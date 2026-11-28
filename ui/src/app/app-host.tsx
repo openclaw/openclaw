@@ -106,6 +106,7 @@ export class ShellOwner
   // chat (the app default route) when settings was the entry point.
   lastWorkspaceLocation: ShellNavigationHost["lastWorkspaceLocation"] = null;
   custodianMinimizeRequestId = 0;
+  firstUse = false;
   lastConcreteRouteId: RouteId | undefined;
   lastLocalePrefSignature: string | null = null;
   outboxStoreRuntime: OutboxStoreRuntime | null = null;

@@ -298,6 +298,29 @@ suite.define(() => {
       }
       await queue.getByText(cancelText, { exact: true }).waitFor();
       expect(await queue.count()).toBe(2);
+      const remove = queue
+        .filter({ hasText: cancelText })
+        .getByRole("button", { name: "Remove queued message" });
+      const otherRemove = queue
+        .filter({ hasText: prompt })
+        .getByRole("button", { name: "Remove queued message" });
+      await gateway.deferNext("chat.abort");
+      await remove.click();
+      await gateway.waitForRequest("chat.abort");
+      if (captureUiProofEnabled) {
+        await page.mouse.move(0, 0);
+        await page
+          .locator(".chat-queue")
+          .screenshot({ path: suite.artifactDir + "/queue.png", animations: "disabled" });
+      }
+      expect(await remove.isDisabled()).toBe(true);
+      expect(await remove.locator(".btn__spinner").isVisible()).toBe(true);
+      expect(await otherRemove.isEnabled()).toBe(true);
+      await gateway.rejectDeferred("chat.abort", {
+        message: "Could not cancel the queued message",
+      });
+      await expect.poll(() => remove.isEnabled()).toBe(true);
+      expect(await remove.locator("svg").isVisible()).toBe(true);
       await page.getByRole("button", { name: "Show earlier unsent messages", exact: true }).click();
       await page.locator(".chat-group.user").getByText(olderText, { exact: true }).waitFor();
       expect(await queue.count()).toBe(2);
@@ -371,11 +394,8 @@ suite.define(() => {
       expect(await gateway.getRequests("chat.send")).toHaveLength(1);
 
       await gateway.deferNext("chat.abort");
-      await queue
-        .filter({ hasText: cancelText })
-        .getByRole("button", { name: "Remove queued message" })
-        .click();
-      const cancellation = await gateway.waitForRequest("chat.abort");
+      await remove.click();
+      const cancellation = await gateway.waitForRequest("chat.abort", { after: 1 });
       expect(cancellation.params).toEqual({
         sessionKey,
         agentId: "main",

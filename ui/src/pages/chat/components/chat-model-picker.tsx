@@ -58,7 +58,7 @@ export type ChatModelPickerParams = {
   triggerModelLabel: string;
   triggerModelValue?: string;
   triggerStatusLabel?: string;
-  onModelSetup?: () => void;
+  onModelSetup?: (provider?: string) => void;
   onProviderSettings?: (provider: string) => void;
   onOpen?: () => unknown;
   onOpenChange?: (open: boolean) => void;

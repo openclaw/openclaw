@@ -112,6 +112,7 @@ export const CORE_TOOL_DEFINITIONS = [
     ["sessions_spawn", { executionLocation: "gateway" }],
     ["github_identity_status", { profiles: ["coding"] }],
     ["github_publish", { profiles: ["coding"] }],
+    ["session_project"],
     ["agents_wait", { profiles: ["coding"] }],
     ["sessions_yield"],
     ["subagents"],
@@ -189,6 +190,8 @@ const RUNTIME_ONLY_TOOL_FACTS = new Map<string, CoreToolFacts>([
   ...["search", "find", "grep", "glob", "tool_search", "tool_describe"].map(
     (name): [string, CoreToolFacts] => [name, { replay: "both" }],
   ),
+  ["github_read", { replay: "both" }],
+  ["github_search", { replay: "both" }],
   ["structured_output", { factoryFamily: "openclaw" }],
 ]);
 

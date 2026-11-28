@@ -77,13 +77,13 @@ it("loads eligible visible icons and reloads retained rows without retrying fail
   flush();
   for (const available of [true, false]) {
     hasIcon = available;
-    emit("cron");
+    emit("chat.metadata.changed", { commandsChanged: true });
     await settlePalette(palette, 0);
     expect(row?.querySelector("img")).toBeNull();
     expect(fetchIcon).toHaveBeenCalledTimes(2);
   }
   hasIcon = true;
-  emit("cron");
+  emit("chat.metadata.changed", { commandsChanged: true });
   await vi.advanceTimersByTimeAsync(0);
   await waitForIcon(3);
   expect(workboard()).toBe(row);

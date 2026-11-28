@@ -173,6 +173,11 @@ module.exports = { id: ${JSON.stringify(pluginId)}, register(api) {
         );
         const previous = await load();
         await fs.writeFile(path.join(root, "index.cjs"), replacementSource);
+        // Package replacement publishes new source facts; the retained registry keeps its old capture.
+        await seedInstalledPluginIndex(
+          { [pluginId]: { source: "path", installPath: root, sourcePath: root, version: "2.1.0" } },
+          { config },
+        );
         await recordDeferredPluginMigrations(pending);
         const held = await load();
         const heldRecord = held.registry.plugins.find((record) => record.id === pluginId);

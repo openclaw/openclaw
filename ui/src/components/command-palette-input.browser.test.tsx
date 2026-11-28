@@ -29,6 +29,7 @@ describe.skipIf(!hasBrowserLayout)("command palette input layout", () => {
     css = "width: 740px; max-width: 100%;",
   ) {
     const props: InputProps = {
+      mode: "search",
       value,
       placeholder: "Search or start a task…",
       onInputRef: () => undefined,
@@ -136,7 +137,7 @@ describe.skipIf(!hasBrowserLayout)("command palette input layout", () => {
   });
 
   it("grows Compose through eight lines, then scrolls without moving its top edge", async () => {
-    const { input } = mountInput("One line", { maxLines: 8 });
+    const { input } = mountInput("One line", { mode: "compose" });
     await nextFrame();
     edit(input, input.value);
     const top = input.getBoundingClientRect().top;

@@ -49,44 +49,30 @@ beforeEach(() => {
 it.each([
   ["command", "settled"],
   ["command", "failed"],
-  ["command", "authority revoked"],
   ["skill", "settled"],
   ["skill", "failed"],
-  ["skill", "authority revoked"],
 ] as const)("waits for workspace attribution before %s dispatch (%s)", async (kind, outcome) => {
   const entered = createDeferred();
   const baseline = createDeferred();
-  let active = true;
   const fixture = dispatchFixture(kind);
   const { effect } = fixture;
-  const result = runInlineFixture(
-    fixture,
-    {
-      opts: {
-        awaitSessionDiffBaseline: async () => {
-          entered.resolve();
-          await baseline.promise;
-        },
+  const result = runInlineFixture(fixture, {
+    opts: {
+      awaitSessionDiffBaseline: async () => {
+        entered.resolve();
+        await baseline.promise;
       },
     },
-    {
-      assertOwnerCurrent: () => {
-        if (!active) {
-          throw new Error("command authority ended");
-        }
-      },
-    },
-  );
+  });
   try {
     await awaitGateBeforeSettlement(entered.promise, result, "Dispatch bypassed attribution");
     expect(effect).not.toHaveBeenCalled();
     if (outcome === "failed") {
       baseline.reject(new Error("attribution failed"));
     } else {
-      active = outcome !== "authority revoked";
       baseline.resolve();
     }
-    const error = outcome === "failed" ? "attribution failed" : "command authority ended";
+    const error = "attribution failed";
     if (kind === "command" && outcome !== "settled") {
       await expect(result).rejects.toThrow(error);
     } else {

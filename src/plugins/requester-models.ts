@@ -31,7 +31,6 @@ export function createPluginRequesterModels(params: {
   const assertCurrent = () => {
     params.signal?.throwIfAborted();
     params.assertCurrent();
-    authority.assertCurrent();
   };
   return Object.freeze({
     async list() {

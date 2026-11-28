@@ -8,7 +8,12 @@ enum ChatInlineChipKind: Hashable, Sendable {
 
     var systemImage: String {
         switch self {
-        case .file: "doc.text"
+        case .file:
+            #if os(iOS)
+            "doc"
+            #else
+            "doc.text"
+            #endif
         case .pullRequest: "arrow.triangle.pull"
         case .issue: "smallcircle.filled.circle"
         }
@@ -554,22 +559,51 @@ enum ChatMarkdownInlineChips {
     /// Text with a tinted symbol before each chip label. SwiftUI Text cannot host capsule views
     /// inline without losing wrapping and selection, so the symbol and link tint carry the chip.
     /// `fileLabels` is nil where file links are off; marked file references then stay plain text.
-    static func text(_ attributed: AttributedString, fileLabels: [String: String]?) -> SwiftUI.Text {
+    @MainActor static func text(
+        _ attributed: AttributedString,
+        fileLabels: [String: String]?,
+        font: Font,
+        environment: EnvironmentValues) -> SwiftUI.Text
+    {
         let attributed = fileLabels.map { self.resolvingFiles(in: attributed, labels: $0) } ?? attributed
         var text = SwiftUI.Text(verbatim: "")
         var hasChip = false
-        for (kind, range) in attributed.runs[ChatInlineChipAttribute.self] {
+        for (link, range) in attributed.runs[\.link] {
             let slice = SwiftUI.Text(AttributedString(attributed[range]))
-            guard let kind else {
-                // swiftlint:disable:next shorthand_operator
-                text = text + slice // SwiftUI.Text concatenates with + only; it has no +=.
-                continue
+            var prefix = SwiftUI.Text(verbatim: "")
+            if let link {
+                let kind = attributed[range].runs.first?[ChatInlineChipAttribute.self]
+                #if os(iOS)
+                let asset: String? = switch kind {
+                case .file: self.fileTarget(from: link).map { ChatInlineGlyph.fileAsset(for: $0.path) }
+                case .pullRequest: "inline-pullRequest"
+                case .issue: "inline-issue"
+                case nil:
+                    if fileLabels != nil, ["https", "http"].contains(link.scheme?.lowercased() ?? "") {
+                        self.githubHosts.contains(link.host?.lowercased() ?? "") ? "github" : "link"
+                    } else {
+                        nil
+                    }
+                }
+                if let asset {
+                    hasChip = true
+                    // Bind the mark to the first word, not to the entire reference.
+                    let intent = attributed[range].runs.first?.inlinePresentationIntent
+                    var linkedFont = self.isCode(intent) ? font.monospaced() : font
+                    if intent?.contains(.stronglyEmphasized) == true { linkedFont = linkedFont.bold() }
+                    if intent?.contains(.emphasized) == true { linkedFont = linkedFont.italic() }
+                    prefix = ChatInlineGlyph.text(for: asset, font: linkedFont, environment: environment)
+                        + SwiftUI.Text(verbatim: "\u{00A0}")
+                }
+                #else
+                if let kind {
+                    hasChip = true
+                    prefix = SwiftUI.Text(Image(systemName: kind.systemImage)).foregroundStyle(.tint)
+                        + SwiftUI.Text(verbatim: "\u{2009}")
+                }
+                #endif
             }
-            hasChip = true
-            text = text
-                + SwiftUI.Text(Image(systemName: kind.systemImage)).foregroundStyle(.tint)
-                + SwiftUI.Text(verbatim: "\u{2009}")
-                + slice
+            text = text + prefix + slice
         }
         return hasChip ? text : SwiftUI.Text(attributed)
     }

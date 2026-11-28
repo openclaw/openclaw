@@ -107,7 +107,7 @@ async function runScenario(cutOff: CutOff, signal: AbortSignal) {
       const pending = JSON.stringify(input.slice(lastOutput + 1));
       const reply = () =>
         writeOpenAiResponsesText(response, { text: "Done.", messageId: "r", responseId: "r" });
-      for (const marker of ["QUEUED_FOLLOWUP", "STEERED_INPUT", "CRON_RUN_MARKER"]) {
+      for (const marker of ["QUEUED_FOLLOWUP", "CRON_RUN_MARKER"]) {
         if (pending.includes(marker)) {
           mark(marker);
         }
@@ -352,9 +352,6 @@ async function runScenario(cutOff: CutOff, signal: AbortSignal) {
     report.queuedFollowup = await send(member.client, s1, "QUEUED_FOLLOWUP later", {
       queueMode: "followup",
     });
-    report.steeredInput = await send(member.client, s1, "STEERED_INPUT now", {
-      queueMode: "steer",
-    });
     const s2 = await create();
     report.spawnTurn = await send(member.client, s2, "PLEASE_SPAWN a helper");
     report.childStarted = await until(() => holds.has("CHILD_HOLD"));
@@ -415,22 +412,19 @@ async function runScenario(cutOff: CutOff, signal: AbortSignal) {
         ),
       };
     }
-    if (cutOff === "openclaw-id-remove") {
+    if (cutOff !== "control") {
+      expect(report.cut).toMatchObject({ ok: true });
       await until(() => holds.get("HOLD_TURN")?.aborted === true, 3000);
     }
+    report.inFlightTurnAborted = holds.get("HOLD_TURN")?.aborted ?? "never started";
     for (const hold of holds.values()) {
       hold.release();
     }
     await sleep(4000);
-    report.inFlightTurnAborted = holds.get("HOLD_TURN")?.aborted ?? "never started";
     report.childRunAborted = holds.get("CHILD_HOLD")?.aborted ?? "never started";
     const after = (marker: string) =>
       seen.some((entry) => entry.marker === marker && entry.at >= cutAt);
     report.queuedFollowupRanAfterCut = after("QUEUED_FOLLOWUP");
-    report.steeredInputRanAfterCut = after("STEERED_INPUT");
-    report.steeredInputRanBeforeCut = seen.some(
-      (entry) => entry.marker === "STEERED_INPUT" && entry.at < cutAt,
-    );
     if (job) {
       report.cronAfterCut = await settle(
         owner.request("cron.run", { id: job.id, mode: "force" }),
@@ -478,19 +472,18 @@ it.for<CutOff>([
   expect(report).toMatchObject({
     cronJobCreated: true,
     holdStarted: true,
+    queuedFollowup: "accepted",
     childStarted: true,
     adminConnectionUntouched: true,
     ownerDeviceProfileIsPerson: true,
   });
   const cut = cutOff !== "control";
-  // Role changes close the tunnel; membership removal also explicitly stops its run.
   expect(report.memberConnectionClosed).toBe(
     cutOff === "openclaw-id-remove" ? 1008 : cut ? 4001 : "still open",
   );
-  expect(report.inFlightTurnAborted).toBe(cutOff === "openclaw-id-remove");
-  // B1-B3: queued/steered input, subagent child and the member's automation.
+  expect(report.inFlightTurnAborted).toBe(cut);
+  // Queued follow-ups and scheduled automation runs re-admit when they start.
   expect(report.queuedFollowupRanAfterCut).toBe(!cut);
-  expect(report.steeredInputRanAfterCut).toBe(!cut);
   // The independently admitted child keeps its own authority in every case.
   expect(report.childRunAborted).toBe(false);
   expect(report.cronTurnReachedModelAfterCut).toBe(!cut);

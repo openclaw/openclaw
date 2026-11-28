@@ -123,7 +123,6 @@ export async function runReplyAgent(
   const preparationResources: { stopBlockReply?: () => void } = {};
   const inputGeneration = getAgentEventLifecycleGeneration();
   try {
-    followupRun.operatorAuthority?.assertCurrent();
     const resolveGatewayContext = providedReplyOperation
       ? getGatewayContextResolver(providedReplyOperation)
       : (readChannelContextGatewayContextResolver(sessionCtx) ??
@@ -248,7 +247,6 @@ export async function runReplyAgent(
     const queuedRunFollowupTurn = createFollowupRunner({
       resolveGatewayContext,
       opts,
-      typing,
       typingMode,
       sessionEntry: activeSessionEntry,
       sessionStore: activeSessionStore,
@@ -308,10 +306,7 @@ export async function runReplyAgent(
         input: controllerInput,
         followupRun,
         runId,
-        assertCurrent: () => {
-          assertAgentRunLifecycleGenerationCurrent(inputGeneration);
-          followupRun.operatorAuthority?.assertCurrent();
-        },
+        assertCurrent: () => assertAgentRunLifecycleGenerationCurrent(inputGeneration),
         enqueue: () =>
           enqueueFollowupRun(
             queueKey,

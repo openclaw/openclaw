@@ -137,10 +137,20 @@ export const databaseEngineAdapters: {
             ),
           );
           db.exec(migration.sql);
-          db.prepare("UPDATE openclaw_schema_meta SET version = ? WHERE store = ?").run(
-            version,
-            store.schema.id,
-          );
+          const minReader = migration.minReader ?? version;
+          if (minReader < version) {
+            db.exec("ALTER TABLE openclaw_schema_meta ADD COLUMN IF NOT EXISTS min_reader BIGINT");
+          }
+          if (minReader < version || snapshot.metadata.min_reader !== undefined) {
+            db.prepare(
+              "UPDATE openclaw_schema_meta SET version = ?, min_reader = ? WHERE store = ?",
+            ).run(version, minReader < version ? minReader : null, store.schema.id);
+          } else {
+            db.prepare("UPDATE openclaw_schema_meta SET version = ? WHERE store = ?").run(
+              version,
+              store.schema.id,
+            );
+          }
           verifyAndRecordPostgresSchema(db, store.namespace!, {
             ...schema,
             version,

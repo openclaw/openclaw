@@ -7,6 +7,7 @@ import type {
 import { GATEWAY_STARTUP_ADMISSION_WAIT_MS } from "../../../../packages/gateway-protocol/src/startup-unavailable.js";
 import { t } from "../../i18n/index.ts";
 import type { ChatAttachment, HumanMention } from "../../lib/chat/chat-types.ts";
+import { visibleSessionMatches } from "../../lib/sessions/navigation.ts";
 import {
   isUiGlobalSessionKey,
   normalizeAgentId,
@@ -19,10 +20,12 @@ import { isInitialChatHistoryUnavailable } from "./chat-history-state.ts";
 import { chatOutboxOwner } from "./chat-outbox-owner.ts";
 import { chatProviderReviewRow } from "./chat-provider-review.ts";
 import { normalizeChatSendAck, type ChatSendAck } from "./chat-send-ack.ts";
+import type { ChatHost } from "./chat-send-contract.ts";
+import { reconcileChatAccessProgram } from "./chat-session.ts";
 import type { ChatState } from "./chat-state-contract.ts";
 
 export async function requestChatSend(
-  state: ChatState,
+  state: ChatHost,
   params: {
     message: string;
     appContext?: ChatAppContextAttachment[];
@@ -59,7 +62,8 @@ export async function requestChatSend(
     canReuseCurrentSessionId && typeof currentSessionId === "string" && currentSessionId.trim()
       ? currentSessionId.trim()
       : undefined;
-  if (chatProviderReviewRow(state, sessionKey, selectedAgentId)?.providerReview) {
+  const row = chatProviderReviewRow(state, sessionKey, selectedAgentId);
+  if (row?.providerReview) {
     throw new Error(t("chat.providerReview.pausedBody"));
   }
   const sessionId = params.sessionId ?? (params.intent ? undefined : routingSessionId);
@@ -76,8 +80,23 @@ export async function requestChatSend(
     params.runId,
   );
   let payload: unknown;
+  const client = state.client!;
   try {
-    payload = await state.client!.request(
+    if (
+      row?.cyberAccessProgram &&
+      row.cyberAccessProgram !== "standard" &&
+      (!sessionId || row.sessionId === sessionId) &&
+      visibleSessionMatches(state, sessionKey, selectedAgentId)
+    ) {
+      const repair = reconcileChatAccessProgram(state, row, sessionKey);
+      if (repair) {
+        if (!(await repair)) {
+          throw new Error(state.chatError ?? t("chat.modelControls.modelsUnavailable"));
+        }
+        request.signal.throwIfAborted();
+      }
+    }
+    payload = await client.request(
       "chat.send",
       {
         sessionKey,

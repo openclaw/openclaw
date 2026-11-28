@@ -6,6 +6,7 @@ import { assertionSucceeds } from "../../shared/assertion.js";
 import type { OpenClawStateDatabaseOptions } from "../../state/openclaw-state-db.js";
 import type { ExecApprovalManager } from "../exec-approval-manager.js";
 import type { ExecApprovalDurableLookup } from "../exec-approval-manager.types.js";
+import { canResolveParticipationExecApproval } from "../exec-approval-participation.js";
 import {
   canAccessOperatorApproval,
   canResolveOperatorApproval,
@@ -46,9 +47,20 @@ export async function loadVisibleApproval(params: {
 } | null> {
   // Reconciliation can settle a live waiter, so authorization must precede
   // every durable read and no unauthorized lookup may reach the bridge.
-  const authorized = params.allowApprovalRuntime
-    ? canResolveOperatorApproval(params.client)
-    : canReviewOperatorApproval(params.client);
+  // A transport reference names its canonical approval only after the durable lookup.
+  let participationId = params.id;
+  const participationAccess = () =>
+    params.allowApprovalRuntime
+      ? canResolveParticipationExecApproval(
+          params.execApprovalManager.getLiveSnapshot(participationId),
+          params.client,
+        )
+      : undefined;
+  const authorized =
+    participationAccess() ??
+    (params.allowApprovalRuntime
+      ? canResolveOperatorApproval(params.client)
+      : canReviewOperatorApproval(params.client));
   if (!params.authority.isCurrent() || !authorized || params.client?.invalidated) {
     return null;
   }
@@ -67,9 +79,6 @@ export async function loadVisibleApproval(params: {
     : undefined;
   let sourceSessionKey = admittedRecord?.request.sessionKey;
   let sourceAgentId = admittedRecord?.request.agentId;
-  if (admittedRecord) {
-    params.authority.bindSource(admittedRecord.request);
-  }
   let sessionAccess = await prepareApprovalSessionAccess({
     client: params.client,
     getCfg: params.getCfg,
@@ -94,14 +103,15 @@ export async function loadVisibleApproval(params: {
     reviewerDeviceIds: () => readonly string[] | null | undefined,
     invitationOnly = false,
   ) =>
-    (invitationOnly
+    participationAccess() ??
+    ((invitationOnly
       ? sessionAccess.canAccessInvited(source())
       : sessionAccess.canAccess(source())) &&
-    canAccessOperatorApproval({
-      client: params.client,
-      allowApprovalRuntime: params.allowApprovalRuntime,
-      binding: { reviewerDeviceIds: reviewerDeviceIds() },
-    });
+      canAccessOperatorApproval({
+        client: params.client,
+        allowApprovalRuntime: params.allowApprovalRuntime,
+        binding: { reviewerDeviceIds: reviewerDeviceIds() },
+      }));
   if (
     liveRecord &&
     !canAccess(
@@ -116,14 +126,9 @@ export async function loadVisibleApproval(params: {
       admittedRecord &&
       (admittedManager?.getLocalSnapshot(bindingId) !== admittedRecord ||
         admittedRecord.request.sessionKey !== sourceSessionKey ||
-        admittedRecord.request.agentId !== sourceAgentId ||
-        !canAccess(
-          () => readApprovalRequestSource(admittedRecord!),
-          () => admittedRecord!.approvalReviewerDeviceIds,
-          true,
-        ))
+        admittedRecord.request.agentId !== sourceAgentId)
     ) {
-      throw new Error("Approval lookup authority is no longer active");
+      throw new Error("The approval record changed. Look up the approval again.");
     }
   };
   const lookupAuthority = {
@@ -177,12 +182,18 @@ export async function loadVisibleApproval(params: {
     await reconcile(params.systemAgentApprovalManager, corrupt);
     throw error;
   }
+  if (lookup.outcome === "found") {
+    participationId = lookup.record.id;
+  }
   if (
     !isLookupCurrent() ||
     params.client?.invalidated ||
-    !(params.allowApprovalRuntime
-      ? canResolveOperatorApproval(params.client)
-      : canReviewOperatorApproval(params.client))
+    !(
+      participationAccess() ??
+      (params.allowApprovalRuntime
+        ? canResolveOperatorApproval(params.client)
+        : canReviewOperatorApproval(params.client))
+    )
   ) {
     return null;
   }
@@ -212,7 +223,6 @@ export async function loadVisibleApproval(params: {
     ) {
       return null;
     }
-    params.authority.bindSource(lookup.record.source);
     const manager =
       lookup.record.kind === "exec"
         ? params.execApprovalManager

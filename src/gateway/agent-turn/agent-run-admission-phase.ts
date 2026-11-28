@@ -7,7 +7,6 @@ import {
   type PreparedModelRuntimeLease,
   type PreparedReplyDispatchRuntime,
 } from "../../agents/prepared-model-runtime.js";
-import { resolveProviderIdForAuth } from "../../agents/provider-auth-aliases.js";
 import { resolveIngressWorkspaceOverrideForSessionRun } from "../../agents/spawned-context.js";
 import type { FollowupCompletionOwner } from "../../agents/subagents/completion/session-followup-completion.types.js";
 import type {
@@ -103,7 +102,11 @@ export async function prepareAgentRunDispatch(
     return undefined;
   }
 
-  const { resolvedRuntime, ...modelSelection } = resolveAgentRunAdmissionModel(params);
+  const admission = await resolveAgentRunAdmissionModel(params);
+  if (!admission) {
+    return undefined;
+  }
+  const { resolvedRuntime, providerFacts, modelSelection } = admission;
   const { lifecycleStorePath } = modelSelection;
   let timeoutSeconds: number | undefined;
   let preparing = true;
@@ -133,12 +136,6 @@ export async function prepareAgentRunDispatch(
         cfg: params.cfgForAgent ?? params.cfg,
         overrideSeconds: timeoutSeconds,
       });
-      const providerFacts = {
-        providerId: resolvedRuntime.provider,
-        authProviderId: resolveProviderIdForAuth(resolvedRuntime.provider, {
-          config: params.cfgForAgent ?? params.cfg,
-        }),
-      };
       if (existing?.entry) {
         // Retain the exact preparing input; admission adds presentation facts only.
         updateRpcSourceSessionId(existing.entry, params.getAdmittedSessionId());
@@ -442,7 +439,6 @@ export async function prepareAgentRunDispatch(
   const assertInputOwnerCurrent = (terminal = false) => {
     assertInputAdmissionCurrent?.();
     assertRequesterCurrent?.();
-    userTurn?.assertRequesterCurrent?.();
     followupCompletion?.assertCurrent();
     if (!resumedTaskAdopted) {
       followupSuccessor?.assertCurrent();
@@ -467,10 +463,49 @@ export async function prepareAgentRunDispatch(
       throw new Error("agent input admission no longer owns this run");
     }
   };
+  const operatorRun = {
+    ...params,
+    lifecycleStorePath,
+    assertInputCurrent: assertInputOwnerCurrent,
+    entry: activeRunAbort.entry,
+  };
+  try {
+    assertInputAdmissionCurrent?.();
+    const context = params.context.resolveGatewayContext?.();
+    // Only host System input may resolve a session owner; public provenance never grants it.
+    const systemTurn =
+      context &&
+      params.canUseInternalRuntimeHandoff &&
+      params.client?.internal?.syntheticClient === true &&
+      params.client.internal.operatorRoleActor?.kind === "system" &&
+      !params.client.internal.operatorRunAuthority &&
+      !params.client.authenticatedUserProfile &&
+      params.resolvedSessionKey &&
+      !isCronSessionKey(params.resolvedSessionKey) &&
+      params.inputProvenance?.kind === "internal_system" &&
+      !isCronExecutionInputProvenance(params.inputProvenance)
+        ? {
+            context,
+            agentId: params.activeSessionAgentId,
+            sessionKey: params.resolvedSessionKey,
+            sessionId: params.getAdmittedSessionId(),
+            storePath: lifecycleStorePath,
+            assertCurrent: () => {
+              assertInputOwnerCurrent();
+              activeRunAbort.controller.signal.throwIfAborted();
+            },
+          }
+        : undefined;
+    // Admit before input persistence yields: the recorded turn carries the grant's owner bit.
+    capturedOperator = await retainAgentTurnOperatorRun({ ...operatorRun, systemTurn });
+  } catch (error) {
+    return rejectPreaccept(resolveAgentRunAdmissionError(ErrorCodes.INVALID_REQUEST, error));
+  }
   try {
     assertInputAdmissionCurrent?.();
     userTurn = await prepareAgentRunUserTurn({
       ...params,
+      senderIsOwner: capturedOperator.authority?.grant.owner === true,
       assertCurrent: () => {
         assertInputOwnerCurrent();
         activeRunAbort.controller.signal.throwIfAborted();
@@ -483,7 +518,6 @@ export async function prepareAgentRunDispatch(
       freshChildStorePath: params.freshChild ? lifecycleStorePath : undefined,
       resolvedThreadId,
     });
-    userTurn.assertRequesterCurrent?.();
     if (userTurn.recorder) {
       // Accepted input owns these media references before it enters the transcript.
       // Later admission rejection must preserve the files retained by that custody.
@@ -533,64 +567,6 @@ export async function prepareAgentRunDispatch(
     return undefined;
   }
   try {
-    const context = params.context.resolveGatewayContext?.();
-    // Provenance is caller-supplied on public RPC. Only the host's system principal
-    // may resolve a session owner; explicitly requester-bound calls keep that requester.
-    const systemTurn =
-      context &&
-      params.canUseInternalRuntimeHandoff &&
-      params.client?.internal?.syntheticClient === true &&
-      params.client.internal.operatorRoleActor?.kind === "system" &&
-      !params.client.internal.operatorRunAuthority &&
-      !params.client.authenticatedUserProfile &&
-      params.resolvedSessionKey &&
-      !isCronSessionKey(params.resolvedSessionKey) &&
-      userTurn.inputProvenance?.kind === "internal_system" &&
-      !isCronExecutionInputProvenance(userTurn.inputProvenance)
-        ? {
-            context,
-            agentId: params.activeSessionAgentId,
-            sessionKey: params.resolvedSessionKey,
-            sessionId: params.getAdmittedSessionId(),
-            storePath: lifecycleStorePath,
-            assertCurrent: () => {
-              assertInputOwnerCurrent();
-              activeRunAbort.controller.signal.throwIfAborted();
-            },
-          }
-        : undefined;
-    // Accepted work retains this caller's continuation for the turn's whole lifetime.
-    capturedOperator = await retainAgentTurnOperatorRun({
-      ...params,
-      lifecycleStorePath,
-      assertInputCurrent: assertInputOwnerCurrent,
-      systemTurn,
-      entry: activeRunAbort.entry,
-      abortSession: params.resolvedSessionKey
-        ? {
-            cfg: params.cfg,
-            storePath: params.lifecycleStorePath,
-            entry: params.sessionEntry,
-            canonicalKey: params.resolvedSessionKey,
-            agentId: params.activeSessionAgentId,
-          }
-        : undefined,
-    });
-    const operatorAdmission = revalidateAdmission(userTurn);
-    if (operatorAdmission !== true) {
-      return await operatorAdmission;
-    }
-    assertInputOwnerCurrent();
-    capturedOperator.authority?.assertCurrent();
-  } catch (error) {
-    const failure = await releasePreparedAgentRunUserTurnAfterFailure(
-      userTurn,
-      error,
-      activeRunAbort.controller.signal,
-    );
-    return rejectPreaccept(resolveAgentRunAdmissionError(ErrorCodes.INVALID_REQUEST, failure));
-  }
-  try {
     if (subagentAdmission.registerPluginSubagent) {
       await subagentAdmission.registerPluginSubagent();
       const registrationAdmission = revalidateAdmission(userTurn);
@@ -598,7 +574,6 @@ export async function prepareAgentRunDispatch(
         return await registrationAdmission;
       }
       assertInputOwnerCurrent();
-      capturedOperator.authority?.assertCurrent();
     }
   } catch (error) {
     const failure = await releasePreparedAgentRunUserTurnAfterFailure(
@@ -633,7 +608,6 @@ export async function prepareAgentRunDispatch(
         assertInputOwnerCurrent();
         params.assertGatewayWorkAdmissionAllowed();
         activeRunAbort.controller.signal.throwIfAborted();
-        capturedOperator.authority?.assertCurrent();
       } catch (err) {
         const failure = await releasePreparedAgentRunUserTurnAfterFailure(
           userTurn,
@@ -648,8 +622,8 @@ export async function prepareAgentRunDispatch(
         ...params,
         sessionId: params.getAdmittedSessionId(),
         spawnedBy: params.sessionEntry?.spawnedBy,
-        isCurrent: params.hasCurrentClientAuthority,
         inputProvenance: userTurn.inputProvenance,
+        grant: capturedOperator.authority?.grant,
       },
       activeRunAbort.controller.signal,
     );

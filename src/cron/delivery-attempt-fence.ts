@@ -1,7 +1,10 @@
+import type { CronStandingGrantAuthority } from "./standing-grant-authority.types.js";
 import { CronRunReceiptRevisionError } from "./store/run-receipt.types.js";
 
 /** Host-held occurrence authority; never serialized into a tool or transport request. */
 export type CronCompletionDeliveryFence = {
+  /** The same receipt owner used by delivery, for standing exec grants. */
+  standingGrantAuthority?: CronStandingGrantAuthority;
   beforeAttempt: () => Promise<void>;
   assertCurrent: () => void;
   /** Diagnostics settle through the captured receipt owner, never delivery authority. */

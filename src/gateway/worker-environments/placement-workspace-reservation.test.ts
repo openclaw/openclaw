@@ -95,7 +95,7 @@ it.each(["retirement", "pending", "reconciling"] as const)(
         assertCurrent();
         effect();
       }),
-    ).rejects.toThrow(kind === "retirement" ? "placement authority changed" : "still reconciling");
+    ).rejects.toThrow(kind === "retirement" ? "placement changed" : "still reconciling");
     expect(effect).not.toHaveBeenCalled();
   },
 );

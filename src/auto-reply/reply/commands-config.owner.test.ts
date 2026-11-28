@@ -142,7 +142,7 @@ it.each(
     ),
   ),
 )(
-  "preserves live owner authority through $command persistence (revoke=$revoke)",
+  "finishes a started $command after an owner change (revoke=$revoke)",
   async ({ command, handler, persistedValue, expected, success, revocation, revoke }) => {
     await withCommandIngress(
       async (fixture) => {
@@ -177,16 +177,10 @@ it.each(
           blocked.finish();
           const outcome = await blocked.pending;
           const persisted = await readFile(state.configPath, "utf8");
-          if (revoke) {
-            expect(persisted).toBe(original);
-            expect(outcome.error).toMatchObject({
-              message: expect.stringContaining("authority changed"),
-            });
-          } else {
-            expect(outcome.error).toBeUndefined();
-            expect(persistedValue(JSON.parse(persisted) as OpenClawConfig)).toEqual(expected);
-            expect(outcome.result?.reply?.text).toContain(success);
-          }
+          // The owner decision is fixed when the command starts; a started command finishes.
+          expect(outcome.error).toBeUndefined();
+          expect(persistedValue(JSON.parse(persisted) as OpenClawConfig)).toEqual(expected);
+          expect(outcome.result?.reply?.text).toContain(success);
         } finally {
           blocked.finish();
           await blocked.pending;

@@ -1,5 +1,27 @@
 import { isRecord } from "@openclaw/normalization-core/record-coerce";
 import type { ProviderModelRouteAuthRequirement } from "../plugin-sdk/provider-model-types.js";
+import { resolveGlobalSingleton } from "../shared/global-singleton.js";
+
+/** Code on the refusal for an automation whose recorded account was removed, signed out or replaced. */
+export const CRON_INFERENCE_ACCOUNT_RETIRED_CODE = "CRON_INFERENCE_ACCOUNT_RETIRED";
+
+// Refusals whose run also gave a candidate on another provider its own credentials. Kept across
+// bundled chunks by identity, like other refusal facts.
+const bypassedAccountRefusals = resolveGlobalSingleton(
+  Symbol.for("openclaw.cronBypassedAccountRefusals"),
+  () => new WeakSet<object>(),
+);
+
+/** The run reached a fallback on another provider, so the recorded account was not its only path. */
+export function markCronAccountRefusalBypassed(refusal: unknown): void {
+  if (refusal instanceof Error) {
+    bypassedAccountRefusals.add(refusal);
+  }
+}
+
+export function isCronAccountRefusalBypassed(refusal: unknown): boolean {
+  return refusal instanceof Error && bypassedAccountRefusals.has(refusal);
+}
 
 /** Scheduler-owned identity, not a user model pin or a copy of credential material. */
 export type CronInferenceBinding = {

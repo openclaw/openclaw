@@ -83,6 +83,9 @@ export function estimateToolSchemaTokens(tools: readonly ToolSchema[] | undefine
   return tools?.length
     ? estimateJsonPayloadTokenPressure(
         tools.map(({ name, description, parameters }) => ({ name, description, parameters })),
+        // Lexical pressure already prices JSON delimiters and dense runs; schema
+        // descriptions should not also pay the arbitrary-JSON density premium.
+        CHARS_PER_TOKEN_ESTIMATE,
       )
     : 0;
 }

@@ -31,7 +31,7 @@ import { getTestPluginRegistry } from "./test-helpers.plugin-registry.js";
 
 installGatewayTestHooks({ scope: "suite" });
 
-it("retains committed initial turns through fencing and denies inference after grant revocation", async () => {
+it("retains committed initial turns and admitted inference through fencing and grant revocation", async () => {
   process.env.OPENCLAW_TEST_MINIMAL_GATEWAY = "0";
   testState.gatewayAuth = undefined;
   const token = "initial-turn-source-fixture-token";
@@ -128,8 +128,6 @@ it("retains committed initial turns through fencing and denies inference after g
       assert(recorder);
       const input = readReplySourceInput(params.replyOptions);
       assert(input);
-      const authority = input.sourceAdapter?.authority;
-      assert(authority);
       expect(recorder.getPersistedMessage?.()).toBeDefined();
       scenario.dispatchStarted = true;
       scenario.dispatchEntered.resolve();
@@ -137,7 +135,6 @@ it("retains committed initial turns through fencing and denies inference after g
       try {
         const persisted = await recorder.persistApproved();
         input.abortSignal.throwIfAborted();
-        authority.assertCurrent();
         if (persisted) {
           scenario.provider();
         }
@@ -207,7 +204,7 @@ it("retains committed initial turns through fencing and denies inference after g
       scenario.allowWrite.resolve();
       await scenario.dispatchFinished.promise;
       await waitForRelease(scenario);
-      expect(scenario.provider).toHaveBeenCalledTimes(revoke ? 0 : 1);
+      expect(scenario.provider).toHaveBeenCalledTimes(1);
       const entry = loadSessionEntry(scenario.scope);
       assert(entry?.sessionId);
       const userMessages = loadTranscriptEventsSync({

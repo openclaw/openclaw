@@ -33,6 +33,8 @@ function packageRootsIn(releasePrefix: string, selected: PackageReleaseSlot): st
     ...new Set([
       path.join(releasePrefix, path.relative(selected.prefix, selected.slot)),
       path.join(packageReleaseGlobalRoot(releasePrefix), path.basename(selected.slot)),
+      // Windows `npm install -g --prefix` puts the package under `<prefix>/node_modules`.
+      path.join(releasePrefix, "node_modules", path.basename(selected.slot)),
     ]),
   ];
 }

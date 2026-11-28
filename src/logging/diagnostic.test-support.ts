@@ -7,21 +7,18 @@ import { resetDiagnosticSessionStateForTest } from "./diagnostic-session-state.j
 import { resetDiagnosticStabilityRecorderForTest } from "./diagnostic-stability.js";
 import { startGatewayDiagnosticHeartbeat, stopGatewayDiagnosticHeartbeat } from "./diagnostic.js";
 
-function startDiagnosticHeartbeatForTest(
-  config?: Parameters<typeof startGatewayDiagnosticHeartbeat>[1],
-  opts?: Parameters<typeof startGatewayDiagnosticHeartbeat>[2],
-) {
-  return startGatewayDiagnosticHeartbeat(createTestGatewayScheduler("fake-timers"), config, {
-    testTimings: { stuckSessionWarnMs: 30_000, stuckSessionAbortMs: 60_000 },
-    recoverStuckSession: () => undefined,
-    ...opts,
-  });
-}
-
 export function startEnabledDiagnosticHeartbeatForTest(
   opts?: Parameters<typeof startGatewayDiagnosticHeartbeat>[2],
 ) {
-  return startDiagnosticHeartbeatForTest({ diagnostics: { enabled: true } }, opts);
+  return startGatewayDiagnosticHeartbeat(
+    createTestGatewayScheduler("fake-timers"),
+    { diagnostics: { enabled: true } },
+    {
+      testTimings: { stuckSessionWarnMs: 30_000, stuckSessionAbortMs: 60_000 },
+      recoverStuckSession: () => undefined,
+      ...opts,
+    },
+  );
 }
 
 export function resetDiagnosticStateForTest(): void {

@@ -934,3 +934,34 @@ it("keeps the durable copy and its backup when task recovery cannot settle the r
     expect.stringContaining("inspect the installation and backups"),
   );
 });
+
+it("restores an enabled task whose export places the update's disable in schema order", async () => {
+  const f = await fixture(true);
+  // Task Scheduler exports omit Enabled=true and serialize false after earlier settings.
+  const exported =
+    "<Task><Settings><MultipleInstancesPolicy>IgnoreNew</MultipleInstancesPolicy><Hidden>false</Hidden></Settings><Actions><Exec><Command>original</Command></Exec></Actions></Task>";
+  let enabled = true;
+  const exportXml = (xml: string) =>
+    xml
+      .replace(/(<Settings>[\s\S]*?)<Enabled>(?:true|false)<\/Enabled>/u, "$1")
+      .replace("</Hidden>", enabled ? "</Hidden>" : "</Hidden><Enabled>false</Enabled>");
+  f.registration.xml = exported;
+  native.probe.mockImplementation(() => ({ status: "found", state: 3, enabled }));
+  const execute = native.exec.getMockImplementation()!;
+  native.exec.mockImplementation(async (command) => {
+    if (command[0] === "/Query") {
+      return { code: 0, stdout: exportXml(f.registration.xml), stderr: "" };
+    }
+    if (command.includes("/DISABLE") || command.includes("/ENABLE")) {
+      enabled = command.includes("/ENABLE");
+      return { code: 0, stdout: "", stderr: "" };
+    }
+    return execute(command);
+  });
+  const failure = new Error("Synthetic activation failure");
+  native.run.mockRejectedValueOnce(failure);
+  await expect(installScheduledTask(f.args)).rejects.toBe(failure);
+  expect(await fs.readFile(f.scriptPath)).toEqual(f.original);
+  expect(enabled).toBe(true);
+  expect(exportXml(f.registration.xml)).toBe(exported);
+});

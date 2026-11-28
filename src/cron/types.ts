@@ -209,6 +209,10 @@ export type CronFailureNotificationDetail =
       source: "payload" | "trigger";
       code: CronTriggerFailureCode;
     }
+  /** A deterministic setup refusal: the operator must record the intended account. */
+  | { kind: "inference-account-unrecorded" }
+  /** The recorded account was removed, signed out or replaced: the job pauses until the operator acts. */
+  | { kind: "inference-account-retired" }
   /** A stuck-session recovery aborted the run for a known semantic cause (e.g. `blocked_tool_call`). */
   | { kind: "agent-stall"; classification: string };
 
@@ -239,6 +243,8 @@ export type CronRunOutcome = {
   diagnostics?: CronRunDiagnostics;
   /** Transient: the run was skipped because its parent conversation is gone; pause the job. */
   parentUnavailable?: CronParentUnavailable;
+  /** Transient: the provider's stated reset for a rate-limited run; the next run waits for it. */
+  rateLimitResetAt?: number;
 };
 
 /** Why a parent-linked job pauses before any session is created. */
@@ -357,8 +363,12 @@ export type CronJobState = Omit<
   runningReceiptId?: string;
   /** Receipt of the active run while its condition is still being evaluated; see the run queue. */
   conditionCheckReceiptId?: string;
-  /** Receipt of the active run while its fired condition waits for a run slot. */
+  /** Receipt of an active run waiting for a slot after a condition or provider check. */
   runSlotWaitReceiptId?: string;
+  /** Resolved provider, valid only with the wait receipt above. */
+  runSlotWaitProvider?: string;
+  /** Receipt that was granted a slot past the fixed floor. */
+  extraRunSlotReceiptId?: string;
   /** Nonce for a committed schedule edit during the pending run. */
   runningScheduleChangeId?: string;
   /**
@@ -515,6 +525,8 @@ type CronJobStateInput = Partial<
     | "runningReceiptId"
     | "conditionCheckReceiptId"
     | "runSlotWaitReceiptId"
+    | "runSlotWaitProvider"
+    | "extraRunSlotReceiptId"
     | "runningScheduleChangeId"
     | "pluginCommandRuns"
     | "pluginCommandBinding"

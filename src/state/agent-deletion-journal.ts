@@ -33,7 +33,7 @@ import type {
   AgentDeletionJournalInput,
   AgentDeletionJournalPurpose,
 } from "./agent-deletion-journal.types.js";
-import { deleteAgentProvenanceForAgent } from "./agent-provenance.js";
+import { deleteAgentProvenanceForAgent } from "./agent-provenance.kernel.js";
 import type {
   OpenClawStateDatabase,
   OpenClawStateDatabaseOptions,

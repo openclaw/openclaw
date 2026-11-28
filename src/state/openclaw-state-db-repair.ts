@@ -17,21 +17,14 @@ import {
   prepareDoctorSqliteIndexCorruption,
 } from "../infra/sqlite-index-recovery.js";
 import { repairCanonicalSqliteIndexes } from "../infra/sqlite-index-schema.js";
-import {
-  assertSqliteIntegrity,
-  isTerminalSqliteIntegrityError,
-  SqliteRepairableForeignKeyError,
-} from "../infra/sqlite-integrity.js";
+import { assertSqliteIntegrity } from "../infra/sqlite-integrity.js";
 import { OpenClawStateOwnershipError } from "../infra/sqlite-lifecycle-errors.js";
 import { configureSqliteMaintenanceCache } from "../infra/sqlite-maintenance-cache.js";
 import { resolveSqliteInspectionSignal } from "../infra/sqlite-readonly-worker-context.js";
 import { assertSqliteSchemaTablesPresent } from "../infra/sqlite-schema-contract.js";
 import { migrateSqliteSchemaToStrictInTransaction } from "../infra/sqlite-strict.js";
 import { runSqliteImmediateTransactionSync } from "../infra/sqlite-transaction.js";
-import {
-  withStateDatabaseSchemaMaintenance,
-  withStateDatabaseSchemaMaintenanceAsync,
-} from "../infra/state-database-maintenance.js";
+import { readSqliteUserVersion } from "../infra/sqlite-user-version.js";
 import { migrateLegacyCronRunLogsToTaskRuns } from "../infra/state-migrations.cron-run-logs.js";
 import {
   runUpdateSqliteMigration,
@@ -39,18 +32,11 @@ import {
 } from "../infra/update-doctor-migration-context.js";
 import { getAsyncWorkSignal } from "../shared/async-work-scope.js";
 import { hasPreJournalStateSchema } from "./agent-deletion-journal-history.js";
-import {
-  clearOpenClawDatabaseQuarantine,
-  readOpenClawDatabaseQuarantineFailure,
-} from "./openclaw-quarantine-store.js";
+import { clearOpenClawDatabaseQuarantine } from "./openclaw-quarantine-store.js";
 import { publishStateRuntimeSchemaAdmission } from "./openclaw-state-db-admission.js";
 import { repairAuditEventsSchema } from "./openclaw-state-db-audit-migration.js";
+import { clearOpenClawStateDatabaseOpenFailure } from "./openclaw-state-db-cache.js";
 import {
-  clearOpenClawStateDatabaseOpenFailure,
-  openClawStateDatabaseCache,
-} from "./openclaw-state-db-cache.js";
-import {
-  type OpenClawStateDatabaseOptions,
   LAZY_ADDITIVE_STATE_TABLES,
   DOCTOR_OWNED_STATE_TABLES,
   OPENCLAW_SQLITE_BUSY_TIMEOUT_MS,
@@ -74,6 +60,10 @@ import {
 import * as operatorApprovalMigration from "./openclaw-state-db-operator-approval-migration.js";
 import { ensureOpenClawStatePermissions } from "./openclaw-state-db-permissions.js";
 import {
+  classifyStateDatabaseIntegrity,
+  hasRecordedStateDatabaseDamage,
+} from "./openclaw-state-db-repair-pending.js";
+import {
   ensureAdditiveStateColumns,
   ensureFirstUseAdditiveStateColumnsForStrictMigration,
 } from "./openclaw-state-db-schema-additive.js";
@@ -85,6 +75,7 @@ import {
   dropLegacyStateTables,
   migrateAgentDatabaseRelativePaths as migrateAgentPaths,
   migrateWorkerPlacementExecutionModeSchema,
+  normalizeSqliteText,
   repairLegacyGatewayRestartHandoffsForStrictMigration,
 } from "./openclaw-state-db-schema-repair.js";
 import { ensureOpenClawStateRuntimeSchema } from "./openclaw-state-db-schema-runtime.js";
@@ -99,50 +90,12 @@ import {
   recoverOrphanTaskDeliveryRows,
   prepareOrphanTaskDeliveryRecovery,
 } from "./openclaw-state-db-task-delivery-recovery.js";
-import { resolveDatabasePath, describeAgentPathMigration } from "./openclaw-state-db.paths.js";
+import { describeAgentPathMigration } from "./openclaw-state-db.paths.js";
 import { assertOpenClawStateWriteAllowed } from "./openclaw-state-ownership.js";
 import { getOpenClawStateRuntimeSchema } from "./openclaw-state-schema-compatibility.js";
 import { OPENCLAW_STATE_SCHEMA_SQL } from "./openclaw-state-schema.js";
 import { UpdateSchemaRefusalError } from "./openclaw-update-schema-refusal.js";
 import { resolveSchemaMigrationIntegrityCheck } from "./schema-migration-backup-scope.js";
-
-type DoctorRepairScope = "doctor" | "indexes" | "readability" | "version";
-type DoctorRepairOptions = OpenClawStateDatabaseOptions & { integrityCheck?: "quick" | "full" };
-
-function resolveDoctorRepairTarget(options: DoctorRepairOptions, scope: DoctorRepairScope) {
-  const env = options.env ?? process.env;
-  const pathname = resolveDatabasePath(options);
-  assertOpenClawStateSchemaRepairAllowed(pathname);
-  if (!existsSync(pathname)) {
-    return undefined;
-  }
-  if (scope === "readability") {
-    // A writer close may checkpoint WAL and invalidate a recorded corruption refusal.
-    openClawStateDatabaseCache.assertOpenClawStateDatabaseFreshOpenAllowedAtPath(pathname, env);
-  }
-  return { pathname, env };
-}
-
-export function repairDoctorStateSchema(options: DoctorRepairOptions, scope: DoctorRepairScope) {
-  const target = resolveDoctorRepairTarget(options, scope);
-  return target
-    ? withStateDatabaseSchemaMaintenance({ databasePath: target.pathname }, () =>
-        repairStateSchema(target.pathname, target.env, scope, options.integrityCheck),
-      )
-    : { changes: [], warnings: [] };
-}
-
-export async function repairDoctorStateSchemaAsync(
-  options: DoctorRepairOptions,
-  scope: DoctorRepairScope,
-): Promise<{ changes: string[]; warnings: string[]; failure?: unknown }> {
-  const target = resolveDoctorRepairTarget(options, scope);
-  return target
-    ? withStateDatabaseSchemaMaintenanceAsync({ databasePath: target.pathname }, () =>
-        repairStateSchemaAsync(target.pathname, target.env, scope, options.integrityCheck),
-      )
-    : { changes: [], warnings: [] };
-}
 
 export function repairStateSchema(
   pathname: string,
@@ -302,8 +255,8 @@ function* repairOpenedStateSchemaSteps(
         warnings: [],
       };
     }
-    // Private preservation readers cannot inspect the recognized malformed catalog.
-    // Publish its owner-rechecked repair before credential or orphan preparation.
+    // Normalization and private preservation readers require a readable catalog.
+    // Publish its owner-rechecked repair before inspecting historical values.
     const preparedSchemaRepair =
       scope === "doctor" || scope === "readability"
         ? prepareStateDatabaseSchemaRepair(db, pathname, env)
@@ -315,15 +268,30 @@ function* repairOpenedStateSchemaSteps(
       };
       const apply = yield {
         sync() {
-          if (scope === "readability") {
-            repairCatalog();
-          }
+          repairCatalog();
         },
         async prepare() {
           return repairCatalog;
         },
       };
       apply?.();
+    }
+    const normalizationVersion = scope === "doctor" ? readSqliteUserVersion(db) : 0;
+    if (normalizationVersion > 0 && normalizationVersion < OPENCLAW_STATE_SCHEMA_VERSION) {
+      // The first async resume can precede capture; yield before this existing repair writes.
+      const applyNormalization = yield {
+        sync() {
+          assertWriteAllowed();
+          normalizeSqliteText(db);
+        },
+        async prepare() {
+          return () => {
+            assertWriteAllowed();
+            normalizeSqliteText(db);
+          };
+        },
+      };
+      applyNormalization?.();
     }
     if (scope === "version" || scope === "doctor") {
       yield {
@@ -412,26 +380,14 @@ function* repairOpenedStateSchemaSteps(
       assertOpenClawStateDatabaseOwner(db, { pathname });
       assertWriteAllowed();
     };
-    const recordedDamage =
-      canInspectIndexes &&
-      Boolean(
-        openClawStateDatabaseCache.getOpenClawStateDatabaseRecordedFailure(pathname) ||
-        readOpenClawDatabaseQuarantineFailure("state", pathname, { env, fresh: true }),
-      );
+    const recordedDamage = canInspectIndexes && hasRecordedStateDatabaseDamage(pathname, env);
     let scanCorruptIndexes = recordedDamage || (scope === "indexes" && integrityCheck === "full");
     let sourceIntegrityVerified = false;
     if (canInspectIndexes && !scanCorruptIndexes) {
-      try {
-        assertSqliteIntegrity(db, pathname, integrity);
-        sourceIntegrityVerified = true;
-      } catch (error) {
-        if (error instanceof Error && isTerminalSqliteIntegrityError(error)) {
-          scanCorruptIndexes = true;
-        } else if (!(error instanceof SqliteRepairableForeignKeyError)) {
-          throw error;
-        }
-        // Known orphan rows retain their preserving recovery inside the write transaction.
-      }
+      // Known orphan rows ("foreign-key") retain their preserving recovery inside the write transaction.
+      const verdict = classifyStateDatabaseIntegrity(db, pathname, integrity ?? {});
+      sourceIntegrityVerified = verdict === "verified";
+      scanCorruptIndexes = verdict === "corrupt";
     }
     if (canInspectIndexes && scanCorruptIndexes) {
       let applyIndexRepair: (() => string[]) | undefined;

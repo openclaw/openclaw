@@ -166,9 +166,8 @@ suite.define(() => {
           await expect.poll(() => modal.count()).toBe(0);
         };
         const begin = async () => {
-          await page.locator("[data-models-connect]").click();
-          await page.locator(`[data-models-login-provider="${loginProvider}"]`).click();
-          await modalButton(loginLabel).click();
+          await page.locator("[data-models-catalog-search]").fill(loginProvider);
+          await page.locator(`[data-models-catalog-provider="${loginProvider}"] button`).click();
           const link = page.locator(".wizard-step__external-link");
           await link.waitFor();
           const popup = context.waitForEvent("page");
@@ -194,7 +193,9 @@ suite.define(() => {
         await freshPage.waitForURL(freshResponse.url());
         expect(new URL(freshResponse.url()).origin).toBe(loginOrigin);
         await expect.poll(profile).toMatchObject(savedProfile);
-        await modal.getByRole("heading", { name: `${loginLabel} is ready`, exact: true }).waitFor();
+        await modal
+          .getByRole("heading", { name: `${loginLabel} connected`, exact: true })
+          .waitFor();
         await page
           .getByText(`${loginLabel}: Provider credentials saved.`, { exact: true })
           .waitFor();

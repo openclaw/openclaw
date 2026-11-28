@@ -301,7 +301,14 @@ describe("local checkout publication", () => {
       await source.git("add", "shared.txt");
     }
     await source.git("add", "artifact.txt");
-    await source.git("commit", "-m", "Implement the requested change");
+    await source.git(
+      "commit",
+      "-m",
+      "Implement the requested change\n\nWhy.\n\nKeep this explanation.\nSigned-off-by: Fixture <fixture@example.invalid>\nMore context.\nReviewed-by: a",
+    );
+    if (outcome === "published") {
+      await source.git("commit", "--allow-empty", "-m", "Follow-up notes");
+    }
     const linked = path.join(root, "linked-worktree");
     if (outcome === "linked project worktree") {
       await source.git("worktree", "add", "-q", "--detach", linked, "HEAD");
@@ -555,20 +562,27 @@ describe("local checkout publication", () => {
     }
     if (outcome.startsWith("before")) {
       expect(result).toMatchObject([
-        false,
-        undefined,
-        { code: "UNAVAILABLE", message: expect.stringContaining("no longer authorized") },
+        true,
+        { status: "published", url: expect.stringContaining("/pull/") },
       ]);
-      expect(source.effects).toEqual(outcome === "before PR" ? ["push"] : []);
-      if (outcome === "before binding") {
-        expect(loadSessionEntryReadOnly(scope)?.worktree).toBeUndefined();
-      }
+      expect(source.effects).toEqual(["push", "pull_request"]);
+      const tasks = await listSessionChildEntriesReadOnly(scope);
+      expect(tasks).toHaveLength(1);
+      expect(tasks[0]?.entry.worktree?.canonicalWorkspaceDir).toBe(publicationSource);
       return;
     }
     expect(result).toMatchObject([
       true,
       { status: "published", url: expect.stringContaining("/pull/") },
     ]);
+    // No caller named a title or body: the PR describes the task's first commit, without its
+    // trailers, while the publication commit keeps naming its branch.
+    expect(f.publishedTitles[0]).toBe("Implement the requested change");
+    expect(f.publishedBodies[0]).toMatch(/^Why\.\n\nKeep this explanation\.\nMore context\.\n\n/u);
+    expect(f.publishedBodies[0]).not.toContain("Signed-off-by:");
+    expect(f.publishedBodies[0]).not.toContain("Reviewed-by:");
+    const published = await readPublicationCommit(source.git, result[1].headCommit);
+    expect(published.message).toMatch(/^Publish openclaw\//u);
     const publicationTarget = { url: result[1].url, branch: result[1].branch };
     const parent = loadSessionEntryReadOnly(scope)!;
     expect(parent).toMatchObject({
@@ -658,7 +672,7 @@ describe("local checkout publication", () => {
       expect(await invoke(source.cwd, true, "guest-follow-up")).toMatchObject([
         false,
         undefined,
-        { message: expect.stringContaining("requester is no longer authorized") },
+        { message: expect.stringContaining("requester is not authorized to publish") },
       ]);
       expect(await source.git("-C", task.entry.spawnedCwd!, "rev-parse", "HEAD")).toBe(taskHead);
       expect(source.effects).toEqual(["push", "pull_request"]);
@@ -681,11 +695,7 @@ describe("local checkout publication", () => {
       expect(revoked).toBe(true);
       expect(await source.git("-C", task.entry.spawnedCwd!, "rev-parse", "HEAD")).toBe(taskHead);
       expect(source.effects).toEqual(["push", "pull_request"]);
-      expect(revokedResult).toMatchObject([
-        false,
-        undefined,
-        { message: expect.stringContaining("session authorization is unavailable") },
-      ]);
+      expect(revokedResult).toMatchObject([false, undefined, { code: "UNAVAILABLE" }]);
       return;
     }
 

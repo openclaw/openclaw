@@ -40,6 +40,17 @@ function usesPhysicalBasedir(content: string): boolean {
   return /^[ \t]*basedir_abs=/mu.test(content);
 }
 
+/**
+ * The path a POSIX shim's `$basedir` words resolve from: the physical bin directory when the
+ * shim defines `basedir_abs`, else the directory as the shell reached it. Detection and
+ * repair use this one answer, so a symlinked bin directory cannot make them disagree.
+ */
+export async function resolveLauncherShellFile(file: string, content: string): Promise<string> {
+  return usesPhysicalBasedir(content)
+    ? path.join(await fs.realpath(path.dirname(file)), path.basename(file))
+    : file;
+}
+
 function isWindowsLauncher(file: string): boolean {
   return /\.(?:cmd|ps1)$/iu.test(file);
 }
@@ -72,9 +83,7 @@ export async function resolveRuntimeLauncherTargets(
   if (bunLauncher) {
     return [bunLauncher.entryPath];
   }
-  const base = usesPhysicalBasedir(content)
-    ? await fs.realpath(path.dirname(file))
-    : path.dirname(file);
+  const base = path.dirname(await resolveLauncherShellFile(file, content));
   const relatives = isWindowsLauncher(file)
     ? [...content.matchAll(windowsLauncherRelativePath)]
         .map((match) => match[2]!.replaceAll("\\", path.sep))

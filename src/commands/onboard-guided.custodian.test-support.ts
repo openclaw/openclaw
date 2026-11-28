@@ -254,6 +254,9 @@ function setupDeps(params: {
     ),
     runForegroundGateway: vi.fn(async () => undefined),
     listManualOptions: vi.fn(async () => ({
+      candidates: [],
+      unavailableCandidates: [],
+      recommendedInstalls: [],
       manualProviders: [],
       authOptions: [],
       workspace: "/tmp/openclaw-workspace",

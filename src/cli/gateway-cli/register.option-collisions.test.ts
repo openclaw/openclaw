@@ -145,6 +145,12 @@ const sharedProgram = createProgram();
 describe("gateway register option collisions", () => {
   beforeEach(() => vi.clearAllMocks());
 
+  it("keeps confirmed lock recovery available without advertising it", () => {
+    const gateway = sharedProgram.commands.find((command) => command.name() === "gateway");
+    expect(gateway?.commands.some((command) => command.name() === "recover-lock")).toBe(true);
+    expect(gateway?.helpInformation()).not.toContain("recover-lock");
+  });
+
   it("requires explicit confirmation before revealing the Gateway token", async () => {
     await parse("auth-token");
 

@@ -5,15 +5,16 @@ import { en } from "./en.ts";
 const catalog = {
   chat: {
     composer: {
-      workspaceRestoreSnapshotDetail:
-        "Restore the saved workspace, including uncommitted changes, before sending a message.",
+      workspaceRestoreSnapshotDetail: "Restore this conversation’s workspace to send a message.",
       workspaceRestoreFreshDetail:
-        "No saved snapshot is available. Restore a fresh checkout of the recorded branch before sending a message.",
-      workspaceRestore: "Restore",
+        "No saved workspace is available. Restore a fresh checkout to send a message.",
+      workspaceRestore: "Restore workspace",
       workspaceRestoreFresh: "Restore fresh checkout",
       workspaceRestoring: "Restoring workspace…",
       workspaceRestoreHelp:
         "Retry Restore, ask an administrator for help, or start a new conversation.",
+      workspaceRestoreAskAdmin:
+        "Ask an administrator to restore this workspace, or start a new conversation.",
     },
   },
 } satisfies TranslationMap;

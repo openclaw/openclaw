@@ -129,7 +129,7 @@ export const usageHandlers: GatewayRequestHandlers = {
     const profileId = gatewayClientSessionCreator(client ?? null)?.id;
     const visibilityIdentity = sessionCap && profileId ? `${profileId}:${sessionCap}` : undefined;
     const { startMs, endMs, includeUntimestamped } = range;
-    const dayBucket = resolveDayBucket(dateInterpretation);
+    const dayBucket = resolveDayBucket(dateInterpretation, range.civilDays);
     const limit = p.projection === "overview" ? 50 : (p.limit ?? 50);
     const hasOverviewOptions =
       p.projection === "overview" ||
@@ -206,8 +206,6 @@ export const usageHandlers: GatewayRequestHandlers = {
         specificKey,
         includeContextWeight,
         creatorKey,
-        // Paging, sorting, and usage filters derive from the same source snapshot.
-        overview: overviewOptions !== undefined,
         projection: p.projection === "overview" ? "overview" : "detail",
         includeAllContext,
         ...(visibilityIdentity ? { visibilityIdentity } : {}),
@@ -629,8 +627,33 @@ export const usageHandlers: GatewayRequestHandlers = {
     if (!resolved) {
       return;
     }
+    let matchesTimestamp: ((ms: number) => boolean) | undefined;
+    if (params?.selectedDays !== undefined) {
+      if (
+        !assertValidParams(
+          params,
+          validateSessionsUsageParams,
+          "sessions.usage.timeseries",
+          respond,
+        )
+      ) {
+        return;
+      }
+      const dates = resolveUsageDateRangeOrRespond(params, respond);
+      if (!dates) {
+        return;
+      }
+      const days = new Set(params.selectedDays);
+      const { startMs, endMs } = dates.range;
+      // A sample can span midnight. Select the original turns in the displayed calendar first.
+      matchesTimestamp = (ms) =>
+        ms >= startMs &&
+        ms <= endMs &&
+        (!days.size || days.has(formatDateLabel(ms, dates.interpretation)));
+    }
     const timeseries = await loadSessionUsageTimeSeries({
       ...resolved,
+      matchesTimestamp,
       maxPoints: 200,
     });
 

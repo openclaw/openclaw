@@ -59,9 +59,9 @@ export async function attachPublicationTransport(
     context.markHandshakeFailure("publication-transport-authority-changed");
     context.sendHandshakeErrorResponse(
       ErrorCodes.FORBIDDEN,
-      "publication transport authority changed",
+      "Publication transport admission failed. Reconnect and try again.",
     );
-    handler.close(1008, "publication transport authority changed");
+    handler.close(1008, "Publication transport admission failed. Reconnect and try again.");
     return;
   }
   const receiver = handler.prepareAuthenticatedReceive("operator");

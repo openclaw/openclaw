@@ -1324,6 +1324,9 @@ final class WebChatSwiftUIWindowController: NSObject, NSWindowDelegate {
         self.windowCommands.setSessionMenuConnection(nil)
         self.conversationController?.close()
         self.viewModel.detachTransport()
+        // AppKit can retain the closed window. Its chat view and SwiftUI toolbar both capture the profile transport.
+        self.window?.contentViewController = nil
+        self.window?.toolbar = nil
         self.window = nil
         self.onVisibilityChanged?(false)
         let onClosed = self.onClosed

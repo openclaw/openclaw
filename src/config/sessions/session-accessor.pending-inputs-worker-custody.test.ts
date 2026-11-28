@@ -532,7 +532,7 @@ it("refuses a stale shared reader without orphaning its source settlement captur
         prepared(
           facts,
           () => {
-            invalidateOpenClawAgentDatabaseValidation(database);
+            invalidateOpenClawAgentDatabaseValidation(database, "a maintenance write");
             return consume();
           },
           assertCurrent,

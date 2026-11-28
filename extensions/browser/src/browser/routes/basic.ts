@@ -327,6 +327,11 @@ export function registerBrowserBasicRoutes(app: BrowserRouteRegistrar, ctx: Brow
     });
   }
 
+  registerBasicProfilePost(app, ctx, "/prewarm", async ({ req, res, profileCtx }) => {
+    await profileCtx.ensureBrowserAvailable({ prewarm: true, signal: req.signal });
+    res.json({ ok: true });
+  });
+
   registerBasicProfilePost(app, ctx, "/start", async ({ req, res, profileCtx }) => {
     let headless: boolean | undefined;
     if (Object.hasOwn(req.query ?? {}, "headless")) {

@@ -115,7 +115,7 @@ it("keeps admitted method authority after preparation; refuses the next request"
   };
   expect(await authorizeGatewayRequestPreDispatch(request)).toMatchObject({ error: null });
   expect(await authorizeGatewayRequestPreDispatch(request)).toMatchObject({
-    error: { code: "FORBIDDEN", message: "Gateway requester authority changed" },
+    error: { code: "FORBIDDEN", message: "This connection lost access. Reconnect and try again." },
   });
 });
 

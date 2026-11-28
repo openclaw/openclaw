@@ -74,7 +74,7 @@ export type MediaAttachmentDisposition =
   | { kind: "capability-disabled" }
   | { kind: "no-model" }
   | { kind: "scope-denied" }
-  | { kind: "failed"; reason?: string; status?: number; code?: string };
+  | { kind: "failed"; reason?: string; status?: number; code?: string; apiKeyRequired?: string };
 
 export type MediaAttachmentProcessing = "completed" | "omitted";
 
@@ -95,6 +95,14 @@ export type MediaUnderstandingDecision = {
   // Optional for shipped SDK decision literals; absence means unknown processing.
   attachmentProcessing?: Record<number, MediaAttachmentProcessing>;
   nativeVisionActive?: boolean;
+};
+
+export type RunMediaUnderstandingFileResult = {
+  text: string | undefined;
+  provider?: string;
+  model?: string;
+  output?: MediaUnderstandingOutput;
+  decision?: MediaUnderstandingDecision;
 };
 
 type MediaUnderstandingTextResult = {

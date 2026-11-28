@@ -818,13 +818,26 @@ private func pendingHandoffDiagnostic(
         #expect(appModel.canAutoReconnect)
     }
 
-    @Test @MainActor func `stable gateway owner preserves focused chat across route changes`() throws {
-        let appModel = NodeAppModel()
-        defer { appModel.disconnectGateway() }
-        let currentConfig = Self.makeGatewayConnectConfig()
+    @Test @MainActor func `stable gateway owner preserves focused chat across route changes`() async throws {
+        let registry = await GatewayRegistryTestIsolation()
+        defer { registry.restore() }
+        let currentConfig = Self.makeGatewayConnectConfig(stableID: "connect-chat-\(UUID().uuidString)")
+        let replacementID = "switch-chat-\(UUID().uuidString)"
+        defer {
+            GatewaySettingsStore.saveGatewayFocusedChatSessionKey(stableID: currentConfig.stableID, sessionKey: nil)
+            GatewaySettingsStore.saveGatewayFocusedChatSessionKey(stableID: replacementID, sessionKey: nil)
+        }
+        try #require(GatewaySettingsStore.upsertGatewayRegistryEntry(.init(
+            stableID: currentConfig.stableID, kind: .manual, name: "Launch test", host: "localhost", port: 443,
+            useTLS: true, contextPath: nil, lastConnectedAtMs: nil), activate: true))
+        GatewaySettingsStore.saveGatewayFocusedChatSessionKey(stableID: currentConfig.stableID, sessionKey: "old-chat")
+        let appModel = NodeAppModel(restoringSavedGatewayRoute: true)
+        defer { appModel.suspendGatewayForTargetReview() }
         let focusedSessionKey = "agent:main:ios-focused"
         appModel.applyGatewayConnectConfig(currentConfig)
-        appModel.focusChatSession(focusedSessionKey)
+        #expect(appModel.chatSessionKey == "main")
+        appModel.openChat(sessionKey: focusedSessionKey)
+        GatewaySettingsStore.saveGatewayFocusedChatSessionKey(stableID: currentConfig.stableID, sessionKey: "old-chat")
 
         let replacementURL = try #require(URL(string: "wss://127.0.0.1:2"))
         let refreshedRoute = Self.makeGatewayConnectConfig(
@@ -835,10 +848,11 @@ private func pendingHandoffDiagnostic(
 
         let replacementConfig = Self.makeGatewayConnectConfig(
             url: replacementURL,
-            stableID: "manual|replacement.example.com|443")
+            stableID: replacementID)
+        GatewaySettingsStore.saveGatewayFocusedChatSessionKey(stableID: replacementID, sessionKey: "other-chat")
         appModel.applyGatewayConnectConfig(replacementConfig, forceReconnect: true)
 
-        #expect(appModel.chatSessionKey != focusedSessionKey)
+        #expect(appModel.chatSessionKey == "other-chat")
     }
 
     @Test @MainActor func `replacement preflight does not adopt old route pairing failure`() {
@@ -3518,7 +3532,7 @@ private func pendingHandoffDiagnostic(
         #expect(SessionStatusScope.available(isConnected: appModel.isOperatorGatewayConnected).contains(.snoozed))
         let snoozed = roster.sessions.filter { SessionStatusScope.snoozed.includes($0, at: now) }
         #expect(snoozed == [session])
-        #expect(CommandCenterTab.sessionDetail(session, now: now).hasPrefix("Wakes "))
+        #expect(SessionPresentation.detail(session, now: now).hasPrefix("Wakes "))
         appModel.selectedAgentId = "work"
         #expect(await appModel.loadCachedChatSessions(gatewayID: gatewayA, agentID: "work") == [workGlobal])
     }

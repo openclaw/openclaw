@@ -536,7 +536,7 @@ export async function executeRemoteExecTurn(params: {
             currentEnvironment.attachedSessionIds.length !== 1 ||
             currentEnvironment.attachedSessionIds[0] !== params.placement.sessionId
           ) {
-            throw new Error("node execution placement authority is no longer current");
+            throw new Error("Node execution placement changed. Start a new turn.");
           }
         },
       },

@@ -21,7 +21,7 @@ import {
 } from "../../src/gateway/methods/registry.js";
 import { resolveGatewayOperatorAccessAuthority } from "../../src/gateway/operator-access-policy.js";
 import { invalidateOperatorRolePolicy } from "../../src/gateway/operator-role-policy.js";
-import { captureGatewayOperatorRunAuthority } from "../../src/gateway/operator-run-authority.js";
+import { prepareGatewayOperatorRunAuthority } from "../../src/gateway/operator-run-authority.js";
 import { createDirectChatContext } from "../../src/gateway/server-chat.agent-events.test-helpers.js";
 import { handleGatewayRequest } from "../../src/gateway/server-methods.js";
 import { toolsInvokeHandlers } from "../../src/gateway/server-methods/tools-invoke.js";
@@ -121,7 +121,7 @@ it.each(["policy", "router-refusal", "host-abort"] as const)(
       );
       context.resolveGatewayContext = () => context;
       const source = new AbortController();
-      const captured = await captureGatewayOperatorRunAuthority({
+      const captured = await prepareGatewayOperatorRunAuthority({
         client,
         context,
         sourceAuthority: {

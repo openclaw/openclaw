@@ -113,7 +113,9 @@ async function reopen(view: Awaited<ReturnType<typeof mount>>) {
   );
   view.update(view.params);
   await waitForSolid(() =>
-    expect(view.container.querySelector("[data-chat-model-favorite]")).not.toBeNull(),
+    expect(
+      view.container.querySelector("[data-chat-model-search]")?.getAttribute("aria-expanded"),
+    ).toBe("true"),
   );
 }
 
@@ -192,7 +194,7 @@ it("uses the same favorite across runtimes while retaining distinct row identiti
   await waitForSolid(() => expect(Object.hasOwn(view.entries, key)).toBe(false));
 });
 
-it("reopens on Favorites only when it was chosen last and holds the selected model", async () => {
+it("reopens on Favorites when last chosen, even with an unstarred model selected", async () => {
   const view = await mount({ [key]: [model] }, undefined, { selectedModelValue: model });
   const activeTab = () =>
     view.container
@@ -207,11 +209,9 @@ it("reopens on Favorites only when it was chosen last and holds the selected mod
   expect(localStorage.getItem(favoritesTabKey)).toBe("1");
   await reopenWith(model);
   await waitForSolid(() => expect(activeTab()).toBe("$favorites"));
-  // An unstarred selection opens its own provider; the Favorites preference remains.
   await reopenWith("openai/large");
-  await waitForSolid(() => expect(activeTab()).toBe("openai"));
-  await reopenWith(model);
   await waitForSolid(() => expect(activeTab()).toBe("$favorites"));
+  expect(rowValues(view.container)).toEqual([model]);
   await selectProvider(view.container, "openai");
   expect(localStorage.getItem(favoritesTabKey)).toBe("0");
   await reopenWith(model);

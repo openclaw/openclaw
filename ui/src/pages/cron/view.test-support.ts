@@ -25,8 +25,9 @@ export function createCronViewJob(id: string, overrides: Partial<CronJob> = {}):
     sessionTarget: "main",
     wakeMode: "next-heartbeat",
     payload: { kind: "systemEvent", text: "ping" },
+    state: {},
     ...overrides,
-  } as CronJob;
+  };
 }
 
 export function scheduledJob(id: string, overrides: Partial<CronJob> = {}): CronJob {
@@ -66,6 +67,7 @@ export function createCronViewProps(overrides: Partial<CronProps> = {}): CronPro
     channelLabels: {},
     runs: [],
     runsState: "ready",
+    runsError: null,
     runsHasMore: false,
     runsLoadingMore: false,
     runsStatuses: [],
@@ -91,6 +93,7 @@ export function createCronViewProps(overrides: Partial<CronProps> = {}): CronPro
     onRun: () => undefined,
     onRemove: async () => undefined,
     onLoadMoreRuns: () => undefined,
+    onRetryRuns: () => undefined,
     onRunsFiltersChange: () => undefined,
     ...overrides,
   };

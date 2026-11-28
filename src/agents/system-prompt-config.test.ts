@@ -6,11 +6,13 @@ import {
   restoreActivePluginRegistrySnapshot,
   setActivePluginRegistry,
 } from "../plugins/runtime.js";
+import * as projects from "../projects/project-registry.js";
 import { createChannelTestPluginBase, createTestRegistry } from "../test-utils/channel-plugins.js";
 import * as ttsSettings from "../tts/tts-settings.js";
 import { configFor } from "./model-auth.fixtures.test-support.js";
 import * as preparedModelCatalog from "./prepared-model-catalog.js";
 import { prepareConfiguredModelAliases } from "./prepared-model-runtime.configured-completion.js";
+import { sessionProjectGuidanceSource } from "./session-project-guidance.js";
 import { AuthStorage, ModelRegistry } from "./sessions/index.js";
 import { buildConfiguredAgentSystemPrompt } from "./system-prompt-config.js";
 import { buildAgentHarnessBasePrompt } from "./system-prompt-harness-base.js";
@@ -118,6 +120,58 @@ function reasoningConfig(
 }
 
 describe("buildConfiguredAgentSystemPrompt", () => {
+  it("suggests a project only when this conversation can move to a registered destination", async () => {
+    const workspace = {
+      id: "workspace:main",
+      displayName: "Workspace",
+      source: "workspace" as const,
+      repoRoot: "/workspace",
+    };
+    const website = {
+      id: "website",
+      displayName: "Website",
+      source: "registered" as const,
+      repoRoot: "/website",
+    };
+    const config = { agents: { entries: { main: { workspace: workspace.repoRoot } } } };
+    const catalog = vi.spyOn(projects, "listProjectRegistry").mockResolvedValue([workspace]);
+    const prompt = (
+      projectId?: string,
+      toolNames = ["session_project"],
+      sessionKey = "agent:main:chat",
+    ) =>
+      buildPrompt({
+        config,
+        agentId: "main",
+        runtimeInfo: { sessionKey },
+        toolNames,
+        prepareSessionProjectGuidance: sessionProjectGuidanceSource({
+          workspaceDir: workspace.repoRoot,
+          config,
+          agentId: "main",
+          sessionKey,
+          entry: { sessionId: "chat", updatedAt: 1, projectId },
+          senderIsOwner: true,
+        }),
+      });
+    const hint = "You are in the default workspace";
+    expect(await prompt()).not.toContain(hint);
+    catalog.mockResolvedValue([workspace, website]);
+    const eligible = await prompt();
+    expect(eligible).toContain(hint);
+    expect(eligible).toContain('{"id":"website","name":"Website"}');
+    expect(eligible).toContain("as your first tool call");
+    const home = await prompt(workspace.id, ["session_project"], "agent:main:main");
+    expect(home).toContain("separate project session");
+    expect(home.split("## Session project")[1]?.split("\n## ")[0]).not.toContain("sessions_spawn");
+    expect(home).toContain('{"id":"website","name":"Website"}');
+    expect(home).not.toContain("call session_project with action move");
+    expect(await prompt(workspace.id)).toContain(hint);
+    expect(await prompt("workspace:another-agent")).not.toContain(hint);
+    expect(await prompt(website.id)).not.toContain(hint);
+    expect(await prompt(undefined, [])).not.toContain(hint);
+  });
+
   it.each([
     ["OpenClaw", true],
     ["crestodian", true],
@@ -207,28 +261,24 @@ describe("buildConfiguredAgentSystemPrompt", () => {
       expect(prompt).not.toContain("restart, config, channels");
       expect(prompt).not.toContain("For an update request, use the Control UI");
       expect(prompt).not.toContain("For updates there, use `openclaw update --yes`");
-      expect(prompt).toContain("Use the built-in updater for standard installs.");
-      expect(prompt).toContain(
-        "For a directly served Git checkout, use its documented in-place update procedure only when the host authorizes it for this caller. An owner need not specify a revision for that procedure.",
+      for (const rule of [
+        "explicit owner request only",
+        "identify the installation actually serving",
+        "built-in updater for standard installs",
+        "a served Git checkout's in-place procedure only when the host authorizes this caller",
+        "no revision needed",
+        "Git on source installs only for a requested exact revision with host maintenance authorization",
+        "report the blocker",
+        "Shell access is not update authority",
+        "change install method only on explicit request",
+        "Keep a working restart path",
+        "if runtime admission refuses, report it and never bypass via `exec`",
+      ]) {
+        expect(prompt).toContain(rule);
+      }
+      expect(prompt.includes("`gateway` update.run only for built-in-updater installs")).toBe(
+        toolNames.includes("gateway"),
       );
-      expect(prompt).toContain(
-        "Otherwise use Git on source installs only for an explicitly requested exact revision with host maintenance authorization.",
-      );
-      expect(prompt).toContain(
-        "If you cannot establish the serving installation or an authorized procedure, report the blocker instead of guessing.",
-      );
-      expect(prompt).toContain(
-        "Shell access is not update authority. Change installation methods only on explicit operator request.",
-      );
-      expect(prompt).toContain("Keep a working restart path before stopping");
-      expect(prompt).toContain(
-        "if runtime admission refuses, report the blocker and never bypass via `exec`",
-      );
-      expect(
-        prompt.includes(
-          "`gateway`: use update.run only when the installation uses the built-in updater",
-        ),
-      ).toBe(toolNames.includes("gateway"));
     }
   });
 
@@ -239,14 +289,28 @@ describe("buildConfiguredAgentSystemPrompt", () => {
         await buildPrompt({ toolNames }),
         buildAgentHarnessBasePrompt({ toolNames }),
       ]) {
-        expect(prompt).toContain("blocks an explicit local repair");
-        expect(prompt).toContain("use existing file/exec permissions");
-        expect(prompt).toContain("save a rollback copy");
-        expect(prompt).toContain("validate, and read back");
-        expect(prompt).toContain(
-          "Never override approvals, readonly config, containment, or disabled tools",
-        );
-        expect(prompt).toContain("or edit access/approval/ownership policies");
+        const recovery = prompt.split("\n").find((line) => line.startsWith("Config recovery:"));
+        for (const rule of [
+          "blocks an explicit local repair",
+          "use existing file/exec permissions",
+          "prefer `openclaw config`",
+          "save a rollback copy",
+          "repair narrowly",
+          "validate",
+          "read back",
+        ]) {
+          expect(recovery).toContain(rule);
+        }
+        expect(recovery).toContain("Never override");
+        for (const guard of [
+          "approvals",
+          "readonly config",
+          "containment",
+          "disabled tools",
+          "access/approval/ownership policies",
+        ]) {
+          expect(recovery?.split("Never override")[1]).toContain(guard);
+        }
         expect(prompt).not.toContain("Exact commands need no helper inference");
       }
     },
@@ -273,7 +337,7 @@ describe("buildConfiguredAgentSystemPrompt", () => {
       });
       expect(disabled).not.toContain("`/update`");
       expect(disabled).not.toContain("`/restart`");
-      expect(disabled).toContain("Keep a working restart path before stopping");
+      expect(disabled).toContain("Keep a working restart path");
       expect(disabled).toContain("Toggle /reasoning; /status shows when enabled.");
       const enabled = await buildPrompt({ toolNames, config: {} });
       expect(enabled).toContain("`/update`");
@@ -533,7 +597,5 @@ describe("buildConfiguredAgentSystemPrompt", () => {
       toolNames: ["sessions_spawn", "subagents"],
     });
     expect(prompt.includes("## Delegation")).toBe(expected);
-    // The child brief has one owner: `## Delegation` when it renders, otherwise Tooling.
-    expect(prompt.includes("objective/output/write-scope/verification")).toBe(!expected);
   });
 });

@@ -76,6 +76,8 @@ export type StateReadScopeOptions = OpenClawStateDatabaseOptions & {
   allowStartupRollbackRecovery?: true;
   /** Selected reports acquire shared bytes only when a reader actually needs them. */
   lazy?: boolean;
+  /** Read-only reports can use the canonical source when it has a verified live SQLite owner. */
+  preferLiveOwner?: true;
   /** Command owners may cancel preparation before the callback acquires its read scope. */
   signal?: AbortSignal;
 };
@@ -215,8 +217,6 @@ export type OpenClawStateReadCommand =
   | UpdateRunAdmissionReadCommand
   | { type: "updateRuns.status" }
   | { type: "updateRuns.historyStatus" }
-  | { type: "updateRuns.pluginCohortRecoveries" }
-  | { type: "updateRuns.pluginSnapshotCollection" }
   | { type: "worktrees.cleanupState" }
   | { type: "workerPlacements.changeSnapshot"; profileIds?: string[] }
   | { type: "nodeHost.config" }

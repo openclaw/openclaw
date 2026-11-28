@@ -1,13 +1,15 @@
 import { normalizeOptionalString } from "@openclaw/normalization-core/string-coerce";
 import { assertAdmittedRunOperatorAuthority } from "../agents/admitted-run-context.js";
 import {
-  captureGatewayToolCallerAssertion,
   getGatewayToolCallerIdentity,
   resolveGatewayToolOperatorSelection,
   withGatewayToolCallerIdentity,
   withoutGatewayToolCallerIdentity,
 } from "../agents/tools/gateway-caller-context.js";
-import { composeSessionSourceAssertion } from "../config/sessions/session-source-authority.js";
+import {
+  composePreparedOnlySessionSource,
+  composeSessionSourceAssertion,
+} from "../config/sessions/session-source-authority.js";
 import { isHostPluginApprovalMethod } from "../infra/approval-gateway-runtime-methods.js";
 import { getActivePluginRegistry } from "../plugins/runtime.js";
 import {
@@ -17,29 +19,18 @@ import {
   getPluginRuntimeGatewayRequestScope,
   withPluginRuntimeGatewayRequestScope,
 } from "../plugins/runtime/gateway-request-scope.js";
+import { assertParticipationGatewayMethod } from "../security/dangerous-tools.js";
 import { intersectOperatorScopes, roleScopesAllow } from "../shared/operator-scope-compat.js";
 import { readInProcessAgentRuntimeIdentity } from "./in-process-agent-runtime-identity.js";
-import { isInProcessSessionRun } from "./in-process-session-run.js";
 import {
   bindInProcessSubagentResume,
   readInProcessSubagentResume,
 } from "./in-process-subagent-resume.js";
-import {
-  projectOperatorScopesForMethod,
-  resolveAgentRuntimeCronScope,
-  resolveLeastPrivilegeOperatorScopesForMethod,
-} from "./method-scopes.js";
+import { resolveLeastPrivilegeOperatorScopesForMethod } from "./method-scopes.js";
 import { resolveGatewayOperatorRoleActor } from "./operator-role-policy.js";
-import { captureGatewayOperatorRunAuthority } from "./operator-run-authority.js";
+import { prepareGatewayOperatorRunAuthority } from "./operator-run-authority.js";
 import { captureGatewayOperatorContinuation } from "./operator-run-recovery.js";
-import {
-  ADMIN_SCOPE,
-  READ_SCOPE,
-  SESSION_READ_SCOPE,
-  SESSION_WRITE_SCOPE,
-  WRITE_SCOPE,
-  isOperatorScope,
-} from "./operator-scopes.js";
+import { WRITE_SCOPE } from "./operator-scopes.js";
 import {
   readOperatorToolGatewayAuthority,
   runWithOperatorToolGatewayAuthority,
@@ -49,17 +40,19 @@ import { resolvePluginSessionWorkDispatch } from "./plugin-session-work-authorit
 import type { GatewayOperatorRoleActor } from "./server-methods/shared-types.js";
 import type {
   DispatchGatewayMethodInProcessOptions,
+  OperatorContinuationOptions,
   OperatorToolGatewayAuthority,
   ResolvedInProcessGatewayDispatch,
 } from "./server-plugin-in-process-dispatch.types.js";
+import { resolveInProcessSyntheticScopes } from "./server-plugin-in-process-scopes.js";
 import { resolveSystemScopeCeiling } from "./server-plugin-in-process-system-ceiling.js";
 import {
   createSyntheticPluginRuntimeClient,
   mergePluginRuntimeClientInternal,
   projectPluginRuntimeClientExecution,
+  runWithOperatorToolGatewayCleanupContext,
 } from "./server-plugin-runtime-client.js";
 import { createSessionContinuationLifetime } from "./session-continuation-lifetime.js";
-import { resolveSessionRuntimeAuthority } from "./session-runtime-authority.js";
 import {
   cancelSubagentCompletionToolHandoff,
   registerSubagentCompletionToolHandoff,
@@ -75,7 +68,7 @@ export async function withOperatorToolGatewayAuthority<T>(
   const context = scope?.resolveGatewayContext ? scope.resolveGatewayContext() : scope?.context;
   const captured =
     context && (authority.operatorRunAuthority || authority.operatorRoleActor?.kind !== "system")
-      ? await captureGatewayOperatorRunAuthority({
+      ? await prepareGatewayOperatorRunAuthority({
           client:
             scope?.client && !authority.operatorRunAuthority
               ? scope.client
@@ -91,7 +84,6 @@ export async function withOperatorToolGatewayAuthority<T>(
       : undefined;
   try {
     authority.assertCurrent?.();
-    captured?.authority.assertCurrent();
     return await runWithOperatorToolGatewayAuthority(
       {
         ...authority,
@@ -117,41 +109,9 @@ export async function withOperatorToolGatewayAuthority<T>(
   }
 }
 
-/** Transfer bounded cleanup without retaining the finished operator invocation. */
-export function runWithOperatorToolGatewayCleanupContext<T>(run: () => T): T {
-  const authority = readOperatorToolGatewayAuthority();
-  if (!authority) {
-    return run();
-  }
-  authority.signal.throwIfAborted();
-  const scope = getPluginRuntimeGatewayRequestScope();
-  // Retain the effective actor and scopes after releasing the invocation;
-  // profile attribution alone does not establish authority.
-  const client = createSyntheticPluginRuntimeClient({
-    authenticatedUserProfile: authority.authenticatedUserProfile,
-    scopes: [...authority.scopes],
-    operatorRoleActor:
-      authority.operatorRoleActor ??
-      scope?.client?.internal?.operatorRoleActor ??
-      (authority.authenticatedUserProfile
-        ? {
-            kind: "operator",
-            profileId: authority.authenticatedUserProfile.profileId,
-          }
-        : undefined),
-  });
-  return runOutsideOperatorToolGatewayAuthority(() =>
-    withPluginRuntimeGatewayRequestScope(
-      { ...scope, client, isWebchatConnect: scope?.isWebchatConnect ?? (() => false) },
-      run,
-    ),
-  );
-}
-
 export function captureOperatorToolGatewayContinuationContextInternal(
   target?: { sessionKey: string; agentId?: string },
-  options?: {
-    retainRequester?: true;
+  options?: OperatorContinuationOptions & {
     request?: { method: string; params: Record<string, unknown> };
   },
 ) {
@@ -172,7 +132,6 @@ export function captureOperatorToolGatewayContinuationContextInternal(
   }
   // Use the normal dispatch owner to intersect scopes and validate the live caller
   // before transferring its source. A cleanup scope alone retains request lifetime.
-  const assertCallerCurrent = captureGatewayToolCallerAssertion();
   const method = options?.request?.method ?? "agent";
   if (options?.request && method !== "plugins.reload") {
     throw new Error("Request-bound continuation only supports plugin reload");
@@ -189,28 +148,33 @@ export function captureOperatorToolGatewayContinuationContextInternal(
         }
       : { syntheticScopeMode: "exact" as const }),
   });
-  return captureGatewayOperatorContinuation({
+  return prepareGatewayOperatorRunAuthority({
     client: resolved.operatorSourceClient,
     context: resolved.context,
     hasCurrentClientAuthority: resolved.hasCurrentClientAuthority,
   }).then((captured) => {
     try {
-      captured?.authority.assertCurrent();
       resolved.assertContextCurrent();
       resolved.assertInvocationCurrent();
-      assertCallerCurrent?.(method);
+      for (const signal of caller?.approvalSignals ?? []) {
+        signal.throwIfAborted();
+      }
       const continuationScope = runWithOperatorToolGatewayCleanupContext(() => ({
         ...getPluginRuntimeGatewayRequestScope(),
         client: captured
-          ? mergePluginRuntimeClientInternal(resolved.client, {
-              operatorRunAuthority: captured.authority,
-            })
+          ? mergePluginRuntimeClientInternal(
+              resolved.client,
+              { operatorRunAuthority: captured.authority },
+              intersectOperatorScopes(
+                resolved.client.connect.scopes ?? [],
+                captured.authority.scopes,
+              ),
+            )
           : resolved.client,
         context: resolved.context,
         resolveGatewayContext,
         isWebchatConnect: resolved.isWebchatConnect,
-        // The retained source still checks device/profile/role and Gateway revocation;
-        // the completed request or disconnected transport no longer owns this work.
+        // Transfer requester custody independently of the completed invocation.
         hasCurrentClientAuthority: captured ? undefined : resolved.hasCurrentClientAuthority,
       }));
       const ownerResolver = resolved.context.resolveGatewayContext ?? resolveGatewayContext;
@@ -224,7 +188,7 @@ export function captureOperatorToolGatewayContinuationContextInternal(
         if (lifetime.signal.aborted) {
           return;
         }
-        lifetime.abort(new Error("Gateway continuation authority is no longer active"));
+        lifetime.abort(new Error("Gateway continuation ended. Start a new request."));
         for (const signal of signals) {
           signal.removeEventListener("abort", release);
         }
@@ -238,7 +202,6 @@ export function captureOperatorToolGatewayContinuationContextInternal(
       }
       const assertCurrent = () => {
         lifetime.signal.throwIfAborted();
-        captured?.authority.assertCurrent();
         if (captured) {
           resolved.assertGatewayCurrent();
         } else {
@@ -257,31 +220,58 @@ export function captureOperatorToolGatewayContinuationContextInternal(
         assertCurrent,
         operatorAuthority: captured?.authority,
         scopes: resolved.client.connect.scopes,
+        requesterOrigin: requester?.origin,
         signal: lifetime.signal,
         release,
         run: runInScope,
         /** Re-enter only the requester selected before transfer, under this retained source. */
-        runWithRequester<T>(run: () => Promise<T>): Promise<T> {
-          return runInScope(() =>
-            requester
-              ? withGatewayToolCallerIdentity(
-                  {
-                    agentId: requester.agentId,
-                    sessionKey: requester.sessionKey,
-                    requesterOrigin: requester.origin,
-                    operatorAuthority: captured?.authority,
-                    personalToolIdentityScoped: true,
-                    personalToolSelection: Object.freeze({
-                      operatorAuthority: captured?.authority,
-                      requesterOrigin: requester.origin,
-                      assertCurrent,
-                    }),
-                    gatewayContextResolver: resolveGatewayContext,
-                  },
-                  run,
-                )
-              : run(),
-          );
+        async runWithRequester<T>(run: () => Promise<T>, agentId?: string): Promise<T> {
+          assertCurrent();
+          const admitted = await captureGatewayOperatorContinuation({
+            agentId: agentId ?? target?.agentId,
+            client: continuationScope.client ?? null,
+            context: resolved.context,
+          });
+          try {
+            return await runInScope(() =>
+              withPluginRuntimeGatewayRequestScope(
+                {
+                  ...continuationScope,
+                  client: admitted
+                    ? mergePluginRuntimeClientInternal(
+                        resolved.client,
+                        { operatorRunAuthority: admitted.authority },
+                        intersectOperatorScopes(
+                          resolved.client.connect.scopes ?? [],
+                          admitted.authority.scopes,
+                        ),
+                      )
+                    : continuationScope.client,
+                },
+                () =>
+                  requester
+                    ? withGatewayToolCallerIdentity(
+                        {
+                          agentId: requester.agentId,
+                          sessionKey: requester.sessionKey,
+                          requesterOrigin: requester.origin,
+                          operatorAuthority: admitted?.authority,
+                          personalToolIdentityScoped: true,
+                          personalToolSelection: Object.freeze({
+                            operatorAuthority: admitted?.authority,
+                            requesterOrigin: requester.origin,
+                            assertCurrent,
+                          }),
+                          gatewayContextResolver: resolveGatewayContext,
+                        },
+                        run,
+                      )
+                    : run(),
+              ),
+            );
+          } finally {
+            admitted?.release();
+          }
         },
       };
     } catch (error) {
@@ -294,7 +284,7 @@ export function captureOperatorToolGatewayContinuationContextInternal(
 /** Captured while live; its accepting owner, not the original invocation, releases it. */
 export function captureOperatorToolGatewayContinuationContext(
   target?: { sessionKey: string; agentId?: string },
-  options?: { retainRequester?: true },
+  options?: OperatorContinuationOptions,
 ) {
   return captureOperatorToolGatewayContinuationContextInternal(target, options);
 }
@@ -302,14 +292,14 @@ export function captureOperatorToolGatewayContinuationContext(
 /** Holds the original operator source until an accepted asynchronous follow-up settles. */
 export async function runWithOperatorToolGatewayContinuationContext<T>(
   run: () => Promise<T>,
+  agentId?: string,
 ): Promise<T> {
-  const preparation = captureOperatorToolGatewayContinuationContext();
-  if (!preparation) {
+  const captured = await captureOperatorToolGatewayContinuationContext();
+  if (!captured) {
     return await runWithOperatorToolGatewayCleanupContext(run);
   }
-  const captured = await preparation;
   try {
-    return await captured.run(run);
+    return await captured.runWithRequester(run, agentId);
   } finally {
     captured.release();
   }
@@ -347,6 +337,7 @@ export function resolveInProcessGatewayDispatch(
     caller?.operatorAuthority ??
     inheritedOperatorAuthority?.operatorRunAuthority ??
     scope?.client?.internal?.operatorRunAuthority;
+  assertParticipationGatewayMethod(method, operatorRunAuthority);
   // A registered settle cohort owns its wake after the spawning tool has finished.
   // Qualify that live owner before replacing the tool lifetime at admission.
   const assertSettleWakeCurrent =
@@ -354,17 +345,9 @@ export function resolveInProcessGatewayDispatch(
   const isHostOwnedAgentRun =
     method === "agent" && Boolean(options?.agentRunTracking || assertSettleWakeCurrent);
   const assertTransferredSettleWakeCurrent =
-    assertSettleWakeCurrent && operatorRunAuthority
-      ? composeSessionSourceAssertion([assertSettleWakeCurrent, operatorRunAuthority.assertCurrent])
-      : undefined;
+    assertSettleWakeCurrent && operatorRunAuthority ? assertSettleWakeCurrent : undefined;
   assertTransferredSettleWakeCurrent?.();
-  const runtimeAuthority = assertTransferredSettleWakeCurrent
-    ? { assertCurrent: assertTransferredSettleWakeCurrent }
-    : resolveSessionRuntimeAuthority({
-        method,
-        runtimeIdentity: agentRuntimeIdentity ?? scope?.client?.internal?.agentRuntimeIdentity,
-      });
-  const assertCallerCurrent = captureGatewayToolCallerAssertion(method);
+  const assertCallerCurrent = composePreparedOnlySessionSource(caller);
   const transfersCreatedInput =
     method === "sessions.create" &&
     (options?.sessionCreation?.via === "spawn" ||
@@ -374,7 +357,6 @@ export function resolveInProcessGatewayDispatch(
         options.sessionCreation.actor.source === "profile" &&
         options.sessionCreation.actor.id === operatorRunAuthority?.profileId)) &&
     caller?.operationalRunInstance !== undefined &&
-    assertCallerCurrent !== undefined &&
     options.agentToolCaller?.agentId === caller.agentId &&
     options.agentToolCaller.sessionKey === caller.sessionKey;
   const assertInvocationCurrent = composeSessionSourceAssertion([
@@ -382,7 +364,6 @@ export function resolveInProcessGatewayDispatch(
     // none may outlive or broaden a recovered service operation's tool ceiling.
     service?.assertCurrent,
     selection?.assertCurrent,
-    runtimeAuthority?.assertCurrent,
     assertSettleWakeCurrent,
     !isHostOwnedAgentRun || !operatorRunAuthority
       ? composeSessionSourceAssertion(
@@ -393,11 +374,10 @@ export function resolveInProcessGatewayDispatch(
           },
         )
       : undefined,
-    operatorRunAuthority?.assertCurrent,
   ]);
   assertInvocationCurrent();
   if (!isHostOwnedAgentRun) {
-    assertCallerCurrent?.(method);
+    assertCallerCurrent?.();
   }
   const scopedOperatorProfile = scope?.client?.authenticatedUserProfile;
   const scopedRoleActor = scope?.client?.internal?.operatorRoleActor;
@@ -495,70 +475,18 @@ export function resolveInProcessGatewayDispatch(
     scopedSystemScopes && sourceScopes
       ? intersectOperatorScopes(sourceScopes, scopedSystemScopes)
       : (scopedSystemScopes ?? sourceScopes);
-  const registeredScope = context.getGatewayMethodRegistry?.().getScope(method);
-  const allowOwnSessionScope = context
-    .getGatewayMethodRegistry?.()
-    .getSessionAccess?.(method)?.allowOwnSessionScope;
-  const syntheticScopeMode = options?.syntheticScopeMode;
-  const cronScope = agentRuntimeIdentity && resolveAgentRuntimeCronScope(method);
-  // Scheduling retains the initiating grant for the saved continuation, not only
-  // permission to edit its job. Other scoped cron calls need just cron authority.
-  const cronScopes = cronScope
-    ? ((method === "cron.add" || method === "cron.update" ? operatorScopes : undefined) ?? [
-        cronScope,
-      ])
-    : undefined;
-  const requestedSyntheticScopes = (
-    (syntheticScopeMode === "minimum" ? cronScopes : undefined) ??
-    options?.syntheticScopes ??
-    (syntheticScopeMode === "exact"
-      ? (operatorScopes ?? scope?.client?.connect.scopes)
-      : undefined) ?? [WRITE_SCOPE]
-  ).map((requested) => {
-    const broad =
-      requested === SESSION_READ_SCOPE
-        ? READ_SCOPE
-        : requested === SESSION_WRITE_SCOPE
-          ? WRITE_SCOPE
-          : undefined;
-    return syntheticScopeMode === "minimum" &&
-      broad &&
-      operatorScopes &&
-      roleScopesAllow({ role: "operator", requestedScopes: [broad], allowedScopes: operatorScopes })
-      ? broad
-      : requested;
+  const syntheticScopes = resolveInProcessSyntheticScopes({
+    method,
+    params,
+    operatorScopes,
+    operatorAuthority: operatorRunAuthority,
+    options,
+    registeredScope: context.getGatewayMethodRegistry?.().getScope(method),
+    allowOwnSessionScope: context.getGatewayMethodRegistry?.().getSessionAccess?.(method)
+      ?.allowOwnSessionScope,
+    clientScopes: scope?.client?.connect.scopes,
+    agentRuntime: Boolean(agentRuntimeIdentity),
   });
-  // Narrow by authority, not literal membership: write also authorizes reads
-  // and Talk, including tools called by a synthetic continuation.
-  const syntheticScopes = operatorScopes
-    ? syntheticScopeMode === "exact"
-      ? requestedSyntheticScopes.filter((requestedScope) =>
-          roleScopesAllow({
-            role: "operator",
-            requestedScopes: [requestedScope],
-            allowedScopes: operatorScopes,
-          }),
-        )
-      : projectOperatorScopesForMethod({
-          method,
-          requestParams: params,
-          requestedScopes: requestedSyntheticScopes,
-          allowedScopes: operatorScopes,
-          ...(allowOwnSessionScope || isInProcessSessionRun(method, params)
-            ? { sessionScope: SESSION_WRITE_SCOPE }
-            : {}),
-          ...(isOperatorScope(registeredScope) ? { requiredScope: registeredScope } : {}),
-        })
-    : syntheticScopeMode === "exact"
-      ? requestedSyntheticScopes
-      : options?.syntheticScopes;
-  if (
-    syntheticScopeMode !== "exact" &&
-    operatorScopes?.includes(ADMIN_SCOPE) &&
-    !syntheticScopes?.includes(ADMIN_SCOPE)
-  ) {
-    syntheticScopes?.push(ADMIN_SCOPE);
-  }
   const hostApprovalRequestEligible =
     options?.allowHostPluginApprovalRequest === true &&
     isHostPluginApprovalMethod(method) &&
@@ -687,10 +615,7 @@ export function resolveInProcessGatewayDispatch(
       );
     }
   };
-  const assertSourceCurrent = composeSessionSourceAssertion([
-    operatorRunAuthority?.assertCurrent,
-    assertGatewayCurrent,
-  ]);
+  const assertSourceCurrent = assertGatewayCurrent;
   return {
     assertGatewayCurrent,
     assertSourceCurrent,
@@ -698,7 +623,6 @@ export function resolveInProcessGatewayDispatch(
     assertContextCurrent: composeSessionSourceAssertion([
       service?.assertCurrent,
       selection?.assertCurrent,
-      runtimeAuthority?.assertCurrent,
       assertSourceCurrent,
       method !== "agent" ? assertCallerCurrent : undefined,
       transfersCreatedInput ? options.agentToolCaller?.assertCurrent : undefined,
@@ -708,6 +632,16 @@ export function resolveInProcessGatewayDispatch(
     context,
     delegatedToolPolicyHandoffId,
     isWebchatConnect,
+    // A scoped plugin RPC may narrow its client during preparation. Bind the
+    // source handler here while its exact pre-narrowing client is still known.
+    parentHttpRequestAuthority:
+      useScopedClient &&
+      options?.disableSyntheticClient &&
+      scope?.gatewayMethodDispatchAllowed &&
+      !client.internal?.syntheticClient &&
+      !client.internal?.authenticatedOperator
+        ? scope.readRequestAuthority?.bind(undefined, scope.client)
+        : undefined,
     operatorSourceClient: operatorRunAuthority
       ? { ...client, internal: { ...client.internal, operatorRunAuthority } }
       : inheritedOperatorAuthority

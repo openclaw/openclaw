@@ -592,6 +592,7 @@ export type SessionHistoryWorkerDatabase = SessionTranscriptInventoryReaders &
     readPreparedCompaction: (
       input: Omit<SessionPreparedCompactionInput, "kind" | "database">,
       signal?: AbortSignal,
+      options?: { timeoutMs?: number },
     ) => Promise<SessionPreparedCompactionValue>;
     readAgentToolUsage: SessionHistoryReader<"agent-tool-usage", "status">;
     discoverTranscriptFacts: CancellableSessionHistoryReader<"transcript-facts-discover", "result">;

@@ -117,21 +117,22 @@ describe("statusAllCommand report data", () => {
     );
   });
 
-  const success = "✅ OpenClaw updated to 2026.9.2 (from 2026.9.1).";
+  const success = "✅ OpenClaw updated to 2026.9.2.";
   const runLine = `Update run: ${success}`,
-    restartLine = `Update restart: ${success}`;
+    restartLine = `Update restart: ${success}`,
+    sentinelLine = "Update restart: Gateway restart update ok";
   it.each`
     history               | phase         | sentinel     | reference                                 | expected
     ${"completed"}        | ${"finished"} | ${null}      | ${null}                                   | ${[runLine]}
     ${"active"}           | ${"active"}   | ${null}      | ${null}                                   | ${["Update run: ⬆️ OpenClaw update in progress: verifying."]}
-    ${"sentinel"}         | ${null}       | ${"ok"}      | ${null}                                   | ${[restartLine]}
+    ${"sentinel"}         | ${null}       | ${"ok"}      | ${null}                                   | ${[sentinelLine]}
     ${"none"}             | ${null}       | ${null}      | ${null}                                   | ${[]}
-    ${"mixed-sentinel"}   | ${"finished"} | ${"error"}   | ${null}                                   | ${[runLine, "Update restart: ⚠️ OpenClaw update failed: restart-unhealthy."]}
+    ${"mixed-sentinel"}   | ${"finished"} | ${"error"}   | ${null}                                   | ${[runLine, "Update restart: Gateway restart update error"]}
     ${"same-run"}         | ${"finished"} | ${"ok"}      | ${"same"}                                 | ${[runLine]}
     ${"different-run"}    | ${"finished"} | ${"ok"}      | ${"1e36e13e-8cbf-4c33-bd2b-03adbd8f7a64"} | ${[runLine, restartLine]}
-    ${"same-prose"}       | ${"finished"} | ${"ok"}      | ${null}                                   | ${[runLine, restartLine]}
+    ${"same-prose"}       | ${"finished"} | ${"ok"}      | ${null}                                   | ${[runLine, sentinelLine]}
     ${"generic-sentinel"} | ${"finished"} | ${"restart"} | ${null}                                   | ${[runLine]}
-    ${"failed-healthy"}   | ${"failed"}   | ${null}      | ${null}                                   | ${["Update run: ⚠️ OpenClaw update failed: post-update-failed."]}
+    ${"failed-healthy"}   | ${"failed"}   | ${null}      | ${null}                                   | ${["Update run: ⚠️ OpenClaw couldn't finish updating."]}
   `(
     "keeps current availability alongside $history history without observing config",
     async ({ phase, sentinel, reference, expected }) => {
@@ -198,6 +199,12 @@ describe("statusAllCommand report data", () => {
       expect(report.filter((line) => /^(Update run|Update restart): /.test(line))).toEqual(
         expected,
       );
+      if (failed) {
+        expect(report.join("\n")).toContain("(post-update-failed)");
+      }
+      if (sentinel === "error") {
+        expect(report.join("\n")).toContain("Reason: restart-unhealthy");
+      }
       expect(mocks.readConfigFileSnapshot).toHaveBeenCalledWith({ observe: false });
     },
   );

@@ -1,5 +1,9 @@
 import { normalizeProviderId } from "@openclaw/model-catalog-core/provider-id";
 import { asNullableRecord as asRecord } from "@openclaw/normalization-core/record-coerce";
+import {
+  isDefaultAgentRuntimeId,
+  normalizeOptionalAgentRuntimeId,
+} from "../../../../src/agents/agent-runtime-id.js";
 import { splitTrailingAuthProfile } from "../../../../src/agents/model-ref-profile.js";
 import type { AgentModelConfig } from "../../../../src/config/types.agents-shared.js";
 import type {
@@ -44,6 +48,8 @@ export type ModelProviderAuthKind = "ok" | "expiring" | "expired" | "missing" | 
 export type ModelProviderLogoutTarget = {
   provider: string;
   profileIds: string[];
+  /** Disconnect and manage actions the provider declares for its OAuth sign-ins. */
+  oauthAccountActions?: ModelAuthStatusProvider["oauthAccountActions"];
 };
 
 /** A provider-wide sign-out, or saved API keys and literal config keys for its auth owner. */
@@ -51,7 +57,11 @@ export type ModelProviderRemovalTarget = { provider: string; credentialType?: "a
 
 /** One account's sign-out, or a provider removal with its displayed credential scope. */
 export type ModelProviderPendingLogout = { cardId: string; label: string } & (
-  | { target: ModelProviderLogoutTarget }
+  | {
+      target: ModelProviderLogoutTarget;
+      /** Revoke the sign-in at its provider first; `label` is the action's text. */
+      disconnect?: { label: string };
+    }
   | { removeConfigKey: string; defaultModels?: string }
   | {
       removeTargets: ModelProviderRemovalTarget[];
@@ -92,6 +102,8 @@ export type ModelProviderCard = ProviderPresentation & {
   /** Configuration owner that pins priority for each auth owner. */
   profileOrderLocks: Record<string, NonNullable<ModelAuthStatusProvider["profileOrderLocked"]>>;
   apiKey?: ModelAuthStatusProvider["apiKey"];
+  /** The saved sign-in doesn't cover voice; an API key would. */
+  voiceApiKeyRequired?: true;
   configApiKeys: Array<{ key: string; reference: boolean }>;
   modelCount: number;
   availableModelCount: number;
@@ -174,6 +186,7 @@ function addLogoutTarget(
   targets: ModelProviderLogoutTarget[],
   provider: string,
   profileIds: string[],
+  oauthAccountActions: ModelAuthStatusProvider["oauthAccountActions"],
 ): void {
   if (profileIds.length === 0) {
     return;
@@ -183,7 +196,11 @@ function addLogoutTarget(
     (candidate) => normalizeProviderId(candidate.provider) === normalized,
   );
   if (!existing) {
-    targets.push({ provider, profileIds: [...new Set(profileIds)] });
+    targets.push({
+      provider,
+      profileIds: [...new Set(profileIds)],
+      ...(oauthAccountActions ? { oauthAccountActions } : {}),
+    });
     return;
   }
   existing.profileIds = [...new Set([...existing.profileIds, ...profileIds])];
@@ -331,8 +348,12 @@ export function buildModelProviderCards(input: ModelProviderCardsInput): ModelPr
       provider.profiles
         .filter((profile) => profile.logoutSupported === true)
         .map((profile) => profile.profileId),
+      provider.oauthAccountActions,
     );
     draft.card.apiKey ??= provider.apiKey;
+    if (provider.voiceApiKeyRequired) {
+      draft.card.voiceApiKeyRequired = true;
+    }
     // Generic auth discovery also includes tool-only API keys; those alone do not make a model card.
     draft.hasModelAuth ||= isMonitoredAuthProvider(provider) || apiKeyCapabilities.has(id);
     const usage = provider.usage;
@@ -424,10 +445,14 @@ export function buildModelProviderCards(input: ModelProviderCardsInput): ModelPr
 export type DefaultModelSelection = {
   primary: string;
   fallbacks: string[];
+  /** Exact global model policies, independent of the credential agent's catalog. */
+  runtimes?: Record<string, { id?: string; pickerRuntimes?: string[] }>;
   /** null = automatic/unset; empty string = explicitly disabled. */
   utilityModel: AgentModelConfig | null;
   /** Unset or null disables decisions globally. */
   decisionModel?: string | null;
+  /** agents.defaults.subagents.model. Unset: the spawn resolver picks the parent's or target agent's model. */
+  subagentModel?: AgentModelConfig | null;
 };
 
 export type ModelPickerEntry = ModelCatalogEntry & { selectionRef?: string };
@@ -437,7 +462,10 @@ export type ModelBehaviorConfig = {
   fastMode: FastMode | undefined;
   fastModeOverridden: boolean;
 };
-export type DefaultsDraft = DefaultModelSelection & ModelBehaviorConfig;
+export type DefaultsDraft = DefaultModelSelection &
+  ModelBehaviorConfig & {
+    runtimeEdit?: { model: string; id: string; pickerRuntimes?: string[] };
+  };
 
 export function resolveDefaultModelPresentation(
   catalog: ModelCatalogPresentation,
@@ -453,6 +481,7 @@ export function resolveDefaultModelPresentation(
         fallbacks: [],
         utilityModel: null,
         decisionModel: null,
+        subagentModel: undefined,
       },
       configuredModels: catalog.models.filter((model) => model.manualSelectionAllowed !== false),
     };
@@ -465,6 +494,7 @@ export function resolveDefaultModelPresentation(
       ...defaults.fallbacks,
       modelSettingPrimary(defaults.utilityModel),
       ...modelSettingFallbacks(defaults.utilityModel),
+      modelSettingPrimary(defaults.subagentModel ?? null),
     ].filter((value): value is string => typeof value === "string" && value.length > 0),
   );
   const source = models ?? [];
@@ -472,7 +502,13 @@ export function resolveDefaultModelPresentation(
   let filtered: ModelPickerEntry[] | undefined;
   for (let index = 0; index < source.length; index++) {
     const model = source[index]!;
-    if (model.available === false && !selected.has(modelCatalogRef(model))) {
+    if (
+      (model.defaultModelRuntimes?.base.available ?? model.available) === false &&
+      !selected.has(modelCatalogRef(model)) &&
+      !model.defaultModelRuntimes?.alternatives.some(
+        (choice) => choice.available && choice.manualSelectionAllowed !== false,
+      )
+    ) {
       filtered ??= source.slice(0, index);
       continue;
     }
@@ -503,6 +539,7 @@ export function resolveDefaultModelPresentation(
           serviceTierObservation: _observation,
           serviceTierObservations: _observations,
           runtimeChoices: _runtimes,
+          defaultModelRuntimes: _defaultRuntimes,
           ...unscoped
         } = match;
         selectable.push({ ...unscoped, selectionRef: ref });
@@ -551,6 +588,25 @@ export function readModelProviderConfig(config: Record<string, unknown> | null):
   const agents = asRecord(config?.agents);
   const defaults = asRecord(agents?.defaults);
   const model = readModelSetting(defaults?.model);
+  const subagentModel = readModelSetting(asRecord(defaults?.subagents)?.model);
+  const runtimes: NonNullable<DefaultModelSelection["runtimes"]> = {};
+  for (const [key, value] of Object.entries(asRecord(defaults?.models) ?? {})) {
+    const entry = asRecord(value);
+    const id = normalizeOptionalAgentRuntimeId(asRecord(entry?.agentRuntime)?.id);
+    const choices = entry?.pickerRuntimes;
+    if (!isDefaultAgentRuntimeId(id) || Array.isArray(choices)) {
+      runtimes[key] = {
+        ...(!isDefaultAgentRuntimeId(id) ? { id } : {}),
+        ...(Array.isArray(choices)
+          ? {
+              pickerRuntimes: choices.filter(
+                (choice): choice is string => typeof choice === "string",
+              ),
+            }
+          : {}),
+      };
+    }
+  }
   return {
     providers: Object.entries(providers ?? {}).map(([key, value]) => {
       const provider = asRecord(value);
@@ -567,10 +623,12 @@ export function readModelProviderConfig(config: Record<string, unknown> | null):
     defaults: {
       primary: modelSettingPrimary(model) ?? "",
       fallbacks: modelSettingFallbacks(model),
+      ...(Object.keys(runtimes).length ? { runtimes } : {}),
       utilityModel: readModelSetting(defaults?.utilityModel),
       ...(typeof defaults?.decisionModel === "string"
         ? { decisionModel: defaults.decisionModel }
         : {}),
+      ...(subagentModel !== null ? { subagentModel } : {}),
     },
   };
 }

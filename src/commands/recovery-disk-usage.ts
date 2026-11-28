@@ -61,7 +61,7 @@ export async function collectRecoveryDiskUsage(params: {
       continue;
     }
     const kind =
-      item.kind !== "update-capture"
+      item.kind !== "update-capture" && item.kind !== "database-snapshot"
         ? "migrationOriginals"
         : item.captureSource === "doctor"
           ? "doctorCaptures"

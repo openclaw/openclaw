@@ -82,6 +82,34 @@ it("renders blocked reports without resource metrics", () => {
   expect(output).toContain("| gateway | clean | BLOCKED |");
 });
 
+it("counts each violation kind and metric even after repeated failures", () => {
+  const violations = [
+    ...Array.from({ length: 20 }, () => ({
+      kind: "threshold",
+      metric: "peakRssMb",
+      actual: 300,
+      expected: "<= 256",
+    })),
+    { kind: "resource", metric: "maxCpuPercent", actual: 320, expected: "<= 300" },
+    { kind: "resource", metric: "maxCpuPercent", actual: 330, expected: "<= 300" },
+    { kind: "evidence", metric: "maxCpuPercent", actual: null, expected: "sampled" },
+  ];
+  const { output, result } = runSummary({
+    records: violations.map((violation) => ({
+      scenario: "gateway",
+      state: { id: "fresh" },
+      status: "FAIL",
+      violations: [violation],
+    })),
+    summary: { statuses: { FAIL: violations.length } },
+  });
+
+  expect(result.status).toBe(0);
+  expect(output).toContain("| threshold | peakRssMb | 20 | gateway | fresh | 300 | <= 256 |");
+  expect(output).toContain("| resource | maxCpuPercent | 2 | gateway | fresh | 320 | <= 300 |");
+  expect(output).toContain("| evidence | maxCpuPercent | 1 | gateway | fresh |  | sampled |");
+});
+
 it("omits key metric rows with invalid sample counts", () => {
   const { output, result } = runSummary(
     metricReport("pass", {

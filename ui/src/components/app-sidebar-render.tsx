@@ -30,11 +30,8 @@ import { Icon } from "./solid/icon.tsx";
 import { useAvatarGatewayContext } from "./solid/identity-avatar-view.ts";
 import { AgentIdentityAvatar } from "./solid/identity-avatar.tsx";
 import { ShortcutHint } from "./solid/kbd.tsx";
-import {
-  renderSessionUnreadBadge,
-  SessionGlyph,
-  SessionRowBadges,
-} from "./solid/session-presentation.tsx";
+import { renderNewSessionLink as NewSessionLink } from "./solid/new-session-link.tsx";
+import { renderSessionUnreadBadge, SessionGlyph } from "./solid/session-presentation.tsx";
 import { ThemeBrandIcon } from "./theme-brand-icon.tsx";
 
 export type AppSidebarRenderHost = AppSidebarSessionNavigationElement & {
@@ -342,6 +339,30 @@ function renderSidebarWorkspaceHeader(host: AppSidebarRenderHost): SolidJSX.Elem
   );
 }
 
+export function SidebarNewSessionAction(props: {
+  host: Pick<
+    AppSidebarRenderHost,
+    "basePath" | "expandedAgentId" | "readNewSessionAccess" | "requestOpenNewSession"
+  >;
+  class: string;
+}) {
+  const disabledReason = createMemo(() => {
+    const access = props.host.readNewSessionAccess();
+    return access.allowed ? undefined : access.reason;
+  });
+  return (
+    <NewSessionLink
+      basePath={props.host.basePath}
+      agentId={props.host.expandedAgentId()}
+      class={props.class}
+      label={t("agentChip.newConversation")}
+      showShortcut
+      disabledReason={disabledReason()}
+      onOpen={(agentId) => props.host.requestOpenNewSession(agentId)}
+    />
+  );
+}
+
 export function renderAppSidebarFooterBar(host: AppSidebarRenderHost): SolidJSX.Element {
   const context = useApplication();
   const profileGateway = projectGateway(context.gateway);
@@ -426,7 +447,6 @@ export function renderAppSidebarFooterBar(host: AppSidebarRenderHost): SolidJSX.
   return (
     <div class="sidebar-footer-bar sidebar-footer-bar--one-action">
       <span class="sidebar-footer-actions">
-        {/* Search sits with the footer controls, above Home. */}
         <openclaw-tooltip>
           <span slot="content">
             <ShortcutHint
@@ -444,6 +464,9 @@ export function renderAppSidebarFooterBar(host: AppSidebarRenderHost): SolidJSX.
             <Icon name="search" />
           </button>
         </openclaw-tooltip>
+        <Show when={host.newSessionInRail}>
+          <SidebarNewSessionAction host={host} class="sidebar-rail__button sidebar-new-session" />
+        </Show>
         <openclaw-tooltip>
           <span slot="content">
             <ShortcutHint
@@ -470,26 +493,19 @@ export function renderAppSidebarFooterBar(host: AppSidebarRenderHost): SolidJSX.
             <Show when={home()} fallback={<Icon name="home" />}>
               {(session) => {
                 const running = () =>
-                  (session().isRunVisuallyActive ?? session().hasActiveRun) ||
-                  session().runningChildCount > 0;
+                  ((session().isRunVisuallyActive ?? session().hasActiveRun) &&
+                    session().status !== "queued") ||
+                  session().hasRunningDescendant === true;
                 return (
-                  <>
-                    {/* Home is navigation, not an interactive session-attention target. */}
-                    <SessionGlyph
-                      content={<Icon name="home" />}
-                      running={running()}
-                      queued={session().status === "queued" && session().runningChildCount === 0}
-                      badge={
-                        <Show when={session().unread && !running()}>
-                          {renderSessionUnreadBadge()}
-                        </Show>
-                      }
-                    />
-                    <SessionRowBadges
-                      outboxAttentionCount={session().outboxAttentionCount}
-                      hasComposerDraft={session().hasComposerDraft}
-                    />
-                  </>
+                  <SessionGlyph
+                    content={<Icon name="home" />}
+                    running={running()}
+                    badge={
+                      <Show when={session().unread && !running()}>
+                        {renderSessionUnreadBadge()}
+                      </Show>
+                    }
+                  />
                 );
               }}
             </Show>

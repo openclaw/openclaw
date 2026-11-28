@@ -96,7 +96,13 @@ it.each(["agent", "reconnect"] as const)(
     let version = 1;
     h.request.mockImplementation(async (method: string, params?: { agentId?: string }) => {
       if (method === "models.authStatus") {
-        return createAuthStatus([{ displayName: `Confirmed ${params?.agentId} ${version}` }]);
+        return createAuthStatus([
+          { displayName: `Confirmed ${params?.agentId} ${version}` },
+          ...Array.from({ length: 6 }, (_, index) => ({
+            provider: `fixture-${index}`,
+            displayName: `Fixture ${index}`,
+          })),
+        ]);
       }
       if (method === "models.list") {
         return version === 1 ? catalog : pending.promise;

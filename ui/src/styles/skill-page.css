@@ -9,6 +9,11 @@
   grid-template-columns: minmax(0, 1fr);
 }
 
+/* The entry focus ring belongs to the skill name, not the spare space beside it. */
+.skill-page .plugin-catalog-detail__title-row h1 {
+  flex-grow: 0;
+}
+
 /* The way back holds its line while the page's code arrives. */
 .skill-page__crumb-reserve {
   min-height: 1.4em;

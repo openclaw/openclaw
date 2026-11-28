@@ -298,6 +298,7 @@ describe("agent runtime plugin registries", () => {
   it("reuses the published Gateway registry inside the reload operation cache", async () => {
     const { config, workspaceDir, metadataSnapshot, activeRegistry } =
       createGatewayRegistryFixture();
+    const getConfiguredHarnessRuntimes = vi.fn(() => []);
     const previousCache = getProcessPluginCache();
     await using operationCache = createPluginCache();
     await using publishedCache = createPluginCache();
@@ -317,10 +318,12 @@ describe("agent runtime plugin registries", () => {
             createPreparedInboundRegistryLoader()(
               { allowGatewaySubagentBinding: true, config, workspaceDir },
               metadataSnapshot,
+              getConfiguredHarnessRuntimes,
             ),
           ),
         ).toBe(activeRegistry);
         expect(hoisted.loadPluginRegistryHandle).not.toHaveBeenCalled();
+        expect(getConfiguredHarnessRuntimes).not.toHaveBeenCalled();
       });
     } finally {
       selectCurrentPluginMetadataCache(previousCache);

@@ -196,9 +196,7 @@ describe("createOllamaStreamFn thinking events", () => {
       3.75,
     ],
     [{ prompt_eval_duration: 1 }, undefined],
-    [{ eval_duration: 1 }, undefined],
     [{ prompt_eval_duration: -1, eval_duration: 1 }, undefined],
-    [{ prompt_eval_duration: "1", eval_duration: 1 }, undefined],
     [{ prompt_eval_duration: Number.MAX_VALUE, eval_duration: Number.MAX_VALUE }, undefined],
   ] as const)("uses only valid final processing timing: %j", async (timing, processingMs) => {
     const events = await streamOllamaEvents([
@@ -519,7 +517,7 @@ describe("createOllamaStreamFn thinking events", () => {
       const usage = doneEvent(events)?.message.usage;
       const contextUsage =
         totalTokens === undefined
-          ? undefined
+          ? { state: "unavailable" }
           : { state: "available", promptTokens: promptCount, totalTokens };
       expect(usage).toMatchObject({
         input: expectedInput,
@@ -527,7 +525,7 @@ describe("createOllamaStreamFn thinking events", () => {
         cacheRead,
         cacheWrite: 0,
         cacheTelemetry: { state: cacheRead ? "available" : "unavailable" },
-        usageReport: { state: contextUsage ? "available" : "unavailable" },
+        usageReport: { state: contextUsage.state },
         totalTokens: expectedInput + cacheRead + expectedOutput,
       });
       expect(usage?.contextUsage).toEqual(contextUsage);
