@@ -26,6 +26,17 @@ describe("default pattern table", () => {
     }
   });
 
+  it.each([
+    "At 17:34 the review found one thing for the UX pass: the screen shows two buttons.",
+    "11:1x Builder done, first pass: the batch is complete.",
+    "250:- Second pass: retry is fine.",
+    "At 7:04:09 the review finished, first pass: the screen is ready.",
+    "At 17:xx the review finished, first pass: the screen is ready.",
+    "At 17:34 the review finished.\n250:- Second pass: retry is fine.",
+  ])("keeps clock- and grep-prefixed prose intact: %s", (input) => {
+    expect(redactSensitiveText(input, { mode: "tools" })).toBe(input);
+  });
+
   it("distinguishes bare pass assignments from prose across record and chunk boundaries", () => {
     const value = "opaque-pass-secret-1234567890";
     const token = "a".repeat(200_000);
@@ -66,6 +77,12 @@ describe("default pattern table", () => {
       ["bypass:\n  pass: ", ""],
       ["? pass\n: ", ""],
       ["host:db.example.test pass: ", ""],
+      ["17:34 pass: ", ""],
+      ["user:bot pass: ", ""],
+      ["At 17:34 user=bot first pass: ", ""],
+      ["At 17:34 user:bot first pass: ", ""],
+      ["host17:34 first pass: ", ""],
+      ["17:34suffix first pass: ", ""],
       ["login (pass: ", ")"],
       ["smtp:\n  pass:\n    ", "\n  user: bot"],
       // JSC abandoned the old nested prefilter lookbehind on key runs above roughly 70k.
