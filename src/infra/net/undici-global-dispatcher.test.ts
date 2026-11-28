@@ -166,8 +166,8 @@ const timedRequest = (timeoutMs = 1_900_000) => ({
   headersTimeout: timeoutMs,
   allowH2: false,
 });
-function installProxyDispatcher<T>(dispatcher: T, options = DEFAULT_PROXY_OPTIONS) {
-  vi.mocked(resolveEnvHttpProxyAgentOptions).mockReturnValue(options);
+function installProxyDispatcher<T>(dispatcher: T) {
+  vi.mocked(resolveEnvHttpProxyAgentOptions).mockReturnValue(DEFAULT_PROXY_OPTIONS);
   setCurrentDispatcher(dispatcher);
   return dispatcher;
 }
