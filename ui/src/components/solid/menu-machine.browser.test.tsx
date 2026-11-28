@@ -1,10 +1,30 @@
 import { cleanup, render } from "@solidjs/testing-library";
 import { createSignal, flush, onCleanup, onSettled } from "solid-js";
 import { afterEach, expect, it } from "vitest";
+import { mountMenu, surface, trigger } from "../../test-helpers/solid-menu.tsx";
 import { createOverlay } from "../overlay-lifecycle.ts";
 import { useMenuMachine, type MenuBinding } from "./menu-machine.ts";
 
 afterEach(cleanup);
+
+it.each(["ltr", "rtl"] as const)("backs out of a cold submenu before Escape in %s", (dir) => {
+  const { handle } = mountMenu({ dir });
+  const press = (key: string) =>
+    document.activeElement!.dispatchEvent(
+      new KeyboardEvent("keydown", { key, bubbles: true, cancelable: true }),
+    );
+  expect(handle.open()).toBe(true);
+  const assign = trigger("people-assign");
+  assign.focus();
+  press(dir === "ltr" ? "ArrowRight" : "ArrowLeft");
+  expect(surface("people-assign").contains(document.activeElement)).toBe(true);
+  press(dir === "ltr" ? "ArrowLeft" : "ArrowRight");
+  expect(document.activeElement).toBe(assign);
+  expect(handle.overlay.open).toBe(true);
+  press("Escape");
+  expect(handle.overlay.open).toBe(false);
+  expect(document.activeElement).toBe(trigger());
+});
 
 it("keeps current menu input reads bounded after visibility and direction changes", async () => {
   let binding!: MenuBinding;

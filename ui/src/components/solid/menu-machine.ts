@@ -109,15 +109,18 @@ export function useMenuMachine(
     },
     { lazy: true },
   );
+  const awaitingRuntime = () => loading || (parent && !parentRuntime() && !parent.error());
   const run = (intent: (loaded: MenuRuntime) => void, highlightedValue?: string | null) => {
     if (runtime) {
       intent(runtime);
-    } else if (overlay.open && loading) {
+    } else if (overlay.open && awaitingRuntime()) {
       pending.push({ run: intent, highlightedValue });
     }
   };
   const load = async () => {
-    if (!mounted || runtime || loading) {
+    // A submenu may already be visible, but its Zag machine must start with its parent.
+    const loadedParent = parentRuntime();
+    if (!mounted || runtime || loading || (parent && !loadedParent)) {
       return;
     }
     loading = true;
@@ -130,7 +133,7 @@ export function useMenuMachine(
       runtime = createMenuRuntime(
         overlay,
         direction,
-        parentRuntime()?.service,
+        loadedParent?.service,
         { ...options, virtualized: () => virtualized },
         items,
         notify,
@@ -217,7 +220,7 @@ export function useMenuMachine(
       event.defaultPrevented ||
       event.isComposing ||
       !overlay.open ||
-      !loading ||
+      !awaitingRuntime() ||
       !(event.target instanceof HTMLElement) ||
       (target === "content" && !ownsTarget(event.target))
     ) {
@@ -268,14 +271,21 @@ export function useMenuMachine(
     if (
       target === "content" &&
       options.surface !== "listbox" &&
-      ["Enter", " "].includes(event.key) &&
-      itemNodes.has(originalTarget) &&
-      !originalTarget.hasAttribute("aria-haspopup") &&
       !pending.some((intent) => intent.keyboard)
     ) {
-      // Leaf activation already has a native owner; only prior navigation needs replay.
-      originalTarget.click();
-      return;
+      // Close the visible branch before the next Escape chooses its deepest owner.
+      if (parent && event.key === (direction() === "rtl" ? "ArrowRight" : "ArrowLeft")) {
+        overlay.request(false, "return");
+        return;
+      }
+      if (
+        ["Enter", " "].includes(event.key) &&
+        itemNodes.has(originalTarget) &&
+        !originalTarget.hasAttribute("aria-haspopup")
+      ) {
+        originalTarget.click();
+        return;
+      }
     }
     pending.push({
       keyboard: true,
