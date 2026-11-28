@@ -12,22 +12,21 @@ export function createMicrophoneMeter(
   let retired = false;
   let peak = 0;
   let latest = 0;
-  void import("./microphone-meter-renderer.ts").then(
-    ({ createMicrophoneMeterRenderer }) => {
-      if (retired) {
-        return;
-      }
-      renderer = createMicrophoneMeterRenderer(...args);
-      // A short syllable can end before the first canvas frame is ready.
-      renderer.setLevel(peak);
-      if (latest !== peak) {
-        renderer.setLevel(latest);
-      }
-    },
-    () => {
-      /* Unavailable decorative code leaves the CSS indicator in place. */
-    },
-  );
+  async function startPainting() {
+    const { createMicrophoneMeterRenderer } = await import("./microphone-meter-renderer.ts");
+    if (retired) {
+      return;
+    }
+    renderer = createMicrophoneMeterRenderer(...args);
+    // A short syllable can end before the first canvas frame is ready.
+    renderer.setLevel(peak);
+    if (latest !== peak) {
+      renderer.setLevel(latest);
+    }
+  }
+  void startPainting().catch(() => {
+    // Unavailable decorative code leaves the CSS indicator in place.
+  });
   return {
     setLevel(level) {
       if (renderer) {

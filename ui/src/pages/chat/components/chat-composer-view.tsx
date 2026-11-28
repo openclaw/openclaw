@@ -599,23 +599,6 @@ export function renderChatComposerView(
                   {context().runStatusAnnouncement}
                 </span>
               </div>
-              <Show
-                when={
-                  !props.realtimeTalkActive &&
-                  context().dictation?.refinementAvailable &&
-                  !context().dictation?.punctuationEnabled
-                }
-              >
-                <button
-                  type="button"
-                  class="chat-controls__provider-settings"
-                  aria-label={t("chat.composer.dictationTextOptions")}
-                  aria-expanded={context().dictation?.refinementOptionsOpen ? "true" : "false"}
-                  onClick={() => context().dictation?.toggleRefinementOptions()}
-                >
-                  <Icon name="settings" />
-                </button>
-              </Show>
             </div>
 
             <div class="agent-chat__composer-footer">
@@ -680,6 +663,23 @@ export function renderChatComposerView(
                 </Show>
                 <ComposerDictationStatus readDictation={() => context().dictation} />
                 <div class="agent-chat__composer-actions">
+                  <Show
+                    when={
+                      !props.realtimeTalkActive &&
+                      context().dictation?.refinementAvailable &&
+                      !context().dictation?.punctuationEnabled
+                    }
+                  >
+                    <button
+                      type="button"
+                      class="chat-controls__provider-settings"
+                      aria-label={t("chat.composer.dictationTextOptions")}
+                      aria-expanded={context().dictation?.refinementOptionsOpen ? "true" : "false"}
+                      onClick={() => context().dictation?.toggleRefinementOptions()}
+                    >
+                      <Icon name="settings" />
+                    </button>
+                  </Show>
                   <ChatPrimaryActions {...context().runControlsProps} />
                 </div>
               </div>

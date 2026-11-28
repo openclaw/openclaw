@@ -92,12 +92,15 @@ export type ComposerRefinementScope = {
   locale: string;
 };
 
-type Punctuation = { policy: DictationPunctuationPolicy; target: ComposerRefinementTarget };
+export type ComposerPunctuationCapture = {
+  policy: DictationPunctuationPolicy;
+  target: ComposerRefinementTarget;
+};
 type Capture = {
   id: string;
   generation: number;
   scope: ComposerRefinementScope;
-  punctuation?: Punctuation;
+  punctuation?: ComposerPunctuationCapture;
   // Only while STT closes, to permit same-field manual recovery without accepting a late final.
   captionAtStop?: string;
   draftChanged?: true;
@@ -125,7 +128,7 @@ export class ComposerDictationRefinement {
 
   constructor(
     private readonly options: {
-      readScope: () => ComposerRefinementScope;
+      readScope: (punctuation: boolean) => ComposerRefinementScope;
       changed: () => void;
       readTarget?: () => ComposerRefinementTarget | undefined;
       commit: (
@@ -201,12 +204,12 @@ export class ComposerDictationRefinement {
     };
   }
 
-  begin(scope = this.options.readScope(), punctuation?: Punctuation): void {
+  begin(scope?: ComposerRefinementScope, punctuation?: ComposerPunctuationCapture): void {
     this.release();
     this.capture = {
       id: globalThis.crypto.randomUUID(),
       generation: ++this.generation,
-      scope: { ...scope },
+      scope: { ...(scope ?? this.options.readScope(Boolean(punctuation))) },
       ...(punctuation
         ? {
             punctuation: {
@@ -231,7 +234,7 @@ export class ComposerDictationRefinement {
     if (!capture) {
       return;
     }
-    const next = this.options.readScope();
+    const next = this.options.readScope(Boolean(capture.punctuation));
     const target = capture.punctuation && this.options.readTarget?.();
     if (!this.sameDestination(capture, next, target)) {
       this.cancel(false);
@@ -536,7 +539,7 @@ export class ComposerDictationRefinement {
             : "outcome-unknown";
       if (committed === true && typeof receipt === "object" && this.capture === capture) {
         const target = this.options.readTarget?.();
-        if (target && this.sameDestination(capture, this.options.readScope(), target)) {
+        if (target && this.sameDestination(capture, this.options.readScope(true), target)) {
           delivery.undo = { transaction: receipt, target: { ...target, value: receipt.value } };
         }
       }
@@ -607,7 +610,7 @@ export class ComposerDictationRefinement {
     const target = this.options.readTarget?.();
     return Boolean(
       target &&
-      this.sameDestination(capture, this.options.readScope(), target) &&
+      this.sameDestination(capture, this.options.readScope(Boolean(capture.punctuation)), target) &&
       target.target === receipt.target &&
       target.revision === receipt.revision &&
       (target.target instanceof HTMLTextAreaElement ? target.target.value : target.value) ===
@@ -640,7 +643,7 @@ export class ComposerDictationRefinement {
     if (this.capture !== capture || capture.draftChanged) {
       return false;
     }
-    const next = this.options.readScope();
+    const next = this.options.readScope(Boolean(capture.punctuation));
     const target = capture.punctuation && this.options.readTarget?.();
     return this.sameDestination(capture, next, target) && this.sameDraft(capture, next, target);
   }

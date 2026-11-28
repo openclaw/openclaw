@@ -6,9 +6,8 @@ import {
   discoverRealtimeTalkCameras,
   discoverRealtimeTalkInputs,
   observeRealtimeTalkDevices,
-  openRealtimeTalkCamera,
-  RealtimeTalkInputOwner,
 } from "./input.ts";
+import { openRealtimeTalkCamera, RealtimeTalkInputOwner } from "./media-capture.ts";
 
 function mediaDevice(kind: MediaDeviceKind, deviceId: string, label: string): MediaDeviceInfo {
   return { kind, deviceId, label, groupId: "", toJSON: () => ({}) } as MediaDeviceInfo;

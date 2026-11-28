@@ -250,7 +250,7 @@ export class DirectDictationControl extends EventTarget {
         }
         const next = reviewed
           ? (textarea.insertReviewed?.(reviewed, () => ownsDraft() && this.options.canCommit()) ??
-              null)
+            null)
           : textarea.insertTranscript(this.place, transcript, late, preservePreview);
         if (next !== null) {
           if (typeof next === "string") {

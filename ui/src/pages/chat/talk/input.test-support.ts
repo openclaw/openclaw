@@ -1,5 +1,5 @@
 import { afterEach, beforeEach, onTestFinished, vi } from "vitest";
-import { RealtimeTalkInputOwner } from "./input.ts";
+import { RealtimeTalkInputOwner } from "./media-capture.ts";
 
 export const mockAudioNode = () => ({ connect: vi.fn(), disconnect: vi.fn() });
 const mockAnalyser = (level: number) => ({

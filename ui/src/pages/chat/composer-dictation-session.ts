@@ -14,8 +14,8 @@ import {
   RealtimeTalkMediaStreamMeter,
   RealtimeTalkPcmInputPump,
 } from "./talk/audio.ts";
-import { describeRealtimeTalkInputError, RealtimeTalkInputOwner } from "./talk/input.ts";
 import { RealtimeTalkLevelSignal } from "./talk/level.ts";
+import { describeRealtimeTalkInputError, RealtimeTalkInputOwner } from "./talk/media-capture.ts";
 
 registerEnglishCatalog(registerChatDictationEnglish);
 

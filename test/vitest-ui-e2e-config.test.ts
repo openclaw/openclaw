@@ -34,7 +34,7 @@ const qaLabFiles = [
   "extensions/qa-lab/src/control-ui-openclaw-delegation.real-gateway.e2e.test.ts",
 ] as const;
 const serialGatewayFiles =
-  `browser-pair-code chat-github-tool-surface chat-provider-failure-cause chat-send-leaf-ancestor chat-steer-deferred-custody chat-steer-send-now chat-yield-pending-reply deepseek-search desktop-resize gateway-fresh-visit guest-owner-filter labs-graduation plugin-inline-view session-management.new-nested theme-startup template-upload`
+  `browser-dictation-refinement browser-pair-code chat-github-tool-surface chat-provider-failure-cause chat-send-leaf-ancestor chat-steer-deferred-custody chat-steer-send-now chat-yield-pending-reply deepseek-search desktop-resize gateway-fresh-visit guest-owner-filter labs-graduation plugin-inline-view session-management.new-nested theme-startup template-upload`
     .split(/\s+/u)
     .concat(
       "required-human-action",
@@ -51,7 +51,7 @@ const sharedSerialGatewayFiles = [
   "ui/src/e2e/slack-inline-identity.e2e.test.ts",
 ];
 const realGatewayFiles = `activity-run-inspector.real-gateway agent-file-lifecycle.real-gateway
-  background-work.real-gateway browser-dictation-refinement.real-gateway chat-collaborator-scroll.real-gateway chat-html-publication.real-gateway
+  background-work.real-gateway chat-collaborator-scroll.real-gateway chat-html-publication.real-gateway
   chat-completed-assistant.real-gateway chat-daybreak.real-gateway chat-html-csp.real-gateway
   chat-session-companion-private.real-gateway config-form.real-gateway quiet-automations.real-gateway
   chat-agent-avatar.real-gateway chat-composer-websearch-kill-switch.real-gateway
