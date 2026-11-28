@@ -686,14 +686,9 @@ describe("native app i18n inventory", () => {
         "Scan QR code",
         "Test connection",
         "Searching…",
-        "Loading chat",
         "What would you like to work on?",
         "Check OpenClaw status",
-        "What can I control here?",
-        "Help me start voice chat",
         "Summarize the current OpenClaw status and tell me what needs attention.",
-        "Show me which phone controls and device capabilities are available right now.",
-        "Help me start a realtime voice session from this phone.",
         "DIARY",
         "ask OpenClaw $prompt",
         "OpenClaw is paused",
@@ -850,27 +845,16 @@ describe("native app i18n inventory", () => {
       "Done",
       (site) => site.path === "apps/ios/Sources/Settings/DashboardPageScreen.swift",
     );
-    expect
-      .soft(
-        entries
-          .filter(
-            (entry) => entry.source === "Update the gateway to load progress cards for this agent.",
-          )
-          .map((entry) => entry.surface)
-          .toSorted(),
-      )
-      .toEqual(["android", "apple"]);
-    expect
-      .soft(
-        entries
-          .filter(
-            (entry) =>
-              entry.source ===
-              "Update the gateway before sending queued messages. This version requires safe delivery routing.",
-          )
-          .map((entry) => entry.surface),
-      )
-      .toEqual(["apple"]);
+    for (const [source, surface] of [
+      ["Update the gateway to load progress cards for this agent.", "android"],
+      ["Update OpenClaw to see plans for this agent.", "apple"],
+      ["Update OpenClaw before sending queued messages.", "apple"],
+    ]) {
+      const matchingSurfaces = entries
+        .filter((entry) => entry.source === source)
+        .map((entry) => entry.surface);
+      expect.soft(matchingSurfaces, source).toEqual([surface]);
+    }
     expectSourceAtSite("Search threads", (site) => site.path.endsWith("/ChatSheets.swift"));
     expectSourceAtSite(
       "Direct mode supports device info, status, and notifications. Voice is included when you connect from iPhone Settings → Apple Watch. Chat and approvals still use the iPhone.",

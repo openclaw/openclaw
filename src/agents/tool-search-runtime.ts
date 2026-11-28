@@ -360,6 +360,12 @@ export class ToolSearchRuntime {
       : this.networkInvocations.size > 0;
   }
 
+  /** Structured controls settle in one reply. Code Mode can still resume a cell. */
+  clearControlInvocation(parentToolCallId: string): void {
+    this.networkInvocations.delete(parentToolCallId);
+    this.terminalTargetBatchByParent.delete(parentToolCallId);
+  }
+
   takeTerminalTargetBatch(parentToolCallId?: string): boolean {
     const parent =
       parentToolCallId ??

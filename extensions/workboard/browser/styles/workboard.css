@@ -3738,6 +3738,16 @@ workboard-inline-text {
     border-block-end: thin solid var(--border);
   }
 
+  /* Sessions boards have two named filters, not the card board's trailing icon actions. */
+  .workboard-sessions .workboard-toolbar {
+    display: flex;
+  }
+
+  .workboard-sessions .workboard-toolbar > :not(.workboard-agent-filter) {
+    flex: 1 1 max-content;
+    min-inline-size: 0;
+  }
+
   .workboard-toolbar:has(> .workboard-active-filters) {
     margin-block-end: 0;
     padding-block-end: 0;

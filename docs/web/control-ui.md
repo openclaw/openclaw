@@ -137,8 +137,8 @@ along its bottom edge or with **Tab** from its main input, without losing text.
 Search finds commands and sessions; Compose prepares a new background session.
 While you are in Search, text of 60 characters or more, a second line, or a file
 moves the palette to Compose; emptying that draft returns it to Search. Choosing
-Search again keeps it for the current draft. Reopening the palette returns to the
-mode you last chose, not to an automatic switch. That choice is remembered in this
+Search again keeps it for the current draft. An empty palette reopens in the
+mode you last chose, not an automatic one. That choice is remembered in this
 browser, including after a reload, when browser storage is available.
 **Cmd/Ctrl+Enter** starts a new background session from either mode using the
 current text and attachments; plain **Enter** still selects a search result.
@@ -159,9 +159,9 @@ explains the failure and only that file is removed. You can manually start a
 session with the remaining text and files; a rejected file cancels a pending
 automatic start. File admission and size limits match the chat composer.
 
-Closing the palette keeps its attachment draft in memory for the same Gateway
-and account. When files moved the palette to Compose, removing them and clearing
-the instructions returns it to Search.
+Closing the palette keeps unsent Compose text and attachments in memory for the
+same Gateway and account. When files moved the palette to Compose, removing them
+and clearing the instructions returns it to Search.
 Reloading or leaving the app does not preserve this in-memory draft.
 
 ## Choose a session workspace
@@ -291,6 +291,8 @@ When opened through OpenClaw ID, the Control UI waits for the Loader's live conn
 After the connection and saved conversation are ready, chat fetches updates while the rest of the page loads. A slow or unavailable cache keeps the normal loading path.
 
 The saved sidebar also retains the session rows for its initial viewport, along with unread marks, activity and attention glyphs, pull-request badges, and the Inbox count. Reload starts at the top of the sidebar. Live facts replace this display projection together with the rows; pins outside the roster retain their saved presentation until their own details arrive. The Inbox button reserves its place while connecting.
+
+In the Inbox, select an approval's session title to open the chat that requested it. Opening the chat leaves the approval pending.
 
 The Online sidebar loads people's open and running session counts when you open it. Switching to Sessions or Pages stops those count refreshes; opening Online again loads current counts. Restoring a Sessions sidebar does not wait for Online counts.
 

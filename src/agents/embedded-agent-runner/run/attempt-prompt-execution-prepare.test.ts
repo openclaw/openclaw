@@ -28,10 +28,7 @@ function imageResult(overrides: Partial<ImageResult> = {}): ImageResult {
 }
 const image = (data: string) => ({ type: "image" as const, data, mimeType: "image/png" });
 
-function createInput(
-  overrides: Partial<PromptExecutionInput> = {},
-  attempt: Partial<PromptExecutionInput["attempt"]> = {},
-): PromptExecutionInput {
+function createInput(overrides: Partial<PromptExecutionInput>): PromptExecutionInput {
   const fsBridge = { readFile: vi.fn() };
   return {
     attempt: {
@@ -40,7 +37,6 @@ function createInput(
       imageOrder: ["inline"],
       images: [image("data")],
       model: { input: ["text", "image"] },
-      ...attempt,
     },
     effectiveFsWorkspaceOnly: true,
     effectiveWorkspace: "/tmp/workspace",

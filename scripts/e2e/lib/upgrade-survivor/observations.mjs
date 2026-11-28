@@ -14,10 +14,16 @@ export function readDatabase(filename, read) {
 
 export function inspectCronBackups(databasePath) {
   const directory = path.dirname(databasePath);
-  const prefix = `${path.basename(databasePath)}.doctor-cron-`;
+  const prefix = `${path.basename(databasePath)}.`;
   return fs
     .readdirSync(directory)
-    .filter((name) => name.startsWith(prefix) && name.endsWith(".bak"))
+    .filter(
+      (name) =>
+        name.startsWith(prefix) &&
+        /^(?:doctor-cron-.+|pre-startup-migration-[a-f0-9-]{36})\.bak$/u.test(
+          name.slice(prefix.length),
+        ),
+    )
     .toSorted()
     .map((name) => ({
       name,

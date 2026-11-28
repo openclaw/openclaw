@@ -359,8 +359,11 @@ const TIMEOUT_MS = 10_000;
 const MAX_BYTES = 1024 * 1024;
 const unavailable = (): ClawRouterPoolResult => ({
   status: "unavailable",
-  message:
-    "ClawRouter pool status is unavailable. Check the ClawRouter connection and try Refresh.",
+  message: "Couldn’t load ClawRouter pool status. Select Refresh to try again.",
+});
+const unsupported = (): ClawRouterPoolResult => ({
+  status: "unsupported",
+  message: "This ClawRouter deployment doesn’t provide pool status.",
 });
 
 async function readJson(response: Response): Promise<unknown> {
@@ -502,7 +505,8 @@ export default defineSingleProviderPluginEntry({
           if (!token) {
             result = {
               status: "not_configured",
-              message: "Configure a ClawRouter key in Model Providers, then try Refresh.",
+              message:
+                "No ClawRouter API key is available. Ask an admin to add one in Settings → Models.",
             };
           } else {
             const baseUrl = normalizeClawRouterRootUrl(
@@ -523,7 +527,7 @@ export default defineSingleProviderPluginEntry({
                 result = {
                   status: "unauthorized",
                   message:
-                    "The ClawRouter key was rejected. Check or replace it in Model Providers.",
+                    "ClawRouter rejected the API key. Ask an admin to replace the key OpenClaw uses.",
                 };
               } else if (response.status === 404) {
                 const body = readRecord(await readJson(response).catch(() => undefined));
@@ -536,17 +540,9 @@ export default defineSingleProviderPluginEntry({
                         status: "hidden",
                         message: "Ask your ClawRouter admin to enable pool status for this policy.",
                       }
-                    : {
-                        status: "unsupported",
-                        message:
-                          "This ClawRouter deployment does not expose pool status. Ask your admin to update ClawRouter.",
-                      };
+                    : unsupported();
               } else if (response.status === 405) {
-                result = {
-                  status: "unsupported",
-                  message:
-                    "This ClawRouter deployment does not expose pool status. Ask your admin to update ClawRouter.",
-                };
+                result = unsupported();
               } else if (!response.ok) {
                 result = unavailable();
               } else {

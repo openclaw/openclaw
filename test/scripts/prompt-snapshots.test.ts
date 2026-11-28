@@ -41,7 +41,7 @@ function renderedPromptSection(content: string, heading: string, nextHeading: st
 
 // Codex app-server Telegram turn: the bytes measured on main when set, plus 5%, rounded up to
 // 256 B. Growth within that margin passes; lower a ceiling when a change shrinks its surface.
-const CODEX_APP_SERVER_PROMPT_BUDGET_BYTES = 13_824;
+const CODEX_APP_SERVER_PROMPT_BUDGET_BYTES = 12_544;
 const CODEX_APP_SERVER_TOOLS_BUDGET_BYTES = 65_792;
 
 let generated: Awaited<ReturnType<typeof createHappyPathPromptSnapshotFiles>>;

@@ -1,5 +1,6 @@
 import { randomUUID } from "node:crypto";
 import { resolveAgentEntry, tryResolveAmbientOwnerAgentId } from "../agents/agent-scope-config.js";
+import { wrapUntrustedPromptDataBlock } from "../agents/sanitize-for-prompt.js";
 import type { SessionEventTarget } from "../auto-reply/reply/session-event-contract.js";
 import {
   assertSessionEventTargetCurrent,
@@ -7,6 +8,7 @@ import {
   enqueueSessionEventForHost,
 } from "../auto-reply/reply/session-event-handoff.js";
 import { prepareSessionEventTargetForHost } from "../auto-reply/reply/session-event-target.js";
+import { SILENT_REPLY_TOKEN } from "../auto-reply/tokens.js";
 import { getRuntimeConfig } from "../config/io.js";
 import {
   canonicalizeMainSessionAlias,
@@ -241,14 +243,19 @@ export function createGatewayCronTargetResolver(
           );
     const enqueue = async (expectedTarget = eventOpts.expectedTarget) => {
       const posted = await posting;
-      const receipt = enqueueSessionEventForHost(text, {
+      const receipt = enqueueSessionEventForHost(posted ? buildPostedNoticeInput(text) : text, {
         ...eventOpts,
         ...(expectedTarget ? { expectedTarget } : {}),
         agentId,
         sessionKey,
         ...(posted
-          ? // The user already has the notice; only the agent's authored reply follows it.
-            { source: "cron_failure_repair" as const, suppressErrorDelivery: true as const }
+          ? {
+              // The user already has the notice; only the agent's authored reply follows it,
+              // and silence is a complete answer.
+              source: "cron_failure_repair" as const,
+              suppressErrorDelivery: true as const,
+              replyExpectation: "optional" as const,
+            }
           : { source: "cron" as const }),
       });
       void receipt.settled.then((result) => {
@@ -273,6 +280,19 @@ export function createGatewayCronTargetResolver(
     return captureCronJobTurnTarget({ job, agentId, sessionKey, context }).then(enqueue);
   };
   return { resolveCronAgent, resolveCronTarget, deferSessionEvent, enqueueSessionEvent };
+}
+
+/**
+ * The repair turn's hidden input for a notice already posted to the conversation. It names the
+ * notice as shown, so the agent adds only a repair it made, or stays silent.
+ */
+function buildPostedNoticeInput(text: string): string {
+  return [
+    "Automation notice from the scheduler, not a user message. It is already shown to the user in this conversation, with what they need to do: do not repeat, paraphrase or acknowledge it.",
+    `If you can fix the cause yourself, do it and reply with one line saying what you changed. Leave a disabled automation disabled unless you fixed its cause. Otherwise reply with exactly ${SILENT_REPLY_TOKEN} as the entire final answer.`,
+    // The notice names the automation, which is user-authored text: data, never instructions.
+    wrapUntrustedPromptDataBlock({ label: "Notice shown to the user", text, maxChars: 4_000 }),
+  ].join("\n");
 }
 
 /**
