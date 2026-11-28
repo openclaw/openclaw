@@ -3,6 +3,7 @@
  * state and navigation guards.
  */
 import { beforeEach, vi } from "vitest";
+import type { NavigationGuardCall } from "./pw-tools-core.guard-test-support.js";
 
 let currentPage: Record<string, unknown> | null = null;
 let currentRefLocator: Record<string, unknown> | null = null;
@@ -94,13 +95,7 @@ const sessionMocks = vi.hoisted(() => ({
   }),
   wasBrowserNavigationSourcePreservedAfterPolicyDenial: vi.fn(() => false),
   withPageNavigationRequestGuard: vi.fn(
-    async ({
-      action,
-      page,
-    }: {
-      action: (url: string) => Promise<unknown>;
-      page: { url: () => string };
-    }) => await action(page.url()),
+    async ({ action, page }: NavigationGuardCall) => await action(page.url()),
   ),
 }));
 

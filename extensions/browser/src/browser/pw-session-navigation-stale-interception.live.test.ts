@@ -1,6 +1,5 @@
 import { once } from "node:events";
 import { createServer } from "node:http";
-import { SsrFBlockedError } from "openclaw/plugin-sdk/security-runtime";
 import { acquireTestPortBlock } from "openclaw/plugin-sdk/test-env";
 import { chromium, type Browser, type Page } from "playwright-core";
 import { afterAll, afterEach, beforeAll, describe, expect, it, vi } from "vitest";
@@ -8,7 +7,6 @@ import { isLiveTestEnabled } from "../../test-support.js";
 import * as navigationGuard from "./navigation-guard.js";
 import {
   gotoPageWithNavigationGuard,
-  wasBrowserNavigationSourcePreservedAfterPolicyDenial,
   withPageNavigationRequestGuard,
 } from "./pw-session-navigation.js";
 
@@ -120,11 +118,11 @@ describe.skipIf(!isLiveTestEnabled())(
       }
     });
 
-    it("still reports a denied document the page cancelled while paused", async () => {
+    it("completes a guarded action when the page cancels a paused denied child document", async () => {
       const page = await browser.newPage();
       try {
         await page.goto(sourceUrl + "/source");
-        const error = await withPageNavigationRequestGuard({
+        await withPageNavigationRequestGuard({
           page,
           ...policy,
           action: async () => {
@@ -134,10 +132,11 @@ describe.skipIf(!isLiveTestEnabled())(
             }, deniedUrl + "/denied-child");
             await cancelled;
           },
-        }).catch((caught: unknown) => caught);
-        expect(error).toBeInstanceOf(SsrFBlockedError);
-        expect(wasBrowserNavigationSourcePreservedAfterPolicyDenial(error)).toBe(true);
+        });
         expect(page.url()).toBe(sourceUrl + "/source");
+        expect(page.frames().map((frame) => frame.url())).not.toContain(
+          deniedUrl + "/denied-child",
+        );
       } finally {
         await page.close();
       }

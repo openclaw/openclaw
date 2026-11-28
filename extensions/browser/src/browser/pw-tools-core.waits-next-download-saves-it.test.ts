@@ -208,6 +208,39 @@ describe("pw-tools-core", () => {
   );
 
   it.each(["waited", "clicked"])(
+    "stops a %s download when the attachment's own frame request is denied",
+    async (mode) => {
+      await withTempDir(async (tempDir) => {
+        createDownloadEventHarness();
+        setPwToolsCoreCurrentRefLocator({ click: vi.fn(async () => {}) });
+        const denied = new Error("browser navigation blocked by policy");
+        // The guard cancels a denied subframe document without failing the
+        // action; the capture must still stop instead of running to its timeout.
+        sessionMocks.withPageNavigationRequestGuard.mockImplementationOnce(
+          async ({ action, onPolicyDenied, page }) => {
+            const pending = action(page.url());
+            onPolicyDenied?.({ state: "subframe", error: denied });
+            return await pending;
+          },
+        );
+        const targetPath = path.join(tempDir, "report.pdf");
+
+        await expect(
+          mode === "waited"
+            ? waitForDownload({ path: targetPath, ssrfPolicy: strictPolicy })
+            : mod.downloadViaPlaywright({
+                ...target,
+                ref: "e12",
+                path: targetPath,
+                timeoutMs: 1000,
+                ssrfPolicy: strictPolicy,
+              }),
+        ).rejects.toThrow("browser navigation blocked by policy");
+      })();
+    },
+  );
+
+  it.each(["waited", "clicked"])(
     "rejects a policy-denied %s download before saving it",
     async (mode) => {
       await withTempDir(async (tempDir) => {
@@ -244,7 +277,8 @@ describe("pw-tools-core", () => {
           url: "http://169.254.169.254/latest/meta-data/",
           ssrfPolicy: strictPolicy,
           browserProxyMode: undefined,
-          signal: mode === "waited" ? expect.any(AbortSignal) : undefined,
+          // Both paths carry the policy-denial signal the capture stops on.
+          signal: expect.any(AbortSignal),
         });
       })();
     },

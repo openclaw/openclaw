@@ -250,7 +250,7 @@ function observeDenials() {
   const events: string[] = [];
   const onPolicyDenied: GuardOptions["onPolicyDenied"] = (event) => {
     events.push(
-      event.state === "detected" ? event.state : `${event.state}:${String(event.sourcePreserved)}`,
+      event.state === "handled" ? `${event.state}:${String(event.sourcePreserved)}` : event.state,
     );
   };
   return { events, onPolicyDenied };
@@ -614,9 +614,11 @@ describe("pw-session selected-page interaction request guard", () => {
     const { events, onPolicyDenied } = observeDenials();
     const guarded = guard(
       async () => {
+        // Both denials are main-frame documents: a denied subframe is cancelled
+        // on its own and no longer takes part in the source-preservation report.
         await Promise.all([
           dispatch({ url: "http://127.0.0.1:18080/first", route: firstRoute }),
-          dispatch({ frame: {}, url: "http://127.0.0.1:18080/second", route: secondRoute }),
+          dispatch({ url: "http://127.0.0.1:18080/second", route: secondRoute }),
         ]);
         throw new Error("locator detached");
       },
