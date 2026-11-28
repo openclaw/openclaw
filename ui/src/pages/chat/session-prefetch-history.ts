@@ -25,7 +25,7 @@ type ChatSessionSnapshotRequestResult =
   | (ChatHistoryDeltaResult & { sessionInfo: GatewaySessionRow })
   | ChatHistoryResetResult;
 
-export async function requestChatSessionSnapshot(
+async function requestChatSessionSnapshot(
   client: GatewayBrowserClient,
   sessionKey: string,
   consumerOwner: object,

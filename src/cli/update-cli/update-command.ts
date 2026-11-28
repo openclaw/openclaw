@@ -12,6 +12,7 @@ import { withSystemPackageOwnershipRun } from "../../infra/update-system-package
 import { resolveDebugProxySettings } from "../../proxy-capture/env.js";
 import { withDeferredDebugProxyCapture } from "../../proxy-capture/runtime-deferral.js";
 import { defaultRuntime } from "../../runtime.js";
+import { tryRunSystemServicePackageUpdate } from "../../update/cli.js";
 import { VERSION } from "../../version.js";
 import type { createUpdateProgress } from "./progress.js";
 import { confirmUpdateDowngrade, type UpdateCommandOptions } from "./shared.js";
@@ -53,6 +54,9 @@ export async function updateCommand(
   inputOpts: UpdateCommandOptions,
   executorOptions?: UpdateCommandExecutorOptions,
 ): Promise<void> {
+  if (!executorOptions && (await tryRunSystemServicePackageUpdate(inputOpts))) {
+    return;
+  }
   return await withSystemPackageOwnershipRun(() =>
     withDeferredDebugProxyCapture(async () => {
       const { tryRunImmutableUpdateCommand } = await import("./update-command-immutable.js");

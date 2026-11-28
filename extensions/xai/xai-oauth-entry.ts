@@ -8,12 +8,34 @@ const XAI_OAUTH_CHOICE_ID = "xai-oauth";
 
 const loadXaiOAuthRuntime = createLazyRuntimeModule(() => import("./xai-oauth.js"));
 
+const matchesSharedAccount: NonNullable<ProviderAuthMethod["matchesSharedAccount"]> = (
+  credential,
+  existing,
+) => {
+  if (
+    credential.type !== "oauth" ||
+    existing.type !== "oauth" ||
+    credential.provider !== PROVIDER_ID ||
+    existing.provider !== PROVIDER_ID
+  ) {
+    return false;
+  }
+  // OAuth subjects are issuer-scoped. Equal email addresses do not identify an account.
+  return Boolean(
+    credential.issuer?.trim() &&
+    credential.accountId?.trim() &&
+    credential.issuer === existing.issuer &&
+    credential.accountId === existing.accountId,
+  );
+};
+
 export function createXaiOAuthAuthMethod(): ProviderAuthMethod {
   return {
     id: XAI_OAUTH_METHOD_ID,
     label: "xAI OAuth",
     hint: "Device-code sign-in; works over SSH and on remote hosts",
     kind: "oauth",
+    matchesSharedAccount,
     wizard: {
       choiceId: XAI_OAUTH_CHOICE_ID,
       choiceLabel: "xAI OAuth",

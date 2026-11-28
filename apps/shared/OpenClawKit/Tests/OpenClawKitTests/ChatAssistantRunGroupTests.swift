@@ -256,6 +256,32 @@ struct ChatAssistantRunGroupTests {
         if scope != "adjacent-unknown" { #expect(rows[2].id == narration.id) }
     }
 
+    /// Victor: the working line jumped above a finished command and back below the next one. An imported
+    /// CLI row loses its run once its live call ends and formed a group after the line's frame.
+    @Test
+    func `the working line stays the last item of its turn through every phase`() {
+        let user = Self.message("user", at: 1)
+        let narration = Self.message("assistant", at: 2, phase: "commentary")
+        let running = Self.tool("read", at: 3)
+        let imported = Self.message("assistant", at: 4, run: nil)
+        let followup = Self.message("user", at: 5, run: "followup")
+        let phases: [(rows: [OpenClawChatMessage], tools: [OpenClawChatPendingToolCall])] = [
+            ([user], []),
+            ([user, narration], [running]),
+            ([user, narration, imported], []),
+            ([user, narration, imported, followup], []),
+        ]
+        for phase in phases {
+            let groups = ChatAssistantRunGroup.build(
+                ChatTranscriptRow.build(from: phase.rows), tools: phase.tools,
+                liveRunID: "run", hasLiveContent: true, searchActive: false)
+            let cells = ChatAssistantListCell.cells(groups[...]).map(\.id)
+            let turnEnd = phase.rows.last?.id == followup.id ? cells.count - 2 : cells.count - 1
+            #expect(cells.firstIndex(of: .live) == turnEnd, "rows: \(phase.rows.count), tools: \(phase.tools.count)")
+            #expect(groups.first { $0.includesLive }?.runID == "run")
+        }
+    }
+
     private static func message(
         _ role: String,
         at timestamp: Double,

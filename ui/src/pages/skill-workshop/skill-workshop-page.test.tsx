@@ -430,6 +430,108 @@ describe("without the skill-workshop plugin", () => {
   });
 });
 
+it.each(["Archive", "Restore"] as const)(
+  "shows the %s move before the reply and rolls it back on refusal",
+  async (label) => {
+    const archive = label === "Archive";
+    const write = createDeferredCore<object>();
+    const request = gateway(
+      {
+        list: {
+          ...list,
+          skills: archive ? [skill] : [],
+          archived: archive ? [] : [archived(SKILL, VERSION, false)],
+        },
+        read: skillRead,
+        [archive ? "archive" : "restore"]: write.promise,
+      },
+      [],
+    );
+    const context = createContext(request, { ...mutationAccess, search: `?skill=${SKILL}` });
+    const page = await mount(context);
+    const control = await click(page, label);
+    await waitForSolid(() => expect(control.getAttribute("aria-busy")).toBe("true"));
+    control.click();
+    expect(
+      request.mock.calls.filter(([method]) => method === "skills.workshop." + label.toLowerCase()),
+    ).toHaveLength(1);
+    expect(title(page)).toBe(SKILL);
+    getByRole(page, "link", { name: /skill workshop/i }).click();
+    await click(page, /^Learned skills/);
+    const destination = archive ? "Archived 1" : "Active 1";
+    await waitForSolid(() => expect(button(page, destination, true)).not.toBeNull());
+    expect(text(page, ".sw-grid")).toContain(archive ? "Archiving…" : "Restoring…");
+    write.reject(new Error("Could not save the skill"));
+    await waitText(page, "Could not save the skill");
+    expect(button(page, archive ? "Active 1" : "Archived 1", true)).not.toBeNull();
+    expect(text(page, ".sw-grid")).toContain(SKILL);
+    await click(page, new RegExp(SKILL));
+    await waitForSolid(() => expect(button(page, label)?.disabled).toBe(false));
+  },
+);
+
+it("keeps newer Workshop navigation and ignores a pre-archive Retry after settlement", async () => {
+  const other = { ...skill, name: "release-notes" };
+  const original = { ...list, skills: [skill, other], archived: [] };
+  const saved = { ...list, skills: [other], archived: [archived(SKILL, VERSION, false)] };
+  const retry = createDeferredCore<SkillsWorkshopListResult>();
+  const move = createDeferredCore<object>();
+  const readList = vi
+    .fn()
+    .mockResolvedValueOnce(original)
+    .mockReturnValueOnce(retry.promise)
+    .mockResolvedValue(saved);
+  const request = gateway({ list: readList, read: skillRead, archive: move.promise }, []);
+  const runtimeConfig = createRuntimeConfigStub();
+  runtimeConfig.state.lastError = "Configuration unavailable";
+  const context = createContext(request, {
+    ...mutationAccess,
+    search: `?skill=${SKILL}`,
+    runtimeConfig,
+  });
+  const page = await mount(context);
+  await click(page, "Retry");
+  await click(page, "Archive");
+  getByRole(page, "link", { name: /skill workshop/i }).click();
+  expect(context.router.getState().location.search).toBe("");
+  await click(page, "Active 1");
+  await click(page, /release-notes/);
+  move.resolve({ change });
+  await waitForSolid(() => expect(button(page, "Archive")?.disabled).toBe(false));
+  expect(title(page)).toBe(other.name);
+  retry.resolve(original);
+  await retry.promise;
+  getByRole(page, "link", { name: /skill workshop/i }).click();
+  await waitForSolid(() => expect(button(page, "Active 1", true)).not.toBeNull());
+  expect(text(page, ".sw-grid")).not.toContain(SKILL);
+  await click(page, "Archived 1");
+  await click(page, new RegExp(SKILL));
+  await waitForSolid(() => expect(button(page, "Restore")?.disabled).toBe(false));
+  expect(request).toHaveBeenCalledWith("skills.workshop.read", {
+    ...skillTarget,
+    filePath: "SKILL.md",
+    versionId: VERSION,
+  });
+});
+
+it("does not offer Archive again when the write succeeds but the inventory read fails", async () => {
+  const inventory = vi
+    .fn()
+    .mockResolvedValueOnce(list)
+    .mockRejectedValueOnce(new Error("Inventory unavailable"))
+    .mockResolvedValue({ ...list, skills: [], archived: [archived(SKILL, VERSION, false)] });
+  const request = gateway({ list: inventory, read: skillRead }, []);
+  const context = createContext(request, { ...mutationAccess, search: `?skill=${SKILL}` });
+  const page = await mount(context);
+  await click(page, "Archive");
+  await waitText(page, "Inventory unavailable");
+  expect(button(page, "Archive")).toBeNull();
+  expect(context.router.getState().location.search).toBe(`?skill=${SKILL}`);
+  await click(page, "Retry");
+  await waitForSolid(() => expect(button(page, "Restore")?.disabled).toBe(false));
+  expect(title(page)).toBe(SKILL);
+});
+
 it("opens an archived skill from a chat link", async () => {
   const versionId = "20260930T010000000Z-archive";
   const request = gateway({

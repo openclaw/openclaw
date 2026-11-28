@@ -109,6 +109,7 @@ struct ChatTranscriptPresentation {
     let metadata: [UUID: ChatMessageMetadata]
     var tools: ChatToolRowContext = .none
     var inspectionRows: [ChatTranscriptRow] = []
+    var narratedStretch: (run: String, messages: Set<UUID>)?
 
     @MainActor
     static func project(
@@ -126,16 +127,22 @@ struct ChatTranscriptPresentation {
             base.map(ChatTranscriptRow.message),
             tools: calls).compactMap { part -> OpenClawChatMessage? in
             switch part {
-            case let .row(.message(message)): message
+            case let .row(.message(message)): return message
             case let .tool(call):
-                OpenClawChatMessage(
+                var block = OpenClawChatMessageContent(
+                    type: "toolCall",
+                    id: call.id,
+                    name: call.name,
+                    arguments: call.args)
+                block.parentToolCallId = call.parentToolCallID
+                return OpenClawChatMessage(
                     id: call.presentationID,
                     role: "assistant",
-                    content: [.init(type: "toolCall", id: call.id, name: call.name, arguments: call.args)],
+                    content: [block],
                     timestamp: call.startedAt,
                     transcriptRunID: call.runID,
                     activity: call.activity.map { [$0] })
-            default: nil
+            default: return nil
             }
         }
         #else
@@ -156,6 +163,7 @@ struct ChatTranscriptPresentation {
             runDurations: runDurations,
             isMessageVisible: { isMessageVisible($0, activeRunIDs) })
         let inspectionRows = rows
+        var narratedStretch: (run: String, messages: Set<UUID>)?
         if collapsesWork {
             var liveToolRunIDs = activeRunIDs
             if let streamingTextRunID {
@@ -174,7 +182,8 @@ struct ChatTranscriptPresentation {
                 searchActive: searchActive,
                 liveToolRunIDs: liveToolRunIDs,
                 narratedRunID: model.liveUsageRunID,
-                runDurations: runDurations)
+                runDurations: runDurations,
+                onNarratedStretch: { run, messages in narratedStretch = (run, Set(messages.map(\.id))) })
         }
         rows = rows.compactMap { row in
             switch row {
@@ -187,7 +196,12 @@ struct ChatTranscriptPresentation {
                 return row
             }
         }
-        return Self(rows: rows, metadata: metadata, tools: tools, inspectionRows: inspectionRows)
+        return Self(
+            rows: rows,
+            metadata: metadata,
+            tools: tools,
+            inspectionRows: inspectionRows,
+            narratedStretch: narratedStretch)
     }
 }
 

@@ -153,6 +153,7 @@ it.each([false, true])("keeps custody across worker clock origins (legacy=%s)", 
 
 it("keeps the selected heartbeat generation alive through native retirement", async () => {
   const root = tempDirs.make("openclaw-owner-generation-");
+  fs.writeFileSync(path.join(root, "package.json"), JSON.stringify({ type: "module" }));
   const lockPath = path.join(root, "root.lock");
   fs.writeFileSync(lockPath, "root-owner");
   const { workers, ready } = observeHeartbeatWorkers();
@@ -609,7 +610,13 @@ it("renews retained custody during synchronous work and never touches a successo
       if (namespace && "pidNsInode" in namespace) {
         expect(
           classifyGatewayLockProcessNamespace(
-            { processNamespace: { ...namespace, pidNsInode: "foreign-observer" } },
+            {
+              processNamespace: {
+                ...namespace,
+                host: `${namespace.host}-peer`,
+                pidNsInode: "foreign-observer",
+              },
+            },
             file.lockPath,
           ),
         ).toBe("unknown");

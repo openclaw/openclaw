@@ -314,9 +314,9 @@ can be valid when credentials are inherited from the shared store; Doctor checks
 effective credentials before reporting a missing profile. It does not remove a
 missing profile from account order or recreate its credentials automatically.
 
-Managed updates and the standard container entrypoint run repairing Doctor before
-activation. A manual source upgrade must include `openclaw doctor --fix` before
-starting the Gateway. Startup checks potentially unmigrated host-account jobs in the background without
+Gateway boot and `openclaw doctor --fix` use the same account-adoption owner for
+legacy host-account jobs, including after a container image replacement.
+Startup checks potentially unmigrated host-account jobs in the background without
 delaying cron readiness or operations. The scan has a five-second aggregate budget;
 if it expires, one warning reports how many jobs were not checked and points to
 `openclaw doctor --lint` for a complete check. Startup does not capture credentials

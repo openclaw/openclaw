@@ -122,7 +122,7 @@ describe("McpServerEditor", () => {
     );
   });
 
-  it("never saves a stdio server without a command", () => {
+  it("explains why a blank command was restored and accepts a replacement", () => {
     const { container, onFormPatch } = mountEditor(
       { local: { command: "npx" } },
       summary("local", "stdio"),
@@ -131,8 +131,14 @@ describe("McpServerEditor", () => {
     change(command, "   ");
     expect(onFormPatch).not.toHaveBeenCalled();
     expect(command.value).toBe("npx");
+    const alert = container.querySelector('[role="alert"]');
+    expect(alert?.textContent).toBe(
+      "This MCP server needs a command to start. The previous command was kept.",
+    );
+    expect(command.getAttribute("aria-describedby")).toBe(alert?.id);
     change(command, "uvx");
     expect(onFormPatch).toHaveBeenCalledWith(["mcp", "servers", "local", "command"], "uvx");
+    expect(container.querySelector('[role="alert"]')).toBeNull();
   });
 
   it("renames by moving the entry and reports the new name", () => {

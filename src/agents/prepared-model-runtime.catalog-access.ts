@@ -70,7 +70,7 @@ const limitFullModelCatalogBuild = pLimit(MAX_CONCURRENT_FULL_MODEL_CATALOG_BUIL
 
 // Persistent callbacks must not retain the build guard's batch and retired sibling owners.
 export function createPersistentModelCatalogAccess(
-  params: PreparedModelRuntimeCatalogAccessParams,
+  { seedInventory, ...params }: PreparedModelRuntimeCatalogAccessParams,
   normalizeProvider: ReturnType<typeof createPreparedModelCatalogProviderNormalizer>,
   eligibleProviders: readonly string[],
   currentAuth: PreparedModelCatalogAuth,
@@ -107,7 +107,7 @@ export function createPersistentModelCatalogAccess(
     inventoryKey,
     nativeSource,
     pluginFingerprint,
-  } = prepareRetainedProviderCatalog(params, normalizeProvider, eligibleProviders);
+  } = prepareRetainedProviderCatalog(params, normalizeProvider, eligibleProviders, seedInventory);
   const attempt = createCatalogAttemptReporter(
     params.inventoryOwner,
     { key: inventoryKey, pluginFingerprint, credentials: params.agentFacts.credentials },
