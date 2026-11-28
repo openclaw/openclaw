@@ -332,33 +332,22 @@ See [Image Generation](/tools/image-generation) for shared tool parameters, prov
 
 ## Video generation
 
-The bundled `google` plugin also registers video generation through the shared
-`video_generate` tool.
+<Warning>
+The bundled `google` video provider still calls the Veo 3.1 Preview route.
+Google shut down `veo-3.1-generate-preview`,
+`veo-3.1-fast-generate-preview`, and `veo-3.1-lite-generate-preview` in the
+Gemini API on October 22, 2026. Do not configure
+`google/veo-3.1-fast-generate-preview` for new video jobs: a valid
+`GEMINI_API_KEY` cannot restore this retired model. Google's recommended
+replacement, `gemini-omni-1.2-flash`, uses the Interactions API, so changing
+only the model ID does not migrate OpenClaw's current provider. Other
+providers' Veo offerings use their own credentials and APIs.
+</Warning>
 
-- Default video model: `google/veo-3.1-fast-generate-preview`
-- Modes: text-to-video, image-to-video, and single-video reference flows
-- Supports `aspectRatio` (`16:9`, `9:16`) and `resolution` (`720P`, `1080P`); audio output is not supported by Veo today
-- Supported durations: **4, 6, or 8 seconds** (other values snap to the nearest allowed value)
-
-To use Google as the default video provider:
-
-```json5
-{
-  agents: {
-    defaults: {
-      mediaModels: {
-        video: {
-          primary: "google/veo-3.1-fast-generate-preview",
-        },
-      },
-    },
-  },
-}
-```
-
-<Note>
-See [Video Generation](/tools/video-generation) for shared tool parameters, provider selection, and failover behavior.
-</Note>
+See [Google's video guide](https://ai.google.dev/gemini-api/docs/video),
+[deprecation schedule](https://ai.google.dev/gemini-api/docs/deprecations),
+and [Video Generation](/tools/video-generation) for currently configurable
+alternatives.
 
 ## Music generation
 
