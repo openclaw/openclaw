@@ -31,6 +31,7 @@ let stateDir: string;
 let currentTime: number | undefined;
 let queue: ReturnType<typeof createQueue>;
 const monitors: ReturnType<typeof createWhatsAppIngressMonitor>[] = [];
+const releaseHeldDispatches: Array<() => void> = [];
 function createQueue() {
   return createChannelIngressQueueForTests<Payload>({
     channelId: "whatsapp",
@@ -68,6 +69,9 @@ beforeEach(async () => {
   queue = createQueue();
 });
 afterEach(async () => {
+  for (const release of releaseHeldDispatches.splice(0)) {
+    release();
+  }
   for (const active of monitors.splice(0)) {
     await active.stop();
   }
@@ -183,6 +187,156 @@ describe("WhatsApp durable receive", () => {
     } finally {
       await active.pause();
       await debouncer.drain();
+    }
+  });
+  it.each([0, 60_000])(
+    "delivers text during direct audio preflight with %i ms debounce and preserves audio replay",
+    async (debounceMs) => {
+      const audioStarted = Promise.withResolvers<void>();
+      const releaseAudio = Promise.withResolvers<void>();
+      const textDelivered = Promise.withResolvers<void>();
+      const textEnqueued = Promise.withResolvers<void>();
+      releaseHeldDispatches.push(releaseAudio.resolve);
+      const started: string[] = [];
+      const finished: string[] = [];
+      let textBody: string | undefined;
+      const onError = vi.fn();
+      const debouncer = createWhatsAppInboundMessageDebouncer({
+        resolveDebounceMs: () => debounceMs,
+        shouldDebounce: (msg) => !msg.payload.media,
+        markRead: async () => {},
+        onPendingWorkChanged: () => {},
+        onError,
+        onMessage: async (msg) => {
+          const id = msg.event.id;
+          if (!id) {
+            throw new Error("expected inbound message id");
+          }
+          started.push(id);
+          if (id === "audio-1") {
+            audioStarted.resolve();
+            await releaseAudio.promise;
+          }
+          if (id === "text") {
+            textBody = msg.payload.body;
+          }
+          await resolveWhatsAppIngressLifecycle(msg)?.onAdopted();
+          finished.push(id);
+          if (id === "text") {
+            textDelivered.resolve();
+          }
+        },
+      });
+      const dispatch: Parameters<typeof monitor>[0] = async (inbound, lifecycle) => {
+        const id = transportId(inbound);
+        const audio = id.startsWith("audio-");
+        await debouncer.enqueue({
+          ...createTestWebInboundMessage({
+            event: { id },
+            payload: {
+              body: audio ? "" : id,
+              ...(audio
+                ? { media: { kind: "audio", type: "audio/ogg", path: "/fixture.ogg" } }
+                : {}),
+            },
+            admission: { conversation: { id: JID, kind: "direct" } },
+          }),
+          turnAdoptionLifecycle: lifecycle,
+        });
+        if (id === "text") {
+          textEnqueued.resolve();
+        }
+        return { kind: "deferred" };
+      };
+      const audioMessage = (id: string): WAMessage => ({
+        ...message(id),
+        message: { ephemeralMessage: { message: { audioMessage: { ptt: true } } } },
+      });
+      await enqueue("leading", 1);
+      // Include a queued voice note from before the preflight lane existed.
+      await queue.enqueue(
+        eventId("audio-1"),
+        {
+          message: serializeWhatsAppDurableInboundMessage(audioMessage("audio-1")),
+          receivedAt: 2,
+        },
+        { laneKey: JID, receivedAt: 2 },
+      );
+      const active = monitor(dispatch);
+      try {
+        await audioStarted.promise;
+        await active.admit({ message: audioMessage("audio-2"), receivedAt: 3 });
+        await active.admit({ message: audioMessage("audio-1"), receivedAt: 4 });
+        await active.admit({ message: message("text"), receivedAt: 5 });
+        await active.waitForPumpIdle();
+        // A held pre-adoption voice note must not leave later text in the queue.
+        expect((await queue.listPending({ limit: "all" })).map((row) => row.id)).not.toContain(
+          eventId("text"),
+        );
+        await textEnqueued.promise;
+        const draining = debouncer.drain();
+        await textDelivered.promise;
+        expect(started.filter((id) => id !== "leading")).toEqual(["audio-1", "text"]);
+        expect(textBody).toBe(debounceMs > 0 ? "leading\ntext" : "text");
+        expect(finished).not.toContain("audio-1");
+        releaseAudio.resolve();
+        await draining;
+        await active.waitForIdle();
+        await debouncer.drain();
+        expect(finished.filter((id) => id !== "leading")).toEqual(["text", "audio-1", "audio-2"]);
+        expect(onError).not.toHaveBeenCalled();
+        await active.stop();
+        queue = createQueue();
+        const restarted = monitor(dispatch);
+        const repeated = await restarted.admit({ message: audioMessage("audio-1"), receivedAt: 6 });
+        expect(repeated).toMatchObject({ queueResult: { kind: "completed" } });
+        await restarted.waitForIdle();
+        expect(started.filter((id) => id !== "leading")).toEqual(["audio-1", "text", "audio-2"]);
+        expect(await queue.listClaims()).toEqual([]);
+        expect(await queue.listPending({ limit: "all" })).toEqual([]);
+      } finally {
+        releaseAudio.resolve();
+        await active.pause();
+        await debouncer.drain();
+      }
+    },
+  );
+  it("keeps group text behind an earlier group audio message", async () => {
+    const audioStarted = Promise.withResolvers<void>();
+    const releaseAudio = Promise.withResolvers<void>();
+    releaseHeldDispatches.push(releaseAudio.resolve);
+    const group = "123@g.us";
+    const started: string[] = [];
+    const active = monitor(async (inbound) => {
+      const id = transportId(inbound);
+      started.push(id);
+      if (id === "group-audio") {
+        audioStarted.resolve();
+        await releaseAudio.promise;
+      }
+      return { kind: "completed" };
+    });
+    try {
+      await active.admit({
+        message: {
+          key: { remoteJid: group, id: "group-audio" },
+          message: { audioMessage: { ptt: true } },
+        },
+        receivedAt: 1,
+      });
+      await audioStarted.promise;
+      await active.admit({
+        message: { key: { remoteJid: group, id: "group-text" }, message: { conversation: "next" } },
+        receivedAt: 2,
+      });
+      await active.waitForPumpIdle();
+      expect(started).toEqual(["group-audio"]);
+      expect(await queue.listPending({ limit: "all" })).toHaveLength(1);
+      releaseAudio.resolve();
+      await active.waitForIdle();
+      expect(started).toEqual(["group-audio", "group-text"]);
+    } finally {
+      releaseAudio.resolve();
     }
   });
   it.each([

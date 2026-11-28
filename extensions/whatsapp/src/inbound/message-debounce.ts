@@ -1,5 +1,6 @@
 import { createInboundDebouncer } from "openclaw/plugin-sdk/channel-inbound-debounce";
 import { fanInChannelIngressLifecycles } from "openclaw/plugin-sdk/channel-ingress-runtime";
+import { hasWhatsAppAudioBody } from "../auto-reply/monitor/audio-preflight.js";
 import { getPrimaryIdentityId } from "../identity.js";
 import type { WhatsAppIngressLifecycle, WhatsAppReadReceiptTarget } from "./durable-receive.js";
 import { attachWhatsAppIngressLifecycle } from "./ingress-lifecycle.js";
@@ -35,7 +36,10 @@ export function createWhatsAppInboundMessageDebouncer(options: {
   };
   const buildKey = (msg: WhatsAppQueuedInboundMessage): string => {
     const admission = msg.admission;
-    return `${admission.accountId}:${admission.conversation.id}`;
+    const key = `${admission.accountId}:${admission.conversation.id}`;
+    return admission.conversation.kind === "direct" && hasWhatsAppAudioBody(msg)
+      ? `${key}:audio`
+      : key;
   };
   const shouldDebounce = (msg: AdmittedWebInboundCallbackMessage): boolean =>
     options.shouldDebounce?.(msg) ?? true;
