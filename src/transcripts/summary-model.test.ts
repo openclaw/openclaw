@@ -6,6 +6,7 @@ import { runWithAsyncWorkResources } from "../shared/async-work-resources.js";
 import { createTranscriptSummaryUpdates, persistTranscriptSummary } from "./capture-summary.js";
 import { resolveTranscriptsConfig } from "./config.js";
 import { createTranscriptSpeakerLabels } from "./speaker-labels.js";
+import type { TranscriptsStore } from "./store.js";
 import { summarizeTranscriptsWithModel as enhanceTranscriptSummary } from "./summary-model.js";
 import "./summary-model.runtime.js";
 import { summarizeTranscripts } from "./summary.js";
