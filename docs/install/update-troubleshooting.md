@@ -173,22 +173,30 @@ alive:
 # 1) BEFORE stopping: capture the PID that owns the port
 lsof -nP -tiTCP:18789 -sTCP:LISTEN   # note this value
 
-# 2) Stop the service, then check that exact PID
-kill -0 <pid>; echo "rc=$?"
+# 2) Stop the service, then test whether that exact PID still exists
+ps -p <pid> -o pid= >/dev/null 2>&1; echo "rc=$?"
 ```
 
-Interpret the exit status, because "not alive" and "could not check" are
+Interpret the result, because "process is gone" and "could not check" are
 different answers:
 
-| `kill -0` result | Meaning |
+| `ps -p <pid> -o pid=` | Meaning |
 |---|---|
-| rc=0 | Process exists — still running (or still draining) |
-| rc=1 (`No such process`) | Process is gone — Gateway has exited |
-| rc=3 / `Operation not permitted` | Liveness could not be checked (PID owned by another user) — do not treat as stopped; re-check with sufficient privileges |
+| rc=0 | Process exists — still running, or still draining |
+| rc=1 | No such process — the Gateway has exited |
 
-An empty `lsof` result plus `kill -0` rc=1 means the Gateway is stopped. During
-a graceful shutdown the listener may close while in-flight work settles, so
-allow a generous margin before concluding that a stop failed, and prefer
+`ps` reports existence for any user's PID, so rc=1 is a real "gone" answer
+rather than a permissions artefact.
+
+If you reach for `kill -0` instead, do not branch on its exit status alone: on
+macOS it returns **1 for both** "no such process" and "operation not permitted",
+and the accompanying message text differs between shells and `/bin/kill`
+(`No such process` vs `no such process`). Use `ps -p`, or parse the message text
+explicitly, before concluding the process is gone.
+
+An empty `lsof` result plus `ps -p <pid>` rc=1 means the Gateway is stopped.
+During a graceful shutdown the listener may close while in-flight work settles,
+so allow a generous margin before concluding that a stop failed, and prefer
 stopping while the Gateway is idle.
 
 ## Node and global install permissions
