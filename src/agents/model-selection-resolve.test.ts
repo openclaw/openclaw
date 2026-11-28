@@ -27,7 +27,7 @@ function providerConfig(provider: string, id: string, baseUrl: string): OpenClaw
 function resolveAllowed(
   cfg: OpenClawConfig,
   raw: string,
-  options: Partial<Parameters<typeof resolveAllowedModelRefCore>[0]> = {},
+  options: Partial<Parameters<typeof resolveAllowedModelRefCore>[0]>,
 ) {
   const { catalog = [], defaultProvider = "anthropic", ...rest } = options;
   return resolveAllowedModelRefCore({ ...rest, cfg, raw, catalog, defaultProvider });

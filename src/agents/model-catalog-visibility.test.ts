@@ -24,7 +24,7 @@ const entryState = (
   evaluation: ModelAuthAvailabilityEvaluation = { availability: true, routeResolution: null },
 ) => resolveLogicalModelCatalogEntryState({ evaluation });
 type VisibleParams = Parameters<typeof resolveLogicalVisibleModelCatalog>[0];
-const visible = (catalog: ModelCatalogEntry[], params: Partial<VisibleParams> = {}) =>
+const visible = (catalog: ModelCatalogEntry[], params: Partial<VisibleParams>) =>
   resolveLogicalVisibleModelCatalog({
     cfg: {},
     catalog,

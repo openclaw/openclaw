@@ -70,7 +70,7 @@ const provider = (overrides: Partial<ProviderConfig> = {}): ProviderConfig => ({
   models: [structuredClone(defaultModel)],
   ...overrides,
 });
-async function generate(params: Partial<Parameters<typeof planModelsJsonForTest>[0]> = {}) {
+async function generate(params: Partial<Parameters<typeof planModelsJsonForTest>[0]>) {
   const authStore = params.authStore ?? { version: 1, profiles: {} };
   vi.spyOn(authProfileStoreRuntime, "ensureAuthProfileStoreAsync").mockResolvedValue(authStore);
   const plan = await planModelsJsonForTest({
