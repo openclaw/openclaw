@@ -554,7 +554,7 @@ actor LocalFixtureChatStore {
 
     init(fixture: LocalChatFixture) {
         self.fixture = fixture
-        self.messages = Self.seedMessages(fixture: fixture)
+        self.messages = PhotoAlbumFixture.messages ?? Self.seedMessages(fixture: fixture)
         self.modelID = fixture.modelID
         if Self.playsToolRunFixture || Self.commandStretchModel != nil {
             self.activeRunID = Self.toolRunID
@@ -1023,7 +1023,7 @@ actor LocalFixtureChatStore {
     func reset() {
         self.duplicateReplaySessionKey = nil
         self.duplicateReplayStarted = false
-        self.messages = Self.seedMessages(fixture: self.fixture)
+        self.messages = PhotoAlbumFixture.messages ?? Self.seedMessages(fixture: self.fixture)
         self.nestedSuccessPending = false
         self.reactionOverrides.removeAll()
         self.modelID = self.fixture.modelID

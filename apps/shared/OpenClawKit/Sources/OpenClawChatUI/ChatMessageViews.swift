@@ -361,6 +361,8 @@ struct ChatGatewayResources: Equatable {
         OpenClawChatMediaKind,
         OpenClawChatPlaybackMode?) async throws -> OpenClawChatLoadedMedia?
 
+    var loadImageThumbnail: @MainActor @Sendable (String) async throws -> OpenClawChatMediaData? = { _ in nil }
+
     static func == (lhs: Self, rhs: Self) -> Bool {
         lhs.owner == rhs.owner
     }
@@ -729,13 +731,20 @@ extension ChatMessageBubble {
     private func messageContent(text: String, textColor: Color) -> some View {
         #if os(iOS)
         // A user's attachments sit above the bubble; the bubble keeps only the text.
-        let attachments = self.isUser ? [] : self.visibleInlineAttachments
-        let omittedImageAttachmentCount = self.isUser ? 0 : self.omittedImageAttachmentCount
+        let album = self.isUser ? nil : ChatMessagePhotoAlbum(self.inlineAttachments, sentPhotos: false)
+        let attachments = self.isUser ? [] : album == nil ? self.visibleInlineAttachments : self.inlineAttachments
+            .filter {
+                !AttachmentRow.rendersImage($0, sentPhotos: false)
+            }
+        let omittedImageAttachmentCount = self.isUser || album != nil ? 0 : self.omittedImageAttachmentCount
         #else
         let attachments = self.visibleInlineAttachments
         let omittedImageAttachmentCount = self.omittedImageAttachmentCount
         #endif
         return VStack(alignment: .leading, spacing: 10) {
+            #if os(iOS)
+            if let album { self.photoStack(album) }
+            #endif
             if self.isUser {
                 VStack(alignment: .leading, spacing: 4) {
                     self.userMessageText(text: text, textColor: textColor)
@@ -975,11 +984,18 @@ extension ChatMessageBubble {
     }
 
     private var userAttachmentGroup: some View {
-        let attachments = self.visibleInlineAttachments
+        let album = ChatMessagePhotoAlbum(self.inlineAttachments, sentPhotos: true)
+        let attachments = album == nil ? self.visibleInlineAttachments : self.inlineAttachments
         let images = attachments.filter(self.rendersUserImage)
         let others = attachments.filter { !self.rendersUserImage($0) }
         return VStack(alignment: .trailing, spacing: ChatUIConstants.userBlockSpacing) {
-            if images.count == 1 {
+            if let album {
+                self.photoStack(album)
+                    .opacity(self.userBubbleAccessories?.send?.isPending == true ? ChatUIConstants.pendingOpacity : 1)
+                    .overlay {
+                        if let send = self.userBubbleAccessories?.send { ChatAttachmentSendOverlay(send: send) }
+                    }
+            } else if images.count == 1 {
                 self.userAttachmentRow(images[0])
             } else if images.count > 1 {
                 self.userImageTiles(images)
@@ -991,12 +1007,17 @@ extension ChatMessageBubble {
                 self.userAttachmentRow(att, localVideo: local)
                     .frame(maxWidth: isVideo ? nil : self.column.bubbleAndMediaMaxWidth, alignment: .trailing)
             }
-            if self.omittedImageAttachmentCount > 0 {
+            if album == nil, self.omittedImageAttachmentCount > 0 {
                 Text(ChatUIConstants.imagesNotShown(self.omittedImageAttachmentCount))
                     .font(OpenClawChatTypography.footnote)
                     .foregroundStyle(.secondary)
             }
         }
+    }
+
+    private func photoStack(_ album: ChatMessagePhotoAlbum) -> some View {
+        ChatMessagePhotoStack(album: album)
+            .id(album.pages.map(\.item.artifactId))
     }
 
     private func sentVideo(in attachments: [OpenClawChatMessageContent], at index: Int) -> OpenClawPendingAttachment? {
@@ -1077,9 +1098,9 @@ private struct AttachmentRow: View {
 
     /// Whether a user's attachment draws as an image (a managed artifact, or a sent photo) rather
     /// than a card.
-    static func rendersImage(_ att: OpenClawChatMessageContent) -> Bool {
+    static func rendersImage(_ att: OpenClawChatMessageContent, sentPhotos: Bool = true) -> Bool {
         #if os(iOS)
-        if ChatUserImageSource.isRenderable(att) { return true }
+        if sentPhotos, ChatUserImageSource.isRenderable(att) { return true }
         #endif
         return att.mediaKind == .image && self.fetchableArtifactId(att) != nil
     }

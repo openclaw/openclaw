@@ -39,7 +39,18 @@ public enum OpenClawChatInboundMedia {
         sessionKey: String,
         agentID: String?) -> URL?
     {
-        self.url(source: source, context: context, sessionKey: sessionKey, agentID: agentID, thumbnail: true)
+        self.url(
+            source: source,
+            context: context,
+            sessionKey: sessionKey,
+            agentID: agentID,
+            thumbnailWidth: self.thumbnailWidth)
+    }
+
+    public static func tileThumbnailURL(
+        source: String, context: OpenClawChatSourceContext, sessionKey: String, agentID: String?) -> URL?
+    {
+        self.url(source: source, context: context, sessionKey: sessionKey, agentID: agentID, thumbnailWidth: 480)
     }
 
     /// The same URL without the rendition: the bytes as uploaded, which the web's full-size view
@@ -50,7 +61,7 @@ public enum OpenClawChatInboundMedia {
         sessionKey: String,
         agentID: String?) -> URL?
     {
-        self.url(source: source, context: context, sessionKey: sessionKey, agentID: agentID, thumbnail: false)
+        self.url(source: source, context: context, sessionKey: sessionKey, agentID: agentID, thumbnailWidth: nil)
     }
 
     private static func url(
@@ -58,15 +69,15 @@ public enum OpenClawChatInboundMedia {
         context: OpenClawChatSourceContext,
         sessionKey: String,
         agentID: String?,
-        thumbnail: Bool) -> URL?
+        thumbnailWidth: Int?) -> URL?
     {
         guard let source = self.canonicalSource(source),
               var url = URLComponents(url: context.gatewayURL, resolvingAgainstBaseURL: false)
         else { return nil }
         var query = [("source", source), ("sessionKey", sessionKey)]
         if let agentID { query.append(("agentId", agentID)) }
-        if thumbnail {
-            query += [("variant", "thumbnail"), ("width", String(self.thumbnailWidth)), ("v", "4")]
+        if let thumbnailWidth {
+            query += [("variant", "thumbnail"), ("width", String(thumbnailWidth)), ("v", "4")]
         }
         let allowed = CharacterSet.alphanumerics.union(CharacterSet(charactersIn: "-._~"))
         url.percentEncodedPath = context.basePath + "/__openclaw__/assistant-media"

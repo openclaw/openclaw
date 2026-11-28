@@ -921,6 +921,12 @@ extension OpenClawChatView {
                     artifactId: artifactId,
                     kind: kind,
                     playback: playback)
+            },
+            loadImageThumbnail: { [weak viewModel] id in
+                guard let viewModel else { return nil }
+                return try await viewModel.transport.loadImageThumbnail(
+                    sessionKey: viewModel.sessionKey,
+                    artifactId: id)
             })
     }
 

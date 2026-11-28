@@ -984,6 +984,9 @@ public protocol OpenClawChatTransport: Sendable {
         kind: OpenClawChatMediaKind,
         playback: OpenClawChatPlaybackMode?) async throws -> OpenClawChatLoadedMedia?
 
+    /// A bounded transcript preview. Never fall back to the original for this request.
+    func loadImageThumbnail(sessionKey: String, artifactId: String) async throws -> OpenClawChatMediaData?
+
     func loadSourceContext() async -> OpenClawChatSourceContext?
     func loadSourceFavicon(host: String) async -> Data?
 
@@ -1053,6 +1056,10 @@ extension OpenClawChatTransport {
     }
 
     public func acquireReactionsRouteLease() async -> OpenClawChatReactionsRouteLease? {
+        nil
+    }
+
+    public func loadImageThumbnail(sessionKey _: String, artifactId _: String) async throws -> OpenClawChatMediaData? {
         nil
     }
 
