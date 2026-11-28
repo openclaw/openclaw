@@ -33,10 +33,11 @@ struct RootSidebarSessionButton: View, Equatable {
     }
 
     var body: some View {
+        _ = self.dynamicTypeSize
         let session = self.node.session
         let isSelected = self.isSelected
         let mark = SessionRowActivityMark(session: session)
-        Button {
+        return Button {
             self.open(session)
         } label: {
             HStack(spacing: 10) {
