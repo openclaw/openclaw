@@ -125,9 +125,12 @@ type SessionTitleParams = {
   onTitleStateChanged?: () => void;
 };
 
-function isAutoTitleSessionKey(sessionKey: string): boolean {
+function autoTitleSessionKind(sessionKey: string): "dashboard" | "native" | undefined {
   const rest = parseAgentSessionKey(sessionKey)?.rest ?? "";
-  return rest.startsWith("dashboard:") || rest.startsWith("ios-") || rest.startsWith("node-");
+  if (rest.startsWith("dashboard:")) {
+    return "dashboard";
+  }
+  return rest.startsWith("ios-") || rest.startsWith("node-") ? "native" : undefined;
 }
 
 /** True when this interactive chat key should receive an automatic topic title. */
@@ -136,7 +139,7 @@ export function isDashboardSessionTitleCandidate(params: {
   userMessage: string;
 }): boolean {
   const sourceText = params.userMessage.trim();
-  return Boolean(sourceText && isAutoTitleSessionKey(params.sessionKey));
+  return Boolean(sourceText && autoTitleSessionKind(params.sessionKey));
 }
 
 function resolveDashboardTitleAuthProfile(params: {
@@ -287,8 +290,6 @@ async function generateDashboardSessionTitle(params: {
   entry?: DashboardSessionTitleModelEntry;
   sourceText: string;
   utilityOnly?: boolean;
-  /** The caller keeps its own name when no model answers, instead of a crustacean slug. */
-  callerFallback?: boolean;
   abortSignal?: AbortSignal;
   assertCurrent?: () => void;
   operatorAuthority?: AdmittedRunOperatorAuthority;
@@ -298,12 +299,9 @@ async function generateDashboardSessionTitle(params: {
   const sourceText = params.sourceText;
   const regularModel = resolveSessionModelRef(params.cfg, params.entry, params.agentId);
   if (!regularModel) {
-    // No configured model can write a title; take the same fallback as a failed model.
-    if (params.utilityOnly || params.callerFallback) {
-      return null;
-    }
+    // No configured model can write a title; report it like a failed model.
     params.onFallback?.();
-    return createCrustaceanSlug();
+    return null;
   }
   const agentHarnessRuntimeOverride = resolveSessionRuntimeOverrideForProvider({
     provider: regularModel.provider,
@@ -369,14 +367,9 @@ async function generateDashboardSessionTitle(params: {
   if (title) {
     return title;
   }
-  // Speculative utility-only naming must not persist a provisional title that
-  // would skip the healthy primary-model pass after send.
-  if (params.utilityOnly || params.callerFallback) {
-    return null;
-  }
-  // Saved titles also name Git branches; never persist raw prompt text as a fallback.
+  // The caller decides how to present an exhausted attempt. Never turn a raw prompt into a branch name.
   params.onFallback?.();
-  return createCrustaceanSlug();
+  return null;
 }
 
 /** Prepares a creation draft's title without creating or updating a session. */
@@ -420,9 +413,7 @@ export async function generateAutomationName(params: {
   operatorAuthority: AdmittedRunOperatorAuthority;
 }): Promise<string | null> {
   const sourceText = resolveSessionTitleSource(params.message);
-  return sourceText
-    ? await generateDashboardSessionTitle({ ...params, sourceText, callerFallback: true })
-    : null;
+  return sourceText ? await generateDashboardSessionTitle({ ...params, sourceText }) : null;
 }
 
 /** Worktree callers bound their own wait without cancelling another naming owner's request. */
@@ -507,9 +498,12 @@ export async function maybeGenerateSessionTitle(params: SessionTitleParams): Pro
       : false;
   }
 
-  const finish = async (generation: Promise<string | null>) => {
-    const displayName = await generation;
-    if (!displayName) {
+  const finish = async (generation: Promise<string | null>, fallbackReady: boolean) => {
+    // Shipped native clients read saved names, not the dashboard's derived title.
+    const displayName =
+      (await generation) ??
+      (autoTitleSessionKind(sessionKey) === "native" ? createCrustaceanSlug() : null);
+    if (!displayName && fallbackReady) {
       return false;
     }
     const persist = async (assertSourceCurrent?: SessionSourceAssertion) => {
@@ -528,10 +522,16 @@ export async function maybeGenerateSessionTitle(params: SessionTitleParams): Pro
           if (current.sessionId !== params.sessionId || hasExplicitSessionName(current)) {
             return null;
           }
+          if (!displayName) {
+            // Record the outcome, never the prompt or a synthetic branch name.
+            return current.titleFallbackReady ? null : { titleFallbackReady: true };
+          }
           persisted = true;
           return { displayName };
         },
         {
+          // Naming is metadata, not activity that should reorder the sidebar.
+          preserveActivity: true,
           requireWriteSuccess: true,
           ...sessionEntryCommitGuardOptions(assertCommitAllowed),
         },
@@ -599,7 +599,7 @@ export async function maybeGenerateSessionTitle(params: SessionTitleParams): Pro
     const withSource = params.withSource;
     if (!withSource) {
       params.commitGuard?.();
-      return await finish(generate());
+      return await finish(generate(), entry.titleFallbackReady === true);
     }
     return await runWithAsyncWorkResources(
       async () => {
@@ -614,7 +614,7 @@ export async function maybeGenerateSessionTitle(params: SessionTitleParams): Pro
           void completion.catch(() => undefined);
           return { completion };
         });
-        return await finish(pending.completion);
+        return await finish(pending.completion, entry.titleFallbackReady === true);
       },
       { cancelOnError: true },
     );

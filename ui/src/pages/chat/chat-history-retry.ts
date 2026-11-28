@@ -75,23 +75,30 @@ export function isRetryableChatReadError(
   if (err instanceof GatewayProtocolRequestTimeoutError) {
     return err.method === method;
   }
-  if (!(err instanceof GatewayRequestError)) {
+  // A fresh subscription rechecks access; never replay a mutation or a denial.
+  if (method === "sessions.messages.subscribe" && isChatSubscriptionTargetChanged(err)) {
+    return true;
+  }
+  if (
+    !(err instanceof GatewayRequestError) ||
+    err.gatewayCode !== "UNAVAILABLE" ||
+    !err.retryable
+  ) {
     return false;
   }
-  const details = asOptionalRecord(err.details);
-  if (err.gatewayCode === "INVALID_REQUEST") {
-    // A fresh subscription rechecks access; never replay a mutation or a denial.
-    return (
-      method === "sessions.messages.subscribe" &&
-      details?.code === "SESSION_MUTATION_AUTHORIZATION_CHANGED" &&
-      details.method === method
-    );
-  }
-  if (err.gatewayCode !== "UNAVAILABLE" || !err.retryable) {
-    return false;
-  }
-  const detailMethod = details?.method;
+  const detailMethod = asOptionalRecord(err.details)?.method;
   return typeof detailMethod !== "string" || detailMethod === method;
+}
+
+export function isChatSubscriptionTargetChanged(error: unknown): boolean {
+  if (!(error instanceof GatewayRequestError) || error.gatewayCode !== "INVALID_REQUEST") {
+    return false;
+  }
+  const details = asOptionalRecord(error.details);
+  return (
+    details?.code === "SESSION_MUTATION_AUTHORIZATION_CHANGED" &&
+    details.method === "sessions.messages.subscribe"
+  );
 }
 
 export function formatChatHistoryLoadError(error: unknown): string {
