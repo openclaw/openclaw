@@ -5,9 +5,10 @@ import {
   normalizeLowercaseStringOrEmpty,
   normalizeOptionalString,
 } from "@openclaw/normalization-core/string-coerce";
+import { isTranscriptArtifactProvider } from "../../packages/agent-core/src/harness/session/transcript-model.js";
 import { resolveAgentModelPrimaryValue } from "../config/model-input.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
-import { DEFAULT_MODEL, DEFAULT_PROVIDER } from "./defaults.js";
+import { DEFAULT_PROVIDER } from "./defaults.js";
 import { findModelInCatalog } from "./model-catalog-lookup.js";
 import type { ModelCatalogEntry } from "./model-catalog.types.js";
 import type { ModelFallbackRouteResolution } from "./model-fallback.types.js";
@@ -18,6 +19,8 @@ import {
   modelKey,
 } from "./model-ref-shared.js";
 import {
+  NO_MODEL_CONFIGURED_MESSAGE,
+  requireDefaultModelForAgent,
   resolveDefaultModelForAgent,
   resolveSubagentConfiguredModelSelection,
 } from "./model-selection-config.js";
@@ -42,7 +45,12 @@ export {
 
 export type { ModelAliasIndex, ModelManifestNormalizationContext, ModelRef };
 
-export { resolveDefaultModelForAgent, resolveSubagentConfiguredModelSelection };
+export {
+  NO_MODEL_CONFIGURED_MESSAGE,
+  requireDefaultModelForAgent,
+  resolveDefaultModelForAgent,
+  resolveSubagentConfiguredModelSelection,
+};
 
 export {
   normalizeStoredOverrideModel,
@@ -53,10 +61,10 @@ export {
   findNormalizedProviderKey,
   legacyModelKey,
   modelKey,
-  normalizeModelRef,
   normalizeProviderId,
   normalizeProviderIdForAuth,
 } from "./model-ref-shared.js";
+export { normalizeModelRef } from "./model-selection-normalize.js";
 export { findNormalizedProviderValue, parseModelRef } from "./model-selection-normalize.js";
 export {
   buildConfiguredModelCatalog,
@@ -65,6 +73,7 @@ export {
   normalizeModelSelection,
   resolveBareModelDefaultProvider,
   resolveConfiguredModelRef,
+  resolveConfiguredRouteModelLabel,
   resolveHooksGmailModel,
   resolveModelRefFromString,
 } from "./model-selection-shared.js";
@@ -101,14 +110,15 @@ export function resolvePersistedSelectedModelRef(
   const runtimeModel = normalizeOptionalString(params.runtimeModel);
   if (runtimeModel) {
     if (runtimeProvider) {
-      return { provider: runtimeProvider, model: runtimeModel };
+      return isTranscriptArtifactProvider(runtimeProvider)
+        ? null
+        : { provider: runtimeProvider, model: runtimeModel };
     }
-    return (
-      parseModelRef(runtimeModel, defaultProvider, params) ?? {
-        provider: defaultProvider,
-        model: runtimeModel,
-      }
-    );
+    const ref = parseModelRef(runtimeModel, defaultProvider, params) ?? {
+      provider: defaultProvider,
+      model: runtimeModel,
+    };
+    return isTranscriptArtifactProvider(ref.provider) ? null : ref;
   }
   return null;
 }
@@ -118,9 +128,6 @@ export async function canonicalizeCaseOnlyCatalogModelRef(params: {
   cfg?: OpenClawConfig;
   defaultProvider: string;
   loadCatalog: () => Promise<ModelCatalogEntry[]>;
-  aliasIndex?: ModelAliasIndex;
-  allowManifestNormalization?: boolean;
-  allowPluginNormalization?: boolean;
   preserveAuthProfile?: boolean;
 }): Promise<string | undefined> {
   const rawModel = normalizeOptionalString(params.raw);
@@ -139,9 +146,6 @@ export async function canonicalizeCaseOnlyCatalogModelRef(params: {
     cfg: params.cfg,
     raw: split.model,
     defaultProvider: params.defaultProvider,
-    aliasIndex: params.aliasIndex,
-    allowManifestNormalization: params.allowManifestNormalization,
-    allowPluginNormalization: params.allowPluginNormalization,
   });
   if (!resolved) {
     return rawModel;
@@ -184,11 +188,12 @@ export function resolveSubagentSpawnModelSelection(params: {
     cfg: params.cfg,
     agentId: params.agentId,
   });
+  const defaultProvider = runtimeDefault?.provider ?? DEFAULT_PROVIDER;
   const configured = resolveConfiguredSubagentSpawnModelSelection({
     cfg: params.cfg,
     agentId: params.agentId,
     modelOverride: params.modelOverride,
-    defaultProvider: runtimeDefault.provider,
+    defaultProvider,
     includeAgentPrimary: !params.inheritedModel,
   });
   if (configured) {
@@ -202,11 +207,14 @@ export function resolveSubagentSpawnModelSelection(params: {
   }
   const raw =
     resolveAgentModelPrimaryValue(params.cfg.agents?.defaults?.model) ??
-    `${runtimeDefault.provider}/${runtimeDefault.model}`;
+    (runtimeDefault ? `${runtimeDefault.provider}/${runtimeDefault.model}` : undefined);
+  if (!raw) {
+    throw new Error(NO_MODEL_CONFIGURED_MESSAGE);
+  }
   const aliasIndex = buildModelAliasIndex({
     cfg: params.cfg,
     agentId: params.agentId,
-    defaultProvider: runtimeDefault.provider,
+    defaultProvider,
   });
   return { model: resolveModelThroughAliases(raw, aliasIndex) };
 }
@@ -221,26 +229,17 @@ export function resolveConfiguredSubagentSpawnModelSelection(params: {
 }): string | undefined {
   const raw =
     normalizeModelSelection(params.modelOverride) ??
-    resolveSubagentConfiguredModelSelection({
-      cfg: params.cfg,
-      agentId: params.agentId,
-      includeAgentPrimary: params.includeAgentPrimary,
-      modelRuntime: params.modelRuntime,
-    });
+    resolveSubagentConfiguredModelSelection(params);
   if (!raw) {
     return undefined;
   }
   const defaultProvider =
     normalizeOptionalString(params.defaultProvider) ??
     resolveConfiguredModelRef(
-      {
-        cfg: params.cfg,
-        agentId: params.agentId,
-        defaultProvider: DEFAULT_PROVIDER,
-        defaultModel: DEFAULT_MODEL,
-      },
+      { cfg: params.cfg, agentId: params.agentId, defaultProvider: DEFAULT_PROVIDER },
       params.modelRuntime,
-    ).provider;
+    )?.provider ??
+    DEFAULT_PROVIDER;
   const aliasIndex = buildModelAliasIndex({
     cfg: params.cfg,
     agentId: params.agentId,

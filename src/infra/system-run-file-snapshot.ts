@@ -1,21 +1,19 @@
-import crypto from "node:crypto";
-import fs from "node:fs";
+import type fs from "node:fs";
+import fsp from "node:fs/promises";
 import path from "node:path";
+import { sha256Hex } from "@openclaw/normalization-core/node-crypto";
 import type { SystemRunApprovalFileOperand } from "./exec-approvals-core.js";
+import { realpathForExec } from "./exec-command-resolution.js";
 
-function hashFileContentsSync(filePath: string): string {
-  return crypto.createHash("sha256").update(fs.readFileSync(filePath)).digest("hex");
-}
-
-export function snapshotFileOperandAtPath(params: {
+export async function snapshotFileOperandAtPath(params: {
   argvIndex: number;
   filePath: string;
-}): { ok: true; snapshot: SystemRunApprovalFileOperand } | { ok: false; message: string } {
+}): Promise<{ ok: true; snapshot: SystemRunApprovalFileOperand } | { ok: false; message: string }> {
   let realPath: string;
   let stat: fs.Stats;
   try {
-    realPath = fs.realpathSync(params.filePath);
-    stat = fs.statSync(realPath);
+    realPath = await realpathForExec(params.filePath);
+    stat = await fsp.stat(realPath);
   } catch {
     return {
       ok: false,
@@ -30,7 +28,7 @@ export function snapshotFileOperandAtPath(params: {
   }
   let sha256: string;
   try {
-    sha256 = hashFileContentsSync(realPath);
+    sha256 = sha256Hex(await fsp.readFile(realPath));
   } catch {
     // An unreadable script has no approved byte identity. Treating it as
     // unbound would let later readable bytes execute under this approval.
@@ -42,18 +40,18 @@ export function snapshotFileOperandAtPath(params: {
   return { ok: true, snapshot: { argvIndex: params.argvIndex, path: realPath, sha256 } };
 }
 
-export function revalidateApprovedMutableFileOperand(params: {
+export async function revalidateApprovedMutableFileOperand(params: {
   snapshot: SystemRunApprovalFileOperand;
   argv: string[];
   cwd: string | undefined;
-}): boolean {
+}): Promise<boolean> {
   const operand = params.argv[params.snapshot.argvIndex]?.trim();
   if (!operand) {
     return false;
   }
   let realPath: string;
   try {
-    realPath = fs.realpathSync(path.resolve(params.cwd ?? process.cwd(), operand));
+    realPath = await realpathForExec(path.resolve(params.cwd ?? process.cwd(), operand));
   } catch {
     return false;
   }
@@ -61,7 +59,7 @@ export function revalidateApprovedMutableFileOperand(params: {
     return false;
   }
   try {
-    return hashFileContentsSync(realPath) === params.snapshot.sha256;
+    return sha256Hex(await fsp.readFile(realPath)) === params.snapshot.sha256;
   } catch {
     return false;
   }

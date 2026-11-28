@@ -62,148 +62,31 @@ Langfuse, or external collector credentials.
 
 ## QA credentials and 1Password
 
-- Use `op` only inside `tmux` for QA secret lookup in this repo.
-- Quick auth check inside tmux:
-
-```bash
-op account list
-```
-
-- Direct Telegram npm live test secrets currently live in 1Password item:
-  - vault: `OpenClaw`
-  - item: `Telegram E2E`
-- That item is the first place to look for:
-  - `OPENCLAW_QA_TELEGRAM_DRIVER_BOT_TOKEN`
-  - `OPENCLAW_QA_TELEGRAM_SUT_BOT_TOKEN`
-  - `OPENCLAW_QA_PROVIDER_MODE`
-  - `OPENCLAW_NPM_TELEGRAM_PACKAGE_SPEC`
-- Convex QA secrets currently live in 1Password items:
-  - vault: `OpenClaw`
-  - item: `OPENCLAW_QA_CONVEX_SITE_URL`
-  - item: `OPENCLAW_QA_CONVEX_SECRET_MAINTAINER`
-  - item: `OPENCLAW_QA_CONVEX_SECRET_CI`
-- Additional related notes/login items seen during QA credential work:
-  - vault: `Private`
-  - items: `OPENCLAW QA`, `Convex`, `Telegram`
-- If a required value is missing from those notes:
-  - do not guess
-  - ask the maintainer/operator for the current value or the current 1Password item name
-  - for Telegram direct runs, `OPENCLAW_QA_TELEGRAM_GROUP_ID` may be stored separately from `Telegram E2E`
-  - for Convex runs, the leased Telegram credential should provide the Telegram group id and bot tokens together; do not require a separate `OPENCLAW_QA_TELEGRAM_GROUP_ID`
-  - for Convex runs, prefer `OpenClaw/OPENCLAW_QA_CONVEX_SITE_URL`; if that is stale or unclear, ask for the active pool URL before running
-- Prefer direct Telegram envs for the npm Telegram Docker lane when available:
-
-```bash
-OPENCLAW_QA_TELEGRAM_GROUP_ID="..." \
-OPENCLAW_QA_TELEGRAM_DRIVER_BOT_TOKEN="..." \
-OPENCLAW_QA_TELEGRAM_SUT_BOT_TOKEN="..." \
-OPENCLAW_QA_PROVIDER_MODE="mock-openai" \
-OPENCLAW_NPM_TELEGRAM_PACKAGE_SPEC="openclaw@beta" \
-pnpm test:docker:npm-telegram-live
-```
-
-- Prefer Convex mode when the goal is stable shared QA infra:
-  - round-robin credential leasing
-  - thinner wrapper for channel-specific setup
-  - CLI/admin flows around the pooled credentials
-- Live npm Telegram Docker lane note:
-  - `scripts/e2e/npm-telegram-live-runner.ts` reads `OPENCLAW_NPM_TELEGRAM_PROVIDER_MODE`
-  - do not assume `OPENCLAW_QA_PROVIDER_MODE` is consumed by that wrapper
-  - if a 1Password note only gives `OPENCLAW_QA_PROVIDER_MODE`, map it explicitly to `OPENCLAW_NPM_TELEGRAM_PROVIDER_MODE` before running the Docker lane
-- Verified live shape:
-  - Convex mode can pass the real Docker lane without direct Telegram env vars
-  - leased Telegram payload includes the group id coupled to the driver/SUT tokens
-  - a real run of `pnpm test:docker:npm-telegram-live` passed with:
-    - `OPENCLAW_QA_CREDENTIAL_SOURCE=convex`
-    - `OPENCLAW_QA_CREDENTIAL_ROLE=maintainer`
-    - `OPENCLAW_QA_CONVEX_SITE_URL`
-    - `OPENCLAW_QA_CONVEX_SECRET_MAINTAINER`
-    - `OPENCLAW_NPM_TELEGRAM_PROVIDER_MODE=mock-openai`
-- If direct Telegram env is missing locally and `op signin` blocks, prefer dispatching the manual GitHub lane because the `qa-live-shared` environment already has Convex CI credentials:
-
-```bash
-gh workflow run "NPM Telegram Beta E2E" --repo openclaw/openclaw --ref main \
-  -f package_spec=openclaw@YYYY.M.D-beta.N \
-  -f package_label=openclaw@YYYY.M.D-beta.N \
-  -f provider_mode=mock-openai
-```
-
-- Poll the exact run id from the dispatch URL. `gh run view --json artifacts` is not supported; list artifacts with:
-
-```bash
-gh api repos/openclaw/openclaw/actions/runs/<run-id>/artifacts
-```
+Before any QA secret lookup or credential-backed lane, read
+[QA credentials and 1Password](references/credentials.md) in full. It owns
+tmux-only secret access, approved references, Convex roles, and missing-reference
+handling. A dispatch does not provision credentials or bypass a refusal.
 
 ## WhatsApp live credentials
 
-Use this when setting up or replacing Convex `kind=whatsapp` credentials.
-
-- Treat WhatsApp QA credentials as operator-owned live accounts, not generated fixtures.
-- Use two dedicated WhatsApp-capable test numbers: one driver account and one SUT account. Do not use personal numbers or personal OpenClaw WhatsApp accounts in the shared pool.
-- Register and link each account manually with WhatsApp or WhatsApp Business, storing Web auth only in isolated local auth dirs outside the repo.
-- For group coverage, create a dedicated test group that includes both QA accounts and store its JID as `groupJid`; otherwise the group mention-gating scenario should be skipped by default and fail when explicitly requested.
-- Package the two Baileys auth dirs into base64 `.tgz` payload fields and add a new active Convex credential row. Prefer adding a fresh row and disabling stale/broken rows over overwriting credentials in place.
-- Expected payload fields: `driverPhoneE164`, `sutPhoneE164`, `driverAuthArchiveBase64`, `sutAuthArchiveBase64`, and optional `groupJid`.
-- Keep credential material out of the repo, logs, PRs, and screenshots. Redact phone numbers unless the operator explicitly asks for local debugging.
-- Validate with `pnpm openclaw qa whatsapp --credential-source convex --credential-role maintainer --provider-mode mock-openai` and preserve artifact paths plus redacted pass/fail summaries.
-- If WhatsApp expires or invalidates a linked Web session, relink locally, package fresh auth archives, add a new Convex row, then disable the stale row.
+For WhatsApp credential setup, replacement, or session recovery, read
+[WhatsApp live credentials](references/whatsapp-credentials.md) in full, after the
+shared [QA credential requirements](references/credentials.md). Keep live account
+and credential material out of the repository and proof artifacts.
 
 ## Character evals
 
-Use `qa character-eval` for style/persona/vibe checks across multiple live models.
-
-```bash
-pnpm openclaw qa character-eval \
-  --output-dir .artifacts/qa-e2e/character-eval-<tag>
-```
-
-- Runs local QA gateway child processes, not Docker.
-- Packaged `pnpm build` omits QA Lab + qa-channel by design (source-checkout
-  only). To exercise `openclaw qa`/qa-channel from a built dist, build with
-  `OPENCLAW_BUILD_PRIVATE_QA=1 pnpm build` (emits `dist/plugin-sdk/qa-lab.js`,
-  `qa-runtime.js`, `dist/extensions/{qa-lab,qa-channel}`) or run via `pnpm dev`.
-- With no model flags, character eval uses its current source-defined candidate,
-  judge, thinking, and fast defaults.
-- Repeat `--model provider/model,thinking=<level>[,fast|,no-fast|,fast=<bool>]`
-  or `--judge-model ...` only to replace the corresponding inventory explicitly.
-- Do not add new examples with separate `--model-thinking`; keep that flag as legacy compatibility only.
-- Report includes judge ranking, run stats, durations, and full transcripts; do not include raw judge replies. Duration is benchmark context, not a grading signal.
-- Candidate and judge concurrency default to 16. Use `--concurrency <n>` and `--judge-concurrency <n>` to override when local gateways or provider limits need a gentler lane.
-- Scenario source is YAML-only under `qa/scenarios/`: use `index.yaml` and
-  per-scenario `*.yaml` files with top-level `title`, `scenario`, and optional
-  `flow`. Never add fenced `qa-scenario` / `qa-flow` Markdown files.
-- For isolated character/persona evals, write the persona into `SOUL.md` and blank `IDENTITY.md` in the scenario flow. Use `SOUL.md + IDENTITY.md` only when intentionally testing how the normal OpenClaw identity combines with the character.
-- Keep prompts natural and task-shaped. The candidate model should receive character setup through `SOUL.md`, then normal user turns such as chat, workspace help, and small file tasks; do not ask "how would you react?" or tell the model it is in an eval.
-- Prefer at least one real task, such as creating or editing a tiny workspace artifact, so the transcript captures character under normal tool use instead of pure roleplay.
+For style, persona, or vibe comparisons, read [character evals](references/character-evals.md)
+in full before choosing models, building the QA lane, or writing scenarios.
+The reference owns candidate/judge defaults, source-build requirements, scenario
+format, and persona setup.
 
 ## Codex CLI model lane
 
-Use model refs shaped like `codex-cli/<codex-model>` whenever QA should exercise Codex as a model backend.
-
-Examples:
-
-```bash
-pnpm openclaw qa suite \
-  --provider-mode live-frontier \
-  --model codex-cli/<codex-model> \
-  --alt-model codex-cli/<codex-model> \
-  --scenario <scenario-id> \
-  --output-dir .artifacts/qa-e2e/codex-<tag>
-```
-
-```bash
-pnpm openclaw qa manual \
-  --model codex-cli/<codex-model> \
-  --message "Reply exactly: CODEX_OK"
-```
-
-- Treat the concrete Codex model name as user/config input; do not hardcode it in source, docs examples, or scenarios.
-- Live QA preserves `CODEX_HOME` so Codex CLI auth/config works while keeping `HOME` and `OPENCLAW_HOME` sandboxed.
-- Mock QA should scrub `CODEX_HOME`.
-- If Codex returns fallback/auth text every turn, first check `CODEX_HOME`,
-  relevant secret-backed auth, and gateway child logs before changing
-  scenario assertions.
-- For model comparison, include `codex-cli/<codex-model>` as another candidate in `qa character-eval`; the report should label it as an opaque model name.
+When QA should use Codex as its model backend, read the
+[Codex CLI model lane](references/codex-cli.md) in full before running the suite,
+manual QA, or character evals. Keep the concrete model name as user/config input;
+the reference also covers live versus mock environment handling and auth triage.
 
 ## Repo facts
 

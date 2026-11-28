@@ -5,7 +5,6 @@ import { sanitizeForConsole } from "./console-sanitize.js";
 import {
   buildApiErrorObservationFields,
   buildTextObservationFields,
-  shouldSuppressRawErrorConsoleSuffix,
 } from "./embedded-agent-error-observation.js";
 
 const OBSERVATION_BEARER_TOKEN = "sk-redact-test-token";
@@ -61,12 +60,14 @@ describe("buildApiErrorObservationFields", () => {
     expect(observed.providerErrorMessagePreview).toBe("pass: opaque…7890 rejected");
   });
 
-  it("redacts provider error types as well as message previews", () => {
+  it("redacts structured provider codes and types as well as message previews", () => {
     const observed = buildApiErrorObservationFields(
       JSON.stringify({
         error: { type: `x-api-key: ${OBSERVATION_BEARER_TOKEN}`, message: "Request failed" },
       }),
+      { code: `x-api-key: ${OBSERVATION_BEARER_TOKEN}` },
     );
+    expect(observed.providerErrorCode).toBe("x-api-key: ***");
     expect(observed.providerErrorType).toBe("x-api-key: ***");
   });
 
@@ -223,14 +224,6 @@ describe("buildApiErrorObservationFields", () => {
 
     expect(observed.httpCode).toBe("401");
     expect(observed.providerRuntimeFailureKind).toBe("unclassified");
-  });
-
-  it("centralizes raw console suffix suppression for auth failures", () => {
-    expect(shouldSuppressRawErrorConsoleSuffix("auth_html")).toBe(true);
-    expect(shouldSuppressRawErrorConsoleSuffix("auth_scope")).toBe(true);
-    expect(shouldSuppressRawErrorConsoleSuffix("auth_refresh")).toBe(true);
-    expect(shouldSuppressRawErrorConsoleSuffix("timeout")).toBe(false);
-    expect(shouldSuppressRawErrorConsoleSuffix(undefined)).toBe(false);
   });
 });
 

@@ -3,8 +3,8 @@ import { execFileSync } from "node:child_process";
 import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
-import { DatabaseSync } from "node:sqlite";
 import zlib from "node:zlib";
+import { readDatabase } from "./observations.mjs";
 
 // Inspect synthetic cell artifacts independently of candidate backup/export filters.
 export function assertNoIncognitoArtifacts(roots, marker) {
@@ -58,8 +58,7 @@ export function assertNoIncognitoArtifacts(roots, marker) {
       if (bytes !== original) {
         fs.writeFileSync(databasePath, bytes);
       }
-      const db = new DatabaseSync(databasePath, { readOnly: true });
-      try {
+      readDatabase(databasePath, (db) => {
         databases++;
         for (const { name: table } of db
           .prepare("SELECT name FROM sqlite_master WHERE type='table'")
@@ -75,9 +74,7 @@ export function assertNoIncognitoArtifacts(roots, marker) {
             }
           }
         }
-      } finally {
-        db.close();
-      }
+      });
     }
   }
   try {

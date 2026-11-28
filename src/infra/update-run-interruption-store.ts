@@ -3,7 +3,9 @@ import { z } from "zod";
 import { runExistingOpenClawStateWriteTransaction } from "../state/openclaw-state-db-existing-write.js";
 import type { DB } from "../state/openclaw-state-db.generated.js";
 import { safeParseJsonWithSchema } from "../utils/zod-parse.js";
-import { executeSqliteQuerySync, getNodeSqliteKysely } from "./kysely-sync.js";
+import { executeSqliteQueryTakeFirstSync, getNodeSqliteKysely } from "./kysely-sync.js";
+import { claimUpdateResultInTransaction } from "./update-result-claim.js";
+import type { UpdateResultPayload } from "./update-result-payload.js";
 import { recordedUpdateRunDrivers } from "./update-run-activity.js";
 import { encodeRun, type UpdateRunLedgerOptions } from "./update-run-codec.js";
 import { inspectUpdateRunDriver } from "./update-run-driver.js";
@@ -12,14 +14,16 @@ import type {
   InterruptedUpdateSettlementResult,
 } from "./update-run-interruption-contract.js";
 import {
+  decodeRun,
   hasStoredUpdateRecovery,
   readActiveUpdateRun,
   readLatestUpdateRun,
-  readUpdateRunRecord,
+  readUpdateRuns,
 } from "./update-run-read.kernel.js";
 import { finishUpdateRunRecord, type UpdateRunRecord } from "./update-run-record.js";
+import { upsertStep } from "./update-run-step-upsert.js";
 import { recordUpdateRunVerificationRecord } from "./update-run-verification.js";
-import { persistRun, updateRunLedgerSchema, upsertStep } from "./update-run-write.js";
+import { persistRun, updateRunLedgerSchema } from "./update-run-write.js";
 
 export const installedUpdateCandidateSchema = z.object({
   version: z.string().trim().min(1).max(1024),
@@ -69,28 +73,93 @@ export function canSettleInterruptedUpdate(run: UpdateRunRecord): boolean {
   );
 }
 
+/** Only interrupted activation can be recovered using the matching readiness observation. */
+function canRecoverLegacyTrialRun(run: UpdateRunRecord): boolean {
+  const abandoned = run.status === "failed" && run.reason === "abandoned";
+  return (
+    run.target.kind === "git" &&
+    run.repair.length === 0 &&
+    !run.verification.recovery &&
+    !run.verification.rollbackOutcome &&
+    (abandoned ||
+      (run.status === "running" &&
+        !run.reason &&
+        ["activating", "restarting", "verifying"].includes(run.phase))) &&
+    recordedUpdateRunDrivers(run).length > 0 &&
+    !run.steps.some(
+      (step) =>
+        step.step === "driver:identity-unavailable" ||
+        step.step === "reconcile:acknowledged" ||
+        step.step === "package rollback" ||
+        step.step === "previous generation restoration" ||
+        (step.status === "failed" &&
+          !(
+            abandoned &&
+            (step.step === "reconcile:abandoned" ||
+              (["activating", "restarting", "verifying"].includes(step.step) &&
+                !step.detail &&
+                !step.failureFacts?.length))
+          )),
+    )
+  );
+}
+
 /** Revalidate the captured run and recovery exclusion inside the worker's transaction. */
 export function persistInterruptedUpdateObservation(
   input: InterruptedUpdateSettlement,
   options: UpdateRunLedgerOptions,
   assertCurrent: (stage: "transaction" | "commit") => void,
 ): InterruptedUpdateSettlementResult {
+  assertCurrent("transaction");
   return runExistingOpenClawStateWriteTransaction(
     ({ db }) => {
-      assertCurrent("transaction");
-      const accept = (run: UpdateRunRecord | undefined): InterruptedUpdateSettlementResult => {
+      const accept = (
+        run: UpdateRunRecord | undefined,
+        updateResult?: UpdateResultPayload,
+      ): InterruptedUpdateSettlementResult => {
         assertCurrent("commit");
-        return { accepted: true, run };
+        return { accepted: true, run, ...(updateResult ? { updateResult } : {}) };
       };
-      const current = readLatestUpdateRun(db);
-      const active = readActiveUpdateRun(db);
-      if (
-        !current ||
-        !isDeepStrictEqual(current, input.expected) ||
-        (active && active.runId !== current.runId) ||
-        hasStoredUpdateRecovery(db, current.runId)
-      ) {
-        return { accepted: false };
+      let current: UpdateRunRecord;
+      const legacyCandidate = input.legacyReady;
+      if (legacyCandidate) {
+        const matches = readUpdateRuns(db, { limit: 2, completedStep: legacyCandidate.step });
+        const [run] = matches;
+        const verification = input.verification;
+        if (
+          !run ||
+          matches.length !== 1 ||
+          !canRecoverLegacyTrialRun(run) ||
+          hasStoredUpdateRecovery(db, run.runId) ||
+          verification?.runningBuildId !== legacyCandidate.buildId ||
+          verification.runningVersion !== legacyCandidate.version ||
+          !verification.booted ||
+          !verification.serviceRunning ||
+          !verification.versionMatch ||
+          !verification.settled ||
+          !verification.coreReady
+        ) {
+          return { accepted: false };
+        }
+        if (
+          readUpdateRuns(db, { active: true, limit: 1, excludeRunIds: [run.runId] }).length ||
+          recordedUpdateRunDrivers(run).some((driver) => inspectUpdateRunDriver(driver) !== "dead")
+        ) {
+          return { accepted: false, retry: true };
+        }
+        current = run;
+      } else {
+        const run = readLatestUpdateRun(db);
+        const active = readActiveUpdateRun(db);
+        if (
+          !run ||
+          !isDeepStrictEqual(run, input.expected) ||
+          (active && active.runId !== run.runId) ||
+          hasStoredUpdateRecovery(db, run.runId)
+        ) {
+          return { accepted: false };
+        }
+        current = run;
       }
       const previous = current.steps.find((step) => step.step === "reconcile:settle");
       const completingCleanup =
@@ -100,13 +169,13 @@ export function persistInterruptedUpdateObservation(
       const eligible = completingCleanup
         ? { ...current, steps: current.steps.filter((step) => step !== previous) }
         : current;
-      if (!canSettleInterruptedUpdate(eligible)) {
+      if (!legacyCandidate && !canSettleInterruptedUpdate(eligible)) {
         return { accepted: false };
       }
       const uncertain = input.cleanup === "pending" || input.cleanup === "unknown";
       const verification = uncertain ? undefined : input.verification;
       if (!verification && previous && input.cleanup === undefined) {
-        return { accepted: true, run: current };
+        return accept(current);
       }
       upsertStep(current, {
         step: "reconcile:settle",
@@ -117,19 +186,20 @@ export function persistInterruptedUpdateObservation(
       if (!verification && previous) {
         // Cleanup publication is diagnostic, not updater activity or a new abandonment window.
         const row = encodeRun(current, options);
-        executeSqliteQuerySync(
+        const persisted = executeSqliteQueryTakeFirstSync(
           db,
           getNodeSqliteKysely<Pick<DB, "update_runs">>(db)
             .updateTable("update_runs")
             .set({ steps_json: row.steps_json })
-            .where("run_id", "=", current.runId),
+            .where("run_id", "=", current.runId)
+            .returningAll(),
         );
-        return accept(readUpdateRunRecord(db, current.runId));
+        return accept(persisted ? decodeRun(persisted) : undefined);
       }
       if (!verification) {
         return accept(persistRun(db, current, options));
       }
-      const candidate = readInstalledUpdateCandidate(current);
+      const candidate = legacyCandidate ?? readInstalledUpdateCandidate(current);
       if (!candidate) {
         return { accepted: false };
       }
@@ -138,10 +208,16 @@ export function persistInterruptedUpdateObservation(
         current.phase = "verifying";
         current.finishedAtMs = null;
         for (const step of current.steps) {
-          if (step.step === "reconcile:abandoned") {
+          if (
+            step.step === "reconcile:abandoned" ||
+            (legacyCandidate && ["activating", "restarting", "verifying"].includes(step.step))
+          ) {
             step.status = "completed";
           }
         }
+      }
+      if (legacyCandidate) {
+        delete current.origin.nextAction;
       }
       recordUpdateRunVerificationRecord(current, verification);
       upsertStep(current, {
@@ -150,8 +226,12 @@ export function persistInterruptedUpdateObservation(
         endedAtMs: Date.now(),
         detail: `Updater exited before recording completion; installed and serving candidate build ${candidate.buildId} verified.`,
       });
-      finishUpdateRunRecord(current, { status: "succeeded", after: candidate });
-      return accept(persistRun(db, current, options));
+      finishUpdateRunRecord(current, {
+        status: "succeeded",
+        after: { version: candidate.version, buildId: candidate.buildId },
+      });
+      const saved = persistRun(db, current, options);
+      return accept(saved, claimUpdateResultInTransaction(db, saved));
     },
     options,
     { schemaSql: updateRunLedgerSchema, operationLabel: "update.run" },

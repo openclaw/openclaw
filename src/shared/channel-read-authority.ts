@@ -1,9 +1,5 @@
 import { AsyncLocalStorage } from "node:async_hooks";
-import {
-  captureEffectAuthority,
-  withEffectPreparation,
-  type EffectPreparation,
-} from "./effect-authority.js";
+import { captureEffectAuthority } from "./effect-authority.js";
 import { resolveGlobalSingleton } from "./global-singleton.js";
 
 type ChannelReadResource = {
@@ -96,7 +92,7 @@ export async function withChannelReadAuthority<T>(
   const assertAuthority = () => {
     parent?.();
     if (!open) {
-      throw new Error("Channel read authority is no longer active.");
+      throw new Error("Channel read ended. Retry the action.");
     }
     sourceSignal?.throwIfAborted();
     assertCurrent();
@@ -188,14 +184,4 @@ export async function withChannelReadAuthority<T>(
   } finally {
     open = false;
   }
-}
-
-/** Scheduled requests retain preparation through provider work and final disclosure. */
-export function withPreparedChannelReadAuthority<T>(
-  prepare: EffectPreparation | undefined,
-  assertCurrent: (() => void) | undefined,
-  run: () => Promise<T>,
-  signal?: AbortSignal,
-): Promise<T> {
-  return withEffectPreparation(prepare, () => withChannelReadAuthority(assertCurrent, run, signal));
 }

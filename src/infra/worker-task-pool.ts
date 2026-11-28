@@ -1,4 +1,4 @@
-import { WorkerTaskPoolCore } from "@openclaw/worker-runtime";
+import { WorkerTaskPoolCore, type WorkerRetirementReason } from "@openclaw/worker-runtime";
 import { createWorkerTaskHost } from "./worker-task-host.js";
 import type {
   WorkerTaskInput,
@@ -16,10 +16,14 @@ export class WorkerTaskPool<Input, Output> {
   private readonly core: WorkerTaskPoolCore<Input, Output>;
 
   constructor(options: WorkerTaskPoolOptions<Output>) {
-    this.core = new WorkerTaskPoolCore<Input, Output>(options, createWorkerTaskHost(), {
-      close: (error) => this.close(error),
-      getSnapshot: () => this.getSnapshot(),
-    });
+    this.core = new WorkerTaskPoolCore<Input, Output>(
+      options,
+      createWorkerTaskHost(undefined, options.workerClass),
+      {
+        close: (error) => this.close(error),
+        getSnapshot: () => this.getSnapshot(),
+      },
+    );
   }
 
   run(input: WorkerTaskInput<Input>, options: WorkerTaskOptions<Input>): Promise<Output> {
@@ -42,8 +46,8 @@ export class WorkerTaskPool<Input, Output> {
     return this.core.rotate();
   }
 
-  close(error?: Error): Promise<void> {
-    return this.core.close(error);
+  close(error?: Error, reason?: WorkerRetirementReason): Promise<void> {
+    return this.core.close(error, reason);
   }
 }
 
@@ -54,13 +58,16 @@ export function createOwnedWorkerTaskPool<Input, Output>(
 ) {
   const core = new WorkerTaskPoolCore<Input, Output>(
     options,
-    createWorkerTaskHost(ownerOptions),
+    createWorkerTaskHost(ownerOptions, options.workerClass),
     undefined,
     ownerOptions,
   );
   return {
-    run: (input: WorkerTaskInput<Input>, taskOptions: WorkerTaskOptions<Input>) =>
-      core.run(input, taskOptions),
+    run: (
+      input: WorkerTaskInput<Input>,
+      taskOptions: WorkerTaskOptions<Input> &
+        Pick<OwnedWorkerTaskOptions<Input>, "diagnosticOperation">,
+    ) => core.run(input, taskOptions),
     rotate: () => core.rotate(),
     runTask: (input: WorkerTaskInput<Input>, taskOptions: OwnedWorkerTaskOptions<Input>) =>
       core.runTask(input, taskOptions),
@@ -69,6 +76,9 @@ export function createOwnedWorkerTaskPool<Input, Output>(
     closeResources: (key?: string) => core.startCloseResources(key).result,
     startCloseResources: (key?: string) => core.startCloseResources(key),
     startRotate: () => core.startRotate(),
+    get isClosed() {
+      return core.isClosed;
+    },
     getSnapshot: () => core.getSnapshot(),
     close: (error?: Error) => core.close(error),
   };

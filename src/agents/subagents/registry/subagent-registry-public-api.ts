@@ -1,12 +1,7 @@
 import { captureOpenClawStateWorkerContext } from "../../../state/openclaw-state-worker-context.js";
 import type { OpenClawStateWorkerContext } from "../../../state/openclaw-state-worker-context.types.js";
-import {
-  planAgentSteeringAcknowledgment,
-  preparePendingAgentSteeringLease,
-  planAgentSteeringRelease,
-} from "../../agent-steering-queue.js";
-import { captureGatewayToolCallerAssertion } from "../../tools/gateway-caller-context.js";
 import { prepareRequesterCronAuthority } from "../requester-cron-authority.js";
+import { resolveRecordedRequester } from "./subagent-child-owner-match.js";
 import type { SubagentLifecycleController } from "./subagent-registry-lifecycle.js";
 import { getSubagentRunsForChildSession } from "./subagent-registry-memory.js";
 import {
@@ -16,15 +11,17 @@ import {
   SubagentRegistryWriteError,
 } from "./subagent-registry-persistence.js";
 import {
-  countActiveRunsForSessionFromRuns,
   listSwarmRunsForGroupFromRuns,
   getLatestSubagentRunByChildSessionKeyFromRuns,
+  buildLatestSubagentRunReadIndexFromRuns,
+  listRunsForRequesterFromRuns,
 } from "./subagent-registry-queries.js";
 import type { PreparedSubagentRunsRead } from "./subagent-registry-read-snapshot.js";
 import type { SubagentRunReadRecord } from "./subagent-registry-read.types.js";
 import { listUnsettledRequesterChildrenInRuns } from "./subagent-registry-requester-yield.js";
 import { claimSubagentYieldInRuns } from "./subagent-registry-run-pause.js";
 import {
+  countActiveSubagentRunsForSession,
   getSubagentRunsSnapshotForRead,
   getSubagentSessionListRunsSnapshotForRead,
   withSubagentRunReadSnapshot,
@@ -32,92 +29,18 @@ import {
 } from "./subagent-registry-state.js";
 import type { SubagentRunRecord, SwarmStructuredOutputState } from "./subagent-registry.types.js";
 import { isSameSubagentRunOwner } from "./subagent-run-generation.js";
+import { isSubagentRunQueued } from "./subagent-run-liveness.js";
 
 export function createSubagentRegistryPublicApi(config: {
   runs: Map<string, SubagentRunRecord>;
   restoreOnce: (context?: OpenClawStateWorkerContext) => Promise<void>;
-  startAnnounceCleanup: (entry: SubagentRunRecord) => boolean;
   settleRequesterTurn: SubagentLifecycleController["settleRequesterTurnAfterSessionSpawns"];
   markRequesterYielded: SubagentLifecycleController["markRequesterTurnYielded"];
 }) {
-  const { runs, restoreOnce, startAnnounceCleanup, settleRequesterTurn } = config;
+  const { runs, restoreOnce, settleRequesterTurn } = config;
   const readRuns = () => getSubagentRunsSnapshotForRead(runs);
   const findRunById = (records: Map<string, SubagentRunRecord>, runId: string) =>
     records.get(runId) ?? [...records.values()].find((entry) => entry.swarmRunId === runId);
-
-  async function leasePendingAgentSteeringItems(params: {
-    requesterSessionKey: string;
-    leaseId: string;
-    now?: number;
-  }) {
-    const context = captureOpenClawStateWorkerContext();
-    await restoreOnce(context);
-    const prepared = await preparePendingAgentSteeringLease({
-      ...params,
-      runs,
-      readResult: async (entry) => {
-        const { readSubagentRunAnnounceResult } =
-          await import("../announce/subagent-announce-output.js");
-        return readSubagentRunAnnounceResult(entry, (runId) => runs.get(runId));
-      },
-    });
-    if (!prepared) {
-      return undefined;
-    }
-    const assertCurrent = () => {
-      if (!prepared.isCurrent()) {
-        throw new SubagentRegistryMutationRejectedError(
-          "A queued child result changed while preparing the requester prompt.",
-        );
-      }
-    };
-    return mutateSubagentRuns(
-      prepared.runIds,
-      (rows) => {
-        const planned = prepared.plan(rows);
-        if (!planned) {
-          throw new SubagentRegistryMutationRejectedError(
-            "A queued child result is no longer available for requester steering.",
-          );
-        }
-        return planned;
-      },
-      { runs, context, assertCurrent },
-    );
-  }
-
-  function ackPendingAgentSteeringItems(params: {
-    runIds: readonly string[];
-    leaseId: string;
-    now?: number;
-  }): Promise<number> {
-    return mutateSubagentRuns(
-      params.runIds,
-      (rows) => planAgentSteeringAcknowledgment({ ...params, runs: rows }),
-      {
-        runs,
-        onPublished: (postimages) => {
-          for (const entry of postimages.values()) {
-            if (entry && typeof entry.cleanupCompletedAt !== "number") {
-              startAnnounceCleanup(entry);
-            }
-          }
-        },
-      },
-    );
-  }
-
-  function releasePendingAgentSteeringItems(params: {
-    runIds: readonly string[];
-    leaseId: string;
-    error?: string;
-  }): Promise<number> {
-    return mutateSubagentRuns(
-      params.runIds,
-      (rows) => planAgentSteeringRelease({ ...params, runs: rows }),
-      { runs },
-    );
-  }
 
   function getSubagentRunByRunId(runId: string): SubagentRunRecord | undefined {
     return findRunById(readRuns(), runId.trim());
@@ -208,7 +131,6 @@ export function createSubagentRegistryPublicApi(config: {
     if (!entry?.collect || entry.collectorCompletion) {
       throw new Error("collector run is unavailable");
     }
-    const next = structuredClone(state);
     await mutateSubagentRuns(
       [entry.runId],
       (rows) => {
@@ -223,8 +145,8 @@ export function createSubagentRegistryPublicApi(config: {
         if (
           current.structuredOutput?.structured !== undefined ||
           (current.structuredOutput?.invalidAttempts ?? 0) >= 2 ||
-          (next.structured === undefined &&
-            next.invalidAttempts !== (current.structuredOutput?.invalidAttempts ?? 0) + 1)
+          (state.structured === undefined &&
+            state.invalidAttempts !== (current.structuredOutput?.invalidAttempts ?? 0) + 1)
         ) {
           throw new SubagentRegistryMutationRejectedError(
             "collector output changed before publication",
@@ -232,7 +154,7 @@ export function createSubagentRegistryPublicApi(config: {
         }
         return {
           value: undefined,
-          postimages: new Map([[current.runId, { ...current, structuredOutput: next }]]),
+          postimages: new Map([[current.runId, { ...current, structuredOutput: state }]]),
         };
       },
       { runs, assertCurrent },
@@ -252,16 +174,46 @@ export function createSubagentRegistryPublicApi(config: {
     );
   }
 
-  /** Resolve a collector reserved by a replay-safe host bridge request. */
-  async function getSwarmRunByLaunchReplayKey(
+  /** Read current direct-child collectors of a requester chat. */
+  async function listCollectorRunsForRequester(params: {
+    sessionKey: string;
+    agentId: string;
+  }): Promise<SubagentRunRecord[]> {
+    return withSubagentRunReadSnapshot(
+      runs,
+      (snapshot) => {
+        const latest = buildLatestSubagentRunReadIndexFromRuns(snapshot);
+        return {
+          runIds: [...snapshot.values()]
+            .filter(
+              (entry) =>
+                entry.collect === true &&
+                entry.requesterSessionKey === params.sessionKey &&
+                latest.getLatestSubagentRun(entry.childSessionKey, entry.childAgentId) === entry,
+            )
+            .map((entry) => entry.runId),
+          sessionKeys: [],
+        };
+      },
+      (_selection, selected) =>
+        listRunsForRequesterFromRuns(new Map(selected), params.sessionKey, {
+          requesterAgentId: params.agentId,
+        }),
+      "all",
+    );
+  }
+
+  /** Resolve replay eligibility without exposing the collector's retained state. */
+  async function resolveSwarmLaunchReplay(
     replayKey: string,
+    requestFingerprint: string,
     requesterSessionKey?: string,
     requesterAgentId?: string,
-  ): Promise<SubagentRunRecord | undefined> {
+  ) {
     const key = replayKey.trim();
     const requesterKey = requesterSessionKey?.trim();
     if (!key) {
-      return undefined;
+      return { status: "missing" } as const;
     }
     return withSubagentRunReadSnapshot(
       runs,
@@ -273,24 +225,31 @@ export function createSubagentRegistryPublicApi(config: {
               entry.swarmLaunchReplayKey === key &&
               (!requesterKey ||
                 (entry.swarmRequesterSessionKey ?? entry.requesterSessionKey) === requesterKey) &&
-              (!requesterAgentId || entry.requesterAgentId === requesterAgentId),
+              (!requesterAgentId || resolveRecordedRequester(entry) === requesterAgentId),
           )
           .map((entry) => entry.runId),
         sessionKeys: [],
       }),
-      (_selection, selected) => selected.values().next().value,
+      (_selection, selected) => {
+        const entry = selected.values().next().value;
+        if (!entry) {
+          return { status: "missing" } as const;
+        }
+        if (entry.swarmLaunchRequestFingerprint !== requestFingerprint) {
+          return { status: "mismatch" } as const;
+        }
+        if (entry.swarmLaunchPending && !isSubagentRunQueued(entry)) {
+          return { status: "inactive" } as const;
+        }
+        return {
+          status: "accepted" as const,
+          runId: entry.swarmRunId ?? entry.runId,
+          currentRunId: entry.runId,
+          childSessionKey: entry.childSessionKey,
+          ...(entry.label ? { label: entry.label } : {}),
+        };
+      },
       "all",
-    );
-  }
-
-  function countActiveRunsForSession(
-    requesterSessionKey: string,
-    options?: { collect?: boolean; requesterAgentId?: string },
-  ): number {
-    return countActiveRunsForSessionFromRuns(
-      new Map([...getSubagentSessionListRunsSnapshotForRead(runs), ...runs]),
-      requesterSessionKey,
-      options,
     );
   }
 
@@ -299,26 +258,17 @@ export function createSubagentRegistryPublicApi(config: {
     params: Parameters<SubagentLifecycleController["markRequesterTurnYielded"]>[0],
   ): Promise<number> {
     const stateContext = params.stateContext ?? captureOpenClawStateWorkerContext();
-    const assertCallerCurrent = captureGatewayToolCallerAssertion();
     const assertCurrent = () => {
       assertSubagentRegistryWriteSourceCurrent(stateContext);
-      assertCallerCurrent?.();
       params.assertCurrent?.();
     };
     assertCurrent();
     const preparedAuthority = prepareRequesterCronAuthority(params) ?? null;
     let result: number;
-    try {
-      await restoreOnce(stateContext);
-      result = await config.markRequesterYielded({
-        ...params,
-        stateContext,
-        assertCurrent,
-        preparedAuthority,
-      });
+    const assertPublishedCurrent = (checkAuthority: boolean) => {
       try {
         assertCurrent();
-        if (result > 0) {
+        if (checkAuthority && result > 0) {
           preparedAuthority?.assertCurrent();
         }
       } catch (error) {
@@ -328,21 +278,23 @@ export function createSubagentRegistryPublicApi(config: {
           result > 0 ? "published" : undefined,
         );
       }
+    };
+    try {
+      await restoreOnce(stateContext);
+      result = await config.markRequesterYielded({
+        ...params,
+        stateContext,
+        assertCurrent,
+        preparedAuthority,
+      });
+      assertPublishedCurrent(true);
     } finally {
       const release = preparedAuthority?.release();
       if (release) {
         await release;
       }
     }
-    try {
-      assertCurrent();
-    } catch (error) {
-      throw new SubagentRegistryWriteError(
-        result > 0 ? "committed" : "not-committed",
-        error,
-        result > 0 ? "published" : undefined,
-      );
-    }
+    assertPublishedCurrent(false);
     return result;
   }
 
@@ -368,11 +320,7 @@ export function createSubagentRegistryPublicApi(config: {
       acknowledgment?: string;
     }) => {
       const stateContext = captureOpenClawStateWorkerContext();
-      const assertCallerCurrent = captureGatewayToolCallerAssertion();
-      const assertCurrent = () => {
-        assertSubagentRegistryWriteSourceCurrent(stateContext);
-        assertCallerCurrent?.();
-      };
+      const assertCurrent = () => assertSubagentRegistryWriteSourceCurrent(stateContext);
       assertCurrent();
       await restoreOnce(stateContext);
       return await claimSubagentYieldInRuns({
@@ -382,16 +330,14 @@ export function createSubagentRegistryPublicApi(config: {
         assertCurrent,
       });
     },
-    leasePendingAgentSteeringItems,
-    ackPendingAgentSteeringItems,
-    releasePendingAgentSteeringItems,
     getSubagentRunByRunId,
     prepareSubagentRunsByRunIds,
     completeCollectorLaunchCleanup,
     recordSwarmStructuredOutput,
     listSwarmRunsForGroup,
-    getSwarmRunByLaunchReplayKey,
-    countActiveRunsForSession,
+    resolveSwarmLaunchReplay,
+    listCollectorRunsForRequester,
+    countActiveRunsForSession: countActiveSubagentRunsForSession.bind(null, runs),
     settleRequesterAfterSessionSpawns: settleRequesterTurn,
     markRequesterTurnYielded,
     listUnsettledRequesterChildren,

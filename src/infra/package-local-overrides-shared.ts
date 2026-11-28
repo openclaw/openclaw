@@ -5,6 +5,8 @@ import { hasErrnoCode, isMissingPathError } from "./errno.js";
 import { root as openFsRoot } from "./fs-safe.js";
 import type { PackageDistContentInventoryEntry } from "./package-dist-inventory.js";
 
+export { pathEntryExists as packageRootExists } from "./path-existence.js";
+
 export type LocalOverridePackageRoot = Awaited<ReturnType<typeof openFsRoot>>;
 
 export type LocalPackageOverrideConflictReason =
@@ -63,18 +65,6 @@ export function emptyResult(
     conflicts: [],
     warnings: [],
   };
-}
-
-export async function packageRootExists(packageRoot: string): Promise<boolean> {
-  try {
-    await fs.lstat(packageRoot);
-    return true;
-  } catch (error) {
-    if (hasErrnoCode(error, "ENOENT")) {
-      return false;
-    }
-    throw error;
-  }
 }
 
 export type LocalPackageOverrideTargetProbe =
@@ -178,14 +168,6 @@ export async function assertRecoveryRootOutsidePackageRoot(
   }
 }
 
-export function countChanges(changes: LocalPackageOverrideChange[]) {
-  return {
-    added: changes.filter((change) => change.kind === "added").length,
-    modified: changes.filter((change) => change.kind === "modified").length,
-    deleted: changes.filter((change) => change.kind === "deleted").length,
-  };
-}
-
 export function normalizeLocalOverridePathSeparators(relativePath: string): string {
   return relativePath.replace(/\\/g, "/");
 }
@@ -236,21 +218,6 @@ export async function inspectLocalOverrideTarget(params: {
   return {
     mode: normalizeFileMode(target.stat.mode),
     sha256: createHash("sha256").update(target.buffer).digest("hex"),
-  };
-}
-
-export async function buildLocalOverrideInventoryEntry(params: {
-  relativePath: string;
-  sourcePath: string;
-  mode?: number;
-}): Promise<PackageDistContentInventoryEntry> {
-  const content = await fs.readFile(params.sourcePath);
-  const stats = await fs.stat(params.sourcePath);
-  return {
-    path: params.relativePath,
-    sha256: createHash("sha256").update(content).digest("hex"),
-    mode: params.mode ?? normalizeFileMode(stats.mode),
-    size: content.length,
   };
 }
 

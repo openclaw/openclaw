@@ -1,16 +1,8 @@
-/**
- * Resolves command queue lane names for embedded-agent sessions and global work.
- */
 import {
   CommandLane,
   SUBAGENT_LANE_PREFIX,
   type CommandLaneConfiguration,
 } from "../../process/lanes.js";
-
-export function resolveSessionLane(key: string) {
-  const cleaned = key.trim() || CommandLane.Main;
-  return cleaned.startsWith("session:") ? cleaned : `session:${cleaned}`;
-}
 
 export function resolveGlobalLane(
   lane?: string,
@@ -42,5 +34,3 @@ export function resolveGlobalLane(
   }
   return cleaned ? cleaned : CommandLane.Main;
 }
-
-export { resolveSessionLane as resolveEmbeddedSessionLane };

@@ -1,3 +1,4 @@
+import type { OpenClawConfig } from "../config/types.openclaw.js";
 import type { GatewayNativeApprovalMethod } from "./approval-gateway-runtime-methods.js";
 import type { ApprovalNativeRouteCoordinator } from "./approval-native-route-coordinator.js";
 import type { ApprovalRequest, ApprovalResolved, ChannelApprovalKind } from "./approval-types.js";
@@ -7,13 +8,14 @@ export type GatewayApprovalResolved = ApprovalResolved;
 
 export type GatewayApprovalEventSubscriber = {
   eventKinds: ReadonlySet<ChannelApprovalKind>;
-  shouldHandle: (request: GatewayApprovalRequest) => boolean;
+  shouldHandle: (request: GatewayApprovalRequest) => boolean | Promise<boolean>;
   onRequested: (request: GatewayApprovalRequest) => void;
   onResolved: (resolved: GatewayApprovalResolved) => void;
 };
 
 /** Gateway-owned authority and event transport for channel-native approval runtimes. */
 export type GatewayNativeApprovalRuntime = {
+  getRuntimeConfig: () => OpenClawConfig;
   request: <T = unknown>(
     method: GatewayNativeApprovalMethod,
     params: Record<string, unknown>,

@@ -1,5 +1,15 @@
 import { normalizeOptionalLowercaseString, normalizeOptionalString } from "./string-coerce.js";
 
+/** Counts matching leading UTF-16 code units without normalizing either string. */
+export function commonPrefixLength(left: string, right: string): number {
+  const limit = Math.min(left.length, right.length);
+  let index = 0;
+  while (index < limit && left[index] === right[index]) {
+    index += 1;
+  }
+  return index;
+}
+
 /** Detects C0 and DEL without rejecting C1 or other Unicode text. */
 export function containsAsciiControlCharacter(value: string): boolean {
   for (let index = 0; index < value.length; index += 1) {
@@ -20,7 +30,7 @@ export function filterStringEntries(value: unknown): string[] {
 
 /** Coerces entries to strings, trims them, and drops empty results. */
 export function normalizeStringEntries(list?: ReadonlyArray<unknown>) {
-  return (list ?? []).map((entry) => normalizeOptionalString(String(entry)) ?? "").filter(Boolean);
+  return (list ?? []).map((entry) => String(entry).trim()).filter(Boolean);
 }
 
 /** Normalizes string entries and lowercases each retained value. */
@@ -56,7 +66,8 @@ export function normalizeUniqueStringEntriesLower(values?: Iterable<unknown>): s
 
 /** Normalizes entries, removes duplicates, and returns sorted output. */
 export function normalizeSortedUniqueStringEntries(values?: Iterable<unknown>): string[] {
-  return sortUniqueStrings(normalizeStringEntries(values ? [...values] : undefined));
+  const normalized = values ? normalizeStringEntries([...values]) : [];
+  return normalized.length < 2 ? normalized : sortUniqueStrings(normalized);
 }
 
 /** Normalizes array-backed string lists and rejects non-array input as empty. */

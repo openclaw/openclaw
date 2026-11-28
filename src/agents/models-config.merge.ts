@@ -6,7 +6,6 @@ import type { ModelCatalogContextWindowOption } from "@openclaw/model-catalog-co
  */
 import { normalizeProviderId } from "@openclaw/model-catalog-core/provider-id";
 import { asPositiveFiniteNumber } from "@openclaw/normalization-core/number-coercion";
-import { isRecord } from "@openclaw/normalization-core/record-coerce";
 import { normalizeOptionalString } from "@openclaw/normalization-core/string-coerce";
 import { mergeModelCost } from "../config/model-cost.js";
 import type {
@@ -95,14 +94,6 @@ export function buildSourceModelFields(
   );
 }
 
-function getProviderModelId(model: unknown): string {
-  if (!model || typeof model !== "object") {
-    return "";
-  }
-  const id = (model as { id?: unknown }).id;
-  return normalizeOptionalString(id) ?? "";
-}
-
 /** Merges implicit provider models with explicit config while preserving explicit fields. */
 export function mergeProviderModels<TProvider extends ProviderModelCatalog>(
   implicit: TProvider,
@@ -114,15 +105,13 @@ export function mergeProviderModels(
   explicit: ProviderModelCatalog,
   options?: ProviderModelMergeOptions,
 ): ProviderModelCatalog {
-  const implicitModels = Array.isArray(implicit.models) ? implicit.models : [];
-  const explicitModels = Array.isArray(explicit.models) ? explicit.models : [];
-  const implicitHeaders = isRecord(implicit.headers) ? implicit.headers : undefined;
-  const explicitHeaders = isRecord(explicit.headers) ? explicit.headers : undefined;
+  const implicitModels = implicit.models ?? [];
+  const explicitModels = explicit.models ?? [];
   const mergedProvider = {
     ...implicit,
     ...explicit,
-    ...(implicitHeaders || explicitHeaders
-      ? { headers: { ...implicitHeaders, ...explicitHeaders } }
+    ...(implicit.headers || explicit.headers
+      ? { headers: { ...implicit.headers, ...explicit.headers } }
       : {}),
   };
   if (implicitModels.length === 0) {
@@ -130,7 +119,7 @@ export function mergeProviderModels(
   }
 
   const getModelId = (model: { id: string }) =>
-    options?.modelIdMatching === "exact" ? model.id : getProviderModelId(model);
+    options?.modelIdMatching === "exact" ? model.id : model.id.trim();
   const implicitById = new Map(
     implicitModels
       .map((model) => [getModelId(model), model] as const)
@@ -190,6 +179,12 @@ export function mergeProviderModels(
       configuredRoute,
       configuredCompat: explicitModel.compat,
     });
+    const catalogRouteMatches = modelTransportRoutesMatch(catalogRoute, configuredRoute);
+    const parameterCount =
+      explicitModel.parameterCount ??
+      (catalogRouteMatches ? implicitModel.parameterCount : undefined);
+    // A configured route that leaves the catalog's endpoint may serve a different model.
+    const family = explicitModel.family ?? (catalogRouteMatches ? implicitModel.family : undefined);
     const contextSelection = explicitModel.contextWindows
       ? explicitModel
       : modelTransportRoutesMatch(catalogRoute, configuredRoute)
@@ -201,6 +196,9 @@ export function mergeProviderModels(
       baseUrl: _baseUrl,
       headers: _headers,
       maxTokensSource: _maxTokensSource,
+      parameterCount: _parameterCount,
+      family: _family,
+      inference: _inference,
       ...implicitMetadata
     } = implicitModel;
     return Object.assign(
@@ -214,9 +212,23 @@ export function mergeProviderModels(
       },
       contextWindow === undefined ? {} : { contextWindow },
       contextTokens === undefined ? {} : { contextTokens },
+      parameterCount === undefined ? {} : { parameterCount },
+      family === undefined ? {} : { family },
       maxTokens === undefined ? {} : { maxTokens },
       maxTokensSource === undefined ? {} : { maxTokensSource },
       { compat },
+      {
+        // Another route withdraws a plain chat grant to unknown, as if discovery had not
+        // matched this row. Only a typed route keeps the veto so it never becomes legacy chat.
+        inference:
+          explicitModel.inference ??
+          (catalogRouteMatches
+            ? implicitModel.inference
+            : implicitModel.inference &&
+                (!implicitModel.inference.chat || implicitModel.inference.decision)
+              ? { chat: false }
+              : undefined),
+      },
       {
         contextWindows: contextSelection?.contextWindows,
         contextWindowDefault: contextSelection?.contextWindowDefault,
@@ -316,7 +328,60 @@ function shouldPreserveExistingBaseUrl(params: {
   return !existingApi || !nextApi || existingApi === nextApi;
 }
 
-export function isWritableProviderConfig(entry: ProviderConfig): boolean {
+/** Returns why the model registry rejects this provider's models, if it does. */
+function findProviderModelsError(
+  providerName: string,
+  config: ProviderModelCatalog,
+  source: "catalog" | "registration",
+): string | undefined {
+  const models = config.models ?? [];
+  if (models.length > 0 && !config.baseUrl) {
+    const subject = source === "catalog" ? "custom models" : "models";
+    return `Provider ${providerName}: "baseUrl" is required when defining ${subject}.`;
+  }
+  for (const model of models) {
+    if (!model.api && !config.api) {
+      const guidance = source === "catalog" ? " Set at provider or model level." : "";
+      return `Provider ${providerName}, model ${model.id}: no "api" specified.${guidance}`;
+    }
+    if (source === "catalog") {
+      for (const field of ["contextWindow", "maxTokens"] as const) {
+        if (model[field] !== undefined && model[field] <= 0) {
+          return `Provider ${providerName}, model ${model.id}: invalid ${field}`;
+        }
+      }
+    }
+  }
+  return undefined;
+}
+
+/** Throws the model registry's rejection reason for this provider's models. */
+export function validateProviderModels(
+  ...params: Parameters<typeof findProviderModelsError>
+): void {
+  const error = findProviderModelsError(...params);
+  if (error) {
+    throw new Error(error);
+  }
+}
+
+/** Returns why models.json must omit this provider: the model registry would reject the file. */
+export function findUnwritableProviderReason(
+  providerName: string,
+  entry: ProviderConfig,
+): string | undefined {
+  // AuthStorage can supply omitted keys; an explicitly empty key still violates the schema.
+  if (entry.apiKey === "" && entry.models?.length) {
+    return `Provider ${providerName}: "apiKey" is empty.`;
+  }
+  return findProviderModelsError(providerName, entry, "catalog");
+}
+
+/**
+ * Retention rule for entries already in models.json. It skips the registry's model rule:
+ * an entry that exists only in the file is the user's data, so a rewrite never drops it for that.
+ */
+function isWritableProviderConfig(entry: ProviderConfig): boolean {
   if (!Array.isArray(entry.models) || entry.models.length === 0) {
     return true;
   }

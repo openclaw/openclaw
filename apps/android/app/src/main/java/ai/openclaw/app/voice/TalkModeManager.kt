@@ -1,10 +1,14 @@
 package ai.openclaw.app.voice
 
 import ai.openclaw.app.asJsonStringOrNull
+import ai.openclaw.app.asObjectOrNull
 import ai.openclaw.app.gateway.ChatSendAck
+import ai.openclaw.app.gateway.ErrorShape
+import ai.openclaw.app.gateway.GatewayRequestNotEnqueued
 import ai.openclaw.app.gateway.GatewayRequestRejected
 import ai.openclaw.app.gateway.GatewaySession
 import ai.openclaw.app.gateway.TalkSessionCancelOutputResult
+import ai.openclaw.app.gateway.TalkSessionCloseDisposition
 import ai.openclaw.app.gateway.chatSendAckHistorySinceSeconds
 import ai.openclaw.app.gateway.parseChatSendAck
 import ai.openclaw.app.hasPermission
@@ -13,7 +17,6 @@ import ai.openclaw.app.i18n.NativeText
 import ai.openclaw.app.i18n.joinedNativeText
 import ai.openclaw.app.i18n.nativeText
 import ai.openclaw.app.i18n.resolveNativeText
-import ai.openclaw.app.node.asObjectOrNull
 import ai.openclaw.app.node.parseJsonBooleanFlag
 import ai.openclaw.app.node.parseJsonDouble
 import ai.openclaw.app.node.parseJsonParamsObject
@@ -24,20 +27,16 @@ import android.content.Intent
 import android.media.AudioFocusRequest
 import android.media.AudioFormat
 import android.media.AudioManager
-import android.media.AudioRecord
-import android.media.MediaRecorder
 import android.os.Build
 import android.os.Bundle
 import android.os.Handler
 import android.os.Looper
-import android.os.ParcelFileDescriptor
 import android.os.SystemClock
 import android.speech.RecognitionListener
 import android.speech.RecognizerIntent
 import android.speech.SpeechRecognizer
 import android.util.Base64
 import android.util.Log
-import androidx.annotation.RequiresApi
 import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.CompletableDeferred
 import kotlinx.coroutines.CoroutineDispatcher
@@ -53,6 +52,7 @@ import kotlinx.coroutines.async
 import kotlinx.coroutines.cancelAndJoin
 import kotlinx.coroutines.channels.BufferOverflow
 import kotlinx.coroutines.channels.Channel
+import kotlinx.coroutines.coroutineScope
 import kotlinx.coroutines.currentCoroutineContext
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.ensureActive
@@ -74,7 +74,6 @@ import kotlinx.serialization.json.JsonArray
 import kotlinx.serialization.json.JsonElement
 import kotlinx.serialization.json.JsonPrimitive
 import kotlinx.serialization.json.buildJsonObject
-import java.io.IOException
 import java.util.LinkedHashMap
 import java.util.Locale
 import java.util.UUID
@@ -146,6 +145,15 @@ private data class TalkStatus(
   val failureAcknowledged: Boolean = false,
 )
 
+private val TalkModeRoute.description: NativeText?
+  get() =
+    when (this) {
+      TalkModeRoute.RealtimeRelay -> null
+      TalkModeRoute.NativeConfigured -> nativeText("Native Talk: using device speech recognition and configured Talk voice.")
+      TalkModeRoute.NativeAndroidFallback -> nativeText("Native Talk: Gateway did not advertise GPT-Live relay support; using device speech recognition and configured Talk voice.")
+      TalkModeRoute.NativeGatewayFallback -> nativeText("Native Talk: Gateway relay is unavailable for this configuration; using device speech recognition and configured Talk voice.")
+    }
+
 /** Identity is the failure's status owner, retained across its relay close event. */
 internal data class TalkFailureNotice(
   val text: String,
@@ -157,51 +165,11 @@ private data class TalkConfigCache(
   val loaded: Boolean = false,
 )
 
-private class PushToTalkAudioSource(
-  val readDescriptor: ParcelFileDescriptor,
-  private val writeStream: ParcelFileDescriptor.AutoCloseOutputStream,
-  private val audioRecord: AudioRecord,
-) {
-  private var finishRequested = false
-  private var inputFinished = false
-  private var descriptorClosed = false
-  var pumpJob: Job? = null
-
-  @Synchronized
-  fun requestFinish() {
-    if (finishRequested) return
-    finishRequested = true
-    runCatching { audioRecord.stop() }
-  }
-
-  // close() must wait for a pump already inside release, not just observe its claim.
-  @Synchronized
-  fun finishFromPump() {
-    if (inputFinished) return
-    inputFinished = true
-    runCatching { audioRecord.stop() }
-    runCatching { audioRecord.release() }
-    runCatching { writeStream.close() }
-  }
-
-  @Synchronized
-  fun close() {
-    requestFinish()
-    pumpJob?.cancel()
-    finishFromPump()
-    pumpJob = null
-    if (!descriptorClosed) {
-      descriptorClosed = true
-      runCatching { readDescriptor.close() }
-    }
-  }
-}
-
 private sealed interface PushToTalkRecognitionRung {
   val candidate: PushToTalkRecognitionCandidate
 
   data class RawAudioSegmented(
-    val source: PushToTalkAudioSource,
+    val source: SpeechRecognitionAudioSource,
   ) : PushToTalkRecognitionRung {
     override val candidate = PushToTalkRecognitionCandidate.RawAudioSegmented
   }
@@ -230,7 +198,6 @@ class TalkModeManager internal constructor(
   private val talkAudioPlayer: TalkAudioPlaying = TalkAudioPlayer(context),
   private val realtimeCaptureDispatcher: CoroutineDispatcher = Dispatchers.IO,
   private val realtimePlaybackDispatcher: CoroutineDispatcher = Dispatchers.IO,
-  private val realtimeMarkAcknowledger: (suspend (sessionId: String, markName: String) -> Unit)? = null,
 ) {
   companion object {
     private const val tag = "TalkMode"
@@ -238,9 +205,7 @@ class TalkModeManager internal constructor(
     private const val realtimeAudioFrameMs = 100
     private const val chatFinalWaitMs = 45_000L
     private const val maxCachedRunCompletions = 128
-    private const val maxConversationEntries = 40
     private const val realtimeUserFinalRewriteGraceMs = 1_500L
-    private const val pushToTalkSampleRateHz = 16_000
     private const val pushToTalkReleaseGraceMs = 5_000L
     private const val pushToTalkReleaseDrainTimeoutMs = 6_000L
     private const val pushToTalkRestartDelayMs = 200L
@@ -260,6 +225,10 @@ class TalkModeManager internal constructor(
   private val json = Json { ignoreUnknownKeys = true }
   private val _isEnabled = MutableStateFlow(false)
   val isEnabled: StateFlow<Boolean> = _isEnabled
+
+  private val _isMicrophoneMuted = MutableStateFlow(false)
+  val isMicrophoneMuted: StateFlow<Boolean> = _isMicrophoneMuted
+  private val microphoneGeneration = AtomicLong()
 
   private val _isListening = MutableStateFlow(false)
   val isListening: StateFlow<Boolean> = _isListening
@@ -319,6 +288,7 @@ class TalkModeManager internal constructor(
   val conversation: StateFlow<List<VoiceConversationEntry>> = _conversation
 
   private var recognizer: SpeechRecognizer? = null
+  private var nativeMuteCompletion: CompletableDeferred<Unit>? = null
   private var restartJob: Job? = null
   private var stopRequested = false
 
@@ -329,12 +299,13 @@ class TalkModeManager internal constructor(
   private var pttCompletion: CompletableDeferred<TalkPttStopPayload>? = null
   private var pttRecognitionRung: PushToTalkRecognitionRung? = null
   private var pttReleaseCompletion: CompletableDeferred<Unit>? = null
+
+  // Native Talk and PTT exclusively own these segments until the turn ends or is retired.
   private val pttFinalSegments = mutableListOf<String>()
   private var pttLivePartial = ""
 
   private var silenceJob: Job? = null
   private val silenceWindowMs get() = configCache.get().value.silenceTimeoutMs
-  private var lastTranscript: String = ""
   private var lastHeardAtMs: Long? = null
   private var lastSpokenText: String? = null
 
@@ -409,7 +380,6 @@ class TalkModeManager internal constructor(
       },
     )
   private var realtimeUserEntryId: String? = null
-  private var realtimeUserEntryAwaitingFinal = false
   private var realtimeUserEntryAwaitingFinalStartedAtMs: Long? = null
   private var realtimeAssistantEntryId: String? = null
 
@@ -460,7 +430,7 @@ class TalkModeManager internal constructor(
   fun setMainSessionKey(sessionKey: String?) {
     val trimmed = sessionKey?.trim().orEmpty()
     if (trimmed.isEmpty()) return
-    mainSessionKey = trimmed
+    synchronized(realtimeCapturePauseLock) { mainSessionKey = trimmed }
   }
 
   fun setEnabled(enabled: Boolean) {
@@ -471,14 +441,99 @@ class TalkModeManager internal constructor(
       start()
     } else {
       Log.d(tag, "disabled")
-      stop()
+      stop(TalkSessionCloseDisposition.Abort)
     }
   }
 
-  /** Stops continuous, one-shot, or push-to-talk capture regardless of the enabled flag. */
-  fun stopAllCapture(failure: NativeText? = null) {
+  /** Mutes input only: the call, submitted work, and assistant playback keep their owners. */
+  fun setMicrophoneMuted(muted: Boolean) {
+    synchronized(realtimeCapturePauseLock) {
+      if (_isMicrophoneMuted.value == muted) return
+      _isMicrophoneMuted.value = muted
+      // Invalidate both queued PCM and a read spanning either toggle. Neither may
+      // replay pre-mute background audio when the user unmutes again.
+      microphoneGeneration.incrementAndGet()
+      if (!_isEnabled.value) return
+      if (muted) {
+        if (nativeMuteCompletion != null || pttReleaseCompletion != null) return
+        val pttCaptureId = activePttCaptureId
+        val nativeRecognizer = recognizer?.takeIf { realtimeSessionId == null && _isListening.value && pttCaptureId == null }
+        if (nativeRecognizer != null) {
+          finishNativeRecognitionOnMute(nativeRecognizer)
+          return
+        }
+        _isListening.value = false
+        retireRecognizer()
+        if (pttCaptureId != null) {
+          closePushToTalkRung()
+          gatewayWorkScope.launch { endPushToTalk(pttCaptureId) }
+          return
+        }
+        // A native silence job may already own a submitted turn; never cancel it.
+      } else if (realtimeSessionId != null && realtimeCapturePause == null) {
+        _isListening.value = !_isMicrophoneMuted.value
+      } else if (listeningMode && !currentStatus.awaitingAgent && !_isSpeaking.value && activePttCaptureId == null) {
+        start()
+      }
+    }
+  }
+
+  private fun finishNativeRecognitionOnMute(owner: SpeechRecognizer) {
+    listeningMode = false
+    _isListening.value = false
+    restartJob?.cancel()
+    restartJob = null
+    silenceJob?.cancel()
+    val completion = CompletableDeferred<Unit>()
+    nativeMuteCompletion = completion
+    // Keep the current callback owner until the speech service emits its final
+    // hypothesis. Destroying it here discards words not yet present in the partial.
+    val stopListening =
+      Runnable {
+        synchronized(realtimeCapturePauseLock) {
+          if (nativeMuteCompletion !== completion || recognizer !== owner) return@Runnable
+          runCatching { owner.stopListening() }.onFailure { completion.complete(Unit) }
+        }
+      }
+    if (Looper.myLooper() == mainHandler.looper) {
+      stopListening.run()
+    } else if (!mainHandler.post(stopListening)) {
+      completion.complete(Unit)
+    }
+    silenceJob =
+      gatewayWorkScope.launch(start = CoroutineStart.LAZY) {
+        withContext(Dispatchers.Main) {
+          if (nativeMuteCompletion !== completion || recognizer !== owner) return@withContext
+          withTimeoutOrNull(pushToTalkReleaseGraceMs) { completion.await() }
+          val transcript =
+            synchronized(realtimeCapturePauseLock) {
+              if (nativeMuteCompletion !== completion || recognizer !== owner) return@withContext
+              nativeMuteCompletion = null
+              val text = PushToTalkTranscriptMerger.merge(pttFinalSegments, pttLivePartial)
+              retireRecognizer()
+              clearRecognizedTranscript()
+              text
+            }
+          if (transcript.isNotEmpty()) {
+            finalizeTranscript(transcript)
+          } else if (_isEnabled.value && !stopRequested) {
+            start()
+          }
+        }
+      }
+    silenceJob?.start()
+  }
+
+  /**
+   * Stops continuous, one-shot, or push-to-talk capture regardless of the enabled flag.
+   * Cleanup preserves accepted work; only an explicit user Stop passes Abort.
+   */
+  fun stopAllCapture(
+    failure: NativeText? = null,
+    disposition: TalkSessionCloseDisposition = TalkSessionCloseDisposition.Detach,
+  ) {
     _isEnabled.value = false
-    stop()
+    stop(disposition)
     failure?.let(::setTalkFailure)
   }
 
@@ -544,8 +599,6 @@ class TalkModeManager internal constructor(
   )
 
   private enum class RealtimeCaptureResume {
-    Skipped,
-    Resumed,
     Restart,
     Disconnected,
   }
@@ -562,6 +615,7 @@ class TalkModeManager internal constructor(
         ?.let { PushToTalkStartResult(it, started = false) }
         ?: throw IllegalStateException("NODE_BACKGROUND_UNAVAILABLE: command requires foreground")
     }
+    check(!_isEnabled.value || !_isMicrophoneMuted.value) { "Talk microphone is muted" }
     // PTT begin is idempotent so gateway retries don't start multiple recognizers.
     activePttCaptureId?.let {
       if (pttReleaseCompletion == null) {
@@ -609,6 +663,7 @@ class TalkModeManager internal constructor(
         val lease = session.captureRequestLease(gatewayStableId())
         val finishPause =
           synchronized(realtimeCapturePauseLock) {
+            check(!_isEnabled.value || !_isMicrophoneMuted.value) { "Talk microphone is muted" }
             if (captureGeneration != startGeneration.get() || !canStartCapture()) {
               throw IllegalStateException("NODE_BACKGROUND_UNAVAILABLE: command requires foreground")
             }
@@ -623,10 +678,7 @@ class TalkModeManager internal constructor(
             retireRecognizer()
             closePushToTalkRung()
             pttReleaseCompletion = null
-            pttFinalSegments.clear()
-            pttLivePartial = ""
-            lastTranscript = ""
-            lastHeardAtMs = null
+            clearRecognizedTranscript()
             activePttCaptureId = captureId
             pttCompletion = completion
             prepareRealtimeCapturePause(captureId, lease)
@@ -642,6 +694,7 @@ class TalkModeManager internal constructor(
               activePttCaptureId != captureId ||
               captureGeneration != startGeneration.get() ||
               !canStartCapture() ||
+              (_isEnabled.value && _isMicrophoneMuted.value) ||
               stopRequested
             ) {
               throw IllegalStateException("NODE_BACKGROUND_UNAVAILABLE: command requires foreground")
@@ -851,20 +904,10 @@ class TalkModeManager internal constructor(
     event: String,
     payloadJson: String?,
   ) {
-    if (event == "config.changed") {
-      invalidateConfig()
-      return
-    }
-    if (event == "talk.event") {
-      handleRealtimeTalkEvent(payloadJson)
-      return
-    }
-    if (event == "talk.voice.change") {
-      handleRealtimeVoiceChange(payloadJson)
-      return
-    }
-    if (ttsOnAllResponses) {
-      Log.d(tag, "gateway event: $event")
+    when (event) {
+      "config.changed" -> return invalidateConfig()
+      "talk.event" -> return handleRealtimeTalkEvent(payloadJson)
+      "talk.voice.change" -> return handleRealtimeVoiceChange(payloadJson)
     }
     if (event != "chat") return
     val obj = parseJsonParamsObject(payloadJson) ?: return
@@ -905,7 +948,7 @@ class TalkModeManager internal constructor(
     // If this is a response we initiated, handle normally below.
     // Otherwise, if ttsOnAllResponses, finish streaming TTS on terminal events.
     val pending = pendingRunId
-    val knownRun = pending == runId || hasRunCompletion(runId)
+    val knownRun = pending == runId || synchronized(completedRunsLock) { completedRunStates.containsKey(runId) }
     if (!knownRun) {
       // A live realtime relay owns speech, including gateway-run consult answers;
       // local TTS would repeat them on a media stream the mic's AEC does not cancel.
@@ -917,7 +960,6 @@ class TalkModeManager internal constructor(
       }
       return
     }
-    Log.d(tag, "chat event arrived runId=$runId state=$state pendingRunId=$pendingRunId")
     val terminal =
       when (state) {
         "final" -> true
@@ -928,15 +970,10 @@ class TalkModeManager internal constructor(
     if (terminal) {
       val text = ChatEventText.assistantTextFromMessage(message)
       if (!text.isNullOrBlank()) {
-        synchronized(completedRunsLock) {
-          completedRunTexts[runId] = text
-          while (completedRunTexts.size > maxCachedRunCompletions) {
-            completedRunTexts.entries.firstOrNull()?.let { completedRunTexts.remove(it.key) }
-          }
-        }
+        completedRunTexts.cacheRunValue(runId, text)
       }
     }
-    cacheRunCompletion(runId, terminal)
+    completedRunStates.cacheRunValue(runId, terminal)
 
     if (runId != pendingRunId) return
     pendingFinal?.complete(terminal)
@@ -1021,7 +1058,7 @@ class TalkModeManager internal constructor(
     }
   }
 
-  private fun stop() {
+  private fun stop(disposition: TalkSessionCloseDisposition) {
     val cancelled =
       synchronized(realtimeCapturePauseLock) {
         stopRequested = true
@@ -1045,13 +1082,10 @@ class TalkModeManager internal constructor(
         restartJob = null
         silenceJob = null
         closePushToTalkRung()
-        pttFinalSegments.clear()
-        pttLivePartial = ""
-        lastTranscript = ""
-        lastHeardAtMs = null
+        clearRecognizedTranscript()
         _isListening.value = false
         setStatus(nativeText("Off"), state = TalkStatusState.Off)
-        stopRealtimeRelay()
+        stopRealtimeRelay(disposition = disposition)
         pendingRunId = null
         pendingFinal = null
         synchronized(completedRunsLock) {
@@ -1069,6 +1103,8 @@ class TalkModeManager internal constructor(
 
   private fun retireRecognizer() =
     synchronized(realtimeCapturePauseLock) {
+      nativeMuteCompletion?.cancel()
+      nativeMuteCompletion = null
       val retired = recognizer ?: return@synchronized
       recognizer = null
       val completion = CompletableDeferred<Unit>()
@@ -1192,7 +1228,7 @@ class TalkModeManager internal constructor(
           realtimeOutputSuppressed = true
         } else {
           realtimeOutputSuppressed = false
-          _isListening.value = true
+          _isListening.value = !_isMicrophoneMuted.value
           if (change == null) setStatus(nativeText("Listening"))
           startRealtimeCaptureLocked(sessionId)
         }
@@ -1201,7 +1237,7 @@ class TalkModeManager internal constructor(
     if (!admitted) {
       // Stop never owned this session; the creator must close it even if its job was cancelled.
       withContext(NonCancellable) {
-        runCatching { lease.request("talk.session.close", buildJsonObject { put("sessionId", JsonPrimitive(sessionId)) }.toString()) }
+        runCatching { lease.closeTalkSession(sessionId, TalkSessionCloseDisposition.Detach) }
       }
       throw CancellationException("realtime talk stopped while connecting")
     }
@@ -1252,7 +1288,7 @@ class TalkModeManager internal constructor(
       var sourceCloseQueued = false
 
       suspend fun closeSource() {
-        change.lease.request("talk.session.close", buildJsonObject { put("sessionId", JsonPrimitive(change.originalSessionId)) }.toString()) { enqueue ->
+        change.lease.closeTalkSession(change.originalSessionId, TalkSessionCloseDisposition.Detach) { enqueue ->
           enqueue()
           sourceCloseQueued = true
         }
@@ -1381,6 +1417,10 @@ class TalkModeManager internal constructor(
     withContext(Dispatchers.Main) {
       synchronized(realtimeCapturePauseLock) {
         if (generation != startGeneration.get() || !_isEnabled.value || stopRequested) return@withContext
+        if (_isMicrophoneMuted.value) {
+          setStatus(nativeText("Listening"), route = route)
+          return@withContext
+        }
         recognizer = SpeechRecognizer.createSpeechRecognizer(context).also { it.setRecognitionListener(recognitionListener(null, it)) }
         // Record the admitted route, not a later config refresh, for this native speech loop.
         setStatus(nativeText("Listening"), route = route)
@@ -1456,6 +1496,11 @@ class TalkModeManager internal constructor(
       }
     }
 
+  private data class RealtimeCapturedFrame(
+    val bytes: ByteArray,
+    val microphoneGeneration: Long,
+  )
+
   /** Caller holds [realtimeCapturePauseLock] so PTT cannot miss newly installed jobs. */
   @SuppressLint("MissingPermission")
   private fun startRealtimeCaptureLocked(sessionId: String) {
@@ -1468,16 +1513,16 @@ class TalkModeManager internal constructor(
     val inputGeneration = audioInputGeneration.incrementAndGet()
     onAppliedAudioInputChanged(null)
     val audioFrames =
-      Channel<ByteArray>(
+      Channel<RealtimeCapturedFrame>(
         capacity = 4,
         onBufferOverflow = BufferOverflow.DROP_OLDEST,
       )
     realtimeAppendJob =
       gatewayWorkScope.launch(realtimeCaptureDispatcher) {
         for (frame in audioFrames) {
-          if (realtimeSessionId != sessionId || audioInputGeneration.get() != inputGeneration) continue
-          if (!shouldAppendRealtimeCapturedFrame(frame.size)) continue
-          val audioBase64 = Base64.encodeToString(frame, Base64.NO_WRAP)
+          if (realtimeSessionId != sessionId || audioInputGeneration.get() != inputGeneration || microphoneGeneration.get() != frame.microphoneGeneration) continue
+          if (!shouldAppendRealtimeCapturedFrame(frame.bytes.size)) continue
+          val audioBase64 = Base64.encodeToString(frame.bytes, Base64.NO_WRAP)
           val params =
             buildJsonObject {
               put("sessionId", JsonPrimitive(sessionId))
@@ -1493,7 +1538,7 @@ class TalkModeManager internal constructor(
               withEnqueue = { enqueue ->
                 // Cancellation can claim capture while this frame waits for the socket.
                 synchronized(realtimeCapturePauseLock) {
-                  if (realtimeSessionId != sessionId || audioInputGeneration.get() != inputGeneration || !shouldAppendRealtimeCapturedFrame(frame.size)) {
+                  if (realtimeSessionId != sessionId || audioInputGeneration.get() != inputGeneration || microphoneGeneration.get() != frame.microphoneGeneration || !shouldAppendRealtimeCapturedFrame(frame.bytes.size)) {
                     throw CancellationException("realtime audio frame superseded")
                   }
                   check(lease?.isCurrent() == true) { "realtime audio connection changed" }
@@ -1543,10 +1588,16 @@ class TalkModeManager internal constructor(
           audioInput.startRecording()
           ready.complete(Unit)
           while (isCurrent() && _isEnabled.value) {
-            val read = audioInput.read(buffer, 0, buffer.size)
-            if (read <= 0) continue
-            if (!shouldAppendRealtimeCapturedFrame(read)) continue
-            audioFrames.trySend(buffer.copyOf(read))
+            val frameGeneration = microphoneGeneration.get()
+            val read = audioInput.read(buffer)
+            synchronized(realtimeCapturePauseLock) {
+              if (read > 0 && microphoneGeneration.get() == frameGeneration && shouldAppendRealtimeCapturedFrame(read)) {
+                // Silence keeps provider VAD/end-of-speech working without sending
+                // any microphone sound. Retain communication routing/AEC for replies.
+                val bytes = if (_isMicrophoneMuted.value) ByteArray(read) else buffer.copyOf(read)
+                audioFrames.trySend(RealtimeCapturedFrame(bytes, frameGeneration))
+              }
+            }
           }
         } catch (err: Throwable) {
           if (err is CancellationException) throw err
@@ -1576,7 +1627,7 @@ class TalkModeManager internal constructor(
       pendingRealtimeOutputClear == null &&
       realtimeCapturePause == null &&
       !localMediaPlaybackActive &&
-      (!realtimePlayoutDelegate.isInitialized() || !realtimePlayout.isPlaying || realtimeAudioInput?.canCaptureDuringPlayback == true)
+      (_isMicrophoneMuted.value || !realtimePlayoutDelegate.isInitialized() || !realtimePlayout.isPlaying || realtimeAudioInput?.canCaptureDuringPlayback == true)
 
   // Playback retains the response that admitted it, even after newer work starts.
   private fun realtimeOutputStatusOwner(turnId: String?): TalkStatusOwner {
@@ -1602,7 +1653,7 @@ class TalkModeManager internal constructor(
         "ready" -> {
           if (realtimeVoiceChange != null) return
           if (isRealtimeCapturePaused()) return
-          _isListening.value = true
+          _isListening.value = !_isMicrophoneMuted.value
           setStatus(nativeText("Listening"))
         }
 
@@ -1611,7 +1662,7 @@ class TalkModeManager internal constructor(
           // Output remains suppressed through the cancelled pre-PTT turn. The
           // first accepted resumed frame establishes the next provider turn.
           realtimeOutputSuppressed = false
-          _isListening.value = true
+          _isListening.value = !_isMicrophoneMuted.value
         }
 
         "responseStarted" -> {
@@ -1767,21 +1818,16 @@ class TalkModeManager internal constructor(
           workScope.launch {
             try {
               if (isCurrent() && owner.active) {
-                val acknowledge = realtimeMarkAcknowledger
-                if (acknowledge != null) {
-                  acknowledge(sessionId, markName)
-                } else {
-                  val params =
-                    buildJsonObject {
-                      put("sessionId", JsonPrimitive(sessionId))
-                      put("markName", JsonPrimitive(markName))
-                    }
-                  // The lease binds the physical socket; the enqueue check binds its live relay.
-                  lease.request("talk.session.acknowledgeMark", params.toString(), 8_000) { enqueue ->
-                    synchronized(realtimeCapturePauseLock) {
-                      if (!isCurrent() || !owner.active) throw CancellationException("realtime session replaced")
-                      enqueue()
-                    }
+                val params =
+                  buildJsonObject {
+                    put("sessionId", JsonPrimitive(sessionId))
+                    put("markName", JsonPrimitive(markName))
+                  }
+                // The lease binds the physical socket; the enqueue check binds its live relay.
+                lease.request("talk.session.acknowledgeMark", params.toString(), 8_000) { enqueue ->
+                  synchronized(realtimeCapturePauseLock) {
+                    if (!isCurrent() || !owner.active) throw CancellationException("realtime session replaced")
+                    enqueue()
                   }
                 }
               }
@@ -1805,6 +1851,7 @@ class TalkModeManager internal constructor(
     closeSession: Boolean = true,
     preserveStatus: Boolean = false,
     preserveVoiceChange: Boolean = false,
+    disposition: TalkSessionCloseDisposition = TalkSessionCloseDisposition.Detach,
   ) = synchronized(realtimeCapturePauseLock) {
     if (!preserveVoiceChange) cancelRealtimeVoiceChange()
     val status = currentStatus
@@ -1834,14 +1881,19 @@ class TalkModeManager internal constructor(
     pendingRealtimeOutputClear = null
     realtimeAgentCoordinator.endSession(sessionId)
     realtimeUserEntryId = null
-    realtimeUserEntryAwaitingFinal = false
     realtimeUserEntryAwaitingFinalStartedAtMs = null
     realtimeAssistantEntryId = null
     setRealtimePlaying(false)
     if (preserveStatus) setStatus(status)
     _isListening.value = false
-    if (closeSession && !sessionId.isNullOrBlank() && lease != null) {
-      gatewayWorkScope.launch { closeRealtimeSession(sessionId, lease) }
+    if (closeSession && sessionId != null && lease != null) {
+      gatewayWorkScope.launch {
+        try {
+          lease.closeTalkSession(sessionId, disposition)
+        } catch (err: Throwable) {
+          if (err !is CancellationException) Log.d(tag, "realtime close ignored: ${err.message ?: err::class.simpleName}")
+        }
+      }
     }
   }
 
@@ -1899,43 +1951,39 @@ class TalkModeManager internal constructor(
     val generation = startGeneration.get()
     val outcome =
       synchronized(realtimeCapturePauseLock) {
-        val current = realtimeCapturePause ?: return@synchronized RealtimeCaptureResume.Skipped
+        val current = realtimeCapturePause ?: return@synchronized null
         if (current.pttCaptureId != captureId || activePttCaptureId != null) {
-          return@synchronized RealtimeCaptureResume.Skipped
+          return@synchronized null
         }
         if (!_isEnabled.value || stopRequested) {
           realtimeCapturePause = null
-          return@synchronized RealtimeCaptureResume.Skipped
+          return@synchronized null
         }
         // Native Talk has no relay ID. A completed PTT turn may have already
         // restarted it; cancellation and empty turns still need that restart.
-        if (!realtimeRelayModelSupported && current.sessionId == null && !listeningMode) {
-          realtimeCapturePause = null
-          return@synchronized RealtimeCaptureResume.Restart
-        }
-        if (current.restartRelay && current.sessionId == null) {
+        if (current.sessionId == null && (current.restartRelay || (!realtimeRelayModelSupported && !listeningMode))) {
           realtimeCapturePause = null
           return@synchronized RealtimeCaptureResume.Restart
         }
         val sessionId = current.sessionId
         if (sessionId == null || realtimeSessionId != sessionId) {
           realtimeCapturePause = null
-          return@synchronized RealtimeCaptureResume.Skipped
+          return@synchronized null
         }
         if (!isConnected()) return@synchronized RealtimeCaptureResume.Disconnected
         if (realtimeCaptureJob?.isActive == true || realtimeAppendJob?.isActive == true) {
           realtimeCapturePause = null
-          return@synchronized RealtimeCaptureResume.Skipped
+          return@synchronized null
         }
         realtimeCapturePause = null
         listeningMode = true
-        _isListening.value = true
+        _isListening.value = !_isMicrophoneMuted.value
         setStatus(nativeText("Listening"))
         startRealtimeCaptureLocked(sessionId)
-        RealtimeCaptureResume.Resumed
+        null
       }
     when (outcome) {
-      RealtimeCaptureResume.Skipped, RealtimeCaptureResume.Resumed -> {
+      null -> {
         return
       }
 
@@ -1945,20 +1993,6 @@ class TalkModeManager internal constructor(
 
       RealtimeCaptureResume.Disconnected -> {
         disableRealtimeModeAndNotifyOwner(generation, nativeText("Gateway not connected"))
-      }
-    }
-  }
-
-  private suspend fun closeRealtimeSession(
-    sessionId: String,
-    lease: GatewaySession.RequestLease,
-  ) {
-    try {
-      val params = buildJsonObject { put("sessionId", JsonPrimitive(sessionId)) }
-      lease.request("talk.session.close", params.toString(), timeoutMs = 5_000)
-    } catch (err: Throwable) {
-      if (err !is CancellationException) {
-        Log.d(tag, "realtime close ignored: ${err.message ?: err::class.simpleName}")
       }
     }
   }
@@ -1989,20 +2023,20 @@ class TalkModeManager internal constructor(
     if (shouldStartNewUserEntry) {
       finishRealtimeConversationEntry(VoiceConversationRole.User)
       entryId = null
-      realtimeUserEntryAwaitingFinal = false
       realtimeUserEntryAwaitingFinalStartedAtMs = null
     }
     val resolvedEntryId =
       if (entryId == null) {
-        appendConversation(role = role, text = text.trimStart(), isStreaming = !isFinal)
+        _conversation.appendVoiceEntry(role = role, text = text.trimStart(), isStreaming = !isFinal)
       } else {
-        updateConversationEntry(id = entryId, text = text, isStreaming = !isFinal)
+        _conversation.updateVoiceEntry(entryId) { entry ->
+          entry.copy(text = mergeRealtimeTranscriptText(entry.text, text, isFinal), isStreaming = !isFinal)
+        }
         entryId
       }
     when (role) {
       VoiceConversationRole.User -> {
         realtimeUserEntryId = if (isFinal) null else resolvedEntryId
-        realtimeUserEntryAwaitingFinal = false
         realtimeUserEntryAwaitingFinalStartedAtMs = null
       }
 
@@ -2018,21 +2052,15 @@ class TalkModeManager internal constructor(
         VoiceConversationRole.User -> realtimeUserEntryId
         VoiceConversationRole.Assistant -> realtimeAssistantEntryId
       } ?: return
-    val current = _conversation.value
-    val targetIndex = current.indexOfFirst { it.id == entryId }
-    if (targetIndex >= 0 && current[targetIndex].isStreaming) {
-      val updated = current.toMutableList()
-      updated[targetIndex] = current[targetIndex].copy(isStreaming = false)
-      _conversation.value = updated
-      if (role == VoiceConversationRole.User) {
-        realtimeUserEntryAwaitingFinal = true
-        realtimeUserEntryAwaitingFinalStartedAtMs = SystemClock.elapsedRealtime()
-      }
+    var wasStreaming = false
+    _conversation.updateVoiceEntry(entryId) { entry ->
+      wasStreaming = entry.isStreaming
+      entry.copy(isStreaming = false)
     }
-    when (role) {
-      VoiceConversationRole.User -> Unit
-      VoiceConversationRole.Assistant -> realtimeAssistantEntryId = null
+    if (wasStreaming && role == VoiceConversationRole.User) {
+      realtimeUserEntryAwaitingFinalStartedAtMs = SystemClock.elapsedRealtime()
     }
+    if (role == VoiceConversationRole.Assistant) realtimeAssistantEntryId = null
   }
 
   private fun shouldStartNewRealtimeUserEntry(
@@ -2044,38 +2072,16 @@ class TalkModeManager internal constructor(
     if (entry.isStreaming) return false
     val existing = entry.text
     if (existing.isBlank() || incoming.isBlank()) return false
-    if (incoming.firstOrNull()?.isWhitespace() == true) return false
+    if (incoming.first().isWhitespace()) return false
     if (incoming == existing || incoming.startsWith(existing) || existing.endsWith(incoming)) return false
-    if (isFinal && realtimeUserEntryAwaitingFinal) {
-      val elapsedMs =
-        realtimeUserEntryAwaitingFinalStartedAtMs?.let { SystemClock.elapsedRealtime() - it } ?: Long.MAX_VALUE
+    val awaitingFinalSince = realtimeUserEntryAwaitingFinalStartedAtMs
+    if (isFinal && awaitingFinalSince != null) {
+      val elapsedMs = SystemClock.elapsedRealtime() - awaitingFinalSince
       if (elapsedMs <= realtimeUserFinalRewriteGraceMs && looksLikeTranscriptReplacement(existing, incoming)) {
         return false
       }
     }
     return true
-  }
-
-  private fun appendConversation(
-    role: VoiceConversationRole,
-    text: String,
-    isStreaming: Boolean,
-  ): String {
-    val id = UUID.randomUUID().toString()
-    _conversation.value =
-      (_conversation.value + VoiceConversationEntry(id = id, role = role, text = text, isStreaming = isStreaming))
-        .takeLast(maxConversationEntries)
-    return id
-  }
-
-  private fun updateConversationEntry(
-    id: String,
-    text: String,
-    isStreaming: Boolean,
-  ) {
-    _conversation.updateVoiceEntry(id) { entry ->
-      entry.copy(text = mergeRealtimeTranscriptText(entry.text, text, isFinal = !isStreaming), isStreaming = isStreaming)
-    }
   }
 
   private fun mergeRealtimeTranscriptText(
@@ -2087,7 +2093,7 @@ class TalkModeManager internal constructor(
     if (incoming.isEmpty()) return existing
     if (incoming == existing || existing.endsWith(incoming)) return existing
     if (incoming.startsWith(existing)) return incoming
-    if (incoming.firstOrNull()?.isWhitespace() == true) return existing + incoming
+    if (incoming.first().isWhitespace()) return existing + incoming
     if (isFinal && looksLikeTranscriptReplacement(existing, incoming)) return incoming
     val overlap = findTranscriptTextOverlap(existing, incoming)
     val suffix = if (overlap > 0) incoming.drop(overlap) else incoming
@@ -2114,7 +2120,7 @@ class TalkModeManager internal constructor(
     val incomingText = normalizeTranscriptText(incoming)
     val commonPrefix = commonPrefixLength(existingText, incomingText)
     val shortest = minOf(existingText.length, incomingText.length)
-    return commonPrefix >= 6 && commonPrefix.toDouble() / maxOf(1, shortest).toDouble() >= 0.45
+    return commonPrefix >= 6 && commonPrefix.toDouble() / shortest.toDouble() >= 0.45
   }
 
   private fun transcriptWords(value: String): List<String> =
@@ -2143,13 +2149,8 @@ class TalkModeManager internal constructor(
   ): Int {
     val base = existing.lowercase(Locale.ROOT)
     val next = incoming.lowercase(Locale.ROOT)
-    val max = minOf(base.length, next.length)
-    for (length in max downTo 3) {
-      if (base.endsWith(next.take(length))) {
-        return length
-      }
-    }
-    return 0
+    return (minOf(base.length, next.length) downTo 3)
+      .firstOrNull { length -> base.endsWith(next.take(length)) } ?: 0
   }
 
   private fun shouldInsertTranscriptSpace(
@@ -2171,6 +2172,7 @@ class TalkModeManager internal constructor(
     firstCandidate: PushToTalkRecognitionCandidate? = null,
   ) = synchronized(realtimeCapturePauseLock) {
     if (activePttCaptureId != captureId || pttReleaseCompletion != null || stopRequested) return@synchronized
+    check(!_isEnabled.value || !_isMicrophoneMuted.value) { "Talk microphone is muted" }
     val recognizerInstance = recognizer ?: error("Speech recognizer unavailable")
     var lastFailure: Throwable? = null
     // API 33 adds segmented callbacks and caller-owned audio; older devices retain the restarting rung.
@@ -2184,7 +2186,7 @@ class TalkModeManager internal constructor(
         val rung =
           when (candidate) {
             PushToTalkRecognitionCandidate.RawAudioSegmented -> {
-              PushToTalkRecognitionRung.RawAudioSegmented(openPushToTalkAudioSource())
+              PushToTalkRecognitionRung.RawAudioSegmented(openSpeechRecognitionAudioSource(gatewayWorkScope))
             }
 
             PushToTalkRecognitionCandidate.SilenceSegmented -> {
@@ -2219,7 +2221,11 @@ class TalkModeManager internal constructor(
       when (rung) {
         is PushToTalkRecognitionRung.RawAudioSegmented -> {
           if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.TIRAMISU) {
-            applyRawAudioSegmentedExtras(this, rung.source)
+            putExtra(RecognizerIntent.EXTRA_AUDIO_SOURCE, rung.source.readDescriptor)
+            putExtra(RecognizerIntent.EXTRA_AUDIO_SOURCE_CHANNEL_COUNT, 1)
+            putExtra(RecognizerIntent.EXTRA_AUDIO_SOURCE_ENCODING, AudioFormat.ENCODING_PCM_16BIT)
+            putExtra(RecognizerIntent.EXTRA_AUDIO_SOURCE_SAMPLING_RATE, speechRecognitionSampleRateHz)
+            putExtra(RecognizerIntent.EXTRA_SEGMENTED_SESSION, RecognizerIntent.EXTRA_AUDIO_SOURCE)
           }
         }
 
@@ -2230,89 +2236,14 @@ class TalkModeManager internal constructor(
           putExtra(RecognizerIntent.EXTRA_SPEECH_INPUT_COMPLETE_SILENCE_LENGTH_MILLIS, 2500)
           putExtra(RecognizerIntent.EXTRA_SPEECH_INPUT_POSSIBLY_COMPLETE_SILENCE_LENGTH_MILLIS, 1800)
           if (rung == PushToTalkRecognitionRung.SilenceSegmented && Build.VERSION.SDK_INT >= Build.VERSION_CODES.TIRAMISU) {
-            applySilenceSegmentedExtras(this)
+            putExtra(
+              RecognizerIntent.EXTRA_SEGMENTED_SESSION,
+              RecognizerIntent.EXTRA_SPEECH_INPUT_COMPLETE_SILENCE_LENGTH_MILLIS,
+            )
           }
         }
       }
     }
-
-  // API 33 RecognizerIntent extras live behind @RequiresApi so min-SDK lint stays meaningful;
-  // segmented rungs are only ever constructed on TIRAMISU+ (see pushToTalkRecognitionCandidates).
-  @RequiresApi(Build.VERSION_CODES.TIRAMISU)
-  private fun applyRawAudioSegmentedExtras(
-    intent: Intent,
-    source: PushToTalkAudioSource,
-  ) {
-    intent.putExtra(RecognizerIntent.EXTRA_AUDIO_SOURCE, source.readDescriptor)
-    intent.putExtra(RecognizerIntent.EXTRA_AUDIO_SOURCE_CHANNEL_COUNT, 1)
-    intent.putExtra(RecognizerIntent.EXTRA_AUDIO_SOURCE_ENCODING, AudioFormat.ENCODING_PCM_16BIT)
-    intent.putExtra(RecognizerIntent.EXTRA_AUDIO_SOURCE_SAMPLING_RATE, pushToTalkSampleRateHz)
-    intent.putExtra(RecognizerIntent.EXTRA_SEGMENTED_SESSION, RecognizerIntent.EXTRA_AUDIO_SOURCE)
-  }
-
-  @RequiresApi(Build.VERSION_CODES.TIRAMISU)
-  private fun applySilenceSegmentedExtras(intent: Intent) {
-    intent.putExtra(
-      RecognizerIntent.EXTRA_SEGMENTED_SESSION,
-      RecognizerIntent.EXTRA_SPEECH_INPUT_COMPLETE_SILENCE_LENGTH_MILLIS,
-    )
-  }
-
-  @SuppressLint("MissingPermission")
-  private fun openPushToTalkAudioSource(): PushToTalkAudioSource {
-    check(Build.VERSION.SDK_INT >= Build.VERSION_CODES.TIRAMISU)
-    val minBufferSize =
-      AudioRecord.getMinBufferSize(
-        pushToTalkSampleRateHz,
-        AudioFormat.CHANNEL_IN_MONO,
-        AudioFormat.ENCODING_PCM_16BIT,
-      )
-    check(minBufferSize > 0) { "AudioRecord buffer unavailable" }
-
-    val pipe = ParcelFileDescriptor.createPipe()
-    var recorder: AudioRecord? = null
-    var writeStream: ParcelFileDescriptor.AutoCloseOutputStream? = null
-    try {
-      recorder =
-        AudioRecord(
-          MediaRecorder.AudioSource.VOICE_RECOGNITION,
-          pushToTalkSampleRateHz,
-          AudioFormat.CHANNEL_IN_MONO,
-          AudioFormat.ENCODING_PCM_16BIT,
-          minBufferSize * 2,
-        )
-      check(recorder.state == AudioRecord.STATE_INITIALIZED) { "AudioRecord initialization failed" }
-      recorder.startRecording()
-      check(recorder.recordingState == AudioRecord.RECORDSTATE_RECORDING) { "AudioRecord did not start" }
-      val activeRecorder = checkNotNull(recorder)
-      val activeWriteStream = ParcelFileDescriptor.AutoCloseOutputStream(pipe[1])
-      writeStream = activeWriteStream
-      val source = PushToTalkAudioSource(pipe[0], activeWriteStream, activeRecorder)
-      source.pumpJob =
-        gatewayWorkScope.launch(Dispatchers.IO) {
-          val buffer = ByteArray(minBufferSize.coerceAtLeast(4_096))
-          try {
-            while (currentCoroutineContext().isActive) {
-              val bytesRead = activeRecorder.read(buffer, 0, buffer.size)
-              if (bytesRead <= 0) break
-              activeWriteStream.write(buffer, 0, bytesRead)
-            }
-          } catch (err: IOException) {
-            Log.d(tag, "PTT audio pipe closed: ${err.message}")
-          } finally {
-            source.finishFromPump()
-          }
-        }
-      return source
-    } catch (err: Throwable) {
-      runCatching { recorder?.stop() }
-      runCatching { recorder?.release() }
-      runCatching { writeStream?.close() }
-      if (writeStream == null) runCatching { pipe[1].close() }
-      runCatching { pipe[0].close() }
-      throw err
-    }
-  }
 
   private fun schedulePushToTalkRestart(
     delayMs: Long,
@@ -2333,7 +2264,9 @@ class TalkModeManager internal constructor(
           -> PushToTalkRecognitionCandidate.RestartingSingleSession
         }
       }
-    commitPushToTalkLivePartial()
+    val partial = pttLivePartial.trim()
+    if (partial.isNotEmpty()) pttFinalSegments += partial
+    pttLivePartial = ""
     closePushToTalkRung()
     restartJob?.cancel()
     restartJob =
@@ -2359,32 +2292,25 @@ class TalkModeManager internal constructor(
       pttRecognitionRung = null
     }
 
-  private fun commitPushToTalkLivePartial() {
-    val partial = pttLivePartial.trim()
-    if (partial.isNotEmpty()) {
-      pttFinalSegments += partial
-    }
-    pttLivePartial = ""
-  }
-
   private fun startListeningInternal(markListening: Boolean) {
+    if (_isEnabled.value && _isMicrophoneMuted.value) return
     val r = recognizer ?: return
     val intent = recognizerIntent()
     if (markListening) {
       setStatus(nativeText("Listening"))
-      _isListening.value = true
+      _isListening.value = !_isMicrophoneMuted.value
     }
     r.startListening(intent)
   }
 
   private fun scheduleRestart(delayMs: Long = 350) {
-    if (stopRequested) return
+    if (stopRequested || _isMicrophoneMuted.value) return
     restartJob?.cancel()
     restartJob =
       gatewayWorkScope.launch {
         delay(delayMs)
         mainHandler.post {
-          if (stopRequested) return@post
+          if (stopRequested || _isMicrophoneMuted.value) return@post
           try {
             recognizer?.cancel()
             val shouldListen = listeningMode
@@ -2403,38 +2329,37 @@ class TalkModeManager internal constructor(
     isFinal: Boolean,
   ) {
     val trimmed = text.trim()
-    if (activePttCaptureId != null) {
-      if (trimmed.isNotEmpty()) {
+    nativeMuteCompletion?.let { completion ->
+      if (!completion.isCompleted && trimmed.isNotEmpty()) {
         if (isFinal) {
           pttFinalSegments += trimmed
           pttLivePartial = ""
         } else {
           pttLivePartial = trimmed
         }
-        lastHeardAtMs = SystemClock.elapsedRealtime()
       }
       return
     }
-    if (_isSpeaking.value && interruptOnSpeech) {
-      if (shouldInterrupt(trimmed)) {
-        cancelActivePlayback()
+    if (activePttCaptureId == null) {
+      if (_isSpeaking.value && interruptOnSpeech) {
+        if (shouldInterrupt(trimmed)) {
+          cancelActivePlayback()
+        }
+        return
       }
-      return
+      if (!_isListening.value) return
     }
+    if (trimmed.isEmpty()) return
 
-    if (!_isListening.value) return
-
-    if (trimmed.isNotEmpty()) {
-      lastTranscript = trimmed
-      lastHeardAtMs = SystemClock.elapsedRealtime()
-    }
-
+    // A recognizer final ends one session, not the Talk turn. Keep its words when
+    // recognition restarts before the silence monitor submits the whole turn.
     if (isFinal) {
-      lastTranscript = trimmed
-      // Don't finalize immediately — let the silence monitor trigger after
-      // silenceWindowMs. This allows the recognizer to fire onResults and
-      // still give the user a natural pause before we send.
+      pttFinalSegments += trimmed
+      pttLivePartial = ""
+    } else {
+      pttLivePartial = trimmed
     }
+    lastHeardAtMs = SystemClock.elapsedRealtime()
   }
 
   private fun startSilenceMonitor(captureId: String? = null) {
@@ -2451,12 +2376,7 @@ class TalkModeManager internal constructor(
   private suspend fun checkSilence(captureId: String?) {
     if (activePttCaptureId != captureId) return
     if (!_isListening.value) return
-    val transcript =
-      if (activePttCaptureId != null) {
-        PushToTalkTranscriptMerger.merge(pttFinalSegments, pttLivePartial)
-      } else {
-        lastTranscript.trim()
-      }
+    val transcript = PushToTalkTranscriptMerger.merge(pttFinalSegments, pttLivePartial)
     if (transcript.isEmpty()) return
     val lastHeard = lastHeardAtMs ?: return
     val elapsed = SystemClock.elapsedRealtime() - lastHeard
@@ -2468,16 +2388,27 @@ class TalkModeManager internal constructor(
       }
       return
     }
-    // The listening job owns the turn, so stop or PTT takeover also cancels pending finalization.
-    finalizeTranscript(transcript)
+    // Native silence detection runs on IO, while mute can claim the same words
+    // from the UI. Publish the claim under their shared lock before either path
+    // can submit/cancel a finalizer; a submitted turn must have exactly one owner.
+    val claimed =
+      synchronized(realtimeCapturePauseLock) {
+        if (activePttCaptureId != null || !_isListening.value || !listeningMode || stopRequested) {
+          false
+        } else {
+          listeningMode = false
+          _isListening.value = false
+          true
+        }
+      }
+    if (claimed) finalizeTranscript(transcript)
   }
 
   private suspend fun finalizeTranscript(transcript: String) {
     listeningMode = false
     _isListening.value = false
     setStatus(nativeText("Thinking…"), awaitingAgent = true)
-    lastTranscript = ""
-    lastHeardAtMs = null
+    clearRecognizedTranscript()
     // Do not start synthesis while native recognition is still queued for teardown on Main.
     retireRecognizer()
     audioRetirement.await()
@@ -2491,10 +2422,8 @@ class TalkModeManager internal constructor(
         return
       }
       val startedAt = System.currentTimeMillis().toDouble() / 1000.0
-      Log.d(tag, "chat.send start sessionKey=$mainSessionKey chars=${transcript.length}")
       val ack = sendChat(transcript)
       val runId = ack.runId ?: throw IllegalStateException("chat.send returned no run id")
-      Log.d(tag, "chat.send ok runId=$runId status=${ack.status}")
       if (ack.isTerminalFailure) {
         setStatus(if (ack.normalizedStatus == "error") nativeText("Chat error") else nativeText("Aborted"))
         return
@@ -2505,7 +2434,7 @@ class TalkModeManager internal constructor(
       }
       // Use text cached from the final event first — avoids chat.history polling
       val assistant =
-        consumeRunText(runId)
+        synchronized(completedRunsLock) { completedRunTexts.remove(runId) }
           ?: waitForAssistantText(
             chatSendAckHistorySinceSeconds(ack, startedAt),
             if (ok) 12_000 else 25_000,
@@ -2515,7 +2444,6 @@ class TalkModeManager internal constructor(
         Log.w(tag, "assistant text timeout runId=$runId")
         return
       }
-      Log.d(tag, "assistant text ok chars=${assistant.length}")
       val playbackToken = cancelActivePlayback()
       // Muting owns only this reply's audio. Stopping capture still cancels the
       // parent turn and must never restart listening over a replacement PTT hold.
@@ -2610,14 +2538,17 @@ class TalkModeManager internal constructor(
         listeningMode = false
         retireRecognizer()
         closePushToTalkRung()
-        pttFinalSegments.clear()
-        pttLivePartial = ""
-        lastTranscript = ""
-        lastHeardAtMs = null
+        clearRecognizedTranscript()
         ClearedPushToTalkCapture(transcript = transcript, completion = completion) to release
       }
     release?.cancel()
     return cleared
+  }
+
+  private fun clearRecognizedTranscript() {
+    pttFinalSegments.clear()
+    pttLivePartial = ""
+    lastHeardAtMs = null
   }
 
   private fun finishPushToTalk(
@@ -2657,17 +2588,27 @@ class TalkModeManager internal constructor(
     }
 
   private suspend fun sendChat(message: String): ChatSendAck {
+    val sessionKey = synchronized(realtimeCapturePauseLock) { mainSessionKey }
     val runId = UUID.randomUUID().toString()
     armPendingRun(runId)
     val params =
       buildJsonObject {
-        put("sessionKey", JsonPrimitive(mainSessionKey))
+        put("sessionKey", JsonPrimitive(sessionKey))
         put("message", JsonPrimitive(message))
-        put("timeoutMs", JsonPrimitive(30_000))
+        // Omit the run deadline so the Gateway's configured agent timeout applies.
         put("idempotencyKey", JsonPrimitive(runId))
       }
     try {
-      val res = requestGateway("chat.send", params.toString())
+      val lease =
+        session.captureRequestLease(gatewayStableId()?.trim()?.takeIf { it.isNotEmpty() })
+          ?: throw GatewayRequestNotEnqueued("not connected")
+      val res =
+        lease.requestAwaitingStartup("chat.send", params.toString()) { enqueue ->
+          synchronized(realtimeCapturePauseLock) {
+            if (mainSessionKey != sessionKey) throw CancellationException("Talk session changed")
+            enqueue()
+          }
+        }
       val parsed = parseChatSendAck(json, res)
       val actualRunId = parsed.runId ?: runId
       if (actualRunId != runId) {
@@ -2685,26 +2626,45 @@ class TalkModeManager internal constructor(
 
   internal suspend fun waitForChatFinal(runId: String): Boolean {
     consumeRunCompletion(runId)?.let { return it }
-    val deferred =
-      if (pendingRunId == runId) {
-        pendingFinal ?: armPendingRun(runId)
-      } else {
-        armPendingRun(runId)
-      }
+    val deferred = (if (pendingRunId == runId) pendingFinal else null) ?: armPendingRun(runId)
 
     consumeRunCompletion(runId)?.let { return it }
 
-    val result =
+    val sessionKey = mainSessionKey
+    return coroutineScope {
+      // History backs up missed events; a slow probe must not delay completion or Stop.
+      val observer =
+        launch {
+          try {
+            do {
+              delay(chatFinalWaitMs)
+            } while (isRunInFlight(sessionKey, runId))
+          } catch (_: Exception) {
+            currentCoroutineContext().ensureActive()
+            // An unavailable snapshot falls through to the existing reply-history recovery.
+          }
+          deferred.complete(false)
+        }
       try {
-        withTimeout(chatFinalWaitMs) { deferred.await() }
-      } catch (_: TimeoutCancellationException) {
-        false
+        deferred.await()
+      } finally {
+        observer.cancel()
+        clearPendingRun(runId)
       }
-
-    if (!result && pendingRunId == runId) {
-      clearPendingRun(runId)
     }
-    return result
+  }
+
+  private suspend fun isRunInFlight(
+    sessionKey: String,
+    runId: String,
+  ): Boolean {
+    val params =
+      buildJsonObject {
+        put("sessionKey", JsonPrimitive(sessionKey))
+        put("limit", JsonPrimitive(1))
+      }
+    val root = json.parseToJsonElement(requestGateway("chat.history", params.toString())).asObjectOrNull() ?: return false
+    return root["inFlightRun"].asObjectOrNull()?.get("runId").asJsonStringOrNull() == runId
   }
 
   private fun armPendingRun(runId: String): CompletableDeferred<Boolean> {
@@ -2722,36 +2682,19 @@ class TalkModeManager internal constructor(
     }
   }
 
-  private fun cacheRunCompletion(
+  private fun <T> LinkedHashMap<String, T>.cacheRunValue(
     runId: String,
-    isFinal: Boolean,
+    value: T,
   ) {
     synchronized(completedRunsLock) {
-      completedRunStates[runId] = isFinal
-      while (completedRunStates.size > maxCachedRunCompletions) {
-        val first = completedRunStates.entries.firstOrNull() ?: break
-        completedRunStates.remove(first.key)
+      this[runId] = value
+      while (size > maxCachedRunCompletions) {
+        remove(keys.first())
       }
     }
   }
 
-  private fun consumeRunCompletion(runId: String): Boolean? {
-    synchronized(completedRunsLock) {
-      return completedRunStates.remove(runId)
-    }
-  }
-
-  private fun hasRunCompletion(runId: String): Boolean {
-    synchronized(completedRunsLock) {
-      return completedRunStates.containsKey(runId)
-    }
-  }
-
-  private fun consumeRunText(runId: String): String? {
-    synchronized(completedRunsLock) {
-      return completedRunTexts.remove(runId)
-    }
-  }
+  private fun consumeRunCompletion(runId: String): Boolean? = synchronized(completedRunsLock) { completedRunStates.remove(runId) }
 
   private suspend fun waitForAssistantText(
     sinceSeconds: Double?,
@@ -2813,7 +2756,7 @@ class TalkModeManager internal constructor(
       onBeforeSpeak()
       ensurePlaybackActive(playbackToken)
       val parsed = TalkDirectiveParser.parse(text)
-      if (parsed.unknownKeys.isNotEmpty()) Log.w(tag, "Unknown talk directive keys: ${parsed.unknownKeys}")
+      if (parsed.unknownKeys.isNotEmpty()) Log.w(tag, "Unknown talk directive keys: count=${parsed.unknownKeys.size}")
       val directive = parsed.directive
       val cleaned = parsed.stripped.trim()
       if (cleaned.isEmpty()) return
@@ -2823,13 +2766,11 @@ class TalkModeManager internal constructor(
         setStatus(nativeText("Generating voice…"), awaitingAgent = true)
       }
       try {
-        val started = SystemClock.elapsedRealtime()
         when (val result = talkSpeakClient.synthesize(text = cleaned, directive = directive)) {
           is TalkSpeakResult.Success -> {
             markAudioPlaybackStarting(playbackToken)
             talkAudioPlayer.play(result.audio)
             ensurePlaybackActive(playbackToken)
-            Log.d(tag, "talk.speak ok durMs=${SystemClock.elapsedRealtime() - started}")
           }
 
           is TalkSpeakResult.FallbackToLocal -> {
@@ -2842,7 +2783,6 @@ class TalkModeManager internal constructor(
               beforeSpeak = { markAudioPlaybackStarting(playbackToken) },
             )
             ensurePlaybackActive(playbackToken)
-            Log.d(tag, "system tts ok durMs=${SystemClock.elapsedRealtime() - started}")
           }
 
           is TalkSpeakResult.Failure -> {
@@ -2850,7 +2790,7 @@ class TalkModeManager internal constructor(
           }
         }
       } catch (err: Throwable) {
-        if (isPlaybackCancelled(err, playbackToken)) {
+        if (err is CancellationException || !playbackEnabled || playbackToken != playbackGeneration.get()) {
           Log.d(tag, "assistant speech cancelled")
           return
         }
@@ -2999,7 +2939,7 @@ class TalkModeManager internal constructor(
       }
     }
 
-  internal fun shouldAllowSpeechInterrupt(): Boolean = listeningMode && !isRealtimeCapturePaused()
+  internal fun shouldAllowSpeechInterrupt(): Boolean = listeningMode && !_isMicrophoneMuted.value && !isRealtimeCapturePaused()
 
   private fun requestAudioFocusForTts(lease: PlaybackLease) {
     if (realtimeAudioInput != null) return
@@ -3034,38 +2974,24 @@ class TalkModeManager internal constructor(
     }
   }
 
-  private fun isPlaybackCancelled(
-    err: Throwable?,
-    playbackToken: Long,
-  ): Boolean {
-    if (err is CancellationException) return true
-    return !playbackEnabled || playbackToken != playbackGeneration.get()
-  }
-
   private fun invalidateConfig() {
-    // Keep active capture settings, but invalidate before waiting for the loader
-    // so neither its stale response nor its waiting consumer can use the old revision.
     configCache.updateAndGet { it.copy(loaded = false) }
   }
 
   private suspend fun ensureConfigLoaded() =
     configReloadMutex.withLock {
-      while (true) {
-        currentCoroutineContext().ensureActive()
-        val owner = configCache.get()
-        if (owner.loaded) return@withLock
-        val loaded =
-          try {
-            val res = requestGateway("talk.config", "{}")
-            val root = json.parseToJsonElement(res).asObjectOrNull()
-            TalkConfigCache(TalkModeGatewayConfigParser.parse(root?.get("config").asObjectOrNull()), loaded = true)
-          } catch (err: Throwable) {
-            if (err is CancellationException) throw err
-            TalkConfigCache()
-          }
-        // Only invalidation requires another read; a current failure returns once.
-        if (configCache.compareAndSet(owner, loaded)) return@withLock
-      }
+      if (configCache.get().loaded) return@withLock
+      val loaded =
+        try {
+          val res = requestGateway("talk.config", "{}")
+          val root = json.parseToJsonElement(res).asObjectOrNull()
+          TalkConfigCache(TalkModeGatewayConfigParser.parse(root?.get("config").asObjectOrNull()), loaded = true)
+        } catch (err: Throwable) {
+          if (err is CancellationException) throw err
+          TalkConfigCache()
+        }
+      // A config change during this read takes effect on the next explicit refresh or Talk restart.
+      configCache.set(loaded)
     }
 
   private fun resolvedSpeechLocaleTag(): String = speechLocale ?: Locale.getDefault().toLanguageTag()
@@ -3126,7 +3052,7 @@ class TalkModeManager internal constructor(
     captureId: String?,
     owner: SpeechRecognizer,
   ): RecognitionListener =
-    object : RecognitionListener {
+    object : SpeechRecognitionListenerAdapter() {
       override fun onReadyForSpeech(params: Bundle?) =
         withCurrentRecognition(owner, captureId) {
           // Only a live listening session may claim the status; a speech-interrupt
@@ -3140,10 +3066,6 @@ class TalkModeManager internal constructor(
 
       override fun onBeginningOfSpeech() {}
 
-      override fun onRmsChanged(rmsdB: Float) {}
-
-      override fun onBufferReceived(buffer: ByteArray?) {}
-
       // onResults/onError always follow end of speech and own the restart. Restarting here
       // cancels the session before its final hypothesis, and the cancel's ERROR_CLIENT clears
       // listening, so checkSilence never sends the transcript.
@@ -3152,6 +3074,10 @@ class TalkModeManager internal constructor(
       override fun onError(error: Int) =
         withCurrentRecognition(owner, captureId) {
           if (stopRequested) return@withCurrentRecognition
+          nativeMuteCompletion?.let {
+            it.complete(Unit)
+            return@withCurrentRecognition
+          }
           _isListening.value = false
           val pushToTalkActive = activePttCaptureId != null
           if (pushToTalkActive) {
@@ -3200,6 +3126,10 @@ class TalkModeManager internal constructor(
         withCurrentRecognition(owner, captureId) {
           val list = results?.getStringArrayList(SpeechRecognizer.RESULTS_RECOGNITION).orEmpty()
           list.firstOrNull()?.let { handleTranscript(it, isFinal = true) }
+          nativeMuteCompletion?.let {
+            it.complete(Unit)
+            return@withCurrentRecognition
+          }
           if (activePttCaptureId != null) {
             _isListening.value = false
             pttReleaseCompletion?.let {
@@ -3241,11 +3171,6 @@ class TalkModeManager internal constructor(
             advanceRung = shouldAdvancePushToTalkRungAfterSegmentedSession(pttRecognitionRung?.candidate ?: return@withCurrentRecognition),
           )
         }
-
-      override fun onEvent(
-        eventType: Int,
-        params: Bundle?,
-      ) {}
     }
 
   // A destroyed recognizer can still deliver queued callbacks, including continuous Talk's null PTT id.
@@ -3283,7 +3208,7 @@ internal fun requireAcceptedRealtimeOutputCancellation(
   return result
 }
 
-private fun GatewaySession.ErrorShape.isUnsupportedSessionLanguageParam(): Boolean =
+private fun ErrorShape.isUnsupportedSessionLanguageParam(): Boolean =
   code == "INVALID_REQUEST" &&
     message
       .lowercase(Locale.ROOT)

@@ -66,36 +66,24 @@ function collectTelegramAllowFromLists(
     { pathLabel: `${prefix}.allowFrom`, holder: account, key: "allowFrom" },
     { pathLabel: `${prefix}.groupAllowFrom`, holder: account, key: "groupAllowFrom" },
   ];
-  const groups = asObjectRecord(account.groups);
-  if (!groups) {
-    return refs;
-  }
-  for (const groupId of Object.keys(groups)) {
-    const group = asObjectRecord(groups[groupId]);
-    if (!group) {
-      continue;
-    }
-    refs.push({
-      pathLabel: `${prefix}.groups.${groupId}.allowFrom`,
-      holder: group,
-      key: "allowFrom",
-    });
-    const topics = asObjectRecord(group.topics);
-    if (!topics) {
-      continue;
-    }
-    for (const topicId of Object.keys(topics)) {
-      const topic = asObjectRecord(topics[topicId]);
-      if (!topic) {
+  const collect = (
+    holder: Record<string, unknown>,
+    parentPath: string,
+    children: "groups" | "topics",
+  ) => {
+    for (const [id, value] of Object.entries(asObjectRecord(holder[children]) ?? {})) {
+      const child = asObjectRecord(value);
+      if (!child) {
         continue;
       }
-      refs.push({
-        pathLabel: `${prefix}.groups.${groupId}.topics.${topicId}.allowFrom`,
-        holder: topic,
-        key: "allowFrom",
-      });
+      const path = `${parentPath}.${children}.${id}`;
+      refs.push({ pathLabel: `${path}.allowFrom`, holder: child, key: "allowFrom" });
+      if (children === "groups") {
+        collect(child, path, "topics");
+      }
     }
-  }
+  };
+  collect(account, prefix, "groups");
   return refs;
 }
 
@@ -127,22 +115,22 @@ function collectTelegramMalformedGroupsWarnings(params: {
 
 function scanTelegramInvalidAllowFromEntries(cfg: OpenClawConfig): TelegramAllowFromInvalidHit[] {
   const hits: TelegramAllowFromInvalidHit[] = [];
-  const scanList = (pathLabel: string, list: unknown) => {
-    if (!Array.isArray(list)) {
-      return;
-    }
-    for (const entry of list) {
-      const normalized = normalizeTelegramAllowFromEntry(entry);
-      if (!normalized || normalized === "*" || isNumericTelegramSenderUserId(normalized)) {
+  for (const scope of collectChannelAccountScopes({ cfg, channelId: "telegram" })) {
+    for (const { pathLabel, holder, key } of collectTelegramAllowFromLists(
+      scope.prefix,
+      scope.account,
+    )) {
+      const list = holder[key];
+      if (!Array.isArray(list)) {
         continue;
       }
-      hits.push({ path: pathLabel, entry: normalizeOptionalString(String(entry)) ?? "" });
-    }
-  };
-
-  for (const scope of collectChannelAccountScopes({ cfg, channelId: "telegram" })) {
-    for (const ref of collectTelegramAllowFromLists(scope.prefix, scope.account)) {
-      scanList(ref.pathLabel, ref.holder[ref.key]);
+      for (const entry of list) {
+        const normalized = normalizeTelegramAllowFromEntry(entry);
+        if (!normalized || normalized === "*" || isNumericTelegramSenderUserId(normalized)) {
+          continue;
+        }
+        hits.push({ path: pathLabel, entry: normalizeOptionalString(String(entry)) ?? "" });
+      }
     }
   }
   return hits;
@@ -251,19 +239,17 @@ function maybeRepairTelegramApiRoots(cfg: OpenClawConfig): {
   }
 
   const next = structuredClone(cfg);
-  const apply = (path: string[], normalized: string) => {
+  for (const { pathSegments: path, normalized } of hits) {
     let target: Record<string, unknown> | null = next as Record<string, unknown>;
     for (const segment of path.slice(0, -1)) {
       target = asObjectRecord(target?.[segment]);
       if (!target) {
-        return;
+        break;
       }
     }
-    target[path[path.length - 1] ?? "apiRoot"] = normalized;
-  };
-
-  for (const hit of hits) {
-    apply(hit.pathSegments, hit.normalized);
+    if (target) {
+      target[path[path.length - 1] ?? "apiRoot"] = normalized;
+    }
   }
   return {
     config: next,
@@ -414,36 +400,27 @@ async function maybeRepairTelegramAllowFromUsernames(cfg: OpenClawConfig): Promi
     if (!Array.isArray(raw)) {
       return;
     }
-    const out: DoctorAllowFromList = [];
+    const out = new Map<string, string>();
     const replaced: Array<{ from: string; to: string }> = [];
     for (const entry of raw) {
       const normalized = normalizeTelegramAllowFromEntry(entry);
       if (!normalized) {
         continue;
       }
-      if (normalized === "*" || isNumericTelegramSenderUserId(normalized)) {
-        out.push(normalized);
-        continue;
+      let output = normalized;
+      if (normalized !== "*" && !isNumericTelegramSenderUserId(normalized)) {
+        const resolved = await resolveUserId(normalized);
+        output = resolved || (normalizeOptionalString(String(entry)) ?? "");
+        if (resolved) {
+          replaced.push({ from: normalizeOptionalString(String(entry)) ?? "", to: resolved });
+        }
       }
-      const resolved = await resolveUserId(normalized);
-      if (resolved) {
-        out.push(resolved);
-        replaced.push({ from: normalizeOptionalString(String(entry)) ?? "", to: resolved });
-      } else {
-        out.push(normalizeOptionalString(String(entry)) ?? "");
+      const keyValue = normalizeOptionalString(output) ?? "";
+      if (keyValue && !out.has(keyValue)) {
+        out.set(keyValue, output);
       }
     }
-    const deduped: DoctorAllowFromList = [];
-    const seen = new Set<string>();
-    for (const entry of out) {
-      const keyValue = normalizeOptionalString(String(entry)) ?? "";
-      if (!keyValue || seen.has(keyValue)) {
-        continue;
-      }
-      seen.add(keyValue);
-      deduped.push(entry);
-    }
-    holder[key] = deduped;
+    holder[key] = [...out.values()];
     for (const replacement of replaced.slice(0, 5)) {
       changes.push(
         `- ${sanitizeForLog(pathLabel)}: resolved ${sanitizeForLog(replacement.from)} -> ${sanitizeForLog(replacement.to)}`,

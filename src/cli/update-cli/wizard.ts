@@ -2,8 +2,6 @@ import { confirm, isCancel } from "@clack/prompts";
 import { selectStyled } from "../../../packages/terminal-core/src/prompt-select-styled.js";
 import { stylePromptMessage } from "../../../packages/terminal-core/src/prompt-style.js";
 import { theme } from "../../../packages/terminal-core/src/theme.js";
-import { readConfigFileSnapshot } from "../../config/config.js";
-import { formatErrorMessage } from "../../infra/errors.js";
 import {
   normalizeUpdateChannel,
   resolveUpdateChannelDisplay,
@@ -21,6 +19,7 @@ import {
   resolveUpdateRoot,
   type UpdateWizardOptions,
 } from "./shared.js";
+import { readUpdateConfigFileSnapshot } from "./update-command-config.js";
 
 export async function updateWizardCommand(opts: UpdateWizardOptions = {}): Promise<void> {
   if (!process.stdin.isTTY) {
@@ -31,6 +30,10 @@ export async function updateWizardCommand(opts: UpdateWizardOptions = {}): Promi
     return;
   }
 
+  const cancel = () => {
+    defaultRuntime.log(theme.muted("Update cancelled."));
+    defaultRuntime.exit(0);
+  };
   const timeoutMs = parseUpdateTimeoutMs(opts.timeout);
 
   const root = await resolveUpdateRoot();
@@ -39,7 +42,7 @@ export async function updateWizardCommand(opts: UpdateWizardOptions = {}): Promi
       root,
       timeoutMs: timeoutMs ?? 3500,
     }),
-    readConfigFileSnapshot({ observe: false }),
+    readUpdateConfigFileSnapshot({ observe: false }),
   ]);
 
   if (updateStatus.installKind === "host") {
@@ -71,34 +74,20 @@ export async function updateWizardCommand(opts: UpdateWizardOptions = {}): Promi
         label: `Keep current (${channelInfo.channel})`,
         hint: channelInfo.label,
       },
-      {
-        value: "stable",
-        label: "Stable",
-        hint: "Tagged releases (npm latest)",
-      },
-      {
-        value: "extended-stable",
-        label: "Extended Stable",
-        hint: "Monthly supported release (npm extended-stable)",
-      },
-      {
-        value: "beta",
-        label: "Beta",
-        hint: "Prereleases (npm beta)",
-      },
-      {
-        value: "dev",
-        label: "Dev",
-        hint: "Git main",
-      },
+      ...(
+        [
+          ["stable", "Stable", "Tagged releases (npm latest)"],
+          ["extended-stable", "Extended Stable", "Monthly supported release (npm extended-stable)"],
+          ["beta", "Beta", "Prereleases (npm beta)"],
+          ["dev", "Dev", "Git main"],
+        ] as const
+      ).map(([value, label, hint]) => ({ value, label, hint })),
     ],
     initialValue: "keep",
   });
 
   if (typeof pickedChannel === "symbol") {
-    defaultRuntime.log(theme.muted("Update cancelled."));
-    defaultRuntime.exit(0);
-    return;
+    return cancel();
   }
 
   const requestedChannel = pickedChannel === "keep" ? null : pickedChannel;
@@ -122,9 +111,7 @@ export async function updateWizardCommand(opts: UpdateWizardOptions = {}): Promi
         initialValue: true,
       });
       if (isCancel(ok) || !ok) {
-        defaultRuntime.log(theme.muted("Update cancelled."));
-        defaultRuntime.exit(0);
-        return;
+        return cancel();
       }
     }
   }
@@ -134,22 +121,16 @@ export async function updateWizardCommand(opts: UpdateWizardOptions = {}): Promi
     initialValue: true,
   });
   if (typeof restart === "symbol") {
-    defaultRuntime.log(theme.muted("Update cancelled."));
-    defaultRuntime.exit(0);
-    return;
+    return cancel();
   }
 
-  try {
-    const { updateCommand } = await import("./update-command.js");
-    await updateCommand({
-      runtimeRecoveryEnv: opts.runtimeRecoveryEnv,
-      channel: requestedChannel ?? undefined,
-      restart,
-      timeout: opts.timeout,
-      acceptCapabilities: opts.acceptCapabilities,
-    });
-  } catch (err) {
-    defaultRuntime.error(formatErrorMessage(err));
-    defaultRuntime.exit(1);
-  }
+  const { updateCommand } = await import("./update-command.js");
+  await updateCommand({
+    runtimeRecoveryEnv: opts.runtimeRecoveryEnv,
+    channel: requestedChannel ?? undefined,
+    restart,
+    timeout: opts.timeout,
+    acceptCapabilities: opts.acceptCapabilities,
+    fullIntegrityCheck: opts.fullIntegrityCheck,
+  });
 }

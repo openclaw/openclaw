@@ -10,13 +10,7 @@ struct IOSMediaArtifactLoader: Sendable {
         let customHeaders: [String: String]
     }
 
-    enum LoadError: Error, Equatable {
-        case invalidSource
-        case invalidResponse
-        case requestFailed(statusCode: Int)
-        case unsupportedMediaType
-        case payloadTooLarge
-    }
+    typealias LoadError = OpenClawChatMediaArtifactLoader.LoadError
 
     typealias Request = @Sendable (URLRequest) async throws -> (Data, URLResponse)
     typealias RequestFactory = @Sendable (GatewayTLSParams, Int) -> Request
@@ -28,7 +22,8 @@ struct IOSMediaArtifactLoader: Sendable {
     init(
         connectionProvider: @escaping ConnectionProvider,
         requestFactory: @escaping RequestFactory = { tls, maximumBytes in
-            let session = GatewayTLSPinningSession(params: tls)
+            let session = GatewayTLSPinningSession(
+                params: tls, allowsRedirects: false, allowsStoredCredentials: false)
             return { request in
                 defer { session.finishTasksAndInvalidate() }
                 return try await session.data(for: request, maximumBytes: maximumBytes)
@@ -39,91 +34,96 @@ struct IOSMediaArtifactLoader: Sendable {
         self.requestFactory = requestFactory
     }
 
+    // The Gateway's smallest rendition is a 480 px WebP capped at 96 KiB. A miss never requests the original.
+    static let tilePreviewWidth = 480
+    private static let tilePreviewBytes = 96 * 1024
+
+    func tileThumbnail(from response: ArtifactsDownloadResult, expectedGatewayID: String) async throws -> Data {
+        guard response.artifact.type == "image" else { throw LoadError.unsupportedMediaType }
+        let preview: ArtifactsDownloadResult
+        if let data = response.data {
+            guard response.artifact.mimetype == "image/webp", response.encoding == "base64" else {
+                throw LoadError.invalidResponse
+            }
+            guard data.utf8.count <= Self.tilePreviewBytes / 3 * 4 else { throw LoadError.payloadTooLarge }
+            preview = response
+        } else {
+            // A managed ticket covers both representations of the same artifact. Preserve its encoded scope and grant.
+            guard let path = response.url, var parts = URLComponents(string: path),
+                  parts.percentEncodedPath.hasPrefix("/api/chat/media/outgoing/"),
+                  parts.percentEncodedPath.hasSuffix("/full") else { throw LoadError.invalidSource }
+            parts.percentEncodedPath = String(parts.percentEncodedPath.dropLast(4)) + "thumbnail"
+            var query = (parts.queryItems ?? []).filter { $0.name != "width" }
+            query.append(URLQueryItem(name: "width", value: String(Self.tilePreviewWidth)))
+            parts.queryItems = query
+            preview = ArtifactsDownloadResult(artifact: response.artifact, url: parts.string)
+        }
+        guard case let .data(media) = try await self.load(
+            response: preview, kind: .image, expectedGatewayID: expectedGatewayID, maximumBytes: Self.tilePreviewBytes),
+            media.mimeType == "image/webp", media.data.count <= Self.tilePreviewBytes
+        else {
+            throw LoadError.invalidResponse
+        }
+        return media.data
+    }
+
     func load(
         response: ArtifactsDownloadResult,
         kind: OpenClawChatMediaKind,
         playback: OpenClawChatPlaybackMode? = nil,
-        expectedGatewayID: String) async throws -> OpenClawChatLoadedMedia
+        expectedGatewayID: String,
+        maximumBytes: Int? = nil) async throws -> OpenClawChatLoadedMedia
     {
-        let maximumBytes = kind.maximumDownloadBytes
-        let declaredMIME = response.artifact.mimetype?.lowercased()
-        if playback != .transcode,
-           let encoded = response.data?.trimmingCharacters(in: .whitespacesAndNewlines),
-           !encoded.isEmpty
-        {
-            guard response.encoding == "base64",
-                  let declaredMIME,
-                  kind.acceptsMIMEType(declaredMIME),
-                  let data = Data(base64Encoded: encoded)
-            else { throw LoadError.invalidResponse }
-            guard data.count <= maximumBytes else { throw LoadError.payloadTooLarge }
-            return .data(OpenClawChatMediaData(data: data, mimeType: declaredMIME))
-        }
+        try await OpenClawChatMediaArtifactLoader.load(response: response, kind: kind, playback: playback) { path in
+            guard let connection = await self.connectionProvider(),
+                  connection.gatewayID == expectedGatewayID,
+                  let url = OpenClawChatMediaURL.resolve(
+                      gatewayURL: connection.config.url,
+                      ticketedPath: path,
+                      playback: playback)
+            else { throw LoadError.invalidSource }
 
-        let path = response.url?.trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
-        guard let connection = await self.connectionProvider(),
-              connection.gatewayID == expectedGatewayID,
-              let url = OpenClawChatMediaURL.resolve(
-                  gatewayURL: connection.config.url,
-                  ticketedPath: path,
-                  playback: playback)
-        else { throw LoadError.invalidSource }
-
-        let headers = url.scheme?.lowercased() == "https"
-            ? GatewayCustomHeaders.sanitized(connection.customHeaders)
-            : [:]
-        // AVPlayer cannot use the app's pinned TLS delegate or immutable proxy
-        // headers. Those routes take the bounded authenticated download path.
-        let canStreamDirectly = kind == .video &&
-            url.scheme?.lowercased() == "https" &&
-            connection.config.tls == nil &&
-            headers.isEmpty &&
-            declaredMIME.map(kind.acceptsMIMEType) == true
-        if canStreamDirectly, playback != .transcode, let declaredMIME {
-            return .stream(OpenClawChatMediaStream(
-                url: url,
-                mimeType: declaredMIME,
-                sizeBytes: response.artifact.sizebytes))
+            let ingress = connection.config.ingressAuthorization
+            let headers: [String: String] = if let ingress {
+                try await ingress.headers(url)
+            } else {
+                url.scheme?.lowercased() == "https"
+                    ? GatewayCustomHeaders.sanitized(connection.customHeaders)
+                    : [:]
+            }
+            // AVPlayer cannot use the app's pinned TLS delegate or immutable proxy
+            // headers. Those routes take the bounded authenticated download path.
+            let allowsStreaming = connection.config.tls == nil && ingress == nil && headers.isEmpty
+            return (url, allowsStreaming, { request in
+                var request = request
+                for (name, value) in headers {
+                    request.setValue(value, forHTTPHeaderField: name)
+                }
+                let tls = connection.config.tls ?? GatewayTLSParams(
+                    required: false,
+                    expectedFingerprint: nil,
+                    allowTOFU: false,
+                    storeKey: nil)
+                let data: Data
+                let urlResponse: URLResponse
+                do {
+                    let operation = self.requestFactory(tls, maximumBytes ?? kind.maximumDownloadBytes)
+                    if let ingress {
+                        (data, urlResponse) = try await ingress.load(request, operation)
+                    } else {
+                        (data, urlResponse) = try await operation(request)
+                    }
+                } catch is GatewayBoundedDataError {
+                    throw LoadError.payloadTooLarge
+                }
+                guard let http = urlResponse as? HTTPURLResponse, http.url == request.url else {
+                    throw LoadError.invalidResponse
+                }
+                // The capability belongs to the captured ingress revision. A late download
+                // must not publish after expiry or replacement by another Access account.
+                try await ingress?.checkResponse(http)
+                return (data, http)
+            })
         }
-
-        var request = URLRequest(url: url)
-        request.timeoutInterval = kind == .video ? 60 : 20
-        request.setValue(kind.acceptHeader, forHTTPHeaderField: "Accept")
-        if canStreamDirectly {
-            request.setValue("bytes=0-0", forHTTPHeaderField: "Range")
-        }
-        for (name, value) in headers {
-            request.setValue(value, forHTTPHeaderField: name)
-        }
-        let tls = connection.config.tls ?? GatewayTLSParams(
-            required: false,
-            expectedFingerprint: nil,
-            allowTOFU: false,
-            storeKey: nil)
-        let data: Data
-        let urlResponse: URLResponse
-        do {
-            (data, urlResponse) = try await self.requestFactory(tls, maximumBytes)(request)
-        } catch is GatewayBoundedDataError {
-            throw LoadError.payloadTooLarge
-        }
-        guard let http = urlResponse as? HTTPURLResponse else { throw LoadError.invalidResponse }
-        if http.statusCode == 202 {
-            return .preparing
-        }
-        guard (200..<300).contains(http.statusCode) else {
-            throw LoadError.requestFailed(statusCode: http.statusCode)
-        }
-        guard let mimeType = http.mimeType?.lowercased(),
-              kind.acceptsMIMEType(mimeType)
-        else { throw LoadError.unsupportedMediaType }
-        if canStreamDirectly {
-            return .stream(OpenClawChatMediaStream(
-                url: url,
-                mimeType: mimeType,
-                sizeBytes: response.artifact.sizebytes))
-        }
-        guard data.count <= maximumBytes else { throw LoadError.payloadTooLarge }
-        return .data(OpenClawChatMediaData(data: data, mimeType: mimeType))
     }
 }

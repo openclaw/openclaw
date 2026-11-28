@@ -1,5 +1,5 @@
 import type { OpenClawConfig } from "../config/types.openclaw.js";
-import type { ImageGenerationProvider } from "../image-generation/types.js";
+import type { ImageGenerationProvider } from "../image-generation/provider-types.js";
 import { withAcquiredPluginCapabilityProviders } from "../plugins/capability-provider-acquisition.js";
 import { createMediaProviderRegistry } from "./provider-registry.js";
 

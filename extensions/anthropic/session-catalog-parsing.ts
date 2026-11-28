@@ -83,11 +83,7 @@ function readParams(
   return value;
 }
 
-export function readListParams(value: unknown): {
-  cursor?: string;
-  limit: number;
-  searchTerm?: string;
-} {
+export function readListParams(value: unknown) {
   if (value === undefined || value === null) {
     return { limit: DEFAULT_PAGE_LIMIT };
   }
@@ -101,17 +97,13 @@ export function readListParams(value: unknown): {
   };
 }
 
-export function readTranscriptParams(value: unknown): {
-  threadId: string;
-  cursor?: string;
-  limit: number;
-} {
+export function readTranscriptParams(value: unknown) {
   const params = readParams(value, "read", ["threadId", "cursor", "limit"]);
   const threadId = readBoundedString(params.threadId, 256);
   if (!threadId || !/^[A-Za-z0-9._:-]+$/.test(threadId)) {
     throw new ClaudeCatalogParamsError("threadId is invalid");
   }
-  const cursor = readOptionalCursor(params.cursor, "transcript");
+  const cursor = readOptionalCursor(params.cursor, "chat history");
   return {
     threadId,
     limit: readLimit(params.limit, DEFAULT_TRANSCRIPT_LIMIT, MAX_TRANSCRIPT_LIMIT),
@@ -164,6 +156,7 @@ export function parseCatalogPage(value: unknown): ClaudeSessionCatalogPage {
     };
     for (const [key, maxLength] of [
       ["name", 500],
+      ["customGroup", 500],
       ["cwd", MAX_STRING_LENGTH],
       ["color", MAX_STRING_LENGTH],
       ["cliVersion", 256],
@@ -203,7 +196,19 @@ export function parseCatalogPage(value: unknown): ClaudeSessionCatalogPage {
     return session;
   });
   const nextCursor = readNodePageCursor(value, "Claude node returned an invalid session page");
-  return { sessions, ...(nextCursor ? { nextCursor } : {}) };
+  let error: ClaudeSessionCatalogPage["error"];
+  if (value.error !== undefined) {
+    if (!isRecord(value.error)) {
+      throw new Error("Claude node returned an invalid session page error");
+    }
+    const code = readBoundedString(value.error.code, 256);
+    const message = readBoundedString(value.error.message, MAX_STRING_LENGTH);
+    if (!code || !message) {
+      throw new Error("Claude node returned an invalid session page error");
+    }
+    error = { code, message };
+  }
+  return { sessions, ...(nextCursor ? { nextCursor } : {}), ...(error ? { error } : {}) };
 }
 
 export function unwrapNodePayload(value: unknown): unknown {
@@ -213,12 +218,7 @@ export function unwrapNodePayload(value: unknown): unknown {
   return value;
 }
 
-export function parseGatewayQuery(value: unknown): {
-  search?: string;
-  limitPerHost: number;
-  hostIds?: string[];
-  cursors?: Record<string, string>;
-} {
+export function parseGatewayQuery(value: unknown) {
   if (value === undefined || value === null) {
     return { limitPerHost: DEFAULT_PAGE_LIMIT };
   }

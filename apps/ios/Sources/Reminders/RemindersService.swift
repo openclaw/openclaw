@@ -16,9 +16,7 @@ final class RemindersService: RemindersServicing {
     func list(params: OpenClawRemindersListParams) async throws -> OpenClawRemindersListPayload {
         let status = self.reminderAuthorizationStatus()
         guard DevicePermissionStatusMap.eventKitRead(status) == .granted else {
-            throw NSError(domain: "Reminders", code: 1, userInfo: [
-                NSLocalizedDescriptionKey: "REMINDERS_PERMISSION_REQUIRED: grant Reminders permission",
-            ])
+            throw Self.error(1, "REMINDERS_PERMISSION_REQUIRED: grant Reminders permission")
         }
 
         let store = EKEventStore()
@@ -52,17 +50,13 @@ final class RemindersService: RemindersServicing {
     func add(params: OpenClawRemindersAddParams) async throws -> OpenClawRemindersAddPayload {
         let status = self.reminderAuthorizationStatus()
         guard DevicePermissionStatusMap.eventKitWrite(status) == .granted else {
-            throw NSError(domain: "Reminders", code: 2, userInfo: [
-                NSLocalizedDescriptionKey: "REMINDERS_PERMISSION_REQUIRED: grant Reminders permission",
-            ])
+            throw Self.error(2, "REMINDERS_PERMISSION_REQUIRED: grant Reminders permission")
         }
 
         let store = EKEventStore()
         let title = params.title.trimmingCharacters(in: .whitespacesAndNewlines)
         guard !title.isEmpty else {
-            throw NSError(domain: "Reminders", code: 3, userInfo: [
-                NSLocalizedDescriptionKey: "REMINDERS_INVALID: title required",
-            ])
+            throw Self.error(3, "REMINDERS_INVALID: title required")
         }
 
         let reminder = EKReminder(eventStore: store)
@@ -89,7 +83,8 @@ final class RemindersService: RemindersServicing {
             title: reminder.title,
             dueISO: due.map { formatter.string(from: $0) },
             completed: reminder.isCompleted,
-            listName: reminder.calendar.title)
+            listName: reminder.calendar.title,
+            notes: reminder.notes)
     }
 
     static func applyDueISO(
@@ -100,11 +95,8 @@ final class RemindersService: RemindersServicing {
         guard let dueISO = rawDueISO?.trimmingCharacters(in: .whitespacesAndNewlines), !dueISO.isEmpty else {
             return
         }
-        let formatter = ISO8601DateFormatter()
-        guard let dueDate = formatter.date(from: dueISO) else {
-            throw NSError(domain: "Reminders", code: 4, userInfo: [
-                NSLocalizedDescriptionKey: "REMINDERS_INVALID: dueISO must be ISO-8601",
-            ])
+        guard let dueDate = OpenClawISO8601.date(from: dueISO) else {
+            throw Self.error(4, "REMINDERS_INVALID: dueISO must be ISO-8601")
         }
 
         var calendar = Calendar(identifier: .gregorian)
@@ -114,10 +106,19 @@ final class RemindersService: RemindersServicing {
             from: dueDate)
         components.calendar = calendar
         components.timeZone = timeZone
-        // EventKit requires a Gregorian due calendar and a matching start date on iOS.
-        reminder.startDateComponents = components
+        let offset = timeZone.secondsFromGMT(for: dueDate)
+        if let reconstructed = components.date, timeZone.secondsFromGMT(for: reconstructed) != offset {
+            // Pin the offset when the named zone resolves a repeated wall time to its other occurrence.
+            components.timeZone = TimeZone(secondsFromGMT: offset)
+        }
+        // Setting the due date can shift a repeated-hour start. Assign the matching start last.
         reminder.dueDateComponents = components
-        reminder.addAlarm(EKAlarm(absoluteDate: dueDate))
+        reminder.startDateComponents = components
+        if components.timeZone != timeZone {
+            reminder.addAlarm(EKAlarm(relativeOffset: 0))
+        } else {
+            reminder.addAlarm(EKAlarm(absoluteDate: dueDate))
+        }
     }
 
     private static func resolveList(
@@ -137,17 +138,17 @@ final class RemindersService: RemindersServicing {
             }) {
                 return calendar
             }
-            throw NSError(domain: "Reminders", code: 5, userInfo: [
-                NSLocalizedDescriptionKey: "REMINDERS_LIST_NOT_FOUND: no list named \(title)",
-            ])
+            throw Self.error(5, "REMINDERS_LIST_NOT_FOUND: no list named \(title)")
         }
 
         if let fallback = store.defaultCalendarForNewReminders() {
             return fallback
         }
 
-        throw NSError(domain: "Reminders", code: 6, userInfo: [
-            NSLocalizedDescriptionKey: "REMINDERS_LIST_NOT_FOUND: no default list",
-        ])
+        throw Self.error(6, "REMINDERS_LIST_NOT_FOUND: no default list")
+    }
+
+    private static func error(_ code: Int, _ message: String) -> NSError {
+        NSError(domain: "Reminders", code: code, userInfo: [NSLocalizedDescriptionKey: message])
     }
 }

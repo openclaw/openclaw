@@ -1,165 +1,91 @@
-import { isDeepStrictEqual } from "node:util";
-import { readDatabasePathIdentitySync } from "../../infra/sqlite-worker-identity.js";
-import { OPENCLAW_AGENT_SCHEMA_VERSION } from "../../state/openclaw-agent-db-contract.js";
-import {
-  AgentDatabaseRegistryChangedError,
-  prepareOpenClawAgentDatabaseRegistrySnapshotRead,
-  type AgentDatabaseRegistryChange,
-} from "../../state/openclaw-agent-db-registry-listing.js";
-import { assertSessionStoreReadCandidate } from "./session-store-read-candidates.js";
-import {
-  createSessionStoreRegistryMutationFilter,
-  type SessionStoreTargetInventoryRequest,
-  type SessionStoreTargetInventoryResult,
-  type SessionStoreTargetReadRequest,
-  type SessionStoreTargetReadResult,
+import { resolveIdentityPathViaExistingAncestor } from "../../infra/path-existence.js";
+import { isArtifactPreservingStateRead } from "../../state/artifact-preserving-state-reads.js";
+import type { AgentDatabaseRegistryChange } from "../../state/openclaw-agent-db-contract.js";
+import { prepareOpenClawAgentDatabaseRegistrySnapshotRead } from "../../state/openclaw-agent-db-registry-listing.js";
+import type { SessionStoreWorkerReadScope } from "./session-entry-read-runtime.types.js";
+import { resolveUnsuffixedSqliteTargetFromSessionStorePath } from "./session-sqlite-target-paths.js";
+import type { SessionStoreRegistryRead } from "./session-sqlite-target.js";
+import type { SessionStoreReadCustody } from "./session-store-read-candidates.js";
+import type {
+  SessionStoreTargetInventoryResult,
+  SessionStoreTargetReadRequest,
+  SessionStoreTargetReadResult,
 } from "./session-store-target-inventory.js";
+import type { SessionStoreTargetInventoryRequest } from "./session-store-target-routing.js";
 import {
+  sessionStoreLane,
+  prepareSessionStoreCandidatesInWorker,
   withSessionHistoryWorkerReadCandidates,
   type SessionHistoryWorkerLane,
 } from "./session-transcript-worker-resources.js";
 
-type PreparedStoreTarget = Extract<SessionStoreTargetReadResult, { kind: "session-store-target" }>;
+type DeepReadonly<T> = { readonly [K in keyof T]: DeepReadonly<T[K]> };
+type PreparedStoreTarget = DeepReadonly<
+  Extract<SessionStoreTargetReadResult, { kind: "session-store-target" }>
+>;
 type StoreTargetReadOwner = {
+  readCustody: SessionStoreReadCustody;
   assertCurrent: () => void;
   onRegistryChange: (change: AgentDatabaseRegistryChange) => void;
   refreshBeforeDispatch: (assertRetainedTarget: () => void) => Promise<void>;
   revalidateTarget: () => Promise<void>;
 };
 
-function prepareSessionStoreRegistryRead(
-  request: Pick<SessionStoreTargetInventoryRequest, "env" | "candidates" | "registryDiscovery">,
-  selectedTarget?: () => PreparedStoreTarget | undefined,
-) {
-  const captured = request.candidates.map((candidate) => {
-    try {
-      const identity = readDatabasePathIdentitySync(candidate.path);
-      return { candidate, identity: identity.key, birthtime: identity.birthtime };
-    } catch {
-      // Retain path fencing; the worker owns an unreadable candidate's diagnostic.
-      return { candidate, identity: "unavailable" };
-    }
-  });
-  const preparedSources: Array<
-    Parameters<typeof createSessionStoreRegistryMutationFilter>[0]["preparedSources"][number]
-  > = [];
-  const unchangedBy = createSessionStoreRegistryMutationFilter({
-    captured,
-    preparedSources,
-    registryDiscovery: request.registryDiscovery,
-  });
-  return prepareOpenClawAgentDatabaseRegistrySnapshotRead(
-    { env: request.env },
-    (mutation, entries) => {
-      const target = selectedTarget?.();
-      if (target && mutation.kind === "upsert" && preparedSources.length === 0) {
-        for (const source of mutation.sources) {
-          const absent = captured.find(
-            ({ candidate, identity }) =>
-              !candidate.scope &&
-              identity.startsWith("path:") &&
-              candidate.physicalPath === target.database.path,
-          );
-          if (
-            !absent ||
-            source.agentId !== target.database.agentId ||
-            source.physicalPath !== target.database.path ||
-            source.schemaVersion !== OPENCLAW_AGENT_SCHEMA_VERSION
-          ) {
-            continue;
-          }
-          try {
-            const current = readDatabasePathIdentitySync(absent.candidate.path);
-            if (current.key === source.identity && current.birthtime !== undefined) {
-              // First registration preserves the selected absent owner; later changes keep its generation.
-              absent.identity = current.key;
-              absent.birthtime = current.birthtime;
-              preparedSources.push({
-                ...target.database,
-                identity: current.key,
-                birthtime: current.birthtime,
-              });
-              break;
-            }
-          } catch {
-            // An unreadable or replaced source remains a registry invalidation.
-          }
-        }
-      }
-      return unchangedBy(mutation, entries);
-    },
-  );
-}
-
-/** Capture registry admission now; retain its witness independently of discovery custody. */
+type PreparedInventory = DeepReadonly<
+  Extract<SessionStoreTargetInventoryResult, { kind: "session-target-inventory" }>
+>;
 export function prepareSessionStoreTargetInventoryRead(
   request: Omit<SessionStoreTargetInventoryRequest, "registeredDatabases">,
   unchangedBy?: Parameters<typeof prepareOpenClawAgentDatabaseRegistrySnapshotRead>[1],
-  lane?: SessionHistoryWorkerLane,
+  registeredDatabases?: SessionStoreRegistryRead,
+  registry = prepareOpenClawAgentDatabaseRegistrySnapshotRead({ env: request.env }, unchangedBy),
+  /** Access checks use the worker pool's reserved class-0 lane. */
+  pointRead?: true,
 ) {
   const { candidates, ...prepared } = request;
-  const captureRegistry = () =>
-    prepareOpenClawAgentDatabaseRegistrySnapshotRead({ env: request.env }, unchangedBy);
-  let registry = captureRegistry();
-  let registryStarted = false;
-  const assertRegistryCurrent = () => {
-    // Explicit publication scopes retain their witness before discovery; other
-    // inventories depend on registry currency only after requesting its rows.
-    if (registryStarted || unchangedBy) {
-      registry.assertCurrent();
-    }
-  };
+  // Security-scoped inventories can supply a stricter witness. Ordinary discovery
+  // keeps its selected registry snapshot; later registrations affect the next read.
+  const assertRegistryCurrent = unchangedBy
+    ? registry.assertCurrent
+    : registry.assertAdmissionCurrent;
   return {
     assertRegistryCurrent,
+    followRegistration: registry.followRegistration,
     withRead<T>(
-      operation: (
-        inventory: Extract<SessionStoreTargetInventoryResult, { kind: "session-target-inventory" }>,
-        assertCurrent: () => void,
-      ) => Promise<T>,
+      operation: (inventory: PreparedInventory, assertCurrent: () => void) => Promise<T>,
       assertCallerCurrent?: () => void,
+      signal?: AbortSignal,
     ) {
       return withSessionHistoryWorkerReadCandidates(
         candidates,
         async (discovery) => {
           const assertCurrent = () => {
+            signal?.throwIfAborted();
             assertCallerCurrent?.();
             discovery.assertCurrent();
             assertRegistryCurrent();
           };
           let inventory = await discovery.readTargetInventory({
             ...prepared,
-            registeredDatabases: { status: "deferred" },
+            registeredDatabases: registeredDatabases ?? { status: "deferred" },
           });
-          assertCurrent();
           if (inventory.kind === "session-target-registry-required") {
-            registryStarted = true;
-            let current;
-            try {
-              current = await registry.read();
-            } catch (error) {
-              if (!(error instanceof AgentDatabaseRegistryChangedError)) {
-                throw error;
-              }
-              registry = captureRegistry();
-              current = await registry.read();
-            }
-            assertCurrent();
-            registry = unchangedBy ? registry : prepareSessionStoreRegistryRead(request);
+            const { result } = await registry.read(signal);
             inventory = await discovery.readTargetInventory({
               ...prepared,
               registeredDatabases:
-                current.result.status === "available"
-                  ? current.result.entries
-                  : { status: "unavailable" },
+                result.status === "available" ? result.entries : { status: "unavailable" },
             });
-            assertCurrent();
           }
+          assertCurrent();
           if (inventory.kind !== "session-target-inventory") {
             throw new Error("Session store inventory requested registry rows twice");
           }
           return operation(inventory, assertCurrent);
         },
-        lane,
+        sessionStoreLane,
+        signal,
+        pointRead,
       );
     },
   };
@@ -170,128 +96,128 @@ export async function withSessionStoreTarget<T>(
   operation: (target: PreparedStoreTarget, owner: StoreTargetReadOwner) => Promise<T>,
   assertCallerCurrent?: () => void,
   onReadError?: (error: unknown, assertCurrent: () => void) => Promise<T>,
-  { lane }: { lane?: SessionHistoryWorkerLane } = {},
+  signal?: AbortSignal,
+  lane: SessionHistoryWorkerLane = sessionStoreLane,
+  pointRead?: true,
 ): Promise<T> {
   assertCallerCurrent?.();
-  const { candidates, ...targetRequest } = request;
-  let selectedTarget: PreparedStoreTarget | undefined;
-  let registryRead = prepareSessionStoreRegistryRead(request, () => selectedTarget);
+  const { candidates, ...targetRequest } = {
+    ...request,
+    ...(isArtifactPreservingStateRead("agent") ? { preserveSourceArtifacts: true as const } : {}),
+  };
+  const registry = prepareOpenClawAgentDatabaseRegistrySnapshotRead({ env: request.env });
   return withSessionHistoryWorkerReadCandidates(
     candidates,
     async (discovery) => {
-      const assertDiscoveryCurrent = () => {
+      const assertCurrent = () => {
         assertCallerCurrent?.();
+        registry.assertAdmissionCurrent();
         discovery.assertCurrent();
-        registryRead.assertCurrent();
-      };
-      const failedRead = async (error: unknown): Promise<T> => {
-        assertDiscoveryCurrent();
-        if (!onReadError) {
-          throw error;
-        }
-        return await onReadError(error, assertDiscoveryCurrent);
       };
       let read = await discovery.readStoreTargetResult({
         ...targetRequest,
         registeredDatabases: { status: "deferred" },
       });
-      if (!read.ok) {
-        return await failedRead(read.error);
-      }
-      let resolved = read.value;
-      let registry: Awaited<ReturnType<typeof registryRead.read>> | undefined;
-      if (resolved.kind === "session-target-registry-required") {
-        registryRead.assertCurrent();
-        registry = await registryRead.read();
-        assertDiscoveryCurrent();
+      if (read.ok && read.value.kind === "session-target-registry-required") {
+        const { result } = await registry.read(signal);
         read = await discovery.readStoreTargetResult({
           ...targetRequest,
           registeredDatabases:
-            registry.result.status === "available"
-              ? registry.result.entries
-              : { status: "unavailable" },
+            result.status === "available" ? result.entries : { status: "unavailable" },
         });
-        if (!read.ok) {
-          return await failedRead(read.error);
-        }
-        resolved = read.value;
-        if (resolved.kind === "session-target-registry-required") {
-          throw new Error("Session store target requested registry rows twice");
-        }
       }
-      const target = resolved;
-      selectedTarget = target;
-      const assertSourceCurrent = () => {
-        assertCallerCurrent?.();
-        discovery.assertCurrent();
-        assertSessionStoreReadCandidate(target.sourcePath, candidates);
-      };
-      const assertCurrent = () => {
-        assertSourceCurrent();
-        registryRead.assertCurrent();
-      };
-      let registrationChanged = false;
-      const verifyCurrentTarget = async (assertRetainedCurrent: () => void) => {
-        assertRetainedCurrent();
-        const currentRead = prepareSessionStoreRegistryRead(request);
-        const currentRegistry = await currentRead.read();
-        assertRetainedCurrent();
-        currentRegistry.assertCurrent();
-        const current = await discovery.readStoreTargetResult({
-          ...targetRequest,
-          registeredDatabases:
-            currentRegistry.result.status === "available"
-              ? currentRegistry.result.entries
-              : { status: "unavailable" },
-        });
-        if (!current.ok) {
-          throw current.error;
-        }
-        assertRetainedCurrent();
-        currentRegistry.assertCurrent();
-        if (!isDeepStrictEqual(current.value, target)) {
-          throw new Error("Session store registration changed its selected target");
-        }
-        registryRead = currentRead;
-        registry = currentRegistry;
-        registrationChanged = false;
-      };
       assertCurrent();
-      // A synchronous consumer may already publish; its operation owns the final currentness check.
-      const result = await operation(target, {
+      if (!read.ok) {
+        if (onReadError) {
+          return onReadError(read.error, assertCurrent);
+        }
+        throw read.error;
+      }
+      if (read.value.kind === "session-target-registry-required") {
+        throw new Error("Session store target requested registry rows twice");
+      }
+      const target = read.value;
+      return operation(target, {
+        readCustody: { sourcePath: target.sourcePath, candidates },
         assertCurrent,
-        onRegistryChange(change) {
-          if (registry) {
-            registry.followRegistration(change);
-            registrationChanged = true;
-          }
-        },
+        onRegistryChange: registry.assertAdmissionCurrent,
         async refreshBeforeDispatch(assertRetainedTarget) {
-          try {
-            assertCurrent();
-          } catch (error) {
-            if (!(error instanceof AgentDatabaseRegistryChangedError)) {
-              throw error;
-            }
-            // A preceding writer may register this same store while admission waits.
-            await verifyCurrentTarget(() => {
-              assertSourceCurrent();
-              assertRetainedTarget();
-            });
-          }
+          assertRetainedTarget();
+          assertCurrent();
         },
         async revalidateTarget() {
+          await prepareSessionStoreCandidatesInWorker(
+            {
+              validate: {
+                readCustody: [{ sourcePath: target.sourcePath, candidates }],
+                candidates: [],
+                sources: [],
+              },
+            },
+            pointRead,
+          );
           assertCurrent();
-          if (registrationChanged) {
-            await verifyCurrentTarget(assertCurrent);
-          }
         },
       });
-      if (registrationChanged) {
-        throw new Error("Session read released its owner before confirming registration");
-      }
-      return result;
     },
     lane,
+    signal,
+    pointRead,
   );
+}
+
+/** A live prepared source already owns physical qualification; cold locators use discovery. */
+export async function prepareSessionStoreReaderCandidates(
+  storePath: string,
+  options: {
+    inspection: boolean;
+    allowDirect: boolean;
+    pointRead?: true;
+    preparedSource?: SessionStoreWorkerReadScope["preparedSource"];
+  },
+) {
+  const target = resolveUnsuffixedSqliteTargetFromSessionStorePath(storePath);
+  const source = options.preparedSource;
+  if (source) {
+    source.assertCurrent();
+    return {
+      target,
+      direct: undefined,
+      candidates: [
+        {
+          path: source.path,
+          physicalPath: source.path,
+          identity: {
+            key: "file:" + source.databaseIdentity,
+            canonicalPath: source.path,
+            birthtime: source.databaseBirthtime,
+          },
+        },
+      ],
+    };
+  }
+  const candidates =
+    !options.inspection && (target.agentId || target.shared)
+      ? [
+          {
+            path: target.path,
+            physicalPath: await resolveIdentityPathViaExistingAncestor(target.path),
+          },
+        ]
+      : (
+          await prepareSessionStoreCandidatesInWorker(
+            {
+              storePath,
+              ...(!options.inspection ? { captureIdentity: false as const } : {}),
+            },
+            options.pointRead,
+          )
+        ).candidates;
+  const direct =
+    !options.inspection && options.allowDirect && target.agentId
+      ? candidates.find(
+          (candidate) => !candidate.scope && candidate.path === candidate.physicalPath,
+        )
+      : undefined;
+  return { target, direct, candidates };
 }

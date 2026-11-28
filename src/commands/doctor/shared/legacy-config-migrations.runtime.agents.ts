@@ -231,10 +231,10 @@ function readOwnToolPolicyGrantList(
 }
 
 function resolveToolProfileForMigration(
-  tools: Record<string, unknown>,
+  tools: Record<string, unknown> | null,
   inheritedProfile?: string,
 ): string | undefined {
-  return typeof tools.profile === "string" ? tools.profile : inheritedProfile;
+  return typeof tools?.profile === "string" ? tools.profile : inheritedProfile;
 }
 
 function collectProfileConfiguredSectionRepairGrants(params: {
@@ -369,10 +369,7 @@ function byProviderToolProfilesNeedConfiguredSectionMigration(
         inheritedByProvider,
         providerKey,
       );
-      const inheritedProviderProfile =
-        typeof inheritedProviderPolicy?.profile === "string"
-          ? inheritedProviderPolicy.profile
-          : undefined;
+      const inheritedProviderProfile = resolveToolProfileForMigration(inheritedProviderPolicy);
       const hasProviderProfile =
         typeof getRecord(policy)?.profile === "string" || Boolean(inheritedProviderProfile);
       if (!hasProviderProfile) {
@@ -464,10 +461,7 @@ function addByProviderProfileConfiguredSectionGrants(
       providerKey,
     );
     const ownsProviderProfile = typeof getRecord(providerPolicy)?.profile === "string";
-    const inheritedProviderProfile =
-      typeof inheritedProviderPolicy?.profile === "string"
-        ? inheritedProviderPolicy.profile
-        : undefined;
+    const inheritedProviderProfile = resolveToolProfileForMigration(inheritedProviderPolicy);
     if (!ownsProviderProfile && !inheritedProviderProfile) {
       continue;
     }
@@ -556,8 +550,7 @@ export const LEGACY_CONFIG_MIGRATIONS_RUNTIME_AGENTS: LegacyConfigMigrationSpec[
           'agents.entries.*.tools.profile filters explicit configured-section tool grants; run "openclaw doctor --fix" to rewrite the explicit grants into a valid allowlist.',
         match: (value, root) => {
           const globalTools = getRecord(root.tools);
-          const inheritedProfile =
-            typeof globalTools?.profile === "string" ? globalTools.profile : undefined;
+          const inheritedProfile = resolveToolProfileForMigration(globalTools);
           const inheritedAlsoAllow = readToolPolicyGrantList(globalTools, "alsoAllow");
           return someAgentEntry(value, (agent) => {
             const agentTools = getRecord(agent.tools);
@@ -574,8 +567,7 @@ export const LEGACY_CONFIG_MIGRATIONS_RUNTIME_AGENTS: LegacyConfigMigrationSpec[
     ],
     apply: (raw, changes) => {
       const globalTools = getRecord(raw.tools);
-      const inheritedProfile =
-        typeof globalTools?.profile === "string" ? globalTools.profile : undefined;
+      const inheritedProfile = resolveToolProfileForMigration(globalTools);
       const inheritedAlsoAllow = readToolPolicyGrantList(globalTools, "alsoAllow");
       addProfileConfiguredSectionGrants(raw.tools, "tools", changes);
       addByProviderProfileConfiguredSectionGrants(raw.tools, "tools", changes);

@@ -8,12 +8,8 @@ struct LiveActivityPresentationRequest: Equatable {
 }
 
 struct LiveActivityVoiceSampleBuffer {
+    private static let capacity = 24
     private(set) var values: [UInt8] = []
-    let capacity: Int
-
-    init(capacity: Int = 24) {
-        self.capacity = max(capacity, 1)
-    }
 
     var payload: [UInt8]? {
         self.values.isEmpty ? nil : self.values
@@ -27,8 +23,8 @@ struct LiveActivityVoiceSampleBuffer {
 
     mutating func append(_ sample: UInt8) {
         self.values.append(sample)
-        if self.values.count > self.capacity {
-            self.values.removeFirst(self.values.count - self.capacity)
+        if self.values.count > Self.capacity {
+            self.values.removeFirst(self.values.count - Self.capacity)
         }
     }
 
@@ -41,7 +37,7 @@ struct LiveActivityVoiceSampleBuffer {
 /// state. ActivityKit receives one reconciled presentation instead of competing
 /// connection, tool, and voice writes.
 struct LiveActivityPresentationArbiter {
-    private struct ToolIdentity: Hashable {
+    private struct ToolIdentity: Equatable {
         let sessionKey: String
         let id: String
     }
@@ -49,24 +45,22 @@ struct LiveActivityPresentationArbiter {
     private(set) var connection: LiveActivityPresentationRequest?
     private(set) var attention: LiveActivityPresentationRequest?
     private(set) var voice: LiveActivityPresentationRequest?
+    private(set) var hasLiveVoice = false
     private(set) var hydratedToolFallback: LiveActivityPresentationRequest?
-    private var toolsByIdentity: [ToolIdentity: LiveActivityPresentationRequest] = [:]
-    private var toolOrder: [ToolIdentity] = []
+    private var tools: [(identity: ToolIdentity, request: LiveActivityPresentationRequest)] = []
 
     var current: LiveActivityPresentationRequest? {
         if let attention {
             return attention
         }
-        if let toolIdentity = toolOrder.last,
-           let tool = toolsByIdentity[toolIdentity]
-        {
-            return tool
+        if let tool = self.tools.last {
+            return tool.request
         }
         return self.voice ?? self.connection ?? self.hydratedToolFallback
     }
 
     var activeToolCount: Int {
-        self.toolsByIdentity.count
+        self.tools.count
     }
 
     static func voiceStatus(
@@ -98,6 +92,12 @@ struct LiveActivityPresentationArbiter {
             self.hydratedToolFallback = nil
         }
         self.voice = request
+        self.hasLiveVoice = request != nil
+    }
+
+    /// A restored card keeps its deadline until this process receives live voice state.
+    mutating func adoptInitialHydratedVoice(_ request: LiveActivityPresentationRequest) {
+        self.voice = request
     }
 
     /// Called only by synchronous process-start hydration before the manager
@@ -107,29 +107,29 @@ struct LiveActivityPresentationArbiter {
     }
 
     mutating func refreshVoice(staleDate: Date) {
+        guard self.hasLiveVoice else { return }
         self.voice?.staleDate = staleDate
     }
 
     mutating func startTool(id: String, request: LiveActivityPresentationRequest) {
-        guard !id.isEmpty else { return }
         self.hydratedToolFallback = nil
         let identity = ToolIdentity(sessionKey: request.sessionKey, id: id)
-        if self.toolsByIdentity[identity] == nil {
-            self.toolOrder.append(identity)
+        if let index = self.tools.firstIndex(where: { $0.identity == identity }) {
+            self.tools[index].request = request
+        } else {
+            self.tools.append((identity, request))
         }
-        self.toolsByIdentity[identity] = request
     }
 
     mutating func endTool(id: String, sessionKey: String) {
         self.hydratedToolFallback = nil
         let identity = ToolIdentity(sessionKey: sessionKey, id: id)
-        self.toolsByIdentity[identity] = nil
-        self.toolOrder.removeAll { $0 == identity }
+        self.tools.removeAll { $0.identity == identity }
     }
 
     mutating func refreshTools(staleDate: Date) {
-        for identity in self.toolsByIdentity.keys {
-            self.toolsByIdentity[identity]?.staleDate = staleDate
+        for index in self.tools.indices {
+            self.tools[index].request.staleDate = staleDate
         }
     }
 
@@ -142,9 +142,8 @@ struct LiveActivityPresentationArbiter {
     mutating func clearAll() {
         self.connection = nil
         self.attention = nil
-        self.voice = nil
+        self.setVoice(nil)
         self.hydratedToolFallback = nil
-        self.toolsByIdentity.removeAll(keepingCapacity: true)
-        self.toolOrder.removeAll(keepingCapacity: true)
+        self.tools.removeAll(keepingCapacity: true)
     }
 }

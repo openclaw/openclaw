@@ -1,11 +1,22 @@
 import { randomUUID } from "node:crypto";
 import { isRecord } from "@openclaw/normalization-core/record-coerce";
+import {
+  isPendingBackgroundResultMessage,
+  projectPlacedBackgroundResultMessage,
+  readBackgroundResultPlacement,
+} from "../../../packages/agent-core/src/harness/session/background-result-placement.js";
 import { iterateSessionContextEntries } from "../../../packages/agent-core/src/harness/session/session.js";
+import {
+  extractToolCallsFromAssistant,
+  extractToolResultId,
+} from "../../../packages/agent-core/src/harness/session/tool-result-pairing.js";
 import { stripCompactionReplayCheckpoint } from "../../../packages/ai/src/transports/provider-compaction-checkpoint.js";
 import { derivePromptTokens, normalizeUsage } from "../../agents/usage.js";
 import { projectModelContextMessages } from "../../shared/model-context-message.js";
+import { OPENCLAW_TRANSCRIPT_ARTIFACT_PROVIDER } from "../../shared/transcript-only-openclaw-assistant.js";
 import type {
   SessionParentForkDecision,
+  ForkSessionFromParentTranscriptParams,
   TranscriptEvent,
 } from "./session-accessor.sqlite-contract.js";
 import { findSessionTranscriptHeader, isIndexedSessionEntry } from "./session-entry-codec.js";
@@ -66,6 +77,7 @@ export function planParentForkDecision(
 
 export function estimateParentForkPromptTokens(
   source: ParentForkSourceTranscript | null,
+  readEvent: (event: TranscriptEvent) => TranscriptEvent = (event) => event,
 ): number | undefined {
   if (!source) {
     return undefined;
@@ -73,7 +85,10 @@ export function estimateParentForkPromptTokens(
   let byteEstimate = 0;
   let latestUsageEstimate: number | undefined;
   let trailingBytes = 0;
-  for (const { event, context } of selectParentForkTokenEstimateEvents(source.branchEntries)) {
+  for (const { event, context, placed } of selectParentForkTokenEstimateEvents(
+    source.branchEntries,
+    readEvent,
+  )) {
     if (
       context !== "reset-retained" &&
       isRecord(event) &&
@@ -96,7 +111,7 @@ export function estimateParentForkPromptTokens(
     const serializedBytes = Buffer.byteLength(JSON.stringify(contextEvent)) + 1;
     byteEstimate += serializedBytes;
     // Retained messages carry usage from before the latest compaction or reset.
-    if (context !== "current" || !isRecord(event)) {
+    if (placed || context !== "current" || !isRecord(event)) {
       if (latestUsageEstimate !== undefined) {
         trailingBytes += serializedBytes;
       }
@@ -152,17 +167,45 @@ export function estimateParentForkPromptTokens(
   return normalizePositiveTokenCount(Math.ceil(byteEstimate / 4));
 }
 
-function* selectParentForkTokenEstimateEvents(branch: readonly TranscriptEvent[]): Generator<{
+function* selectParentForkTokenEstimateEvents(
+  branch: readonly TranscriptEvent[],
+  readEvent: (event: TranscriptEvent) => TranscriptEvent,
+): Generator<{
   event: TranscriptEvent;
   context: "current" | "retained" | "reset-retained" | "opaque";
+  placed?: boolean;
 }> {
+  if (branch.some((entry) => readBackgroundResultPlacement(entry))) {
+    for (const { entry, placement, context } of iterateSessionContextEntries(
+      branch.filter(isIndexedSessionEntry),
+    )) {
+      // Hydrate before projecting: placement carries ancestry, not the result body.
+      const hydrated = readEvent(entry);
+      const hydratedPlacement = placement ? readEvent(placement) : undefined;
+      yield {
+        event:
+          isRecord(hydratedPlacement) &&
+          isIndexedSessionEntry(hydrated) &&
+          hydrated.type === "message"
+            ? {
+                ...hydratedPlacement,
+                type: "message",
+                message: projectPlacedBackgroundResultMessage(hydrated.message),
+              }
+            : hydrated,
+        context,
+        placed: placement !== undefined,
+      };
+    }
+    return;
+  }
   if (
     !branch.some(
       (event) => isRecord(event) && (event.type === "compaction" || event.type === "reset"),
     )
   ) {
     for (const event of branch) {
-      yield { event, context: "current" };
+      yield { event: readEvent(event), context: "current" };
     }
     return;
   }
@@ -171,7 +214,7 @@ function* selectParentForkTokenEstimateEvents(branch: readonly TranscriptEvent[]
   const boundary = selected[0]?.entry;
   if (boundary?.type !== "compaction" && boundary?.type !== "reset") {
     for (const event of branch) {
-      yield { event, context: "current" };
+      yield { event: readEvent(event), context: "current" };
     }
     return;
   }
@@ -182,12 +225,12 @@ function* selectParentForkTokenEstimateEvents(branch: readonly TranscriptEvent[]
     const context =
       isRecord(event) && typeof event.id === "string" ? contexts.get(event.id) : undefined;
     if (context) {
-      yield { event, context };
+      yield { event: readEvent(event), context };
     } else if (
       index > boundaryIndex &&
       (!isRecord(event) || typeof event.id !== "string" || !indexedIds.has(event.id))
     ) {
-      yield { event, context: "opaque" };
+      yield { event: readEvent(event), context: "opaque" };
     }
   }
 }
@@ -242,10 +285,14 @@ export function resolveParentForkSourceTranscript(
     }),
     tree.nodes,
   );
-  const branchEntries =
+  let branchEntries =
     forkFrom === "last-completed"
-      ? visibleBranchEntries.slice(0, findLastCompletedAssistantIndex(visibleBranchEntries) + 1)
+      ? visibleBranchEntries.slice(0, findLastCompletedForkIndex(visibleBranchEntries) + 1)
       : visibleBranchEntries;
+  if (forkFrom === "last-completed" && !hasAssistantHistory(branchEntries)) {
+    // The child writer keeps no history without an assistant; size the same empty prefix.
+    branchEntries = [];
+  }
   const pathEntryIds = new Set(
     branchEntries.flatMap((entry) =>
       isRecord(entry) && typeof entry.id === "string" ? [entry.id] : [],
@@ -281,13 +328,36 @@ export function resolveParentForkSourceTranscript(
   };
 }
 
-function findLastCompletedAssistantIndex(entries: readonly TranscriptEvent[]): number {
+function findLastCompletedForkIndex(entries: readonly TranscriptEvent[]): number {
   return entries.findLastIndex((entry) => {
-    const message = isRecord(entry) && isRecord(entry.message) ? entry.message : undefined;
-    // Tool-use assistant messages are mid-turn checkpoints. Any other persisted
-    // assistant message is a stable boundary, including legacy rows without a reason.
-    return message?.role === "assistant" && message.stopReason !== "toolUse";
+    if (!isRecord(entry)) {
+      return false;
+    }
+    // A reset is stable even before the next assistant response completes.
+    if (entry.type === "reset" || readBackgroundResultPlacement(entry)) {
+      return true;
+    }
+    const message = isRecord(entry.message) ? entry.message : undefined;
+    // Commands and delivery notices can commit while a model turn is still
+    // running; they must not make its unfinished tail a completed fork prefix.
+    // Legacy model responses without a reason remain stable boundaries.
+    return (
+      message?.role === "assistant" &&
+      message.provider !== OPENCLAW_TRANSCRIPT_ARTIFACT_PROVIDER &&
+      !isPendingBackgroundResultMessage(message) &&
+      message.stopReason !== "toolUse"
+    );
   });
+}
+
+function hasAssistantHistory(entries: readonly TranscriptEvent[]): boolean {
+  return entries.some(
+    (entry) =>
+      isRecord(entry) &&
+      entry.type === "message" &&
+      isRecord(entry.message) &&
+      entry.message.role === "assistant",
+  );
 }
 
 function generateEntryId(existingIds: Set<string>): string {
@@ -309,14 +379,7 @@ export function buildForkedChildTranscriptEvents(params: {
   targetSessionId: string;
 }): TranscriptEvent[] {
   const keepHistory =
-    params.source.preserveLeafControl ||
-    params.source.branchEntries.some(
-      (entry) =>
-        isRecord(entry) &&
-        entry.type === "message" &&
-        isRecord(entry.message) &&
-        entry.message.role === "assistant",
-    );
+    params.source.preserveLeafControl || hasAssistantHistory(params.source.branchEntries);
   const header = {
     ...createSessionTranscriptHeader({
       cwd: params.source.cwd,
@@ -337,7 +400,68 @@ export function buildForkedChildTranscriptEvents(params: {
   const lastPathEntry = params.source.branchEntries.at(-1);
   const lastPathEntryId =
     isRecord(lastPathEntry) && typeof lastPathEntry.id === "string" ? lastPathEntry.id : null;
-  let parentId = lastPathEntryId;
+  const pendingResults: TranscriptEvent[] = [];
+  let forkLeafId = params.source.leafId;
+  const completed = new Set<string>();
+  const visiblePath = selectSessionTranscriptTreePathNodes(
+    scanSessionTranscriptTree(params.source.branchEntries),
+    params.source.leafId,
+  );
+  // A fork can cut through its own spawn call. Missing at this boundary is not an abort.
+  for (const { entry } of visiblePath.toReversed()) {
+    if (!isIndexedSessionEntry(entry)) {
+      continue;
+    }
+    if (entry.type === "reset" || entry.type === "compaction" || entry.type === "branch_summary") {
+      break;
+    }
+    if (entry.type !== "message") {
+      continue;
+    }
+    const message = entry.message;
+    if (message.role === "toolResult") {
+      const id = extractToolResultId(message);
+      if (id) {
+        completed.add(id);
+      }
+      continue;
+    }
+    if (
+      message.role === "assistant" &&
+      message.stopReason !== "error" &&
+      message.stopReason !== "aborted"
+    ) {
+      for (const call of extractToolCallsFromAssistant(message)) {
+        if (completed.has(call.id)) {
+          continue;
+        }
+        const id = generateEntryId(pathEntryIds);
+        const timestamp = Date.now();
+        pendingResults.push({
+          type: "message",
+          id,
+          parentId: forkLeafId,
+          timestamp: new Date(timestamp).toISOString(),
+          message: {
+            role: "toolResult",
+            toolCallId: call.id,
+            toolName: call.name ?? "unknown",
+            content: [
+              {
+                type: "text",
+                text: "The parent session's result for this tool call was not available when this conversation was forked.",
+              },
+            ],
+            isError: false,
+            timestamp,
+          },
+        });
+        forkLeafId = id;
+      }
+    }
+    break;
+  }
+  let parentId = pendingResults.length ? forkLeafId : lastPathEntryId;
   const labelEntries = params.source.labelsToWrite.map(({ targetId, label, timestamp }) => {
     const entry = {
       type: "label",
@@ -356,15 +480,39 @@ export function buildForkedChildTranscriptEvents(params: {
         id: generateEntryId(pathEntryIds),
         parentId,
         timestamp: new Date().toISOString(),
-        targetId: params.source.leafId,
+        targetId: forkLeafId,
         appendParentId: params.source.appendParentId,
         ...(params.source.appendMode ? { appendMode: params.source.appendMode } : {}),
       }
     : null;
   return [
-    header,
+    // The parent transcript keeps counting the copied branch.
+    { ...header, ...(lastPathEntryId ? { inheritedThrough: [lastPathEntryId] } : {}) },
     ...params.source.branchEntries,
+    ...pendingResults,
     ...labelEntries,
     ...(leafEntry ? [leafEntry] : []),
   ];
+}
+
+export function resolveParentForkLimitDecision(
+  params: Pick<
+    ForkSessionFromParentTranscriptParams,
+    "enforceTokenLimit" | "forkFrom" | "maxTokens" | "parentEntry"
+  >,
+  source: ParentForkSourceTranscript,
+  readEvent: (event: TranscriptEvent) => TranscriptEvent = (event) => event,
+): Extract<SessionParentForkDecision, { status: "skip" }> | undefined {
+  if (!params.enforceTokenLimit) {
+    return undefined;
+  }
+  const decision = planParentForkDecision(
+    params.parentEntry,
+    estimateParentForkPromptTokens(source, readEvent),
+    {
+      maxTokens: params.maxTokens,
+      preferTranscriptEstimate: params.forkFrom === "last-completed",
+    },
+  );
+  return decision.status === "skip" ? decision : undefined;
 }

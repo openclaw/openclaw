@@ -1,9 +1,6 @@
-/**
- * Resolves model provider API keys from explicit environment variables.
- */
 import { normalizeProviderIdForAuth } from "@openclaw/model-catalog-core/provider-id";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
-import { getShellEnvAppliedKeys } from "../infra/shell-env.js";
+import { isShellEnvAppliedKey } from "../infra/shell-env.js";
 import { resolvePluginSetupProviderCore } from "../plugins/setup-registry.js";
 import { resolveLocalProviderAuthEvidence } from "../secrets/provider-auth-evidence.js";
 import type {
@@ -45,19 +42,28 @@ export type EnvApiKeyLookupOptions = {
   skipSetupProviderFallback?: boolean;
 };
 
-function prepareEnvAuthLookupMaps(env: NodeJS.ProcessEnv, options: EnvApiKeyLookupOptions) {
+function prepareEnvAuthLookupMaps(
+  env: NodeJS.ProcessEnv,
+  options: EnvApiKeyLookupOptions & Pick<ProviderEnvVarLookupParams, "metadataSnapshot">,
+  includeSetupProviderFallback = false,
+) {
   const lookupMaps =
-    !options.aliasMap || !options.candidateMap || !options.authEvidenceMap
+    !options.aliasMap ||
+    !options.candidateMap ||
+    !options.authEvidenceMap ||
+    (includeSetupProviderFallback && !options.setupProviderFallbackRefs)
       ? resolveProviderEnvAuthLookupMaps({
           config: options.config,
           workspaceDir: options.workspaceDir,
           env,
+          ...(includeSetupProviderFallback ? { metadataSnapshot: options.metadataSnapshot } : {}),
         })
       : undefined;
   return {
     aliasMap: options.aliasMap ?? lookupMaps?.aliasMap ?? {},
     candidateMap: options.candidateMap ?? lookupMaps?.envCandidateMap ?? {},
     authEvidenceMap: options.authEvidenceMap ?? lookupMaps?.authEvidenceMap ?? {},
+    lookupMaps,
   };
 }
 
@@ -70,7 +76,6 @@ export function resolveProviderEnvAuthEvidence(
   const providerId = normalizeProviderIdForAuth(provider);
   const { aliasMap, candidateMap, authEvidenceMap } = prepareEnvAuthLookupMaps(env, options);
   const normalized = aliasMap[providerId] ?? providerId;
-  const applied = new Set(getShellEnvAppliedKeys());
 
   for (const envVar of candidateMap[normalized] ?? []) {
     if (!normalizeOptionalSecretInput(env[envVar])) {
@@ -84,7 +89,7 @@ export function resolveProviderEnvAuthEvidence(
           : "api-key";
     return {
       mode,
-      source: applied.has(envVar) ? `shell env: ${envVar}` : `env: ${envVar}`,
+      source: isShellEnvAppliedKey(envVar) ? `shell env: ${envVar}` : `env: ${envVar}`,
     };
   }
 
@@ -107,21 +112,11 @@ export function resolveProviderDirectAuthPlanningEvidence(
   env: NodeJS.ProcessEnv = process.env,
   options: EnvApiKeyLookupOptions & Pick<ProviderEnvVarLookupParams, "metadataSnapshot"> = {},
 ): ProviderDirectAuthPlanningEvidence | null {
-  const lookupMaps =
-    !options.aliasMap ||
-    !options.candidateMap ||
-    !options.authEvidenceMap ||
-    !options.setupProviderFallbackRefs
-      ? resolveProviderEnvAuthLookupMaps({
-          config: options.config,
-          workspaceDir: options.workspaceDir,
-          env,
-          metadataSnapshot: options.metadataSnapshot,
-        })
-      : undefined;
-  const aliasMap = options.aliasMap ?? lookupMaps?.aliasMap ?? {};
-  const candidateMap = options.candidateMap ?? lookupMaps?.envCandidateMap ?? {};
-  const authEvidenceMap = options.authEvidenceMap ?? lookupMaps?.authEvidenceMap ?? {};
+  const { aliasMap, candidateMap, authEvidenceMap, lookupMaps } = prepareEnvAuthLookupMaps(
+    env,
+    options,
+    true,
+  );
   const concrete = resolveProviderEnvAuthEvidence(provider, env, {
     aliasMap,
     candidateMap,
@@ -140,7 +135,6 @@ export function resolveProviderDirectAuthPlanningEvidence(
     : null;
 }
 
-/** Resolve an API key or auth-evidence marker for a provider from environment state. */
 export function resolveEnvApiKey(
   provider: string,
   env: NodeJS.ProcessEnv = process.env,
@@ -149,13 +143,15 @@ export function resolveEnvApiKey(
   const normalizedProvider = normalizeProviderIdForAuth(provider);
   const { aliasMap, candidateMap, authEvidenceMap } = prepareEnvAuthLookupMaps(env, options);
   const normalized = aliasMap[normalizedProvider] ?? normalizedProvider;
-  const applied = new Set(getShellEnvAppliedKeys());
   const candidates = Object.hasOwn(candidateMap, normalized) ? candidateMap[normalized] : undefined;
-  if (Array.isArray(candidates)) {
+  if (candidates !== undefined) {
     for (const envVar of candidates) {
       const apiKey = normalizeOptionalSecretInput(env[envVar]);
       if (apiKey) {
-        return { apiKey, source: applied.has(envVar) ? `shell env: ${envVar}` : `env: ${envVar}` };
+        return {
+          apiKey,
+          source: isShellEnvAppliedKey(envVar) ? `shell env: ${envVar}` : `env: ${envVar}`,
+        };
       }
     }
   }
@@ -168,7 +164,7 @@ export function resolveEnvApiKey(
     return { apiKey: authEvidence.credentialMarker, source: authEvidence.source };
   }
 
-  if (Array.isArray(candidates) || options.skipSetupProviderFallback === true) {
+  if (candidates !== undefined || options.skipSetupProviderFallback === true) {
     return null;
   }
 

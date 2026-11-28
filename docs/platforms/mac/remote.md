@@ -122,7 +122,7 @@ the primary connection.
 
 ## Remote transports
 
-- **SSH tunnel**: uses `ssh -N -L ...` to forward the Gateway port to localhost. The Gateway sees the node's IP as `127.0.0.1` because the tunnel is loopback.
+- **SSH tunnel**: uses `ssh -N -L ...` to forward the Gateway port to localhost. The Gateway sees the node's IP as `127.0.0.1` because the tunnel is loopback. The app also forwards the remote widget sandbox port (remote Gateway port plus one) to `127.0.0.1` on the same port on this Mac, in a second SSH connection, so Dashboard widgets and MCP Apps load without a manual forward. That forward never affects the Gateway connection. If the port is in use on this Mac, or belongs to a Gateway this Mac hosts, the app skips the forward and logs why. It checks the port again whenever it looks up or reuses the Gateway connection, and waits at least 30 seconds after a failed forward before trying again. A remote `mcp.apps.sandboxPort` other than the default is not forwarded; set `mcp.apps.sandboxOrigin` on the remote Gateway instead.
 - **Direct (ws/wss)**: connects straight to the Gateway URL. The Gateway sees the real client IP.
 
 The app disables SSH connection multiplexing and post-authentication backgrounding for its own SSH processes so it can monitor and restart the exact process, even if the selected alias enables `ControlMaster` or `ForkAfterAuthentication`.
@@ -179,7 +179,7 @@ into agent shell environments.
 ## Prereqs on the remote host
 
 1. Install the packaged OpenClaw CLI with `npm install -g openclaw@latest --allow-scripts=openclaw` (omit `--allow-scripts=openclaw` on npm 11.15 and earlier).
-2. Ensure `openclaw` is on PATH for non-interactive shells (symlink into `/usr/local/bin` or `/opt/homebrew/bin` if needed).
+2. Put `openclaw` on PATH for non-interactive shells (symlink into `/usr/local/bin` or `/opt/homebrew/bin` if needed).
 3. For SSH transport: set up key-based SSH auth. Tailscale IPs are recommended for stable reachability off-LAN.
 
 ## macOS app setup
@@ -384,7 +384,7 @@ produce a missing-local-port warning.
 - Prefer loopback binds on the remote host and connect via SSH, Tailscale Serve, or a trusted Tailnet/LAN direct URL.
 - SSH tunneling requires an already-trusted host key by default. Trust the host key first (add it to the configured known-hosts file), or explicitly set `gateway.remote.sshHostKeyPolicy: "openssh"` for a managed alias whose OpenSSH trust policy you accept.
 - If you bind the Gateway to a non-loopback interface, require valid Gateway auth: token, password, or an identity-aware reverse proxy with `gateway.auth.mode: "trusted-proxy"`.
-- Direct `wss://` connections apply one certificate policy to both operator/control traffic and the Mac companion node. Set `gateway.remote.tlsFingerprint` for an explicit pin. Without one, the app records a first-use pin only after normal macOS trust succeeds. Learned pins renew automatically when the replacement certificate passes macOS trust and hostname validation for the same host and port. This includes custom CA-trusted hostnames and Tailscale Serve, including opening or switching to a saved Gateway.
+- Direct `wss://` connections apply one certificate policy to both operator/control traffic and the Mac companion node. Set `gateway.remote.tlsFingerprint` for an explicit pin. Without one, the app records a first-use pin only after normal macOS trust succeeds. Learned pins renew automatically when the replacement certificate passes macOS trust and hostname validation for the same host and port. This includes custom CA-trusted hostnames and Tailscale Serve, opening or switching to a saved Gateway, and automatic reconnects after a Gateway restart or network loss. A declined renewal is logged at notice level with the failed check under subsystem `ai.openclaw`, category `gateway.tls-repair`.
 - Existing learned Keychain pins (including migrated older entries) use this renewal policy without an opt-in or manual cleanup. macOS trust includes administrator-installed roots; configure `gateway.remote.tlsFingerprint` when you deliberately require a narrower, fixed certificate identity. Configured pins never renew automatically. An untrusted, expired, or wrong-host replacement is rejected, and a self-signed endpoint still needs explicit trust or a configured pin.
 - See [Security](/gateway/security) and [Tailscale](/gateway/tailscale).
 

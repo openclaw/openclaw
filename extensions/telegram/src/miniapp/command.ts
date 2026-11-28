@@ -11,7 +11,7 @@ export function registerTelegramMiniAppCommand(
 ): void {
   api.registerCommand({
     name: "controlui",
-    description: "Open the OpenClaw Control UI",
+    description: "Open OpenClaw",
     channels: ["telegram"],
     requireAuth: true,
     exposeSenderIsOwner: true,
@@ -19,15 +19,18 @@ export function registerTelegramMiniAppCommand(
       if (!isTelegramDirectCommand(ctx)) {
         return { text: "open this in a DM with the bot" };
       }
-      const cfg = (api.runtime.config?.current?.() ?? api.config) as OpenClawConfig;
+      const cfg = api.runtime.config.current() as OpenClawConfig;
       const accountId = normalizeAccountId(ctx.accountId ?? DEFAULT_ACCOUNT_ID);
-      const userId = resolveTelegramDirectUserId(ctx);
+      const senderId = ctx.senderId?.trim() ?? "";
+      const userId = /^\d+$/.test(senderId)
+        ? senderId
+        : (/^telegram:(\d+)$/.exec(ctx.from?.trim() ?? "")?.[1] ?? "");
       if (!(await isTelegramMiniAppOwner({ cfg, accountId, userId }))) {
         return {
           text:
             "Restricted to the bot owner. Ask your OpenClaw administrator to add your numeric " +
             `Telegram user ID${userId ? ` (${userId})` : ""} to this bot account's allowFrom or ` +
-            "commands.ownerAllowFrom, then retry /controlui. Wildcards and usernames do not grant Control UI access.",
+            "commands.ownerAllowFrom, then retry /controlui. Wildcards and usernames do not grant access to OpenClaw.",
         };
       }
       let pageUrl: URL;
@@ -41,12 +44,12 @@ export function registerTelegramMiniAppCommand(
         launchTicket: launchTickets.issue({ accountId, userId }),
       }).toString();
       return {
-        text: "Open OpenClaw Control UI.",
+        text: "Open OpenClaw.",
         presentation: {
           blocks: [
             {
               type: "buttons",
-              buttons: [{ label: "Open Control UI", webApp: { url: pageUrl.toString() } }],
+              buttons: [{ label: "Open OpenClaw", webApp: { url: pageUrl.toString() } }],
             },
           ],
         },
@@ -63,12 +66,4 @@ function isTelegramDirectCommand(ctx: PluginCommandContext): boolean {
     return false;
   }
   return /^telegram:\d+$/.test(from) || sessionKey.includes(":telegram:direct:");
-}
-
-function resolveTelegramDirectUserId(ctx: PluginCommandContext): string {
-  const senderId = ctx.senderId?.trim() ?? "";
-  if (/^\d+$/.test(senderId)) {
-    return senderId;
-  }
-  return /^telegram:(\d+)$/.exec(ctx.from?.trim() ?? "")?.[1] ?? "";
 }

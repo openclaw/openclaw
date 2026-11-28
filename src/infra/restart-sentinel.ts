@@ -1,11 +1,8 @@
 import { sliceUtf16Safe } from "@openclaw/normalization-core/utf16-slice";
 import { formatCliCommand } from "../cli/command-format.js";
 import { createSubsystemLogger } from "../logging/subsystem.js";
-import {
-  executeExistingOpenClawStateRead,
-  withExistingOpenClawStateDatabaseReadOnly,
-} from "../state/openclaw-state-db-readonly.js";
-import { runOpenClawStateWriteTransaction } from "../state/openclaw-state-db.js";
+import { executeExistingOpenClawStateRead } from "../state/openclaw-state-db-readonly.js";
+import type { OpenClawStateReadCommand } from "../state/openclaw-state-read.types.js";
 import { captureOpenClawStateWorkerContext } from "../state/openclaw-state-worker-context.js";
 import type { OpenClawStateWorkerContext } from "../state/openclaw-state-worker-context.types.js";
 import {
@@ -15,35 +12,19 @@ import {
 import { resolveRuntimeServiceCommit, resolveRuntimeServiceVersion } from "../version.js";
 import { formatErrorMessage } from "./errors.js";
 import { resolveOpenClawPackageRoot } from "./openclaw-root.js";
+import type { RestartSentinelPayload } from "./restart-sentinel-codec.js";
 import type {
+  ManagedHandoffSentinelIdentity,
+  ManagedHandoffSentinelOutcome,
+  ManagedHandoffSentinelOutcomeResult,
   RestartSentinel,
-  RestartSentinelPayload,
   RestartSentinelRowState,
 } from "./restart-sentinel-store.js";
 import type { RestartSentinelWorkerOperations } from "./restart-sentinel.worker-contract.js";
 import { createSqliteWorkerWriteAdmission } from "./sqlite-worker-store.js";
-import {
-  beginStaleUpdateFailureReportReceiptCleanupRowSync,
-  beginUpdateFailureReportReceiptCleanupRowSync,
-  claimUpdateFailureReportArtifactSweepRowSync,
-  completeUpdateFailureReportReceiptCleanupRowSync,
-  finalizeUpdateFailureReportReceiptRowSync,
-  hasUpdateFailureReportArtifactSweepLeaseRowSync,
-  markUpdateFailureReportReceiptPreparedRowSync,
-  markUpdateFailureReportReceiptPendingRowSync,
-  readUpdateFailureReportReceiptRowSync,
-  releaseUpdateFailureReportArtifactSweepRowSync,
-  refreshUpdateFailureReportReceiptPreparationRowSync,
-  reserveUpdateFailureReportReceiptRowSync,
-  type UpdateFailureReportReceipt,
-} from "./update-failure-report-receipt-store.js";
-import { resolveUpdateInstallRoot } from "./update-install-root.js";
+import { resolveUpdateInstallRoot, updateInstallRootsMatch } from "./update-install-root.js";
 
-export type {
-  RestartSentinelContinuation,
-  RestartSentinelPayload,
-} from "./restart-sentinel-store.js";
-export type { UpdateFailureReportReceipt } from "./update-failure-report-receipt-store.js";
+export type { RestartSentinelPayload } from "./restart-sentinel-codec.js";
 
 export type VerifiedGitUpdateReceipt = {
   root: string;
@@ -67,24 +48,67 @@ async function runRestartSentinelOperation<Key extends keyof RestartSentinelWork
   command: { type: Key; input: RestartSentinelWorkerOperations[Key]["input"] },
   context: OpenClawStateWorkerContext,
   assertProducerCurrent?: () => void,
+  existingOnly = false,
 ): Promise<RestartSentinelWorkerOperations[Key]["output"]> {
   const captured = structuredClone(command);
   const assertCurrent = () => {
     context.admission.assertCurrent();
     assertProducerCurrent?.();
   };
-  const result = await runOpenClawStateWorkerOperation(
-    context,
-    (scope) => scope.execute(captured),
-    {
-      assertCurrent,
-      createAdmission: createSqliteWorkerWriteAdmission(assertCurrent, [
-        context.admission.databasePath,
-      ]),
-    },
+  try {
+    const result = await runOpenClawStateWorkerOperation(
+      context,
+      async (scope) => ({ value: await scope.execute(captured) }),
+      {
+        existingOnly,
+        assertCurrent,
+        createAdmission: createSqliteWorkerWriteAdmission(assertCurrent, [
+          context.admission.databasePath,
+        ]),
+      },
+    );
+    context.admission.assertCurrent();
+    if (!result) {
+      throw new Error("Restart sentinel database is unavailable");
+    }
+    return result.value;
+  } catch (error) {
+    context.admission.assertCurrent();
+    throw error;
+  }
+}
+
+export async function inspectManagedHandoffSentinel(
+  input: ManagedHandoffSentinelIdentity,
+  env: NodeJS.ProcessEnv = process.env,
+  assertCurrent?: () => void,
+): Promise<{ sentinel: RestartSentinel | null; revision: number | null }> {
+  const context = captureOpenClawStateWorkerContext({ env });
+  assertCurrent?.();
+  const reply = await executeExistingOpenClawStateRead(
+    { env: context.environment, path: context.admission.databasePath },
+    { type: "restartSentinel.managedHandoffInspect", input: { ...input } },
+    { context, current: true },
   );
   context.admission.assertCurrent();
-  return result;
+  assertCurrent?.();
+  if (!reply) {
+    throw new Error("Managed handoff sentinel inspection is unavailable");
+  }
+  return reply.snapshot;
+}
+
+export function recordManagedHandoffSentinelOutcome(
+  input: ManagedHandoffSentinelOutcome,
+  env: NodeJS.ProcessEnv,
+  assertCurrent: () => void,
+): Promise<ManagedHandoffSentinelOutcomeResult> {
+  return runRestartSentinelOperation(
+    { type: "restartSentinel.managedHandoffOutcome", input },
+    captureOpenClawStateWorkerContext({ env }),
+    assertCurrent,
+    true,
+  );
 }
 
 export async function writeRestartSentinel(
@@ -96,184 +120,6 @@ export async function writeRestartSentinel(
     { type: "restartSentinel.write", input: payload },
     captureOpenClawStateWorkerContext({ env }),
     assertProducerCurrent,
-  );
-}
-
-export function reserveUpdateFailureReportReceipt(
-  attemptId: string,
-  reservationId: string,
-  previewDigest: string,
-  env: NodeJS.ProcessEnv = process.env,
-): { receipt: UpdateFailureReportReceipt | null; reserved: boolean } {
-  return runOpenClawStateWriteTransaction(
-    ({ db }) =>
-      reserveUpdateFailureReportReceiptRowSync(db, attemptId, reservationId, previewDigest),
-    { env },
-    { operationLabel: "update-failure-report.reserve" },
-  );
-}
-
-export function beginUpdateFailureReportReceiptCleanup(
-  attemptId: string,
-  reservationId: string,
-  env: NodeJS.ProcessEnv = process.env,
-): boolean {
-  return runOpenClawStateWriteTransaction(
-    ({ db }) => beginUpdateFailureReportReceiptCleanupRowSync(db, attemptId, reservationId),
-    { env },
-    { operationLabel: "update-failure-report.begin-cleanup" },
-  );
-}
-
-export function beginStaleUpdateFailureReportReceiptCleanup(
-  attemptId: string,
-  reservationId: string,
-  env: NodeJS.ProcessEnv = process.env,
-): boolean {
-  return runOpenClawStateWriteTransaction(
-    ({ db }) => beginStaleUpdateFailureReportReceiptCleanupRowSync(db, attemptId, reservationId),
-    { env },
-    { operationLabel: "update-failure-report.begin-stale-cleanup" },
-  );
-}
-
-export function completeUpdateFailureReportReceiptCleanup(
-  attemptId: string,
-  reservationId: string,
-  env: NodeJS.ProcessEnv = process.env,
-): boolean {
-  return runOpenClawStateWriteTransaction(
-    ({ db }) => completeUpdateFailureReportReceiptCleanupRowSync(db, attemptId, reservationId),
-    { env },
-    { operationLabel: "update-failure-report.complete-cleanup" },
-  );
-}
-
-export function claimUpdateFailureReportArtifactSweep(
-  attemptId: string,
-  expectedReservationId: string,
-  sweepOwnerId: string,
-  sweepGeneration: string,
-  env: NodeJS.ProcessEnv = process.env,
-): boolean {
-  return runOpenClawStateWriteTransaction(
-    ({ db }) =>
-      claimUpdateFailureReportArtifactSweepRowSync(
-        db,
-        attemptId,
-        expectedReservationId,
-        sweepOwnerId,
-        sweepGeneration,
-      ),
-    { env },
-    { operationLabel: "update-failure-report.claim-artifact-sweep" },
-  );
-}
-
-export function hasUpdateFailureReportArtifactSweepLease(
-  attemptId: string,
-  expectedReservationId: string,
-  sweepOwnerId: string,
-  sweepGeneration: string,
-  env: NodeJS.ProcessEnv = process.env,
-): boolean {
-  return (
-    withExistingOpenClawStateDatabaseReadOnly(
-      ({ db }) =>
-        hasUpdateFailureReportArtifactSweepLeaseRowSync(
-          db,
-          attemptId,
-          expectedReservationId,
-          sweepOwnerId,
-          sweepGeneration,
-        ),
-      { env },
-    ) ?? false
-  );
-}
-
-export function releaseUpdateFailureReportArtifactSweep(
-  attemptId: string,
-  expectedReservationId: string,
-  sweepOwnerId: string,
-  sweepGeneration: string,
-  env: NodeJS.ProcessEnv = process.env,
-): boolean {
-  return runOpenClawStateWriteTransaction(
-    ({ db }) =>
-      releaseUpdateFailureReportArtifactSweepRowSync(
-        db,
-        attemptId,
-        expectedReservationId,
-        sweepOwnerId,
-        sweepGeneration,
-      ),
-    { env },
-    { operationLabel: "update-failure-report.release-artifact-sweep" },
-  );
-}
-
-export function readUpdateFailureReportReceipt(
-  attemptId: string,
-  env: NodeJS.ProcessEnv = process.env,
-): UpdateFailureReportReceipt | null {
-  return (
-    withExistingOpenClawStateDatabaseReadOnly(
-      ({ db }) => readUpdateFailureReportReceiptRowSync(db, attemptId),
-      { env },
-    ) ?? null
-  );
-}
-
-export function refreshUpdateFailureReportReceiptPreparation(
-  attemptId: string,
-  reservationId: string,
-  env: NodeJS.ProcessEnv = process.env,
-): boolean {
-  return runOpenClawStateWriteTransaction(
-    ({ db }) => refreshUpdateFailureReportReceiptPreparationRowSync(db, attemptId, reservationId),
-    { env },
-    { operationLabel: "update-failure-report.refresh-preparation" },
-  );
-}
-
-export function finalizeUpdateFailureReportReceipt(
-  attemptId: string,
-  receipt: UpdateFailureReportReceipt,
-  env: NodeJS.ProcessEnv = process.env,
-): boolean {
-  return runOpenClawStateWriteTransaction(
-    ({ db }) => finalizeUpdateFailureReportReceiptRowSync(db, attemptId, receipt),
-    { env },
-    { operationLabel: "update-failure-report.finalize" },
-  );
-}
-
-export function markUpdateFailureReportReceiptPending(
-  attemptId: string,
-  reservationId: string,
-  previewDigest: string,
-  env: NodeJS.ProcessEnv = process.env,
-): boolean {
-  return runOpenClawStateWriteTransaction(
-    ({ db }) =>
-      markUpdateFailureReportReceiptPendingRowSync(db, attemptId, reservationId, previewDigest),
-    { env },
-    { operationLabel: "update-failure-report.mark-pending" },
-  );
-}
-
-export function markUpdateFailureReportReceiptPrepared(
-  attemptId: string,
-  reservationId: string,
-  previewDigest: string,
-  env: NodeJS.ProcessEnv = process.env,
-): boolean {
-  return runOpenClawStateWriteTransaction(
-    ({ db }) =>
-      markUpdateFailureReportReceiptPreparedRowSync(db, attemptId, reservationId, previewDigest),
-    { env },
-    { operationLabel: "update-failure-report.mark-prepared" },
   );
 }
 
@@ -310,10 +156,10 @@ export async function readRestartSentinelSnapshot(env: NodeJS.ProcessEnv = proce
   revision: number | null;
 }> {
   const reply = await readSentinelState(
-    "restartSentinel.snapshot",
+    { type: "restartSentinel.snapshot", input: undefined },
     captureOpenClawStateWorkerContext({ env }),
   );
-  if (!reply?.ok || reply.type !== "restartSentinel.snapshot") {
+  if (!reply) {
     throw new Error("Restart sentinel snapshot unavailable");
   }
   return reply.snapshot;
@@ -326,16 +172,7 @@ export async function finalizeUpdateRestartSentinelRunningVersion(
   runningRoot?: string | null,
 ): Promise<RestartSentinel | null> {
   const context = captureOpenClawStateWorkerContext({ env });
-  let snapshot: RestartSentinel | null;
-  try {
-    const reply = await readSentinelState("restartSentinel.current", context);
-    snapshot = currentSentinel(
-      reply?.ok && reply.type === "restartSentinel.current" ? reply.state : undefined,
-    );
-  } catch (err) {
-    sentinelLog.warn(`Failed to read restart sentinel: ${formatErrorMessage(err)}`);
-    return null;
-  }
+  const snapshot = await readCurrentRestartSentinel(() => context, false);
   if (!snapshot || snapshot.payload.kind !== "update") {
     return null;
   }
@@ -348,15 +185,34 @@ export async function finalizeUpdateRestartSentinelRunningVersion(
         argv1: process.argv[1],
       })))
     : null;
-  const actualRoot = discoveredRoot ? resolveUpdateInstallRoot(discoveredRoot) : null;
+  // A restarted Gateway finds its root by real path; on a release link that is
+  // the release the link selects, which is the same installation.
+  const actualRoot = discoveredRoot
+    ? expectedRoot && updateInstallRootsMatch(expectedRoot, discoveredRoot)
+      ? expectedRoot
+      : resolveUpdateInstallRoot(discoveredRoot)
+    : null;
 
-  return runRestartSentinelOperation(
+  const finalized = await runRestartSentinelOperation(
     {
       type: "restartSentinel.finalize",
       input: { expectedRevision: snapshot.revision, version, commit, expectedRoot, actualRoot },
     },
     context,
   );
+  if (finalized.installReceipt) {
+    try {
+      // History is optional; a fresh admitted write cannot undo the committed
+      // outcome, and its revision fence preserves any newer update.
+      await runRestartSentinelOperation(
+        { type: "restartSentinel.recordInstall", input: finalized.installReceipt },
+        context,
+      );
+    } catch (error) {
+      sentinelLog.warn(`Failed to record update install history: ${formatErrorMessage(error)}`);
+    }
+  }
+  return finalized.sentinel;
 }
 
 export async function markUpdateRestartSentinelFailure(
@@ -380,23 +236,26 @@ export async function clearRestartSentinelIfRevision(
   );
 }
 
-async function readSentinelState(
-  type: "restartSentinel.current" | "restartSentinel.snapshot" | "restartSentinel.installReceipt",
-  context: OpenClawStateWorkerContext,
-  existingOnly = false,
-) {
+async function readSentinelState<
+  Command extends Extract<
+    OpenClawStateReadCommand,
+    {
+      type:
+        | "restartSentinel.current"
+        | "restartSentinel.snapshot"
+        | "restartSentinel.installReceipt";
+    }
+  >,
+>(command: Command, context: OpenClawStateWorkerContext, existingOnly = false) {
   if (!existingOnly) {
     await executeOpenClawStateWorker(context, { type: "restartSentinel.admit", input: undefined });
   }
   const reply = await executeExistingOpenClawStateRead(
     { env: context.environment, path: context.admission.databasePath },
-    { type, input: undefined },
+    command,
     { context },
   );
   context.admission.assertCurrent();
-  if (reply && !reply.ok) {
-    throw new Error(reply.message);
-  }
   return reply;
 }
 
@@ -408,20 +267,19 @@ function currentSentinel(current: RestartSentinelRowState | undefined): RestartS
 }
 
 async function readCurrentRestartSentinel(
-  env: NodeJS.ProcessEnv,
+  resolveContext: () => OpenClawStateWorkerContext,
   existingOnly: boolean,
+  action: "read" | "check" = "read",
 ): Promise<RestartSentinel | null> {
   try {
     const reply = await readSentinelState(
-      "restartSentinel.current",
-      captureOpenClawStateWorkerContext({ env }),
+      { type: "restartSentinel.current", input: undefined },
+      resolveContext(),
       existingOnly,
     );
-    return currentSentinel(
-      reply?.ok && reply.type === "restartSentinel.current" ? reply.state : undefined,
-    );
+    return currentSentinel(reply?.state);
   } catch (err) {
-    sentinelLog.warn(`Failed to read restart sentinel: ${formatErrorMessage(err)}`);
+    sentinelLog.warn(`Failed to ${action} restart sentinel: ${formatErrorMessage(err)}`);
     return null;
   }
 }
@@ -429,14 +287,14 @@ async function readCurrentRestartSentinel(
 export function readRestartSentinel(
   env: NodeJS.ProcessEnv = process.env,
 ): Promise<RestartSentinel | null> {
-  return readCurrentRestartSentinel(env, false);
+  return readCurrentRestartSentinel(() => captureOpenClawStateWorkerContext({ env }), false);
 }
 
 /** Read the restart sentinel without creating or mutating shared state. */
 export function readRestartSentinelReadOnly(
   env: NodeJS.ProcessEnv = process.env,
 ): Promise<RestartSentinel | null> {
-  return readCurrentRestartSentinel(env, true);
+  return readCurrentRestartSentinel(() => captureOpenClawStateWorkerContext({ env }), true);
 }
 
 async function readUpdateInstallReceiptPayload(
@@ -444,21 +302,20 @@ async function readUpdateInstallReceiptPayload(
 ): Promise<RestartSentinelPayload | null> {
   try {
     const reply = await readSentinelState(
-      "restartSentinel.installReceipt",
+      { type: "restartSentinel.installReceipt", input: undefined },
       captureOpenClawStateWorkerContext({ env }),
     );
-    return reply?.ok && reply.type === "restartSentinel.installReceipt"
-      ? (reply.sentinel?.payload ?? null)
-      : null;
+    return reply?.sentinel?.payload ?? null;
   } catch (err) {
     sentinelLog.warn(`Failed to read update install receipt: ${formatErrorMessage(err)}`);
     return null;
   }
 }
 
-function normalizeVerifiedGitUpdateReceipt(
-  payload: RestartSentinelPayload | null,
-): VerifiedGitUpdateReceipt | null {
+export async function readVerifiedGitUpdateReceipt(
+  env: NodeJS.ProcessEnv = process.env,
+): Promise<VerifiedGitUpdateReceipt | null> {
+  const payload = await readUpdateInstallReceiptPayload(env);
   // Receipt rows are only written after the running install verifies root and revision.
   // An error status records a post-install failure, not an untrusted install.
   if (payload?.kind !== "update" || payload.stats?.mode !== "git" || !payload.stats.after) {
@@ -481,27 +338,14 @@ function normalizeVerifiedGitUpdateReceipt(
   };
 }
 
-export async function readVerifiedGitUpdateReceipt(
-  env: NodeJS.ProcessEnv = process.env,
-): Promise<VerifiedGitUpdateReceipt | null> {
-  return normalizeVerifiedGitUpdateReceipt(await readUpdateInstallReceiptPayload(env));
-}
-
 export async function hasRestartSentinel(env: NodeJS.ProcessEnv = process.env): Promise<boolean> {
-  try {
-    const reply = await readSentinelState(
-      "restartSentinel.current",
-      captureOpenClawStateWorkerContext({ env }),
-    );
-    return (
-      currentSentinel(
-        reply?.ok && reply.type === "restartSentinel.current" ? reply.state : undefined,
-      ) !== null
-    );
-  } catch (err) {
-    sentinelLog.warn(`Failed to check restart sentinel: ${formatErrorMessage(err)}`);
-    return false;
-  }
+  return (
+    (await readCurrentRestartSentinel(
+      () => captureOpenClawStateWorkerContext({ env }),
+      false,
+      "check",
+    )) !== null
+  );
 }
 
 export function formatRestartSentinelMessage(payload: RestartSentinelPayload): string {
@@ -523,19 +367,15 @@ export function formatRestartSentinelMessage(payload: RestartSentinelPayload): s
   return lines.join("\n");
 }
 
-function isRestartRequiredConfigWriteSentinel(payload: RestartSentinelPayload): boolean {
-  return (
-    (payload.kind === "config-apply" || payload.kind === "config-patch") &&
-    payload.status === "ok" &&
-    payload.stats?.requiresRestart === true
-  );
-}
-
 export function summarizeRestartSentinel(payload: RestartSentinelPayload): string {
   if (payload.kind === "config-auto-recovery") {
     return "Gateway auto-recovery";
   }
-  if (isRestartRequiredConfigWriteSentinel(payload)) {
+  if (
+    (payload.kind === "config-apply" || payload.kind === "config-patch") &&
+    payload.status === "ok" &&
+    payload.stats?.requiresRestart === true
+  ) {
     const mode = payload.stats?.mode ? ` (${payload.stats.mode})` : "";
     return `Gateway restart required${mode}`.trim();
   }

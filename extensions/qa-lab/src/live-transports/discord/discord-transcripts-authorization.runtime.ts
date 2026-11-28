@@ -2,8 +2,6 @@ import { randomUUID } from "node:crypto";
 import fs from "node:fs/promises";
 import path from "node:path";
 import { requestDiscord } from "@openclaw/discord/api.js";
-import { formatErrorMessage } from "openclaw/plugin-sdk/error-runtime";
-import { sleep } from "openclaw/plugin-sdk/runtime-env";
 import { assertLiveScenarioReply as assertDiscordScenarioReply } from "../shared/live-scenario-reply.js";
 import {
   type DiscordQaScenarioImplementation,
@@ -11,8 +9,8 @@ import {
   sendChannelMessage,
   getCurrentDiscordVoiceState,
   matchesDiscordScenarioReply,
-  waitForDiscordVoiceState,
 } from "./discord-live.runtime.js";
+import { waitForDiscordVoiceState } from "./discord-live.voice.js";
 import type { DiscordQaScenarioEnvironment } from "./scenario-environment.js";
 
 export const discordQaTranscriptsVoiceAuthorizationScenario: DiscordQaScenarioImplementation = {
@@ -56,117 +54,6 @@ type TranscriptAuthorizationEvidence = {
 };
 
 const VISIBLE_DENIAL_RE = /\b(?:denied|not allowlisted|not authorized|unauthorized)\b/iu;
-
-async function waitForDiscordVoiceDisconnect(params: {
-  channelId: string;
-  guildId: string;
-  timeoutMs: number;
-  token: string;
-}) {
-  const startedAt = Date.now();
-  let lastChannelId: string | null | undefined;
-  let lastError: string | undefined;
-  while (Date.now() - startedAt < params.timeoutMs) {
-    try {
-      const state = await getCurrentDiscordVoiceState({
-        token: params.token,
-        guildId: params.guildId,
-      });
-      lastChannelId = state?.channel_id;
-      lastError = undefined;
-      if (lastChannelId !== params.channelId) {
-        return state;
-      }
-    } catch (error) {
-      lastError = formatErrorMessage(error);
-    }
-    await sleep(500);
-  }
-  throw new Error(
-    `SUT bot did not leave Discord voice channel ${params.channelId} (last channel=${lastChannelId ?? "none"}${
-      lastError ? `; last error: ${lastError}` : ""
-    })`,
-  );
-}
-
-function transcriptStartPrompt(params: {
-  channelId: string;
-  guildId: string;
-  marker: string;
-  sessionId: string;
-  sutApplicationId: string;
-}) {
-  return [
-    `<@${params.sutApplicationId}> Transcript authorization QA.`,
-    "Call the transcripts tool exactly once with these arguments:",
-    JSON.stringify({
-      action: "start",
-      providerId: "discord-voice",
-      sessionId: params.sessionId,
-      guildId: params.guildId,
-      channelId: params.channelId,
-    }),
-    `After the tool returns, begin your reply with ${params.marker}.`,
-    "If the tool failed, include its error verbatim. Do not claim success after a failure.",
-  ].join(" ");
-}
-
-function transcriptStopPrompt(params: {
-  marker: string;
-  sessionId: string;
-  sutApplicationId: string;
-}) {
-  return [
-    `<@${params.sutApplicationId}> Transcript cleanup QA.`,
-    "Call the transcripts tool exactly once with these arguments:",
-    JSON.stringify({ action: "stop", sessionId: params.sessionId }),
-    `After the tool returns, begin your reply with ${params.marker}.`,
-    "If the tool failed, include its error verbatim. Do not claim success after a failure.",
-  ].join(" ");
-}
-
-async function sendPromptAndObserve(params: {
-  createdMessages: CreatedDiscordMessage[];
-  environment: DiscordQaScenarioEnvironment;
-  marker: string;
-  prompt: string;
-  timeoutMs: number;
-}) {
-  const runtimeEnv = params.environment.runtimeEnv;
-  const sent = await sendChannelMessage(
-    runtimeEnv.driverBotToken,
-    runtimeEnv.channelId,
-    params.prompt,
-  );
-  params.createdMessages.push({ messageId: sent.id, token: runtimeEnv.driverBotToken });
-  const matched = await pollChannelMessages({
-    token: runtimeEnv.driverBotToken,
-    channelId: runtimeEnv.channelId,
-    afterSnowflake: sent.id,
-    timeoutMs: params.timeoutMs,
-    observedMessages: params.environment.observedMessages,
-    observationScenarioId: params.environment.scenario.id,
-    observationScenarioTitle: params.environment.scenario.title,
-    triggerMessageId: sent.id,
-    triggerTimestamp: sent.timestamp,
-    predicate: (message) =>
-      matchesDiscordScenarioReply({
-        channelId: runtimeEnv.channelId,
-        matchText: params.marker,
-        message,
-        sutBotId: params.environment.sutIdentity.id,
-      }),
-  });
-  params.createdMessages.push({
-    messageId: matched.message.messageId,
-    token: runtimeEnv.sutBotToken,
-  });
-  assertDiscordScenarioReply({
-    expectedTextIncludes: [params.marker],
-    message: matched.message,
-  });
-  return matched.message;
-}
 
 async function deleteScenarioMessages(params: {
   channelId: string;
@@ -216,6 +103,51 @@ export async function runDiscordTranscriptsVoiceAuthorizationScenario(
   const runtimeEnv = environment.runtimeEnv;
   const phaseTimeoutMs = Math.max(15_000, Math.floor(environment.scenario.timeoutMs / 3));
   const createdMessages: CreatedDiscordMessage[] = [];
+  const voice = {
+    token: runtimeEnv.sutBotToken,
+    guildId: runtimeEnv.guildId,
+    channelId: voiceChannel.id,
+  };
+  const sendTranscriptPrompt = async (
+    action: "start" | "stop",
+    sessionId: string,
+    marker: string,
+    timeoutMs = phaseTimeoutMs,
+  ) => {
+    const prompt = [
+      `<@${runtimeEnv.sutApplicationId}> Transcript ${action === "start" ? "authorization" : "cleanup"} QA.`,
+      "Call the transcripts tool exactly once with these arguments:",
+      JSON.stringify({
+        action,
+        ...(action === "start" ? { providerId: "discord-voice" } : {}),
+        sessionId,
+        ...(action === "start" ? { guildId: voice.guildId, channelId: voice.channelId } : {}),
+      }),
+      `After the tool returns, begin your reply with ${marker}.`,
+      "If the tool failed, include its error verbatim. Do not claim success after a failure.",
+    ].join(" ");
+    const sent = await sendChannelMessage(runtimeEnv.driverBotToken, runtimeEnv.channelId, prompt);
+    createdMessages.push({ messageId: sent.id, token: runtimeEnv.driverBotToken });
+    const matched = await pollChannelMessages({
+      token: runtimeEnv.driverBotToken,
+      channelId: runtimeEnv.channelId,
+      afterSnowflake: sent.id,
+      timeoutMs,
+      predicate: (message) =>
+        matchesDiscordScenarioReply({
+          channelId: runtimeEnv.channelId,
+          matchText: marker,
+          message,
+          sutBotId: environment.sutIdentity.id,
+        }),
+    });
+    createdMessages.push({
+      messageId: matched.message.messageId,
+      token: runtimeEnv.sutBotToken,
+    });
+    assertDiscordScenarioReply({ expectedTextIncludes: [marker], message: matched.message });
+    return matched.message;
+  };
   const evidence: TranscriptAuthorizationEvidence = {
     schemaVersion: 1,
     scenarioId: environment.scenario.id,
@@ -236,110 +168,65 @@ export async function runDiscordTranscriptsVoiceAuthorizationScenario(
   let evidencePath: string;
 
   try {
-    await waitForDiscordVoiceDisconnect({
-      token: runtimeEnv.sutBotToken,
-      guildId: runtimeEnv.guildId,
-      channelId: voiceChannel.id,
+    await waitForDiscordVoiceState({
+      expectation: "left",
+      ...voice,
       timeoutMs: 5_000,
     });
-    const deniedReply = await sendPromptAndObserve({
-      createdMessages,
-      environment,
-      marker: run.negativeMarker,
-      prompt: transcriptStartPrompt({
-        sutApplicationId: runtimeEnv.sutApplicationId,
-        guildId: runtimeEnv.guildId,
-        channelId: voiceChannel.id,
-        sessionId: run.deniedSessionId,
-        marker: run.negativeMarker,
-      }),
-      timeoutMs: phaseTimeoutMs,
-    });
+    const deniedReply = await sendTranscriptPrompt(
+      "start",
+      run.deniedSessionId,
+      run.negativeMarker,
+    );
     evidence.denied.replyObserved = true;
     evidence.denied.visibleDenial = VISIBLE_DENIAL_RE.test(deniedReply.text);
     if (!evidence.denied.visibleDenial) {
       throw new Error("Discord transcript denial was not visible in the SUT reply.");
     }
-    const deniedVoiceState = await getCurrentDiscordVoiceState({
-      token: runtimeEnv.sutBotToken,
-      guildId: runtimeEnv.guildId,
-    });
+    const deniedVoiceState = await getCurrentDiscordVoiceState(voice);
     evidence.denied.voiceStayedDisconnected = deniedVoiceState?.channel_id !== voiceChannel.id;
     if (!evidence.denied.voiceStayedDisconnected) {
       throw new Error("Denied Discord transcript capture joined the target voice channel.");
     }
 
     await configureTranscriptVoiceAccess(true);
-    await sendPromptAndObserve({
-      createdMessages,
-      environment,
-      marker: run.positiveMarker,
-      prompt: transcriptStartPrompt({
-        sutApplicationId: runtimeEnv.sutApplicationId,
-        guildId: runtimeEnv.guildId,
-        channelId: voiceChannel.id,
-        sessionId: run.allowedSessionId,
-        marker: run.positiveMarker,
-      }),
-      timeoutMs: phaseTimeoutMs,
-    });
+    await sendTranscriptPrompt("start", run.allowedSessionId, run.positiveMarker);
     evidence.allowed.replyObserved = true;
     await waitForDiscordVoiceState({
-      token: runtimeEnv.sutBotToken,
-      guildId: runtimeEnv.guildId,
-      channelId: voiceChannel.id,
+      expectation: "joined",
+      ...voice,
       sutBotId: environment.sutIdentity.id,
       timeoutMs: phaseTimeoutMs,
     });
     evidence.allowed.voiceJoined = true;
 
-    await sendPromptAndObserve({
-      createdMessages,
-      environment,
-      marker: run.stopMarker,
-      prompt: transcriptStopPrompt({
-        sutApplicationId: runtimeEnv.sutApplicationId,
-        sessionId: run.allowedSessionId,
-        marker: run.stopMarker,
-      }),
-      timeoutMs: phaseTimeoutMs,
-    });
+    await sendTranscriptPrompt("stop", run.allowedSessionId, run.stopMarker);
     evidence.cleanup.stopReplyObserved = true;
-    await waitForDiscordVoiceDisconnect({
-      token: runtimeEnv.sutBotToken,
-      guildId: runtimeEnv.guildId,
-      channelId: voiceChannel.id,
+    await waitForDiscordVoiceState({
+      expectation: "left",
+      ...voice,
       timeoutMs: phaseTimeoutMs,
     });
     evidence.cleanup.voiceDisconnected = true;
   } finally {
     if (!evidence.cleanup.voiceDisconnected) {
-      const voiceState = await getCurrentDiscordVoiceState({
-        token: runtimeEnv.sutBotToken,
-        guildId: runtimeEnv.guildId,
-      }).catch(() => undefined);
+      const voiceState = await getCurrentDiscordVoiceState(voice).catch(() => undefined);
       if (voiceState !== undefined && voiceState?.channel_id !== voiceChannel.id) {
         evidence.cleanup.voiceDisconnected = true;
       } else {
         evidence.cleanup.emergencyStopAttempted = true;
         for (const sessionId of [run.allowedSessionId, run.deniedSessionId]) {
           const cleanupMarker = `${run.stopMarker}_${sessionId === run.allowedSessionId ? "A" : "D"}`;
-          await sendPromptAndObserve({
-            createdMessages,
-            environment,
-            marker: cleanupMarker,
-            prompt: transcriptStopPrompt({
-              sutApplicationId: runtimeEnv.sutApplicationId,
-              sessionId,
-              marker: cleanupMarker,
-            }),
-            timeoutMs: Math.min(15_000, phaseTimeoutMs),
-          }).catch(() => undefined);
+          await sendTranscriptPrompt(
+            "stop",
+            sessionId,
+            cleanupMarker,
+            Math.min(15_000, phaseTimeoutMs),
+          ).catch(() => undefined);
         }
-        evidence.cleanup.voiceDisconnected = await waitForDiscordVoiceDisconnect({
-          token: runtimeEnv.sutBotToken,
-          guildId: runtimeEnv.guildId,
-          channelId: voiceChannel.id,
+        evidence.cleanup.voiceDisconnected = await waitForDiscordVoiceState({
+          expectation: "left",
+          ...voice,
           timeoutMs: Math.min(15_000, phaseTimeoutMs),
         })
           .then(() => true)

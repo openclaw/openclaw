@@ -15,6 +15,10 @@ import type {
   GitHubSessionReceiptGeneration,
   GitHubSessionReceiptIdentities,
 } from "./github-publication-read.types.js";
+import {
+  deferGitHubPublicationDeletionReceipt,
+  withGitHubPublicationDeletionReceipt,
+} from "./github-publication-receipts.js";
 import { tableExists } from "./openclaw-state-db-schema-helpers.js";
 import type { DB } from "./openclaw-state-db.generated.js";
 import {
@@ -22,6 +26,8 @@ import {
   type OpenClawStateDatabase,
 } from "./openclaw-state-db.js";
 import { captureOpenClawStateWorkerContext } from "./openclaw-state-worker-context.js";
+
+const SESSION_RECEIPT_DELETE_BATCH_SIZE = 64;
 
 /** Capture historical receipts while the session still owns its logical keys. */
 export async function preparePersonalGitHubSessionReceiptDeletion(params: {
@@ -50,7 +56,8 @@ export async function preparePersonalGitHubSessionReceiptDeletion(params: {
     { assertCurrent: params.assertCurrent, existingOnly: true },
   )) ?? { personal: [], repository: [] };
   params.assertCurrent?.();
-  return async ({ assertCurrent, sessionEntryCurrent, retainedSessionKeys } = {}) => {
+  return async (options = {}) => {
+    const { assertCurrent, sessionEntryCurrent, retainedSessionKeys } = options;
     const selectedKeys = new Set(input.sessionKeys.filter((key) => !retainedSessionKeys?.has(key)));
     if (selectedKeys.size === 0) {
       return;
@@ -82,13 +89,17 @@ export async function preparePersonalGitHubSessionReceiptDeletion(params: {
           },
         }),
       {
+        existingOnly: true,
         assertCurrent: assertAdmission,
-        createAdmission: createSqliteWorkerWriteAdmission(
-          (request) => {
-            assertAdmission();
-            assertSessionEntryCurrentAdmission(request, sessionEntryCurrent);
-          },
-          [context.admission.databasePath],
+        createAdmission: withGitHubPublicationDeletionReceipt(
+          createSqliteWorkerWriteAdmission(
+            (request) => {
+              assertAdmission();
+              assertSessionEntryCurrentAdmission(request, sessionEntryCurrent);
+            },
+            [context.admission.databasePath],
+          ),
+          context,
         ),
       },
     );
@@ -154,6 +165,7 @@ export function deletePersonalGitHubSessionReceiptsInDatabase(
         { lookup: "logical" },
       );
       const query = getNodeSqliteKysely<DB>(db);
+      const tombstones = new Map<string, { kind: "absent" }>();
       const hasLifecycles = tableExists(db, "github_publication_session_lifecycles");
       const current = readSessionReceiptDeletionIdentitiesInDatabase(database, params);
       for (const table of existing) {
@@ -211,18 +223,47 @@ export function deletePersonalGitHubSessionReceiptsInDatabase(
         }
         // Materialize before deleting sidecars: late personal receipts are selected through them.
         if (table === "github_personal_publication_requests" && hasLifecycles) {
-          for (const requestId of selected) {
-            executeSqliteQuerySync(
+          for (let start = 0; start < selected.length; start += SESSION_RECEIPT_DELETE_BATCH_SIZE) {
+            const deleted = executeSqliteQuerySync(
               db,
               query
                 .deleteFrom("github_publication_session_lifecycles")
                 .where("publication_kind", "=", "personal")
-                .where("request_id", "=", requestId),
-            );
+                .where(
+                  "request_id",
+                  "in",
+                  sqliteStringSet(selected.slice(start, start + SESSION_RECEIPT_DELETE_BATCH_SIZE)),
+                )
+                .returning("request_id"),
+            ).rows;
+            for (const row of deleted) {
+              tombstones.set(JSON.stringify(["personal-lifecycle", row.request_id]), {
+                kind: "absent",
+              });
+            }
           }
         }
-        for (const requestId of selected) {
-          executeSqliteQuerySync(db, query.deleteFrom(table).where("request_id", "=", requestId));
+        for (let start = 0; start < selected.length; start += SESSION_RECEIPT_DELETE_BATCH_SIZE) {
+          const deleted = executeSqliteQuerySync(
+            db,
+            query
+              .deleteFrom(table)
+              .where(
+                "request_id",
+                "in",
+                sqliteStringSet(selected.slice(start, start + SESSION_RECEIPT_DELETE_BATCH_SIZE)),
+              )
+              .returning("request_id"),
+          ).rows;
+          for (const row of deleted) {
+            tombstones.set(
+              JSON.stringify([
+                table === "github_personal_publication_requests" ? "personal" : "repository",
+                row.request_id,
+              ]),
+              { kind: "absent" },
+            );
+          }
         }
       }
       requestSessionEntryCurrentAdmission(
@@ -230,6 +271,7 @@ export function deletePersonalGitHubSessionReceiptsInDatabase(
         { stage: "commit", facts: undefined },
         { lookup: "logical" },
       );
+      deferGitHubPublicationDeletionReceipt(db, tombstones);
     },
     { database },
     { operationLabel: "github-personal-publication.session-delete" },

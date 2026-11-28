@@ -1,4 +1,3 @@
-// Read-only command default tests cover command defaulting for read-only channel plugins.
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import { STATE_DIR } from "../../config/paths.js";
 
@@ -13,6 +12,23 @@ vi.mock("../../plugins/plugin-metadata-snapshot.js", () => ({
 }));
 
 import { resolveReadOnlyChannelCommandDefaults } from "./read-only-command-defaults.js";
+
+const commands = { nativeCommandsAutoEnabled: true, nativeSkillsAutoEnabled: false };
+function metadata(pluginId: string) {
+  return {
+    index: {
+      plugins: [{ pluginId, origin: "global", enabled: true, enabledByDefault: true }],
+    },
+    plugins: [
+      {
+        id: pluginId,
+        origin: "global",
+        channels: ["demo"],
+        channelConfigs: { demo: { commands } },
+      },
+    ],
+  };
+}
 
 describe("resolveReadOnlyChannelCommandDefaults", () => {
   beforeEach(() => {
@@ -45,34 +61,8 @@ describe("resolveReadOnlyChannelCommandDefaults", () => {
   });
 
   it("resolves command defaults from the shared metadata snapshot", () => {
-    const env = { HOME: "/home/demo" } as NodeJS.ProcessEnv;
-    loadPluginMetadataSnapshot.mockReturnValue({
-      index: {
-        plugins: [
-          {
-            pluginId: "demo",
-            origin: "global",
-            enabled: true,
-            enabledByDefault: true,
-          },
-        ],
-      },
-      plugins: [
-        {
-          id: "demo",
-          origin: "global",
-          channels: ["demo"],
-          channelConfigs: {
-            demo: {
-              commands: {
-                nativeCommandsAutoEnabled: true,
-                nativeSkillsAutoEnabled: false,
-              },
-            },
-          },
-        },
-      ],
-    });
+    const env = { HOME: "/home/demo" };
+    loadPluginMetadataSnapshot.mockReturnValue(metadata("demo"));
 
     expect(
       resolveReadOnlyChannelCommandDefaults("demo", {
@@ -81,10 +71,7 @@ describe("resolveReadOnlyChannelCommandDefaults", () => {
         stateDir: "/state",
         workspaceDir: "/workspace",
       }),
-    ).toEqual({
-      nativeCommandsAutoEnabled: true,
-      nativeSkillsAutoEnabled: false,
-    });
+    ).toEqual(commands);
     expect(loadPluginMetadataSnapshot).toHaveBeenCalledWith({
       allowWorkspaceScopedCurrent: true,
       config: {},
@@ -95,41 +82,8 @@ describe("resolveReadOnlyChannelCommandDefaults", () => {
   });
 
   it("resolves command defaults for manifest channel aliases", () => {
-    loadPluginMetadataSnapshot.mockReturnValue({
-      index: {
-        plugins: [
-          {
-            pluginId: "vendor-demo-plugin",
-            origin: "global",
-            enabled: true,
-            enabledByDefault: true,
-          },
-        ],
-      },
-      plugins: [
-        {
-          id: "vendor-demo-plugin",
-          origin: "global",
-          channels: ["demo"],
-          channelConfigs: {
-            demo: {
-              commands: {
-                nativeCommandsAutoEnabled: true,
-                nativeSkillsAutoEnabled: false,
-              },
-            },
-          },
-        },
-      ],
-    });
+    loadPluginMetadataSnapshot.mockReturnValue(metadata("vendor-demo-plugin"));
 
-    expect(
-      resolveReadOnlyChannelCommandDefaults("demo", {
-        config: {},
-      }),
-    ).toEqual({
-      nativeCommandsAutoEnabled: true,
-      nativeSkillsAutoEnabled: false,
-    });
+    expect(resolveReadOnlyChannelCommandDefaults("demo", { config: {} })).toEqual(commands);
   });
 });

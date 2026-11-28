@@ -13,6 +13,7 @@ import { createDeferredCore } from "../../shared/deferred.js";
 import {
   NODE_DESKTOP_ATTACH_PATH,
   NODE_PORTAL_ATTACH_PATH,
+  NODE_STREAM_MAX_FRAME_BYTES,
 } from "../../shared/node-desktop-stream.js";
 import { createOneTimeTicketStore } from "../../shared/one-time-ticket-store.js";
 import { rejectWebSocketUpgrade } from "../../shared/websocket-upgrade-reject.js";
@@ -24,7 +25,6 @@ import { startWebSocketKeepalive } from "../websocket-keepalive.js";
 type WebSocket = import("ws").WebSocket;
 
 const DEFAULT_TICKET_TTL_MS = 60_000;
-const MAX_ATTACH_FRAME_BYTES = 64 * 1024;
 const streamLog = createSubsystemLogger("gateway/node-stream");
 
 type NodeDesktopStreamMetadata = {
@@ -67,7 +67,7 @@ function parseStreamMetadata(
   kind: NodeStreamKind,
 ): NodeDesktopStreamMetadata | undefined {
   const length = rawDataByteLength(data);
-  if (!isBinary || length === 0 || length > MAX_ATTACH_FRAME_BYTES) {
+  if (!isBinary || length === 0 || length > NODE_STREAM_MAX_FRAME_BYTES) {
     throw new Error(`invalid node ${kind} attach metadata`);
   }
   let value: unknown;
@@ -146,19 +146,16 @@ function readAttachedStream(
 }
 
 /** Owns one-time node stream tickets and pairs authenticated desktop or portal duplexes. */
-export function createNodeDesktopStreamBroker(deps: { ttlMs?: number; now?: () => number } = {}) {
-  const ttlMs = deps.ttlMs ?? DEFAULT_TICKET_TTL_MS;
-  const now = deps.now ?? Date.now;
+export function createNodeDesktopStreamBroker() {
   // Redemption keeps the attachment pending through authorization and metadata;
   // its ticket timer must still reject or cancel that in-flight handoff.
   const pending = new Map<string, TicketEntry>();
   const tickets = createOneTimeTicketStore<TicketEntry>({
-    ttlMs,
-    now,
+    ttlMs: DEFAULT_TICKET_TTL_MS,
     onExpire: (entry, ticket) =>
       rejectTicket(ticket, new Error(`node ${entry.kind} stream ticket expired`)),
   });
-  const wss = new NpmWebSocketServer({ noServer: true, maxPayload: MAX_ATTACH_FRAME_BYTES });
+  const wss = new NpmWebSocketServer({ noServer: true, maxPayload: NODE_STREAM_MAX_FRAME_BYTES });
 
   const remove = (ticket: string): TicketEntry | undefined => {
     const entry = pending.get(ticket);
@@ -200,13 +197,13 @@ export function createNodeDesktopStreamBroker(deps: { ttlMs?: number; now?: () =
     kind: NodeStreamKind,
     attach: (stream: Duplex, metadata: NodeDesktopStreamMetadata | undefined) => T,
   ) {
-    const nowMs = now();
+    const nowMs = Date.now();
     const attached = createDeferredCore<T>();
     void attached.promise.catch(() => undefined);
     const entry: TicketEntry = {
       kind,
       binding,
-      expiresAtMs: nowMs + ttlMs,
+      expiresAtMs: nowMs + DEFAULT_TICKET_TTL_MS,
       resolve(stream, metadata) {
         try {
           attached.resolve(attach(stream, metadata));
@@ -248,15 +245,14 @@ export function createNodeDesktopStreamBroker(deps: { ttlMs?: number; now?: () =
     registry: TicketNodeRegistry,
     binding: NodeDesktopStreamBinding,
   ): Promise<boolean> => {
-    const current = registry.getForPairingGeneration(binding.nodeId, binding.pairingGeneration);
-    if (!current || current.connId !== binding.connId) {
-      return false;
-    }
-    if (!(await registry.isConnectionCurrentPairingState(binding.connId))) {
-      return false;
-    }
-    const rechecked = registry.getForPairingGeneration(binding.nodeId, binding.pairingGeneration);
-    return rechecked?.connId === binding.connId;
+    const hasCurrentConnection = () =>
+      registry.getForPairingGeneration(binding.nodeId, binding.pairingGeneration)?.connId ===
+      binding.connId;
+    return (
+      hasCurrentConnection() &&
+      (await registry.isConnectionCurrentPairingState(binding.connId)) &&
+      hasCurrentConnection()
+    );
   };
 
   async function handleUpgrade(
@@ -277,7 +273,7 @@ export function createNodeDesktopStreamBroker(deps: { ttlMs?: number; now?: () =
     }
     const ticket = (resource.searchParams.get("ticket") ?? "").trim();
     const entry = pending.get(ticket);
-    if (!entry || entry.kind !== kind || entry.redeemed || entry.expiresAtMs <= now()) {
+    if (!entry || entry.kind !== kind || entry.redeemed || entry.expiresAtMs <= Date.now()) {
       rejectWebSocketUpgrade(socket, { status: 401 });
       if (entry && entry.kind === kind && !entry.redeemed) {
         rejectTicket(ticket, new Error(`node ${kind} stream ticket expired`));

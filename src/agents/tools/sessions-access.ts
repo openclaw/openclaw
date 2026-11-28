@@ -75,6 +75,9 @@ function readDescribedSessionVisibilityRow(value: unknown): DescribedSessionVisi
     ownerSessionKey: normalizeOptionalString(value.ownerSessionKey),
     spawnedBy: normalizeOptionalString(value.spawnedBy),
     parentSessionKey: normalizeOptionalString(value.parentSessionKey),
+    childOwnerSessionKeys: Array.isArray(value.childOwnerSessionKeys)
+      ? value.childOwnerSessionKeys.filter((owner): owner is string => typeof owner === "string")
+      : undefined,
     sessionId: normalizeOptionalString(value.sessionId),
   };
 }
@@ -100,12 +103,13 @@ function recordAdmittedSessionDecision(params: {
     return false;
   }
   try {
-    if (caller.receiptAuthority() === false) {
-      return false;
-    }
+    caller.receiptAuthority();
   } catch {
     return false;
   }
+  const representedProfileId = caller.personalToolIdentityScoped
+    ? caller.personalToolSelection?.operatorAuthority?.profileId
+    : caller.operatorAuthority?.profileId;
   const receiptId = `${params.owner}:${randomUUID()}`;
   return recordExecutionDecisionWork({
     workVersion: 1,
@@ -131,6 +135,15 @@ function recordAdmittedSessionDecision(params: {
       remediation: [],
     },
     refs: {
+      ...(representedProfileId
+        ? {
+            representedSubject: {
+              state: "present" as const,
+              kind: "person" as const,
+              rawPrincipalRef: representedProfileId,
+            },
+          }
+        : {}),
       target: {
         namespace: "session",
         value: JSON.stringify([params.targetAgentId, params.targetSessionKey]),
@@ -199,6 +212,7 @@ export async function resolveSessionToolAccess(params: {
   requesterAgentId: string;
   requesterSessionKey: string;
   sessionReadScopeKey?: string;
+  sessionReadAgentOnly?: boolean;
   mainSessionKey?: string;
   authorizationTargetSessionKey?: string;
   targetAgentId: string;
@@ -209,7 +223,12 @@ export async function resolveSessionToolAccess(params: {
   readConfig?: () => OpenClawConfig;
   sandboxed?: boolean;
   callGateway?: AgentToolGatewayRequestCaller;
-}): Promise<SessionVisibilityDecision & { assertCurrent?: () => void }> {
+}): Promise<
+  SessionVisibilityDecision & {
+    assertCurrent?: () => void;
+    basis?: "scoped-grant" | "parent-lineage" | "live-controller";
+  }
+> {
   const authorizationTargetSessionKey =
     params.authorizationTargetSessionKey ?? params.targetSessionKey;
   const deny = (denial: SessionToolAccessDenied) => {
@@ -228,15 +247,19 @@ export async function resolveSessionToolAccess(params: {
     });
     return denial;
   };
-  if (params.sessionReadScopeKey) {
+  if (
+    params.sessionReadScopeKey ||
+    (params.sessionReadAgentOnly && params.targetAgentId !== params.requesterAgentId)
+  ) {
     // Invocation read caps are ceilings: a grant held by the observed session
     // must not widen the auxiliary reader beyond that selected session.
     const capped = createSessionVisibilityDecisionChecker({
       action: params.action,
       defaultAgentId: params.targetAgentId,
       requesterAgentId: params.requesterAgentId,
-      requesterSessionKey: params.sessionReadScopeKey,
-      visibility: "self",
+      requesterSessionKey: params.sessionReadScopeKey ?? params.requesterSessionKey,
+      sessionReadAgentOnly: params.sessionReadAgentOnly,
+      visibility: params.sessionReadScopeKey ? "self" : params.visibility,
       a2aPolicy: params.a2aPolicy,
     }).check({ key: authorizationTargetSessionKey, agentId: params.targetAgentId });
     if (!capped.allowed) {
@@ -251,7 +274,7 @@ export async function resolveSessionToolAccess(params: {
     targetSessionKey: authorizationTargetSessionKey,
   });
   if (scoped) {
-    return { allowed: true, expectedSessionId: scoped.expectedSessionId };
+    return { allowed: true, expectedSessionId: scoped.expectedSessionId, basis: "scoped-grant" };
   }
   const createChecker = () => {
     const cfg = params.readConfig?.();
@@ -324,39 +347,66 @@ export async function resolveSessionToolAccess(params: {
     return finish(false);
   }
   const requesterOwnedAccess = check(true);
-  if (params.requesterOwned) {
-    return finish(true);
-  }
   // Ownership proof can only widen tree visibility; do not let an operational
   // lookup failure replace a deterministic self/A2A policy denial.
   if (!requesterOwnedAccess.allowed) {
     return initial.allowed ? finish(false) : deny(initial);
   }
-  if (
-    params.action === "history" &&
-    params.displayAction !== "search" &&
-    authorizationTargetSessionKey === params.targetSessionKey
-  ) {
+  if (authorizationTargetSessionKey === params.targetSessionKey) {
     try {
       const described = await (params.callGateway ?? callAgentToolGatewayRequest)<{
         session?: unknown;
       }>({
         method: "sessions.describe",
-        params: { key: params.targetSessionKey },
+        params: { key: params.targetSessionKey, agentId: params.targetAgentId },
       });
       const row = readDescribedSessionVisibilityRow(described?.session);
-      if (row?.key === params.targetSessionKey) {
-        const access = createChecker().check(row);
+      if (
+        row?.key === params.targetSessionKey &&
+        (row.agentId ?? parseAgentSessionKey(row.key)?.agentId) === params.targetAgentId &&
+        (row.childOwnerSessionKeys !== undefined ||
+          (params.action === "history" && params.displayAction !== "search"))
+      ) {
+        // Protocol-v4 Gateways published display-only empty owner arrays after
+        // recency expiry. Keep the shipped history-only lineage fallback until
+        // the next protocol break; it never grants send/search/status access.
+        const historyFallback =
+          params.action === "history" &&
+          params.displayAction !== "search" &&
+          row.childOwnerSessionKeys?.length === 0;
+        const access = createChecker().check(
+          historyFallback ? { ...row, childOwnerSessionKeys: undefined } : row,
+        );
         if (!access.allowed) {
           return deny(access);
         }
+        const relationshipOwned = row.childOwnerSessionKeys?.includes(params.requesterSessionKey);
+        const parentLineage =
+          relationshipOwned &&
+          (row.parentSessionKey ?? row.spawnedBy) === params.requesterSessionKey;
+        // Do not narrow an independently authorized peer send/watch to a temporary control grant.
+        if (initial.allowed && !parentLineage) {
+          return finish(false);
+        }
         if (row.sessionId) {
-          return { allowed: true, expectedSessionId: row.sessionId };
+          const basis = relationshipOwned
+            ? parentLineage
+              ? "parent-lineage"
+              : "live-controller"
+            : undefined;
+          return {
+            allowed: true,
+            expectedSessionId: row.sessionId,
+            ...(basis ? { basis } : {}),
+          };
         }
       }
     } catch {
       // Older or temporarily unavailable gateways keep the existing fail-closed lookup below.
     }
+  }
+  if (params.requesterOwned) {
+    return finish(true);
   }
   const ownership = await lookupRequesterSessionOwnership({
     requesterSessionKey: params.requesterSessionKey,
@@ -381,7 +431,6 @@ export async function resolveSessionToolAccess(params: {
   return initial.allowed ? finish(false) : deny(initial);
 }
 
-/** Resolves the requester context used to filter sandboxed session-tool access. */
 export function resolveSandboxedSessionToolContext(params: {
   cfg: OpenClawConfig;
   agentSessionKey?: string;

@@ -4,7 +4,7 @@ import { isRecord } from "openclaw/plugin-sdk/string-coerce-runtime";
 import { getTelegramRuntime } from "./runtime.js";
 import { normalizeTelegramStateAccountId } from "./state-account-id.js";
 import {
-  fingerprintTelegramBotToken,
+  fingerprintOptionalTelegramBotToken,
   resolveTelegramBotUserIdFromToken,
 } from "./token-fingerprint.js";
 
@@ -38,12 +38,13 @@ function extractBotIdFromToken(token?: string): string | null {
   return botUserId === undefined ? null : String(botUserId);
 }
 
-function fingerprintFromToken(token?: string): string | null {
-  const trimmed = token?.trim();
-  if (!trimmed) {
-    return null;
-  }
-  return fingerprintTelegramBotToken(trimmed);
+function updateOffsetState(lastUpdateId: number | null, token?: string) {
+  return {
+    version: STORE_VERSION,
+    lastUpdateId,
+    botId: extractBotIdFromToken(token),
+    tokenFingerprint: fingerprintOptionalTelegramBotToken(token),
+  };
 }
 
 function safeParseState(state: unknown): TelegramUpdateOffsetState | null {
@@ -100,7 +101,7 @@ function rotationForToken(
     reason = "bot-id-changed";
   } else if (parsed.tokenFingerprint === null) {
     reason = "legacy-state";
-  } else if (parsed.tokenFingerprint !== fingerprintFromToken(botToken)) {
+  } else if (parsed.tokenFingerprint !== fingerprintOptionalTelegramBotToken(botToken)) {
     reason = "token-rotated";
   }
   return reason
@@ -169,12 +170,7 @@ export async function prepareTelegramAccount(params: {
     if (!parsed || rotation) {
       // Keep the old identity until purge commits, then replace it without an absent-marker window.
       // Webhook-only accounts need this marker even though they have no polling cursor.
-      await store.register(accountId, {
-        version: STORE_VERSION,
-        lastUpdateId: null,
-        botId: extractBotIdFromToken(params.botToken),
-        tokenFingerprint: fingerprintFromToken(params.botToken),
-      });
+      await store.register(accountId, updateOffsetState(null, params.botToken));
     }
     return rotation ? null : (parsed?.lastUpdateId ?? null);
   } catch (err) {
@@ -194,12 +190,7 @@ export async function writeTelegramUpdateOffset(params: {
   if (!isValidUpdateId(params.updateId)) {
     throw new Error("Telegram update offset must be a non-negative safe integer.");
   }
-  const payload: TelegramUpdateOffsetState = {
-    version: STORE_VERSION,
-    lastUpdateId: params.updateId,
-    botId: extractBotIdFromToken(params.botToken),
-    tokenFingerprint: fingerprintFromToken(params.botToken),
-  };
+  const payload = updateOffsetState(params.updateId, params.botToken);
   await openUpdateOffsetStore(params.env).register(
     normalizeTelegramStateAccountId(params.accountId),
     payload,

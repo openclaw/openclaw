@@ -198,7 +198,12 @@ function parseNodeSessionPage(
     throw new Error(options.messages.invalidNodeCursor);
   }
   return {
-    sessions: value.sessions,
+    // Locality is relative to this Gateway. Never import a paired node's own
+    // verdict about automatic export as a local grant.
+    sessions: value.sessions.map((session) => ({
+      ...session,
+      exportPolicy: { origin: "federated", automatic: false },
+    })),
     ...(nextCursor !== undefined ? { nextCursor } : {}),
   };
 }
@@ -627,24 +632,15 @@ export function createSessionCatalogNodeHostBindings(
   };
   return {
     commands: [
-      {
-        command: options.listCommand,
+      ...(["list", "read"] as const).map((operation): OpenClawPluginNodeHostCommand => ({
+        command: options[`${operation}Command`],
         cap: options.capability,
         dangerous: false,
         hasActiveWork: options.hasActiveWork,
         isAvailable: options.listAvailable,
         handle: async (paramsJSON) =>
-          JSON.stringify(await options.list(options.parseParams(paramsJSON))),
-      },
-      {
-        command: options.readCommand,
-        cap: options.capability,
-        dangerous: false,
-        hasActiveWork: options.hasActiveWork,
-        isAvailable: options.listAvailable,
-        handle: async (paramsJSON) =>
-          JSON.stringify(await options.read(options.parseParams(paramsJSON))),
-      },
+          JSON.stringify(await options[operation](options.parseParams(paramsJSON))),
+      })),
       terminal,
     ],
     policies: [

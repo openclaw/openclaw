@@ -77,17 +77,20 @@ export type CodexAppServerStartOptions = {
   cwd?: string;
   url?: string;
   authToken?: string;
+  tlsPeerCertificate?: string;
   headers: Record<string, string>;
   env?: Record<string, string>;
   clearEnv?: string[];
+  /** Host-owned Git settings applied after configured environment filtering. */
+  managedGitConfigParameters?: string;
 };
 
 export type CodexAppServerRuntimeOptions = {
   start: CodexAppServerStartOptions;
   connectionClass: CodexAppServerConnectionClass;
   remoteWorkspaceRoot?: string;
+  nativeHookRelay?: { url: string; credentialDirectory: string };
   codeModeOnly: boolean;
-  loopDetectionPreToolUseRelay: boolean;
   requestTimeoutMs: number;
   approvalPolicy: CodexAppServerEffectiveApprovalPolicy;
   sandbox: CodexSandboxMode;

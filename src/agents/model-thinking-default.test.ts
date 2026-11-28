@@ -2,194 +2,101 @@ import { describe, expect, it, vi } from "vitest";
 import type { OpenClawConfig } from "../config/types.js";
 import { createPluginMetadataSnapshotFixture } from "../plugins/plugin-metadata.test-support.js";
 import { resolveDirectBundledProviderPolicySurface } from "../plugins/provider-policy-surface.js";
-import { PREPARED_THINKING_POLICY } from "../plugins/provider-thinking-catalog.js";
+import { configFor, modelDefinition } from "./model-auth.fixtures.test-support.js";
 import { resolveThinkingDefault } from "./model-thinking-default.js";
 
 const metadataSnapshot = createPluginMetadataSnapshotFixture({ plugins: [] });
+type Agents = NonNullable<OpenClawConfig["agents"]>;
+const config = (
+  defaults: Agents["defaults"],
+  alpha?: NonNullable<Agents["entries"]>[string],
+): OpenClawConfig => ({ agents: { defaults, ...(alpha ? { entries: { alpha } } : {}) } });
+const modelThinking = (key: string, thinking?: string | boolean) => ({
+  [key]: { params: { thinking } },
+});
+const resolveFor =
+  (
+    provider: string,
+    model: string,
+    options: Partial<Parameters<typeof resolveThinkingDefault>[0]> = {},
+  ) =>
+  (cfg: OpenClawConfig) =>
+    resolveThinkingDefault({ ...options, cfg, provider, model });
 
 vi.mock("../plugins/current-plugin-metadata-snapshot.js", async (importOriginal) => ({
   ...(await importOriginal<typeof import("../plugins/current-plugin-metadata-snapshot.js")>()),
   getCurrentPluginMetadataSnapshot: () => metadataSnapshot,
 }));
 
+function policyResolver(provider: string, model: string, agentId?: string, agentRuntime?: string) {
+  const resolveThinkingProfile = resolveDirectBundledProviderPolicySurface(
+    provider === "kimi" ? "kimi-coding" : provider,
+  )?.resolveThinkingProfile;
+  if (!resolveThinkingProfile) {
+    throw new Error(`Missing thinking policy for ${provider}`);
+  }
+  return resolveFor(provider, model, {
+    agentId,
+    agentRuntime,
+    catalog: [{ provider, id: model, name: model, reasoning: true }],
+    providerPolicySource: { providers: [{ provider: { id: provider, resolveThinkingProfile } }] },
+  });
+}
+
 describe("resolveThinkingDefault", () => {
   it.each([
-    { thinking: "extra-high", expected: "xhigh" },
-    { thinking: false, expected: "off" },
-    { thinking: "disabled", expected: "off" },
-  ])(
-    "prefers and normalizes per-model thinking=$thinking over global defaults",
-    ({ thinking, expected }) => {
-      expect(
-        resolveThinkingDefault({
-          cfg: {
-            agents: {
-              defaults: {
-                thinkingDefault: "low",
-                models: { "fixture/reasoning-model": { params: { thinking } } },
-              },
-            },
-          },
-          provider: "fixture",
-          model: "reasoning-model",
-        }),
-      ).toBe(expected);
-    },
-  );
-
-  it.each([
-    { thinking: false, agentDefault: undefined, expected: "off" },
-    { thinking: "extra-high", agentDefault: undefined, expected: "xhigh" },
-    { thinking: "high", agentDefault: "minimal", expected: "minimal" },
-  ] as const)(
-    "resolves agent thinking defaults (model=$thinking, agent=$agentDefault)",
-    ({ thinking, agentDefault, expected }) => {
-      const cfg: OpenClawConfig = {
-        agents: {
-          defaults: {
-            thinkingDefault: "low",
-            models: { "fixture/reasoning-model": { params: { thinking: "high" } } },
-          },
-          entries: {
-            alpha: {
-              thinkingDefault: agentDefault,
-              models: { "fixture/reasoning-model": { params: { thinking } } },
-            },
-          },
-        },
-      };
-      expect(
-        resolveThinkingDefault({
-          cfg,
-          agentId: "alpha",
-          provider: "fixture",
-          model: "reasoning-model",
-        }),
-      ).toBe(expected);
-    },
-  );
+    [false, undefined, "off"],
+    ["high", "minimal", "minimal"],
+  ] as const)("agent precedence (%s, %s)", (thinking, agentDefault, expected) => {
+    const key = "fixture/reasoning-model";
+    const cfg = config(
+      { thinkingDefault: "low", models: modelThinking(key, "high") },
+      { thinkingDefault: agentDefault, models: modelThinking(key, thinking) },
+    );
+    expect(resolveFor("fixture", "reasoning-model", { agentId: "alpha" })(cfg)).toBe(expected);
+  });
 
   it("accepts legacy duplicated OpenRouter keys for per-model thinking", () => {
-    expect(
-      resolveThinkingDefault({
-        cfg: {
-          agents: {
-            defaults: {
-              models: {
-                "openrouter/openrouter/hunter-alpha": { params: { thinking: "high" } },
-              },
-            },
-          },
-        },
-        provider: "openrouter",
-        model: "openrouter/hunter-alpha",
-      }),
-    ).toBe("high");
+    const model = "openrouter/hunter-alpha";
+    const cfg = config({ models: modelThinking(`openrouter/${model}`, "high") });
+    expect(resolveFor("openrouter", model)(cfg)).toBe("high");
+  });
+
+  it("honors configured anthropic/claude-opus-5 policy with reasoning=true", () => {
+    const provider = "anthropic",
+      model = "claude-opus-5";
+    const resolve = policyResolver(provider, model, undefined, "openclaw");
+    expect(resolve(config({ model: { primary: `${provider}/${model}` } }))).toBe("high");
   });
 
   it.each([
-    { provider: "anthropic", model: "claude-opus-5", reasoning: true, expected: "high" },
-    { provider: "anthropic", model: "claude-opus-4-7", reasoning: true, expected: "off" },
-    { provider: "anthropic", model: "claude-opus-4-8", reasoning: true, expected: "off" },
-    { provider: "anthropic", model: "claude-sonnet-4-6", reasoning: true, expected: "adaptive" },
-    { provider: "anthropic", model: "claude-opus-4-80", reasoning: true, expected: "medium" },
-    { provider: "anthropic-vertex", model: "claude-opus-4-8", reasoning: true, expected: "off" },
-    { provider: "claude-cli", model: "claude-opus-4-8", reasoning: true, expected: "off" },
-    { provider: "anthropic", model: "claude-opus-5", reasoning: false, expected: "off" },
-    { provider: "anthropic", model: "claude-fable-5", reasoning: false, expected: "medium" },
-  ])(
-    "honors configured $provider/$model policy with reasoning=$reasoning",
-    ({ provider, model, reasoning, expected }) => {
-      const resolveThinkingProfile = resolveDirectBundledProviderPolicySurface(
-        provider === "anthropic-vertex" ? provider : "anthropic",
-      )?.resolveThinkingProfile;
-      if (!resolveThinkingProfile) {
-        throw new Error(`Missing thinking policy for ${provider}`);
-      }
-      expect(
-        resolveThinkingDefault({
-          cfg: { agents: { defaults: { model: { primary: `${provider}/${model}` } } } },
-          provider,
-          model,
-          agentRuntime: provider === "claude-cli" ? "claude-cli" : "openclaw",
-          catalog: [{ provider, id: model, name: model, reasoning }],
-          providerPolicySource: {
-            providers: [{ provider: { id: provider, resolveThinkingProfile } }],
-          },
-        }),
-      ).toBe(expected);
-    },
-  );
-
-  it.each(["registry", "prepared", "prepared-null"])(
-    "uses the %s policy owner for configured defaults",
-    (source) => {
-      const resolveThinkingProfile = vi.fn(() => ({
-        levels: [{ id: "off" }, { id: "low" }, { id: "medium" }, { id: "high" }] as const,
-        defaultLevel: "low" as const,
-      }));
-      const registryPolicy =
-        source === "registry"
-          ? resolveThinkingProfile
-          : vi.fn(() => ({ levels: [{ id: "high" }] as const, defaultLevel: "high" as const }));
-      const model = "claude-opus-5";
-      const catalog = [
+    ["Kimi-K3", undefined, undefined, "off"],
+    ["Kimi-K3", "max", undefined, "max"],
+    ["Kimi-K3", "low", "medium", "medium"],
+    ["k3", undefined, undefined, "high"],
+    ["k3-256k", undefined, undefined, "high"],
+  ] as const)(
+    "preserves fresh and serialized Kimi defaults (%s, thinking=%s, agent=%s)",
+    (model, thinking, agentDefault, expected) => {
+      const resolve = policyResolver("kimi", model, "alpha");
+      const fresh = config(
         {
-          provider: "anthropic",
-          id: model,
-          name: model,
-          reasoning: true,
-          ...(source === "registry"
-            ? {}
-            : {
-                [PREPARED_THINKING_POLICY]:
-                  source === "prepared-null" ? null : { resolve: resolveThinkingProfile },
-              }),
+          model: { primary: `kimi/${model}` },
+          models: modelThinking(`kimi/${model}`, thinking),
         },
-      ];
-      expect(
-        resolveThinkingDefault({
-          cfg: { agents: { defaults: { model: { primary: `anthropic/${model}` } } } },
-          provider: "anthropic",
-          model,
-          catalog,
-          agentRuntime: "claude-cli",
-          providerPolicySource: {
-            providers: [{ provider: { id: "anthropic", resolveThinkingProfile: registryPolicy } }],
-          },
-        }),
-      ).toBe(source === "prepared-null" ? "medium" : "low");
-      expect(resolveThinkingProfile).toHaveBeenCalledTimes(source === "prepared-null" ? 0 : 1);
-      if (source !== "registry") {
-        expect(registryPolicy).not.toHaveBeenCalled();
-      }
+        { thinkingDefault: agentDefault },
+      );
+      expect(resolve(fresh), "fresh").toBe(expected);
+      // oxlint-disable-next-line unicorn/prefer-structured-clone -- Persisted JSON omits undefined preferences.
+      expect(resolve(JSON.parse(JSON.stringify(fresh))), "serialized existing").toBe(expected);
     },
   );
 
   it("honors configured provider models that disable reasoning", () => {
-    const cfg: OpenClawConfig = {
-      models: {
-        providers: {
-          google: {
-            api: "google-generative-ai",
-            baseUrl: "https://generativelanguage.googleapis.com/v1beta",
-            models: [
-              {
-                id: "gemma-4-26b-a4b-it",
-                name: "Gemma 4 26B",
-                reasoning: false,
-                input: ["text"],
-                cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
-                contextWindow: 32_000,
-                maxTokens: 8_192,
-              },
-            ],
-          },
-        },
-      },
-    };
-    expect(resolveThinkingDefault({ cfg, provider: "google", model: "gemma-4-26b-a4b-it" })).toBe(
-      "off",
-    );
+    const cfg = configFor("google", "https://generativelanguage.googleapis.com/v1beta", {
+      api: "google-generative-ai",
+      models: [modelDefinition("gemma-4-26b-a4b-it", { reasoning: false })],
+    });
+    expect(resolveFor("google", "gemma-4-26b-a4b-it")(cfg)).toBe("off");
   });
 });

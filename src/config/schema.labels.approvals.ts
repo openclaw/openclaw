@@ -1,4 +1,3 @@
-// Approval forwarding and reviewer field labels.
 export const APPROVAL_FIELD_LABELS: Record<string, string> = {
   approvals: "Approvals",
   "approvals.exec": "Exec Approval Forwarding",

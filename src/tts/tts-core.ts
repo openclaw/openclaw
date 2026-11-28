@@ -1,9 +1,10 @@
 import { resolveTimerTimeoutMs } from "@openclaw/normalization-core/number-coercion";
-// TTS core coordinates text preparation, provider selection, and speech output.
 import { normalizeOptionalString } from "@openclaw/normalization-core/string-coerce";
+import { DEFAULT_PROVIDER } from "../agents/defaults.js";
 import { splitTrailingAuthProfile } from "../agents/model-ref-profile.js";
 import {
   buildModelAliasIndex,
+  NO_MODEL_CONFIGURED_MESSAGE,
   resolveDefaultModelForAgent,
   resolveModelRefFromString,
 } from "../agents/model-selection.js";
@@ -71,10 +72,10 @@ function resolveSummaryModelSelection(
     ? resolveModelRefFromString({
         cfg,
         raw: override,
-        defaultProvider: defaultRef.provider,
+        defaultProvider: defaultRef?.provider ?? DEFAULT_PROVIDER,
         aliasIndex: buildModelAliasIndex({
           cfg,
-          defaultProvider: defaultRef.provider,
+          defaultProvider: defaultRef?.provider ?? DEFAULT_PROVIDER,
           manifestPlugins,
         }),
         manifestPlugins,
@@ -83,13 +84,15 @@ function resolveSummaryModelSelection(
   const raw = resolved ? override : resolveAgentModelPrimaryValue(cfg.agents?.defaults?.model);
   const model = raw ? splitTrailingAuthProfile(raw).model : undefined;
   const ref = resolved?.ref ?? defaultRef;
+  if (!ref) {
+    throw new Error(NO_MODEL_CONFIGURED_MESSAGE);
+  }
   return {
     selection: { provider: ref.provider, modelId: ref.model },
     ...(model && !model.includes("/") ? { shorthandModelId: model } : {}),
   };
 }
 
-/** Summarize long text before synthesis using the configured summary model. */
 export async function summarizeText(
   params: {
     text: string;

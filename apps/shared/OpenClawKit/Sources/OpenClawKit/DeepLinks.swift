@@ -476,8 +476,11 @@ public struct GatewayConnectEndpoint: Codable, Sendable, Equatable {
         guard (1...65535).contains(self.port) else { return nil }
         var components = URLComponents()
         components.scheme = self.tls ? "wss" : "ws"
-        components.host = self.host
-        components.port = self.port
+        components.host = LoopbackHost.isIPv6Literal(self.host) && !self.host.hasPrefix("[")
+            ? "[" + self.host + "]"
+            : self.host
+        // URLSession includes explicit :443 in Host, which can miss hostname-only HTTPS proxy routes.
+        components.port = self.tls && self.port == 443 ? nil : self.port
         components.percentEncodedPath = self.contextPath ?? ""
         return components.url
     }

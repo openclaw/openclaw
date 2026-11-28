@@ -1,10 +1,11 @@
-import { homedir } from "node:os";
 import { join } from "node:path";
 import {
   parseFiniteNumber,
   resolveOptionalIntegerOption,
 } from "openclaw/plugin-sdk/number-runtime";
+import { resolveStateDir } from "openclaw/plugin-sdk/state-paths";
 import { isRecord } from "openclaw/plugin-sdk/string-coerce-runtime";
+import { DEFAULT_CAPTURE_MAX_CHARS, DEFAULT_RECALL_MAX_CHARS } from "./memory-policy-data.js";
 
 type ProducedMemoryConfig = ReturnType<typeof memoryConfigSchema.parse>;
 type OptionalMemoryFields = "dreaming" | "dbPath" | "autoCapture" | "autoRecall";
@@ -15,13 +16,11 @@ export type MemoryConfig = Omit<ProducedMemoryConfig, "embedding" | OptionalMemo
       Partial<Pick<ProducedMemoryConfig["embedding"], OptionalEmbeddingFields>>;
   };
 
-export const MEMORY_CATEGORIES = ["preference", "fact", "decision", "entity", "other"] as const;
-export type MemoryCategory = (typeof MEMORY_CATEGORIES)[number];
-
 const DEFAULT_MODEL = "text-embedding-3-small";
-export const DEFAULT_CAPTURE_MAX_CHARS = 500;
-export const DEFAULT_RECALL_MAX_CHARS = 1000;
-const DEFAULT_DB_PATH = join(homedir(), ".openclaw", "memory", "lancedb");
+
+export function resolveDefaultDbPath(stateDir: string = resolveStateDir()): string {
+  return join(stateDir, "memory", "lancedb");
+}
 
 const EMBEDDING_DIMENSIONS: Record<string, number> = {
   "text-embedding-3-small": 1536,
@@ -187,7 +186,7 @@ export const memoryConfigSchema = {
         dimensions,
       },
       dreaming,
-      dbPath: typeof cfg.dbPath === "string" ? cfg.dbPath : DEFAULT_DB_PATH,
+      dbPath: typeof cfg.dbPath === "string" ? cfg.dbPath : resolveDefaultDbPath(),
       autoCapture: cfg.autoCapture === true,
       autoRecall: cfg.autoRecall !== false,
       captureMaxChars,

@@ -19,6 +19,8 @@ import type {
 } from "./session-accessor.sqlite-reclamation-worker.types.js";
 
 type DatabaseOptions = SqliteSessionReclamationPlan["databaseOptions"];
+// Keep alternating stores warm without retaining an isolate for every visited agent.
+const MAX_RETAINED_RECLAMATION_WORKERS = 4;
 type ReclamationWorkerSlot = {
   worker?: SqliteReclamationWorker;
   execution?: CanonicalWorkerPool;
@@ -66,7 +68,10 @@ function retainWorkerAlias(
   }
 }
 
-function releaseWorkerAliases(worker: SqliteReclamationWorker): void {
+function retireRetainedWorker(key: string, worker: SqliteReclamationWorker): void {
+  if (retained.get(key) === worker) {
+    retained.delete(key);
+  }
   for (const unregister of retainedAliases.get(worker)?.values() ?? []) {
     unregister();
   }
@@ -107,18 +112,29 @@ export function withSqliteReclamationWorker<T>(
       source.assertCurrent();
     }
   };
-  return runExclusiveSqliteTranscriptArchiveWorker(() => {
+  return runExclusiveSqliteTranscriptArchiveWorker(async () => {
     const key = sqliteReaderDatabasePathKey(options.path);
+    if (!retained.has(key)) {
+      while (retained.size >= MAX_RETAINED_RECLAMATION_WORKERS) {
+        // A queued request can lose authority without cancelling its FIFO slot.
+        // Check before retiring a different database's warm connection.
+        assertRequestCurrent();
+        assertSourceCurrent();
+        const oldest = retained.values().next().value;
+        // The archive FIFO has settled every retained request. Close owns native
+        // cleanup and registry removal; a failed close keeps custody and capacity.
+        await oldest!.close();
+      }
+    }
     return useReclamationWorker(
       {
         worker: retained.get(key),
-        retain: (worker) => retained.set(key, worker),
-        retire: (worker) => {
-          if (retained.get(key) === worker) {
-            retained.delete(key);
-          }
-          releaseWorkerAliases(worker);
+        retain: (worker) => {
+          retained.delete(key);
+          retained.set(key, worker);
         },
+        // The cached worker must not capture the requesting plan's closure scope.
+        retire: retireRetainedWorker.bind(undefined, key),
         alias: requestedPath,
       },
       options,
@@ -151,7 +167,7 @@ export async function withSqliteCanonicalValidationWorker<T>(
   } finally {
     closed = true;
     await queue.enqueue("canonical-validation", async () => {
-      await slot.worker?.close("exclusive-handoff");
+      await slot.worker?.close();
     });
   }
 }
@@ -167,7 +183,7 @@ async function useReclamationWorker<T>(
   assertRequestCurrent();
   assertSourceCurrent();
   if (slot.worker && !slot.worker.matches(options, expectedIdentity)) {
-    await slot.worker.close("matches-mismatch");
+    await slot.worker.close();
     slot.worker = undefined;
   }
   assertRequestCurrent();
@@ -197,7 +213,7 @@ async function useReclamationWorker<T>(
     }
     // An uncertain mutation is never replayed; a replacement serves only a later request.
     try {
-      await worker.close("failure");
+      await worker.close();
       if (slot.worker === worker) {
         slot.worker = undefined;
       }

@@ -26,6 +26,9 @@ export function createControlUiMockResponses(
   };
   const methodResponseSequenceIndexes = new Map<string, number>();
   const sessions = input.sessions;
+  const sessionListReplies: { child: boolean; rows: number }[] = [];
+  let sessionListRepliesTruncated = false;
+  let unavailableSessionListReplies = 0;
 
   const startupPendingResponses = new Map(
     [
@@ -63,7 +66,11 @@ export function createControlUiMockResponses(
     return undefined;
   }
 
-  function applyAgentModel(method: string, value: unknown): unknown {
+  function applyAgentModel(method: string, response: unknown): unknown {
+    const value =
+      method === "agents.list" && isRecord(response)
+        ? { sessionPlacement: {}, ...response }
+        : response;
     if (!input.agentModel || !isRecord(value)) {
       return value;
     }
@@ -84,6 +91,12 @@ export function createControlUiMockResponses(
       return applyAgentsList(value);
     }
     return value;
+  }
+
+  function applySessionPlacement(params: unknown, response: Record<string, unknown>) {
+    return isRecord(params) && params.includeSessionPlacement === true
+      ? { sessionPlacement: {}, ...response }
+      : response;
   }
 
   function valuesEqual(actual: unknown, expected: unknown): boolean {
@@ -196,6 +209,28 @@ export function createControlUiMockResponses(
     };
   }
 
+  /** Static transcript overrides also serve the startup read inside a subscription. */
+  function historyTranscript(): Record<string, unknown> {
+    const configured = input.methodResponses["chat.history"];
+    if (!isRecord(configured) || responseCases(configured) || responseSequence(configured)) {
+      return {};
+    }
+    const transcript: Record<string, unknown> = {};
+    for (const field of [
+      "messages",
+      "activity",
+      "sessionId",
+      "sessionInfo",
+      "inFlightRun",
+      "thinkingLevel",
+    ]) {
+      if (Object.hasOwn(configured, field)) {
+        transcript[field] = configured[field];
+      }
+    }
+    return transcript;
+  }
+
   function scopedSearchResponse(
     params: Record<string, unknown>,
     response: Record<string, unknown>,
@@ -278,13 +313,66 @@ export function createControlUiMockResponses(
   }
 
   return {
+    get sessionListResponseFacts() {
+      return {
+        replies: sessionListReplies.map((reply) => ({ ...reply })),
+        truncated: sessionListRepliesTruncated,
+        unavailableReplies: unavailableSessionListReplies,
+      };
+    },
+    deliver(
+      request: { id: string; method: string; params: unknown },
+      payload: unknown,
+      client: {
+        readyState: number;
+        deliver: (frame: unknown) => void;
+        sessionMessageSubscriptions: {
+          recordRequest: (method: string, params: unknown, result?: unknown) => void;
+        };
+      },
+      openState: number,
+    ) {
+      const mockError =
+        isRecord(payload) && isRecord(payload["__mockError"]) ? payload["__mockError"] : null;
+      if (!mockError) {
+        client.sessionMessageSubscriptions.recordRequest(request.method, request.params, payload);
+      }
+      // A receiver may close synchronously during delivery; count that reply, never a closed one.
+      const wasOpen = client.readyState === openState;
+      client.deliver(
+        mockError
+          ? { id: request.id, ok: false, error: mockError, type: "res" }
+          : { id: request.id, ok: true, payload, type: "res" },
+      );
+      if (wasOpen && !mockError && request.method === "sessions.list") {
+        if (isRecord(payload) && Array.isArray(payload.sessions)) {
+          sessionListReplies.push({
+            child:
+              isRecord(request.params) &&
+              typeof request.params.spawnedBy === "string" &&
+              request.params.spawnedBy.trim().length > 0,
+            rows: payload.sessions.length,
+          });
+          if (sessionListReplies.length > 8) {
+            sessionListReplies.shift();
+            sessionListRepliesTruncated = true;
+          }
+        } else {
+          unavailableSessionListReplies++;
+        }
+      }
+      return mockError;
+    },
     select: configuredResponse,
     startupPending,
     applyAgentModel,
+    applySessionPlacement,
     sessionList: sessionListResponse,
+    historyTranscript,
     cases: responseCases,
     sequence: responseSequence,
     matches: paramsMatch,
+    matchesExact: valuesEqual,
     search: scopedSearchResponse,
     resetSequence: (method: string) => methodResponseSequenceIndexes.delete(method),
   };

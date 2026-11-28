@@ -7,6 +7,7 @@ set -euo pipefail
 
 source scripts/lib/openclaw-e2e-instance.sh
 source scripts/e2e/lib/upgrade-survivor/update-restart-auth.sh
+source scripts/e2e/lib/prepublish-plugin-registry.sh
 source scripts/lib/docker-e2e-logs.sh
 
 if [ "${OPENCLAW_QA_ALLOW_UPDATE_FIRST_HOP:-0}" != "1" ]; then
@@ -53,6 +54,11 @@ source_version="$(tar -xOf "$SOURCE_PACKAGE" package/package.json | node -pe 'JS
 candidate_source_version="$(tar -xOf "$ORIGINAL_CANDIDATE_PACKAGE" package/package.json | node -pe 'JSON.parse(require("node:fs").readFileSync(0, "utf8")).version')"
 
 package_root() {
+  local resident="$OPENCLAW_STATE_DIR/git-install/openclaw"
+  if [ -f "$resident/package.json" ]; then
+    printf '%s\n' "$resident"
+    return
+  fi
   printf '%s/lib/node_modules/openclaw\n' "$npm_config_prefix"
 }
 
@@ -60,14 +66,28 @@ first_hop_timing() {
   printf 'first-hop timing: %s %ss\n' "$1" "$((SECONDS - $2))"
 }
 
+# Shipped extended-stable updaters refuse explicit --tag targets on their
+# inferred channel, so a tag update first selects stable as an operator would.
+update_channel_args() {
+  local version version_pattern='^[1-9][0-9]{3}\.([1-9]|1[0-2])\.([1-9][0-9]*)$'
+  version="$(node -p 'require(process.argv[1]).version' "$(package_root)/package.json")"
+  if [[ "$version" =~ $version_pattern ]] && ((10#${BASH_REMATCH[2]} >= 33)); then
+    printf '%s\n' --channel stable
+  fi
+}
+
 run_update() {
   local started=$SECONDS
   local output="$ARTIFACT_DIR/$1" target="$2" update_status=0
+  local arg update_args=(--yes)
+  while IFS= read -r arg; do
+    update_args+=("$arg")
+  done < <(update_channel_args)
   cp "$(package_root)/package.json" "$output-source-package.json"
   printf '%q ' env "PATH=$PATH" "npm_config_prefix=$npm_config_prefix" openclaw \
-    update --yes "--tag=$target" --json >"$output-command.txt"
+    update "${update_args[@]}" "--tag=$target" --json >"$output-command.txt"
   printf '\n' >>"$output-command.txt"
-  openclaw update --yes "--tag=$target" --json \
+  openclaw update "${update_args[@]}" "--tag=$target" --json \
     >"$output.stdout" 2>"$output.stderr" || update_status="$?"
   printf '%s\n' "$update_status" >"$output.exit"
   node - "$output.stdout" <<'TIMINGS'
@@ -97,13 +117,41 @@ TIMINGS
 
 assert_admission() {
   local output="$ARTIFACT_DIR/$1" owner="$2" warning="${3:-}"
-  node - "$output" "$owner" "$warning" <<'ADMISSION'
-const assert = require("node:assert/strict"), fs = require("node:fs");
+  node --input-type=module - "$output" "$owner" "$warning" <<'ADMISSION'
+import assert from "node:assert/strict";
+import fs from "node:fs";
+import { assertCompletedUpdate, assertTerminalUpdateReceipt } from "./scripts/lib/update-receipt.mjs";
 const [output, owner, warning] = process.argv.slice(2);
 const raw = fs.readFileSync(`${output}.stdout`, "utf8");
 const result = JSON.parse(raw.slice(raw.indexOf("{")));
 const source = JSON.parse(fs.readFileSync(`${output}-source-package.json`, "utf8"));
 assert.equal(source.openclaw?.updateAdmissionProtocol, 1, "Source must support candidate admission");
+if (result.phase !== undefined) {
+  const admission = result.origin?.releaseAdmission;
+  const checks = result.steps.filter(({ step }) => step === "candidate-release-check");
+  if (owner === "candidate") {
+    assertCompletedUpdate(result);
+    assert.equal(admission?.owner, "candidate");
+    assert.equal(admission.candidateVersion, result.target?.version);
+    assert.equal(admission.candidateVersion, result.after?.version);
+    assert.equal(admission.verdict, "admit");
+    assert.equal(admission.reason, undefined);
+    assert.deepEqual(checks.map(({ status }) => status), ["completed"]);
+    if (warning) {
+      assert(admission.warnings.some((entry) => entry.code === warning), "Missing candidate warning " + warning);
+    }
+  } else {
+    assertTerminalUpdateReceipt(result, "failed");
+    assert.equal(result.reason, "release-updates-unsupported");
+    assert(result.target?.version, "Refusal must identify the requested target");
+    assert.notEqual(result.target?.version, source.version);
+    assert.equal(result.before?.version, source.version);
+    assert.equal(admission, undefined, "Unsupported target must not execute the release check");
+    assert.deepEqual(checks, []);
+  }
+  fs.writeFileSync(output + "-admission.json", JSON.stringify({ status: result.status, admission, reason: result.reason }, null, 2) + "\n");
+  process.exit(0);
+}
 assert.equal(result.status, "ok");
 assert.equal(result.run?.admission?.owner, owner);
 const verdict = result.run.origin?.candidateAdmission;
@@ -126,6 +174,28 @@ if (owner === "candidate") {
 }
 fs.writeFileSync(`${output}-admission.json`, `${JSON.stringify({ status: result.status, admission: result.run.admission, verdict }, null, 2)}\n`);
 ADMISSION
+}
+
+update_restart_route() {
+  node --input-type=module - "$ARTIFACT_DIR/$1.stdout" <<'UPDATE_RESTART_ROUTE'
+import assert from "node:assert/strict";
+import fs from "node:fs";
+import { assertCompletedUpdate } from "./scripts/lib/update-receipt.mjs";
+const raw = fs.readFileSync(process.argv[2], "utf8");
+const result = JSON.parse(raw.slice(raw.indexOf("{")));
+if (assertCompletedUpdate(result)) {
+  const { after, steps, target, verification } = result;
+  assert(after?.version && after.buildId, "Update did not identify the activated build");
+  assert.equal(after.version, target?.version);
+  assert.equal(after.version, verification?.runningVersion);
+  assert.equal(after.buildId, verification?.runningBuildId);
+  assert(verification.booted && verification.serviceRunning && verification.coreReady && verification.versionMatch);
+  assert(steps.some(({ step, status }) => step === "activating" && status === "completed"));
+  console.log("resident");
+} else {
+  console.log("legacy");
+}
+UPDATE_RESTART_ROUTE
 }
 
 record_residue() {
@@ -263,7 +333,7 @@ reset_lane() {
 
 run_negative_control() {
   local lane=negative
-  setup_lane "$lane" 18791
+  openclaw_prepublish_plugin_registry_run_published setup_lane "$lane" 18791
   local update_status=0
   run_update "$lane-update" "$NEGATIVE_PACKAGE" || update_status="$?"
   local assert_started=$SECONDS
@@ -292,88 +362,82 @@ run_negative_control() {
 
 run_positive_hops() {
   local lane=positive
-  setup_lane "$lane" 18792
-  local first_pid
-  first_pid="$(cat "$ARTIFACT_DIR/$lane-before.pid")"
-
-  run_update "$lane-first" "$CANDIDATE_PACKAGE"
-  local assert_started=$SECONDS
-  assert_installed_build "$CANDIDATE_PACKAGE" "$ARTIFACT_DIR/$lane-first-build-info.json"
-  if [ "$candidate_source_version" = "2026.9.3" ]; then
-    node scripts/e2e/lib/external-package-transition.mjs schema 16 \
-      >"$ARTIFACT_DIR/$lane-first-shared-schema.json"
-  fi
-  wait_service_active
-  local candidate_pid
-  candidate_pid="$(cat "$OPENCLAW_UPGRADE_SURVIVOR_SYSTEMCTL_SHIM_PID_FILE")"
-  if [ "$candidate_pid" = "$first_pid" ]; then
-    echo "first hop did not replace the managed service process" >&2
-    return 1
-  fi
-  if grep -Eq 'ERR_MODULE_NOT_FOUND|Cannot find module' \
-    "$ARTIFACT_DIR/$lane-first.stdout" "$ARTIFACT_DIR/$lane-first.stderr"; then
-    echo "first hop reported a missing runtime import" >&2
-    return 1
-  fi
-  record_residue "$ARTIFACT_DIR/$lane-first-transaction-residue.txt"
-  assert_no_residue "$ARTIFACT_DIR/$lane-first-transaction-residue.txt"
-  record_service_state "$ARTIFACT_DIR/$lane-service-after-first.txt"
-  node scripts/e2e/lib/release-scenarios/assertions.mjs configure-mock-openai 44212
-
-  first_hop_timing "$lane-first assertions" "$assert_started"
-
-  run_update "$lane-second" "$FUTURE_PACKAGE"
-  assert_started=$SECONDS
+  openclaw_prepublish_plugin_registry_run_published setup_lane "$lane" 18792
+  local previous_pid current_pid hop target assert_started route=""
+  local service_pids
+  service_pids=("$(cat "$ARTIFACT_DIR/$lane-before.pid")")
+  local hops=(first second)
   if [ "$ADMISSION_PROTOCOL" = "1" ]; then
-    assert_admission "$lane-second" candidate
+    hops+=(unsupported-admission)
   fi
-  assert_installed_build "$FUTURE_PACKAGE" "$ARTIFACT_DIR/$lane-second-build-info.json"
-  wait_service_active
-  local future_pid
-  future_pid="$(cat "$OPENCLAW_UPGRADE_SURVIVOR_SYSTEMCTL_SHIM_PID_FILE")"
-  if [ "$future_pid" = "$candidate_pid" ]; then
-    echo "second hop did not replace the managed service process" >&2
-    return 1
-  fi
-  if grep -Eq 'ERR_MODULE_NOT_FOUND|Cannot find module' \
-    "$ARTIFACT_DIR/$lane-second.stdout" "$ARTIFACT_DIR/$lane-second.stderr"; then
-    echo "second hop reported a missing runtime import" >&2
-    return 1
-  fi
-  record_residue "$ARTIFACT_DIR/$lane-second-transaction-residue.txt"
-  assert_no_residue "$ARTIFACT_DIR/$lane-second-transaction-residue.txt"
-  record_service_state "$ARTIFACT_DIR/$lane-service-after-second.txt"
-  printf '%s\n' "$first_pid" "$candidate_pid" "$future_pid" \
-    >"$ARTIFACT_DIR/$lane-service-pids.txt"
-  first_hop_timing "$lane-second assertions" "$assert_started"
-  if [ "$ADMISSION_PROTOCOL" = "1" ]; then
-    run_update "$lane-unsupported-admission" "$UNSUPPORTED_ADMISSION_PACKAGE"
+  for hop in "${hops[@]}"; do
+    case "$hop" in
+      first) target="$CANDIDATE_PACKAGE" ;;
+      second) target="$FUTURE_PACKAGE" ;;
+      unsupported-admission) target="$UNSUPPORTED_ADMISSION_PACKAGE" ;;
+    esac
+    previous_pid="${service_pids[${#service_pids[@]} - 1]}"
+    if [ "$hop" = unsupported-admission ] && [ "$route" = resident ]; then
+      local refusal_status=0
+      run_update "$lane-$hop" "$target" || refusal_status="$?"
+      [ "$refusal_status" -eq 1 ] || return 1
+      assert_admission "$lane-$hop" installed
+      assert_installed_build "$FUTURE_PACKAGE" "$ARTIFACT_DIR/$lane-$hop-build-info.json"
+      wait_service_active
+      [ "$(cat "$OPENCLAW_UPGRADE_SURVIVOR_SYSTEMCTL_SHIM_PID_FILE")" = "$previous_pid" ] || return 1
+      record_residue "$ARTIFACT_DIR/$lane-$hop-transaction-residue.txt"
+      assert_no_residue "$ARTIFACT_DIR/$lane-$hop-transaction-residue.txt"
+      record_service_state "$ARTIFACT_DIR/$lane-service-after-$hop.txt"
+      continue
+    fi
+    run_update "$lane-$hop" "$target"
+    route="$(update_restart_route "$lane-$hop")" || return "$?"
     assert_started=$SECONDS
-    assert_admission "$lane-unsupported-admission" installed update-admission-unsupported-target
-    assert_installed_build "$UNSUPPORTED_ADMISSION_PACKAGE" "$ARTIFACT_DIR/$lane-unsupported-admission-build-info.json"
+    if [ "$ADMISSION_PROTOCOL" = "1" ]; then
+      case "$hop" in
+        second) assert_admission "$lane-$hop" candidate ;;
+        unsupported-admission) assert_admission "$lane-$hop" installed update-admission-unsupported-target ;;
+      esac
+    fi
+    assert_installed_build "$target" "$ARTIFACT_DIR/$lane-$hop-build-info.json"
+    if [ "$hop" = first ] && [ "$candidate_source_version" = "2026.9.3" ]; then
+      node scripts/e2e/lib/external-package-transition.mjs schema 16 \
+        >"$ARTIFACT_DIR/$lane-first-shared-schema.json"
+    fi
     wait_service_active
-    local unsupported_pid
-    unsupported_pid="$(cat "$OPENCLAW_UPGRADE_SURVIVOR_SYSTEMCTL_SHIM_PID_FILE")"
-    if [ "$unsupported_pid" = "$future_pid" ]; then
-      echo "unsupported-admission hop did not replace the managed service process" >&2
+    current_pid="$(cat "$OPENCLAW_UPGRADE_SURVIVOR_SYSTEMCTL_SHIM_PID_FILE")"
+    if [ "$route" = legacy ] && [ "$current_pid" = "$previous_pid" ]; then
+      echo "$hop hop did not replace the managed service process" >&2
       return 1
     fi
-    record_residue "$ARTIFACT_DIR/$lane-unsupported-admission-transaction-residue.txt"
-    assert_no_residue "$ARTIFACT_DIR/$lane-unsupported-admission-transaction-residue.txt"
-    record_service_state "$ARTIFACT_DIR/$lane-service-after-unsupported-admission.txt"
-    first_hop_timing "$lane-unsupported-admission assertions" "$assert_started"
-  fi
+    if [ "$hop" != unsupported-admission ] && grep -Eq 'ERR_MODULE_NOT_FOUND|Cannot find module' \
+      "$ARTIFACT_DIR/$lane-$hop.stdout" "$ARTIFACT_DIR/$lane-$hop.stderr"; then
+      echo "$hop hop reported a missing runtime import" >&2
+      return 1
+    fi
+    record_residue "$ARTIFACT_DIR/$lane-$hop-transaction-residue.txt"
+    assert_no_residue "$ARTIFACT_DIR/$lane-$hop-transaction-residue.txt"
+    record_service_state "$ARTIFACT_DIR/$lane-service-after-$hop.txt"
+    service_pids+=("$current_pid")
+    if [ "$hop" = first ]; then
+      node scripts/e2e/lib/release-scenarios/assertions.mjs configure-mock-openai 44212
+    elif [ "$hop" = second ]; then
+      printf '%s\n' "${service_pids[@]}" >"$ARTIFACT_DIR/$lane-service-pids.txt"
+    fi
+    first_hop_timing "$lane-$hop assertions" "$assert_started"
+  done
   stop_lane
 }
 
 run_missing_path_admission() {
   local started=$SECONDS
-  local lane=admission-missing-load-path
+  local lane=admission-missing-load-path route
   if [ "$SCENARIO" != "missing-load-path" ]; then
     reset_lane positive
   fi
   setup_lane "$lane" 18793 "$CANDIDATE_PACKAGE" 1
   run_update "$lane-update" "$FUTURE_PACKAGE"
+  route="$(update_restart_route "$lane-update")" || return "$?"
   local assert_started=$SECONDS
   assert_admission "$lane-update" candidate configured-plugin-path-unavailable
   assert_installed_build "$FUTURE_PACKAGE" "$ARTIFACT_DIR/$lane-build-info.json"
@@ -396,7 +460,7 @@ run_missing_path_admission() {
   # Standalone Doctor can restart an offline service; join it before hashing profile artifacts.
   systemctl --user stop openclaw-gateway.service
   node scripts/e2e/lib/upgrade-survivor/update-admission-entry-probe.mjs \
-    "$(package_root)" "$ARTIFACT_DIR/$lane-entry-probe.json"
+    "$(package_root)" "$ARTIFACT_DIR/$lane-entry-probe.json" "$route"
   record_residue "$ARTIFACT_DIR/$lane-transaction-residue.txt"
   assert_no_residue "$ARTIFACT_DIR/$lane-transaction-residue.txt"
   stop_lane

@@ -32,7 +32,14 @@ import androidx.compose.runtime.remember
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.semantics.Role
+import androidx.compose.ui.semantics.role
+import androidx.compose.ui.semantics.selected
+import androidx.compose.ui.semantics.semantics
+import androidx.compose.ui.semantics.toggleableState
+import androidx.compose.ui.state.ToggleableState
 import androidx.compose.ui.text.font.FontWeight
+import androidx.compose.ui.text.input.KeyboardCapitalization
 import androidx.compose.ui.text.input.KeyboardType
 import androidx.compose.ui.text.input.PasswordVisualTransformation
 import androidx.compose.ui.text.input.VisualTransformation
@@ -75,14 +82,12 @@ internal fun ChatQuestionCard(
       verticalArrangement = Arrangement.spacedBy(14.dp),
     ) {
       prompt.record.questions.forEach { question ->
-        if (question.secretStore != null) {
-          SecretStoreConsent(
-            prompt = prompt,
-            question = question,
-            enabled = pending,
-            onDraftChanged = { update -> onDraftChanged(prompt, update) },
-          )
-        }
+        SecretStoreConsent(
+          prompt = prompt,
+          question = question,
+          enabled = pending,
+          onDraftChanged = { update -> onDraftChanged(prompt, update) },
+        )
         QuestionSection(
           question = question,
           draft = draft,
@@ -92,7 +97,6 @@ internal fun ChatQuestionCard(
       }
       QuestionFooter(
         prompt = prompt,
-        draft = draft,
         status = status,
         nowMs = nowMs,
         onSubmit = onSubmit,
@@ -211,6 +215,16 @@ private fun QuestionSection(
       val selected = (option.value ?: option.label) in draft.selectedOptions[question.questionId].orEmpty()
       Surface(
         onClick = { onDraftChanged { it.toggle(question, option.value ?: option.label) } },
+        modifier =
+          Modifier.semantics {
+            if (question.multiSelect == true) {
+              role = Role.Checkbox
+              toggleableState = if (selected) ToggleableState.On else ToggleableState.Off
+            } else {
+              role = Role.RadioButton
+              this.selected = selected
+            }
+          },
         enabled = enabled,
         shape = RoundedCornerShape(ClawTheme.radii.row),
         color = if (selected) ClawTheme.colors.surfacePressed else ClawTheme.colors.surface,
@@ -244,7 +258,7 @@ private fun QuestionSection(
         label = { Text(if (secret) nativeString("Secret value") else nativeString("Other answer")) },
         visualTransformation = if (secret) PasswordVisualTransformation() else VisualTransformation.None,
         keyboardOptions =
-          if (secret) KeyboardOptions(keyboardType = KeyboardType.Password, autoCorrectEnabled = false) else KeyboardOptions.Default,
+          if (secret) KeyboardOptions(keyboardType = KeyboardType.Password, autoCorrectEnabled = false) else KeyboardOptions(capitalization = KeyboardCapitalization.Sentences),
         minLines = 1,
         maxLines = if (secret) 1 else 4,
       )
@@ -255,13 +269,12 @@ private fun QuestionSection(
 @Composable
 private fun QuestionFooter(
   prompt: ChatQuestionPrompt,
-  draft: ChatQuestionDraft,
   status: ChatQuestionStatus,
   nowMs: Long,
   onSubmit: (ChatQuestionPrompt, Map<String, List<String>>) -> Unit,
   onSkip: (ChatQuestionPrompt) -> Unit,
 ) {
-  val answers = draft.answers(prompt.record.questions)
+  val answers = prompt.draft.answers(prompt.record.questions)
   Row(verticalAlignment = Alignment.CenterVertically) {
     Text(
       text = questionCountdown(prompt.record.expiresAtMs, nowMs),

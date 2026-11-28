@@ -98,18 +98,8 @@ final class HealthStore {
         var lastError: String?
     }
 
-    private final class Refresh {
-        let revision: UInt64?
-        var lease: GatewayConnection.ServerLease?
-        var task: Task<Void, Never>?
-
-        init(revision: UInt64?) {
-            self.revision = revision
-        }
-    }
-
     private var output: Output
-    private var activeRefresh: Refresh?
+    private var activeRefresh: GatewayStoreRefresh?
     var snapshot: HealthSnapshot? {
         self.sourceIsCurrent ? self.output.snapshot : nil
     }
@@ -176,7 +166,7 @@ final class HealthStore {
         self.clearReplacedSource()
         if let refresh = self.activeRefresh, self.refreshIsCurrent(refresh) { return nil }
         self.cancelRefresh()
-        let refresh = Refresh(revision: self.gateway.selectedEndpointRevision)
+        let refresh = GatewayStoreRefresh(revision: self.gateway.selectedEndpointRevision)
         self.activeRefresh = refresh
         let task = Task<Void, Never> { [weak self] in
             await self?.performRefresh(onDemand: onDemand, refresh: refresh)
@@ -190,12 +180,11 @@ final class HealthStore {
         self.activeRefresh = nil
     }
 
-    private func refreshIsCurrent(_ refresh: Refresh) -> Bool {
-        self.ownsRefresh(refresh) &&
-            refresh.lease.map(self.gateway.serverLeaseMatchesCurrentState) != false
+    private func refreshIsCurrent(_ refresh: GatewayStoreRefresh) -> Bool {
+        self.activeRefresh === refresh && refresh.isCurrent(on: self.gateway)
     }
 
-    private func ownsRefresh(_ refresh: Refresh) -> Bool {
+    private func ownsRefresh(_ refresh: GatewayStoreRefresh) -> Bool {
         self.activeRefresh === refresh && refresh.task?.isCancelled != true &&
             refresh.revision == self.gateway.selectedEndpointRevision
     }
@@ -236,7 +225,7 @@ final class HealthStore {
         }
     }
 
-    private func performRefresh(onDemand: Bool, refresh: Refresh) async {
+    private func performRefresh(onDemand: Bool, refresh: GatewayStoreRefresh) async {
         defer {
             if self.activeRefresh === refresh { self.activeRefresh = nil }
         }

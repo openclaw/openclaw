@@ -7,30 +7,6 @@ import {
   type SessionBindingRecord,
 } from "./session-binding-service.js";
 
-function resolveBindingForRequester(
-  requester: ConversationRef,
-  bindings: SessionBindingRecord[],
-): SessionBindingRecord | null {
-  let exactBinding: SessionBindingRecord | null = null;
-  let matchingBinding: SessionBindingRecord | null = null;
-  let matchingCount = 0;
-  for (const entry of bindings) {
-    const conversation = normalizeConversationRef(entry.conversation);
-    if (
-      conversation.channel !== requester.channel ||
-      conversation.accountId !== requester.accountId
-    ) {
-      continue;
-    }
-    if (conversation.conversationId === requester.conversationId) {
-      exactBinding ??= entry;
-    }
-    matchingBinding = entry;
-    matchingCount += 1;
-  }
-  return exactBinding ?? (matchingCount === 1 ? matchingBinding : null);
-}
-
 /** Resolves task-completion delivery only within the requester's conversation scope. */
 export async function resolveBoundDeliveryDestination(input: {
   targetSessionKey: string;
@@ -47,5 +23,16 @@ export async function resolveBoundDeliveryDestination(input: {
   if (!requester?.channel || !requester.conversationId) {
     return null;
   }
-  return resolveBindingForRequester(requester, activeBindings);
+  const matchingBindings = activeBindings
+    .map((record) => ({ record, conversation: normalizeConversationRef(record.conversation) }))
+    .filter(
+      ({ conversation }) =>
+        conversation.channel === requester.channel &&
+        conversation.accountId === requester.accountId,
+    );
+  return (
+    matchingBindings.find(
+      ({ conversation }) => conversation.conversationId === requester.conversationId,
+    )?.record ?? (matchingBindings.length === 1 ? matchingBindings[0]!.record : null)
+  );
 }

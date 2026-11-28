@@ -2,6 +2,7 @@ import { isAnthropicOAuthApiKey } from "@openclaw/ai/internal/anthropic";
 import type { WorkerInferenceModelRef } from "../../../packages/gateway-protocol/src/schema/worker-inference.js";
 import { resolveAgentWorkspaceDir } from "../../agents/agent-scope.js";
 import { resolveSessionAuthSelection } from "../../agents/auth-profiles/session-override.js";
+import { DEFAULT_PROVIDER } from "../../agents/defaults.js";
 import { resolveAgentHarnessPolicy } from "../../agents/harness/policy.js";
 import {
   normalizeProviderId,
@@ -53,13 +54,13 @@ async function resolveApprovedWorkerModelSelection(params: ResolveApprovedWorker
   const policy = createModelVisibilityPolicy({
     ...selection,
     catalog: runtimeSnapshot.modelCatalog.entries,
-    defaultProvider: defaultModel.provider,
+    defaultProvider: defaultModel?.provider ?? DEFAULT_PROVIDER,
     defaultModel,
   });
   const resolved = resolveModelRefFromString({
     ...selection,
     raw: `${modelRef.provider}/${modelRef.model}`,
-    defaultProvider: defaultModel.provider,
+    defaultProvider: defaultModel?.provider ?? DEFAULT_PROVIDER,
     aliasIndex: policy.selectionAliasIndex,
   });
   if (
@@ -101,7 +102,12 @@ export async function resolveApprovedWorkerLocalModel(params: ResolveApprovedWor
       resolved.ref.model,
     );
     if (!model) {
-      return { error: `Unknown configured model: ${resolved.ref.provider}/${resolved.ref.model}` };
+      return {
+        error:
+          `Worker-local inference model ${resolved.ref.provider}/${resolved.ref.model} is missing ` +
+          "from the Gateway model catalog. Add its metadata under models.providers in the " +
+          "Gateway openclaw.json; keep its endpoint and credentials only on the node.",
+      };
     }
     return {
       transcriptPolicy: resolveTranscriptPolicy({
@@ -119,14 +125,14 @@ export async function resolveApprovedWorkerLocalModel(params: ResolveApprovedWor
 }
 
 export async function resolveApprovedWorkerModel(params: ResolveApprovedWorkerModelParams) {
-  const { target, signal, runtimeSnapshot } = params;
+  const { target, signal, runtimeSnapshot, modelRef } = params;
   return await withPluginRuntimeGenerationScope(runtimeSnapshot, async () => {
     const approved = await resolveApprovedWorkerModelSelection(params);
     if (!approved) {
       return undefined;
     }
-    const { sessionEntry, lifecycleConfig, agentDir, workspaceDir, resolved, harnessPolicy } =
-      approved;
+    const { lifecycleConfig, agentDir, workspaceDir, resolved, harnessPolicy } = approved;
+    const sessionEntry = { ...approved.sessionEntry };
     const agentRuntimeId =
       harnessPolicy.runtimeSource !== "implicit" ||
       lifecycleConfig.plugins?.entries?.codex?.enabled === true
@@ -137,7 +143,6 @@ export async function resolveApprovedWorkerModel(params: ResolveApprovedWorkerMo
       provider: resolved.ref.provider,
       modelId: resolved.ref.model,
       agentId: target.agentId,
-      harnessRuntime: harnessPolicy.runtime,
       agentDir,
       sessionEntry,
       sessionStore: { [target.sessionKey]: sessionEntry },
@@ -174,6 +179,8 @@ export async function resolveApprovedWorkerModel(params: ResolveApprovedWorkerMo
     // Route projection and credential selection are one decision. Pin even an
     // automatic profile so generic auth fallback cannot cross to another route.
     const prepared = await prepareSimpleCompletionModel({
+      // This session-bound worker owner revalidates the exact live turn after awaited work.
+      workerInferenceAuthority: { assertCurrent: params.assertCurrent },
       cfg: modelConfig,
       transport: "provider-stream",
       agentId: target.agentId,
@@ -208,10 +215,16 @@ export async function resolveApprovedWorkerModel(params: ResolveApprovedWorkerMo
       }),
       provider: resolved.ref.provider,
       model: resolved.ref.model,
-      config: lifecycleConfig,
-      agentDir,
       workspaceDir,
+      modelRef,
+      runtimeSnapshot,
+      sessionEntry,
       prepared,
     };
   });
 }
+
+export type PreparedWorkerInference = Extract<
+  Awaited<ReturnType<typeof resolveApprovedWorkerModel>>,
+  { prepared: unknown }
+>;

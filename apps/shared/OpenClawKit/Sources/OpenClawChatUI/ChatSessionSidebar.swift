@@ -9,6 +9,13 @@ extension ChatSessionSidebarModel.Node {
 
 @MainActor
 struct ChatSessionSidebar: View {
+    struct RowContext {
+        let now: Date
+        let ownership: ChatSidebarOwnership
+        let previewRequest: ChatSessionSidebarPreviews.Request
+        let selectedRows: [OpenClawChatSessionEntry]
+    }
+
     @Bindable var viewModel: OpenClawChatViewModel
     @Binding var query: String
     @Binding var groups: [OpenClawChatSessionGroup]
@@ -44,6 +51,7 @@ struct ChatSessionSidebar: View {
     @State var observedOrder = ChatSessionSidebarModel.ObservedOrder()
     @State var batch = ChatSessionSidebarBatch()
     @State private var lastSnoozeWake = Date.distantPast
+    @State private var consumedRosterExpiry: Double?
     @State var catalogData = ChatSessionSidebarCatalogs()
 
     var body: some View {
@@ -52,26 +60,35 @@ struct ChatSessionSidebar: View {
         }
     }
 
-    private func sidebar(now: Date) -> some View {
-        let sections = self.interactionSections(now: now)
-        let nextWake = OpenClawChatSessionSnooze.nextWake(
-            in: self.rosterData?.queryRows ?? self.viewModel.sessions, now: now)
+    var sidebarClock: OpenClawChatSessionSnooze.RosterClock {
+        guard self.menuActions.connection?.supportsPersonalPins == true else { return .init() }
+        return self.viewModel.sidebarRosterClock
+    }
+
+    private func sidebar(now localNow: Date) -> some View {
+        let clock = self.sidebarClock
+        let now = clock.gatewayDate(at: localNow)
+        let sections = self.interactionSections(now: localNow)
+        let nextWake = clock.localWake(
+            in: self.rosterData?.queryRows ?? self.viewModel.sessions,
+            at: localNow,
+            ignoringExpiry: self.consumedRosterExpiry)
         let projectedRows = sections.flatMap(\.nodes).flatMap(\.previewSessions)
-        let ownership = self.ownership(for: projectedRows)
+        let visibleRows = self.visibleInteractionRows(sections)
         let rosterIDs = (self.rosterData?.rows ?? self.viewModel.sessions).map(OpenClawChatSessionSidebarData.identity)
-        let previewRequest = ChatSessionSidebarPreviews.Request(
-            viewModel: self.viewModel,
-            sessions: projectedRows)
-        let hydration = self.hydrationRequest(sections)
-        let selectedTreeSession = self.selectedTreeSession
-        let selectedTreeID = ChatSessionSidebarChildren.key(for: selectedTreeSession)
-        let list = List(selection: self.batchSelectionBinding) {
+        let context = self.rowContext(now: now, projectedRows: projectedRows, visibleRows: visibleRows)
+        let homes = self.homeTrees
+        let hydration = self.hydrationRequest(sections, homes: homes)
+        let selectedTreeID = ChatSessionSidebarChildren.key(for: hydration.selection)
+        let list = List(selection: self.batchSelectionBinding(
+            visibleRows: visibleRows, renderedRows: self.renderedInteractionRows(projectedRows)))
+        {
             self.newThreadButton
                 .listRowInsets(EdgeInsets(top: 8, leading: 0, bottom: 16, trailing: 0))
                 .listRowBackground(Color.clear)
                 .listRowSeparator(.hidden)
                 .selectionDisabled()
-            self.pagesSection(sections, now: now, ownership: ownership, previewRequest: previewRequest)
+            self.pagesSection(sections, context: context)
             ChatSidebarOnlineSection(viewModel: self.viewModel)
             self.agentScopePicker
             if !self.showsAllAgents || self.viewModel.agentChoices.isEmpty {
@@ -84,21 +101,21 @@ struct ChatSessionSidebar: View {
                     self.childLoadState(parent)
                 }
             }
-            self.threadsHeading(ownership: ownership)
+            self.threadsHeading(ownership: context.ownership)
             if self.showsAgentRoster {
-                self.agentRoster(sections, now: now, ownership: ownership, previewRequest: previewRequest)
+                self.agentRoster(sections, homes: homes, homeParents: hydration.homeParentsByAgent, context: context)
             } else {
                 ForEach(sections.filter { $0.id != "pinned" }) { section in
-                    self.sessionSection(section, now: now, ownership: ownership, previewRequest: previewRequest)
+                    self.sessionSection(section, context: context)
                 }
             }
             if let data = self.rosterData { ChatSessionSidebarRosterState(data: data) }
             if !hydration.inlineParents.contains(selectedTreeID),
                !hydration.homeParents.contains(where: { ChatSessionSidebarChildren.key(for: $0) == selectedTreeID })
             {
-                self.childLoadState(selectedTreeSession)
+                self.childLoadState(hydration.selection)
             }
-            self.catalogSections(now: now, ownership: ownership, previewRequest: previewRequest)
+            self.catalogSections(context: context)
             if sections.allSatisfy(\.nodes.isEmpty), self.catalogPresentation.catalogs.isEmpty,
                self.rosterData?.isSettled != false
             {
@@ -122,7 +139,7 @@ struct ChatSessionSidebar: View {
             prompt: String(localized: "Search threads"))
         .safeAreaInset(edge: .bottom, spacing: 0) {
             VStack(spacing: 0) {
-                self.batchBar
+                self.batchBar(rows: context.selectedRows)
                 self.archiveUndoNotice
                 self.identityFooter(now: now)
             }
@@ -132,7 +149,10 @@ struct ChatSessionSidebar: View {
             guard items.count == 1, let item = items.first else { return false }
             return self.dropInteraction(item, section: "list", after: false)
         }
-        .onChange(of: self.viewModel.sidebarData?.scopeRevision) { _, _ in self.batch.reset() }
+        .onChange(of: self.viewModel.sidebarData?.scopeRevision) { _, _ in
+            self.batch.reset()
+            self.consumedRosterExpiry = nil
+        }
         .onChange(of: self.rosterData?.query) { _, _ in self.batch.reset(clearConnection: false) }
         .onChange(of: self.viewModel.currentSessionTarget) { _, _ in self.batch.selection = .init() }
         .task(id: self.viewModel.sidebarData?.scopeRevision) { await self.watchPinOrder() }
@@ -175,21 +195,14 @@ struct ChatSessionSidebar: View {
             await self.sidebarChildren.synchronize(model: self.viewModel, requiredParents: hydration.parents)
         }
         .onDisappear { self.sidebarChildren.invalidate() }
-        .task(id: previewRequest) {
+        .task(id: context.previewRequest) {
             let model = self.viewModel
             let cache = model.transcriptCache
             await model.pendingCacheWriteTask?.value
-            guard !Task.isCancelled, ObjectIdentifier(self.viewModel) == previewRequest.modelID else { return }
-            await self.previews.refresh(previewRequest, cache: cache)
+            guard !Task.isCancelled, ObjectIdentifier(self.viewModel) == context.previewRequest.modelID else { return }
+            await self.previews.refresh(context.previewRequest, cache: cache)
         }
-        .task(id: nextWake) {
-            guard let nextWake else { return }
-            do {
-                try await Task.sleep(for: .seconds(max(0, nextWake.timeIntervalSinceNow)))
-                try Task.checkCancellation()
-                self.lastSnoozeWake = max(nextWake, .now)
-            } catch {}
-        }
+        .task(id: nextWake) { await self.refreshAfterWake(nextWake, clock: clock) }
         .task(id: self.groupRefreshID) {
             self.viewModel.refreshSessions(limit: 200)
             do {
@@ -207,6 +220,35 @@ struct ChatSessionSidebar: View {
         return self.presentingDialogs(content)
     }
 
+    private func refreshAfterWake(_ wake: Date?, clock: OpenClawChatSessionSnooze.RosterClock) async {
+        guard let wake else { return }
+        do {
+            try await Task.sleep(for: .seconds(max(0, wake.timeIntervalSinceNow)))
+            try Task.checkCancellation()
+            self.lastSnoozeWake = max(wake, .now)
+            let newExpiry = clock.activityWake.map {
+                $0.local <= self.lastSnoozeWake && $0.expiresAt != self.consumedRosterExpiry
+            } ?? false
+            if newExpiry { self.consumedRosterExpiry = clock.activityWake?.expiresAt }
+            if self.menuActions.connection?.supportsPersonalPins == true {
+                self.viewModel.refreshSessions(limit: 200)
+                self.viewModel.refreshSidebarData(afterRosterExpiry: newExpiry)
+            }
+        } catch {}
+    }
+
+    func rowContext(
+        now: Date,
+        projectedRows: [OpenClawChatSessionEntry],
+        visibleRows: [OpenClawChatSessionEntry]) -> RowContext
+    {
+        RowContext(
+            now: now,
+            ownership: self.ownership(for: projectedRows),
+            previewRequest: .init(viewModel: self.viewModel, sessions: projectedRows),
+            selectedRows: visibleRows.filter { self.batch.selection.keys.contains(self.interactionIdentity($0)) })
+    }
+
     private func presentingDialogs(_ content: some View) -> some View {
         content
             .confirmationDialog(
@@ -219,7 +261,7 @@ struct ChatSessionSidebar: View {
                     self.runSidebarBatch(.delete, rows: self.batch.pendingDelete)
                 }
             } message: {
-                Text("The threads and their transcripts are removed from the gateway.")
+                Text("The chats are removed from the gateway.")
             }
             .sheet(item: self.$menuPresentation) { self.menuSheet($0) }
                 .sheet(item: self.$agentSessionsTarget) { ChatSessionsSheet(viewModel: self.viewModel, agentID: $0.id) }
@@ -235,7 +277,7 @@ struct ChatSessionSidebar: View {
                 .confirmationDialog(self.deleteDialogTitle, isPresented: self.isPresentingDeleteDialog) {
                         self.deleteAction
                     } message: {
-                        Text(String(localized: "The thread and its transcript are removed from the gateway."))
+                        Text(String(localized: "The chat is removed from the gateway."))
                             .font(OpenClawChatTypography.body(size: 13, weight: .regular, relativeTo: .body))
                     }
     }
@@ -332,13 +374,11 @@ struct ChatSessionSidebar: View {
 
     func rows(
         _ nodes: [ChatSessionSidebarModel.Node],
-        now: Date,
-        ownership: ChatSidebarOwnership,
         section: String = "",
-        previewRequest: ChatSessionSidebarPreviews.Request) -> some View
+        context: RowContext) -> some View
     {
         ForEach(nodes, id: \.sidebarID) { node in
-            self.treeRow(node, isChild: false, now: now, ownership: ownership, previewRequest: previewRequest)
+            self.treeRow(node, isChild: false, context: context)
                 .modifier(ChatSidebarSectionInteraction(
                     sidebar: self,
                     section: section == "pinned" ? "" : section,

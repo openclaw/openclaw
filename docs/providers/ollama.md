@@ -8,23 +8,23 @@ title: "Ollama"
 ---
 
 OpenClaw talks to Ollama's native API (`/api/chat`), not the OpenAI-compatible
-`/v1` endpoint. Three modes are supported:
+`/v1` endpoint. Three setups are supported:
 
-| Mode          | What it uses                                                                     |
+| Setup         | What it uses                                                                     |
 | ------------- | -------------------------------------------------------------------------------- |
 | Cloud + Local | A reachable Ollama host, serving local models and (if signed in) `:cloud` models |
-| Cloud only    | `https://ollama.com` directly, no local daemon                                   |
 | Local only    | A reachable Ollama host, local models only                                       |
+| Ollama Cloud  | `https://ollama.com` directly through the `ollama-cloud` provider, no daemon     |
 
-For cloud-only setup with the dedicated `ollama-cloud` provider id, see
-[Ollama Cloud](/providers/ollama-cloud). Use `ollama-cloud/<model>` refs when
-you want cloud routing kept separate from a local `ollama` provider.
+Hosted-only access is its own **Ollama Cloud** setup choice; see
+[Ollama Cloud](/providers/ollama-cloud). Its `ollama-cloud/<model>` refs keep
+cloud routing separate from the local `ollama` provider.
 
 <Warning>
 Do not use the `/v1` OpenAI-compatible URL (`http://host:11434/v1`). It breaks tool calling and models can emit raw tool-call JSON as plain text. Use the native URL: `baseUrl: "http://host:11434"` (no `/v1`).
 </Warning>
 
-The canonical config key is `baseUrl`. `baseURL` is also accepted for
+The current config key is `baseUrl`. `baseURL` is also accepted for
 OpenAI-SDK-style examples, but new config should use `baseUrl`.
 
 This page is an index. Ollama is documented on nine pages, one per reader
@@ -125,7 +125,7 @@ Each entry points at the page that now holds the content.
 - <a id="no-models-available" />[No models available](/providers/ollama/troubleshooting#no-models-available)
 - <a id="connection-refused" />[Connection refused](/providers/ollama/troubleshooting#connection-refused)
 - <a id="remote-host-works-with-curl-but-not-openclaw" />[Remote host works with curl but not OpenClaw](/providers/ollama/troubleshooting#remote-host-works-with-curl-but-not-openclaw)
-- <a id="model-outputs-tool-json-as-text" />[Model outputs tool JSON as text](/providers/ollama/troubleshooting#model-outputs-tool-json-as-text)
+- <a id="model-outputs-tool-json-as-text" />[Model outputs tool calls as text](/providers/ollama/troubleshooting#model-outputs-tool-calls-as-text)
 - <a id="kimi-or-glm-returns-garbled-symbols" />[Kimi or GLM returns garbled symbols](/providers/ollama/troubleshooting#kimi-or-glm-returns-garbled-symbols)
 - <a id="cold-local-model-times-out" />[Cold local model times out](/providers/ollama/troubleshooting#cold-local-model-times-out)
 - <a id="large-context-model-is-too-slow-or-runs-out-of-memory" />[Large-context model is too slow or runs out of memory](/providers/ollama/troubleshooting#large-context-model-is-too-slow-or-runs-out-of-memory)

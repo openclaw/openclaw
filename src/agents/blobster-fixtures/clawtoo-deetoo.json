@@ -1,0 +1,14 @@
+{
+  "version": 1,
+  "id": "clawtoo-deetoo",
+  "name": "Clawtoo Deetoo",
+  "description": "Silver-white shell, cobalt droid panels, and red status light.",
+  "palette": {
+    "shell": "#e8edf1",
+    "claw": "#3b68c4",
+    "glint": "#8cd8ff"
+  },
+  "layers": {
+    "shell_overlay": "<g class=\"lob-clawtoodeetoo\">\n    <path d=\"M27 26 C35 14 45 8 60 8 C75 8 85 14 93 26 Q60 19 27 26 Z\" fill=\"#b8c3cf\" />\n    <g fill=\"#2d5cbd\">\n      <path d=\"M37 17 L46 12 L46 22 L34 24 Z M54 9 H66 L67 21 H53 Z M74 12 L84 17 L86 24 L74 22 Z\" />\n      <path d=\"M20 46 Q60 42 100 46 L101 53 Q60 49 19 53 Z\" />\n      <rect x=\"53\" y=\"58\" width=\"14\" height=\"9\" rx=\"1.5\" />\n      <rect x=\"53\" y=\"71\" width=\"14\" height=\"9\" rx=\"1.5\" />\n    </g>\n    <g fill=\"none\" stroke=\"#9ba8b7\" stroke-width=\"1.5\">\n      <rect x=\"32\" y=\"59\" width=\"13\" height=\"25\" rx=\"2\" /><rect x=\"75\" y=\"59\" width=\"13\" height=\"25\" rx=\"2\" />\n      <path d=\"M54 86 H66 M54 90 H66\" stroke-linecap=\"round\" />\n    </g>\n    <circle cx=\"87\" cy=\"49\" r=\"2.5\" fill=\"#ef5261\" />\n  </g>"
+  }
+}

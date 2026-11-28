@@ -6,27 +6,11 @@ import {
   type ToolsInvokeResult,
 } from "../../../packages/gateway-protocol/src/index.js";
 import { resolveGatewayConversationReadOrigin } from "../conversation-read-origin.js";
+import { readGatewayRequestAdmission } from "../operator-admission.js";
 import { invokeGatewayTool } from "../tools-invoke-shared.js";
 import { readGatewayRequestMutationAuthority } from "./session-mutation-guards.js";
 import type { GatewayRequestHandlers } from "./types.js";
 import { assertValidParams } from "./validation.js";
-
-function resolveRpcErrorCode(params: {
-  type: "invalid_request" | "not_found" | "tool_call_blocked" | "tool_error";
-  requiresApproval?: boolean;
-}): string {
-  if (params.requiresApproval) {
-    return "requires_approval";
-  }
-  return (
-    {
-      invalid_request: "validation_error",
-      not_found: "not_found",
-      tool_call_blocked: "forbidden",
-      tool_error: "internal_error",
-    }[params.type] ?? "internal_error"
-  );
-}
 
 export const toolsInvokeHandlers: GatewayRequestHandlers = {
   "tools.invoke": async (options) => {
@@ -50,7 +34,8 @@ export const toolsInvokeHandlers: GatewayRequestHandlers = {
       authenticatedUserProfile: client?.authenticatedUserProfile,
       operatorRoleActor: client?.internal?.operatorRoleActor,
       operatorScopes: client?.connect.scopes,
-      senderIsOwner: client?.connect?.scopes?.includes("operator.admin"),
+      approvalReviewerDeviceId: client?.connect.device?.id,
+      senderIsOwner: readGatewayRequestAdmission(client).grant.owner,
       clientCaps: client?.connect?.caps,
       conversationReadOrigin: resolveGatewayConversationReadOrigin({
         client,
@@ -78,7 +63,14 @@ export const toolsInvokeHandlers: GatewayRequestHandlers = {
       toolName: outcome.toolName || requestedToolName,
       ...(outcome.error.requiresApproval ? { requiresApproval: true } : {}),
       error: {
-        code: resolveRpcErrorCode(outcome.error),
+        code: outcome.error.requiresApproval
+          ? "requires_approval"
+          : {
+              invalid_request: "validation_error",
+              not_found: "not_found",
+              tool_call_blocked: "forbidden",
+              tool_error: "internal_error",
+            }[outcome.error.type],
         message: outcome.error.message,
       },
     };

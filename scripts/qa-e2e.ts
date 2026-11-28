@@ -1,4 +1,3 @@
-// Qa E2E script supports OpenClaw repository automation.
 import { pathToFileURL } from "node:url";
 
 type QaE2eArgs = {
@@ -87,12 +86,7 @@ async function main(): Promise<number> {
   return isQaSelfCheckSuccessful(result) ? 0 : 1;
 }
 
-function isMainModule() {
-  const entry = process.argv[1];
-  return entry !== undefined && import.meta.url === pathToFileURL(entry).href;
-}
-
-if (isMainModule()) {
+if (process.argv[1] !== undefined && import.meta.url === pathToFileURL(process.argv[1]).href) {
   try {
     process.exitCode = await main();
   } catch (error) {

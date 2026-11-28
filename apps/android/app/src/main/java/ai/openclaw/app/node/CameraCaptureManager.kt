@@ -36,9 +36,9 @@ import kotlinx.coroutines.suspendCancellableCoroutine
 import kotlinx.coroutines.sync.Mutex
 import kotlinx.coroutines.withContext
 import kotlinx.coroutines.withTimeout
+import kotlinx.coroutines.withTimeoutOrNull
 import kotlinx.serialization.Serializable
 import kotlinx.serialization.json.JsonObject
-import java.io.ByteArrayOutputStream
 import java.io.File
 import java.util.concurrent.Executor
 import java.util.concurrent.atomic.AtomicBoolean
@@ -121,6 +121,18 @@ class CameraCaptureManager(
   )
 
   @Volatile private var lifecycleOwner: LifecycleOwner? = null
+  private val lifecycleOwnerObserver =
+    object : LifecycleEventObserver {
+      override fun onStateChanged(
+        source: LifecycleOwner,
+        event: Lifecycle.Event,
+      ) {
+        if (event == Lifecycle.Event.ON_DESTROY) {
+          source.lifecycle.removeObserver(this)
+          if (lifecycleOwner === source) lifecycleOwner = null
+        }
+      }
+    }
 
   companion object {
     // ProcessCameraProvider is process-wide, including during runtime replacement.
@@ -139,8 +151,11 @@ class CameraCaptureManager(
 
   /** Supplies the foreground Activity lifecycle required by CameraX use-case binding. */
   fun attachLifecycleOwner(owner: LifecycleOwner) {
-    // CameraX binds use cases to an Activity lifecycle; background services cannot capture alone.
+    // The runtime outlives its Activity, including when no capture is active.
+    if (owner.lifecycle.currentState == Lifecycle.State.DESTROYED) return
+    lifecycleOwner?.lifecycle?.removeObserver(lifecycleOwnerObserver)
     lifecycleOwner = owner
+    owner.lifecycle.addObserver(lifecycleOwnerObserver)
   }
 
   /** Lists CameraX devices with stable Camera2 ids where available. */
@@ -151,16 +166,6 @@ class CameraCaptureManager(
         .mapNotNull { info -> cameraDeviceInfoOrNull(info) }
         .sortedBy { it.id }
     }
-
-  private fun ensureCameraPermission() {
-    if (context.hasPermission(Manifest.permission.CAMERA)) return
-    throw IllegalStateException("CAMERA_PERMISSION_REQUIRED: grant Camera permission")
-  }
-
-  private fun ensureMicPermission() {
-    if (context.hasPermission(Manifest.permission.RECORD_AUDIO)) return
-    throw IllegalStateException("MIC_PERMISSION_REQUIRED: grant Microphone permission")
-  }
 
   /** Snap and clip share one foreground lease; never queue a stale camera command. */
   internal suspend fun <T> withCapture(
@@ -173,8 +178,8 @@ class CameraCaptureManager(
         check(captureMutex.tryLock()) { "CAMERA_BUSY: another camera capture is active" }
         try {
           fun checkAccess() {
-            ensureCameraPermission()
-            if (includeAudio) ensureMicPermission()
+            check(context.hasPermission(Manifest.permission.CAMERA)) { "CAMERA_PERMISSION_REQUIRED: grant Camera permission" }
+            if (includeAudio) check(context.hasPermission(Manifest.permission.RECORD_AUDIO)) { "MIC_PERMISSION_REQUIRED: grant Microphone permission" }
             check(cameraEnabled()) { "CAMERA_DISABLED: enable Camera in Settings" }
             check(isForeground()) { "NODE_BACKGROUND_UNAVAILABLE: command requires foreground" }
           }
@@ -271,28 +276,11 @@ class CameraCaptureManager(
             val maxEncodedBytes = (maxPayloadBytes / 4) * 3
             val result =
               JpegSizeLimiter.compressToLimit(
-                initialWidth = scaled.width,
-                initialHeight = scaled.height,
+                bitmap = scaled,
                 startQuality = (quality * 100.0).roundToInt().coerceIn(10, 100),
                 minQuality = (quality * 100.0).roundToInt().coerceIn(10, 20),
                 maxBytes = maxEncodedBytes,
-                encode = { width, height, q ->
-                  val bitmap =
-                    if (width == scaled.width && height == scaled.height) {
-                      scaled
-                    } else {
-                      scaled.scale(width, height)
-                    }
-                  val out = ByteArrayOutputStream()
-                  if (!bitmap.compress(Bitmap.CompressFormat.JPEG, q, out)) {
-                    if (bitmap !== scaled) bitmap.recycle()
-                    throw IllegalStateException("UNAVAILABLE: failed to encode JPEG")
-                  }
-                  if (bitmap !== scaled) {
-                    bitmap.recycle()
-                  }
-                  out.toByteArray()
-                },
+                errorMessage = "UNAVAILABLE: failed to encode JPEG",
               )
             val base64 = Base64.encodeToString(result.bytes, Base64.NO_WRAP)
             """{"format":"jpg","base64":"$base64","width":${result.width},"height":${result.height}}"""
@@ -375,7 +363,8 @@ class CameraCaptureManager(
             }
         session.ownRecording(recording)
 
-        kotlinx.coroutines.delay(durationMs.toLong())
+        // CameraX can terminate early; release the capture without waiting out its duration.
+        withTimeoutOrNull(durationMs.toLong()) { finalized.await() }
         recording.close()
 
         val finalizeEvent =
@@ -399,10 +388,7 @@ class CameraCaptureManager(
 
   private fun parseFacing(params: JsonObject?): String? {
     val value = parseJsonString(params, "facing")?.trim()?.lowercase() ?: return null
-    return when (value) {
-      "front", "back" -> value
-      else -> null
-    }
+    return value.takeIf { it == "front" || it == "back" }
   }
 
   private fun parseDeviceId(params: JsonObject?): String? =
@@ -436,28 +422,12 @@ class CameraCaptureManager(
       runCatching {
         Camera2CameraInfo.from(info).getCameraCharacteristic(CameraCharacteristics.LENS_FACING)
       }.getOrNull()
-    val position =
-      when (lensFacing) {
-        CameraCharacteristics.LENS_FACING_FRONT -> "front"
-        CameraCharacteristics.LENS_FACING_BACK -> "back"
-        CameraCharacteristics.LENS_FACING_EXTERNAL -> "external"
-        else -> "unspecified"
-      }
-    val deviceType =
-      if (lensFacing == CameraCharacteristics.LENS_FACING_EXTERNAL) "external" else "builtIn"
-    val name =
-      when (position) {
-        "front" -> "Front Camera"
-        "back" -> "Back Camera"
-        "external" -> "External Camera"
-        else -> "Camera $cameraId"
-      }
-    return CameraDeviceInfo(
-      id = cameraId,
-      name = name,
-      position = position,
-      deviceType = deviceType,
-    )
+    return when (lensFacing) {
+      CameraCharacteristics.LENS_FACING_FRONT -> CameraDeviceInfo(cameraId, "Front Camera", "front", "builtIn")
+      CameraCharacteristics.LENS_FACING_BACK -> CameraDeviceInfo(cameraId, "Back Camera", "back", "builtIn")
+      CameraCharacteristics.LENS_FACING_EXTERNAL -> CameraDeviceInfo(cameraId, "External Camera", "external", "external")
+      else -> CameraDeviceInfo(cameraId, "Camera $cameraId", "unspecified", "builtIn")
+    }
   }
 
   @SuppressLint("UnsafeOptInUsageError")

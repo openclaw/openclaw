@@ -64,6 +64,7 @@ export const WORKBOARD_CARD_TOOL_NAMES = [
   "workboard_release",
   "workboard_comment",
   "workboard_proof",
+  "workboard_verify",
   "workboard_worker_log",
   "workboard_protocol_violation",
   "workboard_unblock",
@@ -255,36 +256,38 @@ export function intersectWorkboardWorkspaceAccess(
   };
 }
 
+export class WorkboardWorkspaceOutsideRootsError extends Error {
+  constructor() {
+    super("workspace path is outside the caller's allowed workspaces.");
+    this.name = "WorkboardWorkspaceOutsideRootsError";
+  }
+}
+
 async function assertCanonicalWorkboardPathAccess(
   candidate: string,
   access: WorkboardWorkspaceAccess,
+  exactRoot = false,
 ): Promise<string> {
   if (access.unrestricted) {
     return candidate;
   }
   for (const root of access.roots) {
     const canonicalRoot = await canonicalPathFromExistingAncestor(root);
-    if (isPathInside(canonicalRoot, candidate)) {
+    if (exactRoot ? canonicalRoot === candidate : isPathInside(canonicalRoot, candidate)) {
       return candidate;
     }
   }
-  throw new Error("workspace path is outside the caller's allowed workspaces.");
+  if (exactRoot) {
+    throw new Error("workspace path must equal one of the caller's allowed workspace roots.");
+  }
+  throw new WorkboardWorkspaceOutsideRootsError();
 }
 
-export async function assertCanonicalWorkboardRootAccess(
+export function assertCanonicalWorkboardRootAccess(
   candidate: string,
   access: WorkboardWorkspaceAccess,
 ): Promise<string> {
-  if (access.unrestricted) {
-    return candidate;
-  }
-  for (const root of access.roots) {
-    const canonicalRoot = await canonicalPathFromExistingAncestor(root);
-    if (canonicalRoot === candidate) {
-      return candidate;
-    }
-  }
-  throw new Error("workspace path must equal one of the caller's allowed workspace roots.");
+  return assertCanonicalWorkboardPathAccess(candidate, access, true);
 }
 
 async function assertPathAllowed(

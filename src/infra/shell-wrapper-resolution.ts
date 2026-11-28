@@ -63,6 +63,18 @@ function withWindowsExeAliases(names: readonly string[]): string[] {
   return names.flatMap((name) => [name, `${name}.exe`]);
 }
 
+export const POSIX_SHELLS_WITH_PLUS_OPTIONS = new Set([
+  "ash",
+  "bash",
+  "dash",
+  "ksh",
+  "mksh",
+  "osh",
+  "sh",
+  "yash",
+  "zsh",
+]);
+
 export const POSIX_SHELL_WRAPPERS = new Set(withWindowsExeAliases(POSIX_SHELL_WRAPPER_NAMES));
 export const POSIX_PARSEABLE_SHELL_WRAPPERS = new Set(
   withWindowsExeAliases(POSIX_PARSEABLE_SHELL_WRAPPER_NAMES),
@@ -102,22 +114,16 @@ function resolveShellWrapperCandidate(
       return null;
     }
     const dispatch = unwrapKnownDispatchWrapperInvocation(argv);
-    if (dispatch.kind === "blocked") {
+    if (dispatch.kind === "unwrapped" && inspectEnv) {
+      hasEnvManipulation ||= hasDispatchEnvManipulation(argv);
+    }
+    const wrapper =
+      dispatch.kind === "not-wrapper" ? unwrapKnownShellMultiplexerInvocation(argv) : dispatch;
+    if (wrapper.kind === "blocked") {
       return null;
     }
-    if (dispatch.kind === "unwrapped") {
-      if (inspectEnv) {
-        hasEnvManipulation ||= hasDispatchEnvManipulation(argv);
-      }
-      argv = dispatch.argv;
-      continue;
-    }
-    const multiplexer = unwrapKnownShellMultiplexerInvocation(argv);
-    if (multiplexer.kind === "blocked") {
-      return null;
-    }
-    if (multiplexer.kind === "unwrapped") {
-      argv = multiplexer.argv;
+    if (wrapper.kind === "unwrapped") {
+      argv = wrapper.argv;
       continue;
     }
     return { argv, token0, hasEnvManipulation };
@@ -154,12 +160,10 @@ function resolveShellWrapperPayload(
   return { ...candidate, wrapper, payload, baseExecutable };
 }
 
-/** Return true when an executable token names a supported shell wrapper. */
 export function isShellWrapperExecutable(token: string): boolean {
   return SHELL_WRAPPER_CANONICAL.has(normalizeExecutableToken(token));
 }
 
-/** Return true when argv resolves to a shell wrapper invocation. */
 export function isShellWrapperInvocation(argv: string[]): boolean {
   const candidate = resolveShellWrapperCandidate(argv);
   return candidate ? isShellWrapperExecutable(candidate.token0) : false;

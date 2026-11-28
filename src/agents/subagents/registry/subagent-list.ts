@@ -1,25 +1,27 @@
 import { normalizeLowercaseStringOrEmpty } from "@openclaw/normalization-core/string-coerce";
 import { resolveSubagentLabel } from "../../../auto-reply/reply/subagents-utils.js";
-import { resolveSessionStorePathCore } from "../../../config/sessions/paths.js";
 import { readSessionEntriesFromStoreInWorker } from "../../../config/sessions/session-entry-read-runtime.js";
-import { resolveUnsuffixedSqliteTargetFromSessionStorePath } from "../../../config/sessions/session-sqlite-target-paths.js";
 import type { SessionEntry } from "../../../config/sessions/types.js";
 import type { OpenClawConfig } from "../../../config/types.openclaw.js";
 import { formatDurationCompact } from "../../../infra/format-time/format-duration.js";
-import { parseAgentSessionKey } from "../../../routing/session-key.js";
+import { isIncognitoSessionKey } from "../../../routing/session-key.js";
 import {
   formatTokenUsageDisplay,
   resolveTotalTokens,
   truncateLine,
 } from "../../../shared/subagents-format.js";
 import { resolveModelDisplayName, resolveModelDisplayRef } from "../../model-selection-display.js";
+import { resolveSubagentChildAgentId } from "./subagent-child-owner-match.js";
+import { resolveSubagentChildSessionOwner } from "./subagent-child-session-owner.js";
 import {
   observeSubagentExecution,
+  resolveYieldedLeafPausedForMs,
   type SubagentExecutionObservation,
 } from "./subagent-execution-observation.js";
 import type { SubagentRunReadIndex } from "./subagent-registry-queries.js";
 import type { SubagentRunReadRecord } from "./subagent-registry-read.types.js";
 import type { SubagentRunRecord } from "./subagent-registry.types.js";
+import { isSubagentPausedByYield } from "./subagent-requester-turn-custody.js";
 import { shouldKeepSubagentRunChildLink } from "./subagent-run-liveness.js";
 import { buildSubagentRunView } from "./subagent-run-view.js";
 import {
@@ -27,6 +29,7 @@ import {
   getSubagentSessionStartedAt,
   resolveSubagentDisplayStatus,
 } from "./subagent-session-metrics.js";
+import { loadSubagentSessionEntry } from "./subagent-session-reconciliation.js";
 
 export type SubagentListReadContext = {
   now: number;
@@ -50,7 +53,7 @@ export function captureSubagentListReadContext(
     runs.map((entry) => [
       entry.childSessionKey,
       readIndex.countPendingDescendantRuns(entry.childSessionKey, {
-        excludeSuspendedDelivery: true,
+        excludeSettledDelivery: true,
       }),
     ]),
   );
@@ -63,16 +66,13 @@ export function captureSubagentListReadContext(
   const execution = new Map(
     [...view.active, ...view.recent].map((entry) => [
       entry.runId,
-      observeSubagentExecution(
-        entry,
-        entry.pauseReason === "sessions_yield" ? fullRuns.values() : [],
-      ),
+      observeSubagentExecution(entry, isSubagentPausedByYield(entry) ? fullRuns.values() : []),
     ]),
   );
   return {
     now,
     recentMinutes,
-    view: structuredClone(view),
+    view,
     childSessionsByController,
     pendingDescendants,
     execution,
@@ -84,33 +84,55 @@ export async function readSubagentListSessionEntries(
   context: SubagentListReadContext,
 ): Promise<Map<string, SessionEntry>> {
   const runs = [...context.view.active, ...context.view.recent];
-  const keysByStore = new Map<string, string[]>();
+  const privateReads: Array<Promise<void>> = [];
+  // Raw session keys can repeat across agents; keep each run's metadata separate.
+  const entries = new Map<string, SessionEntry>();
+  const batches = new Map<
+    string,
+    { agentId: string; storePath: string; runs: SubagentRunRecord[] }
+  >();
   for (const run of runs) {
-    const storePath = resolveSessionStorePathCore(cfg.session?.store, {
-      agentId: parseAgentSessionKey(run.childSessionKey)?.agentId,
-    });
-    const keys = keysByStore.get(storePath);
-    if (keys) {
-      keys.push(run.childSessionKey);
+    if (!resolveSubagentChildAgentId(run)) {
+      continue;
+    }
+    if (isIncognitoSessionKey(run.childSessionKey)) {
+      privateReads.push(
+        loadSubagentSessionEntry({ ...run, cfg }).then((entry) => {
+          if (entry) {
+            entries.set(run.runId, entry);
+          }
+        }),
+      );
+      continue;
+    }
+    const owner = resolveSubagentChildSessionOwner(run, cfg);
+    const batch = batches.get(owner.agentId);
+    if (batch) {
+      batch.runs.push(run);
     } else {
-      keysByStore.set(storePath, [run.childSessionKey]);
+      batches.set(owner.agentId, { ...owner, runs: [run] });
     }
   }
-  const entries = new Map<string, SessionEntry>();
-  for (const [storePath, sessionKeys] of keysByStore) {
-    const target = resolveUnsuffixedSqliteTargetFromSessionStorePath(storePath);
-    const agentId = target.agentId ?? parseAgentSessionKey(sessionKeys[0]!)?.agentId;
-    if (!agentId) {
-      throw new Error("Cannot resolve subagent session metadata without an agent id");
-    }
+  const privateResults = await Promise.allSettled(privateReads);
+  const failure = privateResults.find((result) => result.status === "rejected");
+  if (failure?.status === "rejected") {
+    throw failure.reason;
+  }
+  for (const { agentId, storePath, runs: batchRuns } of batches.values()) {
     const selected = await readSessionEntriesFromStoreInWorker({
       agentId,
       storePath,
-      sessionKeys,
+      sessionKeys: batchRuns.map((run) => run.childSessionKey),
       projection: "list",
     });
-    for (const { sessionKey, entry } of selected.entries) {
-      entries.set(sessionKey, entry);
+    const bySessionKey = new Map(
+      selected.entries.map(({ sessionKey, entry }) => [sessionKey, entry]),
+    );
+    for (const run of batchRuns) {
+      const entry = bySessionKey.get(run.childSessionKey);
+      if (entry) {
+        entries.set(run.runId, entry);
+      }
     }
   }
   return entries;
@@ -137,12 +159,9 @@ function buildChildSessionIndex(
       // the controller relationship.
       continue;
     }
-    const existing = childSessionsByController.get(controllerSessionKey);
-    if (existing) {
-      existing.push(childSessionKey);
-      continue;
-    }
-    childSessionsByController.set(controllerSessionKey, [childSessionKey]);
+    const children = childSessionsByController.get(controllerSessionKey) ?? [];
+    children.push(childSessionKey);
+    childSessionsByController.set(controllerSessionKey, children);
   }
   for (const [controllerSessionKey, childSessions] of childSessionsByController) {
     childSessionsByController.set(controllerSessionKey, childSessions.toSorted());
@@ -159,7 +178,7 @@ export function buildSubagentList(params: {
   const { now, view: runView, childSessionsByController } = params.context;
   let index = 1;
   const buildListEntry = (entry: SubagentRunRecord, runtimeMs: number) => {
-    const sessionEntry = params.sessionEntries.get(entry.childSessionKey);
+    const sessionEntry = params.sessionEntries.get(entry.runId);
     const modelSelection = {
       runtimeProvider: sessionEntry?.modelProvider,
       runtimeModel: sessionEntry?.model,
@@ -181,7 +200,10 @@ export function buildSubagentList(params: {
     const task = truncateLine(entry.task.trim(), params.taskMaxChars ?? 72);
     const taskName = entry.taskName?.trim();
     const taskNamePrefix = taskName ? `${taskName}: ` : "";
-    const line = `${index}. ${taskNamePrefix}${label} (${resolveModelDisplayName(modelSelection)}, ${runtime}${usageText ? `, ${usageText}` : ""}) ${status}${normalizeLowercaseStringOrEmpty(task) !== normalizeLowercaseStringOrEmpty(label) ? ` - ${task}` : ""}`;
+    const pausedForMs = resolveYieldedLeafPausedForMs(entry, execution, now);
+    const pausedAge =
+      pausedForMs === undefined ? undefined : formatDurationCompact(pausedForMs, { spaced: true });
+    const line = `${index}. ${taskNamePrefix}${label} (${resolveModelDisplayName(modelSelection)}, ${runtime}${usageText ? `, ${usageText}` : ""}) ${status}${pausedAge ? `, paused ${pausedAge}` : ""}${normalizeLowercaseStringOrEmpty(task) !== normalizeLowercaseStringOrEmpty(label) ? ` - ${task}` : ""}`;
     const view = {
       index,
       line,
@@ -201,6 +223,7 @@ export function buildSubagentList(params: {
       totalTokens,
       startedAt: getSubagentSessionStartedAt(entry),
       ...(entry.execution.endedAt ? { endedAt: entry.execution.endedAt } : {}),
+      ...(pausedForMs === undefined ? {} : { pausedForMs }),
     };
     index += 1;
     return view;

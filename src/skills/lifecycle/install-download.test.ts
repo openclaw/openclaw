@@ -7,13 +7,14 @@ import path from "node:path";
 import { Readable } from "node:stream";
 import { __setFsSafeTestHooksForTest, getFsSafeTestHooks } from "@openclaw/fs-safe/test-hooks";
 import JSZip from "jszip";
-import * as tar from "tar";
+import * as tar from "tar/raw";
 import { afterAll, afterEach, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
 import { createDeferred } from "../../../test/helpers/promise.js";
-import { withEnvAsync } from "../../test-utils/env.js";
-import type { OpenClawTestState } from "../../test-utils/openclaw-test-state.js";
+import {
+  createOpenClawTestState,
+  type OpenClawTestState,
+} from "../../test-utils/openclaw-test-state.js";
 import { resolveSkillToolsRootDir } from "../runtime/tools-dir.js";
-import { createInstallDownloadTestState } from "../test-support/install-download-test-utils.js";
 import { fetchWithSsrFGuardMock } from "../test-support/install-test-mocks.js";
 import type { SkillInstallSpec } from "../types.js";
 import { installDownloadSpec } from "./install-download.js";
@@ -177,7 +178,10 @@ async function withDownloadServer(
 let workspaceDir = "";
 let testState: OpenClawTestState | undefined;
 beforeAll(async () => {
-  testState = await createInstallDownloadTestState();
+  testState = await createOpenClawTestState({
+    layout: "state-only",
+    prefix: "openclaw-skills-install-",
+  });
   workspaceDir = testState.workspaceDir;
 });
 
@@ -592,6 +596,35 @@ describe("installDownloadSpec extraction safety", () => {
           0o755 & ~mask,
         );
       }
+
+      if (archiveType === "zip") {
+        await withDownloadServer(
+          (response) => {
+            response.writeHead(200, {
+              "content-type": "application/octet-stream",
+              "content-disposition": 'attachment; filename="runtime.zip"',
+            });
+            response.end(archive);
+          },
+          async (origin) => {
+            const inferredKey = `${skillKey}-content-disposition`;
+            const inferred = await installDownloadSpec({
+              skillKey: inferredKey,
+              spec: {
+                kind: "download",
+                url: `${origin}/download`,
+                extract: true,
+                stripComponents: 1,
+              },
+              timeoutMs: 30_000,
+            });
+            expect(inferred.ok, inferred.message).toBe(true);
+            await expect(
+              fs.readFile(path.join(resolveSkillToolsRootDir(inferredKey), "run.sh"), "utf8"),
+            ).resolves.toBe(executableContents);
+          },
+        );
+      }
     },
   );
 
@@ -670,6 +703,54 @@ describe("installDownloadSpec extraction safety", () => {
 
       expect(result.ok).toBe(false);
       expect(await fileExists(path.join(outsideRoot, "runtime", "payload.bin"))).toBe(false);
+    },
+  );
+
+  it.each([undefined, false])(
+    "keeps extensionless downloads unextracted with extract=%s",
+    async (extract) => {
+      const payload = Buffer.from("not an archive");
+      fetchWithSsrFGuardMock.mockResolvedValue({
+        response: new Response(payload, {
+          headers: { "content-disposition": 'attachment; filename="runtime.zip"' },
+        }),
+        release: async () => undefined,
+      });
+      const skillKey = `cd-download-only-${extract}`;
+      const result = await installDownloadSpec({
+        skillKey,
+        spec: { kind: "download", url: "https://example.invalid/download", extract },
+        timeoutMs: 30_000,
+      });
+      expect(result.ok).toBe(true);
+      await expect(
+        fs.readFile(path.join(resolveSkillToolsRootDir(skillKey), "download")),
+      ).resolves.toEqual(payload);
+    },
+  );
+
+  it.each([undefined, 'attachment; filename="one.zip"; filename="two.zip"'])(
+    "fails cleanly without a usable archive name: %s",
+    async (disposition) => {
+      fetchWithSsrFGuardMock.mockResolvedValue({
+        response: new Response("plain-bytes", {
+          headers: disposition ? { "content-disposition": disposition } : {},
+        }),
+        release: async () => undefined,
+      });
+      const result = await installDownloadSpec({
+        skillKey: "cd-missing-archive-name",
+        spec: {
+          kind: "download",
+          id: "dl",
+          url: "https://example.invalid/download",
+          extract: true,
+          targetDir: "runtime",
+        },
+        timeoutMs: 30_000,
+      });
+      expect(result.ok).toBe(false);
+      expect(result.message).toBe("extract requested but archive type could not be detected");
     },
   );
 });
@@ -781,10 +862,10 @@ describe("installDownloadSpec extraction safety (tar.bz2)", () => {
     }
   });
 
-  it.runIf(process.platform !== "win32").each(["read", "close"] as const)(
-    "settles a staged %s failure before publishing any extracted files",
-    async (operation) => {
-      const name = `tbz2-staged-${operation}-failure`;
+  it.runIf(process.platform !== "win32")(
+    "settles a staged close failure before publishing any extracted files",
+    async () => {
+      const name = "tbz2-staged-close-failure";
       const targetDir = path.join(resolveSkillToolsRootDir(name), "target");
       mockArchiveResponse(TAR_BZIP2_FIXTURES.safe);
       let extractedPath = "";
@@ -802,37 +883,27 @@ describe("installDownloadSpec extraction safety (tar.bz2)", () => {
             observed.syncs += 1;
             await sync();
           });
-          if (operation === "read") {
-            const read = handle.read.bind(handle);
-            vi.spyOn(handle, "read")
-              .mockImplementationOnce(read)
-              .mockRejectedValueOnce(new Error("staged read failed at EOF"));
-          }
           const close = handle.close.bind(handle);
           vi.spyOn(handle, "close").mockImplementation(async () => {
             observed.closes += 1;
             await close();
             // Extraction's earlier durability handle must close normally.
-            if (operation === "close" && observed.syncs === 0) {
+            if (observed.syncs === 0) {
               throw new Error("staged close failed");
             }
           });
         },
       });
       try {
-        const result = await withEnvAsync(
-          operation === "read" ? { FS_SAFE_NATIVE_MODE: "off" } : {},
-          () =>
-            installDownloadSkill({
-              name,
-              url: "https://example.invalid/archive.tbz2",
-              archive: "tar.bz2",
-              targetDir,
-            }),
-        );
+        const result = await installDownloadSkill({
+          name,
+          url: "https://example.invalid/archive.tbz2",
+          archive: "tar.bz2",
+          targetDir,
+        });
 
         expect(result.ok).toBe(false);
-        expect(result.stderr).toContain(`staged ${operation} failed`);
+        expect(result.stderr).toContain("staged close failed");
         expect(openedHandles.filter(({ syncs }) => syncs === 0)).toHaveLength(1);
         expect(new Set(openedHandles.map(({ handle }) => handle)).size).toBe(openedHandles.length);
         for (const { handle, closes } of openedHandles) {

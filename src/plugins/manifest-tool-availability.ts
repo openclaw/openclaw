@@ -10,8 +10,6 @@ import type {
   PluginManifestCapabilityProviderConfigSignal,
 } from "./manifest.js";
 
-type ToolMetadata = NonNullable<PluginManifestRecord["toolMetadata"]>[string];
-
 function readPath(root: unknown, path: string | undefined): unknown {
   if (!path?.trim()) {
     return root;
@@ -30,40 +28,6 @@ function readPath(root: unknown, path: string | undefined): unknown {
   return current;
 }
 
-function hasConfiguredValue(params: {
-  config?: OpenClawConfig;
-  env: NodeJS.ProcessEnv;
-  value: unknown;
-}): boolean {
-  const secretRef = parseSecretRef(params.value, params.config?.secrets?.defaults);
-  if (secretRef?.source === "env") {
-    return (
-      canResolveEnvSecretRefInReadOnlyPath({
-        cfg: params.config,
-        provider: secretRef.provider,
-        id: secretRef.id,
-      }) && Boolean(params.env[secretRef.id]?.trim())
-    );
-  }
-  if (secretRef) {
-    const providerConfig = params.config?.secrets?.providers?.[secretRef.provider];
-    return (
-      providerConfig?.source === secretRef.source ||
-      isBuiltInDefaultSecretProviderRef(params.config ?? {}, secretRef)
-    );
-  }
-  if (typeof params.value === "string") {
-    return params.value.trim().length > 0;
-  }
-  if (Array.isArray(params.value)) {
-    return params.value.length > 0;
-  }
-  if (isRecord(params.value)) {
-    return Object.keys(params.value).length > 0;
-  }
-  return params.value !== undefined && params.value !== null;
-}
-
 export function manifestConfigSignalPasses(params: {
   config?: OpenClawConfig;
   env: NodeJS.ProcessEnv;
@@ -75,13 +39,58 @@ export function manifestConfigSignalPasses(params: {
   }
   const overlay = readPath(root, params.signal.overlayPath);
   const baseConfig = isRecord(overlay) ? { ...root, ...overlay } : root;
-  const passes = (effectiveConfig: Record<string, unknown>) =>
-    manifestEffectiveConfigSignalPasses({
-      config: params.config,
-      env: params.env,
-      effectiveConfig,
-      signal: params.signal,
-    });
+  const passes = (effectiveConfig: Record<string, unknown>): boolean => {
+    const modeSignal = params.signal.mode;
+    if (modeSignal) {
+      const modePath = modeSignal.path?.trim() || "mode";
+      const mode =
+        normalizeOptionalString(readPath(effectiveConfig, modePath)) ?? modeSignal.default;
+      if (!mode) {
+        return false;
+      }
+      if (modeSignal.allowed?.length && !modeSignal.allowed.includes(mode)) {
+        return false;
+      }
+      if (modeSignal.disallowed?.includes(mode)) {
+        return false;
+      }
+    }
+    const hasValue = (path: string) => {
+      const value = readPath(effectiveConfig, path);
+      const secretRef = parseSecretRef(value, params.config?.secrets?.defaults);
+      if (secretRef?.source === "env") {
+        return (
+          canResolveEnvSecretRefInReadOnlyPath({
+            cfg: params.config,
+            provider: secretRef.provider,
+            id: secretRef.id,
+          }) && Boolean(params.env[secretRef.id]?.trim())
+        );
+      }
+      if (secretRef) {
+        const providerConfig = params.config?.secrets?.providers?.[secretRef.provider];
+        return (
+          providerConfig?.source === secretRef.source ||
+          isBuiltInDefaultSecretProviderRef(params.config ?? {}, secretRef)
+        );
+      }
+      if (typeof value === "string") {
+        return value.trim().length > 0;
+      }
+      if (Array.isArray(value)) {
+        return value.length > 0;
+      }
+      if (isRecord(value)) {
+        return Object.keys(value).length > 0;
+      }
+      return value !== undefined && value !== null;
+    };
+    const requiredAny = params.signal.requiredAny ?? [];
+    return (
+      (params.signal.required ?? []).every(hasValue) &&
+      (requiredAny.length === 0 || requiredAny.some(hasValue))
+    );
+  };
   if (!params.signal.overlayMapPath?.trim()) {
     return passes(baseConfig);
   }
@@ -91,40 +100,6 @@ export function manifestConfigSignalPasses(params: {
     Object.entries(overlayMap)
       .toSorted(([left], [right]) => left.localeCompare(right))
       .some(([, mapOverlay]) => isRecord(mapOverlay) && passes({ ...baseConfig, ...mapOverlay }))
-  );
-}
-
-function manifestEffectiveConfigSignalPasses(params: {
-  config?: OpenClawConfig;
-  env: NodeJS.ProcessEnv;
-  effectiveConfig: Record<string, unknown>;
-  signal: PluginManifestCapabilityProviderConfigSignal;
-}): boolean {
-  const modeSignal = params.signal.mode;
-  if (modeSignal) {
-    const modePath = modeSignal.path?.trim() || "mode";
-    const mode =
-      normalizeOptionalString(readPath(params.effectiveConfig, modePath)) ?? modeSignal.default;
-    if (!mode) {
-      return false;
-    }
-    if (modeSignal.allowed?.length && !modeSignal.allowed.includes(mode)) {
-      return false;
-    }
-    if (modeSignal.disallowed?.includes(mode)) {
-      return false;
-    }
-  }
-  const hasValue = (path: string) =>
-    hasConfiguredValue({
-      config: params.config,
-      env: params.env,
-      value: readPath(params.effectiveConfig, path),
-    });
-  const requiredAny = params.signal.requiredAny ?? [];
-  return (
-    (params.signal.required ?? []).every(hasValue) &&
-    (requiredAny.length === 0 || requiredAny.some(hasValue))
   );
 }
 
@@ -171,51 +146,6 @@ export function hasNonEmptyManifestEnvCandidate(
   });
 }
 
-function listToolAuthSignals(metadata: ToolMetadata): PluginManifestCapabilityProviderAuthSignal[] {
-  if (metadata.authSignals?.length) {
-    return metadata.authSignals;
-  }
-  return [...(metadata.authProviders ?? []), ...(metadata.aliases ?? [])].map((provider) => ({
-    provider,
-  }));
-}
-
-function toolMetadataPasses(params: {
-  plugin: PluginManifestRecord;
-  metadata: ToolMetadata;
-  config?: OpenClawConfig;
-  env: NodeJS.ProcessEnv;
-  hasAuthForProvider?: (providerId: string) => boolean;
-}): boolean {
-  const authSignals = listToolAuthSignals(params.metadata);
-  if (!params.metadata.configSignals?.length && authSignals.length === 0) {
-    return true;
-  }
-  if (
-    params.metadata.configSignals?.some((signal) =>
-      manifestConfigSignalPasses({
-        config: params.config,
-        env: params.env,
-        signal,
-      }),
-    )
-  ) {
-    return true;
-  }
-  return authSignals.some(
-    (signal) =>
-      manifestProviderBaseUrlGuardPasses({
-        config: params.config,
-        guard: signal.providerBaseUrl,
-      }) &&
-      (params.hasAuthForProvider?.(signal.provider) ||
-        hasNonEmptyManifestEnvCandidate(
-          params.env,
-          manifestPluginSetupProviderEnvVars(params.plugin, signal.provider),
-        )),
-  );
-}
-
 export function hasManifestToolAvailability(params: {
   plugin: PluginManifestRecord;
   toolNames: readonly string[];
@@ -225,15 +155,39 @@ export function hasManifestToolAvailability(params: {
 }): boolean {
   return params.toolNames.some((toolName) => {
     const metadata = params.plugin.toolMetadata?.[toolName];
-    return (
-      !metadata ||
-      toolMetadataPasses({
-        plugin: params.plugin,
-        metadata,
-        config: params.config,
-        env: params.env,
-        hasAuthForProvider: params.hasAuthForProvider,
-      })
+    if (!metadata) {
+      return true;
+    }
+    const authSignals: PluginManifestCapabilityProviderAuthSignal[] = metadata.authSignals?.length
+      ? metadata.authSignals
+      : [...(metadata.authProviders ?? []), ...(metadata.aliases ?? [])].map((provider) => ({
+          provider,
+        }));
+    if (!metadata.configSignals?.length && authSignals.length === 0) {
+      return true;
+    }
+    if (
+      metadata.configSignals?.some((signal) =>
+        manifestConfigSignalPasses({
+          config: params.config,
+          env: params.env,
+          signal,
+        }),
+      )
+    ) {
+      return true;
+    }
+    return authSignals.some(
+      (signal) =>
+        manifestProviderBaseUrlGuardPasses({
+          config: params.config,
+          guard: signal.providerBaseUrl,
+        }) &&
+        (params.hasAuthForProvider?.(signal.provider) ||
+          hasNonEmptyManifestEnvCandidate(
+            params.env,
+            manifestPluginSetupProviderEnvVars(params.plugin, signal.provider),
+          )),
     );
   });
 }

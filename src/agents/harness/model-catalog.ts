@@ -33,7 +33,7 @@ import type {
   PreparedModelRuntimePluginGeneration,
   PreparedNativeModelSelection,
 } from "../prepared-model-runtime.types.js";
-import { resolveDefaultAgentWorkspaceDir } from "../workspace.js";
+import { resolveDefaultAgentWorkspaceDir } from "../workspace-default-path.js";
 import { resolveAgentHarnessPolicy } from "./policy.js";
 import { getRegisteredAgentHarness } from "./registry.js";
 import type { AgentHarnessModelCatalogParams, AgentHarnessModelCatalogResult } from "./types.js";
@@ -78,8 +78,8 @@ export async function augmentModelCatalogWithAgentHarness(params: {
   /** Explicit inventory acquisition; ordinary thinking reads stay selected-harness-only. */
   includePickerRuntimes?: boolean;
   pluginRegistry?: PluginRegistry | null;
-  isCurrent?: () => boolean;
   observationConfig?: OpenClawConfig;
+  providerIds?: readonly string[];
   includesProvider?: (provider: string) => boolean;
   normalizeProvider?: (provider: string) => string;
   onDiscoveryStarted?: (provider: string) => void;
@@ -145,12 +145,9 @@ export async function augmentModelCatalogWithAgentHarness(params: {
   const pluginRegistry = params.observationConfig
     ? params.pluginRegistry
     : (params.pluginRegistry ?? getActivePluginRegistry());
-  if (!pluginRegistry || params.isCurrent?.() === false) {
+  if (!pluginRegistry) {
     return params.snapshot;
   }
-  const isCurrent = () =>
-    params.isCurrent?.() !== false &&
-    (Boolean(params.pluginRegistry) || getActivePluginRegistry() === pluginRegistry);
   if (params.includePickerRuntimes) {
     for (const { harness } of pluginRegistry.agentHarnesses) {
       if (harness.loadModelCatalog && !runtimeProviders.has(harness.id)) {
@@ -183,14 +180,17 @@ export async function augmentModelCatalogWithAgentHarness(params: {
   }
   let result = params.snapshot;
   const completedRows: ModelCatalogEntry[] = [];
+  const requestedProviderIds = params.nativeSelection
+    ? [params.nativeSelection.provider]
+    : params.providerIds;
+  const includesProvider =
+    params.includesProvider ??
+    (requestedProviderIds
+      ? (provider: string) =>
+          requestedProviderIds.some((id) => normalizeProvider(id) === normalizeProvider(provider))
+      : undefined);
   let discovered = false;
   for (const [runtime, providers] of runtimeProviders) {
-    const scopedProviders = [...providers].filter(
-      (provider) => !params.includesProvider || params.includesProvider(provider),
-    );
-    if (providers.size > 0 && scopedProviders.length === 0) {
-      continue;
-    }
     // The scoped lookup retains transient catalog resources for executable CLI cleanup.
     const harness = withPluginRuntimeRegistryScope(
       pluginRegistry,
@@ -199,12 +199,24 @@ export async function augmentModelCatalogWithAgentHarness(params: {
     if (!harness?.loadModelCatalog) {
       continue;
     }
-    if (params.isCurrent?.() === false) {
-      return params.snapshot;
+    const discoveryProviders = harness.modelCatalogProviderIds ?? [...providers];
+    const scopedProviders = discoveryProviders.filter(
+      (provider) => !includesProvider || includesProvider(provider),
+    );
+    // An undeclared, unconfigured harness must be probed to learn its catalog.
+    if (
+      scopedProviders.length === 0 &&
+      (discoveryProviders.length > 0 ||
+        harness.modelCatalogProviderIds !== undefined ||
+        requestedProviderIds?.length === 0)
+    ) {
+      continue;
     }
     for (const provider of scopedProviders) {
       params.onDiscoveryStarted?.(provider);
     }
+    const outsideScope = ({ provider }: { provider: string }) =>
+      includesProvider !== undefined && !includesProvider(provider);
     let listedRows: readonly ModelCatalogEntry[];
     let outcomes: readonly ProviderCatalogOutcome[] = [];
     try {
@@ -214,6 +226,7 @@ export async function augmentModelCatalogWithAgentHarness(params: {
         agentDir: params.agentDir,
         workspaceDir: params.workspaceDir,
         configuredModelRefs,
+        ...(requestedProviderIds ? { providerIds: requestedProviderIds } : {}),
       });
       // v2026.9.5 plugins return plain rows; structured results also own discovery outcomes.
       if (isCatalogRowList(loaded)) {
@@ -226,21 +239,29 @@ export async function augmentModelCatalogWithAgentHarness(params: {
         }
       }
     } catch (error) {
-      if (!isCurrent()) {
-        return params.snapshot;
+      const failedProviders = new Set(
+        [
+          ...scopedProviders,
+          ...[...result.entries, ...result.routeVariants]
+            .filter((entry) => entry.nativeRuntime === runtime && !outsideScope(entry))
+            .map((entry) => entry.provider),
+        ].map(normalizeProvider),
+      );
+      if (result === params.snapshot) {
+        result = { ...params.snapshot };
       }
+      result.nativeProviderOutcomes = replaceRuntimeScope<ProviderCatalogOutcome>(
+        result.nativeProviderOutcomes,
+        runtime,
+        [...failedProviders].map((provider) => ({ provider, status: "unavailable" })),
+        outsideScope,
+      );
       params.onError?.(error, scopedProviders);
       continue;
     }
-    if (!isCurrent()) {
-      return params.snapshot;
-    }
-    const includesProvider = params.includesProvider;
     const scopedRows = includesProvider
       ? listedRows.filter((entry) => includesProvider(entry.provider))
       : listedRows;
-    const outsideScope = ({ provider }: { provider: string }) =>
-      includesProvider !== undefined && !includesProvider(provider);
     const nativeProviderOutcomes = replaceRuntimeScope(
       result.nativeProviderOutcomes,
       runtime,
@@ -309,9 +330,6 @@ export async function augmentModelCatalogWithAgentHarness(params: {
       modelCatalogRouteVariantKey(entry, variantKeyOf(entry)),
     );
   }
-  if (!isCurrent()) {
-    return params.snapshot;
-  }
   if (discovered) {
     params.onDiscoveryCompleted?.(completedRows);
   }
@@ -337,36 +355,56 @@ export function isPreparedNativeModelCatalogReady(params: {
   input: PreparedModelRuntimeInput;
   pluginGeneration: PreparedModelRuntimePluginGeneration;
   snapshot: ModelCatalogSnapshot;
-  selection: PreparedNativeModelSelection;
+  selection?: PreparedNativeModelSelection;
+  catalogAcquired?: boolean;
 }): boolean {
   const { selection, snapshot, pluginGeneration } = params;
-  if (
-    ![...snapshot.entries, ...snapshot.routeVariants].some(
-      (entry) =>
-        entry.provider === selection.provider &&
-        entry.id === selection.modelId &&
-        entry.nativeRuntime === selection.runtime,
-    )
-  ) {
+  if (!selection && params.catalogAcquired !== true) {
     return false;
   }
-  const harness = pluginGeneration.pluginRegistry?.agentHarnesses.find(
-    (registration) => registration.harness.id === selection.runtime,
-  )?.harness;
-  return (
-    !harness?.readModelCatalogReadiness ||
-    withPluginRuntimeGenerationScope(
-      {
-        metadataSnapshot: pluginGeneration.pluginMetadataSnapshot,
-        pluginRegistry: pluginGeneration.pluginRegistry,
-      },
-      () =>
-        harness.readModelCatalogReadiness?.({
-          ...preparedHarnessCatalogScope(params.input),
-          provider: selection.provider,
-          modelId: selection.modelId,
-        }),
-    ) !== undefined
+  if (!selection && !snapshot.routeVariants.some((entry) => entry.nativeRuntime)) {
+    return true;
+  }
+  let scope: AgentHarnessModelCatalogParams | undefined;
+  const readReady = (entry: ModelCatalogEntry) => {
+    const harness = pluginGeneration.pluginRegistry?.agentHarnesses.find(
+      (registration) => registration.harness.id === entry.nativeRuntime,
+    )?.harness;
+    return (
+      !harness?.readModelCatalogReadiness ||
+      harness.readModelCatalogReadiness({
+        ...(scope ??= preparedHarnessCatalogScope(params.input)),
+        provider: entry.provider,
+        modelId: entry.id,
+      }) !== undefined
+    );
+  };
+  return withPluginRuntimeGenerationScope(
+    {
+      metadataSnapshot: pluginGeneration.pluginMetadataSnapshot,
+      pluginRegistry: pluginGeneration.pluginRegistry,
+    },
+    () => {
+      if (selection) {
+        const matches = (entry: ModelCatalogEntry) =>
+          entry.provider === selection.provider &&
+          entry.id === selection.modelId &&
+          entry.nativeRuntime === selection.runtime;
+        const entry = snapshot.entries.find(matches) ?? snapshot.routeVariants.find(matches);
+        return entry !== undefined && readReady(entry);
+      }
+      // These rows already belong to this snapshot; only native readiness can change.
+      return snapshot.routeVariants.every(
+        (entry) =>
+          !entry.nativeRuntime ||
+          (snapshot.nativeProviderOutcomes &&
+            Object.hasOwn(snapshot.nativeProviderOutcomes, entry.nativeRuntime) &&
+            snapshot.nativeProviderOutcomes[entry.nativeRuntime]?.some(
+              (outcome) => outcome.provider === entry.provider && outcome.status !== "ready",
+            )) ||
+          readReady(entry),
+      );
+    },
   );
 }
 
@@ -376,7 +414,7 @@ export function augmentPreparedModelCatalogWithAgentHarness(params: {
   snapshot: ModelCatalogSnapshot;
   preparedSnapshot?: ModelCatalogSnapshot;
   pluginRegistry?: PluginRegistry;
-  isCurrent?: () => boolean;
+  providerIds?: readonly string[];
   includesProvider?: (provider: string) => boolean;
   normalizeProvider?: (provider: string) => string;
   onDiscoveryStarted?: (provider: string) => void;

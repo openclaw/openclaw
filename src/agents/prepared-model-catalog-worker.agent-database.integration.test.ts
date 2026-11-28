@@ -49,7 +49,10 @@ describe("Gateway catalog worker agent database readers", () => {
     try {
       expect(() => leaveWalMode(deleted!)).toThrow(/locked/);
       expect(() => leaveWalMode(survivor!)).toThrow(/locked/);
-      await closeDeletedAgentDatabases(fixture.agentIds[0]!, [deleted!]);
+      await closeDeletedAgentDatabases(fixture.agentIds[0]!, [deleted!], {
+        assertCurrentFinal() {},
+        async assertCurrentAsync() {},
+      });
 
       expect(leaveWalMode(deleted!)).toBe("delete");
       const survivorProfileId = `fleet:${fixture.agentIds[1]!}`;

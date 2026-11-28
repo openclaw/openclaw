@@ -1,8 +1,8 @@
 package ai.openclaw.app.ui.chat
 
 import ai.openclaw.app.chat.ChatMessageContent
-import ai.openclaw.app.chat.ChatReactionIdentity
 import ai.openclaw.app.chat.ChatReactionSummary
+import ai.openclaw.app.gateway.MessageReactionSummaryIdentitiesItem
 import ai.openclaw.app.ui.design.ClawDesignTheme
 import androidx.compose.foundation.layout.Column
 import androidx.compose.runtime.Composable
@@ -188,11 +188,11 @@ class ChatMessageReactionsTest {
       "👍",
       4,
       listOf(
-        ChatReactionIdentity("alex", "Alex"),
-        ChatReactionIdentity("blair", "Blair"),
-        ChatReactionIdentity("viewer", "Viewer"),
-        ChatReactionIdentity("casey", "Casey"),
+        MessageReactionSummaryIdentitiesItem("alex", "Alex"),
+        MessageReactionSummaryIdentitiesItem("blair", "Blair"),
+        MessageReactionSummaryIdentitiesItem("viewer", "Viewer"),
+        MessageReactionSummaryIdentitiesItem("casey", "Casey"),
       ),
     )
-  private val otherReaction = ChatReactionSummary("🚀", 1, listOf(ChatReactionIdentity("alex", "Alex")))
+  private val otherReaction = ChatReactionSummary("🚀", 1, listOf(MessageReactionSummaryIdentitiesItem("alex", "Alex")))
 }

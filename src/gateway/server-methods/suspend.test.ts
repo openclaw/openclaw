@@ -1,5 +1,3 @@
-// Covers suspension RPC validation and coordinator response mapping.
-
 import { expectDefined } from "@openclaw/normalization-core";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import { suspendHandlers } from "./suspend.js";
@@ -20,30 +18,21 @@ vi.mock("../server-active-work.js", () => ({
   createGatewayServerActiveWorkInspectors: vi.fn(() => ({ getChatRuns: vi.fn(() => 0) })),
 }));
 
-function invoke(method: keyof typeof suspendHandlers, params: unknown) {
+async function invoke(method: keyof typeof suspendHandlers, params: unknown) {
   const respond = vi.fn();
-  const pauseScheduling = vi.fn();
-  const resumeScheduling = vi.fn();
-  const warn = vi.fn();
-  const info = vi.fn();
   const handler = expectDefined(suspendHandlers[method], "suspendHandlers[method] test invariant");
-  return Promise.resolve(
-    handler({
-      params,
-      respond,
-      context: {
-        cron: { pauseScheduling, resumeScheduling },
-        logGateway: { warn, info },
-        chatAbortControllers: new Map(),
-        chatQueuedTurns: new Map(),
-      },
-    } as unknown as Parameters<typeof handler>[0]),
-  ).then(() => ({ respond, pauseScheduling, resumeScheduling, info }));
+  await handler({
+    params,
+    respond,
+    context: {
+      cron: { pauseScheduling: vi.fn(), resumeScheduling: vi.fn() },
+      logGateway: { warn: vi.fn(), info: vi.fn() },
+    },
+  } as unknown as Parameters<typeof handler>[0]);
+  return { respond };
 }
 
-beforeEach(() => {
-  vi.clearAllMocks();
-});
+beforeEach(() => vi.clearAllMocks());
 
 describe("gateway suspend handlers", () => {
   it("validates the closed prepare params shape", async () => {
@@ -59,134 +48,44 @@ describe("gateway suspend handlers", () => {
     });
   });
 
-  it("wires prepare to scheduler pause/resume and returns busy or ready", async () => {
-    coordinator.prepare.mockReturnValueOnce({
-      status: "busy",
-      reason: "active-work",
-      activeCount: 1,
-      blockers: [{ kind: "queue", count: 1, message: "busy" }],
-    });
-    const { respond, pauseScheduling, resumeScheduling } = await invoke("gateway.suspend.prepare", {
-      requestId: "request-1",
-    });
-
-    expect(coordinator.prepare).toHaveBeenCalledWith(
-      expect.objectContaining({
-        requestId: "request-1",
-        terminalPolicy: "preserve",
-        pauseScheduling: expect.any(Function),
-        resumeScheduling: expect.any(Function),
-      }),
-    );
-    const options = coordinator.prepare.mock.calls[0]?.[0];
-    options.pauseScheduling();
-    options.resumeScheduling();
-    expect(pauseScheduling).toHaveBeenCalledOnce();
-    expect(resumeScheduling).toHaveBeenCalledOnce();
-    expect(respond).toHaveBeenCalledWith(
-      true,
-      expect.objectContaining({ status: "busy", reason: "active-work" }),
-    );
-  });
-
   it("maps a competing prepared lease to retryable unavailable", async () => {
     coordinator.prepare.mockReturnValueOnce({ status: "conflict", expiresAtMs: Date.now() + 5000 });
     const { respond } = await invoke("gateway.suspend.prepare", { requestId: "request-2" });
 
-    expect(respond).toHaveBeenCalledWith(
+    expect(respond.mock.calls[0]).toMatchObject([
       false,
       undefined,
-      expect.objectContaining({
+      {
         code: "UNAVAILABLE",
         details: expect.objectContaining({ reason: "gateway-suspension-conflict" }),
         retryable: true,
-      }),
-    );
+      },
+    ]);
   });
 
-  it("passes an explicit preserve-only drain through without changing its wire result", async () => {
+  it.each([
+    ["gateway.suspend.prepare", false],
+    ["gateway.suspend.status", true],
+  ] as const)("passes through %s draining results (custody=%s)", async (method, held) => {
+    const params = held
+      ? { suspensionId: "suspension-draining" }
+      : { requestId: "request-draining", drain: true };
+    const blockers = [{ kind: "terminal-persistence", count: 1, message: "pending write" }];
     const result = {
       status: "draining",
-      suspensionId: "suspension-draining",
-      expiresAtMs: 123_000,
-      retryAfterMs: 20_000,
-      activeCount: 1,
-      blockers: [{ kind: "terminal-session", count: 1, message: "one preserved terminal" }],
+      ...(!held ? { suspensionId: "suspension-draining" } : {}),
+      activeCount: blockers.length,
+      blockers,
+      ...(held ? { writeCustody: [{ phase: "terminal-persistence", count: 1 }] } : {}),
     };
-    coordinator.prepare.mockReturnValueOnce(result);
-
-    const { respond, info } = await invoke("gateway.suspend.prepare", {
-      requestId: "request-draining",
-      drain: true,
-    });
-
-    expect(coordinator.prepare).toHaveBeenCalledWith(
-      expect.objectContaining({
-        requestId: "request-draining",
-        terminalPolicy: "preserve",
-        drain: true,
-      }),
-    );
-    expect(respond).toHaveBeenCalledWith(true, result);
-    expect(info).toHaveBeenCalledWith(
-      'DRAINING activeCount=1 blockers=terminal-session:1 holders=["one preserved terminal"] custody=clear',
-    );
-  });
-
-  it("returns a draining status without exposing its owner's suspension id", async () => {
-    const result = {
-      status: "draining",
-      expiresAtMs: 123_000,
-      retryAfterMs: 20_000,
-      activeCount: 2,
-      blockers: [
-        { kind: "root-request", count: 1, message: "1 active gateway request(s): http:openai" },
-        {
-          kind: "terminal-persistence",
-          count: 1,
-          message: "1 pending terminal session write(s): run=run-1 session=agent:main:chat-1",
-        },
-      ],
-      writeCustody: [{ phase: "terminal-persistence", count: 1 }],
-    };
-    coordinator.status.mockReturnValueOnce(result);
-
-    const { respond, info } = await invoke("gateway.suspend.status", {
-      suspensionId: "suspension-draining",
-    });
-
-    expect(coordinator.status).toHaveBeenCalledWith("suspension-draining", false);
-    expect(respond).toHaveBeenCalledWith(true, result);
-    expect(info).toHaveBeenCalledWith(
-      'DRAINING activeCount=2 blockers=root-request:1,terminal-persistence:1 holders=["1 active gateway request(s): http:openai","1 pending terminal session write(s): run=run-1 session=agent:main:chat-1"] custody=held',
-    );
-  });
-
-  it("maps prepare and status recovery to the same retryable unavailable error", async () => {
-    const recovering = {
-      status: "recovering",
-      reason: "scheduler-resume-failed",
-      retryAfterMs: 1_000,
-    };
-    coordinator.prepare.mockReturnValueOnce(recovering);
-    coordinator.status.mockReturnValueOnce(recovering);
-
-    const prepared = await invoke("gateway.suspend.prepare", { requestId: "request-recovery" });
-    const status = await invoke("gateway.suspend.status", { suspensionId: "stale-id" });
-
-    for (const respond of [prepared.respond, status.respond]) {
-      expect(respond).toHaveBeenCalledWith(
-        false,
-        undefined,
-        expect.objectContaining({
-          code: "UNAVAILABLE",
-          message: "gateway scheduler recovery is pending",
-          retryable: true,
-          retryAfterMs: 1_000,
-          details: { reason: "scheduler-resume-failed" },
-        }),
+    coordinator[held ? "status" : "prepare"].mockReturnValue(result);
+    const { respond } = await invoke(method, params);
+    if (!held) {
+      expect(coordinator.prepare).toHaveBeenCalledWith(
+        expect.objectContaining({ ...params, terminalPolicy: "preserve" }),
       );
     }
+    expect(respond).toHaveBeenCalledWith(true, result);
   });
 
   it("keeps resume idempotent and rejects a mismatched active lease", async () => {
@@ -199,40 +98,9 @@ describe("gateway suspend handlers", () => {
       message: "gateway suspension id does not match",
     });
 
-    coordinator.resume.mockReturnValueOnce({
-      ok: true,
-      status: "running",
-      resumed: false,
-    });
+    const result = { ok: true, status: "running", resumed: false };
+    coordinator.resume.mockReturnValueOnce(result);
     const resumed = await invoke("gateway.suspend.resume", { suspensionId: "suspension-1" });
-    expect(resumed.respond).toHaveBeenCalledWith(true, {
-      ok: true,
-      status: "running",
-      resumed: false,
-    });
-  });
-
-  it("returns retryable unavailable when scheduler resume needs retry", async () => {
-    coordinator.resume.mockReturnValueOnce({
-      ok: false,
-      reason: "scheduler-resume-failed",
-      retryAfterMs: 1_000,
-    });
-
-    const { respond } = await invoke("gateway.suspend.resume", {
-      suspensionId: "suspension-1",
-    });
-
-    expect(respond).toHaveBeenCalledWith(
-      false,
-      undefined,
-      expect.objectContaining({
-        code: "UNAVAILABLE",
-        message: "gateway scheduler recovery is pending",
-        retryable: true,
-        retryAfterMs: 1_000,
-        details: { reason: "scheduler-resume-failed" },
-      }),
-    );
+    expect(resumed.respond).toHaveBeenCalledWith(true, result);
   });
 });

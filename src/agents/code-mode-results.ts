@@ -161,7 +161,7 @@ export function createCodeModeResultsAccess(
     },
     load(id: unknown) {
       const { entry } = find(id);
-      return { value: JSON.parse(entry.json) as unknown, networkContent: entry.networkContent };
+      return { json: entry.json, networkContent: entry.networkContent };
     },
     delete(id: unknown) {
       const { store, entry, id: key } = find(id);

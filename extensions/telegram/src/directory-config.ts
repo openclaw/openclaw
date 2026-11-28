@@ -28,10 +28,7 @@ export const listTelegramDirectoryPeersFromConfig =
       if (!trimmed) {
         return null;
       }
-      if (/^-?\d+$/.test(trimmed)) {
-        return trimmed;
-      }
-      return trimmed.startsWith("@") ? trimmed : `@${trimmed}`;
+      return /^-?\d+$/.test(trimmed) || trimmed.startsWith("@") ? trimmed : `@${trimmed}`;
     },
   });
 

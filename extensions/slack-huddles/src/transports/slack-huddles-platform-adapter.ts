@@ -15,10 +15,6 @@ import type {
   SlackHuddlesTranscriptSnapshot,
 } from "./types.js";
 
-function slackHuddleOrigin(meetingUrl: string): string | undefined {
-  return normalizeSlackHuddleUrlForReuse(meetingUrl) ? "https://app.slack.com" : undefined;
-}
-
 export const SLACK_HUDDLES_PLATFORM_ADAPTER = MeetingPlatformAdapter.create<
   MeetingBrowserJoinSession<SlackHuddlesMode>,
   SlackHuddlesMode,
@@ -68,7 +64,8 @@ export const SLACK_HUDDLES_PLATFORM_ADAPTER = MeetingPlatformAdapter.create<
     retryCaptions: false,
     unavailableMessage:
       "Open the OpenClaw browser profile, finish Slack sign-in, admission, or permission prompt, then retry.",
-    origin: slackHuddleOrigin,
+    origin: (meetingUrl) =>
+      normalizeSlackHuddleUrlForReuse(meetingUrl) ? "https://app.slack.com" : undefined,
     scripts: slackHuddlePageScripts,
   }),
 });

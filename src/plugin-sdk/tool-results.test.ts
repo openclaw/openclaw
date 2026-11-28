@@ -13,7 +13,7 @@ describe("tool result helpers", () => {
 
     expectTypeOf(result).toEqualTypeOf<AgentToolResult<typeof payload>>();
     expect(result).toEqual({
-      content: [{ type: "text", text: JSON.stringify(payload, null, 2) }],
+      content: [{ type: "text", text: JSON.stringify(payload) }],
       details: payload,
     });
   });

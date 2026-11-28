@@ -1,6 +1,7 @@
 import type { AmbientEnvTriggerPolicy } from "../channels/config-presence.js";
 import type { ChannelId } from "../channels/plugins/types.public.js";
 import { listAmbientOnlyConfiguredChannelIds } from "../plugins/channel-presence-policy.js";
+import { pluginCommandSupportsChannel } from "../plugins/plugin-command-metadata.js";
 import { getPluginInstance } from "../plugins/plugin-instance-scope.js";
 import type { PluginRegistry } from "../plugins/registry-types.js";
 import type { prepareGatewayLifecycle } from "./server-lifecycle.js";
@@ -54,6 +55,7 @@ export function createPluginReloadChannels({
       await attempt(errors, async () => {
         // Whole-channel targets include preparation that had not reserved an account at drain.
         const result = await channelManager.startChannel(plugin.id, undefined, {
+          reason: "plugin-reload",
           manual: false,
           preserveManualStop: true,
           skipUnavailableAccounts: true,
@@ -96,6 +98,18 @@ export function createPluginReloadChannels({
     for (const channel of [...previousRegistry.channels, ...nextRegistry.channels]) {
       if (changedPluginIds.has(channel.pluginId)) {
         channelTargets.add(channel.plugin.id);
+      }
+    }
+    // Native command handlers keep candidates bound to the registry that started them.
+    // Replacing it retires those candidates even when retained entries keep identity.
+    for (const { plugin } of previousRegistry.channels) {
+      if (
+        plugin.capabilities?.nativeCommands === true &&
+        previousRegistry.commands.some(({ command }) =>
+          pluginCommandSupportsChannel(command, plugin.id),
+        )
+      ) {
+        channelTargets.add(plugin.id);
       }
     }
   };

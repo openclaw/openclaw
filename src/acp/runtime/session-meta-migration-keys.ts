@@ -1,16 +1,16 @@
-import type { DatabaseSync } from "node:sqlite";
 import { normalizeLowercaseStringOrEmpty } from "@openclaw/normalization-core/string-coerce";
 import { tryResolveLegacyDataOwnerAgentId } from "../../agents/agent-scope-config.js";
 import { resolvePersistedSessionStoreOwnerForKey } from "../../config/sessions/session-store-owner.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import { executeSqliteQuerySync } from "../../infra/kysely-sync.js";
+import type { EngineConnection } from "../../infra/sql-connection.js";
 import { normalizeAgentId, parseAgentSessionKey } from "../../routing/session-key.js";
 import {
   acpSessionRowMatchesEntry,
   buildAcpDatabaseSessionKey,
   getAcpSessionKysely,
   parseAcpDatabaseSessionKey,
-  selectAcpSessionRow,
+  selectAcpSessionRowForRead,
 } from "./session-meta-keys.js";
 import type { AcpSessionEntryBinding, AcpSessionRow } from "./session-meta-read.types.js";
 
@@ -78,7 +78,7 @@ export function legacyAcpSessionKeyCandidates(
 
 /** Legacy file imports inspect every supported prior key before deciding whether metadata is superseded. */
 export function selectAcpMigrationRowForStoreEntry(
-  database: DatabaseSync,
+  database: EngineConnection,
   sessionKey: string,
   agentId: string,
   cfg: OpenClawConfig,
@@ -98,11 +98,9 @@ export function selectAcpMigrationRowForStoreEntry(
     ...(!parsed ? [`@agent:${normalizeAgentId(agentId)}:${normalizedKey}`] : []),
     ...(parsed || owner === normalizeAgentId(agentId) ? [normalizedKey] : []),
   ];
-  for (const key of keys) {
-    const row = selectAcpSessionRow(database, key);
-    if (row && (!entry || acpSessionRowMatchesEntry(row, entry))) {
-      return row;
-    }
+  const selected = selectAcpSessionRowForRead(database, { keys, entry });
+  if (selected) {
+    return selected;
   }
   const normalized = normalizeLowercaseStringOrEmpty(normalizedKey);
   const free = parseAgentSessionKey(normalized);

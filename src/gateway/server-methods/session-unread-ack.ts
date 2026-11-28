@@ -5,6 +5,10 @@ export type SessionPatchTargetIdentity = Pick<
   SessionsPatchParams,
   | "agentId"
   | "expectedLifecycleRevision"
+  | "expectedSidebarRoot"
+  | "expectedCategory"
+  | "expectedArchived"
+  | "expectedSidebarAncestors"
   | "expectedMarkedUnreadAt"
   | "expectedPermissionMode"
   | "expectedSandboxMode"
@@ -14,37 +18,41 @@ export type SessionPatchTargetIdentity = Pick<
   | "key"
 >;
 
-const CONDITIONAL_UNREAD_ACK_ALLOWED_KEYS = new Set([
-  "agentId",
-  "expectedLifecycleRevision",
-  "expectedMarkedUnreadAt",
-  "expectedSessionId",
+export const SESSION_PATCH_ADDRESS_KEYS = [
   "key",
+  "agentId",
+  "expectedSessionId",
+  "expectedLifecycleRevision",
+] as const;
+
+const CONDITIONAL_UNREAD_ACK_ALLOWED_KEYS = new Set([
+  ...SESSION_PATCH_ADDRESS_KEYS,
+  "expectedMarkedUnreadAt",
   "unread",
 ]);
 
-/**
- * A patch that carries nothing but the read acknowledgement itself (plus its
- * compare-and-swap preconditions). Shared with the patch projection owner, which
- * must not age the session row for a read.
- */
-export function isSessionUnreadAckOnlyPatch(patch: { unread?: boolean }): boolean {
+export function isReadMarkerOnly(patch: { unread?: boolean }): boolean {
   return (
-    patch.unread === false &&
+    typeof patch.unread === "boolean" &&
     Object.entries(patch).every(
       ([key, value]) => value === undefined || CONDITIONAL_UNREAD_ACK_ALLOWED_KEYS.has(key),
     )
   );
 }
 
+/**
+ * A patch that carries nothing but the read acknowledgement itself (plus its
+ * compare-and-swap preconditions).
+ */
+function isSessionUnreadAckOnlyPatch(patch: { unread?: boolean }): boolean {
+  return patch.unread === false && isReadMarkerOnly(patch);
+}
+
 export function validateSessionUnreadAck(
   patch: { unread?: boolean },
   target: Pick<SessionPatchTargetIdentity, "expectedMarkedUnreadAt">,
 ): string | undefined {
-  if (target.expectedMarkedUnreadAt === undefined) {
-    return undefined;
-  }
-  if (isSessionUnreadAckOnlyPatch(patch)) {
+  if (target.expectedMarkedUnreadAt === undefined || isSessionUnreadAckOnlyPatch(patch)) {
     return undefined;
   }
   return "expectedMarkedUnreadAt requires unread=false as the only mutation.";

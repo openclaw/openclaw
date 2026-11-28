@@ -1,24 +1,20 @@
 import { embeddedAgentLog } from "openclaw/plugin-sdk/agent-harness-runtime";
 import { codexAppIdentityKey } from "./app-identity.js";
 import {
+  resolveCodexPluginThreadAppCacheKey,
   serializeCodexAppInventoryError,
   type CodexAppInventoryCache,
-  type CodexAppInventoryRequest,
   type CodexAppInventorySnapshot,
 } from "./app-inventory-cache.js";
 import { CODEX_SESSION_OVERRIDABLE_LAYER_TYPES } from "./config-layer-policy.js";
 import type { ResolvedCodexPluginsPolicy } from "./config.js";
-import type {
-  CodexPluginInventory,
-  CodexPluginOwnedApp,
-  CodexPluginRuntimeRequest,
-} from "./plugin-inventory.js";
 import {
-  type CodexAppServerRequestResult,
-  isJsonObject,
-  type JsonObject,
-  type v2,
-} from "./protocol.js";
+  createCodexAppInventoryRequest,
+  type CodexPluginInventory,
+  type CodexPluginOwnedApp,
+  type CodexPluginRuntimeRequest,
+} from "./plugin-inventory.js";
+import { isJsonObject, type JsonObject, type v2 } from "./protocol.js";
 
 export type CodexPluginThreadAppAdmissionDiagnostic = {
   code: "account_app_inventory_unavailable" | "account_app_config_unavailable";
@@ -39,40 +35,27 @@ export type CodexPluginThreadAppAdmissionConfig = {
   layers: readonly JsonObject[];
 };
 
-export function resolveCodexPluginThreadAppCacheKey(params: {
-  appCacheKey: string;
-  threadId?: string;
-}): string {
-  return params.threadId
-    ? `${params.appCacheKey}:thread:${encodeURIComponent(params.threadId)}`
-    : params.appCacheKey;
-}
-
-function createCodexPluginThreadAppInventoryRequest(
-  params: CodexPluginThreadAppAdmissionParams,
-): CodexAppInventoryRequest {
-  return async (method, requestParams) =>
-    (await params.request(
-      method,
-      params.threadId ? { ...requestParams, threadId: params.threadId } : requestParams,
-    )) as CodexAppServerRequestResult<typeof method>;
-}
-
 export async function refreshCodexPluginAppInventory(
   params: CodexPluginThreadAppAdmissionParams,
   appCache: CodexAppInventoryCache,
-  options: { forceRefetch?: boolean; reason?: string; targetAppIds?: readonly string[] } = {},
+  options: {
+    forceRefetch?: boolean;
+    reuseRecentForcedRefresh?: boolean;
+    reason?: string;
+    targetAppIds?: readonly string[];
+  } = {},
 ): Promise<CodexAppInventorySnapshot | undefined> {
   if (!params.appCacheKey) {
     return undefined;
   }
-  const request = createCodexPluginThreadAppInventoryRequest(params);
+  const request = createCodexAppInventoryRequest(params);
   try {
     return await appCache.refreshNow({
       key: resolveCodexPluginThreadAppCacheKey(params),
       request,
       nowMs: params.nowMs,
       forceRefetch: options.forceRefetch,
+      reuseRecentForcedRefresh: options.reuseRecentForcedRefresh,
       targetAppIds: options.targetAppIds,
     });
   } catch (error) {
@@ -141,7 +124,7 @@ export async function readCodexThreadAdmissibleAccountApps(
 }> {
   // Account-wide policy must use a complete snapshot; a targeted plugin read
   // cannot establish which other account apps are authorized for this thread.
-  const request = createCodexPluginThreadAppInventoryRequest(params);
+  const request = createCodexAppInventoryRequest(params);
   const cachedInventory = appCache.read({
     key: resolveCodexPluginThreadAppCacheKey(params),
     request,
@@ -152,7 +135,8 @@ export async function readCodexThreadAdmissibleAccountApps(
     cachedInventory.state === "fresh" && !cachedInventory.snapshot?.targetAppIds?.length
       ? cachedInventory.snapshot
       : await refreshCodexPluginAppInventory(params, appCache, {
-          forceRefetch: false,
+          // Account-only admission has no plugin readiness repair. Keep the
+          // default cold refresh so an empty native snapshot can be populated.
           reason: "account_apps_all",
           targetAppIds: [],
         });
@@ -241,7 +225,6 @@ export async function readCodexConfigForAppAdmission(
     };
   } catch (error) {
     const details = serializeCodexAppInventoryError(error);
-    embeddedAgentLog.warn("codex plugin app admission config read failed", { error: details });
     throw new Error(
       `Could not verify the Codex app allowlist: ${String(details.message)}. No native thread was started; resolve the native configuration error and retry.`,
       { cause: error },

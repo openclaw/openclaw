@@ -37,12 +37,9 @@ import javax.net.ssl.TrustManagerFactory
 import javax.net.ssl.X509ExtendedTrustManager
 import javax.net.ssl.X509TrustManager
 
-/** TLS pinning inputs for a discovered or manually configured gateway endpoint. */
+/** A non-null value enables TLS; a null fingerprint selects platform trust. */
 data class GatewayTlsParams(
-  val required: Boolean,
   val expectedFingerprint: String?,
-  val allowTOFU: Boolean,
-  val stableId: String,
 )
 
 /** SSL primitives and accepted route trust installed into OkHttp. */
@@ -210,6 +207,10 @@ internal fun decideGatewayTlsTrust(
   if (probeResult.failure == GatewayTlsProbeFailure.ENDPOINT_UNREACHABLE) {
     return GatewayTlsTrustDecision.Failed(GatewayTlsProbeFailure.ENDPOINT_UNREACHABLE)
   }
+  // Recovery comes first; manual pin entry stays reachable from the recovery screen's advanced action.
+  if (probeResult.failure == GatewayTlsProbeFailure.TLS_HANDSHAKE_TIMEOUT) {
+    return GatewayTlsTrustDecision.Failed(GatewayTlsProbeFailure.TLS_HANDSHAKE_TIMEOUT)
+  }
   return GatewayTlsTrustDecision.PromptRequired(
     fingerprintSha256 = null,
     previousFingerprintSha256 = null,
@@ -217,28 +218,16 @@ internal fun decideGatewayTlsTrust(
   )
 }
 
-/** Builds a TLS config that supports pinned fingerprints and trust-on-first-use. */
-fun buildGatewayTlsConfig(
-  params: GatewayTlsParams?,
-  onStore: ((String) -> Unit)? = null,
-): GatewayTlsConfig? {
-  if (params == null) return null
-  return buildGatewayTlsConfig(
-    params = params,
-    defaultTrust = defaultTrustManager(),
-    onStore = onStore,
-  )
-}
+/** Builds a TLS config using a stored fingerprint or platform trust. */
+fun buildGatewayTlsConfig(params: GatewayTlsParams?): GatewayTlsConfig? = params?.let { buildGatewayTlsConfig(it, defaultTrustManager()) }
 
 internal fun buildGatewayTlsConfig(
   params: GatewayTlsParams,
   defaultTrust: X509TrustManager,
-  onStore: ((String) -> Unit)? = null,
 ): GatewayTlsConfig {
   val expectedInput = params.expectedFingerprint?.takeIf { it.isNotBlank() }
   val expected = expectedInput?.let(::normalizeGatewayTlsFingerprintInput)
   val effectiveFingerprint = AtomicReference(expected)
-  val usesPlatformTrust = expectedInput == null && !params.allowTOFU
 
   fun recordAcceptedFingerprint(chain: Array<X509Certificate>) {
     val certificate = chain.firstOrNull() ?: return
@@ -295,14 +284,6 @@ internal fun buildGatewayTlsConfig(
           effectiveFingerprint.set(fingerprint)
           return
         }
-        if (params.allowTOFU) {
-          // Store only after the TLS stack presents a concrete server cert; the
-          // caller persists the fingerprint against the endpoint's stable id,
-          // and later connects must come back through the pinned branch above.
-          onStore?.invoke(fingerprint)
-          effectiveFingerprint.set(fingerprint)
-          return
-        }
         defaultTrust.checkServerTrusted(chain, authType)
         effectiveFingerprint.set(fingerprint)
       }
@@ -312,7 +293,7 @@ internal fun buildGatewayTlsConfig(
         authType: String,
         socket: Socket,
       ) {
-        if (usesPlatformTrust && defaultTrust is X509ExtendedTrustManager) {
+        if (expectedInput == null && defaultTrust is X509ExtendedTrustManager) {
           // Preserve the connected hostname for Android's domain-aware platform trust manager.
           defaultTrust.checkServerTrusted(chain, authType, socket)
           recordAcceptedFingerprint(chain)
@@ -326,7 +307,7 @@ internal fun buildGatewayTlsConfig(
         authType: String,
         engine: SSLEngine,
       ) {
-        if (usesPlatformTrust && defaultTrust is X509ExtendedTrustManager) {
+        if (expectedInput == null && defaultTrust is X509ExtendedTrustManager) {
           defaultTrust.checkServerTrusted(chain, authType, engine)
           recordAcceptedFingerprint(chain)
         } else {
@@ -340,7 +321,7 @@ internal fun buildGatewayTlsConfig(
   val context = SSLContext.getInstance("TLS")
   context.init(null, arrayOf(trustManager), SecureRandom())
   val verifier =
-    if (expectedInput != null || params.allowTOFU) {
+    if (expectedInput != null) {
       // When pinning, we intentionally ignore hostname mismatch (service discovery often yields IPs).
       HostnameVerifier { _, _ -> true }
     } else {
@@ -491,46 +472,16 @@ internal suspend fun probeGatewayTlsFingerprint(
     } catch (err: Throwable) {
       fingerprintRef.get()?.let { return@withContext GatewayTlsProbeResult(fingerprintSha256 = it) }
       val failure =
-        when (err) {
-          is SSLException,
-          is EOFException,
-          -> {
-            GatewayTlsProbeFailure.TLS_UNAVAILABLE
-          }
-
-          is SocketTimeoutException -> {
-            if (connected) {
-              GatewayTlsProbeFailure.TLS_HANDSHAKE_TIMEOUT
-            } else {
-              GatewayTlsProbeFailure.ENDPOINT_UNREACHABLE
-            }
-          }
-
-          is ConnectException,
-          is UnknownHostException,
-          -> {
-            GatewayTlsProbeFailure.ENDPOINT_UNREACHABLE
-          }
-
-          is SocketException -> {
-            if (connected) {
-              GatewayTlsProbeFailure.TLS_UNAVAILABLE
-            } else {
-              GatewayTlsProbeFailure.ENDPOINT_UNREACHABLE
-            }
-          }
-
-          else -> {
-            GatewayTlsProbeFailure.ENDPOINT_UNREACHABLE
-          }
+        when {
+          err is SSLException || err is EOFException -> GatewayTlsProbeFailure.TLS_UNAVAILABLE
+          !connected || err is ConnectException || err is UnknownHostException -> GatewayTlsProbeFailure.ENDPOINT_UNREACHABLE
+          err is SocketTimeoutException -> GatewayTlsProbeFailure.TLS_HANDSHAKE_TIMEOUT
+          err is SocketException -> GatewayTlsProbeFailure.TLS_UNAVAILABLE
+          else -> GatewayTlsProbeFailure.ENDPOINT_UNREACHABLE
         }
       GatewayTlsProbeResult(failure = failure)
     } finally {
-      try {
-        socket.close()
-      } catch (_: Throwable) {
-        // ignore
-      }
+      runCatching { socket.close() }
     }
   }
 }

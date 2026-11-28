@@ -1,4 +1,4 @@
-import type { DatabaseSync, SQLInputValue } from "node:sqlite";
+import type { SQLInputValue } from "node:sqlite";
 import type { WorkboardCard } from "@openclaw/workboard-contract";
 import {
   compileSqliteQueryBindings,
@@ -11,6 +11,7 @@ import {
   type Row,
   type WorkboardCardDatabase,
 } from "./sqlite-store-records.js";
+import type { WorkboardSqlConnection } from "./sqlite-store-schema.js";
 
 function cardBoardId(card: WorkboardCard): string {
   return card.metadata?.automation?.boardId ?? "default";
@@ -31,7 +32,7 @@ export function bindNull(value: unknown): SQLInputValue {
 }
 
 export function prepareWorkboardUpsert(
-  db: DatabaseSync,
+  db: WorkboardSqlConnection,
   table: "workboard_cards" | "workboard_boards" | "workboard_notification_subscriptions",
   fields: Record<string, () => SQLInputValue>,
   preserved: readonly string[] = [],
@@ -60,7 +61,7 @@ export function prepareWorkboardUpsert(
 }
 
 function insertChildren<T>(
-  db: DatabaseSync,
+  db: WorkboardSqlConnection,
   table: (typeof CARD_CHILD_TABLES)[number],
   cardId: string,
   entries: readonly T[] | undefined,
@@ -72,40 +73,61 @@ function insertChildren<T>(
       .where("card_id", "=", cardId),
   );
   db.prepare(deletion.compiled.sql).run(...deletion.bind());
-  if (entries?.length) {
-    const { compiled, bind } = compileSqliteQueryBindings<[T, number]>((parameter) =>
+  if (!entries?.length) {
+    return;
+  }
+  // The widest child row has 12 columns; 64 rows stay below 999 parameters.
+  for (let offset = 0; offset < entries.length; offset += 64) {
+    const size = Math.min(64, entries.length - offset);
+    const { compiled, bind } = compileSqliteQueryBindings<readonly T[]>((parameter) =>
       getNodeSqliteKysely<WorkboardCardDatabase>(db)
         .insertInto(table)
-        .values({
-          ordinal: parameter(([, ordinal]) => ordinal),
-          ...Object.fromEntries(
-            Object.entries(fields).map(([column, read]) => [
-              column,
-              parameter(([entry]) => read(entry)),
-            ]),
-          ),
-        }),
+        .values(
+          Array.from({ length: size }, (_, index) => ({
+            ordinal: offset + index,
+            ...Object.fromEntries(
+              Object.entries(fields).map(([column, read]) => [
+                column,
+                parameter((source) => read(source[offset + index]!)),
+              ]),
+            ),
+          })),
+        ),
     );
     // Defer payload getters until native preparation succeeds, as for the parent row.
     const statement = db.prepare(compiled.sql);
-    entries.forEach((entry, ordinal) => statement.run(...bind([entry, ordinal])));
+    statement.run(...bind(entries));
   }
 }
 
-export function insertCard(db: DatabaseSync, card: WorkboardCard): void {
-  const board = executeSqliteQueryTakeFirstSync(
-    db,
-    getNodeSqliteKysely<{ workboard_boards: { id: string; kind: string | null } }>(db)
-      .selectFrom("workboard_boards")
-      .select("kind")
-      .where("id", "=", cardBoardId(card)),
+export function insertCard(
+  db: WorkboardSqlConnection,
+  card: WorkboardCard,
+  condition?: { mode: "absent"; key: string } | { mode: "updated"; key: string; updatedAt: number },
+): boolean {
+  const query = getNodeSqliteKysely<
+    WorkboardCardDatabase & { workboard_boards: { id: string; kind: string | null } }
+  >(db);
+  let admission = query.selectNoFrom((eb) =>
+    eb.selectFrom("workboard_boards").select("kind").where("id", "=", cardBoardId(card)).as("kind"),
   );
-  if (board?.kind === "sessions") {
+  if (condition) {
+    admission = admission.where((eb) => {
+      const current = eb.selectFrom("workboard_cards").select("id").where("id", "=", condition.key);
+      return condition.mode === "absent"
+        ? eb.not(eb.exists(current))
+        : eb.exists(current.where("updated_at", "=", condition.updatedAt));
+    });
+  }
+  const board = executeSqliteQueryTakeFirstSync(db, admission);
+  if (!board) {
+    return false;
+  }
+  if (board.kind === "sessions") {
     throw new Error("Sessions boards do not hold cards");
   }
   const execution = card.execution;
   const metadata = card.metadata;
-  const query = getNodeSqliteKysely<WorkboardCardDatabase>(db);
   prepareWorkboardUpsert(db, "workboard_cards", {
     id: () => card.id,
     board_id: () => cardBoardId(card),
@@ -261,4 +283,5 @@ export function insertCard(db: DatabaseSync, card: WorkboardCard): void {
     );
     db.prepare(compiled.sql).run(...bind());
   }
+  return true;
 }

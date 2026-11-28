@@ -5,7 +5,7 @@ import type {
   WAPresence,
 } from "baileys";
 import { captureEffectAuthority } from "openclaw/plugin-sdk/fetch-runtime";
-import { KeyedAsyncQueue } from "openclaw/plugin-sdk/keyed-async-queue";
+import { enqueueKeyedTask } from "openclaw/plugin-sdk/keyed-async-queue";
 import {
   parseStrictPositiveInteger,
   resolveTimerTimeoutMs,
@@ -32,7 +32,7 @@ type WhatsAppSocketOperationTimeoutHooks = {
   onSendMessageTimeout?: (params: { jid: string; promise: Promise<WAMessage | undefined> }) => void;
 };
 
-const socketSendMessageQueues = new WeakMap<WhatsAppSocketOperationAdapter, KeyedAsyncQueue>();
+const socketSendMessageQueues = new WeakMap<WhatsAppSocketOperationAdapter, Promise<void>>();
 
 export const DEFAULT_WHATSAPP_SOCKET_TIMING: Required<WhatsAppSocketTimingOptions> = {
   keepAliveIntervalMs: 25_000,
@@ -78,20 +78,6 @@ export function resolveWhatsAppSocketOperationTimeoutMs(timeoutMs: number): numb
   return resolveTimerTimeoutMs(timeoutMs, DEFAULT_WHATSAPP_SOCKET_TIMING.defaultQueryTimeoutMs);
 }
 
-function runSerializedSocketSendMessage<T>(
-  sock: WhatsAppSocketOperationAdapter,
-  run: () => Promise<T>,
-): Promise<T> {
-  // Adapter instances are short-lived, so key the FIFO by the raw socket. A
-  // bounded send releases the queue after timeout to avoid wedging later work.
-  let queue = socketSendMessageQueues.get(sock);
-  if (!queue) {
-    queue = new KeyedAsyncQueue();
-    socketSendMessageQueues.set(sock, queue);
-  }
-  return queue.enqueue("sendMessage", run);
-}
-
 export async function withWhatsAppSocketOperationTimeout<T>(
   operation: string,
   promise: Promise<T>,
@@ -116,43 +102,43 @@ export function createWhatsAppSocketOperationTimeoutAdapter(
   hooks?: WhatsAppSocketOperationTimeoutHooks,
 ): WhatsAppSocketOperationAdapter {
   const operationTimeoutMs = resolveWhatsAppSocketOperationTimeoutMs(timeoutMs);
-  return {
-    sendMessage: (jid, content, options) => {
-      const effect = captureEffectAuthority();
-      return runSerializedSocketSendMessage(sock, () => {
-        let active = true;
-        const send = effect.initiate(() => {
-          if (!active) {
-            throw new WhatsAppSocketOperationTimeoutError("sendMessage", operationTimeoutMs);
-          }
-          hooks?.assertCurrent?.();
-          return options ? sock.sendMessage(jid, content, options) : sock.sendMessage(jid, content);
-        });
-        return withWhatsAppSocketOperationTimeout("sendMessage", send, operationTimeoutMs, () => {
-          active = false;
-          hooks?.onSendMessageTimeout?.({ jid, promise: send });
-        });
-      });
-    },
-    sendPresenceUpdate: (presence, jid) => {
+  const runOperation = <T>(
+    operation: keyof WhatsAppSocketOperationAdapter,
+    send: () => Promise<T>,
+    onTimeout?: (promise: Promise<T>) => void,
+  ) => {
+    const effect = captureEffectAuthority();
+    const run = () => {
       let active = true;
-      const send = captureEffectAuthority().initiate(() => {
+      const promise = effect.initiate(() => {
         if (!active) {
-          throw new WhatsAppSocketOperationTimeoutError("sendPresenceUpdate", operationTimeoutMs);
+          throw new WhatsAppSocketOperationTimeoutError(operation, operationTimeoutMs);
         }
         hooks?.assertCurrent?.();
-        return jid === undefined
-          ? sock.sendPresenceUpdate(presence)
-          : sock.sendPresenceUpdate(presence, jid);
+        return send();
       });
-      return withWhatsAppSocketOperationTimeout(
-        "sendPresenceUpdate",
-        send,
-        operationTimeoutMs,
-        () => {
-          active = false;
-        },
-      );
-    },
+      return withWhatsAppSocketOperationTimeout(operation, promise, operationTimeoutMs, () => {
+        active = false;
+        onTimeout?.(promise);
+      });
+    };
+    // Key by the raw socket across short-lived adapters; bounded sends release on timeout.
+    return operation === "sendMessage"
+      ? enqueueKeyedTask({ tails: socketSendMessageQueues, key: sock, task: run })
+      : run();
+  };
+  return {
+    sendMessage: (jid, content, options) =>
+      runOperation(
+        "sendMessage",
+        () => (options ? sock.sendMessage(jid, content, options) : sock.sendMessage(jid, content)),
+        (promise) => hooks?.onSendMessageTimeout?.({ jid, promise }),
+      ),
+    sendPresenceUpdate: (presence, jid) =>
+      runOperation("sendPresenceUpdate", () =>
+        jid === undefined
+          ? sock.sendPresenceUpdate(presence)
+          : sock.sendPresenceUpdate(presence, jid),
+      ),
   };
 }

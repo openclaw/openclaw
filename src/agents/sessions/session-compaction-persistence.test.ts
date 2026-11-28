@@ -1,4 +1,5 @@
 import { expect, it, vi } from "vitest";
+import { createDeferred } from "../../../test/helpers/promise.js";
 import {
   getSessionCompactionPersistence,
   getSessionCompactionPersistenceAsync,
@@ -28,10 +29,7 @@ it("retains an awaited compaction invocation and revokes deferred descendants on
   const manager = {};
   const persist = vi.fn<CompactionAppendPersistenceAsync>();
   const failure = new Error("worker rejected compaction");
-  let releaseDescendant!: () => void;
-  const released = new Promise<void>((resolve) => {
-    releaseDescendant = resolve;
-  });
+  const { promise: released, resolve: releaseDescendant } = createDeferred();
   let descendant: Promise<CompactionAppendPersistenceAsync | undefined> | undefined;
   await expect(
     withSessionCompactionPersistenceAsync(manager, persist, async () => {

@@ -16,6 +16,7 @@ import {
   type SubagentLifecycleEndedReason,
 } from "./subagent-lifecycle-events.js";
 import type { SubagentRunRecord } from "./subagent-registry.types.js";
+import { isSubagentPausedByYield } from "./subagent-requester-turn-custody.js";
 import { getSubagentRunRuntimeKey } from "./subagent-run-generation.js";
 
 const log = createSubsystemLogger("agents/subagent-registry-completion");
@@ -42,7 +43,7 @@ export function resolveSubagentKillTargetState(
   const endedAt = entry.execution.endedAt;
   const outcome = entry.execution.outcome;
   const completion = entry.completion;
-  if (typeof endedAt !== "number" || entry.pauseReason === "sessions_yield") {
+  if (typeof endedAt !== "number" || isSubagentPausedByYield(entry)) {
     return undefined;
   }
   if (
@@ -147,29 +148,27 @@ export async function emitSubagentEndedHookOnce(params: {
   params.inFlightOwners.add(owner);
   try {
     const hookRunner = getGlobalHookRunner();
-    if (!hookRunner) {
+    if (!hookRunner?.hasHooks("subagent_ended")) {
       return false;
     }
-    if (hookRunner.hasHooks("subagent_ended")) {
-      await hookRunner.runSubagentEnded(
-        {
-          targetSessionKey: params.entry.childSessionKey,
-          targetKind: SUBAGENT_TARGET_KIND_SUBAGENT,
-          reason: params.reason,
-          sendFarewell: params.sendFarewell,
-          accountId: params.accountId,
-          runId: params.entry.runId,
-          endedAt: params.entry.execution.endedAt,
-          outcome: params.outcome,
-          error: params.error,
-        },
-        {
-          runId: params.entry.runId,
-          childSessionKey: params.entry.childSessionKey,
-          requesterSessionKey: params.entry.requesterSessionKey,
-        },
-      );
-    }
+    await hookRunner.runSubagentEnded(
+      {
+        targetSessionKey: params.entry.childSessionKey,
+        targetKind: SUBAGENT_TARGET_KIND_SUBAGENT,
+        reason: params.reason,
+        sendFarewell: params.sendFarewell,
+        accountId: params.accountId,
+        runId: params.entry.runId,
+        endedAt: params.entry.execution.endedAt,
+        outcome: params.outcome,
+        error: params.error,
+      },
+      {
+        runId: params.entry.runId,
+        childSessionKey: params.entry.childSessionKey,
+        requesterSessionKey: params.entry.requesterSessionKey,
+      },
+    );
     await params.recordEmitted();
     return true;
   } catch (err) {

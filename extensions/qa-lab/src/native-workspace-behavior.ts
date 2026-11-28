@@ -28,29 +28,34 @@ export type QaNativeWorkspaceBehavior = {
 const EDIT_PATH = "runtime-tool-fixture-edit.txt";
 const EDIT_DENIED_PATH = "../runtime-tool-fixture-edit-denied.txt";
 
-const BEHAVIORS: Record<QaNativeWorkspaceBehaviorId, QaNativeWorkspaceBehavior> = {
-  bash: {
-    id: "bash",
+function commandBehavior(id: "bash" | "exec", exitCode: number): QaNativeWorkspaceBehavior {
+  const marker = `RUNTIME_NATIVE_${id.toUpperCase()}`;
+  return {
+    id,
     nativeToolName: "bash",
     providerToolName: "exec_command",
     happyArgs: {
-      cmd: nodeCommand("process.stdout.write('RUNTIME_NATIVE_BASH_OK\\n')"),
+      cmd: nodeCommand(`process.stdout.write('${marker}_OK\\n')`),
     },
     failureArgs: {
-      cmd: nodeCommand("process.stderr.write('RUNTIME_NATIVE_BASH_FAIL\\n'); process.exitCode = 7"),
+      cmd: nodeCommand(`process.stderr.write('${marker}_FAIL\\n'); process.exitCode = ${exitCode}`),
     },
-    happyOutputMarker: "RUNTIME_NATIVE_BASH_OK",
-    failureOutputMarker: "RUNTIME_NATIVE_BASH_FAIL",
+    happyOutputMarker: `${marker}_OK`,
+    failureOutputMarker: `${marker}_FAIL`,
     commandReceiptSignatures: {
-      happy: ["node -e", "process.stdout.write", "RUNTIME_NATIVE_BASH_OK"],
+      happy: ["node -e", "process.stdout.write", `${marker}_OK`],
       failure: [
         "node -e",
         "process.stderr.write",
-        "RUNTIME_NATIVE_BASH_FAIL",
-        "process.exitCode = 7",
+        `${marker}_FAIL`,
+        `process.exitCode = ${exitCode}`,
       ],
     },
-  },
+  };
+}
+
+const BEHAVIORS: Record<QaNativeWorkspaceBehaviorId, QaNativeWorkspaceBehavior> = {
+  bash: commandBehavior("bash", 7),
   edit: {
     id: "edit",
     nativeToolName: "apply_patch",
@@ -81,28 +86,7 @@ const BEHAVIORS: Record<QaNativeWorkspaceBehaviorId, QaNativeWorkspaceBehavior> 
     happyMutation: { path: EDIT_PATH, contents: "after edit\n" },
     failureSentinel: { path: EDIT_DENIED_PATH, contents: "outside edit original\n" },
   },
-  exec: {
-    id: "exec",
-    nativeToolName: "bash",
-    providerToolName: "exec_command",
-    happyArgs: {
-      cmd: nodeCommand("process.stdout.write('RUNTIME_NATIVE_EXEC_OK\\n')"),
-    },
-    failureArgs: {
-      cmd: nodeCommand("process.stderr.write('RUNTIME_NATIVE_EXEC_FAIL\\n'); process.exitCode = 8"),
-    },
-    happyOutputMarker: "RUNTIME_NATIVE_EXEC_OK",
-    failureOutputMarker: "RUNTIME_NATIVE_EXEC_FAIL",
-    commandReceiptSignatures: {
-      happy: ["node -e", "process.stdout.write", "RUNTIME_NATIVE_EXEC_OK"],
-      failure: [
-        "node -e",
-        "process.stderr.write",
-        "RUNTIME_NATIVE_EXEC_FAIL",
-        "process.exitCode = 8",
-      ],
-    },
-  },
+  exec: commandBehavior("exec", 8),
   "fs-read": {
     id: "fs-read",
     nativeToolName: "bash",

@@ -24,7 +24,7 @@ The recommended action surface on this page requires Private API mode. The `imsg
 The helper-injection technique uses `imsg`'s own dylib to reach Messages private APIs. There is no third-party server or BlueBubbles runtime in the OpenClaw iMessage path.
 
 <Warning>
-**Disabling SIP is a real security tradeoff.** SIP is one of macOS's core protections against running modified system code; turning it off system-wide opens up additional attack surface and side effects. Notably, **disabling SIP on Apple Silicon Macs also disables the ability to install and run iOS apps on your Mac**.
+**Disabling SIP is a real security tradeoff.** SIP is one of macOS's core protections against running modified system code; turning it off system-wide creates more ways to attack the system and has other side effects. Notably, **disabling SIP on Apple Silicon Macs also disables the ability to install and run iOS apps on your Mac**.
 
 Treat this as a deliberate operational choice, especially on a primary personal Mac. For production-quality OpenClaw iMessage, prefer a dedicated Mac or bot macOS user where you are comfortable enabling the bridge. If your threat model cannot tolerate SIP being off anywhere, the iMessage plugin is limited to basic mode — text and media send/receive only, no reactions / edit / unsend / effects / group ops.
 </Warning>

@@ -1,4 +1,3 @@
-// Builds provider-aware auth-choice options and grouped onboarding menus.
 import { normalizeProviderId } from "@openclaw/model-catalog-core/provider-id";
 import { uniqueStrings } from "@openclaw/normalization-core/string-normalization";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
@@ -22,12 +21,6 @@ function compareOptionLabels(a: AuthChoiceOption, b: AuthChoiceOption): number {
 /** Keep the first-tier provider list stable; every other group belongs under More. */
 export function isFeaturedAuthChoiceGroup(group: AuthChoiceGroup): boolean {
   return isFeaturedProviderAuthChoiceGroup(group.value);
-}
-
-function compareAssistantOptions(a: AuthChoiceOption, b: AuthChoiceOption): number {
-  const priorityA = a.assistantPriority ?? 0;
-  const priorityB = b.assistantPriority ?? 0;
-  return priorityA - priorityB || compareOptionLabels(a, b);
 }
 
 /** Sort auth-choice groups with featured providers first, then stable labels. */
@@ -73,10 +66,9 @@ export function buildAuthChoiceGroups(params: {
   groups: AuthChoiceGroup[];
   skipOption?: AuthChoiceOption;
 } {
-  const optionByValue = new Map<AuthChoice, AuthChoiceOption>();
-  for (const option of CORE_AUTH_CHOICE_OPTIONS) {
-    optionByValue.set(option.value, option);
-  }
+  const optionByValue = new Map<AuthChoice, AuthChoiceOption>(
+    CORE_AUTH_CHOICE_OPTIONS.map((option) => [option.value, option]),
+  );
   for (const {
     option: { group, ...option },
     providerId,
@@ -136,12 +128,14 @@ export function buildAuthChoiceGroups(params: {
       options: [option],
     });
   }
-  const groups = Array.from(groupsById.values())
-    .map((group) => {
-      group.options = group.options.toSorted(compareAssistantOptions);
-      return group;
-    })
-    .toSorted(compareAuthChoiceGroups);
+  for (const group of groupsById.values()) {
+    group.options = group.options.toSorted((a, b) => {
+      const priorityA = a.assistantPriority ?? 0;
+      const priorityB = b.assistantPriority ?? 0;
+      return priorityA - priorityB || compareOptionLabels(a, b);
+    });
+  }
+  const groups = Array.from(groupsById.values()).toSorted(compareAuthChoiceGroups);
 
   const skipOption = params.includeSkip
     ? ({ value: "skip", label: "Skip for now" } satisfies AuthChoiceOption)

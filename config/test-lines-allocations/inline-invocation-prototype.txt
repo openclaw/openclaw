@@ -1,0 +1,4 @@
+# Mounted-pane output isolation, grouped disclosure, parking, composer/scroll/order
+# and terminal behavior, plus keyed and retained-object publication regressions.
+# 65 additional lines exercise overlapping commands and actual virtualized history.
+394

@@ -157,67 +157,65 @@ impl GatewayDiscovery {
             .values()
             .cloned()
             .collect::<Vec<_>>();
-        gateways.sort_by(|left, right| {
-            left.name
-                .to_ascii_lowercase()
-                .cmp(&right.name.to_ascii_lowercase())
-                .then_with(|| left.host.cmp(&right.host))
-                .then_with(|| left.port.cmp(&right.port))
+        gateways.sort_by_cached_key(|gateway| {
+            (
+                gateway.name.to_ascii_lowercase(),
+                gateway.host.clone(),
+                gateway.port,
+            )
         });
         Ok(gateways)
     }
 
     fn dashboard_url(&self, host: &str, port: u16, tls: bool) -> Result<Url, String> {
-        let host = validated_service_host(host)
-            .ok_or_else(|| "The discovered gateway returned an invalid host.".to_string())?;
-        let gateways = self
-            .gateways
-            .lock()
-            .map_err(|_| "Gateway discovery snapshot is unavailable.".to_string())?;
-        let gateway = gateways
-            .values()
-            .find(|gateway| gateway.host == host && gateway.port == port && gateway.tls == tls)
-            .ok_or_else(|| "The discovered gateway is no longer available.".to_string())?;
-        if !gateway.advertises_direct_transport() {
-            return Err(
-                "The discovered gateway does not advertise a direct connection.".to_string(),
-            );
-        }
-        if !gateway.has_safe_resolved_address() {
-            return Err(
-                "The discovered gateway does not have a safe resolved address.".to_string(),
-            );
-        }
-        let mut url = Url::parse(if gateway.tls {
-            "https://localhost/"
-        } else {
-            "http://localhost/"
-        })
-        .expect("static dashboard URL should parse");
-        if gateway.tls {
-            // TLS binds the validated SRV hostname through certificate validation and SNI.
-            url.set_host(Some(&gateway.host))
-                .map_err(|_| "The discovered gateway returned an invalid host.".to_string())?;
-        } else {
-            // Plaintext has no certificate binding, so navigate to the same private address
-            // validated in this snapshot instead of letting WebKit resolve the hostname again.
-            let address = gateway
-                .addresses
-                .iter()
-                .filter_map(|address| resolved_ip_address(address))
-                .find(is_private_address)
-                .ok_or_else(|| {
-                    "The discovered gateway does not have a safe resolved address.".to_string()
-                })?;
-            url.set_ip_host(address)
-                .map_err(|_| "The discovered gateway returned an invalid host.".to_string())?;
-        }
-        url.set_port(Some(gateway.port))
-            .map_err(|_| "The discovered gateway returned an invalid port.".to_string())?;
-        Ok(url)
+        self.with_gateway(host, port, tls, |gateway| {
+            if !gateway.advertises_direct_transport() {
+                return Err(
+                    "The discovered gateway does not advertise a direct connection.".to_string(),
+                );
+            }
+            if !gateway.has_safe_resolved_address() {
+                return Err(
+                    "The discovered gateway does not have a safe resolved address.".to_string(),
+                );
+            }
+            let mut url = Url::parse(if gateway.tls {
+                "https://localhost/"
+            } else {
+                "http://localhost/"
+            })
+            .expect("static dashboard URL should parse");
+            if gateway.tls {
+                // TLS binds the validated SRV hostname through certificate validation and SNI.
+                url.set_host(Some(&gateway.host))
+                    .map_err(|_| "The discovered gateway returned an invalid host.".to_string())?;
+            } else {
+                // Plaintext has no certificate binding, so navigate to the same private address
+                // validated in this snapshot instead of letting WebKit resolve the hostname again.
+                let address = gateway
+                    .addresses
+                    .iter()
+                    .filter_map(|address| resolved_ip_address(address))
+                    .find(is_private_address)
+                    .ok_or_else(|| {
+                        "The discovered gateway does not have a safe resolved address.".to_string()
+                    })?;
+                url.set_ip_host(address)
+                    .map_err(|_| "The discovered gateway returned an invalid host.".to_string())?;
+            }
+            url.set_port(Some(gateway.port))
+                .map_err(|_| "The discovered gateway returned an invalid port.".to_string())?;
+            Ok(url)
+        })?
     }
 
-    fn gateway_name(&self, host: &str, port: u16, tls: bool) -> Result<String, String> {
+    fn with_gateway<T>(
+        &self,
+        host: &str,
+        port: u16,
+        tls: bool,
+        select: impl FnOnce(&DiscoveredGateway) -> T,
+    ) -> Result<T, String> {
         let host = validated_service_host(host)
             .ok_or_else(|| "The discovered gateway returned an invalid host.".to_string())?;
         self.gateways
@@ -225,7 +223,7 @@ impl GatewayDiscovery {
             .map_err(|_| "Gateway discovery snapshot is unavailable.".to_string())?
             .values()
             .find(|gateway| gateway.host == host && gateway.port == port && gateway.tls == tls)
-            .map(|gateway| gateway.name.clone())
+            .map(select)
             .ok_or_else(|| "The discovered gateway is no longer available.".to_string())
     }
 }
@@ -434,7 +432,7 @@ pub async fn connect_discovered_gateway(
     tls: bool,
 ) -> Result<(), String> {
     let url = discovery.dashboard_url(&host, port, tls)?;
-    let name = discovery.gateway_name(&host, port, tls)?;
+    let name = discovery.with_gateway(&host, port, tls, |gateway| gateway.name.clone())?;
     crate::gateway_windows::open_discovered(app, url, name).await
 }
 
@@ -522,57 +520,46 @@ mod tests {
     }
 
     #[test]
-    fn plaintext_dashboard_url_uses_validated_resolved_ipv4_address() {
-        let service = ServiceInfo::new(
-            GATEWAY_SERVICE_TYPE,
-            "plaintext IPv4 (OpenClaw)",
-            "plaintext-ipv4.local.",
-            "192.168.1.9",
-            18789,
-            &[("gatewayDirectReachable", "1")][..],
-        )
-        .expect("service should be valid")
-        .as_resolved_service();
-        let discovery = GatewayDiscovery::default();
-        apply_event(
-            &discovery.gateways,
-            ServiceEvent::ServiceResolved(Box::new(service)),
-        );
+    fn plaintext_dashboard_urls_use_validated_resolved_addresses() {
+        for (name, host, address, expected) in [
+            (
+                "plaintext IPv4 (OpenClaw)",
+                "plaintext-ipv4.local",
+                "192.168.1.9",
+                "http://192.168.1.9:18789/",
+            ),
+            (
+                "plaintext IPv6 (OpenClaw)",
+                "plaintext-ipv6.local",
+                "fd00::7",
+                "http://[fd00::7]:18789/",
+            ),
+        ] {
+            let service = ServiceInfo::new(
+                GATEWAY_SERVICE_TYPE,
+                name,
+                &format!("{host}."),
+                address,
+                18789,
+                &[("gatewayDirectReachable", "1")][..],
+            )
+            .expect("service should be valid")
+            .as_resolved_service();
+            let discovery = GatewayDiscovery::default();
+            apply_event(
+                &discovery.gateways,
+                ServiceEvent::ServiceResolved(Box::new(service)),
+            );
 
-        assert_eq!(
-            discovery
-                .dashboard_url("plaintext-ipv4.local", 18789, false)
-                .expect("plaintext dashboard URL")
-                .as_str(),
-            "http://192.168.1.9:18789/"
-        );
-    }
-
-    #[test]
-    fn plaintext_dashboard_url_brackets_validated_resolved_ipv6_address() {
-        let service = ServiceInfo::new(
-            GATEWAY_SERVICE_TYPE,
-            "plaintext IPv6 (OpenClaw)",
-            "plaintext-ipv6.local.",
-            "fd00::7",
-            18789,
-            &[("gatewayDirectReachable", "1")][..],
-        )
-        .expect("service should be valid")
-        .as_resolved_service();
-        let discovery = GatewayDiscovery::default();
-        apply_event(
-            &discovery.gateways,
-            ServiceEvent::ServiceResolved(Box::new(service)),
-        );
-
-        assert_eq!(
-            discovery
-                .dashboard_url("plaintext-ipv6.local", 18789, false)
-                .expect("plaintext IPv6 dashboard URL")
-                .as_str(),
-            "http://[fd00::7]:18789/"
-        );
+            assert_eq!(
+                discovery
+                    .dashboard_url(host, 18789, false)
+                    .expect("plaintext dashboard URL")
+                    .as_str(),
+                expected,
+                "{host} -> {address}"
+            );
+        }
     }
 
     #[test]
@@ -605,55 +592,43 @@ mod tests {
     }
 
     #[test]
-    fn rejects_public_plaintext_resolved_address() {
-        let service = ServiceInfo::new(
-            GATEWAY_SERVICE_TYPE,
-            "public plaintext (OpenClaw)",
-            "public-plaintext.local.",
-            "198.51.100.7",
-            18789,
-            &[("gatewayDirectReachable", "1")][..],
-        )
-        .expect("service should be valid")
-        .as_resolved_service();
-        let discovery = GatewayDiscovery::default();
-        apply_event(
-            &discovery.gateways,
-            ServiceEvent::ServiceResolved(Box::new(service)),
-        );
+    fn plaintext_dashboard_urls_reject_public_hosts_or_addresses() {
+        for (name, host, address) in [
+            (
+                "public plaintext (OpenClaw)",
+                "public-plaintext.local",
+                "198.51.100.7",
+            ),
+            (
+                "public hostname (OpenClaw)",
+                "dashboard.example.com",
+                "192.168.1.9",
+            ),
+        ] {
+            let service = ServiceInfo::new(
+                GATEWAY_SERVICE_TYPE,
+                name,
+                &format!("{host}."),
+                address,
+                18789,
+                &[("gatewayDirectReachable", "1")][..],
+            )
+            .expect("service should be valid")
+            .as_resolved_service();
+            let discovery = GatewayDiscovery::default();
+            apply_event(
+                &discovery.gateways,
+                ServiceEvent::ServiceResolved(Box::new(service)),
+            );
 
-        assert_eq!(
-            discovery
-                .dashboard_url("public-plaintext.local", 18789, false)
-                .expect_err("public plaintext should not connect"),
-            "The discovered gateway does not have a safe resolved address."
-        );
-    }
-
-    #[test]
-    fn rejects_public_plaintext_hostname_even_with_private_resolution() {
-        let service = ServiceInfo::new(
-            GATEWAY_SERVICE_TYPE,
-            "public hostname (OpenClaw)",
-            "dashboard.example.com.",
-            "192.168.1.9",
-            18789,
-            &[("gatewayDirectReachable", "1")][..],
-        )
-        .expect("service should be valid")
-        .as_resolved_service();
-        let discovery = GatewayDiscovery::default();
-        apply_event(
-            &discovery.gateways,
-            ServiceEvent::ServiceResolved(Box::new(service)),
-        );
-
-        assert_eq!(
-            discovery
-                .dashboard_url("dashboard.example.com", 18789, false)
-                .expect_err("public plaintext hostname should not connect"),
-            "The discovered gateway does not have a safe resolved address."
-        );
+            assert_eq!(
+                discovery
+                    .dashboard_url(host, 18789, false)
+                    .expect_err("public plaintext should not connect"),
+                "The discovered gateway does not have a safe resolved address.",
+                "{host} -> {address}"
+            );
+        }
     }
 
     #[test]

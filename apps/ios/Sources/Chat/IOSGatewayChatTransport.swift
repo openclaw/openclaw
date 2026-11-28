@@ -4,7 +4,59 @@ import OpenClawKit
 import OpenClawProtocol
 import OSLog
 
-struct IOSGatewayChatTransport: OpenClawChatGatewayTransport {
+struct IOSGatewayChatTransport: OpenClawChatGatewayTransport, OpenClawChatGoalTransport, OpenClawChildStopTransport,
+ChatPRReaderTransport {
+    func prepareChildStop(_ target: OpenClawChildStopTarget) async -> OpenClawChildStopAction? {
+        guard let route = await self.currentSessionMutationRoute(),
+              let scopes = await self.gateway.currentOperatorScopes(ifCurrentRoute: route),
+              target.allows(scopes: scopes),
+              await self.gateway.supportsServerMethod(OpenClawChildStopTarget.method, ifCurrentRoute: route) == true
+        else { return nil }
+        return OpenClawChildStopAction(target: target) {
+            try await self.requestSessionMutation(target.request, ifCurrentRoute: route)
+        }
+    }
+
+    func pullRequestOverview(url: String, sessionKey: String) async throws -> Data? {
+        let scoped = URL(string: url)?.host?.lowercased() != "github.com"
+        let method = scoped ? "github.sessionDetail" : "github.detail"
+        guard await self.gatewayAdvertisesMethod(method) == true else { return nil }
+        var params: [String: AnyCodable] = ["url": .init(url), "section": .init("overview")]
+        if let agent = OpenClawChatSessionKey.agentID(from: sessionKey) ?? self
+            .chatGatewayAgentID { params["agentId"] = .init(agent) }
+        if scoped { params["sessionKey"] = .init(sessionKey) }
+        let data = try await self.requestChatGateway(.init(method: method, params: params, timeoutMs: 12000))
+        // Some readers return the author image only from preview. Keep usable overview data if it isn't available.
+        guard var doc = try? JSONSerialization.jsonObject(with: data) as? [String: Any], doc["url"] as? String == url,
+              doc["imageUrl"] as? String == nil, let author = doc["author"] as? String,
+              !Task.isCancelled else { return data }
+        let preview = scoped ? "github.sessionPreview" : "github.preview"
+        guard await self.gatewayAdvertisesMethod(preview) == true else { return data }
+        params.removeValue(forKey: "section")
+        guard let bytes = try? await self.requestChatGateway(.init(method: preview, params: params, timeoutMs: 8000)),
+              let profile = try? JSONSerialization.jsonObject(with: bytes) as? [String: Any],
+              profile["url"] as? String == url, profile["author"] as? String == author,
+              let image = profile["imageUrl"] as? String else { return data }
+        doc["imageUrl"] = image
+        return try JSONSerialization.data(withJSONObject: doc)
+    }
+
+    func goalControls() async -> (update: Bool, clear: Bool) {
+        guard let route = await self.currentSessionMutationRoute(),
+              let scopes = await self.gateway.currentOperatorScopes(ifCurrentRoute: route),
+              scopes.contains("operator.write") || scopes.contains("operator.admin") else { return (false, false) }
+        async let update = self.gateway.supportsServerMethod("sessions.goal.update", ifCurrentRoute: route)
+        async let clear = self.gateway.supportsServerMethod("sessions.goal.clear", ifCurrentRoute: route)
+        return await (update == true, clear == true)
+    }
+
+    func mutateGoal(_ mutation: OpenClawChatGoalMutation) async throws -> Data {
+        guard let route = await self.currentSessionMutationRoute() else {
+            throw OpenClawChatTransportSendError.notDispatched
+        }
+        return try await self.requestSessionMutation(mutation.request, ifCurrentRoute: route)
+    }
+
     var chatGatewayAgentID: String? {
         self.globalAgentId
     }
@@ -16,7 +68,7 @@ struct IOSGatewayChatTransport: OpenClawChatGatewayTransport {
     static let logger = Logger(subsystem: "ai.openclawfoundation.app", category: "ios.chat.transport")
     let gateway: GatewayNodeSession
     private let widgetGateway: GatewayNodeSession?
-    let globalAgentId: String?
+    private(set) var globalAgentId: String?
     let outboxGatewayID: String?
     private let mediaArtifactLoader: IOSMediaArtifactLoader?
     private let sourceResourceLoader: IOSSourceResourceLoader?
@@ -26,13 +78,9 @@ struct IOSGatewayChatTransport: OpenClawChatGatewayTransport {
     }
 
     func scoped(toAgentID agentID: String) -> (any OpenClawChatTransport)? {
-        IOSGatewayChatTransport(
-            gateway: self.gateway,
-            widgetGateway: self.widgetGateway,
-            globalAgentId: agentID,
-            outboxGatewayID: self.outboxGatewayID,
-            mediaArtifactLoader: self.mediaArtifactLoader,
-            sourceResourceLoader: self.sourceResourceLoader)
+        var scoped = self
+        scoped.globalAgentId = agentID.trimmedNonEmpty?.lowercased()
+        return scoped
     }
 
     init(
@@ -45,8 +93,7 @@ struct IOSGatewayChatTransport: OpenClawChatGatewayTransport {
     {
         self.gateway = gateway
         self.widgetGateway = widgetGateway
-        let normalized = globalAgentId?.trimmingCharacters(in: .whitespacesAndNewlines).lowercased()
-        self.globalAgentId = normalized?.isEmpty == false ? normalized : nil
+        self.globalAgentId = globalAgentId?.trimmedNonEmpty?.lowercased()
         self.outboxGatewayID = GatewayStableIdentifier.exact(outboxGatewayID)
         self.mediaArtifactLoader = mediaArtifactLoader
         self.sourceResourceLoader = sourceResourceLoader
@@ -65,19 +112,20 @@ struct IOSGatewayChatTransport: OpenClawChatGatewayTransport {
                 reason: OpenClawChatTransportUpgradeMessage.routingContract,
                 allowsLiveSend: true)
         }
-        let supportsSettingsCAS = await gateway.supportsServerCapability(
+        let gatewaySupportsSettingsCAS = await gateway.supportsServerCapability(
             .sessionSettingsCAS,
             ifCurrentRoute: route) == true
-        let transport = self
-        guard let routingContract = try? await transport.sessionRoutingContract(ifCurrentRoute: route)
+        let supportsSettingsCAS = gatewaySupportsSettingsCAS && !ScreenshotFixtureMode.failsQueuedSendSettings
+        guard let routingContract = try? await self.sessionRoutingContract(ifCurrentRoute: route)
         else { return .unavailable(reason: nil) }
         return .available(OpenClawChatTransportRouteLease(
-            sendTargetedMessageWithSettings: { key, agent, settings, text, thinking, id, attachments in
-                try await transport.sendMessage(
+            sendTargetedMessage: { key, target, text, thinking, id, attachments in
+                try await self.sendMessage(
                     sessionKey: key,
-                    agentID: agent,
+                    agentID: target.agentID,
                     expectedSessionRoutingContract: routingContract,
-                    expectedSessionSettings: settings,
+                    expectedSessionSettings: target.expectedSessionSettings,
+                    queueMode: target.queueMode,
                     message: text,
                     thinking: thinking,
                     idempotencyKey: id,
@@ -86,7 +134,7 @@ struct IOSGatewayChatTransport: OpenClawChatGatewayTransport {
                     distinguishPreDispatchRouteChange: true)
             },
             requestTargetedHistory: { sessionKey, agentID in
-                try await transport.requestHistory(
+                try await self.requestHistory(
                     sessionKey: sessionKey,
                     agentID: agentID,
                     ifCurrentRoute: route)
@@ -97,22 +145,19 @@ struct IOSGatewayChatTransport: OpenClawChatGatewayTransport {
 
     func acquireSwarmRouteLease() async -> OpenClawChatSwarmRouteLease? {
         guard let route = await currentSessionMutationRoute() else { return nil }
-        let transport = self
         return OpenClawChatSwarmRouteLease(
             isEnabled: { sessionKey in
-                try await transport.isSwarmEnabled(sessionKey: sessionKey, ifCurrentRoute: route)
+                try await self.isSwarmEnabled(sessionKey: sessionKey, ifCurrentRoute: route)
             },
             listChildSessions: { parentKey in
-                try await transport.listChildSessions(parentKey: parentKey, ifCurrentRoute: route)
+                try await self.listChildSessions(parentKey: parentKey, ifCurrentRoute: route)
             })
     }
 
     func acquireSessionSettingsRouteLease() async -> OpenClawChatSessionSettingsRouteLease? {
-        let route = await currentSessionMutationRoute()
-        guard let route else { return nil }
-        let transport = self
+        guard let route = await currentSessionMutationRoute() else { return nil }
         return OpenClawChatSessionSettingsRouteLease { sessionKey, agentID, patch in
-            try await transport.patchSessionSettings(
+            try await self.patchSessionSettings(
                 sessionKey: sessionKey,
                 agentID: agentID,
                 patch: patch,
@@ -125,30 +170,28 @@ struct IOSGatewayChatTransport: OpenClawChatGatewayTransport {
         let unreadAckContract = await gateway.supportsServerCapability(
             .sessionUnreadAckContract,
             ifCurrentRoute: route)
-        let transport = self
         return OpenClawChatSessionMutationRouteLease(
-            sessionTarget: { transport.sessionTarget(for: $0) },
+            sessionTarget: { self.sessionTarget(for: $0) },
             unreadAckContract: unreadAckContract,
             request: { request in
-                try await transport.requestSessionMutation(request, ifCurrentRoute: route)
+                try await self.requestSessionMutation(request, ifCurrentRoute: route)
             })
     }
 
     func acquireNewSessionRouteLease() async -> OpenClawChatNewSessionRouteLease? {
         guard let route = await currentSessionMutationRoute() else { return nil }
-        let transport = self
         let request: @Sendable (OpenClawChatGatewayRequest) async throws -> Data = { request in
-            try await transport.requestSessionMutation(request, ifCurrentRoute: route)
+            try await self.requestSessionMutation(request, ifCurrentRoute: route)
         }
         return OpenClawChatNewSessionRouteLease(
             loadAgents: { onUpdate in
                 try await OpenClawChatAgentsListResponse.load(
                     request: request,
-                    isCurrent: { await transport.gateway.currentRoute() == route },
+                    isCurrent: { await self.gateway.currentRoute() == route },
                     onUpdate: onUpdate)
             },
             createSession: { key, label, agentID, parentSessionKey, worktree, worktreeBaseRef in
-                let createRequest = transport.createSessionRequest(
+                let createRequest = self.createSessionRequest(
                     key: key,
                     label: label,
                     agentID: agentID,
@@ -326,10 +369,10 @@ struct IOSGatewayChatTransport: OpenClawChatGatewayTransport {
         guard let route = await self.currentSessionMutationRoute() else {
             throw CancellationError()
         }
-        let sessionScoped = await self.gateway.supportsServerCapability(
+        guard await self.gateway.supportsServerCapability(
             .publishedModelCatalog,
             ifCurrentRoute: route) == true
-        guard sessionScoped else {
+        else {
             return OpenClawChatModelCatalogSnapshot(choices: [], availabilityIsSessionScoped: false)
         }
         let request = OpenClawChatGatewayRequests.modelsList(
@@ -456,9 +499,38 @@ struct IOSGatewayChatTransport: OpenClawChatGatewayTransport {
         try await self.requestHistory(sessionKey: sessionKey, agentID: nil, ifCurrentRoute: nil)
     }
 
+    func requestHistory(sessionKey: String, cursor: String) async throws -> OpenClawChatHistoryPayload {
+        guard let route = await self.gateway.currentRoute() else { throw CancellationError() }
+        let target = self.sessionTarget(for: sessionKey)
+        let request = OpenClawChatGatewayRequests.history(
+            sessionKey: target.sessionKey, agentID: target.agentID, cursor: cursor, maxBytes: 256 * 1024)
+        let data = try await self.gateway.request(request, ifCurrentRoute: route)
+        guard await self.gateway.currentRoute() == route else { throw CancellationError() }
+        return try JSONDecoder().decode(OpenClawChatHistoryPayload.self, from: data)
+    }
+
     func gatewayAdvertisesMethod(_ method: String) async -> Bool? {
         guard let route = await currentSessionMutationRoute() else { return nil }
         return await self.gateway.supportsServerMethod(method, ifCurrentRoute: route)
+    }
+
+    func watchSessionPullRequests(sessionKeys: [String]) async throws -> Bool? {
+        let method = "controlUi.sessionPullRequests.subscribe"
+        guard let route = await self.gateway.currentRoute(),
+              await self.gateway.supportsServerMethod(method, ifCurrentRoute: route) == true
+        else { return nil }
+        // The Gateway keys snapshots by the canonical agent-scoped key, as the Mac's hover cards send it.
+        let keys = sessionKeys.map { key in
+            let target = self.sessionTarget(for: key)
+            guard OpenClawChatSessionKey.agentID(from: target.sessionKey) == nil, let agent = target.agentID
+            else { return target.sessionKey }
+            return "agent:\(agent):\(target.sessionKey)"
+        }
+        let data = try await self.gateway.request(
+            OpenClawChatGatewayRequests.sessionPullRequestsSubscribe(sessionKeys: keys),
+            ifCurrentRoute: route)
+        struct Receipt: Decodable { let subscribed: Bool? }
+        return (try? JSONDecoder().decode(Receipt.self, from: data))?.subscribed ?? true
     }
 
     func attachmentLimits() async -> GatewayAttachmentLimits? {
@@ -468,9 +540,36 @@ struct IOSGatewayChatTransport: OpenClawChatGatewayTransport {
 
     func fetchProgressCard(sessionKey: String, agentID: String?) async throws -> ProgressCard? {
         let target = self.sessionTarget(for: sessionKey, overrideAgentID: agentID)
-        let request = OpenClawChatGatewayRequests.progressCardGet(
+        let data = try await self.progressCardRequest(OpenClawChatGatewayRequests.progressCardGet(
             sessionKey: target.sessionKey,
-            agentID: target.agentID)
+            agentID: target.agentID))
+        return try OpenClawChatGatewayPayloadCodec.decodeProgressCard(
+            data,
+            agentID: OpenClawChatSessionKey.agentID(from: target.sessionKey) ?? target.agentID)
+    }
+
+    func clearProgressCard(sessionKey: String, agentID: String?, expectedRevision: Int) async throws {
+        let target = self.sessionTarget(for: sessionKey, overrideAgentID: agentID)
+        _ = try await self.progressCardRequest(OpenClawChatGatewayRequests.progressCardClear(
+            sessionKey: target.sessionKey,
+            agentID: target.agentID,
+            expectedRevision: expectedRevision))
+    }
+
+    func refreshProgressCard(
+        sessionKey: String,
+        agentID: String?,
+        idempotencyKey: String) async throws -> OpenClawChatProgressCardRefreshResult
+    {
+        let target = self.sessionTarget(for: sessionKey, overrideAgentID: agentID)
+        let data = try await self.progressCardRequest(OpenClawChatGatewayRequests.progressCardRefresh(
+            sessionKey: target.sessionKey,
+            agentID: target.agentID,
+            idempotencyKey: idempotencyKey))
+        return try OpenClawChatGatewayPayloadCodec.decodeProgressCardRefresh(data)
+    }
+
+    private func progressCardRequest(_ request: OpenClawChatGatewayRequest) async throws -> Data {
         guard let route = await self.currentSessionMutationRoute() else { throw CancellationError() }
         if request.params["agentId"] != nil {
             guard let supported = await self.gateway.supportsServerCapability(
@@ -480,10 +579,7 @@ struct IOSGatewayChatTransport: OpenClawChatGatewayTransport {
                 throw OpenClawChatProgressCardError.ownerScopeUnavailable
             }
         }
-        let data = try await self.gateway.request(request, ifCurrentRoute: route)
-        return try OpenClawChatGatewayPayloadCodec.decodeProgressCard(
-            data,
-            agentID: OpenClawChatSessionKey.agentID(from: target.sessionKey) ?? target.agentID)
+        return try await self.gateway.request(request, ifCurrentRoute: route)
     }
 
     func acquireReactionsRouteLease() async -> OpenClawChatReactionsRouteLease? {
@@ -544,6 +640,19 @@ struct IOSGatewayChatTransport: OpenClawChatGatewayTransport {
         kind: OpenClawChatMediaKind,
         playback: OpenClawChatPlaybackMode?) async throws -> OpenClawChatLoadedMedia?
     {
+        // A user's upload is not an artifact; history names it `media://inbound/<id>`. The transcript
+        // reads its thumbnail; `.native` asks for the bytes as uploaded, for the viewer.
+        if kind == .image, let source = OpenClawChatInboundMedia.canonicalSource(artifactId) {
+            guard let route = await gateway.currentRoute() else { return nil }
+            let target = self.sessionTarget(for: sessionKey)
+            return await self.sourceResourceLoader?.loadInboundImage(
+                source,
+                original: playback == .native,
+                sessionKey: target.sessionKey,
+                agentID: target.agentID,
+                ifCurrentRoute: route)
+                .map(OpenClawChatLoadedMedia.data)
+        }
         guard kind.acceptsManagedArtifactID(artifactId),
               let mediaArtifactLoader,
               let route = await gateway.currentRoute(),
@@ -621,13 +730,10 @@ struct IOSGatewayChatTransport: OpenClawChatGatewayTransport {
 
         do {
             let request = OpenClawChatGatewayRequests.agentWait(runID: runId, timeoutMs: timeoutMs)
-            GatewayDiagnostics.log("agent.wait start runId=\(runId)")
             let res = try await gateway.request(
                 request,
                 ifCurrentRoute: expectedRoute)
-            let observation = try OpenClawChatGatewayPayloadCodec.decodeAgentWaitObservation(res)
-            GatewayDiagnostics.log("agent.wait completed runId=\(runId) observation=\(observation)")
-            return observation
+            return try OpenClawChatGatewayPayloadCodec.decodeAgentWaitObservation(res)
         } catch {
             Self.logger.warning("agent.wait failed \(error.localizedDescription, privacy: .public)")
             GatewayDiagnostics.log("agent.wait failed runId=\(runId) error=\(error.localizedDescription)")
@@ -636,15 +742,25 @@ struct IOSGatewayChatTransport: OpenClawChatGatewayTransport {
     }
 
     func requestHealth(timeoutMs: Int) async throws -> Bool {
-        let res = try await gateway.request(OpenClawChatGatewayRequests.health(timeoutMs: timeoutMs))
+        // Health probes must not spend their request budget waiting for a reconnect.
+        // The session owns reconnects; a later probe can use its new live route.
+        guard let route = await gateway.currentRoute() else { throw CancellationError() }
+        let res = try await gateway.request(
+            OpenClawChatGatewayRequests.health(timeoutMs: timeoutMs),
+            ifCurrentRoute: route)
         return (try? JSONDecoder().decode(OpenClawGatewayHealthOK.self, from: res))?.ok ?? true
     }
 
     func events() -> AsyncStream<OpenClawChatTransportEvent> {
         AsyncStream { continuation in
             let task = Task {
-                let stream = await self.gateway.subscribeServerEvents()
-                for await evt in stream {
+                let subscription = await self.gateway.makeServerEventSubscription(
+                    matching: { OpenClawChatGatewayPayloadCodec.acceptsEvent($0) })
+                defer {
+                    subscription.cancel()
+                    continuation.finish()
+                }
+                for await evt in subscription.events {
                     if Task.isCancelled {
                         return
                     }

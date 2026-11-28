@@ -1,13 +1,16 @@
+import type { ReactionLevel } from "../utils/reaction-level.js";
 import type { ReplyToMode } from "./types.base.js";
 import type {
   ChannelReactionConfig,
   ChannelReadReceiptConfig,
   CommonChannelGroupConfig,
   CommonChannelMessagingConfig,
+  MultiAccountChannelConfig,
 } from "./types.channel-messaging-common.js";
+import type { ChannelImplicitMentionsConfig } from "./types.implicit-mentions.js";
 
 export type SignalReactionNotificationMode = "off" | "own" | "all" | "allowlist";
-export type SignalReactionLevel = "off" | "ack" | "minimal" | "extensive";
+export type SignalReactionLevel = ReactionLevel;
 export type SignalTransportConfig =
   | {
       kind: "managed-native";
@@ -45,6 +48,8 @@ export type SignalGroupConfig = Pick<
 > & {
   /** Emit internal message hooks for mention-skipped group messages. */
   ingest?: boolean;
+  /** Include other members' unquoted recent photos on mentions in this group. */
+  includeOtherMembersHistoryImages?: boolean;
 };
 
 export type SignalAccountConfig = Omit<CommonChannelMessagingConfig, "mentionPatterns"> &
@@ -62,6 +67,8 @@ export type SignalAccountConfig = Omit<CommonChannelMessagingConfig, "mentionPat
     aliases?: Record<string, string>;
     /** Per-group overrides keyed by Signal group id (or "*"). */
     groups?: Record<string, SignalGroupConfig>;
+    /** Opt in to native quote replies counting as mentions for this account. */
+    implicitMentions?: Pick<ChannelImplicitMentionsConfig, "quotedBot">;
     /** Optional per-chat-type native reply quoting overrides. */
     replyToModeByChatType?: Partial<Record<"direct" | "group", ReplyToMode>>;
     /** Action toggles for message tool capabilities. */
@@ -71,9 +78,4 @@ export type SignalAccountConfig = Omit<CommonChannelMessagingConfig, "mentionPat
     };
   };
 
-export type SignalConfig = {
-  /** Optional per-account Signal configuration (multi-account). */
-  accounts?: Record<string, SignalAccountConfig>;
-  /** Optional default account id when multiple accounts are configured. */
-  defaultAccount?: string;
-} & SignalAccountConfig;
+export type SignalConfig = MultiAccountChannelConfig<SignalAccountConfig>;

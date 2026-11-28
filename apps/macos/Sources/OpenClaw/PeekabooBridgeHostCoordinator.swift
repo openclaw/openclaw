@@ -135,45 +135,43 @@ final class PeekabooBridgeHostCoordinator {
     }
 
     private func ensureStarted() async {
-        if let retainedRuntime {
-            let snapshot = await retainedRuntime.snapshot()
+        let retained = self.retainedRuntime
+        if let retained {
+            let snapshot = await retained.snapshot()
             guard snapshot.state != .ready else { return }
-            do {
-                let started = try await retainedRuntime.startChecked()
-                guard started.state == .ready else {
-                    self.logger.error("PeekabooBridge retained runtime did not become ready")
-                    return
-                }
-                self.aliasManager.ensureAliases(logger: self.logger)
-            } catch let PeekabooBridgeHostError.socketAlreadyOwned(path) {
-                self.logSocketServedElsewhere(path)
-            } catch {
-                let message = "Failed to restart retained PeekabooBridge runtime: \(error.localizedDescription)"
-                self.logger.error("\(message, privacy: .public)")
-            }
-            return
         }
-
-        let candidate = self.runtimeFactory()
+        let candidate = retained ?? self.runtimeFactory()
         do {
             let started = try await candidate.startChecked()
             guard started.state == .ready else {
-                await self.stopCandidate(candidate)
-                self.logger.error("PeekabooBridge runtime returned before becoming ready")
+                if retained != nil {
+                    self.logger.error("PeekabooBridge retained runtime did not become ready")
+                } else {
+                    await self.stopCandidate(candidate)
+                    self.logger.error("PeekabooBridge runtime returned before becoming ready")
+                }
                 return
             }
-            guard self.desiredEnabled else {
+            if retained == nil, !self.desiredEnabled {
                 await self.stopCandidate(candidate)
                 return
             }
 
-            self.retainedRuntime = candidate
+            if retained == nil { self.retainedRuntime = candidate }
             self.aliasManager.ensureAliases(logger: self.logger)
-            self.logger.info("PeekabooBridge host ready at \(started.socketPath, privacy: .public)")
+            if retained == nil {
+                self.logger.info("PeekabooBridge host ready at \(started.socketPath, privacy: .public)")
+            }
         } catch let PeekabooBridgeHostError.socketAlreadyOwned(path) {
             self.logSocketServedElsewhere(path)
         } catch {
-            self.logger.error("Failed to start PeekabooBridge host: \(error.localizedDescription, privacy: .public)")
+            if retained != nil {
+                let message = "Failed to restart retained PeekabooBridge runtime: \(error.localizedDescription)"
+                self.logger.error("\(message, privacy: .public)")
+            } else {
+                self.logger
+                    .error("Failed to start PeekabooBridge host: \(error.localizedDescription, privacy: .public)")
+            }
         }
     }
 

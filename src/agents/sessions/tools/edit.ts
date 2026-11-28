@@ -2,23 +2,27 @@ import { constants } from "node:fs";
 import {
   access as fsAccess,
   readFile as fsReadFile,
-  stat as fsStat,
   writeFile as fsWriteFile,
 } from "node:fs/promises";
 import { repairJson } from "@openclaw/ai/internal/runtime";
 import { isRecord } from "@openclaw/normalization-core/record-coerce";
 import { truncateUtf16Safe } from "@openclaw/normalization-core/utf16-slice";
 import { hasErrnoCode } from "../../../infra/errno.js";
-import { captureAgentToolSourceExecutionGuard } from "../../agent-tool-source-execution-guard.js";
+import { decodeUtf8Input } from "../../../infra/utf8-input.js";
 import type { AgentTool } from "../../runtime/index.js";
+import { ToolInputError } from "../../tool-input-error.js";
 import { textResult } from "../../tools/tool-results.js";
-import { decodeUtf8File } from "../../utf8-file.js";
 import {
   resolveFileMutationQueueKey,
   withFileMutationQueueKeyResolution,
 } from "./file-mutation-queue.js";
+import { assertFileToolNotAborted } from "./file-tool-abort.js";
 import { planFileEdit } from "./file-tool-planning.js";
-import { type PersistedFileStat, verifyPersistedUtf8File } from "./file-write-verification.js";
+import {
+  type PersistedFileStat,
+  readPersistedFileStat,
+  verifyPersistedUtf8File,
+} from "./file-write-verification.js";
 import { resolveLocalPathToCwd, resolveToCwd } from "./path-utils.js";
 import type { EditToolDetails, EditToolInput } from "./tool-contracts.js";
 import { wrapToolDefinition } from "./tool-definition-wrapper.js";
@@ -35,33 +39,19 @@ interface EditOperations {
   /** Resolve the physical identity used to order this backend's file operations. */
   resolveQueueKey?: (absolutePath: string, signal?: AbortSignal) => string | Promise<string>;
   /** Read file contents as a Buffer */
-  readFile: (absolutePath: string) => Promise<Buffer>;
+  readFile: (absolutePath: string, signal?: AbortSignal) => Promise<Buffer>;
   /** Write content to a file */
-  writeFile: (absolutePath: string, content: string) => Promise<void>;
+  writeFile: (absolutePath: string, content: string, signal?: AbortSignal) => Promise<void>;
   /** Stat the target before reporting success */
-  statFile: (absolutePath: string) => Promise<PersistedFileStat | null>;
+  statFile: (absolutePath: string, signal?: AbortSignal) => Promise<PersistedFileStat | null>;
   /** Check if file is readable and writable (throw if not) */
-  access: (absolutePath: string) => Promise<void>;
+  access: (absolutePath: string, signal?: AbortSignal) => Promise<void>;
 }
 
 const defaultEditOperations: EditOperations = {
   readFile: (path) => fsReadFile(path),
   writeFile: (path, content) => fsWriteFile(path, content, "utf-8"),
-  statFile: async (path) => {
-    try {
-      const stat = await fsStat(path);
-      return {
-        type: stat.isFile() ? "file" : stat.isDirectory() ? "directory" : "other",
-        size: stat.size,
-        mtimeMs: stat.mtimeMs,
-      } as const;
-    } catch (error) {
-      if (hasErrnoCode(error, "ENOENT")) {
-        return null;
-      }
-      throw error;
-    }
-  },
+  statFile: (path) => readPersistedFileStat(path, (error) => hasErrnoCode(error, "ENOENT")),
   access: (path) => fsAccess(path, constants.R_OK | constants.W_OK),
 };
 
@@ -85,7 +75,13 @@ function prepareEditArguments(input: unknown): EditToolInput {
       if (Array.isArray(parsed)) {
         args.edits = parsed;
       }
-    } catch {}
+    } catch {
+      if (typeof args.oldText !== "string" || typeof args.newText !== "string") {
+        throw new ToolInputError(
+          "Could not parse edits as JSON. Provide a complete JSON array of replacements.",
+        );
+      }
+    }
   }
 
   let edits = Array.isArray(args.edits)
@@ -119,9 +115,8 @@ function appendMismatchHint(error: Error, currentContent: string): Error {
     currentContent.length <= EDIT_MISMATCH_HINT_LIMIT
       ? currentContent
       : `${truncateUtf16Safe(currentContent, EDIT_MISMATCH_HINT_LIMIT)}\n... (truncated)`;
-  const enhanced = new Error(`${error.message}\nCurrent file contents:\n${snippet}`, {
-    cause: error,
-  });
+  const enhanced = new ToolInputError(`${error.message}\nCurrent file contents:\n${snippet}`);
+  enhanced.cause = error;
   enhanced.stack = error.stack;
   return enhanced;
 }
@@ -141,95 +136,82 @@ export function createEditTool(
     outputSchema: EditToolOutputSchema,
     prepareArguments: prepareEditArguments,
     async execute(_toolCallId, input, signal, _onUpdate, _ctx) {
-      const assertCurrent = captureAgentToolSourceExecutionGuard();
       if (!Array.isArray(input.edits) || input.edits.length === 0) {
-        throw new Error("Edit tool input is invalid. edits must contain at least one replacement.");
+        throw new ToolInputError(
+          "Edit tool input is invalid. edits must contain at least one replacement.",
+        );
       }
       const { path, edits: originalEdits } = input;
       const absolutePath = resolvePath(path, cwd);
       const queueKey = resolveFileMutationQueueKey(absolutePath, ops.resolveQueueKey, signal);
 
-      return withFileMutationQueueKeyResolution(queueKey, async () => {
-        if (signal?.aborted) {
-          throw new Error("Operation aborted");
-        }
-        assertCurrent();
+      return withFileMutationQueueKeyResolution(
+        queueKey,
+        async () => {
+          assertFileToolNotAborted(signal);
 
-        let editCount = 0;
-        let expectedContent: string | undefined;
+          let editCount = 0;
+          let expectedContent: string | undefined;
 
-        try {
-          await ops.access(absolutePath);
-        } catch (error: unknown) {
-          const errorMessage =
-            error instanceof Error && "code" in error
-              ? `Error code: ${String(error.code)}`
-              : String(error);
-          throw new Error(`Could not edit file: ${path}. ${errorMessage}.`, {
-            cause: error,
-          });
-        }
+          try {
+            await ops.access(absolutePath, signal);
+          } catch (error: unknown) {
+            const errorMessage =
+              error instanceof Error && "code" in error
+                ? `Error code: ${String(error.code)}`
+                : String(error);
+            throw new Error(`Could not edit file: ${path}. ${errorMessage}.`, {
+              cause: error,
+            });
+          }
 
-        const buffer = await ops.readFile(absolutePath);
-        const rawContent = decodeUtf8File(buffer, absolutePath);
-        try {
-          if (signal?.aborted) {
-            throw new Error("Operation aborted");
-          }
-          assertCurrent();
+          const buffer = await ops.readFile(absolutePath, signal);
+          const rawContent = decodeUtf8Input(buffer, `File ${absolutePath}`);
+          try {
+            assertFileToolNotAborted(signal);
 
-          const plan = await planFileEdit(
-            { path, content: rawContent, edits: originalEdits },
-            signal,
-          );
-          if (signal?.aborted) {
-            throw new Error("Operation aborted");
-          }
-          assertCurrent();
-          if (!plan.changed) {
-            return textResult(plan.message, { changed: false } satisfies EditToolDetails);
-          }
-          editCount = plan.editCount;
-          expectedContent = plan.content;
-          await ops.writeFile(absolutePath, expectedContent);
-          if (signal?.aborted) {
-            throw new Error("Operation aborted");
-          }
-          assertCurrent();
-          if (!(await verifyPersistedUtf8File(absolutePath, expectedContent, ops))) {
-            throw new Error(
-              `Edit verification failed for ${path}: the persisted regular file does not match the requested content. Inspect the target and retry.`,
+            const plan = await planFileEdit(
+              { path, content: rawContent, edits: originalEdits },
+              signal,
             );
-          }
+            assertFileToolNotAborted(signal);
+            if (!plan.changed) {
+              return textResult(plan.message, { changed: false } satisfies EditToolDetails);
+            }
+            editCount = plan.editCount;
+            expectedContent = plan.content;
+            await ops.writeFile(absolutePath, plan.content, signal);
+            assertFileToolNotAborted(signal);
+            if (!(await verifyPersistedUtf8File(absolutePath, plan.content, ops, signal))) {
+              throw new Error(
+                `Edit verification failed for ${path}: the persisted regular file does not match the requested content. Inspect the target and retry.`,
+              );
+            }
 
-          assertCurrent();
-          return textResult<EditToolDetails>(
-            `Successfully replaced ${editCount} block(s) in ${path}.`,
-            { changed: true, ...plan.receipt },
-          );
-        } catch (error: unknown) {
-          assertCurrent();
-          const normalizedError = error instanceof Error ? error : new Error(String(error));
-          const currentContent = await ops
-            .readFile(absolutePath)
-            .then((current) => current.toString("utf-8"))
-            .catch(() => rawContent);
-          if (
-            expectedContent !== undefined &&
-            (await verifyPersistedUtf8File(absolutePath, expectedContent, ops))
-          ) {
-            assertCurrent();
             return textResult<EditToolDetails>(
               `Successfully replaced ${editCount} block(s) in ${path}.`,
-              { changed: true, diff: "", patch: "" },
+              { changed: true, ...plan.receipt },
             );
+          } catch (error: unknown) {
+            const normalizedError = error instanceof Error ? error : new Error(String(error));
+            const recoveryContent = expectedContent;
+            if (
+              recoveryContent !== undefined &&
+              (await verifyPersistedUtf8File(absolutePath, recoveryContent, ops, signal))
+            ) {
+              return textResult<EditToolDetails>(
+                `Successfully replaced ${editCount} block(s) in ${path}.`,
+                { changed: true, diff: "", patch: "" },
+              );
+            }
+            if (normalizedError.message.includes(EDIT_MISMATCH_MESSAGE)) {
+              throw appendMismatchHint(normalizedError, rawContent);
+            }
+            throw normalizedError;
           }
-          if (normalizedError.message.includes(EDIT_MISMATCH_MESSAGE)) {
-            throw appendMismatchHint(normalizedError, currentContent);
-          }
-          throw normalizedError;
-        }
-      });
+        },
+        signal,
+      );
     },
   });
 }

@@ -13,8 +13,10 @@ import type {
   TextContent,
   ThinkingContent,
   ToolCall,
+  Tool,
 } from "../types.js";
 import { notifyLlmRequestActivity } from "../utils/llm-request-activity.js";
+import { mapGoogleToolArguments } from "./google-tool-parameters.js";
 
 // Only Google-owned resource spellings identify the same model.
 const GOOGLE_MODEL_RESOURCE_PREFIX =
@@ -67,6 +69,7 @@ const stopReasons = new Map<string, StopReason>(
   Object.entries({
     STOP: "stop",
     MAX_TOKENS: "length",
+    CONTINUATION: "length",
     BLOCKLIST: "error",
     PROHIBITED_CONTENT: "error",
     SPII: "error",
@@ -99,6 +102,7 @@ export async function consumeGoogleGenerateContentStream(params: {
   chunks: AsyncIterable<GoogleStreamChunk>;
   model: Model;
   output: AssistantMessage;
+  tools?: Tool[];
   stream: WritableTransportStream;
   signal?: AbortSignal;
   nextToolCallId: (name: string | undefined) => string;
@@ -167,11 +171,29 @@ export async function consumeGoogleGenerateContentStream(params: {
       const cacheRead = knownUsage.cachedContentTokenCount;
       const toolUsePromptTokens = knownUsage.toolUsePromptTokenCount;
       const outputTokens = knownUsage.candidatesTokenCount + knownUsage.thoughtsTokenCount;
+      const usageReported =
+        sawTerminalReason ||
+        chunk.candidates?.some(
+          (candidate) =>
+            candidate.finishReason && candidate.finishReason !== "FINISH_REASON_UNSPECIFIED",
+        ) === true;
+      // The prompt count includes cached content; tool-use prompt tokens are prompt too.
+      const contextPromptTokens = promptTokens + toolUsePromptTokens;
       params.output.usage = {
         ...createEmptyTransportUsage(),
+        usageReport: { state: usageReported ? "available" : "unavailable" },
         input: Math.max(0, promptTokens - cacheRead) + toolUsePromptTokens,
         output: outputTokens,
         cacheRead,
+        // The measured request size; context pressure counts from it instead of re-estimating.
+        contextUsage:
+          usageReported && promptTokens > 0
+            ? {
+                state: "available",
+                promptTokens: contextPromptTokens,
+                totalTokens: contextPromptTokens + outputTokens,
+              }
+            : { state: "unavailable" },
         totalTokens:
           chunk.usageMetadata.totalTokenCount ?? promptTokens + outputTokens + toolUsePromptTokens,
       };
@@ -303,7 +325,12 @@ export async function consumeGoogleGenerateContentStream(params: {
             type: "toolCall",
             id: needsNewId ? params.nextToolCallId(part.functionCall.name) : providedId,
             name: part.functionCall.name || "",
-            arguments: part.functionCall.args ?? {},
+            arguments: mapGoogleToolArguments(
+              params.tools,
+              part.functionCall.name || "",
+              part.functionCall.args ?? {},
+              "decode",
+            ),
             ...(part.thoughtSignature && { thoughtSignature: part.thoughtSignature }),
           };
 
@@ -314,11 +341,15 @@ export async function consumeGoogleGenerateContentStream(params: {
             contentIndex: blockIndex(),
             partial: params.output,
           });
+          const streamingCall = { ...toolCall, partialJson: JSON.stringify(toolCall.arguments) };
           params.stream.push({
             type: "toolcall_delta",
             contentIndex: blockIndex(),
-            delta: JSON.stringify(toolCall.arguments),
-            partial: params.output,
+            delta: streamingCall.partialJson,
+            partial: {
+              ...params.output,
+              content: [...params.output.content.slice(0, -1), streamingCall],
+            },
           });
           params.stream.push({
             type: "toolcall_end",
@@ -344,7 +375,7 @@ export async function consumeGoogleGenerateContentStream(params: {
           { code: candidate.finishReason, type: "google_generation_failed" },
         );
       }
-      // MAX_TOKENS can leave a complete-looking partial call. Only a normal
+      // Token limits can leave a complete-looking partial call. Only a normal
       // Google stop may promote parsed calls into an executable tool-use turn.
       if (
         params.output.stopReason === "stop" &&
@@ -361,6 +392,12 @@ export async function consumeGoogleGenerateContentStream(params: {
     throw transportAbortError(params.signal);
   }
 
+  if (!sawTerminalReason) {
+    terminalGenerationError = Object.assign(
+      new Error("Google stream ended before a terminal finish reason"),
+      { code: "STREAM_INCOMPLETE", type: "google_incomplete_stream" },
+    );
+  }
   if (terminalGenerationError) {
     if (preserveParts) {
       params.output.errorCode = terminalGenerationError.code;
@@ -369,21 +406,12 @@ export async function consumeGoogleGenerateContentStream(params: {
     throw terminalGenerationError;
   }
 
-  if (!sawTerminalReason) {
-    if (preserveParts) {
-      params.output.errorCode = "STREAM_INCOMPLETE";
-      params.output.errorType = "google_incomplete_stream";
-    }
-    throw Object.assign(new Error("Google stream ended before a terminal finish reason"), {
-      code: "STREAM_INCOMPLETE",
-      type: "google_incomplete_stream",
-    });
-  }
-
   if (params.output.stopReason === "aborted" || params.output.stopReason === "error") {
     throw new Error("An unknown error occurred");
   }
 
+  // No terminal usage report means no measurement; complete it as explicitly unmeasured.
+  params.output.usage.contextUsage ??= { state: "unavailable" };
   params.stream.push({
     type: "done",
     reason: params.output.stopReason,

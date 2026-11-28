@@ -183,9 +183,8 @@ public final class OpenClawVoiceNoteRecorder {
             try? FileManager.default.removeItem(at: fileURL)
             self.capture.cancel()
             self.onRecordingActiveChanged?(false)
-            self.fail(message: String(
-                format: String(localized: "Could not start recording: %@"),
-                error.localizedDescription))
+            chatUILogger.error("voice note start failed: \(error.localizedDescription, privacy: .public)")
+            self.fail(message: String(localized: "Couldn’t start recording."))
             return false
         }
 
@@ -308,33 +307,11 @@ public final class OpenClawVoiceNoteAudioCapture: NSObject, VoiceNoteAudioCaptur
 
     public func requestPermission() async -> Bool {
         #if os(iOS)
-        switch AVAudioApplication.shared.recordPermission {
-        case .granted:
-            return true
-        case .denied:
-            return false
-        case .undetermined:
-            return await withCheckedContinuation { continuation in
-                AVAudioApplication.requestRecordPermission { granted in
-                    continuation.resume(returning: granted)
-                }
-            }
-        @unknown default:
-            return false
-        }
+        await AVAudioApplication.requestRecordPermission()
         #elseif os(macOS)
-        switch AVCaptureDevice.authorizationStatus(for: .audio) {
-        case .authorized:
-            return true
-        case .denied, .restricted:
-            return false
-        case .notDetermined:
-            return await AVCaptureDevice.requestAccess(for: .audio)
-        @unknown default:
-            return false
-        }
+        await AVCaptureDevice.requestAccess(for: .audio)
         #else
-        return false
+        false
         #endif
     }
 

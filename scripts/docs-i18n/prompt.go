@@ -27,6 +27,7 @@ var languageLabels = map[string]string{
 	"id":    "Indonesian",
 	"pl":    "Polish",
 	"th":    "Thai",
+	"sv":    "Swedish",
 }
 
 func languageKey(lang string) string {
@@ -38,13 +39,13 @@ func prettyLanguageLabel(lang string) string {
 	if trimmed == "" {
 		return lang
 	}
-	if label, ok := languageLabels[languageKey(trimmed)]; ok {
+	if label, ok := languageLabels[strings.ToLower(trimmed)]; ok {
 		return label
 	}
 	return trimmed
 }
 
-func translationPrompt(srcLang, tgtLang string, glossary []GlossaryEntry) string {
+func translationPrompt(srcLang, tgtLang string) string {
 	return strings.TrimSpace(fmt.Sprintf(
 		translationPromptTemplate,
 		prettyLanguageLabel(srcLang),
@@ -52,12 +53,11 @@ func translationPrompt(srcLang, tgtLang string, glossary []GlossaryEntry) string
 		documentationQualityRules,
 		localeRules[languageKey(tgtLang)],
 		protectedProductNameRule(),
-		buildGlossaryPrompt(glossary),
 	))
 }
 
 var alwaysProtectedProductNames = []string{
-	"OpenClaw", "Raspberry Pi", "WhatsApp", "Telegram", "Discord", "iMessage", "Slack", "Microsoft Teams", "Google Chat", "Signal",
+	"OpenClaw", "Raspberry Pi", "WhatsApp", "Telegram", "Discord", "iMessage", "Slack", "Microsoft Teams", "Google Chat", "Signal", "LINE",
 }
 
 var contextualProtectedProductNames = []string{
@@ -78,16 +78,13 @@ func protectedProductNameRule() string {
 var localeRules = map[string]string{
 	"zh-cn": `Locale rules:
 - Use Simplified Chinese, mainland technical terminology, and simplified characters. Use “你/你的”, not “您/您的”.
-- Insert a space between Latin characters or digits and Chinese text when natural under W3C CLREQ. Use Chinese quotation marks “ and ” for Chinese prose; keep ASCII quotes in protected literals.
-- Fixed terminology: “Gateway” is “Gateway 网关”; keep “Skills”, “local loopback”, and “Tailscale” in English.`,
+- Insert a space between Latin characters or digits and Chinese text when natural under W3C CLREQ. Use Chinese quotation marks “ and ” for Chinese prose; keep ASCII quotes in protected literals.`,
 	"zh-tw": `Locale rules:
 - Use Traditional Chinese, Taiwan terminology, and traditional characters; do not emit Simplified Chinese forms. Use “你/你的”.
-- Insert a space between Latin characters or digits and Chinese text when natural. Use Chinese quotation marks “ and ” for Chinese prose; keep ASCII quotes in protected literals.
-- Keep security concepts distinct: translate “credentials” as “認證資訊”, not “憑證”; reserve “憑證” for certificates.`,
+- Insert a space between Latin characters or digits and Chinese text when natural. Use Chinese quotation marks “ and ” for Chinese prose; keep ASCII quotes in protected literals.`,
 	"ja-jp": `Locale rules:
 - Avoid excessively formal Japanese honorifics such as “〜でございます”.
-- Use Japanese quotation marks 「 and 」 for Japanese prose. Do not add or remove spacing around Latin text merely because it borders Japanese; change spacing only when Japanese grammar requires it.
-- Keep “Skills”, “local loopback”, and “Tailscale” in English.`,
+- Use Japanese quotation marks 「 and 」 for Japanese prose. Do not add or remove spacing around Latin text merely because it borders Japanese; change spacing only when Japanese grammar requires it.`,
 	"es": `Locale rules:
 - Use international Spanish, avoid region-specific colloquialisms, and prefer impersonal documentation phrasing.`,
 	"pt-br": `Locale rules:
@@ -96,7 +93,7 @@ var localeRules = map[string]string{
 - Use formal-polite Korean with 합니다/하십시오 forms.`,
 	"de": `Locale rules:
 - Use formal address: “Sie/Ihr/Ihnen”. Avoid informal “du/dein/dir”.
-- Use established technical German; keep “Provider” where it is clearer than “Anbieter”, and avoid awkward mixed compounds.`,
+- Use established technical German and avoid awkward mixed compounds.`,
 	"fr": `Locale rules:
 - Use “vous/votre” and avoid informal “tu/ton”.`,
 	"hi": `Locale rules:
@@ -113,8 +110,7 @@ var localeRules = map[string]string{
 - Use Iranian Persian, Persian ی and ک rather than Arabic ي and ك, and standard Persian half-spaces where required.
 - Keep prose naturally right-to-left without reordering or altering left-to-right code, commands, URLs, placeholders, or product names.`,
 	"ru": `Locale rules:
-- Use established Russian technical terminology.
-- Translate the generic noun “plugin” as “плагин”; inflect it for Russian case and number, and capitalize it when normal Russian syntax requires. Never force English “Plugin” into ordinary prose. Preserve it only inside protected code or identifiers, or when a higher-precedence literal label rule applies.`,
+- Use established Russian technical terminology.`,
 	"tr": `Locale rules:
 - Preserve Turkish dotted and dotless I correctly.`,
 	"uk": `Locale rules:
@@ -123,6 +119,9 @@ var localeRules = map[string]string{
 - Use “Anda” when direct address is necessary.`,
 	"pl": `Locale rules:
 - Prefer impersonal Polish instructional constructions and avoid gendered direct address when it is not required.`,
+	"sv": `Locale rules:
+- Use standard Swedish technical terminology, natural compound words, and Swedish sentence-style capitalization.
+- Use “du/din/ditt/dina” for direct address; do not switch to formal “Ni/Er”.`,
 	"th": `Locale rules:
 - Do not insert spaces between every Thai word; use spacing around Latin text, digits, and protected terms only where natural in Thai.`,
 }
@@ -131,11 +130,11 @@ const documentationQualityRules = `Documentation quality rules:
 - Preserve exact third-party UI labels only when the source clearly uses them as literal interface text: buttons, menu items, settings, form fields, option values, or arrow-separated navigation paths. Indicators include instructions to click, open, select, toggle, copy, or configure an item, plus tables that name fields in a third-party interface. Keep each protected label's spelling, capitalization, punctuation, and Markdown emphasis exactly.
 - In a table documenting third-party fields, preserve literal UI labels in data cells, but translate generic organizational column headings such as “Field”, “Value”, “Description”, “Example”, and “Required”. The same word may be protected when it names an actual UI control elsewhere.
 - Translate the surrounding actions and explanations. Do not preserve ordinary prose merely because it is bold, quoted, title-cased, or inside a table. Translate normal headings, emphasis, descriptions, conceptual labels, link text, and ordinary table headers.
-- Label precedence, highest to lowest: literal third-party UI text; locale-specific fixed terminology stated in this prompt; supplied glossary mappings; normal translation. A higher rule overrides every lower rule and the general instructions to translate all prose, headings, and labels. OpenClaw-owned UI and documentation labels use the highest applicable fixed term or glossary mapping; otherwise translate them normally.
+- Preserve literal third-party UI text as described above; translate OpenClaw-owned UI and documentation labels normally unless they are protected code, identifiers, or product names.
 - Preserve technical meaning over literal wording. Keep authentication, authorization, credentials, tokens, passwords, secrets, identities, and accounts distinct unless the source explicitly equates them. Preserve actors, objects, temporal order, negation, conditions, scope, singular/plural meaning, and requirement strength such as “must”, “required”, “only”, and “never”.
 - Preserve every factual value exactly, including numbers, units, versions, ports, limits, durations, paths, and comparison operators. Do not add explanations, infer missing facts, soften warnings, or correct the source.
 - Use one locale-appropriate register within each page. Do not mix formal, informal, honorific, or speech-level forms. Prefer impersonal documentation phrasing when the locale overlay does not specify a direct-address form.
-- Use one established target-language term per concept within a page. Avoid unnecessary English except for protected literals, code, URLs, glossary-preserved terms, and product names.`
+- Use one established target-language term per concept within a page. Avoid unnecessary English except for protected literals, code, URLs, and product names.`
 
 const translationPromptTemplate = `You are a translation function, not a chat assistant.
 Translate from %s to %s.
@@ -160,27 +159,8 @@ Rules:
 
 %s
 
-- Glossary terms are mandatory under the label precedence rules above. When a source term matches a glossary entry, use its target exactly, including headings, link labels, and short UI-style labels.
-- If a glossary target is identical to the source text, preserve that term exactly as written.
 %s
 - Never output an empty response; if unsure, return the source text unchanged.
 
-%s
-
 If the input is empty, output empty.
 If the input contains only placeholders, output it unchanged.`
-
-func buildGlossaryPrompt(glossary []GlossaryEntry) string {
-	if len(glossary) == 0 {
-		return ""
-	}
-	var lines []string
-	lines = append(lines, "Required terminology (use exactly when the source term matches, except for higher-precedence literal third-party UI text and locale-specific fixed terminology):")
-	for _, entry := range glossary {
-		if entry.Source == "" || entry.Target == "" {
-			continue
-		}
-		lines = append(lines, fmt.Sprintf("- %s -> %s", entry.Source, entry.Target))
-	}
-	return strings.Join(lines, "\n")
-}

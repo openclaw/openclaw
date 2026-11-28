@@ -1,8 +1,8 @@
-/** Materializes configured MCP catalog entries into agent tools and runtime helpers. */
 import crypto from "node:crypto";
 import { normalizeToolParameterSchema } from "@openclaw/ai/internal/tool-schema";
 import { isRecord } from "@openclaw/normalization-core/record-coerce";
 import { normalizeLowercaseStringOrEmpty } from "@openclaw/normalization-core/string-coerce";
+import { truncateUtf16Safe } from "@openclaw/normalization-core/utf16-slice";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { logWarn } from "../logger.js";
 import {
@@ -10,6 +10,8 @@ import {
   setPluginToolMeta,
   type PluginToolMcpMeta,
 } from "../plugins/tool-metadata.js";
+import { sanitizeModelSpecialTokens } from "../security/external-content.js";
+import type { McpCatalogTool, McpToolCatalog } from "./agent-bundle-mcp-catalog.types.js";
 import { releaseSessionMcpRuntime } from "./agent-bundle-mcp-manager-cleanup.js";
 import {
   buildSafeToolName,
@@ -18,15 +20,17 @@ import {
   TOOL_NAME_SEPARATOR,
 } from "./agent-bundle-mcp-names.js";
 import {
+  resolveMcpConnectSurface,
+  type OperatorMcpConnectContext,
+} from "./agent-bundle-mcp-operator-connect.js";
+import {
   getSessionMcpRequestSignal,
   runWithSessionMcpRequestSignal,
 } from "./agent-bundle-mcp-request-context.js";
-import { mergeMcpConnectCatalog } from "./agent-bundle-mcp-requester-connect.js";
+import { createMcpRunView } from "./agent-bundle-mcp-run-view.js";
 import type {
   BundleMcpToolRuntime,
-  McpCatalogTool,
   McpAppRequesterIdentity,
-  McpToolCatalog,
   SessionMcpRuntime,
 } from "./agent-bundle-mcp-types.js";
 import {
@@ -36,107 +40,22 @@ import {
 import {
   projectMcpCallToolResult,
   projectMcpGetPromptResult,
-  setMcpCodeModeGuestResult,
-  setMcpCodeModeGuestResultFromAgentResult,
+  projectMcpJsonAgentToolResult,
 } from "./mcp-content.js";
 import { prepareMcpAppFormUpload } from "./mcp-form-resource-upload.js";
-import { captureMcpFormRequester, createMcpFormToolPreparer } from "./mcp-form-tool-approval.js";
-import { isMcpToolAllowed } from "./mcp-tool-filter.js";
+import { captureMcpFormRequester } from "./mcp-form-tool-approval.js";
+import { isAppOnlyMcpTool } from "./mcp-metadata.js";
+import { createMcpToolFilter, mcpCatalogToolFilterScope } from "./mcp-tool-filter.js";
 import {
   buildMcpAppCanvasPayload,
   fetchMcpAppView,
   type McpAppFormOrigin,
 } from "./mcp-ui-resource.js";
 import { recordAgentCleanupFailure } from "./run-cleanup-timeout.js";
-import type { AgentToolResult } from "./runtime/index.js";
-import { toToolSearchJsonSafe } from "./tool-search-json.js";
+import { neutralizePromptControlMarkers } from "./sanitize-for-prompt.js";
 import type { AnyAgentTool } from "./tools/common.js";
-function isAppOnlyTool(tool: McpCatalogTool): boolean {
-  return tool.uiVisibility !== undefined && !tool.uiVisibility.includes("model");
-}
 
-function buildAppToolPolicyProjections(params: {
-  catalog: McpToolCatalog;
-  modelTools: readonly AnyAgentTool[];
-  reservedToolNames?: Iterable<string>;
-}): AnyAgentTool[] {
-  const tools = params.modelTools.filter(
-    (tool) => getPluginToolMeta(tool)?.mcp?.operation === "tool",
-  );
-  const reservedNames = normalizeReservedToolNames([
-    ...(params.reservedToolNames ?? []),
-    ...params.modelTools.map((tool) => tool.name),
-  ]);
-  const appOnlyTools = params.catalog.tools.filter(isAppOnlyTool).toSorted((a, b) => {
-    const serverOrder = a.safeServerName.localeCompare(b.safeServerName);
-    return serverOrder || a.toolName.localeCompare(b.toolName);
-  });
-  for (const tool of appOnlyTools) {
-    const server = params.catalog.servers[tool.serverName];
-    const name = buildSafeToolName({
-      serverName: tool.safeServerName,
-      toolName: tool.toolName,
-      reservedNames,
-    });
-    reservedNames.add(normalizeLowercaseStringOrEmpty(name));
-    const projection: AnyAgentTool = {
-      name,
-      label: tool.title ?? tool.toolName,
-      description: tool.description || tool.fallbackDescription,
-      parameters: normalizeToolParameterSchema(tool.inputSchema),
-      execute: async () => {
-        throw new Error("MCP App policy projections cannot execute tools");
-      },
-    };
-    setPluginToolMeta(projection, {
-      pluginId: "bundle-mcp",
-      optional: false,
-      mcp: {
-        serverName: tool.serverName,
-        safeServerName: tool.safeServerName,
-        toolName: tool.toolName,
-        operation: "tool",
-        codexApproval: {
-          mode: server?.codexApprovalMode,
-          ...(tool.codexAnnotations ? { annotations: tool.codexAnnotations } : {}),
-        },
-      },
-    });
-    tools.push(projection);
-  }
-  return tools.toSorted((a, b) => a.name.localeCompare(b.name));
-}
-
-function toJsonAgentToolResult(params: {
-  serverName: string;
-  operation: string;
-  value: unknown;
-}): AgentToolResult<unknown> {
-  const publicValue = toToolSearchJsonSafe(
-    params.operation === "resources_list" && Array.isArray(params.value)
-      ? { resources: params.value }
-      : params.operation === "prompts_list" && Array.isArray(params.value)
-        ? { prompts: params.value }
-        : params.value,
-  );
-  if (isRecord(publicValue)) {
-    delete publicValue._meta;
-  }
-  const result: AgentToolResult<unknown> = {
-    content: [
-      {
-        type: "text",
-        text: JSON.stringify(publicValue, null, 2),
-      },
-    ],
-    details: {
-      mcpServer: params.serverName,
-      mcpOperation: params.operation,
-      untrustedMcpOutput: true,
-    },
-  };
-  return setMcpCodeModeGuestResult(result, publicValue);
-}
+const MAX_MCP_SERVER_INSTRUCTIONS_CHARS = 2_000;
 
 function requireStringArg(input: unknown, key: string): string {
   const value = isRecord(input) ? input[key] : undefined;
@@ -177,6 +96,19 @@ export function buildBundleMcpToolsFromCatalog(params: {
   includeSessionDenied?: boolean;
   includeAppOnlyInventory?: boolean;
 }): AnyAgentTool[] {
+  const serverInstructions = new Map<string, string>();
+  for (const server of Object.values(params.catalog.servers)) {
+    if (server.instructions) {
+      const text =
+        server.instructions.length > MAX_MCP_SERVER_INSTRUCTIONS_CHARS
+          ? `${truncateUtf16Safe(server.instructions, MAX_MCP_SERVER_INSTRUCTIONS_CHARS)} …[truncated: server instructions exceed ${MAX_MCP_SERVER_INSTRUCTIONS_CHARS} characters]`
+          : server.instructions;
+      serverInstructions.set(
+        server.serverName,
+        sanitizeModelSpecialTokens(neutralizePromptControlMarkers(text)),
+      );
+    }
+  }
   const initialReservedNames = normalizeReservedToolNames(params.reservedToolNames);
   const sessionDeniedOnly = params.includeSessionDenied === true;
   const appOnlyInventory = params.includeAppOnlyInventory === true;
@@ -199,14 +131,14 @@ export function buildBundleMcpToolsFromCatalog(params: {
     ...tools.map((tool) => tool.name),
   ]);
   const catalogTools = appOnlyInventory
-    ? params.catalog.tools.filter(isAppOnlyTool)
+    ? params.catalog.tools.filter(isAppOnlyMcpTool)
     : sessionDeniedOnly
       ? (params.catalog.sessionDeniedTools ?? [])
       : params.catalog.tools;
   const sortedCatalogTools = catalogTools.toSorted(compareMcpCatalogTools);
 
   for (const tool of sortedCatalogTools) {
-    const appOnly = isAppOnlyTool(tool);
+    const appOnly = isAppOnlyMcpTool(tool);
     if (appOnly && !appOnlyInventory) {
       continue;
     }
@@ -215,6 +147,7 @@ export function buildBundleMcpToolsFromCatalog(params: {
       continue;
     }
     const server = params.catalog.servers[tool.serverName];
+    const instructions = serverInstructions.get(tool.serverName);
     const executionMode: AnyAgentTool["executionMode"] =
       server?.supportsParallelToolCalls === true ? "parallel" : "sequential";
     const safeToolName = buildSafeToolName({
@@ -232,7 +165,7 @@ export function buildBundleMcpToolsFromCatalog(params: {
       name: safeToolName,
       label: tool.title ?? tool.toolName,
       description: tool.description || tool.fallbackDescription,
-      parameters: normalizeToolParameterSchema(tool.inputSchema),
+      parameters: normalizeToolParameterSchema(tool.inputSchema, { toolName: safeToolName }),
       executionMode,
       ...(params.createExecute && !sessionDeniedOnly
         ? { resultContentSource: "network" as const }
@@ -251,6 +184,7 @@ export function buildBundleMcpToolsFromCatalog(params: {
         safeServerName: tool.safeServerName,
         toolName: tool.toolName,
         operation: "tool",
+        ...(instructions ? { instructions } : {}),
         ...(tool.oauthConnectBootstrap ? { oauthConnectBootstrap: true } : {}),
         ...(tool.excludedFromOpenClawCatalog || appOnly
           ? { excludedFromOpenClawCatalog: true }
@@ -268,7 +202,9 @@ export function buildBundleMcpToolsFromCatalog(params: {
   for (const server of Object.values(params.catalog.servers).toSorted((a, b) =>
     a.serverName.localeCompare(b.serverName),
   )) {
-    const safeServerName = server.safeServerName ?? server.serverName;
+    const filterScope = mcpCatalogToolFilterScope(params.catalog, server.serverName);
+    const isToolAllowed = createMcpToolFilter(server.toolFilter, filterScope);
+    const instructions = serverInstructions.get(server.serverName);
     const executionMode: AnyAgentTool["executionMode"] = server.supportsParallelToolCalls
       ? "parallel"
       : "sequential";
@@ -290,7 +226,7 @@ export function buildBundleMcpToolsFromCatalog(params: {
       if (
         !server[capability] ||
         (server.deniedToolNames?.includes(operation) === true) !== sessionDeniedOnly ||
-        !isMcpToolAllowed(server.toolFilter, operation)
+        !isToolAllowed(operation)
       ) {
         return;
       }
@@ -298,7 +234,7 @@ export function buildBundleMcpToolsFromCatalog(params: {
         ? params[definition.createExecute]?.(server.serverName)
         : undefined;
       const name = buildSafeToolName({
-        serverName: safeServerName,
+        serverName: filterScope.safeServerName,
         toolName: operation,
         reservedNames,
       });
@@ -321,9 +257,10 @@ export function buildBundleMcpToolsFromCatalog(params: {
         optional: false,
         mcp: {
           serverName: server.serverName,
-          safeServerName,
+          safeServerName: filterScope.safeServerName,
           toolName: operation,
           operation,
+          ...(instructions ? { instructions } : {}),
           ...(sessionDeniedOnly ? { deniedBySession: true } : {}),
         },
       });
@@ -383,22 +320,31 @@ export function buildBundleMcpToolsFromCatalog(params: {
 
 export async function materializeBundleMcpToolsForRun(params: {
   runtime: SessionMcpRuntime;
+  /** One run's authenticated requester, independent of the cached runtime's lifetime. */
+  assertRequesterCurrent?: () => void;
   agentId?: string;
   appRequester?: McpAppRequesterIdentity;
+  operatorConnect?: OperatorMcpConnectContext;
   reservedToolNames?: Iterable<string>;
   /** Transfer the lease admitted by the manager before returning this runtime. */
   releaseLease?: () => void;
   disposeRuntime?: () => Promise<void>;
 }): Promise<BundleMcpToolRuntime> {
-  const runtime = params.runtime;
+  const viewLifetime = params.assertRequesterCurrent ? new AbortController() : undefined;
+  const runtime = createMcpRunView(
+    params.runtime,
+    params.assertRequesterCurrent,
+    viewLifetime?.signal,
+  );
   let disposal: Promise<void> | undefined;
   let allowedAppToolsByServer: Map<string, Set<string>> | undefined;
   let releaseLease: (() => void) | undefined;
   const dispose = async () => {
+    viewLifetime?.abort(new Error("Requester MCP view has been released."));
     disposal ??= (async () => {
       // Failure to release the lease cannot strand this view's private runtime.
       try {
-        await releaseSessionMcpRuntime({ runtime, releaseLease });
+        await releaseSessionMcpRuntime({ runtime: params.runtime, releaseLease });
       } finally {
         await params.disposeRuntime?.();
       }
@@ -426,10 +372,25 @@ export async function materializeBundleMcpToolsForRun(params: {
     const reservedToolNames = params.reservedToolNames
       ? Array.from(params.reservedToolNames)
       : undefined;
-    const materializedCatalog = mergeMcpConnectCatalog(catalog, runtime.requesterConnect);
+    const connectSurface = await resolveMcpConnectSurface(runtime, catalog, params.operatorConnect);
     const getPrompt = runtime.getPrompt?.bind(runtime);
+    const createListExecute = (
+      method: "listResources" | "listPrompts",
+      operation: "resources_list" | "prompts_list",
+    ): ((serverName: string) => AnyAgentTool["execute"]) | undefined =>
+      runtime[method]
+        ? (serverName) => (_toolCallId, _input, signal) =>
+            runWithSessionMcpRequestSignal(signal, async () => {
+              runtime.markUsed();
+              return projectMcpJsonAgentToolResult({
+                serverName,
+                operation,
+                value: await runtime[method]?.(serverName),
+              });
+            })
+        : undefined;
     const tools = buildBundleMcpToolsFromCatalog({
-      catalog: materializedCatalog,
+      catalog: connectSurface.catalog,
       reservedToolNames,
       createExecute: (tool) => (toolCallId: string, input: unknown, signal?: AbortSignal) =>
         runWithSessionMcpRequestSignal(signal, async () => {
@@ -438,9 +399,9 @@ export async function materializeBundleMcpToolsForRun(params: {
             runtime.appRequester ??
             captureMcpFormRequester(runtime.sessionKey);
           if (!Object.hasOwn(catalog.servers, tool.serverName)) {
-            const connect = runtime.requesterConnect?.createExecute(tool.serverName);
+            const connect = connectSurface.createExecute(tool.serverName);
             if (connect) {
-              return setMcpCodeModeGuestResultFromAgentResult(await connect(toolCallId, input));
+              return await connect(toolCallId, input, signal);
             }
           }
           runtime.markUsed();
@@ -475,16 +436,36 @@ export async function materializeBundleMcpToolsForRun(params: {
                             sessionKey: runtime.sessionKey,
                             requesterId: appRequester?.profileId,
                             assertCurrent,
-                            prepareToolCall: createMcpFormToolPreparer(
-                              {
-                                runtime,
-                                serverName,
-                                agentId: params.agentId,
-                                requesterId: appRequester?.profileId,
-                                assertCurrent,
-                              },
-                              () => allowedAppToolsByServer?.get(serverName),
-                            ),
+                            /** Model-run forms retain their allowlist, then borrow current App approval for each preview. */
+                            prepareToolCall: async (action) => {
+                              const assertToolCallCurrent = () => {
+                                origin.assertCurrent();
+                                action.assertCurrent();
+                                if (
+                                  !allowedAppToolsByServer?.get(serverName)?.has(action.toolName)
+                                ) {
+                                  throw new Error(
+                                    "MCP form preview tool is not granted by the active run",
+                                  );
+                                }
+                              };
+                              assertToolCallCurrent();
+                              const { prepareModelCreatedAppToolCall } =
+                                await import("../gateway/mcp-app-operations.js");
+                              return await prepareModelCreatedAppToolCall(
+                                {
+                                  runtime: origin.runtime,
+                                  view: {
+                                    serverName: origin.serverName,
+                                    sessionId: origin.runtime.sessionId,
+                                    agentId: origin.agentId,
+                                    requesterId: origin.requesterId,
+                                    allowedAppToolNames: allowedAppToolsByServer?.get(serverName),
+                                  },
+                                },
+                                { ...action, assertCurrent: assertToolCallCurrent },
+                              );
+                            },
                           };
                           return await createMcpAppFormResourceContext({
                             snapshot: request.snapshot,
@@ -553,40 +534,20 @@ export async function materializeBundleMcpToolsForRun(params: {
           }
           return agentResult;
         }),
-      createResourceListExecute: runtime.listResources
-        ? (serverName) => (_toolCallId, _input, signal) =>
-            runWithSessionMcpRequestSignal(signal, async () => {
-              runtime.markUsed();
-              return toJsonAgentToolResult({
-                serverName,
-                operation: "resources_list",
-                value: await runtime.listResources?.(serverName),
-              });
-            })
-        : undefined,
+      createResourceListExecute: createListExecute("listResources", "resources_list"),
       createResourceReadExecute: runtime.readResource
         ? (serverName) => (_toolCallId: string, input: unknown, signal?: AbortSignal) =>
             runWithSessionMcpRequestSignal(signal, async () => {
               const uri = requireStringArg(input, "uri");
               runtime.markUsed();
-              return toJsonAgentToolResult({
+              return projectMcpJsonAgentToolResult({
                 serverName,
                 operation: "resources_read",
                 value: await runtime.readResource?.(serverName, uri),
               });
             })
         : undefined,
-      createPromptListExecute: runtime.listPrompts
-        ? (serverName) => (_toolCallId, _input, signal) =>
-            runWithSessionMcpRequestSignal(signal, async () => {
-              runtime.markUsed();
-              return toJsonAgentToolResult({
-                serverName,
-                operation: "prompts_list",
-                value: await runtime.listPrompts?.(serverName),
-              });
-            })
-        : undefined,
+      createPromptListExecute: createListExecute("listPrompts", "prompts_list"),
       createPromptGetExecute: getPrompt
         ? (serverName) => (_toolCallId: string, input: unknown, signal?: AbortSignal) =>
             runWithSessionMcpRequestSignal(signal, async () => {
@@ -606,15 +567,52 @@ export async function materializeBundleMcpToolsForRun(params: {
             })
         : undefined,
     });
-    const appTools = buildAppToolPolicyProjections({
-      catalog: materializedCatalog,
-      modelTools: tools,
-      reservedToolNames,
+    const appTools = tools.filter((tool) => getPluginToolMeta(tool)?.mcp?.operation === "tool");
+    const reservedNames = normalizeReservedToolNames([
+      ...(reservedToolNames ?? []),
+      ...tools.map((tool) => tool.name),
+    ]);
+    const appOnlyTools = connectSurface.catalog.tools.filter(isAppOnlyMcpTool).toSorted((a, b) => {
+      const serverOrder = a.safeServerName.localeCompare(b.safeServerName);
+      return serverOrder || a.toolName.localeCompare(b.toolName);
     });
+    for (const tool of appOnlyTools) {
+      const server = connectSurface.catalog.servers[tool.serverName];
+      const name = buildSafeToolName({
+        serverName: tool.safeServerName,
+        toolName: tool.toolName,
+        reservedNames,
+      });
+      reservedNames.add(normalizeLowercaseStringOrEmpty(name));
+      const projection: AnyAgentTool = {
+        name,
+        label: tool.title ?? tool.toolName,
+        description: tool.description || tool.fallbackDescription,
+        parameters: normalizeToolParameterSchema(tool.inputSchema, { toolName: name }),
+        execute: async () => {
+          throw new Error("MCP App policy projections cannot execute tools");
+        },
+      };
+      setPluginToolMeta(projection, {
+        pluginId: "bundle-mcp",
+        optional: false,
+        mcp: {
+          serverName: tool.serverName,
+          safeServerName: tool.safeServerName,
+          toolName: tool.toolName,
+          operation: "tool",
+          codexApproval: {
+            mode: server?.codexApprovalMode,
+            ...(tool.codexAnnotations ? { annotations: tool.codexAnnotations } : {}),
+          },
+        },
+      });
+      appTools.push(projection);
+    }
 
     return {
-      tools,
-      appTools,
+      tools: connectSurface.withSignIn(tools),
+      appTools: appTools.toSorted((a, b) => a.name.localeCompare(b.name)),
       ...(catalog.diagnostics && catalog.diagnostics.length > 0
         ? { diagnostics: catalog.diagnostics }
         : {}),
@@ -646,21 +644,12 @@ export async function createBundleMcpToolRuntime(params: {
   excludeServerNames?: ReadonlySet<string>;
   reservedToolNames?: Iterable<string>;
   safeServerNamesByServer?: ReadonlyMap<string, string>;
-  createRuntime?: (params: {
-    sessionId: string;
-    workspaceDir: string;
-    agentDir?: string;
-    cfg?: OpenClawConfig;
-    excludeServerNames?: ReadonlySet<string>;
-    safeServerNamesByServer?: ReadonlyMap<string, string>;
-  }) => SessionMcpRuntime;
 }): Promise<BundleMcpToolRuntime> {
   const signal = getSessionMcpRequestSignal();
   signal?.throwIfAborted();
-  const createRuntime =
-    params.createRuntime ?? (await import("./agent-bundle-mcp-runtime.js")).createSessionMcpRuntime;
+  const { createSessionMcpRuntime } = await import("./agent-bundle-mcp-runtime.js");
   signal?.throwIfAborted();
-  const runtime = createRuntime({
+  const runtime = createSessionMcpRuntime({
     sessionId: `bundle-mcp:${crypto.randomUUID()}`,
     workspaceDir: params.workspaceDir,
     cfg: params.cfg,

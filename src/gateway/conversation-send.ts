@@ -20,8 +20,8 @@ import {
   ConversationOperationConflictError,
 } from "./conversation-errors.js";
 import {
-  assertConversationDeliveryAttemptAuthorized,
-  assertConversationRouteEligibleForAgent,
+  withAuthorizedConversationDelivery,
+  prepareConversationDeliveryRouteAuthorization,
 } from "./conversation-route-ownership.js";
 
 /** Performs one durable conversation send inside the Gateway channel owner. */
@@ -38,6 +38,9 @@ export async function runGatewayConversationSend(params: {
 }): Promise<ConversationSendResult> {
   const scope = await prepareConversationRegistryScope(params);
   params.signal?.throwIfAborted();
+  let routeAuthority:
+    | Awaited<ReturnType<typeof prepareConversationDeliveryRouteAuthorization>>
+    | undefined;
   try {
     const operation: ConversationDeliveryRecord | undefined =
       await getConversationDeliveryOperation(scope, params.operationId, {
@@ -55,12 +58,19 @@ export async function runGatewayConversationSend(params: {
       );
     }
     const currentConfig = params.readCurrentConfig?.() ?? params.config;
-    assertConversationRouteEligibleForAgent({
+    const routeFingerprint = resolveConversationRouteFingerprint(conversation);
+    const authority = {
+      conversationRef: conversation.conversationRef,
+      expectedRouteFingerprint: routeFingerprint,
+    };
+    routeAuthority = await prepareConversationDeliveryRouteAuthorization({
+      ...authority,
       config: currentConfig,
+      readCurrentConfig: params.readCurrentConfig,
       agentId: params.agentId,
       conversation,
     });
-    const routeFingerprint = resolveConversationRouteFingerprint(conversation);
+    routeAuthority.assertRequestEligible();
     // Completed retries retain persisted metadata and bypass current delivery-store resolution.
     const completed = operation ? resultFromExistingOperation(operation) : undefined;
     const sent =
@@ -78,16 +88,26 @@ export async function runGatewayConversationSend(params: {
         operationId: params.operationId,
         operationKind: "send",
         routeFingerprint,
+        authority,
         assertCurrent: () => {
           params.signal?.throwIfAborted();
-          assertConversationDeliveryAttemptAuthorized({
-            config: params.readCurrentConfig?.() ?? currentConfig,
-            agentId: params.agentId,
-            conversationRef: conversation.conversationRef,
-            expectedRouteFingerprint: routeFingerprint,
-            scope,
-          });
+          routeAuthority!.assertCurrent(conversation);
         },
+        withDirectAdapterHandoff: (initiate) =>
+          withAuthorizedConversationDelivery(
+            {
+              ...authority,
+              config: currentConfig,
+              readCurrentConfig: params.readCurrentConfig,
+              agentId: params.agentId,
+              scope,
+              routeAuthority,
+            },
+            () => {
+              params.signal?.throwIfAborted();
+              return initiate();
+            },
+          ),
         ...(operation ? { operation } : {}),
         ...(params.signal ? { signal: params.signal } : {}),
       }));
@@ -107,5 +127,7 @@ export async function runGatewayConversationSend(params: {
       throw new ConversationInputError(error.message);
     }
     throw error;
+  } finally {
+    routeAuthority?.dispose();
   }
 }

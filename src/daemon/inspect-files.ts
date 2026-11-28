@@ -2,7 +2,7 @@ import fs from "node:fs/promises";
 import path from "node:path";
 import { normalizeLowercaseStringOrEmpty } from "@openclaw/normalization-core/string-coerce";
 import { hasErrnoCode } from "../infra/errno.js";
-import { resolveGatewaySystemdServiceName, resolveNodeLaunchAgentLabel } from "./constants.js";
+import { resolveGatewaySystemdServiceName, isNodeLaunchAgentLabel } from "./constants.js";
 import { detectMarkerLineWithGateway, hasGatewayServiceMarker } from "./inspect-markers.js";
 import { parseSystemdInlineEnvironment } from "./systemd-unit.js";
 
@@ -20,10 +20,6 @@ export type ExtraGatewayService = {
 
 type ScannedGatewayService = ExtraGatewayService & { extra: boolean; managedGateway: boolean };
 
-export async function readServiceFile(filePath: string): Promise<Buffer | null> {
-  return fs.readFile(filePath).catch(() => null);
-}
-
 export function isPotentialGatewayServiceName(
   name: string,
   platform: "darwin" | "linux",
@@ -32,7 +28,7 @@ export function isPotentialGatewayServiceName(
   return (
     name === selected ||
     (platform === "darwin"
-      ? (name.startsWith("ai.openclaw.") && name !== resolveNodeLaunchAgentLabel()) ||
+      ? (name.startsWith("ai.openclaw.") && !isNodeLaunchAgentLabel(name)) ||
         /clawdbot.*gateway/.test(name)
       : /^(?:openclaw|clawdbot)(?:$|@|-gateway(?:$|[-.@]))/.test(name))
   );
@@ -50,6 +46,7 @@ export type ServiceFileInspectionError = { source: string; message: string };
 export async function collectServiceFiles(params: {
   dir: string;
   extension: string;
+  includeEntry?: (entry: string) => boolean;
   isPotentialName: (name: string) => boolean;
   errors?: ServiceFileInspectionError[];
 }): Promise<ServiceFileEntry[]> {
@@ -64,7 +61,7 @@ export async function collectServiceFiles(params: {
     return out;
   }
   for (const entry of entries.toSorted()) {
-    if (!entry.endsWith(params.extension)) {
+    if (!entry.endsWith(params.extension) || (params.includeEntry && !params.includeEntry(entry))) {
       continue;
     }
     const name = entry.slice(0, -params.extension.length);
@@ -92,12 +89,14 @@ export async function scanSystemdDir(params: {
   dir: string;
   scope: "user" | "system";
   selectedName?: string;
+  includeEntry?: (entry: string) => boolean;
   errors?: ServiceFileInspectionError[];
 }): Promise<ScannedGatewayService[]> {
   const results: ScannedGatewayService[] = [];
   const candidates = await collectServiceFiles({
     dir: params.dir,
     extension: ".service",
+    includeEntry: params.includeEntry,
     isPotentialName: (name) => isPotentialGatewayServiceName(name, "linux", params.selectedName),
     errors: params.errors,
   });

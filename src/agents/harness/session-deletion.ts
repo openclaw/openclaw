@@ -1,8 +1,9 @@
-import { capturePluginLifecycleAuthority } from "../../plugins/registry-lifecycle.js";
-import { getPluginRegistryState } from "../../plugins/runtime-state.js";
-import { getPluginRuntimeGatewayRequestScope } from "../../plugins/runtime/gateway-request-scope.js";
-import { getPluginRuntimeGenerationRegistry } from "../../plugins/runtime/generation-scope.js";
-import { wrapNativeSessionDeletionMutation } from "./native-session/deletion-participant.js";
+import { warnSessionPersistenceDeprecation } from "../sessions/session-persistence-deprecation.js";
+import {
+  getNativeSessionDeletionParticipant,
+  wrapNativeSessionDeletionMutation,
+} from "./native-session/deletion-participant.js";
+import { captureAgentHarnessLifecycleHooks } from "./registry-lifecycle.js";
 import type {
   AgentHarnessSessionDeletionMutation,
   AgentHarnessSessionDeletionParams,
@@ -28,25 +29,7 @@ export function captureAgentHarnessSessionContextResets() {
 function captureAgentHarnessSessionMutations(
   hook: "withSessionDeletion" | "withSessionContextReset",
 ) {
-  const scopedRegistry = () =>
-    getPluginRuntimeGenerationRegistry() ?? getPluginRuntimeGatewayRequestScope()?.pluginRegistry;
-  const scoped = scopedRegistry();
-  const registry = scoped ?? getPluginRegistryState()?.activeRegistry;
-  const owners =
-    registry?.agentHarnesses.flatMap((registration) => {
-      const prepare = registration.harness[hook];
-      if (!prepare) {
-        return [];
-      }
-      const record = registry.plugins.find((plugin) => plugin.id === registration.pluginId);
-      const current =
-        record || registration.pluginId === "core"
-          ? capturePluginLifecycleAuthority(registry, record, {
-              scopedRuntime: scoped === registry,
-            })
-          : undefined;
-      return [{ registration, prepare, current }];
-    }) ?? [];
+  const owners = captureAgentHarnessLifecycleHooks(hook);
   return owners.length === 0
     ? undefined
     : async <T>(
@@ -54,6 +37,7 @@ function captureAgentHarnessSessionMutations(
         run: (
           prepared: ReadonlyMap<string, readonly PreparedAgentHarnessSessionDeletion[]>,
         ) => Promise<T>,
+        assertSourceCurrent?: () => void,
       ): Promise<T> => {
         const pending = targets.flatMap((target) =>
           owners
@@ -73,26 +57,36 @@ function captureAgentHarnessSessionMutations(
           }
           const { owner, target } = candidate;
           let active = true;
+          let preparing = true;
           const assertCurrent = () => {
-            target.initialization?.assertRollbackCurrent();
-            if (
-              !active ||
-              !owner.current?.() ||
-              (scoped && scopedRegistry() !== scoped) ||
-              !registry?.agentHarnesses.includes(owner.registration) ||
-              owner.registration.harness[hook] !== owner.prepare
-            ) {
+            if (!active || !owner.isCurrent()) {
               throw new Error(
                 `Session mutation harness owner changed: ${owner.registration.harness.id}`,
               );
             }
           };
-          try {
+          const assertEffectCurrent = () => {
             assertCurrent();
+            if (preparing) {
+              assertSourceCurrent?.();
+            }
+          };
+          try {
+            assertEffectCurrent();
             const result = await owner.prepare<T>(
-              { ...target, assertCurrent },
+              { ...target, assertCurrent: assertEffectCurrent },
               async (mutation) => {
                 assertCurrent();
+                if (!getNativeSessionDeletionParticipant(mutation)) {
+                  warnSessionPersistenceDeprecation(
+                    `AgentHarness.${hook} unbound commit/rollback callbacks`,
+                    "createNativeSessionBindingLifecycleV2 or createNativeSessionCommitFinalizer",
+                    { pluginId: owner.registration.pluginId, family: "native-session-deletion" },
+                  );
+                }
+                // The transaction now owns forward authority; rollback and terminal
+                // cleanup must settle even if that source is subsequently revoked.
+                preparing = false;
                 const mutations = prepared.get(target.sessionKey) ?? [];
                 mutations.push(
                   Object.assign(

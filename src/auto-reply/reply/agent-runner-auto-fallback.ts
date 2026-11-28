@@ -1,4 +1,3 @@
-import { isDeepStrictEqual } from "node:util";
 import { normalizeOptionalString } from "@openclaw/normalization-core/string-coerce";
 import {
   clearAutoFallbackPrimaryProbeSelection,
@@ -14,17 +13,8 @@ import {
 } from "../../config/sessions/auth-profile-override-provenance.js";
 import { resolveSessionModelOverrideRouteResolution } from "../../config/sessions/model-override-provenance.js";
 import { updateSessionEntry } from "../../config/sessions/session-accessor.js";
-import { mergeSessionSnapshotChanges } from "../../config/sessions/session-snapshot-merge.js";
 import { shouldPreserveUserFacingSessionStateForInputProvenance } from "../../sessions/input-provenance.js";
 import type { FollowupRun } from "./queue.js";
-
-function sessionEntryOnlyUpdatedAtChanged(entry: SessionEntry, snapshot: SessionEntry): boolean {
-  if (entry.updatedAt === snapshot.updatedAt) {
-    return false;
-  }
-  const entryWithoutUpdatedAt = { ...entry, updatedAt: snapshot.updatedAt };
-  return isDeepStrictEqual(entryWithoutUpdatedAt, snapshot);
-}
 
 /** Decides whether to retry after rechecking auto-fallback primary probe state. */
 export function resolveRunAfterAutoFallbackPrimaryProbeRecheck(params: {
@@ -115,15 +105,12 @@ export async function clearRecoveredAutoFallbackPrimaryProbeSelection(params: {
   if (!params.sessionKey || !params.activeSessionStore) {
     return;
   }
-  const cachedSessionEntry = params.activeSessionStore[params.sessionKey];
-  const activeSessionEntry = cachedSessionEntry ?? params.getActiveSessionEntry();
-  if (!activeSessionEntry || !entryMatchesAutoFallbackPrimaryProbe(activeSessionEntry, probe)) {
-    return;
-  }
-  const activeSessionEntryBeforeUpdate = structuredClone(activeSessionEntry);
   if (!params.storePath) {
-    clearAutoFallbackPrimaryProbeSelection(activeSessionEntry);
-    params.activeSessionStore[params.sessionKey] = activeSessionEntry;
+    const entry = params.activeSessionStore[params.sessionKey] ?? params.getActiveSessionEntry();
+    if (entry && entryMatchesAutoFallbackPrimaryProbe(entry, probe)) {
+      clearAutoFallbackPrimaryProbeSelection(entry);
+      params.activeSessionStore[params.sessionKey] = entry;
+    }
     return;
   }
   let comparedEntry: SessionEntry | undefined;
@@ -131,11 +118,7 @@ export async function clearRecoveredAutoFallbackPrimaryProbeSelection(params: {
     { storePath: params.storePath, sessionKey: params.sessionKey },
     (persistedEntry) => {
       comparedEntry = persistedEntry;
-      if (
-        persistedEntry.sessionId !== activeSessionEntryBeforeUpdate.sessionId ||
-        persistedEntry.updatedAt !== activeSessionEntryBeforeUpdate.updatedAt ||
-        !entryMatchesAutoFallbackPrimaryProbe(persistedEntry, probe)
-      ) {
+      if (!entryMatchesAutoFallbackPrimaryProbe(persistedEntry, probe)) {
         return null;
       }
       const shouldClearAuthProfile =
@@ -160,36 +143,12 @@ export async function clearRecoveredAutoFallbackPrimaryProbeSelection(params: {
       };
     },
   );
-  // The persisted comparison owns selection freshness. Publish its updated
-  // result, or refresh the cache from the entry that rejected this probe.
+  // Persistence owns selection. A simultaneous cache-only edit may be refreshed
+  // here; it does not need a second generation or snapshot-merge protocol.
   const authoritativeEntry = updatedEntry ?? comparedEntry;
-  const currentCachedEntry = params.activeSessionStore[params.sessionKey];
-  // Object replacement is a new cache generation even when values match.
-  // Preserve it to avoid clearing an identically reselected fallback.
-  if (currentCachedEntry !== cachedSessionEntry) {
-    return;
-  }
-  const currentEntry = currentCachedEntry ?? (cachedSessionEntry ? undefined : activeSessionEntry);
-  if (!currentEntry) {
-    return;
-  }
   if (authoritativeEntry) {
-    if (isDeepStrictEqual(currentEntry, activeSessionEntryBeforeUpdate)) {
-      params.activeSessionStore[params.sessionKey] = authoritativeEntry;
-      return;
-    }
-    if (
-      currentEntry.sessionId !== activeSessionEntryBeforeUpdate.sessionId ||
-      sessionEntryOnlyUpdatedAtChanged(currentEntry, activeSessionEntryBeforeUpdate)
-    ) {
-      return;
-    }
-    params.activeSessionStore[params.sessionKey] = mergeSessionSnapshotChanges({
-      initial: activeSessionEntryBeforeUpdate,
-      next: authoritativeEntry,
-      current: currentEntry,
-    });
-  } else if (isDeepStrictEqual(currentEntry, activeSessionEntryBeforeUpdate)) {
+    params.activeSessionStore[params.sessionKey] = authoritativeEntry;
+  } else {
     delete params.activeSessionStore[params.sessionKey];
   }
 }

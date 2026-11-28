@@ -1,8 +1,10 @@
 import { createReadStream } from "node:fs";
 import fs from "node:fs/promises";
 import path from "node:path";
+import { pruneMapToMaxSize } from "openclaw/plugin-sdk/collection-runtime";
 import { runTasksWithConcurrency } from "openclaw/plugin-sdk/concurrency-runtime";
 import { isPathStrictlyInside } from "openclaw/plugin-sdk/file-access-runtime";
+import { sha256Hex } from "openclaw/plugin-sdk/node-crypto-runtime";
 import { parseDateFirstTimestampMs } from "openclaw/plugin-sdk/number-runtime";
 import type { SessionCatalogSession } from "openclaw/plugin-sdk/session-catalog";
 import {
@@ -18,7 +20,6 @@ const SUMMARY_SCAN_BATCH_SIZE = 100;
 const MAX_SUMMARY_CACHE_ENTRIES = 256;
 const MAX_SESSION_BYTES = 32 * 1024 * 1024;
 const MAX_SUMMARY_LINE_BYTES = 1024 * 1024;
-const APPEND_PROOF_EDGE_BYTES = 64 * 1024;
 const IO_CONCURRENCY = 8;
 const PI_FILE_CANDIDATE_CACHE_TTL_MS = 32_000;
 const PI_FILE_CANDIDATE_CACHE_MAX_ENTRIES = 8;
@@ -46,7 +47,6 @@ type PiSummaryScanState = {
 type CachedSummary = PiFileCandidate & {
   summary?: PiSessionSummary;
   scanState: PiSummaryScanState;
-  appendProof: { head: Buffer; tail: Buffer };
 };
 
 type PiFileCandidateCacheEntry = {
@@ -177,7 +177,7 @@ async function piFileCandidates(env: NodeJS.ProcessEnv): Promise<PiFileCandidate
   const store = piSessionStore(env);
   const key = `${store.root}\0${store.flat}\0${piAcpSessionStoreRoot(env) ?? ""}`;
   const cached = piFileCandidateCache.get(key);
-  if (cached && cached.expiresAt > Date.now()) {
+  if (cached && cached.expiresAt > performance.now()) {
     piFileCandidateCache.delete(key);
     piFileCandidateCache.set(key, cached);
     return await cached.candidates;
@@ -186,15 +186,9 @@ async function piFileCandidates(env: NodeJS.ProcessEnv): Promise<PiFileCandidate
     piFileCandidateCache.delete(key);
   }
   const candidates = scanPiFileCandidates(env);
-  const entry = { expiresAt: Date.now() + PI_FILE_CANDIDATE_CACHE_TTL_MS, candidates };
+  const entry = { expiresAt: performance.now() + PI_FILE_CANDIDATE_CACHE_TTL_MS, candidates };
   piFileCandidateCache.set(key, entry);
-  while (piFileCandidateCache.size > PI_FILE_CANDIDATE_CACHE_MAX_ENTRIES) {
-    const oldest = piFileCandidateCache.keys().next();
-    if (oldest.done) {
-      break;
-    }
-    piFileCandidateCache.delete(oldest.value);
-  }
+  pruneMapToMaxSize(piFileCandidateCache, PI_FILE_CANDIDATE_CACHE_MAX_ENTRIES);
   try {
     return await candidates;
   } catch (error) {
@@ -215,7 +209,7 @@ function parsePiJsonLines(content: string): Record<string, unknown>[] {
   });
 }
 
-export function piMessageText(content: unknown): string {
+export function piMessageText(content: unknown, includeImages = false): string {
   if (typeof content === "string") {
     return content;
   }
@@ -223,9 +217,19 @@ export function piMessageText(content: unknown): string {
     return "";
   }
   return content
-    .flatMap((part) =>
-      isRecord(part) && part.type === "text" && typeof part.text === "string" ? [part.text] : [],
-    )
+    .flatMap((part) => {
+      if (!isRecord(part)) {
+        return [];
+      }
+      if (part.type === "text" && typeof part.text === "string") {
+        return [part.text];
+      }
+      if (includeImages && part.type === "image") {
+        const mimeType = readBoundedString(part.mimeType, 128);
+        return [mimeType ? `[image: ${mimeType}]` : "[image]"];
+      }
+      return [];
+    })
     .join("\n");
 }
 
@@ -301,44 +305,6 @@ async function scanSummaryAppend(
   }
 }
 
-async function readAppendProof(
-  file: string,
-  size: number,
-): Promise<{ head: Buffer; tail: Buffer }> {
-  const length = Math.min(size, APPEND_PROOF_EDGE_BYTES);
-  if (length === 0) {
-    return { head: Buffer.alloc(0), tail: Buffer.alloc(0) };
-  }
-  const handle = await fs.open(file, "r");
-  try {
-    const head = Buffer.alloc(length);
-    const tail = Buffer.alloc(length);
-    const [headRead, tailRead] = await Promise.all([
-      handle.read(head, 0, length, 0),
-      handle.read(tail, 0, length, size - length),
-    ]);
-    return {
-      head: head.subarray(0, headRead.bytesRead),
-      tail: tail.subarray(0, tailRead.bytesRead),
-    };
-  } finally {
-    await handle.close();
-  }
-}
-
-async function cachedPrefixIsUnchanged(candidate: PiFileCandidate, cached: CachedSummary) {
-  if (cached.identity !== candidate.identity || cached.size >= candidate.size) {
-    return false;
-  }
-  // Pi persists established sessions with appendFileSync. Its in-place rewrite
-  // paths (notably version migration) rewrite the header, so the head proof
-  // rejects them; the tail proof rejects truncation before later growth.
-  const current = await readAppendProof(candidate.file, cached.size);
-  return (
-    current.head.equals(cached.appendProof.head) && current.tail.equals(cached.appendProof.tail)
-  );
-}
-
 async function readPiSessionSummary(
   candidate: PiFileCandidate,
 ): Promise<PiSessionSummary | undefined> {
@@ -352,27 +318,22 @@ async function readPiSessionSummary(
   }
   let summary: PiSessionSummary | undefined;
   let scanState: PiSummaryScanState;
-  let appendProof: CachedSummary["appendProof"];
   try {
-    // Pi normally appends JSONL. Resume only when bounded edge proofs show the
-    // previously indexed prefix survived; rewrites rebuild from byte zero.
+    // Pi appends active sessions. An in-place rewrite that also grows may leave
+    // this read-only catalog stale until eviction; full reads still verify identity.
     const resumable =
-      cached && (await cachedPrefixIsUnchanged(candidate, cached)) ? cached : undefined;
+      cached?.identity === candidate.identity && cached.size < candidate.size ? cached : undefined;
     scanState = resumable
-      ? {
-          ...resumable.scanState,
-          pending: Buffer.from(resumable.scanState.pending),
-        }
+      ? { ...resumable.scanState }
       : {
           pending: Buffer.alloc(0),
           discarding: false,
           invalid: false,
         };
     await scanSummaryAppend(candidate, resumable?.size ?? 0, scanState);
-    appendProof = await readAppendProof(candidate.file, candidate.size);
     // A complete final record is valid without a newline. Project it from a
     // clone so later appends can still finish the cached pending line once.
-    const projectedState = { ...scanState, pending: Buffer.from(scanState.pending) };
+    const projectedState = { ...scanState };
     if (!projectedState.discarding && projectedState.pending.length > 0) {
       processSummaryLine(projectedState, projectedState.pending);
     }
@@ -405,10 +366,7 @@ async function readPiSessionSummary(
     // last good index instead of poisoning future append scans.
     return cached?.summary;
   }
-  if (cached?.summary?.threadId && cached.summary.threadId !== summary?.threadId) {
-    threadFileCache.delete(threadCacheKey(cached.storeRoot, cached.summary.threadId));
-  }
-  cacheSummary(candidate.file, { ...candidate, summary, scanState, appendProof });
+  cacheSummary(candidate.file, { ...candidate, summary, scanState });
   if (summary) {
     threadFileCache.set(threadCacheKey(candidate.storeRoot, summary.threadId), candidate.file);
   }
@@ -420,14 +378,45 @@ function summaryMatches(summary: PiSessionSummary, needle?: string): boolean {
     return true;
   }
   return [summary.threadId, summary.name, summary.cwd].some((field) =>
-    field?.toLocaleLowerCase().includes(needle),
+    field?.toLocaleLowerCase().normalize("NFC").includes(needle),
   );
+}
+
+async function* scanPiSummaries(candidates: PiFileCandidate[]) {
+  for (let index = 0; index < candidates.length; index += SUMMARY_SCAN_BATCH_SIZE) {
+    const { results } = await runTasksWithConcurrency({
+      tasks: candidates
+        .slice(index, index + SUMMARY_SCAN_BATCH_SIZE)
+        .map((candidate) => async () => ({
+          candidate,
+          summary: await readPiSessionSummary(candidate),
+        })),
+      limit: IO_CONCURRENCY,
+      throwOnError: true,
+    });
+    for (const { summary, candidate } of results) {
+      if (summary) {
+        yield { summary, candidate };
+      }
+    }
+  }
 }
 
 export async function listPiSummaryPage(
   env: NodeJS.ProcessEnv,
-  params: { offset: number; limit: number; searchTerm?: string },
+  params: {
+    offset: number;
+    limit: number;
+    searchTerm?: string;
+    exportSource?: { threadId: string; sourceHomeId?: string };
+  },
 ): Promise<{ summaries: PiSessionSummary[]; hasMore: boolean }> {
+  if (params.exportSource) {
+    const { threadId, sourceHomeId } = params.exportSource;
+    const candidate = sourceHomeId && (await resolvePiExportCandidate(threadId, env, sourceHomeId));
+    const summary = candidate && (await readPiSessionSummary(candidate));
+    return { summaries: summary && summary.threadId === threadId ? [summary] : [], hasMore: false };
+  }
   const candidates = await piFileCandidates(env);
   const activeFiles = new Set(candidates.map((candidate) => candidate.file));
   for (const file of summaryCache.keys()) {
@@ -437,24 +426,12 @@ export async function listPiSummaryPage(
   }
   const target = params.offset + params.limit + 1;
   const matches: PiSessionSummary[] = [];
-  const needle = params.searchTerm?.toLocaleLowerCase();
-  for (
-    let index = 0;
-    index < candidates.length && matches.length < target;
-    index += SUMMARY_SCAN_BATCH_SIZE
-  ) {
-    const batch = candidates.slice(index, index + SUMMARY_SCAN_BATCH_SIZE);
-    const { results: summaries } = await runTasksWithConcurrency({
-      tasks: batch.map((candidate) => () => readPiSessionSummary(candidate)),
-      limit: IO_CONCURRENCY,
-      throwOnError: true,
-    });
-    for (const summary of summaries) {
-      if (summary && summaryMatches(summary, needle)) {
-        matches.push(summary);
-        if (matches.length >= target) {
-          break;
-        }
+  const needle = params.searchTerm?.toLocaleLowerCase().normalize("NFC");
+  for await (const { summary } of scanPiSummaries(candidates)) {
+    if (summaryMatches(summary, needle)) {
+      matches.push(summary);
+      if (matches.length >= target) {
+        break;
       }
     }
   }
@@ -468,18 +445,9 @@ async function findPiSummary(
   threadId: string,
   env: NodeJS.ProcessEnv,
 ): Promise<PiSessionSummary | undefined> {
-  const candidates = await piFileCandidates(env);
-  for (let index = 0; index < candidates.length; index += SUMMARY_SCAN_BATCH_SIZE) {
-    const { results: summaries } = await runTasksWithConcurrency({
-      tasks: candidates
-        .slice(index, index + SUMMARY_SCAN_BATCH_SIZE)
-        .map((candidate) => () => readPiSessionSummary(candidate)),
-      limit: IO_CONCURRENCY,
-      throwOnError: true,
-    });
-    const match = summaries.find((summary) => summary?.threadId === threadId);
-    if (match) {
-      return match;
+  for await (const { summary } of scanPiSummaries(await piFileCandidates(env))) {
+    if (summary.threadId === threadId) {
+      return summary;
     }
   }
   return undefined;
@@ -507,42 +475,77 @@ export async function readPiSessionFileBaseline(
   }
 }
 
+// One authoritative candidate snapshot serves every selected thread in this poll.
+// Discarding the native discovery generation also retires its file-origin mapping.
+const exportFilesByDiscovery = new WeakMap<
+  PiFileCandidate[],
+  Promise<Map<string, PiFileCandidate | null>>
+>();
+async function scanExportFiles(candidates: PiFileCandidate[]) {
+  if (candidates.length >= MAX_DISCOVERY_FILES) {
+    throw new Error("Pi session discovery is incomplete");
+  }
+  const files = new Map<string, PiFileCandidate | null>();
+  for await (const { summary, candidate } of scanPiSummaries(candidates)) {
+    files.set(summary.threadId, files.has(summary.threadId) ? null : candidate);
+  }
+  return files;
+}
+
+async function resolvePiExportCandidate(
+  threadId: string,
+  env: NodeJS.ProcessEnv,
+  sourceHomeId: string,
+): Promise<PiFileCandidate | undefined> {
+  const candidates = await piFileCandidates(env);
+  let files = exportFilesByDiscovery.get(candidates);
+  if (!files) {
+    files = scanExportFiles(candidates);
+    exportFilesByDiscovery.set(candidates, files);
+  }
+  const selected = (await files).get(threadId);
+  return selected && sha256Hex(selected.file) === sourceHomeId ? selected : undefined;
+}
+
 export async function readPiSessionById(
   threadId: string,
   env: NodeJS.ProcessEnv,
+  sourceHomeId?: string,
 ): Promise<Record<string, unknown>[]> {
   const cacheKey = threadCacheKey(piSessionStore(env).root, threadId);
-  let file = threadFileCache.get(cacheKey);
-  for (let attempt = 0; attempt < 2; attempt += 1) {
+  let file: string | undefined;
+  if (sourceHomeId === undefined) {
+    file = threadFileCache.get(cacheKey) ?? (await findPiSummary(threadId, env))?.file;
+  } else {
+    // Legacy publication IDs omit the backing file. Refuse duplicate IDs and
+    // store changes even when the normal interactive cache has selected a winner.
+    file = (await resolvePiExportCandidate(threadId, env, sourceHomeId))?.file;
     if (!file) {
-      file = (await findPiSummary(threadId, env))?.file;
+      throw new Error("Pi source selection changed or is ambiguous");
     }
-    if (!file) {
-      throw new Error("Pi session was not found");
-    }
-    try {
-      const stats = await fs.stat(file);
-      if (!stats.isFile()) {
-        throw new Error("Pi session is not a file");
-      }
-      if (stats.size > MAX_SESSION_BYTES) {
-        throw new RangeError("Pi session exceeds the 32 MiB read safety limit");
-      }
-      const entries = parsePiJsonLines(await fs.readFile(file, "utf8"));
-      if (entries[0]?.type === "session" && entries[0].id === threadId) {
-        return entries;
-      }
-    } catch (error) {
-      if (error instanceof RangeError) {
-        throw error;
-      }
-      if (attempt > 0) {
-        throw new Error("Pi session is unavailable", { cause: error });
-      }
-    }
-    // The cached path can disappear when Pi replaces or prunes a session file.
-    threadFileCache.delete(cacheKey);
-    file = undefined;
   }
-  throw new Error("Pi session changed during read");
+  if (!file) {
+    throw new Error("Pi session was not found");
+  }
+  try {
+    const stats = await fs.stat(file);
+    if (!stats.isFile()) {
+      throw new Error("Pi session is not a file");
+    }
+    if (stats.size > MAX_SESSION_BYTES) {
+      throw new RangeError("Pi session exceeds the 32 MiB read safety limit");
+    }
+    const entries = parsePiJsonLines(await fs.readFile(file, "utf8"));
+    if (entries[0]?.type !== "session" || entries[0].id !== threadId) {
+      throw new Error("Pi session changed during read");
+    }
+    return entries;
+  } catch (error) {
+    // A replaced or pruned file fails this request; a later catalog scan rediscovers it.
+    threadFileCache.delete(cacheKey);
+    if (error instanceof RangeError) {
+      throw error;
+    }
+    throw new Error("Pi session is unavailable", { cause: error });
+  }
 }

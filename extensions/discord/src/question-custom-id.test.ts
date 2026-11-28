@@ -1,6 +1,6 @@
 // Discord question custom-id envelope tests.
 import { describe, expect, it } from "vitest";
-import { parseCustomId } from "./internal/discord.js";
+import { parseCustomId } from "./internal/components.base.js";
 import { buildDiscordQuestionCustomId, parseDiscordQuestionData } from "./question-custom-id.js";
 
 describe("question custom id", () => {
@@ -11,7 +11,6 @@ describe("question custom id", () => {
 
     expect(customId).toBe(`ocq:id=${questionId};i=3`);
     expect(customId).toHaveLength(47);
-    expect(customId?.length).toBeLessThanOrEqual(100);
     const parsed = parseCustomId(customId ?? "");
     expect(parsed.key).toBe("ocq");
     expect(parseDiscordQuestionData(parsed.data)).toEqual({ questionId, optionIndex: 3 });

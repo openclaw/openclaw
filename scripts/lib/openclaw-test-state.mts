@@ -1,5 +1,4 @@
 #!/usr/bin/env node
-// Creates isolated OpenClaw test HOME/state directories and shell snippets.
 import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";

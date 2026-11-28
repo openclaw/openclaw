@@ -8,6 +8,14 @@ import type { SessionNativeBindingParticipants } from "./session-native-binding.
 import type { InternalSessionEntry as SessionEntry } from "./types.js";
 
 type SessionMessageCutExpectedState = Pick<SessionEntry, "lifecycleRevision" | "sessionId">;
+/** Bundled history mutations carry source authority separately from released SDK arguments. */
+export type SessionMessageCutPreconditions = {
+  sourceRepositoryWorkspaceId?: string;
+  assertUpstreamCurrent?: () => void;
+  /** Validate the actual fresh destination against current creation policy before commit. */
+  assertForkVisibilityAllowed?: (visibility: SessionEntry["visibility"]) => void;
+};
+
 export type SessionMessageCutResult =
   | SessionMessageCutMutationResult
   | SessionBranchSwitchMutationResult
@@ -21,8 +29,22 @@ export type SessionMessageCutIntent = {
   expectedState: SessionMessageCutExpectedState | undefined;
   mode: "fork" | "rewind" | "switch";
   repositoryWorkspaceId?: string;
+  settledLocalWorkspace?: {
+    worktreeId: string;
+    sessionId: string;
+    lifecycleRevision: string | null;
+    projectionRevision: number;
+  };
   sourceKey: string;
   targetKey: string;
+};
+
+/** Read-only precheck input for an in-place cut, resolved before its commit. */
+export type SessionMessageCutPreflight = {
+  sessionId: string;
+  entry: SessionEntry;
+  intent: SessionMessageCutIntent & { mode: "rewind" | "switch" };
+  sourceRepositoryWorkspaceId?: string;
 };
 
 export type SessionMessageCutCommit = {

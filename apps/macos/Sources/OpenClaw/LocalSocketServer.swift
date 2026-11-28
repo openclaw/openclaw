@@ -24,9 +24,7 @@ private final class LocalSocketLifecycleLease: @unchecked Sendable {
             .path
         let lockPath = "\(canonicalSocketPath).lifecycle.lock"
         let reserved = self.processLock.withLock { () -> Bool in
-            guard !self.reservedPaths.contains(lockPath) else { return false }
-            self.reservedPaths.insert(lockPath)
-            return true
+            self.reservedPaths.insert(lockPath).inserted
         }
         guard reserved else {
             throw ExecApprovalsSocketPathGuardError.lifecycleLockBusy(path: lockPath)
@@ -95,6 +93,32 @@ private final class LocalSocketLifecycleLease: @unchecked Sendable {
 
 /// Owns the listener generation and drains accepted requests before releasing its path.
 final class LocalSocketServer: @unchecked Sendable {
+    @MainActor
+    struct Startup<Listener: AnyObject> {
+        var listener: Listener?
+        var task: Task<Void, Never>?
+        var cleanup: Task<Void, Never>?
+        var generation: UInt64 = 0
+
+        mutating func stop(using stopListener: (Listener) -> Task<Void, Never>) -> Task<Void, Never>? {
+            self.generation &+= 1
+            let startup = self.task
+            startup?.cancel()
+            let shutdown = self.listener.map(stopListener)
+            self.task = nil
+            self.listener = nil
+            guard startup != nil || shutdown != nil else { return self.cleanup }
+            let previous = self.cleanup
+            let cleanup = Task {
+                await previous?.value
+                await startup?.value
+                await shutdown?.value
+            }
+            self.cleanup = cleanup
+            return cleanup
+        }
+    }
+
     private struct OpenedSocket {
         let fd: Int32
         let identity: ExecApprovalsSocketPathIdentity
@@ -139,13 +163,19 @@ final class LocalSocketServer: @unchecked Sendable {
                     continuation.resume(returning: false)
                     return
                 }
-                await self.runAcceptLoop(
-                    prepare: prepare,
-                    handler: handler,
-                    onUnexpectedStop: onUnexpectedStop,
-                    onReady: { ready in
-                        continuation.resume(returning: ready)
-                    })
+                await withCheckedContinuation { drained in
+                    // Blocking accept must not occupy a Swift cooperative executor thread.
+                    DispatchQueue.global(qos: .utility).async {
+                        self.runAcceptLoop(
+                            prepare: prepare,
+                            handler: handler,
+                            onUnexpectedStop: onUnexpectedStop,
+                            onReady: { ready in
+                                continuation.resume(returning: ready)
+                            })
+                        drained.resume()
+                    }
+                }
             }
             self.stateLock.withLock {
                 self.acceptTask = task
@@ -192,9 +222,9 @@ final class LocalSocketServer: @unchecked Sendable {
         prepare: @escaping @Sendable () throws -> Void,
         handler: @escaping @Sendable (FileHandle) async -> Void,
         onUnexpectedStop: @escaping @Sendable () -> Void,
-        onReady: @escaping @Sendable (Bool) -> Void) async
+        onReady: @escaping @Sendable (Bool) -> Void)
     {
-        let shouldOpen = self.stateLock.withLock { self.isRunning && !Task.isCancelled }
+        let shouldOpen = self.stateLock.withLock { self.isRunning }
         guard shouldOpen, let openedSocket = self.openSocket(prepare: prepare) else {
             self.stateLock.withLock {
                 self.isRunning = false
@@ -206,7 +236,7 @@ final class LocalSocketServer: @unchecked Sendable {
         let fd = openedSocket.fd
 
         let shouldAccept = self.stateLock.withLock {
-            guard self.isRunning, !Task.isCancelled else { return false }
+            guard self.isRunning else { return false }
             self.openedSocket = openedSocket
             return true
         }
@@ -218,7 +248,7 @@ final class LocalSocketServer: @unchecked Sendable {
         }
 
         onReady(true)
-        while self.stateLock.withLock({ self.isRunning }), !Task.isCancelled {
+        while self.stateLock.withLock({ self.isRunning }) {
             var addr = sockaddr_un()
             var len = socklen_t(MemoryLayout.size(ofValue: addr))
             let client = withUnsafeMutablePointer(to: &addr) { ptr in
@@ -254,7 +284,7 @@ final class LocalSocketServer: @unchecked Sendable {
             }
         }
 
-        let stoppedUnexpectedly = self.stateLock.withLock { self.isRunning && !Task.isCancelled }
+        let stoppedUnexpectedly = self.stateLock.withLock { self.isRunning }
         self.stop()
         if stoppedUnexpectedly {
             onUnexpectedStop()

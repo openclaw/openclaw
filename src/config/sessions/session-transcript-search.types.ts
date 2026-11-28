@@ -8,6 +8,9 @@ type SessionTranscriptSearchHit = {
   score: number;
 };
 
+/** The host applies current visibility before the worker fills its result window. */
+export type SessionTranscriptSearchFilter = (sessionKeys: string[]) => Promise<boolean[]>;
+
 export type SessionTranscriptSearchResult = {
   hits: SessionTranscriptSearchHit[];
   indexing: boolean;
@@ -17,7 +20,6 @@ export type SessionTranscriptSearchResult = {
 
 export type SessionTranscriptSearchReadResult = Omit<SessionTranscriptSearchResult, "indexing"> & {
   found: boolean;
-  revision?: string;
 };
 
 export type SessionTranscriptSearchParams = {
@@ -33,4 +35,6 @@ export type SessionTranscriptSearchParams = {
   order?: "relevance" | "recent";
   storePath?: string;
   sessionKey?: string;
+  /** Internal host-filtered recall; never enumerate the session inventory. */
+  filterCandidates?: boolean;
 };

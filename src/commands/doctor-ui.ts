@@ -17,7 +17,9 @@ import { resolveOpenClawPackageRoot } from "../infra/openclaw-root.js";
 import { runCommandWithTimeout } from "../process/exec.js";
 import type { RuntimeEnv } from "../runtime.js";
 import { resolveRuntimeServiceBuildId } from "../version.js";
+import type { DoctorMaintenancePending } from "./doctor-maintenance-pending.js";
 import type { DoctorPrompter } from "./doctor-prompter.js";
+import { shouldAutoApproveDoctorFix, type DoctorRepairMode } from "./doctor-repair-mode.js";
 
 type UiProtocolFreshnessIssue = {
   readonly root: string;
@@ -29,24 +31,14 @@ type UiProtocolFreshnessIssue = {
   | { readonly kind: "stale-assets"; readonly changesSinceBuild: readonly string[] }
 );
 
-export async function detectUiProtocolFreshnessIssues(
-  opts: {
-    readonly root?: string;
-    readonly argv1?: string;
-    readonly cwd?: string;
-    readonly collectChangesSinceBuild?: (
-      root: string,
-      uiMtime: Date,
-    ) => Promise<readonly string[] | null>;
-  } = {},
-): Promise<readonly UiProtocolFreshnessIssue[]> {
-  const root =
-    opts.root ??
-    (await resolveOpenClawPackageRoot({
-      moduleUrl: import.meta.url,
-      argv1: opts.argv1 ?? process.argv[1],
-      cwd: opts.cwd ?? process.cwd(),
-    }));
+export async function detectUiProtocolFreshnessIssues(): Promise<
+  readonly UiProtocolFreshnessIssue[]
+> {
+  const root = await resolveOpenClawPackageRoot({
+    moduleUrl: import.meta.url,
+    argv1: process.argv[1],
+    cwd: process.cwd(),
+  });
   if (!root) {
     return [];
   }
@@ -77,41 +69,27 @@ export async function detectUiProtocolFreshnessIssues(
     if (!canBuild) {
       return [];
     }
-    const changesSinceBuild = await (
-      opts.collectChangesSinceBuild ?? collectProtocolSchemaChangesSince
-    )(root, (await fs.stat(uiIndexPath)).mtime);
-    if (changesSinceBuild === null || changesSinceBuild.length === 0) {
+    const uiMtime = (await fs.stat(uiIndexPath)).mtime;
+    const gitLog = await runCommandWithTimeout(
+      [
+        "git",
+        "-C",
+        root,
+        "log",
+        `--since=${uiMtime.toISOString()}`,
+        "--format=%h %s",
+        "packages/gateway-protocol/src",
+      ],
+      { timeoutMs: 5000 },
+    );
+    const output = gitLog.code === 0 ? gitLog.stdout.trim() : "";
+    if (!output) {
       return [];
     }
-    return [{ ...issue, kind: "stale-assets", changesSinceBuild }];
+    return [{ ...issue, kind: "stale-assets", changesSinceBuild: output.split("\n") }];
   } catch {
     return [];
   }
-}
-
-async function collectProtocolSchemaChangesSince(
-  root: string,
-  uiMtime: Date,
-): Promise<readonly string[] | null> {
-  const gitLog = await runCommandWithTimeout(
-    [
-      "git",
-      "-C",
-      root,
-      "log",
-      `--since=${uiMtime.toISOString()}`,
-      "--format=%h %s",
-      "packages/gateway-protocol/src",
-    ],
-    { timeoutMs: 5000 },
-  ).catch(() => null);
-  if (!gitLog || gitLog.code !== 0) {
-    return null;
-  }
-  if (!gitLog.stdout.trim()) {
-    return [];
-  }
-  return gitLog.stdout.trim().split("\n");
 }
 
 export function uiProtocolFreshnessIssueToHealthFinding(
@@ -120,6 +98,8 @@ export function uiProtocolFreshnessIssueToHealthFinding(
   return {
     checkId: "core/doctor/ui-protocol-freshness",
     severity: "warning",
+    category: "fix-now",
+    docsUrl: "https://docs.openclaw.ai/web/control-ui",
     message: formatUiProtocolFreshnessIssue(issue),
     path: issue.uiIndexPath,
     fixHint: issue.installOwner
@@ -166,6 +146,30 @@ function formatUiProtocolFreshnessIssue(issue: UiProtocolFreshnessIssue): string
   ].join("\n");
 }
 
+/**
+ * Read-only: whether {@link maybeRepairUiProtocolFreshness} would build Control UI assets.
+ * Missing assets build under `--fix`; stale ones also need `--force`. An answer that waits
+ * on an interactive prompt is undecidable.
+ */
+export async function checkUiProtocolFreshnessPending(
+  repairMode: DoctorRepairMode,
+): Promise<DoctorMaintenancePending> {
+  let pending: DoctorMaintenancePending = "none";
+  for (const issue of await detectUiProtocolFreshnessIssues()) {
+    if (issue.installOwner || !issue.canBuild) {
+      continue;
+    }
+    const requiresForce = issue.kind === "stale-assets";
+    if (shouldAutoApproveDoctorFix(repairMode, { requiresForce })) {
+      return "work";
+    }
+    if (repairMode.canPrompt && !(repairMode.shouldRepair && requiresForce)) {
+      pending = "undecidable";
+    }
+  }
+  return pending;
+}
+
 export async function maybeRepairUiProtocolFreshness(
   runtime: RuntimeEnv,
   prompter: DoctorPrompter,
@@ -180,15 +184,10 @@ export async function maybeRepairUiProtocolFreshness(
       note(`Skipping UI ${stale ? "rebuild" : "build"}: ui/ sources not present.`, "UI");
       continue;
     }
-    const shouldRepair = stale
-      ? await prompter.confirmAggressiveAutoFix({
-          message: "Rebuild stale Control UI assets now?",
-          initialValue: true,
-        })
-      : await prompter.confirmAutoFix({
-          message: "Build Control UI assets now?",
-          initialValue: true,
-        });
+    const shouldRepair = await prompter[stale ? "confirmAggressiveAutoFix" : "confirmAutoFix"]({
+      message: stale ? "Rebuild stale Control UI assets now?" : "Build Control UI assets now?",
+      initialValue: true,
+    });
     if (!shouldRepair) {
       continue;
     }
@@ -198,17 +197,13 @@ export async function maybeRepairUiProtocolFreshness(
       force: stale,
       onBuildStart: () =>
         note(
-          stale
-            ? "Rebuilding stale UI assets... (this may take a moment)"
-            : "Building Control UI assets... (this may take a moment)",
+          `${stale ? "Rebuilding stale" : "Building Control"} UI assets... (this may take a moment)`,
           "UI",
         ),
     });
     note(
       result.ok
-        ? stale
-          ? "UI rebuild complete."
-          : "UI build complete."
+        ? `UI ${stale ? "rebuild" : "build"} complete.`
         : (result.message ?? `UI ${stale ? "rebuild" : "build"} failed.`),
       "UI",
     );

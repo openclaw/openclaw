@@ -1,35 +1,17 @@
-/** POSIX shell option handling for mutable file operand detection. */
 import { normalizeLowercaseStringOrEmpty } from "@openclaw/normalization-core/string-coerce";
+import { extractEnvAssignmentKeysFromDispatchWrappers } from "./dispatch-wrapper-resolution.js";
 import { parseInlineOptionToken } from "./inline-option-token.js";
 import {
   advancePosixInlineOptionScan,
   POSIX_INLINE_COMMAND_FLAGS,
   resolveInlineCommandMatch,
 } from "./shell-inline-command.js";
-import { POSIX_SHELL_WRAPPERS } from "./shell-wrapper-resolution.js";
+import {
+  POSIX_SHELL_WRAPPERS,
+  POSIX_SHELLS_WITH_PLUS_OPTIONS,
+} from "./shell-wrapper-resolution.js";
 
-const POSIX_SHELL_WRAPPER_SET: ReadonlySet<string> = POSIX_SHELL_WRAPPERS;
-const POSIX_SHELL_OPTIONS_WITH_VALUE = new Set([
-  "--init-file",
-  "--rcfile",
-  "--startup-script",
-  "-O",
-  "-o",
-  "+O",
-  "+o",
-]);
 const POSIX_SHELL_CODE_LOADING_OPTIONS = new Set(["--init-file", "--rcfile", "--startup-script"]);
-const POSIX_SHELLS_WITH_PLUS_OPTIONS = new Set([
-  "ash",
-  "bash",
-  "dash",
-  "ksh",
-  "mksh",
-  "osh",
-  "sh",
-  "yash",
-  "zsh",
-]);
 
 function normalizeOptionFlag(token: string): string {
   return normalizeLowercaseStringOrEmpty(parseInlineOptionToken(token).name);
@@ -77,13 +59,13 @@ export function resolvePosixShellScriptOperandIndex(
     }
     if (!afterDoubleDash && isPosixShellOptionToken(token, supportsPlusOptions)) {
       const flag = normalizeOptionFlag(token);
-      if (POSIX_SHELL_OPTIONS_WITH_VALUE.has(flag)) {
+      if (POSIX_SHELL_CODE_LOADING_OPTIONS.has(flag)) {
         if (!token.includes("=")) {
           i += 1;
         }
         continue;
       }
-      i += advancePosixInlineOptionScan(token) - 1;
+      i += advancePosixInlineOptionScan(token, executable) - 1;
       continue;
     }
     return i;
@@ -92,7 +74,7 @@ export function resolvePosixShellScriptOperandIndex(
 }
 
 export function hasPosixShellCodeLoadingOption(argv: string[], executable: string): boolean {
-  if (!POSIX_SHELL_WRAPPER_SET.has(executable)) {
+  if (!POSIX_SHELL_WRAPPERS.has(executable)) {
     return false;
   }
   const supportsPlusOptions = POSIX_SHELLS_WITH_PLUS_OPTIONS.has(executable);
@@ -117,7 +99,7 @@ export function hasPosixShellCodeLoadingOption(argv: string[], executable: strin
     ) {
       return true;
     }
-    i += advancePosixInlineOptionScan(token) - 1;
+    i += advancePosixInlineOptionScan(token, executable) - 1;
   }
   return false;
 }
@@ -127,11 +109,16 @@ export function hasPosixShellStartupEnvironment(params: {
   executable: string;
   env?: NodeJS.ProcessEnv;
 }): boolean {
-  if (!POSIX_SHELL_WRAPPER_SET.has(params.executable)) {
+  if (!POSIX_SHELL_WRAPPERS.has(params.executable)) {
     return false;
   }
   if (params.env?.BASH_ENV?.trim() || params.env?.ENV?.trim()) {
     return true;
   }
-  return params.argv.some((token) => /^(?:BASH_ENV|ENV)=/u.test(token.trim()));
+  return (
+    params.argv.some((token) => /^(?:BASH_ENV|ENV)=/u.test(token.trim())) ||
+    extractEnvAssignmentKeysFromDispatchWrappers(params.argv).some(
+      (key) => key === "BASH_ENV" || key === "ENV",
+    )
+  );
 }

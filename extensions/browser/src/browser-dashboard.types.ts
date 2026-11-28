@@ -40,6 +40,5 @@ export type SessionBrowserDashboard = {
   signal: AbortSignal;
   assertCurrent: () => void;
   assertDefinitionCurrent: () => Promise<void>;
-  definitionChanged: () => void;
   close: () => Promise<void>;
 };

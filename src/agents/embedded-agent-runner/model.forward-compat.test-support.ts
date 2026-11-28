@@ -11,13 +11,6 @@ export function expectResolvedForwardCompatFallbackResult(params: {
   expectModelFields(params.result.model, params.expectedModel);
 }
 
-export function expectResolvedForwardCompatFallbackWithRegistryResult(params: {
-  result: unknown;
-  expectedModel: Record<string, unknown>;
-}) {
-  expectModelFields(params.result, params.expectedModel);
-}
-
 function expectModelFields(actual: unknown, expected: Record<string, unknown>) {
   // Forward-compatible fallbacks only assert fields that define the contract;
   // unrelated catalog metadata can vary by source.

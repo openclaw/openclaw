@@ -3,6 +3,7 @@ import type { OpenClawConfig } from "../config/types.openclaw.js";
 import type { HealthFinding } from "../flows/health-checks.js";
 import { inspectHostDesktop } from "../gateway/desktop/host-source.js";
 import { runCommandWithTimeout } from "../process/exec-runner.js";
+import type { DoctorMaintenancePending } from "./doctor-maintenance-pending.js";
 import type { DoctorPrompter } from "./doctor-prompter.js";
 
 const SCREEN_SHARING_PORT = 5900;
@@ -10,28 +11,60 @@ const SCREEN_SHARING_COMMAND =
   "sudo launchctl enable system/com.apple.screensharing && sudo launchctl kickstart -k system/com.apple.screensharing";
 const SCREEN_SHARING_SETTINGS = "System Settings → General → Sharing → Screen Sharing";
 
-function hostDesktopSeverity(
-  status: Awaited<ReturnType<typeof inspectHostDesktop>>["status"],
-): HealthFinding["severity"] {
-  return status.state === "unavailable" ||
-    (status.state === "managed" && status.managedState === "failed")
-    ? "warning"
-    : "info";
-}
-
 /** Collects the non-mutating host desktop diagnostic shared by doctor modes. */
 export async function collectHostDesktopHealthFindings(
   cfg: OpenClawConfig,
 ): Promise<readonly HealthFinding[]> {
-  const inspection = await inspectHostDesktop({ config: cfg.desktop?.host });
+  const { status, detail } = await inspectHostDesktop({ config: cfg.desktop?.host });
   return [
     {
       checkId: "core/doctor/host-desktop",
-      severity: hostDesktopSeverity(inspection.status),
-      message: inspection.detail,
+      severity:
+        status.state === "unavailable" ||
+        (status.state === "managed" && status.managedState === "failed")
+          ? "warning"
+          : "info",
+      message: detail,
       path: "desktop.host",
     },
   ];
+}
+
+type HostDesktopInspection = Awaited<ReturnType<typeof inspectHostDesktop>>;
+
+/** Only an enabled host desktop whose macOS Screen Sharing is off has a repair to offer. */
+function canEnableScreenSharing(
+  cfg: OpenClawConfig,
+  platform: NodeJS.Platform,
+  inspection?: HostDesktopInspection,
+): boolean {
+  return (
+    platform === "darwin" &&
+    cfg.desktop?.host?.enabled === true &&
+    (inspection === undefined ||
+      (inspection.status.port === SCREEN_SHARING_PORT &&
+        inspection.unavailableReason === "not-listening"))
+  );
+}
+
+/**
+ * Read-only: whether `noteHostDesktopHealth` would enable Screen Sharing. The repair needs
+ * repair mode and an interactive confirmation.
+ */
+export async function checkHostDesktopRepairPending(
+  cfg: OpenClawConfig,
+  prompter: Pick<DoctorPrompter, "shouldRepair" | "repairMode">,
+): Promise<DoctorMaintenancePending> {
+  const platform = process.platform;
+  if (
+    !prompter.shouldRepair ||
+    !prompter.repairMode.canPrompt ||
+    !canEnableScreenSharing(cfg, platform)
+  ) {
+    return "none";
+  }
+  const inspection = await inspectHostDesktop({ config: cfg.desktop?.host, platform });
+  return canEnableScreenSharing(cfg, platform, inspection) ? "work" : "none";
 }
 
 /** Renders host desktop health and offers an explicitly confirmed macOS service repair. */
@@ -44,12 +77,7 @@ export async function noteHostDesktopHealth(
   const platform = process.platform;
   const inspection = await inspectHostDesktop({ config: cfg.desktop?.host, platform });
   note(inspection.detail, "Host desktop");
-  if (
-    platform !== "darwin" ||
-    cfg.desktop?.host?.enabled !== true ||
-    inspection.status.port !== SCREEN_SHARING_PORT ||
-    inspection.unavailableReason !== "not-listening"
-  ) {
+  if (!canEnableScreenSharing(cfg, platform, inspection)) {
     return;
   }
 
@@ -86,6 +114,6 @@ export async function noteHostDesktopHealth(
       return;
     }
   }
-  const repaired = await inspectHostDesktop({ config: cfg.desktop.host, platform });
+  const repaired = await inspectHostDesktop({ config: cfg.desktop?.host, platform });
   note(repaired.detail, "Host desktop");
 }

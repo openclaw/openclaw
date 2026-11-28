@@ -1,10 +1,26 @@
 ---
+doc-schema-version: 1
 summary: "Codex on a paired device, either harness on a cloud profile, and per-session operating system and machine class"
 title: "Placement and machine selection"
 read_when: "You are choosing where a session runs, or overriding its operating system or machine size."
 ---
 
 Choosing the machine a session runs on: an explicitly authorized paired device, a Crabbox cloud profile for either harness, and per-placement operating-system and machine-class overrides.
+
+## A deployment-required OpenClaw destination
+
+An operator can set
+[`cloudWorkers.requiredProfile`](/gateway/config-cloud-workers#required-worker-profile)
+when every session must use one OpenClaw worker profile. Control UI displays that
+destination without a chooser; it is not a user-selected cloud worker. The
+Gateway owns placement, including an empty managed workspace for a chat without
+a repository, and rejects attempts to select a local or different execution
+target. Normal users do not need manual dispatch privileges.
+
+If preparation fails, the initial message remains unsent and the existing
+placement recovery flow offers Retry or Stop. There is no local fallback. The
+optional selection procedures below apply when the Gateway has no required
+profile.
 
 ## Codex on a paired device
 
@@ -69,7 +85,9 @@ Omit `ref` to use the repository's remote default branch. A branch, tag, or comm
 
 To keep the existing Gateway-source flow, create with `{"worktree":true,"cwd":"/path/to/repo","worktreeName":"big-refactor"}` instead. `projectGitUrl` still means a Gateway-managed project clone.
 
-Repository preparation pins immutable source metadata before eligible cloud allocation without creating a managed Gateway checkout. Selecting prepared capacity and binding it to a session verify current access and visibility, including when interrupted provisioning resumes after a Gateway restart. Public and private preparation identities remain separate. Private preparation uses authenticated temporary Git objects on the Gateway and transfers only a verified pack to the worker. An already-active session keeps its checkout and saved changes across restart; this does not re-admit prepared capacity or revoke downloaded files when GitHub access changes. Providers without project preparation keep ordinary checkout after enrollment. Public sources can use anonymous access only when no shared or native GitHub identity is configured; an unavailable configured identity remains an error.
+Repository preparation pins immutable source metadata before eligible cloud allocation without creating a managed Gateway checkout. Selecting prepared capacity and binding it to a session verify current access and visibility, including a new dispatch requested after a graceful restart. Public and private preparation identities remain separate. Private preparation uses authenticated temporary Git objects on the Gateway and transfers only a verified pack to the worker. An already-active session keeps its checkout and saved changes across restart; this does not re-admit prepared capacity or revoke downloaded files when GitHub access changes. Providers without project preparation keep ordinary checkout after enrollment. Public sources can use anonymous access only when no shared or native GitHub identity is configured; an unavailable configured identity remains an error.
+
+Ordinary checkout and repository restoration to the Gateway use the same identity admission: a configured identity that cannot be read or verified stops the operation before Git runs. Reconnect or refresh that GitHub identity in Settings, then retry the dispatch or move.
 
 Repository preparation and prepared checkout adoption do not transfer GitHub credentials to workers. Subsequent OpenClaw worker turns use the effective shared or native GitHub identity through the existing [per-turn credential binding](/gateway/config-tools/github-identity), when one is available.
 
@@ -93,6 +111,8 @@ Providers may supply this optional read-only identity through their presentation
 
 A worker profile's `settings.target` and `settings.class` remain its defaults; an omitted Crabbox target means Linux. In the Control UI New Session picker, hover or focus a configurable profile under **Cloud** to open its **Operating system** and **Machine** options. Only available operating systems appear. Before the profile is selected, dashed outlines identify its defaults. Choosing any option selects that profile and activates the default for the other setting. The machine list shows classes for the selected operating system, plus any classes that apply to every system, with reported vCPU and RAM when available and the default marked. Changing the operating system clears a selected class if it is unavailable for that system.
 
+New Session, Dispatch, Move, and Restart submit the machine and operating system shown in the picker. Explicit selections and configured defaults take precedence. Without a configured machine default, the picker prefers a class only when its reported vCPU and RAM are both no larger than every other available class for that operating system. Equal shapes keep provider order. Unknown dimensions or a CPU/RAM tradeoff keep the first catalog choice. This is a hardware-size preference, not a price or workload-capacity guarantee; class names such as Small do not rank consistently across operating systems.
+
 The selected profile row and the closed picker show the operating system and machine in muted text beside the profile name, using the selected values or profile defaults. Only metadata reported by the provider is shown. To override the operating system or size for one new placement over RPC, pass `os` and/or `machineClass` with `profileId`:
 
 ```bash
@@ -103,9 +123,16 @@ openclaw gateway call sessions.dispatch \
 
 The bundled Crabbox provider advertises Linux, Windows (WSL2), native Windows, and macOS when the selected backend reports the matching target. Before reading the catalog or starting a worker, the plugin resolves a supported Crabbox binary, automatically installing its managed copy when the selected binary is outdated or missing. Every target uses the same supported version; an old local CLI no longer hides non-Linux targets. See [Crabbox configuration](/gateway/config-cloud-workers#crabbox-profile) for the managed installation policy. Desktop supports Linux, native Windows, and prepared macOS images; WSL2 desktops are unsupported. Warm images remain Linux only. See [desktop prerequisites](/gateway/cloud-workers/desktop). The **Operating system** section appears when the catalog includes available operating-system choices; Crabbox reports the available targets, and each Crabbox machine option identifies its `os`.
 
-Select `windows/normal` for native Windows and `windows/wsl2` for the Linux environment inside Windows. Native Windows runs `settings.setup` as PowerShell and requires supported Node.js and npm on the guest. Headless Windows workers additionally require Crabbox's detached-process launcher. A Bash setup recipe cannot be reused unchanged for that target; see [Worker setup and bundle installation](/gateway/cloud-workers/setup-and-bundle-installation#native-windows-prerequisites).
+Select `windows/normal` for native Windows and `windows/wsl2` for the Linux environment inside Windows. Native Windows runs `settings.setup` as PowerShell and requires supported Node.js and npm on the guest. Headless Windows workers additionally require Crabbox's detached-process launcher. Profiles with `settings.setup` only offer OS and machine choices using the configured target's interpreter: PowerShell for native Windows, POSIX for the other targets. Cross-interpreter overrides fail before allocation; configure a separate native Windows profile instead of reusing a Bash setup recipe. Profiles without setup retain all backend-supported choices. See [Worker setup and bundle installation](/gateway/cloud-workers/setup-and-bundle-installation#native-windows-prerequisites).
 
-The provider reads `classCatalog.profiles` from `crabbox providers --json` when `classCatalog.disposition` is `mapped`. For each target it prefers amd64 entries when available; targets with only mixed or arm64 entries retain those entries. It marks the configured class as the default separately for each operating system. The catalog includes at most 64 machine options, ordered by enrollable operating system and then by catalog order. A classless profile has no invented default. Reported vCPU and RAM appear independently. RAM follows Crabbox's summary contract: positive integer GB/GiB values are shown; other units, fractional values, and missing dimensions stay unknown. macOS entries with `mixed` architecture and missing dimensions remain selectable. Native type names are never used to guess dimensions. Unmapped, missing, unknown, failed, empty, or unusable catalog metadata produces no machine selector, even if legacy `classes` are present. The cloud profile remains selectable, and dispatch or Move without an override preserves its configuration.
+The picker offers provider-reported classes plus the configured default, even
+when that default is absent from the catalog. It shows reported vCPU and RAM
+independently; missing or unsupported dimensions stay unknown, including on
+selectable macOS classes. It never guesses hardware from native type names.
+Unavailable or unusable catalog metadata hides the machine selector, but the
+profile remains selectable: dispatch or Move without an override preserves its
+configuration. See [Crabbox machine catalog](/gateway/config-cloud-workers#crabbox-machine-catalog)
+for catalog filtering, limits, and dimension formats.
 
 Successful catalogs, including valid empty catalogs, are cached for the Gateway lifetime. Failed checks are retried by the next discovery request; a Gateway restart is not needed to recover.
 

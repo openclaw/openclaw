@@ -1,6 +1,6 @@
 package ai.openclaw.app.chat
 
-import ai.openclaw.app.gateway.GatewaySession
+import ai.openclaw.app.gateway.RpcResult
 import ai.openclaw.app.voice.LocalSpeechSpeaking
 import ai.openclaw.app.voice.TalkAudioPlaying
 import ai.openclaw.app.voice.TalkSpeakAudio
@@ -42,20 +42,18 @@ internal fun interface MessageSpeechSynthesizing {
 
 /** Gateway tts.speak client using the general configured TTS provider chain. */
 internal class MessageSpeechClient(
-  private val requestDetailed: suspend (String, String, Long) -> GatewaySession.RpcResult,
+  private val requestDetailed: suspend (String, String, Long) -> RpcResult,
   private val json: Json = Json { ignoreUnknownKeys = true },
 ) : MessageSpeechSynthesizing {
   override suspend fun synthesize(text: String): TalkSpeakAudio? {
     val response =
-      try {
+      runCatchingCancellable {
         requestDetailed(
           "tts.speak",
           buildJsonObject { put("text", text) }.toString(),
           60_000,
         )
-      } catch (err: CancellationException) {
-        throw err
-      } catch (err: Throwable) {
+      }.getOrElse { err ->
         Log.d(TAG, "tts.speak request failed: ${err.message ?: err::class.simpleName}")
         return null
       }
@@ -119,22 +117,6 @@ internal class MessageSpeechController(
       stop()
       return
     }
-    start(messageId = messageId, text = text)
-  }
-
-  fun stop() {
-    generation.incrementAndGet()
-    job?.cancel()
-    job = null
-    player.stop()
-    localSpeech.stop()
-    _state.value = null
-  }
-
-  private fun start(
-    messageId: String,
-    text: String,
-  ) {
     stop()
     val spoken = text.trim()
     if (spoken.isEmpty()) return
@@ -160,14 +142,21 @@ internal class MessageSpeechController(
       }
   }
 
+  fun stop() {
+    generation.incrementAndGet()
+    job?.cancel()
+    job = null
+    player.stop()
+    localSpeech.stop()
+    _state.value = null
+  }
+
   private suspend fun playClip(clip: TalkSpeakAudio?): Boolean {
     if (clip == null) return false
-    return try {
+    return runCatchingCancellable {
       player.play(clip)
       true
-    } catch (err: CancellationException) {
-      throw err
-    } catch (err: Throwable) {
+    }.getOrElse { err ->
       Log.w(TAG, "clip playback failed: ${err.message ?: err::class.simpleName}")
       false
     }

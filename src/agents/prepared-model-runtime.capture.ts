@@ -1,9 +1,13 @@
+import type { OpenClawConfig } from "../config/types.openclaw.js";
 import type { Model } from "../llm/types.js";
 import type { ModelCatalogSnapshot } from "./model-catalog.types.js";
-import { copyPreparedModelRuntimeAuthBindings } from "./prepared-model-runtime-auth.js";
-import { mergePreparedNativeCatalog } from "./prepared-model-runtime.full-catalog.js";
+import {
+  bindPreparedModelRuntimeAuth,
+  copyPreparedModelRuntimeAuthBindings,
+  getPreparedModelRuntimePolicyConfigReader,
+} from "./prepared-model-runtime-auth.js";
+import { mergePreparedNativeCatalog } from "./prepared-model-runtime.catalog-publication.js";
 import type { PreparedModelRuntimeSnapshot } from "./prepared-model-runtime.types.js";
-import { AuthStorage } from "./sessions/auth-storage.js";
 
 const catalogCaptures = new WeakMap<
   PreparedModelRuntimeSnapshot,
@@ -16,13 +20,18 @@ const catalogCaptures = new WeakMap<
   }
 >();
 
-const admittedCatalogs = new WeakMap<PreparedModelRuntimeSnapshot, ModelCatalogSnapshot>();
-
 /** Passive inventory captured at admission; the caller must hold the matching turn lease. */
 export function readCapturedPreparedModelRuntimeCatalog(
   snapshot: PreparedModelRuntimeSnapshot,
 ): ModelCatalogSnapshot | undefined {
-  return admittedCatalogs.get(snapshot);
+  return snapshot.capturedModelCatalog?.admitted;
+}
+
+/** Exact catalog the picker read at admission; route evidence for native-owned models. */
+export function readAdmittedPublishedModelCatalog(
+  snapshot: PreparedModelRuntimeSnapshot,
+): ModelCatalogSnapshot | undefined {
+  return snapshot.capturedModelCatalog?.published;
 }
 
 /** Captures published executable and native model facts without changing any open lease. */
@@ -44,20 +53,25 @@ export function capturePreparedModelRuntimeCatalog(
         catalog.routeVariants.length > 0 ||
         snapshot.modelCatalog.entries.length > 0 ||
         snapshot.modelCatalog.routeVariants.length > 0);
+    const admittedCatalog = nativeCatalog
+      ? mergePreparedNativeCatalog(catalog, {
+          ...catalog,
+          entries: [...catalog.entries, ...snapshot.modelCatalog.entries],
+          routeVariants: [...catalog.routeVariants, ...snapshot.modelCatalog.routeVariants],
+        })
+      : (catalog ?? snapshot.modelCatalog);
     cached = {
       models,
       catalog,
-      admittedCatalog: nativeCatalog
-        ? mergePreparedNativeCatalog(catalog, {
-            ...catalog,
-            entries: [...catalog.entries, ...snapshot.modelCatalog.entries],
-            routeVariants: [...catalog.routeVariants, ...snapshot.modelCatalog.routeVariants],
-          })
-        : (catalog ?? snapshot.modelCatalog),
+      admittedCatalog,
       // Preserve bare configured owners when there are no capability rows to capture.
       capturedSnapshot: hasCatalogFacts
         ? Object.freeze({
             ...snapshot,
+            capturedModelCatalog: {
+              admitted: admittedCatalog,
+              published: catalog ?? snapshot.modelCatalog,
+            },
             ...(nativeCatalog
               ? { modelCatalog: mergePreparedNativeCatalog(catalog, snapshot.modelCatalog) }
               : {}),
@@ -68,26 +82,54 @@ export function capturePreparedModelRuntimeCatalog(
     catalogCaptures.set(snapshot, cached);
   }
   const capturedNative = cached.capturedSnapshot;
-  admittedCatalogs.set(capturedNative, cached.admittedCatalog);
   if (!models?.size) {
     if (capturedNative !== snapshot) {
       copyPreparedModelRuntimeAuthBindings(snapshot, capturedNative);
     }
     return capturedNative;
   }
-  const stores = snapshot.createStores();
-  const credentials = stores.authStorage.getAll();
-  const registry = stores.modelRegistry.fork(stores.authStorage, models);
   const captured: PreparedModelRuntimeSnapshot = Object.freeze({
     ...capturedNative,
+    capturedModelCatalog: {
+      admitted: cached.admittedCatalog,
+      published: cached.catalog ?? snapshot.modelCatalog,
+    },
     readPublishedModels: () => models,
     routeModelResolutionMemo: cached.memo,
-    createStores: () => {
-      const authStorage = AuthStorage.inMemory(credentials);
-      return { authStorage, modelRegistry: registry.fork(authStorage) };
-    },
+    createStores: (publishedModels, selectedModel) =>
+      snapshot.createStores(publishedModels ?? models, selectedModel),
   });
   copyPreparedModelRuntimeAuthBindings(snapshot, captured);
-  admittedCatalogs.set(captured, cached.admittedCatalog);
   return captured;
+}
+
+/** Shared model inventory never replaces a caller's admitted live-versus-scoped policy. */
+export function withPreparedModelRuntimePolicyConfig(
+  snapshot: PreparedModelRuntimeSnapshot,
+  readPolicyConfig: (() => OpenClawConfig) | undefined,
+): PreparedModelRuntimeSnapshot {
+  if (getPreparedModelRuntimePolicyConfigReader(snapshot) === readPolicyConfig) {
+    return snapshot;
+  }
+  const captured = Object.freeze({ ...snapshot });
+  copyPreparedModelRuntimeAuthBindings(snapshot, captured);
+  bindPreparedModelRuntimeAuth(captured, { readPolicyConfig });
+  return captured;
+}
+
+export function stampPreparedModelRuntimeSnapshotConfig(
+  snapshot: PreparedModelRuntimeSnapshot,
+  config: OpenClawConfig,
+  readPolicyConfig: (() => OpenClawConfig) | undefined,
+): PreparedModelRuntimeSnapshot {
+  if (
+    snapshot.config === config &&
+    getPreparedModelRuntimePolicyConfigReader(snapshot) === readPolicyConfig
+  ) {
+    return snapshot;
+  }
+  const stamped = Object.freeze({ ...snapshot, config });
+  copyPreparedModelRuntimeAuthBindings(snapshot, stamped);
+  bindPreparedModelRuntimeAuth(stamped, { readPolicyConfig });
+  return stamped;
 }

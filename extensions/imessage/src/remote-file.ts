@@ -42,7 +42,6 @@ export async function withIMessageRemoteFile<T>(params: {
   remoteHost: string;
   localPath: string;
   timeoutMs?: number;
-  signal?: AbortSignal;
   assertDirectAdapterHandoff?: () => void;
   use: (remotePath: string) => Promise<T>;
 }): Promise<T> {
@@ -69,20 +68,19 @@ rm -rf -- ${remoteDir}
     await runChecked(
       "iMessage remote temporary directory allocation",
       ["ssh", ...SSH_OPTIONS, "-T", "--", remoteHost, "sh -s"],
-      { input: createScript, timeoutMs: params.timeoutMs, signal: params.signal },
+      { input: createScript, timeoutMs: params.timeoutMs },
     );
     params.assertDirectAdapterHandoff?.();
     await runChecked(
       "iMessage remote file upload",
       ["scp", ...SSH_OPTIONS, "--", params.localPath, `${remoteHost}:${remotePath}`],
-      { timeoutMs: params.timeoutMs, signal: params.signal },
+      { timeoutMs: params.timeoutMs },
     );
     params.assertDirectAdapterHandoff?.();
     return await params.use(remotePath);
   } finally {
     try {
-      // An aborted caller may still own a remote file, so cleanup gets its own
-      // bounded attempt without reusing the already-aborted signal.
+      // Cleanup gets its own bounded attempt after allocation, upload, or handoff failure.
       await runChecked(
         "iMessage remote file cleanup",
         ["ssh", ...SSH_OPTIONS, "-T", "--", remoteHost, "sh -s"],

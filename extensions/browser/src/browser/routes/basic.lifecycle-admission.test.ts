@@ -1,11 +1,12 @@
-import { describe, expect, it, vi } from "vitest";
+import { expect, it, vi } from "vitest";
 import { createBrowserRouteContext } from "../server-context.js";
 import { makeBrowserServerState } from "../server-context.test-harness.js";
 import { registerBrowserBasicRoutes } from "./basic.js";
-import { createBrowserRouteApp, createBrowserRouteResponse } from "./test-helpers.js";
+import { createRouteFixture } from "./request.test-support.js";
 import type { BrowserRequest } from "./types.js";
 
 const profilesService = vi.hoisted(() => ({
+  importSystemProfile: vi.fn(async () => ({ ok: true }) as const),
   deleteProfile: vi.fn(async (name: string) => ({ ok: true, profile: name, deleted: true })),
 }));
 
@@ -16,114 +17,100 @@ function createLifecycleRoute(path: string) {
   const context = createBrowserRouteContext({ getState: () => state });
   const deleting = path === "DELETE /profiles/:name";
   const mutation = vi.fn();
-  profilesService.deleteProfile.mockImplementation(async (name) => {
+  function mutate<T>(result: T) {
     mutation();
-    return { ok: true, profile: name, deleted: true };
-  });
+    return result;
+  }
+  profilesService.deleteProfile.mockImplementation(async (name) =>
+    mutate({ ok: true, profile: name, deleted: true }),
+  );
   const profile = {
     ...context.forProfile(),
     ensureBrowserAvailable: async (options?: { signal?: AbortSignal }) => {
       options?.signal?.throwIfAborted();
       mutation();
     },
-    stopRunningBrowser: async () => {
-      mutation();
-      return { stopped: true };
-    },
-    resetProfile: async () => {
-      mutation();
-      return { moved: false, from: "/synthetic/profile" };
-    },
+    stopRunningBrowser: async () => mutate({ stopped: true }),
+    resetProfile: async () => mutate({ moved: false, from: "/synthetic/profile" }),
   };
-  const { app, postHandlers, deleteHandlers } = createBrowserRouteApp();
-  registerBrowserBasicRoutes(app, { ...context, forProfile: () => profile });
-  const handler = deleting ? deleteHandlers.get("/profiles/:name") : postHandlers.get(path);
-  if (!handler) {
-    throw new Error(`Missing browser lifecycle route ${path}`);
-  }
+  const routes = createRouteFixture();
+  registerBrowserBasicRoutes(routes.app, { ...context, forProfile: () => profile });
   return {
     mutation,
-    call: async (request: Partial<BrowserRequest>) => {
-      const response = createBrowserRouteResponse();
-      await handler({ params: { name: "work" }, query: {}, ...request }, response.res);
-      return response;
-    },
+    call: (request: Partial<BrowserRequest>) =>
+      routes.request(deleting ? "delete" : "post", deleting ? "/profiles/:name" : path, {
+        params: { name: "work" },
+        ...request,
+      }),
   };
 }
 
-describe("shared lifecycle admission", () => {
-  it.each(["request canceled", "connection canceled", "authority revoked"])(
-    "rejects a request before mutation when %s",
-    async (reason) => {
-      const route = createLifecycleRoute("/start");
-      const request = new AbortController();
-      const connection = new AbortController();
-      if (reason === "request canceled") {
-        request.abort(new Error(reason));
-      } else if (reason === "connection canceled") {
-        connection.abort(new Error(reason));
-      }
-
-      const response = await route.call({
-        signal: request.signal,
-        requester: { signal: connection.signal, isCurrent: () => reason !== "authority revoked" },
-      });
-
-      expect(response.statusCode).toBeGreaterThanOrEqual(400);
-      expect(route.mutation).not.toHaveBeenCalled();
+it.each([
+  ["/start", "request", 0],
+  ["/start", "connection", 0],
+  ["/start", "dashboard", 0],
+  ["/start", "during admission", 401],
+  ["DELETE /profiles/:name", "during admission", 401],
+  ["/stop", "after admission", 200],
+  ["/reset-profile", "after admission", 200],
+  ["DELETE /profiles/:name", "after admission", 200],
+] as const)("%s respects authority revoked %s", async (path, revocation, status) => {
+  const route = createLifecycleRoute(path);
+  let current = true;
+  const admittedWithAuthority: boolean[] = [];
+  route.mutation.mockImplementation(() => admittedWithAuthority.push(current));
+  const retired = new Error("dashboard retired");
+  const response = await route.call({
+    signal: revocation === "request" ? AbortSignal.abort(retired) : undefined,
+    requester: {
+      signal:
+        revocation === "connection" ? AbortSignal.abort(retired) : new AbortController().signal,
+      isCurrent: () => current,
     },
-  );
-
-  it("rejects a retired dashboard before mutation", async () => {
-    const route = createLifecycleRoute("/start");
-    const response = await route.call({
-      assertCurrent: async () => {
-        throw new Error("dashboard retired");
-      },
-    });
-
-    expect(response.statusCode).toBeGreaterThanOrEqual(400);
-    expect(response.body).toEqual({ error: "Error: dashboard retired" });
-    expect(route.mutation).not.toHaveBeenCalled();
+    assertCurrent: async () => {
+      if (revocation === "dashboard") {
+        throw retired;
+      }
+      const revoke = () => {
+        current = false;
+      };
+      if (revocation === "during admission") {
+        revoke();
+      }
+      if (revocation === "after admission") {
+        queueMicrotask(() => queueMicrotask(revoke));
+      }
+    },
   });
+  if (status) {
+    expect(response.statusCode).toBe(status);
+  } else {
+    expect(response.statusCode).toBeGreaterThanOrEqual(400);
+  }
+  if (revocation === "dashboard") {
+    expect(response.body).toEqual({ error: "Error: dashboard retired" });
+  }
+  expect(admittedWithAuthority).toEqual(status === 200 ? [true] : []);
 });
 
-describe.each(["/start", "/stop", "/reset-profile", "DELETE /profiles/:name"])(
-  "%s lifecycle admission",
-  (path) => {
-    it("rechecks requester authority after dashboard admission", async () => {
-      const route = createLifecycleRoute(path);
-      let current = true;
-      const response = await route.call({
-        requester: { signal: new AbortController().signal, isCurrent: () => current },
-        assertCurrent: async () => {
-          current = false;
-        },
-      });
+it.each([
+  ["google.com", "domains must be an array of domain strings"],
+  [["   ", ""], "domains must include at least one non-empty domain"],
+])("fails closed for domains=%j", async (domains, message) => {
+  const response = await createLifecycleRoute("/profiles/import").call({ body: { domains } });
+  expect(response.statusCode).toBe(400);
+  expect(response.body).toMatchObject({ error: message });
+});
 
-      expect(response.statusCode).toBe(401);
-      expect(route.mutation).not.toHaveBeenCalled();
-    });
+it("forwards the request abort signal into the import transaction", async () => {
+  const abort = new AbortController();
+  await createLifecycleRoute("/profiles/import").call({
+    body: { into: "imported" },
+    signal: abort.signal,
+  });
 
-    it("invokes the admitted operation before yielding its authority check", async () => {
-      const route = createLifecycleRoute(path);
-      let current = true;
-      const admittedWithAuthority: boolean[] = [];
-      route.mutation.mockImplementation(() => admittedWithAuthority.push(current));
-
-      const response = await route.call({
-        requester: { signal: new AbortController().signal, isCurrent: () => current },
-        assertCurrent: async () => {
-          queueMicrotask(() =>
-            queueMicrotask(() => {
-              current = false;
-            }),
-          );
-        },
-      });
-
-      expect(response.statusCode).toBe(200);
-      expect(admittedWithAuthority).toEqual([true]);
-    });
-  },
-);
+  expect(profilesService.importSystemProfile).toHaveBeenLastCalledWith(
+    expect.objectContaining({ into: "imported" }),
+    { signal: abort.signal },
+  );
+});

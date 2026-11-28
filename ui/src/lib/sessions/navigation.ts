@@ -3,6 +3,7 @@ import {
   normalizeOptionalLowercaseString,
   normalizeOptionalString,
 } from "@openclaw/normalization-core/string-coerce";
+import { sessionActivityTimestamp } from "../../../../src/shared/session-activity-timestamp.js";
 import {
   isCronSessionDisplayKey,
   isSystemCreatedSessionRow,
@@ -37,15 +38,6 @@ type SessionNavigationInput = {
   showSystem?: boolean;
   archivedFilter?: SessionArchivedFilter;
   compareSessions?: (a: GatewaySessionRow, b: GatewaySessionRow) => number;
-};
-
-type SessionNavigation = {
-  currentSessionKey: string;
-  selectedAgentId: string;
-  defaultAgentId: string;
-  selectedSession?: GatewaySessionRow;
-  visibleSessions: GatewaySessionRow[];
-  activeRowKey: string | null;
 };
 
 export type SessionScopeHost = {
@@ -140,10 +132,16 @@ export function visibleSessionMatches(
 
 export function filterSessionRows(
   result: SessionsListResult,
-  options: { archivedFilter: SessionArchivedFilter },
+  options: {
+    archivedFilter: SessionArchivedFilter;
+    isHidden?: (row: GatewaySessionRow) => boolean;
+  },
 ): SessionsListResult {
   const sessions = result.sessions.filter(
-    (row) => row.key && sessionMatchesArchivedFilter(row, options.archivedFilter),
+    (row) =>
+      row.key &&
+      sessionMatchesArchivedFilter(row, options.archivedFilter) &&
+      !options.isHidden?.(row),
   );
   return {
     ...result,
@@ -201,15 +199,22 @@ export function filterVisibleSessionRows(
     ) {
       return true;
     }
-    return (
-      sessionMatchesVisibleSessionScope(row, options) &&
-      !isSubagentSessionKey(row.key) &&
-      // Explicit groups keep persistent spawned conversations in shared navigation.
-      (!row.spawnedBy || normalizeOptionalString(row.category) != null)
-    );
+    return sessionMatchesVisibleSessionScope(row, options) && !isSubagentSessionKey(row.key);
   });
 }
 
+function compareSessionRowsByTimestamp(
+  a: GatewaySessionRow,
+  b: GatewaySessionRow,
+  timestamp: (row: GatewaySessionRow) => number,
+): number {
+  const timeDiff = timestamp(b) - timestamp(a);
+  // Stable key tie-break mirrors the gateway comparator (session-list-order.ts)
+  // so tied rows don't swap when the canonical refresh replaces an event merge.
+  return timeDiff !== 0 ? timeDiff : a.key < b.key ? -1 : a.key > b.key ? 1 : 0;
+}
+
+/** Gateway list order: metadata writes (rename, pin, settings) also advance updatedAt. */
 export function compareSessionRowsByUpdatedAt(a: GatewaySessionRow, b: GatewaySessionRow): number {
   const pinnedStateDiff = Number(b.pinned === true) - Number(a.pinned === true);
   if (pinnedStateDiff !== 0) {
@@ -219,13 +224,19 @@ export function compareSessionRowsByUpdatedAt(a: GatewaySessionRow, b: GatewaySe
   if (pinnedDiff !== 0) {
     return pinnedDiff;
   }
-  const updatedDiff = (b.updatedAt ?? 0) - (a.updatedAt ?? 0);
-  // Stable key tie-break mirrors the gateway comparator (session-list-order.ts)
-  // so tied rows don't swap when the canonical refresh replaces an event merge.
-  return updatedDiff !== 0 ? updatedDiff : a.key < b.key ? -1 : a.key > b.key ? 1 : 0;
+  return compareSessionRowsByTimestamp(a, b, (row) => row.updatedAt ?? 0);
 }
 
-export function resolveSessionNavigation(input: SessionNavigationInput): SessionNavigation {
+/**
+ * Sidebar "Last updated": conversation activity (messages and run results), falling back to
+ * updatedAt for sessions recorded before the activity clocks existed. Personal pins have
+ * their own saved order; shared stored pin metadata must not prioritize ordinary rows.
+ */
+export function compareSessionRowsByActivity(a: GatewaySessionRow, b: GatewaySessionRow): number {
+  return compareSessionRowsByTimestamp(a, b, sessionActivityTimestamp);
+}
+
+export function resolveSessionNavigation(input: SessionNavigationInput) {
   const currentSessionKey = resolveSessionKey(input.sessionKey, input.hello);
   const defaultAgentId = resolveUiSelectedGlobalAgentId({
     assistantAgentId: input.assistantAgentId,

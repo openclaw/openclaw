@@ -40,32 +40,23 @@ async function readResponsePrefix(
     throw error;
   }
   const body = response.body;
-  if (!body || typeof body.getReader !== "function") {
-    return await withResponseBodyTimeout({
-      timeoutMs,
-      onTimeout: options?.onTimeout,
-      signal: options?.signal,
-      cancel: async (error) => await body?.cancel(error),
-      read: async () => {
-        const fallback = Buffer.from(await response.arrayBuffer());
-        const truncated = fallback.length > maxBytes;
-        return {
-          materializeBuffer: () => (truncated ? fallback.subarray(0, maxBytes) : fallback),
-          size: fallback.length,
-          truncated,
-        };
-      },
-    });
-  }
-
-  const reader = body.getReader();
+  const reader = body && typeof body.getReader === "function" ? body.getReader() : undefined;
   try {
     return await withResponseBodyTimeout({
       timeoutMs,
       onTimeout: options?.onTimeout,
       signal: options?.signal,
-      cancel: async (error) => await reader.cancel(error),
+      cancel: async (error) => await (reader ?? body)?.cancel(error),
       read: async () => {
+        if (!reader) {
+          const fallback = Buffer.from(await response.arrayBuffer());
+          const truncated = fallback.length > maxBytes;
+          return {
+            materializeBuffer: () => (truncated ? fallback.subarray(0, maxBytes) : fallback),
+            size: fallback.length,
+            truncated,
+          };
+        }
         const chunks: Uint8Array[] = [];
         const result = await withResponseBodyIdleTimeout(
           reader,
@@ -96,7 +87,7 @@ async function readResponsePrefix(
       },
     });
   } finally {
-    reader.releaseLock();
+    reader?.releaseLock();
   }
 }
 

@@ -29,12 +29,7 @@ export type QaTransportFactoryContext = {
   state: QaBusState;
 };
 
-export type QaTransportAdapterFactoryResult = {
-  adapter: QaTransportAdapter;
-  cleanupBeforeGatewayStop: () => Promise<void>;
-  cleanupAfterGatewayStop: () => Promise<void>;
-  cleanupWithoutGateway: () => Promise<void>;
-};
+export type QaTransportAdapterFactoryResult = Awaited<ReturnType<typeof createQaTransportAdapter>>;
 
 const QA_CRABLINE_TRANSPORT_FACTORY_METADATA = createQaCrablineTransportAdapterFactory();
 
@@ -97,19 +92,7 @@ function resolveQaTransportFactoryModuleFlowSupport(
 function createQaTransportCleanup(cleanup: () => Promise<void> | undefined): () => Promise<void> {
   let pending: Promise<void> | undefined;
 
-  return () => {
-    if (!pending) {
-      // Share cleanup across overlapping owners; release failed phases so a
-      // later caller can retry instead of leaking a live transport or lease.
-      pending = Promise.resolve().then(async () => {
-        await cleanup();
-      });
-      void pending.catch(() => {
-        pending = undefined;
-      });
-    }
-    return pending;
-  };
+  return () => (pending ??= Promise.resolve().then(cleanup));
 }
 
 async function collectQaTransportCleanupErrors(
@@ -129,7 +112,7 @@ async function collectQaTransportCleanupErrors(
 export async function createQaTransportAdapter(
   context: QaTransportFactoryContext,
   factories: readonly QaTransportAdapterFactory[] = [],
-): Promise<QaTransportAdapterFactoryResult> {
+) {
   let adapter: QaTransportAdapter;
   try {
     if (context.driver === "qa-channel" && context.channelId === "qa-channel") {

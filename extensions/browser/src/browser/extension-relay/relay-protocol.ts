@@ -35,9 +35,7 @@ export type ExtensionToRelayMessage =
       method: string;
       params?: unknown;
     }
-  /** Successful response to a relay command (cdp/attach/createTab/...). */
   | { type: "result"; seq: number; result?: unknown }
-  /** Failed response to a relay command. */
   | { type: "error"; seq: number; message: string }
   /** chrome.debugger detached outside relay control (infobar cancel, tab gone). */
   | { type: "detached"; tabId: number; reason: string }
@@ -144,4 +142,14 @@ export function parseExtensionMessage(raw: string): ExtensionToRelayMessage | nu
     return null;
   }
   return isExtensionMessage(parsed) ? parsed : null;
+}
+
+/** CDP error frame sent to a relay client. */
+export function toErrorPayload(
+  id: number | null,
+  sessionId: string | undefined,
+  message: string,
+  code = -32000,
+): string {
+  return JSON.stringify({ id, ...(sessionId ? { sessionId } : {}), error: { code, message } });
 }

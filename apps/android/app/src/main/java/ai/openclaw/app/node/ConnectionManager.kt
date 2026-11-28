@@ -2,6 +2,7 @@ package ai.openclaw.app.node
 
 import ai.openclaw.app.BuildConfig
 import ai.openclaw.app.SecurePrefs
+import ai.openclaw.app.chat.PERSONAL_SESSION_PINS_CAPABILITY
 import ai.openclaw.app.gateway.GatewayClientInfo
 import ai.openclaw.app.gateway.GatewayConnectOptions
 import ai.openclaw.app.gateway.GatewayEndpoint
@@ -83,10 +84,7 @@ class ConnectionManager internal constructor(
 
       // TXT may require TLS, but only a stored pin is authoritative.
       return GatewayTlsParams(
-        required = true,
         expectedFingerprint = stored,
-        allowTOFU = false,
-        stableId = stableId,
       )
     }
   }
@@ -105,12 +103,6 @@ class ConnectionManager internal constructor(
     }
   }
 
-  fun resolveModelIdentifier(): String? =
-    listOfNotNull(Build.MANUFACTURER, Build.MODEL)
-      .joinToString(" ")
-      .trim()
-      .ifEmpty { null }
-
   fun buildUserAgent(): String {
     val version = resolvedVersionName()
     val release =
@@ -122,19 +114,16 @@ class ConnectionManager internal constructor(
   }
 
   /** Client identity block shared by node and operator gateway sessions. */
-  fun buildClientInfo(
-    clientId: String,
-    clientMode: String,
-  ): GatewayClientInfo =
+  fun buildClientInfo(clientMode: String): GatewayClientInfo =
     GatewayClientInfo(
-      id = clientId,
+      id = "openclaw-android",
       displayName = prefs.displayName.value,
       version = resolvedVersionName(),
       platform = "android",
       mode = clientMode,
       instanceId = prefs.instanceId.value,
       deviceFamily = "Android",
-      modelIdentifier = resolveModelIdentifier(),
+      modelIdentifier = listOfNotNull(Build.MANUFACTURER, Build.MODEL).joinToString(" ").trim().ifEmpty { null },
     )
 
   fun buildNodeConnectOptions(): GatewayConnectOptions =
@@ -144,7 +133,7 @@ class ConnectionManager internal constructor(
       caps = advertisedCapabilities(),
       commands = advertisedCommands(),
       permissions = buildPermissions(),
-      client = buildClientInfo(clientId = "openclaw-android", clientMode = "node"),
+      client = buildClientInfo(clientMode = "node"),
       userAgent = buildUserAgent(),
     )
 
@@ -160,10 +149,14 @@ class ConnectionManager internal constructor(
           if (inlineWidgetsAvailable()) add(INLINE_WIDGETS_CLIENT_CAPABILITY)
           add(USAGE_REFRESHING_CLIENT_CAPABILITY)
           add(MODEL_SELECTION_POLICY_CLIENT_CAPABILITY)
+          // Android does not consume presence rosters; accept deltas to avoid unused full snapshots.
+          add("presence-deltas")
+          add("health-summary")
+          add(PERSONAL_SESSION_PINS_CAPABILITY)
         },
       commands = emptyList(),
       permissions = emptyMap(),
-      client = buildClientInfo(clientId = "openclaw-android", clientMode = "ui"),
+      client = buildClientInfo(clientMode = "ui"),
       userAgent = buildUserAgent(),
     )
 

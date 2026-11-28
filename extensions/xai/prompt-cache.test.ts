@@ -1,6 +1,7 @@
 import "openclaw/plugin-sdk/compiled-subprocess-testing";
-import { streamSimple, type Model } from "openclaw/plugin-sdk/llm";
+import type { Model } from "openclaw/plugin-sdk/llm";
 import { describe, expect, it } from "vitest";
+import { captureProviderRequestPayload } from "../test-support/provider-request-payload.test-support.js";
 import { resolveXaiTransport } from "./provider-routing.js";
 import { applyXaiRuntimeModelCompat } from "./runtime-model-compat.js";
 
@@ -32,20 +33,11 @@ describe("xAI Responses prompt cache routing", () => {
       baseUrl: route.baseUrl,
     } satisfies Model);
     const model = { ...normalized, ...resolveXaiTransport(normalized) };
-    let payload: unknown;
-    const result = await streamSimple(
+    const { result, payload } = await captureProviderRequestPayload(
       model,
+      { sessionId: "session-123" },
       { messages: [{ role: "user", content: "Synthetic request", timestamp: 1 }] },
-      {
-        apiKey: "synthetic-unused-key",
-        sessionId: "session-123",
-        cacheRetention: "long",
-        onPayload(value) {
-          payload = value;
-          throw new Error("captured before request");
-        },
-      },
-    ).result();
+    );
     expect(result.errorMessage).toBe("captured before request");
     expect(payload).toMatchObject({ prompt_cache_key: route.key });
     expect(payload).not.toHaveProperty("prompt_cache_retention");

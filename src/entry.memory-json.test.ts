@@ -13,9 +13,16 @@ import {
 } from "openclaw/plugin-sdk/sqlite-runtime-testing";
 import { describe, expect, it, vi } from "vitest";
 import {
+  closeHttpServer,
+  listenLoopback,
+  readRequestText,
+  respondJson,
+} from "../test/helpers/gateway-integration-fixtures.js";
+import {
   createOpenClawTestInstance,
   type OpenClawTestInstance,
 } from "../test/helpers/openclaw-test-instance.js";
+import { awaitGateBeforeSettlement } from "../test/helpers/promise.js";
 import { runQaGatewayTestFixture } from "../test/helpers/qa-gateway-test-lifetime.js";
 import { createTempDirTracker } from "../test/helpers/temp-dir.js";
 import { withConsoleLogsRoutedToStderrForJson } from "./cli/json-output-mode.js";
@@ -36,97 +43,120 @@ type MemoryRootFixture = {
   invoke: (args: string[]) => Promise<void>;
 };
 
+function memoryConfig(workspace: string, baseUrl?: string): OpenClawConfig {
+  return {
+    cron: baseUrl ? { enabled: false } : undefined,
+    agents: {
+      ownership: "explicit",
+      defaults: {
+        workspace,
+        skipBootstrap: baseUrl ? true : undefined,
+        model: baseUrl ? { primary: "fixture/unused" } : undefined,
+      },
+      entries: { main: {} },
+    },
+    plugins: {
+      allow: ["memory-core"],
+      slots: { memory: "memory-core" },
+      entries: baseUrl
+        ? { "memory-core": { config: { dreaming: { enabled: false } } } }
+        : undefined,
+    },
+    memory: {
+      search: baseUrl
+        ? {
+            provider: "openai-compatible",
+            model: "synthetic-embedding",
+            fallback: "none",
+            sources: ["memory"],
+            remote: { baseUrl, apiKey: "fixture-unused-key" },
+            query: { minScore: 0.2 },
+          }
+        : { provider: "none", sources: ["memory"], store: { vector: { enabled: false } } },
+    },
+    gateway: baseUrl ? { mode: "local", bind: "loopback" } : undefined,
+    hooks: baseUrl ? { enabled: false } : undefined,
+    tools: baseUrl ? { allow: ["memory_search"] } : undefined,
+  };
+}
+
+function expectJsonFailure({ stdout, stderr }: MemoryRootFixture, message: string) {
+  expect(JSON.parse(stdout())).toEqual({ ok: false, error: { type: "cli_error", message } });
+  expect(stderr().trim()).toBe(message);
+  expect(process.exitCode).toBe(1);
+}
+
 async function withMemoryRoot(run: (fixture: MemoryRootFixture) => Promise<void>) {
   // A later invocation must not adopt roots retained after failed owner drainage.
   const tempDirs = createTempDirTracker();
   const root = tempDirs.make("openclaw-entry-memory-json-");
   const workspaceDir = path.join(root, "workspace");
   const previousExitCode = process.exitCode;
-  const stdout: string[] = [];
-  const stderr: string[] = [];
+  const output = { stdout: "", stderr: "" };
   const cache = createPluginCache();
   try {
     await fs.mkdir(workspaceDir, { recursive: true });
-    vi.stubEnv("OPENCLAW_STATE_DIR", path.join(root, "state"));
-    vi.stubEnv("OPENCLAW_CONFIG_PATH", path.join(root, "openclaw.json"));
-    vi.stubEnv("OPENCLAW_DEBUG", "0");
-    vi.stubEnv(
-      "OPENCLAW_BUNDLED_PLUGINS_DIR",
-      fileURLToPath(new URL("../extensions", import.meta.url)),
-    );
+    for (const [name, value] of Object.entries({
+      OPENCLAW_STATE_DIR: path.join(root, "state"),
+      OPENCLAW_CONFIG_PATH: path.join(root, "openclaw.json"),
+      OPENCLAW_DEBUG: "0",
+      OPENCLAW_BUNDLED_PLUGINS_DIR: fileURLToPath(new URL("../extensions", import.meta.url)),
+    })) {
+      vi.stubEnv(name, value);
+    }
     // The real early-diagnostic dotenv loader must see only this empty fixture.
     vi.spyOn(process, "cwd").mockReturnValue(root);
-    vi.spyOn(process.stdout, "write").mockImplementation((chunk) => {
-      stdout.push(String(chunk));
-      return true;
-    });
-    vi.spyOn(process.stderr, "write").mockImplementation((chunk) => {
-      stderr.push(String(chunk));
-      return true;
-    });
+    for (const stream of ["stdout", "stderr"] as const) {
+      vi.spyOn(process[stream], "write").mockImplementation((chunk) => {
+        output[stream] += String(chunk);
+        return true;
+      });
+    }
     setLoggerOverride({ level: "silent", consoleLevel: "error" });
-    const config: OpenClawConfig = {
-      agents: {
-        ownership: "explicit",
-        defaults: { workspace: workspaceDir },
-        entries: { main: {} },
-      },
-      plugins: { allow: ["memory-core"], slots: { memory: "memory-core" } },
-      memory: {
-        search: {
-          provider: "none",
-          sources: ["memory"],
-          store: { vector: { enabled: false } },
-        },
-      },
-    };
-    await fs.writeFile(path.join(root, "openclaw.json"), JSON.stringify(config));
+    await fs.writeFile(
+      path.join(root, "openclaw.json"),
+      JSON.stringify(memoryConfig(workspaceDir)),
+    );
     const fixtureEnv = { ...process.env };
     const invoke = async (args: string[]) => {
       const argv = ["node", "openclaw", "memory", ...args];
-      stdout.length = 0;
-      stderr.length = 0;
+      output.stdout = output.stderr = "";
       process.exitCode = 0;
-      // Retain JSON routing around the root catch as normal runCli does; the outer
-      // scope restores it when this in-process test invocation finishes.
-      await withConsoleLogsRoutedToStderrForJson(argv, () =>
-        runMainOrRootHelp(argv, {
-          loadRunCli: async () => ({
-            runCli: async (commandArgv) => {
-              const program = new Command().name("openclaw").exitOverride();
-              const resources = new CliPluginInvocationResources();
-              const session = createPluginCliLoadSession(cache, { resources });
-              try {
-                await session.withCache(async () => {
-                  await registerPluginCliCommandsFromValidatedConfig(
-                    program,
-                    fixtureEnv,
-                    { pluginSdkResolution: "src" },
-                    { primary: "memory", session },
-                  );
-                  session.close();
-                  await resources.run(() => program.parseAsync(commandArgv));
-                });
-              } finally {
-                session.close();
-                await resources.release();
-              }
-            },
-          }),
-        }),
-      );
+      // mock-isolation: Run the real memory command, retaining runCli's root JSON routing.
+      vi.doMock("./cli/run-main.js", async () => ({
+        runCli: async (commandArgv: string[]) => {
+          const program = new Command().name("openclaw").exitOverride();
+          const resources = new CliPluginInvocationResources();
+          const session = createPluginCliLoadSession(cache, { resources });
+          try {
+            await session.withCache(async () => {
+              await registerPluginCliCommandsFromValidatedConfig(
+                program,
+                fixtureEnv,
+                { pluginSdkResolution: "src" },
+                { primary: "memory", session },
+              );
+              session.close();
+              await resources.run(() => program.parseAsync(commandArgv));
+            });
+          } finally {
+            session.close();
+            await resources.release();
+          }
+        },
+      }));
+      await withConsoleLogsRoutedToStderrForJson(argv, () => runMainOrRootHelp(argv));
     };
     await run({
       workspaceDir,
-      stdout: () => stdout.join(""),
-      stderr: () => stderr.join(""),
+      stdout: () => output.stdout,
+      stderr: () => output.stderr,
       invoke,
     });
   } finally {
     try {
       try {
-        const retirement = await retirePluginCache(cache);
-        expect(retirement.failures).toEqual([]);
+        expect((await retirePluginCache(cache)).failures).toEqual([]);
       } finally {
         await closeOpenClawAgentDatabasesAsync();
         closeOpenClawAgentDatabasesForTest();
@@ -137,6 +167,7 @@ async function withMemoryRoot(run: (fixture: MemoryRootFixture) => Promise<void>
     } finally {
       clearRuntimeConfigSnapshot();
       resetLogger();
+      vi.doUnmock("./cli/run-main.js");
       vi.restoreAllMocks();
       vi.unstubAllEnvs();
       process.exitCode = previousExitCode;
@@ -146,15 +177,15 @@ async function withMemoryRoot(run: (fixture: MemoryRootFixture) => Promise<void>
 }
 
 async function prepareHistoricalMemoryControl(
-  { workspaceDir, invoke, stdout }: Pick<MemoryRootFixture, "workspaceDir" | "invoke" | "stdout">,
+  fixture: MemoryRootFixture,
   command: "rem-harness" | "rem-backfill",
 ) {
+  const { workspaceDir, invoke, stdout } = fixture;
   const historyPath = path.join(workspaceDir, "2025-01-01.md");
   const history =
     "## Preferences Learned\n- Always choose the copper telescope for observations.\n";
   await fs.writeFile(historyPath, history, "utf8");
   const args = [command, "--agent", "main", "--path", historyPath, "--json"];
-  // Qualify the real fixture before any cleanup-failure instrumentation.
   await invoke(args);
   expect(JSON.parse(stdout())).toMatchObject({
     sourcePath: historyPath,
@@ -169,28 +200,22 @@ async function prepareHistoricalMemoryControl(
 
 describe("memory command failures at the root JSON boundary", () => {
   it("writes one actionable JSON failure for a queryless search", async () => {
-    await withMemoryRoot(async ({ invoke, stdout, stderr }) => {
-      await invoke(["search", "--json"]);
-
-      expect(JSON.parse(stdout())).toEqual({
-        ok: false,
-        error: {
-          type: "cli_error",
-          message: "Missing search query. Provide a positional query or use --query <text>.",
-        },
-      });
-      expect(stderr()).toContain("The CLI command failed.");
-      // Vitest suppresses the native one-shot exit; this checks the logical code only.
-      expect(process.exitCode).toBe(1);
+    await withMemoryRoot(async (fixture) => {
+      await fixture.invoke(["search", "--json"]);
+      expectJsonFailure(
+        fixture,
+        "Missing search query. Provide a positional query or use --query <text>.",
+      );
     });
   });
 
   it.each(["rem-harness", "rem-backfill"] as const)(
     "%s writes one failure document when historical scratch removal rejects",
     async (command) => {
-      await withMemoryRoot(async ({ workspaceDir, invoke, stdout, stderr }) => {
+      await withMemoryRoot(async (fixture) => {
+        const { invoke, stdout } = fixture;
         const { historyPath, history, args } = await prepareHistoricalMemoryControl(
-          { workspaceDir, invoke, stdout },
+          fixture,
           command,
         );
         const realCopyFile = fs.copyFile.bind(fs);
@@ -221,38 +246,30 @@ describe("memory command failures at the root JSON boundary", () => {
           }
           await realRm(target, options);
         });
-        // Attach both settlement handlers immediately, including the early-error path.
-        const settled = invoke(args).then(
-          () => ({ kind: "resolved" as const }),
-          (error: unknown) => ({ kind: "rejected" as const, error }),
-        );
+        // Observe rejection before racing cleanup so early failures cannot go unhandled.
+        const settled = invoke(args);
+        void settled.catch(() => {});
         try {
-          const first = await Promise.race([
-            cleanupStarted.promise.then(() => "cleanup" as const),
-            settled.then(() => "settled" as const),
-          ]);
-          expect(first).toBe("cleanup");
+          await awaitGateBeforeSettlement(
+            cleanupStarted.promise,
+            settled,
+            "memory command settled before scratch cleanup",
+          );
           const beforeRemovalSettled = stdout();
           cleanupRelease.resolve();
-          expect(await settled).toEqual({ kind: "resolved" });
+          await expect(settled).resolves.toBeUndefined();
 
-          // Parse the entire stream: a success document followed by the root
-          // failure document must fail even when each document is valid JSON.
-          expect(JSON.parse(stdout())).toEqual({
-            ok: false,
-            error: { type: "cli_error", message: cleanupError.message },
-          });
-          expect(beforeRemovalSettled).toBe("");
-          expect(cleanupAttempts).toBe(1);
-          expect(stderr()).toContain("[openclaw] The CLI command failed.");
-          expect(stderr()).not.toContain(cleanupError.message);
-          expect(process.exitCode).toBe(1);
-          expect(await fs.readFile(historyPath, "utf8")).toBe(history);
+          // Parsing the whole stream rejects a success document followed by a failure document.
+          expectJsonFailure(fixture, cleanupError.message);
+          expect({
+            beforeRemovalSettled,
+            cleanupAttempts,
+            history: await fs.readFile(historyPath, "utf8"),
+          }).toEqual({ beforeRemovalSettled: "", cleanupAttempts: 1, history });
         } finally {
-          // Release and join even when a baseline assertion fails. Restoring the
-          // filesystem spy cannot settle a promise it already returned.
+          // Restoring the spy cannot settle work already waiting on this promise.
           cleanupRelease.resolve();
-          await settled;
+          await settled.catch(() => {});
           if (scratchDir !== undefined) {
             await realRm(scratchDir, { recursive: true, force: true });
           }
@@ -262,222 +279,166 @@ describe("memory command failures at the root JSON boundary", () => {
   );
 });
 
-// The infra project already prepares the built runtime for this entry-point file.
-describe("registered memory_search through Gateway /tools/invoke (infra)", () => {
-  it(
-    "returns semantic recall before its deadline with chunks-first planner estimates",
-    {
-      timeout: 120_000,
-    },
-    (context) => {
-      const query = "How do we restore service after a failed deployment?";
-      const documents = [
-        [
-          "rollback",
-          "Revert the release to the previous healthy version when the rollout breaks.",
-          0.01,
-        ],
-        ["traffic", "Route requests back to the healthy replica pool while repairs proceed.", 0.05],
-        ["snapshot", "Recover the saved application snapshot and restart the service.", 0.1],
-        ["verify", "Check health probes and run a smoke test before reopening traffic.", 0.15],
-        ["repair", "Repair the broken release in staging before attempting another rollout.", 0.2],
-        [
-          "keyword",
-          "The deployment art exhibition includes a failed sculpture named service.",
-          1.55,
-        ],
-        ["background", "The botanical catalog describes orchids and garden soil.", 1.57],
-      ] as const;
-      const vector = (angle: number) => [
-        Math.cos(angle),
-        Math.sin(angle),
-        ...Array<number>(8190).fill(0),
-      ];
-      const embeddings = new Map<string, number[]>(
-        documents.map(([, text, angle]) => [text, vector(angle)]),
-      );
-      const providerErrors: unknown[] = [];
-      let instance: OpenClawTestInstance | undefined;
-      const provider = createServer((request, response) => {
-        void (async () => {
-          const chunks: Buffer[] = [];
-          for await (const chunk of request) {
-            chunks.push(Buffer.isBuffer(chunk) ? chunk : Buffer.from(chunk));
-          }
-          const body: { input: string[] } = JSON.parse(Buffer.concat(chunks).toString("utf8"));
-          response.writeHead(200, { "content-type": "application/json" });
-          response.end(
-            JSON.stringify({
-              data: body.input.map((text, index) => {
-                const embedding =
-                  text === query || text === "ping" ? vector(0) : embeddings.get(text.trim());
-                if (!embedding) {
-                  throw new Error("Unexpected embedding fixture input");
-                }
-                return { index, embedding };
-              }),
-            }),
-          );
-        })().catch((error: unknown) => {
-          providerErrors.push(error);
-          response.writeHead(500).end();
+it(
+  "Gateway memory_search returns semantic recall before its deadline with chunks-first estimates",
+  {
+    timeout: 120_000,
+  },
+  (context) => {
+    const query = "How do we restore service after a failed deployment?";
+    const documents = [
+      [
+        "rollback",
+        "Revert the release to the previous healthy version when the rollout breaks.",
+        0.01,
+      ],
+      ["traffic", "Route requests back to the healthy replica pool while repairs proceed.", 0.05],
+      ["snapshot", "Recover the saved application snapshot and restart the service.", 0.1],
+      ["verify", "Check health probes and run a smoke test before reopening traffic.", 0.15],
+      ["repair", "Repair the broken release in staging before attempting another rollout.", 0.2],
+      ["keyword", "The deployment art exhibition includes a failed sculpture named service.", 1.55],
+      ["background", "The botanical catalog describes orchids and garden soil.", 1.57],
+    ] as const;
+    const vector = (angle: number) => [
+      Math.cos(angle),
+      Math.sin(angle),
+      ...Array<number>(8190).fill(0),
+    ];
+    const embeddings = new Map<string, number[]>(
+      documents.map(([, text, angle]) => [text, vector(angle)]),
+    );
+    const providerErrors: unknown[] = [];
+    let instance: OpenClawTestInstance | undefined;
+    const provider = createServer((request, response) => {
+      void (async () => {
+        const body: { input: string[] } = JSON.parse(await readRequestText(request));
+        respondJson(response, {
+          data: body.input.map((text, index) => {
+            const embedding =
+              text === query || text === "ping" ? vector(0) : embeddings.get(text.trim());
+            if (!embedding) {
+              throw new Error("Unexpected embedding fixture input");
+            }
+            return { index, embedding };
+          }),
         });
+      })().catch((error: unknown) => {
+        providerErrors.push(error);
+        response.writeHead(500).end();
       });
-      return runQaGatewayTestFixture(
-        context,
-        async ({ signal, verifyCleanup, createTempDir }) => {
-          const workspace = createTempDir("openclaw-memory-query-plan-");
-          await fs.mkdir(path.join(workspace, "memory"));
-          for (const [name, text] of documents) {
-            await fs.writeFile(path.join(workspace, "memory", `${name}.md`), `${text}\n`);
-          }
-          await new Promise<void>((resolve, reject) => {
-            provider.once("error", reject);
-            provider.listen(0, "127.0.0.1", resolve);
-          });
-          const address = provider.address();
-          if (!address || typeof address === "string") {
-            throw new Error("Embedding fixture did not bind a TCP port");
-          }
-          instance = await createOpenClawTestInstance({
-            name: "memory-query-plan",
-            entrypoint: [path.resolve("openclaw.mjs")],
-            signal,
-            verifyCleanup,
-            config: {
-              agents: {
-                ownership: "explicit",
-                defaults: {
-                  workspace,
-                  skipBootstrap: true,
-                  heartbeat: { every: "0m" },
-                  model: { primary: "fixture/unused" },
-                },
-                entries: { main: {} },
-              },
-              gateway: { mode: "local", bind: "loopback" },
-              hooks: { enabled: false },
-              memory: {
-                search: {
-                  provider: "openai-compatible",
-                  model: "synthetic-embedding",
-                  fallback: "none",
-                  sources: ["memory"],
-                  remote: {
-                    baseUrl: `http://127.0.0.1:${address.port}/v1`,
-                    apiKey: "fixture-unused-key",
-                  },
-                  query: { minScore: 0.2 },
-                },
-              },
-              plugins: {
-                allow: ["memory-core"],
-                slots: { memory: "memory-core" },
-                entries: { "memory-core": { config: { dreaming: { enabled: false } } } },
-              },
-              tools: { allow: ["memory_search"] },
-            },
-            env: {
-              VITEST: undefined,
-              NODE_ENV: undefined,
-              OPENCLAW_TEST_MINIMAL_GATEWAY: undefined,
-              OPENCLAW_BUNDLED_PLUGINS_DIR: undefined,
-              OPENCLAW_DISABLE_BUNDLED_PLUGINS: undefined,
-              OPENCLAW_NO_RESPAWN: "1",
-            },
-          });
-          const indexed = await instance.cli(["memory", "index", "--agent", "main", "--force"]);
-          expect(indexed.code, indexed.stderr).toBe(0);
-          const databasePath = path.join(instance.state.agentDir("main"), "openclaw-agent.sqlite");
-          const db = openNodeSqliteDatabase(databasePath, { allowExtension: true });
-          try {
-            const loaded = await loadSqliteVecExtension({ db });
-            expect(loaded.ok, loaded.error).toBe(true);
-            const insert = db.prepare(`INSERT INTO memory_index_chunks
+    });
+    return runQaGatewayTestFixture(
+      context,
+      async ({ signal, verifyCleanup, createTempDir }) => {
+        const workspace = createTempDir("openclaw-memory-query-plan-");
+        await fs.mkdir(path.join(workspace, "memory"));
+        for (const [name, text] of documents) {
+          await fs.writeFile(path.join(workspace, "memory", `${name}.md`), `${text}\n`);
+        }
+        const providerUrl = await listenLoopback(provider);
+        instance = await createOpenClawTestInstance({
+          name: "memory-query-plan",
+          entrypoint: [path.resolve("openclaw.mjs")],
+          signal,
+          verifyCleanup,
+          config: memoryConfig(workspace, `${providerUrl}/v1`),
+          env: {
+            VITEST: undefined,
+            NODE_ENV: undefined,
+            OPENCLAW_TEST_MINIMAL_GATEWAY: undefined,
+            OPENCLAW_BUNDLED_PLUGINS_DIR: undefined,
+            OPENCLAW_DISABLE_BUNDLED_PLUGINS: undefined,
+            OPENCLAW_NO_RESPAWN: "1",
+          },
+        });
+        const indexed = await instance.cli(["memory", "index", "--agent", "main", "--force"]);
+        expect(indexed.code, indexed.stderr).toBe(0);
+        const databasePath = path.join(instance.state.agentDir("main"), "openclaw-agent.sqlite");
+        const db = openNodeSqliteDatabase(databasePath, { allowExtension: true });
+        try {
+          const loaded = await loadSqliteVecExtension({ db });
+          expect(loaded.ok, loaded.error).toBe(true);
+          const insert = db.prepare(`INSERT INTO memory_index_chunks
           (id, path, source, start_line, end_line, hash, model, text, embedding, updated_at)
           SELECT ?, path, source, start_line, end_line, hash, model, text, embedding, updated_at
           FROM memory_index_chunks WHERE path = 'memory/background.md' LIMIT 1`);
-            const insertVector = db.prepare(
-              "INSERT INTO memory_index_chunks_vec (id, embedding) VALUES (?, ?)",
-            );
-            const insertProvenance = db.prepare(`INSERT INTO memory_index_chunk_provenance
+          const insertVector = db.prepare(
+            "INSERT INTO memory_index_chunks_vec (id, embedding) VALUES (?, ?)",
+          );
+          const insertProvenance = db.prepare(`INSERT INTO memory_index_chunk_provenance
           (chunk_id, origin_class, session_kind, observed_at) VALUES (?, 'agent', 'unknown', ?)`);
-            const insertRecall = db.prepare(
-              "INSERT INTO memory_index_chunk_recall_metadata (chunk_id) VALUES (?)",
-            );
-            const background = new Uint8Array(new Float32Array(vector(1.57)).buffer);
-            db.exec("BEGIN");
-            // Wide vectors make repeated KNN work expensive without a large chunk scan after the fix.
-            for (let index = documents.length; index < 4096; index += 1) {
-              const id = `padding-${index}`;
-              insert.run(id);
-              insertVector.run(id, background);
-              insertProvenance.run(id, Date.now());
-              insertRecall.run(id);
-            }
-            db.exec("COMMIT; ANALYZE");
-            db.exec(
-              "UPDATE sqlite_stat1 SET stat = '1 1' WHERE tbl = 'memory_index_chunks'; ANALYZE sqlite_schema;",
-            );
-            expect(db.prepare("SELECT count(*) AS count FROM memory_index_chunks").get()).toEqual({
-              count: 4096,
-            });
-          } finally {
-            db.close();
+          const insertRecall = db.prepare(
+            "INSERT INTO memory_index_chunk_recall_metadata (chunk_id) VALUES (?)",
+          );
+          const background = new Uint8Array(new Float32Array(vector(1.57)).buffer);
+          db.exec("BEGIN");
+          // Wide vectors make repeated KNN work expensive without a large chunk scan after the fix.
+          for (let index = documents.length; index < 4096; index += 1) {
+            const id = `padding-${index}`;
+            insert.run(id);
+            insertVector.run(id, background);
+            insertProvenance.run(id, Date.now());
+            insertRecall.run(id);
           }
-          await instance.startGateway();
-          const startedAt = performance.now();
-          const response = await fetch(`http://127.0.0.1:${instance.port}/tools/invoke`, {
-            method: "POST",
-            headers: {
-              "content-type": "application/json",
-              authorization: `Bearer ${instance.gatewayToken}`,
-            },
-            body: JSON.stringify({
-              tool: "memory_search",
-              agentId: "main",
-              args: { query, maxResults: 5, corpus: "memory" },
-            }),
-            signal,
+          db.exec("COMMIT; ANALYZE");
+          db.exec(
+            "UPDATE sqlite_stat1 SET stat = '1 1' WHERE tbl = 'memory_index_chunks'; ANALYZE sqlite_schema;",
+          );
+          expect(db.prepare("SELECT count(*) AS count FROM memory_index_chunks").get()).toEqual({
+            count: 4096,
           });
-          const responseBody: unknown = await response.json();
-          const elapsedMs = performance.now() - startedAt;
-          console.info(JSON.stringify({ elapsedMs, responseBody, providerErrors }));
-          expect(response.status).toBe(200);
-          expect(responseBody).toMatchObject({
-            ok: true,
-            result: {
-              details: {
-                results: ["snapshot", "traffic", "verify", "repair", "rollback"].map((name) => ({
-                  path: `memory/${name}.md`,
-                  source: "memory",
-                  vectorScore: expect.any(Number),
-                })),
-              },
+        } finally {
+          db.close();
+        }
+        await instance.startGateway();
+        const startedAt = performance.now();
+        const response = await fetch(`http://127.0.0.1:${instance.port}/tools/invoke`, {
+          method: "POST",
+          headers: {
+            "content-type": "application/json",
+            authorization: `Bearer ${instance.gatewayToken}`,
+          },
+          body: JSON.stringify({
+            tool: "memory_search",
+            agentId: "main",
+            args: { query, maxResults: 5, corpus: "memory" },
+          }),
+          signal,
+        });
+        const responseBody: unknown = await response.json();
+        const elapsedMs = performance.now() - startedAt;
+        console.info(JSON.stringify({ elapsedMs, responseBody, providerErrors }));
+        expect(response.status).toBe(200);
+        expect(responseBody).toMatchObject({
+          ok: true,
+          result: {
+            details: {
+              results: ["snapshot", "verify", "traffic", "repair", "rollback"].map((name) => ({
+                path: `memory/${name}.md`,
+                source: "memory",
+                vectorScore: expect.any(Number),
+              })),
             },
+          },
+        });
+        expect(responseBody).not.toHaveProperty("result.details.partial");
+        expect(responseBody).not.toHaveProperty("result.details.timedOut");
+        expect(providerErrors).toEqual([]);
+        const after = openNodeSqliteDatabase(databasePath, { readOnly: true });
+        try {
+          expect(after.prepare("SELECT count(*) AS count FROM memory_index_chunks").get()).toEqual({
+            count: 4096,
           });
-          expect(responseBody).not.toHaveProperty("result.details.partial");
-          expect(responseBody).not.toHaveProperty("result.details.timedOut");
-          expect(providerErrors).toEqual([]);
-          const after = openNodeSqliteDatabase(databasePath, { readOnly: true });
-          try {
-            expect(
-              after.prepare("SELECT count(*) AS count FROM memory_index_chunks").get(),
-            ).toEqual({ count: 4096 });
-          } finally {
-            after.close();
-          }
-        },
-        async () => instance?.cleanup(),
-        async () => {
-          if (provider.listening) {
-            provider.closeAllConnections();
-            await new Promise<void>((resolve, reject) => {
-              provider.close((error) => (error ? reject(error) : resolve()));
-            });
-          }
-        },
-      );
-    },
-  );
-});
+        } finally {
+          after.close();
+        }
+      },
+      async () => instance?.cleanup(),
+      async () => {
+        if (provider.listening) {
+          await closeHttpServer(provider);
+        }
+      },
+    );
+  },
+);

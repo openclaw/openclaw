@@ -1,49 +1,47 @@
-import { existsSync } from "node:fs";
+import fs from "node:fs/promises";
 import path from "node:path";
-import {
-  executeSqliteQuerySync,
-  executeSqliteQueryTakeFirstSync,
-  getNodeSqliteKysely,
-} from "../infra/kysely-sync.js";
-import { deferSqlitePostCommitPublication } from "../infra/sqlite-post-commit.js";
 import { createSqliteWorkerOperationAdmission } from "../infra/sqlite-worker-operation-admission.js";
+import { resolveGlobalMap } from "../shared/global-singleton.js";
+import { runQueuedStoreWrite, type StoreWriterQueue } from "../shared/store-writer-queue.js";
+import type { AgentDeletionWorkerAuthority } from "../state/agent-deletion-worker.types.js";
 import { executeExistingOpenClawStateRead } from "../state/openclaw-state-db-readonly.js";
+import type { OpenClawStateDatabaseOptions } from "../state/openclaw-state-db.js";
 import {
-  runOpenClawStateWriteTransaction,
-  type OpenClawStateDatabaseOptions,
-} from "../state/openclaw-state-db.js";
-import { resolveOpenClawStateSqlitePath } from "../state/openclaw-state-db.paths.js";
-import { captureOpenClawStateWorkerContext } from "../state/openclaw-state-worker-context.js";
+  captureOpenClawStateReadWorkerContext,
+  captureOpenClawStateWorkerContext,
+} from "../state/openclaw-state-worker-context.js";
 import { runOpenClawStateWorkerOperation } from "../state/openclaw-state-worker-store.js";
 import { resolveUserPath } from "../utils.js";
-import { retireWorkspaceFileCache } from "./workspace-file-cache.js";
-import { captureWorkspaceStateFilesystemGuard } from "./workspace-state-guard.js";
+import { assertNoUnmigratedWorkspaceState } from "./workspace-legacy-state.js";
+import { readCachedWorkspaceStateSnapshot } from "./workspace-state-cache.js";
 import {
-  createWorkspaceStateIdentity,
-  resolveCanonicalWorkspacePath,
-  resolveWorkspaceStateAliases,
-  resolveWorkspaceStateIdentity,
-  type WorkspaceStateIdentity,
+  captureWorkspaceFilesystemEvidence,
+  installWorkspaceFilesystemEvidence,
+  prepareWorkspaceStateRead,
+  validateWorkspaceFilesystemEvidence,
+  type WorkspaceFilesystemEvidence,
+} from "./workspace-state-guard.js";
+import {
+  createWorkspaceStateAliases,
+  resolveCanonicalWorkspacePathAsync,
 } from "./workspace-state-identity.js";
 import {
-  assertCanonicalIntegerTimestamp,
-  assertCanonicalTimestamp,
-  readWorkspaceStateSnapshotFromDatabase,
-  deleteWorkspaceStateRowsInDatabase,
-  resolveWorkspaceIdentityFromDatabase,
-  WORKSPACE_SETUP_STATE_VERSION,
-  workspacePathEntryExists,
-  type WorkspaceAttestation,
-  type WorkspaceAttestationInput,
-  type WorkspaceSetupState,
-  type WorkspaceStateDatabase,
-  type WorkspaceStateDatabaseHandle,
-  type WorkspaceStateSnapshot,
-} from "./workspace-state-store.kernel.js";
+  withWorkspaceStatePublication,
+  workspaceStatePublication,
+  readWorkspaceStateReceipt,
+} from "./workspace-state-publication.js";
+import type { WorkspaceAttestationInput } from "./workspace-state-store.kernel.js";
 import type {
+  WorkspaceStateDeletionPlan,
   WorkspaceStateGuard,
   WorkspaceStateWorkerOperations,
 } from "./workspace-state-store.worker-contract.js";
+import {
+  WORKSPACE_SETUP_STATE_VERSION,
+  type WorkspaceAttestation,
+  type WorkspaceSetupState,
+  type WorkspaceStateSnapshot,
+} from "./workspace-state-types.js";
 
 export {
   hasRecentWorkspaceSetupState,
@@ -53,126 +51,163 @@ export {
   readWorkspaceStateSnapshotFromDatabase,
   registerWorkspaceStateAliasIdentitiesInTransaction,
   registerWorkspaceStateAliasesInTransaction,
-  WORKSPACE_ATTESTATION_RECENT_MS,
   WORKSPACE_CONTENT_RELOCATION_MIGRATION_KIND,
   WORKSPACE_LEGACY_STATE_MIGRATION_KIND,
+} from "./workspace-state-store.kernel.js";
+export {
   WORKSPACE_SETUP_STATE_VERSION,
   type WorkspaceAttestation,
   type WorkspaceSetupState,
   type WorkspaceStateSnapshot,
-} from "./workspace-state-store.kernel.js";
+} from "./workspace-state-types.js";
 
-type WorkspaceStateOperationOptions = { assertCurrent?: () => void } & Pick<
+type WorkspaceStateOperationOptions = {
+  assertCurrent?: () => void;
+} & Pick<
   WorkspaceStateGuard,
-  "recoveryHoldPredicate" | "beforeLegacyApply"
+  "recoveryHoldPredicate" | "beforeLegacyApply" | "filesystem" | "stateOwnerPath"
 >;
 
-type WorkspaceStateDeletionPlan = {
-  cacheRoot: string;
-  lexicalAlias: WorkspaceStateIdentity;
-  currentCanonicalIdentity: WorkspaceStateIdentity;
-  pathEntryExisted: boolean;
-};
+const workspaceWrites = resolveGlobalMap<string, StoreWriterQueue>(
+  Symbol.for("openclaw.workspaceStateWrites"),
+);
 
-async function runWorkspaceStateOperation<K extends keyof WorkspaceStateWorkerOperations>(
+async function runWorkspaceStateOperation<
+  K extends Exclude<keyof WorkspaceStateWorkerOperations, "workspace.delete">,
+>(
   command: { type: K; input: WorkspaceStateWorkerOperations[K]["input"] },
   options: OpenClawStateDatabaseOptions & WorkspaceStateOperationOptions,
+  filesystem?: Awaited<ReturnType<typeof prepareWorkspaceStateRead>>,
 ): Promise<WorkspaceStateWorkerOperations[K]["output"]> {
-  const capturedCommand = {
-    ...command,
-    input: {
-      ...command.input,
-      recoveryHoldPredicate: structuredClone(options.recoveryHoldPredicate),
-    },
-  };
   const context = captureOpenClawStateWorkerContext({
     ...options,
     path: options.database?.path ?? options.path,
   });
-  const assertFilesystem = captureWorkspaceStateFilesystemGuard(
-    command.input.workspaceDir,
-    command.type !== "workspace.snapshotAndRegister",
-  );
   const assertCurrent = () => {
     context.admission.assertCurrent();
     options.assertCurrent?.();
-    assertFilesystem();
   };
-  let expiryResult: string | false | undefined;
-  let publication: Promise<void> | undefined;
-  try {
-    const result = await runOpenClawStateWorkerOperation(
-      context,
-      async (scope) => {
-        try {
-          options.beforeLegacyApply?.();
-          return await scope.execute(capturedCommand);
-        } finally {
-          // Native settlement and cache retirement stay inside the writer's FIFO interval.
-          await publication;
-        }
-      },
-      {
-        assertCurrent,
-        createAdmission: (operation) => {
-          const admission = createSqliteWorkerOperationAdmission((request, grant) => {
-            if (request.stage !== "transaction" && request.stage !== "commit") {
-              throw new Error("Workspace state requires transaction admission");
-            }
-            assertCurrent();
-            if (command.type === "workspace.expire" && request.stage === "commit") {
-              if (typeof request.facts !== "string" && request.facts !== false) {
-                throw new Error("Workspace expiry has no admitted result");
-              }
-              expiryResult = request.facts;
-            }
-            grant();
-          });
-          const accepted = admission;
-          publication = operation.settled.then(() => {
-            if (typeof expiryResult === "string" && accepted.committed?.facts === expiryResult) {
-              retireWorkspaceFileCache(expiryResult);
-            }
-          });
-          return { admission, nativeLocations: [context.admission.databasePath] };
+  return runQueuedStoreWrite({
+    queues: workspaceWrites,
+    storePath: context.admission.coordinationKey,
+    label: "Workspace state",
+    fn: async () => {
+      const evidence =
+        filesystem?.evidence ??
+        (await captureWorkspaceFilesystemEvidence(
+          command.input.workspaceDir,
+          command.type !== "workspace.snapshotAndRegister" &&
+            command.type !== "workspace.replaceAttestation",
+        ));
+      assertCurrent();
+      const capturedCommand = {
+        ...command,
+        input: {
+          ...command.input,
+          recoveryHoldPredicate: options.recoveryHoldPredicate,
+          filesystem: [...(options.filesystem ?? []), evidence],
+          stateOwnerPath: options.stateOwnerPath,
         },
-      },
-    );
-    assertCurrent();
-    return result;
-  } finally {
-    await publication;
-  }
+      };
+      const result = await runOpenClawStateWorkerOperation(
+        context,
+        (scope) => {
+          options.beforeLegacyApply?.();
+          return scope.execute(capturedCommand);
+        },
+        {
+          assertCurrent,
+          createAdmission: withWorkspaceStatePublication(context, () => {
+            const admission = createSqliteWorkerOperationAdmission((request, grant) => {
+              if (request.stage !== "transaction" && request.stage !== "commit") {
+                throw new Error("Workspace state requires transaction admission");
+              }
+              assertCurrent();
+              // SAFETY: These are the paired workspace worker's observations for this command.
+              const facts = request.facts as {
+                filesystem: readonly Pick<WorkspaceFilesystemEvidence, "root">[];
+              };
+              installWorkspaceFilesystemEvidence(
+                capturedCommand.input.filesystem,
+                facts.filesystem,
+              );
+              grant();
+            });
+            return { admission, nativeLocations: [context.admission.databasePath] };
+          }),
+        },
+      );
+      assertCurrent();
+      return result;
+    },
+  });
 }
 
 export async function readWorkspaceStateSnapshot(
   workspaceDir: string,
-  options: OpenClawStateDatabaseOptions & WorkspaceStateOperationOptions = {},
+  options: OpenClawStateDatabaseOptions &
+    WorkspaceStateOperationOptions & { checkLegacySources?: boolean } = {},
 ): Promise<WorkspaceStateSnapshot> {
   const capturedWorkspaceDir = path.resolve(resolveUserPath(workspaceDir));
-  if (options.readOnly) {
-    const assertFilesystem = captureWorkspaceStateFilesystemGuard(capturedWorkspaceDir, false);
-    const reply = await executeExistingOpenClawStateRead(options, {
-      type: "workspace.snapshot",
-      workspaceDir: capturedWorkspaceDir,
-    });
+  const context = (
+    options.readOnly ? captureOpenClawStateReadWorkerContext : captureOpenClawStateWorkerContext
+  )({
+    ...options,
+    path: options.database?.path ?? options.path,
+  });
+  const assertCurrent = () => {
+    context.admission.assertCurrent();
     options.assertCurrent?.();
-    assertFilesystem();
-    if (reply && (!reply.ok || reply.type !== "workspace.snapshot")) {
-      throw new Error("Unexpected workspace state snapshot result");
+  };
+  const filesystem = await prepareWorkspaceStateRead(capturedWorkspaceDir);
+  assertCurrent();
+  const validateFilesystem = async () => {
+    for (const evidence of [filesystem.evidence, ...(options.filesystem ?? [])]) {
+      await validateWorkspaceFilesystemEvidence(evidence);
+      assertCurrent();
     }
+  };
+  if (options.checkLegacySources) {
+    await assertNoUnmigratedWorkspaceState({
+      workspaceDir: capturedWorkspaceDir,
+      canonicalPath: filesystem.canonicalPath,
+    });
+  }
+  assertCurrent();
+  if (options.readOnly) {
+    const reply = await executeExistingOpenClawStateRead(
+      options,
+      {
+        type: "workspace.snapshot",
+        workspaceDir: capturedWorkspaceDir,
+      },
+      { context },
+    );
+    await validateFilesystem();
+    assertCurrent();
     return (
       reply?.snapshot ?? {
-        identity: resolveWorkspaceStateIdentity(capturedWorkspaceDir),
+        identity: filesystem.aliases.at(-1)!,
         setupExists: false,
         setup: { version: WORKSPACE_SETUP_STATE_VERSION },
       }
     );
   }
-  return runWorkspaceStateOperation(
-    { type: "workspace.snapshotAndRegister", input: { workspaceDir: capturedWorkspaceDir } },
-    options,
-  );
+  const read = () =>
+    runWorkspaceStateOperation(
+      { type: "workspace.snapshotAndRegister", input: { workspaceDir: capturedWorkspaceDir } },
+      options,
+      filesystem,
+    );
+  // Recovery predicates require the worker's current journal check. Ordinary
+  // preparation reuses state until its owning writer publishes a change.
+  const snapshot =
+    options.recoveryHoldPredicate || options.beforeLegacyApply
+      ? await read()
+      : await readCachedWorkspaceStateSnapshot(context, JSON.stringify(filesystem.aliases), read);
+  await validateFilesystem();
+  assertCurrent();
+  return snapshot;
 }
 
 export async function mergeWorkspaceSetupState(
@@ -181,13 +216,6 @@ export async function mergeWorkspaceSetupState(
   nowMs = Date.now(),
   options: OpenClawStateDatabaseOptions & WorkspaceStateOperationOptions = {},
 ): Promise<WorkspaceSetupState> {
-  assertCanonicalIntegerTimestamp(nowMs, "setup update");
-  if (next.bootstrapSeededAt) {
-    assertCanonicalTimestamp(next.bootstrapSeededAt, "bootstrap seeded");
-  }
-  if (next.setupCompletedAt) {
-    assertCanonicalTimestamp(next.setupCompletedAt, "setup completed");
-  }
   return runWorkspaceStateOperation(
     {
       type: "workspace.mergeSetup",
@@ -201,74 +229,35 @@ export async function mergeWorkspaceSetupState(
   );
 }
 
+export async function rollbackWorkspaceBootstrapSeed(
+  workspaceDir: string,
+  bootstrapSeededAt: string,
+  options: OpenClawStateDatabaseOptions & WorkspaceStateOperationOptions = {},
+): Promise<void> {
+  return runWorkspaceStateOperation(
+    {
+      type: "workspace.rollbackBootstrapSeed",
+      input: { workspaceDir: path.resolve(resolveUserPath(workspaceDir)), bootstrapSeededAt },
+    },
+    options,
+  );
+}
+
 export async function replaceWorkspaceAttestation(
   params: WorkspaceAttestationInput & WorkspaceStateOperationOptions,
 ): Promise<WorkspaceAttestation> {
-  const context = captureOpenClawStateWorkerContext();
-  const { assertCurrent } = params;
-  const input = {
-    workspaceDir: path.resolve(resolveUserPath(params.workspaceDir)),
-    attestedAtMs: params.attestedAtMs,
-    generatedHashes: new Map(params.generatedHashes),
-    nowMs: params.nowMs,
-    recoveryHoldPredicate: structuredClone(params.recoveryHoldPredicate),
-  };
-  return runOpenClawStateWorkerOperation(
-    context,
-    (scope) => {
-      params.beforeLegacyApply?.();
-      return scope.execute({ type: "workspace.replaceAttestation", input });
-    },
+  return runWorkspaceStateOperation(
     {
-      assertCurrent,
-      createAdmission: () => ({
-        nativeLocations: [context.admission.databasePath],
-        admission: createSqliteWorkerOperationAdmission((request, grant) => {
-          if (request.stage !== "transaction" && request.stage !== "commit") {
-            throw new Error("Workspace attestation requires transaction admission");
-          }
-          context.admission.assertCurrent();
-          assertCurrent?.();
-          grant();
-        }),
-      }),
+      type: "workspace.replaceAttestation",
+      input: {
+        workspaceDir: path.resolve(resolveUserPath(params.workspaceDir)),
+        attestedAtMs: params.attestedAtMs,
+        generatedHashes: new Map(params.generatedHashes),
+        nowMs: params.nowMs,
+      },
     },
+    params,
   );
-}
-
-function deleteWorkspaceRows(
-  database: WorkspaceStateDatabaseHandle,
-  identity: WorkspaceStateIdentity,
-): void {
-  deleteWorkspaceStateRowsInDatabase(database, identity);
-  // Explicit agent deletion retains its native transaction and publication owner.
-  deferSqlitePostCommitPublication(database.db, () =>
-    retireWorkspaceFileCache(identity.workspacePath),
-  );
-}
-
-/** The migration owner has verified the same workspace and every relocated byte before this commit. */
-export function retireWorkspaceRelocationAttestation(params: {
-  database: WorkspaceStateDatabaseHandle;
-  identity: WorkspaceStateIdentity;
-  attestedAtMs: number;
-}): boolean {
-  const snapshot = readWorkspaceStateSnapshotFromDatabase(params);
-  if (
-    snapshot.setupExists ||
-    snapshot.attestation?.attestedAtMs !== params.attestedAtMs ||
-    snapshot.attestation.generatedHashes.size > 0
-  ) {
-    return false;
-  }
-  executeSqliteQuerySync(
-    params.database.db,
-    getNodeSqliteKysely<WorkspaceStateDatabase>(params.database.db)
-      .updateTable("workspace_setup_state")
-      .set({ attested_at_ms: null, attestation_updated_at_ms: null })
-      .where("workspace_key", "=", params.identity.workspaceKey),
-  );
-  return true;
 }
 
 /** Clear expired state only when no concurrent writer refreshed the vanished workspace. */
@@ -277,7 +266,6 @@ export async function clearExpiredWorkspaceStateForVanishedWorkspace(
   nowMs = Date.now(),
   options: WorkspaceStateOperationOptions = {},
 ): Promise<boolean> {
-  assertCanonicalIntegerTimestamp(nowMs, "workspace expiry check");
   const result = await runWorkspaceStateOperation(
     {
       type: "workspace.expire",
@@ -292,73 +280,89 @@ export async function clearExpiredWorkspaceStateForVanishedWorkspace(
 }
 
 /** Capture workspace identity before the filesystem entry is removed. */
-export function prepareWorkspaceStateDeletion(workspaceDir: string): WorkspaceStateDeletionPlan {
-  const aliases = resolveWorkspaceStateAliases(workspaceDir);
+export async function prepareWorkspaceStateDeletion(
+  workspaceDir: string,
+): Promise<WorkspaceStateDeletionPlan> {
+  const canonicalRoot = await resolveCanonicalWorkspacePathAsync(workspaceDir);
+  const aliases = createWorkspaceStateAliases(workspaceDir, canonicalRoot);
   return {
-    cacheRoot: resolveCanonicalWorkspacePath(workspaceDir),
     lexicalAlias: aliases[0]!,
     currentCanonicalIdentity: aliases.at(-1)!,
-    pathEntryExisted: workspacePathEntryExists(workspaceDir),
+    pathEntryExisted: await fs.lstat(path.resolve(resolveUserPath(workspaceDir))).then(
+      () => true,
+      () => false,
+    ),
   };
 }
 
 export async function deleteWorkspaceState(
   plan: WorkspaceStateDeletionPlan,
-  options: WorkspaceStateOperationOptions = {},
+  options: Pick<OpenClawStateDatabaseOptions, "database" | "path" | "env"> & {
+    /** Host-only authority; the deletion owner supplies durable transaction predicates. */
+    assertCurrent?: () => void;
+    deletion?: AgentDeletionWorkerAuthority;
+  } = {},
 ): Promise<void> {
-  // Delete-only cleanup must not recreate state after reset/uninstall removed
-  // the canonical database successfully or partially.
-  if (!existsSync(resolveOpenClawStateSqlitePath())) {
-    options.assertCurrent?.();
-    retireWorkspaceFileCache(plan.cacheRoot);
+  const deletionOwner = options.deletion;
+  if (deletionOwner) {
+    let publication: ReturnType<typeof workspaceStatePublication.begin> | undefined;
+    try {
+      await deletionOwner.runWithWorker(
+        (scope, deletion) => scope.execute({ type: "workspace.delete", input: { plan, deletion } }),
+        {
+          onAdmission: (_request, identity) => {
+            publication ??= workspaceStatePublication.begin({
+              identity,
+              assertCurrent: deletionOwner.assertCurrentHost,
+            });
+          },
+          onCommitted: (facts) => {
+            const receipt = readWorkspaceStateReceipt(facts);
+            publication?.committed(receipt.receipt);
+          },
+        },
+      );
+      publication?.finish(true);
+    } finally {
+      publication?.finish(false);
+    }
+    deletionOwner.assertCurrentHost();
     return;
   }
-  runOpenClawStateWriteTransaction((database) => {
-    options.assertCurrent?.();
-    const { lexicalAlias, currentCanonicalIdentity } = plan;
-    const kysely = getNodeSqliteKysely<WorkspaceStateDatabase>(database.db);
-    const storedAlias = executeSqliteQueryTakeFirstSync(
-      database.db,
-      kysely
-        .selectFrom("workspace_path_aliases")
-        .selectAll()
-        .where("alias_key", "=", lexicalAlias.workspaceKey),
-    );
-    if (storedAlias && storedAlias.alias_path !== lexicalAlias.workspacePath) {
-      throw new Error("workspace path alias key collision");
-    }
-    const storedIdentity = storedAlias
-      ? createWorkspaceStateIdentity(storedAlias.workspace_path)
-      : undefined;
-    if (storedIdentity && storedIdentity.workspaceKey !== storedAlias?.workspace_key) {
-      throw new Error("workspace path alias target is invalid");
-    }
-    if (
-      storedIdentity &&
-      plan.pathEntryExisted &&
-      storedIdentity.workspaceKey !== currentCanonicalIdentity.workspaceKey
-    ) {
-      // A repointed configured alias no longer owns its former canonical
-      // workspace. Remove only that stale association, then clean current state.
-      executeSqliteQuerySync(
-        database.db,
-        kysely
-          .deleteFrom("workspace_path_aliases")
-          .where("alias_key", "=", lexicalAlias.workspaceKey),
+  const context = captureOpenClawStateWorkerContext({
+    ...options,
+    path: options.database?.path ?? options.path,
+  });
+  const assertHost = options.assertCurrent;
+  const assertCurrent = () => {
+    context.admission.assertCurrent();
+    assertHost?.();
+  };
+  assertCurrent();
+  await runQueuedStoreWrite({
+    queues: workspaceWrites,
+    storePath: context.admission.coordinationKey,
+    label: "Workspace deletion",
+    fn: async () => {
+      await runOpenClawStateWorkerOperation(
+        context,
+        (scope) => scope.execute({ type: "workspace.delete", input: { plan } }),
+        {
+          existingOnly: true,
+          assertCurrent,
+          createAdmission: withWorkspaceStatePublication(context, () => {
+            const admission = createSqliteWorkerOperationAdmission((request, grant) => {
+              if (request.stage !== "transaction" && request.stage !== "commit") {
+                throw new Error("Workspace deletion requires transaction admission");
+              }
+              assertCurrent();
+              grant();
+            });
+            return { admission, nativeLocations: [context.admission.databasePath] };
+          }),
+        },
       );
-      const currentResolution = resolveWorkspaceIdentityFromDatabase({
-        workspaceDir: currentCanonicalIdentity.workspacePath,
-        database,
-      });
-      return deleteWorkspaceRows(database, currentResolution.identity);
-    }
-    if (storedIdentity) {
-      return deleteWorkspaceRows(database, storedIdentity);
-    }
-    const resolution = resolveWorkspaceIdentityFromDatabase({
-      workspaceDir: currentCanonicalIdentity.workspacePath,
-      database,
-    });
-    return deleteWorkspaceRows(database, resolution.identity);
+      assertCurrent();
+    },
   });
 }

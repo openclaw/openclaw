@@ -1,6 +1,6 @@
 import { MAX_DATE_TIMESTAMP_MS } from "@openclaw/normalization-core/number-coercion";
 import { parseSecretRef, normalizeSecretInputString } from "../../config/types.secrets.js";
-import { isOAuthRefreshFence } from "./oauth-refresh-marker.js";
+import { isFailedOAuthRefreshFence, isOAuthRefreshFence } from "./oauth-refresh-marker.js";
 import type { AuthProfileCredential, OAuthCredential } from "./types.js";
 
 export type AuthCredentialReasonCode =
@@ -9,6 +9,8 @@ export type AuthCredentialReasonCode =
   | "missing_credential"
   | "invalid_expires"
   | "expired"
+  /** The refresh owner settled its claim as failed; only a fresh sign-in recovers. */
+  | "refresh_failed"
   | "unresolved_ref"
   | "malformed_api_key";
 
@@ -82,35 +84,33 @@ export function evaluateStoredCredentialEligibility(params: {
 
   // SecretRef and literal secret strings are both configured credentials;
   // unresolved refs are classified separately for callers to surface useful copy.
-  if (credential.type === "api_key") {
-    const hasKey = normalizeSecretInputString(credential.key) !== undefined;
-    const hasKeyRef = parseSecretRef(credential.keyRef) !== null;
-    if (isMalformedApiKeyInput(credential.key)) {
+  if (credential.type === "api_key" || credential.type === "token") {
+    const hasLiteral =
+      normalizeSecretInputString(
+        credential.type === "api_key" ? credential.key : credential.token,
+      ) !== undefined;
+    const hasRef =
+      parseSecretRef(credential.type === "api_key" ? credential.keyRef : credential.tokenRef) !==
+      null;
+    if (credential.type === "api_key" && isMalformedApiKeyInput(credential.key)) {
       return { eligible: false, reasonCode: "malformed_api_key" };
     }
-    if (!hasKey && !hasKeyRef) {
+    if (!hasLiteral && !hasRef) {
       return { eligible: false, reasonCode: "missing_credential" };
+    }
+    if (credential.type === "token") {
+      const expiryState = resolveTokenExpiryState(credential.expires, now);
+      if (expiryState === "invalid_expires" || expiryState === "expired") {
+        return { eligible: false, reasonCode: expiryState };
+      }
     }
     return { eligible: true, reasonCode: "ok" };
   }
 
-  if (credential.type === "token") {
-    const hasToken = normalizeSecretInputString(credential.token) !== undefined;
-    const hasTokenRef = parseSecretRef(credential.tokenRef) !== null;
-    if (!hasToken && !hasTokenRef) {
-      return { eligible: false, reasonCode: "missing_credential" };
-    }
-
-    const expiryState = resolveTokenExpiryState(credential.expires, now);
-    if (expiryState === "invalid_expires") {
-      return { eligible: false, reasonCode: "invalid_expires" };
-    }
-    if (expiryState === "expired") {
-      return { eligible: false, reasonCode: "expired" };
-    }
-    return { eligible: true, reasonCode: "ok" };
+  if (isFailedOAuthRefreshFence(credential)) {
+    return { eligible: false, reasonCode: "refresh_failed" };
   }
-
+  // A pending fence may still settle: its owner restores or replaces the grant.
   if (isOAuthRefreshFence(credential)) {
     return { eligible: false, reasonCode: "expired" };
   }

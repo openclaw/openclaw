@@ -175,12 +175,18 @@ final class QuickChatModel {
     private(set) var agentDisplay = QuickChatAgentDisplay.placeholder
     private(set) var missingPermissions: [Capability] = []
     private(set) var permissionsDismissedThisSession = false
-    private(set) var isGrantingPermissions = false
+    var isGrantingPermissions: Bool {
+        self.permissionTask != nil
+    }
+
     private(set) var sendState: QuickChatSendState = .idle
     private(set) var isPresentationActive = false
     private(set) var frontmostAppName = String(localized: "focused app")
     private(set) var textContext: QuickChatTextContext?
-    private(set) var isCapturingTextContext = false
+    var isCapturingTextContext: Bool {
+        self.textContextCaptureID != nil
+    }
+
     private(set) var textContextCaptureMessage: String?
     private(set) var isStartingDictation = false
     private(set) var isDictating = false
@@ -210,8 +216,14 @@ final class QuickChatModel {
     private(set) var modelDefaultProvider: String?
     private(set) var modelSelectionPolicy: OpenClawChatModelSelectionPolicy?
     private(set) var modelCatalogInvalidated = false
-    private(set) var isLoadingModelControls = false
-    private(set) var isUpdatingModel = false
+    var isLoadingModelControls: Bool {
+        self.modelControlsTask != nil
+    }
+
+    var isUpdatingModel: Bool {
+        self.routingTarget.map { self.controlPatchSettlementsByTarget[$0] != nil } ?? false
+    }
+
     private(set) var modelControlStatusMessage: String?
     /// Route of the most recently accepted send; navigation reads this immutable value
     /// instead of sampling live routing state that an agent switch could move meanwhile.
@@ -238,20 +250,16 @@ final class QuickChatModel {
     @ObservationIgnored private var agentsMainKey: String?
     @ObservationIgnored private var baseRoutingTarget: OpenClawChatSessionTarget?
     @ObservationIgnored private var sendTask: Task<String, Error>?
-    @ObservationIgnored private var permissionTask: Task<Void, Never>?
+    private var permissionTask: Task<Void, Never>?
     @ObservationIgnored private var permissionPollTask: Task<Void, Never>?
-    @ObservationIgnored private var retryIdentity: RetryIdentity?
+    private var retryIdentity: RetryIdentity?
     @ObservationIgnored private var capturePipelineID: UUID?
-    @ObservationIgnored private var textContextCaptureID: UUID?
+    private var textContextCaptureID: UUID?
     @ObservationIgnored private var textContextCaptureTask: Task<Void, Never>?
     @ObservationIgnored private var dictationTextSession: QuickChatDictationTextSession?
-    @ObservationIgnored private var modelControlsTask: Task<Void, Never>?
+    private var modelControlsTask: Task<Void, Never>?
     @ObservationIgnored private var modelCatalogEventsTask: Task<Void, Never>?
-    @ObservationIgnored private var modelControlsRequestID = UUID()
-    @ObservationIgnored private var controlPatchSettlementsByTarget: [
-        OpenClawChatSessionTarget: ControlPatchSettlement
-    ] =
-        [:]
+    private var controlPatchSettlementsByTarget: [OpenClawChatSessionTarget: ControlPatchSettlement] = [:]
     @ObservationIgnored private var appliedModelSelections: [OpenClawChatSessionTarget: String] = [:]
 
     init(
@@ -271,16 +279,7 @@ final class QuickChatModel {
                 emoji: emoji,
                 avatar: QuickChatAgentDisplay.avatar(fromRendered: identity.avatar))
         },
-        sendProvider: @escaping SendProvider = { sessionKey, agentID, message, thinking, idempotencyKey, attachments in
-            let response = try await GatewayConnection.shared.chatSend(
-                sessionKey: sessionKey,
-                agentID: agentID,
-                message: message,
-                thinking: thinking,
-                idempotencyKey: idempotencyKey,
-                attachments: attachments)
-            return response.status
-        },
+        sendProvider: @escaping SendProvider = QuickChatModel.gatewaySendProvider(gateway: .shared),
         permissionStatusProvider: @escaping PermissionStatusProvider = { capabilities in
             await PermissionManager.grantedStatus(capabilities)
         },
@@ -365,9 +364,20 @@ final class QuickChatModel {
         !self.permissionsDismissedThisSession && !self.missingPermissions.isEmpty
     }
 
+    private var failedSend: RetryIdentity? {
+        guard case .failed = self.sendState,
+              let retryIdentity,
+              retryIdentity.draft == self.text,
+              retryIdentity.route == self.routingTarget,
+              retryIdentity.thinking == self.selectedThinkingLevel
+        else { return nil }
+        return retryIdentity
+    }
+
     var canSend: Bool {
         let hasPendingOverrideState = self.selectedModelSelectionID != nil || self.selectedThinkingLevel != nil
-        return (!self.text.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty || self.textContext != nil) &&
+        return (!self.text.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty ||
+            self.textContext != nil || self.failedSend != nil) &&
             !self.sessionKey.isEmpty &&
             self.connectionGate == .available &&
             !self.isCapturingTextContext &&
@@ -379,12 +389,15 @@ final class QuickChatModel {
     }
 
     var canCaptureWindow: Bool {
+        self.canUseControls && !self.isDictating
+    }
+
+    private var canUseControls: Bool {
         !self.sessionKey.isEmpty &&
             self.connectionGate == .available &&
             !self.isGrantingPermissions &&
             !self.isCapturingTextContext &&
             !self.isStartingDictation &&
-            !self.isDictating &&
             !self.isUpdatingModel &&
             self.sendState != .sending
     }
@@ -470,14 +483,12 @@ final class QuickChatModel {
         guard !capabilities.isEmpty, !self.isGrantingPermissions else { return }
         let id = self.presentationID
         self.permissionTask?.cancel()
-        self.isGrantingPermissions = true
         self.permissionTask = Task { [weak self] in
             guard let self else { return }
             _ = await self.permissionGrantProvider(capabilities)
             guard self.isCurrentPresentation(id), !Task.isCancelled else { return }
             await self.recheckPermissions(id: id)
             guard self.isCurrentPresentation(id), !Task.isCancelled else { return }
-            self.isGrantingPermissions = false
             self.permissionTask = nil
         }
     }
@@ -518,7 +529,8 @@ final class QuickChatModel {
     }
 
     func send() async -> Bool {
-        await self.performSend(messageOverride: nil, attachments: [])
+        let retry = self.failedSend
+        return await self.performSend(messageOverride: retry?.message, attachments: retry?.attachments ?? [])
     }
 
     func captureFocusedAppText() {
@@ -526,7 +538,6 @@ final class QuickChatModel {
         let captureID = UUID()
         let presentationID = self.presentationID
         self.textContextCaptureID = captureID
-        self.isCapturingTextContext = true
         self.textContextCaptureMessage = nil
         self.textContextCaptureTask?.cancel()
         self.textContextCaptureTask = Task { [weak self] in
@@ -538,7 +549,6 @@ final class QuickChatModel {
             else { return }
             self.textContextCaptureID = nil
             self.textContextCaptureTask = nil
-            self.isCapturingTextContext = false
             switch outcome {
             case let .captured(context):
                 self.replaceTextContext(context)
@@ -721,7 +731,7 @@ final class QuickChatModel {
         // settle even though its presentation-scoped controls are being discarded.
         self.resetModelControls()
         // A dispatched chat.send may already be accepted; cancelling and retrying with a new UUID can duplicate it.
-        self.cancelPermissionTask()
+        SimpleTaskSupport.stop(task: &self.permissionTask)
         SimpleTaskSupport.stop(task: &self.permissionPollTask)
     }
 
@@ -730,7 +740,7 @@ final class QuickChatModel {
         self.sendTask?.cancel()
         self.sendTask = nil
         self.retryIdentity = nil
-        self.cancelPermissionTask()
+        SimpleTaskSupport.stop(task: &self.permissionTask)
         SimpleTaskSupport.stop(task: &self.permissionPollTask)
         self.cancelTextContextCapture()
         self.cancelModelControlRefresh()
@@ -804,6 +814,7 @@ final class QuickChatModel {
         let previousTarget = self.routingTarget
         self.setRoutingTarget(target)
         if previousTarget != target {
+            self.retryIdentity = nil
             self.invalidateModelChoices()
             // Explicit overrides survive target changes, but the target's underlying
             // session state must be read again before the compact control claims a value.
@@ -819,7 +830,23 @@ final class QuickChatModel {
     private func setRoutingTarget(_ target: OpenClawChatSessionTarget?) {
         self.sessionKey = target?.sessionKey ?? ""
         self.sendAgentID = target?.agentID
-        self.isUpdatingModel = target.map { self.controlPatchSettlementsByTarget[$0] != nil } ?? false
+    }
+
+    static func gatewaySendProvider(gateway: GatewayConnection) -> SendProvider {
+        { sessionKey, agentID, message, thinking, idempotencyKey, attachments in
+            let route = try await gateway.captureRequiredRoute()
+            let response = try await withGatewayStartupAdmission(method: "chat.send") {
+                try await gateway.chatSend(
+                    sessionKey: sessionKey,
+                    agentID: agentID,
+                    message: message,
+                    thinking: thinking,
+                    idempotencyKey: idempotencyKey,
+                    attachments: attachments,
+                    ifCurrentRoute: route)
+            }
+            return response.status
+        }
     }
 
     private func performSend(
@@ -934,15 +961,9 @@ final class QuickChatModel {
         }
     }
 
-    private func cancelPermissionTask() {
-        SimpleTaskSupport.stop(task: &self.permissionTask)
-        self.isGrantingPermissions = false
-    }
-
     private func cancelTextContextCapture() {
         SimpleTaskSupport.stop(task: &self.textContextCaptureTask)
         self.textContextCaptureID = nil
-        self.isCapturingTextContext = false
     }
 
     private func recheckPermissions(id: UUID) async {
@@ -1018,14 +1039,7 @@ extension QuickChatModel {
     }
 
     var canUseModelControls: Bool {
-        !self.sessionKey.isEmpty &&
-            self.connectionGate == .available &&
-            !self.isGrantingPermissions &&
-            !self.isCapturingTextContext &&
-            !self.isStartingDictation &&
-            !self.isLoadingModelControls &&
-            !self.isUpdatingModel &&
-            self.sendState != .sending
+        self.canUseControls && !self.isLoadingModelControls
     }
 
     var isSelectedThinkingLevelSupported: Bool {
@@ -1081,8 +1095,12 @@ extension QuickChatModel {
         guard self.isCurrentPresentation(presentationID), let target = self.routingTarget else { return }
         switch push {
         case let .event(event):
-            guard event.event == "config.changed" || event.event == "chat.metadata.changed" else { return }
-            if case .modelSelectionChanged = OpenClawChatGatewayPayloadCodec.event(from: event) {
+            guard event.event == "config.changed" || event.event == "chat.metadata.changed",
+                  let metadata = OpenClawChatGatewayPayloadCodec.event(from: event),
+                  metadata.refreshesModelCatalog(
+                      forAgentID: target.agentID ?? OpenClawChatSessionKey.agentID(from: target.sessionKey))
+            else { return }
+            if case .modelSelectionChanged = metadata {
                 self.invalidateModelChoices()
             }
         case .snapshot, .seqGap:
@@ -1102,22 +1120,17 @@ extension QuickChatModel {
 
     private func refreshModelControls(for target: OpenClawChatSessionTarget, afterSettingsChange: Bool = false) {
         guard self.isPresentationActive else { return }
-        let requestID = UUID()
-        self.modelControlsRequestID = requestID
         self.modelControlsTask?.cancel()
-        self.isLoadingModelControls = true
         self.modelControlsTask = Task { [weak self] in
             guard let self else { return }
             defer {
-                if self.modelControlsRequestID == requestID {
-                    self.isLoadingModelControls = false
+                if !Task.isCancelled {
                     self.modelControlsTask = nil
                 }
             }
             do {
                 let snapshot = try await self.modelControlsProvider(target)
-                guard !Task.isCancelled, self.modelControlsRequestID == requestID,
-                      self.routingTarget == target else { return }
+                guard !Task.isCancelled, self.routingTarget == target else { return }
                 self.modelChoices = snapshot.models
                 self.modelSelectionPolicy = snapshot.modelSelectionPolicy
                 if self.modelCatalogInvalidated { self.modelCatalogInvalidated = false }
@@ -1135,7 +1148,7 @@ extension QuickChatModel {
             } catch is CancellationError {
                 return
             } catch {
-                guard self.modelControlsRequestID == requestID, self.routingTarget == target else { return }
+                guard !Task.isCancelled, self.routingTarget == target else { return }
                 self.modelControlStatusMessage = String(localized: "Couldn't load model settings.")
                 return
             }
@@ -1158,7 +1171,6 @@ extension QuickChatModel {
             settings: settings)
         // Install synchronously and serialize same-target settlements: a dispatched mutation
         // cannot be cancelled, and the latest selection must reach the provider last.
-        if self.routingTarget == target { self.isUpdatingModel = true }
         let task = Task { [weak self, previousTask = previousSettlement?.task] in
             _ = await previousTask?.value
             guard let self else { return false }
@@ -1236,7 +1248,6 @@ extension QuickChatModel {
     private func clearControlPatchState(request: ControlPatchRequest) {
         guard self.controlPatchSettlementsByTarget[request.target]?.request == request else { return }
         self.controlPatchSettlementsByTarget.removeValue(forKey: request.target)
-        self.isUpdatingModel = self.routingTarget.map { self.controlPatchSettlementsByTarget[$0] != nil } ?? false
     }
 
     private func awaitControlPatchSettlement(for target: OpenClawChatSessionTarget?) async {
@@ -1247,9 +1258,7 @@ extension QuickChatModel {
     }
 
     private func cancelModelControlRefresh() {
-        self.modelControlsRequestID = UUID()
         SimpleTaskSupport.stop(task: &self.modelControlsTask)
-        self.isLoadingModelControls = false
     }
 
     private func resetModelControls() {

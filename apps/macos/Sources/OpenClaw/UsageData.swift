@@ -70,31 +70,18 @@ struct UsageRow: Identifiable {
 extension GatewayUsageSummary {
     func primaryRows() -> [UsageRow] {
         self.providers.compactMap { provider in
-            if let window = provider.windows.max(by: { $0.usedPercent < $1.usedPercent }) {
-                return UsageRow(
-                    id: "\(provider.provider)-\(window.label)",
-                    providerId: provider.provider,
-                    displayName: provider.displayName,
-                    plan: provider.plan,
-                    windowLabel: window.label,
-                    usedPercent: window.usedPercent.isFinite ? min(100, max(0, window.usedPercent)) : nil,
-                    resetAt: window.resetAt.map { Date(timeIntervalSince1970: $0 / 1000) },
-                    errorText: nil)
-            }
-
-            guard let error = provider.error?.trimmingCharacters(in: .whitespacesAndNewlines),
-                  !error.isEmpty
-            else { return nil }
-
+            let window = provider.windows.max(by: { $0.usedPercent < $1.usedPercent })
+            let error = provider.error?.trimmingCharacters(in: .whitespacesAndNewlines)
+            guard window != nil || error?.isEmpty == false else { return nil }
             return UsageRow(
-                id: "\(provider.provider)-error",
+                id: "\(provider.provider)-\(window?.label ?? "error")",
                 providerId: provider.provider,
                 displayName: provider.displayName,
                 plan: provider.plan,
-                windowLabel: nil,
-                usedPercent: nil,
-                resetAt: nil,
-                errorText: error)
+                windowLabel: window?.label,
+                usedPercent: window.flatMap { $0.usedPercent.isFinite ? min(100, max(0, $0.usedPercent)) : nil },
+                resetAt: window?.resetAt.map { Date(timeIntervalSince1970: $0 / 1000) },
+                errorText: window == nil ? error : nil)
         }
     }
 }

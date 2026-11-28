@@ -1,13 +1,14 @@
 import path from "node:path";
 import { z } from "zod";
 import { safeParseJsonWithSchema } from "../utils/zod-parse.js";
+import { managedHandoffBootSchema } from "./update-managed-service-handoff-boot-schema.js";
 
 const text = z.string().min(1).max(4096);
 const nativeProcessIdentityShape = {
   pid: z.number().int().positive(),
   startIdentity: text.max(128),
 };
-const processIdentitySchema = z
+export const processIdentitySchema = z
   .strictObject({
     ...nativeProcessIdentityShape,
     // Older strict readers must not mistake an argv digest for a dead process.
@@ -18,20 +19,6 @@ const processIdentitySchema = z
       ? /^win32-argv-sha256:[a-f0-9]{64}$/.test(startIdentity)
       : !startIdentity.startsWith("win32-argv-sha256:"),
   );
-export const managedHandoffBootSchema = z.union([
-  z.strictObject({
-    platform: z.enum(["linux", "darwin"]),
-    identity: z.string().regex(/^[a-f0-9]{8}-[a-f0-9]{4}-[a-f0-9]{4}-[a-f0-9]{4}-[a-f0-9]{12}$/i),
-  }),
-  z.strictObject({
-    platform: z.literal("win32"),
-    identity: z.string().regex(/^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}\.\d{7}Z$/),
-  }),
-  z.strictObject({
-    platform: z.literal("freebsd"),
-    identity: z.string().regex(/^[a-f0-9]{32}$/),
-  }),
-]);
 const nativeLifetimeSchema = z.strictObject({
   kind: z.literal("native"),
   unit: text,
@@ -168,6 +155,14 @@ export type HandoffProcessIdentity = z.infer<typeof processIdentitySchema>;
 export type HandoffNativeLifetime = z.infer<typeof nativeLifetimeSchema>;
 export type ManagedHandoffLeaseAction = z.infer<typeof actionSchema>;
 export type ManagedHandoffLeasePayload = z.infer<typeof payloadSchema>;
+
+export function isHandoffProcessIdentity(value: unknown): value is HandoffProcessIdentity {
+  return processIdentitySchema.safeParse(value).success;
+}
+
+export function isManagedHandoffLeasePayload(value: unknown): value is ManagedHandoffLeasePayload {
+  return payloadSchema.safeParse(value).success;
+}
 
 // A retired v1 record names one process. It predates both the executor/helper
 // split and native custody, so it can never carry a v3 borrower.

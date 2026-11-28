@@ -97,7 +97,7 @@ export async function callWhatsAppGatewaySendConcurrently(
 
 function resolveWhatsAppGatewayRpcConnection(gateway: WhatsAppQaGatewayRuntime) {
   if (!gateway.logs || !gateway.token || !gateway.wsUrl) {
-    throw new Error("WhatsApp concurrent Gateway probe requires a live RPC connection.");
+    throw new Error("WhatsApp concurrent Gateway check requires a live RPC connection.");
   }
   return {
     logs: gateway.logs,
@@ -110,7 +110,6 @@ export async function callWhatsAppGatewayPoll(
   context: WhatsAppQaGatewayCallContext,
   params: {
     label: string;
-    maxSelections?: number;
     options: string[];
     question: string;
   },
@@ -121,7 +120,6 @@ export async function callWhatsAppGatewayPoll(
       accountId: context.sutAccountId,
       channel: "whatsapp",
       idempotencyKey: buildWhatsAppQaIdempotencyKey(context.scenarioId, params.label),
-      maxSelections: params.maxSelections,
       options: params.options,
       question: params.question,
       to: context.gatewayTarget,

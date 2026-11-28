@@ -1,4 +1,8 @@
-import { asPositiveFiniteNumber } from "@openclaw/normalization-core/number-coercion";
+import { isDeepStrictEqual } from "node:util";
+import {
+  asNonNegativeFiniteNumber,
+  asPositiveFiniteNumber,
+} from "@openclaw/normalization-core/number-coercion";
 import { resolveCurrentSessionAgentRuntimeMetadata } from "../agents/agent-runtime-metadata.js";
 import { findModelCatalogEntry } from "../agents/model-catalog-lookup.js";
 import { selectModelCatalogRuntimeEntry } from "../agents/model-catalog-view.js";
@@ -6,8 +10,7 @@ import type { ModelCatalogEntry } from "../agents/model-catalog.types.js";
 import { resolveSessionModelIdentityRef } from "../agents/session-model-ref.js";
 import { buildSubagentSessionListReadIndex } from "../agents/subagents/registry/subagent-registry-read.js";
 import { captureRuntimeStateEnvironment } from "../config/paths.js";
-import { resolveSessionStorePathCore, type SessionEntry } from "../config/sessions.js";
-import { resolveConcreteSessionStorePath } from "../config/sessions/paths.js";
+import type { SessionEntry } from "../config/sessions.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { iterateProjectedAgentRunSessionKeys } from "../infra/agent-run-projection.js";
 import {
@@ -15,17 +18,24 @@ import {
   type ProjectedAgentRunIndex,
 } from "../infra/agent-run-registry.js";
 import type { PluginMetadataSnapshot } from "../plugins/plugin-metadata-snapshot.types.js";
-import { readRecentSessionUsageFromTranscript as readScopedRecentSessionUsageFromTranscript } from "./session-transcript-usage.js";
+import { parseAgentSessionKey } from "../routing/session-key.js";
+import { getOrCreateWeakOwnerMap } from "../shared/weak-owner-map.js";
+import {
+  resolveSessionProjectedAutoRuntime,
+  type SessionRuntimeResolution,
+} from "./session-runtime-resolution.js";
+import type { SessionTranscriptUsageSnapshot } from "./session-transcript-derived-readers.js";
 import {
   createSessionRowModelCacheKey,
   type SessionActorProfileIdentity,
   type SessionListRowContext,
 } from "./session-utils-contracts.js";
-import { resolveEstimatedSessionCostUsd } from "./session-utils-core.js";
+import { resolveEstimatedSessionCostUsd, type SessionChildLink } from "./session-utils-core.js";
 import { resolveWorkerPlacementModelRuntime } from "./worker-environments/placement-session-runtime.js";
 
 export function buildSessionListRowMetadataContext(params: {
   now: number;
+  modelCostPricing?: SessionListRowContext["modelCostPricing"];
   sessionKeys?: readonly string[];
   subagentRuns?: SessionListRowContext["subagentRuns"];
   projectedAgentRuns?: ProjectedAgentRunIndex;
@@ -56,11 +66,7 @@ export function buildSessionListRowMetadataContext(params: {
     configuredDefaultModelByAgent: new Map(),
     thinkingFactsByModelRef: new Map(),
     findModelCatalogEntry: (catalog, query) => {
-      let entries = catalogEntries.get(catalog);
-      if (!entries) {
-        entries = new Map();
-        catalogEntries.set(catalog, entries);
-      }
+      const entries = getOrCreateWeakOwnerMap(catalogEntries, catalog);
       const key = createSessionRowModelCacheKey(query.provider, query.modelId);
       if (!entries.has(key)) {
         entries.set(key, findModelCatalogEntry(catalog, query));
@@ -68,12 +74,8 @@ export function buildSessionListRowMetadataContext(params: {
       return entries.get(key);
     },
     selectModelCatalogRuntimeEntry: (selection) => {
-      let entries = runtimeEntries.get(selection.routeVariants);
-      if (!entries) {
-        entries = new Map();
-        runtimeEntries.set(selection.routeVariants, entries);
-      }
-      const key = `${selection.runtimeId}\0${createSessionRowModelCacheKey(selection.entry.provider, selection.entry.id)}`;
+      const entries = getOrCreateWeakOwnerMap(runtimeEntries, selection.routeVariants);
+      const key = `${selection.runtimeId}\0${selection.allowApiFallback !== false}\0${createSessionRowModelCacheKey(selection.entry.provider, selection.entry.id)}`;
       let selected = entries.get(key);
       if (!selected) {
         selected = selectModelCatalogRuntimeEntry(selection);
@@ -82,7 +84,7 @@ export function buildSessionListRowMetadataContext(params: {
       return selected;
     },
     displayModelIdentityByKey: new Map(),
-    modelCostConfigByModelRef: new Map(),
+    modelCostPricing: params.modelCostPricing,
     userProfileIdentityById: params.userProfileIdentityById ?? new Map(),
   };
 }
@@ -108,6 +110,92 @@ export function buildProjectedSubagentActivity(
   return active;
 }
 
+/** Child presentation needs live ownership and sharing facts, never the child's stored payload. */
+export function projectSessionRowChildLinks(
+  links: readonly SessionChildLink[] | undefined,
+  previous?: readonly ProjectedSessionRowChildLink[],
+) {
+  return links?.map((link, index) => {
+    const retained = previous?.[index];
+    if (retained && sameSessionRowChildLink(link, retained)) {
+      return retained;
+    }
+    const { key, entry, agentId, storePath } = link;
+    return {
+      key,
+      agentId,
+      storePath,
+      parsedKey: parseAgentSessionKey(key),
+      entry: projectChildLinkEntry(entry),
+    };
+  });
+}
+
+function projectChildLinkEntry(entry: SessionEntry) {
+  return {
+    sessionId: entry.sessionId,
+    lifecycleRevision: entry.lifecycleRevision,
+    updatedAt: entry.updatedAt,
+    archivedAt: entry.archivedAt,
+    status: entry.status,
+    startedAt: entry.startedAt,
+    endedAt: entry.endedAt,
+    spawnedBy: entry.spawnedBy,
+    parentSessionKey: entry.parentSessionKey,
+    sidebarRoot: entry.sidebarRoot,
+    createdActor: entry.createdActor,
+    visibility: entry.visibility,
+    incognito: entry.incognito,
+  };
+}
+
+type ChildLinkEntry = ReturnType<typeof projectChildLinkEntry>;
+type ProjectedSessionRowChildLink = Omit<SessionChildLink, "entry"> & {
+  parsedKey: ReturnType<typeof parseAgentSessionKey>;
+  entry: ChildLinkEntry;
+};
+const emptyChildLink = projectChildLinkEntry({ sessionId: "", updatedAt: 0 });
+// SAFETY: The compact producer emits the same keys even for absent facts.
+const childLinkFields = Object.keys(emptyChildLink) as (keyof ChildLinkEntry)[];
+
+export function sameSessionRowChildLinkEntry(
+  before: ChildLinkEntry | SessionEntry,
+  after: ChildLinkEntry | SessionEntry,
+) {
+  if (before === after) {
+    return true;
+  }
+  for (const field of childLinkFields) {
+    if (
+      !Object.is(before[field], after[field]) &&
+      (field !== "createdActor" || !isDeepStrictEqual(before[field], after[field]))
+    ) {
+      return false;
+    }
+  }
+  return true;
+}
+
+function sameSessionRowChildLink(link: SessionChildLink, previous: ProjectedSessionRowChildLink) {
+  return (
+    link.key === previous.key &&
+    link.agentId === previous.agentId &&
+    link.storePath === previous.storePath &&
+    sameSessionRowChildLinkEntry(link.entry, previous.entry)
+  );
+}
+
+/** The compact producer includes absent fields; compare its whole shape without retaining child entries. */
+export function reuseSessionRowChildLinks(
+  links: readonly SessionChildLink[],
+  previous: readonly ProjectedSessionRowChildLink[] | undefined,
+) {
+  return previous?.length === links.length &&
+    links.every((link, index) => sameSessionRowChildLink(link, previous[index]!))
+    ? previous
+    : links;
+}
+
 export function resolveTranscriptUsageFallbacks(params: {
   cfg: OpenClawConfig;
   key: string;
@@ -119,16 +207,22 @@ export function resolveTranscriptUsageFallbacks(params: {
   rowContext?: SessionListRowContext;
   agentId: string;
   storeAgentId?: string;
+  transcriptUsage?: SessionTranscriptUsageSnapshot | null;
 }): Map<
   string | undefined,
-  { estimatedCostUsd?: number; totalTokens?: number; totalTokensFresh?: boolean } | null
+  {
+    estimatedCostUsd?: number;
+    totalTokens?: number;
+    totalTokensFresh?: boolean;
+    usageReport?: SessionEntry["usageReport"];
+  } | null
 > {
   const { entry, agentId } = params;
   const fallbacks: ReturnType<typeof resolveTranscriptUsageFallbacks> = new Map();
-  let snapshot: ReturnType<typeof readScopedRecentSessionUsageFromTranscript> | undefined;
+  const snapshot = params.transcriptUsage;
   for (const fallbackModelRef of new Set(params.fallbackModelRefs)) {
     fallbacks.set(fallbackModelRef, null);
-    if (!entry?.sessionId) {
+    if (!entry?.sessionId || !snapshot) {
       continue;
     }
     const resolvedModel = resolveSessionModelIdentityRef(
@@ -138,10 +232,12 @@ export function resolveTranscriptUsageFallbacks(params: {
       fallbackModelRef,
       { allowPluginNormalization: params.allowPluginNormalization },
     );
+    if (!resolvedModel) {
+      continue;
+    }
     if (
       params.freshTotalTokens !== undefined &&
       resolveEstimatedSessionCostUsd({
-        cfg: params.cfg,
         provider: resolvedModel.provider,
         model: resolvedModel.model,
         entry,
@@ -150,40 +246,22 @@ export function resolveTranscriptUsageFallbacks(params: {
     ) {
       continue;
     }
-    if (snapshot === undefined) {
-      const storePath =
-        resolveConcreteSessionStorePath(params.storePath) ??
-        resolveSessionStorePathCore(params.cfg.session?.store, { agentId });
-      try {
-        snapshot = readScopedRecentSessionUsageFromTranscript(
-          {
-            agentId: params.storeAgentId ?? agentId,
-            sessionEntry: entry,
-            sessionId: entry.sessionId,
-            sessionKey: params.key,
-            storePath,
-          },
-          256 * 1024,
-        );
-      } catch {
-        snapshot = null;
-      }
-    }
-    if (snapshot) {
-      const estimatedCostUsd = resolveEstimatedSessionCostUsd({
-        cfg: params.cfg,
-        provider: snapshot.modelProvider ?? resolvedModel.provider,
-        model: snapshot.model ?? resolvedModel.model,
-        explicitCostUsd: snapshot.costUsd,
-        entry: snapshot,
-        rowContext: params.rowContext,
-      });
-      fallbacks.set(fallbackModelRef, {
-        totalTokens: asPositiveFiniteNumber(snapshot.totalTokens),
-        totalTokensFresh: snapshot.totalTokensFresh === true,
-        estimatedCostUsd,
-      });
-    }
+    const estimatedCostUsd = resolveEstimatedSessionCostUsd({
+      provider: snapshot.modelProvider ?? resolvedModel.provider,
+      model: snapshot.model ?? resolvedModel.model,
+      explicitCostUsd: snapshot.costUsd,
+      entry: snapshot,
+      rowContext: params.rowContext,
+    });
+    fallbacks.set(fallbackModelRef, {
+      usageReport: snapshot.usageReport,
+      totalTokens:
+        snapshot.usageReport?.state === "available"
+          ? asNonNegativeFiniteNumber(snapshot.totalTokens)
+          : asPositiveFiniteNumber(snapshot.totalTokens),
+      totalTokensFresh: snapshot.totalTokensFresh === true,
+      estimatedCostUsd,
+    });
   }
   return fallbacks;
 }
@@ -206,31 +284,44 @@ export function resolveGatewaySessionRuntimeProjection(params: {
   preparedAcpMeta?: SessionEntry["acp"] | null;
   rowContext?: SessionListRowContext;
   metadataSnapshot?: PluginMetadataSnapshot | null;
+  runtimeResolution?: SessionRuntimeResolution;
 }) {
-  const { entry } = params;
+  const { entry, runtimeResolution } = params;
   const acpMeta = params.preparedAcpMeta ?? undefined;
-  const agentRuntime = resolveCurrentSessionAgentRuntimeMetadata({
-    cfg: params.cfg,
-    agentScope: { kind: "prepared", agentId: params.agentId },
-    provider: params.provider,
-    model: params.model,
-    sessionKey: params.sessionKey,
-    sessionEntry: params.entry,
-    acpRuntime: acpMeta != null,
-    acpBackend: acpMeta?.backend,
-  });
-  if (agentRuntime.id === "auto" && entry) {
-    agentRuntime.id = resolveWorkerPlacementModelRuntime({
-      ...params,
-      entry,
-      preparedEnvironment: params.rowContext
-        ? (params.rowContext.workerPlacementEnvironment ??= captureRuntimeStateEnvironment())
-        : undefined,
+  let agentRuntime =
+    runtimeResolution?.metadata(params) ??
+    resolveCurrentSessionAgentRuntimeMetadata({
+      cfg: params.cfg,
+      agentScope: { kind: "prepared", agentId: params.agentId },
+      provider: params.provider,
+      model: params.model,
+      sessionKey: params.sessionKey,
+      sessionEntry: params.entry,
+      acpRuntime: acpMeta != null,
+      acpBackend: acpMeta?.backend,
     });
+  const configuredRuntime = agentRuntime.id;
+  let embeddedAutoRuntime: string | undefined;
+  if (configuredRuntime === "auto" && entry) {
+    agentRuntime = {
+      ...agentRuntime,
+      id: resolveWorkerPlacementModelRuntime({
+        ...params,
+        entry,
+        resolveEmbeddedRuntime: () =>
+          (embeddedAutoRuntime =
+            runtimeResolution?.effective(params) ?? resolveSessionProjectedAutoRuntime(params)),
+        preparedEnvironment: params.rowContext
+          ? (params.rowContext.workerPlacementEnvironment ??= captureRuntimeStateEnvironment())
+          : undefined,
+      }),
+    };
   }
   return {
     acpMeta,
     agentRuntime,
+    configuredRuntime,
+    embeddedAutoRuntime,
     runtimeSelectionLocked: resolveGatewaySessionRuntimeSelectionLocked(entry, acpMeta),
   };
 }

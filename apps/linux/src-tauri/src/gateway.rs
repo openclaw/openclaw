@@ -16,67 +16,58 @@ pub struct GatewaySnapshot {
     pub reachable: bool,
     pub status: String,
     pub detail: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub setup_error: Option<String>,
     #[serde(skip)]
     pub runtime_path: Option<std::path::PathBuf>,
 }
 
 impl GatewaySnapshot {
-    pub(crate) fn remote_opening() -> Self {
+    fn unavailable(phase: &'static str, status: &str, detail: impl Into<String>) -> Self {
         Self {
-            phase: "remoteOpening",
+            phase,
             runtime_path: None,
             installed: false,
             running: false,
             reachable: false,
-            status: "Opening remote dashboard".to_string(),
-            detail: Some(
-                "Gateway authentication and readiness are shown in the dashboard.".to_string(),
-            ),
+            status: status.to_string(),
+            detail: Some(detail.into()),
+            setup_error: None,
         }
+    }
+
+    pub(crate) fn remote_opening() -> Self {
+        Self::unavailable(
+            "remoteOpening",
+            "Opening remote Gateway",
+            "Gateway authentication and readiness are shown in OpenClaw.",
+        )
     }
 
     pub(crate) fn remote_error(detail: impl Into<String>) -> Self {
-        Self {
-            phase: "remoteError",
-            status: "Remote connection unavailable".to_string(),
-            detail: Some(detail.into()),
-            ..Self::remote_opening()
-        }
+        Self::unavailable("remoteError", "Remote connection unavailable", detail)
     }
 
     pub fn unconfigured() -> Self {
-        Self {
-            phase: "unconfigured",
-            runtime_path: None,
-            installed: false,
-            running: false,
-            reachable: false,
-            status: "Setup required".to_string(),
-            detail: Some("Choose where your OpenClaw Gateway should run.".to_string()),
-        }
+        Self::unavailable(
+            "unconfigured",
+            "Setup required",
+            "Choose where your OpenClaw Gateway should run.",
+        )
     }
 
     pub fn missing_cli() -> Self {
-        Self {
-            phase: "missingCli",
-            runtime_path: None,
-            installed: false,
-            running: false,
-            reachable: false,
-            status: "CLI required".to_string(),
-            detail: Some("Install the OpenClaw CLI to continue.".to_string()),
-        }
+        Self::unavailable(
+            "missingCli",
+            "CLI required",
+            "Install the OpenClaw CLI to continue.",
+        )
     }
 
     pub fn reconnecting(detail: impl Into<String>) -> Self {
         Self {
-            phase: "reconnecting",
-            runtime_path: None,
             installed: true,
-            running: false,
-            reachable: false,
-            status: "Reconnecting".to_string(),
-            detail: Some(detail.into()),
+            ..Self::unavailable("reconnecting", "Reconnecting", detail)
         }
     }
 }
@@ -159,6 +150,9 @@ struct DashboardResponse {
 }
 
 pub fn status(cli: &OpenClawCli) -> Result<GatewaySnapshot, String> {
+    if crate::test_profile::enabled() {
+        return crate::test_profile::status(cli);
+    }
     let value = cli
         .json::<DaemonStatus, _, _>(["gateway", "status", "--json"])
         .map_err(|error| error.to_string())?;
@@ -233,10 +227,11 @@ pub fn status(cli: &OpenClawCli) -> Result<GatewaySnapshot, String> {
         reachable,
         status: status.to_string(),
         detail,
+        setup_error: None,
     })
 }
 
-#[cfg(not(target_os = "linux"))]
+#[cfg(not(any(target_os = "linux", target_os = "windows", target_os = "macos")))]
 pub fn ensure_ready(cli: &OpenClawCli) -> Result<ReadyGateway, String> {
     let mut snapshot = status(cli)?;
     if snapshot.reachable {
@@ -272,6 +267,9 @@ fn wait_until_reachable(cli: &OpenClawCli) -> Result<GatewaySnapshot, String> {
 }
 
 pub fn act(cli: &OpenClawCli, action: GatewayAction) -> Result<GatewaySnapshot, String> {
+    if crate::test_profile::enabled() {
+        return crate::test_profile::action(cli, action);
+    }
     run_service_command(cli, action.command())?;
     if matches!(action, GatewayAction::Stop) {
         return status(cli);
@@ -300,10 +298,10 @@ pub fn dashboard(cli: &OpenClawCli, snapshot: GatewaySnapshot) -> Result<ReadyGa
         // legacy URL's shared credential and must never consume that grant.
         let shared_auth_url = response
             .url
-            .ok_or_else(|| "Dashboard response did not include a URL.".to_string())?;
+            .ok_or_else(|| "The Gateway did not return a URL.".to_string())?;
         let ws_url = response
             .ws_url
-            .ok_or_else(|| "Dashboard response did not include a WebSocket URL.".to_string())?;
+            .ok_or_else(|| "The Gateway did not return a WebSocket URL.".to_string())?;
         let token = dashboard_token(&shared_auth_url)?;
         return Ok(ReadyGateway {
             snapshot,
@@ -321,7 +319,7 @@ pub fn dashboard(cli: &OpenClawCli, snapshot: GatewaySnapshot) -> Result<ReadyGa
     }
     Err(response
         .reason
-        .unwrap_or_else(|| "Dashboard is not ready.".to_string()))
+        .unwrap_or_else(|| "OpenClaw is not ready.".to_string()))
 }
 
 fn unsupported_dashboard_integration() -> String {
@@ -333,13 +331,13 @@ fn unsupported_dashboard_integration() -> String {
 
 fn dashboard_token(dashboard_url: &str) -> Result<Option<String>, String> {
     let parsed = tauri::Url::parse(dashboard_url)
-        .map_err(|_| "Dashboard returned an invalid URL.".to_string())?;
+        .map_err(|_| "The Gateway returned an invalid URL.".to_string())?;
     let Some(fragment) = parsed.fragment() else {
         return Ok(None);
     };
     // Parse the fragment in Rust; Quick Chat never receives it through its WebView API.
     let fragment_url = tauri::Url::parse(&format!("http://localhost/?{fragment}"))
-        .map_err(|_| "Dashboard returned an invalid authentication fragment.".to_string())?;
+        .map_err(|_| "The Gateway returned an invalid authentication fragment.".to_string())?;
     Ok(fragment_url
         .query_pairs()
         .find(|(key, _)| key == "token")

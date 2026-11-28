@@ -62,9 +62,14 @@ export type ModelPricingSource = {
   passthroughProviderModel?: boolean;
   modelIdTransforms?: "version-dots"[];
 };
-export type ModelPricingProvider = { external?: boolean } & Partial<
-  Record<ModelPricingSourceId, ModelPricingSource | false>
->;
+export type ModelPricingProvider = {
+  external?: boolean;
+  /**
+   * Provider whose catalog rows price this provider's models when it has no price of its own,
+   * for a runtime that sends the same models to that provider (a CLI backend over its vendor API).
+   */
+  priceAs?: string;
+} & Partial<Record<ModelPricingSourceId, ModelPricingSource | false>>;
 
 type CompleteModelCost = Omit<ModelCatalogTieredCost, "range"> &
   Pick<ModelCatalogCost, "tieredPricing">;
@@ -76,8 +81,11 @@ export function normalizeModelPricingProvider(value: unknown): ModelPricingProvi
   if (!record) {
     return undefined;
   }
-  const policy: ModelPricingProvider =
-    typeof record.external === "boolean" ? { external: record.external } : {};
+  const priceAs = normalizeModelCatalogProviderId(normalizeOptionalString(record.priceAs) ?? "");
+  const policy: ModelPricingProvider = {
+    ...(typeof record.external === "boolean" ? { external: record.external } : {}),
+    ...(priceAs ? { priceAs } : {}),
+  };
   for (const { id: sourceId } of MODEL_PRICING_SOURCES) {
     const raw = record[sourceId];
     if (raw === false) {

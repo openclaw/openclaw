@@ -35,6 +35,7 @@ export async function recordBackupRunOutcome(
     createdAt?: number;
     env?: NodeJS.ProcessEnv;
   } & Omit<BackupRunManifest, "pushFailed">,
+  options?: { assertCurrent?: () => void; signal?: AbortSignal },
 ): Promise<void> {
   const databasePath = resolveOpenClawStateSqlitePath(params.env ?? process.env);
   // Best-effort log only: never bootstrap an absent state database to record an
@@ -59,7 +60,7 @@ export async function recordBackupRunOutcome(
   await runOpenClawStateWorkerOperation(
     context,
     (scope) => scope.execute({ type: "backup.recordOutcome", input: row }),
-    { existingOnly: true },
+    { ...options, existingOnly: true },
   );
 }
 
@@ -74,12 +75,6 @@ export async function readBackupRuns(env: NodeJS.ProcessEnv): Promise<BackupRunR
   );
   if (!result) {
     return [];
-  }
-  if (!result.ok) {
-    throw new Error(result.message);
-  }
-  if (result.type !== "backup.runs") {
-    throw new Error("Unexpected backup ledger read result");
   }
   return result.runs;
 }

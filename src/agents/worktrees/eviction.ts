@@ -9,20 +9,25 @@ import type { WorktreeAllocationGuard } from "./allocation.js";
 import { withManagedWorktreeGit } from "./checkout-policy.js";
 import { WorktreeRemovalContentionError } from "./errors.js";
 import type { WorktreeEvictionReason } from "./git-worktree-operations.js";
-import { readRegistryWorktrees } from "./registry-read.js";
+import { prepareWorktreeRegistryGuard, readRegistryWorktrees } from "./registry-read.js";
+import {
+  deferFailedWorktreeRemoval,
+  deferWorktreeCleanup,
+  removalDeferralReason,
+} from "./registry-retirement.js";
 import {
   createWorktreeRemovalClaimsGuard,
-  getRegistryWorktree,
   getRegistryWorktreeProvisionedPaths,
   updateRegistryWorktree,
 } from "./registry.js";
-import { withWorktreeRunEnd } from "./run-end-lifecycle.js";
+import { captureWorktreeRunEndContext, withWorktreeRunEnd } from "./run-end-lifecycle.js";
 import {
   abortWorktreeRemoval,
   claimWorktreeRemoval,
   finalizeWorktreeRemoval,
 } from "./run-lease.js";
 import { captureManagedWorktreeSnapshot } from "./snapshot-host.js";
+import { worktreeSnapshotBase } from "./snapshot-ref.js";
 import type {
   ManagedWorktreeRecord,
   WorktreeRegistryPredicate,
@@ -31,88 +36,74 @@ import type {
 
 const log = createSubsystemLogger("agents/worktrees");
 
-/** Capacity eviction keeps run exclusion but deliberately permits loss of unsaved data. */
+/** Capacity eviction retains checkout custody and a complete recovery snapshot. */
 export async function evictManagedWorktree(params: {
   env: NodeJS.ProcessEnv;
   record: ManagedWorktreeRecord;
   reason: WorktreeEvictionReason;
+  retryDeferred?: boolean;
   guard: WorktreeAllocationGuard;
   getConfig: () => OpenClawConfig;
-  now: () => number;
 }): Promise<WorktreeEvictionReason | "dirty-purged"> {
-  return withWorktreeRunEnd(params.env, () => evictAcceptedWorktree(params));
-}
-
-async function evictAcceptedWorktree(
-  params: Parameters<typeof evictManagedWorktree>[0],
-): Promise<WorktreeEvictionReason | "dirty-purged"> {
-  const { env, record, guard } = params;
-  const authority = guard.workerAuthority;
-  if (!authority?.leaseSet) {
-    throw new Error("Worktree eviction requires the allocation lease's worker authority");
-  }
-  const token = randomUUID();
-  const dependencies: string[] = [];
-  const claimsPredicate = (): WorktreeRegistryPredicate => ({
-    kind: "removal-claims",
-    ids: [record.id, ...dependencies],
-    token,
-  });
-  const workerAuthority: WorktreeWorkerAuthority = {
-    ...authority,
-    predicates: [...(authority.predicates ?? []), { kind: "binding", record }],
-  };
-  let assertClaims = createWorktreeRemovalClaimsGuard(env, [record.id], token);
-  const assertCurrent = () => {
-    guard.commitGuard();
-    const current = getRegistryWorktree(env, record.id);
-    if (
-      !current ||
-      current.removedAt !== undefined ||
-      current.path !== record.path ||
-      current.repoRoot !== record.repoRoot ||
-      current.createdAt !== record.createdAt ||
-      current.lastActiveAt !== record.lastActiveAt
-    ) {
-      throw new Error("Worktree changed before capacity eviction; retry allocation");
+  return withWorktreeRunEnd(params.env, async () => {
+    const { env, record, guard } = params;
+    const authority = guard.workerAuthority;
+    if (!authority?.leaseSet) {
+      throw new Error("Worktree eviction requires retained checkout worker authority");
     }
-    assertClaims();
-  };
-  await claimWorktreeRemoval(env, {
-    worktreeId: record.id,
-    token,
-    assertCurrent: guard.commitGuard,
-    workerAuthority,
-  });
-  let outcome:
-    | { ok: true; value: WorktreeEvictionReason | "dirty-purged" }
-    | { ok: false; error: unknown };
-  try {
-    assertCurrent();
-    const { withSettledLocalWorkspace } =
-      await import("../../gateway/worker-environments/local-workspace-projection.js");
-    const value = await withSettledLocalWorkspace<WorktreeEvictionReason | "dirty-purged">(
-      { worktree: record, env, assertCurrent, workerAuthority, retireRuntime: true },
-      async (accepted) => {
-        const ownerAuthority = accepted?.workerAuthority ?? workerAuthority;
-        const heldClaimsAuthority = (): WorktreeWorkerAuthority => ({
-          ...ownerAuthority,
-          predicates: [...(ownerAuthority.predicates ?? []), claimsPredicate()],
-        });
-        const beforeRun = () => {
-          assertCurrent();
-          accepted?.assertCurrent();
-        };
-        let snapshotRef: string | undefined;
-        let dirty = false;
-        let snapshotError: string | undefined;
-        try {
-          const signal = AbortSignal.any([
-            ...(guard.signal ? [guard.signal] : []),
-            AbortSignal.timeout(5_000),
-          ]);
+    const token = randomUUID();
+    const dependencies: string[] = [];
+    const claimsPredicate = (): WorktreeRegistryPredicate => ({
+      kind: "removal-claims",
+      ids: [record.id, ...dependencies],
+      token,
+    });
+    const workerAuthority: WorktreeWorkerAuthority = {
+      ...authority,
+      predicates: [...(authority.predicates ?? []), { kind: "binding", record }],
+    };
+    let assertClaims = createWorktreeRemovalClaimsGuard(env, [record.id], token);
+    const assertBinding = await prepareWorktreeRegistryGuard(captureWorktreeRunEndContext(env), {
+      predicates: [{ kind: "binding", record }],
+    });
+    const assertCurrent = () => {
+      guard.commitGuard();
+      assertBinding();
+      assertClaims();
+    };
+    await claimWorktreeRemoval(env, {
+      worktreeId: record.id,
+      token,
+      assertCurrent: guard.commitGuard,
+      workerAuthority,
+    });
+    let outcome:
+      | { ok: true; value: WorktreeEvictionReason | "dirty-purged" }
+      | { ok: false; error: unknown };
+    const started = performance.now();
+    try {
+      assertCurrent();
+      if (params.retryDeferred && record.gcRetry) {
+        await deferWorktreeCleanup(env, { observed: record, reason: null }, assertCurrent);
+      }
+      const { withSettledLocalWorkspace } =
+        await import("../../gateway/worker-environments/local-workspace-projection.js");
+      const value = await withSettledLocalWorkspace<WorktreeEvictionReason | "dirty-purged">(
+        { worktree: record, env, assertCurrent, workerAuthority, retireRuntime: true },
+        async (accepted) => {
+          const ownerAuthority = accepted?.workerAuthority ?? workerAuthority;
+          const heldClaimsAuthority = (): WorktreeWorkerAuthority => ({
+            ...ownerAuthority,
+            predicates: [...(ownerAuthority.predicates ?? []), claimsPredicate()],
+          });
+          const beforeRun = () => {
+            assertCurrent();
+            accepted?.assertCurrent();
+          };
+          let snapshotRef: string | undefined;
+          let dirty = false;
           await withManagedWorktreeGit(
-            { record, env, getConfig: params.getConfig, signal, beforeRun },
+            { record, env, getConfig: params.getConfig, signal: guard.signal, beforeRun },
             async (git) => {
               const provisionedPaths = await getRegistryWorktreeProvisionedPaths(env, record.id);
               if (!provisionedPaths) {
@@ -124,7 +115,7 @@ async function evictAcceptedWorktree(
                 reason: `capacity-${params.reason}`,
                 provisionedPaths,
                 git,
-                signal,
+                signal: guard.signal,
                 assertCurrent: beforeRun,
                 workerAuthority: heldClaimsAuthority(),
                 requireDiskSpace: guard.requireDiskSpace,
@@ -145,152 +136,172 @@ async function evictAcceptedWorktree(
                     "--no-commit-id",
                     "--name-only",
                     "-r",
-                    `${snapshotRef}^`,
+                    worktreeSnapshotBase(snapshotRef, snapshotRef),
                     snapshotRef,
                   ],
-                  { signal, beforeRun },
+                  { signal: guard.signal, beforeRun },
                 ),
               );
               if (accepted) {
                 const snapshotCommit = await git.require(
                   record.repoRoot,
                   ["rev-parse", `${snapshotRef}^{commit}`],
-                  { signal, beforeRun },
+                  { signal: guard.signal, beforeRun },
                 );
-                await accepted.prepareArchive?.(snapshotCommit);
+                const archive = await accepted.prepareArchive?.();
+                await archive?.(snapshotCommit);
               }
             },
           );
-        } catch (error) {
-          if (hasSqliteWorkerOutcomeUnknown(error)) {
-            throw error;
-          }
           beforeRun();
-          snapshotError = String(error);
-        }
-        beforeRun();
-        const live = await readRegistryWorktrees(env, { liveOnly: true });
-        const liveIds = new Set(live.map((candidate) => candidate.id));
-        beforeRun();
-        // Cancellation can stop preparation, but never abandon an admitted deletion.
-        const settleGuard = () => {
-          guard.rollbackGuard();
-          assertClaims();
-        };
-        let deletionAdmitted = false;
-        const assertEffectCurrent = () => (deletionAdmitted ? settleGuard() : beforeRun());
-        const fenceDependencies = async (ids: string[]) => {
-          for (const id of ids) {
-            if (id === record.id || !liveIds.has(id)) {
-              throw new Error("Worktree dependency is outside the admitted inventory");
-            }
-            try {
-              await claimWorktreeRemoval(env, {
-                worktreeId: id,
-                token,
-                assertCurrent: assertEffectCurrent,
-                workerAuthority: deletionAdmitted
-                  ? {
-                      leaseSet: authority.leaseSet,
-                      predicates: [{ kind: "binding", record }, claimsPredicate()],
-                    }
-                  : heldClaimsAuthority(),
-              });
-            } catch (error) {
-              if (error instanceof WorktreeRemovalContentionError && error.blockedByRun) {
-                log.warn(
-                  `Worktree eviction live-refused: ${record.id}; dependency ${error.blockedByRun.worktreeId}; live pid ${error.blockedByRun.pid}`,
-                );
+          const live = await readRegistryWorktrees(env, { liveOnly: true });
+          const liveIds = new Set(live.map((candidate) => candidate.id));
+          beforeRun();
+          // Cancellation can stop preparation, but never abandon an admitted deletion.
+          const settleGuard = () => {
+            guard.rollbackGuard();
+            assertClaims();
+          };
+          let deletionAdmitted = false;
+          const assertEffectCurrent = () => (deletionAdmitted ? settleGuard() : beforeRun());
+          const fenceDependencies = async (ids: string[], signal: AbortSignal) => {
+            for (const id of ids) {
+              if (id === record.id || !liveIds.has(id)) {
+                throw new Error("Worktree dependency is outside the admitted inventory");
               }
-              throw error;
-            }
-            dependencies.push(id);
-            assertClaims = createWorktreeRemovalClaimsGuard(
-              env,
-              [record.id, ...dependencies],
-              token,
-            );
-            if (dependencies.length % 8 === 0) {
-              await yieldTurn();
-            }
-          }
-          assertEffectCurrent();
-        };
-        await runOutsideCommandProcessScope(() =>
-          runGitWorkerOperation(
-            { type: "worktree.eviction-purge", input: { record, live } },
-            {
-              assertCurrent: assertEffectCurrent,
-              onEffect: async (effect) => {
-                assertEffectCurrent();
-                if (effect.type === "worktree.eviction-fence") {
-                  await fenceDependencies(effect.input.worktreeIds);
-                } else if (effect.type === "worktree.eviction-admit") {
-                  deletionAdmitted = true;
+              try {
+                await claimWorktreeRemoval(env, {
+                  worktreeId: id,
+                  token,
+                  assertCurrent: assertEffectCurrent,
+                  workerAuthority: deletionAdmitted
+                    ? {
+                        leaseSet: authority.leaseSet,
+                        predicates: [{ kind: "binding", record }, claimsPredicate()],
+                        signal,
+                      }
+                    : { ...heldClaimsAuthority(), signal },
+                });
+              } catch (error) {
+                if (error instanceof WorktreeRemovalContentionError && error.blockedByRun) {
+                  log.warn(
+                    `Worktree eviction live-refused: ${record.id}; dependency ${error.blockedByRun.worktreeId}; live pid ${error.blockedByRun.pid}`,
+                  );
                 }
+                throw error;
+              }
+              dependencies.push(id);
+              assertClaims = createWorktreeRemovalClaimsGuard(
+                env,
+                [record.id, ...dependencies],
+                token,
+              );
+              if (dependencies.length % 8 === 0) {
+                await yieldTurn();
+              }
+            }
+            assertEffectCurrent();
+          };
+          await runOutsideCommandProcessScope(() =>
+            runGitWorkerOperation(
+              { type: "worktree.eviction-purge", input: { record, live } },
+              {
+                assertCurrent: assertEffectCurrent,
+                onEffect: async (effect, { signal }) => {
+                  // Admitted deletion keeps the worker deadline while caller cancellation joins settlement.
+                  const effectSignal =
+                    !deletionAdmitted && guard.signal
+                      ? AbortSignal.any([signal, guard.signal])
+                      : signal;
+                  if (!deletionAdmitted) {
+                    effectSignal.throwIfAborted();
+                  }
+                  assertEffectCurrent();
+                  if (effect.type === "worktree.eviction-fence") {
+                    await fenceDependencies(effect.input.worktreeIds, effectSignal);
+                  } else if (effect.type === "worktree.eviction-admit") {
+                    deletionAdmitted = true;
+                  }
+                },
+              },
+            ),
+          );
+          settleGuard();
+          const removedAt = Date.now();
+          await updateRegistryWorktree(
+            env,
+            record.id,
+            { removedAt, snapshotRef },
+            {
+              assertCurrent: settleGuard,
+              removalToken: token,
+              workerAuthority: {
+                leaseSet: authority.leaseSet,
+                predicates: [{ kind: "binding", record }, claimsPredicate()],
               },
             },
-          ),
-        );
-        settleGuard();
-        const removedAt = params.now();
-        await updateRegistryWorktree(
-          env,
-          record.id,
-          { removedAt, snapshotRef },
-          {
-            assertCurrent: settleGuard,
-            removalToken: token,
-            workerAuthority: {
-              leaseSet: authority.leaseSet,
-              predicates: [{ kind: "binding", record }, claimsPredicate()],
-            },
-          },
-        );
-        await finalizeWorktreeRemoval(
-          env,
-          { worktreeId: record.id, lastActiveAt: record.lastActiveAt, removedAt, token },
-          // Deletion already holds custody; caller cancellation cannot abandon its settlement.
-          { leaseSet: authority.leaseSet, predicates: [claimsPredicate()] },
-        );
-        const reason = dirty || snapshotError ? "dirty-purged" : params.reason;
-        log.warn(
-          `Worktree evicted: ${record.id}; reason ${reason}; selected ${params.reason}; ${snapshotRef ? `snapshot ${snapshotRef}` : "no recovery snapshot"}${snapshotError ? `; snapshot failed: ${snapshotError}` : ""}`,
-        );
-        return reason;
-      },
-    );
-    outcome = { ok: true, value };
-  } catch (error) {
-    if (hasSqliteWorkerOutcomeUnknown(error)) {
-      throw error;
-    }
-    outcome = { ok: false, error };
-  }
-  const errors: unknown[] = outcome.ok ? [] : [outcome.error];
-  for (const [index, id] of [...dependencies, record.id].entries()) {
-    try {
-      await abortWorktreeRemoval(env, id, token);
+          );
+          await finalizeWorktreeRemoval(
+            env,
+            { worktreeId: record.id, lastActiveAt: record.lastActiveAt, removedAt, token },
+            // Deletion already holds custody; caller cancellation cannot abandon its settlement.
+            { leaseSet: authority.leaseSet, predicates: [claimsPredicate()] },
+          );
+          const reason = dirty ? "dirty-purged" : params.reason;
+          log.warn(
+            `Worktree evicted: ${record.id}; reason ${reason}; selected ${params.reason}; ${snapshotRef ? `snapshot ${snapshotRef}` : "no recovery snapshot"}`,
+          );
+          return reason;
+        },
+      ).catch(async (error: unknown) => {
+        const refusal = removalDeferralReason(error);
+        if (refusal && !hasSqliteWorkerOutcomeUnknown(error)) {
+          await deferFailedWorktreeRemoval({
+            env,
+            id: record.id,
+            stage: "snapshot",
+            ...refusal,
+            elapsedMs: Math.round(performance.now() - started),
+            now: Date.now(),
+            previousAttempts: record.gcRetry?.attempts ?? 0,
+            claimToken: token,
+            assertCurrent,
+          });
+        }
+        throw error;
+      });
+      outcome = { ok: true, value };
     } catch (error) {
-      errors.push(error);
       if (hasSqliteWorkerOutcomeUnknown(error)) {
-        break;
+        throw error;
+      }
+      outcome = { ok: false, error };
+    }
+    const errors: unknown[] = outcome.ok ? [] : [outcome.error];
+    for (const [index, id] of [...dependencies, record.id].entries()) {
+      try {
+        await abortWorktreeRemoval(env, id, token);
+      } catch (error) {
+        errors.push(error);
+        if (hasSqliteWorkerOutcomeUnknown(error)) {
+          break;
+        }
+      }
+      if ((index + 1) % 8 === 0) {
+        await yieldTurn();
       }
     }
-    if ((index + 1) % 8 === 0) {
-      await yieldTurn();
+    if (errors.length > 1) {
+      throw new AggregateError(errors, "Worktree eviction or claim release failed", {
+        cause: errors[0],
+      });
     }
-  }
-  if (errors.length > 1) {
-    throw new AggregateError(errors, "Worktree eviction or claim release failed", {
-      cause: errors[0],
-    });
-  }
-  if (!outcome.ok) {
-    throw outcome.error;
-  }
-  if (errors.length > 0) {
-    throw errors[0];
-  }
-  return outcome.value;
+    if (!outcome.ok) {
+      throw outcome.error;
+    }
+    if (errors.length > 0) {
+      throw errors[0];
+    }
+    return outcome.value;
+  });
 }

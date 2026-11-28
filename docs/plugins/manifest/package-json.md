@@ -64,7 +64,7 @@ For `openclaw.channel.cliAddOptions`, use Commander's long-option syntax, such a
 
 Official install-on-demand metadata should declare `npmSpec` as the default and `clawhubSpec` as the secondary source when both publish the same plugin. Default remote installs try npm first, then the declared ClawHub source only when the npm target is unavailable. A ClawHub-only plugin stays on ClawHub; OpenClaw never derives an npm package name from a ClawHub slug. Explicit source selections, exact versions, and non-`latest` tags remain authoritative. Doctor's existing stale runtime repair can refresh an official plugin bound to the current OpenClaw release cohort on its recorded registry, retaining exact npm pin intent by recording the replacement version. Bare specs and `@latest` follow the active release-channel policy while retaining the requested selector in the install record. Integrity, compatibility, trust, install-policy, and capability-consent failures do not authorize switching sources.
 
-Exact npm version pinning already lives in `npmSpec`, for example `"npmSpec": "@wecom/wecom-openclaw-plugin@1.2.3"`. Official external catalog entries should pair exact specs with `expectedIntegrity` so update flows fail closed if the fetched npm artifact no longer matches the pinned release. Interactive onboarding still offers trusted registry npm specs, including bare package names and dist-tags, for compatibility. Catalog diagnostics can distinguish exact, floating, integrity-pinned, missing-integrity, package-name mismatch, and invalid default-choice sources. They also warn when `expectedIntegrity` is present but there is no valid npm source it can pin. When `expectedIntegrity` is present, install/update flows enforce it; when it is omitted, the registry resolution is recorded without an integrity pin.
+Exact npm version pinning already lives in `npmSpec`, for example `"npmSpec": "@wecom/wecom-openclaw-plugin@1.2.3"`. Official external catalog entries should pair exact specs with `expectedIntegrity` so update flows reject the artifact if the fetched npm artifact no longer matches the pinned release. Interactive onboarding still offers trusted registry npm specs, including bare package names and dist-tags, for compatibility. Catalog diagnostics can distinguish exact, floating, integrity-pinned, missing-integrity, package-name mismatch, and invalid default-choice sources. They also warn when `expectedIntegrity` is present but there is no valid npm source it can pin. When `expectedIntegrity` is present, install/update flows enforce it; when it is omitted, the registry resolution is recorded without an integrity pin.
 
 Channel plugins should provide `openclaw.setupEntry` when status, channel list, or SecretRef scans need to identify configured accounts without loading the full runtime. The setup entry should expose channel metadata plus setup-safe config, status, and secrets adapters; keep network clients, gateway listeners, and transport runtimes in the main extension entrypoint.
 
@@ -80,10 +80,12 @@ Runtime entrypoint fields do not override package-boundary checks for source ent
 {
   "openclaw": {
     "channel": {
-      "id": "whatsapp",
+      "id": "matrix",
       "persistedAuthState": {
         "specifier": "./auth-presence",
-        "exportName": "hasAnyWhatsAppAuth"
+        "exportName": "hasAnyMatrixAuth",
+        "exportNameAsync": "hasAnyMatrixAuthAsync",
+        "backingStore": "plugin-state"
       }
     }
   }
@@ -91,6 +93,15 @@ Runtime entrypoint fields do not override package-boundary checks for source ent
 ```
 
 Use it when setup, doctor, status, or read-only presence flows need a cheap yes/no auth check before the full channel plugin loads. Persisted auth state is not configured channel state: do not use this metadata to auto-enable plugins, repair runtime dependencies, or decide whether a channel runtime should load. The target export should be a small function that reads persisted state only; do not route it through the full channel runtime barrel.
+
+Database-backed checkers should also declare `exportNameAsync`, naming an awaited
+checker in the same module. Runtime discovery prefers that export and awaits its
+boolean result; use a worker-owned state store inside it. Keep `exportName` for
+older hosts during the compatibility window. Hosts may use the synchronous export
+when no awaited companion is declared, but never retry a failed awaited checker
+through the synchronous export.
+Older hosts ignore `exportNameAsync` and call `exportName` synchronously; do not
+change that export to return a Promise.
 
 A `persistedAuthState` checker whose data comes exclusively from the host's keyed plugin-state store may declare `"backingStore": "plugin-state"`. Before loading that checker, OpenClaw asks the existing state-read owner whether the backing database is definitely absent. An active retained snapshot, cached open handle, existing file or symlink, or uncertain filesystem result keeps the normal checker path. The absence result is not cached, so state created later in the same process is still discovered. This fact does not establish authentication or grant state access; the checker still validates existing records. Omit it for checkers that can find persisted auth in other stores or files. Older hosts ignore the optional fact and run the checker normally.
 
@@ -137,6 +148,7 @@ If two distinct plugin roots share the same `id`, only the **highest-precedence*
 
 Implications:
 
+- When the workspace extensions root resolves to the global extensions root (for example, when the workspace is your home directory), OpenClaw scans it only as a global source. Installed plugins retain their installation provenance and official trust checks.
 - An auto-discovered workspace or untracked global copy will not shadow a bundled plugin, even when its id is enabled or allowlisted. `plugins.allow` and `plugins.entries.<id>.enabled` control load permission, not source selection.
 - To override a bundled plugin intentionally, select its path via `plugins.load.paths`. A tracked global install can also override an ordinary bundled copy, but not a development-source bundled copy.
 - Explicit config-selected overrides emit one informational diagnostic per plugin per discovery generation, without a config warning. Ambiguous selections and other unexpected duplicates still warn and identify the discarded copy and selected source. Intentional tracked-install overrides of ordinary bundled copies do not emit duplicate warnings.

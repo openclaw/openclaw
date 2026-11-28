@@ -16,6 +16,7 @@ import {
   getActiveMcpLoopbackRuntimeMock,
   closeMcpLoopbackServerMock,
   buildProgramMock,
+  assertRuntimeMock,
   registerSubCliByNameMock,
   restoreRuntimeTerminalStateMock,
   enableConsoleCaptureMock,
@@ -29,10 +30,20 @@ import process from "node:process";
 import { CommanderError } from "commander";
 import { describe, expect, it, vi } from "vitest";
 import { loggingState } from "../logging/state.js";
+import { captureCliUncaughtExceptionListener } from "./failure-output.test-support.js";
 import { registerRunMainProxyExitTests } from "./run-main.proxy-exit.test-support.js";
+import { registerSignalExitOwner, waitForCliSignalExit } from "./signal-exit-barrier.js";
 
 describe("runCli exit behavior", () => {
   installRunMainTestHooks();
+
+  it("cleans resources when runtime preflight rejects before dispatch", async () => {
+    const failure = new Error("runtime preflight failed");
+    assertRuntimeMock.mockRejectedValueOnce(failure);
+    hasMemoryRuntimeMock.mockReturnValue(true);
+    await expect(runCli(["node", "openclaw", "status"])).rejects.toBe(failure);
+    expect(closeActiveMemorySearchManagersMock).toHaveBeenCalledOnce();
+  });
 
   it("completes asynchronous teardown before returning to the outer entrypoint", async () => {
     const order: string[] = [];
@@ -143,37 +154,39 @@ describe("runCli exit behavior", () => {
         parseAsync: vi.fn().mockResolvedValueOnce(undefined),
       });
 
-      const processOnSpy = vi.spyOn(process, "on");
+      const previousExitCode = process.exitCode;
       const consoleErrorSpy = vi.spyOn(console, "error").mockImplementation(() => {});
       const exitSpy = vi.spyOn(process, "exit").mockImplementation(((code?: number) => {
         throw new Error(`process.exit(${String(code)})`);
       }) as typeof process.exit);
 
-      await runCli(cliArgs("status"));
-
-      const handler = processOnSpy.mock.calls.find(([event]) => event === "uncaughtException")?.[1];
-      if (typeof handler !== "function") {
-        throw new Error("uncaughtException handler was not registered");
-      }
+      const handler = await captureCliUncaughtExceptionListener(() => runCli(cliArgs("status")));
 
       try {
         loggingState.forceConsoleToStderr = machineOutput;
-        expect(() => handler(new Error("boom"))).toThrow("process.exit(1)");
+        handler(new Error("boom"), "uncaughtException");
+        expect(await waitForCliSignalExit()).toBe(1);
+        expect(process.exitCode).toBe(1);
+        expect(exitSpy).not.toHaveBeenCalled();
         expect(consoleErrorSpy).toHaveBeenCalledWith(
           "[openclaw] OpenClaw hit an unexpected runtime error.",
         );
         expect(consoleErrorSpy).toHaveBeenCalledWith("[openclaw] For help, run `openclaw doctor`.");
-        expect(restoreRuntimeTerminalStateMock).toHaveBeenCalledWith("uncaught exception", {
-          resumeStdinIfPaused: false,
-        });
-      } finally {
-        loggingState.forceConsoleToStderr = false;
-        if (typeof handler === "function") {
-          process.off("uncaughtException", handler);
+        expect(restoreRuntimeTerminalStateMock).toHaveBeenCalledWith("uncaught exception");
+        const owner = vi.fn();
+        const releaseOwner = registerSignalExitOwner(owner);
+        try {
+          handler(new Error("owned failure"), "uncaughtException");
+          expect(owner).toHaveBeenCalledExactlyOnceWith(1, "uncaught exception");
+        } finally {
+          releaseOwner();
         }
+      } finally {
+        await waitForCliSignalExit();
+        process.exitCode = previousExitCode;
+        loggingState.forceConsoleToStderr = false;
         consoleErrorSpy.mockRestore();
         exitSpy.mockRestore();
-        processOnSpy.mockRestore();
       }
     },
   );
@@ -184,36 +197,26 @@ describe("runCli exit behavior", () => {
       parseAsync: vi.fn().mockResolvedValueOnce(undefined),
     });
 
-    const processOnSpy = vi.spyOn(process, "on");
     const consoleWarnSpy = vi.spyOn(console, "warn").mockImplementation(() => {});
     const exitSpy = vi.spyOn(process, "exit").mockImplementation(((code?: number) => {
       throw new Error(`process.exit(${String(code)})`);
     }) as typeof process.exit);
 
-    await runCli(cliArgs("status"));
-
-    const handler = processOnSpy.mock.calls.find(([event]) => event === "uncaughtException")?.[1];
-    if (typeof handler !== "function") {
-      throw new Error("uncaughtException handler was not registered");
-    }
+    const handler = await captureCliUncaughtExceptionListener(() => runCli(cliArgs("status")));
 
     try {
       const hostUnreachable = Object.assign(new Error("connect EHOSTUNREACH 149.154.167.220:443"), {
         code: "EHOSTUNREACH",
       });
-      expect(handler(hostUnreachable)).toBeUndefined();
+      expect(handler(hostUnreachable, "uncaughtException")).toBeUndefined();
       expect(consoleWarnSpy.mock.calls).toEqual([
         ["[openclaw] Non-fatal uncaught exception (continuing):", hostUnreachable.stack],
       ]);
       expect(restoreRuntimeTerminalStateMock).not.toHaveBeenCalled();
       expect(exitSpy).not.toHaveBeenCalled();
     } finally {
-      if (typeof handler === "function") {
-        process.off("uncaughtException", handler);
-      }
       consoleWarnSpy.mockRestore();
       exitSpy.mockRestore();
-      processOnSpy.mockRestore();
     }
   });
 });

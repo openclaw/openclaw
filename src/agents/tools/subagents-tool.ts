@@ -1,26 +1,37 @@
 import { AsyncLocalStorage } from "node:async_hooks";
 import { Type } from "typebox";
+import {
+  getAgentToolExecutionContext,
+  type AgentToolPendingInput,
+} from "../../../packages/agent-core/src/tool-execution-context.js";
 import { getRuntimeConfig } from "../../config/config.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import { createAbortError } from "../../infra/abort-signal.js";
 import { captureOpenClawStateWorkerContext } from "../../state/openclaw-state-worker-context.js";
+import { bindAgentToolExecutionLocation } from "../agent-tool-metadata.js";
 import { sanitizeRunStatusText } from "../run-status-text.js";
 import { optionalPositiveIntegerSchema, optionalStringEnum } from "../schema/typebox.js";
+import {
+  matchesSubagentChildSessionOwner,
+  resolveSubagentChildAgentId,
+} from "../subagents/registry/subagent-child-owner-match.js";
 import {
   ensureSubagentControllerOwnsRun,
   listControlledSubagentRunFacts,
   resolveSubagentControllerIdentity,
-  type ResolvedSubagentController,
 } from "../subagents/registry/subagent-control-scope.js";
 import {
   DEFAULT_RECENT_MINUTES,
   killSubagentRunAdmin,
   buildControlledSubagentRunsReadContext,
   MAX_RECENT_MINUTES,
-  resolveSubagentController,
 } from "../subagents/registry/subagent-control.js";
+import type { ResolvedSubagentController } from "../subagents/registry/subagent-control.types.js";
 import { createSubagentControllerRead } from "../subagents/registry/subagent-controller-read.js";
-import { observeSubagentExecution } from "../subagents/registry/subagent-execution-observation.js";
+import {
+  observeSubagentExecution,
+  resolveYieldedLeafPausedForMs,
+} from "../subagents/registry/subagent-execution-observation.js";
 import {
   buildSubagentList,
   readSubagentListSessionEntries,
@@ -35,6 +46,7 @@ import {
   prepareSubagentSessionListReadCache,
 } from "../subagents/registry/subagent-registry-state.js";
 import type { SubagentRunRecord } from "../subagents/registry/subagent-registry.types.js";
+import { isSubagentPausedByYield } from "../subagents/registry/subagent-requester-turn-custody.js";
 import { isSameSubagentRunOwner } from "../subagents/registry/subagent-run-generation.js";
 import {
   jsonResult,
@@ -62,16 +74,25 @@ const SubagentsToolSchema = Type.Object({
 });
 type SubagentsToolOptions = {
   agentSessionKey?: string;
-  callerPolicySessionKey?: string;
   agentId?: string;
   config?: OpenClawConfig;
 };
-function mapRun(run: SubagentRunRecord) {
+function mapRun(
+  run: SubagentRunRecord,
+  now: number,
+  snapshot: ReadonlyMap<string, SubagentRunRecord>,
+) {
+  // Observe announced children from the snapshot, as the list does; a parent waiting on them is not a leaf.
+  const pausedForMs = resolveYieldedLeafPausedForMs(
+    run,
+    observeSubagentExecution(run, isSubagentPausedByYield(run) ? snapshot.values() : []),
+    now,
+  );
   return {
     runId: run.runId,
     sessionKey: run.childSessionKey,
     label: sanitizeRunStatusText(run.label, { maxChars: 80 }) || undefined,
-    status: run.pauseReason === "sessions_yield" ? "waiting" : run.execution.status,
+    status: isSubagentPausedByYield(run) ? "waiting" : run.execution.status,
     outcome: run.execution.outcome
       ? {
           status: run.execution.outcome.status,
@@ -83,15 +104,35 @@ function mapRun(run: SubagentRunRecord) {
         }
       : undefined,
     deliveryStatus: run.delivery?.status,
+    requesterDelivery: run.delivery?.requesterDelivery,
     startedAt: run.execution.startedAt,
     endedAt: run.execution.endedAt,
+    ...(pausedForMs === undefined ? {} : { pausedForMs }),
   };
 }
+
+// Only the current tree grants visibility. A settled predecessor cannot extend it.
+function isReadablePredecessor(run: SubagentRunRecord, readable: SubagentRunReadRecord[]): boolean {
+  if (run.execution.status !== "terminal" || isSubagentPausedByYield(run)) {
+    return false;
+  }
+  return readable.some(
+    (current) =>
+      current.requesterSessionKey === run.requesterSessionKey &&
+      current.requesterAgentId === run.requesterAgentId &&
+      current.requesterStorePath === run.requesterStorePath &&
+      current.controllerSessionKey === run.controllerSessionKey &&
+      current.controllerStorePath === run.controllerStorePath &&
+      matchesSubagentChildSessionOwner(current, run.childSessionKey, run.childAgentId),
+  );
+}
+
 function waitForSelectedRuns(params: {
   runIds: string[];
   readRuns: (snapshot: ReadonlyMap<string, SubagentRunRecord>) => SubagentRunRecord[];
   timeoutMs: number;
   signal?: AbortSignal;
+  pendingInput?: AgentToolPendingInput;
 }) {
   // A publisher's temporary scope must not own preparation started by its wake.
   const inWaitContext = AsyncLocalStorage.snapshot();
@@ -101,13 +142,15 @@ function waitForSelectedRuns(params: {
       const task = visible.get(runId);
       return task ? [task] : [];
     });
+    const now = Date.now();
     const unavailable = params.runIds.filter((runId) => !visible.has(runId));
     const attention = tasks.filter((task) => {
+      // Observes without children, so a parent waiting on announced children stays in attention.
       const wait = observeSubagentExecution(task, []).wait;
       return task.delivery?.status === "suspended" || wait?.kind === "external";
     });
     const completed = tasks.filter(
-      (task) => task.execution.status === "terminal" && task.pauseReason !== "sessions_yield",
+      (task) => task.execution.status === "terminal" && !isSubagentPausedByYield(task),
     );
     return {
       reason: unavailable.length
@@ -117,7 +160,7 @@ function waitForSelectedRuns(params: {
           : completed.length
             ? "completed"
             : undefined,
-      runs: tasks.map(mapRun),
+      runs: tasks.map((task) => mapRun(task, now, snapshot)),
       completed: completed.map((task) => task.runId),
       attention: attention.map((task) => task.runId),
       ...(unavailable.length ? { unavailable } : {}),
@@ -131,6 +174,7 @@ function waitForSelectedRuns(params: {
     let abortError: Error | undefined;
     const cleanup = () => {
       unsubscribe();
+      unsubscribeInput?.();
       clearTimeout(timer);
       params.signal?.removeEventListener("abort", onAbort);
     };
@@ -150,11 +194,11 @@ function waitForSelectedRuns(params: {
           if (!compactReady || !prepared) {
             preparation = !compactReady
               ? prepareSubagentSessionListReadCache()
-              : prepareSubagentRunsSnapshotForRunIds(subagentRuns, params.runIds).then(
-                  (snapshot) => {
-                    prepared = snapshot;
-                  },
-                );
+              : prepareSubagentRunsSnapshotForRunIds(subagentRuns, params.runIds, {
+                  yieldedChildren: true,
+                }).then((snapshot) => {
+                  prepared = snapshot;
+                });
             void preparation.then(
               () => {
                 preparation = undefined;
@@ -178,12 +222,13 @@ function waitForSelectedRuns(params: {
             return;
           }
           const state = result.value;
-          if (!timedOut && !state.reason) {
+          const inputPending = params.pendingInput?.hasPending() === true;
+          if (!timedOut && !state.reason && !inputPending) {
             return;
           }
           settled = true;
           cleanup();
-          resolve({ ...state, reason: state.reason ?? "timeout" });
+          resolve({ ...state, reason: state.reason ?? (inputPending ? "input" : "timeout") });
         } catch (error) {
           fail(error);
         }
@@ -206,6 +251,7 @@ function waitForSelectedRuns(params: {
       });
     };
     const unsubscribe = subscribeSubagentRunChanges("persistence", wake);
+    const unsubscribeInput = params.pendingInput?.subscribe(wake);
     params.signal?.addEventListener("abort", onAbort, { once: true });
     const timer = setTimeout(() => {
       timedOut = true;
@@ -221,69 +267,61 @@ function waitForSelectedRuns(params: {
 }
 
 export function createSubagentsTool(opts: SubagentsToolOptions = {}): AnyAgentTool {
-  const readScope = (readController?: ReturnType<typeof createSubagentControllerRead>["read"]) => {
+  const readScope = (
+    readController: ReturnType<typeof createSubagentControllerRead>["read"],
+    selectedRunId?: string,
+  ) => {
     const cfg = opts.config ?? getRuntimeConfig();
-    const controller = readController
-      ? readController()
-      : resolveSubagentController({
-          cfg,
-          agentSessionKey: opts.agentSessionKey,
-          agentId: opts.agentId,
-        });
+    const controller = readController();
     if (!controller.controllerAgentId) {
       throw new ToolInputError("Subagent controller agent required");
     }
-    const runs = listControlledSubagentRunFacts(
-      controller.controllerSessionKey,
-      controller.controllerAgentId,
-      cfg,
-    );
     const readable = new Map<string, SubagentRunReadRecord>();
     const controlled = new Set<string>();
-    const pending: Array<{
-      owner: Pick<ResolvedSubagentController, "controllerSessionKey" | "controllerAgentId">;
-      entries: SubagentRunReadRecord[];
-    }> = [{ owner: controller, entries: runs }];
+    const pending: Array<
+      Pick<ResolvedSubagentController, "controllerSessionKey" | "controllerAgentId">
+    > = [controller];
     const visited = new Set<string>();
     while (pending.length) {
       const current = pending.shift()!;
-      const identity = current.owner.controllerAgentId + "\0" + current.owner.controllerSessionKey;
+      const identity = current.controllerAgentId + "\0" + current.controllerSessionKey;
       if (visited.has(identity)) {
         continue;
       }
       visited.add(identity);
-      for (const entry of current.entries) {
+      const entries = listControlledSubagentRunFacts(
+        current.controllerSessionKey,
+        current.controllerAgentId,
+        cfg,
+        selectedRunId,
+      );
+      for (const entry of entries) {
         readable.set(entry.runId, entry);
         if (
           controller.controlScope !== "children" ||
-          ensureSubagentControllerOwnsRun({ cfg, controller: current.owner, entry })
+          ensureSubagentControllerOwnsRun({ cfg, controller: current, entry })
         ) {
           continue;
         }
         controlled.add(entry.runId);
-        const childController = resolveSubagentControllerIdentity({
-          cfg,
-          agentSessionKey: entry.childSessionKey,
-          agentId: entry.childAgentId,
-        });
-        pending.push({
-          owner: childController,
-          entries: listControlledSubagentRunFacts(
-            childController.controllerSessionKey,
-            childController.controllerAgentId,
+        pending.push(
+          resolveSubagentControllerIdentity({
             cfg,
-          ),
-        });
+            agentSessionKey: entry.childSessionKey,
+            agentId: entry.childAgentId,
+          }),
+        );
       }
     }
     return { cfg, controller, readable: [...readable.values()], controlled };
   };
-  return {
+  const tool: AnyAgentTool = {
     label: "Subagents",
     name: "subagents",
     parameters: SubagentsToolSchema,
+    repeatable: { actions: ["list", "wait"] },
     description:
-      "List native subagents, wait for selected runIds, or cancel a runId and its descendants. A wait timeout never cancels execution or consumes completion delivery.",
+      "List native subagents, wait for selected runIds, or cancel a runId and its descendants. A wait timeout never cancels execution or consumes completion delivery. Never loop-poll list; check status only on demand, debug, or intervention. Follow each spawn's accepted completion mode.",
     execute: async (_toolCallId, args, signal) => {
       const params = args as Record<string, unknown>;
       const action = readToolStringParam(params, "action") ?? "list";
@@ -295,7 +333,6 @@ export function createSubagentsTool(opts: SubagentsToolOptions = {}): AnyAgentTo
             entry: SubagentRunRecord;
             generation: SubagentRunRecord["generation"];
             createdAt: number;
-            ownership: ReturnType<typeof subagentRuns.captureRegistrationOwnership>;
           }
         | undefined;
       const assertSelection = () => {
@@ -311,15 +348,9 @@ export function createSubagentsTool(opts: SubagentsToolOptions = {}): AnyAgentTo
             entry,
             generation: entry.generation,
             createdAt: entry.createdAt,
-            ownership: subagentRuns.captureRegistrationOwnership(
-              entry.childSessionKey,
-              entry,
-              entry.childAgentId,
-            ),
           };
         }
         if (selection) {
-          selection.ownership.assertCurrent();
           if (
             !entry ||
             !isSameSubagentRunOwner(entry, selection.entry) ||
@@ -330,22 +361,19 @@ export function createSubagentsTool(opts: SubagentsToolOptions = {}): AnyAgentTo
           }
         }
       };
-      const controllerRead =
-        action === "cancel"
-          ? createSubagentControllerRead({
-              config: () => opts.config ?? getRuntimeConfig(),
-              agentSessionKey: opts.agentSessionKey,
-              agentId: opts.agentId,
-              assertCurrent: assertSelection,
-            })
-          : undefined;
-      const readCurrentScope = () => readScope(controllerRead?.read);
+      const controllerRead = createSubagentControllerRead({
+        config: () => opts.config ?? getRuntimeConfig(),
+        agentSessionKey: opts.agentSessionKey,
+        agentId: opts.agentId,
+        assertCurrent: assertSelection,
+      });
+      const readCurrentScope = () => readScope(controllerRead.read, requestedRunId);
       const prepareRead = () => {
         assertSelection();
         if (!getSubagentSessionListReadSnapshotIdentity()) {
           return prepareSubagentSessionListReadCache();
         }
-        return controllerRead?.prepare();
+        return controllerRead.prepare();
       };
       try {
         for (let pending = prepareRead(); pending; pending = prepareRead()) {
@@ -363,17 +391,23 @@ export function createSubagentsTool(opts: SubagentsToolOptions = {}): AnyAgentTo
             ...(await waitForSelectedRuns({
               runIds,
               readRuns: (snapshot) => {
-                const visible = new Set(readScope().readable.map((entry) => entry.runId));
-                return [...snapshot.values()].filter((entry) => visible.has(entry.runId));
+                const { readable } = readCurrentScope();
+                const visible = new Set(readable.map((entry) => entry.runId));
+                const selected = runIds.flatMap((id) => snapshot.get(id) ?? []);
+                return selected.filter(
+                  (run) => visible.has(run.runId) || isReadablePredecessor(run, readable),
+                );
               },
               timeoutMs:
                 Math.min(60, readNonNegativeIntegerParam(params, "timeoutSeconds") ?? 30) * 1000,
               signal,
+              pendingInput: getAgentToolExecutionContext()?.pendingInput,
             })),
           });
         }
-        const { cfg, controller, readable, controlled } = readCurrentScope();
         if (action === "list") {
+          const cfg = opts.config ?? getRuntimeConfig();
+          const controller = controllerRead.read();
           const readContext = await buildControlledSubagentRunsReadContext(
             controller.controllerSessionKey,
             controller.controllerAgentId,
@@ -400,6 +434,7 @@ export function createSubagentsTool(opts: SubagentsToolOptions = {}): AnyAgentTo
           });
         }
         if (action === "cancel") {
+          const { cfg, controller, readable, controlled } = readCurrentScope();
           const runId = requestedRunId;
           if (!runId) {
             throw new ToolInputError("Subagent runId required");
@@ -415,7 +450,7 @@ export function createSubagentsTool(opts: SubagentsToolOptions = {}): AnyAgentTo
             {
               cfg,
               sessionKey: target.childSessionKey,
-              agentId: target.childAgentId ?? target.requesterAgentId,
+              agentId: resolveSubagentChildAgentId(target),
               expectedRunId: target.runId,
               expectedTaskRunId: target.taskRunId ?? target.runId,
               expectedGeneration: target.generation,
@@ -443,9 +478,14 @@ export function createSubagentsTool(opts: SubagentsToolOptions = {}): AnyAgentTo
         }
         throw new ToolInputError("Unsupported subagents action");
       } finally {
-        controllerRead?.release();
-        selection?.ownership.release();
+        controllerRead.release();
       }
     },
   };
+  // A worker reaches this tool over the Gateway; its call must outlive the requested wait.
+  bindAgentToolExecutionLocation(tool, {
+    kind: "gateway",
+    timeout: { argument: "timeoutSeconds", defaultSeconds: 30, paddingMs: 60_000 },
+  });
+  return tool;
 }

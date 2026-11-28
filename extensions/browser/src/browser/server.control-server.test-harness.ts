@@ -422,7 +422,6 @@ const chromeMcpMocks = vi.hoisted(() => ({
   clickChromeMcpElement: vi.fn(async () => {}),
   closeChromeMcpSession: vi.fn(async () => true),
   closeChromeMcpTab: vi.fn(async () => {}),
-  countChromeMcpTabs: vi.fn(async () => 1),
   dragChromeMcpElement: vi.fn(async () => {}),
   ensureChromeMcpAvailable: vi.fn(async () => {}),
   evaluateChromeMcpScript: vi.fn(async () => true),
@@ -510,7 +509,8 @@ function loadConfig() {
 
 vi.mock("openclaw/plugin-sdk/runtime-config-snapshot", async (importOriginal) => ({
   ...(await importOriginal<typeof import("openclaw/plugin-sdk/runtime-config-snapshot")>()),
-  getRuntimeConfig: loadConfig,
+  readRuntimeConfig: loadConfig,
+  captureRuntimeConfigAsyncReader: () => async () => loadConfig(),
   getRuntimeConfigSnapshot: vi.fn(() => null),
 }));
 
@@ -569,7 +569,9 @@ vi.mock("./chrome.js", () => ({
   }),
 }));
 
+// mock-isolation: The control server uses synthetic page sockets for its CDP operations.
 vi.mock("./cdp.js", () => ({
+  readCdpTargetCrashState: async () => false,
   createTargetViaCdp: cdpMocks.createTargetViaCdp,
   getDocumentIdentitiesViaCdp: cdpMocks.getDocumentIdentitiesViaCdp,
   normalizeCdpWsUrl: vi.fn((wsUrl: string) => wsUrl),

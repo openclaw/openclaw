@@ -10,7 +10,7 @@ import {
 } from "./slack-live.contracts.js";
 
 function validateSlackQaRuntimeEnv(runtimeEnv: SlackQaRuntimeEnv, label: string) {
-  if (!/^[A-Z][A-Z0-9]+$/.test(runtimeEnv.channelId.trim())) {
+  if (!/^[A-Z][A-Z0-9]+$/.test(runtimeEnv.channelId)) {
     throw new Error(`${label} channelId must be a Slack id like C123 or U123.`);
   }
   return runtimeEnv;

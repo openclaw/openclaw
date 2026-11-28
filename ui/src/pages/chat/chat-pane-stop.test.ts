@@ -9,8 +9,13 @@ import { createSessionsListResult } from "../../test-helpers/chat-model.ts";
 import { createTestGatewayClient } from "../../test-helpers/gateway-client.ts";
 import { sessionMutationGatewayHello } from "../../test-helpers/gateway-methods.ts";
 import { createChatPaneSessionActionCallbacks } from "./chat-pane-session-controls.ts";
-import { createSessionCapabilityFixture, createTestChatPane } from "./chat-pane.test-support.ts";
+import { createTestChatPane } from "./chat-pane.test-support.ts";
+import { createSessionCapabilityFixture } from "./chat-session-capability.test-support.ts";
 import { handleAbortChat, replayPendingChatAbort } from "./run-lifecycle.ts";
+
+function sessionsWith(...sessions: GatewaySessionRow[]) {
+  return { ...createSessionsListResult(), sessions };
+}
 
 function createStopFixture(scopes = ["operator.write"], useSessionOwner = false) {
   const request = vi.fn(async (_method: string, _params?: unknown): Promise<unknown> => ({
@@ -27,10 +32,7 @@ function createStopFixture(scopes = ["operator.write"], useSessionOwner = false)
   if (useSessionOwner) {
     onTestFinished(() => sessions.dispose());
   }
-  const { pane, state } = createTestChatPane({
-    client,
-    sessions,
-  });
+  const { pane, state } = createTestChatPane({ client, sessions });
   state.chatRunId = "original-run";
   state.chatMessage = "keep this draft";
   state.pendingAbort = null;
@@ -44,7 +46,7 @@ function createStopFixture(scopes = ["operator.write"], useSessionOwner = false)
     status: "running",
     updatedAt: 1,
   };
-  state.sessionsResult = { ...createSessionsListResult(), sessions: [session] };
+  state.sessionsResult = sessionsWith(session);
   let snapshot: ApplicationGatewaySnapshot = {
     ...pane.context.gateway.snapshot,
     hello: sessionMutationGatewayHello(scopes),
@@ -73,26 +75,122 @@ function createStopFixture(scopes = ["operator.write"], useSessionOwner = false)
     if (methods) {
       hello.features = { ...hello.features, methods };
     }
-    snapshot = {
-      ...snapshot,
-      phase: "connected",
-      hello,
-    };
+    snapshot = { ...snapshot, phase: "connected", hello };
     state.connected = true;
     state.hello = snapshot.hello;
   };
   return { pane, state, session, client, request, callbacks, disconnect, reconnect, onDenied };
 }
 
+describe("chat pane compact intent", () => {
+  it("dispatches through the existing command owner only with current admin access", async () => {
+    const fixture = createStopFixture(["operator.admin"]);
+    const send = vi.fn(async () => {});
+    fixture.state.handleSendChat = send;
+    const compact = fixture.callbacks().onCompact;
+    expect(compact).toBeTypeOf("function");
+    await compact?.();
+    expect(send).toHaveBeenCalledExactlyOnceWith("/compact");
+    send.mockClear();
+    fixture.reconnect(["operator.read"]);
+    await compact?.();
+    expect(send).not.toHaveBeenCalled();
+    expect(fixture.onDenied).toHaveBeenCalledOnce();
+    expect(fixture.callbacks().onCompact).toBeUndefined();
+  });
+
+  it.each(["session", "run", "connection"])("rejects a stale %s target", async (change) => {
+    const fixture = createStopFixture(["operator.admin"]);
+    const send = vi.fn(async () => {});
+    fixture.state.handleSendChat = send;
+    const compact = fixture.callbacks().onCompact;
+    if (change === "session") {
+      fixture.session.sessionId = "replacement-session";
+    } else if (change === "run") {
+      fixture.state.chatRunId = "replacement-run";
+    } else {
+      fixture.disconnect();
+    }
+    await compact?.();
+    expect(send).not.toHaveBeenCalled();
+  });
+});
+
 describe("chat pane Stop intent", () => {
+  it("lets a send participant stop an exact run without session-wide authority", async () => {
+    const fixture = createStopFixture(["operator.sessions.read"]);
+    Object.assign(fixture.session, { sharingRole: "member", invitedAccess: "send" });
+    const stop = fixture.callbacks().onAbort;
+    expect(stop).toBeTypeOf("function");
+    stop?.();
+    await vi.waitFor(() =>
+      expect(fixture.request).toHaveBeenCalledExactlyOnceWith("chat.abort", {
+        sessionKey: fixture.session.key,
+        runId: "original-run",
+        userInitiated: true,
+      }),
+    );
+    expect(fixture.state.chatMessage).toBe("keep this draft");
+    fixture.state.chatRunSessionAbortable = true;
+    expect(fixture.callbacks().onAbort).toBeUndefined();
+    fixture.state.chatRunSessionAbortable = false;
+    fixture.state.chatRunId = null;
+    expect(fixture.callbacks().onAbort).toBeUndefined();
+  });
+
+  it.each(["read", "suggest", undefined] as const)(
+    "does not revive a participant Stop after invitation changes to %s",
+    async (invitedAccess) => {
+      const fixture = createStopFixture(["operator.sessions.read"]);
+      Object.assign(fixture.session, { sharingRole: "member", invitedAccess: "send" });
+      const stop = fixture.callbacks().onAbort;
+      expect(stop).toBeTypeOf("function");
+      fixture.disconnect();
+      stop?.();
+      fixture.session.invitedAccess = invitedAccess;
+      fixture.reconnect();
+      expect(await replayPendingChatAbort(fixture.state)).toBe(false);
+      expect(fixture.state.pendingAbort).toBeNull();
+      stop?.();
+      expect(fixture.callbacks().onAbort).toBeUndefined();
+      fixture.session.invitedAccess = "send";
+      expect(await replayPendingChatAbort(fixture.state)).toBe(false);
+      expect(fixture.request).not.toHaveBeenCalled();
+    },
+  );
+
+  it("leaves adopted-run ownership to the Gateway and shows a denial without broad fallback", async () => {
+    const fixture = createStopFixture(["operator.sessions.read"]);
+    Object.assign(fixture.session, { sharingRole: "member", invitedAccess: "send" });
+    fixture.request.mockRejectedValue(
+      new Error("Only the initiating participant can stop this run"),
+    );
+    const stop = fixture.callbacks().onAbort;
+    expect(stop).toBeTypeOf("function");
+    stop?.();
+    await vi.waitFor(() => expect(fixture.state.chatError).toContain("initiating participant"));
+    expect(fixture.request).toHaveBeenCalledExactlyOnceWith("chat.abort", {
+      sessionKey: fixture.session.key,
+      runId: "original-run",
+      userInitiated: true,
+    });
+    expect(fixture.state.chatRunId).toBe("original-run");
+    expect(fixture.state.chatMessage).toBe("keep this draft");
+  });
+
   it.each([
     { scope: "operator.write", method: "chat.abort", renderBeforeDisconnect: true },
     { scope: "operator.sessions.write", method: "chat.abort", renderBeforeDisconnect: false },
     { scope: "operator.sessions.write", method: "sessions.abort", renderBeforeDisconnect: false },
+    { scope: "operator.sessions.read", method: "chat.abort", renderBeforeDisconnect: true },
+    { scope: "operator.sessions.read", method: "chat.abort", renderBeforeDisconnect: false },
   ])(
-    "replays only the captured run once via $method with $scope",
+    "replays only the captured run once via $method with $scope (rendered online=$renderBeforeDisconnect)",
     async ({ scope, method, renderBeforeDisconnect }) => {
       const fixture = createStopFixture([scope]);
+      if (scope === "operator.sessions.read") {
+        Object.assign(fixture.session, { sharingRole: "member", invitedAccess: "send" });
+      }
       fixture.state.chatRunSessionAbortable = method === "sessions.abort";
       const renderedStop = renderBeforeDisconnect ? fixture.callbacks().onAbort : undefined;
       fixture.disconnect();
@@ -112,6 +210,7 @@ describe("chat pane Stop intent", () => {
           method,
           {
             [method === "chat.abort" ? "sessionKey" : "key"]: fixture.state.sessionKey,
+            userInitiated: true,
             runId: "original-run",
           },
         ],
@@ -261,7 +360,7 @@ describe("chat pane Stop intent", () => {
       if (change === "ownership") {
         fixture.session.sharingRole = "viewer";
       } else {
-        fixture.state.sessionsResult = { ...createSessionsListResult(), sessions: [] };
+        fixture.state.sessionsResult = sessionsWith();
       }
     } else if (change === "session") {
       fixture.session.sessionId = "replacement-session";
@@ -294,52 +393,92 @@ describe("chat pane Stop intent", () => {
         sessionId: "other-session",
         sharingRole: ownsOriginal ? "viewer" : "owner",
       };
-      fixture.state.sessionKey = replacement.key;
-      fixture.state.chatRunId = "other-run";
-      fixture.state.sessionsResult = {
-        ...createSessionsListResult(),
-        sessions: [replacement, fixture.session],
-      };
+      Object.assign(fixture.state, {
+        sessionKey: replacement.key,
+        chatRunId: "other-run",
+        sessionsResult: sessionsWith(replacement, fixture.session),
+      });
       fixture.reconnect();
       expect(await replayPendingChatAbort(fixture.state)).toBe(ownsOriginal);
       expect(fixture.state.pendingAbort).toBeNull();
       expect(fixture.request.mock.calls).toEqual(
         ownsOriginal
-          ? [["chat.abort", { sessionKey: fixture.session.key, runId: "original-run" }]]
+          ? [
+              [
+                "chat.abort",
+                { sessionKey: fixture.session.key, runId: "original-run", userInitiated: true },
+              ],
+            ]
           : [],
       );
     },
   );
 
-  it.each(["owner", "viewer"] as const)(
-    "settles waiting narrow Stop when the canonical row arrives as %s",
-    async (sharingRole) => {
-      const fixture = createStopFixture(["operator.sessions.write"], true);
+  it.each([
+    {
+      sharingRole: "owner",
+      scopes: ["operator.sessions.write"],
+      invitedAccess: undefined,
+      allowed: true,
+    },
+    {
+      sharingRole: "viewer",
+      scopes: ["operator.sessions.write"],
+      invitedAccess: undefined,
+      allowed: false,
+    },
+    {
+      sharingRole: "member",
+      scopes: ["operator.sessions.read"],
+      invitedAccess: "send",
+      allowed: true,
+    },
+    {
+      sharingRole: "member",
+      scopes: ["operator.sessions.read"],
+      invitedAccess: "read",
+      allowed: false,
+    },
+  ] as const)(
+    "settles waiting narrow Stop when the canonical row arrives as $sharingRole/$invitedAccess",
+    async ({ sharingRole, scopes, invitedAccess, allowed }) => {
+      const fixture = createStopFixture([...scopes], true);
+      if (scopes[0] === "operator.sessions.read") {
+        Object.assign(fixture.session, { sharingRole: "member", invitedAccess: "send" });
+      }
       fixture.disconnect();
       fixture.callbacks().onAbort?.();
-      fixture.state.sessionsResult = { ...createSessionsListResult(), sessions: [] };
+      fixture.state.sessionsResult = sessionsWith();
       fixture.reconnect();
       expect(await replayPendingChatAbort(fixture.state)).toBe(false);
       expect(fixture.state.pendingAbort?.runId).toBe("original-run");
-      expect(fixture.request).not.toHaveBeenCalled();
+      expect(
+        fixture.request.mock.calls.filter(
+          ([method]) => method === "chat.abort" || method === "sessions.abort",
+        ),
+      ).toEqual([]);
       fixture.pane.presented = false;
       fixture.session.sharingRole = sharingRole;
+      fixture.session.invitedAccess = invitedAccess;
       const unsubscribe = fixture.state.sessions.subscribe((state) =>
         fixture.pane.applySessionsState(state),
       );
       onTestFinished(unsubscribe);
       fixture.request.mockImplementation(async (method) =>
-        method === "sessions.list"
-          ? { ...createSessionsListResult(), sessions: [fixture.session] }
-          : { aborted: true },
+        method === "sessions.list" ? sessionsWith(fixture.session) : { aborted: true },
       );
       await fixture.state.sessions.refresh({ agentId: "main", force: true });
       fixture.pane.applySessionsState(fixture.state.sessions.state);
       expect(await replayPendingChatAbort(fixture.state)).toBe(false);
       expect(fixture.state.pendingAbort).toBeNull();
       expect(fixture.request.mock.calls.filter(([method]) => method === "chat.abort")).toEqual(
-        sharingRole === "owner"
-          ? [["chat.abort", { sessionKey: fixture.session.key, runId: "original-run" }]]
+        allowed
+          ? [
+              [
+                "chat.abort",
+                { sessionKey: fixture.session.key, runId: "original-run", userInitiated: true },
+              ],
+            ]
           : [],
       );
     },

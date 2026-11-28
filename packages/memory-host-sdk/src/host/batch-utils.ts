@@ -1,6 +1,6 @@
+import { floorPositiveFiniteNumber } from "@openclaw/normalization-core/number-coercion";
 import type { SsrFPolicy } from "./openclaw-runtime-network.js";
-
-// Common HTTP and grouping helpers for remote embedding batch clients.
+import type { RemoteEmbeddingRequestAuth } from "./remote-http.js";
 
 /** Minimal HTTP client config needed by batch providers. */
 export type BatchHttpClientConfig = {
@@ -8,6 +8,7 @@ export type BatchHttpClientConfig = {
   headers?: Record<string, string>;
   ssrfPolicy?: SsrFPolicy;
   fetchImpl?: typeof fetch;
+  resolveRequestHeaders?: RemoteEmbeddingRequestAuth;
 };
 
 /** Normalize batch API base URLs by removing one trailing slash. */
@@ -32,19 +33,12 @@ export function buildBatchHeaders(
   return headers;
 }
 
-function normalizePositiveInteger(value: number | undefined): number | undefined {
-  if (typeof value !== "number" || !Number.isFinite(value) || value <= 0) {
-    return undefined;
-  }
-  return Math.floor(value);
-}
-
 export function splitBatchRequestsByLimits<T>(
   requests: T[],
   limits: { maxRequests: number; maxJsonlBytes?: number },
 ): T[][] {
-  const maxRequests = normalizePositiveInteger(limits.maxRequests) ?? 1;
-  const maxJsonlBytes = normalizePositiveInteger(limits.maxJsonlBytes);
+  const maxRequests = floorPositiveFiniteNumber(limits.maxRequests) ?? 1;
+  const maxJsonlBytes = floorPositiveFiniteNumber(limits.maxJsonlBytes);
   if (requests.length === 0) {
     return maxJsonlBytes ? [] : [requests];
   }
@@ -53,7 +47,9 @@ export function splitBatchRequestsByLimits<T>(
   let current: T[] = [];
   let currentBytes = 0;
   for (const request of requests) {
-    const requestBytes = Buffer.byteLength(JSON.stringify(request) ?? "", "utf8");
+    // A normalized zero is still a byte cap; only an absent cap skips sizing.
+    const requestBytes =
+      maxJsonlBytes === undefined ? 0 : Buffer.byteLength(JSON.stringify(request) ?? "", "utf8");
     const separatorBytes = current.length === 0 ? 0 : 1;
     const wouldExceedRequests = current.length >= maxRequests;
     const wouldExceedBytes =

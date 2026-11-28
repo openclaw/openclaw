@@ -3,7 +3,7 @@
  * Keeps callers from reaching into runtime config or plugin metadata snapshot
  * plumbing directly.
  */
-import { getRuntimeConfig } from "../config/config.js";
+import { readRuntimeConfig as getRuntimeConfig } from "../config/runtime-snapshot.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import {
   getCurrentPluginMetadataSnapshot,
@@ -13,7 +13,6 @@ import { resolvePluginMetadataSnapshot } from "../plugins/plugin-metadata-snapsh
 import { resolveAgentWorkspaceDir, resolveDefaultAgentId } from "./agent-scope.js";
 import type { PluginModelCatalogMetadataSnapshot } from "./plugin-model-catalog.js";
 
-/** Resolve the workspace directory model discovery should use for agent scope. */
 export function resolveModelWorkspaceDir(
   cfg: OpenClawConfig | undefined,
   explicitWorkspaceDir: string | undefined,
@@ -28,8 +27,6 @@ export function resolveModelWorkspaceDir(
 }
 
 /**
- * Resolve the plugin metadata snapshot for model discovery.
- *
  * Explicit snapshots win for tests and prepared runtimes. Otherwise we prefer
  * the current process snapshot, then fall back to resolving from config/env.
  */

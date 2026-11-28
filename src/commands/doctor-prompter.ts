@@ -1,4 +1,4 @@
-import { confirm, select } from "@clack/prompts";
+import { confirm, select, type SelectOptions } from "@clack/prompts";
 import { styleSelectParams } from "../../packages/terminal-core/src/prompt-select-styled-params.js";
 import { stylePromptMessage } from "../../packages/terminal-core/src/prompt-style.js";
 import type { RuntimeEnv } from "../runtime.js";
@@ -22,10 +22,7 @@ export function createDoctorPrompter(params: {
 }) {
   const repairMode = resolveDoctorRepairMode(params.options);
   const confirmPrompt = async (p: DoctorConfirmParams) => {
-    if (params.signal?.aborted) {
-      return false;
-    }
-    if (repairMode.nonInteractive) {
+    if (params.signal?.aborted || repairMode.nonInteractive) {
       return false;
     }
     if (!repairMode.canPrompt) {
@@ -82,6 +79,16 @@ export function createDoctorPrompter(params: {
         return fallback;
       }
       return guardCancel(await select(styleSelectParams(p)), params.runtime, 130) as T;
+    },
+    selectRuntimeRepair: async <T>(p: SelectOptions<T>, fallback: T | undefined) => {
+      // An ambiguous persisted identity requires an operator choice, including under --fix.
+      if (!repairMode.canPrompt || repairMode.updateInProgress || params.signal?.aborted) {
+        return fallback;
+      }
+      const answer = await select<T>(
+        styleSelectParams({ ...p, signal: params.signal ?? p.signal }),
+      );
+      return params.signal?.aborted ? fallback : guardCancel(answer, params.runtime, 130);
     },
     shouldRepair: repairMode.shouldRepair,
     shouldForce: repairMode.shouldForce,

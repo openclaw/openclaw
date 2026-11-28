@@ -58,8 +58,6 @@ export type RuntimeSessionFactsSelectionResult = {
   scope: string | undefined;
   /** Changes when the selected immutable facts, people, or activity deadline change. */
   revision: string;
-  /** Retained text is reusable only under the same redaction policy. */
-  redactionRevision: string;
   sessions: Array<
     RuntimeSessionFacts & {
       isMain?: boolean;

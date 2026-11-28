@@ -4,6 +4,7 @@ import { toErrorObject, toStringifiedError } from "openclaw/plugin-sdk/error-run
 import { createDeferred } from "openclaw/plugin-sdk/extension-shared";
 import {
   createCpuTrackedWorker,
+  createPluginRuntimeProcessEntrypoint,
   resolveRuntimeWorkerArgv,
   resolveRuntimeWorkerUrl,
 } from "openclaw/plugin-sdk/process-runtime";
@@ -49,15 +50,9 @@ type PeerParams = {
 export class OpenAIQuicksilverAudioPeer implements OpenAIQuicksilverAudioPeerContract {
   static async create(params: PeerParams): Promise<OpenAIQuicksilverAudioPeer> {
     params.signal?.throwIfAborted();
-    const url = resolveRuntimeWorkerUrl({
-      currentModuleUrl: import.meta.url,
-      sourceWorkerName: "realtime-quicksilver-audio.worker",
-      distWorkerPath: "extensions/openai/realtime-quicksilver-audio.worker.js",
-      package: {
-        name: "@openclaw/openai-provider",
-        distWorkerPath: "realtime-quicksilver-audio.worker.js",
-      },
-    });
+    const url = resolveRuntimeWorkerUrl(
+      createPluginRuntimeProcessEntrypoint("openAiRealtimeAudio", import.meta.url),
+    );
     const worker = createCpuTrackedWorker(url, {
       workerData: {
         iceServers: params.iceServers,

@@ -429,7 +429,6 @@ type QaNativeCoverageEvidenceKind = "script" | "vitest" | "playwright";
 type QaScorecardEvidenceKind = QaNativeCoverageEvidenceKind | "qa-scenario";
 export type QaScorecardEvidenceMode = z.infer<typeof qaScorecardEvidenceModeSchema>;
 export type QaScorecardChannelDriver = z.infer<typeof qaScorecardChannelDriverSchema>;
-type QaMaturityScoreKey = (typeof QA_MATURITY_SCORE_KEYS)[number];
 export type QaMaturityScoreObject = z.infer<typeof qaMaturityScoreObjectSchema>;
 export type QaMaturityDecision = z.infer<
   | typeof qaMaturityScoreDecisionSchema
@@ -527,13 +526,13 @@ export function readValidatedQaMaturityScoreSources(params?: {
     YAML.parse(fs.readFileSync(scoresPath, "utf8")),
     scoresPath,
   );
-  const warnings = validateQaMaturityScoresAgainstTaxonomy({
+  validateQaMaturityScoresAgainstTaxonomy({
     coverageScores: params?.coverageScores,
     scores,
     taxonomy,
     scoresPath,
   });
-  return { scores, taxonomy, warnings };
+  return { scores, taxonomy };
 }
 
 function readQaMaturityTaxonomy(repoRoot: string | undefined) {
@@ -724,14 +723,6 @@ export function qaMaturityFamilyOrder(surfaces: readonly QaMaturityTaxonomySurfa
   return [...new Set(surfaces.map((surface) => surface.family))];
 }
 
-function averageSurfaceScore(rows: readonly QaMaturityScoreSurface[], key: QaMaturityScoreKey) {
-  return Math.round(rows.reduce((sum, row) => sum + row.scores[key].score, 0) / rows.length);
-}
-
-function averageCategoryScore(rows: readonly QaMaturityScoreCategory[], key: QaMaturityScoreKey) {
-  return Math.round(rows.reduce((sum, row) => sum + row[key].score, 0) / rows.length);
-}
-
 export function qaMaturityCoverageCategoryKey(surfaceId: string, categoryName: string) {
   return `${surfaceId}\u0000${categoryName}`;
 }
@@ -750,7 +741,6 @@ function validateQaMaturityScoresAgainstTaxonomy(params: {
   scoresPath?: string;
 }) {
   const scoresPath = params.scoresPath ?? QA_MATURITY_SCORES_PATH;
-  const warnings: string[] = [];
   const scoreSurfaces = params.scores.surfaces;
   const taxonomyIndex = buildQaMaturityTaxonomyCategoryIndex(params.taxonomy);
   if (params.scores.counts.active_surfaces !== scoreSurfaces.length) {
@@ -852,21 +842,18 @@ function validateQaMaturityScoresAgainstTaxonomy(params: {
   }
 
   const rollups = params.scores.rollups;
+  const surfaceScores = scoreSurfaces.map((surface) => surface.scores);
   for (const key of QA_MATURITY_SCORE_KEYS) {
-    const expectedSurfaceAverage = averageSurfaceScore(scoreSurfaces, key);
-    if (rollups.surface_average[key].score !== expectedSurfaceAverage) {
-      throw new Error(
-        `${scoresPath}.rollups.surface_average.${key}.score must be ${expectedSurfaceAverage}`,
-      );
-    }
-    const expectedCategoryAverage = averageCategoryScore(allScoreCategories, key);
-    if (rollups.category_average[key].score !== expectedCategoryAverage) {
-      throw new Error(
-        `${scoresPath}.rollups.category_average.${key}.score must be ${expectedCategoryAverage}`,
-      );
+    for (const [kind, rows] of [
+      ["surface_average", surfaceScores],
+      ["category_average", allScoreCategories],
+    ] as const) {
+      const expected = Math.round(rows.reduce((sum, row) => sum + row[key].score, 0) / rows.length);
+      if (rollups[kind][key].score !== expected) {
+        throw new Error(`${scoresPath}.rollups.${kind}.${key}.score must be ${expected}`);
+      }
     }
   }
-  return warnings;
 }
 
 function buildMaturityRefs(taxonomy: QaMaturityTaxonomy | null) {
@@ -902,58 +889,14 @@ function buildMaturityRefs(taxonomy: QaMaturityTaxonomy | null) {
 export function readQaScorecardProfileOptions(profileId: string | undefined, repoRoot?: string) {
   const profile = profileId?.trim();
   if (!profile) {
-    return { evidenceMode: "full" as const, channelDriver: "qa-channel" as const };
+    return { evidenceMode: "full" as const };
   }
   const profileOptions = readQaMaturityTaxonomy(repoRoot)?.profiles.find(
     (entry) => entry.id === profile,
   );
   return {
     evidenceMode: profileOptions?.evidenceMode ?? "full",
-    channelDriver: profileOptions?.channelDriver ?? "qa-channel",
   };
-}
-
-function collectInventoryRefsForCoverageId(params: {
-  coverageId: string;
-  role: QaCoverageEvidenceRole;
-  refs: readonly ScenarioInventoryRef[];
-  repoRoot?: string;
-  categoryId: string;
-  issues: QaScorecardValidationIssue[];
-  missingInventoryRefs: Set<string>;
-}) {
-  const grouped = new Map<string, QaScorecardInventoryRef>();
-  for (const ref of params.refs) {
-    if (ref.path && !pathExists(params.repoRoot, ref.path)) {
-      params.missingInventoryRefs.add(ref.path);
-      params.issues.push({
-        code: "inventory-ref-not-found",
-        severity: "warning",
-        categoryId: params.categoryId,
-        ref: ref.path,
-        message: `${params.categoryId} references missing ${ref.kind} inventory target ${ref.path}`,
-      });
-      continue;
-    }
-
-    const key = `${ref.kind}\0${ref.path ?? ""}`;
-    const report =
-      grouped.get(key) ??
-      ({
-        coverageId: params.coverageId,
-        kind: ref.kind,
-        path: ref.path,
-        role: params.role,
-        scenarioRefs: [],
-      } satisfies QaScorecardInventoryRef);
-    report.scenarioRefs.push(ref.sourcePath);
-    grouped.set(key, report);
-  }
-
-  return [...grouped.values()].map((report) => {
-    report.scenarioRefs = uniqueSorted(report.scenarioRefs);
-    return report;
-  });
 }
 
 function buildQaScorecardTaxonomyReport(params: {
@@ -975,7 +918,7 @@ function buildQaScorecardTaxonomyReport(params: {
   });
   const allScenarioCoverageIds = uniqueSorted(params.scenarios.flatMap(scenarioCoverageIds));
 
-  if (!pathExists(params.repoRoot, QA_MATURITY_TAXONOMY_PATH) || !params.taxonomy) {
+  if (!params.taxonomy) {
     issues.push({
       code: "taxonomy-ref-not-found",
       severity: "warning",
@@ -1070,19 +1013,15 @@ function buildQaScorecardTaxonomyReport(params: {
       };
     }) ?? [];
 
-  const categoryIdsWithInventory = new Set<string>();
-  for (const coverageId of [
-    ...primaryInventoryRefsByCoverageId.keys(),
-    ...secondaryInventoryRefsByCoverageId.keys(),
-  ]) {
-    const categoryId = maturityRefs.coverageIds.get(coverageId);
-    if (categoryId) {
-      categoryIdsWithInventory.add(categoryId);
-    }
-  }
   const relevantCategoryIds = uniqueSorted([
     ...profileCategoryIdsByCategoryId.keys(),
-    ...categoryIdsWithInventory,
+    ...[
+      ...primaryInventoryRefsByCoverageId.keys(),
+      ...secondaryInventoryRefsByCoverageId.keys(),
+    ].flatMap((coverageId) => {
+      const categoryId = maturityRefs.coverageIds.get(coverageId);
+      return categoryId ? [categoryId] : [];
+    }),
   ]);
 
   const requiredCoverageIds = new Set<string>();
@@ -1105,14 +1044,39 @@ function buildQaScorecardTaxonomyReport(params: {
         ["primary", primaryInventoryRefsByCoverageId],
         ["secondary", secondaryInventoryRefsByCoverageId],
       ] as const) {
-        const refs = collectInventoryRefsForCoverageId({
-          coverageId,
-          role,
-          refs: refsByCoverageId.get(coverageId) ?? [],
-          repoRoot: params.repoRoot,
-          categoryId,
-          issues,
-          missingInventoryRefs,
+        const sourceRefs = refsByCoverageId.get(coverageId) ?? [];
+        const repoRoot = params.repoRoot;
+        const grouped = new Map<string, QaScorecardInventoryRef>();
+        for (const ref of sourceRefs) {
+          if (ref.path && !pathExists(repoRoot, ref.path)) {
+            missingInventoryRefs.add(ref.path);
+            issues.push({
+              code: "inventory-ref-not-found",
+              severity: "warning",
+              categoryId,
+              ref: ref.path,
+              message: `${categoryId} references missing ${ref.kind} inventory target ${ref.path}`,
+            });
+            continue;
+          }
+
+          const key = `${ref.kind}\0${ref.path ?? ""}`;
+          const report =
+            grouped.get(key) ??
+            ({
+              coverageId,
+              kind: ref.kind,
+              path: ref.path,
+              role,
+              scenarioRefs: [],
+            } satisfies QaScorecardInventoryRef);
+          report.scenarioRefs.push(ref.sourcePath);
+          grouped.set(key, report);
+        }
+
+        const refs = [...grouped.values()].map((report) => {
+          report.scenarioRefs = uniqueSorted(report.scenarioRefs);
+          return report;
         });
         if (refs.length === 0) {
           continue;

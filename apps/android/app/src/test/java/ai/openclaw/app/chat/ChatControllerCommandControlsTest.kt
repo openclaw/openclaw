@@ -1,5 +1,6 @@
 package ai.openclaw.app.chat
 
+import ai.openclaw.app.gateway.ErrorShape
 import ai.openclaw.app.gateway.GatewayRequestNotEnqueued
 import ai.openclaw.app.gateway.GatewayRequestRejected
 import ai.openclaw.app.gateway.GatewaySession
@@ -321,7 +322,7 @@ class ChatControllerCommandControlsTest {
             createCalls += 1
             if (createCalls == 1) {
               throw GatewayRequestRejected(
-                GatewaySession.ErrorShape(
+                ErrorShape(
                   code = "INVALID_REQUEST",
                   message =
                     "invalid sessions.create params: at root: unexpected property 'succeedsParent'",
@@ -410,14 +411,15 @@ class ChatControllerCommandControlsTest {
         }
 
       controller.patchSession(
-        key = "main",
-        ownerAgentId = "owner-a",
-        expectedSessionId = "session-main",
-        clearLabel = true,
-        clearCategory = true,
-        pinned = true,
-        archived = false,
-        unread = true,
+        ChatSessionPatch(
+          key = "main",
+          ownerAgentId = "owner-a",
+          expectedSessionId = "session-main",
+          clearLabel = true,
+          clearCategory = true,
+          archived = false,
+          unread = true,
+        ),
       )
       controller.deleteSession("main", ownerAgentId = "main")
 
@@ -427,7 +429,7 @@ class ChatControllerCommandControlsTest {
       assertTrue(patch.contains("\"expectedSessionId\":\"session-main\""))
       assertTrue(patch.contains("\"label\":null"))
       assertTrue(patch.contains("\"category\":null"))
-      assertTrue(patch.contains("\"pinned\":true"))
+      assertFalse(patch.contains("\"pinned\""))
       assertTrue(patch.contains("\"archived\":false"))
       assertTrue(patch.contains("\"unread\":true"))
 
@@ -445,8 +447,8 @@ class ChatControllerCommandControlsTest {
           respond("sessions.list", """{"sessions":[]}""")
         }
 
-      assertTrue(controller.patchSession(key = "main", ownerAgentId = "owner-a", color = "purple"))
-      assertTrue(controller.patchSession(key = "main", ownerAgentId = "owner-a", clearColor = true))
+      assertTrue(controller.patchSession(ChatSessionPatch(key = "main", ownerAgentId = "owner-a", color = "purple")))
+      assertTrue(controller.patchSession(ChatSessionPatch(key = "main", ownerAgentId = "owner-a", clearColor = true)))
 
       val patches = requests.filter { it.first == "sessions.patch" }.map { json.parseToJsonElement(it.second!!).jsonObject }
       assertEquals(listOf(JsonPrimitive("purple"), JsonNull), patches.map { it["color"] })
@@ -463,7 +465,7 @@ class ChatControllerCommandControlsTest {
           respond("sessions.list", """{"sessions":[]}""")
         }
 
-      assertTrue(controller.patchSession(key = "main", ownerAgentId = "owner-a", label = "Renamed chat"))
+      assertTrue(controller.patchSession(ChatSessionPatch(key = "main", ownerAgentId = "owner-a", label = "Renamed chat")))
 
       val patch = requests.single { it.first == "sessions.patch" }.second.orEmpty()
       assertTrue(patch.contains("\"key\":\"main\""))
@@ -500,9 +502,11 @@ class ChatControllerCommandControlsTest {
 
       assertTrue(
         controller.patchSession(
-          key = "agent:main:side",
-          expectedSessionId = "session-side",
-          archived = true,
+          ChatSessionPatch(
+            key = "agent:main:side",
+            expectedSessionId = "session-side",
+            archived = true,
+          ),
         ),
       )
 
@@ -526,7 +530,7 @@ class ChatControllerCommandControlsTest {
           },
         )
 
-      assertFalse(controller.patchSession(key = "agent:main:cached", archived = true))
+      assertFalse(controller.patchSession(ChatSessionPatch(key = "agent:main:cached", archived = true)))
       assertFalse(requests.contains("sessions.patch"))
     }
 
@@ -816,7 +820,7 @@ class ChatControllerCommandControlsTest {
           gatewayAdvertisesCapability = { it == SESSION_UNREAD_ACK_CAPABILITY }
         }
 
-      assertTrue(controller.patchSession(key = "main", unread = false))
+      assertTrue(controller.patchSession(ChatSessionPatch(key = "main", unread = false)))
       advanceUntilIdle()
 
       val patch = requests.single { it.first == "sessions.patch" }.second.orEmpty()
@@ -840,9 +844,11 @@ class ChatControllerCommandControlsTest {
       assertEquals("agent:main:side", controller.sessionKey.value)
 
       controller.patchSession(
-        key = "agent:main:side",
-        expectedSessionId = "session-side",
-        archived = true,
+        ChatSessionPatch(
+          key = "agent:main:side",
+          expectedSessionId = "session-side",
+          archived = true,
+        ),
       )
       advanceUntilIdle()
       assertEquals("main", controller.sessionKey.value)
@@ -1008,20 +1014,49 @@ class ChatControllerCommandControlsTest {
     }
 
   @Test
-  fun startNewChatRejectsWhileRunPending() =
+  fun startNewChatSucceedsWhileRunPending() =
     runTest {
       val (controller, requests) =
         chatControllerTestSetup {
           respond("chat.send", """{"runId":"run-1"}""")
+          respond("sessions.create", """{"ok":true,"key":"agent:main:dashboard:fresh"}""")
+          respond("chat.history", """{"sessionId":"fresh-session","messages":[]}""")
           respond("health", "{}")
+          respond("sessions.list", """{"sessions":[]}""")
         }
       controller.load("main")
       runCurrent()
 
       assertTrue(controller.sendMessageAwaitAcceptance("hello", "off", emptyList()))
       assertEquals(1, controller.pendingRunCount.value)
-      assertEquals(false, controller.startNewChatAwait())
+      assertTrue(controller.startNewChatAwait())
+
+      val create = requests.first { it.first == "sessions.create" }.second.orEmpty()
+      assertTrue(create.contains("\"parentSessionKey\":\"main\""))
+      assertTrue(create.contains("\"emitCommandHooks\":true"))
+      assertTrue(create.contains("\"succeedsParent\":false"))
+      assertEquals("agent:main:dashboard:fresh", controller.sessionKey.value)
+      assertEquals(0, controller.pendingRunCount.value)
+      assertTrue(requests.none { it.first == "chat.abort" || it.first == "chat.stop" })
+      assertNull(controller.errorText.value)
+    }
+
+  @Test
+  fun startNewWorktreeStillWaitsWhileRunPending() =
+    runTest {
+      val (controller, requests) =
+        chatControllerTestSetup {
+          respond("chat.send", """{"runId":"run-1"}""")
+          respond("sessions.create", """{"ok":true,"key":"agent:main:dashboard:fresh"}""")
+          respond("health", "{}")
+        }
+      controller.load("main")
+      runCurrent()
+
+      assertTrue(controller.sendMessageAwaitAcceptance("hello", "off", emptyList()))
+      assertEquals(false, controller.startNewChatAwait(worktree = true))
       assertTrue(requests.none { it.first == "sessions.create" })
+      assertEquals(1, controller.pendingRunCount.value)
     }
 
   @Test

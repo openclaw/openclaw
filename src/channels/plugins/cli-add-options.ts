@@ -1,10 +1,11 @@
 // Resolves plugin-owned `channels add` CLI options from bundled and catalog metadata.
 import { Option } from "commander";
-import { listBundledPackageChannelMetadata } from "../../plugins/bundled-package-channel-metadata.js";
+import { listChannelCatalogEntries } from "../../plugins/channel-catalog-registry.js";
 import type {
   PluginPackageChannel,
   PluginPackageChannelCliOption,
 } from "../../plugins/manifest.js";
+import { dedupeByKey } from "../../shared/dedupe-by-key.js";
 import { listRawChannelPluginCatalogEntries } from "./catalog.js";
 
 export type ChannelSetupCliOptionValueMetadata = {
@@ -43,7 +44,9 @@ export function resolveChannelSetupCliOptionMetadata(
   channelId?: string,
   params: { includeAll?: boolean } = {},
 ) {
-  const bundledChannels = listBundledPackageChannelMetadata().toSorted(compareChannels);
+  const bundledChannels = listChannelCatalogEntries({ origin: "bundled" })
+    .map((entry) => entry.channel)
+    .toSorted(compareChannels);
   const catalogChannels = listRawChannelPluginCatalogEntries({
     excludeWorkspace: true,
     excludeOrigins: ["bundled"],
@@ -61,15 +64,9 @@ export function resolveChannelSetupCliOptionMetadata(
   const channels = params.includeAll ? orderedChannels : selectedChannel ? [selectedChannel] : [];
   // Keep pre-dedupe candidates available to detect cross-channel flag-arity conflicts.
   const optionCandidates = channels.flatMap(channelSetupOptions);
-  const seenSwitches = new Set<string>();
-  const options = optionCandidates.filter((option) => {
-    const key = channelCliOptionSwitchKey(option.flags);
-    if (seenSwitches.has(key)) {
-      return false;
-    }
-    seenSwitches.add(key);
-    return true;
-  });
+  const options = dedupeByKey(optionCandidates, (option) =>
+    channelCliOptionSwitchKey(option.flags),
+  );
   const valueMetadataByAttributeName = new Map<string, ChannelSetupCliOptionValueMetadata>();
   // Value coercion metadata is a legacy-options mechanism; modern contracts
   // type their fields, and their cliAddOptions never register above.

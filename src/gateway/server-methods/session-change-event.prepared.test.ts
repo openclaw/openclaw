@@ -7,12 +7,14 @@ afterEach(async () => {
   await flushPendingSessionsChangedEvents();
 });
 
-it.each([false, true])(
-  "coalesces keyless refreshes without repeating prepared facts (prepared=%s)",
-  async (preparedPublication) => {
+it.each([
+  { preparedPublication: true, factCount: 0 },
+  { preparedPublication: false, factCount: 3 },
+])(
+  "coalesces keyless refreshes with preparedPublication=$preparedPublication",
+  async ({ preparedPublication, factCount }) => {
     const context = {
       getRuntimeConfig: () => ({}),
-      chatAbortControllers: new Map(),
       getSessionEventSubscriberConnIds: () => new Set(["listener"]),
       broadcastToConnIds: vi.fn(),
     } satisfies Parameters<typeof emitSessionsChanged>[0];
@@ -24,7 +26,7 @@ it.each([false, true])(
         emitSessionsChanged(context, { reason: "delete" }, { preparedPublication });
       }
       expect(context.broadcastToConnIds.mock.calls.length).toBeLessThan(3);
-      expect(facts).toHaveBeenCalledTimes(preparedPublication ? 0 : 3);
+      expect(facts).toHaveBeenCalledTimes(factCount);
       expect(readGatewayAccessRevision()).toBe(accessRevision + 3);
 
       await flushPendingSessionsChangedEvents(context);

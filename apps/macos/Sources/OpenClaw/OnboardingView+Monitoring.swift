@@ -23,18 +23,17 @@ extension OnboardingView {
     }
 
     func updateDiscoveryMonitoring(for pageIndex: Int) {
-        let shouldMonitor = pageIndex == connectionPageIndex
+        if pageIndex == connectionPageIndex {
+            // Checking this Mac's Gateway port stays on this Mac; it needs no Local Network access.
+            Task { @MainActor in await self.refreshLocalGatewayProbe() }
+        }
+        // Browsing for gateways makes macOS ask for Local Network access, so only Nearby starts it.
+        let shouldMonitor = pageIndex == findPageIndex && showRemoteChoices
         if shouldMonitor, !monitoringDiscovery {
             monitoringDiscovery = true
-            Task { @MainActor in
-                try? await Task.sleep(nanoseconds: 150_000_000)
-                guard self.monitoringDiscovery else { return }
-                self.gatewayDiscovery.start()
-                await self.refreshLocalGatewayProbe()
-            }
-        } else if !shouldMonitor, monitoringDiscovery {
-            monitoringDiscovery = false
-            gatewayDiscovery.stop()
+            gatewayDiscovery.start()
+        } else if !shouldMonitor {
+            self.stopDiscovery()
         }
     }
 
@@ -145,12 +144,7 @@ extension OnboardingView {
     }
 
     func finishExistingCLIActivation() async {
-        defer {
-            installingCLI = false
-            cliInstallPhase = .idle
-            OnboardingController.shared.setWindowCloseEnabled(true)
-            OnboardingController.shared.busyReason = nil
-        }
+        defer { self.finishCLIInstallProgress() }
 
         if BundledRuntime.isBundledApp {
             await self.prepareBundledGateway(afterFreshInstall: false)
@@ -194,12 +188,7 @@ extension OnboardingView {
 
     func runCLIInstall() async {
         await GatewayProcessManager.shared.waitForStartupAttempt()
-        defer {
-            self.installingCLI = false
-            self.cliInstallPhase = .idle
-            OnboardingController.shared.setWindowCloseEnabled(true)
-            OnboardingController.shared.busyReason = nil
-        }
+        defer { self.finishCLIInstallProgress() }
         guard self.requiresLocalCLI else { return }
         guard GatewayProcessManager.shared.installation == .managed else {
             self.cliStatus = GatewayProcessManager.Installation.ownershipFailure
@@ -238,6 +227,13 @@ extension OnboardingView {
         (cliInstalled, cliStatus) = await Self.localGatewayActivationOutcome(
             CLIInstaller.activateLocalGateway(),
             afterFreshInstall: true)
+    }
+
+    private func finishCLIInstallProgress() {
+        self.installingCLI = false
+        self.cliInstallPhase = .idle
+        OnboardingController.shared.setWindowCloseEnabled(true)
+        OnboardingController.shared.busyReason = nil
     }
 
     private func prepareBundledGateway(afterFreshInstall: Bool = true) async {
@@ -292,16 +288,11 @@ extension OnboardingView {
         } else {
             nil
         }
-        await MainActor.run {
-            guard let desc else {
-                self.localGatewayProbe = nil
-                return
-            }
-            let command = desc.command.trimmingCharacters(in: .whitespacesAndNewlines)
-            self.localGatewayProbe = LocalGatewayProbe(
+        self.localGatewayProbe = desc.map { desc in
+            LocalGatewayProbe(
                 port: port,
                 pid: desc.pid,
-                command: command,
+                command: desc.command.trimmingCharacters(in: .whitespacesAndNewlines),
                 profile: .current,
                 managedServicePID: managedServicePID)
         }

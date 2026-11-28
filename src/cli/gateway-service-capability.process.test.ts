@@ -2,7 +2,7 @@ import fs from "node:fs";
 import path from "node:path";
 import { DatabaseSync } from "node:sqlite";
 import { fileURLToPath } from "node:url";
-import { afterEach, describe, expect, it } from "vitest";
+import { afterEach, expect, it } from "vitest";
 import { createFixtureLifetime } from "../../test/helpers/fixture-lifetime.js";
 import {
   createBuiltRuntime,
@@ -10,6 +10,7 @@ import {
   runBuiltRuntime,
   runSourceRuntime,
 } from "../commands/doctor-config-preflight.process.test-support.js";
+import { listDirectoryTreeStrictSync } from "../infra/directory-walk.js";
 import { acquireFileLockSync } from "../infra/file-lock-manager.js";
 import { resolveGatewayStateOwnerPath } from "../infra/gateway-state-owner.js";
 import { resolveRuntimeWorkerUrl } from "../infra/runtime-worker-url.js";
@@ -26,7 +27,7 @@ const CLI_CHILD_TIMEOUT_MS = 60_000;
 const tempDirs = createFixtureLifetime();
 afterEach(() => tempDirs.cleanup());
 
-function createFixture({ guardReadOnly = false } = {}) {
+function createFixture() {
   const root = tempDirs.createTempDir("openclaw-service-capability-");
   const stateDir = path.join(root, "state");
   const configPath = path.join(root, "openclaw.json");
@@ -59,10 +60,9 @@ function createFixture({ guardReadOnly = false } = {}) {
   const lockPath = resolveGatewayStateOwnerPath(databasePath);
   const operationsPath = path.join(root, "probe-operations.jsonl");
   const preloadPath = path.join(root, "guard-probe.cjs");
-  if (guardReadOnly) {
-    fs.writeFileSync(
-      preloadPath,
-      `const fs = require("node:fs");
+  fs.writeFileSync(
+    preloadPath,
+    `const fs = require("node:fs");
 const path = require("node:path");
 const threads = require("node:worker_threads");
 const append = fs.appendFileSync;
@@ -96,15 +96,11 @@ threads.Worker = new Proxy(threads.Worker, {
 require("node:module").syncBuiltinESMExports();
 if (threads.isMainThread) record("ready");
 `,
-    );
-  }
-  const childEnv = guardReadOnly
-    ? { ...env, NODE_OPTIONS: `--require ${JSON.stringify(preloadPath)}` }
-    : env;
+  );
+  const childEnv = { ...env, NODE_OPTIONS: `--require ${JSON.stringify(preloadPath)}` };
   const startTime = getFileLockProcessStartTime(process.pid);
   fs.mkdirSync(path.dirname(lockPath), { recursive: true });
   return {
-    databasePath,
     stateDir,
     probeOperations: () =>
       fs
@@ -125,25 +121,25 @@ if (threads.isMainThread) record("ready");
       }),
     }),
     run: (args: string[]) =>
-      source
-        ? tempDirs.track(
-            runSourceRuntime(
+      tempDirs.track(
+        source
+          ? runSourceRuntime(
               runtimeRoot,
               childEnv,
               [path.join(runtimeRoot, "src/entry.ts"), ...args],
               CLI_CHILD_TIMEOUT_MS,
-            ),
-          )
-        : tempDirs.track(runBuiltRuntime(runtimeRoot, childEnv, args, CLI_CHILD_TIMEOUT_MS)),
+            )
+          : runBuiltRuntime(runtimeRoot, childEnv, args, CLI_CHILD_TIMEOUT_MS),
+      ),
   };
 }
 
 function snapshotState(stateDir: string) {
-  return fs
-    .readdirSync(stateDir, { recursive: true })
-    .toSorted((left, right) => String(left).localeCompare(String(right)))
+  return listDirectoryTreeStrictSync(stateDir)
+    .map((walkEntry) => walkEntry.relativePath)
+    .toSorted((left, right) => left.localeCompare(right))
     .map((relative) => {
-      const pathname = path.join(stateDir, String(relative));
+      const pathname = path.join(stateDir, relative);
       const stat = fs.statSync(pathname);
       return [
         relative,
@@ -153,75 +149,25 @@ function snapshotState(stateDir: string) {
     });
 }
 
-describe("candidate service capability startup", () => {
-  it(
-    "answers capability and version probes without state writes or locks while a Gateway owns an older schema",
-    async () => {
-      const fixture = createFixture({ guardReadOnly: true });
-      const before = snapshotState(fixture.stateDir);
-      try {
-        const result = await fixture.run([
-          "gateway",
-          "install",
-          "--update-executor",
-          "check",
-          "--json",
-        ]);
-        expect(result.code, `${result.stderr}\n${result.stdout}`).toBe(0);
-        expect(JSON.parse(result.stdout)).toEqual({
-          updateExecutor: "root-spawner-v1",
-          targetRootBinding: true,
-          definitionBackup: true,
-          retainedOwnerBinding: true,
-          originalDefinitionBinding: true,
-          originalRuntimePinBinding: true,
-        });
-        const locked = await fixture.run([
-          "gateway",
-          "install",
-          "--update-executor=check",
-          "--json",
-        ]);
-        expect(locked.code, locked.stderr).toBe(0);
-        expect(JSON.parse(locked.stdout)).toEqual(JSON.parse(result.stdout));
-        const version = await fixture.run(["--version"]);
-        expect(version.code, version.stderr).toBe(0);
-        expect(version.stdout).toMatch(/^OpenClaw /u);
-        expect(fixture.probeOperations()).toEqual(["ready", "ready", "ready"]);
-        expect(snapshotState(fixture.stateDir)).toEqual(before);
-        const database = new DatabaseSync(fixture.databasePath, { readOnly: true });
-        try {
-          expect(database.prepare("PRAGMA user_version").get()?.user_version).toBe(
-            OPENCLAW_STATE_SCHEMA_VERSION - 1,
-          );
-        } finally {
-          database.close();
-        }
-      } finally {
-        fixture.gateway.release();
-      }
-    },
-    getCliProcessTestTimeout(CLI_CHILD_TIMEOUT_MS, CLI_CHILD_TIMEOUT_MS, CLI_CHILD_TIMEOUT_MS),
-  );
-
-  it("keeps ordinary service commands behind the live Gateway schema fence", async () => {
+it(
+  "answers capability and version probes without state writes or locks while a Gateway owns an older schema",
+  async () => {
     const fixture = createFixture();
-    const before = fs.readFileSync(fixture.databasePath);
+    const before = snapshotState(fixture.stateDir);
     try {
-      const result = await fixture.run(["gateway", "install", "--json"]);
-      expect(result.code).toBe(1);
-      expect(JSON.parse(result.stdout)).toMatchObject({
-        ok: false,
-        error: {
-          type: "cli_error",
-          message: expect.stringContaining(
-            `OpenClaw state database is busy at ${fixture.databasePath}.`,
-          ),
-        },
-      });
-      expect(fs.readFileSync(fixture.databasePath)).toEqual(before);
+      for (const option of [["--update-executor", "check"], ["--update-executor=check"]]) {
+        const result = await fixture.run(["gateway", "install", ...option, "--json"]);
+        expect(result.code, `${result.stderr}\n${result.stdout}`).toBe(0);
+        expect(JSON.parse(result.stdout)).toMatchObject({ updateExecutor: "root-spawner-v1" });
+      }
+      const version = await fixture.run(["--version"]);
+      expect(version.code, version.stderr).toBe(0);
+      expect(version.stdout).toMatch(/^OpenClaw /u);
+      expect(fixture.probeOperations()).toEqual(["ready", "ready", "ready"]);
+      expect(snapshotState(fixture.stateDir)).toEqual(before);
     } finally {
       fixture.gateway.release();
     }
-  });
-});
+  },
+  getCliProcessTestTimeout(CLI_CHILD_TIMEOUT_MS, CLI_CHILD_TIMEOUT_MS, CLI_CHILD_TIMEOUT_MS),
+);

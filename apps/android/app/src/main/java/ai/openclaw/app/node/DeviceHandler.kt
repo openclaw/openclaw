@@ -2,7 +2,7 @@ package ai.openclaw.app.node
 
 import ai.openclaw.app.BuildConfig
 import ai.openclaw.app.SensitiveFeatureConfig
-import ai.openclaw.app.gateway.GatewaySession
+import ai.openclaw.app.gateway.InvokeResult
 import android.annotation.SuppressLint
 import android.app.ActivityManager
 import android.content.Context
@@ -34,6 +34,12 @@ private const val DEFAULT_DEVICE_APPS_LIMIT = 100
 private const val MAX_DEVICE_APPS_LIMIT = 200
 private const val DEVICE_APPS_SYSTEM_FLAGS =
   ApplicationInfo.FLAG_SYSTEM or ApplicationInfo.FLAG_UPDATED_SYSTEM_APP
+private val NETWORK_TRANSPORTS =
+  listOf(
+    NetworkCapabilities.TRANSPORT_WIFI to "wifi",
+    NetworkCapabilities.TRANSPORT_CELLULAR to "cellular",
+    NetworkCapabilities.TRANSPORT_ETHERNET to "wired",
+  )
 
 internal fun isSystemDeviceApp(appInfo: ApplicationInfo): Boolean = (appInfo.flags and DEVICE_APPS_SYSTEM_FLAGS) != 0
 
@@ -129,15 +135,15 @@ class DeviceHandler internal constructor(
     val temperatureC: Double?,
   )
 
-  fun handleDeviceStatus(_paramsJson: String?): GatewaySession.InvokeResult = GatewaySession.InvokeResult.ok(statusPayloadJson())
+  fun handleDeviceStatus(_paramsJson: String?): InvokeResult = InvokeResult.ok(statusPayloadJson())
 
-  fun handleDeviceInfo(_paramsJson: String?): GatewaySession.InvokeResult = GatewaySession.InvokeResult.ok(infoPayloadJson())
+  fun handleDeviceInfo(_paramsJson: String?): InvokeResult = InvokeResult.ok(infoPayloadJson())
 
-  fun handleDevicePermissions(_paramsJson: String?): GatewaySession.InvokeResult = GatewaySession.InvokeResult.ok(permissionsPayloadJson())
+  fun handleDevicePermissions(_paramsJson: String?): InvokeResult = InvokeResult.ok(permissionsPayloadJson())
 
-  fun handleDeviceHealth(_paramsJson: String?): GatewaySession.InvokeResult = GatewaySession.InvokeResult.ok(healthPayloadJson())
+  fun handleDeviceHealth(_paramsJson: String?): InvokeResult = InvokeResult.ok(healthPayloadJson())
 
-  fun handleDeviceApps(paramsJson: String?): GatewaySession.InvokeResult {
+  fun handleDeviceApps(paramsJson: String?): InvokeResult {
     val params = parseJsonParamsObject(paramsJson)
     val includeSystem = parseJsonBooleanFlag(params, "includeSystem") ?: false
     val includeDisabled = parseJsonBooleanFlag(params, "includeDisabled") ?: false
@@ -155,7 +161,7 @@ class DeviceHandler internal constructor(
         }.toList()
     val limitedApps = matchingApps.take(limit)
 
-    return GatewaySession.InvokeResult.ok(
+    return InvokeResult.ok(
       buildJsonObject {
         put("count", JsonPrimitive(limitedApps.size))
         put("totalMatched", JsonPrimitive(matchingApps.size))
@@ -420,19 +426,8 @@ class DeviceHandler internal constructor(
   private fun networkInterfacesJson(caps: NetworkCapabilities?) =
     buildJsonArray {
       if (caps == null) return@buildJsonArray
-      var hasKnownTransport = false
-      if (caps.hasTransport(NetworkCapabilities.TRANSPORT_WIFI)) {
-        hasKnownTransport = true
-        add(JsonPrimitive("wifi"))
-      }
-      if (caps.hasTransport(NetworkCapabilities.TRANSPORT_CELLULAR)) {
-        hasKnownTransport = true
-        add(JsonPrimitive("cellular"))
-      }
-      if (caps.hasTransport(NetworkCapabilities.TRANSPORT_ETHERNET)) {
-        hasKnownTransport = true
-        add(JsonPrimitive("wired"))
-      }
-      if (!hasKnownTransport) add(JsonPrimitive("other"))
+      val interfaces = NETWORK_TRANSPORTS.filter { (transport, _) -> caps.hasTransport(transport) }
+      if (interfaces.isEmpty()) add(JsonPrimitive("other"))
+      interfaces.forEach { (_, name) -> add(JsonPrimitive(name)) }
     }
 }

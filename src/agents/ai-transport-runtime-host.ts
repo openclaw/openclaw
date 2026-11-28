@@ -4,7 +4,11 @@ import {
   type AiProviderRequestCapabilities,
 } from "@openclaw/ai";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
-import "../llm/ai-transport-host.js";
+import { configureAiTransportBaseHost } from "../llm/ai-transport-host.js";
+import {
+  attachProviderAuthAuthority,
+  getProviderAuthAuthority,
+} from "../plugins/provider-auth-authority.js";
 import { getModelProviderRuntimePluginHandle } from "../plugins/provider-hook-runtime.js";
 import type { ProviderRuntimeModel } from "../plugins/provider-runtime-model.types.js";
 import {
@@ -19,6 +23,10 @@ import { resolveModelExtraParamSources } from "./model-extra-params.js";
 import { createOpenAICompletionsPayloadPolicyWrapper } from "./openai-completions-payload-policy.js";
 import { resolveProviderRequestCapabilities } from "./provider-attribution.js";
 import {
+  attachModelProviderLocalServiceReconciler,
+  getModelProviderLocalServiceReconciler,
+} from "./provider-local-service-reconcile.js";
+import {
   attachModelProviderLocalService,
   getModelProviderLocalService,
 } from "./provider-local-service.js";
@@ -31,11 +39,10 @@ import {
 } from "./provider-request-config.js";
 import { transformTransportMessages } from "./transport-message-transform.js";
 
-let configured = false;
-
 /** Installs the agent and plugin ports only on paths that execute provider runtime. */
 export function configureAiTransportRuntimeHost(): void {
-  if (configured) {
+  const installation = configureAiTransportBaseHost();
+  if (installation.runtime) {
     return;
   }
   const host = getDefaultAiTransportHost();
@@ -66,6 +73,13 @@ export function configureAiTransportRuntimeHost(): void {
         }),
       wrapSimpleCompletionStream: (params) => {
         const config = params.config as OpenClawConfig | undefined;
+        const { defaultParams, modelParams, agentModelParams, agentParams } =
+          resolveModelExtraParamSources({
+            config,
+            provider: params.provider,
+            modelId: params.context.modelId,
+            agentId: params.context.agentId,
+          });
         const providerStreamFn = wrapProviderSimpleCompletionStreamFn({
           ...params,
           config,
@@ -74,19 +88,14 @@ export function configureAiTransportRuntimeHost(): void {
             ...params.context,
             config: params.context.config as OpenClawConfig | undefined,
             model: params.context.model as ProviderRuntimeModel,
+            modelParams: { ...modelParams, ...agentModelParams },
+            modelCallUrgency: "background",
           },
         });
         const baseStreamFn = providerStreamFn ?? params.context.streamFn;
         if ((params.context.sourceApi ?? params.context.model.api) !== "openai-completions") {
           return providerStreamFn;
         }
-        const { defaultParams, modelParams, agentModelParams, agentParams } =
-          resolveModelExtraParamSources({
-            config,
-            provider: params.provider,
-            modelId: params.context.modelId,
-            agentId: params.context.agentId,
-          });
         return createOpenAICompletionsPayloadPolicyWrapper(baseStreamFn, [
           defaultParams,
           modelParams,
@@ -108,22 +117,24 @@ export function configureAiTransportRuntimeHost(): void {
         capability: "llm",
         transport: "stream",
       }).headers,
-    requiresManagedTransport: (model) => {
-      const request = getModelProviderRequestTransport(model);
-      return Boolean(request?.proxy || request?.tls || getModelProviderLocalService(model));
-    },
     inheritManagedTransport: (source, target) =>
       inheritModelProviderRequestRouteFacts(
         source,
-        attachModelProviderLocalService(
-          attachModelProviderRequestTransport(target, getModelProviderRequestTransport(source)),
-          getModelProviderLocalService(source),
+        attachModelProviderLocalServiceReconciler(
+          attachModelProviderLocalService(
+            attachModelProviderRequestTransport(
+              attachProviderAuthAuthority(target, getProviderAuthAuthority(source)),
+              getModelProviderRequestTransport(source),
+            ),
+            getModelProviderLocalService(source),
+          ),
+          getModelProviderLocalServiceReconciler(source),
         ),
       ),
     transformTransportMessages,
     registerCustomApi: ensureCustomApiRegistered,
   });
-  configured = true;
+  installation.runtime = true;
 }
 
 configureAiTransportRuntimeHost();

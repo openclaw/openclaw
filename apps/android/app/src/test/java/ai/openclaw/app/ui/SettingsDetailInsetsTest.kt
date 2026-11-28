@@ -27,8 +27,6 @@ import androidx.compose.foundation.layout.WindowInsets
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.ime
 import androidx.compose.foundation.layout.safeDrawing
-import androidx.compose.material.icons.Icons
-import androidx.compose.material.icons.filled.Settings
 import androidx.compose.material3.DrawerValue
 import androidx.compose.material3.rememberDrawerState
 import androidx.compose.runtime.Composable
@@ -152,6 +150,44 @@ class SettingsDetailInsetsTest {
       } finally {
         closeNodeRuntimeTestFixture(runtime)
       }
+    }
+  }
+
+  @Test
+  @Config(qualifiers = "w360dp-h800dp-420dpi")
+  @GraphicsMode(GraphicsMode.Mode.NATIVE)
+  fun systemAgentQuestionsRetireOnSkipAndAnswerAndReturnAfterRestart() {
+    withSystemAgentConversation(
+      listOf(
+        { systemAgentReply("First question", question = true) },
+        { systemAgentReply("Second question", question = true) },
+        { error("Synthetic answer failure") },
+        { systemAgentReply("Fresh question", question = true) },
+      ),
+    ) {
+      awaitReply("First question")
+      composeRule.onNodeWithText("Skip for now").performScrollTo().performClick()
+      composeRule.waitUntil(timeoutMillis = 5_000) { requests.size == 2 && runtime.systemAgentChatController.state.value.sending }
+      assertEquals("Skip for now", requests[1]["message"]?.jsonPrimitive?.content)
+      composeRule.onNodeWithText("NEXT STEP").assertDoesNotExist()
+      composeRule.onNodeWithText("Continue configuration").assertDoesNotExist()
+
+      releaseReplies[1].countDown()
+      awaitReply("Second question")
+      composeRule.onNodeWithText("Continue configuration").performScrollTo().performClick()
+      composeRule.waitUntil(timeoutMillis = 5_000) { requests.size == 3 && runtime.systemAgentChatController.state.value.sending }
+      assertEquals("Continue configuration", requests[2]["message"]?.jsonPrimitive?.content)
+      composeRule.onNodeWithText("NEXT STEP").assertDoesNotExist()
+
+      releaseReplies[2].countDown()
+      composeRule.waitUntil(timeoutMillis = 5_000) { runtime.systemAgentChatController.state.value.errorText != null }
+      composeRule.onNodeWithText("NEXT STEP").assertDoesNotExist()
+      composeRule.onNodeWithText("Restart").performClick()
+      composeRule.waitUntil(timeoutMillis = 5_000) { requests.size == 4 }
+      releaseReplies[3].countDown()
+      awaitReply("Fresh question")
+      composeRule.onNodeWithText("NEXT STEP").assertIsDisplayed()
+      composeRule.onNodeWithText("Skip for now").assertIsDisplayed()
     }
   }
 
@@ -804,7 +840,7 @@ class SettingsDetailInsetsTest {
       assertEquals(draft, prepared.input)
       assertTrue(
         "Reading must be established before Send retires the newest question",
-        !prepared.sending && questionMessage.id !in prepared.retiredQuestionIds && questionMessage.id !in prepared.dismissedQuestionIds,
+        !prepared.sending && questionMessage.id !in prepared.retiredQuestionIds,
       )
 
       val before = readLine(reading)
@@ -1091,7 +1127,7 @@ class SettingsDetailInsetsTest {
                 drawerState = rememberDrawerState(initialValue = DrawerValue.Closed),
                 drawerContent = {},
               ) {
-                SettingsDetailFrame(title = "Gateway", subtitle = "", icon = Icons.Default.Settings, onBack = {}) {
+                SettingsDetailFrame(route = SettingsRoute.Gateway, title = "Gateway", subtitle = "", onBack = {}) {
                   repeat(20) { index -> ClawTextField("Field $index", {}, "") }
                   ClawTextField("Unsubmitted draft", {}, "Password", modifier = Modifier.testTag("last-field"))
                   ClawPrimaryButton(text = "Save", onClick = {})

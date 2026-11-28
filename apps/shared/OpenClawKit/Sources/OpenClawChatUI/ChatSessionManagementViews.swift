@@ -50,12 +50,10 @@ enum ChatSessionBatchMutationRunner {
         var succeeded: [(Int, String)] = []
         var failures: [String: String] = [:]
         await withTaskGroup(of: (Int, String, String?).self) { group in
-            var nextIndex = 0
-            while nextIndex < limit {
-                let index = nextIndex
+            for index in 0..<limit {
                 group.addTask { await run(index) }
-                nextIndex += 1
             }
+            var nextIndex = limit
             while let (index, key, error) = await group.next() {
                 if let error {
                     failures[key] = error
@@ -132,6 +130,9 @@ struct ChatSessionInspectorSheet: View {
     @Bindable var viewModel: OpenClawChatViewModel
 
     @Environment(\.dismiss) private var dismiss
+    #if os(macOS)
+    @Environment(\.openClawChatWindowCommands) private var windowCommands
+    #endif
     @State private var legacySession: OpenClawChatSessionEntry
     private let target: OpenClawChatSessionTarget
     private let sessionID: String?
@@ -205,6 +206,11 @@ struct ChatSessionInspectorSheet: View {
                     .disabled(self.isMutatingGroup)
                     Toggle("Pinned", isOn: self.pinnedBinding)
                         .font(OpenClawChatTypography.body)
+                        #if os(macOS)
+                        .disabled(self.windowCommands?.sessionMenuActions.canTogglePin(
+                            self.displayedSession,
+                            at: self.viewModel.sidebarRosterClock.gatewayDate()) != true)
+                        #endif
                     Toggle("Archived", isOn: self.archivedBinding)
                         .font(OpenClawChatTypography.body)
                         .disabled(!ChatSessionSidebarModel.canArchiveSession(
@@ -306,7 +312,15 @@ struct ChatSessionInspectorSheet: View {
 
     private var pinnedBinding: Binding<Bool> {
         Binding(
-            get: { self.displayedSession.isPinned },
+            get: {
+                #if os(macOS)
+                self.windowCommands?.sessionMenuActions.isPinnedForAction(
+                    self.displayedSession,
+                    at: self.viewModel.sidebarRosterClock.gatewayDate()) ?? self.displayedSession.isPinned
+                #else
+                self.displayedSession.isPinned
+                #endif
+            },
             set: { pinned in
                 guard self.canonicalSession != nil else { return }
                 self.displayedSession.pinned = pinned
@@ -600,13 +614,8 @@ public struct ChatNewSessionOptionsPopover: View {
 
     public var body: some View {
         VStack(alignment: .leading, spacing: 20) {
-            VStack(alignment: .leading, spacing: 5) {
-                Text("New Thread")
-                    .font(OpenClawChatTypography.headline)
-                Text("Choose an agent and a place to work.")
-                    .font(OpenClawChatTypography.footnote)
-                    .foregroundStyle(.secondary)
-            }
+            Text("New Thread")
+                .font(OpenClawChatTypography.headline)
 
             VStack(alignment: .leading, spacing: 8) {
                 Text("Agent")
@@ -633,6 +642,7 @@ public struct ChatNewSessionOptionsPopover: View {
                 Toggle(isOn: self.$usesWorktree) {
                     Text("Separate working copy")
                         .font(OpenClawChatTypography.formControl.weight(.medium))
+                        .fixedSize(horizontal: false, vertical: true)
                 }
                 .toggleStyle(.switch)
                 .disabled(self.agentOptions.isLoading || self.isCreating || self.agentOptions.selectedAgent?
@@ -690,7 +700,13 @@ public struct ChatNewSessionOptionsPopover: View {
                 Button(action: self.createThread) {
                     Text("Create Thread").font(OpenClawChatTypography.formControl.weight(.medium))
                 }
-                .buttonStyle(.borderedProminent)
+                #if os(iOS)
+                .buttonStyle(.bordered)
+                    .tint(.primary)
+                #else
+                    .buttonStyle(.borderedProminent)
+                    .tint(OpenClawChatTheme.accent)
+                #endif
                 .keyboardShortcut(.defaultAction)
                 .disabled(
                     self.agentOptions.isLoading || self.isCreating || self.agentOptions.selectedAgentID.isEmpty || self
@@ -699,6 +715,9 @@ public struct ChatNewSessionOptionsPopover: View {
         }
         .padding(20)
         .frame(width: 360)
+        #if os(iOS)
+        .tint(.primary)
+        #endif
         .task { await self.loadOptions() }
         .onChange(of: self.agentOptions.selectedAgentID) {
             if self.agentOptions.selectedAgent?.workspaceGit == false {

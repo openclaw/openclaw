@@ -1,61 +1,24 @@
 import Foundation
 
 final class CanvasFileWatcher: @unchecked Sendable {
-    private let watcher: CoalescingFSEventsWatcher
-    private let pollingWatcher: PollingDirectoryWatcher
-
-    init(url: URL, onChange: @escaping () -> Void) {
-        // Both producers can stop together from onChange without waiting on each other.
-        let queue = DispatchQueue(label: "ai.openclaw.canvaswatcher")
-        self.watcher = CoalescingFSEventsWatcher(
-            paths: [url.path],
-            queue: queue,
-            onChange: onChange)
-        self.pollingWatcher = PollingDirectoryWatcher(
-            url: url,
-            queue: queue,
-            onChange: onChange)
-    }
-
-    func startEventStream() {
-        self.watcher.start()
-    }
-
-    func setPollingEnabled(_ enabled: Bool) {
-        if enabled {
-            self.pollingWatcher.start()
-        } else {
-            self.pollingWatcher.stop()
-        }
-    }
-
-    func stop() {
-        self.watcher.stop()
-        self.pollingWatcher.stop()
-    }
-
-    var isPolling: Bool {
-        self.pollingWatcher.isRunning
-    }
-}
-
-private final class PollingDirectoryWatcher: @unchecked Sendable {
     private struct FileSignature: Equatable {
         let modifiedAt: TimeInterval
         let size: Int
     }
 
     private let url: URL
-    private let queue: DispatchQueue
+    private let queue = DispatchQueue(label: "ai.openclaw.canvaswatcher")
     private let queueKey = DispatchSpecificKey<UInt8>()
+    private let watcher: CoalescingFSEventsWatcher
     private let onChange: () -> Void
     private var timer: DispatchSourceTimer?
     private var lastSnapshot: [String: FileSignature] = [:]
 
-    init(url: URL, queue: DispatchQueue, onChange: @escaping () -> Void) {
+    init(url: URL, onChange: @escaping () -> Void) {
         self.url = url
-        self.queue = queue
         self.onChange = onChange
+        // Both producers can stop together from onChange without waiting on each other.
+        self.watcher = CoalescingFSEventsWatcher(paths: [url.path], queue: self.queue, onChange: onChange)
         self.queue.setSpecific(key: self.queueKey, value: 1)
     }
 
@@ -64,8 +27,18 @@ private final class PollingDirectoryWatcher: @unchecked Sendable {
         self.queue.setSpecific(key: self.queueKey, value: nil)
     }
 
-    func start() {
+    func startEventStream() {
+        self.watcher.start()
+    }
+
+    func setPollingEnabled(_ enabled: Bool) {
         self.onQueue {
+            guard enabled else {
+                self.timer?.cancel()
+                self.timer = nil
+                self.lastSnapshot = [:]
+                return
+            }
             guard self.timer == nil else { return }
             self.lastSnapshot = self.snapshot()
 
@@ -80,14 +53,11 @@ private final class PollingDirectoryWatcher: @unchecked Sendable {
     }
 
     func stop() {
-        self.onQueue {
-            self.timer?.cancel()
-            self.timer = nil
-            self.lastSnapshot = [:]
-        }
+        self.watcher.stop()
+        self.setPollingEnabled(false)
     }
 
-    var isRunning: Bool {
+    var isPolling: Bool {
         self.onQueue {
             self.timer != nil
         }

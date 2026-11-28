@@ -78,3 +78,23 @@ export function resolveSubagentWaitTimeoutMs(cfg: OpenClawConfig, runTimeoutSeco
     overrideSeconds: runTimeoutSeconds ?? 0,
   });
 }
+
+export function shouldPreservePublishedExplicitRunTimeout(entry: SubagentRunRecord): boolean {
+  if (
+    entry.execution.outcome?.status !== "timeout" ||
+    typeof entry.execution.endedAt !== "number"
+  ) {
+    return false;
+  }
+  const deadlineMs = resolveSubagentRunDeadlineMs(entry);
+  if (deadlineMs === undefined || entry.execution.endedAt < deadlineMs) {
+    return false;
+  }
+  return (
+    entry.cleanupHandled === true ||
+    typeof entry.cleanupCompletedAt === "number" ||
+    typeof entry.endedHookEmittedAt === "number" ||
+    entry.delivery?.status === "delivered" ||
+    typeof entry.delivery?.announcedAt === "number"
+  );
+}

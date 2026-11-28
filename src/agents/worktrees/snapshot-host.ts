@@ -1,30 +1,34 @@
 import { randomUUID } from "node:crypto";
 import { lstatSync } from "node:fs";
+import fs from "node:fs/promises";
 import path from "node:path";
 import { resolveStateDir } from "../../config/paths.js";
+import { formatErrorMessage, hasErrnoCode } from "../../infra/errors.js";
+import { withContentGitSlot } from "../../infra/git-content-budget.js";
 import { runGitWorkerOperation } from "../../infra/git-worker.js";
-import {
-  withWorktreeAllocationLease,
-  withWorktreeMutationLease,
-  type WorktreeAllocationGuard,
-} from "./allocation.js";
+import { withWorktreeMutationLease, type WorktreeAllocationGuard } from "./allocation.js";
 import type { WorktreeGitPolicy } from "./checkout-git-config.js";
 import { removeUnusedEmptyWorktreeSource } from "./empty-source.js";
+import { WorktreePreservationError } from "./errors.js";
 import { requireGit, worktreePathExists, commandError, listGitWorktrees, runGit } from "./git.js";
+import { hydrateCommitObjects, missingCommitObjects } from "./object-hydration.js";
+import { collectOrphanWorktreeBranches } from "./orphan-branches.js";
 import { createProvisionedSnapshotWriter } from "./provisioned-snapshot-store.js";
 import {
-  deleteRegistryWorktree,
-  assertRegistrySnapshotRetirement,
-  createWorktreeRemovalClaimsGuard,
-  getRegistryWorktree,
-} from "./registry.js";
+  captureWorktreeRegistryReadGuard,
+  prepareWorktreeRegistryGuard,
+  readRegistryWorktree,
+} from "./registry-read.js";
+import { deferWorktreeCleanup } from "./registry-retirement.js";
+import { deleteRegistryWorktree, createWorktreeRemovalClaimsGuard } from "./registry.js";
 import { assertExactStateSourceIdentity } from "./removal-git.js";
-import { withWorktreeRunEnd } from "./run-end-lifecycle.js";
+import { resolveRepository } from "./repository-paths.js";
+import { captureWorktreeRunEndContext, withWorktreeRunEnd } from "./run-end-lifecycle.js";
 import { abortWorktreeRemoval, claimWorktreeRemoval } from "./run-lease.js";
-import { resolveRepository } from "./service-preparation.js";
 import type { ExactStateRetirement } from "./snapshot-exact-state-contract.js";
 import { readExactStateSnapshot } from "./snapshot-exact-state.js";
-import { clearExactRestoreReceipt, readExactRestoreReceipt } from "./snapshot-restore-exact.js";
+import { worktreeSnapshotBase } from "./snapshot-ref.js";
+import { readExactRestoreReceipt } from "./snapshot-restore-exact.js";
 import type {
   ManagedWorktreeRecord,
   RetireManagedWorktreeSnapshotParams,
@@ -66,6 +70,39 @@ export async function captureManagedWorktreeSnapshot(params: {
     if (params.exactState && !exactState) {
       throw new Error("Exact-state capture lacks retirement custody");
     }
+    // Hydrate at the admitted mutation boundary. Snapshot commands stay offline,
+    // including status/index preparation that may need unchanged HEAD blobs.
+    await withContentGitSlot(async () => {
+      const options = {
+        signal: params.signal,
+        beforeRun: params.assertCurrent,
+        lowerPriority: true,
+        env: { GIT_NO_REPLACE_OBJECTS: "1" },
+      };
+      const missing = await missingCommitObjects(record.path, "HEAD", options);
+      if (missing.length > 0) {
+        try {
+          await hydrateCommitObjects(record.path, "HEAD", missing, options);
+          // Prove local custody, not promisor membership (which scans every promisor pack).
+          // A successful fetch alone cannot prove a clean snapshot is offline-restorable.
+          const remaining = await missingCommitObjects(record.path, "HEAD", options);
+          if (remaining.length > 0) {
+            throw new Error(`Worktree snapshot has missing blob ${remaining[0]}`);
+          }
+        } catch (cause) {
+          params.signal?.throwIfAborted();
+          params.assertCurrent?.();
+          // Keep the cleanup owner's shared-repository backoff on failed hydration.
+          throw new WorktreePreservationError(
+            "repository-corrupt",
+            `Worktree snapshot has missing blob ${missing[0]}; check the promisor remote or repair the repository before retrying cleanup. Checkout preserved.`,
+            { cause },
+          );
+        }
+      }
+    }, params.signal);
+    params.signal?.throwIfAborted();
+    params.assertCurrent?.();
     return await runGitWorkerOperation(
       {
         type: "worktree.snapshot",
@@ -74,7 +111,11 @@ export async function captureManagedWorktreeSnapshot(params: {
           checkoutPath: record.path,
           repoRoot: record.repoRoot,
           reason: params.reason,
-          provisionedPaths,
+          // Ordinary recovery preserves user state, not reinstallable dependencies.
+          // Explicit exact-state retirement keeps its complete provisioned capture.
+          provisionedPaths: exactState
+            ? provisionedPaths
+            : provisionedPaths.filter((entry) => !/(^|\/)node_modules\//u.test(entry)),
           ...(exactState ? { exactState } : {}),
         },
       },
@@ -104,12 +145,13 @@ export async function captureManagedWorktreeSnapshot(params: {
                 ],
                 effect.input.purpose,
                 true,
+                signal,
               );
               assertCurrent();
               return undefined;
             case "worktree.snapshot-provisioned-reset":
             case "worktree.snapshot-provisioned-chunk":
-              return await writeProvisioned(effect, () => signal.throwIfAborted());
+              return await writeProvisioned(effect, signal);
             case "worktree.eviction-fence":
             case "worktree.eviction-admit":
               throw new Error("Snapshot capture cannot authorize worktree eviction");
@@ -151,8 +193,8 @@ export async function verifyManagedWorktreeExactSnapshot(params: {
       signal: params.signal,
       assertCurrent: params.assertCurrent,
       git: params.git.worker,
-      onEffect: async () => {
-        params.signal?.throwIfAborted();
+      onEffect: async (_effect, { signal }) => {
+        signal.throwIfAborted();
         params.assertCurrent();
         return undefined;
       },
@@ -160,37 +202,17 @@ export async function verifyManagedWorktreeExactSnapshot(params: {
   );
 }
 
-export function assertExactSnapshotRecordCurrent(
-  env: NodeJS.ProcessEnv,
-  original: ManagedWorktreeRecord,
-) {
-  const current = getRegistryWorktree(env, original.id);
-  if (
-    !current ||
-    current.ownerKind !== original.ownerKind ||
-    current.ownerId !== original.ownerId ||
-    current.createdAt !== original.createdAt ||
-    current.lastActiveAt !== original.lastActiveAt ||
-    current.removedAt !== original.removedAt ||
-    current.path !== original.path ||
-    current.repoRoot !== original.repoRoot ||
-    current.repoFingerprint !== original.repoFingerprint ||
-    current.branch !== original.branch ||
-    current.snapshotRef !== original.snapshotRef
-  ) {
-    throw new Error(
-      "Exact-state recovery owner or lifecycle changed; source and snapshot preserved",
-    );
-  }
-}
-
-/** Explicit retirement shares the same allocation owner as removal and GC. */
+/** Explicit retirement owns the same checkout as removal and restore. */
 export async function retireManagedWorktreeSnapshotById(
-  params: RetireManagedWorktreeSnapshotParams,
-  env: NodeJS.ProcessEnv = process.env,
+  input: RetireManagedWorktreeSnapshotParams,
+  environment: NodeJS.ProcessEnv = process.env,
 ) {
-  return await withWorktreeAllocationLease({ ...params, env }, async (guard) => {
-    const record = getRegistryWorktree(env, params.id);
+  const context = captureWorktreeRunEndContext(environment);
+  const env = { ...environment, ...context.environment };
+  const params = { ...input };
+  return await withWorktreeMutationLease({ ...params, env }, async (guard) => {
+    const record = await readRegistryWorktree(context, params.id);
+    guard.commitGuard();
     if (
       !record ||
       record.removedAt === undefined ||
@@ -211,18 +233,49 @@ export async function retireManagedWorktreeSnapshotById(
   });
 }
 
-export async function retireExpiredManagedWorktreeSnapshot(params: {
+export async function retireExpiredManagedWorktreeSnapshot(input: {
   env: NodeJS.ProcessEnv;
   id: string;
   expiresBefore: number;
+  retryDeferred?: boolean;
   guard: WorktreeAllocationGuard;
-}): Promise<boolean> {
+}): Promise<boolean | string> {
+  const context = captureWorktreeRunEndContext(input.env);
+  const params = { ...input, env: { ...input.env, ...context.environment } };
   return await withWorktreeMutationLease(
     { ...params.guard, env: params.env, id: params.id },
     async (guard) => {
-      const record = getRegistryWorktree(params.env, params.id);
+      const accept = captureWorktreeRegistryReadGuard(context, "exact-snapshot");
+      const record = await readRegistryWorktree(context, params.id);
+      guard.commitGuard();
       if (!record || record.removedAt === undefined || record.removedAt >= params.expiresBefore) {
         return false;
+      }
+      const assertRecordCurrent = accept(record);
+      if (!record.snapshotRef?.startsWith("refs/openclaw/snapshots/exact-")) {
+        if (record.gcProtection && !params.retryDeferred) {
+          return record.gcProtection;
+        }
+        try {
+          const leftover = await fs.lstat(record.path);
+          if (!leftover.isDirectory()) {
+            throw new Error("Retired checkout path is not a directory");
+          }
+          guard.commitGuard();
+          // Empty leftovers contain no recovery data; never recurse or follow links.
+          await fs.rmdir(record.path);
+        } catch (error) {
+          if (!hasErrnoCode(error, "ENOENT")) {
+            const reason = `Retired checkout retained; recovery and branch preserved: ${formatErrorMessage(error)}`;
+            return (await deferWorktreeCleanup(
+              params.env,
+              { observed: record, reason },
+              guard.commitGuard,
+            ))
+              ? reason
+              : false;
+          }
+        }
       }
       await retireManagedWorktreeSnapshot({
         record,
@@ -230,6 +283,7 @@ export async function retireExpiredManagedWorktreeSnapshot(params: {
         signal: guard.signal,
         assertCurrent: guard.commitGuard,
         workerAuthority: guard.workerAuthority,
+        assertRecordCurrent,
       });
       return true;
     },
@@ -244,11 +298,20 @@ async function prepareExactSnapshotRetirement(params: {
   assertCurrent: () => void;
 }) {
   const { record, expected, signal, assertCurrent } = params;
-  const ref = `refs/openclaw/snapshots/${record.id}`;
+  const ref = record.snapshotRef;
+  if (expected.retainedSourceRef.startsWith("refs/heads/openclaw/")) {
+    throw new Error(
+      "Managed branches expire with their worktrees; choose an ordinary branch or remote-tracking retained source ref",
+    );
+  }
   if (
     expected.id !== record.id ||
+    !ref ||
+    ![
+      `refs/openclaw/snapshots/${record.id}`,
+      `refs/openclaw/snapshots/clean-v1/${record.id}`,
+    ].includes(ref) ||
     expected.expectedSnapshotRef !== ref ||
-    record.snapshotRef !== ref ||
     record.removedAt !== expected.expectedRemovedAt ||
     !Number.isSafeInteger(expected.expectedRemovedAt) ||
     expected.expectedRemovedAt < 0 ||
@@ -321,19 +384,26 @@ async function prepareExactSnapshotRetirement(params: {
   if (snapshotTree !== retainedTree) {
     throw new Error("Snapshot contains source not covered by the retained commit");
   }
-  const parents = (
-    await requireGit(
-      record.repoRoot,
-      ["rev-list", "--parents", "-n", "1", expected.expectedSnapshotOid],
-      options,
-    )
-  ).split(" ");
-  if (parents.length !== 2) {
-    throw new Error("Snapshot parent custody is unavailable");
+  if (worktreeSnapshotBase(ref, expected.expectedSnapshotOid) !== expected.expectedSnapshotOid) {
+    const parents = (
+      await requireGit(
+        record.repoRoot,
+        ["rev-list", "--parents", "-n", "1", expected.expectedSnapshotOid],
+        options,
+      )
+    ).split(" ");
+    if (parents.length !== 2) {
+      throw new Error("Snapshot parent custody is unavailable");
+    }
   }
   await requireGit(
     record.repoRoot,
-    ["merge-base", "--is-ancestor", parents[1]!, expected.expectedRetainedSourceOid],
+    [
+      "merge-base",
+      "--is-ancestor",
+      worktreeSnapshotBase(ref, expected.expectedSnapshotOid),
+      expected.expectedRetainedSourceOid,
+    ],
     options,
   );
   assertCurrent();
@@ -369,18 +439,38 @@ async function retireManagedWorktreeSnapshot(params: {
   assertCurrent: () => void;
   workerAuthority?: WorktreeWorkerAuthority;
   expected?: RetireManagedWorktreeSnapshotParams;
+  assertRecordCurrent?: () => void;
 }) {
   const { record, env, signal } = params;
+  const retireBranch = async (commitGuard: () => void) => {
+    const cleanup = await collectOrphanWorktreeBranches({
+      env,
+      repoRoot: record.repoRoot,
+      retiring: record,
+      signal,
+      commitGuard,
+    });
+    const failure = cleanup.branches.find((branch) => branch.outcome === "failed");
+    if (failure) {
+      // Keep the row for GC retry; the normal GC receipt records the failure.
+      throw new Error(`Managed branch cleanup failed for ${failure.branch}: ${failure.reason}`);
+    }
+  };
   if (params.expected) {
     const { withLocalWorkspaceStore } =
       await import("../../gateway/worker-environments/local-workspace-store.js");
     await withLocalWorkspaceStore(
       { ...params, worktreeId: record.id, requireAbsent: true },
       async (store) => {
-        const assertCurrent = () => {
-          store.assertCurrent();
-          assertRegistrySnapshotRetirement(env, record);
-        };
+        const assertRetirement = await prepareWorktreeRegistryGuard(
+          captureWorktreeRunEndContext(env),
+          {
+            ...store.workerAuthority,
+            predicates: [{ kind: "snapshot-retirement", record }],
+            assertCurrent: store.assertCurrent,
+          },
+        );
+        const assertCurrent = assertRetirement;
         assertCurrent();
         const retireSnapshot = await prepareExactSnapshotRetirement({
           record,
@@ -388,9 +478,14 @@ async function retireManagedWorktreeSnapshot(params: {
           signal,
           assertCurrent,
         });
+        await retireBranch(assertCurrent);
         await retireSnapshot(assertCurrent);
         assertCurrent();
-        deleteRegistryWorktree(env, record.id, { assertCurrent, expectedRetired: record });
+        await deleteRegistryWorktree(env, record.id, {
+          assertCurrent,
+          expectedRetired: record,
+          workerAuthority: { ...store.workerAuthority, assertCurrent },
+        });
       },
     );
     // Retained source refs remain owned, including an otherwise empty source repository.
@@ -405,7 +500,7 @@ async function retireManagedWorktreeSnapshot(params: {
   const assertCurrent = () => {
     params.assertCurrent();
     if (exactRecord) {
-      assertExactSnapshotRecordCurrent(env, record);
+      params.assertRecordCurrent?.();
       if (claimed && expirationToken) {
         assertClaim?.();
       }
@@ -447,6 +542,8 @@ async function retireManagedWorktreeSnapshot(params: {
           assertProjectionCurrent();
         };
         if (await worktreePathExists(record.repoRoot)) {
+          const deletions = [`delete refs/openclaw/removals/${record.id}\0\0`];
+          let assertDeletionCurrent = beforeRun;
           if (record.snapshotRef) {
             const found = await runGit(
               record.repoRoot,
@@ -473,6 +570,7 @@ async function retireManagedWorktreeSnapshot(params: {
             };
             const registrations = exactRecord ? await listGitWorktrees(record.repoRoot) : [];
             if (exactRecord) {
+              assertDeletionCurrent = assertNoLiveSource;
               assertNoLiveSource();
               if (registrations.some((entry) => entry.path === record.path)) {
                 throw new Error(
@@ -514,40 +612,35 @@ async function retireManagedWorktreeSnapshot(params: {
             // Missing metadata can mean a prior expiry already deleted the ref.
             // Finalize the expired row idempotently, but never infer or delete an
             // unknown retained directory without its captured identity.
-            await requireGit(
-              record.repoRoot,
-              ["update-ref", "-d", record.snapshotRef, ...(snapshot ? [snapshot] : [])],
-              {
-                signal,
-                beforeRun: exactRecord ? assertNoLiveSource : beforeRun,
-              },
-            );
+            deletions.push(`delete ${record.snapshotRef}\0${snapshot ?? ""}\0`);
             if (exactRecord) {
               const receipt = await readExactRestoreReceipt(record, {
                 signal,
                 beforeRun: assertNoLiveSource,
               });
               if (receipt) {
-                await clearExactRestoreReceipt(record, receipt, {
-                  signal,
-                  beforeRun: assertNoLiveSource,
-                });
+                deletions.push(`delete ${receipt.ref}\0${receipt.commit}\0`);
               }
             }
           }
-          // Snapshot-loss removal can leave only a pending HEAD pin. Keep its
-          // registry owner until that pin has been cleared too.
-          await requireGit(
-            record.repoRoot,
-            ["update-ref", "-d", "refs/openclaw/removals/" + record.id],
-            { signal, beforeRun },
-          );
+          // One transaction retires all recovery refs with at most one packed-refs rewrite.
+          // Snapshot-loss removal may have only the pending HEAD pin remaining.
+          await requireGit(record.repoRoot, ["update-ref", "--stdin", "-z"], {
+            signal,
+            beforeRun: assertDeletionCurrent,
+            input: `start\0${deletions.join("")}prepare\0commit\0`,
+          });
+          await retireBranch(assertDeletionCurrent);
         }
       },
     });
     await removeUnusedEmptyWorktreeSource({ env, record, signal, commitGuard: assertCurrent });
     assertCurrent();
-    deleteRegistryWorktree(env, record.id, { assertCurrent, removalToken: expirationToken });
+    await deleteRegistryWorktree(env, record.id, {
+      assertCurrent,
+      removalToken: expirationToken,
+      workerAuthority: { ...params.workerAuthority, assertCurrent },
+    });
   } finally {
     if (expirationToken && claimed) {
       await abortWorktreeRemoval(env, record.id, expirationToken);

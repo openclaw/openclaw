@@ -11,7 +11,7 @@ const SIDEBAR_MAX_WIDTH_PX = 1_200;
 const SIDEBAR_MAX_HEIGHT_PX = 800;
 const SIDEBAR_MAIN_MIN_WIDTH_PX = 312;
 export const SIDEBAR_NARROW_BREAKPOINT_PX = 680;
-const SIDEBAR_DIVIDER_WIDTH_PX = 6;
+const SIDEBAR_DIVIDER_WIDTH_PX = 12;
 
 export function clampWidth(width: number): number {
   return Math.min(SIDEBAR_MAX_WIDTH_PX, Math.max(SIDEBAR_MIN_WIDTH_PX, width));
@@ -51,18 +51,18 @@ export function fitSidebarLayout(
   layout: SidebarLayout,
   availableWidth: number,
 ): SidebarLayout | null {
-  const next = structuredClone(layout);
   if (!Number.isFinite(availableWidth) || availableWidth <= 0) {
-    return next;
+    return layout;
   }
-  const column = next.columns[0];
+  const column = layout.columns[0];
   if (!column) {
-    return next;
+    return layout;
   }
-  next.columns = [column];
-  if (sidebarDock(next) === "bottom") {
-    column.height = clampHeight(column.height);
-    return next;
+  if (sidebarDock(layout) === "bottom") {
+    const height = clampHeight(column.height);
+    return layout.columns.length === 1 && height === column.height
+      ? layout
+      : { ...layout, columns: [{ ...column, height }] };
   }
   const maxColumnWidth = Math.max(
     SIDEBAR_MIN_WIDTH_PX,
@@ -72,8 +72,10 @@ export function fitSidebarLayout(
   if (SIDEBAR_MIN_WIDTH_PX > budget) {
     return null;
   }
-  column.width = Math.min(maxColumnWidth, budget, clampWidth(column.width));
-  return next;
+  const width = Math.min(maxColumnWidth, budget, clampWidth(column.width));
+  return layout.columns.length === 1 && width === column.width
+    ? layout
+    : { ...layout, columns: [{ ...column, width }] };
 }
 
 export function initializeBrowserSidebarWidth(
@@ -96,13 +98,10 @@ export function initializeBrowserSidebarWidth(
   ) {
     return layout;
   }
-  const next = structuredClone(layout);
-  const nextColumn = next.columns[0]!;
+  const nextColumn = { ...column };
   // Reclaim the centered chat's spare margins; share tighter panes evenly.
-  nextColumn.width = Math.max(
-    column.width,
-    availableWidth - Math.min(chatWidth, availableWidth / 2) - SIDEBAR_DIVIDER_WIDTH_PX,
-  );
+  const contentWidth = availableWidth - SIDEBAR_DIVIDER_WIDTH_PX;
+  nextColumn.width = Math.max(column.width, contentWidth - Math.min(chatWidth, contentWidth / 2));
   delete nextColumn.browserWidthPending;
-  return fitSidebarLayout(next, availableWidth) ?? layout;
+  return fitSidebarLayout({ ...layout, columns: [nextColumn] }, availableWidth) ?? layout;
 }

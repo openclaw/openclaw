@@ -1,8 +1,10 @@
 /** Imports shipped cron quarantine sidecars only through the doctor migration boundary. */
 import { createHash } from "node:crypto";
 import fs from "node:fs/promises";
+import { asFiniteNumber } from "@openclaw/normalization-core/number-coercion";
 import { isRecord } from "@openclaw/normalization-core/record-coerce";
 import type { CronQuarantinedJob } from "../../../cron/store.js";
+import { decodeUtf8Input } from "../../../infra/utf8-input.js";
 import { parseJsonWithJson5Fallback } from "../../../utils/parse-json-compat.js";
 
 export type LegacyCronQuarantine = {
@@ -11,21 +13,14 @@ export type LegacyCronQuarantine = {
   jobs: CronQuarantinedJob[];
 };
 
-/** Resolves the historical sidecar without making it part of the runtime store API. */
-function resolveLegacyCronQuarantinePath(storePath: string): string {
-  return storePath.endsWith(".json")
-    ? storePath.replace(/\.json$/, "-quarantine.json")
-    : `${storePath}-quarantine.json`;
-}
-
 /** Reads and validates a historical quarantine file without modifying its source. */
 export async function loadLegacyCronQuarantineForMigration(
   storePath: string,
 ): Promise<LegacyCronQuarantine | undefined> {
-  const quarantinePath = resolveLegacyCronQuarantinePath(storePath);
+  const quarantinePath = `${storePath.endsWith(".json") ? storePath.slice(0, -5) : storePath}-quarantine.json`;
   let raw: string;
   try {
-    raw = await fs.readFile(quarantinePath, "utf-8");
+    raw = decodeUtf8Input(await fs.readFile(quarantinePath), quarantinePath);
   } catch (error) {
     if ((error as NodeJS.ErrnoException).code === "ENOENT") {
       return undefined;
@@ -47,10 +42,7 @@ export async function loadLegacyCronQuarantineForMigration(
       throw new Error(`Unsupported cron quarantine entry at ${quarantinePath} index ${index}`);
     }
     const quarantined: CronQuarantinedJob = {
-      quarantinedAtMs:
-        typeof entry.quarantinedAtMs === "number" && Number.isFinite(entry.quarantinedAtMs)
-          ? entry.quarantinedAtMs
-          : Date.now(),
+      quarantinedAtMs: asFiniteNumber(entry.quarantinedAtMs) ?? Date.now(),
       sourceIndex: typeof entry.sourceIndex === "number" ? entry.sourceIndex : -1,
       reason: entry.reason,
     };

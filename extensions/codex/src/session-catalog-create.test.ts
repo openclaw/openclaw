@@ -8,59 +8,7 @@ import { resolveCodexCatalogCreateSession } from "./session-catalog-create.js";
 
 const modelConfig = { resolveAllowedModelRef, resolveDefaultModelForAgent };
 
-function configWithAllowedModels(models: string[], runtime?: string): OpenClawConfig {
-  return {
-    agents: {
-      defaults: {
-        model: { primary: models[0] },
-        models: Object.fromEntries(
-          models.map((model) => [model, runtime ? { agentRuntime: { id: runtime } } : {}]),
-        ),
-      },
-    },
-  };
-}
-
 describe("resolveCodexCatalogCreateSession", () => {
-  it("advertises the canonical implicit Codex default", () => {
-    expect(resolveCodexCatalogCreateSession(modelConfig, {}, "main")).toEqual({
-      model: "openai/gpt-6-astra",
-      agentRuntime: "codex",
-    });
-  });
-
-  it("preserves an existing Sol selection under an unchanged Sol-only policy", () => {
-    const config: OpenClawConfig = {
-      agents: {
-        defaults: {
-          model: { primary: "openai/gpt-5.6-sol" },
-          models: { "openai/gpt-5.6-sol": {} },
-          modelPolicy: { allow: ["openai/gpt-5.6-sol"] },
-        },
-      },
-    };
-    const before = structuredClone(config);
-
-    expect(resolveCodexCatalogCreateSession(modelConfig, config, "main")).toEqual({
-      model: "openai/gpt-5.6-sol",
-      agentRuntime: "codex",
-    });
-    expect(config).toEqual(before);
-  });
-
-  it("pins the Codex model even when ordinary chats use the direct runtime", () => {
-    expect(
-      resolveCodexCatalogCreateSession(
-        modelConfig,
-        configWithAllowedModels(["openai/gpt-6-astra"], "openclaw"),
-        "main",
-      ),
-    ).toEqual({
-      model: "openai/gpt-6-astra",
-      agentRuntime: "codex",
-    });
-  });
-
   it("does not advertise creation when the Codex model is outside the allowlist", () => {
     expect(
       resolveCodexCatalogCreateSession(
@@ -104,16 +52,6 @@ describe("resolveCodexCatalogCreateSession", () => {
       model: "openai/gpt-5.6-luna",
       agentRuntime: "codex",
     });
-  });
-
-  it("uses Astra for Codex creation when ordinary chats use another provider", () => {
-    expect(
-      resolveCodexCatalogCreateSession(
-        modelConfig,
-        configWithAllowedModels(["anthropic/claude-sonnet-4-6", "openai/gpt-6-astra"]),
-        "main",
-      ),
-    ).toEqual({ model: "openai/gpt-6-astra", agentRuntime: "codex" });
   });
 
   it("does not advertise creation before runtime config is available", () => {

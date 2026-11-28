@@ -5,12 +5,24 @@ import {
 } from "../../../packages/gateway-protocol/src/index.js";
 import { SessionWorktreeLifecycleError } from "../../agents/worktrees/errors.js";
 import { SESSION_LIFECYCLE_CHANGED_ERROR_REASON } from "../../config/sessions/lifecycle.js";
+import { ARCHIVE_UNDO_CHANGED } from "../../config/sessions/session-archive-undo.js";
 import { formatErrorMessage } from "../../infra/errors.js";
+import { AgentDeletionPendingError } from "../../sessions/session-agent-work-admission.js";
 import { ModelAccountConnectAuthorityError } from "../model-account-connect-errors.js";
 import { SessionMutationAuthorizationChangedError } from "../session-sharing.js";
+import { SessionModelCatalogUnavailableError } from "./session-model-catalog-wait.js";
 import { sessionLog } from "./sessions-shared.js";
 
 export function unexpectedPatchError(key: string, error: unknown): ErrorShape {
+  if (error instanceof Error && error.message === ARCHIVE_UNDO_CHANGED) {
+    return errorShape(ErrorCodes.INVALID_REQUEST, ARCHIVE_UNDO_CHANGED);
+  }
+  if (error instanceof AgentDeletionPendingError) {
+    return errorShape(ErrorCodes.UNAVAILABLE, error.message);
+  }
+  if (error instanceof SessionModelCatalogUnavailableError) {
+    return error.error;
+  }
   if (error instanceof ModelAccountConnectAuthorityError) {
     return errorShape(ErrorCodes.FORBIDDEN, error.message);
   }

@@ -238,15 +238,6 @@ function listPortListeners(port: number): PortProcess[] {
   }
 }
 
-export function forceFreePort(
-  port: number,
-  opts: { beforeSignal?: BeforePortSignal } = {},
-): PortProcess[] {
-  const listeners = listPortListeners(port);
-  killPids(port, listeners, "SIGTERM", opts.beforeSignal);
-  return listeners;
-}
-
 function killPids(
   port: number,
   listeners: PortProcess[],
@@ -293,7 +284,7 @@ export async function forceFreePortAndWait(
   let useFuserFallback = false;
 
   try {
-    killed = forceFreePort(port, opts.beforeSignal ? { beforeSignal: opts.beforeSignal } : {});
+    killed = listPortListeners(port);
   } catch (err) {
     if (!isRecoverableLsofError(err)) {
       throw err;
@@ -305,6 +296,10 @@ export async function forceFreePortAndWait(
     }
     useFuserFallback = true;
     killed = killPortWithFuser(port, "SIGTERM", opts.beforeSignal);
+  }
+  // Signal and ownership errors must propagate without switching cleanup tools.
+  if (!useFuserFallback) {
+    killPids(port, killed, "SIGTERM", opts.beforeSignal);
   }
 
   if (killed.length === 0) {

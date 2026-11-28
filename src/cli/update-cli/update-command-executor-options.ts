@@ -5,18 +5,16 @@ import type { ManagedUpdateLeaseAuthority } from "./update-command-executor-stat
 import { UpdateCommandRecoveryPendingError } from "./update-command-recovery-error.js";
 
 export type UpdateCommandExecutorOptions =
-  | {
-      existingAuthority: Omit<ManagedUpdateLeaseAuthority, "owner">;
-      legacyManagedParent?: never;
-      legacyPackageParent?: never;
-      legacyPackageHandoff?: never;
-    }
-  | {
-      existingAuthority?: never;
-      legacyManagedParent: { runId: string; handoffId: string; root: string };
-      legacyPackageParent?: never;
-      legacyPackageHandoff?: never;
-    }
+  | ({ legacyPackageParent?: never; legacyPackageHandoff?: never } & (
+      | {
+          existingAuthority: Omit<ManagedUpdateLeaseAuthority, "owner">;
+          legacyManagedParent?: never;
+        }
+      | {
+          existingAuthority?: never;
+          legacyManagedParent: { runId: string; handoffId: string; root: string };
+        }
+    ))
   | {
       existingAuthority?: never;
       legacyManagedParent?: never;
@@ -31,6 +29,8 @@ export type UpdateCommandExecutor = {
     root: string,
     options?: { preflight?: true; activationTimeoutMs?: number; serviceRoot?: string },
   ): Promise<UpdateRecoveryFence>;
+  /** Runs separately bounded work outside the activation budget, which moves by its duration. */
+  exclude?<T>(operation: () => Promise<T>): Promise<T>;
 };
 
 export function resolveUpdateCommandRetainedRoot(

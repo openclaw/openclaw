@@ -3,15 +3,22 @@ import { isRecord } from "openclaw/plugin-sdk/string-coerce-runtime";
 import type { PolicyDataHandlingEvidence, PolicyEvidence } from "../policy-state.js";
 import { CHECK_IDS } from "./check-ids.js";
 import {
-  authProfileAllowModesShapeFindings,
-  dataHandlingEntries,
-  dataHandlingLabel,
-  dataHandlingPolicyShapeFindings,
-  secretPolicyShapeFindings,
-} from "./data-auth-shapes.js";
-import { policyEvidenceFinding } from "./policy-evidence-finding.js";
+  collectPolicyShapeFindings,
+  createOrderedPolicyShape,
+  firstPolicyShapeFinding,
+} from "./ordered-shape.js";
+import { SUPPORTED_AUTH_PROFILE_MODES } from "./policy-constants.js";
+import {
+  policyEvidenceFinding,
+  policyEvidenceRuleFindings,
+  type PolicyEvidenceRule,
+} from "./policy-evidence-finding.js";
 import { authProfileHasMetadata, requiredAuthProfileMetadata } from "./policy-runtime.js";
-import { agentScopedPolicyTargets, policyHasRules, scopedAgentIdMatches } from "./policy-scope.js";
+import {
+  agentScopedPolicyTargets,
+  policyHasRules,
+  scopedAgentEvidenceMatches,
+} from "./policy-scope.js";
 import { ocPathSegment, readPolicyBoolean, readStringList } from "./utils.js";
 
 export function secretAuthProvenanceFindings(
@@ -20,8 +27,45 @@ export function secretAuthProvenanceFindings(
   policyDocName: string,
   evidence: PolicyEvidence,
 ): readonly HealthFinding[] {
-  const secretShapeFindings = secretPolicyShapeFindings(policy, policyPath, policyDocName);
-  const authShapeFindings = authProfileAllowModesShapeFindings(policy, policyPath, policyDocName);
+  function secretPolicyShapeFindings(): readonly HealthFinding[] {
+    if (!isRecord(policy) || !isRecord(policy.secrets)) {
+      return [];
+    }
+    const shape = createOrderedPolicyShape(policy, { policyPath, policyDocName });
+    function* findings() {
+      yield shape.boolean("secrets.requireManagedProviders");
+      yield shape.boolean("secrets.allowInsecureProviders");
+      yield shape.list("secrets.denySources", {
+        array: {
+          message: "{policy} {property} must be an array of source names.",
+          hint: 'Use an array such as ["exec"] or remove secrets.denySources.',
+        },
+        entry: {
+          message: "{policy} {property}[{index}] must be a non-empty source name.",
+          hint: "Use non-empty source names such as env, file, exec, or openclaw.",
+        },
+      });
+    }
+    return collectPolicyShapeFindings(findings());
+  }
+  const secretShapeFindings = secretPolicyShapeFindings();
+  function authProfileAllowModesShapeFindings(): readonly HealthFinding[] {
+    const shape = createOrderedPolicyShape(policy, { policyPath, policyDocName });
+    const finding = shape.list("auth.profiles.allowModes", {
+      allowed: SUPPORTED_AUTH_PROFILE_MODES,
+      normalize: "lower",
+      array: {
+        message: "{policy} {property} must be an array of auth modes.",
+        hint: "Use supported auth modes: {allowed}.",
+      },
+      entry: {
+        message: "{policy} {property}[{index}] must be a supported auth mode.",
+        hint: "Use supported auth modes: {allowed}.",
+      },
+    });
+    return finding === undefined ? [] : [finding];
+  }
+  const authShapeFindings = authProfileAllowModesShapeFindings();
   return [
     ...(secretShapeFindings.length > 0
       ? secretShapeFindings
@@ -44,7 +88,46 @@ export function dataHandlingFindings(
   policyDocName: string,
   evidence: PolicyEvidence,
 ): readonly HealthFinding[] {
-  const shapeFindings = dataHandlingPolicyShapeFindings(policy, policyPath, policyDocName);
+  function dataHandlingPolicyShapeFindings(): readonly HealthFinding[] {
+    if (!isRecord(policy) || !isRecord(policy.dataHandling)) {
+      return [];
+    }
+    const shape = createOrderedPolicyShape(policy, { policyPath, policyDocName });
+    const sections = [
+      ["sensitiveLogging", "requireRedaction"],
+      ["telemetry", "denyContentCapture"],
+      ["retention", "requireSessionMaintenance"],
+      ["memory", "denySessionTranscriptIndexing"],
+    ] as const;
+    function* sectionRules(section: string, rule: string) {
+      yield shape.keys(
+        "dataHandling." + section,
+        [rule],
+        "data-handling",
+        "Remove {unsupported} or use {property}." + rule + ".",
+      );
+      yield shape.boolean("dataHandling." + section + "." + rule);
+    }
+    function* shapeRules() {
+      yield shape.keys(
+        "dataHandling",
+        ["memory", "retention", "sensitiveLogging", "telemetry"],
+        "data-handling",
+        "Remove {unsupported} or use a supported data-handling policy rule.",
+      );
+      for (const [section] of sections) {
+        yield shape.object(
+          "dataHandling." + section,
+          "Fix {property} so it contains boolean policy rules.",
+        );
+      }
+      for (const [section, rule] of sections) {
+        yield firstPolicyShapeFinding(sectionRules(section, rule));
+      }
+    }
+    return collectPolicyShapeFindings(shapeRules());
+  }
+  const shapeFindings = dataHandlingPolicyShapeFindings();
   if (shapeFindings.length > 0) {
     return shapeFindings;
   }
@@ -64,30 +147,16 @@ export function dataHandlingFindings(
         evidence,
         (entry) =>
           entry.kind !== "memorySessionTranscriptIndexing" ||
-          scopedDataHandlingAgentMatches(entry, target.agentId, evidence.dataHandling ?? []),
+          scopedAgentEvidenceMatches(
+            entry,
+            target.agentId,
+            evidence.dataHandling ?? [],
+            entry.id === "agents-defaults-memory-session-transcripts",
+          ),
       ),
     );
   }
   return findings;
-}
-
-function scopedDataHandlingAgentMatches(
-  entry: PolicyDataHandlingEvidence,
-  policyAgentId: string,
-  entries: readonly PolicyDataHandlingEvidence[],
-): boolean {
-  if (scopedAgentIdMatches(entry.agentId, policyAgentId)) {
-    return true;
-  }
-  return (
-    entry.id === "agents-defaults-memory-session-transcripts" &&
-    !entries.some(
-      (candidate) =>
-        candidate.scope === "agent" &&
-        candidate.kind === entry.kind &&
-        scopedAgentIdMatches(candidate.agentId, policyAgentId),
-    )
-  );
 }
 
 function dataHandlingFindingsForRule(
@@ -101,57 +170,40 @@ function dataHandlingFindingsForRule(
   if (!isRecord(dataHandling)) {
     return [];
   }
-  const findings: HealthFinding[] = [];
-  // dataHandling.sensitiveLogging.requireRedaction has no check here on purpose: redaction is
-  // an unconditional runtime invariant (src/logging/redact.ts), so policy state records it as
-  // satisfied evidence (oc://openclaw.invariant/logging/redaction) instead of a finding.
-  if (readPolicyBoolean(dataHandling, ["telemetry", "denyContentCapture"]) === true) {
-    findings.push(
-      ...dataHandlingEntries(evidence, "telemetryContentCapture")
-        .filter(evidenceFilter)
-        .filter((entry) => entry.value === true)
-        .map((entry) =>
-          policyEvidenceFinding(entry, {
-            checkId: CHECK_IDS.policyDataHandlingTelemetryContentCapture,
-            message: "Telemetry content capture is enabled.",
-            requirement: `oc://${policyDocName}/${requirementBase}/telemetry/denyContentCapture`,
-            fixHint: "Disable diagnostics.otel.captureContent or update policy after review.",
-          }),
-        ),
-    );
-  }
-  if (readPolicyBoolean(dataHandling, ["retention", "requireSessionMaintenance"]) === true) {
-    findings.push(
-      ...dataHandlingEntries(evidence, "sessionRetentionMode")
-        .filter(evidenceFilter)
-        .filter((entry) => entry.value !== "enforce")
-        .map((entry) =>
-          policyEvidenceFinding(entry, {
-            checkId: CHECK_IDS.policyDataHandlingSessionRetentionNotEnforced,
-            message: `Session retention maintenance mode is '${entry.value ?? "unknown"}'.`,
-            requirement: `oc://${policyDocName}/${requirementBase}/retention/requireSessionMaintenance`,
-            fixHint: "Set session.maintenance.mode to enforce or update policy after review.",
-          }),
-        ),
-    );
-  }
-  if (readPolicyBoolean(dataHandling, ["memory", "denySessionTranscriptIndexing"]) === true) {
-    findings.push(
-      ...dataHandlingEntries(evidence, "memorySessionTranscriptIndexing")
-        .filter(evidenceFilter)
-        .filter((entry) => entry.value === true)
-        .map((entry) =>
-          policyEvidenceFinding(entry, {
-            checkId: CHECK_IDS.policyDataHandlingSessionTranscriptMemory,
-            message: `${dataHandlingLabel(entry)} enables session transcript memory indexing.`,
-            requirement: `oc://${policyDocName}/${requirementBase}/memory/denySessionTranscriptIndexing`,
-            fixHint:
-              "Disable session transcript memory indexing for the matching config surface or update policy after review.",
-          }),
-        ),
-    );
-  }
-  return findings;
+  // Redaction is an unconditional runtime invariant, recorded as satisfied evidence.
+  const rules = [
+    {
+      path: ["telemetry", "denyContentCapture"],
+      kind: "telemetryContentCapture",
+      violates: (entry) => entry.value === true,
+      checkId: CHECK_IDS.policyDataHandlingTelemetryContentCapture,
+      message: () => "Telemetry content capture is enabled.",
+      fixHint: "Disable diagnostics.otel.captureContent or update policy after review.",
+    },
+    {
+      path: ["retention", "requireSessionMaintenance"],
+      kind: "sessionRetentionMode",
+      violates: (entry) => entry.value !== "enforce",
+      checkId: CHECK_IDS.policyDataHandlingSessionRetentionNotEnforced,
+      message: (entry) => `Session retention maintenance mode is '${entry.value ?? "unknown"}'.`,
+      fixHint: "Set session.maintenance.mode to enforce or update policy after review.",
+    },
+    {
+      path: ["memory", "denySessionTranscriptIndexing"],
+      kind: "memorySessionTranscriptIndexing",
+      violates: (entry) => entry.value === true,
+      checkId: CHECK_IDS.policyDataHandlingSessionTranscriptMemory,
+      message: (entry) => `${dataHandlingLabel(entry)} enables session transcript memory indexing.`,
+      fixHint:
+        "Disable session transcript memory indexing for the matching config surface or update policy after review.",
+    },
+  ] satisfies readonly PolicyEvidenceRule<PolicyDataHandlingEvidence>[];
+  return policyEvidenceRuleFindings(
+    (evidence.dataHandling ?? []).filter(evidenceFilter),
+    rules.filter((rule) => readPolicyBoolean(dataHandling, rule.path) === true),
+    policyDocName,
+    requirementBase,
+  );
 }
 
 function secretManagedProviderFindings(
@@ -259,4 +311,10 @@ function authProfileModeFindings(
         fixHint: "Change the auth profile mode or update policy after review.",
       });
     });
+}
+
+function dataHandlingLabel(entry: PolicyDataHandlingEvidence): string {
+  return entry.agentId === undefined
+    ? "Global data handling config"
+    : "agent '" + entry.agentId + "'";
 }

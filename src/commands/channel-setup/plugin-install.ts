@@ -4,7 +4,7 @@ import { applyPluginAutoEnable } from "../../config/plugin-auto-enable.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import { createSubsystemLogger } from "../../logging/subsystem.js";
 import {
-  resolveConfiguredChannelPluginIds,
+  resolveConfiguredChannelPluginIdsAsync,
   resolveDiscoverableScopedChannelPluginIds,
 } from "../../plugins/channel-plugin-ids.js";
 import { loadPluginRegistryHandle } from "../../plugins/loader.js";
@@ -25,10 +25,10 @@ export async function ensureChannelSetupPluginInstalled(
     beforePersistentEffect?: () => Promise<void>;
   },
 ): Promise<
-  Pick<OnboardingInstallResult, "cfg" | "installed" | "status"> &
+  Pick<OnboardingInstallResult, "cfg" | "installed" | "status" | "error"> &
     Partial<Pick<OnboardingInstallResult, "pluginId">>
 > {
-  const result = await ensureOnboardingPluginInstalled({
+  return await ensureOnboardingPluginInstalled({
     cfg: params.cfg,
     entry: {
       pluginId: params.entry.pluginId ?? params.entry.id,
@@ -42,6 +42,7 @@ export async function ensureChannelSetupPluginInstalled(
     runtime: params.runtime,
     workspaceDir: params.workspaceDir,
     ...(params.promptInstall !== undefined ? { promptInstall: params.promptInstall } : {}),
+    ...(params.failureOutput ? { failureOutput: params.failureOutput } : {}),
     ...(params.autoConfirmSingleSource !== undefined
       ? { autoConfirmSingleSource: params.autoConfirmSingleSource }
       : {}),
@@ -49,23 +50,17 @@ export async function ensureChannelSetupPluginInstalled(
       ? { beforePersistentEffect: params.beforePersistentEffect }
       : {}),
   });
-  return {
-    cfg: result.cfg,
-    installed: result.installed,
-    pluginId: result.pluginId,
-    status: result.status,
-  };
 }
 
 /** Load an inactive setup-plugin registry snapshot for resolving a channel without side effects. */
-export function loadChannelSetupPluginRegistrySnapshotForChannel(params: {
+export async function loadChannelSetupPluginRegistrySnapshotForChannel(params: {
   cfg: OpenClawConfig;
   runtime: RuntimeEnv;
   channel: string;
   pluginId?: string;
   workspaceDir?: string;
   forceSetupOnlyChannelPlugins?: boolean;
-}): PluginRegistry {
+}): Promise<PluginRegistry> {
   let scopedPluginId = params.pluginId?.trim();
   if (!scopedPluginId) {
     scopedPluginId = getTrustedChannelPluginCatalogEntry(params.channel, {
@@ -89,7 +84,7 @@ export function loadChannelSetupPluginRegistrySnapshotForChannel(params: {
     resolveAgentWorkspaceDir(resolvedConfig, resolveDefaultAgentId(resolvedConfig));
   const onlyPluginIds = scopedPluginId
     ? [scopedPluginId]
-    : resolveConfiguredChannelPluginIds({
+    : await resolveConfiguredChannelPluginIdsAsync({
         config: resolvedConfig,
         activationSourceConfig: params.cfg,
         workspaceDir,

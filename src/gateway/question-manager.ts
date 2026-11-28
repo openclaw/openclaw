@@ -1,4 +1,3 @@
-// Gateway question manager.
 // Tracks transient operator questions and short-lived terminal records in memory.
 import { randomUUID } from "node:crypto";
 import {
@@ -22,7 +21,10 @@ import {
   type GatewayRootWorkAdmissionContinuationScope,
 } from "../process/gateway-work-admission.js";
 import { AsyncWorkScope, getAsyncWorkSignal } from "../shared/async-work-scope.js";
-import type { QuestionSessionAccess } from "./question-session-access.types.js";
+import type {
+  QuestionClientAuthorization,
+  QuestionSessionAccess,
+} from "./question-session-access.types.js";
 
 /** Grace period for late question.waitAnswer and question.get calls. */
 const QUESTION_RESOLVED_ENTRY_GRACE_MS = 15_000;
@@ -58,8 +60,12 @@ type QuestionManagerRequest = {
   onResolved?:
     | ((event: QuestionResolvedEvent, observation: QuestionObservation) => void)
     | ((event: QuestionResolvedEvent, observation: QuestionObservation) => Promise<void>);
+  /** Host-owned human decision boundary; never accepted from wire data. */
+  authorizeClient?: QuestionClientAuthorization;
   sessionAccess?: QuestionSessionAccess;
   isRequesterActive?: () => boolean;
+  /** Producer authority is independent of optional ordinary-session disclosure access. */
+  requesterLifetime?: { signal?: AbortSignal; release: () => void };
   requesterRun?: OperationalRunInstanceRef;
   /** Trusted handler binds the run; the manager owns expiry and terminal release. */
   registerHumanInputWait?: (isPending: () => boolean) => ((resolved: boolean) => void) | undefined;
@@ -74,11 +80,15 @@ type QuestionEntry = {
   job: GatewayScheduledJob;
   waiters: Set<Waiter>;
   onResolved?: QuestionManagerRequest["onResolved"];
+  /** Host-owned human decision boundary; never accepted from wire data. */
+  authorizeClient?: QuestionClientAuthorization;
   sessionAccess?: QuestionSessionAccess;
   isRequesterActive?: () => boolean;
+  requesterLifetime?: QuestionManagerRequest["requesterLifetime"];
   requesterRun?: OperationalRunInstanceRef;
   admissionContinuation: GatewayRootWorkAdmissionContinuationScope | null;
   releaseHumanInputWait?: (resolved: boolean) => void;
+  releaseRequesterWatch?: () => void;
   committing?: boolean;
   commitUnknown?: boolean;
   retired?: boolean;
@@ -88,7 +98,9 @@ type QuestionEntry = {
 export type QuestionObservation = {
   readonly record: QuestionRecord;
   readonly ordinary: boolean;
+  readonly requesterRun?: OperationalRunInstanceRef;
   readonly sessionAccess?: QuestionSessionAccess;
+  readonly authorizeClient?: QuestionClientAuthorization;
   isCurrent: () => boolean;
   refreshRequester: () => void;
 };
@@ -147,7 +159,10 @@ export class QuestionManager {
     if (this.closed) {
       throw new Error("Question manager is closed");
     }
-    if (params.isRequesterActive && !params.isRequesterActive()) {
+    if (
+      params.requesterLifetime?.signal?.aborted ||
+      (params.isRequesterActive && !params.isRequesterActive())
+    ) {
       throw new QuestionManagerError(
         QuestionManagerErrorCodes.REQUESTER_INACTIVE,
         "the agent run that requested this question is no longer active",
@@ -190,7 +205,9 @@ export class QuestionManager {
       waiters: new Set(),
       onResolved: params.onResolved,
       sessionAccess: params.sessionAccess,
+      authorizeClient: params.authorizeClient,
       isRequesterActive: params.isRequesterActive,
+      requesterLifetime: params.requesterLifetime,
       requesterRun: params.requesterRun,
       admissionContinuation: retainGatewayRootWorkAdmissionContinuationScope(),
     };
@@ -205,6 +222,15 @@ export class QuestionManager {
     entry.releaseHumanInputWait = params.registerHumanInputWait?.(
       () => this.get(id)?.status === "pending" && this.entries.get(id) === entry,
     );
+    const signal = entry.requesterLifetime?.signal;
+    if (signal) {
+      const refresh = () => this.refreshRequester(entry);
+      signal.addEventListener("abort", refresh, { once: true });
+      entry.releaseRequesterWatch = () => signal.removeEventListener("abort", refresh);
+      if (signal.aborted) {
+        refresh();
+      }
+    }
     return record;
   }
 
@@ -235,7 +261,9 @@ export class QuestionManager {
         return entry.record;
       },
       ordinary: entry.ordinary,
+      requesterRun: entry.requesterRun,
       sessionAccess: entry.sessionAccess,
+      authorizeClient: entry.authorizeClient,
       isCurrent: () => this.entries.get(entry.record.id) === entry,
       refreshRequester: () => this.refreshRequester(entry),
     };
@@ -249,7 +277,7 @@ export class QuestionManager {
     ) {
       return;
     }
-    const active = entry.isRequesterActive?.();
+    const active = entry.requesterLifetime?.signal?.aborted ? false : entry.isRequesterActive?.();
     // Liveness can reset/reuse the public id or settle the captured entry reentrantly.
     // A worker-confirmed source loss must retire only this still-pending observation.
     if (
@@ -337,8 +365,7 @@ export class QuestionManager {
       }
       signal?.addEventListener("abort", waiter, { once: true });
       if (timeoutMs !== undefined) {
-        timer = setTimeout(waiter, resolveTimerTimeoutMs(timeoutMs, 1));
-        timer.unref?.();
+        timer = setTimeout(waiter, resolveTimerTimeoutMs(timeoutMs, 1)).unref();
       }
     });
   }
@@ -387,7 +414,7 @@ export class QuestionManager {
       ) {
         throw new QuestionManagerError(
           QuestionManagerErrorCodes.REQUESTER_INACTIVE,
-          "the question's resolution authority is no longer active",
+          "The question ended or changed. Request a new question.",
         );
       }
     };
@@ -465,7 +492,10 @@ export class QuestionManager {
     if (this.entries.get(entry.record.id) === entry) {
       this.entries.delete(entry.record.id);
     }
+    entry.releaseRequesterWatch?.();
+    entry.releaseRequesterWatch = undefined;
     entry.sessionAccess?.release();
+    entry.requesterLifetime?.release();
     entry.job.cancel();
     const releaseHumanInputWait = entry.releaseHumanInputWait;
     entry.releaseHumanInputWait = undefined;
@@ -575,6 +605,8 @@ export class QuestionManager {
   }
 
   private finish(entry: QuestionEntry): Promise<void> {
+    entry.releaseRequesterWatch?.();
+    entry.releaseRequesterWatch = undefined;
     entry.job.cancel();
     const continuation = entry.admissionContinuation;
     entry.admissionContinuation = null;
@@ -599,13 +631,16 @@ export class QuestionManager {
       try {
         // Enter the original continuation before these callbacks can release its last parked root.
         settle();
-        const { id, status, answers } = entry.record;
+        const { id, status, answers, resolvedBy } = entry.record;
         if (status !== "pending" && this.entries.get(id) === entry) {
           const event: QuestionResolvedEvent =
             status === "answered"
               ? { id, status, answers: answers ?? { answers: {} } }
               : { id, status };
-          await entry.onResolved?.(event, this.observeEntry(entry));
+          await entry.onResolved?.(
+            { ...event, ...(resolvedBy ? { resolvedBy } : {}) },
+            this.observeEntry(entry),
+          );
         }
       } finally {
         continuation?.release();
@@ -636,6 +671,7 @@ export class QuestionManager {
                 if (this.entries.get(entry.record.id) === entry) {
                   this.entries.delete(entry.record.id);
                   entry.sessionAccess?.release();
+                  entry.requesterLifetime?.release();
                 }
               },
             });

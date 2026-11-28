@@ -7,6 +7,7 @@ import {
 } from "./subagent-lifecycle-events.js";
 import { getCurrentSubagentRunOwner } from "./subagent-registry-memory.js";
 import type { SubagentCompletionRequest, SubagentRunRecord } from "./subagent-registry.types.js";
+import { isSubagentPausedByYield } from "./subagent-requester-turn-custody.js";
 
 const PENDING_LIFECYCLE_TERMINAL_TTL_MS = 5 * 60_000;
 
@@ -25,7 +26,6 @@ type PendingLifecycleParams = {
 type PendingLifecycleTerminal = PendingLifecycleParams & {
   kind: PendingLifecycleKind;
   timer: NodeJS.Timeout;
-  entry: SubagentRunRecord;
 };
 
 export function createPendingLifecycleScheduler(params: {
@@ -43,18 +43,13 @@ export function createPendingLifecycleScheduler(params: {
     pendingByRunId.delete(runId);
   }
 
-  function clearAll() {
-    pendingByRunId.forEach(({ timer }) => clearTimeout(timer));
-    pendingByRunId.clear();
-  }
-
   const canComplete = (
     kind: PendingLifecycleKind,
     entry: SubagentRunRecord,
     expected: SubagentRunRecord,
   ) =>
     entry.execution.startedAt === expected.execution.startedAt &&
-    entry.pauseReason !== "sessions_yield" &&
+    !isSubagentPausedByYield(entry) &&
     entry.execution.outcome?.status !== "ok" &&
     (kind !== "error" || entry.endedReason !== SUBAGENT_ENDED_REASON_COMPLETE);
 
@@ -71,20 +66,20 @@ export function createPendingLifecycleScheduler(params: {
         return;
       }
       pendingByRunId.delete(scheduleParams.runId);
-      const entry = getCurrentSubagentRunOwner(params.runs, pending.entry);
-      if (!entry || !canComplete(kind, entry, pending.entry)) {
+      const entry = getCurrentSubagentRunOwner(params.runs, pending.expectedEntry);
+      if (!entry || !canComplete(kind, entry, pending.expectedEntry)) {
         return;
       }
       let publication: Pick<SubagentRunRecord, "execution" | "endedReason"> | undefined;
       const isCurrent = () => {
-        const current = getCurrentSubagentRunOwner(params.runs, pending.entry);
+        const current = getCurrentSubagentRunOwner(params.runs, pending.expectedEntry);
         return (
           current !== undefined &&
-          current.pauseReason !== "sessions_yield" &&
+          !isSubagentPausedByYield(current) &&
           (publication
             ? current.endedReason === publication.endedReason &&
               isDeepStrictEqual(current.execution, publication.execution)
-            : canComplete(kind, current, pending.entry))
+            : canComplete(kind, current, pending.expectedEntry))
         );
       };
       params.completeInBackground(
@@ -122,8 +117,8 @@ export function createPendingLifecycleScheduler(params: {
         pending.cancellation ? "lifecycle-cancellation-grace" : `lifecycle-${kind}-grace`,
       );
     }, AGENT_RUN_TERMINAL_RETRY_GRACE_MS);
-    timer.unref?.();
-    pendingByRunId.set(scheduleParams.runId, { ...scheduleParams, kind, timer, entry: selected });
+    timer.unref();
+    pendingByRunId.set(scheduleParams.runId, { ...scheduleParams, kind, timer });
   }
 
   return {
@@ -131,13 +126,20 @@ export function createPendingLifecycleScheduler(params: {
     clearPriorAttempt: (runId: string) => {
       const pending = pendingByRunId.get(runId);
       const current = params.runs.get(runId);
-      if (pending && current && pending.entry.execution.startedAt !== current.execution.startedAt) {
+      if (
+        pending &&
+        current &&
+        pending.expectedEntry.execution.startedAt !== current.execution.startedAt
+      ) {
         clearKind(runId);
       }
     },
     clearError: (runId: string) => clearKind(runId, "error"),
     clearTimeout: (runId: string) => clearKind(runId, "timeout"),
-    clearAll,
+    clearAll() {
+      pendingByRunId.forEach(({ timer }) => clearTimeout(timer));
+      pendingByRunId.clear();
+    },
     scheduleCancellation: (scheduleParams: Parameters<typeof schedule>[1]) =>
       schedule("error", { ...scheduleParams, cancellation: true }),
     scheduleError: (scheduleParams: Parameters<typeof schedule>[1]) =>

@@ -1,6 +1,6 @@
 import type { SpawnSyncOptionsWithStringEncoding } from "node:child_process";
 // Canonical watched-input state shared by artifact producers and freshness readers.
-import { createHash, type Hash } from "node:crypto";
+import { createHash } from "node:crypto";
 import type fs from "node:fs";
 import { createRequire } from "node:module";
 import path from "node:path";
@@ -303,12 +303,31 @@ function generatedControlUiManifest(deps: RunNodeInputDeps, file: string) {
   );
 }
 
-export type RunNodeInputState = { signature: string; generation: string };
+function installedModulesInputs(contents: Buffer<ArrayBuffer>): Buffer<ArrayBuffer> {
+  try {
+    const metadata: unknown = JSON.parse(contents.toString());
+    if (
+      isRecord(metadata) &&
+      typeof metadata.packageManager === "string" &&
+      metadata.packageManager.startsWith("pnpm@12.") &&
+      metadata.layoutVersion === 5 &&
+      typeof metadata.prunedAt === "string"
+    ) {
+      // pnpm 12 writes JSON here. Cache-pruning time is not a compiler input;
+      // retain the complete dependency/layout metadata, including unknown fields.
+      const { prunedAt: _prunedAt, ...inputs } = metadata;
+      return Buffer.from(JSON.stringify(inputs));
+    }
+  } catch {
+    // Unrecognized metadata keeps its existing byte-for-byte identity.
+  }
+  return contents;
+}
 
-function captureRunNodeInputSignature(
+/** Identifies effective production inputs, independently of transport-carrier commits. */
+export function resolveRunNodeInputSignature(
   deps: RunNodeInputDeps,
   scope: "build" | "runtime",
-  generation?: { hash: Hash; assetPhase?: boolean },
 ): string | null {
   try {
     const files = listRunNodeInputFiles(deps, scope);
@@ -330,11 +349,12 @@ function captureRunNodeInputSignature(
       hash.update(`\0${identity}\0`);
       const absolute = path.resolve(deps.cwd, file);
       const generatedManifest = generatedControlUiManifest(deps, file);
-      const omitGeneration = !generation || (generation.assetPhase && generatedManifest);
       try {
-        const before = deps.fs.statSync(absolute, { bigint: true });
         const link = deps.fs.lstatSync(absolute, { bigint: true });
         let contents = deps.fs.readFileSync(absolute);
+        if (file === "node_modules/.modules.yaml") {
+          contents = installedModulesInputs(contents);
+        }
         if (generatedManifest) {
           const manifest: unknown = JSON.parse(contents.toString());
           if (!isRecord(manifest)) {
@@ -351,29 +371,15 @@ function captureRunNodeInputSignature(
           ]),
         );
         hash.update(contents);
-        const after = deps.fs.statSync(absolute, { bigint: true });
-        if (
-          before.ctimeNs !== after.ctimeNs ||
-          before.size !== after.size ||
-          before.ino !== after.ino ||
-          before.dev !== after.dev
-        ) {
-          throw new Error(`Build input changed while reading: ${file}`);
-        }
-        return omitGeneration
-          ? ""
-          : `${[link.dev, link.ino, link.ctimeNs, after.dev, after.ino, after.ctimeNs, after.size].join(":")}\0`;
       } catch (error) {
         if ((error as NodeJS.ErrnoException).code !== "ENOENT" || !optional) {
           throw error;
         }
         hash.update("missing");
-        return omitGeneration ? "" : "missing\0";
       }
     };
     for (const file of files) {
-      const captured = capture(file, true);
-      generation?.hash.update(`${file}\0${captured}`);
+      capture(file, true);
     }
     // Keep the declared compiler installation in the identity without loading it.
     capture("node_modules/.modules.yaml", true);
@@ -386,23 +392,4 @@ function captureRunNodeInputSignature(
   } catch {
     return null;
   }
-}
-
-/** Capture content and transient mutation evidence from the same input observations. */
-export function captureRunNodeInputState(
-  deps: RunNodeInputDeps,
-  scope: "build" | "runtime",
-  options: { assetPhase?: boolean } = {},
-): RunNodeInputState | null {
-  const hash = createHash("sha256");
-  const signature = captureRunNodeInputSignature(deps, scope, { hash, ...options });
-  return signature ? { signature, generation: hash.digest("hex") } : null;
-}
-
-/** Identifies effective production inputs, independently of transport-carrier commits. */
-export function resolveRunNodeInputSignature(
-  deps: RunNodeInputDeps,
-  scope: "build" | "runtime",
-): string | null {
-  return captureRunNodeInputSignature(deps, scope);
 }

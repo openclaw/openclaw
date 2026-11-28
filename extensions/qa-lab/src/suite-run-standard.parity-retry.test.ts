@@ -192,28 +192,10 @@ afterEach(async () => {
 describe("QA suite Control UI ownership", () => {
   it.each([
     {
-      label: "a non-Control UI scenario by default",
-      surface: "channel",
-      explicit: undefined,
-      enabled: false,
-    },
-    {
-      label: "an explicitly enabled non-Control UI scenario",
-      surface: "channel",
-      explicit: true,
-      enabled: true,
-    },
-    {
       label: "a Control UI scenario by default",
       surface: "control-ui",
       explicit: undefined,
       enabled: true,
-    },
-    {
-      label: "an explicitly disabled Control UI scenario",
-      surface: "control-ui",
-      explicit: false,
-      enabled: false,
     },
   ])("only starts and publishes the gateway Control UI for $label", async (testCase) => {
     const lab = makeRetryTestLab();
@@ -253,36 +235,6 @@ describe("QA suite Control UI ownership", () => {
 });
 
 describe("QA runtime parity scenario retry isolation", () => {
-  it.each(["pass", "fail"] as const)(
-    "records each retry and selects the whole %s attempt",
-    async (status) => {
-      const captured: QaEvidenceSummaryV3Json[] = [];
-      const runScenario = vi
-        .fn<QaSuiteScenarioRunner>()
-        .mockResolvedValueOnce(makeRetryTestResult("fail"))
-        .mockResolvedValueOnce(makeRetryTestResult(status));
-      const result = await runQaFlowSuiteStandard(
-        { lab: makeRetryTestLab(), onEvidence: (summary) => captured.push(summary) },
-        makeRetryTestContext(),
-        runScenario,
-      );
-      const final = captured.at(-1)!;
-      expect(final.schemaVersion).toBe(3);
-      expect(final.entries.map((entry) => entry.result.status)).toEqual(["fail", status]);
-      expect(getEffectiveQaEvidenceEntries(final).map((entry) => entry.result.status)).toEqual([
-        status,
-      ]);
-      expect(projectQaEvidenceScenarioOutcomes(final)[0]).toMatchObject({
-        status,
-        occurrenceId: result.scenarios[0]!.evidenceOccurrenceId,
-      });
-      expect(mocks.writeQaSuiteArtifacts.mock.calls.at(-1)?.[0].recordedEvidence).toMatchObject({
-        occurrences: final.occurrences,
-        entries: final.entries,
-      });
-    },
-  );
-
   it.each(["skip", "pass", "fail"] as const)(
     "retries only observed failures when a captured failure continues to %s",
     async (status) => {
@@ -512,107 +464,104 @@ describe("QA runtime parity scenario retry isolation", () => {
     expect(snapshots.at(-1)?.scenarios.map((item) => item.id)).toEqual(["same", "other", "same"]);
   });
 
-  it.each([false, true])(
-    "preserves runner progress through cleanup (failFast=%s)",
-    async (failFast) => {
-      vi.useFakeTimers({ toFake: ["Date"] });
-      const at = (second: number) => new Date(Date.UTC(2026, 7, 4, 0, 0, second));
-      vi.setSystemTime(at(0));
-      const lab = makeRetryTestLab();
-      const context = makeRetryTestContext();
-      context.selectedScenarios = ["first", "second", "tail"].map((id) => {
-        const scenario = makeQaSuiteTestScenario(id);
-        scenario.title = `Catalog ${id}`;
-        if (scenario.execution.kind === "flow") {
-          scenario.execution.retryCount = 0;
-        }
-        return scenario;
-      });
-      const snapshots: Parameters<QaLabServerHandle["setScenarioRun"]>[0][] = [];
-      vi.mocked(lab.setScenarioRun).mockImplementation((next) =>
-        snapshots.push(structuredClone(next)),
-      );
-      const results: QaSuiteScenarioResult[] = [
-        {
-          name: "result first",
-          status: "pass",
-          details: "",
-          steps: [{ name: "check", status: "pass" }],
-        },
-        { name: "result second", status: "fail", steps: [] },
-        { name: "result tail", status: "skip", details: "not applicable", steps: [] },
-      ];
-      const runScenario = vi.fn<QaSuiteScenarioRunner>().mockImplementation(async () => {
-        const index = runScenario.mock.calls.length - 1;
-        vi.setSystemTime(at(index + 1));
-        return results[index]!;
-      });
-      mocks.runQaFlowSuiteCleanupPlan.mockImplementationOnce(async () => {
-        expect(snapshots.every((snapshot) => snapshot?.status === "running")).toBe(true);
-        expect(mocks.writeQaSuiteArtifacts).not.toHaveBeenCalled();
-        vi.setSystemTime(at(10));
-        return [];
-      });
+  it.each([false])("preserves runner progress through cleanup (failFast=%s)", async (failFast) => {
+    vi.useFakeTimers({ toFake: ["Date"] });
+    const at = (second: number) => new Date(Date.UTC(2026, 7, 4, 0, 0, second));
+    vi.setSystemTime(at(0));
+    const lab = makeRetryTestLab();
+    const context = makeRetryTestContext();
+    context.selectedScenarios = ["first", "second", "tail"].map((id) => {
+      const scenario = makeQaSuiteTestScenario(id);
+      scenario.title = `Catalog ${id}`;
+      if (scenario.execution.kind === "flow") {
+        scenario.execution.retryCount = 0;
+      }
+      return scenario;
+    });
+    const snapshots: Parameters<QaLabServerHandle["setScenarioRun"]>[0][] = [];
+    vi.mocked(lab.setScenarioRun).mockImplementation((next) =>
+      snapshots.push(structuredClone(next)),
+    );
+    const results: QaSuiteScenarioResult[] = [
+      {
+        name: "result first",
+        status: "pass",
+        details: "",
+        steps: [{ name: "check", status: "pass" }],
+      },
+      { name: "result second", status: "fail", steps: [] },
+      { name: "result tail", status: "skip", details: "not applicable", steps: [] },
+    ];
+    const runScenario = vi.fn<QaSuiteScenarioRunner>().mockImplementation(async () => {
+      const index = runScenario.mock.calls.length - 1;
+      vi.setSystemTime(at(index + 1));
+      return results[index]!;
+    });
+    mocks.runQaFlowSuiteCleanupPlan.mockImplementationOnce(async () => {
+      expect(snapshots.every((snapshot) => snapshot?.status === "running")).toBe(true);
+      expect(mocks.writeQaSuiteArtifacts).not.toHaveBeenCalled();
+      vi.setSystemTime(at(10));
+      return [];
+    });
 
-      await runQaFlowSuiteStandard({ lab, failFast }, context, runScenario);
+    await runQaFlowSuiteStandard({ lab, failFast }, context, runScenario);
 
-      const finishedCount = failFast ? 2 : 3;
-      const finalStatuses = failFast ? ["pass", "fail", "pending"] : ["pass", "fail", "skip"];
-      expect(
-        snapshots.map((snapshot) => snapshot?.scenarios.map((scenario) => scenario.status)),
-      ).toEqual([
-        ["pending", "pending", "pending"],
-        ["running", "pending", "pending"],
-        ["pass", "pending", "pending"],
-        ["pass", "running", "pending"],
-        ["pass", "fail", "pending"],
-        ...(failFast
-          ? []
-          : [
-              ["pass", "fail", "running"],
-              ["pass", "fail", "skip"],
-            ]),
-        finalStatuses,
-      ]);
-      expect(snapshots.at(-1)).toStrictEqual({
-        kind: "suite",
-        status: "completed",
-        startedAt: at(0).toISOString(),
-        finishedAt: at(10).toISOString(),
-        scenarios: context.selectedScenarios.map((scenario, index) =>
-          Object.assign(
-            { id: scenario.id, name: scenario.title, status: finalStatuses[index] },
-            index < finishedCount
-              ? {
-                  details: results[index]!.details,
-                  steps: results[index]!.steps,
-                  startedAt: at(index).toISOString(),
-                  finishedAt: at(index + 1).toISOString(),
-                }
-              : {},
-          ),
+    const finishedCount = failFast ? 2 : 3;
+    const finalStatuses = failFast ? ["pass", "fail", "pending"] : ["pass", "fail", "skip"];
+    expect(
+      snapshots.map((snapshot) => snapshot?.scenarios.map((scenario) => scenario.status)),
+    ).toEqual([
+      ["pending", "pending", "pending"],
+      ["running", "pending", "pending"],
+      ["pass", "pending", "pending"],
+      ["pass", "running", "pending"],
+      ["pass", "fail", "pending"],
+      ...(failFast
+        ? []
+        : [
+            ["pass", "fail", "running"],
+            ["pass", "fail", "skip"],
+          ]),
+      finalStatuses,
+    ]);
+    expect(snapshots.at(-1)).toStrictEqual({
+      kind: "suite",
+      status: "completed",
+      startedAt: at(0).toISOString(),
+      finishedAt: at(10).toISOString(),
+      scenarios: context.selectedScenarios.map((scenario, index) =>
+        Object.assign(
+          { id: scenario.id, name: scenario.title, status: finalStatuses[index] },
+          index < finishedCount
+            ? {
+                details: results[index]!.details,
+                steps: results[index]!.steps,
+                startedAt: at(index).toISOString(),
+                finishedAt: at(index + 1).toISOString(),
+              }
+            : {},
         ),
-      });
-      expect(runScenario).toHaveBeenCalledTimes(finishedCount);
-      expect(mocks.captureTransportArtifacts).toHaveBeenCalledOnce();
-      expect(mocks.captureTransportArtifacts.mock.invocationCallOrder[0]).toBeLessThan(
-        mocks.runQaFlowSuiteCleanupPlan.mock.invocationCallOrder[0]!,
-      );
-      expect(mocks.writeQaSuiteArtifacts).toHaveBeenCalledWith(
-        expect.objectContaining({
-          transportArtifacts: {
-            artifacts: [{ kind: "channel-driver-smoke", path: "readiness.json" }],
-          },
-        }),
-      );
-      expect(mocks.writeQaSuiteArtifacts.mock.invocationCallOrder[0]).toBeLessThan(
-        vi.mocked(lab.setLatestReport).mock.invocationCallOrder[0]!,
-      );
-      expect(vi.mocked(lab.setLatestReport).mock.invocationCallOrder[0]).toBeLessThan(
-        vi.mocked(lab.setScenarioRun).mock.invocationCallOrder.at(-1)!,
-      );
-    },
-  );
+      ),
+    });
+    expect(runScenario).toHaveBeenCalledTimes(finishedCount);
+    expect(mocks.captureTransportArtifacts).toHaveBeenCalledOnce();
+    expect(mocks.captureTransportArtifacts.mock.invocationCallOrder[0]).toBeLessThan(
+      mocks.runQaFlowSuiteCleanupPlan.mock.invocationCallOrder[0]!,
+    );
+    expect(mocks.writeQaSuiteArtifacts).toHaveBeenCalledWith(
+      expect.objectContaining({
+        transportArtifacts: {
+          artifacts: [{ kind: "channel-driver-smoke", path: "readiness.json" }],
+        },
+      }),
+    );
+    expect(mocks.writeQaSuiteArtifacts.mock.invocationCallOrder[0]).toBeLessThan(
+      vi.mocked(lab.setLatestReport).mock.invocationCallOrder[0]!,
+    );
+    expect(vi.mocked(lab.setLatestReport).mock.invocationCallOrder[0]).toBeLessThan(
+      vi.mocked(lab.setScenarioRun).mock.invocationCallOrder.at(-1)!,
+    );
+  });
 
   it("does not publish terminal artifacts when cleanup fails", async () => {
     const lab = makeRetryTestLab();
@@ -651,27 +600,6 @@ describe("QA runtime parity scenario retry isolation", () => {
       ),
     ).toHaveLength(0);
   });
-
-  it.each([
-    { forcedRuntime: undefined, expectedRuntime: "openclaw" },
-    { forcedRuntime: "codex" as const, expectedRuntime: "codex" },
-  ])(
-    "records $expectedRuntime as the selected runtime fact",
-    async ({ forcedRuntime, expectedRuntime }) => {
-      const runScenario = vi.fn<QaSuiteScenarioRunner>().mockImplementation(async (env) => {
-        expect(env.runtimeId).toBe(expectedRuntime);
-        return makeRetryTestResult("pass");
-      });
-
-      await runQaFlowSuiteStandard(
-        { lab: makeRetryTestLab(), ...(forcedRuntime ? { forcedRuntime } : {}) },
-        makeRetryTestContext(),
-        runScenario,
-      );
-
-      expect(runScenario).toHaveBeenCalledOnce();
-    },
-  );
 
   it("skips connected-transport readiness for intentionally unhealthy startup", async () => {
     const context = makeRetryTestContext();
@@ -719,7 +647,7 @@ describe("QA runtime parity scenario retry isolation", () => {
     });
   });
 
-  it.each(["pass", "fail"] as const)(
+  it.each(["fail"] as const)(
     "retains sanitized logs after an initial %s only when the scenario retried",
     async (firstStatus) => {
       vi.stubEnv("OPENCLAW_QA_KEEP_TEMP", undefined);

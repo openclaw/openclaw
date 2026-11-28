@@ -3,11 +3,14 @@ import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
 import { afterAll, afterEach, beforeAll, beforeEach, vi } from "vitest";
+import * as hostMemory from "../infra/host-memory.js";
 import { closeOpenClawAgentDatabasesAsync } from "../state/openclaw-agent-db-lifecycle.js";
 import { createTestGatewayScheduler } from "../test-utils/gateway-scheduler-clock.js";
 import type { MockFn } from "../test-utils/vitest-mock-fn.js";
 import type { CronEvent } from "./service.js";
 import { CronService } from "./service.js";
+import { stop } from "./service/ops-lifecycle.js";
+import * as cronServiceState from "./service/state.js";
 import {
   createCronServiceState,
   type CronServiceState,
@@ -15,6 +18,13 @@ import {
 } from "./service/state.js";
 import { saveCronStore } from "./store.js";
 import type { CronJob } from "./types.js";
+
+// An existing scheduler keeps the captured reader while later drains observe new headroom.
+const cronAvailableMemory = vi.fn<() => number>();
+export function mockCronAvailableMemory(bytes: number) {
+  vi.spyOn(hostMemory, "captureServiceAvailableMemoryReader").mockReturnValue(cronAvailableMemory);
+  return cronAvailableMemory.mockReturnValue(bytes);
+}
 
 type NoopLogger = {
   debug: MockFn;
@@ -30,6 +40,29 @@ export function createNoopLogger(): NoopLogger {
     warn: vi.fn(),
     error: vi.fn(),
   };
+}
+
+/** Capture the facade's actual state while keeping construction and runtime behavior intact. */
+export function createCronServiceWithStateForTest(deps: CronServiceDeps): {
+  cron: CronService;
+  state: CronServiceState;
+} {
+  let state: CronServiceState | undefined;
+  const createState = cronServiceState.createCronServiceState;
+  const capture = vi.spyOn(cronServiceState, "createCronServiceState");
+  capture.mockImplementationOnce((serviceDeps) => {
+    state = createState(serviceDeps);
+    return state;
+  });
+  try {
+    const cron = new CronService(deps);
+    if (!state) {
+      throw new Error("Cron service construction did not publish its state");
+    }
+    return { cron, state };
+  } finally {
+    capture.mockRestore();
+  }
 }
 
 export function createCronStoreHarness(options?: { prefix?: string }) {
@@ -158,39 +191,47 @@ export function createStartedCronServiceWithFinishedBarrier(params: {
   nowMs?: CronServiceDeps["nowMs"];
   storePath: string;
   logger: ReturnType<typeof createNoopLogger>;
-  requestHeartbeatAndWait?: CronServiceDeps["requestHeartbeatAndWait"];
-  resolveHeartbeatTimeoutMs?: CronServiceDeps["resolveHeartbeatTimeoutMs"];
+  runSessionEvent?: CronServiceDeps["runSessionEvent"];
   onEvent?: CronServiceDeps["onEvent"];
 }): {
   cron: CronService;
+  state: CronServiceState;
   enqueueSystemEvent: MockFn;
-  requestHeartbeat: MockFn;
-  requestHeartbeatAndWait: MockFn;
+  enqueueSessionEvent: ReturnType<
+    typeof vi.fn<NonNullable<CronServiceDeps["enqueueSessionEvent"]>>
+  >;
+  runSessionEvent: ReturnType<typeof vi.fn<NonNullable<CronServiceDeps["runSessionEvent"]>>>;
   finished: ReturnType<typeof createFinishedBarrier>;
 } {
   const enqueueSystemEvent = vi.fn();
-  const requestHeartbeat = vi.fn();
-  const requestHeartbeatAndWait = vi.fn(
-    params.requestHeartbeatAndWait ?? (async () => ({ status: "ran" as const, durationMs: 1 })),
+  const enqueueSessionEvent = vi.fn<NonNullable<CronServiceDeps["enqueueSessionEvent"]>>();
+  const runSessionEvent = vi.fn<NonNullable<CronServiceDeps["runSessionEvent"]>>(
+    params.runSessionEvent ?? (async () => ({ status: "ok" })),
   );
   const finished = createFinishedBarrier();
-  const cron = new CronService({
+  const { cron, state } = createCronServiceWithStateForTest({
     scheduler: params.scheduler,
     nowMs: params.nowMs,
     storePath: params.storePath,
     cronEnabled: true,
     log: params.logger,
     enqueueSystemEvent,
-    requestHeartbeat,
-    requestHeartbeatAndWait,
-    resolveHeartbeatTimeoutMs: params.resolveHeartbeatTimeoutMs,
+    enqueueSessionEvent,
+    runSessionEvent,
     runIsolatedAgentJob: vi.fn(async () => ({ status: "ok" as const })),
     onEvent: (event) => {
       finished.onEvent(event);
       params.onEvent?.(event);
     },
   });
-  return { cron, enqueueSystemEvent, requestHeartbeat, requestHeartbeatAndWait, finished };
+  return {
+    cron,
+    state,
+    enqueueSystemEvent,
+    enqueueSessionEvent,
+    runSessionEvent,
+    finished,
+  };
 }
 
 export async function withCronServiceForTest(
@@ -201,24 +242,33 @@ export async function withCronServiceForTest(
     logger: ReturnType<typeof createNoopLogger>;
     cronEnabled: boolean;
     runIsolatedAgentJob?: CronServiceDeps["runIsolatedAgentJob"];
+    runSessionEvent?: CronServiceDeps["runSessionEvent"];
   },
   run: (context: {
     cron: CronService;
+    state: CronServiceState;
     enqueueSystemEvent: ReturnType<typeof vi.fn>;
-    requestHeartbeat: ReturnType<typeof vi.fn>;
+    enqueueSessionEvent: ReturnType<
+      typeof vi.fn<NonNullable<CronServiceDeps["enqueueSessionEvent"]>>
+    >;
+    runSessionEvent: ReturnType<typeof vi.fn<NonNullable<CronServiceDeps["runSessionEvent"]>>>;
   }) => Promise<void>,
 ): Promise<void> {
   const store = await params.makeStorePath();
   const enqueueSystemEvent = vi.fn();
-  const requestHeartbeat = vi.fn();
-  const cron = new CronService({
+  const enqueueSessionEvent = vi.fn<NonNullable<CronServiceDeps["enqueueSessionEvent"]>>();
+  const runSessionEvent = vi.fn<NonNullable<CronServiceDeps["runSessionEvent"]>>(
+    params.runSessionEvent ?? (async () => ({ status: "ok" })),
+  );
+  const { cron, state } = createCronServiceWithStateForTest({
     scheduler: params.scheduler,
     nowMs: params.nowMs,
     cronEnabled: params.cronEnabled,
     storePath: store.storePath,
     log: params.logger,
     enqueueSystemEvent,
-    requestHeartbeat,
+    enqueueSessionEvent,
+    runSessionEvent,
     runIsolatedAgentJob:
       params.runIsolatedAgentJob ??
       (vi.fn(async () => ({ status: "ok" as const, summary: "done" })) as never),
@@ -226,53 +276,28 @@ export async function withCronServiceForTest(
 
   await cron.start();
   try {
-    await run({ cron, enqueueSystemEvent, requestHeartbeat });
+    await run({
+      cron,
+      state,
+      enqueueSystemEvent,
+      enqueueSessionEvent,
+      runSessionEvent,
+    });
   } finally {
     cron.stop();
     await store.cleanup();
   }
 }
 
-export function createRunningCronServiceState(params: {
-  storePath: string;
-  log: CronServiceDeps["log"];
-  nowMs: () => number;
-  jobs: CronJob[];
-}) {
-  const state = createCronServiceState({
-    scheduler: createTestGatewayScheduler(),
-    cronEnabled: true,
-    storePath: params.storePath,
-    log: params.log,
-    nowMs: params.nowMs,
-    enqueueSystemEvent: vi.fn(),
-    requestHeartbeat: vi.fn(),
-    runIsolatedAgentJob: vi.fn().mockResolvedValue({ status: "ok", summary: "ok" }),
-  });
-  state.running = true;
-  state.activeTimerTicks = 1;
-  state.store = {
-    version: 1,
-    jobs: params.jobs,
-  };
-  return state;
-}
-
-function disposeCronServiceState(state: Pick<CronServiceState, "timer">): void {
-  if (state.timer) {
-    state.timer.cancel();
-    state.timer = null;
-  }
-}
-
 export async function withCronServiceStateForTest<T>(
-  state: Pick<CronServiceState, "timer">,
+  state: CronServiceState,
   run: () => Promise<T>,
 ): Promise<T> {
   try {
     return await run();
   } finally {
-    disposeCronServiceState(state);
+    stop(state);
+    await state.schedulerDrain;
   }
 }
 
@@ -288,7 +313,6 @@ export function createMockCronStateForJobs(params: {
     defaultAgentId: "main",
     nowMs: () => nowMs,
     enqueueSystemEvent: () => {},
-    requestHeartbeat: () => {},
     runIsolatedAgentJob: async () => ({ status: "ok" }),
     log: createNoopLogger(),
   });

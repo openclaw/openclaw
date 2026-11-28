@@ -65,7 +65,7 @@ provider replay checkpoint. If that replay unit cannot fit, the turn fails befor
 handoff with a visible retry instruction. The managed line limit excludes its final
 newline; standalone stdin counts every byte.
 
-Admission fails closed if the envelope is invalid, the credential is rejected,
+Admission is refused if the envelope is invalid, the credential is rejected,
 the bundle or protocol features do not match, or the session and owner epoch are
 no longer current. Missing, duplicate, or unknown tool names also invalidate the
 envelope. Operators should start workers through the cloud worker
@@ -77,6 +77,8 @@ the attempt count, Gateway host and port (or local socket path), and last failur
 `no hello within deadline` means it opened but the Gateway did not complete worker
 admission. A retryable admission rejection retains its reason. These bounded,
 credential-redacted details appear in the node launch journal and turn error.
+Transport reconnects use jittered exponential backoff. A brief successful admission
+does not reset the retry streak or budget; a successful heartbeat clears both.
 
 Container launches revalidate the pinned daemon identity before creating each
 container. This check allows 30 seconds for a busy daemon; a timeout still fails
@@ -114,7 +116,7 @@ Materialized skill files are temporary turn inputs in a private directory separa
 from worker state and its GitHub credentials. Their directory is scoped to the
 session and workspace, and each skill path uses a short readable name with a digest
 of its name, source, and verified content.
-Unchanged deliveries recreate the same paths in deterministic prompt order, so
+Unchanged deliveries recreate the same paths in a fixed prompt order, so
 later turns can reuse the provider's prompt prefix and read references from earlier
 turns without rewriting transcript history. Changed skill content receives a new
 path. The worker holds a filesystem lock through cleanup; another live turn cannot

@@ -101,30 +101,37 @@ Two safety rules apply regardless of thresholds: the last three assistant turns 
 
 Only `toolResult` messages are eligible; normal conversation text is left alone. Use `agents.defaults.contextPruning.tools.{allow,deny}` to scope which tool names are prunable on either path.
 
-## Legacy image cleanup
+<a id="legacy-image-cleanup" />
 
-OpenClaw also builds a separate idempotent replay view for sessions that persist raw image blocks or prompt-hydration media markers in history.
+## Image history
 
-- It preserves the **3 most recent completed turns** byte-for-byte so prompt cache prefixes for recent follow-ups stay stable. This count includes all completed turns, not just image-bearing ones, so text-only turns consume the window too.
-- The window advances only when a new user turn begins, never within a tool loop.
-- In the replay view, older already-processed image blocks from `user` or `toolResult` history are replaced with `[image data removed - already processed by model]`.
-- Older textual media references such as `[media attached: ...]`, `[Image: source: ...]`, and `media://inbound/...` are replaced with `[media reference removed - already processed by model]`. Current-turn attachment markers stay intact so vision models can still hydrate fresh images.
-- The raw session transcript is not rewritten, so history viewers can still render the original message entries and their images.
-- This is separate from normal cache-TTL pruning above. It exists to stop repeated image payloads or stale media refs from busting prompt caches on later turns.
+Image blocks and attachment references stay in retained conversation history as
+new turns arrive. Replacing an already-sent image with a cleanup marker changes
+the prompt prefix and discards the provider's cached context. Compaction and
+explicit history-window limits own removal of old image-bearing turns; there is
+no separate age-based image cleanup. The raw transcript keeps the original
+attachments for history viewers.
 
 ## Smart defaults
 
-The bundled Anthropic plugin auto-configures pruning and heartbeat cadence the first time it resolves an Anthropic (or Claude CLI) auth profile, but only for fields you have not already set explicitly:
+The bundled Anthropic plugin supplies pruning defaults when it resolves an
+Anthropic (or Claude CLI) auth profile, but only for fields you have not set
+explicitly. It also supplies the initial cadence when setup provisions the
+ordinary proactive-check job:
 
-| Auth mode                                | `contextPruning.mode` | `contextPruning.ttl` | `heartbeat.every` |
-| ---------------------------------------- | --------------------- | -------------------- | ----------------- |
-| OAuth/token (including Claude CLI reuse) | `cache-ttl`           | `1h`                 | `1h`              |
-| API key                                  | `cache-ttl`           | `1h`                 | `30m`             |
+| Auth mode                                | `contextPruning.mode` | `contextPruning.ttl` | Initial proactive-check cadence |
+| ---------------------------------------- | --------------------- | -------------------- | ------------------------------- |
+| OAuth/token (including Claude CLI reuse) | `cache-ttl`           | `1h`                 | `1h`                            |
+| API key                                  | `cache-ttl`           | `1h`                 | `30m`                           |
 
-If you set `agents.defaults.contextPruning.mode` or `agents.defaults.heartbeat.every` yourself, OpenClaw does not override them. This auto-default only fires for Anthropic-family auth; other providers get pruning `off` unless you configure it.
+Explicit `agents.defaults.contextPruning.mode` remains authoritative. These
+pruning defaults apply only to Anthropic-family auth; other providers keep
+pruning off unless configured. Job cadence is stored once at provisioning;
+changing auth or provider later does not rewrite the job. Edit it with
+`openclaw automations edit <job-id> --every <duration>`.
 
 The seeded `ttl` applies to client-side pruning. Direct Anthropic API-key requests
-use the token thresholds above while retaining the same heartbeat defaults.
+use the token thresholds above while retaining the same initial job cadence.
 
 ## Enable or disable
 

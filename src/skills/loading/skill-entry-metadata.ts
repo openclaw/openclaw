@@ -2,7 +2,6 @@ import path from "node:path";
 import { normalizeOptionalString } from "@openclaw/normalization-core/string-coerce";
 import { readRootJsonObjectSync } from "../../infra/json-files.js";
 import { resolveSkillInvocationPolicy, resolveSkillManifestMetadata } from "./frontmatter.js";
-import { SKILL_SOURCE_ORIGIN_RELATIVE_PATH } from "./skill-entry-metadata-path.js";
 import { tryRealpath } from "./symlink-targets.js";
 import type { WorkspaceSkillSources } from "./workspace-skill-sources.types.js";
 
@@ -10,7 +9,7 @@ const MAX_SKILL_SOURCE_ORIGIN_BYTES = 16 * 1024;
 
 function readSourceInstallSkillKey(skillDir: string): string | undefined {
   try {
-    const sourceOriginPath = path.join(skillDir, SKILL_SOURCE_ORIGIN_RELATIVE_PATH);
+    const sourceOriginPath = path.join(skillDir, ".openclaw/source-origin.json");
     const parentRealPath = tryRealpath(path.dirname(sourceOriginPath));
     if (!parentRealPath) {
       return undefined;

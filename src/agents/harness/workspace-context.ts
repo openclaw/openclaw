@@ -9,6 +9,7 @@ import {
 } from "../system-prompt-context-files.js";
 import {
   buildAgentWorkspaceInstructionSnapshot,
+  renderAgentWorkspaceInstructionSnapshot,
   selectAgentWorkspaceInstructionFiles,
 } from "./workspace-instructions.js";
 
@@ -38,6 +39,8 @@ export type AgentWorkspaceContext = {
   personaInstructions?: string;
   /** Safe for carriers inherited by delegated agents; excludes selected personal profiles. */
   sharedPersonaInstructions?: string;
+  /** Selected personal profile only, for parent-only carriers. */
+  personalPersonaInstructions?: string;
   promptContextFiles: EmbeddedContextFile[];
   memoryReferenceFiles: EmbeddedContextFile[];
   memoryToolRoutedBootstrapFiles: BootstrapFile[];
@@ -71,13 +74,16 @@ export async function prepareAgentWorkspaceContext(
     : memoryToolRouted
       ? bootstrapFiles.filter((file) => !isRootMemoryPath(file.path, params.workspaceDir))
       : bootstrapFiles;
-  const contextFiles = buildBootstrapContextForFiles(budgetFiles, params).map((file) =>
-    projectContextFile(file, params.projectPath),
-  );
-  const instructionSnapshot = buildAgentWorkspaceInstructionSnapshot(
-    contextFiles,
-    params.workspaceDir,
-  );
+  const instructionFiles: EmbeddedContextFile[] = [];
+  const contextFiles = buildBootstrapContextForFiles(budgetFiles, params).map((file) => {
+    const projected = projectContextFile(file, params.projectPath);
+    // Select against source paths; sandbox paths do not belong to the configured workspace.
+    if (selectAgentWorkspaceInstructionFiles([file], params.workspaceDir).length > 0) {
+      instructionFiles.push(projected);
+    }
+    return projected;
+  });
+  const instructionSnapshot = renderAgentWorkspaceInstructionSnapshot(instructionFiles);
   if (instructionsOnly) {
     return {
       bootstrapFiles,
@@ -103,7 +109,7 @@ export async function prepareAgentWorkspaceContext(
       const basename = contextFileBasename(file.path);
       const nativeProjectDocument = params.nativeProjectDocBasenames
         ? params.nativeProjectDocBasenames.has(basename)
-        : selectAgentWorkspaceInstructionFiles([file], params.workspaceDir).length > 0;
+        : instructionFiles.includes(file);
       return (
         basename.length > 0 &&
         !nativeProjectDocument &&
@@ -144,6 +150,9 @@ export async function prepareAgentWorkspaceContext(
     sharedPersonaInstructions: renderPersonaInstructions(
       personaFiles.filter((file) => file.personalUser !== true),
     ),
+    personalPersonaInstructions: renderPersonaInstructions(
+      personaFiles.filter((file) => file.personalUser === true),
+    ),
     promptContextFiles,
     memoryReferenceFiles,
     memoryToolRoutedBootstrapFiles,
@@ -158,7 +167,7 @@ function renderPersonaInstructions(files: readonly EmbeddedContextFile[]): strin
     return undefined;
   }
   const preamble =
-    "OpenClaw loaded these workspace instruction files from the active agent workspace. They are the canonical definitions of who you are, how you think and work, and the human you work alongside. Internalize and follow them accordingly." +
+    "OpenClaw loaded these workspace instruction files from the active agent workspace. They are the instructions that define who you are, how you think and work, and the human you work alongside. Internalize and follow them accordingly." +
     (files.some((file) => file.personalUser === true)
       ? ` ${PERSONAL_USER_CONTEXT_INSTRUCTIONS}`
       : "");

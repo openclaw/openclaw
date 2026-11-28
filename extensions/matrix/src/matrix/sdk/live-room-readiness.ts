@@ -9,7 +9,6 @@ import { withMatrixSendCurrentness } from "./send-currentness.js";
 type MatrixLiveSyncSnapshot = {
   state: MatrixSyncState | null;
   fromCache: boolean;
-  revision: number;
 };
 
 type MatrixLiveEncryptedRoomParams = {
@@ -44,7 +43,7 @@ export async function withMatrixLiveEncryptedRoom<T>(
     params.assertActive();
     return await probeMatrixLiveEncryptedRoom({ ...params, signal });
   })();
-  // QA owns the admitted callback; joining only readiness avoids a stop/operation self-join.
+  // The caller owns dispatch; joining only readiness avoids a stop/operation self-join.
   params.operations.add(active);
   void active.finally(() => params.operations.delete(active)).catch(noop);
   // STOPPED ends the caller's wait, not the owned non-abortable probe.
@@ -66,7 +65,7 @@ export async function withMatrixLiveEncryptedRoom<T>(
     params.emitter.off("sync.state", onSyncState);
   }
   assertCurrent();
-  return await withMatrixSendCurrentness(owner, assertCurrent, () => run(assertCurrent));
+  return await withMatrixSendCurrentness(owner, assertCurrent, () => run(assertCurrent), signal);
 }
 
 async function probeMatrixLiveEncryptedRoom(
@@ -94,7 +93,6 @@ async function probeMatrixLiveEncryptedRoom(
     for (;;) {
       changed = false;
       assertActive();
-      const sync = params.getSync();
       const room = params.client.getRoom(params.roomId);
       const crypto = params.client.getCrypto();
       const isCurrent = () => {
@@ -105,7 +103,6 @@ async function probeMatrixLiveEncryptedRoom(
           room != null &&
           params.client.getRoom(params.roomId) === room &&
           room.getMyMembership() === "join" &&
-          room.hasEncryptionStateEvent() &&
           crypto != null &&
           params.client.getCrypto() === crypto
         );
@@ -115,15 +112,14 @@ async function probeMatrixLiveEncryptedRoom(
         // a canceled waiter must not let shutdown destroy its crypto backend.
         const encrypted = await crypto.isEncryptionEnabledInRoom(params.roomId);
         assertActive();
-        // A sync during the probe invalidates that result, even if the state
-        // string repeats. Once admitted, healthy live sync is not revocation.
-        if (params.getSync().revision !== sync.revision || !isCurrent()) {
+        if (!isCurrent()) {
           continue;
         }
-        if (encrypted) {
+        const isEncrypted = () => encrypted || room?.hasEncryptionStateEvent() === true;
+        if (isEncrypted()) {
           return () => {
             assertActive();
-            if (!isCurrent()) {
+            if (!isCurrent() || !isEncrypted()) {
               throw new Error("Matrix live encrypted room changed before dispatch; retry the send");
             }
           };

@@ -4,6 +4,8 @@ import {
   SHORT_TERM_PHASE_SIGNAL_NAMESPACE,
   SHORT_TERM_RECALL_NAMESPACE,
   memoryCoreStateReference,
+  memoryCoreWorkspaceEntryKey,
+  openWorkspaceStore,
   readMemoryCoreWorkspaceEntries,
   writeMemoryCoreWorkspaceEntries,
   writeMemoryCoreWorkspaceEntry,
@@ -25,6 +27,21 @@ const SHORT_TERM_STORE_NAMESPACES = {
   recall: SHORT_TERM_RECALL_NAMESPACE,
   phase: SHORT_TERM_PHASE_SIGNAL_NAMESPACE,
 };
+
+// The workspace mutation lock covers source inspection and this atomic cleanup.
+export async function pruneShortTermStore(workspaceDir: string, keys: string[]): Promise<void> {
+  if (keys.length === 0) {
+    return;
+  }
+  const recall = openWorkspaceStore(SHORT_TERM_RECALL_NAMESPACE);
+  const phase = openWorkspaceStore(SHORT_TERM_PHASE_SIGNAL_NAMESPACE);
+  await recall.deleteKeys!(
+    keys.map((key) => memoryCoreWorkspaceEntryKey(workspaceDir, key)),
+    {
+      alsoFrom: phase,
+    },
+  );
+}
 
 export async function readShortTermStore(
   workspaceDir: string,

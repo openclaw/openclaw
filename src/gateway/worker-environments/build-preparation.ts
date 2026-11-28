@@ -65,7 +65,7 @@ export function createWorkerEnvironmentBuildPreparation(options: BuildPreparatio
     if (!project) {
       throw serviceError(
         "invalid_project",
-        "Project must be an accessible local Git checkout root with a HEAD commit",
+        "Project must be an accessible local Git checkout root with committed files",
       );
     }
     authorize?.();
@@ -83,11 +83,13 @@ export function createWorkerEnvironmentBuildPreparation(options: BuildPreparatio
     signal.throwIfAborted();
     authorize?.();
     providerLifecycle.assertPreparedIntentCurrent(profileId, intent);
+    const preparation =
+      intent.profileSnapshot.runtimePreparation ?? intent.profileSnapshot.project?.preparation;
     requireProviderExecutionMode(intent.providerId, executionMode);
     const timeout = providerLifecycle
       .providerFor(intent.providerId)
       .resolvePreparedIdleTimeoutMs?.(requireWorkerProfile(intent.profileSnapshot.settings));
-    if (!intent.preparationKey || !Number.isSafeInteger(timeout) || !timeout || timeout <= 0) {
+    if (!preparation || !Number.isSafeInteger(timeout) || !timeout || timeout <= 0) {
       throw serviceError(
         "invalid_profile",
         "Worker profile does not support prepared workers with an idle timeout",
@@ -103,7 +105,7 @@ export function createWorkerEnvironmentBuildPreparation(options: BuildPreparatio
         profileSnapshot: intent.profileSnapshot,
         preparation: {
           purpose: "build",
-          key: intent.preparationKey,
+          key: preparation.key,
           demandAtMs,
           expiresAtMs: demandAtMs + timeout,
         },
@@ -126,7 +128,7 @@ export function createWorkerEnvironmentBuildPreparation(options: BuildPreparatio
     schedulePreparedRefill();
     return {
       environmentId: record.environmentId,
-      preparationKey: intent.preparationKey,
+      preparationKey: preparation.key,
       reused: record.environmentId !== identity.environmentId,
     };
   };

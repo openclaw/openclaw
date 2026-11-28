@@ -1,4 +1,3 @@
-import { parseStrictPositiveInteger } from "@openclaw/normalization-core/number-coercion";
 import type { Command } from "commander";
 import {
   resolveAgentOperationAgentId,
@@ -10,7 +9,8 @@ import {
   loadAuthProfileStoreForRuntime,
 } from "../../agents/auth-profiles.js";
 import {
-  getRuntimeConfig,
+  captureRuntimeConfigAsyncReader,
+  getRuntimeConfigSnapshot,
   getRuntimeConfigSourceSnapshot,
   setRuntimeConfigSnapshot,
 } from "../../config/config.js";
@@ -20,8 +20,9 @@ import { getProviderEnvVarsCore } from "../../secrets/provider-env-vars.js";
 import { resolveModelRefOverride } from "../../shared/model-ref-override.js";
 import { resolveCommandConfigWithSecrets } from "../command-config-resolution.js";
 import { inheritOptionFromParent } from "../command-options.js";
+import { throwExpectedCliError } from "../expected-cli-error.js";
 import { parseTimeoutMsWithFallback } from "../parse-timeout.js";
-import type { CapabilityTransport } from "./metadata.js";
+import type { CapabilityTransport } from "./result-types.js";
 
 export function resolveTransport(opts: {
   local?: boolean;
@@ -29,7 +30,7 @@ export function resolveTransport(opts: {
   defaultTransport: CapabilityTransport;
 }): CapabilityTransport {
   if (opts.local && opts.gateway) {
-    throw new Error("Pass only one of --local or --gateway.");
+    throwExpectedCliError("Pass only one of --local or --gateway.");
   }
   if (opts.local) {
     return "local";
@@ -51,7 +52,7 @@ export function resolveCapabilityProviderAgentId(
 ): string {
   const requestedAgentId = rawAgentId?.trim();
   if (rawAgentId !== undefined && !requestedAgentId) {
-    throw new Error("--agent must not be blank");
+    throwExpectedCliError("--agent must not be blank");
   }
   const agentId = resolveAgentOperationAgentId(cfg, requestedAgentId, {
     surface,
@@ -102,28 +103,14 @@ export function providerHasGenericConfig(params: {
 export function requireProviderModelOverride(
   raw: string | undefined,
 ): { provider: string; model: string } | undefined {
-  const resolved = resolveModelRefOverride(raw);
-  if (!raw?.trim()) {
+  const { provider, model } = resolveModelRefOverride(raw);
+  if (!model) {
     return undefined;
   }
-  if (!resolved.provider || !resolved.model) {
-    throw new Error("Model overrides must use the form <provider/model>.");
+  if (!provider) {
+    throwExpectedCliError("Model overrides must use the form <provider/model>.");
   }
-  return {
-    provider: resolved.provider,
-    model: resolved.model,
-  };
-}
-
-export function parseOptionalPositiveInteger(raw: unknown, label: string): number | undefined {
-  if (raw === undefined) {
-    return undefined;
-  }
-  const value = parseStrictPositiveInteger(raw);
-  if (value === undefined) {
-    throw new Error(`${label} must be a positive integer`);
-  }
-  return value;
+  return { provider, model };
 }
 
 export function parseOptionalTimeoutMs(raw: string | number | undefined): number | undefined {
@@ -136,16 +123,19 @@ export function parseOptionalTimeoutMs(raw: string | number | undefined): number
 export async function resolveLocalCapabilityRuntimeConfig(params: {
   commandName: string;
   targetIds: Set<string>;
+  localGatewayAbsent?: true;
   allowedPaths?: Set<string>;
   forcedActivePaths?: Set<string>;
   optionalActivePaths?: Set<string>;
   config?: OpenClawConfig;
 }): Promise<OpenClawConfig> {
-  const cfg = params.config ?? getRuntimeConfig();
+  const cfg =
+    params.config ?? (await (getRuntimeConfigSnapshot() ?? captureRuntimeConfigAsyncReader()()));
   const { effectiveConfig } = await resolveCommandConfigWithSecrets({
     config: cfg,
     commandName: params.commandName,
     targetIds: params.targetIds,
+    ...(params.localGatewayAbsent ? { localGatewayAbsent: params.localGatewayAbsent } : {}),
     ...(params.allowedPaths ? { allowedPaths: params.allowedPaths } : {}),
     ...(params.forcedActivePaths ? { forcedActivePaths: params.forcedActivePaths } : {}),
     ...(params.optionalActivePaths ? { optionalActivePaths: params.optionalActivePaths } : {}),

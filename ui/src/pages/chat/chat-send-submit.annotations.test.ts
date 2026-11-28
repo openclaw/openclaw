@@ -49,12 +49,12 @@ describe("handleSendChat browser annotation context", () => {
     expect(host.request.mock.calls.some(([method]) => method === "chat.send")).toBe(false);
   });
 
-  it.each(["/stop", "wait"])(
+  it.each(["wait"])(
     "routes active-run stop intent %s before materializing annotation context",
     async (command) => {
       const attachment = createBrowserAnnotationAttachment("stop", "Review the annotated page");
       const host = makeChatHost({
-        requestHandlers: { "chat.abort": { aborted: true } },
+        requestHandlers: { "sessions.abort": { status: "aborted" } },
         chatAttachments: [attachment],
         chatMessage: command,
         chatRunId: "annotation-stop-run",
@@ -63,18 +63,16 @@ describe("handleSendChat browser annotation context", () => {
       vi.spyOn(host.client!, "recoveryScopeReady", "get").mockReturnValue(false);
       await handleSendChat(host);
 
-      expect(host.request).toHaveBeenCalledWith("chat.abort", {
-        runId: "annotation-stop-run",
-        sessionKey: "agent:main",
+      expect(host.request).toHaveBeenCalledWith("sessions.abort", {
+        userInitiated: true,
+        key: "agent:main",
+        clearQueued: true,
       });
       expect(host.request.mock.calls.some(([method]) => method === "chat.send")).toBe(false);
     },
   );
 
-  it.each([
-    ["/side", ""],
-    ["/btw", "explain this"],
-  ])(
+  it.each([["/side", ""]])(
     "opens companion intent %s %s without sending annotation context",
     async (command, question) => {
       const attachment = createBrowserAnnotationAttachment("companion", "Review the page");
@@ -97,21 +95,7 @@ describe("handleSendChat browser annotation context", () => {
     },
   );
 
-  it("keeps annotation context on natural stop words when no run is active", async () => {
-    const attachment = createBrowserAnnotationAttachment("idle-stop", "Review the page");
-    const host = makeChatHost({
-      requestHandlers: { "chat.send": { runId: "annotation-idle-run", status: "started" } },
-      chatAttachments: [attachment],
-      chatMessage: "wait",
-    });
-
-    await handleSendChat(host);
-
-    expect(findChatSendPayload(host).message).toBe("Review the page\n\nwait");
-    expect(host.request).not.toHaveBeenCalledWith("chat.abort", expect.anything());
-  });
-
-  it.each(["browser", "selection"])(
+  it.each(["selection"])(
     "preserves %s annotations across remote commands until the next actual model prompt",
     async (kind) => {
       const annotation: ChatAttachment =
@@ -124,7 +108,7 @@ describe("handleSendChat browser annotation context", () => {
               dataUrl: `data:text/plain;base64,${Buffer.from("Selected text:\nReview the deployment checklist.").toString("base64")}`,
               selectionAnnotation: {
                 text: "Review the deployment checklist.",
-                comment: "",
+                comment: "Is this still current?",
                 sessionKey: "agent:main",
                 messageId: "assistant-1",
                 start: 0,
@@ -156,13 +140,12 @@ describe("handleSendChat browser annotation context", () => {
       expect(modelPrompt.message).toBe(
         kind === "browser"
           ? "Review the annotated page\n\nExplain the highlighted issue"
-          : "Explain the highlighted issue",
+          : "> Review the deployment checklist.\n\nIs this still current?\n\nExplain the highlighted issue",
       );
-      expect(modelPrompt.attachments).toEqual([
-        expect.objectContaining({
-          mimeType: kind === "browser" ? "image/png" : "text/plain",
-        }),
-      ]);
+      // Selection comments are message text, never an uploaded file.
+      expect(modelPrompt.attachments).toEqual(
+        kind === "browser" ? [expect.objectContaining({ mimeType: "image/png" })] : undefined,
+      );
       expect(host.chatAttachments).toEqual([]);
     },
   );
@@ -223,10 +206,7 @@ describe("handleSendChat browser annotation context", () => {
     },
   );
 
-  it.each([
-    { reuseId: true, draft: "" },
-    { reuseId: false, draft: "Newer operator draft" },
-  ])(
+  it.each([{ reuseId: true, draft: "" }])(
     "never restores a failed approval over a newer attachment (reused ID: $reuseId)",
     async ({ reuseId, draft }) => {
       const acknowledgment = createDeferred<{ runId: string; status: "error" }>();

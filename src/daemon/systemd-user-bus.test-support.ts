@@ -17,6 +17,10 @@ export async function systemdManagerVersionProbe(
   command: string,
   args: string[],
 ): Promise<ExecResult> {
+  // Staging a unit reloads the manager so the next start uses it.
+  if (command === "systemctl" && args.join(" ") === "--user daemon-reload") {
+    return { code: 0, termination: "exit", stdout: "", stderr: "" };
+  }
   expect(command).toBe("busctl");
   expect(args).toEqual([
     "--user",

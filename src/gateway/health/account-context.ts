@@ -100,7 +100,6 @@ export async function resolveHealthAccountContext(params: {
       plugin: params.plugin,
       account,
       cfg: params.cfg,
-      readAccountConfiguredField: true,
     });
   } catch (error) {
     diagnostics.push(

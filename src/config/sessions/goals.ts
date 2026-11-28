@@ -9,7 +9,8 @@ import {
   buildUpdatedSessionGoalObjective,
   buildUpdatedSessionGoalStatus,
 } from "./goals-transitions.js";
-import { loadSessionEntryReadOnly, patchSessionEntryCore } from "./session-accessor.js";
+import { patchSessionEntryCore } from "./session-accessor.js";
+import { withSessionEntryReadOnlyInWorker } from "./session-entry-read-runtime.js";
 import type { SessionEntry, SessionGoal, SessionGoalStatus } from "./types.js";
 
 type SessionGoalSnapshot = {
@@ -73,7 +74,7 @@ export function formatSessionGoalStatus(goal: SessionGoal | undefined): string {
     goal.tokenBudget === undefined
       ? ""
       : `Token budget: ${formatTokenCount(goal.tokensUsed)}/${formatTokenCount(goal.tokenBudget)}`;
-  const note = goal.lastStatusNote ? `Note: ${goal.lastStatusNote}` : "";
+  const note = goal.lastStatusNote ? `Last status note: ${goal.lastStatusNote}` : "";
   const commands = resolveGoalCommandHint(goal.status);
   return [
     "Goal",
@@ -81,6 +82,7 @@ export function formatSessionGoalStatus(goal: SessionGoal | undefined): string {
     `Objective: ${goal.objective}`,
     `Tokens used: ${formatTokenCount(goal.tokensUsed)}`,
     ...(budget ? [budget] : []),
+    `Settled automatic turns: ${goal.continuationTurns}`,
     ...(note ? [note] : []),
     "",
     `Commands: ${commands}`,
@@ -97,7 +99,7 @@ function resolveGoalCommandHint(status: SessionGoalStatus): string {
     case "budget_limited":
       return "/goal resume, /goal edit <objective>, /goal clear";
     case "complete":
-      return "/goal clear";
+      return "/goal resume, /goal clear";
   }
   return "/goal";
 }
@@ -108,20 +110,27 @@ export async function getSessionGoal(
   const now = nowMs(options.now);
   if (options.persist === false) {
     // Status rendering should not write incidental budget/baseline adoption unless callers opt in.
-    const entry =
-      loadSessionEntryReadOnly({ sessionKey: options.sessionKey, storePath: options.storePath }) ??
-      options.fallbackEntry;
-    const projected = entry
-      ? resolveSessionGoalDisplayState(entry, now, { adoptFreshBaseline: false })
-      : undefined;
-    return projected ? { status: "found", goal: projected } : { status: "missing" };
+    return withSessionEntryReadOnlyInWorker(
+      { sessionKey: options.sessionKey, storePath: options.storePath },
+      () => {},
+      async (read) => {
+        if (!read.ok) {
+          throw read.error;
+        }
+        const entry = read.value ?? options.fallbackEntry;
+        const goal = entry
+          ? resolveSessionGoalDisplayState(entry, now, { adoptFreshBaseline: false })
+          : undefined;
+        return goal ? { status: "found", goal } : { status: "missing" };
+      },
+    );
   }
   let goal: SessionGoal | undefined;
   const result = await patchSessionEntryCore(
     { sessionKey: options.sessionKey, storePath: options.storePath },
     (entry) => {
       const accounted = accountSessionGoalUsage(entry, now);
-      goal = accounted ? { ...accounted } : undefined;
+      goal = accounted;
       if (!accounted || JSON.stringify(accounted) === JSON.stringify(entry.goal)) {
         return null;
       }

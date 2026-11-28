@@ -12,6 +12,7 @@ type WidgetSandboxHostOptions = {
   frame: HTMLIFrameElement;
   sandboxOrigin: string;
   sandboxUrl: string;
+  sandboxShellHtml?: string;
   documentKey: string;
   /** Restricts the untrusted inner document, not the trusted transport shell. */
   allowScripts?: boolean;
@@ -53,6 +54,10 @@ export class WidgetSandboxHost {
 
   get loaded(): boolean {
     return this.documentLoaded;
+  }
+
+  get rendered(): boolean {
+    return this.loaded && this.renderId === null;
   }
 
   update(options: WidgetSandboxHostOptions): void {
@@ -103,6 +108,21 @@ export class WidgetSandboxHost {
     if (event.source !== this.frame.contentWindow || event.origin !== this.options.sandboxOrigin) {
       return;
     }
+    if (
+      event.data?.method === "ui/notifications/sandbox-bootstrap-ready" &&
+      event.data?.params?.version === 1 &&
+      this.options.sandboxShellHtml !== undefined
+    ) {
+      this.frame.contentWindow?.postMessage(
+        {
+          jsonrpc: "2.0",
+          method: "ui/notifications/sandbox-bootstrap-shell",
+          params: { html: this.options.sandboxShellHtml },
+        },
+        this.options.sandboxOrigin,
+      );
+      return;
+    }
     if (event.data?.method === "ui/notifications/sandbox-resource-loaded") {
       if (this.renderId && event.data?.params?.renderId === this.renderId) {
         this.clearReadyTimeout();
@@ -142,13 +162,11 @@ export class WidgetSandboxHost {
   }
 
   private clearReadyTimeout(): void {
-    if (this.slowTimer !== null) {
-      window.clearTimeout(this.slowTimer);
-      this.slowTimer = null;
-    }
-    if (this.readyTimer !== null) {
-      window.clearTimeout(this.readyTimer);
-      this.readyTimer = null;
+    for (const key of ["slowTimer", "readyTimer"] as const) {
+      if (this[key] !== null) {
+        window.clearTimeout(this[key]);
+        this[key] = null;
+      }
     }
   }
 
@@ -223,12 +241,7 @@ export class WidgetSandboxHost {
 
   private async loadDocument(): Promise<void> {
     const { loadDocument } = this.options;
-    if (
-      this.loaded ||
-      this.pendingDocument !== null ||
-      this.activeLoad !== null ||
-      !this.frame.contentWindow
-    ) {
+    if (this.loaded || this.pendingDocument !== null || this.activeLoad !== null) {
       return;
     }
     const controller = new AbortController();

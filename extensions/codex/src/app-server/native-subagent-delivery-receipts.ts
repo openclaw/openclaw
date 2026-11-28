@@ -1,7 +1,5 @@
 import { embeddedAgentLog } from "openclaw/plugin-sdk/agent-harness-runtime";
-import { readStringField as readString } from "openclaw/plugin-sdk/string-coerce-runtime";
-import { codexNativeSubagentNotifications } from "./native-subagent-notification.js";
-import { isJsonObject, type CodexServerNotification } from "./protocol.js";
+import type { CodexNativeSubagentNotification } from "./native-subagent-notification.js";
 
 type ReceiptParent = Readonly<{
   parentThreadId: string;
@@ -46,7 +44,7 @@ export function registerCodexNativeSubagentReceiptAlias<Parent extends ReceiptPa
   return known.deliveryReceipts.addAlias(childThreadId, agentPath);
 }
 
-type Receipt = { agentPath: string; result?: string };
+type Receipt = { agentPath: string; result?: string; contextual: boolean };
 type Outcome = {
   paths: Set<string>;
   result?: string;
@@ -60,29 +58,13 @@ export class CodexNativeSubagentDeliveryReceipts {
   private readonly pending: Receipt[] = [];
   private readonly outcomes = new Map<string, Outcome>();
 
-  observe(notification: CodexServerNotification): string[] {
-    const params = isJsonObject(notification.params) ? notification.params : undefined;
-    const item = isJsonObject(params?.item) ? params.item : undefined;
-    if (!item) {
-      return [];
-    }
-    const nativeResults = codexNativeSubagentNotifications.fromNotification(notification);
-    for (const agentPath of codexNativeSubagentNotifications.deliveredAgentPaths(notification)) {
-      const id = `${notification.method}:${readString(item, "id") ?? JSON.stringify(item)}:${agentPath}`;
+  observe(receipts: CodexNativeSubagentNotification["receipts"], contextual = false): string[] {
+    for (const { id, agentPath, result } of receipts) {
       if (this.seen.has(id)) {
         continue;
       }
       this.seen.add(id);
-      let result = nativeResults.find((value) => value.agentPath === agentPath)?.result;
-      if (item.type === "agent_message" && Array.isArray(item.content)) {
-        const part = item.content[0];
-        const text = isJsonObject(part) ? readString(part, "text") : undefined;
-        result = text?.split("\nPayload:\n").slice(1).join("\nPayload:\n");
-      } else if (isJsonObject(item.agentsStates)) {
-        const child = item.agentsStates[agentPath];
-        result = isJsonObject(child) ? readString(child, "message") : result;
-      }
-      this.pending.push({ agentPath, result: receiptResultKey(result) });
+      this.pending.push({ agentPath, contextual, result: receiptResultKey(result) });
     }
     return this.match();
   }
@@ -141,23 +123,21 @@ export class CodexNativeSubagentDeliveryReceipts {
       );
       // Raw native receipts have no child turn ID. Prefer the oldest matching
       // result; a delayed predecessor receipt must never acknowledge its successor.
-      let match: [string, Outcome] | undefined;
-      for (const candidate of matches) {
-        const outcome = candidate[1];
-        if (
-          (outcome.result !== undefined && outcome.result === receipt.result) ||
-          outcome.receiptResults.has(receipt.result)
-        ) {
-          match = candidate;
-          break;
-        }
-        if (outcome.result === undefined) {
-          // An unresolved predecessor can still own this receipt.
-          match = matches.length === 1 ? candidate : undefined;
-          break;
-        }
-      }
-      if (!match) {
+      const match = matches.find(
+        ([, outcome]) =>
+          outcome.result === undefined ||
+          outcome.result === receipt.result ||
+          outcome.receiptResults.has(receipt.result),
+      );
+      // An unresolved predecessor can still own this receipt unless its exact
+      // rendering was already accepted before the successor appeared.
+      const ambiguous =
+        match &&
+        match[1].result === undefined &&
+        !match[1].receiptResults.has(receipt.result) &&
+        // A later parent can receive a contextual notice for an already retired predecessor.
+        (receipt.contextual || matches.length > 1);
+      if (!match || ambiguous) {
         index += 1;
         continue;
       }
@@ -176,7 +156,7 @@ export class CodexNativeSubagentDeliveryReceipts {
 
 export function observeCodexNativeSubagentDeliveryReceipts<Parent extends ReceiptParent>(params: {
   state: Parent;
-  notification: CodexServerNotification;
+  notification: CodexNativeSubagentNotification;
   knownChildren: Iterable<KnownReceiptChild<Parent>>;
   applyReceipts: (runIds: readonly string[]) => void;
 }): void {
@@ -191,7 +171,7 @@ export function observeCodexNativeSubagentDeliveryReceipts<Parent extends Receip
     }
   }
   for (const tracker of trackers) {
-    applyReceipts(tracker.observe(notification));
+    applyReceipts(tracker.observe(notification.receipts, notification.completions.length > 0));
   }
 }
 

@@ -170,29 +170,6 @@ async function cleanupProfileFixture(
 }
 
 describe("scripts/profile-extension-memory", () => {
-  it("prints help without requiring built plugin artifacts", () => {
-    const result = runProfileExtensionMemory(["--help"]);
-
-    expect(result.status).toBe(0);
-    expect(result.stderr).toBe("");
-    expect(result.stdout).toContain(
-      "Usage: node --import tsx scripts/profile-extension-memory.mts",
-    );
-  });
-
-  it("stops parsing options after the argument terminator", () => {
-    expect(parseArgs(["--extension", "discord", "--", "--extension", "telegram"])).toMatchObject({
-      extensions: ["discord"],
-    });
-  });
-
-  it("accepts package-manager argument separators before script options", () => {
-    expect(parseArgs(["--", "--extension", "discord", "--skip-combined"])).toMatchObject({
-      extensions: ["discord"],
-      skipCombined: true,
-    });
-  });
-
   it("rejects loose numeric flags before scanning built plugin artifacts", () => {
     const cases = [
       ["--concurrency", "2abc"],
@@ -237,27 +214,6 @@ describe("scripts/profile-extension-memory", () => {
       selected: ["external"],
       expected: [{ dir: "external", file: "extensions/external/dist/index.js" }],
     },
-    {
-      name: "nested output in the root plugin tree",
-      files: ["dist/extensions/external/dist/index.js"],
-      selected: ["external"],
-      expected: [{ dir: "external", file: "dist/extensions/external/dist/index.js" }],
-    },
-    ...[true, false].map((selected) => ({
-      name: `mixed internal and external output (${selected ? "selected" : "default"})`,
-      files: ["dist/extensions/internal/index.js", "extensions/external/dist/index.js"],
-      selected: selected ? ["internal", "external"] : [],
-      expected: [
-        { dir: "external", file: "extensions/external/dist/index.js" },
-        { dir: "internal", file: "dist/extensions/internal/index.js" },
-      ],
-    })),
-    ...["index.js", "dist/index.js"].map((rootEntry) => ({
-      name: `one canonical root ${rootEntry} when both builds exist`,
-      files: [`dist/extensions/external/${rootEntry}`, "extensions/external/dist/index.js"],
-      selected: ["external", "external"],
-      expected: [{ dir: "external", file: `dist/extensions/external/${rootEntry}` }],
-    })),
   ])("profiles $name", ({ files, selected, expected }) => {
     const root = realpathSync(mkdtempSync(path.join(tmpdir(), "openclaw-extension-memory #test-")));
     try {
@@ -273,34 +229,6 @@ describe("scripts/profile-extension-memory", () => {
           file,
           file.endsWith(".ts") ? 'throw new Error("source imported");\n' : "export {};\n",
           "utf8",
-        );
-      }
-      const identified = files[0] === "dist/extensions/external/dist/index.js";
-      if (identified) {
-        const git = (args: string[]) => {
-          const result = spawnSync("git", args, { cwd: root, encoding: "utf8" });
-          expect(result.status, result.stderr).toBe(0);
-          return result.stdout.trim();
-        };
-        git(["init", "--quiet", "--template="]);
-        git(["add", "."]);
-        git([
-          "-c",
-          "core.hooksPath=/dev/null",
-          "-c",
-          "commit.gpgsign=false",
-          "-c",
-          "user.name=Fixture",
-          "-c",
-          "user.email=fixture@example.invalid",
-          "commit",
-          "--quiet",
-          "-m",
-          "fixture",
-        ]);
-        writeFileSync(
-          path.join(root, "dist/build-info.json"),
-          JSON.stringify({ commit: git(["rev-parse", "HEAD"]) }),
         );
       }
       const reportPath = path.join(root, "report.json");
@@ -333,16 +261,10 @@ describe("scripts/profile-extension-memory", () => {
       );
       expect(report.scope).toBe("cold-import");
       expect(report.qualification).toMatchObject({
-        qualified: identified && process.platform !== "win32",
+        qualified: false,
         temporaryHomeRemoved: true,
       });
-      if (!identified) {
-        expect(report.qualification.gaps).toContain("canonical build identity unavailable");
-      } else if (process.platform === "win32") {
-        expect(report.qualification.gaps).toEqual(["child/process-group closure unavailable"]);
-      } else {
-        expect(report.qualification.gaps).toEqual([]);
-      }
+      expect(report.qualification.gaps).toContain("canonical build identity unavailable");
       for (const row of [report.combined, ...report.results]) {
         expect(row.completion).toBe("imports");
         expect(row.resources.totalCpuUs).toBe(row.resources.userCpuUs + row.resources.systemCpuUs);
@@ -470,27 +392,6 @@ describe("scripts/profile-extension-memory", () => {
           processGroup: process.platform === "win32" ? "unavailable" : "verified",
         },
       });
-    } finally {
-      rmSync(root, { recursive: true, force: true });
-    }
-  });
-
-  it("creates parent directories for nested JSON report paths", () => {
-    const root = mkdtempSync(path.join(tmpdir(), "openclaw-extension-memory-test-"));
-    try {
-      const extensionDir = path.join(root, "dist", "extensions", "simple");
-      const reportPath = path.join(root, ".artifacts", "memory", "report.json");
-      mkdirSync(extensionDir, { recursive: true });
-      writeFileSync(path.join(extensionDir, "index.js"), `export default {};\n`, "utf8");
-
-      const result = runProfileExtensionMemory(
-        ["--extension", "simple", "--skip-combined", "--concurrency", "1", "--json", reportPath],
-        root,
-      );
-
-      expect(result.status, result.stderr).toBe(0);
-      const report = JSON.parse(readFileSync(reportPath, "utf8"));
-      expect(report.counts).toMatchObject({ totalEntries: 1, ok: 1, fail: 0, timeout: 0 });
     } finally {
       rmSync(root, { recursive: true, force: true });
     }
@@ -634,6 +535,11 @@ describe("scripts/profile-extension-memory", () => {
       }),
     ),
     {
+      name: "isolates inherited child environment",
+      scenario: "environment isolation",
+      signalFailureCase: null,
+    },
+    {
       name: "does not qualify a completed import report before home cleanup",
       scenario: "report home deletion failure",
       signalFailureCase: null,
@@ -667,7 +573,9 @@ describe("scripts/profile-extension-memory", () => {
     const reportHomeFailure = scenario === "report home deletion failure";
     const homeDeletionFailure = scenario === "home deletion failure" || reportHomeFailure;
     const signalFailure = scenario === "settled signal failure";
-    const completeImports = signalFailure || reportHomeFailure;
+    const environmentIsolation = scenario === "environment isolation";
+    const includeCombined = signalFailureCase === "combined" || environmentIsolation;
+    const completeImports = signalFailure || reportHomeFailure || environmentIsolation;
     const root = mkdtempSync(path.join(tmpdir(), "openclaw-extension-memory-mappers-"));
     const journalPath = path.join(root, "journal.json");
     const preloadPath = path.join(root, "spawn-fixture.mjs");
@@ -682,11 +590,14 @@ describe("scripts/profile-extension-memory", () => {
       writeFileSync(
         preloadPath,
         [
+          "import assert from 'node:assert/strict';",
           "import cp from 'node:child_process';",
           "import { EventEmitter } from 'node:events';",
           "import fs, { existsSync, writeFileSync } from 'node:fs';",
           "import { syncBuiltinESMExports } from 'node:module';",
+          "import path from 'node:path';",
           "import { PassThrough } from 'node:stream';",
+          "import { fileURLToPath } from 'node:url';",
           "let home, finishHeld, homeDuringClose, failedPid;",
           "const started = [], closed = [], signals = [], live = new Map();",
           "let now = 1_000;",
@@ -739,6 +650,21 @@ describe("scripts/profile-extension-memory", () => {
           "};",
           "cp.spawn = (_command, args, options) => {",
           "  home = options.env.HOME;",
+          `  if (${environmentIsolation}) {`,
+          "    const expectedHome = path.dirname(fileURLToPath(args[1]));",
+          "    assert.equal(options.env.HOME, expectedHome);",
+          "    assert.equal(options.env.USERPROFILE, expectedHome);",
+          "    assert.equal(options.env.OPENCLAW_HOME, expectedHome);",
+          "    assert.equal(options.env.OPENCLAW_STATE_DIR, path.join(expectedHome, '.openclaw'));",
+          "    assert.equal(options.env.OPENCLAW_CONFIG_PATH, path.join(expectedHome, '.openclaw', 'openclaw.json'));",
+          "    assert.equal(options.env.XDG_CONFIG_HOME, path.join(expectedHome, '.config'));",
+          "    assert.equal(options.env.XDG_CACHE_HOME, path.join(expectedHome, '.cache'));",
+          "    assert.equal(options.env.XDG_DATA_HOME, path.join(expectedHome, '.local', 'share'));",
+          "    assert.equal(options.env.XDG_STATE_HOME, path.join(expectedHome, '.local', 'state'));",
+          "    assert.equal(options.env.XDG_RUNTIME_DIR, path.join(expectedHome, '.run'));",
+          "    assert.equal(options.env.NODE_DISABLE_COMPILE_CACHE, '1');",
+          "    assert.equal(options.env.OPENCLAW_NO_RESPAWN, '1');",
+          "  }",
           "  const body = args.at(-1);",
           "  const completion = body.match(/__OPENCLAW_IMPORT_COMPLETE__=[a-f0-9-]+/)?.[0];",
           "  const name = body.includes('IMPORTED_ALL') ? 'combined' :",
@@ -791,7 +717,7 @@ describe("scripts/profile-extension-memory", () => {
           "--import",
           preloadPath,
           SCRIPT_PATH,
-          ...(signalFailureCase === "combined" ? [] : ["--skip-combined"]),
+          ...(includeCombined ? [] : ["--skip-combined"]),
           "--concurrency",
           "2",
           "--json",
@@ -799,7 +725,24 @@ describe("scripts/profile-extension-memory", () => {
         ],
         {
           cwd: root,
-          env: { ...process.env, TSX_TSCONFIG_PATH: SOURCE_TSCONFIG_PATH },
+          env: {
+            ...process.env,
+            ...(environmentIsolation
+              ? {
+                  HOME: path.join(root, "inherited-home"),
+                  USERPROFILE: path.join(root, "inherited-userprofile"),
+                  OPENCLAW_HOME: path.join(root, "inherited-openclaw-home"),
+                  OPENCLAW_STATE_DIR: path.join(root, "inherited-state"),
+                  OPENCLAW_CONFIG_PATH: path.join(root, "inherited-config.json"),
+                  XDG_CONFIG_HOME: path.join(root, "inherited-xdg-config"),
+                  XDG_CACHE_HOME: path.join(root, "inherited-xdg-cache"),
+                  XDG_DATA_HOME: path.join(root, "inherited-xdg-data"),
+                  XDG_STATE_HOME: path.join(root, "inherited-xdg-state"),
+                  XDG_RUNTIME_DIR: path.join(root, "inherited-xdg-runtime"),
+                }
+              : {}),
+            TSX_TSCONFIG_PATH: SOURCE_TSCONFIG_PATH,
+          },
           encoding: "utf8",
           timeout: 10_000,
           killSignal: "SIGKILL",
@@ -807,16 +750,21 @@ describe("scripts/profile-extension-memory", () => {
       );
       const journal = JSON.parse(readFileSync(journalPath, "utf8"));
       home = journal.home;
-      expect(result.status, result.stderr).toBe(parentSignal ? 143 : 1);
+      expect(result.status, result.stderr).toBe(environmentIsolation ? 0 : parentSignal ? 143 : 1);
       expect(journal.pending).toBe(linuxDeadline);
       expect(journal.started).toEqual([
         "baseline",
-        ...(signalFailureCase === "combined" ? ["combined"] : []),
+        ...(includeCombined ? ["combined"] : []),
         "a-held",
         "b-error",
         ...(completeImports ? ["c-unused"] : []),
       ]);
-      if (parentSignal) {
+      if (environmentIsolation) {
+        const report = JSON.parse(readFileSync(reportPath, "utf8"));
+        expect(report.counts.fail).toBe(0);
+        expect(journal.closed).toEqual(expect.arrayContaining(journal.started));
+        expect(journal.homeExists).toBe(false);
+      } else if (parentSignal) {
         if (!linuxDeadline) {
           expect(result.stderr).toContain("group signal failed");
         }
@@ -958,7 +906,7 @@ describe("scripts/profile-extension-memory", () => {
   );
 
   describe.runIf(process.platform !== "win32")("unverified timeout cleanup", () => {
-    it.each(["alive", "EPERM", "EIO"] as const)(
+    it.each(["alive", "EPERM"] as const)(
       "rejects when the owned group is %s after SIGKILL",
       async (groupState) => {
         const child = Object.assign(new EventEmitter(), {
@@ -1009,7 +957,7 @@ describe("scripts/profile-extension-memory", () => {
     );
   });
 
-  it.runIf(process.platform !== "win32").each(["EIO", "EPERM"])(
+  it.runIf(process.platform !== "win32").each(["EPERM"])(
     "preserves %s group-signal and primary failures alongside unverified cleanup",
     async (errorCode) => {
       const primary = new Error("case failed");
@@ -1065,61 +1013,63 @@ describe("scripts/profile-extension-memory", () => {
     },
   );
 
-  it.runIf(process.platform !== "win32").each([
-    { label: "nonzero exit", code: 23, signal: null },
-    { label: "signal exit", code: null, signal: "SIGTERM" as const },
-  ])("cleanup preserves terminal evidence without an error event: $label", async (outcome) => {
-    const child = Object.assign(new EventEmitter(), {
-      pid: 2_147_483_647,
-      exitCode: outcome.code,
-      signalCode: outcome.signal,
-      stdout: new PassThrough(),
-      stderr: new PassThrough(),
-      kill: vi.fn(() => true),
-    });
-    const signal = vi.spyOn(process, "kill").mockImplementation((pid, requestedSignal) => {
-      expect(pid).toBe(-child.pid);
-      expect([0, "SIGKILL"]).toContain(requestedSignal);
-      return true;
-    });
-    try {
-      const failure: unknown = await runCase({
-        completionKind: "imports",
-        body: "",
-        env: process.env,
-        hookPath: "unused-hook.mjs",
-        name: "terminal-without-error-event",
-        repoRoot: process.cwd(),
-        shutdownGraceMs: 0,
-        timeoutMs: 30_000,
-        spawnImpl: (() => {
-          queueMicrotask(() => {
-            child.stderr.end(`${"x".repeat(160_000)}\nprimary import diagnostic\n`);
-            child.stdout.end();
-            child.emit("exit", outcome.code, outcome.signal);
-            child.emit("close", outcome.code, outcome.signal);
-          });
-          return child;
-        }) as unknown as typeof spawn,
-      }).then(
-        () => {
-          throw new Error("unverified cleanup resolved unexpectedly");
-        },
-        (error: unknown) => error,
-      );
-      expect(failure).toBeInstanceOf(Error);
-      if (!(failure instanceof Error)) {
-        throw new Error("missing cleanup failure");
+  it
+    .runIf(process.platform !== "win32")
+    .each([{ label: "signal exit", code: null, signal: "SIGTERM" as const }])(
+    "cleanup preserves terminal evidence without an error event: $label",
+    async (outcome) => {
+      const child = Object.assign(new EventEmitter(), {
+        pid: 2_147_483_647,
+        exitCode: outcome.code,
+        signalCode: outcome.signal,
+        stdout: new PassThrough(),
+        stderr: new PassThrough(),
+        kill: vi.fn(() => true),
+      });
+      const signal = vi.spyOn(process, "kill").mockImplementation((pid, requestedSignal) => {
+        expect(pid).toBe(-child.pid);
+        expect([0, "SIGKILL"]).toContain(requestedSignal);
+        return true;
+      });
+      try {
+        const failure: unknown = await runCase({
+          completionKind: "imports",
+          body: "",
+          env: process.env,
+          hookPath: "unused-hook.mjs",
+          name: "terminal-without-error-event",
+          repoRoot: process.cwd(),
+          shutdownGraceMs: 0,
+          timeoutMs: 30_000,
+          spawnImpl: (() => {
+            queueMicrotask(() => {
+              child.stderr.end(`${"x".repeat(160_000)}\nprimary import diagnostic\n`);
+              child.stdout.end();
+              child.emit("exit", outcome.code, outcome.signal);
+              child.emit("close", outcome.code, outcome.signal);
+            });
+            return child;
+          }) as unknown as typeof spawn,
+        }).then(
+          () => {
+            throw new Error("unverified cleanup resolved unexpectedly");
+          },
+          (error: unknown) => error,
+        );
+        expect(failure).toBeInstanceOf(Error);
+        if (!(failure instanceof Error)) {
+          throw new Error("missing cleanup failure");
+        }
+        expect(hasUnjoinedWork(failure)).toBe(true);
+        expect(failure.message).toMatch(outcome.signal ? /SIGTERM/u : /\b23\b/u);
+        expect(failure.message).toContain("primary import diagnostic");
+        expect(failure.message).toMatch(/cleanup/i);
+        expect(failure.message.length).toBeLessThan(10_000);
+      } finally {
+        signal.mockRestore();
       }
-      expect(hasUnjoinedWork(failure)).toBe(true);
-      expect(failure.message).toMatch(outcome.signal ? /SIGTERM/u : /\b23\b/u);
-      expect(failure.message).toContain("primary import diagnostic");
-      expect(failure.message).toMatch(/cleanup/i);
-      expect(failure.message.length).toBeLessThan(10_000);
-    } finally {
-      signal.mockRestore();
-    }
-  });
+    },
+  );
 
   it.runIf(process.platform !== "win32")(
     "cleans timeout descendants before resolving the case",

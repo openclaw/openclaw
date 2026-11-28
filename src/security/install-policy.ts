@@ -4,6 +4,7 @@ import type { OpenClawConfig, SecurityConfig } from "../config/types.openclaw.js
 import { formatErrorMessage } from "../infra/errors.js";
 import { runCommandWithTimeout } from "../process/exec.js";
 import { normalizePositiveInt, normalizePositiveTimerMs } from "../secrets/shared.js";
+import type { SkillInstallSpec } from "../skills/types.js";
 import { resolveUserPath } from "../utils.js";
 import { resolveRuntimeServiceVersion } from "../version.js";
 import { inspectPathPermissions, safeStat } from "./audit-fs.js";
@@ -84,21 +85,7 @@ type InstallPolicyRequest = {
   };
   skill?: {
     installId: string;
-    installSpec?: {
-      id?: string;
-      kind: "brew" | "node" | "go" | "uv" | "download";
-      label?: string;
-      bins?: string[];
-      os?: string[];
-      formula?: string;
-      package?: string;
-      module?: string;
-      url?: string;
-      archive?: string;
-      extract?: boolean;
-      stripComponents?: number;
-      targetDir?: string;
-    };
+    installSpec?: Omit<SkillInstallSpec, "sha256">;
   };
   plugin?: {
     pluginId: string;
@@ -382,8 +369,8 @@ export async function runInstallPolicy(params: {
   let config = params.config;
   if (!config) {
     try {
-      const { getRuntimeConfig } = await import("../config/io.js");
-      config = getRuntimeConfig({ skipPluginValidation: true });
+      const { captureRuntimeConfigAsyncReader } = await import("../config/io.js");
+      config = await captureRuntimeConfigAsyncReader({ skipPluginValidation: true })();
     } catch (err) {
       return failClosed(`could not load OpenClaw config (${formatErrorMessage(err)})`);
     }

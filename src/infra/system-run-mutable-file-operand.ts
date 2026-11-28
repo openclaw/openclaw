@@ -1,4 +1,3 @@
-/** Detects mutable file operands in approved commands. */
 import path from "node:path";
 import { expectDefined } from "@openclaw/normalization-core";
 import {
@@ -7,6 +6,7 @@ import {
 } from "@openclaw/normalization-core/string-coerce";
 import { splitShellArgs } from "../utils/shell-argv.js";
 import { detectInlineEvalInSegments } from "./command-analysis/risks.js";
+import { isEnvAssignmentToken } from "./command-carriers.js";
 import { isInterpreterLikeSafeBin } from "./exec-safe-bin-runtime-policy.js";
 import {
   POSIX_PARSEABLE_SHELL_WRAPPERS,
@@ -15,6 +15,7 @@ import {
   unwrapKnownDispatchWrapperInvocation,
   unwrapKnownShellMultiplexerInvocation,
 } from "./exec-wrapper-resolution.js";
+import { resolveExecWrapperTrustPlan } from "./exec-wrapper-trust-plan.js";
 import { parseInlineOptionToken } from "./inline-option-token.js";
 import {
   normalizePackageManagerExecToken,
@@ -22,6 +23,7 @@ import {
   PNPM_DLX_OPTIONS_WITH_VALUE,
   PNPM_FLAG_OPTIONS,
   PNPM_OPTIONS_WITH_VALUE,
+  resolveKnownPackageManagerExecInvocation,
   unwrapKnownPackageManagerExecInvocation,
 } from "./package-manager-exec-wrapper.js";
 import {
@@ -31,11 +33,11 @@ import {
   NODE_OPTIONS_WITH_FILE_VALUE,
 } from "./system-run-mutable-file-options.js";
 import {
-  isLikelyScriptLikePathSync,
+  isLikelyScriptLikePath,
   looksLikeExplicitPathToken,
   looksLikePathToken,
-  pathLooksMutableForShellPayloadSync,
-  resolvesToExistingFileSync,
+  pathLooksMutableForShellPayload,
+  resolvesToExistingFile,
 } from "./system-run-mutable-file-policy.js";
 import {
   hasPerlUnsafeApprovalFlag,
@@ -81,28 +83,26 @@ function unwrapArgvForMutableOperand(argv: string[]): {
   let baseIndex = 0;
   let opaqueMultiplexerSeen = false;
   while (true) {
+    let next: string[] | null;
     const dispatchUnwrap = unwrapKnownDispatchWrapperInvocation(current);
     if (dispatchUnwrap.kind === "unwrapped") {
-      baseIndex += current.length - dispatchUnwrap.argv.length;
-      current = dispatchUnwrap.argv;
-      continue;
-    }
-    const shellMultiplexerUnwrap = unwrapKnownShellMultiplexerInvocation(current);
-    if (shellMultiplexerUnwrap.kind === "unwrapped") {
-      if (OPAQUE_MUTABLE_SCRIPT_RUNNERS.has(shellMultiplexerUnwrap.wrapper)) {
-        opaqueMultiplexerSeen = true;
+      next = dispatchUnwrap.argv;
+    } else {
+      const shellMultiplexerUnwrap = unwrapKnownShellMultiplexerInvocation(current);
+      if (shellMultiplexerUnwrap.kind === "unwrapped") {
+        if (OPAQUE_MUTABLE_SCRIPT_RUNNERS.has(shellMultiplexerUnwrap.wrapper)) {
+          opaqueMultiplexerSeen = true;
+        }
+        next = shellMultiplexerUnwrap.argv;
+      } else {
+        next = unwrapKnownPackageManagerExecInvocation(current);
       }
-      baseIndex += current.length - shellMultiplexerUnwrap.argv.length;
-      current = shellMultiplexerUnwrap.argv;
-      continue;
     }
-    const packageManagerUnwrap = unwrapKnownPackageManagerExecInvocation(current);
-    if (packageManagerUnwrap) {
-      baseIndex += current.length - packageManagerUnwrap.length;
-      current = packageManagerUnwrap;
-      continue;
+    if (!next) {
+      return { argv: current, baseIndex, opaqueMultiplexerSeen };
     }
-    return { argv: current, baseIndex, opaqueMultiplexerSeen };
+    baseIndex += current.length - next.length;
+    current = next;
   }
 }
 
@@ -131,15 +131,15 @@ export function unwrapSystemRunMutableFileOperandArgv(argv: string[]): string[] 
   return unwrapArgvForMutableOperand(argv).argv;
 }
 
-function resolveOptionFilteredFileOperandIndex(params: {
+async function resolveOptionFilteredFileOperandIndex(params: {
   argv: string[];
   startIndex: number;
   cwd: string | undefined;
   optionsWithValue?: ReadonlySet<string>;
-}): number | null {
+}): Promise<number | null> {
   const index = resolveOptionFilteredPositionalIndex(params);
   return index !== null &&
-    resolvesToExistingFileSync(readTrimmedArgToken(params.argv, index), params.cwd)
+    (await resolvesToExistingFile(readTrimmedArgToken(params.argv, index), params.cwd))
     ? index
     : null;
 }
@@ -176,11 +176,11 @@ function resolveOptionFilteredPositionalIndex(params: {
   return null;
 }
 
-function resolveGenericInterpreterScriptOperandIndex(params: {
+async function resolveGenericInterpreterScriptOperandIndex(params: {
   argv: string[];
   cwd: string | undefined;
   optionsWithFileValue?: ReadonlySet<string>;
-}): number | null {
+}): Promise<number | null> {
   let afterDoubleDash = false;
   const hits: number[] = [];
   for (let i = 1; i < params.argv.length; i += 1) {
@@ -188,45 +188,39 @@ function resolveGenericInterpreterScriptOperandIndex(params: {
     if (!token) {
       continue;
     }
-    if (afterDoubleDash) {
-      if (resolvesToExistingFileSync(token, params.cwd)) {
-        hits.push(i);
-      }
-      continue;
-    }
-    if (token === "--") {
+    if (!afterDoubleDash && token === "--") {
       afterDoubleDash = true;
       continue;
     }
-    if (token === "-") {
+    if (!afterDoubleDash && token === "-") {
       return null;
     }
-    if (token.startsWith("-")) {
+    if (!afterDoubleDash && token.startsWith("-")) {
       const option = parseInlineOptionToken(token);
       const flag = option.name;
       const inlineValue = option.hasInlineValue ? option.inlineValue : undefined;
       if (params.optionsWithFileValue?.has(normalizeLowercaseStringOrEmpty(flag))) {
-        if (inlineValue && resolvesToExistingFileSync(inlineValue, params.cwd)) {
+        if (inlineValue && (await resolvesToExistingFile(inlineValue, params.cwd))) {
           return null;
         }
         const nextToken = readTrimmedArgToken(params.argv, i + 1);
-        if (!inlineValue && nextToken && resolvesToExistingFileSync(nextToken, params.cwd)) {
+        if (!inlineValue && nextToken && (await resolvesToExistingFile(nextToken, params.cwd))) {
           return null;
         }
       }
       continue;
     }
-    if (resolvesToExistingFileSync(token, params.cwd)) {
+    if (await resolvesToExistingFile(token, params.cwd)) {
       hits.push(i);
     }
   }
   return hits.length === 1 ? expectDefined(hits[0], "hits entry at 0") : null;
 }
 
-function resolveBunScriptOperandIndex(params: {
+async function resolveBunScriptOperandIndex(params: {
   argv: string[];
   cwd: string | undefined;
-}): number | null {
+}): Promise<number | null> {
   const directIndex = resolveOptionFilteredPositionalIndex({
     argv: params.argv,
     startIndex: 1,
@@ -237,7 +231,7 @@ function resolveBunScriptOperandIndex(params: {
   }
   const directToken = readTrimmedArgToken(params.argv, directIndex);
   if (directToken === "run") {
-    return resolveOptionFilteredFileOperandIndex({
+    return await resolveOptionFilteredFileOperandIndex({
       argv: params.argv,
       startIndex: directIndex + 1,
       cwd: params.cwd,
@@ -253,14 +247,14 @@ function resolveBunScriptOperandIndex(params: {
   return directIndex;
 }
 
-function resolveDenoRunScriptOperandIndex(params: {
+async function resolveDenoRunScriptOperandIndex(params: {
   argv: string[];
   cwd: string | undefined;
-}): number | null {
+}): Promise<number | null> {
   if (readTrimmedArgToken(params.argv, 1) !== "run") {
     return null;
   }
-  return resolveOptionFilteredFileOperandIndex({
+  return await resolveOptionFilteredFileOperandIndex({
     argv: params.argv,
     startIndex: 2,
     cwd: params.cwd,
@@ -348,24 +342,27 @@ function isMutableScriptRunner(executable: string): boolean {
   );
 }
 
-function resolveDirectScriptExecutableIndex(params: {
+async function resolveDirectScriptExecutableIndex(params: {
   argv: string[];
   cwd: string | undefined;
-}): number | null {
+}): Promise<number | null> {
   const unwrapped = unwrapArgvForMutableOperand(params.argv);
   const executable = readTrimmedArgToken(unwrapped.argv, 0);
   if (
     PACKAGE_MANAGER_EXECUTABLES.has(normalizeExecutableToken(executable)) ||
     !looksLikeExplicitPathToken(executable) ||
-    !resolvesToExistingFileSync(executable, params.cwd)
+    !(await resolvesToExistingFile(executable, params.cwd))
   ) {
     return null;
   }
   const resolvedPath = path.resolve(params.cwd ?? process.cwd(), executable);
-  return pathLooksMutableForShellPayloadSync(resolvedPath) ? unwrapped.baseIndex : null;
+  return (await pathLooksMutableForShellPayload(resolvedPath)) ? unwrapped.baseIndex : null;
 }
 
-function resolveMutableFileOperandIndex(argv: string[], cwd: string | undefined): number | null {
+async function resolveMutableFileOperandIndex(
+  argv: string[],
+  cwd: string | undefined,
+): Promise<number | null> {
   const unwrapped = unwrapArgvForMutableOperand(argv);
   const executable = normalizeExecutableToken(unwrapped.argv[0] ?? "");
   if (!executable) {
@@ -388,7 +385,7 @@ function resolveMutableFileOperandIndex(argv: string[], cwd: string | undefined)
     }
   }
   if (executable === "bun") {
-    const bunIndex = resolveBunScriptOperandIndex({
+    const bunIndex = await resolveBunScriptOperandIndex({
       argv: unwrapped.argv,
       cwd,
     });
@@ -397,7 +394,7 @@ function resolveMutableFileOperandIndex(argv: string[], cwd: string | undefined)
     }
   }
   if (executable === "deno") {
-    const denoIndex = resolveDenoRunScriptOperandIndex({
+    const denoIndex = await resolveDenoRunScriptOperandIndex({
       argv: unwrapped.argv,
       cwd,
     });
@@ -412,9 +409,9 @@ function resolveMutableFileOperandIndex(argv: string[], cwd: string | undefined)
     return null;
   }
   if (!isMutableScriptRunner(executable)) {
-    return resolveDirectScriptExecutableIndex({ argv, cwd });
+    return await resolveDirectScriptExecutableIndex({ argv, cwd });
   }
-  const genericIndex = resolveGenericInterpreterScriptOperandIndex({
+  const genericIndex = await resolveGenericInterpreterScriptOperandIndex({
     argv: unwrapped.argv,
     cwd,
     optionsWithFileValue:
@@ -423,21 +420,69 @@ function resolveMutableFileOperandIndex(argv: string[], cwd: string | undefined)
   return genericIndex === null ? null : unwrapped.baseIndex + genericIndex;
 }
 
-function shellPayloadNeedsStableBinding(shellCommand: string, cwd: string | undefined): boolean {
-  if (/[;&|<>]/u.test(shellCommand)) {
+async function shellPayloadNeedsStableBinding(
+  shellCommand: string,
+  cwd: string | undefined,
+  shellExecutable: string,
+): Promise<boolean> {
+  // Only reconsider payloads the raw separator check previously rejected.
+  const needsLiteralCheck = /[;&|<>]/u.test(shellCommand);
+  // Node exec uses sh; other shell grammars retain their existing separator refusal.
+  if (needsLiteralCheck && shellExecutable !== "sh") {
     return true;
   }
-  const argv = splitShellArgs(shellCommand);
-  if (!argv || argv.length === 0) {
+  const globIndexes: number[] = [];
+  let argv = splitShellArgs(shellCommand, {
+    rejectShellSyntax: needsLiteralCheck,
+    onUnquotedGlob: (index) => globIndexes.push(index),
+  });
+  if (!argv) {
+    return needsLiteralCheck;
+  }
+  if (argv.length === 0) {
     return false;
   }
+  if (needsLiteralCheck) {
+    const plan = resolveExecWrapperTrustPlan(argv);
+    const executableIndex = argv.length - plan.argv.length;
+    const firstToken = readTrimmedArgToken(plan.argv, 0);
+    if (
+      plan.policyBlocked ||
+      plan.shellWrapperExecutable ||
+      PACKAGE_MANAGER_EXECUTABLES.has(normalizePackageManagerExecToken(firstToken)) ||
+      resolveKnownPackageManagerExecInvocation(plan.argv).kind !== "not-package-manager" ||
+      globIndexes.some((index) => index <= executableIndex) ||
+      isEnvAssignmentToken(firstToken) ||
+      // Pathname expansion can synthesize builtin options such as -v.
+      (firstToken === "printf" &&
+        (plan.argv[1]?.startsWith("-v") || globIndexes.includes(executableIndex + 1))) ||
+      (["test", "["].includes(firstToken) &&
+        (plan.argv.includes("-v") || globIndexes.length > 0)) ||
+      [
+        "eval",
+        "trap",
+        "enable",
+        "let",
+        "declare",
+        "typeset",
+        "export",
+        "readonly",
+        "local",
+        "!",
+        "coproc",
+      ].includes(firstToken)
+    ) {
+      return true;
+    }
+    argv = plan.argv;
+  }
   if (
-    resolveMutableFileOperandIndex(argv, cwd) !== null ||
-    requiresStableInterpreterApprovalBindingWithShellCommand({
+    (await resolveMutableFileOperandIndex(argv, cwd)) !== null ||
+    (await requiresStableInterpreterApprovalBindingWithShellCommand({
       argv,
       cwd,
       shellCommand: null,
-    })
+    }))
   ) {
     return true;
   }
@@ -445,38 +490,42 @@ function shellPayloadNeedsStableBinding(shellCommand: string, cwd: string | unde
   if (firstToken === "." || firstToken === "source") {
     return true;
   }
-  if (!resolvesToExistingFileSync(firstToken, cwd)) {
+  if (!(await resolvesToExistingFile(firstToken, cwd))) {
     return false;
   }
   if (!path.isAbsolute(firstToken)) {
     return true;
   }
   const resolvedPath = path.resolve(cwd ?? process.cwd(), firstToken);
-  if (pathLooksMutableForShellPayloadSync(resolvedPath)) {
+  if (await pathLooksMutableForShellPayload(resolvedPath)) {
     return true;
   }
-  return isLikelyScriptLikePathSync(resolvedPath);
+  return await isLikelyScriptLikePath(resolvedPath);
 }
 
-function requiresStableInterpreterApprovalBindingWithShellCommand(params: {
+async function requiresStableInterpreterApprovalBindingWithShellCommand(params: {
   argv: string[];
   shellCommand: string | null;
   cwd: string | undefined;
-}): boolean {
+}): Promise<boolean> {
   const unwrapped = unwrapArgvForMutableOperand(params.argv);
   if (unwrapped.opaqueMultiplexerSeen) {
     return true;
   }
   if (params.shellCommand !== null) {
-    return shellPayloadNeedsStableBinding(params.shellCommand, params.cwd);
+    return await shellPayloadNeedsStableBinding(
+      params.shellCommand,
+      params.cwd,
+      normalizeExecutableToken(unwrapped.argv[0] ?? ""),
+    );
   }
-  if (pnpmDlxInvocationNeedsFailClosedBinding(params.argv, params.cwd)) {
+  if (await pnpmDlxInvocationNeedsFailClosedBinding(params.argv, params.cwd)) {
     return true;
   }
   const directExecutable = readTrimmedArgToken(unwrapped.argv, 0);
   if (
     looksLikeExplicitPathToken(directExecutable) &&
-    !resolvesToExistingFileSync(directExecutable, params.cwd)
+    !(await resolvesToExistingFile(directExecutable, params.cwd))
   ) {
     return true;
   }
@@ -488,7 +537,10 @@ function requiresStableInterpreterApprovalBindingWithShellCommand(params: {
   );
 }
 
-function pnpmDlxInvocationNeedsFailClosedBinding(argv: string[], cwd: string | undefined): boolean {
+async function pnpmDlxInvocationNeedsFailClosedBinding(
+  argv: string[],
+  cwd: string | undefined,
+): Promise<boolean> {
   if (normalizePackageManagerExecToken(argv[0] ?? "") !== "pnpm") {
     return false;
   }
@@ -503,14 +555,14 @@ function pnpmDlxInvocationNeedsFailClosedBinding(argv: string[], cwd: string | u
     }
     if (token === "--") {
       if (afterDlx) {
-        return resolveMutableFileOperandIndex(argv.slice(idx + 1), cwd) !== null;
+        return (await resolveMutableFileOperandIndex(argv.slice(idx + 1), cwd)) !== null;
       }
       idx += 1;
       continue;
     }
     if (!token.startsWith("-")) {
       if (afterDlx) {
-        return resolveMutableFileOperandIndex(argv.slice(idx), cwd) !== null;
+        return (await resolveMutableFileOperandIndex(argv.slice(idx), cwd)) !== null;
       }
       if (token !== "dlx") {
         return false;
@@ -548,11 +600,11 @@ export type SystemRunBindingFailure = {
   reason?: "unsupported-command-shape";
 };
 
-export function resolveSystemRunMutableFileOperandTarget(params: {
+export async function resolveSystemRunMutableFileOperandTarget(params: {
   argv: string[];
   cwd: string | undefined;
   shellCommand: string | null;
-}): { ok: true; argvIndex: number | null } | SystemRunBindingFailure {
+}): Promise<{ ok: true; argvIndex: number | null } | SystemRunBindingFailure> {
   if (hasDispatchCwdOption(params.argv)) {
     return {
       ok: false,
@@ -560,12 +612,8 @@ export function resolveSystemRunMutableFileOperandTarget(params: {
     };
   }
   const unwrapped = unwrapArgvForMutableOperand(params.argv);
-  if (
-    hasPosixShellCodeLoadingOption(
-      unwrapped.argv,
-      normalizeExecutableToken(unwrapped.argv[0] ?? ""),
-    )
-  ) {
+  const executable = normalizeExecutableToken(unwrapped.argv[0] ?? "");
+  if (hasPosixShellCodeLoadingOption(unwrapped.argv, executable)) {
     return {
       ok: false,
       message: "SYSTEM_RUN_DENIED: approval cannot safely bind shell startup files",
@@ -574,7 +622,7 @@ export function resolveSystemRunMutableFileOperandTarget(params: {
   if (
     hasPosixShellStartupEnvironment({
       argv: params.argv,
-      executable: normalizeExecutableToken(unwrapped.argv[0] ?? ""),
+      executable,
       env: process.env,
     })
   ) {
@@ -586,7 +634,7 @@ export function resolveSystemRunMutableFileOperandTarget(params: {
   if (
     hasUnbindableRuntimeApprovalOption({
       argv: unwrapped.argv,
-      executable: normalizeExecutableToken(unwrapped.argv[0] ?? ""),
+      executable,
     })
   ) {
     return {
@@ -594,10 +642,10 @@ export function resolveSystemRunMutableFileOperandTarget(params: {
       message: "SYSTEM_RUN_DENIED: approval cannot safely bind runtime code-loading or cwd options",
     };
   }
-  const argvIndex = resolveMutableFileOperandIndex(params.argv, params.cwd);
+  const argvIndex = await resolveMutableFileOperandIndex(params.argv, params.cwd);
   if (argvIndex === null) {
     if (
-      requiresStableInterpreterApprovalBindingWithShellCommand({
+      await requiresStableInterpreterApprovalBindingWithShellCommand({
         argv: params.argv,
         shellCommand: params.shellCommand,
         cwd: params.cwd,

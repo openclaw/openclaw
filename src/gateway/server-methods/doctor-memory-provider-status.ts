@@ -1,7 +1,8 @@
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import { formatErrorMessage as formatError } from "../../infra/errors.js";
+import type { MemoryHealth } from "../../plugins/memory-provider-runtime-types.js";
 import { getActiveMemoryProviderCore } from "../../plugins/memory-runtime.js";
-import { captureGatewayOperatorRunAuthority } from "../operator-run-authority.js";
+import { prepareGatewayOperatorRunAuthority } from "../operator-run-authority.js";
 import type { GatewayRequestHandlerOptions } from "./types.js";
 
 export const SKIPPED_MEMORY_EMBEDDING_PROBE = {
@@ -21,18 +22,24 @@ type ProviderStatusRequest = Pick<
 
 /** Reads provider-native memory health under the current operator request authority. */
 export async function respondProviderMemoryStatus(params: ProviderStatusRequest): Promise<void> {
+  const respondHealth = (health: MemoryHealth, provider = params.providerId) =>
+    params.respond(
+      true,
+      { agentId: params.agentId, provider, health, embedding: SKIPPED_MEMORY_EMBEDDING_PROBE },
+      undefined,
+    );
   let open = true;
   const assertRequestCurrent = () => {
     params.signal?.throwIfAborted();
     params.client?.connectionSignal?.throwIfAborted();
-    if (!open || params.client?.invalidated || params.hasCurrentClientAuthority?.() === false) {
-      throw new Error("Memory status authority is no longer active");
+    if (!open) {
+      throw new Error("Memory status request ended. Start a new request to retry.");
     }
   };
-  let captured: Awaited<ReturnType<typeof captureGatewayOperatorRunAuthority>> = undefined;
+  let captured: Awaited<ReturnType<typeof prepareGatewayOperatorRunAuthority>> = undefined;
   let provider: Awaited<ReturnType<typeof getActiveMemoryProviderCore>>["provider"] = null;
   try {
-    captured = await captureGatewayOperatorRunAuthority({
+    captured = await prepareGatewayOperatorRunAuthority({
       client: params.client,
       context: params.context,
       hasCurrentClientAuthority: params.hasCurrentClientAuthority,
@@ -42,11 +49,6 @@ export async function respondProviderMemoryStatus(params: ProviderStatusRequest)
       throw new Error("Memory provider status requires authenticated operator authority");
     }
     const authority = captured.authority;
-    const assertCurrent = () => {
-      assertRequestCurrent();
-      authority.assertCurrent();
-    };
-    assertCurrent();
     const acquired = await getActiveMemoryProviderCore({
       cfg: params.cfg,
       agentId: params.agentId,
@@ -57,7 +59,7 @@ export async function respondProviderMemoryStatus(params: ProviderStatusRequest)
           scopes: authority.scopes,
           connId: params.client?.connId,
         },
-        assertCurrent,
+        assertCurrent: assertRequestCurrent,
         signal: params.signal,
       },
     });
@@ -66,28 +68,10 @@ export async function respondProviderMemoryStatus(params: ProviderStatusRequest)
       throw new Error(acquired.error ?? `memory plugin "${params.providerId}" unavailable`);
     }
     const health = await provider.health();
-    assertCurrent();
-    params.respond(
-      true,
-      {
-        agentId: params.agentId,
-        provider: acquired.providerId ?? params.providerId,
-        health,
-        embedding: SKIPPED_MEMORY_EMBEDDING_PROBE,
-      },
-      undefined,
-    );
+    assertRequestCurrent();
+    respondHealth(health, acquired.providerId ?? params.providerId);
   } catch (err) {
-    params.respond(
-      true,
-      {
-        agentId: params.agentId,
-        provider: params.providerId,
-        health: { status: "unavailable", message: formatError(err) },
-        embedding: SKIPPED_MEMORY_EMBEDDING_PROBE,
-      },
-      undefined,
-    );
+    respondHealth({ status: "unavailable", message: formatError(err) });
   } finally {
     open = false;
     try {

@@ -128,8 +128,6 @@ internal fun prepareChatHistory(
     latestUserMessageVersion = latestUser?.let(::stableMessageVersion),
     rawHistoryVersionPrefix =
       buildString {
-        append(messages.size)
-        append(':')
         append(latest?.id.orEmpty())
         append(':')
         append(latest?.role.orEmpty())
@@ -191,18 +189,7 @@ internal fun PreparedChatHistory.buildTimeline(
     }
   val items = projectToolActivity(sourceItems, rows, pendingToolCalls, toolScope, toolScopesByRun)
   val latestUserIndex = items.indexOfFirst { it is ChatTimelineItem.Message && it.message.id == latestUserMessageId }.takeIf { it >= 0 }
-  if (items.isEmpty()) {
-    return ChatTimeline(
-      items = items,
-      readAnchorIndex = null,
-      latestContentIndex = null,
-      latestUserMessageId = null,
-      latestUserMessageVersion = null,
-      latestContentVersion = "",
-    )
-  }
-
-  val latestContentIndex = 0
+  val latestContentIndex = 0.takeIf { items.isNotEmpty() }
   // In reverseLayout, index 0 is bottom-most. Keep the latest prompt as a stable
   // reader anchor even after streaming rows collapse into a finished reply.
   val readAnchorIndex = latestUserIndex ?: latestContentIndex
@@ -211,17 +198,21 @@ internal fun PreparedChatHistory.buildTimeline(
     items = items,
     readAnchorIndex = readAnchorIndex,
     latestContentIndex = latestContentIndex,
-    latestUserMessageId = latestUserMessageId,
-    latestUserMessageVersion = latestUserMessageVersion,
+    latestUserMessageId = latestUserMessageId.takeIf { latestContentIndex != null },
+    latestUserMessageVersion = latestUserMessageVersion.takeIf { latestContentIndex != null },
     latestContentVersion =
-      latestContentVersion(
-        rawHistoryVersionPrefix,
-        pendingRunCount,
-        pendingToolCalls,
-        stream,
-        outboxItems + recoveryOutboxItems,
-        questions,
-      ),
+      if (latestContentIndex == null) {
+        ""
+      } else {
+        latestContentVersion(
+          rawHistoryVersionPrefix,
+          pendingRunCount,
+          pendingToolCalls,
+          stream,
+          outboxItems + recoveryOutboxItems,
+          questions,
+        )
+      },
   )
 }
 
@@ -360,6 +351,7 @@ private fun stableMessageVersion(message: ChatMessage): String {
   val role = message.role.trim().lowercase()
   val idempotencyKey = message.idempotencyKey?.trim().orEmpty()
   if (idempotencyKey.isNotEmpty()) return "$role:idempotency:$idempotencyKey"
+  message.entryId?.let { return "$role:entry:$it" }
 
   return buildString {
     append(role)

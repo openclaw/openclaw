@@ -8,6 +8,44 @@ struct ChatLiveRunState: Equatable, Sendable {
 }
 
 extension OpenClawChatViewModel {
+    var resolvedMainSessionKey: String {
+        if let agentID = self.explicitSessionAgentID ?? OpenClawChatSessionKey.agentID(from: self.sessionKey) {
+            return self.mainSessionKey(forAgent: agentID)
+        }
+        return ChatPayloadDecoding.trimmedNonEmptyString(self.sessionDefaults?.mainSessionKey) ?? "main"
+    }
+
+    /// Sequence and token telemetry do not change which runs are active.
+    var liveRunStateByRunID: [String: ChatLiveRunState] {
+        get {
+            self.access(keyPath: \.liveRunStateByRunID)
+            return self.liveRunStateStorage
+        }
+        set {
+            let lifecycle: (ChatLiveRunState) -> ChatLiveRunState = { state in
+                var state = state
+                state.sequence = 0
+                state.outputTokens = nil
+                return state
+            }
+            let lifecycleChanged = newValue.mapValues(lifecycle) != self.liveRunStateStorage.mapValues(lifecycle)
+            let tokensChanged = newValue.compactMapValues(\.outputTokens) !=
+                self.liveRunStateStorage.compactMapValues(\.outputTokens)
+            let update = {
+                if lifecycleChanged {
+                    self.withMutation(keyPath: \.liveRunStateByRunID) { self.liveRunStateStorage = newValue }
+                } else {
+                    self.liveRunStateStorage = newValue
+                }
+            }
+            if tokensChanged {
+                self.withMutation(keyPath: \.liveRunOutputTokens, update)
+            } else {
+                update()
+            }
+        }
+    }
+
     func usesMutableContractRouting(sessionKey: String, contract: String?) -> Bool {
         if OpenClawChatSessionKey.agentID(from: sessionKey) == nil {
             return true
@@ -56,10 +94,16 @@ extension OpenClawChatViewModel {
     /// Session lists publish canonical agent keys even when the UI presents `main`.
     /// Keep visible model metadata on the same exact-then-alias read path.
     public func currentSessionEntry() -> OpenClawChatSessionEntry? {
-        self.sessions.first(where: { $0.key == self.sessionKey }) ??
+        if let draft = self.newChatDraft, draft.key == self.sessionKey { return draft.entry }
+        return self.sessions.first(where: { $0.key == self.sessionKey }) ??
             self.sessions.first(where: {
                 self.matchesCurrentSessionKey(incoming: $0.key, current: self.sessionKey)
             })
+    }
+
+    /// Session opt-in; hosts also apply their local trace preference.
+    public var currentSessionReasoningVisible: Bool {
+        (self.currentSessionEntry() ?? self.retainedActiveSession)?.reasoningLevel == "on"
     }
 
     static func preferredLiveUsageRunID(
@@ -86,7 +130,8 @@ extension OpenClawChatViewModel {
     }
 
     var liveRunOutputTokens: Int? {
-        self.liveUsageRunID.flatMap { self.liveRunStateByRunID[$0]?.outputTokens }
+        self.access(keyPath: \.liveRunOutputTokens)
+        return self.liveUsageRunID.flatMap { self.liveRunStateStorage[$0]?.outputTokens }
     }
 
     var hasAdvertisedLiveRun: Bool {
@@ -119,8 +164,12 @@ extension OpenClawChatViewModel {
         self.markTimelineChanged()
     }
 
-    func syncActiveSessionRunIDsFromCurrentSession() {
-        self.updateActiveSessionRunIDs(self.currentSessionEntry()?.activeRunIds ?? [])
+    func syncActiveSessionMetadata() {
+        let entry = self.currentSessionEntry()
+        if let entry {
+            self.retainedActiveSession = entry
+        }
+        self.updateActiveSessionRunIDs(entry?.activeRunIds ?? [])
     }
 
     func ownsLiveTelemetryRun(_ runID: String) -> Bool {
@@ -129,22 +178,15 @@ extension OpenClawChatViewModel {
     }
 
     @discardableResult
-    func applyLiveRunUsage(runID: String, sequence: Int, outputTokens: Int) -> Bool {
-        guard sequence > 0, outputTokens > 0, self.ownsLiveTelemetryRun(runID) else { return false }
+    func acceptLiveRunSequence(runID: String, sequence: Int, outputTokens: Int? = nil) -> Bool {
+        guard sequence > 0, outputTokens.map({ $0 > 0 }) != false,
+              self.ownsLiveTelemetryRun(runID) else { return false }
         var state = self.liveRunStateByRunID[runID] ?? ChatLiveRunState()
         guard sequence > state.sequence else { return false }
         state.sequence = sequence
-        state.outputTokens = max(outputTokens, state.outputTokens ?? 0)
-        self.liveRunStateByRunID[runID] = state
-        return true
-    }
-
-    @discardableResult
-    func acceptLiveRunSequence(runID: String, sequence: Int) -> Bool {
-        guard sequence > 0, self.ownsLiveTelemetryRun(runID) else { return false }
-        var state = self.liveRunStateByRunID[runID] ?? ChatLiveRunState()
-        guard sequence > state.sequence else { return false }
-        state.sequence = sequence
+        if let outputTokens {
+            state.outputTokens = max(outputTokens, state.outputTokens ?? 0)
+        }
         self.liveRunStateByRunID[runID] = state
         return true
     }
@@ -255,6 +297,26 @@ extension OpenClawChatViewModel {
             sessionRoutingContract: routeContract)
     }
 
+    func sessionSettingsPatchTarget(
+        in sessionKey: String,
+        canonicalSessionKey: String?,
+        agentID: String?,
+        sessionRoutingContract: String?) -> ModelPatchTarget
+    {
+        if canonicalSessionKey == nil,
+           agentID == nil,
+           sessionRoutingContract == nil,
+           sessionKey == self.sessionKey
+        {
+            return self.currentModelPatchTarget()
+        }
+        return self.modelPatchTarget(
+            sessionKey: sessionKey,
+            canonicalSessionKey: canonicalSessionKey,
+            agentID: agentID,
+            sessionRoutingContract: sessionRoutingContract)
+    }
+
     func sessionEntryForThinking(
         sessionKey: String,
         canonicalSessionKey: String?,
@@ -311,6 +373,10 @@ extension OpenClawChatViewModel {
         agentID: String?,
         syncSelection: Bool)
     {
+        if self.newChatDraft?.key == sessionKey {
+            if syncSelection { self.syncSelectedModel() }
+            return
+        }
         let existingIndex = self.sessionIndexForModelState(sessionKey: sessionKey)
         var updated = existingIndex.map { self.sessions[$0] }
             ?? self.sidebarData?.row(key: sessionKey, agentID: self.currentSessionSnapshot().deliveryAgentID)
@@ -350,7 +416,7 @@ extension OpenClawChatViewModel {
         let now = Date().timeIntervalSince1970 * 1000
         let cutoff = now - (24 * 60 * 60 * 1000)
         let sorted = OpenClawChatSessionListOrganizer.organize(sessions)
-        let mainSessionKey = resolvedMainSessionKey
+        let mainSessionKey = self.resolvedMainSessionKey
 
         var result: [OpenClawChatSessionEntry] = []
         var included = Set<String>()
@@ -369,7 +435,7 @@ extension OpenClawChatViewModel {
             included.insert(entry.key)
         }
 
-        if !included.contains(sessionKey) {
+        if !self.isNewChatDraft, !included.contains(sessionKey) {
             result.append(sorted.first(where: { $0.key == self.sessionKey }) ?? .init(key: sessionKey))
         }
 
@@ -388,7 +454,7 @@ extension OpenClawChatViewModel {
             incoming: incoming,
             agentId: agentId,
             current: current,
-            mainSessionKey: resolvedMainSessionKey,
+            mainSessionKey: self.resolvedMainSessionKey,
             activeAgentId: self.explicitSessionAgentID ?? activeAgentId,
             sessionRoutingContract: self.agentCatalog?.sessionRoutingContract ?? self.sessionRoutingContract)
     }

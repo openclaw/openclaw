@@ -18,21 +18,15 @@ function findOption(
     if (matches(option)) {
       return option;
     }
-    const child = findOption(readChildOptions(option), matches);
+    const child =
+      "options" in option && Array.isArray(option.options)
+        ? findOption(option.options, matches)
+        : undefined;
     if (child) {
       return child;
     }
   }
   return undefined;
-}
-
-function readChildOptions(
-  option: APIApplicationCommandInteractionDataOption,
-): APIApplicationCommandInteractionDataOption[] | undefined {
-  if (!("options" in option) || !Array.isArray(option.options)) {
-    return undefined;
-  }
-  return option.options;
 }
 
 export class OptionsHandler {

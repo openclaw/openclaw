@@ -32,7 +32,7 @@ describe("recorded worker inference placement", () => {
           providerId: "device",
           profileSnapshot: { settings: { inference } },
         }),
-      ).toThrow();
+      ).toThrow('settings.inference must be "gateway" or "worker"');
     },
   );
 

@@ -39,6 +39,13 @@ const WorktreeRunEndCleanupSchema = Type.Union([
   }),
 ]);
 
+const WorktreeCleanupSchema = closedObject({
+  state: Type.String({ enum: ["preserved", "retrying"] }),
+  reason: NonEmptyString,
+  attempts: Type.Integer({ minimum: 1 }),
+  nextAttemptAt: Type.Union([Type.Integer({ minimum: 0 }), Type.Null()]),
+});
+
 export const WorktreeRecordSchema = closedObject({
   id: NonEmptyString,
   name: WorktreeNameSchema,
@@ -55,6 +62,7 @@ export const WorktreeRecordSchema = closedObject({
   removedAt: Type.Optional(Type.Integer({ minimum: 0 })),
   runEndCleanup: Type.Optional(WorktreeRunEndCleanupSchema),
   gcProtection: Type.Optional(NonEmptyString),
+  cleanup: Type.Optional(WorktreeCleanupSchema),
 });
 
 export const WorktreesListParamsSchema = closedObject({});
@@ -74,12 +82,14 @@ export const WorktreesCreateParamsSchema = closedObject({
 export const WorktreesRemoveParamsSchema = closedObject({
   id: NonEmptyString,
   force: Type.Optional(Type.Boolean()),
+  retryPreserved: Type.Optional(Type.Boolean()),
   ifLossless: Type.Optional(Type.Boolean()),
   exactState: Type.Optional(WorktreeExactStateSchema),
   expectedOwnerId: Type.Optional(NonEmptyString),
 });
 export const WorktreesRemoveResultSchema = closedObject({
   removed: Type.Boolean(),
+  preserved: Type.Optional(WorktreeCleanupSchema),
   snapshotRef: Type.Optional(NonEmptyString),
   /** Why the pre-removal snapshot failed; removal may have stopped or continued without one. */
   snapshotError: Type.Optional(NonEmptyString),
@@ -107,7 +117,9 @@ export const WorktreesBranchesResultSchema = closedObject({
   defaultBranch: Type.Optional(NonEmptyString),
   headBranch: Type.Optional(NonEmptyString),
   repositoryStatus: Type.Optional(WorktreeRepositoryStatusSchema),
+  requiresWorktree: Type.Optional(Type.Boolean()),
   branchesUnavailable: Type.Optional(Type.Boolean()),
+  refreshing: Type.Optional(Type.Boolean()),
 });
 
 export const WorktreesRestoreParamsSchema = closedObject({
@@ -129,6 +141,29 @@ export const WorktreesGcResultSchema = closedObject({
   removed: Type.Array(NonEmptyString),
   orphansDeleted: Type.Integer({ minimum: 0 }),
   snapshotsPruned: Type.Integer({ minimum: 0 }),
+  scratchDeferred: Type.Optional(Type.Literal("io-pressure")),
+  scratch: Type.Optional(
+    closedObject({
+      entriesRemoved: Type.Integer({ minimum: 0 }),
+      bytesRemoved: Type.Integer({ minimum: 0 }),
+      filesRemoved: Type.Integer({ minimum: 0 }),
+      skippedLive: Type.Integer({ minimum: 0 }),
+      scanned: Type.Integer({ minimum: 0 }),
+      deferred: Type.Integer({ minimum: 0 }),
+      errors: Type.Array(Type.String()),
+    }),
+  ),
+  gitMaintenance: Type.Optional(
+    closedObject({
+      repoRoot: NonEmptyString,
+      stage: Type.String({
+        enum: ["packs", "objects", "maintenance", "completed", "suspended", "throttled"],
+      }),
+      packsBefore: Type.Optional(Type.Integer({ minimum: 0 })),
+      packsAfter: Type.Optional(Type.Integer({ minimum: 0 })),
+    }),
+  ),
+  packsRemoved: Type.Optional(Type.Integer({ minimum: 0 })),
   orphansRetired: Type.Optional(Type.Integer({ minimum: 0 })),
   retiredCheckoutPaths: Type.Optional(Type.Array(NonEmptyString)),
   outcome: Type.Optional(Type.String({ enum: ["completed", "deferred", "partial"] })),
@@ -137,7 +172,7 @@ export const WorktreesGcResultSchema = closedObject({
       closedObject({
         id: Type.Optional(NonEmptyString),
         stage: Type.String({
-          enum: ["idle", "templates", "limits", "size", "orphans", "snapshots"],
+          enum: ["idle", "templates", "limits", "size", "orphans", "snapshots", "git-maintenance"],
         }),
         outcome: Type.String({ enum: ["failed", "deferred", "retired"] }),
         reason: Type.String(),
@@ -145,10 +180,20 @@ export const WorktreesGcResultSchema = closedObject({
     ),
   ),
   issueCount: Type.Optional(Type.Integer({ minimum: 0 })),
+  eligibleCount: Type.Optional(Type.Integer({ minimum: 0 })),
+  deferredCount: Type.Optional(Type.Integer({ minimum: 0 })),
+  failedCount: Type.Optional(Type.Integer({ minimum: 0 })),
   protectedCount: Type.Optional(Type.Integer({ minimum: 0 })),
   protectionReasons: Type.Optional(Type.Record(Type.String(), Type.Integer({ minimum: 0 }))),
   limitsSatisfied: Type.Optional(Type.Union([Type.Boolean(), Type.Null()])),
   evictions: Type.Optional(Type.Record(Type.String(), Type.Integer({ minimum: 0 }))),
+});
+
+export const WorktreesRecoverFileParamsSchema = closedObject({
+  sessionKey: NonEmptyString,
+  path: NonEmptyString,
+  recoveryId: Type.String({ format: "uuid" }),
+  expectedOwnerId: NonEmptyString,
 });
 
 export const WorktreesRecoverRemovalParamsSchema = closedObject({
@@ -185,6 +230,7 @@ export type WorktreesRemoveResult = Static<typeof WorktreesRemoveResultSchema>;
 export type WorktreesRestoreParams = Static<typeof WorktreesRestoreParamsSchema>;
 export type WorktreesGcParams = Static<typeof WorktreesGcParamsSchema>;
 export type WorktreesGcResult = Static<typeof WorktreesGcResultSchema>;
+export type WorktreesRecoverFileParams = Static<typeof WorktreesRecoverFileParamsSchema>;
 export type WorktreesRecoverRemovalParams = Static<typeof WorktreesRecoverRemovalParamsSchema>;
 export type WorktreesRecoverRemovalResult = Static<typeof WorktreesRecoverRemovalResultSchema>;
 export type WorktreesRetireSnapshotParams = Static<typeof WorktreesRetireSnapshotParamsSchema>;

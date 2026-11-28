@@ -1,10 +1,9 @@
-import { createAbortError } from "../../infra/abort-signal.js";
 import type { CliBackendExecute } from "../../plugins/cli-backend.types.js";
 import { getPluginValueInstance } from "../../plugins/plugin-instance-scope.js";
 import type { PluginInstanceConsumer } from "../../plugins/plugin-instance.types.js";
-import { resolveAdmittedRunActiveAssertion } from "../admitted-run-context.js";
+import type { ReplyBackendHandle } from "../../sessions/session-controller.contracts.js";
 import { resolveReplyExpectation } from "../reply-completion.js";
-import type { CliExecutionTarget, PreparedCliRunContext, RunCliAgentParams } from "./types.js";
+import type { CliExecutionTarget, RunCliAgentParams } from "./types.js";
 
 export function unsupportedIsolatedCompletionError(
   backendId: string,
@@ -18,38 +17,42 @@ export function unsupportedIsolatedCompletionError(
 }
 
 /** Keep all CLI transports bound to the same reply-operation identity and terminal contract. */
-export function attachCliReplyBackend(params: RunCliAgentParams, cancel: () => void) {
+export function attachCliReplyBackend(
+  params: RunCliAgentParams,
+  cancel: () => void,
+  capabilities?: Pick<
+    ReplyBackendHandle,
+    | "messageInjectionV2"
+    | "supportsTranscriptCommitWait"
+    | "turnStatus"
+    | "supportsQueueMessageImages"
+  >,
+) {
   if (!params.replyOperation) {
     return undefined;
   }
-  const handle = {
+  const handle: ReplyBackendHandle = {
     kind: "cli" as const,
     runId: params.runId,
     toolAuthorityFingerprint: params.toolAuthorityFingerprint,
     terminalReplyExpectation: resolveReplyExpectation(params),
+    // Admission compares these against the arriving message: a handle that
+    // omits them rejects message-tool-only and gateway task-suggestion turns,
+    // which then wait for the turn to end instead of joining it.
+    sourceReplyDeliveryMode: params.sourceReplyDeliveryMode,
+    taskSuggestionDeliveryMode: params.taskSuggestionDeliveryMode,
     cancel,
+    ...capabilities,
+    get turnStatus() {
+      return capabilities?.turnStatus;
+    },
+    // The runtime registers its input sink after attach; read its image support at admission.
+    get supportsQueueMessageImages() {
+      return capabilities?.supportsQueueMessageImages;
+    },
   };
   params.replyOperation.attachBackend(handle);
   return () => params.replyOperation?.detachBackend(handle);
-}
-
-/** Capture both the admitted run and any narrower caller-owned execution authority. */
-export function createCliRunCurrentAssertion(
-  params: PreparedCliRunContext["params"],
-  signal = params.abortSignal,
-): () => void {
-  const assertCallerCurrent = params.assertCurrent;
-  const assertAdmitted = resolveAdmittedRunActiveAssertion(params.admittedRunContext, signal);
-  return () => {
-    assertCallerCurrent?.();
-    if (signal?.aborted) {
-      throw createAbortError("CLI run aborted");
-    }
-    if (!assertAdmitted) {
-      throw new Error("CLI run authority is no longer active");
-    }
-    assertAdmitted();
-  };
 }
 
 /** Preparation and execution must agree on the owner of private prompt context. */

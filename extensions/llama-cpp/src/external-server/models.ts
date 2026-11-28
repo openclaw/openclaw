@@ -1,27 +1,26 @@
-import type {
-  ModelDefinitionConfig,
-  ModelProviderConfig,
+import {
+  resolveDefaultModelMaxTokens,
+  type ModelDefinitionConfig,
+  type ModelProviderConfig,
 } from "openclaw/plugin-sdk/provider-model-shared";
 import {
   SELF_HOSTED_DEFAULT_CONTEXT_WINDOW,
   SELF_HOSTED_DEFAULT_COST,
-  SELF_HOSTED_DEFAULT_MAX_TOKENS,
 } from "openclaw/plugin-sdk/provider-setup";
 import { asPositiveSafeInteger } from "openclaw/plugin-sdk/string-coerce-runtime";
-import { LLAMA_SERVER_DEFAULT_ORIGIN } from "./defaults.js";
-import { normalizeLlamaServerProviderConfig } from "./endpoint.js";
+import { LLAMA_CPP_SERVER, type LlamaServerIdentity } from "./defaults.js";
+import { normalizeLlamaServerProviderConfig, resolveLlamaServerEndpoint } from "./endpoint.js";
 
-type LlamaServerModelStatus =
-  | "unloaded"
-  | "loading"
-  | "loaded"
-  | "sleeping"
-  | "downloading"
-  | "unknown";
+type LlamaServerModelStatus = "unloaded" | "loading" | "loaded" | "sleeping" | "unknown";
 
 type LlamaServerModelWire = Record<string, unknown> & {
   id?: unknown;
   object?: unknown;
+  context_length?: unknown;
+  meta?: {
+    n_ctx?: unknown;
+    n_ctx_train?: unknown;
+  };
   status?: {
     value?: unknown;
     failed?: unknown;
@@ -45,7 +44,7 @@ type LlamaServerPropsWire = Record<string, unknown> & {
 };
 
 export type LlamaServerDiscoveredModel = {
-  config: ModelDefinitionConfig;
+  config: ModelDefinitionConfig & { input: Array<"text" | "image"> };
   status: LlamaServerModelStatus;
   failed: boolean;
 };
@@ -56,26 +55,17 @@ function normalizeStatus(value: unknown): LlamaServerModelStatus {
     case "loading":
     case "loaded":
     case "sleeping":
-    case "downloading":
       return value;
     default:
       return "unknown";
   }
 }
 
-function resolveContextWindow(props: LlamaServerPropsWire | undefined): number {
-  return (
-    asPositiveSafeInteger(props?.default_generation_settings?.n_ctx) ??
-    asPositiveSafeInteger(props?.n_ctx) ??
-    SELF_HOSTED_DEFAULT_CONTEXT_WINDOW
-  );
-}
-
 function resolveMaxTokens(props: LlamaServerPropsWire | undefined, contextWindow: number): number {
   const params = props?.default_generation_settings?.params;
   const advertised =
     asPositiveSafeInteger(params?.max_tokens) ?? asPositiveSafeInteger(params?.n_predict);
-  return Math.min(advertised ?? SELF_HOSTED_DEFAULT_MAX_TOKENS, contextWindow);
+  return Math.min(advertised ?? resolveDefaultModelMaxTokens(contextWindow), contextWindow);
 }
 
 function resolveInput(
@@ -91,6 +81,7 @@ function resolveInput(
 
 function buildCompat(
   props: LlamaServerPropsWire | undefined,
+  useRuntimeDefaults: boolean,
 ): NonNullable<ModelDefinitionConfig["compat"]> {
   const caps = props?.chat_template_caps;
   return {
@@ -99,7 +90,9 @@ function buildCompat(
     supportsReasoningEffort: caps?.supports_reasoning_effort === true,
     supportsTemperature: true,
     supportsUsageInStreaming: true,
-    supportsTools: caps?.supports_tool_calls === true,
+    ...(typeof caps?.supports_tool_calls === "boolean" || useRuntimeDefaults
+      ? { supportsTools: caps?.supports_tool_calls === true }
+      : {}),
     supportsStrictMode: false,
     supportsJsonSchemaResponseFormat: true,
     requiresStringContent: caps?.supports_typed_content !== true,
@@ -107,17 +100,34 @@ function buildCompat(
   };
 }
 
-/** Maps one llama-server model row plus optional runtime properties into OpenClaw config. */
 export function mapLlamaServerModel(
   row: LlamaServerModelWire,
   props?: LlamaServerPropsWire,
+  useRuntimeDefaults = true,
 ): LlamaServerDiscoveredModel | null {
   const id = typeof row.id === "string" ? row.id.trim() : "";
   if (!id || (row.object !== undefined && row.object !== "model")) {
     return null;
   }
-  const contextWindow = resolveContextWindow(props);
-  const compat = buildCompat(props);
+  // The router lists unfinished downloads so its UI can resume them. They cannot serve requests.
+  if (row.status?.value === "downloading" || row.status?.value === "incomplete") {
+    return null;
+  }
+  const nativeContextWindow =
+    asPositiveSafeInteger(row.context_length) ?? asPositiveSafeInteger(row.meta?.n_ctx_train);
+  const runtimeContextWindow =
+    asPositiveSafeInteger(props?.default_generation_settings?.n_ctx) ??
+    asPositiveSafeInteger(props?.n_ctx) ??
+    asPositiveSafeInteger(row.meta?.n_ctx);
+  // Setup must not turn an unverified runtime fallback into an authored override.
+  const contextWindow =
+    nativeContextWindow ??
+    runtimeContextWindow ??
+    (useRuntimeDefaults ? SELF_HOSTED_DEFAULT_CONTEXT_WINDOW : undefined);
+  // Cold router rows report native capacity, not the loaded server's effective cap.
+  const contextTokens =
+    runtimeContextWindow ?? (nativeContextWindow === undefined ? contextWindow : undefined);
+  const compat = buildCompat(props, useRuntimeDefaults);
   return {
     config: {
       id,
@@ -126,8 +136,11 @@ export function mapLlamaServerModel(
       input: resolveInput(row, props),
       cost: { ...SELF_HOSTED_DEFAULT_COST },
       contextWindow,
-      contextTokens: contextWindow,
-      maxTokens: resolveMaxTokens(props, contextWindow),
+      contextTokens,
+      maxTokens: resolveMaxTokens(
+        props,
+        contextTokens ?? contextWindow ?? SELF_HOSTED_DEFAULT_CONTEXT_WINDOW,
+      ),
       compat,
     },
     status: normalizeStatus(row.status?.value),
@@ -136,21 +149,37 @@ export function mapLlamaServerModel(
 }
 
 export function buildLlamaServerProviderConfig(params: {
+  server?: LlamaServerIdentity;
   configured?: ModelProviderConfig;
   discoveredModels: readonly LlamaServerDiscoveredModel[];
 }): ModelProviderConfig {
-  const models = Array.isArray(params.configured?.models) ? [...params.configured.models] : [];
-  const seen = new Set(models.map((model) => model.id));
-  for (const discovered of params.discoveredModels) {
-    if (seen.has(discovered.config.id)) {
-      continue;
-    }
-    seen.add(discovered.config.id);
-    models.push(discovered.config);
-  }
-  return normalizeLlamaServerProviderConfig({
-    ...params.configured,
-    baseUrl: params.configured?.baseUrl ?? LLAMA_SERVER_DEFAULT_ORIGIN,
-    models,
+  const baseUrl = resolveLlamaServerEndpoint(
+    params.configured?.baseUrl,
+    params.server ?? LLAMA_CPP_SERVER,
+  ).inferenceBaseUrl;
+  const discoveredById = new Map(params.discoveredModels.map(({ config }) => [config.id, config]));
+  const models = (params.configured?.models ?? []).map((configured) => {
+    const discovered = discoveredById.get(configured.id);
+    discoveredById.delete(configured.id);
+    const matchesRoute =
+      (!configured.api || configured.api === "openai-completions") &&
+      resolveLlamaServerEndpoint(configured.baseUrl?.trim() || baseUrl).inferenceBaseUrl ===
+        baseUrl;
+    return discovered && matchesRoute
+      ? Object.assign({}, discovered, configured, {
+          contextWindow: configured.contextWindow ?? discovered.contextWindow,
+          contextTokens: configured.contextTokens ?? discovered.contextTokens,
+          compat: { ...discovered.compat, ...configured.compat },
+        })
+      : configured;
   });
+  models.push(...discoveredById.values());
+  return normalizeLlamaServerProviderConfig(
+    {
+      ...params.configured,
+      baseUrl,
+      models,
+    },
+    params.server ?? LLAMA_CPP_SERVER,
+  );
 }

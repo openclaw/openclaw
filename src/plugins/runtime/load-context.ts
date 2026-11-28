@@ -1,11 +1,10 @@
-// Prepared plugin runtime load facts and registry-owned context access.
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import type { PluginInstallRecord } from "../../config/types.plugins.js";
 import { createSubsystemLogger } from "../../logging.js";
+import { captureEnvironmentKey } from "../../shared/environment-key.js";
 import { isDeeplyFrozenPlainData } from "../../shared/immutable-data.js";
-import { normalizePluginsConfig } from "../config-state.js";
+import { resolvePreparedPluginRegistrationConfigKey } from "../config-state.js";
 import { hashStableJson } from "../installed-plugin-index-hash.js";
-import { resolvePluginRegistrationConfigKey } from "../loader-registration-config.js";
 import type { PluginLoadOptions } from "../loader-types.js";
 import type { PluginManifestRegistry } from "../manifest-registry.js";
 import { resolvePluginControlPlaneFingerprint } from "../plugin-control-plane-context.js";
@@ -21,7 +20,6 @@ import {
 
 const log = createSubsystemLogger("plugins");
 
-/** Resolved plugin runtime load context shared by runtime loader callers. */
 export type PluginRuntimeLoadContext = {
   rawConfig: OpenClawConfig;
   config: OpenClawConfig;
@@ -29,12 +27,14 @@ export type PluginRuntimeLoadContext = {
   autoEnabledReasons: Readonly<Record<string, string[]>>;
   workspaceDir: string | undefined;
   env: NodeJS.ProcessEnv;
+  environmentKey: object;
   logger: PluginLogger;
   manifestRegistry?: PluginManifestRegistry;
   metadataSnapshot?: PluginMetadataSnapshot;
   installRecords?: Record<string, PluginInstallRecord>;
   preferBuiltPluginArtifacts?: boolean;
   expectedSourceDigests?: PluginLoadOptions["expectedSourceDigests"];
+  selectedContextEngine?: PluginRuntimeLoadContextState["selectedContextEngine"];
 };
 
 const immutableActivationValueHashes = new WeakMap<object, string>();
@@ -65,35 +65,32 @@ function activationInputFingerprint(config: OpenClawConfig, env: NodeJS.ProcessE
   return hashStableJson({ config: activationConfigFingerprint(config), env });
 }
 
-function activationResultFingerprint(context: PluginRuntimeLoadContext): string {
-  return hashStableJson({
-    config: activationConfigFingerprint(context.config),
-    activationSourceConfig: activationConfigFingerprint(context.activationSourceConfig),
-    autoEnabledReasons: context.autoEnabledReasons,
-    env: context.env,
-  });
-}
-
 export function setPluginRuntimeLoadContext(
   registry: PluginRegistry,
-  context: PluginRuntimeLoadContext,
+  context: Omit<PluginRuntimeLoadContext, "environmentKey"> &
+    Partial<Pick<PluginRuntimeLoadContext, "environmentKey">>,
   registrationConfigKey?: string,
   loaderCacheIdentity?: PluginRuntimeLoadContextState["loaderCacheIdentity"],
 ): void {
   const previous = getPluginRuntimeLoadContextState(registry);
   const capturedIdentity = previous?.loaderCacheIdentity ?? loaderCacheIdentity;
-  const bound = {
+  const bound: PluginRuntimeLoadContext & PluginRuntimeLoadContextState = {
     ...context,
+    fallbackRateLimitModels: new WeakMap(),
+    environmentKey: context.environmentKey ?? captureEnvironmentKey(context.env),
     activationInputFingerprint: activationInputFingerprint(context.rawConfig, context.env),
-    activationResultFingerprint: activationResultFingerprint(context),
     ...(capturedIdentity ? { loaderCacheIdentity: capturedIdentity } : {}),
+    // Selection belongs to the generation that registered these closures, not later metadata.
+    selectedContextEngine: previous
+      ? previous.selectedContextEngine
+      : context.selectedContextEngine,
     // Host preparation may rebind metadata, but it cannot change already-registered closures.
     registrationConfigKey:
       previous?.registrationConfigKey ??
       registrationConfigKey ??
-      resolvePluginRegistrationConfigKey({
-        runtimeEntries: normalizePluginsConfig(context.config.plugins).entries,
-        sourceEntries: normalizePluginsConfig(context.activationSourceConfig.plugins).entries,
+      resolvePreparedPluginRegistrationConfigKey({
+        runtimeConfig: context.config.plugins,
+        sourceConfig: context.activationSourceConfig.plugins,
       }),
     declaredProviderOwners:
       context.metadataSnapshot &&
@@ -119,7 +116,7 @@ export const getPluginRuntimeLoadContext = (
     | (PluginRuntimeLoadContext & PluginRuntimeLoadContextState)
     | undefined;
 
-/** Reuses activation decisions only within the exact metadata generation and unchanged inputs. */
+/** Reuses captured activation decisions for matching metadata and requested inputs. */
 export function getReusablePluginRuntimeActivation(
   registry: object | undefined,
   params: {
@@ -135,8 +132,7 @@ export function getReusablePluginRuntimeActivation(
   if (
     !context ||
     context.metadataSnapshot !== params.metadataSnapshot ||
-    context.workspaceDir !== params.workspaceDir ||
-    context.activationResultFingerprint !== activationResultFingerprint(context)
+    context.workspaceDir !== params.workspaceDir
   ) {
     return undefined;
   }
@@ -156,7 +152,6 @@ export function getReusablePluginRuntimeActivation(
   };
 }
 
-/** Runtime load option values that can be passed directly to plugin loading. */
 type PluginRuntimeResolvedLoadValues = Pick<
   PluginLoadOptions,
   | "config"
@@ -166,22 +161,19 @@ type PluginRuntimeResolvedLoadValues = Pick<
   | "env"
   | "logger"
   | "manifestRegistry"
+  | "metadataSnapshot"
   | "installRecords"
   | "preferBuiltPluginArtifacts"
   | "expectedSourceDigests"
 >;
 
-/** Creates the default plugin runtime loader logger. */
-export function createPluginRuntimeLoaderLogger(): PluginLogger {
-  return {
-    info: (message) => log.info(message),
-    warn: (message) => log.warn(message),
-    error: (message) => log.error(message),
-    debug: (message) => log.debug(message),
-  };
-}
+export const pluginRuntimeLoaderLogger: PluginLogger = {
+  info: (message) => log.info(message),
+  warn: (message) => log.warn(message),
+  error: (message) => log.error(message),
+  debug: (message) => log.debug(message),
+};
 
-/** Projects explicit runtime load fields from prepared contexts or resolved values. */
 export function buildPluginRuntimeLoadOptions(
   values: PluginRuntimeResolvedLoadValues,
   overrides?: Partial<PluginLoadOptions>,
@@ -194,6 +186,7 @@ export function buildPluginRuntimeLoadOptions(
     env: values.env,
     logger: values.logger,
     manifestRegistry: values.manifestRegistry,
+    metadataSnapshot: values.metadataSnapshot,
     installRecords: values.installRecords,
     preferBuiltPluginArtifacts: values.preferBuiltPluginArtifacts,
     expectedSourceDigests: values.expectedSourceDigests,

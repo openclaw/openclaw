@@ -29,12 +29,73 @@ describe("tool-authored source replies", () => {
     expect(extractMessagingToolSourceReplyPayload(result)).toBeUndefined();
   });
 
+  it("marks the callback controls of a tool-authored reply as agent-owned", () => {
+    const buttons = (value: string) => ({
+      blocks: [
+        { type: "buttons", buttons: [{ label: "Pick", action: { type: "callback", value } }] },
+      ],
+    });
+    expect(
+      extractToolAuthoredSourceReplyPayload({
+        details: { sourceReply: { text: "Pick one", presentation: buttons(":pick:a") } },
+      }),
+    ).toEqual({ text: "Pick one", presentation: buttons(":::pick:a") });
+  });
+
   it("admits a media-only reply", () => {
     expect(
       extractToolAuthoredSourceReplyPayload({
         details: { sourceReply: { mediaUrls: ["/tmp/flyer.png"] } },
       }),
     ).toEqual({ mediaUrls: ["/tmp/flyer.png"] });
+  });
+
+  it.each([
+    { message: "Internal diagnostic" },
+    { mediaUrl: "/tmp/internal-report.pdf" },
+    { mediaUrls: ["/tmp/internal-report.pdf"] },
+  ])("does not restore withdrawn reply content from top-level details: %j", (details) => {
+    expect(
+      extractToolAuthoredSourceReplyPayload({ details: { ...details, sourceReply: {} } }),
+    ).toBeUndefined();
+  });
+
+  it("keeps a media-only reply separate from unrelated result and delivery metadata", () => {
+    expect(
+      extractToolAuthoredSourceReplyPayload({
+        details: {
+          message: "Internal diagnostic",
+          mediaUrl: "/tmp/internal-report.pdf",
+          audioAsVoice: true,
+          idempotencyKey: "internal-operation",
+          sourceReplyTranscriptOwner: true,
+          sourceReply: { mediaUrls: ["/tmp/public-report.pdf"] },
+        },
+      }),
+    ).toEqual({ mediaUrls: ["/tmp/public-report.pdf"] });
+  });
+
+  it("preserves top-level fallbacks for already-sent internal message mirrors", () => {
+    expect(
+      extractMessagingToolSourceReplyPayload({
+        details: {
+          sourceReplySink: "internal-ui",
+          deliveryStatus: "sent",
+          message: "Delivered report",
+          mediaUrl: "/tmp/report.pdf",
+          audioAsVoice: true,
+          idempotencyKey: "delivered-message",
+          sourceReplyTranscriptOwner: true,
+          sourceReply: {},
+        },
+      }),
+    ).toEqual({
+      text: "Delivered report",
+      mediaUrl: "/tmp/report.pdf",
+      audioAsVoice: true,
+      idempotencyKey: "delivered-message",
+      transcriptOwner: true,
+    });
   });
 
   it.each([

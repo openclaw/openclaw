@@ -28,6 +28,39 @@ struct ApplicationRelocatorTests {
     }
 
     @Test
+    func `scratch locations deny persistent integration without relocating`() {
+        for temporaryPath in ["/var/folders/ab/cd/T", "/private/var/folders/ab/cd/T"] {
+            let temporaryDirectory = URL(fileURLWithPath: temporaryPath)
+            for path in [
+                "/tmp/OpenClaw.app",
+                "/private/tmp/run/OpenClaw.app",
+                "/var/folders/ab/cd/T/x/OpenClaw.app",
+                "/private/var/folders/ab/cd/T/x/OpenClaw.app",
+                "/Users/tester/Downloads/OpenClaw.app",
+            ] {
+                #expect(!ApplicationRelocator.allowsPersistentIntegration(
+                    URL(fileURLWithPath: path),
+                    homeDirectory: home,
+                    temporaryDirectory: temporaryDirectory,
+                    isReadOnlyVolume: false))
+            }
+            for path in [
+                "/Applications/OpenClaw.app",
+                "/Users/tester/Applications/OpenClaw.app",
+                "/Users/tester/Tools/OpenClaw.app",
+            ] {
+                #expect(ApplicationRelocator.allowsPersistentIntegration(
+                    URL(fileURLWithPath: path),
+                    homeDirectory: home,
+                    temporaryDirectory: temporaryDirectory,
+                    isReadOnlyVolume: false))
+            }
+        }
+        #expect(ApplicationRelocator.recommendation(
+            for: environment(path: "/private/tmp/run/OpenClaw.app")) == .continueLaunch)
+    }
+
+    @Test
     func `debug and test builds never relocate`() {
         let recommendation = ApplicationRelocator.recommendation(
             for: environment(

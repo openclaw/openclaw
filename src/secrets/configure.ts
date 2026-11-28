@@ -9,6 +9,7 @@ import {
   normalizeStringifiedOptionalString,
 } from "@openclaw/normalization-core/string-coerce";
 import { normalizeCsvOrLooseStringList } from "@openclaw/normalization-core/string-normalization";
+import { terminalText } from "../../packages/terminal-core/src/safe-text.js";
 import { listAgentIds, resolveAgentDir, resolveDefaultAgentId } from "../agents/agent-scope.js";
 import { AUTH_STORE_VERSION } from "../agents/auth-profiles/constants.js";
 import { loadPersistedAuthProfileStore } from "../agents/auth-profiles/persisted.js";
@@ -25,7 +26,7 @@ import {
 import { isSafeExecutableValue } from "../infra/exec-safety.js";
 import { loadPluginManifestRegistryCore } from "../plugins/manifest-registry.js";
 import { normalizeAgentId } from "../routing/session-key.js";
-import { runSecretsApply, type SecretsApplyResult } from "./apply.js";
+import { runSecretsApply } from "./apply.js";
 import { iterateAuthProfileCredentials } from "./auth-profiles-scan.js";
 import { createSecretsConfigIO } from "./config-io.js";
 import {
@@ -36,7 +37,6 @@ import {
   type ConfigureCandidate,
 } from "./configure-plan.js";
 import { getSkippedExecRefStaticError } from "./exec-resolution-policy.js";
-import type { SecretsApplyPlan } from "./plan.js";
 import { getProviderEnvVarsCore } from "./provider-env-vars.js";
 import { listSecretProviderIntegrationPresets } from "./provider-integrations.js";
 import {
@@ -48,12 +48,6 @@ import {
 import { resolveSecretRefValue } from "./resolve.js";
 import { assertExpectedResolvedSecretValue } from "./secret-value.js";
 import { isNonEmptyString, isRecord } from "./shared.js";
-
-/** Result returned after interactive secrets configure builds and preflights an apply plan. */
-type SecretsConfigureResult = {
-  plan: SecretsApplyPlan;
-  preflight: SecretsApplyResult;
-};
 
 const WINDOWS_ABS_PATH_PATTERN = /^[A-Za-z]:[\\/]/;
 const WINDOWS_UNC_PATH_PATTERN = /^\\\\[^\\]+\\[^\\]+/;
@@ -137,22 +131,16 @@ function providerHint(provider: SecretProviderConfig): string {
 }
 
 function toSourceChoices(config: OpenClawConfig): Array<{ value: SecretRefSource; label: string }> {
-  const hasSource = (source: SecretRefSource) =>
-    Object.values(config.secrets?.providers ?? {}).some((provider) => provider.source === source);
-  const choices: Array<{ value: SecretRefSource; label: string }> = [
-    {
-      value: "env",
-      label: "env",
-    },
-    { value: "store", label: "store" },
-  ];
-  if (hasSource("file")) {
-    choices.push({ value: "file", label: "file" });
-  }
-  if (hasSource("exec")) {
-    choices.push({ value: "exec", label: "exec" });
-  }
-  return choices;
+  return (["env", "store", "file", "exec"] as const)
+    .filter(
+      (source) =>
+        source === "env" ||
+        source === "store" ||
+        Object.values(config.secrets?.providers ?? {}).some(
+          (provider) => provider.source === source,
+        ),
+    )
+    .map((value) => ({ value, label: value }));
 }
 
 function assertNoCancel<T>(value: T | typeof CANCEL_SYMBOL): T {
@@ -182,13 +170,10 @@ async function promptRequiredText(params: {
 const AUTH_PROFILE_ID_PATTERN = /^[A-Za-z0-9:_-]{1,128}$/;
 
 function validateEnvNameCsv(value: string): string | undefined {
-  const entries = normalizeCsvOrLooseStringList(value);
-  for (const entry of entries) {
-    if (!isValidEnvSecretRefId(entry)) {
-      return `Invalid env name: ${entry}`;
-    }
-  }
-  return undefined;
+  const invalid = normalizeCsvOrLooseStringList(value).find(
+    (entry) => !isValidEnvSecretRefId(entry),
+  );
+  return invalid === undefined ? undefined : terminalText`Invalid env name: ${invalid}`;
 }
 
 async function promptEnvNameCsv(params: {
@@ -205,36 +190,42 @@ async function promptEnvNameCsv(params: {
   return normalizeCsvOrLooseStringList(raw);
 }
 
-async function promptOptionalPositiveInt(params: {
-  message: string;
-  initialValue?: number;
-  max: number;
-}): Promise<number | undefined> {
+const PROVIDER_LIMITS = {
+  timeoutMs: { label: "Timeout ms", max: 120000 },
+  noOutputTimeoutMs: { label: "No-output timeout ms", max: 120000 },
+  maxBytes: { label: "Max bytes", max: 20 * 1024 * 1024 },
+  maxOutputBytes: { label: "Max output bytes", max: 20 * 1024 * 1024 },
+};
+
+async function promptOptionalPositiveInt(
+  key: keyof typeof PROVIDER_LIMITS,
+  base?: Partial<Record<keyof typeof PROVIDER_LIMITS, number>>,
+): Promise<number | undefined> {
+  const { label, max } = PROVIDER_LIMITS[key];
+  const initialValue = base?.[key];
   const raw = assertNoCancel(
     await text({
-      message: params.message,
-      initialValue: params.initialValue === undefined ? "" : String(params.initialValue),
+      message: `${label} (blank for default)`,
+      initialValue: initialValue === undefined ? "" : String(initialValue),
       validate: (value) => {
         const trimmed = normalizeStringifiedOptionalString(value) ?? "";
         if (!trimmed) {
           return undefined;
         }
-        const parsed = parseOptionalPositiveInt(trimmed, params.max);
+        const parsed = parseOptionalPositiveInt(trimmed, max);
         if (parsed === undefined) {
-          return `Must be an integer between 1 and ${params.max}`;
+          return `Must be an integer between 1 and ${max}`;
         }
         return undefined;
       },
     }),
   );
-  return parseOptionalPositiveInt(raw, params.max);
+  return parseOptionalPositiveInt(raw, max);
 }
 
-function configureCandidateKey(candidate: {
-  configFile: "openclaw.json" | "auth-profile-store";
-  path: string;
-  agentId?: string;
-}): string {
+function configureCandidateKey(
+  candidate: Pick<ConfigureCandidate, "configFile" | "path" | "agentId">,
+): string {
   if (candidate.configFile === "auth-profile-store") {
     return `auth-profiles:${normalizeOptionalString(candidate.agentId) ?? ""}:${candidate.path}`;
   }
@@ -392,16 +383,8 @@ async function promptFileProvider(
     }),
   );
 
-  const timeoutMs = await promptOptionalPositiveInt({
-    message: "Timeout ms (blank for default)",
-    initialValue: base?.timeoutMs,
-    max: 120000,
-  });
-  const maxBytes = await promptOptionalPositiveInt({
-    message: "Max bytes (blank for default)",
-    initialValue: base?.maxBytes,
-    max: 20 * 1024 * 1024,
-  });
+  const timeoutMs = await promptOptionalPositiveInt("timeoutMs", base);
+  const maxBytes = await promptOptionalPositiveInt("maxBytes", base);
   return {
     source: "file",
     path: filePath,
@@ -459,23 +442,11 @@ async function promptExecProvider(
     }),
   );
 
-  const timeoutMs = await promptOptionalPositiveInt({
-    message: "Timeout ms (blank for default)",
-    initialValue: base?.timeoutMs,
-    max: 120000,
-  });
+  const timeoutMs = await promptOptionalPositiveInt("timeoutMs", base);
 
-  const noOutputTimeoutMs = await promptOptionalPositiveInt({
-    message: "No-output timeout ms (blank for default)",
-    initialValue: base?.noOutputTimeoutMs,
-    max: 120000,
-  });
+  const noOutputTimeoutMs = await promptOptionalPositiveInt("noOutputTimeoutMs", base);
 
-  const maxOutputBytes = await promptOptionalPositiveInt({
-    message: "Max output bytes (blank for default)",
-    initialValue: base?.maxOutputBytes,
-    max: 20 * 1024 * 1024,
-  });
+  const maxOutputBytes = await promptOptionalPositiveInt("maxOutputBytes", base);
 
   const jsonOnly = assertNoCancel(
     await confirm({
@@ -497,7 +468,7 @@ async function promptExecProvider(
         const entries = normalizeCsvOrLooseStringList(value ?? "");
         for (const entry of entries) {
           if (!isAbsolutePathValue(entry)) {
-            return `Trusted dir must be absolute: ${entry}`;
+            return terminalText`Trusted dir must be absolute: ${entry}`;
           }
         }
         return undefined;
@@ -618,8 +589,8 @@ async function configureProvidersInteractive(
           message: "Select plugin preset",
           options: presetEntries.map((entry) => ({
             value: entry,
-            label: entry.displayName,
-            hint: `${entry.providerAlias} | ${entry.pluginId}:${entry.id} | exec plugin`,
+            label: terminalText`${entry.displayName}`,
+            hint: terminalText`${entry.providerAlias} | ${entry.pluginId}:${entry.id} | exec plugin`,
           })),
         }),
       );
@@ -627,7 +598,7 @@ async function configureProvidersInteractive(
       if (current) {
         const shouldReplace = assertNoCancel(
           await confirm({
-            message: `Replace provider "${preset.providerAlias}" with the ${preset.displayName} preset?`,
+            message: terminalText`Replace provider "${preset.providerAlias}" with the ${preset.displayName} preset?`,
             initialValue: false,
           }),
         );
@@ -635,7 +606,7 @@ async function configureProvidersInteractive(
           continue;
         }
       }
-      setSecretProvider(config, preset.providerAlias, structuredClone(preset.providerConfig));
+      setSecretProvider(config, preset.providerAlias, preset.providerConfig);
       continue;
     }
 
@@ -645,8 +616,8 @@ async function configureProvidersInteractive(
           message: action === "edit" ? "Select provider to edit" : "Select provider to remove",
           options: providerEntries.map(([providerAlias, providerConfig]) => ({
             value: { alias: providerAlias, provider: providerConfig },
-            label: providerAlias,
-            hint: providerHint(providerConfig),
+            label: terminalText`${providerAlias}`,
+            hint: terminalText`${providerHint(providerConfig)}`,
           })),
         }),
       );
@@ -660,7 +631,7 @@ async function configureProvidersInteractive(
       }
       const shouldRemove = assertNoCancel(
         await confirm({
-          message: `Remove provider "${alias}"?`,
+          message: terminalText`Remove provider "${alias}"?`,
           initialValue: false,
         }),
       );
@@ -674,13 +645,12 @@ async function configureProvidersInteractive(
 /** Runs interactive secrets configuration and returns changed config/auth-store state. */
 export async function runSecretsConfigureInteractive(
   params: {
-    env?: NodeJS.ProcessEnv;
     providersOnly?: boolean;
     skipProviderSetup?: boolean;
     agentId?: string;
     allowExecInPreflight?: boolean;
   } = {},
-): Promise<SecretsConfigureResult> {
+) {
   if (!process.stdin.isTTY) {
     throw new Error("secrets configure requires an interactive TTY.");
   }
@@ -688,7 +658,7 @@ export async function runSecretsConfigureInteractive(
     throw new Error("Cannot combine --providers-only with --skip-provider-setup.");
   }
 
-  const env = params.env ?? process.env;
+  const env = process.env;
   const allowExecInPreflight = Boolean(params.allowExecInPreflight);
   const io = createSecretsConfigIO({ env });
   const { snapshot } = await io.readConfigFileSnapshotForWrite();
@@ -754,7 +724,7 @@ export async function runSecretsConfigureInteractive(
         hint: string;
       }> = visibleCandidates.map((candidate) => ({
         value: candidate,
-        label: candidate.label,
+        label: terminalText`${candidate.label}`,
         hint: [
           // Auth profiles live in the agent's SQLite store; naming the retired
           // JSON file here sent operators looking for a file that no longer exists.
@@ -767,7 +737,7 @@ export async function runSecretsConfigureInteractive(
       options.push({
         value: "__create_auth_profile__",
         label: "Create auth profile mapping",
-        hint: `Add a new auth-profiles target for agent ${configureAgentId}`,
+        hint: terminalText`Add a new auth-profiles target for agent ${configureAgentId}`,
       });
       if (hasDerivedCandidates) {
         options.push({

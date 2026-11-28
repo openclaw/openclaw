@@ -18,13 +18,9 @@ import {
   WizardSession,
   type WizardStep,
 } from "../../wizard/session.js";
-import { canAccessWizardSession } from "../server-wizard-sessions.js";
+import { canAccessWizardSession, noteWizardReader } from "../server-wizard-sessions.js";
 import { formatForLog } from "../ws-log.js";
-import {
-  createAdmittedWizardSession,
-  respondSetupAdmissionBusy,
-  whenAdmittedWizardSessionSettled,
-} from "./setup-admission.js";
+import { startGatewayWizard, whenAdmittedWizardSessionSettled } from "./setup-admission.js";
 import type { GatewayRequestHandlerOptions, GatewayRequestHandlers } from "./types.js";
 import { assertValidParams, defineValidatedGatewayHandler, type Validator } from "./validation.js";
 
@@ -102,22 +98,24 @@ function wizardSessionHandler<T extends { sessionId: string }>(
       );
       return;
     }
+    noteWizardReader(session, options.client);
     await run(options, session);
   });
 }
 
 export const wizardHandlers: GatewayRequestHandlers = {
-  "wizard.start": async ({ params, respond, context }) => {
+  "wizard.start": async (request) => {
+    const { params, respond, context } = request;
     if (!assertValidParams(params, validateWizardStartParams, "wizard.start", respond)) {
       return;
     }
     const sessionId = randomUUID();
     const flow = params.flow ?? "setup";
     const createSession = () =>
-      flow === "channels"
-        ? new WizardSession((prompter, _signal, wizardSession) =>
-            runHostedWizard((runtime) =>
-              context.channelWizardRunner(
+      new WizardSession((prompter, _signal, wizardSession) =>
+        runHostedWizard((runtime) =>
+          flow === "channels"
+            ? context.channelWizardRunner(
                 {
                   channel: params.channel,
                   onConfigured: (accounts) => wizardSession.setConfiguredAccounts(accounts),
@@ -129,12 +127,8 @@ export const wizardHandlers: GatewayRequestHandlers = {
                 },
                 runtime,
                 prompter,
-              ),
-            ),
-          )
-        : new WizardSession((prompter) =>
-            runHostedWizard((runtime) =>
-              context.wizardRunner(
+              )
+            : context.wizardRunner(
                 {
                   mode: params.mode,
                   workspace: params.workspace,
@@ -143,22 +137,27 @@ export const wizardHandlers: GatewayRequestHandlers = {
                 runtime,
                 prompter,
               ),
-            ),
-          );
-    const session = await createAdmittedWizardSession(createSession, flow === "setup");
-    if (!session) {
-      respondSetupAdmissionBusy(respond);
-      return;
-    }
-    context.wizardSessions.set(sessionId, session);
-    const result = await session.next();
-    if (result.done) {
-      // Let the runner release setup admission before the terminal response,
-      // so an immediate replacement wizard is not rejected as still busy.
-      await whenAdmittedWizardSessionSettled(session);
-      context.purgeWizardSession(sessionId);
-    }
-    respond(true, { sessionId, ...sanitizeWizardResultForClient(result) }, undefined);
+        ),
+      );
+    await startGatewayWizard({
+      request,
+      sessionId,
+      // A lost start reply leaves the modal without a session id to cancel.
+      // Retire abandoned channel input without interrupting in-flight writes.
+      closeInputOnDisconnect: flow === "channels",
+      lockSetupTarget: flow === "setup",
+      createSession,
+      respondStarted: async (session) => {
+        const result = await session.next();
+        if (result.done) {
+          // Let the runner release setup admission before the terminal response,
+          // so an immediate replacement wizard is not rejected as still busy.
+          await whenAdmittedWizardSessionSettled(session);
+          context.purgeWizardSession(sessionId);
+        }
+        respond(true, { sessionId, ...sanitizeWizardResultForClient(result) }, undefined);
+      },
+    });
   },
   "wizard.next": wizardSessionHandler(
     "wizard.next",

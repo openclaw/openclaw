@@ -97,16 +97,11 @@ struct NodeMenuEntryFormatter {
 
     private static func versionLabels(_ entry: NodeInfo, compact: Bool = true) -> [String] {
         let (core, ui) = self.resolveVersions(entry)
-        var labels: [String] = []
-        if let core {
-            let label = compact ? self.compactVersion(core) : self.shortVersionLabel(core)
-            labels.append("core \(label)")
+        return [("core", core), ("ui", ui)].compactMap { kind, version in
+            guard let version else { return nil }
+            let label = compact ? self.compactVersion(version) : self.shortVersionLabel(version)
+            return "\(kind) \(label)"
         }
-        if let ui {
-            let label = compact ? self.compactVersion(ui) : self.shortVersionLabel(ui)
-            labels.append("ui \(label)")
-        }
-        return labels
     }
 
     private static func resolveVersions(_ entry: NodeInfo) -> (core: String?, ui: String?) {

@@ -24,16 +24,22 @@ final class ChatCatalogUITests: XCTestCase {
         XCTAssertTrue(self.waitUntilEnabled(modelPicker), app.debugDescription)
         modelPicker.tap()
         self.capture(app, named: "opened-model-menu")
+        // Search reaches every provider's models without opening each provider.
+        let search = app.searchFields.firstMatch
+        XCTAssertTrue(search.waitForExistence(timeout: 10), app.debugDescription)
+        search.tap()
+        search.typeText("fixture")
         let unknownRow = app.buttons.matching(NSPredicate(
-            format: "label BEGINSWITH %@", "catalog-proof/fixture")).firstMatch
+            format: "identifier BEGINSWITH %@", "chat-model-picker-model-catalog-proof/fixture")).firstMatch
         XCTAssertTrue(unknownRow.waitForExistence(timeout: 10), app.debugDescription)
         XCTAssertTrue(unknownRow.isEnabled)
         let authRequiredRow = app.buttons.matching(NSPredicate(
-            format: "label BEGINSWITH %@", "anthropic/claude-fixture")).firstMatch
+            format: "identifier BEGINSWITH %@", "chat-model-picker-model-anthropic/claude-fixture")).firstMatch
         XCTAssertTrue(authRequiredRow.waitForExistence(timeout: 10))
         XCTAssertFalse(authRequiredRow.isEnabled)
-        let modelRow = app.buttons.matching(NSPredicate(
-            format: "label BEGINSWITH %@", "\(model.provider)/\(model.id)")).firstMatch
+        search.buttons["Clear text"].tap()
+        search.typeText(model.id)
+        let modelRow = app.buttons["chat-model-picker-model-\(model.provider)/\(model.id)"]
         XCTAssertTrue(modelRow.waitForExistence(timeout: 10), app.debugDescription)
         self.capture(app, named: "published-model-picker")
         modelRow.tap()
@@ -41,17 +47,24 @@ final class ChatCatalogUITests: XCTestCase {
         XCTAssertTrue(effort.waitForExistence(timeout: 10))
         XCTAssertTrue(self.waitUntilEnabled(effort))
         effort.tap()
-        let thinking = app.buttons["Thinking"]
-        XCTAssertTrue(thinking.waitForExistence(timeout: 5), app.debugDescription)
+        let bar = app.descendants(matching: .any)["chat-effort-bar"]
+        XCTAssertTrue(bar.waitForExistence(timeout: 5), app.debugDescription)
         self.capture(app, named: "published-fast-unavailable")
         XCTAssertFalse(app.buttons["Fast"].exists, "Fast must follow this model's published supportsFastMode=false")
-        thinking.tap()
-        for level in model.thinkingLevels {
-            XCTAssertTrue(app.buttons["\(level.label) (override)"].waitForExistence(timeout: 5), app.debugDescription)
+        if model.thinkingLevels.count > 1 {
+            XCTAssertTrue(app.descendants(matching: .any)["chat-effort-bar-slider"].exists, app.debugDescription)
         }
+        XCTAssertFalse(app.buttons.matching(NSPredicate(format: "label ENDSWITH %@", "(override)")).firstMatch.exists)
         self.capture(app, named: "published-thinking-choices")
         app.coordinate(withNormalizedOffset: CGVector(dx: 0.5, dy: 0.2)).tap()
-        app.buttons["chat-model-sign-in"].tap()
+        modelPicker.tap()
+        let modelSignIn = app.buttons["chat-model-sign-in"]
+        XCTAssertTrue(modelSignIn.waitForExistence(timeout: 5))
+        modelSignIn.tap()
+        // Provider accounts lists the provider; its page holds the sign-in options.
+        let provider = app.buttons["model-auth-provider-catalog-proof"]
+        XCTAssertTrue(provider.waitForExistence(timeout: 15), app.debugDescription)
+        provider.tap()
         let signIn = app.buttons["Catalog fixture sign-in"]
         XCTAssertTrue(signIn.waitForExistence(timeout: 15))
         signIn.tap()
@@ -66,10 +79,8 @@ final class ChatCatalogUITests: XCTestCase {
         XCTAssertTrue(confirm.waitForExistence(timeout: 10))
         confirm.tap()
         app.buttons["Continue"].tap()
-        let account = app.descendants(matching: .any)["model-auth-provider-catalog-proof"]
-        let connected = XCTNSPredicateExpectation(
-            predicate: NSPredicate(format: "label CONTAINS %@", "Connected"), object: account)
-        XCTAssertEqual(XCTWaiter.wait(for: [connected], timeout: 20), .completed)
+        // Signed in: the options move under "Sign-in options", with no banner.
+        XCTAssertTrue(app.staticTexts["Sign-in options"].waitForExistence(timeout: 20), app.debugDescription)
         self.capture(app, named: "published-auth-state")
         let evidence = XCTAttachment(data: catalogData, uniformTypeIdentifier: "public.json")
         evidence.name = "gateway-published-model"
@@ -116,7 +127,7 @@ final class ChatCatalogUITests: XCTestCase {
         XCTAssertTrue(app.keyboards.firstMatch.waitForNonExistence(timeout: 3))
 
         self.assertGuestInlineModel(
-            inlineModel, value: "primary", failureID: "guest-model-policy:permitted:current-selection")
+            inlineModel, app: app, value: "primary", failureID: "guest-model-policy:permitted:current-selection")
         self.capture(app, named: "guest-model-permitted-inline")
         let permitted = self.openPolicyActions(app)
         self.expandPolicyProvider(permitted)
@@ -133,7 +144,7 @@ final class ChatCatalogUITests: XCTestCase {
         _ = try await self.policyRequest(fixtureURL, path: "null", method: "POST")
         _ = try await self.policyRequest(fixtureURL, path: "await-catalog")
         self.assertGuestInlineModel(
-            inlineModel, value: "Default", failureID: "guest-model-policy:null:current-selection")
+            inlineModel, app: app, value: "Default", failureID: "guest-model-policy:null:current-selection")
         self.capture(app, named: "guest-model-null-inline")
         let opened = self.openPolicyActions(app)
         self.expandPolicyProvider(opened)
@@ -155,10 +166,11 @@ final class ChatCatalogUITests: XCTestCase {
         let failed = try await self.policyRequest(fixtureURL, path: "fail", method: "POST")
         XCTAssertTrue(failed.reads.contains { $0.phase == "held" && $0.outcome == "failed" })
         self.dismissPolicyActions(app)
-        let loadError = app.staticTexts["Model choices could not load. Reconnect and try again."]
-        XCTAssertTrue(loadError.waitForExistence(timeout: 3))
+        // The failure lives in the model sheet; nothing is drawn under the composer card.
+        let inlineLoadError = app.staticTexts["Couldn’t load models."]
+        XCTAssertFalse(inlineLoadError.waitForExistence(timeout: 3))
         self.assertGuestInlineModel(
-            inlineModel, value: "Default", failureID: "guest-model-policy:failed:current-selection")
+            inlineModel, app: app, value: "Default", failureID: "guest-model-policy:failed:current-selection")
         XCTAssertEqual(input.value as? String, draft)
         XCTAssertTrue(history.exists)
         self.capture(app, named: "guest-model-failed-inline")
@@ -173,8 +185,8 @@ final class ChatCatalogUITests: XCTestCase {
         _ = try await self.policyRequest(fixtureURL, path: "recover", method: "POST")
         let recovered = try await self.policyRequest(fixtureURL, path: "await-catalog")
         self.assertGuestInlineModel(
-            inlineModel, value: "primary", failureID: "guest-model-policy:recovered:current-selection")
-        XCTAssertTrue(loadError.waitForNonExistence(timeout: 3))
+            inlineModel, app: app, value: "primary", failureID: "guest-model-policy:recovered:current-selection")
+        XCTAssertTrue(inlineLoadError.waitForNonExistence(timeout: 3))
         XCTAssertEqual(input.value as? String, draft)
         XCTAssertTrue(history.exists)
         XCTAssertEqual(recovered.savedModel, initial.savedModel)
@@ -219,12 +231,29 @@ final class ChatCatalogUITests: XCTestCase {
         app.buttons["Go to Chat"].tap()
     }
 
-    private func assertGuestInlineModel(_ element: XCUIElement, value: String, failureID: String) {
-        let expectation = XCTNSPredicateExpectation(predicate: NSPredicate(format: "value == %@", value), object: element)
+    private func assertGuestInlineModel(
+        _ element: XCUIElement,
+        app: XCUIApplication,
+        value: String,
+        failureID: String)
+    {
+        let expectation = XCTNSPredicateExpectation(
+            predicate: NSPredicate(format: "value == %@", value),
+            object: element)
         XCTAssertEqual(XCTWaiter.wait(for: [expectation], timeout: 3), .completed, failureID)
-        // Current iOS gates the inline menu on operator.write. This proves the
-        // Guest's visible label without granting a broader scope to open it.
-        XCTAssertFalse(element.isEnabled)
+        // Browsing sign-in does not grant model mutation; every visible choice stays disabled.
+        XCTAssertTrue(element.isEnabled)
+        element.tap()
+        XCTAssertTrue(app.buttons["chat-model-sign-in"].waitForExistence(timeout: 3))
+        let choices = app.buttons.matching(NSPredicate(
+            format: "label BEGINSWITH %@ OR label == %@ OR label BEGINSWITH %@",
+            "fixture/",
+            "Default",
+            "Default: "))
+        for choice in choices.allElementsBoundByIndex {
+            XCTAssertFalse(choice.isEnabled, failureID)
+        }
+        app.coordinate(withNormalizedOffset: CGVector(dx: 0.05, dy: 0.5)).tap()
     }
 
     private func openPolicyActions(_ app: XCUIApplication) -> XCUIElement {

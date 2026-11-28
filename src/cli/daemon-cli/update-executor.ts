@@ -1,8 +1,11 @@
+import { readByteStreamWithLimit } from "@openclaw/media-core/read-byte-stream-with-limit";
 import { isRecord } from "@openclaw/normalization-core/record-coerce";
 import { withGatewayServiceRebindCapture } from "../../daemon/service-rebind.js";
 import { withGatewayServiceUpdateAuthority } from "../../daemon/service-update-authority.js";
 import { resolveOpenClawPackageRoot } from "../../infra/openclaw-root.js";
 import { resolveUpdateInstallRoot } from "../../infra/update-install-root.js";
+import { createSubsystemLogger } from "../../logging/subsystem.js";
+import { ExitError } from "../../runtime.js";
 import {
   withDelegatedUpdateCommandExecutor,
   type UpdateCommandChildGrant,
@@ -30,17 +33,11 @@ export async function runGatewayServiceUpdateCommand(
     throw new Error("Unsupported update-owned native command mode.");
   }
   try {
-    const chunks: Buffer[] = [];
-    let bytes = 0;
-    for await (const chunk of process.stdin) {
-      const buffer = Buffer.isBuffer(chunk) ? chunk : Buffer.from(chunk);
-      bytes += buffer.byteLength;
-      if (bytes > 64 * 1024) {
-        throw new Error("Update executor input exceeds its bound.");
-      }
-      chunks.push(buffer);
-    }
-    const input: unknown = JSON.parse(Buffer.concat(chunks).toString("utf8"));
+    const bytes = await readByteStreamWithLimit(process.stdin, {
+      maxBytes: 64 * 1024,
+      onOverflow: () => new Error("Update executor input exceeds its bound."),
+    });
+    const input: unknown = JSON.parse(bytes.toString("utf8"));
     if (
       !isRecord(input) ||
       input.action !== action ||
@@ -78,6 +75,17 @@ export async function runGatewayServiceUpdateCommand(
       withGatewayServiceUpdateAuthority(
         fence.assertCurrent,
         async () => {
+          if (action === "install" || action === "restart") {
+            try {
+              const { prepareLegacyTrialRun } = await import("../../update/legacy-trial.js");
+              await prepareLegacyTrialRun(grant.runId, root, fence.assertCurrent);
+            } catch (error) {
+              fence.assertCurrent();
+              createSubsystemLogger("update").warn(
+                `Could not record legacy update preparation: ${String(error)}`,
+              );
+            }
+          }
           if (input.originalDefinition !== undefined) {
             if (action !== "install" || typeof input.originalDefinition !== "string") {
               throw new Error("Invalid rebind action.");
@@ -103,6 +111,11 @@ export async function runGatewayServiceUpdateCommand(
       ),
     );
   } catch (cause) {
+    // The action already reported its outcome. Authority loss is converted by
+    // withGatewayServiceUpdateAuthority before a bare ExitError can reach here.
+    if (cause instanceof ExitError) {
+      throw cause;
+    }
     throw new Error(
       "UPDATE_NATIVE_AUTHORITY: " + (cause instanceof Error ? cause.message : String(cause)),
       { cause },

@@ -13,7 +13,6 @@ import {
   isWorkspaceJournalReceipt,
   type WorkerWorkspaceJournalOwner,
   type WorkspaceJournalReadCommand,
-  type WorkspaceJournalReadResult,
   type WorkspaceJournalReceipt,
 } from "./placement-workspace-journal.types.js";
 import type { WorkspaceJournalWorkerOperations } from "./placement-workspace-journal.worker-contract.js";
@@ -25,10 +24,10 @@ export function createPlacementWorkspaceJournalWorkerOps(runtime: {
 }) {
   const context = captureOpenClawStateWorkerContext({ path: runtime.path });
 
-  async function read(
-    command: WorkspaceJournalReadCommand,
+  async function read<Command extends WorkspaceJournalReadCommand>(
+    command: Command,
     assertCurrent?: () => void,
-  ): Promise<WorkspaceJournalReadResult> {
+  ) {
     context.admission.assertCurrent();
     assertCurrent?.();
     const reply = await executeExistingOpenClawStateRead({ path: runtime.path }, command, {
@@ -36,15 +35,10 @@ export function createPlacementWorkspaceJournalWorkerOps(runtime: {
     });
     context.admission.assertCurrent();
     assertCurrent?.();
-    if (reply?.ok && reply.type === command.type) {
-      switch (reply.type) {
-        case "placementJournals.owners":
-        case "placementJournals.placement":
-        case "placementJournals.load":
-          return reply;
-      }
+    if (!reply) {
+      throw new Error("Worker workspace journal reader is unavailable");
     }
-    throw new Error("Worker workspace journal reader is unavailable");
+    return reply;
   }
 
   async function execute(
@@ -52,7 +46,6 @@ export function createPlacementWorkspaceJournalWorkerOps(runtime: {
     assertCurrent?: () => void,
     preparation?: SqliteWorkerInputPreparation,
   ): Promise<WorkspaceJournalReceipt> {
-    let published = false;
     const readReceipt = (facts: unknown) =>
       isWorkspaceJournalReceipt(facts) && facts.type === command.type ? facts : undefined;
     const mutation = createPlacementWorkerMutation({
@@ -78,6 +71,7 @@ export function createPlacementWorkspaceJournalWorkerOps(runtime: {
               stagePlacementWorkspaceJournalWorkerPublication(
                 context.admission.identity,
                 owner.sessionId,
+                command.type === "placementJournals.begin",
               ),
             );
           }
@@ -92,10 +86,7 @@ export function createPlacementWorkspaceJournalWorkerOps(runtime: {
         };
       },
       publish(receipt) {
-        if (!published) {
-          published = true;
-          sessionChanges.emitBatch(receipt.changes);
-        }
+        sessionChanges.emitBatch(receipt.changes);
       },
     });
     try {
@@ -116,16 +107,10 @@ export function createPlacementWorkspaceJournalWorkerOps(runtime: {
         { type: "placementJournals.placement", owner: { ...owner } },
         assertCurrent,
       );
-      if (reply.type !== "placementJournals.placement") {
-        throw new Error("Unexpected workspace journal placement reply");
-      }
       return reply.placement;
     },
     async listWorkspaceReconciliationOwners(assertCurrent?: () => void) {
       const reply = await read({ type: "placementJournals.owners" }, assertCurrent);
-      if (reply.type !== "placementJournals.owners") {
-        throw new Error("Unexpected workspace journal owners reply");
-      }
       return reply.owners;
     },
     async loadWorkspaceReconciliation(
@@ -141,9 +126,6 @@ export function createPlacementWorkspaceJournalWorkerOps(runtime: {
         },
         assertCurrent,
       );
-      if (reply.type !== "placementJournals.load") {
-        throw new Error("Unexpected workspace journal load reply");
-      }
       return reply.journal;
     },
     async beginWorkspaceReconciliation(

@@ -95,6 +95,10 @@ capture, worker accounting, the live-pool registry, and shared compute capacity.
 The package controls when those operations run and holds admission until their
 required settlement receipts arrive.
 
+Pools can set their own worker heap limits through `workerOptions.resourceLimits`.
+The Control UI asset reader uses a 16 MiB young generation to reduce committed
+nursery space between read bursts while keeping its workers warm.
+
 Each synchronous pool or rotation pass captures its native workers and asks the
 host to service them. OpenClaw's host binds a pool to one native source, so one
 service call advances that shared source. Nested calls capture a fresh pass;
@@ -117,6 +121,26 @@ admitted messages before terminal lifecycle events. A failed startup discards
 unadmitted data. Losing the task channel is a transport
 failure, never an execution or cleanup receipt. Ordinary SDK workers keep their
 parent-port transport.
+
+When the task channel closes before its supervisor reports a failure, the pool
+retires the worker through that same native cleanup path before rejecting the
+active task. The failure preserves the supervisor's exception and cause, or the
+observed exit code when no exception arrived. Channel-only loss still fails; an
+exit code observed after requested retirement does not identify what closed the
+channel. A refused cleanup reports both failures without releasing custody or
+silently retrying the stop, including for synchronously serviced tasks. An owned
+task still preparing input instead rejects promptly with the failure already
+observed: its cleanup must join preparation before retirement. The input and
+admission remain owned until preparation and cleanup settle.
+
+Workers whose task failure leaves native state uncertain opt into
+`retireOnError`. The server revokes task admission without publishing a reusable
+failed-task response, rejects queued resource-close receipts, and joins those
+receipts outside the execution promise they depend on. It then joins the host
+`onRetire` hook, records a failing exit status, and closes both the task port and
+parent port (once when they are the same port). The host hook releases
+application-owned diagnostics; native exit remains the execution receipt.
+Ordinary task failures keep their existing reusable response.
 
 Private served transports declare `requiresReady` on the host and acknowledge
 readiness only after the task server installs its message listener. A native
@@ -144,11 +168,32 @@ cleanup. Failed retirement retains custody for a later retry. Neither a rejected
 result nor a cancellation request alone proves that execution or resources have
 settled.
 
+Workers without retained native resources use one supervisor receipt for execution
+and cleanup completion. The host still emits execution exit before final exit.
+Resource-owning workers retain separate receipts so execution capacity can be
+released while resource cleanup is pending or has failed.
+
 When queued work competes with a task waiting for a host response, `yieldSignal`
 requests a cooperative checkpoint. The host operation retains its own lifetime;
 queue pressure does not grant permission to cancel its underlying work. A
 checkpoint releases the task's execution slot through the ordinary settlement
 path, and continuation work rejoins admission.
+
+Task deadlines include queueing by default. Internal retained owners can select
+`timeoutFrom: "dispatch"` when preceding work has an owner-controlled lifetime;
+the budget then starts at slot assignment and still covers input preparation,
+execution, and host exchanges. The scheduler owns both deadline modes.
+
+The caller's execution deadline also bounds host exchanges. Responses may
+shorten that deadline, never renew it. Code Mode explicitly uses
+`hostTimeout: "owner"` because its host budget already accounts for approval
+pauses; its response rearms the pool clock with the remaining execution budget.
+Timeout aborts the host signal without claiming that accepted host effects have
+settled. Those effects remain under their existing owner's cleanup contract.
+The abort reason preserves the task failure. A pending host callback timeout
+also emits `WORKER_HOST_CALLBACK_TIMEOUT` with a bounded operation label; callback
+payloads are never included. Host adapters must carry that signal into their
+queue and I/O owners so cancellation removes waiting work before admission.
 
 ### Async context lifetime
 
@@ -224,6 +269,11 @@ capacity waiters. A generic `drain` notification would add no useful producer
 control to those paths. Add one only for a caller that can pause before buffering
 or allocating its next input, and observe actual admission release, including
 retained ownership, rather than task-result completion.
+
+Admission errors identify the exhausted pool or shared-compute task/byte budget,
+its current count and limit, and the rejected input's reported bytes. Host-classified
+worker/operation labels provide context without exposing task input or private paths.
+The error code remains `overloaded`; diagnostics do not change admission or retry behavior.
 
 Memory-driven recycling needs evidence of growth after garbage collection and
 must weigh recovered heap and external memory against worker startup cost.

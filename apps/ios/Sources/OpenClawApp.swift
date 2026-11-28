@@ -1,10 +1,18 @@
 import BackgroundTasks
 import Foundation
+import OpenClawChatUI
 import OpenClawKit
 import os
 import SwiftUI
 import UIKit
 @preconcurrency import UserNotifications
+
+/// Keep native menu actions neutral without changing link or button tints elsewhere.
+private struct PrimaryInkMenuStyle: MenuStyle {
+    func makeBody(configuration: Configuration) -> some View {
+        Menu(configuration).tint(.primary)
+    }
+}
 
 enum WatchPromptAction: Sendable {
     case delivery(OpenClawWatchChatDeliveryCommand)
@@ -90,7 +98,6 @@ final class OpenClawAppDelegate: NSObject, UIApplicationDelegate, @preconcurrenc
     private var pendingExecApprovalPrompts: [ApprovalNotificationPrompt] = []
     private var pendingExecApprovalRequestedPushes: [ApprovalNotificationPrompt] = []
     private var pendingExecApprovalResolvedPushes: [ApprovalNotificationPrompt] = []
-    private var pendingOpenURLs: [URL] = []
 
     weak var appModel: NodeAppModel? {
         didSet {
@@ -109,9 +116,6 @@ final class OpenClawAppDelegate: NSObject, UIApplicationDelegate, @preconcurrenc
             }
             self.deliverPending(&self.pendingExecApprovalResolvedPushes) { push in
                 await model.handleExecApprovalResolvedRemotePush(push)
-            }
-            self.deliverPending(&self.pendingOpenURLs) { url in
-                await model.handleDeepLink(url: url)
             }
         }
     }
@@ -135,10 +139,6 @@ final class OpenClawAppDelegate: NSObject, UIApplicationDelegate, @preconcurrenc
     }
 
     #if DEBUG
-    func _test_resolvedAppModel() -> NodeAppModel? {
-        self.resolvedAppModel()
-    }
-
     func _test_wakeRefreshTaskIdentifier() -> String {
         Self.wakeRefreshTaskIdentifier
     }
@@ -158,22 +158,6 @@ final class OpenClawAppDelegate: NSObject, UIApplicationDelegate, @preconcurrenc
         ApprovalNotificationBridge.registerCategories(center: notificationCenter)
         Task { @MainActor in
             await self.registerForRemoteNotificationsIfEnrollmentReady(application)
-        }
-        return true
-    }
-
-    func application(
-        _: UIApplication,
-        open url: URL,
-        options _: [UIApplication.OpenURLOptionsKey: Any] = [:]) -> Bool
-    {
-        guard DeepLinkParser.parse(url) != nil else { return false }
-        guard let model = resolvedAppModel() else {
-            self.pendingOpenURLs.append(url)
-            return true
-        }
-        Task { @MainActor in
-            await model.handleDeepLink(url: url)
         }
         return true
     }
@@ -212,7 +196,6 @@ final class OpenClawAppDelegate: NSObject, UIApplicationDelegate, @preconcurrenc
         didReceiveRemoteNotification userInfo: [AnyHashable: Any],
         fetchCompletionHandler completionHandler: @escaping (UIBackgroundFetchResult) -> Void)
     {
-        self.logger.info("APNs remote notification received keys=\(userInfo.keys.count, privacy: .public)")
         Task { @MainActor in
             if let push = ApprovalNotificationBridge.parseResolvedPush(userInfo: userInfo) {
                 if let appModel = self.resolvedAppModel() {
@@ -233,7 +216,6 @@ final class OpenClawAppDelegate: NSObject, UIApplicationDelegate, @preconcurrenc
                 return
             }
             let result = await appModel.handleSilentPushWake(userInfo)
-            self.logger.info("APNs wake handled=\(result.handled, privacy: .public)")
             if !result.handled {
                 self.scheduleBackgroundWakeRefresh(afterSeconds: 90, reason: "silent_push_not_applied")
             }
@@ -242,7 +224,6 @@ final class OpenClawAppDelegate: NSObject, UIApplicationDelegate, @preconcurrenc
     }
 
     func scenePhaseChanged(_ phase: ScenePhase) {
-        GatewayDiagnostics.log("app delegate: scene phase changed=\(String(describing: phase))")
         if phase == .background {
             self.scheduleBackgroundWakeRefresh(afterSeconds: 120, reason: "scene_background")
         }
@@ -469,20 +450,12 @@ enum WatchPromptNotificationBridge {
     {
         guard sendResult.queuedForDelivery || !sendResult.deliveredImmediately else { return }
 
-        let title = params.title.trimmingCharacters(in: .whitespacesAndNewlines)
-        let body = params.body.trimmingCharacters(in: .whitespacesAndNewlines)
-        guard !title.isEmpty || !body.isEmpty else { return }
         guard await self.isNotificationAuthorizationAllowed(notificationCenter: notificationCenter),
               !Task.isCancelled
         else { return }
 
-        let normalizedActions = (params.actions ?? []).compactMap { action -> OpenClawWatchAction? in
-            let id = action.id.trimmingCharacters(in: .whitespacesAndNewlines)
-            let label = action.label.trimmingCharacters(in: .whitespacesAndNewlines)
-            guard !id.isEmpty, !label.isEmpty else { return nil }
-            return OpenClawWatchAction(id: id, label: label, style: action.style)
-        }
-        let displayedActions = Array(normalizedActions.prefix(4))
+        // The node invoke boundary normalizes display fields and caps actions before delivery.
+        let displayedActions = params.actions ?? []
 
         var categoryIdentifier = ""
         if !displayedActions.isEmpty {
@@ -523,21 +496,14 @@ enum WatchPromptNotificationBridge {
         }
 
         let content = UNMutableNotificationContent()
-        content.title = title.isEmpty ? "OpenClaw" : title
-        content.body = body
+        content.title = params.title.isEmpty ? "OpenClaw" : params.title
+        content.body = params.body
         content.sound = .default
         content.userInfo = userInfo
         if !categoryIdentifier.isEmpty {
             content.categoryIdentifier = categoryIdentifier
         }
-        switch params.priority ?? .active {
-        case .passive:
-            content.interruptionLevel = .passive
-        case .timeSensitive:
-            content.interruptionLevel = .timeSensitive
-        case .active:
-            content.interruptionLevel = .active
-        }
+        content.interruptionLevel = (params.priority ?? .active).interruptionLevel
 
         let request = UNNotificationRequest(
             identifier: "watch.prompt.\(invokeID)",
@@ -636,8 +602,15 @@ struct OpenClawApp: App {
         GatewaySettingsStore.bootstrapPersistence()
         (UserDefaults(suiteName: OpenClawAppGroup.identifier) ?? .standard)
             .removeObject(forKey: "share.defaultInstruction")
+        // Settings used to persist pasted setup codes (which carry Gateway credentials) here.
+        UserDefaults.standard.removeObject(forKey: "gateway.setupCode")
+        // Retired unattended deep-link key; no build reads it.
+        UserDefaults.standard.removeObject(forKey: "deeplink.agent.key")
         OpenClawType.installUIKitAppearance()
-        let appModel = NodeAppModel(audioAdmissionInitiallyAllowed: false)
+        let appModel = NodeAppModel(
+            voiceNoteRecorder: Self.voiceNoteRecorder,
+            audioAdmissionInitiallyAllowed: false,
+            restoringSavedGatewayRoute: true)
         #if DEBUG
         if ProcessInfo.processInfo.arguments.contains("--openclaw-reset-onboarding") {
             // Reruns must exercise onboarding instead of saved pairing state.
@@ -651,6 +624,18 @@ struct OpenClawApp: App {
             UserDefaults.standard.set(true, forKey: "gateway.hasConnectedOnce")
             UserDefaults.standard.set(true, forKey: "onboarding.quickSetupDismissed")
             appModel.enterScreenshotFixtureMode()
+            if let state = Self.talkFixtureState {
+                appModel.talkMode.enterChatFixture(state)
+                if ProcessInfo.processInfo.arguments.contains("--openclaw-talk-fixture-live") {
+                    appModel.setTalkEnabled(true)
+                } else if let seconds = Self.talkFixtureStartDelay {
+                    // Talk turned on from outside the composer (Shortcuts, another client) over a draft.
+                    Task { @MainActor in
+                        try? await Task.sleep(for: .seconds(seconds))
+                        appModel.setTalkEnabled(true)
+                    }
+                }
+            }
             if Self.screenshotNotificationGuidanceEnabled {
                 appModel._debug_presentNotificationPermissionGuidancePromptForScreenshot()
             }
@@ -670,6 +655,11 @@ struct OpenClawApp: App {
     var body: some Scene {
         WindowGroup {
             RootTabs()
+                .openClawToasts(self.appModel.toasts)
+                #if DEBUG
+                .task { await Self.sendDebugSpokenTurnIfRequested(self.appModel) }
+                #endif
+                .menuStyle(PrimaryInkMenuStyle())
                 .tint(OpenClawBrand.accent)
                 .font(OpenClawType.body)
                 .environment(self.appearanceModel)
@@ -690,6 +680,16 @@ struct OpenClawApp: App {
                     if Self.liveActivityVoicePreviewEnabled {
                         LiveActivityManager.shared.startVoicePreview()
                     }
+                    if let command = Self.voiceWakeFixtureCommand {
+                        // UI tests: hear `command` every few seconds, as if spoken, with no microphone
+                        // and no send. Only the toast reacts to it.
+                        while !Task.isCancelled {
+                            try? await Task.sleep(for: .seconds(4))
+                            self.appModel.voiceWake.lastTriggeredCommand = nil
+                            try? await Task.sleep(for: .milliseconds(100))
+                            self.appModel.voiceWake.lastTriggeredCommand = command
+                        }
+                    }
                     #endif
                 }
                 .onReceive(
@@ -698,8 +698,6 @@ struct OpenClawApp: App {
                         OpenClawType.refreshUIKitAppearance(in: Self.connectedWindows())
                     })
                 .onOpenURL { url in
-                    // SwiftUI owns normal scene delivery; the delegate also queues URLs
-                    // that arrive before the scene has installed its model.
                     Task { await self.appModel.handleDeepLink(url: url) }
                 }
                 .onChange(of: self.scenePhase) { _, newValue in
@@ -719,11 +717,60 @@ struct OpenClawApp: App {
         #endif
     }
 
+    private static var voiceNoteRecorder: OpenClawVoiceNoteRecorder {
+        #if DEBUG
+        if self.screenshotModeEnabled, ProcessInfo.processInfo.arguments.contains("--openclaw-voice-note-fixture") {
+            return OpenClawVoiceNoteRecorder(capture: VoiceNoteFixtureCapture())
+        }
+        #endif
+        return OpenClawVoiceNoteRecorder()
+    }
+
+    #if DEBUG
+    private static var talkFixtureState: TalkModeManager.ChatFixtureState? {
+        let arguments = ProcessInfo.processInfo.arguments
+        guard let index = arguments.firstIndex(of: "--openclaw-talk-fixture"), index + 1 < arguments.count
+        else { return nil }
+        return TalkModeManager.ChatFixtureState(rawValue: arguments[index + 1])
+    }
+
+    private static var talkFixtureStartDelay: Double? {
+        let arguments = ProcessInfo.processInfo.arguments
+        guard let index = arguments.firstIndex(of: "--openclaw-talk-fixture-start-after"), index + 1 < arguments.count
+        else { return nil }
+        return Double(arguments[index + 1])
+    }
+    #endif
+
+    #if DEBUG
+    @MainActor
+    private static func sendDebugSpokenTurnIfRequested(_ appModel: NodeAppModel) async {
+        let arguments = ProcessInfo.processInfo.arguments
+        guard let index = arguments.firstIndex(of: "--openclaw-talk-say"), index + 1 < arguments.count else { return }
+        for _ in 0..<60 where !appModel.talkMode.isGatewayConnected {
+            try? await Task.sleep(for: .milliseconds(500))
+        }
+        await appModel.talkMode._debug_sendSpokenTurn(arguments[index + 1])
+    }
+    #endif
+
     private static var screenshotNotificationGuidanceEnabled: Bool {
         #if DEBUG
         ProcessInfo.processInfo.arguments.contains("--openclaw-screenshot-notification-guidance")
         #else
         false
+        #endif
+    }
+
+    private static var voiceWakeFixtureCommand: String? {
+        #if DEBUG
+        let arguments = ProcessInfo.processInfo.arguments
+        guard let index = arguments.firstIndex(of: "--openclaw-voice-wake-fixture"),
+              arguments.indices.contains(index + 1)
+        else { return nil }
+        return arguments[index + 1]
+        #else
+        nil
         #endif
     }
 

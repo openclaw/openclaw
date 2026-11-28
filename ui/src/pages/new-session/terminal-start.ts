@@ -1,8 +1,8 @@
-import { html, nothing } from "lit";
 import type { GatewayBrowserClient } from "../../api/gateway.ts";
 import { pathForTerminalSession } from "../../app-route-paths.ts";
-import { t } from "../../i18n/index.ts";
 import { registerNewSessionSetupEnglish } from "../../i18n/locales/en-new-session-setup.ts";
+import type { ChatAttachment } from "../../lib/chat/chat-types.ts";
+import { formatUiError } from "../../lib/format-error.ts";
 import {
   readSessionMethodAccess,
   type SessionMethodAccess,
@@ -10,6 +10,7 @@ import {
 import { startCatalogSessionInTerminal } from "../../lib/sessions/catalog-terminal.ts";
 import { normalizeAgentId } from "../../lib/sessions/session-key.ts";
 import { createManagedWorktree } from "../../lib/worktrees/create-worktree.ts";
+import { foldPastedTextAttachments } from "../chat/pasted-text-card.ts";
 import { buildLocalUserMessage } from "../chat/user-message-content.ts";
 import type { DraftPlaceState } from "./draft-place-state.ts";
 import type { DraftSubmissionSnapshot } from "./draft-submission-contract.ts";
@@ -38,6 +39,7 @@ export async function submitDraftInTerminal(options: {
   place: DraftPlaceState;
   flow: {
     readonly message: string;
+    readonly attachmentDraft: { readonly attachments: readonly ChatAttachment[] };
     canSubmit(): boolean;
     noteBlockedSubmitAttempt(): void;
     setError(message: string): void;
@@ -60,7 +62,11 @@ export async function submitDraftInTerminal(options: {
     return;
   }
   const submission = options.capture(client);
-  const initialMessage = flow.message.trim();
+  // Terminals accept no files; the submit gate admits only pasted-text cards, which are message text.
+  const initialMessage = foldPastedTextAttachments(
+    flow.message,
+    flow.attachmentDraft.attachments,
+  ).text.trim();
   const terminalInput = {
     hostId: place.terminalHostId,
     cwd: place.folder.trim() || (place.terminalOnNode ? "" : place.workspacePath()),
@@ -116,7 +122,7 @@ export async function submitDraftInTerminal(options: {
     }
   } catch (error) {
     if (submission.isCurrent()) {
-      flow.setError(error instanceof Error ? error.message : String(error));
+      flow.setError(formatUiError(error));
     }
   } finally {
     if (submission.isRequestCurrent()) {
@@ -125,48 +131,9 @@ export async function submitDraftInTerminal(options: {
   }
 }
 
-export function renderNewSessionTerminalHost(params: {
+export type NewSessionTerminalHostOptions = {
   hosts: Array<{ hostId: string; label: string }> | undefined;
   hostId: string;
   submitting: boolean;
   onSelect: (hostId: string) => void;
-}) {
-  if (!params.hosts) {
-    return nothing;
-  }
-  if (params.hosts.length === 0) {
-    return html`<span class="new-session-page__catalog-unavailable" role="status">
-      ${t("newSession.nativeHostsUnavailable")}
-    </span>`;
-  }
-  if (params.hosts.length === 1 && params.hosts[0]?.hostId === params.hostId) {
-    return nothing;
-  }
-  return html`<div class="new-session-page__select new-session-page__menu-field">
-    <span>${t("newSession.where")}</span>
-    <select
-      class="new-session-page__trigger"
-      aria-label=${t("newSession.where")}
-      .value=${params.hostId}
-      ?disabled=${params.submitting}
-      @change=${(event: Event) => {
-        if (event.currentTarget instanceof HTMLSelectElement) {
-          params.onSelect(event.currentTarget.value);
-        }
-      }}
-    >
-      ${
-        !params.hosts.some((host) => host.hostId === params.hostId)
-          ? html`<option value=${params.hostId} selected disabled>
-              ${t("newSession.chooseNativeHost")}
-            </option>`
-          : nothing
-      }
-      ${params.hosts.map(
-        (host) => html`<option value=${host.hostId} ?selected=${host.hostId === params.hostId}>
-          ${host.label}
-        </option>`,
-      )}
-    </select>
-  </div>`;
-}
+};

@@ -1,37 +1,46 @@
-/** Linux systemd unit paths and environment-file parsing. */
 import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
+import { isStringArray } from "@openclaw/normalization-core/record-coerce";
 import { hasErrnoCode } from "../infra/errno.js";
+import { hasCommandProcessCleanupError } from "../process/exec-result.js";
 import {
   resolveGatewaySystemdServiceName,
   resolveGatewaySystemdServiceNameCandidates,
 } from "./constants.js";
 import { normalizeWindowsPathSeparators } from "./output.js";
 import { resolveDaemonHomeDir } from "./paths.js";
+import { withServiceInspectionBudget } from "./service-inspection-budget.js";
 import {
   ServiceDefinitionInspectionError,
   ServiceStartRefusalError,
   ServiceOwnershipRefusalError,
   findServiceOwnershipRefusal,
+  SYSTEMD_STATE_SELECTOR_KEYS,
 } from "./service-inspection-error.js";
 import { resolveSystemdServiceStartRefusal } from "./service-runtime.js";
 import type {
   GatewayServiceCommandConfig,
   GatewayServiceCommandSnapshot,
   GatewayServiceEnv,
-  GatewayServiceEnvironmentValueSource,
   GatewayServiceManagedOverrides,
   GatewayServiceReadOptions,
   SystemdServiceReadTarget,
 } from "./service-types.js";
+import { systemdUnitCallArgs } from "./systemd-bus-query.js";
 import { createSystemdCommandQuery } from "./systemd-command-query.js";
+import { readSystemdDropInOverrides } from "./systemd-drop-in-overrides.js";
 import {
-  resolveSystemdEnvironmentFiles,
+  buildSystemdCommandSnapshot,
+  expandSystemdSpecifier,
+  parseSystemdEnvironmentFileSpec,
   type SystemdEnvironmentFileSpec,
-  type SystemdEnvironmentFilesParams,
 } from "./systemd-environment-files.js";
 import { assertSystemdServiceAccount } from "./systemd-service-identity.js";
+import {
+  canResolveSystemdStateFromHost,
+  readSystemdAccountHome,
+} from "./systemd-state-identity.js";
 import {
   parseSystemdEnvAssignments,
   parseSystemdExecStart,
@@ -41,13 +50,6 @@ import {
 
 const SYSTEMD_GATEWAY_DOTENV_FILENAME = "gateway.systemd.env";
 const SYSTEMD_NODE_DOTENV_FILENAME = "node.systemd.env";
-
-type SystemdCommandSnapshotParams = SystemdEnvironmentFilesParams & {
-  programArguments: string[];
-  workingDirectory: string;
-  inlineEnvironment: Record<string, string>;
-  unsetEnvironment: string[];
-};
 
 export function resolveSystemdUnitPathForName(env: GatewayServiceEnv, name: string): string {
   const home = normalizeWindowsPathSeparators(resolveDaemonHomeDir(env));
@@ -81,39 +83,10 @@ export function resolveSystemdUnitPath(env: GatewayServiceEnv): string {
   return resolveSystemdUnitPathForName(env, resolveSystemdServiceName(env));
 }
 
-// Unit file parsing/rendering: see systemd-unit.ts
-
 const UNKNOWN_SYSTEMD_OVERRIDES = {
   launcher: "command",
   environment: true,
 } satisfies GatewayServiceManagedOverrides;
-
-async function buildSystemdCommandSnapshot(
-  params: SystemdCommandSnapshotParams,
-): Promise<GatewayServiceCommandSnapshot> {
-  const fileEnvironment = await resolveSystemdEnvironmentFiles(params);
-  const environment = { ...params.inlineEnvironment, ...fileEnvironment };
-  const environmentValueSources: Record<string, GatewayServiceEnvironmentValueSource> =
-    Object.fromEntries(Object.keys(params.inlineEnvironment).map((key) => [key, "inline"]));
-  for (const key of Object.keys(fileEnvironment)) {
-    environmentValueSources[key] = Object.hasOwn(params.inlineEnvironment, key)
-      ? "inline-and-file"
-      : "file";
-  }
-  for (const assignment of params.unsetEnvironment) {
-    const separator = assignment.indexOf("=");
-    const key = separator < 0 ? assignment : assignment.slice(0, separator);
-    if (separator < 0 || environment[key] === assignment.slice(separator + 1)) {
-      delete environment[key];
-      delete environmentValueSources[key];
-    }
-  }
-  return {
-    programArguments: params.programArguments,
-    ...(params.workingDirectory ? { workingDirectory: params.workingDirectory } : {}),
-    ...(Object.keys(environment).length > 0 ? { environment, environmentValueSources } : {}),
-  };
-}
 
 async function readSystemdManagerCommand(
   env: GatewayServiceEnv,
@@ -135,19 +108,12 @@ async function readSystemdManagerCommand(
     opts,
     unavailable,
   );
+  let effectiveExecutable: string | undefined;
   try {
     const assertAbsentWithoutLoading = async (): Promise<null> => {
       // Missing loaded objects do not prove an authored/native unit definition is absent.
       const fileState = await query(
-        [
-          "call",
-          destination,
-          "/org/freedesktop/systemd1",
-          `${manager}.Manager`,
-          "GetUnitFileState",
-          "s",
-          unitName,
-        ],
+        systemdUnitCallArgs(destination, unitName, "GetUnitFileState"),
         ["s"],
       );
       const value = fileState?.[0];
@@ -165,15 +131,11 @@ async function readSystemdManagerCommand(
       return null;
     };
     const loaded = await query(
-      [
-        "call",
+      systemdUnitCallArgs(
         destination,
-        "/org/freedesktop/systemd1",
-        `${manager}.Manager`,
-        opts?.requireLoaded && !inspection ? "GetUnit" : "LoadUnit",
-        "s",
         unitName,
-      ],
+        opts?.requireLoaded && !inspection ? "GetUnit" : "LoadUnit",
+      ),
       ["o"],
     );
     if (!loaded) {
@@ -191,8 +153,6 @@ async function readSystemdManagerCommand(
     }
     const readProperties = (scope: "Unit" | "Service", names: string[], signatures: string[]) =>
       query(["get-property", destination, unitPath, `${manager}.${scope}`, ...names], signatures);
-    const isStringArray = (value: unknown): value is string[] =>
-      Array.isArray(value) && value.every((entry) => typeof entry === "string");
     const unitProperties = await readProperties(
       "Unit",
       [
@@ -271,7 +231,10 @@ async function readSystemdManagerCommand(
       typeof execution[0] !== "string" ||
       execution[0].length === 0 ||
       typeof execution[2] !== "boolean" ||
-      !execution.slice(3).every(Number.isInteger) ||
+      !execution
+        .slice(3, 7)
+        .every((value) => typeof value === "bigint" || Number.isInteger(value)) ||
+      !execution.slice(7).every(Number.isInteger) ||
       !isStringArray(programArguments) ||
       programArguments.length === 0 ||
       typeof workingDirectory !== "string" ||
@@ -314,7 +277,25 @@ async function readSystemdManagerCommand(
       typeof user === "string" &&
       expectedServiceAccount === undefined
         ? opts?.requireEffective
-          ? assertSystemdServiceAccount(user)
+          ? assertSystemdServiceAccount(user, () => ({
+              unitName,
+              unitPath: sourcePath,
+              serviceUser: user,
+              programArguments,
+              workingDirectory: workingDirectory.replace(/^!/, ""),
+              selectors: Object.fromEntries(
+                SYSTEMD_STATE_SELECTOR_KEYS.flatMap((key) =>
+                  Object.hasOwn(inlineEnvironment, key) ? [[key, inlineEnvironment[key]]] : [],
+                ),
+              ),
+              selectorsIncomplete:
+                fileSpecs.length > 0 ||
+                unset.some((assignment) =>
+                  SYSTEMD_STATE_SELECTOR_KEYS.some(
+                    (key) => assignment === key || assignment.startsWith(`${key}=`),
+                  ),
+                ),
+            }))
           : os.userInfo()
         : undefined;
     const sameAccount =
@@ -337,9 +318,12 @@ async function readSystemdManagerCommand(
         : null;
     const managedOverrides =
       !reloadPending && managedDefinition
-        ? await readSystemdDropInOverrides(dropInPaths, managedUnsetEnvironment, env).catch(
-            () => UNKNOWN_SYSTEMD_OVERRIDES,
-          )
+        ? await readSystemdDropInOverrides(
+            dropInPaths,
+            managedUnsetEnvironment,
+            env,
+            fileSpecs,
+          ).catch(() => UNKNOWN_SYSTEMD_OVERRIDES)
         : UNKNOWN_SYSTEMD_OVERRIDES;
     const snapshot = await buildSystemdCommandSnapshot({
       programArguments,
@@ -350,12 +334,26 @@ async function readSystemdManagerCommand(
       failOnUnavailable: opts?.requireEffective,
     });
     if (
-      sameAccount &&
-      !Object.hasOwn(snapshot.environment ?? {}, "HOME") &&
-      !unset.some((assignment) => assignment === "HOME" || assignment === `HOME=${account.homedir}`)
+      systemScope &&
+      typeof user === "string" &&
+      !Object.hasOwn(snapshot.environment ?? {}, "HOME")
     ) {
-      snapshot.environment = { ...snapshot.environment, HOME: account.homedir };
+      const home = sameAccount ? account.homedir : await readSystemdAccountHome(user);
+      if (
+        !home ||
+        unset.some((assignment) => assignment === "HOME" || assignment === `HOME=${home}`)
+      ) {
+        snapshot.stateIdentityUnverified = true;
+      } else {
+        // systemd supplies User='s home; the inspecting account's HOME is unrelated.
+        snapshot.environment = { ...snapshot.environment, HOME: home };
+      }
     }
+    if (systemScope && opts?.inspectStateIdentity && !snapshot.stateIdentityUnverified) {
+      snapshot.stateIdentityUnverified =
+        !(await canResolveSystemdStateFromHost(query, destination, unitPath)) || undefined;
+    }
+    effectiveExecutable = execution[0];
     return {
       ...snapshot,
       ...(managedDefinition && managedOverrides ? { managedDefinition, managedOverrides } : {}),
@@ -365,112 +363,10 @@ async function readSystemdManagerCommand(
     };
   } finally {
     await close();
-  }
-}
-
-async function readSystemdDropInOverrides(
-  dropInPaths: string[],
-  managedUnsetEnvironment: string[],
-  env: GatewayServiceEnv,
-): Promise<GatewayServiceManagedOverrides> {
-  const inlineEnvironmentKeys = new Set<string>();
-  const fileEnvironmentKeys = new Set<string>();
-  const unsetEnvironmentKeys = new Set<string>();
-  const overrides: GatewayServiceManagedOverrides = {};
-  let resetInline = false;
-  let resetFiles = false;
-  for (const pathname of dropInPaths) {
-    const content = await fs.readFile(pathname, "utf8");
-    let inService = false;
-    // Loaded drop-ins own directives even when their current values equal the managed base.
-    for (const rawLine of splitSystemdLogicalLines(content)) {
-      const line = rawLine.trim();
-      if (!line || line.startsWith("#") || line.startsWith(";")) {
-        continue;
-      }
-      if (line.startsWith("[")) {
-        if (!line.endsWith("]")) {
-          throw new Error("Invalid systemd drop-in section");
-        }
-        inService = line === "[Service]";
-        continue;
-      }
-      if (!inService) {
-        continue;
-      }
-      const separator = line.indexOf("=");
-      if (separator < 0) {
-        throw new Error("Invalid systemd drop-in directive");
-      }
-      const directive = line.slice(0, separator).trim();
-      if (directive === "ExecStart" || directive === "WorkingDirectory") {
-        overrides.launcher =
-          directive === "ExecStart" ? "command" : (overrides.launcher ?? "working-directory");
-      } else if (["Environment", "EnvironmentFile", "UnsetEnvironment"].includes(directive)) {
-        const value = line.slice(separator + 1).trim();
-        if (!value) {
-          if (directive === "Environment") {
-            inlineEnvironmentKeys.clear();
-            resetInline = true;
-          } else if (directive === "EnvironmentFile") {
-            fileEnvironmentKeys.clear();
-            resetFiles = true;
-          } else {
-            unsetEnvironmentKeys.clear();
-            for (const assignment of managedUnsetEnvironment) {
-              unsetEnvironmentKeys.add(assignment.split("=", 1)[0] ?? assignment);
-            }
-          }
-        } else if (directive === "Environment") {
-          const assignments = parseSystemdEnvAssignments(value);
-          if (assignments.length !== splitSystemdEnvironmentWords(value).length) {
-            throw new Error("Invalid systemd drop-in environment");
-          }
-          for (const { key } of assignments) {
-            inlineEnvironmentKeys.add(key);
-          }
-        } else if (directive === "UnsetEnvironment") {
-          for (const assignment of splitSystemdEnvironmentWords(value)) {
-            const key = assignment.split("=", 1)[0];
-            if (!key) {
-              throw new Error("Invalid systemd drop-in environment removal");
-            }
-            unsetEnvironmentKeys.add(key);
-          }
-        } else if (value.replace(/%%|%h/gu, "").includes("%")) {
-          overrides.environment = true;
-        } else {
-          try {
-            const spec = parseSystemdEnvironmentFileSpec(value, env);
-            const fileEnvironment = await resolveSystemdEnvironmentFiles({
-              environmentFileSpecs: spec ? [spec] : [],
-              failOnUnavailable: true,
-            });
-            for (const key of Object.keys(fileEnvironment)) {
-              fileEnvironmentKeys.add(key);
-            }
-          } catch {
-            overrides.environment = true;
-          }
-        }
-      }
+    if (effectiveExecutable) {
+      opts?.onEffectiveExecutable?.(effectiveExecutable);
     }
   }
-  if (overrides.environment !== true) {
-    const ownedKeys = [
-      ...new Set([...inlineEnvironmentKeys, ...fileEnvironmentKeys, ...unsetEnvironmentKeys]),
-    ];
-    if (ownedKeys.length > 0 || resetInline || resetFiles) {
-      overrides.environment = {
-        ...(ownedKeys.length > 0 ? { keys: ownedKeys } : {}),
-        ...(resetInline ? { resetInline: true } : {}),
-        ...(resetFiles ? { resetFiles: true } : {}),
-      };
-    }
-  }
-  // A known-empty set preserves the authored definition without mistaking native
-  // defaults (such as a user service's home cwd) for operator-owned overrides.
-  return overrides;
 }
 
 export async function readSystemdServiceExecStart(
@@ -526,46 +422,48 @@ export async function readSystemdServiceCommandLocation(
       >;
     }
 > {
-  const deadline = performance.now() + 5000;
-  const target =
-    systemdReadTarget ??
-    (await (
-      await import("./systemd-scope.js")
-    ).findInstalledSystemdGatewayScope(env, { requireLoaded: true, timeoutMs: 5000 })) ??
-    undefined;
-  const read = (systemdReadBinding?: GatewayServiceReadOptions["systemdReadBinding"]) => {
-    const timeoutMs = deadline - performance.now();
-    if (timeoutMs <= 0) {
-      throw new Error("Service location inspection deadline expired.");
+  return await withServiceInspectionBudget(async (inspectionBudget) => {
+    const deadline = inspectionBudget.now() + 5000;
+    const target =
+      systemdReadTarget ??
+      (await (
+        await import("./systemd-scope.js")
+      ).findInstalledSystemdGatewayScope(env, { requireLoaded: true, timeoutMs: 5000 })) ??
+      undefined;
+    const read = (systemdReadBinding?: GatewayServiceReadOptions["systemdReadBinding"]) => {
+      const timeoutMs = deadline - inspectionBudget.now();
+      if (timeoutMs <= 0) {
+        throw new Error("Service location inspection deadline expired.");
+      }
+      return readSystemdServiceCommand(
+        env,
+        {
+          requireEffective: true,
+          requireLoaded: true,
+          systemdReadTarget: target,
+          systemdReadBinding,
+          timeoutMs,
+        },
+        true,
+      );
+    };
+    let command: Awaited<ReturnType<typeof read>>;
+    if (target?.scope === "system") {
+      command = await read();
+    } else {
+      const [{ withSystemdServiceReadBinding }, { admitSystemdServiceReadBinding }] =
+        await Promise.all([import("./service-operation-lock.js"), import("./systemd-peer.js")]);
+      command = await withSystemdServiceReadBinding(
+        env,
+        () => admitSystemdServiceReadBinding(env, deadline, target?.unitName),
+        read,
+        deadline,
+      );
     }
-    return readSystemdServiceCommand(
-      env,
-      {
-        requireEffective: true,
-        requireLoaded: true,
-        systemdReadTarget: target,
-        systemdReadBinding,
-        timeoutMs,
-      },
-      true,
-    );
-  };
-  let command: Awaited<ReturnType<typeof read>>;
-  if (target?.scope === "system") {
-    command = await read();
-  } else {
-    const [{ withSystemdServiceReadBinding }, { admitSystemdServiceReadBinding }] =
-      await Promise.all([import("./service-operation-lock.js"), import("./systemd-peer.js")]);
-    command = await withSystemdServiceReadBinding(
-      env,
-      () => admitSystemdServiceReadBinding(env, deadline, target?.unitName),
-      read,
-      deadline,
-    );
-  }
-  return command === "not-loaded" || command === null
-    ? { kind: "not-loaded" }
-    : { kind: "command", command };
+    return command === "not-loaded" || command === null
+      ? { kind: "not-loaded" as const }
+      : { kind: "command" as const, command };
+  });
 }
 
 async function readSystemdServiceCommand(
@@ -667,7 +565,11 @@ async function readSystemdServiceCommand(
         return command;
       })
       .catch((error: unknown) => {
-        if (opts?.requireEffective || findServiceOwnershipRefusal(error)) {
+        if (
+          opts?.requireEffective ||
+          findServiceOwnershipRefusal(error) ||
+          hasCommandProcessCleanupError(error)
+        ) {
           throw error;
         }
         opts?.onCommandInspection?.({ kind: "unavailable", error });
@@ -684,7 +586,11 @@ async function readSystemdServiceCommand(
     };
   } catch (error) {
     options?.onCommandInspection?.({ kind: "unavailable", error });
-    if (options?.requireEffective || findServiceOwnershipRefusal(error)) {
+    if (
+      options?.requireEffective ||
+      findServiceOwnershipRefusal(error) ||
+      hasCommandProcessCleanupError(error)
+    ) {
       throw error;
     }
     return null;
@@ -713,20 +619,4 @@ export function resolveLegacyNodeSystemdEnvironmentFilePath(params: {
 
 export function isNodeSystemdEnvironment(env: GatewayServiceEnv): boolean {
   return env.OPENCLAW_SERVICE_KIND?.trim() === "node";
-}
-
-function expandSystemdSpecifier(input: string, env: GatewayServiceEnv): string {
-  return input.replace(/%%|%h/gu, (specifier) =>
-    specifier === "%%" ? "%" : normalizeWindowsPathSeparators(resolveDaemonHomeDir(env)),
-  );
-}
-
-function parseSystemdEnvironmentFileSpec(
-  value: string,
-  env: GatewayServiceEnv,
-): SystemdEnvironmentFileSpec | undefined {
-  const optional = value.startsWith("-");
-  const pathname = expandSystemdSpecifier(optional ? value.slice(1) : value, env);
-  // Native systemd ignores relative declarations rather than resolving them beside the unit.
-  return path.posix.isAbsolute(pathname) ? [pathname, optional] : undefined;
 }

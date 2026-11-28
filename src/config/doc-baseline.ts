@@ -463,13 +463,13 @@ function writeFileAtomic(filePath: string, content: string): void {
   replaceFileAtomicSync({
     filePath,
     content,
+    allowDrvfsRenameRecovery: true,
     dirMode: 0o755,
     mode: 0o644,
     tempPrefix: path.basename(filePath),
   });
 }
 
-/** Build the sha256 hash file content for all config baseline artifacts. */
 function computeConfigBaselineHashFileContent(json: ConfigDocBaselineArtifacts): string {
   const lines = [
     `${sha256Hex(json.combined)}  config-baseline.json`,

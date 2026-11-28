@@ -1,17 +1,5 @@
 import type { InternalSessionEntry as SessionEntry } from "./types.js";
 
-/** Call only after archive drain or startup reconciliation has excluded live work. */
-export function settleArchivedSessionRun(entry: SessionEntry, now: number): void {
-  if (entry.archivedAt === undefined || entry.status !== "running") {
-    return;
-  }
-  // Keep recovery/delivery receipts and known run timing; archive cancels execution.
-  entry.status = "killed";
-  entry.abortedLastRun = true;
-  entry.endedAt ??= now;
-  delete entry.lifecycleRunId;
-}
-
 /** Returns true for terminal statuses that a later visible turn may recover in place. */
 export function isRecoverableTerminalSessionStatus(
   status: SessionEntry["status"] | undefined,
@@ -30,15 +18,28 @@ export function recoverTerminalSessionEntryForVisibleTurn(entry: SessionEntry): 
     endedAt: undefined,
     runtimeMs: undefined,
     lastRunError: undefined,
+    suppressErrorNotice: undefined,
     abortedLastRun: undefined,
-    restartRecoveryForceSafeTools: undefined,
-    restartRecoveryDeliveryContext: undefined,
-    restartRecoveryDeliveryMediaUrls: undefined,
-    restartRecoveryDisableMessageTool: undefined,
-    restartRecoverySuppressTextDelivery: undefined,
-    restartRecoveryDeliveryRequestFingerprint: undefined,
-    restartRecoveryDeliveryRunId: undefined,
-    restartRecoveryDeliverySourceRunId: undefined,
-    restartRecoverySourceReplyDeliveryMode: undefined,
   };
+}
+
+/** The row narrows candidates; the initiating transcript key confirms the exact wire ID. */
+export function matchesPersistedClientRunId(stored: string, wire: string): boolean {
+  return stored === wire || stored === wire.trim();
+}
+
+/** Projection refreshes can retain a recovered result only while the same attempt owns the row. */
+export function samePersistedSessionRun(
+  before: SessionEntry | undefined,
+  after: SessionEntry | undefined,
+): boolean {
+  return (
+    before === after ||
+    (before?.sessionId === after?.sessionId &&
+      before?.lastRunId === after?.lastRunId &&
+      before?.lifecycleRunId === after?.lifecycleRunId &&
+      before?.status === after?.status &&
+      before?.startedAt === after?.startedAt &&
+      before?.endedAt === after?.endedAt)
+  );
 }

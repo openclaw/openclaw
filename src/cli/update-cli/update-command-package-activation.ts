@@ -5,7 +5,11 @@ import { assertNoPendingPackageActivation } from "../../infra/package-update-act
 import { resolveUpdateInstallRoot } from "../../infra/update-install-root.js";
 import { defaultRuntime } from "../../runtime.js";
 import type { MutableUpdateExecutionParams } from "./update-command-execution.types.js";
-import { reserveUpdateCommandExecutorSlot } from "./update-command-executor.js";
+import {
+  captureUpdateCommandExecutorAuthority,
+  reserveUpdateCommandExecutorSlot,
+  type UpdateCommandExecutor,
+} from "./update-command-executor.js";
 import type { PackageInstallUpdateParams } from "./update-command-package.js";
 import { UpdateCommandPendingRecoveryFailure } from "./update-command-result.js";
 
@@ -44,8 +48,27 @@ export function assertUpdatePackageActivationAdmission(
   if (options?.serviceRoot && options.serviceRoot !== root) {
     assertUpdatePackageActivationAdmission(options.serviceRoot, {
       continuation: options.continuation,
+      dryRun: options.dryRun,
     });
   }
+}
+
+/** Own interruption settlement for the package root before target metadata can block. */
+export async function admitUpdatePackageRoot(
+  executor: UpdateCommandExecutor,
+  root: string,
+  serviceRoot: string | undefined,
+  run: MutableUpdateExecutionParams["opts"]["run"],
+): Promise<void> {
+  assertUpdatePackageActivationAdmission(root, { serviceRoot });
+  const fence = await executor.enter(root, { preflight: true, serviceRoot });
+  if (run) {
+    run.executorFence = fence;
+  }
+  fence.assertCurrent();
+  assertUpdatePackageActivationAdmission(captureUpdateCommandExecutorAuthority(fence).installKey, {
+    serviceRoot,
+  });
 }
 
 export function createPackageUpdateActivationOptions(params: {

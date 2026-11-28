@@ -38,6 +38,7 @@ type EndCallContext = Pick<
   | "notifyHangupTimers"
   | "endCallOperations"
   | "mutationQueue"
+  | "beforeCallEnd"
 >;
 
 type ConnectedCallContext = Pick<CallManagerContext, "activeCalls" | "provider">;
@@ -82,6 +83,7 @@ export async function initiateCall(
   const dtmfSequence = opts.dtmfSequence;
   const requesterSessionKey = opts.requesterSessionKey?.trim();
   const agentId = normalizeAgentId(opts.agentId ?? ctx.config.agentId);
+  const brief = opts.brief;
   if (dtmfSequence) {
     const validationError = validateDtmfDigits(dtmfSequence);
     if (validationError) {
@@ -117,6 +119,11 @@ export async function initiateCall(
     return { callId: "", success: false, error: "fromNumber not configured" };
   }
 
+  const pendingNotifyAmd =
+    mode === "notify" &&
+    Boolean(initialMessage) &&
+    ctx.provider.name === "twilio" &&
+    ctx.config.voicemail?.detection === "twilio";
   const callRecord: CallRecord = {
     callId,
     provider: ctx.provider.name,
@@ -138,7 +145,16 @@ export async function initiateCall(
     metadata: {
       ...(initialMessage && { initialMessage }),
       mode,
+      ...(pendingNotifyAmd ? { pendingNotifyAmd: true } : {}),
+      ...(ctx.config.voicemail?.detection === "twilio" &&
+      (ctx.provider.name === "twilio" || ctx.provider.name === "mock")
+        ? { voicemailManagedByHost: true }
+        : {}),
       ...(requesterSessionKey ? { requesterSessionKey } : {}),
+      ...(brief ? { brief } : {}),
+      ...(brief?.maxDurationSeconds
+        ? { maxDurationSeconds: Math.min(brief.maxDurationSeconds, ctx.config.maxDurationSeconds) }
+        : {}),
     },
   };
 
@@ -159,7 +175,9 @@ export async function initiateCall(
     }
     let inlineTwiml: string | undefined;
     let preConnectTwiml: string | undefined;
-    if (mode === "notify" && initialMessage) {
+    if (pendingNotifyAmd) {
+      inlineTwiml = '<Response><Pause length="60"/></Response>';
+    } else if (mode === "notify" && initialMessage) {
       const pollyVoice = mapVoiceToPolly(resolvePreferredTtsVoice(ctx.config));
       inlineTwiml = generateNotifyTwiml(initialMessage, pollyVoice);
       console.log(`[voice-call] Using inline TwiML for notify mode (voice: ${pollyVoice})`);
@@ -188,6 +206,7 @@ export async function initiateCall(
       webhookUrl: ctx.webhookUrl,
       inlineTwiml,
       preConnectTwiml,
+      ...(ctx.config.voicemail?.detection === "twilio" ? { voicemail: ctx.config.voicemail } : {}),
       ...(streamSession
         ? { streamUrl: streamSession.streamUrl, streamAuthToken: streamSession.token }
         : {}),
@@ -228,6 +247,7 @@ export async function initiateCall(
 
 export type SpeakOptions = {
   listenAfterPlayback?: boolean;
+  turnToken?: string;
   isCurrent?: () => boolean;
 };
 
@@ -289,6 +309,7 @@ export async function speak(
       text,
       voice,
       ...(options?.listenAfterPlayback ? { listenAfterPlayback: true } : {}),
+      ...(options?.turnToken ? { turnToken: options.turnToken } : {}),
     });
 
     if (!(await updateCall(ctx, call, (next) => addTranscriptEntry(next, "bot", text)))) {
@@ -362,6 +383,13 @@ export async function speakInitialMessage(
     return;
   }
 
+  if (
+    call.metadata?.pendingNotifyAmd ||
+    call.metadata?.notifyStatus ||
+    call.metadata?.voicemailStatus
+  ) {
+    return;
+  }
   const initialMessage = call.metadata?.initialMessage as string | undefined;
   const mode = (call.metadata?.mode as CallMode) ?? "conversation";
 
@@ -380,7 +408,9 @@ export async function speakInitialMessage(
 
   try {
     console.log(`[voice-call] Speaking initial message for call ${call.callId} (mode: ${mode})`);
-    const result = await speak(ctx, call.callId, initialMessage);
+    const result = await speak(ctx, call.callId, initialMessage, {
+      listenAfterPlayback: mode === "conversation" && ctx.provider?.name === "twilio",
+    });
     if (!result.success) {
       console.warn(`[voice-call] Failed to speak initial message: ${result.error}`);
       return;
@@ -448,10 +478,13 @@ export async function speakInitialMessage(
       if (ctx.isStopping()) {
         throw new Error("Voice Call manager is stopping");
       }
-      await ctx.provider.startListening({
-        callId: call.callId,
-        providerCallId: call.providerCallId ?? providerCallId,
-      });
+      // Twilio's Say already owns the following Gather; replacing it cuts playback short.
+      if (ctx.provider.name !== "twilio") {
+        await ctx.provider.startListening({
+          callId: call.callId,
+          providerCallId: call.providerCallId ?? providerCallId,
+        });
+      }
     }
   } finally {
     ctx.initialMessageInFlight.delete(call.callId);
@@ -478,7 +511,14 @@ export async function continueCall(
   const turnToken = provider.name === "twilio" ? crypto.randomUUID() : undefined;
 
   try {
-    const speakResult = await speak(ctx, callId, prompt);
+    const listenAfterPlayback =
+      provider.name === "twilio" && !hasConversationStreamConnect(provider, ctx.config);
+    const speakResult = await speak(
+      ctx,
+      callId,
+      prompt,
+      listenAfterPlayback ? { listenAfterPlayback: true, turnToken } : undefined,
+    );
     if (!speakResult.success) {
       return speakResult;
     }
@@ -494,11 +534,13 @@ export async function continueCall(
       throw new Error("Voice Call manager is stopping");
     }
     const listenStartedAt = Date.now();
-    await provider.startListening({
-      callId,
-      providerCallId: call.providerCallId ?? providerCallId,
-      turnToken,
-    });
+    if (!listenAfterPlayback) {
+      await provider.startListening({
+        callId,
+        providerCallId: call.providerCallId ?? providerCallId,
+        turnToken,
+      });
+    }
     if (ctx.isStopping()) {
       throw new Error("Voice Call manager is stopping");
     }
@@ -569,13 +611,19 @@ export function endCall(
         reason,
       });
 
-      await ctx.mutationQueue.enqueue("state", () =>
-        finalizeCall({
-          ctx,
-          call,
-          endReason: reason,
-        }),
-      );
+      try {
+        await ctx.beforeCallEnd?.(call);
+      } catch (error) {
+        console.warn(`[voice-call] Failed to drain call ${callId}: ${formatErrorMessage(error)}`);
+      }
+
+      await ctx.mutationQueue.enqueue("state", () => {
+        const preparedCall = copyCallRecord(call);
+        if (reason === "voicemail" && preparedCall.metadata?.voicemailStatus === "playing") {
+          preparedCall.metadata = { ...preparedCall.metadata, voicemailStatus: "left" };
+        }
+        return finalizeCall({ ctx, call, preparedCall, endReason: reason });
+      });
 
       return { success: true };
     } catch (err) {

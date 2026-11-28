@@ -16,12 +16,14 @@ Which Slack events OpenClaw observes, and what it does with them.
 - Thread broadcasts ("Also send to channel" thread replies) are processed as normal user messages.
 - Reaction add/remove events are mapped into system events.
 - Member join/leave, channel created/renamed, and pin add/remove events are mapped into system events.
+- Reaction, pin, member, edit/delete, and interaction events are dropped when OpenClaw cannot learn the conversation type from the event, an earlier event, or `conversations.info`. Slack ID prefixes do not distinguish group DMs from channels, so guessing could apply the open channel policy to a group DM. Grant the manifest's `channels:read`, `groups:read`, and `mpim:read` scopes to avoid these drops.
 - When the bot itself joins an allowed channel, it posts one introduction grounded in the channel name, purpose or topic, and available recent messages. Introductions are enabled by default, never run in direct messages, and can be disabled with `channels.slack.joinIntro: false` or overridden per account with `channels.slack.accounts.<accountId>.joinIntro`. See [group join introductions](/channels#group-join-introductions) for the history limits, once-per-room behavior, and untrusted-content handling.
 - Optional presence polling can map an observed human participant's `away` to `active` transition into the participant's most recently active eligible Slack session. The default is off.
 - `channel_id_changed` can migrate channel config keys when `configWrites` is enabled.
 - Channel topic/purpose metadata is treated as untrusted context and can be injected into routing context.
 - Agent View `app_context` entities are validated in Slack relevance order and exposed only as structured untrusted context; an omitted context clears the turn rather than reusing stale entities.
 - Thread starter and initial thread-history context seeding are filtered by configured sender allowlists when applicable.
+- Durably admitted Home and Assistant events retry temporary Slack API failures, including suggested-prompt updates, after reconnects or restarts. Permanent authorization errors keep their normal outcome.
 - Dedicated Web API reads used for checks, scope discovery, conversation classification, and delivery reconciliation have a 30-second deadline per request attempt. Transient failures can still retry, so the full operation may take longer. Shared Bolt and mutation-capable clients do not receive this default deadline because Slack may commit a mutation before a late response reaches OpenClaw.
 - Block actions, shortcuts, and modal interactions emit structured `Slack interaction: ...` system events with rich payload fields:
   - block actions: selected values, labels, picker values, and `workflow_*` metadata

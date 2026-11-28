@@ -1,4 +1,3 @@
-/** Collects plugin config secret refs from runtime plugin metadata. */
 import { resolveConfigWidePluginManifestRegistry } from "../config/io.plugin-metadata.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import {
@@ -8,6 +7,7 @@ import {
 import { normalizePluginsConfig, resolveEnableState } from "../plugins/config-state.js";
 import type { PluginOrigin } from "../plugins/plugin-origin.types.js";
 import { formatConcreteConfigPath } from "../shared/dot-path.js";
+import { hasPluginConfigValues } from "./runtime-secret-scan.js";
 import {
   collectCanonicalSecretInputAssignment as collectSecretInputAssignment,
   type ResolverContext,
@@ -26,19 +26,20 @@ import { isRecord } from "./shared.js";
  * installed). This prevents resolution failures for SecretRefs belonging to
  * non-loadable plugins from blocking startup or preflight validation.
  */
-/** Collects SecretRef assignments from plugin-owned config contract paths. */
 export function collectPluginConfigAssignments(params: {
   /** Mutable config snapshot whose plugin config values will receive resolved secrets. */
   config: OpenClawConfig;
   /** Defaults from the source config, used while matching manifest-declared SecretInput paths. */
   defaults: SecretDefaults | undefined;
-  /** Resolver context that receives assignments and inactive-surface warnings. */
   context: ResolverContext;
   /** Optional installed plugin roots; missing IDs are treated as stale inactive config. */
   loadablePluginOrigins?: ReadonlyMap<string, PluginOrigin>;
 }): void {
   const entries = params.config.plugins?.entries;
-  if (!isRecord(entries)) {
+  const configuredEntries = isRecord(entries)
+    ? Object.entries(entries).filter(([, entry]) => hasPluginConfigValues(entry))
+    : [];
+  if (configuredEntries.length === 0) {
     return;
   }
 
@@ -57,26 +58,19 @@ export function collectPluginConfigAssignments(params: {
   const pluginContracts = resolvePluginConfigContractsById({
     config: params.config,
     env: params.context.env,
-    fallbackToBundledMetadata: true,
     fallbackToBundledMetadataForResolvedBundled: !params.context.manifestRegistry,
     fallbackBundledPluginIds: bundledLoadablePluginIds,
-    pluginIds: Object.keys(entries),
+    pluginIds: configuredEntries.map(([pluginId]) => pluginId),
     manifestRegistry,
   });
 
-  for (const [pluginId, entry] of Object.entries(entries)) {
+  for (const [pluginId, entry] of configuredEntries) {
     const metadata = pluginContracts.get(pluginId);
     if (!metadata?.configContracts.secretInputs?.paths.length) {
       continue;
     }
     const secretInputs = metadata.configContracts.secretInputs;
-    if (!isRecord(entry)) {
-      continue;
-    }
     const pluginConfig = entry.config;
-    if (!isRecord(pluginConfig)) {
-      continue;
-    }
 
     const pluginOrigin = params.loadablePluginOrigins?.get(pluginId);
     const resolvedOrigin = pluginOrigin ?? metadata.origin;

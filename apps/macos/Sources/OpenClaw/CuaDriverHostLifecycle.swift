@@ -181,21 +181,12 @@ extension CuaDriverHostCoordinator {
         return errno == EPERM
     }
 
-    private static func processExecutableURL(_ processIdentifier: pid_t) -> URL? {
-        var buffer = [CChar](repeating: 0, count: Int(PATH_MAX))
-        let length = proc_pidpath(processIdentifier, &buffer, UInt32(buffer.count))
-        guard length > 0 else { return nil }
-        let bytes = buffer.prefix { $0 != 0 }.map { UInt8(bitPattern: $0) }
-        guard let path = String(bytes: bytes, encoding: .utf8) else { return nil }
-        return URL(fileURLWithPath: path)
-    }
-
     private static func processExecutableMatches(
         _ processIdentifier: pid_t,
         expectedExecutableURL: URL) -> Bool
     {
-        guard let actualExecutableURL = self.processExecutableURL(processIdentifier) else { return false }
-        let actualPath = actualExecutableURL.resolvingSymlinksInPath().standardizedFileURL.path
+        guard let path = ProcessIdentity.executablePath(pid: processIdentifier) else { return false }
+        let actualPath = URL(fileURLWithPath: path).resolvingSymlinksInPath().standardizedFileURL.path
         let expectedPath = expectedExecutableURL.resolvingSymlinksInPath().standardizedFileURL.path
         return actualPath == expectedPath
     }

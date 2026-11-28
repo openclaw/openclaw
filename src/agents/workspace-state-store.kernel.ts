@@ -6,20 +6,27 @@ import {
   executeSqliteQueryTakeFirstSync,
   getNodeSqliteKysely,
 } from "../infra/kysely-sync.js";
-import { runSqliteDeferredTransactionSync } from "../infra/sqlite-transaction.js";
+import { runSqliteReadSnapshotSync } from "../infra/sqlite-transaction.js";
 import { formatDoctorStateRepairFailure } from "../infra/state-repair-message.js";
 import type { OpenClawStateDatabase } from "../state/openclaw-state-db-contract.js";
 import type { DB as OpenClawStateKyselyDatabase } from "../state/openclaw-state-db.generated.js";
 import { resolveUserPath } from "../utils.js";
+import { chunkItems } from "../utils/chunk-items.js";
 import {
   createWorkspaceStateIdentity,
   resolveWorkspaceStateAliases,
   WorkspaceAliasRepointedError,
   type WorkspaceStateIdentity,
 } from "./workspace-state-identity.js";
+import { workspaceStatePublication } from "./workspace-state-publication.js";
+import {
+  WORKSPACE_SETUP_STATE_VERSION,
+  type WorkspaceAttestation,
+  type WorkspaceSetupState,
+  type WorkspaceStateSnapshot,
+} from "./workspace-state-types.js";
 
-export const WORKSPACE_SETUP_STATE_VERSION = 1 as const;
-export const WORKSPACE_ATTESTATION_RECENT_MS = 24 * 60 * 60 * 1000;
+const WORKSPACE_ATTESTATION_RECENT_MS = 24 * 60 * 60 * 1000;
 export const WORKSPACE_LEGACY_STATE_MIGRATION_KIND = "legacy-workspace-setup-files";
 export const WORKSPACE_CONTENT_RELOCATION_MIGRATION_KIND = "workspace-content-relocation";
 const MAX_WORKSPACE_ATTESTATION_FILENAME_LENGTH = 255;
@@ -59,25 +66,6 @@ export function assertCanonicalIntegerTimestamp(value: number, label: string): v
   }
 }
 
-export type WorkspaceSetupState = {
-  version: typeof WORKSPACE_SETUP_STATE_VERSION;
-  bootstrapSeededAt?: string;
-  setupCompletedAt?: string;
-};
-
-export type WorkspaceAttestation = {
-  attestedAtMs: number;
-  generatedHashes: ReadonlyMap<string, string>;
-};
-
-export type WorkspaceStateSnapshot = {
-  identity: WorkspaceStateIdentity;
-  setupExists: boolean;
-  setupUpdatedAtMs?: number;
-  setup: WorkspaceSetupState;
-  attestation?: WorkspaceAttestation;
-};
-
 export type WorkspaceStateDatabase = Pick<
   OpenClawStateKyselyDatabase,
   | "workspace_setup_state"
@@ -89,7 +77,7 @@ export type WorkspaceStateDatabase = Pick<
 
 export type WorkspaceStateDatabaseHandle = Pick<OpenClawStateDatabase, "db" | "path">;
 
-export function workspacePathEntryExists(workspaceDir: string): boolean {
+function workspacePathEntryExists(workspaceDir: string): boolean {
   try {
     fs.lstatSync(path.resolve(resolveUserPath(workspaceDir)));
     return true;
@@ -104,11 +92,19 @@ type WorkspaceIdentityResolution = {
   missingAliasKeys: string[];
 };
 
+export type WorkspacePathFacts = {
+  aliases: WorkspaceStateIdentity[];
+  pathEntryExisted: boolean;
+};
+
 export function resolveWorkspaceIdentityFromDatabase(params: {
   workspaceDir: string;
   database: WorkspaceStateDatabaseHandle;
+  pathFacts?: WorkspacePathFacts;
 }): WorkspaceIdentityResolution {
-  const aliases = resolveWorkspaceStateAliases(params.workspaceDir);
+  // Runtime workers carry their observed target through the final host grant.
+  // Native Template/maintenance kernels retain their synchronous path discovery.
+  const aliases = params.pathFacts?.aliases ?? resolveWorkspaceStateAliases(params.workspaceDir);
   const canonicalIdentity = aliases.at(-1)!;
   const kysely = getNodeSqliteKysely<WorkspaceStateDatabase>(params.database.db);
   const rows = executeSqliteQuerySync(
@@ -136,7 +132,7 @@ export function resolveWorkspaceIdentityFromDatabase(params: {
     // A repointed alias can also resolve to an already initialized workspace.
     // Report the repairable alias failure before the two owners look like corruption.
     if (
-      workspacePathEntryExists(params.workspaceDir) &&
+      (params.pathFacts?.pathEntryExisted ?? workspacePathEntryExists(params.workspaceDir)) &&
       rowIdentity.workspaceKey !== canonicalIdentity.workspaceKey
     ) {
       throw new WorkspaceAliasRepointedError({
@@ -168,34 +164,50 @@ export function registerWorkspaceStateAliasIdentitiesInTransaction(params: {
 }): void {
   assertCanonicalIntegerTimestamp(params.updatedAtMs, "path alias update");
   const kysely = getNodeSqliteKysely<WorkspaceStateDatabase>(params.database.db);
-  for (const alias of params.aliases) {
-    const existing = executeSqliteQueryTakeFirstSync(
+  for (const aliases of chunkItems(params.aliases, 64)) {
+    const existingRows = executeSqliteQuerySync(
       params.database.db,
       kysely
         .selectFrom("workspace_path_aliases")
         .selectAll()
-        .where("alias_key", "=", alias.workspaceKey),
-    );
-    if (existing) {
-      if (
-        existing.alias_path !== alias.workspacePath ||
-        existing.workspace_key !== params.identity.workspaceKey ||
-        existing.workspace_path !== params.identity.workspacePath
-      ) {
-        throw new Error("workspace path alias conflicts with canonical state");
+        .where(
+          "alias_key",
+          "in",
+          aliases.map((alias) => alias.workspaceKey),
+        ),
+    ).rows;
+    const existingByKey = new Map(existingRows.map((row) => [row.alias_key, row]));
+    const missing: typeof existingRows = [];
+    for (const alias of aliases) {
+      const existing = existingByKey.get(alias.workspaceKey);
+      if (existing) {
+        if (
+          existing.alias_path !== alias.workspacePath ||
+          existing.workspace_key !== params.identity.workspaceKey ||
+          existing.workspace_path !== params.identity.workspacePath
+        ) {
+          throw new Error("workspace path alias conflicts with canonical state");
+        }
+        continue;
       }
-      continue;
-    }
-    executeSqliteQuerySync(
-      params.database.db,
-      kysely.insertInto("workspace_path_aliases").values({
+      const row = {
         alias_key: alias.workspaceKey,
         alias_path: alias.workspacePath,
         workspace_key: params.identity.workspaceKey,
         workspace_path: params.identity.workspacePath,
         updated_at_ms: params.updatedAtMs,
-      }),
+      };
+      missing.push(row);
+      existingByKey.set(row.alias_key, row);
+    }
+    if (missing.length === 0) {
+      continue;
+    }
+    executeSqliteQuerySync(
+      params.database.db,
+      kysely.insertInto("workspace_path_aliases").values(missing),
     );
+    workspaceStatePublication.stageDeletions(params.database.db, ["aliases"]);
   }
 }
 
@@ -287,6 +299,7 @@ export function readWorkspaceStateSnapshotFromDatabase(params: {
     setup: {
       version: WORKSPACE_SETUP_STATE_VERSION,
       ...(setupRow?.bootstrap_seeded_at ? { bootstrapSeededAt: setupRow.bootstrap_seeded_at } : {}),
+      ...(setupRow?.bootstrap_deferred === 1 ? { bootstrapDeferred: true } : {}),
       ...(setupRow?.setup_completed_at ? { setupCompletedAt: setupRow.setup_completed_at } : {}),
     },
     ...(attestationPresent
@@ -304,7 +317,7 @@ export function readWorkspaceStateSnapshotForDirectoryInDatabase(params: {
   workspaceDir: string;
   database: WorkspaceStateDatabaseHandle;
 }): WorkspaceStateSnapshot {
-  return runSqliteDeferredTransactionSync(params.database.db, () => {
+  return runSqliteReadSnapshotSync(params.database.db, () => {
     const { identity } = resolveWorkspaceIdentityFromDatabase(params);
     return readWorkspaceStateSnapshotFromDatabase({ identity, database: params.database });
   });
@@ -320,6 +333,7 @@ export type WorkspaceAttestationInput = {
 export function replaceWorkspaceAttestationInDatabase(
   database: WorkspaceStateDatabaseHandle,
   params: WorkspaceAttestationInput,
+  pathFacts?: WorkspacePathFacts,
 ): WorkspaceAttestation {
   assertCanonicalIntegerTimestamp(params.attestedAtMs, "attestation");
   if (params.nowMs !== undefined) {
@@ -336,10 +350,10 @@ export function replaceWorkspaceAttestationInDatabase(
   // Capture the comparison clock only after BEGIN IMMEDIATE acquires the
   // writer lock, so a newer committed row cannot look future-dated.
   const updatedAtMs = params.nowMs ?? Date.now();
-  assertCanonicalIntegerTimestamp(updatedAtMs, "attestation update");
   const resolution = resolveWorkspaceIdentityFromDatabase({
     workspaceDir: params.workspaceDir,
     database,
+    pathFacts,
   });
   const identity = resolution.identity;
   const snapshot = readWorkspaceStateSnapshotFromDatabase({ identity, database });
@@ -357,24 +371,21 @@ export function replaceWorkspaceAttestationInDatabase(
     return snapshot.attestation;
   }
   const kysely = getNodeSqliteKysely<WorkspaceStateDatabase>(database.db);
+  const values = {
+    // Heals the NULL path on adopted legacy orphan attestation rows.
+    workspace_path: identity.workspacePath,
+    attested_at_ms: params.attestedAtMs,
+    attestation_updated_at_ms: updatedAtMs,
+  };
   executeSqliteQuerySync(
     database.db,
     kysely
       .insertInto("workspace_setup_state")
       .values({
         workspace_key: identity.workspaceKey,
-        workspace_path: identity.workspacePath,
-        attested_at_ms: params.attestedAtMs,
-        attestation_updated_at_ms: updatedAtMs,
+        ...values,
       })
-      .onConflict((conflict) =>
-        conflict.column("workspace_key").doUpdateSet({
-          // Heals the NULL path on adopted legacy orphan attestation rows.
-          workspace_path: identity.workspacePath,
-          attested_at_ms: params.attestedAtMs,
-          attestation_updated_at_ms: updatedAtMs,
-        }),
-      ),
+      .onConflict((conflict) => conflict.column("workspace_key").doUpdateSet(values)),
   );
   const committedHashes = snapshot.attestation?.generatedHashes;
   if (
@@ -406,10 +417,12 @@ export function replaceWorkspaceAttestationInDatabase(
     aliases: resolution.aliases,
     updatedAtMs,
   });
-  return {
+  const attestation = {
     attestedAtMs: params.attestedAtMs,
     generatedHashes: new Map(sortedHashes),
   };
+  workspaceStatePublication.stagePostimages(database.db, [{ ...snapshot, attestation }]);
+  return attestation;
 }
 
 export function deleteWorkspaceStateRowsInDatabase(
@@ -441,37 +454,34 @@ export function deleteWorkspaceStateRowsInDatabase(
       kysely.deleteFrom("migration_sources").where("source_key", "in", receiptKeys),
     );
     const runIds = [...new Set(receiptRows.map((row) => row.last_run_id))];
-    const referencedRunIds = new Set(
-      executeSqliteQuerySync(
-        database.db,
-        kysely
-          .selectFrom("migration_sources")
-          .select("last_run_id")
-          .where("last_run_id", "in", runIds),
-      ).rows.map((row) => row.last_run_id),
+    executeSqliteQuerySync(
+      database.db,
+      kysely
+        .deleteFrom("migration_runs")
+        .where("id", "in", runIds)
+        .where((eb) =>
+          eb.not(
+            eb.exists(
+              eb
+                .selectFrom("migration_sources")
+                .select("source_key")
+                .whereRef("migration_sources.last_run_id", "=", "migration_runs.id"),
+            ),
+          ),
+        ),
     );
-    const orphanedRunIds = runIds.filter((runId) => !referencedRunIds.has(runId));
-    if (orphanedRunIds.length > 0) {
-      executeSqliteQuerySync(
-        database.db,
-        kysely.deleteFrom("migration_runs").where("id", "in", orphanedRunIds),
-      );
-    }
   }
-  executeSqliteQuerySync(
-    database.db,
-    kysely
-      .deleteFrom("workspace_generated_bootstrap_hashes")
-      .where("workspace_key", "=", workspaceKey),
-  );
-  executeSqliteQuerySync(
-    database.db,
-    kysely.deleteFrom("workspace_setup_state").where("workspace_key", "=", workspaceKey),
-  );
   executeSqliteQuerySync(
     database.db,
     kysely.deleteFrom("workspace_path_aliases").where("workspace_key", "=", workspaceKey),
   );
+  for (const table of ["workspace_generated_bootstrap_hashes", "workspace_setup_state"] as const) {
+    executeSqliteQuerySync(
+      database.db,
+      kysely.deleteFrom(table).where("workspace_key", "=", workspaceKey),
+    );
+  }
+  workspaceStatePublication.stageDeletions(database.db, [workspaceKey]);
 }
 
 export function recentWorkspaceAttestation(

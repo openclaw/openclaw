@@ -283,17 +283,13 @@ export class MeetingSessionTranscriptStore<TSession extends MeetingSessionRecord
     snapshot: MeetingTranscriptSnapshot,
   ): TranscriptSnapshotDelta {
     const pageNextIndex = snapshot.droppedLines + snapshot.lines.length;
-    if (!previous || previous.pageEpoch !== snapshot.epoch) {
+    if (
+      !previous ||
+      previous.pageEpoch !== snapshot.epoch ||
+      snapshot.droppedLines >= previous.pageNextIndex
+    ) {
       return {
         commitEmpty: previous !== undefined,
-        lines: snapshot.lines,
-        prefixKeys: [],
-        startIndex: snapshot.droppedLines,
-      };
-    }
-    if (snapshot.droppedLines >= previous.pageNextIndex) {
-      return {
-        commitEmpty: true,
         lines: snapshot.lines,
         prefixKeys: [],
         startIndex: snapshot.droppedLines,

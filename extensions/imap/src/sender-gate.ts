@@ -22,21 +22,6 @@ type ImapAuthEvidence = {
     | "authentication-temperror";
 };
 
-type SenderGateVerdict =
-  | { accepted: true; sender: string; reason: "token" }
-  | {
-      accepted: false;
-      sender?: string;
-      reason: "invalid-from" | "sender-not-allowed" | "message-too-old";
-      transient: false;
-    }
-  | (ImapAuthEvidence & { sender: string } & (
-        | { accepted: true }
-        | { accepted: false; transient: boolean }
-      ));
-
-export type MailAuthenticator = typeof authenticate;
-
 function matchesImapSender(sender: string, entries: readonly string[]): boolean {
   const at = sender.lastIndexOf("@");
   if (at < 1) {
@@ -55,6 +40,50 @@ function matchesImapSender(sender: string, entries: readonly string[]): boolean 
       entry.slice(entryAt + 1).toLowerCase() === domain
     );
   });
+}
+
+// A domain URL parsing treats as structure rather than host spelling is compared as the
+// raw lowercased text, the strict direction, instead of being normalized through URL.
+const UNNORMALIZED_DOMAIN = /[/\\%?#@:\s]/u;
+
+function mailboxDomainKey(domain: string): string {
+  if (UNNORMALIZED_DOMAIN.test(domain)) {
+    return domain.toLowerCase();
+  }
+  try {
+    return new URL(`https://${domain}`).hostname.toLowerCase();
+  } catch {
+    return domain.toLowerCase();
+  }
+}
+
+// An RFC 5322/6531 quoted local part whose content is a dot-atom, with or without
+// the UTF-8 that RFC 6532 allows, names the same mailbox as its unquoted spelling.
+// mailparser drops these optional quotes while mailauth keeps them, so both sides are
+// compared without them. Quotes hiding anything a local part cannot carry unquoted
+// (whitespace, "@", specials, control characters, escapes) stay as they are written.
+const QUOTED_DOT_ATOM = /^"([^.\s"(),:;<@[\\\]\p{Cc}]+(?:\.[^.\s"(),:;<@[\\\]\p{Cc}]+)*)"$/u;
+
+function unquotedLocalPart(local: string): string {
+  return QUOTED_DOT_ATOM.exec(local)?.[1] ?? local;
+}
+
+function authenticatesSenderMailbox(result: AuthenticateResult, sender: string): boolean {
+  const [mailbox] = result.dkim.headerFrom;
+  if (mailbox === undefined || result.dkim.headerFrom.length !== 1) {
+    return false;
+  }
+  const mailboxAt = mailbox.lastIndexOf("@");
+  const senderAt = sender.lastIndexOf("@");
+  // mailparser hands the allowlist a Unicode domain, mailauth keeps the header spelling,
+  // so both are compared as their punycode A-label form
+  return (
+    mailboxAt > 0 &&
+    senderAt > 0 &&
+    unquotedLocalPart(mailbox.slice(0, mailboxAt)) ===
+      unquotedLocalPart(sender.slice(0, senderAt)) &&
+    mailboxDomainKey(mailbox.slice(mailboxAt + 1)) === mailboxDomainKey(sender.slice(senderAt + 1))
+  );
 }
 
 function recipientAddresses(mail: ParsedMail): string[] {
@@ -140,21 +169,20 @@ function mapImapAuthStrength(
   if (trusted && account.senderAuth.acceptTrustedAuthservId) {
     return { strength: "asserted", reason: "trusted-authserv-dmarc-pass", transient: false };
   }
-  const spfPass = result?.spf && result.spf.status.result === "pass";
-  const untrustedEvidence = headers.some(
-    (header) => header.dmarc === "pass" || header.spf === "pass",
-  );
-  if (spfPass || untrustedEvidence) {
-    return {
-      strength: "unverified",
-      reason: "unverified-authentication",
-      transient: dmarc === "temperror",
-    };
-  }
+  // DMARC can fail when an aligned DKIM key lookup has a temporary DNS error.
+  const transient =
+    dmarc === "temperror" ||
+    Boolean(result?.dkim.results.some((entry) => entry.status.result === "temperror"));
   return {
     strength: "unverified",
-    reason: dmarc === "temperror" ? "authentication-temperror" : `dmarc-${dmarc || "none"}`,
-    transient: dmarc === "temperror",
+    reason:
+      (result?.spf && result.spf.status.result === "pass") ||
+      headers.some((header) => header.dmarc === "pass" || header.spf === "pass")
+        ? "unverified-authentication"
+        : transient
+          ? "authentication-temperror"
+          : `dmarc-${dmarc || "none"}`,
+    transient,
   };
 }
 
@@ -163,27 +191,36 @@ export async function evaluateImapSender(params: {
   raw: Buffer;
   internalDate: Date;
   account: ImapAccountConfig;
-  authenticator?: MailAuthenticator;
-}): Promise<SenderGateVerdict> {
+}) {
   const fromValues = params.mail.from?.value ?? [];
   const fromHeaders = params.mail.headerLines.filter(({ key }) => key.toLowerCase() === "from");
   if (fromHeaders.length !== 1 || fromValues.length !== 1 || !fromValues[0]?.address) {
-    return { accepted: false, reason: "invalid-from", transient: false };
+    return { accepted: false as const, reason: "invalid-from" as const, transient: false as const };
   }
   const sender = fromValues[0].address;
   if (!matchesImapSender(sender, params.account.allowedSenders)) {
-    return { accepted: false, sender, reason: "sender-not-allowed", transient: false };
+    return {
+      accepted: false as const,
+      sender,
+      reason: "sender-not-allowed" as const,
+      transient: false as const,
+    };
   }
   if (matchingSenderToken(params.mail, sender, params.account)) {
-    return { accepted: true, sender, reason: "token" };
+    return { accepted: true as const, sender, reason: "token" as const };
   }
   if (Date.now() - params.internalDate.getTime() > AUTH_FRESHNESS_MS) {
-    return { accepted: false, sender, reason: "message-too-old", transient: false };
+    return {
+      accepted: false as const,
+      sender,
+      reason: "message-too-old" as const,
+      transient: false as const,
+    };
   }
   let result: AuthenticateResult | undefined;
   try {
     const resolver = new Resolver({ timeout: DNS_TIMEOUT_MS, tries: 1 });
-    result = await (params.authenticator ?? authenticate)(params.raw, {
+    result = await authenticate(params.raw, {
       resolver: async (domain, type) =>
         type === "TXT" ? await resolver.resolveTxt(domain) : await resolver.resolve(domain),
       disableArc: true,
@@ -199,19 +236,35 @@ export async function evaluateImapSender(params: {
       fallback.strength === "asserted" &&
       meetsIdentifierAuthentication(fallback.strength, params.account.senderAuth.min)
     ) {
-      return { accepted: true, sender, strength: fallback.strength, reason: fallback.reason };
+      return {
+        accepted: true as const,
+        sender,
+        strength: fallback.strength,
+        reason: fallback.reason,
+      };
     }
     return {
-      accepted: false,
+      accepted: false as const,
       sender,
-      strength: "unverified",
-      reason: "authentication-temperror",
-      transient: true,
+      strength: "unverified" as const,
+      reason: "authentication-temperror" as const,
+      transient: true as const,
     };
   }
   const evidence = mapImapAuthStrength(result, authenticationHeaders(params.mail), params.account);
   if (!meetsIdentifierAuthentication(evidence.strength, params.account.senderAuth.min)) {
-    return { accepted: false, sender, ...evidence };
+    return { accepted: false as const, sender, ...evidence };
   }
-  return { accepted: true, sender, strength: evidence.strength, reason: evidence.reason };
+  // The allowlist matched the mailbox mailparser read, DMARC aligned the one mailauth
+  // read; only an exact single-mailbox match proves the allowlisted sender was signed.
+  if (!authenticatesSenderMailbox(result, sender)) {
+    return {
+      accepted: false as const,
+      sender,
+      strength: evidence.strength,
+      reason: "sender-mismatch" as const,
+      transient: false as const,
+    };
+  }
+  return { accepted: true as const, sender, strength: evidence.strength, reason: evidence.reason };
 }

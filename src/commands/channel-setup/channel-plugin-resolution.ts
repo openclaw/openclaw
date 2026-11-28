@@ -73,8 +73,8 @@ export async function resolveInstallableChannelPlugin(params: {
   let plugin = getLoadedChannelPlugin(channelId);
   let pluginInstalled = false;
   if (!plugin && catalogEntry) {
-    const loadPlugin = (pluginId?: string): ChannelPlugin | undefined => {
-      const snapshot = loadChannelSetupPluginRegistrySnapshotForChannel({
+    const loadPlugin = async (pluginId?: string): Promise<ChannelPlugin | undefined> => {
+      const snapshot = await loadChannelSetupPluginRegistrySnapshotForChannel({
         cfg: nextCfg,
         runtime: params.runtime,
         channel: channelId,
@@ -92,7 +92,7 @@ export async function resolveInstallableChannelPlugin(params: {
       )?.plugin;
       return setupPlugin && supports(setupPlugin) ? setupPlugin : undefined;
     };
-    plugin = loadPlugin(catalogEntry.pluginId);
+    plugin = await loadPlugin(catalogEntry.pluginId);
 
     if (!plugin && params.allowInstall !== false) {
       const installResult = await ensureChannelSetupPluginInstalled({
@@ -106,7 +106,7 @@ export async function resolveInstallableChannelPlugin(params: {
       const installedPluginId = installResult.pluginId ?? catalogEntry.pluginId;
       pluginInstalled = installResult.installed;
       if (pluginInstalled) {
-        plugin = loadPlugin(installedPluginId);
+        plugin = await loadPlugin(installedPluginId);
       }
       if (installedPluginId && catalogEntry.pluginId !== installedPluginId) {
         catalogEntry = { ...catalogEntry, pluginId: installedPluginId };

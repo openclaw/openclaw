@@ -1,6 +1,23 @@
 import { vi } from "vitest";
 
-vi.mock("../../transcript-policy.js", () => ({
+// mock-isolation: Workspace tests supply runtime facts without host discovery.
+vi.mock("../../system-prompt-params.js", () => ({
+  resolveSystemPromptRepoRoot: async () => undefined,
+  buildSystemPromptParams: () => ({
+    runtimeInfo: {},
+  }),
+}));
+
+// mock-isolation: Session fixtures keep compaction policy deterministic without loading runtime settings.
+vi.mock("../../agent-settings.js", () => ({
+  applyAgentAutoCompactionGuard: () => {},
+  applyAgentCompactionSettingsFromConfig: () => {},
+  isSilentOverflowProneModel: () => false,
+  resolveEffectiveCompactionMode: () => "default",
+}));
+
+vi.mock("../../transcript-policy.js", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("../../transcript-policy.js")>()),
   resolveTranscriptPolicy: () => ({
     allowSyntheticToolResults: false,
     repairToolUseResultPairing: true,

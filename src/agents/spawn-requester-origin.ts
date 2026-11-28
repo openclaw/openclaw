@@ -1,5 +1,11 @@
+import {
+  normalizeOptionalString,
+  normalizeOptionalThreadValue,
+} from "@openclaw/normalization-core/string-coerce";
 import type { ChatType } from "../channels/chat-type.js";
+import type { ReplyToMode } from "../config/types.base.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
+import type { McpCurrentConversationOrigin } from "../gateway/mcp-grant-store.js";
 import { resolveFirstBoundAccountId } from "../routing/bound-account-read.js";
 import { normalizeDeliveryContext } from "../utils/delivery-context.shared.js";
 
@@ -114,4 +120,54 @@ export function resolveRequesterOriginForChild(params: {
     to: params.requesterTo,
     threadId: params.requesterThreadId,
   });
+}
+
+export type SpawnRequesterConversationSource = {
+  agentTo?: string;
+  agentThreadId?: string | number;
+  currentMessagingTarget?: string;
+  currentChannelId?: string;
+  currentThreadTs?: string | number;
+  currentConversationOrigin?: McpCurrentConversationOrigin;
+};
+
+/** Keep each requester destination paired with its own thread. */
+export function resolveSpawnRequesterConversationTarget(source: SpawnRequesterConversationSource): {
+  to?: string;
+  threadId?: string | number;
+} {
+  const to = normalizeOptionalString(source.agentTo);
+  const threadId = normalizeOptionalThreadValue(source.agentThreadId);
+  if (to || threadId !== undefined) {
+    return { to, threadId };
+  }
+  // Generic MCP bearer headers can guide delivery, but cannot authorize a binding target.
+  if (source.currentConversationOrigin === "caller-token") {
+    return {};
+  }
+  return {
+    to:
+      normalizeOptionalString(source.currentMessagingTarget) ??
+      normalizeOptionalString(source.currentChannelId),
+    threadId: normalizeOptionalThreadValue(source.currentThreadTs),
+  };
+}
+
+/** Thread for delayed requester delivery; a top-level Slack message's reply anchor is not a thread. */
+export function resolveRequesterDeliveryThreadId(source: {
+  agentChannel?: string;
+  agentThreadId?: string | number;
+  currentThreadTs?: string;
+  currentMessageId?: string | number;
+  replyToMode?: ReplyToMode;
+}): string | number | undefined {
+  if (
+    source.agentChannel === "slack" &&
+    source.replyToMode === "off" &&
+    source.currentThreadTs !== undefined &&
+    source.currentThreadTs === source.currentMessageId
+  ) {
+    return undefined;
+  }
+  return source.currentThreadTs ?? source.agentThreadId;
 }

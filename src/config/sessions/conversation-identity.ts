@@ -2,10 +2,7 @@ import {
   normalizeOptionalLowercaseString,
   normalizeOptionalString as normalizeText,
 } from "@openclaw/normalization-core/string-coerce";
-import { normalizeInternalTurnContext } from "../../auto-reply/internal-turn-source.js";
-import type { MsgContext } from "../../auto-reply/templating.js";
 import { normalizeChatType, type ChatType } from "../../channels/chat-type.js";
-import { resolveConversationLabel } from "../../channels/conversation-label.js";
 import { normalizeOptionalAccountId } from "../../routing/account-id.js";
 import {
   buildConversationRef,
@@ -15,18 +12,9 @@ import {
   deliveryContextFromSession,
   sessionDeliveryOrigin,
 } from "../../utils/delivery-context.read.js";
-import {
-  mergeDeliveryContext,
-  normalizeDeliveryContext,
-} from "../../utils/delivery-context.shared.js";
 import type { DeliveryContext } from "../../utils/delivery-context.types.js";
-import {
-  conversationRouteContextFromMsgContext,
-  type ConversationRouteContext,
-} from "./conversation-route-context.js";
-import { resolveGroupSessionKey } from "./group.js";
-import { deriveSessionOrigin } from "./metadata.js";
-import type { GroupKeyResolution, SessionEntry } from "./types.js";
+import type { ConversationRouteContext } from "./conversation-route-context.js";
+import type { SessionEntry } from "./types.js";
 
 export type ConversationKind = ChatType;
 
@@ -188,58 +176,5 @@ export function conversationIdentityFromSessionEntry(
     nativeChannelId: origin?.nativeChannelId,
     nativeDirectUserId: origin?.nativeDirectUserId,
     label: entry.displayName ?? entry.label,
-  });
-}
-
-/** Derives the same stable address from live inbound channel facts. */
-export function conversationIdentityFromMsgContext(params: {
-  ctx: MsgContext;
-  deliveryContext?: DeliveryContext;
-  groupResolution?: GroupKeyResolution | null;
-}): ConversationIdentity | null {
-  normalizeInternalTurnContext(params.ctx);
-  const route = deriveSessionOrigin(params.ctx);
-  const explicitDeliveryContext = normalizeDeliveryContext(params.deliveryContext);
-  const deliveryContext = mergeDeliveryContext(explicitDeliveryContext, {
-    channel: route?.provider,
-    to: route?.to,
-    accountId: route?.accountId,
-    threadId: route?.threadId,
-  });
-  const groupResolution = params.groupResolution ?? resolveGroupSessionKey(params.ctx);
-  const routeContext = conversationRouteContextFromMsgContext(params.ctx);
-  const kind = groupResolution?.chatType ?? normalizeKind(params.ctx.ChatType);
-  const directIngressTarget = kind === "direct" ? normalizeText(params.ctx.From) : undefined;
-  // An explicit delivery context is already a paired route. Otherwise direct ingress
-  // addresses the sender (`From`), while OriginatingTo can describe the local endpoint.
-  const useDirectIngressTarget = Boolean(directIngressTarget && !explicitDeliveryContext?.to);
-  const deliveryTarget = useDirectIngressTarget
-    ? directIngressTarget
-    : (normalizeText(deliveryContext?.to) ??
-      normalizeText(params.ctx.OriginatingTo) ??
-      normalizeText(params.ctx.To));
-  const channel = useDirectIngressTarget
-    ? (normalizeText(route?.provider) ??
-      normalizeText(params.ctx.OriginatingChannel) ??
-      normalizeText(params.ctx.Provider))
-    : (deliveryContext?.channel ??
-      groupResolution?.channel ??
-      normalizeText(route?.provider) ??
-      normalizeText(params.ctx.OriginatingChannel) ??
-      normalizeText(params.ctx.Provider));
-  return buildConversationIdentity({
-    channel,
-    accountId: useDirectIngressTarget
-      ? (route?.accountId ?? params.ctx.AccountId)
-      : (deliveryContext?.accountId ?? route?.accountId ?? params.ctx.AccountId),
-    kind,
-    peerId: routeContext?.peerId ?? deliveryTarget,
-    deliveryTarget,
-    threadId: useDirectIngressTarget
-      ? (route?.threadId ?? params.ctx.MessageThreadId)
-      : (deliveryContext?.threadId ?? params.ctx.MessageThreadId),
-    nativeChannelId: params.ctx.NativeChannelId ?? route?.nativeChannelId,
-    nativeDirectUserId: params.ctx.NativeDirectUserId ?? route?.nativeDirectUserId,
-    label: normalizeText(resolveConversationLabel(params.ctx)) ?? route?.label,
   });
 }

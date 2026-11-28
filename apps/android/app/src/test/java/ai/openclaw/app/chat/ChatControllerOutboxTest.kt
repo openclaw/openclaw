@@ -2,6 +2,8 @@ package ai.openclaw.app.chat
 
 import ai.openclaw.app.NodeApp
 import ai.openclaw.app.NodeForegroundService
+import ai.openclaw.app.gateway.ErrorShape
+import ai.openclaw.app.gateway.GatewayErrorDetails
 import ai.openclaw.app.gateway.GatewayRequestNotEnqueued
 import ai.openclaw.app.gateway.GatewayRequestOutcomeUnknown
 import ai.openclaw.app.gateway.GatewayRequestRejected
@@ -928,6 +930,53 @@ class ChatControllerOutboxTest {
     }
 
   @Test
+  fun restartAdmissionRejectionResumesTheSameSendAfterReconnect() {
+    for (liveSend in listOf(false, true)) {
+      outboxTest {
+        val chat = controller()
+        gateway.online = liveSend
+        chat.load("main")
+        advanceUntilIdle()
+        gateway.sendFailureAfterDispatch =
+          GatewayRequestRejected(
+            ErrorShape(
+              code = "UNAVAILABLE",
+              message = "Gateway is restarting",
+              details =
+                GatewayErrorDetails(
+                  code = null,
+                  canRetryWithDeviceToken = false,
+                  recommendedNextStep = null,
+                  reason = "gateway-restarting",
+                  retryable = true,
+                ),
+            ),
+          )
+        chat.sendMessageAwaitAcceptance(message = "survive the restart", thinkingLevel = "off", attachments = emptyList())
+        if (!liveSend) {
+          gateway.online = true
+          chat.handleGatewayEvent("health", null)
+        }
+        advanceUntilIdle()
+
+        val queued = chat.outboxItems.value.single()
+        assertEquals(ChatOutboxStatus.Queued, queued.status)
+        assertEquals(0, queued.retryCount)
+        assertEquals(listOf(queued.id), gateway.sentIdempotencyKeys)
+        assertFalse(chat.healthOk.value)
+
+        gateway.sendFailureAfterDispatch = null
+        chat.handleGatewayEvent("health", null)
+        advanceUntilIdle()
+
+        assertEquals(listOf(queued.id, queued.id), gateway.sentIdempotencyKeys)
+        assertTrue(chat.outboxItems.value.isEmpty())
+        assertEquals(1, chat.messages.value.count { it.idempotencyKey == "${queued.id}:user" })
+      }
+    }
+  }
+
+  @Test
   fun transmittedGatewayRejectionNeverReplaysUntilExplicitRetryAcrossRestart() =
     outboxTest {
       val processJob = SupervisorJob()
@@ -939,7 +988,7 @@ class ChatControllerOutboxTest {
 
       gateway.online = true
       gateway.sendFailureAfterDispatch =
-        GatewayRequestRejected(GatewaySession.ErrorShape(code = "UNAVAILABLE", message = "cached run failed"))
+        GatewayRequestRejected(ErrorShape(code = "UNAVAILABLE", message = "cached run failed"))
       first.handleGatewayEvent("health", null)
       advanceUntilIdle()
 
@@ -1563,6 +1612,9 @@ class ChatControllerOutboxTest {
       val loaded = outbox.loadAttachments(queued.id)
       assertTrue(imageBytes.contentEquals(loaded[0].bytes))
       assertTrue(voiceBytes.contentEquals(loaded[1].bytes))
+      // The queued bubble's thumbnail reads the stored photo; audio never feeds an image preview.
+      assertTrue(imageBytes.contentEquals(chat.loadOutboxImagePreview(queued.attachments[0])))
+      assertNull(chat.loadOutboxImagePreview(queued.attachments[1]))
 
       // Reconnect flushes the attachment payload with the captured metadata.
       gateway.online = true
@@ -2149,7 +2201,7 @@ class ChatControllerOutboxTest {
         "chat",
         """{"sessionKey":"custom","runId":"owner-a-row","state":"delta","message":{"role":"assistant","content":[{"type":"text","text":"private A stream"}]}}""",
       )
-      assertNull(chat.streamingAssistantText.value)
+      assertNull(chat.streamingAssistant.value?.text)
 
       chat.switchSession("agent:other:main")
       defaultAgentId = "owner-a"
@@ -2655,7 +2707,7 @@ class ChatControllerOutboxTest {
           )
         }.toString(),
       )
-      assertEquals("Original run is still working.", chat.streamingAssistantText.value)
+      assertEquals("Original run is still working.", chat.streamingAssistant.value?.text)
 
       // A follow-up send must see the accepted head as live-owned: it dispatches directly,
       // without erasing the running turn or parking its durable row.
@@ -2663,7 +2715,7 @@ class ChatControllerOutboxTest {
       advanceTimeBy(10_000)
       assertTrue(followUp)
       assertEquals(listOf("slow turn", "second"), gateway.sentMessages)
-      assertEquals("Original run is still working.", chat.streamingAssistantText.value)
+      assertEquals("Original run is still working.", chat.streamingAssistant.value?.text)
       assertTrue(outbox.rows().values.none { it.status == ChatOutboxStatus.Failed })
     }
 

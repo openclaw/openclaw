@@ -30,13 +30,13 @@ export async function writeSessionStore(
 
 export async function writeSessionStoreEntries(
   home: string,
-  entries: Record<string, Record<string, unknown>>,
+  entries: Record<string, SessionEntry>,
 ): Promise<string> {
   const dir = path.join(home, ".openclaw", "sessions");
   await fs.mkdir(dir, { recursive: true });
   const storePath = path.join(dir, "sessions.json");
   for (const [sessionKey, entry] of Object.entries(entries)) {
-    await replaceSessionEntry({ storePath, sessionKey }, entry as unknown as SessionEntry);
+    await replaceSessionEntry({ storePath, sessionKey }, entry);
   }
   return storePath;
 }

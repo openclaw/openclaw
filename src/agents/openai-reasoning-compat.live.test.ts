@@ -4,10 +4,12 @@ import { SessionManager } from "openclaw/plugin-sdk/agent-sessions";
 import type { Model } from "openclaw/plugin-sdk/llm";
 import { Type } from "typebox";
 import { describe, expect, it } from "vitest";
-import { discoverAuthStorageFacts, discoverModels } from "./agent-model-discovery.js";
+import { discoverAuthStorageFacts, discoverModelsAsync } from "./agent-model-discovery.js";
 import { resolveDefaultAgentDir } from "./agent-scope.js";
 import { sanitizeSessionHistory } from "./embedded-agent-runner/replay-history.js";
 import {
+  extractLiveResponseText,
+  createSingleUserPromptMessage,
   completeSimpleWithTimeout,
   isLiveProfileKeyModeEnabled,
   isLiveTestEnabled,
@@ -38,13 +40,7 @@ async function completeReplyWithRetry(params: {
       params.model,
       {
         systemPrompt: "You are a concise assistant. Follow the user's instruction exactly.",
-        messages: [
-          {
-            role: "user",
-            content: params.message,
-            timestamp: Date.now(),
-          },
-        ],
+        messages: createSingleUserPromptMessage(params.message),
       },
       {
         apiKey: params.apiKey,
@@ -53,11 +49,7 @@ async function completeReplyWithRetry(params: {
       },
       120_000,
     );
-    const text = response.content
-      .filter((block) => block.type === "text")
-      .map((block) => block.text.trim())
-      .join(" ")
-      .trim();
+    const text = extractLiveResponseText(response.content);
     return {
       text,
       errorMessage:
@@ -97,45 +89,51 @@ function resolveTargetModelRef(): { provider: string; modelId: string } {
   };
 }
 
+async function prepareLiveTarget() {
+  const { provider, modelId } = resolveTargetModelRef();
+  const cfg = await readLiveTestConfig();
+  await ensureOpenClawModelsJson(cfg);
+
+  const agentDir = resolveDefaultAgentDir(cfg);
+  const { authStorage } = await discoverAuthStorageFacts(agentDir);
+  const modelRegistry = await discoverModelsAsync(authStorage, agentDir);
+  const model = modelRegistry.find(provider, modelId) as Model | null;
+
+  if (!model) {
+    logProgress(`[openai-reasoning-compat] model missing from registry: ${TARGET_MODEL_REF}`);
+    return undefined;
+  }
+
+  let apiKeyInfo;
+  try {
+    apiKeyInfo = await getApiKeyForModelCore({
+      model,
+      cfg,
+      credentialPrecedence: resolveLiveCredentialPrecedence(model.provider, REQUIRE_PROFILE_KEYS),
+    });
+  } catch (error) {
+    logProgress(`[openai-reasoning-compat] skip (${String(error)})`);
+    return undefined;
+  }
+
+  if (REQUIRE_PROFILE_KEYS && !apiKeyInfo.source.startsWith("profile:")) {
+    logProgress(
+      `[openai-reasoning-compat] skip (non-profile credential source: ${apiKeyInfo.source})`,
+    );
+    return undefined;
+  }
+  return { model, apiKeyInfo };
+}
+
 describeLive("openai reasoning compat live", () => {
   it(
     "remaps low reasoning for the configured OpenAI mini target",
     async () => {
-      const { provider, modelId } = resolveTargetModelRef();
-      const cfg = await readLiveTestConfig();
-      await ensureOpenClawModelsJson(cfg);
-
-      const agentDir = resolveDefaultAgentDir(cfg);
-      const { authStorage } = discoverAuthStorageFacts(agentDir);
-      const modelRegistry = discoverModels(authStorage, agentDir);
-      const model = modelRegistry.find(provider, modelId) as Model | null;
-
-      if (!model) {
-        logProgress(`[openai-reasoning-compat] model missing from registry: ${TARGET_MODEL_REF}`);
+      const target = await prepareLiveTarget();
+      if (!target) {
         return;
       }
-
-      let apiKeyInfo;
-      try {
-        apiKeyInfo = await getApiKeyForModelCore({
-          model,
-          cfg,
-          credentialPrecedence: resolveLiveCredentialPrecedence(
-            model.provider,
-            REQUIRE_PROFILE_KEYS,
-          ),
-        });
-      } catch (error) {
-        logProgress(`[openai-reasoning-compat] skip (${String(error)})`);
-        return;
-      }
-
-      if (REQUIRE_PROFILE_KEYS && !apiKeyInfo.source.startsWith("profile:")) {
-        logProgress(
-          `[openai-reasoning-compat] skip (non-profile credential source: ${apiKeyInfo.source})`,
-        );
-        return;
-      }
+      const { model, apiKeyInfo } = target;
 
       logProgress(
         `[openai-reasoning-compat] target=${TARGET_MODEL_REF} auth source=${apiKeyInfo.source}`,
@@ -158,41 +156,11 @@ describeLive("openai reasoning compat live", () => {
   it(
     "accepts repaired OpenAI Codex parallel tool replay with aborted missing results",
     async () => {
-      const { provider, modelId } = resolveTargetModelRef();
-      const cfg = await readLiveTestConfig();
-      await ensureOpenClawModelsJson(cfg);
-
-      const agentDir = resolveDefaultAgentDir(cfg);
-      const { authStorage } = discoverAuthStorageFacts(agentDir);
-      const modelRegistry = discoverModels(authStorage, agentDir);
-      const model = modelRegistry.find(provider, modelId) as Model | null;
-
-      if (!model) {
-        logProgress(`[openai-reasoning-compat] model missing from registry: ${TARGET_MODEL_REF}`);
+      const target = await prepareLiveTarget();
+      if (!target) {
         return;
       }
-
-      let apiKeyInfo;
-      try {
-        apiKeyInfo = await getApiKeyForModelCore({
-          model,
-          cfg,
-          credentialPrecedence: resolveLiveCredentialPrecedence(
-            model.provider,
-            REQUIRE_PROFILE_KEYS,
-          ),
-        });
-      } catch (error) {
-        logProgress(`[openai-reasoning-compat] skip (${String(error)})`);
-        return;
-      }
-
-      if (REQUIRE_PROFILE_KEYS && !apiKeyInfo.source.startsWith("profile:")) {
-        logProgress(
-          `[openai-reasoning-compat] skip (non-profile credential source: ${apiKeyInfo.source})`,
-        );
-        return;
-      }
+      const { model, apiKeyInfo } = target;
 
       const messages = [
         {
@@ -288,11 +256,7 @@ describeLive("openai reasoning compat live", () => {
         120_000,
       );
 
-      const text = response.content
-        .filter((block) => block.type === "text")
-        .map((block) => block.text.trim())
-        .join(" ")
-        .trim();
+      const text = extractLiveResponseText(response.content);
       const errorMessage =
         typeof (response as { errorMessage?: unknown }).errorMessage === "string"
           ? ((response as { errorMessage?: string }).errorMessage ?? "")

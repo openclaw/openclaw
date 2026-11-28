@@ -4,10 +4,8 @@
  */
 import { normalizeLowercaseStringOrEmpty } from "@openclaw/normalization-core/string-coerce";
 
-/** Canonical route target families shared by channel-owned parsers. */
 export type MessagingTargetKind = "user" | "channel";
 
-/** Parsed channel target with the original token and normalized lookup key. */
 export type MessagingTarget = {
   kind: MessagingTargetKind;
   id: string;
@@ -15,13 +13,11 @@ export type MessagingTarget = {
   normalized: string;
 };
 
-/** Options for parsers that can infer a kind or reject ambiguous input. */
 export type MessagingTargetParseOptions = {
   defaultKind?: MessagingTargetKind;
   ambiguousMessage?: string;
 };
 
-/** Creates a parsed target while preserving the user-provided raw token. */
 export function buildMessagingTarget(
   kind: MessagingTargetKind,
   id: string,
@@ -35,7 +31,6 @@ export function buildMessagingTarget(
   };
 }
 
-/** Validates an extracted target id with a channel-owned grammar. */
 export function ensureTargetId(params: {
   candidate: string;
   pattern: RegExp;
@@ -78,7 +73,6 @@ export function parseMentionPrefixOrAtUserTarget(params: {
   return buildMessagingTarget("user", id, params.raw);
 }
 
-/** Requires a parsed target of the requested kind and returns its channel id. */
 export function requireTargetKind(params: {
   platform: string;
   target: MessagingTarget | undefined;

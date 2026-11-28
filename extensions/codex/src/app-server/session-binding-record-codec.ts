@@ -55,6 +55,17 @@ const contextEngineSchema = z
     projection: contextEngineProjectionSchema.optional().catch(undefined),
   })
   .strict();
+const readOnlyToolsSchema = z
+  .record(
+    z.string(),
+    z
+      .object({
+        enabled: z.boolean(),
+        approval_mode: z.enum(["auto", "prompt", "writes", "approve"]).optional(),
+      })
+      .strict(),
+  )
+  .optional();
 const destructiveApprovalModeSchema = z.enum(["allow", "deny", "auto", "ask"]).optional();
 // Account-connected apps are admitted without a plugin package; both entry
 // shapes must round-trip or stored policy context silently drops on read.
@@ -64,6 +75,7 @@ const accountAppPolicyEntrySchema = z
     appName: z.string(),
     allowDestructiveActions: z.boolean(),
     allowOpenWorld: z.boolean().optional(),
+    readOnlyTools: readOnlyToolsSchema,
     destructiveApprovalMode: destructiveApprovalModeSchema.catch(undefined),
     mcpServerNames: z.array(z.string()),
   })
@@ -76,6 +88,7 @@ const pluginAppPolicyEntrySchema = z
     pluginName: z.string(),
     allowDestructiveActions: z.boolean(),
     allowOpenWorld: z.boolean().optional(),
+    readOnlyTools: readOnlyToolsSchema,
     destructiveApprovalMode: destructiveApprovalModeSchema.catch(undefined),
     mcpServerNames: z.array(z.string()),
   })
@@ -161,6 +174,8 @@ const threadBindingSchema = z
     ringZeroClientInstanceId: optionalStringSchema,
     /** Durable fact preventing a later unrestricted turn from widening this thread. */
     nativeToolPolicyRestricted: z.literal(true).optional().catch(undefined),
+    // Optional creation-policy attestation; legacy bindings remain readable.
+    restrictedThreadConfigFingerprint: optionalNonBlankStringSchema,
     nativeHookRelayGeneration: optionalNonBlankStringSchema,
     appServerRuntimeFingerprint: optionalStringSchema,
     pluginAppsFingerprint: optionalStringSchema,
@@ -169,6 +184,8 @@ const threadBindingSchema = z
     contextEngine: contextEngineSchema.optional().catch(undefined),
     environmentSelectionFingerprint: optionalStringSchema,
     conversationStartId: optionalStringSchema,
+    // Source lifecycle recorded at creation; cleanup may outlive the private session owner.
+    conversationIncognito: z.literal(true).optional(),
     conversationSourceTransferComplete: z.literal(true).optional().catch(undefined),
     historyCoveredThrough: optionalTimestampSchema,
     // Observed density of the last completed turn on this thread: prompt chars
@@ -184,64 +201,38 @@ const threadBindingSchema = z
       .catch(undefined),
   })
   .superRefine((binding, context) => {
+    const report = (message: string) => context.addIssue({ code: "custom", message });
     if (binding.connectionScope === "supervision") {
       if (!binding.supervisionSourceThreadId) {
-        context.addIssue({
-          code: "custom",
-          message: "supervision connection ownership requires its native source thread id",
-        });
+        report("supervision connection ownership requires its native source thread id");
       }
       if (binding.preserveNativeModel !== true) {
-        context.addIssue({
-          code: "custom",
-          message: "supervision connection ownership requires native model ownership",
-        });
+        report("supervision connection ownership requires native model ownership");
       }
       if (binding.conversationSourceTransferComplete !== true) {
-        context.addIssue({
-          code: "custom",
-          message: "supervision connection ownership requires a completed source transfer",
-        });
+        report("supervision connection ownership requires a completed source transfer");
       }
       if (!binding.pendingSupervisionBranch && (!binding.model?.trim() || !binding.modelProvider)) {
-        context.addIssue({
-          code: "custom",
-          message: "materialized supervision bindings require a native model and provider",
-        });
+        report("materialized supervision bindings require a native model and provider");
       }
     }
     if (binding.supervisionSourceThreadId && binding.connectionScope !== "supervision") {
-      context.addIssue({
-        code: "custom",
-        message: "a supervision source thread id requires supervision connection ownership",
-      });
+      report("a supervision source thread id requires supervision connection ownership");
     }
     if (!binding.pendingSupervisionBranch) {
       return;
     }
     if (binding.threadId !== binding.pendingSupervisionBranch.sourceThreadId) {
-      context.addIssue({
-        code: "custom",
-        message: "pending supervision source must match the provisional thread binding",
-      });
+      report("pending supervision source must match the provisional thread binding");
     }
     if (binding.supervisionSourceThreadId !== binding.pendingSupervisionBranch.sourceThreadId) {
-      context.addIssue({
-        code: "custom",
-        message: "pending supervision source must match its durable source identity",
-      });
+      report("pending supervision source must match its durable source identity");
     }
     if (binding.preserveNativeModel !== true) {
-      context.addIssue({
-        code: "custom",
-        message: "pending supervision bindings must defer model selection to Codex App Server",
-      });
+      report("pending supervision bindings must defer model selection to Codex App Server");
     }
     if (binding.connectionScope !== "supervision") {
-      context.addIssue({
-        code: "custom",
-        message: "pending supervision bindings require supervision connection ownership",
-      });
+      report("pending supervision bindings require supervision connection ownership");
     }
   });
 
@@ -267,7 +258,6 @@ export function matchesPendingSupervisionBranch(
   );
 }
 
-/** Context-engine state persisted with a Codex app-server thread binding. */
 export type CodexAppServerContextEngineBinding = z.infer<typeof contextEngineSchema>;
 /** Context-engine projection metadata used to guard resumed native threads. */
 export type CodexAppServerContextEngineProjectionBinding = z.infer<
@@ -337,10 +327,7 @@ export function readCodexAppServerThreadBinding(
   value: unknown,
 ): CodexAppServerThreadBinding | undefined {
   const result = threadBindingSchema.safeParse(value);
-  if (!result.success) {
-    return undefined;
-  }
-  return result.data;
+  return result.success ? result.data : undefined;
 }
 
 export function stripUndefinedBinding(

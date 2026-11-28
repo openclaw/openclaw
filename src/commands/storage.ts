@@ -1,5 +1,6 @@
 import { randomBytes, randomUUID } from "node:crypto";
-import { getRuntimeConfig } from "../config/config.js";
+import { terminalText } from "../../packages/terminal-core/src/safe-text.js";
+import { captureRuntimeConfigAsyncReader } from "../config/config.js";
 import { type RuntimeEnv, writeRuntimeJson } from "../runtime.js";
 import {
   initStorageLocation,
@@ -14,7 +15,7 @@ import { acquireStorageProvider } from "../storage/provider.js";
 type StorageCommandOptions = { json?: boolean };
 
 export async function storageListCommand(runtime: RuntimeEnv, opts: StorageCommandOptions) {
-  const config = getRuntimeConfig();
+  const config = await captureRuntimeConfigAsyncReader()();
   const locations = [];
   for (const location of listStorageLocations(config)) {
     let displayTarget = location.displayTarget;
@@ -52,9 +53,8 @@ export async function storageListCommand(runtime: RuntimeEnv, opts: StorageComma
     runtime.log("No storage locations configured. Configure storage.locations to add one.");
   }
   for (const location of locations) {
-    runtime.log(
-      `${location.name} (${location.provider}): ${location.state}${location.displayTarget ? ` — ${location.displayTarget}` : ""}${location.message ? `\n  ${location.message}` : ""}`,
-    );
+    const summary = terminalText`${location.name} (${location.provider}): ${location.state}${location.displayTarget ? ` — ${location.displayTarget}` : ""}`;
+    runtime.log(summary + (location.message ? terminalText`\n  ${location.message}` : ""));
   }
 }
 
@@ -63,13 +63,16 @@ export async function storageInitCommand(
   name: string,
   opts: StorageCommandOptions,
 ) {
-  const location = await initStorageLocation({ name, config: getRuntimeConfig() });
+  const location = await initStorageLocation({
+    name,
+    config: await captureRuntimeConfigAsyncReader()(),
+  });
   try {
     const description = location.describe();
     if (opts.json) {
       writeRuntimeJson(runtime, { ...description, state: "ok" });
     } else {
-      runtime.log(`Storage location ${name} initialized: ${description.displayTarget}`);
+      runtime.log(terminalText`Storage location ${name} initialized: ${description.displayTarget}`);
     }
   } finally {
     await location.close();
@@ -81,7 +84,10 @@ export async function storageTestCommand(
   name: string,
   opts: StorageCommandOptions,
 ) {
-  const location = await openStorageLocation({ name, config: getRuntimeConfig() });
+  const location = await openStorageLocation({
+    name,
+    config: await captureRuntimeConfigAsyncReader()(),
+  });
   try {
     const key = `.openclaw-probe-${randomUUID()}`;
     const payload = randomBytes(256);
@@ -117,7 +123,7 @@ export async function storageTestCommand(
       writeRuntimeJson(runtime, { ...location.describe(), state: "ok", sizeBytes: payload.length });
     } else {
       runtime.log(
-        `Storage location ${name}: wrote, read, verified, and deleted ${payload.length} bytes.`,
+        terminalText`Storage location ${name}: wrote, read, verified, and deleted ${payload.length} bytes.`,
       );
     }
   } finally {

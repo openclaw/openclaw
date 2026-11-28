@@ -3,10 +3,8 @@ import {
   GATEWAY_CLIENT_NAMES,
 } from "../../packages/gateway-protocol/src/client-info.js";
 import { storeDeviceAuthToken } from "../infra/device-auth-store.js";
-import {
-  loadOrCreateDeviceIdentity,
-  publicKeyRawBase64UrlFromPem,
-} from "../infra/device-identity.js";
+import { loadOrCreateDeviceIdentityAsync } from "../infra/device-identity-async.js";
+import { publicKeyRawBase64UrlFromPem } from "../infra/device-identity.js";
 import { approveDevicePairing } from "../infra/device-pairing-approval.js";
 import { getPairedDevice, requestDevicePairing } from "../infra/device-pairing.js";
 import { resolveGatewayClientPlatformIdentity } from "../shared/gateway-client-platform.js";
@@ -45,7 +43,7 @@ async function cacheOperatorToken(params: {
  * authenticated loopback access without writing generated auth into config.
  */
 export async function ensureStartupLocalCliPairing(): Promise<StartupLocalCliPairingResult> {
-  const identity = loadOrCreateDeviceIdentity();
+  const identity = await loadOrCreateDeviceIdentityAsync();
   const publicKey = publicKeyRawBase64UrlFromPem(identity.publicKeyPem);
   const existing = await getPairedDevice(identity.deviceId);
   if (existing) {

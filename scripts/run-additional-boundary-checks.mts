@@ -15,6 +15,7 @@ import {
   terminateManagedChild,
   waitForManagedProcessGroupExit,
 } from "./lib/managed-child-process.mts";
+import { decodeUtf8Tail } from "./lib/output-tail.mts";
 
 const DEFAULT_CHECK_TIMEOUT_MS = 10 * 60 * 1000;
 const DEFAULT_OUTPUT_MAX_BYTES = 512 * 1024;
@@ -61,14 +62,15 @@ export const BOUNDARY_CHECKS = (
     "lint:tmp:no-raw-channel-fetch",
     "lint:tmp:no-raw-http2-imports",
     "lint:agent:ingress-owner",
-    // This full-root pass runs all four focused rules, including the narrower
-    // HTTP/window.open guards and both public assertion aliases.
+    // One pass owns all focused AST guards, including forced process exits in
+    // runtime sources and shipped launchers, not unrelated developer tooling.
     "lint:no-chained-type-assertions",
     "lint:plugins:no-monolithic-plugin-sdk-entry-imports",
     "lint:plugins:no-extension-src-imports",
     "lint:plugins:no-extension-test-core-imports",
     "lint:plugins:plugin-sdk-subpaths-exported",
     ["deps:root-ownership:check", "pnpm", ["deps:root-ownership:check"]],
+    ["deps:pins:check", "pnpm", ["deps:pins:check"]],
     ["web-fetch-provider-boundary", "pnpm", ["run", "lint:web-fetch-provider-boundaries"]],
     [
       "extension-plugin-sdk-boundaries",
@@ -184,15 +186,6 @@ export function selectChecksForShard(
 
 export function formatCommand({ command, args }: Pick<BoundaryCheck, "args" | "command">) {
   return [command, ...args].join(" ");
-}
-
-function decodeUtf8Tail(buffer: Buffer) {
-  let start = 0;
-  while (start < buffer.length && (buffer[start]! & 0b1100_0000) === 0b1000_0000) {
-    start += 1;
-  }
-  // Appends are complete JS strings; only a byte slice's leading boundary can be partial.
-  return buffer.subarray(start).toString("utf8");
 }
 
 export function createBoundedOutputBuffer(maxBytes = DEFAULT_OUTPUT_MAX_BYTES) {

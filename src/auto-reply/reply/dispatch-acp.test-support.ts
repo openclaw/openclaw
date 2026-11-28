@@ -13,6 +13,9 @@ export async function runDispatch(params: {
   bodyForAgent: string;
   runId?: string;
   onAgentRunStart?: Parameters<typeof tryDispatchAcpReplyCore>[0]["onAgentRunStart"];
+  onPreparedAgentRunStart?: Parameters<
+    typeof tryDispatchAcpReplyCore
+  >[0]["onPreparedAgentRunStart"];
   userTurnTranscriptRecorder?: Parameters<
     typeof tryDispatchAcpReplyCore
   >[0]["userTurnTranscriptRecorder"];
@@ -55,6 +58,7 @@ export async function runDispatch(params: {
     dispatcher: params.dispatcher ?? createDispatcher().dispatcher,
     ...(params.runId ? { runId: params.runId } : {}),
     onAgentRunStart: params.onAgentRunStart,
+    onPreparedAgentRunStart: params.onPreparedAgentRunStart,
     userTurnTranscriptRecorder: params.userTurnTranscriptRecorder,
     prepareAssistantTranscriptMessage: params.prepareAssistantTranscriptMessage,
     sessionKey: targetSessionKey,

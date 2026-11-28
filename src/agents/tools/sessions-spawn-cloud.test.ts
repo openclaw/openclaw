@@ -5,12 +5,22 @@ import { afterAll, afterEach, beforeAll, beforeEach, describe, expect, it, vi } 
 import { convertResponsesToolPayload } from "../../../packages/ai/src/providers/openai-responses-tools.js";
 import { SessionsCreateParamsSchema } from "../../../packages/gateway-protocol/src/schema/sessions-create.js";
 import { validateToolArguments } from "../../../packages/llm-core/src/validation.js";
+import {
+  clearRuntimeConfigSnapshot,
+  setRuntimeConfigSnapshot,
+} from "../../config/runtime-snapshot.js";
 import { upsertSessionEntryCore } from "../../config/sessions/session-accessor.js";
 import type { GatewayRequestContext } from "../../gateway/server-methods/types.js";
-import { useSessionStoreTempDirs } from "../../test-utils/session-state-cleanup.js";
+import { createReplyTurnParticipants } from "../../sessions/session-controller.tool-authority.js";
+import {
+  drainSessionStateForTest,
+  useSessionStoreTempDirs,
+} from "../../test-utils/session-state-cleanup.js";
+import { createTestOperatorAuthority } from "../admitted-run-context.test-support.js";
 import {
   expectRegisteredSubagentRun,
   supportedSpawnModelChoice,
+  withSpawnTestModel,
 } from "../subagents/spawn/subagent-spawn.test-helpers.js";
 import { withGatewayToolCallerIdentity } from "./gateway-caller-context.js";
 
@@ -61,25 +71,18 @@ describe("visible session placement and authority", () => {
     acpRuntimeRegistry = await import("../../acp/runtime/registry.js");
   });
   beforeEach(() => {
+    setRuntimeConfigSnapshot({});
     acpRuntimeRegistry.testing.resetAcpRuntimeBackendsForTests();
     hoisted.prepareModelChoiceMock.mockReset().mockImplementation(supportedSpawnModelChoice);
     hoisted.spawnSubagentDirectMock.mockReset();
     hoisted.spawnAcpDirectMock.mockReset();
     hoisted.runSubagentProgressMock.mockClear();
   });
-  afterEach(() => acpRuntimeRegistry.testing.resetAcpRuntimeBackendsForTests());
-
-  function mockCallArg(mock: unknown, callIndex: number, argIndex: number, label: string) {
-    const calls = (mock as { mock?: { calls?: unknown[][] } }).mock?.calls;
-    if (!Array.isArray(calls)) {
-      throw new Error(`expected ${label} mock calls`);
-    }
-    const call = calls[callIndex];
-    if (!call) {
-      throw new Error(`expected ${label} call ${callIndex + 1}`);
-    }
-    return requireRecord(call[argIndex], `${label} call ${callIndex + 1} arg ${argIndex + 1}`);
-  }
+  afterEach(async () => {
+    await drainSessionStateForTest();
+    clearRuntimeConfigSnapshot();
+    acpRuntimeRegistry.testing.resetAcpRuntimeBackendsForTests();
+  });
 
   it.each([
     { visible: undefined, placement: undefined },
@@ -92,28 +95,51 @@ describe("visible session placement and authority", () => {
         agentSessionKey: "agent:main:dashboard:parent",
         workspaceDir: "/workspace/parent",
         callGateway,
+        config: { tools: { swarm: true } },
       });
-      const [wireTool] = convertResponsesToolPayload([tool], { strict: true });
+      const [wireTool] = convertResponsesToolPayload([tool], { strict: false });
       expect(wireTool?.strict).toBe(false);
       const parameters = requireRecord(wireTool?.parameters, "Responses parameters");
       expect(parameters.required).not.toContain("placement");
+      // Exact synthetic campaign call; optional placement variants share the boundary.
       const request = {
-        task: "Review the local worktree",
-        runtime: "subagent",
-        ...(visible === undefined ? {} : { visible }),
-        ...(placement === undefined ? {} : { placement }),
-        worktree: false,
         mode: "run",
-        cwd: "/workspace/review",
         completionTarget: "parent",
+        streamTo: "parent",
+        task: "Independently verify this entire input.txt content: 'Synthetic coding fixture: 2 + 2 = 4.' Use ordinary integer arithmetic. State the computed sum and whether the stated equality is correct. All needed context is in this task. Do not use tools, inspect environment or credentials, create a checkout, or read or modify files. Answer directly.",
+        user: "gateway-owner",
+        taskName: "check-one",
+        label: "Independent calculation check one",
+        runtime: "subagent",
+        agentId: "stress1",
+        model: "openai/stress-primary",
+        runTimeoutSeconds: 120,
+        thinking: "off",
+        cyberAccessProgram: "standard",
+        cwd: "/var/folders/xn/p60r8bmd5nx8_fzvmcc85xwc0000gn/T/openclaw-restart-workspaces-vtpHBi/stress1",
+        cleanup: "keep",
+        expectsCompletionMessage: true,
+        sandbox: "inherit",
+        context: "isolated",
+        lightContext: true,
+        blind: false,
+        fastMode: false,
+        placement: { kind: "local" },
+        visible: false,
+        group: "",
+        projectId: "",
+        projectGitUrl: "",
+        worktree: false,
+        worktreeName: "check-one",
+        worktreeBaseRef: "",
+        attachments: [],
+        attachAs: { mountPath: "" },
+        resumeSessionId: "",
       };
+      Object.assign(request, { visible, placement });
       expect(Value.Check(parameters, request)).toBe(true);
-      expect(
-        Value.Check(parameters, {
-          ...request,
-          placement: { kind: "local", profileId: "ignored" },
-        }),
-      ).toBe(false);
+      const invalidPlacement = { ...request, placement: { kind: "local", profileId: "ignored" } };
+      expect(Value.Check(parameters, invalidPlacement)).toBe(false);
       const args = validateToolArguments(tool, {
         type: "toolCall",
         id: "local-review",
@@ -127,7 +153,20 @@ describe("visible session placement and authority", () => {
         runId: "local-review-run",
       });
 
-      const result = await tool.execute("local-review", args);
+      const participants = createReplyTurnParticipants({
+        operatorAuthority: createTestOperatorAuthority({
+          profileId: request.user,
+          scopes: ["operator.write"],
+        }),
+      });
+      const result = await withGatewayToolCallerIdentity(
+        {
+          agentId: "main",
+          sessionKey: "agent:main:dashboard:parent",
+          personalToolParticipants: participants,
+        },
+        () => tool.execute("local-review", args),
+      ).finally(() => participants.close());
 
       expect(result.details).toMatchObject({ status: "accepted", runId: "local-review-run" });
       expect(hoisted.spawnSubagentDirectMock).toHaveBeenCalledOnce();
@@ -138,6 +177,10 @@ describe("visible session placement and authority", () => {
           mode: "run",
           completionTarget: "parent",
           expectsCompletionMessage: true,
+          worktree: false,
+          projectId: undefined,
+          worktreeName: undefined,
+          worktreeBaseRef: undefined,
         }),
         expect.objectContaining({
           agentSessionKey: "agent:main:dashboard:parent",
@@ -152,11 +195,7 @@ describe("visible session placement and authority", () => {
     acpRuntimeRegistry.registerAcpRuntimeBackend({
       id: "placement-test",
       runtime: {
-        ensureSession: vi.fn(async () => ({
-          sessionKey: "agent:reviewer:acp:local",
-          backend: "placement-test",
-          runtimeSessionName: "reviewer",
-        })),
+        ensureSession: vi.fn(() => Promise.reject(new Error("Unexpected ACP session creation"))),
         async *runTurn() {},
         cancel: vi.fn(async () => {}),
         close: vi.fn(async () => {}),
@@ -204,7 +243,7 @@ describe("visible session placement and authority", () => {
       name: JSON.stringify(args),
       args,
       error:
-        /^Cloud placement requires visible=true and worktree=true\. Corrected call: sessions_spawn\(/,
+        /^Cloud and device placement require visible=true and worktree=true\. Corrected call: sessions_spawn\(/,
     })),
     {
       name: "local placement with a cloud selector",
@@ -299,18 +338,20 @@ describe("visible session placement and authority", () => {
         throw new Error("registration unavailable");
       }
     });
+    const config = withSpawnTestModel({
+      session: { store: storePath },
+      agents: {
+        ...(success
+          ? { defaults: { subagents: { model: "mock-provider/child@child-profile" } } }
+          : {}),
+        entries: { main: {} },
+      },
+      cloudWorkers: { profiles: { build: { provider: "fixture", settings: {} } } },
+    });
+    setRuntimeConfigSnapshot(config);
     const tool = createSessionsSpawnTool({
       agentSessionKey: "agent:main:main",
-      config: {
-        session: { store: storePath },
-        agents: {
-          ...(success
-            ? { defaults: { subagents: { model: "mock-provider/child@child-profile" } } }
-            : {}),
-          entries: { main: {} },
-        },
-        cloudWorkers: { profiles: { build: { provider: "fixture", settings: {} } } },
-      },
+      config,
       callGateway: callGateway as never,
       registerRun,
       countActiveRuns: () => 0,
@@ -338,11 +379,11 @@ describe("visible session placement and authority", () => {
         "sessions.dispatch",
         "agent",
       ]);
-      expect(mockCallArg(callGateway, 0, 1, "sessions.create")).toMatchObject({
+      expect(callGateway.mock.calls[0]?.[1]).toMatchObject({
         model: "mock-provider/child@child-profile",
         titleSource: task.slice(0, 1000),
       });
-      expect(mockCallArg(callGateway, 0, 1, "sessions.create")).not.toHaveProperty("task");
+      expect(callGateway.mock.calls[0]?.[1]).not.toHaveProperty("task");
       expect(callGateway).toHaveBeenCalledWith(
         "sessions.dispatch",
         {
@@ -404,5 +445,52 @@ describe("visible session placement and authority", () => {
       expect(registerRun).not.toHaveBeenCalled();
     }
     expect(hoisted.spawnSubagentDirectMock).not.toHaveBeenCalled();
+  });
+
+  it("dispatches a paired-device placement and reports the device", async () => {
+    const storePath = path.join(sessionDirs.make(), "sessions.json");
+    const key = "agent:main:dashboard:device-child";
+    const placement = {
+      state: "active",
+      runner: { kind: "device", status: "available", deviceId: "office-mac" },
+    };
+    const callGateway = vi.fn(async (method: string, _request: unknown) => {
+      if (method === "sessions.create") {
+        await upsertSessionEntryCore(
+          { agentId: "main", sessionKey: key, storePath },
+          { sessionId: "device-child", updatedAt: 1 },
+        );
+        return { key, sessionId: "device-child", runStarted: false };
+      }
+      return method === "sessions.dispatch"
+        ? { key, sessionId: "device-child", placement }
+        : { runId: "device-run", status: "accepted" };
+    });
+    const config = withSpawnTestModel({
+      session: { store: storePath },
+      agents: { entries: { main: {} } },
+    });
+    setRuntimeConfigSnapshot(config);
+    const tool = createSessionsSpawnTool({
+      config,
+      callGateway: callGateway as never,
+      registerRun: vi.fn(async () => {}),
+      countActiveRuns: () => 0,
+    });
+    const result = await withCloudGateway(() =>
+      tool.execute("device-spawn", {
+        task: "Run the tests on the office Mac",
+        visible: true,
+        worktree: true,
+        placement: { kind: "device", deviceId: "office-mac" },
+      }),
+    );
+    expect(callGateway.mock.calls.map(([method]) => method)).toEqual([
+      "sessions.create",
+      "sessions.dispatch",
+      "agent",
+    ]);
+    expect(callGateway.mock.calls[1]?.[1]).toEqual({ key, deviceId: "office-mac" });
+    expect(result.details).toMatchObject({ status: "accepted", runId: "device-run", placement });
   });
 });

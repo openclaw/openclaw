@@ -1,8 +1,8 @@
 // Shared TypeScript AST and source-file helpers for guard scripts.
 import { promises as fs } from "node:fs";
 import path from "node:path";
-import { fileURLToPath } from "node:url";
-import * as ts from "typescript/unstable/ast";
+import * as ts from "typescript/ast";
+import { isDirectRunUrl } from "./direct-run.mjs";
 import { createNativeTypeScriptParser, type NativeTypeScriptParser } from "./native-typescript.mts";
 
 const baseTestSuffixes = [".test.ts", ".test-utils.ts", ".test-harness.ts", ".e2e-harness.ts"];
@@ -35,14 +35,17 @@ export function resolveSourceRoots(repoRoot: string, relativeRoots: string[]) {
 }
 
 export function isTestLikeTypeScriptFile(filePath: string, extraTestSuffixes: string[] = []) {
-  return [...baseTestSuffixes, ...extraTestSuffixes].some((suffix) => filePath.endsWith(suffix));
+  return [...baseTestSuffixes, ...extraTestSuffixes].some(
+    (suffix) =>
+      filePath.endsWith(suffix) || (suffix.endsWith(".ts") && filePath.endsWith(`${suffix}x`)),
+  );
 }
 
 async function collectTypeScriptFiles(
   targetPath: string,
   options: CollectTypeScriptFilesOptions = {},
 ): Promise<string[]> {
-  const fileExtensions = options.fileExtensions ?? [".ts"];
+  const fileExtensions = options.fileExtensions ?? [".ts", ".tsx"];
   const includeTests = options.includeTests ?? false;
   const extraTestSuffixes = options.extraTestSuffixes ?? [];
   const skipNodeModules = options.skipNodeModules ?? true;
@@ -376,7 +379,7 @@ export function collectCallExpressionLines(
  * Runs a script main function only when the module is the direct entrypoint.
  */
 export function runAsScript(importMetaUrl: string, main: () => Promise<unknown>) {
-  if (!process.argv[1] || path.resolve(process.argv[1]) !== fileURLToPath(importMetaUrl)) {
+  if (!isDirectRunUrl(process.argv[1], importMetaUrl)) {
     return;
   }
   main().catch((error: unknown) => {

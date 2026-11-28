@@ -16,18 +16,21 @@ import { isNativeSessionCatalogOptOutOnly } from "../../../plugins/native-sessio
 import {
   getOfficialExternalPluginCatalogEntry,
   resolveOfficialExternalProviderContractPluginIds,
-  resolveOfficialExternalWebProviderContractPluginIdsForEnv,
 } from "../../../plugins/official-external-plugin-catalog.js";
-import {
-  resolveWebSearchInstallCatalogEntriesForEnv,
-  resolveWebSearchInstallCatalogEntry,
-} from "../../../plugins/web-search-install-catalog.js";
 import { VERSION } from "../../../version.js";
+import type { DoctorMaintenancePending } from "../../doctor-maintenance-pending.js";
 import { listDoctorConfiguredChannelIds } from "./configured-channel-ids.js";
+import {
+  collectConfiguredWebFetchPluginIds,
+  collectConfiguredWebSearchPluginIds,
+} from "./configured-provider-plugin-ids.js";
 import { collectConfiguredProviderPluginIds } from "./configured-provider-plugin-installs.js";
 import { acpxRuntimeIsConfigured } from "./configured-runtime-plugin-installs.js";
 import { collectBlockedPluginIds as collectBlockedPluginIdSet } from "./missing-configured-plugin-install.ids.js";
-import { repairMissingPluginInstallsForIds } from "./missing-configured-plugin-install.js";
+import {
+  isMissingPluginInstallRepairNoOpForIds,
+  repairMissingPluginInstallsForIds,
+} from "./missing-configured-plugin-install.js";
 import { shouldDeferConfiguredPluginInstallRepair } from "./update-phase.js";
 
 const CONFIGURED_PLUGIN_INSTALL_RELEASE_VERSION = "2026.5.2-beta.1";
@@ -76,11 +79,7 @@ function hasMaterialPluginEntry(entry: unknown): boolean {
 }
 
 function collectMaterialPluginEntryIds(cfg: OpenClawConfig): string[] {
-  const entries = asNullableRecord(cfg.plugins?.entries);
-  if (!entries) {
-    return [];
-  }
-  return Object.entries(entries)
+  return Object.entries(asNullableRecord(cfg.plugins?.entries) ?? {})
     .filter(
       ([pluginId, entry]) =>
         !isNativeSessionCatalogOptOutOnly(pluginId, entry) && hasMaterialPluginEntry(entry),
@@ -109,48 +108,6 @@ function collectConfiguredChannelIds(cfg: OpenClawConfig, env: NodeJS.ProcessEnv
     environmentChannelIsConfigured: (channelId) =>
       !isChannelDisabled(cfg, channelId) && isChannelConfigured(cfg, channelId, env),
     sort: "locale",
-  });
-}
-
-function collectWebSearchPluginIds(cfg: OpenClawConfig, env: NodeJS.ProcessEnv): string[] {
-  if (cfg.tools?.web?.search?.enabled === false) {
-    return [];
-  }
-  const providerId = cfg.tools?.web?.search?.provider;
-  const entry =
-    typeof providerId === "string"
-      ? resolveWebSearchInstallCatalogEntry({ providerId })
-      : undefined;
-  return [
-    ...(entry?.pluginId ? [entry.pluginId] : []),
-    ...resolveWebSearchInstallCatalogEntriesForEnv(env).map((candidate) => candidate.pluginId),
-  ];
-}
-
-function collectWebFetchPluginIds(cfg: OpenClawConfig, env: NodeJS.ProcessEnv): string[] {
-  const webFetch = cfg.tools?.web?.fetch;
-  if (webFetch?.enabled === false) {
-    return [];
-  }
-  const providerId = normalizeId(webFetch?.provider)?.toLowerCase();
-  return [
-    ...(providerId
-      ? resolveOfficialExternalProviderContractPluginIds({
-          contract: "webFetchProviders",
-          providerIds: new Set([providerId]),
-        })
-      : []),
-    ...resolveOfficialExternalWebProviderContractPluginIdsForEnv({
-      contract: "webFetchProviders",
-      env,
-    }),
-  ];
-}
-
-function collectSpeechPluginIds(cfg: OpenClawConfig): string[] {
-  return resolveOfficialExternalProviderContractPluginIds({
-    contract: "speechProviders",
-    providerIds: collectConfiguredSpeechProviderIds(cfg),
   });
 }
 
@@ -209,7 +166,6 @@ function collectReleaseConfiguredPluginIds(params: {
 }): ReleaseConfiguredPluginIds {
   const env = params.env ?? process.env;
   const pluginIds = new Set<string>();
-  const channelIds = new Set<string>();
   if (params.cfg.plugins?.enabled === false) {
     return { pluginIds: [], channelIds: [] };
   }
@@ -225,28 +181,63 @@ function collectReleaseConfiguredPluginIds(params: {
     ...collectSlotPluginIds(params.cfg),
     ...collectConfiguredProviderPluginIds({ cfg: params.cfg, env }),
     ...collectConfiguredAgentHarnessRuntimes(params.cfg).filter((id) => id === "codex"),
-    ...collectWebSearchPluginIds(params.cfg, env),
-    ...collectWebFetchPluginIds(params.cfg, env),
-    ...collectSpeechPluginIds(params.cfg),
+    ...collectConfiguredWebSearchPluginIds(params.cfg, env, "backfill"),
+    ...collectConfiguredWebFetchPluginIds(params.cfg, env),
+    ...resolveOfficialExternalProviderContractPluginIds({
+      contract: "speechProviders",
+      providerIds: collectConfiguredSpeechProviderIds(params.cfg),
+    }),
     ...(acpxRuntimeIsConfigured(params.cfg) ? ["acpx"] : []),
     ...collectAllowOnlyOfficialPluginIds(params.cfg),
   ]) {
     addEligiblePluginId(params.cfg, pluginIds, pluginId);
   }
-  for (const channelId of collectConfiguredChannelIds(params.cfg, env)) {
-    if (
+  const channelIds = collectConfiguredChannelIds(params.cfg, env).filter(
+    (channelId) =>
       !isChannelDisabled(params.cfg, channelId) &&
       !isDenied(params.cfg, channelId) &&
-      !isPluginEntryDisabled(params.cfg, channelId)
-    ) {
-      channelIds.add(channelId);
-    }
-  }
+      !isPluginEntryDisabled(params.cfg, channelId),
+  );
 
   return {
     pluginIds: [...pluginIds].toSorted((left, right) => left.localeCompare(right)),
-    channelIds: [...channelIds].toSorted((left, right) => left.localeCompare(right)),
+    channelIds,
   };
+}
+
+/**
+ * Read-only: whether `maybeRunConfiguredPluginInstallReleaseStep` would change a package, an
+ * install record or the config. A config that has not crossed the release gate counts as work,
+ * because a completed step stamps its touched version.
+ */
+export async function checkConfiguredPluginInstallReleaseStepPending(params: {
+  cfg: OpenClawConfig;
+  env?: NodeJS.ProcessEnv;
+  touchedVersion?: string | null;
+  currentVersion?: string | null;
+}): Promise<DoctorMaintenancePending> {
+  const env = params.env ?? process.env;
+  const configured = collectReleaseConfiguredPluginIds({ cfg: params.cfg, env });
+  if (configured.pluginIds.length === 0 && configured.channelIds.length === 0) {
+    return "none";
+  }
+  if (
+    shouldRunConfiguredPluginInstallReleaseStep({
+      currentVersion: params.currentVersion,
+      touchedVersion: params.touchedVersion,
+    })
+  ) {
+    return "work";
+  }
+  return (await isMissingPluginInstallRepairNoOpForIds({
+    cfg: params.cfg,
+    env,
+    pluginIds: configured.pluginIds,
+    channelIds: configured.channelIds,
+    blockedPluginIds: collectBlockedPluginIdSet(params.cfg),
+  }))
+    ? "none"
+    : "work";
 }
 
 /** Run the configured-plugin install release backfill when the config still needs it. */

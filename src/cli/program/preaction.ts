@@ -1,10 +1,9 @@
-// Global Commander pre-action hook: startup presentation, config guard, logging, and plugin preflight.
 import type { Command } from "commander";
 import type { StartupConfigPreflightOptions } from "../../commands/startup-config-preflight.js";
 import { setVerbose } from "../../globals.js";
 import type { LogLevel } from "../../logging/levels.js";
-import { resolvePluginInstallInvalidConfigPolicy } from "../../plugins/install-config.js";
 import { defaultRuntime } from "../../runtime.js";
+import { getAsyncWorkSignal } from "../../shared/async-work-scope.js";
 import { resolveCliArgvInvocation } from "../argv-invocation.js";
 import { getVerboseFlag, isHelpOrVersionInvocation } from "../argv.js";
 import { CLI_NAME } from "../cli-name.js";
@@ -14,44 +13,15 @@ import {
 } from "../command-execution-startup.js";
 import { resolveCliCommandPathPolicy } from "../command-path-policy.js";
 import { resolveCliStartupPolicy } from "../command-startup-policy.js";
+import { throwExpectedCliError } from "../expected-cli-error.js";
+import { shouldPreserveGatewayProcessArgv } from "../gateway-run-argv.js";
 import { applyResolvedCommandOutputMode } from "../json-output-mode.js";
 import { isModelsPlainMachineOutput } from "../models-output-mode.js";
-import { resolvePluginInstallPreactionRequest } from "../plugin-install-config-policy.js";
 import { getCommanderCommandPath, hasCommanderOptionToken } from "./commander-parse-facts.js";
 import { isCommandJsonOutputMode } from "./json-mode.js";
 import { isParentDefaultHelpAction } from "./parent-default-help.js";
 
 const HELP_OR_VERSION_FLAGS = new Set(["-h", "--help", "-V", "--version"]);
-
-// Every CLI invocation presents as `openclaw` in process listings instead of `node`; only the
-// long-running Gateway takes a distinct title (see gateway-cli/run-loop.ts), so lock readers and
-// operators can tell it apart from ordinary commands.
-function setProcessTitleForCommand() {
-  if (process.title !== CLI_NAME) {
-    process.title = CLI_NAME;
-  }
-}
-
-function shouldAllowInvalidConfigForAction(actionCommand: Command, commandPath: string[]): boolean {
-  return (
-    commandPath[0] === "update" ||
-    resolvePluginInstallInvalidConfigPolicy(
-      resolvePluginInstallPreactionRequest({
-        actionCommand,
-        commandPath,
-        argv: process.argv,
-      }),
-    ) === "allow-plugin-recovery"
-  );
-}
-
-function getCliLogLevel(actionCommand: Command): LogLevel | undefined {
-  if (actionCommand.getOptionValueSourceWithGlobals("logLevel") !== "cli") {
-    return undefined;
-  }
-  const logLevel = actionCommand.optsWithGlobals<{ logLevel?: unknown }>().logLevel;
-  return typeof logLevel === "string" ? (logLevel as LogLevel) : undefined;
-}
 
 function isBareParentDefaultHelpInvocation(actionCommand: Command, argv: string[]): boolean {
   if (!isParentDefaultHelpAction(actionCommand)) {
@@ -65,22 +35,6 @@ function isBareParentDefaultHelpInvocation(actionCommand: Command, argv: string[
   return primary === actionCommand.name() || actionCommand.aliases().includes(primary);
 }
 
-function isGuidedConfigCommandPath(commandPath: string[]): boolean {
-  const [primary, secondary, extra] = commandPath;
-  if (primary !== "config" || extra !== undefined) {
-    return false;
-  }
-  return (
-    secondary !== "get" &&
-    secondary !== "set" &&
-    secondary !== "patch" &&
-    secondary !== "unset" &&
-    secondary !== "file" &&
-    secondary !== "schema" &&
-    secondary !== "validate"
-  );
-}
-
 async function runStateStoreGuard(commandPath: string[]): Promise<void> {
   if (resolveCliCommandPathPolicy(commandPath).stateStoreGuard !== "run") {
     return;
@@ -90,6 +44,8 @@ async function runStateStoreGuard(commandPath: string[]): Promise<void> {
     const { checkCliGatewayStateDir } = await import("../state-dir-gateway-check.js");
     outcome = await checkCliGatewayStateDir({ command: `openclaw ${commandPath.join(" ")}` });
   } catch (error) {
+    // A cancelled guard read is the CLI stopping, not a guard failure to diagnose.
+    getAsyncWorkSignal()?.throwIfAborted();
     const { formatErrorMessage } = await import("../../infra/errors.js");
     const { logDebug } = await import("../../logger.js");
     logDebug(`state-store guard unavailable: ${formatErrorMessage(error)}`);
@@ -98,14 +54,18 @@ async function runStateStoreGuard(commandPath: string[]): Promise<void> {
   if (outcome.kind === "warn") {
     defaultRuntime.log(outcome.message);
   } else if (outcome.kind === "refuse") {
-    throw new Error(outcome.message);
+    throwExpectedCliError(outcome.message);
   }
 }
 
 /** Register global pre-action bootstrap hooks for every non-help command invocation. */
 export function registerPreActionHooks(program: Command, programVersion: string) {
   program.hook("preAction", async (_thisCommand, actionCommand) => {
-    setProcessTitleForCommand();
+    // Present ordinary commands as `openclaw`. Foreground Gateways can retain
+    // their original Linux command line for installation ownership checks.
+    if (process.title !== CLI_NAME && !shouldPreserveGatewayProcessArgv(process.argv)) {
+      process.title = CLI_NAME;
+    }
     const argv = process.argv;
     const helpOrVersionWasOptionValue = hasCommanderOptionToken(
       actionCommand,
@@ -146,7 +106,11 @@ export function registerPreActionHooks(program: Command, programVersion: string)
     });
     const verbose = getVerboseFlag(argv);
     setVerbose(verbose);
-    const cliLogLevel = getCliLogLevel(actionCommand);
+    let cliLogLevel: LogLevel | undefined;
+    if (actionCommand.getOptionValueSourceWithGlobals("logLevel") === "cli") {
+      const logLevel = actionCommand.optsWithGlobals<{ logLevel?: unknown }>().logLevel;
+      cliLogLevel = typeof logLevel === "string" ? (logLevel as LogLevel) : undefined;
+    }
     if (cliLogLevel) {
       process.env.OPENCLAW_LOG_LEVEL = cliLogLevel;
     }
@@ -154,7 +118,19 @@ export function registerPreActionHooks(program: Command, programVersion: string)
       process.env.NODE_NO_WARNINGS ??= "1";
     }
     // Capability discovery precedes staged-update admission and must not migrate live state.
-    if (nativeUpdateExecutorCheck || isGuidedConfigCommandPath(commandPath)) {
+    const [primary, secondary, extra] = commandPath;
+    if (
+      nativeUpdateExecutorCheck ||
+      (primary === "config" &&
+        extra === undefined &&
+        secondary !== "get" &&
+        secondary !== "set" &&
+        secondary !== "patch" &&
+        secondary !== "unset" &&
+        secondary !== "file" &&
+        secondary !== "schema" &&
+        secondary !== "validate")
+    ) {
       return;
     }
     await runStateStoreGuard(commandPath);
@@ -165,12 +141,17 @@ export function registerPreActionHooks(program: Command, programVersion: string)
         runtime: defaultRuntime,
         commandPath,
         startupPolicy,
-        skipConfigGuard: true,
       });
       return;
     }
     let beforeStatePreparation: StartupConfigPreflightOptions["beforeStatePreparation"];
-    let allowInvalid = shouldAllowInvalidConfigForAction(actionCommand, commandPath);
+    let allowInvalid = primary === "update";
+    if (primary === "plugins" && secondary === "install") {
+      // Only installation can recover an invalid config from the requested plugin's metadata.
+      const { allowsPluginInstallConfigRecovery } =
+        await import("../plugin-install-config-policy.js");
+      allowInvalid = allowsPluginInstallConfigRecovery(actionCommand);
+    }
     const isGatewayRun =
       commandPath[0] === "gateway" &&
       (commandPath.length === 1 || (commandPath.length === 2 && commandPath[1] === "run"));

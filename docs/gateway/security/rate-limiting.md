@@ -48,7 +48,7 @@ The budget uses the client IP resolved before the upgrade:
   these headers. Proxy-shaped requests without valid attribution are rejected
   before acquiring a slot; they do not fall back to a shared proxy-IP budget.
 - **Cloudflare Tunnel:** the same trusted-proxy rules apply. Trust the immediate
-  `cloudflared` socket source narrowly and ensure a safe `X-Forwarded-For`
+  `cloudflared` socket source narrowly and check that a safe `X-Forwarded-For`
   chain reaches the Gateway. `CF-Connecting-IP` is not used to select this
   budget. See [Cloudflare Tunnel and Access](/gateway/cloudflare-access).
 - **OpenClaw-managed Tailscale Serve:** the dedicated private listener uses the
@@ -137,6 +137,13 @@ failures are keyed by the normalized page origin (for example
 `browser-origin:https://evil.example`) rather than the shared loopback IP,
 so each origin gets its own bucket; from non-loopback addresses the key
 stays the client IP. This is not configurable.
+
+Assistant media reads that use a credential in the URL also enforce a lockout on
+direct loopback. Requests marked `Sec-Fetch-Site: same-origin` have a separate
+budget from other URL reads at that address. URL failures also count toward the IP
+history. They use the lockout without the loopback failure delay.
+With `exemptLoopback: false`, the configured per-IP limit also applies. Local
+clients that send a bearer header continue to use their configured IP policy.
 
 ### Unconfigured same-host reverse proxies
 

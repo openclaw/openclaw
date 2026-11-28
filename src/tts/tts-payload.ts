@@ -4,15 +4,15 @@ import {
   type ReplyPayload,
 } from "../auto-reply/reply-payload.js";
 import { getChannelPlugin } from "../channels/plugins/registry.js";
+import { selectLiveRuntimeConfig } from "../config/runtime-snapshot.js";
 import type { OpenClawConfig } from "../config/types.js";
-import { isVerbose, logVerbose } from "../globals.js";
+import { logVerbose } from "../globals.js";
 import { resolveSendableOutboundReplyParts } from "../infra/outbound/reply-payload-parts.js";
 import { hasReplyPayloadContent } from "../interactive/payload.js";
 import { truncateUtf16Safe } from "../utils.js";
 import { normalizeMessageChannel } from "../utils/message-channel-core.js";
 import { parseTtsDirectives, resolveTtsDirectiveFacts } from "./directives.js";
 import { canonicalizeSpeechProviderId, getSpeechProvider } from "./provider-registry.js";
-import type { SpeechVoiceOption } from "./provider-types.js";
 import { assertSpeechRuntimeAvailable, isSpeechRuntimeAvailable } from "./runtime-availability.js";
 import { isCodeHeavySpeechText, normalizeSpeechText } from "./speech-text.js";
 import { summarizeText } from "./tts-core.js";
@@ -20,15 +20,12 @@ import { prepareTtsPreferences, type PreparedTtsPreferences } from "./tts-prefer
 import {
   getResolvedSpeechProviderConfig,
   resolveSpeechProviderTimeoutMs,
-  resolveTtsProvider,
+  resolveTtsProviderAsync,
 } from "./tts-provider-resolution.js";
-import type { TtsStatusEntry } from "./tts-runtime-types.js";
+import type { SpeechVoiceOption, TtsStatusEntry } from "./tts-runtime-types.js";
 import {
-  getTtsMaxLength,
-  isSummarizationEnabled,
   resolveTtsConfig,
-  resolveTtsRuntimeConfig,
-  resolveTtsSettingsSnapshot,
+  resolveTtsSettingsSnapshotAsync,
   type ResolvedTtsConfig,
 } from "./tts-settings.js";
 import { textToSpeechCore, type TtsAudioPersistence } from "./tts-synthesis.js";
@@ -51,7 +48,7 @@ export async function listSpeechVoices(params: {
   baseUrl?: string;
 }): Promise<SpeechVoiceOption[]> {
   assertSpeechRuntimeAvailable();
-  const cfg = params.cfg ? resolveTtsRuntimeConfig(params.cfg) : undefined;
+  const cfg = params.cfg ? selectLiveRuntimeConfig(params.cfg) : undefined;
   const provider = canonicalizeSpeechProviderId(params.provider, cfg);
   if (!provider) {
     throw new Error("speech provider id is required");
@@ -120,8 +117,14 @@ export async function maybeApplyTtsToPayloadCore(
   if (params.payload.isCompactionNotice) {
     return params.payload;
   }
-  const cfg = resolveTtsRuntimeConfig(params.cfg);
-  const { autoMode, config, prefsPath } = resolveTtsSettingsSnapshot({
+  const cfg = selectLiveRuntimeConfig(params.cfg);
+  const {
+    autoMode,
+    config,
+    prefsPath,
+    maxLength: preferredMaxLength,
+    summarize,
+  } = await resolveTtsSettingsSnapshotAsync({
     cfg,
     preparedTtsPreferences: params.preparedTtsPreferences ?? (await prepareTtsPreferences()),
     sessionAuto: params.ttsAuto,
@@ -134,7 +137,7 @@ export async function maybeApplyTtsToPayloadCore(
   if (!explicitTts && (autoMode === "off" || ttsMetadata?.commandReply)) {
     return params.payload;
   }
-  const activeProvider = resolveTtsProvider(config, prefsPath);
+  const activeProvider = await resolveTtsProviderAsync(config, prefsPath);
 
   const reply = resolveSendableOutboundReplyParts(params.payload);
   const text = reply.text;
@@ -143,23 +146,15 @@ export async function maybeApplyTtsToPayloadCore(
     providerConfigs: config.providerConfigs,
     preferredProviderId: activeProvider,
   };
-  const directives = ttsMetadata?.tts
-    ? {
-        cleanedText: text,
-        ...resolveTtsDirectiveFacts(ttsMetadata.tts, config.modelOverrides, directiveOptions),
-      }
-    : parseTtsDirectives(text, config.modelOverrides, directiveOptions);
+  const directives =
+    ttsMetadata?.tts || ttsMetadata?.ttsDirectivesParsed
+      ? {
+          cleanedText: text,
+          ...resolveTtsDirectiveFacts(ttsMetadata.tts, config.modelOverrides, directiveOptions),
+        }
+      : parseTtsDirectives(text, config.modelOverrides, directiveOptions);
   if (directives.warnings.length > 0) {
-    logVerbose(`TTS: ignored directive overrides (${directives.warnings.join("; ")})`);
-  }
-
-  if (isVerbose()) {
-    const effectiveProvider = directives.overrides?.provider
-      ? (canonicalizeSpeechProviderId(directives.overrides.provider, cfg) ?? activeProvider)
-      : activeProvider;
-    logVerbose(
-      `TTS: auto mode enabled (${autoMode}), channel=${params.channel}, selected provider=${effectiveProvider}, config.provider=${config.provider}, config.providerSource=${config.providerSource}`,
-    );
+    logVerbose(`TTS: ignored ${directives.warnings.length} directive override(s)`);
   }
 
   const visibleText = directives.cleanedText.trim();
@@ -181,7 +176,7 @@ export async function maybeApplyTtsToPayloadCore(
     return nextPayload;
   }
 
-  const mode = config.mode ?? "final";
+  const mode = config.mode;
   if (mode === "final" && params.kind && params.kind !== "final") {
     return nextPayload;
   }
@@ -196,7 +191,8 @@ export async function maybeApplyTtsToPayloadCore(
     return nextPayload;
   }
 
-  const maxLength = getTtsMaxLength(prefsPath);
+  // Synthesis rejects text over config.maxTextLength, so never prepare more than that.
+  const maxLength = Math.min(preferredMaxLength, config.maxTextLength);
   let textForAudio = ttsText;
   let wasSummarized = false;
 
@@ -207,7 +203,7 @@ export async function maybeApplyTtsToPayloadCore(
   }
 
   if (textForAudio.length > maxLength) {
-    if (!isSummarizationEnabled(prefsPath)) {
+    if (!summarize) {
       logVerbose(
         `TTS: truncating long text (${textForAudio.length} > ${maxLength}), summarization disabled.`,
       );
@@ -230,9 +226,8 @@ export async function maybeApplyTtsToPayloadCore(
           );
           textForAudio = `${truncateUtf16Safe(textForAudio, config.maxTextLength - 3)}...`;
         }
-      } catch (err) {
-        const error = err as Error;
-        logVerbose(`TTS: summarization failed, truncating instead: ${error.message}`);
+      } catch {
+        logVerbose("TTS: summarization failed, truncating instead.");
         textForAudio = `${truncateUtf16Safe(textForAudio, maxLength - 3)}...`;
       }
     }
@@ -292,6 +287,6 @@ export async function maybeApplyTtsToPayloadCore(
   }
 
   const latency = Date.now() - ttsStart;
-  logVerbose(`TTS: conversion failed after ${latency}ms (${result.error ?? "unknown"}).`);
+  logVerbose(`TTS: conversion failed after ${latency}ms.`);
   return applyExplicitSpeechVisibleFallback(nextPayload, params.channel, explicitTtsText);
 }

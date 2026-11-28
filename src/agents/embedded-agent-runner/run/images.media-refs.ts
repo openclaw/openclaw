@@ -1,4 +1,4 @@
-import { safeFileURLToPath } from "@openclaw/fs-safe/advanced";
+import { trySafeFileURLToPath } from "@openclaw/fs-safe/advanced";
 import {
   isImageMediaFact,
   normalizeMediaFacts,
@@ -35,18 +35,17 @@ export function isOpenClawCliImageCachePath(filePath: string): boolean {
 }
 
 export function resolveMediaFactLocalRef(fact: MediaFact): MediaFileRef | undefined {
-  const mediaUri = [fact.url, fact.path].find((value) => value?.startsWith("media://inbound/"));
+  const mediaUri =
+    (fact.staged || fact.workspaceDir) && fact.path && !fact.path.startsWith("media://")
+      ? undefined
+      : [fact.url, fact.path].find((value) => value?.startsWith("media://inbound/"));
   const identity = mediaUri ?? fact.path ?? fact.url;
   if (!identity) {
     return undefined;
   }
   let resolved = mediaUri;
   if (!resolved && /^file:/i.test(identity)) {
-    try {
-      resolved = safeFileURLToPath(identity);
-    } catch {
-      return undefined;
-    }
+    resolved = trySafeFileURLToPath(identity);
   } else if (
     !resolved &&
     (!URL_SCHEME_PATTERN.test(identity) || WINDOWS_DRIVE_PATH_PATTERN.test(identity))

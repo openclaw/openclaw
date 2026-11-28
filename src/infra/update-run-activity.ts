@@ -1,5 +1,9 @@
-import { getSelfAndAncestorPidsSync } from "./restart-stale-pids.js";
-import { inspectUpdateRunDriver, type UpdateRunDriver } from "./update-run-driver.js";
+import {
+  inspectUpdateRunDriver,
+  sameUpdateRunDriver,
+  toUpdateRunDriver,
+  type UpdateRunDriver,
+} from "./update-run-driver.js";
 import {
   isExpiredLegacyUpdateRun,
   LEGACY_UPDATE_RUN_EXPIRED_REASON,
@@ -22,6 +26,13 @@ function hasUnrecordedUpdateRunDriver(record: UpdateRunRecord): boolean {
   return record.steps.some((step) => step.step === "driver:identity-unavailable");
 }
 
+export function isUpdateRunContinuationCandidate(
+  record: UpdateRunRecord,
+  inheritedRunId: string | undefined,
+): boolean {
+  return record.runId === inheritedRunId?.trim() && !hasUnrecordedUpdateRunDriver(record);
+}
+
 export function isStaleIdentitylessUpdateRun(record: UpdateRunRecord): boolean {
   return (
     record.status === "running" &&
@@ -31,35 +42,12 @@ export function isStaleIdentitylessUpdateRun(record: UpdateRunRecord): boolean {
   );
 }
 
+/** Process identities only: callers copy them into strict lease and recovery records. */
 export function recordedUpdateRunDrivers(record: UpdateRunRecord): UpdateRunDriver[] {
   return [
     ...(record.origin.driver ? [record.origin.driver] : []),
     ...(record.origin.previousDrivers ?? []),
-  ];
-}
-
-/** Correlation alone cannot let another process continue a live update. */
-function isCurrentUpdateRunContinuation(
-  record: UpdateRunRecord,
-  inheritedRunId: string | undefined,
-): boolean {
-  if (record.runId !== inheritedRunId?.trim() || hasUnrecordedUpdateRunDriver(record)) {
-    return false;
-  }
-  const drivers = recordedUpdateRunDrivers(record);
-  const ancestors = getSelfAndAncestorPidsSync(undefined, { requireVerifiedParent: true });
-  let ownsDriver = false;
-  for (const driver of drivers) {
-    const liveness = inspectUpdateRunDriver(driver);
-    if (liveness === "dead") {
-      continue;
-    }
-    if (liveness !== "alive" || !ancestors.has(driver.pid)) {
-      return false;
-    }
-    ownsDriver = true;
-  }
-  return ownsDriver;
+  ].map(toUpdateRunDriver);
 }
 
 export function formatUpdateRunOwnership(record: UpdateRunRecord): string {
@@ -81,27 +69,6 @@ export function formatUpdateRunOwnership(record: UpdateRunRecord): string {
   return `Update ${record.runId} remains recorded as running (${record.phase}); ${owners}${unrecorded}; started ${new Date(record.createdAtMs).toISOString()} (age ${age(record.createdAtMs)}), last activity ${new Date(activity).toISOString()} (age ${age(activity)}). Repair could not verify that the recorded update work stopped; it did not assume the update resumed. Check each named host or supervisor: this host cannot safely determine liveness when a driver is shown as "not observed". If a driver is active, wait for it or stop it through its owning host or supervisor. If this is the same machine after a rename, restore its recorded hostname before retrying \`openclaw update repair\`; otherwise contact support.`;
 }
 
-export type UpdateRepairDriverAdmission =
-  | { kind: "continuation"; run: UpdateRunRecord }
-  | { kind: "recovery"; runs: UpdateRunRecord[] }
-  | { kind: "conflict"; message: string };
-
-export function inspectUpdateRepairDriverAdmission(
-  runs: UpdateRunRecord[],
-  inheritedRunId: string | undefined,
-): UpdateRepairDriverAdmission {
-  let continuation: UpdateRunRecord | undefined;
-  for (const run of runs) {
-    if (isCurrentUpdateRunContinuation(run, inheritedRunId)) {
-      continuation = run;
-    } else if (!inspectUpdateRunDriverAbandonment(run, { explicit: true })) {
-      // A captured continuation remains relevant after its driver terminalizes it.
-      return { kind: "conflict", message: formatUpdateRunOwnership(run) };
-    }
-  }
-  return continuation ? { kind: "continuation", run: continuation } : { kind: "recovery", runs };
-}
-
 /** Only a fresh, unacknowledged recovery may substitute for a full repair invocation. */
 export function isFreshUnacknowledgedAbandonedUpdateRun(record: UpdateRunRecord): boolean {
   return (
@@ -113,17 +80,17 @@ export function isFreshUnacknowledgedAbandonedUpdateRun(record: UpdateRunRecord)
   );
 }
 
-/** Recorded drivers require positive death evidence; untouched legacy admissions have a fixed expiry. */
+/** Recorded drivers need death proof or exclusive repair custody; legacy admissions have a fixed expiry. */
 export function inspectUpdateRunAbandonment(
   record: UpdateRunRecord,
-  input: { explicit?: boolean } = {},
+  input: { explicit?: boolean; exclusiveRepair?: boolean } = {},
 ): string | undefined {
   return record.status === "running" ? inspectUpdateRunDriverAbandonment(record, input) : undefined;
 }
 
-function inspectUpdateRunDriverAbandonment(
+export function inspectUpdateRunDriverAbandonment(
   record: UpdateRunRecord,
-  input: { explicit?: boolean },
+  input: { explicit?: boolean; exclusiveRepair?: boolean },
 ): string | undefined {
   if (isExpiredLegacyUpdateRun(record)) {
     return LEGACY_UPDATE_RUN_EXPIRED_REASON;
@@ -132,16 +99,39 @@ function inspectUpdateRunDriverAbandonment(
   if (!input.explicit && identityUnavailable) {
     return undefined;
   }
-  const drivers = recordedUpdateRunDrivers(record);
-  // Explicit repair need not wait for dead drivers, but an unrecorded adopter may still be working.
-  const requiresInactivity = !input.explicit || !drivers.length || identityUnavailable;
+  let drivers = recordedUpdateRunDrivers(record);
+  const handoff = record.origin.managedHandoff;
+  if (handoff) {
+    // The serving Gateway remains alive during validation, but no longer drives the update.
+    // Adoption can prune the dead helper; its separate lifetime must still be checked.
+    drivers = [
+      handoff.helper,
+      ...drivers.filter(
+        (driver) =>
+          !sameUpdateRunDriver(driver, handoff.parent) &&
+          !sameUpdateRunDriver(driver, handoff.helper),
+      ),
+    ];
+  }
+  // Confirmed driver death needs no grace; an unrecorded adopter may still be working.
+  const requiresInactivity = !drivers.length || identityUnavailable;
   if (requiresInactivity && Date.now() - updateRunLastActivity(record) <= ABANDONED_UPDATE_RUN_MS) {
     return undefined;
   }
   if (drivers.length) {
-    return drivers.every((driver) => inspectUpdateRunDriver(driver) === "dead")
-      ? "inactive-driver-dead"
-      : undefined;
+    if (drivers.every((driver) => inspectUpdateRunDriver(driver) === "dead")) {
+      return handoff ? "handoff-terminated" : "inactive-driver-dead";
+    }
+    // Repair's live executor and state custody exclude these drivers even after
+    // a machine rename. Elapsed time or a foreign hostname alone cannot do so.
+    if (
+      input.exclusiveRepair &&
+      !identityUnavailable &&
+      drivers.every((driver) => inspectUpdateRunDriver(driver) !== "alive")
+    ) {
+      return "exclusive-repair-ownership";
+    }
+    return undefined;
   }
   return input.explicit ? "operator-reconciled-inactive-run" : undefined;
 }

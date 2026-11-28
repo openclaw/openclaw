@@ -39,7 +39,7 @@ enum OpenClawTextValue: ExpressibleByStringLiteral {
 
 struct OpenClawProBackground: View {
     var body: some View {
-        Color(uiColor: .systemGroupedBackground)
+        OpenClawBrand.canvas
             .ignoresSafeArea()
     }
 }
@@ -63,6 +63,26 @@ struct ProCard<Content: View>: View {
 }
 
 extension View {
+    @ViewBuilder
+    func openClawToolbarGlyphScale() -> some View {
+        if #available(iOS 27.1, *) {
+            self.modifier(OpenClawVerticalToolbarGlyphScale())
+        } else {
+            self
+        }
+    }
+
+    @ViewBuilder
+    func openClawToolbarHitTarget(preservesIntrinsicWidth: Bool = false) -> some View {
+        if #available(iOS 27.1, *) {
+            self.modifier(OpenClawToolbarHitTarget(preservesIntrinsicWidth: preservesIntrinsicWidth))
+        } else if preservesIntrinsicWidth {
+            self.frame(minHeight: 44)
+        } else {
+            self.frame(width: 44, height: 44)
+        }
+    }
+
     func proPanelSurface(
         tint: Color? = nil,
         radius: CGFloat = OpenClawProMetric.cardRadius,
@@ -76,40 +96,49 @@ extension View {
 
     @ViewBuilder
     func openClawGlassButton(prominent: Bool = false, tint: Color? = nil) -> some View {
-        if #available(iOS 26.0, *) {
-            if prominent {
-                self
-                    .font(OpenClawType.subheadSemiBold)
-                    .buttonStyle(.glassProminent)
-                    .tint(tint ?? OpenClawBrand.accent)
-            } else {
-                self
-                    .font(OpenClawType.subheadSemiBold)
-                    .buttonStyle(.glass)
-                    .tint(tint)
-            }
-        } else if prominent {
+        if prominent {
             self
                 .font(OpenClawType.subheadSemiBold)
-                .buttonStyle(.borderedProminent)
-                .tint(tint ?? OpenClawBrand.accent)
+                .buttonStyle(.glassProminent)
+                .tint(tint ?? OpenClawBrand.accentFill)
         } else {
             self
                 .font(OpenClawType.subheadSemiBold)
-                .buttonStyle(.bordered)
+                .buttonStyle(.glass)
                 .tint(tint)
         }
     }
 
-    @ViewBuilder
     func openClawGlassSurface() -> some View {
-        if #available(iOS 26.0, *) {
-            self.glassEffect(.regular, in: .rect(cornerRadius: OpenClawProMetric.controlRadius))
-        } else {
-            self.background(
-                .regularMaterial,
-                in: RoundedRectangle(cornerRadius: OpenClawProMetric.controlRadius, style: .continuous))
-        }
+        self.glassEffect(.regular, in: .rect(cornerRadius: OpenClawProMetric.controlRadius))
+    }
+}
+
+@available(iOS 27.1, *)
+private struct OpenClawVerticalToolbarGlyphScale: ViewModifier {
+    @Environment(\.toolbarVerticalEdge) private var verticalEdge
+
+    func body(content: Content) -> some View {
+        // Enlarge only the artwork inside its matching 52pt target. Follow
+        // the system bar's actual axis instead of guessing from screen width.
+        content.scaleEffect(
+            self.verticalEdge != nil && UIDevice.current.userInterfaceIdiom == .phone ? 1.3 : 1)
+    }
+}
+
+@available(iOS 27.1, *)
+private struct OpenClawToolbarHitTarget: ViewModifier {
+    @Environment(\.toolbarVerticalEdge) private var verticalEdge
+    let preservesIntrinsicWidth: Bool
+
+    func body(content: Content) -> some View {
+        let isSideToolbar = self.verticalEdge != nil && UIDevice.current.userInterfaceIdiom == .phone
+        let size: CGFloat = isSideToolbar ? 52 : 44
+        content.frame(
+            minWidth: isSideToolbar || !self.preservesIntrinsicWidth ? size : nil,
+            maxWidth: isSideToolbar || !self.preservesIntrinsicWidth ? size : nil,
+            minHeight: size,
+            maxHeight: self.preservesIntrinsicWidth && !isSideToolbar ? nil : size)
     }
 }
 
@@ -124,7 +153,7 @@ private struct ProPanelSurfaceModifier: ViewModifier {
             .background {
                 let shape = RoundedRectangle(cornerRadius: self.radius, style: .continuous)
                 shape
-                    .fill(Color(uiColor: self.isProminent ? .systemBackground : .secondarySystemGroupedBackground))
+                    .fill(OpenClawBrand.surfaceRaised)
                     .overlay {
                         shape.strokeBorder(self.borderStyle, lineWidth: 1)
                     }
@@ -141,7 +170,7 @@ private struct ProPanelSurfaceModifier: ViewModifier {
         if let tint {
             return tint.opacity(self.isProminent ? 0.18 : 0.10)
         }
-        return Color(uiColor: .separator).opacity(self.colorScheme == .dark ? 0.22 : 0.12)
+        return OpenClawBrand.border
     }
 }
 
@@ -165,32 +194,101 @@ struct OpenClawSidebarHeaderAction {
     let systemName: String
     let accessibilityLabel: OpenClawTextValue
     var accessibilityIdentifier: String?
+    /// The drawer's reveal control stays in its toolbar slot while the drawer covers it.
+    /// Only the button observes this presentation.
+    var drawerPresentation: RootSidebarPresentation?
+    var hasApprovalAttention = false
     let action: () -> Void
+
+    /// Read only in the button to avoid rebuilding the destination or its toolbar.
+    var isShown: Bool {
+        self.drawerPresentation?.isPresented != true
+    }
+}
+
+/// Builds `content` for a destination that owns the sidebar reveal control.
+struct OpenClawSidebarRevealContent<Content: View>: View {
+    let action: OpenClawSidebarHeaderAction?
+    @ViewBuilder let content: (OpenClawSidebarHeaderAction) -> Content
+
+    var body: some View {
+        if let action = self.action {
+            self.content(action)
+        }
+    }
+}
+
+/// Keeps navigation bar visibility tied to the destination's header configuration.
+struct OpenClawSidebarRevealToolbarVisibility: ViewModifier {
+    let action: OpenClawSidebarHeaderAction?
+    let visibility: (_ hasRevealControl: Bool) -> Visibility
+
+    func body(content: Content) -> some View {
+        content.toolbar(self.visibility(self.action != nil), for: .navigationBar)
+    }
+}
+
+struct OpenClawRoundNavigationButton<Glyph: View>: View {
+    let action: () -> Void
+    @ViewBuilder let glyph: () -> Glyph
+
+    var body: some View {
+        Button(action: self.action) {
+            self.glyph().openClawToolbarHitTarget().contentShape(Rectangle())
+        }
+        .buttonStyle(.plain)
+        .glassEffect(.regular.interactive(), in: Circle())
+    }
 }
 
 struct OpenClawSidebarControlButton: View {
     let action: OpenClawSidebarHeaderAction
 
+    private static let chatMenuGlyph = UIGraphicsImageRenderer(size: CGSize(width: 16, height: 8)).image { _ in
+        UIColor.black.setFill()
+        UIBezierPath(roundedRect: CGRect(x: 0, y: 0, width: 16, height: 2), cornerRadius: 1).fill()
+        UIBezierPath(roundedRect: CGRect(x: 0, y: 6, width: 10, height: 2), cornerRadius: 1).fill()
+    }
+
     var body: some View {
         self.identified(self.button.buttonStyle(.plain))
+            .opacity(self.action.isShown ? 1 : 0)
     }
 
     private var button: some View {
         Button(action: self.action.action) {
-            self.icon
+            Label {
+                self.action.accessibilityLabel.text
+                    .font(OpenClawType.body)
+            } icon: {
+                self.icon
+            }
+            .labelStyle(.iconOnly)
         }
-        .frame(width: 44, height: 44)
+        .openClawToolbarHitTarget()
         .contentShape(Rectangle())
         .accessibilityLabel(self.action.accessibilityLabel.text)
+        .accessibilityValue(self.action.hasApprovalAttention
+            ? String(localized: "Needs approval")
+            : "")
     }
 
     private var icon: some View {
-        Image(systemName: self.action.systemName)
-            .font(OpenClawType.subheadSemiBold)
-            .foregroundStyle(OpenClawBrand.accent)
-            .frame(
-                width: OpenClawProMetric.compactControlSize,
-                height: OpenClawProMetric.compactControlSize)
+        Image(uiImage: Self.chatMenuGlyph)
+            .renderingMode(.template)
+            .foregroundStyle(Color(uiColor: .label))
+            .openClawToolbarGlyphScale()
+            .frame(width: OpenClawProMetric.compactControlSize, height: OpenClawProMetric.compactControlSize)
+            .overlay(alignment: .topTrailing) {
+                if self.action.hasApprovalAttention {
+                    Circle()
+                        .fill(OpenClawBrand.warn)
+                        .frame(width: 7, height: 7)
+                        .padding(7)
+                        .allowsHitTesting(false)
+                        .accessibilityHidden(true)
+                }
+            }
     }
 
     @ViewBuilder
@@ -209,18 +307,20 @@ struct OpenClawSidebarToolbarItem: ToolbarContent {
 
     @ToolbarContentBuilder
     var body: some ToolbarContent {
-        if #available(iOS 26.0, *) {
-            ToolbarItem(placement: self.placement) {
-                OpenClawSidebarControlButton(action: self.action)
-            }
-            // Sidebar reveal is intentionally background-free in every host;
-            // suppress the toolbar's automatic glass so it cannot reappear.
-            .sharedBackgroundVisibility(.hidden)
+        if #available(iOS 27.1, *) {
+            self.item.axisBehavior(.verticalPreferred).visibilityPriority(.high)
         } else {
-            ToolbarItem(placement: self.placement) {
-                OpenClawSidebarControlButton(action: self.action)
-            }
+            self.item
         }
+    }
+
+    private var item: some ToolbarContent {
+        ToolbarItem(placement: self.placement) {
+            OpenClawSidebarControlButton(action: self.action)
+        }
+        // Sidebar reveal is intentionally background-free in every host;
+        // suppress the toolbar's automatic glass so it cannot reappear.
+        .sharedBackgroundVisibility(.hidden)
     }
 }
 
@@ -228,11 +328,7 @@ struct OpenClawGlassControlGroup<Content: View>: View {
     @ViewBuilder let content: Content
 
     var body: some View {
-        if #available(iOS 26.0, *) {
-            GlassEffectContainer(spacing: 8) {
-                self.content
-            }
-        } else {
+        GlassEffectContainer(spacing: 8) {
             self.content
         }
     }
@@ -404,13 +500,15 @@ struct OpenClawToggleIndicator: View {
     let isOn: Bool
 
     var body: some View {
+        // The native switch's footprint (63x28 on iOS 26), so a Settings row with this indicator
+        // is as tall as one with a system Toggle.
         Capsule()
-            .fill(self.isOn ? OpenClawBrand.accent : Color.secondary.opacity(0.35))
-            .frame(width: 52, height: 32)
+            .fill(self.isOn ? OpenClawBrand.ok : Color.secondary.opacity(0.35))
+            .frame(width: 63, height: 28)
             .overlay(alignment: self.isOn ? .trailing : .leading) {
                 Circle()
                     .fill(Color.white)
-                    .frame(width: 28, height: 28)
+                    .frame(width: 24, height: 24)
                     .padding(2)
                     .shadow(color: Color.black.opacity(0.14), radius: 1, x: 0, y: 1)
             }
@@ -476,36 +574,26 @@ struct OpenClawGatewayCompactPill: View {
     @Environment(NodeAppModel.self) private var appModel
 
     var body: some View {
-        OpenClawStatusBadge(label: .verbatim(self.title), tone: self.tone)
+        let presentation = GatewayStatusBuilder.build(appModel: self.appModel).statusPresentation
+        OpenClawStatusBadge(label: .verbatim(presentation.title), tone: presentation.tone)
             .accessibilityLabel(
                 String(
                     format: String(localized: "Gateway %@"),
-                    self.title))
+                    presentation.title))
     }
+}
 
-    private var title: String {
-        switch GatewayStatusBuilder.build(appModel: self.appModel) {
+extension GatewayDisplayState {
+    var statusPresentation: (title: String, tone: OpenClawStatusTone) {
+        switch self {
         case .connected:
-            String(localized: "Online")
+            (String(localized: "Online"), .ok)
         case .connecting:
-            String(localized: "Connecting")
+            (String(localized: "Connecting"), .accent)
         case .error:
-            String(localized: "Attention")
+            (String(localized: "Attention"), .warn)
         case .disconnected:
-            String(localized: "Offline")
-        }
-    }
-
-    private var tone: OpenClawStatusTone {
-        switch GatewayStatusBuilder.build(appModel: self.appModel) {
-        case .connected:
-            .ok
-        case .connecting:
-            .accent
-        case .error:
-            .warn
-        case .disconnected:
-            .muted
+            (String(localized: "Offline"), .muted)
         }
     }
 }

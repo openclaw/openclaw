@@ -1,20 +1,83 @@
 import { GatewayProtocolRequestTimeoutError } from "@openclaw/gateway-client/browser";
-import { GatewayRequestError } from "../../api/gateway.ts";
+import { asOptionalRecord } from "@openclaw/normalization-core/record-coerce";
+import { sleepWithAbort } from "@openclaw/retry";
+import {
+  monotonicDeadlineAfter,
+  remainingMonotonicMs,
+} from "../../../../src/shared/monotonic-time.ts";
+import { GatewayRequestError } from "../../api/gateway-connect-errors.ts";
 import { t } from "../../i18n/index.ts";
 import { formatUiError } from "../../lib/format-error.ts";
-import { isAgentDatabaseInspectionPendingError } from "../../lib/gateway-availability.ts";
+import {
+  isAgentDatabaseInspectionPendingError,
+  resolveGatewayReadRetryDelayMs,
+} from "../../lib/gateway-availability.ts";
 
 export const CHAT_HISTORY_RETRY_WINDOW_MS = 60_000;
 
 type RetryableChatReadError = GatewayRequestError | GatewayProtocolRequestTimeoutError;
 
-/** Reads are replayable; subscription acquisition first settles its coordinator's compensation. */
+/** One deadline and retry policy for tail, older-page, and speculative history reads. */
+export async function retryChatHistoryRead<T>(options: {
+  method: "chat.history" | "chat.startup";
+  controller: AbortController;
+  signal?: AbortSignal;
+  isCurrent: () => boolean;
+  request: (signal: AbortSignal) => Promise<T>;
+  onRetry?: () => void;
+}): Promise<T> {
+  const { controller, method } = options;
+  const signal = options.signal
+    ? AbortSignal.any([options.signal, controller.signal])
+    : controller.signal;
+  let lastRetryableError: unknown;
+  const deadlineAt = monotonicDeadlineAfter(CHAT_HISTORY_RETRY_WINDOW_MS);
+  const timeout = setTimeout(
+    () =>
+      controller.abort(
+        isAgentDatabaseInspectionPendingError(lastRetryableError)
+          ? lastRetryableError
+          : new GatewayProtocolRequestTimeoutError(
+              { method, timeoutMs: CHAT_HISTORY_RETRY_WINDOW_MS, requestSent: true },
+              t("chat.historyRequestTimedOut"),
+            ),
+      ),
+    CHAT_HISTORY_RETRY_WINDOW_MS,
+  );
+  const shouldRetry = () =>
+    !signal.aborted && remainingMonotonicMs(deadlineAt) > 0 && options.isCurrent();
+  try {
+    for (let attempt = 0; ; attempt += 1) {
+      signal.throwIfAborted();
+      try {
+        return await options.request(signal);
+      } catch (error) {
+        if (!shouldRetry() || !isRetryableChatReadError(error, method)) {
+          throw error;
+        }
+        lastRetryableError = error;
+        options.onRetry?.();
+        await sleepWithAbort(resolveGatewayReadRetryDelayMs(error, attempt), signal);
+        if (!shouldRetry()) {
+          throw error;
+        }
+      }
+    }
+  } finally {
+    clearTimeout(timeout);
+  }
+}
+
 export function isRetryableChatReadError(
   err: unknown,
   method: string,
 ): err is RetryableChatReadError {
   if (err instanceof GatewayProtocolRequestTimeoutError) {
     return err.method === method;
+  }
+  // A fresh subscription rechecks access; never replay a mutation or a denial.
+  if (method === "sessions.messages.subscribe" && isChatSubscriptionTargetChanged(err)) {
+    return true;
   }
   if (
     !(err instanceof GatewayRequestError) ||
@@ -23,12 +86,19 @@ export function isRetryableChatReadError(
   ) {
     return false;
   }
-  const details = err.details;
-  if (!details || typeof details !== "object") {
-    return true;
-  }
-  const detailMethod = (details as { method?: unknown }).method;
+  const detailMethod = asOptionalRecord(err.details)?.method;
   return typeof detailMethod !== "string" || detailMethod === method;
+}
+
+export function isChatSubscriptionTargetChanged(error: unknown): boolean {
+  if (!(error instanceof GatewayRequestError) || error.gatewayCode !== "INVALID_REQUEST") {
+    return false;
+  }
+  const details = asOptionalRecord(error.details);
+  return (
+    details?.code === "SESSION_MUTATION_AUTHORIZATION_CHANGED" &&
+    details.method === "sessions.messages.subscribe"
+  );
 }
 
 export function formatChatHistoryLoadError(error: unknown): string {

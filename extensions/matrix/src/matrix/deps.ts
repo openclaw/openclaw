@@ -1,8 +1,12 @@
 import fs from "node:fs";
 import { createRequire } from "node:module";
 import path from "node:path";
+import { fileURLToPath } from "node:url";
 import { formatErrorMessage } from "openclaw/plugin-sdk/error-runtime";
-import { runCommandWithTimeout } from "openclaw/plugin-sdk/process-runtime";
+import {
+  resolveRuntimeDependencyEntrypointUrl,
+  runCommandWithTimeout,
+} from "openclaw/plugin-sdk/process-runtime";
 import type { RuntimeEnv } from "openclaw/plugin-sdk/runtime";
 
 const REQUIRED_MATRIX_PACKAGES = [
@@ -57,16 +61,12 @@ function isMuslRuntime(): boolean {
 function resolveMatrixCryptoNativeBindingFilename(): string | null {
   switch (process.platform) {
     case "darwin":
-      return process.arch === "arm64"
-        ? "matrix-sdk-crypto.darwin-arm64.node"
-        : process.arch === "x64"
-          ? "matrix-sdk-crypto.darwin-x64.node"
-          : null;
+      return ["arm64", "x64"].includes(process.arch)
+        ? `matrix-sdk-crypto.darwin-${process.arch}.node`
+        : null;
     case "linux":
       if (process.arch === "x64") {
-        return isMuslRuntime()
-          ? "matrix-sdk-crypto.linux-x64-musl.node"
-          : "matrix-sdk-crypto.linux-x64-gnu.node";
+        return `matrix-sdk-crypto.linux-x64-${isMuslRuntime() ? "musl" : "gnu"}.node`;
       }
       if (process.arch === "arm64" && !isMuslRuntime()) {
         return "matrix-sdk-crypto.linux-arm64-gnu.node";
@@ -79,13 +79,9 @@ function resolveMatrixCryptoNativeBindingFilename(): string | null {
       }
       return null;
     case "win32":
-      return process.arch === "x64"
-        ? "matrix-sdk-crypto.win32-x64-msvc.node"
-        : process.arch === "ia32"
-          ? "matrix-sdk-crypto.win32-ia32-msvc.node"
-          : process.arch === "arm64"
-            ? "matrix-sdk-crypto.win32-arm64-msvc.node"
-            : null;
+      return ["x64", "ia32", "arm64"].includes(process.arch)
+        ? `matrix-sdk-crypto.win32-${process.arch}-msvc.node`
+        : null;
     default:
       return null;
   }
@@ -98,7 +94,11 @@ function resolveMatrixCryptoNativeBindingPath(): string | null {
   }
   try {
     return path.join(
-      path.dirname(defaultResolveFn("@matrix-org/matrix-sdk-crypto-nodejs/download-lib.js")),
+      path.dirname(
+        fileURLToPath(
+          resolveRuntimeDependencyEntrypointUrl("matrixCryptoDownload", import.meta.url),
+        ),
+      ),
       filename,
     );
   } catch {
@@ -145,7 +145,9 @@ async function ensureMatrixCryptoRuntimeOnce(): Promise<void> {
     }
   }
 
-  const scriptPath = defaultResolveFn("@matrix-org/matrix-sdk-crypto-nodejs/download-lib.js");
+  const scriptPath = fileURLToPath(
+    resolveRuntimeDependencyEntrypointUrl("matrixCryptoDownload", import.meta.url),
+  );
   let failure: string | undefined;
   try {
     const result = await runCommandWithTimeout([process.execPath, scriptPath], {

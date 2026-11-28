@@ -10,11 +10,7 @@ import {
   resetEmbeddedAttemptHarness,
 } from "./attempt-spawn-workspace.test-support.js";
 
-export type ContextEngineAttemptOptions = Parameters<typeof createContextEngineAttemptRunner>[0];
-
-export function completedStream(message: unknown) {
-  return { result: async () => message, [Symbol.asyncIterator]: () => (async function* () {})() };
-}
+type ContextEngineAttemptOptions = Parameters<typeof createContextEngineAttemptRunner>[0];
 
 export function useContextEngineAttemptHarness(sessionKey: string) {
   const hoisted = getHoisted();
@@ -34,21 +30,13 @@ export function useContextEngineAttemptHarness(sessionKey: string) {
     await closeOpenClawAgentDatabasesAsync();
     await cleanupTempPaths(suiteTempPaths);
   });
-  beforeAll(async () => {
-    await preloadRunEmbeddedAttemptForTests();
-  });
-  return {
-    hoisted,
-    tempPaths,
-    runAttempt: (
-      options: Omit<ContextEngineAttemptOptions, "sessionKey" | "tempPaths" | "contextEngine"> &
-        Partial<Pick<ContextEngineAttemptOptions, "contextEngine" | "sessionKey">> = {},
-    ) =>
-      createContextEngineAttemptRunner({
-        sessionKey,
-        tempPaths,
-        contextEngine: createContextEngineBootstrapAndAssemble(),
-        ...options,
-      }),
-  };
+  beforeAll(preloadRunEmbeddedAttemptForTests);
+  const runAttempt = (options: Partial<Omit<ContextEngineAttemptOptions, "tempPaths">> = {}) =>
+    createContextEngineAttemptRunner({
+      sessionKey,
+      tempPaths,
+      contextEngine: createContextEngineBootstrapAndAssemble(),
+      ...options,
+    });
+  return { hoisted, tempPaths, runAttempt };
 }

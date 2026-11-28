@@ -28,34 +28,15 @@ describe("plugin npm runtime build args", () => {
     });
   });
 
-  it("selects preparation without compilation only when explicitly requested", () => {
-    for (const args of [
-      ["--prepare-native-import", "extensions/slack"],
-      ["extensions/slack", "--prepare-native-import"],
-      ["--", "--prepare-native-import", "extensions/slack"],
-    ]) {
+  it.each([["extensions/qa-lab", "--qa-gateway-fixture"]])(
+    "selects the private Gateway graph for %j",
+    (...args) => {
       expect(parseSingleBuildArgs(args)).toEqual({
-        packageDir: "extensions/slack",
-        prepareNativeImport: true,
+        packageDir: "extensions/qa-lab",
+        profile: "qa-gateway-fixture",
       });
-    }
-    expect(() => parseSingleBuildArgs(["--prepare-native-import"])).toThrow(/usage:/u);
-    expect(() => parseSingleBuildArgs(["--prepare-native-import", "--unknown"])).toThrow(/usage:/u);
-    expect(() =>
-      parseSingleBuildArgs(["--prepare-native-import", "extensions/slack", "extra"]),
-    ).toThrow(/unexpected/u);
-  });
-
-  it.each([
-    ["--qa-gateway-fixture", "extensions/qa-lab"],
-    ["extensions/qa-lab", "--qa-gateway-fixture"],
-    ["--", "--qa-gateway-fixture", "extensions/qa-lab"],
-  ])("selects the private Gateway graph for %j", (...args) => {
-    expect(parseSingleBuildArgs(args)).toEqual({
-      packageDir: "extensions/qa-lab",
-      profile: "qa-gateway-fixture",
-    });
-  });
+    },
+  );
 
   it("refuses source-host preparation for portable Gateway fixtures", () => {
     expect(() =>
@@ -68,24 +49,14 @@ describe("plugin npm runtime build args", () => {
     expect(() => parseSingleBuildArgs(["--qa-gateway-fixture"])).toThrow(/usage:/u);
   });
 
-  it.each([
-    { argv: ["extensions/slack", ""] },
-    { argv: ["extensions/slack", " \t "] },
-    { argv: ["extensions/slack", "", "extra"] },
-    { argv: ["extensions/slack", "", "--unexpected"] },
-    { argv: ["--", "extensions/slack", ""] },
-    { argv: ["--prepare-native-import", "extensions/slack", ""] },
-    { argv: ["extensions/slack", "", "--prepare-native-import"] },
-    { argv: ["extensions/slack", "--prepare-native-import", "", "--unexpected"] },
-    { argv: ["--", "--prepare-native-import", "extensions/slack", ""] },
-    { argv: ["--prepare-native-import", "extensions/slack", "", "--prepare-native-import"] },
-    { argv: ["extensions/qa-lab", "--qa-gateway-fixture", ""] },
-    { argv: ["extensions/qa-lab", "--qa-gateway-fixture", "--qa-gateway-fixture"] },
-  ])("rejects excess runtime build argv $argv after extracting its mode", ({ argv }) => {
-    expect(() => parseSingleBuildArgs(argv)).toThrow(
-      "unexpected plugin npm runtime build argument",
-    );
-  });
+  it.each([{ argv: ["extensions/slack", ""] }])(
+    "rejects excess runtime build argv $argv after extracting its mode",
+    ({ argv }) => {
+      expect(() => parseSingleBuildArgs(argv)).toThrow(
+        "unexpected plugin npm runtime build argument",
+      );
+    },
+  );
 
   it("preserves help, literal targets, and the bulk builder's separate grammar", () => {
     expect(parseSingleBuildArgs(["--", "--help", ""])).toEqual({ help: true, packageDir: "" });

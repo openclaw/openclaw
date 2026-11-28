@@ -1,7 +1,7 @@
 /** Collects text-to-speech secret refs from runtime config. */
 import { appendConfigPathSegment } from "../shared/dot-path.js";
 import {
-  collectCanonicalSecretInputAssignment as collectSecretInputAssignment,
+  createConfigSecretInputCollector,
   type ResolverContext,
   type SecretDefaults,
 } from "./runtime-shared.js";
@@ -19,6 +19,7 @@ export function collectTtsApiKeyAssignments(params: {
   active?: boolean;
   inactiveReason?: string;
 }): void {
+  const collect = createConfigSecretInputCollector(params);
   const collectProviders = (tts: Record<string, unknown>, pathPrefix: string) => {
     if (!isRecord(tts.providers)) {
       return;
@@ -27,29 +28,26 @@ export function collectTtsApiKeyAssignments(params: {
       if (!isRecord(providerConfig)) {
         continue;
       }
-      collectSecretInputAssignment({
-        value: providerConfig.apiKey,
-        path: `${appendConfigPathSegment(`${pathPrefix}.providers`, providerId)}.apiKey`,
-        expected: "string",
-        defaults: params.defaults,
-        context: params.context,
-        active: params.active,
-        inactiveReason: params.inactiveReason,
-        owner: {
-          ownerKind: "capability",
-          ownerId:
-            typeof params.ownerId === "function"
-              ? params.ownerId(providerId)
-              : (params.ownerId ?? "tts"),
-          requiredForGateway: false,
-          disposition: "isolate",
-          // Persona selection may change without reload; retain the complete TTS owner contract.
-          contract: params.tts,
+      collect(
+        providerConfig,
+        "apiKey",
+        `${appendConfigPathSegment(`${pathPrefix}.providers`, providerId)}.apiKey`,
+        {
+          active: params.active,
+          inactiveReason: params.inactiveReason,
+          owner: {
+            ownerKind: "capability",
+            ownerId:
+              typeof params.ownerId === "function"
+                ? params.ownerId(providerId)
+                : (params.ownerId ?? "tts"),
+            requiredForGateway: false,
+            disposition: "isolate",
+            // Persona selection may change without reload; retain the complete TTS owner contract.
+            contract: params.tts,
+          },
         },
-        apply: (value) => {
-          providerConfig.apiKey = value;
-        },
-      });
+      );
     }
   };
   collectProviders(params.tts, params.pathPrefix);
