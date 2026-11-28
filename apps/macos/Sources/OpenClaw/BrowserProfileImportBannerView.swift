@@ -185,7 +185,10 @@ extension BrowserProfileImportBannerView {
     @MainActor
     static func makeDashboardPane(webView: NSView) -> NSView {
         let container = NSView()
-        webView.translatesAutoresizingMaskIntoConstraints = false
+        // WebKit resizes the inspected view directly when its inspector docks.
+        // Keep the dashboard frame flexible so layout preserves the docked split.
+        webView.frame = container.bounds
+        webView.autoresizingMask = [.width, .height]
         container.addSubview(webView)
         let banner = NSHostingView(rootView: BrowserProfileImportBannerView(model: .shared))
         banner.translatesAutoresizingMaskIntoConstraints = false
@@ -194,10 +197,6 @@ extension BrowserProfileImportBannerView {
         let bannerWidth = banner.widthAnchor.constraint(equalToConstant: 560)
         bannerWidth.priority = .defaultHigh
         NSLayoutConstraint.activate([
-            webView.leadingAnchor.constraint(equalTo: container.leadingAnchor),
-            webView.trailingAnchor.constraint(equalTo: container.trailingAnchor),
-            webView.topAnchor.constraint(equalTo: container.topAnchor),
-            webView.bottomAnchor.constraint(equalTo: container.bottomAnchor),
             // Float just below the 50px titlebar clearance the native chrome
             // CSS reserves so the card never collides with window controls.
             banner.topAnchor.constraint(equalTo: container.topAnchor, constant: 58),
