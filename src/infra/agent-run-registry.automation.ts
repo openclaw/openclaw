@@ -1,3 +1,4 @@
+import { ToolInputError } from "../agents/tool-input-error.js";
 import { parseAutomationResult } from "../cron/automation-result.js";
 import { isCronRunSessionKey } from "../sessions/session-key-utils.js";
 import {
@@ -134,8 +135,8 @@ export function createAutomationResultRecorder(
       throw new Error("record_result already accepted for this automation run");
     }
     if (!normalized) {
-      throw new Error(
-        "record_result requires a valid outcome and trimmed summary of 1–2000 characters (optional only for no_change)",
+      throw new ToolInputError(
+        "Set outcome to no_change, progress, done, blocked, or needs_attention. Include a trimmed summary of 1–2000 characters unless outcome is no_change.",
       );
     }
     run.result = normalized;

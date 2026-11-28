@@ -1,0 +1,65 @@
+{
+  "provenance": {
+    "source": "https://github.com/DonnieFi/openclaw/commit/864ee3fd6b4ebb02cfa19193c9dd9ba56260b3ff",
+    "description": "Contributor-run live Gateway proof for #206884 / PR #207044. Isolated state, Code Mode, qa-channel capture bus, and Codex user-home login. No credentials or transcripts are stored here."
+  },
+  "head": "a383623b90f3cd5aef39846b95f52bab9bf37292",
+  "codeMode": true,
+  "queue": {
+    "pending": 0,
+    "unchanged": true
+  },
+  "target": "dm:local-proof",
+  "channel": "qa-channel",
+  "model": "openai/gpt-6-astra",
+  "runtime": "codex",
+  "invocation": {
+    "add": "openclaw automations add --session isolated --announce --channel qa-channel --to dm:local-proof --model openai/gpt-6-astra --fallbacks \"\" --timeout-seconds 600 --cron \"0 0 1 1 *\" --tz UTC --exact --message <job text>",
+    "run": "openclaw automations run <id> --wait --wait-timeout 15m --timeout 600000"
+  },
+  "jobs": {
+    "requiredReport": "Check the queue. Report its status every run, including when nothing changed. If it is empty, report 'Queue: IDLE'.",
+    "conditionalAlert": "Check the queue. Alert me only if a new item needs attention."
+  },
+  "runs": {
+    "requiredReport": {
+      "runId": "cron-request.08b932db-ae04-4d22-9c0d-d699d7ae597d",
+      "status": "ok",
+      "completionStatus": "succeeded",
+      "provider": "openai",
+      "model": "gpt-6-astra",
+      "summary": "Queue: IDLE",
+      "deliveryStatus": "delivered",
+      "delivered": true,
+      "captureCount": 1,
+      "captureText": "Queue: IDLE",
+      "messageToolSatisfied": false,
+      "toolActions": [
+        "exec",
+        "bash",
+        "automations:get",
+        "automations:scratch_get"
+      ]
+    },
+    "conditionalAlert": {
+      "runId": "cron-request.2891ff80-47d1-479c-b5be-08f8c8f17fce",
+      "status": "ok",
+      "completionStatus": "succeeded",
+      "provider": "openai",
+      "model": "gpt-6-astra",
+      "deliveryStatus": "not-delivered",
+      "deliverySuppressionReason": "silent",
+      "delivered": false,
+      "captureCount": 0,
+      "recordedOutcome": "no_change",
+      "messageToolSatisfied": false,
+      "toolActions": [
+        "exec",
+        "bash",
+        "automations:get",
+        "automations:record_result",
+        "automations:runs"
+      ]
+    }
+  }
+}
