@@ -72,6 +72,8 @@ file, Doctor preserves the scratch and original file, prints a notice, and
 completes the conversion. Explicitly unset scratch stays unset. The automation
 uses its existing scratch; review the retained file before copying any wanted
 instructions into the job. Repeating Doctor keeps both originals and succeeds.
+`--set` and `--file` replace the whole scratch, so include any existing text you
+want to keep. See [Monitor scratch](/gateway/heartbeat#monitor-scratch).
 
 Doctor prints this one-time note when migration completes:
 
