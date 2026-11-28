@@ -35,6 +35,8 @@ Before adding test, answer:
 - Fixtures must not fabricate owner receipts/order or claim persistence path
   never writes.
 - Negative controls must fail at intended guard; names must match exercised behavior.
+- Gates must derive their universe from the owner and fail closed on unanalyzed input
+  (#161798); see [quality gates](references/audit.md#quality-gates).
 - Auditing candidates: use [full checklist](references/audit.md#junk-patterns).
 
 ## Retention bar
