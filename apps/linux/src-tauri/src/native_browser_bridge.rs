@@ -165,6 +165,7 @@ fn scoped_script(document: &DashboardDocument, script: &str) -> String {
 
 fn initialization_script(document: &DashboardDocument) -> String {
     let token = json!(document.token);
+    let reports_device_pixel_ratio = cfg!(target_os = "linux");
     scoped_script(
         document,
         &format!(
@@ -176,6 +177,9 @@ fn initialization_script(document: &DashboardDocument) -> String {
   const invoke = window.__TAURI_INTERNALS__.invoke.bind(window.__TAURI_INTERNALS__);
   const handler = {{ postMessage: async message => {{
     await ready;
+    if ({reports_device_pixel_ratio} && message?.type === "present") {{
+      message = {{ ...message, devicePixelRatio: window.devicePixelRatio }};
+    }}
     try {{ return await invoke("native_browser_request", {{ message, token }}); }}
     catch (error) {{ return {{ ok: false, error: String(error) }}; }}
   }} }};
