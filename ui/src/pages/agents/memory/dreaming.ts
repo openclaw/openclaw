@@ -1,3 +1,7 @@
+import {
+  GatewayProtocolRequestError,
+  resolveSafeTimeoutDelayMs,
+} from "@openclaw/gateway-client/browser";
 import { asNullableRecord as asRecord } from "@openclaw/normalization-core/record-coerce";
 import { normalizeOptionalString as normalizeTrimmedString } from "@openclaw/normalization-core/string-coerce";
 import type {
@@ -8,6 +12,8 @@ import type {
 import { defaultSlotIdForKey, resolveSlotSelection } from "../../../../../src/plugins/slots.ts";
 import type { GatewayBrowserClient, GatewayHelloOk } from "../../../api/gateway.ts";
 import type { ConfigSnapshot } from "../../../api/types.ts";
+import { pluginTabLocation } from "../../../app-route-paths.ts";
+import type { ApplicationContext } from "../../../app/context.ts";
 import { t } from "../../../i18n/index.ts";
 import { registerDreamingEnglish } from "../../../i18n/locales/en-dreaming.ts";
 import { copyToClipboard } from "../../../lib/clipboard.ts";
@@ -429,6 +435,111 @@ export function clearSettledDreamingRead(state: DreamingState, key: DreamingReso
   if (!state.resourceReads[key]?.pending) {
     delete state.resourceReads[key];
   }
+}
+
+export type WikiResourceKey = "wikiImportInsights" | "wikiOverview";
+
+const MAX_WIKI_REBUILD_RETRIES = 4;
+
+export function isWikiResourceKey(key: DreamingResourceKey): key is WikiResourceKey {
+  return key === "wikiImportInsights" || key === "wikiOverview";
+}
+
+function resolveWikiRebuildingRetryDelayMs(error: unknown): number | null {
+  if (
+    !(error instanceof GatewayProtocolRequestError) ||
+    error.gatewayCode !== "UNAVAILABLE" ||
+    !error.retryable ||
+    asRecord(error.details)?.state !== "rebuilding"
+  ) {
+    return null;
+  }
+  return Math.min(resolveSafeTimeoutDelayMs(error.retryAfterMs ?? 500, { minMs: 250 }), 2_000);
+}
+
+export function createWikiRebuildRetryScheduler() {
+  const timers = new Map<WikiResourceKey, ReturnType<typeof globalThis.setTimeout>>();
+  function cancel(key?: WikiResourceKey) {
+    if (key) {
+      const timer = timers.get(key);
+      if (timer !== undefined) {
+        globalThis.clearTimeout(timer);
+        timers.delete(key);
+      }
+      return;
+    }
+    for (const timer of timers.values()) {
+      globalThis.clearTimeout(timer);
+    }
+    timers.clear();
+  }
+  function watch(
+    state: DreamingState,
+    key: WikiResourceKey,
+    attempt: number,
+    onRetry: (nextAttempt: number) => void,
+  ) {
+    if (attempt >= MAX_WIKI_REBUILD_RETRIES) {
+      return;
+    }
+    const settled = state.resourceReads[key];
+    if (!settled) {
+      return;
+    }
+    void settled.promise.catch((error: unknown) => {
+      const delay = resolveWikiRebuildingRetryDelayMs(error);
+      if (delay === null || state.resourceReads[key] !== settled) {
+        return;
+      }
+      cancel(key);
+      timers.set(
+        key,
+        globalThis.setTimeout(() => {
+          timers.delete(key);
+          if (state.resourceReads[key] === settled) {
+            onRetry(attempt + 1);
+          }
+        }, delay),
+      );
+    });
+  }
+  return { cancel, watch };
+}
+
+export function openKnowledgePluginView(
+  context: Pick<ApplicationContext, "basePath" | "navigate">,
+  agentId: string,
+  query?: string,
+) {
+  const tab = pluginTabLocation({ pluginId: "knowledge", id: "overview" }, context.basePath);
+  const search = new URLSearchParams(tab.search);
+  search.set("p.agent", agentId);
+  search.set("p.view", query ? "search" : "browse");
+  if (query) {
+    search.set("p.q", query);
+  }
+  context.navigate("plugin", { pathname: tab.pathname, search: "?" + search.toString() });
+}
+
+export function normalizeWikiPagePreview(lookup: string, response: unknown): WikiPagePreview {
+  const payload = asRecord(response);
+  const content =
+    typeof payload?.content === "string" && payload.content.length > 0
+      ? payload.content
+      : t("dreaming.wiki.noContent");
+  const updatedAt = normalizeTrimmedString(payload?.updatedAt);
+  const totalLines =
+    typeof payload?.totalLines === "number" && Number.isFinite(payload.totalLines)
+      ? Math.max(0, Math.floor(payload.totalLines))
+      : undefined;
+  return {
+    title: normalizeTrimmedString(payload?.title) ?? lookup,
+    path: normalizeTrimmedString(payload?.path) ?? lookup,
+    content,
+    ...(totalLines === undefined ? {} : { totalLines }),
+    ...(payload?.truncated === true ? { truncated: true } : {}),
+    ...(updatedAt ? { updatedAt } : {}),
+  };
 }
 
 export async function runDreamDiaryAction(

@@ -26,7 +26,12 @@ import type { DreamingEntry, DreamingReviewPanel, DreamingViewState } from "./dr
 import { DreamingScene } from "./view-scene.tsx";
 import { DiaryEmpty, DreamingRead, formatCompactDateTime } from "./view-shared.tsx";
 import type { DreamingProps } from "./view-types.ts";
-import { ImportedInsightsContent, WikiPreviewOverlay, WikiOverviewContent } from "./view-wiki.tsx";
+import {
+  ImportedInsightsContent,
+  WikiKnowledgeSearchForm,
+  WikiOverviewContent,
+  WikiPreviewOverlay,
+} from "./view-wiki.tsx";
 
 /** One sweep runs these in order, so that is the order they read in. */
 const SWEEP_PHASES = ["light", "rem", "deep"] as const;
@@ -349,6 +354,7 @@ function DreamingDiarySection(props: DreamingProps) {
         <DreamingRead
           on={[props.selectedAgentId, initialLoading()]}
           errorClass="dreams-diary__error"
+          onRetry={props.onRefreshDiary}
           fallback={<DiaryEmpty message={t("dreaming.diary.reloading")} />}
         >
           {(() => {
@@ -657,6 +663,7 @@ function DreamingReview(props: DreamingProps) {
               props.wikiImportInsights === null && props.wikiImportInsightsLoading,
             ]}
             errorClass="dreams-diary__error"
+            onRetry={props.onRefreshImports}
             fallback={<DiaryEmpty message={t("dreaming.wiki.loadingInsights")} />}
           >
             <ImportedInsightsContent owner={props} data={props.readImports()} />
@@ -674,39 +681,15 @@ function DreamingReview(props: DreamingProps) {
         >
           <Show when={props.onOpenKnowledge}>
             {(open) => (
-              <form
-                class="row wrap items-center gap-2"
-                role="search"
-                aria-label={t("dreaming.wiki.searchKnowledge")}
-                onSubmit={(event) => {
-                  event.preventDefault();
-                  const query = new FormData(event.currentTarget).get("query");
-                  if (typeof query === "string" && query.trim()) {
-                    open()(query.trim());
-                  }
-                }}
-              >
-                <input
-                  class="settings-input"
-                  type="search"
-                  name="query"
-                  required
-                  maxlength={200}
-                  aria-label={t("dreaming.wiki.searchKnowledge")}
-                  placeholder={t("dreaming.wiki.searchKnowledge")}
-                />
-                <button class="btn btn--sm" type="submit">
-                  {t("common.search")}
-                </button>
-                <button class="btn btn--subtle btn--sm" type="button" onClick={() => open()()}>
-                  {t("dreaming.wiki.browseKnowledge")}
-                </button>
-              </form>
+              <WikiKnowledgeSearchForm
+                onOpen={(query) => (query === undefined ? open()() : open()(query))}
+              />
             )}
           </Show>
           <DreamingRead
             on={[props.selectedAgentId, props.wikiOverview === null && props.wikiOverviewLoading]}
             errorClass="dreams-diary__error"
+            onRetry={props.onRefreshWikiOverview}
             fallback={<DiaryEmpty message={t("dreaming.wiki.loadingWiki")} />}
           >
             <WikiOverviewContent owner={props} data={props.readOverview()} />

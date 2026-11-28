@@ -1,8 +1,5 @@
-import { asOptionalObjectRecord } from "@openclaw/normalization-core/record-coerce";
-import { normalizeOptionalString } from "@openclaw/normalization-core/string-coerce";
 import { createDeferred } from "@solidjs/signals";
 import { action, createMemo, createOptimistic, createStore, onSettled } from "solid-js";
-import { pluginTabLocation } from "../../../app-route-paths.ts";
 import type { ApplicationContext, ApplicationGateway } from "../../../app/context.ts";
 import { hasOperatorReadAccess } from "../../../app/operator-access.ts";
 import {
@@ -25,8 +22,12 @@ import {
   copyDreamingArchivePath,
   createDreamingState,
   createDreamingViewState,
+  createWikiRebuildRetryScheduler,
   DREAM_PHRASE_KEYS,
+  isWikiResourceKey,
   loadDreamingResource,
+  normalizeWikiPagePreview,
+  openKnowledgePluginView,
   resolveConfiguredDreaming,
   runDreamDiaryAction,
   updateDreamingEnabled,
@@ -81,6 +82,7 @@ export function createAgentMemory(
   let pendingEnabled: boolean | null = null;
   let wikiPreview: WikiPreviewRequest | null = null;
   let pendingWikiRead: { request: WikiPreviewRequest } | null = null;
+  const wikiRetries = createWikiRebuildRetryScheduler();
   const [configOpenScope, setConfigOpenScope] = createOptimistic<DreamingState>();
   const [configOpening, setConfigOpening] = createOptimistic(false);
   const [diaryRequest, setDiaryRequest] = createOptimistic<DreamingState>();
@@ -107,6 +109,7 @@ export function createAgentMemory(
   const gateway = new GatewayPageBinding(notify, {
     getGateway: () => context.gateway,
     invalidateRequests: ({ identityChanged }) => {
+      wikiRetries.cancel();
       retireDiaryPresentation();
       // Retain published data in a new owner; retired reads can only mutate the old state.
       dreaming = {
@@ -160,6 +163,7 @@ export function createAgentMemory(
   }
 
   function resetTransientState() {
+    wikiRetries.cancel();
     retireDiaryPresentation();
     wikiPreview = null;
     pendingWikiRead = null;
@@ -323,11 +327,25 @@ export function createAgentMemory(
     if (resource === "all") {
       await Promise.all(
         (["dreamingStatus", "dreamDiary", "wikiImportInsights", "wikiOverview"] as const).map(
-          (key) => runDreamingTask((current) => loadDreamingResource(current, key), scope),
+          (key) => loadResource(key, scope),
         ),
       );
     } else {
-      await runDreamingTask((current) => loadDreamingResource(current, resource), scope);
+      await loadResource(resource, scope);
+    }
+  }
+
+  async function loadResource(key: DreamingResourceKey, scope: DreamingTaskScope, attempt = 0) {
+    if (isWikiResourceKey(key) && attempt === 0) {
+      wikiRetries.cancel(key);
+    }
+    await runDreamingTask((current) => loadDreamingResource(current, key), scope);
+    if (isTaskScopeCurrent(scope) && isWikiResourceKey(key)) {
+      wikiRetries.watch(scope.state, key, attempt, (nextAttempt) => {
+        if (isTaskScopeCurrent(scope)) {
+          void loadResource(key, scope, nextAttempt);
+        }
+      });
     }
   }
 
@@ -433,27 +451,9 @@ export function createAgentMemory(
       lineCount: 5000,
       agentId,
     });
-    if (!isTaskScopeCurrent(scope) || scope.state.selectedAgentId !== agentId) {
-      return null;
-    }
-    const payload = asOptionalObjectRecord(response);
-    const content =
-      typeof payload?.content === "string" && payload.content.length > 0
-        ? payload.content
-        : t("dreaming.wiki.noContent");
-    const updatedAt = normalizeOptionalString(payload?.updatedAt);
-    const totalLines =
-      typeof payload?.totalLines === "number" && Number.isFinite(payload.totalLines)
-        ? Math.max(0, Math.floor(payload.totalLines))
-        : undefined;
-    return {
-      title: normalizeOptionalString(payload?.title) ?? lookup,
-      path: normalizeOptionalString(payload?.path) ?? lookup,
-      content,
-      ...(totalLines === undefined ? {} : { totalLines }),
-      ...(payload?.truncated === true ? { truncated: true } : {}),
-      ...(updatedAt ? { updatedAt } : {}),
-    };
+    return isTaskScopeCurrent(scope) && scope.state.selectedAgentId === agentId
+      ? normalizeWikiPagePreview(lookup, response)
+      : null;
   }
 
   function read() {
@@ -509,22 +509,7 @@ export function createAgentMemory(
         ),
         onOpenKnowledge:
           configuredDreaming.pluginId === "knowledge" && agentId
-            ? (query?: string) => {
-                const tab = pluginTabLocation(
-                  { pluginId: "knowledge", id: "overview" },
-                  context.basePath,
-                );
-                const search = new URLSearchParams(tab.search);
-                search.set("p.agent", agentId);
-                search.set("p.view", query ? "search" : "browse");
-                if (query) {
-                  search.set("p.q", query);
-                }
-                context.navigate("plugin", {
-                  pathname: tab.pathname,
-                  search: "?" + search.toString(),
-                });
-              }
+            ? (query?: string) => openKnowledgePluginView(context, agentId, query)
             : undefined,
         wikiImportInsightsLoading: dreaming.resourceReads.wikiImportInsights?.pending ?? false,
         wikiImportInsights: dreaming.wikiImportInsights,
