@@ -1,0 +1,3 @@
+# Streaming-to-history regression coverage for confirmed steering boundaries.
+# Covers late tools, repeated steering, loaded history, and stable reply identity.
+226
