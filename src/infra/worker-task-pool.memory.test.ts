@@ -12,7 +12,7 @@ it.each(["heap", "external"] as const)(
       { receipt?: MessagePort; external?: boolean },
       {
         heap: number;
-        external: number;
+        arrayBuffers: number;
         threadId: number;
         checksum?: number;
         resourceLimits: { maxOldGenerationSizeMb?: number };
@@ -39,7 +39,7 @@ it.each(["heap", "external"] as const)(
       );
       const [idle] = await collected;
       expect(allocated.checksum).toBe(74);
-      const counter = memoryKind === "heap" ? "heap" : "external";
+      const counter = memoryKind === "heap" ? "heap" : "arrayBuffers";
       const allocationBytes = memoryKind === "heap" ? 100 * 1024 * 1024 : 48 * 1024 * 1024;
       expect(allocated[counter]).toBeGreaterThan(warm[counter] + allocationBytes);
       expect(idle[counter]).toBeLessThan(warm[counter] + 32 * 1024 * 1024);

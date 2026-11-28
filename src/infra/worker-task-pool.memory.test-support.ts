@@ -8,7 +8,7 @@ const collectedPayloads = new FinalizationRegistry<MessagePort>((receipt) => {
   receipt.postMessage(
     {
       heap: getHeapStatistics().used_heap_size,
-      external: process.memoryUsage().external,
+      arrayBuffers: process.memoryUsage().arrayBuffers,
       threadId,
     },
     [],
@@ -29,7 +29,7 @@ serveWorkerTasks((input) => {
     collectedPayloads.register(payload, receipt);
     return {
       heap: before,
-      external: process.memoryUsage().external,
+      arrayBuffers: process.memoryUsage().arrayBuffers,
       checksum: payload[0]! + payload.at(-1)!,
       threadId,
       resourceLimits,
@@ -37,7 +37,7 @@ serveWorkerTasks((input) => {
   }
   return {
     heap: getHeapStatistics().used_heap_size,
-    external: process.memoryUsage().external,
+    arrayBuffers: process.memoryUsage().arrayBuffers,
     threadId,
     resourceLimits,
   };
