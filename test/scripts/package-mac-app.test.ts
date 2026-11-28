@@ -21,6 +21,7 @@ import { afterEach, describe, expect, it } from "vitest";
 import { runManagedCommand } from "../../scripts/lib/managed-child-process.mts";
 import { UPDATE_COMPATIBILITY_CHUNK_HEADER } from "../../scripts/lib/update-compat-contract.mjs";
 import { listCoreRuntimePostBuildOutputs } from "../../scripts/runtime-postbuild.mts";
+import { listDirectoryTreeStrictSync } from "../../src/infra/directory-walk.js";
 import { resolveNodeRuntimeExecutable } from "../../src/infra/node-runtime-executable.ts";
 import { awaitGateBeforeSettlement, createDeferred, withinTest } from "../helpers/promise.js";
 import { useAutoCleanupTempDirTracker } from "../helpers/temp-dir.js";
@@ -1530,7 +1531,9 @@ describe("package-mac-app plist stamping", () => {
       expect(readFileSync(file), file).toEqual(bytes);
     }
     expect(
-      readdirSync(destination, { recursive: true }).some((file) => /\.thin\./u.test(String(file))),
+      listDirectoryTreeStrictSync(destination).some(({ relativePath }) =>
+        relativePath.includes(".thin."),
+      ),
     ).toBe(false);
     if (missingSlice) {
       expect(result.stderr).toContain("lipo:");
