@@ -802,6 +802,10 @@ The session prompt rebuilds only at these points:
 - An explicit compaction (`/compact` or automatic compaction).
 - A move from the default workspace into a project when the session had the
   project move tool. The fresh series removes that tool and its guidance.
+  Before the move, Gateway-started turns (completions, automations,
+  `sessions_send`) keep the guidance. Only a turn from a sender who may not
+  choose projects renders without it, so that sender never sees the project
+  list.
 - A model or provider switch, including a change of API, base URL, agent
   harness, tool surface (direct tools, tool search, or Code Mode), or the
   session's selected personal profile. The selection is a session fact (its
