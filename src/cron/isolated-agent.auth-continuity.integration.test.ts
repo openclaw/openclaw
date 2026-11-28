@@ -352,91 +352,86 @@ it.each(["API key", "OAuth", "scheduled-model OAuth"] as const)(
 );
 
 it.each([
-  ["configured key", undefined],
-  [
-    "unadopted stored account",
-    "Automation has no recorded inference account. Runtime openclaw would run openai/gpt-4.1 with stored account openai:platform. Record the account with openclaw automations edit <jobId> --model openai/gpt-4.1@openai:platform. For eligible host-managed accounts, openclaw doctor --fix can record it without pinning the model.",
-  ],
+  ["configured key", "Bearer synthetic-config-key"],
+  // An unpinned job selects its account like an interactive turn (#202699).
+  ["unrecorded stored account", `Bearer ${platformKey}`],
   ["replacement", undefined],
   ["revocation", undefined],
-] as const)("enforces %s before provider HTTP through the real runner", async (kind, error) => {
-  await withAuthState("cron-legacy-account", async (state) => {
-    const openaiUrl = "https://api.openai.com/v1";
-    const requests: Array<{ url: string; authorization: string | null }> = [];
-    interceptProvider(async (input, init) => {
-      const request = new Request(input, init);
-      if (request.method !== "POST" || !request.url.endsWith("/responses")) {
-        throw new Error(`Unexpected external I/O in cron credential fixture: ${request.url}`);
-      }
-      requests.push({ url: request.url, authorization: request.headers.get("authorization") });
-      return completedResponse("gpt-4.1");
-    });
-    const cfg = configure(
-      state,
-      {
-        model: { primary: "openai/gpt-4.1", fallbacks: ["local/gpt-4.1"] },
-        models: runtimeModels("openai/gpt-4.1", "local/gpt-4.1"),
-      },
-      {
-        openai: {
-          ...provider(openaiUrl),
-          ...(kind === "configured key" ? { apiKey: "synthetic-config-key" } : {}),
-        },
-        local: provider("http://127.0.0.1:11434/v1"),
-      },
-      kind === "configured key"
-        ? undefined
-        : { profiles: { [platformId]: { provider: "openai", mode: "api_key" } } },
-    );
-    if (kind !== "configured key") {
-      await persistAuthProfileBatch({ profiles: [keyProfile(platformId, platformKey)] });
-    }
-    await writeConfig(state, cfg);
-    const job = storedJob("legacy-account");
-    if (kind === "replacement" || kind === "revocation") {
-      job.inferenceBinding =
-        (await captureCronInferenceBinding({
-          cfg,
-          agentId: "main",
-          model: `openai/gpt-4.1@${platformId}`,
-        })) ?? undefined;
-      expect(job.inferenceBinding).toMatchObject({ profileId: platformId, source: "user" });
-    }
-    const storePath = state.statePath("cron", "jobs.json");
-    await saveCronJobsStore(storePath, { version: 1, jobs: [job] });
-    if (kind === "replacement") {
-      await persistAuthProfileBatch({
-        profiles: [keyProfile(platformId, "synthetic-replacement-key")],
+] as const)(
+  "enforces %s before provider HTTP through the real runner",
+  async (kind, authorization) => {
+    await withAuthState("cron-legacy-account", async (state) => {
+      const openaiUrl = "https://api.openai.com/v1";
+      const requests: Array<{ url: string; authorization: string | null }> = [];
+      interceptProvider(async (input, init) => {
+        const request = new Request(input, init);
+        if (request.method !== "POST" || !request.url.endsWith("/responses")) {
+          throw new Error(`Unexpected external I/O in cron credential fixture: ${request.url}`);
+        }
+        requests.push({ url: request.url, authorization: request.headers.get("authorization") });
+        return completedResponse("gpt-4.1");
       });
-    } else if (kind === "revocation") {
-      expect(await removeAuthProfilesAcrossOwnerStores({ profileIds: [platformId] })).toBe(true);
-    }
-    clearRuntimeAuthProfileStoreSnapshots();
-    const reloaded = (await loadCronJobsStore(storePath)).jobs[0]!;
-    expect(reloaded.inferenceBinding).toEqual(job.inferenceBinding);
-    try {
-      const result = await runStoredTurn(cfg, reloaded);
-      if (kind === "replacement" || kind === "revocation") {
-        // The changed account is never adopted: no openai request is sent with any key.
-        // Only its provider is refused; the configured local fallback still serves the run.
-        expect(result.status, result.error).toBe("ok");
-        expect(requests.some(({ url }) => url.startsWith(openaiUrl))).toBe(false);
-        expect(requests.length).toBeGreaterThan(0);
-      } else if (error) {
-        expect(result.status).toBe("error");
-        expect(result.error).toContain(error);
-        expect(requests).toEqual([]);
-      } else {
-        expect(result.status, result.error).toBe("ok");
-        expect(requests).toEqual([
-          { url: `${openaiUrl}/responses`, authorization: "Bearer synthetic-config-key" },
-        ]);
+      const cfg = configure(
+        state,
+        {
+          model: { primary: "openai/gpt-4.1", fallbacks: ["local/gpt-4.1"] },
+          models: runtimeModels("openai/gpt-4.1", "local/gpt-4.1"),
+        },
+        {
+          openai: {
+            ...provider(openaiUrl),
+            ...(kind === "configured key" ? { apiKey: "synthetic-config-key" } : {}),
+          },
+          local: provider("http://127.0.0.1:11434/v1"),
+        },
+        kind === "configured key"
+          ? undefined
+          : { profiles: { [platformId]: { provider: "openai", mode: "api_key" } } },
+      );
+      if (kind !== "configured key") {
+        await persistAuthProfileBatch({ profiles: [keyProfile(platformId, platformKey)] });
       }
-    } finally {
-      await resetPreparedModelRuntimeSnapshotsForTest();
-    }
-  });
-});
+      await writeConfig(state, cfg);
+      const job = storedJob("legacy-account");
+      if (kind === "replacement" || kind === "revocation") {
+        job.inferenceBinding =
+          (await captureCronInferenceBinding({
+            cfg,
+            agentId: "main",
+            model: `openai/gpt-4.1@${platformId}`,
+          })) ?? undefined;
+        expect(job.inferenceBinding).toMatchObject({ profileId: platformId, source: "user" });
+      }
+      const storePath = state.statePath("cron", "jobs.json");
+      await saveCronJobsStore(storePath, { version: 1, jobs: [job] });
+      if (kind === "replacement") {
+        await persistAuthProfileBatch({
+          profiles: [keyProfile(platformId, "synthetic-replacement-key")],
+        });
+      } else if (kind === "revocation") {
+        expect(await removeAuthProfilesAcrossOwnerStores({ profileIds: [platformId] })).toBe(true);
+      }
+      clearRuntimeAuthProfileStoreSnapshots();
+      const reloaded = (await loadCronJobsStore(storePath)).jobs[0]!;
+      expect(reloaded.inferenceBinding).toEqual(job.inferenceBinding);
+      try {
+        const result = await runStoredTurn(cfg, reloaded);
+        if (kind === "replacement" || kind === "revocation") {
+          // The changed account is never adopted: no openai request is sent with any key.
+          // Only its provider is refused; the configured local fallback still serves the run.
+          expect(result.status, result.error).toBe("ok");
+          expect(requests.some(({ url }) => url.startsWith(openaiUrl))).toBe(false);
+          expect(requests.length).toBeGreaterThan(0);
+        } else {
+          expect(result.status, result.error).toBe("ok");
+          expect(requests).toEqual([{ url: `${openaiUrl}/responses`, authorization }]);
+        }
+      } finally {
+        await resetPreparedModelRuntimeSnapshotsForTest();
+      }
+    });
+  },
+);
 
 it.each([
   { label: "refreshable control", refresh: "synthetic-refresh" },

@@ -8,7 +8,6 @@ import {
   setupCronRegressionFixtures,
 } from "../../../test/helpers/cron/service-regression-fixtures.js";
 import { AuthProfileAuthorizationError } from "../../agents/auth-profiles/authorization-contract.js";
-import { createUnrecordedScheduledAccountRefusal } from "../../agents/scheduled-unrecorded-account.js";
 import type { RestartRecoveryOperatorSource } from "../../gateway/operator-run-recovery-source.codec.js";
 import { openOpenClawStateDatabase } from "../../state/openclaw-state-db.js";
 import { resolveCronConfigurationRefusal } from "../configuration-refusal.js";
@@ -466,58 +465,6 @@ it("records failure diagnostics and keeps the job scheduled on its tenth consecu
   );
   expect(enqueueSessionEvent).not.toHaveBeenCalled();
 });
-
-it.each([
-  { hasOperatorSource: false, profileId: "openai:synthetic-account" },
-  { hasOperatorSource: true, profileId: "openai:synthetic-account" },
-  { hasOperatorSource: true, profileId: undefined },
-])(
-  "keeps an account-refused recurring job scheduled (operator source: $hasOperatorSource, profile: $profileId)",
-  async ({ hasOperatorSource, profileId }) => {
-    const enqueueSessionEvent = vi.fn();
-    const sendCronFailureAlert = vi.fn<NonNullable<CronServiceDeps["sendCronFailureAlert"]>>(
-      async () => undefined,
-    );
-    const { state, job, apply, deferredNotifications } = outcomeFixture(
-      startedAt,
-      {
-        failureAlert: { cooldownMs: 0 },
-        ...(hasOperatorSource
-          ? { operatorSource: { source: operatorSource, executionRevision: "fixture-revision" } }
-          : {}),
-      },
-      { enqueueSessionEvent, sendCronFailureAlert },
-    );
-    const refusal = createUnrecordedScheduledAccountRefusal({
-      runtime: "codex",
-      modelRef: "openai/gpt-5.5",
-      profileId,
-    });
-    const error = refusal.message;
-    apply({
-      status: "error",
-      error,
-      executionStarted: true,
-      ...resolveCronConfigurationRefusal(refusal),
-    });
-
-    expect(job.enabled).toBe(true);
-    expect(job.state.nextRunAtMs).toBeGreaterThan(startedAt);
-    expect(job.state.lastError).toBe(error);
-    expect(job.state.autoDisabled).toBeUndefined();
-    expect(deferredNotifications).toHaveLength(1);
-    await runPostPersistCronNotifications(state, structuredClone(deferredNotifications));
-    expect(sendCronFailureAlert).toHaveBeenCalledOnce();
-    const text = sendCronFailureAlert.mock.calls[0]?.[0].payload.text ?? "";
-    expect(text).toContain("no recorded inference account");
-    expect(text).toContain("openclaw doctor --fix");
-    expect(text).toContain("or use a configured provider key");
-    expect(text).not.toContain("run it with a stored account");
-    // The stored account stays in automation history, not in the alert.
-    expect(text).not.toContain("openai:synthetic-account");
-    expect(enqueueSessionEvent).not.toHaveBeenCalled();
-  },
-);
 
 it.each([
   { name: "stale", options: { scheduleOwnership: "stale" } },

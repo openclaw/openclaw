@@ -3,6 +3,7 @@ import * as modelRuntime from "../agents/embedded-agent-runner/model.js";
 import { prepareEmbeddedRunAuthPlan } from "../agents/embedded-agent-runner/run/auth-plan.js";
 import type { AgentHarness } from "../agents/harness/types.js";
 import { makeProviderModelFixture } from "../agents/test-helpers/provider-model-fixture.js";
+import type { OpenClawConfig } from "../config/types.openclaw.js";
 import type { Model } from "../llm/types.js";
 import { createPluginMetadataSnapshotFixture } from "../plugins/plugin-metadata.test-support.js";
 import { withPluginRuntimeGenerationScope } from "../plugins/runtime/generation-scope.js";
@@ -10,6 +11,7 @@ import {
   withOpenClawTestState,
   type OpenClawTestState,
 } from "../test-utils/openclaw-test-state.js";
+import { captureCronInferenceBinding } from "./inference-binding.runtime.js";
 
 const harness: AgentHarness = {
   id: "openclaw",
@@ -104,20 +106,36 @@ const bedrockModel: FixtureModel = {
   baseUrl: "https://bedrock-runtime.us-east-1.amazonaws.com",
 };
 
-// Stored-profile refusal is exercised through provider HTTP in auth-continuity.integration.
-it("refuses legacy adoption from ambient AWS SDK credentials at the auth boundary", async () => {
+// An unpinned scheduled run uses the AWS SDK chain like an interactive turn (#192524, #202699).
+it("selects ambient AWS SDK credentials for an unpinned scheduled run", async () => {
   await withAuthState(async (state) => {
-    const materialize = vi.spyOn(modelRuntime, "resolveModelAsync");
-    const stores = modelRuntime.createEmptyAgentDiscoveryStores();
+    const prepared = await prepareAuth(
+      state,
+      mockModel(bedrockModel),
+      { config: configFor(bedrockModel, { auth: "aws-sdk" }) },
+      bedrockModel,
+    );
+    expect(prepared.preparedAuthAttempts).toMatchObject([
+      { kind: "direct", plan: { credentialSource: { kind: "direct" } } },
+    ]);
+    expect(prepared.lockedProfileId).toBeUndefined();
+  });
+});
+
+// A selected AWS SDK profile has no stored secret; creation keeps the job unbound (#202699).
+it("creates an unbound job for a selected AWS SDK profile", async () => {
+  await withAuthState(async () => {
+    const cfg = {
+      ...configFor(bedrockModel, { auth: "aws-sdk" }),
+      auth: { profiles: { "amazon-bedrock:sdk": { provider: "amazon-bedrock", mode: "aws-sdk" } } },
+    } as OpenClawConfig;
     await expect(
-      prepareAuth(
-        state,
-        stores,
-        { config: configFor(bedrockModel, { auth: "aws-sdk" }) },
-        bedrockModel,
-      ),
-    ).rejects.toThrow("Automation has no recorded inference account");
-    expect(materialize).not.toHaveBeenCalled();
+      captureCronInferenceBinding({
+        cfg,
+        agentId: "main",
+        model: "amazon-bedrock/anthropic.claude-sonnet@amazon-bedrock:sdk",
+      }),
+    ).resolves.toBeUndefined();
   });
 });
 
