@@ -229,23 +229,26 @@ describe("media store", () => {
     { name: "fake.png", header: "IMAGE/PNG", mime: "application/zip", ext: "zip" },
     { name: "data.bin", header: undefined, mime: "application/zip", ext: "zip" },
     { name: "addon.xpi", header: undefined, mime: "application/x-xpinstall", ext: "xpi" },
-    { name: "lib.jar", header: undefined, mime: "application/java-archive", ext: "jar" },
+    { name: "lib.jar", header: "image/png", mime: "application/java-archive", ext: "jar" },
     {
       name: "app.apk",
       header: undefined,
       mime: "application/vnd.android.package-archive",
       ext: "apk",
     },
-  ])("stores generic ZIP bytes named $name as .$ext", async ({ name, header, mime, ext }) => {
-    const zip = new JSZip();
-    zip.file("hello.txt", "hi");
-    const buffer = await zip.generateAsync({ type: "nodebuffer" });
-    const saved = await store.saveMediaBuffer(buffer, header, "inbound", 5 * 1024 * 1024, name);
-    expect(saved.contentType).toBe(mime);
-    expect(path.basename(saved.path)).toMatch(
-      new RegExp(`^${path.parse(name).name}---[a-f0-9-]{36}\\.${ext}$`),
-    );
-  });
+  ])(
+    "stores generic ZIP bytes named $name ($header) as .$ext",
+    async ({ name, header, mime, ext }) => {
+      const zip = new JSZip();
+      zip.file("hello.txt", "hi");
+      const buffer = await zip.generateAsync({ type: "nodebuffer" });
+      const saved = await store.saveMediaBuffer(buffer, header, "inbound", 5 * 1024 * 1024, name);
+      expect(saved.contentType).toBe(mime);
+      expect(path.basename(saved.path)).toMatch(
+        new RegExp(`^${path.parse(name).name}---[a-f0-9-]{36}\\.${ext}$`),
+      );
+    },
+  );
 
   it.each([
     {
