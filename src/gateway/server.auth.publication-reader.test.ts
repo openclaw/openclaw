@@ -445,21 +445,23 @@ describe.each([PUBLICATION_READ_SCOPE, PUBLICATION_STEER_SCOPE])(
       },
     );
 
-    test("does not expose writer operations before source handlers are registered", async () => {
-      if (!writer) {
-        return;
-      }
-      await configure(true);
-      setTestPluginRegistry(createEmptyPluginRegistry());
-      const device = await paired();
-      await withGatewayServer(async ({ port }) => {
-        const { ws, connected } = await connectReader(port, device);
-        expect(connected.ok, JSON.stringify(connected.error)).toBe(true);
-        expect((connected.payload as HelloOk).features).toEqual({ methods: [], events: ["tick"] });
-        expect((await rpcReq(ws, "session-share.steer.target", {})).ok).toBe(false);
-        expect((await rpcReq(ws, "session-share.steer.send", {})).ok).toBe(false);
+    if (writer) {
+      test("does not expose writer operations before source handlers are registered", async () => {
+        await configure(true);
+        setTestPluginRegistry(createEmptyPluginRegistry());
+        const device = await paired();
+        await withGatewayServer(async ({ port }) => {
+          const { ws, connected } = await connectReader(port, device);
+          expect(connected.ok, JSON.stringify(connected.error)).toBe(true);
+          expect((connected.payload as HelloOk).features).toEqual({
+            methods: [],
+            events: ["tick"],
+          });
+          expect((await rpcReq(ws, "session-share.steer.target", {})).ok).toBe(false);
+          expect((await rpcReq(ws, "session-share.steer.send", {})).ok).toBe(false);
+        });
       });
-    });
+    }
     function publishReaderOptIn(value: boolean | undefined) {
       const config = readRuntimeConfig();
       setRuntimeConfigSnapshot({

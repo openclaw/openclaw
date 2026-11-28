@@ -305,7 +305,8 @@ export function SidebarUpdateCard(
     if (run) {
       const view = projectUpdateRun(run, props.connected ?? true);
       return {
-        title: view.headline,
+        // The Inbox row already renders a status icon. The report keeps its own mark.
+        title: view.headline.replace(/^[✅⚠ℹ↩⬆]\uFE0F? /u, ""),
         detail:
           props.statusBanner?.source === "read"
             ? props.statusBanner.text
@@ -374,6 +375,11 @@ export function SidebarUpdateCard(
           <SidebarNotificationCard
             title={current().title}
             detail={checkingTarget() ? t("updates.sidebar.checking") : current().detail}
+            detailRole={
+              !props.refreshRequired && leadingRun() && props.statusBanner?.source === "read"
+                ? "alert"
+                : undefined
+            }
             timestampMs={current().timestampMs}
             icon={current().icon}
             severity={current().severity}
@@ -384,7 +390,20 @@ export function SidebarUpdateCard(
               }
             }}
             onDismiss={props.onDismiss}
-            body={<CompactDetails />}
+            body={
+              <Show when={leadingRun() && !props.refreshRequired} fallback={<CompactDetails />}>
+                <div class="sidebar-issues-panel__actions">
+                  <button
+                    ref={sidebarAttentionFocusRef()}
+                    class="sidebar-issues-panel__action"
+                    type="button"
+                    onClick={openRun}
+                  >
+                    {t("updates.run.toast.details")}
+                  </button>
+                </div>
+              </Show>
+            }
             bodyClass="sidebar-update-issue__body"
           />
         )}

@@ -26,6 +26,28 @@ final class ChatSessionSidebarActions {
     }
 
     let connection: OpenClawSessionMenuConnection?
+    var canEditPins: Bool {
+        guard let connection, connection.supportsPersonalPins, connection.pinProfile.verified else { return false }
+        return connection.allows("sessions.patch") || connection.allows(
+            "sessions.patch",
+            scope: "operator.sessions.write")
+    }
+
+    /// A sleeping row loses its visible rank, not its saved personal membership.
+    func isPinnedForAction(_ session: OpenClawChatSessionEntry, at now: Date) -> Bool {
+        guard self.canEditPins, session.isSnoozed(at: now) else { return session.isPinned }
+        return self.connection?.pinProfile.savedKeys?.contains(session.key) == true
+    }
+
+    func canTogglePin(_ session: OpenClawChatSessionEntry, at now: Date) -> Bool {
+        self.canEditPins && (!session.isSnoozed(at: now) || self.isPinnedForAction(session, at: now))
+    }
+
+    /// Pages starts root drags only with group-write authority; do not advertise an unusable drop zone.
+    var canDropPins: Bool {
+        self.canEditPins && self.connection?.allows("sessions.groups.put") == true
+    }
+
     private var profiles: [Profile]?
     private var selfID: String?
     private var worktrees: [WorktreeRecord] = []
@@ -48,6 +70,9 @@ final class ChatSessionSidebarActions {
         self.nextRefresh = now.advanced(by: .seconds(60))
         self.refreshTask = Task {
             self.loadingOwners = true
+            if connection.supportsPersonalPins, connection.allows("users.prefs.get", scope: "operator.sessions.read") {
+                _ = try? await connection.pinProfile.read(connection, forDisplay: true)
+            }
             await self.loadOwners()
             // ui/src/components/session-menu-work.ts:51: loopback cannot prove locality (SSH tunnels).
             if connection.local, let result: WorktreesListResult = try? await connection.read("worktrees.list"),

@@ -1,25 +1,11 @@
-import {
-  createSubagentRunRecord,
-  type SubagentRunRecordOverrides,
-} from "../../subagent-test-fixtures.test-helpers.js";
-import { loadPendingFinalDeliveryPayload } from "./subagent-delivery-state.js";
+import { expectDefined } from "@openclaw/normalization-core/expect";
+import type { SubagentRunRecordOverrides } from "../../subagent-test-fixtures.test-helpers.js";
 import { SUBAGENT_ENDED_REASON_KILLED } from "./subagent-lifecycle-events.js";
+import { mutateSubagentRuns } from "./subagent-registry-persistence.js";
 import type { SubagentRunRecord } from "./subagent-registry.types.js";
 
 type KilledRunOverrides = SubagentRunRecordOverrides &
   Pick<SubagentRunRecord, "task" | "createdAt">;
-type SuspendedDeliveryRunOverrides = Omit<
-  SubagentRunRecordOverrides,
-  "startedAt" | "outcome" | "expectsCompletionMessage" | "delivery"
-> &
-  Pick<
-    SubagentRunRecord,
-    "childSessionKey" | "requesterSessionKey" | "requesterDisplayKey" | "task" | "createdAt"
-  > & {
-    endedAt: number;
-    delivery: Partial<NonNullable<SubagentRunRecord["delivery"]>>;
-  };
-
 export const makeKilledRun = (
   killedAt: number,
   overrides: KilledRunOverrides,
@@ -40,27 +26,15 @@ export const makeCompletedCollectorRun = (
   collectorCompletion: { status: "done" },
   ...overrides,
 });
-export const makeSuspendedDeliveryRun = ({
-  delivery: deliveryOverrides,
-  ...overrides
-}: SuspendedDeliveryRunOverrides): SubagentRunRecordOverrides => ({
-  expectsCompletionMessage: true,
-  startedAt: overrides.createdAt,
-  outcome: { status: "ok" },
-  ...overrides,
-  delivery: {
-    status: "suspended",
-    createdAt: overrides.createdAt,
-    attemptCount: 3,
-    lastError: "gateway request timeout for agent",
-    payload: loadPendingFinalDeliveryPayload(
-      createSubagentRunRecord({
-        ...overrides,
-        outcome: { status: "ok" },
-        expectsCompletionMessage: true,
-      }),
-    ),
-    suspendedReason: "expiry",
-    ...deliveryOverrides,
-  },
-});
+
+export async function updateSubagentRunFixture(
+  runId: string,
+  update: (entry: SubagentRunRecord) => void,
+) {
+  await mutateSubagentRuns([runId], (rows) => {
+    const current = expectDefined(rows.get(runId), "registered fixture run");
+    const next = structuredClone(current);
+    update(next);
+    return { value: undefined, postimages: new Map([[runId, next]]) };
+  });
+}

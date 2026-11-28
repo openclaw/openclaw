@@ -27,7 +27,7 @@ export function ReviewFilename(props: { name: string }) {
   return (
     <span class="session-diff__filename-label">
       <span ref={createTextOverflow(() => props.name)} class="session-diff__basename">
-        {split() ? props.name.slice(0, split()) : props.name}
+        <bdi>{split() ? props.name.slice(0, split()) : props.name}</bdi>
       </span>
       {split() > 0 && <span class="session-diff__extension">{props.name.slice(split())}</span>}
     </span>

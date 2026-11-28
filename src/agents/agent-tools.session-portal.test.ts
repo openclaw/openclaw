@@ -86,7 +86,7 @@ it.each([
           expect(portal?.parameters).toEqual(ownerPortal?.parameters);
           const result = await portal!.execute("refused", { action: "list" });
           expect(result.details).toMatchObject({ gated: true });
-          expect(JSON.stringify(result.content)).toContain("needs the owner's authority");
+          expect(JSON.stringify(result.content)).toContain("I did not run portal.");
         } else {
           expect(portal).toBeUndefined();
         }

@@ -35,18 +35,12 @@ export function createSubagentRegistryListener(config: {
   pendingLifecycle: ReturnType<typeof createPendingLifecycleScheduler>;
   resumeRequesterSettleWake: (runId: string, entry: SubagentRunRecord) => void;
   adoptPausedSubagentRunIntoSuccessor: (entry: SubagentRunRecord) => Promise<boolean>;
-  refreshFrozenResultFromSession: (sessionKey: string) => Promise<unknown>;
   completeSubagentRunWithRecovery: (
     params: SubagentCompletionRequest,
     source: string,
   ) => Promise<void>;
 }) {
-  const {
-    runs,
-    pendingLifecycle,
-    refreshFrozenResultFromSession,
-    completeSubagentRunWithRecovery,
-  } = config;
+  const { runs, pendingLifecycle, completeSubagentRunWithRecovery } = config;
   let listenerStop: (() => void) | null = null;
 
   function ensureListener() {
@@ -74,7 +68,7 @@ export function createSubagentRegistryListener(config: {
       });
     });
     const stopAgent = onAgentEvent((evt) => {
-      if (!evt || evt.stream !== "lifecycle") {
+      if (evt.stream !== "lifecycle") {
         return;
       }
       // Own lifecycle writes before their first await.
@@ -82,11 +76,6 @@ export function createSubagentRegistryListener(config: {
         const phase = evt.data?.phase;
         let entry = runs.get(evt.runId);
         if (!entry) {
-          if (phase === "end" && typeof evt.sessionKey === "string") {
-            const sessionKey = evt.sessionKey;
-            // A replacement generation can finish after its predecessor row is terminal.
-            await refreshFrozenResultFromSession(sessionKey);
-          }
           return;
         }
         const lifecycleGeneration = getAgentEventLifecycleGeneration();
@@ -107,10 +96,8 @@ export function createSubagentRegistryListener(config: {
             await mutateSubagentRuns(
               [runId],
               (rows) => {
-                const current = rows.get(runId);
-                if (!current || !isSameSubagentRunOwner(current, entry)) {
-                  throw new Error("Subagent lifecycle start lost its original run");
-                }
+                // mutateSubagentRuns checks assertCurrent before this synchronous plan.
+                const current = rows.get(runId)!;
                 if (
                   current.execution.status === "terminal" ||
                   current.killIntent ||
@@ -149,16 +136,19 @@ export function createSubagentRegistryListener(config: {
         }
         // A retry's start may still be publishing when its terminal event arrives.
         // Join the existing per-run mutation queue before selecting that attempt.
-        const observed = await mutateSubagentRuns([runId], (rows) => ({ value: rows.get(runId) }), {
-          runs,
-          context,
-          assertCurrent,
-        });
+        const observed = await mutateSubagentRuns(
+          [runId],
+          (rows) => ({ value: rows.get(runId)! }),
+          {
+            runs,
+            context,
+            assertCurrent,
+          },
+        );
         if (
-          !observed ||
-          (startedAt !== undefined &&
-            observed.execution.startedAt !== undefined &&
-            observed.execution.startedAt !== startedAt)
+          startedAt !== undefined &&
+          observed.execution.startedAt !== undefined &&
+          observed.execution.startedAt !== startedAt
         ) {
           return;
         }
@@ -238,10 +228,8 @@ export function createSubagentRegistryListener(config: {
   return {
     ensure: ensureListener,
     reset: () => {
-      if (listenerStop) {
-        listenerStop();
-        listenerStop = null;
-      }
+      listenerStop?.();
+      listenerStop = null;
     },
   };
 }

@@ -55,36 +55,25 @@ function resolveAutoEnableProviderPluginIds(
   return Object.fromEntries(entries);
 }
 
-function isProviderConfigured(cfg: OpenClawConfig, providerId: string): boolean {
-  const normalized = normalizeProviderId(providerId);
-  const profiles = cfg.auth?.profiles;
-  if (
-    profiles &&
-    typeof profiles === "object" &&
-    Object.values(profiles).some(
-      (profile) => isRecord(profile) && normalizeProviderId(profile.provider ?? "") === normalized,
-    )
-  ) {
-    return true;
-  }
-
-  const providerConfig = cfg.models?.providers;
-  if (
-    providerConfig &&
-    typeof providerConfig === "object" &&
-    Object.keys(providerConfig).some((key) => normalizeProviderId(key) === normalized)
-  ) {
-    return true;
-  }
-
-  return collectConfiguredModelRefs(cfg, { includeChannelModelOverrides: false }).some(
-    ({ value: ref }) => {
-      const trimmed = ref.trim();
-      const slash = trimmed.indexOf("/");
-      const provider = slash > 0 ? normalizeProviderId(trimmed.slice(0, slash)) : null;
-      return Boolean(provider) && provider === normalized;
-    },
+function collectConfiguredProviderIds(cfg: OpenClawConfig, modelRefs: ReadonlySet<string>) {
+  const ids = new Set(
+    Object.keys(asOptionalObjectRecord(cfg.models?.providers) ?? {}).map(normalizeProviderId),
   );
+  const profiles = cfg.auth?.profiles;
+  if (profiles && typeof profiles === "object") {
+    for (const profile of Object.values(profiles)) {
+      if (isRecord(profile)) {
+        ids.add(normalizeProviderId(profile.provider ?? ""));
+      }
+    }
+  }
+  for (const ref of modelRefs) {
+    const slash = ref.indexOf("/");
+    if (slash > 0) {
+      ids.add(normalizeProviderId(ref.slice(0, slash)));
+    }
+  }
+  return ids;
 }
 
 function hasPluginOwnedToolConfig(cfg: OpenClawConfig, plugin: PluginManifestRecord): boolean {
@@ -323,20 +312,23 @@ export function resolveConfiguredPluginAutoEnableCandidates(
       : [];
   };
 
-  for (const [providerId, pluginId] of Object.entries(
-    resolveAutoEnableProviderPluginIds(params.registry),
-  )) {
-    if (isProviderConfigured(params.config, providerId)) {
-      changes.push({ pluginId, kind: "provider-auth-configured", providerId });
+  const modelRefs = new Set(
+    collectConfiguredModelRefs(params.config, { includeChannelModelOverrides: false }).map(
+      ({ value }) => value,
+    ),
+  );
+  const providerClaims = Object.entries(resolveAutoEnableProviderPluginIds(params.registry));
+  if (providerClaims.length > 0) {
+    const configuredProviders = collectConfiguredProviderIds(params.config, modelRefs);
+    for (const [providerId, pluginId] of providerClaims) {
+      if (configuredProviders.has(normalizeProviderId(providerId))) {
+        changes.push({ pluginId, kind: "provider-auth-configured", providerId });
+      }
     }
   }
 
   const configuredModelPluginIds = new Set<string>();
-  for (const modelRef of new Set(
-    collectConfiguredModelRefs(params.config, { includeChannelModelOverrides: false }).map(
-      ({ value }) => value,
-    ),
-  )) {
+  for (const modelRef of modelRefs) {
     const owningPluginIds = resolveOwningPluginIdsForModelRef({
       model: modelRef,
       config: params.config,
@@ -388,10 +380,12 @@ export function resolveConfiguredPluginAutoEnableCandidates(
   }
 
   const decisionProviderIds = new Set(getConfiguredDecisionProviderIds(params.config));
-  for (const plugin of params.registry.plugins) {
-    for (const providerId of plugin.contracts?.decisionProviders ?? []) {
-      if (decisionProviderIds.has(providerId)) {
-        changes.push({ pluginId: plugin.id, kind: "decision-provider-selected", providerId });
+  if (decisionProviderIds.size > 0) {
+    for (const plugin of params.registry.plugins) {
+      for (const providerId of plugin.contracts?.decisionProviders ?? []) {
+        if (decisionProviderIds.has(providerId)) {
+          changes.push({ pluginId: plugin.id, kind: "decision-provider-selected", providerId });
+        }
       }
     }
   }
@@ -425,29 +419,29 @@ export function resolveConfiguredPluginAutoEnableCandidates(
     }
   }
 
-  for (const [contract, configKey, kind] of [
-    ["webSearchProviders", "webSearch", "plugin-web-search-configured"],
-    ["tools", null, "plugin-tool-configured"],
-    ["webFetchProviders", "webFetch", "plugin-web-fetch-configured"],
-  ] as const) {
-    for (const plugin of params.registry.plugins) {
-      if (
-        (plugin.contracts?.[contract]?.length ?? 0) === 0 ||
-        (contract === "webSearchProviders" && (plugin.providers?.length ?? 0) === 0)
-      ) {
-        continue;
-      }
-      const config = params.config.plugins?.entries?.[plugin.id]?.config;
-      const configured = configKey
-        ? isRecord(config) && isRecord(config[configKey])
-        : hasPluginOwnedToolConfig(params.config, plugin);
-      if (configured) {
-        changes.push({ pluginId: plugin.id, kind });
+  if (hasSetupAutoEnableRelevantConfig(params.config)) {
+    for (const [contract, configKey, kind] of [
+      ["webSearchProviders", "webSearch", "plugin-web-search-configured"],
+      ["tools", null, "plugin-tool-configured"],
+      ["webFetchProviders", "webFetch", "plugin-web-fetch-configured"],
+    ] as const) {
+      for (const plugin of params.registry.plugins) {
+        if (
+          (plugin.contracts?.[contract]?.length ?? 0) === 0 ||
+          (contract === "webSearchProviders" && (plugin.providers?.length ?? 0) === 0)
+        ) {
+          continue;
+        }
+        const config = params.config.plugins?.entries?.[plugin.id]?.config;
+        const configured = configKey
+          ? isRecord(config) && isRecord(config[configKey])
+          : hasPluginOwnedToolConfig(params.config, plugin);
+        if (configured) {
+          changes.push({ pluginId: plugin.id, kind });
+        }
       }
     }
-  }
 
-  if (hasSetupAutoEnableRelevantConfig(params.config)) {
     const manifestMatchedPluginIds = new Set(changes.map((entry) => entry.pluginId));
     const setupPluginIds = resolveRelevantSetupAutoEnablePluginIds(
       params.config,

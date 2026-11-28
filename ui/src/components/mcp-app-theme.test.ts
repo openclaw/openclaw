@@ -14,6 +14,7 @@ describe("collectMcpAppStyleVariables", () => {
     });
     root.style.setProperty("--card", "  #161920  ");
     root.style.setProperty("--bg", "#0e1015");
+    root.style.setProperty("--bg-elevated", "   ");
     const variables = collectMcpAppStyleVariables();
 
     // Values cross into a separate origin, where a Control UI token name would
@@ -22,6 +23,7 @@ describe("collectMcpAppStyleVariables", () => {
     // published values self-contained; jsdom does not implement that
     // substitution, so the guarantee is verified in a browser rather than here.
     expect(variables["--color-background-primary"]).toBe("#161920");
+    expect(variables).not.toHaveProperty("--color-background-tertiary");
     expect(
       Object.values(variables).every(
         (value) => typeof value === "string" && value === value.trim(),

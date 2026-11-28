@@ -133,7 +133,7 @@ it.each(["success", "caller-revoked", "session-replaced", "native-denied"] as co
                 hasCurrentClientAuthority: () => callerCurrent,
                 methodRegistry: registry,
               }),
-            ).rejects.toThrow("Gateway caller authority is no longer active");
+            ).rejects.toThrow("Gateway request could not start");
             expect(chatHandler).toHaveBeenCalledOnce();
             expect(dispatchInboundMessageMock).toHaveBeenCalledOnce();
           }

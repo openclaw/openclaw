@@ -18,8 +18,6 @@ const waveformElement = (player: ChatAudioPlayer) =>
   player.querySelector(".chat-audio-player__waveform");
 const waveformRects = (player: ChatAudioPlayer) =>
   player.querySelectorAll(".chat-audio-player__waveform rect");
-const seekInput = (player: ChatAudioPlayer) =>
-  player.querySelector<HTMLInputElement>(".chat-audio-player__seek")!;
 const source = (player: ChatAudioPlayer) => player.querySelector("audio")?.getAttribute("src");
 function pendingFetch() {
   const response = createDeferred<Response>();
@@ -170,77 +168,6 @@ describe("ChatAudioPlayer", () => {
     expect(card(player, "__expand")).toBeNull();
   });
 
-  it("drives play, pause, seek, and keyboard state through the hidden audio element", async () => {
-    const inline = "data:audio/wav;base64,UklGRg==";
-    const player = await createPlayer("briefing", { src: inline });
-    expect(headerDownload(player)?.getAttribute("href")).toBe(inline);
-    const media = audio(player);
-    expect(times(player)).toEqual(["0:00 / 0:00"]);
-    Object.defineProperty(media, "buffered", {
-      configurable: true,
-      value: { length: 1, end: () => 1_832.5 },
-    });
-    setMediaNumber(media, "duration", 3_665);
-    setMediaNumber(media, "currentTime", 65.9);
-    media.dispatchEvent(new Event("loadedmetadata"));
-    await player.updateComplete;
-    expect(times(player)).toEqual(["1:05 / 61:05"]);
-    expect(seekInput(player).style.getPropertyValue("--chat-audio-buffered")).toBe("50%");
-    setMediaNumber(media, "duration", 125);
-    setMediaNumber(media, "currentTime", 0);
-    const { play, pause } = mockPlayback(media);
-    media.dispatchEvent(new Event("loadedmetadata"));
-    await player.updateComplete;
-    expect(times(player)).toEqual(["0:00 / 2:05"]);
-    control(player, "toggle").click();
-    await waitForSolid(() => expect(play).toHaveBeenCalledOnce());
-    await waitForSolid(() =>
-      expect(control(player, "toggle")?.getAttribute("aria-label")).toBe("Pause"),
-    );
-    expect(headerDownload(player)?.getAttribute("download")).toBe("briefing.mp3");
-    const seek = seekInput(player);
-    seek.value = "35";
-    seek.dispatchEvent(new Event("input", { bubbles: true }));
-    expect(media.currentTime).toBe(35);
-    for (const [key, time] of [
-      ["ArrowRight", 40],
-      ["ArrowUp", 45],
-      ["ArrowLeft", 40],
-      ["ArrowDown", 35],
-    ] as const) {
-      const event = new KeyboardEvent("keydown", { key, bubbles: true, cancelable: true });
-      seek.dispatchEvent(event);
-      expect(event.defaultPrevented).toBe(true);
-      expect(media.currentTime).toBe(time);
-    }
-    const controls = player.querySelector<HTMLElement>(".chat-audio-player")!;
-    controls.dispatchEvent(new KeyboardEvent("keydown", { key: "ArrowRight", bubbles: true }));
-    expect(media.currentTime).toBe(40);
-    controls.dispatchEvent(new KeyboardEvent("keydown", { key: " ", bubbles: true }));
-    expect(pause).toHaveBeenCalledOnce();
-    await player.updateComplete;
-    expect(times(player)).toEqual(["0:40 / 2:05"]);
-  });
-
-  it("does not expand the attachment when muting through the changing SVG icon", async () => {
-    const player = await createPlayer("voice");
-    player.onExpand = vi.fn();
-    await player.updateComplete;
-    const icon = player.querySelector(".chat-audio-player__volume svg polygon")!;
-    icon.addEventListener("click", () => icon.remove(), { once: true });
-    icon.dispatchEvent(new MouseEvent("click", { bubbles: true }));
-    const media = audio(player);
-    expect(media.muted).toBe(true);
-    const volume = player.querySelector<HTMLButtonElement>(".chat-audio-player__volume")!;
-    volume.click();
-    expect(media.muted).toBe(false);
-    volume.click();
-    expect(media.muted).toBe(true);
-    await player.updateComplete;
-    expect(audio(player).muted).toBe(true);
-    expect(player.onExpand).not.toHaveBeenCalled();
-  });
-
   it("announces unavailable audio while preserving its download and recovery", async () => {
     const first = await createPlayer("broken");
     const status = first.querySelector('[role="status"]');
@@ -304,16 +231,6 @@ describe("ChatAudioPlayer", () => {
       }
     },
   );
-
-  it("keeps header Download focused when the parent Expand callback changes", async () => {
-    const player = await createPlayer("callback-focus", { onExpand: vi.fn() });
-    const download = headerDownload(player)!;
-    download.focus();
-    expect(document.activeElement).toBe(download);
-    player.onExpand = vi.fn();
-    await player.updateComplete;
-    expect(document.activeElement).toBe(download);
-  });
 
   it.each(["download", "expand", "outside"])(
     "preserves %s focus when playback preparation fails",

@@ -69,13 +69,7 @@ registerCommandPaletteEnglish();
 type CommandPaletteProps = ReturnType<CommandPaletteState["readProps"]>;
 
 function groupItems(items: CommandPaletteItem[]): Array<[string, CommandPaletteItem[]]> {
-  const map = new Map<string, CommandPaletteItem[]>();
-  for (const item of items) {
-    const group = map.get(item.category) ?? [];
-    group.push(item);
-    map.set(item.category, group);
-  }
-  return [...map.entries()];
+  return [...Map.groupBy(items, (item) => item.category).entries()];
 }
 
 const paletteListboxId = "cmd-palette-listbox";
@@ -178,7 +172,8 @@ function getOptionId(index: number): string {
 }
 
 function matchesFilter(item: CommandPaletteItem, filter: PaletteFilter) {
-  return filter === "all" || item.category === (filter === "sessions" ? "chats" : "messages");
+  const category = item.category === "archived" ? "chats" : item.category;
+  return filter === "all" || category === (filter === "sessions" ? "chats" : "messages");
 }
 
 function resolvePaletteResults(snapshot: CommandPaletteProps, prepared?: CommandPaletteItem[]) {
@@ -457,6 +452,7 @@ export function CommandPaletteView(props: { readProps: () => CommandPaletteProps
     <>
       <openclaw-modal-dialog
         prop:initialFocus={() => initialInput}
+        native-browser-backdrop
         class="cmd-palette-overlay palette"
         label={t("palette.placeholder")}
         style={COMMAND_PALETTE_DIALOG_STYLE}
@@ -643,12 +639,12 @@ export function CommandPaletteView(props: { readProps: () => CommandPaletteProps
             </Show>
           </div>
           <Show when={error()}>
-            <div
-              class="cmd-palette__creation-error agent-chat__composer-status agent-chat__composer-status-band agent-chat__composer-status-band--wrap"
-              data-tone="danger"
-              role="alert"
-            >
-              {error()}
+            <div class="cmd-palette__creation-error" role="alert">
+              <Icon
+                class="cmd-palette__creation-error-icon"
+                name={current().draft.error ? "circleAlert" : "info"}
+              />
+              <span>{error()}</span>
             </div>
           </Show>
           <CommandPaletteDock

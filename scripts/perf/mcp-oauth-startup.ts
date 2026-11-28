@@ -21,6 +21,7 @@ import { pathToFileURL } from "node:url";
 import { parseArgs } from "node:util";
 import type { OpenClawConfig } from "../../src/config/types.openclaw.js";
 import type { PluginManifestRegistry } from "../../src/plugins/manifest-registry.js";
+import { startCollectedHeapSampling } from "../lib/heap-sampling.ts";
 import { parseStrictIntegerOption } from "../lib/strict-integer-option.ts";
 
 const { values } = parseArgs({
@@ -161,12 +162,7 @@ try {
   assert.equal(coldInitializes, 1, "Cold acquisition must reach the OAuth-required HTTP server");
   const hostLoadBefore = loadavg();
   if (values.allocation) {
-    inspector.connect();
-    await inspector.post("HeapProfiler.startSampling", {
-      samplingInterval: 16_384,
-      includeObjectsCollectedByMajorGC: true,
-      includeObjectsCollectedByMinorGC: true,
-    });
+    await startCollectedHeapSampling(inspector, 16_384);
   }
   const cpuStart = process.cpuUsage();
   const threadCpuStart = process.threadCpuUsage();

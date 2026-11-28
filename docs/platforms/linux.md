@@ -783,6 +783,14 @@ Covered child process surfaces:
 - MCP stdio server children
 - Managed local model and embedding service children
 - OpenClaw-launched browser/Chrome processes (via the plugin SDK process runtime)
+- The directory watch helper, and SQLite read-only helpers that the Gateway
+  spawns directly. These helpers recover on their own: lost watches fall back
+  to scans, and a reader that is killed fails only the reads it is serving.
+
+The spawn brokers keep the Gateway's own score. A killed native-resource broker
+leaves plugin native resources unusable until the Gateway restarts, and repeated
+kills of the command broker use up its restarts. In both cases, a clean Gateway
+restart is the better outcome.
 
 Sandbox backend transports keep their prepared environment and inherited OOM
 score instead of receiving this wrapper. Workload resource policy belongs to

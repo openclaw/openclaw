@@ -26,6 +26,7 @@ import {
 import { PluginInstance } from "../../src/plugins/plugin-instance.js";
 import { createEmptyPluginRegistry } from "../../src/plugins/registry-empty.js";
 import { settlesWithin } from "../../src/shared/settle-within.js";
+import { startCollectedHeapSampling } from "../lib/heap-sampling.ts";
 
 const { values } = parseArgs({ options: { allocations: { type: "boolean", default: false } } });
 assert(global.gc, "Run with --expose-gc");
@@ -89,12 +90,7 @@ await nextTurn();
 const inspector = new Session();
 try {
   if (values.allocations) {
-    inspector.connect();
-    await inspector.post("HeapProfiler.startSampling", {
-      samplingInterval: 1024,
-      includeObjectsCollectedByMajorGC: true,
-      includeObjectsCollectedByMinorGC: true,
-    });
+    await startCollectedHeapSampling(inspector, 1024);
   }
   const hostLoad = loadavg();
   const memoryBefore = process.memoryUsage();

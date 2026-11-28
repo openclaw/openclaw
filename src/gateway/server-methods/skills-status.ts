@@ -44,7 +44,7 @@ export async function buildRemoteAwareWorkspaceSkillStatus(
 export const handleSkillsStatus = defineValidatedGatewayHandler(
   "skills.status",
   validateSkillsStatusParams,
-  async ({ params, respond, context, client, signal, hasCurrentClientAuthority }) => {
+  async ({ params, respond, context, client, signal }) => {
     const agentId = params.agentId ?? tryResolveAmbientOwnerAgentId(context.getRuntimeConfig());
     const resolved = resolveSkillsAgentWorkspace({ ...params, agentId }, context);
     if (!resolved.ok) {
@@ -57,7 +57,6 @@ export const handleSkillsStatus = defineValidatedGatewayHandler(
         context,
         respond,
         signal,
-        hasCurrentClientAuthority,
         sessionKey: params.sessionKey,
         agentId: resolved.agentId,
         changedError: errorShape(ErrorCodes.INVALID_REQUEST, "Session changed; retry."),

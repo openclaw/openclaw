@@ -47,9 +47,9 @@ jobs:
           cache-mode: read-write
           dependency-cache: ${{ matrix.platform == 'linux' && 'true' || 'false' }}
           install-bun: "false"
+          install-deps: "false"
 
-      # Setup owns the completed toolchain and dependency trees. Publish them
-      # before build and transform warming delay unrelated readers.
+      # Publish toolchain downloads before dependency population.
       - name: Save Node toolchain cache
         if: ${{ steps.setup-node-env.outputs.cache-mode == 'read-write' && runner.os != 'Windows' && runner.environment != 'github-hosted' && steps.setup-node-env.outputs.node-toolchain-populated == 'true' && steps.setup-node-env.outputs.node-toolchain-cache-matched-key != steps.setup-node-env.outputs.node-toolchain-cache-key }}
         continue-on-error: true
@@ -58,13 +58,8 @@ jobs:
           path: ${{ steps.setup-node-env.outputs.node-toolchain-cache-path }}
           key: ${{ steps.setup-node-env.outputs.node-toolchain-cache-key }}
 
-      - name: Populate fresh hosted Linux dependency store
+      - name: Prepare fresh hosted Linux dependency store
         if: ${{ runner.os == 'Linux' && runner.environment == 'github-hosted' && steps.setup-node-env.outputs.cache-mode == 'read-write' && steps.setup-node-env.outputs.pnpm-store-cache-key != '' && steps.setup-node-env.outputs.pnpm-store-cache-hit != 'true' }}
-        env:
-          CI: "true"
-          DEPENDENCY_CACHE: "false"
-          DEPENDENCY_CACHE_HIT: "false"
-          FROZEN_LOCKFILE: "true"
         run: |
           set -euo pipefail
           test "$PNPM_CONFIG_STORE_DIR" = "$GITHUB_WORKSPACE/.cache/openclaw-pnpm-store"
@@ -82,7 +77,14 @@ jobs:
           if [[ -d "$bootstrap/toolchain" ]]; then
             mv "$bootstrap/toolchain" "$PNPM_CONFIG_STORE_DIR/toolchain"
           fi
-          bash .github/actions/setup-node-env/install-dependencies.sh
+
+      - name: Install publisher dependencies
+        env:
+          CI: "true"
+          DEPENDENCY_CACHE: ${{ matrix.platform == 'linux' && 'true' || 'false' }}
+          DEPENDENCY_CACHE_HIT: ${{ steps.setup-node-env.outputs.dependency-cache-hit }}
+          FROZEN_LOCKFILE: "true"
+        run: bash .github/actions/setup-node-env/install-dependencies.sh
 
       - name: Save exact dependency cache
         if: ${{ steps.setup-node-env.outputs.cache-mode == 'read-write' && steps.setup-node-env.outputs.dependency-cache-key != '' && steps.setup-node-env.outputs.dependency-cache-hit != 'true' }}

@@ -19,6 +19,7 @@ import { parseArgs } from "node:util";
 import { GCProfiler } from "node:v8";
 import * as candidate from "../../packages/ai/src/transports/model-request-body.js";
 import { fetchWithSsrFGuard } from "../../src/infra/net/fetch-guard.js";
+import { startCollectedHeapSampling } from "../lib/heap-sampling.ts";
 import { parseStrictIntegerOption } from "../lib/strict-integer-option.js";
 
 const { values } = parseArgs({
@@ -77,12 +78,7 @@ async function arm(module: typeof candidate, label: string, pair: number) {
   globalThis.gc!();
   const inspector = new Session();
   if (values.allocation) {
-    inspector.connect();
-    await inspector.post("HeapProfiler.startSampling", {
-      samplingInterval: 4096,
-      includeObjectsCollectedByMajorGC: true,
-      includeObjectsCollectedByMinorGC: true,
-    });
+    await startCollectedHeapSampling(inspector, 4096);
   }
   const gc = new GCProfiler();
   gc.start();

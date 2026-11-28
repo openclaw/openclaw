@@ -42,6 +42,14 @@ export type CiTimingRun = {
 
 type Samples = Map<string, number[]>;
 type WorkerCeilings = Map<string, Set<number | "unspecified" | "ambiguous">>;
+type ParentGenerationSample = {
+  parent: string;
+  generationKey: string;
+  expectedParts: number;
+  observedParts: number;
+  summedSeconds: number;
+  runParentSeconds?: number;
+};
 
 function normalizeTimingLog(text: string): string {
   // Quoted child output remains nested; only gh's outer job/step columns are removed.
@@ -1126,17 +1134,31 @@ function recordCompleteParentSamples(
     generation.parts.set(parsed.part, median(values));
     generations.set(parsed.generationKey, generation);
   }
-  for (const { parent, expected, parts } of generations.values()) {
+  const observations: ParentGenerationSample[] = [];
+  for (const [generationKey, { parent, expected, parts }] of generations) {
+    const total = [...parts.values()].reduce((sum, duration) => sum + duration, 0);
+    observations.push({
+      parent,
+      generationKey,
+      expectedParts: expected,
+      observedParts: parts.size,
+      summedSeconds: total,
+    });
     if (parts.size !== expected) {
       continue;
     }
     // Inventory-specific child keys expire when files move. Retain the full
     // measured cost at its parent so the next inventory has a measured floor.
     // One run/profile supplies one sample, even after retries or repartitioning.
-    const total = [...parts.values()].reduce((sum, duration) => sum + duration, 0);
     const direct = samples.get(parent);
     samples.set(parent, [Math.max(total, direct ? median(direct) : 0)]);
   }
+  for (const observation of observations) {
+    if (observation.observedParts === observation.expectedParts) {
+      observation.runParentSeconds = median(samples.get(observation.parent)!);
+    }
+  }
+  return observations;
 }
 
 function refitMap(
@@ -1234,6 +1256,8 @@ export function refitTestTimings(
       .flat()
       .map((observation) => [runtimePlacementTimingIdentity(observation), observation]),
   );
+  const parentSamples: (ParentGenerationSample & { runId: number; profile: CiTimingProfile })[] =
+    [];
   const uniqueRuns = new Map<number, CiTimingRun>();
   for (const run of runs) {
     const retained = uniqueRuns.get(run.id);
@@ -1371,11 +1395,14 @@ export function refitTestTimings(
       changedUiFiles.add(file);
     }
     for (const profile of CI_TIMING_PROFILES) {
-      recordCompleteParentSamples(
+      const generations = recordCompleteParentSamples(
         current[profile],
         observedParents[profile],
         !run.pullRequestMergeRef && !run.logs.some((log) => log.kind === "release-packed"),
       );
+      for (const sample of generations) {
+        parentSamples.push(Object.assign(sample, { runId: run.id, profile }));
+      }
       for (const [identity, values] of currentRuntime[profile]) {
         recordSample(runtimeSamples[profile], identity, median(values));
       }
@@ -1614,6 +1641,12 @@ export function refitTestTimings(
   }
   return {
     timings,
+    parentSamples: parentSamples.toSorted(
+      (a, b) =>
+        a.runId - b.runId ||
+        a.profile.localeCompare(b.profile) ||
+        a.generationKey.localeCompare(b.generationKey),
+    ),
     changes: changes.toSorted((a, b) => (a.key < b.key ? -1 : a.key > b.key ? 1 : 0)),
     runIds,
     rejectedWorkerKeys,

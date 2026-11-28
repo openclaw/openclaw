@@ -28,6 +28,7 @@ import { prepareCronSession } from "../../cron/isolated-agent/session.js";
 import { refreshCostUsageCacheForAgent } from "../../infra/session-cost-usage-aggregation.js";
 import * as usageWorkerRuntime from "../../infra/session-cost-usage-worker-runtime.js";
 import { discoverAllSessions, loadSessionCostSummary } from "../../infra/session-cost-usage.js";
+import type { SessionUsageTimeSeries } from "../../shared/session-usage-timeseries-types.js";
 import { buildUsageOverview } from "../../shared/usage-overview.js";
 import type { SessionsUsageResult } from "../../shared/usage-types.js";
 import { openOpenClawAgentDatabase } from "../../state/openclaw-agent-db.js";
@@ -310,6 +311,50 @@ it("keeps prior cron runs attributed through guarded replacement and the real us
           ? { points: [expect.objectContaining({ totalTokens: 30 })] }
           : { logs: [expect.objectContaining({ role: "assistant", tokens: 30 })] },
       );
+    }
+  });
+});
+
+it("filters current-instance turns by displayed day before sampling the timeline", async () => {
+  await withUsageState(async (state) => {
+    const key = "agent:main:midnight-usage";
+    const scope = sessionScope(state, "main", key);
+    const sessionId = "midnight-usage";
+    const midnight = Date.parse("2026-05-13T18:15:00Z"); // Midnight in Kathmandu.
+    await upsertSessionEntryCore(scope, { sessionId, updatedAt: midnight });
+    await persistSessionTranscriptTurn(
+      { ...scope, sessionId },
+      {
+        cwd: state.workspaceDir,
+        updateMode: "none",
+        messages: Array.from({ length: 201 }, (_, index) => {
+          const now = midnight + index - 5;
+          const tokens = index === 4 ? 7 : 1 + (index % 2);
+          return { message: usageMessage(tokens, now, tokens / 4), now };
+        }),
+      },
+    );
+    const calendar = {
+      startDate: "2026-05-12",
+      endDate: "2026-05-14",
+      mode: "specific",
+      timeZone: "Asia/Kathmandu",
+    };
+    for (const [selection, tokens, cost] of [
+      [{}, 307, 76.75],
+      [{ ...calendar, selectedDays: ["2026-05-13"] }, 13, 3.25],
+      [{ ...calendar, selectedDays: ["2026-05-12", "2026-05-14"] }, 294, 73.5],
+      [{ ...calendar, mode: "utc", selectedDays: ["2026-05-14"] }, 0, 0],
+    ] as const) {
+      const [ok, payload, error] = await requestUsage(
+        { key, ...selection },
+        "sessions.usage.timeseries",
+      );
+      expect(ok, JSON.stringify(error)).toBe(true);
+      const { points } = payload as SessionUsageTimeSeries;
+      expect(points.length).toBeLessThanOrEqual(200);
+      expect(points.at(-1)?.cumulativeTokens ?? 0).toBe(tokens);
+      expect(points.at(-1)?.cumulativeCost ?? 0).toBe(cost);
     }
   });
 });

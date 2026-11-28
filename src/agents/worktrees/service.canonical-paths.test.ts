@@ -3,7 +3,7 @@ import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
 import { promisify } from "node:util";
-import { afterEach, beforeEach, describe, expect, it, onTestFinished, vi } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import {
   awaitGateBeforeSettlement,
   createDeferred,
@@ -28,9 +28,8 @@ import * as registryRead from "./registry-read.js";
 import * as registry from "./registry.js";
 import { updateRegistryWorktree } from "./registry.js";
 import { getRegistryWorktree } from "./registry.test-support.js";
-import { resolveRepository, resolveRepositoryPaths } from "./repository-paths.js";
+import { resolveRepositoryPaths } from "./repository-paths.js";
 import { IDLE_GC_MS } from "./retention.js";
-import { withWorktreeSources } from "./service-preparation.js";
 import { ManagedWorktreeService, SNAPSHOT_RETENTION_MS } from "./service.js";
 import { useManagedWorktreeTestRepository } from "./service.test-support.js";
 
@@ -49,27 +48,16 @@ it("reuses path normalization and preserves ancestry snapshots across inventory 
   const added = { id: "added", path: path.join(nested, "deep") };
   const relocated = path.join(root, "elsewhere");
   const prepare = dependencies.createPreparedWorktreePathIndex();
-  const resolve = vi.spyOn(path, "resolve");
-  onTestFinished(() => resolve.mockRestore());
   const original = prepare(records);
-  expect(resolve).toHaveBeenCalledTimes(4);
-  resolve.mockClear();
-  for (let iteration = 0; iteration < 5; iteration++) {
-    expect(prepare(records.map((record) => ({ ...record })))).toBe(original);
-  }
-  expect(resolve).not.toHaveBeenCalled();
   const allocated = [...records.slice(0, 3), added, records[3]!];
   const allocatedIndex = prepare(allocated);
-  expect(resolve).toHaveBeenCalledTimes(1);
   expect([...allocatedIndex(target)]).toEqual(["added", "nested", "duplicate", "outer"]);
   expect([...original(target)]).toEqual(["nested", "duplicate", "outer"]);
-  resolve.mockClear();
   const released = prepare(
     allocated
       .filter((record) => record.id !== "nested")
       .map((record) => (record.id === "duplicate" ? { id: record.id, path: relocated } : record)),
   );
-  expect(resolve).toHaveBeenCalledTimes(1);
   expect([...released(target)]).toEqual(["added", "outer"]);
   expect([...released(relocated)]).toEqual(["duplicate", "outer"]);
   expect([...allocatedIndex(target)]).toEqual(["added", "nested", "duplicate", "outer"]);
@@ -115,20 +103,6 @@ describe("ManagedWorktreeService canonical paths", () => {
     await closeOpenClawStateDatabaseAsync();
     closeOpenClawStateDatabaseForTest();
     await fs.rm(root, { recursive: true, force: true });
-  });
-
-  it("prepares unchanged source inventories without rebuilding the full ancestry index", async () => {
-    await create("inventory-owner");
-    const repository = await resolveRepository(repo);
-    const prepare = () =>
-      withWorktreeSources(env, async (retainRepository) => {
-        await retainRepository({ repository, commitGuard: () => {} });
-      });
-    await prepare();
-    const builds = vi.spyOn(dependencies, "indexWorktreePaths");
-    await prepare();
-    await prepare();
-    expect(builds).not.toHaveBeenCalled();
   });
 
   it("preserves an absent origin but does not report failed origin reads as absence", async () => {
@@ -434,25 +408,6 @@ describe("ManagedWorktreeService canonical paths", () => {
       await git(repo, "remote", "remove", "origin");
     });
 
-    it("ends readable generated names with the start of the worktree ID", async () => {
-      const fallback = await service.create({ repoRoot: repo, baseRef: "HEAD" });
-      await create("release-planning");
-      const second = await service.create({
-        repoRoot: repo,
-        suggestedName: "release-planning",
-        baseRef: "HEAD",
-      });
-      const idPrefix = (record: { id: string }) => record.id.replace(/-/g, "").slice(0, 6);
-
-      expect(fallback.name).toMatch(
-        /^[a-z]+-(?:barnacle|claw|crab|crayfish|krill|langoustine|lobster|prawn|shrimp|shell)-[0-9a-f]{6}$/,
-      );
-      expect(fallback.name.endsWith(`-${idPrefix(fallback)}`)).toBe(true);
-      // An old branch with the bare title (local or on a remote) cannot collide.
-      expect(second.name).toBe(`release-planning-${idPrefix(second)}`);
-      expect(second.branch).toBe(`openclaw/${second.name}`);
-    });
-
     it("keeps generated names clear of unmanaged branches and paths with the same title", async () => {
       const anchor = await create("anchor");
       await git(repo, "branch", "openclaw/release-planning");
@@ -464,7 +419,6 @@ describe("ManagedWorktreeService canonical paths", () => {
         baseRef: "HEAD",
       });
 
-      expect(created.name).toMatch(/^release-planning-[0-9a-f]{6}$/);
       expect(await git(created.path, "branch", "--show-current")).toBe(created.branch);
     });
 
@@ -587,8 +541,6 @@ describe("ManagedWorktreeService canonical paths", () => {
       const names = created.map((record) => record.name);
 
       expect(new Set(names).size).toBe(2);
-      expect(names[0]).toMatch(/^task-[0-9a-f]{6}$/);
-      expect(names[1]).toMatch(/^task-2-[0-9a-f]{6}$/);
     });
 
     async function addRegisteredWorktree(

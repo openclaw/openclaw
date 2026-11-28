@@ -205,3 +205,16 @@ it.each(["runtime", "authoritative", "persisted"] as const)(
     );
   },
 );
+
+it("distinguishes an authoritative empty overlay from a scoped lookup without matches", () => {
+  const store = { version: 1, profiles: {} };
+  const authoritative = overlayRuntimeExternalOAuthProfiles(store, [], {
+    runtimeExternalProfileIdsAuthoritative: true,
+  });
+  expect(authoritative).toStrictEqual({
+    ...store,
+    runtimeExternalProfileIds: [],
+    runtimeExternalProfileIdsAuthoritative: true,
+  });
+  expect(overlayRuntimeExternalOAuthProfiles(authoritative, [])).toStrictEqual(store);
+});

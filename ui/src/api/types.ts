@@ -125,10 +125,6 @@ export type CyberAccessProgram = NonNullable<GatewayWireSessionRow["cyberAccessP
 
 export type GatewaySessionRow = Omit<GatewayWireSessionRow, "archivedBy" | "updatedAt"> &
   Pick<SessionRow, "archivedBy" | "updatedAt"> & {
-    /** Transient UI-owned Swarm note overlays, not persisted session fields. */
-    swarmPhase?: string;
-    swarmPhaseRank?: number;
-    swarmLog?: string;
     icon?: string;
     channelAvatarUrl?: string;
     surface?: string;
@@ -148,8 +144,10 @@ export type SessionsPatchResult = SessionsPatchResultBase<{
   icon?: GatewaySessionRow["icon"];
   color?: GatewaySessionRow["color"];
   category?: GatewaySessionRow["category"];
+  snoozedUntil?: GatewaySessionRow["snoozedUntil"];
   updatedAt?: number;
   createdAt?: number;
+  pinned?: boolean;
   pinnedAt?: number;
   lastReadAt?: number;
   lastActivityAt?: number;

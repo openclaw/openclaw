@@ -1,6 +1,7 @@
 import { raceWithTimeout } from "../../packages/retry/src/index.js";
 import { createAgentRunRestartAbortError } from "../agents/run-termination.js";
 import { isAgentEventLifecycleGenerationCurrent } from "../infra/agent-events.js";
+import type { RestartResumeNotice } from "../infra/agent-run-registry.types.js";
 import { throwIfSettledRejected } from "../infra/error-graph-internal.js";
 import { createSubsystemLogger } from "../logging/subsystem.js";
 import { hasGatewayContextOwner } from "../plugins/runtime/gateway-request-scope.js";
@@ -19,7 +20,10 @@ const shutdownLog = createSubsystemLogger("gateway/shutdown");
 export type GatewayRunShutdownParams = {
   resolveGatewayContext: GatewayContextResolver;
   /** Snapshot live owners once, before cancellation changes their running state. */
-  persistRunningSessionsForRestart?: (signal: AbortSignal) => Promise<void>;
+  persistRunningSessionsForRestart?: (
+    signal: AbortSignal,
+    collectNotice: (notice: RestartResumeNotice) => void,
+  ) => Promise<void>;
   terminateRunningSubagentsForShutdown?: () => Promise<void>;
   cancelReceivedWork?: (reason?: Error) => void;
 };
@@ -45,6 +49,7 @@ export async function prepareGatewayRunShutdown(
   });
   const effects = captureGatewaySessionWorkAdmissionInterruption(params.resolveGatewayContext);
   const persistence = new AbortController();
+  const notices: RestartResumeNotice[] = [];
   // Leave time for abort finalizers and resource retirement within the owner's deadline.
   const budget = getProcessCleanupBudget();
   const remainingCleanupMs = () =>
@@ -55,7 +60,9 @@ export async function prepareGatewayRunShutdown(
     await raceWithTimeout(
       () =>
         measureGatewayCloseStep("restart.close.session-markers", async () =>
-          params.persistRunningSessionsForRestart?.(persistence.signal),
+          params.persistRunningSessionsForRestart?.(persistence.signal, (notice) =>
+            notices.push(notice),
+          ),
         ),
       persistenceMs,
       () => {
@@ -72,6 +79,24 @@ export async function prepareGatewayRunShutdown(
     shutdownLog.warn(`Restart marker persistence failed: ${String(error)}`);
     failure = { error };
   }
+  if (notices.length > 0) {
+    // Only committed markers reach here. A slow channel must not delay turn cancellation
+    // past the cleanup budget or turn a successful save into a persistence failure.
+    const controller = new AbortController();
+    try {
+      const outcomes = await raceWithTimeout(
+        Promise.allSettled(notices.map(async (notify) => notify(controller.signal))),
+        Math.min(2_000, remainingCleanupMs()),
+        () => controller.abort(),
+        { ref: false },
+      );
+      if (!outcomes || outcomes.some((outcome) => outcome.status === "rejected")) {
+        shutdownLog.warn("Could not confirm every saved reply's restart notice before shutdown");
+      }
+    } finally {
+      controller.abort();
+    }
+  }
   // Start child retirement, then signal every captured owner before joining any of them.
   const subagents = measureGatewayCloseStep("restart.close.subagent-settlement", async () =>
     params.terminateRunningSubagentsForShutdown?.(),
@@ -85,8 +110,7 @@ export async function prepareGatewayRunShutdown(
       recordGatewayShutdownWarning(params.warnings, "session-abort");
       return "continue";
     },
-    // Shutdown has no terminal chat presentation. The next ordinary input explains
-    // the restart; cancellation still runs the owner's normal abort/finalization path.
+    // A restart notice is not a final reply. Cancellation still runs normal finalizers.
     cancelInput: (_input, cancel) => cancel(),
     cancelOperation: (operation, cancel) =>
       operation.lifecycleGeneration !== undefined &&

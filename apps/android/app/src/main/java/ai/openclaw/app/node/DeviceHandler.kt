@@ -2,7 +2,7 @@ package ai.openclaw.app.node
 
 import ai.openclaw.app.BuildConfig
 import ai.openclaw.app.SensitiveFeatureConfig
-import ai.openclaw.app.gateway.GatewaySession
+import ai.openclaw.app.gateway.InvokeResult
 import android.annotation.SuppressLint
 import android.app.ActivityManager
 import android.content.Context
@@ -135,15 +135,15 @@ class DeviceHandler internal constructor(
     val temperatureC: Double?,
   )
 
-  fun handleDeviceStatus(_paramsJson: String?): GatewaySession.InvokeResult = GatewaySession.InvokeResult.ok(statusPayloadJson())
+  fun handleDeviceStatus(_paramsJson: String?): InvokeResult = InvokeResult.ok(statusPayloadJson())
 
-  fun handleDeviceInfo(_paramsJson: String?): GatewaySession.InvokeResult = GatewaySession.InvokeResult.ok(infoPayloadJson())
+  fun handleDeviceInfo(_paramsJson: String?): InvokeResult = InvokeResult.ok(infoPayloadJson())
 
-  fun handleDevicePermissions(_paramsJson: String?): GatewaySession.InvokeResult = GatewaySession.InvokeResult.ok(permissionsPayloadJson())
+  fun handleDevicePermissions(_paramsJson: String?): InvokeResult = InvokeResult.ok(permissionsPayloadJson())
 
-  fun handleDeviceHealth(_paramsJson: String?): GatewaySession.InvokeResult = GatewaySession.InvokeResult.ok(healthPayloadJson())
+  fun handleDeviceHealth(_paramsJson: String?): InvokeResult = InvokeResult.ok(healthPayloadJson())
 
-  fun handleDeviceApps(paramsJson: String?): GatewaySession.InvokeResult {
+  fun handleDeviceApps(paramsJson: String?): InvokeResult {
     val params = parseJsonParamsObject(paramsJson)
     val includeSystem = parseJsonBooleanFlag(params, "includeSystem") ?: false
     val includeDisabled = parseJsonBooleanFlag(params, "includeDisabled") ?: false
@@ -161,7 +161,7 @@ class DeviceHandler internal constructor(
         }.toList()
     val limitedApps = matchingApps.take(limit)
 
-    return GatewaySession.InvokeResult.ok(
+    return InvokeResult.ok(
       buildJsonObject {
         put("count", JsonPrimitive(limitedApps.size))
         put("totalMatched", JsonPrimitive(matchingApps.size))

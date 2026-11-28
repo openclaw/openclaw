@@ -59,6 +59,7 @@ it("continues a followup only with the partition that leaves no cohort member wo
       release() {},
       assertCurrent() {},
       run: (run) => run(),
+      runWithRequester: (run) => run(),
     },
   });
   onTestFinished(() => owner.close());

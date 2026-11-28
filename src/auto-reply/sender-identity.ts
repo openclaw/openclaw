@@ -58,6 +58,14 @@ export function normalizeAllowFromEntry(params: AllowFromParams & { value: strin
   );
 }
 
+export function isWildcardAllowFromEntry(entry: string): boolean {
+  return entry.trim() === "*";
+}
+
+export function stripWildcardAllowFrom(list: string[]): string[] {
+  return list.filter((entry) => !isWildcardAllowFromEntry(entry));
+}
+
 export function resolveSenderCandidates(
   params: AllowFromParams & {
     senderId?: string | null;

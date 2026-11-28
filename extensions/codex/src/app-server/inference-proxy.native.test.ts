@@ -549,6 +549,106 @@ describe.skipIf(process.platform === "win32")("native inference admission", () =
       expect(transport.httpSockets.size).toBe(2);
     },
   );
+  it.skipIf(process.env.OPENCLAW_LIVE_CODEX_INFERENCE === "1")(
+    "keeps oversized native history terminal while a bounded replacement can answer",
+    { timeout: 60_000 },
+    async (context) => {
+      const native = await prepareNative(context, "codex-relay-size-");
+      const upstreamCalls: number[] = [];
+      transport.fetch.mockReset().mockImplementation(async (args) => {
+        upstreamCalls.push(1);
+        expect(String(args.url).endsWith("/responses")).toBe(true);
+        return {
+          response: new Response(
+            responseEvents("bounded", assistantMessage("answer", "BOUNDED_OK"))
+              .map((event) => `data: ${JSON.stringify(event)}\n\n`)
+              .join(""),
+            { headers: { "content-type": "text/event-stream" } },
+          ),
+          release: async () => {},
+        };
+      });
+      const proxy = await createCodexInferenceProxy({
+        upstream: new URL("https://api.openai.com/v1"),
+        assertCurrent: () => {},
+      });
+      context.onTestFinished(() => proxy.close());
+      await fs.writeFile(
+        path.join(native.codexHome, "config.toml"),
+        [
+          "model_context_window=100000000",
+          "model_auto_compact_token_limit=99000000",
+          ...nativeConfig("gpt-5.5", "http-fixture"),
+          ...fixtureProvider("Synthetic size provider", proxy.baseUrl, false),
+        ].join("\n"),
+      );
+      const client = await startNative(context, native);
+      const begin = async () => {
+        const { thread } = await client.request("thread/start", { cwd: native.cwd });
+        const registration = await proxy.context.register({
+          threadId: thread.id,
+          text: "Synthetic size recovery proof.",
+          signal: new AbortController().signal,
+          assertCurrent: () => {},
+        });
+        context.onTestFinished(() => registration.release());
+        return { thread, registration };
+      };
+      const old = await begin();
+      // The native history, not the small current request, crosses the real 32 MiB relay cap.
+      for (let index = 0; index < 34; index++) {
+        await client.request("thread/inject_items", {
+          threadId: old.thread.id,
+          items: [
+            {
+              type: "message",
+              role: "user",
+              content: [{ type: "input_text", text: "x".repeat(1_000_000) }],
+            },
+          ],
+        });
+      }
+      const turns = observeTurns(client);
+      const start = async (entry: typeof old) => {
+        await client.request("turn/start", {
+          threadId: entry.thread.id,
+          input: nativeInput("Reply exactly BOUNDED_OK. Do not use tools."),
+          responsesapiClientMetadata: {
+            [CODEX_INFERENCE_GENERATION_KEY]: entry.registration.generation,
+          },
+        });
+      };
+      await start(old);
+      await turns.settled(old.thread.id, "failed");
+      const failed = await client.request("thread/read", {
+        threadId: old.thread.id,
+        includeTurns: true,
+      });
+      expect(failed.thread.turns?.at(-1)?.error?.message).toContain(
+        "Request exceeds the maximum size accepted by the Codex inference relay",
+      );
+      expect(upstreamCalls).toHaveLength(0);
+      const fresh = await begin();
+      await start(fresh);
+      await turns.settled(fresh.thread.id);
+      const answered = await client.request("thread/read", {
+        threadId: fresh.thread.id,
+        includeTurns: true,
+      });
+      expect(
+        answered.thread.turns
+          ?.flatMap((turn) => turn.items)
+          .filter((item) => item.type === "agentMessage")
+          .map((item) => item.text),
+      ).toContain("BOUNDED_OK");
+      expect(upstreamCalls).toHaveLength(1);
+      const retained = await client.request("thread/read", {
+        threadId: old.thread.id,
+        includeTurns: false,
+      });
+      expect(retained.thread.id).toBe(old.thread.id);
+    },
+  );
   it.skipIf(process.env.OPENCLAW_LIVE_CODEX_INFERENCE !== "1")(
     "streams through the real relay with isolated native API-key auth",
     { timeout: 90_000 },

@@ -862,8 +862,14 @@
 }
 
 .sw-file-chip {
+  max-width: 100%;
   height: 28px;
   padding: 0 10px;
+  overflow: hidden;
+  white-space: nowrap;
+  text-overflow: ellipsis;
+  /* Clip the directory prefix before the identifying end of the filename. */
+  direction: rtl;
   border: 0;
   border-radius: var(--radius-md);
   background: color-mix(in srgb, var(--text) 6%, transparent);

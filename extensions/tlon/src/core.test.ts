@@ -83,6 +83,42 @@ describe("tlon core", () => {
     });
   });
 
+  it("preserves club policy and rules for named accounts without inheriting ship permission", () => {
+    const cfg = accountConfig({
+      ...shipCredentials,
+      dmAllowlist: ["~bus"],
+      clubPolicy: "approve-each",
+      clubRules: { "0v1.abcde": "allow" },
+      accounts: { work: { clubPolicy: "disabled", clubRules: {} } },
+    });
+    expect(tlonChannelConfigSchema.runtime?.safeParse(cfg.channels.tlon).success).toBe(true);
+    expect(resolveTlonAccount(cfg)).toMatchObject({
+      clubPolicy: "approve-each",
+      clubRules: { "0v1.abcde": "allow" },
+    });
+    expect(resolveTlonAccount(cfg, "work")).toMatchObject({
+      clubPolicy: "disabled",
+      clubRules: {},
+    });
+    expect(resolveTlonAccount(accountConfig({ dmAllowlist: ["~bus"] }))).toMatchObject({
+      clubPolicy: null,
+      clubRules: {},
+    });
+  });
+
+  it.each([
+    ["0v0", true],
+    ["0vabc", true],
+    ["0v1.abcde", true],
+    ["0v1.abc", false],
+    ["0v01", false],
+    ["0v123456", false],
+  ])("validates club rule ID %s against Tlon's wire format", (clubId, success) => {
+    expect(
+      tlonChannelConfigSchema.runtime?.safeParse({ clubRules: { [clubId]: "allow" } }).success,
+    ).toBe(success);
+  });
+
   it("configures ship, auth, and discovery settings", async () => {
     const answers: Record<string, string> = {
       "Ship name": "sampel-palnet",

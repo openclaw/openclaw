@@ -19,6 +19,7 @@ import {
   executeExistingOpenClawStateRead,
   getActiveOpenClawStateDatabaseReadSnapshot,
   isArtifactPreservingStateRead,
+  withExistingOpenClawStateDatabaseCurrentReadOnly,
   withExistingOpenClawStateDatabaseReadOnly,
 } from "../state/openclaw-state-db-readonly.js";
 import {
@@ -244,6 +245,17 @@ export async function readExecApprovalsPolicyReadOnlyAsync(
     warnFailClosed("exec approvals SQLite state is unavailable; denying host execution", error);
     return { file: createFailClosedExecApprovalsFallback() };
   }
+}
+
+/**
+ * Read-only: the stored policy `updateExecApprovalsForMaintenance` would start from, read
+ * directly from the existing state database (no copy). Undefined without a state database.
+ */
+export function readExecApprovalsForMaintenance(): ExecApprovalsFile | undefined {
+  return withExistingOpenClawStateDatabaseCurrentReadOnly(
+    ({ db }) => snapshotFromExecApprovalsDatabase(db).file,
+    { allowNativeRead: true },
+  );
 }
 
 /** Doctor retains its synchronous native migration transaction. Runtime edits use the writer. */

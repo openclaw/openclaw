@@ -424,6 +424,18 @@ it.each(["direct", "lifecycle", "agent", "summary"])("shares %s envelopes", asyn
           (candidate) => candidate.profile === peer.profile && candidate.capability === "legacy",
         );
         expect(decodedPayloads[index]).toEqual(decodedPayloads[legacy]);
+        const equivalent = peers.find(
+          (candidate) =>
+            candidate !== peer &&
+            candidate.profile === peer.profile &&
+            candidate.capability === peer.capability &&
+            (peer.capability === "legacy" || candidate.baseline === peer.baseline),
+        );
+        if (equivalent) {
+          expect(JSON.parse(peer.send.mock.lastCall![0]).payload).toEqual(
+            JSON.parse(equivalent.send.mock.lastCall![0]).payload,
+          );
+        }
       }
       const beforeRevocation = peers.map((peer) => peer.send.mock.calls.length);
       peers[0]!.send.mockImplementationOnce(() => {
@@ -458,8 +470,8 @@ it.each(["direct", "lifecycle", "agent", "summary"])("shares %s envelopes", asyn
       // Row changes retain connection keys; only four unprimed legacy sockets need encoding.
       expect(sharingKeyEncodings).toBe(4);
       expect(rowEncodings).toBeLessThanOrEqual(16);
-      // Two wire capabilities per group, plus one legacy envelope per authority.
-      expect(envelopeEncodings).toBeLessThanOrEqual(10);
+      // Stable fields are serialized apart from each socket's delta and ancestor history.
+      expect(envelopeEncodings).toBe(0);
       // Two authorities, each with stale/current deltas and one legacy representation.
       expect(sessionEncodings).toHaveLength(6);
       expect(ancestorFieldEncodings).toBe(0);

@@ -37,6 +37,7 @@ import { readStartupMigrationWarning } from "../infra/state-migrations.messages.
 import { DoctorMaintenanceRefusalError } from "../infra/update-doctor-result.js";
 import { CommandProcessCleanupError } from "../process/exec-result.js";
 import { withCommandProcessScope } from "../process/exec-spawn.js";
+import { stateV24Schema } from "../state/openclaw-historical-imports.test-support.js";
 import { OPENCLAW_STATE_SCHEMA_VERSION } from "../state/openclaw-state-db-contract.js";
 import {
   closeOpenClawStateDatabaseAsync,
@@ -290,12 +291,7 @@ describe("automatic client credential preparation", () => {
       fs.mkdirSync(path.dirname(shared), { recursive: true });
       {
         using database = new DatabaseSync(shared);
-        database.exec(
-          fs.readFileSync(
-            new URL("../../test/fixtures/sqlite/openclaw-state-schema-v24.sql", import.meta.url),
-            "utf8",
-          ),
-        );
+        database.exec(stateV24Schema());
         database.exec(
           "PRAGMA user_version = 24; INSERT INTO schema_meta (meta_key, role, schema_version, created_at, updated_at) VALUES ('primary', 'global', 24, 1, 1)",
         );

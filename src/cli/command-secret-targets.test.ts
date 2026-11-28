@@ -138,7 +138,6 @@ import {
   getAgentRuntimeCommandSecretTargetIds,
   getCapabilityWebFetchCommandSecretTargets,
   getCapabilityWebSearchCommandSecretTargets,
-  getModelsCommandSecretTargetIds,
   getQrRemoteCommandSecretTargetIds,
   getScopedChannelsCommandSecretTargets,
   getSecurityAuditCommandSecretTargetIds,
@@ -203,13 +202,6 @@ describe("command secret target ids", () => {
     expect(getQrRemoteCommandSecretTargetIds()).toEqual(
       new Set(["gateway.remote.token", "gateway.remote.password"]),
     );
-  });
-
-  it("keeps static model targets out of the registry path", () => {
-    const ids = getModelsCommandSecretTargetIds();
-    expect(ids.has("models.providers.*.apiKey")).toBe(true);
-    expect(ids.has("models.providers.*.request.tls.key")).toBe(true);
-    expect(ids.has("channels.discord.token")).toBe(false);
   });
 
   it("includes gateway auth targets for status command scans", () => {

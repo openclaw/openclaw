@@ -137,6 +137,28 @@ describe("hooks mapping", () => {
     }
   });
 
+  it("resolves header templates case-insensitively while payload and query stay case-sensitive", async () => {
+    const mappings = resolveHookMappings({
+      mappings: [
+        {
+          match: { path: "github" },
+          action: "wake",
+          textTemplate:
+            "{{headers.X-GitHub-Event}} {{headers.x-github-delivery}} {{payload.MixedCase}} {{payload.mixedcase}} {{query.MixedCase}} {{query.mixedcase}}",
+        },
+      ],
+    });
+    const result = await applySingleHookMapping(mappings, {
+      ...mappingContext("github", { MixedCase: "payload-upper", mixedcase: "payload-lower" }),
+      headers: { "x-github-event": "push", "x-github-delivery": "delivery-1" },
+      url: new URL(
+        "http://127.0.0.1:18789/hooks/github?MixedCase=query-upper&mixedcase=query-lower",
+      ),
+    });
+
+    expectWakeText(result, "push delivery-1 payload-upper payload-lower query-upper query-lower");
+  });
+
   it.each(["wake", "agent"] as const)(
     "rejects %s session key templates that render empty",
     async (action) => {

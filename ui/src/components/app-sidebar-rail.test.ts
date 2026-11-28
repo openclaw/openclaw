@@ -9,6 +9,7 @@ import { isRouteId, locationForRoute, routePageSpec, type RouteId } from "../app
 import { selectShellRouteState } from "../app/app-host-route-state.ts";
 import type { ApplicationContext } from "../app/context.ts";
 import { setAvatarGatewayOrigin } from "../lib/identity-avatar-context.ts";
+import { childSessionListQuery } from "../lib/sessions/child-session-data.ts";
 import * as toast from "../lib/toast.ts";
 import { createFrameClock } from "../test-helpers/animation-frame-clock.ts";
 import {
@@ -148,64 +149,77 @@ function drag(
 }
 
 describe("personal navigation rail", () => {
-  it("keeps fixed navigation and Home, Inbox, identity separate from the middle view", async () => {
-    const { sidebar, dom } = await fixture();
-    expect(
-      [...dom.all("[data-navigation-view]")].map((button) =>
-        button.getAttribute("data-navigation-view"),
-      ),
-    ).toEqual(["sessions", "online"]);
-    const frame = dom.query("aside.sidebar")!;
-    const bottom = dom.query(".sidebar-rail__bottom")!;
-    expect(
-      domProbe(bottom).present(
-        ".sidebar-footer-bar__home",
-        "openclaw-sidebar-attention",
-        ".sidebar-identity-card",
-      ),
-    ).toEqual([true, true, true]);
-    expect(dom.present(".nav-item--home", ".sidebar-shell__footer .sidebar-identity-card")).toEqual(
-      [false, false],
-    );
-    // "More" opens with usable links on its first update, without replacing the Sessions sidebar.
-    expect(dom.query(".sidebar-pages-menu")).toBeNull();
-    await click(sidebar, "[data-rail-more]");
-    expect(dom.query('.sidebar-pages-menu [data-sidebar-entry="route:usage"] a')).not.toBeNull();
-    expect(dom.query(".sidebar-pages-menu-popover .sidebar-view-loading")).toBeNull();
-    expect(dom.query(".sidebar-session-content")).not.toBeNull();
-    expect(dom.query("aside.sidebar")).toBe(frame);
-    expect(dom.query(".sidebar-rail__bottom")).toBe(bottom);
-    const identity = bottom.querySelector(".sidebar-identity-card")!;
-    expect(
-      identity.querySelector(".sidebar-identity-card__avatar .sidebar-identity-card__status"),
-    ).not.toBeNull();
-    expect(identity.getAttribute("data-connection-status")).toBe("connected");
-    expect(identity.getAttribute("aria-label")).toContain("Identity and app menu for Self");
-    for (const status of ["connecting", "reconnecting", "offline", "reload-required"] as const) {
-      sidebar.connectionStatus = status;
+  it("shows only running or unread on rail Home, even with a draft and held inputs", async () => {
+    const key = "agent:main:main";
+    const { sidebar, publish, dom } = await fixture({
+      storedOutboxes: outbox(key),
+      navigationCollapsed: true,
+    });
+    const home = dom.query(".sidebar-footer-bar__home")!;
+    for (const [status, unread, labels] of [
+      ["queued", false, []],
+      ["queued", true, ["Unread"]],
+      ["running", true, ["Active run"]],
+      ["done", true, ["Unread"]],
+      ["done", false, []],
+    ] as const) {
+      publish({ status, unread, hasActiveRun: status === "queued" || status === "running" }, key);
       await sidebar.updateComplete;
-      expect(identity.getAttribute("data-connection-status")).toBe(status);
-      expect(identity.querySelector(".gateway-status")).toBeNull();
+      expect(
+        [...home.querySelectorAll('[role="img"]')].map((el) => el.getAttribute("aria-label")),
+      ).toEqual(labels);
     }
   });
 
-  it("keeps Home outbox attention and drafts visible with its run state when collapsed", async () => {
-    const { sidebar, publish, dom } = await fixture();
-    publish({ hasActiveRun: true, status: "running" }, "agent:main:main");
-    await update(sidebar, { storedOutboxes: outbox("agent:main:main"), navigationCollapsed: true });
-    const home = dom.query(".sidebar-footer-bar__home")!;
-    const icons = domProbe(home);
-    expect(icons.attr(".session-glyph__ring", "aria-label")).toBe("Active run");
-    expect(icons.attr(".session-row-badge--attention", "aria-label")).toContain("2");
-    expect(icons.present(".session-row-badge--draft")).toEqual([true]);
-    await update(sidebar, { storedOutboxes: outbox("agent:main:main", 0) });
-    expect(
-      icons.present(
-        ".session-row-badge--attention",
-        ".session-row-badge--draft",
-        ".session-glyph__ring",
-      ),
-    ).toEqual([false, false, true]);
+  it("spins rail Home only after a child is confirmed running", async () => {
+    const { sidebar, sessions, result, dom } = await fixture();
+    const key = "agent:main:main";
+    const childKey = "agent:main:subagent:worker";
+    const childWindow = { ...childSessionListQuery(key), source: "sidebar" as const };
+    const firstRead = createDeferred<typeof result>();
+    let children = { ...result, count: 0, sessions: [] as GatewaySessionRow[] };
+    sessions.list.mockImplementation(async (query) => {
+      if (query?.spawnedBy !== key) {
+        return sessions.result;
+      }
+      await firstRead.promise;
+      return children;
+    });
+    const running = () => dom.query(".sidebar-footer-bar__home .session-glyph__ring") !== null;
+    sessions.publishList({
+      agentId: "main",
+      result: {
+        ...result,
+        sessions: [{ key, kind: "direct", childSessions: [childKey], hasActiveSubagentRun: true }],
+      },
+    });
+    await sidebar.updateComplete;
+    expect(running()).toBe(false);
+
+    for (const status of ["queued", "running", "done"] as const) {
+      const ts = children.ts + 1;
+      children = {
+        ...result,
+        ts,
+        count: 1,
+        sessions: [
+          {
+            key: childKey,
+            sessionId: childKey,
+            kind: "direct",
+            spawnedBy: key,
+            status,
+            updatedAt: ts,
+          },
+        ],
+      };
+      firstRead.resolve(result);
+      await sessions.sessions.refreshList({ ...childWindow, force: true });
+      await sidebar.sessionData.loadChildSessions(key);
+      await sidebar.updateComplete;
+      expect(sidebar.sessionData.childSessionRowsByParent[key]?.[0]?.status).toBe(status);
+      expect(running(), status).toBe(status === "running");
+    }
   });
 
   it("pins and unpins sessions personally without sessions.patch", async () => {
@@ -312,46 +326,6 @@ describe("personal navigation rail", () => {
     await sidebar.updateComplete;
     expect(
       rail(sidebar, "session-rail:agent:main:mine")!.querySelector(".session-glyph__ring"),
-    ).toBeNull();
-  });
-
-  it("keeps a session shortcut's identity with only running and unread decorations", async () => {
-    const { sidebar, sessions, publish, dom } = await fixture();
-    const key = "agent:main:mine";
-    publish(
-      {
-        label: "Release Notes",
-        icon: "📝",
-        hasActiveRun: true,
-        status: "running",
-        unread: true,
-        agentStatus: {
-          note: "Waiting for input",
-          attention: "key",
-          expiresAt: Date.now() + 60_000,
-        },
-        worktree: { id: "wt-notes", branch: "docs/notes", repoRoot: "/repo" },
-      },
-      key,
-    );
-    sessions.sessions.setPullRequestSummary(key, { numbers: [1], state: "open" });
-    await update(sidebar, { storedOutboxes: outbox(key), sidebarEntries: [`session-rail:${key}`] });
-    const row = dom.query(`[data-session-key="${key}"]`)!;
-    expect(
-      domProbe(row).present(
-        ".sidebar-session-attention__icon",
-        ".session-row-badge--attention",
-        ".session-row-badge--draft",
-      ),
-    ).toEqual([true, true, true]);
-    const pin = dom.query(`.sidebar-rail [data-sidebar-entry="session-rail:${key}"]`)!;
-    expect(pin.querySelector(".session-glyph__emoji")?.textContent).toBe("📝");
-    expect(pin.querySelectorAll(".session-glyph__ring")).toHaveLength(1);
-    expect(pin.querySelectorAll(".session-glyph__badge--unread")).toHaveLength(1);
-    expect(
-      pin.querySelector(
-        ".sidebar-session-attention__icon, .session-row-badges, [data-pull-request-state], .session-owner-chip",
-      ),
     ).toBeNull();
   });
 

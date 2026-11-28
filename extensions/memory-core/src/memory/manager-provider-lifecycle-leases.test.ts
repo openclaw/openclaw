@@ -28,7 +28,7 @@ type LifecycleFields = {
   db: DatabaseSync;
   computeProviderKey: () => string;
   ensureProviderInitialized: () => Promise<void>;
-  markLocalEmbeddingProviderDegraded: (err: unknown) => void;
+  markEmbeddingProviderFailure: (err: unknown) => void;
   activateFallbackProvider: (reason: string) => Promise<boolean>;
   beginSyncProviderGeneration: () => void;
   endSyncProviderGeneration: () => void;
@@ -72,7 +72,7 @@ describe("memory index", () => {
     assert.ok(fields.provider, "Expected a test embedding provider");
     fields.provider.id = "local";
     fields.providerKey = fields.computeProviderKey();
-    fields.markLocalEmbeddingProviderDegraded(providerFixture.createLocalWorkerExitError());
+    fields.markEmbeddingProviderFailure(providerFixture.createLocalWorkerExitError());
     await vi.waitFor(() => {
       expect(fields.provider).toBeNull();
       expect(providerFixture.providerCloseCalls).toBe(1);

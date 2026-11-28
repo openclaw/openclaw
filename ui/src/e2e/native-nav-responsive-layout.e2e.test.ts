@@ -82,31 +82,51 @@ suite.define(() => {
     expect(metrics).toEqual({ bodyScrollTop: 0, htmlScrollTop: 0, rootScrollY: 0 });
   });
 
-  it.each([false, true])("keeps compact chat search reachable (phone: %s)", async (phone) => {
-    const page = await openPage(
-      phone ? { hasTouch: true, height: 852, phone, width: 393 } : { width: 900 },
-    );
-    if (phone) {
-      await shellHas(page, "shell--mobile-nav");
-    }
-    await shellHas(page, "shell--merged-chat-chrome");
-    await expect.poll(() => page.locator(".topbar").isVisible()).toBe(false);
+  it.each([false, true])(
+    "keeps the compact chat drawer free of rail search (phone: %s)",
+    async (phone) => {
+      const page = await openPage(
+        phone ? { hasTouch: true, height: 852, phone, width: 393 } : { width: 900 },
+      );
+      if (phone) {
+        await shellHas(page, "shell--mobile-nav");
+      }
+      await shellHas(page, "shell--merged-chat-chrome");
+      await expect.poll(() => page.locator(".topbar").isVisible()).toBe(false);
 
-    const header = page.locator(".agent-chat__header--mobile").filter({ visible: true });
-    const drawerButton = header.getByRole("button", { name: "Expand sidebar" });
-    await drawerButton.waitFor({ state: "visible" });
-    await expect.poll(() => header.locator(".chat-pane__palette-open").count()).toBe(0);
-    await (phone ? drawerButton.tap() : drawerButton.click());
-    await shellHas(page, "shell--nav-drawer-open");
-    const drawerSearch = page.locator(".shell-nav .sidebar-brand__search");
-    await expect.poll(() => drawerSearch.isVisible()).toBe(true);
-    await (phone ? drawerSearch.tap() : drawerSearch.click());
-    const paletteInput = page.locator(".cmd-palette__input");
-    await paletteInput.waitFor({ state: "visible" });
-    if (phone) {
-      await expect.poll(() => paletteInput.evaluate((input) => input.matches(":focus"))).toBe(true);
-    }
-  });
+      const header = page.locator(".agent-chat__header--mobile").filter({ visible: true });
+      const drawerButton = header.getByRole("button", { name: "Expand sidebar" });
+      await drawerButton.waitFor({ state: "visible" });
+      await expect.poll(() => header.locator(".chat-pane__palette-open").count()).toBe(0);
+      await (phone ? drawerButton.tap() : drawerButton.click());
+      await shellHas(page, "shell--nav-drawer-open");
+
+      // #203440 hides the desktop-only rail control on every mobile page, so the drawer is
+      // no longer a search surface. The count guard keeps this from passing on a page that
+      // failed to render; the hiding mechanism itself is covered by
+      // form-controls.browser.test.ts, so this only asserts the observable result.
+      const drawerSearch = page.locator(".shell-nav .sidebar-brand__search");
+      await expect.poll(() => drawerSearch.count()).toBe(1);
+      expect(await drawerSearch.isVisible()).toBe(false);
+
+      // The open drawer traps focus and swallows the palette chord on purpose
+      // (`handleNavDrawerKeydown`), so the search case no longer reaches the palette from
+      // inside it. Close the drawer and prove the palette chord still works, so this case
+      // fails if the rail change also took the palette away.
+      await page.keyboard.press("Escape");
+      await shellHas(page, "shell--nav-drawer-open", false);
+      await page.keyboard.press(
+        (await page.evaluate(() => navigator.platform)).startsWith("Mac") ? "Meta+k" : "Control+k",
+      );
+      const paletteInput = page.locator(".cmd-palette__input");
+      await paletteInput.waitFor({ state: "visible" });
+      if (phone) {
+        await expect
+          .poll(() => paletteInput.evaluate((input) => input.matches(":focus")))
+          .toBe(true);
+      }
+    },
+  );
 
   it.each([
     { width: 852, height: 393, atomicMoves: true },

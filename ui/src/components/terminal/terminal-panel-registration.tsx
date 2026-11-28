@@ -34,14 +34,6 @@ function ownerFor(host: Host) {
   ] as const) {
     Object.defineProperty(host, key, { configurable: true, get: () => owner[key] });
   }
-  const bridgePrototype = Object.getPrototypeOf(host);
-  Object.defineProperty(host, "updateComplete", {
-    configurable: true,
-    get: () =>
-      Promise.resolve(Reflect.get(bridgePrototype, "updateComplete", host)).then(
-        () => owner.updateComplete,
-      ),
-  });
   return owner;
 }
 const styles = `${dockStyles}\n${tabStyles}\n${terminalStyles}`;
@@ -76,6 +68,7 @@ export const TerminalPanelHost = defineSolidBridge<TerminalInputs, TerminalPanel
       routeTarget: { default: null, attribute: false },
     },
     propertyChanged: (host, key) => owners.get(host)?.inputsChanged(key),
+    updateComplete: (host) => owners.get(host)?.updateComplete,
     methods: {
       activateTerminalHost: (host) => ownerFor(host).activateTerminalHost(),
       toggle: (host) => ownerFor(host).toggle(),

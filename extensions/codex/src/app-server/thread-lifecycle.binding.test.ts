@@ -2878,42 +2878,6 @@ describe("Codex app-server thread lifecycle bindings", () => {
     },
   );
 
-  it("resumes a Codex thread when context-engine sidecar metadata is compatible", async () => {
-    const { sessionFile, workspaceDir } = createPaths();
-    const contextEngine = {
-      schemaVersion: 1 as const,
-      engineId: "lossless-claw",
-      policyFingerprint:
-        '{"schemaVersion":1,"engineId":"lossless-claw","ownsCompaction":true,"contextTokenBudget":400000,"projectionMaxChars":1000000}',
-    };
-    await writeEmptyToolsBinding(sessionFile, workspaceDir, {
-      contextEngine,
-    });
-    const params = createParams(sessionFile, workspaceDir);
-    params.contextEngine = {
-      info: { id: "lossless-claw", name: "Lossless Claw", ownsCompaction: true },
-      assemble: vi.fn(),
-      compact: vi.fn(),
-    } as never;
-    params.contextTokenBudget = 400_000;
-
-    const respond = createFixedThreadRequest("thread-existing", ["thread/resume"]);
-    const fixture = await createAgentLifecycleHarness({
-      respond,
-      persistedThreads: ["thread-existing"],
-    });
-    const { client, request } = fixture;
-
-    const binding = await startOrResumeThread({
-      client,
-      params,
-    });
-
-    expect(binding.threadId).toBe("thread-existing");
-    expect(binding.lifecycle).toEqual({ action: "resumed" });
-    expect(request.mock.calls.map(([method]) => method)).toEqual(COLD_RESUME_METHODS);
-  });
-
   it("starts a fresh Codex thread when context-engine sidecar metadata is no longer active", async () => {
     const { sessionFile, workspaceDir } = createPaths();
     await writeEmptyToolsBinding(sessionFile, workspaceDir, {

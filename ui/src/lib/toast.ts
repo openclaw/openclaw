@@ -1,4 +1,5 @@
 import type { AgentIdentity } from "./identity-avatar-view.ts";
+import { acquireNativeOverlayCutouts } from "./native-overlay-occlusion.ts";
 import { listen } from "./reactive/listener.ts";
 
 type ToastDismissReason = "action" | "dismiss" | "disconnected" | "replaced" | "timeout";
@@ -131,6 +132,7 @@ class ToastOwner {
   private publishPending = false;
   private homeLayer: HTMLElement | undefined;
   private stopPlacementSync: (() => void) | undefined;
+  private releaseCutouts: (() => void) | undefined;
 
   laneElement(lane: ToastLane, element: HTMLElement | undefined) {
     if (element) {
@@ -249,6 +251,8 @@ class ToastOwner {
     this.stopPlacementSync?.();
     this.stopPlacementSync = undefined;
     connectedHosts.delete(this.host);
+    this.releaseCutouts?.();
+    this.releaseCutouts = undefined;
     if (this.host.closest("openclaw-modal-dialog") && this.restorePresentationLayer()) {
       return;
     }
@@ -431,8 +435,14 @@ class ToastOwner {
     // containing block so fixed toast coordinates still refer to the viewport.
     if (this.host.toasts.length > 0) {
       this.host.showPopover();
+      this.releaseCutouts ??= acquireNativeOverlayCutouts(() => [
+        ...this.host.getElementsByClassName("app-toast"),
+        ...this.host.getElementsByClassName("app-toast__dismiss"),
+      ]);
     } else {
       this.host.hidePopover();
+      this.releaseCutouts?.();
+      this.releaseCutouts = undefined;
     }
   }
 

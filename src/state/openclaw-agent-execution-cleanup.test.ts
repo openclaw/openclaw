@@ -37,6 +37,7 @@ function cleanup() {
         coordinationKey: "file:synthetic-state",
         databasePath: sharedStatePath,
         identity: { key: "file:synthetic-state", canonicalPath: sharedStatePath },
+        isCurrent: () => true,
         assertCurrent() {},
       },
     },
@@ -178,6 +179,7 @@ it.each(["current", "replaced", "revoked"] as const)(
         lastCompletedAtMs: 1,
         consecutiveBlocked: 0,
         warning: false,
+        bytePressure: false,
       },
     };
     const lease = {
@@ -232,6 +234,7 @@ it.each(["current", "replaced", "revoked"] as const)(
           coordinationKey: shared.key,
           databasePath: statePath,
           identity: shared,
+          isCurrent: () => true,
           assertCurrent() {},
         },
       },

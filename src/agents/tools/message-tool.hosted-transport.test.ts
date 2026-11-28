@@ -148,8 +148,11 @@ it("dispatches a hosted message action without connecting to either Gateway endp
           sessionKey,
           operationalRunInstance,
           gatewayContextResolver: () => context,
-          receiptAuthority: () =>
-            runs.getActiveAgentRunDelegatedAuthority(operationalRunInstance) === authority,
+          receiptAuthority: () => {
+            if (runs.getActiveAgentRunDelegatedAuthority(operationalRunInstance) !== authority) {
+              throw new Error("agent tool caller authority is no longer active");
+            }
+          },
         },
         () =>
           selectedTool.execute("hosted-reaction", {

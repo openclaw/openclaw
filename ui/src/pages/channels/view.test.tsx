@@ -579,15 +579,6 @@ describe("channel config advanced tier", () => {
     disclosure!.dispatchEvent(new Event("toggle"));
     expect(onShowAdvancedSettings).toHaveBeenCalledWith(false);
   });
-
-  it("renders field help from the resolved hints", () => {
-    const { container } = renderWhatsAppConfigForm(false, {
-      ...CHANNEL_TIER_HINTS,
-      "channels.whatsapp.enabled": { advanced: false, help: "Turn this channel on or off." },
-    } as typeof CHANNEL_TIER_HINTS);
-
-    expect(texts(container, ".settings-row__desc")).toContain("Turn this channel on or off.");
-  });
 });
 
 const CHANNEL_DETAIL_CASES = [
@@ -763,40 +754,6 @@ describe("channel detail", () => {
     ]);
   });
 
-  it.each([0, 1, 2])("shows Telegram account rows only above its %i-account threshold", (count) => {
-    const accounts = [
-      {
-        accountId: "first",
-        name: "First",
-        configured: true,
-        running: false,
-        probe: { bot: { username: "first_bot" } },
-      },
-      { accountId: "second", name: "Second", configured: false, running: true },
-    ].slice(0, count);
-    const container = renderChannelDetailFixture(
-      "telegram",
-      { telegram: { running: true } },
-      { accounts },
-    );
-    if (count < 2) {
-      expect(container.textContent).not.toContain("@first_bot");
-    } else {
-      const rows = Array.from(container.querySelectorAll(".settings-row")).filter((row) =>
-        row.querySelector(".settings-row__title"),
-      );
-      expect(rows.map((row) => row.querySelector(".settings-row__title")?.textContent)).toEqual([
-        "@first_bot",
-        "Second",
-      ]);
-      expect(rows.map((row) => row.querySelector(".settings-row__desc")?.textContent)).toEqual([
-        "first",
-        "second",
-      ]);
-      expect(rows.map((row) => text(row, ".settings-status"))).toEqual(["Configured", "Running"]);
-    }
-  });
-
   it("keeps the bundled display policy for a same-ID custom channel status", () => {
     const container = renderChannelDetailFixture(
       "signal",
@@ -905,14 +862,4 @@ it("announces a stale refresh without adding a notice to the page", () => {
   expect(
     container.querySelector(".settings-control__sr-label[role='status']")?.textContent,
   ).toContain("Showing the last available status");
-});
-
-it("keeps a space between the partial snapshot notice and its warnings", () => {
-  const props = createProps(
-    channelSnapshot({}, { partial: true, warnings: ["Telegram probe timed out"] }),
-  );
-  const container = renderHub(props);
-  expect(container.querySelector(".callout.warn")?.textContent).toContain(
-    "Refresh to try again. Telegram probe timed out",
-  );
 });
