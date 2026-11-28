@@ -42,7 +42,7 @@ it.each<
     expect(stored?.state.nextRunAtMs).toBeUndefined();
     expect(stored).toMatchObject({
       enabled: false,
-      state: { consecutiveErrors: priorFailures + 1 },
+      state: { consecutiveErrors: priorFailures + 1, oneShotEnded: true },
     });
     expect(stored?.state.autoDisabled).toBeUndefined();
     expect(f.runCronFailureRepair).not.toHaveBeenCalled();
@@ -67,6 +67,7 @@ it.each([true, false])(
       await f.cron.run(job.id, "force");
       const stored = await f.cron.readJob(job.id);
       expect(stored?.enabled).toBe(enabled);
+      expect(stored?.state.oneShotEnded).toBeUndefined();
       expect(stored?.state.autoDisabled).toBeUndefined();
       expect(f.enqueueSessionEvent).not.toHaveBeenCalled();
       // An ordinary first-failure alert, not a terminal auto-disable notice.

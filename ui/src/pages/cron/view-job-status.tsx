@@ -1,7 +1,6 @@
 import type { CronJob } from "../../api/types.ts";
 import { Icon } from "../../components/solid/icon.tsx";
 import { isCronJobRunning } from "../../lib/cron-status.ts";
-import { automationGroup } from "../../lib/cron/automation-groups.ts";
 import { hasUnchangedCronSchedule } from "../../lib/cron/form-schedule.ts";
 import type { CronFormState } from "../../lib/cron/types.ts";
 import { formatUiExternalText } from "../../lib/format-error.ts";
@@ -30,7 +29,7 @@ export function describeJobNextRun(job: CronJob, absolute = false): string {
     return t("cron.attention.noNextRun");
   }
   if (!job.enabled) {
-    return automationGroup(job) === "history" ? t("cron.form.noNextRun") : t("cron.list.paused");
+    return job.state.oneShotEnded === true ? t("cron.form.noNextRun") : t("cron.list.paused");
   }
   const waiting = job.state?.admissionDeferred;
   if (waiting) {

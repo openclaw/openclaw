@@ -165,6 +165,14 @@ describe("Gateway legacy heartbeat projection lifecycle", () => {
       "cron-result-broadcast",
       async (service) => {
         const job = projectionJob("projection-result", Date.now());
+        job.schedule = { kind: "at", at: new Date(job.createdAtMs).toISOString() };
+        job.enabled = false;
+        job.deleteAfterRun = false;
+        job.state = {
+          lastRunAtMs: job.createdAtMs,
+          lastRunStatus: "ok",
+          oneShotEnded: true,
+        };
         job.state.lastTriggerEvalAtMs = job.createdAtMs - 1_000;
         runCronSessionTurnMock.mockResolvedValue({
           status: "ok",
@@ -182,6 +190,7 @@ describe("Gateway legacy heartbeat projection lifecycle", () => {
           state: {
             lastDurationMs: expect.any(Number),
             lastTriggerEvalAtMs: job.state.lastTriggerEvalAtMs,
+            oneShotEnded: true,
             lastMeaningfulResult: {
               outcome: "blocked",
               summary: "Waiting for release approval.",

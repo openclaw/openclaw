@@ -2,12 +2,9 @@ import type { JSX } from "@solidjs/web";
 import { createMemo, createSignal, For, latest, onSettled, Show } from "solid-js";
 import type { CronCompactJob } from "../api/types.ts";
 import { pathForRoute } from "../app-route-paths.ts";
+import { readGatewayOperatorAccess } from "../app/operator-access.ts";
 import { registerCronEnglish } from "../i18n/locales/en-cron.ts";
-import {
-  automationGroup,
-  automationGroups,
-  type AutomationGroup,
-} from "../lib/cron/automation-groups.ts";
+import { automationGroups, type AutomationGroup } from "../lib/cron/automation-groups.ts";
 import { automationsFilter } from "../lib/cron/automations-filter.ts";
 import { isCronInventoryInvalidation } from "../lib/cron/inventory-connection.ts";
 import { readCronInventory } from "../lib/cron/inventory.ts";
@@ -35,10 +32,12 @@ const formatTimeToday = createMsFormatter({ hour: "numeric", minute: "2-digit" }
 const formatLaterDay = createMsFormatter({ month: "short", day: "numeric" });
 
 /** When it runs next, then how often: "Today 5:05 PM · Every 20 minutes", "Nov 21 · Weekly",
-    or the last run for a retained one-shot. */
+    or the last run for an ended one-shot. */
 function automationByline(job: CronCompactJob, group: AutomationGroup): string {
   if (group === "history") {
-    return t("cron.jobState.lastRunAt", { at: formatLastRun(job.lastRunAtMs) });
+    return job.lastRunAtMs == null
+      ? t("cron.form.noNextRun")
+      : t("cron.jobState.lastRunAt", { at: formatLastRun(job.lastRunAtMs) });
   }
   const cadence = job.schedule ? formatCronCadence({ schedule: job.schedule }) : undefined;
   const nextMs = job.enabled ? job.nextRunAtMs : undefined;
@@ -162,7 +161,7 @@ export function SidebarAutomations(props: {
     const rows: Record<AutomationGroup, CronCompactJob[]> = { active: [], paused: [], history: [] };
     const status = automationsFilter().status;
     for (const job of shown()) {
-      const group = automationGroup(job);
+      const group = job.enabled ? "active" : job.oneShotEnded ? "history" : "paused";
       if (status === "all" || status === group) {
         rows[group].push(job);
       }
@@ -227,18 +226,20 @@ export function SidebarAutomations(props: {
           </InlineAlert>
         )}
       </Show>
-      <a
-        class="nav-item sidebar-automations__new"
-        href={`${cronPath()}?new`}
-        onClick={(event) =>
-          handleNavigationClick(event, () => props.host.onNavigate?.("cron", { search: "?new" }))
-        }
-      >
-        <span class="nav-item__icon" aria-hidden="true">
-          <Icon name="plus" />
-        </span>
-        <span class="nav-item__text">{t("cron.list.newTask")}</span>
-      </a>
+      <Show when={readGatewayOperatorAccess(gateway.read().snapshot).canAdmin}>
+        <a
+          class="nav-item sidebar-automations__new"
+          href={`${cronPath()}?new`}
+          onClick={(event) =>
+            handleNavigationClick(event, () => props.host.onNavigate?.("cron", { search: "?new" }))
+          }
+        >
+          <span class="nav-item__icon" aria-hidden="true">
+            <Icon name="plus" />
+          </span>
+          <span class="nav-item__text">{t("cron.list.newTask")}</span>
+        </a>
+      </Show>
       <a
         class={["nav-item", { "nav-item--active": activityCurrent() }]}
         href={`${cronPath()}?activity`}
@@ -256,16 +257,16 @@ export function SidebarAutomations(props: {
       </a>
       <For each={automationGroups}>
         {(group) => {
-          const [open, setOpen] = createSignal(
-            () => group === "active" || automationsFilter().status === group,
-          );
+          const [open, setOpen] = createSignal(group === "active");
+          const filtered = () => automationsFilter().status === group;
+          const [shownOpen, setShownOpen] = createSignal(() => filtered() || open());
           return (
             <Show when={groups()[group].length > 0}>
               <SidebarListGroup
                 label={t(`cron.tabs.${group}`)}
                 indicator={groupFailureIndicator(groups()[group])}
-                open={open()}
-                onToggle={() => setOpen((value) => !value)}
+                open={shownOpen()}
+                onToggle={() => (filtered() ? setShownOpen : setOpen)(!shownOpen())}
               >
                 <For each={groups()[group]} keyed={(job) => job.id}>
                   {(job) => <Row job={job()} group={group} />}

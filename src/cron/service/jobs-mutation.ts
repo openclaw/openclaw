@@ -140,6 +140,13 @@ export function finalizeUpdatedJob(params: {
         delete nextJob.state.runningScheduleChangeId;
       }
     }
+    if (
+      !isDeepStrictEqual(job.schedule, nextJob.schedule) ||
+      nextJob.state.nextRunAtMs !== undefined ||
+      (isJobEnabled(nextJob) && nextJob.schedule.kind === "on-exit")
+    ) {
+      delete nextJob.state.oneShotEnded;
+    }
   } else if (isJobEnabled(nextJob) && !hasScheduledNextRunAtMs(nextJob.state.nextRunAtMs)) {
     nextJob.state.nextRunAtMs = computeJobNextRunAtMs(nextJob, now);
   }

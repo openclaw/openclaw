@@ -520,6 +520,7 @@ type CronJobStateInput = Partial<
     | "autoDisabled"
     | "admissionDeferred"
     | "scheduleActivatedAtMs"
+    | "oneShotEnded"
     | "streamSourceIdentity"
     | "sourceIdentity"
     | "runningReceiptId"

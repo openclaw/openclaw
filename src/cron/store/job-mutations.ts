@@ -298,6 +298,9 @@ export function planCronJobMutation(
         streamRestartExhaustedRequested: mutation.patch.state?.streamRestartExhausted === true,
         isJobActive: () => previousJob?.state.runningAtMs !== undefined,
       });
+      if (options.watchedCommandExited) {
+        nextJob.state.oneShotEnded = true;
+      }
     }
     if (previousJob?.pluginCommand !== undefined) {
       // Disable preserves the original envelope, requester authority, and attempt count.

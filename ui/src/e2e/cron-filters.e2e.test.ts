@@ -173,6 +173,7 @@ suite.define(() => {
       await page.goto(`${suite.server.baseUrl}cron`);
       await page.locator(".cron-overview-empty").waitFor();
       await expectCount(page, '[data-test-id="cron-new-task"]', 0);
+      await expectCount(page, '.sidebar-automations a[href*="?new"]', 0);
 
       await openAutomation(page, readOnlyJob.id);
       await page.getByRole("note").filter({ hasText: "owner with automation access" }).waitFor();

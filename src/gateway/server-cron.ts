@@ -641,6 +641,7 @@ export function buildGatewayCronService(params: {
         try {
           // Consume an already-owned exit during drain without admitting a new payload.
           await cron.updateWithPrecondition(job.id, { enabled: false }, completionToken, {
+            watchedCommandExited: true,
             commitGuard: controls.commitGuard,
           });
           controls.onReserved();

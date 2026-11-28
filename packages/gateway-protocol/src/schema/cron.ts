@@ -450,6 +450,8 @@ export const CronJobStateSchema = closedObject({
     }),
   ),
   scheduleActivatedAtMs: Type.Optional(CronDateTimestampMsSchema),
+  /** The scheduler consumed the retained timed occurrence or watched command exit. */
+  oneShotEnded: Type.Optional(Type.Literal(true)),
   runningAtMs: Type.Optional(CronDateTimestampMsSchema),
   lastRunAtMs: Type.Optional(CronDateTimestampMsSchema),
   lastMeaningfulResult: Type.Optional(AutomationLastMeaningfulResultSchema),
@@ -488,6 +490,7 @@ const CronJobStatePatchSchema = closedObject(
   Type.Omit(CronJobStateSchema, [
     "admissionDeferred",
     "scheduleActivatedAtMs",
+    "oneShotEnded",
     "lastMeaningfulResult",
     "lastDiagnostics",
     "lastDiagnosticSummary",

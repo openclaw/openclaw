@@ -680,6 +680,8 @@ export type CronUpdateOptions = Pick<
   | "streamOperatorSource"
   | "sessionEntryCurrent"
 > & {
+  /** The watcher observed its command exit while the Gateway was draining. */
+  watchedCommandExited?: true;
   /** Parent incarnation recorded by `automations bind`; only fills an absent link. */
   bindSourceConversation?: NonNullable<CronStoredJob["sourceConversation"]>;
   /** Null forbids policy adoption; undefined retains in-process operator defaults. */

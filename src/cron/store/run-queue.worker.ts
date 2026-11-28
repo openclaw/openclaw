@@ -29,6 +29,7 @@ import { retainManualOneShotOccurrence } from "../service/one-shot-schedule.js";
 import type { CronJob, CronStoredJob } from "../types.js";
 import { hasCanonicalCronDeliveryMode } from "./delivery-codec.js";
 import { readCronEventClaimInDatabase, transferCronEventInDatabase } from "./event-ingress.js";
+import { restoreLegacyTimedEnds } from "./legacy-one-shot-receipts.js";
 import { loadedCronStoreFromRows, loadCronRows, updateCronRuntimeRow } from "./row-codec.js";
 import { recordSkippedCronRequestInDatabase } from "./run-history.kernel.js";
 import {
@@ -162,6 +163,14 @@ function requestCronRunsInDatabase(
     accepted: [],
     rejected: [],
   };
+  // A manual rerun can replace the last-run timestamp used to recognize an older occurrence.
+  restoreLegacyTimedEnds(
+    db,
+    input.storeKey,
+    input.requests.flatMap((request) =>
+      request.mode === "force" ? (jobs.get(request.jobId) ?? []) : [],
+    ),
+  );
   for (const request of input.requests) {
     const job = jobs.get(request.jobId);
     const timed = parseCronScheduledRunId(request.receiptId);
@@ -296,6 +305,8 @@ function requestCronRunsInDatabase(
       job.enabled = false;
       job.updatedAtMs = input.nowMs;
       job.state.scheduleActivatedAtMs = input.nowMs;
+      // Record the watched command’s exit in the same write that disarms it.
+      job.state.oneShotEnded = true;
       delete job.state.nextRunAtMs;
       delete job.state.startupCatchupAtMs;
       delete job.state.pacedNextRunAtMs;

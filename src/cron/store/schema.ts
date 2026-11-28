@@ -9,6 +9,8 @@ type CronStoreDatabase = Pick<
   OpenClawStateKyselyDatabase,
   | "cron_job_scratch"
   | "cron_jobs"
+  | "cron_run_receipts"
+  | "task_runs"
   | "operator_approval_standing_grants"
   | "operator_approval_standing_grant_generations"
 >;

@@ -69,6 +69,9 @@ export function markInterruptedStartupRun(params: {
 
   // An uncertain started one-shot is never replayed; a distinct replacement keeps its slot.
   if (job.schedule.kind === "at" && replacementAtMs === undefined) {
+    if (job.enabled) {
+      job.state.oneShotEnded = true;
+    }
     job.enabled = false;
   }
 

@@ -210,13 +210,16 @@ describe("automations output contract", () => {
     expectOutput(tool, result.details);
   });
 
-  it("accepts the reauthorization flags that Gateway projections emit", async () => {
+  it("accepts the ended and reauthorization flags that Gateway projections emit", async () => {
     const { storePath } = await makeStorePath();
     const cron = createCronService(storePath);
     onTestFinished(() => cron.stop());
     const ownerSessionKey = "agent:main:telegram:direct:creator";
     const blocked: CronJob = {
       ...job,
+      enabled: false,
+      schedule: { kind: "at", at: new Date(1000).toISOString() },
+      state: { oneShotEnded: true },
       id: "dm-capped-watcher",
       sessionTarget: "isolated",
       payload: { kind: "agentTurn", message: "Check the queue", toolsAllow: ["read"] },
@@ -230,7 +233,10 @@ describe("automations output contract", () => {
     };
     const compactList = { ...source, jobs: projectCronListJobs(cron, source, true) };
     const details = cronJobReadView(blocked);
-    expect(compactList.jobs[0]).toMatchObject({ reauthorizationRequired: true });
+    expect(compactList.jobs[0]).toMatchObject({
+      oneShotEnded: true,
+      reauthorizationRequired: true,
+    });
     expect(details).toMatchObject({ reauthorizationRequired: true });
     const gatewayCall = vi
       .fn()

@@ -204,6 +204,8 @@ it("offers the shared automation filters in the native embedded list", async () 
     const filter = [...page.querySelectorAll<HTMLButtonElement>("button")].find(
       (button) => button.getAttribute("aria-label") === "Filters",
     );
+    page.querySelector<HTMLButtonElement>('[role="group"][aria-label="Paused"] button')!.click();
+    await waitForSolid(() => expect(page.querySelector('a[href*="?job=paused"]')).not.toBeNull());
     expect(filter).toBeDefined();
     filter!.click();
     await waitForSolid(() =>
@@ -219,11 +221,14 @@ it("offers the shared automation filters in the native embedded list", async () 
       expect(page.querySelector('.sidebar-automations a[href*="?job=paused"]')).not.toBeNull();
       expect(document.activeElement).toBe(filter);
     });
+    page.querySelector<HTMLButtonElement>('[role="group"][aria-label="Paused"] button')!.click();
+    await waitForSolid(() => expect(page.querySelector('a[href*="?job=paused"]')).toBeNull());
     filter!.click();
     await waitForSolid(() => expect(getButtonByText(document.body, "Reset")).toBeDefined());
     getButtonByText(document.body, "Reset").click();
     await waitForSolid(() => {
       expect(page.querySelector('.sidebar-automations a[href*="?job=active"]')).not.toBeNull();
+      expect(page.querySelector('a[href*="?job=paused"]')).not.toBeNull();
       expect(document.activeElement).toBe(filter);
     });
   } finally {

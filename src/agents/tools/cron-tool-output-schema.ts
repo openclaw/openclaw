@@ -60,6 +60,7 @@ const CompactCronJobSchema = closedObject({
   lastRunStatus: Type.Union([...job.lastRunStatus.anyOf, Type.Null()]),
   lastRunError: nullableString,
   runningAtMs: job.state.properties.runningAtMs,
+  oneShotEnded: job.state.properties.oneShotEnded,
   lastDurationMs: job.state.properties.lastDurationMs,
   lastTriggerEvalAtMs: job.state.properties.lastTriggerEvalAtMs,
   lastMeaningfulResult: job.state.properties.lastMeaningfulResult,

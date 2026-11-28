@@ -327,6 +327,19 @@ export function applyJobResult(
         });
       }
     }
+    if (ownsSchedule && job.schedule.kind === "at") {
+      if (job.enabled && job.state.nextRunAtMs !== undefined) {
+        delete job.state.oneShotEnded;
+      } else if (
+        previousScheduleState.enabled &&
+        !preserveOneShotSchedule &&
+        !job.enabled &&
+        !job.state.autoDisabled &&
+        !result.parentUnavailable
+      ) {
+        job.state.oneShotEnded = true;
+      }
+    }
     return shouldDelete;
   };
 

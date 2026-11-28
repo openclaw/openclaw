@@ -115,6 +115,7 @@ export function toCronBroadcastEvent(evt: CronEvent) {
               "lastRunStatus",
               "lastStatus",
               "runningAtMs",
+              "oneShotEnded",
               "autoDisabled",
             ]),
           },

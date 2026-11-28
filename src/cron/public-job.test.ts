@@ -20,6 +20,7 @@ describe("toPublicCronJob", () => {
     const state = {
       nextRunAtMs: 2_000,
       queuedAtMs: 1_900,
+      oneShotEnded: true,
       runningReceiptId: "pending-receipt",
       startupCatchupAtMs: 2_000,
       pacedNextRunAtMs: 2_000,
@@ -39,6 +40,7 @@ describe("toPublicCronJob", () => {
     expect(result).toMatchObject({ payload });
     expect(result.state).toStrictEqual({
       nextRunAtMs: 2_000,
+      oneShotEnded: true,
       triggerState: { revision: 1 },
     });
   });

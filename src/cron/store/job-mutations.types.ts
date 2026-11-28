@@ -27,6 +27,7 @@ type CronJobMutationOptions = Pick<
 > & {
   scheduledToolPolicy?: CronScheduledToolPolicy | null;
   bindSourceConversation?: NonNullable<CronStoredJob["sourceConversation"]>;
+  watchedCommandExited?: true;
   captured: boolean;
   runtimeAuthority?: CronRuntimeAuthority;
 };
