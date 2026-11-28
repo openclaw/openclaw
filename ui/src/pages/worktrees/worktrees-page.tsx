@@ -34,7 +34,6 @@ import {
 import { sessionHubTabs, type SessionHubTab } from "../sessions/session-hub-tabs.ts";
 import "../../styles/settings.css";
 import "../../styles/hub-tabs.css";
-import "./worktree-row.css";
 import { WorktreeReferenceChoice } from "./reference-choice.tsx";
 import { WorktreesModel } from "./worktrees-model.ts";
 
