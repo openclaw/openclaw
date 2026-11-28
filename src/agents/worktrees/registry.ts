@@ -1,9 +1,6 @@
 import { randomUUID } from "node:crypto";
-import {
-  executeSqliteQuerySync,
-  getNodeSqliteKysely,
-  sqliteStringSet,
-} from "../../infra/kysely-sync.js";
+import { withEngineStoreAdmission } from "../../infra/database-engine/admission-scope.js";
+import { executeSqliteQuerySync, getNodeSqliteKysely } from "../../infra/kysely-sync.js";
 import type { EngineConnection } from "../../infra/sql-connection.js";
 import { withStateDatabaseSchemaMaintenance } from "../../infra/state-database-maintenance.js";
 import {
@@ -27,9 +24,8 @@ import {
   captureWorktreeRunEndContext,
 } from "./run-end-lifecycle.js";
 import {
-  collectLiveRunLeases,
-  worktreeRunLeaseScope,
-  WORKTREE_REMOVING_LEASE_KEY,
+  prepareWorktreeRemovalClaimsCheck,
+  readLiveWorktreeRemovalToken,
 } from "./run-lease-owner.js";
 import { releaseWorktreeRunLeaseInDatabase } from "./run-lease-store.kernel.js";
 import type { ManagedWorktreeRecord, WorktreeWorkerAuthority } from "./types.js";
@@ -264,28 +260,11 @@ export function createWorktreeRemovalClaimsGuard(
   worktreeIds: readonly string[],
   token: string,
 ): () => void {
-  const ids = [...new Set(worktreeIds)];
-  const count = ids.length;
-  const scopes = sqliteStringSet(ids.map(worktreeRunLeaseScope));
+  const check = prepareWorktreeRemovalClaimsCheck(worktreeIds, token);
+  // Git and filesystem commit guards must synchronously verify the current durable claim.
   return () => {
-    if (count === 0) {
-      return;
-    }
-    const db = dbFor(env);
-    const held = executeSqliteQuerySync(
-      db,
-      kyselyFor(db)
-        .selectFrom("state_leases")
-        .select((eb) => eb.fn.countAll<number>().as("held"))
-        .where("state_leases.scope", "in", scopes)
-        .where("state_leases.lease_key", "=", WORKTREE_REMOVING_LEASE_KEY)
-        .where("state_leases.owner", "=", token),
-    ).rows[0]?.held;
-    if (held !== count) {
-      throw new WorktreeRemovalContentionError(
-        "busy",
-        "Worktree removal claim changed; checkout preserved",
-      );
+    if (check) {
+      withEngineStoreAdmission(() => check(dbFor(env)));
     }
   };
 }
@@ -319,13 +298,9 @@ export function assertWorktreeRemovalAvailable(
   worktreeId: string,
   ownToken?: string,
 ): void {
-  const db = dbFor(env);
-  const token = collectLiveRunLeases(
-    db,
-    kyselyFor(db),
-    worktreeRunLeaseScope(worktreeId),
-    false,
-  ).removingToken;
+  const token = withEngineStoreAdmission(() =>
+    readLiveWorktreeRemovalToken(dbFor(env), worktreeId),
+  );
   if (token !== undefined && token !== ownToken) {
     throw new WorktreeRemovalContentionError(
       "busy",

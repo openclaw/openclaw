@@ -1,5 +1,9 @@
 import { safeParseJsonRecord } from "@openclaw/normalization-core/json-coercion";
-import { executeSqliteQuerySync, getNodeSqliteKysely } from "../../infra/kysely-sync.js";
+import {
+  executeSqliteQuerySync,
+  getNodeSqliteKysely,
+  sqliteStringSet,
+} from "../../infra/kysely-sync.js";
 import type { EngineConnection } from "../../infra/sql-connection.js";
 import { isLockOwnerDefinitelyStale } from "../../infra/stale-lock-file.js";
 import type { DB } from "../../state/openclaw-state-db.generated.js";
@@ -94,6 +98,50 @@ function inspectRunLeases(
     liveCount,
     exclusive,
     ...(removingToken !== undefined ? { removingToken } : {}),
+  };
+}
+
+export function readWorktreeRemovalClaim(db: EngineConnection, worktreeId: string) {
+  return executeSqliteQuerySync(
+    db,
+    getNodeSqliteKysely<WorktreeLeaseDatabase>(db)
+      .selectFrom("state_leases")
+      .select(["owner", "payload_json"])
+      .where("scope", "=", worktreeRunLeaseScope(worktreeId))
+      .where("lease_key", "=", WORKTREE_REMOVING_LEASE_KEY),
+  ).rows[0];
+}
+
+export function readLiveWorktreeRemovalToken(db: EngineConnection, worktreeId: string) {
+  const claim = readWorktreeRemovalClaim(db, worktreeId);
+  return claim &&
+    !isLockOwnerDefinitelyStale({ payload: parseLeaseOwnerPayload(claim.payload_json) })
+    ? claim.owner
+    : undefined;
+}
+
+export function prepareWorktreeRemovalClaimsCheck(worktreeIds: readonly string[], token: string) {
+  const ids = [...new Set(worktreeIds)];
+  if (ids.length === 0) {
+    return undefined;
+  }
+  const scopes = sqliteStringSet(ids.map(worktreeRunLeaseScope));
+  return (db: EngineConnection) => {
+    const held = executeSqliteQuerySync(
+      db,
+      getNodeSqliteKysely<WorktreeLeaseDatabase>(db)
+        .selectFrom("state_leases")
+        .select((eb) => eb.fn.countAll<number>().as("held"))
+        .where("scope", "in", scopes)
+        .where("lease_key", "=", WORKTREE_REMOVING_LEASE_KEY)
+        .where("owner", "=", token),
+    ).rows[0]?.held;
+    if (held !== ids.length) {
+      throw new WorktreeRemovalContentionError(
+        "busy",
+        "Worktree removal claim changed; checkout preserved",
+      );
+    }
   };
 }
 
