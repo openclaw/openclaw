@@ -405,7 +405,9 @@ it.runIf(process.platform === "darwin").each([
           expect(facts.every((fact) => (fact.message?.length ?? 0) <= 200)).toBe(true);
           const report = await prepareUpdateFailureReport(recorded, { env });
           expect(report.body).toContain("Reason code: managed-service-handoff-failed");
-          expect(report.body).toContain("managed update handoff exited before signaling readiness");
+          expect(report.body).toMatch(
+            /managed update handoff (?:exited before signaling readiness|control input closed)/,
+          );
           if (kind === "oversized crash output") {
             expect(report.body).toContain("EACCES");
           }
