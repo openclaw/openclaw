@@ -18,6 +18,7 @@ public struct OpenClawChatView: View {
     @Environment(\.openClawChatFloatingHeader) private var floatingHeader
     @Environment(\.openClawChatComposerAccessory) private var composerAccessory
     @Environment(\.openClawChatShowsDisconnectNotice) private var showsDisconnectNotice
+    @Environment(\.openClawToastPresenter) private var toastPresenter
     @Environment(\.openClawChatStatusBarInset) private var statusBarInset
     @Environment(\.openClawChatInteractionsDisabled) private var interactionsDisabled
     @State private var scrollerBottomID = UUID()
@@ -479,7 +480,7 @@ extension OpenClawChatView {
     private func messageList(transcript: TranscriptPresentation) -> some View {
         let hasVisibleContent = !transcript.rows.isEmpty || self.hasVisibleTransientContent
         let notice = hasVisibleContent && !self.viewModel.isLoading && self.visibleEmptyAssistantIntro == nil
-            ? self.activeErrorText : nil
+            ? self.bannerText : nil
         let isWaitingForTranscript = self.showsCleanLoadingPlaceholder(hasVisibleContent: hasVisibleContent)
         return ZStack {
             self.messageListScrollContent(transcript: transcript, hasVisibleContent: hasVisibleContent)
@@ -528,15 +529,18 @@ extension OpenClawChatView {
                 self.jumpToLatestButton
             }
         }
+        .onChange(of: self.viewModel.errorText) { _, text in
+            self.postErrorToast(text, transcriptHasContent: hasVisibleContent)
+        }
         #if os(iOS)
         .modifier(ChatScrollCommandModifier(
-                command: self.$scrollCommand,
-                currentSessionTarget: { self.viewModel.currentSessionTarget },
-                shouldNavigate: { !self.scroll.readingPosition.isTurnRealized($0) }))
+            command: self.$scrollCommand,
+            currentSessionTarget: { self.viewModel.currentSessionTarget },
+            shouldNavigate: { !self.scroll.readingPosition.isTurnRealized($0) }))
         #else
-            .modifier(ChatScrollCommandModifier(
-                command: self.$scrollCommand,
-                currentSessionTarget: { self.viewModel.currentSessionTarget }))
+        .modifier(ChatScrollCommandModifier(
+            command: self.$scrollCommand,
+            currentSessionTarget: { self.viewModel.currentSessionTarget }))
         #endif
         // Ensure the message list claims vertical space on the first layout pass.
         .frame(maxHeight: .infinity, alignment: .top)
@@ -1268,6 +1272,23 @@ extension OpenClawChatView {
         return error
     }
 
+    /// Where an app shows toasts (the iPhone), a failure is a toast and the banner keeps only the
+    /// model's standing sign-in problem, which the composer's Model sign-in row acts on.
+    private var bannerText: String? {
+        guard self.toastPresenter != nil else { return self.activeErrorText }
+        let showsContextualSignIn = self.showsComposer && self.isDesktopLayout && self.composerChrome == .clean
+        return showsContextualSignIn ? nil : self.viewModel.composerModelAvailabilityMessage
+    }
+
+    private func postErrorToast(_ errorText: String?, transcriptHasContent: Bool) {
+        guard let presenter = self.toastPresenter,
+              let text = chatErrorToastText(errorText, transcriptHasContent: transcriptHasContent)
+        else { return }
+        presenter.post(.failure(text))
+        // Cleared so the same failure posts again next time.
+        self.viewModel.errorText = nil
+    }
+
     private var hasVisibleStreamingAssistantText: Bool {
         self.viewModel.liveAssistantTextShape.map {
             AssistantTextParser.hasVisibleContent(in: $0, includeThinking: self.displayOptions.contains(.reasoning))
@@ -1520,16 +1541,8 @@ extension OpenClawChatView {
         return self.displayOptions.contains(.toolActivity) && message.hasDisplayableToolActivity
     }
 
-    @ViewBuilder
     private func copyMessageButton(for message: OpenClawChatMessage) -> some View {
-        let text = ChatMessageVisibleText.copyText(in: message)
-        if !text.isEmpty {
-            Button {
-                ChatPasteboard.copy(text)
-            } label: {
-                chatActionLabel(Text("Copy Message"), systemImage: "doc.on.doc")
-            }
-        }
+        ChatCopyMessageMenuButton(text: ChatMessageVisibleText.copyText(in: message))
     }
 
     #if os(iOS)

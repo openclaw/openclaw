@@ -179,6 +179,18 @@ func chatErrorPresentation(
     return ("Something went wrong", error, "exclamationmark.triangle.fill", .orange)
 }
 
+/// What a toast says for the chat's failure text, or nil when it belongs somewhere else: an empty
+/// transcript shows it in place with Refresh, a lost connection has its own notice, and an outdated
+/// Gateway's missing plans are not something the person just did.
+func chatErrorToastText(_ errorText: String?, transcriptHasContent: Bool) -> String? {
+    guard transcriptHasContent,
+          let text = ChatPayloadDecoding.trimmedNonEmptyString(errorText),
+          !chatErrorIsDisconnected(text),
+          text != OpenClawChatTransportUpgradeMessage.progressCardAgentScope
+    else { return nil }
+    return text
+}
+
 /// The one width rule of the chat pane: a margin and a centred reading column derived from the
 /// measured pane width, shared by transcript rows, cards and the composer.
 struct ChatColumnLayout: Equatable {

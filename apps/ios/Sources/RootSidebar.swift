@@ -467,10 +467,12 @@ struct RootSidebar: View {
                     cornerRadius: OpenClawProMetric.controlRadius,
                     style: .continuous))
                 .accessibilityAddTraits(isGatewaySelected ? .isSelected : [])
+                .layoutPriority(1)
 
-                Spacer(minLength: 4)
+                Spacer(minLength: 0)
 
                 self.newChatButton
+                    .frame(minWidth: 44)
             }
         }
         .padding(.horizontal, 10)
@@ -744,7 +746,7 @@ struct RootSidebar: View {
                 }
                 await self.model.refreshSessions(appModel: self.appModel)
             } catch {
-                self.model.reportSessionError(error)
+                // The row's action already said what failed, in a toast with Try again.
             }
         }
     }
@@ -759,7 +761,11 @@ struct RootSidebar: View {
                 self.selectSidebarDestination(.chat)
                 await self.model.refreshSessions(appModel: self.appModel)
             } catch {
-                self.model.reportSessionError(error)
+                self.appModel.toasts.post(.failure(
+                    String(
+                        format: String(localized: "Couldn’t fork “%@”."),
+                        SessionPresentation.title(session)),
+                    retry: { self.forkSession(session) }))
             }
         }
     }

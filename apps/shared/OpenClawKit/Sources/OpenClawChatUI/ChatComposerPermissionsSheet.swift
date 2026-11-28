@@ -132,7 +132,12 @@ private struct ChatComposerPermissionsSheet: View {
             }
         }
         .sensoryFeedback(.selection, trigger: self.selectionCount)
-        .onDisappear { self.viewModel.dismissComposerCapabilityNotice() }
+        // While the sheet is up its footer shows a failed change; the toast doesn't repeat it.
+        .onAppear { self.viewModel.statusStrip.surfaceDidOpen(OpenClawChatViewModel.permissionsSheetSurface) }
+        .onDisappear {
+            self.viewModel.dismissComposerCapabilityNotice()
+            self.viewModel.statusStrip.surfaceDidClose(OpenClawChatViewModel.permissionsSheetSurface)
+        }
         .accessibilityIdentifier("chat-composer-permissions-sheet")
     }
 
