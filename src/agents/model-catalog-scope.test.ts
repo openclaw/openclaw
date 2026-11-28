@@ -78,7 +78,7 @@ describe("resolveModelCatalogScope", () => {
     // not fall through to bare manifest refs.
     const cfg = configFor("tui-pty-mock", "http://127.0.0.1:64087/v1", {
       api: "openai-responses",
-      models: [modelDefinition("gpt-5.5", { contextWindow: 128_000 })],
+      models: [modelDefinition("gpt-5.5")],
     });
 
     expect(
