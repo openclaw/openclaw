@@ -8,12 +8,13 @@ import {
   type SessionPendingInput,
 } from "./session-accessor.sqlite-pending-inputs.js";
 import { prepareSqliteScope } from "./session-accessor.sqlite-scope.js";
-import { hasSessionActorEmptyPendingInputHistory } from "./session-actor-replica.js";
+import { readSessionActorEmptyPendingInputHistory } from "./session-actor-replica.js";
 import { withSessionActorStorage } from "./session-actor-storage-acquisition.js";
 import { captureSessionActorStorageOwner } from "./session-actor-storage-binding.js";
 import type {
   PendingInputHistoryQuery,
   PendingInputHistorySnapshot,
+  PendingInputHistoryTerminalCheck,
 } from "./session-pending-input-history.types.js";
 import { projectSessionPendingInput } from "./session-pending-input-value.js";
 import { captureSessionStoreReadTarget } from "./session-store-read-target.js";
@@ -126,11 +127,11 @@ async function readPendingInputRows(
     return { rows: [], total: 0 };
   }
   assertReadCurrent();
-  if (
+  const emptyHistory =
     !query.queuedOnly &&
-    hasSessionActorEmptyPendingInputHistory(identity, resolved.sessionKey, query.sessionId)
-  ) {
-    return { rows: [], total: 0 };
+    readSessionActorEmptyPendingInputHistory(identity, resolved.sessionKey, query.sessionId);
+  if (emptyHistory) {
+    return { rows: [], total: 0, ...(query.includeQueueObservation && { runState: emptyHistory }) };
   }
   return withSessionHistoryWorkerDatabase(databaseOptions, async (owner) => {
     if (onRead) {
@@ -177,9 +178,21 @@ export async function listSessionPendingInputs(
     limit?: number;
     before?: number;
     audience?: import("./session-pending-input-audience.js").PendingInputAudience;
+    observeQueue?: (
+      hasQueuedInput: boolean | undefined,
+      matchesTerminal: PendingInputHistoryTerminalCheck,
+    ) => void;
   } = {},
 ): Promise<SessionPendingInputPage> {
-  const { rows, total, nextBefore } = await readPendingInputRows(scope, options);
+  const { observeQueue, ...query } = options;
+  const { rows, total, hasQueuedInput, runState, nextBefore } = await readPendingInputRows(scope, {
+    ...query,
+    ...(observeQueue && { includeQueueObservation: true }),
+  });
+  observeQueue?.(
+    total === 0 ? false : hasQueuedInput,
+    (runId, status) => runState?.lastRunId === runId && runState.status === status,
+  );
   return {
     items: rows.toReversed().map(projectSessionPendingInput),
     total: total ?? 0,

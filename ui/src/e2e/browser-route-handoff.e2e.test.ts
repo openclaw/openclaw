@@ -29,18 +29,21 @@ const browserResponses = (...cases: ReturnType<typeof browserCase>[]) => ({
 function browserCases(
   tab: BrowserTab,
   screenshot: Record<string, unknown>,
-  address: Record<string, unknown> = {},
+  address: { target?: string; node?: string; query?: { profile: string } } = {},
   tabs: BrowserTab[] = [tab],
 ) {
   const result = { cssWidth: 100, cssHeight: 100, title: tab.title, url: tab.url };
-  const passiveAddress = address.query
-    ? { ...address, query: { operatorInput: false, ...asNullableRecord(address.query) } }
-    : address;
+  const withOperatorInput = (operatorInput: boolean) =>
+    address.query ? { ...address, query: { operatorInput, ...address.query } } : address;
   return [
     browserCase("/tabs", { running: true, tabs }, address),
-    browserCase("/screenshot", screenshot, passiveAddress),
-    browserCase("/act", { result }, passiveAddress),
-    browserCase("/operator/input", { sent: 1, navigated: false, blockedByDialog: false }, address),
+    browserCase("/screenshot", screenshot, { ...withOperatorInput(false), method: "POST" }),
+    browserCase("/act", { result }, withOperatorInput(false)),
+    browserCase(
+      "/operator/input",
+      { sent: 1, navigated: false, blockedByDialog: false },
+      withOperatorInput(true),
+    ),
   ];
 }
 const png = createSolidPngBuffer(1, 1, { r: 255, g: 255, b: 255 });
@@ -214,6 +217,62 @@ suite.define(() => {
         const inline = await geometry();
         expect(inline.verticalGap).toBeLessThan(0);
         expect(inline.horizontalGap).toBeGreaterThan(0);
+      },
+    );
+  });
+
+  it("keeps a long alternative address on one line and opens its full destination on a phone", async () => {
+    await suite.withPage(
+      {
+        locale: "en-US",
+        serviceWorkers: "block",
+        viewport: { width: 390, height: 844 },
+        hasTouch: true,
+        isMobile: true,
+      },
+      async ({ page }) => {
+        const tab = makeTab("existing", "Design review", "https://design.invalid/");
+        await routeMedia(page);
+        const gateway = await installMockGateway(page, {
+          featureMethods: ["browser.request"],
+          operatorScopes: ["operator.admin"],
+          methodResponses: browserResponses(
+            browserCase("/navigate", { targetId: tab.targetId }),
+            ...browserCases(tab, {
+              targetId: tab.targetId,
+              path: "/fixture/design.png",
+              url: tab.url,
+            }),
+            browserCase("/screencast", {
+              __mockError: { code: "UNAVAILABLE", message: "Still only" },
+            }),
+          ),
+        });
+        await page.goto(
+          `${suite.server.baseUrl}focus/browser?sessionKey=agent%3Amain%3Awork&target=host&profile=work&targetId=existing`,
+        );
+        const panel = page.locator("openclaw-browser-panel");
+        await panel.locator('.bp-shot[alt="Design review"]').waitFor();
+        const draft = "studio/assets/56f03e68c20240a98eeff51dfa791bc9";
+        const address = panel.getByRole("textbox", { name: "Page address" });
+        await address.fill("studio");
+        const short = panel.getByRole("button", { name: "Go to https://studio/", exact: true });
+        const height = await short.evaluate((button) => button.getBoundingClientRect().height);
+        await address.fill(draft);
+        const url = "https://" + draft;
+        const option = panel.getByRole("button", { name: "Go to " + url, exact: true });
+        expect(await option.evaluate((button) => button.getBoundingClientRect().height)).toBe(
+          height,
+        );
+        expect(await option.getAttribute("title")).toBe(url);
+        await option.tap();
+        await expect
+          .poll(async () =>
+            (await gateway.getRequests("browser.request")).map((request) => request.params),
+          )
+          .toContainEqual(
+            expect.objectContaining({ path: "/navigate", body: { targetId: tab.targetId, url } }),
+          );
       },
     );
   });
@@ -490,12 +549,12 @@ suite.define(() => {
           await routeMedia(page);
           const hostTab = {
             ...makeTab("t1", "Managed tab", "https://managed.example/"),
-            target: "host",
+            target: "host" as const,
             profile: "managed",
           };
           const nodeTab = {
             ...makeTab("t1", "Node tab", "https://work.example/"),
-            target: "node",
+            target: "node" as const,
             node: "node-a",
             profile: "work",
           };

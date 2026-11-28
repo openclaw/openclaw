@@ -873,11 +873,8 @@ describe("OpenAI completions compatibility and tools", () => {
         { ...proxy, compat: { strictMessageKeys: true } },
         { ...historyContext(), tools: [] },
         [
-          {
-            role: "assistant",
-            content:
-              "[tool call id=call_1 name=lookup_weather] {}\n[tool result id=call_1 name=lookup_weather] sunny",
-          },
+          { role: "assistant", content: null },
+          { role: "tool", content: "sunny" },
         ],
       ],
     ];
@@ -942,8 +939,8 @@ describe("OpenAI completions compatibility and tools", () => {
     }
   });
 
-  // Strict needs a route that declares it and a schema strict-compatible as written.
-  it("sends strict only for a declared route and a strict-as-written schema", () => {
+  // A declared route sends strict: false even for a schema closed as written; others omit it.
+  it("sends strict: false only on a route that declares the field", () => {
     const closed = objectSchema(
       { path: { type: "string" } },
       { additionalProperties: false, required: ["path"] },
@@ -954,14 +951,10 @@ describe("OpenAI completions compatibility and tools", () => {
     expect(strictOf(proxy, closed)).not.toHaveProperty("strict");
     expect(strictOf({ ...proxy, compat: { supportsStrictMode: true } }, closed)).toHaveProperty(
       "strict",
-      true,
+      false,
     );
-    expect(strictOf(toolsNative, closed)).toHaveProperty("strict", true);
-    // An optional key or an open root keeps a declared route's tool non-strict and unchanged.
-    expect(strictOf(toolsNative, { ...closed, required: [] })).toHaveProperty("strict", false);
-    expect(
-      strictOf(toolsNative, objectSchema({ path: { type: "string" } }, { required: ["path"] })),
-    ).toHaveProperty("strict", false);
+    expect(strictOf(toolsNative, closed)).toHaveProperty("strict", false);
+    expect(strictOf(toolsNative, closed)).toHaveProperty("parameters", closed);
   });
 
   it("fails required choice when every schema is quarantined", () => {
@@ -970,20 +963,19 @@ describe("OpenAI completions compatibility and tools", () => {
     ).toThrow("no tools survived schema conversion");
   });
 
-  it("preserves history markers only for native requests with supported tools", () => {
-    const unsupported = { ...proxy, compat: { ...proxy.compat, supportsTools: false } };
-    const cases = [
-      [request(unsupported, undefined, { ...historyContext(), tools: [tool()] }), false],
-      [request(toolsNative, undefined, { ...historyContext(), tools: [brokenTool] }), true],
-      [request(proxy, undefined, historyContext()), false],
-    ] as const;
-    for (const [params, marker] of cases) {
-      if (marker) {
-        expect(params.tools).toEqual([]);
-      } else {
+  it.each(["direct", "managed"] as const)(
+    "never sends an empty tools array or an orphan tool choice in %s mode",
+    (mode) => {
+      const cases: [CompletionsModel, Context][] = [
+        [toolsNative, { ...historyContext(), tools: [brokenTool] }],
+        [toolsNative, historyContext()],
+        [proxy, historyContext()],
+      ];
+      for (const [model, context] of cases) {
+        const params = requestMode(mode, model, { toolChoice: "none" }, context);
         expect(params).not.toHaveProperty("tools");
         expect(params).not.toHaveProperty("tool_choice");
       }
-    }
-  });
+    },
+  );
 });

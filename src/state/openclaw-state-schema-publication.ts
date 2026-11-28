@@ -1,7 +1,11 @@
 import type { DatabaseSync } from "node:sqlite";
 import { isRecord } from "@openclaw/normalization-core/record-coerce";
 import { parse as parseSemver } from "semver";
-import { executeSqliteQuerySync, getNodeSqliteKysely } from "../infra/kysely-sync.js";
+import {
+  executeSqliteQuerySync,
+  executeSqliteQueryTakeFirstSync,
+  getNodeSqliteKysely,
+} from "../infra/kysely-sync.js";
 import type { EngineConnection } from "../infra/sql-connection.js";
 import { isPostgresSqlConnection } from "../infra/sql-connection.js";
 import { invalidateSqliteSchemaFacts } from "../infra/sqlite-schema-facts.js";
@@ -209,4 +213,57 @@ export function advanceStateSchemaContentVersion(
         query.where("value_json", "=", String(versions.fromVersion)),
       ),
   );
+}
+
+/**
+ * Read-only: whether `markCurrentStateSchemaVersion` (without metadata creation) would
+ * change the header, the content-version row or the owner's `schema_meta` version. Any
+ * published version below the current one has work; a newer writer's store is left alone.
+ */
+export function hasCurrentStateSchemaVersionWork(db: DatabaseSync): boolean {
+  if (
+    readStateSchemaContentVersion(db) > OPENCLAW_STATE_SCHEMA_VERSION ||
+    !tableExists(db, "audit_events")
+  ) {
+    return false;
+  }
+  const published = readSqliteUserVersion(db);
+  if (published < OPENCLAW_STATE_SCHEMA_VERSION) {
+    return true;
+  }
+  if (published === OPENCLAW_STATE_SCHEMA_VERSION && tableExists(db, "config_machine_state")) {
+    const hasFloor = tableHasColumn(db, "config_machine_state", "min_reader");
+    const contentRows = getNodeSqliteKysely<PublicationDatabase>(db)
+      .selectFrom("config_machine_state")
+      .where("state_key", "=", CONTENT_VERSION_KEY);
+    const row = executeSqliteQueryTakeFirstSync(
+      db,
+      hasFloor
+        ? contentRows.select(["value_json", "min_reader"])
+        : contentRows.select(["value_json"]),
+    );
+    if (
+      row &&
+      (row.value_json !== String(OPENCLAW_STATE_SCHEMA_VERSION) ||
+        ("min_reader" in row && row.min_reader !== null))
+    ) {
+      return true;
+    }
+  }
+  if (
+    !tableExists(db, "schema_meta") ||
+    !["meta_key", "schema_version", "updated_at"].every((column) =>
+      tableHasColumn(db, "schema_meta", column),
+    )
+  ) {
+    return false;
+  }
+  const metadata = executeSqliteQueryTakeFirstSync(
+    db,
+    getNodeSqliteKysely<Pick<DB, "schema_meta">>(db)
+      .selectFrom("schema_meta")
+      .select("schema_version")
+      .where("meta_key", "=", "primary"),
+  );
+  return metadata !== undefined && metadata.schema_version !== published;
 }

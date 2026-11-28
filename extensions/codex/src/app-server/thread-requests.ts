@@ -3,7 +3,6 @@ import { isHostScopedAgentToolActive } from "openclaw/plugin-sdk/agent-harness-r
 import type { AgentHarnessSessionRuntimeParamsV1 } from "openclaw/plugin-sdk/codex-mcp-projection";
 import { expectDefined } from "openclaw/plugin-sdk/expect-runtime";
 import { isIncognitoSessionKey } from "openclaw/plugin-sdk/session-key-runtime";
-import { deniesCodexNativeDelegation } from "../../native-tool-policy.js";
 import type { CodexAppServerClient } from "./client.js";
 import {
   buildCodexDefaultCollaborationPolicy,
@@ -20,7 +19,6 @@ import { joinPresentSections } from "./developer-instruction-sections.js";
 import {
   isMessageOnlyCodexSourceReply,
   isSystemAgentOnlyCodexDynamicToolAllowlist,
-  shouldDisableCodexToolSearchForModel,
 } from "./dynamic-tool-profile.js";
 import { mergeCodexThreadConfigs } from "./plugin-thread-config.js";
 import { buildCodexProjectDocThreadConfig } from "./project-doc-thread-config.js";
@@ -324,6 +322,10 @@ export function buildCodexRuntimeThreadConfig(
         // Native goals start autonomous turns; OpenClaw owns both continuation and progress cards.
         "features.goals": false,
         "tools.update_plan.enabled": false,
+        // sessions_spawn is the one subagent surface on every runtime: its children run
+        // OpenClaw tools, which native Codex children cannot. Native delegation would
+        // duplicate it in every request's tool list.
+        ...CODEX_DELEGATION_DISABLED_THREAD_CONFIG,
         ...(!enabled
           ? {
               "features.code_mode": false,
@@ -402,23 +404,6 @@ function resolveDirectOnlyToolNamespaces(
     .map((tool) => tool.name);
 }
 
-export function isCodexNativeDelegationDisabledForRun(
-  params: CodexThreadConfigurationContext,
-  hostSystemAgentActive = isHostScopedAgentToolActive("openclaw"),
-): boolean {
-  // Disabling only multi_agent still permits Codex's model-selected or explicit V2 tools.
-  return (
-    isCodexResponsesOAuthRun(params) ||
-    params.delegationCapability === "report_only" ||
-    params.delegationCapability === "host_only" ||
-    params.requireWorkspaceOnly === true ||
-    params.pluginHarnessToolPolicyRestricted === true ||
-    deniesCodexNativeDelegation(params.pluginHarnessToolPolicySafeDeniedTools) ||
-    isMessageOnlyCodexSourceReply(params) ||
-    (hostSystemAgentActive && isSystemAgentOnlyCodexDynamicToolAllowlist(params.toolsAllow))
-  );
-}
-
 export function buildCodexRuntimeThreadConfigForRun(
   params: CodexThreadConfigurationContext,
   config: JsonObject | undefined,
@@ -481,9 +466,6 @@ export function buildCodexRuntimeThreadConfigForRun(
       options.askUserAvailable && !hasNativeQuestionOptIn(baseConfig, options.nativeConfig)
         ? { "tools.experimental_request_user_input.enabled": false }
         : undefined,
-      isCodexNativeDelegationDisabledForRun(params, options.hostSystemAgentActive)
-        ? CODEX_DELEGATION_DISABLED_THREAD_CONFIG
-        : undefined,
       isCodexResponsesOAuthRun(params)
         ? {
             "features.apps": false,
@@ -498,9 +480,6 @@ export function buildCodexRuntimeThreadConfigForRun(
         : undefined,
       params.pluginHarnessToolPolicySafeDeniedTools?.includes("image_generate")
         ? { "features.image_generation": false }
-        : undefined,
-      shouldDisableCodexToolSearchForModel(params.modelId)
-        ? { "features.multi_agent": false }
         : undefined,
       messageOnlySourceReply ||
         params.pluginHarnessToolPolicyRestricted === true ||

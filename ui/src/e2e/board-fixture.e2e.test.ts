@@ -351,7 +351,12 @@ describeStandaloneMockServer("standalone Control UI mock server", () => {
         ]),
       ).toMatchObject([
         {
-          sessionInfo: { hasActiveRun: true, status: "running", activeRunIds: ["mock-plan-run"] },
+          sessionInfo: {
+            key: "agent:main:main",
+            hasActiveRun: true,
+            status: "running",
+            activeRunIds: ["mock-plan-run"],
+          },
           inFlightRun: { runId: "mock-plan-run" },
         },
       ]);

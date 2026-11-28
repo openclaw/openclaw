@@ -37,11 +37,19 @@ function frozenSource(files: Record<string, string>) {
   git(...gitIdentity, "commit", "-qm", "target", "--allow-empty");
   const sha = git("rev-parse", "HEAD");
   const output = path.join(fixtureRoot, "github.env");
-  const qualify = (selectedSha = sha) => {
+  const qualify = (selectedSha = sha, allowOmissions = true) => {
     execFileSync(process.execPath, [resolver, root], {
-      env: { ...process.env, OPENCLAW_SELECTED_SHA: selectedSha, GITHUB_ENV: output },
+      env: {
+        ...process.env,
+        OPENCLAW_SELECTED_SHA: selectedSha,
+        GITHUB_ENV: output,
+        OPENCLAW_ALLOW_FROZEN_TARGET_SCENARIO_OMISSIONS: allowOmissions ? "1" : "0",
+      },
       stdio: "pipe",
     });
+    if (!existsSync(output)) {
+      return {};
+    }
     return Object.fromEntries(
       read(output)
         .trim()
@@ -512,6 +520,47 @@ it("keeps current silent denial on the normal trusted scenario mount", () => {
   expect(captureSuiteMounts().filter((arg) => arg.includes(scenarioPath))).toEqual([]);
 });
 
+it("uses a measured context list for frozen help-only targets without enabling omissions", () => {
+  const contextPath = "qa/scenarios/channels/telegram-context-command.yaml";
+  const reportPath = "src/auto-reply/reply/commands-context-report.ts";
+  const currentScenario = read(path.join(repoRoot, contextPath));
+  const currentReport = read(path.join(repoRoot, reportPath));
+  const olderReport = currentReport.replace(
+    'if (sub === "help") {',
+    'if (!sub || sub === "help") {',
+  );
+  const { sha, qualify } = frozenSource({
+    [reportPath]: olderReport,
+    [contextPath]: "target-only-untrusted-content",
+    [scenarioPath]: trusted.replace(silent, explicit),
+  });
+  const env = qualify(sha, false);
+  expect(env.OPENCLAW_NPM_TELEGRAM_COMMAND_SCENARIO).toBeUndefined();
+  expect(env.OPENCLAW_NPM_TELEGRAM_OMIT_DEFAULT_SCENARIOS).toBeUndefined();
+  const overlay = env.OPENCLAW_NPM_TELEGRAM_CONTEXT_SCENARIO;
+  assert.ok(overlay);
+  const legacyScenario = read(overlay);
+  expect(legacyScenario).toContain(sha);
+  expect(legacyScenario).not.toContain("target-only-untrusted-content");
+  expect(YAML.parse(legacyScenario).scenario.execution.config).toEqual({
+    commandText: "/context list",
+    replyMarker: "Context breakdown",
+    expectedDetails: "System prompt (",
+  });
+  expect(YAML.parse(currentScenario).scenario.execution.config).toEqual({
+    commandText: "/context",
+    replyMarker: "Prompt budget",
+    expectedDetails: "/context list",
+  });
+  const current = frozenSource({ [reportPath]: currentReport });
+  expect(current.qualify(current.sha, false)).toEqual({});
+  const { runs, result } = captureDocker({ OPENCLAW_NPM_TELEGRAM_CONTEXT_SCENARIO: overlay });
+  expect(result.status, result.stderr).toBe(0);
+  const base = runs[1]!.indexOf(`${repoRoot}/qa/scenarios:/app/qa/scenarios:ro`);
+  expect(base).toBeGreaterThan(0);
+  expect(runs[1]!.indexOf(`${overlay}:/app/${contextPath}:ro`)).toBeGreaterThan(base);
+});
+
 it("refuses unknown source contracts and mismatched selected source identities", () => {
   expect(() => resolveFixture(trusted.replace(silent, ""))).toThrow();
   expect(() => resolveFixture(trusted.replace(silent, explicit), "0".repeat(40))).toThrow();
@@ -609,6 +658,7 @@ if (args.includes('/output')) process.exit(Number(process.env.ARTIFACT_EXIT_CODE
     DOCKER_CALLS: callsPath,
     OPENCLAW_SKIP_DOCKER_BUILD: "1",
     OPENCLAW_NPM_TELEGRAM_COMMAND_SCENARIO: "",
+    OPENCLAW_NPM_TELEGRAM_CONTEXT_SCENARIO: "",
     OPENCLAW_NPM_TELEGRAM_SCENARIOS: "",
     OPENCLAW_NPM_TELEGRAM_OUTPUT_DIR: path.join(root, "output"),
     OPENCLAW_NPM_TELEGRAM_CREDENTIAL_SOURCE: "convex",
@@ -652,8 +702,23 @@ it.each([false, true])("isolates install and runtime credentials (upgrade=%s)", 
       `${path.join(root, "output")}:/app/.artifacts/qa-e2e/npm-telegram-live-output`,
       `${repoRoot}/node_modules:/trusted-harness/node_modules:ro`,
     ]),
-    expect.arrayContaining(["--network", "none", `${path.join(root, "output")}:/output`]),
+    expect.arrayContaining([
+      "--network",
+      "none",
+      `${path.join(root, "output")}:/output`,
+      "find",
+      "-P",
+      "/output",
+      "/npm-global",
+      "-exec",
+      "chown",
+      "-h",
+    ]),
   ]);
+  const npmPrefixMount = runs[0]!.find((arg) => arg.endsWith(":/npm-global"));
+  expect(npmPrefixMount).toBeTruthy();
+  expect(runs[2]).toContain(npmPrefixMount);
+  expect(existsSync(npmPrefixMount!.slice(0, -":/npm-global".length))).toBe(false);
   expect(runs[0]?.some((arg) => arg.startsWith("OPENCLAW_QA_CONVEX_SECRET_"))).toBe(false);
   expect(runs[2]?.some((arg) => arg.startsWith("OPENCLAW_QA_CONVEX_SECRET_"))).toBe(false);
   expect(runs[1]?.includes(`${candidate}:${candidatePath}:ro`)).toBe(upgrade);
@@ -680,7 +745,9 @@ it.each([0, 7])("reports artifact handoff failure without masking suite exit %s"
   });
   const expectedExit = suiteExit || 1;
   expect(result.status, result.stderr).toBe(expectedExit);
-  expect(result.stderr).toContain("Could not return Telegram artifacts to the host user.");
+  expect(result.stderr).toContain(
+    "Could not return Telegram artifacts and npm prefix to the host user.",
+  );
   expect(readFileSync(path.join(root, "output/run-metadata.txt"), "utf8")).toContain(
     `exit_code=${expectedExit}\n`,
   );

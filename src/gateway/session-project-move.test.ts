@@ -35,6 +35,30 @@ import { listCarryCheckouts, type CarrySource } from "./session-workspace-carry.
 
 const commit = ["-c", "user.name=Fixture", "-c", "user.email=fixture@example.test", "commit"];
 
+it.each([
+  [{ session: { mainKey: "home" } }, "agent:qa:home"],
+  [{ session: { mainKey: "home" } }, "main"],
+  [{ session: { scope: "global" } }, "global"],
+] as const)(
+  "refuses a retained model move before yielding Home (%s, %s)",
+  async (cfg, sessionKey) => {
+    const context = createDirectChatContext({ getRuntimeConfig: () => cfg });
+    const caller = { agentId: "qa", sessionKey };
+    await withPluginRuntimeGatewayRequestScope(
+      { context, resolveGatewayContext: () => context, isWebchatConnect: () => false },
+      () =>
+        withGatewayToolCallerIdentity(caller, () =>
+          expect(
+            createSessionProjectTool({ senderIsOwner: true, sessionId: "fixture" }).execute(
+              "retained-move",
+              { action: "move", projectId: "fixture" },
+            ),
+          ).rejects.toThrow("Home"),
+        ),
+    );
+  },
+);
+
 it("refuses an SSH sandbox move before changing the stored conversation", async () => {
   await withOpenClawTestState({ scenario: "minimal" }, async (state) => {
     const cfg: OpenClawConfig = {

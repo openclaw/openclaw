@@ -7,7 +7,7 @@ import {
   type FinalizeChannelInboundContextAsyncParams,
 } from "./context.js";
 
-function buildContext(overrides: Partial<BuildChannelInboundEventContextParams> = {}) {
+function buildContext(overrides: Partial<BuildChannelInboundEventContextParams>) {
   return buildChannelInboundEventContext({
     channel: "test",
     accountId: "acct",

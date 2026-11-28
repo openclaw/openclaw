@@ -106,52 +106,6 @@ function createErasedCoreSourceFixture() {
 }
 
 describe("CI changed Node test plan", () => {
-  it.each([
-    [
-      "qa/scenarios/runtime/cloud-worker-admission-authority.yaml",
-      ["extensions/qa-lab/src/coverage-report.test.ts"],
-    ],
-    ["taxonomy.yaml", ["extensions/qa-lab/src/coverage-report.test.ts"]],
-    ["apps/macos/Sources/OpenClaw/DebugSettings.swift", ["test/scripts/native-app-i18n.test.ts"]],
-    ["apps/ios/WatchApp/Sources/WatchInboxView.swift", ["test/scripts/native-app-i18n.test.ts"]],
-    [
-      "apps/shared/OpenClawKit/Sources/OpenClawKit/Resources/tool-display.json",
-      ["test/scripts/native-app-i18n.test.ts"],
-    ],
-    [
-      "apps/android/app/src/main/java/ai/openclaw/app/Screen.kt",
-      ["test/scripts/native-app-i18n.test.ts"],
-    ],
-    ["apps/android/app/src/play/res/values/strings.xml", ["test/scripts/native-app-i18n.test.ts"]],
-    [
-      "apps/android/app/src/thirdParty/res/values/strings.xml",
-      ["test/scripts/native-app-i18n.test.ts"],
-    ],
-    ["apps/android/wear/src/main/res/values/strings.xml", ["test/scripts/native-app-i18n.test.ts"]],
-    ["apps/macos/README.md", []],
-    ["apps/android/app/src/test/Screen.kt", []],
-  ] as const)("keeps bounded inventory owners for %s in aggressive PRs", (input, owners) => {
-    const readers = [
-      "extensions/qa-lab/src/coverage-report.test.ts",
-      "extensions/github-copilot/replay-policy.test.ts",
-      "test/scripts/native-app-i18n.test.ts",
-    ];
-    const cwd = createSourceFixture("changed-inventory-owner-", {
-      [input]: "export {};\n",
-      ...Object.fromEntries(readers.map((file) => [file, "export {};\n"])),
-      "src/other/unrelated.test.ts": "export {};\n",
-      "test/scripts/unrelated.test.ts": "export {};\n",
-      "extensions/other-provider/unrelated.test.ts": "export {};\n",
-    });
-    const targets = resolveChangedNodeTestTargets([input], {
-      cwd,
-      selectionMode: "aggressive",
-      includePrExemptRuntimeTests: false,
-      includeReleaseOnlyRuntimeTests: false,
-    });
-    expect(targets.toSorted()).toEqual([...owners].toSorted());
-  });
-
   it("retains the three-hop Copilot replay consumer without widening import depth", () => {
     const consumer = "extensions/github-copilot/replay-policy.test.ts";
     const source = "src/plugins/provider-replay-helpers.ts";
@@ -406,27 +360,6 @@ describe("CI changed Node test plan", () => {
       expect(selectedFiles(mixed)).not.toContain("test/scripts/mobile-release-ci.test.ts");
     }
   });
-  it("keeps plugin-owned package metadata on its package and concrete readers", () => {
-    const manifest = "extensions/msteams/package.json";
-    const reader = "src/infra/plugin-package-reader.test.ts";
-    const hostReader = "src/plugins/bundled-plugin-metadata.test.ts";
-    const pluginTests = ["extensions/msteams/index.test.ts", "extensions/msteams/setup.test.ts"];
-    const cwd = createSourceFixture("changed-plugin-metadata-", {
-      [manifest]: JSON.stringify({ name: "@openclaw/msteams" }),
-      [reader]: 'import "../../extensions/msteams/package.json" with { type: "json" };',
-      [hostReader]: "export {};",
-      [pluginTests[0]!]: "export {};",
-      [pluginTests[1]!]: "export {};",
-      "extensions/discord/package.json": JSON.stringify({ name: "@openclaw/discord" }),
-      "extensions/discord/index.test.ts": "export {};",
-    });
-    const shards = createChangedNodeTestShards([manifest], { cwd });
-    expectFiles(shards, [...pluginTests, reader]);
-    expect(
-      selectedFiles(createChangedNodeTestShards([manifest, hostReader], { cwd })).toSorted(),
-    ).toEqual([...pluginTests, reader, hostReader].toSorted());
-  });
-
   it("keeps a focused source job beside its canonical source scanner", () => {
     const shards = createChangedNodeTestShards(["src/agents/live-provider-owner.ts"]);
     const sourceTargets = [

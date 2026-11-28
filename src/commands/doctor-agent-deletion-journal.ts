@@ -1,22 +1,14 @@
 import { existsSync } from "node:fs";
-import path from "node:path";
 import { sanitizeForLog } from "../../packages/terminal-core/src/ansi.js";
-import {
-  listAgentIds,
-  resolveAgentDir,
-  resolveAgentWorkspaceDir,
-} from "../agents/agent-scope-config.js";
 import { formatCliCommand } from "../cli/command-format.js";
-import { quoteCliArg, quotePowerShellArg } from "../cli/quote-cli-arg.js";
 import { createConfigIO } from "../config/io.js";
-import { isTransientSqliteBackupPath } from "../infra/backup-volatile-filter.js";
 import { readOnlyOpenWouldCreateSqliteSidecars } from "../infra/sqlite-files.js";
 import { isArtifactPreservingStateRead } from "../state/artifact-preserving-state-reads.js";
 import { isStatePostgres } from "../state/openclaw-state-db-engine.js";
 import { prepareStateDatabaseInitialization } from "../state/openclaw-state-db-initialization.js";
 import { withExistingOpenClawStateDatabaseReadOnly } from "../state/openclaw-state-db-readonly.js";
 import { resolveOpenClawStateSqlitePath } from "../state/openclaw-state-db.paths.js";
-import { isReservedSystemAgentId } from "../system-agent/agent-id.js";
+import { formatHeldAgentStoreGuidance } from "./doctor-agent-deletion-held.js";
 import {
   quarantineAgentDeletionJournal,
   readAgentDeletionJournalRecoverySource,
@@ -184,33 +176,12 @@ export async function repairDoctorAgentDeletionJournal(params: {
     observe: false,
     pluginValidation: "core-only",
   }).readConfigFileSnapshot();
-  const quote = process.platform === "win32" ? quotePowerShellArg : quoteCliArg;
   const warnings = [
     ...recoveryWarnings,
     `Warning: Agent deletion journal ${missing && !params.shouldRepair ? "missing" : quarantined ? "quarantined" : recoveryWarnings.length > 0 ? "unusable" : "reconstructed"}; ${held.length} store${held.length === 1 ? "" : "s"} held back. Updates can continue; held stores remain untouched.`,
-    ...held.map((target) => {
-      if (isTransientSqliteBackupPath(target.path)) {
-        return sanitizeForLog(
-          `${target.path}: internal SQLite coordination artifact; preserved without agent restoration or deletion.`,
-        );
-      }
-      if (isReservedSystemAgentId(target.agentId)) {
-        return sanitizeForLog(
-          `${target.path}: ${target.agentId} is a reserved system agent and cannot be added or deleted. Run ${formatCliCommand("openclaw doctor --fix", params.env)} to restore its canonical store after ownership, integrity, and backup verification; unverified stores remain untouched.`,
-        );
-      }
-      const workspace = resolveAgentWorkspaceDir(snapshot.sourceConfig, target.agentId, params.env);
-      const agentDir = listAgentIds(snapshot.sourceConfig).includes(target.agentId)
-        ? resolveAgentDir(snapshot.sourceConfig, target.agentId, params.env)
-        : path.dirname(target.path);
-      const restore = formatCliCommand(
-        `openclaw agents add ${quote(target.agentId)} --workspace ${quote(workspace)} --agent-dir ${quote(agentDir)} --non-interactive`,
-        params.env,
-      );
-      return sanitizeForLog(
-        `${target.path}: ${path.basename(target.path) === "openclaw-agent.sqlite" ? "verify the workspace" : "restore the original session.store configuration for this database and verify the workspace"}, then run ${restore} to abort deletion and restore; after restoration, run ${formatCliCommand(`openclaw agents delete ${quote(target.agentId)} --force`, params.env)} to confirm deletion instead.`,
-      );
-    }),
+    ...held.map((target) =>
+      formatHeldAgentStoreGuidance(target, snapshot.sourceConfig, params.env),
+    ),
     ...(missing && !params.shouldRepair
       ? [
           `Run ${formatCliCommand("openclaw doctor --fix", params.env)} to reconstruct the journal and restore verified configured stores automatically after verified backups. Other stores remain held.`,

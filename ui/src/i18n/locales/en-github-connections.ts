@@ -92,9 +92,8 @@ const enGitHubConnections = {
     githubCancelling: "Requesting cancellation…",
     githubFinishing: "Finishing sign-in…",
     githubCancelFailed: "Couldn’t confirm cancellation",
-    githubCancelFailedHint:
-      "Sign-in is still active. Wait for it to finish or try cancelling again.",
-    githubRetryCancel: "Try cancelling again",
+    githubCancelFailedHint: "Sign-in may still be active.",
+    githubRetryCancel: "Try canceling again",
     githubCodeReady: "Code ready",
     githubWaiting: "Waiting for approval…",
     githubSlowDown: "Waiting for GitHub…",

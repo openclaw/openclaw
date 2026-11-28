@@ -31,7 +31,6 @@ import {
   patchMcpServers,
   summarizeMcpServers,
   type McpServerSummary,
-  type McpServersPatchBuildResult,
 } from "../lib/config/mcp-servers.ts";
 import { formatUiError } from "../lib/format-error.ts";
 import { canCallGatewayMethod } from "../lib/gateway-methods.ts";
@@ -65,6 +64,12 @@ export type McpServerEditorRenderer = (
 
 type McpServersCardProps = { docsUrl: string; renderEditor?: McpServerEditorRenderer };
 type McpServerMessage = { kind: "error" | "success"; text: string };
+type McpServerMutation = Parameters<typeof patchMcpServers>[1] & {
+  successText: string;
+  present?: () => void;
+  /** Report the failure beside the control that asked, instead of above the list. */
+  onError?: (message: string) => void;
+};
 
 function quoteShellArg(value: string): string {
   return /^[A-Za-z0-9._:/-]+$/.test(value) ? value : shellEscapeBackslash(value);
@@ -251,10 +256,13 @@ function McpServerRow(props: {
   canSignIn: boolean;
   editor?: JSX.Element;
   onToggleOpen: () => void;
-  onToggleEnabled: (enabled: boolean) => void;
+  onToggleEnabled: (enabled: boolean, present: () => void) => void;
   onSignIn: () => void;
   onRemove: () => void;
 }) {
+  // Preview the requested configuration, never tool status or sign-in eligibility.
+  const [requested, setRequested] = createOptimistic<boolean | null>(null);
+  const checked = () => requested() ?? props.server.enabled;
   const detailId = () => `mcp-server-detail-${props.server.name.replace(/[^a-z0-9-]/giu, "-")}`;
   const facts = () =>
     [
@@ -268,7 +276,7 @@ function McpServerRow(props: {
     <div
       class={[
         "mcp-server-row",
-        { "mcp-server-row--open": props.open, "mcp-server-row--off": !props.server.enabled },
+        { "mcp-server-row--open": props.open, "mcp-server-row--off": !checked() },
       ]}
       data-mcp-name={props.server.name}
     >
@@ -292,12 +300,11 @@ function McpServerRow(props: {
         <span title={props.blockedReason ?? undefined}>
           <Switch
             ariaLabel={props.server.name}
-            checked={props.server.enabled}
+            checked={checked()}
             disabled={props.blockedReason !== null}
             saving={props.saving}
-            // The config snapshot decides the position, so a refused write never lies.
             onChange={(enabled) => {
-              props.onToggleEnabled(enabled);
+              props.onToggleEnabled(enabled, () => setRequested(enabled));
               return false;
             }}
           />
@@ -456,17 +463,12 @@ export function McpServersCard(props: McpServersCardProps) {
     login.runner.prepareSignIn("oauth", server.name);
     void login.runner.startMcpLogin(server.name);
   };
-  const performMutation = action(function* (mutate: () => Promise<void>) {
+  const performMutation = action(function* (options: McpServerMutation) {
     setBusy(true);
-    yield mutate();
+    options.present?.();
+    yield patchMcpServers(context.runtimeConfig, options);
   });
-  const mutate = async (options: {
-    buildPatch: (servers: Readonly<Record<string, unknown>>) => McpServersPatchBuildResult;
-    note: string;
-    successText: string;
-    /** Report the failure beside the control that asked, instead of above the list. */
-    onError?: (message: string) => void;
-  }): Promise<boolean> => {
+  const mutate = async (options: McpServerMutation): Promise<boolean> => {
     if (!active || !canMutate() || mutationPending) {
       return false;
     }
@@ -474,7 +476,7 @@ export function McpServersCard(props: McpServersCardProps) {
     setView((draft) => {
       draft.message = null;
     });
-    const result = performMutation(() => patchMcpServers(context.runtimeConfig, options));
+    const result = performMutation(options);
     if (!options.onError) {
       void setCompletion(result);
     }
@@ -519,8 +521,9 @@ export function McpServersCard(props: McpServersCardProps) {
       });
     }
   };
-  const toggleServer = (name: string, enabled: boolean) =>
+  const toggleServer = (name: string, enabled: boolean, present: () => void) =>
     mutate({
+      present,
       buildPatch: (servers) => buildToggleMcpServerPatch(servers, name, enabled),
       note: `mcp settings: ${enabled ? "enable" : "disable"} server ${name}`,
       successText: t(enabled ? "mcpServers.enabledSuccess" : "mcpServers.disabledSuccess", {
@@ -653,7 +656,9 @@ export function McpServersCard(props: McpServersCardProps) {
                           draft.expanded = draft.expanded === server().name ? null : server().name;
                         })
                       }
-                      onToggleEnabled={(enabled) => void toggleServer(server().name, enabled)}
+                      onToggleEnabled={(enabled, present) =>
+                        void toggleServer(server().name, enabled, present)
+                      }
                       onSignIn={() => signIn(server())}
                       onRemove={() => removeServer(server().name)}
                     />

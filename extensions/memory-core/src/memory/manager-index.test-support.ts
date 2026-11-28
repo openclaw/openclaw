@@ -47,11 +47,7 @@ type ManagerIndexFixtureConfig = {
   batchEnabled?: boolean;
   model?: string;
   outputDimensionality?: number;
-  multimodal?: {
-    enabled?: boolean;
-    modalities?: Array<"image" | "audio" | "all">;
-    maxFileBytes?: number;
-  };
+  multimodal?: NonNullable<NonNullable<ManagerConfig["memory"]>["search"]>["multimodal"];
   vectorEnabled?: boolean;
   ftsTokenizer?: "unicode61" | "trigram";
   cacheEnabled?: boolean;

@@ -17,10 +17,17 @@ final class AdaptiveLayoutUITests: XCTestCase {
         app.launch()
         defer { app.terminate() }
 
-        let actions = app.buttons["Chat actions"]
-        XCTAssertTrue(actions.waitForExistence(timeout: 30))
-        actions.tap()
-        let options = app.buttons["New session options…"]
+        let showSidebar = app.buttons["RootTabs.Sidebar.Show"]
+        XCTAssertTrue(showSidebar.waitForExistence(timeout: 30))
+        showSidebar.tap()
+        let newChat = app.buttons["New Chat"]
+        XCTAssertTrue(newChat.waitForExistence(timeout: 5))
+        newChat.tap()
+        let input = app.textViews["chat-message-input"]
+        XCTAssertTrue(input.waitForExistence(timeout: 5))
+        input.tap()
+        input.typeText("/new")
+        let options = app.buttons["chat-new-session-options"]
         XCTAssertTrue(options.waitForExistence(timeout: 5))
         options.tap()
 
@@ -69,9 +76,12 @@ final class AdaptiveLayoutUITests: XCTestCase {
         defer { app.terminate() }
         let input = app.descendants(matching: .any)["chat-message-input"].firstMatch
         XCTAssertTrue(input.waitForExistence(timeout: 30))
-        let identity = app.buttons["chat-agent-identity"].firstMatch
+        let identity = app.descendants(matching: .any)["chat-agent-identity"].firstMatch
         let actions = app.buttons["Chat actions"].firstMatch
-        for control in [identity, actions] {
+        XCTAssertTrue(identity.waitForExistence(timeout: 5))
+        XCTAssertTrue(app.windows.firstMatch.frame.contains(identity.frame))
+        let showSidebar = app.buttons["RootTabs.Sidebar.Show"].firstMatch
+        for control in [showSidebar, actions] {
             XCTAssertTrue(control.waitForExistence(timeout: 5))
             let geometry = XCTAttachment(string: "window=\(app.windows.firstMatch.frame) control=\(control.frame)")
             geometry.lifetime = .keepAlways
@@ -82,21 +92,16 @@ final class AdaptiveLayoutUITests: XCTestCase {
             XCTAssertTrue(app.windows.firstMatch.frame.contains(control.frame))
         }
         self.capture("chat-toolbar-current-window", in: app)
-        try self.assertToolbarPainted([identity, actions], in: app.windows.firstMatch)
-        if abs(identity.frame.midY - actions.frame.midY) > 44 {
-            identity.tap()
-            let status = app.descendants(matching: .any)["chat-gateway-status-details"].firstMatch
-            XCTAssertTrue(status.waitForExistence(timeout: 5), "Side-toolbar status needs visible feedback")
-            input.tap()
-            XCTAssertTrue(status.waitForNonExistence(timeout: 5))
-        }
+        try self.assertToolbarPainted([showSidebar, actions], in: app.windows.firstMatch)
         actions.tap()
-        let gatewaySettings = app.buttons["chat-gateway-settings"].firstMatch
+        let pin = app.buttons["Pin"].firstMatch
+        XCTAssertTrue(pin.waitForExistence(timeout: 5))
+        XCTAssertTrue(pin.isHittable)
+        XCTAssertTrue(app.windows.firstMatch.frame.contains(pin.frame))
+        input.tap()
+        showSidebar.tap()
+        let gatewaySettings = app.buttons["RootTabs.Sidebar.GatewaySettings"].firstMatch
         XCTAssertTrue(gatewaySettings.waitForExistence(timeout: 5))
-        let menu = app.descendants(matching: .any)["chat-actions-popover"].firstMatch
-        for _ in 0..<3 where !gatewaySettings.isHittable {
-            menu.swipeUp()
-        }
         XCTAssertTrue(gatewaySettings.isHittable)
         gatewaySettings.tap()
         let readiness = app.descendants(matching: .any)["RootTabs.Ready"].firstMatch
@@ -189,6 +194,7 @@ final class AdaptiveLayoutUITests: XCTestCase {
         XCUIDevice.shared.orientation = .portrait
         let app = XCUIApplication()
         app.launchArguments = [
+            "-sidebar.pinnedPages", "sessions",
             "--openclaw-initial-destination", "chat",
             "--openclaw-appearance", "light",
             "--openclaw-ui-test-readiness",
@@ -220,26 +226,21 @@ final class AdaptiveLayoutUITests: XCTestCase {
         self.capture("iphone-landscape-compact-chat", in: app)
         self.rotateWindow(in: app, portrait: true)
         show.tap()
-        let overview = app.buttons["RootTabs.Sidebar.Destination.overview"]
-        XCTAssertTrue(overview.waitForExistence(timeout: 5))
-        overview.tap()
+        let sessions = app.buttons["RootTabs.Sidebar.Destination.sessions"]
+        XCTAssertTrue(sessions.waitForExistence(timeout: 5))
+        sessions.tap()
         let readiness = app.descendants(matching: .any)["RootTabs.Ready"].firstMatch
-        self.expectation(for: NSPredicate(format: "value == %@", "ready:overview"), evaluatedWith: readiness)
+        self.expectation(for: NSPredicate(format: "value == %@", "ready:sessions"), evaluatedWith: readiness)
         self.waitForExpectations(timeout: 10)
         XCTAssertTrue(show.waitForExistence(timeout: 5), "Selecting a drawer row must navigate and close it")
-        let viewport = app.scrollViews.containing(.button, identifier: "Gateway settings").firstMatch
-        XCTAssertTrue(viewport.waitForExistence(timeout: 5))
-        let detailFrame = viewport.frame
-        let window = app.windows.firstMatch
-        let windowFrame = window.frame
-        // Save the visible detail's trailing edge before the drawer hides its accessibility tree.
-        let dismissalPoint = window.coordinate(withNormalizedOffset: .zero).withOffset(CGVector(
-            dx: detailFrame.maxX - windowFrame.minX - 8,
-            dy: detailFrame.midY - windowFrame.minY))
+        let search = app.buttons["Sessions.Search"]
+        XCTAssertTrue(search.isHittable)
         show.tap()
-        XCTAssertTrue(overview.waitForExistence(timeout: 5))
-        dismissalPoint.tap()
+        XCTAssertTrue(sessions.waitForExistence(timeout: 5))
+        // The trailing edge of the window still shows the detail beside the open phone drawer.
+        app.windows.firstMatch.coordinate(withNormalizedOffset: CGVector(dx: 0.98, dy: 0.5)).tap()
         XCTAssertTrue(show.waitForExistence(timeout: 5), "Tapping exposed detail must dismiss the drawer")
+        XCTAssertTrue(search.isHittable)
     }
 
     /// Synthetic conversation content is used only to exercise native interaction.
@@ -402,7 +403,7 @@ final class AdaptiveLayoutUITests: XCTestCase {
         let input = app.descendants(matching: .any)["chat-message-input"].firstMatch
         XCTAssertTrue(input.waitForExistence(timeout: 30))
         let window = app.windows.firstMatch.frame
-        let identity = app.buttons["chat-agent-identity"].firstMatch
+        let identity = app.descendants(matching: .any)["chat-agent-identity"].firstMatch
         let actions = app.buttons["Chat actions"].firstMatch
         let composer = app.otherElements["chat-composer-surface"].firstMatch
         for (name, element) in [("identity", identity), ("actions", actions), ("composer", composer)] {

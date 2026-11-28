@@ -43,9 +43,12 @@ directory of the available trusted tool names, plus the structured
 lists names only: `tool_search` returns input signatures and `tool_describe`
 full schemas on demand, so descriptions are not repeated on every request.
 Setting `tools.toolSearch: true` or an object without a mode selects this
-structured surface. Direct-only tools remain visible alongside the controls, and so
-do OpenClaw tools that poll by design (such as `agents_wait` and `subagents`), so
-the tool repeat guard sees their own repeat exemption. On
+structured surface. Direct-only tools remain visible alongside the controls.
+Tools that poll by design (such as `agents_wait` and `subagents`) stay deferred:
+`dispatch_action` carries their repeat exemption, so polling them through it is
+not flagged as a repeat. A tool family is shown or deferred as one unit: the
+delegation family (`sessions_spawn`, `subagents`, `agents_wait`) is visible only
+together, so the model never takes some members for the whole capability. On
 the default OpenClaw runner, an admitted `progress_card` also appears with its
 full schema in the first model request, so the agent can update the card
 without searching.
@@ -108,9 +111,9 @@ run:
 3. List eligible MCP tools through the session MCP runtime.
 4. Add eligible client tools supplied for the current run.
 5. Apply optional include/exclude selectors to the eligible catalog. Keep
-   unselected and excluded tools, core coding primitives, polling tools and
-   direct-only tools model-visible; index compact descriptors for selected
-   eligible tools.
+   unselected and excluded tools, core coding primitives and direct-only tools
+   model-visible, with the rest of their tool family; index compact descriptors
+   for selected eligible tools.
 6. Add a size-limited capability directory filtered by policy to the cache-stable
    system-prompt prefix. Selection uses fixed rules unless the usage-ranked
    tool index lab is enabled.
@@ -124,7 +127,8 @@ policy, approval, hook, logging, and result handling still apply.
 
 Network-backed results use the active model's normal tool-result budget, including
 the external-content wrapper and sanitization overhead. Tool Search does not
-apply a separate 20,000-character ceiling.
+apply a separate 20,000-character ceiling. Each structured control call carries
+the network provenance of its own result or error.
 
 If a complete network result cannot fit, Tool Search omits the payload rather than
 showing a partial page with a misleading continuation cursor. For a read-only
@@ -330,13 +334,19 @@ description, as it already can in its full description, `tool_describe`
 output, server instructions, and tool results. Choose MCP servers you trust.
 
 The directory is limited to 4,096 UTF-8 bytes, about 1,000 tokens. When the
-rows do not fit, OpenClaw first drops descriptions and keeps names and inputs.
-If inputs do not all fit, the smallest servers keep theirs and the others list
-names only. If names still do not fit, servers with the most tools become count lines such as
+rows do not fit, OpenClaw first drops descriptions and keeps names. If names
+still do not fit, servers with the most tools become count lines such as
 `- github server: 40 tools, names omitted`, starting with the largest server.
 If even count lines do not fit, the remaining servers are counted in one
 final line. A server is never omitted silently, and a closing line points to
-`tool_search` whenever names are omitted.
+`tool_search` whenever names are omitted. Inputs then fill the space the listed
+names leave: listed servers take turns, each giving its shortest remaining
+input, so no listed server goes without inputs because of its size or name. A
+server shown only as a count line has no rows to sign, and with the
+usage-ranked lab on, the ranked order applies instead. Without learned usage no
+tool is known to matter more, so within a server the widest inputs (often write
+tools) come last. A listed row without its input sends the model to
+`tool_describe` first.
 
 With the [usage-ranked tool index](/concepts/experimental-features#usage-ranked-tool-index)
 enabled and learned usage available, the same budget keeps descriptions for the

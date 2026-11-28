@@ -66,7 +66,6 @@ export function registerRequesterWakeOwnershipTests(options: {
         retireAfterSettle: true,
       };
       Object.assign(input.subagent, owner);
-      input.subagent.retireAfterSettle = true;
       options.persistOwner(input);
 
       await expect(
