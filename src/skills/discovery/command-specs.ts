@@ -303,6 +303,7 @@ function assembleWorkspaceSkillCommandSpecs(
       if (!activationState.activated) {
         continue;
       }
+      const seenFiles = new Set<string>();
       for (const relativeRoot of resolveClaudeCommandRootDirs(record.rootDir)) {
         const commandRoot = path.resolve(record.rootDir, relativeRoot);
         if (!fs.existsSync(commandRoot)) {
@@ -311,7 +312,23 @@ function assembleWorkspaceSkillCommandSpecs(
         if (!isPathInsideWithRealpath(record.rootDir, commandRoot, { requireRealpath: true })) {
           continue;
         }
-        for (const filePath of listMarkdownFilesRecursive(commandRoot)) {
+        const rootStat = fs.statSync(commandRoot);
+        const directFile = rootStat.isFile();
+        let files: string[] = [];
+        if (rootStat.isDirectory()) {
+          files = listMarkdownFilesRecursive(commandRoot);
+        } else if (
+          directFile &&
+          !path.basename(commandRoot).startsWith(".") &&
+          path.extname(commandRoot).toLowerCase() === ".md"
+        ) {
+          files = [commandRoot];
+        }
+        for (const filePath of files) {
+          if (seenFiles.has(filePath)) {
+            continue;
+          }
+          seenFiles.add(filePath);
           let raw: string;
           try {
             raw = readRegularFileSync({
@@ -334,7 +351,9 @@ function assembleWorkspaceSkillCommandSpecs(
           }
           const rawName =
             normalizeOptionalString(frontmatter.name) ||
-            toDefaultCommandName(commandRoot, filePath);
+            (directFile
+              ? path.basename(filePath, path.extname(filePath))
+              : toDefaultCommandName(commandRoot, filePath));
           if (!rawName) {
             continue;
           }
