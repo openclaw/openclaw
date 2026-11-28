@@ -185,6 +185,14 @@ Confirm the Gateway answers. `/healthz` reports that the listener is up. `/start
 ```bash
 curl -sS https://<worker-subdomain>.workers.dev/healthz
 curl -sS -H "Authorization: Bearer $OPENCLAW_GATEWAY_TOKEN" \
+  https://<worker-subdomain>.workers.dev/startupz
+```
+
+Check channel readiness separately. `/readyz` can return `503` after startup has
+finished if a configured channel account is unhealthy; see [Health checks](/gateway/health#http-checks).
+
+```bash
+curl -sS -H "Authorization: Bearer $OPENCLAW_GATEWAY_TOKEN" \
   https://<worker-subdomain>.workers.dev/readyz
 ```
 
