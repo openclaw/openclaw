@@ -28,7 +28,7 @@ describe("question reply guidance", () => {
       if (!presentation) {
         throw new Error("Expected a single-choice question presentation");
       }
-      const optionText = ["- Staging: Safer default", "- Production", "", guidance].join("\n");
+      const optionText = ["1. Staging - Safer default", "2. Production", "", guidance].join("\n");
 
       expect(payload.text).toContain(guidance);
 
