@@ -30,6 +30,7 @@ import {
 } from "../voice-selection.js";
 import { createRelayAgentRunRegistration } from "./agent-consult.js";
 import { scheduleRelayCancellationDeadline } from "./cancellation-deadline.js";
+import { rejectRelaySessionClose } from "./close-recovery.js";
 import {
   submitForcedTalkRealtimeRelayToolResult,
   submitRelayAgentControlProviderResults,
@@ -109,12 +110,43 @@ export function closeRelaySession(
     if (reason === "error") {
       session.closing.reason = reason;
     }
+    // A retried durable close is shared with every later caller so disconnect
+    // cleanup joins its actual outcome instead of the already-rejected close
+    // completion (#204615).
+    if (session.closing.retryCompletion) {
+      return session.closing.retryCompletion;
+    }
+    // A close that failed settlement admission drained the accepted transcript
+    // but never ran the durable voice close, and the session stays in the
+    // draining set for exactly this retry. Re-attempt the real close through
+    // the voice owner once settlement authority is available (#204615). The
+    // disposition selected by the initial close is reused: a later retry must
+    // not recompute it (a completed voice replacement is no longer visible in
+    // the change registry, which would silently turn a detach into an abort
+    // and skip retained unspoken answers).
+    if (session.closing.voiceCloseRetryable && !session.voiceSessionClose) {
+      const disposition = session.closing.disposition ?? "abort";
+      const retry = closeRelayVoiceSession(session, disposition);
+      session.closing.retryCompletion = retry;
+      void retry.catch((error: unknown) => {
+        session.context.logGateway.warn(
+          `retried realtime relay voice session close failed: ${formatError(error)}`,
+        );
+      });
+      return retry;
+    }
     return session.closing.completion;
   }
+  const disposition =
+    options?.disposition ??
+    (isTalkVoiceSessionReplacing(session.id, session.connId, session.sessionTarget.agentId)
+      ? "detach"
+      : "abort");
   const completion = createDeferredCore();
   const closing: NonNullable<RelaySession["closing"]> = {
     reason,
     completion: completion.promise,
+    disposition,
   };
   session.closing = closing;
   const close = async (admissionFailure?: { error: unknown }) => {
@@ -158,26 +190,6 @@ export function closeRelaySession(
   return completion.promise;
 }
 
-async function rejectRelaySessionClose(
-  session: RelaySession,
-  closing: NonNullable<RelaySession["closing"]>,
-  error: unknown,
-  finish: (closeVoice: () => Promise<void>) => Promise<void>,
-): Promise<never> {
-  closing.reason = "error";
-  closing.runTranscript = () => false;
-  session.voiceTranscriptQueue.seal();
-  const accepted = (session.voiceSessionClose ??= session.voiceTranscriptQueue.flush());
-  try {
-    await finish(() => accepted);
-  } catch (cleanupError) {
-    throw new AggregateError([error, cleanupError], "Realtime relay close failed", {
-      cause: cleanupError,
-    });
-  }
-  throw error;
-}
-
 function finishRelaySessionClose(
   session: RelaySession,
   reason: "completed" | "error",
@@ -187,6 +199,7 @@ function finishRelaySessionClose(
   preparation?: Promise<unknown>,
 ): Promise<void> {
   const disposition =
+    closing.disposition ??
     options?.disposition ??
     (isTalkVoiceSessionReplacing(session.id, session.connId, session.sessionTarget.agentId)
       ? "detach"
@@ -198,17 +211,28 @@ function finishRelaySessionClose(
   relaySessions.delete(session.id);
   drainingRelaySessions.add(session);
   forgetUnifiedTalkSession(session.id);
-  clearTimeout(session.cleanupTimer);
+  // The expiry timer stays armed: for a close that failed admission the
+  // session remains in the draining set until its durable close settles, and
+  // the timer is its cleanup path on a persistent connection (#204615). For
+  // a fully settled close the timer is a no-op at TTL (both maps are empty).
   retireRelayAgentRuns(
     session,
     disposition === "detach" ? undefined : reason === "error" ? "relay-error" : "relay-closed",
   );
   const finish = (close = closeVoice) => {
     const voiceClose = close(disposition).finally(() => session.runAuthority?.release());
-    void voiceClose.then(
-      () => drainingRelaySessions.delete(session),
-      () => drainingRelaySessions.delete(session),
-    );
+    // Remove the session from the draining set only when the durable voice
+    // close settles. An admission-failure close settles the transcript flush
+    // without ever running closeRelayVoiceSession; the session must stay
+    // discoverable by connection cleanup so a later attempt can settle the
+    // durable record (#204615).
+    const durableClose = session.voiceSessionClose;
+    if (durableClose) {
+      void durableClose.then(
+        () => drainingRelaySessions.delete(session),
+        () => drainingRelaySessions.delete(session),
+      );
+    }
     broadcastRelaySessionClosed(session, closing.reason, options?.eventReason);
     return voiceClose;
   };
