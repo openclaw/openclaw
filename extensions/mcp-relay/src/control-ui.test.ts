@@ -4,9 +4,16 @@ import type * as UI from "openclaw/plugin-sdk/control-ui";
 import { expect, it, onTestFinished, vi } from "vitest";
 import plugin from "./control-ui.js";
 
-vi.mock("./i18n/locales/translated.json", () => ({
-  default: { es: { mcpRelay: { connectedApps: { title: "Apps conectadas" } } } },
-}));
+vi.mock(import("./i18n/locales/translated.json"), async (importOriginal) => {
+  const catalog = await importOriginal();
+  return {
+    ...catalog,
+    default: {
+      ...catalog.default,
+      es: { mcpRelay: { connectedApps: { title: "Apps conectadas" } } },
+    },
+  };
+});
 
 const caller = {
   principal: { kind: "person", profileId: "person-alex" },
