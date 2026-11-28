@@ -1,4 +1,6 @@
 /** Build the authenticated application-command dispatcher for the relay socket. */
+import { releaseOpenClawGroupBeforeClose } from "./relay-tab-groups.js";
+
 export function createRelayCommandHandler({
   send,
   isCurrent,
@@ -111,6 +113,9 @@ export function createRelayCommandHandler({
         case "closeTab": {
           const epoch = captureAccess(message.tabId);
           await requireTab(message.tabId, epoch);
+          // Closing the last tab of the "OpenClaw" group would make Chromium
+          // save the group; ungrouping dissolves it instead.
+          await releaseOpenClawGroupBeforeClose(message.tabId);
           // Chrome closes the debugger with the tab. Detaching first would retire
           // the controlled document's authority before its explicit close can run.
           await chrome.tabs.remove(message.tabId);

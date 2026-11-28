@@ -1,13 +1,21 @@
 import assert from "node:assert/strict";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { createRelayCommandHandler } from "./relay-command-handler.js";
+import { OPENCLAW_TAB_GROUP_TITLE } from "./relay-core.js";
 
 const navigationResult = { frameId: "root", loaderId: "blank-loader" };
 function createHarness() {
   const epoch = { revision: 1, groupRevision: 0, tabRevision: 2 };
   const chromeMock = {
     debugger: { sendCommand: vi.fn(async () => ({ value: 1 })) },
-    tabs: { remove: vi.fn(async () => undefined), update: vi.fn(async () => undefined) },
+    tabs: {
+      get: vi.fn(async () => ({ id: 7, windowId: 3, groupId: -1 })),
+      query: vi.fn(async () => []),
+      remove: vi.fn(async () => undefined),
+      ungroup: vi.fn(async () => undefined),
+      update: vi.fn(async () => undefined),
+    },
+    tabGroups: { get: vi.fn(async () => ({ id: 9, windowId: 3, title: "Other" })) },
   };
   vi.stubGlobal("chrome", chromeMock);
   const dependencies = {
@@ -94,5 +102,55 @@ describe("relay authority rechecks", () => {
       .mockRejectedValueOnce(new Error(message));
     await ctx.handler({ type: "cdp", seq: 4, tabId: 7, method: "Runtime.evaluate" });
     expect(ctx.send).toHaveBeenCalledWith({ type: "error", seq: 4, message });
+  });
+});
+
+describe("closeTab OpenClaw group release", () => {
+  const clawTab = { id: 7, windowId: 3, groupId: 9 };
+  const clawGroup = { id: 9, windowId: 3, title: OPENCLAW_TAB_GROUP_TITLE };
+
+  it("dissolves the OpenClaw group before closing its last tab", async () => {
+    ctx.chromeMock.tabs.get.mockResolvedValueOnce(clawTab);
+    ctx.chromeMock.tabGroups.get.mockResolvedValueOnce(clawGroup);
+    ctx.chromeMock.tabs.query.mockResolvedValueOnce([clawTab]);
+    await ctx.handler({ type: "closeTab", seq: 3, tabId: 7 });
+    expect(ctx.chromeMock.tabs.ungroup).toHaveBeenCalledExactlyOnceWith([7]);
+    expect(ctx.chromeMock.tabs.remove).toHaveBeenCalledWith(7);
+    const [check] = ctx.requireAccessibleTab.mock.invocationCallOrder;
+    const [ungroup] = ctx.chromeMock.tabs.ungroup.mock.invocationCallOrder;
+    const [remove] = ctx.chromeMock.tabs.remove.mock.invocationCallOrder;
+    assert(check !== undefined && ungroup !== undefined && remove !== undefined);
+    expect(check).toBeLessThan(ungroup);
+    expect(ungroup).toBeLessThan(remove);
+    expect(ctx.send).toHaveBeenCalledWith({ type: "result", seq: 3, result: {} });
+  });
+
+  it("keeps the OpenClaw group when another tab remains in it", async () => {
+    ctx.chromeMock.tabs.get.mockResolvedValueOnce(clawTab);
+    ctx.chromeMock.tabGroups.get.mockResolvedValueOnce(clawGroup);
+    ctx.chromeMock.tabs.query.mockResolvedValueOnce([clawTab, { id: 8, windowId: 3, groupId: 9 }]);
+    await ctx.handler({ type: "closeTab", seq: 3, tabId: 7 });
+    expect(ctx.chromeMock.tabs.ungroup).not.toHaveBeenCalled();
+    expect(ctx.chromeMock.tabs.remove).toHaveBeenCalledWith(7);
+    expect(ctx.send).toHaveBeenCalledWith({ type: "result", seq: 3, result: {} });
+  });
+
+  it("leaves groups with other titles untouched", async () => {
+    ctx.chromeMock.tabs.get.mockResolvedValueOnce({ id: 7, windowId: 3, groupId: 9 });
+    ctx.chromeMock.tabGroups.get.mockResolvedValueOnce({ id: 9, windowId: 3, title: "Other" });
+    await ctx.handler({ type: "closeTab", seq: 3, tabId: 7 });
+    expect(ctx.chromeMock.tabs.ungroup).not.toHaveBeenCalled();
+    expect(ctx.chromeMock.tabs.remove).toHaveBeenCalledWith(7);
+    expect(ctx.send).toHaveBeenCalledWith({ type: "result", seq: 3, result: {} });
+  });
+
+  it("still closes the tab when ungrouping fails", async () => {
+    ctx.chromeMock.tabs.get.mockResolvedValueOnce(clawTab);
+    ctx.chromeMock.tabGroups.get.mockResolvedValueOnce(clawGroup);
+    ctx.chromeMock.tabs.query.mockResolvedValueOnce([clawTab]);
+    ctx.chromeMock.tabs.ungroup.mockRejectedValueOnce(new Error("ungroup failed"));
+    await ctx.handler({ type: "closeTab", seq: 3, tabId: 7 });
+    expect(ctx.chromeMock.tabs.remove).toHaveBeenCalledWith(7);
+    expect(ctx.send).toHaveBeenCalledWith({ type: "result", seq: 3, result: {} });
   });
 });
