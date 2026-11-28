@@ -39,6 +39,12 @@ export type CallGatewayBaseOptions = Pick<GatewayClientOptions, "caps" | "onEven
     clientVersion?: string;
     platform?: string;
     requiredStoredDeviceAuthScopes?: OperatorScope[];
+    /**
+     * Treat explicit `scopes` as a ceiling: requested whole when the stored
+     * device grant covers them, otherwise the method's least-privilege scopes,
+     * so the call never files a scope-upgrade request.
+     */
+    grantCeiling?: boolean;
     /** Keep caller-resolved token/password authoritative, including an empty result. */
     skipImplicitAuth?: boolean;
     onHelloOk?: GatewayClientOptions["onHelloOk"];

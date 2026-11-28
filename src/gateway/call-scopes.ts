@@ -4,6 +4,7 @@ import { normalizeOptionalString } from "@openclaw/normalization-core/string-coe
 import { readPairingConnectErrorDetails } from "../../packages/gateway-protocol/src/connect-error-details.js";
 import { readMissingScopeErrorDetails } from "../../packages/gateway-protocol/src/gateway-error-details.js";
 import type { DeviceAuthEntry } from "../shared/device-auth.js";
+import { roleScopesAllow } from "../shared/operator-scope-compat.js";
 import type { CallGatewayBaseOptions } from "./call-options.js";
 import {
   ADMIN_SCOPE,
@@ -58,9 +59,31 @@ export async function fitScopesToStoredDeviceGrant(params: {
   /** Explicit scopes, stored-auth calls and shared secrets keep their request. */
   keepRequest: boolean;
   loadGrant: () => Promise<DeviceAuthEntry | null>;
+  /** gateway.remote.edgeAuth: the proxy authenticates, not the stored grant. */
+  proxyAuthenticated?: boolean;
 }): Promise<OperatorScope[] | undefined> {
   const { opts, scopes } = params;
-  if (!scopes || params.keepRequest) {
+  if (!scopes) {
+    return scopes;
+  }
+  // A ceiling goes out whole only when the device connects by its stored grant
+  // and that grant covers it; otherwise the method's least-privilege scopes go
+  // out, as before the ceiling, so the call never files a scope upgrade and a
+  // shared-secret or proxy session never asks the Gateway to re-mint the token.
+  if (opts.grantCeiling === true) {
+    const grantedScopes =
+      params.keepRequest || params.proxyAuthenticated
+        ? []
+        : ((await params.loadGrant())?.scopes ?? []);
+    if (
+      roleScopesAllow({ role: "operator", requestedScopes: scopes, allowedScopes: grantedScopes })
+    ) {
+      return scopes;
+    }
+    const { resolveLeastPrivilegeOperatorScopesForMethod } = await import("./method-scopes.js");
+    return resolveLeastPrivilegeOperatorScopesForMethod(opts.method, opts.params);
+  }
+  if (params.keepRequest) {
     return scopes;
   }
   const grantedScopes = (await params.loadGrant())?.scopes;

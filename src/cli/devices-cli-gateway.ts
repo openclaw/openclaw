@@ -8,12 +8,17 @@ export const callDevicesGateway = async (
   method: string,
   opts: Parameters<typeof callGatewayFromCliWithTransport>[1],
   params?: unknown,
-  callOpts?: { scopes?: OperatorScope[]; signal?: AbortSignal },
+  callOpts?: {
+    scopes?: OperatorScope[];
+    grantCeiling?: boolean;
+    signal?: AbortSignal;
+  },
 ) =>
   callGatewayFromCliWithTransport(method, opts, params, {
     label: `Devices ${method}`,
     defaultTimeoutMs: DEFAULT_DEVICES_TIMEOUT_MS,
     scopes: callOpts?.scopes,
+    grantCeiling: callOpts?.grantCeiling,
     signal: callOpts?.signal,
     sharedStateMode: "read-only",
   });

@@ -87,6 +87,11 @@ type ApprovePairingGatewayContext = {
 };
 
 const FALLBACK_NOTICE = "Direct scope access failed; using local fallback.";
+// The Gateway shows a non-admin device-token session only its own entries. Ask
+// for admin where the stored grant holds it, so an administrator's CLI sees other
+// devices and their pending requests; a narrower or missing grant keeps the
+// pairing-only request and never files a scope upgrade.
+const LIST_REQUEST = { scopes: [PAIRING_SCOPE, ADMIN_SCOPE], grantCeiling: true };
 const OPERATOR_ROLE = "operator";
 const OPERATOR_SCOPE_PREFIX = "operator.";
 
@@ -116,7 +121,7 @@ async function listPairingWithFallback(
 ): Promise<DevicePairingList> {
   try {
     return parseDevicePairingList(
-      await callGatewayCli("device.pair.list", opts, {}, { scopes: [PAIRING_SCOPE], signal }),
+      await callGatewayCli("device.pair.list", opts, {}, { ...LIST_REQUEST, signal }),
     );
   } catch (error) {
     signal?.throwIfAborted();
@@ -437,14 +442,10 @@ async function resolveTokenManagementScopes(
 }
 
 function selectLatestPendingRequest(pending: PendingDevice[] | undefined) {
-  if (!pending?.length) {
-    return null;
-  }
-  return pending.reduce((latest, current) => {
-    const latestTs = typeof latest.ts === "number" ? latest.ts : 0;
-    const currentTs = typeof current.ts === "number" ? current.ts : 0;
-    return currentTs > latestTs ? current : latest;
-  });
+  const ts = (request: PendingDevice) => (typeof request.ts === "number" ? request.ts : 0);
+  return pending?.length
+    ? pending.reduce((latest, current) => (ts(current) > ts(latest) ? current : latest))
+    : null;
 }
 
 function formatTokenSummary(tokens: DeviceTokenSummary[] | undefined) {
