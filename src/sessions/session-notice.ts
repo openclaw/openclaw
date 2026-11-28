@@ -11,7 +11,6 @@ import type { PluginNotice } from "../shared/plugin-notice.js";
 import { PLUGIN_NOTICE_KIND } from "../shared/transcript-only-openclaw-assistant.js";
 import { isDeliverableMessageChannel, normalizeMessageChannel } from "../utils/message-channel.js";
 import { chatRef, type ChatRef } from "./chat-ref.js";
-import { resolveSendPolicy } from "./send-policy.js";
 
 /** The exact session incarnation a background producer observed; a reset or replacement ends it. */
 export type SessionGeneration = Readonly<
@@ -149,25 +148,16 @@ export async function postSessionNotice(
         sessionKey: resolveSystemEventQueueKey(sessionKey, agentId),
       });
     }
-    // A conversation that denies automatic sends keeps the notice in its transcript only.
-    return {
-      sendPolicy: resolveSendPolicy({
-        cfg: config,
-        entry,
-        sessionKey,
-        channel: route?.deliveryContext?.channel,
-      }),
-    };
+    return entry;
   });
   if (!current) {
     return { status: "skipped", reason: "session-changed" };
   }
   const target = route?.deliveryContext;
   const channel = target?.channel ? normalizeMessageChannel(target.channel) : undefined;
-  const delivery =
+  const planned =
     channel &&
     target?.to &&
-    current.sendPolicy !== "deny" &&
     isDeliverableMessageChannel(channel) &&
     !params.deliver?.skipChannels?.includes(channel)
       ? {
@@ -177,6 +167,19 @@ export async function postSessionNotice(
           // The session key's thread is canonical; stored context may name a stale thread.
           threadId: route?.threadId ?? target.threadId,
         }
+      : undefined;
+  // A conversation that denies automatic sends keeps the notice in its transcript only. The
+  // policy owner reaches the channel plugin registry, which loads this module: keep it lazy,
+  // like the delivery runtime below.
+  const delivery =
+    planned &&
+    (await import("./send-policy.js")).resolveSendPolicy({
+      cfg: config,
+      entry: current,
+      sessionKey,
+      channel: planned.channel,
+    }) !== "deny"
+      ? planned
       : undefined;
   if (delivery) {
     assertCurrent();
