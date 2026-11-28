@@ -149,6 +149,29 @@ describe("sandbox fs bridge anchored ops", () => {
     ).resolves.toBeNull();
   });
 
+  it("stats the parent directory before cd-ing, so a missing parent is classified the same as a missing file", async () => {
+    // Regression for #185552: dash's own `cd` failure text ("can't cd to <dir>") has no
+    // "No such file or directory" substring, unlike bash, so a missing *parent* directory
+    // used to bypass the classification below entirely and throw instead of returning null.
+    // Stat-ing the parent first reuses the exact same GNU-stat error text this file already
+    // trusts for a missing basename, so one script change fixes both without a new heuristic.
+    mockStat(() => ({
+      stdout: Buffer.from("regular file|6|2026-11-27 19:38:12.911418915 +0530\n"),
+      stderr: Buffer.alloc(0),
+      code: 0,
+    }));
+
+    await bridge.stat({ filePath: "note.txt" });
+
+    const call = mockedExecDockerRaw.mock.calls.find(([args]) =>
+      getDockerScript(args).includes('stat -c "%F|%s|%y"'),
+    );
+    expect(call).toBeDefined();
+    const script = getDockerScript(call![0]);
+    expect(script).toContain('LC_ALL=C stat -c "%F" -- "$1"');
+    expect(script.indexOf('stat -c "%F"')).toBeLessThan(script.indexOf('cd -- "$1"'));
+  });
+
   it("keeps non-missing stat failures as errors", async () => {
     mockStat(() => ({
       stdout: Buffer.alloc(0),
