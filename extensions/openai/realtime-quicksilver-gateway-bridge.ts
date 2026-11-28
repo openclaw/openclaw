@@ -63,6 +63,7 @@ const WEBSOCKET_OPEN = 1;
 
 type OpenAIQuicksilverBridgeConfig = RealtimeVoiceBridgeCreateRequest & {
   model: string;
+  acknowledgement?: string;
   voice?: string;
   logger: Pick<PluginLogger, "debug" | "warn">;
   resolveAuth: () => Promise<OpenAIQuicksilverAuth>;
@@ -462,6 +463,7 @@ export class OpenAIQuicksilverGatewayBridge implements RealtimeVoiceBridge {
         getSocket: () => this.sideband,
         logger: this.config.logger,
         model: this.config.model,
+        acknowledgement: this.config.acknowledgement,
         onError: this.config.onError,
         onFatalError: (error) => this.fail(error),
         onSessionClosed: (reason) => {

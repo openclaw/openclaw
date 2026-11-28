@@ -213,6 +213,7 @@ export function buildOpenAIRealtimeVoiceProvider(
         const bridgeConfig = {
           ...req,
           model,
+          acknowledgement: config.acknowledgement,
           voice: config.voice,
           instructions: buildOpenAIQuicksilverInstructions(model, req.instructions),
         };
