@@ -291,8 +291,11 @@ export async function createGatewayHttpTransport(params: {
       ?.nodeCapability;
   };
 
+  // The live Gateway keeps its Tailscale route while an update candidate validates.
   const managedTailscaleMode =
-    params.tailscaleMode && params.tailscaleMode !== "off" ? params.tailscaleMode : undefined;
+    !params.updateCanary && params.tailscaleMode && params.tailscaleMode !== "off"
+      ? params.tailscaleMode
+      : undefined;
   const bindHosts = await resolveGatewayListenHosts(params.bindHost);
   if (!isLoopbackHost(params.bindHost)) {
     params.log.warn(
