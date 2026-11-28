@@ -381,10 +381,7 @@ export function mutableCompensationFixtureSource(): string {
             assert.equal(fs.existsSync(root+'/compensation-writer-retired'),true);
             marker('compensation-uncertainty-observed');
           } else if(mode==='sealed-compensation') {
-            marker('compensation-refusal-observed');
             process.send({compensationRefused:!fs.existsSync(root+'/compensation-rollback-entered')});
-          } else {
-            marker('compensation-finish-observed');
           }
         } finally {
           nativeFs.default.lstat=originalLstat;

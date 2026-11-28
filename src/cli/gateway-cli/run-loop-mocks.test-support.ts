@@ -125,12 +125,6 @@ const m = {
   })),
   scheduleGatewayRestart: vi.fn((_opts?: { delayMs?: number; reason?: string }) => ({
     ok: true,
-    pid: process.pid,
-    signal: "SIGUSR2" as const,
-    delayMs: 0,
-    mode: "emit" as const,
-    coalesced: false,
-    cooldownMsApplied: 0,
   })),
   advanceCronActiveJobGeneration: vi.fn(),
   resetCronActiveJobs: vi.fn(),

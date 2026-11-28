@@ -200,14 +200,13 @@ class PreparedPoolFixture {
       purpose?: "reserve" | "build";
       runSetupScript?: boolean;
       repository?: RepositoryWorkerProjectSnapshot;
-      profileId?: string;
       expiresAtMs?: number;
     } = {},
   ) =>
     this.store.createIntent({
       environmentId,
       providerId: this.provider.id,
-      profileId: options.profileId ?? "development",
+      profileId: "development",
       provisionOperationId: `provision:${environmentId}`,
       profileSnapshot: this.profile(
         options.projectKey,
