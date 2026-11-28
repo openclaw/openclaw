@@ -7,10 +7,15 @@ import { icon } from "./ui-icons.js";
 
 type Access = GrantEntry["access"];
 /** A conversation the operator can see, for labels and the grant picker. */
-type GrantSession = { key: string; title: string; archived: boolean };
-/** Known group and channel conversations of the viewed agent; `complete` says
- * whether a grant missing from them can be reported as matching none. */
-export type GrantSessions = { rows: GrantSession[]; complete: boolean };
+type GrantSession = { key: string; label?: string; displayName?: string; archived?: boolean };
+/** Only the scoped list supplies picker and status facts. The already-loaded
+ * application roster may supply an exact title when that list is incomplete. */
+export type GrantSessions = {
+  rows: GrantSession[];
+  complete: boolean;
+  roster: () => readonly GrantSession[];
+};
+const title = (s: GrantSession) => s.label?.trim() || s.displayName?.trim() || s.key;
 
 const ACCESS: [Access, string][] = [
   ["read", "Can read"],
@@ -46,8 +51,21 @@ export function conversationAccessSection(
   );
   const entries = snapshot.grants.entries.filter((g) => g.agent === agentId),
     rows = sessions?.rows ?? [],
-    find = (key: string) => rows.find((s) => s.key === key),
+    byKey = new Map(rows.map((s) => [s.key, s])),
     feedback = el("p", "", "knowledge-dialog-feedback");
+  const rosterNames = new Map<string, string>();
+  if (sessions && !sessions.complete) {
+    const unresolved = new Set(
+      entries.filter((g) => !byKey.has(g.sessionKey)).map((g) => g.sessionKey),
+    );
+    if (unresolved.size) {
+      for (const row of sessions.roster()) {
+        if (unresolved.has(row.key)) {
+          rosterNames.set(row.key, title(row));
+        }
+      }
+    }
+  }
   feedback.setAttribute("role", "status");
   feedback.setAttribute("aria-live", "polite");
   const disabled = !snapshot.canChange;
@@ -91,16 +109,16 @@ export function conversationAccessSection(
     badge.append(icon("users", 14));
     const copy = el("span", undefined, "knowledge-store-copy"),
       titleLine = el("span"),
-      known = find(entry.sessionKey),
-      name = known?.title ?? entry.sessionKey;
+      known = byKey.get(entry.sessionKey),
+      name = known ? title(known) : (rosterNames.get(entry.sessionKey) ?? entry.sessionKey);
     titleLine.append(el("strong", name));
-    if (sessions?.complete && !rows.some((s) => covers(entry.sessionKey, s.key))) {
+    if (sessions?.complete && !known && !rows.some((s) => covers(entry.sessionKey, s.key))) {
       titleLine.append(el("span", "No known conversation", "chip knowledge-chip"));
     } else if (known?.archived) {
       titleLine.append(el("span", "Archived", "chip knowledge-chip"));
     }
     copy.append(titleLine);
-    if (known) {
+    if (known || name !== entry.sessionKey) {
       copy.append(el("small", entry.sessionKey, "knowledge-muted knowledge-grant-key"));
     }
     const mode = accessSelect(entry.access, "Access for " + name),
@@ -144,7 +162,7 @@ export function conversationAccessSection(
   placeholder.value = "";
   pick.append(placeholder);
   for (const s of candidates) {
-    const option = el("option", s.title);
+    const option = el("option", title(s));
     option.value = s.key;
     pick.append(option);
   }
