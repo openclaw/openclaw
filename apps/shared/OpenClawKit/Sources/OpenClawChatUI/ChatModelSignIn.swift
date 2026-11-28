@@ -7,15 +7,27 @@ import SwiftUI
 /// Requests stay bound to the agent and physical connection captured when the sheet opens.
 public struct OpenClawChatModelSignInContext: Sendable {
     public let agentID: String
+    public let canRemoveSignIn: Bool
+    public let canStartSignIn: Bool
+    public let canSetAPIKey: Bool
+    public let canCheckConnection: Bool
     public let request: @MainActor @Sendable (String, [String: AnyCodable]) async throws -> Data
     public let isCurrent: @MainActor @Sendable () async -> Bool
 
     public init(
         agentID: String,
+        canRemoveSignIn: Bool = false,
+        canStartSignIn: Bool = true,
+        canSetAPIKey: Bool = false,
+        canCheckConnection: Bool = false,
         request: @escaping @MainActor @Sendable (String, [String: AnyCodable]) async throws -> Data,
         isCurrent: @escaping @MainActor @Sendable () async -> Bool)
     {
         self.agentID = agentID
+        self.canRemoveSignIn = canRemoveSignIn
+        self.canStartSignIn = canStartSignIn
+        self.canSetAPIKey = canSetAPIKey
+        self.canCheckConnection = canCheckConnection
         self.request = request
         self.isCurrent = isCurrent
     }
@@ -26,6 +38,7 @@ struct ChatModelAuthStatus: Decodable {
         /// The provider these options sign in to; the phone groups options by it.
         let provider: String?
         let loginOptions: [LoginOption]?
+        let apiKeySupported: Bool?
     }
 
     struct LoginOption: Decodable, Identifiable, Equatable {
@@ -33,6 +46,7 @@ struct ChatModelAuthStatus: Decodable {
         let label: String
         let hint: String?
         let groupLabel: String?
+        var kind: String?
     }
 
     struct Expiry: Decodable, Equatable {
@@ -46,9 +60,23 @@ struct ChatModelAuthStatus: Decodable {
         let status: String?
         let displayName: String?
         let email: String?
+        let planLabel: String?
         let expiry: Expiry?
         /// Only saved sign-ins this server can remove carry it.
         let logoutSupported: Bool?
+        var source: String?
+    }
+
+    struct Usage: Decodable, Equatable {
+        struct Window: Decodable, Equatable {
+            let label: String
+            let usedPercent: Double
+            let resetAt: Double?
+        }
+
+        let windows: [Window]
+        let plan: String?
+        let authProfileId: String?
     }
 
     struct NativeAuth: Decodable, Equatable {
@@ -71,6 +99,7 @@ struct ChatModelAuthStatus: Decodable {
         let profiles: [Profile]?
         let nativeAuth: NativeAuth?
         let apiKey: APIKey?
+        let usage: Usage?
         var id: String {
             self.provider
         }
@@ -174,7 +203,7 @@ final class ChatModelSignInModel {
     }
 
     func start(_ option: ChatModelAuthStatus.LoginOption) async {
-        guard !self.busy, !self.closed, self.sessionID == nil,
+        guard self.canStartSignIn, !self.busy, !self.closed, self.sessionID == nil,
               self.authStatus?.loginOptions.contains(where: { $0.id == option.id }) == true
         else { return }
         let id = UUID().uuidString
@@ -280,6 +309,86 @@ final class ChatModelSignInModel {
             } else {
                 self.outcome = .signOutFailed
             }
+        }
+    }
+
+    var canStartSignIn: Bool {
+        self.context.canStartSignIn
+    }
+
+    func canRemoveSignIn(provider: String, profileID: String) -> Bool {
+        self.context.canRemoveSignIn && self.authStatus?.providers.first { $0.provider == provider }?
+            .profiles?.contains { $0.profileId == profileID && $0.logoutSupported == true } == true
+    }
+
+    func removeSignIn(provider: String, profileID: String) async {
+        guard self.canRemoveSignIn(provider: provider, profileID: profileID) else { return }
+        await self.signOut(provider: provider, profileIDs: [profileID])
+    }
+
+    var canCheckConnection: Bool {
+        self.context.canCheckConnection
+    }
+
+    var canSetAPIKey: Bool {
+        self.context.canSetAPIKey
+    }
+
+    /// A successful probe proves at least one route works, not that all accounts work.
+    func checkConnection(provider: String) async -> String {
+        struct Receipt: Decodable {
+            let status: String
+            let error: String?
+        }
+        guard self.canCheckConnection, !self.busy, self.sessionID == nil else {
+            return String(localized: "Can’t check the connection right now.")
+        }
+        self.busy = true
+        defer { self.busy = false }
+        do {
+            let data = try await request("models.probe", [
+                "provider": AnyCodable(provider), "agentId": AnyCodable(context.agentID),
+            ])
+            let receipt = try JSONDecoder().decode(Receipt.self, from: data)
+            if receipt.status == "ok" {
+                return String(localized: "Provider responded.")
+            }
+            return receipt.error?.trimmedNonEmpty ?? String(localized: "Couldn’t verify the connection.")
+        } catch {
+            return String(localized: "Couldn’t verify the connection.")
+        }
+    }
+
+    /// Sets the provider’s key, not an arbitrary named profile. The secret is never retained by the model.
+    func setAPIKey(provider: String, key: String) async -> String {
+        struct Receipt: Decodable {
+            let provider: String
+            let profileId: String
+            let warning: String?
+        }
+        guard self.canSetAPIKey, !self.busy, self.sessionID == nil, let key = key.trimmedNonEmpty,
+              authStatus?.providerCapabilities?.contains(where: {
+                  $0.provider == provider && $0.apiKeySupported == true
+              }) == true
+        else { return String(localized: "Can’t update the API key right now.") }
+        self.busy = true
+        defer { self.busy = false }
+        do {
+            let data = try await request("models.authSetApiKey", [
+                "provider": AnyCodable(provider), "agentId": AnyCodable(context.agentID),
+                "apiKey": AnyCodable(key),
+            ])
+            let receipt = try JSONDecoder().decode(Receipt.self, from: data)
+            do { try await self.readStatus() } catch { self.outcome = .loadFailed }
+            if await self.context.isCurrent(), !self.closed {
+                await self.onAuthChanged()
+            }
+            if receipt.warning?.trimmedNonEmpty != nil {
+                return String(localized: "API key saved, but some provider settings couldn’t be updated.")
+            }
+            return String(localized: "API key saved.")
+        } catch {
+            return String(localized: "Couldn’t confirm whether the API key was saved. Refresh before trying again.")
         }
     }
 
