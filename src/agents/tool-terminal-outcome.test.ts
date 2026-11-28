@@ -18,7 +18,10 @@ import { buildPayloads } from "./embedded-agent-runner/run/payloads.test-helpers
 import { createSubscribedSessionHarness } from "./embedded-agent-subscribe.e2e-harness.js";
 import { makeAgentAssistantMessage } from "./test-helpers/agent-message-fixtures.js";
 import { inferToolMetaFromArgsCore } from "./tool-display.js";
+import { registerHeadlessToolSearchCatalog } from "./tool-search-catalog.js";
+import { createToolSearchCatalogRef, createToolSearchTools } from "./tool-search.js";
 import { createToolTerminalObserver } from "./tool-terminal-outcome.js";
+import { jsonResult } from "./tools/common.js";
 
 const steeringModel: Model = {
   id: "tool-terminal-steering-model",
@@ -184,6 +187,82 @@ describe("tool terminal outcome observer", () => {
       }
     },
   );
+
+  it.each([
+    {
+      name: "keeps a failed target after another target succeeds",
+      calls: [
+        { id: "sessions_spawn", args: { task: "fail" } },
+        { id: "skills_search", args: { task: "ok" } },
+      ],
+      expected: ["⚠️ Sub-agent failed"],
+    },
+    {
+      name: "recovers an unknown target through the real one",
+      calls: [
+        { id: "sessions_spwan", args: { task: "ok" } },
+        { id: "sessions_spawn", args: { task: "ok" } },
+      ],
+      expected: [],
+    },
+    {
+      name: "recovers a failed target when its catalog id succeeds",
+      calls: [
+        { id: "sessions_spawn", args: { task: "fail" } },
+        { id: "openclaw:core:sessions_spawn", args: { task: "ok" } },
+      ],
+      expected: [],
+    },
+    {
+      name: "recovers a flattened call whose id is a target argument",
+      calls: [
+        { name: "sessions_spawn", id: "req-7", task: "fail" },
+        { name: "sessions_spawn", id: "req-8", task: "ok" },
+      ],
+      expected: [],
+    },
+  ])("$name through dispatch_action", async ({ calls, expected }) => {
+    const catalogRef = createToolSearchCatalogRef();
+    const target = (name: string) => ({
+      name,
+      label: name,
+      description: `Runs ${name}.`,
+      parameters: Type.Object({ task: Type.Optional(Type.String()) }),
+      execute: async (_id: string, args: { task?: string }) =>
+        jsonResult(
+          args.task === "fail" ? { status: "error", error: `${name} failed` } : { status: "ok" },
+        ),
+    });
+    registerHeadlessToolSearchCatalog({
+      catalogRef,
+      tools: [target("sessions_spawn"), target("skills_search")],
+    });
+    const dispatch = createToolSearchTools({ catalogRef }).find(
+      (tool) => tool.name === "dispatch_action",
+    );
+    const { emit, subscription } = createSubscribedSessionHarness({ runId: "dispatch-target" });
+    const turns = calls.map((args, index) => [
+      makeToolCall(`call-${index}`, "dispatch_action", args),
+    ]);
+    const agent = new Agent({
+      initialState: { model: steeringModel, tools: dispatch ? [dispatch] : [] },
+      streamFn: () => responseStream(turns.shift() ?? []),
+    });
+    const unsubscribe = agent.subscribe(emit);
+    try {
+      await agent.prompt("Delegate the task.");
+      await subscription.waitForPendingEvents();
+      const payloads = buildPayloads({
+        assistantTexts: subscription.assistantTexts,
+        lastAssistant: subscription.getCurrentAttemptAssistant(),
+        lastToolError: subscription.getLastToolError(),
+      });
+      expect(payloads.map((payload) => payload.text)).toEqual(expected);
+    } finally {
+      unsubscribe();
+      subscription.unsubscribe();
+    }
+  });
 
   it.each([
     { name: "recovers", recovered: true },
