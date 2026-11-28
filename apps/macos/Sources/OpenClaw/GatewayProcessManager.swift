@@ -185,7 +185,7 @@ final class GatewayProcessManager {
     private var testingSkipControlChannelRefresh = false
     private var testingControlChannelRefreshForces: [Bool] = []
     #endif
-    let logger = Logger(subsystem: "ai.openclaw", category: "gateway.process")
+    let logger: Logger
 
     private let logLimit = 20000 // characters to keep in-memory
     private let environmentRefreshMinInterval: TimeInterval = 30
@@ -193,10 +193,12 @@ final class GatewayProcessManager {
 
     init(
         readinessClock: any Clock<Duration> = ContinuousClock(),
-        childSupervisor: GatewayChildSupervisor = GatewayChildSupervisor())
+        childSupervisor: GatewayChildSupervisor = GatewayChildSupervisor(),
+        logger: Logger = Logger(subsystem: "ai.openclaw", category: "gateway.process"))
     {
         self.readinessClock = readinessClock
         self.childSupervisor = childSupervisor
+        self.logger = logger
     }
 
     var hostsLocalGatewayWithRemotePrimary: Bool {

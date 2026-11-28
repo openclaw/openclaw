@@ -57,6 +57,39 @@ final class GatewayChildSupervisor {
         }
     }
 
+    struct LogSetupError: LocalizedError {
+        enum Operation: String {
+            case createFolder = "create the Gateway log folder"
+            case openFile = "open the Gateway log file"
+        }
+
+        let operation: Operation
+        let path: String
+        let underlyingError: any Error
+
+        var errorDescription: String? {
+            let recovery = switch self.operation {
+            case .createFolder:
+                String(localized: "Check that the parent folder is writable and no file blocks the log folder.")
+            case .openFile:
+                String(localized: "Check that the log path is a writable file or can be created in its folder.")
+            }
+            let retry = String(localized: "Then quit and reopen OpenClaw to retry.")
+            let code = GatewayChildSupervisor.startupSystemErrorCode(for: self.underlyingError).map { " (\($0))" } ?? ""
+            return "Could not \(self.operation.rawValue) \(self.path): \(self.underlyingError.localizedDescription)" +
+                "\(code)\n\(recovery) \(retry)"
+        }
+    }
+
+    nonisolated static func startupSystemErrorCode(for error: any Error) -> String? {
+        let cause = error as NSError
+        return switch cause.domain {
+        case NSPOSIXErrorDomain: "POSIX \(cause.code)"
+        case NSCocoaErrorDomain: "Cocoa \(cause.code)"
+        default: nil
+        }
+    }
+
     struct Child: Sendable {
         let waitUntilStarted: @Sendable () async throws -> Int32
         let wait: @Sendable () async -> Failure
@@ -214,12 +247,19 @@ final class GatewayChildSupervisor {
 
     private static func launch(configuration: Configuration) throws -> Child {
         let logURL = URL(fileURLWithPath: configuration.logPath)
-        try FileManager.default.createDirectory(
-            at: logURL.deletingLastPathComponent(), withIntermediateDirectories: true)
+        let logDirectory = logURL.deletingLastPathComponent()
+        do {
+            try FileManager.default.createDirectory(at: logDirectory, withIntermediateDirectories: true)
+        } catch {
+            throw LogSetupError(operation: .createFolder, path: logDirectory.path, underlyingError: error)
+        }
         // Darwin's SETEXEC session spawn needs this descriptor open for its file actions.
         // Subprocess applies CLOEXEC_DEFAULT to close unrelated descriptors in the child.
         let descriptor = Darwin.open(logURL.path, O_WRONLY | O_CREAT | O_APPEND, S_IRUSR | S_IWUSR)
-        guard descriptor >= 0 else { throw POSIXError(POSIXErrorCode(rawValue: errno) ?? .EIO) }
+        guard descriptor >= 0 else {
+            let error = POSIXError(POSIXErrorCode(rawValue: errno) ?? .EIO)
+            throw LogSetupError(operation: .openFile, path: logURL.path, underlyingError: error)
+        }
         let log = FileHandle(fileDescriptor: descriptor, closeOnDealloc: true)
         let lifeline = Pipe()
         let process = ManagedProcess.launch(
