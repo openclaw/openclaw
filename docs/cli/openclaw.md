@@ -46,7 +46,27 @@ It does not dump secrets or load plugin CLI commands just to start.
 
 Use `status` for the detailed inventory: config path, docs/source paths, local CLI checks, key/token presence, agents, model, and Gateway details.
 
-OpenClaw uses the same reference discovery as regular agents: in a Git checkout it points at local `docs/` and the source tree; in an npm install it uses bundled docs and links to [https://github.com/openclaw/openclaw](https://github.com/openclaw/openclaw), with guidance to check source when docs are not enough.
+### Documentation and assistant-led setup
+
+OpenClaw reports documentation/source locations through the same reference
+discovery used by regular agents: local paths in a checkout or bundled
+installation, plus the [source repository](https://github.com/openclaw/openclaw).
+Those locations are references, not document contents automatically loaded into
+the setup conversation.
+
+Regular agents can consult those references with their available read/search
+tools and use the [assistant-led setup framework](/start/small-host-setup#assistant-led-setup)
+to guide the user without assigning a reading task. The built-in setup agent is
+more restricted: its primary loop acts only through the typed `openclaw` tool,
+and its fallback planner uses the supplied overview and conversation without
+file or network lookups. It does not currently have an arbitrary documentation
+reader. Linking a guide does not by itself make that agent consume it.
+
+Keep guidance within the current surface: inspect through supported operations,
+use protected sign-in controls, and report what their results actually confirm.
+For an app-managed Mac, follow [native onboarding](/start/onboarding) and
+[Gateway on macOS](/platforms/mac/bundled-gateway); do not substitute Linux
+service setup or an independent runtime installation.
 
 ## Explain an error without a model
 
@@ -232,7 +252,8 @@ Plugin uninstall refuses a
 plugin that backs the active inference route; exit OpenClaw and run
 `openclaw plugins uninstall <id>` from a terminal.
 
-Approval is given in your own words: unambiguous replies ("yes", "sure", "go ahead", "not now") resolve from a fixed list. When the configured route supports a separate completion call, other replies can be classified from only your message and the pending proposal — never by the conversation model itself, which cannot self-approve. Unclassified or ambiguous replies keep the proposal pending and the conversation asks again.
+In a direct OpenClaw setup conversation—not a delegated request or rescue
+command—approval is given in your own words: unambiguous replies ("yes", "sure", "go ahead", "not now") resolve from a fixed list. When the configured route supports a separate completion call, other replies can be classified from only your message and the pending proposal — never by the conversation model itself, which cannot self-approve. Unclassified or ambiguous replies keep the proposal pending and the conversation asks again.
 
 ### Change history
 
@@ -319,26 +340,24 @@ with `openclaw setup` on the Gateway host. If cancellation deferred legacy
 history migration for a newly named agent, the next Gateway startup retries it;
 use `openclaw doctor --fix` on the same state/config to finish it sooner.
 
-If inference is missing or its live check fails, leave OpenClaw and run `openclaw onboard`. Guided onboarding tries the configured model first, then authenticated subscription CLIs, API keys, and remaining supported CLIs; it asks each candidate for a real reply and persists only a passing route. OpenClaw starts immediately after that boundary and can then configure the workspace, Gateway, channels, agents, plugins, and other optional features.
+If inference is missing or its live check fails, leave OpenClaw and run
+`openclaw onboard`. The terminal's guided flow can look for existing connections,
+waits for your choice, and verifies it with a real reply before activation. A
+failed or cancelled attempt does not automatically try another provider. Reuse
+a saved sign-in when it is offered.
+See [CLI onboarding](/start/wizard#guided-default).
 
-The macOS app skips this ladder entirely when it reaches a configured Gateway
-whose default agent already has a configured model; it opens the normal agent
-UI.
-For a fresh or incomplete Gateway, the app drives the inference ladder through
-the `openclaw.setup.detect` and `openclaw.setup.activate` Gateway methods:
-detect lists every candidate backend it finds, activate live-tests one
-candidate (a real "reply with OK" completion), and only persists the model,
-credential, and provider/runtime state needed for that route after the test passes. Workspace and Gateway defaults remain for OpenClaw. A failing candidate
-never changes config; the app automatically walks down the ladder and finally
-offers a manual key/token step populated from the Gateway's active
-text-inference provider plugins. The selected provider owns its starter model
-and config, and the credential is verified the same way before it is saved.
-While detection still probes local tools and services, the app and the Control
-UI list the provider sign-in and key/token choices that
-`openclaw.setup.options` reads from config and plugin manifests, so you can
-start one right away. Results that arrive later add detected candidates without
-moving focus, changing your selection, or interrupting a sign-in or test you
-already started.
+Native macOS [automatic first run](/start/onboarding#automatic-first-run) is a
+different entry point: it can test detected AI access with real completions. A
+Gateway with a configured model follows the existing-agent startup path. Choose
+**Set up manually** to select the connection yourself; the
+[onboarding overview](/start/onboarding-overview#macos-app-onboarding) explains
+automatic selection and what happens when verification fails.
+
+The app and Control UI can offer sign-in and key/token options while local
+detection is still running. `openclaw.setup.options` reads those choices from
+config and plugin manifests. Later discovery results can add options without
+moving focus, changing your selection, or interrupting a sign-in or test.
 
 Codex supervision and other optional plugin features stay outside this
 inference activation transaction. Configure them only after inference is
@@ -347,7 +366,7 @@ supervision opt-outs remain untouched during inference setup.
 
 ## AI conversation
 
-Interactive OpenClaw's free-form conversation runs through the same agent loop as regular OpenClaw agents, restricted to one ring-zero OpenClaw authority tool, `openclaw`, that wraps the typed operations. Read actions run freely, mutations require your conversational approval for that exact operation (see Operations and approval), and every applied write is audited and re-validated. The agent session persists, so OpenClaw has real multi-turn memory. If the verified inference route later stops working, return to `openclaw onboard` and repair it before continuing.
+Interactive OpenClaw's free-form conversation runs through the same agent loop as regular OpenClaw agents, restricted to one ring-zero OpenClaw authority tool, `openclaw`, that wraps the typed operations. Read actions run freely. Direct setup conversations collect approval for an exact mutation; delegated requests use the calling session's permission and approval controls (see Operations and approval). Every applied write is audited and re-validated. The agent session persists, so OpenClaw has real multi-turn memory. If the verified inference route later stops working, return to `openclaw onboard` and repair it before continuing.
 
 A failed or timed-out turn ends that setup conversation with a visible error.
 Retrying starts a fresh conversation and live-checks the inference route again.
@@ -385,7 +404,7 @@ Embedded runtimes and the Codex app-server harness enforce the ring-zero
 restriction directly: the run carries an OpenClaw tool allow-list with only
 the `openclaw` tool. For Codex, OpenClaw also disables environments, native
 execution, multi-agent, goal, app/plugin, skill/MCP, web-search,
-`request_user_input`, and its native planning utility for that run. CLI
+and `request_user_input` for that run. CLI
 harnesses do not consume OpenClaw's allow-list,
 so OpenClaw admits only backends whose own tool-selection contract can prove
 the same restriction:
@@ -400,8 +419,8 @@ the same restriction:
 
 Only OpenClaw sessions get the openclaw MCP server; normal agent runs
 never see this tool. Selectable/no-native CLI backends and API-key models
-therefore enforce the literal single-tool loop. Codex app-server models enforce
-a single OpenClaw authority tool plus the inert native planning utility. In all
+therefore enforce the literal single-tool loop. Codex app-server models restrict the setup run to
+the OpenClaw authority tool. In all
 three cases, setup writes remain confined to OpenClaw's audited approval
 contract.
 
@@ -473,7 +492,7 @@ Security contract for remote rescue:
 - Remote rescue cannot open the local TUI or switch into an interactive agent session; use local `openclaw` for agent handoff.
 - `config unset` is unavailable in remote rescue because that path cannot revalidate owner policy at the final write. Ask your regular agent to remove the setting through the setup helper, or run `openclaw config unset <path>` locally.
 - Persistent writes still require approval, even in rescue mode.
-- Pending approvals are one-use. Any newer rescue command for the same account, channel, and sender revokes the older plan; failed execution also consumes approval, so resend the command to retry.
+- Pending approvals are one-use. Any newer rescue command for the same account, channel, and sender revokes the older plan. Failed execution also consumes approval: inspect the operation outcome and current state before submitting a fresh command, and retry only incomplete work.
 - Every applied rescue operation is audited. Message-channel rescue records channel, account, sender, and source-address metadata; config-mutating operations also record config hashes before and after.
 - Secrets are never echoed. SecretRef inspection reports availability, not values.
 - If the Gateway is alive, rescue prefers Gateway typed operations; if it is dead, rescue uses only the minimal local repair surface that does not depend on the normal agent loop.

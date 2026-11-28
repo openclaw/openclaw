@@ -56,6 +56,12 @@ browser dashboard. Reopen it later with `openclaw dashboard`.
 Docs: [Dashboard](/web/dashboard).
 </Info>
 
+<Tip>
+Using a saved password-manager API key or an existing Ollama server? See
+[Small-host setup](/start/small-host-setup) for credential entry, verification,
+and the next action after an interrupted step.
+</Tip>
+
 ## Memory embeddings
 
 After a local AI connection is verified, guided onboarding offers a skippable
