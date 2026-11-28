@@ -634,11 +634,26 @@ export function assignTransportErrorDetails(
         asOptionalRecord(record?.error) ??
         asOptionalRecord(response?.error) ??
         asOptionalRecord(asOptionalRecord(record?.payload)?.error);
-      const metadata: Record<string, string | number | undefined> = {
+      const argumentHash = readTransportDiagnosticLabel(cause?.argumentHash);
+      const terminalToolArgumentDiagnostics =
+        cause?.code === MALFORMED_TOOL_CALL_TERMINAL_ERROR_CODE &&
+        typeof cause.argumentChars === "number" &&
+        Number.isSafeInteger(cause.argumentChars) &&
+        cause.argumentChars >= 0 &&
+        typeof argumentHash === "string" &&
+        typeof cause.repairAttempted === "boolean"
+          ? {
+              argumentChars: cause.argumentChars,
+              argumentHash,
+              repairAttempted: cause.repairAttempted,
+            }
+          : undefined;
+      const metadata: Record<string, string | number | boolean | undefined> = {
         provider: output.provider,
         model: output.model,
         name: readTransportDiagnosticLabel(record?.name),
         ...diagnostic,
+        ...terminalToolArgumentDiagnostics,
         status: readTransportDiagnosticLabel(
           record?.status ?? record?.statusCode ?? response?.status,
         ),

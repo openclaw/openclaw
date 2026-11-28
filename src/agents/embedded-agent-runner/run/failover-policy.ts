@@ -42,6 +42,8 @@ type AssistantDecisionParams = ProfileDecisionParams & {
   errorMessage?: string;
   /** A listed model rejected the chat request; only another model can help. */
   listedModelRejected?: boolean;
+  /** Malformed tool arguments are model-specific output failures proven pre-dispatch. */
+  malformedToolCallArguments?: boolean;
 };
 
 type RunFailoverDecisionParams =
@@ -160,6 +162,11 @@ export function resolveRunFailoverDecision(params: RunFailoverDecisionParams): R
         params.terminal.source === "external")
     ) {
       return surfaceError;
+    }
+    if (params.malformedToolCallArguments) {
+      return params.fallbackConfigured
+        ? { action: "fallback_model", reason: "format" }
+        : { action: "continue_normal" };
     }
     // Same model, another login or a compaction cannot fix it; the next model can (#198288).
     if (params.listedModelRejected) {

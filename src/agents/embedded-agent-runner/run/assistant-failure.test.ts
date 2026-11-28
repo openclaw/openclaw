@@ -6,6 +6,7 @@ import { projectProviderError } from "../../../../packages/ai/src/utils/provider
 import type { OpenClawConfig } from "../../../config/types.openclaw.js";
 import {
   type AssistantMessage,
+  MALFORMED_TOOL_CALL_ARGUMENTS_ERROR_CODE,
   PROVIDER_FAILURE_WITH_OUTPUT_ERROR_CODE,
   PROVIDER_POST_DISPATCH_AMBIGUITY_ERROR_CODE,
 } from "../../../llm/types.js";
@@ -106,6 +107,7 @@ function makeToolRejectionInput(model: string) {
       provider: "anthropic",
       model,
       stopReason: "error",
+      errorCode: MALFORMED_TOOL_CALL_ARGUMENTS_ERROR_CODE,
       errorMessage: "Provider completed tool call with malformed JSON arguments",
       content: [],
       usage: createMockUsage(640, 1329),
@@ -600,50 +602,59 @@ describe("handleEmbeddedAssistantFailure", () => {
     expect(fixture.advanceAuthProfile).not.toHaveBeenCalled();
   });
 
-  it.each([
-    ["retries discarded content", 0, true, "claude-opus-5", true],
-    ["surfaces the exhausted rejection", 3, false, "claude-opus-5", true],
-    ["falls back after exhausting retries", 3, true, "mock-1", false],
-  ] as const)(
-    "%s for a pre-dispatch tool-call rejection",
-    async (_name, retries, fallback, model, refresh) => {
-      const fixture = makeToolRejectionInput(model);
-      fixture.input.emptyErrorRetries = retries;
-      fixture.input.runInput.fallbackConfigured = fallback;
-      if (refresh) {
-        fixture.input.preparedRuntime.maybeRefreshRuntimeAuthForAuthError = vi.fn(async () => true);
-      }
-      if (retries === 0) {
-        expect(await handleEmbeddedAssistantFailure(fixture.input)).toMatchObject({
-          action: "retry",
-          emptyErrorRetries: 1,
-        });
-        expectNoRecovery(fixture);
-      } else if (!fallback) {
-        expect(await handleEmbeddedAssistantFailure(fixture.input)).toMatchObject({
-          action: "proceed",
-          emptyErrorRetries: 3,
-        });
-      } else {
-        await expect(handleEmbeddedAssistantFailure(fixture.input)).rejects.toMatchObject({
-          reason: "unknown",
-          provider: "anthropic",
-          model: "mock-1",
-          rawError: "Provider completed tool call with malformed JSON arguments",
-        });
-        expect(fixture.advanceAuthProfile).not.toHaveBeenCalled();
-        expect(fixture.traceAttempts).toEqual([
-          {
-            provider: "anthropic",
-            model: "mock-1",
-            result: "fallback_model",
-            reason: "unknown",
-            stage: "assistant",
-          },
-        ]);
-      }
-    },
-  );
+  it("sends a safe malformed tool-call failure to a configured model fallback immediately", async () => {
+    let primaryAttempts = 0;
+    const result = await runWithModelFallback({
+      cfg: undefined,
+      provider: "anthropic",
+      model: "claude-opus-5",
+      manifestPlugins: [],
+      skipAuthProfileRuntime: true,
+      fallbacksOverride: ["openai/fixture-next"],
+      run: async (provider) => {
+        if (provider === "openai") {
+          return "Fallback answered.";
+        }
+        primaryAttempts += 1;
+        const fixture = makeToolRejectionInput();
+        fixture.input.runInput.fallbackConfigured = true;
+        fixture.input.emptyErrorRetries = 0;
+        const outcome = await handleEmbeddedAssistantFailure(fixture.input);
+        return `Primary unexpectedly returned ${outcome.action}`;
+      },
+    });
+
+    expect(result).toMatchObject({ provider: "openai", result: "Fallback answered." });
+    expect(primaryAttempts).toBe(1);
+  });
+
+  it("lets terminal recovery repair malformed arguments when no fallback is configured", async () => {
+    const fixture = makeToolRejectionInput();
+    fixture.input.runInput.fallbackConfigured = false;
+    fixture.input.emptyErrorRetries = 0;
+
+    await expect(handleEmbeddedAssistantFailure(fixture.input)).resolves.toMatchObject({
+      action: "proceed",
+      emptyErrorRetries: 0,
+    });
+    expectNoRecovery(fixture);
+  });
+
+  it("does not send a side-effecting malformed attempt to model fallback", async () => {
+    const fixture = makeToolRejectionInput();
+    fixture.input.runInput.fallbackConfigured = true;
+    fixture.input.emptyErrorRetries = 0;
+    fixture.input.normalizedAttempt.attempt.currentAttemptReplayMetadata = {
+      hadPotentialSideEffects: true,
+      replaySafe: false,
+    };
+
+    await expect(handleEmbeddedAssistantFailure(fixture.input)).resolves.toMatchObject({
+      action: "proceed",
+      emptyErrorRetries: 0,
+    });
+    expect(fixture.traceAttempts).toEqual([]);
+  });
 
   it("does not cache an exact credential-file failure from a fallback candidate", async () => {
     await withEnvAsync({ OPENCLAW_FALLBACK_SKIP_TTL_MS: "60000" }, async () => {

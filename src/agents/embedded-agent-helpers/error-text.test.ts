@@ -1,5 +1,6 @@
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
+import { renderRecordedAssistantFailureCopy } from "../failover/assistant-request-failure-copy.js";
 import { resolvePreparedSandboxRuntimeStatus } from "../sandbox/runtime-status.js";
 import { makeAssistantMessageFixture } from "../test-helpers/assistant-message-fixtures.js";
 import { formatAssistantErrorText, formatUserFacingAssistantErrorText } from "./error-text.js";
@@ -40,6 +41,44 @@ describe("formatAssistantErrorText streaming JSON parse classification", () => {
   ])("preserves safe user-facing copy for %s (%s)", (errorMessage, errorCode, expected) => {
     const message = makeAssistantMessageFixture({ errorMessage, errorCode });
     expect(formatUserFacingAssistantErrorText(message)).toBe(expected);
+  });
+
+  it("shows validated malformed tool-call diagnostics in the user-facing failure", () => {
+    const message = makeAssistantMessageFixture({
+      errorMessage: "Provider completed tool call with malformed JSON arguments SECRET.md",
+      errorCode: "malformed_tool_call_arguments",
+      errorBody: JSON.stringify({
+        code: "malformed_tool_call_arguments",
+        argumentChars: 19,
+        argumentHash: "jiqoxq1e07seo",
+        repairAttempted: true,
+        argumentText: "SECRET.md",
+      }),
+    });
+    const expected =
+      "⚠️ The model returned malformed tool-call arguments. This call was rejected before execution. Check completed work, then retry the task or choose another model. Diagnostic details: 19 characters; hash jiqoxq1e07seo; repair attempted: yes. For details, open Settings → Logs in the OpenClaw app or run `openclaw logs --follow` in your terminal.";
+    const copy = formatUserFacingAssistantErrorText(message);
+
+    expect(copy).toBe(expected);
+    expect(copy).not.toContain("SECRET.md");
+    expect(renderRecordedAssistantFailureCopy(message)).toBe(expected);
+  });
+
+  it("does not render malformed or provider-controlled diagnostic fields", () => {
+    const message = makeAssistantMessageFixture({
+      errorMessage: "Provider completed tool call with malformed JSON arguments",
+      errorCode: "malformed_tool_call_arguments",
+      errorBody: JSON.stringify({
+        code: "malformed_tool_call_arguments",
+        argumentChars: 19,
+        argumentHash: "SECRET.md",
+        repairAttempted: true,
+      }),
+    });
+
+    const copy = formatUserFacingAssistantErrorText(message);
+    expect(copy).not.toContain("SECRET.md");
+    expect(copy).not.toContain("diagnostic hash");
   });
 
   const parseError =

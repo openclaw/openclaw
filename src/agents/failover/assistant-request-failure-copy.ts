@@ -82,6 +82,7 @@ const API_KEY_EXPIRED_USER_TEXT =
   "This API key has expired. Create a new API key in your provider's console and replace it in OpenClaw or its secret store. Signing in again will not renew this key.";
 const ITEM_CONFLICT_USER_TEXT =
   "⚠️ The AI service could not recover saved conversation state (item_conflict). Retry this turn. If it still fails, run /compact or choose another model, and share the Gateway logs with the operator.";
+const MALFORMED_TOOL_CALL_ARGUMENTS_ERROR_CODE = "malformed_tool_call_arguments";
 
 const ASSISTANT_REQUEST_FAILURE_COPY = {
   auth: "Couldn't sign in to the AI service. Sign in again under Models in the OpenClaw app or run `openclaw configure`.",
@@ -282,6 +283,35 @@ export function renderAssistantFormatFailureCopy(
   return undefined;
 }
 
+/** Render only the content-free diagnostics created for terminal malformed tool arguments. */
+export function renderMalformedToolCallFailureCopy(message: {
+  errorCode?: unknown;
+  errorBody?: unknown;
+}): string | undefined {
+  if (
+    message.errorCode !== MALFORMED_TOOL_CALL_ARGUMENTS_ERROR_CODE ||
+    typeof message.errorBody !== "string"
+  ) {
+    return undefined;
+  }
+  const details = safeParseJsonRecord(message.errorBody);
+  const argumentChars = details?.argumentChars;
+  const argumentHash = details?.argumentHash;
+  const repairAttempted = details?.repairAttempted;
+  if (
+    details?.code !== MALFORMED_TOOL_CALL_ARGUMENTS_ERROR_CODE ||
+    typeof argumentChars !== "number" ||
+    !Number.isSafeInteger(argumentChars) ||
+    argumentChars < 0 ||
+    typeof argumentHash !== "string" ||
+    !/^[a-z0-9]{1,14}$/u.test(argumentHash) ||
+    typeof repairAttempted !== "boolean"
+  ) {
+    return undefined;
+  }
+  return `⚠️ The model returned malformed tool-call arguments. This call was rejected before execution. Check completed work, then retry the task or choose another model. Diagnostic details: ${argumentChars} characters; hash ${argumentHash}; repair attempted: ${repairAttempted ? "yes" : "no"}. ${ERROR_DETAILS_HINT}`;
+}
+
 /** Render loading facts without trusting provider diagnostics or recovery instructions. */
 export function renderModelLoadFailureCopy(message: {
   model?: unknown;
@@ -319,6 +349,10 @@ export function renderRecordedAssistantFailureCopy(
   },
   options?: FailureCopyOptions,
 ): string | undefined {
+  const malformedToolCallCopy = renderMalformedToolCallFailureCopy(message);
+  if (malformedToolCallCopy) {
+    return malformedToolCallCopy;
+  }
   const modelLoadCopy = renderModelLoadFailureCopy(message);
   if (modelLoadCopy) {
     return modelLoadCopy;

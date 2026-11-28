@@ -453,11 +453,13 @@ export function resolveSettledToolTerminalContinuation(
 export function isRejectedBeforeDispatch(attempt: IncompleteTurnAttempt): boolean {
   const assistant = resolveCurrentAttemptAssistant(attempt);
   return (
-    attempt.itemLifecycle.completedCount > 0 &&
     !attempt.hasToolMediaBlockReply &&
     assistant?.stopReason === "error" &&
-    (assistant.errorCode === MALFORMED_TOOL_CALL_ARGUMENTS_ERROR_CODE ||
-      isPreDispatchToolCallRejectionMessage(assistant.errorMessage)) &&
+    ((assistant.errorCode === MALFORMED_TOOL_CALL_ARGUMENTS_ERROR_CODE &&
+      attempt.itemLifecycle.activeCount === 0 &&
+      attempt.itemLifecycle.completedCount === attempt.itemLifecycle.startedCount) ||
+      (attempt.itemLifecycle.completedCount > 0 &&
+        isPreDispatchToolCallRejectionMessage(assistant.errorMessage))) &&
     readSettledToolCalls(assistant).length === 0
   );
 }

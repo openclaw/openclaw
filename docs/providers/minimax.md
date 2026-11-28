@@ -165,6 +165,25 @@ MiniMax M3 and M3.1 Flash are preferred [Code Mode](/tools/code-mode) models on 
     API-key setups use the `minimax` provider id. Model refs follow the form `minimax/MiniMax-M3`.
     </Note>
 
+    ### Anthropic Messages compatibility
+
+    For a specific MiniMax model using `api: "anthropic-messages"`, set
+    `compat.supportsEagerToolInputStreaming` on that model entry under
+    `models.providers.minimax.models` to opt out of per-tool eager input streaming:
+
+    ```json5 validate=false
+    {
+      id: "MiniMax-M3.1-Flash",
+      name: "MiniMax M3.1 Flash",
+      compat: { supportsEagerToolInputStreaming: false },
+    }
+    ```
+
+    With this set to `false`, OpenClaw omits `tools[].eager_input_streaming` and sends the legacy
+    `fine-grained-tool-streaming-2025-05-14` beta header on tool-enabled requests. The default is
+    `true`. This changes the request format; it is an opt-out for compatibility testing, not a
+    confirmed fix for intermittent malformed tool arguments.
+
   </Tab>
 </Tabs>
 
