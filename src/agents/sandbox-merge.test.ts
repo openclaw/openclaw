@@ -2,7 +2,7 @@ import { describe, expect, it } from "vitest";
 import type { AgentSandboxConfig } from "../config/types.agents-shared.js";
 import { resolveSandboxConfigForAgent, resolveSandboxScope } from "./sandbox/config.js";
 
-function resolve(defaults: AgentSandboxConfig, agent: AgentSandboxConfig = {}) {
+function resolve(defaults: AgentSandboxConfig, agent: AgentSandboxConfig) {
   return resolveSandboxConfigForAgent(
     { agents: { defaults: { sandbox: defaults }, entries: { test: { sandbox: agent } } } },
     "test",

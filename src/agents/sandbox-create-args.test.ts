@@ -11,7 +11,7 @@ import type { SandboxDockerConfig } from "./sandbox/types.js";
 describe("buildSandboxCreateArgs", () => {
   afterEach(() => vi.restoreAllMocks());
 
-  function createSandboxConfig(overrides: Partial<SandboxDockerConfig> = {}): SandboxDockerConfig {
+  function createSandboxConfig(overrides: Partial<SandboxDockerConfig>): SandboxDockerConfig {
     return {
       image: "openclaw-sandbox:trixie-slim",
       containerPrefix: "openclaw-sbx-",
