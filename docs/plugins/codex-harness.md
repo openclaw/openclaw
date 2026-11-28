@@ -771,13 +771,15 @@ is still being recovered or repeated identical results make a receipt ambiguous,
 OpenClaw preserves the later pending delivery instead of risking a lost result;
 this can cause an additional continuation.
 
-Codex owns native subagent execution and controls. Follow up through the parent
-session, which can use Codex's native collaboration tools. For an admitted native
+Codex owns native subagent execution and controls. Threads that OpenClaw starts
+or resumes have native multi-agent turned off, so new delegation uses
+`sessions_spawn`. Native children that exist already (from a thread Codex started
+itself, or from before this change) are still observed. For an admitted native
 assignment, OpenClaw's harness observes the child and routes results after the
 parent yields. The native foreground parent already receives completion messages, so OpenClaw does not
-send another continuation for a result it has consumed. Threads that OpenClaw
-starts or resumes have native multi-agent turned off; new delegation uses
-`sessions_spawn`. Stored submission and result
+send another continuation for a result it has consumed. After a cold resume, an
+OpenClaw parent cannot send more input to an earlier native child; start the
+next task with `sessions_spawn`. Stored submission and result
 receipts are recovery evidence, not permission to adopt a child or deliver to a
 replacement parent.
 
