@@ -379,13 +379,20 @@ export async function applyNonInteractivePluginProviderChoice(
           modelTarget === "utility"
             ? resolveAgentModelPrimaryValue(result.agents?.defaults?.utilityModel)
             : resolveAgentModelPrimaryValue(result.agents?.defaults?.model);
+        const defaultModel =
+          selected && selectSetupCredential(profiles, selected, prepared.config)
+            ? splitTrailingAuthProfile(selected).model
+            : method.starterModel;
+        if (!defaultModel?.trim()) {
+          // Without a model the new key cannot be tested, so it must not replace the working one.
+          throw new Error(
+            `Setup could not choose a ${providerChoice.provider.label} model to test the new key, so the key was not saved and your connection is unchanged. If you trust this key, replace the current key with it without a test (for a key kept in a secret reference, update the secret instead):\n${formatCliCommand(`openclaw models auth paste-api-key --provider ${quoteCliArg(providerChoice.provider.id)} --agent ${quoteCliArg(params.target.agentId)}`)}`,
+          );
+        }
         const modelRef = resolveSetupModel({
           label: providerChoice.provider.label,
           providerId: providerChoice.provider.id,
-          defaultModel:
-            selected && selectSetupCredential(profiles, selected, prepared.config)
-              ? splitTrailingAuthProfile(selected).model
-              : method.starterModel,
+          defaultModel,
         });
         if (typeof modelRef !== "string") {
           throw new Error(modelRef.error);
