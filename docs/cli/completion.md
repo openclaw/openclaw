@@ -23,11 +23,13 @@ openclaw completion --shell bash --write-state
 ## Options
 
 - `-s, --shell <shell>`: shell target, one of `zsh`, `bash`, `powershell`, or `fish`. Detected from `$SHELL`, otherwise PowerShell on Windows and zsh elsewhere.
-- `-i, --install`: install completion by adding a source line for the cached script to your shell profile
+- `-i, --install`: update your shell profile to load the cached script. The command does not ask for confirmation.
 - `--write-state`: write completion script(s) to `$OPENCLAW_STATE_DIR/completions` (default `~/.openclaw/completions`) without printing to stdout. With `--shell` it writes only that shell, otherwise all four.
-- `-y, --yes`: skip install confirmation prompts (non-interactive)
+- `-y, --yes`: accepted for compatibility. It has no effect because `--install` does not prompt.
 
 ## Install flow
+
+To inspect the script without changing your shell profile, run `openclaw completion`. To print the script for a different shell, specify it by name, for example `openclaw completion --shell bash`.
 
 `--install` points your profile at the cached script, so the cache must exist first. If the cache is missing, the command fails and tells you to run `openclaw completion --write-state`. Combine `--write-state --install` to do both in one step. Without `--shell`, the command preserves a recognized `$SHELL`. When `$SHELL` is missing or unrecognized, it defaults to PowerShell on Windows and zsh elsewhere.
 

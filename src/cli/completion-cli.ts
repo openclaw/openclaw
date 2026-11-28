@@ -70,12 +70,12 @@ export function registerCompletionCli(program: Command) {
         "Shell to generate completion for (default: detected)",
       ).choices(COMPLETION_SHELLS),
     )
-    .option("-i, --install", "Install completion script to shell profile")
+    .option("-i, --install", "Update your shell profile to load cached completions (no prompt)")
     .option(
       "--write-state",
       "Write completion scripts to $OPENCLAW_STATE_DIR/completions (no stdout)",
     )
-    .option("-y, --yes", "Skip confirmation (non-interactive)", false)
+    .option("-y, --yes", "Accepted for compatibility; --install does not prompt", false)
     .action(async (options) => {
       // Route logs to stderr so plugin loading messages do not corrupt
       // the completion script written to stdout.
