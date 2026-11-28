@@ -25,10 +25,14 @@ function compileStatement(source: { toOperationNode(): RootOperationNode }): Sql
   return { sql: statement, parameters: parameters as SQLInputValue[] };
 }
 
-/** The query side of the unit-norm path; a zero vector has no direction and stays as is. */
-function toUnitNorm(vector: readonly number[]): readonly number[] {
-  const norm = Math.hypot(...vector);
-  return norm < 1e-10 ? vector : vector.map((value) => value / norm);
+/** The query side of the unit-norm path; undefined for a zero vector, which has no direction. */
+function toUnitNorm(vector: readonly number[]): readonly number[] | undefined {
+  let squared = 0;
+  for (const value of vector) {
+    squared += value * value;
+  }
+  const norm = Math.sqrt(squared);
+  return norm < 1e-10 ? undefined : vector.map((value) => value / norm);
 }
 
 /** Native L2 candidates, cosine reranking, and the existing bounded underfill decision. */
@@ -117,14 +121,18 @@ export function bindSqliteVectorCapability(
       const vector = admitted.databasePath
         ? request.vector.map((value) => (Number.isFinite(value) ? value + 0 : 0))
         : request.vector;
-      const blob = vectorToBlob(request.unitNormVectors ? toUnitNorm(vector) : vector);
+      const unitQuery = request.unitNormVectors ? toUnitNorm(vector) : undefined;
+      const blob = vectorToBlob(unitQuery ?? vector);
       const query = compileStatement(
         request.query({
           match: /* kysely-allow-raw: sqlite-vec candidate matching binds both vector and candidate limit. */ sql<boolean>`${embedding} MATCH ${blob} AND k = ${candidate}`,
-          distance: request.unitNormVectors
-            ? // For unit vectors, cosine distance = L2² / 2; vec0 returns L2 with each candidate.
-              /* kysely-allow-raw: Alias comes from the admitted vector index declaration. */ sql<number>`(${distanceColumn} * ${distanceColumn}) / 2.0`
-            : /* kysely-allow-raw: Native cosine distance reranks the admitted vector candidates. */ sql<number>`vec_distance_cosine(${embedding}, ${blob})`,
+          distance: !request.unitNormVectors
+            ? /* kysely-allow-raw: Native cosine distance reranks the admitted vector candidates. */ sql<number>`vec_distance_cosine(${embedding}, ${blob})`
+            : unitQuery
+              ? // For unit vectors, cosine distance = L2² / 2; vec0 returns L2 with each candidate.
+                /* kysely-allow-raw: Alias comes from the admitted vector index declaration. */ sql<number>`(${distanceColumn} * ${distanceColumn}) / 2.0`
+              : // A zero query has no direction: zero similarity, as the fallback scorer returns.
+                /* kysely-allow-raw: Constant distance for a query without direction. */ sql<number>`1.0`,
         }),
       );
       const plan: SqliteVectorPlan = {

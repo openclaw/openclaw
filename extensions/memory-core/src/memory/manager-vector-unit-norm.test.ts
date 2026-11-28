@@ -127,7 +127,7 @@ describe("unit-norm vector search", () => {
     }
   });
 
-  it("treats a zero query vector as equidistant instead of failing", async () => {
+  it("gives a zero query vector zero similarity, as the fallback scorer does", async () => {
     using db = await createVectorDb();
     seededVectors(4).forEach((vector, index) => {
       insertChunk(db, `chunk-${index}`, vector);
@@ -146,14 +146,20 @@ describe("unit-norm vector search", () => {
     );
     expect(result.rows).toHaveLength(4);
     for (const row of result.rows) {
-      expect(row.dist).toBeCloseTo(0.5, 5);
+      expect(row.dist).toBe(1);
     }
+  });
+
+  it("does not store zero vectors, which have no direction", () => {
+    expect(normalizeStoredEmbedding([0, 0, 0])).toEqual([]);
+    expect(normalizeStoredEmbedding([Number.NaN, 0])).toEqual([]);
+    expect(normalizeStoredEmbedding([3, 4])).toEqual([0.6, 0.8]);
   });
 });
 
 describe("normalizeMemoryVectorsInPlace", () => {
   it.each(["NONE", "INCREMENTAL"] as const)(
-    "rebuilds non-unit vectors, keeps zero vectors, and sets the marker (auto_vacuum=%s)",
+    "rebuilds non-unit vectors, drops zero vectors, and sets the marker (auto_vacuum=%s)",
     async (autoVacuum) => {
       using db = await createVectorDb(["memory_index_chunks_vec"], autoVacuum);
       const table = "memory_index_chunks_vec";
@@ -173,12 +179,13 @@ describe("normalizeMemoryVectorsInPlace", () => {
       );
       expect(readMemoryVectorsUnitNorm(db)).toBe(false);
 
-      expect(normalizeMemoryVectorsInPlace(db)).toEqual({ scanned: 4, rewritten: 2 });
+      expect(normalizeMemoryVectorsInPlace(db)).toEqual({ scanned: 4, rewritten: 3 });
       expect(readMemoryVectorsUnitNorm(db)).toBe(true);
       for (const id of ["raw-a", "raw-b", "unit"]) {
         expect(norm(readVector(db, table, id))).toBeCloseTo(1, 5);
       }
-      expect(norm(readVector(db, table, "zero"))).toBe(0);
+      // Unit-norm scoring would give a zero vector similarity 0.5; it is dropped instead.
+      expect(db.prepare(`SELECT id FROM ${table} WHERE id = ?`).get("zero")).toBeUndefined();
       // Direction is preserved.
       const rewritten = readVector(db, table, "raw-a");
       const scale = norm(a!);
@@ -188,14 +195,14 @@ describe("normalizeMemoryVectorsInPlace", () => {
       expect(
         db.prepare("SELECT name FROM sqlite_master WHERE name LIKE '%unit_norm_stage%'").all(),
       ).toEqual([]);
-      for (const id of ["raw-a", "raw-b", "unit", "zero"]) {
+      for (const id of ["raw-a", "raw-b", "unit"]) {
         insertChunk(db, id, Array.from(readVector(db, table, id)));
       }
       const hits = await knn(db, table, a!, true);
       expect(hits.rows[0]?.id).toBe("raw-a");
       expect(hits.rows[0]?.dist).toBeCloseTo(0, 5);
 
-      expect(normalizeMemoryVectorsInPlace(db)).toEqual({ scanned: 4, rewritten: 0 });
+      expect(normalizeMemoryVectorsInPlace(db)).toEqual({ scanned: 3, rewritten: 0 });
     },
   );
 

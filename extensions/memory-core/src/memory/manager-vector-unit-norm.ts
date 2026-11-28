@@ -25,9 +25,14 @@ export const VECTOR_UNIT_NORM_META_KEY = "memory_vector_unit_norm_v1";
 /** Stored vectors whose norm differs from 1 by more than this are rewritten. */
 const UNIT_NORM_TOLERANCE = 1e-5;
 
-/** Vectors stored by this release: sanitized and L2-normalized. */
+/**
+ * Vectors stored by this release: sanitized and L2-normalized. A zero vector
+ * has no direction and no cosine similarity to anything, so it is not stored:
+ * an empty result, which writers already treat as "no vector for this chunk".
+ */
 export function normalizeStoredEmbedding(embedding: number[]): number[] {
-  return sanitizeAndNormalizeEmbedding(embedding);
+  const normalized = sanitizeAndNormalizeEmbedding(embedding);
+  return normalized.some((value) => value !== 0) ? normalized : [];
 }
 
 export function readMemoryVectorsUnitNorm(db: EngineConnection): boolean {
@@ -65,20 +70,22 @@ function l2Norm(vector: Float32Array): number {
 
 /** A stored vector that the unit-norm path cannot score exactly as stored. */
 function needsNormalization(vector: Float32Array): boolean {
-  const norm = l2Norm(vector);
-  // A zero vector has no direction; it stays as stored, as on write.
-  return norm >= 1e-10 && Math.abs(norm - 1) > UNIT_NORM_TOLERANCE;
+  // Zero vectors are dropped: unit-norm scoring would rank them at similarity 0.5.
+  return Math.abs(l2Norm(vector) - 1) > UNIT_NORM_TOLERANCE;
 }
 
-function toStoredBlob(vector: Float32Array): Buffer {
+/** The blob to store again, or undefined for a vector with no direction. */
+function toStoredBlob(vector: Float32Array): Buffer | undefined {
   if (!needsNormalization(vector)) {
     return Buffer.from(vector.buffer, vector.byteOffset, vector.byteLength);
   }
-  return Buffer.from(new Float32Array(normalizeStoredEmbedding(Array.from(vector))).buffer);
+  const normalized = normalizeStoredEmbedding(Array.from(vector));
+  return normalized.length > 0 ? Buffer.from(new Float32Array(normalized).buffer) : undefined;
 }
 
 /**
- * Make every stored vector unit length, then set the marker. The caller holds
+ * Make every stored vector unit length (dropping zero vectors, which have no
+ * direction), then set the marker. The caller holds
  * the write transaction and has sqlite-vec loaded on *db*.
  *
  * When some vectors need it, the vec0 table is rebuilt from its own DDL
@@ -138,10 +145,10 @@ export function normalizeMemoryVectorsInPlace(
   const insert = db.prepare(`INSERT INTO ${table} (id, embedding) VALUES (?, ?)`);
   for (const row of db.prepare(`SELECT id, embedding FROM ${stage} ORDER BY rowid`).iterate()) {
     const { id, embedding } = row as { id: string; embedding: Uint8Array };
-    insert.run(
-      id,
-      embedding.byteLength % 4 === 0 ? toStoredBlob(readFloat32(embedding)) : embedding,
-    );
+    const blob = embedding.byteLength % 4 === 0 ? toStoredBlob(readFloat32(embedding)) : embedding;
+    if (blob) {
+      insert.run(id, blob);
+    }
   }
   db.exec(`DROP TABLE ${stage}`);
   markMemoryVectorsUnitNorm(db);
