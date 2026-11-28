@@ -47,14 +47,14 @@ function canUseSerialTooling16Runner(job: CompactNodeTestShard, runnerBackend?: 
   );
 }
 
-type MeasuredExchangeRow = readonly [group: string, envelope: string];
+type MeasuredTransferRow = readonly [group: string, envelope: string];
 
-/** Exchange whole measured groups without changing row slots, setup, or admission prices. */
-export function exchangeMeasuredCompactGroups(
+/** Transfer a whole measured group without changing row slots, setup, or admission prices. */
+export function transferMeasuredCompactGroup(
   jobs: readonly (NodeTestShard | CompactNodeTestShard)[],
-  [first, second]: readonly [MeasuredExchangeRow, MeasuredExchangeRow],
+  [source, destination]: readonly [MeasuredTransferRow, MeasuredTransferRow],
 ): readonly (NodeTestShard | CompactNodeTestShard)[] {
-  const find = ([name, envelope]: MeasuredExchangeRow) => {
+  const find = ([name, envelope]: MeasuredTransferRow) => {
     const matches = jobs.flatMap((job) => {
       const { checkName, shardName: _shardName, groups, ...row } = job;
       if (!checkName.startsWith("checks-node-compact-") || !groups) {
@@ -70,16 +70,16 @@ export function exchangeMeasuredCompactGroups(
     });
     return matches.length === 1 ? matches[0] : undefined;
   };
-  const a = find(first);
-  const b = find(second);
-  if (!a || !b || a.job === b.job) {
+  const donor = find(source);
+  const recipient = find(destination);
+  if (!donor || donor.groups.length < 2 || !recipient || donor.job === recipient.job) {
     return jobs;
   }
   return jobs.map((job) =>
-    job === a.job
-      ? { ...job, groups: [...a.groups.filter((group) => group !== a.group), b.group] }
-      : job === b.job
-        ? { ...job, groups: [...b.groups.filter((group) => group !== b.group), a.group] }
+    job === donor.job
+      ? { ...job, groups: donor.groups.filter((group) => group !== donor.group) }
+      : job === recipient.job
+        ? { ...job, groups: [...recipient.groups, donor.group] }
         : job,
   );
 }

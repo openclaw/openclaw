@@ -1,13 +1,13 @@
 import { createHash } from "node:crypto";
 import { expect, it } from "vitest";
 import {
-  exchangeMeasuredCompactGroups,
+  transferMeasuredCompactGroup,
   resolveBoatNodeJobBudget,
   resolveSelectedNodeTestRunner,
 } from "../../scripts/lib/ci-node-test-capacity.mts";
 import type { CompactNodeTestShard } from "../../scripts/lib/ci-node-test-plan.mts";
 
-it("exchanges measured groups only while both compact row envelopes match", () => {
+it("transfers a measured group only while both compact row envelopes match", () => {
   const runner = "blacksmith-8vcpu-ubuntu-2404";
   const group = (name: string) => ({
     shard_name: name,
@@ -29,20 +29,20 @@ it("exchanges measured groups only while both compact row envelopes match", () =
     shardName: "compact-large-" + index,
     groups,
   });
-  const rows = [row(0, [slow]), row(1, [fast, sibling])] as const;
-  const exchange = [
-    ["slow", measured([slow])],
-    ["fast", measured([fast, sibling])],
+  const rows = [row(0, [slow, sibling]), row(1, [fast])] as const;
+  const transfer = [
+    ["slow", measured([slow, sibling])],
+    ["fast", measured([fast])],
   ] as const;
-  expect(exchangeMeasuredCompactGroups(rows, exchange)).toEqual([
-    { ...rows[0], groups: [fast] },
-    { ...rows[1], groups: [sibling, slow] },
+  expect(transferMeasuredCompactGroup(rows, transfer)).toEqual([
+    { ...rows[0], groups: [sibling] },
+    { ...rows[1], groups: [fast, slow] },
   ]);
   const drifted = [
     rows[0],
-    { ...rows[1], groups: [fast, { ...sibling, includePatterns: ["new.test.ts"] }] },
+    { ...rows[1], groups: [{ ...fast, includePatterns: ["new.test.ts"] }] },
   ];
-  expect(exchangeMeasuredCompactGroups(drifted, exchange)).toBe(drifted);
+  expect(transferMeasuredCompactGroup(drifted, transfer)).toBe(drifted);
 });
 
 it("paces Boat starts across the day and preserves included headroom", () => {
