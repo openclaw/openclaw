@@ -4,6 +4,7 @@ import {
   type AuthProfileAuthorization,
 } from "../../agents/auth-profiles/authorization-contract.js";
 import { captureAuthProfileAuthorization } from "../../agents/auth-profiles/authorization.js";
+import { splitTrailingAuthProfile } from "../../agents/model-ref-profile.js";
 import { resolveCliRuntimeExecutionProvider } from "../../agents/model-runtime-aliases.js";
 import { resolveSessionModelRef } from "../../agents/session-model-ref.js";
 import { resolveSimpleCompletionSelectionForAgent } from "../../agents/simple-completion-selection.js";
@@ -66,6 +67,7 @@ export async function loadCronRuntimeSessionEntry(params: {
 export async function captureCronInferenceForCaller(
   params: Parameters<typeof captureCronInferenceBinding>[0],
   caller: InferenceCaller,
+  creatorProfileId?: string,
 ) {
   let selection: UserModelAccountSelection | undefined;
   let authority: AuthProfileAuthorization | undefined;
@@ -77,7 +79,7 @@ export async function captureCronInferenceForCaller(
     authorizeProfile: async (profileId, inherited) => {
       // Trusted creator selections already carry their owner's permission. New
       // personal selections require the same live human authority as chat.
-      if (isUserModelAuthProfileId(profileId) && !inherited) {
+      if (isUserModelAuthProfileId(profileId) && !(inherited && profileId === creatorProfileId)) {
         selection = await preparePersonalModelAccountSelection(caller, profileId);
         return selection.assertCurrent;
       }
@@ -92,6 +94,27 @@ export async function captureCronInferenceForCaller(
     },
     disposeInferenceAuthorization: () => authority?.dispose(),
   };
+}
+
+export function resolveCronReminderAccountEdit(currentJob: CronStoredJob, patch: CronJobPatch) {
+  // Released clients encode account selection and key recovery as model-only agentTurn patches.
+  // Authorize the original request, but persist only the binding for a system event.
+  const accountOnly =
+    currentJob.payload.kind === "systemEvent" &&
+    patch.payload?.kind === "agentTurn" &&
+    typeof patch.payload.model === "string" &&
+    Object.keys(patch).length === 1 &&
+    Object.keys(patch.payload).length === 2 &&
+    Boolean(currentJob.inferenceBinding || splitTrailingAuthProfile(patch.payload.model).profile);
+  const convertsUnboundReminder =
+    currentJob.payload.kind === "systemEvent" &&
+    patch.payload?.kind === "agentTurn" &&
+    !accountOnly &&
+    !currentJob.inferenceBinding &&
+    !currentJob.runtimeAuthority &&
+    !currentJob.runtimeAuthorityRecoveryRequired &&
+    !currentJob.ownerTransferPending;
+  return { accountOnly, convertsUnboundReminder };
 }
 
 /** Account edits replace ownership; a plain-model edit can release a deleted account onto a key. */

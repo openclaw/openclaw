@@ -64,6 +64,49 @@ function captureAuthority(
 }
 
 describe("cron handler inference binding persistence", () => {
+  it("records the main conversation’s account without borrowing its owner's permission", async ({
+    fixture,
+  }) => {
+    const personal = await fixture.personalAccount();
+    await upsertSessionEntryCore(
+      { sessionKey: "agent:main:main", agentId: "main" },
+      {
+        sessionId: "main-account-selection",
+        updatedAt: 1,
+        providerOverride: "openai",
+        modelOverride: "gpt-4.1",
+        authProfileOverride: personal.profileId,
+        authProfileOverrideSource: "user",
+      },
+    );
+    const params = modelParams(undefined, "main");
+    await fixture.invoke("cron.add", params, personal.other, { expectedSuccess: false });
+    await fixture.invoke("cron.add", params, personal.owner);
+    expect((await fixture.reload()).inferenceBinding?.profileId).toBe(personal.profileId);
+  });
+
+  it("records the scheduled account when a reminder becomes an isolated prompt", async ({
+    fixture,
+  }) => {
+    fixture.setScheduledProfile(subscriptionId, "default", true);
+    await fixture.invoke("cron.add", {
+      ...createParams(),
+      sessionTarget: "main",
+      payload: { kind: "systemEvent", text: "Reminder" },
+    });
+    const reminder = await fixture.reload();
+    expect(reminder.inferenceBinding).toBeUndefined();
+    await fixture.invoke("cron.update", {
+      id: reminder.id,
+      patch: { sessionTarget: "isolated", payload: { kind: "agentTurn", message: "Prompt" } },
+    });
+    expect(await fixture.reload()).toMatchObject({
+      id: reminder.id,
+      inferenceBinding: { profileId: subscriptionId },
+      payload: { kind: "agentTurn", message: "Prompt" },
+    });
+  });
+
   it("records the requested account without converting a main-session system event", async ({
     fixture,
   }) => {

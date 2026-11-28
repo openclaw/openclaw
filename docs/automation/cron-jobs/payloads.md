@@ -259,8 +259,7 @@ while the response is pending.
 
 Main-session system events use the main session’s model, not the scheduled subagent model. New reminders follow the chat’s current inference account on each run. Creating the reminder does not pin an account, and running Doctor later does not change that. For reminders saved by older releases, repairing Doctor adopts an eligible stored account so the original job can continue. An environment SecretRef needs no stored account. If Doctor imports a literal provider key into a stored account, it also adopts that account for the saved event. To record an account explicitly, run `openclaw automations edit <jobId> --model <current-session-model>@<profileId>`. This binds the account without pinning the model or changing the event text, schedule, or ID. Without a configured model, the event cannot complete.
 
-New isolated agent-turn jobs privately retain their selected stored inference account
-and compatible authentication route. OAuth and API keys can remain enabled together:
+New scheduled prompts, including `--session main --message`, privately retain their selected stored inference account and compatible authentication route. Converting an unbound reminder to a scheduled prompt records the account selected for the new prompt. A job created on a configured key has no stored account to record. If its route later requires a stored account, select that account explicitly on the job; changing the conversation alone does not authorize the switch. OAuth and API keys can remain enabled together:
 changing interactive defaults, profile order, or the job’s plain model selection does
 not switch the job’s account or billing route. Automatic ownership remains distinct
 from an explicit user profile pin. Token refresh within the same authorization is

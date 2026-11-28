@@ -9,7 +9,9 @@ import type { AdmittedRunOperatorAuthority } from "../../agents/admitted-run-con
 import { tryResolveAmbientOwnerAgentId } from "../../agents/agent-scope.js";
 import { captureScheduledOperatorSource } from "../../agents/operator-run-recovery-source.js";
 import { resolveIngressWorkspaceOverrideForSessionRun } from "../../agents/spawned-context.js";
+import { resolveCanonicalMainSessionKey } from "../../config/sessions/main-session-key.js";
 import { attributeDelegatedSessionCreator } from "../../config/sessions/session-entry-provenance.js";
+import type { SessionEntry } from "../../config/sessions/types.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import {
   resolveCronJobEffectiveAgentId,
@@ -272,6 +274,72 @@ export async function assertValidCronSessionTarget(
   throw new Error(AGENT_HARNESS_SESSION_KEY_RESERVED_MESSAGE);
 }
 
+export async function captureCronPromptInference(
+  job: CronJobCreate,
+  cfg: OpenClawConfig,
+  caller: InferenceCaller,
+  context: {
+    agentId?: string;
+    creatorKey?: string;
+    loaded?: { key: string; entry?: SessionEntry };
+  },
+) {
+  if (job.payload.kind !== "agentTurn") {
+    return undefined;
+  }
+  const main = job.sessionTarget === "main";
+  const agentId = resolveCronJobEffectiveAgentId(
+    main ? { agentId: job.agentId } : { ...job, agentId: context.agentId ?? job.agentId },
+    tryResolveAmbientOwnerAgentId(cfg),
+  );
+  const executionKey = main
+    ? resolveCanonicalMainSessionKey({
+        agentId,
+        mainKey: cfg.session?.mainKey,
+        sessionScope: cfg.session?.scope,
+      })
+    : resolveCronSessionTargetSessionKey(job.sessionTarget);
+  const executionEntry = executionKey
+    ? (await loadGatewaySessionEntryReadOnlyInWorker({ cfg, key: executionKey, agentId })).entry
+    : undefined;
+  if (main && executionEntry?.modelSelectionLocked) {
+    return undefined;
+  }
+  const creator = context.creatorKey
+    ? (context.loaded?.key === context.creatorKey
+        ? context.loaded
+        : await loadGatewaySessionEntryReadOnlyInWorker({
+            cfg,
+            key: context.creatorKey,
+            agentId: context.agentId,
+          })
+      )?.entry
+    : undefined;
+  const hookKey = executionKey ?? "";
+  return await captureCronInferenceForCaller(
+    {
+      cfg,
+      agentId,
+      model: job.payload.model,
+      isGmailHook:
+        (job.payload.externalContentSource ??
+          resolveHookExternalContentSource(parseAgentSessionKey(hookKey)?.rest ?? hookKey)) ===
+        "gmail",
+      sessionEntry: main ? executionEntry : creator,
+      executionSessionEntry: executionEntry,
+      runtimeSessionEntry: await loadCronRuntimeSessionEntry({
+        cfg,
+        job,
+        agentId,
+        executionEntry,
+        loaded: context.loaded,
+      }),
+    },
+    caller,
+    creator?.authProfileOverride,
+  );
+}
+
 export async function captureCronCreatorSession(
   job: CronJobCreate & Partial<Pick<CronStoredJob, "operatorSource" | "streamOperatorSource">>,
   callerScope: CronCallerScope | undefined,
@@ -316,47 +384,13 @@ export async function captureCronCreatorSession(
         callerScope.agentId,
       )
     : legacyActor;
-  const inferencePayload =
-    !hasRuntimeAuthority && job.sessionTarget !== "main" && job.payload.kind === "agentTurn"
-      ? job.payload
-      : undefined;
-  const inferenceAgentId = inferencePayload
-    ? resolveCronJobEffectiveAgentId({ ...job, agentId }, tryResolveAmbientOwnerAgentId(cfg))
+  const inference = !hasRuntimeAuthority
+    ? await captureCronPromptInference(job, cfg, caller, {
+        agentId,
+        creatorKey: callerScope?.sessionKey,
+        loaded: sessionKey ? { key: sessionKey, entry: loaded?.entry } : undefined,
+      })
     : undefined;
-  const executionSessionKey = resolveCronSessionTargetSessionKey(job.sessionTarget) ?? "";
-  const executionSession =
-    inferenceAgentId && executionSessionKey
-      ? await loadGatewaySessionEntryReadOnlyInWorker({
-          cfg,
-          key: executionSessionKey,
-          agentId: inferenceAgentId,
-        })
-      : undefined;
-  const inference =
-    inferencePayload && inferenceAgentId
-      ? await captureCronInferenceForCaller(
-          {
-            cfg,
-            agentId: inferenceAgentId,
-            model: inferencePayload.model,
-            isGmailHook:
-              (inferencePayload.externalContentSource ??
-                resolveHookExternalContentSource(
-                  parseAgentSessionKey(executionSessionKey)?.rest ?? executionSessionKey,
-                )) === "gmail",
-            sessionEntry: callerScope ? creatorSession : undefined,
-            executionSessionEntry: executionSession?.entry,
-            runtimeSessionEntry: await loadCronRuntimeSessionEntry({
-              cfg,
-              job,
-              agentId: inferenceAgentId,
-              executionEntry: executionSession?.entry,
-              loaded: sessionKey ? { key: sessionKey, entry: loaded?.entry } : undefined,
-            }),
-          },
-          caller,
-        )
-      : undefined;
   const directControlUi =
     caller.client?.internal?.authenticatedControlUi === true &&
     !caller.client.internal.syntheticClient &&
