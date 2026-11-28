@@ -130,6 +130,7 @@ async function proveRuntimeCache(native: boolean) {
     : testRuntime.resolveVitestTestCommand([...flags, ...operands], env);
   expect(expectedCommand).toEqual({
     command: process.execPath,
+    runtime: "bun",
     envOverrides: { NODE_DISABLE_COMPILE_CACHE: "1", PATH: nodePath.dirname(process.execPath) },
     args: native
       ? [
@@ -583,6 +584,7 @@ registerHooks({resolve(specifier, context, nextResolve) {
       const nativeCommand = vi.spyOn(testRuntime, "resolveNativeBunTestCommand").mockReturnValue({
         command: process.execPath,
         args: fixtureArgs,
+        runtime: process.versions.bun ? "bun" : "node",
       });
       const { handle: watched, clock } = captureWatchdog(() => {
         try {

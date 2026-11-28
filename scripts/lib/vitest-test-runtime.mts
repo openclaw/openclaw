@@ -9,6 +9,7 @@ import { resolveVitestNodeArgs } from "./vitest-node-args.mts";
 type VitestTestCommand = {
   command: string;
   args: string[];
+  runtime: "node" | "bun";
   envOverrides?: Readonly<Record<string, string>>;
 };
 
@@ -24,6 +25,7 @@ export function resolveNativeBunTestCommand(
   const command = requirePinnedBun(env);
   return {
     command,
+    runtime: "bun",
     envOverrides: { ...bunTestEnvOverrides, ...pinnedBunEnv(command, env) },
     args: [
       "test",
@@ -43,17 +45,18 @@ export function resolveVitestTestCommand(
   args: string[],
   env: NodeJS.ProcessEnv = process.env,
 ): VitestTestCommand {
-  if (resolveTestRuntime(env) === "node") {
-    return { command: process.execPath, args };
-  }
-  const cliIndex = args.findIndex((arg) => path.basename(arg) === "vitest.mjs");
+  const cliIndex =
+    resolveTestRuntime(env) === "bun"
+      ? args.findIndex((arg) => path.basename(arg) === "vitest.mjs")
+      : -1;
   if (cliIndex < 0) {
-    return { command: process.execPath, args };
+    return { command: process.execPath, args, runtime: process.versions.bun ? "bun" : "node" };
   }
   const nodeFlags = new Set(resolveVitestNodeArgs({}));
   const command = requirePinnedBun(env);
   return {
     command,
+    runtime: "bun",
     envOverrides: { ...bunTestEnvOverrides, ...pinnedBunEnv(command, env) },
     // Strip V8 flags only before the CLI; test names and filters stay byte-for-byte.
     args: [

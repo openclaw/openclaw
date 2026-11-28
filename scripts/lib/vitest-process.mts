@@ -1,4 +1,4 @@
-import { spawn, type SpawnOptions } from "node:child_process";
+import { spawn, spawnSync, type SpawnOptions } from "node:child_process";
 import fs from "node:fs";
 import { homedir, tmpdir } from "node:os";
 import path from "node:path";
@@ -34,6 +34,7 @@ export function spawnOwnedVitestProcess(spec: {
   command: string;
   args: string[];
   options: SpawnOptions;
+  runtime?: "node" | "bun";
   // Preparatory tools share lifetime ownership, but are not Vitest home consumers.
   homeMode?: TestHomeSelection | "tooling";
 }) {
@@ -110,6 +111,22 @@ export function spawnOwnedVitestProcess(spec: {
       }
     }
     const options = { ...spec.options, detached, env: childEnv };
+    if (spec.runtime === "bun") {
+      // Ask the selected binary, not the repo pin: local overrides can run a
+      // different revision. A failed diagnostic must not block the test launch.
+      const revision = spawnSync(spec.command, ["--revision"], {
+        cwd: options.cwd,
+        env: options.env,
+        encoding: "utf8",
+        stdio: ["ignore", "pipe", "ignore"],
+        timeout: 1_000,
+        killSignal: "SIGKILL",
+      });
+      const version = revision.status === 0 ? revision.stdout.trim().split(/\r?\n/u, 1)[0] : "";
+      console.error(`[vitest] test runtime: Bun ${version || "(version unavailable)"}`);
+    } else if (spec.runtime === "node") {
+      console.error(`[vitest] test runtime: Node ${process.versions.node}`);
+    }
     child = spawn(spec.command, spec.args, options);
   } catch (error) {
     tempDirs.cleanup();

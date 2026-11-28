@@ -43,6 +43,12 @@ new directory taxonomy.
 | Commits         | `git add <files...>` then `git commit -m "<message>"`                          | Stage only the intended files for each commit.                                                                      |
 | Remote proof    | `node scripts/crabbox-wrapper.mjs ...`                                         | Use when the current host lacks the required isolation, OS, device, or capacity; sync each run and reuse the lease. |
 
+## Test runtime in logs
+
+The Vitest wrappers report the selected test runtime and its version on stderr
+at launch. A Node launcher can still select pinned Bun for the tests. Read the
+runtime header rather than relying on the launcher command or log filename.
+
 ## Runtime script generation and proof builds
 
 `pnpm runtime:scripts:gen` bundles embedded programs and their materializer.
