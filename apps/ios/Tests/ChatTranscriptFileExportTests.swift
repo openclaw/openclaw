@@ -26,10 +26,30 @@ struct ChatTranscriptFileExportTests {
             ([canonical, exact], "Review-Friday.md", "# Review / Friday"),
             ([unrelated], "main.md", "# main"),
         ] {
+            model.retainedActiveSession = nil
             model.sessions = rows
             let url = try ChatInfoPage.writeTranscript(for: model, in: directory)
             #expect(url.lastPathComponent == filename)
             #expect(try Data(contentsOf: url) == Data((heading + body).utf8))
         }
+    }
+
+    @Test func `names the file after a chat the roster leaves out`() throws {
+        let key = "agent:main:field-notes"
+        let model = OpenClawChatViewModel(
+            sessionKey: key,
+            transport: IOSGatewayChatTransport(gateway: GatewayNodeSession()))
+        defer { model.detachTransport() }
+        let directory = FileManager.default.temporaryDirectory.appendingPathComponent(
+            UUID().uuidString,
+            isDirectory: true)
+        defer { try? FileManager.default.removeItem(at: directory) }
+        // The capped roster holds newer chats only; the chat's own history row is kept on the side.
+        model.sessions = [OpenClawChatSessionEntry(key: "agent:main:newer", displayName: "Newer chat")]
+        model.retainedActiveSession = OpenClawChatSessionEntry(key: key, displayName: "Field recording plan")
+
+        let url = try ChatInfoPage.writeTranscript(for: model, in: directory)
+        #expect(url.lastPathComponent == "Field recording plan.md")
+        #expect(try String(contentsOf: url, encoding: .utf8).hasPrefix("# Field recording plan"))
     }
 }

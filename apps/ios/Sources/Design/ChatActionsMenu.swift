@@ -53,7 +53,7 @@ struct ChatActionsMenu: View {
 
     private var session: OpenClawChatSessionEntry? {
         guard let viewModel, !viewModel.isNewChatDraft else { return nil }
-        guard let row = viewModel.currentSessionEntry() else { return nil }
+        guard let row = viewModel.activeSessionEntry() else { return nil }
         return self.appModel.displayedSidebarPins?.project(row) ?? row
     }
 

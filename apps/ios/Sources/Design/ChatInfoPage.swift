@@ -28,7 +28,7 @@ struct ChatInfoPage: View {
     }
 
     private var session: OpenClawChatSessionEntry? {
-        self.isCurrent ? self.visit.model.currentSessionEntry() ?? self.visit.session : self.visit.session
+        self.isCurrent ? self.visit.model.activeSessionEntry() ?? self.visit.session : self.visit.session
     }
 
     private var title: String {
@@ -227,7 +227,7 @@ struct ChatInfoPage: View {
     }
 
     static func writeTranscript(for viewModel: OpenClawChatViewModel, in directory: URL) throws -> URL {
-        let title = viewModel.currentSessionEntry()?.displayName
+        let title = viewModel.activeSessionEntry()?.displayName
         let key = viewModel.sessionKey
         let filename = ChatTranscriptExporter.filename(sessionTitle: title, sessionKey: key)
         let markdown = ChatTranscriptExporter.markdown(

@@ -47,7 +47,7 @@ struct ChatInfoVisit: Hashable {
         self.agentName = agentName
         self.badge = badge
         self.avatar = avatar
-        self.session = kind == .chat ? model.currentSessionEntry() : nil
+        self.session = kind == .chat ? model.activeSessionEntry() : nil
         self.usage = model.contextUsage
         if kind == .chat {
             let feed = OpenClawChatInfoPullRequests(model: model)
