@@ -652,6 +652,35 @@ describe("createFeishuReplyDispatcher streaming behavior", () => {
     },
   );
 
+  it("keeps a referenced reply attachment name on its own file (#205246)", async () => {
+    useNonStreamingAutoAccount();
+    const { options } = createDispatcherHarness();
+    await options.final({
+      text: "Files",
+      mediaUrls: ["/tmp/a.pdf", "/tmp/b.pdf"],
+      attachments: [{ path: "/tmp/b.pdf", name: "B.pdf" }],
+    });
+    expect(sendMediaFeishuMock).toHaveBeenCalledTimes(2);
+    const calls = sendMediaFeishuMock.mock.calls.map(([params]) => params);
+    expect(calls[0]).toMatchObject({ mediaUrl: "/tmp/a.pdf" });
+    expect(calls[0]?.fileName).toBeUndefined();
+    expect(calls[1]).toMatchObject({ mediaUrl: "/tmp/b.pdf", fileName: "B.pdf" });
+  });
+
+  it("preserves positional reply attachment names (#205246)", async () => {
+    useNonStreamingAutoAccount();
+    const { options } = createDispatcherHarness();
+    await options.final({
+      text: "Files",
+      mediaUrls: ["/tmp/a.pdf", "/tmp/b.pdf"],
+      attachments: [{ name: "A.pdf" }, { name: "B.pdf" }],
+    });
+    expect(sendMediaFeishuMock).toHaveBeenCalledTimes(2);
+    const calls = sendMediaFeishuMock.mock.calls.map(([params]) => params);
+    expect(calls[0]).toMatchObject({ mediaUrl: "/tmp/a.pdf", fileName: "A.pdf" });
+    expect(calls[1]).toMatchObject({ mediaUrl: "/tmp/b.pdf", fileName: "B.pdf" });
+  });
+
   it("includes the required peer-bot mention after sanitizing presentation content", async () => {
     useNonStreamingAutoAccount();
     const { options } = createDispatcherHarness({

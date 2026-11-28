@@ -1085,4 +1085,100 @@ describe("Feishu chunked delivery and media receipts", () => {
     expect(sendMessageFeishuMock).not.toHaveBeenCalled();
   });
 });
+
+describe("Feishu media filename override (#205246)", () => {
+  const reportUrl = "/tmp/repro/report_en.pdf";
+  const overrideName = "季度报告.pdf";
+  const aUrl = "/tmp/a.pdf";
+  const bUrl = "/tmp/b.pdf";
+
+  // The uploader (sendMediaFeishu) uploads under the handed-over fileName and
+  // falls back to the media basename when none is given; assert the resulting
+  // upload name for each media call instead of mock property shapes.
+  const uploadName = (index = 0) => {
+    const call = mediaCall(index);
+    return call?.fileName ?? call?.mediaUrl?.split("/").pop();
+  };
+
+  it("uploads under the media basename when no override is given", async () => {
+    await sendMedia({ text: "probe", mediaUrl: reportUrl });
+    expect(sendMediaFeishuMock).toHaveBeenCalledOnce();
+    expect(mediaCall()).toMatchObject({ mediaUrl: reportUrl });
+    expect(uploadName()).toBe("report_en.pdf");
+  });
+
+  it("resolves the override from payload attachments on the sendPayload path", async () => {
+    await sendPayload({
+      text: "probe",
+      mediaUrl: reportUrl,
+      attachments: [{ path: reportUrl, name: overrideName }],
+    });
+    expect(sendMediaFeishuMock).toHaveBeenCalledOnce();
+    expect(mediaCall()).toMatchObject({ mediaUrl: reportUrl });
+    expect(uploadName()).toBe(overrideName);
+  });
+
+  it("uploads under the media basename when payload attachments carry no name", async () => {
+    await sendPayload({
+      text: "probe",
+      mediaUrl: reportUrl,
+      attachments: [{ path: reportUrl }],
+    });
+    expect(sendMediaFeishuMock).toHaveBeenCalledOnce();
+    expect(uploadName()).toBe("report_en.pdf");
+  });
+
+  it("keeps a referenced attachment name on its own file on the card path", async () => {
+    await sendPayload({
+      text: nativeCardText,
+      mediaUrls: [aUrl, bUrl],
+      attachments: [{ path: bUrl, name: "B.pdf" }],
+    });
+    expect(sendMediaFeishuMock).toHaveBeenCalledTimes(2);
+    expect(mediaCall(0)).toMatchObject({ mediaUrl: aUrl });
+    expect(mediaCall(1)).toMatchObject({ mediaUrl: bUrl });
+    expect(uploadName(0)).toBe("a.pdf");
+    expect(uploadName(1)).toBe("B.pdf");
+  });
+
+  it("keeps a referenced attachment name on its own file on the fallback path", async () => {
+    await sendPayload({
+      text: "probe",
+      mediaUrls: [aUrl, bUrl],
+      attachments: [{ path: bUrl, name: "B.pdf" }],
+    });
+    expect(sendMediaFeishuMock).toHaveBeenCalledTimes(2);
+    expect(mediaCall(0)).toMatchObject({ mediaUrl: aUrl });
+    expect(mediaCall(1)).toMatchObject({ mediaUrl: bUrl });
+    expect(uploadName(0)).toBe("a.pdf");
+    expect(uploadName(1)).toBe("B.pdf");
+  });
+
+  it("preserves positional attachment names on the fallback path", async () => {
+    await sendPayload({
+      text: "probe",
+      mediaUrls: [aUrl, bUrl],
+      attachments: [{ name: "A.pdf" }, { name: "B.pdf" }],
+    });
+    expect(sendMediaFeishuMock).toHaveBeenCalledTimes(2);
+    expect(mediaCall(0)).toMatchObject({ mediaUrl: aUrl });
+    expect(mediaCall(1)).toMatchObject({ mediaUrl: bUrl });
+    expect(uploadName(0)).toBe("A.pdf");
+    expect(uploadName(1)).toBe("B.pdf");
+  });
+
+  it("preserves positional attachment names when fallback media and text are separated", async () => {
+    await sendPayload({
+      text: "probe",
+      mediaUrls: [aUrl, bUrl],
+      attachments: [{ name: "A.pdf" }, { name: "B.pdf" }],
+      channelData: propagation,
+    });
+    expect(sendMediaFeishuMock).toHaveBeenCalledTimes(2);
+    expect(mediaCall(0)).toMatchObject({ mediaUrl: aUrl });
+    expect(mediaCall(1)).toMatchObject({ mediaUrl: bUrl });
+    expect(uploadName(0)).toBe("A.pdf");
+    expect(uploadName(1)).toBe("B.pdf");
+  });
+});
 /* oxlint-disable max-lines -- TODO: split this grandfathered oversized file. */

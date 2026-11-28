@@ -1,6 +1,7 @@
 import path from "node:path";
 import { isChannelPartialDeliveryError } from "openclaw/plugin-sdk/channel-inbound";
 import {
+  collectReplyMediaEntries,
   createMessageReceiptFromOutboundResults,
   createReplyToFanout,
 } from "openclaw/plugin-sdk/channel-outbound";
@@ -128,6 +129,18 @@ type FeishuOutboundPayload = Parameters<
 >[0]["payload"];
 type FeishuSendPayloadContext = Parameters<NonNullable<ChannelOutboundAdapter["sendPayload"]>>[0];
 type FeishuSendTextContext = Parameters<NonNullable<ChannelOutboundAdapter["sendText"]>>[0];
+
+// The SDK owns attachment-to-media association (collectReplyMediaEntries):
+// attachments with a source reference match that media, unreferenced ones
+// match positionally. Resolve one media URL's paired display name through
+// that owner instead of re-deriving the pairing locally.
+function resolveFeishuPayloadMediaFileName(
+  payload: FeishuOutboundPayload,
+  mediaUrl: string,
+): string | undefined {
+  const name = collectReplyMediaEntries(payload, [mediaUrl])[0]?.attachment?.name?.trim();
+  return name || undefined;
+}
 
 function toFeishuOutboundResult<T extends { chatId: string }>(result: T) {
   const { chatId, ...delivery } = result;
@@ -329,12 +342,17 @@ async function sendFeishuFallbackPayload(params: {
 
   // Card fallbacks can exceed media-caption limits. Deliver attachments first,
   // then preserve the complete fallback through the normal 4k text fanout.
+  // Resolve the SDK media/attachment pairs before flattening to URL-only
+  // sendMedia calls so positional attachment names are not dropped.
+  const mediaEntries = collectReplyMediaEntries(params.payload, mediaUrls);
   let lastResult: Awaited<ReturnType<typeof sendText>> | undefined;
-  for (const mediaUrl of mediaUrls) {
+  for (const { url: mediaUrl, attachment } of mediaEntries) {
+    const fileName = attachment?.name?.trim() || undefined;
     lastResult = await sendMedia({
       ...ctx,
       text: "",
       mediaUrl,
+      ...(fileName ? { filename: fileName } : {}),
       replyToId: nextReplyToId(),
       audioAsVoice: params.payload.audioAsVoice ?? ctx.audioAsVoice,
       ...(propagateMediaUploadFailure ? { propagateMediaUploadFailure: true } : {}),
@@ -388,11 +406,17 @@ async function sendFeishuTtsSupplementPayload(params: {
     }
   }
 
-  for (const mediaUrl of normalizeStringEntries(resolvePayloadMediaUrls(params.payload))) {
+  const ttsMediaEntries = collectReplyMediaEntries(
+    params.payload,
+    normalizeStringEntries(resolvePayloadMediaUrls(params.payload)),
+  );
+  for (const { url: mediaUrl, attachment } of ttsMediaEntries) {
+    const fileName = attachment?.name?.trim() || undefined;
     lastResult = await sendMedia({
       ...ctx,
       text: "",
       mediaUrl,
+      ...(fileName ? { filename: fileName } : {}),
       replyToId: nextReplyToId(),
       audioAsVoice: params.payload.audioAsVoice ?? ctx.audioAsVoice,
     });
@@ -536,6 +560,7 @@ export const feishuOutbound: ChannelOutboundAdapter = withFeishuOutboundSendCont
         threadId: ctx.threadId,
       });
     const mediaUrls = normalizeStringEntries(resolvePayloadMediaUrls(payload));
+    const mediaEntries = collectReplyMediaEntries(payload, mediaUrls);
     return attachChannelToResult(
       "feishu",
       toFeishuOutboundResult(
@@ -550,12 +575,14 @@ export const feishuOutbound: ChannelOutboundAdapter = withFeishuOutboundSendCont
               attachChannelToResult("feishu", toFeishuOutboundResult(deliveryResult)),
             );
           },
-          send: async ({ mediaUrl }) => {
+          send: async ({ mediaUrl, index }) => {
             const { replyToMessageId, replyInThread } = nextReplyMode();
+            const fileName = mediaEntries[index]?.attachment?.name?.trim() || undefined;
             return await sendMediaFeishu({
               cfg: ctx.cfg,
               to: ctx.to,
               mediaUrl,
+              ...(fileName ? { fileName } : {}),
               accountId: ctx.accountId ?? undefined,
               mediaAccess: ctx.mediaAccess,
               mediaLocalRoots: ctx.mediaLocalRoots,
@@ -678,7 +705,16 @@ export const feishuOutbound: ChannelOutboundAdapter = withFeishuOutboundSendCont
         mediaLocalRoots,
         mediaReadFile,
         propagateMediaUploadFailure,
+        filename: explicitFileName,
       } = ctx;
+      // Payload-carrying callers (sendPayload fallbacks via the shared
+      // text/media helper) spread the payload into this context at runtime
+      // but flatten media into URL-only calls; resolve this URL's paired
+      // attachment name through the SDK owner before the pairing is lost.
+      const payload = (ctx as { payload?: FeishuOutboundPayload }).payload;
+      const payloadFileName =
+        payload && mediaUrl ? resolveFeishuPayloadMediaFileName(payload, mediaUrl) : undefined;
+      const fileName = explicitFileName?.trim() || payloadFileName;
       const sendParams = { cfg, to, accountId: ctx.accountId ?? undefined };
       const nextReplyToId = createFeishuReplyFanout(ctx);
       const nextReplyMode = () => {
@@ -730,10 +766,10 @@ export const feishuOutbound: ChannelOutboundAdapter = withFeishuOutboundSendCont
         mediaResult = await sendMediaFeishu({
           ...sendParams,
           mediaUrl,
+          ...(fileName ? { fileName } : {}),
           mediaAccess,
           mediaLocalRoots,
           mediaReadFile,
-          fileName: ctx.filename,
           ...mediaReplyMode,
           ...(audioAsVoice === true ? { audioAsVoice: true } : {}),
         });

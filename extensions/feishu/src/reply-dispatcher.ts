@@ -5,6 +5,7 @@ import {
   type ChannelInboundTurnPlan,
 } from "openclaw/plugin-sdk/channel-inbound";
 import {
+  collectReplyMediaEntries,
   createChannelMessageReplyPipeline,
   formatChannelProgressDraftLineForEntry,
   resolveChannelPreviewStreamMode,
@@ -661,6 +662,11 @@ export function createFeishuReplyDispatcher(params: CreateFeishuReplyDispatcherP
     options?: { fallbackText?: string },
   ): Promise<FeishuReplyDeliveryResult> => {
     const mediaUrls = resolveSendableOutboundReplyParts(payload).mediaUrls;
+    // Resolve the SDK media/attachment pairs before the send helper flattens
+    // media into URL-only callbacks, so positional attachment names survive.
+    // The helper invokes `send` once per URL, in order.
+    const mediaEntries = collectReplyMediaEntries(payload, mediaUrls);
+    let mediaEntryIndex = 0;
     let sentFallbackText = false;
     let degradedVoiceFallbackText: string | undefined;
     const results: FeishuReplyDeliveryResult[] = [];
@@ -669,9 +675,11 @@ export function createFeishuReplyDispatcher(params: CreateFeishuReplyDispatcherP
         mediaUrls,
         caption: "",
         send: async ({ mediaUrl }) => {
+          const fileName = mediaEntries[mediaEntryIndex++]?.attachment?.name?.trim() || undefined;
           const result = await sendMediaFeishu({
             ...replyTarget,
             mediaUrl,
+            ...(fileName ? { fileName } : {}),
             mediaAccess: resolveOutboundMediaAccessForConfig(cfg),
             ...(payload.audioAsVoice === true ? { audioAsVoice: true } : {}),
           });
