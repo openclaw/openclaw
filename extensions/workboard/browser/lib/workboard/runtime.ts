@@ -105,6 +105,7 @@ function createDefaultState(): WorkboardUiState {
     mutationReadiness: "ready",
     error: null,
     cards: [],
+    pendingDrops: new Map(),
     nextCursor: null,
     boards: [],
     statuses: WORKBOARD_STATUSES,

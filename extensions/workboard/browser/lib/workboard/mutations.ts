@@ -1,6 +1,7 @@
 import { isRecord } from "openclaw/plugin-sdk/string-coerce-runtime";
 import { isGatewayRequestError, type GatewayBrowserClient } from "../../api/gateway.ts";
 import {
+  cardsWithPendingDrops,
   changedDraftPayload,
   draftPayload,
   planWorkboardCardDrop,
@@ -180,8 +181,12 @@ export async function moveWorkboardCard(
   if (current.nextCursor && params.beforeCardId !== undefined) {
     return;
   }
-  const cards = current.cards;
+  const cards = cardsWithPendingDrops(current);
   const card = cards.find((candidate) => candidate.id === params.cardId);
+  const dropPlan =
+    card && params.beforeCardId !== undefined
+      ? planWorkboardCardDrop(cards, card, params.status, params.beforeCardId, params.boardFilter)
+      : [];
   const moves =
     params.beforeCardId === undefined
       ? [
@@ -191,9 +196,7 @@ export async function moveWorkboardCard(
             ...(current.nextCursor ? {} : { position: params.position }),
           },
         ]
-      : card
-        ? planWorkboardCardDrop(cards, card, params.status, params.beforeCardId, params.boardFilter)
-        : [];
+      : dropPlan;
   if (!moves.length) {
     return;
   }
@@ -203,6 +206,12 @@ export async function moveWorkboardCard(
     async (state, client) => {
       // A recovered older load must not clear an error owned by this move.
       delete getWorkboardRuntime(params.host).loadError;
+      if (dropPlan.length) {
+        for (const move of dropPlan) {
+          state.pendingDrops.set(move.id, { status: params.status, position: move.position });
+        }
+        notifyWorkboard(params.host);
+      }
       try {
         for (const move of moves) {
           const payload =
@@ -219,6 +228,7 @@ export async function moveWorkboardCard(
                     : {}),
                 });
           replaceCard(state, normalizeCardPayload(payload));
+          state.pendingDrops.delete(move.id);
         }
       } catch (error) {
         state.error = formatError(error);
@@ -230,6 +240,10 @@ export async function moveWorkboardCard(
           reloadAfterFailure = true;
         }
       } finally {
+        // Only remove this drop's unconfirmed placements; never rewind a successful peer write.
+        for (const move of dropPlan) {
+          state.pendingDrops.delete(move.id);
+        }
         if (state.draggedCardId === params.cardId) {
           state.draggedCardId = null;
         }
