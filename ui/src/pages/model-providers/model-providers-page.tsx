@@ -1,4 +1,4 @@
-import { createMemo } from "solid-js";
+import { createMemo, createSignal, lazy, Loading, Show } from "solid-js";
 import { splitTrailingAuthProfile } from "../../../../src/agents/model-ref-profile.js";
 import type { ApplicationContext } from "../../app/context-types.ts";
 import { useApplication } from "../../lib/reactive/context.ts";
@@ -13,7 +13,16 @@ import {
   renderModelProvidersPageShell as ModelProvidersPageShell,
 } from "./view.tsx";
 
-export function ModelProvidersContent(props: { controller: ModelProvidersOwner }) {
+// The route loader starts this import with first-run data, so detected models arrive with the page.
+const FirstRunModelSetup = lazy(() => import("../model-setup/model-setup-page.tsx"), {
+  export: "FirstRunModelSetup",
+});
+
+export function ModelProvidersContent(props: {
+  controller: ModelProvidersOwner;
+  /** First-run setup adds detected models, activation recovery and the onboarding handoff. */
+  firstRun?: boolean;
+}) {
   const current = createMemo(() => props.controller.viewProps());
   let initialLoadComplete = false;
   const showProviderDetails = createMemo(() => {
@@ -40,6 +49,27 @@ export function ModelProvidersContent(props: { controller: ModelProvidersOwner }
     );
   const Discovery = () => props.controller.discovery.render(discoveryData);
   const installedAgents = <InstalledAgents />;
+  // First-run setup owns local discovery, so its activations keep their recovery receipt.
+  const [firstRunDiscovery, setFirstRunDiscovery] = createSignal(false);
+  // Detected models render above the catalog; one loading boundary waits for them so the
+  // catalog never moves when they arrive.
+  const [firstRunSettled, setFirstRunSettled] = createSignal(false);
+  const firstRunSetup = (
+    <Show when={props.firstRun}>
+      <Loading>
+        <FirstRunModelSetup
+          discoveryOpen={firstRunDiscovery()}
+          agentLabel={discoveryData().agentLabel}
+          credentialChoices={discoveryData().credentialChoices}
+          onDetectionSettled={() => setFirstRunSettled(true)}
+          onClose={() => {
+            setFirstRunDiscovery(false);
+            current().props.onRefresh();
+          }}
+        />
+      </Loading>
+    </Show>
+  );
   // Installed agents report their own listing failures on their rows; an error naming only them
   // repeats that. A failing provider without a card isn't set up, so it stays quiet too.
   const agentFailuresOnly = createMemo(() => {
@@ -77,6 +107,8 @@ export function ModelProvidersContent(props: { controller: ModelProvidersOwner }
           logoutSaving={props.controller.logoutSaving()}
           providerDetailsReady={showProviderDetails()}
           accountRecovery={<Recovery />}
+          firstRunSetup={firstRunSetup}
+          firstRunPending={props.firstRun === true && !firstRunSettled()}
           installedAgents={current().installedAgentsAvailable ? installedAgents : undefined}
           agentModel={agentModel()}
           catalogReceipt={agentFailuresOnly() ? undefined : current().props.catalogReceipt}
@@ -90,9 +122,13 @@ export function ModelProvidersContent(props: { controller: ModelProvidersOwner }
               void login.open(group.authProviders, { select: group.id });
             }
           }}
+          onDiscover={() =>
+            props.firstRun ? setFirstRunDiscovery(true) : current().props.onDiscover()
+          }
           discoverDisabled={
             !current().props.canMutate ||
             props.controller.discovery.busy ||
+            firstRunDiscovery() ||
             current().props.loginBusy ||
             current().props.addProviderOpen
           }
@@ -114,10 +150,29 @@ export type ModelProvidersPageProps = {
   loaderPending?: boolean;
 };
 
-export function ModelProvidersPageBody(props: ModelProvidersPageProps) {
-  const context: ApplicationContext = useApplication();
-  const controller = createModelProviders(context, props);
+function SettingsModelProviders(props: ModelProvidersPageProps) {
+  const controller = createModelProviders(useApplication(), props);
   return <ModelProvidersContent controller={controller} />;
+}
+
+function FirstRunModelProviders(props: ModelProvidersPageProps) {
+  const context: ApplicationContext = useApplication();
+  // First run sets up the agent the app uses, so that is the agent this Models page edits.
+  const firstRunContext: ApplicationContext = Object.create(context, {
+    settingsAgentSelection: { value: context.agentSelection },
+  });
+  const controller = createModelProviders(firstRunContext, props);
+  return <ModelProvidersContent controller={controller} firstRun />;
+}
+
+export function ModelProvidersPageBody(props: ModelProvidersPageProps) {
+  // Each mode keeps one selection owner for its mount; changing mode remounts the page body.
+  const firstRun = createMemo(() => props.routeData?.firstRun === true);
+  return (
+    <Show when={firstRun()} fallback={<SettingsModelProviders {...props} />}>
+      <FirstRunModelProviders {...props} />
+    </Show>
+  );
 }
 
 export function ModelProvidersPage(props: ModelProvidersPageProps) {

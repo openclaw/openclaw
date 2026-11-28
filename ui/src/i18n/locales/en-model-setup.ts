@@ -14,8 +14,6 @@ const enModelSetup = {
       otherSoftware: "Other detected software",
     },
     heading: "Set up a model",
-    intro:
-      "OpenClaw finds saved accounts and local models on the computer running OpenClaw. Choose one to begin; nothing is selected, tested, installed, or saved automatically.",
     loading: "Loading models…",
     testing: "Asking the selected model for a quick reply…",
     retry: "Retry",
@@ -27,14 +25,7 @@ const enModelSetup = {
       useCurrent: "Verify & use selected model",
     },
     verify: {
-      title: "Selected model",
-      button: "Check model",
-      retry: "Try again",
-      checkAgain: "Check again",
       checkingButton: "Checking…",
-      checking: "Asking {modelRef} for a quick reply…",
-      ready: "Ready",
-      readyIn: "Ready · {latencyMs} ms",
       providerUnavailable: "{provider} isn’t responding.",
     },
     access: {
@@ -51,15 +42,7 @@ const enModelSetup = {
       testingButton: "Testing…",
     },
     nativeModels: {
-      title: "Use an installed agent",
-      body: "Choose a model from an installed agent. It keeps its own sign-in and tools. Use saves your choice without running the setup test.",
       choose: "Choose a model",
-      use: "Use",
-      saving: "Saving…",
-      loading: "Loading installed agents…",
-      empty:
-        "No models from installed agents yet. Check the installed app, then open the picker again.",
-      unconfirmed: "Availability not confirmed",
     },
     empty: {
       title: "Recommended installs",

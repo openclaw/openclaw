@@ -222,6 +222,7 @@ export function ModelProviders(props: ModelProvidersViewProps) {
     <>
       <SettingsPage carapace>
         {props.accountRecovery}
+        {props.firstRunSetup}
         <Show when={signedInNoModels()}>
           <InlineAlert tone="warning" role="status" data-model-readiness="no-models">
             {t("modelProviders.readiness.signedInNoModels")}
@@ -229,7 +230,7 @@ export function ModelProviders(props: ModelProvidersViewProps) {
         </Show>
         <Show when={hasDefaults() && (first() === false || savedDefaults())}>{defaults()}</Show>
         <Show
-          when={first() !== undefined}
+          when={first() !== undefined && !props.firstRunPending}
           fallback={
             <div class="model-providers__loading">
               <SettingsLoadingSkeleton rows={2} />

@@ -9,8 +9,6 @@ import { hasOperatorAdminAccess } from "../../app/operator-access.ts";
 import { isGatewayMethodAdvertised } from "../../lib/gateway-methods.ts";
 import { i18nRevision, t } from "../../lib/reactive/i18n.ts";
 import { observeState } from "../../lib/reactive/observe-state.ts";
-import { readSessionDefaults } from "../../lib/sessions/session-key.ts";
-import { createModelProviderLogin } from "../model-providers/login-controller.ts";
 import {
   captureModelSetupConnection,
   modelSetupAgentSelection,
@@ -23,7 +21,6 @@ import { completeModelSetupWizard } from "./model-setup-completion.ts";
 import { createModelSetupIconLoader } from "./model-setup-icon-loader.tsx";
 import { createModelSetupSaving } from "./model-setup-saving.ts";
 import { formatModelSetupError } from "./model-setup-task-result.ts";
-import { createNativeModelSetup } from "./native-model-setup.tsx";
 import { candidateActivation, type ModelSetupPrepareOption } from "./prepare-options.ts";
 import { manualProviderActivation } from "./provider-picker.tsx";
 import type { ModelSetupDetection } from "./rpc.ts";
@@ -38,10 +35,13 @@ import { ModelSetupWizardRunner, type ModelSetupWizardCompletion } from "./wizar
 
 export type ModelSetupPageProps = {
   routeData?: ModelSetupRouteData;
-  embedded?: boolean;
+  /** First-run setup opens local discovery on request; discovery alone is always open. */
+  discoveryOpen?: boolean;
   agentLabel?: string;
   credentialChoices?: readonly string[];
   onClose?: () => void;
+  /** The first detection finished, or cannot run; the Models page holds its first paint until then. */
+  onDetectionSettled?: () => void;
 };
 
 export function createModelSetup(
@@ -60,8 +60,6 @@ export function createModelSetup(
     }
   };
   const actionsDisabled = (): boolean =>
-    login.busy ||
-    nativeModels.active ||
     state.activationState.phase === "testing" ||
     state.verifyState.phase === "checking" ||
     wizardMutationActive ||
@@ -75,11 +73,9 @@ export function createModelSetup(
 
   let observedConnection: ReturnType<typeof captureModelSetupConnection> | null = null;
   let pendingPrepareOption: ModelSetupPrepareOption | null = null;
-  let manualProviderRevealPending = false;
   let wizardMutationGeneration = 0;
   let wizardMutationActive = false;
   let wizardReturnFocus: HTMLElement | null = null;
-  let manualInput: HTMLInputElement | undefined;
   let feedback: HTMLElement | undefined;
   let wizardDialog: import("../../components/modal-dialog.tsx").OpenClawModalDialog | undefined;
   const readConnection = () => {
@@ -106,39 +102,11 @@ export function createModelSetup(
     closeWizard,
     notify,
   });
-  const nativeModels = createNativeModelSetup({
-    getContext: () => context,
-    getConnection: readConnection,
-    canUseSetup,
-    blocked: () => {
-      projection.read();
-      return activationBlocked();
-    },
-    onSelected: () => (props.embedded ? props.onClose?.() : context.navigate("chat")),
-    onChange: notify,
-  });
   const iconLoader = createModelSetupIconLoader(
     () => context,
     () => state.pageState,
     (urls) => (state.iconUrls = urls),
   );
-  const login = createModelProviderLogin({
-    getScope: () => ({
-      context,
-      agentId: agentSelection().state.selectedId,
-      connectionEpoch: context.gateway.connectionRevision,
-    }),
-    getManualProviders: () =>
-      state.pageState.phase === "ready" ? state.pageState.result.manualProviders : [],
-    onManualProvider: (authChoice) => {
-      manualProviderRevealPending = true;
-      selectManualProvider(authChoice);
-    },
-    canStart: () =>
-      canUseSetup(context.gateway.snapshot.client) && !firstRun.unresolved && !actionsDisabled(),
-    canContinue: () => canUseSetup(context.gateway.snapshot.client) && !firstRun.unresolved,
-    refresh: () => detect(),
-  });
   const wizard = new ModelSetupWizardRunner({
     getClient: () => context.gateway.snapshot.client,
     getAgentId: () => agentSelection().state.selectedId,
@@ -222,16 +190,11 @@ export function createModelSetup(
   const [detectionIdentity, setDetectionRequest] = createSignal<ModelSetupDetection>();
 
   let feedbackState: ModelSetupActivationState | undefined;
+  const [detectionSettled, setDetectionSettled] = createSignal(false);
 
   function afterRender() {
     if (!connected) {
       return;
-    }
-    if (manualProviderRevealPending) {
-      manualProviderRevealPending = false;
-      wizardDialog?.setReturnFocusTarget(manualInput ?? null);
-      manualInput?.scrollIntoView?.({ block: "nearest", behavior: "auto" });
-      manualInput?.focus({ preventScroll: true });
     }
     if (feedbackState !== state.activationState && state.activationState.phase !== "idle") {
       feedback?.scrollIntoView?.({ block: "nearest", behavior: "auto" });
@@ -242,6 +205,16 @@ export function createModelSetup(
     }
     iconLoader.reconcile();
     firstRun.start();
+    const snapshot = context.gateway.snapshot;
+    if (
+      !detectionSettled() &&
+      (snapshot.phase !== "connected" ||
+        !canUseSetup(snapshot.client) ||
+        (state.detectionRequest === null && state.pageState.phase !== "loading"))
+    ) {
+      setDetectionSettled(true);
+      props.onDetectionSettled?.();
+    }
   }
 
   function synchronizeGateway(currentRoute: ModelSetupPageProps["routeData"]): void {
@@ -259,7 +232,6 @@ export function createModelSetup(
     }
     const connection = observation.connection;
     observedConnection = connection;
-    nativeModels.reset();
     // A pending agent roster keeps its prior connection fields; read the live phase.
     const suspendedNotice =
       snapshot.phase !== "connected" && state.wizardMode === "auth"
@@ -304,8 +276,6 @@ export function createModelSetup(
     } else {
       firstRun.connectionChanged(connection);
     }
-    manualProviderRevealPending = false;
-    login.reset();
     state.detectionRequest = null;
     setDetectionRequest(undefined);
     retireWizardMutation();
@@ -554,9 +524,6 @@ export function createModelSetup(
       snapshot.phase === "connected" &&
       isGatewayMethodAdvertised(snapshot, "openclaw.setup.detect") !== true;
     return {
-      onManualInput: (element: HTMLInputElement) => {
-        manualInput = element;
-      },
       onFeedback: (element: HTMLDivElement) => {
         feedback = element;
       },
@@ -565,7 +532,10 @@ export function createModelSetup(
       },
       detecting: state.detectionRequest !== null,
       detectionIdentity,
-      embedded: props.embedded ?? false,
+      // Outside first run, setup is the Models page's local discovery dialog.
+      embedded: routeData()?.firstRun !== true,
+      discoveryOpen: routeData()?.firstRun !== true || props.discoveryOpen === true,
+      detectionSettled: detectionSettled(),
       agentLabel: props.agentLabel ?? "",
       credentialChoices: props.credentialChoices ?? [],
       onClose: props.onClose,
@@ -580,7 +550,6 @@ export function createModelSetup(
       ),
       activation: state.activationState,
       verify: state.verifyState,
-      connection: props.embedded ? undefined : login.pageActions,
       wizard:
         state.wizardState.phase === "step" && wizardMutationActive
           ? { ...state.wizardState, busy: true }
@@ -592,7 +561,6 @@ export function createModelSetup(
       canPrepare:
         canUseSetup(snapshot.client) &&
         isGatewayMethodAdvertised(snapshot, "openclaw.setup.prepare.start") === true,
-      modelConfigured: readSessionDefaults(snapshot)?.modelConfigured === true,
       gatewayTooOld,
       refreshWarning: state.setupRefreshWarning,
       cancellationNotice: state.cancellationNotice,
@@ -605,7 +573,6 @@ export function createModelSetup(
       manualApiKey: state.manualApiKey,
       manualError: state.manualError,
       moreSignInOpen: state.moreSignInOpen,
-      nativeModels,
       firstRun: routeData()?.firstRun === true,
       iconUrls: state.iconUrls,
       onDetect: () => {
@@ -613,7 +580,6 @@ export function createModelSetup(
           void detect();
         }
       },
-      onVerify: (): void => void firstRun.verify(),
       onActivateCandidate: (candidate: SystemAgentSetupDetectResult["candidates"][number]): void =>
         void activate(
           candidateActivation(candidate),
@@ -642,15 +608,15 @@ export function createModelSetup(
         state.moreSignInOpen = open;
       },
       onIconError: iconLoader.invalidate,
-      onOpenChat: () => (props.embedded ? props.onClose?.() : firstRun.continueSetup()),
+      onOpenChat: () =>
+        routeData()?.firstRun === true ? firstRun.continueSetup() : props.onClose?.(),
       onOpenSetupAssistant: () => firstRun.continueSetup("utility"),
       onSuccessClose: () => {
-        if (props.embedded) {
-          props.onClose?.();
-          return;
+        if (routeData()?.firstRun === true) {
+          state.activationState = { phase: "idle" };
+          void detect();
         }
-        state.activationState = { phase: "idle" };
-        void detect();
+        props.onClose?.();
       },
       onWizardValueChange: (value: unknown) => {
         state.wizardDraft = { ...state.wizardDraft, value };
@@ -663,7 +629,6 @@ export function createModelSetup(
   };
   const synchronizeCurrentGateway = () => {
     synchronizeGateway(routeData());
-    login.synchronize();
     notify();
   };
   createEffect(
@@ -704,7 +669,6 @@ export function createModelSetup(
   });
   return {
     view,
-    login,
     wizardSaving: wizardSaving.saving,
     revision: projection.revision,
   };

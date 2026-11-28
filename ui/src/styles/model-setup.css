@@ -1,11 +1,12 @@
-.model-setup,
-.model-setup__loading-sections {
+.model-setup {
   display: grid;
   gap: 18px;
 }
 
-openclaw-model-setup-page > .content-header {
-  padding-inline: 0;
+/* First-run additions are direct items of the Models page; empty hosts take no space. */
+openclaw-model-setup-page,
+.model-setup__dialogs {
+  display: contents;
 }
 
 .model-setup__intro {
@@ -15,21 +16,10 @@ openclaw-model-setup-page > .content-header {
   gap: 16px;
 }
 
-.model-setup__intro h1 {
-  margin: 0;
-  font-size: 20px;
-}
-
 .model-setup-wizard .oc-dialog__title,
 .model-setup-wizard .model-setup-wizard__success-title {
   margin: 0;
   font-size: var(--overlay-modal-title-size);
-}
-
-.model-setup__intro p {
-  margin: 6px 0 0;
-  color: var(--muted);
-  max-width: 720px;
 }
 
 .model-setup__rows {
@@ -37,46 +27,12 @@ openclaw-model-setup-page > .content-header {
   gap: 10px;
 }
 
-.model-setup__loading-row {
-  min-height: 72px;
-}
-
-.model-setup__loading-section--selected .model-setup__loading-row {
-  min-height: 73px;
-}
-
-.model-setup__loading-section--candidates .model-setup__loading-row {
-  min-height: 79px;
-}
-
-.model-setup__loading-section--sign-in .model-setup__loading-row {
-  min-height: 68px;
-}
-
-.model-setup__loading-icon,
 .model-setup__icon {
   width: 24px;
   height: 24px;
   flex: 0 0 24px;
-}
-
-.model-setup__loading-copy {
-  display: grid;
-  flex: 1;
-  gap: 8px;
-}
-
-.model-setup__loading-status {
-  height: 14px;
-  color: var(--muted);
-  font-size: 12px;
-  line-height: 14px;
-}
-
-.model-setup__loading-action {
-  width: 96px;
-  height: 36px;
-  flex: none;
+  object-fit: contain;
+  border-radius: 5px;
 }
 
 .model-setup__row {
@@ -95,24 +51,8 @@ openclaw-model-setup-page > .content-header {
   flex: 1;
 }
 
-.model-setup__row-title {
-  display: flex;
-  align-items: center;
-  gap: 8px;
-  margin-bottom: 3px;
-}
-
-.model-setup__icon {
-  object-fit: contain;
-  border-radius: 5px;
-}
-
 .model-setup__icon.provider-brand-icon--fallback {
   font-size: 11px;
-}
-
-.model-setup__current-copy {
-  min-width: 0;
 }
 
 .model-setup__row-actions {
@@ -172,12 +112,6 @@ openclaw-model-setup-page > .content-header {
 .model-setup__testing {
   margin-top: 8px;
   color: var(--accent);
-}
-
-.model-setup__verified {
-  margin-top: 8px;
-  color: var(--ok);
-  font-weight: 600;
 }
 
 .model-setup__failure {
@@ -489,8 +423,6 @@ openclaw-model-setup-page > .content-header {
     flex-direction: column;
   }
 
-  .model-setup__loading-icon,
-  .model-setup__loading-action,
   .model-setup__row > .btn {
     align-self: flex-start;
   }
