@@ -519,6 +519,12 @@ it("does not persist plaintext alongside SecretRefs", async ({ auth: { agentDir 
     "anthropic:default": { ...token, token: "token-plaintext" },
   };
   saveAuthProfileStore({ version: 1, profiles }, agentDir);
+  expect(inspectStore(agentDir)).toEqual({
+    status: "readable",
+    raw: expect.objectContaining({
+      profiles: { "openai:default": key, "anthropic:default": token },
+    }),
+  });
   const loaded = ensureAuthProfileStore(agentDir, noExternal);
   expect(loaded.profiles["openai:default"]).toEqual(key);
   expect(loaded.profiles["anthropic:default"]).toEqual(token);
