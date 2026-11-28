@@ -407,8 +407,10 @@ struct DashboardWindowSmokeTests {
     }
 
     private func makeDashboardDragWindow() -> DashboardWindowGestureSpy {
+        // Sit low in the visible frame so a small drag is never clamped.
+        let origin = NSScreen.main?.visibleFrame.origin ?? .zero
         let window = DashboardWindowGestureSpy(
-            contentRect: NSRect(x: 240, y: 240, width: 720, height: 480),
+            contentRect: NSRect(x: origin.x + 40, y: origin.y + 40, width: 720, height: 480),
             styleMask: [.titled, .closable, .miniaturizable, .resizable, .fullSizeContentView],
             backing: .buffered,
             defer: false)
