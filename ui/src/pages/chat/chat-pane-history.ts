@@ -178,7 +178,7 @@ export abstract class ChatPaneHistory extends ChatPaneSnapshotHydration {
 
   protected reconcileHistoryAfterRender(): void {
     this.evaluateHistoryEdge();
-    if (this.conversationPresented && this.state?.settings.compactSessionOpening) {
+    if (this.conversationPresented) {
       // A query can precede the first history page, a reconnect, or a pane reveal.
       void getTranscriptState(this.presentationId).search.resumeEarlierHistory?.();
     }
@@ -228,7 +228,6 @@ export abstract class ChatPaneHistory extends ChatPaneSnapshotHydration {
         root.clientHeight <= 0 ||
         root.scrollHeight > root.clientHeight ||
         (!catalogSession &&
-          this.state.settings?.compactSessionOpening &&
           chatHistoryRequests(this.state).compactOpeningSessionKey === this.state.sessionKey &&
           this.transcript.hasMessageRows)
       ) {

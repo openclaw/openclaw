@@ -143,7 +143,6 @@ export function createConfigPagePreferences(context: ApplicationContext, invalid
         },
         setAccent: (accent: string | undefined) =>
           accent === undefined ? reset("accent") : apply({ accent }),
-        compactSessionOpening: settings().compactSessionOpening === true,
         chatSendShortcut: normalizeChatSendShortcut(settings().chatSendShortcut),
         chatSendShortcutOverridden: chatSendShortcutPref.overridden,
         chatSendShortcutProvenance: chatSendShortcutPref.provenance,

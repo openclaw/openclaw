@@ -205,7 +205,6 @@ export type UiSettings = {
   chatPersistCommentary?: boolean;
   // Browser-local composer visibility; saved progress and other placements are unchanged.
   chatShowTaskProgress?: boolean;
-  compactSessionOpening?: boolean;
   // Browser-local presentation preference; false preserves active-card auto-expand.
   chatCollapseTaskProgress?: boolean;
   chatSendShortcut?: ChatSendShortcut;
