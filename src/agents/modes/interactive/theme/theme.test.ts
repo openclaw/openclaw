@@ -68,6 +68,15 @@ describe("loadThemeFromPath", () => {
     expect(theme.bg("selectedBg", "text")).toBe(`\x1b[48;5;${index}mtext\x1b[49m`);
   });
 
+    it.each(["#1z2y3x", "#-1-2-3", "# 1 2 3", "#12345g", "#fff"])(
+    "rejects malformed hex color %s in both color modes",
+    (color) => {
+      for (const mode of ["256color", "truecolor"] as const) {
+        expect(() => loadColor(color, mode)).toThrow(`Invalid hex color: ${color}`);
+      }
+    },
+  );
+
   it("preserves RGB channels in truecolor output", () => {
     const theme = loadColor("#5f87af", "truecolor");
     expectColors(theme, "\x1b[38;2;95;135;175m", "\x1b[48;2;95;135;175m");
