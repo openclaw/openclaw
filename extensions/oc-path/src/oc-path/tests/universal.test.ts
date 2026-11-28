@@ -83,6 +83,22 @@ describe("resolveOcPath", () => {
 });
 
 describe("setOcPath", () => {
+  it.each(['"title"', "'title'", '"ti\\u0074le"'])(
+    "rejects insertion over the existing quoted frontmatter key %s",
+    (spelling) => {
+      const ast = parseMd(`---\n${spelling}: original\n---\nBody\n`);
+      expectEditError(ast, "oc://note.md/[frontmatter]/+title", "new", "type-mismatch");
+    },
+  );
+
+  it("allows a new frontmatter key when only a nested or differently typed key exists", () => {
+    const uri = "oc://note.md/[frontmatter]/+true";
+    const ast = parseMd('---\n"true": string\nnested:\n  true: child\n---\n');
+    expect(edit(ast, uri, "new").raw).toBe(
+      '---\n"true": string\nnested:\n  true: child\ntrue: new\n---\n',
+    );
+  });
+
   it.each([
     ['{"é":true,"e\\u0301":true}', "e\u0301", "false", '{"é":true,"e\\u0301":false}', false],
     [

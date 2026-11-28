@@ -15,7 +15,7 @@
  * @module @openclaw/oc-path/universal
  */
 
-import { isMap, isSeq, type Node } from "yaml";
+import { isMap, isSeq, type Node, parseDocument } from "yaml";
 import type { MdAst } from "./ast.js";
 import { OcPathEditError } from "./edit-error.js";
 import { setMdOcPath } from "./edit.js";
@@ -453,6 +453,15 @@ function setMdInsertion(ast: MdAst, info: InsertionInfo, value: string): OcAst {
         : ast.raw.startsWith("\uFEFF")
           ? 1
           : 0;
+    if (hasFrontmatter) {
+      // The addressable entries omit quoted keys, but YAML still considers
+      // "title" and title the same key. Compare the key as it will be emitted.
+      const source = ast.raw.slice(sourceLineOffset(ast.raw, 2), offset).replace(/\r(?!\n)/g, "\n");
+      const map = parseDocument(source, { logLevel: "silent" }).contents;
+      if (isMap(map) && map.has(parseDocument(key).contents)) {
+        throw new OcPathEditError("type-mismatch", `frontmatter key '${key}' already exists`);
+      }
+    }
     const entry = `${key}: ${formatFrontmatterValue(value)}`;
     return insertMdSource(
       ast,
