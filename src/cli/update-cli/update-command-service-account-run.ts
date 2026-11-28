@@ -8,6 +8,60 @@ import type { SystemServiceAccountPlan } from "./update-command-admit-service-ac
 
 export type ServiceAccountExecution = Extract<SystemServiceAccountPlan, { kind: "switch" }>;
 
+/** The only environment root's runuser gets; the unit's environment applies after the switch. */
+export const SERVICE_ACCOUNT_LAUNCH_PATH = "/usr/sbin:/usr/bin:/sbin:/bin";
+
+/**
+ * Runs as the account: loads the unit's environment from the handoff file and executes the
+ * release entry with exactly that environment. Loader variables such as LD_PRELOAD from the
+ * unit therefore never reach a root process.
+ */
+export const SERVICE_ACCOUNT_ENV_LOADER = [
+  "const [file, ...argv] = process.argv.slice(1);",
+  'const env = JSON.parse(require("node:fs").readFileSync(file, "utf8"));',
+  'const run = require("node:child_process").spawnSync(process.execPath, argv, { env, stdio: "inherit" });',
+  "process.exit(typeof run.status === 'number' ? run.status : 1);",
+].join("\n");
+
+/**
+ * Files root hands to the unit's account: a fresh root-owned directory that others may only
+ * traverse, and files only that account can read. Root never reads them back.
+ */
+export type ServiceAccountHandoff = {
+  directory: string;
+  envFile: string;
+  write: (name: string, contents: string) => Promise<string>;
+  remove: () => Promise<void>;
+};
+
+export async function createServiceAccountHandoff(
+  execution: ServiceAccountExecution,
+  env: Record<string, string> = {},
+): Promise<ServiceAccountHandoff> {
+  const directory = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-update-handoff-"));
+  const remove = () => fs.rm(directory, { recursive: true, force: true });
+  const write = async (name: string, contents: string) => {
+    const file = path.join(directory, name);
+    const handle = await fs.open(file, "wx", 0o600);
+    try {
+      await handle.writeFile(contents, "utf8");
+      await handle.chown(execution.uid, execution.gid);
+      await handle.chmod(0o400);
+    } finally {
+      await handle.close();
+    }
+    return file;
+  };
+  try {
+    await fs.chmod(directory, 0o711);
+    const envFile = await write("env.json", JSON.stringify({ ...execution.env, ...env }));
+    return { directory, envFile, write, remove };
+  } catch (error) {
+    await remove();
+    throw error;
+  }
+}
+
 /**
  * Run this release's own entry point as the unit's account with the unit's environment.
  * Privilege only goes down: root never executes anything the account produced, and callers
@@ -15,12 +69,11 @@ export type ServiceAccountExecution = Extract<SystemServiceAccountPlan, { kind: 
  */
 export async function runReleaseAsServiceAccount(
   execution: ServiceAccountExecution,
+  handoff: ServiceAccountHandoff,
   params: {
     root: string;
     args: string[];
     timeoutMs: number;
-    /** Release runtime selectors the parent set for this candidate, never root's state selectors. */
-    env?: Record<string, string>;
     maxStdoutBytes?: number;
   },
 ): Promise<BufferedCommandResult> {
@@ -32,47 +85,24 @@ export async function runReleaseAsServiceAccount(
     serviceAccountArgv({
       runuser: execution.runuser,
       account: execution.account,
-      argv: [process.execPath, entry, ...params.args],
-      preserveEnvironment: true,
+      argv: [
+        process.execPath,
+        "-e",
+        SERVICE_ACCOUNT_ENV_LOADER,
+        handoff.envFile,
+        entry,
+        ...params.args,
+      ],
     }),
     {
       // Neither root's working directory nor any path the account owns.
       cwd: "/",
       baseEnv: {},
-      env: { ...execution.env, ...params.env },
+      env: { PATH: SERVICE_ACCOUNT_LAUNCH_PATH },
       input: "",
       timeoutMs: params.timeoutMs,
       maxOutputBytes: { stdout: params.maxStdoutBytes ?? 1024 * 1024, stderr: 64 * 1024 },
       killProcessTree: true,
     },
   );
-}
-
-/**
- * Hand one file to the unit's account: a fresh root-owned directory and file readable by the
- * account's group only, so the account can read it and nobody but root can replace it.
- */
-export async function withServiceAccountHandoff<T>(
-  execution: ServiceAccountExecution,
-  name: string,
-  contents: string,
-  run: (file: string) => Promise<T>,
-): Promise<T> {
-  const directory = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-update-handoff-"));
-  try {
-    await fs.chown(directory, process.getuid?.() ?? 0, execution.gid);
-    await fs.chmod(directory, 0o750);
-    const file = path.join(directory, name);
-    const handle = await fs.open(file, "wx", 0o640);
-    try {
-      await handle.writeFile(contents, "utf8");
-      await handle.chown(process.getuid?.() ?? 0, execution.gid);
-      await handle.chmod(0o640);
-    } finally {
-      await handle.close();
-    }
-    return await run(file);
-  } finally {
-    await fs.rm(directory, { recursive: true, force: true });
-  }
 }

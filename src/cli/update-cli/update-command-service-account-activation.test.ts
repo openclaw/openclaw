@@ -15,6 +15,7 @@ const native = vi.hoisted(() => ({
   startPid: 0,
   scheduled: [] as string[][],
   plan: undefined as ServiceAccountExecution | undefined,
+  stopIgnored: false,
 }));
 // Unit selection and account resolution have their own tests in the admission suite.
 vi.mock("./update-command-admit-service-account.js", async (importOriginal) => ({
@@ -29,7 +30,9 @@ vi.mock("../../daemon/systemd-lifecycle.js", async (importOriginal) => ({
   ...(await importOriginal<typeof import("../../daemon/systemd-lifecycle.js")>()),
   stopSystemdService: async () => {
     native.events.push("stop");
-    native.unit = { active: "inactive", pid: 0 };
+    if (!native.stopIgnored) {
+      native.unit = { active: "inactive", pid: 0 };
+    }
   },
   startSystemdService: async () => {
     native.events.push("start");
@@ -76,8 +79,8 @@ function installAccount(answers: Record<string, [number, string]>): void {
     [
       "#!/bin/sh",
       'dir=$(dirname "$0")',
-      // -m -u <account> -- <node> <entry> <command...>
-      'shift 6; command=$1; [ "$command" = gateway ] && command=health; [ "$command" = update ] && command=$2',
+      // -u <account> -- <node> -e <loader> <env file> <entry> <command...>
+      'shift 8; command=$1; [ "$command" = gateway ] && command=health; [ "$command" = update ] && command=$2',
       'echo "$command" >> "$dir/calls"',
       '[ -f "$dir/$command.code" ] || exit 70',
       'cat "$dir/$command.out"',
@@ -91,11 +94,15 @@ function installAccount(answers: Record<string, [number, string]>): void {
     unitName: "openclaw-gateway.service",
     unitPath: "/etc/systemd/system/openclaw-gateway.service",
     account: "openclaw",
-    uid: process.getuid?.() ?? 0,
+    uid: process.getuid?.() || 1001,
     gid: process.getgid?.() ?? 0,
     runuser: shim,
     home: path.join(accountDir, "home"),
-    env: { HOME: path.join(accountDir, "home"), PATH: process.env.PATH ?? "/usr/bin:/bin" },
+    env: {
+      HOME: path.join(accountDir, "home"),
+      PATH: process.env.PATH ?? "/usr/bin:/bin",
+      OPENAI_API_KEY: "unit-only-value",
+    },
   };
 }
 
@@ -103,6 +110,9 @@ const calls = () =>
   fs.existsSync(path.join(accountDir, "calls"))
     ? fs.readFileSync(path.join(accountDir, "calls"), "utf8").trim().split("\n")
     : [];
+
+const scheduledPayloads = () =>
+  native.scheduled.map((argv) => JSON.parse(argv.at(-1) ?? "null") as Record<string, unknown>);
 
 const ok = (status: string): [number, string] => [0, `${JSON.stringify({ status })}\n`];
 
@@ -123,6 +133,7 @@ beforeEach(() => {
   native.unit = { active: "active", pid: process.pid };
   native.scheduled = [];
   native.plan = undefined;
+  native.stopIgnored = false;
   root = dirs.make("service-account-release-");
   fs.mkdirSync(path.join(root, "dist"));
   fs.writeFileSync(path.join(root, "dist", "index.js"), "setInterval(() => {}, 1000);\n");
@@ -145,7 +156,7 @@ afterEach(() => {
 
 describe("system service update as the unit's account", () => {
   it.runIf(process.platform === "linux")(
-    "stops the unit, migrates as the account, starts and verifies the candidate, then finishes",
+    "stops the unit, migrates as the account, starts and verifies the candidate, then settles after the updater",
     async () => {
       installAccount({
         migrate: ok("migrated"),
@@ -157,8 +168,11 @@ describe("system service update as the unit's account", () => {
 
       expect(result).toMatchObject({ status: "updated", warnings: [] });
       expect(native.events).toEqual(["stop", "start"]);
-      expect(calls()).toEqual(["migrate", "health", "finish"]);
-      expect(native.scheduled).toEqual([]);
+      // The run is recorded only once the installed updater has settled the package.
+      expect(calls()).toEqual(["migrate", "health"]);
+      expect(scheduledPayloads()).toMatchObject([
+        { mode: "settle", unit: "openclaw-gateway.service" },
+      ]);
     },
   );
 
@@ -179,16 +193,21 @@ describe("system service update as the unit's account", () => {
     const result = await activate();
 
     expect(result).toMatchObject({ status: "failed", stateRestored: true });
-    expect(native.events).toEqual(["stop"]);
+    // Restoring re-confirms the stop first.
+    expect(native.events).toEqual(["stop", "stop"]);
     expect(calls()).toEqual(["migrate", "restore"]);
     // The unit restarts only after the installed updater restored the previous package.
-    expect(native.scheduled).toHaveLength(1);
-    expect(native.scheduled[0]?.slice(-4)).toEqual([
-      String(process.ppid),
-      fs.realpathSync(root),
-      "2026.11.16",
-      "openclaw-gateway.service",
+    expect(scheduledPayloads()).toMatchObject([
+      {
+        mode: "start",
+        driverPid: process.ppid,
+        root: fs.realpathSync(root),
+        candidateVersion: "2026.11.16",
+        unit: "openclaw-gateway.service",
+      },
     ]);
+    // The transient unit's argv carries no environment values, only the handoff path.
+    expect(JSON.stringify(native.scheduled)).not.toContain("unit-only-value");
   });
 
   it("keeps the unit stopped and the backup when the account cannot restore", async () => {
@@ -198,8 +217,20 @@ describe("system service update as the unit's account", () => {
 
     expect(result).toMatchObject({ status: "failed", stateRestored: false });
     expect(result.status === "failed" && result.message).toContain("update backup is kept");
-    expect(native.events).toEqual(["stop"]);
+    // Restoring re-confirms the stop first.
+    expect(native.events).toEqual(["stop", "stop"]);
     expect(native.scheduled).toEqual([]);
+  });
+
+  it("keeps the state and the backup when the unit cannot be confirmed stopped", async () => {
+    installAccount({ migrate: ok("migrated"), restore: ok("restored") });
+    native.stopIgnored = true;
+
+    const result = await activate();
+
+    expect(result).toMatchObject({ status: "failed", stateRestored: false });
+    expect(result.status === "failed" && result.message).toContain("nothing was migrated");
+    expect(calls()).toEqual([]);
   });
 
   it("restores when the started unit does not serve the candidate", async () => {

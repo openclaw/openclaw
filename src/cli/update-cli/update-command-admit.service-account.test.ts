@@ -181,9 +181,12 @@ beforeEach(() => {
   systemd.readCommand.mockReset().mockRejectedValue(mismatch());
   // Root by default; refusal cases below remove one requirement for switching accounts.
   setEuid(0);
-  systemd.readAccount
-    .mockReset()
-    .mockResolvedValue({ uid: 1001, gid: process.getgid?.() ?? 0, home: "/var/lib/openclaw" });
+  systemd.readAccount.mockReset().mockResolvedValue({
+    // A root test runner may hand files to any account; others only to themselves.
+    uid: process.getuid?.() || 1001,
+    gid: process.getgid?.() ?? 0,
+    home: "/var/lib/openclaw",
+  });
   systemd.runuser.mockReset().mockResolvedValue(undefined);
   systemd.readAsRoot.mockReset().mockResolvedValue(serviceCommand());
   systemd.entry.mockReset().mockResolvedValue(path.join(root, "dist", "index.js"));
@@ -367,7 +370,9 @@ function installAccountProcess(answer: { stdout: string; code: number }) {
       "#!/bin/sh",
       'dir=$(dirname "$0")',
       'printf "%s\\n" "$@" > "$dir/argv"',
-      'env > "$dir/env"',
+      'env > "$dir/launch-env"',
+      'ls -ln "$7" > "$dir/env-mode"',
+      'cp "$7" "$dir/env.json"',
       "for last; do :; done",
       'ls -ln "$last" > "$dir/context-mode"',
       'cp "$last" "$dir/context"',
@@ -428,26 +433,26 @@ describe("candidate admission run as the unit's account", () => {
     ]);
     expect(verdict.warnings.map((warning) => warning.code)).toEqual(["retired-state-format"]);
     // Root ran the candidate's own admission as the account, by argument vector.
-    expect(accountProcess.read("argv").trim().split("\n")).toEqual([
-      "-m",
+    expect(accountProcess.read("argv").trim().split("\n").slice(0, 5)).toEqual([
       "-u",
       "openclaw",
       "--",
       process.execPath,
+      "-e",
+    ]);
+    expect(accountProcess.read("argv").trim().split("\n").slice(-5)).toEqual([
       path.join(root, "dist", "index.js"),
       "update",
       "admit",
       "--context",
       expect.stringMatching(/context\.json$/u),
     ]);
-    // The account sees the unit's environment, not this process's state selectors.
-    const env = Object.fromEntries(
-      accountProcess
-        .read("env")
-        .trim()
-        .split("\n")
-        .map((line) => [line.slice(0, line.indexOf("=")), line.slice(line.indexOf("=") + 1)]),
-    );
+    // runuser itself runs with a trusted environment; the unit's environment, including
+    // loader variables it may set, applies only after the switch.
+    const launchEnv = accountProcess.read("launch-env");
+    expect(launchEnv).not.toContain("unit-only-value");
+    expect(launchEnv).not.toContain(stateDir);
+    const env = JSON.parse(accountProcess.read("env.json")) as Record<string, string>;
     expect(env).toMatchObject({
       HOME: "/var/lib/openclaw",
       OPENCLAW_STATE_DIR: "/var/lib/openclaw/.openclaw",
@@ -456,9 +461,10 @@ describe("candidate admission run as the unit's account", () => {
       OPENCLAW_DEV_SOURCE_ROOT: expect.any(String),
     });
     expect(Object.values(env)).not.toContain(stateDir);
+    // Only the account can read what it is handed, and nobody else can replace it.
+    expect(accountProcess.read("env-mode")).toMatch(/^-r--------[@+.]? /u);
     expect(JSON.parse(accountProcess.read("context"))).toMatchObject({ installation: { root } });
-    // Readable by the account's group, replaceable by nobody else, and removed afterwards.
-    expect(accountProcess.read("context-mode")).toMatch(/^-rw-r-----[@+.]? /u);
+    expect(accountProcess.read("context-mode")).toMatch(/^-r--------[@+.]? /u);
     const handoff = accountProcess.read("argv").trim().split("\n").at(-1)!;
     expect(fs.existsSync(path.dirname(handoff))).toBe(false);
     // Nothing of this process's own (broken) state was read or changed.

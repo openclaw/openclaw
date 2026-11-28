@@ -5,8 +5,8 @@ import {
   type UpdateAdmissionVerdict,
 } from "../../infra/update-run-schema.js";
 import {
+  createServiceAccountHandoff,
   runReleaseAsServiceAccount,
-  withServiceAccountHandoff,
   type ServiceAccountExecution,
 } from "./update-command-service-account-run.js";
 
@@ -48,23 +48,24 @@ export async function admitAsServiceAccount(
       },
     };
   };
-  const result = await withServiceAccountHandoff(
-    execution,
-    "context.json",
-    JSON.stringify(context),
-    (file) =>
-      runReleaseAsServiceAccount(execution, {
-        root: facts.candidateRoot,
-        args: ["update", "admit", "--context", file],
-        timeoutMs: context.request.timeoutMs ?? 120_000,
-        env: {
-          NODE_DISABLE_COMPILE_CACHE: "1",
-          OPENCLAW_NO_RESPAWN: "1",
-          OPENCLAW_DEV_SOURCE_ROOT: facts.candidateRoot,
-          ...(context.target.version !== null ? { OPENCLAW_VERSION: context.target.version } : {}),
-        },
-      }),
-  );
+  // Runtime selectors the installed updater set for this candidate, never root's state.
+  const handoff = await createServiceAccountHandoff(execution, {
+    NODE_DISABLE_COMPILE_CACHE: "1",
+    OPENCLAW_NO_RESPAWN: "1",
+    OPENCLAW_DEV_SOURCE_ROOT: facts.candidateRoot,
+    ...(context.target.version !== null ? { OPENCLAW_VERSION: context.target.version } : {}),
+  });
+  let result: Awaited<ReturnType<typeof runReleaseAsServiceAccount>>;
+  try {
+    const file = await handoff.write("context.json", JSON.stringify(context));
+    result = await runReleaseAsServiceAccount(execution, handoff, {
+      root: facts.candidateRoot,
+      args: ["update", "admit", "--context", file],
+      timeoutMs: context.request.timeoutMs ?? 120_000,
+    });
+  } finally {
+    await handoff.remove();
+  }
   if (result.termination !== "exit" || (result.code !== 0 && result.code !== 3)) {
     return refuse(
       result.termination === "exit" ? `exit ${result.code}` : `admission ${result.termination}`,

@@ -20,23 +20,14 @@ export async function findRootOwnedRunuser(): Promise<string | undefined> {
 }
 
 /**
- * Root runs `argv` as a systemd unit's account, so privilege only goes down. With
- * `preserveEnvironment`, the child gets exactly the spawn environment the caller passes
- * (`-m`), which keeps secret values out of argv, where any local account could read them
- * through /proc; otherwise runuser resets HOME, SHELL, USER and LOGNAME for the account.
+ * Root runs `argv` as a systemd unit's account, so privilege only goes down. runuser resets
+ * HOME, SHELL, USER and LOGNAME for the account; callers pass a trusted environment and apply
+ * anything the unit defines only after the switch.
  */
 export function serviceAccountArgv(params: {
   runuser: string;
   account: string;
   argv: readonly string[];
-  preserveEnvironment?: boolean;
 }): string[] {
-  return [
-    params.runuser,
-    ...(params.preserveEnvironment ? ["-m"] : []),
-    "-u",
-    params.account,
-    "--",
-    ...params.argv,
-  ];
+  return [params.runuser, "-u", params.account, "--", ...params.argv];
 }
