@@ -146,9 +146,9 @@ an update run in either root's home or the service account's state directory.
 The service's own boot, running as `User=`, migrates its state and converges plugins.
 The unit's environment, profile, state selectors, and file ownership stay unchanged.
 
-The CLI checks HTTP readiness when the unit's command names a port. Otherwise,
-it checks that systemd reports the unit active and prints the commands to inspect
-the service; active does not prove that startup migration has completed:
+The CLI checks that systemd reports the unit active and prints the commands to
+inspect the service. It does not assume HTTP when TLS is configured only in the
+service's state: active does not prove that startup migration has completed.
 
 ```bash
 sudo systemctl status openclaw-gateway.service
@@ -163,6 +163,40 @@ guidance. Non-root cross-account updates remain refused.
 
 Before a significant update, create a verified backup as the service account
 with its existing selectors (see [Before updating](#before-updating-create-a-verified-backup)).
+
+### Older installed updaters
+
+If an older updater refuses this layout before installing the new package, do
+not repeat the same update command. Replace the package manually:
+
+1. If that run explicitly selected the service's state, its log or report may
+   now belong to root. Give those files back to the service account before
+   making the backup:
+
+   ```bash
+   sudo find /var/lib/openclaw/.openclaw -xdev -user 0 -exec chown openclaw {} +
+   ```
+
+2. Create a verified backup as the service account, preserving the unit's home,
+   state, config and profile selectors:
+
+   ```bash
+   sudo -u openclaw env HOME=/var/lib/openclaw OPENCLAW_STATE_DIR=/var/lib/openclaw/.openclaw \
+     openclaw backup create --verify --output /var/lib/openclaw
+   ```
+
+3. Replace the package with its owning package manager, then restart and inspect
+   the existing unit. For npm (omit `--allow-scripts=openclaw` on npm 11.15 and earlier):
+
+   ```bash
+   sudo npm install -g openclaw@latest --allow-scripts=openclaw
+   sudo systemctl restart openclaw-gateway.service
+   sudo systemctl status openclaw-gateway.service
+   sudo journalctl -u openclaw-gateway.service
+   ```
+
+Substitute the actual account, paths, package manager, and unit name. Retain the
+verified backup until the updated service is healthy.
 
 Gateway startup migrates configuration and database schemas in the selected state
 directory, so no separate state copy, Doctor run, or account adoption is needed.

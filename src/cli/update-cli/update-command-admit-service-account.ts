@@ -24,7 +24,7 @@ export async function inspectSystemServiceAccountForAdmission(params: {
   }
   return {
     message: `Gateway service ${mismatch.unitName} runs as ${mismatch.serviceUser || "root"}, but this update runs as ${os.userInfo().username}; the candidate cannot check that account's state.`,
-    nextAction: `Run the current installed CLI as root to replace only the package and restart the service without root state steps. See ${SYSTEM_SERVICE_UPDATE_DOCS}.`,
+    nextAction: `This installed updater cannot safely update another account's state. Follow the manual package replacement and ownership-repair instructions at ${SYSTEM_SERVICE_UPDATE_DOCS}.`,
   };
 }
 

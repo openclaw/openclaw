@@ -15,7 +15,6 @@ const native = vi.hoisted(() => ({
   active: vi.fn(),
   install: vi.fn(),
   root: "",
-  ready: vi.fn(),
 }));
 // Native service inspection and package replacement have independent owner tests.
 // Exercise the real CLI branch; the forbidden state boundary throws on the base.
@@ -69,10 +68,6 @@ vi.mock("./target.js", async (original) => ({
     spec: "openclaw@2026.11.29",
     version: "2026.11.29",
   }),
-}));
-vi.mock("../cli/daemon-cli/restart-health-probe.js", async (original) => ({
-  ...(await original<typeof import("../cli/daemon-cli/restart-health-probe.js")>()),
-  waitForGatewayHttpReadiness: native.ready,
 }));
 
 let home: TempHomeEnv;
@@ -137,7 +132,6 @@ beforeEach(async () => {
   });
   native.restart.mockResolvedValue({ outcome: "completed" });
   native.active.mockResolvedValue({ code: 0, stdout: "active", stderr: "" });
-  native.ready.mockResolvedValue({ healthz: 200, readyz: 200 });
   process.exitCode = undefined;
 });
 afterEach(async () => {
@@ -158,7 +152,9 @@ it.each([false, true])(
       JSON.parse(await fs.readFile(path.join(native.root, "package.json"), "utf8")).version,
     ).toBe("2026.11.29");
     expect(native.restart).toHaveBeenCalledOnce();
-    expect(native.ready).toHaveBeenCalledOnce();
+    expect(defaultRuntime.writeJson).toHaveBeenCalledWith(
+      expect.objectContaining({ message: expect.stringContaining("readiness not verified") }),
+    );
     expect(process.exitCode).toBe(0);
     expect(await fs.readdir(serviceState)).toEqual(["openclaw.json"]);
     expect(await fs.readFile(path.join(serviceState, "openclaw.json"), "utf8")).toBe(
@@ -168,13 +164,13 @@ it.each([false, true])(
   },
 );
 
-it.each(["inactive", "not-ready"])(
+it.each(["inactive", "restart-failed"])(
   "does not report a %s boot as a successful update",
   async (failure) => {
     if (failure === "inactive") {
       native.active.mockResolvedValue({ code: 3, stdout: "inactive", stderr: "" });
     } else {
-      native.ready.mockResolvedValue({ healthz: 200, readyz: 503 });
+      native.restart.mockRejectedValue(new Error("systemctl restart failed"));
     }
     await expect(updateCommand({ yes: true })).rejects.toThrow(
       "journalctl -u openclaw-gateway.service",
@@ -186,7 +182,6 @@ it("honors --no-restart without claiming the package is serving", async () => {
   await updateCommand({ yes: true, restart: false });
   expect(native.install).toHaveBeenCalledOnce();
   expect(native.restart).not.toHaveBeenCalled();
-  expect(native.ready).not.toHaveBeenCalled();
   expect(defaultRuntime.log).toHaveBeenCalledWith(
     expect.stringContaining("Restart with: systemctl restart openclaw-gateway.service"),
   );

@@ -1,8 +1,3 @@
-import { waitForGatewayHttpReadiness } from "../cli/daemon-cli/restart-health-probe.js";
-import {
-  DEFAULT_RESTART_HEALTH_ATTEMPTS,
-  DEFAULT_RESTART_HEALTH_DELAY_MS,
-} from "../cli/daemon-cli/restart-health.constants.js";
 import {
   assertGlobalUpdateOwner,
   parseUpdateChannel,
@@ -17,7 +12,6 @@ import { restartSystemdService } from "../daemon/systemd-lifecycle.js";
 import { captureSystemdServiceIdentity } from "../daemon/systemd-service-identity.js";
 import { compareSemverStrings } from "../infra/npm-registry-spec.js";
 import { runGlobalPackageUpdateSteps } from "../infra/package-update-steps.js";
-import { parseTcpPortFromArgs } from "../infra/tcp-port.js";
 import { resolveEffectiveUpdateChannel } from "../infra/update-channels.js";
 import {
   createGlobalInstallEnv,
@@ -120,11 +114,20 @@ export async function updateSystemServicePackage(
   const checks = `systemctl status ${unit.unitName}; journalctl -u ${unit.unitName}`;
   let message = `Package ${installed.afterVersion ?? target.version} installed. State convergence belongs to ${unit.serviceUser}'s service boot.`;
   if (opts.restart !== false) {
-    await restartSystemdService({
-      env: process.env,
-      systemdIdentity: selected,
-      stdout: createNullWriter(),
-    });
+    try {
+      await restartSystemdService({
+        env: process.env,
+        systemdIdentity: selected,
+        stdout: createNullWriter(),
+      });
+    } catch (cause) {
+      throw new Error(
+        `Package installed, but ${unit.unitName} could not restart. Check: ${checks}`,
+        {
+          cause,
+        },
+      );
+    }
     const active = await execSystemctl(
       ["is-active", "--quiet", unit.unitName],
       process.env,
@@ -133,23 +136,8 @@ export async function updateSystemServicePackage(
     if (active.code !== 0) {
       throw new Error(`Package installed, but ${unit.unitName} is not active. Check: ${checks}`);
     }
-    const port = parseTcpPortFromArgs(unit.programArguments);
-    if (port) {
-      const ready = await waitForGatewayHttpReadiness({
-        port,
-        attempts: DEFAULT_RESTART_HEALTH_ATTEMPTS,
-        deadlineAt: performance.now() + timeoutMs,
-        delayMs: DEFAULT_RESTART_HEALTH_DELAY_MS,
-      });
-      if (ready.healthz !== 200 || ready.readyz !== 200) {
-        throw new Error(
-          `Package installed, but ${unit.unitName} did not become ready. Check: ${checks}`,
-        );
-      }
-      message += " Gateway HTTP readiness passed.";
-    } else {
-      message += " Unit active; readiness not verified.";
-    }
+    // Port alone cannot identify HTTP versus configured TLS without opening service state.
+    message += " Unit active; readiness not verified.";
   } else {
     message += ` Restart with: systemctl restart ${unit.unitName}.`;
   }
