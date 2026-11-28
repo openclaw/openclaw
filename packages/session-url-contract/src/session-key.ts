@@ -5,7 +5,7 @@ export const DEFAULT_MAIN_KEY = "main";
 
 // ASCII case folding preserves the token grammar; the suffix must survive trimming.
 const INCOGNITO_SESSION_RE =
-  /^\s*agent:[^:]+:(?:dashboard|subagent|internal-session-effects):incognito-[^:]*[^\s:]\s*$/i;
+  /^\s*agent:[^:]+:(?:dashboard|subagent|internal-session-effects|setup-inference):incognito-[^:]*[^\s:]\s*$/i;
 
 /** Classifies process-only agent session keys without consulting runtime registry state. */
 export function isIncognitoSessionKey(sessionKey: string | undefined | null): boolean {
