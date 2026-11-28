@@ -13,7 +13,8 @@ import {
   getPluginRuntimeGatewayRequestScope,
   withPluginRuntimeGatewayRequestScope,
 } from "../plugins/runtime/gateway-request-scope.js";
-import { runWithGatewayDetachedWorkAdmission } from "../process/gateway-work-admission.js";
+import { runWithGatewayIndependentRootWorkAdmission } from "../process/gateway-work-admission.js";
+import { trackAsyncWork } from "../shared/async-work-scope.js";
 import { getOpenClawDatabaseMaintenanceScope } from "../state/openclaw-state-maintenance-context.js";
 import { createAgentRuntimeApprovalAuthorityValidator } from "./agent-runtime-approval-authority.js";
 import { loadGatewayConfigRevisionProjector } from "./config-revision-token.js";
@@ -113,9 +114,13 @@ async function createLocalGatewayRequestContext(
     loadReplyDispatchRuntime: (loadParams) =>
       loadRunReplyDispatchRuntime({ ...loadParams, config: params.getRuntimeConfig() }),
     // Admitted turns (spawned children, completion continuations) outlive the caller's turn.
-    // As root work they hold the one-shot process's databases open until they settle.
+    // Each turn is root work for its own run only, so a one-shot process keeps its databases
+    // open until it settles; detached follow-up admits its own root. A closed caller scope
+    // still refuses new execution.
     trackExecution: (run) =>
-      runWithGatewayDetachedWorkAdmission(async () => await run(), "local:agent-turn"),
+      trackAsyncWork(() =>
+        runWithGatewayIndependentRootWorkAdmission(async () => await run(), "local:agent-turn"),
+      ),
     deps: params.deps,
     configRevisionProjector: await loadGatewayConfigRevisionProjector({ env: process.env }),
     cron,
