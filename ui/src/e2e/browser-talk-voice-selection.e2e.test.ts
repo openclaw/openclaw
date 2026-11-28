@@ -133,7 +133,7 @@ suite.define(() => {
     });
   });
 
-  it("keeps a long retained Talk provider inside its selected segment on a phone", async () => {
+  it("keeps a long retained Talk provider editable on a phone", async () => {
     await suite.withPage(
       { viewport: { width: 390, height: 844 }, hasTouch: true },
       async ({ page }) => {
@@ -157,35 +157,29 @@ suite.define(() => {
           },
         });
         await page.goto(suite.server.baseUrl + "settings/talk");
-        const group = page.getByRole("radiogroup", { name: "Provider", exact: true });
-        const retained = group.getByRole("radio", { name: provider, exact: true });
-        await retained.waitFor({ state: "attached" });
-        expect(await retained.isChecked()).toBe(true);
+        const liveVoice = page.locator("section.settings-section", {
+          has: page.getByRole("heading", { name: "Live voice", exact: true }),
+        });
+        const trigger = liveVoice.locator("openclaw-select-picker .picker-select__trigger").first();
+        const customProvider = liveVoice.getByRole("textbox", { name: "Provider", exact: true });
+        await expect.poll(() => trigger.textContent()).toContain("Custom…");
+        await expect.poll(() => customProvider.inputValue()).toBe(provider);
         await page.evaluate(() => document.fonts.ready.then(() => {}));
-        const fits = await retained.evaluate((input: HTMLInputElement) => {
-          const label = input.labels![0]!;
-          const text = [...label.childNodes].find(
-            (node) => node.nodeType === Node.TEXT_NODE && node.textContent?.trim(),
-          );
-          if (!text) {
-            throw new Error("Missing visible provider label");
-          }
-          const range = document.createRange();
-          range.selectNodeContents(text);
-          const bounds = label.getBoundingClientRect(),
-            style = getComputedStyle(label);
-          return [...range.getClientRects()].every(
-            (line) =>
-              line.left >= bounds.left + Number.parseFloat(style.paddingLeft) - 1 &&
-              line.right <= bounds.right - Number.parseFloat(style.paddingRight) + 1,
+        const fits = await customProvider.evaluate((input) => {
+          const bounds = input.getBoundingClientRect();
+          return (
+            bounds.width > 0 &&
+            bounds.left >= 0 &&
+            bounds.right <= window.innerWidth &&
+            document.documentElement.scrollWidth <= window.innerWidth
           );
         });
-        expect(fits, "every line stays inside the selected provider's padding").toBe(true);
-        await retained.focus();
-        await page.keyboard.press("ArrowRight");
-        await expect
-          .poll(() => group.getByRole("radio", { name: "Auto", exact: true }).isChecked())
-          .toBe(true);
+        expect(fits, "the retained provider does not widen the phone page").toBe(true);
+        await trigger.click();
+        const auto = page.getByRole("option", { name: /^Auto(?: \(|$)/ });
+        await auto.click();
+        await expect.poll(() => trigger.textContent()).toMatch(/Auto/);
+        await expect.poll(() => customProvider.count()).toBe(0);
       },
     );
   });

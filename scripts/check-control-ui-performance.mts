@@ -89,7 +89,11 @@ const controlUiPerformanceBudgets = {
   // Peter requested the single Daybreak toggle (#204302, 2026-11-23): model-switch remap and
   // stale-program repair measured +451 B over paired base 1,334,559 B at 34c8570c; on top of
   // main's 1,335,821 B limit (which keeps its 64 B headroom) that is 1,336,272 B.
-  chatBootJsGzipBytes: 1_336_272,
+  // Talk status chimes (#204355): measured 1,336,653 B (+469 B over paired base 1,336,184 B at
+  // 032a2b33), the synchronous iOS audio unlock plus three persisted cue prefs; lazy-loading
+  // the gesture module measured at most -141 B and risks the unlock; plus 64 B headroom.
+  // Pending maintainer approval.
+  chatBootJsGzipBytes: 1_336_717,
   // The same shared lazy signer adds the coordinator-accepted +235 B here.
   // Same #198491 approval: measured 815,742 B (+1,122 B over main) plus 64 B headroom.
   // Continuation wakes (#200056): measured 816,096 B (+390 B over main) plus 64 B.

@@ -1,0 +1,137 @@
+/* @vitest-environment jsdom */
+import { afterEach, expect, it } from "vitest";
+import type { SelectPicker } from "../../components/select-picker.ts";
+import { cleanupSolid } from "../../test-helpers/mount-solid.ts";
+import { waitForSolid } from "../../test-helpers/solid-settle.ts";
+import { createTalkMutationHarness, realtimeProviderPicker } from "./talk.test-support.tsx";
+
+afterEach(() => {
+  cleanupSolid();
+  document.body.replaceChildren();
+});
+
+it("blocks Voice provider choices the Gateway would reject", async () => {
+  const { page, runtimeConfig } = createTalkMutationHarness();
+  page.configObject = {
+    talk: {
+      realtime: { mode: "stt-tts" },
+      provider: "a",
+      providers: { a: {}, b: {} },
+    },
+  };
+  const voice = () =>
+    [...page.querySelectorAll<SelectPicker>("openclaw-select-picker")].find((candidate) =>
+      candidate.params.options.some((option) => option.value === "tts-local-cli"),
+    );
+  await waitForSolid(() => expect(voice()).toBeDefined());
+  const byValue = (value: string) =>
+    voice()!.params.options.find((option) => option.value === value);
+  // Two entries: unsetting the provider is invalid, and so is a provider outside the map.
+  expect(byValue("")?.disabled).toBe(true);
+  expect(byValue("tts-local-cli")?.disabled).not.toBe(true);
+  voice()!.params.onChange("tts-local-cli");
+  expect(runtimeConfig.patchForm).toHaveBeenCalledWith(["talk", "providers", "tts-local-cli"], {
+    args: [],
+  });
+  expect(runtimeConfig.patchForm).toHaveBeenCalledWith(["talk", "provider"], "tts-local-cli");
+  runtimeConfig.patchForm.mockClear();
+  page.configObject = {
+    talk: { realtime: { mode: "stt-tts" }, providers: { "tts-local-cli": { command: "speak" } } },
+  };
+  await waitForSolid(() => expect(byValue("a")).toBeUndefined());
+  voice()!.params.onChange("tts-local-cli");
+  expect(runtimeConfig.patchForm).toHaveBeenCalledTimes(1);
+  page.configObject = { talk: { realtime: { mode: "stt-tts" }, providers: { a: {} } } };
+  await waitForSolid(() => expect(byValue("")?.disabled).toBe(false));
+  expect(byValue("")?.description).toBeUndefined();
+});
+
+it("edits an unlisted realtime provider with a populated catalog", async () => {
+  const { page, runtimeConfig } = createTalkMutationHarness({ provider: "acme-voice" });
+  await waitForSolid(() =>
+    expect(realtimeProviderPicker(page)?.params.options.length).toBeGreaterThan(2),
+  );
+  const input = page.querySelector<HTMLInputElement>('input[aria-label="Provider"]');
+  expect(input?.value).toBe("acme-voice");
+  input!.value = "acme-next";
+  input!.dispatchEvent(new Event("change", { bubbles: true }));
+  expect(runtimeConfig.patchForm).toHaveBeenCalledWith(
+    ["talk", "realtime", "provider"],
+    "acme-next",
+  );
+});
+
+it("keeps empty Custom command arguments when the editor is committed", async () => {
+  const { page, runtimeConfig } = createTalkMutationHarness();
+  const args = ["--voice", "", "--text", "{{Text}}"];
+  page.configObject = {
+    talk: {
+      realtime: { mode: "stt-tts" },
+      provider: "tts-local-cli",
+      providers: { "tts-local-cli": { args } },
+    },
+  };
+  const editor = () =>
+    page.querySelector<HTMLTextAreaElement>('textarea[aria-label="Arguments (one per line)"]');
+  await waitForSolid(() => expect(editor()?.value).toBe(args.join("\n")));
+  editor()!.dispatchEvent(new Event("change", { bubbles: true }));
+  expect(runtimeConfig.patchForm).not.toHaveBeenCalled();
+  editor()!.value = "--voice\n\n--text\nHello\n";
+  editor()!.dispatchEvent(new Event("change", { bubbles: true }));
+  expect(runtimeConfig.patchForm).toHaveBeenCalledWith(
+    ["talk", "providers", "tts-local-cli", "args"],
+    ["--voice", "", "--text", "Hello", ""],
+  );
+});
+
+function mountSplitProvider(provider: string) {
+  const harness = createTalkMutationHarness({
+    catalogRequest: (_, catalog) => ({
+      ...catalog,
+      speech: {
+        providers: [
+          { id: "microsoft", label: "Microsoft", aliases: ["edge"], configured: true },
+          { id: "openai", label: "OpenAI", configured: false },
+        ],
+      },
+    }),
+  });
+  harness.page.configObject = { talk: { realtime: { mode: "stt-tts" }, provider } };
+  const picker = () =>
+    [...harness.page.querySelectorAll<SelectPicker>("openclaw-select-picker")].find((candidate) =>
+      candidate.params.options.some((option) => option.value === "tts-local-cli"),
+    );
+  return { ...harness, picker };
+}
+
+it("displays a saved speech provider alias without patching the draft", async () => {
+  const { page, picker, runtimeConfig } = mountSplitProvider("edge");
+  await waitForSolid(() => expect(picker()?.params.value).toBe("microsoft"));
+  expect(picker()?.params.options.find(({ value }) => value === "microsoft")?.label).toBe(
+    "Microsoft",
+  );
+  expect(page.configObject?.talk).toMatchObject({ provider: "edge" });
+  expect(runtimeConfig.patchForm).not.toHaveBeenCalled();
+  expect(runtimeConfig.removeFormValue).not.toHaveBeenCalled();
+});
+
+it("retains and edits a speech provider ID outside the catalog", async () => {
+  const { page, picker, runtimeConfig } = mountSplitProvider("example-voice");
+  await waitForSolid(() =>
+    expect(
+      picker()?.params.options.find(({ value }) => value === picker()?.params.value)?.label,
+    ).toMatch(/Custom/),
+  );
+  const input = page.querySelector<HTMLInputElement>('input[aria-label="Provider"]');
+  expect(input?.value).toBe("example-voice");
+  input!.value = "example-voice-next";
+  input!.dispatchEvent(new Event("change", { bubbles: true }));
+  expect(runtimeConfig.patchForm).toHaveBeenCalledWith(["talk", "provider"], "example-voice-next");
+});
+
+it("writes the chosen catalog speech provider", async () => {
+  const { picker, runtimeConfig } = mountSplitProvider("edge");
+  await waitForSolid(() => expect(picker()?.params.value).toBe("microsoft"));
+  picker()!.params.onChange("openai");
+  expect(runtimeConfig.patchForm).toHaveBeenCalledExactlyOnceWith(["talk", "provider"], "openai");
+});

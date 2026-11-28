@@ -77,6 +77,41 @@ const suite = createControlUiE2eSuite({
 });
 
 suite.define(() => {
+  it.each(["browser", "native"] as const)(
+    "shows the right Talk chime controls in %s",
+    async (host) => {
+      await suite.withPage(
+        { viewport: { width: 390, height: 844 }, locale: "en-US" },
+        async ({ page }) => {
+          if (host === "native") {
+            await installNativeEmbed(page, { platform: "ios", formFactor: "phone" });
+            await installDeviceSettingsBridge(page, createIosNativeDeviceSettingsSnapshot());
+          }
+          await installMockGateway(page);
+          await page.goto(suite.server.baseUrl + "settings/talk");
+          const talk = page.locator(".talk-page");
+          const browserChimes = talk.getByRole("group", { name: "Status chimes" });
+          const device = talk.getByRole("heading", { name: "This iPhone" });
+          if (host === "native") {
+            await device.waitFor();
+            expect(await browserChimes.count()).toBe(0);
+          } else {
+            await browserChimes.waitFor();
+            await talk.getByText("Saved for this browser").waitFor();
+            expect(await device.count()).toBe(0);
+          }
+          if (captureUiProof) {
+            const dir = createControlUiE2eArtifactDir("talk-chimes");
+            await page.screenshot({
+              path: path.join(dir, host + "-390.png"),
+              animations: "disabled",
+            });
+          }
+        },
+      );
+    },
+  );
+
   it("keeps the wrapped browser Permissions help link's focus outline visible", async () => {
     await suite.withPage(
       { viewport: { width: 390, height: 844 }, locale: "en-US" },

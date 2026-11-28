@@ -32,6 +32,7 @@ export class SplitTalkTransport implements RealtimeTalkTransport {
     private readonly callbacks: RealtimeTalkCallbacks,
     private readonly options: SplitTalkOptions,
     private readonly inputDeviceId?: string,
+    private readonly onReplyCaptureReady?: (echoCancellation: boolean) => void,
   ) {}
 
   async start(): Promise<"ready" | "cancelled"> {
@@ -57,14 +58,28 @@ export class SplitTalkTransport implements RealtimeTalkTransport {
     this.callbacks.onInputLevel?.(0);
   }
 
-  private async listen(): Promise<void> {
+  hasEchoCancellation(): boolean {
+    return this.capture?.hasEchoCancellation() === true;
+  }
+
+  private async listen(afterReply = false): Promise<void> {
     if (this.closed) {
       return;
     }
+    let cuePending = afterReply;
     const capture = new ComposerDictationSession(
       this.client,
       {
-        onReady: () => this.callbacks.onStatus?.("listening"),
+        onReady: () => {
+          if (this.closed || this.capture !== capture) {
+            return;
+          }
+          this.callbacks.onStatus?.("listening");
+          if (cuePending && !this.closed && this.capture === capture) {
+            cuePending = false;
+            this.onReplyCaptureReady?.(capture.hasEchoCancellation());
+          }
+        },
         onError: (message) => this.fail(new Error(message)),
         onLevel: (level) => this.callbacks.onInputLevel?.(level),
         onTranscriptChange: () => undefined,
@@ -91,6 +106,7 @@ export class SplitTalkTransport implements RealtimeTalkTransport {
         return;
       }
       this.capture = null;
+      let afterReply = false;
       if (text) {
         const answer = await this.send(text);
         if (this.closed) {
@@ -104,9 +120,10 @@ export class SplitTalkTransport implements RealtimeTalkTransport {
             () => !this.closed,
             this.options.maxTextLength,
           );
+          afterReply = true;
         }
       }
-      await this.listen();
+      await this.listen(afterReply);
     } catch (error) {
       this.fail(error);
     }

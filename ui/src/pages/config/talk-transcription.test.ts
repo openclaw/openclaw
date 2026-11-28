@@ -14,6 +14,10 @@ afterEach(() => {
   vi.useRealTimers();
 });
 
+function useSplitMode(page: { configObject: Record<string, unknown> }) {
+  page.configObject = { ...page.configObject, talk: { realtime: { mode: "stt-tts" } } };
+}
+
 it("reports the chosen speech-to-text provider as not ready and links to Models", async () => {
   const navigate = vi.fn();
   const { page } = createTalkMutationHarness({
@@ -33,6 +37,7 @@ it("reports the chosen speech-to-text provider as not ready and links to Models"
   });
   page.configObject = {
     ...page.configObject,
+    talk: { ...(page.configObject.talk as object), realtime: { mode: "stt-tts" } },
     tools: {
       media: {
         models: [
@@ -77,6 +82,7 @@ it("names the provider Talk falls back to when the preferred model is not ready"
   });
   page.configObject = {
     ...page.configObject,
+    talk: { ...(page.configObject.talk as object), realtime: { mode: "stt-tts" } },
     tools: {
       media: {
         models: [
@@ -93,7 +99,9 @@ it("names the provider Talk falls back to when the preferred model is not ready"
   };
   const statusRow = () =>
     [...page.querySelectorAll<HTMLElement>("section.settings-section")]
-      .find((section) => section.textContent?.includes(t("talkPage.transcription.title")))
+      .find(
+        (section) => section.querySelector("h2")?.textContent === t("talkPage.transcription.title"),
+      )
       ?.querySelector<HTMLElement>(".settings-row");
   // Talk runs on the OpenAI fallback, not on the OpenRouter model the picker shows.
   await waitForSolid(() =>
@@ -123,6 +131,7 @@ it("says Talk uses the voice notes model when that model is the one in use", asy
   });
   page.configObject = {
     ...page.configObject,
+    talk: { ...(page.configObject.talk as object), realtime: { mode: "stt-tts" } },
     tools: {
       media: {
         models: [{ provider: "openai", model: "gpt-4o-transcribe", capabilities: ["audio"] }],
@@ -151,6 +160,7 @@ it("shows the Talk catalog without waiting for Models", async () => {
       },
     }),
   });
+  useSplitMode(page);
   await waitForSolid(() =>
     expect(page.textContent).toContain(
       t("talkPage.transcription.talkVoiceCall", { provider: "OpenAI" }),
@@ -184,6 +194,7 @@ it.each([
     });
     page.configObject = {
       ...page.configObject,
+      talk: { realtime: { mode: "stt-tts" } },
       tools: {
         media: {
           models: [{ provider: "deepgram", model: "nova-3", capabilities: ["audio"] }],
@@ -232,6 +243,7 @@ it("does not check the picked model against providers of an unreported path", as
   });
   page.configObject = {
     ...page.configObject,
+    talk: { ...(page.configObject.talk as object), realtime: { mode: "stt-tts" } },
     tools: {
       media: {
         models: [{ provider: "deepgram", model: "nova-3", capabilities: ["audio"] }],
@@ -240,7 +252,7 @@ it("does not check the picked model against providers of an unreported path", as
     },
   };
   await waitForSolid(() =>
-    expect(page.textContent).toContain(t("talkPage.transcription.voiceNotesDescription")),
+    expect(page.textContent).toContain(t("talkPage.transcription.voiceNotesTitle")),
   );
   expect(page.textContent).not.toContain(t("talkPage.transcription.providerNotReady"));
 });
@@ -259,6 +271,7 @@ it("does not call an unavailable speech-to-text provider a missing key", async (
   });
   page.configObject = {
     ...page.configObject,
+    talk: { ...(page.configObject.talk as object), realtime: { mode: "stt-tts" } },
     tools: {
       media: {
         models: [{ provider: "anthropic", model: "claude-opus-5-5", capabilities: ["audio"] }],
@@ -312,6 +325,7 @@ it("does not report a ready provider-less transcription route as unconfigured", 
   });
   page.configObject = {
     ...page.configObject,
+    talk: { ...(page.configObject.talk as object), realtime: { mode: "stt-tts" } },
     tools: {
       media: {
         models: [
@@ -327,7 +341,9 @@ it("does not report a ready provider-less transcription route as unconfigured", 
   };
   const statusRow = () =>
     [...page.querySelectorAll<HTMLElement>("section.settings-section")]
-      .find((section) => section.textContent?.includes(t("talkPage.transcription.title")))
+      .find(
+        (section) => section.querySelector("h2")?.textContent === t("talkPage.transcription.title"),
+      )
       ?.querySelector<HTMLElement>(".settings-row");
   await waitForSolid(() => expect(statusRow()?.textContent).toContain(t("talkPage.status.ready")));
   expect(statusRow()?.textContent).toContain(t("talkPage.transcription.talkUsesVoiceNotes"));
@@ -354,9 +370,11 @@ it.each([
         },
       }),
     });
+    useSplitMode(page);
     const talkRow = () =>
-      [...page.querySelectorAll<HTMLElement>(".settings-row")].find((row) =>
-        row.textContent?.startsWith(t("talkPage.transcription.talkTitle")),
+      [...page.querySelectorAll<HTMLElement>(".settings-row")].find(
+        (row) =>
+          row.querySelector(".settings-row__title")?.textContent === t("talkPage.provider.title"),
       );
     const buttons = await waitForSolid(() => {
       const found = [...(talkRow()?.querySelectorAll("button") ?? [])];
@@ -387,6 +405,7 @@ it("sends the Talk row to AI Agents settings when the voice model chose its prov
       },
     }),
   });
+  useSplitMode(page);
   const change = await waitForSolid(() => {
     const found = [...page.querySelectorAll("button")].find(
       (candidate) => candidate.textContent === t("talkPage.transcription.change"),
@@ -433,6 +452,7 @@ it.each([
     });
     page.configObject = {
       ...page.configObject,
+      talk: { realtime: { mode: "stt-tts" } },
       tools: {
         media: {
           models: [{ provider, model, capabilities: ["audio"] }],

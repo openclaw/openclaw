@@ -6,6 +6,7 @@ import { loadSettings, type UiSettings } from "../../app/settings.ts";
 import { t } from "../../i18n/index.ts";
 import { formatUiError } from "../../lib/format-error.ts";
 import { GatewaySpeechPlayback } from "../../lib/speech-playback.ts";
+import { prepareTalkChimes } from "./talk/chimes-gesture.ts";
 import {
   createRealtimeTalkConversationState,
   continueRealtimeTalkConversation,
@@ -95,7 +96,10 @@ export function createInitialChatRealtimeState(): Pick<ChatRealtimeState, "realt
 
 export function stopChatRealtimeTalk(
   state: ChatRealtimeState,
-  options: RealtimeVoiceCloseOptions & { preserveConversation?: boolean } = {},
+  options: RealtimeVoiceCloseOptions & {
+    preserveConversation?: boolean;
+    userStopped?: boolean;
+  } = {},
 ) {
   const session = state.realtimeTalk.snapshot.realtimeTalkSession;
   const playback = state.realtimeTalk.snapshot.realtimeTalkPlayback;
@@ -122,7 +126,10 @@ export function stopChatRealtimeTalk(
       : createRealtimeTalkConversationState(),
   });
   playback?.stop();
-  void session?.stop({ disposition: options.disposition ?? "detach" });
+  void session?.stop(
+    { disposition: options.disposition ?? "detach" },
+    options.userStopped === true,
+  );
 }
 
 export function dismissRealtimeTalkError(state: ChatRealtimeState) {
@@ -210,6 +217,15 @@ export function attachChatRealtimeActions(
       : 0;
     const videoDeviceId = talkSettings.realtimeTalkVideoDeviceId?.trim() || undefined;
     const autoEnableCamera = talkSettings.talkCameraAutoEnable === true;
+    const cues = {
+      wake: talkSettings.talkChimeStart === true,
+      bye: talkSettings.talkChimeEnd === true,
+      follow: talkSettings.talkChimeReply === true,
+    };
+    const talkChimes = cues.wake || cues.bye || cues.follow ? cues : undefined;
+    if (talkChimes && !voiceChange) {
+      prepareTalkChimes();
+    }
     state.realtimeTalk.update({
       // The prepared playback owns this attempt before the lazy voice controller exists.
       realtimeTalkPlayback: playback,
@@ -300,6 +316,7 @@ export function attachChatRealtimeActions(
       split,
       playback,
       autoEnableCamera,
+      talkChimes,
       itemPrefix,
       orderOffset,
       startRealtimeTalk,
@@ -311,7 +328,7 @@ export function attachChatRealtimeActions(
       state.realtimeTalk.snapshot.realtimeTalkSession ||
       state.realtimeTalk.snapshot.realtimeTalkActive
     ) {
-      stopChatRealtimeTalk(state, { disposition: "abort" });
+      stopChatRealtimeTalk(state, { disposition: "abort", userStopped: true });
       return;
     }
     await startRealtimeTalk();

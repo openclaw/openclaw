@@ -279,6 +279,14 @@ export class RealtimeTalkInputOwner {
     return this.media;
   }
 
+  hasEchoCancellation(): boolean {
+    return (
+      this.stream
+        ?.getAudioTracks()
+        .some((track) => track.getSettings?.().echoCancellation === true) === true
+    );
+  }
+
   requireStream(): MediaStream {
     const media = this.media;
     if (!media) {

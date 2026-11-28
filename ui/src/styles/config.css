@@ -758,13 +758,6 @@
   border-color: var(--danger);
 }
 
-/* A saved provider absent from the catalog is still a selectable ID, not a short label. */
-.talk-provider-options > .settings-segmented__btn {
-  max-width: 100%;
-  overflow-wrap: anywhere;
-  white-space: normal;
-}
-
 /* The curated rows and the schema editor read as one column of sections. */
 .security-page > .settings-page {
   padding-bottom: 0;

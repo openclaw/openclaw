@@ -1,5 +1,6 @@
 // Named imports let the Control UI use these features without the full server catalog.
 export const BOARD_WIDGET_PUT_CANVAS_DOC = "board-widget-put-canvas-doc";
+export const TALK_CHAT_SETTINGS = "talk-chat-settings";
 export const SESSION_APPROVAL_RECIPIENTS = "session-approval-recipients-v1";
 export const SYSTEM_AGENT_WIZARD_CANCEL = "openclaw-chat-wizard-cancel";
 
@@ -59,6 +60,7 @@ export const GATEWAY_SERVER_CAPS = {
   SYSTEM_AGENT_WIZARD_CANCEL,
   SYSTEM_AGENT_SETUP_MODEL_REF: "openclaw-setup-model-ref",
   TASK_SUGGESTIONS_ACCEPT_MODES: "taskSuggestions.acceptModes",
+  TALK_CHAT_SETTINGS,
   TALK_SESSION_CLOSE_DISPOSITION: "talk-session-close-disposition",
   UPDATE_RUN_CONSENT_IDENTITY: "update-run-consent-identity-v1",
 } as const;
