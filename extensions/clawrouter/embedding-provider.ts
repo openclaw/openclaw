@@ -148,8 +148,8 @@ export const clawrouterEmbeddingProvider: MemoryEmbeddingProviderAdapter = {
       });
       const plan = planClawRouterEmbeddingCall(offers, model, inputs, options, call);
       if (plan.kind === "native") {
-        const headers = new Headers(context.headers);
-        headers.set("Content-Type", "application/json");
+        const requestHeaders = new Headers(context.headers);
+        requestHeaders.set("Content-Type", "application/json");
         const vectors: number[][] = [];
         for (const request of plan.requests) {
           signal.throwIfAborted();
@@ -157,7 +157,7 @@ export const clawrouterEmbeddingProvider: MemoryEmbeddingProviderAdapter = {
             request.offer.url,
             {
               method: "POST",
-              headers,
+              headers: requestHeaders,
               body: JSON.stringify(
                 request.offer.routeKind === "manifest"
                   ? {
@@ -183,7 +183,7 @@ export const clawrouterEmbeddingProvider: MemoryEmbeddingProviderAdapter = {
           try {
             if (!response.ok) {
               throw await createProviderHttpError(response, "ClawRouter embeddings failed", {
-                requestHeaders: headers,
+                requestHeaders,
                 signal,
                 maxBodyBytes: 8 * 1024,
               });

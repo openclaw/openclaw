@@ -167,6 +167,8 @@ schema/runtime owners' qualification.
 Direct providers and ClawRouter share the native client builders and vector
 readers. Every response batch must have complete, finite vectors with the admitted
 count and dimensions. The consumer stages split batches until all requests succeed.
+Routed Bedrock Cohere v4 accepts 256, 512, 1024, or 1536 dimensions.
+The direct Bedrock plugin also passes 384 and 768 to its configured endpoint.
 Known Google and Bedrock model IDs supply the input limit for memory chunking.
 For custom catalog aliases the upstream model is known only after discovery.
 Oversized text for a lower-limit native alias is rejected before dispatch.

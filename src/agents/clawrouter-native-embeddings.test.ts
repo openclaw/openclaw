@@ -163,7 +163,9 @@ describe("actual ClawRouter native memory embeddings", () => {
       wires.push({ path: req.url ?? "", auth: req.headers.authorization, body, pathModel });
       if (quota) {
         res.statusCode = 429;
-        if (quota === "temporary") res.setHeader("Retry-After", "3");
+        if (quota === "temporary") {
+          res.setHeader("Retry-After", "3");
+        }
         res.end(
           JSON.stringify({
             error: { code: quota === "temporary" ? "rate_limited" : "insufficient_quota" },
@@ -446,8 +448,10 @@ describe("actual ClawRouter native memory embeddings", () => {
     expect(adapter().resolveIndexIdentity?.(cfg)).not.toEqual(
       adapter().resolveIndexIdentity?.({ ...cfg, dimensions: 512 }),
     );
-    const { provider } = await create({ ...cfg, dimensions: 384 });
-    await expect(provider!.embed("bad dimension")).rejects.toThrow("dimensions");
+    for (const dimensions of [384, 768]) {
+      const { provider } = await create({ ...cfg, dimensions });
+      await expect(provider!.embed("bad dimension")).rejects.toThrow("dimensions");
+    }
     const { provider: valid } = await create(cfg);
     await expect(
       valid!.embed({

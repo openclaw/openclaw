@@ -249,9 +249,14 @@ function resolveBedrockEmbeddingClient(
 
   let dimensions: number | undefined;
   if (options.dimensions != null) {
-    if (spec?.validDims && !spec.validDims.includes(options.dimensions)) {
+    // Direct endpoints historically accept two extra Cohere v4 widths.
+    const validDims =
+      spec?.family === "cohere-v4" && spec.validDims
+        ? [...spec.validDims, 384, 768].toSorted((a, b) => a - b)
+        : spec?.validDims;
+    if (validDims && !validDims.includes(options.dimensions)) {
       throw new Error(
-        `Invalid dimensions ${options.dimensions} for ${model}. Valid values: ${spec.validDims.join(", ")}`,
+        `Invalid dimensions ${options.dimensions} for ${model}. Valid values: ${validDims.join(", ")}`,
       );
     }
     dimensions = options.dimensions;

@@ -127,7 +127,7 @@ export function planClawRouterEmbeddingCall(
         Array.isArray(offer.model.capabilities) &&
         offer.model.capabilities.includes("llm.embeddings"),
     )
-    .sort((a, b) => offerPriority(a) - offerPriority(b));
+    .toSorted((a, b) => offerPriority(a) - offerPriority(b));
   let rejected: unknown;
   // Try only local codec preparation. Once a plan is chosen, dispatch never falls back.
   for (const offer of candidates) {
@@ -151,7 +151,7 @@ export function planClawRouterEmbeddingCall(
         }
         const wireModel = offer.routeKind === "unified" ? model : normalizeOptionalString(upstream);
         if (typeof wireModel === "string" && wireModel) {
-          return { kind: "remote" as const, offer, wireModel, voyage, role };
+          return { kind: "remote", offer, wireModel, voyage, role } as const;
         }
       } else if (
         offer.routeKind !== "unified" &&

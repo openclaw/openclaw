@@ -225,53 +225,71 @@ it.each([
 it.each([
   {
     model: cohere,
+    requested: undefined,
     queryResponse: '{"embeddings":[[3,4]]}',
     batchResponse: '{"embeddings":[[0,2],[3,4]]}',
     dimensions: 1024,
     requestFields: {},
     maxInputTokens: 512,
   },
-  {
+  ...[undefined, 384, 768].map((requested) => ({
     model: "global.cohere.embed-v4:0",
+    requested,
     queryResponse: '{"embeddings":{"float":[[3,4]]}}',
     batchResponse: '{"embeddings":{"float":[[0,2],[3,4]]}}',
-    dimensions: 1536,
-    requestFields: { embedding_types: ["float"], output_dimension: 1536, truncate: "RIGHT" },
+    dimensions: requested ?? 1536,
+    requestFields: {
+      embedding_types: ["float"],
+      output_dimension: requested ?? 1536,
+      truncate: "RIGHT",
+    },
     maxInputTokens: 128_000,
-  },
-])("preserves $model query and document batch contracts", async (testCase) => {
-  const { model, queryResponse, batchResponse, dimensions, requestFields, maxInputTokens } =
-    testCase;
-  const send = vi
-    .spyOn(bedrockRuntimeSdk.BedrockRuntimeClient.prototype, "send")
-    .mockResolvedValueOnce({
-      body: new TextEncoder().encode(queryResponse),
-    } as never)
-    .mockResolvedValueOnce({
-      body: new TextEncoder().encode(batchResponse),
-    } as never);
-  const { provider, client } = await createBedrockEmbeddingProvider({ config: {}, model });
-
-  await expect(provider.embed("memory", { inputType: "query" })).resolves.toEqual([0.6, 0.8]);
-  await expect(
-    provider.embedBatch(["first", "second"], { inputType: "document" }),
-  ).resolves.toEqual([
-    [0, 1],
-    [0.6, 0.8],
-  ]);
-
-  expect(send).toHaveBeenCalledTimes(2);
-  for (const [index, request] of [
-    { texts: ["memory"], input_type: "search_query" },
-    { texts: ["first", "second"], input_type: "search_document" },
-  ].entries()) {
-    const input = send.mock.calls[index]?.[0]?.input;
-    if (!input || !("body" in input) || typeof input.body !== "string") {
-      throw new Error("Expected a JSON embedding request body");
+  })),
+])(
+  "preserves $model query and document batch contracts at $dimensions dimensions",
+  async (testCase) => {
+    const { model, queryResponse, batchResponse, dimensions, requestFields, maxInputTokens } =
+      testCase;
+    const send = vi
+      .spyOn(bedrockRuntimeSdk.BedrockRuntimeClient.prototype, "send")
+      .mockResolvedValueOnce({
+        body: new TextEncoder().encode(queryResponse),
+      } as never)
+      .mockResolvedValueOnce({
+        body: new TextEncoder().encode(batchResponse),
+      } as never);
+    const { provider, client } = await createBedrockEmbeddingProvider({
+      config: {},
+      model,
+      ...(testCase.requested === undefined
+        ? {}
+        : { remote: { baseUrl: privateUrl }, dimensions: testCase.requested }),
+    });
+    if (testCase.requested !== undefined) {
+      expect(client.endpoint).toBe(privateUrl);
     }
-    expect(JSON.parse(input.body)).toEqual({ ...request, truncate: "END", ...requestFields });
-    expect(input).toMatchObject({ modelId: model });
-  }
-  expect(client).toMatchObject({ model, dimensions });
-  expect(provider.maxInputTokens).toBe(maxInputTokens);
-});
+
+    await expect(provider.embed("memory", { inputType: "query" })).resolves.toEqual([0.6, 0.8]);
+    await expect(
+      provider.embedBatch(["first", "second"], { inputType: "document" }),
+    ).resolves.toEqual([
+      [0, 1],
+      [0.6, 0.8],
+    ]);
+
+    expect(send).toHaveBeenCalledTimes(2);
+    for (const [index, request] of [
+      { texts: ["memory"], input_type: "search_query" },
+      { texts: ["first", "second"], input_type: "search_document" },
+    ].entries()) {
+      const input = send.mock.calls[index]?.[0]?.input;
+      if (!input || !("body" in input) || typeof input.body !== "string") {
+        throw new Error("Expected a JSON embedding request body");
+      }
+      expect(JSON.parse(input.body)).toEqual({ ...request, truncate: "END", ...requestFields });
+      expect(input).toMatchObject({ modelId: model });
+    }
+    expect(client).toMatchObject({ model, dimensions });
+    expect(provider.maxInputTokens).toBe(maxInputTokens);
+  },
+);
