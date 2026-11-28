@@ -15,6 +15,8 @@ import type { InternalSessionEntry as SessionEntry } from "../../config/sessions
 import { resolveProjectedSessionContextTokens } from "../../config/sessions/context-token-provenance.js";
 import { isExplicitChatFork } from "../../config/sessions/session-entry-lineage.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
+import { logVerbose } from "../../globals.js";
+import { emitAgentRunStatusEvent } from "../../infra/agent-run-status-events.js";
 import type { MemoryFlushRunParams } from "./agent-runner-memory.types.js";
 import { refreshQueuedFollowupSession, type FollowupRun } from "./queue.js";
 
@@ -236,5 +238,23 @@ export function adoptCompactedFollowupSession(
       nextSessionId: sessionId,
       nextSessionFile: queueKey,
     });
+  }
+}
+
+/** Tells the parent run, and the chat when reply preflight asks, that the flush turn has started. */
+export async function announceMemoryFlushStart(params: MemoryFlushRunParams): Promise<void> {
+  // Only the bounded phase belongs to the parent turn; maintenance content stays private.
+  if (params.opts?.runId) {
+    emitAgentRunStatusEvent({
+      runId: params.opts.runId,
+      sessionKey: params.sessionKey,
+      phase: "memory_flushing",
+    });
+  }
+  // The flush is a full model turn that can take minutes before compaction starts.
+  try {
+    await params.onCompactionNotice?.("memory_flush");
+  } catch (err) {
+    logVerbose(`memory flush notice delivery failed: ${String(err)}`);
   }
 }

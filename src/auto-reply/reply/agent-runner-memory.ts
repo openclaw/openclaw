@@ -41,6 +41,7 @@ import { createLazyImportLoader } from "../../shared/lazy-promise.js";
 import type { ReplyPayload } from "../types.js";
 import {
   adoptCompactedFollowupSession,
+  announceMemoryFlushStart,
   defersTokenCompactionToRequestBoundary,
   followupOwnsNativeCompaction,
   followupUsesCliRuntime,
@@ -663,6 +664,9 @@ export async function runMemoryFlushIfNeeded(
     maintenanceRun,
     sourcePolicySessionKey,
   } = preparedAttempt;
+  const parentRunId = params.opts?.runId;
+  // Before the stall guard starts, so a slow channel does not use up the flush's window.
+  await announceMemoryFlushStart(params);
   const stallGuard = startMemoryFlushStallGuard(params, selection, abortSignal);
   const deferredLifecycle = createDeferredEmbeddedRunLifecycleManager({
     runId: flushRunId,
@@ -673,15 +677,6 @@ export async function runMemoryFlushIfNeeded(
   });
   const flushedCompactionCount = entry?.compactionCount ?? 0;
   let visibleErrorPayloads: ReplyPayload[] = [];
-  // Only the bounded phase belongs to the parent turn; maintenance content stays private.
-  const parentRunId = params.opts?.runId;
-  if (parentRunId) {
-    emitAgentRunStatusEvent({
-      runId: parentRunId,
-      sessionKey: params.sessionKey,
-      phase: "memory_flushing",
-    });
-  }
   const stopHeartbeat = startFollowupRunPreAdoptionHeartbeat(params.followupRun, abortSignal);
   // Only runnable maintenance owns a run context. The matching finally is
   // the sole cleanup path so setup, execution, and persistence exits cannot orphan it.

@@ -494,6 +494,7 @@ export async function prepareReplyAgentTurn<TConfigured>(
               if (
                 kind === "queued_followup" &&
                 phase !== "start" &&
+                phase !== "memory_flush" &&
                 phase !== "memory_flush_degraded"
               ) {
                 pendingTerminalCompactionNotice = { phase, text };
@@ -563,10 +564,8 @@ export async function prepareReplyAgentTurn<TConfigured>(
               abortSignal: operation.abortSignal,
               // Compaction decides whether work is needed, then replans from the
               // checkpoint result. A queued source must not bypass this memory write.
-              beforeCompaction: async (entry, announceStart) => {
+              beforeCompaction: async (entry) => {
                 await admitReplyMaintenance(turn, replySessionKey, assertAdmissionCurrent);
-                // A scheduled turn outside its window is refused above, before any notice.
-                await announceStart();
                 const flushed = await tracePhase("reply.memory_flush", () =>
                   runMemoryFlushIfNeeded({
                     ...preparation,

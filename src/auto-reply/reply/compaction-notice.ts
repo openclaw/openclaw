@@ -8,7 +8,6 @@ import { BOUNDED_CONTEXT_NOTICE } from "../../context-engine/transcript-byte-lim
 import { logVerbose } from "../../globals.js";
 import { formatTokenCount } from "../../utils/token-format.js";
 import type { ReplyPayload } from "../types.js";
-import { resolveFollowupAbortSignal, type FollowupRun } from "./queue/types.js";
 
 export type CompactionNoticePhase =
   | "start"
@@ -17,6 +16,7 @@ export type CompactionNoticePhase =
   | "incomplete"
   | "skipped"
   | "context_bounded"
+  | "memory_flush"
   | "memory_flush_degraded";
 
 const COMPACTION_NOTICE_TEXT: Record<CompactionNoticePhase, string> = {
@@ -26,98 +26,10 @@ const COMPACTION_NOTICE_TEXT: Record<CompactionNoticePhase, string> = {
     "⚠️ Compaction completed with a degraded summary. Older details, exact identifiers, or pending requests may be missing. Resend important context; /new or a larger model can help.",
   incomplete: "🧹 Compaction incomplete",
   skipped: "🧹 Compaction not needed",
+  memory_flush: "🧹 Saving memory before compaction...",
   memory_flush_degraded: "⚠️ Memory maintenance temporarily failed; continuing your reply.",
   context_bounded: BOUNDED_CONTEXT_NOTICE,
 };
-
-/**
- * Notices for one preflight compaction, which may announce itself before its memory
- * checkpoint and then replan. Delivery failures never fail compaction.
- */
-export function createCompactionNotifier(
-  onNotice: ((phase: CompactionNoticePhase, text?: string) => Promise<void> | void) | undefined,
-) {
-  let started = false;
-  let ended = false;
-  const notify = async (phase: CompactionNoticePhase, text?: string) => {
-    // Compaction starting reopens a run whose earlier notice was a bounded-context warning.
-    ended = phase !== "start";
-    // The replan after the memory checkpoint reaches the start notice again.
-    if (phase === "start" && started) {
-      return;
-    }
-    started ||= phase === "start";
-    try {
-      await onNotice?.(phase, text);
-    } catch (err) {
-      logVerbose(`preflightCompaction notice delivery failed: ${String(err)}`);
-    }
-  };
-  // The checkpoint and compaction stop for the run's cancellation or withdrawn operator authority;
-  // neither leaves a chat to tell "Compaction incomplete".
-  const cancelled = (run: CompactionRun) =>
-    resolveFollowupAbortSignal({
-      abortSignal: run.abortSignal,
-      operatorAuthority: run.followupRun.operatorAuthority,
-    })?.aborted === true;
-  return {
-    cancelled,
-    notify,
-    get ended() {
-      return ended;
-    },
-    /**
-     * Announces compaction unless it stays silent (token compaction handed to the ChatGPT boundary).
-     * Best effort: without `notifyUser` nothing is probed (the callback may exist only for mandatory
-     * warnings), and a failing probe skips the notice rather than the memory checkpoint that follows.
-     */
-    async announceStart(silent: () => Promise<boolean>, cfg?: OpenClawConfig): Promise<void> {
-      if (!onNotice || !shouldNotifyUserAboutCompaction(cfg)) {
-        return;
-      }
-      try {
-        if (await silent()) {
-          return;
-        }
-      } catch (err) {
-        logVerbose(`preflightCompaction start notice skipped: ${String(err)}`);
-        return;
-      }
-      await notify("start");
-    },
-    /** Awaits work that may follow the start notice; an error after it reports "incomplete" unless cancelled. */
-    async settleOnFailure<T>(run: CompactionRun, work: Promise<T>): Promise<T> {
-      try {
-        return await work;
-      } catch (err) {
-        if (started && !ended && !cancelled(run)) {
-          await notify("incomplete");
-        }
-        throw err;
-      }
-    },
-    /** Ends a run that will not compact; a sent start notice gets "skipped". */
-    async endWithoutCompaction<T>(result: T): Promise<T> {
-      if (started && !ended) {
-        await notify("skipped");
-      }
-      return result;
-    },
-  };
-}
-
-type CompactionRun = {
-  abortSignal?: AbortSignal;
-  followupRun: Pick<FollowupRun, "operatorAuthority">;
-};
-
-export type CompactionNotifier = ReturnType<typeof createCompactionNotifier>;
-
-/** The memory checkpoint before compaction; it calls `announceStart` once its owner admits maintenance. */
-export type CompactionCheckpoint<Entry> = (
-  entry: Entry,
-  announceStart: () => Promise<void>,
-) => Promise<Entry | undefined>;
 
 export function formatCompactionStatus(
   entry?: Pick<SessionEntry, "compactionCount" | "compactionQualityDegraded">,

@@ -452,7 +452,8 @@ guard are unchanged.
 Routine compaction runs silently by default. A degraded summary always produces a
 warning that older details, identifiers, or pending requests may be lost, and that
 `/new` or a larger model can help. Set `notifyUser` to also show brief status messages
-when compaction starts and completes, and when a pre-compaction memory flush is
+when compaction starts and completes, when a pre-compaction memory flush starts (it is a
+full model turn and can take minutes on a long session), and when that flush is
 exhausted but the reply still continues:
 
 ```json5
@@ -466,13 +467,6 @@ exhausted but the reply still continues:
   },
 }
 ```
-
-"Compacting context..." is sent once maintenance is allowed and before the [memory
-flush](#memory-flush), which can take minutes on a large local context. If the flush
-leaves nothing to compact, "Compaction not needed" follows, unless the chat has reached
-its transcript size limit: then the warning that older history was left out is the last
-message. Queued web-chat turns and channels that deliver only a final reply show
-compaction notices with that reply. Compaction left to ChatGPT's own servers sends none.
 
 ### Memory flush
 

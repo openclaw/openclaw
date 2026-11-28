@@ -101,7 +101,6 @@ async function runRequiredCheckpoint(params: PreflightParams) {
   }
   return params.beforeCompaction(
     params.sessionEntry ?? { sessionId: params.followupRun.run.sessionId, updatedAt: 1 },
-    async () => {},
   );
 }
 

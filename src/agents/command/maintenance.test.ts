@@ -142,10 +142,7 @@ describe("agent command foreground completion", () => {
       preflight.mockImplementationOnce(async (params) => {
         const entry = expectDefined(params.sessionEntry, "preflight predecessor");
         const checkpoint = expectDefined(params.beforeCompaction, "preflight checkpoint");
-        const refreshed = expectDefined(
-          await checkpoint(entry, async () => {}),
-          "checkpoint session",
-        );
+        const refreshed = expectDefined(await checkpoint(entry), "checkpoint session");
         const ownerEntry = expectDefined(
           loadSessionEntry({ agentId: "main", sessionKey, storePath }),
           "authoritative checkpoint owner",

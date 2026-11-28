@@ -58,4 +58,6 @@ export type MemoryFlushRunParams = {
   storePath?: string;
   replyOperation?: ReplyOperation;
   abortSignal?: AbortSignal;
+  /** Reply preflight announces the flush turn, which can take minutes before compaction starts. */
+  onCompactionNotice?: (phase: "memory_flush") => Promise<void> | void;
 };
