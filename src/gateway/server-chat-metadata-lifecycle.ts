@@ -250,11 +250,15 @@ export async function createGatewayChatMetadataLifecycle(params: {
       // snapshot here is expected and the publication listener performs the first refresh.
       await runtime.refresh().then(
         () => {
-          preparedModelRuntimeState = "available";
+          if (preparedModelRuntimeState === "unobserved") {
+            preparedModelRuntimeState = "available";
+          }
         },
         (error: unknown) => {
           if (!(error instanceof ChatMetadataSnapshotUnavailableError)) {
-            preparedModelRuntimeState = "available";
+            if (preparedModelRuntimeState === "unobserved") {
+              preparedModelRuntimeState = "available";
+            }
             params.log.warn(`chat metadata catch-up refresh failed: ${String(error)}`);
           }
         },

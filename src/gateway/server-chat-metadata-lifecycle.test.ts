@@ -367,6 +367,41 @@ describe("gateway chat metadata lifecycle", () => {
     }
   });
 
+  it("preserves publication failure when catch-up refresh rejects afterward", async () => {
+    const entered = createDeferred();
+    const release = createDeferred();
+    const failure = new Error("owner publication failed");
+
+    mocks.refresh.mockImplementationOnce(() => {
+      entered.resolve();
+      return release.promise;
+    });
+
+    const { lifecycle: pending, sidecarOwner } = createLifecycle();
+    const lifecycle = await pending;
+    const attachment = lifecycle.attachContext(context, sidecarOwner.publish);
+
+    try {
+      await entered.promise;
+
+      const modelListener = mocks.registerModelListener.mock.calls[0]![0];
+      modelListener({ phase: "failed", error: failure });
+
+      release.reject(failure);
+      await expect(attachment).resolves.toBeUndefined();
+
+      const skillsListener = mocks.registerSkillsListener.mock.calls[0]![0];
+      skillsListener({ reason: "watch" });
+
+      // A subordinate change must not refresh after publication has failed.
+      expect(mocks.refresh).toHaveBeenCalledOnce();
+      expect(mocks.fail).toHaveBeenCalledExactlyOnceWith(failure);
+    } finally {
+      release.resolve();
+      await attachment;
+    }
+  });
+
   it.each(["build failed", "catalog during attachment", "owner invalidated"] as const)(
     "refreshes subordinate changes after %s catch-up",
     async (startup) => {
