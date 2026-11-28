@@ -104,6 +104,7 @@ function ensureChromiumAvailable(repoRoot: string) {
 function buildChromiumLaunchOptions(params: QaWebOpenPageParams) {
   const baseOptions = {
     headless: params.headless ?? true,
+    chromiumSandbox: true,
   };
   if (params.channel) {
     return {

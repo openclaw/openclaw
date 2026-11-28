@@ -30,12 +30,13 @@ type BrowserLease = {
 };
 
 type SharedBrowserState = {
+  key: string;
   browserPromise: Promise<BrowserInstance>;
   idleTimer: ReturnType<typeof setTimeout> | null;
   users: number;
 };
 
-let sharedBrowserState: SharedBrowserState | null = null;
+const sharedBrowserStates = new Map<string, SharedBrowserState>();
 
 export class PlaywrightDiffScreenshotter {
   private readonly config: OpenClawConfig;
@@ -333,39 +334,40 @@ async function resolveBrowserExecutablePath(config: OpenClawConfig): Promise<str
 }
 
 async function acquireSharedBrowser(config: OpenClawConfig): Promise<BrowserLease> {
-  if (!sharedBrowserState) {
-    // Browser selection changes take effect after the shared browser's idle close.
-    const browserPromise = resolveBrowserExecutablePath(config)
-      .then((executablePath) =>
-        chromium.launch({
-          headless: true,
-          ...(executablePath ? { executablePath } : {}),
-          args: ["--disable-dev-shm-usage"],
-        }),
-      )
+  const executablePath = await resolveBrowserExecutablePath(config);
+  const chromiumSandbox = config.browser?.noSandbox !== true;
+  const key = JSON.stringify([executablePath ?? null, chromiumSandbox]);
+  let state = sharedBrowserStates.get(key);
+  if (!state) {
+    const browserPromise = chromium
+      .launch({
+        headless: true,
+        chromiumSandbox,
+        ...(executablePath ? { executablePath } : {}),
+        args: ["--disable-dev-shm-usage"],
+      })
       .then((browser) => {
         browser.on("disconnected", () => {
-          if (sharedBrowserState?.browserPromise === browserPromise) {
-            clearIdleTimer(sharedBrowserState);
-            sharedBrowserState = null;
+          const current = sharedBrowserStates.get(key);
+          if (current?.browserPromise === browserPromise) {
+            clearIdleTimer(current);
+            sharedBrowserStates.delete(key);
           }
         });
         return browser;
       })
       .catch((error: unknown) => {
-        sharedBrowserState = null;
+        if (sharedBrowserStates.get(key)?.browserPromise === browserPromise) {
+          sharedBrowserStates.delete(key);
+        }
         throw error;
       });
 
-    sharedBrowserState = {
-      browserPromise,
-      idleTimer: null,
-      users: 0,
-    };
+    state = { key, browserPromise, idleTimer: null, users: 0 };
+    sharedBrowserStates.set(key, state);
   }
 
-  clearIdleTimer(sharedBrowserState);
-  const state = sharedBrowserState;
+  clearIdleTimer(state);
   const browser = await state.browserPromise;
   state.users += 1;
 
@@ -383,8 +385,8 @@ async function acquireSharedBrowser(config: OpenClawConfig): Promise<BrowserLeas
 function scheduleIdleBrowserClose(state: SharedBrowserState): void {
   clearIdleTimer(state);
   state.idleTimer = setTimeout(() => {
-    if (sharedBrowserState === state && state.users === 0) {
-      void closeSharedBrowser();
+    if (sharedBrowserStates.get(state.key) === state && state.users === 0) {
+      void closeSharedBrowser(state);
     }
   }, BROWSER_IDLE_MS);
   state.idleTimer.unref();
@@ -398,12 +400,8 @@ function clearIdleTimer(state: SharedBrowserState): void {
   state.idleTimer = null;
 }
 
-async function closeSharedBrowser(): Promise<void> {
-  const state = sharedBrowserState;
-  if (!state) {
-    return;
-  }
-  sharedBrowserState = null;
+async function closeSharedBrowser(state: SharedBrowserState): Promise<void> {
+  sharedBrowserStates.delete(state.key);
   clearIdleTimer(state);
   const browser = await state.browserPromise.catch(() => null);
   await browser?.close().catch(() => {});
