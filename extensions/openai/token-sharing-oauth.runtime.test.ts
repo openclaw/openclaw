@@ -593,4 +593,40 @@ describe("ChatGPT token-sharing authorization", () => {
       "ChatGPT authentication request failed during signing key fetch (HTTP 403, cf-ray=8f1234567890-SJC). Retry sign-in later.",
     );
   });
+
+  it("reports bounded upstream request ID on refresh HTTP 403 while preserving refresh outcome", async () => {
+    const credential = await loginCredential();
+    request.mockResolvedValueOnce(
+      oauthResponse({ error: "access_denied", error_description: "secret-refresh-detail" }, 403, {
+        "x-request-id": "req_403_trace_01",
+      }),
+    );
+    await expect(refreshTokenSharingCredential(credential)).rejects.toMatchObject({
+      message:
+        "ChatGPT token-sharing refresh failed (403): provider_error (x-request-id=req_403_trace_01)",
+      oauthRefreshOutcome: {
+        version: 1,
+        phase: "token-response",
+        outcome: "unknown",
+        status: 403,
+        reason: "provider_error",
+      },
+      oauthRefreshFailure: {
+        status: 403,
+        stage: "token refresh",
+        requestId: "x-request-id=req_403_trace_01",
+      },
+    });
+  });
+
+  it("ignores malformed request ID headers containing whitespace or control characters", async () => {
+    request.mockResolvedValueOnce(
+      oauthResponse({ error: "access_denied" }, 403, {
+        "x-request-id": "bad header value with spaces",
+      }),
+    );
+    await expect(loginCredential()).rejects.toThrow(
+      "ChatGPT authentication request failed during token exchange (HTTP 403, access_denied). Retry sign-in later.",
+    );
+  });
 });

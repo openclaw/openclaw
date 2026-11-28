@@ -111,9 +111,21 @@ async function requestJson(
           response.status,
           json,
         );
+        const requestId = readBoundedRequestId(response.headers);
         if (json?.error === "invalid_grant") {
           failure.message =
             "ChatGPT connection expired or was revoked. Sign in again to reconnect.";
+        } else if (requestId) {
+          failure.message = `${failure.message} (${requestId})`;
+        }
+        if (requestId) {
+          Object.assign(failure, {
+            oauthRefreshFailure: {
+              ...failure.oauthRefreshFailure,
+              ...(stage ? { stage } : {}),
+              requestId,
+            },
+          });
         }
         throw failure;
       }
