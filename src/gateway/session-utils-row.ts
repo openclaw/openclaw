@@ -11,6 +11,7 @@ import type { AgentHarnessSessionRuntimeOwnership } from "../agents/harness/type
 import type { ModelCatalogEntry } from "../agents/model-catalog.types.js";
 import { resolveModelContextWindowProfile } from "../agents/model-context-window.js";
 import { buildSubagentRunReadIndexFromRuns } from "../agents/subagents/registry/subagent-registry-queries.js";
+import { buildSessionSwarmSummary } from "../agents/subagents/registry/subagent-session-swarm-summary.js";
 import {
   sessionWorktreeAvailability,
   type SessionWorktreeObservation,
@@ -60,7 +61,6 @@ import {
 } from "./session-row-model-facts.js";
 import { projectSessionRowProviderReview } from "./session-row-provider-review.js";
 import type { SessionRuntimeResolution } from "./session-runtime-resolution.js";
-import { buildSessionSwarmSummary } from "./session-swarm-summary.js";
 import type { SessionTranscriptUsageSnapshot } from "./session-transcript-derived-readers.js";
 import type {
   GatewaySessionModelSource,
@@ -576,10 +576,10 @@ export function materializeSessionRow(
 
 /** Writers replace published facts; config and live indexes keep their own owners. */
 export function replaceSessionRowFacts(
-  materialized: ReturnType<typeof materializeSessionRow>,
+  materialized: SessionRowMaterialization,
   row?: Partial<GatewaySessionRow>,
   source?: Partial<ReturnType<typeof materializeSessionRow>["source"]>,
-): ReturnType<typeof materializeSessionRow> {
+): SessionRowMaterialization {
   const nextRow = row ? freezeSessionRowPatch(materialized.row, row) : materialized.row;
   if (!source && nextRow === materialized.row) {
     return materialized;
@@ -589,8 +589,13 @@ export function replaceSessionRowFacts(
     publicationIdentity: materialized.publicationIdentity,
     row: nextRow,
     source: source ? Object.freeze({ ...materialized.source, ...source }) : materialized.source,
+    rowPatched: materialized.rowPatched || nextRow !== materialized.row,
   });
 }
+
+type SessionRowMaterialization = ReturnType<typeof materializeSessionRow> & {
+  rowPatched?: boolean;
+};
 
 export function presentSessionRow(
   materialized: ReturnType<typeof materializeSessionRow>,
@@ -616,7 +621,7 @@ export function presentSessionRow(
   }
   const subagentRuns =
     options.subagentRuns ?? buildSubagentRunReadIndexFromRuns({ ...source.subagentRunInputs, now });
-  const { subagentRun, fields } =
+  const { subagent, fields } =
     options.preparedRunState ??
     projectGatewaySessionRunState({
       key: row.key,
@@ -630,7 +635,7 @@ export function presentSessionRow(
       },
     });
   Object.assign(row, fields);
-  const usage = source.usageByFallbackModel?.get(subagentRun?.model);
+  const usage = source.usageByFallbackModel?.get(subagent?.model);
   row.usageReport ??= usage?.usageReport;
   row.totalTokens = freshSessionTotalTokens ?? asNonNegativeFiniteNumber(usage?.totalTokens);
   row.totalTokensFresh =
@@ -663,7 +668,7 @@ export function presentSessionRow(
       });
       if (contribution.included) {
         keys.push(child.key);
-        active ||= contribution.active === true;
+        active ||= contribution.active;
       }
     }
     children = { childSessions: keys.length ? keys : undefined, hasActiveSubagentRun: active };

@@ -64,19 +64,11 @@ describe("managed handoff Node selection", () => {
     ];
     const command = [...expectedCommand];
     expect(prepareManagedHandoffCliRuntime(command, env, execPath)).toEqual({
-      nodeExecArgv: foreground
-        ? []
-        : [
-            "--import",
-            CLI_PARENT_BOUND_PRELOAD,
-            process.platform === "win32"
-              ? "--stack-size=8192"
-              : "--disable-warning=ExperimentalWarning",
-          ],
-      readyEnv: {
-        ...env,
-        ...(foreground || process.platform === "win32" ? {} : { OPENCLAW_NODE_OPTIONS_READY: "1" }),
-      },
+      nodeExecArgv:
+        foreground || process.platform !== "win32"
+          ? []
+          : ["--import", CLI_PARENT_BOUND_PRELOAD, "--stack-size=8192"],
+      readyEnv: env,
     });
     expect(command).toEqual(expectedCommand);
   });

@@ -35,6 +35,43 @@ struct ChatTranscriptSearchTests {
         #expect(ChatTranscriptSearchResults(rows: [], query: "match").selection(after: first.id) == nil)
     }
 
+    @Test func `find matches visible phrases across emphasis and keeps literal code searchable`() {
+        let user = self.message("A **red** fox", role: "user")
+        let assistant = self.message("A _réd_ fox")
+        let plain = self.message("a red fox")
+        let code = self.message("A `**red**` fox")
+        let rows = [user, assistant, plain, code].map(ChatTranscriptRow.message)
+
+        let phrase = ChatTranscriptSearchResults(rows: rows, query: "red fox")
+        #expect(phrase.messageIDs == [user.id, assistant.id, plain.id])
+        #expect(ChatTranscriptSearchResults(rows: rows, query: "**red**").messageIDs == [user.id, code.id])
+    }
+
+    @Test func `find matches phrases across inline code and link labels within one paragraph`() {
+        let code = self.message("Pick ripe `pears` today.", role: "user")
+        let link = self.message("Pick ripe [pears](#fruit) today.")
+        let separate = self.message("Pick ripe\n\n`pears` today.")
+        let rows = [code, link, separate].map(ChatTranscriptRow.message)
+
+        #expect(ChatTranscriptSearchResults(rows: rows, query: "ripe pears").messageIDs == [code.id, link.id])
+        #expect(ChatTranscriptSearchResults(rows: rows, query: "`pears`").messageIDs == [code.id, separate.id])
+        #expect(ChatTranscriptSearchResults(rows: rows, query: "[pears](#fruit)").messageIDs == [link.id])
+    }
+
+    @Test(arguments: [
+        ("A ~~red~~ fox", "red fox"),
+        ("Use \\#1 today", "Use #1 today"),
+        ("Tea &amp; pears", "Tea & pears"),
+    ])
+    func `find matches rendered strikethrough escapes and entities`(source: String, phrase: String) {
+        let formatted = self.message(source)
+        let plain = self.message(phrase, role: "user")
+        let rows = [formatted, plain].map(ChatTranscriptRow.message)
+
+        #expect(ChatTranscriptSearchResults(rows: rows, query: phrase).messageIDs == [formatted.id, plain.id])
+        #expect(ChatTranscriptSearchResults(rows: rows, query: source).messageIDs == [formatted.id])
+    }
+
     private func message(_ text: String, role: String = "assistant") -> OpenClawChatMessage {
         OpenClawChatMessage(
             role: role,

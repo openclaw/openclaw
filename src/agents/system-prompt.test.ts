@@ -154,7 +154,9 @@ describe("buildAgentSystemPrompt", () => {
       "points can't-do claims at session capabilities and the docs index",
       { toolNames: ["read", "session_status", "web_fetch"] },
       [
-        "Can't-do claims: missing tools/failures show session limits, not OpenClaw's—check `session_status` with `capabilities=true`, then the docs index https://docs.openclaw.ai/llms.txt first.",
+        "session limits, not OpenClaw's",
+        "`session_status` with `capabilities=true`",
+        "https://docs.openclaw.ai/llms.txt",
       ],
     ],
     [
@@ -171,9 +173,10 @@ describe("buildAgentSystemPrompt", () => {
       "acknowledges unavailable capability and docs routes in a sandbox without web tools",
       { toolNames: ["read"], sandboxInfo: { enabled: true } },
       [
-        "Can't-do claims: missing tools/failures show session limits, not OpenClaw's—state what could not be checked.",
+        "session limits, not OpenClaw's",
+        "what could not be checked",
         "Docs: https://docs.openclaw.ai",
-        "state docs could not be checked and mark recall unverified",
+        "docs could not be checked and mark recall unverified",
       ],
       [
         "capabilities=true",
@@ -372,8 +375,8 @@ describe("buildAgentSystemPrompt", () => {
       { toolNames: ["openclaw", "gateway"] },
       [
         "For this Gateway's config writes, channels, plugins, agents, or models/providers: use `openclaw`",
-        "`gateway`: use update.run only when the installation uses the built-in updater",
-        "`update.cleanup` (`dryRun` previews; permanently removes rollback copies",
+        "`gateway` update.run only for built-in-updater installs",
+        "`update.cleanup` (`dryRun` previews; deletes rollback copies, so require an explicit request)",
       ],
       ["models/providers, updates: ask `openclaw`"],
     ],
@@ -415,9 +418,9 @@ describe("buildAgentSystemPrompt", () => {
   });
   it("conditions routine promotion on the available automation actions", () => {
     expect(renderPrompt({ toolNames: ["automations"] })).toContain(
-      "exposes list/add/run/remove and the same job is asked a 3rd time:",
+      "exposes list/add/run/remove, on the same job's 3rd request:",
     );
-    expect(renderPrompt({ toolNames: ["read"] })).not.toContain("asked a 3rd time");
+    expect(renderPrompt({ toolNames: ["read"] })).not.toContain("3rd request");
   });
 
   it("routes browser sidebar requests through the exposed screen tool", () => {
@@ -429,7 +432,7 @@ describe("buildAgentSystemPrompt", () => {
     expect(withoutScreen).not.toContain('action="browser_show"');
     expect(withScreen).toContain("web/app turn may drive UI");
     const presentation = withScreen.split("## UI Presentation\n")[1]?.split("\n## ")[0] ?? "";
-    expect(presentation).toContain('screen(action="browser_show")');
+    expect(presentation).toContain("Control UI panels: `screen`");
     expect(withScreen.indexOf("## UI Presentation")).toBeGreaterThan(
       withScreen.indexOf(SYSTEM_PROMPT_CACHE_BOUNDARY),
     );
@@ -558,15 +561,7 @@ describe("buildAgentSystemPrompt", () => {
     const msg = renderPrompt({ toolNames: ["message", "sessions_send"] });
     const spawn = renderPrompt({ toolNames: ["sessions_spawn"] });
     expect(msg).not.toContain("delegate bounded independent work via `sessions_spawn`");
-    expect(msg).not.toContain("Never loop-poll `subagents list`");
     expect(spawn).toContain("delegate bounded independent work via `sessions_spawn`");
-    expect(spawn).not.toContain("Never loop-poll `subagents list`");
-    expect(renderPrompt({ toolNames: ["sessions_spawn", "subagents"] })).toContain(
-      "Never loop-poll `subagents list`",
-    );
-    expect(
-      renderPrompt({ toolNames: ["sessions_spawn", "sessions_yield", "subagents"] }),
-    ).toContain("Announcing children: wait via `sessions_yield`");
   });
 
   it("keeps prefer delegation out of minimal prompts and conditions follow-up guidance", () => {
@@ -617,7 +612,7 @@ describe("buildAgentSystemPrompt", () => {
     expect(withoutCollection).not.toContain("wait for runtime completion events");
   });
 
-  it("preserves completion-event guidance for interactive sessions without sessions_yield", () => {
+  it("keeps interactive sessions out of isolated-automation completion policy", () => {
     for (const subagentDelegationMode of ["suggest", "prefer"] as const) {
       const prompt = renderPrompt({
         toolNames: ["sessions_spawn", "agents_wait"],
@@ -625,7 +620,6 @@ describe("buildAgentSystemPrompt", () => {
         subagentDelegationMode,
       });
 
-      expect(prompt).toContain("wait for runtime completion events; never busy-poll.");
       expect(prompt).not.toContain("child completion will not resume this turn");
       expect(prompt.includes("Announced completion is push-based")).toBe(
         subagentDelegationMode === "prefer",

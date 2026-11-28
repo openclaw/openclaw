@@ -184,7 +184,6 @@ src/agents/subagents/announce/subagent-announce-delivery.test.ts
 src/agents/subagents/registry/subagent-control.test.ts
 src/agents/subagents/registry/subagent-registry-lifecycle.test.ts
 src/agents/subagents/registry/subagent-registry.test.ts
-src/agents/system-prompt.ts
 src/agents/tool-search.test.ts
 src/agents/tools/image-generate-tool.test.ts
 src/agents/tools/image-tool.test.ts
@@ -195,7 +194,6 @@ src/agents/workspace.ts
 src/agents/worktrees/service.ts
 src/auto-reply/reply/agent-runner-memory.test.ts
 src/auto-reply/reply/agent-runner-memory.ts
-src/auto-reply/reply/agent-runner.misc.runreplyagent.test.ts
 src/auto-reply/reply/agent-runner.runreplyagent.e2e.test.ts
 src/auto-reply/reply/directive-handling.model.test.ts
 src/auto-reply/reply/dispatch-acp.test.ts

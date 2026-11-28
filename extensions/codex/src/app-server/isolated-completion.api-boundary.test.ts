@@ -207,6 +207,9 @@ it.each(["api-key", "siwc"] as const)(
     params.authorization.plan.selectedAuthMode = "oauth";
     params.authorization.plan.selectedAuthFlow = "chatgpt-token-sharing";
     if (mode === "api-key") {
+      // Utility recaps ask for no reasoning under a small cap. The route row offers
+      // `none`; Codex's own listing (codexModel: low only) does not.
+      params.thinkLevel = "off";
       params.streamParams = { maxTokens: 37, temperature: 0 };
       params.authorization = {
         owner: "host",
@@ -215,6 +218,7 @@ it.each(["api-key", "siwc"] as const)(
           id: "gpt-5.4",
           api: "openai-responses",
           baseUrl: endpoint,
+          compat: { supportedReasoningEfforts: ["none", "low"] },
         } as Extract<IsolatedParams["authorization"], { owner: "host" }>["model"],
         auth: { mode: "api-key", apiKey: "synthetic-selected-key", profileId, source: "profile" },
       };
@@ -261,7 +265,10 @@ it.each(["api-key", "siwc"] as const)(
         ...(mode === "api-key" ? { max_output_tokens: 37, temperature: 0 } : {}),
       });
       expect(body).not.toHaveProperty("previous_response_id");
-      expect(calls.filter((call) => call.method === "turn/start")).toHaveLength(1);
+      const turns = calls.filter((call) => call.method === "turn/start");
+      expect(turns).toHaveLength(1);
+      // Medium reasoning would spend the whole cap before any visible answer.
+      expect(turns[0]!.params?.effort).toBe(mode === "api-key" ? "none" : "low");
       expect(refresh).toHaveBeenCalledTimes(mode === "siwc" ? 1 : 0);
     } finally {
       await h.client.closeAndWait();

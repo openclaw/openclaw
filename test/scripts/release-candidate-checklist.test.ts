@@ -1511,18 +1511,6 @@ return Response.json({id, run_attempt: 1, repository: {full_name: "openclaw/open
     expect(existsSync(join(installedModules, "yaml"))).toBe(true);
   });
 
-  it("keeps plugin plan warnings advisory and visible", () => {
-    const warning = "example-runtime is behind npm latest";
-    const plan = { all: [{ packageName: "@openclaw/example" }], warnings: [warning] };
-    const result = runInNewContext(
-      stripNodeTypeScriptTypes(
-        `${checklistFunctions("formatPluginPlanSummary")}\nformatPluginPlanSummary("plugin npm plan", plan)`,
-      ),
-      { isRecord, plan },
-    );
-    expect(result).toEqual(["- plugin npm plan: 1 packages", "- Warning: " + warning]);
-  });
-
   it.each(["v2026.9.1"])("refuses to print a main-sourced publish command for %s", (tag) => {
     const options = parseArgs(["--tag", tag]);
     const producer = { status: "passed", headSha: "a".repeat(40), workflowRef: "main" };

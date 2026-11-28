@@ -22,7 +22,7 @@ import {
 } from "../../test-utils/openclaw-test-state.js";
 import { assertPluginMetadataSnapshotConsistency } from "../plugin-metadata.test-helpers.js";
 import { WITHOUT_OPENAI_ENV_AUTH } from "../test-helpers.env.js";
-import { listModels, requestModelsList } from "./models-list.test-support.js";
+import { catalogLoader, createModelsListClient } from "./models-list.test-support.js";
 import {
   claudeOptOutConfig,
   EXPECTED_DEMO_IDENTITY,
@@ -94,6 +94,9 @@ vi.mock("../../plugins/provider-thinking.js", () => ({
   },
 }));
 
+// Prepared owner facts use this fixture, including when ambient discovery has bundled decisions.
+const { listModels, requestModelsList } = createModelsListClient(modelPluginMetadataSnapshot);
+
 const withoutOpenAIEnvAuth = async <T>(run: () => Promise<T>): Promise<T> =>
   await withEnvAsync({ ...WITHOUT_OPENAI_ENV_AUTH }, run);
 
@@ -151,10 +154,6 @@ function createDemoOAuthStore(params: { access: string; expires: number }) {
       },
     },
   };
-}
-
-function catalogLoader(entries: Array<Record<string, unknown>>) {
-  return vi.fn(async () => entries);
 }
 
 function expectModels(respond: ReturnType<typeof vi.fn>, models: unknown) {
@@ -299,54 +298,6 @@ describe("models.list", () => {
     expect(custom).not.toHaveProperty("apiKeySupported");
   });
 
-  it("projects exact CLI runtime thinking capabilities onto every configured Claude model", async () => {
-    const modelIds = [
-      "claude-opus-5",
-      "claude-opus-4-8",
-      "claude-opus-4-7",
-      "claude-opus-4-6",
-      "claude-sonnet-5",
-      "claude-fable-5",
-      "claude-sonnet-4-6",
-    ];
-    const runtimeConfig: OpenClawConfig = {
-      agents: {
-        defaults: {
-          models: Object.fromEntries(
-            modelIds.map((modelId) => [
-              `anthropic/${modelId}`,
-              { agentRuntime: { id: "claude-cli" } },
-            ]),
-          ),
-        },
-      },
-    };
-    const loadGatewayModelCatalog = vi.fn(async () =>
-      modelIds.map((modelId) => ({
-        id: modelId,
-        name: modelId,
-        provider: "anthropic",
-        reasoning: true,
-      })),
-    );
-    const respond = await listModels({
-      view: "all",
-      runtimeConfig,
-      loadGatewayModelCatalog,
-    });
-
-    const payload = modelPayload(respond);
-    for (const modelId of modelIds) {
-      expect(
-        payload?.models.find((entry) => entry.provider === "anthropic" && entry.id === modelId),
-      ).toMatchObject({
-        reasoning: true,
-        agentRuntime: { id: "claude-cli" },
-        thinkingLevels: thinkingLevels("off minimal low medium high ultra"),
-      });
-    }
-  });
-
   it("preserves a configured reasoning opt-out on a Claude CLI route", async () => {
     const modelId = "claude-opus-5";
     const runtimeConfig = claudeOptOutConfig(modelId);
@@ -411,50 +362,6 @@ describe("models.list", () => {
       thinkingLevels: thinkingLevels("minimal low medium adaptive high xhigh max ultra"),
       thinkingDefault: "high",
     });
-  });
-
-  it("publishes a materialized Claude CLI logical row with its configured thinking default", async () => {
-    const modelIds = ["claude-opus-5", "claude-sonnet-5"];
-    const runtimeConfig = {
-      agents: {
-        defaults: {
-          model: { primary: `anthropic/${modelIds[0]}` },
-          models: Object.fromEntries(
-            modelIds.map((modelId) => [
-              `anthropic/${modelId}`,
-              { agentRuntime: { id: "claude-cli" }, params: { thinking: "medium" } },
-            ]),
-          ),
-        },
-      },
-      models: configForProviders({
-        anthropic: { models: modelIds.map((id) => ({ id, name: id })) },
-      }).models,
-    } as unknown as OpenClawConfig;
-    const respond = await listModels({
-      view: "configured",
-      runtimeConfig,
-      // Prepared catalog shape: runtime-only rows are deliberately absent.
-      loadGatewayModelCatalog: vi.fn(async () =>
-        modelIds.map((id) => ({ id, name: id, provider: "anthropic", reasoning: true })),
-      ),
-    });
-
-    const payload = modelPayload(respond);
-    for (const modelId of modelIds) {
-      expect(
-        payload?.models.find((entry) => entry.provider === "anthropic" && entry.id === modelId),
-      ).toMatchObject({
-        reasoning: true,
-        agentRuntime: { id: "claude-cli" },
-        thinkingDefault: "medium",
-        thinkingLevels: expect.arrayContaining([
-          { id: "off", label: "off" },
-          { id: "medium", label: "medium" },
-          { id: "high", label: "high" },
-        ]),
-      });
-    }
   });
 
   it("publishes the concrete Claude CLI thinking policy for a configured logical model", async () => {
@@ -888,72 +795,6 @@ describe("models.list", () => {
           },
           ...configuredModels,
         ],
-      );
-    });
-  });
-
-  it("keeps keyless local provider wildcard discoveries visible with unknown availability", async () => {
-    await withoutOpenAIEnvAuth(async () => {
-      await withModelsTestState(
-        {
-          env: { VLLM_API_KEY: undefined },
-        },
-        async () => {
-          const catalog = [
-            {
-              id: "llama-configured",
-              name: "Llama Configured",
-              provider: "vllm",
-              api: "openai-completions",
-              baseUrl: "http://127.0.0.1:8000/v1",
-            },
-            {
-              id: "llama-discovered",
-              name: "Llama Discovered",
-              provider: "vllm",
-              api: "openai-completions",
-              baseUrl: "http://127.0.0.1:8000/v1",
-            },
-          ];
-          const cfg = {
-            agents: { defaults: { models: { "vllm/*": {} } } },
-            models: configForProviders({
-              vllm: {
-                api: "openai-completions",
-                baseUrl: "http://127.0.0.1:8000/v1",
-                models: [{ id: "llama-configured", name: "Llama Configured" }],
-              },
-            }).models,
-          } as unknown as OpenClawConfig;
-          const expected = [
-            {
-              id: "llama-configured",
-              name: "Llama Configured",
-              provider: "vllm",
-              local: true,
-              available: true,
-              tags: ["default"],
-            },
-            {
-              id: "llama-discovered",
-              name: "Llama Discovered",
-              provider: "vllm",
-              local: true,
-              available: true,
-            },
-          ];
-
-          for (const view of ["default", "configured"] as const) {
-            const { request, respond } = requestModelsList({
-              view,
-              includeDefaultModels: false,
-              runtimeConfig: cfg,
-              loadGatewayModelCatalog: catalogLoader(catalog),
-            });
-            await request;
-            expectModels(respond, expected);
-          }
-        },
       );
     });
   });

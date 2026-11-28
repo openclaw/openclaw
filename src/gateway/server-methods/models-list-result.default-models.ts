@@ -40,17 +40,20 @@ export async function resolveDefaultModelsPreview(
   const includeAgentUtilityModel =
     request.includeDefaultModels === true && !request.sessionKey && !request.authProfileId;
   const { cfg, metadataSnapshot, snapshot: catalog } = params;
+  const selection = resolveUtilityModelSelectionForAgent({
+    cfg,
+    agentId: params.agentId,
+    catalog,
+    metadataSnapshot,
+  });
   const utilityModel: NonNullable<ModelsListResult["utilityModel"]> =
-    resolveUtilityModelSelectionForAgent({
-      cfg,
-      agentId: params.agentId,
-      catalog,
-      metadataSnapshot,
-    }) ?? {
-      modelRef: null,
-      source:
-        readUtilityModelSetting(cfg, params.agentId).kind === "disabled" ? "disabled" : "none",
-    };
+    "modelRef" in selection
+      ? selection
+      : {
+          modelRef: null,
+          source:
+            readUtilityModelSetting(cfg, params.agentId).kind === "disabled" ? "disabled" : "none",
+        };
   const primary = resolveDefaultModelForAgent({
     cfg,
     manifestPlugins: metadataSnapshot,

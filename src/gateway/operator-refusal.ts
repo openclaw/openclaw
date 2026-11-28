@@ -18,6 +18,10 @@ const refusalCauses = {
     why: "Your role on this Gateway does not allow it.",
     nextStep: "Ask a Gateway admin to do it, or to add the permission to your role.",
   },
+  "owner-only": {
+    why: "It needs the Gateway owner's authority, and this turn does not run with it.",
+    nextStep: "Ask the Gateway owner to do it.",
+  },
   "channel-unverified": {
     why: "This channel cannot confirm who you are.",
     nextStep:
@@ -70,6 +74,14 @@ export type OperatorRefusalCause = keyof typeof refusalCauses;
 export function operatorRefusalText(cause: OperatorRefusalCause, action = "start this request") {
   const { why, nextStep } = refusalCauses[cause];
   return `I did not ${action}. ${why} ${nextStep}`;
+}
+
+/**
+ * The session's timeline line for runs stopped because their starter lost access. Every viewer
+ * of the session sees it, so it names the person instead of addressing them.
+ */
+export function accessLossStopText(runs: number, name: string): string {
+  return `Stopped ${runs} ${runs === 1 ? "run" : "runs"} started by ${name}: their access to this session changed.`;
 }
 
 /** A definite refusal of operator work. Its message is the sentence the person sees. */

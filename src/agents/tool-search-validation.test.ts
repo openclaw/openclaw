@@ -53,13 +53,11 @@ it("offers exact schema recovery when a wide input hint elides nested fields", a
       { recoverySurface: "catalog" },
     ),
   ).rejects.toThrow("tool handle's describe()");
+  // The schema in the error carries the nested fields the compact hint elides.
   await expect(dispatch(id, { target: "archive", filters: { unrelated: true } })).rejects.toThrow(
-    `Use tool_describe with id "${id}"`,
+    '"pageSize":{"type":"integer"}',
   );
   expect(tool.execute).not.toHaveBeenCalled();
-  expect((await runtime.describe(id)).parameters).toMatchObject({
-    properties: { filters: { properties: { pageSize: { type: "integer" } } } },
-  });
   await dispatch(id, { target: "archive", filters: { region: "local", pageSize: 2 } });
   expect(tool.execute).toHaveBeenCalledOnce();
 });

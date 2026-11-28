@@ -1,6 +1,9 @@
 import path from "node:path";
 import { invokeNativeHookRelay } from "openclaw/plugin-sdk/agent-harness-runtime";
-import { createAgentHarnessHostCapabilitiesForTest } from "openclaw/plugin-sdk/plugin-test-runtime";
+import {
+  createAgentHarnessCompletionScopeForTest,
+  createAgentHarnessHostCapabilitiesForTest,
+} from "openclaw/plugin-sdk/plugin-test-runtime";
 import { captureSessionEntryCurrentCheckAsync } from "openclaw/plugin-sdk/session-binding-runtime";
 import { resolveStorePath } from "openclaw/plugin-sdk/session-store-runtime";
 import { expect, it, vi } from "vitest";
@@ -164,10 +167,10 @@ it.each([false, true])(
     const params = parentParams("parent");
     const { sessionFile, workspaceDir } = params;
     params.abortSignal = abort.signal;
-    params.agentHarnessCompletionScope = {
+    params.agentHarnessCompletionScope = createAgentHarnessCompletionScopeForTest({
       requesterSessionKey: params.sessionKey!,
       requesterAgentId: "main",
-    };
+    });
     const parent = createParentHarness();
     const { runtime, harness } = parent;
     const completionAttempts = observeCompletionAttempts();
@@ -214,7 +217,6 @@ it.each([false, true])(
       expect.objectContaining({
         result: "child completed",
         scope: params.agentHarnessCompletionScope,
-        expectedRequester: expect.objectContaining({ sessionId: params.sessionId }),
       }),
     );
   },

@@ -39,8 +39,10 @@ describe("AppSidebar catalog reconnect", () => {
       await vi.advanceTimersByTimeAsync(0);
       await sidebar.updateComplete;
       expect(sidebar.textContent).not.toContain("Stale session");
+      const callsBeforeActivation = request.mock.calls.length;
       document.dispatchEvent(new Event("visibilitychange"));
       await vi.advanceTimersByTimeAsync(5_000);
+      expect(request).toHaveBeenCalledTimes(callsBeforeActivation + 1);
 
       expect(request).toHaveBeenLastCalledWith("sessions.catalog.list", {
         agentId: "main",

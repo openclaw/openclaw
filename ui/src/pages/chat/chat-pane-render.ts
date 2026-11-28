@@ -22,7 +22,7 @@ import { parseCatalogSessionKey } from "../../lib/sessions/catalog-key.ts";
 import { resolveUiConfiguredMainKey } from "../../lib/sessions/session-key.ts";
 import { navigateToModelProvider } from "../model-providers/navigation.ts";
 import { isChatBubbleMode } from "./chat-bubble-mode.ts";
-import { chatGoalRecovery, mutateChatGoal, submitChatGoalDraft } from "./chat-goals.ts";
+import { bindChatGoalActions, chatGoalRecovery, submitChatGoalDraft } from "./chat-goals.ts";
 import { chatHistoryOlderSelector } from "./chat-history-request.ts";
 import { isInitialChatHistoryUnavailable } from "./chat-history-state.ts";
 import { resolveChatModelSetup } from "./chat-model-setup.ts";
@@ -125,6 +125,10 @@ export class ChatPaneRuntime extends ChatPaneLayoutRender {
       this.context.runtimeConfig.state,
     );
     const currentAgentId = resolveChatAgentId(state);
+    const isCurrentAgent = () =>
+      this.state === state &&
+      this.connectionGeneration === selectionConnectionGeneration &&
+      resolveChatAgentId(state) === currentAgentId;
     this.composerCapabilities?.synchronize(state, currentAgentId);
     const catalogKey = parseCatalogSessionKey(state.sessionKey);
     const catalog = catalogKey !== null;
@@ -452,6 +456,8 @@ export class ChatPaneRuntime extends ChatPaneLayoutRender {
                 this.history.loadingOlder ||
                 (catalogKey ? this.history.catalogLoading : state.chatLoading),
               onShowEarlier: () => void this.loadOlderMessages(),
+              onSearchEarlier:
+                nativeConversation && !state.chatLoading ? this.searchEarlier : undefined,
             }
           : undefined,
       catalogPreviewImage: catalog ? this.history.catalogPreviewImage : undefined,
@@ -629,7 +635,7 @@ export class ChatPaneRuntime extends ChatPaneLayoutRender {
       onQueueMove: sessionParticipationBlocked ? undefined : state.moveQueuedChatMessage,
       queuedEdit: createChatPaneQueuedEditProps(state, sessionParticipationBlocked),
       goalRecovery: chatGoalRecovery(state),
-      onGoalAction: (goalId, action) => void mutateChatGoal(state, { goalId, action }),
+      onGoalAction: bindChatGoalActions(state, selectedSession?.goal, isCurrentAgent),
       goalDraftMode: state.chatGoalDraftMode ?? null,
       currentSessionId: state.currentSessionId,
       onGoalDraftModeChange: (mode) => {
@@ -640,10 +646,7 @@ export class ChatPaneRuntime extends ChatPaneLayoutRender {
         ? (draft, submissionAction) => submitChatGoalDraft(state, draft, submissionAction)
         : undefined,
       onCompanionStageAttachment: (attachment, sessionKey) =>
-        this.state === state &&
-        this.connectionGeneration === selectionConnectionGeneration &&
-        resolveChatAgentId(state) === currentAgentId &&
-        this.stageSessionCompanionAttachment(attachment, sessionKey),
+        isCurrentAgent() && this.stageSessionCompanionAttachment(attachment, sessionKey),
       replyTarget: state.chatReplyTarget ?? null,
       onClearReply: () => setReply(null),
       onSetReply: sessionDisabledBanner ? undefined : setReply,

@@ -4,7 +4,7 @@ import {
   isCodeModeDiagnosticEnabled,
   logCodeModeDiagnostic,
 } from "../../../logging/code-mode-diagnostic.js";
-import { getPluginToolMeta } from "../../../plugins/tool-metadata.js";
+import { classifyAgentToolSource, getPluginToolMeta } from "../../../plugins/tool-metadata.js";
 import {
   finalizeAgentToolAvailability,
   gateAgentToolExecution,
@@ -27,7 +27,7 @@ import {
   withRuntimeToolSchemaQuarantine,
   type RuntimeToolSchemaQuarantineRecorder,
 } from "../../tool-schema-quarantine.js";
-import { isOnDemandCatalogTool } from "../../tool-search-catalog.js";
+import { isOnDemandCatalogTool, selectDirectMcpToolNames } from "../../tool-search-catalog.js";
 import { TOOL_SEARCH_CONTROL_TOOL_NAMES } from "../../tool-search-protocol.js";
 import { createToolSearchSelectionMatcher } from "../../tool-search-selection.js";
 import {
@@ -373,24 +373,40 @@ export async function prepareEmbeddedAttemptToolCatalog(input: {
   };
   return Object.assign(current, {
     /**
-     * Installs the session's GitHub listing pin and keeps on-demand tools the session pin already
-     * sends direct. Rebuilds the catalog once when either changes the surface.
+     * Installs the session's GitHub listing pin and keeps on-demand and MCP tools the session pin
+     * already sends direct. Rebuilds the catalog once when either changes the surface.
      */
     installToolListingPin: async (
       pin: NonNullable<typeof pinToolListing>,
-      readPinnedToolNames?: () => ReadonlySet<string>,
+      readPinnedToolNames?: () => ReadonlySet<string> | undefined,
     ) => {
       pinToolListing = pin;
       const tools = input.bundleTools.uncompactedEffectiveTools;
       const catalogRef = input.preparedToolBase.toolSurfaceRuntime.toolSearchCatalogRef;
       const onDemand = tools.filter(isOnDemandCatalogTool);
-      // Read the transcript pin only when a deferred on-demand tool could be promoted.
+      const hasMcp = tools.some((tool) => classifyAgentToolSource(tool).source === "mcp");
+      // Read the transcript pin only when it could keep a cataloged tool direct.
       const pinnedNames =
-        catalogRef?.current && onDemand.length > 0 ? readPinnedToolNames?.() : undefined;
+        catalogRef?.current && (onDemand.length > 0 || hasMcp)
+          ? readPinnedToolNames?.()
+          : undefined;
       const promoted = onDemand.filter((tool) => pinnedNames?.has(tool.name)).map((t) => t.name);
+      let mcpChanged = false;
+      if (catalogRef?.current && hasMcp) {
+        // Only a runner that pins the session's tool listing declares MCP tools directly: the
+        // established pin owns the set, and a series' first request chooses it by size.
+        catalogRef.sessionPinnedToolNames =
+          pinnedNames ?? selectDirectMcpToolNames(tools, undefined);
+        const pinnedMcp = selectDirectMcpToolNames(tools, catalogRef.sessionPinnedToolNames);
+        const builtMcp = current.effectiveTools.filter(
+          (tool) => classifyAgentToolSource(tool).source === "mcp",
+        );
+        mcpChanged =
+          pinnedMcp.size !== builtMcp.length || builtMcp.some((tool) => !pinnedMcp.has(tool.name));
+      }
       if (catalogRef && promoted.length > 0) {
         catalogRef.promotedToolNames = new Set(promoted);
-      } else if (pin(tools, false) === tools) {
+      } else if (!mcpChanged && pin(tools, false) === tools) {
         return false;
       }
       await withRuntimeToolSchemaQuarantine((record) => refreshTools(record, false));

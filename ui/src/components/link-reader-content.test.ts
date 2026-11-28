@@ -378,7 +378,9 @@ describe("link reader document content", () => {
     image.dispatchEvent(new Event("error"));
     expect(image.hidden).toBe(true);
     expect(container.textContent).toContain("Image unavailable: Build status");
-    const original = container.querySelector<HTMLAnchorElement>("a[data-link-reader-external]");
+    const original = container.querySelector<HTMLAnchorElement>(
+      ".lr-description a[data-link-reader-external]",
+    );
     expect(original?.href).toBe("https://images.example/status.png");
     expect(container.querySelector("a a")).toBeNull();
     update(container, { ...value, title: "Updated title" });

@@ -80,7 +80,7 @@ async function fixture({
     },
   };
   const opts = { json: true, yes: true, run };
-  const reportingRow = { status: "running", origin: {} };
+  const reportingRow = { status: "running", origin: {}, verification: {}, steps: [] };
   const assertCurrent = () => run.executorFence.assertCurrent();
   const restartContext = {
     refreshGatewayServiceEnv: false,
@@ -334,7 +334,6 @@ async function fixture({
     "../../shared/state-lease-loss-format",
     "../../shared/update-outcome",
     "../../state/openclaw-state-lease-error",
-    "../../infra/update-run-report",
     "../../infra/update-run-notice",
     "../quote-cli-arg",
     "../../infra/update-run-record",

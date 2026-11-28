@@ -6,6 +6,7 @@ import { createDeferred, withinTest } from "../../test/helpers/promise.js";
 import type { SessionEventReceipt } from "../auto-reply/reply/session-event-contract.js";
 import * as sessionEvents from "../auto-reply/reply/session-event-handoff.js";
 import { listSessionPendingInputs } from "../config/sessions/session-pending-input-history.js";
+import { getAgentEventLifecycleGeneration, onAgentEventForRun } from "../infra/agent-events.js";
 import { withInvitedGuestGateway } from "./guest-session-access.test-support.js";
 import * as restartResume from "./session-restart-resume.js";
 
@@ -77,12 +78,29 @@ it("replays ordinary owner-only queued input through the same restart lifecycle"
           messageId: "owner-resumed",
           responseId: "owner-resumed-response",
         });
-      await fixture.restart();
+      const queuedSettled = createDeferred();
+      using queuedEvents = new DisposableStack();
+      await fixture.restart(async () => {
+        queuedEvents.defer(
+          onAgentEventForRun("owner-restart-queued", (event) => {
+            if (
+              event.lifecycleGeneration === getAgentEventLifecycleGeneration() &&
+              event.stream === "lifecycle" &&
+              (event.data.phase === "end" || event.data.phase === "error") &&
+              event.data.executionSettled === true
+            ) {
+              queuedSettled.resolve();
+            }
+          }),
+        );
+      });
       await withinTest(recovered.promise, signal);
       const rootReceipt = await withinTest(resumed.promise, signal);
       const rootOutcome = await withinTest(rootReceipt.settled, signal);
       console.info("ROOT_RESTART_OUTCOME", JSON.stringify({ id: rootReceipt.id, rootOutcome }));
       expect(rootOutcome).toMatchObject({ status: "completed", executionStarted: true });
+      // Queued agent.wait returns pending immediately; wait for execution before its publication.
+      await withinTest(queuedSettled.promise, signal);
       const completed = await fixture.sender.request(
         "agent.wait",
         { runId: "owner-restart-queued", timeoutMs: 30_000 },

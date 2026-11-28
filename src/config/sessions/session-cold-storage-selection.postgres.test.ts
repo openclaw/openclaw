@@ -26,7 +26,7 @@ import { transcriptEventJsonSql } from "./transcript-payload.js";
 describe.skipIf(!mixedAgentConnection)("PostgreSQL cold transcript selection", () => {
   useMixedAgentPair("postgres", "postgres");
 
-  it("skips protection reads only for full externalization batches and preserves incoming references", () => {
+  it("skips unnecessary protection reads and preserves incoming references", () => {
     const options = { agentId: "main" };
     const database = admit(() => openOpenClawAgentDatabase(options));
     expect(isPostgresSqlConnection(database.db)).toBe(true);
@@ -119,9 +119,13 @@ describe.skipIf(!mixedAgentConnection)("PostgreSQL cold transcript selection", (
       maxTranscripts: 1,
       maxBytes: 64 * 1024 * 1024,
     };
-    for (const maxTranscripts of [1, 2]) {
+    for (const { maxTranscripts, beforeMs, needsProtection } of [
+      { maxTranscripts: 1, beforeMs: 100, needsProtection: false },
+      { maxTranscripts: 2, beforeMs: 1, needsProtection: false },
+      { maxTranscripts: 2, beforeMs: 100, needsProtection: true },
+    ]) {
       using observation = observeStatementEvents();
-      const selected = admit(() => selectSessionColdBatch({ ...input, maxTranscripts }));
+      const selected = admit(() => selectSessionColdBatch({ ...input, maxTranscripts, beforeMs }));
       assert(selected.found);
       expect(selected.value.externalizations.map((archive) => archive.session_id)).toEqual([
         coldId,
@@ -134,7 +138,7 @@ describe.skipIf(!mixedAgentConnection)("PostgreSQL cold transcript selection", (
           /select .*"last_activity_at".*"last_interaction_at".*from "session_nodes"/,
         ),
       });
-      if (maxTranscripts === 1) {
+      if (!needsProtection) {
         expect(observation.events).not.toEqual(expect.arrayContaining([protectionRead]));
       } else {
         expect(observation.events).toEqual(expect.arrayContaining([protectionRead]));

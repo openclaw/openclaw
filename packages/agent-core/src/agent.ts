@@ -15,7 +15,6 @@ import {
   attachInternalSyncSteeringGetter,
   getInternalBeforeRequest,
   getInternalToolRepeatPolicy,
-  getInternalRepetitionGuard,
   getInternalToolTurnCompletion,
   setInternalBeforeRequest,
 } from "./internal-hooks.js";
@@ -513,7 +512,6 @@ export class Agent {
     const config: AgentLoopConfig = {
       toolInterruptions: this.toolInterruptions,
       model: this.mutableState.model,
-      repetitionGuard: getInternalRepetitionGuard(this),
       thinkingLevel: this.mutableState.thinkingLevel,
       reasoning: resolveAgentReasoningOption(
         this.mutableState.model,

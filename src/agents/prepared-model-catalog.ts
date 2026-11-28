@@ -63,7 +63,7 @@ import {
   normalizeThinkingCatalogProviders,
   resolveEffectiveAgentRuntime,
 } from "./thinking-runtime.js";
-import { resolveDefaultAgentWorkspaceDir } from "./workspace.js";
+import { resolveDefaultAgentWorkspaceDir } from "./workspace-default-path.js";
 
 export { withPreparedModelRuntimeReadBatch } from "./prepared-model-runtime.owner.js";
 export { getPendingPreparedModelRuntimeReplacement } from "./prepared-model-runtime.js";

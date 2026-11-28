@@ -18,6 +18,10 @@ describe("runtime-import", () => {
     expect(toSafeImportPath("\\\\server\\share\\plugin\\index.mjs")).toBe(
       "file://server/share/plugin/index.mjs",
     );
+    expect(toSafeImportPath("file:///C:/Users/alice/plugin/index.mjs")).toBe(
+      "file:///C:/Users/alice/plugin/index.mjs",
+    );
+    expect(toSafeImportPath("./relative/index.mjs")).toBe("./relative/index.mjs");
   });
 
   it("keeps non-Windows import paths unchanged", () => {

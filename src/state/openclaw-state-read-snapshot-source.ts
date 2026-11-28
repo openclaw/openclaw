@@ -261,10 +261,9 @@ export async function prepareOpenClawStateReadSnapshotSource({
           error,
         );
       }
-      throw new Error(
-        `Cannot read shared state for discovery: ${pathname}. Retry after the current state operation completes. ${String(error)}`,
-        { cause: error },
-      );
+      throw new Error(`Cannot read shared state for discovery: ${pathname}. ${String(error)}`, {
+        cause: error,
+      });
     }
   }
   return {

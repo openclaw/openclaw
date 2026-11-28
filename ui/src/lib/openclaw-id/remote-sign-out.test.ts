@@ -30,7 +30,7 @@ function loader(ok: boolean | "never answers", logoutUrl?: string) {
   vi.stubGlobal("MessageChannel", Channel);
   vi.stubGlobal("navigator", { serviceWorker: { controller: { postMessage } } });
   vi.stubGlobal("window", { setTimeout, clearTimeout, location: { assign } });
-  return { assign, close, postMessage };
+  return { assign, close };
 }
 
 describe("remote account sign-out", () => {

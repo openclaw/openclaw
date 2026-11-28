@@ -197,12 +197,17 @@ export function resolveNewSessionSubmitBlock(
   ) {
     return { gate: "mentions-unsupported", reason: t("chat.mentions.unsupported") };
   }
-  if (
-    gateway.preferenceLoading ||
-    (kind === "session" && place.modelControl.isRestoringPreference()) ||
-    !place.placementPreferenceReady
-  ) {
-    return { gate: "preference-restore", reason: t("newSession.restoringPreferences") };
+  const restoringPreferences =
+    gateway.preferenceLoading || (kind === "session" && place.modelControl.isRestoringPreference());
+  if (restoringPreferences || !place.placementPreferenceReady) {
+    return {
+      gate: "preference-restore",
+      reason: t(
+        !restoringPreferences && place.savedProjectLookupFailed
+          ? "newSession.savedProjectLookupFailed"
+          : "newSession.restoringPreferences",
+      ),
+    };
   }
   const agents = snapshot.context?.agents.state;
   const rosterBlock = (): NewSessionSubmitBlock => ({

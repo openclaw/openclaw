@@ -191,6 +191,7 @@ describe("DraftSubmissionFlow submit gates", () => {
               : Promise.resolve({ repositoryStatus: "not_git", branches: [] }),
       });
       const read = place.browser.refreshProjects();
+      expectGate(flow, "preference-restore", "Restoring your last session setup…");
       await flow.submit();
       expect(context.sessions.createResult).not.toHaveBeenCalled();
       discovery.reject(new Error("Project discovery unavailable"));
@@ -198,7 +199,7 @@ describe("DraftSubmissionFlow submit gates", () => {
       place.restorePreferenceSelections();
 
       expect(place.preferenceSelection().projectId).toBe("registered");
-      expect(flow.canSubmit()).toBe(false);
+      expectGate(flow, "preference-restore", "Your saved project didn’t load. Choose a workspace.");
       await flow.submit();
       await flow.submit(undefined, true);
       expect(context.sessions.createResult).not.toHaveBeenCalled();
@@ -209,7 +210,9 @@ describe("DraftSubmissionFlow submit gates", () => {
         projects = Promise.resolve({
           projects: [{ id: "registered", displayName: "Registered", source: "registered" }],
         });
-        await place.browser.refreshProjects();
+        const retry = place.browser.refreshProjects();
+        expectGate(flow, "preference-restore", "Restoring your last session setup…");
+        await retry;
         place.restorePreferenceSelections();
         availability.resolve({ current: true, worktree: true });
         await availability.promise;

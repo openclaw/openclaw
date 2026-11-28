@@ -5,6 +5,7 @@ import { setTimeout as sleep } from "node:timers/promises";
 import type { UpdateRunParams } from "../../packages/gateway-protocol/src/index.js";
 import { GATEWAY_SERVER_CAPS } from "../../packages/gateway-protocol/src/server-capabilities.js";
 import { formatCliCommand } from "../cli/command-format.js";
+import { recordCliGatewayRunFailure } from "../cli/failure-output.js";
 import {
   assertGlobalUpdateOwner,
   requestUpdateDowngradeConfirmation,
@@ -45,10 +46,6 @@ import { readTrial, resolvePrefix } from "./store.js";
 import { resolveTarget } from "./target.js";
 
 const POLL_MS = 2_000;
-/** Earlier updaters' runtime cleanup is advisory: no new deletion starts after this. */
-const RETAINED_RUNTIME_BUDGET_MS = 2 * 60_000;
-/** Below this `--timeout`, cleanup could take more than a tenth of the update's budget. */
-const RETAINED_RUNTIME_MIN_TIMEOUT_MS = 10 * RETAINED_RUNTIME_BUDGET_MS;
 /** Prepare, plus a trial that includes the boot migration. */
 const RUN_DEADLINE_MS = PREPARE_DEADLINE_MS + 30 * 60_000;
 const UPDATE_TIMEOUT_MESSAGE =
@@ -340,93 +337,57 @@ export async function runReleaseUpdateCli(opts: ReleaseUpdateOptions): Promise<v
     opts.sha && upstreamRef
       ? { kind: "git" as const, upstreamRef, upstreamSha: opts.sha }
       : undefined;
-  // Like the releases prepareUpdate collects, an earlier updater's leftover is removed before
-  // this update starts; afterwards the release launcher would count as a possible holder.
-  // A census cannot be interrupted (Windows allows it 15 s), so a short --timeout skips cleanup.
-  if (remainingUpdateBudget(deadline) >= RETAINED_RUNTIME_MIN_TIMEOUT_MS) {
-    for (const line of await reclaimRetainedUpdateRuntimes(opts.runningRoot)) {
-      // The cleanup owner already logs each runtime it keeps.
-      if (line.startsWith("Runtime retained at ")) {
-        continue;
-      }
-      if (opts.json) {
-        defaultRuntime.error(line);
-      } else {
-        defaultRuntime.log(line);
-      }
-    }
-  }
   // Explicit package targets stay local: update.run cannot carry them without a protocol change.
   // --no-restart prepares in this process; the release starts at the Gateway's next start.
-  const request =
+  let request =
     opts.restart && !opts.tag ? await requestGatewayUpdate(target, opts, deadline) : null;
-  let record = request
-    ? await followRun(request.runId, request.connection, opts.json, deadline)
-    : await updateWithoutGateway(opts, deadline);
-  if (
-    request &&
-    !request.supportsConsent &&
-    opts.acceptCapabilities &&
-    (record?.status === "succeeded" || record?.status === "skipped")
-  ) {
-    // Shipped Gateways reject unknown fields. Update once with the old request, then
-    // apply consent through the now-new Gateway's existing already-current/plugin path.
-    const retry = await requestGatewayUpdate(target, opts, deadline, record);
-    record = retry ? await followRun(retry.runId, retry.connection, opts.json, deadline) : record;
-  }
-  if (opts.tag && opts.restart && record && isPendingActivation(record)) {
-    const connection = await requestLocalGatewayRestart(deadline).catch((error: unknown) => {
-      // Publication already succeeded; its pending trial remains valid for the
-      // launcher's next start even when this client's restart budget expires.
-      if (error === deadline.expired) {
-        return null;
-      }
-      throw error;
-    });
-    if (connection) {
-      const releaseAdmission = opts.json ? record.origin.releaseAdmission : undefined;
-      record = (await followRun(record.runId, connection, opts.json, deadline)) ?? record;
-      // The local preparer recorded admission; the Gateway follow-up carries only wire fields.
-      if (record && releaseAdmission) {
-        record = { ...record, origin: { ...record.origin, releaseAdmission } };
+  let record: UpdateRunRecord | undefined;
+  try {
+    record = request
+      ? await followRun(request.runId, request.connection, opts.json, deadline)
+      : await updateWithoutGateway(opts, deadline);
+    if (
+      request &&
+      !request.supportsConsent &&
+      opts.acceptCapabilities &&
+      (record?.status === "succeeded" || record?.status === "skipped")
+    ) {
+      // Shipped Gateways reject unknown fields. Update once with the old request, then
+      // apply consent through the now-new Gateway's existing already-current/plugin path.
+      const retry = await requestGatewayUpdate(target, opts, deadline, record);
+      if (retry) {
+        // Consent starts another run; failed observation must not report the old ID.
+        request = retry;
+        record = await followRun(retry.runId, retry.connection, opts.json, deadline);
       }
     }
+    if (opts.tag && opts.restart && record && isPendingActivation(record)) {
+      const connection = await requestLocalGatewayRestart(deadline).catch((error: unknown) => {
+        // Publication already succeeded; its pending trial remains valid for the
+        // launcher's next start even when this client's restart budget expires.
+        if (error === deadline.expired) {
+          return null;
+        }
+        throw error;
+      });
+      if (connection) {
+        const releaseAdmission = opts.json ? record.origin.releaseAdmission : undefined;
+        record = (await followRun(record.runId, connection, opts.json, deadline)) ?? record;
+        // The local preparer recorded admission; the Gateway follow-up carries only wire fields.
+        if (record && releaseAdmission) {
+          record = { ...record, origin: { ...record.origin, releaseAdmission } };
+        }
+      }
+    }
+  } catch (error) {
+    recordCliGatewayRunFailure(error, request?.runId);
+    throw error;
   }
-  report(record, opts.json);
+  report(record, opts.json, request?.runId);
   process.exitCode =
     record?.status === "succeeded" || record?.status === "skipped" || isPendingActivation(record)
       ? 0
       : 1;
-}
-
-/**
- * Removes the runtime an earlier in-place updater retained (shipped updaters promise that the
- * next update does). Doctor's owner decides custody from the runtime's owner record and the
- * process census. It runs in this command, not the Gateway: the census is synchronous, and
- * without an owner record it cannot tell the requesting `openclaw update` from an old updater.
- */
-async function reclaimRetainedUpdateRuntimes(runningRoot: string): Promise<string[]> {
-  const deadline = Date.now() + RETAINED_RUNTIME_BUDGET_MS;
-  try {
-    const { prepareRetainedUpdateRuntimeMaintenance } =
-      await import("../commands/doctor-retained-runtime.js");
-    // This command's temp directories and the system one; Doctor also reads the service's.
-    const maintain = await prepareRetainedUpdateRuntimeMaintenance(process.env, {
-      inspectService: false,
-      packageRoots: [runningRoot],
-    });
-    // Doctor also fences its own process's workers; this command never loads code from
-    // another updater's runtime.
-    return await maintain(true, {
-      assertCurrent: () => {
-        if (Date.now() >= deadline) {
-          throw new Error("cleanup ran out of time; the next update retries");
-        }
-      },
-    });
-  } catch (error) {
-    return [`Could not inspect retained updater runtimes: ${formatErrorMessage(error)}`];
-  }
 }
 
 async function requestLocalGatewayRestart(
@@ -526,6 +487,9 @@ async function requestGatewayUpdate(
           ? ` Only the requested update channel was saved: update.channel is now "${opts.channel}" for this state directory. Run \`openclaw config set update.channel <previous channel>\` to restore it.`
           : "";
       throw new Error(`${response.message ?? "The Gateway refused the update."}${savedChannel}`);
+    }
+    if (!opts.json) {
+      defaultRuntime.log(`Update run: ${response.runId}`);
     }
     return { runId: response.runId, supportsConsent, connection };
   } catch (error) {
@@ -639,9 +603,9 @@ function isPendingActivation(record: UpdateRunRecord | undefined) {
   return record?.status === "running" && record.phase === "activating";
 }
 
-function report(record: UpdateRunRecord | undefined, json: boolean) {
+function report(record: UpdateRunRecord | undefined, json: boolean, runId?: string) {
   if (json) {
-    defaultRuntime.writeJson(record ?? { status: "unknown" });
+    defaultRuntime.writeJson(record ?? { status: "unknown", ...(runId ? { runId } : {}) });
     return;
   }
   // The CLI stopped following before the run finished (its --timeout budget); the run goes on.

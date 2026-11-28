@@ -8,6 +8,7 @@ import {
   findDecisionReason,
   normalizeDecisionReason,
 } from "../../packages/media-understanding-common/src/format.js";
+import type { RunMediaUnderstandingFileResult } from "../../packages/media-understanding-common/src/types.js";
 import { resolveAgentDir, resolveDefaultAgentDir } from "../agents/agent-scope.js";
 import { resolveImageCompressionModelPolicy } from "../agents/image-compression-policy.js";
 import type { OpenClawConfig } from "../config/types.js";
@@ -43,9 +44,9 @@ import type {
   DescribeVideoFileParams,
   ExtractStructuredWithModelParams,
   RunMediaUnderstandingFileParams,
-  RunMediaUnderstandingFileResult,
   TranscribeAudioFileParams,
 } from "./runtime-types.js";
+export type { RunMediaUnderstandingFileResult } from "../../packages/media-understanding-common/src/types.js";
 export type {
   DescribePreparedImageWithModelParams,
   DescribeImageFileParams,
@@ -54,7 +55,6 @@ export type {
   DescribeVideoFileParams,
   ExtractStructuredWithModelParams,
   RunMediaUnderstandingFileParams,
-  RunMediaUnderstandingFileResult,
   TranscribeAudioFileParams,
 } from "./runtime-types.js";
 

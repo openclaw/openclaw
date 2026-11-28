@@ -3,7 +3,7 @@ import Vision
 import XCTest
 
 extension OpenClawSnapshotUITests {
-    func verifyApprovalNotificationsNavigation(fromOverview: Bool) async throws {
+    func verifyApprovalNotificationsNavigation() async throws {
         try XCTSkipUnless(
             ProcessInfo.processInfo.environment["OPENCLAW_IOS_APPROVAL_FIXTURE_URL"] != nil,
             "Requires a task-owned synthetic Gateway approval fixture")
@@ -17,24 +17,16 @@ extension OpenClawSnapshotUITests {
         if app.buttons["Not Now"].waitForExistence(timeout: 8) {
             app.buttons["Not Now"].tap()
         }
-        let approvalDialog = app.descendants(matching: .any)["exec-approval-review-scroll"]
-        XCTAssertTrue(approvalDialog.waitForExistence(timeout: 8))
-        XCTAssertTrue(app.buttons["Cancel"].waitForExistence(timeout: 8))
-        app.buttons["Cancel"].tap()
+        XCTAssertFalse(
+            app.descendants(matching: .any).matching(identifier: "chat-session-approval").firstMatch.exists,
+            "A request without session provenance belongs in Settings")
 
-        if fromOverview {
-            try self.selectSidebarDestination("Overview")
-            let approvals = app.buttons.containing(.staticText, identifier: "Pending approvals").firstMatch
-            XCTAssertTrue(approvals.waitForExistence(timeout: 8))
-            approvals.tap()
-        } else {
-            try self.selectSidebarDestination("Settings")
-            let approvals = app.buttons.containing(.staticText, identifier: "Approvals").firstMatch
-            XCTAssertTrue(approvals.waitForExistence(timeout: 8))
-            approvals.tap()
-        }
+        try self.selectSidebarDestination("Settings")
+        let approvals = app.buttons.containing(.staticText, identifier: "Approvals").firstMatch
+        XCTAssertTrue(approvals.waitForExistence(timeout: 8))
+        approvals.tap()
 
-        let origin = fromOverview ? "overview" : "settings"
+        let origin = "settings"
         let review = app.buttons["Review exec approval"].firstMatch
         XCTAssertTrue(review.waitForExistence(timeout: 5))
         review.tap()
@@ -57,9 +49,7 @@ extension OpenClawSnapshotUITests {
             dashboard.waitForExistence(timeout: 8),
             "Notification settings must render in the embedded Dashboard")
         XCTAssertTrue(dashboard.staticTexts["Notifications"].waitForExistence(timeout: 8))
-        XCTAssertFalse(
-            approvalDialog.exists,
-            "The approval being reviewed must not cover Dashboard notification settings")
+        XCTAssertFalse(app.descendants(matching: .any).matching(identifier: "chat-session-approval").firstMatch.exists)
         let close = app.buttons["DashboardPage.Close"]
         XCTAssertTrue(close.exists)
         close.tap()
@@ -68,7 +58,7 @@ extension OpenClawSnapshotUITests {
     }
 
     func agentIdentity(in app: XCUIApplication) -> XCUIElement {
-        app.buttons.matching(identifier: "chat-agent-identity").firstMatch
+        app.descendants(matching: .any).matching(identifier: "chat-agent-identity").firstMatch
     }
 
     func readinessMarker(in app: XCUIApplication) -> XCUIElement {
@@ -79,8 +69,7 @@ extension OpenClawSnapshotUITests {
         switch destination {
         case "overview": app.staticTexts["Agent session"]
         case "chat": app.otherElements["chat-composer-surface"]
-        case "agents": app.buttons["agent-status-filter-menu"]
-        case "settings": app.descendants(matching: .any)["SettingsHub.Fallback"]
+        case "settings": app.descendants(matching: .any)["SettingsHub.Native"]
         case "gateway": app.navigationBars["Gateway"]
         default: self.readinessMarker(in: app)
         }
@@ -202,8 +191,10 @@ extension OpenClawSnapshotUITests {
         XCTAssertGreaterThanOrEqual(element.frame.height + tolerance, minimum, file: file, line: line)
     }
 
+    /// `allowing` is how far a target may reach over its neighbor's empty padding.
     func assertNoHorizontalOverlap(
         _ elements: [XCUIElement],
+        allowing allowedOverlap: CGFloat = 0,
         file: StaticString = #filePath,
         line: UInt = #line)
     {
@@ -211,7 +202,7 @@ extension OpenClawSnapshotUITests {
         for (left, right) in zip(ordered, ordered.dropFirst()) {
             XCTAssertLessThanOrEqual(
                 left.frame.maxX,
-                right.frame.minX + 0.5,
+                right.frame.minX + allowedOverlap + 0.5,
                 "\(left.identifier) overlaps \(right.identifier)",
                 file: file,
                 line: line)
@@ -313,8 +304,15 @@ extension OpenClawSnapshotUITests {
         self.waitForHittable(true, of: destination)
         destination.tap()
 
-        self.waitForHittable(false, of: hideSidebar)
-        XCTAssertTrue(app.buttons["RootTabs.Sidebar.Show"].waitForExistence(timeout: 5), file: file, line: line)
+        if title == "Settings" {
+            XCTAssertTrue(
+                app.descendants(matching: .any)["SettingsHub.Native"].waitForExistence(timeout: 5),
+                file: file,
+                line: line)
+        } else {
+            self.waitForHittable(false, of: hideSidebar)
+            XCTAssertTrue(app.buttons["RootTabs.Sidebar.Show"].waitForExistence(timeout: 5), file: file, line: line)
+        }
     }
 
     func startNewChatFromSidebar(
@@ -465,10 +463,11 @@ extension OpenClawSnapshotUITests {
         XCTAssertEqual(input.value as? String, text)
         send.tap()
 
+        let working = app.descendants(matching: .any)["chat-working-status"]
         let failureContext = { (checkpoint: String) in
             "IOS_RELEASE_CHAT_FAILURE \(stage) \(checkpoint) draft=\(input.value as? String == text) " +
                 "keyboard=\(app.keyboards.firstMatch.exists) reply=\(app.staticTexts[replyMarker].exists) " +
-                "writing=\(app.staticTexts["Writing"].exists) jump=\(app.buttons["Jump to latest reply"].exists) " +
+                "working=\(working.exists) jump=\(app.buttons["Jump to latest reply"].exists) " +
                 "foreground=\(app.state == .runningForeground) input=\(input.exists) " +
                 "transcript=\(app.scrollViews["chat-transcript"].exists) send=\(send.exists)"
         }
@@ -477,16 +476,28 @@ extension OpenClawSnapshotUITests {
         XCTAssertTrue(
             app.staticTexts[replyMarker].waitForExistence(timeout: 60),
             failureContext("reply"))
-        XCTAssertTrue(app.staticTexts["Writing"].waitForNonExistence(timeout: 5))
+        XCTAssertTrue(working.waitForNonExistence(timeout: 5))
     }
 
     func dismissChatKeyboardThroughTranscript(in app: XCUIApplication) throws {
         // Typing can move historical replies off-screen; tap visible text without activating an action.
         let transcript = try self.chatTranscript(in: app)
         let actionQueries = [transcript.buttons, transcript.links]
+        // The header and the composer float over the transcript, and XCUI still reports text under
+        // them as hittable: tap only text between them, where a tap reaches the transcript.
+        let headerControls = ["RootTabs.Sidebar.Show", "chat-agent-identity"]
+            .map { app.descendants(matching: .any)[$0].firstMatch }
+        let headerBottom = headerControls
+            .filter(\.exists)
+            .map(\.frame.maxY)
+            .max() ?? transcript.frame.minY
+        let composer = app.descendants(matching: .any)["chat-composer-surface"].firstMatch
+        let composerTop = composer.exists ? composer.frame.minY : transcript.frame.maxY
         let dismissalText = try XCTUnwrap(
             transcript.staticTexts.allElementsBoundByIndex.first { candidate in
                 guard candidate.isHittable,
+                      candidate.frame.minY >= headerBottom,
+                      candidate.frame.maxY <= composerTop,
                       !candidate.buttons.firstMatch.exists,
                       !candidate.links.firstMatch.exists
                 else {
@@ -506,18 +517,11 @@ extension OpenClawSnapshotUITests {
         file: StaticString = #filePath,
         line: UInt = #line) throws
     {
-        let actions = try XCTUnwrap(self.app?.buttons["Chat actions"], file: file, line: line)
-        XCTAssertTrue(actions.waitForExistence(timeout: 8), file: file, line: line)
-        actions.tap()
-
         let app = try XCTUnwrap(self.app, file: file, line: line)
-        let gatewaySettings = app.buttons["chat-gateway-settings"]
-        let actionsMenu = app.collectionViews.firstMatch
-        for _ in 0..<3 {
-            if gatewaySettings.waitForExistence(timeout: 1) { break }
-            actionsMenu.swipeUp()
-        }
-        XCTAssertTrue(gatewaySettings.waitForExistence(timeout: 3), file: file, line: line)
+        self.tapSidebarReveal(in: app, file: file, line: line)
+        let gatewaySettings = app.buttons["RootTabs.Sidebar.GatewaySettings"]
+        XCTAssertTrue(gatewaySettings.waitForExistence(timeout: 5), file: file, line: line)
+        self.waitForHittable(true, of: gatewaySettings)
         gatewaySettings.tap()
     }
 
@@ -693,26 +697,129 @@ extension OpenClawSnapshotUITests {
         }
     }
 
+    /// The picker sheet opens at its medium detent; drag its title bar up to the large one.
+    func expandModelPickerSheet(in app: XCUIApplication) {
+        let bar = app.navigationBars["Model"]
+        XCTAssertTrue(bar.waitForExistence(timeout: 3), app.debugDescription)
+        bar.coordinate(withNormalizedOffset: CGVector(dx: 0.5, dy: 0.5)).press(
+            forDuration: 0.1,
+            thenDragTo: app.coordinate(withNormalizedOffset: CGVector(dx: 0.5, dy: 0.05)))
+    }
+
+    /// Provider accounts is the picker's last row; the composer can also offer a sign-in shortcut.
+    func pickerSignInRow(in app: XCUIApplication) -> XCUIElement {
+        let signIn = app.buttons.matching(NSPredicate(
+            format: "identifier == %@ AND label == %@", "chat-model-sign-in", "Provider accounts")).element
+        if !signIn.waitForExistence(timeout: 2) {
+            self.expandModelPickerSheet(in: app)
+        }
+        XCTAssertTrue(signIn.waitForExistence(timeout: 3), app.debugDescription)
+        return signIn
+    }
+
+    /// The phone composer shows its model and effort chips while the draft is focused.
+    func inlineModelChip(in app: XCUIApplication) -> XCUIElement {
+        let input = self.chatMessageInput(in: app)
+        XCTAssertTrue(input.waitForExistence(timeout: 8))
+        input.tap()
+        return app.buttons["chat-composer-inline-model"]
+    }
+
+    /// Opens a provider in the model picker card and returns one of its model rows.
+    func pickerModelRow(_ selectionID: String, provider: String, in app: XCUIApplication) -> XCUIElement {
+        let providerRow = app.buttons["chat-model-picker-provider-\(provider)"]
+        if !providerRow.waitForExistence(timeout: 2) {
+            self.expandModelPickerSheet(in: app)
+        }
+        XCTAssertTrue(providerRow.waitForExistence(timeout: 3), app.debugDescription)
+        providerRow.tap()
+        let row = app.buttons["chat-model-picker-model-\(selectionID)"]
+        XCTAssertTrue(row.waitForExistence(timeout: 3), app.debugDescription)
+        return row
+    }
+
+    /// The "+" opens a system sheet: photos with the camera first, Photo Library and Files, then skills and
+    /// connectors. Permissions stay with the shield.
+    func verifyComposerAddSheet(in app: XCUIApplication) {
+        let attachmentButton = app.buttons["chat-attachment-picker"]
+        attachmentButton.tap()
+        let addSheet = app.descendants(matching: .any)["chat-composer-add-sheet"]
+        XCTAssertTrue(addSheet.waitForExistence(timeout: 3))
+        for id in ["chat-composer-add-photo-library", "chat-composer-add-files"] {
+            XCTAssertTrue(app.buttons[id].waitForExistence(timeout: 3), id)
+            XCTAssertTrue(app.buttons[id].isEnabled, id)
+        }
+        XCTAssertTrue(app.buttons["chat-composer-add-camera"].exists)
+        XCTAssertTrue(app.buttons["chat-composer-add-skills"].exists)
+        XCTAssertTrue(app.buttons["chat-composer-add-connectors"].exists)
+        XCTAssertFalse(app.buttons["Permissions"].exists)
+        XCTAssertFalse(app.switches["chat-composer-web-search"].exists, "Web search stays with the shield")
+        self.attachScreenshot(named: "chat-composer-add-sheet")
+
+        app.buttons["chat-composer-add-skills"].tap()
+        XCTAssertTrue(app.buttons["chat-composer-skill-autoreview"].waitForExistence(timeout: 3))
+        XCTAssertFalse(
+            app.buttons["chat-composer-skill-disabled-fixture"].exists,
+            "A skill off on the host isn't offered")
+        self.attachScreenshot(named: "chat-composer-skills")
+        app.buttons["chat-composer-skill-switches"].tap()
+        XCTAssertTrue(app.switches["chat-composer-skill-switch-autoreview"].waitForExistence(timeout: 3))
+        self.closeAddSheetFromPushedPage(in: app, through: ["Skills", "Use a skill"])
+        XCTAssertTrue(addSheet.waitForNonExistence(timeout: 3))
+
+        attachmentButton.tap()
+        app.buttons["chat-composer-add-connectors"].tap()
+        XCTAssertTrue(app.buttons["chat-composer-connector-GitHub"].waitForExistence(timeout: 3))
+        XCTAssertTrue(app.buttons["chat-composer-connector-Linear"].exists)
+        self.attachScreenshot(named: "chat-composer-connectors")
+        app.buttons["chat-composer-connector-GitHub"].tap()
+        XCTAssertTrue(app.switches["chat-composer-connector-switch"].waitForExistence(timeout: 3))
+        XCTAssertTrue(app.switches["chat-composer-tool-search_code"].exists)
+        XCTAssertTrue(app.switches["chat-composer-tool-create_issue"].exists)
+        self.attachScreenshot(named: "chat-composer-connector")
+        self.closeAddSheetFromPushedPage(in: app, through: ["GitHub", "Connectors"])
+        XCTAssertTrue(addSheet.waitForNonExistence(timeout: 3))
+    }
+
+    /// A pushed page in the + sheet has no close; Back returns to the root, whose close is at the leading edge.
+    func closeAddSheetFromPushedPage(in app: XCUIApplication, through pages: [String]) {
+        let close = app.buttons["chat-composer-add-close"]
+        XCTAssertFalse(close.exists, "Only the + sheet's root page carries a close button")
+        for page in pages {
+            let back = app.navigationBars[page].buttons.element(boundBy: 0)
+            XCTAssertTrue(back.waitForExistence(timeout: 3), "\(page) has a back button")
+            back.tap()
+        }
+        XCTAssertTrue(close.waitForExistence(timeout: 3))
+        XCTAssertLessThan(close.frame.midX, app.frame.midX, "The close button sits at the leading edge")
+        close.tap()
+    }
+
     func verifyComposerMenus(in app: XCUIApplication) {
         let inlinePermissions = app.buttons["chat-composer-inline-permissions"]
         let inlineEffort = app.buttons["chat-composer-inline-effort"]
         let contextUsage = app.buttons["chat-context-usage"]
-        let attachmentButton = app.buttons["chat-attachment-picker"]
+        // The side margin stays outside the menus and the transcript's interactive content.
+        let outsideMenu = app.coordinate(withNormalizedOffset: CGVector(dx: 0.01, dy: 0.4))
         inlinePermissions.tap()
-        XCTAssertTrue(app.buttons["Default (inherited)"].waitForExistence(timeout: 3))
-        XCTAssertTrue(app.buttons["Read-only"].waitForExistence(timeout: 3))
-        XCTAssertTrue(app.buttons["Guarded"].waitForExistence(timeout: 3))
-        XCTAssertTrue(app.buttons["Workspace"].waitForExistence(timeout: 3))
-        XCTAssertTrue(app.buttons["Full"].waitForExistence(timeout: 3))
+        for mode in ["default", "read-only", "guarded", "workspace", "full"] {
+            XCTAssertTrue(app.buttons["chat-composer-permission-\(mode)"].waitForExistence(timeout: 3))
+        }
+        XCTAssertTrue(app.switches["chat-composer-web-search"].exists)
         self.attachScreenshot(named: "chat-composer-permissions")
-        app.coordinate(withNormalizedOffset: CGVector(dx: 0.5, dy: 0.2)).tap()
+        app.buttons["chat-composer-permissions-close"].tap()
+        self.chatMessageInput(in: app).tap()
 
         inlineEffort.tap()
-        XCTAssertTrue(app.buttons["Thinking"].waitForExistence(timeout: 3))
-        XCTAssertTrue(app.buttons["Fast"].waitForExistence(timeout: 3))
+        XCTAssertTrue(app.descendants(matching: .any)["chat-effort-bar-slider"].waitForExistence(timeout: 3))
+        XCTAssertTrue(app.buttons["Fast"].exists)
+        XCTAssertFalse(app.buttons["Default (inherited)"].exists, "The effort bar shows only levels")
         self.attachScreenshot(named: "chat-composer-effort")
-        app.coordinate(withNormalizedOffset: CGVector(dx: 0.5, dy: 0.2)).tap()
+        outsideMenu.tap()
+        XCTAssertTrue(app.descendants(matching: .any)["chat-effort-bar"].waitForNonExistence(timeout: 3))
 
+        app.buttons["Chat actions"].tap()
+        XCTAssertTrue(contextUsage.waitForExistence(timeout: 3))
         contextUsage.tap()
         XCTAssertTrue(
             app.descendants(matching: .any)["24.0k of 128.0k tokens used"]
@@ -720,99 +827,16 @@ extension OpenClawSnapshotUITests {
         let compactThread = app.buttons["Compact Thread"]
         XCTAssertTrue(compactThread.waitForExistence(timeout: 3))
         XCTAssertTrue(compactThread.isEnabled)
-        app.coordinate(withNormalizedOffset: CGVector(dx: 0.5, dy: 0.2)).tap()
+        outsideMenu.tap()
+        if app.buttons["Export chat"].exists {
+            outsideMenu.tap()
+        }
+        self.chatMessageInput(in: app).tap()
 
-        attachmentButton.tap()
-        let photoLibrary = app.buttons["Photo Library"]
-        XCTAssertTrue(photoLibrary.waitForExistence(timeout: 3))
-        XCTAssertTrue(photoLibrary.isEnabled)
-        XCTAssertTrue(app.buttons["Camera"].waitForExistence(timeout: 3))
-        let mediaFile = app.buttons["File"]
-        XCTAssertTrue(mediaFile.waitForExistence(timeout: 3))
-        XCTAssertTrue(mediaFile.isEnabled)
-        XCTAssertTrue(app.buttons["Verbosity"].waitForExistence(timeout: 3))
-        XCTAssertTrue(app.buttons["Web Search"].waitForExistence(timeout: 3))
-        XCTAssertTrue(app.buttons["Skills"].waitForExistence(timeout: 3))
-        XCTAssertTrue(app.buttons["Connectors"].waitForExistence(timeout: 3))
-        XCTAssertFalse(app.buttons["Permissions"].exists)
-        XCTAssertEqual(
-            app.buttons.matching(NSPredicate(format: "label == %@", "Model")).count,
-            1)
-        XCTAssertFalse(app.buttons["Thinking"].exists)
-        XCTAssertFalse(app.buttons["Fast"].exists)
-        XCTAssertFalse(self.app?.buttons["Voice Memo"].exists == true)
-        self.attachScreenshot(named: "chat-composer-capabilities")
-        self.app?.coordinate(withNormalizedOffset: CGVector(dx: 0.5, dy: 0.2)).tap()
-
-        attachmentButton.tap()
-        app.buttons["Skills"].tap()
-        XCTAssertTrue(app.buttons["Auto Review"].waitForExistence(timeout: 3))
-        let disabledSkill = app.buttons["Disabled Skill — Disabled in the Gateway configuration."]
-        XCTAssertTrue(disabledSkill.waitForExistence(timeout: 3))
-        XCTAssertFalse(disabledSkill.isEnabled)
-        self.attachScreenshot(named: "chat-composer-skills")
-        self.app?.coordinate(withNormalizedOffset: CGVector(dx: 0.5, dy: 0.2)).tap()
-
-        attachmentButton.tap()
-        app.buttons["Connectors"].tap()
-        XCTAssertTrue(app.buttons["GitHub"].waitForExistence(timeout: 3))
-        XCTAssertTrue(app.buttons["Linear"].waitForExistence(timeout: 3))
-        self.attachScreenshot(named: "chat-composer-connectors")
-        app.buttons["GitHub"].tap()
-        XCTAssertTrue(app.buttons["Enabled for this session"].waitForExistence(timeout: 3))
-        XCTAssertTrue(app.buttons["Tool Access"].waitForExistence(timeout: 3))
-        app.buttons["Tool Access"].tap()
-        XCTAssertTrue(app.buttons["Search code"].waitForExistence(timeout: 3))
-        XCTAssertTrue(app.buttons["Create issue"].waitForExistence(timeout: 3))
-        self.attachScreenshot(named: "chat-composer-tool-access")
-        self.app?.coordinate(withNormalizedOffset: CGVector(dx: 0.5, dy: 0.2)).tap()
+        self.verifyComposerAddSheet(in: app)
         self.attachScreenshot(named: "chat-composer-compact")
     }
 
-    func verifyModelSelection(in app: XCUIApplication, actions: XCUIElement, popover: XCUIElement) {
-        let expandedProviderDrawer = app.buttons["chat-model-provider-drawer-openai"]
-        XCTAssertTrue(expandedProviderDrawer.waitForExistence(timeout: 5))
-        expandedProviderDrawer.tap()
-        let collapsedProviderDrawer = app.buttons["chat-model-provider-drawer-openai"]
-        self.waitForValue("Collapsed", of: collapsedProviderDrawer)
-        let anthropicDrawer = app.buttons["chat-model-provider-drawer-anthropic"]
-        XCTAssertTrue(anthropicDrawer.waitForExistence(timeout: 5))
-        self.assertMinimumTouchTarget(anthropicDrawer)
-        XCTAssertEqual(anthropicDrawer.value as? String, "Collapsed")
-        anthropicDrawer.tap()
-        let expandedAnthropicDrawer = app.buttons["chat-model-provider-drawer-anthropic"]
-        self.waitForValue("Expanded", of: expandedAnthropicDrawer)
-        let nonDefaultModel = app.buttons["anthropic/claude-opus-4-1"]
-        XCTAssertTrue(nonDefaultModel.waitForExistence(timeout: 5))
-        XCTAssertTrue(nonDefaultModel.images["chat-model-provider-icon-anthropic"].exists)
-        self.assertMinimumTouchTarget(nonDefaultModel)
-        nonDefaultModel.tap()
-        XCTAssertTrue(popover.waitForNonExistence(timeout: 3))
-
-        actions.tap()
-        let selectedNextModel = app.buttons["anthropic/claude-opus-4-1"]
-        XCTAssertTrue(selectedNextModel.waitForExistence(timeout: 5))
-        XCTAssertEqual(selectedNextModel.value as? String, "Selected")
-        XCTAssertGreaterThan(
-            selectedNextModel.images["chat-menu-selection-checkmark"].frame.minX,
-            selectedNextModel.frame.midX)
-        let restoredDefaultModel = app.buttons["Default: openai/gpt-5.6-sol"]
-        XCTAssertTrue(restoredDefaultModel.waitForExistence(timeout: 5))
-        restoredDefaultModel.tap()
-        XCTAssertTrue(popover.waitForNonExistence(timeout: 3))
-
-        actions.tap()
-        let reselectedDefaultModel = app.buttons["Default: openai/gpt-5.6-sol"]
-        XCTAssertTrue(reselectedDefaultModel.waitForExistence(timeout: 5))
-        XCTAssertEqual(reselectedDefaultModel.value as? String, "Selected")
-        XCTAssertGreaterThan(
-            reselectedDefaultModel.images["chat-menu-selection-checkmark"].frame.minX,
-            reselectedDefaultModel.frame.midX)
-    }
-
-    /// A fresh simulator can show this system alert before the scene becomes active.
-    /// Screenshot fixtures do not exercise notification authorization; leave the
-    /// readiness assertion intact and answer only that specific launch prompt.
     func dismissScreenshotNotificationPrompt() {
         let springboard = XCUIApplication(bundleIdentifier: "com.apple.springboard")
         let alert = springboard.alerts.firstMatch
