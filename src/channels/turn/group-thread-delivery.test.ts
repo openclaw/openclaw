@@ -116,6 +116,7 @@ it.each([false, true])(
         observeMessageSent: true,
         ...(prepared ? { durable: { to: "chat-1" } } : {}),
         deliver,
+        deliverPrepared: (plan) => deliver(plan.payload),
       },
     });
     expectDispatched(result);
