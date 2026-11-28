@@ -212,7 +212,7 @@ export abstract class ChatPaneReactions extends ChatPaneSharingActions {
     ) {
       return;
     }
-    // Pending offline writes remain presentation-only until the Gateway accepts them.
+    // Pending writes remain presentation-only until the Gateway accepts them.
     const messageReactions = projectChatMessageReactions(snapshot.messages, this.reactionServer);
     const entries = Object.entries(messageReactions);
     if (
@@ -273,7 +273,16 @@ export abstract class ChatPaneReactions extends ChatPaneSharingActions {
       state.sessionKey === sessionKey &&
       (selectedChatSessionRow(state)?.sessionId ?? state.currentSessionId) === sessionId;
     const key = `reaction:${sessionKey}:${messageId}:${emoji}`;
-    let pending: PendingReaction | undefined;
+    const self = gatewayPresentationScope(gateway).displayUser;
+    const pending: PendingReaction | undefined =
+      self?.identity?.type === "profile"
+        ? { messageId, emoji, remove, identity: { id: self.identity.id, label: self.name } }
+        : undefined;
+    if (pending) {
+      // Project the latest click before dispatch, including before a superseded intent is discarded.
+      this.reactionPending.set(key, pending);
+      this.publishReactions();
+    }
     const run = async (requestClient: NonNullable<typeof client>) => {
       const publicationScope = deferredOwner ? this.captureConnectionScope() : scope;
       const revision = this.reactionRevisions.get(messageId) ?? 0;
@@ -309,32 +318,29 @@ export abstract class ChatPaneReactions extends ChatPaneSharingActions {
           showToast({ severity: "error", message: formatUiError(error) });
         }
       } finally {
-        if (ownsTarget()) {
-          if (pending && this.reactionPending.get(key) === pending) {
-            this.reactionPending.delete(key);
-          }
-          if (this.reactionWrites.get(messageId) === operation) {
-            this.reactionWrites.delete(messageId);
-          }
+        // A reconnect can replace the client without replacing this presentation scope.
+        const removePending = pending && this.reactionPending.get(key) === pending;
+        if (removePending) {
+          this.reactionPending.delete(key);
+        }
+        if (this.reactionWrites.get(messageId) === operation) {
+          this.reactionWrites.delete(messageId);
+        }
+        if (removePending || ownsTarget()) {
           this.publishReactions();
         }
       }
     };
     if (!scope || deferredOwner) {
-      const self = deferredOwner?.displayUser;
-      if (self?.identity?.type !== "profile") {
+      if (!pending) {
         return;
       }
-      pending = { messageId, emoji, remove, identity: { id: self.identity.id, label: self.name } };
       const discard = () => {
         if (ownsTarget() && this.reactionPending.get(key) === pending) {
           this.reactionPending.delete(key);
           this.publishReactions();
         }
       };
-      // Install the replacement before the queue discards its superseded intent.
-      this.reactionPending.set(key, pending);
-      this.publishReactions();
       const agentId = resolveChatAgentId(state);
       if (
         !context.gateway.defer({

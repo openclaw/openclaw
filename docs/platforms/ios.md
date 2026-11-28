@@ -27,7 +27,7 @@ The app requires iOS 26.2 or iPadOS 26.2 or later.
 - Queues text messages sent while disconnected in a durable per-gateway outbox (up to 50): queued bubbles show in the transcript, flush in order on reconnect without duplicating sends on retries, remain durable until saved history confirms the send, retry with backoff before surfacing a retry/delete action, and expire instead of sending after 48 hours offline; reset/forget clears the queue with the cache.
 - Long-press a queued or **Not sent** message and choose **Edit** to move its text and attachments back into the composer, below anything you already typed. Edit is unavailable while the message is sending or confirming, or when delivery is unknown, because the Gateway may already have it. If the Gateway rejects a message on its final attempt, or it expires before it was ever sent, and chat history loaded afterward on the same connection does not contain it, the message returns to an empty, visible composer automatically with a **Not sent: … Your message is back in the composer.** note; otherwise it stays **Not sent** with Edit.
 - Send text while a reply is running: tapping Send uses the Gateway's configured queue mode, and `/steer` works as a normal slash command. Touch and hold Send to use the opposite action for that message: **Steer now** when the default is Queue, or **Queue next** when it is Steer. Both choices appear if the Gateway uses another mode or does not report its default. The follow-up appears immediately with its delivery status while the current reply keeps streaming. A menu choice survives reconnect and does not change the session default. Attachments and local session reset/compact commands still wait for the current reply to finish.
-- Chat is the single text-and-voice surface. Chat actions can open the full Sessions screen without leaving Chat and can show or hide assistant reasoning and tool activity. Tap the microphone for draft dictation, open its menu to record a voice note, or use the inline Talk control for realtime voice; the Talk control animates from live microphone or playback level while listening or speaking.
+- Chat is the single text-and-voice surface. Chat actions can open the full Sessions screen without leaving Chat. In **Settings → Chat**, choose whether to show assistant reasoning and tool activity. Tap the microphone for draft dictation, open its menu to record a voice note, or use the inline Talk control for realtime voice; the Talk control animates from live microphone or playback level while listening or speaking.
 - Assistant reasoning is visible only with `/reasoning on` and the local **Show reasoning & tool activity** setting enabled. `/reasoning off` hides it after history reload and relaunch. Tool activity follows the local setting independently.
 - Sessions has **Active**, **Snoozed**, **Automations**, and **Archived** scopes. **All Sessions** includes the current agent’s existing main conversation alongside other chats; **Home** remains its permanent sidebar shortcut. Snoozed sessions stay out of the active sidebar and Overview until they wake.
 - Agent narration appears inline as each segment finishes, including after reconnect. Narration, tool activity, and the reply stay grouped in one response. Compact-width layouts hide the assistant avatar to leave more room for text; regular-width layouts keep a single top-aligned avatar. Completed standalone bubbles use sender-side tails where the avatar is hidden, and accessible reply containers retain the assistant’s name. Completed chat turns keep all assistant text and media visible in place on iPhone and iPad. Contiguous tool activity and reasoning fold into separate **Worked** disclosures between the visible parts. Collapsed headings list operation kinds and failed, blocked, skipped, or unknown outcomes; expanding a section also shows its total tool-call count. Tap one to inspect that stretch of work; loading older history keeps expanded sections open. Active or unanswered work stays expanded.
@@ -93,15 +93,16 @@ Finish recording or delivering attachments and send or clear the current draft
 before using the quick picker. It does not move drafts to another Gateway.
 **Approvals** opens the native approval inbox and shows the pending count.
 
-An icon beside a native sidebar session shows whether its oldest pending request
-is a question or an approval. It opens a compact preview and the number of
-additional requests of that kind. The agent and section headings summarize their sessions, including
-requests outside the visible recent-session list. Tap an icon, activate it with
-a keyboard, or use VoiceOver to read the details without switching chats.
-Questions stay available when navigating away from Chat. Completed, cancelled,
-and expired requests disappear from these previews; answer and credential drafts
-never appear. Gateway administration approvals open their existing Dashboard
-review page, while native exec and plugin approvals keep their existing actions.
+**Needs approval** marks sessions with an approval waiting. A dot on the
+sidebar button signals that another session needs approval. Open that session
+to review the card above the composer. Requests without a known session are
+available in **Settings → Approvals**. Gateway administration approvals still
+open their Dashboard review page.
+
+A question icon opens a preview without switching chats. The agent and section
+headings summarize questions from their sessions, including those outside the
+recent list. Completed, cancelled, and expired requests disappear from these
+indicators. Answer and credential drafts never appear in previews.
 
 The Gateway must serve Dashboard pages that support the companion iOS app.
 If a loaded Settings page does not report that support, a native banner asks you

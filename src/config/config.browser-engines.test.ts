@@ -1,4 +1,6 @@
-import { describe, expect, it } from "vitest";
+import { describe, expect, it, vi } from "vitest";
+import { z } from "zod";
+import { OpenClawSchema } from "./zod-schema.js";
 import { OpenClawSchemaShape } from "./zod-schema.root-shape.js";
 
 const externalProfile = {
@@ -6,6 +8,21 @@ const externalProfile = {
   cdpUrl: "ws://127.0.0.1:9222/",
   attachOnly: true,
 };
+
+it("constructs the profile name validator once, when the browser shape is needed", () => {
+  const browser = OpenClawSchemaShape.browser.unwrap();
+  const clone = browser.clone();
+  using profileNameRegex = vi.spyOn(z.ZodString.prototype, "regex", "get");
+
+  expect(OpenClawSchema.safeParse({}).success).toBe(true);
+  expect(profileNameRegex).not.toHaveBeenCalled();
+  expect(OpenClawSchema.safeParse({ browser: {} }).success).toBe(true);
+  expect(profileNameRegex).toHaveBeenCalledTimes(1);
+
+  expect(clone.shape.profiles).toBe(browser.shape.profiles);
+  expect(browser.toJSONSchema().properties).toHaveProperty("profiles");
+  expect(profileNameRegex).toHaveBeenCalledTimes(1);
+});
 
 describe.each(["lightpanda", "kitesurf"] as const)("%s browser engine config", (engine) => {
   it.each([

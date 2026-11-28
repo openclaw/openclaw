@@ -97,7 +97,7 @@ export const AssistantPanelContent = defineSolidBridge<Props>(
   {
     properties: {
       active: { default: false, type: Boolean },
-      destination: { default: "custodian" },
+      destination: { default: "custodian", reflect: true },
       sessionKey: { default: "" },
       agentId: { default: "" },
       sessionContext: { default: undefined, attribute: false },

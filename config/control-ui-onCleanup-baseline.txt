@@ -33,7 +33,6 @@ ui/src/pages/chat/components/chat-position-rail-controller.ts	1
 ui/src/pages/chat/session-prefetch.ts	1
 ui/src/pages/chat/solid-render-lifecycle.ts	1
 ui/src/pages/meetings/meetings-page.tsx	1
-ui/src/pages/model-setup/native-model-setup.tsx	1
 ui/src/pages/model-setup/rpc.ts	1
 ui/src/pages/plugin/plugin-page.tsx	1
 ui/src/pages/plugins/plugin-discovery.ts	2

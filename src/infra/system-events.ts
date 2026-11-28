@@ -662,9 +662,8 @@ export function consumeSelectedSystemEventEntries(
 export function adoptSelectedSystemEventEntries(
   sessionKey: string,
   consumedEntries: readonly SystemEvent[],
-  options?: { deferredEventIds?: readonly string[] },
 ): SystemEvent[] {
-  return consumeSelectedSystemEventEntriesCore(sessionKey, consumedEntries, options, true);
+  return consumeSelectedSystemEventEntriesCore(sessionKey, consumedEntries, undefined, true);
 }
 
 function consumeSelectedSystemEventEntriesCore(
@@ -678,8 +677,8 @@ function consumeSelectedSystemEventEntriesCore(
   if (!entry || entry.queue.length === 0 || consumedEntries.length === 0) {
     return [];
   }
-  // Prompt admission can defer captured occurrences to a delivery owner. Selection
-  // still resolves against the live queue, in captured order, never late arrivals.
+  // Consumers can retain captured occurrences while consuming the returned selection.
+  // Selection resolves against the live queue, in captured order, never late arrivals.
   const deferredIds = new Set(options?.deferredEventIds);
   const selected: SystemEvent[] = [];
   const retired: SystemEvent[] = [];

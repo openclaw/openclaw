@@ -166,7 +166,7 @@ describe("X allowlist Gateway methods", () => {
       expect(await invoke("x.allowlist.add", { username: "maintainer" })).toHaveBeenCalledWith(
         false,
         undefined,
-        { code: "UNAVAILABLE", message: refusal.message },
+        { code: "UNAVAILABLE", message: refusal.message, details: { xBudgetResumesAt: 1 } },
       );
     }
     expect(logger.error).not.toHaveBeenCalled();
@@ -544,12 +544,17 @@ describe("X allowlist Gateway methods", () => {
 
   it("rejects invalid handles and unknown accounts without making paid lookups", async () => {
     const { invoke } = gateway();
-    for (const params of [
-      { username: "https://x.com/person" },
-      { username: "person", accountId: "missing" },
-    ]) {
-      expectError(await invoke("x.allowlist.add", params), "INVALID_REQUEST");
-    }
+    expect(
+      await invoke("x.allowlist.add", { username: "https://x.com/person" }),
+    ).toHaveBeenCalledWith(
+      false,
+      undefined,
+      expect.objectContaining({ code: "INVALID_REQUEST", details: { xHandleRequired: true } }),
+    );
+    expectError(
+      await invoke("x.allowlist.add", { username: "person", accountId: "missing" }),
+      "INVALID_REQUEST",
+    );
     expect(getUserByUsername).not.toHaveBeenCalled();
   });
 });

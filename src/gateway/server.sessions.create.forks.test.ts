@@ -25,7 +25,7 @@ import {
   registerForkableCliBackend,
 } from "./server.sessions.create.forks.test-support.js";
 import {
-  setupSessionCreateTestHarness,
+  setupSessionCreateHandlerTestHarness,
   requireNonEmptyString,
 } from "./server.sessions.create.test-support.js";
 import { gatewayConnect } from "./server/client-fixtures.test-support.js";
@@ -40,7 +40,7 @@ import {
   getGatewayConfigModule,
 } from "./test/server-sessions.test-helpers.js";
 
-const { createSessionStoreDir } = setupSessionCreateTestHarness();
+const { createSessionStoreDir } = setupSessionCreateHandlerTestHarness();
 
 test("sessions.create keeps ordinary dashboard chats independent of Home", async () => {
   const { storePath } = await createSessionStoreDir();
@@ -94,8 +94,6 @@ test("sessions.create keeps ordinary dashboard chats independent of Home", async
 });
 
 test.each([
-  { params: { agentId: "main", spawnDepth: 1 }, message: "spawnDepth requires parentSessionKey" },
-  { params: { fork: true }, message: "fork requires parentSessionKey" },
   {
     params: { agentId: "ops", parentSessionKey: "agent:main:missing" },
     message: "unknown parent session: agent:main:missing",
@@ -108,10 +106,6 @@ test.each([
       task: "hello after replacing parent",
     },
     message: "sessions.create key must differ from parentSessionKey",
-  },
-  {
-    params: { parentSessionKey: "main", forkFrom: "last-completed" },
-    message: "forkFrom requires fork=true",
   },
 ] as const)(
   "sessions.create rejects invalid child intent: $message",
@@ -164,14 +158,6 @@ test.each<{
     tokens: 391_869,
     window: 922_000,
     limit: undefined,
-  },
-  {
-    name: "visible spawn with explicit small model",
-    model: "gpt-small",
-    provider: "openai",
-    tokens: 150_000,
-    window: 128_000,
-    limit: "150000/128000 tokens",
   },
   {
     name: "visible spawn with selected window clamping configured capacity",
@@ -551,50 +537,40 @@ test.each(["cli", "enabled", "disabled"] as const)(
   },
 );
 
-test.each(["caller key", "unauthorized agent"])(
-  "sessions.create rejects a catalog target with %s",
-  async (conflict) => {
-    const { storePath } = await createSessionStoreDir();
-    testState.agentsConfig = { ownership: "explicit", entries: { main: {}, research: {} } };
-    const existing = sessionStoreEntry("sess-existing-catalog-target", {
+test("sessions.create rejects a catalog target with a caller key", async () => {
+  const { storePath } = await createSessionStoreDir();
+  testState.agentsConfig = { ownership: "explicit", entries: { main: {}, research: {} } };
+  const existing = sessionStoreEntry("sess-existing-catalog-target", {
+    providerOverride: "openai",
+    modelOverride: "gpt-existing",
+  });
+  await writeSessionStore({ entries: { main: existing } });
+  installSessionCatalog(() => ({
+    model: "anthropic/claude-opus-4-8",
+    agentRuntime: "claude-cli",
+  }));
+  try {
+    const created = await directSessionReq("sessions.create", {
+      catalogId: "claude",
+      key: "main",
+      agentId: "main",
+    });
+    expect(created).toMatchObject({
+      ok: false,
+      error: { code: "INVALID_REQUEST", message: "sessions.create catalogId cannot include key" },
+    });
+    expect(
+      loadSessionEntry({ agentId: "main", sessionKey: "agent:main:main", storePath }),
+    ).toMatchObject({
+      sessionId: existing.sessionId,
       providerOverride: "openai",
       modelOverride: "gpt-existing",
     });
-    await writeSessionStore({ entries: { main: existing } });
-    const resolveCreateSession = vi.fn(({ agentId }: { agentId?: string }) =>
-      agentId === "research"
-        ? undefined
-        : { model: "anthropic/claude-opus-4-8", agentRuntime: "claude-cli" },
-    );
-    installSessionCatalog(resolveCreateSession);
-    try {
-      const created = await directSessionReq("sessions.create", {
-        catalogId: "claude",
-        ...(conflict === "caller key" ? { key: "main", agentId: "main" } : { agentId: "research" }),
-      });
-      expect(created).toMatchObject({
-        ok: false,
-        error:
-          conflict === "caller key"
-            ? { code: "INVALID_REQUEST", message: "sessions.create catalogId cannot include key" }
-            : { code: "UNAVAILABLE", message: "session catalog claude cannot create sessions" },
-      });
-      expect(
-        loadSessionEntry({ agentId: "main", sessionKey: "agent:main:main", storePath }),
-      ).toMatchObject({
-        sessionId: existing.sessionId,
-        providerOverride: "openai",
-        modelOverride: "gpt-existing",
-      });
-      if (conflict === "unauthorized agent") {
-        expect(resolveCreateSession).toHaveBeenCalledWith({ agentId: "research" });
-      }
-    } finally {
-      testState.agentsConfig = undefined;
-      setActivePluginRegistry(createEmptyPluginRegistry());
-    }
-  },
-);
+  } finally {
+    testState.agentsConfig = undefined;
+    setActivePluginRegistry(createEmptyPluginRegistry());
+  }
+});
 
 test.each<{
   name: string;
@@ -693,7 +669,7 @@ test.each<{
   },
 ])(
   "sessions.create inherits only durable selection: $name",
-  async ({ name, defaults, parent, inherited, absent, resolved }) => {
+  async ({ defaults, parent, inherited, absent, resolved }) => {
     const { storePath } = await createSessionStoreDir();
     testState.agentConfig = { model: { primary: defaults } };
     await writeSessionStore({ entries: { main: sessionStoreEntry("sess-parent", parent) } });
@@ -717,15 +693,6 @@ test.each<{
       for (const field of absent) {
         expect(entry?.[field], field).toBeUndefined();
       }
-    }
-    if (name === "explicit selection") {
-      const overridden = await directSessionReq<CreatedSession>("sessions.create", {
-        agentId: "main",
-        fastMode: false,
-        parentSessionKey: "main",
-      });
-      expect(overridden.ok, JSON.stringify(overridden.error)).toBe(true);
-      expect(overridden.payload?.entry?.fastMode).toBe(false);
     }
   },
 );

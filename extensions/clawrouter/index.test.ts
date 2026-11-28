@@ -622,6 +622,17 @@ describe("ClawRouter plugin", () => {
       provider.buildReplayPolicy?.({ provider: "clawrouter", modelApi, modelId } as never),
     ).toMatchObject(expected);
   });
+
+  it("uses native reasoning for Gemini GenerateContent only", () => {
+    const context = { provider: "clawrouter", modelId: "google/gemini-4-neon" };
+    expect(
+      provider.resolveReasoningOutputMode?.({ ...context, modelApi: "google-generative-ai" }),
+    ).toBe("native");
+    expect(
+      provider.resolveReasoningOutputMode?.({ ...context, modelApi: "openai-completions" }),
+    ).toBeUndefined();
+  });
+
   function toolSchema(name: string, parameters: unknown) {
     return [{ name, description: "Test tool", parameters }];
   }

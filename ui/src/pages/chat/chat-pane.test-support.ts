@@ -118,15 +118,10 @@ export type TestChatPane = HTMLElement &
     retireHeaderSessionMutations: () => void;
     createSession: () => Promise<boolean>;
     restoreArchivedSession: (sessionKey: string, expectedSessionId: string) => Promise<void>;
-    resolveTaskSuggestion: ChatPaneRuntime["resolveTaskSuggestion"];
-    copyTaskSuggestionPrompt: ChatPaneRuntime["copyTaskSuggestionPrompt"];
     handleDocumentKeydown: (event: KeyboardEvent) => void;
-    handleTaskSuggestionEvent: ChatPaneRuntime["handleTaskSuggestionEvent"];
-    refreshTaskSuggestions: () => Promise<void>;
     refreshSessionPullRequests: (options?: { refresh?: boolean; automatic?: boolean }) => boolean;
     sessionPullRequests: ControlUiSessionPullRequest[];
     sessionPullRequestsBranch: ControlUiSessionBranch | undefined;
-    suggestionChatProps: ChatPaneRuntime["suggestionChatProps"];
     addCurrentSessionSuggestion: () => Promise<void>;
     resetSessionSuggestions: () => void;
     sessionSuggestionsRefreshPromise: Promise<void> | undefined;
@@ -141,6 +136,7 @@ export type TestChatPane = HTMLElement &
     sendTypingState: (typing: boolean, preview?: string, cursor?: number) => void;
     refreshSessionSuggestions: () => Promise<void>;
     resolveCurrentSessionSuggestion: ChatPaneRuntime["resolveCurrentSessionSuggestion"];
+    sessionSuggestionChatProps: ChatPaneRuntime["sessionSuggestionChatProps"];
     deferSessionHydrationUntilTranscript: ChatPaneRuntime["deferSessionHydrationUntilTranscript"];
     catalogItemMessage: ChatPaneRuntime["catalogItemMessage"];
     handleTranscriptScroll: (event: Event) => void;

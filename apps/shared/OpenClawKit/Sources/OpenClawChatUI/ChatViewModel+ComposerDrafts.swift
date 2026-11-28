@@ -83,6 +83,8 @@ extension OpenClawChatViewModel {
         self.composerDraftAttachmentPositions = [:]
         self.composerDraftSync.insertingAttachmentIDs = []
         self.composerDraftKey = nil
+        // A tile still preparing or failed belongs to the chat being left; its read is dropped.
+        self.preparingAttachments = []
         self.applyComposerDraft(text: "", attachments: [])
     }
 
@@ -319,7 +321,7 @@ extension OpenClawChatViewModel {
                 guard self.attachments.contains(where: { $0.id == id }) else { return }
                 self.errorText = String(
                     format: String(
-                        localized: "Could not save %@ with this draft. Send or remove it before switching chats."),
+                        localized: "Couldn’t save %@ with this draft. Send or remove it before switching chats."),
                     stored.fileName)
             }
         }

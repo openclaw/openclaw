@@ -11,7 +11,6 @@ import {
   validateWorkerInferenceEventFrame,
 } from "../../../packages/gateway-protocol/src/schema/worker-inference.js";
 import type { BoundAgentRunSessionTarget } from "../../agents/run-session-target.types.js";
-import { boundedJsonUtf8Bytes } from "../../infra/json-utf8-bytes.js";
 import { hasSqliteWorkerOutcomeUnknown } from "../../infra/sqlite-worker-contract.js";
 import { runWithGatewayIndependentRootWorkContinuation } from "../../process/gateway-work-admission.js";
 import type { WorkerConnectionIdentity, WorkerInferenceExecutor } from "./connection-identity.js";
@@ -128,7 +127,7 @@ export function createWorkerInferenceManager(options: WorkerInferenceManagerOpti
     if (unknownSettlements.has(entry.storeKey)) {
       return "provider-error";
     }
-    const bindingError = matchesIdentity(entry.identity, entry.request);
+    const bindingError = matchesIdentity(entry.identity, entry.storeInput);
     if (bindingError) {
       return bindingError;
     }
@@ -292,7 +291,10 @@ export function createWorkerInferenceManager(options: WorkerInferenceManagerOpti
     recovered,
     settleAbort,
   });
-  const executeEntry = async (entry: ActiveInference): Promise<void> => {
+  const executeEntry = async (
+    entry: ActiveInference,
+    request: WorkerInferenceStartParams,
+  ): Promise<void> => {
     const initialFence = durableFence(entry);
     if (initialFence) {
       if (entry.authorityFailure && hasSqliteWorkerOutcomeUnknown(entry.authorityFailure.error)) {
@@ -310,7 +312,7 @@ export function createWorkerInferenceManager(options: WorkerInferenceManagerOpti
     try {
       outcome = await options.execute({
         identity: entry.identity,
-        request: entry.request,
+        request,
         sessionTarget: entry.sessionTarget,
         signal: entry.controller.signal,
         emit: (event) => {
@@ -324,10 +326,10 @@ export function createWorkerInferenceManager(options: WorkerInferenceManagerOpti
             type: "event",
             event: "worker.inference.event",
             payload: {
-              runEpoch: entry.request.runEpoch,
-              sessionId: entry.request.sessionId,
-              runId: entry.request.runId,
-              turnId: entry.request.turnId,
+              runEpoch: entry.storeInput.runEpoch,
+              sessionId: entry.storeInput.sessionId,
+              runId: entry.storeInput.runId,
+              turnId: entry.storeInput.turnId,
               seq: nextSeq,
               event,
             },
@@ -369,26 +371,27 @@ export function createWorkerInferenceManager(options: WorkerInferenceManagerOpti
     await joinInferenceOperations([finish(entry, outcome)], failure ? [failure.error] : []);
   };
   const launchEntry = (entry: ActiveInference): void => {
+    const request = entry.request;
     if (
-      entry.launched ||
+      !request ||
       entry.settled ||
       entry.abortReason ||
       controls.isStopping() ||
-      controls.isDraining(entry.request.sessionId)
+      controls.isDraining(entry.storeInput.sessionId)
     ) {
       return;
     }
-    entry.launched = true;
+    entry.request = undefined;
     // Register the raw operation before executor callbacks can reserve a drain.
     const operation = track(
       runWithGatewayIndependentRootWorkContinuation(
-        () => Promise.resolve().then(() => executeEntry(entry)),
+        () => Promise.resolve().then(() => executeEntry(entry, request)),
         "worker:dispatch",
       ),
       entry.storeInput,
     );
     entry.execution = operation;
-    providers.set(operation, entry.request.sessionId);
+    providers.set(operation, entry.storeInput.sessionId);
     void operation.then(
       () => providers.delete(operation),
       (error: unknown) => {
@@ -454,6 +457,7 @@ export function createWorkerInferenceManager(options: WorkerInferenceManagerOpti
       },
     };
   };
+  // Consumes the validated, freshly decoded worker request.
   const start = async (params: {
     identity: WorkerConnectionIdentity;
     request: WorkerInferenceStartParams;
@@ -491,24 +495,25 @@ export function createWorkerInferenceManager(options: WorkerInferenceManagerOpti
     ) {
       return { ok: false, reason: "provider-error" };
     }
-    if (!boundedJsonUtf8Bytes(params.request, requestMaxBytes).complete) {
+    // For decoded, finite JSON, ordering keys changes the hash bytes but never the size.
+    const serialized = stableStringify(params.request);
+    if (Buffer.byteLength(serialized) > requestMaxBytes) {
       return { ok: false, reason: "invalid-context" };
     }
-    const serialized = stableStringify(params.request);
     const claimKey = serializeWorkerSessionTurnClaim(params.identity.turnClaim!);
-    const hash = createHash("sha256").update(`${claimKey}\0${serialized}`).digest("hex");
+    const hash = createHash("sha256").update(`${claimKey}\0`).update(serialized).digest("hex");
     // An explicit retry reconciles a known failure through durable begin/replay.
     // A new identity may replace an uncertain predecessor only after its raw work
     // settles; the predecessor's own key remains fenced above.
     for (const previous of active.values()) {
-      if (previous.request.sessionId === params.request.sessionId && previous.failure) {
+      if (previous.storeInput.sessionId === params.request.sessionId && previous.failure) {
         forget(previous);
       }
     }
     const existing = active.get(claimKey);
     if (
       existing &&
-      existing.request.turnId === params.request.turnId &&
+      existing.storeInput.turnId === params.request.turnId &&
       existing.storeInput.requestHash === hash &&
       !existing.settled
     ) {
@@ -525,7 +530,7 @@ export function createWorkerInferenceManager(options: WorkerInferenceManagerOpti
         : replayResult(existing, existing.terminalOutcome!, params.sink);
     }
     for (const concurrent of active.values()) {
-      if (concurrent.request.sessionId !== params.request.sessionId) {
+      if (concurrent.storeInput.sessionId !== params.request.sessionId) {
         continue;
       }
       const fence = durableFence(concurrent);
@@ -542,7 +547,7 @@ export function createWorkerInferenceManager(options: WorkerInferenceManagerOpti
       claimKey,
       storeKey: inferenceTurnKey(params.request),
       identity: params.identity,
-      request: structuredClone(params.request),
+      request: params.request,
       sessionTarget: params.sessionTarget,
       storeInput: {
         environmentId: params.identity.environmentId,
@@ -560,7 +565,6 @@ export function createWorkerInferenceManager(options: WorkerInferenceManagerOpti
       controller: new AbortController(),
       seq: 0,
       streamedBytes: 0,
-      launched: false,
       settled: false,
     };
     // Register before recovery or BEGIN can yield, so Stop and drains own pending admissions.
@@ -607,12 +611,12 @@ export function createWorkerInferenceManager(options: WorkerInferenceManagerOpti
         }
         const fence = durableFence(entry);
         // An accepted drain owns cancellation; its pending acknowledgment stays inert.
-        if (fence || (controls.isStopping() && !controls.isDraining(entry.request.sessionId))) {
+        if (fence || (controls.isStopping() && !controls.isDraining(entry.storeInput.sessionId))) {
           await settleAbort(entry, fence ?? "cancelled");
           return acceptedResult(entry, params.sink);
         }
         const running = [...providers.values()].filter(
-          (sessionId) => sessionId === entry.request.sessionId,
+          (sessionId) => sessionId === entry.storeInput.sessionId,
         ).length;
         if (running >= MAX_PROVIDER_OPERATIONS_PER_SESSION) {
           entry.replay = true;
@@ -645,7 +649,7 @@ export function createWorkerInferenceManager(options: WorkerInferenceManagerOpti
       forget(failed);
     }
     const entry = active.get(claimKey);
-    if (entry?.request.turnId === params.request.turnId) {
+    if (entry?.storeInput.turnId === params.request.turnId) {
       await settleAbort(entry, "cancelled");
     } else {
       await track(

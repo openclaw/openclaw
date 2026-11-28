@@ -170,24 +170,21 @@ describe("delivery-owned system event selection", () => {
       enqueue("Restart first", { contextKey: "task:restart-sentinel:first" });
       enqueue("Newer instruction second");
       const captured = peekEntries(sessionKey);
-      const retainedId = expectDefined(captured[0]?.id, "captured restart occurrence ID");
       if (consumed) {
         consumeSelected(sessionKey, captured);
       }
       enqueue("Late arrival third");
       const text = await drainFormattedEvents(sessionKey, {
         events: captured,
-        deferredEventIds: [retainedId],
       });
       if (consumed) {
         expect(text).toBeUndefined();
       } else {
+        expect(text).toContain("Restart first");
         expect(text?.indexOf("Restart first")).toBeLessThan(
           text!.indexOf("Newer instruction second"),
         );
         expect(text).not.toContain("Late arrival third");
-        expect(peekSystemEvents(sessionKey)).toEqual(["Restart first", "Late arrival third"]);
-        consumeSelected(sessionKey, [captured[0]!]);
       }
       expect(peekSystemEvents(sessionKey)).toEqual(["Late arrival third"]);
     },

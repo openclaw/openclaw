@@ -88,9 +88,15 @@ describe("one-shot cron run background work", () => {
     );
     // The command exits after the run ended: refused once, and no turn reaches the model.
     await waitFor(() => {
-      expect(logs()).toContain("completion was not admitted (cron run has ended");
+      const failures = logs()
+        .split("\n")
+        .filter((line) => line.includes("[exec] completion delivery failed"));
+      expect(failures).toEqual([
+        expect.stringContaining(
+          "normal session; cron run has ended; inspect the result in its run record",
+        ),
+      ]);
     }, 60_000);
-    expect(logs().split("completion was not admitted").length - 1).toBe(1);
     expect(await laterRequests()).toEqual([]);
   }, 240_000);
 

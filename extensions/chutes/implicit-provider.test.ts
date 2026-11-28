@@ -1,5 +1,5 @@
 import { registerSingleProviderPlugin } from "openclaw/plugin-sdk/plugin-test-runtime";
-import { resolveOAuthApiKeyMarker } from "openclaw/plugin-sdk/provider-auth";
+import { resolveOAuthApiKeyMarker, type OAuthCredential } from "openclaw/plugin-sdk/provider-auth";
 import { afterEach, expect, it, vi } from "vitest";
 import plugin from "./index.js";
 import { CHUTES_BASE_URL } from "./models.js";
@@ -26,6 +26,44 @@ afterEach(() => vi.unstubAllGlobals());
 it("publishes the env vars used by core api-key auto-detection", async () => {
   const provider = await registerSingleProviderPlugin(plugin);
   expect(provider.envVars).toEqual(["CHUTES_API_KEY", "CHUTES_OAUTH_TOKEN"]);
+});
+
+it("matches Chutes reconnects only by UserInfo subject in the same OAuth client", async () => {
+  const provider = await registerSingleProviderPlugin(plugin);
+  const matches = provider.auth.find(({ id }) => id === "oauth")?.matchesSharedAccount;
+  const saved: OAuthCredential = {
+    type: "oauth",
+    provider: "chutes",
+    access: "fixture-access",
+    refresh: "fixture-refresh",
+    expires: 1,
+    email: "fixture-user",
+    accountId: "Subject",
+    clientId: "fixture-client",
+  };
+  expect(matches?.({ ...saved, email: "renamed-user", access: "rotated-access" }, saved)).toBe(
+    true,
+  );
+  for (const other of [
+    { ...saved, accountId: "subject" },
+    { ...saved, accountId: undefined },
+    { ...saved, clientId: "another-client" },
+    { ...saved, clientId: undefined },
+    { ...saved, issuer: "https://other.example.test" },
+    { ...saved, provider: "other" },
+    { type: "api_key", provider: "chutes", key: "fixture-key" } as const,
+  ]) {
+    expect(matches?.(saved, other)).toBe(false);
+    expect(matches?.(other, saved)).toBe(false);
+  }
+  for (const unknown of [
+    { ...saved, accountId: " " },
+    { ...saved, accountId: undefined },
+    { ...saved, clientId: " " },
+    { ...saved, issuer: "https://other.example.test" },
+  ]) {
+    expect(matches?.(unknown, unknown)).toBe(false);
+  }
 });
 
 it("renews an OAuth credential through the registered hook with caller config", async () => {

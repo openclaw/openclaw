@@ -1,5 +1,5 @@
 import { execFile } from "node:child_process";
-import { open, readdir } from "node:fs/promises";
+import { open, readdir, readFile } from "node:fs/promises";
 import { setImmediate } from "node:timers/promises";
 import {
   DarwinProcessInspectionError,
@@ -15,6 +15,7 @@ export type PosixProcess = {
   pgid: number;
   state: string;
   startedAt: string;
+  startTimeMicros?: number;
 };
 
 /** A zombie leader can still own running threads, reported by the ps-style l flag. */
@@ -25,6 +26,7 @@ export function isDeadProcessState(state: string): boolean {
 const PROCESS_COLUMNS = "pid=,ppid=,pgid=,stat=,lstart=";
 const MAX_PROCESS_CONTAINMENT_MS = 2_000;
 const PROCESS_INSPECTION_MAX_BYTES = 8 * 1024 * 1024;
+const PROC_STAT_BATCH_SIZE = 128;
 
 export class ProcessInspectionError extends Error {
   constructor(readonly reason: "deadline" | "permission" | "unavailable") {
@@ -51,6 +53,10 @@ function remainingInspectionTime(deadline: number): number {
   return remainingMs;
 }
 
+function procErrorCode(error: unknown): unknown {
+  return error && typeof error === "object" && "code" in error ? error.code : undefined;
+}
+
 function inspectionFailure(error: unknown): ProcessInspectionError {
   if (error instanceof DarwinProcessInspectionError) {
     return new ProcessInspectionError(error.reason);
@@ -58,7 +64,7 @@ function inspectionFailure(error: unknown): ProcessInspectionError {
   if (error instanceof ProcessInspectionError) {
     return error;
   }
-  const code = error && typeof error === "object" && "code" in error ? error.code : undefined;
+  const code = procErrorCode(error);
   // Every abort signal in this reader is owned by its inspection deadline.
   return new ProcessInspectionError(
     code === "ABORT_ERR"
@@ -70,12 +76,8 @@ function inspectionFailure(error: unknown): ProcessInspectionError {
 }
 
 function isMissingProcess(error: unknown): boolean {
-  return (
-    error !== null &&
-    typeof error === "object" &&
-    "code" in error &&
-    (error.code === "ENOENT" || error.code === "ESRCH")
-  );
+  const code = procErrorCode(error);
+  return code === "ENOENT" || code === "ESRCH";
 }
 
 export async function readCodexAppServerProcessSnapshot(
@@ -109,6 +111,7 @@ export async function readCodexAppServerProcess(
 export async function readCodexAppServerProcessCommand(
   observed: PosixProcess,
   deadline: number,
+  purpose?: "startup",
 ): Promise<string> {
   let output: string;
   if (process.platform === "linux") {
@@ -141,7 +144,10 @@ export async function readCodexAppServerProcessCommand(
       }
     } while (pending);
   } else if (process.platform === "darwin") {
-    output = await readDarwinProcessCommandLine(observed.pid, deadline).catch((error: unknown) => {
+    output = await readDarwinProcessCommandLine(
+      purpose === "startup" ? observed : observed.pid,
+      deadline,
+    ).catch((error: unknown) => {
       throw inspectionFailure(error);
     });
   } else {
@@ -168,12 +174,13 @@ function readProcesses(
   if (process.platform === "darwin") {
     return readDarwinProcessSnapshot(deadline, pids)
       .then((rows) =>
-        rows.map(({ pid, ppid, pgid, state, startedAt }) => ({
+        rows.map(({ pid, ppid, pgid, state, startedAt, startTimeMicros }) => ({
           pid,
           ppid,
           pgid,
           state,
           startedAt,
+          startTimeMicros,
         })),
       )
       .catch((error: unknown) => {
@@ -273,38 +280,57 @@ function readLinuxProcesses(
   deadline: number,
 ): Promise<PosixProcess[]> {
   return withinInspectionDeadline(deadline, async () => {
-    // The sequential scan consumes each record before reusing its buffer.
-    const buffer = Buffer.allocUnsafe(4096);
     const bootId = parseLinuxBootId(
-      (await readProcFile("/proc/sys/kernel/random/boot_id", deadline, buffer)).toString("utf8"),
+      (await readFile("/proc/sys/kernel/random/boot_id")).toString("utf8"),
     );
     remainingInspectionTime(deadline);
-    const entries = selected ? selected.map(String) : await readdir("/proc");
-    const rows: PosixProcess[] = [];
-    let bytes = 0;
-    for (const entry of entries) {
-      if (!/^\d+$/.test(entry)) {
-        continue;
-      }
-      let stat: Buffer;
+    const entries = (selected?.map(String) ?? (await readdir("/proc"))).filter((entry) =>
+      /^\d+$/.test(entry),
+    );
+    let remainingBytes = PROCESS_INSPECTION_MAX_BYTES;
+    const readStat = async (entry: string) => {
+      remainingInspectionTime(deadline);
       try {
-        stat = await readProcFile(
-          `/proc/${entry}/stat`,
-          deadline,
-          buffer,
-          PROCESS_INSPECTION_MAX_BYTES - bytes,
-        );
+        // proc_pid_stat emits a bounded task name and a fixed number of integer
+        // fields, so one read can collect the entire kernel record.
+        const stat = await readFile(`/proc/${entry}/stat`);
+        if (stat.length > remainingBytes) {
+          throw new ProcessInspectionError("unavailable");
+        }
+        remainingBytes -= stat.length;
+        return parseLinuxProcess(stat.toString("utf8"), entry, bootId, selected !== undefined);
       } catch (error) {
         // A process can exit between enumeration and read; denial never proves exit.
         if (isMissingProcess(error)) {
-          continue;
+          return undefined;
         }
         throw error;
       }
-      bytes += stat.length;
-      const row = parseLinuxProcess(stat.toString("utf8"), entry, bootId, selected !== undefined);
-      if (row) {
-        rows.push(row);
+    };
+    const rows: PosixProcess[] = [];
+    // Bound descriptors and scratch space while sharing wakeups across independent reads.
+    let batchSize = PROC_STAT_BATCH_SIZE;
+    for (let offset = 0; offset < entries.length;) {
+      const batch = entries.slice(offset, offset + batchSize);
+      offset += batch.length;
+      const results = await Promise.allSettled(batch.map(readStat));
+      for (const [slot, result] of results.entries()) {
+        let row: PosixProcess | undefined;
+        if (result.status === "fulfilled") {
+          row = result.value;
+        } else {
+          const code = procErrorCode(result.reason);
+          if (batch.length === 1 || (code !== "EMFILE" && code !== "ENFILE")) {
+            throw result.reason;
+          }
+          // The batch has closed its handles. A host with one spare descriptor
+          // can finish the same census serially, within its original deadline.
+          batchSize = 1;
+          row = await readStat(batch[slot]!);
+        }
+        if (row) {
+          rows.push(row);
+        }
       }
     }
     return rows;
@@ -375,12 +401,7 @@ async function withinInspectionDeadline<T>(deadline: number, read: () => Promise
   return value;
 }
 
-async function readProcFile(
-  file: string,
-  deadline: number,
-  scratch: Buffer,
-  maxBytes = PROCESS_INSPECTION_MAX_BYTES,
-): Promise<Buffer> {
+async function readProcFile(file: string, deadline: number, scratch: Buffer): Promise<Buffer> {
   // No runtime launch: procfs reads cannot load ambient preloads or project config.
   remainingInspectionTime(deadline);
   const handle = await open(file, "r");
@@ -392,7 +413,7 @@ async function readProcFile(
       const { bytesRead } = await handle.read(
         buffer,
         bytes,
-        Math.min(buffer.length - bytes, maxBytes - bytes + 1),
+        Math.min(buffer.length - bytes, PROCESS_INSPECTION_MAX_BYTES - bytes + 1),
         null,
       );
       remainingInspectionTime(deadline);
@@ -400,11 +421,13 @@ async function readProcFile(
         return buffer.subarray(0, bytes);
       }
       bytes += bytesRead;
-      if (bytes > maxBytes) {
+      if (bytes > PROCESS_INSPECTION_MAX_BYTES) {
         throw new ProcessInspectionError("unavailable");
       }
       if (bytes === buffer.length) {
-        const next = Buffer.allocUnsafe(Math.min(buffer.length * 2, maxBytes + 1));
+        const next = Buffer.allocUnsafe(
+          Math.min(buffer.length * 2, PROCESS_INSPECTION_MAX_BYTES + 1),
+        );
         buffer.copy(next);
         buffer = next;
       }

@@ -29,7 +29,11 @@ function UsageTrack(props: { label?: string; heading?: JSX.Element; children: JS
 
 /** Equal slots compare accounts, not token capacity. Only windows with the same label share a track. */
 export function AccountUsageBars(props: {
-  readings: (AccountUsageRead & { name: () => string; status: () => JSX.Element })[];
+  readings: (AccountUsageRead & {
+    name: () => string;
+    status: () => JSX.Element;
+    planLabel?: () => string | undefined;
+  })[];
   expandedAccount?: string;
   onToggleAccount: (id: string) => void;
   canReorder: boolean;
@@ -229,7 +233,7 @@ export function AccountUsageBars(props: {
           <For each={props.readings}>
             {(read, index) => {
               const id = () => read.account().profileId;
-              const plan = () => read.result().snapshot?.plan?.trim();
+              const plan = () => read.planLabel?.() || read.result().snapshot?.plan?.trim();
               return (
                 <ColumnButton
                   index={index()}
@@ -247,6 +251,13 @@ export function AccountUsageBars(props: {
                   <span class="model-providers__account-name" aria-hidden="true">
                     {read.name()}
                   </span>
+                  <Show when={read.planLabel?.()}>
+                    {(label) => (
+                      <span class="chip" aria-hidden="true">
+                        {label()}
+                      </span>
+                    )}
+                  </Show>
                   {read.status()}
                 </ColumnButton>
               );

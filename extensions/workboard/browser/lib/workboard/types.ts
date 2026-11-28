@@ -74,6 +74,8 @@ export type WorkboardUiState = {
   mutationReadiness: "ready" | "canonical_reload_required" | "stale_edit_draft";
   error: string | null;
   cards: WorkboardCard[];
+  inlinePreviews: Map<WorkboardCard, WorkboardCard>;
+  pendingDrops: Map<string, Pick<WorkboardCard, "status" | "position">>;
   nextCursor: WorkboardCardCursor | null;
   boards: WorkboardBoardSummary[];
   statuses: readonly WorkboardStatus[];

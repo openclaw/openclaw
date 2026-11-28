@@ -758,6 +758,7 @@ class NodeRuntime internal constructor(
   initialForeground: Boolean = true,
   initialReconnectSuppressed: Boolean = false,
   private val externalTranscriptCache: ChatTranscriptCache? = null,
+  private val screenshotSessionList: () -> String? = { null },
 ) {
   private val clientDatabases =
     when (mode) {
@@ -784,6 +785,7 @@ class NodeRuntime internal constructor(
   private val screenshotRequester by lazy {
     AndroidScreenshotFixture.createRequester(
       branchesEnabled = screenshotBranchesEnabled,
+      sessionListOverride = screenshotSessionList,
       onEvent = { event, payload -> chat.handleGatewayEvent(event, payload) },
     )
   }

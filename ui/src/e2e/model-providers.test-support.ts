@@ -5,6 +5,13 @@ import { expect } from "vitest";
 import { takeControlUiViewportScreenshot } from "../test-helpers/control-ui-e2e-screenshot.ts";
 import type { MockGatewayControls, MockGatewayRequest } from "../test-helpers/control-ui-e2e.ts";
 
+export async function openTencentTokenHubKeyForm(page: Page) {
+  await page.locator("[data-models-catalog-search]").fill("tencent-tokenhub");
+  await page.getByRole("button", { name: "Connect: Tencent Cloud", exact: true }).click();
+  await page.getByRole("button", { name: /^Tencent TokenHub API key\b/ }).click();
+  return page.getByRole("dialog", { name: "Add provider" });
+}
+
 export async function openMoreModelSettings(scope: Locator) {
   const more = scope.getByRole("button", { name: "More settings", exact: true });
   if ((await more.getAttribute("aria-expanded")) === "false") {

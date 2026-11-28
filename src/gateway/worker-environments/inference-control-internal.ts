@@ -1,7 +1,6 @@
 import type {
   WorkerInferenceCancelParams,
   WorkerInferenceErrorReason,
-  WorkerInferenceStartParams,
 } from "../../../packages/gateway-protocol/src/schema/worker-inference.js";
 import type { BoundAgentRunSessionTarget } from "../../agents/run-session-target.types.js";
 import { throwCollectedErrors } from "../../infra/error-graph-internal.js";
@@ -81,7 +80,7 @@ export function safeRevalidate(
 
 export function matchesIdentity(
   identity: WorkerConnectionIdentity,
-  request: WorkerInferenceStartParams | WorkerInferenceCancelParams,
+  request: WorkerInferenceCancelParams,
 ): WorkerInferenceErrorReason | null {
   const claim = identity.turnClaim;
   if (
@@ -172,7 +171,7 @@ export function createWorkerInferenceSessionControls(params: {
           continue;
         }
         settling.push(settleAbort(entry, reason));
-        control?.onCancelled?.(entry.request.runId);
+        control?.onCancelled?.(entry.storeInput.runId);
       }
     } catch (error) {
       failure = { error };
@@ -193,15 +192,15 @@ export function createWorkerInferenceSessionControls(params: {
   ): WorkerInferenceCancellation => {
     const captured = captureCancellationEntries(
       (entry) =>
-        entry.request.sessionId === sessionId &&
-        (runId === undefined || entry.request.runId === runId),
+        entry.storeInput.sessionId === sessionId &&
+        (runId === undefined || entry.storeInput.runId === runId),
     );
     const executionSettled = joinInferenceOperations(
       captured.flatMap((entry) => (entry.execution ? [entry.execution] : [])),
     );
     void executionSettled.catch(() => {});
     return {
-      runIds: [...new Set(captured.map((entry) => entry.request.runId))].toSorted(),
+      runIds: [...new Set(captured.map((entry) => entry.storeInput.runId))].toSorted(),
       settled: executionSettled,
       executing: captured.some((entry) => entry.execution !== undefined && !entry.settled),
       cancel(control) {
@@ -222,8 +221,8 @@ export function createWorkerInferenceSessionControls(params: {
   const hasSession = (sessionId: string, runId?: string): boolean =>
     [...active.values()].some(
       (entry) =>
-        entry.request.sessionId === sessionId &&
-        (runId === undefined || entry.request.runId === runId),
+        entry.storeInput.sessionId === sessionId &&
+        (runId === undefined || entry.storeInput.runId === runId),
     );
   const hasSessionOperation = (sessionId: string): boolean =>
     [...operations.values()].some((owner) => owner.sessionId === sessionId);
@@ -232,7 +231,9 @@ export function createWorkerInferenceSessionControls(params: {
     if (drainingSessions.has(sessionId)) {
       throw new WorkerInferenceSessionDrainBusyError(sessionId);
     }
-    const captured = captureCancellationEntries((entry) => entry.request.sessionId === sessionId);
+    const captured = captureCancellationEntries(
+      (entry) => entry.storeInput.sessionId === sessionId,
+    );
     const sessionOperations = [...operations].filter(([, owner]) => owner.sessionId === sessionId);
     const capturedOperations = sessionOperations.map(([operation]) => operation);
     const capturedStoreKeys = new Set([
@@ -282,7 +283,7 @@ export function createWorkerInferenceSessionControls(params: {
   const resolveSessionTargetForRunId = (runId: string): BoundAgentRunSessionTarget | undefined => {
     let target: BoundAgentRunSessionTarget | undefined;
     for (const entry of active.values()) {
-      if (entry.request.runId !== runId) {
+      if (entry.storeInput.runId !== runId) {
         continue;
       }
       const source = entry.sessionTarget;
@@ -309,7 +310,7 @@ export function createWorkerInferenceSessionControls(params: {
     stoppingPromise = stopped.promise;
     const acceptedDrains = new Map(drainingSessions);
     const cancelling = cancelWhere(
-      (entry) => !acceptedDrains.has(entry.request.sessionId),
+      (entry) => !acceptedDrains.has(entry.storeInput.sessionId),
       "provider-error",
     );
     void joinInferenceOperations(

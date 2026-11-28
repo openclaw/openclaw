@@ -1,10 +1,7 @@
+import { getRuntimeContextDataRanges, setRuntimeContextDataRanges } from "@openclaw/llm-core/types";
 import type { AssistantMessageEvent, Context, Model, ToolCall } from "openclaw/plugin-sdk/llm";
 import { expect, it } from "vitest";
 import { mergePluginTextTransforms, wrapStreamFnTextTransforms } from "./plugin-text-transforms.js";
-import {
-  getRuntimeContextDataRanges,
-  setRuntimeContextDataRanges,
-} from "./runtime-context-data-ranges.js";
 import { makeAgentAssistantMessage } from "./test-helpers/agent-message-fixtures.js";
 import { createQueuedAssistantStream } from "./test-helpers/assistant-event-stream.test-support.js";
 

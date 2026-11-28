@@ -7,6 +7,7 @@ import type { OpenClawConfig } from "../../config/types.js";
 import { fetchWithSsrFGuard } from "../../infra/net/fetch-guard.js";
 import type { MediaExecutionContext } from "../../media-understanding/provider-execution.js";
 import type { MediaUnderstandingProvider } from "../../media-understanding/provider-types.js";
+import type { InputProvenance } from "../../sessions/input-provenance.js";
 // Include the shared runtime in the compiled fixture instead of compiling its lazy import mid-test.
 import "../../media-understanding/apply.runtime.js";
 import { prepareAgentImageUnderstanding } from "./agent-image-understanding.js";
@@ -56,9 +57,11 @@ function prepare(
   cfg = configuredVision,
   execution?: MediaExecutionContext,
   source: { channel?: string; chatType?: string } = {},
+  inputProvenance?: InputProvenance,
 ) {
   return prepareAgentImageUnderstanding({
     ...source,
+    ...(inputProvenance ? { inputProvenance } : {}),
     message: "What color is the square?",
     media: [{ path: imagePath, contentType: "image/png", fileName: "square.png" }],
     cfg,
@@ -175,3 +178,62 @@ it.each(["preparation", "adapter"] as const)(
     expect(controller.signal.aborted).toBe(false);
   },
 );
+
+const generatedImage: InputProvenance = { kind: "inter_session", sourceTool: "image_generate" };
+
+it("still describes a generated image when a vision model is configured", async () => {
+  const result = await prepare(configuredVision, undefined, {}, generatedImage);
+  expect(describeImage).toHaveBeenCalledTimes(1);
+  expect(result.message).toBe(
+    "[Image]\nUser text:\nWhat color is the square?\nDescription:\nA red square.",
+  );
+  expect(result.media).toEqual([expect.objectContaining({ hydrationSuppressed: true })]);
+});
+
+it.each(["missing provider", "empty response"] as const)(
+  "continues a generated-image completion without inspection for %s",
+  async (failure) => {
+    if (failure === "empty response") {
+      describeImage.mockResolvedValue({ text: "   " });
+    }
+    const cfg = failure === "missing provider" ? {} : configuredVision;
+    const result = await prepare(cfg, undefined, {}, generatedImage);
+    expect(result).toEqual({
+      message:
+        "What color is the square?\n\n[Generated image not inspected: no vision model produced a description. Do not claim to have inspected its content; refer to it only by what was requested.]",
+      media: [
+        {
+          path: imagePath,
+          contentType: "image/png",
+          fileName: "square.png",
+          hydrationSuppressed: true,
+        },
+      ],
+    });
+  },
+);
+
+it("keeps rejecting undescribed images from other inter-session sources", async () => {
+  await expect(
+    prepare({}, undefined, {}, { kind: "inter_session", sourceTool: "subagent_announce" }),
+  ).rejects.toThrow("Image attachments could not be analyzed.");
+});
+
+it("keeps rejecting revoked authority for a generated-image completion", async () => {
+  let current = true;
+  resolveImageCompressionModelPolicy.mockImplementationOnce(async () => {
+    current = false;
+    return {};
+  });
+  const execution: MediaExecutionContext = {
+    signal: new AbortController().signal,
+    assertCurrent: () => {
+      if (!current) {
+        throw new Error("Request authority expired");
+      }
+    },
+  };
+  await expect(prepare(configuredVision, execution, {}, generatedImage)).rejects.toThrow(
+    "Request authority expired",
+  );
+});

@@ -8,6 +8,7 @@ import {
   hasLongWindowRateLimitEvidence,
   resolveRetryAfterMs,
 } from "../agents/failover/retry-evidence.js";
+import { runOutsidePreparedModelRuntimePluginGenerationScope } from "../agents/prepared-model-runtime-generation-scope.js";
 import { resolveUtilityModelRefForAgent } from "../agents/utility-model.js";
 import {
   ACTIVITY_SUMMARY_FORMAT_REVISION,
@@ -26,6 +27,7 @@ import { formatErrorMessage } from "../infra/errors.js";
 import type { GatewayScheduledJob, GatewayScheduler } from "../infra/gateway-scheduler.js";
 import { pruneMapToMaxSize } from "../infra/map-size.js";
 import { createSubsystemLogger } from "../logging/subsystem.js";
+import { runOutsidePluginRuntimeGenerationScope } from "../plugins/runtime/generation-scope.js";
 import {
   isCronSessionKey,
   isIncognitoSessionKey,
@@ -353,10 +355,11 @@ export function createSessionActivitySummaries(deps: {
         text = text.slice(0, -OMISSION_NOTICE.length).trimEnd();
       }
       const work = notes.length > 0 || Boolean(restyle && text);
-      // The owner's role gates model work before "updating" or a timer; execution's
+      // The owner's authority gates model work before "updating" or a timer; execution's
       // fallback runner still picks the allowed model from this run's chain.
-      const { operatorAuthority, roleRefusesUtility } = work ? await recapAuthority.prepare() : {};
-      if (roleRefusesUtility) {
+      const admission = work ? await recapAuthority.prepare() : {};
+      if (admission.refused) {
+        // A refusal is published, never retried; the next activity asks again.
         publish(state, "unavailable");
         return;
       }
@@ -400,7 +403,7 @@ export function createSessionActivitySummaries(deps: {
             state.calls += 1;
             const result = await defaultCompleteModel({
               ...prepared,
-              operatorAuthority,
+              operatorAuthority: admission.operatorAuthority,
               purpose: "session-activity-summary",
               sessionId: state.sessionId,
               sessionKey: state.key,
@@ -579,7 +582,12 @@ export function createSessionActivitySummaries(deps: {
         continue;
       }
       // Recaps outlive requesting runs, but still owe cleanup to inherited connection work.
-      const work = trackAsyncWork(() => run(state))
+      // They select the current plugin generation, never the finished run's retiring one.
+      const work = trackAsyncWork(() =>
+        runOutsidePreparedModelRuntimePluginGenerationScope(() =>
+          runOutsidePluginRuntimeGenerationScope(() => run(state)),
+        ),
+      )
         .catch((error: unknown) => {
           log.debug("Activity recap background work failed", { error: formatErrorMessage(error) });
         })

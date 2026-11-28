@@ -16,7 +16,6 @@ const mocks = vi.hoisted(() => ({
   bind: vi.fn(),
   delete: vi.fn(),
   list: vi.fn(),
-  exit: vi.fn(),
   verbose: vi.fn(),
   runtime: { log: vi.fn(), error: vi.fn(), exit: vi.fn() },
 }));
@@ -46,7 +45,7 @@ vi.mock("../../runtime.js", async (importOriginal) => ({
 }));
 
 // mock-isolation: One-shot command output must not exit the test process.
-vi.mock("../one-shot-exit.js", () => ({ requestExitAfterOneShotOutput: mocks.exit }));
+vi.mock("../one-shot-exit.js", () => ({ requestExitAfterOneShotOutput: () => undefined }));
 
 const handlers = vi.hoisted(() => ({
   create: vi.fn(),

@@ -324,6 +324,7 @@ jobs:
           import sys
           import tempfile
           import time
+          from contextlib import nullcontext
           from types import TracebackType
 
           linux = os.environ.get("RUNNER_OS", sys.platform) in ("Linux", "linux")
@@ -719,21 +720,37 @@ jobs:
 
 
           def fetch(directory, *refs, prune=False, max_attempts=3, depth=1,
-                    blobless=False, retry_failures=False, retry_codes=()):
+                    blobless=False, retry_failures=False, retry_codes=(), retry_receive_error=False):
               for attempt in range(1, max_attempts + 1):
-                  try:
-                      run_git(directory, "-c", "protocol.version=2", "fetch", "--no-tags",
-                              *(["--prune"] if prune else []), "--no-recurse-submodules", f"--depth={depth}",
-                              *(["--filter=blob:none"] if blobless else []), "origin", *refs,
-                              timeout=fetch_timeout_seconds, reclaim_locks=True)
-                      return
-                  except (FetchTimeout, GitFailure) as error:
-                      check_cancelled()
-                      retryable = isinstance(error, FetchTimeout) or retry_failures or error.code in retry_codes
-                      if not retryable or attempt == max_attempts:
-                          raise
-                      print(f"::warning::checkout fetch failed on attempt {attempt}; retrying", flush=True)
-                      backoff(5)
+                  # A regular file cannot fill a pipe while run_git waits for its child.
+                  with tempfile.TemporaryFile() if retry_receive_error else nullcontext() as stderr:
+                      try:
+                          run_git(directory, "-c", "protocol.version=2", "fetch", "--no-tags",
+                                  *(["--prune"] if prune else []), "--no-recurse-submodules", f"--depth={depth}",
+                                  *(["--filter=blob:none"] if blobless else []), "origin", *refs,
+                                  timeout=fetch_timeout_seconds, reclaim_locks=True, stderr=stderr,
+                                  env={"LC_ALL": "C"} if stderr is not None else None)
+                          return
+                      except (FetchTimeout, GitFailure) as error:
+                          check_cancelled()
+                          if attempt == max_attempts:
+                              raise
+                          retryable = isinstance(error, FetchTimeout) or retry_failures or error.code in retry_codes
+                          if not retryable and stderr is not None and isinstance(error, GitFailure) and error.code == 128:
+                              # Status 128 alone also covers permanent errors like missing refs or locks.
+                              start = max(0, stderr.seek(0, os.SEEK_END) - 16384)
+                              stderr.seek(start)
+                              tail = stderr.read(16384)
+                              retryable = b"\nerror: RPC failed; curl 56 " in (tail if start else b"\n" + tail)
+                          if not retryable:
+                              raise
+                      finally:
+                          if stderr is not None and not closed:
+                              stderr.seek(0)
+                              shutil.copyfileobj(stderr, sys.stderr.buffer)
+                              sys.stderr.flush()
+                  print(f"::warning::checkout fetch failed on attempt {attempt}; retrying", flush=True)
+                  backoff(5)
 
 
           def git_output(directory, *arguments, timeout=None, env=None):
@@ -912,7 +929,7 @@ jobs:
               # credential scope ends and test workers create historical worktrees.
               refs.extend(prerequisites)
               fetch(workspace, *refs, prune=True, max_attempts=1 if reset else 3,
-                    retry_codes=(124, 137) if kind == "skills" else ())
+                    retry_codes=(124, 137) if kind == "skills" else (), retry_receive_error=kind == "platform")
               run_git(workspace, "checkout", *(["--force"] if reset else []), "--detach",
                       sha if kind in ("linux-node", "android") else target)
               if kind == "android":

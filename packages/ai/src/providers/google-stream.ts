@@ -410,6 +410,8 @@ export async function consumeGoogleGenerateContentStream(params: {
     throw new Error("An unknown error occurred");
   }
 
+  // No terminal usage report means no measurement; complete it as explicitly unmeasured.
+  params.output.usage.contextUsage ??= { state: "unavailable" };
   params.stream.push({
     type: "done",
     reason: params.output.stopReason,

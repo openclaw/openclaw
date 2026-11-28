@@ -3,7 +3,7 @@ import path from "node:path";
 import {
   buildChannelConfigSchema,
   buildJsonChannelConfigSchema,
-} from "../channels/plugins/config-schema.js";
+} from "../channels/plugins/config-schema-projection.js";
 import type { ChannelConfigRuntimeSchema } from "../channels/plugins/types.config.js";
 import { createSubsystemLogger } from "../logging/subsystem.js";
 import type { JsonSchemaObject } from "../shared/json-schema.types.js";

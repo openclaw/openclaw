@@ -97,6 +97,7 @@ export async function pickAuthMethod(params: {
   return params.prompter
     .select({
       message: `${params.tokenOnly ? "Token" : "Auth"} method for ${provider.label}`,
+      searchable: !params.tokenOnly,
       options: methods.map((method) => ({
         value: method.id,
         label: method.label,

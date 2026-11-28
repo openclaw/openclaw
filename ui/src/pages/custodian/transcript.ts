@@ -91,6 +91,8 @@ export async function dismissCustodianQuestion(
   owner: {
     messages: readonly CustodianMessage[];
     dismissedQuestions: Set<string>;
+    readonly canSend: boolean;
+    readonly operationEpoch: number;
     exitSetup(): void;
     send(text: string, display: string, questionReply: boolean): Promise<string>;
   },
@@ -105,15 +107,21 @@ export async function dismissCustodianQuestion(
     owner.exitSetup();
     return;
   }
-  const outcome = await owner.send(
+  if (!owner.canSend || !owner.messages.includes(message)) {
+    return;
+  }
+  const key = `${message.id}:${question.id}`;
+  const pending = owner.send(
     question.isOther ? t("optionCard.skip") : "cancel",
     t("optionCard.skip"),
     true,
   );
-  if (outcome !== "rejected" && owner.messages.includes(message)) {
-    owner.dismissedQuestions = new Set(owner.dismissedQuestions).add(
-      `${message.id}:${question.id}`,
-    );
+  const epoch = owner.operationEpoch;
+  owner.dismissedQuestions.add(key);
+  publish();
+  // An uncertain send must not offer a duplicate answer; rejoin resolves the live prompt.
+  if ((await pending) === "rejected" && owner.operationEpoch === epoch) {
+    owner.dismissedQuestions.delete(key);
     publish();
   }
 }

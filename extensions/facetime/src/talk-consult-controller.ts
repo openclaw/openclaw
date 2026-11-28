@@ -316,6 +316,7 @@ export function createFaceTimeConsultController(params: {
       spawnedBy: params.requesterSessionKey,
       senderId: params.senderId,
       contextMode: "fork",
+      runner: "agent-turn",
       messageProvider: AGENT_CONSULT_MESSAGE_PROVIDER,
       lane: `facetime:${params.normalizedCallUUID}`,
       runIdPrefix: `facetime:${params.normalizedCallUUID}`,

@@ -9,7 +9,7 @@ import {
   createModelChatUpstream,
   createModelGatewayFixture,
 } from "./model-gateway.test-support.ts";
-import { expandProvider } from "./model-providers.test-support.ts";
+import { expandProvider, openTencentTokenHubKeyForm } from "./model-providers.test-support.ts";
 
 // Removing the provider behind the default model keeps the default (documented logout
 // contract), so the confirmation has to say so, and later chats must fail without
@@ -48,9 +48,7 @@ suite.define(() => {
       async ({ page }) => {
         await page.goto(await open("settings/model-providers"));
         await waitForControlUiGatewayReady(page);
-        await page.locator("[data-models-catalog-search]").fill("Tencent");
-        await page.locator('[data-models-catalog-provider="tencent-tokenhub"] button').click();
-        const form = page.getByRole("dialog", { name: "Add provider" });
+        const form = await openTencentTokenHubKeyForm(page);
         await form.getByRole("textbox", { name: "API key" }).fill("sk-synthetic-remove-in-use");
         await form.getByRole("button", { name: "Save provider", exact: true }).click();
         await expect.poll(() => form.isVisible(), { timeout: 30_000 }).toBe(false);

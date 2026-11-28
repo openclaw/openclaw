@@ -5,6 +5,7 @@ extension EnvironmentValues {
     @Entry public var openClawChatWrapCodeLines: Bool = false
     @Entry public var openClawChatUsesFloatingComposer = false
     @Entry public var openClawChatFloatingHeader: AnyView?
+    @Entry public var openClawOpenChildChat: (@MainActor (String, String) -> Void)?
     @Entry public var openClawChatComposerAccessory: AnyView?
     @Entry public var openClawChatStatusBarInset: CGFloat = 0
     @Entry public var openClawChatInteractionsDisabled = false
@@ -114,9 +115,30 @@ public struct OpenClawChatDisplayOptions: OptionSet, Sendable {
     public static let reasoning = Self(rawValue: 1 << 0)
     public static let toolActivity = Self(rawValue: 1 << 1)
     public static let assistantTrace: Self = [.reasoning, .toolActivity]
+    /// Commentary streamed between tool calls goes away once its run finishes (web "Keep commentary"
+    /// off, chat-thread-facts.ts `isHiddenChatCommentary`). The running turn keeps its own.
+    public static let hidesFinishedCommentary = Self(rawValue: 1 << 2)
 
     public static func assistantTrace(_ isVisible: Bool) -> Self {
         isVisible ? .assistantTrace : []
+    }
+}
+
+extension OpenClawChatDisplayOptions {
+    /// What the View switches decide before the row's own content does; nil leaves it to the content.
+    func presetVisibility(of message: OpenClawChatMessage, activeRunIDs: Set<String>) -> Bool? {
+        if self.contains(.hidesFinishedCommentary), message.streamSegmentID != nil,
+           !(message.workRunID.map(activeRunIDs.contains) ?? false)
+        {
+            return false
+        }
+        // Hidden tool calls keep the rows that hand work off (web chat-thread-build.ts:339-349).
+        if !self.contains(.toolActivity), message.content.contains(where: { block in
+            block.isToolCall && block.name.map { ChatToolActivityItem.handoffToolNames.contains($0) } == true
+        }) {
+            return true
+        }
+        return nil
     }
 }
 
@@ -157,10 +179,34 @@ func chatErrorPresentation(
     return ("Something went wrong", error, "exclamationmark.triangle.fill", .orange)
 }
 
+/// What a toast says for the chat's failure text, or nil when it belongs somewhere else: an empty
+/// transcript shows it in place with Refresh, a lost connection has its own notice, and an outdated
+/// Gateway's missing plans are not something the person just did.
+func chatErrorToastText(_ errorText: String?, transcriptHasContent: Bool) -> String? {
+    guard transcriptHasContent,
+          let text = ChatPayloadDecoding.trimmedNonEmptyString(errorText),
+          !chatErrorIsDisconnected(text),
+          text != OpenClawChatTransportUpgradeMessage.progressCardAgentScope
+    else { return nil }
+    return text
+}
+
 /// The one width rule of the chat pane: a margin and a centred reading column derived from the
 /// measured pane width, shared by transcript rows, cards and the composer.
 struct ChatColumnLayout: Equatable {
     static let maxColumnWidth: CGFloat = 768
+    private static let compactMargin: CGFloat = 16
+
+    #if os(iOS)
+    /// The safe-area bar travels with the keyboard; count the surface's inset toward the gap.
+    @MainActor static func keyboardPadding(
+        style: OpenClawChatView.Style, chrome: OpenClawChatView.ComposerChrome, visible: Bool) -> CGFloat
+    {
+        guard visible, UIDevice.current.userInterfaceIdiom == .phone else { return 0 }
+        let inset = OpenClawChatComposer.surfaceInset(style: style, chrome: chrome)
+        return max(0, Self.compactMargin / 2 - inset)
+    }
+    #endif
 
     let margin: CGFloat
     let columnWidth: CGFloat
@@ -168,7 +214,7 @@ struct ChatColumnLayout: Equatable {
     /// An unmeasured pane (width 0, before its first layout) assumes the widest column.
     init(paneWidth: CGFloat) {
         let width = paneWidth > 0 ? paneWidth : .infinity
-        self.margin = width < 700 ? 16 : 24
+        self.margin = width < 700 ? Self.compactMargin : 24
         self.columnWidth = max(0, min(Self.maxColumnWidth, width - 2 * self.margin))
     }
 

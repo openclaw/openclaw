@@ -283,11 +283,24 @@ export abstract class AppSidebarBase {
 
   setSessionOwnerFilter = (ownerId: string | null, involvingMe = false) => {
     this.sessionOwnerFilter.set(ownerId, involvingMe);
-    if (this.sidebarSnapshot) {
+    const snapshot = this.sidebarSnapshot;
+    if (snapshot) {
       // Keep the cached rows, but let explicit intent select the replacement query.
       const selected = this.sessionOwnerFilter.read();
-      this.sidebarSnapshot.ownerId = selected.ownerId;
-      this.sidebarSnapshot.involvingMe = selected.involvingMe;
+      this.sidebarSnapshot = {
+        ...snapshot,
+        ownerId: selected.ownerId,
+        involvingMe: selected.involvingMe,
+        // An unfiltered boot pin can bridge navigation, not child membership.
+        pinnedSessions:
+          selected.involvingMe && !snapshot.involvingMe
+            ? snapshot.pinnedSessions.map((pin) => ({
+                ...pin,
+                children: [],
+                childLoadParentKeys: [],
+              }))
+            : snapshot.pinnedSessions,
+      };
     }
   };
 

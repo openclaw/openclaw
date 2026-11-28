@@ -57,7 +57,7 @@ describe("incomplete-turn terminal metadata", () => {
     const attempt = refusalAttempt("anthropic", false);
 
     expect(payloadText(attempt)).toBe(
-      "No answer was returned. Ask again if you still need one. Note: some tool actions may have already been executed — please verify before retrying.",
+      "The provider refused this request (category: cyber). Revise the request and try again. Note: some tool actions may have already been executed — please verify before retrying.",
     );
   });
 

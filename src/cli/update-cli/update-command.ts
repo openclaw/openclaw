@@ -12,6 +12,7 @@ import { withSystemPackageOwnershipRun } from "../../infra/update-system-package
 import { resolveDebugProxySettings } from "../../proxy-capture/env.js";
 import { withDeferredDebugProxyCapture } from "../../proxy-capture/runtime-deferral.js";
 import { defaultRuntime } from "../../runtime.js";
+import { tryRunSystemServicePackageUpdate } from "../../update/cli.js";
 import { VERSION } from "../../version.js";
 import type { createUpdateProgress } from "./progress.js";
 import { confirmUpdateDowngrade, type UpdateCommandOptions } from "./shared.js";
@@ -57,6 +58,9 @@ export async function updateCommand(
     withDeferredDebugProxyCapture(async () => {
       const { tryRunImmutableUpdateCommand } = await import("./update-command-immutable.js");
       if (await tryRunImmutableUpdateCommand(inputOpts)) {
+        return;
+      }
+      if (!executorOptions && (await tryRunSystemServicePackageUpdate(inputOpts))) {
         return;
       }
       const { preparePostgresPoolForUpdate } = await import("../../infra/postgres-sync/pool.js");

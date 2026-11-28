@@ -632,7 +632,7 @@ export function bootstrapApplication(
             ? {
                 redirect: () =>
                   history.replace({
-                    ...locationForRoute("model-setup", basePath),
+                    ...locationForRoute("model-providers", basePath),
                     search: "?firstRun=1",
                   }),
                 onInitialDecision: () => resolveInitialFirstRunDecision?.(),

@@ -28,6 +28,17 @@ still require approval of the exact target, account, and text. The tool cannot
 select another repository. Success returns the comment URL; check the thread
 before retrying an unconfirmed result.
 
+## Add a pull request assignee
+
+With full operator write access, inspect the open pull request first, then call
+`github_publish` with `action: "add_assignee"`, the same `pullRequestUrl`,
+its observed `expectedHeadCommit`, and one GitHub login in `assignee`. The
+Gateway uses its configured GitHub identity. Existing assignees are preserved,
+and an already assigned login does not trigger another write. A successful
+result confirms the login on the pull request. If GitHub does not confirm the
+assignment, check the PR and the managed identity’s repository permissions
+before retrying.
+
 ## Session GitHub App reader
 
 A configured `tools.github` (or complete agent override) with

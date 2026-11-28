@@ -271,26 +271,29 @@
   min-width: 0;
 }
 
+.sw-row__name,
+.sw-row__desc,
+.sw-row__change,
+.sw-row__meta {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
 .sw-row__name {
   min-width: 0;
-  overflow: hidden;
   color: var(--text-strong);
   font-size: var(--control-ui-text-md);
   font-weight: 550;
   line-height: 20px;
-  text-overflow: ellipsis;
-  white-space: nowrap;
 }
 
 .sw-row__desc,
 .sw-row__change,
 .sw-row__meta {
-  overflow: hidden;
   color: var(--muted);
   font-size: 12.5px;
   line-height: 1.45;
-  text-overflow: ellipsis;
-  white-space: nowrap;
 }
 
 .sw-row__change {
@@ -862,8 +865,14 @@
 }
 
 .sw-file-chip {
+  max-width: 100%;
   height: 28px;
   padding: 0 10px;
+  overflow: hidden;
+  white-space: nowrap;
+  text-overflow: ellipsis;
+  /* Clip the directory prefix before the identifying end of the filename. */
+  direction: rtl;
   border: 0;
   border-radius: var(--radius-md);
   background: color-mix(in srgb, var(--text) 6%, transparent);
@@ -946,23 +955,6 @@
   color: var(--text-strong);
   font-size: var(--control-ui-text-md);
   font-weight: 550;
-}
-
-.sw-timeline__why {
-  flex: 1 1 100%;
-  order: 1;
-  min-width: 0;
-  overflow: hidden;
-  color: var(--muted);
-  font-size: 13.5px;
-  line-height: 1.5;
-  text-overflow: ellipsis;
-  white-space: nowrap;
-}
-
-.sw-timeline__item--open .sw-timeline__why {
-  color: var(--text);
-  white-space: normal;
 }
 
 .sw-timeline__when {

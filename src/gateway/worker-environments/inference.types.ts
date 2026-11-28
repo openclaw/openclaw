@@ -40,7 +40,8 @@ export type ActiveInference = {
   claimKey: string;
   storeKey: string;
   identity: WorkerConnectionIdentity;
-  request: WorkerInferenceStartParams;
+  /** The provider takes this payload on launch. Controls use storeInput. */
+  request: WorkerInferenceStartParams | undefined;
   sessionTarget: BoundAgentRunSessionTarget;
   storeInput: WorkerInferenceTurnInput;
   sink: WorkerInferenceSink;
@@ -52,7 +53,6 @@ export type ActiveInference = {
   controller: AbortController;
   seq: number;
   streamedBytes: number;
-  launched: boolean;
   /** Raw executor lifetime survives its earlier cancellation/terminal acknowledgment. */
   execution?: Promise<void>;
   settled: boolean;

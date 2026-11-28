@@ -33,6 +33,8 @@ export const decisionCapabilities = ModelInferenceCapabilitiesSchema.parse(
 );
 
 const PROVIDER_ID = "clawrouter";
+/** Code on the refusal for a model the selected key's catalog does not offer. */
+export const CLAWROUTER_MODEL_NOT_OFFERED_CODE = "clawrouter_model_not_offered";
 // Inventory changes infrequently; inference still enforces current grants and budgets.
 // Explicit catalog refresh bypasses this response cache at the acquisition owner.
 const CATALOG_CACHE_TTL_MS = 60 * 60_000;
@@ -634,7 +636,12 @@ export async function buildClawRouterProviderConfig(params: {
       }))
   ) {
     // An undefined preparation result lets a configured row bypass this catalog denial.
-    throw new Error("ClawRouter catalog does not offer the selected model");
+    throw Object.assign(
+      new Error(
+        `ClawRouter catalog does not offer ${requestedModelId} to this key. Choose a model it offers (openclaw models list --provider clawrouter), or ask your ClawRouter admin to grant this one.`,
+      ),
+      { code: CLAWROUTER_MODEL_NOT_OFFERED_CODE },
+    );
   }
   return {
     baseUrl: `${rootUrl}/v1`,

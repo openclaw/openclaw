@@ -112,6 +112,7 @@ export const ChatPendingInputsPageSchema = closedObject({
     { maxItems: 20 },
   ),
   total: Type.Integer({ minimum: 0 }),
+  hasQueuedInput: Type.Optional(Type.Boolean()),
   queuedCount: Type.Optional(Type.Integer({ minimum: 0 })),
   nextBefore: Type.Optional(Type.Integer({ minimum: 1 })),
 });

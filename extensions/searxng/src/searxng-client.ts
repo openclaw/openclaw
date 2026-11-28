@@ -1,6 +1,7 @@
 import type { OpenClawConfig } from "openclaw/plugin-sdk/config-contracts";
 import { ProviderHttpError } from "openclaw/plugin-sdk/provider-http";
 import {
+  buildUnsupportedSearchFilterResponse,
   externalContentStamp,
   nativeWebSearchCodecs,
   DEFAULT_CACHE_TTL_MINUTES,
@@ -117,9 +118,26 @@ export async function runSearxngSearch(params: {
   count?: number;
   categories?: string;
   language?: string;
+  country?: string;
+  freshness?: string;
+  date_after?: string;
+  date_before?: string;
   signal?: AbortSignal;
 }): Promise<Record<string, unknown>> {
   params.signal?.throwIfAborted();
+  // SearXNG supports language; the other shared web_search filters would be silently dropped.
+  const unsupportedResponse = buildUnsupportedSearchFilterResponse(
+    {
+      country: params.country,
+      freshness: params.freshness,
+      date_after: params.date_after,
+      date_before: params.date_before,
+    },
+    "searxng",
+  );
+  if (unsupportedResponse) {
+    return unsupportedResponse;
+  }
   const count = resolveSearchCount(
     params.count ?? params.config?.tools?.web?.search?.maxResults,
     DEFAULT_SEARCH_COUNT,
