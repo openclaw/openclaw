@@ -1,0 +1,22 @@
+{
+  "kitSaved": true,
+  "siteDataWiped": true,
+  "replacementExportSafe": true,
+  "connectedBefore": true,
+  "connectedAfter": true,
+  "sameAccount": true,
+  "samePerson": true,
+  "sameRole": true,
+  "roleRemainedOperator": true,
+  "sameScopes": true,
+  "scopesRemainedOperatorReadOnly": true,
+  "newDevice": true,
+  "approvedUsingRecoveryKit": true,
+  "recoveryKitSpecificToast": true,
+  "ownerInboxScriptAssertion": true,
+  "ownerHistoryScriptAssertion": true,
+  "wrongAccountRefused": true,
+  "removedKitRefused": true,
+  "removedHistoryLinkAbsent": true,
+  "removedHistoryLabel": true
+}

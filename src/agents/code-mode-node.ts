@@ -111,12 +111,12 @@ function newestIdlePool(
   return warm;
 }
 
-function retireIdlePool(owner: NodePool): void {
+function retireIdlePool(owner: NodePool, reason: WorkerRetirementReason = "memory_pressure"): void {
   if (!idlePools.has(owner)) {
     return;
   }
   void runBestEffortCleanup({
-    cleanup: () => closePool(owner, "memory_pressure"),
+    cleanup: () => closePool(owner, reason),
     onError: (error) =>
       process.emitWarning(`Code Mode worker retirement failed: ${formatErrorMessage(error)}`),
   });
@@ -288,7 +288,7 @@ async function releasePool(owner: NodePool): Promise<void> {
   }
   // A completed later cell supersedes a warm floor without renewing its old deadline.
   if (previous && idlePools.get(previous)?.expired) {
-    await closePool(previous, "idle-expiry");
+    runInDetachedAsyncContext(() => retireIdlePool(previous, "idle-expiry"));
   }
 }
 

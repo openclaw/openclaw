@@ -1,2 +1,0 @@
-# Exact net regression growth: a task whose admission budget lapsed still retires its private SQLite snapshot copy, while new admission work stays refused.
-33

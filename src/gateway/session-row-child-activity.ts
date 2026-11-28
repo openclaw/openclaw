@@ -2,6 +2,7 @@ import { isDeepStrictEqual } from "node:util";
 import { readSwarmReservationRevision } from "../agents/subagents/swarm/swarm-scheduler.js";
 import { readAgentRunIndexVersion } from "../infra/agent-run-registry.js";
 import type { SessionRowChange } from "../sessions/session-row-changes.js";
+import { MAX_SESSION_ROW_AUDIENCES } from "../shared/session-list-limits.js";
 import { createSessionRowChildVisibility } from "./session-row-child-visibility.js";
 import {
   identity,
@@ -250,8 +251,8 @@ export function createSessionRowChildActivity(readChildren: (link: Link) => read
           }
         }
       }
-      const subagentRuns = context.subagentRuns.atTime(now);
       if (parent.dirty.size) {
+        const subagentRuns = context.subagentRuns.atTime(now);
         let recomputeExpiry = now < parent.sampledAt || now > parent.nextExpiry;
         for (const key of parent.dirty) {
           for (const child of parent.byKey.get(key) ?? []) {
@@ -311,7 +312,7 @@ export function createSessionRowChildActivity(readChildren: (link: Link) => read
       let view = parent.views.get(viewKey);
       if (!view) {
         // Match the bounded audience history of child authorization; never retain clients.
-        if (parent.views.size === 64) {
+        if (parent.views.size === MAX_SESSION_ROW_AUDIENCES) {
           parent.views.delete(parent.views.keys().next().value);
         }
         view = { excluded, active: 0, keysDirty: true };
@@ -413,6 +414,15 @@ export function createSessionRowChildProjection(params: {
     mark(change: SessionRowChange) {
       if (!("all" in change)) {
         invalidate(change.sessionKey);
+        if (change.scope === "runtime") {
+          if (change.runtimeSession) {
+            for (const row of params.matching({ key: change.runtimeSession.sessionId }, "id")) {
+              invalidate(row.key);
+            }
+          }
+          // Both runtime keys and session-ID aliases have invalidated their ancestors.
+          activity.invalidateRuntime([]);
+        }
         return;
       }
       if (change.factsInvalidated) {

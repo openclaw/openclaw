@@ -44,3 +44,24 @@ export function cleanupSessionResources(sessionId?: string, owner?: SessionResou
     throw new AggregateError(errors, "Failed to cleanup session resources");
   }
 }
+
+declare const providerStateBrand: unique symbol;
+
+/**
+ * Ownership of one conversation's mutable provider state (response continuation, pooled
+ * sockets). Only the conversation's writer run obtains one; every other run shares the
+ * conversation's affinity (`sessionId`, prompt-cache key) but keeps no state.
+ */
+export type ProviderStateScope = {
+  readonly sessionId: string;
+  readonly [providerStateBrand]: true;
+};
+
+/** The stream option that carries the writer's scope; absent for every other run. */
+export const PROVIDER_STATE_SCOPE: unique symbol = Symbol("providerStateScope");
+
+/** Called only by the writer's lane admission; a lint rule enforces that. */
+export function claimConversationProviderState(sessionId: string): ProviderStateScope {
+  // SAFETY: the brand is type-only; it keeps a plain session id from standing in for a scope.
+  return { sessionId } as ProviderStateScope;
+}

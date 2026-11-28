@@ -159,7 +159,6 @@ async function runWithModelFallbackInternal<T>(
   const operatorAuthority = params.operatorAuthority;
   if (operatorAuthority) {
     assertAdmittedRunOperatorAuthority(operatorAuthority);
-    operatorAuthority.assertCurrent();
   }
   const plannedCandidates = resolveModelCandidateChain({
     cfg: params.cfg,
@@ -275,7 +274,6 @@ async function runWithModelFallbackInternal<T>(
       continue;
     }
     const candidateRef = { provider: candidate.provider, model: candidate.model };
-    operatorAuthority?.assertCurrent();
     if (operatorAuthority?.modelPolicy?.allows(candidateRef) === false) {
       continue;
     }
@@ -503,7 +501,6 @@ async function runWithModelFallbackInternal<T>(
       }
     }
 
-    operatorAuthority?.assertCurrent();
     if (operatorAuthority?.modelPolicy?.allows(candidateRef) === false) {
       continue;
     }

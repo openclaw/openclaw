@@ -19,7 +19,6 @@ it("keeps real onboarding warnings but omits the rehearsal's synthetic loopback 
     runGatewayConfigHealth: unused,
     runAuthProfileMigration: unused,
     runAuthProfileHealth: unused,
-    runGatewayAuthHealth: unused,
     runLegacyStateHealth: unused,
   })
     .flatMap((contribution) => contribution.healthChecks)

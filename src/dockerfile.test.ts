@@ -1,6 +1,6 @@
 import assert from "node:assert/strict";
 import { execFileSync } from "node:child_process";
-import { cp, mkdir, readFile, readdir, stat } from "node:fs/promises";
+import { cp, mkdir, readFile, readdir, stat, writeFile } from "node:fs/promises";
 import { basename, dirname, join, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
 import { BUNDLED_PLUGIN_ROOT_DIR } from "openclaw/plugin-sdk/test-fixtures";
@@ -126,6 +126,38 @@ describe("Dockerfile", () => {
     },
   );
 
+  it.each([
+    { pluginRoot: "extensions", privateQa: false },
+    { pluginRoot: "extensions", privateQa: true },
+    { pluginRoot: "bundled-plugins", privateQa: false },
+    { pluginRoot: "bundled-plugins", privateQa: true },
+  ])(
+    "stages $pluginRoot test sources with private QA=$privateQa",
+    async ({ pluginRoot, privateQa }) => {
+      const dockerfile = await readDockerfile("Dockerfile", true);
+      const stage = dockerfile.match(/^FROM build AS runtime-build-output\n([\s\S]*?)(?=^FROM )/m);
+      assert(stage?.[1], "Missing runtime build output stage");
+      const commands = Array.from(stage[1].matchAll(/^RUN (.+)$/gm), ([, command]) => command);
+      const fixture = tempDirs.make("docker-runtime-plugin-tests-");
+      const plugin = join(fixture, pluginRoot, "fixture");
+      await mkdir(plugin, { recursive: true });
+      await mkdir(join(fixture, "packages"));
+      await writeFile(join(fixture, "selected-plugin-dirs"), privateQa ? "qa-lab\n" : "");
+      await writeFile(join(plugin, "index.ts"), "runtime");
+      await writeFile(join(plugin, "index.test.ts"), "test");
+      await writeFile(join(fixture, "packages", "outside.test.ts"), "outside");
+
+      const script = commands
+        .join(" && ")
+        .replaceAll("/tmp/openclaw-selected-plugin-dirs", "selected-plugin-dirs");
+      run("/bin/sh", ["-eu", "-c", script], { OPENCLAW_BUNDLED_PLUGIN_DIR: pluginRoot }, fixture);
+
+      const expected = privateQa ? ["index.test.ts", "index.ts"] : ["index.ts"];
+      expect((await readdir(plugin)).toSorted()).toEqual(expected);
+      expect(await readFile(join(fixture, "packages", "outside.test.ts"), "utf8")).toBe("outside");
+    },
+  );
+
   it("keeps validated plugin selection outside build-context copies", async () => {
     const dockerfile = await readDockerfile();
     expectInOrder(
@@ -209,17 +241,19 @@ describe("Dockerfile", () => {
     expectInOrder(slice, "docker_gpg_pub_count=", "actual_fingerprint=", "gpg --dearmor");
   });
 
-  it("pre-creates named-volume mount points before switching to the node user", async () => {
+  it("keeps the home traversable for custom UIDs and named-volume mount points private", async () => {
     const dockerfile = await readDockerfile();
     const runtime = dockerfile.slice(dockerfile.lastIndexOf("FROM base-runtime"));
     // #85968: the node-owned parent must precede the private leaf directories.
     expectInOrder(
       runtime,
       "FROM base-runtime",
+      "RUN chmod 0755 /home/node",
       "RUN install -d -m 0755 -o node -g node /home/node/.config",
       "install -d -m 0700 -o node -g node \\",
       "USER node",
     );
+    expect(runtime).not.toMatch(/chmod\s+(?:-R\s+0755|0755\s+-R)\s+\/home\/node/u);
     expect(dockerfile).not.toContain("mkdir -p /home/node/.openclaw");
     expectContains(
       dockerfile,

@@ -17,6 +17,10 @@ on:
       - "scripts/lib/changelog*.mjs"
   workflow_dispatch:
     inputs:
+      fast_track_request:
+        description: Optional exact copy of the published fast-track request; replay otherwise discovers the release asset
+        required: false
+        type: string
       tag:
         description: Stable OpenClaw tag to replay or repair, for example v2026.6.8 or v2026.6.8-2; every other input is optional
         required: false
@@ -38,6 +42,9 @@ on:
 permissions:
   actions: read
   contents: write
+
+env:
+  FAST_TRACK_REQUEST_JSON: ${{ inputs.fast_track_request }}
 
 concurrency:
   group: openclaw-stable-main-closeout-${{ github.event_name == 'workflow_dispatch' && (inputs.tag || github.run_id) || github.ref }}
@@ -61,7 +68,8 @@ jobs:
       should_closeout: ${{ steps.inputs.outputs.should_closeout }}
       tag: ${{ steps.inputs.outputs.tag }}
     steps:
-      - name: Install GitHub API backoff helper
+      - &github-api-backoff
+        name: Install GitHub API backoff helper
         run: |
           cat > "$RUNNER_TEMP/github-api-backoff.sh" <<'BASH'
           gh_with_retry() {
@@ -70,8 +78,9 @@ jobs:
               if output="$(gh "$@" 2>&1)"; then
                 printf '%s\n' "$output"
                 return 0
+              else
+                status=$?
               fi
-              status=$?
               lower_output="${output,,}"
               if [[ "$lower_output" != *"rate limit"* && "$output" != *"HTTP 429"* ]]; then
                 printf '%s\n' "$output" >&2
@@ -303,10 +312,13 @@ jobs:
             exit 1
           fi
           if ! release_manifest_run_json="$(jq -ce '
+            (if .recovery != null then .recovery.producer else . end) as $producer |
             if .workflowName == "Full Release Validation" and
-              (.runId | type == "string" and test("^[1-9][0-9]*$")) and
-              (.runAttempt | type == "string" and test("^[1-9][0-9]*$"))
-            then {id: .runId, runAttempt: .runAttempt}
+              (.recovery != null or ($producer.runId | type) == "string") and
+              (.recovery != null or ($producer.runAttempt | type) == "string") and
+              ($producer.runId | tostring | test("^[1-9][0-9]*$")) and
+              ($producer.runAttempt | tostring | test("^[1-9][0-9]*$"))
+            then {id: ($producer.runId | tostring), runAttempt: ($producer.runAttempt | tostring)}
             else empty
             end
           ' "$release_manifest_path")"; then
@@ -386,7 +398,6 @@ jobs:
           ref: ${{ github.workflow_sha }}
           path: .closeout-tooling
           fetch-depth: 1
-          sparse-checkout: scripts
           persist-credentials: false
 
       - name: Checkout shipped release tag
@@ -417,29 +428,7 @@ jobs:
             exit 1
           fi
 
-      - name: Install GitHub API backoff helper
-        run: |
-          cat > "$RUNNER_TEMP/github-api-backoff.sh" <<'BASH'
-          gh_with_retry() {
-            local attempt output status lower_output
-            for attempt in 1 2 3 4 5; do
-              if output="$(gh "$@" 2>&1)"; then
-                printf '%s\n' "$output"
-                return 0
-              fi
-              status=$?
-              lower_output="${output,,}"
-              if [[ "$lower_output" != *"rate limit"* && "$output" != *"HTTP 429"* ]]; then
-                printf '%s\n' "$output" >&2
-                return "$status"
-              fi
-              echo "::warning::GitHub API throttled stable closeout on attempt ${attempt}; retrying after backoff." >&2
-              sleep $((attempt * attempt * 5))
-            done
-            printf '%s\n' "$output" >&2
-            return "$status"
-          }
-          BASH
+      - *github-api-backoff
 
       - name: Set up Docker verification for manual recovery
         if: ${{ github.event_name == 'workflow_dispatch' && inputs.allow_failed_publish_recovery }}
@@ -451,8 +440,23 @@ jobs:
           node-version: "24.22.1"
           package-manager-cache: false
 
+      - name: Setup trusted closeout dependencies
+        uses: ./.closeout-tooling/.github/actions/setup-pnpm-store-cache
+        with:
+          cache-mode: off
+          package-manager-file: .closeout-tooling/package.json
+          lockfile-path: .closeout-tooling/pnpm-lock.yaml
+          node-version: "24.22.1"
+
+      - name: Install trusted closeout dependencies
+        working-directory: .closeout-tooling
+        env:
+          CI: "true"
+        run: pnpm install --frozen-lockfile --ignore-scripts
+
       - name: Verify release workflow evidence
         env:
+          CLOSEOUT_TOOLING_SHA: ${{ github.workflow_sha }}
           RELEASE_TAG: ${{ needs.resolve.outputs.tag }}
           GH_TOKEN: ${{ github.token }}
           EVIDENCE_TAG: ${{ needs.resolve.outputs.evidence_tag }}
@@ -465,26 +469,11 @@ jobs:
           . "$RUNNER_TEMP/github-api-backoff.sh"
           gh_with_retry api "repos/${GITHUB_REPOSITORY}/actions/runs/${FULL_RELEASE_VALIDATION_RUN_ID}/attempts/${FULL_RELEASE_VALIDATION_RUN_ATTEMPT}" \
             > "$RUNNER_TEMP/full-release-validation-run.json"
-          node --input-type=module - "$RUNNER_TEMP/full-release-validation-run.json" <<'NODE'
-          import { readFileSync } from "node:fs";
-          const run = JSON.parse(readFileSync(process.argv[2], "utf8"));
-          for (const [key, expected] of [
-            ["name", "Full Release Validation"],
-            ["event", "workflow_dispatch"],
-            ["status", "completed"],
-            ["conclusion", "success"],
-          ]) {
-            if (run[key] !== expected) {
-              throw new Error(`Full Release Validation must have ${key}=${expected}, got ${run[key] ?? "<missing>"}.`);
-            }
-          }
-          if (String(run.run_attempt ?? "") !== process.env.FULL_RELEASE_VALIDATION_RUN_ATTEMPT) {
-            throw new Error(`Full Release Validation run attempt mismatch: expected ${process.env.FULL_RELEASE_VALIDATION_RUN_ATTEMPT}, got ${run.run_attempt ?? "<missing>"}.`);
-          }
-          NODE
+          publish_workflow_path="$(gh_with_retry api "repos/${GITHUB_REPOSITORY}/actions/runs/${RELEASE_PUBLISH_RUN_ID}" --jq .path)"
           gh_with_retry run view "$RELEASE_PUBLISH_RUN_ID" --repo "$GITHUB_REPOSITORY" \
-            --json workflowName,event,status,conclusion,headSha,jobs \
-            > "$RUNNER_TEMP/release-publish-run.json"
+            --json event,status,conclusion,headSha,jobs,attempt | \
+            jq --arg path "$publish_workflow_path" '. + {path: $path}' \
+              > "$RUNNER_TEMP/release-publish-run.json"
 
           manifest_dir="$RUNNER_TEMP/full-release-validation-manifest"
           rm -rf "$manifest_dir"
@@ -497,20 +486,101 @@ jobs:
             --pattern "$manifest_checksum_asset" \
             --dir "$manifest_dir"
           node .closeout-tooling/scripts/verify-stable-main-closeout.mjs verify-checksum "$manifest_dir/$manifest_asset"
+          approval_asset="openclaw-${evidence_version}-fast-track-approval.json"
+          approval_count="$(gh_with_retry release view "$EVIDENCE_TAG" --repo "$GITHUB_REPOSITORY" --json assets \
+            --jq ".assets | map(select(.name == \"${approval_asset}\")) | length")"
+          if [[ "$approval_count" == 1 ]]; then
+            gh_with_retry release download "$EVIDENCE_TAG" --repo "$GITHUB_REPOSITORY" \
+              --pattern "$approval_asset" --pattern "${approval_asset}.sha256" --dir "$manifest_dir"
+            node .closeout-tooling/scripts/verify-stable-main-closeout.mjs verify-checksum "$manifest_dir/$approval_asset"
+            published_approval="$(jq -c . "$manifest_dir/$approval_asset")"
+            if [[ -n "$FAST_TRACK_REQUEST_JSON" && "$(jq -Sc . <<< "$FAST_TRACK_REQUEST_JSON")" != "$(jq -Sc . <<< "$published_approval")" ]]; then
+              echo "Fast-track closeout must retain the exact published request." >&2
+              exit 1
+            fi
+            export FAST_TRACK_REQUEST_JSON="$published_approval"
+            export RELEASE_PUBLISH_RUN_ID
+            publication_job_id="$(jq -er '
+              [.jobs[] | select(.name == "Publish plugins, then OpenClaw") |
+                select(any(.steps[]?; .name == "Write release approval receipt" and .conclusion == "success"))] |
+              if length == 1 then .[0].databaseId else error("Expected one original publication admission job") end
+            ' "$RUNNER_TEMP/release-publish-run.json")"
+            export RELEASE_PUBLISH_RUN_ATTEMPT="$(gh_with_retry api \
+              "repos/${GITHUB_REPOSITORY}/actions/jobs/${publication_job_id}" --jq .run_attempt)"
+            printf 'RELEASE_PUBLISH_RUN_ID=%s\nRELEASE_PUBLISH_RUN_ATTEMPT=%s\n' \
+              "$RELEASE_PUBLISH_RUN_ID" "$RELEASE_PUBLISH_RUN_ATTEMPT" >> "$GITHUB_ENV"
+            printf 'FAST_TRACK_REQUEST_JSON=%s\n' "$FAST_TRACK_REQUEST_JSON" >> "$GITHUB_ENV"
+          elif [[ "$approval_count" != 0 || -n "$FAST_TRACK_REQUEST_JSON" ]]; then
+            echo "Fast-track closeout requires exactly one published request asset." >&2
+            exit 1
+          fi
           tag_sha="$(git -C "$GITHUB_WORKSPACE/release-tag" rev-parse HEAD)"
           jq -e \
             --arg tag_sha "$tag_sha" \
             --arg run_id "$FULL_RELEASE_VALIDATION_RUN_ID" \
             --arg run_attempt "$FULL_RELEASE_VALIDATION_RUN_ATTEMPT" '
+            (if .recovery != null then .recovery.producer else . end) as $producer |
             .workflowName == "Full Release Validation" and
-            .runId == $run_id and
-            .runAttempt == $run_attempt and
+            (if .recovery != null then ($producer.runId | tostring) else $producer.runId end) == $run_id and
+            (if .recovery != null then ($producer.runAttempt | tostring) else $producer.runAttempt end) == $run_attempt and
             .targetSha == $tag_sha
           ' "$manifest_dir/$manifest_asset" >/dev/null || {
             echo "Full Release Validation manifest does not contain the required stable release controls." >&2
             exit 1
           }
-          node .closeout-tooling/scripts/lib/release-publish-gates.mts \
+          SOURCE_SHA="$tag_sha" node --input-type=module - "$RUNNER_TEMP/full-release-validation-run.json" "$manifest_dir/$manifest_asset" <<'NODE'
+          import { readFileSync } from "node:fs";
+          import { createReleaseEvidenceClient, validateReleaseRunEvidence } from "./.closeout-tooling/scripts/release-ci-summary.mjs";
+          import { authenticateFullReleaseValidationEvidence } from "./.closeout-tooling/scripts/validate-full-release-validation-evidence.mjs";
+          const manifest = JSON.parse(readFileSync(process.argv[3], "utf8"));
+          const run = JSON.parse(readFileSync(process.argv[2], "utf8"));
+          const recovery = manifest.receiptRecovery ?? manifest.recovery;
+          const fastTrack = process.env.FAST_TRACK_REQUEST_JSON;
+          if (fastTrack) {
+            await authenticateFullReleaseValidationEvidence({
+              run, manifest, manifestPath: process.argv[3],
+              expectedRepository: process.env.GITHUB_REPOSITORY,
+              expectedRunId: process.env.FULL_RELEASE_VALIDATION_RUN_ID,
+              expectedRunAttempt: process.env.FULL_RELEASE_VALIDATION_RUN_ATTEMPT,
+              expectedTargetSha: process.env.SOURCE_SHA,
+              expectedReleaseTag: process.env.EVIDENCE_TAG,
+              expectedTrustedWorkflowFullRef: 'refs/heads/main',
+              expectedTrustedWorkflowSha: process.env.CLOSEOUT_TOOLING_SHA,
+              verifierSourceSha: process.env.CLOSEOUT_TOOLING_SHA,
+              expectedCoreNpmPublication: { npmDistTag: 'latest' },
+            });
+          }
+          for (const [key, expected] of [
+            ...(!recovery ? [["name", "Full Release Validation"]] : []),
+            ["event", "workflow_dispatch"],
+            ["status", "completed"],
+            ...(!fastTrack ? [["conclusion", "success"]] : []),
+          ]) {
+            if (run[key] !== expected) {
+              throw new Error(`Full Release Validation must have ${key}=${expected}, got ${run[key] ?? "<missing>"}.`);
+            }
+          }
+          if (String(run.run_attempt ?? "") !== process.env.FULL_RELEASE_VALIDATION_RUN_ATTEMPT) {
+            throw new Error(`Full Release Validation run attempt mismatch: expected ${process.env.FULL_RELEASE_VALIDATION_RUN_ATTEMPT}, got ${run.run_attempt ?? "<missing>"}.`);
+          }
+          if (recovery && !fastTrack) {
+            // Recovery is a separate authenticated producer, never a renamed FRV.
+            // The shared owner binds this published manifest to its exact artifact,
+            // original C/Q receipts, successful seal, and current operator authority.
+            const evidence = await validateReleaseRunEvidence({
+              repository: process.env.GITHUB_REPOSITORY,
+              runId: process.env.FULL_RELEASE_VALIDATION_RUN_ID,
+              manifestPath: process.argv[3],
+              expectedTargetSha: process.env.SOURCE_SHA,
+              verifierSourceSha: process.env.CLOSEOUT_TOOLING_SHA,
+            }, createReleaseEvidenceClient(process.env.GITHUB_REPOSITORY));
+            if (String(evidence.current.runAttempt) !== process.env.FULL_RELEASE_VALIDATION_RUN_ATTEMPT) {
+              throw new Error("Recovery current attempt differs from published evidence.");
+            }
+          }
+          NODE
+          RELEASE_TAG="$EVIDENCE_TAG" RELEASE_NPM_DIST_TAG=latest EXPECTED_SHA="$tag_sha" \
+            node .closeout-tooling/scripts/lib/release-publish-gates.mts \
             --consumer stable-closeout --manifest "$manifest_dir/$manifest_asset"
 
           recovery_evidence="$manifest_dir/openclaw-${evidence_version}-postpublish-evidence.json"
@@ -525,7 +595,7 @@ jobs:
           import { basename } from "node:path";
           const run = JSON.parse(readFileSync(process.argv[2], "utf8"));
           for (const [key, expected] of [
-            ["workflowName", "OpenClaw Release Publish"],
+            ["path", ".github/workflows/openclaw-release-publish.yml"],
             ["event", "workflow_dispatch"],
             ["status", "completed"],
           ]) {
@@ -684,6 +754,13 @@ jobs:
             -f 'inputs[site_url]=https://openclaw.ai/' --jq '.workflow_run_id')"
           [[ "$run_id" =~ ^[1-9][0-9]*$ ]] || { echo "Website dispatch did not return a run ID." >&2; exit 1; }
           echo "Website verification: https://github.com/openclaw/openclaw.ai/actions/runs/$run_id" >> "$GITHUB_STEP_SUMMARY"
+          # A just-dispatched run can briefly return 404 for its jobs, which
+          # makes `gh run watch` fail before the run starts (v2026.11.8).
+          for attempt in 1 2 3 4 5 6; do
+            gh api "repos/openclaw/openclaw.ai/actions/runs/$run_id/jobs" --silent && break
+            (( attempt < 6 )) || { echo "Website run $run_id jobs did not become readable." >&2; exit 1; }
+            sleep 10
+          done
           gh run watch "$run_id" --repo openclaw/openclaw.ai --exit-status --interval 15
 
       - name: Attach immutable closeout evidence

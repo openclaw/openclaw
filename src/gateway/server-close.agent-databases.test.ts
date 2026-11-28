@@ -55,7 +55,7 @@ import { completeAgentDeletionJournalInDatabase } from "../state/agent-deletion-
 import { assertNoOpenClawAgentDatabaseLeasesReadOnly } from "../state/openclaw-agent-db-lease-inspection.js";
 import { OpenClawAgentDatabaseLeaseActiveError } from "../state/openclaw-agent-db-lease.js";
 import { withOpenClawAgentDatabaseReadOnly } from "../state/openclaw-agent-db-readonly.js";
-import * as schema from "../state/openclaw-agent-db-schema.js";
+import * as schema from "../state/openclaw-agent-db-schema-admission.js";
 import {
   closeOpenClawAgentDatabasesForTest,
   openOpenClawAgentDatabase,
@@ -723,7 +723,7 @@ it.skipIf(process.platform === "win32")(
         ...args
       ) {
         const result = yield* gate(...args);
-        diagnostics = args[3];
+        diagnostics = args[3]?.diagnostics;
         return result;
       });
       const reopened = openOpenClawAgentDatabase(options);

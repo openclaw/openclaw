@@ -31,6 +31,7 @@ const performanceSources = [
     "control-ui-i18n-config.ts",
     "control-ui-i18n-config.json",
     "control-ui-module-attribution.mts",
+    "control-ui-script-coverage.mts",
     "control-ui-optional-assets.ts",
     "record-shared.mjs",
     "regexp.mjs",
@@ -606,7 +607,7 @@ describe("Control UI performance budgets", () => {
             createHash("sha256").update(String(index)).digest("hex"),
           ).join(""),
       );
-      for (let index = 0; index < 32; index++) {
+      for (let index = 0; index < 34; index++) {
         fixture.writeAsset("extra-" + index + ".css", 53_000, 10_500);
       }
       const summary = path.join(fixture.rootDir, "summary.md");

@@ -86,6 +86,8 @@ it.each([
     { baselineWallMs: 1000, maxRegressionPct: 12.5, maxWallMs: 1500 },
   ],
   [["--max-wall-ms", "1e3"], {}, { maxWallMs: 1000 }],
+  [["--max-wall-ms", "0.25"], {}, { maxWallMs: 0.25 }],
+  [["--max-wall-ms", " 0x10 "], {}, { maxWallMs: 16 }],
 ] as const)("parses budget arguments %j and env %j", (args, env, expected) => {
   expect(testing.parseArgs(args, env)).toMatchObject(expected);
 });
@@ -102,8 +104,16 @@ it.each([
   [[], "provide --max-wall-ms, --baseline-wall-ms, or set --report-only"],
   [["--max-wall-ms", "1e3ms"], "--max-wall-ms must be a non-negative number"],
   [["--max-regression-pct"], "--max-regression-pct requires a value"],
+  [["--max-wall-ms=1000"], "Unknown option: --max-wall-ms=1000"],
+  [["--max-wall-ms", " "], "--max-wall-ms requires a value"],
+  [["--max-wall-ms", "-1"], "--max-wall-ms requires a value"],
+  [["--max-wall-ms", "Infinity"], "--max-wall-ms must be a non-negative number"],
   [["--max-wall-ms", "--baseline-wall-ms", "1000"], "--max-wall-ms requires a value"],
   [["--max-wall-ms", "1000", "--max-wall-ms", "2000"], "--max-wall-ms was provided more than once"],
+  [
+    ["--max-wall-ms", "1000", "--max-wall-ms", "invalid"],
+    "--max-wall-ms was provided more than once",
+  ],
 ] as const)("rejects invalid budget arguments %j", (args, message) => {
   expect(() => testing.parseArgs(args, {})).toThrow(message);
 });

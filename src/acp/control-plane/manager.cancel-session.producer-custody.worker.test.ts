@@ -1,12 +1,13 @@
 import { expect, it, vi } from "vitest";
-import { withinTest } from "../../../test/helpers/promise.js";
+import { createDeferred, withinTest } from "../../../test/helpers/promise.js";
 import { createTestAdmittedRunContext } from "../../agents/admitted-run-context.test-support.js";
 import { withSessionTurn } from "../../sessions/session-controller.admission.js";
+import { getCurrentSessionControllerClaim } from "../../sessions/session-controller.context.js";
 import { resolveSessionStorePathForAcp } from "../runtime/session-meta-store.js";
 import { withAcpCancellationFixture } from "./manager.cancel-session.worker.test-support.js";
 import {
   createGate,
-  holdEnsure,
+  runtimeHandle,
   startTurn,
   untilAborted,
 } from "./manager.cancellation-locator.test-support.js";
@@ -170,8 +171,19 @@ it("cancels the exact queued ACP instance while its parent, active sibling, and 
 it("joins filtered cancellation to backend preparation cleanup", async ({ signal }) => {
   await withAcpCancellationFixture(async (f) => {
     const preparation = createGate("Turn ended before backend preparation");
+    const cancelled = createDeferred();
     const selected = invocation(f, "preparing-id", "must not reach model");
-    holdEnsure(f, preparation, "retained-runtime");
+    f.ensureSession.mockImplementationOnce(async () => {
+      const claim = getCurrentSessionControllerClaim();
+      if (!claim) {
+        throw new Error("Backend preparation has no controller claim");
+      }
+      claim.abortController.signal.addEventListener("abort", () => cancelled.resolve(), {
+        once: true,
+      });
+      await preparation.wait();
+      return runtimeHandle(f, "retained-runtime");
+    });
     const turn = selected.start();
     const turnResult = Promise.allSettled([turn]);
     let cancellation: Promise<void> | undefined;
@@ -188,8 +200,8 @@ it("joins filtered cancellation to backend preparation cleanup", async ({ signal
       cancellation = selected.cancel().then(() => {
         settled = true;
       });
-      // The held backend preparation is observable producer work, not a cancellation receipt.
-      await Promise.resolve();
+      // Owner validation can await storage before cancellation reaches the held preparation.
+      await withinTest(cancelled.promise, signal);
       expect(settled).toBe(false);
       expect(f.runTurn).not.toHaveBeenCalled();
       preparation.open();

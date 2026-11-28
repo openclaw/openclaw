@@ -27,6 +27,7 @@ import {
   GATEWAY_STARTUP_RETRY_AFTER_MS,
 } from "../../../../packages/gateway-protocol/src/startup-unavailable.js";
 import { getRuntimeConfig } from "../../../config/io.js";
+import type { GatewayOperatorRoleDefinition } from "../../../config/types.gateway.js";
 import { intersectOperatorScopes, roleScopesAllow } from "../../../shared/operator-scope-compat.js";
 import {
   isBrowserCopilotClient,
@@ -49,6 +50,7 @@ import { formatForLog, formatPeerTextForLog } from "../../ws-log.js";
 import { truncateCloseReason } from "../close-reason.js";
 import type {
   AuthenticatedGatewayConnect,
+  DeviceAuthorizedGatewayConnect,
   GatewayConnectPhaseContext,
 } from "./message-handler-types.js";
 
@@ -138,6 +140,26 @@ export function applyConnectionScopeCap(params: {
     : params.scopes.filter((scope) => declaredScopes.includes(scope));
 }
 
+/**
+ * Caps connection scopes by the person's role. `roleCappedScopes` keeps what the role took
+ * away so a later role change that would grant more can reconnect the client.
+ */
+export function capConnectionScopesByRole(
+  effectiveScopes: string[],
+  rolePolicy: Pick<GatewayOperatorRoleDefinition, "scopes"> | undefined,
+): { scopes: string[]; roleCappedScopes?: readonly string[] } {
+  if (!rolePolicy) {
+    return { scopes: effectiveScopes };
+  }
+  const scopes = intersectOperatorScopes(effectiveScopes, rolePolicy.scopes);
+  // Capping can swap in narrower implied scopes, so compare grants rather than list lengths.
+  const capped = effectiveScopes.some(
+    (scope) =>
+      !roleScopesAllow({ role: "operator", requestedScopes: [scope], allowedScopes: scopes }),
+  );
+  return capped ? { scopes, roleCappedScopes: Object.freeze([...effectiveScopes]) } : { scopes };
+}
+
 export function resolveEffectiveConnectionScopes(params: {
   role: string;
   deviceScopes: string[];
@@ -177,10 +199,14 @@ export function rejectGatewayConnectOrigin(
 /** Recheck live authority after awaited work, before granting credentials or registering a client. */
 export function resolveGatewayConnectPolicyFailure(
   context: GatewayConnectPhaseContext,
-  state: AuthenticatedGatewayConnect,
+  state: AuthenticatedGatewayConnect &
+    Pick<DeviceAuthorizedGatewayConnect, "isDeviceTokenSubjectCurrent">,
 ): { kind: "auth" } | { kind: "origin"; reason: string } | undefined {
   const principal = state.authResult.openclawId;
-  if (principal && !isOpenClawIdTunnelPrincipalCurrent(principal)) {
+  if (
+    (principal && !isOpenClawIdTunnelPrincipalCurrent(principal)) ||
+    state.isDeviceTokenSubjectCurrent?.() === false
+  ) {
     return { kind: "auth" };
   }
   if (context.browserOrigin) {
@@ -303,19 +329,19 @@ export async function admitGatewayConnect(context: GatewayConnectPhaseContext) {
   const remoteIngress = getRemoteControlUiIngressContext(context.handler.upgradeReq);
   if (remoteIngress) {
     const denied = !hasCurrentRemoteControlUiIngress(remoteIngress)
-      ? "Remote Control UI ingress is no longer active; reconnect through the current grant."
+      ? "Remote web app ingress is no longer active; reconnect through the current grant."
       : role !== "operator"
-        ? "Remote Control UI ingress only admits the operator role."
+        ? "Remote web app ingress only admits the operator role."
         : !connectParams.device
-          ? "Remote Control UI ingress requires a signed device identity."
+          ? "Remote web app ingress requires a signed device identity."
           : Object.values(connectParams.auth ?? {}).some((credential) => credential !== undefined)
-            ? "Remote Control UI ingress requires a credential-free signed device; reconnect without stored credentials."
+            ? "Remote web app ingress requires a credential-free signed device; reconnect without stored credentials."
             : !roleScopesAllow({
                   role,
                   requestedScopes: scopes,
                   allowedScopes: remoteIngress.operatorScopeCeiling,
                 })
-              ? "Remote Control UI scopes must stay within this grant's operator scope ceiling."
+              ? "Remote web app scopes must stay within this grant's operator scope ceiling."
               : undefined;
     if (denied) {
       markHandshakeFailure("remote-control-ui-admission-denied");

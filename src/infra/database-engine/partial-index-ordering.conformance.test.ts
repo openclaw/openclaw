@@ -213,15 +213,18 @@ async function readJournalPlans(
     );
   } catch (error) {
     postgresPoolTransferList(postgresPool).forEach((port) => port.close());
-    admission.finish();
+    await admission.finish();
     throw error;
   }
   let cleanup: Promise<void> | undefined;
   const stop = () =>
-    (cleanup ??= worker
-      .terminate()
-      .then(() => undefined)
-      .finally(() => admission.finish()));
+    (cleanup ??= (async () => {
+      try {
+        await worker.terminate();
+      } finally {
+        await admission.finish();
+      }
+    })());
   retainCleanup(stop);
   try {
     return await conformanceWorkerResult<JournalResult>(worker, "Partial-index journal");

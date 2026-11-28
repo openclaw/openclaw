@@ -12,11 +12,11 @@ import {
   agentRouteFromPath,
   canonicalPluginTabLocation,
   dynamicRouteFromPath,
+  isApplicationEntryPath,
   isSessionRouteId,
   pathForAgentPanel,
   pathForRoute,
   locationForRoute,
-  pluginSlugCandidate,
   pluginTabSlugFromPath,
   routeIdFromPath,
   setPluginTabSlugs,
@@ -38,8 +38,7 @@ import { page as channelsPage } from "./pages/channels/route.ts";
 import { pages as chatPages } from "./pages/chat/route.ts";
 import type { ChatRouteData } from "./pages/chat/session-route-data.ts";
 import { page as cloudWorkersPage } from "./pages/cloud-workers/route.tsx";
-import { canonicalGeneralSettingsLocation } from "./pages/config/route-data.ts";
-import { pages as configPages } from "./pages/config/route.ts";
+import { canonicalSettingsLocation, pages as configPages } from "./pages/config/route.ts";
 import { page as connectionPage } from "./pages/connection/route.ts";
 import { page as cronPage } from "./pages/cron/route.tsx";
 import { page as custodianPage } from "./pages/custodian/route.tsx";
@@ -63,10 +62,13 @@ import { canonicalPluginsRouteLocation } from "./pages/plugins/route-data.ts";
 import { pages as pluginsPages } from "./pages/plugins/route.tsx";
 import { page as portalsPage } from "./pages/portals/route.ts";
 import { page as profilePage } from "./pages/profile/route.ts";
+import { page as projectsPage } from "./pages/projects/route.tsx";
+import { page as rolesPage } from "./pages/roles/route.tsx";
 import { page as searchPage } from "./pages/search/route.ts";
 import { page as secretsPage } from "./pages/secrets/route.ts";
 import { page as sessionsPage } from "./pages/sessions/route.ts";
 import { page as skillWorkshopPage } from "./pages/skill-workshop/route.ts";
+import { canonicalSkillsRouteLocation } from "./pages/skills/route-location.ts";
 import { pages as skillsPages } from "./pages/skills/route.ts";
 import { page as systemsPage } from "./pages/systems/route.ts";
 import { page as clawsPage } from "./pages/templates/route.ts";
@@ -104,6 +106,7 @@ const APP_ROUTE_TREE = [
   clawsPage,
   agentsPage,
   approvalsPage,
+  rolesPage,
   channelsPage,
   cloudWorkersPage,
   connectionPage,
@@ -117,6 +120,7 @@ const APP_ROUTE_TREE = [
   profilePage,
   workboardPage,
   worktreesPage,
+  projectsPage,
   sessionsPage,
   systemsPage,
   secretsPage,
@@ -170,9 +174,12 @@ function canonicalRouteLocation(
   location: RouteLocation,
   basePath: string,
 ): RouteLocation {
-  return routeId === "config"
-    ? canonicalGeneralSettingsLocation(location, basePath)
-    : routeId === "model-setup"
+  if (isApplicationEntryPath(location.pathname, basePath)) {
+    return { ...location, pathname: pathForRoute("chat", basePath) };
+  }
+  return (
+    canonicalSettingsLocation(routeId, location, basePath) ??
+    (routeId === "model-setup"
       ? canonicalModelSetupLocation(location, basePath)
       : routeId === "workboard"
         ? (resolveWorkboardRouteLocation(location, basePath).canonicalLocation ?? location)
@@ -180,7 +187,10 @@ function canonicalRouteLocation(
           ? canonicalPluginTabLocation(location, basePath)
           : routeId === "plugins" || routeId === "plugin-settings"
             ? (canonicalPluginsRouteLocation(location, basePath) ?? location)
-            : location;
+            : routeId === "skills"
+              ? (canonicalSkillsRouteLocation(location, basePath) ?? location)
+              : location)
+  );
 }
 
 export function createApplicationRouter(): ApplicationRouter {
@@ -196,12 +206,9 @@ export function createApplicationRouter(): ApplicationRouter {
       if (context.nativeConversation?.interceptNavigation(requested)) {
         return Promise.resolve();
       }
-      const canonical =
-        location || routeId === "config" || routeId === "model-setup"
-          ? canonicalRouteLocation(routeId, requested, context.basePath)
-          : undefined;
+      const canonical = canonicalRouteLocation(routeId, requested, context.basePath);
       const destination =
-        canonical && (routeId === "config" || routeId === "model-setup")
+        canonical.pathname !== requested.pathname
           ? (routeIdFromPath(canonical.pathname, context.basePath) ?? routeId)
           : routeId;
       // Retired URLs must not mount a page between two live destinations.
@@ -273,17 +280,6 @@ export async function startApplicationRouter(
     history.replace({
       ...location,
       pathname: pathForAgentPanel(initialAgentRoute.agentId, null, basePath),
-    });
-    location = history.location();
-  }
-  // Single-segment plugin deep links wait for hello before outlet recovery.
-  if (
-    routeIdFromPath(location.pathname, basePath) === null &&
-    !pluginSlugCandidate(location.pathname, basePath)
-  ) {
-    history.replace({
-      ...location,
-      pathname: router.pathForRoute("chat", basePath),
     });
     location = history.location();
   }
@@ -370,13 +366,13 @@ export async function startApplicationRouter(
         if (target.status === "success" && !target.isFetching) {
           const pendingVerification = interrupted;
           interrupted = undefined;
-          // Snapshot admission can finish after hello; verify it once even without
+          // Cached admission can finish after hello; verify it once even without
           // an interrupted connection, using the loader's authoritative replacement.
           // SAFETY: This branch accepts only session routes loaded by loadChatRoute.
           const data = target.data as ChatRouteData | undefined;
           if (
             data?.kind === "session" &&
-            data.sessionResolutionFromCache === "snapshot" &&
+            data.sessionResolutionFromCache &&
             !revalidatedCache.has(target.abortController)
           ) {
             revalidatedCache.add(target.abortController);

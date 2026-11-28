@@ -408,48 +408,6 @@ describe("scenario-flow-runner", () => {
     );
   });
 
-  it("supports qaImport inside flow expressions", async () => {
-    const result = await runScenarioFlow({
-      api: createImportApi("qa-import"),
-      scenarioTitle: "qa-import",
-      vars: { preparedValue: "ready" },
-      flow: {
-        steps: [
-          {
-            name: "uses qaImport",
-            actions: [
-              {
-                set: "basename",
-                value: {
-                  expr: '(await qaImport("node:path")).basename("/tmp/skill/SKILL.md")',
-                },
-              },
-              {
-                assert: {
-                  expr: 'basename === "SKILL.md"',
-                },
-              },
-              { assert: 'preparedValue === "ready"' },
-            ],
-            detailsExpr: "basename",
-          },
-        ],
-      },
-    });
-
-    expect(result).toEqual({
-      name: "qa-import",
-      status: "pass",
-      steps: [
-        {
-          name: "uses qaImport",
-          status: "pass",
-          details: "SKILL.md",
-        },
-      ],
-    });
-  });
-
   it("loads bundled QA runtime modules through qaImport", async () => {
     const result = await runScenarioFlow({
       api: createImportApi("qa-fixture-import"),

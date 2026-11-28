@@ -8,7 +8,6 @@ import {
   patchSessionEntryCore,
 } from "../../../config/sessions/session-accessor.js";
 import { createInternalAgentTurnFacade } from "../../../gateway/agent-turn/internal-facade.js";
-import { abortControlledSubagents } from "../../../gateway/server-methods/chat-abort-descendants.js";
 import {
   createChatAbortContext,
   invokeChatAbortHandler,
@@ -24,6 +23,7 @@ import {
   prepareSystemAgentRunAdmission,
   resolveAdmittedRunActiveAssertion,
 } from "../../admitted-run-context.js";
+import { abortControlledSubagents } from "../cancel-descendants.js";
 import { killSessionSubagentRuns } from "../registry/subagent-control-kill.js";
 import { PROVISIONAL_KILL_RECONCILIATION_MS } from "../registry/subagent-registry-helpers.js";
 import { subagentRuns } from "../registry/subagent-registry-memory.js";
@@ -594,13 +594,31 @@ it.each([
           expect(subagentRuns.has("nested")).toBe(false);
         }
       }
+      if (phase === "requester replacement") {
+        // Turnover keeps the unspent results owed to the session's current turn instead
+        // of consuming them; that turn's runtime context carries them.
+        expect(subagentRuns.get("nested")?.requesterSettleWake).toMatchObject({
+          status: "pending",
+        });
+        const { buildActiveSubagentRuntimeContext } =
+          await import("../registry/subagent-active-context.js");
+        const context = await buildActiveSubagentRuntimeContext({
+          cfg: getRuntimeConfig(),
+          controllerSessionKey: requesterKey,
+          controllerAgentId: "main",
+        });
+        expect(context).toContain('run_json="nested"');
+        expect(context).toContain("requester_continuation=pending");
+        expect(startedTurns).toEqual([]);
+        return;
+      }
       expect(subagentRuns.get("nested")?.requesterSettleWake).toBeUndefined();
       if (completedNestedOutcome) {
         expect(nestedPublications.length).toBeGreaterThan(0);
         for (const published of nestedPublications) {
           expect(published.execution.outcome).toEqual(completedNestedOutcome);
         }
-        if (phase === "requester reset" || phase === "requester replacement") {
+        if (phase === "requester reset") {
           expect(subagentRuns.get("nested")?.execution.outcome).toEqual(completedNestedOutcome);
         } else {
           expect(subagentRuns.has("nested")).toBe(false);

@@ -89,6 +89,28 @@ describe("managed worktree pending slots", () => {
     return waiting.promise;
   }
 
+  it("gives concurrent owners with the same title distinct names", async ({ signal }) => {
+    const create = (ownerId: string) =>
+      service.create({
+        repoRoot,
+        suggestedName: "release-planning",
+        ownerKind: "session",
+        ownerId,
+        signal,
+      });
+
+    const [first, second] = await withinTest(
+      Promise.all([create("first"), create("second")]),
+      signal,
+    );
+
+    expect(first.name).toMatch(/^release-planning-[0-9a-f]{6}$/);
+    expect(second.name).toMatch(/^release-planning-[0-9a-f]{6}$/);
+    expect(first.name).not.toBe(second.name);
+    expect(await service.listRegistryRecords()).toHaveLength(2);
+    expect(await readPendingWorktrees(env)).toEqual([]);
+  });
+
   async function holdLease(scope: string, key: string) {
     const entered = createDeferred();
     const release = createDeferred();
@@ -349,13 +371,15 @@ describe("managed worktree pending slots", () => {
         signal,
       );
       const sourceWaiting = createDeferred();
-      const acquire = stateLease.withOpenClawStateLease;
-      vi.spyOn(stateLease, "withOpenClawStateLease").mockImplementation((options, run) => {
-        if (options.scope === "projects.checkout" && options.key === repoRoot) {
-          sourceWaiting.resolve();
-        }
-        return acquire(options, run);
-      });
+      const acquire = stateLease.withOpenClawStateLeaseAsync;
+      vi.spyOn(stateLease, "withOpenClawStateLeaseAsync").mockImplementation(
+        (options, context, run) => {
+          if (options.scope === "projects.checkout" && options.key === repoRoot) {
+            sourceWaiting.resolve();
+          }
+          return acquire(options, context, run);
+        },
+      );
       const second = create(1, "project-second");
       operations.push(second);
       await withinTest(
@@ -854,7 +878,7 @@ describe("managed worktree pending slots", () => {
         release.resolve();
         await expect(withinTest(crashed, signal)).rejects.toThrow(failure.message);
         const replacement = await withinTest(retry, signal);
-        expect(replacement.name).toBe("crashed-2");
+        expect(replacement.name).toMatch(/^crashed-[0-9a-f]{6}$/);
         expect(await fs.readFile(path.join(replacement.path, "README.md"), "utf8")).toBe("base\n");
         expect(await fs.readFile(path.join(record.path, "partial.txt"), "utf8")).toBe(
           "uncertain native output\n",

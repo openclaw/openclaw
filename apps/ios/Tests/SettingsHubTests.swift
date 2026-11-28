@@ -8,6 +8,8 @@ import WebKit
 import XCTest
 @testable import OpenClaw
 
+/// The waits below have no deadline of their own; this limit bounds a lost signal (#161616).
+@Suite(.timeLimit(.minutes(10)))
 @MainActor
 struct SettingsHubTests {
     @Test func `Dashboard settings require an active admin session outside demo and screenshots`() {
@@ -26,6 +28,45 @@ struct SettingsHubTests {
                 isDemoMode: testCase.demo,
                 isScreenshotMode: testCase.screenshot) == testCase.dashboard)
         }
+    }
+
+    @Test func `Account header names the person and adds the email only when it is not the name`() throws {
+        func profile(_ json: String) -> SettingsAccount.Answer {
+            SettingsAccount.Answer(selfProfile: Data(#"{"profile":\#(json)}"#.utf8))
+        }
+        let named = try #require(profile(#"""
+        {"id":"p1","displayName":" Avery Quinn ","emails":["avery@example.test"],
+         "githubIdentity":{"login":"avery","profileUrl":"u","avatarUrl":"a"},"hasAvatar":false}
+        """#).profile)
+        #expect(named.name == "Avery Quinn")
+        #expect(named.detail == "avery@example.test")
+        #expect(named.initials == "AQ")
+        let login = try #require(profile(
+            #"{"id":"p1","displayName":null,"emails":[],"githubIdentity":{"login":"avery"}}"#).profile)
+        #expect(login.name == "avery")
+        #expect(login.detail == nil)
+        let email = try #require(profile(#"{"id":"p1","displayName":"","emails":["avery@example.test"]}"#).profile)
+        #expect(email.name == "avery@example.test")
+        #expect(email.detail == nil)
+        // A token-only owner profile has nothing to show, so there is no header.
+        #expect(profile(#"{"id":"gateway-owner","displayName":null,"emails":[],"githubIdentity":null}"#) == .empty)
+        #expect(SettingsAccount.Answer(selfProfile: Data("{}".utf8)) == .unreadable)
+    }
+
+    @Test func `Account header shape hint follows readable answers per Gateway`() throws {
+        let suite = "SettingsHubTests.accountShape.\(UUID().uuidString)"
+        let defaults = try #require(UserDefaults(suiteName: suite))
+        defer { defaults.removePersistentDomain(forName: suite) }
+        #expect(SettingsAccount.lastShape(gatewayID: "gw-a", defaults: defaults) == nil)
+        SettingsAccount.remember(
+            .profile(.init(name: "Avery Quinn", detail: "avery@example.test")), gatewayID: "gw-a", defaults: defaults)
+        #expect(SettingsAccount.lastShape(gatewayID: "gw-a", defaults: defaults) == .nameAndDetail)
+        // A failed read keeps the last answer; an empty profile stops reserving space.
+        SettingsAccount.remember(.unreadable, gatewayID: "gw-a", defaults: defaults)
+        #expect(SettingsAccount.lastShape(gatewayID: "gw-a", defaults: defaults) == .nameAndDetail)
+        SettingsAccount.remember(.empty, gatewayID: "gw-a", defaults: defaults)
+        #expect(SettingsAccount.lastShape(gatewayID: "gw-a", defaults: defaults) == .empty)
+        #expect(SettingsAccount.lastShape(gatewayID: "gw-b", defaults: defaults) == nil)
     }
 
     @Test func `Access cookie resource rule admits only the Gateway authority`() async throws {
@@ -378,6 +419,86 @@ struct SettingsHubTests {
         try await waitForDashboardCondition { !compatibility.needsGatewayUpgrade }
         #expect(!compatibility.needsGatewayUpgrade)
     }
+
+    @Test(arguments: [
+        (404, "text/plain", "Not Found", false),
+        (503, "text/plain", "Web app assets are being prepared. Try again shortly.", false),
+        (404, "text/html", "<html><body>Sign in</body></html>", true),
+        (200, "text/plain", "ready", true),
+    ])
+    func `settings Dashboard never renders a plain Gateway error body`(
+        response: (statusCode: Int, mimeType: String, body: String, renders: Bool)) async throws
+    {
+        let server = try SettingsHubHTTPFixture(
+            body: response.body, status: response.statusCode, contentType: response.mimeType)
+        defer { server.stop() }
+        let fixture = try await DashboardResponseFixture(url: server.start())
+        let text = try await fixture.load()
+        let visibleText = response.mimeType == "text/html" ? "Sign in" : response.body
+        #expect(text.contains(visibleText) == response.renders)
+    }
+}
+
+/// Loads a Gateway URL in a real web view, with the settings coordinator deciding its navigation
+/// response policy. Only HTTP loads reach that policy with an `HTTPURLResponse`: WebKit reports
+/// custom-scheme responses as plain `URLResponse` and skips the policy for simulated requests.
+@MainActor
+final class DashboardResponseFixture: NSObject, WKNavigationDelegate {
+    let compatibility = DashboardEmbedCompatibility()
+    private let url: URL
+    private let webView: WKWebView
+    private let coordinator: AuthenticatedControlUIWebViewCoordinator
+    private var loaded: CheckedContinuation<Void, Never>?
+
+    init(url: URL) {
+        self.url = url
+        let configuration = WKWebViewConfiguration()
+        configuration.websiteDataStore = .nonPersistent()
+        self.webView = WKWebView(frame: .zero, configuration: configuration)
+        self.coordinator = AuthenticatedControlUIWebViewCoordinator(
+            url: url, tls: nil, usesNativeEmbed: true, embedCompatibility: self.compatibility)
+        super.init()
+        self.webView.navigationDelegate = self
+    }
+
+    /// Returns the page text once WebKit commits or cancels the response.
+    func load() async throws -> String {
+        await withCheckedContinuation { continuation in
+            self.loaded = continuation
+            self.webView.load(URLRequest(url: self.url))
+        }
+        let text = try await self.webView.evaluateJavaScript("document.documentElement?.innerText ?? ''")
+        return text as? String ?? ""
+    }
+
+    func webView(
+        _ webView: WKWebView,
+        decidePolicyFor navigationResponse: WKNavigationResponse,
+        decisionHandler: @escaping @MainActor @Sendable (WKNavigationResponsePolicy) -> Void)
+    {
+        let delegate: any WKNavigationDelegate = self.coordinator
+        // WebKit allows every response when the delegate does not decide.
+        if delegate.webView?(webView, decidePolicyFor: navigationResponse, decisionHandler: decisionHandler) == nil {
+            decisionHandler(.allow)
+        }
+    }
+
+    func webView(_: WKWebView, didFinish _: WKNavigation!) {
+        self.finishLoad()
+    }
+
+    func webView(_: WKWebView, didFailProvisionalNavigation _: WKNavigation!, withError _: any Error) {
+        self.finishLoad()
+    }
+
+    func webView(_: WKWebView, didFail _: WKNavigation!, withError _: any Error) {
+        self.finishLoad()
+    }
+
+    private func finishLoad() {
+        self.loaded?.resume()
+        self.loaded = nil
+    }
 }
 
 @MainActor
@@ -471,19 +592,34 @@ private final class AccessCookieInstallFixture {
     }
 }
 
+/// Re-reads signal-less WebKit and fixture state until it holds. No per-wait deadline: a cold
+/// WebContent launch on a loaded simulator took 47.8 s, so a fixed 10 s deadline failed working
+/// loads. Swift Testing suites bound a lost signal with their time limit (#161616). The CI step does
+/// not enable XCTest time limits, so XCTest callers pass their test's one shared `deadline`.
 @MainActor
-private func waitForDashboardCondition(_ condition: () -> Bool) async throws {
-    let deadline = ContinuousClock.now.advanced(by: .seconds(10))
+private func waitForDashboardCondition(
+    until deadline: ContinuousClock.Instant? = nil,
+    _ condition: () -> Bool) async throws
+{
     while !condition() {
-        guard ContinuousClock.now < deadline else { throw URLError(.timedOut) }
+        if let deadline, ContinuousClock.now >= deadline {
+            throw NSError(
+                domain: "SettingsHubVisualProofTests",
+                code: 3,
+                userInfo: [NSLocalizedDescriptionKey: "The test reached its time limit while this wait was pending"])
+        }
         try await Task.sleep(for: .milliseconds(50))
     }
 }
 
 @MainActor
 final class SettingsHubVisualProofTests: XCTestCase {
+    /// One limit for the whole test, shared by all of its waits.
+    private static let testLimit: Duration = .seconds(5 * 60)
+
     @MainActor
     func testIngressAuthorizedDashboardEntryPointsLoadTheSelectedGatewayPage() async throws {
+        let deadline = ContinuousClock.now.advanced(by: Self.testLimit)
         let registryIsolation = await GatewayRegistryTestIsolation()
         defer { registryIsolation.restore() }
         let instanceID = "settings-ingress-\(UUID().uuidString)"
@@ -578,7 +714,7 @@ final class SettingsHubVisualProofTests: XCTestCase {
             // Trusted-proxy operator admission can grant admin without issuing a reusable device token.
             model.applyGatewayConnectConfig(config)
             proofStage = "waiting for native operator admission"
-            try await waitForDashboardCondition { model.isOperatorGatewayConnected }
+            try await waitForDashboardCondition(until: deadline) { model.isOperatorGatewayConnected }
             proofStage = "reading admitted native route"
             let admittedRoute = await model.operatorSession.currentRoute()
             let operatorRoute = try XCTUnwrap(admittedRoute)
@@ -603,7 +739,7 @@ final class SettingsHubVisualProofTests: XCTestCase {
             let desktopURL = try XCTUnwrap(ControlUIHubPage.desktop(source: nil, session: nil).url(config: config))
             let terminalURL = try XCTUnwrap(ControlUIHubPage.terminal.url(config: config))
             let entryPoints: [(String, URL, AnyView)] = [
-                ("settings-hub", expectedURL, AnyView(SettingsHubScreen(navigationPath: .constant([]))
+                ("settings-advanced", expectedURL, AnyView(SettingsHubScreen(navigationPath: .constant([.advanced]))
                         .environment(model)
                         .environment(appearanceModel)
                         .environment(gatewayController)
@@ -634,7 +770,8 @@ final class SettingsHubVisualProofTests: XCTestCase {
                         expectedURL: pageURL,
                         bodyMarker: bodyMarker,
                         gateway: gateway,
-                        attachmentName: "settings-ingress-\(name)")
+                        attachmentName: "settings-ingress-\(name)",
+                        deadline: deadline)
                 } catch {
                     failures.append("\(name): \(error)")
                 }
@@ -650,7 +787,7 @@ final class SettingsHubVisualProofTests: XCTestCase {
             gateway.acceptedOperatorScopes = ["operator.read"]
             model.applyGatewayConnectConfig(config)
             proofStage = "waiting for limited operator admission"
-            try await waitForDashboardCondition { model.isOperatorGatewayConnected }
+            try await waitForDashboardCondition(until: deadline) { model.isOperatorGatewayConnected }
             proofStage = "reading admitted limited route"
             let limitedRoute = await model.operatorSession.currentRoute()
             let limitedOperatorRoute = try XCTUnwrap(limitedRoute)
@@ -682,7 +819,8 @@ final class SettingsHubVisualProofTests: XCTestCase {
         expectedURL: URL,
         bodyMarker: String,
         gateway: NativeGatewayWebSocketFixture,
-        attachmentName: String) async throws
+        attachmentName: String,
+        deadline: ContinuousClock.Instant) async throws
     {
         let controller = UIHostingController(rootView: rootView)
         let scene = try XCTUnwrap(UIApplication.shared.connectedScenes
@@ -702,7 +840,7 @@ final class SettingsHubVisualProofTests: XCTestCase {
         controller.view.layoutIfNeeded()
 
         do {
-            try await waitForDashboardCondition {
+            try await waitForDashboardCondition(until: deadline) {
                 guard let webView = Self.findWebView(in: controller.view) else { return false }
                 return webView.url == expectedURL && !webView.isLoading
             }
@@ -746,14 +884,15 @@ final class SettingsHubVisualProofTests: XCTestCase {
     }
 
     func testOlderDashboardShowsNativeGatewayUpgradeBanner() async throws {
+        let deadline = ContinuousClock.now.advanced(by: Self.testLimit)
         let html = """
         <!doctype html><html><meta name="viewport" content="width=device-width, initial-scale=1">
         <body style="font: 17px -apple-system; padding: 24px; color: #222; background: white">
         <h1>Settings</h1><p>Manage your Gateway preferences.</p></body></html>
         """
-        let fixture = try SettingsHubHTTPFixture(html: html)
+        let fixture = try SettingsHubHTTPFixture(body: html)
         defer { fixture.stop() }
-        let fixtureURL = try await fixture.start()
+        let fixtureURL = try await fixture.start(until: deadline)
 
         let model = NodeAppModel(audioAdmissionInitiallyAllowed: false)
         let gatewayController = GatewayConnectionController(appModel: model, startDiscovery: false)
@@ -790,7 +929,7 @@ final class SettingsHubVisualProofTests: XCTestCase {
         var originalView: WKWebView?
         var bodyText = "not evaluated"
         do {
-            try await waitForDashboardCondition {
+            try await waitForDashboardCondition(until: deadline) {
                 guard let webView = Self.findWebView(in: controller.view) else { return false }
                 return webView.url == fixtureURL && !webView.isLoading
             }
@@ -806,7 +945,7 @@ final class SettingsHubVisualProofTests: XCTestCase {
             try await self.attach(
                 controller.view, named: "settings-older-dashboard-before-upgrade-banner", webView: webView)
 
-            try await waitForDashboardCondition {
+            try await waitForDashboardCondition(until: deadline) {
                 controller.view.setNeedsLayout()
                 controller.view.layoutIfNeeded()
                 return compatibility.needsGatewayUpgrade &&
@@ -860,7 +999,7 @@ final class SettingsHubVisualProofTests: XCTestCase {
 }
 
 @MainActor
-private final class SettingsHubHTTPFixture {
+final class SettingsHubHTTPFixture {
     private struct Client {
         let connection: NWConnection
         var request = Data()
@@ -872,12 +1011,12 @@ private final class SettingsHubHTTPFixture {
     private var stopped = false
     private(set) var requestCount = 0
 
-    init(html: String) throws {
+    init(body text: String, status: Int = 200, contentType: String = "text/html; charset=utf-8") throws {
         let parameters = NWParameters.tcp
         parameters.requiredLocalEndpoint = .hostPort(host: "127.0.0.1", port: .any)
         self.listener = try NWListener(using: parameters, on: .any)
-        let body = Data(html.utf8)
-        let header = "HTTP/1.1 200 OK\r\nContent-Type: text/html; charset=utf-8\r\n" +
+        let body = Data(text.utf8)
+        let header = "HTTP/1.1 \(status) Fixture\r\nContent-Type: \(contentType)\r\n" +
             "Content-Length: \(body.count)\r\nCache-Control: no-store\r\nConnection: close\r\n\r\n"
         self.response = Data(header.utf8) + body
         self.listener.newConnectionHandler = { [weak self] connection in
@@ -894,9 +1033,9 @@ private final class SettingsHubHTTPFixture {
         }
     }
 
-    func start() async throws -> URL {
+    func start(until deadline: ContinuousClock.Instant? = nil) async throws -> URL {
         self.listener.start(queue: .main)
-        try await waitForDashboardCondition {
+        try await waitForDashboardCondition(until: deadline) {
             switch self.listener.state {
             case .ready, .failed, .cancelled: true
             default: false

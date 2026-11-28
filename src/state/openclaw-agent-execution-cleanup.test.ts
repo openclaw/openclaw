@@ -178,6 +178,7 @@ it.each(["current", "replaced", "revoked"] as const)(
         lastCompletedAtMs: 1,
         consecutiveBlocked: 0,
         warning: false,
+        bytePressure: false,
       },
     };
     const lease = {

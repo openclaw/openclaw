@@ -474,7 +474,7 @@ export function listNativePendingChildren(
     if (
       !parentThreadIds.has(child.parentThreadId) ||
       child.settledWithoutCompletion ||
-      child.nativeCompletionDelivered ||
+      child.completionDelivery?.isConsumed() ||
       (child.terminal && !child.pendingCompletion)
     ) {
       continue;

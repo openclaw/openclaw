@@ -22,15 +22,7 @@ import { openNodeSqliteDatabase } from "./node-sqlite.js";
 import { normalizeWindowsPathPreservingCase } from "./path-guards.js";
 import { resolvePrivateSqliteSnapshotStagingRoot } from "./sqlite-private-directory.js";
 import { tryInspectSqliteReadOnlyInProcess } from "./sqlite-readonly-inspection.js";
-import {
-  retainSnapshotWork,
-  withPreparedSqliteSnapshot,
-} from "./sqlite-readonly-location-cleanup.js";
-import {
-  inspectSqliteSchemaHeaderInProcess,
-  prepareSqliteReadOnlyLocationInProcess,
-  prepareSqliteReadOnlyLocationSyncInProcess,
-} from "./sqlite-readonly-location.js";
+import { retainSnapshotWork } from "./sqlite-readonly-location-cleanup.js";
 import { createSqliteSnapshotStagingDirectory } from "./sqlite-snapshot-staging.js";
 import {
   StateDatabaseDiscoverySchema,
@@ -59,7 +51,9 @@ import {
   collectRegisteredPaths,
   collectSupplementalStateDatabasePaths,
   readSharedDatabaseVersion,
+  readUpdatePluginMetadata,
   readUpdateStoreSchemaVersion,
+  withStateDatabaseSnapshot,
   type StateInput,
 } from "./update-candidate-state.shared.js";
 import {
@@ -68,6 +62,7 @@ import {
 } from "./update-candidate-state.sizes.js";
 import {
   publishStateDatabaseVersions,
+  resolveAgentDirOverrideDatabasePaths,
   UpdateStateSchemaVersionsSchema,
   type UpdateStateSchemaVersion,
 } from "./update-candidate-state.versions.js";
@@ -89,6 +84,7 @@ export const UpdateCandidateSnapshotInventorySchema = z.object({
   databases: z
     .array(z.tuple([z.string(), StateDatabaseDiscoverySchema]))
     .transform((entries) => new Map(entries)),
+  // Released parents budget all projected files through this historical field.
   pluginBytes: z.number().nonnegative(),
   pluginPlan: z.literal(UPDATE_CANDIDATE_PLUGIN_PLAN_FILENAME),
   // The installed driver budgets the candidate worker's copy lifecycle.
@@ -102,33 +98,6 @@ export const UpdateStateSchemaInspectionPlanSchema = z.object({
   sharedVersion: UpdateStateSchemaVersionsSchema.element,
 });
 type UpdateStateSchemaInspectionPlan = z.infer<typeof UpdateStateSchemaInspectionPlanSchema>;
-
-async function withStateDatabaseSnapshot<T>(
-  file: string,
-  read: (location: string) => T | Promise<T>,
-  stagingRoot?: string,
-  onProgress?: (progress: UpdateStateInspectionProgress) => void,
-  preserveSourceArtifacts = false,
-): Promise<T> {
-  const progress = createUpdateStateSnapshotReporter(file, "shared database snapshot", onProgress);
-  const snapshot = preserveSourceArtifacts
-    ? prepareSqliteReadOnlyLocationSyncInProcess(file, stagingRoot)
-    : await prepareSqliteReadOnlyLocationInProcess(
-        file,
-        stagingRoot,
-        undefined,
-        progress.onProgress,
-      );
-  // A leftover private copy must not fail an update; the Gateway sweep reclaims it.
-  return withPreparedSqliteSnapshot(
-    snapshot,
-    async (location) => {
-      progress.complete((await fs.stat(location)).size);
-      return read(location);
-    },
-    { bestEffortCleanup: true },
-  );
-}
 
 export async function collectStateDatabasePaths(
   input: StateInput,
@@ -162,10 +131,8 @@ export async function collectStateDatabasePaths(
       ? (await listDefaultAgentDatabasePaths(input.stateDir)).map((entry) => entry.agentId)
       : [];
   const configured = Object.entries(input.config.agents?.entries ?? {});
-  for (const directory of [input.env?.OPENCLAW_AGENT_DIR, input.env?.PI_CODING_AGENT_DIR]) {
-    if (directory?.trim()) {
-      queue(path.join(resolveUserPath(directory, input.env), "openclaw-agent.sqlite"));
-    }
+  for (const file of resolveAgentDirOverrideDatabasePaths(input.env)) {
+    queue(file);
   }
   const projected = (input.config.agents?.list ?? []).map((agent) => [agent.id, agent] as const);
   for (const [id, agent] of [...configured, ...projected]) {
@@ -212,15 +179,14 @@ export async function readUpdateCandidateStateInventoryInProcess(
   };
   const { prepareUpdateCandidatePlugins, readUpdateCandidatePluginIndex } =
     await import("./update-candidate-plugins.js");
-  const files = await collectSupplementalStateDatabasePaths(
-    input,
-    await collectStateDatabasePaths(input),
-  );
+  const files = await collectStateDatabasePaths(input);
   const shared = path.resolve(input.stateDir, "state", "openclaw.sqlite");
   const measure = async (
     sharedStateDatabasePath?: string,
     sharedStatePluginIndex?: import("./update-candidate-plugins.js").UpdateCandidatePluginIndex,
+    metadata: ReturnType<typeof readUpdatePluginMetadata> = [],
   ): Promise<z.infer<typeof UpdateCandidateSnapshotInventorySchema>> => {
+    await collectSupplementalStateDatabasePaths(input, files, metadata);
     // Database discovery is complete; plugin failures must retain their own phase.
     input.onProgress?.({ phase: "plugin inventory", path: input.stateDir });
     const plugins = await prepareUpdateCandidatePlugins({
@@ -229,12 +195,14 @@ export async function readUpdateCandidateStateInventoryInProcess(
       sharedStatePluginIndex,
       onProgress,
     });
+    const coldArchives = await import("./update-candidate-cold-archives.worker.js");
     await fs.writeFile(planPath, JSON.stringify(plugins));
+    const cold = await coldArchives.measureColdArchiveBytes(files, input.targetStateDir);
     return {
       databases: files,
-      pluginBytes: plugins.bytes,
+      pluginBytes: plugins.bytes + cold.bytes,
       pluginPlan: UPDATE_CANDIDATE_PLUGIN_PLAN_FILENAME,
-      warnings: plugins.warnings,
+      warnings: [...plugins.warnings, ...cold.warnings],
     };
   };
   if (await updateStateDatabaseExists(shared)) {
@@ -251,10 +219,13 @@ export async function readUpdateCandidateStateInventoryInProcess(
     input.onProgress?.({ phase: "shared database inspection", path: shared });
     const metadata = tryInspectSqliteReadOnlyInProcess(shared, (db) => {
       collectRegisteredPaths(db, shared, files);
-      return readUpdateCandidatePluginIndex(db);
+      return {
+        pluginIndex: readUpdateCandidatePluginIndex(db),
+        pluginMetadata: input.additionalPaths === undefined ? readUpdatePluginMetadata(db) : [],
+      };
     });
     if (metadata) {
-      return measure(undefined, metadata.value);
+      return measure(undefined, metadata.value.pluginIndex, metadata.value.pluginMetadata);
     }
     return withStateDatabaseSnapshot(
       shared,
@@ -262,10 +233,14 @@ export async function readUpdateCandidateStateInventoryInProcess(
         const db = openNodeSqliteDatabase(location, { readOnly: true });
         try {
           collectRegisteredPaths(db, shared, files);
+          return measure(
+            location,
+            undefined,
+            input.additionalPaths === undefined ? readUpdatePluginMetadata(db) : [],
+          );
         } finally {
           db.close();
         }
-        return measure(location);
       },
       input.targetStateDir,
       input.onProgress,
@@ -280,32 +255,36 @@ export async function discoverUpdateStateSchemaInspectionInProcess(
     stagingRoot: string;
     onProgress?: (progress: UpdateStateInspectionProgress) => void;
     preserveSourceArtifacts?: boolean;
+    /** The stopped backup owner already captured this generation and verifies source stability. */
+    sharedDatabaseImage?: string;
   },
 ): Promise<UpdateStateSchemaInspectionPlan> {
   const shared = path.resolve(input.stateDir, "state", "openclaw.sqlite");
   input.onProgress?.({ phase: "shared database discovery", path: shared });
-  const files = await collectSupplementalStateDatabasePaths(
-    input,
-    await collectStateDatabasePaths(input),
-  );
+  const files = await collectStateDatabasePaths(input);
   if (!(await updateStateDatabaseExists(shared))) {
+    await collectSupplementalStateDatabasePaths(input, files);
     return { files: [...files], sharedVersion: { path: shared, userVersion: null } };
   }
   if (resolveDatabaseFamilyEngines(input.config).state === "postgres") {
+    await collectSupplementalStateDatabasePaths(input, files);
     const { readUpdatePostgresState } = await import("./update-candidate-state.postgres.js");
     const result = await readUpdatePostgresState(input, files);
     return { files: result.files, sharedVersion: { path: shared, ...result.version } };
   }
-  const sharedVersion = await withStateDatabaseSnapshot(
-    shared,
-    async (location) => ({
-      path: shared,
-      ...(await readSharedDatabaseVersion(location, shared, files, input)),
-    }),
-    input.stagingRoot,
-    input.onProgress,
-    input.preserveSourceArtifacts,
-  );
+  const read = async (location: string) => ({
+    path: shared,
+    ...(await readSharedDatabaseVersion(location, shared, files, input)),
+  });
+  const sharedVersion = input.sharedDatabaseImage
+    ? await read(input.sharedDatabaseImage)
+    : await withStateDatabaseSnapshot(
+        shared,
+        read,
+        input.stagingRoot,
+        input.onProgress,
+        input.preserveSourceArtifacts,
+      );
   return { files: [...files], sharedVersion };
 }
 
@@ -321,7 +300,14 @@ export async function readUpdateStateSchemaVersionsInProcess(
   const shared = path.resolve(input.stateDir, "state", "openclaw.sqlite");
   const files = input.inspectionPlan
     ? new Map(input.inspectionPlan.files)
-    : await collectSupplementalStateDatabasePaths(input, await collectStateDatabasePaths(input));
+    : await collectStateDatabasePaths(input);
+  if (
+    !input.inspectionPlan &&
+    (resolveDatabaseFamilyEngines(input.config).state === "postgres" ||
+      !(await updateStateDatabaseExists(shared)))
+  ) {
+    await collectSupplementalStateDatabasePaths(input, files);
+  }
   const sharedIdentity = resolveUpdateCandidateStateIdentity(input.stateDir, shared);
   // Inspect each identity once, then publish every spelling for released rollback baselines.
   const inspected = new Map<string, Omit<UpdateStateSchemaVersion, "path">>();
@@ -391,27 +377,33 @@ async function discoverLegacyUpdateStateSchemaInspection(
     params.signal,
   );
   // Settle the copy worker and close the private reader before removing discovery staging.
-  return withStateInspectionCleanup(stagingRoot, async () => {
-    // The selected candidate owns source access; the loaded parent only opens its private copy.
-    const snapshot = parseUpdateStateInspectionWorker(
-      await runUpdateStateInspectionWorker({ ...params, stagingRoot, readOnlySource: shared }),
-      z.object({ ok: z.literal(true), location: z.string() }),
-    );
-    const relative = path.relative(stagingRoot, snapshot.location);
-    if (
-      !relative ||
-      relative === ".." ||
-      relative.startsWith(`..${path.sep}`) ||
-      path.isAbsolute(relative)
-    ) {
-      throw new Error("Legacy state inspection returned a snapshot outside parent-owned staging.");
-    }
-    const sharedVersion = {
-      path: shared,
-      ...(await readSharedDatabaseVersion(snapshot.location, shared, files, params.input)),
-    };
-    return { files: [...files], sharedVersion };
-  });
+  return withStateInspectionCleanup(
+    stagingRoot,
+    async () => {
+      // The selected candidate owns source access; the loaded parent only opens its private copy.
+      const snapshot = parseUpdateStateInspectionWorker(
+        await runUpdateStateInspectionWorker({ ...params, stagingRoot, readOnlySource: shared }),
+        z.object({ ok: z.literal(true), location: z.string() }),
+      );
+      const relative = path.relative(stagingRoot, snapshot.location);
+      if (
+        !relative ||
+        relative === ".." ||
+        relative.startsWith(`..${path.sep}`) ||
+        path.isAbsolute(relative)
+      ) {
+        throw new Error(
+          "Legacy state inspection returned a snapshot outside parent-owned staging.",
+        );
+      }
+      const sharedVersion = {
+        path: shared,
+        ...(await readSharedDatabaseVersion(snapshot.location, shared, files, params.input)),
+      };
+      return { files: [...files], sharedVersion };
+    },
+    { cleanupFailure: "warn" },
+  );
 }
 
 async function discoverStateSchema(params: Parameters<typeof runUpdateStateInspectionWorker>[0]) {
@@ -429,16 +421,20 @@ export async function readUpdateStateDatabaseInventory(input: StateInput) {
   const sourceEnv = input.env ?? process.env;
   const stagingParent = resolvePrivateSqliteSnapshotStagingRoot(sourceEnv);
   const stagingRoot = await createSqliteSnapshotStagingDirectory(stagingParent);
-  return withStateInspectionCleanup(stagingRoot, async () => {
-    const worker = { nodeRunner: process.execPath, sourceEnv, stagingRoot };
-    const shared = path.join(input.stateDir, "state", "openclaw.sqlite");
-    const { discovery } = await discoverStateSchema({
-      ...worker,
-      input: { ...input, mode: "discover", stagingRoot },
-      databases: await readUpdateStateDatabaseSizes([shared], worker),
-    });
-    return new Map(discovery.files);
-  });
+  return withStateInspectionCleanup(
+    stagingRoot,
+    async () => {
+      const worker = { nodeRunner: process.execPath, sourceEnv, stagingRoot };
+      const shared = path.join(input.stateDir, "state", "openclaw.sqlite");
+      const { discovery } = await discoverStateSchema({
+        ...worker,
+        input: { ...input, mode: "discover", stagingRoot },
+        databases: await readUpdateStateDatabaseSizes([shared], worker),
+      });
+      return new Map(discovery.files);
+    },
+    { cleanupFailure: "warn" },
+  );
 }
 
 /** Schema fencing reads private copies in candidate workers under size-aware deadlines. */
@@ -472,41 +468,45 @@ export async function readUpdateStateSchemaVersions({
     root !== undefined,
     signal,
   );
-  const inspection = withStateInspectionCleanup(stagingRoot, async () => {
-    const shared = path.resolve(input.stateDir, "state", "openclaw.sqlite");
-    const sizeOptions = { nodeRunner, signal, sourceEnv, stagingRoot, timeoutMs };
-    const discoveryParams = {
-      input: { ...input, mode: "discover", stagingRoot },
-      nodeRunner,
-      root,
-      signal,
-      sourceEnv,
-      stagingRoot,
-      timeoutMs,
-      databases: await readUpdateStateDatabaseSizes([shared], sizeOptions),
-    };
-    // Activation may replace the updater package. Both legacy subprocesses must use the candidate.
-    const { discovery, legacyWorker } = await discoverStateSchema(discoveryParams);
-    onInventory?.(new Map(discovery.files));
-    const sharedIdentity = resolveUpdateCandidateStateIdentity(input.stateDir, shared);
-    // Legacy workers recopy the shared database and may inspect every raw alias.
-    // Current workers reuse the discovered shared version and inspect each remaining identity once.
-    const files = legacyWorker
-      ? discovery.files.flatMap(([, database]) => database.spellings)
-      : discovery.files
-          .filter(([identity]) => identity !== sharedIdentity)
-          .map(([, database]) => database.spellings[0]);
-    return parseUpdateStateInspectionWorker(
-      await runUpdateStateInspectionWorker({
-        ...discoveryParams,
-        input: legacyWorker
-          ? { ...input, mode: "versions" }
-          : { ...input, mode: "versions", stagingRoot, inspectionPlan: discovery },
-        databases: await readUpdateStateDatabaseSizes(files, sizeOptions),
-      }),
-      UpdateStateSchemaVersionsSchema,
-    );
-  });
+  const inspection = withStateInspectionCleanup(
+    stagingRoot,
+    async () => {
+      const shared = path.resolve(input.stateDir, "state", "openclaw.sqlite");
+      const sizeOptions = { nodeRunner, signal, sourceEnv, stagingRoot, timeoutMs };
+      const discoveryParams = {
+        input: { ...input, mode: "discover", stagingRoot },
+        nodeRunner,
+        root,
+        signal,
+        sourceEnv,
+        stagingRoot,
+        timeoutMs,
+        databases: await readUpdateStateDatabaseSizes([shared], sizeOptions),
+      };
+      // Activation may replace the updater package. Both legacy subprocesses must use the candidate.
+      const { discovery, legacyWorker } = await discoverStateSchema(discoveryParams);
+      onInventory?.(new Map(discovery.files));
+      const sharedIdentity = resolveUpdateCandidateStateIdentity(input.stateDir, shared);
+      // Legacy workers recopy the shared database and may inspect every raw alias.
+      // Current workers reuse the discovered shared version and inspect each remaining identity once.
+      const files = legacyWorker
+        ? discovery.files.flatMap(([, database]) => database.spellings)
+        : discovery.files
+            .filter(([identity]) => identity !== sharedIdentity)
+            .map(([, database]) => database.spellings[0]);
+      return parseUpdateStateInspectionWorker(
+        await runUpdateStateInspectionWorker({
+          ...discoveryParams,
+          input: legacyWorker
+            ? { ...input, mode: "versions" }
+            : { ...input, mode: "versions", stagingRoot, inspectionPlan: discovery },
+          databases: await readUpdateStateDatabaseSizes(files, sizeOptions),
+        }),
+        UpdateStateSchemaVersionsSchema,
+      );
+    },
+    { cleanupFailure: "warn" },
+  );
   return retainSnapshotWork(inspection, () => controller.abort());
 }
 
@@ -521,7 +521,10 @@ export async function snapshotUpdateCandidateState(
     onProgress?: (progress: UpdateStateInspectionProgress) => void;
   },
 ): Promise<z.infer<typeof UpdateCandidateStateSnapshotSchema>> {
+  const { inspectSqliteSchemaHeaderInProcess } =
+    await import("./sqlite-schema-header-inspection.js");
   const { createVerifiedSqliteSnapshot } = await import("./sqlite-snapshot.js");
+  const coldArchives = await import("./update-candidate-cold-archives.worker.js");
   const { AGENT_FTS_SCHEMAS } = await import("../state/openclaw-agent-fts-schema.js");
   const { copyUpdateCandidatePlugins, UpdateCandidatePluginPlanSchema } =
     await import("./update-candidate-plugins.js");
@@ -553,10 +556,13 @@ export async function snapshotUpdateCandidateState(
   const execApprovals = createUpdateCandidateExecApprovalsProjection(sourceRoot, targetPath);
   // Physical copies dedupe on projection identity; the published versions
   // keep every raw alias so released rollback baselines still match.
-  const files = await collectSupplementalStateDatabasePaths(
-    input,
-    await collectStateDatabasePaths(input),
-  );
+  const files = await collectStateDatabasePaths(input);
+  if (
+    resolveDatabaseFamilyEngines(input.config).state === "postgres" ||
+    !(await updateStateDatabaseExists(shared))
+  ) {
+    await collectSupplementalStateDatabasePaths(input, files);
+  }
   const inspected = new Map<string, Omit<UpdateStateSchemaVersion, "path">>();
   if (
     resolveDatabaseFamilyEngines(input.config).state === "postgres" &&
@@ -587,7 +593,13 @@ export async function snapshotUpdateCandidateState(
     let snapshotSource = file;
     const { capturePostgresBackup, readBackupEngine } =
       await import("../snapshot/database-backup.js");
-    const { userVersion } = await inspectSqliteSchemaHeaderInProcess(file, input.targetStateDir);
+    const { userVersion } = await inspectSqliteSchemaHeaderInProcess(
+      file,
+      input.targetStateDir,
+      undefined,
+      false,
+      { cleanupFailure: "warn" },
+    );
     // PostgreSQL anchors have header version zero; versioned SQLite uses online backup directly.
     const engine = userVersion === 0 ? readBackupEngine(file) : undefined;
     if (engine?.engine === "postgres") {
@@ -608,7 +620,7 @@ export async function snapshotUpdateCandidateState(
       sourceAcquisition: {
         mode: "isolated-process",
         stagingRoot: input.targetStateDir,
-        bestEffortCleanup: true,
+        cleanupFailure: "warn",
       },
       integrity:
         snapshotSource === file
@@ -627,69 +639,71 @@ export async function snapshotUpdateCandidateState(
       // full image and alter implicit row IDs before candidate migrations run.
       preserveRowIds: true,
       onProgress: progress.onProgress,
-      ...(file === shared
-        ? {
-            transform: (db: DatabaseSync) => {
-              contentVersion = readStateSchemaContentVersion(db);
-              // Preserve the known source selector before rehearsal changes the state root.
-              // The migration still refuses an unmatched historical partition.
-              if (sourceStoreKey && tableExists(db, "config_machine_state")) {
-                migrateCronDefaultStoreIdentity(db, {
-                  previousVersion: contentVersion ?? userVersion,
-                  legacyDefaultStoreKey: sourceStoreKey,
-                });
-              }
-              const queries = getNodeSqliteKysely<CandidateStateDatabase>(db);
-              execApprovals.rebaseReceipt(db);
-              // Source process leases cannot own the independently opened rehearsal copy.
-              for (const table of leaseTables) {
-                if (tableExists(db, table)) {
-                  executeSqliteQuerySync(db, queries.deleteFrom(table));
-                }
-              }
-              for (const { stored, source } of collectRegisteredPaths(db, shared, files)) {
-                const rebound = targetPath(source);
-                const reboundStored = path.relative(input.targetStateDir, rebound);
-                const resolvedRebound = resolveOpenClawRegisteredAgentDatabasePath(
-                  shared,
-                  reboundStored,
-                );
-                // Extended-length \\?\ and plain spellings of one registered database
-                // are the same duplicate pair as a legacy absolute/relative pair.
-                const sameRegisteredDatabase =
-                  source === resolvedRebound ||
-                  (process.platform === "win32" &&
-                    normalizeWindowsPathPreservingCase(source) ===
-                      normalizeWindowsPathPreservingCase(resolvedRebound));
-                if (stored !== reboundStored && sameRegisteredDatabase) {
-                  // A legacy absolute/relative pair names exactly the same source.
-                  // Collapse only that duplicate in the copy before its unique-key update.
-                  executeSqliteQuerySync(
-                    db,
-                    queries
-                      .deleteFrom("agent_databases")
-                      .where("path", "=", stored)
-                      .where(
-                        "agent_id",
-                        "in",
-                        queries
-                          .selectFrom("agent_databases")
-                          .select("agent_id")
-                          .where("path", "=", reboundStored),
-                      ),
-                  );
-                }
-                executeSqliteQuerySync(
-                  db,
-                  queries
-                    .updateTable("agent_databases")
-                    .set({ path: reboundStored })
-                    .where("path", "=", stored),
-                );
-              }
-            },
+      transform: async (db: DatabaseSync) => {
+        if (file !== shared) {
+          await coldArchives.copyColdArchives(db, file, target);
+          return;
+        }
+        contentVersion = readStateSchemaContentVersion(db);
+        await collectSupplementalStateDatabasePaths(
+          input,
+          files,
+          input.additionalPaths === undefined ? readUpdatePluginMetadata(db) : [],
+        );
+        // Preserve the known source selector before rehearsal changes the state root.
+        // The migration still refuses an unmatched historical partition.
+        if (sourceStoreKey && tableExists(db, "config_machine_state")) {
+          migrateCronDefaultStoreIdentity(db, {
+            previousVersion: contentVersion ?? userVersion,
+            legacyDefaultStoreKey: sourceStoreKey,
+          });
+        }
+        const queries = getNodeSqliteKysely<CandidateStateDatabase>(db);
+        execApprovals.rebaseReceipt(db);
+        // Source process leases cannot own the independently opened rehearsal copy.
+        for (const table of leaseTables) {
+          if (tableExists(db, table)) {
+            executeSqliteQuerySync(db, queries.deleteFrom(table));
           }
-        : {}),
+        }
+        for (const { stored, source } of collectRegisteredPaths(db, shared, files)) {
+          const rebound = targetPath(source);
+          const reboundStored = path.relative(input.targetStateDir, rebound);
+          const resolvedRebound = resolveOpenClawRegisteredAgentDatabasePath(shared, reboundStored);
+          // Extended-length \\?\ and plain spellings of one registered database
+          // are the same duplicate pair as a legacy absolute/relative pair.
+          const sameRegisteredDatabase =
+            source === resolvedRebound ||
+            (process.platform === "win32" &&
+              normalizeWindowsPathPreservingCase(source) ===
+                normalizeWindowsPathPreservingCase(resolvedRebound));
+          if (stored !== reboundStored && sameRegisteredDatabase) {
+            // A legacy absolute/relative pair names exactly the same source.
+            // Collapse only that duplicate in the copy before its unique-key update.
+            executeSqliteQuerySync(
+              db,
+              queries
+                .deleteFrom("agent_databases")
+                .where("path", "=", stored)
+                .where(
+                  "agent_id",
+                  "in",
+                  queries
+                    .selectFrom("agent_databases")
+                    .select("agent_id")
+                    .where("path", "=", reboundStored),
+                ),
+            );
+          }
+          executeSqliteQuerySync(
+            db,
+            queries
+              .updateTable("agent_databases")
+              .set({ path: reboundStored })
+              .where("path", "=", stored),
+          );
+        }
+      },
     });
     progress.complete((await fs.stat(target)).size);
     inspected.set(identity, {

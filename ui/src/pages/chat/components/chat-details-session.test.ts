@@ -365,6 +365,51 @@ it("uses the current PR renderer and preserves CI session identity and branch di
   });
   expect(element.querySelector(".chat-pr")).toBeNull();
 });
+it.each([false, true])(
+  "omits subsessions from Details, including retained snapshots (desktop=%s)",
+  async (desktop) => {
+    const parent = "agent:main:details";
+    const child = (key: string, label: string): GatewaySessionRow => ({
+      key,
+      label,
+      kind: "direct",
+      parentSessionKey: parent,
+      status: "done",
+    });
+    const ordinary = child("agent:main:acp:coder", "Ordinary child");
+    const native = child("agent:main:subagent:review", "Native review");
+    const element = await mount({
+      subagentSessions: [ordinary, native],
+      subagentSessionsHydrated: true,
+      onOpenSubagent: vi.fn(),
+      onOpenSubagents: vi.fn(),
+      desktopPresentation: {
+        peopleLabel: "People",
+        outputsLabel: "Outputs",
+        subagentsWorkingLabel: "Working",
+      },
+    });
+    element.desktop = desktop;
+    await element.updateComplete;
+    await waitForSolid(() => expect(element.textContent).toContain("Native review"));
+    expect(element.textContent).not.toContain("Ordinary child");
+    await updateDetails(element, { subagentSessions: [ordinary] });
+    expect(element.querySelector('[data-details-group="subagents"]')).toBeNull();
+    await updateDetails(element, {
+      subagentSessionsHydrated: false,
+      cachedDetails: {
+        locale: "en",
+        subagents: {
+          total: 1,
+          rows: [{ key: ordinary.key, label: ordinary.label!, status: "done", listed: false }],
+          counts: [{ status: "done", count: 1, listed: false }],
+        },
+      },
+    });
+    expect(element.querySelector('[data-details-group="subagents"]')).toBeNull();
+  },
+);
+
 it("groups every direct subagent with counts, live activity first, and a bounded preview", async () => {
   const parent = "agent:main:details";
   const child = (slug: string, state: Partial<GatewaySessionRow>): GatewaySessionRow => ({
@@ -615,6 +660,7 @@ it.each([false, true])(
     element.desktop = desktop;
     await element.updateComplete;
     const environment = element.querySelector('[data-details-group="environment"]')!;
+    await vi.dynamicImportSettled();
     await waitForSolid(() =>
       expect(environment.querySelector("button.chat-pr__create")?.textContent).toBe("Create PR"),
     );
@@ -850,4 +896,65 @@ it("reloads missing branchless facts even when Environment was collapsed", async
   setUncommitted(result);
   await waitForSolid(() => expect(stop).toHaveBeenCalledOnce());
   expect(view.container.querySelector('[data-details-group="environment"]')).not.toBeNull();
+});
+
+it("shows two members who have never sent, dedupes contributors, and removes revoked membership immediately", async () => {
+  const owner = {
+    type: "human",
+    id: "owner",
+    identity: { type: "profile", id: "owner" },
+    label: "Owner Person",
+  } as const;
+  const member = (id: string) => ({
+    type: "human" as const,
+    id,
+    identity: { type: "profile" as const, id },
+    label: id,
+  });
+  const sharing = {
+    sessionKey: "agent:main:details",
+    role: "owner" as const,
+    allowedVisibilities: [],
+    members: ["speaker", "Silent One", "Silent Two"].map((identityId) => ({
+      identityId,
+      addedAt: 1,
+    })),
+    identities: [member("speaker"), member("Silent One"), member("Silent Two")],
+  };
+  const element = await mount({
+    selectedSession: {
+      key: sharing.sessionKey,
+      kind: "direct",
+      owner: { actor: owner },
+      createdActor: owner,
+      participants: [member("speaker")],
+      participantCount: 1,
+    },
+    sharing,
+    desktopPresentation: {
+      peopleLabel: "People",
+      outputsLabel: "Outputs",
+      subagentsWorkingLabel: "Working",
+    },
+    desktopDisclosures: { expanded: { people: true }, onExpandedChange() {} },
+  });
+  element.desktop = true;
+  await updateDetails(element);
+  await vi.dynamicImportSettled();
+  await waitForSolid(() =>
+    expect(element.querySelectorAll(".chat-details-people__row")).toHaveLength(4),
+  );
+  expect(element.querySelector(".chat-details-people")?.textContent).toContain("Silent One");
+  expect(element.querySelector(".chat-details-people")?.textContent).toContain("Silent Two");
+  expect(element.querySelector(".chat-details-people")?.textContent).not.toContain("Can send");
+  await updateDetails(element, {
+    sharing: {
+      ...sharing,
+      members: sharing.members.filter(({ identityId }) => identityId !== "Silent Two"),
+    },
+  });
+  await waitForSolid(() =>
+    expect(element.querySelectorAll(".chat-details-people__row")).toHaveLength(3),
+  );
+  expect(element.querySelector(".chat-details-people")?.textContent).not.toContain("Silent Two");
 });

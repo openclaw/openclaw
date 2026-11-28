@@ -3,6 +3,7 @@ import type { Context } from "grammy";
 import { resolveAgentDir, resolveDefaultModelForAgent } from "openclaw/plugin-sdk/agent-runtime";
 import { parseExecApprovalCommandText } from "openclaw/plugin-sdk/approval-reply-runtime";
 import { buildCommandsMessagePaginated } from "openclaw/plugin-sdk/command-status";
+import { agentControlText } from "openclaw/plugin-sdk/interactive-runtime";
 import { applySessionModelSelection } from "openclaw/plugin-sdk/model-session-runtime";
 import {
   formatModelsAvailableHeaderAsync,
@@ -72,6 +73,7 @@ import {
 } from "./model-buttons.js";
 import {
   hasTelegramOpaqueCallbackPrefix,
+  parseTelegramAgentCallbackData,
   parseTelegramNativeCommandCallbackData,
   parseTelegramOpaqueCallbackData,
 } from "./native-command-callback-data.js";
@@ -137,9 +139,16 @@ export function createTelegramCallbackRouter({
       const hasReservedModelPrefix = data.startsWith("mdl1~");
       const hasReservedOpaquePrefix = hasTelegramOpaqueCallbackPrefix(data);
       const opaqueCallbackData = parseTelegramOpaqueCallbackData(callback.data?.trimStart());
+      // Agent-authored values stay data even when slash-prefixed; commands use action.type "command".
+      // Agent buttons already delivered by v2026.11.5 continue as their marked value.
+      const agentCallbackData = parseTelegramAgentCallbackData(data) ?? data;
+      const agentCallbackText = agentControlText(agentCallbackData);
+      const hasReservedTypedPrefix = hasReservedOpaquePrefix || agentCallbackText !== undefined;
       const genericCallbackText = data.startsWith("/") ? data : `callback_data: ${data}`;
       const callbackCommandText =
-        nativeCallbackCommand ?? (opaqueCallbackData ? "" : genericCallbackText);
+        nativeCallbackCommand ??
+        agentCallbackText ??
+        (opaqueCallbackData ? "" : genericCallbackText);
       const hasReservedApprovalPrefix = hasTelegramApprovalCallbackPrefix(data);
       const hasReservedQuestionPrefix = hasTelegramQuestionCallbackPrefix(data);
       const typedApprovalCallback = parseTelegramApprovalCallbackData(data);
@@ -163,7 +172,7 @@ export function createTelegramCallbackRouter({
         !isRuntimeControlCallback &&
         inlineButtonsUnavailable &&
         !nativeCallbackCommand &&
-        !hasReservedOpaquePrefix &&
+        !hasReservedTypedPrefix &&
         !hasReservedModelPrefix
       ) {
         return;
@@ -221,7 +230,7 @@ export function createTelegramCallbackRouter({
       if (
         inlineButtonsUnavailable &&
         ((nativeCallbackCommand && !legacyApprovalCallback) ||
-          hasReservedOpaquePrefix ||
+          hasReservedTypedPrefix ||
           hasReservedModelPrefix)
       ) {
         await terminalizeUnavailableCallback();
@@ -310,7 +319,7 @@ export function createTelegramCallbackRouter({
           ctx,
           callbackMessage,
           data,
-          pluginCallbackData: opaqueCallbackData ?? data,
+          pluginCallbackData: opaqueCallbackData ?? agentCallbackData,
           callbackConversationId,
           callbackThreadId,
           senderId,
@@ -480,7 +489,9 @@ export function createTelegramCallbackRouter({
           const safePage = Math.max(1, Math.min(page, totalPages));
           const currentModel =
             sessionState.model ||
-            `${activeResolvedDefault.provider}/${activeResolvedDefault.model}`;
+            (activeResolvedDefault
+              ? `${activeResolvedDefault.provider}/${activeResolvedDefault.model}`
+              : undefined);
           const availability = modelData.modelMenu?.byProvider.get(provider);
           const buttons = buildModelsKeyboard({
             provider,
@@ -523,8 +534,8 @@ export function createTelegramCallbackRouter({
             agentId: sessionState.agentId,
           });
           const isDefaultSelection =
-            selection.provider === resolvedDefault.provider &&
-            selection.model === resolvedDefault.model;
+            selection.provider === resolvedDefault?.provider &&
+            selection.model === resolvedDefault?.model;
           const persistedSessionEntry = sessionState.sessionEntry;
           const sessionEntryMissing = persistedSessionEntry === undefined;
           const sessionEntry = persistedSessionEntry ?? {
@@ -551,10 +562,10 @@ export function createTelegramCallbackRouter({
               sessionEntry,
               sessionStore,
               allowCreate: sessionEntryMissing,
-              defaultProvider: resolvedDefault.provider,
-              defaultModel: resolvedDefault.model,
-              currentProvider: currentSelection.provider,
-              currentModel: currentSelection.model,
+              defaultProvider: resolvedDefault?.provider ?? selection.provider,
+              defaultModel: resolvedDefault?.model,
+              currentProvider: currentSelection?.provider,
+              currentModel: currentSelection?.model,
               modelCatalog: modelData.modelCatalog,
               canPersistStickyModelSelection: false,
               request: {

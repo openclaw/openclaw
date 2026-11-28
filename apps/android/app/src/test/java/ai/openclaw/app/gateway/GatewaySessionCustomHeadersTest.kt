@@ -28,19 +28,9 @@ import okhttp3.mockwebserver.Dispatcher
 import okhttp3.mockwebserver.MockResponse
 import okhttp3.mockwebserver.MockWebServer
 import okhttp3.mockwebserver.RecordedRequest
+import okhttp3.mockwebserver.SocketPolicy
 import okio.Buffer
 import okio.ByteString
-import org.bouncycastle.asn1.ASN1Integer
-import org.bouncycastle.asn1.DERBitString
-import org.bouncycastle.asn1.DERNull
-import org.bouncycastle.asn1.pkcs.PKCSObjectIdentifiers
-import org.bouncycastle.asn1.x500.X500Name
-import org.bouncycastle.asn1.x509.AlgorithmIdentifier
-import org.bouncycastle.asn1.x509.Certificate
-import org.bouncycastle.asn1.x509.SubjectPublicKeyInfo
-import org.bouncycastle.asn1.x509.Time
-import org.bouncycastle.asn1.x509.V3TBSCertificateGenerator
-import org.bouncycastle.asn1.x509.Validity
 import org.junit.Assert.assertArrayEquals
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertNull
@@ -51,12 +41,6 @@ import org.robolectric.RobolectricTestRunner
 import org.robolectric.RuntimeEnvironment
 import org.robolectric.annotation.Config
 import java.io.IOException
-import java.security.KeyPairGenerator
-import java.security.KeyStore
-import java.security.MessageDigest
-import java.security.Signature
-import java.security.cert.CertificateFactory
-import java.util.Date
 import java.util.UUID
 import java.util.concurrent.ConcurrentLinkedQueue
 import java.util.concurrent.CountDownLatch
@@ -64,9 +48,6 @@ import java.util.concurrent.TimeUnit
 import java.util.concurrent.atomic.AtomicBoolean
 import java.util.concurrent.atomic.AtomicInteger
 import java.util.concurrent.atomic.AtomicReference
-import javax.net.ssl.KeyManagerFactory
-import javax.net.ssl.SSLContext
-import javax.net.ssl.SSLSocketFactory
 
 private const val TEST_TIMEOUT_MS = 8_000L
 private const val CONNECT_CHALLENGE_FRAME =
@@ -128,24 +109,33 @@ class GatewaySessionCustomHeadersTest {
       }
     }
 
+  @Test
+  fun sourceFaviconsRecoverAfterTransientHttpFailureWithoutReconnecting() {
+    runBlocking {
+      assertSourceFavicons(contextPath = "/socket", basePath = "/ui", recoverFailedFavicon = true)
+    }
+  }
+
   private suspend fun assertSourceFavicons(
     contextPath: String,
     basePath: String,
     proxyAcceptsRead: Boolean? = null,
     expectedBasePath: String = basePath.ifEmpty { contextPath },
+    recoverFailedFavicon: Boolean = false,
   ) = coroutineScope {
     val connected = CompletableDeferred<Unit>()
     val slowStarted = CompletableDeferred<Unit>()
     val releaseSlow = java.util.concurrent.CountDownLatch(1)
     val iconRequests = ConcurrentLinkedQueue<RecordedRequest>()
+    val failFirstRecoveryRequest = AtomicBoolean(true)
     val imageBytes = byteArrayOf(1, 2, 3, 4)
-    val tls = if (proxyAcceptsRead != null) sourceFaviconTls() else null
+    val tls = if (proxyAcceptsRead != null) gatewayTlsTestFixture() else null
     val proxyAuthorization = "Basic c3ludGhldGljOnByb3h5"
     val expectedAuthorization = if (proxyAcceptsRead == true) listOf(proxyAuthorization) else listOfNotNull(proxyAuthorization.takeIf { tls != null }) + listOf("Bearer issued-device-token", "Bearer shared-token")
     val trap = MockWebServer().apply { start() }
     val server =
       MockWebServer().apply {
-        tls?.let { useHttps(it.first, false) }
+        tls?.let { useHttps(it.socketFactory, false) }
         dispatcher =
           object : Dispatcher() {
             override fun dispatch(request: RecordedRequest): MockResponse {
@@ -178,6 +168,9 @@ class GatewaySessionCustomHeadersTest {
               val authorization = request.getHeader("Authorization")
               if (proxyAcceptsRead == true && authorization != proxyAuthorization) return MockResponse().setResponseCode(401)
               if (proxyAcceptsRead != true && authorization != "Bearer shared-token") return MockResponse().setResponseCode(401)
+              if (request.path?.endsWith("recover.example") == true && failFirstRecoveryRequest.getAndSet(false)) {
+                return MockResponse().setResponseCode(503)
+              }
               return when {
                 request.path?.endsWith("redirect.example") == true -> {
                   MockResponse().setResponseCode(302).setHeader("Location", trap.url("/must-not-load"))
@@ -226,7 +219,7 @@ class GatewaySessionCustomHeadersTest {
         token = "shared-token",
         bootstrapToken = "never-http-bootstrap",
         password = null,
-        tls = tls?.let { GatewayTlsParams(expectedFingerprint = it.second) },
+        tls = tls?.let { GatewayTlsParams(expectedFingerprint = it.fingerprint) },
         options =
           GatewayConnectOptions(
             role = "operator",
@@ -251,6 +244,15 @@ class GatewaySessionCustomHeadersTest {
       if (tls != null) assertTrue(iconRequests.all { it.getHeader("X-Proxy-Route") == "source-proof" })
       assertArrayEquals(imageBytes, load("example.com")?.bytes)
       assertEquals(expectedAuthorization.size, iconRequests.size)
+      if (recoverFailedFavicon) {
+        assertNull(load("recover.example"))
+        val recovered = load("recover.example")
+        assertArrayEquals("A transient HTTP failure must not poison the connection cache", imageBytes, recovered?.bytes)
+        val requestsAfterRecovery = iconRequests.size
+        val cached = load("recover.example")
+        assertArrayEquals(imageBytes, cached?.bytes)
+        assertEquals(requestsAfterRecovery, iconRequests.size)
+      }
       assertNull(load("redirect.example"))
       assertEquals(0, trap.requestCount)
       assertNull(load("large.example"))
@@ -432,6 +434,8 @@ class GatewaySessionCustomHeadersTest {
       val artifactRequests = ConcurrentLinkedQueue<kotlinx.serialization.json.JsonObject>()
       val audioRequestCount = AtomicInteger()
       val mediaRequests = ConcurrentLinkedQueue<RecordedRequest>()
+      val stalledDownloadRequest = CompletableDeferred<Unit>()
+      val mediaClient = CompletableDeferred<OkHttpClient>()
       val invalidMediaPaths =
         mapOf(
           "invalid-absolute" to "https://attacker.invalid$imagePath",
@@ -454,10 +458,26 @@ class GatewaySessionCustomHeadersTest {
                 if (request.path?.startsWith("$contextPath$filePath") == true) {
                   mediaRequests.add(request)
                   return when (request.requestUrl?.queryParameter("test")) {
-                    "redirect" -> MockResponse().setResponseCode(302).setHeader("Location", redirectTrap.url("/must-not-load"))
-                    "oversized" -> MockResponse().setHeader("Content-Type", "application/pdf").setHeader("Content-Length", 100L * 1024L * 1024L + 1L)
-                    "missing-mime" -> MockResponse().setBody(Buffer().write(fileBytes))
-                    else -> MockResponse().setHeader("Content-Type", "application/pdf").setChunkedBody(Buffer().write(fileBytes), 8)
+                    "stalled" -> {
+                      stalledDownloadRequest.complete(Unit)
+                      MockResponse().setSocketPolicy(SocketPolicy.NO_RESPONSE)
+                    }
+
+                    "redirect" -> {
+                      MockResponse().setResponseCode(302).setHeader("Location", redirectTrap.url("/must-not-load"))
+                    }
+
+                    "oversized" -> {
+                      MockResponse().setHeader("Content-Type", "application/pdf").setHeader("Content-Length", 100L * 1024L * 1024L + 1L)
+                    }
+
+                    "missing-mime" -> {
+                      MockResponse().setBody(Buffer().write(fileBytes))
+                    }
+
+                    else -> {
+                      MockResponse().setHeader("Content-Type", "application/pdf").setChunkedBody(Buffer().write(fileBytes), 8)
+                    }
                   }
                 }
                 if (request.path == "$contextPath$imagePath") {
@@ -526,6 +546,7 @@ class GatewaySessionCustomHeadersTest {
                             val path =
                               invalidFilePath ?: when (requestedArtifactId) {
                                 "file-redirect" -> "$filePath&test=redirect"
+                                "file-stalled" -> "$filePath&test=stalled"
                                 "file-oversized" -> "$filePath&test=oversized"
                                 "file-missing-mime" -> "$filePath&test=missing-mime"
                                 else -> filePath
@@ -570,6 +591,10 @@ class GatewaySessionCustomHeadersTest {
           onDisconnected = {},
           onEvent = { _, _ -> },
           customHeadersProvider = { error("Cleartext transport must not read custom headers") },
+          webSocketFactory = { client, request, listener ->
+            mediaClient.complete(client)
+            client.newWebSocket(request, listener)
+          },
         )
 
       try {
@@ -665,6 +690,33 @@ class GatewaySessionCustomHeadersTest {
             assertNull(session.loadMediaArtifact(stableId, "main", "main", id, GatewayMediaKind.File))
           }
           assertEquals(0, redirectTrap.requestCount)
+
+          val client = mediaClient.await()
+          val pendingDownload =
+            async { runCatching { session.loadMediaArtifact(stableId, "main", "main", "file-stalled", GatewayMediaKind.File) } }
+          try {
+            withTimeout(TEST_TIMEOUT_MS) { stalledDownloadRequest.await() }
+            val call =
+              client.dispatcher
+                .runningCalls()
+                .single { it.request().url.queryParameter("test") == "stalled" }
+            pendingDownload.cancel()
+            assertTrue(
+              "Canceling a media load must close its HTTP call without waiting for the network timeout",
+              call.isCanceled(),
+            )
+            withTimeout(TEST_TIMEOUT_MS) { pendingDownload.join() }
+          } finally {
+            pendingDownload.cancel()
+            // Release the real stalled request even when the cancellation regression fails.
+            client.dispatcher
+              .runningCalls()
+              .filter { it.request().url.queryParameter("test") == "stalled" }
+              .forEach { it.cancel() }
+          }
+          val afterCancellation =
+            session.loadMediaArtifact(stableId, "main", "main", fileArtifactId, GatewayMediaKind.File) as? GatewayLoadedMedia.Buffered
+          assertArrayEquals(fileBytes, afterCancellation?.bytes)
         }
         assertTrue(
           artifactRequests.all {
@@ -861,40 +913,6 @@ class GatewaySessionCustomHeadersTest {
       }
     }
 
-  private fun sourceFaviconTls(): Pair<SSLSocketFactory, String> {
-    val keyPair = KeyPairGenerator.getInstance("RSA").apply { initialize(2048) }.generateKeyPair()
-    val algorithm = AlgorithmIdentifier(PKCSObjectIdentifiers.sha256WithRSAEncryption, DERNull.INSTANCE)
-    val subject = X500Name("CN=source-favicon-test")
-    val now = System.currentTimeMillis()
-    val tbs =
-      V3TBSCertificateGenerator()
-        .apply {
-          setSerialNumber(ASN1Integer.ONE)
-          setSignature(algorithm)
-          setIssuer(subject)
-          setSubject(subject)
-          setValidity(Validity(Time(Date(now - 60_000)), Time(Date(now + 86_400_000))))
-          setSubjectPublicKeyInfo(SubjectPublicKeyInfo.getInstance(keyPair.public.encoded))
-        }.generateTBSCertificate()
-    val signature =
-      Signature.getInstance("SHA256withRSA").apply {
-        initSign(keyPair.private)
-        update(tbs.encoded)
-      }
-    val encoded = Certificate(tbs, algorithm, DERBitString(signature.sign())).encoded
-    val certificate = CertificateFactory.getInstance("X.509").generateCertificate(encoded.inputStream())
-    val password = charArrayOf()
-    val keyStore =
-      KeyStore.getInstance("PKCS12").apply {
-        load(null, null)
-        setKeyEntry("server", keyPair.private, password, arrayOf(certificate))
-      }
-    val managers = KeyManagerFactory.getInstance(KeyManagerFactory.getDefaultAlgorithm()).apply { init(keyStore, password) }
-    val factory = SSLContext.getInstance("TLS").apply { init(managers.keyManagers, null, null) }.socketFactory
-    val fingerprint = MessageDigest.getInstance("SHA-256").digest(encoded).joinToString("") { "%02x".format(it) }
-    return factory to fingerprint
-  }
-
   @Test
   fun suspendedIngressCannotCreateSocketAfterDisconnect() =
     runBlocking {
@@ -1020,7 +1038,7 @@ class GatewaySessionCustomHeadersTest {
   @Test
   fun ingressDenialPausesReconnectUntilExplicitRetry() =
     runBlocking {
-      val failure = CompletableDeferred<Pair<GatewaySession.ErrorShape, Boolean>>()
+      val failure = CompletableDeferred<Pair<ErrorShape, Boolean>>()
       val secondAuthorization = CompletableDeferred<Unit>()
       val socketCreated = CompletableDeferred<Unit>()
       val attempts = AtomicInteger()
@@ -1071,7 +1089,7 @@ class GatewaySessionCustomHeadersTest {
       for (mode in listOf("valid", "retire", "expired")) {
         val retire = mode == "retire"
         val valid = AtomicBoolean(true)
-        val failure = CompletableDeferred<Pair<GatewaySession.ErrorShape, Boolean>>()
+        val failure = CompletableDeferred<Pair<ErrorShape, Boolean>>()
         val server = MockWebServer()
         val firstRequest = CompletableDeferred<Unit>()
         val releaseResponse = CountDownLatch(if (retire) 1 else 0)
@@ -1180,7 +1198,7 @@ class GatewaySessionCustomHeadersTest {
       val peerClosed = CompletableDeferred<Unit>()
       val responseHeld = CompletableDeferred<Unit>()
       val rawFailure = CompletableDeferred<Throwable>()
-      val failure = CompletableDeferred<Pair<GatewaySession.ErrorShape, Boolean>>()
+      val failure = CompletableDeferred<Pair<ErrorShape, Boolean>>()
       val releaseResponse = CountDownLatch(1)
       val releaseFailure = CountDownLatch(1)
       val opened = AtomicInteger()
@@ -1292,7 +1310,7 @@ class GatewaySessionCustomHeadersTest {
   fun onlyAnExplicitUpgradeChallengePausesForExternalAuthorization() =
     runBlocking {
       for (protected in listOf(false, true)) {
-        val failure = CompletableDeferred<Pair<GatewaySession.ErrorShape, Boolean>>()
+        val failure = CompletableDeferred<Pair<ErrorShape, Boolean>>()
         val disconnected = CompletableDeferred<Unit>()
         val scope = CoroutineScope(SupervisorJob() + Dispatchers.Default)
         val authorization =
@@ -1470,7 +1488,7 @@ class GatewaySessionCustomHeadersTest {
   private fun ingressSession(
     scope: CoroutineScope,
     authorization: GatewayIngressAuthorization,
-    onFailure: (GatewaySession.ErrorShape, Boolean) -> Unit = { _, _ -> },
+    onFailure: (ErrorShape, Boolean) -> Unit = { _, _ -> },
     onConnected: (GatewayHelloSummary) -> Unit = {},
     socketFactory: (OkHttpClient, Request, WebSocketListener) -> WebSocket,
   ) = GatewaySession(

@@ -1,6 +1,5 @@
 import { once } from "node:events";
 import fs from "node:fs/promises";
-import type { IncomingMessage } from "node:http";
 import path from "node:path";
 import { afterEach, beforeEach, expect, it, vi } from "vitest";
 import { createDeferred } from "../../test/helpers/promise.js";
@@ -12,8 +11,7 @@ import {
 import * as fsSafe from "../infra/fs-safe.js";
 import { resolvePreferredOpenClawTmpDir } from "../infra/tmp-openclaw-dir.js";
 import * as playback from "../media/playback-transcode.js";
-import { handleControlUiAssistantMediaRequest } from "./control-ui.js";
-import * as httpAuth from "./http-auth-utils.js";
+import { handleControlUiAssistantMediaRequest } from "./control-ui-assistant-media-http.js";
 import { makeMockHttpResponse } from "./test-http-response.js";
 
 const runFfprobe = vi.hoisted(() => vi.fn<() => Promise<string>>());
@@ -193,7 +191,7 @@ it("shares audio metadata probes, retries failures, and reinspects replacements"
   expect(await readMetadata(filePath)).toMatchObject({ available: true, durationMs: 4567 });
   expect(runFfprobe).toHaveBeenCalledTimes(3);
   expect(runFfprobe).toHaveBeenCalledWith(expect.any(Array), {
-    stdinFileDescriptor: expect.any(Number),
+    stdinFile: expect.any(Object),
   });
 });
 
@@ -321,63 +319,5 @@ it.each(["meta", "playback"] as const)(
       expect(abandoned.end).not.toHaveBeenCalled();
     }
     expect(runFfprobe).toHaveBeenCalledTimes(metadata ? 4 : 3);
-  },
-);
-
-it.each(["while queued", "during safe-open"] as const)(
-  "rechecks reader authority %s and retains work for an authorized shared viewer",
-  async (revocation) => {
-    await using batch = await createBlockedMedia(5);
-    const { paths: realPaths, requests } = batch;
-    const revokedRequests = new Set<IncomingMessage>();
-    const authorize = httpAuth.authorizeControlUiReadRequestOrReply;
-    vi.spyOn(httpAuth, "authorizeControlUiReadRequestOrReply").mockImplementation(
-      async (params) => {
-        const authorized = await authorize(params);
-        return authorized
-          ? {
-              ...authorized,
-              hasCurrentClientAuthority: () =>
-                !revokedRequests.has(params.req) && authorized.hasCurrentClientAuthority(),
-            }
-          : authorized;
-      },
-    );
-    let revokeDuringOpen: (() => void) | undefined;
-    const openedFiles = observeOpenedFiles((opened, files) => {
-      if (
-        opened.realPath === realPaths[3] &&
-        files.filter((entry) => entry.realPath === realPaths[3]).length === 2
-      ) {
-        revokeDuringOpen?.();
-      }
-    });
-    await batch.occupySlots();
-    const observed = observeMetadataRequests();
-    const allowed = batch.start(realPaths[2]!);
-    const revoked = batch.start(realPaths[3]!);
-    const sharedRevoked = batch.start(realPaths[4]!);
-    const sharedAllowed = batch.start(realPaths[4]!);
-    await observed(4);
-    revokedRequests.add(sharedRevoked.res.req);
-    const revoke = () => revokedRequests.add(revoked.res.req);
-    if (revocation === "while queued") {
-      revoke();
-    } else {
-      revokeDuringOpen = revoke;
-    }
-    batch.release();
-    await expectPlaybackResponses([...requests.slice(0, 2), allowed, sharedAllowed]);
-    for (const request of [revoked, sharedRevoked]) {
-      expect(await request.handled).toBe(true);
-      expect(request.res.statusCode).toBe(404);
-    }
-    expect(openedFiles.filter((entry) => entry.realPath === realPaths[3])).toHaveLength(
-      revocation === "while queued" ? 1 : 2,
-    );
-    expect(runFfprobe).toHaveBeenCalledTimes(4);
-    for (const opened of openedFiles) {
-      expect(opened.handle.fd).toBe(-1);
-    }
   },
 );

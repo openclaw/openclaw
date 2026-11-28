@@ -1,4 +1,4 @@
-import { replaceCompactionReplayOwnerContent } from "@openclaw/ai/transports";
+import { isOpenAIResponsesApi, replaceCompactionReplayOwnerContent } from "@openclaw/ai/transports";
 import { asOptionalObjectRecord } from "@openclaw/normalization-core/record-coerce";
 import { hasNonEmptyString } from "@openclaw/normalization-core/string-coerce";
 import { normalizeUniqueTrimmedStringList } from "@openclaw/normalization-core/string-normalization";
@@ -334,12 +334,9 @@ export function wrapStreamFnSanitizeMalformedToolCalls(
       allowedToolNames,
       allowProviderOwnedThinkingReplay,
     );
-    const isOpenAIResponsesApi =
-      modelApi === "openai-responses" ||
-      modelApi === "openai-chatgpt-responses" ||
-      modelApi === "azure-openai-responses";
+    const responsesApi = isOpenAIResponsesApi(modelApi);
     const replayInputsChanged = sanitized.messages !== messages;
-    let nextMessages = isOpenAIResponsesApi
+    let nextMessages = responsesApi
       ? sanitizeToolUseResultPairingForModel(sanitized.messages, true, sanitized.pairing)
       : replayInputsChanged
         ? sanitizeToolUseResultPairing(sanitized.messages)
@@ -382,7 +379,7 @@ export function wrapStreamFnSanitizeMalformedToolCalls(
         preserveContextBoundaries: modelApi !== "bedrock-converse-stream",
       });
     }
-    if (isOpenAIResponsesApi) {
+    if (responsesApi) {
       nextMessages = normalizeOpenAIResponsesToolCallIds(nextMessages);
     }
     if (nextMessages === messages) {

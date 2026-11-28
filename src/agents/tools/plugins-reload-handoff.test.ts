@@ -340,7 +340,6 @@ it.for([
   "cancelled",
   "replaced",
   "system",
-  "non-owner",
   "operator-owner",
 ] as const)(
   "preserves authenticated plugin execution across reload handoff: %s",
@@ -445,7 +444,7 @@ it.for([
           scenario === "system"
             ? undefined
             : createOperatorClient(
-                scenario === "non-owner" || scenario === "operator-owner"
+                scenario === "operator-owner"
                   ? { profileName: `reload-${scenario}`, scopes: ["operator.admin"] }
                   : { profileId: GATEWAY_OWNER_PROFILE_ID, scopes: ["operator.admin"] },
               );
@@ -453,7 +452,7 @@ it.for([
           client.internal = {
             authenticatedOperator: true,
             operatorRoleActor:
-              scenario === "non-owner" || scenario === "operator-owner"
+              scenario === "operator-owner"
                 ? { kind: "operator", profileId: client.authenticatedUserProfile!.profileId }
                 : { kind: "system" },
             operatorAccessAuthority: {
@@ -462,9 +461,8 @@ it.for([
             },
           };
         }
-        const isOwner = scenario !== "system" && scenario !== "non-owner";
-        const invalidated =
-          scenario === "revoked" || scenario === "cancelled" || scenario === "replaced";
+        const isOwner = scenario !== "system";
+        const invalidated = scenario === "cancelled" || scenario === "replaced";
         runEmbeddedAgentMock.mockReset().mockImplementation(async (params) => {
           const admittedRunContext = await startEmbeddedTurn(params, "resumed owner admission");
           expect(readAdmittedRunOperatorAuthority(admittedRunContext)?.profileId).toBe(
@@ -576,11 +574,11 @@ it.for([
             expect(readOperatorToolGatewayAuthority()?.operatorRunAuthority?.profileId).toBe(
               client?.authenticatedUserProfile?.profileId,
             );
-            // Only the yielding turn's owner decision plus a live operator source grants owner tools.
+            // The live operator source's admitted grant decides owner tools; the flag alone grants none.
             const tool = createPluginsTool({
               sessionId,
               runId: "reload-source",
-              senderIsOwner: isOwner || scenario === "system",
+              senderIsOwner: true,
               onYield: () => {
                 operation.completeWithAfterClearBarrier(cleanup.promise);
               },
@@ -670,8 +668,8 @@ it.for([
   { scenario: "task", adopts: true },
   // A kill between yield and resume leaves the stopped task alone.
   { scenario: "killed", adopts: false },
-  // An independent turn in the same child session never takes over an earlier paused task.
-  { scenario: "follow-up", adopts: false },
+  // The chat owns the paused task: a handoff from a later turn in the same child continues it.
+  { scenario: "follow-up", adopts: true },
 ] as const)(
   "resumes a yielded subagent task through its reload handoff: $scenario",
   async ({ scenario, adopts }, { signal, onTestFinished }) => {

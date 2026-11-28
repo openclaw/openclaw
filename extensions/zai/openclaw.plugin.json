@@ -40,6 +40,33 @@
         "family": "zai",
         "models": [
           {
+            "id": "glm-5.4",
+            "name": "GLM-5.4",
+            "reasoning": true,
+            "input": ["text", "image"],
+            "contextWindow": 1048576,
+            "maxTokens": 131072,
+            "cost": {
+              "input": 0,
+              "output": 0,
+              "cacheRead": 0,
+              "cacheWrite": 0
+            },
+            "thinkingLevelMap": {
+              "minimal": "medium",
+              "low": "medium",
+              "medium": "medium",
+              "xhigh": "max"
+            },
+            "compat": {
+              "codeMode": "preferred",
+              "supportsReasoningEffort": true,
+              "supportedReasoningEfforts": ["medium", "high", "max"],
+              "thinkingLevels": ["off", "low", "high", "max"],
+              "defaultThinkingLevel": "max"
+            }
+          },
+          {
             "id": "glm-5.3",
             "name": "GLM-5.3",
             "reasoning": true,

@@ -129,11 +129,12 @@ import { spawn } from "node:child_process";
 import fs from "node:fs";
 import { createRequire } from "node:module";
 createRequire(import.meta.url)(${JSON.stringify(path.join(privateTmp, "private-handoff-guard.cjs"))});
-const now = Date.now;
-Date.now = () => now() - 50 * 60_000;
 const executor = await import(${url("executor")});
 const { createUpdateRun } = await import(${url("runLedger")});
 const { readUpdateRunDriver } = await import(${url("runDriver")});
+// Capture real lifecycle clocks before aging the update records.
+const now = Date.now;
+Date.now = () => now() - 50 * 60_000;
 const run = createUpdateRun({ trigger: "cli", origin: { driver: readUpdateRunDriver(), admission: { owner: "installed" } } });
 await executor.withUpdateCommandExecutor(run.runId, async (owner) => {
   const fence = await owner.enter(${JSON.stringify(slot)});

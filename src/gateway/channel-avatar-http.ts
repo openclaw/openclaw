@@ -104,7 +104,6 @@ export async function handleChannelAvatarHttpRequest(
   if (!requestAuth) {
     return true;
   }
-  requestAuth.assertCurrent();
   if (!selected.ok) {
     throw selected.error;
   }
@@ -115,8 +114,8 @@ export async function handleChannelAvatarHttpRequest(
     return true;
   }
 
-  const serve = async (reference: string | undefined, assertCurrent: () => void) => {
-    assertCurrent();
+  const serve = async (reference: string | undefined, assertCurrent?: () => void) => {
+    assertCurrent?.();
     if (!reference) {
       res.setHeader("cache-control", "no-store");
       respondNotFound(res);
@@ -129,7 +128,7 @@ export async function handleChannelAvatarHttpRequest(
     } catch {
       // The media may have expired or been pruned after the session row was written.
     }
-    assertCurrent();
+    assertCurrent?.();
     if (!image) {
       res.setHeader("cache-control", "no-store");
       respondNotFound(res);
@@ -149,14 +148,13 @@ export async function handleChannelAvatarHttpRequest(
     const origin = sessionDeliveryOrigin(entry);
     const reference = origin?.avatar;
     const assertCurrent = () => {
-      requestAuth.assertCurrent();
       const current = source.readCurrent();
       if (
         current?.sessionId !== entry?.sessionId ||
         current?.lifecycleRevision !== entry?.lifecycleRevision ||
         sessionDeliveryOrigin(current)?.avatar !== reference
       ) {
-        throw new Error("Channel avatar session authority changed");
+        throw new Error("Channel avatar session changed. Retry the request.");
       }
     };
     return serve(
@@ -171,7 +169,6 @@ export async function handleChannelAvatarHttpRequest(
     ).loadGatewaySessionEntryReadOnlyInWorker({
       cfg: getRuntimeConfig(),
       key: requestedKey,
-      assertActive: requestAuth.assertCurrent,
     });
     if (entry && !requestAuth.canReadSession(requestedKey, entry)) {
       sendSessionReadForbidden(res);
@@ -184,5 +181,5 @@ export async function handleChannelAvatarHttpRequest(
   } catch {
     // Invalid or missing session keys are ordinary route misses.
   }
-  return serve(reference, requestAuth.assertCurrent);
+  return serve(reference);
 }

@@ -1,3 +1,5 @@
+import { prepareExecApprovalsCurrentRead } from "../infra/exec-approvals-store.js";
+import { captureOpenClawStateWorkerContext } from "../state/openclaw-state-worker-context.js";
 import {
   prepareExecDefaults,
   resolveExecConfigState,
@@ -12,16 +14,27 @@ import type { PreparedToolConstruction } from "./tool-construction-preparation.j
 export async function withPreparedExecDefaults<T>(
   params: ResolveExecDefaultsParams,
   shared: PreparedToolConstruction,
-  consume: (defaults: ResolvedExecDefaults) => Promise<T>,
+  consume: (
+    defaults: ResolvedExecDefaults,
+    prepareCurrentRead: () => Promise<() => ResolvedExecDefaults>,
+  ) => Promise<T>,
 ): Promise<T> {
   const { agentId } = resolveExecConfigState(params);
   const scope = { cfg: params.cfg, agentId, sessionKey: params.sessionKey };
   return await withSandboxRuntimeStatusInWorker(scope, shared, async (sandbox) => {
-    const defaults = await resolvePreparedExecDefaultsAsync(
-      prepareExecDefaults(params, sandbox),
-      shared.loadExecApprovals,
-    );
+    const preparation = prepareExecDefaults(params, sandbox);
+    const defaults = await resolvePreparedExecDefaultsAsync(preparation, shared.loadExecApprovals);
     shared.assertCurrent();
-    return await consume(defaults);
+    return await consume(defaults, async () => {
+      if (preparation.kind === "resolved") {
+        shared.assertCurrent();
+        return () => preparation.defaults;
+      }
+      const read = await prepareExecApprovalsCurrentRead(
+        captureOpenClawStateWorkerContext({ env: shared.env }),
+      );
+      shared.assertCurrent();
+      return () => preparation.resolve(read());
+    });
   });
 }

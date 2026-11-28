@@ -1,4 +1,3 @@
-import { parseCanonicalIpAddress } from "@openclaw/net-policy/ip";
 import { isRecord } from "@openclaw/normalization-core/record-coerce";
 import { readNonBlankString } from "@openclaw/normalization-core/string-coerce";
 import type { JSX } from "@solidjs/web";
@@ -14,31 +13,15 @@ import { formatRelativeTimestamp } from "../lib/reactive/format.ts";
 import { t } from "../lib/reactive/i18n.ts";
 import { formatGitHubItemReference, parseGitHubLinkTarget } from "./github-link-target.ts";
 import { createPreviewRenderer } from "./link-reader-preview-root.tsx";
-import { linkReaderAuthorHref, linkReaderResponseMatchesTarget } from "./link-reader-response.ts";
+import {
+  linkReaderAuthorHref,
+  linkReaderResponseMatchesTarget,
+  safePreviewImage,
+} from "./link-reader-response.ts";
 import { linkReaderTargetKey, type LinkReaderTarget } from "./link-reader-target.ts";
 import { createHovercardControlRef } from "./portaled-hovercard-focus.ts";
 import { BrandIcon, Icon } from "./solid/icon.tsx";
 export type LinkPreview = LinkReaderTarget & ControlUiLinkReaderPreview;
-
-function safePreviewImage(value: string | undefined): string | undefined {
-  if (!value) {
-    return undefined;
-  }
-  if (/^data:image\/(?:gif|jpeg|png|webp);base64,/u.test(value)) {
-    return value;
-  }
-  const url = URL.parse(value);
-  const host = url?.hostname.replace(/\.+$/u, "") ?? "";
-  return url?.protocol === "https:" &&
-    !url.username &&
-    !url.password &&
-    url.origin !== window.location.origin &&
-    host.includes(".") &&
-    !/(?:^|\.)(?:localhost|local|internal|localdomain)$/u.test(host) &&
-    !parseCanonicalIpAddress(host)
-    ? url.href
-    : undefined;
-}
 
 function parsePreviewResponse(
   target: LinkReaderTarget,
@@ -82,7 +65,6 @@ function parsePreviewResponse(
         ? value.coAuthorCount
         : undefined,
     createdAt: readNonBlankString(value.createdAt),
-    updatedAt: readNonBlankString(value.updatedAt),
     imageUrl: safePreviewImage(readNonBlankString(value.imageUrl)),
     metadata: Array.isArray(value.metadata)
       ? value.metadata.flatMap((entry) =>
@@ -373,7 +355,9 @@ const renderPreviewContent = createPreviewRenderer<{
 }>(
   (props) => {
     const preview = () => props.value.preview;
-    const timestamp = () => preview().updatedAt ?? preview().createdAt;
+    // Match the reader panel: show the badge event (merged/closed) or creation time, never the
+    // last activity time, which bot comments and CI keep bumping.
+    const timestamp = () => preview().badge?.timestamp ?? preview().createdAt;
     const authorHref = () => linkReaderAuthorHref(preview().authorUrl, preview().href);
     const author = () => (
       <>

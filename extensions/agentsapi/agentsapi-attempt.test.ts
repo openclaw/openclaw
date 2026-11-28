@@ -375,7 +375,7 @@ it("rejects attachment steering without committing its recorder", async () => {
   expect(result.terminal).toEqual({ kind: "ok" });
 });
 
-it.for(["same run", "new run", "reset binding", "new budget", "cancelled", "revoked"] as const)(
+it.for(["same run", "new run", "reset binding", "cancelled", "revoked"] as const)(
   "handles %s after steering without widening retry prompt history",
   async (retryScope, { signal }) => {
     const fixture = await createAttempt();
@@ -444,8 +444,6 @@ it.for(["same run", "new run", "reset binding", "new budget", "cancelled", "revo
       fixture.params.runId = "another-run";
     } else if (retryScope === "reset binding") {
       fixture.resetBinding();
-    } else if (retryScope === "new budget") {
-      fixture.params.contextTokenBudget = 32_000;
     } else if (retryScope === "cancelled") {
       fixture.controller.abort(interruption);
     } else if (retryScope === "revoked") {

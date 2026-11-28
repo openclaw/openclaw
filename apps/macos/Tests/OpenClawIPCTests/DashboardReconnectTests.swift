@@ -1,3 +1,4 @@
+import AppKit
 import ConcurrencyExtras
 import Foundation
 import OpenClawKit
@@ -290,6 +291,60 @@ struct DashboardReconnectTests {
         let reconnected = try #require(manager._testController())
         #expect(reconnected.currentURL == identityURL)
         #expect(reconnected.auth == identified.auth)
+    }
+
+    @Test func `hidden dashboard follows native reconnects before returning and stops on close`() async throws {
+        try await TestIsolation.withIsolatedState {
+            let server = try await DashboardHTTPFixture.start()
+            defer { server.stop() }
+            let url = server.websocketURL()
+            let endpoint = GatewayEndpointState.ready(
+                mode: .remote, url: url, token: "synthetic-owner", password: nil, routeRevision: 0)
+            let generation = LockIsolated(0)
+            let manager = DashboardManager._testMake(
+                legacyCredentialsProvider: { _, _ in
+                    let accepted = generation.value
+                    return .init(
+                        credentials: [:],
+                        isCurrent: { generation.value == accepted },
+                        waitForInvalidation: nil)
+                })
+            let controller = DashboardWindowController(
+                url: server.url(),
+                auth: .nativeDevice(gatewayUrl: url.absoluteString, token: "synthetic-owner", password: nil),
+                websiteDataStore: .nonPersistent(),
+                windowAutosaveName: "",
+                requestBrowserProfileImportOffer: { _ in false })
+            manager._testSetController(controller)
+            defer { manager.close() }
+            controller.show()
+            await manager.handleEndpointState(endpoint)
+            let current = try #require(manager._testController())
+            let window = try #require(current.window)
+            try await DashboardTestWait.document(current, "initial dashboard")
+            _ = try await current.webView.evaluateJavaScript("window.unsentDraft = 'keep me'")
+            try #require(current.documentHost.hasCurrentNativeStartupCredentials)
+
+            window.orderOut(nil)
+            for revision in 1...2 {
+                generation.setValue(revision)
+                try #require(!current.documentHost.hasCurrentNativeStartupCredentials)
+                await manager.handleEndpointState(endpoint)
+                try #require(current.documentHost.hasCurrentNativeStartupCredentials)
+                #expect(!window.isVisible)
+                #expect(current.documentHost.isNativeAuthAvailable())
+            }
+            window.orderFront(nil)
+            #expect(manager._testController() === current)
+            #expect(try await current.webView.evaluateJavaScript("window.unsentDraft") as? String == "keep me")
+
+            current.closeDashboard()
+            generation.setValue(3)
+            await manager.handleEndpointState(endpoint)
+            #expect(!current.documentHost.hasCurrentNativeStartupCredentials)
+            #expect(!current.documentHost.isNativeAuthAvailable())
+            #expect(!window.isVisible)
+        }
     }
 
     @Test func `authenticated control reconnect recovers unchanged ready route`() async throws {

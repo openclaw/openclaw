@@ -10,6 +10,7 @@ import { getTerminalTableWidth, renderTable } from "../../../packages/terminal-c
 import { formatErrorMessage } from "../../infra/errors.js";
 import { formatTimeAgo } from "../../infra/format-time/format-relative.ts";
 import { defaultRuntime } from "../../runtime.js";
+import { getAsyncWorkSignal } from "../../shared/async-work-scope.js";
 import { isNodeHostStats } from "../../shared/node-host-stats.js";
 import { parseNodeList, parsePairingList } from "../../shared/node-list-parse.js";
 import type { NodeListNode, PairedNode } from "../../shared/node-list-types.js";
@@ -17,7 +18,7 @@ import { shortenHomeInString } from "../../utils.js";
 import { formatPairingApproveCommand } from "../pairing-command-format.js";
 import { parseDurationMs } from "../parse-duration.js";
 import { formatVersionLabel } from "../version-format.js";
-import { formatConnectionFlagReminder, getNodesTheme, runNodesCommand } from "./cli-utils.js";
+import { formatConnectionFlagReminder, getNodesTheme, runNodesReadCommand } from "./cli-utils.js";
 import { renderPendingPairingRequestsTable } from "./pairing-render.js";
 import {
   callNodesGatewayCli,
@@ -199,6 +200,7 @@ async function tryReadNodeList(opts: NodesRpcOpts): Promise<NodeListNode[] | nul
   try {
     return parseNodeList(await callNodeDiagnosticsGatewayCli("node.list", opts, {}));
   } catch (error) {
+    getAsyncWorkSignal()?.throwIfAborted();
     // Best-effort enrichment may degrade to pairing-only rows, but never
     // silently: without this notice the table looks authoritative while
     // omitting connected/commands state. Stderr keeps --json output clean.
@@ -219,7 +221,7 @@ export function registerNodesStatusCommands(nodes: Command) {
       .option("--connected", "Only show connected nodes")
       .option("--last-connected <duration>", "Only show nodes connected within duration (e.g. 24h)")
       .action(async (opts: NodesRpcOpts) => {
-        await runNodesCommand("status", async () => {
+        await runNodesReadCommand("status", async () => {
           const connectedOnly = Boolean(opts.connected);
           const sinceMs = parseSinceMs(opts.lastConnected);
           const result = await callNodeDiagnosticsGatewayCli("node.list", opts, {});
@@ -338,7 +340,7 @@ export function registerNodesStatusCommands(nodes: Command) {
       .description("Describe a node (capabilities + supported invoke commands)")
       .requiredOption("--node <idOrNameOrIp>", "Node id, name, or IP")
       .action(async (opts: NodesRpcOpts) => {
-        await runNodesCommand("describe", async () => {
+        await runNodesReadCommand("describe", async () => {
           const nodeId = await resolveNodeDiagnosticsId(opts, opts.node ?? "");
           const result = await callNodeDiagnosticsGatewayCli("node.describe", opts, {
             nodeId,
@@ -455,10 +457,10 @@ export function registerNodesStatusCommands(nodes: Command) {
       .option("--connected", "Only show connected nodes")
       .option("--last-connected <duration>", "Only show nodes connected within duration (e.g. 24h)")
       .action(async (opts: NodesRpcOpts) => {
-        await runNodesCommand("list", async () => {
+        await runNodesReadCommand("list", async (signal) => {
           const connectedOnly = Boolean(opts.connected);
           const sinceMs = parseSinceMs(opts.lastConnected);
-          const result = await callNodesGatewayCli("node.pair.list", opts, {});
+          const result = await callNodesGatewayCli("node.pair.list", opts, {}, { signal });
           const { pending, paired } = parsePairingList(result);
           const { heading, muted } = getNodesTheme();
           const tableWidth = getTerminalTableWidth();

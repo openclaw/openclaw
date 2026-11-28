@@ -36,20 +36,6 @@ export function prepareExecApprovalStandingGrant<TPayload>(params: {
   return { standingGrantSpec, standingGrant };
 }
 
-export function projectClosedApprovalResolution<TPayload>(
-  closed: ExecApprovalForceDenyResult<TPayload>,
-): ExecApprovalResolveResult<TPayload> {
-  if (closed.outcome === "not-found" || closed.outcome === "corrupt") {
-    return closed;
-  }
-  return {
-    outcome: "already-resolved",
-    retry: "conflict",
-    record: closed.record,
-    ...(closed.liveRecord ? { liveRecord: closed.liveRecord } : {}),
-  };
-}
-
 export function projectRepairedApprovalResolution<TPayload>(
   repaired: ExecApprovalForceDenyResult<TPayload>,
   decision: ExecApprovalDecision,

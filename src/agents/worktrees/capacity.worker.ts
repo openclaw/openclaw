@@ -85,13 +85,14 @@ function reserveWorktreeCapacityInDatabase(
   input: WorktreeCapacityRequest,
 ): WorktreeCapacityResult {
   const { key, owner, demands, purpose, snapshot } = input;
+  const reserve = snapshot ? 128 * 1024 ** 2 : 4 * GiB;
   const volumes = measureVolumes(demands);
   const k = getNodeSqliteKysely<Pick<DB, "state_leases">>(db);
   const rows = executeSqliteQuerySync(
     db,
     k
       .selectFrom("state_leases")
-      .select(["lease_key", "owner", "heartbeat_at", "payload_json"])
+      .select(["lease_key", "owner", "payload_json"])
       .where("scope", "=", WORKTREE_CAPACITY_RESERVATION_SCOPE),
   ).rows;
   const pending = new Map<string, { bytes: number; reserve: number; key: string }>();
@@ -103,10 +104,7 @@ function reserveWorktreeCapacityInDatabase(
     const isOwn = row.lease_key === key && row.owner === key;
     if (
       !isOwn &&
-      readStateLeaseProcessOwnerStatus(
-        parseStateLeaseProcessOwner(row.payload_json),
-        row.heartbeat_at ?? undefined,
-      ) === "dead"
+      readStateLeaseProcessOwnerStatus(parseStateLeaseProcessOwner(row.payload_json)) === "dead"
     ) {
       executeSqliteQuerySync(
         db,
@@ -130,6 +128,10 @@ function reserveWorktreeCapacityInDatabase(
       continue;
     }
     for (const reservation of reservations) {
+      // A debt-free peer with no stronger reserve cannot make this request wait.
+      if (reservation.bytes === 0 && reservation.reserve <= reserve) {
+        continue;
+      }
       const previous = pending.get(reservation.device);
       pending.set(reservation.device, {
         bytes: (previous?.bytes ?? 0) + reservation.bytes,
@@ -138,7 +140,6 @@ function reserveWorktreeCapacityInDatabase(
       });
     }
   }
-  const reserve = snapshot ? 128 * 1024 ** 2 : 4 * GiB;
   const reservations: WorktreeVolumeReservation[] = [];
   for (const [device, volume] of volumes) {
     const other = pending.get(String(device));

@@ -39,6 +39,13 @@ const WorktreeRunEndCleanupSchema = Type.Union([
   }),
 ]);
 
+const WorktreeCleanupSchema = closedObject({
+  state: Type.String({ enum: ["preserved", "retrying"] }),
+  reason: NonEmptyString,
+  attempts: Type.Integer({ minimum: 1 }),
+  nextAttemptAt: Type.Union([Type.Integer({ minimum: 0 }), Type.Null()]),
+});
+
 export const WorktreeRecordSchema = closedObject({
   id: NonEmptyString,
   name: WorktreeNameSchema,
@@ -55,6 +62,7 @@ export const WorktreeRecordSchema = closedObject({
   removedAt: Type.Optional(Type.Integer({ minimum: 0 })),
   runEndCleanup: Type.Optional(WorktreeRunEndCleanupSchema),
   gcProtection: Type.Optional(NonEmptyString),
+  cleanup: Type.Optional(WorktreeCleanupSchema),
 });
 
 export const WorktreesListParamsSchema = closedObject({});
@@ -74,12 +82,14 @@ export const WorktreesCreateParamsSchema = closedObject({
 export const WorktreesRemoveParamsSchema = closedObject({
   id: NonEmptyString,
   force: Type.Optional(Type.Boolean()),
+  retryPreserved: Type.Optional(Type.Boolean()),
   ifLossless: Type.Optional(Type.Boolean()),
   exactState: Type.Optional(WorktreeExactStateSchema),
   expectedOwnerId: Type.Optional(NonEmptyString),
 });
 export const WorktreesRemoveResultSchema = closedObject({
   removed: Type.Boolean(),
+  preserved: Type.Optional(WorktreeCleanupSchema),
   snapshotRef: Type.Optional(NonEmptyString),
   /** Why the pre-removal snapshot failed; removal may have stopped or continued without one. */
   snapshotError: Type.Optional(NonEmptyString),
@@ -107,6 +117,7 @@ export const WorktreesBranchesResultSchema = closedObject({
   defaultBranch: Type.Optional(NonEmptyString),
   headBranch: Type.Optional(NonEmptyString),
   repositoryStatus: Type.Optional(WorktreeRepositoryStatusSchema),
+  requiresWorktree: Type.Optional(Type.Boolean()),
   branchesUnavailable: Type.Optional(Type.Boolean()),
   refreshing: Type.Optional(Type.Boolean()),
 });
@@ -130,6 +141,7 @@ export const WorktreesGcResultSchema = closedObject({
   removed: Type.Array(NonEmptyString),
   orphansDeleted: Type.Integer({ minimum: 0 }),
   snapshotsPruned: Type.Integer({ minimum: 0 }),
+  scratchDeferred: Type.Optional(Type.Literal("io-pressure")),
   scratch: Type.Optional(
     closedObject({
       entriesRemoved: Type.Integer({ minimum: 0 }),

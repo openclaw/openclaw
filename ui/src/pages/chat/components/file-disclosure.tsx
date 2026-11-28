@@ -69,7 +69,12 @@ export function FileDisclosure(props: {
       if (!next) {
         return undefined;
       }
-      if (next === applied) {
+      if (
+        applied &&
+        next.open === applied.open &&
+        next.active === applied.active &&
+        next.instant === applied.instant
+      ) {
         if (folder()) {
           if (!animation || !current.open || content.getBoundingClientRect().height === height) {
             return undefined;

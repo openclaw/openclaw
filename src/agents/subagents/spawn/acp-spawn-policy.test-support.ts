@@ -1,5 +1,5 @@
 import os from "node:os";
-import { expect, it } from "vitest";
+import { expect, it, type Mock } from "vitest";
 import type { OpenClawConfig } from "../../../config/types.openclaw.js";
 import type { spawnAcpDirect } from "./acp-spawn.js";
 
@@ -9,7 +9,49 @@ export function registerAcpSpawnPolicyTests(fixture: {
   initializeSessionMock: unknown;
   upsertSessionEntryMock: unknown;
   callGatewayMock: unknown;
+  readAcpResumeSessionOwnerMock: Mock;
+  countActiveRunsForSessionMock: Mock;
 }) {
+  it.each(["policy", "capacity"] as const)(
+    "keeps admitted policy and refreshes capacity during ACP preparation (%s)",
+    async (change) => {
+      const parent = "agent:main:subagent:parent";
+      const agents = (fixture.state.cfg.agents ??= {});
+      const defaults = (agents.defaults ??= {});
+      const policy = (defaults.subagents ??= {});
+      policy.maxChildrenPerAgent = 1;
+      fixture.readAcpResumeSessionOwnerMock.mockImplementation(async () => {
+        if (change === "policy") {
+          policy.allowAgents = [];
+        } else {
+          fixture.countActiveRunsForSessionMock.mockReturnValue(1);
+        }
+        return {
+          sessionKey: "agent:codex:acp:owned",
+          entry: { sessionId: "sess-owned", updatedAt: 100, spawnedBy: parent },
+        };
+      });
+      const result = await fixture.spawn(
+        { task: "inspect", agentId: "codex", mode: "run", resumeSessionId: "fixture-resume" },
+        { agentSessionKey: parent },
+      );
+      if (change === "policy") {
+        expect(result.status).toBe("accepted");
+      } else {
+        expect(result).toMatchObject({
+          status: "forbidden",
+          error: expect.stringContaining("max active children"),
+        });
+        expect(fixture.initializeSessionMock).not.toHaveBeenCalled();
+      }
+      const next = await fixture.spawn(
+        { task: "inspect", agentId: "codex", mode: "run" },
+        { agentSessionKey: parent },
+      );
+      expect(next.status).toBe("forbidden");
+    },
+  );
+
   it.each(["codex", undefined])(
     "refuses restricted cross-agent ACP targets, including the default (%s)",
     async (agentId) => {

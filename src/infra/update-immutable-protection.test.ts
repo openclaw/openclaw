@@ -32,7 +32,7 @@ async function fixture() {
   };
   fs.writeFileSync(configPath, JSON.stringify(config), { mode: 0o600 });
   openOpenClawStateDatabase({ env });
-  fingerprintConfigSnapshotAuthoredConfig(config, { env });
+  await fingerprintConfigSnapshotAuthoredConfig(config, { env });
   const context = { env, assertCurrent: () => {} };
   const capture = () => captureImmutableProtection({ configPath, stateDir: root, ...context });
   const snapshot = await capture();

@@ -193,6 +193,17 @@ describe("GitHub release-note rendering", () => {
     );
   });
 
+  it("identifies an explicitly approved retired line without claiming current maintenance", () => {
+    const rendered = renderNotes("## 2026.9.37\n\n- Fix.", {
+      version: "2026.9.37",
+      tag: "v2026.9.37",
+      regularStableVersion: "2026.11.2",
+      retiredLineReason: "Approved named release",
+    });
+    expect(rendered.body).toContain("retired maintenance line by explicit maintainer decision");
+    expect(rendered.body).not.toContain("long-term support");
+  });
+
   it("uses the full form at exactly 125,000 bytes and compacts at 125,001", () => {
     const seed = renderNotes(changelogFor("x"));
     const exactRecordLength =

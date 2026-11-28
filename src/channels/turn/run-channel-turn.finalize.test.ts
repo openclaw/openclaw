@@ -165,7 +165,10 @@ describe("channel turn finalize", () => {
     const error = new Error("transcript read failed");
     const turn = prepared({
       history,
-      ctxPayload: createCtx({ AgentId: "main", SessionTranscriptContext: { historyLimit: 1 } }),
+      ctxPayload: createCtx({
+        AgentId: "main",
+        SessionTranscriptContext: { chatWindow: true, historyLimit: 1 },
+      }),
     });
     readRecentUserAssistantTextForSession.mockRejectedValueOnce(error);
     await expect(runPreparedChannelTurn(turn)).rejects.toBe(error);

@@ -3,6 +3,8 @@ package ai.openclaw.app
 import ai.openclaw.app.chat.ChatActiveRunPresentation
 import ai.openclaw.app.chat.ChatCommandEntry
 import ai.openclaw.app.chat.ChatComposerOwner
+import ai.openclaw.app.chat.ChatController
+import ai.openclaw.app.chat.ChatHistoryPaging
 import ai.openclaw.app.chat.ChatMessage
 import ai.openclaw.app.chat.ChatOutboxItem
 import ai.openclaw.app.chat.ChatPendingToolCall
@@ -24,6 +26,7 @@ import ai.openclaw.app.chat.SessionDiffSnapshot
 import ai.openclaw.app.chat.SessionForkResult
 import ai.openclaw.app.chat.SessionGroupCatalogSnapshot
 import ai.openclaw.app.chat.SessionRewindResult
+import ai.openclaw.app.chat.SessionWakeDeadline
 import ai.openclaw.app.chat.defaultChatThinkingLevelSelection
 import ai.openclaw.app.chat.resolveChatComposerOwner
 import ai.openclaw.app.chat.runCatchingCancellable
@@ -63,6 +66,7 @@ import kotlinx.coroutines.CoroutineStart
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.ExperimentalCoroutinesApi
 import kotlinx.coroutines.Job
+import kotlinx.coroutines.flow.Flow
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.SharingStarted
 import kotlinx.coroutines.flow.StateFlow
@@ -148,9 +152,13 @@ private const val CHAT_COMPOSER_DRAFTS_STATE_KEY = "chat-composer-text-drafts"
 internal class ChatShareDraftQueue(
   private val capacity: Int = MAX_PENDING_CHAT_SHARES,
 ) {
+  private class QueuedDraft(
+    val draft: ChatShareDraft,
+    var owner: ChatComposerOwner,
+  )
+
   private val lock = Any()
-  private val drafts = ArrayDeque<ChatShareDraft>()
-  private val ownersById = mutableMapOf<Long, ChatComposerOwner>()
+  private val drafts = ArrayDeque<QueuedDraft>()
   private val headLease = Mutex()
   private val _queued = MutableStateFlow<List<ChatShareDraft>>(emptyList())
   val queued: StateFlow<List<ChatShareDraft>> = _queued.asStateFlow()
@@ -167,8 +175,7 @@ internal class ChatShareDraftQueue(
   ): Boolean =
     synchronized(lock) {
       if (drafts.size >= capacity) return@synchronized false
-      drafts.addLast(draft)
-      ownersById[draft.id] = owner
+      drafts.addLast(QueuedDraft(draft, owner))
       publishQueueLocked()
       true
     }
@@ -180,9 +187,8 @@ internal class ChatShareDraftQueue(
   ): Boolean =
     synchronized(lock) {
       val ownedHead = firstForOwnerLocked(owner)
-      if (ownedHead?.id != id) return@synchronized false
+      if (ownedHead?.draft?.id != id) return@synchronized false
       drafts.remove(ownedHead)
-      ownersById.remove(id)
       publishQueueLocked()
       true
     }
@@ -195,7 +201,7 @@ internal class ChatShareDraftQueue(
   ): Boolean =
     headLease.withLock {
       synchronized(lock) {
-        if (firstForOwnerLocked(owner)?.id != id) return@withLock false
+        if (firstForOwnerLocked(owner)?.draft?.id != id) return@withLock false
       }
       block()
       true
@@ -207,16 +213,15 @@ internal class ChatShareDraftQueue(
   ) {
     if (from == to) return
     synchronized(lock) {
-      val ownedIds = ownersById.filterValues { it == from }.keys
-      ownedIds.forEach { ownersById[it] = to }
-      if (ownedIds.isNotEmpty()) _ownerRevision.value += 1
+      val ownedDrafts = drafts.filter { it.owner == from }
+      ownedDrafts.forEach { it.owner = to }
+      if (ownedDrafts.isNotEmpty()) _ownerRevision.value += 1
     }
   }
 
   fun clear() {
     synchronized(lock) {
       drafts.clear()
-      ownersById.clear()
       publishQueueLocked()
     }
   }
@@ -224,23 +229,19 @@ internal class ChatShareDraftQueue(
   suspend fun removeOwners(matches: (ChatComposerOwner) -> Boolean) {
     headLease.withLock {
       synchronized(lock) {
-        val removedIds = ownersById.filterValues(matches).keys
-        if (removedIds.isEmpty()) return@synchronized
-        drafts.removeAll { it.id in removedIds }
-        removedIds.forEach(ownersById::remove)
-        publishQueueLocked()
+        if (drafts.removeAll { matches(it.owner) }) publishQueueLocked()
       }
     }
   }
 
-  fun ownerOf(id: Long): ChatComposerOwner? = synchronized(lock) { ownersById[id] }
+  fun ownerOf(id: Long): ChatComposerOwner? = synchronized(lock) { drafts.firstOrNull { it.draft.id == id }?.owner }
 
   internal fun size(): Int = synchronized(lock) { drafts.size }
 
-  private fun firstForOwnerLocked(owner: ChatComposerOwner): ChatShareDraft? = drafts.firstOrNull { draft -> ownersById[draft.id] == owner }
+  private fun firstForOwnerLocked(owner: ChatComposerOwner): QueuedDraft? = drafts.firstOrNull { it.owner == owner }
 
   private fun publishQueueLocked() {
-    _queued.value = drafts.toList()
+    _queued.value = drafts.map { it.draft }
   }
 }
 
@@ -487,11 +488,11 @@ class MainViewModel internal constructor(
   internal fun resumeNodeServiceForConnection(): () -> Boolean = NodeForegroundService.resume(context = nodeApp, startNow = prefs.onboardingCompleted.value)
 
   /**
-   * Adapts a runtime StateFlow to a stable ViewModel StateFlow before runtime startup.
+   * Adapts a runtime Flow to a stable ViewModel StateFlow before runtime startup.
    */
   private fun <T> runtimeState(
     initial: T,
-    selector: (NodeRuntime) -> StateFlow<T>,
+    selector: (NodeRuntime) -> Flow<T>,
   ): StateFlow<T> =
     runtimeRef
       .flatMapLatest { runtime -> runtime?.let(selector) ?: flowOf(initial) }
@@ -514,7 +515,7 @@ class MainViewModel internal constructor(
   val notificationForwardingMaxEventsPerMinute: StateFlow<Int> =
     prefs.notificationForwardingMaxEventsPerMinute
 
-  val isConnected: StateFlow<Boolean> = runtimeState(initial = false) { it.isConnected }
+  val isConnected: StateFlow<Boolean> = runtimeState(initial = false) { it.gatewayConnectionDisplay.map { display -> display.isConnected } }
   val gatewayControlPage: StateFlow<NodeRuntime.GatewayControlPage?> =
     runtimeState(initial = null) { it.gatewayControlPage }
   val desktopObserveAvailable: StateFlow<Boolean> =
@@ -548,6 +549,14 @@ class MainViewModel internal constructor(
 
   internal fun refreshSessionGroups() = ensureRuntime().chat.refreshSessionGroups()
 
+  internal val sessionBrowserRevision: StateFlow<Long> = runtimeState(initial = 0L) { it.chat.sessionBrowserRevision }
+
+  internal val sessionWindowWake: StateFlow<SessionWakeDeadline?> = runtimeState(initial = null) { it.chat.sessionWindowWake }
+
+  internal fun refreshChatSessionsAfterWake(wake: SessionWakeDeadline) = ensureRuntime().chat.refreshSessionsAfterWake(wake)
+
+  internal fun refreshCurrentChatSessionWindow(): Unit = ensureRuntime().chat.refreshSessionsForCurrentWindow()
+
   internal suspend fun loadMoreChatSessions(): Boolean = ensureRuntime().chat.loadMoreSessions()
 
   val sessionCustomGroups: StateFlow<List<String>> = prefs.sessionCustomGroups
@@ -555,6 +564,7 @@ class MainViewModel internal constructor(
   val sidebarVisiblePages: StateFlow<List<String>> = prefs.sidebarVisiblePages
   val sessionCatalogAvailable: StateFlow<Boolean> =
     runtimeState(initial = false) { it.sessionCatalogAvailable }
+  internal val personalSessionPinAccess = runtimeState(initial = PersonalSessionPinAccess.Unsupported) { it.personalSessionPinAccess }
   internal val sessionDiffAvailable: StateFlow<Boolean> =
     runtimeState(initial = false) { it.sessionDiffAvailable }
   val sessionCatalogState: StateFlow<SessionCatalogState> =
@@ -574,7 +584,7 @@ class MainViewModel internal constructor(
   val cronActionState: StateFlow<GatewayCronActionState> = runtimeState(initial = GatewayCronActionState.Idle) { it.cronActionState }
   val pendingCronRunJobIds: StateFlow<Set<String>> = runtimeState(initial = emptySet()) { it.pendingCronRunJobIds }
   internal val usageState = runtimeState(initial = GatewaySummaryState<GatewayUsageSummary>()) { it.usageState }
-  internal val skillsState = runtimeState(initial = GatewaySummaryState<GatewaySkillsSummary>()) { it.skillsState }
+  internal val skillsState = runtimeState(initial = GatewaySummaryState<List<GatewaySkillSummary>>()) { it.skillsState }
   val clawHubSkillMethodsAvailable: StateFlow<Boolean> =
     runtimeState(initial = false) { it.clawHubSkillMethodsAvailable }
   val skillMutationKeys: StateFlow<Set<String>> = runtimeState(initial = emptySet()) { it.skillMutationKeys }
@@ -647,6 +657,7 @@ class MainViewModel internal constructor(
   val micCooldown: StateFlow<Boolean> = runtimeState(initial = false) { it.micCooldown }
   val micIsListening: StateFlow<Boolean> = runtimeState(initial = false) { it.micIsListening }
   val talkModeEnabled: StateFlow<Boolean> = runtimeState(initial = false) { it.talkModeEnabled }
+  val talkMicrophoneMuted: StateFlow<Boolean> = runtimeState(initial = false) { it.talkMicrophoneMuted }
   val talkModeListening: StateFlow<Boolean> = runtimeState(initial = false) { it.talkModeListening }
   val talkModeSpeaking: StateFlow<Boolean> = runtimeState(initial = false) { it.talkModeSpeaking }
   val talkAwaitingAgent: StateFlow<Boolean> = runtimeState(initial = false) { it.talkAwaitingAgent }
@@ -673,6 +684,10 @@ class MainViewModel internal constructor(
   val chatTranscriptAnchor: StateFlow<ChatTranscriptAnchorState?> =
     runtimeState(initial = null) { it.chat.transcriptAnchor }
   val chatHistoryLoading: StateFlow<Boolean> = runtimeState(initial = false) { it.chat.historyLoading }
+  internal val chatHistoryPaging: StateFlow<ChatHistoryPaging> = runtimeState(initial = ChatHistoryPaging()) { it.chat.historyPaging }
+
+  internal fun loadChatHistoryPage(older: Boolean) = ensureRuntime().chat.loadHistoryPage(older)
+
   internal val chatSessionCreating: StateFlow<Boolean> = runtimeState(initial = false) { it.chat.isCreatingSession }
   val chatError: StateFlow<String?> = runtimeState(initial = null) { it.chat.errorText }
   val chatHealthOk: StateFlow<Boolean> = runtimeState(initial = false) { it.chat.healthOk }
@@ -684,7 +699,7 @@ class MainViewModel internal constructor(
   val chatModelCatalog: StateFlow<List<GatewayModelSummary>> = runtimeState(initial = emptyList()) { it.chat.modelCatalog }
   val chatPendingSessionSettingsKeys: StateFlow<Set<String>> =
     runtimeState(initial = emptySet()) { it.chat.pendingSessionSettingsKeys }
-  val chatStreamingAssistantText: StateFlow<String?> = runtimeState(initial = null) { it.chat.streamingAssistantText }
+  internal val chatStreamingAssistant: StateFlow<ChatController.StreamingAssistant?> = runtimeState(initial = null) { it.chat.streamingAssistant }
   val chatPendingToolCalls: StateFlow<List<ChatPendingToolCall>> = runtimeState(initial = emptyList()) { it.chat.pendingToolCalls }
   val chatToolActivities: StateFlow<List<ChatPendingToolCall>> = runtimeState(initial = emptyList()) { it.chat.toolActivities }
   val chatQuestions: StateFlow<List<ChatQuestionPrompt>> = runtimeState(initial = emptyList()) { it.chat.questions }
@@ -1184,6 +1199,8 @@ class MainViewModel internal constructor(
 
   fun setTalkModeEnabled(enabled: Boolean): Unit = ensureRuntime().setTalkModeEnabled(enabled)
 
+  fun setTalkMicrophoneMuted(muted: Boolean): Unit = ensureRuntime().setTalkMicrophoneMuted(muted)
+
   internal suspend fun requestRecordAudioPermission(): Boolean {
     val requester = permissionRequester ?: return false
     return runCatchingCancellable {
@@ -1251,9 +1268,16 @@ class MainViewModel internal constructor(
     launchGatewayConnectionOperation { runtime, isCurrent -> runtime.refreshGatewayConnection(isCurrent) }
   }
 
-  fun startGatewayDiscovery() {
-    queueRuntimeStartup()
+  fun enterGatewayFingerprintManually() {
+    launchGatewayConnectionOperation { runtime, isCurrent -> runtime.refreshGatewayConnection(isCurrent, manualTlsTrust = true) }
   }
+
+  fun loadGatewaySettings(): Unit = queueRuntimeStartup()
+
+  fun startGatewayDiscovery(): Job =
+    viewModelScope.launch(Dispatchers.Default) {
+      ensureRuntime().discoverGateways()
+    }
 
   fun connect(endpoint: GatewayEndpoint) {
     launchGatewayConnectionOperation { runtime, isCurrent -> runtime.connectSwitchingGateway(endpoint, isCurrent = isCurrent) }
@@ -1830,7 +1854,7 @@ class MainViewModel internal constructor(
   suspend fun fetchChatSessionList(
     search: String?,
     archived: Boolean,
-  ): List<ChatSessionEntry> = ensureRuntime().chat.fetchSessionList(search = search, archived = archived)
+  ): List<ChatSessionEntry>? = ensureRuntime().chat.fetchSessionList(search = search, archived = archived)
 
   fun abortChat(): Unit = ensureRuntime().chat.abort()
 

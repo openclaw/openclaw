@@ -1,2 +1,0 @@
-# Retain streamed allocation and real-consumer read-count assertions.
-1

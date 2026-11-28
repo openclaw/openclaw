@@ -319,6 +319,18 @@ nodeReportIt(
 import assert from "node:assert/strict";
 import fs from "node:fs";
 const markerPath = ${JSON.stringify(path.join(reports, "exit-entry.json"))};
+const descriptors = Object.getOwnPropertyDescriptors(fs);
+const syncCalls = [];
+for (const [name, value] of Object.entries(fs)) {
+  if (name.endsWith("Sync") && typeof value === "function") {
+    fs[name] = (...args) => { syncCalls.push(name); return Reflect.apply(value, fs, args); };
+  }
+}
+const waitResult = Atomics.wait(new Int32Array(new SharedArrayBuffer(4)), 0, 1, 0);
+Object.defineProperties(fs, descriptors);
+assert.equal(waitResult, "not-equal");
+assert.deepEqual(syncCalls, [], "fork diagnostics must not contaminate test filesystem observations");
+assert.equal(fs.existsSync(${JSON.stringify(path.join(reports, "synchronous-wait.json"))}), false);
 const before = process.exitCode;
 assert.throws(() => Reflect.apply(process.exit, process, [{}]), { code: "ERR_INVALID_ARG_TYPE" });
 assert.equal(process.exitCode, before);

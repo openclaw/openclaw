@@ -31,6 +31,7 @@ full behavior and rationale of each numbered check, follow the links under
     - Talk config migration from legacy flat `talk.*` fields into `talk.provider` + `talk.providers.<provider>`.
     - Browser migration checks for legacy Chrome extension configs and Chrome MCP readiness, with explicit commands for native-bootstrap inspection and repair.
     - OpenCode provider override warnings (`models.providers.opencode` / `opencode-zen` / `opencode-go`).
+    - Deprecated model warnings: a configured model ref whose catalog row is `deprecated` with a `statusReason` gets one warning with the reason and the config paths. Doctor never rewrites the ref.
     - Legacy OpenAI Codex provider/profile migration (`openai-codex` → `openai`) and shadowing warnings for stale `models.providers.openai-codex`.
     - OAuth TLS prerequisites check for OpenAI Codex OAuth profiles.
     - Plugin/tool allowlist warnings when `plugins.allow` is restrictive but tool policy still asks for wildcard or plugin-owned tools.
@@ -50,6 +51,7 @@ full behavior and rationale of each numbered check, follow the links under
     - Session transcript repair for duplicated prompt-rewrite branches created by affected 2026.4.24 builds.
     - State integrity and permissions checks (sessions, transcripts, state dir).
     - Warnings for SQLite databases on confirmed network filesystems, including NFS, SMB, and SSHFS. Doctor recommends a local disk; this diagnostic does not move data, change journaling, or block updates. Unknown filesystems and cross-VM mounts are not identified as network storage.
+    - On NFS, open files can delay removal of temporary SQLite snapshot directories. Busy or nonempty removal after snapshot retirement produces warnings and retains cleanup for later. A verified backup remains usable; Doctor and Gateway preflight still surface permission, I/O, retirement, identity, content, and integrity failures. Candidate update checks log temporary cleanup failures separately, preserving the check's result or original error. If a reported temporary directory remains after OpenClaw exits, remove it once no process holds its files open.
     - Config file permission checks (chmod 600) when running locally.
     - Model auth health: checks OAuth expiry, can refresh expiring tokens, and reports auth-profile cooldown/disabled states.
     - Claude CLI discovery uses the Anthropic plugin's executable resolver, including native installations in `~/.local/bin`. During updates, a Doctor child can inherit the Gateway service's narrower `PATH`; Doctor reports the discovered binary's location when it is outside that path. A missing binary still produces installation guidance.

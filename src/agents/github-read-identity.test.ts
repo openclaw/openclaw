@@ -20,6 +20,9 @@ import {
 } from "../config/runtime-snapshot.js";
 import {
   createGitHubReadIdentity,
+  clearNativeGitHubTokenCache,
+  readNativeGitHubConfiguration,
+  refreshNativeGitHubConfiguration,
   readCachedNativeGitHubToken,
   readNativeGitHubToken,
 } from "./github-read-identity.js";
@@ -36,6 +39,7 @@ const account = (id = 101, login = "native-user") => Response.json({ id, login, 
 
 beforeEach(() => {
   run.mockReset();
+  clearNativeGitHubTokenCache();
   vi.stubEnv("GH_TOKEN", undefined);
   vi.stubEnv("GITHUB_TOKEN", undefined);
 });
@@ -95,6 +99,28 @@ const assertActive =
       throw new Error(reason);
     }
   };
+
+it("publishes only authoritative process-native configuration and retires an invalidated sample", async () => {
+  run
+    .mockResolvedValueOnce(commandResult("", 1))
+    .mockResolvedValueOnce(commandResult('{"hosts":{}}'));
+  await refreshNativeGitHubConfiguration();
+  expect(readNativeGitHubConfiguration("github.com")).toBe("unconfigured");
+  expect(readNativeGitHubConfiguration("other.example.com")).toBe("unknown");
+  run.mockResolvedValue(commandResult("", 1));
+  await refreshNativeGitHubConfiguration();
+  expect(readNativeGitHubConfiguration("github.com")).toBe("unknown");
+  run.mockResolvedValue(commandResult("synthetic-native-token"));
+  await refreshNativeGitHubConfiguration();
+  expect(readNativeGitHubConfiguration("github.com")).toBe("configured");
+  const gate = createDeferredCore<ReturnType<typeof commandResult>>();
+  run.mockReturnValueOnce(gate.promise);
+  const sampling = refreshNativeGitHubConfiguration();
+  clearNativeGitHubTokenCache();
+  gate.resolve(commandResult("synthetic-native-token"));
+  await sampling;
+  expect(readNativeGitHubConfiguration("github.com")).toBe("unknown");
+});
 
 describe("native GitHub identity absence", () => {
   const launchFailure = (code = "ENOENT") => ({
@@ -604,9 +630,14 @@ describe("prepared GitHub read authority", () => {
   });
 
   it("admits explicit anonymous reads only while native credentials remain absent", async () => {
-    run.mockImplementation(async (argv: string[]) =>
-      argv[2] === "status" ? commandResult('{"hosts":{}}') : commandResult("", 1),
-    );
+    run.mockImplementation(async (argv: string[], { env }: { env: NodeJS.ProcessEnv }) => {
+      if (argv[2] !== "status") {
+        return commandResult("", 1);
+      }
+      // gh reports GH_HOST as an errored account even without stored credentials.
+      const hosts = env.GH_HOST ? { [env.GH_HOST]: [{ state: "error" }] } : {};
+      return commandResult(JSON.stringify({ hosts }));
+    });
     const options = readOptions();
     await expect(prepareRead(options)).rejects.toThrow("credential is unavailable");
     const identity = await prepareRead({ ...options, allowAnonymous: true });

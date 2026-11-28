@@ -690,7 +690,11 @@ Start with the artifact identity:
   config recipe coverage.
 
 The `legacy-operator-state` survivor installs a matching published companion
-through a moving tag (`latest`, `beta`, or `alpha`). If npm confirms that the
+through a moving tag (`latest`, `beta`, or `alpha`). A controlled ClawHub URL
+first serves the independently fetched published companion archive, then serves
+the sealed candidate plugin manifest and archives at that same URL. The recorded
+ClawHub source survives the upgrade; version, archive digests, integrity, and
+capability consent remain checked against the selected artifact. If npm confirms that the
 exact companion version was never published, the row records that companion as
 unavailable in `baselineCompanion` and continues the remaining operator-state
 and external-plugin migration checks. Registry errors still fail fixture setup.

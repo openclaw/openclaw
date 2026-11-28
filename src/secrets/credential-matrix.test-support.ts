@@ -14,7 +14,7 @@ type CredentialMatrixEntry = {
   notes?: string;
 };
 
-export type SecretRefCredentialMatrixDocument = {
+type SecretRefCredentialMatrixDocument = {
   version: 1;
   matrixId: "strictly-user-supplied-credentials";
   pathSyntax: 'Dot path with "*" for map keys and "[]" for arrays.';

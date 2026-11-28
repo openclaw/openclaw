@@ -48,6 +48,7 @@ export function createGatewayCredentials(ownsWarmBoot: boolean) {
   let scope: string | undefined;
   let capturedOwner: BootRecordOwner | undefined;
   let liveOwner: BootRecordOwner | undefined;
+  let hasReceivedHello = false;
   return {
     get hasWarmBoot() {
       return capturedOwner !== undefined;
@@ -88,6 +89,19 @@ export function createGatewayCredentials(ownsWarmBoot: boolean) {
         : credentials
           ? bootRecordOwner(credentials)
           : undefined;
+    },
+    connectionAfterHello(connection: ApplicationGatewayConnection, controlUiBuildFresh: boolean) {
+      // Preserve pending initial recovery only when hello changes no authority.
+      // Later hellos, stale builds, and retired bootstrap credentials fence it.
+      const preserveInitialConnection =
+        !hasReceivedHello &&
+        controlUiBuildFresh &&
+        !connection.bootstrapToken &&
+        connection.bootstrapProfile === undefined;
+      hasReceivedHello = true;
+      return preserveInitialConnection
+        ? connection
+        : { ...connection, bootstrapToken: "", bootstrapProfile: undefined };
     },
     acceptRecoveryScope(gatewayUrl: string, recoveryScope?: string): void {
       retirePluginRecoveryStorage(gatewayUrl, recoveryScope);

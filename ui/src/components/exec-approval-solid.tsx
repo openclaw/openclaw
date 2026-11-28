@@ -1,7 +1,11 @@
 // Control UI modal presents approvals after an explicit operator action.
 import { For, Show, createMemo, createSignal, onSettled } from "solid-js";
 import type { GatewaySessionRow } from "../api/types.ts";
-import type { ExecApprovalDecision, ExecApprovalRequest } from "../app/exec-approval.ts";
+import {
+  canDecideApproval,
+  type ExecApprovalDecision,
+  type ExecApprovalRequest,
+} from "../app/exec-approval.ts";
 import {
   KEYBOARD_SHORTCUT_COMBOS,
   matchesShortcutCombo,
@@ -156,7 +160,7 @@ export const ExecApproval = defineSolidBridge<{ props?: ExecApprovalProps }, Met
         props?.busy ||
         deciding() ||
         !props?.connected ||
-        !props?.canGrant
+        !canDecideApproval(request, props.canGrant)
       ) {
         return;
       }

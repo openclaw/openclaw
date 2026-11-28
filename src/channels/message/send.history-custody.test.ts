@@ -4,6 +4,7 @@ import {
   sendDurableMessageBatch,
   withDurableMessageSendContext,
 } from "../../plugin-sdk/channel-outbound.js";
+import { chatRef } from "../../sessions/chat-ref.js";
 import { sendDurableMessageBatchCore } from "./send.js";
 
 const deliver = vi.hoisted(() =>
@@ -19,13 +20,11 @@ it.each(["batch", "context", "private-core"] as const)(
   "only explicit private arguments supply history custody through %s",
   async (entrypoint) => {
     deliver.mockClear();
-    const generation = {
+    const generation = chatRef({
       agentId: "secondary",
       storePath: "/synthetic/agent.sqlite",
       sessionKey: "agent:secondary:dashboard:notice",
-      sessionId: "notice-session",
-      lifecycleRevision: null,
-    };
+    });
     const injected = {
       cfg: {},
       channel: "reef",

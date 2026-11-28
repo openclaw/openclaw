@@ -138,6 +138,8 @@ record({ kind: "preload" });
       : [
           ["cron list", { jobs: [] }],
           ["gateway call cron.status", { enabled: true }],
+          ["gateway call diagnostics.cpuProfile", { captured: "cpu" }],
+          ["gateway call diagnostics.heapSnapshot", { captured: "heap" }],
         ];
     for (const online of [true, false]) {
       if (!online) {
@@ -168,7 +170,10 @@ record({ kind: "preload" });
               : {}),
           },
         });
-        expect(result, result.stderr).toMatchObject({ code: online ? 0 : 1, signal: null });
+        expect(result, `${command}: ${result.stderr}`).toMatchObject({
+          code: online ? 0 : 1,
+          signal: null,
+        });
         if (online) {
           expect(JSON.parse(result.stdout)).toMatchObject(expected);
         } else {

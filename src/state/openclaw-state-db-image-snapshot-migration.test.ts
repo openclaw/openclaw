@@ -73,6 +73,7 @@ it("ordinary open with a lazy-column gap rolls back malformed images, then impor
         profile_snapshot_json: expect.any(String),
         resource_receipt_json: null,
         retention_json: null,
+        provision_source_json: null,
       });
       expect(JSON.parse(String(row.profile_snapshot_json))).toEqual({
         install: "bundle",

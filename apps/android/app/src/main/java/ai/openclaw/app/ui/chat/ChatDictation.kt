@@ -22,6 +22,7 @@ import androidx.compose.material.icons.outlined.MicNone
 import androidx.compose.material3.Icon
 import androidx.compose.material3.Surface
 import androidx.compose.material3.Text
+import androidx.compose.material3.minimumInteractiveComponentSize
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.DisposableEffect
 import androidx.compose.runtime.getValue
@@ -100,12 +101,13 @@ internal interface ChatDictationRecognizer {
   fun destroy()
 }
 
+internal fun isOnDeviceDictationAvailable(context: Context): Boolean = runCatching { SpeechRecognizer.isOnDeviceRecognitionAvailable(context.applicationContext) }.getOrDefault(false)
+
 internal class AndroidChatDictationRecognizer(
   context: Context,
 ) : ChatDictationRecognizer {
   private val appContext = context.applicationContext
-  override val isAvailable: Boolean =
-    runCatching { SpeechRecognizer.isOnDeviceRecognitionAvailable(appContext) }.getOrDefault(false)
+  override val isAvailable: Boolean = isOnDeviceDictationAvailable(appContext)
   private var generation = 0L
   private var recognizer: SpeechRecognizer? = null
 
@@ -453,6 +455,7 @@ internal fun ChatComposerMicButton(
   Surface(
     modifier =
       modifier
+        .minimumInteractiveComponentSize()
         .size(ClawTheme.spacing.touchTarget)
         .combinedClickable(
           enabled = interactionEnabled,
@@ -491,7 +494,7 @@ internal fun ChatComposerMicButton(
             ChatDictationState.Listening -> Icons.Default.Stop
             else -> Icons.Outlined.MicNone
           },
-        contentDescription = null,
+        contentDescription = dictationActionLabel,
         modifier = Modifier.size(20.dp),
       )
     }

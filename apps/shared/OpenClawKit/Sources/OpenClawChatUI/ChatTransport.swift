@@ -2,10 +2,22 @@ import Foundation
 import OpenClawKit
 import OpenClawProtocol
 
+enum OpenClawPersonalPinError: LocalizedError {
+    case unsupportedGateway, placementChanged
+
+    var errorDescription: String? {
+        switch self {
+        case .unsupportedGateway: String(localized: "Update the Gateway to change personal session pins.")
+        case .placementChanged: String(localized: "Pin placement changed. Refresh the list and retry.")
+        }
+    }
+}
+
 public enum OpenClawChatTransportEvent: Sendable {
     case health(ok: Bool)
     case tick
     case chatMetadataChanged(modelCatalogChanged: Bool = true, agentID: String? = nil)
+    case personalPinsChanged
     case modelSelectionChanged
     case sessionsChanged(OpenClawChatSessionsChangedEvent)
     case sessionObserver(SessionObserverDigest)
@@ -438,10 +450,12 @@ public struct OpenClawChatSessionMutationRouteLease: Sendable {
     public init(
         sessionTarget: @escaping @Sendable (String) -> OpenClawChatSessionTarget,
         unreadAckContract: Bool?,
+        allowPinWrites: Bool = true,
         receivesPatchReceipts: Bool = false,
         request: @escaping @Sendable (OpenClawChatGatewayRequest) async throws -> Data)
     {
         self.patchSessionImpl = { requested, id, unreadAt, label, category, color, pinned, archived, snooze, unread in
+            guard pinned == nil || allowPinWrites else { throw OpenClawPersonalPinError.unsupportedGateway }
             guard unread != false || unreadAckContract != nil else {
                 throw OpenClawChatTransportSendError.notDispatched
             }

@@ -6,6 +6,7 @@ import { normalizePluginsConfig } from "./config-state.js";
 import { shouldRejectHardlinkedPluginFiles } from "./hardlink-policy.js";
 import { passesManifestOwnerBasePolicy } from "./manifest-owner-policy.js";
 import { loadPluginManifestRegistryCore, type PluginManifestRecord } from "./manifest-registry.js";
+import { hasPluginGenerationSourceCustody } from "./plugin-generation-source-lookup.js";
 import { getCurrentPluginMetadataSnapshotRuntime } from "./plugin-metadata-snapshot.runtime.js";
 import { preparePluginModule } from "./plugin-module-loader-cache.js";
 import {
@@ -151,6 +152,23 @@ export async function loadProviderPolicyArtifactsAsync(owners: readonly PluginMa
     }
     const owner = owners[0];
     return owner ? { owner, surface: null } : null;
+  });
+}
+
+/** Source custody admits synchronous policy reads only from owners prepared in its scope. */
+export async function prepareTrustedExternalProviderPolicySurfaces(
+  registry: ProviderPolicyRegistry,
+): Promise<void> {
+  if (!hasPluginGenerationSourceCustody()) {
+    return;
+  }
+  await withPluginSetupPreparation({}, async ({ assertCurrent }) => {
+    for (const owner of registry.plugins) {
+      if (owner.origin !== "bundled" && owner.trustedOfficialInstall === true) {
+        await prepareProviderPolicySurfaceForOwner(owner)?.prepare?.(assertCurrent);
+        assertCurrent();
+      }
+    }
   });
 }
 

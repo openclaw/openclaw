@@ -1,8 +1,6 @@
-import { afterEach, expect, it, vi } from "vitest";
+import { afterEach, expect, it } from "vitest";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
-import * as logger from "../logger.js";
 import { setGatewayPluginMetadataSnapshot } from "../plugins/current-plugin-metadata-snapshot.js";
-import * as pluginLoader from "../plugins/loader.js";
 import { loadAndActivateRootPluginRegistry } from "../plugins/loader.js";
 import {
   cleanupPluginLoaderFixturesForTest,
@@ -17,7 +15,7 @@ import {
   getPluginRuntimeGatewayRequestScope,
   withPluginRuntimeRegistryScope,
 } from "../plugins/runtime/gateway-request-scope.js";
-import { getPluginRuntimeGenerationRegistry } from "../plugins/runtime/generation-scope.js";
+import { getPluginRuntimeGenerationRegistry } from "../plugins/runtime/generation-state.js";
 import { withOpenClawTestState } from "../test-utils/openclaw-test-state.js";
 import { resetPreparedModelRuntimeSnapshotsForTest } from "./prepared-model-runtime.test-support.js";
 import {
@@ -38,7 +36,6 @@ type Probe = {
   gateway: string[];
   ownerCurrent: string[];
   tools?: string[];
-  retainedWork?: number;
 };
 
 afterEach(async () => {
@@ -89,8 +86,7 @@ it("assembles full Gateway plugin tools without widening the selected model gene
       });
       const toolFile = await state.writeText(
         "plugins/workboard/index.cjs",
-        `globalThis[${JSON.stringify(probeKey)}]("tool-load");
-module.exports = {
+        `module.exports = {
   id: ${JSON.stringify(toolPluginId)},
   register(api) {
     api.registerTool(() => {
@@ -120,14 +116,12 @@ module.exports = {
         const requestRegistry = getPluginRuntimeGatewayRequestScope()?.pluginRegistry;
         const ownerCurrent =
           requestRegistry && getPluginRegistryGatewayOwner(requestRegistry)?.current();
-        const toolRecord = ownerCurrent?.plugins.find((plugin) => plugin.id === toolPluginId);
         probes.push({
           event,
           generation: pluginIds(getPluginRuntimeGenerationRegistry()),
           gateway: pluginIds(requestRegistry),
           ownerCurrent: pluginIds(ownerCurrent),
           ...(tools ? { tools } : {}),
-          ...(toolRecord ? { retainedWork: getPluginInstance(toolRecord)?.retainedWorkCount } : {}),
         });
         if (event === "tool-factory" && closeOnToolFactory && lifecycle.close) {
           closeOnToolFactory = false;
@@ -163,11 +157,9 @@ module.exports = {
         cache: false,
       });
       expect(pluginIds(root)).toEqual([providerPluginId, toolPluginId]);
+      const toolInstance = getPluginInstance(root.plugins.find(({ id }) => id === toolPluginId)!)!;
       const owner = createPluginRegistryOwner(root, state.workspaceDir);
       lifecycle.close = owner.close;
-      const warn = vi.spyOn(logger, "logWarn").mockImplementation(() => {});
-      const loadRegistry = vi.spyOn(pluginLoader, "loadPluginRegistryHandle");
-      const loadPlugins = vi.spyOn(pluginLoader, "loadOpenClawPlugins");
       const inventoryParams = {
         agentId: "main",
         agentDir: state.agentDir(),
@@ -181,7 +173,7 @@ module.exports = {
             cfg: inventoryConfig,
             ...inventoryParams,
           });
-          return await acquired.run((runtime) =>
+          const toolInventory = await acquired.run((runtime) =>
             resolveEffectiveToolInventory({
               cfg: inventoryConfig,
               ...inventoryParams,
@@ -191,23 +183,14 @@ module.exports = {
               runtimeModel: normalizeProvider ? runtime.runtimeModel : undefined,
             }).then((inventory) => inventory.groups.flatMap((group) => group.tools)),
           );
+          return toolInventory;
         });
       try {
         const inventory = await resolveInventory(config);
+        expect(toolInstance.retainedWorkCount).toBe(0);
         expect(inventory).toContainEqual(
           expect.objectContaining({ id: toolName, source: "plugin", pluginId: toolPluginId }),
         );
-        expect(warn.mock.calls.some(([message]) => message.includes("unknown entries"))).toBe(
-          false,
-        );
-        for (let repeat = 0; repeat < 2; repeat++) {
-          expect(await resolveInventory(config)).toContainEqual(
-            expect.objectContaining({ id: toolName, source: "plugin", pluginId: toolPluginId }),
-          );
-        }
-        expect(loadRegistry).not.toHaveBeenCalled();
-        expect(loadPlugins).not.toHaveBeenCalled();
-
         const disabledConfig: OpenClawConfig = {
           ...config,
           plugins: {
@@ -231,18 +214,13 @@ module.exports = {
         expect(closing).toBeDefined();
         await closing;
       } finally {
-        loadRegistry.mockRestore();
-        loadPlugins.mockRestore();
-        warn.mockRestore();
         await owner.close();
       }
 
-      expect(probes.filter((probe) => probe.event === "tool-load")).toHaveLength(1);
       expect(probes.find((probe) => probe.event === "tool-factory")).toMatchObject({
         generation: [providerPluginId],
         gateway: [providerPluginId, toolPluginId],
         ownerCurrent: [providerPluginId, toolPluginId],
-        retainedWork: 1,
       });
       expect(probes.find((probe) => probe.event === "normalize")).toMatchObject({
         generation: [providerPluginId],

@@ -35,11 +35,12 @@ import {
   type ModelFallbackChainStopReason,
   type ModelFallbackStepFields,
 } from "./model-fallback-observation.js";
-import type {
-  FallbackAttempt,
-  ModelCandidate,
-  ModelFallbackAttemptProvenance,
-  ModelFallbackResultClassification,
+import {
+  MODEL_FALLBACK_SKIPPED_CODE,
+  type FallbackAttempt,
+  type ModelCandidate,
+  type ModelFallbackAttemptProvenance,
+  type ModelFallbackResultClassification,
 } from "./model-fallback.types.js";
 import { modelKey } from "./model-ref-shared.js";
 import { isCliRuntimeAlias } from "./model-runtime-aliases.js";
@@ -520,6 +521,7 @@ function buildFailedCandidateAttempt(
         : described.message,
     reason: described.reason ?? "unknown",
     rateLimitRetriesExhausted: described.rateLimitRetriesExhausted,
+    rateLimitResetAt: described.rateLimitResetAt,
     authMode: described.authMode,
     status: described.status,
     code: described.code,
@@ -641,8 +643,16 @@ export function throwFallbackFailureSummary(params: {
       authMode: lastAttempt?.authMode,
       status: lastAttempt?.status,
       rateLimitRetriesExhausted: lastAttempt?.rateLimitRetriesExhausted,
+      rateLimitResetAt: lastAttempt?.rateLimitResetAt,
       code: lastAttempt?.code,
       quotaScope: lastAttempt?.quotaScope,
+      userMessage:
+        params.lastError instanceof FailoverError &&
+        lastAttempt &&
+        lastAttempt.provider === params.lastError.provider &&
+        lastAttempt.code !== MODEL_FALLBACK_SKIPPED_CODE
+          ? params.lastError.userMessage
+          : undefined,
       cause: params.lastError instanceof Error ? params.lastError : undefined,
       sessionId: params.attribution?.sessionId,
       lane: params.attribution?.lane,

@@ -1,4 +1,4 @@
-import { existsSync } from "node:fs";
+import { closeSync, existsSync, openSync } from "node:fs";
 import { isDeepStrictEqual } from "node:util";
 import { note } from "../../packages/terminal-core/src/note.js";
 import { resolveFutureConfigActionBlock } from "../config/future-version-guard.js";
@@ -98,6 +98,8 @@ async function runDoctorConfigPreflightOperation(
       if (existsSync(databasePath)) {
         // Harden before SQLite can retain a read-only handle for an owned 0444 file.
         ensureOpenClawStatePermissions(databasePath, process.env);
+        // An already-current database may need no writes, but immutable state still needs repair.
+        closeSync(openSync(databasePath, "r+"));
       }
     });
   }
@@ -137,7 +139,7 @@ async function runDoctorConfigPreflightOperation(
     stateMigrationUnsettled ||=
       result.outcome === "deferred" ||
       (result.warnings.length > 0 && result.warningDisposition !== "recoverable");
-    pluginMigrations.observe(result);
+    pluginMigrations.observe(result, configSnapshotRead?.pluginMetadataSnapshot);
     noteDoctorMigrationResult(result, { prefix: "- " });
   };
   // One preflight owns completion; each read still checks the current update phase.
@@ -331,6 +333,7 @@ async function runDoctorConfigPreflightOperation(
         },
       }),
     );
+    preflightWarnings.push(...(entryState.warnings ?? []));
     if (!repair && entryState.found > 0) {
       const { SessionStoreMigrationRequiredError } =
         await import("../config/sessions/migration-required.js");
@@ -477,12 +480,13 @@ async function runDoctorConfigPreflightOperation(
       ),
     );
     const { repairLegacySessionEntryStates } = await import("./doctor-session-delivery-state.js");
-    await repairLegacySessionEntryStates({
+    const entryState = await repairLegacySessionEntryStates({
       apply: true,
       cfg: automaticConfigRepair?.config ?? baseConfig,
       env: process.env,
       integrityCheck: options.integrityCheck,
     });
+    preflightWarnings.push(...(entryState.warnings ?? []));
   }
   if (stateDirMigrations && options.doctorOnlyStateMigrations === true) {
     const { retireDoctorA2uiWidgets } = await import("./doctor-a2ui-widgets.js");

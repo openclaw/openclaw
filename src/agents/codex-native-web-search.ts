@@ -19,6 +19,9 @@ export async function isCodexNativeWebSearchRelevant(params: {
   }
 
   const defaultModel = resolveDefaultModelForAgent({ cfg: params.config });
+  if (!defaultModel) {
+    return false;
+  }
   const configuredProvider = params.config.models?.providers?.[defaultModel.provider];
   const configuredModelApi = configuredProvider?.models?.find(
     (candidate) => candidate.id === defaultModel.model,

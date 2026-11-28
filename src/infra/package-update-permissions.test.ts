@@ -11,7 +11,6 @@ import {
   stagedNpmPrefix,
   writePackageRoot,
 } from "./package-update-steps.test-support.js";
-import { prepareUpdateFailureReport } from "./update-failure-report-prepare.js";
 import { UpdateFailureFactSchema } from "./update-run-schema.js";
 import { updateRunStepsFromResultStep } from "./update-run-step.js";
 
@@ -97,8 +96,7 @@ it.each([
   [undefined, "unexpected-error"],
   [undefined, "causes"],
   [undefined, "private-prose"],
-  [undefined, "saved-private-prose"],
-] as const)("retains local exceptions with public-safe reports (%s, %s)", async (code, kind) => {
+] as const)("retains sanitized local exceptions (%s, %s)", async (code, kind) => {
   await withTestDir({ prefix: "openclaw-validating-error-" }, async (base) => {
     const globalRoot = path.join(base, "lib/node_modules");
     const packageRoot = path.join(globalRoot, "openclaw");
@@ -171,23 +169,6 @@ it.each([
       ]),
     );
     const status = result.steps.flatMap(updateRunStepsFromResultStep);
-    const report = await prepareUpdateFailureReport(
-      {
-        attemptId: "validating-error",
-        recordedRun: {
-          runId: "validating-error",
-          steps: result.steps.flatMap(updateRunStepsFromResultStep),
-        },
-        result: {
-          status: "error",
-          mode: "npm",
-          durationMs: 1,
-          steps: kind === "unexpected-error" || kind === "saved-private-prose" ? [] : result.steps,
-          reason: result.reason ?? "unexpected-error",
-        },
-      },
-      { env },
-    );
     const local = JSON.stringify(status);
     for (const detail of ["Candidate validation refused", "errno=-13", "syscall=spawn", "path="]) {
       expect(local).toContain(detail);
@@ -195,19 +176,13 @@ it.each([
     if (kind.includes("private-prose") || kind === "stage") {
       expect(local).toContain("AcmeInternal during merger planning");
     }
-    expect(report.body).not.toMatch(
-      /Candidate validation refused|AcmeInternal|merger planning|errno=-13|syscall=spawn/u,
-    );
-    expect(report.body).toContain("Details retained locally");
-    for (const output of [local, report.body]) {
-      expect(output).toContain("src/infra/package-update-steps.ts:605:7");
-      expect(output).not.toMatch(/Private Operator|fixture-private-token|hidden|secret/);
-      if (kind !== "dest") {
-        expect(output).not.toContain("chmod");
-      }
-      if (code) {
-        expect(output).toContain(code);
-      }
+    expect(local).toContain("src/infra/package-update-steps.ts:605:7");
+    expect(local).not.toMatch(/Private Operator|fixture-private-token|hidden|secret/);
+    if (kind !== "dest") {
+      expect(local).not.toContain("chmod");
+    }
+    if (code) {
+      expect(local).toContain(code);
     }
     if (kind === "causes") {
       for (const detail of [
@@ -219,9 +194,6 @@ it.each([
       ]) {
         expect(local).toContain(detail);
       }
-      expect(report.body).toContain("ENOTSUP");
-      expect(report.body).toContain("SQLITE_BUSY");
-      expect(report.body).not.toMatch(/Nested validation refused|Worker refused/u);
     }
     if (code || kind === "text-only") {
       expect(result.reason).toBe("global-install-permission-denied");

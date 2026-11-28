@@ -1,3 +1,4 @@
+import { getAsyncWorkSignal } from "openclaw/plugin-sdk/concurrency-runtime";
 import {
   formatMemoryIndexRebuildGuidance,
   readMemorySearchManagerStatus,
@@ -14,6 +15,7 @@ import {
   withProgress,
 } from "openclaw/plugin-sdk/memory-core-host-runtime-cli";
 import {
+  resolveMemorySearchConfig,
   resolveMemorySearchIndexConfig,
   type OpenClawConfig,
 } from "openclaw/plugin-sdk/memory-core-host-runtime-core";
@@ -208,6 +210,7 @@ export async function runMemoryStatus(
     agentId: string;
     status: ReturnType<MemoryManager["status"]>;
     excludedConfiguredSources?: "sessions"[];
+    skippedMultimodalModalities?: string[];
     embeddingProbe?: MemoryEmbeddingProbeResult;
     indexError?: string;
     scan?: MemorySourceScan;
@@ -216,6 +219,7 @@ export async function runMemoryStatus(
     dreamingAudit?: DreamingArtifactsAuditSummary;
     dreamingRepair?: RepairDreamingArtifactsResult;
   }> = [];
+  const signal = getAsyncWorkSignal();
   const cfg = await withMemoryCommand({
     commandName: "memory status",
     options: opts,
@@ -290,6 +294,8 @@ export async function runMemoryStatus(
         ...(resolveMemorySearchIndexConfig(agentCfg, agentId)?.sessionSourceExcluded
           ? { excludedConfiguredSources: ["sessions"] }
           : {}),
+        skippedMultimodalModalities: resolveMemorySearchConfig(agentCfg, agentId)?.multimodal
+          .skippedModalities,
         embeddingProbe,
         indexError,
         scan,
@@ -299,7 +305,15 @@ export async function runMemoryStatus(
         dreamingRepair,
       });
     },
+  }).catch((error: unknown) => {
+    if (!signal?.aborted) {
+      throw error;
+    }
   });
+  // Ctrl+C owns the exit; an interrupted check prints no partial status.
+  if (!cfg || signal?.aborted) {
+    return;
+  }
   if (opts.json) {
     defaultRuntime.writeJson(allResults);
     return;
@@ -310,6 +324,7 @@ export async function runMemoryStatus(
       agentId,
       status,
       excludedConfiguredSources,
+      skippedMultimodalModalities,
       embeddingProbe,
       indexError,
       scan,
@@ -350,6 +365,9 @@ export async function runMemoryStatus(
       extraPaths.length
         ? `${label("Extra paths")} ${info(terminalText`${extraPaths.join(", ")}`)}`
         : null,
+      skippedMultimodalModalities?.length
+        ? `${label("Skipped media")} ${warn(terminalText`${skippedMultimodalModalities.join(", ")} (not supported by the embedding model)`)}`
+        : null,
       `${label("Indexed")} ${success(indexedLabel)}`,
       `${label("Dirty")} ${status.dirty ? warn("yes") : muted("no")}`,
       `${label("Store")} ${info(terminalText`${storePath}`)}`,
@@ -388,6 +406,9 @@ export async function runMemoryStatus(
             : "unavailable";
       addState("Embeddings", state);
       addField("Embeddings error", embeddingProbe.error, warn);
+    } else {
+      const refusal = asNullableRecord(status.custom)?.embeddingRefusal;
+      addField("Embeddings", typeof refusal === "string" ? refusal : undefined, warn);
     }
     const runtime = deep ? readLlamaCppRuntimeStatus(status) : null;
     if (runtime) {

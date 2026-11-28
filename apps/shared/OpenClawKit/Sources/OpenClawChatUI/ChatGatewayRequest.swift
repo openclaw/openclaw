@@ -277,9 +277,13 @@ public enum OpenClawChatGatewayRequests {
         label: String?,
         parentSessionKey: String?,
         worktree: Bool?,
-        worktreeBaseRef: String? = nil) -> OpenClawChatGatewayRequest
+        worktreeBaseRef: String? = nil,
+        category: String? = nil,
+        cwd: String? = nil) -> OpenClawChatGatewayRequest
     {
         var params = ["key": AnyCodable(key)]
+        self.add(cwd, to: &params, key: "cwd")
+        self.add(category, to: &params, key: "category")
         self.add(agentID, to: &params, key: "agentId")
         self.add(label, to: &params, key: "label", trim: false)
         self.add(parentSessionKey, to: &params, key: "parentSessionKey", trim: false)
@@ -576,6 +580,13 @@ public enum OpenClawChatGatewayRequests {
             method: "sessions.compact",
             params: params,
             timeoutMs: self.compactionTimeoutMs)
+    }
+
+    public static func sessionPreview(sessionKey: String) -> OpenClawChatGatewayRequest {
+        OpenClawChatGatewayRequest(
+            method: "sessions.preview",
+            params: ["keys": AnyCodable([sessionKey]), "limit": AnyCodable(6), "maxChars": AnyCodable(1200)],
+            timeoutMs: 4000)
     }
 
     public static func history(

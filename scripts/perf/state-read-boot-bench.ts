@@ -31,7 +31,7 @@ import type * as MachineState from "../../src/state/config-machine-state-write.j
 import type * as Reads from "../../src/state/openclaw-state-db-readonly.js";
 import type * as State from "../../src/state/openclaw-state-db.js";
 import type { OpenClawStateReadCommand } from "../../src/state/openclaw-state-read.types.js";
-import { sumSampledHeapBytes } from "../lib/heap-sampling.ts";
+import { startCollectedHeapSampling, sumSampledHeapBytes } from "../lib/heap-sampling.ts";
 import { parseStrictIntegerOption } from "../lib/strict-integer-option.ts";
 
 const { values } = parseArgs({
@@ -129,12 +129,7 @@ async function measure(run: () => Promise<void>, operations: number) {
   await nextTurn();
   const inspector = new Session();
   if (values.allocations) {
-    inspector.connect();
-    await inspector.post("HeapProfiler.startSampling", {
-      samplingInterval: 4096,
-      includeObjectsCollectedByMajorGC: true,
-      includeObjectsCollectedByMinorGC: true,
-    });
+    await startCollectedHeapSampling(inspector, 4096);
   }
   try {
     const workersBefore = lifecycle().workerLifecycle;

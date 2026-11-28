@@ -9,7 +9,7 @@ import type { MsgContext } from "../auto-reply/templating.js";
 import type { OpenClawConfig } from "../config/types.js";
 import type { ModelDefinitionConfig } from "../config/types.models.js";
 import type { MediaUnderstandingModelConfig } from "../config/types.tools.js";
-import { readImageMetadataFromHeader } from "../media/media-services.js";
+import { readImageMetadataFromHeader } from "../media/image-header-metadata.js";
 import type { ImageCompressionModelPolicy } from "../media/web-media.js";
 import { createEmptyPluginRegistry } from "../plugins/registry.js";
 import { getActivePluginRegistry, setActivePluginRegistry } from "../plugins/runtime.js";
@@ -624,7 +624,7 @@ describe("image resizing", () => {
         await expect(run()).rejects.toMatchObject({
           name: "MediaUnderstandingSkipError",
           reason: "maxBytes",
-          message: `Attachment 1 exceeds maxBytes ${maxBytes}`,
+          message: `Attachment 1 exceeds the size limit of ${maxBytes} bytes.`,
         });
         expect(describeImage).not.toHaveBeenCalled();
       },
