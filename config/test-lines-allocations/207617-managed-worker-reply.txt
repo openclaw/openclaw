@@ -1,0 +1,3 @@
+# Exercise interrupted worker settlement in SQLite and recheck the original
+# connection before accepting a reply from Codex history.
+374

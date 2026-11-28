@@ -28,10 +28,14 @@ const simpleUserMessage = z.object({
   clientId: identifier,
   content: z.array(z.object({ type: z.literal("text"), text: z.string() })).nonempty(),
 });
+const itemTime = z.int().nonnegative().nullish();
 const simpleAssistantMessage = z.strictObject({
   id: identifier,
   type: z.literal("agentMessage"),
   phase: z.literal("final_answer").nullable(),
+  startedAtMs: itemTime,
+  completedAtMs: itemTime,
+  moderation: z.null().optional(),
   delivery: z.null().optional(),
   questions: z.null().optional(),
   memoryCitation: z.null().optional(),

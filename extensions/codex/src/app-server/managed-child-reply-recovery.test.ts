@@ -32,7 +32,6 @@ const identityInput = {
 };
 const identity = sessionBindingIdentity(identityInput);
 const threadId = "managed-thread";
-const runtimeIdentity = { serverVersion: "0.164.0" };
 
 function savedPage() {
   return {
@@ -66,7 +65,8 @@ function savedPage() {
   };
 }
 
-async function setup(page: unknown = savedPage()) {
+async function setup(page: unknown = savedPage(), serverVersion = "0.164.0") {
+  const runtimeIdentity = { serverVersion };
   const appServer = resolveCodexAppServerRuntimeOptions({
     pluginConfig: readCodexPluginConfig(pluginConfig),
   });
@@ -144,25 +144,54 @@ describe("interrupted managed Codex child reply", () => {
 
   const read = { type: "dynamicToolCall", id: "read", status: "completed", success: true };
 
-  it("returns only the final answer after progress and a successful tool call", async () => {
+  it("returns only the final answer from timed Codex history after progress and a read", async () => {
     const page = savedPage();
     const [turn] = page.data;
     const [user, assistant] = turn.items;
-    const fixture = await setup({
+    const unrecordedTiming = { startedAtMs: null, completedAtMs: null };
+    const unmoderatedAssistant = { ...assistant, moderation: null, questions: null };
+    const timedPage = {
       ...page,
       data: [
         {
           ...turn,
           items: [
-            user,
-            { ...assistant, id: "progress", phase: "commentary", text: "Checking the file." },
-            { type: "reasoning", id: "step", content: ["private reasoning"] },
-            { ...read, contentItems: [{ type: "inputText", text: "private file" }] },
-            { ...assistant, phase: "final_answer" },
+            { ...user, ...unrecordedTiming },
+            {
+              ...unmoderatedAssistant,
+              ...unrecordedTiming,
+              id: "progress",
+              phase: "commentary",
+              text: "Checking the file.",
+            },
+            {
+              ...unrecordedTiming,
+              type: "reasoning",
+              id: "step",
+              summary: [],
+              content: ["private reasoning"],
+            },
+            {
+              ...read,
+              namespace: null,
+              tool: "read",
+              arguments: { path: "README.md" },
+              contentItems: [{ type: "inputText", text: "private file" }],
+              durationMs: 12,
+              startedAtMs: 1_699_999_999_100,
+              completedAtMs: 1_699_999_999_112,
+            },
+            {
+              ...unmoderatedAssistant,
+              phase: "final_answer",
+              startedAtMs: 1_699_999_999_200,
+              completedAtMs: 1_700_000_000_000,
+            },
           ],
         },
       ],
-    });
+    };
+    const fixture = await setup(timedPage, "0.172.0");
     await fixture.run();
     expect(fixture.accept.mock.calls.map(([text]) => text)).toEqual([assistant.text]);
   });
@@ -179,7 +208,13 @@ describe("interrupted managed Codex child reply", () => {
           completedAt?: number | null;
         };
         user?: { clientId: string };
-        assistant?: { phase?: string; text?: string; attachment?: string };
+        assistant?: {
+          phase?: string;
+          text?: string;
+          attachment?: string;
+          completedAtMs?: number;
+          moderation?: unknown;
+        };
         extraItem?: {
           id: string;
           type: string;
@@ -187,6 +222,7 @@ describe("interrupted managed Codex child reply", () => {
           status?: string;
           phase?: string | null;
           delivery?: unknown;
+          startedAtMs?: number;
         };
       },
     ]
@@ -201,6 +237,37 @@ describe("interrupted managed Codex child reply", () => {
     ["commentary", { assistant: { phase: "commentary" } }],
     ["an unknown phase", { assistant: { phase: undefined } }],
     ["unrecognized assistant fields", { assistant: { attachment: "local-file" } }],
+    [
+      "a final answer with a display decision",
+      {
+        assistant: {
+          moderation: {
+            moderated: true,
+            display: {
+              mode: "block",
+              version: 1,
+              reason: { kind: "protection", protectionType: "fixture" },
+            },
+          },
+        },
+      },
+    ],
+    ["a negative item completion time", { assistant: { completedAtMs: -1 } }],
+    [
+      "an unsafe item completion time",
+      { assistant: { completedAtMs: Number.MAX_SAFE_INTEGER + 1 } },
+    ],
+    [
+      "a fractional commentary start time",
+      {
+        extraItem: {
+          ...savedPage().data[0].items[1],
+          id: "progress",
+          phase: "commentary",
+          startedAtMs: 1.5,
+        },
+      },
+    ],
     ["inline reasoning", { assistant: { text: "<think>private work</think>Visible text." } }],
     ["silent reply", { assistant: { text: "NO_REPLY" } }],
     ["a pending tool", { extraItem: { ...read, status: "inProgress" } }],
