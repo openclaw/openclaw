@@ -1,5 +1,9 @@
+import { resolveOpenAIModelReasoningEfforts } from "openclaw/plugin-sdk/llm";
 import { describeOpenAiCompatibleVideo } from "openclaw/plugin-sdk/media-understanding";
-import type { ProviderCatalogContext } from "openclaw/plugin-sdk/plugin-entry";
+import type {
+  ProviderCatalogContext,
+  ProviderNormalizeResolvedModelContext,
+} from "openclaw/plugin-sdk/plugin-entry";
 import { createProviderApiKeyAuthMethod } from "openclaw/plugin-sdk/provider-auth-api-key";
 import { buildOpenAICompatibleLiveProviderCatalog } from "openclaw/plugin-sdk/provider-catalog-live-runtime";
 import {
@@ -238,6 +242,25 @@ function resolveQwenTokenPlanThinkingProfile(modelId: string) {
   return undefined;
 }
 
+function normalizeQwenTokenPlanResolvedModel({ model }: ProviderNormalizeResolvedModelContext) {
+  if (
+    !isQwen4MaxModelId(model.id) ||
+    !model.reasoning ||
+    model.api !== "openai-completions" ||
+    (model.compat &&
+      "thinkingFormat" in model.compat &&
+      model.compat.thinkingFormat !== undefined) ||
+    resolveOpenAIModelReasoningEfforts(model) !== undefined
+  ) {
+    return undefined;
+  }
+  // The agent and transport need defaults only when the model has no effort contract.
+  return {
+    ...model,
+    thinkingLevelMap: { xhigh: "xhigh", max: "xhigh", ...model.thinkingLevelMap },
+  };
+}
+
 function resolveQwenThinkingProfile(modelId: string) {
   if (isQwen4MaxModelId(modelId)) {
     return {
@@ -309,6 +332,7 @@ export default defineSingleProviderPluginEntry({
       wrapSimpleCompletionStreamFn: wrapQwenProviderStream,
       classifyFailoverReason: classifyQwenFailoverReason,
       resolveThinkingProfile: ({ modelId }) => resolveQwenTokenPlanThinkingProfile(modelId),
+      normalizeResolvedModel: normalizeQwenTokenPlanResolvedModel,
     });
     api.registerProvider({
       id: QWEN_TOKEN_PLAN_LEGACY_PROVIDER_ID,
@@ -318,6 +342,7 @@ export default defineSingleProviderPluginEntry({
       wrapStreamFn: wrapQwenProviderStream,
       wrapSimpleCompletionStreamFn: wrapQwenProviderStream,
       classifyFailoverReason: classifyQwenFailoverReason,
+      normalizeResolvedModel: normalizeQwenTokenPlanResolvedModel,
     });
     api.registerMediaUnderstandingProvider({
       id: "qwen",
