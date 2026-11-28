@@ -425,10 +425,7 @@ export const ChatProcessesPanel = defineSolidBridge<ChatProcessesPanelProps>(
               </button>
             </span>
             {!props.mobile && (
-              <strong
-                class="chat-processes__detail-name"
-                title={selectedRow()?.name}
-              >
+              <strong class="chat-processes__detail-name" title={selectedRow()?.name}>
                 <bdi>{selectedRow()?.name}</bdi>
               </strong>
             )}
