@@ -207,6 +207,32 @@ The result and `window-before.png` / `window-after.png` stay under the scratch d
 
 After either proof, stop only the Gateway, app/node, and fixture processes you launched for the rig. Retain only inspected proof results and synthetic captures, then remove the task-owned scratch directory. On macOS, also remove the fresh proof profile directory (`~/.openclaw-<profile>`) and its `ai.openclaw.mac.profile.<profile>` defaults domain. Never clean up the operator profile or Gateway.
 
+#### Linux effect-receipt proof
+
+The receipt proof exercises one real CUA mutation through the paired-node rig. Build the same committed checkout with `pnpm build`, prepare its isolated Linux rig as above, and approve its node command surface. In the fixture terminal, use a fresh window with exactly one editable control and the required initial text:
+
+```bash
+scripts/dev/computer-use-macos-live-rig.sh fixture \
+  "$scratch" "OpenClaw Receipt Fixture" "OpenClaw Receipt Sentinel" "P05 RECEIPT BEFORE"
+```
+
+From the same X11 and D-Bus session, run the receipt check. Match `OPENCLAW_GATEWAY_PORT` to the port selected during preparation; this example uses `29431`:
+
+```bash
+env -u OPENCLAW_GATEWAY_URL -u OPENCLAW_GATEWAY_TOKEN -u OPENCLAW_GATEWAY_PASSWORD \
+  OPENCLAW_CONFIG_PATH="$scratch/gateway.json" \
+  OPENCLAW_STATE_DIR="$scratch/agent-state" \
+  OPENCLAW_GATEWAY_PORT=29431 \
+  node --import ./scripts/tsx.mjs scripts/dev/computer-use-effect-receipt-proof.ts \
+  --window-title "OpenClaw Receipt Fixture" --artifacts "$scratch/receipt-proof"
+```
+
+The output directory must be empty. The script requires the sole connected computer node to advertise the Linux CUA provider and the exact fixture window to contain its expected initial text. It sends one background, window-addressed `type` action without an element reference. The pinned Linux driver's AT-SPI insert acknowledges delivery without reading the element back, so it can report `unverifiable`; an element-addressed insert can instead report `confirmed`.
+
+The proof requires actual uncertain provider evidence, a successful fresh automatic window observation containing the inserted marker once, and an `uncertain` private terminal receipt on the original result object. It fails on a refusal, a confirmed provider result, a missing observation, or a receipt upgraded to committed. There is no input retry or foreground fallback. Run against the original receipt-classification base, the same assertion must fail because the terminal receipt is `mutation_committed`; a setup failure is not that reproduction.
+
+`result.json` contains allowlisted source identities, provider identity, outcome facts, and assertion status. It omits tokens, endpoints, window titles, text payloads, native references, and images. Inspect the file before sharing. The script imports the source computer tool and terminal observer and reaches the built Gateway, built paired node, and native CUA SDK. Agent/model execution, voice capture, approvals, and cancellation settlement remain outside this check. Its cleanup callback is best effort for paired nodes; stop and join the rig processes you own using the cleanup procedure above.
+
 ### Windows and Linux (experimental, direct SDK)
 
 The bundled `cua-computer` plugin loads its Gateway policy by default on every platform. Local computer control remains opt-in on Windows and Linux; loading the policy alone does not start a native driver, register local computer commands, or check local driver artifacts. macOS keeps its default CUA integration with the app-owned daemon. Explicitly disabling the plugin also disables its cloud computer policy.
