@@ -45,3 +45,21 @@ it("supplies the retained result as data without changing job instructions", asy
   expect(commandBody).toContain("repeated known blockers quiet");
   expect(commandBody).toContain("Explicitly requested recurring digests or reports still deliver");
 });
+
+it("names the exact automations tool instead of an ambiguous automation tool", async () => {
+  const { commandBody } = await buildCronCommandBody({
+    job: {
+      id: "outcome",
+      name: "Synthetic outcome job",
+      payload: { kind: "agentTurn", message: "Check queue." },
+    },
+    cfg: {},
+    message: "Check queue.",
+    baseSessionKey: "agent:main:main",
+    formattedTime: "2026-10-26T00:00:00Z",
+    timeLine: "Current time: 2026-10-26T00:00:00Z",
+  });
+  expect(commandBody).toContain("If the `automations` tool offers record_result");
+  expect(commandBody).toContain("use that tool, not an MCP or connector automation tool");
+  expect(commandBody).not.toContain("If the automation tool offers record_result");
+});
