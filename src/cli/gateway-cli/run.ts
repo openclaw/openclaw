@@ -77,6 +77,10 @@ import {
   INVALID_TAILSCALE,
   INVALID_WS_LOG,
 } from "./run-flag-checks.js";
+import {
+  createConfiguredGatewayHealthProbe,
+  isGatewayHealthzResponse,
+} from "./run-health-probe.js";
 import { runGatewayLoop } from "./run-loop.js";
 import {
   extractGatewayMiskeys,
@@ -85,10 +89,6 @@ import {
   toOptionString,
 } from "./run-option-values.js";
 import type { GatewayRunOpts } from "./run-options.js";
-import {
-  createConfiguredGatewayHealthProbe,
-  isGatewayHealthzResponse,
-} from "./run-supervised-health.js";
 import type { GatewayRunRuntimeHooks } from "./runtime-hooks.js";
 import {
   handleGatewayLockFailure,

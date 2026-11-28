@@ -314,6 +314,8 @@ export async function startScheduledTask({
   env,
   onMutation,
   assertCurrent,
+  beforeMutation,
+  prepareEffect,
   preserveAutoStart,
 }: GatewayServiceControlArgs): Promise<void> {
   const effectiveEnv = env ?? (process.env as GatewayServiceEnv);
@@ -414,6 +416,8 @@ export async function startScheduledTask({
   await runScheduledTaskOrThrow({
     taskName,
     assertCurrent,
+    beforeMutation,
+    prepareEffect,
     allowFallback: preserveAutoStart !== true,
     env: effectiveEnv,
     scriptPath: resolveTaskScriptPath(effectiveEnv),
@@ -430,6 +434,7 @@ export async function restartRegisteredScheduledTask(params: {
   onEndMutation?: () => void;
   onRunMutation?: () => void;
   assertCurrent?: () => void;
+  beforeMutation?: GatewayServiceControlArgs["beforeMutation"];
   prepareEffect?: GatewayServiceControlArgs["prepareEffect"];
   warn?: (message: string) => void;
 }): Promise<ScheduledTaskRestartResult> {
@@ -472,6 +477,7 @@ export async function restartRegisteredScheduledTask(params: {
   const activation = await runScheduledTaskOrThrow({
     taskName,
     assertCurrent: params.assertCurrent,
+    beforeMutation: params.beforeMutation,
     prepareEffect: params.prepareEffect,
     env: params.env,
     scriptPath: resolveTaskScriptPath(params.env),
@@ -522,6 +528,7 @@ export async function restartScheduledTask({
   env,
   onMutation,
   assertCurrent,
+  beforeMutation,
   prepareEffect,
   updateHandoff,
   warn,
@@ -553,6 +560,7 @@ export async function restartScheduledTask({
     warn,
     preserveDefinition,
     assertCurrent,
+    beforeMutation,
     prepareEffect: prepareActivation,
     env: effectiveEnv,
     stdout,

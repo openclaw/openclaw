@@ -2,6 +2,7 @@ import { writeFileSync } from "node:fs";
 import fs from "node:fs/promises";
 import path from "node:path";
 import { expect, it, vi } from "vitest";
+import * as stateDatabase from "../../state/openclaw-state-db-cache.js";
 import { withTestDir } from "../../test-helpers/temp-dir.js";
 import { runUpdatedInstallGatewayCommand } from "./update-command-service-command.js";
 import type { UpdateServiceDefinitionRecovery } from "./update-command-service-context-types.js";
@@ -96,5 +97,27 @@ it.each(["restarted", "scheduled"])("retains restart facts (%s)", async (result)
     ).resolves.toBe("accepted");
     expect((await fs.readFile(received, "utf8")).split("\n")).toContain("--preserve-definition");
     expect(onReadiness.mock.calls).toEqual(result === "restarted" ? [[readiness]] : []);
+  });
+});
+
+it("does not dispatch activation when the updater cannot release state custody", async () => {
+  await withTestDir({ prefix: "openclaw-update-custody-" }, async (root) => {
+    await fs.mkdir(path.join(root, "dist"));
+    await fs.writeFile(path.join(root, "dist", "index.mjs"), "process.exitCode = 1;");
+    const release = vi.spyOn(stateDatabase, "releaseOpenClawStateDatabaseCustody");
+    release.mockRejectedValueOnce(new Error("state custody unavailable"));
+    const onGatewayStartAttempted = vi.fn();
+    try {
+      await expect(
+        runUpdatedInstallGatewayCommand(
+          { result: { root, mode: "npm" }, opts: {}, invocationEnv: {}, onGatewayStartAttempted },
+          "restart",
+        ),
+      ).rejects.toThrow("state custody unavailable");
+      expect(release).toHaveBeenCalledOnce();
+      expect(onGatewayStartAttempted).not.toHaveBeenCalled();
+    } finally {
+      release.mockRestore();
+    }
   });
 });

@@ -1,3 +1,4 @@
+import { resolveGatewayStartupTiming } from "../../commands/gateway-startup-timing.js";
 import { GATEWAY_RESTART_REPLACEMENT_TIMEOUT_MS } from "../../infra/gateway-shutdown-budget.js";
 
 export const DEFAULT_RESTART_HEALTH_TIMEOUT_MS = GATEWAY_RESTART_REPLACEMENT_TIMEOUT_MS;
@@ -12,3 +13,9 @@ export const INTERRUPTED_UPDATE_SETTLE_TIMEOUT_MS =
   Math.floor(DEFAULT_RESTART_HEALTH_TIMEOUT_MS / 4) +
   (Math.ceil(DEFAULT_RESTART_HEALTH_ATTEMPTS / 10) - 1) * DEFAULT_RESTART_HEALTH_DELAY_MS +
   3 * 10_000;
+
+export function postRestartHealthAttempts(): number {
+  return process.platform === "win32"
+    ? Math.ceil(resolveGatewayStartupTiming().deadlineMs / DEFAULT_RESTART_HEALTH_DELAY_MS)
+    : DEFAULT_RESTART_HEALTH_ATTEMPTS;
+}

@@ -166,21 +166,3 @@ export function createForcedExitAfterStabilityBundle(params: {
     }
   };
 }
-
-export async function releaseRetiringGatewayCustody(
-  cleanup: Pick<ReturnType<typeof createGatewayRunCleanup>, "waitForPersistence">,
-  bootCompletion: Promise<void> | undefined,
-  lock: { release: () => Promise<void> } | null,
-  supervisorMode: string | null,
-): Promise<void> {
-  const persisted = await cleanup.waitForPersistence(bootCompletion);
-  if (supervisorMode === "schtasks") {
-    if (!persisted) {
-      throw new Error("Gateway state custody release did not settle; successor cannot start");
-    }
-    // Native borrowers must join; the accepted stop's watchdog owns this deadline.
-    await lock?.release();
-  } else {
-    await cleanup.waitForPersistence(lock?.release());
-  }
-}

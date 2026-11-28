@@ -21,7 +21,6 @@ import {
   waitForStoppedFreeGatewayRestart,
   waitForRunningGateway,
   portUsage,
-  ownerLease,
 } from "./restart-health.test-helpers.js";
 
 vi.mock("../../daemon/launchd-exec.js", async (importOriginal) => ({
@@ -74,7 +73,6 @@ describe("restart health", () => {
 
   it("waits for a transferred state owner without opening its SQLite store", async () => {
     const service = makeGatewayService({ status: "stopped" });
-    const readMigrationLease = vi.fn(() => false);
     readActiveGatewayLockIdentity.mockResolvedValue({
       pid: 8000,
       port: 18789,
@@ -88,12 +86,14 @@ describe("restart health", () => {
       attempts: 10,
       delayMs: 500,
       stateCustodyTransferred: true,
-      isStartupMigrationActive: readMigrationLease,
     });
     expectWait(result, "healthy", 1000);
     expect(readActiveGatewayLockIdentity).toHaveBeenCalled();
     expect(readGatewayOwnerLease).not.toHaveBeenCalled();
-    expect(readMigrationLease).not.toHaveBeenCalled();
+    expect(service.readRuntime).toHaveBeenCalledWith(
+      expect.anything(),
+      expect.objectContaining({ stateCustodyTransferred: true }),
+    );
   });
 
   it("ends readiness polling immediately for a verified service hold", async () => {
@@ -128,41 +128,27 @@ describe("restart health", () => {
     });
   });
 
-  it.each([
-    [true, 100_000, 360],
-    [false, 2000, 20],
-  ] as const)(
-    "waits for owner readiness (expired lease=%s)",
-    async (expired, readyAt, attempts) => {
+  it.each([100_000, 2_000])(
+    "waits for a live file owner's readiness after %s ms",
+    async (readyAt) => {
       setPlatform("win32");
-      readGatewayOwnerLease.mockImplementation(() => {
-        if (expired) {
-          return { ...ownerLease(2080), expired: true };
-        }
-        return monotonicClock.nowMs < 1000
-          ? ownerLease(6464, "dead", 1000)
-          : ownerLease(2080, "live", 2000);
+      readActiveGatewayLockIdentity.mockResolvedValue({
+        pid: 2080,
+        port: 18789,
+        ownerId: "starting-gateway",
+        createdAt: "2026-11-25T00:00:00.000Z",
       });
       listenAfter(readyAt, 2080);
       serveHealth();
       const snapshot = await waitForRunningGateway({
         service: makeGatewayService({ status: "stopped" }),
-        attempts,
+        attempts: 360,
         delayMs: 500,
       });
       expectWait(snapshot, "healthy", readyAt);
       expect(snapshot.staleGatewayPids).toEqual([]);
     },
   );
-
-  it("returns as soon as an owner observed unknown in this wait dies with the port free", async () => {
-    readGatewayOwnerLease.mockImplementation(() => ({
-      ...ownerLease(2080),
-      state: monotonicClock.nowMs === 0 ? "unknown" : "dead",
-    }));
-    const snapshot = await waitForStoppedFreeGatewayRestart();
-    expectWait(snapshot, "stopped-free", 500);
-  });
 
   it.each([
     {
@@ -321,7 +307,6 @@ describe("restart health", () => {
       waitForRunningGateway({
         attempts: 1,
         delayMs: 60_000,
-        isStartupMigrationActive: () => true,
         signal: controller.signal,
       }),
     ).rejects.toBe(aborted);

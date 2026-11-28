@@ -15,6 +15,7 @@ import type { UpdateRunResult } from "../../infra/update-runner-types.js";
 import type { UpdateStepResult } from "../../infra/update-step-result.js";
 import { CommandProcessCleanupError } from "../../process/exec-result.js";
 import { runCommandWithTimeout, type CommandOptions } from "../../process/exec.js";
+import { releaseOpenClawStateDatabaseCustody } from "../../state/openclaw-state-db-cache.js";
 import type { DaemonActionResponse } from "../daemon-cli/response.js";
 import type { GatewayRestartSnapshot } from "../daemon-cli/restart-health.types.js";
 import { resolveNodeRunner, type UpdateCommandOptions } from "./shared.js";
@@ -299,6 +300,9 @@ export async function runUpdatedInstallGatewayCommand(
       args: [...args, ...(grant ? ["--update-executor", "run"] : [])],
     });
     const argv = [invocation.command, ...invocation.args];
+    // The successor may need the same state database before this child returns.
+    await releaseOpenClawStateDatabaseCustody();
+    assertCurrent();
     params.onGatewayStartAttempted?.(action);
     return await runSettledGatewayCommand(argv, {
       ...(grant

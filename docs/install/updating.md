@@ -118,6 +118,16 @@ it (see [Rollback and recovery](/install/updating/rollback-and-recovery)).
 
 ## Update implementation contract
 
+Gateway updates that require exclusive SQLite access release state custody before
+starting the replacement. The retiring Gateway records shutdown and closes its
+state readers and retained file handles. Standalone respawns finish process
+cleanup and a final state closure before spawning; the retiring process observes
+readiness over HTTP with captured configuration, without reopening SQLite.
+
+Native service start and restart capture the service command and configuration
+before activation. An operator-scope warning reports when credentials are needed
+to inspect detailed readiness; it does not replace listener ownership checks.
+
 Candidate Doctor removes empty snapshot directories left by cancellation between
 private directory creation and native-token acquisition, after its inspection
 workers have settled. Unconfirmed worker cleanup and unowned snapshot payloads

@@ -37,6 +37,7 @@ import {
 import { withCommandProcessScope } from "../../process/exec-spawn.js";
 import { defaultRuntime } from "../../runtime.js";
 import { getAsyncWorkSignal } from "../../shared/async-work-scope.js";
+import { releaseOpenClawStateDatabaseCustody } from "../../state/openclaw-state-db-cache.js";
 import { formatCliCommand } from "../command-format.js";
 import {
   isTerminalInteractive,
@@ -47,7 +48,11 @@ import {
   appendGatewayLifecycleAudit,
   createGatewayLifecycleMutationAudit,
 } from "./lifecycle-audit.js";
-import { resolveGatewayConfigPorts, resolveGatewayLifecycleContext } from "./lifecycle-context.js";
+import {
+  createGatewayLifecycleContext,
+  resolveGatewayConfigPorts,
+  resolveGatewayLifecycleContext,
+} from "./lifecycle-context.js";
 import {
   commandInterrupted,
   runServiceRestart,
@@ -64,8 +69,8 @@ import { handleSystemScopeSystemdGateway } from "./lifecycle-systemd-scope.js";
 import { signalGatewayRestart } from "./lifecycle-unmanaged.js";
 import { createDaemonActionContext } from "./response.js";
 import { createGatewayRestartDeadline } from "./restart-health-deadline.js";
+import { postRestartHealthAttempts } from "./restart-health.constants.js";
 import {
-  DEFAULT_RESTART_HEALTH_ATTEMPTS,
   DEFAULT_RESTART_HEALTH_DELAY_MS,
   formatGatewayRestartFailure,
   renderGatewayPortHealthDiagnostics,
@@ -75,15 +80,14 @@ import {
   waitForGatewayHealthyListener,
   waitForGatewayHealthyRestart,
 } from "./restart-health.js";
-import { assertGatewayServiceActionAllowed, renderGatewayServiceStartHints } from "./shared.js";
+import {
+  assertGatewayServiceActionAllowed,
+  renderGatewayServiceStartHints,
+  renderGatewayServiceStopHints,
+  renderGatewayServiceUninstallHints,
+} from "./shared.js";
 import { repairLoadedGatewayServiceForStart } from "./start-repair.js";
 import type { DaemonLifecycleOptions } from "./types.js";
-
-function postRestartHealthAttempts(): number {
-  return process.platform === "win32"
-    ? Math.ceil(resolveGatewayStartupTiming().deadlineMs / DEFAULT_RESTART_HEALTH_DELAY_MS)
-    : DEFAULT_RESTART_HEALTH_ATTEMPTS;
-}
 
 async function stopGatewayWithoutServiceManager(
   port: number,
@@ -246,20 +250,6 @@ async function runExternalSupervisorRestart(opts: DaemonLifecycleOptions): Promi
   return true;
 }
 
-function renderGatewayServiceStopHints(): string[] {
-  return [
-    `Run ${formatCliCommand("openclaw gateway status --deep")} to inspect the service, then retry.`,
-  ];
-}
-
-function renderGatewayServiceUninstallHints(): string[] {
-  return [
-    ...renderGatewayServiceStopHints(),
-    "To remove the service manually, see https://docs.openclaw.ai/install/uninstall#manual-service-removal-cli-not-installed",
-  ];
-}
-
-/** Uninstall the managed Gateway service after stopping it. */
 export async function runDaemonUninstall(opts: DaemonLifecycleOptions = {}) {
   assertGatewayServiceActionAllowed("uninstall", "uninstall the gateway service");
   return await runServiceUninstall({
@@ -277,9 +267,16 @@ export async function runDaemonStart(opts: DaemonLifecycleOptions = {}) {
   assertGatewayServiceActionAllowed("start", "start the gateway");
   const service = resolveGatewayService();
   const expectedPort = (await resolveGatewayConfigPorts()).explicit;
+  let context = await resolveGatewayLifecycleContext(service);
+  const beforeServiceMutation = () => {
+    assertGatewayServiceActionAllowed("start", "start the gateway");
+    return releaseOpenClawStateDatabaseCustody();
+  };
+  await beforeServiceMutation();
   return await runServiceStart({
     serviceNoun: "Gateway",
     service,
+    beforeServiceMutation,
     renderStartHints: renderGatewayServiceStartHints,
     onNotLoaded:
       process.platform === "darwin"
@@ -295,18 +292,23 @@ export async function runDaemonStart(opts: DaemonLifecycleOptions = {}) {
             return recovered;
           }
         : undefined,
-    repairLoadedService: async ({ json, stdout, warn, state, issues }) =>
-      await repairLoadedGatewayServiceForStart({
+    repairLoadedService: async ({ json, stdout, warn, state, issues }) => {
+      const result = await repairLoadedGatewayServiceForStart({
         service,
         json,
         stdout,
         warn,
         state,
         issues,
-      }),
+        beforeServiceMutation,
+      });
+      if (result) {
+        context = createGatewayLifecycleContext(service, result.lifecycle);
+      }
+      return result;
+    },
     postStartCheck: async ({ fail, warnings }) => {
       const { deadlineMs } = resolveGatewayStartupTiming();
-      const context = await resolveGatewayLifecycleContext(service);
       const port = expectedPort ?? context.port;
       const deadlineAt = performance.now() + deadlineMs;
       const attempts = Math.ceil(deadlineMs / DEFAULT_RESTART_HEALTH_DELAY_MS);
@@ -318,7 +320,7 @@ export async function runDaemonStart(opts: DaemonLifecycleOptions = {}) {
         withCommandProcessScope(
           () =>
             waitForGatewayHealthyRestart({
-              service,
+              service: context.probeService,
               port,
               attempts,
               delayMs: DEFAULT_RESTART_HEALTH_DELAY_MS,
@@ -326,6 +328,7 @@ export async function runDaemonStart(opts: DaemonLifecycleOptions = {}) {
               deadline: healthDeadline,
               deadlineOutcome: "snapshot",
               env: context.env,
+              config: context.config ?? {},
               supervisorKeepsAlive: process.platform === "darwin",
               signal: getAsyncWorkSignal(),
             }),
@@ -341,6 +344,7 @@ export async function runDaemonStart(opts: DaemonLifecycleOptions = {}) {
         }),
       ]);
       if (health.healthy && readiness.healthz === 200 && readiness.readyz === 200) {
+        warnings.push(...(health.operatorScopeWarning ? [health.operatorScopeWarning] : []));
         return;
       }
       warnings.push(...renderRestartDiagnostics(health));
@@ -443,14 +447,22 @@ export async function runDaemonRestart(opts: DaemonLifecycleOptions = {}): Promi
   let restartedWithoutServiceManager = false;
   let unmanagedPreviousLockIdentity: GatewayLockIdentity | undefined;
   const restartIntent = resolveGatewayRestartIntentOptions(opts);
-  let configPorts = await resolveGatewayConfigPorts();
+  const configPorts = await resolveGatewayConfigPorts();
+  let callerConfig = configPorts.config;
   const { explicit: configuredPort, fallback: fallbackPort } = configPorts;
   let restartContext = await resolveGatewayLifecycleContext(service, preserveDefinition).catch(
     (error: unknown) => {
       if (hasCommandProcessCleanupError(error) || preserveDefinition) {
         throw error;
       }
-      return { port: fallbackPort, env: process.env, command: undefined, config: undefined };
+      return {
+        ...createGatewayLifecycleContext(service, {
+          env: process.env,
+          command: undefined,
+          config: undefined,
+        }),
+        port: fallbackPort,
+      };
     },
   );
   let managedRestartPort = preserveDefinition
@@ -467,6 +479,10 @@ export async function runDaemonRestart(opts: DaemonLifecycleOptions = {}): Promi
   let stateCustodyTransferred = false;
   const restartWaitSeconds = Math.round(restartWaitMs / 1000);
   let unmanagedRestartWait: ReturnType<typeof resolveRestartListenerHealthWait> | undefined;
+  const beforeServiceMutation = () => {
+    assertGatewayServiceActionAllowed("restart", "restart the gateway");
+    return releaseOpenClawStateDatabaseCustody();
+  };
 
   return runServiceRestart({
     serviceNoun: "Gateway",
@@ -476,10 +492,9 @@ export async function runDaemonRestart(opts: DaemonLifecycleOptions = {}): Promi
       ...opts,
       ...(restartIntent ? { restartIntent } : {}),
     },
-    readDriftContext: () => ({ config: configPorts.config ?? {}, command: restartContext.command }),
+    readDriftContext: () => ({ config: callerConfig ?? {}, command: restartContext.command }),
     expectedPort: configuredPort,
-    beforeServiceMutation: () =>
-      assertGatewayServiceActionAllowed("restart", "restart the gateway"),
+    beforeServiceMutation,
     prepareServiceEffect: updateOwnedTask
       ? async () => {
           stateCustodyTransferred = true;
@@ -540,11 +555,12 @@ export async function runDaemonRestart(opts: DaemonLifecycleOptions = {}): Promi
             warn,
             state,
             issues,
+            beforeServiceMutation,
           });
-          // Repair invalidates the prepared service definition and caller config.
+          // Repair publishes its replacement definition and auth before native activation.
           if (result) {
-            restartContext = await resolveGatewayLifecycleContext(service);
-            configPorts = await resolveGatewayConfigPorts();
+            restartContext = createGatewayLifecycleContext(service, result.lifecycle);
+            callerConfig = result.lifecycle.config;
             managedRestartPort = configuredPort ?? restartContext.port;
           }
           return result;
@@ -641,25 +657,13 @@ export async function runDaemonRestart(opts: DaemonLifecycleOptions = {}): Promi
 
       const waitForHealthy = async () =>
         await waitForGatewayHealthyRestart({
-          service: stateCustodyTransferred
-            ? {
-                readCommand: async () => restartContext.command ?? null,
-                readRuntime: (env, options) =>
-                  service.readRuntime(env, {
-                    ...options,
-                    commandInspection: restartContext.command
-                      ? { kind: "present", command: restartContext.command }
-                      : { kind: "absent" },
-                  }),
-              }
-            : service,
+          service: restartContext.probeService,
           port: managedRestartPort,
           attempts: restartHealthAttempts,
           delayMs: DEFAULT_RESTART_HEALTH_DELAY_MS,
           ...(process.platform === "win32" ? { timeoutMs: restartWaitMs } : {}),
           env: restartContext.env,
-          config: stateCustodyTransferred ? (restartContext.config ?? {}) : restartContext.config,
-          stateCustodyTransferred,
+          config: restartContext.config ?? {},
           probeHosts: await resolveGatewayServiceProbeHosts(restartContext),
           requireOwnedListener: restartContext.env.OPENCLAW_UPDATE_IN_PROGRESS !== "1",
           supervisorKeepsAlive: process.platform === "darwin",
@@ -688,6 +692,7 @@ export async function runDaemonRestart(opts: DaemonLifecycleOptions = {}): Promi
             env: process.env,
             stdout,
             warn,
+            beforeMutation: beforeServiceMutation,
             onMutation: createGatewayLifecycleMutationAudit({ action: "restart" }),
           });
           if (retryRestart.outcome === "scheduled") {
@@ -699,6 +704,7 @@ export async function runDaemonRestart(opts: DaemonLifecycleOptions = {}): Promi
       }
 
       if (health.healthy) {
+        warnings.push(...(health.operatorScopeWarning ? [health.operatorScopeWarning] : []));
         return { outcome: "completed", readiness: health };
       }
 
