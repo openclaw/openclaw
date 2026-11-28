@@ -18,6 +18,16 @@ extension OpenClawSnapshotUITests {
             before,
             accuracy: 1,
             "Show more should reveal the tail, not skip past the reader")
+
+        let latest = app.buttons["Jump to latest reply"]
+        XCTAssertTrue(latest.waitForExistence(timeout: 5))
+        latest.tap()
+        XCTAssertTrue(toggle.isHittable)
+        toggle.tap()
+        XCTAssertEqual(toggle.value as? String, "Collapsed")
+        XCTAssertTrue(
+            app.windows.firstMatch.frame.contains(item.frame),
+            "Do not leave the reader past the shorter prompt")
     }
 
     func testFinishedCommandsSeparatedByEmptyThinkingShareOneSheet() throws {
