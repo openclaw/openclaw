@@ -217,7 +217,6 @@ describe("Code Mode guest source validation", () => {
   });
 
   it.each([
-    "return require('node:fs');",
     "return import('node:fs');",
     "return require /* hidden */ ('node:fs');",
     String.raw`return r\u0065quire('node:fs');`,

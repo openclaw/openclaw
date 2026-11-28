@@ -516,7 +516,6 @@ describe("createCliJsonlStreamingParser events", () => {
       name: "Bash",
       input: { command: "ls -la" },
       result: "total 0\n",
-      isError: false,
     },
     {
       resultRole: "assistant",
@@ -526,7 +525,6 @@ describe("createCliJsonlStreamingParser events", () => {
       name: "web_search",
       input: { query: "openclaw" },
       result: [{ type: "web_search_result", title: "OpenClaw", url: "https://example.com" }],
-      isError: false,
     },
     {
       resultRole: "assistant",
@@ -536,7 +534,6 @@ describe("createCliJsonlStreamingParser events", () => {
       name: "echo",
       input: { value: "hello" },
       result: [{ type: "text", text: "hello" }],
-      isError: false,
     },
   ])("emits $resultRole result events for $useType", (fixture) => {
     const { starts, results, parser } = createToolEventParser();
@@ -551,7 +548,7 @@ describe("createCliJsonlStreamingParser events", () => {
       type: fixture.resultType,
       tool_use_id: fixture.toolCallId,
       content: fixture.result,
-      is_error: fixture.isError,
+      is_error: false,
     };
     finishCliFrames(
       parser,
@@ -575,7 +572,7 @@ describe("createCliJsonlStreamingParser events", () => {
       {
         toolCallId: fixture.toolCallId,
         name: fixture.name,
-        isError: fixture.isError,
+        isError: false,
         result: fixture.result,
       },
     ]);

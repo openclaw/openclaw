@@ -11,11 +11,9 @@ type McpCatalogEntry = NonNullable<Parameters<typeof createCodeModeNamespaceRunt
 function mcpCatalogEntry(params: {
   id: string;
   serverName?: string;
-  safeServerName?: string;
   toolName?: string;
   description?: string;
   parameters?: unknown;
-  operation?: NonNullable<McpCatalogEntry["mcp"]>["operation"];
   node?: NonNullable<McpCatalogEntry["mcp"]>["node"];
 }): McpCatalogEntry {
   const serverName = params.serverName ?? "github";
@@ -28,9 +26,9 @@ function mcpCatalogEntry(params: {
     parameters: params.parameters ?? { type: "object", properties: {} },
     mcp: {
       serverName,
-      safeServerName: params.safeServerName ?? serverName,
+      safeServerName: serverName,
       toolName,
-      operation: params.operation ?? "tool",
+      operation: "tool",
       ...(params.node ? { node: params.node } : {}),
     },
   };
