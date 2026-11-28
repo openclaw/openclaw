@@ -5,6 +5,27 @@ import Testing
 
 @MainActor
 struct ClientCredentialStartupTests {
+    @Test func `settled CLI schema refusal carries its recovery suggestion`() async throws {
+        let fixture = try Fixture()
+        defer { fixture.remove() }
+        let refusal = "Refusing a forward database schema migration: this CLI is 2026.10.5 but the Gateway " +
+            "service runs 2026.10.4 from /opt/openclaw; run openclaw update (or the CLI from /opt/openclaw)."
+        var environment = fixture.environment
+        environment["TEST_EXIT_CODE"] = "1"
+        environment["TEST_STDERR"] = "[openclaw] Reason: \(refusal)\nother diagnostic"
+        do {
+            try await ClientCredentialStartup.prepare(
+                executionRoot: fixture.executionRoot,
+                configURL: fixture.configURL,
+                bundle: fixture.bundle,
+                profile: AppProfile(environment: [:]),
+                environment: environment)
+            Issue.record("Refused credential preparation was reported as ready")
+        } catch {
+            #expect((error as NSError).localizedRecoverySuggestion == refusal)
+        }
+    }
+
     @Test(arguments: ["default", "credential-fixture"])
     func `startup uses the matching bundled owner and explicit execution root`(_ profileName: String) async throws {
         let fixture = try Fixture()
@@ -110,6 +131,16 @@ struct ClientCredentialStartupTests {
             #expect(error.localizedDescription.contains("schema 36"))
         }
         #expect(!FileManager.default.fileExists(atPath: fixture.externalMarker.path))
+    }
+
+    @Test func `only a separately managed service is offered the CLI update`() {
+        let refusal = ClientCredentialStartup.GatewayServiceSchemaRefusal(message: "service recovery")
+        let serviceRecovery = AppDelegate.credentialStartupRecovery(for: refusal, replacingAppManagedService: false)
+        #expect(serviceRecovery == refusal.message)
+        #expect(AppDelegate.credentialStartupRecovery(for: refusal, replacingAppManagedService: true) == nil)
+        #expect(AppDelegate.credentialStartupRecovery(
+            for: OpenClawNativeStateError("Local client credential schema does not match version 1"),
+            replacingAppManagedService: false) == nil)
     }
 
     private struct Fixture {

@@ -38,7 +38,20 @@ enum ClientCredentialStartup {
             if !result.timedOut, let mismatch = NewerStateSchemaError(diagnostic: detail) {
                 throw mismatch
             }
+            if !result.timedOut, result.preflightError?.nonEmpty == nil,
+               let start = result.stderr.range(of: "Refusing a forward database schema migration:")
+            {
+                let sentence = result.stderr[start.lowerBound...].prefix(while: { !$0.isNewline })
+                throw GatewayServiceSchemaRefusal(message: String(sentence))
+            }
             throw OpenClawNativeStateError("Could not prepare local client credentials. " + detail.suffix(4000))
         }
+    }
+
+    struct GatewayServiceSchemaRefusal: LocalizedError {
+        let message: String
+
+        var errorDescription: String? { "Could not prepare local client credentials. " + self.message }
+        var recoverySuggestion: String? { self.message }
     }
 }

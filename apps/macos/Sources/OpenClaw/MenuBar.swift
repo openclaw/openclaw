@@ -344,6 +344,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         self.credentialStartupTask = Task { @MainActor [weak self] in
             guard let self else { return }
             defer { self.credentialStartupTask = nil }
+            var replacingAppManagedService = false
             do {
                 let root = DeviceIdentityStore.stateDirectoryURL
                 let executionRoot = OpenClawPaths.stateDirURL
@@ -354,6 +355,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
                             configURL: OpenClawPaths.configURL)
                     }
                     if let replacement = await StaleGatewayServiceReplacement.detect() {
+                        replacingAppManagedService = true
                         self.credentialLogger
                             .info("Replacing the previous build's Gateway service before credential preparation")
                         if let error = try await replacement.run(prepareCredentials: prepare) {
@@ -395,16 +397,25 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
                 guard !Task.isCancelled else { return }
                 self.credentialLogger
                     .error("Credential startup failed: \(error.localizedDescription, privacy: .public)")
-                self.showCredentialStartupFailure(schemaMismatch: error as? NewerStateSchemaError)
+                self.showCredentialStartupFailure(
+                    schemaMismatch: error as? NewerStateSchemaError,
+                    serviceRecovery: Self.credentialStartupRecovery(
+                        for: error, replacingAppManagedService: replacingAppManagedService))
             }
         }
     }
 
-    private func showCredentialStartupFailure(schemaMismatch: NewerStateSchemaError?) {
+    static func credentialStartupRecovery(for error: Error, replacingAppManagedService: Bool) -> String? {
+        // An app-owned service cannot use the CLI's update instruction.
+        guard !replacingAppManagedService else { return nil }
+        return (error as? ClientCredentialStartup.GatewayServiceSchemaRefusal)?.recoverySuggestion
+    }
+
+    private func showCredentialStartupFailure(schemaMismatch: NewerStateSchemaError?, serviceRecovery: String?) {
         let title = schemaMismatch == nil
             ? "OpenClaw client credentials need recovery"
             : "OpenClaw app update required"
-        let message = schemaMismatch?.localizedDescription ??
+        let message = schemaMismatch?.localizedDescription ?? serviceRecovery ??
             ("Quit OpenClaw, run openclaw doctor --fix with the matching CLI, then reopen OpenClaw. " +
                 "If you restored a backup, restore its matching client credentials too.")
         self.credentialLogger.error("\(title, privacy: .public). \(message, privacy: .public)")
