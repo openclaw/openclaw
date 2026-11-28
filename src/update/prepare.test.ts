@@ -551,6 +551,7 @@ describe("package release conversion", () => {
       const access = vi.mocked(fs.access).getMockImplementation()!;
       vi.mocked(fs.access).mockImplementation(async (file, mode) => {
         if (file === runningRoot) {
+          vi.stubGlobal("process", { ...process, platform: windows ? "win32" : "darwin" });
           throw Object.assign(new Error("Read-only global package"), { code: "EACCES" });
         }
         return access(file, mode);
@@ -561,9 +562,6 @@ describe("package release conversion", () => {
           trigger: "cli",
           before: { version: "2026.11.6" },
         });
-        if (windows) {
-          vi.stubGlobal("process", { ...process, platform: "win32" });
-        }
         expect(
           await prepareUpdate({
             runId: run.runId,
