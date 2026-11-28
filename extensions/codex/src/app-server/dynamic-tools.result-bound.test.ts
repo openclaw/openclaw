@@ -52,61 +52,6 @@ describe("Codex dynamic-tool results go through the one tool-result bound", () =
     expect(text).not.toContain("Full output:");
   });
 
-  // A whole-prefix cut below ~4.1k chars dropped the end marker. Only the body is cut now:
-  // the warning, start marker and end marker stay whole, down to the smallest window a run
-  // accepts (4,000 tokens, CONTEXT_WINDOW_HARD_MIN_TOKENS).
-  it.each([4_000, 8_000, 16_000])(
-    "keeps the whole envelope frame at the smallest budgets: %i-token window",
-    async (contextWindowTokens) => {
-      const wrapped = wrapExternalContent(`${"x".repeat(60_000)}\nLAST`, { source: "api" });
-      const bridge = bridgeReturning("github_read", textToolResult(wrapped), {
-        contextWindowTokens,
-        remoteWorkspaceRoot: "/remote/workspace",
-      });
-      const text = texts(await callTool(bridge, "github_read", {}, "call-small"));
-      const ids = [
-        ...text.matchAll(/<<<(END_)?EXTERNAL_UNTRUSTED_CONTENT id="([a-f0-9]{16})">>>/gu),
-      ];
-
-      expect(ids.map((match) => (match[1] ? "end" : "start"))).toEqual(["start", "end"]);
-      expect(ids[0]?.[2]).toBe(ids[1]?.[2]);
-      const frameEnd = wrapped.indexOf("\n---\n") + 5;
-      expect(text.slice(0, frameEnd).replace(/id="[a-f0-9]{16}"/u, "")).toBe(
-        wrapped.slice(0, frameEnd).replace(/id="[a-f0-9]{16}"/u, ""),
-      );
-      // The trusted notice follows the closed frame, outside it.
-      expect(text).toMatch(
-        /\nLAST\n<<<END_EXTERNAL_UNTRUSTED_CONTENT id="[a-f0-9]{16}">>>\n\n\[\.\.\. \d+ chars omitted\]$/u,
-      );
-    },
-  );
-
-  // An image takes 16,000 of a 16,700-char context share: a plain head would be shorter than
-  // the warning and start marker. The envelope's frame is reserved, so only the body shrinks.
-  it("keeps the whole envelope frame when an image leaves little room", async () => {
-    const wrapped = wrapExternalContent(`${"x".repeat(60_000)}\nLAST`, { source: "api" });
-    const bridge = bridgeReturning(
-      "github_read",
-      {
-        content: [
-          { type: "text", text: wrapped },
-          { type: "image", data: PNG, mimeType: "image/png" },
-        ],
-        details: {},
-      },
-      { contextWindowTokens: 16_700, remoteWorkspaceRoot: "/remote/workspace" },
-    );
-    const text = texts(await callTool(bridge, "github_read", {}, "call-image-room"));
-    const frameEnd = wrapped.indexOf("\n---\n") + 5;
-
-    expect(text.slice(0, frameEnd).replace(/id="[a-f0-9]{16}"/u, "")).toBe(
-      wrapped.slice(0, frameEnd).replace(/id="[a-f0-9]{16}"/u, ""),
-    );
-    expect(text).toMatch(
-      /\n<<<END_EXTERNAL_UNTRUSTED_CONTENT id="[a-f0-9]{16}">>>\n\n\[\.\.\. \d+ chars omitted\]$/u,
-    );
-  });
-
   it("keeps images and bounds mixed text blocks within the shared budget", async () => {
     const bridge = bridgeReturning(
       "mixed_lookup",

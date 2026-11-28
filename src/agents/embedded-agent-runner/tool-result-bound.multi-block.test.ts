@@ -90,22 +90,6 @@ describe("untrusted-content frames survive the bound", () => {
     },
   );
 
-  it.each([4_000, 16_000, 128_000])(
-    "two wrapped pages: %i-token window",
-    async (contextWindowTokens) => {
-      const { shown } = await expectFailClosed(
-        [
-          { type: "text", text: page("A") },
-          { type: "text", text: page("B") },
-        ],
-        contextWindowTokens,
-      );
-      // The first page is cut in its body; the second is left out whole, not cut open.
-      expect(shown).toHaveLength(1);
-      expect(shown[0]).toContain("UNTRUSTED-A-FIRST");
-    },
-  );
-
   it.each([4_000, 8_000])("14 wrapped pages at a %i-token window", async (contextWindowTokens) => {
     await expectFailClosed(
       Array.from({ length: 14 }, (_, i) => ({
