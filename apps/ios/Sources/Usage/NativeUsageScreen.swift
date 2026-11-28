@@ -22,7 +22,6 @@ struct NativeUsageScreen: View {
     struct Agent: Identifiable { let id: String }
 
     @Environment(NodeAppModel.self) private var appModel
-    @Environment(\.accessibilityReduceMotion) private var reduceMotion
     @State private var report: NativeUsageReport?
     @State private var loadedQuery: NativeUsageQuery?
     @State private var plans: NativeUsagePlans?
@@ -162,31 +161,34 @@ struct NativeUsageScreen: View {
     }
 
     private var periodControls: some View {
-        Section {
-            VStack(alignment: .leading, spacing: 8) {
+        Group {
+            Section {
                 Picker(selection: self.$period) {
                     ForEach(Period.allCases) { period in Text(period.title).font(OpenClawType.caption).tag(period) }
                 } label: { Text("Date range").font(OpenClawType.body) }
                     .pickerStyle(.segmented)
+                    .listRowInsets(EdgeInsets())
+                    .listRowBackground(Color.clear)
+                    .listRowSeparator(.hidden)
+            } footer: {
                 let dates = self.dates
                 let interval = dates.lowerBound..<dates.upperBound
                 Text(verbatim: interval.formatted(.interval.year().month(.abbreviated).day()) + " · " + TimeZone.current
                     .identifier)
                     .font(OpenClawType.caption).foregroundStyle(.secondary)
             }
-            .listRowInsets(EdgeInsets(top: 0, leading: 0, bottom: 0, trailing: 0))
-            .listRowBackground(Color.clear)
-            .listRowSeparator(.hidden)
             if self.period == .custom {
-                DatePicker(selection: self.$customStart, in: ...self.customEnd, displayedComponents: .date) {
-                    Text("Start date").font(OpenClawType.body)
-                }
-                DatePicker(
-                    selection: self.$customEnd,
-                    in: self.customStart...max(self.customStart, Date.now),
-                    displayedComponents: .date)
-                {
-                    Text("End date").font(OpenClawType.body)
+                Section {
+                    DatePicker(selection: self.$customStart, in: ...self.customEnd, displayedComponents: .date) {
+                        Text("Start date").font(OpenClawType.body)
+                    }
+                    DatePicker(
+                        selection: self.$customEnd,
+                        in: self.customStart...max(self.customStart, Date.now),
+                        displayedComponents: .date)
+                    {
+                        Text("End date").font(OpenClawType.body)
+                    }
                 }
             }
         }
@@ -326,10 +328,8 @@ struct NativeUsageScreen: View {
             let result = try await GatewayPayloadDecoding.decode(NativeUsageReport.self, from: data)
             try Task.checkCancellation()
             guard self.query == query, self.reportRequest == request else { return }
-            withAnimation(self.reduceMotion ? nil : .easeOut(duration: 0.2)) {
-                self.report = result
-                self.loadedQuery = query
-            }
+            self.report = result
+            self.loadedQuery = query
         } catch {
             guard !Task.isCancelled, self.query == query, self.reportRequest == request else { return }
             self.reportError = error.localizedDescription

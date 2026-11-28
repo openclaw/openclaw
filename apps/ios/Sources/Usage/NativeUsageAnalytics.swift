@@ -209,7 +209,6 @@ struct NativeUsageAnalytics: View {
             }
         }
         .padding(.vertical, 8)
-        .animation(self.reduceMotion ? nil : .easeOut(duration: 0.22), value: tokens)
     }
 
     private func metricButton(_ metric: Metric, title: LocalizedStringKey, value: String, selected: Bool) -> some View {
@@ -217,6 +216,7 @@ struct NativeUsageAnalytics: View {
             VStack(alignment: .leading, spacing: 3) {
                 Text(title).font(OpenClawType.footnoteMedium).foregroundStyle(.secondary)
                 Text(verbatim: value).font(OpenClawType.title3).monospacedDigit().contentTransition(.numericText())
+                    .animation(self.reduceMotion ? nil : .easeOut(duration: 0.22), value: value)
             }.frame(maxWidth: .infinity, alignment: .leading).padding(10)
                 .background(
                     selected ? OpenClawBrand.accent.opacity(0.09) : Color.clear,
