@@ -36,14 +36,17 @@ Setup
 View Notes
 
 - List all notes: `memo notes`
+- Refresh the inventory without the five-minute cache: `memo notes -nc`
 - Filter by folder: `memo notes -f "Folder Name"`
-- Search notes (fuzzy): `memo notes -s "query"`
+- Read note N from the current inventory: `memo notes -v N`
+- Search notes (interactive fuzzy selector): `memo notes -s`
+  - `-s` is a boolean flag; enter the query in the selector.
 
 Create Notes
 
-- Add a new note: `memo notes -a`
+- Add a new note to an existing folder: `memo notes -a -f "Folder Name"`
   - Opens an interactive editor to compose the note.
-- Quick add with title: `memo notes -a "Note Title"`
+  - `-a` is a boolean flag; enter the title and body in the editor.
 
 Edit Notes
 
@@ -63,12 +66,15 @@ Move Notes
 Export Notes
 
 - Export to HTML/Markdown: `memo notes -ex`
-  - Exports selected note; uses Mistune for markdown processing.
+  - Interactively exports the default account or a chosen folder to HTML, with optional html2text Markdown conversion.
 
 Limitations
 
 - Cannot edit notes containing images or attachments.
 - Interactive prompts may require terminal access.
+- Search uses fzf; body previews require bat, which the Memo 0.6.0 Homebrew formula does not declare.
+- Memo enumerates note IDs and titles before filtering by folder. Interactive search also reads note bodies into temporary files.
+- These commands were checked against Memo 0.6.0; inspect `memo notes --help` for the installed version.
 
 Notes
 
