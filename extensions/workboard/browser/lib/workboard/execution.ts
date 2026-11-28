@@ -1,4 +1,5 @@
 import type { BoardGetParams, SessionsCreateResult } from "@openclaw/gateway-protocol";
+import { canRequestWorkboardChanges } from "@openclaw/workboard-contract";
 import {
   isRecord,
   normalizeOptionalString,
@@ -215,4 +216,28 @@ export async function stopWorkboardCard(
       replaceCard(state, normalizeCardPayload(payload));
     },
   );
+}
+
+export async function requestWorkboardChanges(
+  params: WorkboardClientContext & { card: WorkboardCard; instructions: string },
+) {
+  return runWorkboardCardMutation({ ...params, cardId: params.card.id }, async (state, client) => {
+    assertCurrentCard(state, params.card);
+    if (!canRequestWorkboardChanges(params.card)) {
+      throw new Error("Only finished Workboard attempts can be reworked.");
+    }
+    const payload = await client.request("workboard.cards.start", {
+      id: params.card.id,
+      rework: {
+        instructions: params.instructions,
+        expectedUpdatedAt: params.card.updatedAt,
+      },
+    });
+    const next = normalizeCardPayload(payload);
+    const current = state.cards.find(({ id }) => id === next.id);
+    if (current && next.updatedAt >= current.updatedAt) {
+      replaceCard(state, next);
+    }
+    return true;
+  });
 }

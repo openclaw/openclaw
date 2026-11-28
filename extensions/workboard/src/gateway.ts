@@ -3,6 +3,7 @@ import type {
   WorkboardSessionsBoardRead,
   WorkboardSessionsBoardView,
 } from "@openclaw/workboard-contract";
+import { WORKBOARD_REWORK_INSTRUCTIONS_MAX_LENGTH } from "@openclaw/workboard-contract";
 import { readStringParam } from "openclaw/plugin-sdk/core";
 import { formatErrorMessage } from "openclaw/plugin-sdk/error-runtime";
 import {
@@ -24,6 +25,7 @@ import type { WorkboardSessionsBoardService } from "./sessions-board.js";
 import { resolveWorkboardSqliteWorkerModuleUrl } from "./sqlite-store-paths.js";
 import { registerWorkboardStoreLifecycle } from "./store-lifecycle.js";
 import { assertSupportedMetadataKeys } from "./store-metadata-keys.js";
+import { normalizeBoundedString } from "./store-normalizers.js";
 import { WorkboardCardConflictError, WorkboardStore } from "./store.js";
 import {
   assertWorkboardWorkspaceMutationAccess,
@@ -83,6 +85,26 @@ function readExpectedUpdatedAt(params: Record<string, unknown>): number | undefi
     throw new Error("expectedUpdatedAt must be a finite number.");
   }
   return value;
+}
+
+function readRework(value: unknown) {
+  if (value === undefined) {
+    return undefined;
+  }
+  if (!isRecord(value)) {
+    throw new Error("rework must contain instructions and expectedUpdatedAt.");
+  }
+  const instructions = normalizeBoundedString(
+    value.instructions,
+    undefined,
+    WORKBOARD_REWORK_INSTRUCTIONS_MAX_LENGTH,
+    "rework instructions",
+  );
+  const expectedUpdatedAt = readExpectedUpdatedAt(value);
+  if (!instructions || expectedUpdatedAt === undefined) {
+    throw new Error("rework instructions and expectedUpdatedAt are required.");
+  }
+  return { instructions, expectedUpdatedAt };
 }
 
 function readId(params: Record<string, unknown>): string {
@@ -379,7 +401,11 @@ export function registerWorkboardGatewayMethods(params: {
     options: { supportsMaxStarts: boolean; directCard?: boolean },
   ) => {
     const cardId = options.directCard ? readId(requestParams) : undefined;
-    const { boardId, maxStarts: rawMaxStarts } = asRecord(requestParams);
+    const { boardId, maxStarts: rawMaxStarts, rework: rawRework } = asRecord(requestParams);
+    if (!cardId && rawRework !== undefined) {
+      throw new Error("rework requires workboard.cards.start.");
+    }
+    const rework = readRework(rawRework);
     if (!options.supportsMaxStarts && rawMaxStarts !== undefined) {
       throw new Error("maxStarts requires workboard.cards.dispatchWithOptions.");
     }
@@ -396,6 +422,7 @@ export function registerWorkboardGatewayMethods(params: {
       worktrees: api.runtime.worktrees,
       options: {
         ...(cardId ? { cardId, maxStarts: 1 } : {}),
+        ...(rework ? { rework } : {}),
         boardId: typeof boardId === "string" ? boardId : undefined,
         ...(maxStarts !== undefined ? { maxStarts } : {}),
         ...(provider ? { provider } : {}),

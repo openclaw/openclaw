@@ -1,5 +1,6 @@
 import type { WorkboardCard } from "@openclaw/workboard-contract";
-import { expect, it } from "vitest";
+import { expect, it, vi } from "vitest";
+import { dispatchAndStartWorkboardCards } from "./dispatcher.js";
 import { syncWorkboardSubagentEnded } from "./lifecycle-sync.js";
 import { createWorkboardSqliteTestStore } from "./test/sqlite-store.js";
 
@@ -60,6 +61,77 @@ async function createBlockedManagedCard() {
   });
   return { store, blocked, sessionKey, runId };
 }
+
+it.each(["previous claim", "new reviewer claim", "busy owner"] as const)(
+  "admits rework of a lifecycle-finished Review card with the correct owner (%s)",
+  async (ownerState) => {
+    const store = createWorkboardSqliteTestStore();
+    const card = await store.create({ title: "Review fictional totals", status: "ready" });
+    const run = vi.fn().mockResolvedValueOnce({ runId: "first-run" }).mockResolvedValueOnce({
+      runId: "rework-run",
+    });
+    const start = (rework?: { instructions: string; expectedUpdatedAt: number }) =>
+      dispatchAndStartWorkboardCards({
+        store,
+        subagent: { run },
+        options: { cardId: card.id, maxStarts: 1, rework },
+      });
+    const initial = (await start()).started[0]!;
+    await end(store, initial.sessionKey, initial.runId, (await store.get(card.id))!.updatedAt + 1);
+    const settled = (await store.get(card.id))!;
+    const retiredClaim = settled.metadata?.claim;
+    expect(settled.status).toBe("review");
+    expect(retiredClaim?.expiresAt).toBeGreaterThan(Date.now());
+
+    if (ownerState === "new reviewer claim") {
+      await store.releaseClaim(card.id, { token: retiredClaim!.token });
+      await store.claim(card.id, { ownerId: "reviewer" });
+    } else if (ownerState === "busy owner") {
+      await store.create({ title: "Another running sample", status: "running" });
+    }
+    const previous = (await store.get(card.id))!;
+    const input = {
+      instructions: "Check the second fictional sample.",
+      expectedUpdatedAt: previous.updatedAt,
+    };
+    const rework = await start(input);
+    if (ownerState !== "previous claim") {
+      const expected = ownerState === "new reviewer claim" ? /already claimed/ : /already has/;
+      expect(rework.startFailures[0]?.error).toMatch(expected);
+      expect(run).toHaveBeenCalledTimes(1);
+      await expect(
+        store.claim(
+          card.id,
+          { ownerId: "workboard-dispatcher" },
+          {
+            rework: { ...input, requestedSessionKey: initial.sessionKey },
+          },
+        ),
+      ).rejects.toThrow(expected);
+      await expect(store.get(card.id)).resolves.toEqual(previous);
+      return;
+    }
+    expect(rework.startFailures).toEqual([]);
+    expect(rework.started).toMatchObject([
+      { cardId: card.id, sessionKey: initial.sessionKey, runId: "rework-run" },
+    ]);
+    expect(run).toHaveBeenCalledTimes(2);
+    const active = await store.get(card.id);
+    expect(active).toMatchObject({
+      status: "running",
+      metadata: {
+        attempts: [
+          { status: "succeeded", runId: "first-run" },
+          { status: "running", runId: "rework-run" },
+        ],
+      },
+    });
+    expect(active?.metadata?.claim?.token).not.toBe(retiredClaim?.token);
+    await expect(store.heartbeat(card.id, { token: retiredClaim!.token })).rejects.toThrow(
+      "claim token does not match",
+    );
+  },
+);
 
 it.each([undefined, "shared-run"])(
   "persists terminal attempts for two cards sharing a session and run %s",

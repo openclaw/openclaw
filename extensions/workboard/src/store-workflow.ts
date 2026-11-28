@@ -7,6 +7,7 @@ import type {
   WorkboardMetadata,
   WorkboardRunAttempt,
 } from "@openclaw/workboard-contract";
+import { canRequestWorkboardChanges } from "@openclaw/workboard-contract";
 import {
   isFutureDateTimestampMs,
   resolveOptionalIntegerOption,
@@ -22,6 +23,7 @@ import {
   cardRunId,
   cardSessionKey,
   closeRunningAttempts,
+  hasFinishedWorkboardLaunchClaim,
   retryBudgetExhausted,
 } from "./store-card-helpers.js";
 import {
@@ -32,6 +34,7 @@ import {
   secondsToDurationMs,
   workboardBoardOwnerSlotLimit,
 } from "./store-constants.js";
+import { WorkboardCardConflictError } from "./store-core.js";
 import type {
   WorkboardBlockInput,
   WorkboardCardPatch,
@@ -58,7 +61,7 @@ import {
   normalizeStringList,
 } from "./store-normalizers.js";
 import { WorkboardPromoteStore } from "./store-promote.js";
-import { finishRun } from "./store-status-write.js";
+import { buildPreparedWorkboardLaunch, finishRun } from "./store-status-write.js";
 import { appendVerification, buildVerification, verificationFits } from "./store-verification.js";
 
 class WorkboardClaimRefusedError extends Error {
@@ -99,7 +102,15 @@ export class WorkboardWorkflowStore extends WorkboardPromoteStore {
         now,
         ttlSeconds ? secondsToDurationMs(ttlSeconds) : DEFAULT_CLAIM_TTL_MS,
       );
-      const guarded = await this.promoteDependencyReady(await this.requireCard(id), now);
+      const current = await this.requireCard(id);
+      const rework = options.rework;
+      if (rework && current.updatedAt !== rework.expectedUpdatedAt) {
+        throw new WorkboardCardConflictError(current);
+      }
+      if (rework && !canRequestWorkboardChanges(current)) {
+        throw new WorkboardClaimRefusedError("Only finished Workboard attempts can be reworked.");
+      }
+      const guarded = rework ? current : await this.promoteDependencyReady(current, now);
       if (guarded.metadata?.archivedAt) {
         throw new Error("card is archived.");
       }
@@ -120,7 +131,8 @@ export class WorkboardWorkflowStore extends WorkboardPromoteStore {
       ) {
         throw new Error("card workspace or placement changed. Retry the claim.");
       }
-      const existingClaim = guarded.metadata?.claim;
+      const existingClaim =
+        rework && hasFinishedWorkboardLaunchClaim(guarded) ? undefined : guarded.metadata?.claim;
       const activeClaim =
         existingClaim &&
         (isFutureDateTimestampMs(existingClaim.expiresAt, { nowMs: now }) ||
@@ -152,23 +164,36 @@ export class WorkboardWorkflowStore extends WorkboardPromoteStore {
       }
       const metadata = clearDiagnostics(guarded.metadata, ["stranded_ready"]);
       const board = await this.boardStore.lookup(cardBoardId(guarded));
+      const prepared = rework
+        ? buildPreparedWorkboardLaunch(guarded, rework.requestedSessionKey, now)
+        : undefined;
       const card = await this.updateCard(
         guarded,
         {
           status:
-            guarded.status === "backlog" || guarded.status === "todo" || guarded.status === "ready"
+            rework ||
+            guarded.status === "backlog" ||
+            guarded.status === "todo" ||
+            guarded.status === "ready"
               ? "running"
               : guarded.status,
+          ...(prepared && {
+            sessionKey: prepared.sessionKey,
+            runId: prepared.runId,
+            execution: prepared.execution,
+          }),
           ...(options.adoptWorkspaceAccess && !guarded.metadata?.automation?.workspaceAccess
             ? { workspaceAccess: options.adoptWorkspaceAccess }
             : {}),
           metadata: {
             ...metadata,
+            ...(rework && { comments: appendComment(metadata.comments, rework.instructions, now) }),
             claim: { ownerId, token, claimedAt: now, lastHeartbeatAt: now, expiresAt },
           },
         },
         {
           expectedUpdatedAt: guarded.updatedAt,
+          automationLaunch: prepared?.ownedLaunch,
           ownerSlot: { ownerId, now, limit: workboardBoardOwnerSlotLimit(board?.board) },
         },
       );

@@ -26,6 +26,50 @@ function renderDetails(card: WorkboardCard, overrides: Partial<WorkboardProps> =
   return { state, props, container, button };
 }
 
+it("sends revised instructions from a finished card and displays the new run", async () => {
+  const card = createWorkboardCard({
+    status: "done",
+    sessionKey: canonical,
+    runId: "prior",
+    execution: {
+      id: "execution",
+      kind: "agent-session",
+      mode: "autonomous",
+      status: "done",
+      startedAt: 1,
+      updatedAt: 2,
+      sessionKey: canonical,
+      runId: "prior",
+    },
+  });
+  const updated = {
+    ...card,
+    status: "running",
+    runId: "revised",
+    updatedAt: card.updatedAt + 1,
+  };
+  const instructions = "Check the second fictional sample.";
+  const client = createWorkboardTestClient(() => ({ card: updated }));
+  const { button, container, state } = renderDetails(card, { client });
+  const form = expectDefined(container.querySelector("details:has(form)"), "rework disclosure");
+  expect(form.querySelector("summary")?.textContent?.trim()).toBe("Request changes");
+  (form as HTMLDetailsElement).open = true;
+  const input = expectDefined(form.querySelector("textarea"), "rework instructions");
+  const submit = button("details form button[type=submit]");
+  expect(submit.disabled).toBe(true);
+  input.value = instructions;
+  input.dispatchEvent(new Event("input", { bubbles: true }));
+  await waitForFast(() => expect(submit.disabled).toBe(false));
+  submit.click();
+  await waitForFast(() => expect(state.cards[0]?.runId).toBe("revised"));
+  expect(client.request).toHaveBeenCalledWith("workboard.cards.start", {
+    id: card.id,
+    rework: { instructions, expectedUpdatedAt: card.updatedAt },
+  });
+  expect(state.cards[0]?.sessionKey).toBe(canonical);
+  expect(container.querySelector("details:has(form)")).toBeNull();
+});
+
 it.each([
   [canonical, "unknown", true],
   [canonical, "unavailable", true],

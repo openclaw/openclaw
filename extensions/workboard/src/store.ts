@@ -40,7 +40,7 @@ import type {
 import { capText, normalizeBoardId, normalizeTimestamp } from "./store-normalizers.js";
 import { WorkboardNotificationStore } from "./store-notifications.js";
 import { readCards } from "./store-read.js";
-import { finishRun } from "./store-status-write.js";
+import { buildPreparedWorkboardLaunch, finishRun } from "./store-status-write.js";
 
 export type { WorkboardDispatchResult } from "./store-inputs.js";
 export { WorkboardCardConflictError } from "./store-core.js";
@@ -170,28 +170,7 @@ export class WorkboardStore extends WorkboardNotificationStore {
     return await this.enqueueMutation(async () => {
       const result = await this.updateLatestCard(id, (card) => {
         assertCanMutateClaimedCard(card, input.scope);
-        const provisionalRunId = `workboard:${card.id}:${card.updatedAt}`;
-        const launch: WorkboardPreparedLaunch = {
-          phase: "prepared",
-          requestedSessionKey: input.requestedSessionKey,
-          provisionalRunId,
-          preparedAt: card.updatedAt,
-        };
-        return {
-          sessionKey: input.requestedSessionKey,
-          runId: provisionalRunId,
-          execution: {
-            id: card.execution?.id ?? `${card.id}:agent-session`,
-            kind: "agent-session",
-            mode: "autonomous",
-            status: "running",
-            sessionKey: input.requestedSessionKey,
-            runId: provisionalRunId,
-            startedAt: input.now,
-            updatedAt: input.now,
-          },
-          ownedLaunch: launch,
-        };
+        return buildPreparedWorkboardLaunch(card, input.requestedSessionKey, input.now);
       });
       const launch = result.card.metadata?.automation?.launch;
       if (launch?.phase !== "prepared") {
@@ -231,7 +210,12 @@ export class WorkboardStore extends WorkboardNotificationStore {
 
   async failPreparedLaunch(
     id: string,
-    input: { expectedLaunch: WorkboardPreparedLaunch; reason: string; failedAt: number },
+    input: {
+      expectedLaunch: WorkboardPreparedLaunch;
+      reason: string;
+      failedAt: number;
+      preserveSession?: boolean;
+    },
   ): Promise<boolean> {
     const failedAt = Math.max(input.failedAt, input.expectedLaunch.preparedAt);
     const reason = capText(input.reason, 2000) ?? "Dispatcher could not start worker.";
@@ -242,7 +226,7 @@ export class WorkboardStore extends WorkboardNotificationStore {
           return undefined;
         }
         const blocked = this.buildBlockedCardPatch(card, reason, failedAt, {
-          clearExecutionAssociation: true,
+          clearExecutionAssociation: !input.preserveSession,
         });
         return {
           ...blocked,
@@ -285,7 +269,11 @@ export class WorkboardStore extends WorkboardNotificationStore {
           association &&
           card.metadata?.attempts?.findLast(
             (attempt) =>
-              attempt.status === "blocked" &&
+              (attempt.status === "blocked" ||
+                (launch.phase === "prepared" &&
+                  association.runId !== undefined &&
+                  attempt.status !== "running" &&
+                  attempt.runId !== launch.provisionalRunId)) &&
               (association.runId
                 ? attempt.runId === association.runId
                 : launch.phase === "accepted" &&

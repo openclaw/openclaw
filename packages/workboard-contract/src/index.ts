@@ -442,6 +442,20 @@ export type WorkboardCard = {
   metadata?: WorkboardMetadata;
 };
 
+export const WORKBOARD_REWORK_INSTRUCTIONS_MAX_LENGTH = 2000;
+
+export function canRequestWorkboardChanges(card: WorkboardCard): boolean {
+  const execution = card.execution;
+  return Boolean(
+    !card.metadata?.archivedAt &&
+    (card.status === "review" || card.status === "done") &&
+    execution?.mode === "autonomous" &&
+    (execution.status === "review" || execution.status === "done") &&
+    (card.sessionKey ?? execution.sessionKey) &&
+    (card.runId ?? execution.runId),
+  );
+}
+
 export type WorkboardCardCursor = {
   position: number;
   createdAt: number;

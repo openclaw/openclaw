@@ -413,6 +413,14 @@ resulting run id and session key back onto the card. Each linked
 execution also records an attempt summary (engine, mode, model, run id,
 timestamps, status, rolling failure count) so repeated failures stay visible.
 
+For a finished autonomous attempt in **Review** or **Done**, open the card and
+choose **Request changes**. Describe the changes and start a new attempt from
+the same card. The new run receives those instructions, and Workboard keeps
+the previous attempts, evidence, comments, and dependency links under its
+existing history limits. The card returns to **Running**, so pending dependents
+wait for the usual completion workflow to mark it **Done** again. Work that
+has already started on a dependent card continues.
+
 The Control UI reads lifecycle from the card's linked session. Card status changes are persisted by the Gateway-side Workboard
 plugin using the linked run and session lifecycle (see
 [Session lifecycle sync](#session-lifecycle-sync)).

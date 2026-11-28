@@ -1,4 +1,5 @@
 /** @jsxImportSource @solidjs/web */
+import { canRequestWorkboardChanges } from "@openclaw/workboard-contract";
 import { For, Show, createEffect, createMemo, merge } from "solid-js";
 import { AgentAvatar, SessionSummary, Dialog } from "../../components/host-components.tsx";
 import { icons } from "../../components/icons.tsx";
@@ -47,6 +48,7 @@ import {
 } from "./view-inline-properties.tsx";
 import { liveInputValue } from "./view-input-value.ts";
 import { closeWorkboardPopoverOnAction, workboardPopoverRef } from "./view-popover.ts";
+import { RequestChangesForm } from "./view-request-changes.tsx";
 import { workboardScrollFadeRef } from "./view-scroll-fade.ts";
 
 export const workboardCardDetailDrawerId = "workboard-card-detail-drawer";
@@ -464,6 +466,23 @@ function CardDetailsContent(props: WorkboardProps & { card: WorkboardCard }) {
                         action={action()}
                         tab="overview"
                       />
+                      <Show
+                        when={
+                          action().writable &&
+                          !action().live &&
+                          canRequestWorkboardChanges(card()) &&
+                          card().id
+                        }
+                        keyed
+                      >
+                        {() => (
+                          <RequestChangesForm
+                            workboard={actionProps}
+                            card={card()}
+                            busy={action().busy}
+                          />
+                        )}
+                      </Show>
                       {action().showStartControls ? (
                         <details class="workboard-detail__disclosure workboard-detail__engine-options">
                           <summary>

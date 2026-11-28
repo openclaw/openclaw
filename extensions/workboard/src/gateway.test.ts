@@ -576,6 +576,110 @@ describe("workboard gateway methods", () => {
     }
   });
 
+  it("reworks a finished card once, preserving dependency holds and earlier evidence", async () => {
+    const store = createWorkboardSqliteTestStore();
+    const card = await store.create({ title: "Review sample totals", status: "todo" });
+    const worker = vi.fn<SubagentRun>();
+    worker.mockResolvedValueOnce({ runId: "first-attempt" });
+    worker.mockImplementationOnce(async ({ sessionKey }) => {
+      const armed = (await store.get(card.id))!;
+      expect(armed.status).toBe("running");
+      const observedAt = armed.updatedAt + 1;
+      await expect(
+        store.syncLifecycle(card.id, {
+          targetStatus: "review",
+          executionStatus: "review",
+          sourceUpdatedAt: observedAt,
+          stale: undefined,
+          now: observedAt,
+          association: {
+            expectedSessionKey: sessionKey,
+            expectedRunId: armed.runId,
+            sessionKey,
+            runId: "first-attempt",
+            acceptedAt: observedAt,
+          },
+        }),
+      ).resolves.toBe(false);
+      return { runId: "revised-attempt" };
+    });
+    const { invoke } = createGateway({ store, run: worker });
+    const context = { context: { getRuntimeConfig: () => ({}) } };
+    const start = (params: Record<string, unknown> = {}) =>
+      invoke("cards.start", { id: card.id, ...params }, context);
+    expect((await start()).ok).toBe(true);
+    await store.complete(
+      card.id,
+      {
+        summary: "Checked the first sample",
+        proof: { status: "passed", label: "First sample" },
+        artifacts: [{ label: "First report", url: "https://example.invalid/report" }],
+      },
+      null,
+    );
+    const child = await store.create({ title: "Publish totals", parents: [card.id] });
+    await expect(store.prepareStart(child.id)).resolves.toMatchObject({ status: "ready" });
+    const previous = (await store.get(card.id))!;
+    const rework = {
+      instructions: "Recheck totals against the second fictional sample.",
+      expectedUpdatedAt: previous.updatedAt,
+    };
+    const [started, duplicate] = await Promise.all([start({ rework }), start({ rework })]);
+    expect(started.ok).toBe(true);
+    expect(duplicate.ok).toBe(false);
+    expect(worker).toHaveBeenCalledTimes(2);
+    expect(worker).toHaveBeenLastCalledWith(
+      expect.objectContaining({
+        sessionKey: previous.sessionKey,
+        message: expect.stringContaining(rework.instructions),
+      }),
+    );
+    expect(started.data?.card.metadata.claim.token).toBe("[redacted]");
+    const revised = (await store.get(card.id))!;
+    expect(revised).toMatchObject({
+      id: previous.id,
+      status: "running",
+      runId: "revised-attempt",
+      metadata: {
+        links: previous.metadata?.links,
+        artifacts: previous.metadata?.artifacts,
+        proof: previous.metadata?.proof,
+        attempts: [
+          { runId: "first-attempt", status: "succeeded" },
+          { runId: "revised-attempt", status: "running" },
+        ],
+        comments: expect.arrayContaining([
+          expect.objectContaining({ body: "Checked the first sample" }),
+          expect.objectContaining({ body: rework.instructions }),
+        ]),
+      },
+    });
+    expect(revised.completedAt).toBeUndefined();
+    await expect(store.prepareStart(child.id)).resolves.toMatchObject({ status: "todo" });
+    await expect(store.claim(child.id, { ownerId: "child-worker" })).rejects.toThrow(
+      "dependencies are not done",
+    );
+    const completed = await store.complete(card.id, {}, null);
+    worker.mockRejectedValueOnce(new Error("Fictional provider unavailable"));
+    const requestAgain = (instructions: string) =>
+      start({ rework: { instructions, expectedUpdatedAt: completed.updatedAt } });
+    expect((await requestAgain("   ")).ok).toBe(false);
+    expect(worker).toHaveBeenCalledTimes(2);
+    expect((await requestAgain("Check the larger sample.")).ok).toBe(false);
+    await expect(store.get(card.id)).resolves.toMatchObject({
+      status: "blocked",
+      sessionKey: previous.sessionKey,
+      metadata: {
+        proof: previous.metadata?.proof,
+        attempts: [
+          { status: "succeeded", runId: "first-attempt" },
+          { status: "succeeded", runId: "revised-attempt" },
+          { status: "blocked" },
+        ],
+      },
+    });
+  });
+
   it("keeps write-scope worktree dispatch within configured agent workspaces", async () => {
     const run = vi.fn().mockResolvedValue({ runId: "run-card" });
     const createWorktree = vi.fn().mockResolvedValue({
