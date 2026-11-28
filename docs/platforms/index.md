@@ -31,6 +31,7 @@ WSL2 for the most Linux-compatible Gateway runtime.
 
 - VPS hub: [VPS hosting](/vps)
 - Azure (Linux VM): [Azure](/install/azure)
+- boxd (VM + HTTPS URL): [boxd](/install/boxd)
 - Daytona (cloud sandbox): [Daytona](/install/daytona)
 - EasyRunner (Podman + Caddy): [EasyRunner](/platforms/easyrunner)
 - exe.dev (VM + HTTPS proxy): [exe.dev](/install/exe-dev)
