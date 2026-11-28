@@ -28,6 +28,7 @@ vi.mock("../infra/tailscale.js", () => ({
 
 import { createDeferred } from "../../test/helpers/promise.js";
 import { TailscaleRouteOwnershipConflictError } from "../infra/tailscale-route-ownership-error.js";
+import { TailscaleServePathPermissionError } from "../infra/tailscale-serve-path-permission-error.js";
 import { resetSecretRedactionRegistryForTest } from "../logging/secret-redaction-registry.test-support.js";
 import { resolveControlUiIdentity } from "./control-ui-identity.js";
 import { startGatewayTailscaleExposure as startGatewayTailscaleExposureBase } from "./server-tailscale.js";
@@ -221,6 +222,20 @@ describe("startGatewayTailscaleExposure", () => {
       expect(mocks.stopRouteClaim).toHaveBeenCalledOnce();
     },
   );
+
+  it("warns and degrades to loopback when serve fails due to a path/socket permission 401", async () => {
+    mocks.claimTailscaleRoute.mockRejectedValueOnce(
+      new TailscaleServePathPermissionError(
+        "sending serve config: 401 Unauthorized: must be root, or be an operator and able to run 'sudo tailscale' to serve a path or Unix socket",
+      ),
+    );
+    const cleanup = await startGatewayTailscaleExposure({ tailscaleMode: "serve" });
+    expect(cleanup).toBeNull();
+    expect(logTailscale.warn).toHaveBeenCalledWith(
+      expect.stringContaining("requires root/sudo operator privileges"),
+    );
+    expect(getTailscalePublishedOrigin()).toBeUndefined();
+  });
 });
 
 describe("managed Tailscale claim recovery", () => {

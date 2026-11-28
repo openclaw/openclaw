@@ -3,6 +3,7 @@ import { computeBackoff, sleepWithAbort, type BackoffPolicy } from "../infra/bac
 import { formatErrorMessage } from "../infra/errors.js";
 import { isTailscaleRouteOwnershipConflictError } from "../infra/tailscale-route-ownership-error.js";
 import { TailscaleServeDisabledError } from "../infra/tailscale-serve-disabled-error.js";
+import { TailscaleServePathPermissionError } from "../infra/tailscale-serve-path-permission-error.js";
 import {
   claimTailscaleRoute,
   getTailnetHostname,
@@ -124,6 +125,12 @@ export async function startGatewayTailscaleExposure(params: {
     if (params.tailscaleMode === "serve" && err instanceof TailscaleServeDisabledError) {
       params.logTailscale.warn(
         "Tailscale Serve is not enabled on this tailnet. The authenticated local Gateway remains available on loopback; remote access is unavailable. Restore the intended tailnet Serve policy and restart the Gateway.",
+      );
+      return null;
+    }
+    if (params.tailscaleMode === "serve" && err instanceof TailscaleServePathPermissionError) {
+      params.logTailscale.warn(
+        `Tailscale Serve failed because an existing path or Unix socket handler requires root/sudo operator privileges (${err.message}). The authenticated local Gateway remains available on loopback; remote access is unavailable until the foreign path handler is removed or converted to a proxy and the Gateway is restarted.`,
       );
       return null;
     }
