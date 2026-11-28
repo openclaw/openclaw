@@ -29,6 +29,7 @@ import {
 } from "./io.observe-recovery-effects.js";
 import {
   createConfigHealthFingerprint,
+  readConfigBaselineContentBytes,
   extractRestoreErrorDetails,
   readConfigHealthEntry,
 } from "./io.observe-state.js";
@@ -314,6 +315,9 @@ function* planSuspiciousConfigRead(
     parsed,
     lastObservedSuspiciousSignature: entry.lastObservedSuspiciousSignature,
     lastKnownGood: backupBaseline,
+    getBaselineContentBytes: backupBaseline
+      ? () => readConfigBaselineContentBytes(deps, configPath, backupBaseline)
+      : undefined,
   });
   const suspiciousSignature = `${current.hash}:${suspicious.join(",")}`;
   if (

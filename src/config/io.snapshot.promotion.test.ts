@@ -31,7 +31,7 @@ import {
   observeConfigSnapshotSync,
   restoreConfigHealthBaselineForRolledBackWrite,
 } from "./io.observe.js";
-import { normalizeConfigIoDeps } from "./io.read-helpers.js";
+import { hashConfigRaw, normalizeConfigIoDeps } from "./io.read-helpers.js";
 import { createSnapshot } from "./mutate.test-support.js";
 import { withTempHomeConfig } from "./test-helpers.js";
 import type { ConfigFileSnapshot, OpenClawConfig } from "./types.js";
@@ -368,7 +368,10 @@ describe("last-known-good promotion after accepted writes", () => {
       const canonicalRaw = fs.readFileSync(configPath, "utf8");
       expect(observedDuringAdvance).toBe(observe);
       if (observe) {
-        expect(outcomes).toEqual([{ status: "conflict" }, { status: "applied" }]);
+        expect(outcomes).toEqual([{ status: "conflict" }]);
+        expect(
+          readConfigHealthStateFromStore(healthDeps).entries?.[configPath]?.lastKnownGood?.hash,
+        ).toBe(hashConfigRaw(canonicalRaw));
       }
       expect(Buffer.byteLength(verboseRaw)).toBeGreaterThan(Buffer.byteLength(canonicalRaw) * 2);
       // The accepted edit stays promotable despite the intervening observation.
@@ -394,6 +397,34 @@ describe("last-known-good promotion after accepted writes", () => {
       expect(fs.readFileSync(configPath, "utf8")).toBe(canonicalRaw);
     },
   );
+
+  it("retains an external formatting reduction through an accepted edit and promotion", async () => {
+    const { configPath, env, io, root } = acceptedWriteFixture();
+    const config = verboseConfig();
+    const verboseRaw = `${JSON.stringify(config, null, 20)}\n`;
+    fs.writeFileSync(configPath, verboseRaw);
+    await promoteCurrent(io);
+    fs.writeFileSync(`${configPath}.bak`, verboseRaw);
+
+    const normalizedRaw = `${JSON.stringify(config, null, 2)}\n`;
+    expect(Buffer.byteLength(normalizedRaw)).toBeLessThan(Buffer.byteLength(verboseRaw) / 2);
+    fs.writeFileSync(configPath, normalizedRaw);
+
+    const coldIo = createConfigIO({ env, configPath, homedir: () => root, observe: true });
+    const normalized = await coldIo.readConfigFileSnapshot({ recoverSuspicious: true });
+    expect(normalized.raw).toBe(normalizedRaw);
+    await io.writeConfigFile(
+      { ...normalized.config, gateway: { ...normalized.config.gateway, port: 19187 } },
+      { baseSnapshot: normalized },
+    );
+    const edited = await coldIo.readConfigFileSnapshot({ recoverSuspicious: true });
+    expect(edited.config.gateway?.port).toBe(19187);
+    await expectPromotion(io, edited);
+    expect(fs.readFileSync(`${configPath}.last-good`, "utf8")).toBe(edited.raw);
+
+    seedConfig(configPath, { gateway: { mode: "local", port: 19188 } });
+    await expectPromotion(io, await io.readConfigFileSnapshot(), false);
+  });
 
   it("restores the inherited anomaly when a later accepted edit rolls back", async () => {
     const initial = createRecoveryBaselineConfig();
