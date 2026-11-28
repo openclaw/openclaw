@@ -302,6 +302,7 @@ it.runIf(process.platform === "darwin").each([
     `${"discarded startup noise".repeat(500)}\nError: helper startup failed: EACCES token=fixture-private-token\nRetry after correcting file permissions.`,
     "helper startup failed: EACCES",
   ],
+  ["missing installed recovery runtime", null, "installed runtime is unavailable"],
 ] as const)(
   "retains bounded startup diagnostics from the live CLI handoff: %s",
   async (kind, output, expected) => {
@@ -324,20 +325,22 @@ it.runIf(process.platform === "darwin").each([
       complete: true,
     });
     const worker = installPrivateUpdateHandoffWorker(control);
-    const prepare = expectDefined(worker.getMockImplementation(), "private lease worker");
-    worker.mockImplementation(async (options) => {
-      const store = await prepare(options);
-      const stage = store.stageRuntime.bind(store);
-      store.stageRuntime = async (directory) => {
-        const files = await stage(directory);
-        await fs.writeFile(
-          expectDefined(files[0], "staged handoff runtime"),
-          `process.stderr.write(${JSON.stringify(output)}); process.exit(1);`,
-        );
-        return files;
-      };
-      return store;
-    });
+    if (output !== null) {
+      const prepare = expectDefined(worker.getMockImplementation(), "private lease worker");
+      worker.mockImplementation(async (options) => {
+        const store = await prepare(options);
+        const stage = store.stageRuntime.bind(store);
+        store.stageRuntime = async (directory) => {
+          const files = await stage(directory);
+          await fs.writeFile(
+            expectDefined(files[0], "staged handoff runtime"),
+            `process.stderr.write(${JSON.stringify(output)}); process.exit(1);`,
+          );
+          return files;
+        };
+        return store;
+      });
+    }
     await withEnvAsync(
       {
         HOME: root,

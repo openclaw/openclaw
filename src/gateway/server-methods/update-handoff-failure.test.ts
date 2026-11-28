@@ -1,8 +1,5 @@
-import path from "node:path";
 import { expectDefined } from "@openclaw/normalization-core";
-import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
-import { installPrivateUpdateHandoffWorker } from "../../../test/helpers/private-update-handoff-store.js";
-import { useAutoCleanupTempDirTracker } from "../../../test/helpers/temp-dir.js";
+import { beforeEach, describe, expect, it, vi } from "vitest";
 import { UpdatePreMutationError } from "../../cli/update-cli/shared.js";
 import {
   buildStatusUpdateRows,
@@ -22,8 +19,6 @@ import {
   captureUpdateRunPayload,
   mockGlobalInstallSurface,
 } from "./update.test-harness.js";
-
-const tempDirs = useAutoCleanupTempDirTracker(afterEach);
 
 function readRun(payload: Awaited<ReturnType<typeof captureUpdateRunPayload>>) {
   return expectDefined(getUpdateRun(expectDefined(payload, "update response").runId), "update run");
@@ -70,38 +65,6 @@ describe("update.run handoff refusal diagnostics", () => {
       expect(report.body).toContain("Result: failed");
     },
   );
-
-  it("records a real detached helper refusal before launchd activation", async () => {
-    const root = tempDirs.make("openclaw-handoff-missing-runtime-");
-    const tmp = await import("../../infra/tmp-openclaw-dir.js");
-    const coordinator = vi.spyOn(tmp, "resolvePreferredOpenClawTmpDir").mockReturnValue(root);
-    const leaseWorker = installPrivateUpdateHandoffWorker(root);
-    const handoff = await vi.importActual<
-      typeof import("../../infra/update-managed-service-handoff.js")
-    >("../../infra/update-managed-service-handoff.js");
-    startHandoff.mockImplementationOnce((params) =>
-      handoff.startManagedServiceUpdateHandoff({
-        ...params,
-        root,
-        env: { ...process.env },
-        execPath: process.execPath,
-        argv1: path.join(root, "missing-entry.cjs"),
-        supervisor: "launchd",
-      }),
-    );
-    try {
-      const payload = expectDefined(await captureUpdateRunPayload(), "update response");
-      const run = readRun(payload);
-      const report = await prepareUpdateFailureReport(run);
-      expect(payload.ok).toBe(false);
-      expect(report.body).toContain("handoff-helper-exited");
-      expect(report.body).toContain("Rollback outcome: not needed");
-      expectServing();
-    } finally {
-      coordinator.mockRestore();
-      leaseWorker.mockRestore();
-    }
-  });
 
   it.each([
     ["helper-start-failed", Object.assign(new Error("spawn node EAGAIN"), { code: "EAGAIN" })],
