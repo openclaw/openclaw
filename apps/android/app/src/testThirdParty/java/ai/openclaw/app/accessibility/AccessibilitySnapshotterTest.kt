@@ -448,6 +448,183 @@ class AccessibilitySnapshotterTest {
       executor.close()
       service.onDestroy()
     }
+
+  @Test
+  @Suppress("DEPRECATION")
+  fun activateOnPassiveLabelDispatchesClickToNearestEnabledClickableAncestorAndRecyclesParents() =
+    runTest {
+      val service = Robolectric.buildService(OpenClawAccessibilityService::class.java).create().get()
+      val row =
+        snapshotNode(text = "Wi-Fi row").apply {
+          isClickable = true
+          isEnabled = true
+          addAction(AccessibilityNodeInfo.ACTION_CLICK)
+          snapshotShadow.setRefreshReturnValue(true)
+        }
+      val container =
+        snapshotNode().apply {
+          snapshotShadow.parentNode = row
+          snapshotShadow.setRefreshReturnValue(true)
+        }
+      val label =
+        snapshotNode(text = "Wi-Fi").apply {
+          snapshotShadow.parentNode = container
+          snapshotShadow.setRefreshReturnValue(true)
+        }
+      val executor =
+        AccessibilityActionExecutor(
+          connectionProvider = { testConnection(service) },
+          captureSnapshot = {
+            fakeCapture(
+              id = "ancestor-click-snapshot",
+              packageName = "example.package",
+              nodesByRef = mapOf("n2" to label),
+            )
+          },
+          foregroundPackageProvider = { "example.package" },
+          uiEpochProvider = { 60 },
+        )
+      val observed = executor.observe()
+
+      val result = executor.act(observed.id, MobileUiAction.Activate("n2"))
+
+      assertEquals(ActionOutcomeCode.AcceptedButUnverified, result.code)
+      assertEquals(listOf(AccessibilityNodeInfo.ACTION_CLICK), row.snapshotShadow.performedActions)
+      assertTrue(label.snapshotShadow.performedActions.isEmpty())
+      assertTrue(container.snapshotShadow.recycled)
+      assertTrue(row.snapshotShadow.recycled)
+      assertFalse(label.snapshotShadow.recycled)
+      executor.close()
+      assertTrue(label.snapshotShadow.recycled)
+      service.onDestroy()
+    }
+
+  @Test
+  @Suppress("DEPRECATION")
+  fun activateStopsAtDisabledClickableControlInsteadOfClickingParentCard() =
+    runTest {
+      val service = Robolectric.buildService(OpenClawAccessibilityService::class.java).create().get()
+      val card =
+        snapshotNode(text = "Card").apply {
+          isClickable = true
+          isEnabled = true
+          addAction(AccessibilityNodeInfo.ACTION_CLICK)
+          snapshotShadow.setRefreshReturnValue(true)
+        }
+      val disabledButton =
+        snapshotNode(text = "Submit").apply {
+          className = "android.widget.Button"
+          isClickable = true
+          isEnabled = false
+          snapshotShadow.parentNode = card
+          snapshotShadow.setRefreshReturnValue(true)
+        }
+      val disabledButtonParentCopy =
+        snapshotNode(text = "Submit").apply {
+          className = "android.widget.Button"
+          isClickable = true
+          isEnabled = false
+          snapshotShadow.parentNode = card
+          snapshotShadow.setRefreshReturnValue(true)
+        }
+      val innerLabel =
+        snapshotNode(text = "Submit label").apply {
+          isClickable = false
+          isEnabled = false
+          snapshotShadow.parentNode = disabledButtonParentCopy
+          snapshotShadow.setRefreshReturnValue(true)
+        }
+      val executor =
+        AccessibilityActionExecutor(
+          connectionProvider = { testConnection(service) },
+          captureSnapshot = {
+            fakeCapture(
+              id = "disabled-control-snapshot",
+              packageName = "example.package",
+              nodesByRef = mapOf("n1" to disabledButton, "n2" to innerLabel),
+            )
+          },
+          foregroundPackageProvider = { "example.package" },
+          uiEpochProvider = { 60 },
+        )
+      val observed = executor.observe()
+
+      val directDisabledResult = executor.act(observed.id, MobileUiAction.Activate("n1"))
+      val childOfDisabledResult = executor.act(observed.id, MobileUiAction.Activate("n2"))
+
+      assertEquals(ActionOutcomeCode.ActionNotSupported, directDisabledResult.code)
+      assertEquals(ActionOutcomeCode.ActionNotSupported, childOfDisabledResult.code)
+      assertTrue(card.snapshotShadow.performedActions.isEmpty())
+      assertTrue(disabledButton.snapshotShadow.performedActions.isEmpty())
+      assertTrue(disabledButtonParentCopy.snapshotShadow.performedActions.isEmpty())
+      assertTrue(innerLabel.snapshotShadow.performedActions.isEmpty())
+      assertFalse(card.snapshotShadow.recycled)
+      assertTrue(disabledButtonParentCopy.snapshotShadow.recycled)
+      assertFalse(disabledButton.snapshotShadow.recycled)
+      executor.close()
+      assertTrue(disabledButton.snapshotShadow.recycled)
+      assertTrue(innerLabel.snapshotShadow.recycled)
+      service.onDestroy()
+    }
+
+  @Test
+  @Suppress("DEPRECATION")
+  fun activateAncestorFallbackRespectsMaxDepthAndDoesNotApplyToNonActivateActions() =
+    runTest {
+      val service = Robolectric.buildService(OpenClawAccessibilityService::class.java).create().get()
+      val deepRoot =
+        snapshotNode(text = "Too far").apply {
+          isClickable = true
+          isEnabled = true
+          addAction(AccessibilityNodeInfo.ACTION_CLICK)
+          addAction(AccessibilityNodeInfo.ACTION_SCROLL_FORWARD)
+          snapshotShadow.setRefreshReturnValue(true)
+        }
+      var chain = deepRoot
+      repeat(9) { index ->
+        chain =
+          snapshotNode(text = "wrapper-$index").apply {
+            snapshotShadow.parentNode = chain
+            snapshotShadow.setRefreshReturnValue(true)
+          }
+      }
+      val nearScrollable =
+        snapshotNode(text = "Scrollable").apply {
+          isScrollable = true
+          isEnabled = true
+          addAction(AccessibilityNodeInfo.ACTION_SCROLL_FORWARD)
+          snapshotShadow.setRefreshReturnValue(true)
+        }
+      val scrollChild =
+        snapshotNode(text = "Scroll label").apply {
+          snapshotShadow.parentNode = nearScrollable
+          snapshotShadow.setRefreshReturnValue(true)
+        }
+      val executor =
+        AccessibilityActionExecutor(
+          connectionProvider = { testConnection(service) },
+          captureSnapshot = {
+            fakeCapture(
+              id = "depth-and-scroll-snapshot",
+              packageName = "example.package",
+              nodesByRef = mapOf("deep" to chain, "scrollChild" to scrollChild),
+            )
+          },
+          foregroundPackageProvider = { "example.package" },
+          uiEpochProvider = { 60 },
+        )
+      val observed = executor.observe()
+
+      val tooDeep = executor.act(observed.id, MobileUiAction.Activate("deep"))
+      val scrollResult = executor.act(observed.id, MobileUiAction.Scroll("scrollChild", ScrollDirection.Forward))
+
+      assertEquals(ActionOutcomeCode.ActionNotSupported, tooDeep.code)
+      assertEquals(ActionOutcomeCode.ActionNotSupported, scrollResult.code)
+      assertTrue(deepRoot.snapshotShadow.performedActions.isEmpty())
+      assertTrue(nearScrollable.snapshotShadow.performedActions.isEmpty())
+      executor.close()
+      service.onDestroy()
+    }
 }
 
 private fun testConnection(
@@ -511,6 +688,7 @@ private val AccessibilityNodeInfo.snapshotShadow: SnapshotNodeShadow
 @Implements(AccessibilityNodeInfo::class)
 class SnapshotNodeShadow : ShadowAccessibilityNodeInfo() {
   var children: List<AccessibilityNodeInfo> = emptyList()
+  var parentNode: AccessibilityNodeInfo? = null
   var childRequests: Int = 0
     private set
   var recycled: Boolean = false
@@ -524,6 +702,9 @@ class SnapshotNodeShadow : ShadowAccessibilityNodeInfo() {
     childRequests += 1
     return children[index]
   }
+
+  @Implementation
+  public override fun getParent(): AccessibilityNodeInfo? = parentNode
 
   @Implementation
   public override fun recycle() {

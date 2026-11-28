@@ -285,10 +285,34 @@ class AccessibilityActionExecutor internal constructor(
     if (actionId == AccessibilityNodeInfo.ACTION_SET_TEXT && shouldRedactText(node.isPassword, node.isEditable, node.inputType)) {
       return ActionResult(ActionOutcomeCode.SecureContent, "Text entry into password fields is refused")
     }
-    if (node.actionList.none { it.id == actionId }) {
-      return ActionResult(ActionOutcomeCode.ActionNotSupported, "Node $ref does not advertise $actionName")
-    }
-    val accepted = runCatching { node.performAction(actionId, arguments) }.getOrDefault(false)
+    // A passive label or icon inside a clickable row does not advertise click itself;
+    // activate clicks its nearest enabled clickable ancestor, as a tap on it would.
+    // Stop at any touch-consuming control (e.g., a disabled Button inside a clickable card),
+    // matching Android View.onTouchEvent so disabled controls never fall through to containers.
+    val ancestors = mutableListOf<AccessibilityNodeInfo>()
+    val target =
+      if (node.actionList.any { it.id == actionId }) {
+        node
+      } else if (action is MobileUiAction.Activate && !node.blocksAncestorActivation()) {
+        nearestMatchingAncestor(
+          node,
+          parentOf = { child -> runCatching { child.parent }.getOrNull()?.also(ancestors::add) },
+          matches = { candidate -> candidate.isEnabled && candidate.actionList.any { it.id == actionId } },
+          stopAt = AccessibilityNodeInfo::blocksAncestorActivation,
+        )
+      } else {
+        null
+      }
+    val accepted =
+      try {
+        if (target == null) {
+          return ActionResult(ActionOutcomeCode.ActionNotSupported, "Node $ref does not advertise $actionName")
+        }
+        runCatching { target.performAction(actionId, arguments) }.getOrDefault(false)
+      } finally {
+        @Suppress("DEPRECATION")
+        ancestors.forEach(AccessibilityNodeInfo::recycle)
+      }
     return if (accepted) {
       ActionResult(ActionOutcomeCode.AcceptedButUnverified)
     } else {
@@ -396,3 +420,25 @@ private fun swipeGesture(action: MobileUiAction.Swipe): GestureDescription =
       moveTo(action.x1.toFloat(), action.y1.toFloat())
       lineTo(action.x2.toFloat(), action.y2.toFloat())
     }.gesture(action.durationMs)
+
+private fun AccessibilityNodeInfo.blocksAncestorActivation(): Boolean = isClickable || isLongClickable || isContextClickable
+
+/**
+ * Walks up from [start] (exclusive) for at most [maxDepth] parents and returns the first match,
+ * stopping before crossing any ancestor where [stopAt] is true.
+ */
+internal fun <T : Any> nearestMatchingAncestor(
+  start: T,
+  parentOf: (T) -> T?,
+  matches: (T) -> Boolean,
+  stopAt: (T) -> Boolean = { false },
+  maxDepth: Int = 8,
+): T? {
+  var current = start
+  repeat(maxDepth) {
+    current = parentOf(current) ?: return null
+    if (matches(current)) return current
+    if (stopAt(current)) return null
+  }
+  return null
+}
