@@ -3,6 +3,34 @@ import type { MentionsCapability } from "../app/mentions.ts";
 import type { SidebarInboxEntry } from "./sidebar-attention-entries.ts";
 import type { SidebarAttentionFocus } from "./sidebar-attention-focus.ts";
 
+export function inboxEntryIdentity(
+  entry: SidebarInboxEntry,
+  connectionRevision: number,
+  recoveryScope: string | undefined,
+): string {
+  switch (entry.type) {
+    case "approval":
+      return JSON.stringify([entry.type, entry.approval.id]);
+    case "mention":
+      return JSON.stringify([entry.type, entry.mention.id]);
+    case "attention":
+      return JSON.stringify([entry.type, entry.kind, entry.signature]);
+    case "outbox":
+      return JSON.stringify([
+        entry.type,
+        entry.id,
+        entry.sessionKey,
+        entry.agentId,
+        connectionRevision,
+        recoveryScope,
+      ]);
+    case "scopeUpgrade":
+    case "update":
+      return entry.type;
+  }
+  return entry satisfies never;
+}
+
 /** Only the departing pixels outlive membership; a new tab or viewer discards the exit. */
 export function createSidebarMentionExit(
   mentionSource: MentionsCapability,

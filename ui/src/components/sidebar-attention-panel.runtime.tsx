@@ -28,7 +28,6 @@ import "../styles/sidebar-menus.css";
 import "../styles/sidebar-issues.css";
 import type { SidebarAttentionDismissal } from "./sidebar-attention-dismissals.ts";
 import {
-  inboxEntryIdentity,
   sidebarInboxEntryMatchesTab,
   sidebarInboxTabCounts,
   type SidebarAttentionItem,
@@ -41,6 +40,7 @@ import {
 } from "./sidebar-attention-focus.ts";
 import { SidebarAttentionStoreOwner } from "./sidebar-attention-store.ts";
 import "../styles/hub-tabs.css";
+import { createSidebarMentionExit, inboxEntryIdentity } from "./sidebar-inbox-rows.ts";
 import {
   renderSidebarApprovalItem as SidebarApprovalItem,
   SidebarIssueItem,
@@ -49,7 +49,6 @@ import {
   renderSidebarUpdateSurface as SidebarUpdateSurface,
 } from "./sidebar-issue-item.tsx";
 import { ISSUE_TABS, type IssueTab } from "./sidebar-issues-tabs.ts";
-import { createSidebarMentionExit } from "./sidebar-mention-exit.ts";
 import { renderSidebarOutboxItem as SidebarOutboxItem } from "./sidebar-outbox-item.tsx";
 import { HubTabs } from "./solid/hub-tabs.tsx";
 import { Icon } from "./solid/icon.tsx";
