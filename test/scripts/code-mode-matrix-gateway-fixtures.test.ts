@@ -12,7 +12,11 @@ import {
   GATEWAY_MATRIX_TASKS,
   type GatewayMatrixTask,
 } from "../../scripts/lib/code-mode-matrix-gateway-fixtures.js";
-import { runGatewayMatrixCell } from "../../scripts/lib/code-mode-matrix-gateway.js";
+import {
+  collectGatewayMatrixTrace,
+  evaluateGatewayMatrixTask,
+  runGatewayMatrixCell,
+} from "../../scripts/lib/code-mode-matrix-gateway.js";
 import * as performanceFixtures from "../../scripts/lib/code-mode-matrix-performance-fixtures.js";
 import { prepareGatewayMatrixProcessOwner } from "../../scripts/lib/code-mode-matrix-process-owner.js";
 import { runtimeProcessEntrypoints } from "../../src/infra/runtime-process-entrypoints.js";
@@ -270,6 +274,30 @@ describe("Gateway code-mode matrix fixtures", () => {
     const { fixture, entry } = prepare(task);
     expect(invoke(entry, []).tools).toEqual([]);
     expect(fixture.requiredTools).toEqual([]);
+  });
+
+  it("recognizes a one-time task scheduled in the creating conversation", () => {
+    const task = "automation-contracts";
+    const { expected } = createGatewayMatrixFixture(task, 1);
+    const sessionKey = "agent:qa:matrix:conversation";
+    const createdAtMs = Date.UTC(2026, 0, 1);
+    const job = {
+      name: expected.jobName,
+      sessionTarget: `session:${sessionKey}`,
+      payload: { kind: "agentTurn", message: expected.payloadText },
+      createdAtMs,
+      schedule: { kind: "at", at: new Date(createdAtMs + 86_400_000).toISOString() },
+    };
+    const trace = collectGatewayMatrixTrace([
+      {
+        matrixSessionKey: sessionKey,
+        customType: "openclaw.nested-tool.v1",
+        details: { toolName: "automations", input: { action: "add" }, result: { details: job } },
+      },
+    ]);
+    expect(
+      evaluateGatewayMatrixTask({ task, expected, final: "", trace, receipts: [] }).createdFacts,
+    ).toBe(true);
   });
 
   it("keeps each repetition reproducible across runtime/model consumers", () => {

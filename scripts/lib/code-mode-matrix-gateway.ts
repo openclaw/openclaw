@@ -808,10 +808,11 @@ export function evaluateGatewayMatrixTask(params: {
         const createdAt = asFiniteNumber(job.createdAtMs);
         return (
           job.name === expected.jobName &&
-          job.sessionTarget === "main" &&
+          typeof item.sessionKey === "string" &&
+          job.sessionTarget === `session:${item.sessionKey}` &&
           record(job.payload) &&
-          job.payload.kind === "systemEvent" &&
-          job.payload.text === expected.payloadText &&
+          job.payload.kind === "agentTurn" &&
+          job.payload.message === expected.payloadText &&
           createdAt !== undefined &&
           Number.isFinite(scheduledAt) &&
           Math.abs(scheduledAt - createdAt - 86_400_000) <= 300_000

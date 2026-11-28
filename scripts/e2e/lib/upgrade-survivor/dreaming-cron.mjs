@@ -135,6 +135,10 @@ function stableJson(value) {
   return JSON.stringify(value);
 }
 
+function grantRevision({ enabled: _enabled, state: _state, ...definition }) {
+  return `sha256:${createHash("sha256").update(stableJson(definition)).digest("base64url")}`;
+}
+
 function seed(stateDir, artifacts, baselineRoot, candidateTarball) {
   const baseline = installedIdentity(baselineRoot);
   assert.equal(baseline.version, baselineVersion);
@@ -260,8 +264,7 @@ function seed(stateDir, artifacts, baselineRoot, candidateTarball) {
     db.exec("BEGIN IMMEDIATE");
     for (const [index, { storeKey, definition }] of jobs.entries()) {
       const updatedAt = 1_800_000_000_000 + index;
-      const { enabled: _enabled, state: _state, ...grantDefinition } = definition;
-      const revision = `sha256:${createHash("sha256").update(stableJson(grantDefinition)).digest("base64url")}`;
+      const revision = grantRevision(definition);
       const runtimeState = {
         lastRunAtMs: updatedAt - 10_000,
         lastRunStatus: "error",
@@ -335,8 +338,7 @@ function assertMigratedHeartbeat(fixture, row, receipt) {
   };
   delete expected.declarationKey;
   assert.deepEqual(JSON.parse(row.job_json), expected);
-  const { enabled: _enabled, state: _state, ...grantDefinition } = expected;
-  const revision = `sha256:${createHash("sha256").update(stableJson(grantDefinition)).digest("base64url")}`;
+  const revision = grantRevision(expected);
   assert.notEqual(revision, before.grant_definition_revision);
   assert(Number.isSafeInteger(row.updated_at) && row.updated_at >= before.updated_at);
   assert.deepEqual(row, {
@@ -386,7 +388,22 @@ function assertRepaired(fixture, current) {
       fixture.baselineRows.find((entry) => entry.job_id === row.job_id) ??
       fixture.before.rows.find((entry) => entry.job_id === row.job_id);
     if (preservedIds.includes(row.job_id)) {
-      assert.deepEqual(row, before, `Preserved job changed: ${row.job_id}`);
+      const original = JSON.parse(before.job_json);
+      const expected = {
+        ...original,
+        sessionTarget: "session:agent:main:main",
+        payload: { kind: "agentTurn", message: original.payload.text },
+      };
+      assert.deepEqual(JSON.parse(row.job_json), expected);
+      assert.deepEqual(row, {
+        ...before,
+        job_json: row.job_json,
+        payload_kind: "agentTurn",
+        updated_at: before.runtime_updated_at_ms,
+        grant_definition_updated_at: before.runtime_updated_at_ms,
+        grant_definition_revision: grantRevision(expected),
+        grant_definition_generation: before.grant_definition_generation + 1,
+      });
       continue;
     }
     for (const field of [
@@ -806,8 +823,7 @@ export function assertRuntimePersistence(runtime, rows) {
     for (const field of ["updated_at", "runtime_updated_at_ms", "grant_definition_updated_at"]) {
       assert.equal(row[field], updatedAt, `Runtime wrote incorrect ${field} for ${before.job_id}`);
     }
-    const { enabled: _enabled, state: _state, ...grantDefinition } = definition;
-    const revision = `sha256:${createHash("sha256").update(stableJson(grantDefinition)).digest("base64url")}`;
+    const revision = grantRevision(definition);
     assert.equal(row.grant_definition_revision, revision);
     assert.equal(
       row.grant_definition_generation,
