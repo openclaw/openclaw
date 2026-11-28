@@ -111,26 +111,17 @@ export function deriveTimeSeries(
       filteredUsage,
     };
   }
-  let cumTokens = 0,
-    cumCost = 0;
   const isCumulative = mode === "cumulative";
   const breakdownByType = mode === "per-turn" && breakdownMode === "by-type";
-  const points = rangePoints.map((p) => {
-    cumTokens += p.totalTokens;
-    cumCost += p.cost;
-    return {
-      timestamp: p.timestamp,
-      input: p.input,
-      output: p.output,
-      cacheRead: p.cacheRead,
-      cacheWrite: p.cacheWrite,
-      cost: p.cost,
-      value: isCumulative
-        ? cumTokens
-        : breakdownByType
-          ? p.input + p.output + p.cacheRead + p.cacheWrite
-          : p.totalTokens,
-    };
+  let cumulativeTokens = 0;
+  const barValues = rangePoints.map((point) => {
+    if (isCumulative) {
+      cumulativeTokens += point.totalTokens;
+      return cumulativeTokens;
+    }
+    return breakdownByType
+      ? point.input + point.output + point.cacheRead + point.cacheWrite
+      : point.totalTokens;
   });
 
   const width = 400,
@@ -150,26 +141,27 @@ export function deriveTimeSeries(
     (total, { key }) => total + filteredTokens[key],
     0,
   );
-  const maxValue = Math.max(...points.map((p) => p.value), 1);
-  const slotWidth = chartWidth / points.length; // space per bar including gap
+  const maxValue = Math.max(...barValues, 1);
+  const slotWidth = chartWidth / rangePoints.length; // space per bar including gap
   const barWidth = Math.min(CHART_MAX_BAR_WIDTH, Math.max(1, slotWidth * CHART_BAR_WIDTH_RATIO));
   const barGap = slotWidth - barWidth;
 
   const leftHandleX = padding.left + rangeStartIdx * (barWidth + barGap);
   const rightHandleX =
-    padding.left + (Math.min(rangeEndIdx, points.length) - 1) * (barWidth + barGap) + barWidth;
-  const firstTimestamp = expectDefined(points[0], "time series first point").timestamp;
-  const lastTimestamp = expectDefined(points.at(-1), "time series last point").timestamp;
+    padding.left + (Math.min(rangeEndIdx, rangePoints.length) - 1) * (barWidth + barGap) + barWidth;
+  const firstTimestamp = expectDefined(rangePoints[0], "time series first point").timestamp;
+  const lastTimestamp = expectDefined(rangePoints.at(-1), "time series last point").timestamp;
   const cursorLeft = Math.max(firstTimestamp, Math.min(lastTimestamp, rangeStartTs));
   const cursorRight = Math.max(firstTimestamp, Math.min(lastTimestamp, rangeEndTs));
 
-  const bars = points.map((point, index) => {
+  const bars = rangePoints.map((point, index) => {
+    const value = barValues[index]!;
     const x = padding.left + index * (barWidth + barGap);
-    const barHeight = (point.value / maxValue) * chartHeight;
+    const barHeight = (value / maxValue) * chartHeight;
     const y = padding.top + chartHeight - barHeight;
     const tooltipLines = [
       formatTooltipTimestamp(point.timestamp),
-      `${formatUsageTokens(point.value)} ${normalizeLowercaseStringOrEmpty(t("usage.metrics.tokens"))}`,
+      `${formatUsageTokens(value)} ${normalizeLowercaseStringOrEmpty(t("usage.metrics.tokens"))}`,
     ];
     if (breakdownByType) {
       tooltipLines.push(
@@ -181,10 +173,10 @@ export function deriveTimeSeries(
     let segmentY = padding.top + chartHeight;
     const segments = breakdownByType
       ? USAGE_TOKEN_CATEGORIES.flatMap(({ key, className }) => {
-          if (point[key] <= 0 || point.value <= 0) {
+          if (point[key] <= 0 || value <= 0) {
             return [];
           }
-          const segmentHeight = barHeight * (point[key] / point.value);
+          const segmentHeight = barHeight * (point[key] / value);
           segmentY -= segmentHeight;
           return [{ className, y: segmentY, height: segmentHeight }];
         })
@@ -204,7 +196,7 @@ export function deriveTimeSeries(
       cursorRight,
       cursorLeft,
       lastTimestamp,
-      points,
+      points: rangePoints,
       padding,
       width,
       leftHandleX,
@@ -224,9 +216,6 @@ export function deriveTimeSeries(
       rangeStartTs,
       rangeEndTs,
       totalTypeTokens,
-      filteredCost: filteredTokens.totalCost,
-      cumTokens,
-      cumCost,
       filteredTokens,
     },
     emptyKey: null,
@@ -595,16 +584,16 @@ function TimeSeriesChart(props: {
             {" · "}
             {formatUsageTokens(model().filteredTokens.totalTokens)}
             {" · "}
-            {formatUsageCost(model().filteredCost)}
+            {formatUsageCost(model().filteredTokens.totalCost)}
           </>
         ) : (
           <>
             {" "}
             {model().points.length} {t("usage.overview.messagesAbbrev")}
             {" · "}
-            {formatUsageTokens(model().cumTokens)}
+            {formatUsageTokens(model().filteredTokens.totalTokens)}
             {" · "}
-            {formatUsageCost(model().cumCost)}{" "}
+            {formatUsageCost(model().filteredTokens.totalCost)}{" "}
           </>
         )}
       </div>
