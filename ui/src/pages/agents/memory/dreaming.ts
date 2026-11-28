@@ -1,7 +1,3 @@
-import {
-  GatewayProtocolRequestError,
-  resolveSafeTimeoutDelayMs,
-} from "@openclaw/gateway-client/browser";
 import { asNullableRecord as asRecord } from "@openclaw/normalization-core/record-coerce";
 import { normalizeOptionalString as normalizeTrimmedString } from "@openclaw/normalization-core/string-coerce";
 import type {
@@ -435,75 +431,6 @@ export function clearSettledDreamingRead(state: DreamingState, key: DreamingReso
   if (!state.resourceReads[key]?.pending) {
     delete state.resourceReads[key];
   }
-}
-
-export type WikiResourceKey = "wikiImportInsights" | "wikiOverview";
-
-const MAX_WIKI_REBUILD_RETRIES = 4;
-
-export function isWikiResourceKey(key: DreamingResourceKey): key is WikiResourceKey {
-  return key === "wikiImportInsights" || key === "wikiOverview";
-}
-
-function resolveWikiRebuildingRetryDelayMs(error: unknown): number | null {
-  if (
-    !(error instanceof GatewayProtocolRequestError) ||
-    error.gatewayCode !== "UNAVAILABLE" ||
-    !error.retryable ||
-    asRecord(error.details)?.state !== "rebuilding"
-  ) {
-    return null;
-  }
-  return Math.min(resolveSafeTimeoutDelayMs(error.retryAfterMs ?? 500, { minMs: 250 }), 2_000);
-}
-
-export function createWikiRebuildRetryScheduler() {
-  const timers = new Map<WikiResourceKey, ReturnType<typeof globalThis.setTimeout>>();
-  function cancel(key?: WikiResourceKey) {
-    if (key) {
-      const timer = timers.get(key);
-      if (timer !== undefined) {
-        globalThis.clearTimeout(timer);
-        timers.delete(key);
-      }
-      return;
-    }
-    for (const timer of timers.values()) {
-      globalThis.clearTimeout(timer);
-    }
-    timers.clear();
-  }
-  function watch(
-    state: DreamingState,
-    key: WikiResourceKey,
-    attempt: number,
-    onRetry: (nextAttempt: number) => void,
-  ) {
-    if (attempt >= MAX_WIKI_REBUILD_RETRIES) {
-      return;
-    }
-    const settled = state.resourceReads[key];
-    if (!settled) {
-      return;
-    }
-    void settled.promise.catch((error: unknown) => {
-      const delay = resolveWikiRebuildingRetryDelayMs(error);
-      if (delay === null || state.resourceReads[key] !== settled) {
-        return;
-      }
-      cancel(key);
-      timers.set(
-        key,
-        globalThis.setTimeout(() => {
-          timers.delete(key);
-          if (state.resourceReads[key] === settled) {
-            onRetry(attempt + 1);
-          }
-        }, delay),
-      );
-    });
-  }
-  return { cancel, watch };
 }
 
 export function openKnowledgePluginView(

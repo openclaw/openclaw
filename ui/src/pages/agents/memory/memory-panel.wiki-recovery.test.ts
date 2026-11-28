@@ -12,7 +12,6 @@ import { installDreamingViewTestTranslations } from "./view.test-helpers.ts";
 const restoreTranslations = installDreamingViewTestTranslations();
 afterAll(() => restoreTranslations());
 afterEach(() => {
-  vi.useRealTimers();
   cleanupSolid();
   document.body.replaceChildren();
   vi.restoreAllMocks();
@@ -20,17 +19,7 @@ afterEach(() => {
 
 const WIKI_HELLO = gatewayHelloForMethods(["wiki.overview", "wiki.importInsights", "config.patch"]);
 
-function rebuildingError(retryAfterMs = 500) {
-  return new GatewayRequestError({
-    code: "UNAVAILABLE",
-    message: "Memory Wiki dashboards are rebuilding. Retry shortly.",
-    details: { state: "rebuilding" },
-    retryable: true,
-    retryAfterMs,
-  });
-}
-
-function overviewPayload(title = "Repro Page") {
+function overviewPayload(title = "Architecture synthesis") {
   return {
     totalItems: 1,
     totalPages: 10,
@@ -49,7 +38,7 @@ function overviewPayload(title = "Repro Page") {
         contradictionCount: 0,
         items: [
           {
-            pagePath: "concepts/repro-page.md",
+            pagePath: "concepts/architecture-notes.md",
             title,
             kind: "concept",
             claimCount: 0,
@@ -58,7 +47,7 @@ function overviewPayload(title = "Repro Page") {
             claims: [],
             questions: [],
             contradictions: [],
-            snippet: "Repro page content.",
+            snippet: "Compiled reference notes.",
           },
         ],
       },
@@ -76,21 +65,21 @@ function emptyInsights() {
   };
 }
 
-it("automatically retries rebuilding wiki dashboards and renders recovered cards", async () => {
-  vi.useFakeTimers();
+it("recovers Memory Wiki from a rebuilding error via its inline Retry button without reloading sibling resources", async () => {
   let rebuilding = true;
   const page = await createPage(
     {
       [DIARY]: () => diary("Nightly diary"),
-      "wiki.importInsights": () => {
-        if (rebuilding) {
-          throw rebuildingError(500);
-        }
-        return emptyInsights();
-      },
+      "wiki.importInsights": () => emptyInsights(),
       "wiki.overview": () => {
         if (rebuilding) {
-          throw rebuildingError(500);
+          throw new GatewayRequestError({
+            code: "UNAVAILABLE",
+            message: "Memory Wiki dashboards are rebuilding. Retry shortly.",
+            details: { state: "rebuilding" },
+            retryable: true,
+            retryAfterMs: 500,
+          });
         }
         return overviewPayload();
       },
@@ -104,143 +93,82 @@ it("automatically retries rebuilding wiki dashboards and renders recovered cards
   });
   flush();
   await page.waitText(
-    ".dreams-diary__error",
+    "#dreams-review-wiki .dreams-diary__error",
     "Memory Wiki dashboards are rebuilding. Retry shortly.",
   );
-  expect(page.text(".dreams-diary__error-state button")).toBe("Retry");
+  expect(page.text("#dreams-review-wiki .dreams-diary__error-state button")).toBe("Retry");
 
-  rebuilding = false;
   const statusCallsBefore = page.request.mock.calls.filter(([name]) => name === STATUS).length;
   const diaryCallsBefore = page.request.mock.calls.filter(([name]) => name === DIARY).length;
-  await vi.advanceTimersByTimeAsync(500);
+  const insightsCallsBefore = page.request.mock.calls.filter(
+    ([name]) => name === "wiki.importInsights",
+  ).length;
+
+  rebuilding = false;
+  click(page.container, "#dreams-review-wiki .dreams-diary__error-state button");
   await waitForSolid(() => {
-    expect(page.query(".dreams-diary__error")).toBeNull();
-    expect(page.container.textContent).toContain("Repro Page");
+    expect(page.query("#dreams-review-wiki .dreams-diary__error")).toBeNull();
+    expect(page.container.textContent).toContain("Architecture synthesis");
   });
   expect(page.request.mock.calls.filter(([name]) => name === STATUS)).toHaveLength(
     statusCallsBefore,
   );
   expect(page.request.mock.calls.filter(([name]) => name === DIARY)).toHaveLength(diaryCallsBefore);
+  expect(page.request.mock.calls.filter(([name]) => name === "wiki.importInsights")).toHaveLength(
+    insightsCallsBefore,
+  );
 });
 
-it("bounds automatic rebuilding retries and recovers via inline Retry button", async () => {
-  vi.useFakeTimers();
-  let overviewCalls = 0;
-  let failOverview = true;
-  const page = await createPage(
-    {
-      [DIARY]: () => diary("Nightly diary"),
-      "wiki.importInsights": () => emptyInsights(),
-      "wiki.overview": () => {
-        overviewCalls += 1;
-        if (failOverview) {
-          throw rebuildingError(500);
-        }
-        return overviewPayload("Recovered After Retry Click");
-      },
-    },
-    "main",
-    WIKI_HELLO,
-  );
-  page.context.setConfig({ plugins: { entries: { "memory-wiki": { enabled: true } } } });
-  page.dreaming.onViewStateChange((draft) => {
-    draft.openReviewPanel = "wiki";
-  });
-  flush();
-
-  await vi.advanceTimersByTimeAsync(10_000);
-  await page.waitText(
-    ".dreams-diary__error",
-    "Memory Wiki dashboards are rebuilding. Retry shortly.",
-  );
-  const boundedCalls = overviewCalls;
-  expect(boundedCalls).toBeGreaterThan(1);
-  expect(boundedCalls).toBeLessThanOrEqual(5);
-
-  await vi.advanceTimersByTimeAsync(5_000);
-  expect(overviewCalls).toBe(boundedCalls);
-
-  failOverview = false;
-  click(page.container, ".dreams-diary__error-state button");
-  await waitForSolid(() => {
-    expect(page.query(".dreams-diary__error")).toBeNull();
-    expect(page.container.textContent).toContain("Recovered After Retry Click");
-  });
-});
-
-it.each(["agent", "disconnect", "unmount"] as const)(
-  "cancels pending rebuilding retries on %s retirement",
-  async (retirement) => {
-    vi.useFakeTimers();
+it.each(["insights", "diary"] as const)(
+  "recovers %s via its inline Retry button without reloading wiki overview",
+  async (panel) => {
+    let fail = true;
     const page = await createPage(
       {
-        "wiki.importInsights": () => emptyInsights(),
-        "wiki.overview": () => {
-          throw rebuildingError(500);
+        [DIARY]: () => {
+          if (panel === "diary" && fail) {
+            throw new Error("Diary read failed");
+          }
+          return diary("Recovered diary entry");
         },
+        "wiki.importInsights": () => {
+          if (panel === "insights" && fail) {
+            throw new GatewayRequestError({
+              code: "INVALID_REQUEST",
+              message:
+                'Memory Wiki dashboards need a compiled snapshot. Run "openclaw wiki compile", then reload.',
+              details: { state: "compile-required" },
+            });
+          }
+          return emptyInsights();
+        },
+        "wiki.overview": () => overviewPayload(),
       },
       "main",
       WIKI_HELLO,
     );
-    await waitForSolid(() =>
-      expect(
-        page.request.mock.calls.filter(
-          ([name, params]) =>
-            name === "wiki.overview" && (params as { agentId?: string })?.agentId === "main",
-        ),
-      ).toHaveLength(1),
-    );
-    if (retirement === "agent") {
-      page.setAgentId("support");
-    } else if (retirement === "disconnect") {
-      page.context.emit({ phase: "reconnecting", hello: null });
-    } else {
-      page.unmount();
+    page.context.setConfig({ plugins: { entries: { "memory-wiki": { enabled: true } } } });
+    if (panel === "insights") {
+      page.dreaming.onViewStateChange((draft) => {
+        draft.openReviewPanel = "insights";
+      });
+      flush();
     }
-    await vi.advanceTimersByTimeAsync(2_000);
-    expect(
-      page.request.mock.calls.filter(
-        ([name, params]) =>
-          name === "wiki.overview" && (params as { agentId?: string })?.agentId === "main",
-      ),
-    ).toHaveLength(1);
+    const scopeSelector = panel === "insights" ? "#dreams-review-insights" : ".dreams-diary";
+    await waitForSolid(() =>
+      expect(page.text(`${scopeSelector} .dreams-diary__error-state button`)).toBe("Retry"),
+    );
+    const overviewCallsBefore = page.request.mock.calls.filter(
+      ([name]) => name === "wiki.overview",
+    ).length;
+
+    fail = false;
+    click(page.container, `${scopeSelector} .dreams-diary__error-state button`);
+    await waitForSolid(() => {
+      expect(page.query(`${scopeSelector} .dreams-diary__error`)).toBeNull();
+    });
+    expect(page.request.mock.calls.filter(([name]) => name === "wiki.overview")).toHaveLength(
+      overviewCallsBefore,
+    );
   },
 );
-
-it("does not auto-retry non-rebuilding wiki errors while still offering inline Retry", async () => {
-  vi.useFakeTimers();
-  let calls = 0;
-  let fail = true;
-  const page = await createPage(
-    {
-      "wiki.importInsights": () => {
-        calls += 1;
-        if (fail) {
-          throw new GatewayRequestError({
-            code: "INVALID_REQUEST",
-            message:
-              'Memory Wiki dashboards need a compiled snapshot. Run "openclaw wiki compile", then reload.',
-            details: { state: "compile-required" },
-          });
-        }
-        return emptyInsights();
-      },
-      "wiki.overview": () => overviewPayload(),
-    },
-    "main",
-    WIKI_HELLO,
-  );
-  page.context.setConfig({ plugins: { entries: { "memory-wiki": { enabled: true } } } });
-  page.dreaming.onViewStateChange((draft) => {
-    draft.openReviewPanel = "insights";
-  });
-  flush();
-  await waitForSolid(() => expect(calls).toBe(1));
-  await vi.advanceTimersByTimeAsync(2_000);
-  expect(calls).toBe(1);
-  expect(page.text(".dreams-diary__error-state button")).toBe("Retry");
-  fail = false;
-  click(page.container, ".dreams-diary__error-state button");
-  await waitForSolid(() => expect(page.query(".dreams-diary__error")).toBeNull());
-  expect(calls).toBe(2);
-});

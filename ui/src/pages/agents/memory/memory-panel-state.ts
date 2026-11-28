@@ -22,9 +22,7 @@ import {
   copyDreamingArchivePath,
   createDreamingState,
   createDreamingViewState,
-  createWikiRebuildRetryScheduler,
   DREAM_PHRASE_KEYS,
-  isWikiResourceKey,
   loadDreamingResource,
   normalizeWikiPagePreview,
   openKnowledgePluginView,
@@ -82,7 +80,6 @@ export function createAgentMemory(
   let pendingEnabled: boolean | null = null;
   let wikiPreview: WikiPreviewRequest | null = null;
   let pendingWikiRead: { request: WikiPreviewRequest } | null = null;
-  const wikiRetries = createWikiRebuildRetryScheduler();
   const [configOpenScope, setConfigOpenScope] = createOptimistic<DreamingState>();
   const [configOpening, setConfigOpening] = createOptimistic(false);
   const [diaryRequest, setDiaryRequest] = createOptimistic<DreamingState>();
@@ -109,7 +106,6 @@ export function createAgentMemory(
   const gateway = new GatewayPageBinding(notify, {
     getGateway: () => context.gateway,
     invalidateRequests: ({ identityChanged }) => {
-      wikiRetries.cancel();
       retireDiaryPresentation();
       // Retain published data in a new owner; retired reads can only mutate the old state.
       dreaming = {
@@ -163,7 +159,6 @@ export function createAgentMemory(
   }
 
   function resetTransientState() {
-    wikiRetries.cancel();
     retireDiaryPresentation();
     wikiPreview = null;
     pendingWikiRead = null;
@@ -327,25 +322,11 @@ export function createAgentMemory(
     if (resource === "all") {
       await Promise.all(
         (["dreamingStatus", "dreamDiary", "wikiImportInsights", "wikiOverview"] as const).map(
-          (key) => loadResource(key, scope),
+          (key) => runDreamingTask((current) => loadDreamingResource(current, key), scope),
         ),
       );
     } else {
-      await loadResource(resource, scope);
-    }
-  }
-
-  async function loadResource(key: DreamingResourceKey, scope: DreamingTaskScope, attempt = 0) {
-    if (isWikiResourceKey(key) && attempt === 0) {
-      wikiRetries.cancel(key);
-    }
-    await runDreamingTask((current) => loadDreamingResource(current, key), scope);
-    if (isTaskScopeCurrent(scope) && isWikiResourceKey(key)) {
-      wikiRetries.watch(scope.state, key, attempt, (nextAttempt) => {
-        if (isTaskScopeCurrent(scope)) {
-          void loadResource(key, scope, nextAttempt);
-        }
-      });
+      await runDreamingTask((current) => loadDreamingResource(current, resource), scope);
     }
   }
 
