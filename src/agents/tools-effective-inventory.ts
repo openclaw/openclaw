@@ -17,7 +17,6 @@ import {
   hasBundledPluginPublicSurface,
   loadBundledPluginPublicSurfaceModuleSync,
 } from "../plugin-sdk/facade-runtime.js";
-import { resolveEffectivePluginActivationState } from "../plugins/config-state.js";
 import { withPluginMetadataSnapshotScope } from "../plugins/current-plugin-metadata-snapshot.js";
 import { getGatewayPluginMetadataSnapshot } from "../plugins/current-plugin-metadata-state.js";
 import { resolvePluginControlPlaneFingerprint } from "../plugins/plugin-control-plane-context.js";
@@ -116,14 +115,9 @@ function buildToolInventoryNotices(params: {
     ];
   }
 
-  // Name plugins.allow only when the loader's activation policy excludes browser for that reason.
   if (
-    resolveEffectivePluginActivationState({
-      id: "browser",
-      origin: "bundled",
-      rootConfig: params.cfg,
-      enabledByDefault: true,
-    }).reason === "not in allowlist"
+    Array.isArray(params.cfg.plugins?.allow) &&
+    !listIncludesTool(params.cfg.plugins.allow, "browser")
   ) {
     return [
       {

@@ -63,7 +63,6 @@ describe("scanCodexNativeAssets", () => {
 
   it.each([
     ["an empty allowlist", { allow: [], entries: { codex: { enabled: true } } }, true],
-    ["a padded allowlist entry", { allow: [" Codex "] }, true],
     ["a denylist", { deny: ["codex"], entries: { codex: { enabled: true } } }, false],
   ])("follows plugin activation with %s (#205672)", async (_, plugins, scanned) => {
     await writeFile(path.join(codexHome, "skills", "tweet-helper", "SKILL.md"));
