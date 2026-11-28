@@ -70,7 +70,6 @@ describe("compaction hook wiring", () => {
       incrementCompactionCount: vi.fn(),
       getCompactionCount: () => compactionCount,
       noteCompactionTokensAfter: vi.fn(),
-      getLastCompactionTokensAfter: vi.fn(() => undefined),
       ...(withRetryHooks
         ? {
             noteCompactionRetry: vi.fn(),

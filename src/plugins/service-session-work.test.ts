@@ -154,7 +154,7 @@ function fixture() {
     isStopping: () => false,
     resolveGatewayContext: () => context,
   });
-  return { service, lease, signal };
+  return { service, lease };
 }
 const input = {
   id: "job",
