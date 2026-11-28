@@ -8,17 +8,16 @@ import {
   stopEvent,
   streamBedrockForTest,
   textDelta,
-} from "../extensions/amazon-bedrock/bedrock.test-support.js";
-import { createAppleFmStream } from "../extensions/apple-fm/stream.js";
-import { createGoogleGenerativeAiTransportStreamFn } from "../extensions/google/transport-stream.js";
-import { wrapLmstudioInferencePreload } from "../extensions/lmstudio/src/stream.js";
-import { streamModel } from "../extensions/lmstudio/src/stream.test-support.js";
-import { createOllamaStreamFn } from "../extensions/ollama/src/stream.runtime.js";
-import { createRadiusStreamFn } from "../extensions/radius/stream.js";
+} from "../extensions/amazon-bedrock/test-api.js";
+import { createAppleFmStream } from "../extensions/apple-fm/test-api.js";
+import { createGoogleGenerativeAiTransportStreamFn } from "../extensions/google/test-api.js";
+import { streamModel, wrapLmstudioInferencePreload } from "../extensions/lmstudio/test-api.js";
+import { createOllamaStreamFn } from "../extensions/ollama/test-api.js";
 import {
   baseUrl as radiusBaseUrl,
+  createRadiusStreamFn,
   usage as radiusUsage,
-} from "../extensions/radius/test-support.js";
+} from "../extensions/radius/test-api.js";
 import { createApiRegistry } from "../packages/ai/src/api-registry.js";
 import { configureAiTransportHost, getAiTransportHost } from "../packages/ai/src/host.js";
 import {
