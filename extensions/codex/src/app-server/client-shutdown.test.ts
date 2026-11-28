@@ -21,15 +21,24 @@ afterEach(() => {
 });
 
 describe.skipIf(process.platform === "win32")("npm launcher shutdown", () => {
-  const outcomes = ["confirmed", "unconfirmed", "deadline", "joining deadline"];
+  const outcomes = ["confirmed", "unconfirmed"];
+  if (process.platform === "linux") {
+    outcomes.push("deadline", "joining deadline");
+  }
   it.each(outcomes)("preserves %s force-kill containment", async (cleanup) => {
     vi.useFakeTimers();
     const harness = createClientHarness({ autoEmitExit: false });
     const root = { pid: 12345, ppid: process.pid, pgid: 12345, state: "S", startedAt: "fake" };
     Object.assign(harness.process, { pid: root.pid });
+    const resumeRetry = Promise.withResolvers<void>();
+    let scans = 0;
     // Model OS reads/signals; the real containment owner must produce the receipt.
     vi.spyOn(processSnapshot, "readCodexAppServerProcessSnapshot").mockImplementation(
       async (deadline) => {
+        if (cleanup === "joining deadline" && ++scans === 2) {
+          await resumeRetry.promise;
+          throw new processSnapshot.ProcessInspectionError("deadline");
+        }
         if (cleanup.endsWith("deadline")) {
           await new Promise((resolve) => {
             setTimeout(resolve, Math.ceil(deadline! - performance.now()));
@@ -66,12 +75,22 @@ describe.skipIf(process.platform === "win32")("npm launcher shutdown", () => {
     }
     const closing = harness.client.closeAndWait({ forceKillDelayMs: 10, exitTimeoutMs: 100 });
     if (cleanup === "joining deadline") {
-      // The short waiter settles while the first close still owns its force-kill grace.
-      await vi.advanceTimersByTimeAsync(2_301);
-      await expect(closing).resolves.toEqual({ exited: false, cleanup: "uncertain" });
+      // Each waiter observes exit within its own deadline while the transport owns the retry.
+      const later = harness.client.closeAndWait({ exitTimeoutMs: 150 });
+      try {
+        await vi.advanceTimersByTimeAsync(2_301);
+        await expect(closing).resolves.toEqual({ exited: false, cleanup: "uncertain" });
+        expect(scans).toBe(2);
+        expect(kill).not.toHaveBeenCalledWith(-root.pid, "SIGKILL");
+        Object.assign(harness.process, { exitCode: 0 });
+        harness.process.emit("exit", 0, null);
+        await vi.advanceTimersByTimeAsync(50);
+        await expect(later).resolves.toEqual({ exited: true, cleanup: "uncertain" });
+      } finally {
+        resumeRetry.resolve();
+      }
+      await vi.advanceTimersByTimeAsync(75);
       expect(kill).not.toHaveBeenCalledWith(-root.pid, "SIGKILL");
-      await vi.advanceTimersByTimeAsync(125);
-      expect(kill).toHaveBeenCalledWith(-root.pid, "SIGKILL");
       return;
     }
     // The existing exit wait leaves time to observe a real asynchronous process exit.

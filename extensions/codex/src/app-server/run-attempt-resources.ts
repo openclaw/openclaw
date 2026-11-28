@@ -205,8 +205,8 @@ export function prepareCodexAttemptResources(prompt: CodexAttemptPrompt) {
       // Close the authorized node lease first; losing its socket first is a real disconnect.
       await releaseSandboxExecEnvironment();
       const ownedClient = state.releaseSharedClientLease ? state.client : undefined;
-      // Releasing an isolated lease calls close(). Start the one-shot close first:
-      // the first caller owns the transport's grace period.
+      // Releasing an isolated lease calls close(). Start shutdown with the
+      // one-shot policy while this run still owns the first close.
       const oneShotClose = params.oneShotCliRun
         ? ownedClient?.closeAndWait(CODEX_ONE_SHOT_CLIENT_CLOSE_OPTIONS)
         : undefined;

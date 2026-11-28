@@ -291,8 +291,8 @@ function readLinuxProcesses(
     const readStat = async (entry: string) => {
       remainingInspectionTime(deadline);
       try {
-        // Unlike cmdline, proc_pid_stat is a single kernel record: a bounded
-        // task name and a fixed number of integer fields. Read it in one operation.
+        // proc_pid_stat emits a bounded task name and a fixed number of integer
+        // fields, so one read can collect the entire kernel record.
         const stat = await readFile(`/proc/${entry}/stat`);
         if (stat.length > remainingBytes) {
           throw new ProcessInspectionError("unavailable");

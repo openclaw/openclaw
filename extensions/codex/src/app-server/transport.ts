@@ -6,8 +6,10 @@ export type CodexAppServerCloseResult =
   | { exited: true; cleanup: "closed" | "terminated" | "uncertain" }
   | { exited: false; cleanup: "uncertain" };
 
+type ContainmentOutcome = "natural" | "graceful" | "contained" | "uncertain";
 type TransportClose = {
-  closing: Promise<"natural" | "graceful" | "contained" | "uncertain">;
+  closing: Promise<ContainmentOutcome>;
+  outcome?: ContainmentOutcome;
   naturalExit: boolean;
   wasForced: () => boolean;
   exitWaitReady: Promise<void>;
@@ -121,13 +123,16 @@ function beginCodexAppServerTransportClose(
     // Failed containment cannot certify cleanup from the root's exit alone.
     return contained ? "contained" : "uncertain";
   })();
-  void closing.then(exitWaitReady.resolve, exitWaitReady.reject);
-  const closure = {
+  const closure: TransportClose = {
     closing,
     naturalExit: false,
     wasForced: () => forced,
     exitWaitReady: exitWaitReady.promise,
   };
+  void closing.then((outcome) => {
+    closure.outcome = outcome;
+    exitWaitReady.resolve();
+  }, exitWaitReady.reject);
   CODEX_APP_SERVER_TRANSPORT_CLOSES.set(child, closure);
   return closure;
 }
@@ -186,24 +191,21 @@ export async function closeCodexAppServerTransportAndWait(
       )
     : undefined;
   const closure = beginCodexAppServerTransportClose(child, options);
-  // Even a late caller with a shorter exit budget can stop waiting while the
-  // transport owns the retry. Confirm exit, containment and pipe drain together.
+  // Each caller can observe physical exit on its own deadline while the
+  // transport retains the retry. A pending census leaves cleanup uncertain.
   await closure.exitWaitReady;
   const settled = await waitForCodexAppServerTransportExit(
     child,
     options.exitTimeoutMs ?? 2_000,
-    closure.closing.then(
-      () => drained ?? true,
-      () => false,
-    ),
+    drained,
   );
-  const containment = settled ? await closure.closing : undefined;
   if (settled) {
     await Promise.all([
       waitForCodexAppServerProcessRegistrationCleanup(child),
       child.waitForCleanup?.(),
     ]);
   }
+  const containment = closure.outcome;
   closure.naturalExit =
     containment === "natural" && settled && (child.exitCode != null || child.signalCode != null);
   if (options.drainStdio) {
