@@ -11,23 +11,24 @@ const DOT_PATH_SEGMENT = /(?:^|[\\/])\.{1,2}(?![^\\/])/;
 const WILDCARD = /[*?]/;
 const WINDOWS_PREFIX = /^\\\\[?.]\\/;
 const WINDOWS_SEPARATOR = /\\/g;
-const ESCAPED_SEPARATOR = /\\\\/g;
 
 function normalizeMatchTarget(value: string): string {
   if (process.platform === "win32") {
     const stripped = value.replace(WINDOWS_PREFIX, "");
     return normalizeLowercaseStringOrEmpty(stripped.replace(WINDOWS_SEPARATOR, "/"));
   }
-  const normalized = value.includes("\\\\") ? value.replace(ESCAPED_SEPARATOR, "/") : value;
+  // A POSIX filename may contain backslashes. Folding "\\" into "/" would
+  // approve that file as a different allowlisted path. Windows separators
+  // fold only on win32.
   if (process.platform === "darwin") {
-    if (normalized === "/private/var") {
+    if (value === "/private/var") {
       return "/var";
     }
-    if (normalized.startsWith("/private/var/")) {
-      return normalized.slice("/private".length);
+    if (value.startsWith("/private/var/")) {
+      return value.slice("/private".length);
     }
   }
-  return normalized;
+  return value;
 }
 
 function normalizeDotPathSegments(value: string): string {
