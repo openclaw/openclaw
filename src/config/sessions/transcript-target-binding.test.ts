@@ -41,3 +41,10 @@ it.each([
     Object.defineProperty(process, "platform", descriptor);
   }
 });
+
+it("resolves a profile-selected state directory", () => {
+  const home = path.resolve("synthetic-home");
+  expect(
+    captureSessionTranscriptStorageEnvironment({ HOME: home, OPENCLAW_PROFILE: "work" }),
+  ).toEqual({ OPENCLAW_STATE_DIR: path.join(home, ".openclaw-work") });
+});
