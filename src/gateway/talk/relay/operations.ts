@@ -24,7 +24,6 @@ import { resolveOwnedActiveTalkRunTarget } from "../run-ownership.js";
 import { forgetUnifiedTalkSession, registerTalkConnectionCleanup } from "../session-registry.js";
 import {
   cancelTalkVoiceSessionChange,
-  isTalkVoiceSessionReplacing,
   registerTalkVoiceSession,
   unregisterTalkVoiceSession,
 } from "../voice-selection.js";
@@ -186,11 +185,7 @@ function finishRelaySessionClose(
   options?: RealtimeVoiceCloseOptions & { eventReason?: "output-cancelled" },
   preparation?: Promise<unknown>,
 ): Promise<void> {
-  const disposition =
-    options?.disposition ??
-    (isTalkVoiceSessionReplacing(session.id, session.connId, session.sessionTarget.agentId)
-      ? "detach"
-      : "abort");
+  const disposition = options?.disposition ?? "detach";
   unregisterTalkVoiceSession(session.id, session.connId, session.sessionTarget.agentId);
   session.transcriptReadiness.close();
   session.harness.close();
@@ -338,9 +333,7 @@ export function submitTalkRealtimeRelayToolResult(params: {
 
   if (cancelledAgentCall) {
     const cancellationEpoch = session.toolResultEpoch;
-    const providerResult = buildRealtimeVoiceAgentCancelProviderResult(
-      "OpenClaw cancelled this consult before completion. Do not restart it.",
-    );
+    const providerResult = buildRealtimeVoiceAgentCancelProviderResult();
     const submitCancellation = () => {
       if (
         relaySessions.get(session.id) !== session ||
@@ -654,9 +647,7 @@ export async function cancelTalkRealtimeRelayTurn(params: {
   for (const { handle, nativeCallIds } of forcedConsults) {
     session.harness.forcedConsults.markCancelled(handle);
     session.forcedTerminalProviderResults.set(handle.id, {
-      result: buildRealtimeVoiceAgentCancelProviderResult(
-        "OpenClaw cancelled this consult before completion. Do not restart it.",
-      ),
+      result: buildRealtimeVoiceAgentCancelProviderResult(),
       options: suppressedToolResultOptions(session),
       turnId,
       epoch: terminalEpoch,
@@ -693,6 +684,6 @@ export function stopTalkRealtimeRelaySession(params: {
   disposition?: RealtimeVoiceCloseOptions["disposition"];
 }): void | Promise<void> {
   return closeRelaySession(getRelaySession(params.relaySessionId, params.connId), "completed", {
-    disposition: params.disposition ?? "abort",
+    disposition: params.disposition ?? "detach",
   });
 }

@@ -1,5 +1,6 @@
 import { isRecord } from "@openclaw/normalization-core/record-coerce";
 import { REALTIME_VOICE_DESCRIBE_VIEW_TOOL_NAME } from "../../../../../src/talk/describe-view-tool.js";
+import type { RealtimeVoiceCloseOptions } from "../../../../../src/talk/provider-types.js";
 import { formatUiError } from "../../../lib/format-error.ts";
 import { listen } from "../../../lib/reactive/listener.ts";
 import { RealtimeTalkMediaStreamMeter } from "./audio.ts";
@@ -51,7 +52,10 @@ export class WebRtcSdpRealtimeTalkTransport implements RealtimeTalkTransport {
   private readonly completedToolCallIds = new Set<string>();
   private readonly offerExchange = new RealtimeTalkWebRtcOfferExchange();
   private readonly camera: RealtimeTalkCameraOwner;
-  private readonly consultAbortControllers = new Set<AbortController>();
+  private readonly consultControllers = new Set<{
+    abort: AbortController;
+    detach: AbortController;
+  }>();
   private readonly controlAbortController = new AbortController();
   private starting = false;
   private startupError: Error | null = null;
@@ -205,8 +209,9 @@ export class WebRtcSdpRealtimeTalkTransport implements RealtimeTalkTransport {
     return "cancelled";
   }
 
-  stop(options?: { emitClosed?: boolean }): void {
+  stop(options?: RealtimeVoiceCloseOptions & { emitClosed?: boolean }): void {
     const emitClosed = !this.closed && options?.emitClosed !== false;
+    const disposition = options?.disposition ?? "detach";
     this.closed = true;
     try {
       if (emitClosed) {
@@ -226,10 +231,14 @@ export class WebRtcSdpRealtimeTalkTransport implements RealtimeTalkTransport {
       this.inputMeter = null;
       this.audio?.remove();
       this.audio = null;
-      for (const controller of this.consultAbortControllers) {
-        controller.abort();
+      for (const controller of this.consultControllers) {
+        if (disposition === "abort") {
+          controller.abort.abort();
+        } else {
+          controller.detach.abort();
+        }
       }
-      this.consultAbortControllers.clear();
+      this.consultControllers.clear();
       this.completedToolCallIds.clear();
       this.responseOutcomes.reset();
       this.responseState = "idle";
@@ -324,7 +333,7 @@ export class WebRtcSdpRealtimeTalkTransport implements RealtimeTalkTransport {
             return;
           }
           if (
-            this.consultAbortControllers.size > 0 &&
+            this.consultControllers.size > 0 &&
             shouldAutoControlRealtimeVoiceAgentText(event.transcript)
           ) {
             void steerRealtimeTalkActiveConsult({
@@ -511,18 +520,22 @@ export class WebRtcSdpRealtimeTalkTransport implements RealtimeTalkTransport {
     if (name !== REALTIME_VOICE_AGENT_CONSULT_TOOL_NAME) {
       return;
     }
-    const abortController = new AbortController();
-    this.consultAbortControllers.add(abortController);
+    const controllers = {
+      abort: new AbortController(),
+      detach: new AbortController(),
+    };
+    this.consultControllers.add(controllers);
     try {
       await submitRealtimeTalkConsult({
         ctx: this.ctx,
         callId,
         args,
-        signal: abortController.signal,
+        signal: controllers.abort.signal,
+        detachSignal: controllers.detach.signal,
         submit: (toolCallId, result) => this.submitToolResult(toolCallId, result),
       });
     } finally {
-      this.consultAbortControllers.delete(abortController);
+      this.consultControllers.delete(controllers);
     }
   }
 

@@ -415,7 +415,10 @@ export function renderChatPrimaryActionsSolid(props: ChatRunControlsProps) {
       </button>
     </openclaw-tooltip>
   );
-  const TalkAction = (action: { camera?: boolean }) => (
+  // A run that outlives the call keeps going; the person can rejoin Talk while it runs.
+  const rejoinTalkWhileRunning = () =>
+    props.canAbort && !hasSendableContent() && !hasComposedContent() && props.onToggleVoice;
+  const TalkAction = (action: { camera?: boolean; running?: boolean }) => (
     <openclaw-tooltip
       class={{ "chat-mobile-talk-action": !action.camera }}
       prop:content={
@@ -447,7 +450,7 @@ export function renderChatPrimaryActionsSolid(props: ChatRunControlsProps) {
               props.voiceStatus === "error"
             : !props.connected ||
               props.sending ||
-              props.isBusy ||
+              (props.isBusy && !action.running) ||
               Boolean(props.submitDisabledReason)
         }
         aria-label={action.camera ? cameraLabel() : t("chat.composer.realtimeTalkCapability")}
@@ -549,10 +552,19 @@ export function renderChatPrimaryActionsSolid(props: ChatRunControlsProps) {
               />
             </span>
           ) : null}
-          {!props.readDictation?.()?.active &&
-          !(props.canAbort && !hasSendableContent()) &&
-          !hasComposedContent() &&
-          props.onToggleVoice ? (
+          {!props.readDictation?.()?.active && rejoinTalkWhileRunning() ? (
+            <>
+              <span class="chat-mobile-primary-action">
+                <TalkAction running />
+              </span>
+              <span class="chat-mobile-primary-action chat-desktop-primary-action">
+                <PrimaryAction />
+              </span>
+            </>
+          ) : !props.readDictation?.()?.active &&
+            !(props.canAbort && !hasSendableContent()) &&
+            !hasComposedContent() &&
+            props.onToggleVoice ? (
             <>
               <span class="chat-mobile-primary-action">
                 <PrimaryAction mobile />

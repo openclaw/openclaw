@@ -182,7 +182,7 @@ export class OpenAIQuicksilverGatewayBridge implements RealtimeVoiceBridge {
   acknowledgeMark(): void {}
 
   close(options?: RealtimeVoiceCloseOptions): void | Promise<void> {
-    return this.teardown("completed", undefined, options?.disposition ?? "abort");
+    return this.teardown("completed", undefined, options?.disposition ?? "detach");
   }
 
   isConnected(): boolean {
@@ -543,7 +543,7 @@ export class OpenAIQuicksilverGatewayBridge implements RealtimeVoiceBridge {
   private teardown(
     reason: "completed" | "error",
     beforeClose?: () => void,
-    disposition: RealtimeVoiceCloseDisposition = "abort",
+    disposition: RealtimeVoiceCloseDisposition = "detach",
   ): void | Promise<void> {
     if (this.closed) {
       return this.closingPromise;

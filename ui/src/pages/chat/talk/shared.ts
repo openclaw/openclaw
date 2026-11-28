@@ -45,6 +45,8 @@ export type RealtimeTalkTranscriptItem =
 
 export type RealtimeTalkCallbacks = {
   onStatus?: (status: RealtimeTalkStatus, detail?: string) => void;
+  /** The Gateway accepted a consult run; the chat owns it from here, even after the call ends. */
+  onConsultRun?: (run: { runId: string; sessionKey: string }) => void;
   onInputNotice?: (detail: string) => void;
   onVideoCapability?: (capable: boolean) => void;
   onInputLevel?: (level: number) => void;
@@ -345,13 +347,17 @@ export async function submitRealtimeTalkConsult(params: {
   relaySessionId?: string;
   submitAbortResult?: boolean;
   signal?: AbortSignal;
+  /** Stops waiting for the answer on transport teardown without aborting the agent run. */
+  detachSignal?: AbortSignal;
 }): Promise<void> {
   const { ctx, callId, submit } = params;
   ctx.callbacks.onStatus?.("thinking");
   let run: TalkClientToolCallResult | undefined;
   let aborted = false;
+  let detached = false;
   let submitted = false;
   let submissionCompleted = false;
+  const waitController = new AbortController();
   const submitOnce = async (result: unknown): Promise<void> => {
     if (submitted) {
       return;
@@ -362,11 +368,18 @@ export async function submitRealtimeTalkConsult(params: {
   };
   const submitAbortResult = async (): Promise<void> => {
     if (params.submitAbortResult !== false) {
-      await submitOnce(buildRealtimeVoiceAgentCancelProviderResult());
+      await submitOnce(
+        aborted || params.signal?.aborted
+          ? buildRealtimeVoiceAgentCancelProviderResult(
+              "The user stopped this task. Do not retry unless the user asks again.",
+            )
+          : buildRealtimeVoiceAgentCancelProviderResult(),
+      );
     }
   };
   const abortRun = () => {
     aborted = true;
+    waitController.abort();
     // Relay lifetimes belong to the Gateway; aborting this browser wait must not cancel them.
     if (run && !params.relaySessionId) {
       void ctx.client
@@ -378,11 +391,20 @@ export async function submitRealtimeTalkConsult(params: {
         .catch(() => undefined);
     }
   };
+  const detachWait = () => {
+    detached = true;
+    waitController.abort();
+  };
   if (params.signal?.aborted) {
     await submitAbortResult();
     return;
   }
+  if (params.detachSignal?.aborted) {
+    return;
+  }
   const disposeAbort = params.signal && listen(params.signal, "abort", abortRun, { once: true });
+  const disposeDetach =
+    params.detachSignal && listen(params.detachSignal, "abort", detachWait, { once: true });
   try {
     const args =
       typeof params.args === "string" ? JSON.parse(params.args || "{}") : (params.args ?? {});
@@ -391,8 +413,11 @@ export async function submitRealtimeTalkConsult(params: {
       await submitAbortResult();
       return;
     }
+    if (params.detachSignal?.aborted) {
+      return;
+    }
     // Cancellation must not hide the acknowledgement that owns the Gateway run.
-    // Once the run id arrives, direct transports can cancel the exact started consult.
+    // Explicit cancellation aborts the started consult; transport detach lets it finish.
     run = await ctx.client.request<TalkClientToolCallResult>("talk.client.toolCall", {
       sessionKey: ctx.sessionKey,
       ...(ctx.voiceSessionId ? { voiceSessionId: ctx.voiceSessionId } : {}),
@@ -401,23 +426,38 @@ export async function submitRealtimeTalkConsult(params: {
       args,
       ...(params.relaySessionId ? { relaySessionId: params.relaySessionId } : {}),
     });
+    // Report the run before any abort or detach check: the chat must be able to Stop it.
+    ctx.callbacks.onConsultRun?.({ runId: run.runId, sessionKey: ctx.sessionKey });
     if (params.signal?.aborted) {
       abortRun();
       await submitAbortResult();
+      return;
+    }
+    if (params.detachSignal?.aborted) {
       return;
     }
     const result = await waitForChatResult({
       client: ctx.client,
       runId: run.runId,
       timeoutMs: 120_000,
-      signal: params.signal,
+      signal: waitController.signal,
     });
+    if (detached || params.detachSignal?.aborted) {
+      return;
+    }
     await submitOnce({ result });
   } catch (error) {
     if (submitted) {
       throw error;
     }
-    if (aborted || params.signal?.aborted || isAbortError(error)) {
+    if (aborted || params.signal?.aborted) {
+      await submitAbortResult();
+      return;
+    }
+    if (detached || params.detachSignal?.aborted) {
+      return;
+    }
+    if (isAbortError(error)) {
       await submitAbortResult();
       return;
     }
@@ -426,7 +466,14 @@ export async function submitRealtimeTalkConsult(params: {
     });
   } finally {
     disposeAbort?.();
-    if (submissionCompleted && !aborted && !params.signal?.aborted) {
+    disposeDetach?.();
+    if (
+      submissionCompleted &&
+      !aborted &&
+      !detached &&
+      !params.signal?.aborted &&
+      !params.detachSignal?.aborted
+    ) {
       ctx.callbacks.onStatus?.("listening");
     }
   }

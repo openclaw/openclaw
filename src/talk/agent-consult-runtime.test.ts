@@ -2,6 +2,7 @@ import { expectDefined } from "@openclaw/normalization-core";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { createDeferred } from "../../test/helpers/promise.js";
 import type { RunEmbeddedAgentParams } from "../agents/embedded-agent-runner/run/params.js";
+import { createAgentRunDirectAbortError } from "../agents/run-termination.js";
 import { setReplyPayloadMetadata } from "../auto-reply/reply-payload.js";
 import type { SessionEntry } from "../config/sessions/types.js";
 import {
@@ -175,6 +176,21 @@ describe("realtime voice agent consult runtime", () => {
       "voice session closed",
     );
     expect(runEmbeddedAgent).not.toHaveBeenCalled();
+  });
+
+  it("preserves explicit user Stop from the registered run signal", async () => {
+    const { runtime, runEmbeddedAgent } = createAgentRuntime();
+    const registration = new AbortController();
+    const reason = createAgentRunDirectAbortError(true);
+    runEmbeddedAgent.mockImplementationOnce(async () => {
+      registration.abort(reason);
+      return { payloads: [], meta: { aborted: true } };
+    });
+    await expect(
+      runConsult(runtime, {
+        onRunStarted: async () => ({ abortSignal: registration.signal }),
+      }),
+    ).rejects.toBe(reason);
   });
 
   it.each([false, true])(

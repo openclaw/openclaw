@@ -169,13 +169,14 @@ export async function runTalkRelayCloseHistory(input: {
       sessionId: relay.relaySessionId,
       ...(input.disposition ? { disposition: input.disposition } : {}),
     });
-    expect(signal.aborted).toBe(input.disposition !== "detach");
+    const detached = input.disposition !== "abort";
+    expect(signal.aborted).toBe(!detached);
     releaseModel.resolve();
     await waitForDispatchEnd();
     await input.drainPublications();
     const expectedAnswers = [
       ...(input.spokenReplacement ? [spokenAnswer] : []),
-      ...(input.disposition === "detach" ? [answer] : []),
+      ...(detached ? [answer] : []),
       ...(input.pendingFollowUp ? [followUpAnswer] : []),
     ];
     expect(
@@ -192,9 +193,9 @@ export async function runTalkRelayCloseHistory(input: {
       return message && extractText(message) === answer ? [message] : [];
     });
     expect(stored.map(extractText)).toEqual(
-      input.disposition === "detach" ? (input.afterFinal ? [answer, answer] : [answer]) : [],
+      detached ? (input.afterFinal ? [answer, answer] : [answer]) : [],
     );
-    if (input.disposition === "detach") {
+    if (detached) {
       expect(input.liveMessages().map(extractText)).toContain(answer);
       expect(stored.at(-1)?.display).toBeUndefined();
       if (input.afterFinal) {

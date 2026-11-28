@@ -45,6 +45,7 @@ export function createTalkRunCancel(params: {
       runId,
       active,
       assertCurrent: params.assertCurrent,
+      userInitiated: true,
       hookContext: { commandSource: "talk", senderId: params.connId },
     });
     if (stopped.failure) {

@@ -7,6 +7,14 @@ import { createChatRunState } from "../server-chat-state.js";
 import type { GatewayRequestContext } from "../server-methods/types.js";
 import { createControlFixture } from "./client-control-fixture.test-support.js";
 
+const appendInjectedAssistantMessageToTranscript = vi.hoisted(() =>
+  vi.fn(async (_params: unknown) => ({ ok: true })),
+);
+
+vi.mock("../server-methods/chat-transcript-inject.js", () => ({
+  appendInjectedAssistantMessageToTranscript,
+}));
+
 const { config, coreParams, mocks } = await vi.hoisted(
   () => import("./client-gateway-control.agent-consult.test-support.js"),
 );
@@ -146,6 +154,7 @@ const startedRunIds: string[] = [];
 beforeEach(() => {
   mocks.runEmbeddedAgentCore.mockReset();
   resetConsultFixture();
+  appendInjectedAssistantMessageToTranscript.mockClear();
   order.length = 0;
   startedRunIds.length = 0;
   mocks.consultRealtimeVoiceAgent.mockImplementation(async (params: ConsultParams) => {
@@ -248,9 +257,24 @@ it("cancels a running consult through Stop and keeps the session's waiting turn"
     await waiting;
     expect(waitingRan).toHaveBeenCalledOnce();
     await vi.waitFor(() =>
-      expect(bridge.submitToolResult).toHaveBeenCalledWith(
-        "call-1",
-        expect.objectContaining({ status: "cancelled" }),
+      expect(bridge.submitToolResult.mock.calls).toEqual([
+        [
+          "call-1",
+          {
+            status: "cancelled_by_user",
+            message: "The user stopped this task. Do not retry unless the user asks again.",
+          },
+        ],
+      ]),
+    );
+    await vi.waitFor(() =>
+      expect(appendInjectedAssistantMessageToTranscript).toHaveBeenCalledExactlyOnceWith(
+        expect.objectContaining({
+          sessionKey: sessionTarget.canonicalKey,
+          expectedSessionId: "session-talk",
+          idempotencyKey: `talk-consult-stop:${startedRunIds[0]}`,
+          message: "The user stopped this task. Do not retry unless the user asks again.",
+        }),
       ),
     );
     expect(hook).toHaveBeenCalledOnce();
@@ -278,6 +302,7 @@ it("keeps an in-flight consult running across a preserveRuns transport replaceme
   });
   // The retired transport owns no presentation; the run itself still completed.
   expect(bridge.submitToolResult).not.toHaveBeenCalled();
+  expect(appendInjectedAssistantMessageToTranscript).not.toHaveBeenCalled();
   const next = gate();
   const replacement = createOwner();
   replacement.consult("call-2", "next");

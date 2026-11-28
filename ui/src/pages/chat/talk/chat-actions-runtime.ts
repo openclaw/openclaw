@@ -207,6 +207,8 @@ export async function startChatRealtimeSession(
     client,
     sessionKey,
     {
+      // Not gated on the current session: End Talk detaches the run, which keeps going in chat.
+      onConsultRun: (run) => state.adoptTalkConsultRun?.(run),
       onStatus: forCurrentSession((status, detail) => {
         state.realtimeTalk.update({
           realtimeTalkStatus: status,

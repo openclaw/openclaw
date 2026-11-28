@@ -496,13 +496,9 @@ describe("WebRtcSdpRealtimeTalkTransport", () => {
     transport.stop();
   });
 
-  it("aborts an in-flight OpenAI tool consult when the transport stops", async () => {
+  it("detaches an in-flight OpenAI tool consult when the transport stops", async () => {
     const listeners = new Set<(event: { event: string; payload?: unknown }) => void>();
     const request = vi.fn(async (method: string, params: Record<string, unknown>) => {
-      if (method === "chat.abort") {
-        expect(params).toEqual({ sessionKey: "agent:main:main", agentId: "main", runId: "run-1" });
-        return { ok: true, aborted: true };
-      }
       expect(method).toBe("talk.client.toolCall");
       expect(params.callId).toBe("call-1");
       expect(params.name).toBe(REALTIME_VOICE_AGENT_CONSULT_TOOL_NAME);
@@ -529,14 +525,8 @@ describe("WebRtcSdpRealtimeTalkTransport", () => {
 
     transport.stop();
 
-    await waitForFast(() =>
-      expect(request).toHaveBeenCalledWith("chat.abort", {
-        sessionKey: "agent:main:main",
-        agentId: "main",
-        runId: "run-1",
-      }),
-    );
-    expect(listeners.size).toBe(0);
+    await waitForFast(() => expect(listeners.size).toBe(0));
+    expect(request).not.toHaveBeenCalledWith("chat.abort", expect.anything());
   });
 
   it.each([false, true])(

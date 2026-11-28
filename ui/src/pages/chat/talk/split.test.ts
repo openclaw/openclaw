@@ -297,7 +297,7 @@ it.each([
   },
 );
 
-it("stopping during the model response aborts the owned run and ignores late output", async () => {
+it("stopping during the model response detaches the owned run and ignores late output", async () => {
   const h = harness();
   await h.state.toggleRealtimeTalk();
   const sent = observeSend(h);
@@ -308,7 +308,7 @@ it("stopping during the model response aborts the owned run and ignores late out
   await h.state.toggleRealtimeTalk();
   h.answer("Too late", runId);
   await Promise.resolve();
-  expect(h.request).toHaveBeenCalledWith("chat.abort", { sessionKey, runId });
+  expect(h.called("chat.abort")).toBe(false);
   expect(h.called("tts.speak")).toBe(false);
   expect(tracks).toHaveLength(1);
 });
@@ -358,7 +358,7 @@ it.each(["page cleanup", "Read aloud"])(
   },
 );
 
-it.each(["Stop", "cleanup"])(
+it.each(["End Talk", "cleanup", "explicit abort"])(
   "preserves the %s disposition when chat admission acknowledges late",
   async (reason) => {
     const h = harness();
@@ -371,15 +371,17 @@ it.each(["Stop", "cleanup"])(
     await h.state.toggleRealtimeTalk();
     h.utterance();
     await h.sent.promise;
-    if (reason === "Stop") {
+    if (reason === "End Talk") {
       await h.state.toggleRealtimeTalk();
+    } else if (reason === "explicit abort") {
+      stopChatRealtimeTalk(h.state, { disposition: "abort" });
     } else {
       stopChatRealtimeTalk(h.state);
     }
     admitted.resolve();
     await vi.advanceTimersByTimeAsync(0);
     const aborts = h.request.mock.calls.filter(([method]) => method === "chat.abort");
-    if (reason === "Stop") {
+    if (reason === "explicit abort") {
       expect(aborts).toContainEqual(["chat.abort", { sessionKey, runId: "accepted-run" }]);
     } else {
       expect(aborts).toEqual([]);

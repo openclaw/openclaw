@@ -511,9 +511,7 @@ export function createTalkRealtimeRelaySession(
         if (forcedConsult.kind === "in_flight" || forcedConsult.kind === "already_delivered") {
           if (forcedConsult.kind === "already_delivered") {
             const result = relay.harness.forcedConsults.isCancelled(forcedConsult.handle)
-              ? buildRealtimeVoiceAgentCancelProviderResult(
-                  "OpenClaw cancelled this consult before completion. Do not restart it.",
-                )
+              ? buildRealtimeVoiceAgentCancelProviderResult()
               : buildAlreadyDeliveredToolResult();
             return submitFinalProviderToolResult({
               session: relay,

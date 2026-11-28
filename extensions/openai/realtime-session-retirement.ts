@@ -35,7 +35,7 @@ export function createOpenAIRealtimeSessionLease(params: {
     },
     close: (
       session: OpenAIRealtimeSession,
-      disposition: RealtimeVoiceCloseDisposition = "abort",
+      disposition: RealtimeVoiceCloseDisposition = "detach",
       error?: Error,
       retry = false,
     ): Promise<void> => {
@@ -70,7 +70,9 @@ export function createOpenAIRealtimeSessionLease(params: {
         if (delay !== undefined) {
           session.retryIndex = (session.retryIndex ?? 0) + 1;
           session.retryTimer = setTimeout(() => {
-            void activeSessionLease.close(session, "abort", undefined, true).catch(() => undefined);
+            void activeSessionLease
+              .close(session, disposition, undefined, true)
+              .catch(() => undefined);
           }, delay).unref();
           params.logger.warn("OpenAI realtime remote cleanup failed; retry remains scheduled");
         } else {

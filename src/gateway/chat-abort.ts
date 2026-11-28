@@ -4,6 +4,7 @@ import {
   createAgentRunDirectAbortError,
   createAgentRunRestartAbortError,
   isAgentRunDirectAbortReason,
+  isUserInitiatedAgentRunAbortReason,
   resolveAgentRunAbortLifecycleFields,
 } from "../agents/run-termination.js";
 import { readToolValidationErrorSummary } from "../agents/tool-error-summary.js";
@@ -173,6 +174,7 @@ export function registerChatAbortController(params: {
   /** Raw source work includes preparation and source-specific terminal publication. */
   sourceWork?: Promise<unknown>;
   onCancel?: (stopReason: string) => void;
+  talkConsult?: true;
   sourceInput?: SessionControllerInput;
 }): RegisteredChatAbortController {
   // Sessionless RPCs retain prepared authority without a fabricated session owner.
@@ -236,8 +238,30 @@ export function registerChatAbortController(params: {
     trackSessionControllerSourceWork(input, params.sourceWork);
   }
   const entry: RpcSourceRef = { input, adapter };
-  adapter.cancellationAcknowledgment = () => waitForChatAbortTerminalPersistence(entry);
-  adapter.cancel = () => {
+  let talkStopReceipt: Promise<void> | undefined;
+  adapter.cancellationAcknowledgment = async () => {
+    await waitForChatAbortTerminalPersistence(entry);
+    await talkStopReceipt;
+  };
+  adapter.cancel = (reason) => {
+    if (
+      params.talkConsult &&
+      isUserInitiatedAgentRunAbortReason(reason) &&
+      isUserInitiatedAgentRunAbortReason(input.abortSignal.reason)
+    ) {
+      const identity = getRpcSourceIdentity(entry);
+      talkStopReceipt ??= import("./talk/consult-stop-transcript.js").then(
+        ({ appendTalkConsultStopTranscript }) =>
+          appendTalkConsultStopTranscript({
+            ...identity,
+            storePath: target.storeScope,
+            runId: params.runId,
+          }),
+      );
+      // The Stop acknowledgment owns reporting; do not leave an unhandled rejection
+      // when a caller cancels through the forwarding controller instead.
+      void talkStopReceipt.catch(() => {});
+    }
     adapter.abortStopReason ??= resolveChatAbortStopReason(input.abortSignal);
     adapter.abortDiagnosticReason ??= resolveChatAbortDiagnosticReason(input.abortSignal, adapter);
     params.onCancel?.(adapter.abortStopReason);

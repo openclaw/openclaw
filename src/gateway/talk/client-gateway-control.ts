@@ -41,7 +41,6 @@ import { createTalkRealtimeRunControlOwner, createTalkRunCancel } from "./realti
 import { resolveOwnedActiveTalkRunTarget } from "./run-ownership.js";
 import { registerTalkConnectionCleanup } from "./session-registry.js";
 import type { PreparedTalkSessionTarget } from "./session-target.types.js";
-import { isTalkVoiceSessionReplacing } from "./voice-selection.js";
 
 const owners = new Map<string, GatewayControlOwner>();
 const pendingOwners = new Set<GatewayControlOwner>();
@@ -557,13 +556,7 @@ export function createTalkClientGatewayControlOwner(
       }
       ready = false;
       retainedExactSpeechTexts = [];
-      const preserveRuns =
-        options?.preserveRuns ??
-        isTalkVoiceSessionReplacing(
-          params.voiceSessionId,
-          params.connId,
-          params.sessionTarget.agentId,
-        );
+      const preserveRuns = options?.preserveRuns ?? true;
       acceptingProviderTranscripts = !options?.skipProvider && closeProvider !== undefined;
       // Disconnect and restart must still join retired transports while teardown drains.
       pendingOwners.add(owner);

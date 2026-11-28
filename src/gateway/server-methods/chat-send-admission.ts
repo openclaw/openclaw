@@ -37,6 +37,7 @@ import {
   isRpcSourceRegistered,
 } from "../../sessions/session-controller.rpc-sources.js";
 import { captureSessionControllerInterruptBefore } from "../../sessions/session-controller.stop-runtime.js";
+import { REALTIME_VOICE_AGENT_CONSULT_TOOL_NAME } from "../../talk/agent-consult-tool.js";
 import { registerChatAbortController } from "../chat-abort.js";
 import type { DedupeEntry } from "../server-shared.js";
 import { assertExpectedLeafActive } from "./chat-send-active-leaf.js";
@@ -237,6 +238,10 @@ export async function admitChatSend(params: ChatSendAdmissionParams) {
     resolveTerminalProducer: (active) =>
       resolveActiveReplyRunOwnerForSignal(active.input.abortSignal),
     kind: "chat-send",
+    ...(request.systemInputProvenance?.kind === "internal_system" &&
+    request.systemInputProvenance.sourceTool === REALTIME_VOICE_AGENT_CONSULT_TOOL_NAME
+      ? { talkConsult: true }
+      : {}),
     turnKind,
     ...(progressRefresh ? { controlUiVisible: false, projectSessionActive: false } : {}),
     lifecycleGeneration,

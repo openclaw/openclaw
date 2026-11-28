@@ -86,8 +86,8 @@ const WORKING_RESULT = {
     "Tell the person briefly that you are checking, then wait for the final OpenClaw result before answering with the actual result.",
 };
 const CANCELLED_RESULT = {
-  status: "cancelled",
-  message: "OpenClaw cancelled this consult before completion. Do not restart it.",
+  status: "cancelled_by_user",
+  message: "The user stopped this task. Do not retry unless the user asks again.",
 };
 const DELIVERED_RESULT = {
   status: "already_delivered",
@@ -1302,7 +1302,9 @@ describe("talk realtime gateway relay", () => {
     resetContinuity(request);
     resetContinuity(request);
 
-    expect(fixture.abortController.signal.aborted).toBe(true);
+    expect(fixture.abortController.signal.aborted).toBe(false);
+    expect(relay.activeAgentRuns.size).toBe(0);
+    expect(relay.activeAgentToolCalls.size).toBe(0);
     expect(handleBargeIn).not.toHaveBeenCalled();
     expect(bridge.close).not.toHaveBeenCalled();
     expect(submitToolResult).toHaveBeenCalledTimes(1);
@@ -1972,10 +1974,10 @@ describe("talk realtime gateway relay", () => {
 
   it.each([
     { source: "turn", reason: "barge-in" },
-    { source: "session", reason: "relay-closed" },
+    { source: "session", reason: undefined },
     { source: "abort", reason: "relay-closed" },
     { source: "detach", reason: undefined },
-    { source: "provider", reason: "relay-error" },
+    { source: "provider", reason: undefined },
     { source: "disconnect", reason: undefined },
   ] as const)("settles linked agent runs on $source termination", async ({ source, reason }) => {
     const close = vi.fn();
@@ -2618,16 +2620,16 @@ describe("talk realtime gateway relay", () => {
         mode: "cancel",
         suppress: expectedSuppress,
         providerResult: {
-          status: "cancelled",
-          message: "Cancelled the active OpenClaw run.",
+          status: "cancelled_by_user",
+          message: "The user stopped this task. Do not retry unless the user asks again.",
         },
       });
       expect(abortEmbeddedRun).toHaveBeenCalledTimes(1);
       expect(bridge.submitToolResult).toHaveBeenCalledWith(
         "call-1",
         {
-          status: "cancelled",
-          message: "Cancelled the active OpenClaw run.",
+          status: "cancelled_by_user",
+          message: "The user stopped this task. Do not retry unless the user asks again.",
         },
         expectedOptions,
       );
@@ -2727,7 +2729,10 @@ describe("talk realtime gateway relay", () => {
         expect(await cancellation).toMatchObject({
           ok: true,
           mode: "cancel",
-          providerResult: { status: "cancelled", message: "Cancelled the active OpenClaw run." },
+          providerResult: {
+            status: "cancelled_by_user",
+            message: "The user stopped this task. Do not retry unless the user asks again.",
+          },
         });
         expect(abortEmbeddedRun).toHaveBeenCalledTimes(1);
         expect(bridge.submitToolResult).not.toHaveBeenCalled();
@@ -2872,11 +2877,9 @@ describe("talk realtime gateway relay", () => {
           captured.request?.onClose?.(ending === "provider-error" ? "error" : "completed");
         }
         expect(close).toHaveBeenCalledExactlyOnceWith({
-          disposition: ending === "explicit-abort" || ending === "client-stop" ? "abort" : "detach",
+          disposition: ending === "explicit-abort" ? "abort" : "detach",
         });
-        expect(abortController.signal.aborted).toBe(
-          ending === "explicit-abort" || ending === "client-stop",
-        );
+        expect(abortController.signal.aborted).toBe(ending === "explicit-abort");
         expect(relaySessions.has(session.relaySessionId)).toBe(false);
         expect(() =>
           resolveTalkVoiceSession({
@@ -2899,7 +2902,8 @@ describe("talk realtime gateway relay", () => {
   it.each([
     {
       name: "expires",
-      aborts: true,
+      aborts: false,
+      removes: true,
       close: (session: { relaySessionId: string }) => {
         const relay = relaySessions.get(session.relaySessionId);
         if (!relay) {
@@ -2912,6 +2916,7 @@ describe("talk realtime gateway relay", () => {
     {
       name: "fails connection ownership",
       aborts: false,
+      removes: false,
       close: (session: { relaySessionId: string }) => {
         void sendRelayAudio({
           ...relayTarget(session, "conn-other"),
@@ -2921,19 +2926,16 @@ describe("talk realtime gateway relay", () => {
     },
   ])(
     "settles relay control without crossing ownership when the relay $name",
-    async ({ close, aborts }) => {
+    async ({ close, aborts, removes }) => {
       const fixture = await createAbortableRelayRunFixture();
 
       expect(() => close(fixture.session)).toThrow("Unknown realtime relay session");
 
       expect(fixture.abortController.signal.aborted).toBe(aborts);
-      if (aborts) {
-        expectChatAbortPayload(fixture.broadcast, "relay-closed");
-        expectNodeAbortPayload(fixture.nodeSendToSession);
-      } else {
-        expect(fixture.broadcast).not.toHaveBeenCalled();
-        expect(fixture.nodeSendToSession).not.toHaveBeenCalled();
-        expect(relaySessions.has(fixture.session.relaySessionId)).toBe(true);
+      expect(fixture.broadcast).not.toHaveBeenCalled();
+      expect(fixture.nodeSendToSession).not.toHaveBeenCalled();
+      expect(relaySessions.has(fixture.session.relaySessionId)).toBe(!removes);
+      if (!removes) {
         expect(() => transmitAudio(fixture.session, "AQI=")).not.toThrow();
         expect(fixture.abortController.signal.aborted).toBe(false);
       }

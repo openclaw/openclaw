@@ -6,6 +6,7 @@ import { loadSettings, type UiSettings } from "../../app/settings.ts";
 import { t } from "../../i18n/index.ts";
 import { formatUiError } from "../../lib/format-error.ts";
 import { GatewaySpeechPlayback } from "../../lib/speech-playback.ts";
+import { adoptStartedChatRun } from "./run-lifecycle.ts";
 import {
   createRealtimeTalkConversationState,
   continueRealtimeTalkConversation,
@@ -26,6 +27,8 @@ export type ChatRealtimeState = {
   lastError?: string | null;
   chatError?: string | null;
   realtimeTalk: ChatRealtimeOwner;
+  /** Makes an accepted Talk consult run the chat's active run so Stop response can cancel it. */
+  adoptTalkConsultRun?: (run: { runId: string; sessionKey: string }) => void;
   resetRealtimeTalkConversation: () => void;
   toggleRealtimeTalk: () => Promise<void>;
   toggleRealtimeTalkCamera: () => Promise<void>;
@@ -91,6 +94,16 @@ class ChatRealtimeOwner {
 
 export function createInitialChatRealtimeState(): Pick<ChatRealtimeState, "realtimeTalk"> {
   return { realtimeTalk: new ChatRealtimeOwner() };
+}
+
+/** Talk consult runs start outside the composer; adopt one so Stop response can cancel it. */
+export function adoptTalkConsultRun(
+  host: Parameters<typeof adoptStartedChatRun>[0] & { sessionKey: string },
+  run: { runId: string; sessionKey: string },
+): void {
+  if (host.sessionKey === run.sessionKey && !host.chatRunId) {
+    adoptStartedChatRun(host, run.runId, Date.now());
+  }
 }
 
 export function stopChatRealtimeTalk(
@@ -311,7 +324,7 @@ export function attachChatRealtimeActions(
       state.realtimeTalk.snapshot.realtimeTalkSession ||
       state.realtimeTalk.snapshot.realtimeTalkActive
     ) {
-      stopChatRealtimeTalk(state, { disposition: "abort" });
+      stopChatRealtimeTalk(state);
       return;
     }
     await startRealtimeTalk();

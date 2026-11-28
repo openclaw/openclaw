@@ -195,9 +195,83 @@ describe("RealtimeTalkSession consult handoff", () => {
         agentId: "voice",
         runId: "run-1",
       });
-      expect(submit).toHaveBeenCalledOnce();
+      expect(submit).toHaveBeenCalledExactlyOnceWith("call-1", {
+        status: "cancelled_by_user",
+        message: "The user stopped this task. Do not retry unless the user asks again.",
+      });
     },
   );
+
+  it("reports the accepted consult run so the chat can adopt it, even when the ack arrives after detach", async () => {
+    const pendingAcknowledgement = createDeferred<ReturnType<typeof consultRunResult>>();
+    const request = vi.fn(async (method: string) => {
+      if (method === "talk.client.toolCall") {
+        return await pendingAcknowledgement.promise;
+      }
+      throw new Error(`unexpected request: ${method}`);
+    });
+    const onConsultRun = vi.fn();
+    const detachController = new AbortController();
+    const consult = submitRealtimeTalkConsult({
+      ctx: consultContext(
+        { request },
+        { sessionKey: "agent:main:main", callbacks: { onConsultRun } },
+      ),
+      callId: "call-1",
+      args: { question: "Keep working" },
+      submit: vi.fn(),
+      detachSignal: detachController.signal,
+    });
+    await vi.waitFor(() => expect(request).toHaveBeenCalledOnce());
+    expect(onConsultRun).not.toHaveBeenCalled();
+
+    detachController.abort();
+    pendingAcknowledgement.resolve(consultRun);
+    await consult;
+
+    expect(onConsultRun).toHaveBeenCalledExactlyOnceWith({
+      runId: "run-1",
+      sessionKey: "agent:main:main",
+    });
+  });
+
+  it("detaches a direct consult on transport teardown without calling chat.abort even on late ack", async () => {
+    const pendingAcknowledgement = createDeferred<{
+      runId: string;
+      agentId: string;
+      agentSessionKey: string;
+    }>();
+    const request = vi.fn(async (method: string) => {
+      if (method === "talk.client.toolCall") {
+        return await pendingAcknowledgement.promise;
+      }
+      throw new Error(`unexpected request: ${method}`);
+    });
+    const submit = vi.fn();
+    const onStatus = vi.fn();
+    const detachController = new AbortController();
+
+    const consult = submitRealtimeTalkConsult({
+      ctx: consultContext({ request }, { sessionKey: "main", callbacks: { onStatus } }),
+      callId: "call-1",
+      args: { question: "Keep working" },
+      submit,
+      detachSignal: detachController.signal,
+    });
+    await vi.waitFor(() => expect(request).toHaveBeenCalledOnce());
+
+    detachController.abort();
+    pendingAcknowledgement.resolve({
+      runId: "run-1",
+      agentId: "voice",
+      agentSessionKey: "agent:voice:home",
+    });
+    await consult;
+
+    expect(request).not.toHaveBeenCalledWith("chat.abort", expect.anything());
+    expect(submit).not.toHaveBeenCalled();
+    expect(onStatus).not.toHaveBeenCalledWith("listening");
+  });
 
   it.each([
     {
@@ -333,7 +407,7 @@ describe("RealtimeTalkSession consult handoff", () => {
       sessionKey: "agent:main:main",
       active: true,
       aborted: true,
-      message: "Cancelled the active OpenClaw run.",
+      message: "The user stopped this task. Do not retry unless the user asks again.",
       speak: true,
       show: true,
       suppress: false,

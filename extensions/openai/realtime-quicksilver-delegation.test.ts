@@ -498,3 +498,53 @@ it("suppresses host cancellation and stops accepting work after teardown", async
   delegate(controller, "delegation-late", "late task");
   expect(runAgentConsult).toHaveBeenCalledOnce();
 });
+
+it.each(["user Stop", "detach", "close", "supersede"] as const)(
+  "projects the exact user-stop outcome: %s",
+  async (disposition) => {
+    const result = deferred<{ text: string }>();
+    const replacement = deferred<{ text: string }>();
+    const runAgentConsult = vi
+      .fn<ConsultRunner>()
+      .mockReturnValueOnce(result.promise)
+      .mockReturnValue(replacement.promise);
+    const { controller, socket } = createDelegationHarness({
+      model: "gpt-live-1",
+      runAgentConsult,
+    });
+    const start = (id: string, text: string) => {
+      controller.handleEvent({ kind: "transcript-delta", role: "user", text });
+      delegate(controller, id, text);
+    };
+    start("first", "check the weather");
+    await vi.waitFor(() => expect(runAgentConsult).toHaveBeenCalledOnce());
+    if (disposition === "detach") {
+      controller.beginTranscriptDrain("detach");
+    } else if (disposition === "close") {
+      controller.stop(new Error("session closed"));
+    } else if (disposition === "supersede") {
+      start("replacement", "check the time");
+    }
+    result.reject(
+      Object.assign(new Error("agent run aborted"), {
+        name: "AbortError",
+        code: "OPENCLAW_DIRECT_ABORT",
+        userInitiated: true,
+      }),
+    );
+    await nextEventLoopTurn();
+    controller.stop(new Error("test ended"));
+    replacement.resolve({ text: "" });
+    expect(parseSent(socket)).toEqual(
+      disposition === "user Stop"
+        ? [
+            {
+              type: "session.thinking.append",
+              delegation_id: "first",
+              content: "The user stopped this task. Do not retry unless the user asks again.",
+            },
+          ]
+        : [],
+    );
+  },
+);

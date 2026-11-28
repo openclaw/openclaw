@@ -9,6 +9,7 @@ import { resolveAgentRunCwd } from "../agents/agent-scope-config.js";
 import { resolveSessionAgentId } from "../agents/agent-scope.js";
 import type { RunEmbeddedAgentParams } from "../agents/embedded-agent-runner/run/params.js";
 import type { EmbeddedAgentRunMeta } from "../agents/embedded-agent-runner/types.js";
+import { isUserInitiatedAgentRunAbortReason } from "../agents/run-termination.js";
 import { resolveIngressWorkspaceOverrideForSessionRun } from "../agents/spawned-context.js";
 import { getReplyPayloadMetadata } from "../auto-reply/reply-payload.js";
 import { resolveLoadedSessionThreadInfo } from "../channels/plugins/session-thread-info-loaded.js";
@@ -240,6 +241,9 @@ function assertRealtimeVoiceConsultNotInterrupted(
   // Preserve the run owner's interruption before projecting partial or empty text
   // into speech. A timeout must remain a failure, not a silent cancellation.
   if (classification === "cancellation") {
+    if (isUserInitiatedAgentRunAbortReason(abortSignal.reason)) {
+      abortSignal.throwIfAborted();
+    }
     throw new DOMException("Realtime voice agent consult cancelled", "AbortError");
   }
   if (classification === "timeout") {
