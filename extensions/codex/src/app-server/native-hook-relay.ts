@@ -343,6 +343,7 @@ export function createCodexNativeHookRelay(params: {
                     turnId: invocation.turnId,
                     itemId: invocation.toolUseId,
                     target: targetThreadId,
+                    returnsSubmissionId: toolName === CODEX_NATIVE_SUBAGENT_SUBMISSION_HOOK_TOOL,
                     readQualification: admission.readQualification,
                     signal: preparation.signal,
                     assertCurrent: preparation.assertCurrent,
