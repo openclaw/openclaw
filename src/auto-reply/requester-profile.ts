@@ -51,6 +51,17 @@ class RequesterProfile {
       : undefined;
   }
 
+  static copy(value: unknown, carrier: object): void {
+    if (
+      typeof value === "object" &&
+      value !== null &&
+      #profile in value &&
+      "id" in value.#profile
+    ) {
+      Object.assign(carrier, { [REQUESTER_PROFILE]: value });
+    }
+  }
+
   static transferUnlinked(context: MsgContext, carrier: object): void {
     const value: unknown = Reflect.get(context, REQUESTER_PROFILE);
     const identity = RequesterProfile.read(value, context);
@@ -144,4 +155,9 @@ export function readAdmittedUnlinkedChannelRequester(
   run: OperationalRunInstanceRef | undefined,
 ): (() => void) | undefined {
   return run ? unlinkedChannelRuns.get(run) : undefined;
+}
+
+/** Preserve the ingress binding on host-owned projections; currency is checked at consumption. */
+export function copyTransferredRequesterProfile(source: object, carrier: object): void {
+  RequesterProfile.copy(Reflect.get(source, REQUESTER_PROFILE), carrier);
 }

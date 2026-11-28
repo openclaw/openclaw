@@ -310,6 +310,7 @@ async function withPreparedEmbeddedRunToolAuthorityOwned<T, Attempt extends Tool
       {
         agentId,
         sessionKey,
+        sessionId,
         operationalRunInstance: instance,
         personalToolParticipants,
         webchatMcpRequester: captureRunMcpRequester({
