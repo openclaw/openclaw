@@ -50,7 +50,8 @@ fi
 
 list_sessions() {
   local label="$1"; shift
-  local tmux_cmd=(tmux "$@")
+  # Non-UTF-8 tmux clients sanitize the tabs used to separate fields.
+  local tmux_cmd=(tmux -u "$@")
 
   local session_format=$'#{session_name}\t#{session_attached}\t#{t:session_created}'
 
