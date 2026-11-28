@@ -57,6 +57,7 @@ export function ask(ui: Page, record: AskRecord, correct = false, candidate?: Ca
   });
   let sending = false;
   let createdKey: string | undefined;
+  const requestText = () => `${prompt.value.trim()}\n\n${recordReference(record, candidate)}`;
   const openSession = (sessionKey: string) => {
     dismiss();
     void host.sessions.refresh().catch(() => {});
@@ -78,7 +79,7 @@ export function ask(ui: Page, record: AskRecord, correct = false, candidate?: Ca
     try {
       const created = await host.request<CreatedSession>("sessions.create", {
         agentId: s.agentId || undefined,
-        message: `${prompt.value.trim()}\n\n${recordReference(record, candidate)}`,
+        message: requestText(),
       });
       if (!created?.key) {
         feedback.textContent = t("knowledge.ask.notStarted");
@@ -87,7 +88,22 @@ export function ask(ui: Page, record: AskRecord, correct = false, candidate?: Ca
       if (created.runError) {
         const sessionKey = (createdKey = created.key);
         feedback.textContent = t("knowledge.ask.notSent");
-        const open = button(t("knowledge.ask.openSession"), () => openSession(sessionKey));
+        const open = button(t("knowledge.ask.copyAndOpen"), () => {
+          void copyAndOpen();
+        });
+        async function copyAndOpen() {
+          open.disabled = true;
+          try {
+            await navigator.clipboard.writeText(requestText());
+          } catch {
+            feedback.textContent = t("knowledge.ask.copyFailed");
+            open.disabled = false;
+            return;
+          }
+          if (panel.open) {
+            openSession(sessionKey);
+          }
+        }
         send.replaceWith(open);
         open.focus();
         return;

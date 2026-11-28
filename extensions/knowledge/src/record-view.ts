@@ -65,19 +65,7 @@ export async function showDetail(
   pages = 1,
   waitForPanels = false,
 ) {
-  const {
-    s,
-    feature,
-    live,
-    errorText,
-    failure,
-    empty,
-    agentName,
-    askLabel,
-    open,
-    load,
-    renderToolbar,
-  } = ui;
+  const { s, feature, live, failure, empty, agentName, askLabel, open, load, renderToolbar } = ui;
   const pending: Promise<unknown>[] = [];
   const result = await feature.invoke("record_detail", {
     id,
@@ -430,7 +418,6 @@ export async function showDetail(
                 nextEvidenceOffset: null,
               },
               () => live(n),
-              errorText,
             ),
           );
         } else {
@@ -556,7 +543,7 @@ export async function showDetail(
     const originals = el("details", undefined, "knowledge-retained-originals");
     originals.append(
       el("summary", t("knowledge.record.originals")),
-      evidenceView(feature, result, () => live(n), errorText),
+      evidenceView(feature, result, () => live(n)),
     );
     filePanel.append(originals);
   }

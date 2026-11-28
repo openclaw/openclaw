@@ -90,7 +90,7 @@ export function renderClaim(
   aboutId?: string,
   detail?: Detail,
 ) {
-  const { s, feature, evidenceLoaders, live, errorText, failure, agentName, open } = ui;
+  const { s, feature, evidenceLoaders, live, failure, agentName, open } = ui;
   const standalone = Boolean(detail);
   const record = result.record!,
     card = el(
@@ -321,7 +321,6 @@ export function renderClaim(
           feature,
           loaded,
           alive,
-          errorText,
           undefined,
           record.lifecycle === "active" ? correct : undefined,
           openClaim,

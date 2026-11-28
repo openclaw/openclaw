@@ -10,7 +10,7 @@ export default {
     creating: "{store} is being created",
     creatingBody: "This takes a moment. It isn’t an empty store yet.",
     openFailed: "Couldn’t open this store",
-    openFailedBody: "Knowledge couldn’t open this store. Its assignment hasn’t changed.",
+    openFailedBody: "Your store assignment hasn’t changed.",
     filesMissing: "Its files or database are missing.",
     assignments: "Agent store assignments",
     store: "Knowledge store",

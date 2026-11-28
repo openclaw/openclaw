@@ -74,6 +74,7 @@ export function renderScribeRunHistory(
   runs: ScribeRun[],
   basePath: string,
   runHistoryFailed: boolean,
+  redact: (text: string) => string,
 ) {
   const { job, session } = snapshot;
   const history = el("section", undefined, "scribe-history");
@@ -88,11 +89,13 @@ export function renderScribeRunHistory(
   for (const run of runs) {
     const line = el("div", undefined, "scribe-run");
     const end = el("span", undefined, "scribe-run-end");
-    if (runFailed(run)) {
+    const failed = runFailed(run);
+    if (failed) {
       end.append(statusChip("failing"));
     }
     // A run in its own session keeps its chat history there, not in the scribe’s parent session;
     // the Automations page shows it, also after that session is cleaned up.
+    let summary: string | HTMLElement = failed ? "" : runText(run);
     if (job && run.runId && run.sessionKey && run.sessionKey !== session?.key) {
       const params = new URLSearchParams({ job: job.id, run: run.runId });
       const href = `${basePath}/automations?${params}`;
@@ -103,10 +106,26 @@ export function renderScribeRunHistory(
           "knowledge-quiet knowledge-small",
         ),
       );
+    } else if (failed) {
+      const diagnostic = run.error ? redact(run.error).trim() : "";
+      if (diagnostic) {
+        const disclosure = el("details");
+        disclosure.append(
+          el("summary", t("knowledge.scribes.runs.showDetails")),
+          el("p", diagnostic),
+        );
+        summary = disclosure;
+      } else {
+        summary = t(
+          run.status === "skipped"
+            ? "knowledge.scribes.runs.skippedIncomplete"
+            : "knowledge.scribes.runs.noDetails",
+        );
+      }
     }
     line.append(
       el("time", when(run.runAtMs ?? run.ts)),
-      el("span", runFailed(run) ? "" : runText(run)),
+      typeof summary === "string" ? el("span", summary) : summary,
       end,
     );
     rows.append(line);

@@ -146,7 +146,8 @@ export default {
       notStarted: "Couldn’t start the session. Your request is still here.",
       notConfirmed: "Couldn’t confirm the session started. Your request is still here.",
       notSent: "The session started, but OpenClaw couldn’t confirm it received your request.",
-      openSession: "Open session",
+      copyAndOpen: "Copy request and open session",
+      copyFailed: "Couldn’t copy your request. It’s still here.",
     },
     loading: {
       record: "Opening record…",

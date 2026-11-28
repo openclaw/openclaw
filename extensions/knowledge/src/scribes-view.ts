@@ -709,6 +709,9 @@ function detail(
   } else if (job && snapshot.runMessage?.state === "differs") {
     root.append(updateNotice(ui, snapshot, job, agentId, snapshot.runMessage.current));
   }
-  root.append(grid, renderScribeRunHistory(snapshot, runs, host.basePath, runHistoryFailed));
+  root.append(
+    grid,
+    renderScribeRunHistory(snapshot, runs, host.basePath, runHistoryFailed, ui.errorText),
+  );
   return root;
 }

@@ -18,6 +18,7 @@ beforeAll(() => {
 
 afterEach(() => {
   document.body.replaceChildren();
+  vi.unstubAllGlobals();
 });
 
 // Mounts the dialog against a fake host whose sessions.create result is supplied by the test.
@@ -64,6 +65,10 @@ it("starts a new chat with the edited request and the record reference, then ope
 });
 
 it("keeps an unsent request and opens the same session without creating another", async () => {
+  const copy = vi
+    .fn(async (_text: string) => {})
+    .mockRejectedValueOnce(new Error("Clipboard denied"));
+  vi.stubGlobal("navigator", { clipboard: { writeText: copy } });
   const { root, prompt, askButton, request, open } = mount(
     { ok: true, key: "agent:main:new", runError: { message: "model unavailable" } },
     { correct: true },
@@ -78,9 +83,20 @@ it("keeps an unsent request and opens the same session without creating another"
   expect(open).not.toHaveBeenCalled();
   expect(prompt.value).toMatch(/The date moved\.$/);
   expect(root.textContent).not.toContain("model unavailable");
-  [...root.querySelectorAll("button")]
-    .find((button) => button.textContent === "Open session")!
-    .click();
+  const recover = [...root.querySelectorAll("button")].find(
+    (button) => button.textContent === "Copy request and open session",
+  )!;
+  recover.click();
+  await vi.waitFor(() => expect(root.textContent).toContain("Couldn’t copy your request."));
+  expect(open).not.toHaveBeenCalled();
+  expect(prompt.value.endsWith("The date moved.")).toBe(true);
+  recover.click();
+  await vi.waitFor(() => expect(open).toHaveBeenCalledOnce());
+  expect(copy.mock.lastCall?.[0]).toBe(
+    [prompt.value, "", "Record: Birdclaw", "ID: rec-1", "Revision: 4", "Hash: " + record.hash].join(
+      String.fromCharCode(10),
+    ),
+  );
   expect(request).toHaveBeenCalledOnce();
   expect(open).toHaveBeenCalledWith({ sessionKey: "agent:main:new", agentId: "main" });
 });

@@ -25,7 +25,6 @@ export function evidenceView(
   feature: FeatureClient<FullOutputContract>,
   result: Detail,
   alive: () => boolean,
-  redact: (s: string) => string,
   expansion = { count: 20 },
   correction?: HTMLButtonElement,
   lead?: HTMLButtonElement,
@@ -239,10 +238,18 @@ export function evidenceView(
   let offset = result.nextEvidenceOffset;
   if (offset != null) {
     const more = el("button", t("knowledge.evidence.more"));
+    const notice = el("div");
+    notice.setAttribute("role", "status");
+    notice.className = "knowledge-error";
+    const explain = (key: string) => {
+      notice.textContent = t(key);
+      more.before(notice);
+    };
     more.type = "button";
     root.append(more);
     const loadMore = async () => {
       more.disabled = true;
+      notice.remove();
       expansion.count = Math.max(expansion.count, offset! + 20);
       try {
         const page = await feature.invoke("record_detail", {
@@ -256,7 +263,9 @@ export function evidenceView(
           return;
         }
         if (page.record?.hash !== hash) {
-          throw new Error(t("knowledge.evidence.recordChanged"));
+          explain("knowledge.evidence.recordChanged");
+          more.remove();
+          return;
         }
         page.evidence?.forEach(append);
         offset = page.nextEvidenceOffset;
@@ -268,8 +277,10 @@ export function evidenceView(
             await loadMore();
           }
         }
-      } catch (error) {
-        root.append(el("p", redact(String(error))));
+      } catch {
+        if (alive()) {
+          explain("knowledge.evidence.moreFailed");
+        }
       } finally {
         more.disabled = false;
       }

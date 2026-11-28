@@ -619,16 +619,22 @@ it("reports a skipped run that could not complete as failed", async () => {
         ts: 1_793_000_000_000,
         status: "skipped",
         completionStatus: "failed",
-        error: "agent tool caller authority is no longer active",
+        error: "agent tool caller authority is no longer active: synthetic-private-detail",
       },
     ],
   });
+  ui.errorText = (error) => String(error).replace("synthetic-private-detail", "[redacted]");
   ui.s.scribe = "claim-consolidation";
   const view = await render();
   expect(view.textContent).toContain("1 of 1 recent run failed");
-  expect(view.querySelector(".scribe-run")?.textContent).not.toContain(
-    "agent tool caller authority is no longer active",
+  const details = view.querySelector<HTMLDetailsElement>(".scribe-run details")!;
+  expect(details.open).toBe(false);
+  expect(details.querySelector("summary")?.textContent).toBe("Show details");
+  expect(details.querySelector("p")?.textContent).toBe(
+    "agent tool caller authority is no longer active: [redacted]",
   );
+  expect(view.textContent).not.toContain("synthetic-private-detail");
+  expect(view.querySelector(".scribe-run button")).toBeNull();
   expect(view.querySelector(".scribe-run .scribe-chip-warn")?.textContent).toBe("Failing");
 });
 
