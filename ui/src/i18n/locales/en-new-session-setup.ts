@@ -230,6 +230,7 @@ const enNewSessionSetup = {
     autoDeviceInfo: "About automatic device selection",
     autoDeviceScope: "Connected devices only",
     restoringPreferences: "Restoring your last session setup…",
+    savedProjectLookupFailed: "Your saved project didn’t load. Choose a workspace.",
     checkingPlace: "Checking the selected device…",
     agentsUnavailable:
       "No agents are available on this Gateway. Ask an admin to add one before starting a session.",

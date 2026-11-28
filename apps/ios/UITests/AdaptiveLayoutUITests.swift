@@ -94,6 +94,10 @@ final class AdaptiveLayoutUITests: XCTestCase {
         self.capture("chat-toolbar-current-window", in: app)
         try self.assertToolbarPainted([showSidebar, actions], in: app.windows.firstMatch)
         actions.tap()
+        let pin = app.buttons["Pin"].firstMatch
+        XCTAssertTrue(pin.waitForExistence(timeout: 5))
+        XCTAssertTrue(pin.isHittable)
+        XCTAssertTrue(app.windows.firstMatch.frame.contains(pin.frame))
         input.tap()
         showSidebar.tap()
         let gatewaySettings = app.buttons["RootTabs.Sidebar.GatewaySettings"].firstMatch

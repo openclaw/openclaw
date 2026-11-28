@@ -158,6 +158,8 @@ enum SessionStatusScope: String, CaseIterable {
 }
 
 struct CommandSessionsScreen: View {
+    private static let interGroupSpacing: CGFloat = 20
+
     @Environment(NodeAppModel.self) private var appModel
     @Environment(\.dismiss) private var dismiss
     @Environment(\.dynamicTypeSize) private var dynamicTypeSize
@@ -165,13 +167,13 @@ struct CommandSessionsScreen: View {
     let sidebarModel: RootSidebarModel
     let headerSidebarAction: OpenClawSidebarHeaderAction?
     let openChat: () -> Void
+    let openSearch: () -> Void
 
     /// Archived rows are not in the live roster; this screen reads them when that filter is on.
     @State private var archived: [OpenClawChatSessionEntry] = []
     @State private var isLoadingArchived = false
     @State private var archiveLoadFailed = false
     /// Notice for a partially loaded archive; rendered alongside the retained rows, never instead of them.
-    @State private var actionErrorText: String?
     @State private var partialLoadText: String?
     /// Bumped by the partial-load retry button; part of `refreshID` so `.task(id:)` refetches.
     @State private var refreshNonce = 0
@@ -211,7 +213,9 @@ struct CommandSessionsScreen: View {
                             : String(localized: "Connect to OpenClaw.")))
                 } else {
                     ForEach(sections) { section in
-                        self.sectionView(section)
+                        self.sectionView(
+                            section,
+                            topPadding: section.id == sections.first?.id ? 8 : Self.interGroupSpacing)
                     }
                 }
             }
@@ -329,6 +333,18 @@ struct CommandSessionsScreen: View {
     private var bottomBar: some View {
         GlassEffectContainer(spacing: 8) {
             HStack(spacing: 8) {
+                Button(action: self.openSearch) {
+                    Image(systemName: "magnifyingglass")
+                        .font(.system(size: 17, weight: .medium))
+                        .foregroundStyle(OpenClawBrand.textStrong)
+                        .frame(width: 48, height: 48)
+                        .contentShape(Circle())
+                }
+                .buttonStyle(.plain)
+                .glassEffect(.regular.interactive(), in: Circle())
+                .accessibilityLabel(String(localized: "Search"))
+                .accessibilityIdentifier("Sessions.Search")
+
                 Spacer(minLength: 8)
 
                 Button {
@@ -402,7 +418,7 @@ struct CommandSessionsScreen: View {
     }
 
     @ViewBuilder
-    private func sectionView(_ section: SessionListSection) -> some View {
+    private func sectionView(_ section: SessionListSection, topPadding: CGFloat) -> some View {
         switch section.id {
         case let .group(group):
             let collapsed = self.collapsedBinding(group)
@@ -417,7 +433,7 @@ struct CommandSessionsScreen: View {
                     title: group.title,
                     isCollapsed: collapsed,
                     id: "Sessions.Group.\(group.rawValue)")
-                    .padding(.top, 8)
+                    .padding(.top, topPadding)
             }
         case let .category(name):
             Section {
@@ -433,7 +449,7 @@ struct CommandSessionsScreen: View {
                     refresh: self.refreshSessions,
                     openSession: self.openSessionKey,
                     accessory: { EmptyView() })
-                    .padding(.top, 8)
+                    .padding(.top, topPadding)
             }
         }
     }
@@ -733,7 +749,11 @@ struct CommandSessionsScreen: View {
                 await self.refreshSessions()
                 self.openSessionKey(key)
             } catch {
-                self.actionErrorText = error.localizedDescription
+                self.appModel.toasts.post(.failure(
+                    String(
+                        format: String(localized: "Couldn’t fork “%@”."),
+                        SessionPresentation.title(session)),
+                    retry: { self.forkSession(session) }))
             }
         }
     }
@@ -750,7 +770,7 @@ struct CommandSessionsScreen: View {
                 }
                 await self.refreshSessions()
             } catch {
-                self.actionErrorText = error.localizedDescription
+                // The row's action already said what failed, in a toast with Try again.
             }
         }
     }

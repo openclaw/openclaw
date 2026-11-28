@@ -111,7 +111,6 @@ export type ChatState = StreamCausalBoundaryState & {
   settings?: {
     chatPersistCommentary?: boolean;
     chatInlineCommands?: boolean;
-    compactSessionOpening?: boolean;
     gatewayUrl?: string | null;
   };
   sessions?: Partial<SessionCapability>;

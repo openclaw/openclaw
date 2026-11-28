@@ -88,10 +88,18 @@ type DoctorLintStateRunner = <T>(run: () => Promise<T>) => Promise<T>;
 const RUNTIME_TOOL_SCHEMA_CHECK_ID = "core/doctor/runtime-tool-schemas";
 const PROJECT_CLONE_SHAPE_CHECK_ID = "core/doctor/project-clone-shape";
 const SKILLS_READINESS_CHECK_ID = "core/doctor/skills-readiness";
-const AUTH_PROFILE_CHECK_ID = "core/doctor/auth-profiles";
 const HEARTBEAT_SOURCE_CHECK_IDS = new Set([
   "core/doctor/heartbeat-cadence-migration",
   "core/doctor/heartbeat-scratch-migration",
+]);
+// Auth profiles and client credentials are secret stores bound to the source state file's
+// identity: a private copy can never prove their migration, so checks that read them (device
+// pairing, and gateway health through its device-identity handshake) read the source state.
+const SOURCE_STATE_CHECK_IDS = new Set([
+  "core/doctor/auth-profiles",
+  "core/doctor/device-pairing",
+  "core/doctor/gateway-health",
+  ...HEARTBEAT_SOURCE_CHECK_IDS,
 ]);
 
 /** Only the rehearsal worker reports before disposal and inherits its CLI's budget anchor. */
@@ -504,8 +512,7 @@ async function executeDoctorLint(
           ) {
             return inspectPrivate(detect);
           }
-          // Source-bound loaders must keep the launch selectors of their retained read owner.
-          return check.id === AUTH_PROFILE_CHECK_ID || HEARTBEAT_SOURCE_CHECK_IDS.has(check.id)
+          return SOURCE_STATE_CHECK_IDS.has(check.id)
             ? checkCtx.runWithSourceState(detect)
             : detect();
         },
