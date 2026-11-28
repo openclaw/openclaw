@@ -1,5 +1,6 @@
 import { expect, it } from "vitest";
-import { GatewayStateOwnerContentionError } from "../infra/gateway-state-owner.js";
+import { GatewayLockNamespaceError } from "../infra/gateway-lock-payload.js";
+import { GatewayStateOwnerContentionError } from "../infra/gateway-state-owner-errors.js";
 import { StartupMaintenanceRequiredError } from "../infra/startup-maintenance-required.js";
 import { DoctorUnreadableStateDatabaseError } from "../infra/state-repair-message.js";
 import { OpenClawDatabaseSchemaPreflightError } from "../state/openclaw-database-preflight.messages.js";
@@ -15,6 +16,19 @@ it("preserves a worker migration refusal and its recovery command", () => {
     "[openclaw] Command failed",
     `[openclaw] Reason: ${cause.message}`,
   ]);
+});
+
+it("shows Gateway ownership recovery when Matrix startup cannot verify the holder", () => {
+  const cause = new GatewayLockNamespaceError({ pid: 4242, host: "fixture-holder" });
+  const error = new Error("Startup metadata inspection failed", { cause });
+  expect(
+    formatCliFailureLines({
+      title: "The CLI command failed.",
+      error,
+      argv: ["node", "openclaw", "matrix", "doctor", "recover"],
+      env: {},
+    }),
+  ).toEqual(["[openclaw] The CLI command failed.", `[openclaw] Reason: ${cause.message}`]);
 });
 
 it.each([
