@@ -268,6 +268,7 @@ describe("resolvePluginWebSearchProviders", () => {
       EXPECTED_BUNDLED_RUNTIME_WEB_SEARCH_PROVIDER_KEYS,
     );
     expect(loadOpenClawPluginsMock).toHaveBeenCalledTimes(1);
+    expectScopedWebSearchCandidates(["brave"]);
   });
 
   it("loads only the selected runtime when a bundled search tool is created", () => {
@@ -411,12 +412,6 @@ describe("resolvePluginWebSearchProviders", () => {
     const loaderParams = requireLastCallFirstArg(loadOpenClawPluginsMock, "loadOpenClawPlugins");
     const plugins = requirePluginsConfig(loaderParams);
     expect(plugins.allow).toEqual(["brave", "perplexity"]);
-  });
-
-  it("scopes plugin loading to manifest-declared web-search candidates", () => {
-    resolvePluginWebSearchProviders({});
-
-    expectScopedWebSearchCandidates(["brave"]);
   });
 
   it("keeps allowlist web-search provider discovery scoped to the configured allowlist", () => {

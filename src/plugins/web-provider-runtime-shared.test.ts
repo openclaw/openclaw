@@ -10,11 +10,7 @@ import type { WebProviderRuntimeResolution } from "./web-provider-runtime-shared
 const mocks = vi.hoisted(() => ({
   isPluginRegistryLoadInFlight: vi.fn(() => false),
   loadOpenClawPlugins: vi.fn(),
-  resolveCompatibleRuntimePluginRegistry: vi.fn(),
   getLoadedRuntimePluginRegistry: vi.fn(),
-  resolvePluginRegistryLoadCacheKey: vi.fn((options: unknown) => JSON.stringify(options)),
-  resolveRuntimePluginRegistry: vi.fn(),
-  getActivePluginRegistry: vi.fn<() => Record<string, unknown> | null>(() => null),
   getActivePluginRegistryWorkspaceDir: vi.fn(() => undefined),
   buildPluginRuntimeLoadOptions: vi.fn((_values: unknown, overrides?: Record<string, unknown>) => ({
     ...overrides,
@@ -27,12 +23,10 @@ const mocks = vi.hoisted(() => ({
   },
 }));
 
+// mock-isolation: Keep provider registry loading synthetic; each case supplies its registry.
 vi.mock("./loader.js", () => ({
   isPluginRegistryLoadInFlight: mocks.isPluginRegistryLoadInFlight,
   loadOpenClawPlugins: mocks.loadOpenClawPlugins,
-  resolveCompatibleRuntimePluginRegistry: mocks.resolveCompatibleRuntimePluginRegistry,
-  resolvePluginRegistryLoadCacheKey: mocks.resolvePluginRegistryLoadCacheKey,
-  resolveRuntimePluginRegistry: mocks.resolveRuntimePluginRegistry,
 }));
 
 vi.mock("./active-runtime-registry.js", async (importOriginal) => ({
@@ -40,8 +34,8 @@ vi.mock("./active-runtime-registry.js", async (importOriginal) => ({
   getLoadedRuntimePluginRegistry: mocks.getLoadedRuntimePluginRegistry,
 }));
 
+// mock-isolation: Keep workspace lookup independent of process-global runtime registry state.
 vi.mock("./runtime.js", () => ({
-  getActivePluginRegistry: mocks.getActivePluginRegistry,
   getActivePluginRegistryWorkspaceDir: mocks.getActivePluginRegistryWorkspaceDir,
 }));
 
@@ -84,16 +78,8 @@ describe("web-provider-runtime-shared", () => {
     mocks.isPluginRegistryLoadInFlight.mockReset();
     mocks.isPluginRegistryLoadInFlight.mockReturnValue(false);
     mocks.loadOpenClawPlugins.mockReset();
-    mocks.resolveCompatibleRuntimePluginRegistry.mockReset();
     mocks.getLoadedRuntimePluginRegistry.mockReset();
     mocks.getLoadedRuntimePluginRegistry.mockReturnValue(undefined);
-    mocks.resolvePluginRegistryLoadCacheKey.mockReset();
-    mocks.resolvePluginRegistryLoadCacheKey.mockImplementation((options: unknown) =>
-      JSON.stringify(options),
-    );
-    mocks.resolveRuntimePluginRegistry.mockReset();
-    mocks.getActivePluginRegistry.mockReset();
-    mocks.getActivePluginRegistry.mockReturnValue(null);
     mocks.getActivePluginRegistryWorkspaceDir.mockReset();
     mocks.getActivePluginRegistryWorkspaceDir.mockReturnValue(undefined);
     mocks.buildPluginRuntimeLoadOptions.mockReset();
