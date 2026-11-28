@@ -275,36 +275,6 @@ describe("recoverEmbeddedRunAttempt", () => {
       );
     },
   );
-  it.each(
-    outputLimitScenarios.flatMap((scenario) =>
-      [true, false].map((noTools) => ({ scenario, noTools })),
-    ),
-  )(
-    "continues output-limited work without replay (no tools=$noTools)",
-    async ({ scenario, noTools }) => {
-      const fixture = await recoverAfterTransportDrop({
-        ...scenario,
-        noTools,
-        preToolText: noTools ? undefined : "The change is saved. I am checking its results.",
-      });
-
-      expect(fixture.recovery).toMatchObject({ action: "retry", lastRetryFailoverReason: null });
-      expect(fixture.markOwnedTranscriptRetry).toHaveBeenCalledTimes(2);
-      expect(fixture.continueFromCurrentTranscript).toHaveBeenCalledExactlyOnceWith({
-        includeToolFailureInstruction: false,
-        messages: undefined,
-      });
-      expect(fixture.failoverRetryController.transientRetryCount).toBe(1);
-      expectNoProfileFailure(fixture);
-      expect(fixture.onAgentEvent).toHaveBeenCalledWith(
-        expect.objectContaining({
-          stream: "run_status",
-          data: expect.objectContaining({ phase: "retrying", reason: "output_limit" }),
-        }),
-      );
-    },
-  );
-
   it.each([outputLimitScenario, emptyLengthScenario])(
     "does not bypass the output-limit budget through empty-error retries",
     async (scenario) => {
@@ -323,9 +293,9 @@ describe("recoverEmbeddedRunAttempt", () => {
   );
 
   it.each(
-    outputLimitScenarios
-      .slice(0, 2)
-      .flatMap((scenario) => [true, false].map((noTools) => ({ scenario, noTools }))),
+    outputLimitScenarios.flatMap((scenario) =>
+      [true, false].map((noTools) => ({ scenario, noTools })),
+    ),
   )(
     "allows only one output-limit continuation after progress (no tools=$noTools)",
     async ({ scenario, noTools }) => {
@@ -340,6 +310,7 @@ describe("recoverEmbeddedRunAttempt", () => {
       expect(fixture.continueFromCurrentTranscript).toHaveBeenCalledExactlyOnceWith({
         includeToolFailureInstruction: false,
         messages: undefined,
+        unsettledTail: true,
       });
       expect(fixture.failoverRetryController.transientRetryCount).toBe(1);
       expectNoProfileFailure(fixture);
@@ -736,7 +707,7 @@ describe("recoverEmbeddedRunAttempt", () => {
     expect(fixture.continueFromCurrentTranscript).toHaveBeenCalledExactlyOnceWith({
       includeToolFailureInstruction: false,
       messages: scenario.pluginHarnessOwnsTransport ? fixture.attempt.messagesSnapshot : undefined,
-      ...(replays ? { replayCurrentUserTurn: true } : {}),
+      unsettledTail: !replays,
     });
   });
 
@@ -799,6 +770,7 @@ describe("recoverEmbeddedRunAttempt", () => {
     expect(fixture.continueFromCurrentTranscript).toHaveBeenCalledExactlyOnceWith({
       includeToolFailureInstruction: Boolean(scenario.lastToolError),
       messages: undefined,
+      unsettledTail: true,
     });
     expectNoProfileFailure(fixture);
     expect(fixture.onAgentEvent).toHaveBeenCalledWith(

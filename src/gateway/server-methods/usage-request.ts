@@ -124,7 +124,7 @@ export const usageCostHandler = withUsageRequestBudget(
         loadCostUsageSummaryCached({
           startMs,
           endMs,
-          dayBucket: resolveDayBucket(dateInterpretation),
+          dayBucket: resolveDayBucket(dateInterpretation, range.civilDays),
           config,
           agentId: effectiveAgentId,
           agentScope,

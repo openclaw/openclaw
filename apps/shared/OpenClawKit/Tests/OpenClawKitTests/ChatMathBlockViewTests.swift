@@ -25,13 +25,8 @@ struct ChatMathBlockViewTests {
                     message: message,
                     style: .standard,
                     markdownVariant: .standard,
-                    userAccent: nil,
                     displayOptions: [],
-                    assistantName: "OpenClaw",
-                    assistantAvatarText: "OC",
-                    assistantAvatarTint: nil,
                     showsAssistantAvatar: usesSplitView,
-                    isClean: true,
                     contextWindowTokens: nil,
                     userMessageExpanded: false,
                     onToggleUserMessageExpanded: {},
@@ -39,11 +34,8 @@ struct ChatMathBlockViewTests {
                         modelID: ObjectIdentifier(Self.self),
                         sessionTarget: OpenClawChatSessionTarget(sessionKey: "main", agentID: nil),
                         sessionGeneration: 0),
-                    inlineWidgetResolverReady: false,
-                    inlineWidgetResourceResolver: { _, _ in nil },
-                    mediaArtifactResolverReady: false,
-                    mediaPlaybackAllowed: { false },
-                    loadMediaArtifact: { _, _, _ in nil })
+                    mediaPlaybackAllowed: { false })
+                    .environment(\.openClawAssistantIdentity, ChatAssistantIdentity(name: "OpenClaw", avatarText: "OC"))
             }
             .frame(maxWidth: .infinity)
         }

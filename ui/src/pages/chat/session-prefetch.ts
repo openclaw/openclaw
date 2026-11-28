@@ -1,4 +1,3 @@
-import { asOptionalRecord } from "@openclaw/normalization-core/record-coerce";
 import { onCleanup } from "solid-js";
 import type { GatewayBrowserClient } from "../../api/gateway.ts";
 import type { GatewaySessionRow } from "../../api/types.ts";
@@ -11,17 +10,9 @@ import {
   CHAT_PANE_LIFECYCLE_CHANGED_EVENT,
   CHAT_TRANSCRIPT_LOADING_CHANGED_EVENT,
 } from "./chat-history-events.ts";
-import { requestChatSessionSnapshot } from "./chat-history-request.ts";
 import { chatPanesWithin } from "./chat-pane-elements.ts";
 import { getSessionCacheValue, MAX_CACHED_CHAT_SESSIONS } from "./session-cache.ts";
-import {
-  appendChatMessageToCache,
-  cacheChatSessionSnapshot,
-  projectChatTranscriptMetadata,
-  readChatSessionSnapshot,
-  type ChatMessageCache,
-  type ChatSessionSnapshot,
-} from "./session-message-cache.ts";
+import type { ChatMessageCache } from "./session-message-cache.ts";
 import { subscribeSnapshotInvalidation } from "./session-snapshot-invalidation-events.ts";
 import { resolveChatSnapshotKey, resolveChatSnapshotSessionKey } from "./session-snapshot-key.ts";
 import type { SessionSnapshotStore } from "./session-snapshot-store.ts";
@@ -248,7 +239,10 @@ class SessionPrefetcher {
       return;
     }
     const { client } = snapshot;
-    await this.snapshotStore.loadSavedAtIndex();
+    const [, { prefetchSessionHistory }] = await Promise.all([
+      this.snapshotStore.loadSavedAtIndex(),
+      import("./session-prefetch-history.ts"),
+    ]);
     if (cycle.controller.signal.aborted || !this.isCurrent(snapshot)) {
       return;
     }
@@ -264,123 +258,20 @@ class SessionPrefetcher {
     const candidate = this.selectCandidate(snapshot);
     if (candidate) {
       cycle.candidate = candidate;
-      await this.prefetchCandidate(snapshot, client, candidate, cycle.controller.signal);
-    }
-  }
-
-  private async prefetchCandidate(
-    snapshot: SessionPrefetchSnapshot,
-    client: GatewayBrowserClient,
-    candidate: SessionPrefetchCandidate,
-    signal: AbortSignal,
-  ): Promise<void> {
-    // Hydration and cursor removal are synchronous owned writes. Renew
-    // only after checking the previous claim, before another await.
-    let ownsCache = this.snapshotStore.captureReadScope(candidate.snapshotKey);
-    const isCurrent = () =>
-      !signal.aborted && this.isCurrent(snapshot, candidate) && ownsCache.isCurrent();
-    // Every network request re-reads readiness: a presented pane can start
-    // loading during the persisted snapshot read or between history pages.
-    const mayRequest = () => isCurrent() && mayPrefetchHistory(this.snapshot, candidate.sessionKey);
-    const target = { sessionKey: candidate.canonicalSessionKey };
-    const readSnapshot = () => readChatSessionSnapshot(this.cache, snapshot.snapshotHost, target);
-    const cacheSnapshot = (value: ChatSessionSnapshot) =>
-      cacheChatSessionSnapshot(this.cache, snapshot.snapshotHost, target, value);
-    try {
-      if (!mayRequest() || this.isOpen(candidate.snapshotKey)) {
-        return;
-      }
-      let existing = readSnapshot();
-      if (!existing && this.snapshotStore.readSavedAt(candidate.snapshotKey) !== null) {
-        existing = await this.snapshotStore.read(candidate.snapshotKey);
-        if (!mayRequest()) {
-          return;
-        }
-        if (existing) {
-          cacheSnapshot(existing);
-          ownsCache.dispose();
-          ownsCache = this.snapshotStore.captureReadScope(candidate.snapshotKey);
-        }
-      }
-      // The cooldown counts network attempts; a candidate yielded before its
-      // request stays eligible for the cycle after the presented transcript commits.
-      this.lastAttemptAt.set(candidate.snapshotKey, Date.now());
-      let result = await requestChatSessionSnapshot(
+      await prefetchSessionHistory({
         client,
-        candidate.canonicalSessionKey,
-        this,
-        mayRequest,
-        existing?.deltaCursor,
-        signal,
-      );
-      if (!isCurrent()) {
-        return;
-      }
-      if (result.kind === "reset") {
-        if (existing?.deltaCursor !== undefined) {
-          const { deltaCursor: _deltaCursor, ...withoutCursor } = existing;
-          cacheSnapshot(withoutCursor);
-          existing = withoutCursor;
-          ownsCache.dispose();
-          ownsCache = this.snapshotStore.captureReadScope(candidate.snapshotKey);
-        }
-        if (!mayRequest()) {
-          return;
-        }
-        result = await requestChatSessionSnapshot(
-          client,
-          candidate.canonicalSessionKey,
-          this,
-          mayRequest,
-          undefined,
-          signal,
-        );
-        if (!isCurrent()) {
-          return;
-        }
-      }
-      if (this.isOpen(candidate.snapshotKey)) {
-        return;
-      }
-      let cached: ChatSessionSnapshot;
-      if (result.kind === "delta") {
-        for (const payload of result.messages) {
-          const event = asOptionalRecord(payload);
-          if (!event || !Object.hasOwn(event, "message")) {
-            continue;
-          }
-          appendChatMessageToCache(this.cache, snapshot.snapshotHost, target, event.message, event);
-        }
-        const updated = readSnapshot();
-        if (!updated) {
-          return;
-        }
-        cached = {
-          ...updated,
-          // Prefetch does not own transient run replay. Keep the prior cursor
-          // so the opening pane can consume the same authoritative snapshot.
-          ...(result.inFlightRun ? {} : { deltaCursor: result.deltaCursor }),
-          ...(Object.hasOwn(result.sessionInfo, "activeLeafEntryId")
-            ? { displayedLeafEntryId: result.sessionInfo.activeLeafEntryId?.trim() || null }
-            : {}),
-          sessionId: result.sessionInfo.sessionId?.trim() || updated.sessionId,
-          transcriptMetadata: projectChatTranscriptMetadata(result.sessionInfo),
-        };
-      } else if (result.kind === "snapshot") {
-        cached = result.snapshot;
-      } else {
-        throw new Error("chat history page request returned a cursor reset");
-      }
-      cacheSnapshot(cached);
-    } catch (error) {
-      if (!signal.aborted) {
-        console.debug(
-          `[chat-session-prefetch] history fetch failed for ${candidate.canonicalSessionKey}`,
-          error,
-        );
-      }
-    } finally {
-      ownsCache.dispose();
+        sessionKey: candidate.canonicalSessionKey,
+        snapshotKey: candidate.snapshotKey,
+        cache: this.cache,
+        snapshotHost: snapshot.snapshotHost,
+        store: this.snapshotStore,
+        owner: this,
+        signal: cycle.controller.signal,
+        isTargetCurrent: () => this.isCurrent(snapshot, candidate),
+        stillIntended: () => mayPrefetchHistory(this.snapshot, candidate.sessionKey),
+        isOpen: () => this.isOpen(candidate.snapshotKey),
+        noteAttempt: () => this.lastAttemptAt.set(candidate.snapshotKey, Date.now()),
+      });
     }
   }
 

@@ -89,12 +89,16 @@ async function openSession() {
 
 it("settles an accepted copy before retiring on malformed input", async () => {
   const copy = createDeferred<{ location: string; cleanupRoot: string }>();
-  owners.prepareCopy.mockReturnValue(copy.promise);
+  const entered = createDeferred();
+  owners.prepareCopy.mockImplementation(() => {
+    entered.resolve();
+    return copy.promise;
+  });
   const session = await openSession();
   session.events.emit("message", { id: 1, args: ["sync", "/source.sqlite"] });
-  expect(owners.prepareCopy).toHaveBeenCalledOnce();
   session.events.emit("message", { invalid: true });
   session.events.emit("message", { id: 2, args: ["sync", "/other.sqlite"] });
+  await entered.promise;
   expect(session.child.disconnect).not.toHaveBeenCalled();
   expect(owners.prepareCopy).toHaveBeenCalledOnce();
   copy.resolve({ location: "/private/snapshot.sqlite", cleanupRoot: "/private" });

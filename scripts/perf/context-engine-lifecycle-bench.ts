@@ -14,6 +14,8 @@
  * Add --retained --profile <path> to exclude minor-collected objects and retain
  * the raw sampling profile for owner-frame attribution (not exact promotion).
  * --runtime-carriers includes 16 hidden carriers per history to measure filtering.
+ * --foreground includes fixed system/tool preparation after assembly. Compare unchanged
+ * prompts and --system-addition; the latter must re-estimate the changed prompt.
  */
 import assert from "node:assert/strict";
 import { createHash } from "node:crypto";
@@ -39,6 +41,8 @@ const { values } = parseArgs({
     "runtime-carriers": { type: "boolean", default: false },
     "long-context": { type: "boolean", default: false },
     counts: { type: "boolean", default: false },
+    foreground: { type: "boolean", default: false },
+    "system-addition": { type: "boolean", default: false },
   },
 });
 const iterations = Number(values.iterations);
@@ -80,6 +84,9 @@ const loader = registerHooks({
 });
 const { prepareHarnessContextEnginePrompt } =
   await import("../../src/agents/harness/context-engine-lifecycle.js");
+const { createFixedRequestTokenEstimator } =
+  await import("../../src/agents/sessions/context-token-pressure.js");
+const { freezeJsonSnapshot } = await import("../../src/shared/immutable-data.js");
 loader.deregister();
 const { OPENCLAW_RUNTIME_CONTEXT_CUSTOM_TYPE } =
   await import("../../src/agents/internal-runtime-context.js");
@@ -96,7 +103,13 @@ const contextEngine: ContextEngine = {
   async assemble({ messages, tokenBudget }) {
     engineCalls++;
     historyTokenBudget = tokenBudget;
-    return { messages, estimatedTokens: 0 };
+    return {
+      messages,
+      estimatedTokens: 0,
+      ...(values["system-addition"]
+        ? { systemPromptAddition: "Required engine instructions. 中文。".repeat(100) }
+        : {}),
+    };
   },
 };
 const attempts = Array.from({ length: values["long-context"] ? 10 : 8 }, (_attempt, session) => ({
@@ -190,15 +203,30 @@ if (values["long-context"]) {
   }
 }
 const fingerprint = createHash("sha256");
-for (const attempt of attempts) {
+const tools = Array.from({ length: 100 }, (_, i) => ({
+  name: `read_${i}`,
+  description: "Read source evidence. 中文。".repeat(12),
+  parameters: freezeJsonSnapshot({ type: "object", properties: { path: { type: "string" } } }),
+}));
+async function prepare(attempt: (typeof attempts)[number]) {
   const result = await prepareHarnessContextEnginePrompt(attempt);
+  const fixed = values.foreground
+    ? (result.estimateFixedRequest ?? createFixedRequestTokenEstimator())({
+        systemPrompt: result.systemPrompt,
+        tools,
+      })
+    : undefined;
+  return { result, fixed };
+}
+for (const attempt of attempts) {
+  const result = await prepare(attempt);
   fingerprint.update(JSON.stringify({ result, historyTokenBudget }));
 }
 const turnMs: number[] = [];
 async function run(count: number) {
   for (let index = 0; index < count; index++) {
     const started = performance.now();
-    await prepareHarnessContextEnginePrompt(attempts[index % attempts.length]!);
+    await prepare(attempts[index % attempts.length]!);
     turnMs.push(performance.now() - started);
   }
 }
@@ -257,6 +285,8 @@ try {
       p95TurnMs: turnMs.toSorted((a, b) => a - b)[Math.floor(iterations * 0.95)],
       unrelatedAttemptFields: 128,
       tools: 40,
+      foregroundTools: values.foreground ? tools.length : undefined,
+      systemAddition: values["system-addition"],
       runtimeCarriersPerSession: values["runtime-carriers"] ? 16 : 0,
       mode: values.allocations ? "allocation" : "timing",
       includeMinorCollected: values.allocations ? !values.retained : undefined,

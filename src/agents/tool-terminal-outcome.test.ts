@@ -2,6 +2,7 @@ import { Type } from "typebox";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { Agent } from "../../packages/agent-core/src/agent.js";
 import { createDeferred } from "../../test/helpers/promise.js";
+import { resolveCronPayloadOutcome } from "../cron/isolated-agent/helpers.js";
 import type { Message, Model } from "../llm/types.js";
 import { createAssistantMessageEventStream } from "../llm/utils/event-stream.js";
 import {
@@ -17,7 +18,10 @@ import { buildPayloads } from "./embedded-agent-runner/run/payloads.test-helpers
 import { createSubscribedSessionHarness } from "./embedded-agent-subscribe.e2e-harness.js";
 import { makeAgentAssistantMessage } from "./test-helpers/agent-message-fixtures.js";
 import { inferToolMetaFromArgsCore } from "./tool-display.js";
+import { registerHeadlessToolSearchCatalog } from "./tool-search-catalog.js";
+import { createToolSearchCatalogRef, createToolSearchTools } from "./tool-search.js";
 import { createToolTerminalObserver } from "./tool-terminal-outcome.js";
+import { jsonResult } from "./tools/common.js";
 
 const steeringModel: Model = {
   id: "tool-terminal-steering-model",
@@ -129,6 +133,186 @@ describe("tool terminal outcome observer", () => {
       }
     },
   );
+
+  it.each([
+    { verboseLevel: "off", expected: "⚠️ Automations failed" },
+    {
+      verboseLevel: "full",
+      expected: "⚠️ Automations failed: record_result already accepted for this automation run",
+    },
+  ] as const)(
+    "names the dispatched tool, not the dispatcher, at $verboseLevel verbosity",
+    async ({ verboseLevel, expected }) => {
+      const { emit, subscription } = createSubscribedSessionHarness({ runId: "dispatched" });
+      const turns = [
+        [
+          makeToolCall("call-dispatch", "dispatch_action", {
+            id: "automations",
+            args: { action: "record_result", outcome: "no_change" },
+          }),
+        ],
+      ];
+      const agent = new Agent({
+        initialState: {
+          model: steeringModel,
+          tools: [
+            {
+              name: "dispatch_action",
+              label: "Tool Call",
+              description: "Calls a catalog tool.",
+              parameters: Type.Object({ id: Type.String(), args: Type.Object({}) }),
+              execute: async () => {
+                throw new Error("record_result already accepted for this automation run");
+              },
+            },
+          ],
+        },
+        streamFn: () => responseStream(turns.shift() ?? []),
+      });
+      const unsubscribe = agent.subscribe(emit);
+      try {
+        await agent.prompt("Run the scheduled check.");
+        await subscription.waitForPendingEvents();
+        const payloads = buildPayloads({
+          isCronTrigger: true,
+          verboseLevel,
+          assistantTexts: subscription.assistantTexts,
+          lastAssistant: subscription.getCurrentAttemptAssistant(),
+          lastToolError: subscription.getLastToolError(),
+        });
+        expect(payloads.map((payload) => payload.text)).toEqual([expected]);
+      } finally {
+        unsubscribe();
+        subscription.unsubscribe();
+      }
+    },
+  );
+
+  it.each([
+    {
+      name: "keeps a failed target after another target succeeds",
+      calls: [
+        { id: "sessions_spawn", args: { task: "fail" } },
+        { id: "skills_search", args: { task: "ok" } },
+      ],
+      expected: ["⚠️ Sub-agent failed"],
+    },
+    {
+      name: "recovers an unknown target through the real one",
+      calls: [
+        { id: "sessions_spwan", args: { task: "ok" } },
+        { id: "sessions_spawn", args: { task: "ok" } },
+      ],
+      expected: [],
+    },
+    {
+      name: "recovers a failed target when its catalog id succeeds",
+      calls: [
+        { id: "sessions_spawn", args: { task: "fail" } },
+        { id: "openclaw:core:sessions_spawn", args: { task: "ok" } },
+      ],
+      expected: [],
+    },
+    {
+      name: "recovers a flattened call whose id is a target argument",
+      calls: [
+        { name: "sessions_spawn", id: "req-7", task: "fail" },
+        { name: "sessions_spawn", id: "req-8", task: "ok" },
+      ],
+      expected: [],
+    },
+  ])("$name through dispatch_action", async ({ calls, expected }) => {
+    const catalogRef = createToolSearchCatalogRef();
+    const target = (name: string) => ({
+      name,
+      label: name,
+      description: `Runs ${name}.`,
+      parameters: Type.Object({ task: Type.Optional(Type.String()) }),
+      execute: async (_id: string, args: { task?: string }) =>
+        jsonResult(
+          args.task === "fail" ? { status: "error", error: `${name} failed` } : { status: "ok" },
+        ),
+    });
+    registerHeadlessToolSearchCatalog({
+      catalogRef,
+      tools: [target("sessions_spawn"), target("skills_search")],
+    });
+    const dispatch = createToolSearchTools({ catalogRef }).find(
+      (tool) => tool.name === "dispatch_action",
+    );
+    const { emit, subscription } = createSubscribedSessionHarness({ runId: "dispatch-target" });
+    const turns = calls.map((args, index) => [
+      makeToolCall(`call-${index}`, "dispatch_action", args),
+    ]);
+    const agent = new Agent({
+      initialState: { model: steeringModel, tools: dispatch ? [dispatch] : [] },
+      streamFn: () => responseStream(turns.shift() ?? []),
+    });
+    const unsubscribe = agent.subscribe(emit);
+    try {
+      await agent.prompt("Delegate the task.");
+      await subscription.waitForPendingEvents();
+      const payloads = buildPayloads({
+        assistantTexts: subscription.assistantTexts,
+        lastAssistant: subscription.getCurrentAttemptAssistant(),
+        lastToolError: subscription.getLastToolError(),
+      });
+      expect(payloads.map((payload) => payload.text)).toEqual(expected);
+    } finally {
+      unsubscribe();
+      subscription.unsubscribe();
+    }
+  });
+
+  it.each([
+    { name: "recovers", recovered: true },
+    { name: "never recovers", recovered: false },
+  ])("keeps a scheduled run whose model calls a missing tool and $name", async ({ recovered }) => {
+    const execute = vi.fn(async () => ({
+      content: [{ type: "text" as const, text: "51" }],
+      details: {},
+    }));
+    const { emit, subscription } = createSubscribedSessionHarness({ runId: "missing-tool" });
+    const turns = [
+      [makeToolCall("call-missing", "cream_exec", { command: "cat state.json" })],
+      ...(recovered ? [[makeToolCall("call-exec", "exec", { command: "cat state.json" })]] : []),
+      [{ type: "text" as const, text: "NO_REPLY" }],
+    ];
+    const agent = new Agent({
+      initialState: {
+        model: steeringModel,
+        tools: [
+          {
+            name: "exec",
+            label: "exec",
+            description: "Runs a command.",
+            parameters: Type.Object({ command: Type.String() }),
+            execute,
+          },
+        ],
+      },
+      streamFn: () => responseStream(turns.shift() ?? []),
+    });
+    const unsubscribe = agent.subscribe(emit);
+    try {
+      await agent.prompt("Run the scheduled scan.");
+      await subscription.waitForPendingEvents();
+      expect(execute).toHaveBeenCalledTimes(recovered ? 1 : 0);
+      const payloads = buildPayloads({
+        isCronTrigger: true,
+        assistantTexts: subscription.assistantTexts,
+        lastAssistant: subscription.getCurrentAttemptAssistant(),
+        lastToolError: subscription.getLastToolError(),
+      });
+      expect(payloads.map((payload) => payload.text)).toEqual(
+        recovered ? [] : ["⚠️ Cream Exec blocked"],
+      );
+      expect(resolveCronPayloadOutcome({ payloads }).hasFatalErrorPayload).toBe(!recovered);
+    } finally {
+      unsubscribe();
+      subscription.unsubscribe();
+    }
+  });
 
   it.each([
     { firstOutcome: "success", error: undefined, warnings: [] },

@@ -591,11 +591,11 @@ it("records a recovered push response even when authority closes during its obse
   };
   expect(await f.coordinator.requestForSessionV2(request)).toMatchObject({
     requestId: first.requestId,
-    status: "failed",
-    code: "identity_changed",
+    status: "published",
+    url,
   });
   expect(readReceipt(first.requestId)?.pushed_head_commit).toBe(f.runtime.head);
-  expect(f.runtime.effects).toEqual(["push"]);
+  expect(f.runtime.effects).toEqual(["push", "pull_request"]);
 });
 
 it.each([
@@ -856,7 +856,7 @@ it("does not treat a pure Gateway-local claim as a repository worker owner", asy
     owner: { kind: "local" },
   });
   await expect(f.publish("gateway-local", { expectedRunId: claim.runId })).rejects.toThrow(
-    "session authority changed",
+    "session moved",
   );
   expect(mocks.prepareIdentity).not.toHaveBeenCalled();
   expect(listReceipts()).toEqual([]);
@@ -890,7 +890,7 @@ it.each(["mismatched environment", "replaced claim"] as const)(
         agentId: REQUEST.agentId,
         idempotencyKey: "closed-remote-owner",
       }),
-    ).rejects.toThrow("session authority changed");
+    ).rejects.toThrow("session moved");
     expect(listReceipts()).toEqual([]);
     expect(f.runtime.effects).toEqual([]);
   },

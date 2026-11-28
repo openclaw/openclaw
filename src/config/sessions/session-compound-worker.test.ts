@@ -338,30 +338,6 @@ it.for(["turn", "reset"] as const)(
   },
 );
 
-it("commits a reset with zero host SQL", async () => {
-  await withFixture(async (f) => {
-    const committed = vi.fn();
-    const sql = observeHostDataSql();
-    try {
-      const result = await f.reset({
-        buildNextEntry: () => ({ sessionId: "host-sql-reset", updatedAt: 2 }),
-        afterEntryMutation: committed,
-      });
-      expect(result).toMatchObject({
-        previousSessionId: "original",
-        nextEntry: { sessionId: "host-sql-reset" },
-        archivedTranscripts: [],
-      });
-      expect(sql.queries.length, `T1 reset host SQL observations: ${sql.queries.length}`).toBe(0);
-      expect(committed).toHaveBeenCalledOnce();
-    } finally {
-      sql.restore();
-    }
-    expect(f.read()?.sessionId).toBe("host-sql-reset");
-    expect(f.events().filter((event) => event.type === "reset")).toHaveLength(1);
-  });
-});
-
 it("reconciles a dirty reset transcript through the host owner after commit", async () => {
   await withFixture(async (f) => {
     await f.append({

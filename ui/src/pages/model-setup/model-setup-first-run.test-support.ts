@@ -3,11 +3,7 @@
 import { afterEach, beforeEach, expect, vi } from "vitest";
 import { GatewayRequestError } from "../../api/gateway-connect-errors.ts";
 import type { GatewayBrowserClient } from "../../api/gateway.ts";
-import type {
-  ModelCatalogEntry,
-  SystemAgentSetupDetectResult,
-  WizardNextResult,
-} from "../../api/types.ts";
+import type { SystemAgentSetupDetectResult, WizardNextResult } from "../../api/types.ts";
 import type { ApplicationContext, ApplicationGateway } from "../../app/context.ts";
 import { i18n } from "../../i18n/index.ts";
 import { createRuntimeConfigCapability } from "../../lib/config/runtime-config-capability.ts";
@@ -31,14 +27,6 @@ export const missingWizardError = () =>
   });
 
 export const running = { done: false, status: "running" } as const;
-
-export const nativeModel = (name = "Fixture model"): ModelCatalogEntry => ({
-  provider: "acp-opencode",
-  id: "fixture-model",
-  name,
-  available: true,
-  agentRuntime: { id: "acp-opencode", source: "implicit" },
-});
 
 export const configuredDetection = (configuredModel: string) => ({
   ...detection,
@@ -122,8 +110,10 @@ export function createFirstRunContext(refreshError?: string, beforeRefresh?: () 
   const base = createContext();
   // Replace the base capability only after installing the publishing Gateway.
   base.runtimeConfig.dispose();
-  const { request } = base;
-  const client = createTestGatewayClient(request);
+  const { request, setupOptions } = base;
+  const client = createTestGatewayClient((...args) =>
+    (args[0] === "openclaw.setup.options" ? setupOptions : request)(...args),
+  );
   const snapshot = {
     ...base.snapshot,
     client,
@@ -177,6 +167,7 @@ export function createFirstRunContext(refreshError?: string, beforeRefresh?: () 
     client,
     context,
     request,
+    setupOptions,
     snapshot,
     publishGatewaySnapshot: publication.publish,
   };

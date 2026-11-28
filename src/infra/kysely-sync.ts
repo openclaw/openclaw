@@ -1,7 +1,14 @@
 import type { DatabaseSync, SQLInputValue } from "node:sqlite";
 import { toUSVString } from "node:util";
 import { toErrorObject } from "@openclaw/normalization-core/error-coercion";
-import type { Compilable, CompiledQuery, Kysely, QueryResult, RawBuilder } from "kysely";
+import type {
+  Compilable,
+  CompiledQuery,
+  Expression,
+  Kysely,
+  QueryResult,
+  RawBuilder,
+} from "kysely";
 import {
   InsertQueryNode,
   Kysely as KyselyInstance,
@@ -59,6 +66,15 @@ const compileOnlyPostgresDialect = new OpenClawPostgresDialect({
   },
 });
 
+let compileOnlyPostgresKysely: Kysely<unknown> | undefined;
+
+/** For asynchronous PostgreSQL callers that compile with the shared owners and run the query themselves. */
+export function getCompileOnlyPostgresKysely<Database>(): Kysely<Database> {
+  compileOnlyPostgresKysely ??= new KyselyInstance({ dialect: compileOnlyPostgresDialect });
+  // SAFETY: this compile-only facade stores no rows; Database supplies the caller's schema types.
+  return compileOnlyPostgresKysely as Kysely<Database>;
+}
+
 export function getNodeSqliteKysely<Database>(
   db: DatabaseSync | PostgresSqlConnection,
 ): Kysely<Database>;
@@ -102,7 +118,7 @@ export function sqliteStringSet(values: readonly string[]): RawBuilder<string> {
 
 /** Expands encoded string tuples without adding one SQLite parameter per field. */
 export function sqliteStringSetEntries(
-  encoded: string | RawBuilder<string>,
+  encoded: string | Expression<string>,
 ): RawBuilder<{ key: number; value: string | null }> {
   return kyselySql<{ key: number; value: string | null }>(sqliteStringSetEntriesFragments, encoded);
 }

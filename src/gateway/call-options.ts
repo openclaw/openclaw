@@ -9,7 +9,7 @@ export type GatewayRequestFunction = <T = Record<string, unknown>>(
   opts?: GatewayClientRequestOptions,
 ) => Promise<T>;
 
-export type CallGatewayBaseOptions = Pick<GatewayClientOptions, "caps"> &
+export type CallGatewayBaseOptions = Pick<GatewayClientOptions, "caps" | "onEvent"> &
   GatewayCallDeviceAuthOptions & {
     url?: string;
     /** Require this resolved endpoint without overriding target selection or authentication. */
@@ -30,7 +30,11 @@ export type CallGatewayBaseOptions = Pick<GatewayClientOptions, "caps"> &
     onAccepted?: GatewayClientRequestOptions["onAccepted"];
     onSignalAbort?: (request: GatewayRequestFunction) => Promise<void> | void;
     /** Continue a multi-request operation on this exact authenticated connection. */
-    onResponse?: (request: GatewayRequestFunction, signal: AbortSignal) => Promise<void>;
+    onResponse?: (
+      request: GatewayRequestFunction,
+      signal: AbortSignal,
+      result: unknown,
+    ) => Promise<void>;
     clientDisplayName?: string;
     clientVersion?: string;
     platform?: string;

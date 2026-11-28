@@ -20,12 +20,16 @@ import {
   resolveAuthProfileDatabasePath,
 } from "./auth-profiles/sqlite.js";
 import { collectConfiguredAgentHarnessRuntimes } from "./harness-runtimes.js";
+import { createPreparedModelCatalogProviderNormalizer } from "./model-catalog-provider-normalizer.js";
 import {
-  createFullModelCatalogAccess,
+  createPersistentModelCatalogAccess,
   MAX_CONCURRENT_FULL_MODEL_CATALOG_BUILDS,
 } from "./prepared-model-runtime.catalog-access.js";
+import { prepareInitialModelCatalogAuth } from "./prepared-model-runtime.catalog-auth.js";
 import type {
   PreparedModelRuntimeAgentFacts,
+  PreparedModelRuntimeCatalogAccess,
+  PreparedModelRuntimeCatalogAccessParams,
   PreparedModelRuntimeCatalogFacts,
   PreparedModelRuntimeCatalogSource,
 } from "./prepared-model-runtime.catalog-contract.js";
@@ -67,10 +71,42 @@ import type {
 
 const MAX_CONCURRENT_MODEL_RUNTIME_AGENT_SOURCE_BUILDS = 2;
 
+async function createFullModelCatalogAccess(
+  params: PreparedModelRuntimeCatalogAccessParams,
+  assertBuildCurrent: () => void,
+): Promise<PreparedModelRuntimeCatalogAccess> {
+  assertBuildCurrent();
+  const normalizeProvider = createPreparedModelCatalogProviderNormalizer(
+    params.pluginGeneration.pluginMetadataSnapshot,
+    params.agentFacts.input.config,
+    params.agentFacts.env,
+  );
+  const eligibleProviders = [
+    ...new Set(
+      [...params.agentFacts.providerIds, ...Object.keys(params.agentFacts.credentials)].map(
+        normalizeProvider,
+      ),
+    ),
+  ].toSorted();
+  const currentAuth = await prepareInitialModelCatalogAuth(
+    params,
+    eligibleProviders,
+    assertBuildCurrent,
+  );
+  assertBuildCurrent();
+  return createPersistentModelCatalogAccess(
+    params,
+    normalizeProvider,
+    eligibleProviders,
+    currentAuth,
+  );
+}
+
 export type PreparedModelRuntimeBuildCandidate = Readonly<{
   input: PreparedModelRuntimeInput;
   catalogOwner: PreparedModelRuntimeSnapshot["catalogOwner"];
   inventoryOwner?: Parameters<typeof createFullModelCatalogAccess>[0]["inventoryOwner"];
+  seedInventory?: Parameters<typeof createFullModelCatalogAccess>[0]["seedInventory"];
   pluginGeneration?: PreparedModelRuntimePluginGeneration;
   prepareInboundPluginRegistry?: boolean;
   isGenerationCurrent?: () => boolean;
@@ -140,6 +176,7 @@ async function buildSnapshotBatch(
         isCurrent: candidate.isGenerationCurrent ?? (() => false),
         retirementSignal: candidate.retirementSignal,
         inventoryOwner: candidate.inventoryOwner ?? {},
+        seedInventory: candidate.seedInventory,
       },
       () => assertBuildCurrent(candidate.input),
     );
@@ -250,10 +287,12 @@ async function buildSnapshotBatch(
           // Otherwise file creation can retire the credentials this build just captured.
           // Discovery stays asynchronous; read-only admission must not borrow write permission.
           if (!readAgentDatabaseAdmissionRefusal(agentId, { env })) {
+            // Admission belongs to this build, not the individual catalog generation.
+            // Auth changes can retire that generation while this publication drains them.
             await prepareOpenClawAgentDatabaseExecution(
               { agentId, path: resolveAuthProfileDatabasePath(input.agentDir), env },
               () => assertBuildCurrent(input),
-              candidate.retirementSignal,
+              signal,
             );
             assertBuildCurrent(input);
           }

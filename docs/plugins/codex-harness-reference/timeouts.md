@@ -26,7 +26,8 @@ still cancels shared startup.
 
 OpenClaw-owned dynamic tool calls are bounded independently from
 `appServer.requestTimeoutMs`. Ordinary Codex `item/tool/call` requests use the
-first available timeout in this order:
+first available timeout in this order (a tool whose schema allows no extra
+properties and does not declare the timeout argument does not receive it):
 
 - A positive per-call `timeoutMs` argument.
 - A positive integer per-call `timeoutSeconds` argument, plus 30000 ms for setup

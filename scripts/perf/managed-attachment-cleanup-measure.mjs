@@ -20,6 +20,8 @@ const { values } = parseArgs({
     allocations: { type: "boolean" },
     "owner-dir": { type: "string" },
     messages: { type: "string", default: "5000" },
+    attachments: { type: "string", default: "2" },
+    unavailable: { type: "boolean" },
     "message-bytes": { type: "string", default: "8192" },
     operations: { type: "string", default: "30" },
     seconds: { type: "string", default: "30" },
@@ -37,6 +39,7 @@ const integer = (value, name, min = 1) => {
   return number;
 };
 const messageCount = integer(values.messages, "messages");
+const attachmentCount = integer(values.attachments, "attachments");
 const messageBytes = integer(values["message-bytes"], "message-bytes");
 const operations = integer(values.operations, "operations");
 const seconds = integer(values.seconds, "seconds");
@@ -139,7 +142,7 @@ try {
     const filePath = path.join(stateDir, "synthetic-attachment.txt");
     writeFileSync(filePath, "Synthetic attachment bytes\n", { flag: "wx" });
     const attachments = [];
-    for (let index = 0; index < 2; index++) {
+    for (let index = 0; index < attachmentCount; index++) {
       const messageId = `attachment-${index}`;
       const blocks = await media.createManagedOutgoingMediaBlocks({
         sessionKey: scope.sessionKey,
@@ -171,7 +174,7 @@ try {
         type: "message",
         timestamp,
         id: messageId,
-        parentId: index ? "attachment-0" : `message-${messageCount - 1}`,
+        parentId: index ? `attachment-${index - 1}` : `message-${messageCount - 1}`,
         message: { role: "assistant", content: blocks },
       })),
     ];
@@ -184,7 +187,7 @@ try {
       format: "openclaw-managed-cleanup-v1",
       messageCount,
       messageBytes,
-      attachments: 2,
+      attachments: attachmentCount,
       sessionKey: scope.sessionKey,
     };
     writeFileSync(marker, JSON.stringify(fixture), { flag: "wx" });
@@ -193,13 +196,18 @@ try {
   } else {
     const fixture = JSON.parse(readFileSync(marker, "utf8"));
     assert.equal(fixture.format, "openclaw-managed-cleanup-v1");
+    if (values.unavailable) {
+      config.setRuntimeConfigSnapshot({
+        session: { store: path.join(stateDir, "missing.sqlite") },
+      });
+    }
     const cleanup = () =>
       media.cleanupManagedOutgoingMediaRecords({ stateDir, sessionKey: scope.sessionKey });
     await cleanup();
     assert.equal(
       (await records.listManagedImageRecordEntries({ stateDir, sessionKey: scope.sessionKey }))
         .length,
-      2,
+      fixture.attachments,
     );
     inspector = values.allocations ? new Session() : undefined;
     inspector?.connect();
@@ -302,11 +310,12 @@ try {
     assert.equal(
       (await records.listManagedImageRecordEntries({ stateDir, sessionKey: scope.sessionKey }))
         .length,
-      2,
+      fixture.attachments,
       "Cleanup removed a referenced original",
     );
     const report = {
       fixture,
+      unavailable: values.unavailable === true,
       node: process.version,
       operations,
       requestedSeconds: seconds,

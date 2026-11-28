@@ -1,5 +1,6 @@
 import { expect, it } from "vitest";
 import { controlUiSessionUrl, installMockGateway } from "../test-helpers/control-ui-e2e.ts";
+import { openAiAuthor } from "./chat-flow.test-support.ts";
 import {
   createControlUiE2eContextOptions,
   createControlUiE2eSuite,
@@ -32,16 +33,18 @@ suite.define(() => {
           { role: "user", content: "Check the evidence." },
           ...["reasoning-1", "reasoning-2"].map((id) => ({
             role: "assistant",
+            provider: openAiAuthor.provider,
+            model: openAiAuthor.model,
             content: [{ type: "thinking", thinking }],
             __openclaw: { id },
           })),
           ...(withTools
             ? [
-                { role: "assistant", content: [tool] },
+                { role: "assistant", ...openAiAuthor, content: [tool] },
                 { role: "toolResult", toolCallId: "read", toolName: "read", content: "Read." },
               ]
             : []),
-          { role: "assistant", content: [{ type: "text", text: finalText }] },
+          { role: "assistant", ...openAiAuthor, content: [{ type: "text", text: finalText }] },
         ],
       });
       await page.goto(controlUiSessionUrl(suite.server.baseUrl, sessionKey));

@@ -69,7 +69,12 @@ suite.define(() => {
             ui.menuItem(page.locator("openclaw-session-menu"), "Delete…"),
           );
           const dialog = await support.waitForConfirmModal(page);
-          await dialog.getByText("Nightly backup (nightly-backup)").waitFor();
+          // Bound automations render as cards that name the job without its ID.
+          await dialog
+            .getByRole("listitem")
+            .filter({ hasText: "Nightly backup" })
+            .getByText("Nightly backup", { exact: true })
+            .waitFor();
           return dialog;
         };
         let dialog = await openDelete();

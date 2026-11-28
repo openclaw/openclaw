@@ -2,8 +2,8 @@ import type {
   deliverAgentHarnessCompletion,
   captureAgentHarnessCompletionCustody,
   createAgentHarnessCompletionEventSink,
-  AgentHarnessCompletionScope,
 } from "openclaw/plugin-sdk/agent-harness-completion";
+import { createAgentHarnessCompletionScopeForTest } from "openclaw/plugin-sdk/plugin-test-runtime";
 import { onTestFinished, vi } from "vitest";
 import { createFakeCodexAppServerClient } from "./codex-app-server.test-fixtures.js";
 import { CodexNativeSubagentCompletionDelivery } from "./native-subagent-completion-delivery.js";
@@ -257,7 +257,10 @@ export function parentRegistration(
 }
 
 export function createCompletionScope(requesterSessionKey = "agent:main:discord:channel:C123") {
-  return { requesterSessionKey, requesterAgentId: "main" } satisfies AgentHarnessCompletionScope;
+  return createAgentHarnessCompletionScopeForTest({
+    requesterSessionKey,
+    requesterAgentId: "main",
+  });
 }
 
 export function nativeHistoryOwner(parentThreadId = "parent-thread") {

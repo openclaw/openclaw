@@ -720,3 +720,17 @@ it("several agents without a default: operators must choose; tools are unaffecte
   expect(((await query(f, "records_detail")) as Output<"records_detail">).total).toBe(1);
   expect((await f.service.status({}, f.as("main"))).store).toBe("unprovisioned");
 });
+
+it("uses only a rostered system agent as the operator default in an explicit fleet", async () => {
+  const f = await fixture();
+  const systemAgent = { agentId: "Research" };
+  Object.assign(f.host.config.agents, { ownership: "explicit", defaults: { systemAgent } });
+  await f.save("research", "Research note");
+  expect((await f.snapshot()).defaultAgent).toBe("research");
+  const status = await f.service.status({}, f.reader);
+  expect(status.agent).toBe("research");
+  expect(status.store).toBe("ready");
+
+  systemAgent.agentId = "retired";
+  await expect(f.service.status({}, f.reader)).rejects.toThrow(/choose which agent/);
+});

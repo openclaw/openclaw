@@ -9,7 +9,7 @@ import { isMainThread } from "node:worker_threads";
 import { setRuntimeConfigSnapshot } from "../config/runtime-snapshot.js";
 import { writeSessionEntry } from "../config/sessions/session-accessor.sqlite-entry-store.js";
 import { readExecRequestOwners } from "../infra/exec-request-context.js";
-import { peekSystemEventEntries } from "../infra/system-events.js";
+import { enqueueSystemEvent, peekSystemEventEntries } from "../infra/system-events.js";
 import {
   resetGatewayWorkAdmission,
   tryBeginGatewaySuspendAdmission,
@@ -43,6 +43,7 @@ import {
   getActiveBackgroundExecSessionCount,
   createProcessSession,
   markBackgrounded,
+  processSessionInstanceId,
   type ProcessSession,
   setExitWakeRecorder,
   waitForExecSession,
@@ -501,11 +502,22 @@ void it("reports each wake-armed ordinary command a restart lost, once, with wha
         await initializeDurableProcesses({
           crashWindows: { main: [{ startedAt: crashed.startedAt, endedAt: stopped.startedAt }] },
         });
+        // Display prefixes can collide; unrelated notices must not identify this process.
+        assert.ok(
+          enqueueSystemEvent(`Unrelated completion (${crashed.id.slice(0, 8)})`, {
+            sessionKey,
+            contextKey: "exec:unrelated-process",
+          }),
+        );
         const notice = async (session: ProcessSession) => {
-          const matching = () =>
-            peekSystemEventEntries(sessionKey).filter((event) =>
-              event.text.includes(session.id.slice(0, 8)),
+          // The notice is keyed by the adopted process instance (its owed result id).
+          const matching = () => {
+            const adopted = getFinishedSession(session.id) ?? getSession(session.id);
+            const contextKey = adopted && `exec:${processSessionInstanceId(adopted)}`;
+            return peekSystemEventEntries(sessionKey).filter(
+              (event) => contextKey !== undefined && event.contextKey === contextKey,
             );
+          };
           // Reporting runs after startup without holding durable adoption.
           for (let turn = 0; turn < 500 && matching().length === 0; turn++) {
             await delay(10);

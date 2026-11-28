@@ -1,6 +1,5 @@
 // Real Control UI rendering and routing; provider/Gateway replies are controlled fixtures.
 import { expect, it } from "vitest";
-import { installMockGateway } from "../test-helpers/control-ui-e2e.ts";
 import { createControlUiE2eSuite } from "./control-ui-e2e-suite.test-support.ts";
 import {
   activated,
@@ -53,8 +52,7 @@ suite.define(() => {
     "waits for an explicit choice on %s and preserves provider failure details",
     async (query) => {
       await withPage(async ({ page }) => {
-        const installGateway = query ? installMockGateway : installSetupGateway;
-        const gateway = await installGateway(page, {
+        const gateway = await installSetupGateway(page, {
           featureMethods: [rpc.detect, rpc.activate, rpc.auth, rpc.next],
           methodResponses: {
             [rpc.detect]: detection,
@@ -69,12 +67,15 @@ suite.define(() => {
         } else {
           await openModelSetup(page, suite.server.baseUrl);
         }
-        await page.locator('.model-setup h2:text-is("Available models")').waitFor();
+        await page.locator("[data-candidate-kind]").first().waitFor();
+        expect(new URL(page.url()).pathname).toBe("/settings/model-providers");
+        expect(new URL(page.url()).search).toBe(query || "?connect=1");
         const choices = page.locator("[data-candidate-kind]");
         expect(await choices.first().textContent()).toContain("Anthropic");
-        expect(await page.getByLabel("Show existing sessions").isChecked()).toBe(false);
-        expect(await page.locator("openclaw-model-setup-page [data-selected]").count()).toBe(0);
-        await button(page, "Check again").click();
+        if (query) {
+          await openModelSetup(page);
+        }
+        await button(page.locator(".model-setup-discovery"), "Check again").click();
         await gateway.waitForRequest(rpc.detect, { after: 1 });
         await page.locator('.model-setup h2:text-is("Available models")').waitFor();
         await expectRequestCounts(gateway, {
@@ -86,13 +87,13 @@ suite.define(() => {
           "config.patch": 0,
           "config.apply": 0,
         });
+        if (query) {
+          await button(page.locator(".model-setup-discovery"), "Close").click();
+        }
 
         await page.locator('[data-candidate-kind="anthropic-api-key"] button').click();
         const activation = await gateway.waitForRequest(rpc.activate);
-        expect(activation.params).toMatchObject({
-          kind: "anthropic-api-key",
-          nativeSessionCatalogsEnabled: false,
-        });
+        expect(activation.params).toMatchObject({ kind: "anthropic-api-key" });
         await waitText(page, "HTTP 401: review this provider credential and try again.", false);
         expect(await gateway.getRequests(rpc.activate)).toHaveLength(1);
       });
@@ -101,7 +102,7 @@ suite.define(() => {
 
   it("starts managed provider installation only after a click and waits at capability consent", async () => {
     await withPage(async ({ page }) => {
-      const gateway = await installMockGateway(page, {
+      const gateway = await installSetupGateway(page, {
         featureMethods: [rpc.detect, rpc.auth, rpc.next, rpc.cancel],
         methodResponses: {
           [rpc.detect]: detection,
@@ -116,6 +117,7 @@ suite.define(() => {
         },
       });
       await page.goto(suite.server.baseUrl + "settings/model-setup?firstRun=1");
+      await openModelSetup(page);
       const install = page
         .locator('[data-auth-choice="meta-api-key"]')
         .getByRole("button", { name: "Review & install" });
@@ -127,12 +129,9 @@ suite.define(() => {
           .getByRole("button", { name: "Set up endpoint" })
           .isVisible(),
       ).toBe(true);
-      await page.getByLabel("Show existing sessions").check();
       await install.click();
-      expect((await gateway.waitForRequest(rpc.auth)).params).toMatchObject({
-        authChoice: "meta-api-key",
-        nativeSessionCatalogsEnabled: true,
-      });
+      const auth = (await gateway.waitForRequest(rpc.auth)).params;
+      expect(auth).toMatchObject({ authChoice: "meta-api-key" });
       const dialog = page.locator("openclaw-modal-dialog");
       await waitText(dialog, "Allow this provider plugin to call its inference endpoint?");
       const next = await gateway.getRequests(rpc.next);
@@ -145,8 +144,8 @@ suite.define(() => {
     });
   });
 
-  it("continues Meta capability review into its auth form, then relaunches without replay", async () => {
-    await withPage(async ({ page, context }) => {
+  it("continues Meta capability review into its auth form", async () => {
+    await withPage(async ({ page }) => {
       const modelRef = "meta/fixture-model";
       const gateway = await installSetupGateway(page, {
         featureMethods: [rpc.detect, rpc.auth, rpc.next, rpc.cancel, rpc.verify],
@@ -164,11 +163,7 @@ suite.define(() => {
       await openModelSetup(page, suite.server.baseUrl);
       await page.locator('[data-auth-choice="meta-api-key"] button').click();
       const start = await gateway.waitForRequest(rpc.auth);
-      expect(start.params).toMatchObject({
-        agentId: "main",
-        authChoice: "meta-api-key",
-        nativeSessionCatalogsEnabled: false,
-      });
+      expect(start.params).toMatchObject({ agentId: "main", authChoice: "meta-api-key" });
       const dialog = page.locator("openclaw-modal-dialog");
       await waitText(dialog, "Accept Meta provider capabilities?");
 
@@ -193,26 +188,6 @@ suite.define(() => {
           answer: { stepId: "meta-api-key", value: "synthetic-meta-api-key" },
         },
       ]);
-
-      const relaunched = await context.newPage();
-      const afterRelaunch = await installMockGateway(relaunched, {
-        featureMethods: [rpc.detect, rpc.auth, rpc.activate, rpc.verify],
-        methodResponses: {
-          [rpc.detect]: {
-            ...detection,
-            configuredModel: modelRef,
-            setupComplete: true,
-            nativeSessionCatalogPreferenceRequired: false,
-          },
-        },
-      });
-      await relaunched.goto(suite.server.baseUrl + "settings/model-setup?firstRun=explicit");
-      await relaunched.locator(".model-setup__current").waitFor();
-      await expectRequestCounts(afterRelaunch, {
-        [rpc.auth]: 0,
-        [rpc.activate]: 0,
-        [rpc.verify]: 0,
-      });
     });
   });
 

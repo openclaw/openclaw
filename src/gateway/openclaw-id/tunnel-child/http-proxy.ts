@@ -73,6 +73,8 @@ export function proxyHttp(params: {
         }
       })();
     });
+    // Send the head before waiting for DATA so a reused socket is no longer idle.
+    req.flushHeaders();
     pumpBody(reader, req).catch((error: unknown) =>
       fail(
         error instanceof TunnelProtocolError

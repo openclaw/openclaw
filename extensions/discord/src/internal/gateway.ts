@@ -315,27 +315,28 @@ export class GatewayPlugin implements GatewayPluginContract {
     this.send({ op: GatewayOpcodes.Heartbeat, d: this.sequence }, true);
   }
 
-  private async identifyWithConcurrency(sourceSocket?: ws.WebSocket): Promise<void> {
-    await sharedGatewayIdentifyLimiter.wait();
-    const socket = sourceSocket ?? this.ws;
-    if (!socket || socket !== this.ws) {
-      return;
-    }
-    if (socket.readyState !== READY_STATE_OPEN) {
-      this.scheduleReconnect({ reason: "identify", preferResume: false });
-      return;
-    }
-    this.send(
-      {
-        op: GatewayOpcodes.Identify,
-        d: {
-          token: this.client?.options.token ?? "",
-          intents: this.options.intents ?? 0,
-          properties: { os: process.platform, browser: "openclaw", device: "openclaw" },
+  private identifyWithConcurrency(socket: ws.WebSocket): Promise<void> {
+    return sharedGatewayIdentifyLimiter.schedule(() => {
+      if (socket !== this.ws) {
+        return false;
+      }
+      if (socket.readyState !== READY_STATE_OPEN) {
+        this.scheduleReconnect({ reason: "identify", preferResume: false });
+        return false;
+      }
+      this.send(
+        {
+          op: GatewayOpcodes.Identify,
+          d: {
+            token: this.client?.options.token ?? "",
+            intents: this.options.intents ?? 0,
+            properties: { os: process.platform, browser: "openclaw", device: "openclaw" },
+          },
         },
-      },
-      true,
-    );
+        true,
+      );
+      return true;
+    });
   }
 
   send(payload: GatewaySendPayload | GatewayReceivePayload, skipRateLimit = false): void {

@@ -56,6 +56,9 @@ export const DEFAULT_CODEX_RUNTIME_THREAD_CONFIG = {
   "features.recommended_plugins": false,
   "features.goals": false,
   "tools.update_plan.enabled": false,
+  "agents.enabled": false,
+  "features.multi_agent": false,
+  "features.multi_agent_v2": false,
   "features.code_mode": true,
   "features.code_mode_only": false,
   "features.shell_tool": true,
@@ -95,6 +98,16 @@ type NativeFixtureThread = {
   loaded: boolean;
   subscribed: boolean;
 };
+
+export function readEmptyNativeConfig(method: string) {
+  if (method === "config/read") {
+    return { config: {}, origins: {}, layers: [] };
+  }
+  if (method === "configRequirements/read") {
+    return { requirements: null };
+  }
+  throw new Error(`unexpected method: ${method}`);
+}
 
 /** A synthetic native server, not a client mock: requests still cross the real wire and guards. */
 export function createCodexLifecycleHarness(options: {

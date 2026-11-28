@@ -117,7 +117,6 @@ async function exerciseDiagnostics({ page }: { page: Page }) {
       },
       status: {
         runtime: "diagnostics-e2e",
-        securityAudit: { summary: { critical: 0, warn: 1, info: 2 } },
       },
       "system.info": systemInfo(0.25, 0.2, [4, 8], [432, 210, 256], [0.18, 0.04, 0.03, 0.23]),
       health: { ok: true, gateway: "healthy" },
@@ -148,7 +147,7 @@ async function exerciseDiagnostics({ page }: { page: Page }) {
     has: page.getByRole("heading", { name: "Snapshots" }),
   });
   await snapshots.waitFor();
-  for (const text of ["1 warning", "diagnostics-e2e", "healthy", "gateway-heartbeat"]) {
+  for (const text of ["diagnostics-e2e", "healthy", "gateway-heartbeat"]) {
     await contains(snapshots, text);
   }
   const models = page.locator(".settings-section", {
@@ -391,6 +390,15 @@ async function exerciseDiagnostics({ page }: { page: Page }) {
   await contains(snapshots, "diagnostics-e2e");
   await page.setViewportSize({ height: 844, width: 390 });
   await noOverflow();
+  for (const panel of await snapshots.getByRole("group").all()) {
+    expect(
+      await panel.evaluate((node) => {
+        const parent = node.parentElement!.getBoundingClientRect();
+        const box = node.getBoundingClientRect();
+        return Math.max(Math.abs(box.left - parent.left), Math.abs(box.right - parent.right));
+      }),
+    ).toBeLessThan(1);
+  }
   await page.setViewportSize({ height: 1000, width: 1280 });
   await page.getByRole("searchbox", { name: "Search settings" }).focus();
   await page.keyboard.press("Escape");

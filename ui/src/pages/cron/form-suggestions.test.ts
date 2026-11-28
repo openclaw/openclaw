@@ -3,7 +3,7 @@
 import type { ConversationListItem } from "@openclaw/gateway-protocol";
 import { expect, it } from "vitest";
 import { createChannelCapability } from "../../lib/channels/index.ts";
-import { cronListResponse, operatorHello, waitForCronPage } from "./cron-page.test-support.tsx";
+import { cronListResponse, waitForCronPage } from "./cron-page.test-support.tsx";
 import { cronRpc, mountCronPage } from "./cron-rpc.test-support.ts";
 import { createCronViewJob } from "./view.test-support.ts";
 
@@ -72,11 +72,13 @@ async function mountSuggestions(conversations: ConversationListItem[]) {
         // A real ID must survive even when another account uses it as a name.
         { accountId: "ops", name: "work" },
       ],
-      discord: [{ accountId: "discord-account", name: "Discord account" }],
+      discord: [
+        { accountId: " default ", name: "Discord default" },
+        { accountId: "discord-account", name: "Discord account" },
+      ],
     },
     channelDefaultAccountId: { telegram: "default", discord: "discord-account" },
   };
-  mounted.gateway.emitSnapshot({ hello: operatorHello(["operator.admin"]) });
   await waitForCronPage(() => expect(mounted.page.cron.cronJobs).toHaveLength(2));
   expect(mounted.page.querySelector("datalist")).toBeNull();
   mounted.page.querySelector<HTMLButtonElement>('[data-test-id="cron-new-task"]')!.click();
@@ -118,6 +120,7 @@ it.each([
               "https://example.test/conversation-shaped-url",
             ].toSorted(),
       );
+      expect(suggestions(page, "cron-failure-alert-to-suggestions")).toEqual(recipients);
       expect(suggestions(page, "cron-delivery-account-suggestions")).toEqual(accounts);
     });
     expect(suggestions(page, "cron-tz-suggestions")).toContain("Etc/GMT+12");

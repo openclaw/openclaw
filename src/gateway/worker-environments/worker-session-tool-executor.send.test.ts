@@ -242,7 +242,7 @@ describe("worker session tool send delivery", () => {
       }
     })();
 
-    expect(result.resultJson).toMatch(/authority changed|lost ownership/u);
+    expect(result.resultJson).toMatch(/authority changed|turn ended|lost ownership/u);
     expect(receipts).toEqual([]);
     expect(delivered).not.toHaveBeenCalled();
   });

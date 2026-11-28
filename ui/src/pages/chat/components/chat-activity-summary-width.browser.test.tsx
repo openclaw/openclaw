@@ -66,7 +66,7 @@ it.each(
   async ({ thread, presentation }) => {
     const container = document.body.appendChild(document.createElement("div"));
     container.className = "chat";
-    container.style.width = "768px";
+    container.style.width = "640px";
     const root = mountSolid(
       () => (
         <div class={["chat-thread", { "chat-thread--direct": thread === "direct" }]}>
@@ -113,3 +113,62 @@ it.each(
     );
   },
 );
+
+it("truncates only the names to keep a narrow launch summary on one line", async () => {
+  const launches = group(
+    "launches",
+    "tool",
+    [1, 2, 3].map((index) => {
+      const id = String(index);
+      const label = "Recurring PR and noise audit " + id;
+      const name = "sessions_spawn";
+      return {
+        role: "assistant",
+        content: [
+          { type: "toolCall", id, name, arguments: { label, task: label } },
+          {
+            type: "tool_result",
+            id,
+            name,
+            text: JSON.stringify({
+              status: "accepted",
+              childSessionKey: "agent:main:subagent:" + id,
+            }),
+          },
+        ],
+      };
+    }),
+  );
+  const container = document.body.appendChild(document.createElement("div"));
+  container.style.width = "300px";
+  const root = mountSolid(
+    () => (
+      <ActivityGroup
+        groups={[launches]}
+        options={{ ...options, showToolCalls: true, subagents: { onOpenSession: () => {} } }}
+        presentation="standalone"
+      />
+    ),
+    { container },
+  );
+  onTestFinished(() => {
+    root.unmount();
+    container.remove();
+  });
+  await settleToolBridges(container);
+  const title = container.querySelector<HTMLElement>(".chat-tool-row__title")!;
+  const links = title.querySelectorAll("button");
+  expect(links).toHaveLength(2);
+  expect(title.textContent).toContain("1 more");
+  expect(title.scrollWidth).toBeLessThanOrEqual(title.clientWidth);
+  for (const link of links) {
+    expect(link.scrollWidth).toBeGreaterThan(link.clientWidth);
+    expect(link.clientWidth).toBeGreaterThan(0);
+    expect(getComputedStyle(link).textOverflow).toBe("ellipsis");
+  }
+  const row = title.closest(".chat-tool-row")!;
+  expect(row.getBoundingClientRect().height).toBeCloseTo(
+    links[0]!.getBoundingClientRect().height,
+    0,
+  );
+});

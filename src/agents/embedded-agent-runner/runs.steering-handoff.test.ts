@@ -135,7 +135,7 @@ describe("captured question and drain ownership", () => {
       expect(mock).not.toHaveBeenCalled();
     }
   }
-  function injection(overrides: Partial<Injection> = {}): Injection {
+  function injection(overrides: Partial<Injection>): Injection {
     return { version: 2, isAvailable: accept, queueMessage: vi.fn(asyncNoop), ...overrides };
   }
   function start(overrides: Partial<EmbeddedAgentQueueHandle> = {}) {
@@ -215,7 +215,9 @@ describe("captured question and drain ownership", () => {
           setActiveEmbeddedRun(sessionId, replacement);
         }
         released.resolve();
-        await expect(result).rejects.toThrow("Message injection authority is no longer current");
+        await expect(result).rejects.toThrow(
+          "The message input is no longer available. Start a new turn to retry.",
+        );
         unused(queueMessage);
       } finally {
         released.resolve();

@@ -89,13 +89,22 @@ export function projectAgentActivityItem<
   ) {
     return { ...item, status: "failed" };
   }
+  const args = asRecord(facts.args);
+  // The internal source sink reports sent only after delivery; an intended destination
+  // or a dry-run sourceReply payload does not mean there is a visible duplicate.
+  const sourceReply =
+    name === "message" &&
+    item.status === "completed" &&
+    details?.sourceReplySink === "internal-ui" &&
+    details.deliveryStatus === "sent";
   const routine =
     facts.nativeOperation === "wait" ||
     facts.nativeOperation === "process.poll" ||
     isAgentPlanProgressToolName(name) ||
     name === "sessions_yield" ||
-    (name === "process" && asRecord(facts.args)?.action === "poll") ||
-    (name === "message" && asRecord(facts.args)?.action === "react");
+    (name === "process" && args?.action === "poll") ||
+    (name === "message" && args?.action === "react") ||
+    sourceReply;
   return routine && (item.status === "running" || item.status === "completed")
     ? { ...item, hideFromChannelProgress: true }
     : item;

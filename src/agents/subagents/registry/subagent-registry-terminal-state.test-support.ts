@@ -35,57 +35,6 @@ export function registerTerminalStateSignalAuthorityTests({
   helperMocks: { persistSubagentSessionTiming: Mock<() => Promise<void>> };
   lifecycleEventMocks: { emitSessionLifecycleEvent: Mock };
 }) {
-  it("records the finalized expired discard when lifecycle cleanup deletes a suspended row", async () => {
-    createDatabaseOptions();
-    let controller: SubagentLifecycleController | undefined;
-    try {
-      const entry = createRunEntry({
-        cleanup: "delete",
-        execution: { status: "terminal", endedAt: 2, outcome: { status: "ok" } },
-        completion: { required: true, resultText: "retained result" },
-        delivery: {
-          status: "suspended",
-          suspendedAt: 3,
-          suspendedReason: "permanent_failure",
-          lastError: "delivery unavailable",
-        },
-      });
-      const runs = new Map<string, SubagentRunRecord>();
-      await mutateSubagentRuns(
-        [entry.runId],
-        () => ({ value: undefined, postimages: new Map([[entry.runId, entry]]) }),
-        { runs },
-      );
-      controller = createLifecycleController({ entry, runs, realWorker: true });
-      await controller.completeCleanupBookkeeping({
-        runId: entry.runId,
-        entry,
-        cleanup: "delete",
-        completedAt: 4,
-        skipRequesterSettleWake: true,
-        preserveTranscript: true,
-        finalizeDelivery: (draft) => SubagentLifecycleController.discardTerminalDelivery(draft, 4),
-      });
-      expect(loadSubagentRegistryFromSqlite().has(entry.runId)).toBe(false);
-      const { events } = await sessionStateEvents.listSessionStateEventsSince(
-        entry.requesterSessionKey,
-        "main",
-        0,
-        200,
-      );
-      expect(events).toMatchObject([
-        {
-          kind: "child_delivery_removed",
-          runId: entry.runId,
-          payload: { outcome: "discarded", reason: "expired", lastError: "delivery unavailable" },
-        },
-      ]);
-    } finally {
-      controller?.clearRuntimeState();
-      await cleanupSessionStateTestState();
-    }
-  });
-
   it.each([
     { change: "none", stage: "commit" },
     { change: "provisional kill", stage: "transaction" },

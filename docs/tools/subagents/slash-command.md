@@ -17,8 +17,10 @@ read_when:
 /subagents info <id|#>
 ```
 
-`/subagents info` shows run metadata (status, timestamps, session id,
-transcript path, cleanup). `/subagents log` prints recent chat turns for a
+`/subagents info` shows the recorded status, timestamps, session ID and cleanup
+policy. For unfinished work, Activity can show a current tool, a wait or
+“current activity unavailable.” If activity is unavailable, check the original
+worker before repeating the task. `/subagents log` prints recent chat turns for a
 run; add the `tools` token to include tool-call/result messages (omitted
 by default). Use `sessions_history` for a bounded, safety-filtered recall
 view from within an agent turn, or inspect the transcript path on disk for
@@ -97,6 +99,7 @@ explicitly unsupported even though the ACP spawn and child are observable.
     - OpenClaw hands completions back to the requester session through an `agent` turn with a stable key that prevents duplicate turns.
     - If the requester run is still active, OpenClaw first tries to wake/steer that run instead of starting a second visible reply path.
     - If an active requester cannot accept steering, including a busy CLI run, the handoff waits in the same session lane and starts after the current turn releases its claim. A failed wake does not start a competing turn or discard the completion.
+    - Children with different Gateway ownership settle separately. A restored child without a live delivery owner cannot fail the live siblings' completion batch; an undeliverable result produces a failure notice in the original requester conversation, including after its original turn has ended.
     - A successful parent completion may return `NO_REPLY` or no visible text and settle quietly, including for external conversations. If the parent produces a visible reply, external delivery requires a confirmed send, not merely an answer saved in the requester transcript.
     - Native sub-agents do not get the message tool. They return plain assistant text to the parent/requester agent; human-visible replies stay owned by the parent/requester agent's normal delivery policy.
     - Queue acceptance is not delivery. If direct handoff cannot be used, delivery falls back to queue routing; the completion remains `session_queued`, rather than delivered, until the durable queue settles.

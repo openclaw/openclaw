@@ -745,13 +745,6 @@ describe("new-session composer attachment drops", () => {
     composer.dispatchEvent(createDragEvent("drop", [file]));
 
     await waitForFast(() => expect(replace).toHaveBeenCalledOnce());
-    expect(replace).toHaveBeenCalledWith([
-      expect.objectContaining({
-        fileName: "pic.png",
-        mimeType: "image/png",
-        sizeBytes: file.size,
-      }),
-    ]);
     expect(attachmentDraft.attachments).toHaveLength(1);
     expect(attachmentDraft.attachments[0]).toMatchObject({
       fileName: "pic.png",

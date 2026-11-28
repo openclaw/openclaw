@@ -1,4 +1,5 @@
 import { afterEach, beforeEach, expect, it, vi } from "vitest";
+import { getAgentEventLifecycleGeneration } from "../../../infra/agent-events.js";
 import { createSubagentRunRecord } from "../../subagent-test-fixtures.test-helpers.js";
 import { SUBAGENT_ENDED_REASON_ERROR } from "./subagent-lifecycle-events.js";
 import { subagentRegistryLog } from "./subagent-registry-lifecycle-log.js";
@@ -9,7 +10,7 @@ import { resetSubagentRegistryForTests } from "./subagent-registry.test-helpers.
 import type { SubagentRunRecord } from "./subagent-registry.types.js";
 
 const SUBAGENT_RESTART_INTERRUPTED_ERROR =
-  "The Gateway stopped before this subagent finished. Its run did not survive the restart; inspect its saved work before retrying.";
+  "The Gateway restarted without confirming this subagent's result. Remote work may still be running or may have finished. Check the original worker and its saved work before retrying.";
 const PROCESS_STARTED_AT = 1_800_000_000_000;
 const NOW = PROCESS_STARTED_AT + 60_000;
 
@@ -54,7 +55,7 @@ afterEach(async () => {
 it("fails a running child restored from an earlier Gateway so its requester wakes", async () => {
   using warning = vi.spyOn(subagentRegistryLog, "warn").mockImplementation(() => {});
   const entry = restoredRunningRow();
-  // Startup has admitted fresh completion custody; child execution still did not survive.
+  // Startup has admitted fresh completion custody; the child's outcome is unknown.
 
   const { complete, settled } = settle(entry);
 
@@ -71,6 +72,7 @@ it("fails a running child restored from an earlier Gateway so its requester wake
       recoveryCurrent: undefined,
       endedAt: NOW,
       outcome: { status: "error", error: SUBAGENT_RESTART_INTERRUPTED_ERROR },
+      terminalReply: { disposition: "empty" },
       reason: SUBAGENT_ENDED_REASON_ERROR,
       sendFarewell: true,
       accountId: "primary",
@@ -82,6 +84,12 @@ it("fails a running child restored from an earlier Gateway so its requester wake
 
 it.each([
   [
+    "a current-lifecycle row with an earlier wall-clock timestamp",
+    (entry: SubagentRunRecord) => {
+      entry.execution.lifecycleGeneration = getAgentEventLifecycleGeneration();
+    },
+  ],
+  [
     "a row awaiting fresh completion admission",
     (entry: SubagentRunRecord) => subagentRuns.retireCompletionAuthority(entry),
   ],
@@ -89,7 +97,6 @@ it.each([
     "a row this process created",
     (entry: SubagentRunRecord) => {
       entry.createdAt = PROCESS_STARTED_AT + 1;
-      subagentRuns.retireCompletionAuthority(entry);
     },
   ],
   [
@@ -101,7 +108,6 @@ it.each([
         endedAt: NOW - 1,
         outcome: { status: "ok" },
       };
-      subagentRuns.retireCompletionAuthority(entry);
     },
   ],
   [

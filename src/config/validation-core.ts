@@ -1,6 +1,7 @@
 import path from "node:path";
 import { isCanonicalDottedDecimalIPv4, isLoopbackIpAddress } from "@openclaw/net-policy/ip";
 import { sanitizeForLog } from "../../packages/terminal-core/src/ansi.js";
+import { withAgentRosterFactsBatch } from "../agents/agent-roster.js";
 import {
   listAgentEntries,
   listAgentEntriesWithSource,
@@ -378,7 +379,7 @@ function collectSandboxContainerEnvIssues(
 }
 
 /**
- * Validates config without applying runtime defaults.
+ * Validates config as loaded (with the implicit `main` roster) without applying runtime defaults.
  * Use this when you need the raw validated config (e.g., for writing back to file).
  */
 export function validateConfigObjectRaw(
@@ -393,7 +394,7 @@ export function validateConfigObjectRaw(
   },
 ): { ok: true; config: OpenClawConfig } | { ok: false; issues: ConfigValidationIssue[] } {
   const normalizedRaw = stripPreservedLegacyRootKeysForValidation(
-    raw,
+    applyImplicitAgentRosterDefaults(raw),
     opts?.preservedLegacyRootKeys,
   );
   const rosterIssues = findLegacyConfigRuleIssues(normalizedRaw, LEGACY_AGENT_ROSTER_RULES);
@@ -449,7 +450,10 @@ export function validateConfigObjectRaw(
   if (sandboxContainerEnvIssues.length > 0) {
     return { ok: false, issues: sandboxContainerEnvIssues };
   }
-  const duplicates = findDuplicateAgentDirs(validatedConfig, opts);
+  // The parsed roster is private to this validation, so directory lookups can share one index.
+  const duplicates = withAgentRosterFactsBatch(validatedConfig, () =>
+    findDuplicateAgentDirs(validatedConfig, opts),
+  );
   if (duplicates.length > 0) {
     return {
       ok: false,
@@ -476,7 +480,7 @@ export function validateConfigObject(
     sourceRaw?: unknown;
   },
 ): { ok: true; config: OpenClawConfig } | { ok: false; issues: ConfigValidationIssue[] } {
-  const result = validateConfigObjectRaw(applyImplicitAgentRosterDefaults(raw), opts);
+  const result = validateConfigObjectRaw(raw, opts);
   if (!result.ok) {
     return result;
   }

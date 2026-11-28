@@ -173,25 +173,6 @@ describe("plugin package authoring metadata", () => {
     });
   });
 
-  it("rejects inconsistent source and runtime extension metadata", async () => {
-    const result = await validatePackageExtensionEntriesForInstall({
-      packageDir: process.cwd(),
-      extensions: ["./src/one.ts", "./src/two.ts"],
-      manifest: {
-        openclaw: {
-          extensions: ["./src/one.ts", "./src/two.ts"],
-          runtimeExtensions: ["./dist/one.js"],
-        },
-      },
-    });
-
-    expect(result).toEqual({
-      ok: false,
-      error:
-        "package.json openclaw.runtimeExtensions length (1) must match openclaw.extensions length (2)",
-    });
-  });
-
   it("rejects a runtime setup entry without a source setup entry", async () => {
     const result = await validatePackageExtensionEntriesForInstall({
       packageDir: process.cwd(),

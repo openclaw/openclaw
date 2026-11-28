@@ -49,7 +49,6 @@ export function pluginRuntime(
     installed?: boolean;
     enabled?: boolean;
     install?: CodexPluginsManagementRuntime["install"];
-    refresh?: CodexPluginsManagementRuntime["refresh"];
     setupAllowed?: boolean;
   } = {},
 ) {
@@ -102,7 +101,7 @@ export function pluginRuntime(
           return responses[method] as TResponse;
         },
       }),
-    refresh: params.refresh ?? vi.fn(async () => ({ diagnostics: [] })),
+    refresh: vi.fn(async () => ({ diagnostics: [] })),
   } satisfies CodexPluginsManagementRuntime;
 }
 

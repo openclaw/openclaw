@@ -282,11 +282,15 @@ private struct ChatInlineWidgetResolution: Equatable {
 @MainActor
 struct ChatInlineWidgetView: View {
     @Environment(\.openClawEmbeddedBrowserUnavailableReason) private var browserUnavailableReason
+    /// Read here rather than passed in, so a health flip restarts this widget's load without
+    /// changing the row that holds it.
+    @Environment(\.openClawChatGateway) private var gateway
+    @Environment(\.openClawToastPresenter) private var toastPresenter
     let preview: OpenClawChatCanvasPreview
-    let resolverReady: Bool
-    let resolveResource: @MainActor @Sendable (
-        String,
-        OpenClawChatWidgetResource?) async -> OpenClawChatWidgetResource?
+
+    private var resolverReady: Bool {
+        self.gateway?.isResolverReady() == true
+    }
 
     @State private var resolution: ChatInlineWidgetResolution?
     @State private var recoveryAttempts = 0
@@ -406,7 +410,7 @@ struct ChatInlineWidgetView: View {
                     .stroke(OpenClawChatTheme.muted.opacity(0.24), lineWidth: 1)
             }
             .contentShape(Rectangle())
-            .contextMenu {
+            .chatActionContextMenu {
                 Button {
                     self.requestSnapshot(for: .copy)
                 } label: {
@@ -440,7 +444,14 @@ struct ChatInlineWidgetView: View {
         switch outcome {
         case let .failure(request):
             guard self.consumeSnapshotRequest(request) else { return }
-            self.exportErrorMessage = String(localized: "The widget image could not be captured.")
+            if let toastPresenter {
+                let text = request.action == .copy
+                    ? String(localized: "Couldn’t copy the image.")
+                    : String(localized: "Couldn’t save the image.")
+                toastPresenter.post(.failure(text, retry: { self.requestSnapshot(for: request.action) }))
+            } else {
+                self.exportErrorMessage = String(localized: "The widget image could not be captured.")
+            }
         case let .success(request, image):
             guard self.consumeSnapshotRequest(request) else { return }
             switch request.action {
@@ -464,6 +475,7 @@ struct ChatInlineWidgetView: View {
     #if os(iOS)
     private func copySnapshot(_ image: OpenClawPlatformImage) {
         UIPasteboard.general.image = image
+        self.toastPresenter?.post(.copied(String(localized: "Image copied")))
     }
 
     private func saveSnapshot(_ image: OpenClawPlatformImage) {
@@ -530,7 +542,7 @@ struct ChatInlineWidgetView: View {
               self.activePath == path, self.loadGeneration == generation
         else { return }
         self.resolutionInFlight = true
-        let candidate = await resolveResource(path, failedResource)
+        let candidate = await self.gateway?.resolveWidgetResource(path, failedResource)
         guard self.activePath == path,
               self.loadGeneration == generation
         else { return }

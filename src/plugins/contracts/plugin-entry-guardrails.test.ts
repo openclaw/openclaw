@@ -109,12 +109,12 @@ function importsDefinePluginEntry(importClause: string | undefined): boolean {
     .some((part) => part.split(/\s+as\s+/u)[0]?.trim() === "definePluginEntry");
 }
 
-function analyzeSourceModule(params: { filePath: string; source: string }): {
+function analyzeSourceModule(sourceText: string): {
   specifiers: string[];
   relativeSpecifiers: string[];
   importsDefinePluginEntryFromCore: boolean;
 } {
-  const source = stripSourceComments(params.source);
+  const source = stripSourceComments(sourceText);
   const specifiers = new Set<string>();
   let importsDefinePluginEntryFromCore = false;
 
@@ -217,7 +217,7 @@ function findForbiddenContractModuleGraphPaths(params: {
     }
 
     const source = readFileSync(currentPath, "utf8");
-    const analysis = analyzeSourceModule({ filePath: currentPath, source });
+    const analysis = analyzeSourceModule(source);
     for (const specifier of collectForbiddenContractSpecifiers(analysis.specifiers)) {
       failures.push(`${repoRelativePath} imported ${specifier}`);
     }
@@ -248,7 +248,7 @@ describe("plugin entry guardrails", () => {
       const indexPath = resolve(plugin.rootDir, "index.ts");
       try {
         const source = readFileSync(indexPath, "utf8");
-        if (analyzeSourceModule({ filePath: indexPath, source }).importsDefinePluginEntryFromCore) {
+        if (analyzeSourceModule(source).importsDefinePluginEntryFromCore) {
           failures.push(`extensions/${plugin.pluginId}/index.ts`);
         }
       } catch {
@@ -298,16 +298,13 @@ describe("plugin entry guardrails", () => {
 
   it("follows relative import edges while scanning guarded contract graphs", () => {
     expect(
-      analyzeSourceModule({
-        filePath: "guardrail-fixture.ts",
-        source: `
+      analyzeSourceModule(`
         import { x } from "./safe.js";
         import "./setup.js";
         export { x };
         export * from "./barrel.js";
         import { y } from "openclaw/plugin-sdk/core";
-      `,
-      }).relativeSpecifiers.toSorted(),
+      `).relativeSpecifiers.toSorted(),
     ).toEqual(["./barrel.js", "./safe.js", "./setup.js"]);
   });
 
@@ -332,13 +329,10 @@ describe("plugin entry guardrails", () => {
 
   it("detects aliased definePluginEntry imports from core", () => {
     expect(
-      analyzeSourceModule({
-        filePath: "aliased-plugin-entry.ts",
-        source: `
+      analyzeSourceModule(`
           import { definePluginEntry as dpe } from "openclaw/plugin-sdk/core";
           import { somethingElse } from "openclaw/plugin-sdk/core";
-        `,
-      }).importsDefinePluginEntryFromCore,
+        `).importsDefinePluginEntryFromCore,
     ).toBe(true);
   });
 });

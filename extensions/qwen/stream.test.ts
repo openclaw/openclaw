@@ -96,6 +96,26 @@ function readToolMessage(id = "call_1", reasoningContent?: string) {
 }
 
 describe("Qwen streams", () => {
+  it("preserves Qwen4-Max effort tiers through both payload passes", () => {
+    const model = tokenPlanModel("qwen4-max");
+    for (const [level, effort] of [
+      ["off", undefined],
+      ["minimal", "low"],
+      ["low", "low"],
+      ["medium", "high"],
+      ["high", "high"],
+      ["xhigh", "xhigh"],
+      ["max", "xhigh"],
+      [undefined, "high"],
+    ] as const) {
+      expect(captureProviderPayload(model, level, { messages: [] })).toStrictEqual({
+        messages: [],
+        enable_thinking: level !== "off",
+        ...(effort ? { reasoning_effort: effort } : {}),
+      });
+    }
+  });
+
   it.each([
     "https://dashscope.aliyuncs.com/compatible-mode/v1",
     "https://dashscope-intl.aliyuncs.com/compatible-mode/v1",
@@ -160,40 +180,45 @@ describe("Qwen streams", () => {
     expect(messages[0]?.reasoning_content).toBe("original reasoning");
   });
 
-  it.each(["in-place mutation", "sync replacement", "async replacement"] as const)(
-    "honors caller budgets and reasoning overrides after %s",
-    async (mode) => {
-      const capture = createAsyncPayloadCapture(createModel("qwen3.8-max"), "high", () => ({
-        messages: [],
-      }));
-      for (const [replacement, expected] of [
-        [{ thinking_budget: 512 }, { thinking_budget: 512, enable_thinking: true }],
-        [{ reasoning_effort: "low" }, { reasoning_effort: "low", enable_thinking: true }],
-        [{ reasoning_effort: "none" }, { enable_thinking: false }],
-      ]) {
-        const captured = await capture((payload) => {
-          expect(payload).toEqual({
-            messages: [],
-            enable_thinking: true,
-            reasoning_effort: "xhigh",
-          });
-          if (mode === "in-place mutation") {
-            if (!payload || typeof payload !== "object") {
-              throw new Error("Expected a Qwen request payload");
-            }
-            Object.assign(payload, replacement);
-            return undefined;
+  it.each(
+    ["qwen3.8-max", "qwen4-max"].flatMap((id) =>
+      (["in-place mutation", "sync replacement", "async replacement"] as const).map(
+        (mode) => [id, mode] as const,
+      ),
+    ),
+  )("honors %s caller budgets and reasoning overrides after %s", async (id, mode) => {
+    const capture = createAsyncPayloadCapture(
+      createModel(id),
+      id === "qwen3.8-max" ? "high" : "xhigh",
+      () => ({ messages: [] }),
+    );
+    for (const [replacement, expected] of [
+      [{ thinking_budget: 512 }, { thinking_budget: 512, enable_thinking: true }],
+      [{ reasoning_effort: "low" }, { reasoning_effort: "low", enable_thinking: true }],
+      [{ reasoning_effort: "none" }, { enable_thinking: false }],
+    ]) {
+      const captured = await capture((payload) => {
+        expect(payload).toEqual({
+          messages: [],
+          enable_thinking: true,
+          reasoning_effort: "xhigh",
+        });
+        if (mode === "in-place mutation") {
+          if (!payload || typeof payload !== "object") {
+            throw new Error("Expected a Qwen request payload");
           }
-          const next = { ...replacement };
-          return mode === "async replacement" ? Promise.resolve(next) : next;
-        });
-        expect(captured).toEqual({
-          ...(mode === "in-place mutation" ? { messages: [] } : {}),
-          ...expected,
-        });
-      }
-    },
-  );
+          Object.assign(payload, replacement);
+          return undefined;
+        }
+        const next = { ...replacement };
+        return mode === "async replacement" ? Promise.resolve(next) : next;
+      });
+      expect(captured).toEqual({
+        ...(mode === "in-place mutation" ? { messages: [] } : {}),
+        ...expected,
+      });
+    }
+  });
 
   it("only registers for Qwen-family OpenAI-compatible providers", () => {
     expect(wrap(createModel(undefined, { provider: "qwencloud" }))).toBeTypeOf("function");

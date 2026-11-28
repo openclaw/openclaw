@@ -53,7 +53,6 @@ import { scheduleNodeConnectionNotification } from "../../node-connection-notifi
 import { resolveOpenClawIdClawOrigin } from "../../openclaw-id/claw-origin.js";
 import {
   resolveGatewayOperatorRoleActor,
-  resolveAdministratorMemberRolePolicy,
   resolveOperatorRolePolicy,
   resolveOperatorRolePolicyForProfile,
 } from "../../operator-role-policy.js";
@@ -64,6 +63,7 @@ import {
   TICK_INTERVAL_MS,
   WEBSOCKET_OPEN_READY_STATE,
 } from "../../server-constants.js";
+import { supportsSessionArchiveUndo } from "../../session-pin-compatibility.js";
 import { resolveProfileActivityViewerId } from "../../session-profile-activity-policy.js";
 import { getSessionRowProjection } from "../../session-row-projection-access.js";
 import { allowedSessionVisibilities } from "../../session-sharing.js";
@@ -206,12 +206,9 @@ export async function sendGatewayHello(
           activityClient,
           resolveGatewayOperatorRoleActor(activityClient)?.kind === "system"
             ? undefined
-            : (
-                resolveAdministratorMemberRolePolicy(activityClient, context.configSnapshot) ??
-                resolveOperatorRolePolicyForProfile(
-                  activityClient.authenticatedUserProfile?.profileId,
-                  buildRequestContext().getCommittedRuntimeConfig?.() ?? context.configSnapshot,
-                )
+            : resolveOperatorRolePolicyForProfile(
+                activityClient.authenticatedUserProfile?.profileId,
+                buildRequestContext().getCommittedRuntimeConfig?.() ?? context.configSnapshot,
               )?.scopes,
           activityClient.authenticatedUserProfile?.profileId,
         )
@@ -271,6 +268,7 @@ export async function sendGatewayHello(
         GATEWAY_SERVER_CAPS.NODE_WORKER_BUNDLE_STATUS,
         GATEWAY_SERVER_CAPS.NODE_WORKER_BUNDLE_PREFETCH,
         GATEWAY_SERVER_CAPS.NODE_WORKER_CAPTURED_EXEC_POLICY,
+        GATEWAY_SERVER_CAPS.NODE_WORKER_EXEC_MEMORY_BOUNDARY,
         GATEWAY_SERVER_CAPS.NODE_WORKER_WORKSPACE_QUIESCENCE,
         GATEWAY_SERVER_CAPS.NODE_WORKER_WORKSPACE_RESULT,
         GATEWAY_SERVER_CAPS.NODE_WORKER_ENVIRONMENT_SESSION,
@@ -286,7 +284,12 @@ export async function sendGatewayHello(
         GATEWAY_SERVER_CAPS.PUBLISHED_MODEL_CATALOG,
         GATEWAY_SERVER_CAPS.PROGRESS_CARD_AGENT_SCOPE,
         GATEWAY_SERVER_CAPS.SESSION_SCOPED_CHAT_METADATA,
+        GATEWAY_SERVER_CAPS.SESSION_APPROVAL_RECIPIENTS,
         GATEWAY_SERVER_CAPS.SESSION_SCOPED_MODEL_CATALOG,
+        GATEWAY_SERVER_CAPS.PERSONAL_SESSION_PINS,
+        ...(supportsSessionArchiveUndo(activityClient, context.configSnapshot)
+          ? [GATEWAY_SERVER_CAPS.SESSION_ARCHIVE_UNDO]
+          : []),
         GATEWAY_SERVER_CAPS.SESSION_UNREAD_ACK_CONTRACT,
         GATEWAY_SERVER_CAPS.SESSION_GOAL_START,
         GATEWAY_SERVER_CAPS.SESSION_SETTINGS_CONTRACT,
@@ -296,6 +299,7 @@ export async function sendGatewayHello(
         GATEWAY_SERVER_CAPS.SYSTEM_AGENT_SETUP_MODEL_REF,
         GATEWAY_SERVER_CAPS.TASK_SUGGESTIONS_ACCEPT_MODES,
         GATEWAY_SERVER_CAPS.TALK_SESSION_CLOSE_DISPOSITION,
+        GATEWAY_SERVER_CAPS.UPDATE_RUN_CONSENT_IDENTITY,
       ],
     },
     snapshot,
@@ -409,6 +413,12 @@ export async function sendGatewayHello(
       }
     }
     snapshot.suspension = { phase: getGatewaySuspendAdmissionPhase() };
+    if (
+      (deviceToken || bootstrapDeviceTokens.length > 0) &&
+      state.isDeviceTokenSubjectCurrent?.() === false
+    ) {
+      throw new Error("Credential delivery requires current profile membership");
+    }
     helloWriteStarted = true;
     await sendFrame({ type: "res", id: frame.id, ok: true, payload: helloOk });
   } catch (err) {

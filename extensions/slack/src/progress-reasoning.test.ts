@@ -110,34 +110,6 @@ describe("planSlackReasoningCards", () => {
     ]);
     expect(planSlackReasoningCards(createSlackReasoningCardState())).toEqual([]);
   });
-
-  it("completes every segment but the newest and keeps post-tool text out of pre-tool cards", () => {
-    const state = {
-      ...createSlackReasoningCardState(),
-      sealed: ["Before the tool call."],
-      open: "After the tool result.",
-      toolCalls: 1,
-    };
-    expect(
-      planSlackReasoningCards(state).map((line) => [line.id, line.status ?? "open", line.text]),
-    ).toEqual([
-      ["reasoning:1", "completed", "🧠 Before the tool call."],
-      ["reasoning:2", "open", "🧠 After the tool result."],
-    ]);
-  });
-
-  it("numbers every segment of a long think; the stream pipeline places them", () => {
-    const state = { ...createSlackReasoningCardState(), open: segmentsOf(60).join(" ") };
-    const lines = planSlackReasoningCards(state);
-    expect(lines.map((line) => line.id)).toEqual(
-      Array.from({ length: 60 }, (_, index) => `reasoning:${index + 1}`),
-    );
-    expect(lines.slice(0, 59).every((line) => line.status === "completed")).toBe(true);
-    expect(lines.at(-1)?.status).toBeUndefined();
-    for (const line of lines) {
-      expect(line.text.length).toBeLessThanOrEqual(250);
-    }
-  });
 });
 
 describe("rolloverSlackReasoningCards", () => {

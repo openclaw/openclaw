@@ -10,6 +10,7 @@ import {
 import { expectDefined } from "@openclaw/normalization-core";
 import { asOptionalRecord } from "@openclaw/normalization-core/record-coerce";
 import { expect, vi } from "vitest";
+import { createTestOperatorAuthority } from "../../agents/admitted-run-context.test-support.js";
 import { registerExecApprovalFollowupRuntimeHandoff } from "../../agents/bash-tools.exec-approval-followup-state.js";
 import type { AgentInternalEvent } from "../../agents/internal-events.js";
 import { resetSubagentRegistryForTests } from "../../agents/subagents/registry/subagent-registry.test-helpers.js";
@@ -39,8 +40,8 @@ import {
   waitForAssertion,
 } from "./agent-clock.test-helpers.js";
 import { agentIdentityHandlers } from "./agent-identity.js";
+import { agentRunHandler } from "./agent-run-handler.js";
 import { createAgentTestSessionRowProjection } from "./agent-session-projection.test-support.js";
-import { agentHandlers } from "./agent.js";
 import { resetSubagentRegistryMocks } from "./agent.subagent-registry.mocks.test-support.js";
 import { getAgentTestStorePath } from "./agent.user-turn-recorder.test-support.js";
 import { flushPendingSessionsChangedEvents } from "./session-change-event.js";
@@ -103,7 +104,7 @@ export const makeContext = (session?: {
   return context;
 };
 
-type AgentHandler = NonNullable<typeof agentHandlers.agent>;
+type AgentHandler = typeof agentRunHandler;
 
 export type AgentHandlerArgs = Parameters<AgentHandler>[0];
 
@@ -301,6 +302,7 @@ export function backendGatewayClient(): NonNullable<AgentHandlerArgs["client"]> 
       },
       scopes: ["operator.write"],
     },
+    internal: { localBackendClient: true },
   };
 }
 
@@ -352,6 +354,20 @@ export function operatorWriteCliClient(
         mode: "cli",
       },
       scopes,
+    },
+  };
+}
+
+/** A local owner CLI socket carrying its admitted owner authority; the grant decides. */
+export function localOwnerCliClient(): NonNullable<AgentHandlerArgs["client"]> {
+  return {
+    ...operatorWriteCliClient(["operator.admin"]),
+    internal: {
+      isLocalClient: true,
+      operatorRunAuthority: createTestOperatorAuthority({
+        profileId: "gateway-owner",
+        scopes: ["operator.admin"],
+      }),
     },
   };
 }
@@ -454,17 +470,14 @@ export async function invokeAgent(
     vi.useFakeTimers({ toFake: ["setTimeout", "clearTimeout"] });
   }
   try {
-    await expectDefined(agentHandlers.agent, "agentHandlers.agent test invariant").call(
-      agentHandlers,
-      {
-        params,
-        respond: respond as never,
-        context,
-        req: { type: "req", id: options?.reqId ?? "agent-test-req", method: "agent" },
-        client: options?.client ?? null,
-        isWebchatConnect: options?.isWebchatConnect ?? (() => false),
-      },
-    );
+    await agentRunHandler({
+      params,
+      respond: respond as never,
+      context,
+      req: { type: "req", id: options?.reqId ?? "agent-test-req", method: "agent" },
+      client: options?.client ?? null,
+      isWebchatConnect: options?.isWebchatConnect ?? (() => false),
+    });
     if (options?.flushDispatch !== false) {
       await waitForAcceptedRunDispatch({
         respond,

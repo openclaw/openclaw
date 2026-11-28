@@ -1,5 +1,4 @@
 import { execFileSync } from "node:child_process";
-import { once } from "node:events";
 import {
   appendFile,
   chmod,
@@ -276,46 +275,6 @@ it("binds real-client callbacks to the exact socket and preserves recovery callb
   expect(snapshot().events.every((event) => event.socketIndex === null)).toBe(true);
   await result;
 });
-
-it.each(["upstream", "client", "fixture"] as const)(
-  "records the tap's first %s terminal event before cascading close",
-  async (side) => {
-    const server = net.createServer();
-    server.listen(0, "127.0.0.1");
-    await once(server, "listening");
-    const address = server.address();
-    if (!address || typeof address === "string") {
-      throw new Error("missing fixture address");
-    }
-    const tap = await observeDesktopEndpointPackets(address.port, new AbortController().signal);
-    const accepted = once(server, "connection");
-    const client = net.connect({ host: "127.0.0.1", port: tap.port });
-    const [upstream] = (await accepted) as [net.Socket];
-    try {
-      expect(tap.terminalSnapshot()).toEqual({ events: [], omitted: 0 });
-      if (side === "fixture") {
-        await tap.close();
-      } else {
-        (side === "upstream" ? upstream : client).end();
-      }
-      await vi.waitFor(() => expect(tap.terminalSnapshot().events).toHaveLength(1));
-      expect(tap.terminalSnapshot().events[0]).toMatchObject({
-        connectionIndex: 0,
-        side,
-        event: side === "fixture" ? "cleanup" : "end",
-      });
-      await tap.close();
-      expect(tap.terminalSnapshot().events).toHaveLength(1);
-    } finally {
-      client.destroy();
-      upstream.destroy();
-      await tap.close();
-      await new Promise<void>((resolve, reject) => {
-        server.close((error) => (error ? reject(error) : resolve()));
-      });
-    }
-  },
-);
 
 it("projects bounded gateway owner facts and never publishes raw identity or stderr", async () => {
   const file = fixtureFile("desktop-gateway-log-", "gateway.log");

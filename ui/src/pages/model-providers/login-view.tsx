@@ -1,18 +1,21 @@
-import { createMemo, Errored, For, Loading, Show } from "solid-js";
+import { createMemo, Errored, For, Loading, onSettled, Show } from "solid-js";
 import type { ModelAuthStatusResult } from "../../api/types.ts";
+import { providerDisplayLabel } from "../../components/provider-icon-data.ts";
 import { IconButton } from "../../components/solid/icon-button.tsx";
 import { InlineAlert } from "../../components/solid/inline-alert.tsx";
+import { ModelPicker } from "../../components/solid/model-picker.tsx";
 import { buildExternalLinkRel, EXTERNAL_LINK_TARGET } from "../../lib/external-link.ts";
 import { formatUiError } from "../../lib/format-error.ts";
 import { t } from "../../lib/reactive/i18n.ts";
 import { ModelProviderIcon } from "../../lib/reactive/provider-presentation.tsx";
 import { ModelSetupWizard } from "../model-setup/wizard-view-solid.tsx";
 import type { ModelProviderLogin } from "./login-controller.ts";
-import { ProviderAccountSummary } from "./profiles-view.tsx";
+import { hasProviderAccounts, ProviderAccountSummary } from "./profiles-view.tsx";
 
 export function ModelProviderLoginView(props: { controller: ModelProviderLogin }) {
   const picker = createMemo(() => props.controller.pickerView());
   const wizard = createMemo(() => props.controller.wizardViewProps);
+  const choosingModel = createMemo(() => Boolean(props.controller.completionModelPicker()));
   return (
     <Show
       when={picker()}
@@ -22,6 +25,11 @@ export function ModelProviderLoginView(props: { controller: ModelProviderLogin }
             {...wizard()}
             busy={props.controller.saving()}
             doneAction={props.controller.doneAction()}
+            doneContent={
+              choosingModel() ? (
+                <CompletionModelSelection controller={props.controller} />
+              ) : undefined
+            }
           />
         </div>
       }
@@ -50,6 +58,23 @@ export function ModelProviderLoginView(props: { controller: ModelProviderLogin }
         </Show>
       )}
     </Show>
+  );
+}
+
+function CompletionModelSelection(props: { controller: ModelProviderLogin }) {
+  let section: HTMLDivElement | undefined;
+  const picker = createMemo(() => props.controller.completionModelPicker());
+  onSettled(() => section?.focus({ preventScroll: true }));
+  return (
+    <div
+      class="field"
+      tabindex={-1}
+      ref={(element) => {
+        section = element;
+      }}
+    >
+      <Show when={picker()}>{(current) => <ModelPicker {...current()} />}</Show>
+    </div>
   );
 }
 
@@ -169,7 +194,7 @@ function PickerDialog(props: {
                               group().choices.length
                                 ? [
                                     ...group().choices.map((choice) => choice.label),
-                                    ...(group().apiKeyProvider
+                                    ...(group().apiKeyProviders.length
                                       ? [t("modelProviders.status.apiKey")]
                                       : []),
                                   ].join(" · ")
@@ -199,7 +224,7 @@ function PickerDialog(props: {
                   <Show when={current().unavailable}>
                     {(unavailable) => <p role="status">{unavailable().message}</p>}
                   </Show>
-                  <Show when={!current().unavailable}>
+                  <Show when={!current().unavailable && hasProviderAccounts(current().accounts)}>
                     <ProviderAccountSummary
                       cards={current().accounts}
                       recovery={
@@ -214,7 +239,9 @@ function PickerDialog(props: {
                     />
                   </Show>
                   <section class="model-provider-login__methods">
-                    <h3>{t("modelProviders.login.connectAccount")}</h3>
+                    <Show when={hasProviderAccounts(current().accounts)}>
+                      <h3>{t("modelProviders.login.connectAccount")}</h3>
+                    </Show>
                     <div
                       data-models-login-choice
                       ref={props.controller.setMethodChoices.bind(props.controller)}
@@ -231,24 +258,40 @@ function PickerDialog(props: {
                         )}
                       </For>
                     </div>
-                    <Show when={provider().apiKeyProvider}>
-                      <LoginOption
-                        buttonRef={props.controller.setApiKeyChoice.bind(props.controller)}
-                        label={t("modelProviders.status.apiKey")}
-                        hint={t("modelProviders.login.apiKeyHint")}
-                        apiKey
-                        card
-                        disabled={current().disabled}
-                        onClick={() => current().onApiKey()}
-                      />
-                    </Show>
+                    <For
+                      each={provider().apiKeyProviders}
+                      keyed={(apiKeyProvider) => apiKeyProvider}
+                    >
+                      {(apiKeyProvider, index) => (
+                        <LoginOption
+                          buttonRef={(element) => {
+                            if (index() === 0) {
+                              props.controller.setApiKeyChoice(element);
+                            }
+                          }}
+                          label={
+                            // A combined card names each key's owner so the key reaches the right one.
+                            provider().apiKeyProviders.length > 1
+                              ? t("modelProviders.login.apiKeyFor", {
+                                  provider: providerDisplayLabel(apiKeyProvider()),
+                                })
+                              : t("modelProviders.status.apiKey")
+                          }
+                          hint={t("modelProviders.login.apiKeyHint")}
+                          apiKey
+                          card
+                          disabled={current().disabled}
+                          onClick={() => current().onApiKey(apiKeyProvider())}
+                        />
+                      )}
+                    </For>
                   </section>
                 </>
               )}
             </Show>
           </Show>
         </div>
-        <Show when={current().provider || current().showDiscover}>
+        <Show when={(current().provider && current().showBack) || current().showDiscover}>
           <openclaw-modal-actions class="oc-dialog__footer model-setup-wizard__footer">
             <Show
               when={current().provider}

@@ -288,6 +288,8 @@ type SessionEntryCore = SessionEntryProvenance &
     /** Ordinary Template admission owns this exact pending incarnation until verified setup. */
     templateInitialization?: {
       source: { packageName: string; version?: string };
+      /** The original Add's zone follows this admission through reviewed or chat setup. */
+      deviceTimeZone?: string;
       agentConfig: import("../types.agents.js").AgentEntryConfig;
       workspaceIdentity: string;
       /** Verified intent recorded before instructions or config can change. */
@@ -301,11 +303,10 @@ type SessionEntryCore = SessionEntryProvenance &
       configured?: { planDigest: string; sourceIntegrity: string };
     };
     /** Creation is finished; Retry continues only this hidden Template setup turn. */
-    templateSetup?: {
+    templateSetup?: import("../../templates/conversation.js").TemplateSetupOpening & {
       source: { packageName: string; version?: string };
-      report: import("../../templates/conversation.js").TemplateSetupReport;
-      /** Workspace is ready; dependency installation can overlap the first conversation turn. */
-      dependenciesPending?: true;
+      /** From the verified manifest, never inferred from the agent's editable workspace. */
+      requiredAutomationIds?: string[];
       /** Avoid replaying the greeting when Retry only needs to report dependency results. */
       openingComplete?: true;
     };
@@ -394,6 +395,8 @@ type SessionEntryCore = SessionEntryProvenance &
     parentSessionLifecycleRevision?: string;
     /** How this session node came to exist; written once and retained across sessionId rotations. */
     createdVia?: SessionCreatedVia;
+    /** Write-once sessions_create intent; spawn lineage still bounds admission depth. */
+    createdIndependently?: true;
     /** Creation-only presentation surface; stored in entry_json without a column projection. */
     createdSurface?: SessionRow["createdSurface"];
     /** Actor that caused node creation, with an optional profile, session, or sender id; written once. */
@@ -424,8 +427,10 @@ type SessionEntryCore = SessionEntryProvenance &
     blindPrompt?: true;
     /** Version of the requester tool-policy snapshot captured when this child was spawned. */
     inheritedToolPolicyVersion?: 1;
-    /** Sender/channel restriction provenance retained with the inherited tool snapshot. */
+    /** Restriction provenance for ordinary sender-delegated tool policy. */
     inheritedToolPolicySource?: "sender";
+    /** Immutable original execution source required by a constrained delegated session. */
+    delegatedOperatorSource?: QueuedOperatorRecoverySource;
     /** Session-scoped tool deny entries inherited from the caller that created this session. */
     inheritedToolDeny?: string[];
     /** Session-scoped tool allow entries inherited from the caller that created this session. */
@@ -615,6 +620,21 @@ type SessionEntryCore = SessionEntryProvenance &
     /** A committed lossy compaction affected this history; cleared with a new session. */
     compactionQualityDegraded?: true;
     memoryFlush?: MemoryFlushState;
+    /**
+     * Last read-only prompt-cache prewarm (`agents.defaults.promptCacheKeepWarm`). It keeps a
+     * keep-warm series and the cache-TTL pruning clock across Gateway restarts. Readers ignore it
+     * unless its reply is still in the transcript they read and the route matches.
+     */
+    promptCacheKeepWarm?: {
+      /** Transcript entry of the provider reply whose cached prefix the pings keep warm. */
+      anchorEntryId: string;
+      provider: string;
+      model: string;
+      /** Request start of the last successful prewarm. */
+      lastPingAt: number;
+      /** Successful prewarms since the last human turn. */
+      pings: number;
+    };
     cliSessionIds?: Record<string, string>;
     cliSessionBindings?: Record<string, CliSessionBinding>;
     /** Initialization fence for seeding canonical ACP metadata; cleared after creation. */
@@ -681,6 +701,8 @@ export type SessionScheduledMemoryParent = {
 };
 
 export type InternalSessionEntryCore = SessionEntryCore & {
+  /** A failed naming attempt released the transcript fallback; retries must not hide it. */
+  titleFallbackReady?: true;
   /**
    * Written only by cron run preparation on a child-placement `:run:` row, so a
    * session the run spawns can resolve its memory audience through that parent.
@@ -710,10 +732,14 @@ export type InternalSessionEntryCore = SessionEntryCore & {
   publicShare?: { id: string; sessionId: string; createdAt: number };
   /** Run that owns the current non-terminal Gateway lifecycle projection. */
   lifecycleRunId?: string;
+  /** Restart resume scope the latest run started under; see session-restart-resume-scope. */
+  lifecycleRestartScope?: string;
   /** Exact run that produced the latest terminal Gateway lifecycle projection. */
   lastRunId?: string;
   /** Run admitted by the session lane; overwritten at admission and checked by transcript writes. */
   activeWriterRunId?: string;
+  /** Admitted native shell calls whose terminal transcript write has not been acknowledged. */
+  pendingShellCalls?: import("./session-restart-resume-scope.js").PendingSessionShellCalls;
   /** Canonical remote repository awaiting preparation by this exact session generation. */
   pendingProjectGitUrl?: string;
   /** Authorized worktree intent awaiting preparation by an admitted turn. */
@@ -728,6 +754,10 @@ export type InternalSessionEntryCore = SessionEntryCore & {
   sessionDiffBaselineCapture?: import("./session-diff-baseline-capture.js").SessionDiffBaselineCapture;
   /** Running root-session resume only; accepted queued input owns its own durable row. */
   resumeAfterRestart?: {
+    /** Backend execution whose tool results belong to the interrupted turn. */
+    sourceRunId?: string;
+    /** A direct chat turn in a visible spawned session, not its original delegated run. */
+    directChat?: true;
     /** Interrupted turn requester; revalidated before the replacement turn is admitted. */
     operatorSource?: QueuedOperatorRecoverySource;
     /** Restart resume scope of the Gateway that wrote the marker; see session-restart-resume-scope. */
@@ -877,6 +907,7 @@ function mergeSessionEntryWithPolicy(
     next.createdVia = existing.createdVia;
   }
   next.createdSurface = existing.createdSurface;
+  next.createdIndependently = existing.createdIndependently;
   if (existing.createdActor !== undefined) {
     next.createdActor = existing.createdActor;
   }

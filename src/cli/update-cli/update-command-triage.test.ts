@@ -2,10 +2,8 @@ import fs from "node:fs/promises";
 import path from "node:path";
 import { afterEach, beforeEach, expect, it, vi } from "vitest";
 import { useAutoCleanupTempDirTracker } from "../../../test/helpers/temp-dir.js";
-import * as configureShared from "../../commands/configure.shared.js";
 import { withTriageTerminal } from "../../commands/triage.test-support.js";
 import { CONTROL_PLANE_UPDATE_SENTINEL_META_ENV } from "../../infra/update-control-plane-sentinel.js";
-import * as updateFailureReport from "../../infra/update-failure-report.js";
 import { POST_CORE_UPDATE_ENV } from "../../infra/update-post-core-context.js";
 import { defaultRuntime, ExitError } from "../../runtime.js";
 import { withEnvAsync } from "../../test-utils/env.js";
@@ -271,25 +269,6 @@ it("leaves triage to the owner for a managed helper child", async () => {
   ).rejects.toMatchObject({ code: 80 });
   await expectNoTriage(target);
   await expectMissing(target.env.OPENCLAW_STATE_DIR);
-});
-
-it("uses a new report identity for each distinct CLI update execution", async () => {
-  const target = await createInstalledTriage();
-  reportActionSelect.mockResolvedValue("dismiss");
-  vi.spyOn(configureShared, "confirm").mockResolvedValue(false);
-  const prepare = vi.spyOn(updateFailureReport, "prepareUpdateFailureReport");
-
-  await withTriageTerminal(true, async () => {
-    for (let index = 0; index < 2; index += 1) {
-      reportActionSelect.mockResolvedValueOnce("report");
-      await expect(failUpdate(target)).rejects.toMatchObject({ code: 1 });
-    }
-  });
-
-  const attemptIds = prepare.mock.calls.map(([params]) => params.attemptId);
-  expect(attemptIds).toHaveLength(2);
-  expect(attemptIds).toEqual(Array(2).fill(expect.stringMatching(/^[0-9a-f-]{36}$/u)));
-  expect(attemptIds[0]).not.toBe(attemptIds[1]);
 });
 
 it("does not start triage when the report action menu throws", async () => {

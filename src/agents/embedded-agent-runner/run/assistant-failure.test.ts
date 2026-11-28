@@ -97,7 +97,7 @@ function setAttempt(
   });
 }
 
-function makeToolRejectionInput(model = "claude-opus-5") {
+function makeToolRejectionInput(model: string) {
   const fixture = makeExhaustedCredentialFailureInput();
   setAttempt(
     fixture.input,
@@ -731,6 +731,29 @@ describe("assistant failure fallback guards", () => {
     ).rejects.toThrow();
     expect(run).toHaveBeenCalledOnce();
     expect(attempts).toBe(1);
+  });
+  it("preserves redacted plugin copy or generic advice at the overload cap", async () => {
+    for (const copy of [
+      "Contact support. api_key=sk-fixture1234567890abcdefghijklmnop",
+      undefined,
+    ]) {
+      const input = makeAssistantFailureInput({ errorMessage: "HTTP 503 overloaded" });
+      input.overloadProfileRotations = 1;
+      input.failover.overloadProfileRotationLimit = 1;
+      input.providerOwner = { id: "fixture", formatUserFacingError: () => copy };
+      const failure = await failureFor(input);
+      expect(failure).toMatchObject({ reason: "overloaded", status: 503 });
+      expect(input.failover.advanceAuthProfile).not.toHaveBeenCalled();
+      expect(failure.message).toBe(
+        "The AI service is temporarily overloaded. Please try again in a moment.",
+      );
+      if (copy) {
+        expect(failure.userMessage).toEqual(expect.stringContaining("Contact support."));
+        expect(failure.userMessage).not.toContain("sk-fixture1234567890abcdefghijklmnop");
+      } else {
+        expect(failure.userMessage).toBeUndefined();
+      }
+    }
   });
   it("preserves billing failures when bookkeeping rejects=true", async () => {
     using warn = vi.spyOn(log, "warn").mockImplementation(() => {});

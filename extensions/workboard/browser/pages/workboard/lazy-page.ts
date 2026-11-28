@@ -52,11 +52,11 @@ export function createLazyWorkboardPage(load: () => Promise<ControlUiView>): Con
                   context.host.ui.invalidate();
                 }
               },
-              (error: unknown) => {
+              () => {
                 if (alive()) {
                   // Browsers can retain failed module fetches across remounts.
-                  // Keep the cause for diagnostics and name the document recovery.
-                  failure = { error: new Error(t("workboard.pageLoadFailed"), { cause: error }) };
+                  // The host displays thrown causes, including internal chunk URLs.
+                  failure = { error: new Error(t("workboard.pageLoadFailed")) };
                   context.host.ui.invalidate();
                 }
               },

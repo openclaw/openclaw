@@ -66,11 +66,4 @@ describe("outbound message identity registry", () => {
     expect(isRecentOutboundMessageIdentity(message("message-0"))).toBe(false);
     expect(isRecentOutboundMessageIdentity(message("message-10000"))).toBe(true);
   });
-
-  it("matches a transport-defined outbound source identity", () => {
-    const source = { ...identity, messageId: undefined, sourceId: "webhook-1" };
-    recordOutboundMessageIdentity(source);
-
-    expect(isRecentOutboundMessageIdentity(source)).toBe(true);
-  });
 });

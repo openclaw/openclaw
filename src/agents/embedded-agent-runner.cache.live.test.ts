@@ -60,7 +60,6 @@ const LIVE_TEST_PNG_URL = new URL(
 type CacheRun = {
   hitRate: number;
   suffix: string;
-  text: string;
   usage: AssistantMessage["usage"];
 };
 type CacheTraceEvent = {
@@ -268,7 +267,6 @@ async function runEmbeddedCacheProbe(params: {
     const usage = normalizeLiveUsage(result.meta.agentMeta?.usage);
     return {
       suffix: params.suffix,
-      text,
       usage,
       hitRate: computeCacheHitRate(usage),
     };
@@ -425,7 +423,6 @@ function cacheRunFromResponse(response: AssistantMessage, suffix: string): Cache
   expect(text.toLowerCase()).toContain(suffix.toLowerCase());
   return {
     suffix,
-    text,
     usage: response.usage,
     hitRate: computeCacheHitRate(response.usage),
   };

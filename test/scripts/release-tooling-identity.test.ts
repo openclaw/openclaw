@@ -178,12 +178,7 @@ describe("release tooling identity", () => {
     const manifestPath = join(manifestDir, "full-release-validation-manifest.json");
     writeFileSync(
       manifestPath,
-      JSON.stringify({
-        runId: RUN_ID,
-        runAttempt: 1,
-        targetSha: SHA,
-        sourceAdmission: { qualificationAdmission: {} },
-      }),
+      JSON.stringify({ runId: RUN_ID, runAttempt: 1, targetSha: SHA, receiptRecovery: {} }),
     );
     const result = spawnSync(
       process.execPath,

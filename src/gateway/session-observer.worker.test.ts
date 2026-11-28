@@ -482,6 +482,8 @@ it.for(["model", "failed model", "synthesized terminal"] as const)(
           config,
           readSession: vi.fn(() => ({ ...initialEntry, lifecycleRevision: "owned" })),
           completeModel: vi.fn(async () => {
+            // The source moves while the model runs; its digest must not be consumed.
+            changeSourceOnRead = true;
             if (kind === "failed model") {
               throw new Error("model request failed");
             }
@@ -501,8 +503,8 @@ it.for(["model", "failed model", "synthesized terminal"] as const)(
           expect(harness.persistDigest).toHaveBeenCalledOnce();
           harness.broadcastToConnIds.mockClear();
           harness.persistDigest.mockClear();
+          changeSourceOnRead = true;
         }
-        changeSourceOnRead = true;
         await deliver("lifecycle", { phase: "end", startedAt: 0, endedAt: 31_000 });
         await settle();
 

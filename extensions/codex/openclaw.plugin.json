@@ -407,6 +407,7 @@
           },
           "url": { "type": "string" },
           "authToken": { "type": ["string", "object"] },
+          "tlsPeerCertificate": { "type": "string", "minLength": 1, "maxLength": 16384 },
           "headers": {
             "type": "object",
             "additionalProperties": { "type": ["string", "object"] }

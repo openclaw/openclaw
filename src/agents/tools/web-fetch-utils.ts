@@ -578,3 +578,15 @@ export async function extractBasicHtmlContent(params: {
   const text = stripInvisibleUnicode(rendered.text) || stripInvisibleUnicode(rendered.title ?? "");
   return text ? { text, title: rendered.title } : null;
 }
+
+// Repair model-injected scheme/authority whitespace; preserve path/query whitespace
+// for the URL parser to percent-encode.
+export function sanitizeWebFetchUrl(raw: string): string {
+  let end = raw.length;
+  while (end > 0 && raw.charCodeAt(end - 1) <= 0x20) {
+    end -= 1;
+  }
+  const trimmed = raw.slice(0, end).replace(/^\s+/, "");
+  const repaired = trimmed.replace(/^(https?:\/\/)\s+/i, "$1");
+  return repaired.replace(/^(https?:\/\/[^/?#\s]+)\s+$/i, "$1");
+}

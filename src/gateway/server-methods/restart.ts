@@ -5,7 +5,7 @@ import {
   errorShape,
   validateUpdateRunParams,
 } from "../../../packages/gateway-protocol/src/index.js";
-import { prepareCommandOwnerAuthority } from "../../auto-reply/command-auth.js";
+import { prepareCommandOwnerAuthority } from "../../auto-reply/command-owner-facts.js";
 import { isRestartEnabled } from "../../config/commands.flags.js";
 import { formatErrorMessage } from "../../infra/errors.js";
 import { readActiveGatewayLockIdentity } from "../../infra/gateway-lock.js";

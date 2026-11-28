@@ -1,7 +1,7 @@
 import { createSignal, flush } from "solid-js";
 import { describe, expect, it, onTestFinished, vi } from "vitest";
 import { createDeferred } from "../../../../test/helpers/promise.js";
-import type { GatewayBrowserClient } from "../../api/gateway.ts";
+import { type GatewayBrowserClient, GatewayRequestError } from "../../api/gateway.ts";
 import type { CronScratchGetResult } from "../../api/types.ts";
 import type { ApplicationContext } from "../../app/context.ts";
 import { createTestGatewayClient } from "../../test-helpers/gateway-client.ts";
@@ -89,9 +89,20 @@ function savedRequest() {
 }
 
 describe("ordinary automation scratch editor", () => {
-  it.each(["Save scratch", "Reload scratch"])(
-    "preserves the draft through a pending %s failure and retry",
-    async (action) => {
+  it.each([
+    {
+      action: "Save scratch",
+      guidance:
+        "OpenClaw couldn’t confirm the save. Copy any edits you want to keep, then use Reload scratch to check what’s saved.",
+    },
+    {
+      action: "Reload scratch",
+      guidance:
+        "Couldn’t reload scratch. Copy any edits you want to keep before trying Reload scratch again.",
+    },
+  ])(
+    "preserves the draft through a pending $action, explains the failure, and clears it on retry",
+    async ({ action, guidance }) => {
       const pending = createDeferred<CronScratchGetResult>();
       const retry = createDeferred<CronScratchGetResult>();
       onTestFinished(() => {
@@ -107,13 +118,16 @@ describe("ordinary automation scratch editor", () => {
       await waitForSolid(() => expect(button.disabled).toBe(true));
       expect(textarea.value).toBe("Draft notes");
       expect(textarea.readOnly).toBe(true);
-      pending.reject(new Error("Synthetic request unavailable"));
+      pending.reject(
+        new GatewayRequestError({ code: "UNAVAILABLE", message: "Synthetic request unavailable" }),
+      );
       await waitForSolid(() => {
         expect(button.disabled).toBe(false);
-        expect(editor.querySelector('[role="status"]')?.textContent).toBe(
-          "Synthetic request unavailable",
-        );
+        expect(editor.querySelector('[role="status"]')?.textContent).toBe(guidance);
       });
+      const details = editor.querySelector<HTMLDetailsElement>("details details");
+      expect(details?.open).toBe(false);
+      expect(details?.textContent).toContain("Synthetic request unavailable");
       expect(editor.querySelector("textarea")).toBe(textarea);
       expect(textarea.value).toBe("Draft notes");
       await click(editor, action);
@@ -139,6 +153,28 @@ describe("ordinary automation scratch editor", () => {
       }
     },
   );
+
+  it("keeps the access message for a denied scratch request", async () => {
+    const request = vi.fn<GatewayBrowserClient["request"]>().mockRejectedValueOnce(
+      new GatewayRequestError({
+        code: "FORBIDDEN",
+        message: "permission denied",
+        details: {
+          code: "MISSING_SCOPE",
+          missingScope: "operator.admin",
+          requiredScopes: ["operator.admin"],
+        },
+      }),
+    );
+    const { editor } = await mount(request);
+    await click(editor, "Load scratch");
+    await waitForSolid(() => {
+      expect(editor.querySelector('[role="status"]')?.textContent).toBe(
+        "Couldn’t complete this request. Ask an admin to grant admin access.",
+      );
+    });
+    expect(editor.querySelector("details details")).toBeNull();
+  });
 
   it("releases a held save when selecting another job", async () => {
     const pending = Promise.withResolvers<CronScratchGetResult>();

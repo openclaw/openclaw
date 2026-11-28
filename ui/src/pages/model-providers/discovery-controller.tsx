@@ -121,7 +121,6 @@ export function createModelProviderDiscovery(options: DiscoveryOptions) {
               >
                 <ModelSetup
                   routeData={{ firstRun: false }}
-                  embedded
                   credentialChoices={getData().credentialChoices}
                   agentLabel={getData().agentLabel}
                   onClose={() => close(true)}

@@ -63,6 +63,7 @@ import { claimAgentSessionWriter } from "./session-bootstrap.js";
 // mock-isolation: Deadline and custody tests exercise raw work without durable writer admission.
 vi.mock("./session-bootstrap.js", () => ({
   claimAgentSessionWriter: vi.fn(async () => undefined),
+  claimRunProviderState: vi.fn(() => undefined),
 }));
 
 beforeEach(() => {
@@ -829,6 +830,10 @@ describe("exact attempt deadline transfer", () => {
         abort.abort();
         break;
     }
+    expect(old.isCurrent()).toBe(false);
+    expect(old.isAttemptCurrent()).toBe(
+      invalidation === "revoked" || invalidation === "replaced admission",
+    );
     const deadline = operation.watchdog.snapshot().executionDeadlineAtMs;
     old.onAttemptDeadlineChanged({ kind: "bounded", deadlineAtMs: Date.now() });
     old.onAttemptTimeout(new Error("late timeout"));

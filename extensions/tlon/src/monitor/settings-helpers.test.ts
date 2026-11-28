@@ -17,6 +17,8 @@ const baseAccount: TlonResolvedAccount = {
   dangerouslyAllowPrivateNetwork: false,
   groupChannels: ["chat/~host/general"],
   dmAllowlist: ["~zod"],
+  clubPolicy: null,
+  clubRules: {},
   groupInviteAllowlist: ["~bus"],
   autoDiscoverChannels: true,
   crossChannelCitations: null,

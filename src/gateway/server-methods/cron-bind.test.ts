@@ -57,6 +57,9 @@ describe("cron.bind admission", () => {
   it("rejects a caller-supplied conversation", async () => {
     const { respond } = await invokeCron("cron.bind", { id: keyOnlyJob.id, sessionKey: PARENT });
 
-    expectResponseError(respond, { code: "INVALID_REQUEST" });
+    expectResponseError(respond, {
+      code: "INVALID_REQUEST",
+      messageIncludes: "unexpected property 'sessionKey'",
+    });
   });
 });

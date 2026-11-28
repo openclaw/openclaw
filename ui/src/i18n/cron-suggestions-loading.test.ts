@@ -10,7 +10,7 @@ it("loads schedule validation copy with the schedule owner", async () => {
   expect(manager.t("cron.errors.invalidRunTime")).toBe("cron.errors.invalidRunTime");
 
   const { buildCronSchedule } = await import("../lib/cron/form-schedule.ts");
-  const { DEFAULT_CRON_FORM } = await import("../lib/cron/state.ts");
+  const { DEFAULT_CRON_FORM } = await import("../lib/cron/editor-state.ts");
   expect(() =>
     buildCronSchedule({ ...DEFAULT_CRON_FORM, scheduleKind: "at", scheduleAt: "invalid" }),
   ).toThrow("Invalid run time.");
@@ -23,7 +23,7 @@ it("loads payload validation copy with the payload owner", async () => {
   );
 
   const { buildCronPayload } = await import("../lib/cron/payload.ts");
-  const { DEFAULT_CRON_FORM } = await import("../lib/cron/state.ts");
+  const { DEFAULT_CRON_FORM } = await import("../lib/cron/editor-state.ts");
   expect(() =>
     buildCronPayload(
       { ...DEFAULT_CRON_FORM, payloadKind: "systemEvent", payloadText: "" },

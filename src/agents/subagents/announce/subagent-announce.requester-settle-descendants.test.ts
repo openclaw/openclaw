@@ -61,7 +61,7 @@ it("counts resident and durable descendants without restoring settled text", asy
         ...completed,
         cleanupCompletedAt: undefined,
         execution: { status: "terminal", endedAt: 5 },
-        delivery: { status: "failed", disposition: "retryable" },
+        delivery: { status: "failed" },
       });
       persistRegistryFixture(new Map([entry, completed, pending].map((row) => [row.runId, row])));
       subagentRuns.set(completed.runId, compactSubagentRunForMemory(completed));
@@ -77,8 +77,6 @@ it("counts resident and durable descendants without restoring settled text", asy
         { status: "delivered" },
         { status: "not_required" },
         { status: "discarded" },
-        { status: "failed", disposition: "intentional_non_delivery" },
-        { status: "failed", disposition: "permanent_failure" },
       ] as const) {
         persistRegistryFixture(new Map([[pending.runId, { ...pending, delivery }]]), [
           pending.runId,

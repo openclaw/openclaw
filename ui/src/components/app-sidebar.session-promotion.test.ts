@@ -37,33 +37,29 @@ async function mountFamily() {
     }),
   };
   const patches: Record<string, unknown>[] = [];
-  const request = createGatewayRequestMock(async (method, params) => {
-    const query = isRecord(params) ? params : {};
+  const request = createGatewayRequestMock(async (method, raw) => {
+    const params = isRecord(raw) ? raw : {};
     const { parent, child } = family;
     if (method === "sessions.list") {
       return { ...sessionsResult([parent, child], child.updatedAt ?? 1), groups: ["Projects"] };
     }
     if (method === "sessions.describe") {
-      return { session: query?.key === parent.key ? parent : child };
+      return { session: params.key === parent.key ? parent : child };
     }
     if (method === "sessions.groups.list" || method === "sessions.groups.put") {
       return { groups: [{ name: "Projects", position: 0 }], sectionOrder: [] };
     }
-    if (method === "sessions.groups.defaults") {
-      return { defaults: [] };
-    }
     if (method === "sessions.patch") {
-      const patch = query;
-      patches.push(patch);
+      patches.push(params);
       family.child = {
         ...child,
-        ...(typeof patch.sidebarRoot === "boolean" ? { sidebarRoot: patch.sidebarRoot } : {}),
-        category: typeof patch.category === "string" ? patch.category : undefined,
+        ...(typeof params.sidebarRoot === "boolean" ? { sidebarRoot: params.sidebarRoot } : {}),
+        category: typeof params.category === "string" ? params.category : undefined,
         updatedAt: (child.updatedAt ?? 1) + 1,
       };
       return { ok: true, key: child.key, path: "", entry: { ...family.child } };
     }
-    return {};
+    return method === "sessions.groups.defaults" ? { defaults: [] } : {};
   });
   const gateway = createGatewayHarness(createTestGatewayClient(request));
   const sessionKey = family.child.key;
@@ -77,17 +73,6 @@ async function mountFamily() {
   sidebar.sessionKey = sessionKey;
   await sidebar.updateComplete;
   return { sidebar, sessions, family, patches };
-}
-
-function expectHistoryIdentity({
-  parent,
-  child,
-}: Awaited<ReturnType<typeof mountFamily>>["family"]) {
-  expect(child).toMatchObject({
-    sessionId: "child-id",
-    parentSessionKey: parent.key,
-    spawnedBy: parent.key,
-  });
 }
 
 it.each(["existing group", "new group"])(
@@ -116,7 +101,11 @@ it.each(["existing group", "new group"])(
         isChild: false,
         sidebarRoot: true,
       });
-      expectHistoryIdentity(family);
+      expect(family.child).toMatchObject({
+        sessionId: "child-id",
+        parentSessionKey: family.parent.key,
+        spawnedBy: family.parent.key,
+      });
       sidebar.sidebarEntries = [];
       sidebar.onUpdateSidebarEntries = (entries) => {
         sidebar.sidebarEntries = entries;
@@ -134,3 +123,19 @@ it.each(["existing group", "new group"])(
     }
   },
 );
+
+it("moves a demoted saved child out of Pinned without forgetting its pin", async () => {
+  const { sidebar, sessions, family } = await mountFamily();
+  const key = family.child.key;
+  sidebar.sidebarEntries = [`session:${key}`];
+  const placementsAfter = async (sidebarRoot: boolean) => {
+    await sessions.patch(key, { sidebarRoot });
+    await sidebar.updateComplete;
+    return [...sidebar.querySelectorAll(`.sidebar-recent-session[data-session-key="${key}"]`)].map(
+      (row) => row.closest<HTMLElement>("[data-session-section]")?.dataset.sessionSection,
+    );
+  };
+  expect(await placementsAfter(true)).toEqual(["pinned"]);
+  expect(await placementsAfter(false)).toEqual(["ungrouped"]);
+  expect(await placementsAfter(true)).toEqual(["pinned"]);
+});

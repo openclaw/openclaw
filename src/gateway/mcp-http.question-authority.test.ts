@@ -1,13 +1,12 @@
 import { expectDefined } from "@openclaw/normalization-core";
 import { afterEach, beforeEach, expect, it, vi } from "vitest";
 import { runQaGatewayFixture } from "../../test/helpers/qa-gateway-cleanup.js";
-import { createAdmittedRunOperatorAuthority } from "../agents/admitted-run-context.js";
+import { createTestOperatorAuthority } from "../agents/admitted-run-context.test-support.js";
 import { testing as cliBackendsTesting } from "../agents/cli-backends.test-support.js";
 import {
   buildDefaultTestCliBackend,
   createCliRunnerPrepareFixture,
 } from "../agents/cli-runner.test-helpers.js";
-import { createCliRunCurrentAssertion } from "../agents/cli-runner/execution-target.js";
 import { prepareCliRunContext } from "../agents/cli-runner/prepare.js";
 import {
   resetCliRunnerPrepareTestDeps,
@@ -154,12 +153,12 @@ function createQuestionFixture(
   runtime: { port: number; ownerToken: string },
   signal: AbortSignal,
 ) {
-  const operatorAuthority = createAdmittedRunOperatorAuthority({
+  const operatorAuthority = createTestOperatorAuthority({
     profileId: "question-owner",
     scopes: ["operator.admin"],
     gatewayAccessGrant: null,
     modelPolicy: prepareOperatorModelPolicy({ cfg: config, policy: {} }),
-    assertCurrent: () => signal.throwIfAborted(),
+    signal,
   });
   const toolCalls: Promise<unknown>[] = [];
   const resolveTools = toolResolution.resolveGatewayScopedTools;
@@ -226,9 +225,8 @@ function createQuestionFixture(
           context.preparedBackend.env?.OPENCLAW_MCP_TOKEN,
           "prepared CLI grant",
         );
-        context.preparedBackend.mcpClientGrantCapture?.activate(
-          captureKey,
-          createCliRunCurrentAssertion(context.params),
+        context.preparedBackend.mcpClientGrantCapture?.activate(captureKey, () =>
+          context.params.abortSignal?.throwIfAborted(),
         );
         expect(resolveGrant(token, runtime.ownerToken)?.isCurrent()).toBe(true);
         return { token, context, source, admission };

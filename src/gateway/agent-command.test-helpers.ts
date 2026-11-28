@@ -17,12 +17,34 @@ export async function observeGatewayRunExecution(selection?: { method: "agent"; 
   const chatModule = selection
     ? undefined
     : await import("./server-methods/chat-send-dispatch-errors.js");
-  const execute = executionModule.startAgentRunExecution;
-  const handleRequest = requestModule.handleGatewayRequest;
-  const retainWork = admission.runWithRetainedGatewayRootWork;
-  const continueWork = admission.runWithGatewayIndependentRootWorkContinuation;
-  const trackWork = asyncWork.trackAsyncWork;
-  const beginSessionWork = sessionWork.beginSessionEffect;
+  // Vitest reuses spy objects; capture their implementation before a nested observer replaces it.
+  const previousExecute = vi.isMockFunction(executionModule.startAgentRunExecution)
+    ? vi.mocked(executionModule.startAgentRunExecution).getMockImplementation()
+    : undefined;
+  const execute = previousExecute ?? executionModule.startAgentRunExecution;
+  const previousHandleRequest = vi.isMockFunction(requestModule.handleGatewayRequest)
+    ? vi.mocked(requestModule.handleGatewayRequest).getMockImplementation()
+    : undefined;
+  const handleRequest = previousHandleRequest ?? requestModule.handleGatewayRequest;
+  const previousRetainWork = vi.isMockFunction(admission.runWithRetainedGatewayRootWork)
+    ? vi.mocked(admission.runWithRetainedGatewayRootWork).getMockImplementation()
+    : undefined;
+  const retainWork = previousRetainWork ?? admission.runWithRetainedGatewayRootWork;
+  const previousContinueWork = vi.isMockFunction(
+    admission.runWithGatewayIndependentRootWorkContinuation,
+  )
+    ? vi.mocked(admission.runWithGatewayIndependentRootWorkContinuation).getMockImplementation()
+    : undefined;
+  const continueWork =
+    previousContinueWork ?? admission.runWithGatewayIndependentRootWorkContinuation;
+  const previousTrackWork = vi.isMockFunction(asyncWork.trackAsyncWork)
+    ? vi.mocked(asyncWork.trackAsyncWork).getMockImplementation()
+    : undefined;
+  const trackWork = previousTrackWork ?? asyncWork.trackAsyncWork;
+  const previousBeginSessionWork = vi.isMockFunction(sessionWork.beginSessionEffect)
+    ? vi.mocked(sessionWork.beginSessionEffect).getMockImplementation()
+    : undefined;
+  const beginSessionWork = previousBeginSessionWork ?? sessionWork.beginSessionEffect;
   const rootWorkAdmission = admission.tryBeginGatewayRootWorkAdmission;
   const previousRootWork = vi.isMockFunction(rootWorkAdmission)
     ? rootWorkAdmission.getMockImplementation()
@@ -68,7 +90,12 @@ export async function observeGatewayRunExecution(selection?: { method: "agent"; 
           }),
       };
     });
-  const createChatLifecycle = chatModule?.createChatSendDispatchErrorLifecycle;
+  const chatLifecycle = chatModule?.createChatSendDispatchErrorLifecycle;
+  const previousChatLifecycle =
+    chatLifecycle && vi.isMockFunction(chatLifecycle)
+      ? vi.mocked(chatLifecycle).getMockImplementation()
+      : undefined;
+  const createChatLifecycle = previousChatLifecycle ?? chatLifecycle;
   const spies = {
     session: vi.spyOn(sessionWork, "beginSessionEffect").mockImplementation((params) => {
       const pending = beginSessionWork(params);
@@ -160,8 +187,42 @@ export async function observeGatewayRunExecution(selection?: { method: "agent"; 
       try {
         await settleSelected();
       } finally {
-        for (const spy of Object.values(spies)) {
-          spy?.mockRestore();
+        if (previousExecute) {
+          spies.execution.mockImplementation(previousExecute);
+        } else {
+          spies.execution.mockRestore();
+        }
+        if (previousHandleRequest) {
+          spies.request.mockImplementation(previousHandleRequest);
+        } else {
+          spies.request.mockRestore();
+        }
+        if (previousRetainWork) {
+          spies.effect.mockImplementation(previousRetainWork);
+        } else {
+          spies.effect.mockRestore();
+        }
+        if (previousContinueWork) {
+          spies.continuation.mockImplementation(previousContinueWork);
+        } else {
+          spies.continuation.mockRestore();
+        }
+        if (previousTrackWork) {
+          spies.asyncWork.mockImplementation(previousTrackWork);
+        } else {
+          spies.asyncWork.mockRestore();
+        }
+        if (previousBeginSessionWork) {
+          spies.session.mockImplementation(previousBeginSessionWork);
+        } else {
+          spies.session.mockRestore();
+        }
+        if (spies.chat) {
+          if (previousChatLifecycle) {
+            spies.chat.mockImplementation(previousChatLifecycle);
+          } else {
+            spies.chat.mockRestore();
+          }
         }
         if (previousRootWork) {
           rootWorkSpy.mockImplementation(previousRootWork);

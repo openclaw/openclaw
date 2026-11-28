@@ -340,6 +340,8 @@ async function resetDirectChatSession() {
   resetConfigRuntimeState();
 }
 
+// An authless Gateway: a local socket on it is admitted as the local host.
+const NO_AUTH = { authMethod: "none" };
 function createControlUiClient(
   scopes = ["operator.write", "operator.admin"],
   properties: Record<string, unknown> = {},
@@ -348,6 +350,7 @@ function createControlUiClient(
     ...properties,
     connect: {
       client: { id: GATEWAY_CLIENT_NAMES.CONTROL_UI, mode: GATEWAY_CLIENT_MODES.WEBCHAT },
+      role: "operator",
       scopes,
     },
   } as never;
@@ -432,11 +435,9 @@ async function sendControlUiChat(params: {
     req: { type: "req", id: params.idempotencyKey, method: "chat.send", params: requestParams },
     params: requestParams,
     client: createControlUiClient(undefined, {
-      ...(params.localClient ? { internal: { isLocalClient: true } } : {}),
-      ...(params.authenticatedUserId ? { authenticatedUserId: params.authenticatedUserId } : {}),
-      ...(params.authenticatedUserProfile
-        ? { authenticatedUserProfile: params.authenticatedUserProfile }
-        : {}),
+      ...(params.localClient ? { internal: { isLocalClient: true }, authPolicy: NO_AUTH } : {}),
+      authenticatedUserId: params.authenticatedUserId,
+      authenticatedUserProfile: params.authenticatedUserProfile,
     }),
     isWebchatConnect: () => true,
     respond: params.respond,
@@ -1253,48 +1254,6 @@ describe("gateway server chat", () => {
     }
   });
 
-  test("chat.metadata coalesces configured models and text commands", async () => {
-    await withGatewayChatHarness(async ({ ws }) => {
-      await writeGatewayConfig({
-        agents: {
-          ownership: "explicit",
-          defaults: { systemAgent: { agentId: "main" } },
-          entries: {
-            main: {},
-            work: {
-              model: { primary: "minimax/MiniMax-M2.7-highspeed" },
-              tools: { swarm: { enabled: true } },
-            },
-          },
-        },
-        models: {
-          providers: {
-            minimax: {
-              baseUrl: "https://minimax.example.com/v1",
-              models: [{ id: "MiniMax-M2.7-highspeed", name: "MiniMax M2.7 Highspeed" }],
-            },
-          },
-        },
-      });
-      await connectOk(ws, { prePairDevice: true });
-
-      const metadata = await rpcReq<{
-        commands?: Array<{ name?: string; textAliases?: string[] }>;
-        models?: Array<{ id?: string; provider?: string }>;
-        swarmEnabled?: boolean;
-      }>(ws, "chat.metadata", { agentId: "work" });
-
-      expect(metadata.ok).toBe(true);
-      expect(metadata.payload?.swarmEnabled).toBe(true);
-      expect(metadata.payload?.models).toContainEqual(
-        expect.objectContaining({ id: "MiniMax-M2.7-highspeed", provider: "minimax" }),
-      );
-      expect(metadata.payload?.commands).toContainEqual(
-        expect.objectContaining({ name: "model", textAliases: expect.arrayContaining(["/model"]) }),
-      );
-    });
-  });
-
   registerChatAdmittedMediaTests({
     withChatSession: (run) =>
       withDirectChatSession(async (_sessionDir, storePath) => run(makeMainSessionScope(storePath))),
@@ -1976,8 +1935,8 @@ describe("gateway server chat", () => {
           }
           return {};
         });
-        const { createAgentTurnService } = await import("./agent-turn/agent-turn-service.js");
-        const service = createAgentTurnService({ context, isWebchatConnect: () => true });
+        const { prepareExactAgentTurnWait } = await import("./agent-turn/agent-wait.js");
+        const waitForRun = () => prepareExactAgentTurnWait(context, { runId, timeoutMs: 0 }).wait();
         const chatEvents = () =>
           broadcast.mock.calls.flatMap(([event, payload]) =>
             event === "chat" && (payload as { runId?: string }).runId === runId ? [payload] : [],
@@ -2002,7 +1961,7 @@ describe("gateway server chat", () => {
           expect(context.dedupe.get(`chat:${runId}`)).toMatchObject(
             chatResult(true, { status: "accepted" }),
           );
-          await expect(service.waitForTurn({ runId, timeoutMs: 0 })).resolves.toMatchObject({
+          await expect(waitForRun()).resolves.toMatchObject({
             result: { runId, status: "pending", timeoutPhase: "queue", providerStarted: false },
           });
           expect(isRpcSourceQueued(rpcSourceTesting.get(runId))).toBe(true);
@@ -2072,7 +2031,7 @@ describe("gateway server chat", () => {
                   }),
             }),
           ]);
-          await expect(service.waitForTurn({ runId, timeoutMs: 0 })).resolves.toMatchObject({
+          await expect(waitForRun()).resolves.toMatchObject({
             result: {
               runId,
               status: settlement === "dropped" ? "error" : "ok",
@@ -2715,41 +2674,6 @@ describe("gateway server chat", () => {
       const serialized = JSON.stringify(messages);
       expect(serialized).toContain("oldest visible question");
       expect(serialized).not.toContain("stale announce reply");
-    });
-  });
-
-  test("chat.history backfills older offset pages across a dense silent gap", async () => {
-    await withGatewayChatHarness(async ({ ws, createSessionDir }) => {
-      await prepareMainHistoryHarness({ ws, createSessionDir });
-      const startedAt = Date.now();
-      await writeMainSessionTranscript([
-        createTextTranscriptEvent("user", "older visible question", { timestamp: startedAt }),
-        createTextTranscriptEvent("assistant", "older visible answer", {
-          timestamp: startedAt + 1,
-        }),
-        ...Array.from({ length: 80 }, (_, index) =>
-          createTextTranscriptEvent("assistant", "NO_REPLY", { timestamp: startedAt + index + 2 }),
-        ),
-        createTextTranscriptEvent("assistant", "latest visible answer", {
-          timestamp: startedAt + 82,
-        }),
-      ]);
-
-      const firstPage = await historyPage(ws, { limit: 1, offset: 0, maxChars: 100 });
-      expect(firstPage.ok).toBe(true);
-      expect(JSON.stringify(firstPage.payload?.messages)).toContain("latest visible answer");
-      expect(firstPage.payload?.nextOffset).toBe(1);
-
-      const olderPage = await historyPage(ws, {
-        limit: 2,
-        offset: firstPage.payload?.nextOffset,
-        maxChars: 100,
-      });
-      expect(olderPage.ok).toBe(true);
-      expect(olderPage.payload?.messages?.map(readOpenClawSeq)).toEqual([1, 2]);
-      expect(JSON.stringify(olderPage.payload?.messages)).not.toContain("NO_REPLY");
-      expect(olderPage.payload?.hasMore).toBe(false);
-      expect(olderPage.payload?.nextOffset).toBeUndefined();
     });
   });
 

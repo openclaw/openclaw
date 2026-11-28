@@ -122,7 +122,7 @@ vi.mock("../../../config/sessions/session-entry-read-runtime.js", async (importO
 }));
 
 const announceSpy = vi.fn(
-  async (_params: unknown): Promise<"delivered" | "retryable"> => "delivered",
+  async (_params: unknown): Promise<"delivered" | "undelivered"> => "delivered",
 );
 const runSubagentEndedHookMock = vi.fn(async (_eventValue?: unknown, _ctx?: unknown) => {});
 const emitSessionLifecycleEventMock = vi.hoisted(() => vi.fn());
@@ -254,7 +254,7 @@ describe("subagent registry steer restarts", () => {
 
   const createDeferredAnnounce = () => {
     const entered = createDeferred();
-    const delivery = createDeferred<"delivered" | "retryable">();
+    const delivery = createDeferred<"delivered" | "undelivered">();
     announceSpy.mockImplementationOnce(() => {
       entered.resolve();
       return delivery.promise;
@@ -498,7 +498,7 @@ describe("subagent registry steer restarts", () => {
     }
   });
 
-  it("clears terminal lifecycle state when replacing after steer restart", async () => {
+  it("clears terminal state and preserves cumulative timing after steer restart", async () => {
     await registerRun({
       runId: "run-terminal-state-old",
       childSessionKey: "agent:main:subagent:terminal-state",
@@ -506,10 +506,13 @@ describe("subagent registry steer restarts", () => {
     });
     const previous = expectDefined(listMainRuns()[0], "registered run");
     const endedAt = Date.now();
+    const startedAt = endedAt - 120_000;
     await updateRun(previous.runId, (draft) => {
       draft.endedHookEmittedAt = endedAt;
       draft.endedReason = "subagent-error";
-      draft.execution = { status: "terminal", endedAt, outcome: { status: "error" } };
+      draft.execution = { status: "terminal", startedAt, endedAt, outcome: { status: "error" } };
+      draft.sessionStartedAt = startedAt;
+      draft.accumulatedRuntimeMs = 0;
       draft.completion = { required: true, resultText: "stale completion", capturedAt: endedAt };
       draft.cleanupCompletedAt = endedAt;
       draft.cleanupHandled = true;
@@ -540,6 +543,14 @@ describe("subagent registry steer restarts", () => {
       lifecycleGeneration: "test-generation",
     });
     expect(run.task).toBe(previous.task);
+    expect(mod.getSubagentSessionStartedAt(run)).toBe(startedAt);
+    expect(run.accumulatedRuntimeMs).toBe(120_000);
+    expect(
+      mod.getSubagentSessionRuntimeMs(
+        run,
+        expectDefined(run.execution.startedAt, "replacement start") + 30_000,
+      ),
+    ).toBe(150_000);
     expect(run.execution).toMatchObject({
       status: "running",
       lifecycleGeneration: "test-generation",
@@ -597,46 +608,6 @@ describe("subagent registry steer restarts", () => {
     expect(run.task).toBe("new steer instruction from user");
     expect(run.taskRunId).toBe("run-steer-task-old");
     expect(run.generation).toBe(2);
-  });
-
-  it("preserves cumulative session timing across steer replacement runs", async () => {
-    await registerRun({
-      runId: "run-runtime-old",
-      childSessionKey: "agent:main:subagent:runtime",
-      task: "keep timing stable",
-    });
-
-    const previous = listMainRuns()[0];
-    expect(previous?.runId).toBe("run-runtime-old");
-    if (!previous) {
-      throw new Error("missing previous run");
-    }
-
-    await updateRun(previous.runId, (draft) => {
-      draft.execution.startedAt = 1_000;
-      draft.sessionStartedAt = 1_000;
-      draft.execution.endedAt = 121_000;
-      draft.accumulatedRuntimeMs = 0;
-      draft.execution.outcome = { status: "ok" };
-    });
-
-    const replaced = await mod.replaceSubagentRunAfterSteerCore({
-      previousRunId: "run-runtime-old",
-      nextRunId: "run-runtime-new",
-    });
-    expect(replaced).toBe(true);
-
-    const next = listMainRuns().find((entry) => entry.runId === "run-runtime-new");
-    if (next === undefined) {
-      throw new Error("expected restarted run");
-    }
-    expect(mod.getSubagentSessionStartedAt(next)).toBe(1_000);
-    expect(next.accumulatedRuntimeMs).toBe(120_000);
-
-    if (!next.execution.startedAt) {
-      throw new Error("missing next startedAt");
-    }
-    expect(mod.getSubagentSessionRuntimeMs(next, next.execution.startedAt + 30_000)).toBe(150_000);
   });
 
   it("rejects a replacement owned by a retired Gateway lifecycle", async () => {
@@ -697,7 +668,7 @@ describe("subagent registry steer restarts", () => {
       const typed = params as { childRunId?: string };
       if (typed.childRunId === "run-parent") {
         parentAttempts += 1;
-        return parentAttempts >= 2 ? "delivered" : "retryable";
+        return parentAttempts >= 2 ? "delivered" : "undelivered";
       }
       return "delivered";
     });

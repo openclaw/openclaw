@@ -1,10 +1,8 @@
-import { normalizeUniqueStringEntries } from "@openclaw/normalization-core/string-normalization";
 import { createMemo, For } from "solid-js";
 import type { CronProps } from "./view-types.ts";
 export function CronSuggestionLists(
   props: Pick<
     CronProps,
-    | "thinkingSuggestions"
     | "timezoneSuggestions"
     | "deliveryToSuggestions"
     | "failureAlertToSuggestions"
@@ -12,15 +10,12 @@ export function CronSuggestionLists(
   >,
 ) {
   const lists = createMemo(() =>
-    Object.entries({
-      "cron-thinking-suggestions": props.thinkingSuggestions,
-      "cron-tz-suggestions": props.timezoneSuggestions,
-      "cron-delivery-to-suggestions": props.deliveryToSuggestions,
-      "cron-failure-alert-to-suggestions": props.failureAlertToSuggestions,
-      "cron-delivery-account-suggestions": props.accountSuggestions,
-    })
-      .map(([id, options]) => ({ id, options: normalizeUniqueStringEntries(options) }))
-      .filter((list) => list.options.length > 0),
+    [
+      { id: "cron-tz-suggestions", options: props.timezoneSuggestions },
+      { id: "cron-delivery-to-suggestions", options: props.deliveryToSuggestions },
+      { id: "cron-failure-alert-to-suggestions", options: props.failureAlertToSuggestions },
+      { id: "cron-delivery-account-suggestions", options: props.accountSuggestions },
+    ].filter((list) => list.options.length > 0),
   );
   return (
     <For each={lists()} keyed={(list) => list.id}>

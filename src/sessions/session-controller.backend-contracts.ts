@@ -24,7 +24,10 @@ import type { PromptImageOrderEntry } from "../media/prompt-image-order.js";
 import type { RuntimePluginToolGrant } from "../plugins/runtime/tool-grant.js";
 import type { InputProvenance } from "./input-provenance.js";
 import type { ReplyBackendTurnStatus } from "./session-controller.turn-status.types.js";
-import type { UserTurnTranscriptRecorder } from "./user-turn-transcript.types.js";
+import type {
+  NativeSteerInputIdentity,
+  UserTurnTranscriptRecorder,
+} from "./user-turn-transcript.types.js";
 
 export type ReplyBackendCancelReason = "user_abort" | "restart" | "superseded";
 
@@ -63,6 +66,8 @@ export type ReplyBackendQueueMessageOptions = {
   onQueueAccepted?: (accepted: boolean) => void;
   /** Releases per-input custody after commit, cancellation, or terminal rejection. */
   onQueueSettled?: () => void;
+  /** Native identity of this steered input, reported only after its transcript is committed. */
+  onNativeInputCommitted?: (identity: NativeSteerInputIdentity) => void;
   sourceReplyDeliveryMode?: SourceReplyDeliveryMode;
   taskSuggestionDeliveryMode?: TaskSuggestionDeliveryMode;
   /** Prepared channel turn to merge only at transcript persistence. */

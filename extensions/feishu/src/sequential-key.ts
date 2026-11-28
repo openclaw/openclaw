@@ -2,8 +2,8 @@ import {
   isAbortRequestText,
   isBtwRequestText,
 } from "openclaw/plugin-sdk/command-primitives-runtime";
-import { normalizeFeishuCommandProbeBody } from "./bot-content.js";
-import { parseFeishuMessageEvent, type FeishuMessageEvent } from "./bot.js";
+import type { FeishuMessageEvent } from "./event-types.js";
+import { normalizeFeishuCommandProbeBody, parseFeishuMessageEvent } from "./message-content.js";
 
 export function getFeishuSequentialKey(params: {
   accountId: string;

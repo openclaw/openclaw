@@ -59,7 +59,7 @@ docker_e2e_docker_cmd image inspect "$IMAGE_NAME" >"$ARTIFACTS/image.json"
 node "$ROOT_DIR/scripts/e2e/lib/container-image-upgrade/assert-launch.mjs" "$ARTIFACTS/image.json"
 IMAGE_ID="$(docker_e2e_docker_cmd image inspect -f '{{.Id}}' "$IMAGE_NAME")"
 
-for cell in default compose old-shape unsafe; do
+for cell in default compose unsafe; do
   name="openclaw-image-upgrade-$RUN_ID-$cell"
   volume="$name-state"
   if docker_e2e_docker_cmd volume inspect "$volume" >/dev/null 2>&1; then
@@ -96,12 +96,6 @@ for cell in default compose old-shape unsafe; do
       docker_e2e_docker_cmd run -d --name "$name" --label "$LABEL=$RUN_ID" \
         "${mounts[@]}" "${environment[@]}" "$IMAGE_ID" \
         node dist/index.js gateway --bind lan --port 18789 >/dev/null ;;
-    old-shape)
-      # Counterfactual original04d0 activation shape on the final candidate image.
-      # This is the sole entrypoint override, not a separately built baseline image.
-      docker_e2e_docker_cmd run -d --name "$name" --label "$LABEL=$RUN_ID" \
-        "${mounts[@]}" "${environment[@]}" --entrypoint tini "$IMAGE_ID" \
-        -s -- node openclaw.mjs gateway >/dev/null ;;
   esac
   if [ "$cell" = default ] || [ "$cell" = compose ]; then
     docker_e2e_wait_container_bash "$name" 180 1 'node /proof/scripts/e2e/lib/container-image-upgrade/fixture.mjs ready'

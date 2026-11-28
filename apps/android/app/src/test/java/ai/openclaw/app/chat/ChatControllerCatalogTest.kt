@@ -1,7 +1,7 @@
 package ai.openclaw.app.chat
 
+import ai.openclaw.app.gateway.ErrorShape
 import ai.openclaw.app.gateway.GatewayRequestRejected
-import ai.openclaw.app.gateway.GatewaySession
 import kotlinx.coroutines.CompletableDeferred
 import kotlinx.coroutines.ExperimentalCoroutinesApi
 import kotlinx.coroutines.test.advanceUntilIdle
@@ -418,6 +418,6 @@ class ChatControllerCatalogTest {
 
   private fun supersededMetadataRead() =
     GatewayRequestRejected(
-      GatewaySession.ErrorShape("UNAVAILABLE", "Session changed while preparing its metadata. Retry the request."),
+      ErrorShape("UNAVAILABLE", "Session changed while preparing its metadata. Retry the request."),
     )
 }

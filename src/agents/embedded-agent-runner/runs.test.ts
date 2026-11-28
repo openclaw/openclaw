@@ -7,11 +7,6 @@ import {
   rotateAgentEventLifecycleGeneration,
 } from "../../infra/agent-events.js";
 import {
-  claimAgentRunDelegatedAuthority,
-  releaseAgentRunDelegatedAuthority,
-  validateAgentRunDelegatedAuthority,
-} from "../../infra/agent-run-registry.js";
-import {
   resetDiagnosticEventsForTest,
   setDiagnosticsEnabledForProcess,
 } from "../../infra/diagnostic-events.js";
@@ -46,7 +41,6 @@ import { createDeferredCore } from "../../shared/deferred.js";
 import {
   prepareSystemAgentRunAdmission,
   type PreparedAgentRunAdmission,
-  createOperationalRunInstanceRef,
 } from "../admitted-run-context.js";
 import { createEnteredGate } from "../entered-gate.test-support.js";
 import { SessionControllerAdmissionRequiredError } from "../harness/errors.js";
@@ -54,7 +48,6 @@ import { captureRequesterOrigin, hasSameRequesterOrigin } from "../requester-ori
 import { withSessionPlacementForcedTerminalSettlement } from "../session-placement-forced-terminal-settlement.js";
 import {
   createAdmittedGatewayToolCallerIdentity,
-  captureGatewayToolCallerAssertion,
   withGatewayToolCallerIdentity,
 } from "../tools/gateway-caller-context.js";
 import { prepareEmbeddedRunPermissionChange } from "./run-permissions.js";
@@ -559,51 +552,6 @@ describe("embedded run ownership", () => {
     },
   );
 
-  it.each(["replaced", "released"] as const)(
-    "does not stop a native turn after the captured caller authority is %s",
-    async (retirement) => {
-      const instance = createOperationalRunInstanceRef("stop-caller");
-      const authority = claimAgentRunDelegatedAuthority(instance);
-      const authorities = [authority];
-      const abort = vi.fn();
-      const handle = createRunHandle({ runId: "target", abort });
-      const operation = setActiveEmbeddedRun(sessionId, handle, sessionKey);
-      const capture = captureSessionControllerStop({ operations: [operation] });
-      const assertCurrent = await withGatewayToolCallerIdentity(
-        {
-          agentId: "main",
-          sessionKey: "agent:main:stop-caller",
-          operationalRunInstance: instance,
-          receiptAuthority: () => validateAgentRunDelegatedAuthority(authority),
-        },
-        () => captureGatewayToolCallerAssertion(),
-      );
-      if (!assertCurrent) {
-        throw new Error("Expected admitted Stop caller assertion");
-      }
-      try {
-        assertCurrent();
-        releaseAgentRunDelegatedAuthority(authority);
-        if (retirement === "replaced") {
-          authorities.push(
-            claimAgentRunDelegatedAuthority(createOperationalRunInstanceRef(instance.runId)),
-          );
-        }
-        await expect(
-          stopSession({ source: "interrupt", capture, assertCurrent }).completed,
-        ).rejects.toThrow("agent tool caller authority is no longer active");
-        unused(abort);
-        expect(operation.result).toBeNull();
-        expect(isEmbeddedAgentRunHandleActive(sessionId)).toBe(true);
-      } finally {
-        for (const retained of authorities) {
-          releaseAgentRunDelegatedAuthority(retained);
-        }
-        clearActiveEmbeddedRun(sessionId, handle);
-      }
-    },
-  );
-
   it.each([
     ["stopped", { isStopped: (): boolean => true }],
     ["aborted", { isAborted: (): boolean => true }],
@@ -817,9 +765,8 @@ describe("runtime liveness ownership", () => {
 
 describe("native lifecycle admission and cancellation", () => {
   const undrained = { aborted: false, drained: false, forceCleared: false };
-  const drain = (
-    options: Omit<Parameters<typeof abortAndDrainEmbeddedAgentRun>[0], "sessionId"> = {},
-  ) => abortAndDrainEmbeddedAgentRun({ sessionId, settleMs: 100, ...options });
+  const drain = (options: Omit<Parameters<typeof abortAndDrainEmbeddedAgentRun>[0], "sessionId">) =>
+    abortAndDrainEmbeddedAgentRun({ sessionId, settleMs: 100, ...options });
   it("retires exact transcript ownership behind an alias without clearing a replacement", async () => {
     const sessionFile = "in-memory:detached-native-file";
     const effect = await beginSessionEffect({
@@ -851,10 +798,8 @@ describe("native lifecycle admission and cancellation", () => {
       effect.release();
     }
   });
-  it.each([true])("requires exact admission even with an ambient turn: %s", (active) => {
-    const operation = active
-      ? createReplyOperation({ sessionId, sessionKey, resetTriggered: false })
-      : undefined;
+  it("requires exact admission even with an ambient turn: true", () => {
+    const operation = createReplyOperation({ sessionId, sessionKey, resetTriggered: false });
     const handle = createEmbeddedRunHandle();
     let rejection: unknown;
     try {
@@ -866,58 +811,51 @@ describe("native lifecycle admission and cancellation", () => {
     expect(rejection).toMatchObject({ code: "SESSION_CONTROLLER_ADMISSION_REQUIRED" });
     expect(isEmbeddedAgentRunHandleActive(sessionId)).toBe(false);
     expect(getEmbeddedRunAttachment(handle)).toBeUndefined();
-    expect(isSessionRunActive(sessionId)).toBe(active);
-    operation?.complete();
+    expect(isSessionRunActive(sessionId)).toBe(true);
+    operation.complete();
   });
-  it.each([false])(
-    "continues detached cleanup after cancellation fails (producer settles=%s)",
-    async (producerSettles) => {
-      vi.useFakeTimers();
-      const cleanupGate = createEnteredGate();
-      const cleanup = vi.fn(cleanupGate.wait);
-      const abort = vi.fn(() => {
-        throw new Error("detached runtime cancellation failed");
-      });
-      const handle = createEmbeddedRunHandle({ abort });
-      withSessionPlacementForcedTerminalSettlement(
-        cleanup,
-        () => {},
-        () => setDetachedEmbeddedRun(sessionId, handle),
+  it("continues detached cleanup after cancellation fails (producer settles=false)", async () => {
+    vi.useFakeTimers();
+    const cleanupGate = createEnteredGate();
+    const cleanup = vi.fn(cleanupGate.wait);
+    const abort = vi.fn(() => {
+      throw new Error("detached runtime cancellation failed");
+    });
+    const handle = createEmbeddedRunHandle({ abort });
+    withSessionPlacementForcedTerminalSettlement(
+      cleanup,
+      () => {},
+      () => setDetachedEmbeddedRun(sessionId, handle),
+    );
+    let completed: Awaited<ReturnType<typeof drain>> | undefined;
+    const draining = drain({ forceClear: true }).then((result) => (completed = result));
+    try {
+      await awaitGateBeforeSettlement(
+        cleanupGate.entered,
+        draining,
+        "drain settled before entering detached cleanup",
       );
-      let completed: Awaited<ReturnType<typeof drain>> | undefined;
-      const draining = drain({ forceClear: true }).then((result) => (completed = result));
-      try {
-        await awaitGateBeforeSettlement(
-          cleanupGate.entered,
-          draining,
-          "drain settled before entering detached cleanup",
-        );
-        expect(abort).toHaveBeenCalledOnce();
-        expect(cleanup).toHaveBeenCalledOnce();
-        expect(isEmbeddedAgentRunHandleActive(sessionId)).toBe(true);
-        if (producerSettles) {
-          clearActiveEmbeddedRun(sessionId, handle);
-        } else {
-          await vi.advanceTimersByTimeAsync(100);
-        }
-        expect(completed).toBeUndefined();
-        cleanupGate.release();
-        await expect(draining).resolves.toEqual({ ...undrained, drained: producerSettles });
-        expect(isEmbeddedAgentRunHandleActive(sessionId)).toBe(!producerSettles);
-      } finally {
-        cleanupGate.release();
-        clearActiveEmbeddedRun(sessionId, handle);
-        await draining.catch(() => undefined);
-      }
-    },
-  );
+      expect(abort).toHaveBeenCalledOnce();
+      expect(cleanup).toHaveBeenCalledOnce();
+      expect(isEmbeddedAgentRunHandleActive(sessionId)).toBe(true);
+      await vi.advanceTimersByTimeAsync(100);
+      expect(completed).toBeUndefined();
+      cleanupGate.release();
+      await expect(draining).resolves.toEqual(undrained);
+      expect(isEmbeddedAgentRunHandleActive(sessionId)).toBe(true);
+    } finally {
+      cleanupGate.release();
+      clearActiveEmbeddedRun(sessionId, handle);
+      await draining.catch(() => undefined);
+    }
+  });
 });
 
 describe("lifecycle generation ownership", () => {
   function createGenerationRunHandle(
     params: NonNullable<Parameters<typeof createEmbeddedRunHandle>[0]> & {
       compacting?: boolean;
-    } = {},
+    },
   ) {
     return {
       ...createEmbeddedRunHandle({

@@ -150,8 +150,10 @@ export function* decodeSessionColdRecords(
     SessionColdArchive,
     "session_id" | "generation" | "event_count" | "raw_bytes" | "last_seq"
   > & { first_seq?: number },
+  admitEnvelope?: (byteLength: number) => void,
 ): Generator<SessionColdRecord> {
   const decoded = zlib.zstdDecompressSync(bytes, { maxOutputLength: MAX_COLD_ARCHIVE_BYTES });
+  admitEnvelope?.(decoded.byteLength);
   let headerSeen = false;
   let eventCount = 0;
   let rawBytes = -1;

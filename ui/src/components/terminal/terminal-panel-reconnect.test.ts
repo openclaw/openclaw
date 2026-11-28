@@ -630,7 +630,6 @@ describe("OpenClawTerminalPanel reconnect", () => {
     createGhosttyTerminalMock
       .mockResolvedValueOnce(createTerminalController())
       .mockResolvedValueOnce(createTerminalController())
-      .mockResolvedValueOnce(createTerminalController())
       .mockResolvedValueOnce(createTerminalController());
     const requests: Array<{ method: string; params: unknown }> = [];
     let opened = 0;

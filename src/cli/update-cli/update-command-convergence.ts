@@ -91,6 +91,15 @@ export async function convergeUpdatePlugins(params: {
   assertCurrent?.();
   const postUpdateRoot = params.result.root ?? params.root;
   const gitRelease = isSwitchedGitRelease(params.result);
+  // Every path below writes a changed channel to config: copy the originals first.
+  if (
+    params.requestedChannel &&
+    params.configSnapshot.valid &&
+    params.requestedChannel !== params.storedChannel
+  ) {
+    await params.opts.run?.captureOriginal?.();
+    assertCurrent?.();
+  }
   if (gitRelease && params.opts.restart === false) {
     // Unverified until it starts: replacing plugins now could strand them if its trial fails.
     const postUpdateConfigSnapshot = await persistRequestedUpdateChannel({
@@ -317,7 +326,13 @@ export async function convergeUpdatePlugins(params: {
                 }
               : {}),
             pluginUpdate: producedPluginUpdate,
-            beforeDoctor: params.beforeDoctor,
+            beforeDoctor: async () => {
+              // Fresh Doctor can migrate core and plugin state. An already-current core
+              // copies its originals only here, once it knows Doctor will run.
+              await params.opts.run?.captureOriginal?.();
+              assertCurrent?.();
+              await params.beforeDoctor?.();
+            },
             assertCurrent,
             yes: params.opts.yes === true,
             json: params.opts.json === true,

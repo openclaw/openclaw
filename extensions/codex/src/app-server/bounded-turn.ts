@@ -46,7 +46,7 @@ import {
   buildCodexRingZeroThreadConfigPatch,
   readCodexInheritedMcpServerNames,
 } from "./thread-requests.js";
-import { resolveCodexPromptError } from "./usage-limit-error.js";
+import { readCodexRuntimeUpdateFacts, resolveCodexPromptError } from "./usage-limit-error.js";
 
 const loadInferenceRouting = createLazyRuntimeModule(() => import("./inference-routing.js"));
 
@@ -110,6 +110,8 @@ type CodexBoundedTurnParams = {
   authRequirement?: CodexAppServerAuthRequirement;
   timeoutMs: number;
   thinkLevel?: Parameters<typeof resolveCodexAppServerReasoningEffort>[0]["thinkLevel"];
+  /** Route-row reasoning support; preferred over Codex model/list. */
+  supportedReasoningEfforts?: readonly string[];
   streamParams?: CodexInferenceStreamParams;
   signal?: AbortSignal;
   assertCurrent?: () => void;
@@ -399,7 +401,8 @@ async function runBoundedCodexAppServerTurnInWorkspace(
                 : resolveCodexAppServerReasoningEffort({
                     thinkLevel: params.thinkLevel,
                     modelId: modelSelection.model,
-                    supportedReasoningEfforts: modelSelection.supportedReasoningEfforts,
+                    supportedReasoningEfforts:
+                      params.supportedReasoningEfforts ?? modelSelection.supportedReasoningEfforts,
                   }),
             ...(params.outputSchema ? { outputSchema: params.outputSchema } : {}),
           } satisfies CodexTurnStartParams,
@@ -419,7 +422,10 @@ async function runBoundedCodexAppServerTurnInWorkspace(
         const notification = result.error
           ? readCodexErrorNotification(result.error)?.error
           : undefined;
-        const priorFailure = notification ? resolveCodexPromptError(notification) : undefined;
+        const runtime = { model: thread.model, ...readCodexRuntimeUpdateFacts(client) };
+        const priorFailure = notification
+          ? resolveCodexPromptError(notification, runtime)
+          : undefined;
         const completed = result.turn?.error;
         // Preserve recorded failure details when the completion adds none.
         const retainPrior =
@@ -427,7 +433,7 @@ async function runBoundedCodexAppServerTurnInWorkspace(
           completed?.codexErrorInfo == null &&
           (!completed?.message || completed.message === notification?.message);
         const failure =
-          completed && !retainPrior ? resolveCodexPromptError(completed) : priorFailure;
+          completed && !retainPrior ? resolveCodexPromptError(completed, runtime) : priorFailure;
         throw failure instanceof Error
           ? failure
           : new Error(failure ?? `codex app-server ${params.taskLabel} turn failed`);

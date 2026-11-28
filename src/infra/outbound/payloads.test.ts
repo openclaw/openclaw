@@ -344,3 +344,14 @@ describe("outbound payloads", () => {
     });
   });
 });
+
+it("keeps private reply metadata on JSON-projected payloads without serializing it", () => {
+  const earlier = setReplyPayloadMetadata(
+    { text: "Earlier answer" },
+    { precedingInputAnswer: true },
+  );
+  const [projected, current] = toJson(createPlan([earlier, { text: "Current answer" }]));
+  expect(getReplyPayloadMetadata(projected!)?.precedingInputAnswer).toBe(true);
+  expect(getReplyPayloadMetadata(current!)?.precedingInputAnswer).toBeUndefined();
+  expect(JSON.stringify(projected)).not.toContain("precedingInputAnswer");
+});

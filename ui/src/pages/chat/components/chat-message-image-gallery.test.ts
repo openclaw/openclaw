@@ -180,9 +180,9 @@ describe("message image gallery loading", () => {
     const expectedSrc = `/openclaw/__openclaw__/assistant-media?source=${encodeURIComponent(source)}&mediaTicket=ticket-inbound&${new URLSearchParams({ filename })}`;
     expect(
       container.querySelector<HTMLImageElement>(".chat-message-image")?.getAttribute("src"),
-    ).toBe(`${expectedSrc}&variant=thumbnail&width=480&v=4`);
+    ).toBe(`${expectedSrc}&variant=thumbnail&width=480&v=5`);
     expect(container.querySelector(".chat-message-image")?.getAttribute("srcset")).toBe(
-      `${expectedSrc}&variant=thumbnail&width=480&v=4 1x, ${expectedSrc}&variant=thumbnail&width=960&v=4 2x`,
+      `${expectedSrc}&variant=thumbnail&width=480&v=5 1x, ${expectedSrc}&variant=thumbnail&width=960&v=5 2x`,
     );
     const tile = container.querySelector<HTMLButtonElement>(".chat-message-image-button");
     expect(tile).not.toBeNull();
@@ -192,7 +192,7 @@ describe("message image gallery loading", () => {
     await opened.promise;
     expect(onOpenImage).toHaveBeenCalledWith(
       expect.objectContaining({
-        src: new URL(`${expectedSrc}&variant=thumbnail&width=480&v=4`, window.location.href).href,
+        src: new URL(`${expectedSrc}&variant=thumbnail&width=480&v=5`, window.location.href).href,
         title: filename,
       }),
     );
@@ -252,7 +252,7 @@ describe("message image gallery loading", () => {
         await vi.advanceTimersByTimeAsync(0);
         expect(fetchDisplay).not.toHaveBeenCalled();
         expect(fetch.mock.calls.map(([url]) => url)).toEqual([
-          source.replace(/\/full$/u, "/thumbnail?v=4&width=480"),
+          source.replace(/\/full$/u, "/thumbnail?v=5&width=480"),
         ]);
         expect(await gallery.controller.move(1)).toBe(false);
         expect(fetchDisplay).toHaveBeenCalledOnce();
@@ -271,7 +271,7 @@ describe("message image gallery loading", () => {
         expect(gallery.controller.peek().current?.title).toBe("Managed neighbor");
         expect(gallery.controller.peek().current?.src).toBe(`${blobPrefix}-1`);
         expect(gallery.controller.peek().failed).toBe(false);
-        expect(fetch.mock.calls.every(([url]) => url.includes("/thumbnail?v=4&width="))).toBe(true);
+        expect(fetch.mock.calls.every(([url]) => url.includes("/thumbnail?v=5&width="))).toBe(true);
       } finally {
         dispose();
       }

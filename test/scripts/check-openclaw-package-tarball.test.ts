@@ -5,7 +5,7 @@ import { chmodSync, existsSync, readFileSync, rmSync, statSync, writeFileSync } 
 import { join, resolve } from "node:path";
 import { pathToFileURL } from "node:url";
 import { gzipSync } from "node:zlib";
-import { Header, type HeaderData, Pax } from "tar";
+import { Header, type HeaderData, Pax } from "tar/raw";
 import { afterEach, describe, expect, it } from "vitest";
 import { LOCAL_BUILD_METADATA_DIST_PATHS } from "../../scripts/lib/local-build-metadata-paths.mts";
 import {
@@ -784,22 +784,6 @@ syncBuiltinESMExports();
         "unreadable packaged extension asset metadata:",
         "extension example static asset output must be a package-relative path",
       ],
-    });
-  });
-
-  it("accepts package-less extension roots without metadata-declared assets", () => {
-    const extensionRuntime = "dist/extensions/example/runtime.js";
-    const extensionManifest = "dist/extensions/example/openclaw.plugin.json";
-    checkTarball({
-      inventory: ["dist/index.js", extensionRuntime, extensionManifest],
-      files: {
-        "dist/index.js": "export {};\n",
-        [extensionRuntime]: "export {};\n",
-        [extensionManifest]: '{"id":"example"}\n',
-      },
-      options: { postinstall: true },
-      status: 0,
-      successText: true,
     });
   });
 

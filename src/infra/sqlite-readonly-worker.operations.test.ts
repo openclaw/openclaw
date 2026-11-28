@@ -513,20 +513,19 @@ it("retires idle readers under memory pressure and reopens for later reads", asy
   const launch = captureSqliteReadOnlyWorkerLaunch(env, "canonical");
   const readFromPool = () =>
     pool.run(source, { ...readOptions(), mode: "operation", command: readCommand() }, launch);
+  const expected = { operation: "agentRetirement.sessionStoreBlocker", value: blocker };
   try {
-    await expect(readFromPool()).resolves.toEqual({
-      operation: "agentRetirement.sessionStoreBlocker",
-      value: blocker,
-    });
+    await expect(readFromPool()).resolves.toEqual(expected);
     const first = lastChild();
     expect(first.exitCode).toBeNull();
     channel("openclaw.memory.critical").publish(true);
+    // Both callers select while native retirement is still joining the old slot.
+    const successors = Promise.all([readFromPool(), readFromPool()]);
     await expect.poll(() => first.exitCode, { timeout: 5_000 }).toBe(0);
     await sessions[0]!.closed;
-    await expect(readFromPool()).resolves.toEqual({
-      operation: "agentRetirement.sessionStoreBlocker",
-      value: blocker,
-    });
+    await expect(successors).resolves.toEqual([expected, expected]);
+    await readFromPool();
+    expect(sessions).toHaveLength(2);
     expect(lastChild()).not.toBe(first);
   } finally {
     await Promise.all(sessions.map((session) => session.close()));

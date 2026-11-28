@@ -16,7 +16,6 @@ import {
   rewrapToolWithBeforeToolCallHook,
   type HookContext,
 } from "../agents/agent-tools.before-tool-call.js";
-import { hasAnyAuthProfileStoreSourceAsync } from "../agents/auth-profiles/source-check.js";
 import { createHeadlessDeadlineScope } from "../agents/code-mode-headless.js";
 import type {
   CodeModeNamespaceDescriptor,
@@ -56,11 +55,12 @@ import {
   withGatewayToolCallerIdentity,
 } from "../agents/tools/gateway-caller-context.js";
 import { ensureAgentWorkspace } from "../agents/workspace.js";
-import { selectLiveRuntimeConfig } from "../config/runtime-snapshot.js";
+import { readRuntimeConfig, selectLiveRuntimeConfig } from "../config/runtime-snapshot.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { restoreCronScriptOperatorSource } from "../gateway/cron-operator-source.js";
 import type { GatewayContextResolver } from "../gateway/server-methods/types.js";
 import { formatErrorMessageWithCode } from "../infra/errors.js";
+import { isOperatorAuthorityUnavailable } from "../infra/operator-authority-error.js";
 import { logWarn } from "../logger.js";
 import {
   capturePluginLifecycleAuthority,
@@ -72,6 +72,7 @@ import { getPluginToolMeta } from "../plugins/tool-metadata.js";
 import { normalizeAgentId } from "../routing/session-key.js";
 import { resolveCronAgentConfig } from "./isolated-agent/run-config.js";
 import { resolveCronAgentSessionKey } from "./isolated-agent/session-key.js";
+import { CronOperatorSourceError } from "./operator-source-error.js";
 import { prepareCronRunAdmission } from "./run-admission.js";
 import {
   resolveCronScheduledToolPolicy,
@@ -94,7 +95,11 @@ import {
   scriptFailure,
   type CronScriptPayloadExecutionResult,
 } from "./trigger-script-result.js";
-import { createCronTriggerRuntimeLifetime } from "./trigger-script-runtime-lifetime.js";
+import {
+  createCronTriggerRuntimeLifetime,
+  retainCronTriggerRuntime,
+  reuseCronTriggerRuntime,
+} from "./trigger-script-runtime-lifetime.js";
 import type {
   CronToolsAllowExecTarget,
   CronTriggerEvaluationResult,
@@ -123,6 +128,7 @@ void assertTriggerCodesCoverHeadless;
 
 type PreparedTriggerRuntime = {
   [Symbol.dispose]?: () => void;
+  sandboxNeedsProvisioning?: (signal: AbortSignal) => Promise<boolean>;
   createTools: (
     admitted: AdmittedRunContext,
     signal: AbortSignal,
@@ -158,7 +164,7 @@ type LoadTriggerPluginRegistry = (input: {
 }) => PluginRegistry;
 
 type CronTriggerEvaluatorDeps = {
-  config: OpenClawConfig;
+  config?: OpenClawConfig;
   runHeadless?: typeof runCodeModeScriptHeadless;
   prepareRuntime?: PrepareTriggerRuntime;
   loadPluginRegistry?: LoadTriggerPluginRegistry;
@@ -230,8 +236,15 @@ async function prepareTriggerRuntime(
       config,
       sessionKey,
       workspaceDir,
+      assertCurrent: () => preparationSignal?.throwIfAborted(),
     });
     try {
+      const sandboxNeedsProvisioning =
+        sandbox?.backend?.id === "docker"
+          ? (await import("../agents/sandbox/docker-backend.js")).getDockerSandboxProvisioningCheck(
+              sandbox.backend,
+            )
+          : undefined;
       preparationSignal?.throwIfAborted();
       const effectiveWorkspace =
         sandbox?.enabled && sandbox.workspaceAccess !== "rw" ? sandbox.workspaceDir : workspaceDir;
@@ -239,8 +252,6 @@ async function prepareTriggerRuntime(
         toolsEnabled: true,
         toolsAllow: params.toolsAllow,
       });
-      const authProfileStoreSource =
-        toolPlan.constructTools && (await hasAnyAuthProfileStoreSourceAsync(agentDir));
       preparationSignal?.throwIfAborted();
       const scheduledToolPolicy = resolveScheduledToolPolicyContext({
         toolsAllow: params.toolsAllow,
@@ -279,6 +290,7 @@ async function prepareTriggerRuntime(
         signal,
         messageActionTurnCapability,
       ) => {
+        const assertSource = resolveAdmittedRunActiveAssertion(admitted, signal);
         const allTools = toolPlan.constructTools
           ? await createOpenClawCodingToolsInternalAsync({
               agentId,
@@ -286,13 +298,14 @@ async function prepareTriggerRuntime(
               operationalRunInstance: admitted.operationalRunInstance,
               messageActionTurnCapability,
               abortSignal: signal,
-              exec: { config },
+              prepareHostFileMutation: assertSource?.prepareSessionSourceStorageEffect,
+              // No conversation collects a backgrounded command, so exec waits for its result.
+              exec: { config, allowBackground: false },
               sandbox,
               sessionKey,
               trigger: "cron",
               jobId: params.jobId,
               agentDir,
-              authProfileStoreSource,
               cwd: effectiveWorkspace,
               workspaceDir: effectiveWorkspace,
               spawnWorkspaceDir: workspaceDir,
@@ -339,6 +352,7 @@ async function prepareTriggerRuntime(
         createTools,
         acquireMcpTools,
         context,
+        sandboxNeedsProvisioning,
         ...(pluginRegistry ? { pluginRegistry } : {}),
         scheduledToolPolicy,
         [Symbol.dispose]: () => sandbox?.[Symbol.dispose]?.(),
@@ -383,19 +397,6 @@ function createCronCodeModeRunner(deps: CronTriggerEvaluatorDeps) {
     entry.lifetime.retire();
   };
 
-  const retainRuntime = async (
-    entry: TriggerRuntimeCacheEntry,
-    scope: ReturnType<typeof createHeadlessDeadlineScope>,
-  ) => {
-    const release = entry.lifetime.retain();
-    try {
-      return { runtime: await scope.wait(entry.promise), release };
-    } catch (error) {
-      release();
-      throw error;
-    }
-  };
-
   const resolveCachedRuntime = async (
     request: Parameters<PrepareTriggerRuntime>[0],
     scope: ReturnType<typeof createHeadlessDeadlineScope>,
@@ -417,13 +418,11 @@ function createCronCodeModeRunner(deps: CronTriggerEvaluatorDeps) {
     ) {
       runtimeCache.delete(request.jobId);
       runtimeCache.set(request.jobId, cached);
-      // Shared preparation follows its first caller's cancellation, not its deadline;
-      // a later caller's cancellation leaves the shared work for the next tick.
-      const retained = await retainRuntime(cached, scope);
-      if (retained.runtime.isCurrent()) {
+      // A preparation can outlive this evaluation's deadline and serve the next tick.
+      const retained = await reuseCronTriggerRuntime(cached, scope);
+      if (retained) {
         return retained;
       }
-      retained.release();
     }
     if (cached) {
       retireRuntime(request.jobId, cached);
@@ -481,7 +480,7 @@ function createCronCodeModeRunner(deps: CronTriggerEvaluatorDeps) {
       })
       .finally(settlePreparation);
     try {
-      return await retainRuntime(entry, scope);
+      return await retainCronTriggerRuntime(entry, scope);
     } catch (error) {
       // A missed deadline keeps preparation running for the next tick instead of
       // repeating the same cold load forever; cancellation still starts cold.
@@ -521,7 +520,7 @@ function createCronCodeModeRunner(deps: CronTriggerEvaluatorDeps) {
         params.deliveryAttemptFence,
       );
       const request = {
-        runtimeConfig: selectLiveRuntimeConfig(deps.config),
+        runtimeConfig: deps.config ? selectLiveRuntimeConfig(deps.config) : readRuntimeConfig(),
         jobId: params.job.id,
         agentId: params.job.agentId,
         toolsAllow: params.job.payload.toolsAllow,
@@ -539,7 +538,7 @@ function createCronCodeModeRunner(deps: CronTriggerEvaluatorDeps) {
       });
       releaseRuntime = release;
       admission = prepareCronRunAdmission({
-        scheduledExecution: params.occurrence.mint({
+        scheduledExecution: await params.occurrence.mint({
           cfg: runtime.context.config,
           agentId: runtime.context.agentId,
           runId,
@@ -662,6 +661,10 @@ function createCronCodeModeRunner(deps: CronTriggerEvaluatorDeps) {
         return { kind: "completed" as const, result };
       });
     } catch (error) {
+      // A refused or unavailable operator source is not a script failure; the caller owns it.
+      if (isOperatorAuthorityUnavailable(error) || error instanceof CronOperatorSourceError) {
+        throw error;
+      }
       return scriptFailure(
         formatErrorMessageWithCode(error),
         error instanceof CodeModeHeadlessTimeoutError
