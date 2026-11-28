@@ -39,6 +39,7 @@ export async function resolveAuthorizedIMessageReplyReference(params: {
   hasExclusiveLocalDatabase: boolean;
   service?: IMessageService;
   replyToId?: string;
+  replyToIdSource?: "explicit" | "implicit";
   conversationReadOrigin?: string;
 }): Promise<string | undefined> {
   if (!createActionGate(params.account.config.actions)("reply")) {
@@ -52,7 +53,8 @@ export async function resolveAuthorizedIMessageReplyReference(params: {
   const messageId = await resolveIMessageMessageId(rawReplyToId, {
     chatContext,
   });
-  await authorizeIMessageResourceReference({
+  const authorized = await authorizeResourceReference({
+    allowMissingImplicitReply: params.replyToIdSource === "implicit",
     accountId: params.account.accountId,
     chatContext,
     cliPath: params.cliPath,
@@ -62,7 +64,7 @@ export async function resolveAuthorizedIMessageReplyReference(params: {
     messageId,
     conversationReadOrigin: params.conversationReadOrigin,
   });
-  return messageId;
+  return authorized ? messageId : undefined;
 }
 
 export async function authorizeIMessageResourceReference(params: {
@@ -75,6 +77,14 @@ export async function authorizeIMessageResourceReference(params: {
   messageId: string;
   conversationReadOrigin?: string;
 }): Promise<void> {
+  await authorizeResourceReference(params);
+}
+
+async function authorizeResourceReference(
+  params: Parameters<typeof authorizeIMessageResourceReference>[0] & {
+    allowMissingImplicitReply?: boolean;
+  },
+): Promise<boolean> {
   const cacheContext = {
     ...params.chatContext,
     accountId: params.accountId,
@@ -85,7 +95,7 @@ export async function authorizeIMessageResourceReference(params: {
     cacheBinding = await resolveIMessageCachedResourceBinding(normalizedMessageId, cacheContext);
   }
   if (cacheBinding === "match") {
-    return;
+    return true;
   }
   if (cacheBinding === "mismatch") {
     throw new Error("iMessage message reference belongs to a different account or conversation.");
@@ -95,13 +105,18 @@ export async function authorizeIMessageResourceReference(params: {
     ? await checkIMessageResourceBinding(params)
     : "unavailable";
   if (providerBinding === "match") {
-    return;
+    return true;
   }
-  if (providerBinding === "mismatch") {
+  if (providerBinding === "missing" && params.allowMissingImplicitReply) {
+    // Internal session events have IDs but no native message to reply to. Only a
+    // successful lookup proving absence may turn an inherited anchor into a root send.
+    return false;
+  }
+  if (providerBinding === "mismatch" || providerBinding === "missing") {
     throw new Error("iMessage message reference does not belong to the selected conversation.");
   }
   if (params.conversationReadOrigin === "direct-operator") {
-    return;
+    return true;
   }
   throw new Error(
     "Delegated iMessage message references require a current same-account conversation binding when the Messages database is unavailable.",

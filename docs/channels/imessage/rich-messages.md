@@ -58,6 +58,8 @@ All actions are enabled by default; use `channels.imessage.actions` to turn indi
   <Accordion title="Message IDs">
     Inbound iMessage context includes both short `MessageSid` values and full message GUIDs (`MessageSidFull`) when available. Short IDs are scoped to the recent SQLite-backed reply cache and are checked against the current chat before use. If a short ID expires, retry with its `MessageSidFull` while targeting the conversation that supplied it. Full IDs do not bypass conversation or account binding, so replace an ID from another chat with one from the current target. Remote delegated calls can reject stale full IDs when current-conversation evidence is unavailable.
 
+    Background session events can carry internal IDs rather than native message GUIDs. Automatically inherited reply anchors become top-level sends only when the account’s exclusive local Messages database confirms the message does not exist. Explicit reply targets, references to another account or conversation, and unavailable lookup evidence retain their existing validation; real native GUIDs keep normal threading.
+
   </Accordion>
 
   <Accordion title="Capability detection">

@@ -175,7 +175,15 @@ describe("routed iMessage reply threading", () => {
     expect(sendDurableMessageBatchCore.mock.calls.map(([send]) => send.replyToId)).toEqual(ids);
     expect(
       sendDurableMessageBatchCore.mock.calls.map(([send]) => send.payloads[0]?.replyToId),
-    ).toEqual([ids[0], undefined]);
+    ).toEqual([undefined, undefined]);
+    expect(
+      sendDurableMessageBatchCore.mock.calls.map(([send]) =>
+        createReplyToDeliveryPolicy(send).resolveCurrentReplyTo(send.payloads[0]!),
+      ),
+    ).toEqual([
+      { replyToId: "weather-question", source: "implicit" },
+      { replyToId: "mets-question", source: "implicit" },
+    ]);
   });
 
   it.each(["first", "all"] as const)(
