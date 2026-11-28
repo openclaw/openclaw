@@ -1,8 +1,17 @@
 import type { ToolRepeatableTarget } from "@openclaw/agent-core";
 import { classifyAgentToolSource } from "../plugins/tool-metadata.js";
-import { resolveCoreToolFacts } from "./core-tool-facts.js";
 import type { ToolSearchCatalogEntry } from "./tool-search-types.js";
 import type { AnyAgentTool } from "./tools/common.js";
+
+/** Core tools the model reads as one capability, so Tool Search shows or defers them together. */
+export const CORE_TOOL_CATALOG_FAMILIES: Readonly<Record<string, readonly string[]>> = {
+  delegation: ["sessions_spawn", "subagents", "agents_wait"],
+};
+const CORE_TOOL_CATALOG_FAMILY = new Map(
+  Object.entries(CORE_TOOL_CATALOG_FAMILIES).flatMap(([family, names]) =>
+    names.map((name) => [name, family] as const),
+  ),
+);
 
 /**
  * A core tool family is shown or deferred as one unit: a visible member reads as the whole
@@ -18,7 +27,7 @@ export function createFamilyVisibility(params: {
   const coreFamily = (tool: AnyAgentTool) => {
     const { source, sourceName } = classifyAgentToolSource(tool);
     return source === "openclaw" && sourceName === "core"
-      ? resolveCoreToolFacts(tool.name)?.catalogFamily
+      ? CORE_TOOL_CATALOG_FAMILY.get(tool.name)
       : undefined;
   };
   const nameCounts = new Map<string, number>();

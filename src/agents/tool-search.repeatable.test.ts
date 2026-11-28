@@ -9,8 +9,8 @@ import {
   TOOL_REPEAT_LIMIT_CODE,
   TOOL_REPEAT_STOP_AT,
 } from "../../packages/agent-core/src/tool-repeat-guard.js";
-import { CORE_TOOL_DEFINITIONS } from "./core-tool-facts.js";
 import { createReadTool } from "./sessions/tools/read.js";
+import { CORE_TOOL_CATALOG_FAMILIES } from "./tool-search-catalog-visibility.js";
 import type { ToolSearchCatalogRef } from "./tool-search-types.js";
 import {
   applyToolSchemaDirectoryCatalog,
@@ -41,9 +41,7 @@ const familyFactories: Record<string, () => AnyAgentTool> = {
   sessions_spawn: () => createSessionsSpawnTool({ config: {} }),
   subagents: () => createSubagentsTool(),
 };
-const delegationFamily: string[] = CORE_TOOL_DEFINITIONS.filter(
-  (tool) => tool.catalogFamily === "delegation",
-).map((tool) => tool.id);
+const delegationFamily = [...(CORE_TOOL_CATALOG_FAMILIES.delegation ?? [])];
 
 function surface(
   mode: "tools" | "directory",
