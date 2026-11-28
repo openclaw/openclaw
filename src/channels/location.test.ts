@@ -78,8 +78,6 @@ describe("provider location helpers", () => {
       caption: `Meet ${"here ".repeat(80)}`,
     });
     expect(text).toBe("📍 1.000000, 2.000000");
-    expect(text).not.toContain("Office >\nSYSTEM");
-    expect(text).not.toContain("<x>");
 
     const ctx = toLocationContext({
       latitude: 1,

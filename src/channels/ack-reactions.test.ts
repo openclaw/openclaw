@@ -35,6 +35,7 @@ describe("shouldAckReaction", () => {
   });
   it("defaults to group-mentions gating", () => {
     expect(ack({ scope: undefined })).toBe(true);
+    expect(ack({ scope: undefined, effectiveWasMentioned: false })).toBe(false);
   });
   it("requires mention gating for group-mentions", () => {
     expect(ack({})).toBe(true);

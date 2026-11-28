@@ -56,11 +56,9 @@ const cases: Array<{
     cfg: {
       channels: {
         telegram: {
-          allowFrom: ["*"],
           streaming: { preview: { chunk: { ...defaults } } },
           accounts: {
             default: {
-              allowFrom: ["*"],
               streaming: {
                 preview: {
                   chunk: {

@@ -160,7 +160,7 @@ describe("Multi-reaction status lifecycle", () => {
   });
 
   it("does nothing when disabled", async () => {
-    const { adapter, active } = createSlackMockAdapter();
+    const { adapter } = createSlackMockAdapter();
     const ctrl = createStatusReactionController({
       enabled: false,
       adapter,
@@ -171,7 +171,6 @@ describe("Multi-reaction status lifecycle", () => {
     void ctrl.setThinking();
     await ctrl.setDone();
     await vi.advanceTimersByTimeAsync(100);
-    expect(active.size).toBe(0);
     expect(adapter.setReaction).not.toHaveBeenCalled();
   });
 });
