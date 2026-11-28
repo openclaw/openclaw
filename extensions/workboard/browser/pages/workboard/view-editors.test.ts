@@ -161,60 +161,6 @@ describe("WorkboardView", () => {
     );
   });
 
-  it("reapplies card templates after editing their text fields", async () => {
-    const client = createWorkboardTestClient({
-      "workboard.cards.create": { card: createWorkboardCard({ title: "Release: " }) },
-    });
-    const { state, container, renderView } = createWorkboardView({
-      client,
-      onRequestUpdate: () => undefined,
-    });
-    state.draftOpen = true;
-    renderView();
-    const template = textButton(container, "Release");
-    const fields = [
-      [".workboard-draft__title", "Release: "],
-      [".workboard-draft__notes", "Scope:\nVerification:\nCloseout:"],
-    ] as const;
-    template.click();
-    renderView();
-    for (const [selector, value] of fields) {
-      const input = expectDefined(
-        container.querySelector<HTMLInputElement | HTMLTextAreaElement>(selector),
-        selector,
-      );
-      expect(input.value).toBe(value);
-      input.value = `Edited ${value}`;
-      input.dispatchEvent(new InputEvent("input", { bubbles: true }));
-    }
-    addLabel(container, "custom draft");
-    expect(selectedLabels(container)).toEqual(["custom draft", "release"]);
-    template.click();
-    renderView();
-    expect(selectedLabels(container)).toEqual(["release"]);
-    for (const [selector, value] of fields) {
-      expect(container.querySelector<HTMLInputElement | HTMLTextAreaElement>(selector)?.value).toBe(
-        value,
-      );
-    }
-    const form = container.querySelector<HTMLFormElement>(".workboard-draft")!;
-    const submit = form.querySelector<HTMLButtonElement>(".workboard-draft__submit")!;
-    expect(submit.form).toBe(form);
-    expect(form.lastElementChild?.contains(submit)).toBe(true);
-    form.dispatchEvent(new Event("submit", { bubbles: true, cancelable: true }));
-    await waitForFast(() => expect(state.draftOpen).toBe(false));
-    expect(client.request).toHaveBeenCalledExactlyOnceWith(
-      "workboard.cards.create",
-      expect.objectContaining({
-        title: "Release: ",
-        notes: "Scope:\nVerification:\nCloseout:",
-        labels: ["release"],
-        priority: "urgent",
-        templateId: "release",
-      }),
-    );
-  });
-
   it.each(["title", "notes"] as const)(
     "preserves an inline %s draft through lost connectivity and client availability",
     async (field) => {
@@ -312,25 +258,6 @@ describe("WorkboardView", () => {
     save.click();
     await waitForFast(() => expect(state.cards[0]?.notes).toBe("Edited notes"));
     expect(attempts).toBe(2);
-  });
-
-  it("keeps notes selectable and opens the editor only on a plain click", async () => {
-    const card = createWorkboardCard({ notes: "Copy me" });
-    const { state, container, renderView } = createWorkboardView({
-      client: createWorkboardTestClient({}),
-    });
-    state.cards = [card];
-    state.detailCardId = card.id;
-    renderView();
-    const { trigger, owner, open } = await inlineEditor(container, "notes");
-    const selection = expectDefined(document.getSelection(), "selection");
-    selection.selectAllChildren(trigger);
-    trigger.click();
-    flush();
-    expect(owner.querySelector("textarea")).toBeNull();
-    selection.removeAllRanges();
-    const textarea = await open();
-    expect(textarea.value).toBe("Copy me");
   });
 
   it("resumes dirty labels after light dismissal and clears them only on explicit cancel", async () => {

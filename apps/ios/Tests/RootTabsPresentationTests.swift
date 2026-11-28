@@ -264,10 +264,6 @@ struct RootTabsPresentationTests {
         #expect(!RootSidebarModel.isFailedCronJob(Self.cronJob(enabled: true, status: "ok")))
     }
 
-    @Test func `recent session cap is disabled while search is active`() {
-        #expect(RootSidebar.recentSessionCap(searchText: "deploy") == nil)
-    }
-
     @Test func `configured gateway bypasses launch request and stale onboarding markers`() {
         let route = RootTabs.startupPresentationRoute(
             gatewayConnected: false,

@@ -1,8 +1,5 @@
 import type { GatewayProtocolRequestOptions } from "@openclaw/gateway-client/browser";
-import type {
-  SessionsSetInvolvementParams,
-  SessionsListParams,
-} from "../../../../packages/gateway-protocol/src/index.js";
+import type { SessionsListParams } from "../../../../packages/gateway-protocol/src/index.js";
 import {
   expandSessionRowFacts,
   SESSION_ROWS_DELTA_PREFIX,
@@ -17,14 +14,6 @@ import type {
   SessionRequestClient,
   SessionResetOptions,
 } from "./session-types.ts";
-
-/** Personal list choices share one RPC contract across all session menus. */
-export async function requestSessionInvolvement(
-  client: SessionRequestClient,
-  params: SessionsSetInvolvementParams,
-): Promise<void> {
-  await client.request("sessions.setInvolvement", params);
-}
 
 /** Gateway rosters omit recency so Chat and Settings agree, and carry the shared
  *  sidebar page size: a roster smaller than the store empties whole categories

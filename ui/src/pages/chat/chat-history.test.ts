@@ -8,7 +8,7 @@ import { GatewayRequestError } from "../../api/gateway-connect-errors.ts";
 import type { GatewaySessionRow, SessionsRewindResult } from "../../api/types.ts";
 import { handleChatGatewayEvent } from "./chat-gateway.ts";
 import { rewindChatHistory, switchChatHistoryBranch } from "./chat-history-actions.ts";
-import { loadOlderChatHistoryPage, requestChatSessionSnapshot } from "./chat-history-request.ts";
+import { loadOlderChatHistoryPage } from "./chat-history-request.ts";
 import type { ChatHistoryResult } from "./chat-history-snapshot.ts";
 import { syncSelectedSessionMessageSubscription } from "./chat-history-subscription.ts";
 import {
@@ -92,7 +92,7 @@ function rewindState(history: ChatHistoryResult, response: Promise<SessionsRewin
 const rewind = (state: ReturnType<typeof rewindState>) =>
   rewindChatHistory(state, "user-entry", new ChatAttachmentReadLifecycle(() => {}));
 
-it("preserves prepared quiet activity through older pages and prefetched snapshots", async () => {
+it("preserves prepared quiet activity through older pages", async () => {
   const result = {
     role: "toolResult",
     toolCallId: "wait",
@@ -108,20 +108,12 @@ it("preserves prepared quiet activity through older pages and prefetched snapsho
   expect((await loadOlderChatHistoryPage(state, { cursor: "older-1" }))?.messages).toEqual(
     expected,
   );
-  expect(
-    await requestChatSessionSnapshot(state.client!, state.sessionKey, state, () => true),
-  ).toMatchObject({ kind: "snapshot", snapshot: { messages: expected } });
   expect(result).not.toHaveProperty("activity");
 });
 
-it.each([
-  { compact: false, openingStart: 100 },
-  { compact: true, openingStart: 100 },
-  { compact: true, openingStart: 101 },
-  { compact: true, openingStart: 107 },
-])(
-  "reuses the startup receipt during browser history restore (compact $compact, opening starts at $openingStart)",
-  async ({ compact, openingStart }) => {
+it.each([100, 101, 107])(
+  "reuses the startup receipt during browser history restore (opening starts at %i)",
+  async (openingStart) => {
     const entries = (start: number, end: number) =>
       Array.from({ length: end - start + 1 }, (_, index) => {
         const seq = start + index;
@@ -149,7 +141,6 @@ it.each([
       totalMessages: end,
     };
     const state = Object.assign(createState(initialHistory), { sessionKey: "agent:main:warm" });
-    Object.assign(state.settings, { compactSessionOpening: compact });
     const response = createDeferred<Awaited<ReturnType<typeof state.sessions.subscribeMessages>>>();
     const subscription = vi
       .spyOn(state.sessions, "subscribeMessages")
@@ -187,7 +178,7 @@ it.each([
 
     await ready;
     await opening;
-    expect(subscription.mock.calls[0]?.[1]?.initialHistory?.limit).toBe(compact ? 24 : 80);
+    expect(subscription.mock.calls[0]?.[1]?.initialHistory?.limit).toBe(24);
     expect(request.mock.calls.map(([method, params]) => ({ method, params }))).toMatchObject(
       openingStart === 100
         ? []

@@ -53,7 +53,9 @@ it.each([false, true])(
       ["check:test-lines-ratchet", "--base", "exact-base", "--no-merge-base"],
       ["config:docs:check"],
       ["plugins:inventory:check"],
+      ["plugin-sdk:check-exports"],
       ["check:database-dialect-ratchet", "--base", "exact-base", "--no-merge-base"],
+      ["plugin-sdk:surface:check"],
     ]);
   },
 );

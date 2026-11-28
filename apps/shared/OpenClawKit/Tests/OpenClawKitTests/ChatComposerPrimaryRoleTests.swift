@@ -10,7 +10,8 @@ final class ChatComposerPrimaryRoleTests: XCTestCase {
         elsewhere: Bool = false,
         blocking: Bool = false,
         capture: Bool = false,
-        talk: Bool = true) -> ChatComposerPrimaryRole
+        talk: Bool = true,
+        live: Bool = false) -> ChatComposerPrimaryRole
     {
         ChatComposerPrimaryRole.resolve(
             hasDraftToSend: draft,
@@ -20,7 +21,18 @@ final class ChatComposerPrimaryRoleTests: XCTestCase {
             // A reply this client can stop is always blocking run activity.
             hasBlockingRunActivity: blocking || reply || elsewhere,
             isLocalVoiceCaptureActive: capture,
-            hasTalkControl: talk)
+            talk: live ? .live : (talk ? .available : .unavailable))
+    }
+
+    func testLiveTalkEndsTalkInEveryState() {
+        // Listening, speaking: nothing else is running.
+        XCTAssertEqual(self.role(live: true), .talk)
+        // Thinking: the Talk turn is a run this client did not start, which alone would show an inert Stop.
+        XCTAssertEqual(self.role(elsewhere: true, live: true), .talk)
+        XCTAssertEqual(self.role(reply: true, live: true), .talk)
+        // A draft kept from before Talk waits under the Talk surface; the button still ends Talk.
+        XCTAssertEqual(self.role(draft: true, canSend: true, live: true), .talk)
+        XCTAssertEqual(self.role(blocking: true, live: true), .talk)
     }
 
     func testIdleComposerFollowsTheDraft() {

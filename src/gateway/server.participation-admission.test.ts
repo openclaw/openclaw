@@ -190,10 +190,11 @@ it("readmits pending native child and scheduled work under current invitation bo
           .spyOn(sessionEvents, "enqueueSessionEventForHost")
           .mockImplementation((...args) => {
             const receipt = enqueue(...args);
-            if (args[1].source === "cron_failure_repair") {
-              repair.resolve(receipt.settled);
-            } else if (args[1].contextKey === `cron:${job.id}:failure-alert`) {
+            // The failure alert's turn is a hidden repair turn too (#207226): match it first.
+            if (args[1].contextKey === `cron:${job.id}:failure-alert`) {
               fallback.resolve(receipt.settled);
+            } else if (args[1].source === "cron_failure_repair") {
+              repair.resolve(receipt.settled);
             }
             return receipt;
           });
@@ -223,8 +224,8 @@ it("readmits pending native child and scheduled work under current invitation bo
           status: "error",
           error: expect.stringContaining("authority"),
         });
-        // The rejected repair starts a separate fallback turn. Keep the invitation revoked
-        // until that turn has also been refused, before sharing the provider with manual runs.
+        // The rejected repair and the failure alert's turn are separate turns. Keep the invitation
+        // revoked until both have been refused, before sharing the provider with manual runs.
         for (const notice of [repair, fallback]) {
           expect(await withinTest(notice.promise, signal)).toMatchObject({
             status: "failed",

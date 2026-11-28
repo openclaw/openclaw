@@ -26,7 +26,6 @@ export function createProcessFixtures(cleanupError: string, cleanupTimeoutMs?: n
   afterEach(cleanup, cleanupTimeoutMs);
   return {
     make: (prefix: string) => directories.make(prefix),
-    cleanup,
     ownChild(child: ChildProcess) {
       const closed = once(child, "close");
       children.set(child, closed);

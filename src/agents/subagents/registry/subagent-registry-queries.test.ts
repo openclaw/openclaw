@@ -19,10 +19,7 @@ import type { SubagentRunRecord } from "./subagent-registry.types.js";
 
 const STALE_UNENDED_SUBAGENT_RUN_MS = 2 * 60 * 60 * 1_000;
 
-function makeRun(
-  runId: string,
-  overrides: Partial<SubagentRunRecordOverrides> = {},
-): SubagentRunRecord {
+function makeRun(runId: string, overrides: Partial<SubagentRunRecordOverrides>): SubagentRunRecord {
   const childSessionKey = overrides.childSessionKey ?? `agent:main:subagent:${runId}`;
   const requesterSessionKey = overrides.requesterSessionKey ?? "agent:main:main";
   return createSubagentRunRecord({
