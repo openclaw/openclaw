@@ -328,6 +328,7 @@ const catalog = {
         "Could not preview this file. Text previews require UTF-8 files up to 256 KiB. Download it to read the full file.",
       htmlPreviewUnavailable:
         "Could not preview this HTML file. HTML previews require UTF-8 files up to 2 MiB. Download it to read the full file.",
+      emptyFile: "OpenClaw can’t attach empty files.",
       readFailed: "Could not attach file. Try again.",
       imagesOnly: "Side chat accepts image attachments only.",
       tooLarge: "Too large to send: {names}{more}",

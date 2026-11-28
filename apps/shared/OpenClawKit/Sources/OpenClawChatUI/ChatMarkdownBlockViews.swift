@@ -272,13 +272,12 @@ struct ChatMarkdownTableView: View {
     private func cell(_ text: String, isHeader: Bool, column: Int) -> some View {
         // Cells read at the size of the reply's body text; a fixed footnote size stayed
         // smaller than the surrounding prose at every Dynamic Type setting.
-        let font = isHeader ? self.typography.proseFont.weight(.semibold) : self.typography.proseFont
-        return ChatMarkdownInlineChips.text(
+        ChatMarkdownInlineChips.text(
             ChatMarkdownInlineChips.inlineMarkdown(text),
             fileLabels: self.fileLabels,
-            font: font,
+            font: self.typography.tableCellFont(isHeader: isHeader),
             environment: self.environment)
-            .font(font)
+            .font(self.typography.tableCellFont(isHeader: isHeader))
             .foregroundStyle(OpenClawChatTheme.assistantText)
             .textSelection(.enabled)
             // Grid cells otherwise accept compressed row proposals and ellipsize wrapped text.
