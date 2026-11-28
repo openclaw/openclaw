@@ -158,6 +158,8 @@ enum SessionStatusScope: String, CaseIterable {
 }
 
 struct CommandSessionsScreen: View {
+    private static let interGroupSpacing: CGFloat = 20
+
     @Environment(NodeAppModel.self) private var appModel
     @Environment(\.dismiss) private var dismiss
     @Environment(\.dynamicTypeSize) private var dynamicTypeSize
@@ -211,7 +213,9 @@ struct CommandSessionsScreen: View {
                             : String(localized: "Connect to OpenClaw.")))
                 } else {
                     ForEach(sections) { section in
-                        self.sectionView(section)
+                        self.sectionView(
+                            section,
+                            topPadding: section.id == sections.first?.id ? 8 : Self.interGroupSpacing)
                     }
                 }
             }
@@ -402,7 +406,7 @@ struct CommandSessionsScreen: View {
     }
 
     @ViewBuilder
-    private func sectionView(_ section: SessionListSection) -> some View {
+    private func sectionView(_ section: SessionListSection, topPadding: CGFloat) -> some View {
         switch section.id {
         case let .group(group):
             let collapsed = self.collapsedBinding(group)
@@ -417,7 +421,7 @@ struct CommandSessionsScreen: View {
                     title: group.title,
                     isCollapsed: collapsed,
                     id: "Sessions.Group.\(group.rawValue)")
-                    .padding(.top, 8)
+                    .padding(.top, topPadding)
             }
         case let .category(name):
             Section {
@@ -433,7 +437,7 @@ struct CommandSessionsScreen: View {
                     refresh: self.refreshSessions,
                     openSession: self.openSessionKey,
                     accessory: { EmptyView() })
-                    .padding(.top, 8)
+                    .padding(.top, topPadding)
             }
         }
     }
