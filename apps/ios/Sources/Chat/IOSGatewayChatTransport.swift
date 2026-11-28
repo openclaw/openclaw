@@ -4,7 +4,18 @@ import OpenClawKit
 import OpenClawProtocol
 import OSLog
 
-struct IOSGatewayChatTransport: OpenClawChatGatewayTransport {
+struct IOSGatewayChatTransport: OpenClawChatGatewayTransport, OpenClawChildStopTransport {
+    func prepareChildStop(_ target: OpenClawChildStopTarget) async -> OpenClawChildStopAction? {
+        guard let route = await self.currentSessionMutationRoute(),
+              let scopes = await self.gateway.currentOperatorScopes(ifCurrentRoute: route),
+              target.allows(scopes: scopes),
+              await self.gateway.supportsServerMethod(OpenClawChildStopTarget.method, ifCurrentRoute: route) == true
+        else { return nil }
+        return OpenClawChildStopAction(target: target) {
+            try await self.requestSessionMutation(target.request, ifCurrentRoute: route)
+        }
+    }
+
     var chatGatewayAgentID: String? {
         self.globalAgentId
     }

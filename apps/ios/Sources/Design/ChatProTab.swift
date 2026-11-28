@@ -36,10 +36,13 @@ struct ChatProTab: View {
 
     @State private var transcriptShareItem: TranscriptShareItem?
     @State private var showsTranscriptExportError = false
+    @Environment(\.dismiss) private var dismiss
     @State private var compactToolbarInset: CGFloat = 0
     @State private var showsNewSessionOptions = false
     @State private var speech: OpenClawChatSpeechController?
     @State private var isGatewayStatusManuallyExpanded = false
+    var childKey: String?
+    var childName: String?
     let headerSidebarAction: OpenClawSidebarHeaderAction?
     /// Set only while no Gateway has ever been saved or connected on this device.
     let startFirstGatewaySetup: (() -> Void)?
@@ -82,6 +85,13 @@ struct ChatProTab: View {
 
     private var content: some View {
         self.chatSurface
+            .background {
+                if self.childKey != nil {
+                    ChatNativeEdgeBack(
+                        usesFloatingHeader: !self.usesSideToolbar,
+                        isBlocked: self.isAttachmentOwnerPinned)
+                }
+            }
             .ignoresSafeArea(.container, edges: self.usesSideToolbar ? .top : [])
             // In landscape the keyboard can leave less than the bars' minimum height. Anchor the overflow above it.
             .frame(
@@ -95,6 +105,8 @@ struct ChatProTab: View {
             .scrollEdgeEffectStyle(.soft, for: .vertical)
             .navigationTitle("")
             .navigationBarTitleDisplayMode(.inline)
+            .navigationBarBackButtonHidden(
+                self.childKey != nil && self.usesSideToolbar && self.isAttachmentOwnerPinned)
             .toolbar(self.usesSideToolbar ? .visible : .hidden, for: .navigationBar)
             .toolbar {
                 if #available(iOS 27.1, *), self.usesSideToolbar {
@@ -119,7 +131,15 @@ struct ChatProTab: View {
     private var chatHeader: some View {
         GlassEffectContainer(spacing: 8) {
             HStack(alignment: self.isMainChat ? .top : .center, spacing: 8) {
-                if let headerSidebarAction {
+                if self.childKey != nil {
+                    OpenClawRoundNavigationButton(action: self.dismiss.callAsFunction) {
+                        Image(systemName: "chevron.backward")
+                            .font(.system(size: 18, weight: .semibold))
+                            .foregroundStyle(.primary)
+                    }
+                    .accessibilityLabel("Back")
+                    .disabled(self.isAttachmentOwnerPinned)
+                } else if let headerSidebarAction {
                     OpenClawSidebarControlButton(action: headerSidebarAction)
                 } else if self.isMainChat {
                     Color.clear
@@ -356,7 +376,9 @@ struct ChatProTab: View {
 
     @ViewBuilder
     private var headerAgentIdentity: some View {
-        if self.viewModel?.isNewChatDraft == true {
+        if let childKey, let childName {
+            self.sessionHeaderText(title: childName, subtitle: self.viewModel?.subagentChatStatus(for: childKey))
+        } else if self.viewModel?.isNewChatDraft == true {
             Color.clear.frame(width: 0, height: 0).accessibilityHidden(true)
         } else if self.isMainChat, !self.usesSideToolbar {
             self.mainChatIdentity
@@ -371,20 +393,33 @@ struct ChatProTab: View {
     private var headerAgentIdentityLabel: some View {
         HStack(spacing: 4) {
             self.headerIdentityBadge()
-            VStack(alignment: .leading, spacing: 0) {
-                Text(verbatim: self.headerSessionTitle ?? self.agentDisplayName)
-                    .font(OpenClawType.subheadSemiBold)
-                    .lineLimit(self.usesSideToolbar || self.headerProjectName != nil ? 1 : 2)
-                if let project = self.headerProjectName {
-                    Text(verbatim: project)
+            self.sessionHeaderText(
+                title: self.headerSessionTitle ?? self.agentDisplayName,
+                subtitle: self.headerProjectName)
+        }
+        .frame(maxWidth: self.usesSideToolbar ? nil : .infinity, alignment: .leading)
+    }
+
+    private func sessionHeaderText(title: String, subtitle: String?) -> some View {
+        let name = Text(verbatim: title).font(OpenClawType.subheadSemiBold)
+        return ZStack(alignment: .leading) {
+            if self.childKey != nil, !self.usesSideToolbar {
+                // At large text sizes the two-line name can be taller than either glass control.
+                name.lineLimit(2, reservesSpace: true).hidden().accessibilityHidden(true)
+            }
+            VStack(alignment: self.usesSideToolbar && self.childKey != nil ? .center : .leading, spacing: 0) {
+                name.lineLimit(self.usesSideToolbar || subtitle != nil ? 1 : 2)
+                    .accessibilityIdentifier("chat-header-title")
+                if let subtitle {
+                    Text(verbatim: subtitle)
                         .font(OpenClawType.caption)
                         .foregroundStyle(.secondary)
                         .lineLimit(1)
+                        .accessibilityIdentifier("chat-header-subtitle")
                 }
             }
-            .multilineTextAlignment(.leading)
         }
-        .frame(maxWidth: self.usesSideToolbar ? nil : .infinity, alignment: .leading)
+        .multilineTextAlignment(.leading)
     }
 
     private var gatewayStatusIsHealthy: Bool {
@@ -646,7 +681,8 @@ struct ChatProTab: View {
     }
 
     private var messagePlaceholder: String {
-        String(format: String(localized: "Message %@"), self.agentDisplayName)
+        if self.childKey != nil { return String(localized: "Message subagent") }
+        return String(format: String(localized: "Message %@"), self.agentDisplayName)
     }
 
     private var canQueueOffline: Bool {
@@ -696,6 +732,75 @@ struct ChatProTab: View {
         self.isAttachmentOwnerPinned
             ? self.appModel.chatPresentation.presentationAgentAvatar
             : self.appModel.agentAvatarImage(for: self.currentActiveAgent?.id ?? self.appModel.chatAgentId)
+    }
+}
+
+/// UIKit normally gates its interactive pop on a visible navigation bar. The floating header
+/// replaces that bar, not the navigation stack or its edge-driven transition.
+private struct ChatNativeEdgeBack: UIViewControllerRepresentable {
+    let usesFloatingHeader: Bool
+    let isBlocked: Bool
+
+    func makeUIViewController(context _: Context) -> Controller {
+        Controller()
+    }
+
+    func updateUIViewController(_ controller: Controller, context _: Context) {
+        controller.update(usesFloatingHeader: self.usesFloatingHeader, isBlocked: self.isBlocked)
+    }
+
+    static func dismantleUIViewController(_ controller: Controller, coordinator _: ()) {
+        controller.restore()
+    }
+
+    final class Controller: UIViewController {
+        private weak var edge: UIGestureRecognizer?
+        private weak var contentPop: UIGestureRecognizer?
+        private weak var previousDelegate: UIGestureRecognizerDelegate?
+        private var wasEnabled = false
+        private var wasContentPopEnabled = false
+        private var usesFloatingHeader = false
+        private var isBlocked = false
+
+        override func viewDidAppear(_ animated: Bool) {
+            super.viewDidAppear(animated)
+            guard self.edge == nil, let navigationController, navigationController.viewControllers.count > 1,
+                  let edge = navigationController.interactivePopGestureRecognizer else { return }
+            self.edge = edge
+            self.previousDelegate = edge.delegate
+            self.wasEnabled = edge.isEnabled
+            self.contentPop = navigationController.interactiveContentPopGestureRecognizer
+            self.wasContentPopEnabled = self.contentPop?.isEnabled == true
+            self.applyGestureState()
+        }
+
+        func update(usesFloatingHeader: Bool, isBlocked: Bool) {
+            guard self.usesFloatingHeader != usesFloatingHeader || self.isBlocked != isBlocked else { return }
+            self.usesFloatingHeader = usesFloatingHeader
+            self.isBlocked = isBlocked
+            self.applyGestureState()
+        }
+
+        private func applyGestureState() {
+            // A pop must not remove the route while the chat owner refuses to switch sessions.
+            self.edge?.delegate = self.usesFloatingHeader ? nil : self.previousDelegate
+            self.edge?.isEnabled = !self.isBlocked && (self.usesFloatingHeader || self.wasEnabled)
+            self.contentPop?.isEnabled = !self.isBlocked && self.wasContentPopEnabled
+        }
+
+        override func viewDidDisappear(_ animated: Bool) {
+            super.viewDidDisappear(animated)
+            self.restore()
+        }
+
+        func restore() {
+            guard let edge else { return }
+            edge.delegate = self.previousDelegate
+            edge.isEnabled = self.wasEnabled
+            self.contentPop?.isEnabled = self.wasContentPopEnabled
+            self.contentPop = nil
+            self.edge = nil
+        }
     }
 }
 
@@ -783,7 +888,8 @@ private struct ChatToolbarStatusPopover<Status: View>: ViewModifier {
 /// The tab's own model, environment, and state reads still invalidate it directly.
 extension ChatProTab: @MainActor Equatable {
     static func == (lhs: Self, rhs: Self) -> Bool {
-        lhs.headerSidebarAction?.systemName == rhs.headerSidebarAction?.systemName &&
+        lhs.childKey == rhs.childKey && lhs.childName == rhs.childName &&
+            lhs.headerSidebarAction?.systemName == rhs.headerSidebarAction?.systemName &&
             lhs.headerSidebarAction?.accessibilityIdentifier == rhs.headerSidebarAction?.accessibilityIdentifier &&
             lhs.headerSidebarAction?.drawerPresentation === rhs.headerSidebarAction?.drawerPresentation &&
             lhs.headerSidebarAction?.hasApprovalAttention == rhs.headerSidebarAction?.hasApprovalAttention &&
