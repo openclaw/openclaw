@@ -37,7 +37,7 @@ const operatorOptions = {
 
 function conversationTool(
   kind: "list" | "send" | "turn",
-  options: Parameters<typeof createHostedConversationTools>[0] = {},
+  options: Parameters<typeof createHostedConversationTools>[0],
 ) {
   const tool = expectDefined(
     createHostedConversationTools(options, "main", {}).find(
@@ -58,7 +58,7 @@ function conversationTool(
 
 async function execute(
   kind: "list" | "send" | "turn",
-  args: Record<string, unknown> = {},
+  args: Record<string, unknown>,
   id: string = kind,
 ) {
   const tool = conversationTool(kind, operatorOptions);
