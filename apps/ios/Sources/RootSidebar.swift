@@ -26,11 +26,6 @@ struct RootSidebar: View {
 
     var body: some View {
         let categories = self.sessionCategories
-        let sessionSections = self.visibleSessionSections(categories: categories)
-        let sessionLayout = Self.sessionLayout(sessionSections)
-        let sidebarSessionKeys = Set(Self.flattened(sessionSections.flatMap(\.nodes)).map(\.session.key))
-        let actualSessionKeys = Set(self.model.sessions.map(\.key))
-        let showsAllSessions = sidebarSessionKeys.intersection(actualSessionKeys).count >= 15
         let rowPass = SessionRowPass(
             selectedSessionKey: resolvedSelectedSessionKey,
             mainSessionKey: resolvedMainSessionKey,
@@ -41,29 +36,15 @@ struct RootSidebar: View {
             VStack(alignment: .leading, spacing: 16) {
                 self.pagesSection(approvals: rowPass.approvals)
                     .padding(.top, 2)
-                if !sessionLayout.pinnedNodes.isEmpty {
-                    VStack(alignment: .leading, spacing: 4) {
-                        self.sessionSectionHeader(
-                            String(localized: "Pinned"),
-                            isCollapsed: self.$pinnedSessionsCollapsed,
-                            id: "RootTabs.Sidebar.PinnedSection")
-                        if !self.pinnedSessionsCollapsed {
-                            ForEach(self.displayRows(sessionLayout.pinnedNodes)) { row in
-                                self.sessionTreeRow(row, rowPass: rowPass)
-                            }
-                        }
-                    }
+                if self.model.isPreparingDrawerSessions(appModel: self.appModel) {
+                    self.loadingSessionsRow
+                } else {
+                    self.drawerSessionSections(rowPass: rowPass)
                 }
-                self.sessionsSection(
-                    sections: sessionLayout.sections,
-                    hasPinnedSessions: !sessionLayout.pinnedNodes.isEmpty,
-                    showsAllSessions: showsAllSessions,
-                    rowPass: rowPass)
             }
             .frame(maxWidth: .infinity, alignment: .leading)
             .padding(.horizontal, 10)
             .padding(.vertical, 10)
-            .animation(self.reduceMotion ? nil : .easeInOut(duration: 0.2), value: sessionLayout.pinnedNodes.map(\.id))
             .modifier(RootSidebarAnchoredContent(anchor: self.scrollAnchor))
         }
         .scrollEdgeEffectStyle(.soft, for: .vertical)
@@ -264,6 +245,46 @@ struct RootSidebar: View {
         return Image(uiImage: image)
     }
 
+    private func drawerSessionSections(rowPass: SessionRowPass) -> some View {
+        let sessionSections = self.visibleSessionSections(categories: rowPass.categories)
+        let sessionLayout = Self.sessionLayout(sessionSections)
+        let sidebarSessionKeys = Set(Self.flattened(sessionSections.flatMap(\.nodes)).map(\.session.key))
+        let actualSessionKeys = Set(self.model.sessions.map(\.key))
+        let showsAllSessions = sidebarSessionKeys.intersection(actualSessionKeys).count >= 15
+        return Group {
+            if !sessionLayout.pinnedNodes.isEmpty {
+                VStack(alignment: .leading, spacing: 4) {
+                    self.sessionSectionHeader(
+                        String(localized: "Pinned"),
+                        isCollapsed: self.$pinnedSessionsCollapsed,
+                        id: "RootTabs.Sidebar.PinnedSection")
+                    if !self.pinnedSessionsCollapsed {
+                        ForEach(self.displayRows(sessionLayout.pinnedNodes)) { row in
+                            self.sessionTreeRow(row, rowPass: rowPass)
+                        }
+                    }
+                }
+            }
+            self.sessionsSection(
+                sections: sessionLayout.sections,
+                hasPinnedSessions: !sessionLayout.pinnedNodes.isEmpty,
+                showsAllSessions: showsAllSessions,
+                rowPass: rowPass)
+        }
+        .animation(self.reduceMotion ? nil : .easeInOut(duration: 0.2), value: sessionLayout.pinnedNodes.map(\.id))
+    }
+
+    private var loadingSessionsRow: some View {
+        HStack(spacing: 9) {
+            ProgressView().controlSize(.small)
+            Text(String(localized: "Loading sessions"))
+                .font(OpenClawType.captionMedium)
+                .foregroundStyle(OpenClawSidebarPalette.muted)
+        }
+        .frame(minHeight: 44)
+        .padding(.horizontal, 10)
+    }
+
     private func sessionsSection(
         sections: [ChatSessionSidebarModel.Section],
         hasPinnedSessions: Bool,
@@ -308,14 +329,7 @@ struct RootSidebar: View {
             if !self.sessionsCollapsed {
                 let rows = self.sessionRows(in: sections)
                 if self.model.isRefreshing, self.model.sessions.isEmpty {
-                    HStack(spacing: 9) {
-                        ProgressView().controlSize(.small)
-                        Text(String(localized: "Loading sessions"))
-                            .font(OpenClawType.captionMedium)
-                            .foregroundStyle(OpenClawSidebarPalette.muted)
-                    }
-                    .frame(minHeight: 44)
-                    .padding(.horizontal, 10)
+                    self.loadingSessionsRow
                 } else if rows.isEmpty, !hasPinnedSessions {
                     Text(String(localized: "No sessions"))
                         .font(OpenClawType.captionMedium)
