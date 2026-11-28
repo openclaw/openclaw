@@ -4,8 +4,8 @@ import { Icon } from "../../../components/solid/icon.tsx";
 import { registerChatToolLabelsEnglish } from "../../../i18n/locales/en-chat-tool-labels.ts";
 import { getLocale, registerEnglishCatalog, t } from "../../../lib/reactive/i18n.ts";
 import { groupSubagentCompletions, subagentCompletionNames } from "../chat-spawned-subagent.ts";
-import { SubagentName } from "./chat-subagent-badge.tsx";
 import { ChatContinuationDelay } from "./chat-handoff-sessions.tsx";
+import { SubagentName } from "./chat-subagent-badge.tsx";
 
 registerEnglishCatalog(registerChatToolLabelsEnglish);
 

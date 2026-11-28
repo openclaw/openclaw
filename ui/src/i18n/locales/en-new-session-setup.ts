@@ -189,6 +189,9 @@ const enNewSessionSetup = {
     checkoutRepositoryFrom: "Remote checkout from {branch}",
     checkoutRequiresWorktree: "Use an isolated worktree for this project and agent",
     checkoutCheckUnavailable: "Couldn’t check the checkout. Select the project again to retry.",
+    checkoutProjectUnavailable: "This session can’t use this project.",
+    checkoutProjectUnavailableAction:
+      "This session can’t use this project. Choose another project or workspace.",
     checkoutRemoteLocked: "Paired and cloud devices use a worktree",
     local: "This computer",
     folderPlaceholder: "Agent workspace",
