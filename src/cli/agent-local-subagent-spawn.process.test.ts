@@ -51,10 +51,17 @@ function spawnCall(response: ServerResponse) {
   ]);
 }
 
-it(
-  "agent --local spawns a subagent and continues with its result",
+it.each([
+  [
+    "agent --local",
+    ["agent", "--local", "--agent", "main", "--session-id", randomUUID(), "--message", parentTask],
+  ],
+  // Temporary state bypasses the local owner; its own cleanup must still wait for the child.
+  ["agent exec", ["agent", "exec", parentTask]],
+])(
+  "%s spawns a subagent and continues with its result",
   { timeout: 120_000 },
-  async () => {
+  async (_name, commandArgs) => {
     const root = tempDirs.make("openclaw-local-subagent-spawn-");
     const fixture = createCliProcessFixture(root, {
       TMPDIR: root,
@@ -126,14 +133,7 @@ it(
           "--import",
           path.resolve("scripts/tsx.mjs"),
           fileURLToPath(resolveRuntimeWorkerUrl(cliRecoveryEntrypoints.cli)),
-          "agent",
-          "--local",
-          "--agent",
-          "main",
-          "--session-id",
-          randomUUID(),
-          "--message",
-          parentTask,
+          ...commandArgs,
           "--thinking",
           "off",
           "--timeout",

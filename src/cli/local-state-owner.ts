@@ -56,6 +56,21 @@ class LocalStateOwnerError extends Error {
   }
 }
 
+/**
+ * Detached work a one-shot command admitted (subagent completion, announcements) writes through
+ * the command's databases; every owner that closes them lets that work finish unless the user
+ * interrupts.
+ */
+export async function waitForLocalBackgroundWork(signal: AbortSignal | undefined): Promise<void> {
+  await waitForGatewayRootWorkIdle({
+    signal,
+    onWaiting: (count) =>
+      process.stderr.write(
+        `Waiting for ${count} background ${count === 1 ? "task" : "tasks"} to finish. Press Ctrl-C to stop.\n`,
+      ),
+  });
+}
+
 /** Select one owner before domain admission and retain offline custody through resource settlement. */
 export async function runWithLocalStateOwner<T>(params: {
   method: string;
@@ -440,18 +455,10 @@ export async function runWithLocalStateOwner<T>(params: {
       } finally {
         uncertainCleanup ||= cleanup.outcome === "uncertain";
         if (resources) {
-          // Detached work the command admitted (subagent completion, announcements) writes
-          // through these databases; let it finish unless the user interrupts.
           // The CLI signal gate aborts `controller`; `agent --local` owns SIGINT through its bridge.
-          await waitForGatewayRootWorkIdle({
-            signal: params.signal
-              ? AbortSignal.any([controller.signal, params.signal])
-              : controller.signal,
-            onWaiting: (count) =>
-              process.stderr.write(
-                `Waiting for ${count} background ${count === 1 ? "task" : "tasks"} to finish. Press Ctrl-C to stop.\n`,
-              ),
-          });
+          await waitForLocalBackgroundWork(
+            params.signal ? AbortSignal.any([controller.signal, params.signal]) : controller.signal,
+          );
         }
         // Failed cleanup keeps physical custody; release cannot race accepted worker/native work.
         await resources?.close();

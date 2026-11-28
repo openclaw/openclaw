@@ -377,6 +377,10 @@ export async function agentExecCommand(
   const recordCleanupError = (error: unknown) => {
     cleanupError = error;
   };
+  if (!cleanupError && temporaryDatabaseScope) {
+    const { waitForLocalBackgroundWork } = await import("../cli/local-state-owner.js");
+    await waitForLocalBackgroundWork(abortSignal);
+  }
   // Delayed worker registration can outlive its lexical maintenance scope. Drain the
   // exact temporary owners before the scope closes and the filesystem root is removed.
   if (!cleanupError && temporaryStateDir) {
