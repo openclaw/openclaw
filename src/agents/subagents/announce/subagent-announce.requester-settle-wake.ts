@@ -632,7 +632,7 @@ async function maybeWakeRequesterAfterAllChildrenSettledBound(
             },
           );
         return !pauseNotice && pendingMembers.length === 0
-          ? withAgentRpcYieldSuccessor(settledBatch, directIdempotencyKey, settle)
+          ? withAgentRpcYieldSuccessor(settledBatch, reservedInput, settle)
           : settle();
       };
       try {

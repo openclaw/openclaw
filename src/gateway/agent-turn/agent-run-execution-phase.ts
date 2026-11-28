@@ -22,6 +22,7 @@ import { adoptExecRequestSession } from "../../infra/exec-request-context.js";
 import { PluginRuntimeCloseCompletedError } from "../../plugins/runtime-close-error.js";
 import { bindGatewayContextResolver } from "../../plugins/runtime/gateway-request-scope.js";
 import { retainGatewayRootWorkAdmissionContinuation } from "../../process/gateway-work-admission.js";
+import { chatRef } from "../../sessions/chat-ref.js";
 import { withSessionTurn } from "../../sessions/session-controller.admission.js";
 import { runWithSessionControllerCleanup } from "../../sessions/session-controller.cleanup-context.js";
 import { withSessionControllerSource } from "../../sessions/session-controller.context.js";
@@ -83,10 +84,21 @@ async function executeAgentRun(
   acknowledgeCleanup: () => void,
 ): Promise<void> {
   const { prepared } = params;
-  const yieldReply = observeAgentRpcYieldExecution({
-    runId: params.runId,
+  const transcript = {
     sessionId: params.resolvedSessionId,
-    sessionKey: params.resolvedSessionKey,
+    lifecycleRevision: params.sessionEntry?.lifecycleRevision,
+  };
+  const yieldReply = observeAgentRpcYieldExecution({
+    input: prepared.activeRunAbort.entry?.input,
+    address:
+      params.resolvedSessionKey && prepared.lifecycleStorePath
+        ? chatRef({
+            agentId: params.activeSessionAgentId,
+            storePath: prepared.lifecycleStorePath,
+            sessionKey: params.resolvedSessionKey,
+          })
+        : undefined,
+    entry: transcript,
     yieldReply: params.io.yieldReply,
   });
   let deliverFinal: (() => void) | undefined;
@@ -537,7 +549,7 @@ async function executeAgentRun(
                       sessionId,
                     });
                     updateRpcSourceSessionId(prepared.activeRunAbort.entry, sessionId);
-                    yieldReply?.updateSessionId(sessionId);
+                    yieldReply?.adoptTranscript({ ...transcript, sessionId });
                   }
                 },
                 workspaceDir: workspaceOverride ?? replyDispatchRuntime.workspaceDir,

@@ -20,7 +20,8 @@ export type AgentTurnIo = {
   yieldReply?: {
     deadline: number;
     signal: AbortSignal;
-    publish(frame: AgentTurnFrame, runId: string): void;
+    project(frame: AgentTurnFrame): AgentTurnFrame;
+    publish(frame: AgentTurnFrame): void;
   };
   emitAcceptance: (acceptance: AgentTurnFrame, meta?: Parameters<RespondFn>[3]) => void;
   /** Publishes the exact controller before asynchronous runtime preparation. */

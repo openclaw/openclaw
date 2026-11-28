@@ -44,12 +44,18 @@ export const agentRunHandler: GatewayRequestHandlers["agent"] = async ({
   }
   const connectionSignal = client?.connectionSignal;
   if (connectionSignal && !client?.internal?.syntheticClient && !request.deliver) {
+    const { runId } = preflight;
     io.yieldReply = {
       deadline:
         Date.now() +
         resolveAgentTimeoutMs({ cfg: preflight.cfg, overrideSeconds: request.timeout }),
       signal: connectionSignal,
-      publish: (frame, runId) => {
+      project: ([ok, payload, error]) => [
+        ok,
+        payload && typeof payload === "object" ? { ...payload, runId } : payload,
+        error,
+      ],
+      publish: (frame) => {
         if (!connectionSignal.aborted) {
           io.emitFinal(frame, { runId });
         }

@@ -1,6 +1,7 @@
 import { isDeepStrictEqual } from "node:util";
 import { promoteGoalContinuationYield } from "../../../auto-reply/reply/goal-continuation-return.js";
 import type { ProgressContinuationState } from "../../../channels/progress-continuation.js";
+import { getRpcSource } from "../../../sessions/session-controller.rpc-sources.js";
 import { captureOpenClawStateWorkerContext } from "../../../state/openclaw-state-worker-context.js";
 import type { OpenClawStateWorkerContext } from "../../../state/openclaw-state-worker-context.types.js";
 import type { AcceptedSessionSpawn } from "../../accepted-session-spawn.js";
@@ -625,7 +626,10 @@ export async function settleRequesterTurnAfterSessionSpawns(params: {
       const entries = children(members);
       trackSubagentProgressYield(requesterTurnRunId, entries);
       if (rearmGeneration !== undefined) {
-        promoteAgentRpcYieldReply(entries, requesterTurnRunId, rearmGeneration);
+        const source = getRpcSource(requesterTurnRunId);
+        if (source) {
+          promoteAgentRpcYieldReply(entries, source.input);
+        }
       }
       promoteFollowupYield({ requesterTurnRunId, entries, rearmGeneration });
       promoteGoalContinuationYield({ requesterTurnRunId, entries, rearmGeneration });
