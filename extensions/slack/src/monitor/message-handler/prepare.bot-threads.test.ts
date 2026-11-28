@@ -1,13 +1,25 @@
 import type { App } from "@slack/bolt";
+import { createOpenClawCodingToolsAsync } from "openclaw/plugin-sdk/agent-harness";
+import { withRegisteredChannelIngress } from "openclaw/plugin-sdk/channel-ingress-test-runtime";
+import { resolveCommandAuthorizationAsync } from "openclaw/plugin-sdk/command-auth-native";
 import type { OpenClawConfig } from "openclaw/plugin-sdk/config-contracts";
+import {
+  createTestRegistry,
+  getActivePluginRegistry,
+  resetPluginRuntimeStateForTest,
+  setActivePluginRegistry,
+} from "openclaw/plugin-sdk/plugin-test-runtime";
 import {
   clearRuntimeConfigSnapshot,
   setRuntimeConfigSnapshot,
 } from "openclaw/plugin-sdk/runtime-config-snapshot";
 import { enqueueRoutedSystemEvent } from "openclaw/plugin-sdk/system-event-runtime";
+import { withOpenClawTestState } from "openclaw/plugin-sdk/test-state";
 import { afterEach, beforeEach, expect, it, vi } from "vitest";
+import { slackPlugin } from "../../../channel-plugin-api.js";
 import { mergeSlackAccountConfig } from "../../accounts.js";
 import { SlackConfigSchema } from "../../config-schema.js";
+import * as slackRuntime from "../../runtime.js";
 import {
   clearSlackThreadParticipationCache,
   recordSlackThreadParticipation,
@@ -42,11 +54,13 @@ function fixture(
   slack: SlackConfig = {},
   accountId = "default",
   messages?: OpenClawConfig["messages"],
+  options: { commands?: OpenClawConfig["commands"]; senderId?: string } = {},
 ) {
   const threadTs = `${1700000000 + caseId++}.000000`;
   const cfg: OpenClawConfig = {
     session: { store: store.makeTmpStorePath().storePath },
     messages,
+    commands: options.commands,
     channels: {
       slack: {
         enabled: true,
@@ -79,7 +93,7 @@ function fixture(
     type: "message",
     channel: "C123",
     channel_type: "channel",
-    user: "U1",
+    user: options.senderId ?? "U1",
     ts: threadTs.replace(".000000", ".000001"),
     thread_ts: threadTs,
     parent_user_id: "B1",
@@ -88,7 +102,7 @@ function fixture(
   const prepare = () => prepareSlackMessage({ ctx, account, message, opts: { source: "message" } });
   const expectDrop = (reason: string) =>
     expect(info).toHaveBeenCalledWith(expect.objectContaining({ reason }), expect.any(String));
-  return { ctx, message, replies, addReaction, prepare, threadTs, expectDrop };
+  return { cfg, ctx, message, replies, addReaction, prepare, threadTs, expectDrop };
 }
 
 it("validates scoped boolean overrides without adding a default", () => {
@@ -175,4 +189,102 @@ it("admits replies to roots verified by bot ID when bot-thread mentions are disa
   const prepared = await test.prepare();
   expect(prepared?.ctxPayload.RawBody).toBe("Continue here");
   expect(test.replies).toHaveBeenCalledTimes(1);
+});
+
+it("grants only the current configured owner the OpenClaw tool in a bot-created thread", async () => {
+  await withOpenClawTestState({ scenario: "minimal" }, async (state) => {
+    const ownerId = "U123OWNER";
+    const test = fixture({ requireMention: true, ...botThreads(false) }, "default", undefined, {
+      commands: { ownerAllowFrom: [`slack:user:${ownerId}`] },
+      senderId: ownerId,
+    });
+    test.cfg.agents = {
+      entries: { main: { tools: { alsoAllow: ["openclaw"] } } },
+      defaults: { workspace: state.workspaceDir, skipBootstrap: true },
+    };
+    setRuntimeConfigSnapshot(test.cfg, test.cfg);
+
+    const previousRegistry = getActivePluginRegistry();
+    setActivePluginRegistry(
+      createTestRegistry([{ pluginId: slackPlugin.id, plugin: slackPlugin, source: "test" }], {
+        config: test.cfg,
+      }),
+    );
+
+    try {
+      await withRegisteredChannelIngress(
+        {
+          plugin: slackPlugin,
+          config: test.cfg,
+          setRuntime: (runtime) => {
+            vi.spyOn(slackRuntime, "getSlackRuntime").mockReturnValue(runtime);
+          },
+        },
+        async (runtime) => {
+          test.ctx.buildContext = runtime.channel.inbound.buildContext;
+          const prepared = await test.prepare();
+          expect(prepared?.ctxPayload).toMatchObject({
+            SenderId: ownerId,
+            MessageThreadId: test.threadTs,
+          });
+          const authorization = await resolveCommandAuthorizationAsync({
+            ctx: prepared!.ctxPayload,
+            cfg: test.cfg,
+            commandAuthorized: true,
+          });
+          expect(authorization).toMatchObject({
+            senderIsOwner: true,
+            ownerList: [ownerId.toLowerCase()],
+          });
+          expect(() => authorization.assertOwnerCurrent?.()).not.toThrow();
+
+          const tools = (senderIsOwner: boolean) =>
+            createOpenClawCodingToolsAsync({
+              config: test.cfg,
+              agentId: "main",
+              sessionKey: `agent:main:slack:channel:C123:thread:${test.threadTs}`,
+              messageProvider: "slack",
+              senderIsOwner,
+              modelProvider: "test-provider",
+              modelId: "test-model",
+              workspaceDir: state.workspaceDir,
+              cwd: state.workspaceDir,
+            });
+          expect(
+            (await tools(authorization.senderIsOwner)).find((tool) => tool.name === "openclaw"),
+          ).toBeDefined();
+
+          test.message.user = "U999OTHER";
+          const nonOwner = await test.prepare();
+          const denied = await resolveCommandAuthorizationAsync({
+            ctx: nonOwner!.ctxPayload,
+            cfg: test.cfg,
+            commandAuthorized: true,
+          });
+          expect(denied.senderIsOwner).toBe(false);
+          const deniedTool = (await tools(denied.senderIsOwner)).find(
+            (tool) => tool.name === "openclaw",
+          );
+          expect(deniedTool).toBeDefined();
+          expect(JSON.stringify((await deniedTool!.execute("non-owner", {})).content)).toContain(
+            "openclaw needs the owner's authority",
+          );
+
+          test.message.user = undefined;
+          test.message.bot_id = "B123BOT";
+          expect(await test.prepare()).toBeNull();
+
+          test.cfg.commands = { ownerAllowFrom: [] };
+          setRuntimeConfigSnapshot(test.cfg, test.cfg);
+          expect(() => authorization.assertOwnerCurrent?.()).toThrow("authority changed");
+        },
+      );
+    } finally {
+      if (previousRegistry) {
+        setActivePluginRegistry(previousRegistry);
+      } else {
+        resetPluginRuntimeStateForTest();
+      }
+    }
+  });
 });
