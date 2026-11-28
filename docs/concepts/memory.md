@@ -190,15 +190,33 @@ permissions, storage diagnostics, and PostgreSQL limitations.
 
 ## Memory tools
 
-The agent has three tools for working with memory:
+By default, `memory-core` provides three built-in tools for working with memory:
 
 - **`memory_search`** — finds relevant notes using semantic search, even when
   the wording differs from the original.
-- **`memory_get`** — reads a specific memory file or line range.
+- **`memory_get`** — reads a specific memory file by relative `path` (and
+  optional line range) rather than resolving provider-scoped references.
 - **`intent`** — creates, lists, or explicitly cancels event-conditioned
   standing intents. Time-based reminders continue to use scheduled tasks.
 
-All three tools are provided by the active memory plugin (default: `memory-core`).
+`memory-core` registers `memory_search` and `memory_get` only when it owns
+`plugins.slots.memory`. When loaded in a mode that allows tool registration,
+`memory-core` registers `intent` independently of the memory slot selection.
+Selecting another memory plugin does not automatically route `memory_search` or
+`memory_get` to that provider: native and record-only providers keep their own
+agent-facing tools, skills, and UI and do not need to register those tool names.
+Session memory reads are authorized against the host-resolved memory audience
+and applicable policy.
+
+The Gateway exposes a separate provider-neutral operator read interface
+(`memory.search` with `version: 2`, `memory.get` with a provider-scoped
+`reference`, and `memory.status`) that dispatches to the selected provider under
+operator authority and returns `version: 2` with `providerId` on success.
+Healthy `memory.status` or successful Gateway reads therefore do not establish
+that `memory_search` or `memory_get` is available to the agent for that provider.
+See
+[Compatibility and host integration](/plugins/sdk-overview/memory-and-context#compatibility-and-host-integration)
+for provider-scoped references, Gateway reads, and plugin-owned tools.
 
 The agent can answer directly when the conversation, bootstrap files, or supplied
 recall fully answers the question. It uses memory tools to retrieve missing facts
