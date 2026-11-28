@@ -520,6 +520,29 @@
   }
 }
 
+/* Content blocks share the image and composer radius. Unlike the editable
+   composer, static blocks do not need WebKit's paint workaround below. */
+.card,
+.code-block-wrapper,
+.exec-approval-card,
+.automation-card,
+.session-automation-mobile__group,
+.chat-assistant-attachment-card,
+.chat-image-frame,
+.chat-message-image-button,
+.chat-message-image,
+.markdown-inline-image-button,
+.markdown-inline-image,
+.markdown-external-image,
+.chat-context-attachment__body,
+.chat-source-card,
+.chat-tool-msg-body,
+.chat-question-panel,
+.task-suggestion {
+  border-radius: var(--composer-radius);
+  corner-shape: superellipse(1.5);
+}
+
 /* Continuous corner curvature. Where the engine can draw a superellipse the
    corner keeps curving into the edge instead of stopping on a tangent, which
    reads as a shorter arc than a circular corner of the same radius — the 1.25
@@ -556,11 +579,8 @@
   }
 
   .agent-chat__search-bar.agent-chat__search-bar,
-  .exec-approval-card.exec-approval-card,
   .exec-approval-list.exec-approval-list,
   .login-gate__card.login-gate__card,
-  .code-block-wrapper.code-block-wrapper,
-  .card.card,
   .option-card__choice.option-card__choice {
     border-radius: calc(14px * var(--openclaw-corner-radius-scale));
     corner-shape: superellipse(1.5);

@@ -279,7 +279,6 @@
   max-width: 100%;
   padding: 0;
   border: 0;
-  border-radius: var(--radius-xl);
   background: transparent;
   cursor: zoom-in;
 }
@@ -300,7 +299,6 @@
   position: relative;
   display: inline-flex;
   max-width: min(100%, 400px);
-  border-radius: var(--radius-xl);
 }
 
 .chat-image-surface {
@@ -457,7 +455,6 @@
   max-width: min(100%, 400px);
   height: auto;
   max-height: 360px;
-  border-radius: var(--radius-xl);
   object-fit: contain;
   transition: transform 150ms ease-out;
 }
@@ -537,20 +534,6 @@
     overflow: visible;
     white-space: normal;
     overflow-wrap: anywhere;
-  }
-}
-
-@supports (corner-shape: superellipse(1.5)) {
-  .chat-assistant-attachment-card.chat-assistant-attachment-card {
-    border-radius: calc(14px * var(--openclaw-corner-radius-scale));
-    corner-shape: superellipse(1.5);
-  }
-
-  .chat-image-frame.chat-image-frame,
-  .chat-message-image-button.chat-message-image-button,
-  .chat-message-image.chat-message-image {
-    border-radius: calc(20px * var(--openclaw-corner-radius-scale));
-    corner-shape: superellipse(1.5);
   }
 }
 
@@ -710,7 +693,6 @@
   max-width: 100%;
   overflow: hidden;
   border: 1px solid var(--chat-attachment-border);
-  border-radius: var(--radius-md);
   background: transparent;
   transition: background-color 120ms ease;
 }

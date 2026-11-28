@@ -21,9 +21,14 @@ const CORNER_CASES = [
   ...corners(
     "14px",
     "17.5px",
-    ".card, .option-card__choice, .exec-approval-card, .agent-chat__search-bar",
+    ".option-card__choice, .agent-chat__search-bar, .chat-attachment-thumb",
   ),
   ...corners("20px", "25px", ".option-card, .settings-group, .agent-chat__input .slash-menu"),
+  ...corners(
+    "20px",
+    "25px",
+    ".card, .exec-approval-card, .code-block-wrapper, .chat-assistant-attachment-card, .chat-image-frame, .automation-card, .chat-source-card, .chat-tool-msg-body, .chat-clawhub-card, openclaw-youtube-video .card",
+  ),
   ...COMPOSER_CASES,
   // Menu rows share --menu-item-radius at both scales.
   ...corners("10px", "12.5px", ".slash-menu-item, .chat-reply-context-menu button"),
@@ -62,9 +67,14 @@ const markup = `<main>
       <div class="agent-chat__talk-status callout">Connecting</div>
     </div>
   </div>
+  <div class="chat-bubble"><div class="chat-assistant-attachment-card"></div><div class="chat-image-frame"></div>
+    <div class="automation-card chat-created-automations"></div><div class="code-block-wrapper"></div>
+    <button class="chat-source-card"></button><div class="chat-tool-msg-body"></div>
+    <div class="card chat-clawhub-card"></div><openclaw-youtube-video><div class="card"></div></openclaw-youtube-video>
+  </div>
   <div class="sidebar-recent-session">Surface</div><a class="nav-item" href="#/chat">Chat</a>
   <div class="slash-menu" role="listbox"><div class="slash-menu__scroll"><div class="slash-menu-group"><div class="slash-menu-item" role="option">Item</div></div></div></div>
-  <div class="agent-chat__input"><div class="slash-menu">Menu</div></div>
+  <div class="agent-chat__input"><div class="chat-attachment-thumb"></div><div class="slash-menu">Menu</div></div>
   <div class="chat-reply-context-menu" role="menu"><button type="button" role="menuitem">Reply</button></div>
   <div class="agent-chat__search-bar"><input type="text" /></div>
   <span class="chip">Chip</span><span class="statusDot"></span><div class="run-inspector__panel">Surface</div>
@@ -98,6 +108,11 @@ const css = readStyles(
   "styles/chat/startup-layout",
   "styles/chat/layout",
   "styles/chat/message-layout",
+  "components/automation-card",
+  "styles/chat/source-previews",
+  "styles/chat/tool-cards",
+  "styles/chat/clawhub-card",
+  "pages/chat/components/youtube-video-card",
   "styles/chat/composer-surface",
   "styles/chat/composer",
   "styles/settings-controls",

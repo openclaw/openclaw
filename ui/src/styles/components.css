@@ -448,7 +448,6 @@ openclaw-session-owner-chip .viewer-avatar__initials {
 .card {
   border: 1px solid var(--border);
   background: var(--card);
-  border-radius: var(--radius-lg);
   padding: 18px;
   animation: rise 0.25s var(--ease-out) backwards;
   transition:
@@ -1911,7 +1910,6 @@ openclaw-tooltip:last-child > .refresh-button,
   margin-block: 1em;
   overflow: hidden;
   border: 1px solid var(--inline-code-border, var(--border-strong));
-  border-radius: var(--radius-md);
   background: var(--inline-code-bg, var(--bg-muted));
 }
 
@@ -2549,7 +2547,6 @@ select.data-table-pagination__size {
   flex-direction: column;
   background: color-mix(in srgb, var(--exec-approval-accent) 5%, var(--card));
   border: 1px solid color-mix(in srgb, var(--exec-approval-accent) 45%, var(--border));
-  border-radius: var(--radius-lg);
   padding: var(--overlay-modal-padding);
   animation: scale-in 0.2s var(--ease-out);
 }

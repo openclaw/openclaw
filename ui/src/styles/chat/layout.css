@@ -1772,7 +1772,6 @@ openclaw-chat-video-player {
   padding: 14px 16px 17px;
   overflow: hidden;
   border: 1px solid color-mix(in srgb, var(--border) 86%, transparent);
-  border-radius: var(--radius-xl);
   background: var(--task-suggestion-card-bg);
   user-select: text;
   box-shadow:

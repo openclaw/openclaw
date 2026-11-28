@@ -343,7 +343,7 @@ describeControlUiE2e("Chat plugin installation status", () => {
           await surface
             .locator(".chat-clawhub-card")
             .evaluate((element) => getComputedStyle(element).borderRadius),
-        ).toBe("15px");
+        ).toBe("25px");
         const width = (await surface.boundingBox())!.width;
         desktopWidth ??= width;
         expect(width).toBe(desktopWidth);
@@ -410,7 +410,7 @@ describeControlUiE2e("Chat plugin installation status", () => {
             await surface
               .locator(".chat-clawhub-card")
               .evaluate((element) => getComputedStyle(element).borderRadius),
-          ).toBe("15px");
+          ).toBe("25px");
           const identity = await surface.locator(".chat-clawhub-card__listing").boundingBox();
           const actions = await surface.locator(".chat-clawhub-card__actions").boundingBox();
           expect(

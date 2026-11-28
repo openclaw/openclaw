@@ -38,7 +38,6 @@
 .chat-context-attachment__body {
   background: var(--bg-accent);
   border: 1px solid var(--border);
-  border-radius: var(--radius-md);
   margin-top: 8px;
   max-width: 440px;
   padding: 12px;

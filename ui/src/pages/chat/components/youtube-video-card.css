@@ -8,7 +8,6 @@ openclaw-youtube-video {
   .card {
     overflow: hidden;
     border: 1px solid var(--border);
-    border-radius: var(--radius-lg, 12px);
     background: var(--card);
   }
   .stage {
