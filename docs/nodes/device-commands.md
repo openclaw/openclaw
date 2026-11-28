@@ -130,7 +130,7 @@ Available families:
 - `photos.latest` — iOS, Android.
 - `contacts.search` — iOS, Android (read-only default); `contacts.add` is dangerous and needs `gateway.nodes.commands.allow`.
 - `calendar.events` — iOS, Android (read-only default); `calendar.add` is dangerous and needs `gateway.nodes.commands.allow`.
-- `reminders.list` — iOS, Android (read-only default); `reminders.add` is dangerous and needs `gateway.nodes.commands.allow`.
+- `reminders.list`, `reminders.add` — iOS only. `reminders.list` is read-only and allowed by default; `reminders.add` is dangerous and needs `gateway.nodes.commands.allow`.
 - `callLog.search` — Android only.
 - `motion.activity`, `motion.pedometer` — iOS, Android; capability-gated by available sensors.
 
