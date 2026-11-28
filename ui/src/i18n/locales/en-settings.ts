@@ -1232,6 +1232,11 @@ const enSettings = {
       sourceExternal: "External CLI",
       sourceInherited: "Shared account",
       sourceSaved: "Saved in OpenClaw",
+      nameManagedByConfig: "Name managed in configuration",
+      renameAccount: "Rename",
+      renameAccountFor: "Rename {account}",
+      accountName: "Account name",
+      accountNamePlaceholder: "Leave blank to use the default",
     },
     apiKey: {
       label: "API key",
