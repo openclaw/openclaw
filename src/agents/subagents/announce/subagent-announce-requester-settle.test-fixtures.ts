@@ -80,8 +80,8 @@ export function createRequesterSettleCases() {
   };
   function settleCase(
     name: string,
-    result?: Record<string, unknown>,
-    options: SettleCaseOptions = {},
+    result: Record<string, unknown> | undefined,
+    options: SettleCaseOptions,
   ) {
     return {
       name,

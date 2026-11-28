@@ -11,6 +11,7 @@ import {
 const dirs = useAutoCleanupTempDirTracker(afterEach);
 afterEach(() => {
   vi.doUnmock("../infra/update-run-reconciliation.read.js");
+  vi.doUnmock("../infra/restart-stale-pids.js");
   vi.resetModules();
 });
 
@@ -58,4 +59,17 @@ it("refuses a source replaced while update metadata code loads before opening SQ
     resume.resolve();
     await pending.catch(() => {});
   }
+});
+
+it("selects reconciliation candidates without loading Gateway process cleanup", async () => {
+  // mock-isolation: Fail on import to catch Gateway process cleanup loading in the SQLite reader.
+  vi.doMock("../infra/restart-stale-pids.js", () => {
+    throw new Error("Gateway process cleanup loaded during update reconciliation");
+  });
+  const { openNodeSqliteDatabase } = await import("../infra/node-sqlite.js");
+  const { prepareUpdateRunAdmissionRead } = await import("../infra/update-run-admission.read.js");
+  const command = { type: "updateRuns.reconciliationCandidates", input: {} } as const;
+  const read = await prepareUpdateRunAdmissionRead(command);
+  using database = openNodeSqliteDatabase(":memory:");
+  expect(read(database)).toEqual({ type: command.type, candidates: [] });
 });

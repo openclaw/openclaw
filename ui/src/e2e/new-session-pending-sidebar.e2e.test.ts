@@ -14,6 +14,95 @@ import {
 const suite = createNewSessionPageE2eSuite();
 
 suite.define(() => {
+  it.each([false, true])(
+    "waits for the first title without moving the sidebar (initial failure: %s)",
+    async (failed) => {
+      await suite.withPage({ viewport: { width: 1280, height: 900 } }, async ({ page }) => {
+        const key = "agent:main:dashboard:release-planning";
+        const excerpt = "Compare the release checklist with last week's notes";
+        const neighbor = {
+          key: "agent:main:planning",
+          sessionId: "planning",
+          kind: "direct",
+          label: "Weekly planning",
+          updatedAt: 1,
+        };
+        const row = {
+          key,
+          sessionId: "release",
+          kind: "direct",
+          derivedTitle: excerpt,
+          titlePending: true,
+          updatedAt: 2,
+        };
+        const gateway = await installMockGateway(page, {
+          sessionKey: key,
+          sessions: [row, neighbor],
+        });
+        await page.goto(new URL(controlUiSessionPath(key), suite.server.baseUrl).href);
+        const target = page.locator('.sidebar-recent-session[data-session-key="' + key + '"]');
+        const following = page.locator(
+          '.sidebar-recent-session[data-session-key="' + neighbor.key + '"]',
+        );
+        const heading = page.locator(
+          ".chat-pane-cache__pane--visible .chat-pane__session-title-text",
+        );
+        const menu = page.locator(
+          ".chat-pane-cache__pane--visible .chat-header-session-menu__trigger",
+        );
+        const capture = async (name: string) => {
+          if (failed && process.env.OPENCLAW_UI_E2E_ARTIFACT_DIR) {
+            await page.screenshot({
+              path: `${suite.artifactDir}/${name}.png`,
+              clip: { x: 0, y: 0, width: 800, height: 122 },
+              animations: "disabled",
+            });
+          }
+        };
+        await target.waitFor();
+        await following.waitFor();
+        await heading.waitFor();
+        await menu.waitFor({ state: "attached" });
+        expect(await menu.isVisible()).toBe(false);
+        await capture("pending");
+        expect(await target.locator("a").first().getAttribute("aria-busy")).toBe("true");
+        expect(await heading.locator(".session-title-placeholder").count()).toBe(1);
+        const boxes = () =>
+          Promise.all(
+            [target, following, target.locator(".sidebar-recent-session__link")].map((el) =>
+              el.boundingBox(),
+            ),
+          );
+        const before = await boxes();
+        for (const displayName of failed
+          ? [undefined, "Release checklist"]
+          : ["Release checklist"]) {
+          const settled = { ...row, titlePending: false, displayName, updatedAt: row.updatedAt };
+          await gateway.setSessionsListResponse({ sessions: [settled, neighbor] });
+          await gateway.emitGatewayEvent("sessions.changed", {
+            sessionKey: key,
+            key,
+            reason: "chat.title",
+            session: settled,
+          });
+          await expect.poll(() => heading.textContent()).toBe(displayName ?? excerpt);
+          await expect.poll(() => target.locator("a").first().getAttribute("aria-busy")).toBeNull();
+          expect(await boxes()).toEqual(before);
+          expect(await menu.isVisible()).toBe(true);
+          await expect
+            .poll(() =>
+              target
+                .locator(".sidebar-recent-session__name")
+                .first()
+                .evaluate((el) => getComputedStyle(el).opacity),
+            )
+            .toBe("1");
+          await capture(displayName ? "recovered" : "fallback");
+        }
+      });
+    },
+  );
+
   it.each([
     { destination: "chip", mode: "chip", pinned: false },
     { destination: "roster", mode: "roster", pinned: false },

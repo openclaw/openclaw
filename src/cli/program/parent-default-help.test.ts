@@ -23,7 +23,6 @@ describe("applyParentDefaultHelpAction (#73077)", () => {
     const parent = program.command("parent").description("test parent");
     parent.exitOverride();
     parent.command("list").action(() => {});
-    parent.command("status").action(() => {});
     return parent;
   }
 

@@ -273,6 +273,7 @@ const activeExecSessions = new Map<
 let finishedSessionOutputChars = 0;
 
 let sweeper: NodeJS.Timeout | null = null;
+let sweeperDueAt = 0;
 let observeDurableProcesses: (() => Promise<void>) | undefined;
 
 /** Reuse the retention timer for bounded durable-unit observation. */
@@ -799,7 +800,6 @@ if (process.env.VITEST || process.env.NODE_ENV === "test") {
 }
 
 function scheduleSweeper() {
-  stopSweeper();
   const now = Date.now();
   let nextExpiration = Number.POSITIVE_INFINITY;
   for (const [id, session] of finishedSessions) {
@@ -816,10 +816,18 @@ function scheduleSweeper() {
     nextExpiration = Math.min(nextExpiration, now + 5_000);
   }
   if (!Number.isFinite(nextExpiration)) {
+    stopSweeper();
     return;
   }
+  // Finishing another command must not postpone an already scheduled observation.
+  if (sweeper && sweeperDueAt <= nextExpiration) {
+    return;
+  }
+  stopSweeper();
+  sweeperDueAt = nextExpiration;
   sweeper = runInDetachedAsyncContext(() =>
     setTimeout(() => {
+      sweeper = null;
       const observation = observeDurableProcesses?.();
       if (observation) {
         void observation.then(scheduleSweeper, scheduleSweeper);

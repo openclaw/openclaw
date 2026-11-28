@@ -42,6 +42,7 @@ import {
   updateSessionStoreEntry,
   upsertSessionEntry,
 } from "../../plugin-sdk/session-store-runtime.js";
+import { runWithGatewayDetachedWorkContinuation } from "../../process/gateway-work-admission.js";
 import { withSessionTurn } from "../../sessions/session-controller.admission.js";
 import {
   beginSessionEffect,
@@ -297,7 +298,8 @@ export function createRuntimeAgent(
           opts: Parameters<PluginRuntime["agent"]["runCommandFromIngress"]>[0],
           runtime: Parameters<PluginRuntime["agent"]["runCommandFromIngress"]>[1],
         ) => {
-          if (opts.senderIsOwner === true) {
+          const channelTurn = opts.messageChannel !== undefined;
+          if (channelTurn && opts.senderIsOwner === true) {
             warnPluginSdkDeprecation({
               family: "ingress-owner-claim",
               method: "runCommandFromIngress({ senderIsOwner })",
@@ -306,16 +308,26 @@ export function createRuntimeAgent(
               compatibility: "The host ignores the claim and decides owner from the sender.",
             });
           }
-          return await command.agentCommandFromGatewayIngress(
-            {
-              ...identity.sanitizePublicAgentCommandIngressOpts(opts),
-              senderIsOwner: readIngressSenderAdmission(config.current({ clone: true }), {
-                ...opts,
-                senderId: opts.runContext?.senderId,
-              }).grant.owner,
-            },
-            runtime,
-            undefined,
+          // Like runEmbeddedAgent, a bridge consult may outlive the request that opened it.
+          return await runWithGatewayDetachedWorkContinuation(
+            () =>
+              command.agentCommandFromGatewayIngress(
+                {
+                  ...identity.sanitizePublicAgentCommandIngressOpts(opts),
+                  senderIsOwner: channelTurn
+                    ? readIngressSenderAdmission(config.current({ clone: true }), {
+                        ...opts,
+                        senderId: opts.runContext?.senderId,
+                      }).grant.owner
+                    : opts.senderIsOwner === true,
+                  // The plugin-scoped wrapper admitted these bindings for the caller's own tools.
+                  toolBindings: opts.toolBindings,
+                },
+                runtime,
+                undefined,
+              ),
+            `plugin:${getPluginRuntimeGatewayRequestScope()?.pluginId ?? "unknown"}:run-command-from-ingress`,
+            opts.abortSignal,
           );
         },
     ),

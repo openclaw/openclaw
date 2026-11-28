@@ -11,7 +11,10 @@ import { captureOpenClawStateWorkerContext } from "../../state/openclaw-state-wo
 import { bindAgentToolExecutionLocation } from "../agent-tool-metadata.js";
 import { sanitizeRunStatusText } from "../run-status-text.js";
 import { optionalPositiveIntegerSchema, optionalStringEnum } from "../schema/typebox.js";
-import { resolveSubagentChildAgentId } from "../subagents/registry/subagent-child-owner-match.js";
+import {
+  matchesSubagentChildSessionOwner,
+  resolveSubagentChildAgentId,
+} from "../subagents/registry/subagent-child-owner-match.js";
 import {
   ensureSubagentControllerOwnsRun,
   listControlledSubagentRunFacts,
@@ -107,6 +110,23 @@ function mapRun(
     ...(pausedForMs === undefined ? {} : { pausedForMs }),
   };
 }
+
+// Only the current tree grants visibility. A settled predecessor cannot extend it.
+function isReadablePredecessor(run: SubagentRunRecord, readable: SubagentRunReadRecord[]): boolean {
+  if (run.execution.status !== "terminal" || isSubagentPausedByYield(run)) {
+    return false;
+  }
+  return readable.some(
+    (current) =>
+      current.requesterSessionKey === run.requesterSessionKey &&
+      current.requesterAgentId === run.requesterAgentId &&
+      current.requesterStorePath === run.requesterStorePath &&
+      current.controllerSessionKey === run.controllerSessionKey &&
+      current.controllerStorePath === run.controllerStorePath &&
+      matchesSubagentChildSessionOwner(current, run.childSessionKey, run.childAgentId),
+  );
+}
+
 function waitForSelectedRuns(params: {
   runIds: string[];
   readRuns: (snapshot: ReadonlyMap<string, SubagentRunRecord>) => SubagentRunRecord[];
@@ -371,8 +391,12 @@ export function createSubagentsTool(opts: SubagentsToolOptions = {}): AnyAgentTo
             ...(await waitForSelectedRuns({
               runIds,
               readRuns: (snapshot) => {
-                const visible = new Set(readCurrentScope().readable.map((entry) => entry.runId));
-                return [...snapshot.values()].filter((entry) => visible.has(entry.runId));
+                const { readable } = readCurrentScope();
+                const visible = new Set(readable.map((entry) => entry.runId));
+                const selected = runIds.flatMap((id) => snapshot.get(id) ?? []);
+                return selected.filter(
+                  (run) => visible.has(run.runId) || isReadablePredecessor(run, readable),
+                );
               },
               timeoutMs:
                 Math.min(60, readNonNegativeIntegerParam(params, "timeoutSeconds") ?? 30) * 1000,

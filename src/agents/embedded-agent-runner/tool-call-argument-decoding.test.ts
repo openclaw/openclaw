@@ -33,7 +33,7 @@ describe("createHtmlEntityToolCallArgumentDecodingWrapper", () => {
     return { assistant, baseStreamFn };
   };
 
-  const drive = async (baseStreamFn: never): Promise<DecodedMessage> => {
+  const drive = async (baseStreamFn: never, onEvent?: () => void): Promise<DecodedMessage> => {
     const wrapped = createHtmlEntityToolCallArgumentDecodingWrapper(baseStreamFn);
     const stream = wrapped({} as never, {} as never, {} as never) as unknown as {
       [Symbol.asyncIterator](): AsyncIterator<unknown>;
@@ -41,6 +41,7 @@ describe("createHtmlEntityToolCallArgumentDecodingWrapper", () => {
     };
     for await (const event of stream as AsyncIterable<unknown>) {
       void event;
+      onEvent?.();
     }
     return stream.result();
   };
@@ -78,7 +79,9 @@ describe("createHtmlEntityToolCallArgumentDecodingWrapper", () => {
       },
     })) as never;
 
-    const first = await drive(baseStreamFn);
+    const first = await drive(baseStreamFn, () => {
+      expect(assistant.content[0]?.arguments.content).toBe("&amp;");
+    });
     const second = await drive(secondStreamFn);
 
     expect(first.content[0]?.arguments.content).toBe("&amp;");

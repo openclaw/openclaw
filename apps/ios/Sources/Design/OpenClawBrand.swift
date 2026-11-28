@@ -66,7 +66,9 @@ enum OpenClawBrand {
     static let carapaceSea = Color(red: 79 / 255.0, green: 200 / 255.0, blue: 174 / 255.0)
     static let uiAccent = OpenClawIOSBrand.accent
     static let uiAccentFill = uiAccent
+    // periphery:ignore - Keep the legacy UIKit hot-accent fill name for source compatibility.
     static let uiAccentHot = uiAccentFill
+    // periphery:ignore - Keep the legacy UIKit hot-accent foreground name for source compatibility.
     static let uiAccentHotForeground = uiAccent
     static let uiVoid = adaptiveUIColor(light: (247, 246, 245), dark: (27, 27, 26))
     static let uiObsidian = adaptiveUIColor(light: (251, 250, 250), dark: (43, 43, 41))
@@ -75,15 +77,12 @@ enum OpenClawBrand {
     static let uiWarn = adaptiveUIColor(light: (146, 64, 14), dark: (245, 158, 11))
     static let uiDanger = OpenClawIOSBrand.danger
     static let uiInfo = adaptiveUIColor(light: (29, 78, 216), dark: (96, 165, 250))
-    // Carapace status foreground tokens. Keep these separate from the broader
-    // app feedback palette so compact state indicators match the web system.
-    static let uiStatusSuccess = adaptiveUIColor(light: (22, 163, 74), dark: (34, 197, 94))
-    static let uiStatusWarning = adaptiveUIColor(light: (217, 119, 6), dark: (251, 191, 36))
-    static let uiStatusError = adaptiveUIColor(light: (220, 38, 38), dark: (239, 68, 68))
 
     static let accent = Color(uiColor: Self.uiAccent)
     static let accentFill = Color(uiColor: Self.uiAccentFill)
+    // periphery:ignore - Keep the legacy SwiftUI hot-accent fill name for source compatibility.
     static let accentHot = Color(uiColor: Self.uiAccentHot)
+    // periphery:ignore - Keep the legacy SwiftUI hot-accent foreground name for source compatibility.
     static let accentHotForeground = Color(uiColor: Self.uiAccentHotForeground)
     static let canvas = Color(uiColor: Self.uiVoid)
     static let surfaceRaised = Color(uiColor: Self.uiObsidian)
@@ -95,19 +94,13 @@ enum OpenClawBrand {
     static let text = Color(uiColor: adaptiveUIColor(light: (53, 53, 49), dark: (221, 221, 215)))
     static let textSecondary = Color(uiColor: Self.uiTextSecondary)
     static let textTertiary = Color(uiColor: adaptiveUIColor(light: (139, 138, 132), dark: (133, 132, 126)))
+    // periphery:ignore - Keep the legacy SwiftUI name for the canvas color for source compatibility.
     static let void = canvas
+    // periphery:ignore - Keep the legacy SwiftUI name for the raised surface color for source compatibility.
     static let obsidian = surfaceRaised
     static let danger = Color(uiColor: Self.uiDanger)
     static let ok = Color(uiColor: Self.uiOK)
     static let warn = Color(uiColor: Self.uiWarn)
-    static let info = Color(uiColor: Self.uiInfo)
-    static let statusSuccess = Color(uiColor: Self.uiStatusSuccess)
-    static let statusWarning = Color(uiColor: Self.uiStatusWarning)
-    static let statusError = Color(uiColor: Self.uiStatusError)
-    // Keep provider colors aligned with the Control UI brand tokens.
-    static let providerOpenAI = Color(red: 16 / 255.0, green: 163 / 255.0, blue: 127 / 255.0)
-    static let providerAnthropic = Color(red: 217 / 255.0, green: 119 / 255.0, blue: 87 / 255.0)
-    static let providerGoogle = Color(red: 66 / 255.0, green: 133 / 255.0, blue: 244 / 255.0)
     static let activationCanvas = canvas
     static let activationSurface = surfaceRaised
     static let activationInsetSurface = surfaceMuted

@@ -927,6 +927,11 @@ also stops the backup rather than falling back to a direct file copy. Restore
 the required SQLite capabilities or use the plugin's own backup procedure before
 retrying. This also applies to newly recognized database filenames.
 
+If a managed SQLite database appears during capture (for example, when the Gateway
+starts), backup discards that attempt and retries with fresh snapshots, up to
+three attempts in total. It publishes no archive if it cannot snapshot every newly
+observed database or if databases are still appearing on the last attempt.
+
 Other SQLite files under state and configured agent roots, including their
 sidecars, are copied as opaque bytes. Creation reports each filename in
 `warnings` with an `opaque` label. Unmanaged SQLite symbolic links that exceed

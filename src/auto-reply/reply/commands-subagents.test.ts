@@ -314,6 +314,9 @@ describe("subagents global-session inspection", () => {
       const text = await replyText(handleSubagentsCommand(params, true));
 
       expectText(text, ["research worker"], ["ops worker"]);
+      if (command === "/subagents info 1") {
+        expectText(text, ["Recorded status: running", "Activity: current activity unavailable"]);
+      }
       if (command === "/subagents log 1 5") {
         expectText(
           text,
@@ -429,6 +432,19 @@ describe("subagents info", () => {
     }
   });
 
+  it("distinguishes a pending approval from the recorded running status", async () => {
+    const run = timedRun("awaiting-approval", "Inspect a waiting worker", Date.now());
+    seedSubagentRunForReadTest(run);
+    const context = buildInfoContext([run], [run.runId]);
+    context.readContext.list.execution = new Map([
+      [run.runId, { state: "waiting", wait: { kind: "approval" } }],
+    ]);
+    expectText(await replyText(handleSubagentsInfoAction(context)), [
+      "Recorded status: running",
+      "Activity: waiting for approval",
+    ]);
+  });
+
   it("returns usage for missing targets", async () => {
     const result = await handleSubagentsInfoAction(buildInfoContext([], []));
     expect(result.shouldContinue).toBe(false);
@@ -451,10 +467,15 @@ describe("subagents info", () => {
     const context = buildInfoContext(runs);
     const listing = await replyText(handleSubagentsListAction(context));
     expectText(listing, ["1. recent worker", " killed"], ["stale worker"]);
-    expectText(await replyText(handleSubagentsInfoAction(context)), [
-      "Run: numbering-recent",
-      "Status: killed",
-    ]);
+    expectText(
+      await replyText(handleSubagentsInfoAction(context)),
+      ["Run: numbering-recent", "Status: killed"],
+      ["Activity:"],
+    );
+    expectText(
+      await replyText(handleSubagentsInfoAction({ ...context, restTokens: ["numbering-stale"] })),
+      ["Run: numbering-stale", "Activity: current activity unavailable"],
+    );
     callGatewayMock.mockResolvedValue({ messages: [] });
     await handleSubagentsLogAction(context);
     expect(callGatewayMock).toHaveBeenLastCalledWith({

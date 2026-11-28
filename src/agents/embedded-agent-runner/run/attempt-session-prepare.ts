@@ -595,7 +595,9 @@ export async function prepareEmbeddedAttemptSessionManager(
     runId: attempt.runId,
     sessionKey: attempt.sessionKey,
     config: attempt.config,
-    contextWindowTokens: attempt.contextTokenBudget,
+    // Same window as the context guard, so a bounded result is its fixed point.
+    contextWindowTokens:
+      attempt.contextTokenBudget ?? attempt.model.contextWindow ?? attempt.model.maxTokens,
     inputProvenance: attempt.inputProvenance,
     privateCompletion: attempt.privateCompletion,
     preparedUserTurnMessage,

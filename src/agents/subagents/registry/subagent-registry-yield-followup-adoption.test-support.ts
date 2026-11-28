@@ -205,11 +205,7 @@ export function registerYieldFollowupAdoptionTests({
         );
       }
       const event = endedEvent(runId, 333);
-      if (killed) {
-        lifecycleHandler(event);
-      } else {
-        await settleLifecycle(event);
-      }
+      await settleLifecycle(event);
       const run = findRequesterRun(runId);
       if (killed) {
         expectUnpausedKill(run, { cleanupCompletedAt: killedCleanupAt });

@@ -1,3 +1,4 @@
+import { quoteCliArg } from "../cli/quote-cli-arg.js";
 import { resolveGlobalSingleton } from "../shared/global-singleton.js";
 import { recordModelFallbackStop } from "./model-fallback-stop.js";
 
@@ -13,6 +14,7 @@ const unrecordedAccountRefusals = resolveGlobalSingleton(
  */
 export function createUnrecordedScheduledAccountRefusal(params: {
   runtime: string;
+  jobId?: string;
   /** `provider/model` the run would execute. */
   modelRef: string;
   profileId?: string;
@@ -22,7 +24,7 @@ export function createUnrecordedScheduledAccountRefusal(params: {
     : "a credential that is not a configured key";
   const refusal = new Error(
     `Automation has no recorded inference account. Runtime ${params.runtime} would run ${params.modelRef} with ${account}. ` +
-      `Record the account with openclaw automations edit <jobId> --model ${params.modelRef}@${params.profileId ?? "<profileId>"}.` +
+      `Record the account with openclaw automations edit ${params.jobId ? quoteCliArg(params.jobId) : "<jobId>"} --model ${quoteCliArg(`${params.modelRef}@${params.profileId ?? "<profileId>"}`)}.` +
       (params.runtime === "openclaw" || params.runtime === "codex"
         ? " For eligible host-managed accounts, openclaw doctor --fix can record it without pinning the model."
         : ""),

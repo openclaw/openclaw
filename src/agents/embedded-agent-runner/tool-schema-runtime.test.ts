@@ -40,8 +40,9 @@ describe("tool schema runtime diagnostics", () => {
 
   it("passes through provider runtime loading policy for normalization", () => {
     const tools = [{ name: "alpha" }] as never;
+    const normalizedTools = [{ name: "normalized-alpha" }];
     const runtimeHandle = { provider: "example", plugin: { id: "example-plugin" } } as never;
-    mocks.normalizeProviderToolSchemasWithPlugin.mockReturnValueOnce(tools);
+    mocks.normalizeProviderToolSchemasWithPlugin.mockReturnValueOnce(normalizedTools);
 
     expect(
       normalizeProviderToolSchemas({
@@ -50,7 +51,7 @@ describe("tool schema runtime diagnostics", () => {
         runtimeHandle,
         allowRuntimePluginLoad: false,
       }),
-    ).toBe(tools);
+    ).toBe(normalizedTools);
 
     expect(mocks.normalizeProviderToolSchemasWithPlugin).toHaveBeenCalledWith(
       expect.objectContaining({

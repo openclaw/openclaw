@@ -13,7 +13,7 @@ import {
 import { subagentRuns } from "./subagent-registry-memory.js";
 import type { SubagentRunRecord } from "./subagent-registry.types.js";
 
-function run(runId: string, overrides: Partial<SubagentRunRecord> = {}): SubagentRunRecord {
+function run(runId: string, overrides: Partial<SubagentRunRecord>): SubagentRunRecord {
   return createSubagentRunRecord({
     runId,
     childSessionKey: `agent:main:subagent:${runId}`,
@@ -93,7 +93,7 @@ it("observes only latest announced children and clears dependencies after settle
 it("reports pause age only for a continuable yielded leaf", () => {
   const now = 2_000_000_000_000;
   const pausedAt = now - 90_000_000;
-  const age = (overrides: Partial<SubagentRunRecord> = {}) => {
+  const age = (overrides: Partial<SubagentRunRecord>) => {
     const entry = run("paused", {
       pauseReason: "sessions_yield",
       execution: { status: "terminal", endedAt: pausedAt },

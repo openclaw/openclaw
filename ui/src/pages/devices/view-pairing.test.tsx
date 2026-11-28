@@ -44,12 +44,13 @@ const expectEnabled = (view: PairingView) =>
   );
 
 describe("device pairing dialog", () => {
-  it("shows status Retry pending and retires it on close before a late completion", async () => {
+  it("checks the existing setup status and retires the pending read on close", async () => {
     const status = createDeferred<{
       completion: { setupId: string; access: "full"; deviceName: string };
     }>();
+    const request = vi.fn(() => status.promise);
     const state = createDevicePairSetupState({
-      client: createTestGatewayClient(() => status.promise),
+      client: createTestGatewayClient(request),
       connected: true,
     });
     state.devicePairSetupOpen = true;
@@ -85,7 +86,10 @@ describe("device pairing dialog", () => {
       );
     });
     onTestFinished(() => closeDevicePairSetup(state));
-    view.getByRole("button", { name: "Reload" }).click();
+    view.getByRole("button", { name: "Check connection status" }).click();
+    expect(request).toHaveBeenCalledExactlyOnceWith("device.pair.setupStatus", {
+      setupId: "old-setup",
+    });
     await waitForSolid(() => {
       expect(view.container.querySelector(".device-pair-setup__loading")).not.toBeNull();
       expect(view.queryByRole("alert")).toBeNull();
@@ -311,7 +315,7 @@ describe("device pairing dialog", () => {
       ));
       expect(view.getByRole("alert").textContent).toContain(error.message);
       expect(view.queryByText("Set up secure access")).toBeNull();
-      expect(view.getByRole("button", { name: "Reload" })).toBeTruthy();
+      expect(view.getByRole("button", { name: "Create setup code" })).toBeTruthy();
     },
   );
 });

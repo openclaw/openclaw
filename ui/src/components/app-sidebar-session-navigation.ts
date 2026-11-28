@@ -134,7 +134,8 @@ export abstract class AppSidebarSessionNavigationElement extends AppSidebarBase 
       return null;
     }
     // Cache release and row projection read the same owner before the child renders.
-    const { result, cards } = rosterActivityStore(context).snapshot;
+    const { result: acceptedResult, cards, involvingMe } = rosterActivityStore(context).snapshot;
+    const result = involvingMe === this.sessionInvolvingMeFilterActive ? acceptedResult : null;
     const agentIds = cards.map((card) => card.id);
     if (this.admittedRoster?.context !== context) {
       this.admittedRoster = undefined;
@@ -495,7 +496,13 @@ export abstract class AppSidebarSessionNavigationElement extends AppSidebarBase 
       return this.readSnapshotNavigation(this.sidebarSnapshot).zone;
     }
     const liveRows = rows ?? this.selectedAgentSessionRows(this.getSessionNavigationState());
-    return personalSidebarZone(this, liveRows);
+    return personalSidebarZone(
+      this,
+      liveRows,
+      this.sidebarAgentsMode === "roster" && this.sessionInvolvingMeFilterActive
+        ? (this.rosterSessionSource?.result ?? null)
+        : undefined,
+    );
   }
 
   /** Explicit personal unpins remove a reference, never shared session metadata. */
@@ -595,8 +602,13 @@ export abstract class AppSidebarSessionNavigationElement extends AppSidebarBase 
     );
   }
 
-  readonly knownSectionOrder = () =>
-    this.sessionData.sessionsResult ? [...(this.context.sessions.state.sectionOrder ?? [])] : [];
+  readonly knownSectionOrder = () => {
+    if (!this.sessionData.sessionsResult) {
+      return [];
+    }
+    const sessions = this.context.sessions;
+    return [...(sessions.pendingSectionOrder ?? sessions.state.sectionOrder ?? [])];
+  };
 
   knownSessionCatalogIds(): string[] {
     return collectKnownSidebarSessionCatalogIds({

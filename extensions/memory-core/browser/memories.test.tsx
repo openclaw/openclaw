@@ -86,7 +86,7 @@ const waitMatch = (text: string) => waitForSolid(() => expect(match()).toBe(text
 
 it("loads changed locales without replacing the search input or its draft", async () => {
   const originalInput = input();
-  expect(originalInput.placeholder).toBe("Search this agent's memories");
+  expect(originalInput.placeholder).toBe("Search this agent’s memories");
   search("Ada", false);
   update({ locale: "fr" });
   await waitForSolid(() =>
@@ -138,7 +138,7 @@ it.each(["search", "detail", "resolve", "reject"])(
 
 it("hides search when the method is not advertised", () => {
   update({ advertisedMethods: [] });
-  expect(element.textContent).toContain("Update the gateway to search memories");
+  expect(element.textContent).toContain("Update the Gateway to search memories");
   expect(element.querySelector("form")).toBeNull();
 });
 
@@ -157,7 +157,8 @@ it("blocks offline retries and retries the search after reconnecting", async () 
   search("missing");
   const originalInput = input();
   const originalSubmit = submitButton();
-  await waitText("index unavailable");
+  await waitText("Couldn’t search memories.");
+  expect(element.textContent).not.toContain("index unavailable");
   update({ connected: false, connectionEpoch: 2 });
   expect(retry()?.disabled).toBe(true);
   retry()?.click();
@@ -166,7 +167,7 @@ it("blocks offline retries and retries the search after reconnecting", async () 
   expect(retry()?.disabled).toBe(false);
   retry()?.click();
   await waitText("Searching");
-  expect(element.textContent).not.toContain("index unavailable");
+  expect(element.textContent).not.toContain("Couldn’t search memories.");
   expect(input()).toBe(originalInput);
   expect(submitButton()).toBe(originalSubmit);
   expect(originalSubmit?.disabled).toBe(true);
@@ -229,6 +230,7 @@ it("keeps session, absolute, and escaping paths non-expandable", async () => {
   await waitForSolid(() => expect(element.querySelectorAll("article")).toHaveLength(6));
   expect(element.querySelectorAll("article > button")).toHaveLength(1);
   expect(element.querySelectorAll("article > div.settings-row")).toHaveLength(5);
+  expect(element.textContent).toContain("chat\u00a0history");
   expect(fileReads()).toHaveLength(0);
 });
 
@@ -239,8 +241,8 @@ it("keeps results and the query through a same-identity reconnect and retries in
     .mockResolvedValueOnce(memoryFileResponse(matchedContent));
   search();
   await openResult();
-  await waitText("Could not load this memory file: gateway closed");
-  expectText(element, [result.snippet], ["Memory search failed"]);
+  await waitText("Couldn’t open this memory file.");
+  expectText(element, [result.snippet], ["Couldn’t search memories.", "gateway closed"]);
   update({ connected: false, connectionEpoch: 2 });
   expect(submitButton()?.disabled).toBe(true);
   update({ connected: true, connectionEpoch: 3 });
@@ -252,6 +254,26 @@ it("keeps results and the query through a same-identity reconnect and retries in
   clickRow();
   await waitMatch("matched two\nmatched three");
   expect(fileReads()).toHaveLength(2);
+});
+
+it.each([
+  ["workspace_file_not_found", "This memory file is no longer available."],
+  ["workspace_file_too_large", "This memory file is too large to preview."],
+  ["workspace_file_unsupported", "This memory file can’t be shown as text."],
+  [null, "This memory file can’t be shown as text."],
+])("shows the known file-preview limit without raw details: %s", async (type, notice) => {
+  request.mockResolvedValueOnce(searchResponse([result]));
+  if (type) {
+    request.mockRejectedValueOnce(
+      Object.assign(new Error("private file details"), { details: { type } }),
+    );
+  } else {
+    request.mockResolvedValueOnce({ file: { encoding: "base64", content: "cHJpdmF0ZQ==" } });
+  }
+  search();
+  await openResult();
+  await waitText(notice);
+  expectText(element, [result.snippet], ["private file details", "cHJpdmF0ZQ=="]);
 });
 
 it("shows stale guidance alongside empty results and clears it after a fresh search", async () => {

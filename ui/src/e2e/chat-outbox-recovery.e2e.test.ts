@@ -134,17 +134,7 @@ suite.define(() => {
         const artifactDir = captureUiProofEnabled
           ? createControlUiE2eArtifactDir(`chat-send-reconcile-${outcome}`)
           : undefined;
-        const gateway = await installMockGateway(page, {
-          heldMethods: ["chat.send"],
-          methodResponses: {
-            "chat.history": {
-              messages: [],
-              sessionId: "session:agent:main:main",
-              sessionInfo: { hasActiveRun: false, status: "done" },
-              thinkingLevel: null,
-            },
-          },
-        });
+        const gateway = await installMockGateway(page, { heldMethods: ["chat.send"] });
         await page.goto(`${suite.server.baseUrl}chat`);
         const prompt = "Reconcile this exact submission";
         await composerFor(page).fill(prompt);

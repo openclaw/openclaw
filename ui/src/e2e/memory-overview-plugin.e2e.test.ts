@@ -196,7 +196,7 @@ suite.define(() => {
       expect(await gateway.getRequests("doctor.memory.status")).toHaveLength(3);
       await gateway.setOnline(false);
       await gateway.closeLatest();
-      await expect(overview).toContainText("gateway is offline");
+      await expect(overview).toContainText("Gateway is offline");
       expect(await gateway.getRequests("doctor.memory.status")).toHaveLength(3);
       expect(errors).toEqual([]);
     });

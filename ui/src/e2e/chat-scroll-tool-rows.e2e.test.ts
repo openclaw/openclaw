@@ -103,9 +103,13 @@ function history() {
 type Sample = { top: number; blocks: Record<string, number> };
 
 suite.define(() => {
-  it.each(["reply", "gap"] as const)(
-    "returns to the same reading position in the %s after toggling tool calls",
-    async (edge) => {
+  it.each([
+    { edge: "before the reply", side: "top", inset: 2 },
+    { edge: "inside the reply", side: "bottom", inset: 2 },
+    { edge: "after the footer", side: "bottom", inset: -2 },
+  ] as const)(
+    "returns to the same reading position $edge after toggling tool calls",
+    async ({ edge, side, inset }) => {
       await suite.withPage(
         { viewport: { width: 1000, height: 600 }, reducedMotion: "reduce" },
         async ({ page }) => {
@@ -138,33 +142,42 @@ suite.define(() => {
           const thread = page.locator(".chat-pane-cache__pane--active .chat-thread");
           await thread.getByText(notes.at(-1)!.content, { exact: true }).waitFor();
           const text = thread.getByText(reply, { exact: true });
-          // Read at the bottom of the reply or in the gap after its footer.
           await thread.press("PageUp");
           await waitForTranscriptScrollIdle(thread);
           const boundary =
-            edge === "reply"
-              ? text
-              : thread
+            edge === "after the footer"
+              ? thread
                   .locator(".chat-group.assistant", { hasText: reply })
-                  .locator(".chat-group-footer");
-          const inset = edge === "reply" ? 2 : -2;
-          await boundary.evaluate((node, visiblePixels) => {
-            const scroller = node.closest<HTMLElement>(".chat-thread")!;
-            scroller.scrollTop +=
-              node.getBoundingClientRect().bottom -
-              scroller.getBoundingClientRect().top -
-              visiblePixels;
-          }, inset);
+                  .locator(".chat-group-footer")
+              : edge === "before the reply"
+                ? thread.locator(".chat-bubble", { has: page.getByText(reply, { exact: true }) })
+                : text;
+          await boundary.evaluate(
+            (node, placement) => {
+              const scroller = node.closest<HTMLElement>(".chat-thread")!;
+              scroller.scrollTop +=
+                node.getBoundingClientRect()[placement.side] -
+                scroller.getBoundingClientRect().top -
+                placement.inset;
+            },
+            { side, inset },
+          );
           await waitForTranscriptScrollIdle(thread);
           expect(
             Math.abs(
-              (await boundary.evaluate((node) => node.getBoundingClientRect().bottom)) -
+              (await boundary.evaluate(
+                (node, edgeSide) => node.getBoundingClientRect()[edgeSide],
+                side,
+              )) -
                 (await thread.boundingBox())!.y -
                 inset,
             ),
           ).toBeLessThanOrEqual(1);
-          const next = thread.getByText(notes[10]!.content, { exact: true });
-          const position = () => next.evaluate((node) => node.getBoundingClientRect().top);
+          const reading =
+            edge === "before the reply"
+              ? text
+              : thread.getByText(notes[10]!.content, { exact: true });
+          const position = () => reading.evaluate((node) => node.getBoundingClientRect().top);
           const before = await position();
 
           const trigger = page.getByRole("button", { name: /^Actions for / });

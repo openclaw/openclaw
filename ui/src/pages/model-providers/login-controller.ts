@@ -1,9 +1,5 @@
 import { createSignal, onSettled } from "solid-js";
-import type {
-  ModelAuthStatusResult,
-  ModelCatalogEntry,
-  SystemAgentSetupDetectResult,
-} from "../../api/types.ts";
+import type { ModelAuthStatusResult, ModelCatalogEntry } from "../../api/types.ts";
 import type { ApplicationContext } from "../../app/context.ts";
 import { createWizardLogin } from "../../components/wizard-login-controller.tsx";
 import { registerSettingsEnglish } from "../../i18n/locales/en-settings.ts";
@@ -46,8 +42,6 @@ export function createModelProviderLogin(options: {
   refresh: (providerId?: string) => Promise<unknown>;
   onDiscover?: () => void;
   onApiKey?: (provider: string) => void;
-  getManualProviders?: () => SystemAgentSetupDetectResult["manualProviders"];
-  onManualProvider?: (authChoice: string) => void;
 }) {
   let publish: (() => void) | undefined;
   const notify = () => publish?.();
@@ -103,7 +97,7 @@ export function createModelProviderLogin(options: {
     run,
     reset,
     synchronizePresentation: () => presentation.synchronize(),
-    allowSetup: () => Boolean(options.onManualProvider) || !selection().modelRef,
+    allowSetup: () => !selection().modelRef,
     loginProviders,
   });
   const modelSelection = createProviderModelSelection({
@@ -208,7 +202,6 @@ export function createModelProviderLogin(options: {
   function loginProviders(
     providers?: string[],
     authStatus = options.getScope().authStatus,
-    allowSetup = false,
     pluginId?: string,
   ) {
     return buildLoginProviders({
@@ -216,8 +209,6 @@ export function createModelProviderLogin(options: {
       pluginId,
       authStatus,
       allowQuickApiKey: Boolean(options.onApiKey),
-      manualProviders:
-        allowSetup && options.onManualProvider ? options.getManualProviders?.() : undefined,
     });
   }
 
@@ -234,9 +225,9 @@ export function createModelProviderLogin(options: {
     if (!client || !scope.agentId) {
       return;
     }
-    // Setup always chooses a model; elsewhere a sign-in only chooses one for an
-    // agent without a configured primary, never replacing the operator's choice.
-    const allowSetup = !pluginId && (Boolean(options.onManualProvider) || !selection().modelRef);
+    // A sign-in only chooses a model for an agent without a configured primary,
+    // never replacing the operator's choice.
+    const allowSetup = !pluginId && !selection().modelRef;
     const currentGeneration = ++generation;
     const request = {
       controller: new AbortController(),
@@ -275,7 +266,7 @@ export function createModelProviderLogin(options: {
           signal: request.controller.signal,
         }));
       if (inventoryRequest === request && isCurrent()) {
-        const available = loginProviders(providers, authStatus, allowSetup, pluginId);
+        const available = loginProviders(providers, authStatus, pluginId);
         const only =
           (providers || pluginId) && available.length === 1 ? available[0]?.id : undefined;
         const provider = available.find((group) => group.id === (select ?? only));
@@ -385,9 +376,7 @@ export function createModelProviderLogin(options: {
       return null;
     }
     const canSelect = () => currentPicker === picker && Boolean(authStatus) && picker.isCurrent();
-    const groups = authStatus
-      ? loginProviders(picker.providers, authStatus, picker.allowSetup, picker.pluginId)
-      : [];
+    const groups = authStatus ? loginProviders(picker.providers, authStatus, picker.pluginId) : [];
     const provider = groups.find((group) => group.id === providerSelection());
     const accounts = provider ? providerAccounts(provider, authStatus) : [];
     const docsUrl =
@@ -427,7 +416,11 @@ export function createModelProviderLogin(options: {
       onProvider: (providerId: string) => {
         const selected = groups.find((group) => group.id === providerId);
         // In the picker only a lone key skips ahead; a sign-in method keeps its method step.
-        if (!canSelect() || !selected || (selected.apiKeyProvider && enter(selected, authStatus))) {
+        if (
+          !canSelect() ||
+          !selected ||
+          (selected.apiKeyProviders.length && enter(selected, authStatus))
+        ) {
           return;
         }
         setProvider(providerId);
@@ -436,12 +429,12 @@ export function createModelProviderLogin(options: {
         onSettled(focusPickerTarget);
       },
       onChoice: (selected: LoginChoice) => canSelect() && startChoice(selected, picker.allowSetup),
-      onApiKey: () => {
-        if (!canSelect() || !provider?.apiKeyProvider) {
+      onApiKey: (apiKeyProvider: string) => {
+        if (!canSelect() || !provider?.apiKeyProviders.includes(apiKeyProvider)) {
           return;
         }
         reset();
-        options.onApiKey?.(provider.apiKeyProvider);
+        options.onApiKey?.(apiKeyProvider);
       },
       onUseProfile: (profileId: string) => {
         if (recovery && currentPicker === picker && picker.isCurrent()) {
@@ -471,11 +464,6 @@ export function createModelProviderLogin(options: {
 
   /** Starts one sign-in method; the picker, if any, closes as the wizard takes over. */
   function startChoice(selected: LoginChoice, allowSetup: boolean): void {
-    if (selected.kind === "setup-secret") {
-      reset();
-      options.onManualProvider?.(selected.id);
-      return;
-    }
     currentPicker = null;
     refreshWarning = null;
     signIn.choose(selected, allowSetup);
@@ -485,7 +473,7 @@ export function createModelProviderLogin(options: {
   function enter(
     group: LoginProvider,
     authStatus = options.getScope().authStatus,
-    allowSetup = Boolean(options.onManualProvider) || !selection().modelRef,
+    allowSetup = !selection().modelRef,
   ): boolean {
     const entry = directEntry(group, authStatus);
     if (entry && "choice" in entry) {
@@ -686,13 +674,9 @@ export function createModelProviderLogin(options: {
           loginProviders([card.id, ...card.credentialProviderIds]).length > 0,
       };
     },
-    get pageActions() {
+    get loginMessage() {
       view.read();
-      return {
-        onConnect: () => open(),
-        connectDisabled: !options.canStart() || busy(),
-        loginMessage: message,
-      };
+      return message;
     },
     get wizardViewProps() {
       view.read();
