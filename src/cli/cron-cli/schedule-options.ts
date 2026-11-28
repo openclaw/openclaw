@@ -70,7 +70,10 @@ export function resolveCronCreateScheduleFromArgs(
       normalized.at = "";
     } else {
       const fields = positionalSchedule.split(/\s+/u).length;
-      normalized.cronExpr = fields === 5 || fields === 6 ? positionalSchedule : "";
+      normalized.cronExpr =
+        fields === 5 || fields === 6 || positionalSchedule.startsWith("@")
+          ? positionalSchedule
+          : "";
       normalized.at = normalized.cronExpr ? "" : positionalSchedule;
     }
   }
