@@ -304,9 +304,14 @@ function GitHubAuthorizationCode(
         info
         title={t("agentTools.githubAuthorization")}
         description={
-          props.authorization.phase === "cancel_error"
-            ? `${t("agentTools.githubCancelFailedHint")}${props.authorization.message ? ` ${props.authorization.message}` : ""}`
-            : t("agentTools.githubAuthorizationHint")
+          props.authorization.phase === "cancel_error" ? (
+            <>
+              <div>{t("agentTools.githubCancelFailedHint")}</div>
+              <ErrorDetails error={props.authorization.message} />
+            </>
+          ) : (
+            t("agentTools.githubAuthorizationHint")
+          )
         }
         control={
           <>

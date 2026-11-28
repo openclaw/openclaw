@@ -294,6 +294,7 @@ const repositoryScriptEntries = [
   "scripts/perf/sandbox-paths-measure.ts!",
   "scripts/perf/github-publication-snapshot-measure.ts!",
   "scripts/perf/github-detail-retention.ts!",
+  "scripts/perf/tool-search-retention.ts!",
   "scripts/perf/workspace-reconciliation-measure.ts!",
   "scripts/perf/workspace-snapshot-read-measure.ts!",
   "scripts/perf/workspace-git-main-thread-measure.mjs!",
