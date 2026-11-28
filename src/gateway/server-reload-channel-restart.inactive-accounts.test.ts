@@ -81,7 +81,6 @@ it.each([
         shouldSkipChannelRestart: false,
         isLifecycleReloadAborted: () => false,
         getChannelAutostartSuppression: manager.getAutostartSuppression,
-        channelReloadTargets: () => new Set(["telegram"]),
         scheduleRecoveryRestart,
       });
       if (disabled) {
