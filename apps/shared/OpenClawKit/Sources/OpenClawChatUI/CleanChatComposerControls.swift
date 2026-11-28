@@ -101,9 +101,11 @@ enum ChatSpeedBolt: String {
     case fast = "on"
     case ultrafast
 
+    static let fastSymbolName = "bolt.fill"
+
     var image: Image {
         switch self {
-        case .fast: Image(systemName: "bolt.fill")
+        case .fast: Image(systemName: Self.fastSymbolName)
         case .ultrafast: Image("zapDouble", bundle: .module)
         }
     }
@@ -149,7 +151,7 @@ struct CleanChatEffortGauge: View {
                     .foregroundStyle(OpenClawChatTheme.accent)
                     .offset(x: -0.25 * unit, y: 1.75 * unit)
             case .fast:
-                ChatSpeedBolt.fast.image
+                Image(systemName: ChatSpeedBolt.fastSymbolName)
                     .font(.system(size: 9.5 * unit, weight: .semibold))
                     .foregroundStyle(OpenClawChatTheme.accent)
                     .offset(y: 2.5 * unit)
@@ -834,7 +836,6 @@ struct ChatAttachmentTile: View {
             OpenClawChatPickerAttachmentMetadata.glyph(
                 mimeType: self.tile.mimeType,
                 fileName: self.tile.fileName)
-                .font(.system(size: 16))
                 .foregroundStyle(OpenClawChatTheme.muted)
                 .frame(width: metrics.fileIconSize, height: metrics.fileIconSize)
         }

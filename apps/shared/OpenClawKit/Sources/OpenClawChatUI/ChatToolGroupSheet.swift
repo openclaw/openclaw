@@ -491,8 +491,7 @@ private struct ChatToolStepDetail: View {
             HStack {
                 Text(title).font(OpenClawChatTypography.footnote)
                 Spacer()
-                ChatCopyButton(text: text, label: copyLabel)
-                    .font(.system(size: 15))
+                ChatCopyButton(text: text, label: copyLabel, symbolSize: 15)
             }
             .foregroundStyle(.secondary)
             Text(verbatim: text)

@@ -43,6 +43,9 @@ struct ChatCopyButton: View {
     let text: String
     let label: LocalizedStringKey
     var revealed = true
+    var symbolSize: CGFloat? = nil
+
+    @Environment(\.font) private var inheritedFont
 
     // Shared control hit target for inline block controls.
     #if os(macOS)
@@ -59,6 +62,7 @@ struct ChatCopyButton: View {
             self.copiedAt = .now
         } label: {
             Image(systemName: self.copiedAt == nil ? "doc.on.doc" : "checkmark")
+                .font(self.symbolSize.map { Font.system(size: $0) } ?? self.inheritedFont)
                 .frame(width: Self.controlSize, height: Self.controlSize)
                 .contentShape(Rectangle())
         }

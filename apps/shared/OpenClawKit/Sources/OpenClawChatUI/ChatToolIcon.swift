@@ -1,6 +1,5 @@
 import Foundation
 import OpenClawKit
-import SwiftUI
 
 enum ChatToolIcon {
     private static let fallbackSymbol = "puzzlepiece.extension"
@@ -270,14 +269,6 @@ enum ChatToolIcon {
             return "squareTerminal"
         }
         return self.operationIcons[key] ?? (self.symbols[icon] == nil ? "puzzle" : icon)
-    }
-
-    @MainActor @ViewBuilder static func glyph(for name: String, icon: String, args: AnyCodable? = nil) -> some View {
-        #if os(iOS)
-        ChatVectorGlyph(asset: self.asset(for: name, icon: icon, args: args), size: 13)
-        #else
-        Image(systemName: self.symbol(for: name, icon: icon))
-        #endif
     }
 
     static func symbol(for name: String, icon: String) -> String {
