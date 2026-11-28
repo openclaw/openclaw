@@ -24,8 +24,8 @@ export function normalizeCappedStringList(value: unknown, field: "labels" | "par
       throw new Error(`${field} must be ${maxLength} characters or fewer.`);
     }
     values.push(normalized);
-    if (values.length >= maxEntries) {
-      break;
+    if (values.length > maxEntries) {
+      throw new Error(`${field} supports at most ${maxEntries} entries.`);
     }
   }
   return values;
