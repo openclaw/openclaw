@@ -196,9 +196,10 @@ struct NativeUsageAnalytics: View {
                     AxisMarks(position: .trailing, values: .automatic(desiredCount: 3)) {
                         AxisGridLine()
                         if isCost {
-                            AxisValueLabel(format: .currency(code: "USD").precision(.fractionLength(0...2)))
+                            AxisValueLabel(format: FloatingPointFormatStyle<Double>.Currency(code: "USD")
+                                .precision(.fractionLength(0...2)))
                         } else {
-                            AxisValueLabel(format: .number.notation(.compactName))
+                            AxisValueLabel(format: FloatingPointFormatStyle<Double>.number.notation(.compactName))
                         }
                     }
                 }
@@ -243,7 +244,7 @@ struct NativeUsageAnalytics: View {
                                 }
                                 Image(systemName: "chevron.right").imageScale(.small).foregroundStyle(.tertiary)
                             }
-                        }.buttonStyle(.plain)
+                        }.buttonStyle(.plain).accessibilityIdentifier("Usage.Agent." + name)
                     }
                 }
             } header: { Text("Agents").font(OpenClawType.subheadSemiBold) }

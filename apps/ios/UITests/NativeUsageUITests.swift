@@ -28,10 +28,11 @@ final class NativeUsageUITests: XCTestCase {
                 predicate: NSPredicate(format: "exists == YES AND label != %@", original),
                 object: summary)
             XCTAssertEqual(XCTWaiter.wait(for: [changed], timeout: 6), .completed)
+            self.capture(app, "usage-week-" + appearance)
             app.buttons["Custom"].tap()
-            XCTAssertTrue(app.staticTexts["Start date"].waitForExistence(timeout: 4))
+            XCTAssertTrue(app.descendants(matching: .any)["Start date"].firstMatch.waitForExistence(timeout: 4))
             self.capture(app, "usage-custom-" + appearance)
-            let agent = app.buttons.containing(.staticText, identifier: "Research").firstMatch
+            let agent = app.buttons["Usage.Agent.Research"]
             for _ in 0..<6 where !agent.isHittable {
                 app.swipeUp()
             }
