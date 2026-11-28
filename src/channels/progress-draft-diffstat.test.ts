@@ -5,9 +5,9 @@ function createTracker() {
   const tracker = createProgressDraftDiffStatTracker({ canStage: () => true });
   return {
     ...tracker,
-    stage: (toolCallId: string, name: string, args: Record<string, unknown>, phase = "start") =>
-      tracker.stageToolEvent({ toolCallId, name, phase, args }),
-    write: (toolCallId: string, content = "line", path = "src/example.ts", phase = "start") =>
+    stage: (toolCallId: string, name: string, args: Record<string, unknown>) =>
+      tracker.stageToolEvent({ toolCallId, name, phase: "start", args }),
+    write: (toolCallId: string, content: string, path = "src/example.ts", phase = "start") =>
       tracker.stageToolEvent({ toolCallId, name: "write", phase, args: { path, content } }),
     complete: (toolCallId: string, status = "completed") =>
       tracker.commitItemEvent({ toolCallId, phase: "end", status }),

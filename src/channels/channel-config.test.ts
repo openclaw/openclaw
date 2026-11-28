@@ -63,7 +63,11 @@ describe("resolveChannelEntryMatchWithFallback", () => {
 });
 
 describe("resolveChannelMatchConfig", () => {
-  const resolveEntry = (): { matchKey?: string; matchSource?: ChannelMatchSource } => ({});
+  const resolveEntry = (entry: {
+    allow: boolean;
+  }): { allowed: boolean; matchKey?: string; matchSource?: ChannelMatchSource } => ({
+    allowed: entry.allow,
+  });
   it("returns null when no entry is matched", () => {
     const resolved = resolveChannelMatchConfig({ matchKey: "x" }, resolveEntry);
     expect(resolved).toBeNull();
@@ -74,7 +78,7 @@ describe("resolveChannelMatchConfig", () => {
       { entry: { allow: true }, matchKey: "*", matchSource: "wildcard" },
       resolveEntry,
     );
-    expect(resolved).toEqual({ matchKey: "*", matchSource: "wildcard" });
+    expect(resolved).toEqual({ allowed: true, matchKey: "*", matchSource: "wildcard" });
   });
 });
 
