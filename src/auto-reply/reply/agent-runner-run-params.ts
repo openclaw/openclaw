@@ -20,6 +20,7 @@ import { SILENT_REPLY_TOKEN } from "../tokens.js";
 import type { AgentFallbackCandidateCommonParams } from "./agent-runner-fallback-cycle.types.js";
 import type { FollowupRun } from "./queue.js";
 import { resolveReplyRunTrigger } from "./reply-turn-kind.js";
+import { resolveFollowupReplyExpectation } from "./source-reply-delivery-mode.js";
 
 export function resolveReplyScheduledToolPolicy(
   run: Pick<FollowupRun["run"], "scheduledAutomation" | "scheduledToolPolicy">,
@@ -158,8 +159,13 @@ export function buildFallbackCandidateTurnParams(params: AgentFallbackCandidateC
       "Treat each completion result above as an internal continuation, not a new user request. " +
       "Reconcile the results with the conversation and continue any outstanding authorized work. " +
       "Report requested results not yet delivered, meaningful outcome changes, or new unresolved failures, blockers, or decisions. " +
-      "Stay silent for routine output, duplicate or superseded results, and failures already recovered from; do not recap them or announce that nothing changed. " +
-      `If no user-facing update is needed, reply ${SILENT_REPLY_TOKEN} only.`
+      // A result-required turn rejects silence, so offering it only forces a retry or fallback.
+      (resolveFollowupReplyExpectation(turn.followupRun, turn.followupRun.run.config) ===
+      "result-required"
+        ? "Do not recap routine output, duplicate or superseded results, or failures already recovered from. " +
+          "This turn must end with a visible result: if nothing changed since your last report, say so in one short line."
+        : "Stay silent for routine output, duplicate or superseded results, and failures already recovered from; do not recap them or announce that nothing changed. " +
+          `If no user-facing update is needed, reply ${SILENT_REPLY_TOKEN} only.`)
     : turn.commandBody;
   return {
     preparedTtsPreferences: turn.opts?.preparedTtsPreferences,

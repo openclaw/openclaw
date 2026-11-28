@@ -156,6 +156,39 @@ describe("ordinary session event execution", () => {
     },
   );
 
+  it.for(["embedded", "cli"] as const)(
+    "does not offer NO_REPLY to a subagent exec wake in the %s turn, which must return a result",
+    async (runtime) => {
+      const followupRun = createFollowupRun({
+        sessionKey: "agent:main:subagent:child",
+        messageProvider: "webchat",
+        inputProvenance: { kind: "internal_system", sourceTool: "exec" },
+      });
+      if (runtime === "cli") {
+        useCliFallback(followupRun);
+      }
+      const prompts: string[] = [];
+      const inspect = async (params: RunEmbeddedAgentInternalParams | RunCliAgentParams) => {
+        prompts.push(params.prompt);
+        return { payloads: [{ text: "done" }], meta: {} };
+      };
+      state.runEmbeddedAgentMock.mockImplementation(inspect);
+      state.runCliAgentMock.mockImplementation(inspect);
+
+      const result = await executeAgentTurn({
+        ...createMinimalRunAgentTurnParams({ followupRun }),
+        commandBody: "Exec completed (job-5678, code 0) :: build ok",
+      });
+
+      expect(result.outcome).toMatchObject({ kind: "settled", status: "ok" });
+      expect(prompts).toHaveLength(1);
+      expect(prompts[0]).toContain("[OpenClaw exec completion]");
+      expect(prompts[0]).toContain("requested results not yet delivered");
+      expect(prompts[0]).toContain("must end with a visible result");
+      expect(prompts[0]).not.toContain("NO_REPLY");
+    },
+  );
+
   it("captures a structured result and binds the scheduled grant to the policy session", async () => {
     const runId = "automation-result-capture";
     const policySessionKey = "agent:main:irc:default:direct:alice";
