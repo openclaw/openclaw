@@ -134,3 +134,29 @@ it.each(NATIVE_ACCOUNT_MATRIX)(
     );
   },
 );
+
+it.each(["none", "api_key"] as const)(
+  "attests server ownership only when no profile is forwarded for %s",
+  async (kind) => {
+    const request = vi.fn(async () => ({}));
+    const onServerOwnedAuth = vi.fn();
+    await applyCodexAppServerAuthProfile({
+      client: { request } as never,
+      agentDir: AGENT_DIR,
+      authProfileStore: buildStore(kind),
+      config: {},
+      onServerOwnedAuth,
+    });
+    if (kind === "none") {
+      expect(onServerOwnedAuth).toHaveBeenCalledOnce();
+      expect(request).not.toHaveBeenCalled();
+    } else {
+      expect(onServerOwnedAuth).not.toHaveBeenCalled();
+      expect(request).toHaveBeenCalledWith(
+        "account/login/start",
+        { type: "apiKey", apiKey: "matrix-api-key" },
+        expect.anything(),
+      );
+    }
+  },
+);

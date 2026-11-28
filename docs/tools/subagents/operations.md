@@ -145,17 +145,30 @@ requester transcript are not replayed.
 
 A crash or `SIGKILL` cannot write a shutdown marker. Startup can still resume an
 eligible root requester from its persisted run identity in the immediately preceding
-Gateway lifetime. Children do not resume independently. After any restart, a child
-that was still running in the previous Gateway is recorded as failed with an
-interruption error, and its requester receives that failure through the normal
-completion path, so a waiting parent wakes instead of waiting indefinitely.
-The terminal notice waits for fresh requester authority after startup; it cannot
-use the previous Gateway's retired custody.
+Gateway lifetime. Children do not resume independently. Ordinarily the Gateway records an
+interruption and notifies the parent once it has fresh requester authority.
 
-An external worker can keep running or finish while the Gateway is down.
+A managed Codex worker can finish while the Gateway is down. For a new
+worker on a configured remote WebSocket with server-owned authentication,
+the Gateway can check the original turn for a final text reply. It matches
+the launch and connection. The history must show a single turn with one
+final text answer. Reasoning, labeled commentary and successful dynamic
+tool calls can precede it. Only the answer is delivered. Native shell and
+other unsupported items can leave delivery pending. The Gateway never
+repeats the task to recover a reply. Older launches without a recovery
+record keep the ordinary interruption behavior.
+
+If the Gateway recognizes the launch but cannot verify the result, the
+worker stays pending. Even if you requested deletion, cleanup waits without
+a time limit. After three checks, it waits at least five minutes
+between checks until the next restart. Verify access to the original
+worker. An older Gateway can drop the recovery record when it rewrites
+the session. Settle pending workers before rolling back.
+
 In the parent chat, check `/subagents info <runId>` and
 `/subagents log <runId> 20`. If the result is missing, check the original
-worker and any changes it made before repeating the task. A stopped
+worker and any changes it made before repeating the task. Once the parent
+has the answer, an idle goal may need **Resume**. A stopped
 execution is not a yielded pause, and a replacement does not inherit workspace or
 publication ownership. If the root cannot resume, send a new message to continue.
 Reversible suspension does not mark or cancel children.

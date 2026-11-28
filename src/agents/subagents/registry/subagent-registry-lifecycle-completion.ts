@@ -150,6 +150,13 @@ export async function completeSubagentRunAttempt(
             }
             const entry = planned.entry;
             const outcomeStatus = planned.effects.terminalSignalOutcome;
+            const effectsCheck = (
+              completeParams.sessionEffects ?? context.getSessionEffects(current)
+            )?.nativeCheck;
+            const recovered = completeParams.recoveredReplyCheck;
+            if (recovered && (!outcomeStatus || effectsCheck || suppressSessionEffects)) {
+              throw new SubagentRegistryMutationRejectedError("Recovered worker session changed");
+            }
             const terminalEvents = outcomeStatus
               ? [
                   prepareSubagentTerminalState(
@@ -160,9 +167,7 @@ export async function completeSubagentRunAttempt(
                       requesterSessionKey: entry.requesterSessionKey,
                       outcomeStatus,
                       watcherStorePaths: prepared.watcherStorePaths,
-                      sessionEntryCurrent: (
-                        completeParams.sessionEffects ?? context.getSessionEffects(current)
-                      )?.nativeCheck,
+                      sessionEntryCurrent: recovered ?? effectsCheck,
                     },
                     prepared.now,
                   ),

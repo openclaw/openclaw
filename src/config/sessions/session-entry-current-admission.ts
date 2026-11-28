@@ -62,6 +62,7 @@ function decodeSessionEntryCurrentFacts(
     lifecycleRunId: value.lifecycleRunId,
     lastRunId: value.lastRunId,
     activeWriterRunId: value.activeWriterRunId,
+    abortedLastRun: value.abortedLastRun,
     skillLibrarySelections: value.skillLibrarySelections,
     executionPolicy: value.executionPolicy,
   };

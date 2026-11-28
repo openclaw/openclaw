@@ -391,7 +391,9 @@ export async function applyCodexAppServerAuthProfile(params: {
   config?: AuthProfileOrderConfig;
   assertCurrent?: () => void;
   assertCurrentAsync?: () => Promise<void>;
+  onServerOwnedAuth?: () => void;
 }): Promise<CodexAppServerAuthHandoff | undefined> {
+  const { client, authRequirement, assertCurrent } = params;
   const withCurrent = async (write: () => void) => {
     await params.assertCurrentAsync?.();
     params.assertCurrent?.();
@@ -399,66 +401,63 @@ export async function applyCodexAppServerAuthProfile(params: {
   };
   params.assertCurrent?.();
   if (!params.preparedAuth && params.authProfileId === null) {
-    await assertNativeCodexAccountMatchesRoute(
-      params.client,
-      params.authRequirement,
-      params.assertCurrent,
-      withCurrent,
-    );
+    await assertNativeCodexAccountMatchesRoute(client, authRequirement, assertCurrent, withCurrent);
+    params.onServerOwnedAuth?.();
     return undefined;
   }
-  const agentDir = params.agentDir ?? resolveDefaultAgentDir(params.config ?? {});
+  const profile = {
+    agentDir: params.agentDir ?? resolveDefaultAgentDir(params.config ?? {}),
+    authProfileStore: params.authProfileStore,
+    authProfileId: params.authProfileId ?? undefined,
+    config: params.config,
+  };
   let loginParams: CodexLoginAccountParams | undefined =
     params.preparedAuth?.kind === "profile"
       ? params.preparedAuth.snapshot.loginParams
       : params.preparedAuth?.kind === "api-key"
         ? { type: "apiKey", apiKey: params.preparedAuth.apiKey }
         : await resolveCodexAppServerAuthProfileLoginParamsInternal({
-            agentDir,
-            authProfileId: params.authProfileId ?? undefined,
-            authProfileStore: await resolveCodexAppServerAuthProfileStore({
-              ...params,
-              agentDir,
-              authProfileId: params.authProfileId ?? undefined,
-            }),
-            config: params.config,
+            ...profile,
+            authProfileStore: await resolveCodexAppServerAuthProfileStore(profile),
           });
-  if (params.authRequirement === "subscription" && loginParams?.type !== "chatgptAuthTokens") {
+  if (authRequirement === "subscription" && loginParams?.type !== "chatgptAuthTokens") {
     throw createCodexAppServerAuthError(
       "Codex subscription auth profile could not produce login credentials. Sign in to OpenAI with ChatGPT in OpenClaw, select that profile, then retry.",
     );
   }
   if (
     !loginParams &&
-    (params.authRequirement === "api-key" || params.authRequirement === "environment-api-key") &&
+    (authRequirement === "api-key" || authRequirement === "environment-api-key") &&
     params.startOptions?.transport === "stdio"
   ) {
     const env = resolveCodexAppServerSpawnEnv(params.startOptions, process.env);
     loginParams = await resolveCodexAppServerFallbackApiKeyLoginParams({
-      client: params.client,
+      client,
       env,
-      ...(params.authRequirement === "api-key" ? { codexCliAuthEnv: process.env } : {}),
-      assertCurrent: params.assertCurrent,
+      ...(authRequirement === "api-key" ? { codexCliAuthEnv: process.env } : {}),
+      assertCurrent,
       withCurrent,
     });
   }
-  if (loginParams) {
-    // Refresh and overload backoff can outlive the caller; check at the physical write.
-    try {
-      await params.client.request("account/login/start", loginParams, {
-        assertCurrent: params.assertCurrent,
-        withCurrent,
-      });
-    } catch (error) {
-      throw codexPrewriteRejectionCause(error);
-    }
-    if (loginParams.type === "chatgptAuthTokens") {
-      params.assertCurrent?.();
-      return {
-        accessFingerprint: fingerprintTokenAuthProfileCacheKey(loginParams.accessToken),
-        chatgptAccountId: loginParams.chatgptAccountId,
-      };
-    }
+  if (!loginParams) {
+    params.onServerOwnedAuth?.();
+    return undefined;
+  }
+  // Refresh and overload backoff can outlive the caller; check at the physical write.
+  try {
+    await client.request("account/login/start", loginParams, {
+      assertCurrent,
+      withCurrent,
+    });
+  } catch (error) {
+    throw codexPrewriteRejectionCause(error);
+  }
+  if (loginParams.type === "chatgptAuthTokens") {
+    params.assertCurrent?.();
+    return {
+      accessFingerprint: fingerprintTokenAuthProfileCacheKey(loginParams.accessToken),
+      chatgptAccountId: loginParams.chatgptAccountId,
+    };
   }
   return undefined;
 }

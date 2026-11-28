@@ -23,6 +23,7 @@ import { joinPresentSections } from "./developer-instruction-sections.js";
 import { resolveCodexExplicitSkillInputs } from "./explicit-skill-input.js";
 import { CODEX_INFERENCE_GENERATION_KEY } from "./inference-context.js";
 import { getCodexInferenceThread } from "./inference-routing.js";
+import { codexManagedChildTurnReceipt, isCodexManagedChildAttempt } from "./managed-child-turn.js";
 import { readCodexRuntimeModelId } from "./model-runtime.js";
 import { listAllCodexAppServerModels } from "./models.js";
 import { assertCodexTurnStartResponse } from "./protocol-validators.js";
@@ -346,6 +347,14 @@ export async function prepareCodexAttemptTurnRequest(
       timeoutMs: params.timeoutMs,
       assertCurrent: assertTurnCurrent,
     });
+    if (
+      selectedThread.lifecycle.action === "started" &&
+      !selectedThread.lifecycle.preserveExistingBinding &&
+      selectedThread.managedChildRecoveryFingerprint &&
+      isCodexManagedChildAttempt(params)
+    ) {
+      turnStartParams.clientUserMessageId = codexManagedChildTurnReceipt({ ...params, threadId });
+    }
     codexModelCallDiagnostics.setRequestPayloadBytes(utf8JsonByteLength(turnStartParams));
     runAgentHarnessLlmInputHook({
       event: buildLlmInputEvent(),

@@ -103,6 +103,7 @@ export type CodexStartOrResumeThreadParams = Omit<
   /** Versioned owner of configured MCP for scheduled dynamic-tool execution. */
   configuredMcpOwnershipVersion?: 1;
   appServerRuntimeFingerprint?: string;
+  managedChildRecoveryFingerprint?: string;
   pluginThreadConfig?: CodexPluginThreadConfigProvider;
   contextEngineProjection?: CodexContextEngineThreadBootstrapProjection;
   /** Selected quoted history, injected before turn/start on the admitted idle thread. */

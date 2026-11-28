@@ -43,6 +43,9 @@ const loadEffectiveMcpCatalog = createLazyRuntimeModule(
 const loadNativeSubagentRoster = createLazyRuntimeModule(
   () => import("./src/app-server/native-subagent-roster.js"),
 );
+const loadManagedChildReplyRecovery = createLazyRuntimeModule(
+  () => import("./src/app-server/managed-child-reply-recovery.js"),
+);
 const loadRunAttempt = createLazyRuntimeModule(() => import("./src/app-server/run-attempt.js"));
 const loadCyberFailover = createLazyRuntimeModule(
   () => import("./src/app-server/cyber-failover.js"),
@@ -345,6 +348,17 @@ export function createCodexAppServerAgentHarness(
         bindingStore: options.bindingStore,
         pluginConfig: resolveAttemptPluginConfig(params.config),
       });
+    },
+    withInterruptedSubagentReply: async (params) => {
+      const { withCodexInterruptedSubagentReply } = await loadManagedChildReplyRecovery();
+      return await withCodexInterruptedSubagentReply(
+        { ...params, assertCurrent: () => assertOwnershipCurrent(params) },
+        {
+          bindingStore: options.bindingStore,
+          resolvePluginConfig: () =>
+            resolveAttemptPluginConfig(options.resolveConfig?.() ?? params.config),
+        },
+      );
     },
     readNativeSubagents: async (params) => {
       const { readCodexNativeSubagents } = await loadNativeSubagentRoster();

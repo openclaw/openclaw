@@ -171,6 +171,19 @@ export async function settleRestartInterruptedSubagentRun(params: {
   ) {
     return false;
   }
+  if (readScope && entry.expectsCompletionMessage && !entry.nativePluginOwner && !entry.collect) {
+    const { recoverInterruptedSubagentReply } = await import("./subagent-restart-reply.js");
+    const status = await recoverInterruptedSubagentReply(
+      entry,
+      readScope.completionCurrent,
+      complete,
+    );
+    if (status) {
+      return status === "published";
+    }
+  } else if (entry.execution.replyRecoveryHarness) {
+    return false;
+  }
   subagentRegistryLog.warn("Settling subagent interrupted by Gateway restart", {
     runId,
     requesterSessionKey: entry.requesterSessionKey,
