@@ -7,6 +7,7 @@ import {
 } from "../../test-utils/channel-plugins.js";
 import { makeCronJob } from "../delivery.test-helpers.js";
 import type { CronJob } from "../types.js";
+import { resolveFailureAlert } from "./failure-alerts.js";
 import type { DeferredCronNotifications } from "./state.js";
 import { runPostPersistCronNotifications } from "./store.js";
 import { applyJobResult } from "./timer-outcomes.js";
@@ -45,6 +46,7 @@ const failureDestination = {
   accountId: "telegram-bot",
 };
 const primaryDelivery = { ...failureDestination, mode: "announce" as const, threadId: 42 };
+const alternateRoute = { ...failureDestination, threadId: undefined, alternateRoute: true };
 
 function testPlugin(id: string, aliases: string[], targetPrefixes: string[], outputPrefix = "") {
   const plugin = createChannelTestPluginBase({ id });
@@ -79,13 +81,46 @@ beforeEach(() => {
 
 afterEach(resetPluginRuntimeStateForTest);
 
+type RoutingCase = [Partial<NonNullable<CronJob["delivery"]>>, CronJob["failureAlert"], object];
+it.each<RoutingCase>([
+  [
+    { threadId: 0, failureDestination: { ...failureDestination, to: "tg:19098680" } },
+    undefined,
+    { ...alternateRoute, to: "tg:19098680" },
+  ],
+  [
+    { failureDestination },
+    { to: "tg:19098680" },
+    { ...failureDestination, to: "tg:19098680", threadId: 42, alternateRoute: false },
+  ],
+  [{ failureDestination }, { mode: "announce" }, alternateRoute],
+  [
+    { channel: "googlechat", to: "googlechat:RoomA" },
+    { to: "gchat:rooma" },
+    { channel: "googlechat", to: "gchat:rooma", accountId: undefined, threadId: undefined },
+  ],
+])("resolves the account and thread for %j / %j", (delivery, failureAlert, expected) => {
+  expect(
+    resolveFailureAlert(
+      { deps: { cronConfig: { failureAlert: { enabled: true, after: 1 } } } },
+      { delivery: { ...primaryDelivery, ...delivery }, failureAlert },
+    ),
+  ).toMatchObject(expected);
+});
+
+it("does not inherit the primary account for another channel", () => {
+  expect(
+    resolveFailureAlert(
+      { deps: { cronConfig: { failureAlert: { enabled: true, after: 1, channel: "slack" } } } },
+      { delivery: primaryDelivery },
+    ),
+  ).toMatchObject({ channel: "slack", to: undefined, accountId: undefined });
+});
+
 it("routes required delivery failure outside the failed topic", async () => {
-  const { send, apply, drain } = routingFixture(
-    {
-      delivery: primaryDelivery,
-    },
-    { cronConfig: { failureAlert: { ...failureDestination, threadId: 84 } } },
-  );
+  const { send, apply, drain } = routingFixture({
+    delivery: { ...primaryDelivery, bestEffort: false, failureDestination },
+  });
   apply({
     status: "ok",
     deliveryAttempted: true,
@@ -99,7 +134,7 @@ it("routes required delivery failure outside the failed topic", async () => {
   expect(send).toHaveBeenCalledExactlyOnceWith(
     expect.objectContaining({
       ...failureDestination,
-      threadId: 84,
+      threadId: undefined,
       inheritSessionThread: false,
       payload: expect.objectContaining({
         text: 'Automation "Topic-routed job" delivery failed\nCheck automation history for details.',
@@ -112,7 +147,7 @@ it("preserves the aliased primary route and run time while starting cooldown at 
   const runAtMs = Date.parse("2026-07-30T00:00:00.000Z");
   const endedAt = runAtMs + 5 * 60_000;
   const { job, send, apply, drain } = routingFixture(
-    { delivery: { ...primaryDelivery, to: "tg:19098680" } },
+    { failureAlert: { to: "tg:19098680" } },
     {
       cronConfig: { failureAlert: { enabled: true, after: 1, cooldownMs: 60_000 } },
       nowMs: () => endedAt,

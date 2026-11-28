@@ -8,7 +8,7 @@ import {
 import type { AdmittedRunOperatorAuthority } from "../../agents/admitted-run-context.js";
 import { captureCronStreamSandboxTarget } from "../../agents/sandbox/stream-context.js";
 import { tryResolveCronJobEffectiveAgentId } from "../../cron/agent-id.js";
-import { assertValidCronAnnounceDelivery } from "../../cron/delivery-channel-validation.js";
+import { assertValidCronCreateDelivery } from "../../cron/delivery-channel-validation.js";
 import { resolveCronDeliveryPreview } from "../../cron/delivery-preview.js";
 import { cronAddResultReadView } from "../../cron/job-read-view.js";
 import { readPluginCommandCreation } from "../../cron/plugin-command-creation.js";
@@ -182,7 +182,11 @@ export const cronAddHandler: GatewayRequestHandler = async ({
       runtimeAuthority !== undefined,
     );
     await assertValidCronSessionTarget(jobCreate, cfg);
-    await assertValidCronAnnounceDelivery({ cfg, delivery: jobCreate.delivery });
+    await assertValidCronCreateDelivery(
+      cfg,
+      { ...jobCreate, createdActor: creatorOptions.createdActor },
+      context.cron.getDefaultAgentId(),
+    );
   } catch (err) {
     creatorOptions?.disposeOperatorSource?.();
     creatorOptions?.disposeInferenceAuthorization?.();

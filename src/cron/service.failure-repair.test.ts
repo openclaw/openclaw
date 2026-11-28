@@ -20,11 +20,10 @@ const ownerSessionKey = "agent:main:telegram:direct:owner";
 const owned = {
   delivery: createTelegramDelivery(),
   owner: { agentId: "main", sessionKey: ownerSessionKey },
-  failureAlert: true,
+  failureAlert: { cooldownMs: 0 },
 };
 
-const withRepair = (run: AlertParams[1]) =>
-  withFailureAlertCron({ failureAlert: { cooldownMs: 0 } }, run);
+const withRepair = (run: AlertParams[1]) => withFailureAlertCron({}, run);
 
 function expectNotifications(f: RepairFixture, repairs: number, alerts: number, notices?: number) {
   expect(f.runCronFailureRepair).toHaveBeenCalledTimes(repairs);
@@ -91,9 +90,60 @@ function applyError(
 }
 
 describe("CronService failure repair", () => {
+  it.each<[string, Partial<CronJob>]>([
+    [
+      "failureAlert",
+      { failureAlert: { after: 1, cooldownMs: 0, channel: "discord", to: "channel:alerts" } },
+    ],
+    [
+      "delivery.failureDestination",
+      {
+        failureAlert: { after: 1, cooldownMs: 0 },
+        delivery: {
+          mode: "none",
+          failureDestination: { channel: "discord", to: "channel:alerts" },
+        },
+      },
+    ],
+  ])(
+    "alerts an explicitly selected %s without repair and keeps incident dedup",
+    (_name, overrides) =>
+      withRepair(async (f) => {
+        const job = await f.addJob("daily monitor", {
+          ...owned,
+          schedule: { kind: "every", everyMs: 86_400_000 },
+          delivery: { mode: "none" },
+          ...overrides,
+        });
+        await f.cron.run(job.id, "force");
+        expectNotifications(f, 0, 1);
+        expect(f.sendCronFailureAlert).toHaveBeenCalledWith(
+          expect.objectContaining({
+            channel: "discord",
+            to: "channel:alerts",
+            mode: "announce",
+            payload: expect.objectContaining({
+              text: expect.stringContaining('Automation "daily monitor" failed'),
+            }),
+          }),
+        );
+        await f.cron.run(job.id, "force");
+        expectNotifications(f, 0, 1);
+        f.runIsolatedAgentJob.mockResolvedValue({ status: "error", error: "wrong model id" });
+        await f.cron.run(job.id, "force");
+        expectNotifications(f, 0, 2);
+        f.runIsolatedAgentJob.mockResolvedValueOnce({ status: "ok", delivered: true });
+        await f.cron.run(job.id, "force");
+        expect(f.cron.getJob(job.id)?.state.failureAlertIncident).toBeUndefined();
+        await f.cron.run(job.id, "force");
+        expectNotifications(f, 0, 3);
+      }),
+  );
+
   it.each<[string, CronJob["failureAlert"], number]>([
     ["inherited global destination", undefined, 1],
-    ["alerts on", true, 1],
+    ["threshold-only override", { after: 1, cooldownMs: 0 }, 1],
+    ["mode-only override", { after: 1, mode: "announce" }, 1],
     ["job opt-out", false, 0],
   ])("keeps repair policy for %s", (_name, failureAlert, repairs) =>
     withFailureAlertCron(
@@ -235,7 +285,7 @@ describe("CronService failure repair", () => {
       const job = await f.addJob("one-shot sync", {
         ...owned,
         schedule: oneShot(),
-        failureAlert: true,
+        failureAlert: { after: 8, cooldownMs: 0 },
       });
       for (let attempt = 1; attempt <= 4; attempt += 1) {
         vi.setSystemTime(f.cron.getJob(job.id)?.state.nextRunAtMs ?? Date.now());
@@ -255,6 +305,11 @@ describe("CronService failure repair", () => {
   it.each<[string, Partial<CronJob>, [number, number, number], boolean?]>([
     ["owned", { owner: owned.owner }, [1, 0, 0]],
     [
+      "owned with an explicit failure destination",
+      { owner: owned.owner, failureAlert: { channel: "telegram", to: "19098680" } },
+      [0, 1, 0],
+    ],
+    [
       "owner without an external route",
       { owner: owned.owner, delivery: { mode: "none" } },
       [1, 0, 0],
@@ -262,6 +317,11 @@ describe("CronService failure repair", () => {
     ["owned when repair cannot start", { owner: owned.owner }, [1, 1, 0], true],
     ["unowned", {}, [0, 1, 0]],
     ["unowned without a route", { delivery: { mode: "none" } }, [0, 0, 0]],
+    [
+      "inherited best-effort alert suppressed",
+      { delivery: { ...createTelegramDelivery(), bestEffort: true } },
+      [0, 0, 0],
+    ],
     ["alerts disabled", { failureAlert: false }, [0, 0, 0]],
   ])(
     "notifies a terminal one-shot script failure: %s",
@@ -342,6 +402,30 @@ describe("CronService failure repair", () => {
       ["owned hourly", true, 3_600_000, 1, 0],
       ["unowned hourly", false, 3_600_000, 0, 1],
       ["owned every-minute", true, 60_000, 1, 0],
+      [
+        "owned thread-only failure alert",
+        true,
+        3_600_000,
+        0,
+        1,
+        { failureAlert: { after: 1, threadId: 42 } },
+      ],
+      [
+        "owned thread-only failure destination",
+        true,
+        3_600_000,
+        0,
+        1,
+        { delivery: { ...createTelegramDelivery(), failureDestination: { threadId: 42 } } },
+      ],
+      [
+        "owned explicit destination",
+        true,
+        3_600_000,
+        0,
+        1,
+        { failureAlert: { after: 1, channel: "telegram", to: "19098680" } },
+      ],
     ])(
       "holds the %s notification until the quick retries are exhausted",
       (_name, isOwned, everyMs, repairs, alerts, overrides) =>

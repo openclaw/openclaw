@@ -71,8 +71,6 @@ function mismatch(overrides: Partial<SystemdServiceAccountMismatch> = {}) {
     serviceUser: "openclaw",
     programArguments: ["/usr/bin/node", path.join(root, "dist", "index.js"), "gateway"],
     workingDirectory: "",
-    selectors: { HOME: "/var/lib/openclaw", OPENCLAW_STATE_DIR: "/var/lib/openclaw/.openclaw" },
-    selectorsIncomplete: false,
     ...overrides,
   });
 }

@@ -24,6 +24,7 @@ import {
   buildDirectCronDeliveryIdempotencyKey,
   DIRECT_CRON_DELIVERY_COMPLETION_RETENTION,
   isCompletedDirectCronDelivery,
+  logCronDeliveryWarn,
   maybeApplyTtsToCronPayloads,
   retryTransientDirectCronDelivery,
   waitForCompletedDirectCronDelivery,
@@ -59,6 +60,7 @@ export async function sendCronAnnouncePayloadStrict(params: {
   /** The isolated finalizer already selected the visible reply lanes. */
   admittedReasoning?: true;
   abortSignal: AbortSignal;
+  bestEffort?: boolean;
   tts?: { auto?: TtsAutoMode };
   inspectionUrl?: string;
   sessionGeneration?: ChatRef;
@@ -97,11 +99,20 @@ export async function sendCronAnnouncePayloadStrict(params: {
     : undefined;
   const queueName = outboundDeliveryQueueName({ sessionGeneration: params.sessionGeneration });
   if (id) {
-    if (await isCompletedDirectCronDelivery(id, queueName)) {
-      fence?.assertCurrent();
-      params.onDeliveryAttempt?.(true);
-      // Completed receipts retain no payload projection; never reconstruct one from new input.
-      return { status: "sent", payloads: [] };
+    try {
+      if (await isCompletedDirectCronDelivery(id, queueName)) {
+        fence?.assertCurrent();
+        params.onDeliveryAttempt?.(true);
+        // Completed receipts retain no payload projection; never reconstruct one from new input.
+        return { status: "sent", payloads: [] };
+      }
+    } catch (error) {
+      if (!params.bestEffort) {
+        throw error;
+      }
+      await logCronDeliveryWarn(
+        `[cron:${params.jobId}] delivery receipt unavailable; continuing best-effort notification`,
+      );
     }
   }
   const prepared = params.tts
@@ -160,8 +171,8 @@ export async function sendCronAnnouncePayloadStrict(params: {
             : {}),
           assertTranscriptCurrent: fence?.assertCurrent,
           identity,
-          bestEffort: false,
-          durability: "required",
+          bestEffort: params.bestEffort === true,
+          durability: params.bestEffort === true ? "best_effort" : "required",
           ...(id
             ? {
                 deliveryIntentId: id,

@@ -2,6 +2,7 @@ import {
   findLlamacppGbnfSchemaViolations,
   normalizeToolParameterSchema,
 } from "@openclaw/ai/internal/tool-schema";
+import { validateToolArguments } from "@openclaw/llm-core/validation";
 import { Value } from "typebox/value";
 import { describe, expect, it } from "vitest";
 import { getToolTerminalPresentation } from "../tool-terminal-presentation.js";
@@ -151,11 +152,35 @@ describe("cron model schema regressions", () => {
     },
   );
 
-  it("projects nullable fields and the failure-alert switch into the restricted provider dialect", () => {
+  it("preserves failure-alert values in the shared job schema", () => {
+    for (const [failureAlert, accepted] of [
+      [null, true],
+      [false, true],
+      [{ after: 3, cooldownMs: 0, includeSkipped: true }, true],
+      [undefined, true],
+      [true, false],
+    ] as const) {
+      const args = { action: "update", job: { failureAlert } };
+      const validate = () =>
+        validateToolArguments(schemaTool, {
+          type: "toolCall",
+          id: "failure-alert",
+          name: "automations",
+          arguments: args,
+        });
+      if (accepted) {
+        expect(validate()).toEqual(args);
+      } else {
+        expect(validate).toThrow(/job.failureAlert/);
+      }
+    }
+  });
+
+  it("projects nullable fields and failure policies into the restricted provider dialect", () => {
     const projected = normalizeToolParameterSchema(schema, { modelProvider: "gemini" });
     expect(propertyAt(projected, "job.failureAlert")).toMatchObject({
-      type: "boolean",
-      description: expect.stringContaining("failure"),
+      type: "object",
+      description: expect.stringContaining("false disables"),
     });
     for (const key of ["job.agentId", "job.sessionKey", "job.payload.model"]) {
       expect(propertyAt(projected, key)).toMatchObject({

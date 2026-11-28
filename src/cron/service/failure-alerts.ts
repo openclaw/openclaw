@@ -15,8 +15,11 @@ import { normalizeAnyChannelId } from "../../channels/registry-normalize.js";
 import { sha256Hex } from "../../infra/crypto-digest.js";
 import { resolveTargetPrefixedChannel } from "../../infra/outbound/channel-target-prefix.js";
 import { normalizeTargetForProvider } from "../../infra/outbound/target-normalization.js";
-import { resolveCronDeliveryDefaultsScope } from "../delivery-defaults.js";
-import { resolveCronDeliveryPlan } from "../delivery-plan.js";
+import {
+  resolveCronDeliveryDefaultsScope,
+  resolveCronFailureAlertDefaults,
+} from "../delivery-defaults.js";
+import { resolveCronDeliveryPlan, resolveFailureDestination } from "../delivery-plan.js";
 import { cronFailureDetailLines } from "../failure-notification-text.js";
 import { hasCanonicalCronDeliveryMode } from "../store/delivery-codec.js";
 import type {
@@ -134,82 +137,127 @@ export function resolveFailureAlert(
     job,
     state.deps.resolveDefaultAgentId?.() ?? state.deps.defaultAgentId,
   );
-  const policy = state.deps.cronConfig?.failureAlert;
-  if (job.failureAlert === false || (job.failureAlert !== true && policy?.enabled === false)) {
+  // The owner's agent route replaces the global route fields; tuning stays global.
+  const globalConfig = resolveCronFailureAlertDefaults(defaults);
+  const jobConfig = job.failureAlert === false ? undefined : job.failureAlert;
+
+  if (job.failureAlert === false) {
     return null;
   }
-  const primary = hasCanonicalCronDeliveryMode(job.delivery)
+  if (!jobConfig && globalConfig?.enabled === false) {
+    return null;
+  }
+  const hasJobRoute = Boolean(
+    jobConfig &&
+    (jobConfig.channel !== undefined ||
+      jobConfig.to !== undefined ||
+      jobConfig.accountId !== undefined ||
+      jobConfig.threadId !== undefined ||
+      jobConfig.mode !== undefined),
+  );
+  const alternateRoute = resolveFailureDestination(
+    job,
+    globalConfig,
+    hasJobRoute ? jobConfig : undefined,
+  );
+  const primaryRoute = hasCanonicalCronDeliveryMode(job.delivery)
     ? resolveCronDeliveryPlan(job, defaults)
     : undefined;
-  const resultRoute =
-    primary?.requested || (primary?.mode === "webhook" && primary.to) ? primary : undefined;
-  const hasGlobalRoute =
-    policy?.mode === "webhook"
-      ? Boolean(normalizeOptionalString(policy.to))
-      : Boolean(
-          policy?.channel || policy?.to || policy?.accountId || policy?.threadId !== undefined,
-        );
-  const selected = hasGlobalRoute ? policy : resultRoute;
-  const mode = selected?.mode === "webhook" ? "webhook" : "announce";
-  const primaryChannel =
-    resultRoute?.mode === "announce"
-      ? (resolveFailureAlertChannel(resultRoute.channel, resultRoute.to) ?? "last")
-      : undefined;
-  const hasAnnounceRouteSelector = policy?.channel !== undefined || policy?.to !== undefined;
+  const primaryAnnounceRoute =
+    primaryRoute?.mode === "announce" && primaryRoute.requested ? primaryRoute : undefined;
+  const explicitlyConfigured = jobConfig !== undefined || globalConfig !== undefined;
+  // An owned job has a conversation to notify even without an external route.
+  if (
+    !alternateRoute &&
+    !primaryAnnounceRoute &&
+    !explicitlyConfigured &&
+    !hasFailureRepairOwner(job)
+  ) {
+    return null;
+  }
+  const configuredMode =
+    jobConfig?.mode ?? (jobConfig?.channel ? "announce" : undefined) ?? globalConfig?.mode;
+  const route =
+    alternateRoute ??
+    (configuredMode === "webhook" && explicitlyConfigured
+      ? {
+          mode: "webhook",
+          to: normalizeOptionalString(jobConfig?.to ?? globalConfig?.to),
+          accountId: normalizeOptionalString(jobConfig?.accountId ?? globalConfig?.accountId),
+        }
+      : primaryAnnounceRoute);
+  const mode = (route?.mode ?? configuredMode) === "webhook" ? "webhook" : "announce";
+  const primaryChannel = primaryAnnounceRoute
+    ? (resolveFailureAlertChannel(primaryAnnounceRoute.channel, primaryAnnounceRoute.to) ?? "last")
+    : undefined;
+  const hasAnnounceRouteSelector =
+    jobConfig?.channel !== undefined ||
+    jobConfig?.to !== undefined ||
+    job.delivery?.failureDestination?.channel !== undefined ||
+    job.delivery?.failureDestination?.to !== undefined ||
+    globalConfig?.channel !== undefined ||
+    globalConfig?.to !== undefined;
+  const hasAlertRouteSelector =
+    hasAnnounceRouteSelector ||
+    jobConfig?.accountId !== undefined ||
+    job.delivery?.failureDestination?.accountId !== undefined ||
+    globalConfig?.accountId !== undefined;
   const channel =
-    mode === "webhook"
-      ? "last"
-      : !hasAnnounceRouteSelector && primaryChannel
-        ? primaryChannel
-        : (resolveFailureAlertChannel(selected?.channel, selected?.to) ?? "last");
+    mode === "announce" && !hasAnnounceRouteSelector && primaryChannel
+      ? primaryChannel
+      : (resolveFailureAlertChannel(route?.channel, route?.to) ?? "last");
+  const routeUsesPrimaryChannel =
+    mode === "announce" && primaryAnnounceRoute !== undefined && channel === primaryChannel;
   const to =
-    normalizeOptionalString(selected?.to) ??
-    (mode === "announce" && channel === primaryChannel ? resultRoute?.to : undefined);
+    normalizeOptionalString(route?.to) ??
+    (routeUsesPrimaryChannel ? primaryAnnounceRoute?.to : undefined);
   const primaryRecipientMatches =
-    resultRoute !== undefined &&
-    mode === resultRoute.mode &&
-    (mode === "webhook" || channel === primaryChannel) &&
-    (to === resultRoute.to ||
-      (mode === "announce" &&
-        to !== undefined &&
-        resultRoute.to !== undefined &&
+    primaryAnnounceRoute !== undefined &&
+    mode === "announce" &&
+    channel === primaryChannel &&
+    (to === primaryAnnounceRoute.to ||
+      (to !== undefined &&
+        primaryAnnounceRoute.to !== undefined &&
         normalizeFailureAlertRecipient(channel, to) ===
-          normalizeFailureAlertRecipient(channel, resultRoute.to)));
+          normalizeFailureAlertRecipient(channel, primaryAnnounceRoute.to)));
   const accountId =
-    mode === "announce"
-      ? (normalizeOptionalString(selected?.accountId) ??
-        (primaryRecipientMatches ? resultRoute?.accountId : undefined))
-      : undefined;
+    normalizeOptionalString(route?.accountId) ??
+    (primaryRecipientMatches ? primaryAnnounceRoute?.accountId : undefined);
+  // Preserve legacy thread inheritance when no explicit failure thread is set.
+  const primaryThreadFallbackMatches =
+    primaryRecipientMatches &&
+    accountId === primaryAnnounceRoute?.accountId &&
+    (alternateRoute === null ||
+      !job.delivery?.failureDestination ||
+      primaryAnnounceRoute?.threadId == null ||
+      jobConfig?.to !== undefined);
   const threadId =
     mode === "announce"
-      ? (normalizeOptionalThreadValue(selected?.threadId) ??
-        (primaryRecipientMatches && accountId === resultRoute?.accountId
-          ? resultRoute?.threadId
-          : undefined))
+      ? (normalizeOptionalThreadValue(route?.threadId) ??
+        (primaryThreadFallbackMatches ? primaryAnnounceRoute?.threadId : undefined))
       : undefined;
   const primaryRouteMatches =
     primaryRecipientMatches &&
-    accountId === resultRoute?.accountId &&
+    accountId === primaryAnnounceRoute?.accountId &&
     normalizeOptionalStringifiedId(threadId) ===
-      normalizeOptionalStringifiedId(resultRoute?.threadId);
-  const inheritsPrimaryTarget =
-    primaryRouteMatches && !hasAnnounceRouteSelector && policy?.accountId === undefined;
-  if (!selected && !hasFailureRepairOwner(job)) {
-    return null;
-  }
+      normalizeOptionalStringifiedId(primaryAnnounceRoute?.threadId);
+  const inheritsPrimaryTarget = primaryRouteMatches && !hasAlertRouteSelector;
+
   return {
-    after: clampPositiveInt(policy?.after, DEFAULT_FAILURE_ALERT_AFTER),
-    cooldownMs: clampNonNegativeInt(policy?.cooldownMs, DEFAULT_FAILURE_ALERT_COOLDOWN_MS),
-    includeSkipped: policy?.includeSkipped ?? false,
+    after: clampPositiveInt(jobConfig?.after ?? globalConfig?.after, DEFAULT_FAILURE_ALERT_AFTER),
+    cooldownMs: clampNonNegativeInt(
+      jobConfig?.cooldownMs ?? globalConfig?.cooldownMs,
+      DEFAULT_FAILURE_ALERT_COOLDOWN_MS,
+    ),
     channel,
     to,
     mode,
     accountId,
+    target: inheritsPrimaryTarget ? primaryAnnounceRoute?.target : undefined,
+    directPolicy: inheritsPrimaryTarget ? primaryAnnounceRoute?.directPolicy : undefined,
     threadId,
-    alternateRoute: hasGlobalRoute && !primaryRouteMatches,
-    target: inheritsPrimaryTarget ? resultRoute?.target : undefined,
-    directPolicy: inheritsPrimaryTarget ? resultRoute?.directPolicy : undefined,
-    hasDestination: selected !== undefined,
+    includeSkipped: jobConfig?.includeSkipped ?? globalConfig?.includeSkipped ?? false,
+    alternateRoute: alternateRoute !== null && !primaryRouteMatches,
   };
 }
 
@@ -353,7 +401,7 @@ function failureIncident(params: {
 }
 
 /**
- * Emits one failure notice when threshold and cooldown policy allow it.
+ * Emits one failure notice when threshold, best-effort, and cooldown policy allow it.
  * A job owned by a conversation sends the notice to that conversation's agent, which fixes
  * the problem or tells the user; other jobs alert their route directly.
  */
@@ -386,10 +434,15 @@ function maybeEmitFailureAlert(
   // A one-shot's final failure is its last outcome: its notice ignores the threshold and cooldown.
   const terminal = params.terminalOneShot === true;
   const alertConfig = params.alertConfig;
-  if (!alertConfig || (!alertConfig.hasDestination && params.status === "skipped")) {
+  if (!alertConfig) {
     return;
   }
   if (!terminal && params.consecutiveCount < alertConfig.after) {
+    return;
+  }
+  // Best-effort delivery suppresses inherited alert noise, not an independently
+  // configured job alert that the operator explicitly requested.
+  if (params.job.delivery?.bestEffort === true && !params.job.failureAlert) {
     return;
   }
   const incident = failureIncident({ ...params, route: alertConfig });
@@ -416,7 +469,22 @@ function maybeEmitFailureAlert(
     runAtMs: params.runAtMs,
     route: alertConfig,
   };
+  // Destination selectors express alert-only intent; policy or mode-only overrides
+  // still go to the owner conversation. Do not infer intent from resolved routes.
+  const hasJobFailureDestination = [
+    params.job.failureAlert,
+    params.job.delivery?.failureDestination,
+  ].some(
+    (route) =>
+      route &&
+      (route.channel !== undefined ||
+        route.to !== undefined ||
+        route.threadId !== undefined ||
+        route.accountId !== undefined),
+  );
   if (
+    !hasJobFailureDestination &&
+    (terminal || alertConfig.mode === "announce") &&
     params.status === "error" &&
     // Command jobs and on-exit or stream schedules are operator-only, so they alert as before.
     hasFailureRepairOwner(params.job) &&
@@ -426,7 +494,7 @@ function maybeEmitFailureAlert(
     params.deferredNotifications.push({
       kind: "failure-repair",
       job,
-      fallback: alertConfig.hasDestination ? alert : undefined,
+      fallback: alert,
       text: buildCronFailureRepairBrief({
         job: params.job,
         consecutiveErrors: params.consecutiveCount,
@@ -510,8 +578,7 @@ export function finalizeCronFailureNotifications(
     params.result.status === "ok" &&
     params.completionStatus === "failed" &&
     params.job.state.lastDeliveryStatus === "not-delivered" &&
-    params.alertConfig &&
-    (hasFailureRepairOwner(params.job) || params.alertConfig.alternateRoute)
+    params.alertConfig?.alternateRoute
   ) {
     if (
       !requestFailureNotification(
@@ -539,28 +606,12 @@ export function finalizeCronFailureNotifications(
     const payload: ReplyPayload = {
       text: [`Automation "${job.name || job.id}" delivery failed`, ...detailLines].join("\n"),
     };
-    const alert = {
-      kind: "failure-alert" as const,
+    params.deferredNotifications.push({
+      kind: "failure-alert",
       job,
       payload,
       runAtMs: params.result.startedAt,
       route,
-    };
-    params.deferredNotifications.push(
-      hasFailureRepairOwner(params.job)
-        ? {
-            kind: "failure-repair",
-            job,
-            fallback: route.alternateRoute ? alert : undefined,
-            text: buildCronFailureRepairBrief({
-              job: params.job,
-              consecutiveErrors: 1,
-              error: params.job.state.lastDeliveryError,
-              errorReason: params.job.state.lastErrorReason,
-              deliveryFailed: true,
-            }),
-          }
-        : alert,
-    );
+    });
   }
 }

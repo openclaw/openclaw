@@ -811,6 +811,7 @@
 
 .cron-advanced__summary {
   display: inline-flex;
+  max-inline-size: calc(100% - 8px);
   align-self: flex-start;
   align-items: center;
   gap: 5px;
@@ -870,7 +871,8 @@
   vertical-align: middle;
 }
 
-.cron-trigger-summary {
+.cron-trigger-summary,
+.cron-alert-summary {
   display: inline-flex;
   align-items: center;
   gap: var(--space-1);
@@ -879,6 +881,12 @@
   font-size: var(--control-ui-text-xs);
   font-weight: 600;
   vertical-align: middle;
+}
+
+.cron-alert-summary,
+.cron-advanced__sections .settings-section__desc {
+  min-width: 0;
+  overflow-wrap: anywhere;
 }
 
 .cron-trigger-script {

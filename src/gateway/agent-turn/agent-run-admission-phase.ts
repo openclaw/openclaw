@@ -331,7 +331,9 @@ export async function prepareAgentRunDispatch(
   let replyDispatchRuntime: PreparedReplyDispatchRuntime;
   let preparedModelRuntime: PreparedAgentRunModelRuntime;
   try {
-    const publishedRuntime = await loadPublishedGatewayReplyDispatchRuntime({
+    const loadReplyDispatchRuntime =
+      params.context.loadReplyDispatchRuntime ?? loadPublishedGatewayReplyDispatchRuntime;
+    const publishedRuntime = await loadReplyDispatchRuntime({
       agentId: params.activeSessionAgentId,
       abortSignal: activeRunAbort.controller.signal,
       onRuntimeLease: (lease) => {

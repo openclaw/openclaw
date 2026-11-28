@@ -22,6 +22,7 @@ it.each<
   ["transient failure with route", "rate limit exceeded", routed, 1],
   ["same incident during cooldown", permanentError, routed, 2, 2],
   ["no route", permanentError, { mode: "none" }, 0],
+  ["best-effort route", permanentError, { ...routed, bestEffort: true }, 0],
 ])("ends a watcher on a terminal %s", async (_name, error, delivery, alerts, priorFailures = 0) => {
   await withFailureAlertCron({}, async (f) => {
     f.runIsolatedAgentJob.mockResolvedValue({ status: "error", error });

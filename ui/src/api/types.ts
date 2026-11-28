@@ -186,10 +186,7 @@ export type CronRunsStatusValue = NonNullable<CronRunsParams["statuses"]>[number
 export type CronSortDir = NonNullable<CronListParams["sortDir"]>;
 export type CronPayload = ProtocolCronJob["payload"];
 
-export type CronStatus = Pick<
-  CronStatusSummary,
-  "enabled" | "triggersEnabled" | "jobs" | "failureAlertsEnabled"
-> &
+export type CronStatus = Pick<CronStatusSummary, "enabled" | "triggersEnabled" | "jobs"> &
   Partial<Pick<CronStatusSummary, "nextWakeAtMs">>;
 
 export type { CronServiceRunResult as CronRunResult } from "../../../src/cron/service-contract.js";

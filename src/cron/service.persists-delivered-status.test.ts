@@ -48,7 +48,12 @@ type CronAddInput = Parameters<CronService["add"]>[0];
 const destination = { channel: "forum", to: "123" };
 const commandOk = { status: "ok", summary: "HOOKSCHED_PAYLOAD" } as const;
 const commandError = { status: "error", error: "command exited with code 1" } as const;
-const failureAlert = true;
+const failureAlert = { after: 1, channel: "telegram", to: "123" };
+const deliveryRejected = {
+  status: "ok",
+  delivered: false,
+  deliveryError: "delivery rejected",
+} as const;
 const verifiedDelivery = {
   delivered: true,
   resolved: { ok: true, ...destination },
@@ -459,6 +464,46 @@ describe("CronService persists delivered status", () => {
         ...(!verified
           ? { failureNotificationDelivery: expect.objectContaining({ status: "unknown" }) }
           : { deliveryError: undefined }),
+      });
+    },
+  );
+
+  it.each([
+    ["best-effort to required", true, [false], "succeeded"],
+    ["required A to B to A", false, [true, false], "failed"],
+  ] as const)(
+    "authors completion from the admitted delivery policy: %s",
+    async (_name, admittedBestEffort, edits, expectedCompletionStatus) => {
+      const execution = gate(deliveryRejected);
+      await using h = await createScheduledService({
+        runIsolatedAgentJob: vi.fn(execution.run),
+      });
+      const { cron, finished } = h;
+      const job = await cron.add({
+        ...agentJob(`admitted-policy-${admittedBestEffort}`),
+        delivery: { mode: "announce", ...destination, bestEffort: admittedBestEffort },
+      });
+
+      const run = cron.run(job.id, "force");
+      await execution.entered;
+      for (const bestEffort of edits) {
+        await cron.update(job.id, { delivery: { bestEffort } });
+      }
+      execution.release();
+      await run;
+
+      expect(await finished).toMatchObject({
+        status: "ok",
+        deliveryStatus: "not-delivered",
+        completionStatus: expectedCompletionStatus,
+        deliveryError: "delivery rejected",
+        error: undefined,
+      });
+      expect(cron.getJob(job.id)?.state).toMatchObject({
+        lastRunStatus: "ok",
+        consecutiveErrors: 0,
+        lastError: undefined,
+        lastDeliveryError: "delivery rejected",
       });
     },
   );

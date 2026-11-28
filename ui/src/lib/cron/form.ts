@@ -4,11 +4,12 @@ import { resolveCronTriggerMinIntervalMs } from "../../../../src/config/cron-lim
 import { hasCanonicalCronDeliveryMode } from "../../../../src/cron/store/delivery-codec.js";
 import type { CronJob, CronPayload } from "../../api/types.ts";
 import { toNumber } from "../format.ts";
-import { parseCronDurationMs } from "./decimal.ts";
+import { parseCronDurationMs, parseFailureAlertCooldownMs } from "./decimal.ts";
 import { DEFAULT_CRON_FORM } from "./editor-state.ts";
 import {
   formatDateTimeLocal,
   parseEverySchedule,
+  durationMsToSecondsString,
   parseStaggerSchedule,
   resolveCronScheduleAt,
 } from "./form-schedule.ts";
@@ -157,6 +158,19 @@ export function validateCronForm(form: CronFormState): CronFieldErrors {
       errors.deliveryTo = error;
     }
   }
+  if (form.failureAlertMode === "custom") {
+    const afterRaw = form.failureAlertAfter.trim();
+    if (afterRaw) {
+      const after = toNumber(afterRaw, 0);
+      if (!Number.isFinite(after) || after < 1) {
+        errors.failureAlertAfter = "Failure alert threshold must be at least 1.";
+      }
+    }
+    const cooldownRaw = form.failureAlertCooldownSeconds.trim();
+    if (cooldownRaw && parseFailureAlertCooldownMs(cooldownRaw) === undefined) {
+      errors.failureAlertCooldownSeconds = "Cooldown must be finite and 0 or greater.";
+    }
+  }
   return errors;
 }
 
@@ -169,6 +183,7 @@ export function isReadOnlyCronPayload(payload: CronPayload | null): boolean {
 }
 
 export function jobToForm(job: CronJob, prev: CronFormState): CronFormState {
+  const failureAlert = typeof job.failureAlert === "object" ? job.failureAlert : undefined;
   const payload = job.payload;
   const agentTurn = payload.kind === "agentTurn" ? payload : undefined;
   const payloadLocked = isReadOnlyCronPayload(payload);
@@ -235,10 +250,22 @@ export function jobToForm(job: CronJob, prev: CronFormState): CronFormState {
     deliveryChannel: job.delivery?.channel ?? CRON_CHANNEL_LAST,
     deliveryTo: job.delivery?.to ?? "",
     deliveryAccountId: job.delivery?.accountId ?? "",
+    deliveryBestEffort: job.delivery?.bestEffort ?? false,
     deliveryThreadId: job.delivery?.threadId,
     deliveryCompletionDestination:
       job.delivery?.mode === "announce" ? job.delivery.completionDestination : undefined,
-    failureAlert: job.failureAlert,
+    deliveryFailureDestination: job.delivery?.failureDestination,
+    failureAlertMode: job.failureAlert === false ? "disabled" : failureAlert ? "custom" : "inherit",
+    failureAlertAfter: typeof failureAlert?.after === "number" ? String(failureAlert.after) : "",
+    failureAlertCooldownSeconds:
+      typeof failureAlert?.cooldownMs === "number"
+        ? durationMsToSecondsString(failureAlert.cooldownMs)
+        : "",
+    failureAlertChannel: failureAlert?.channel ?? CRON_CHANNEL_LAST,
+    failureAlertTo: failureAlert?.to ?? "",
+    failureAlertDeliveryMode: failureAlert?.mode ?? "",
+    failureAlertAccountId: failureAlert?.accountId ?? "",
+    failureAlertThreadId: failureAlert?.threadId,
     timeoutSeconds:
       typeof agentTurn?.timeoutSeconds === "number" ? String(agentTurn.timeoutSeconds) : "",
   };

@@ -58,21 +58,11 @@ import { gatewayReplyMock } from "./test-helpers.runtime-state.js";
 vi.mock("../agents/embedded-agent-runner/run.js", () => ({ runEmbeddedAgent: vi.fn() }));
 
 const fetchWithSsrFGuardMock = vi.hoisted(() =>
-  vi.fn(async (params: GuardedFetchOptions) => {
-    // The result and failure alert can share a URL. Only reject the alert request.
-    if (
-      params.url === "https://example.invalid/failed-failure-alert" &&
-      typeof params.init?.body === "string" &&
-      Object.hasOwn(JSON.parse(params.init.body), "message")
-    ) {
-      throw new Error("alert transport rejected");
-    }
-    return {
-      response: new Response("ok", { status: 200 }),
-      finalUrl: params.url,
-      release: async () => {},
-    };
-  }),
+  vi.fn(async (params: GuardedFetchOptions) => ({
+    response: new Response("ok", { status: 200 }),
+    finalUrl: params.url,
+    release: async () => {},
+  })),
 );
 
 const sendCronAnnouncePayloadStrictMock = vi.hoisted(() =>
@@ -267,7 +257,7 @@ async function addWebhookCronJob(params: {
   sessionTarget?: "main" | "isolated";
   payloadText?: string;
   delivery: Record<string, unknown>;
-  failureAlert?: boolean;
+  failureAlert?: Record<string, unknown>;
 }) {
   const { ws, name, sessionTarget = "main", payloadText, delivery, failureAlert } = params;
   const response = await rpcReq(ws, "cron.add", {
@@ -896,7 +886,9 @@ describe("gateway server cron", () => {
 
     for (const outcome of ["delivered", "failed", "unreached"] as const) {
       const error = outcome === "failed" ? "alert transport rejected" : "adapter_returned_no_send";
-      if (outcome === "unreached") {
+      if (outcome === "failed") {
+        fetchWithSsrFGuardMock.mockRejectedValueOnce(new Error(error));
+      } else if (outcome === "unreached") {
         sendCronAnnouncePayloadStrictMock.mockImplementationOnce(async (params) => {
           params.onDeliveryAttempt?.(false);
           return { status: "suppressed", reason: "adapter_returned_no_send" };
@@ -905,11 +897,11 @@ describe("gateway server cron", () => {
       cronIsolatedRun.mockResolvedValueOnce({ status: "error", error: "job failed" });
       const jobId = await add(`${outcome} failure alert`, {
         sessionTarget: "isolated",
-        delivery:
+        delivery: { mode: "none" },
+        failureAlert:
           outcome === "unreached"
-            ? { mode: "announce", channel: "telegram", to: "123" }
-            : { mode: "webhook", to: `https://example.invalid/${outcome}-failure-alert` },
-        failureAlert: true,
+            ? { after: 1, mode: "announce", channel: "telegram", to: "123" }
+            : { after: 1, mode: "webhook", to: `https://example.invalid/${outcome}-failure-alert` },
       });
       await runCronJobAndWaitForFailureAlert(ws, jobId, {
         fallback: outcome !== "delivered",

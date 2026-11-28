@@ -55,7 +55,7 @@ export function parseEverySchedule(
   return { everyAmount: durationMsToSecondsString(everyMs), everyUnit: "seconds" };
 }
 
-function durationMsToSecondsString(ms: number): string {
+export function durationMsToSecondsString(ms: number): string {
   const value = BigInt(ms);
   const whole = value / 1_000n;
   const remainder = value % 1_000n;

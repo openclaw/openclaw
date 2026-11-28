@@ -4,6 +4,7 @@ import path from "node:path";
 import { DatabaseSync } from "node:sqlite";
 import { expectDefined } from "@openclaw/normalization-core";
 // Cron store tests cover persisted scheduled job state and run metadata.
+import { createRequireRecord } from "openclaw/plugin-sdk/test-fixtures";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { trackSqliteStatementExecutions } from "../../test/helpers/sqlite-statement-execution-counter.js";
 import { openOpenClawStateDatabase } from "../state/openclaw-state-db.js";
@@ -23,6 +24,8 @@ import { cronStoreKey } from "./store/key.js";
 import type { CronStoreFile } from "./types.js";
 
 const makeStorePath = createStorePathFixture();
+
+const requireRecord = createRequireRecord("record", "expected-label");
 
 describe("resolveCronStorePath", () => {
   const envSnapshot = captureEnv(["OPENCLAW_HOME", "HOME"]);
@@ -87,13 +90,13 @@ describe("cron store", () => {
       name: "interval schedule with an explicitly empty failure alert",
       schedule: { kind: "every", everyMs: 60_000, anchorMs: 1_000 },
       delivery: { mode: "announce", channel: "telegram", threadId: 42 },
-      failureAlert: true,
+      failureAlert: {},
     },
     {
       name: "cron schedule with webhook delivery and populated failure alert",
       schedule: { kind: "cron", expr: "0 9 * * *", tz: "UTC", staggerMs: 0 },
       delivery: { mode: "webhook", to: "https://example.invalid/cron" },
-      failureAlert: true,
+      failureAlert: { after: 3, cooldownMs: 60_000, includeSkipped: true },
     },
     {
       name: "process-exit schedule with explicit failure destination clears",
@@ -101,8 +104,9 @@ describe("cron store", () => {
       delivery: {
         mode: "announce",
         channel: "telegram",
+        failureDestination: { channel: undefined, to: "slack:C123", accountId: undefined },
       },
-      failureAlert: true,
+      failureAlert: { channel: "slack", to: "slack:C123", mode: "announce" },
     },
     {
       name: "stream schedule with completion webhook",
@@ -118,7 +122,7 @@ describe("cron store", () => {
         to: "telegram:chat",
         completionDestination: { mode: "webhook", to: "https://example.invalid/complete" },
       },
-      failureAlert: true,
+      failureAlert: { accountId: "bot-1", mode: "webhook" },
     },
   ] satisfies Array<{
     name: string;
@@ -495,6 +499,7 @@ describe("cron store", () => {
       to: "telegram:chat-1",
       threadId: "topic-9",
       accountId: "bot-1",
+      bestEffort: true,
       completionDestination: {
         mode: "webhook",
         to: "https://example.invalid/legacy-completion",
@@ -546,6 +551,57 @@ describe("cron store", () => {
     expect(typeof jobs[0]?.delivery?.threadId).toBe("number");
     expect(jobs[1]?.delivery?.threadId).toBe("42");
     expect(typeof jobs[1]?.delivery?.threadId).toBe("string");
+  });
+
+  it("round-trips explicit failure destination field clears through canonical cron job JSON", async () => {
+    const { storePath } = await makeStorePath();
+    const job = makeStore("sqlite-failure-destination-clear-job", true).jobs[0];
+    job.sessionTarget = "isolated";
+    job.payload = { kind: "agentTurn", message: "hello" };
+    job.delivery = {
+      mode: "announce",
+      channel: "telegram",
+      to: "telegram:chat-1",
+      failureDestination: {
+        channel: undefined,
+        to: "slack:C123",
+        accountId: undefined,
+        mode: undefined,
+      },
+    };
+
+    await saveCronStore(storePath, { version: 1, jobs: [job] });
+
+    const row = openOpenClawStateDatabase()
+      .db.prepare("SELECT job_json FROM cron_jobs WHERE job_id = ?")
+      .get(job.id) as { job_json: string };
+    expect(JSON.parse(row.job_json).delivery.failureDestination).toEqual({
+      channel: null,
+      to: "slack:C123",
+      accountId: null,
+      mode: null,
+    });
+
+    const delivery = (await loadCronStore(storePath)).jobs[0]?.delivery;
+    expect(delivery?.failureDestination).toEqual({
+      channel: undefined,
+      to: "slack:C123",
+      accountId: undefined,
+      mode: undefined,
+    });
+    expect(Object.hasOwn(delivery?.failureDestination as object, "channel")).toBe(true);
+    expect(Object.hasOwn(delivery?.failureDestination as object, "accountId")).toBe(true);
+    expect(Object.hasOwn(delivery?.failureDestination as object, "mode")).toBe(true);
+
+    const loaded = await loadCronJobsStoreWithConfigJobs(storePath);
+    const configDelivery = requireRecord(loaded.configJobs[0]?.delivery, "config delivery");
+    const configFailureDestination = requireRecord(
+      configDelivery.failureDestination,
+      "config failure destination",
+    );
+    expect(Object.hasOwn(configFailureDestination, "channel")).toBe(true);
+    expect(Object.hasOwn(configFailureDestination, "accountId")).toBe(true);
+    expect(Object.hasOwn(configFailureDestination, "mode")).toBe(true);
   });
 
   it("keeps custom store paths separated by SQLite store key", async () => {

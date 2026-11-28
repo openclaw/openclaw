@@ -10,6 +10,7 @@ import { loadSessionEntry, replaceSessionEntry } from "../src/config/sessions/se
 import type { OpenClawConfig } from "../src/config/types.openclaw.js";
 import { createGatewayInstanceRuntime } from "../src/gateway/server-instance-runtime.js";
 import type { GatewayLifecycleRuntime } from "../src/gateway/server-instance-runtime.types.js";
+import { registerGatewayLifecycleRuntime } from "../src/gateway/server-lifecycle-runtime-context.js";
 import { createContext } from "../src/gateway/server-plugin-in-process-dispatch.test-support.js";
 import { deliverOutboundPayloads } from "../src/infra/outbound/deliver.js";
 import { drainPendingDeliveriesCore } from "../src/infra/outbound/delivery-queue-recovery.js";
@@ -106,7 +107,12 @@ function createLifecycle(kind: "notice" | "typing", cfg: OpenClawConfig, plugin 
     },
     isDispatchAvailable: () => true,
   });
-  const restore = () => restoreActivePluginRegistrySnapshot(snapshot);
+  // This fixture stands in for the listening Gateway, which owns the process lifecycle runtime.
+  const releaseLifecycleRuntime = registerGatewayLifecycleRuntime(runtime.lifecycle);
+  const restore = () => {
+    releaseLifecycleRuntime();
+    restoreActivePluginRegistrySnapshot(snapshot);
+  };
   return { deliveryContext, runtime, settings, restore };
 }
 

@@ -121,7 +121,7 @@ export function registerCronRepairCases(
         payload: { kind: "agentTurn", message: "Inspect the upstream service." },
         owner: { agentId: "main", sessionKey: ownerSessionKey },
         delivery: { mode: "none" },
-        failureAlert: true,
+        failureAlert: { after: 2, mode: "announce" },
       });
       const jobId = expectCronJobIdFromResponse(await request("cron.add", repairJob));
       const repairSettled = createDeferred();
@@ -130,6 +130,7 @@ export function registerCronRepairCases(
           repairSettled.resolve();
         }
       });
+      await run(jobId);
       await run(jobId);
       expect(await withinTest(repairOutcome.promise, signal)).toMatchObject({
         result: { meta: { terminalReply: { disposition: "silent" } } },
@@ -184,7 +185,7 @@ export function registerCronRepairCases(
           payload: { kind: "agentTurn", message: "Wait for cancellation." },
           owner: { agentId: "main", sessionKey: ownerSessionKey },
           delivery: { mode: "none" },
-          failureAlert: true,
+          failureAlert: { after: 1, cooldownMs: 0, mode: "announce" },
         }),
       ),
     );

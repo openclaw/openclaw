@@ -578,9 +578,10 @@ describe("cron ownership access matrix", () => {
       "only pause, resume, reschedule or remove it",
     );
     expect((await legacy.stored())?.delivery).toEqual({ mode: "none" });
+    const alertRoute = { after: 1, mode: "webhook", to: "https://alerts.example/cron" };
     const realert = await updateAs(
       "scoped",
-      { id: legacy.id, patch: { failureAlert: true } },
+      { id: legacy.id, patch: { failureAlert: alertRoute } },
       legacy.context,
     );
     expect(String(realert.respond.mock.calls[0]?.[2]?.message)).toContain(

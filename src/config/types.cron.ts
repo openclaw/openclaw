@@ -9,6 +9,11 @@ type CronSchemaInput = NonNullable<z.input<typeof OpenClawSchemaShape.cron>>;
 
 export type CronFailureAlertConfig = NonNullable<CronSchemaInput["failureAlert"]>;
 
+export type CronFailureDestinationConfig = Pick<
+  CronFailureAlertConfig,
+  "channel" | "to" | "threadId" | "accountId" | "mode"
+>;
+
 /** Configured announce destination used when an isolated job names no route of its own. */
 export type CronDefaultDeliveryDestinationConfig = NonNullable<CronSchemaInput["delivery"]>;
 

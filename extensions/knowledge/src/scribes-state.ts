@@ -45,7 +45,7 @@ export type ScribeJob = {
   /** The conversation that created the automation; a `current` job runs as its child. */
   sessionKey?: string;
   schedule: { kind: string; expr?: string; tz?: string; everyMs?: number; at?: string };
-  failureAlert?: boolean;
+  failureAlert?: false | { after?: number };
   /**
    * Whose authority its runs use: `trusted` for an automation an administrator wrote, `account`
    * for one an agent turn created, which can't read channels on a schedule.

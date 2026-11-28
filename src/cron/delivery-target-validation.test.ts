@@ -24,6 +24,7 @@ describe("assertCronDeliveryInputNonBlankFields", () => {
       assertCronDeliveryInputNonBlankFields({
         channel: "slack",
         to: "#general",
+        failureDestination: { channel: "email", to: "admin@example.com" },
         completionDestination: { to: "done" },
       }),
     ).not.toThrow();

@@ -182,14 +182,14 @@ describe("WebChat automation creation through the tool and Gateway", () => {
             channel: "telegram",
             to: "synthetic-recipient",
             threadId: "",
-            completionDestination: { mode: "webhook", to: "" },
+            failureDestination: { channel: "", to: "", accountId: "", mode: "announce" },
           },
           deleteAfterRun: true,
         },
         patch: { name: "", schedule: { kind: "at", at: "" }, trigger: null },
       };
       await expect(tool.execute("blank-destination", args)).rejects.toThrow(
-        "omit delivery.completionDestination if unused, or supply a valid target. No changes were saved. Retry with corrected arguments; do not report success unless the retry succeeds.",
+        "omit delivery.failureDestination if unused, or supply a valid target. No changes were saved. Retry with corrected arguments; do not report success unless the retry succeeds.",
       );
       expect(await cron.list({ includeDisabled: true })).toEqual([]);
 

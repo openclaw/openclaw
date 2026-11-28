@@ -1,5 +1,6 @@
 import { isRecord } from "openclaw/plugin-sdk/string-coerce-runtime";
 import { isGatewayRequestError, type GatewayBrowserClient } from "../../api/gateway.ts";
+import { t } from "../../i18n/index.ts";
 import {
   cardsWithPendingDrops,
   changedDraftPayload,
@@ -65,7 +66,7 @@ export async function saveWorkboardCardDraft(params: WorkboardClientContext) {
     return;
   }
   if (cardId && (!base || base.id !== cardId)) {
-    state.error = "This card changed before editing began. Cancel and reopen it to continue.";
+    state.error = t("workboard.cardChangedBeforeEdit");
     notifyWorkboard(params.host);
     return;
   }
@@ -98,8 +99,8 @@ export async function saveWorkboardCardDraft(params: WorkboardClientContext) {
   } catch (error) {
     const conflict = base && reconcileCardConflict(state, error);
     if (conflict) {
-      rebaseWorkboardDraft(state, conflict.card);
-      state.error = `${conflict.message} Your unsaved edits remain in the form.`;
+      rebaseWorkboardDraft(state, conflict);
+      state.error = t("workboard.editConflict");
     } else {
       state.error = formatError(error);
     }
@@ -166,7 +167,7 @@ function reconcileCardConflict(
   ) {
     const card = normalizeCardPayload(error.details);
     applyCard(state, card);
-    return { card, message: error.message };
+    return card;
   }
   return null;
 }

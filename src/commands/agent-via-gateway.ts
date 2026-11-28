@@ -18,7 +18,6 @@ import {
   tryResolveAgentOperationAgentId,
   tryResolveSoleAgentId,
 } from "../agents/agent-scope-config.js";
-import type { EmbeddedAgentRunMeta } from "../agents/embedded-agent-runner/types.js";
 import { measureAgentStartup } from "../agents/startup-timing.js";
 import { isExecutionIdentityCollectionEnabled } from "../audit/audit-config.js";
 import { readAgentRunTerminalOutcome } from "../channels/turn/agent-run-terminal-outcome.js";
@@ -58,31 +57,16 @@ import {
   resolveAgentIdFromSessionKey,
   scopeLegacySessionKeyToAgent,
 } from "../routing/session-key.js";
-import { type RuntimeEnv, writeRuntimeJson } from "../runtime.js";
+import type { RuntimeEnv } from "../runtime.js";
 import { normalizeMessageChannel } from "../utils/message-channel-normalize.js";
 import { sleep } from "../utils/sleep.js";
 import { resolveAgentGatewayIdentity } from "./agent-gateway-identity.js";
+import {
+  createYieldFollower,
+  readAcceptedRunContext,
+  type GatewayAgentResponse,
+} from "./agent-gateway-reply.js";
 import { readAgentMessageFile } from "./agent-message-input.js";
-
-type AgentGatewayResult = {
-  payloads?: Array<{
-    text?: string;
-    mediaUrl?: string | null;
-    mediaUrls?: string[];
-  }>;
-  deliveryStatus?: unknown;
-  meta?: EmbeddedAgentRunMeta;
-};
-
-type GatewayAgentResponse = {
-  runId?: string;
-  status?: string;
-  summary?: string;
-  reason?: string;
-  pendingInputId?: string;
-  result?: AgentGatewayResult;
-  deliveryStatus?: unknown;
-};
 
 const GATEWAY_TRANSIENT_CONNECT_RETRY_DELAYS_MS = [1_000, 2_000, 5_000, 10_000, 15_000] as const;
 
@@ -124,7 +108,6 @@ type AgentDispatchOpts = Omit<AgentCliOpts, "messageFile"> & {
   localGatewayCompatibilityAgentId?: string;
 };
 
-type AgentCliSignal = ProcessSignal;
 type GatewayAbortRequest = (...args: Parameters<GatewayRequestFunction>) => Promise<unknown>;
 
 function usesImplicitRemoteCompatibilityDefault(roster: RemoteGatewayRoster): boolean {
@@ -152,7 +135,7 @@ function resolveImplicitCliAgentId(cfg: OpenClawConfig, remote?: RemoteGatewayRo
 
 const GATEWAY_ABORT_RETRY_DELAYS_MS = [50, 150, 300, 600] as const;
 const GATEWAY_ABORT_REQUEST_TIMEOUT_MS = 2_000;
-const AGENT_CLI_SIGNAL_EXIT_CODES: Record<AgentCliSignal, number> = {
+const AGENT_CLI_SIGNAL_EXIT_CODES: Record<ProcessSignal, number> = {
   SIGINT: 130,
   SIGTERM: 143,
 };
@@ -449,18 +432,6 @@ function isAbortError(err: unknown): boolean {
   return err instanceof Error && err.name === "AbortError";
 }
 
-function readAcceptedRunContext(payload: unknown) {
-  const accepted = asOptionalRecord(payload);
-  if (accepted?.status !== "accepted") {
-    return undefined;
-  }
-  return {
-    runId: normalizeOptionalString(accepted.runId),
-    sessionKey: normalizeOptionalString(accepted.sessionKey),
-    agentId: normalizeOptionalString(accepted.agentId),
-  };
-}
-
 function isConfirmedChatAbortResponseForRun(value: unknown, runId: string): boolean {
   const response = asOptionalRecord(value);
   if (response?.aborted !== true) {
@@ -472,7 +443,7 @@ function isConfirmedChatAbortResponseForRun(value: unknown, runId: string): bool
   return Array.isArray(response.runIds) && response.runIds.includes(runId);
 }
 
-function exitForReceivedSignal(signal: AgentCliSignal | undefined, runtime: RuntimeEnv): boolean {
+function exitForReceivedSignal(signal: ProcessSignal | undefined, runtime: RuntimeEnv): boolean {
   if (!signal) {
     return false;
   }
@@ -482,7 +453,7 @@ function exitForReceivedSignal(signal: AgentCliSignal | undefined, runtime: Runt
 
 function returnAfterSignalExit<T>(
   value: T,
-  signal: AgentCliSignal | undefined,
+  signal: ProcessSignal | undefined,
   runtime: RuntimeEnv,
 ): T | undefined {
   return exitForReceivedSignal(signal, runtime) ? undefined : value;
@@ -494,12 +465,6 @@ function markAgentRunExitCode(status: unknown): void {
   }
   // Unknown reported statuses fail closed; let Node drain stdout before exiting.
   process.exitCode = status === "ok" || status === "completed" ? 0 : 1;
-}
-
-function formatInFlightGatewayAgentMessage(response: GatewayAgentResponse): string {
-  return response.runId
-    ? `Agent run ${response.runId} is already in flight; not starting a duplicate run.`
-    : "Agent run is already in flight; not starting a duplicate run.";
 }
 
 async function agentViaGatewayCommand(
@@ -658,6 +623,7 @@ async function agentViaGatewayCommand(
     }
     return false;
   };
+  const follower = createYieldFollower({ json: opts.json, timeoutSeconds, runtime });
   const dispatchGatewayAgentCall = async (activeCfg: OpenClawConfig) =>
     await withProgress(
       {
@@ -665,7 +631,7 @@ async function agentViaGatewayCommand(
         indeterminate: true,
         enabled: opts.json !== true,
       },
-      async () =>
+      async (progress) =>
         await callGateway({
           method: "agent",
           beforeDeviceIdentityLoad: prepareCliGatewayStateAccess,
@@ -702,9 +668,22 @@ async function agentViaGatewayCommand(
             runContext.accepted = readAcceptedRunContext(payload);
           },
           onSignalAbort: async (request) => {
+            // A yielded turn already ended; stopping the wait leaves its subagents running.
+            if (follower.following) {
+              return;
+            }
             activeConnectionAbortAttempted = true;
             activeConnectionAbortSucceeded = await abortGatewayRun(request, false);
           },
+          onEvent: (event) => follower.onEvent(event),
+          onResponse: async (_request, connection, result) =>
+            await follower.follow({
+              // SAFETY: the same final `agent` response this call returns as `response` below.
+              response: result as GatewayAgentResponse,
+              sessionKey: runContext.accepted?.sessionKey,
+              connection,
+              progress,
+            }),
           ...gatewayIdentity,
         }),
     );
@@ -716,6 +695,11 @@ async function agentViaGatewayCommand(
       response = await dispatchGatewayAgentCall(cfg);
       break;
     } catch (err) {
+      // The turn already answered; only the wait for its subagents ended early.
+      if (follower.following) {
+        response = follower.following;
+        break;
+      }
       if (
         !runContext.accepted &&
         shouldRetryGatewayDispatchWithShellEnvFallback(err) &&
@@ -764,52 +748,7 @@ async function agentViaGatewayCommand(
     throw new Error("gateway agent call did not return a response");
   }
   markAgentRunExitCode(response.status);
-
-  if (opts.json) {
-    const deliveryStatus = response.result?.deliveryStatus;
-    writeRuntimeJson(
-      runtime,
-      deliveryStatus === undefined ? response : { ...response, deliveryStatus },
-    );
-    return response;
-  }
-
-  const payloads = response.result?.payloads ?? [];
-  if (response.result?.meta?.requestShaping?.thinkingClamp) {
-    runtime.log(response.result.meta.requestShaping.thinkingClamp);
-  }
-
-  if (response.reason === "input_withdrawn_before_turn") {
-    runtime.error?.(response.summary);
-    return response;
-  }
-
-  if (response.status === "in_flight") {
-    runtime.error?.(formatInFlightGatewayAgentMessage(response));
-    return response;
-  }
-
-  if (payloads.length === 0) {
-    if (response?.status !== "ok") {
-      runtime.log(response?.summary ? response.summary : "No reply from agent.");
-    }
-    return response;
-  }
-
-  for (const payload of payloads) {
-    const { resolveSendableOutboundReplyParts } = await import("openclaw/plugin-sdk/reply-payload");
-    const { formatOutboundPayloadLog } = await import("../infra/outbound/payloads.js");
-    const parts = resolveSendableOutboundReplyParts({
-      text: payload.text,
-      mediaUrls: payload.mediaUrls,
-      mediaUrl: typeof payload.mediaUrl === "string" ? payload.mediaUrl : undefined,
-    });
-    const out = formatOutboundPayloadLog(parts).trimEnd();
-    if (out) {
-      runtime.log(out);
-    }
-  }
-
+  await follower.finish(response, runContext.accepted?.sessionKey);
   return response;
 }
 
@@ -901,6 +840,7 @@ export async function agentCliCommand(opts: AgentCliOpts, runtime: RuntimeEnv) {
         target: "agent state",
         onForeignOwner: "refuse",
         onlineAlternative: "Omit --local to run it through the Gateway.",
+        signal: signalBridge.signal,
         runLocal: () =>
           runEmbeddedAgentCommand(
             {

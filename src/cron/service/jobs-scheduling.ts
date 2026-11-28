@@ -13,10 +13,7 @@ import {
   setCronSourceIdentity,
 } from "../source-schedule.js";
 import { resolveCronStaggerMs } from "../stagger.js";
-import {
-  hasCanonicalCronDeliveryMode,
-  hasCanonicalCronFailureSettings,
-} from "../store/delivery-codec.js";
+import { hasCanonicalCronDeliveryMode } from "../store/delivery-codec.js";
 import type { CronScheduleMaintenanceOptions } from "../store/runtime-worker.types.js";
 import { resolveCronStreamBatching } from "../stream-schedule.js";
 import type { CronJob, CronSchedule } from "../types.js";
@@ -363,8 +360,8 @@ export function findJobOrThrow(state: CronServiceState, id: string) {
 }
 
 /** Returns the effective enabled flag, defaulting missing values to enabled. */
-export function isJobEnabled(job: Pick<CronJob, "enabled" | "failureAlert" | "delivery">): boolean {
-  return (job.enabled ?? true) && hasCanonicalCronFailureSettings(job);
+export function isJobEnabled(job: Pick<CronJob, "enabled">): boolean {
+  return job.enabled ?? true;
 }
 
 export function isTimeScheduledJob(job: Pick<CronJob, "schedule">): boolean {

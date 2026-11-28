@@ -167,9 +167,7 @@ Reloading or leaving the app does not preserve this in-memory draft.
 ## Choose a session workspace
 
 Open **Workspace** on New session to choose a saved project, a recent folder, or
-a repository URL. Long lists show the search field immediately; search remains
-available from the magnifying-glass button on shorter lists and stays visible
-while you scroll.
+a repository URL. The search/paste field opens immediately, even on short lists.
 
 For a new worktree, type part of a branch name in **From** to filter the loaded
 repository branches. The menu lists the default and current branches first,
@@ -180,9 +178,14 @@ or commit, or leave it blank for the Gateway default.
 Saved repositories show a repository icon and their `org/repo` identity when the
 Gateway provides it. Search matches both that identity and the project display
 name, so repositories from different organizations are easier to distinguish.
-The **Local projects** section filters the Gateway’s saved project catalog immediately;
-it does not scan the filesystem. GitHub search results appear separately, without
-repeating repositories already shown as local matches. If no local project matches,
+**Local projects** filters saved projects as you type. With GitHub search access,
+type at least two characters and pause to see matching repositories. Use the arrow
+keys and **Enter** to select a result, or paste a Git URL and press **Enter** to
+select that repository directly.
+When saved entries share a name and repository identity, the picker distinguishes
+them by checkout path if the Gateway supplies it, or by project ID otherwise.
+GitHub search results appear separately, without repeating repositories already
+shown as local matches. If no local project matches,
 the picker says so explicitly. Selecting a repository also shows its identity in
 the workspace control.
 Session-only connections receive the same read-safe repository identity for

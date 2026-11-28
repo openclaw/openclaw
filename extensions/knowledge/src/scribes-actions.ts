@@ -1,6 +1,7 @@
 /** Gateway writes behind the Scribes controls: start, run now, pause, turn off, repair and update. */
 import type { ControlUiHost } from "openclaw/plugin-sdk/control-ui";
 import { isRecord } from "openclaw/plugin-sdk/string-coerce-runtime";
+import { t } from "./i18n/index.js";
 import {
   checkRunMessage,
   defaultOptions,
@@ -17,6 +18,9 @@ import {
 import { jobConversationKey, type ScribeJob, type ScribeSnapshot } from "./scribes-state.js";
 
 type ScribeHost = Pick<ControlUiHost, "request" | "sessions">;
+
+/** Reader-safe failure from a classified scribe action, not a raw Gateway exception. */
+export class ScribeActionError extends Error {}
 
 /**
  * The scribe's conversation, ready for a message or an automation: its existing session (restored
@@ -43,7 +47,7 @@ async function conversation(host: ScribeHost, snapshot: ScribeSnapshot, agentId:
     surface: "plugin-dock",
   });
   if (!key) {
-    throw new Error("The scribe’s conversation could not be created.");
+    throw new ScribeActionError(t("knowledge.scribes.sessionNotCreated"));
   }
   // A retry after a failed write reuses this conversation instead of creating another.
   snapshot.session = { key, displayName: scribeLabel(snapshot.scribe) };
@@ -120,7 +124,7 @@ async function declareScribe(
       })
     : await host.request("cron.add", {
         delivery: { mode: "none" },
-        failureAlert: true,
+        failureAlert: { after: 2 },
         ...declaration.saved?.job,
         ...definition,
         agentId,
@@ -166,14 +170,18 @@ export async function startScribe(
   }
   const expr = "schedule" in setup.options ? setup.options.schedule : undefined;
   if (!expr) {
-    throw new Error("An ongoing scribe needs a schedule.");
+    throw new ScribeActionError(t("knowledge.scribes.scheduleRequired"));
   }
   const job = await declareScribe(host, snapshot, agentId, {
     schedule: { kind: "cron", expr, tz: setup.timezone },
     runMessage: text,
   });
   if (job?.enabled) {
-    await runScribeNow(host, job);
+    try {
+      await runScribeNow(host, job);
+    } catch {
+      throw new ScribeActionError(t("knowledge.scribeDialog.firstRunFailed"));
+    }
   }
 }
 
@@ -247,12 +255,7 @@ function savedOptions(job: ScribeJob) {
 }
 
 // What a refused run means for the operator, by the scheduler's reason.
-const RUN_REFUSALS: Record<string, string> = {
-  stopped: "the scheduler is stopped",
-  disabled: "the automation is disabled",
-  ownerless: "the automation lost its owner; Repair sets it up again",
-  "invalid-spec": "its schedule is invalid; Repair sets it up again",
-};
+const RUN_REFUSALS = new Set(["stopped", "disabled", "ownerless", "invalid-spec"]);
 
 /**
  * Run the scribe's automation now, even when it is not due. Rejects unless the scheduler queued
@@ -267,7 +270,13 @@ export async function runScribeNow(host: ScribeHost, job: ScribeJob) {
     return;
   }
   const reason = isRecord(answer) && typeof answer.reason === "string" ? answer.reason : "";
-  throw new Error(`The run did not start: ${(RUN_REFUSALS[reason] ?? reason) || "not accepted"}.`);
+  throw new ScribeActionError(
+    t(
+      RUN_REFUSALS.has(reason)
+        ? `knowledge.scribes.refusals.${reason}`
+        : "knowledge.scribes.refusals.other",
+    ),
+  );
 }
 
 /** Disable or enable the automation; rejected if it changed since it was read. */

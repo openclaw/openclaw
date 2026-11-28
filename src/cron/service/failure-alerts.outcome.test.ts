@@ -362,12 +362,11 @@ function createFixture() {
   });
   job.schedule = { kind: "every", everyMs: 60_000, anchorMs: clock.now };
   job.delivery = { mode: "none" };
-  job.failureAlert = true;
+  job.failureAlert = { after: 1, cooldownMs: 60_000 };
   const sendCronFailureAlert = vi.fn(async () => undefined);
   const state = createCronRegressionState({
     storePath: store.storePath,
     nowMs: () => clock.now,
-    cronConfig: { failureAlert: { channel: "last", after: 1, cooldownMs: 60_000 } },
     sendCronFailureAlert,
     runIsolatedAgentJob: vi.fn(),
   });

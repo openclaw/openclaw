@@ -816,7 +816,7 @@ describe.skipIf(!connection)("Gateway PostgreSQL cron lifecycle", () => {
         wakeMode: "now",
         payload: { kind: "agentTurn", message: unfinishedPrompt },
         delivery: { mode: "none" },
-        failureAlert: true,
+        failureAlert: { after: 1, cooldownMs: 0 },
       });
       // Omit the completion wait: the process must die with accepted, unfinished work.
       const unfinishedRun = await gateway.request<{ runId: string }>("cron.run", {

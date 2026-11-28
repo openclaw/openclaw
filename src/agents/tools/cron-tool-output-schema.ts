@@ -106,7 +106,6 @@ const CronStatusOutputSchema = closedObject({
   // Restricted automation runs receive only enabled; ordinary status includes
   // these scheduler-owned fields (older Gateways may omit newer fields).
   triggersEnabled: Type.Optional(Type.Boolean()),
-  failureAlertsEnabled: Type.Optional(Type.Boolean()),
   storePath: Type.Optional(Type.String()),
   storage: Type.Optional(Type.Literal("sqlite")),
   sqlitePath: Type.Optional(Type.String()),

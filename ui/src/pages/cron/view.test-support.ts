@@ -78,6 +78,7 @@ export function createCronViewProps(overrides: Partial<CronProps> = {}): CronPro
     models: { catalog: undefined, agent: undefined },
     timezoneSuggestions: [],
     deliveryToSuggestions: [],
+    failureAlertToSuggestions: [],
     accountSuggestions: [],
     onDetailTabChange: () => undefined,
     onCancelEdit: () => undefined,

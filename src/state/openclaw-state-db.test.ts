@@ -1367,8 +1367,8 @@ describe("openclaw state database", () => {
           failureDestination: {
             mode: "announce",
             channel: "slack",
-            to: null,
-            accountId: null,
+            to: undefined,
+            accountId: undefined,
           },
         },
         state: { lastStatus: "error", lastRunStatus: "error" },

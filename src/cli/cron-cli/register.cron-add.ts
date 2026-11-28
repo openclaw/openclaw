@@ -368,8 +368,6 @@ export function registerCronAddCommand(cron: Command) {
             }
 
             const params = {
-              failureAlert:
-                cmd.getOptionValueSource("failureAlert") === "cli" ? opts.failureAlert : undefined,
               name,
               declarationKey,
               displayName,
@@ -407,6 +405,7 @@ export function registerCronAddCommand(cron: Command) {
                     to: hasWebhook ? webhookUrl : normalizeOptionalString(opts.to),
                     threadId: hasWebhook ? undefined : threadId,
                     accountId: hasWebhook ? undefined : accountId,
+                    bestEffort: opts.bestEffortDeliver ? true : undefined,
                   }
                 : undefined,
             };

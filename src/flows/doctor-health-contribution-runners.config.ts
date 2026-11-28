@@ -343,16 +343,6 @@ export async function runWriteConfigHealth(
             for (const change of cronOwnerChanges) {
               ctx.runtime.log(change);
             }
-            const { repairScopedCronFailureAlertsBeforeConfigWrite } =
-              await import("../commands/doctor/cron/failure-alert-migration.js");
-            for (const change of await repairScopedCronFailureAlertsBeforeConfigWrite({
-              snapshot,
-              nextConfig,
-              env: ctx.env ?? process.env,
-              assertCurrent,
-            })) {
-              ctx.runtime.log(change);
-            }
             return { nextConfig };
           },
           afterWrite: { mode: "auto" },

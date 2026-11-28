@@ -4,7 +4,7 @@ import {
   CronJobConfigRevisionConflictError,
   resolveCronJobConfigRevision,
 } from "../cron/config-revision.js";
-import { assertValidCronAnnounceDelivery } from "../cron/delivery-channel-validation.js";
+import { assertValidCronCreateDelivery } from "../cron/delivery-channel-validation.js";
 import { normalizeCronJobCreate } from "../cron/normalize.js";
 import type { CronJobScratchWriteResult } from "../cron/scratch-contract.js";
 import type { CronServiceContract } from "../cron/service-contract.js";
@@ -52,7 +52,11 @@ export function createTemplateCronGateway(
       const config = getConfig();
       try {
         creator = await captureCreator?.(normalized, config);
-        await assertValidCronAnnounceDelivery({ cfg: config, delivery: normalized.delivery });
+        await assertValidCronCreateDelivery(
+          config,
+          { ...normalized, createdActor: creator?.createdActor },
+          cron.getDefaultAgentId(),
+        );
         guard();
         const actor = creator?.createdActor;
         options?.captureOwnerProfileId?.(

@@ -25,9 +25,9 @@ When a Gateway restart interrupts a running script before webhook delivery, Open
 
 Primary webhooks record delivery after an HTTP 2xx acknowledgment. An HTTP rejection
 records **Not delivered**. If the request may have reached the receiver but its
-response is lost or times out, delivery stays **Unknown**. OpenClaw does
-not retry that ambiguous send. If execution succeeded, completion also stays
-**Unknown**.
+response is lost or times out, delivery stays **Unknown**; the transport does not
+retry that ambiguous send. Required delivery also leaves completion unknown,
+while best-effort delivery can complete successfully without claiming delivery.
 
 When `gateway.publicOrigin` is configured and the Control UI is enabled, chat
 notifications include an `Inspect` link into the Control UI. Command and script
@@ -90,9 +90,9 @@ When an announcement omits `delivery.accountId`, OpenClaw uses the remembered se
 
 For announce delivery in the Control UI Automations editor, choose a channel and an explicit **Account ID** under **Advanced** to see configured conversation targets in the **To** field. Selecting a target preserves your chosen account and does not infer a topic. Changing the agent, delivery mode, channel, account, or recipient clears the previous topic when you save. These configured suggestions apply only to the primary announce destination; failure-alert routing remains separate. You can still enter a target that is not in the suggestions.
 
-On hosts with multiple configured channels, isolated announce jobs created with `automations add|create` or changed with `automations edit` must set `--channel <channel-plugin-id>` unless a provider-prefixed `--to` or a preserved session route selects the channel.
+On hosts with multiple configured channels, isolated announce jobs created with `automations add|create` or changed with `automations edit` must set `--channel <channel-plugin-id>` unless a provider-prefixed `--to` or a preserved session route selects the channel. Use `--best-effort-deliver` only when unresolved fallback delivery is acceptable; it does not choose a channel, and a delivery failure does not fail the job.
 
-Channel announcements retry transient failures only when no payload may have reached the recipient. A successful retry records delivery and clears the earlier attempt's error. Partial or ambiguous sends are not replayed by the announcement retry loop.
+Channel announcements retry transient failures only when no payload may have reached the recipient. A successful retry records delivery without retaining the earlier attempt's error, including with best-effort delivery. Partial or ambiguous sends are not replayed by the announcement retry loop.
 
 When announce delivery uses `channel: "last"` or omits `channel`, a provider-prefixed target such as `telegram:123` can select the channel before the scheduler falls back to session history or a single configured channel. Only prefixes advertised by the loaded plugin are provider selectors. If `delivery.channel` is explicit, the target prefix must name the same provider; `channel: "whatsapp"` with `to: "telegram:123"` is rejected instead of letting WhatsApp interpret the Telegram ID as a phone number. Target-kind and service prefixes (`channel:<id>`, `user:<id>`, `imessage:<handle>`, `sms:<number>`) stay channel-owned target syntax, not provider selectors.
 
@@ -153,7 +153,7 @@ The job owner is its `agentId`, else the agent in its session key, else the defa
 - Defaults resolve at run time. Stored jobs are never rewritten, so changing or removing a default moves future results of every job that relies on it. Jobs that already store an explicit route, including routes pinned at creation by earlier releases, keep it.
 - A default's `channel` must name an installed channel plugin; config validation rejects an unknown one, and `openclaw doctor` lists defaults whose channel plugin is not active. `cron.agents` keys that differ only by case are rejected.
 
-The global failure-alert route applies separately from these result destinations.
+Failure alerts have the same layers. `cron.creators.<profileId>.failureAlert` and `cron.agents.<agentId>.failureAlert` set the route fields (`mode`, `channel`, `to`, `threadId`, `accountId`) for that person's or agent's jobs; the creator route wins, and either replaces the `cron.failureAlert` route fields whole. Threshold, cooldown, skipped-run counting, and `enabled` stay Gateway-wide in `cron.failureAlert`. Failure routes also accept an optional `threadId`. For Telegram topics, use `to: "-100123456789", threadId: 1`; the existing `to: "-100123456789:topic:1"` form still works. No migration is required. Without these optional defaults, existing delivery and creating-conversation fallback behavior is unchanged. When no failure route is configured, alerts fall back to the job's primary announce destination, which includes a configured default destination. A `none` job still gets failure alerts through a configured failure route, as before.
 
 ### Owner delivery and direct messages
 
@@ -186,8 +186,6 @@ final-output delivery.
 
 ### Failure notifications
 
-Each automation has one **Failure alerts** switch. It starts from the Gateway default unless you explicitly turn it on or off. An eligible automation first asks the agent in the owning conversation to investigate. If that turn cannot start, or the job has no eligible owner conversation, it uses the global failure route when configured; otherwise it uses the automation's result destination. A partial global announce route keeps the result recipient when the channel matches, and keeps its account and thread when that recipient still matches. A job without a conversation or a destination records the failure in its run history.
-
 Failure-alert webhooks stay **Unknown** when the request may have reached the
 receiver but its response is lost. An explicit HTTP rejection or a failure proven
 to precede sending records **Not delivered** and allows the in-app fallback
@@ -197,17 +195,50 @@ When an alert on an owner-targeted route or a route with `directPolicy: "block"`
 recorded as Not delivered, its fallback turn stays in-session: it is not delivered
 automatically and has no current external conversation for implicit sends.
 
-The [Gateway failure-alert policy](/gateway/config-automation#cronfailurealert) controls the threshold, cooldown, route, and whether to alert on skipped runs. By default, alerts begin at the first failure with a one-hour cooldown between different failures. The same unresolved failure repeats at most daily, or less often if the cooldown is longer. Successful completion clears the incident without sending a notice. A local-provider preflight outage follows the threshold and cooldown even when other skips are excluded.
+A model-backed run can finish successfully even when its final reply says the requested task is blocked or could not be completed. The scheduler does not infer execution failure from assistant prose. Such a reply follows normal delivery: `announce` sends it, `none` stays silent, and `NO_REPLY` suppresses a text-only announcement without failing the run. A blocker report does not itself increment the execution-failure streak, trigger error backoff, or request a failure alert or owner-conversation repair. Runtime errors, such as provider failures and execution timeouts, still use the failure policy below.
 
-Failed required delivery stays failed even when the work succeeded. It does not increment the execution-failure streak. Delivery alerts use the owning conversation or a different global failure route, bypass the threshold, and honor the cooldown. They do not resend to the result destination that just failed.
+Execution failures use one scheduler-owned threshold and cooldown policy. A job with an existing failure route is covered by default from its first failure, with a 1-hour cooldown between different failures. The same unresolved failure is raised again at most once a day, so a failed fix is noticed on the next run of a daily or weekly job. The route can be a resolved failure destination or the job's primary announce target. A job created from a conversation always has that conversation to notify. Other jobs with no such route stay quiet unless a per-job or global `failureAlert` object explicitly activates the policy.
 
 A timed one-shot job that ends after a permanent failure or exhausted retries notifies on that final failure without waiting for the consecutive-failure threshold or the cooldown. A watcher-fired `on-exit` job ends on any execution error, including a transient one: retrying would rerun the watched command. Eligible owned jobs receive a repair request in their owner conversation; other jobs use the enabled failure-alert route. Operator cancellations and runs retired by a Gateway restart send no repair or alert.
 
+Repeated failures with the same cause form one incident and do not send repeated alerts, even after the cooldown expires or the Gateway restarts. A changed cause or destination can send a new alert after the cooldown. A successful run clears the incident and its cooldown without sending a notification, so the next failure can alert again; the recovery stays visible in automation history. Skipped runs and unknown delivery outcomes do not establish recovery. A successful quiet trigger check can recover a trigger failure, but cannot establish that a previously failed payload has recovered.
+
+Startup recovery reconciles incidents from saved run outcomes without sending historical notifications. A saved successful run clears the old incident even if its job-state update was interrupted, so a later recurrence can alert again.
+
+Failure notification routes resolve in this order:
+
+1. Route fields in the job's `failureAlert` object.
+2. `job.delivery.failureDestination`, layered over the destination fields in global `cron.failureAlert` (`mode`, `channel`, `to`, `threadId`, `accountId`), or over the creator's `cron.creators.<profileId>.failureAlert` route, else the owning agent's `cron.agents.<agentId>.failureAlert` route, when one exists. A `cron.failureDestination` block is not read directly; `openclaw doctor --fix` merges it into the global object.
+3. The job's primary announce target, including a configured [default destination](#default-destinations).
+   When this tier applies, failure alerts keep the primary target's owner targeting and `directPolicy`.
+
+- `job.failureAlert: false` disables execution and required-delivery failure alerts for that job.
+- Global `cron.failureAlert.enabled: false` disables inherited notifications. A per-job `failureAlert` object explicitly re-enables that job; `enabled: true` explicitly enables the global policy.
+- A per-job `failureAlert` object or any global `cron.failureAlert` object activates and tunes the policy even when the job had no existing route.
+- `delivery.bestEffort: true` suppresses inherited/default execution-failure alerts. An explicit per-job `failureAlert` remains authoritative.
+- `delivery.failureDestination` is only supported on `sessionTarget="isolated"` jobs unless the primary delivery mode is `webhook`.
+- Local-provider preflight skips use the normal failure-alert threshold, incident deduplication, and cooldown even when `failureAlert.includeSkipped` is unset or false. Start the provider or check its endpoint in automation history; recurring jobs remain enabled and resume after a later preflight succeeds. When a skipped one-shot has no remaining scheduled run, or the job is paused, restore the provider and use **Run Now** or reschedule the automation. Failure alerts distinguish these cases from jobs with another scheduled run. These skips do not request owner-conversation repair. Explicit alert opt-outs and best-effort policy still apply.
+- `failureAlert.includeSkipped: true` opts a job or global automation alert policy into other repeated skipped-run alerts. Skipped runs keep a separate consecutive-skip counter, so they do not affect execution-error backoff.
+- `openclaw automations edit` exposes per-job alert tuning: `--failure-alert`/`--no-failure-alert`, `--failure-alert-after <n>`, `--failure-alert-channel`, `--failure-alert-to`, `--failure-alert-cooldown`, `--failure-alert-include-skipped`/`--failure-alert-exclude-skipped`, `--failure-alert-mode`, and `--failure-alert-account-id`.
+
+In the Control UI automation editor, **Advanced** summarizes a custom alert destination and failure threshold. Open **Advanced** → **Failure alerts** to see the saved thread and edit the timing, chat recipient and account, or webhook URL. To change a separate thread ID, use `openclaw automations edit <jobId> --failure-alert-thread-id <id>`. An omitted channel displays the neutral `last` choice without storing it. Leave the threshold or cooldown blank, or choose **Default** for alert mode, to use the Gateway's normal global and routing defaults. Cooldowns accept decimal seconds with millisecond precision, including `0` for no cooldown; for example, `1.001` seconds preserves `1001` milliseconds. Editing other job fields or cloning a job preserves its alert policy, including its explicit thread/topic and skipped-run settings. Changing the destination clears a carried topic unless the same change supplies a replacement, matching normal delivery.
+
+A required completion-delivery failure is distinct from an execution failure: a run can record `status: "ok"` with `completionStatus: "failed"`. It does not increment the execution-failure streak or backoff. A delivery-failure alert can notify through a resolved alternate failure destination without waiting for `failureAlert.after`. Repeated delivery failures also form one incident. Alerts for changed failures, including the first delivery failure after an execution alert, honor the shared job/global `failureAlert.cooldownMs` (default 1 hour); suppressed alerts still leave the delivery failure in run history. Skipped runs and quiet trigger checks do not clear a delivery incident or its cooldown; successful completion does. The scheduler never retries the already-failed primary route for an alert.
+
+Chat failure notifications include the run start time in the agent's configured user timezone. When `gateway.publicOrigin` is configured and the Control UI is enabled, they also include an `Inspect` link to the automation run. Webhook message text stays stable; integrations can read the same instant from the structured `runAtMs` field and construct their own links.
+Chat notifications show normalized failure causes or allowlisted producer facts for known command and script failures. Arbitrary commands, paths, provider bodies, secrets, delivery errors, skip reasons, diagnostics, and stack/error text remain in automation history. Failure webhooks retain the structured raw error for diagnostic integrations.
+
+Billing and upstream-service failure notifications also explain the next step:
+resolve billing with the provider account owner, retry after a service failure,
+or choose another provider for the automation.
+
 #### Owner-conversation repair
 
-For eligible automations, the agent in the owning conversation can diagnose the problem, make a safe repair, or tell you what it needs.
+Repair is on by default for owned automations with inherited failure destinations: every failure notice for such a job goes to the conversation that created it instead of to chat, and the agent there is the user's notice. If that turn cannot start, the normal alert is sent instead. A job with `failureAlert: false` gets neither.
 
-When an eligible job created from a conversation (it has an owner session) fails and alerts are on, OpenClaw sends a repair request to that owner conversation instead of the alert. The request names the job and includes its schedule, name, payload, and last error; the name, payload, and error are marked as untrusted data. Command jobs and on-exit or stream schedules are operator-only and alert as before.
+An explicitly selected job-level failure destination bypasses repair: setting `channel`, `to`, or `accountId` in `job.failureAlert` or `job.delivery.failureDestination` sends the alert directly to the resolved failure route, even when the job has an owner conversation. No separate repair opt-out key is needed. Destinations inherited from the primary announce route or global `cron.failureAlert` keep repair-first behavior. Overrides that only tune `after`, `cooldownMs`, or `includeSkipped`, or only select `mode`, do not bypass repair. Explicit destinations still honor alert opt-outs, thresholds, cooldowns, quick-retry holds, and incident deduplication. Terminal one-shot failures still bypass the threshold as described above.
+
+When an eligible job created from a conversation (it has an owner session) fails and the inherited alert would go to chat (`announce` mode), OpenClaw sends a repair request to that owner conversation instead of the alert. The request names the job and includes its schedule, name, payload, and last error; the name, payload, and error are marked as untrusted data. Command jobs and on-exit or stream schedules are operator-only and alert as before.
 
 The conversation handles the request as a system turn: it runs in that conversation's session, with its transcript, workspace, and tool policy, and the reply goes to the conversation's own route, including its thread or topic. Heartbeat settings do not apply. For recurring jobs, a transient outage gets no reply, a problem it can fix in the workspace (for example the helper script or instructions file the job follows) gets fixed with a one-line note, and otherwise it tells you in plain words what is broken and what it needs. For a terminal one-shot failure, the agent does the still-needed work or schedules a corrected automation, stays silent if the work is no longer needed, or asks you for what is missing. The repair turn acts for the job's requester, the same person or operator the job's own runs act for. When that requester is still an owner, the turn keeps owner-only tools such as automation control, so it can read the job's runs and update the job it repairs; OpenClaw rechecks owner status before each owner-only action. When the requester is not an owner, or no longer is, the turn can only read the automations that conversation can see. A job that records no requester uses the conversation owner's current access. Scheduler notices about a job, such as the auto-disable notice, follow the same rule.
 

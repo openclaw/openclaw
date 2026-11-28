@@ -125,26 +125,6 @@ extension OpenClawChatViewModel {
             },
             pullRequests: self.sessionPullRequests?.key == self.sessionKey ? self.sessionPullRequests?.snapshot : nil)
     }
-
-    /// A child's order and latest reply, through the transcript's own decoding and visible-text rules.
-    func loadActivityChildTranscript(sessionKey: String) async throws -> ChatActivityChildTranscript {
-        var page = try await self.transport.requestHistory(sessionKey: sessionKey)
-        let sessionID = page.sessionId
-        var order: String?
-        var reply: String?
-        var cursors = Set<String>()
-        repeat {
-            try Task.checkCancellation()
-            let messages = await Self.decodeMessages(page.messages ?? [], activity: page.activity)
-            let transcript = ChatActivityChildTranscript(messages: messages)
-            order = order ?? transcript.order
-            reply = reply ?? transcript.latestReply
-            guard order == nil || reply == nil, page.hasMore != false,
-                  let cursor = page.olderCursor, cursors.insert(cursor).inserted else { break }
-            page = try await self.transport.requestHistory(sessionKey: sessionKey, cursor: cursor)
-        } while page.sessionId == sessionID
-        return ChatActivityChildTranscript(order: order, latestReply: reply)
-    }
 }
 
 struct ChatGoalActivity {
@@ -156,34 +136,4 @@ struct ChatGoalActivity {
 struct ChatPullRequestWatch {
     var key: String?
     var task: Task<Void, Never>?
-}
-
-struct ChatActivityChildTranscript: Equatable {
-    let order: String?
-    let latestReply: String?
-
-    init(order: String?, latestReply: String?) {
-        self.order = order
-        self.latestReply = latestReply
-    }
-
-    init(messages: [OpenClawChatMessage]) {
-        var order: String?
-        var reply: String?
-        for message in messages.reversed() {
-            let role = message.role.lowercased()
-            let origin = message.provenance
-            // chat.history presents sessions_send input as an assistant bubble from the sending agent.
-            let instruction = message.isForwardedTurnBoundary ||
-                (origin?.kind == "inter_session" && origin?.sourceTool == "sessions_spawn") ||
-                (role == "user" && (origin == nil || origin?.kind == "external_user"))
-            let authoredReply = role == "assistant" && origin?.kind != "inter_session" &&
-                origin?.kind != "internal_system" && message.stopReason != "error"
-            guard (order == nil && instruction) || (reply == nil && authoredReply),
-                  let text = ChatMessageVisibleText.visibleText(in: message).trimmedNonEmpty else { continue }
-            if instruction { order = text } else { reply = text }
-            if order != nil, reply != nil { break }
-        }
-        self.init(order: order, latestReply: reply)
-    }
 }

@@ -561,6 +561,7 @@ it.for([
             expect(Boolean(outcome.deliveryError)).toBe(unavailable || otherConversation);
             expect(
               resolveAdmittedCronCompletionStatus(
+                job,
                 "ok",
                 notificationDisabled
                   ? "not-requested"
@@ -588,6 +589,7 @@ it.for([
             expect(sendText).not.toHaveBeenCalled();
             expect(
               resolveAdmittedCronCompletionStatus(
+                job,
                 "ok",
                 "not-delivered",
                 outcome.deliverySuppressionReason,

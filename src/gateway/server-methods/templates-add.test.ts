@@ -63,7 +63,7 @@ vi.mock("../../config/io.runtime.js", async (importOriginal) => ({
 }));
 vi.mock("../../cron/delivery-channel-validation.js", async (importOriginal) => ({
   ...(await importOriginal<typeof import("../../cron/delivery-channel-validation.js")>()),
-  assertValidCronAnnounceDelivery: validateDelivery,
+  assertValidCronCreateDelivery: validateDelivery,
 }));
 vi.mock("../../plugins/management-mutations.js", async (importOriginal) => ({
   ...(await importOriginal<typeof import("../../plugins/management-mutations.js")>()),
@@ -411,14 +411,9 @@ it.each([
 
 it("validates Template schedule delivery before calling the scheduler", async () => {
   const cron = makeCron({});
-  const delivery = { mode: "announce" as const, channel: "unconfigured", to: "fixture-recipient" };
-  validateDelivery.mockRejectedValueOnce(new Error("Unconfigured announce route"));
-  const request = await applyThrough(
-    (input) => input.cronGateway!.add({ ...schedule, delivery }),
-    { cron },
-    enabled,
-  );
-  expect(validateDelivery).toHaveBeenCalledWith(expect.objectContaining({ delivery }));
+  const config = { ...enabled, cron: { failureAlert: { channel: "unconfigured" } } };
+  validateDelivery.mockRejectedValueOnce(new Error("Unconfigured failure route"));
+  const request = await applyThrough((input) => input.cronGateway!.add(schedule), { cron }, config);
 
   expect(cron.add).not.toHaveBeenCalled();
   expect(request[0]?.[2]).toMatchObject({ code: "UNAVAILABLE" });

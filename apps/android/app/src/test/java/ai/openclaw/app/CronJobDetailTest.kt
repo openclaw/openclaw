@@ -3,7 +3,6 @@ package ai.openclaw.app
 import ai.openclaw.app.i18n.resolveNativeText
 import kotlinx.serialization.json.Json
 import kotlinx.serialization.json.JsonObject
-import kotlinx.serialization.json.JsonPrimitive
 import kotlinx.serialization.json.buildJsonObject
 import kotlinx.serialization.json.jsonArray
 import kotlinx.serialization.json.jsonObject
@@ -58,7 +57,7 @@ class CronJobDetailTest {
     assertEquals("openai/gpt-5.5", detail.payloadModel)
     assertEquals("high", detail.payloadThinking)
     assertEquals("Announce · telegram · chat-42 · Account primary", detail.deliveryLabel.resolveNativeText())
-    assertEquals("On", detail.failureAlertLabel.resolveNativeText())
+    assertEquals("After 3 · Announce · telegram · ops · Cooldown Every 1h", detail.failureAlertLabel.resolveNativeText())
     assertEquals(2L, detail.consecutiveErrors)
     assertEquals("error", detail.lastRunStatus)
   }
@@ -92,15 +91,20 @@ class CronJobDetailTest {
   }
 
   @Test
-  fun distinguishesDisabledFailureAlertsFromDefaults() {
-    val job = parseJob()
-    val disabledJob = JsonObject(job + ("failureAlert" to JsonPrimitive(false)))
-    val defaultJob = JsonObject(job - "failureAlert")
-    val disabledDetail = requireNotNull(parseGatewayCronJobDetail(disabledJob))
-    val defaultDetail = requireNotNull(parseGatewayCronJobDetail(defaultJob))
+  fun preservesWholeMinutesWhenProjectingFailureCooldowns() {
+    val cases = listOf(88_200_000L to "Every 1470m", 86_400_000L to "Every 1d")
 
-    assertEquals("Off", disabledDetail.failureAlertLabel.resolveNativeText())
-    assertEquals("Default", defaultDetail.failureAlertLabel.resolveNativeText())
+    for ((cooldownMs, expected) in cases) {
+      val alert =
+        buildJsonObject {
+          put("after", 3)
+          put("cooldownMs", cooldownMs)
+        }
+      val job = JsonObject(parseJob() + ("failureAlert" to alert))
+      val detail = requireNotNull(parseGatewayCronJobDetail(job))
+
+      assertEquals("After 3 · Cooldown $expected", detail.failureAlertLabel.resolveNativeText())
+    }
   }
 
   @Test
@@ -208,7 +212,7 @@ class CronJobDetailTest {
           "wakeMode": "now",
           "payload": $payload,
           "delivery": {"mode":"announce","channel":"telegram","to":"chat-42","accountId":"primary"},
-          "failureAlert": true,
+          "failureAlert": {"after":3,"mode":"announce","channel":"telegram","to":"ops","cooldownMs":3600000},
           "state": {
             "nextRunAtMs": 3000,
             "lastRunAtMs": 2500,

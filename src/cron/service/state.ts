@@ -621,7 +621,6 @@ export type CronWakeMode = "now" | "next-heartbeat";
 export type CronStatusSummary = {
   enabled: boolean;
   triggersEnabled: boolean;
-  failureAlertsEnabled?: boolean;
   /** @deprecated Alias for `sqlitePath`. */
   storePath: string;
   storage: "sqlite";

@@ -19,8 +19,6 @@ import {
 import {
   CRON_DELIVERY_REPAIR_REQUIRED_MESSAGE,
   hasCanonicalCronDeliveryMode,
-  hasCanonicalCronFailureSettings,
-  CRON_FAILURE_SETTINGS_REPAIR_REQUIRED_MESSAGE,
 } from "../store/delivery-codec.js";
 import { planCronJobMutation } from "../store/job-mutations.js";
 import type {
@@ -220,13 +218,13 @@ export async function ensureLoaded(
   const durableNextRunAtMsByJobId = new Map<string, number | undefined>();
   const quarantinedConfigJobs: QuarantinedCronConfigJob[] = [...loaded.invalidConfigRows];
   for (const [index, raw] of loadedJobs.entries()) {
-    if (!hasCanonicalCronDeliveryMode(raw.delivery) || !hasCanonicalCronFailureSettings(raw)) {
+    if (!hasCanonicalCronDeliveryMode(raw.delivery)) {
       const warningKey = `delivery:${raw.id}`;
       if (!state.warnedInvalidPersistedJobKeys.has(warningKey)) {
         state.warnedInvalidPersistedJobKeys.add(warningKey);
         state.deps.log.warn(
           { jobId: raw.id },
-          `cron: job execution withheld: ${hasCanonicalCronFailureSettings(raw) ? CRON_DELIVERY_REPAIR_REQUIRED_MESSAGE : CRON_FAILURE_SETTINGS_REPAIR_REQUIRED_MESSAGE}`,
+          `cron: job execution withheld: ${CRON_DELIVERY_REPAIR_REQUIRED_MESSAGE}`,
         );
       }
     }

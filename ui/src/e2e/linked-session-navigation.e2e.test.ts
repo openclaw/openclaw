@@ -70,9 +70,10 @@ suite.define(() => {
             },
           });
           await page.goto(`${suite.server.baseUrl}settings/worktrees`);
-          const link = page
-            .locator("openclaw-worktrees-page")
-            .getByRole("link", { name: "Session", exact: true });
+          const worktrees = page.locator("openclaw-worktrees-page");
+          // The owner link sits in the row's collapsed repository details.
+          await worktrees.locator(".worktree-row__details summary").click();
+          const link = worktrees.getByRole("link", { name: "Session", exact: true });
           await link.waitFor({ state: "visible" });
           const primaryKeys = () =>
             evaluateControlUiContext(

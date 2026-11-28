@@ -77,6 +77,7 @@ import {
   telegramDisabledAccountConfig,
   msteamsConfig,
   slackSynologyConfig,
+  slackConfig,
 } from "./cron.validation.test-support.js";
 import type { GatewayClient } from "./types.js";
 
@@ -1931,40 +1932,128 @@ describe("cron method validation", () => {
     },
   );
 
-  it.each([true, false, null])(
-    "updates the failure-alert switch without changing the result destination (%j)",
-    async (failureAlert) => {
-      setRuntimeConfig(telegramSlackConfig());
-      const delivery = { mode: "announce" as const, channel: "telegram", to: "telegram:1" };
-      const { context, respond } = await invokeCronUpdate(
-        { id: "cron-1", patch: { failureAlert } },
-        createCronJob({ delivery }),
-      );
-      expect(context.cron.update).toHaveBeenCalledExactlyOnceWith("cron-1", { failureAlert });
+  const failureAlertChannelError = {
+    code: "INVALID_REQUEST",
+    messageIncludes: "failureAlert.channel",
+  } as const;
+
+  function globalFailureAlertConfig(
+    config: OpenClawConfig,
+    failureAlert: NonNullable<OpenClawConfig["cron"]>["failureAlert"],
+  ): OpenClawConfig {
+    return { ...config, cron: { failureAlert } };
+  }
+
+  function createRoutedCronJob(
+    channel: string,
+    to: string,
+    overrides: Pick<Partial<CronJob>, "failureAlert"> = {},
+  ): CronJob {
+    return createCronJob({ delivery: { mode: "announce", channel, to }, ...overrides });
+  }
+
+  function failureAlertUpdateAccepted(
+    title: string,
+    patch: Record<string, unknown>,
+    currentJob: CronJob = createCronJob(),
+    config: OpenClawConfig = telegramSlackConfig(),
+  ): void {
+    it(title, async () => {
+      setRuntimeConfig(config);
+      const { context, respond } = await invokeCronUpdate({ id: "cron-1", patch }, currentJob);
+      expect(context.cron.update).toHaveBeenCalled();
       expectCronSuccess(respond);
-    },
+    });
+  }
+
+  function failureAlertUpdateRejected(
+    title: string,
+    patch: Record<string, unknown>,
+    currentJob: CronJob = createCronJob(),
+    config: OpenClawConfig = telegramSlackConfig(),
+  ): void {
+    it(title, async () => {
+      setRuntimeConfig(config);
+      const { context, respond } = await invokeCronUpdate({ id: "cron-1", patch }, currentJob);
+      expect(context.cron.update).not.toHaveBeenCalled();
+      expectResponseError(respond, failureAlertChannelError);
+    });
+  }
+
+  function failureAlertAddRejected(
+    title: string,
+    params: Record<string, unknown>,
+    config: OpenClawConfig,
+  ): void {
+    it(title, async () => {
+      setRuntimeConfig(config);
+      const { context, respond } = await invokeCronAdd(params);
+      expect(context.cron.add).not.toHaveBeenCalled();
+      expectResponseError(respond, failureAlertChannelError);
+    });
+  }
+
+  // An explicit job channel selects announce routing ahead of the global
+  // webhook destination, so the canonical resolver must validate it.
+  failureAlertUpdateRejected(
+    "validates an explicit failureAlert channel ahead of a global webhook on cron.update",
+    { failureAlert: { channel: "C0EXAMPLE01", to: "https://example.invalid/hook" } },
+    createCronJob(),
+    globalFailureAlertConfig(telegramSlackConfig(), { enabled: true, mode: "webhook" }),
+  );
+
+  failureAlertAddRejected(
+    "validates an explicit failureAlert channel ahead of a global webhook on cron.add",
+    agentTurnCronParams({
+      name: "inherited webhook alert",
+      failureAlert: { channel: "C0EXAMPLE01", to: "https://example.invalid/hook" },
+    }),
+    globalFailureAlertConfig(slackConfig(), { enabled: true, mode: "webhook" }),
+  );
+
+  // Route-backed alerts are already active by default, so a threshold-only edit
+  // must not revalidate a legacy channel that the patch does not change.
+  failureAlertUpdateAccepted(
+    "does not revalidate a route-backed legacy channel for a threshold-only edit",
+    { failureAlert: { after: 3 } },
+    createRoutedCronJob("c0legacyinvalid", "123"),
   );
 
   it.each([
-    { failureAlert: { after: 3 } },
-    { failureAlert: { channel: "telegram", to: "telegram:1" } },
-    { delivery: { failureDestination: { channel: "telegram", to: "telegram:1" } } },
-  ])("rejects retired alert settings on cron.update (%j)", async (patch) => {
-    const { context, respond } = await invokeCronUpdate({ id: "cron-1", patch }, createCronJob());
-    expect(context.cron.update).not.toHaveBeenCalled();
-    expectResponseError(respond, {
-      code: "INVALID_REQUEST",
-      messageIncludes: "invalid cron.update",
-    });
+    {
+      name: "provider-alias recipient",
+      delivery: { mode: "announce", channel: "slack", to: "slack:C123" },
+      alertTo: "tg:123",
+    },
+  ] as const)("lets a $name select its own alert channel", async ({ delivery, alertTo }) => {
+    setRuntimeConfig(telegramSlackConfig());
+
+    const { context, respond } = await invokeCronUpdate(
+      { id: "cron-1", patch: { failureAlert: { to: alertTo } } },
+      createCronJob({ delivery }),
+    );
+
+    expect(context.cron.update).toHaveBeenCalled();
+    expectCronSuccess(respond);
   });
 
-  it("rejects retired alert settings on cron.add", async () => {
-    const { context, respond } = await invokeCronAdd(
-      agentTurnCronParams({ failureAlert: { channel: "telegram", to: "telegram:1" } }),
-    );
-    expect(context.cron.add).not.toHaveBeenCalled();
-    expectResponseError(respond, { code: "INVALID_REQUEST", messageIncludes: "invalid cron.add" });
-  });
+  failureAlertUpdateAccepted(
+    "does not inherit a primary recipient for another explicit failure-alert channel",
+    { failureAlert: { channel: "slack" } },
+    createRoutedCronJob("telegram", "telegram:1"),
+  );
+
+  failureAlertAddRejected(
+    "rejects an unconfigured inherited global failure-alert channel",
+    agentTurnCronParams({
+      delivery: { mode: "announce", channel: "telegram", to: "telegram:1" },
+    }),
+    globalFailureAlertConfig(telegramConfig(), {
+      enabled: true,
+      channel: "slack",
+      to: "slack:C123",
+    }),
+  );
 
   // Creation records no host inference account for a CLI-backed model, so an
   // edit must accept the same model ref instead of demanding a stored account.

@@ -420,7 +420,7 @@ describe("production lint suppressions", () => {
         "src/plugins/plugin-return-value.ts|typescript/prefer-promise-reject-errors|1",
         "src/plugins/plugin-return-value.ts|typescript/unbound-method|1",
         "src/plugins/plugin-return-value.ts|unicorn/no-thenable|1",
-        "src/plugins/provider-login-options.ts|unicorn/no-array-sort|2",
+        "src/plugins/provider-login-options.ts|unicorn/no-array-sort|1",
         "src/plugins/provider-registry-selection.ts|unicorn/no-array-sort|1",
         "src/plugins/public-surface-loader.ts|typescript/no-unnecessary-type-parameters|3",
         // Admission records original factory identities; executable views bind their receivers.

@@ -188,6 +188,14 @@ function coerceDelivery(delivery: UnknownRecord) {
       delete next[field];
     }
   }
+  if ("failureDestination" in next && next.failureDestination !== null) {
+    // Null is an explicit clear signal in patches; invalid objects are dropped.
+    if (isRecord(next.failureDestination)) {
+      next.failureDestination = coerceFailureDestination(next.failureDestination);
+    } else {
+      delete next.failureDestination;
+    }
+  }
   if ("completionDestination" in next && next.completionDestination !== null) {
     // Completion destinations are currently webhook-only, so other shapes are
     // discarded before they can persist as ambiguous config.
@@ -214,6 +222,42 @@ function coerceCompletionDestination(value: UnknownRecord) {
     mode,
     ...(to ? { to } : {}),
   } satisfies UnknownRecord;
+}
+
+function coerceFailureDestination(value: UnknownRecord) {
+  const next = snapshotOwnCronRecord(value);
+  if (next.threadId != null) {
+    const threadId = parseDeliveryInput({ threadId: next.threadId }).threadId;
+    if (threadId !== undefined) {
+      next.threadId = threadId;
+    } else {
+      delete next.threadId;
+    }
+  }
+  for (const [field, normalize] of [
+    ["channel", normalizeOptionalLowercaseString],
+    ["to", normalizeOptionalString],
+    ["accountId", normalizeOptionalString],
+  ] as const) {
+    if (next[field] == null) {
+      continue;
+    }
+    const normalized = normalize(next[field]);
+    if (normalized) {
+      next[field] = normalized;
+    } else {
+      delete next[field];
+    }
+  }
+  if (next.mode != null) {
+    const mode = normalizeOptionalLowercaseString(next.mode);
+    if (mode === "announce" || mode === "webhook") {
+      next.mode = mode;
+    } else {
+      delete next.mode;
+    }
+  }
+  return { ...next };
 }
 
 function normalizeSessionTarget(raw: unknown) {

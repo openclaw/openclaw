@@ -157,7 +157,9 @@ describe("local owner matching-number dialog", () => {
     fixture.expired = true;
     fixture.listeners.forEach((listener) => listener());
     await vi.waitFor(() => expect(document.body.textContent).not.toContain("The numbers match"));
-    expect(document.body.textContent).toContain("expired or was cancelled");
+    expect(document.body.textContent).toContain(
+      "The other browser’s request expired or was canceled. Start a new request there.",
+    );
     expect(document.querySelector("input")).toBeNull();
     expect(fixture.decide).not.toHaveBeenCalled();
     fixture.code = undefined;

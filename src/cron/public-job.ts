@@ -1,4 +1,3 @@
-import { hasCanonicalCronFailureSettings } from "./store/delivery-codec.js";
 import type { CronJob, CronStoredJob } from "./types.js";
 
 /** Remove scheduler-only state before a cron job crosses a public API boundary. */
@@ -35,11 +34,6 @@ export function toPublicCronJob(job: CronStoredJob): CronJob {
   delete state.runningScheduleChangeId;
   delete state.failureAlertIncident;
   delete state.lastFailureNotificationId;
-  if (!hasCanonicalCronFailureSettings(publicJob)) {
-    publicJob.enabled = false;
-    delete publicJob.delivery;
-    delete publicJob.failureAlert;
-  }
   return {
     ...publicJob,
     state,

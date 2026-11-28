@@ -42,7 +42,7 @@ describe("CronService silent failure alerts", { concurrent: false }, () => {
           ...cronTestDeps({ storePath }),
           cronConfig: {
             triggers: { enabled: true },
-            failureAlert: { enabled: true, channel: "last", after: 1, cooldownMs: 0 },
+            failureAlert: { enabled: true, after: 1, cooldownMs: 0 },
           },
           sendCronFailureAlert,
           admitScheduledOccurrence: ({ job }) =>

@@ -181,7 +181,7 @@ it.each([
   ({ priorErrors, restart }) => {
     const { job, apply, deferredNotifications } = outcomeFixture(startedAt, {
       state: { consecutiveErrors: priorErrors },
-      failureAlert: true,
+      failureAlert: { after: 1, cooldownMs: 0 },
     });
     apply({ ...restartFailure(), interruptedByRestart: restart });
 
@@ -281,11 +281,10 @@ it.each([
   ["cron", { kind: "cron", expr: "0 6,10,14,18 * * 1-5", tz: "UTC" }],
 ] as const)("runs a %s job on its first slot after the provider's reset", (_, jobSchedule) => {
   const resetAt = startedAt + 6 * 24 * 60 * 60 * 1000 + 30 * 60_000;
-  const { job, apply, deferredNotifications } = outcomeFixture(
-    startedAt,
-    { schedule: jobSchedule, failureAlert: true },
-    { cronConfig: { failureAlert: { after: 1, cooldownMs: 0 } } },
-  );
+  const { job, apply, deferredNotifications } = outcomeFixture(startedAt, {
+    schedule: jobSchedule,
+    failureAlert: { after: 1, cooldownMs: 0 },
+  });
   apply({
     status: "error",
     error: "429 rate limited",
@@ -430,13 +429,8 @@ it("records failure diagnostics and keeps the job scheduled on its tenth consecu
   } satisfies NonNullable<Parameters<typeof applyJobResult>[2]["diagnostics"]>;
   const { state, job, apply, deferredNotifications } = outcomeFixture(
     startedAt,
-    { state: { consecutiveErrors: 8 }, failureAlert: true },
-    {
-      enqueueSessionEvent,
-      sendCronFailureAlert,
-      log,
-      cronConfig: { failureAlert: { after: 10, cooldownMs: 0 } },
-    },
+    { state: { consecutiveErrors: 8 }, failureAlert: { after: 10, cooldownMs: 0 } },
+    { enqueueSessionEvent, sendCronFailureAlert, log },
   );
   apply({ status: "error", error: "ninth failure", diagnostics: structuredClone(diagnostics) });
   expect(job.enabled).toBe(true);
@@ -487,16 +481,12 @@ it.each([
     const { state, job, apply, deferredNotifications } = outcomeFixture(
       startedAt,
       {
-        failureAlert: true,
+        failureAlert: { cooldownMs: 0 },
         ...(hasOperatorSource
           ? { operatorSource: { source: operatorSource, executionRevision: "fixture-revision" } }
           : {}),
       },
-      {
-        enqueueSessionEvent,
-        sendCronFailureAlert,
-        cronConfig: { failureAlert: { cooldownMs: 0 } },
-      },
+      { enqueueSessionEvent, sendCronFailureAlert },
     );
     const refusal = createUnrecordedScheduledAccountRefusal({
       runtime: "codex",
@@ -709,13 +699,9 @@ it("pauses a parent-linked job once when its parent conversation is gone", () =>
 });
 
 it("sends one notice when an alert route also reports skipped runs", () => {
-  const { job, apply, deferredNotifications } = outcomeFixture(
-    startedAt,
-    { failureAlert: true },
-    {
-      cronConfig: { failureAlert: { after: 1, cooldownMs: 0, includeSkipped: true } },
-    },
-  );
+  const { job, apply, deferredNotifications } = outcomeFixture(startedAt, {
+    failureAlert: { after: 1, cooldownMs: 0, includeSkipped: true },
+  });
   apply(parentPause());
   expect(job.enabled).toBe(false);
   expect(deferredNotifications).toEqual([pauseNotice]);

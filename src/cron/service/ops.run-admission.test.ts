@@ -195,13 +195,12 @@ describe("cron service run admission", () => {
     const job = makeJob("invalid-manual-stale-notification", dueAt);
     job.sessionTarget = "main";
     job.payload = { kind: "command", argv: ["echo", "invalid main payload"] };
-    job.failureAlert = true;
+    job.failureAlert = { after: 1, cooldownMs: 60_000, includeSkipped: true };
     const sendCronFailureAlert = vi.fn(async () => {});
     const editedName = "edited after invalid-run commit";
     let edited = false;
     let persistedStatusAtEvent: string | undefined;
     const { state } = await createCronRunFixture(store.storePath, job, {
-      cronConfig: { failureAlert: { channel: "last", includeSkipped: true } },
       sendCronFailureAlert,
       runIsolatedAgentJob: vi.fn(),
       onEvent: (event) => {

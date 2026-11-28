@@ -169,7 +169,7 @@ describe("undecodable scheduled authority", () => {
         schedule: { kind: "every", everyMs: 60_000, anchorMs: nowMs },
         wakeMode: "next-heartbeat",
         delivery: { mode: "none" },
-        failureAlert: true,
+        failureAlert: { after: 1, channel: "telegram", to: "fixture-recipient" },
         state: { nextRunAtMs: nowMs + 60_000 },
         operatorSource: scenario?.operatorSource ?? {
           executionRevision: "invalid",
@@ -210,7 +210,6 @@ describe("undecodable scheduled authority", () => {
         nowMs: clock.clock.now,
         storePath,
         cronEnabled: true,
-        cronConfig: { failureAlert: { channel: "telegram", to: "fixture-recipient" } },
         defaultAgentId: "main",
         log: logger,
         enqueueSystemEvent,

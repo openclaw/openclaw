@@ -11,7 +11,7 @@ export const reviewJob = {
   configRevision: "rev-7",
   sessionTarget: "session:s-review",
   schedule: { kind: "cron", expr: "45 3 * * 0" },
-  failureAlert: true,
+  failureAlert: { after: 2 },
   state: { lastRunStatus: "ok", lastRunAtMs: 1_793_000_000_000, nextRunAtMs: 1_793_090_000_000 },
 };
 

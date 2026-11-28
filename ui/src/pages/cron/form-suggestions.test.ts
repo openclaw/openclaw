@@ -72,7 +72,10 @@ async function mountSuggestions(conversations: ConversationListItem[]) {
         // A real ID must survive even when another account uses it as a name.
         { accountId: "ops", name: "work" },
       ],
-      discord: [{ accountId: "discord-account", name: "Discord account" }],
+      discord: [
+        { accountId: " default ", name: "Discord default" },
+        { accountId: "discord-account", name: "Discord account" },
+      ],
     },
     channelDefaultAccountId: { telegram: "default", discord: "discord-account" },
   };
@@ -106,6 +109,7 @@ it.each([
     // Inspect each projection of the accepted directory without requesting a replacement.
     page.cron.cronForm.deliveryChannel = channel;
     page.cron.cronForm.deliveryMode = mode;
+    page.cron.cronForm.failureAlertDeliveryMode = mode === "webhook" ? "announce" : "webhook";
     page.refreshView();
     await waitForCronPage(() => {
       expect(suggestions(page, "cron-delivery-to-suggestions")).toEqual(
@@ -117,6 +121,11 @@ it.each([
               "https://example.test/conversation-shaped-url",
             ].toSorted(),
       );
+      if (channel === "telegram") {
+        expect(suggestions(page, "cron-failure-alert-to-suggestions")).toEqual(
+          mode === "webhook" ? [telegramTarget, webhookTarget] : [webhookTarget],
+        );
+      }
       expect(suggestions(page, "cron-delivery-account-suggestions")).toEqual(accounts);
     });
     expect(suggestions(page, "cron-tz-suggestions")).toContain("Etc/GMT+12");

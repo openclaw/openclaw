@@ -112,8 +112,12 @@ describe("cron CLI delivery suppression readback", () => {
         const storePath = state.statePath("cron", "jobs.json");
         const events: CronEvent[] = [];
         let runReleased: Promise<"settled" | "reset"> | undefined;
-        let phase: "silent" | "required-delivery-error" | "execution-error" | "not-requested" =
-          "silent";
+        let phase:
+          | "silent"
+          | "delivery-error"
+          | "required-delivery-error"
+          | "execution-error"
+          | "not-requested" = "silent";
         const runIsolatedAgentJob: CronServiceDeps["runIsolatedAgentJob"] = async ({
           job,
           abortSignal,
@@ -149,7 +153,7 @@ describe("cron CLI delivery suppression readback", () => {
             runStartedAt: now,
             timeoutMs: 5_000,
             resolvedDelivery:
-              phase === "required-delivery-error"
+              phase === "delivery-error" || phase === "required-delivery-error"
                 ? {
                     ok: false,
                     mode: "explicit",
@@ -180,6 +184,7 @@ describe("cron CLI delivery suppression readback", () => {
               satisfiesSourceDelivery: false,
               unverifiedMessageToolDelivery: false,
             },
+            deliveryBestEffort: job.delivery?.bestEffort === true,
             deliveryPayloads: text ? [{ text }] : [],
             synthesizedText: text,
             summary: text,
@@ -188,11 +193,7 @@ describe("cron CLI delivery suppression readback", () => {
             isAborted: () => abortSignal?.aborted === true,
             abortReason: () => "fixture aborted",
           });
-          const disposition = dispatch.disposition;
-          const failure =
-            disposition?.kind === "error" && disposition.errorKind !== "delivery-target"
-              ? disposition
-              : undefined;
+          const failure = dispatch.disposition?.kind === "error" ? dispatch.disposition : undefined;
           return {
             status: failure ? "error" : "ok",
             error: failure?.error,
@@ -235,6 +236,7 @@ describe("cron CLI delivery suppression readback", () => {
           });
           for (const nextPhase of [
             "silent",
+            "delivery-error",
             "required-delivery-error",
             "execution-error",
             "silent",
@@ -249,6 +251,7 @@ describe("cron CLI delivery suppression readback", () => {
                       mode: "announce",
                       channel: "telegram",
                       to: "123",
+                      bestEffort: phase === "delivery-error",
                     },
             });
             runReleased = undefined;
@@ -262,7 +265,7 @@ describe("cron CLI delivery suppression readback", () => {
               "10ms",
             ]);
             const failed = phase === "execution-error" || phase === "required-delivery-error";
-            const expectedStatus = phase === "execution-error" ? "error" : "ok";
+            const expectedStatus = failed ? "error" : "ok";
             const completionStatus = failed ? "failed" : "succeeded";
             const deliveryStatus =
               phase === "execution-error"
@@ -343,12 +346,11 @@ describe("cron CLI delivery suppression readback", () => {
             const list = await runCli(["list"]);
             const show = await runCli(["show", job.id]);
             if (isRich()) {
-              const color =
-                expectedStatus === "error"
-                  ? theme.error
-                  : phase === "required-delivery-error"
-                    ? theme.warn
-                    : theme.success;
+              const color = failed
+                ? theme.error
+                : phase === "delivery-error"
+                  ? theme.warn
+                  : theme.success;
               const probe = color("probe");
               const expectedAnsi = probe.slice(0, probe.indexOf("probe"));
               expect(expectedAnsi).not.toBe("");
@@ -359,13 +361,12 @@ describe("cron CLI delivery suppression readback", () => {
               expect.soft(show.text).toMatch(/silent|suppressed/i);
               expect.soft(list.text).not.toContain("ok (not delivered)");
               expect.soft(show.text).not.toContain("ok (not delivered)");
-            } else if (phase === "required-delivery-error") {
+            } else if (phase === "delivery-error") {
               expect(list.text).toContain("ok (not delivered)");
-              expect(show.text).toContain("status: ok (not delivered)");
               expect(show.text).toContain(
                 "last delivery error: fixture delivery route unavailable",
               );
-            } else if (phase === "execution-error") {
+            } else if (failed) {
               expect(show.text).toContain("status: error");
               expect(show.text).not.toContain("ok (not delivered)");
             } else {
@@ -373,11 +374,11 @@ describe("cron CLI delivery suppression readback", () => {
               expect(show.text).not.toContain("ok (not delivered)");
             }
           }
-          expect(events).toHaveLength(5);
+          expect(events).toHaveLength(6);
           expect(
             readCronRunHistoryPageForTests({ storeKey: cronStoreKey(storePath), jobId: job.id })
               .total,
-          ).toBe(5);
+          ).toBe(6);
         } finally {
           cron.stop();
         }

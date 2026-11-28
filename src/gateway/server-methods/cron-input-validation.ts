@@ -23,7 +23,10 @@ import {
   resolveCronJobEffectiveAgentId,
   tryResolveCronJobEffectiveAgentId,
 } from "../../cron/agent-id.js";
-import { assertValidCronAnnounceDelivery } from "../../cron/delivery-channel-validation.js";
+import {
+  assertValidCronAnnounceDelivery,
+  assertValidCronFailureAlert,
+} from "../../cron/delivery-channel-validation.js";
 import { resolveCronDeliveryDefaultsScope } from "../../cron/delivery-defaults.js";
 import { resolveCronDeliveryPlan } from "../../cron/delivery-plan.js";
 import { assertCronDeliveryInputNonBlankFields } from "../../cron/delivery-target-validation.js";
@@ -42,6 +45,7 @@ import {
   resolveCronRunAdmissionSource,
   resolveCronSessionWorkspaceOwnershipError,
 } from "../../cron/run-authority.js";
+import { resolveFailureAlert } from "../../cron/service/failure-alerts.js";
 import { applyJobPatch } from "../../cron/service/jobs.js";
 import {
   isCronOperatorSourceParent,
@@ -235,7 +239,9 @@ export async function assertValidCronUpdatePatch(params: {
     await assertValidCronSessionTarget(nextJob, params.cfg);
   }
   // Clearing a concrete channel (channel: null) while keeping a bare announce `to`
-  // intentionally falls back to "last" in multi-channel configs.
+  // intentionally falls back to "last" in multi-channel configs. Use the same
+  // adjusted delivery for both the delivery check and the inherited-alert check so
+  // an alert that inherits the route is judged identically to the delivery itself.
   const effectiveDelivery =
     params.patch.delivery?.channel === null &&
     nextJob.delivery &&
@@ -248,6 +254,37 @@ export async function assertValidCronUpdatePatch(params: {
     await assertValidCronAnnounceDelivery({
       cfg: params.cfg,
       delivery: effectiveDelivery,
+    });
+  }
+  // Compare the canonical before/after policy so route-changing edits are
+  // validated without blocking threshold-only edits on legacy stored channels.
+  const failureAlertPatch = params.patch.failureAlert;
+  const failureAlertRoutingPatched =
+    failureAlertPatch &&
+    ("channel" in failureAlertPatch || "to" in failureAlertPatch || "mode" in failureAlertPatch);
+  const alertDeps = {
+    deps: { cronConfig: params.cfg.cron, defaultAgentId: params.defaultAgentId },
+  };
+  const currentAlert = resolveFailureAlert(alertDeps, params.currentJob);
+  const nextAlert = resolveFailureAlert(alertDeps, { ...nextJob, delivery: effectiveDelivery });
+  const alertNewlyEnabled = currentAlert === null && nextAlert !== null;
+  const alertRouteChanged =
+    currentAlert?.mode !== nextAlert?.mode ||
+    currentAlert?.channel !== nextAlert?.channel ||
+    currentAlert?.to !== nextAlert?.to ||
+    currentAlert?.accountId !== nextAlert?.accountId ||
+    currentAlert?.threadId !== nextAlert?.threadId;
+  if (
+    failureAlertRoutingPatched ||
+    alertNewlyEnabled ||
+    (alertRouteChanged && (params.patch.delivery !== undefined || failureAlertPatch === null))
+  ) {
+    await assertValidCronFailureAlert({
+      cfg: params.cfg,
+      failureAlert: nextJob.failureAlert,
+      delivery: effectiveDelivery,
+      owner: nextJob,
+      defaultAgentId: params.defaultAgentId,
     });
   }
   return nextJob;

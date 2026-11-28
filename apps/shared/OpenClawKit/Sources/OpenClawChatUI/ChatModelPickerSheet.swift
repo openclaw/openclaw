@@ -79,7 +79,7 @@ struct ChatModelPickerSheet: View {
                         }
                         if self.viewModel.selectedModelSupportsFastMode {
                             Section {
-                                ChatEffortSpeedPicker(viewModel: self.viewModel)
+                                ChatEffortSpeedPicker(viewModel: self.viewModel, showsMenuIcons: true)
                                     .pickerStyle(.menu)
                                     .font(OpenClawChatTypography.settingsBody)
                                     .tint(Color(uiColor: .secondaryLabel))

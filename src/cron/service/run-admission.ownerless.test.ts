@@ -280,16 +280,13 @@ describe("ownerless skip transaction guards", () => {
     { label: "captured absence", configuredDefault: undefined, rawDefault: undefined },
   ])("finishes a committed skip after default routing changes ($label)", async (testCase) => {
     const job = commandJob(`committed-skip-${testCase.label.replaceAll(" ", "-")}`);
-    job.failureAlert = true;
+    job.failureAlert = { after: 1, cooldownMs: 0, includeSkipped: true };
     let currentDefault: string | undefined = testCase.rawDefault;
     const { state, storePath, events, execute } = await setupOwnerlessJob(
       job,
       () => currentDefault,
     );
     state.deps.defaultAgentId = testCase.configuredDefault;
-    state.deps.cronConfig = {
-      failureAlert: { channel: "last", cooldownMs: 0, includeSkipped: true },
-    };
     const database = openOpenClawStateDatabase().db;
     let switched = false;
     const stopObserving = observeCronStoreCommits(storePath, () => {

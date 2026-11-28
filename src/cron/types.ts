@@ -71,8 +71,11 @@ export type CronDelivery = {
   threadId?: string | number;
   /** Explicit channel account id for multi-account setups (e.g. multiple Telegram bots). */
   accountId?: string;
+  bestEffort?: boolean;
   /** Additional webhook destination used when a job must keep chat delivery. */
   completionDestination?: CronCompletionDestination;
+  /** Separate destination for failure notifications. */
+  failureDestination?: CronFailureDestination;
 };
 
 /** Webhook completion destination used alongside chat delivery. */
@@ -81,8 +84,22 @@ type CronCompletionDestination = {
   to?: string;
 };
 
+/** Destination override for failed-run notifications. */
+type CronFailureDestination = {
+  channel?: CronMessageChannel;
+  to?: string;
+  threadId?: string | number;
+  accountId?: string;
+  mode?: "announce" | "webhook";
+};
+
+/** Partial failure-destination update shape; null clears individual override fields. */
+type CronFailureDestinationPatch = {
+  [K in keyof CronFailureDestination]?: CronFailureDestination[K] | null;
+};
+
 /** Partial delivery update shape; null clears optional delivery destinations or fields. */
-export type CronDeliveryPatch = Partial<Pick<CronDelivery, "mode">> & {
+export type CronDeliveryPatch = Partial<Pick<CronDelivery, "mode" | "bestEffort">> & {
   target?: "owner" | null;
   directPolicy?: "allow" | "block" | null;
   channel?: CronMessageChannel | null;
@@ -90,6 +107,7 @@ export type CronDeliveryPatch = Partial<Pick<CronDelivery, "mode">> & {
   threadId?: string | number | null;
   accountId?: string | null;
   completionDestination?: CronCompletionDestination | null;
+  failureDestination?: CronFailureDestinationPatch | null;
 };
 
 /** Execution outcome, separate from delivery outcome. */
@@ -295,6 +313,14 @@ export type CronAgentExecutionPhaseUpdate = CronAgentExecutionStarted & {
   phase: CronAgentExecutionPhase;
 };
 
+/** Failure alert policy persisted on a cron job. */
+export type CronFailureAlert = Exclude<NonNullable<CronJobWire["failureAlert"]>, false>;
+
+/** Partial failure-alert update; null clears an inherited field override. */
+export type CronFailureAlertPatch = {
+  [K in keyof CronFailureAlert]?: CronFailureAlert[K] | null;
+};
+
 /** Payload variants cron can execute in main-session or detached modes. */
 export type CronPayload =
   | Exclude<CronJobWire["payload"], { kind: "agentTurn" }>
@@ -395,7 +421,7 @@ export type CronJob = CronJobBase<
   CronWakeMode,
   CronPayload,
   CronDelivery,
-  boolean
+  CronFailureAlert | false
 > & {
   declarationKey?: string;
   displayName?: string;
@@ -555,6 +581,6 @@ export type CronJobPatch = Partial<
   trigger?: CronTrigger | null;
   payload?: CronPayloadPatch;
   delivery?: CronDeliveryPatch;
-  failureAlert?: boolean | null;
+  failureAlert?: CronFailureAlertPatch | false | null;
   state?: CronJobStateInput;
 };

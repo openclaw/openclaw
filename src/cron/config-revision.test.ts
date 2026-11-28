@@ -60,12 +60,12 @@ it("preserves order when case-insensitive command env keys collide on Windows", 
   );
 });
 
-it("distinguishes inherited and explicitly disabled failure alerts", () => {
+it("distinguishes inherited and explicitly cleared delivery fields", () => {
   const inherited = makeJob();
   expect(
     resolveCronJobConfigRevision({
       ...inherited,
-      failureAlert: false,
+      delivery: { ...inherited.delivery!, failureDestination: { channel: undefined } },
     }),
   ).not.toBe(resolveCronJobConfigRevision(inherited));
 });
@@ -85,6 +85,7 @@ it("matches SQLite normalization across optional fields, schedules, payloads, tr
       payload: { kind: "agentTurn", message, toolsAllow: ["read"], toolsAllowIsDefault: false },
       delivery: {
         mode: "announce",
+        failureDestination: { channel: undefined, accountId: undefined },
       },
     }),
     makeJob({
@@ -97,7 +98,7 @@ it("matches SQLite normalization across optional fields, schedules, payloads, tr
       id: "default-tools-without-list",
       schedule: { kind: "cron", expr: "0 9 * * *", tz: "" },
       payload: { kind: "agentTurn", message, toolsAllowIsDefault: true },
-      failureAlert: true,
+      failureAlert: {},
       trigger: { script: "json({ fire: true })", once: true },
     }),
     makeJob({
@@ -115,7 +116,7 @@ it("matches SQLite normalization across optional fields, schedules, payloads, tr
       sessionTarget: "main",
       payload: { kind: "systemEvent", text: "Process exited" },
       delivery: undefined,
-      failureAlert: true,
+      failureAlert: { after: 2, cooldownMs: 0, includeSkipped: false },
     }),
   ];
   await saveCronStore(storePath, { version: 1, jobs });

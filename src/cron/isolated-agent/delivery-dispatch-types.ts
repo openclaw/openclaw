@@ -43,6 +43,7 @@ export type DispatchCronDeliveryParams = {
   skipDelivery?: NormalizeReplySkipReason;
   spawnOnlyHandoff: boolean;
   sourceDeliveryOutcome: SourceDeliveryOutcome;
+  deliveryBestEffort: boolean;
   deliveryPayloads: ReplyPayload[];
   synthesizedText?: string;
   ttsAuto?: TtsAutoMode;

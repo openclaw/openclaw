@@ -1,7 +1,9 @@
+import { hasHttpUrlPrefix } from "@openclaw/net-policy/url-protocol";
 import {
   normalizeSortedUniqueTrimmedStringList,
-  normalizeTrimmedStringList,
+  normalizeUniqueTrimmedStringList,
 } from "@openclaw/normalization-core/string-normalization";
+import { normalizeHttpWebhookUrl } from "../../../../src/cron/webhook-url.ts";
 import { userProfileDisplayName } from "../../../../src/shared/user-profile-display-name.js";
 import type { GatewayAgentRow } from "../../api/types.ts";
 import { hasCronFormErrors } from "../../lib/cron/form.ts";
@@ -27,6 +29,7 @@ export function buildCronViewProps(page: ReturnType<typeof createCronPage>) {
   let models: CronModelSource = { catalog: undefined, agent: undefined };
   let timezoneSuggestions: string[] = [];
   let accountSuggestions: string[] = [];
+  let failureAlertToSuggestions: string[] = [];
   let deliveryToSuggestions: string[] = [];
   // Only the editor consumes these inventories; list updates must not rebuild them.
   if (cron.cronCreateOpen || (cron.cronEditingJob && page.detailTab() !== "history")) {
@@ -54,21 +57,23 @@ export function buildCronViewProps(page: ReturnType<typeof createCronPage>) {
       ...savedDeliveryTargets,
       ...(cron.cronForm.deliveryMode === "announce" ? conversationTargets : []),
     ]);
-    const accountTargets = normalizeTrimmedStringList(
+    accountSuggestions = normalizeUniqueTrimmedStringList(
       (channel === "last"
         ? Object.values(channels.channelsSnapshot?.channelAccounts ?? {}).flat()
         : (channels.channelsSnapshot?.channelAccounts?.[channel] ?? [])
       ).map((account) => account.accountId),
     );
-    const forDeliveryMode = (targets: string[]) =>
-      cron.cronForm.deliveryMode === "webhook"
-        ? targets.filter((value) => /^https?:\/\//i.test(value))
-        : targets;
     timezoneSuggestions = resolveTimezoneSuggestions(
       cron.cronJobs.map((job) => (job.schedule.kind === "cron" ? (job.schedule.tz ?? "") : "")),
     );
-    accountSuggestions = accountTargets;
-    deliveryToSuggestions = forDeliveryMode(deliveryTargets);
+    failureAlertToSuggestions =
+      cron.cronForm.failureAlertDeliveryMode === "webhook"
+        ? savedDeliveryTargets.filter(normalizeHttpWebhookUrl)
+        : savedDeliveryTargets;
+    deliveryToSuggestions =
+      cron.cronForm.deliveryMode === "webhook"
+        ? deliveryTargets.filter(hasHttpUrlPrefix)
+        : deliveryTargets;
   }
   const canManage =
     cron.cronEditingJob || cron.cronCreateOpen
@@ -147,6 +152,7 @@ export function buildCronViewProps(page: ReturnType<typeof createCronPage>) {
     models,
     timezoneSuggestions,
     deliveryToSuggestions,
+    failureAlertToSuggestions,
     accountSuggestions,
   };
 }

@@ -167,6 +167,7 @@ export function applyJobResult(
   const completionStatus =
     result.completionStatus ??
     resolveAdmittedCronCompletionStatus(
+      job,
       result.status,
       deliveryState.status,
       deliveryState.deliverySuppressionReason,

@@ -138,7 +138,7 @@ const sendFailureAlert: NonNullable<CronServiceDeps["sendCronFailureAlert"]> = (
   });
 
 function failureDelivery(to: string): NonNullable<CronJobCreate["delivery"]> {
-  return { mode: "webhook", to };
+  return { mode: "none", failureDestination: { mode: "webhook", to } };
 }
 
 function agentResult(result: Awaited<ReturnType<CronServiceDeps["runIsolatedAgentJob"]>>) {
@@ -201,7 +201,7 @@ describe("cron delivery outcomes", { concurrent: false }, () => {
             ...(timeoutSeconds === undefined ? {} : { timeoutSeconds }),
           },
           delivery: failureDelivery(receiver.url),
-          failureAlert: true,
+          failureAlert: { after: 1 },
         });
 
       const channelJob = await createJob("providerless channel failure");
@@ -335,8 +335,12 @@ describe("cron delivery outcomes", { concurrent: false }, () => {
               agentId: "work",
               sessionKey,
               wakeMode: "now",
-              delivery: { mode: "webhook", to: "http://127.0.0.1:9/failure" },
-              failureAlert: true,
+              delivery: { mode: "none" },
+              failureAlert: {
+                after: 1,
+                mode: "webhook",
+                to: "http://127.0.0.1:9/failure",
+              },
             });
 
             await cron.run(job.id, "force");
