@@ -55,6 +55,7 @@ import {
   createLegacyAuditStateSnapshotPlan,
   type BackupStateSnapshotPlan,
 } from "./backup-legacy-audit-snapshot.js";
+import { assertNoPortableSourcePathCollision } from "./backup-portable-path-preflight.js";
 import type { ReportBackupProgress } from "./backup-progress.js";
 import {
   createBackupScratchDirectory,
@@ -429,6 +430,10 @@ async function createBackupArchiveAttempt(
 
   if (opts.dryRun) {
     return result;
+  }
+
+  if (!onlyConfig) {
+    await assertNoPortableSourcePathCollision(plan, archiveRoot, result.assets, opts.signal);
   }
 
   await prepareBackupOutputParent(outputPath);

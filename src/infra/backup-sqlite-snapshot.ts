@@ -40,6 +40,7 @@ import {
   sanitizeOpenClawStateLeaseRows,
 } from "../state/openclaw-state-snapshot-sanitizer.js";
 import type { ReportBackupProgress, BackupProgressStage } from "./backup-progress.js";
+import { isSqliteClassifiedPath } from "./backup-sqlite-classified-path.js";
 import {
   assertBackupSqliteSourceGroup,
   captureBackupSqliteSourceGroup,
@@ -108,12 +109,7 @@ export function classifyBackupSqliteSource(
   inventory: BackupResourceInventory,
 ): "excluded" | "sqlite" | "opaque" | "opaque-skip" | undefined {
   const resolvedSourcePath = path.resolve(sourcePath);
-  const withinOwnedRoot =
-    isPathInside(inventory.stateDir, resolvedSourcePath) ||
-    inventory.agentRoots.some(({ sourcePath: agentRoot }) =>
-      isPathInside(agentRoot, resolvedSourcePath),
-    );
-  if (!withinOwnedRoot || inventory.isPackageContent(resolvedSourcePath)) {
+  if (!isSqliteClassifiedPath(resolvedSourcePath, inventory)) {
     return undefined;
   }
   const transient = isTransientSqliteBackupPath(resolvedSourcePath);

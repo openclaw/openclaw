@@ -37,6 +37,7 @@ import {
   withIsolatedBackupState as withOpenClawTestState,
 } from "./backup-create.test-support.js";
 import type { BackupProgressEvent } from "./backup-progress.js";
+import * as backupSqliteSnapshot from "./backup-sqlite-snapshot.js";
 import { classifyBackupSqliteSource } from "./backup-sqlite-snapshot.js";
 import { writeTarArchiveWithRetry } from "./backup-tar-retry.js";
 import * as backupTarWalk from "./backup-tar-walk.js";
@@ -1185,22 +1186,17 @@ describe("createBackupArchive", () => {
     withState(async (state) => {
       const { outputDir, dbPath: latePath } = await pluginDatabaseFixture(state, "late.sqlite");
 
-      const originalReaddir = fs.readdir.bind(fs);
+      const originalSnapshotPlan = backupSqliteSnapshot.createBackupSqliteSnapshotPlan;
       let createdLatePath = false;
       let stagedArchiveCleanupAttempts = 0;
-      const readdirSpy = vi.spyOn(fs, "readdir").mockImplementation((async (...args: unknown[]) => {
-        const entries = await (originalReaddir as (...readdirArgs: unknown[]) => Promise<unknown>)(
-          ...args,
-        );
-        if (
-          !createdLatePath &&
-          path.resolve(String(args[0])) === path.resolve(path.dirname(latePath))
-        ) {
+      const snapshotPlanSpy = vi
+        .spyOn(backupSqliteSnapshot, "createBackupSqliteSnapshotPlan")
+        .mockImplementation(async (params) => {
+          const plan = await originalSnapshotPlan(params);
           createdLatePath = true;
           await fs.writeFile(latePath, "late SQLite state");
-        }
-        return entries;
-      }) as typeof fs.readdir);
+          return plan;
+        });
       const originalUnlinkSync = fsSync.unlinkSync.bind(fsSync);
       const unlinkSpy = vi.spyOn(fsSync, "unlinkSync").mockImplementation((target) => {
         const targetPath = path.resolve(String(target));
@@ -1225,7 +1221,7 @@ describe("createBackupArchive", () => {
         expect(await fs.readdir(outputDir)).toEqual([]);
       } finally {
         unlinkSpy.mockRestore();
-        readdirSpy.mockRestore();
+        snapshotPlanSpy.mockRestore();
       }
     }),
   );
