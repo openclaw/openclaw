@@ -413,11 +413,8 @@ async function runDelegatedDoctor(input: DecodedUpdateDoctorInput): Promise<void
       }
       if (systemService) {
         process.stderr.write(
-          `Gateway service ${systemService.unitName} was updated as ${systemService.account} and serves this release (not serving for ${Math.round(systemService.notServingMs / 1000)}s).${systemService.settleUnit ? ` Its update record is written as ${systemService.account} once this update exits (${systemService.settleUnit}).` : ""}\n`,
+          `Gateway service ${systemService.unitName} was updated as ${systemService.account} and serves this release (not serving for ${Math.round(systemService.notServingMs / 1000)}s). Its update record is written as ${systemService.account} once this update exits (${systemService.settleUnit}).\n`,
         );
-        for (const warning of systemService.warnings) {
-          process.stderr.write(`${warning}\n`);
-        }
       }
       const { runDoctorHealthFlow } = await import("../flows/doctor-health.js");
       assertCurrent();

@@ -29,8 +29,7 @@ export type ServiceAccountActivation =
       account: string;
       notServingMs: number;
       /** Transient unit that records the run and retires the backup once the updater exits. */
-      settleUnit?: string;
-      warnings: string[];
+      settleUnit: string;
     }
   | {
       status: "failed";
@@ -368,14 +367,13 @@ async function activateSystemServiceAsAccount(
     });
     if (settleUnit) {
       handoffOwned = false;
-      return { status: "updated", unitName, account, notServingMs, settleUnit, warnings: [] };
+      return { status: "updated", unitName, account, notServingMs, settleUnit };
     }
-    // Without the transient unit the package is not final yet: keep the backup and leave
-    // recording the run to the operator, who can see whether the update was kept.
-    const warnings = [
-      `${unitName} serves ${options.candidateVersion}, but the step that records this update for ${account} could not be scheduled; the update backup is kept. Once this update has finished, run update finish as ${account} with --backup-root ${backupRoot}.`,
-    ];
-    return { status: "updated", unitName, account, notServingMs, warnings };
+    // Without the settle unit nothing could restore the state if the installed updater later
+    // put the previous package back, so do not keep the update.
+    return await restore(
+      `${unitName} served ${options.candidateVersion}, but the step that settles this update could not be scheduled.`,
+    );
   } finally {
     if (handoffOwned) {
       await handoff.remove();

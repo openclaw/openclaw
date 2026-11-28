@@ -174,7 +174,7 @@ describe("system service update as the unit's account", () => {
 
       const result = await activate();
 
-      expect(result).toMatchObject({ status: "updated", warnings: [] });
+      expect(result).toMatchObject({ status: "updated" });
       expect(native.events).toEqual(["stop", "start"]);
       // The run is recorded only once the installed updater has settled the package.
       expect(calls()).toEqual(["migrate", "health"]);
@@ -222,19 +222,25 @@ describe("system service update as the unit's account", () => {
   });
 
   it.runIf(process.platform === "linux")(
-    "keeps the backup when the settle step cannot be scheduled",
+    "restores instead of keeping an update nothing could roll back",
     async () => {
-      installAccount({ migrate: ok("migrated"), health: [0, "{}"], finish: ok("finished") });
+      installAccount({
+        migrate: ok("migrated"),
+        health: [0, "{}"],
+        restore: ok("restored"),
+      });
       native.scheduleFails = true;
 
       const result = await activate();
 
-      expect(result).toMatchObject({ status: "updated" });
-      expect(result.status === "updated" && result.warnings[0]).toContain(
-        "the update backup is kept",
+      expect(result).toMatchObject({ status: "failed", stateRestored: true });
+      expect(result.status === "failed" && result.message).toContain(
+        "Start it with sudo systemctl start",
       );
-      // Retiring the backup now would leave no rollback if the updater later restores the package.
-      expect(calls()).toEqual(["migrate", "health"]);
+      expect(native.events).toEqual(["stop", "start", "stop"]);
+      // Keeping it would leave nothing to restore the state if the updater later
+      // restores the previous package.
+      expect(calls()).toEqual(["migrate", "health", "restore"]);
     },
   );
 
