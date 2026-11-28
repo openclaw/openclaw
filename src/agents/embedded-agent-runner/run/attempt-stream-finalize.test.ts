@@ -63,7 +63,6 @@ function createFixture(overrides: FixtureOverrides = {}) {
     overrides.activeSession ??
     ({
       agent: { state: { messages: [] } },
-      getActiveToolNames: vi.fn(() => ["read"]),
       sessionId: "active-session",
     } as never);
   const sessionManager =
@@ -96,7 +95,6 @@ function createFixture(overrides: FixtureOverrides = {}) {
   const sessionRuntimeState = {
     prePromptMessageCount: 3,
     promptCache: undefined,
-    systemPromptText: "system prompt",
   };
   const state: SettledInput["state"] = {
     beforeAgentRunBlockedBy: undefined,
@@ -265,7 +263,6 @@ describe("runEmbeddedAttemptSettledPhase stream finalization", () => {
     const originalMessages = sessionManager.buildSessionContext().messages;
     const activeSession = {
       agent: { state: { messages: originalMessages } },
-      getActiveToolNames: vi.fn(() => ["read"]),
       sessionId: "active-session",
     };
     const fixture = createFixture({
@@ -386,7 +383,6 @@ describe("runEmbeddedAttemptSettledPhase stream finalization", () => {
     const originalMessages = sessionManager.buildSessionContext().messages;
     const activeSession = {
       agent: { state: { messages: originalMessages } },
-      getActiveToolNames: vi.fn(() => ["read"]),
       sessionId: "active-session",
     };
     const fixture = createFixture({
