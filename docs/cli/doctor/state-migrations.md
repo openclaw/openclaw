@@ -321,8 +321,8 @@ Quarantined deletion records and unconfigured or mismatched stores still require
 explicit restoration. Runtime admission remains separate from Doctor's repair
 holds. Review the paths and use the
 noninteractive `openclaw agents add` command printed by Doctor to restore the
-intended agent, or `openclaw agents delete` to confirm deletion. An unconfigured
-agent must be restored before deletion. For a custom database filename, restore
+intended agent, or `openclaw agents delete` to confirm deletion. Restore an
+unconfigured held agent first so its store is verified before deletion. For a custom database filename, restore
 the original `session.store` configuration first; `agents add` refuses to create
 an empty replacement when it cannot select a held store. Doctor prints the exact
 restore and delete commands using the regular agent's ID, such as `main`.
