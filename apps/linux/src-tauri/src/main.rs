@@ -28,6 +28,8 @@ mod keep_awake;
 mod keep_awake_platform;
 #[cfg(test)]
 mod keep_awake_tests;
+#[cfg(any(target_os = "linux", test))]
+mod linux_editing;
 mod native_browser;
 mod native_browser_bridge;
 mod native_browser_platform;
@@ -3214,6 +3216,8 @@ fn replace_main_webview_for_target(
     let view = window
         .add_child(builder, LogicalPosition::new(0, 0), size)
         .and_then(|view| {
+            #[cfg(target_os = "linux")]
+            linux_editing::install_webview(&view)?;
             #[cfg(target_os = "macos")]
             window_chrome_macos::install_webview(&view)?;
             window_chrome::observe_history(&view);
@@ -3504,6 +3508,10 @@ fn main() {
             })
             .build()?;
         window_chrome::install(&window.as_ref().window())?;
+        #[cfg(target_os = "linux")]
+        if let Some(view) = app.get_webview("main") {
+            linux_editing::install_webview(&view)?;
+        }
         #[cfg(target_os = "macos")]
         if let Some(view) = app.get_webview("main") {
             window_chrome_macos::install_webview(&view)?;

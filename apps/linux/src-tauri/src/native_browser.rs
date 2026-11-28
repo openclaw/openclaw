@@ -424,6 +424,13 @@ impl NativeBrowserState {
                     LogicalSize::new(1.0, 1.0),
                 )
                 .map_err(|error| format!("Could not open the browser tab: {error}"))?;
+            #[cfg(target_os = "linux")]
+            if let Err(error) = crate::linux_editing::install_webview(&view) {
+                let _ = view.close();
+                return Err(format!(
+                    "Could not prepare browser tab editing shortcuts: {error}"
+                ));
+            }
             if let Err(error) = current() {
                 let _ = view.close();
                 return Err(error);

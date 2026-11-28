@@ -2413,6 +2413,9 @@ fn open_profile_recovery(app: &AppHandle, intent: &Intent, error: &str) -> Resul
         .inner_size()
         .map_err(|_| "Could not measure the recovery window.")?;
     let view=window.add_child(builder,LogicalPosition::new(0,0),size).map_err(|_|"Could not open Gateway recovery. Use Manage Gateways from the native menu to fix this connection.")?;
+    #[cfg(target_os = "linux")]
+    crate::linux_editing::install_webview(&view)
+        .map_err(|_| "Could not prepare recovery window editing shortcuts.")?;
     #[cfg(target_os = "macos")]
     crate::window_chrome_macos::install_webview(&view)
         .map_err(|_| "Could not prepare recovery window controls.")?;
@@ -2529,6 +2532,9 @@ fn replace_document(
     let view = window
         .add_child(builder, LogicalPosition::new(0, 0), size)
         .map_err(|_| "Could not open OpenClaw for this Gateway.")?;
+    #[cfg(target_os = "linux")]
+    crate::linux_editing::install_webview(&view)
+        .map_err(|_| "Could not prepare Gateway window editing shortcuts.")?;
     #[cfg(target_os = "macos")]
     crate::window_chrome_macos::install_webview(&view)
         .map_err(|_| "Could not prepare Gateway window controls.")?;
@@ -2878,6 +2884,9 @@ pub(crate) fn open_settings(app: &AppHandle) -> Result<(), String> {
             .map_err(|_| "Could not open Gateway settings.")?;
     crate::window_chrome::install(&window.as_ref().window())
         .map_err(|_| "Could not prepare Gateway settings controls.")?;
+    #[cfg(target_os = "linux")]
+    crate::linux_editing::install_webview(window.as_ref())
+        .map_err(|_| "Could not prepare Gateway settings editing shortcuts.")?;
     #[cfg(target_os = "macos")]
     crate::window_chrome_macos::install_webview(window.as_ref())
         .map_err(|_| "Could not prepare Gateway settings controls.")?;
