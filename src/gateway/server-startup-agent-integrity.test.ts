@@ -43,8 +43,9 @@ for (const method of ["prepare", "exec"]) {
 `;
 const counterImport = `data:text/javascript,${encodeURIComponent(counterSource)}`;
 const previousNodeOptions = process.env.NODE_OPTIONS;
-const originalPrepare = DatabaseSync.prototype.prepare;
-const originalExec = DatabaseSync.prototype.exec;
+const originalMethods = (["prepare", "exec"] as const).map(
+  (method) => [method, Object.getOwnPropertyDescriptor(DatabaseSync.prototype, method)] as const,
+);
 
 beforeAll(async () => {
   // Children forked after this point load the counter; this process loads it once.
@@ -56,8 +57,11 @@ afterEach(() => {
   delete process.env.OPENCLAW_TEST_INTEGRITY_COUNT_PATH;
 });
 afterAll(() => {
-  DatabaseSync.prototype.prepare = originalPrepare;
-  DatabaseSync.prototype.exec = originalExec;
+  for (const [method, descriptor] of originalMethods) {
+    if (descriptor) {
+      Object.defineProperty(DatabaseSync.prototype, method, descriptor);
+    }
+  }
   if (previousNodeOptions === undefined) {
     delete process.env.NODE_OPTIONS;
   } else {
