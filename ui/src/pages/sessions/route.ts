@@ -5,11 +5,12 @@ import type { SessionArchivedFilter } from "../../lib/sessions/index.ts";
 import { buildSessionsListQuery } from "./list-query.ts";
 
 export type SessionsRouteData = {
+  folder?: string;
   expandedSessionKey: string | null;
   statusFilter: SessionArchivedFilter;
 };
 
-function routeOptions(location: RouteLocation) {
+function routeOptions(location: RouteLocation): SessionsRouteData {
   const search = new URLSearchParams(location.search);
   const expandedSessionKey = search.get("session")?.trim() || null;
   // The retired internal `showArchived` param is deliberately not read; Sessions
@@ -17,7 +18,10 @@ function routeOptions(location: RouteLocation) {
   const requestedStatus = search.get("status");
   const statusFilter: SessionArchivedFilter =
     requestedStatus === "archived" ? "archived" : requestedStatus === "all" ? "all" : "active";
-  return { expandedSessionKey, statusFilter };
+  const options = { expandedSessionKey, statusFilter };
+  const folder = search.get("folder");
+  // An empty folder opens the folder list. Ordinary session routes keep their existing shape.
+  return folder === null ? options : { ...options, folder };
 }
 
 export const page = defineSolidPage<"sessions", ApplicationContext, SessionsRouteData>(
@@ -26,7 +30,7 @@ export const page = defineSolidPage<"sessions", ApplicationContext, SessionsRout
   {
     loaderDeps: (context: ApplicationContext, location: RouteLocation) => {
       const options = routeOptions(location);
-      return `${options.expandedSessionKey ?? ""}\u0000${options.statusFilter}\u0000${context.agentSelection.state.scopeId ?? "all"}`;
+      return `${options.expandedSessionKey ?? ""}\u0000${JSON.stringify(options.folder)}\u0000${options.statusFilter}\u0000${context.agentSelection.state.scopeId ?? "all"}`;
     },
     loader: (context: ApplicationContext, { location, cause }): SessionsRouteData => {
       const options = routeOptions(location);

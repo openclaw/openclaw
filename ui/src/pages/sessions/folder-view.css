@@ -1,0 +1,88 @@
+.session-folders {
+  padding-block: 8px 32px;
+}
+.session-folders svg {
+  width: 18px;
+  height: 18px;
+  flex-shrink: 0;
+}
+.folder-title-row,
+.folder-section-title {
+  justify-content: space-between;
+}
+.folder-title-row,
+.folder-tabs {
+  margin-block: 16px 24px;
+}
+.folder-grid {
+  grid-template-columns: repeat(auto-fit, minmax(min(260px, 100%), 1fr));
+}
+.folder-tile {
+  text-align: start;
+  color: var(--text);
+  min-height: 160px;
+}
+.folder-tile__arrow {
+  float: inline-end;
+}
+.folder-metrics {
+  gap: 24px;
+}
+.folder-metrics > div {
+  display: grid;
+}
+.folder-metrics p {
+  max-width: 280px;
+  margin-inline-start: auto;
+}
+.folder-layout {
+  grid-template-columns: minmax(0, 1.35fr) minmax(280px, 1fr);
+  align-items: start;
+}
+.folder-layout--threads {
+  grid-template-columns: 1fr;
+}
+.folder-thread__top a,
+.folder-artifact-source a {
+  flex: 1;
+  overflow-wrap: anywhere;
+}
+.folder-thread__preview {
+  overflow: hidden;
+  display: -webkit-box;
+  -webkit-line-clamp: 3;
+  -webkit-box-orient: vertical;
+  overflow-wrap: anywhere;
+}
+.folder-thread__footer span {
+  margin-inline-end: auto;
+}
+.folder-thread__footer select {
+  min-width: 0;
+  max-width: 65%;
+}
+.folder-brief .session-progress-card {
+  border: 0;
+  padding: 0;
+  background: none;
+}
+.folder-artifact-source {
+  border-bottom: 1px solid var(--border);
+  padding-block: 16px;
+}
+@media (max-width: 1100px) {
+  .folder-layout {
+    grid-template-columns: 1fr;
+  }
+}
+@media (max-width: 640px) {
+  .folder-metrics p,
+  .folder-thread__footer > span {
+    margin: 0;
+    width: 100%;
+  }
+  .folder-section-title {
+    align-items: flex-start;
+    flex-direction: column;
+  }
+}

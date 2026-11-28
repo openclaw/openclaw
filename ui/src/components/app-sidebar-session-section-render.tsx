@@ -29,6 +29,7 @@ import { renderNewSessionLink as NewSessionLink } from "./solid/new-session-link
 
 // Most sections fit their first page, so Show more/Collapse load on first need.
 const SessionPagination = lazy(() => import("./app-sidebar-session-pagination.tsx"));
+
 export function renderSessionSection(params: {
   host: SidebarSessionListHost;
   section: RenderableSessionSection;
@@ -343,6 +344,27 @@ export function renderSessionSection(params: {
                   {labelText()}
                 </button>
               )}
+              <Show when={group()}>
+                {(name) => (
+                  <a
+                    class="sidebar-session-group-actions"
+                    aria-label={t("sessionsView.openFolder", { name: name() })}
+                    title={t("sessionsView.openFolder", { name: name() })}
+                    href={`${pathForRoute("sessions", host().basePath)}?folder=${encodeURIComponent(name())}`}
+                    onClick={(event) => {
+                      if (host().onNavigate) {
+                        handleNavigationClick(event, () =>
+                          host().onNavigate?.("sessions", {
+                            search: `?folder=${encodeURIComponent(name())}`,
+                          }),
+                        );
+                      }
+                    }}
+                  >
+                    <Icon name="folder" />
+                  </a>
+                )}
+              </Show>
               {group() || section().id === "ungrouped" ? (
                 <NewSessionLink
                   basePath={host().basePath}

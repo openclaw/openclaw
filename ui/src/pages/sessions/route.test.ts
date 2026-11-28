@@ -13,6 +13,7 @@ async function loadSessionsRoute(
   search: string,
   scopeId: string | null,
   expectedQuery: Partial<SessionListOptions>,
+  folder?: string,
 ) {
   const sessions = { list: vi.fn(), listSnapshot: vi.fn(), refreshList: vi.fn() };
   const context = {
@@ -36,6 +37,7 @@ async function loadSessionsRoute(
   expect(data).toEqual({
     expandedSessionKey: expectedQuery.search ?? null,
     statusFilter: expectedQuery.archivedFilter,
+    ...(folder !== undefined && { folder }),
   });
   expect(
     buildSessionsListQuery(
@@ -63,6 +65,8 @@ async function loadSessionsRoute(
 
 it.each([
   ["", "writer", { archivedFilter: "active", agentId: "writer" }],
+  ["?folder=", "writer", { archivedFilter: "active", agentId: "writer" }, ""],
+  ["?folder=list", "writer", { archivedFilter: "active", agentId: "writer" }, "list"],
   ["?status=archived", null, { archivedFilter: "archived" }],
   ["?status=all", "main", { archivedFilter: "all", agentId: "main" }],
   [
