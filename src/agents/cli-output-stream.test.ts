@@ -452,3 +452,44 @@ it.each([
   expect(completed).toEqual([]);
   expect(parser.getOutput()?.errorText).toBeTruthy();
 });
+
+it.each<[name: string, frames: unknown[], expected: unknown[]]>([
+  [
+    "initialization and assistant frames forward their raw model field",
+    [
+      nativeInit(["Read"], { model: "claude-opus-5-5-20261101" }),
+      assistant([{ type: "text", text: "Working" }], "claude-opus-5-5-20261101"),
+      result("done"),
+    ],
+    ["claude-opus-5-5-20261101", "claude-opus-5-5-20261101"],
+  ],
+  [
+    "frames without a named model forward the raw value",
+    [nativeInit(["Read"]), assistant([{ type: "text", text: "Working" }], ""), result("done")],
+    [undefined, ""],
+  ],
+  [
+    "subagent frames never forward",
+    [
+      { ...nativeInit(["Read"], { model: "sub-init" }), parent_tool_use_id: "child-call" },
+      {
+        ...assistant([{ type: "text", text: "Child work" }], "sub-model"),
+        parent_tool_use_id: "child-call",
+      },
+      assistant([{ type: "text", text: "Parent work" }], "claude-haiku-4-5-20251001"),
+      result("done"),
+    ],
+    ["claude-haiku-4-5-20251001"],
+  ],
+  [
+    "the synthetic marker forwards raw for downstream filtering",
+    [nativeInit(["Read"]), syntheticNoResponse(), result("done")],
+    [undefined, "<synthetic>"],
+  ],
+])("forwards parent serving model fields: %s", (_name, frames, expected) => {
+  const observed: unknown[] = [];
+  const parser = createClaudeParser({ onObservedModel: (model) => observed.push(model) });
+  parser.push(joinJsonlFrames(...frames, ""));
+  parser.finish();
+  expect(observed).toEqual(expected);
+});

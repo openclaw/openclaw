@@ -48,7 +48,6 @@ import {
   streamJsonOutputLimitErrorText,
 } from "./cli-output-stream-limits.js";
 import { resolveCliStreamOutput } from "./cli-output-stream-output.js";
-export { CLI_STREAM_JSON_MISSING_RESULT_ERROR } from "./cli-output-stream-output.js";
 const CLAUDE_SYNTHETIC_NO_RESPONSE_ERROR = "Claude CLI returned a synthetic no-response result.";
 
 export function createCliJsonlStreamingParser(params: CliJsonlStreamingParserOptions) {
@@ -329,6 +328,7 @@ export function createCliJsonlStreamingParser(params: CliJsonlStreamingParserOpt
       parsed.subtype === "init" &&
       !isClaudeSubagentRecord(parsed)
     ) {
+      params.onObservedModel?.(parsed.model);
       try {
         params.onNativeTools?.(parsed.tools);
       } catch (error) {
@@ -375,6 +375,7 @@ export function createCliJsonlStreamingParser(params: CliJsonlStreamingParserOpt
       }
       resumeCheckpointId = pickCliResumeCheckpointId({ ...params, parsed }) ?? resumeCheckpointId;
       params.onAssistantMessage?.(parsed.message);
+      params.onObservedModel?.(parsed.message.model);
       if (claudeStreamJson && isClaudeSyntheticNoResponse(parsed)) {
         sawClaudeSyntheticNoResponse = true;
       }

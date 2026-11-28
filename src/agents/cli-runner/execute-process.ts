@@ -5,6 +5,7 @@ import {
   enqueueSessionEventForHost,
 } from "../../auto-reply/reply/session-event-handoff.js";
 import { shouldLogVerbose } from "../../globals.js";
+import { emitAgentEventForRunContext } from "../../infra/agent-events.js";
 import { getAgentRunContext } from "../../infra/agent-run-registry.js";
 import { formatErrorMessage } from "../../infra/errors.js";
 import {
@@ -21,6 +22,7 @@ import type { RunExit } from "../../process/supervisor/types.js";
 import { truncateUtf8Suffix } from "../../utils/utf8-truncate.js";
 import { resolveSessionAgentId } from "../agent-scope.js";
 import type { CliOutput, CliTerminalInterruption } from "../cli-output-contracts.js";
+import { normalizeClaudeObservedModel } from "../cli-output-records.js";
 import { transformCliResultText } from "../cli-output-results.js";
 import { createCliJsonlStreamingParser } from "../cli-output-stream.js";
 import { formatCliOutputError, parseCliOutput } from "../cli-output.js";
@@ -193,6 +195,31 @@ export async function executeCliProcess(params: {
       cliBackendLog.warn(`CLI watchdog follow-up unavailable: ${formatErrorMessage(error)}`);
     }
   }
+  // The backend names its serving model in parent init and assistant frames;
+  // publishing it through the run owner lets live sessions expose the model
+  // while the run works. De-duplicated per attempt like publishMessageModel.
+  const runContext = getAgentRunContext(runParams.runId);
+  let publishedModel: string | undefined;
+  const observeBackendModel = runContext
+    ? (model: unknown) => {
+        const observed = normalizeClaudeObservedModel(model);
+        if (!observed || observed === publishedModel) {
+          return;
+        }
+        publishedModel = observed;
+        emitAgentEventForRunContext(
+          {
+            runId: runParams.runId,
+            ...(runParams.sessionKey ? { sessionKey: runParams.sessionKey } : {}),
+            ...(runParams.sessionId ? { sessionId: runParams.sessionId } : {}),
+            ...(runParams.agentId ? { agentId: runParams.agentId } : {}),
+            stream: "lifecycle",
+            data: { phase: "model", provider: context.backendResolved.id, model: observed },
+          },
+          runContext,
+        );
+      }
+    : undefined;
 
   const streamingParser = hasJsonlOutput
     ? createCliJsonlStreamingParser({
@@ -217,6 +244,7 @@ export async function executeCliProcess(params: {
         onSessionId: params.observeForkSuccessor,
         onNativeTools: context.preparedBackend.mcpClientGrantCapture?.captureNativeTools,
         onAssistantMessage: params.diagnostics?.observeAssistantMessage,
+        onObservedModel: observeBackendModel,
         onUsage: params.diagnostics?.observeUsage,
         onAttributedSubagentProgress: (parentToolUseId) => {
           if (!params.events.isActiveForegroundAgentTool(parentToolUseId)) {
