@@ -95,6 +95,42 @@ export function selectUpdateOwedSteps(runs: readonly UpdateRunRecord[]): UpdateO
   });
 }
 
+/**
+ * Whether automatic updates may retry owed plugin convergence for `version`, from runs listed
+ * newest first. Each row gets one same-version campaign: a campaign run that started and targeted
+ * `version`, listed at or before the run that holds the row, ends automatic retries until a real
+ * update or a manual command takes the row. A Doctor-only row is no reason to restart: an update
+ * settles it only after changing plugins.
+ */
+export function owesAutomaticPluginRetry(
+  runs: readonly UpdateRunRecord[],
+  version: string,
+): boolean {
+  if (runs.some((run) => run.status === "running")) {
+    return false;
+  }
+  const owedRow = `${OWED_STEP_PREFIX}plugin-convergence`;
+  let retried = false;
+  for (const run of runs) {
+    retried ||=
+      run.trigger === "campaign" &&
+      run.target.version === version &&
+      run.before.version === version;
+    // The newest run that mentions the row decides it; a failed or rolled-back run does not.
+    const row = updateRunOwesSteps(run)
+      ? run.steps.find((step) => step.step === owedRow)
+      : undefined;
+    if (row) {
+      return (
+        row.status === "skipped" &&
+        !retried &&
+        (run.after.version ?? run.target.version) === version
+      );
+    }
+  }
+  return false;
+}
+
 /** One sentence for reports: what is owed, why, and what settles it. */
 export function formatUpdateOwedStep(step: Pick<UpdateOwedStep, "id" | "reason">): string {
   const { label, retry } = isUpdateOwedStepId(step.id)

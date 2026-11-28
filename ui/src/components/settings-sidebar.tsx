@@ -34,22 +34,22 @@ import { normalizeAgentId } from "../lib/sessions/session-key.ts";
 import {
   settingsNavigationLabelForRoute,
   settingsNavigationOwnerRoute,
-  settingsParentRoute,
   settingsSearchTextMatches,
   settingsSearchTitleRank,
 } from "../lib/settings-navigation.ts";
 import type { GatewayStatusProps } from "./gateway-status.ts";
 import { isIconName } from "./icon-data.ts";
+import { createSettingsAgentTrigger } from "./settings-agent-trigger.ts";
 import {
   SettingsSaveIndicator,
   type SettingsSaveIndicatorProps,
 } from "./settings-save-indicator.tsx";
-import { SidebarBuildChip } from "./sidebar-build-chip.tsx";
 import "./agent-select-registration.ts";
+import { SidebarBuildChip } from "./sidebar-build-chip.tsx";
 import "../styles/settings.css";
 import { GatewayStatus } from "./solid/gateway-status.tsx";
+import { IconButton } from "./solid/icon-button.tsx";
 import { Icon } from "./solid/icon.tsx";
-import { Kbd } from "./solid/kbd.tsx";
 import { ThemeBrandingIcon } from "./theme-brand-icon.tsx";
 
 registerRouteSubtitlesEnglish();
@@ -64,7 +64,9 @@ export type SettingsSidebarProps = {
   activeRouteId: RouteId;
   pluginTabs?: readonly GatewayControlUiPluginTab[];
   activePluginTab?: GatewayControlUiPluginTab;
+  embeddedPluginTitle?: string;
   agents: readonly AgentRosterRow[];
+  agentRosterRead?: Promise<unknown> | null;
   agentIdentity: AgentIdentityCapability;
   settingsAgentSelection: AgentSelectionCapability;
   activePathname?: string;
@@ -94,6 +96,7 @@ export type SettingsSidebarProps = {
 };
 
 type SettingsNavigationGroupView = {
+  key: RouteId | "search-results";
   labelKey: string | null;
   items: readonly SettingsNavigationItemView[];
   plugins?: readonly GatewayControlUiPluginTab[];
@@ -243,7 +246,7 @@ function SettingsBlockItem(props: { sidebar: SettingsSidebarProps; block: Settin
   );
 }
 
-function SettingsAgentSelector(props: SettingsSidebarProps) {
+function SettingsAgentSelector(props: SettingsSidebarProps & { inHeader?: boolean }) {
   const identitySource = createMemo(() => props.agentIdentity);
   const selectionSource = createMemo(() => props.settingsAgentSelection);
   const identities = createMemo(() => projectOwner(identitySource(), (source) => source.entries()));
@@ -263,6 +266,7 @@ function SettingsAgentSelector(props: SettingsSidebarProps) {
       void source.ensure(ids);
     },
   );
+  const triggerAttrs = createSettingsAgentTrigger(() => props.agentRosterRead);
   const roster = createMemo(() => props.agents);
   const agents = createMemo(() =>
     listSelectableAgents(roster()).map((agent) =>
@@ -283,9 +287,10 @@ function SettingsAgentSelector(props: SettingsSidebarProps) {
     })),
   );
   return (
-    <div class="settings-sidebar__agent">
+    <div class={["settings-sidebar__agent", { "settings-sidebar__agent--header": props.inHeader }]}>
       <openclaw-agent-select
         prop:options={options()}
+        prop:triggerAttrs={triggerAttrs}
         prop:identityTargetsRef={(read) => {
           readIdentityTargets = read;
         }}
@@ -340,7 +345,7 @@ function EmbeddedSettingsHeader(props: SettingsSidebarProps) {
       <h1 class="page-title">
         {props.presentation === "embed-list"
           ? t("nav.settings")
-          : (props.activePluginTab?.label ??
+          : (props.embeddedPluginTitle ??
             settingsNavigationLabelForRoute(
               props.activeRouteId,
               props.nativeDeviceSettings?.snapshot,
@@ -433,6 +438,7 @@ export function renderSettingsSidebar(props: SettingsSidebarProps) {
       const normalizedQuery = normalizeLowercaseStringOrEmpty(searchQuery);
       if (!normalizedQuery) {
         return navigationGroups.map((group) => ({
+          key: group.key,
           labelKey: group.labelKey,
           items: group.routes.map((routeId) => ({ routeId, showPage: true, blocks: [] })),
           plugins: group.labelKey === "nav.settingsGroupAgents" ? props.pluginTabs : undefined,
@@ -530,7 +536,7 @@ export function renderSettingsSidebar(props: SettingsSidebarProps) {
         })),
       ];
       return items.length > 0 || pluginMatches.length > 0
-        ? [{ labelKey: null, items, plugins: pluginMatches }]
+        ? [{ key: "search-results", labelKey: null, items, plugins: pluginMatches }]
         : [];
     });
     function SearchCompletion() {
@@ -609,13 +615,13 @@ export function renderSettingsSidebar(props: SettingsSidebarProps) {
               </p>
             }
           >
-            <For each={groups()} keyed={false}>
+            <For each={groups()} keyed={(group) => group.key}>
               {(group) => (
                 <div class="settings-sidebar__group">
                   <Show when={group().labelKey}>
                     {(label) => <div class="settings-sidebar__group-label">{t(label())}</div>}
                   </Show>
-                  <For each={group().items} keyed={false}>
+                  <For each={group().items} keyed={(item) => item.routeId}>
                     {(item) => (
                       <>
                         <Show when={item().showPage}>
@@ -675,23 +681,15 @@ export function renderSettingsSidebar(props: SettingsSidebarProps) {
       >
         <aside class="settings-sidebar">
           <header class="settings-sidebar__header" onMouseDown={beginNativeWindowDragFromTopInset}>
-            <button type="button" class="settings-sidebar__back" onClick={() => props.onExit()}>
-              <span class="settings-sidebar__back-icon" aria-hidden="true">
-                <Icon name="arrowLeft" />
-              </span>
-              {t("nav.exitSettings")}
-              {/* On a subpage Escape goes up a level, so it does not mean this button. */}
-              <Show
-                when={
-                  !settingsParentRoute(props.activeRouteId, props.activePathname, props.basePath)
-                }
-              >
-                <Kbd keys="esc" class="settings-sidebar__esc" ariaHidden />
-              </Show>
-            </button>
+            <IconButton
+              class="settings-sidebar__back"
+              icon="arrowLeft"
+              label={t("nav.exitSettings")}
+              onClick={() => props.onExit()}
+            />
             <h1 class="settings-sidebar__title">{t("nav.settings")}</h1>
+            <SettingsAgentSelector {...props} inHeader />
           </header>
-          <SettingsAgentSelector {...props} />
           <SettingsSearch />
           <SettingsNavigation />
           <footer class="settings-sidebar__footer">

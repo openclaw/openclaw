@@ -9,20 +9,17 @@ import {
 import { subagentRuns } from "./subagent-registry-memory.js";
 import {
   buildSubagentRunReadIndexFromRuns,
-  countActiveRunsForSessionFromRuns,
   listRunsForRequesterFromRuns,
   getLatestSubagentRunByChildSessionKeyFromRuns,
   shouldIgnorePostCompletionAnnounceForSessionFromRuns,
 } from "./subagent-registry-queries.js";
 import { listSubagentRunsForRequester } from "./subagent-registry-read.js";
+import { countActiveSubagentRunsForSession as countActiveRunsForSessionFromRuns } from "./subagent-registry-state.js";
 import type { SubagentRunRecord } from "./subagent-registry.types.js";
 
 const STALE_UNENDED_SUBAGENT_RUN_MS = 2 * 60 * 60 * 1_000;
 
-function makeRun(
-  runId: string,
-  overrides: Partial<SubagentRunRecordOverrides> = {},
-): SubagentRunRecord {
+function makeRun(runId: string, overrides: Partial<SubagentRunRecordOverrides>): SubagentRunRecord {
   const childSessionKey = overrides.childSessionKey ?? `agent:main:subagent:${runId}`;
   const requesterSessionKey = overrides.requesterSessionKey ?? "agent:main:main";
   return createSubagentRunRecord({
@@ -46,65 +43,23 @@ const descendants = (index: ReturnType<typeof buildSubagentRunReadIndexFromRuns>
   runIds(index.listDescendantRunsForRequester(root));
 
 describe("subagent registry query regressions", () => {
-  it("counts prepared descendants without allocating array iterators", () => {
-    const parent = makeRun("parent", { endedAt: 100 });
-    const child = makeRun("child", {
-      requesterSessionKey: parent.childSessionKey,
-      endedAt: 100,
-    });
-    const index = buildSubagentRunReadIndexFromRuns({ runs: toRunMap([parent, child]) });
-    const root = parent.requesterSessionKey;
-    index.listDescendantRunsForRequester(root);
-    index.countActiveDescendantRuns(root);
-    const iterate = Array.prototype[Symbol.iterator];
-    let iterations = 0;
-    // eslint-disable-next-line no-extend-native -- Measure native iterator work; restore synchronously below.
-    Array.prototype[Symbol.iterator] = function () {
-      iterations++;
-      return iterate.call(this);
-    };
-    let active: number;
-    let pending: number;
-    try {
-      active = index.countActiveDescendantRuns(root);
-      pending = index.countPendingDescendantRuns(root);
-    } finally {
-      // eslint-disable-next-line no-extend-native -- Restore the instrumented native iterator.
-      Array.prototype[Symbol.iterator] = iterate;
-    }
-    expect(active).toBe(0);
-    expect(pending).toBe(2);
-    expect(iterations).toBe(0);
-    using clears = vi.spyOn(Set.prototype, "clear");
-    using writes = vi.spyOn(Map.prototype, "set");
-    for (let window = 0; window < 10; window++) {
-      expect(index.atTime(Date.now()).countActiveDescendantRuns(root)).toBe(0);
-    }
-    // Clearing an empty dirty set replaces its backing store on every warm read.
-    expect(clears).not.toHaveBeenCalled();
-    expect(writes).not.toHaveBeenCalled();
-  });
-
-  it.each([50, 150, 500])("repairs active descendants without reading %i siblings", (size) => {
+  it("repairs active descendant counts after incremental patches", () => {
     const now = Date.UTC(2026, 9, 25);
-    const children = Array.from({ length: size }, (_, i) =>
+    const children = Array.from({ length: 500 }, (_, i) =>
       makeRun(`child-${i}`, { createdAt: now, endedAt: now }),
     );
     const child = children[0]!;
     const root = child.requesterSessionKey;
     let index = buildSubagentRunReadIndexFromRuns({ runs: toRunMap(children), now });
     expect(index.countActiveDescendantRuns(root)).toBe(0);
-    using reads = vi.spyOn(index.latestRunsByChildSessionKey, "get");
     for (let event = 1; event <= 20; event++) {
       const changed = {
         ...child,
         execution: { ...child.execution, endedAt: event % 2 ? undefined : now },
       };
       index = index.patch(toRunMap([changed]), new Map(), now + event);
-      reads.mockClear();
       expect(index.countActiveDescendantRuns(root)).toBe(event % 2);
       expect(index.atTime(now + event + 1).countActiveDescendantRuns(root)).toBe(event % 2);
-      expect(reads.mock.calls.length).toBeLessThanOrEqual(1);
       expect(index.hasUnendedRuns(root)).toBe(event % 2 === 1);
       expect(index.hasUnendedRuns(child.childSessionKey)).toBe(event % 2 === 1);
     }
@@ -294,7 +249,7 @@ describe("subagent registry query regressions", () => {
     const updated = { ...last, cleanupCompletedAt: 100 };
     index = index.patch(toRunMap([updated]), new Map());
     expect(unrelatedReads).toBe(0);
-    expect(index.getDisplaySubagentRun("last")).toBe(updated);
+    expect(index.getSessionDisplayFacts("last")?.identity).toBe(updated);
 
     index = index.patch(new Map([[middle.runId, undefined]]), new Map());
     const replacement = { ...last, cleanupCompletedAt: 200 };
@@ -339,8 +294,8 @@ describe("subagent registry query regressions", () => {
     expect(index.revision).not.toBe(revision);
     const replay = buildSubagentRunReadIndexFromRuns(index.inputs);
     for (const view of [index, replay]) {
-      expect(view.getDisplaySubagentRun("child")).toBe(older);
-      expect(view.getDisplaySubagentRun("moved")).toBe(latest);
+      expect(view.getSessionDisplayFacts("child")?.identity).toBe(older);
+      expect(view.getSessionDisplayFacts("moved")?.identity).toBe(latest);
     }
     expect(runIds(index.runsByControllerSessionKey.get("parent"))).toEqual(["older"]);
     expect(runIds(index.runsByControllerSessionKey.get("controller"))).toEqual(["latest"]);
@@ -349,12 +304,12 @@ describe("subagent registry query regressions", () => {
     expect(descendants(index, "parent")).toEqual(["older"]);
     expect(descendants(index, "requester")).toEqual(["latest"]);
     index = index.patch(new Map(), new Map([[latest.runId, undefined]]));
-    expect(index.getDisplaySubagentRun("moved")).toBe(runs.get("latest"));
-    expect(buildSubagentRunReadIndexFromRuns(index.inputs).getDisplaySubagentRun("moved")).toBe(
-      runs.get("latest"),
-    );
+    expect(index.getSessionDisplayFacts("moved")?.identity).toBe(runs.get("latest"));
+    expect(
+      buildSubagentRunReadIndexFromRuns(index.inputs).getSessionDisplayFacts("moved")?.identity,
+    ).toBe(runs.get("latest"));
     index = index.patch(new Map([[latest.runId, undefined]]), new Map());
-    expect(index.getDisplaySubagentRun("moved")).toBeNull();
+    expect(index.getSessionDisplayFacts("moved")).toBeNull();
     expect(index.runsByControllerSessionKey.has("controller")).toBe(false);
     expect(index.swarmRunsByRequesterSessionKey.has("swarm")).toBe(false);
     expect(index.listDescendantRunsForRequester("requester")).toEqual([]);
@@ -393,11 +348,17 @@ describe("subagent registry query regressions", () => {
       const params = { runs: toRunMap([running, ended, live[1]!]), now };
       const index = buildSubagentRunReadIndexFromRuns(params);
       expect(index.atTime(now).countActiveDescendantRuns(root)).toBe(1);
+      expect(index.getSessionDisplayFacts(running.childSessionKey)?.active).toBe(true);
       release();
-      expect(index.getDisplaySubagentRun(running.childSessionKey)).toBe(running);
+      expect(index.getSessionDisplayFacts(running.childSessionKey)).toMatchObject({
+        identity: running,
+        active: false,
+      });
       expect(index.countActiveDescendantRuns(root)).toBe(0);
-      expect(index.atTime(now).getDisplaySubagentRun(running.childSessionKey)).toBe(ended);
-      expect(index.getDisplaySubagentRun(running.childSessionKey)).toBe(running);
+      expect(index.atTime(now).getSessionDisplayFacts(running.childSessionKey)?.identity).toBe(
+        ended,
+      );
+      expect(index.getSessionDisplayFacts(running.childSessionKey)?.identity).toBe(running);
     } finally {
       release();
       for (const entry of live) {
@@ -442,6 +403,10 @@ describe("subagent registry query regressions", () => {
       .mockReturnValueOnce(capturedAt)
       .mockReturnValue(capturedAt + 1);
     expect(countActiveRunsForSessionFromRuns(runs, "agent:main:main")).toBe(1);
+    vi.mocked(Date.now)
+      .mockReturnValueOnce(capturedAt)
+      .mockReturnValue(capturedAt + 1);
+    expect(countActiveRunsForSessionFromRuns(toRunMap([child]), parent.childSessionKey)).toBe(0);
   });
 
   it("preserves breadth-first cycle traversal and refreshes a cached tree after a generation moves", () => {
@@ -503,22 +468,15 @@ describe("subagent registry query regressions", () => {
       generation: 2,
     });
     const sibling = makeRun("bucket-sibling", { requesterSessionKey: root });
-    const rows = [
-      child,
-      sibling,
-      otherAgent,
-      ...Array.from({ length: 100 }, (_, i) => makeRun(`bucket-${i}`)),
-    ];
+    const rows = [child, sibling, otherAgent];
     try {
       for (const row of rows) {
         subagentRuns.set(row.runId, row);
       }
-      using scans = vi.spyOn(subagentRuns, "values");
       const read = () => listSubagentRunsForRequester(root);
       expect(read()).toEqual([subagentRuns.get(child.runId), subagentRuns.get(sibling.runId)]);
       subagentRuns.set(child.runId, { ...child, task: "updated task" });
       expect(read()).toEqual([subagentRuns.get(child.runId), subagentRuns.get(sibling.runId)]);
-      expect(scans).not.toHaveBeenCalled();
     } finally {
       for (const row of rows) {
         subagentRuns.delete(row.runId);

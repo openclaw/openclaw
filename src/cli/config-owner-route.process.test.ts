@@ -26,6 +26,42 @@ import { prepareUserProfileCatalogForTest } from "../test-utils/user-profile-cat
 import { writeFixtureJson } from "./cli-fixtures.test-support.js";
 import { runStateOwnerCli as run, stateOwnerEnv } from "./cli-process-fixture.test-support.js";
 
+const reloadFault = vi.hoisted(() => ({
+  failuresRemaining: 0,
+  onFailure: undefined as (() => void) | undefined,
+  observeFile: undefined as (() => void) | undefined,
+}));
+
+vi.mock("../config/source-file.js", async (importOriginal) => {
+  const actual = await importOriginal<typeof import("../config/source-file.js")>();
+  return {
+    ...actual,
+    createConfigFileAdapter: (opts: Parameters<typeof actual.createConfigFileAdapter>[0]) => {
+      reloadFault.observeFile = opts.onChange;
+      return actual.createConfigFileAdapter(opts);
+    },
+  };
+});
+
+vi.mock("../gateway/config-reload.js", async (importOriginal) => {
+  const actual = await importOriginal<typeof import("../gateway/config-reload.js")>();
+  return {
+    ...actual,
+    startGatewayConfigReloader: (opts: Parameters<typeof actual.startGatewayConfigReloader>[0]) =>
+      actual.startGatewayConfigReloader({
+        ...opts,
+        onNoopConfigCommit: async (...args) => {
+          if (reloadFault.failuresRemaining > 0) {
+            reloadFault.failuresRemaining--;
+            reloadFault.onFailure?.();
+            throw new Error("Synthetic config apply failure");
+          }
+          return await opts.onNoopConfigCommit(...args);
+        },
+      }),
+  };
+});
+
 // One real Gateway owns the state root; CLI children are the shapes the Windows companion
 // app runs against its own running Gateway (setup wizard, gateway setup, local AI tray).
 const roots = useAutoCleanupTempDirTracker(afterAll);
@@ -143,6 +179,35 @@ describe("config mutations against a running Gateway", () => {
     await lock?.release();
     await claim?.release();
     restoreEnv.restore();
+  });
+
+  it("confirms a saved config set after the watcher retries the failed apply", async () => {
+    const failedApply = createDeferredCore();
+    reloadFault.failuresRemaining = 1;
+    reloadFault.onFailure = () => failedApply.resolve();
+    try {
+      const command = run(env, ["config", "set", "logging.level", "debug"]);
+      await Promise.race([failedApply.promise, command]);
+      // Supply the observation without making the CLI's bounded confirmation
+      // depend on native watch delivery under CI load. The Gateway still reads real saved bytes.
+      reloadFault.observeFile!();
+      const result = await command;
+
+      expect(reloadFault.failuresRemaining).toBe(0);
+      expect((await readConfig()).logging.level).toBe("debug");
+      const revision = await observer!.request<{
+        configRevisionHash: string;
+        appliedConfigHash: string;
+      }>("config.get", {});
+      expect(result.code, result.stderr).toBe(0);
+      expect(result.stdout).toContain("Updated logging.level. The Gateway applied the change.");
+      expect(revision.configRevisionHash).toBeTruthy();
+      expect(revision.appliedConfigHash).toBe(revision.configRevisionHash);
+      expectGatewayKeptRunning();
+    } finally {
+      reloadFault.failuresRemaining = 0;
+      reloadFault.onFailure = undefined;
+    }
   });
 
   it("routes MCP set, configure, tools, unset, and add through the live Gateway", async () => {
@@ -328,8 +393,11 @@ describe("config mutations against a running Gateway", () => {
 
   it("previews then applies a batch file, and unsets the written paths", async () => {
     const batchFile = path.join(env.HOME!, "local-ai.batch.json");
+    // Without a models list, the Gateway's runtime view of ollama holds a default `models: []`.
+    const ollama = { baseUrl: "http://127.0.0.1:11434", api: "ollama", apiKey: "ollama-local" };
     await writeFixtureJson(batchFile, [
       { path: "models.providers.llamacpp", value: provider },
+      { path: "models.providers.ollama", value: ollama },
       { path: "agents.defaults.model.primary", value: "llamacpp/local" },
     ]);
     const preview = await run(env, ["config", "set", "--batch-file", batchFile, "--dry-run"]);
@@ -337,18 +405,22 @@ describe("config mutations against a running Gateway", () => {
     expect((await readConfig()).models).toBeUndefined();
     const apply = await run(env, ["config", "set", "--batch-file", batchFile]);
     expect(apply.code, apply.stderr).toBe(0);
-    expect(apply.stdout).toContain("Updated 2 config paths.");
+    expect(apply.stdout).toContain("Updated 3 config paths.");
     const applied = await gatewayConfig();
     expect(applied.models.providers.llamacpp).toMatchObject({ baseUrl: provider.baseUrl });
     expect(applied.agents.defaults.model.primary).toBe("llamacpp/local");
 
-    for (const unsetPath of ["agents.defaults.model.primary", "models.providers.llamacpp"]) {
+    for (const unsetPath of [
+      "agents.defaults.model.primary",
+      "models.providers.llamacpp",
+      "models.providers.ollama",
+    ]) {
       const unset = await run(env, ["config", "unset", unsetPath]);
       expect(unset.code, unset.stderr).toBe(0);
       expect(unset.stdout).toContain(`Removed ${unsetPath}.`);
     }
     const removed = await readConfig();
-    expect(removed.models?.providers?.llamacpp).toBeUndefined();
+    expect(removed.models?.providers).toEqual({});
     expect(removed.agents?.defaults?.model?.primary).toBeUndefined();
   });
 
@@ -481,5 +553,24 @@ describe("config mutations against a running Gateway", () => {
     expect(result.stderr).toContain("stop the Gateway through its service owner");
     expect(await fs.readFile(env.OPENCLAW_CONFIG_PATH!, "utf8")).toBe(before);
     expectGatewayKeptRunning();
+  });
+
+  it("preserves the config set error when the saved revision stays inactive", async () => {
+    reloadFault.failuresRemaining = Number.POSITIVE_INFINITY;
+    try {
+      const result = await run(env, ["config", "set", "logging.level", "warn"]);
+      expect(result.code, result.stderr).toBe(1);
+      expect(result.stderr).toContain("persisted but was not applied to the active Gateway");
+      expect((await readConfig()).logging.level).toBe("warn");
+      const revision = await observer!.request<{
+        configRevisionHash: string;
+        appliedConfigHash: string;
+      }>("config.get", {});
+      expect(revision.configRevisionHash).toBeTruthy();
+      expect(revision.appliedConfigHash).not.toBe(revision.configRevisionHash);
+      expectGatewayKeptRunning();
+    } finally {
+      reloadFault.failuresRemaining = 0;
+    }
   });
 });

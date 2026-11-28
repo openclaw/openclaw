@@ -1,6 +1,5 @@
 import { captureOpenClawStateWorkerContext } from "../../../state/openclaw-state-worker-context.js";
 import type { OpenClawStateWorkerContext } from "../../../state/openclaw-state-worker-context.types.js";
-import { captureGatewayToolCallerAssertion } from "../../tools/gateway-caller-context.js";
 import { prepareRequesterCronAuthority } from "../requester-cron-authority.js";
 import { resolveRecordedRequester } from "./subagent-child-owner-match.js";
 import type { SubagentLifecycleController } from "./subagent-registry-lifecycle.js";
@@ -30,6 +29,7 @@ import {
 } from "./subagent-registry-state.js";
 import type { SubagentRunRecord, SwarmStructuredOutputState } from "./subagent-registry.types.js";
 import { isSameSubagentRunOwner } from "./subagent-run-generation.js";
+import { isSubagentRunQueued } from "./subagent-run-liveness.js";
 
 export function createSubagentRegistryPublicApi(config: {
   runs: Map<string, SubagentRunRecord>;
@@ -203,16 +203,17 @@ export function createSubagentRegistryPublicApi(config: {
     );
   }
 
-  /** Resolve a collector reserved by a replay-safe host bridge request. */
-  async function getSwarmRunByLaunchReplayKey(
+  /** Resolve replay eligibility without exposing the collector's retained state. */
+  async function resolveSwarmLaunchReplay(
     replayKey: string,
+    requestFingerprint: string,
     requesterSessionKey?: string,
     requesterAgentId?: string,
-  ): Promise<SubagentRunRecord | undefined> {
+  ) {
     const key = replayKey.trim();
     const requesterKey = requesterSessionKey?.trim();
     if (!key) {
-      return undefined;
+      return { status: "missing" } as const;
     }
     return withSubagentRunReadSnapshot(
       runs,
@@ -229,7 +230,25 @@ export function createSubagentRegistryPublicApi(config: {
           .map((entry) => entry.runId),
         sessionKeys: [],
       }),
-      (_selection, selected) => selected.values().next().value,
+      (_selection, selected) => {
+        const entry = selected.values().next().value;
+        if (!entry) {
+          return { status: "missing" } as const;
+        }
+        if (entry.swarmLaunchRequestFingerprint !== requestFingerprint) {
+          return { status: "mismatch" } as const;
+        }
+        if (entry.swarmLaunchPending && !isSubagentRunQueued(entry)) {
+          return { status: "inactive" } as const;
+        }
+        return {
+          status: "accepted" as const,
+          runId: entry.swarmRunId ?? entry.runId,
+          currentRunId: entry.runId,
+          childSessionKey: entry.childSessionKey,
+          ...(entry.label ? { label: entry.label } : {}),
+        };
+      },
       "all",
     );
   }
@@ -239,10 +258,8 @@ export function createSubagentRegistryPublicApi(config: {
     params: Parameters<SubagentLifecycleController["markRequesterTurnYielded"]>[0],
   ): Promise<number> {
     const stateContext = params.stateContext ?? captureOpenClawStateWorkerContext();
-    const assertCallerCurrent = captureGatewayToolCallerAssertion();
     const assertCurrent = () => {
       assertSubagentRegistryWriteSourceCurrent(stateContext);
-      assertCallerCurrent?.();
       params.assertCurrent?.();
     };
     assertCurrent();
@@ -303,11 +320,7 @@ export function createSubagentRegistryPublicApi(config: {
       acknowledgment?: string;
     }) => {
       const stateContext = captureOpenClawStateWorkerContext();
-      const assertCallerCurrent = captureGatewayToolCallerAssertion();
-      const assertCurrent = () => {
-        assertSubagentRegistryWriteSourceCurrent(stateContext);
-        assertCallerCurrent?.();
-      };
+      const assertCurrent = () => assertSubagentRegistryWriteSourceCurrent(stateContext);
       assertCurrent();
       await restoreOnce(stateContext);
       return await claimSubagentYieldInRuns({
@@ -322,7 +335,7 @@ export function createSubagentRegistryPublicApi(config: {
     completeCollectorLaunchCleanup,
     recordSwarmStructuredOutput,
     listSwarmRunsForGroup,
-    getSwarmRunByLaunchReplayKey,
+    resolveSwarmLaunchReplay,
     listCollectorRunsForRequester,
     countActiveRunsForSession: countActiveSubagentRunsForSession.bind(null, runs),
     settleRequesterAfterSessionSpawns: settleRequesterTurn,

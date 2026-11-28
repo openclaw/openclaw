@@ -1,5 +1,4 @@
 import { randomBytes, randomUUID } from "node:crypto";
-import { isNamedOperatorRoleEnforcementEnabled } from "openclaw/plugin-sdk/gateway-config-runtime";
 import type { GatewayControlUiIngressFactoryV2 } from "openclaw/plugin-sdk/gateway-ingress";
 import type { PluginServiceSchedulerV1 } from "openclaw/plugin-sdk/plugin-entry";
 import type { PluginRuntime } from "openclaw/plugin-sdk/runtime-store";
@@ -214,8 +213,7 @@ export class RelayService {
     const config = this.#options.config();
     if (
       authority.principal.kind === "owner" &&
-      (isNamedOperatorRoleEnforcementEnabled(config) ||
-        config.gateway?.auth?.mode === "trusted-proxy")
+      (config.gateway?.roles?.default || config.gateway?.auth?.mode === "trusted-proxy")
     ) {
       throw new RelayError(
         "unavailable",

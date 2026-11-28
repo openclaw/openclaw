@@ -534,7 +534,6 @@ it("settles a client-close route after the host trajectory capability closes (fi
   const operatorSource = {
     profileId: "staff-fixture",
     scopes: ["operator.write"],
-    assertCurrent: () => {},
   };
 
   const harness = createStartedThreadHarness();

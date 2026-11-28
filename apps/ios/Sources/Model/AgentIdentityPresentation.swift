@@ -1,10 +1,15 @@
 import Foundation
 import ImageIO
 import OpenClawChatUI
+import OpenClawKit
 import OpenClawProtocol
 import UIKit
 
 enum AgentIdentityPresentation {
+    nonisolated static func displayName(for agent: AgentSummary) -> String {
+        agent.name?.trimmedNonEmpty ?? agent.id
+    }
+
     nonisolated static func imageSource(identity: [String: AnyCodable]?) -> String? {
         for key in ["avatarUrl", "avatar"] {
             guard let source = identity?[key]?.value as? String else { continue }

@@ -94,6 +94,7 @@ it.each(
     await stream(
       model,
       {
+        systemPrompt: "Synthetic persistent instructions",
         messages: [{ role: "user", content: "Synthetic pricing proof", timestamp: 0 }],
       },
       { apiKey: "synthetic-key" },
@@ -101,6 +102,15 @@ it.each(
   ).result();
   expect(result.stopReason).toBe("stop");
   expect(bodies).toHaveLength(1);
+  expect(bodies[0]).not.toHaveProperty("instructions");
+  expect(bodies[0]?.input).toMatchObject([
+    {
+      type: "message",
+      role: "developer",
+      content: [{ type: "input_text", text: "Synthetic persistent instructions" }],
+    },
+    { role: "user" },
+  ]);
   if (tier === "default") {
     expect(bodies[0]).not.toHaveProperty("service_tier");
   } else {
@@ -152,6 +162,7 @@ it.each(
           ? { input: 8, output: 40, cacheRead: 0.4, cacheWrite: 10 }
           : { input: 2, output: 10, cacheRead: 0.1, cacheWrite: 2.5 },
       compat: {
+        cachesInstructions: false,
         supportsTemperature: false,
         supportedReasoningEfforts: ["low", "medium", "high", "xhigh", "max"],
         defaultThinkingLevel: "medium",

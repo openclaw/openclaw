@@ -1,6 +1,12 @@
 import fsSync from "node:fs";
 import fs from "node:fs/promises";
-import { createServer, request, type IncomingMessage, type Server } from "node:http";
+import {
+  createServer,
+  request,
+  ServerResponse,
+  type IncomingMessage,
+  type Server,
+} from "node:http";
 import path from "node:path";
 import { promisify } from "node:util";
 import { brotliCompressSync, brotliDecompressSync, gunzipSync, gzipSync } from "node:zlib";
@@ -77,8 +83,11 @@ describe.each([
     await write("assets/selected.js", assetBody);
     await write("assets/selected.js.gz", gzipSync(assetBody));
     await write("assets/selected.js.br", brotliCompressSync(assetBody));
+    await write("assets/shared-Br123456.js", assetBody);
+    await write("assets/shared-Br123456.js.br", brotliCompressSync(assetBody));
+    await write("assets/shared-Id123456.js", assetBody);
     await write("assets/cold.js", assetBody);
-    for (const name of ["get", "head", "forbidden"]) {
+    for (const name of ["get", "head", "forbidden", "absent", "excluded"]) {
       await write(`assets/cold-${name}-A1234567.js`, assetBody);
     }
     for (const publicAsset of ["themes/absolutely.css", "sw.js"]) {
@@ -152,6 +161,28 @@ describe.each([
       expect(list).toHaveBeenCalledOnce();
     });
 
+    it.each([
+      ["absent", "br, gzip, identity;q=0"],
+      ["excluded", "*;q=0"],
+    ])("reuses the %s asset's 406 while rechecking unknown paths", async (name, accept) => {
+      const read = vi.spyOn(WorkerTaskPool.prototype, "run");
+      const headers = { "Accept-Encoding": accept };
+      for (const expectedReads of [1, 0]) {
+        read.mockClear();
+        expect(
+          (await requestAsset(`${baseUrl}/assets/cold-${name}-A1234567.js`, "GET", headers))
+            .response.statusCode,
+        ).toBe(406);
+        expect(read).toHaveBeenCalledTimes(expectedReads);
+        read.mockClear();
+        expect(
+          (await requestAsset(`${baseUrl}/assets/unavailable-${name}-A1234567.js`, "GET", headers))
+            .response.statusCode,
+        ).toBe(404);
+        expect(read).toHaveBeenCalledOnce();
+      }
+    });
+
     it("keeps public content immutable across builds and revalidates changed versions", async () => {
       if (rootState.kind !== "bundled") {
         throw new Error("Expected bundled test root");
@@ -188,6 +219,48 @@ describe.each([
         rootState.publicAssetBuildId = "fixture-build";
       }
     });
+
+    it.each([
+      { file: "shared-Br123456.js", encoding: "br" },
+      { file: "shared-Id123456.js", encoding: "identity" },
+    ])(
+      "shares a bundled $encoding body across different client preferences",
+      async ({ file, encoding }) => {
+        const read = vi.spyOn(WorkerTaskPool.prototype, "run");
+        const sent = vi.spyOn(ServerResponse.prototype, "end");
+        const get = async (accept: string) => {
+          const { response, body } = await requestAsset(`${baseUrl}/assets/${file}`, "GET", {
+            "Accept-Encoding": accept,
+          });
+          expect(response.statusCode).toBe(200);
+          expect(response.headers.vary).toBe("Accept-Encoding");
+          expect(response.headers["content-encoding"]).toBe(encoding === "br" ? "br" : undefined);
+          expect(encoding === "br" ? brotliDecompressSync(body) : body).toEqual(assetBody);
+        };
+        await Promise.all([get("br, gzip"), get("br")]);
+        await get("br, gzip");
+        await get("br");
+        const bodies = sent.mock.calls.flatMap(([chunk]) =>
+          Buffer.isBuffer(chunk) ? [chunk] : [],
+        );
+        expect(bodies).toHaveLength(4);
+        const uniqueBodies = new Set(bodies);
+        const workerBodyReads = read.mock.calls.filter(
+          ([input]) => (input as ControlUiFileRead).readBody,
+        ).length;
+        const retainedBytes = Array.from(uniqueBodies).reduce(
+          (sum, body) => sum + body.byteLength,
+          0,
+        );
+        const observation = { workerBodyReads, uniqueBuffers: uniqueBodies.size, retainedBytes };
+        expect(observation, JSON.stringify(observation)).toEqual({
+          workerBodyReads: 1,
+          uniqueBuffers: 1,
+          retainedBytes:
+            encoding === "br" ? brotliCompressSync(assetBody).byteLength : assetBody.byteLength,
+        });
+      },
+    );
 
     it("reads only negotiated bodies while alternating cold encoding preferences", async () => {
       const read = vi.spyOn(WorkerTaskPool.prototype, "run");

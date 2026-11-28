@@ -149,6 +149,7 @@ export type CompactEmbeddedAgentSessionRuntimeParams = Omit<
   CompactEmbeddedAgentSessionParams,
   "sessionFile"
 > & {
+  pluginExecutionAuthority?: import("../admitted-run-context.js").AdmittedRunOperatorAuthority;
   /** Deprecated file-backed artifact target. Prefer sessionTarget for new callers. */
   sessionFile?: string;
 };

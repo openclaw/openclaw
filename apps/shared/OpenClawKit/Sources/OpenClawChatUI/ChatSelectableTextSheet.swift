@@ -13,13 +13,7 @@ struct ChatSelectableTextSheet: View {
                 .navigationTitle("Select Text")
                 .navigationBarTitleDisplayMode(.inline)
                 .toolbar {
-                    ToolbarItem(placement: .confirmationAction) {
-                        Button {
-                            self.dismiss()
-                        } label: {
-                            Text("Close").font(OpenClawChatTypography.body)
-                        }
-                    }
+                    OpenClawSheetCloseItem { self.dismiss() }
                 }
         }
     }
@@ -50,6 +44,9 @@ enum ChatSelectableTextViewFactory {
         textView.isEditable = false
         textView.isSelectable = true
         textView.isScrollEnabled = true
+        if #available(iOS 26.0, *) {
+            textView.topEdgeEffect.style = .soft
+        }
         textView.alwaysBounceVertical = true
         textView.backgroundColor = .clear
         textView.textColor = .label

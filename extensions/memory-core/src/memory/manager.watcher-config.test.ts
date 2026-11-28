@@ -14,15 +14,29 @@ import {
   resetMemoryCoreDreamingStateForTests,
 } from "../test-helpers.js";
 import { runInMemoryTestBackgroundContext } from "./background-context.test-support.js";
+import type { MemoryFileWatcherOptions } from "./file-watcher.js";
 import { MemoryIndexDatabase } from "./manager-database-context.js";
 import { MemoryIndexManager } from "./manager.js";
+
+const settledChanges = vi.hoisted(() => vi.fn<() => void>());
 
 // Keep owner fault injection in this process; real worker transport has separate coverage.
 vi.mock("./local-file-watcher.js", async (original) => {
   const { MemoryFileWatcher } = await import("./file-watcher.js");
   return {
     ...(await original<typeof import("./local-file-watcher.js")>()),
-    LocalMemoryFileWatcher: MemoryFileWatcher,
+    LocalMemoryFileWatcher: class extends MemoryFileWatcher {
+      constructor(options: MemoryFileWatcherOptions) {
+        super({
+          ...options,
+          onChange: () => {
+            const result = options.onChange();
+            settledChanges();
+            return result;
+          },
+        });
+      }
+    },
   };
 });
 
@@ -41,6 +55,7 @@ describe("Memory watch configuration", () => {
   let manager: MemoryIndexManager | null = null;
   beforeEach(async () => {
     observer.reset();
+    settledChanges.mockReset();
     vi.stubEnv("CHOKIDAR_USEPOLLING", "false");
     vi.stubEnv("CHOKIDAR_INTERVAL", undefined);
     state = await createOpenClawTestState({ label: "memory-watch-config" });
@@ -87,6 +102,66 @@ describe("Memory watch configuration", () => {
   }
   const snippets = async (active: MemoryIndexManager, text: string) =>
     (await active.search(text, { minScore: 0 })).map((result) => result.snippet);
+
+  it("does not invalidate a foreground index again when its baseline debounce arrives", async () => {
+    vi.useFakeTimers({ toFake: ["setTimeout", "clearTimeout"] });
+    const { cfg, active, idle } = await openManager("Baseline already indexed.");
+    const entry = observer.observations[0]!;
+    entry.dirty(undefined, "reconcile");
+    expect(active.status().dirty).toBe(true);
+    await active.sync({ reason: "foreground" });
+    expect(active.status().dirty).toBe(false);
+    const dirtiness: Array<ReturnType<MemoryIndexManager["status"]>["dirty"]> = [];
+    settledChanges.mockImplementation(() => dirtiness.push(active.status().dirty));
+    await vi.advanceTimersByTimeAsync(resolveMemorySearchConfig(cfg, "main")!.sync.watchDebounceMs);
+    expect(dirtiness).toEqual([false]);
+    await idle();
+    expect(await snippets(active, "Baseline")).toContain("Baseline already indexed.");
+  });
+
+  it.each(["selected", "overflow"] as const)(
+    "indexes a settled %s edit even when foreground sync consumed its first dirty notification",
+    async (notification) => {
+      const { file, cfg, active, idle } = await openManager("Initial indexed text.");
+      const entry = observer.observations[0]!;
+      vi.useFakeTimers({ toFake: ["setTimeout", "clearTimeout"] });
+      await fs.writeFile(file, "Intermediate write.");
+      if (notification === "overflow") {
+        entry.dirty(undefined, "overflow");
+      } else {
+        entry.dirty([{ path: path.relative(entry.root.rootDir, file), type: "content" }]);
+      }
+      await active.sync({ reason: "foreground" });
+      expect(active.status().dirty).toBe(false);
+      // Finish during debounce, before even the first settling sample.
+      await fs.writeFile(file, "Final cobalt heron text.");
+      const sampled = createDeferred<void>();
+      const open = entry.root.open.bind(entry.root);
+      vi.spyOn(entry.root, "open").mockImplementation(async (...args) => {
+        const opened = await open(...args);
+        const dispose = opened[Symbol.asyncDispose].bind(opened);
+        vi.spyOn(opened, Symbol.asyncDispose).mockImplementation(async () => {
+          await dispose();
+          sampled.resolve();
+        });
+        return opened;
+      });
+      const changed = createDeferred<void>();
+      settledChanges.mockImplementation(() => changed.resolve());
+      await vi.advanceTimersByTimeAsync(
+        resolveMemorySearchConfig(cfg, "main")!.sync.watchDebounceMs,
+      );
+      if (notification === "selected") {
+        await sampled.promise;
+        await vi.advanceTimersByTimeAsync(0);
+        await vi.advanceTimersByTimeAsync(100);
+      }
+      await changed.promise;
+      await idle();
+      expect(await snippets(active, "cobalt heron")).toContain("Final cobalt heron text.");
+      expect(active.status().dirty).toBe(false);
+    },
+  );
 
   it("keeps a newer selected-file dirty behind held settling before publishing the index", async () => {
     const { file, cfg, active, idle } = await openManager("Initial indexed text.");

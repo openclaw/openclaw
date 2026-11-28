@@ -47,19 +47,15 @@ import {
 import { resolveLegacyInheritedAuthDir } from "../legacy-inherited-auth-dir.js";
 import { resolveModelFallbackAvailability } from "../model-selection-config.js";
 import {
+  createPreparedModelRuntimeSnapshotBorrow,
   getPreparedModelRuntimePluginGeneration,
   runOutsidePreparedModelRuntimePluginGenerationScope,
   withPreparedModelRuntimePluginGenerationScope,
 } from "../prepared-model-runtime-generation-scope.js";
 import {
-  PreparedModelRuntimeInitialRunAdmissionError,
-  PreparedModelRuntimeOwnerNotPublishedError,
-} from "../prepared-model-runtime.errors.js";
-import {
   acquireAgentRunPreparedModelRuntime,
   acquireReadOnlyPreparedModelRuntime,
 } from "../prepared-model-runtime.js";
-import { prepareAgentPromptProjects } from "../prompt-projects.js";
 import { settleFailedRequesterRun, settleRequesterRun } from "../requester-run-settlement.js";
 import { resolveAgentRunErrorLifecycleFields } from "../run-termination.js";
 import { waitForSessionMaintenance } from "../session-maintenance/coordinator.js";
@@ -88,6 +84,8 @@ import {
 } from "./run/model-admission.js";
 import {
   bindRunToPreparedModelRuntime,
+  initializeReadOnlyRunModelCatalog,
+  prepareRunModelRuntimeProjects,
   resolvePreparedRuntimeWorkspaces,
 } from "./run/prepared-runtime-context.js";
 import { createEmbeddedRunProgressController } from "./run/progress-controller.js";
@@ -347,28 +345,22 @@ async function runEmbeddedAgentForSession(
                   ...(params.pluginGeneration ? { pluginGeneration: params.pluginGeneration } : {}),
                 }
               : {}),
-          })
-            .catch((error: unknown) => {
-              // A refreshed generation may already have executed tools. Only the first
-              // acquisition can prove that this candidate never entered execution.
-              if (
-                !refreshed &&
-                error instanceof PreparedModelRuntimeOwnerNotPublishedError &&
-                error.admissionBlocked
-              ) {
-                throw new PreparedModelRuntimeInitialRunAdmissionError(error);
-              }
-              throw error;
-            })
-            .finally(() => {
-              noteLaneTaskProgress();
-              laneController.setLaneTaskDeadline(undefined);
-            });
+          }).finally(() => {
+            noteLaneTaskProgress();
+            laneController.setLaneTaskDeadline(undefined);
+          });
           preparedRuntimeResource = preparedModelRuntimeLease;
           startupStages.mark("prepared-runtime");
-          const preparedModelRuntimeOwnerSnapshot = preparedModelRuntimeLease.snapshot;
-          let preparedLeaseActive = true;
+          let preparedSnapshotBorrow:
+            | ReturnType<typeof createPreparedModelRuntimeSnapshotBorrow>
+            | undefined;
           try {
+            const preparedModelRuntimeOwnerSnapshot = await initializeReadOnlyRunModelCatalog(
+              params,
+              preparedModelRuntimeLease.snapshot,
+              requestedRuntimeSelection,
+              laneController.abortSignal,
+            );
             throwIfAborted();
             if (
               params.pluginGeneration &&
@@ -387,16 +379,10 @@ async function runEmbeddedAgentForSession(
             });
             params = rebound.runParams;
             const workspaceResolution = rebound.workspaceResolution;
-            const projects = await prepareAgentPromptProjects({
-              config: params.config,
-              workspaceDir: workspaceResolution.workspaceDir,
-              cwd: params.cwd,
-              sessionId: params.sessionId,
-            });
-            const preparedModelRuntime = Object.freeze({
-              ...preparedModelRuntimeOwnerSnapshot,
-              ...projects,
-            });
+            const preparedModelRuntime = await prepareRunModelRuntimeProjects(
+              params,
+              preparedModelRuntimeOwnerSnapshot,
+            );
             const runPrepared = async () => {
               params = refresh.withDeliveryCallbacks(params);
               const preparedAgentId = workspaceResolution.agentId;
@@ -467,7 +453,7 @@ async function runEmbeddedAgentForSession(
                 sessionKey: resolvedSessionKey,
                 sessionId: params.sessionId,
                 workspaceDir: resolvedWorkspace,
-                activeProjectKeys: [...projects.activeProjectKeys],
+                activeProjectKeys: [...preparedModelRuntime.activeProjectKeys],
                 modelProviderId: provider,
                 modelId,
                 trigger: params.trigger,
@@ -581,13 +567,17 @@ async function runEmbeddedAgentForSession(
                   return runPrepared();
                 }),
               );
-            return params.pluginGeneration
-              ? await withPreparedModelRuntimePluginGenerationScope(
-                  preparedModelRuntimeLease.pluginGeneration,
-                  runWithPreparedRuntime,
-                  () => (preparedLeaseActive ? preparedModelRuntimeOwnerSnapshot : undefined),
-                )
-              : await runWithPreparedRuntime();
+            if (!params.pluginGeneration) {
+              return await runWithPreparedRuntime();
+            }
+            preparedSnapshotBorrow = createPreparedModelRuntimeSnapshotBorrow(
+              preparedModelRuntimeOwnerSnapshot,
+            );
+            return await withPreparedModelRuntimePluginGenerationScope(
+              preparedModelRuntimeLease.pluginGeneration,
+              runWithPreparedRuntime,
+              preparedSnapshotBorrow.read,
+            );
           } finally {
             const initialWriter = initialWriterResource;
             if (initialWriter) {
@@ -596,7 +586,7 @@ async function runEmbeddedAgentForSession(
               );
               void initialWriterCleanup.catch(() => {});
             }
-            preparedLeaseActive = false;
+            preparedSnapshotBorrow?.close();
           }
         };
         // The lane reports its existing result while this owner retains actual cleanup work.

@@ -18,7 +18,7 @@ export async function executeSystemAgentTemplateOperation(
   const gateway = getSystemAgentTemplateGateway();
   if (!gateway) {
     throw new Error(
-      "Template installation needs an active administrator Gateway request. Use Settings → Ask OpenClaw or Pages → Templates on the target Gateway; enable Templates in Settings → Labs first. No shell fallback is available.",
+      "Template installation needs an active administrator Gateway request. Use Settings → Ask OpenClaw or Customize → Templates on the target Gateway. No shell fallback is available.",
     );
   }
   if (operation.kind === "template-review" || !opts.approved) {

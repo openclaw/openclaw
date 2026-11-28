@@ -6,13 +6,13 @@ import type {
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import type { StatelessTemplateAddOptions } from "./add-stateless.js";
 import { TemplateAddMutationError } from "./add.js";
+import { TemplatesDisabledError } from "./availability.js";
 import type { ClawHubTemplateTrust, withResolvedClawHubSource } from "./clawhub-source.js";
 import {
   applyTemplateAddForGateway,
   TemplateGatewayPlanBlockedError,
   TemplateGatewayPlanChangedError,
 } from "./gateway-add-apply.js";
-import { TemplatesLabsDisabledError } from "./labs-gate.js";
 import type { TemplateAddPlan, TemplateReadResult } from "./types.js";
 
 const mocks = vi.hoisted(() => ({
@@ -129,7 +129,9 @@ const skillReview = {
   reviewToken: "sha256:skill-review",
 };
 const config: OpenClawConfig = { gateway: { controlUi: { experimental: { templates: true } } } };
-const labsOff: OpenClawConfig = { gateway: { controlUi: { experimental: { templates: false } } } };
+const templatesOff: OpenClawConfig = {
+  gateway: { controlUi: { experimental: { templates: false } } },
+};
 
 type ApplyInput = Parameters<typeof applyTemplateAddForGateway>[0];
 function applyInput(overrides: Partial<ApplyInput> = {}) {
@@ -518,28 +520,28 @@ describe("Gateway Template Add application", () => {
     expect(options.getCurrentConfig()).toBe(config);
   });
 
-  it("refuses Add when Labs turns off while waiting for the mutation lease", async () => {
+  it("refuses Add when Templates is disabled while waiting for the mutation lease", async () => {
     let onDisk = config;
     enterPluginLease(() => {
-      onDisk = labsOff;
+      onDisk = templatesOff;
     });
     usePolicy(() => onDisk);
 
-    await expect(applyReviewed()).rejects.toBeInstanceOf(TemplatesLabsDisabledError);
+    await expect(applyReviewed()).rejects.toBeInstanceOf(TemplatesDisabledError);
     expectNoMutation();
   });
 
-  it("rechecks Labs at a later mutation effect boundary", async () => {
+  it("rechecks Templates availability at a later mutation effect boundary", async () => {
     let onDisk = config;
     usePolicy(() => onDisk);
     mocks.apply.mockImplementation(
       async (_plan: TemplateAddPlan, options: StatelessTemplateAddOptions) => {
-        onDisk = labsOff;
+        onDisk = templatesOff;
         await options.prepareEffect?.();
       },
     );
 
-    await expect(applyReviewed()).rejects.toBeInstanceOf(TemplatesLabsDisabledError);
+    await expect(applyReviewed()).rejects.toBeInstanceOf(TemplatesDisabledError);
     expect(mocks.apply).toHaveBeenCalledTimes(1);
   });
 

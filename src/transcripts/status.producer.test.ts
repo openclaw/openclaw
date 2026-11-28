@@ -12,17 +12,14 @@ import { createTranscriptsAutoStartService } from "./auto-start.js";
 import * as transcriptCapture from "./capture.js";
 import { readTranscriptCaptureSnapshot, startTranscripts } from "./capture.js";
 import { readConfiguredTranscriptStarts } from "./configured-start-status.js";
-import type {
-  TranscriptOccupancyWatchRequest,
-  TranscriptSessionDescriptor,
-  TranscriptStartRequest,
-} from "./provider-types.js";
+import type { TranscriptOccupancyWatchRequest, TranscriptStartRequest } from "./provider-types.js";
 import { readTranscriptLibraryStatus } from "./status.js";
 import {
   transcriptStatusRoom as room,
   useTranscriptStatusFixture,
 } from "./status.producer.test-harness.js";
 import { transcriptSessionSelector, TranscriptsStore } from "./store.js";
+import type { TranscriptSessionDescriptor } from "./types.js";
 
 const fixture = useTranscriptStatusFixture();
 type Fixture = ReturnType<typeof fixture>;

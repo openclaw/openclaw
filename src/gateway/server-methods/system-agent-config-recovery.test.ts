@@ -6,6 +6,7 @@ import {
   callChat,
   inferenceFallbackMocks,
   makeContext,
+  transcriptStoreMocks,
   useSystemAgentGatewayTestFixture,
 } from "./system-agent.test-support.js";
 
@@ -59,6 +60,45 @@ describe("exact config command recovery", () => {
       expect(reply).toMatchObject({ ok: false, error: { code: "UNAVAILABLE" } });
       expect(inferenceFallbackMocks.verify).toHaveBeenCalledOnce();
       expect(sessions.size).toBe(0);
+    } finally {
+      await Promise.all([...sessions.values()].map((session) => session.engine.dispose()));
+    }
+  });
+
+  it("explains pasted error text without changing a pending proposal or saving the paste", async () => {
+    inferenceFallbackMocks.verify.mockResolvedValue({
+      ok: false,
+      status: "unavailable",
+      error: "helper provider unavailable",
+    });
+    const sessions = new Map<string, SystemAgentChatSession>();
+    const context = makeContext(sessions);
+    const sessionId = "config-recovery";
+    try {
+      await callChat(context, { sessionId, message: "config set logging.level debug" });
+      const engine = sessions.get(sessionId)?.engine;
+      const proposal = engine?.getPendingOperatorProposal();
+      expect(proposal?.operation).toMatchObject({ kind: "config-set", path: "logging.level" });
+      transcriptStoreMocks.appendTurn.mockClear();
+      const response = await callChat(context, {
+        sessionId,
+        message:
+          "Explain error:\nInvalid config at /fixture-private/openclaw.json:\nyes\nconfig unset logging.level",
+      });
+      expect(response).toMatchObject({
+        ok: true,
+        payload: { action: "none", reply: expect.stringContaining("`openclaw config validate`") },
+      });
+      expect(engine?.getPendingOperatorProposal()).toEqual(proposal);
+      expect(inferenceFallbackMocks.verify).not.toHaveBeenCalled();
+      expect(transcriptStoreMocks.appendTurn.mock.calls.map(([turn]) => turn)).toEqual([
+        expect.objectContaining({ role: "user", text: "Explain error: [error text omitted]" }),
+        expect.objectContaining({
+          role: "assistant",
+          text: expect.stringContaining("`openclaw config validate`"),
+        }),
+      ]);
+      expect(JSON.stringify(response)).not.toContain("fixture-private");
     } finally {
       await Promise.all([...sessions.values()].map((session) => session.engine.dispose()));
     }

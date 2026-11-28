@@ -297,6 +297,11 @@ export function isModelsAuthOrderSetParams(
 ): value is import("typebox").Static<
   typeof import("../../schema-modules.js").ModelsAuthOrderSetParamsSchema
 >;
+export function isModelsAuthProfileRenameParams(
+  value: unknown,
+): value is import("typebox").Static<
+  typeof import("../../schema/model-auth-profile.js").ModelsAuthProfileRenameParamsSchema
+>;
 export function isModelsAuthRefreshParams(
   value: unknown,
 ): value is import("typebox").Static<
@@ -406,6 +411,11 @@ export function isSkillsUpdateParams(
   value: unknown,
 ): value is import("typebox").Static<
   typeof import("../../schema-modules.js").SkillsUpdateParamsSchema
+>;
+export function isSkillsCategoriesParams(
+  value: unknown,
+): value is import("typebox").Static<
+  typeof import("../../schema-modules.js").SkillsCategoriesParamsSchema
 >;
 export function isSkillsSearchParams(
   value: unknown,
@@ -766,6 +776,11 @@ export function isChatToolTitlesParams(
   value: unknown,
 ): value is import("typebox").Static<
   typeof import("../../schema-modules.js").ChatToolTitlesParamsSchema
+>;
+export function isChatPendingInputsOwnParams(
+  value: unknown,
+): value is import("typebox").Static<
+  typeof import("../../schema-modules.js").ChatPendingInputsOwnParamsSchema
 >;
 export function isChatPendingInputsDismissParams(
   value: unknown,
@@ -1525,6 +1540,11 @@ export function isCronStatusParams(
 ): value is import("typebox").Static<
   typeof import("../../schema-modules.js").CronStatusParamsSchema
 >;
+export function isCronAcknowledgeFailureParams(
+  value: unknown,
+): value is import("typebox").Static<
+  typeof import("../../schema-modules.js").CronAcknowledgeFailureParamsSchema
+>;
 export function isCronGetParams(
   value: unknown,
 ): value is import("typebox").Static<typeof import("../../schema-modules.js").CronGetParamsSchema>;
@@ -1818,6 +1838,11 @@ export function isSessionsCatalogListParams(
 ): value is import("typebox").Static<
   typeof import("../../schema-modules.js").SessionsCatalogListParamsSchema
 >;
+export function isSessionsCatalogRouteParams(
+  value: unknown,
+): value is import("typebox").Static<
+  typeof import("../../schema-modules.js").SessionsCatalogRouteParamsSchema
+>;
 export function isSessionsCatalogReadParams(
   value: unknown,
 ): value is import("typebox").Static<
@@ -1953,6 +1978,11 @@ export function isSessionMemberAddParams(
 ): value is import("typebox").Static<
   typeof import("../../schema-modules.js").SessionMemberAddParamsSchema
 >;
+export function isSessionMemberSetAccessParams(
+  value: unknown,
+): value is import("typebox").Static<
+  typeof import("../../schema-modules.js").SessionMemberSetAccessParamsSchema
+>;
 export function isSessionMemberRemoveParams(
   value: unknown,
 ): value is import("typebox").Static<
@@ -2002,6 +2032,16 @@ export function isSessionsTitlePrepareParams(
   value: unknown,
 ): value is import("typebox").Static<
   typeof import("../../schema-modules.js").SessionsTitlePrepareParamsSchema
+>;
+export function isSessionsSteerTargetParams(
+  value: unknown,
+): value is import("typebox").Static<
+  typeof import("../../schema-modules.js").SessionsSteerTargetParamsSchema
+>;
+export function isSessionsSteerActiveParams(
+  value: unknown,
+): value is import("typebox").Static<
+  typeof import("../../schema-modules.js").SessionsSteerActiveParamsSchema
 >;
 export function isSessionsSendParams(
   value: unknown,
@@ -2237,6 +2277,11 @@ export function isSessionsFilesPreviewParams(
   value: unknown,
 ): value is import("typebox").Static<
   typeof import("../../schema-modules.js").SessionsFilesPreviewParamsSchema
+>;
+export function isSessionsFilesStatParams(
+  value: unknown,
+): value is import("typebox").Static<
+  typeof import("../../schema-modules.js").SessionsFilesStatParamsSchema
 >;
 export function isSessionsFilesPreviewReleaseParams(
   value: unknown,
@@ -2532,6 +2577,11 @@ export function isTemplatesDraftsSaveParams(
 ): value is import("typebox").Static<
   typeof import("../../schema-modules.js").TemplatesDraftsSaveParamsSchema
 >;
+export function isTemplatesDraftsSignInParams(
+  value: unknown,
+): value is import("typebox").Static<
+  typeof import("../../schema-modules.js").TemplatesDraftsSignInParamsSchema
+>;
 export function isTemplatesDraftsReviewParams(
   value: unknown,
 ): value is import("typebox").Static<
@@ -2651,6 +2701,21 @@ export function isProjectsRemoveParams(
   value: unknown,
 ): value is import("typebox").Static<
   typeof import("../../schema-modules.js").ProjectsRemoveParamsSchema
+>;
+export function isProjectsMoveSessionOptionsParams(
+  value: unknown,
+): value is import("typebox").Static<
+  typeof import("../../schema-modules.js").ProjectsMoveSessionOptionsParamsSchema
+>;
+export function isProjectsMoveSessionParams(
+  value: unknown,
+): value is import("typebox").Static<
+  typeof import("../../schema-modules.js").ProjectsMoveSessionParamsSchema
+>;
+export function isProjectsRenameParams(
+  value: unknown,
+): value is import("typebox").Static<
+  typeof import("../../schema-modules.js").ProjectsRenameParamsSchema
 >;
 export function isWorktreesListParams(
   value: unknown,

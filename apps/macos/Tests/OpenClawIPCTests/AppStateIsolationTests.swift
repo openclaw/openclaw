@@ -103,6 +103,8 @@ struct AppStateIsolationTests {
             #expect(await manager._testAttachExistingGatewayIfAvailable(port: port))
             let failure = manager.lastFailureReason ?? ""
             #expect(failure.contains("already owned by another process"))
+            #expect(failure.contains("connect in Remote mode"))
+            #expect(failure.contains("start a local Gateway, set gateway.port to a free port"))
             let endpointState = await GatewayEndpointStore.shared.currentState()
             let revision = GatewayEndpointStore.shared.routeRevision
             #expect(endpointState == .unavailable(mode: .local, reason: failure, routeRevision: revision))
@@ -454,8 +456,6 @@ struct ProfileChatPreferencesTests {
             var modelCaptureError: Error?
             try await AppKitTestSupport.openMenu(button, in: window) { menu in
                 initiallyPinned = menu.items.contains { $0.title == "Unpin model" }
-                let index = try #require(menu.items.firstIndex { $0.title == "fixture/fresh" })
-                try #require(menu.items[index].isEnabled)
                 // Capture errors must not skip the preference actions and assertions.
                 do {
                     try AppKitTestSupport.record(
@@ -463,6 +463,9 @@ struct ProfileChatPreferencesTests {
                 } catch {
                     modelCaptureError = error
                 }
+                // Rendering the capture can shift the model rows.
+                let index = try #require(menu.items.firstIndex { $0.title == "fixture/fresh" })
+                try #require(menu.items[index].isEnabled)
                 menu.performActionForItem(at: index)
             }
             #expect(modelCaptureError == nil)

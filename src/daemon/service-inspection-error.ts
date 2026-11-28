@@ -129,6 +129,33 @@ export class ServiceOwnershipRefusalError extends Error {
   }
 }
 
+/** A loaded system unit observed running under an account other than this process. */
+export type SystemdServiceAccountMismatch = {
+  unitName: string;
+  unitPath: string;
+  serviceUser: string;
+  programArguments: string[];
+  workingDirectory: string;
+};
+
+/** The same refusal, carrying what was observed so callers can name the unit and its account. */
+export class SystemdServiceAccountRefusalError extends ServiceOwnershipRefusalError {
+  constructor(readonly mismatch: SystemdServiceAccountMismatch) {
+    super("systemd-account-refused");
+  }
+}
+
+export function findSystemdServiceAccountMismatch(
+  error: unknown,
+): SystemdServiceAccountMismatch | undefined {
+  for (const candidate of collectNestedErrorCandidates(error)) {
+    if (candidate instanceof SystemdServiceAccountRefusalError) {
+      return candidate.mismatch;
+    }
+  }
+  return undefined;
+}
+
 export function findServiceOwnershipRefusal(
   error: unknown,
 ): ServiceOwnershipRefusalError | undefined {

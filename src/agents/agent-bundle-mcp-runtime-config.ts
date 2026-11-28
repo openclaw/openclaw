@@ -118,7 +118,12 @@ export function resolveSessionMcpConfigSummary(params: {
   manifestRegistry?: Pick<PluginManifestRegistry, "plugins">;
   toolOverrides?: Pick<SessionToolOverrides, "mcpServers" | "mcpToolsDeny">;
   toolDenylist?: string[];
-}): { fingerprint: string; serverNames: string[]; policyBlockedServerNames: string[] } {
+}): {
+  fingerprint: string;
+  serverNames: string[];
+  policyBlockedServerNames: string[];
+  pluginIdsByServer: ReadonlyMap<string, string>;
+} {
   const { loaded, safeServerNamesByServer, policyBlockedServerNames } = loadSessionMcpConfig({
     ...params,
     logDiagnostics: false,
@@ -138,5 +143,10 @@ export function resolveSessionMcpConfigSummary(params: {
       : {}),
     safeServerNamesByServer,
   });
-  return { fingerprint, serverNames, policyBlockedServerNames };
+  return {
+    fingerprint,
+    serverNames,
+    policyBlockedServerNames,
+    pluginIdsByServer: new Map(Object.entries(loaded.pluginIdsByServer ?? {})),
+  };
 }

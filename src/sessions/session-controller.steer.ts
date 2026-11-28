@@ -75,7 +75,7 @@ export async function beginSessionControllerSteer(
   try {
     const assertInputCurrent = () => {
       params.input.abortSignal.throwIfAborted();
-      params.input.sourceAdapter?.authority?.assertCurrent();
+      params.input.sourceAdapter?.authority?.assertCurrent?.();
       params.options.abortSignal?.throwIfAborted();
     };
     const preparation = params.options.toolAuthorityPreparation;
@@ -217,14 +217,14 @@ export async function sendSessionControllerSteerNow(
   if (!selected) {
     return { status: "settled", tools: [] };
   }
-  input.sourceAdapter?.authority?.assertCurrent();
+  input.sourceAdapter?.authority?.assertCurrent?.();
   const { pending, queuedFollowup } = selected;
   if (pending.result) {
     return pending.result;
   }
   const interrupt = (): ReplySteerNowResult => {
     assertCurrent();
-    input.sourceAdapter?.authority?.assertCurrent();
+    input.sourceAdapter?.authority?.assertCurrent?.();
     const current = resolvePendingSteerControl(input);
     if (!current) {
       return { status: "settled", tools: [] };

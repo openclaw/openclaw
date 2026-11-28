@@ -730,6 +730,10 @@ async function main(argv = process.argv.slice(2)) {
 
 function handleMainError(error) {
   console.error(error instanceof Error ? error.message : String(error));
+  // Identity lookups wrap the gh failure; retain its diagnostic without dumping captured stdout.
+  if (error instanceof Error && error.cause instanceof Error) {
+    console.error(`Caused by: ${error.cause.message}`);
+  }
   process.exitCode = 1;
 }
 

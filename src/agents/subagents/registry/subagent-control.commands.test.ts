@@ -340,10 +340,8 @@ it.each([
           },
         });
         expect(result).toMatchObject({
-          status:
-            alternate || selection === "preaccept-revoked" || selection === "postaccept-revoked"
-              ? "error"
-              : "ok",
+          // A revocation after acceptance applies to the next request; this Stop reports ok.
+          status: alternate || selection === "preaccept-revoked" ? "error" : "ok",
           killed: 0,
           labels: [],
         });
@@ -389,7 +387,7 @@ it.each([
 );
 
 it.each(["confirmed", "uncertain", "late-revoked-evicted", "late-owner-evicted"] as const)(
-  "parent cancellation reports %s command cleanup and preserves an independent service",
+  "parent cancellation reports %s command cleanup; the ended task then stops its service",
   async (cleanup) => {
     const requesterSessionKey = parentKey;
     const childSessionKey = "agent:main:subagent:active-command";
@@ -583,7 +581,10 @@ it.each(["confirmed", "uncertain", "late-revoked-evicted", "late-owner-evicted"]
           : {}),
       });
       if (cleanup === "late-revoked-evicted") {
-        expectError(result, "Synthetic caller revoked after native cancellation acceptance");
+        // The Stop was admitted; a later revocation applies to the caller's next request.
+        expect(result.status === "error" ? result.error : "").not.toContain(
+          "Synthetic caller revoked after native cancellation acceptance",
+        );
       }
       if (observation) {
         // This plan never requested cancellation; native Stop accepted it through another owner.
@@ -605,8 +606,10 @@ it.each(["confirmed", "uncertain", "late-revoked-evicted", "late-owner-evicted"]
         expect(recordEvicted).toBe(true);
         expectEvicted(ordinary);
       }
-      expectServiceSurvives(service);
       expect(resolveSubagentSessionStatus(subagentRuns.get(runId))).toBe("killed");
+      // Stop leaves the service to its owner; the hidden child's ended task then stops it.
+      await waitForExecSession(service);
+      expect(service).toMatchObject({ exited: true, exitReason: "manual-cancel" });
     } finally {
       spawnFault.mockRestore();
       controller.abort();

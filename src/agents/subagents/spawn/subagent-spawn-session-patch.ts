@@ -22,6 +22,7 @@ import type { InternalSessionEntry, SessionEntry } from "../../../config/session
 import type { OpenClawConfig } from "../../../config/types.openclaw.js";
 import { buildDashboardSessionTitleSource } from "../../../gateway/dashboard-session-title.js";
 import type { FreshChildSession } from "../../../gateway/in-process-session-run.js";
+import { captureQueuedOperatorRecoverySource } from "../../../gateway/operator-run-recovery-source.js";
 import type { ProjectRequester } from "../../../gateway/project-access.js";
 import {
   normalizeTrustedGroupMetadata,
@@ -45,6 +46,7 @@ import {
   normalizeSessionDeliveryState,
   type DeliveryContext,
 } from "../../../utils/delivery-context.shared.js";
+import type { AdmittedRunOperatorAuthority } from "../../admitted-run-context.js";
 import { captureDelegatedToolPolicyAssertion } from "../../delegated-tool-policy.js";
 import { getSessionToolUsageRanking } from "../../embedded-agent-runner/session-prompt-state.js";
 import { inheritedToolAllowPatch, inheritedToolDenyPatch } from "../../inherited-tool-deny.js";
@@ -98,7 +100,8 @@ export async function createInitialSubagentSession(input: {
   >["childSessionPatch"];
   inheritedToolAllowlist?: string[];
   inheritedToolDenylist?: string[];
-  inheritedToolPolicySource?: "sender";
+  inheritedToolPolicySource?: SessionEntry["inheritedToolPolicySource"];
+  operatorAuthority?: AdmittedRunOperatorAuthority;
   delegatedToolPolicy?: SessionEntry["delegatedToolPolicy"];
   modelPatch: Partial<
     Extract<
@@ -133,6 +136,9 @@ export async function createInitialSubagentSession(input: {
     ...inheritedToolAllowPatch(params.inheritedToolAllowlist),
     ...inheritedToolDenyPatch(params.inheritedToolDenylist),
     ...params.modelPatch,
+    ...(params.operatorAuthority?.participationCeiling
+      ? { delegatedOperatorSource: captureQueuedOperatorRecoverySource(params.operatorAuthority) }
+      : {}),
     ...(params.collect ? { swarmCollector: true } : {}),
     ...(params.outputSchema ? { swarmOutputSchema: params.outputSchema } : {}),
     ...(params.incognito ? { incognito: true } : {}),
@@ -322,10 +328,11 @@ export async function createInitialSubagentSession(input: {
                         ...(!params.worktree
                           ? {
                               sessionRoot: resolveUserPath(
-                                params.inheritedToolPolicySource === "sender"
-                                  ? params.sessionPermissionPolicy.root
-                                  : (params.spawnedWorkspaceDir ??
-                                      params.sessionPermissionPolicy.root),
+                                params.operatorAuthority?.participationCeiling?.source.root ??
+                                  (params.inheritedToolPolicySource === "sender"
+                                    ? params.sessionPermissionPolicy.root
+                                    : (params.spawnedWorkspaceDir ??
+                                      params.sessionPermissionPolicy.root)),
                               ),
                             }
                           : {}),

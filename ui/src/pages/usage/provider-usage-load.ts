@@ -8,7 +8,7 @@ export function createProviderUsageLoader(options: {
   client: () => GatewayBrowserClient | null;
   isCurrent: (epoch: unknown) => boolean;
   epoch: () => unknown;
-  onResult: (epoch: unknown) => void;
+  onResult: () => void;
   onSettled: () => void;
 }) {
   let active: AbortController | null = null;
@@ -23,6 +23,9 @@ export function createProviderUsageLoader(options: {
     active = null;
   };
   return {
+    get pending() {
+      return active !== null;
+    },
     /** The last complete snapshot; a refreshing or failed read keeps it. */
     get summary() {
       return summary;
@@ -60,7 +63,7 @@ export function createProviderUsageLoader(options: {
           if (result.ok && !incomplete) {
             summary = result.value;
           }
-          options.onResult(epoch);
+          options.onResult();
         }
       } catch {
         // An aborted or failed read leaves the previous plans visible.

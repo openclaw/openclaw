@@ -56,6 +56,8 @@ function normalizeSignalUuidEntry(entry: string): string | null {
 
 const signalIngressIdentity = defineStableChannelIngressIdentity({
   key: "stable",
+  // signal-cli reports the sender from the decrypted, sender-certified envelope.
+  authentication: "verified",
   normalizeEntry: () => null,
   aliases: [
     {

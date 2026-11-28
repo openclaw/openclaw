@@ -35,3 +35,76 @@ it("exposes app cards and permission-filtered settings sections without RPCs", (
     search: "?section=transcripts",
   });
 });
+
+it("lists named commands, sessions, archived sessions, loose matches, then message hits", () => {
+  const session = (label: string, category: CommandPaletteItem["category"]) => ({
+    id: `session-${label}`,
+    label,
+    icon: "messageSquare" as const,
+    category,
+    action: `session:${label}`,
+    session: { key: label, kind: "direct" as const, updatedAt: 1 },
+  });
+  const setting = (label: string, description?: string): CommandPaletteItem => ({
+    id: `settings-${label}`,
+    label,
+    icon: "settings",
+    category: "settings",
+    action: "nav:appearance",
+    description,
+  });
+  const items = filterCommandPaletteItems({
+    query: "voice",
+    includeSlashCommands: false,
+    sessionItems: [
+      session("Fix voice notes", "chats"),
+      session("Voice", "chats"),
+      session("Old voice notes", "archived"),
+      session("message hit", "messages"),
+    ],
+    catalogItems: [
+      setting("Talk", "Wake word and voice replies"),
+      setting("Talk voice"),
+      setting("Voice"),
+    ],
+    desktopAvailable: false,
+    custodianAvailable: false,
+  });
+  expect(items.map((item) => `${item.category}:${item.label}`)).toEqual([
+    "settings:Voice",
+    "settings:Talk voice",
+    "chats:Fix voice notes",
+    "chats:Voice",
+    "archived:Old voice notes",
+    "more:Talk",
+    "messages:message hit",
+  ]);
+});
+
+it("keeps a named setting before the catalog cap excludes loose matches", () => {
+  const catalogItems: CommandPaletteItem[] = Array.from({ length: 10 }, (_, index) => ({
+    id: `loose-${index}`,
+    label: `A setting ${index}`,
+    description: "voice",
+    icon: "settings",
+    category: "settings",
+    action: "nav:appearance",
+  }));
+  catalogItems.push({
+    id: "named",
+    label: "Talk voice",
+    icon: "settings",
+    category: "settings",
+    action: "nav:appearance",
+  });
+  const items = filterCommandPaletteItems({
+    query: "voice",
+    includeSlashCommands: false,
+    sessionItems: [],
+    catalogItems,
+    desktopAvailable: false,
+    custodianAvailable: false,
+  });
+  expect(items[0]?.id).toBe("named");
+  expect(items.filter((item) => catalogItems.some(({ id }) => id === item.id))).toHaveLength(10);
+});

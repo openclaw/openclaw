@@ -1,4 +1,5 @@
 import os from "node:os";
+import { isOpenAIResponsesApi } from "@openclaw/ai/transports";
 import { normalizeOptionalLowercaseString } from "@openclaw/normalization-core/string-coerce";
 import {
   resolveAgentConfig,
@@ -8,6 +9,7 @@ import {
   resolveAgentModelFallbacksOverride,
 } from "../agents/agent-scope.js";
 import { ensureAuthProfileStoreAsync } from "../agents/auth-profiles/store-runtime.js";
+import { readLastPromptCacheKeyFact } from "../agents/embedded-agent-runner/prompt-cache-observability.js";
 import { resolveFastModeState } from "../agents/fast-mode.js";
 import { resolveAgentHarnessAutoSelectionHint } from "../agents/harness/auto-selection.js";
 import { resolveAgentHarnessPolicy } from "../agents/harness/policy.js";
@@ -45,6 +47,7 @@ import {
 } from "../infra/provider-usage.js";
 import { formatMissingCostEntries } from "../infra/session-cost-usage-totals.js";
 import { loadSessionCostSummariesFromCache } from "../infra/session-cost-usage.js";
+import { resolveModelCostConfig } from "../model-catalog/usage-pricing.js";
 import { resolveActiveProviderThinkingProfile } from "../plugins/provider-thinking-active.js";
 import { normalizeAccountId } from "../routing/account-id.js";
 import { resolveNormalizedAccountEntry } from "../routing/account-lookup.js";
@@ -54,12 +57,8 @@ import {
   deliveryContextFromSession,
   sessionDeliveryOrigin,
 } from "../utils/delivery-context.read.js";
-import {
-  estimateAggregateUsageCostAsync,
-  resolveModelCostConfig,
-  formatTokenCount,
-  formatUsd,
-} from "../utils/usage-format.js";
+import { formatTokenCount } from "../utils/token-format.js";
+import { estimateAggregateUsageCostAsync, formatUsd } from "../utils/usage-format.js";
 import {
   buildCodexSyntheticUsageAuth,
   resolveUsageCredentialType,
@@ -261,6 +260,18 @@ export async function buildStatusReplyParts(
       ? { authLabelOverride: params.modelAuthOverride }
       : {}),
   });
+  // The run's own record of its last request, never a second rule: only an OpenAI-style
+  // request to the selected model that went out without prompt_cache_key is named.
+  const lastCacheKeyFact = sessionKey ? readLastPromptCacheKeyFact(sessionKey) : undefined;
+  const selectedCacheKey =
+    lastCacheKeyFact &&
+    !lastCacheKeyFact.cacheKeyPresent &&
+    lastCacheKeyFact.provider === selectedLookupProvider &&
+    lastCacheKeyFact.modelId === selectedLookupModel &&
+    (lastCacheKeyFact.modelApi === "openai-completions" ||
+      isOpenAIResponsesApi(lastCacheKeyFact.modelApi))
+      ? "not sent"
+      : undefined;
   let selectedModelAuth = selectedResolution.authLabel;
   const activeModelAuth = Object.hasOwn(params, "activeModelAuthOverride")
     ? params.activeModelAuthOverride
@@ -477,7 +488,8 @@ export async function buildStatusReplyParts(
     agentId: statusAgentId,
     allowPluginNormalization: false,
   });
-  const configuredDefaultModelLabel = `${configuredDefaultRef.provider}/${configuredDefaultRef.model}`;
+  const configuredDefaultModelLabel =
+    configuredDefaultRef && `${configuredDefaultRef.provider}/${configuredDefaultRef.model}`;
   const pluginHealthLine = Object.hasOwn(params, "pluginHealthLineOverride")
     ? params.pluginHealthLineOverride
     : await resolveRuntimePluginHealthLine();
@@ -674,6 +686,7 @@ export async function buildStatusReplyParts(
     resolvedElevated: resolvedElevatedLevel,
     modelAuth: selectedModelAuth,
     selectedEndpoint: selectedResolution.endpoint,
+    selectedCacheKey,
     activeModelAuth,
     uptimeValue: buildStatusUptimeValue(),
     usageLine: usageLine ?? undefined,

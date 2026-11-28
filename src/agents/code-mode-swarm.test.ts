@@ -1,5 +1,3 @@
-import { createHash } from "node:crypto";
-import { stableStringify } from "@openclaw/normalization-core";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { awaitGateBeforeSettlement, createDeferred } from "../../test/helpers/promise.js";
 import { CodeModeOutputState } from "./code-mode-json.js";
@@ -17,7 +15,6 @@ import {
   runUntilCompleted,
   testing,
 } from "./code-mode.test-support.js";
-import type { SubagentRunRecord } from "./subagents/registry/subagent-registry.types.js";
 import type { SpawnSubagentParams } from "./subagents/spawn/subagent-spawn-contract.js";
 import { fakeTool } from "./test-helpers/fake-tool.js";
 import {
@@ -30,7 +27,7 @@ import { createSessionsSpawnTool } from "./tools/sessions-spawn-tool.js";
 
 const swarmMocks = vi.hoisted(() => ({
   emitSessionLifecycleEvent: vi.fn(),
-  getSwarmRunByLaunchReplayKey: vi.fn(),
+  resolveSwarmLaunchReplay: vi.fn(),
   waitForCollectorCompletion: vi.fn(),
   spawnSubagentDirect: vi.fn(),
 }));
@@ -48,7 +45,7 @@ vi.mock("../sessions/session-lifecycle-events.js", async (importOriginal) => ({
 
 vi.mock("./subagents/registry/subagent-registry.js", async (importOriginal) => ({
   ...(await importOriginal<typeof import("./subagents/registry/subagent-registry.js")>()),
-  getSwarmRunByLaunchReplayKey: swarmMocks.getSwarmRunByLaunchReplayKey,
+  resolveSwarmLaunchReplay: swarmMocks.resolveSwarmLaunchReplay,
 }));
 
 vi.mock("./tools/agents-wait-tool.js", async (importOriginal) => ({
@@ -136,32 +133,6 @@ const restoredCollector = {
   sessionKey: "agent:main:subagent:1",
 };
 
-function collectorRecord(overrides: Partial<SubagentRunRecord> = {}): SubagentRunRecord {
-  return {
-    runId: "collector-1",
-    childSessionKey: "agent:main:subagent:1",
-    requesterSessionKey: "agent:main:main",
-    requesterDisplayKey: "agent:main:main",
-    task: "Research",
-    cleanup: "delete",
-    createdAt: 1,
-    execution: { status: "running" },
-    ...overrides,
-  };
-}
-
-function collectorFingerprint(task = "Research"): string {
-  return `sha256:${createHash("sha256")
-    .update(
-      stableStringify({
-        task,
-        collect: true,
-        groupId: "swarm:agent:main:main:run-swarm",
-      }),
-    )
-    .digest("hex")}`;
-}
-
 function createSwarmHarness(onSpawn?: (input: SpawnSubagentParams) => void | Promise<void>) {
   const harness = createCodeModeHarness();
   const toolsConfig = (harness.config as { tools: Record<string, unknown> }).tools;
@@ -207,7 +178,7 @@ function expectCollectorCalls(count: number, harness: ReturnType<typeof createSw
 beforeEach(() => {
   swarmMocks.spawnSubagentDirect.mockReset().mockResolvedValue({ ...acceptedCollector });
   swarmMocks.emitSessionLifecycleEvent.mockReset();
-  swarmMocks.getSwarmRunByLaunchReplayKey.mockReset().mockResolvedValue(undefined);
+  swarmMocks.resolveSwarmLaunchReplay.mockReset().mockResolvedValue({ status: "missing" });
   swarmMocks.waitForCollectorCompletion.mockReset().mockResolvedValue({ ...restoredCollector });
 });
 
@@ -369,6 +340,17 @@ describe("Code Mode swarm guest", () => {
 });
 
 describe("Code Mode swarm host bridge", () => {
+  it.each([null, ""])("rejects an invalid optional label %j before spawning", async (label) => {
+    const harness = createSwarmHarness();
+    const result = await runSwarmCode(
+      harness,
+      `return await agents.run("Research", { label: ${JSON.stringify(label)} });`,
+    );
+    expect(result).toMatchObject({ status: "failed", code: "invalid_input" });
+    expect(JSON.stringify(result)).toContain("agents.run label must be a non-empty string.");
+    expect(swarmMocks.spawnSubagentDirect).not.toHaveBeenCalled();
+  });
+
   it.each([
     { ordinaryCount: 144, afterSwarm: false },
     { ordinaryCount: 145, afterSwarm: false },
@@ -480,7 +462,7 @@ describe("Code Mode swarm host bridge", () => {
       try { await spawn({ task: "raw handle", collect: true }); }
       catch (error) { failures.push(error.message); }
       return { failures, advertised: "collect" in description.parameters.properties,
-        joined: await agents.run("Research", { schema: { type: "object" } }) };
+        joined: await agents.run("Research", { fastMode: false, schema: { type: "object" } }) };
     `,
       );
       expect(result).toMatchObject({
@@ -497,6 +479,7 @@ describe("Code Mode swarm host bridge", () => {
       expect(swarmMocks.spawnSubagentDirect).toHaveBeenCalledOnce();
       expect(swarmMocks.spawnSubagentDirect.mock.calls[0]?.[0]).toMatchObject({
         collect: true,
+        fastMode: false,
         outputSchema: { type: "object" },
       });
       expect(swarmMocks.waitForCollectorCompletion).toHaveBeenCalledOnce();
@@ -677,7 +660,14 @@ describe("Code Mode swarm host bridge", () => {
   );
 
   it("reuses a registered collector for the same invocation without double-spawn", async () => {
-    let persisted: SubagentRunRecord | undefined;
+    let persisted:
+      | {
+          status: "accepted";
+          runId: string;
+          currentRunId: string;
+          childSessionKey: string;
+        }
+      | undefined;
     const harness = createSwarmHarness((input) => {
       const replayKey = input.swarmLaunchReplayKey;
       const requestFingerprint = input.swarmLaunchRequestFingerprint;
@@ -685,14 +675,16 @@ describe("Code Mode swarm host bridge", () => {
         expect.stringMatching(/^cm_replay_[0-9a-f]{24}:bridge:agentSpawn:1$/u),
       );
       expect(requestFingerprint).toMatch(/^sha256:[0-9a-f]{64}$/u);
-      persisted = collectorRecord({
-        swarmRunId: "collector-1",
-        collect: true,
-        swarmLaunchReplayKey: String(replayKey),
-        swarmLaunchRequestFingerprint: String(requestFingerprint),
-      });
+      persisted = {
+        status: "accepted",
+        runId: "collector-1",
+        currentRunId: "collector-current",
+        childSessionKey: "agent:main:subagent:1",
+      };
     });
-    swarmMocks.getSwarmRunByLaunchReplayKey.mockImplementation(async () => persisted);
+    swarmMocks.resolveSwarmLaunchReplay.mockImplementation(
+      async () => persisted ?? { status: "missing" },
+    );
     const code = 'return await agents.run("Research");';
 
     const first = await runSwarmCode(harness, code);
@@ -701,30 +693,23 @@ describe("Code Mode swarm host bridge", () => {
     expect(first).toMatchObject({ status: "completed", value: "restored" });
     expect(replayed).toMatchObject({ status: "completed", value: "restored" });
     expect(harness.spawnTool.execute).toHaveBeenCalledTimes(1);
-    expect(swarmMocks.getSwarmRunByLaunchReplayKey).toHaveBeenCalledTimes(2);
+    expect(swarmMocks.resolveSwarmLaunchReplay).toHaveBeenCalledTimes(2);
     expect(swarmMocks.waitForCollectorCompletion).toHaveBeenCalledTimes(2);
   });
 
   it.each([
     {
       state: "mismatched fingerprint",
-      task: "Different task",
-      pending: false,
+      status: "mismatch",
       error: "does not match the persisted collector",
     },
     {
       state: "reservation without current launch",
-      task: "Research",
-      pending: true,
+      status: "inactive",
       error: "launch is no longer active; start a new request",
     },
-  ])("refuses unusable collector reservations: $state", async ({ task, pending, error }) => {
-    swarmMocks.getSwarmRunByLaunchReplayKey.mockResolvedValue(
-      collectorRecord({
-        swarmLaunchPending: pending,
-        swarmLaunchRequestFingerprint: collectorFingerprint(task),
-      }),
-    );
+  ])("reports rejected collector reservations: $state", async ({ status, error }) => {
+    swarmMocks.resolveSwarmLaunchReplay.mockResolvedValue({ status });
     const harness = createSwarmHarness();
     const result = await runSwarmCode(harness, 'return await agents.run("Research");');
     expect(result).toMatchObject({ status: "failed", code: "invalid_input" });

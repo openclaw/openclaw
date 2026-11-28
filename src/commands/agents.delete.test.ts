@@ -15,7 +15,10 @@ import * as localCronService from "../cron/local-service.js";
 import { loadCronStore, resolveCronJobsStorePath, saveCronStore } from "../cron/store.js";
 import { saveExecApprovals } from "../infra/exec-approvals-store.test-support.js";
 import { readExecApprovalsSnapshot } from "../infra/exec-approvals.js";
+import { migrateLegacyMediaPersistence } from "../infra/state-migrations.media-persistence.js";
 import { defaultRuntime } from "../runtime.js";
+import { reconstructAgentDeletionJournal } from "../state/agent-deletion-journal-recovery.js";
+import { completeAgentDeletionJournalInDatabase } from "../state/agent-deletion-journal.js";
 import { recordAgentProvenance } from "../state/agent-provenance.js";
 import { writeConfigMachineState } from "../state/config-machine-state-write.js";
 import {
@@ -23,8 +26,15 @@ import {
   registerOpenClawAgentDatabase,
 } from "../state/openclaw-agent-db-registry.js";
 import { openOpenClawAgentDatabase } from "../state/openclaw-agent-db.js";
+import {
+  openOpenClawStateDatabase,
+  runOpenClawStateWriteTransaction,
+} from "../state/openclaw-state-db.js";
 import { withStateDirEnv } from "../test-helpers/state-dir-env.js";
-import { readAgentDeletionJournal } from "../test-utils/agent-deletion-journal.js";
+import {
+  beginAgentDeletionJournal,
+  readAgentDeletionJournal,
+} from "../test-utils/agent-deletion-journal.js";
 import { readAgentProvenance } from "../test-utils/agent-provenance.js";
 import { createCanonicalAgentConfigFixture } from "../test-utils/config-roster.js";
 import { createTestConfigSnapshot, createTestRuntime } from "./test-runtime-config-helpers.js";
@@ -572,4 +582,151 @@ describe("agents delete command", () => {
       expectSharedWorkspace(opsWorkspace);
     },
   );
+
+  it.for(["files gone", "directory remains", "unknown id"] as const)(
+    "retires an unconfigured agent that is still registered (%s)",
+    async (shape, { state }) => {
+      // A retired agent removed from config by hand keeps its registry row (#205927).
+      await state.setup();
+      const agentDir = path.join(state.stateDir, "agents", "retired", "agent");
+      if (shape !== "unknown id") {
+        registerOpenClawAgentDatabase({
+          agentId: "retired",
+          path: path.join(agentDir, "openclaw-agent.sqlite"),
+        });
+      }
+      if (shape === "directory remains") {
+        await fs.mkdir(agentDir, { recursive: true });
+        const confirm = vi.fn(async () => false);
+        wizardMocks.createClackPrompter.mockReturnValue({ confirm });
+        await agentsDeleteCommand({ id: "retired" });
+        // Nothing is removed silently: the prompt names the remaining directory.
+        expect(confirm).toHaveBeenCalledWith(
+          expect.objectContaining({
+            message: expect.stringMatching(
+              new RegExp(`still exist and will be moved to Trash:\\n.*${agentDir}`),
+            ),
+          }),
+        );
+        expect(registeredAgentIds()).toContain("retired");
+        expectNoLocalMutation();
+        // Confirming moves the named directory to Trash and removes the registration.
+        confirm.mockResolvedValue(true);
+        await agentsDeleteCommand({ id: "retired" });
+        expect(moveToTrash.mock.calls.map(([target]) => target)).toContain(agentDir);
+        expect(registeredAgentIds()).not.toContain("retired");
+        return;
+      }
+      // Doctor's state migration reports the missing store on every run until it is retired.
+      const skipped = async () =>
+        (await migrateLegacyMediaPersistence({ env: process.env })).warnings.filter((warning) =>
+          warning.startsWith("Skipped missing registered agent database"),
+        );
+      if (shape === "files gone") {
+        for (let run = 0; run < 2; run += 1) {
+          expect(await skipped()).toEqual([
+            expect.stringContaining("run openclaw agents delete retired"),
+          ]);
+        }
+      }
+      await removeAgent({ id: shape === "unknown id" ? "ghost" : "retired", json: true });
+      if (shape === "unknown id") {
+        expectJsonFailure(
+          'Agent "ghost" not found. Run openclaw agents list to see configured agents.',
+        );
+        expectNoLocalMutation();
+        return;
+      }
+      expect(runtime.exit).not.toHaveBeenCalled();
+      expect(configMocks.replaceConfigFile).not.toHaveBeenCalled();
+      expect(registeredAgentIds()).not.toContain("retired");
+      expect(readAgentDeletionJournal("retired")?.cleanupCompleted).toBe(true);
+      // One cleanup, then silence.
+      for (let run = 0; run < 2; run += 1) {
+        expect(await skipped()).toEqual([]);
+      }
+    },
+  );
+
+  it.for(["own workspace", "workspace now used by ops"] as const)(
+    "deletes the recorded files of a retired agent after a keep-files deletion (%s)",
+    async (shape, { state }) => {
+      // A keep-files deletion keeps the registration; its journal is the only record of a
+      // custom workspace once config no longer names the agent.
+      await state.setup();
+      const agentDir = path.join(state.stateDir, "agents", "retired", "agent");
+      const workspace = path.join(
+        state.stateDir,
+        shape === "own workspace" ? "custom-retired-workspace" : "workspace-ops",
+      );
+      await Promise.all([agentDir, workspace].map((dir) => fs.mkdir(dir, { recursive: true })));
+      registerOpenClawAgentDatabase({
+        agentId: "retired",
+        path: path.join(agentDir, "openclaw-agent.sqlite"),
+      });
+      beginAgentDeletionJournal({
+        agentId: "retired",
+        operationId: "kept-files",
+        agentDir,
+        workspaceDir: workspace,
+        sessionsDir: path.join(state.stateDir, "agents", "retired", "sessions"),
+        deleteFiles: false,
+      });
+      runOpenClawStateWriteTransaction((database) =>
+        completeAgentDeletionJournalInDatabase(database, "retired", "kept-files"),
+      );
+      const confirm = vi.fn(async () => true);
+      wizardMocks.createClackPrompter.mockReturnValue({ confirm });
+      await agentsDeleteCommand({ id: "retired" });
+      const trashed = moveToTrash.mock.calls.map(([target]) => target);
+      expect(registeredAgentIds()).not.toContain("retired");
+      if (shape === "workspace now used by ops") {
+        // A surviving agent's workspace is never trashed.
+        expect(trashed).not.toContain(workspace);
+        return;
+      }
+      expect(confirm).toHaveBeenCalledWith(
+        expect.objectContaining({ message: expect.stringContaining(workspace) }),
+      );
+      expect(trashed).toContain(workspace);
+    },
+  );
+
+  it("shows Doctor's restore-first warning for a held store before confirming", async ({
+    state,
+  }) => {
+    // Lost deletion history: Doctor reconstructs it and holds the retired agent's store back.
+    await state.setup();
+    const storePath = path.join(
+      state.stateDir,
+      "agents",
+      "retired",
+      "agent",
+      "openclaw-agent.sqlite",
+    );
+    await fs.mkdir(path.dirname(storePath), { recursive: true });
+    openOpenClawAgentDatabase({ agentId: "retired", path: storePath });
+    openOpenClawStateDatabase().db.exec("DROP TABLE agent_deletion_journal");
+    runOpenClawStateWriteTransaction((database) =>
+      reconstructAgentDeletionJournal(database, [{ agentId: "retired", path: storePath }]),
+    );
+    const restoreFirst = expect.stringMatching(
+      /Doctor holds back a store of agent "retired"[\s\S]*openclaw agents add '?retired'?[\s\S]*to abort deletion and restore/,
+    );
+    const confirm = vi.fn(async () => false);
+    wizardMocks.createClackPrompter.mockReturnValue({ confirm });
+    await agentsDeleteCommand({ id: "retired" });
+    expect(confirm).toHaveBeenCalledWith(expect.objectContaining({ message: restoreFirst }));
+    expect(registeredAgentIds()).toContain("retired");
+    expectNoLocalMutation();
+    // A store outside Doctor's holds keeps the ordinary confirmation.
+    await agentsDeleteCommand({ id: "ops" });
+    expect(confirm).toHaveBeenLastCalledWith(
+      expect.objectContaining({ message: 'Delete agent "ops" and prune workspace/state?' }),
+    );
+    // --force prints the same warning and proceeds.
+    await removeAgent({ id: "retired", json: true });
+    expect(runtime.error).toHaveBeenCalledWith(restoreFirst);
+    expect(registeredAgentIds()).not.toContain("retired");
+  });
 });

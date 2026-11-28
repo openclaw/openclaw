@@ -5,7 +5,10 @@ import { Type } from "typebox";
 import type { ImageGenerationSourceImage } from "../../image-generation/asset-types.js";
 import { sniffImageMimeType } from "../../image-generation/image-assets.js";
 import { normalizeImageGenerationResolution } from "../../image-generation/resolution.js";
-import { generateImage } from "../../image-generation/runtime.js";
+import {
+  generateImage,
+  resolveImageGenerationModelCapabilities,
+} from "../../image-generation/runtime.js";
 import type {
   ImageGenerationOpenAIOptions,
   ImageGenerationProviderOptions,
@@ -15,11 +18,8 @@ import { createSubsystemLogger } from "../../logging/subsystem.js";
 import { parseImageGenerationModelRef } from "../../media-generation/model-ref.js";
 import { withImageGenerationProviders } from "../../media-generation/registry.js";
 import { resolveGeneratedMediaMaxBytes } from "../../media/configured-max-bytes.js";
-import {
-  encodeImageWithinBytes,
-  getImageMetadata,
-  readImageMetadataFromHeader,
-} from "../../media/media-services.js";
+import { readImageMetadataFromHeader } from "../../media/image-header-metadata.js";
+import { encodeImageWithinBytes, getImageMetadata } from "../../media/media-services.js";
 import { formatMediaSize } from "../../media/store.shared.js";
 import { readSnakeCaseParamRaw } from "../../param-key.js";
 import { createEnumOptionParser } from "../../shared/enum-option.js";
@@ -459,15 +459,16 @@ export function createImageGenerateTool(
               }) ?? DEFAULT_COUNT;
             signal?.throwIfAborted();
             acquired.assertOpen();
-            if (selectedProvider) {
+            const selectedCapabilities =
+              selectedProvider &&
+              resolveImageGenerationModelCapabilities(selectedProvider, selectedModelId);
+            if (selectedCapabilities) {
               const isEdit = imageInputs.length > 0;
-              const modeCaps = isEdit
-                ? selectedProvider.capabilities.edit
-                : selectedProvider.capabilities.generate;
+              const modeCaps = isEdit ? selectedCapabilities.edit : selectedCapabilities.generate;
               const maxCount = modeCaps.maxCount ?? MAX_COUNT;
               if (count > maxCount) {
                 throw new ToolInputError(
-                  `${selectedProvider.id} ${isEdit ? "edit" : "generate"} supports at most ${maxCount} output image${maxCount === 1 ? "" : "s"}.`,
+                  `${selectedProviderId} ${isEdit ? "edit" : "generate"} supports at most ${maxCount} output image${maxCount === 1 ? "" : "s"}.`,
                 );
               }
             }
@@ -499,9 +500,7 @@ export function createImageGenerateTool(
               mimeType,
             }));
             const modeCaps =
-              inputImages.length > 0
-                ? selectedProvider?.capabilities.edit
-                : selectedProvider?.capabilities.generate;
+              inputImages.length > 0 ? selectedCapabilities?.edit : selectedCapabilities?.generate;
             const inferredResolution =
               size || explicitResolution
                 ? undefined
@@ -512,8 +511,7 @@ export function createImageGenerateTool(
               explicitResolution ??
               (modeCaps?.supportsResolution === false ||
               (selectedModelId &&
-                selectedProvider?.capabilities.geometry?.resolutionsByModel?.[selectedModelId]
-                  ?.length === 0)
+                selectedCapabilities?.geometry?.resolutionsByModel?.[selectedModelId]?.length === 0)
                 ? undefined
                 : inferredResolution);
             const requestKey = buildMediaGenerationRequestKey({

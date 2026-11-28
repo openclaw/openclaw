@@ -7,7 +7,7 @@ import type { SidebarAttentionStore } from "../app/sidebar-attention-store.ts";
 import { invalidateModelAuthStatusRequests } from "../lib/model-auth-request-state.ts";
 import { loadModelAuthStatus } from "../lib/model-auth.ts";
 import { createTestGatewayClient } from "../test-helpers/gateway-client.ts";
-import { createStore } from "./sidebar-attention-store.test-support.ts";
+import { createStore, cronPage } from "./sidebar-attention-store.test-support.ts";
 import { SidebarAttentionStoreOwner } from "./sidebar-attention-store.ts";
 
 let store: SidebarAttentionStore | undefined;
@@ -47,7 +47,7 @@ async function setup(expiresInMs?: number) {
   const client = createTestGatewayClient((method) =>
     method === "models.authStatus"
       ? authRequest()
-      : Promise.resolve({ jobs: [], enabled: true, hasMore: false }),
+      : Promise.resolve(method === "cron.list" ? cronPage() : { enabled: true, jobs: 0 }),
   );
   const harness = createGatewayHarness(client);
   store = createStore(harness.gateway);

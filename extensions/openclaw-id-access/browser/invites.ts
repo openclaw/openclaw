@@ -129,20 +129,3 @@ function requireDefinedRole(link: Link, role: MemberRole, confirmedAdmin: boolea
     throw new RoleClassificationChangedError();
   }
 }
-
-/** Changes only the membership role, with the same owner signature and submit path as removal. */
-export async function changeMemberRole(
-  request: Request,
-  link: Link,
-  accountId: string,
-  role: MemberRole,
-  confirmedAdmin: boolean,
-): Promise<void> {
-  requireDefinedRole(link, role, confirmedAdmin);
-  const statement = await signMembershipChange(link, {
-    op: "set_role",
-    account_id: accountId,
-    role,
-  });
-  await request("openclawId.authority", { action: "submit", statement });
-}

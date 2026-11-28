@@ -25,6 +25,10 @@ import {
   readGeneratedSqliteCatalog,
   readGeneratedSqliteFingerprint,
 } from "../../src/state/postgres-schema.generated/sqlite-catalogs.js";
+import {
+  readSqliteStateCatalog,
+  readSqliteStateFingerprint,
+} from "../../src/state/postgres-schema.generated/sqlite-state-catalogs.js";
 
 const inputs = listSqliteSchemaInputs();
 const distinctInputs = [...new Map(inputs.map((input) => [input.sql, input])).values()];
@@ -86,9 +90,32 @@ describe("generated SQLite schema catalogs", () => {
     }
   });
 
+  it.each([
+    ["full", "df594c58841a6f289f32aab3f0ff5c0d20f3be8f600a21271f08e7ed21e0cce2"],
+    ["runtime 0/0", "42740e063461d52643265d479219da2387ab3fa5e5cc81b4d6246f9aa0d635db"],
+    ["runtime 0/1", "5b971c4a36389f5654e0ef2b717fa98d2021f93c0d83871c3a8473a98ac80eb4"],
+    ["runtime 1/0", "537b715e8837d0ad7ba5c85a331e69c24f2d4e3594d5b2ce84dffd909f000242"],
+    ["runtime 1/1", "df787440d666b59909bf906a96936af7f802c1e747e5928f8863de00aea0b9c1"],
+  ])("serves the pre-Workshop-activity %s catalog after a build swap", (_layout, hash) => {
+    // An installed reader supplies the hash of its original SQL to the replacement assets.
+    expect(readSqliteStateFingerprint(hash)).toBeDefined();
+    expect(readSqliteStateCatalog(hash)).toBeDefined();
+  });
+
   it("keeps predecessor schemas free of objects introduced after their version", () => {
     // A state schema edit without a matching predecessor transform retires every
     // derived hash, stranding real databases on the previous layout.
+    const predecessor41 = getOpenClawStatePredecessorSchema(41);
+    expect(createHash("sha256").update(predecessor41).digest("hex")).toBe(
+      "f410ba904b7af3414751f66fa320d9263f708b0eedeecb4cf1f49fa73ef67022",
+    );
+    expect(readGeneratedSqliteCatalog(predecessor41)).toBeDefined();
+    const predecessor40 = getOpenClawStatePredecessorSchema(40);
+    expect(predecessor40).not.toContain("requested_by_profile_id");
+    expect(createHash("sha256").update(predecessor40).digest("hex")).toBe(
+      "fcbb00212b86de19fc5fa0f04654883e4714871ea6417f63645a97c1c9e9457f",
+    );
+    expect(readGeneratedSqliteCatalog(predecessor40)).toBeDefined();
     const predecessor39 = getOpenClawStatePredecessorSchema(39);
     expect(predecessor39).not.toContain(
       "CREATE TABLE IF NOT EXISTS device_pairing_browser_requests",
@@ -127,7 +154,7 @@ describe("generated SQLite schema catalogs", () => {
   ] as const)(
     "keeps the pre-provision-source catalog readable after a build swap (%s)",
     (flags, hash) => {
-      const predecessor = withLegacyWorkerProvisionSource(OPENCLAW_STATE_SCHEMA_SQL);
+      const predecessor = withLegacyWorkerProvisionSource(getOpenClawStatePredecessorSchema(40));
       const historical = flags
         ? getOpenClawStateRuntimeSchema(
             { includeVersionLazyAdditiveTables: flags[0], includeAgentDeletionJournal: flags[1] },
@@ -147,7 +174,7 @@ describe("generated SQLite schema catalogs", () => {
     const historical = getOpenClawStateRuntimeSchema(
       options,
       withLegacyWorkspaceBootstrapDeferred(
-        withLegacyWorkerProvisionSource(OPENCLAW_STATE_SCHEMA_SQL),
+        withLegacyWorkerProvisionSource(getOpenClawStatePredecessorSchema(40)),
       ),
     );
     expect(createHash("sha256").update(historical).digest("hex")).toBe(

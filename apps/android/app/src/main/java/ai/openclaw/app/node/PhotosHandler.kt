@@ -1,6 +1,6 @@
 package ai.openclaw.app.node
 
-import ai.openclaw.app.gateway.GatewaySession
+import ai.openclaw.app.gateway.InvokeResult
 import ai.openclaw.app.hasPhotoReadPermission
 import android.content.ContentResolver
 import android.content.ContentUris
@@ -215,7 +215,7 @@ class PhotosHandler internal constructor(
   appContext: Context,
   private val dataSource: PhotosDataSource = SystemPhotosDataSource(appContext),
 ) {
-  fun handlePhotosLatest(paramsJson: String?): GatewaySession.InvokeResult {
+  fun handlePhotosLatest(paramsJson: String?): InvokeResult {
     if (!dataSource.hasPermission()) {
       return nodeInvokeError("PHOTOS_PERMISSION_REQUIRED", "grant Photos permission")
     }

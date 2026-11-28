@@ -295,7 +295,7 @@ it.each(["allowed", "auth-reflection", "header-reflection", "abort-release"] as 
           await getPluginInstance(record)?.dispose();
           await closeProviderTransportDispatcherPool();
           await loopbackDispatcher.close();
-          await resetAdmissionState(true);
+          await resetAdmissionState();
         }
       },
     ),

@@ -258,13 +258,6 @@ test.for([
           ...(worktree ? { pendingWorktree: { baseRef } } : {}),
         });
         await vi.waitFor(() => expect(projectCloneMocks.materialize).toHaveBeenCalledOnce());
-        expect(projectCloneMocks.materialize).toHaveBeenCalledWith(
-          expect.objectContaining({ gitUrl: "https://github.com/openclaw/openclaw.git" }),
-          expect.objectContaining({
-            signal: expect.any(AbortSignal),
-            token: "protected-native-token",
-          }),
-        );
         expect(events).toContainEqual(
           expect.objectContaining({
             runId,
@@ -304,7 +297,6 @@ test.for([
 
         materialization.resolve(project);
         await settleWorkspaceRuns(context, storePath, key);
-        expect(projectCloneMocks.assertSelected).toHaveBeenCalled();
         const error = broadcast.mock.calls.find(
           ([event, payload]) => event === "chat" && payload.state === "error",
         );
@@ -625,8 +617,6 @@ test("sessions.create rejects conflicting, unsupported, and invalid remote proje
   for (const params of [
     { message: "Start", projectGitUrl: validRemote, projectId: "workspace:main" },
     { message: "Start", projectGitUrl: validRemote, cwd: workspace },
-    { projectGitUrl: validRemote },
-    { message: "Start", projectGitUrl: "   " },
     { message: "Start", projectGitUrl: "file:///tmp/untrusted-project" },
     { message: "Start", projectGitUrl: "https://token@github.com/openclaw/openclaw.git" },
     { key: existing?.key, message: "Start", projectGitUrl: validRemote },
@@ -970,66 +960,38 @@ test.each([false, true])(
             assertCurrent() {},
           });
           expect(copied.preview).toEqual(new Uint8Array(Buffer.from("accepted parent bytes\n")));
-          for (const phase of [
-            "forbidden",
-            "before-copy",
-            "after-copy",
-            "before-binding",
-            "source",
-          ] as const) {
-            let current = phase !== "forbidden";
-            const key = `agent:main:subagent:repository-${phase}`;
-            let completedCopies = 0;
-            const stage = workerWorkspaceResultStaging.stageWorkerWorkspaceResult;
-            const copy = vi
-              .spyOn(workerWorkspaceResultStaging, "stageWorkerWorkspaceResult")
-              .mockImplementation(async (params) => {
-                current &&= phase !== "before-copy";
-                if (phase === "source") {
-                  await replaceSessionEntry(
-                    { agentId: "main", sessionKey: parentKey, storePath },
-                    { ...parent.entry, sessionId: "reassigned-parent" },
-                  );
-                }
-                const result = await stage(params);
-                completedCopies++;
-                current &&= phase !== "after-copy";
-                return result;
-              });
-            const fork = repositoryCheckpoints.forkSessionRepositoryWorkspace;
-            const prepared = vi
-              .spyOn(repositoryCheckpoints, "forkSessionRepositoryWorkspace")
-              .mockImplementation(async (params) => {
-                const result = await fork(params);
-                current &&= phase !== "before-binding";
-                return result;
-              });
-            try {
-              const denied = await directSessionReq(
-                "sessions.create",
-                { ...selection, key },
-                { client, hasCurrentClientAuthority: () => current },
-              ).catch((error: unknown) => ({ ok: false, error }));
-              expect(denied, phase).toMatchObject({
-                ok: false,
-                error: {
-                  message:
-                    phase === "source"
-                      ? "Spawn parent repository changed; retry from its current session"
-                      : "Gateway requester authority changed",
-                },
-              });
-              expect(readEntry(storePath, key), phase).toBeUndefined();
-              expect(await store.find({ agentId: "main", sessionKey: key }), phase).toBeUndefined();
-              expect(await store.get(original.workspaceId), phase).toEqual(original);
-              expect(copy).toHaveBeenCalledTimes(phase === "forbidden" ? 0 : 1);
-              expect(completedCopies).toBe(
-                phase === "after-copy" || phase === "before-binding" ? 1 : 0,
+          // The parent's source changing mid-copy is a data fence and still refuses.
+          const key = "agent:main:subagent:repository-source";
+          let completedCopies = 0;
+          const stage = workerWorkspaceResultStaging.stageWorkerWorkspaceResult;
+          const copy = vi
+            .spyOn(workerWorkspaceResultStaging, "stageWorkerWorkspaceResult")
+            .mockImplementation(async (params) => {
+              await replaceSessionEntry(
+                { agentId: "main", sessionKey: parentKey, storePath },
+                { ...parent.entry, sessionId: "reassigned-parent" },
               );
-            } finally {
-              copy.mockRestore();
-              prepared.mockRestore();
-            }
+              const result = await stage(params);
+              completedCopies++;
+              return result;
+            });
+          try {
+            const denied = await directSessionReq(
+              "sessions.create",
+              { ...selection, key },
+              { client },
+            ).catch((error: unknown) => ({ ok: false, error }));
+            expect(denied).toMatchObject({
+              ok: false,
+              error: { message: "Spawn parent repository changed; retry from its current session" },
+            });
+            expect(readEntry(storePath, key)).toBeUndefined();
+            expect(await store.find({ agentId: "main", sessionKey: key })).toBeUndefined();
+            expect(await store.get(original.workspaceId)).toEqual(original);
+            expect(copy).toHaveBeenCalledTimes(1);
+            expect(completedCopies).toBe(0);
+          } finally {
+            copy.mockRestore();
           }
         }
       },

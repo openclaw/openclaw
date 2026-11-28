@@ -17,9 +17,10 @@ const REQUESTER_FIELDS = [
 ] as const;
 
 /**
- * Who asked for the finished turn: the sender, owner flag, group and channel that tool policy
- * resolves against. The stored session does not record them, so a fork carries them to check
- * the requester's current policy again when it runs.
+ * Who asked for the finished turn: the sender, group and channel that tool policy resolves
+ * against. The stored session does not record them, so a fork carries them to check the
+ * requester's current policy again when it runs. The owner flag is the fork caller's admitted
+ * authority, never the turn's: the transcript records attribution, not authority.
  */
 export type SessionForkRequester = Pick<
   EmbeddedForegroundPromptContext,
@@ -45,7 +46,7 @@ function projectSessionForkRequester(context: SessionForkRequester): SessionFork
 export function readSessionForkRequesterFromTurn(meta: unknown): SessionForkRequester | undefined {
   const record = asOptionalRecord(meta);
   const origin = asOptionalRecord(record?.requesterOrigin);
-  if (!record || (!origin && typeof record.senderIsOwner !== "boolean" && !record.senderId)) {
+  if (!record || (!origin && !record.senderId)) {
     return undefined;
   }
   const text = (value: unknown) => (typeof value === "string" && value ? value : undefined);
@@ -61,6 +62,5 @@ export function readSessionForkRequesterFromTurn(meta: unknown): SessionForkRequ
     senderName: text(origin?.senderName) ?? text(record.senderName),
     senderUsername: text(origin?.senderUsername) ?? text(record.senderUsername),
     senderE164: text(origin?.senderE164),
-    ...(typeof record.senderIsOwner === "boolean" ? { senderIsOwner: record.senderIsOwner } : {}),
   });
 }

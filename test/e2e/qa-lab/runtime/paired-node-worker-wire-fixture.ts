@@ -485,7 +485,8 @@ export async function createPairedNodeWorkerHost(
     OPENCLAW_STATE_DIR: nodeStateDir,
     ...options.workerEnv,
   };
-  await fs.mkdir(nodeEnv.HOME, { recursive: true });
+  await fs.mkdir(options.root, { recursive: true, mode: 0o700 });
+  await fs.mkdir(nodeEnv.HOME, { recursive: true, mode: 0o700 });
   const workspace = new NodeWorkerWorkspaceRuntime({ root: nodeHostRoot, env: nodeEnv });
   const bundleInstaller = new NodeWorkerBundleInstaller({ root: nodeHostRoot, env: nodeEnv });
   const nativeInferenceSnapshot = options.nodeConfig

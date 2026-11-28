@@ -149,6 +149,7 @@ it("keeps model projections across display writes but invalidates authored value
     ...initial,
     ui: { seamColor: "#123456", prefs: { chatShowToolCalls: false } },
     meta: { lastTouchedVersion: "2026.10.11" },
+    browser: { profiles: { temporary: { cdpPort: 18801, color: "#123456" } } },
   };
   setSnapshot(display, display);
   expect(resolveRuntimeConfigCacheKey(display)).not.toBe(configKey);
@@ -165,23 +166,6 @@ it("keeps model projections across display writes but invalidates authored value
   expect(modelCacheKey(resolved)).not.toBe(modelKey);
   setSnapshot(source, source);
   expect(modelCacheKey(source)).not.toBe(modelKey);
-});
-
-it("hashes one captured immutable fleet only once", () => {
-  const source = {
-    agents: {
-      entries: Object.fromEntries(
-        Array.from({ length: 200 }, (_, index) => [`agent-${index}`, { name: `${index}` }]),
-      ),
-    },
-  };
-  const keys = vi.spyOn(Object, "keys");
-  const config = captureRuntimeConfig(source);
-  const first = hashRuntimeConfigValue(config);
-  for (let index = 0; index < 200; index += 1) {
-    expect(hashRuntimeConfigValue(config)).toBe(first);
-  }
-  expect(keys.mock.calls.filter(([value]) => value === config.agents?.entries)).toHaveLength(1);
 });
 
 it("rehashes mutable descendants of a shallow-frozen config", () => {

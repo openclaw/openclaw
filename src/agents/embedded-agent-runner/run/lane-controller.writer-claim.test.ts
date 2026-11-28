@@ -72,12 +72,11 @@ function writerParams(overrides: Partial<RunEmbeddedAgentParams> = {}) {
   } satisfies RunEmbeddedAgentParams;
 }
 
-async function seedWriter(runId = "run-a", extra: Partial<InternalSessionEntry> = {}) {
+async function seedWriter(runId = "run-a") {
   await replaceSessionEntry(writerScope(), {
     activeWriterRunId: runId,
     ...sessionRevision,
     updatedAt: 1,
-    ...extra,
   } as InternalSessionEntry);
 }
 
@@ -461,7 +460,7 @@ describe("embedded run durable writer admission", () => {
         const claiming = claimAgentSessionWriter(writerParams({ admittedRunContext }));
         if (revoke) {
           await expect(claiming).rejects.toMatchObject({
-            message: "admitted run authority is no longer active",
+            message: "This agent run is no longer active. Start a new turn to retry.",
             cause: revoked,
           });
         } else {

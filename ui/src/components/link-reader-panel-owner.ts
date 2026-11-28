@@ -38,7 +38,6 @@ import { PANEL_HOSTED_TABS_CHANGE_EVENT } from "./panel-hosted-tabs.ts";
 
 registerLinkReaderEnglish();
 
-const HISTORY_LIMIT = 30;
 export const LINK_READER_TAB_LIMIT = 10;
 
 /** Browser-style, memory-only tabs and connection-scoped document authority. */
@@ -159,17 +158,12 @@ export function createLinkReaderPanel(
         if (!current) {
           return props.readers.length > 0 ? [tab] : [];
         }
-        if (!resolveLinkReaderTarget(current.href, props.readers)) {
+        tab.target = resolveLinkReaderTarget(current.href, props.readers);
+        if (tab.target?.reader !== current.reader) {
           setTabView(tab, { status: "idle" });
-          return [];
         }
-        tab.history = tab.history.flatMap((entry) => {
-          const resolved = resolveLinkReaderTarget(entry.href, props.readers);
-          return resolved ? [resolved] : [];
-        });
-        tab.index = tab.history.findIndex((entry) => entry.href === current.href);
-        if (tabTarget(tab)?.reader !== current.reader) {
-          setTabView(tab, { status: "idle" });
+        if (!tab.target) {
+          return [];
         }
         tab.reloadPending = true;
         return [tab];
@@ -329,8 +323,7 @@ export function createLinkReaderPanel(
     abortRequest();
     const tab: ReaderTab = {
       id: "link-reader-tab-" + ++nextTabId,
-      history: target ? [target] : [],
-      index: target ? 0 : -1,
+      target: target ?? null,
       view: { status: "idle" },
       reloadPending: false,
     };
@@ -382,8 +375,7 @@ export function createLinkReaderPanel(
     const previous = tabTarget(tab);
     if (previous?.href !== target.href) {
       abortRequest();
-      tab.history = [...tab.history.slice(0, tab.index + 1), target].slice(-HISTORY_LIMIT);
-      tab.index = tab.history.length - 1;
+      tab.target = target;
       if (!previous || targetKey(previous) !== targetKey(target)) {
         setTabView(tab, { status: "idle" });
       }
@@ -430,17 +422,14 @@ export function createLinkReaderPanel(
       return;
     }
     if (target) {
-      const existing =
-        detail?.newTab !== false
-          ? state.tabs.find((tab) => {
-              const current = tabTarget(tab);
-              return current && targetKey(current) === targetKey(target);
-            })
-          : undefined;
+      const existing = state.tabs.find((tab) => {
+        const current = tabTarget(tab);
+        return current && targetKey(current) === targetKey(target);
+      });
       if (existing) {
         selectHostedTab(existing.id);
         navigate(target);
-      } else if (detail?.newTab === false || (activeTab() && !currentTarget())) {
+      } else if (activeTab() && !currentTarget()) {
         navigate(target);
       } else {
         createTab(target);
@@ -472,19 +461,6 @@ export function createLinkReaderPanel(
   function refreshDocument(): void {
     abortRequest();
     refreshRequested = true;
-    publish();
-  }
-  function goHistory(offset: number): void {
-    const tab = activeTab();
-    if (!tab || tab.index + offset < 0 || tab.index + offset >= tab.history.length) {
-      return;
-    }
-    abortRequest();
-    tab.index += offset;
-    setTabView(tab, { status: "idle" });
-    state.urlDraft = currentTarget()?.href ?? "";
-    state.invalidUrl = false;
-    scrollContent = true;
     publish();
   }
   function commitUrl(event: Event): void {
@@ -704,7 +680,6 @@ export function createLinkReaderPanel(
     handleToggleRequest,
     closePanel,
     refresh: refreshDocument,
-    goHistory,
     commitUrl,
     requestSection,
     editUrl(value: string) {

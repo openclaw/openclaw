@@ -15,20 +15,20 @@ export function createPreparedSessionTargetAssertion(input: {
   isAttemptCurrent: () => boolean;
   assertActiveRun: NonNullable<ReturnType<typeof resolveAdmittedRunActiveAssertion>>;
 }) {
-  const {
-    runId,
-    sessionId,
-    sessionPromptState,
-    selectedPromptTarget,
-    isAttemptCurrent,
-    assertActiveRun,
-  } = input;
+  const { runId, sessionId, isAttemptCurrent, assertActiveRun } = input;
+  const target: {
+    current: Pick<typeof input, "sessionPromptState" | "selectedPromptTarget"> | undefined;
+  } = {
+    current: {
+      sessionPromptState: input.sessionPromptState,
+      selectedPromptTarget: input.selectedPromptTarget,
+    },
+  };
   const targetFields = ["agentId", "sessionId", "sessionKey", "storePath", "threadId"] as const;
   type RefusalReason =
     | "attempt_inactive"
     | "session_identity_changed"
     | "target_changed"
-    | "source_authority_refused"
     | "scope_authority_refused";
   let refusalRecorded = false;
   const recordTargetRefusal = (reason: RefusalReason, field?: (typeof targetFields)[number]) => {
@@ -46,17 +46,20 @@ export function createPreparedSessionTargetAssertion(input: {
   const assertTargetCurrent = () => {
     let reason: RefusalReason | undefined;
     let field: (typeof targetFields)[number] | undefined;
-    if (!isAttemptCurrent()) {
+    if (!isAttemptCurrent() || !target.current) {
       reason = "attempt_inactive";
-    } else if (sessionPromptState.sessionId !== sessionId) {
-      reason = "session_identity_changed";
     } else {
-      field = targetFields.find(
-        (candidate) =>
-          sessionPromptState.sessionTarget?.[candidate] !== selectedPromptTarget[candidate],
-      );
-      if (field) {
-        reason = "target_changed";
+      const { sessionPromptState, selectedPromptTarget } = target.current;
+      if (sessionPromptState.sessionId !== sessionId) {
+        reason = "session_identity_changed";
+      } else {
+        field = targetFields.find(
+          (candidate) =>
+            sessionPromptState.sessionTarget?.[candidate] !== selectedPromptTarget[candidate],
+        );
+        if (field) {
+          reason = "target_changed";
+        }
       }
     }
     if (reason) {
@@ -64,25 +67,25 @@ export function createPreparedSessionTargetAssertion(input: {
       throw new SessionWorkStartChangedError("Session target preparation outlived its attempt");
     }
   };
-  return composeSessionSourceAssertion([assertActiveRun], (assertSource) => {
-    assertTargetCurrent();
-    try {
-      assertSource();
-    } catch (cause) {
-      recordTargetRefusal("source_authority_refused");
-      throw new SessionWorkStartChangedError("Session target preparation outlived its attempt", {
-        cause,
-      });
-    }
-    // Source callbacks can retire this attempt or replace its selected target.
+  // Admission checked the run's source once; here only Stop, the run lifetime and the
+  // selected target are current. Session row predicates still reach the writer.
+  const assertCurrent = composeSessionSourceAssertion([assertActiveRun], () => {
     assertTargetCurrent();
     try {
       assertActiveRun.assertScopeCurrent();
     } catch (cause) {
       recordTargetRefusal("scope_authority_refused");
-      throw new SessionWorkStartChangedError("Session target scope authority is no longer active", {
+      throw new SessionWorkStartChangedError("Session target preparation outlived its attempt", {
         cause,
       });
     }
   });
+  return {
+    assertCurrent,
+    [Symbol.dispose]() {
+      // Retained transcript guards must keep refusing without retaining the
+      // completed prompt owner and its snapshot-bearing run parameters.
+      target.current = undefined;
+    },
+  };
 }

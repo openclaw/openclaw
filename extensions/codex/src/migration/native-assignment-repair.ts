@@ -118,31 +118,17 @@ async function normalizeRow(
           sessionId: current.entry.sessionId,
           ...(requester.kind === "session-key" ? { sessionKey: current.sessionKey } : {}),
         });
-        let unknownLifecycle = false;
-        assignments = assignments.filter((assignment) => {
-          if (
-            currentKey !== entry.key ||
-            assignment.owner.sessionId !== current.entry.sessionId ||
-            assignment.owner.connectionFingerprint !== fingerprint
-          ) {
-            return false;
-          }
-          // Shipped owners may omit revisions on both sides. The exact session
-          // and connection checks above still fence that legacy identity.
-          if (assignment.owner.lifecycleRevision === current.entry.lifecycleRevision) {
-            return true;
-          }
-          if (!assignment.owner.lifecycleRevision || !current.entry.lifecycleRevision) {
-            unknownLifecycle = true;
-            return true;
-          }
-          return false;
-        });
-        if (unknownLifecycle) {
-          warnings.push(
-            `Preserved Codex assignments with unknown lifecycle evidence in ${entry.key}.`,
-          );
-        }
+        // Keep exactly what native recovery can still deliver: it requires equal
+        // revisions, including both absent on shipped legacy owners. A revision on
+        // only one side means a reset or cut minted a new lifecycle, and revisions
+        // are never reissued, so that assignment is obsolete.
+        assignments = assignments.filter(
+          (assignment) =>
+            currentKey === entry.key &&
+            assignment.owner.sessionId === current.entry.sessionId &&
+            assignment.owner.connectionFingerprint === fingerprint &&
+            assignment.owner.lifecycleRevision === current.entry.lifecycleRevision,
+        );
       } else {
         warnings.push(
           `Preserved Codex assignments with unknown requester evidence in ${entry.key}.`,

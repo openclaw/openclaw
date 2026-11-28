@@ -14,16 +14,52 @@ function ensureMode(target: string, mode: number): void {
   }
 }
 
-export function ensureOpenClawAgentDatabasePermissions(
-  pathname: string,
-  options: OpenClawAgentDatabaseOptions,
-): void {
+function resolveAgentDatabaseModeTargets(pathname: string, options: OpenClawAgentDatabaseOptions) {
   const dir = path.dirname(pathname);
   const defaultPath = resolveOpenClawAgentSqlitePath({
     agentId: options.agentId,
     env: options.env,
   });
-  const isDefaultAgentDatabase = path.resolve(pathname) === path.resolve(defaultPath);
+  return { dir, isDefaultAgentDatabase: path.resolve(pathname) === path.resolve(defaultPath) };
+}
+
+/**
+ * Read-only: whether `ensureOpenClawAgentDatabasePermissions` would create a directory
+ * or change a mode. Windows always rewrites modes.
+ */
+export function agentDatabasePermissionsNeedRepair(
+  pathname: string,
+  options: OpenClawAgentDatabaseOptions,
+): boolean {
+  if (process.platform === "win32") {
+    return true;
+  }
+  const { dir, isDefaultAgentDatabase } = resolveAgentDatabaseModeTargets(pathname, options);
+  if (!existsSync(dir)) {
+    return true;
+  }
+  const differs = (target: string, mode: number) => (statSync(target).mode & 0o7777) !== mode;
+  if (isDefaultAgentDatabase && differs(dir, OPENCLAW_AGENT_DB_DIR_MODE)) {
+    return true;
+  }
+  return resolveSqliteDatabaseFilePaths(pathname).some((candidate) => {
+    try {
+      return differs(candidate, OPENCLAW_AGENT_DB_FILE_MODE);
+    } catch (error) {
+      // SAFETY: statSync throws Node system errors, which carry an errno code.
+      if ((error as NodeJS.ErrnoException).code === "ENOENT") {
+        return false;
+      }
+      throw error;
+    }
+  });
+}
+
+export function ensureOpenClawAgentDatabasePermissions(
+  pathname: string,
+  options: OpenClawAgentDatabaseOptions,
+): void {
+  const { dir, isDefaultAgentDatabase } = resolveAgentDatabaseModeTargets(pathname, options);
   const dirExisted = existsSync(dir);
   mkdirSync(dir, { recursive: true, mode: OPENCLAW_AGENT_DB_DIR_MODE });
   // Default agent state is private by contract; custom pre-existing dirs keep caller ownership.

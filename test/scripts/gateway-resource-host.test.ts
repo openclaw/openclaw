@@ -3,13 +3,14 @@ import path from "node:path";
 import { fileURLToPath } from "node:url";
 import { afterEach, expect, it } from "vitest";
 import * as resource from "../../scripts/e2e/kitchen-sink-rpc-walk.mts";
+import { resolveTestNodeExecPath } from "../../src/test-utils/node-process.js";
 
 const roots: string[] = [];
 afterEach(() => roots.splice(0).forEach((root) => rmSync(root, { recursive: true, force: true })));
 
 const runtime = {
   runner: {
-    command: process.execPath,
+    command: resolveTestNodeExecPath(),
     baseArgs: [fileURLToPath(new URL("./fixtures/gateway-resource-host.mjs", import.meta.url))],
   },
   buildInfo: { commit: "a".repeat(40), version: "fixture", buildId: "fixture-build" },

@@ -25,6 +25,7 @@ import { PerformanceObserver } from "node:perf_hooks";
 import { parseArgs } from "node:util";
 import type { SubscribeEmbeddedAgentSessionParams } from "../../src/agents/embedded-agent-subscribe.types.js";
 import type { AgentSessionEvent } from "../../src/agents/sessions/index.js";
+import { startCollectedHeapSampling } from "../lib/heap-sampling.ts";
 
 const { values } = parseArgs({
   options: {
@@ -178,12 +179,7 @@ const observer = new PerformanceObserver((list) => {
 observer.observe({ entryTypes: ["gc"] });
 const inspector = new Session();
 if (values.mode === "allocation") {
-  inspector.connect();
-  await inspector.post("HeapProfiler.startSampling", {
-    samplingInterval: 32768,
-    includeObjectsCollectedByMajorGC: true,
-    includeObjectsCollectedByMinorGC: true,
-  });
+  await startCollectedHeapSampling(inspector, 32768);
 }
 const hostLoadBefore = loadavg();
 const cpuStart = process.threadCpuUsage();

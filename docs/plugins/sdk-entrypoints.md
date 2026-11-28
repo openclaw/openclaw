@@ -227,6 +227,12 @@ configured remote workspace during registration so callers cannot fall back to
 local files before its service starts. Register its bridge when ready and release
 it when the service stops. Callers keep their existing document authorization.
 
+`AgentHarnessHostCapabilities.prepareLocalExecScratch({ cwd })` prepares the admitted local workspace's
+`.openclaw/tmp/` and returns `TMPDIR`, `TMP`, and `TEMP` for its child shells.
+The host closes this operation with its admitted run. Native harnesses apply these values to the session's shell environment, without
+changing a shared server's process environment. Do not project local paths into
+remote or sandbox processes; those execution owners select their own paths.
+
 The bridge's optional `createFileExclusive` operation publishes a complete file
 only if its path does not exist, returning `"created"` or `"exists"`. It must use
 an atomic exclusive-create operation, never a separate existence check followed
@@ -438,8 +444,10 @@ after awaited preparation, use
 `session-store-runtime`) with `stores: [{ agentId, storePath, sessionKeys }]`.
 It retains all selected physical sources until its synchronous callback returns.
 An optional `involvingProfileId` matches exact canonical owners or direct profile
-participants, including merge aliases; it never matches mentions or display
-prefixes. After preparing the selected stores, the shared-state worker reads a
+participants, including merge aliases; it does not interpret names, logins or
+display prefixes. A separate optional `profileRelation` accepts a numeric GitHub
+account target and an `owned` or `involving` relationship. `involving` additionally
+matches recorded mentions. Both selectors intersect when supplied together. After preparing the selected stores, the shared-state worker reads a
 fresh canonical profile snapshot, without reusing an earlier inspection snapshot
 or resident catalog. Local identity changes invalidate that prepared selection.
 Final native reads observe the selected session rows after the last await. Profile
@@ -579,6 +587,14 @@ The lightweight `decisions` subpath exports
 the canonical capability schema rather than a competing normalizer. Static
 capability declarations do not confer account entitlement.
 
+## Resource profile
+
+`openclaw/plugin-sdk/resource-profile` exports `getResourceProfile`,
+`onResourceProfileChange`, and the `ResourceProfile` type. It reads the existing
+Gateway decision without selecting another profile or exposing a setter.
+See [Resource profile](/plugins/sdk-runtime#resource-profile) for lifecycle and
+subscription semantics.
+
 ## Runtime request headers
 
 `openclaw/plugin-sdk/provider-request-headers` exports the `ModelRequestHeaders`
@@ -595,6 +611,10 @@ before a process effect. The lease and invocation own its lifetime; saved copies
 do not survive release or cancellation. Use `redactOutput` at diagnostic egress.
 This capability is host-local and is never a wire environment override.
 
+`process-runtime` exports `AGENT_GIT_CONFIG_PARAMETERS` for the host-owned agent Git
+maintenance defaults. Native execution adapters append these parameters after
+resolving their own inherited Git configuration and environment filtering.
+
 `process-runtime` exports `createBoundedLineFramer` for bounded LF-delimited byte
 streams. It preserves incomplete lines and leaves CR handling to the consumer.
 `stripGatewayAllocatorEnv` removes `MALLOC_CONF` and jemalloc `LD_PRELOAD`
@@ -602,3 +622,16 @@ entries in place from a caller-owned child environment. Copy inherited values
 first; never pass `process.env`. Other preload libraries remain available.
 Node duplex calls may supply `assertCurrent` to compose caller-owned liveness with
 the runtime's existing dispatch and delivery authority.
+
+Session Share keeps the legacy list/read contracts unchanged. Optional node
+catalog commands are `openclaw.sessions.catalog.list.v1` and
+`openclaw.sessions.catalog.read.v1`, explicitly allowed on the receiver and
+advertised/approved on the source. Node list accepts `profileRelation` and
+`includeOriginalPath`; read accepts `profileRelation`. The only source target is
+`{ type: "github-account", id: "123" }`, with relationship `owned` or `involving`.
+The outbound Gateway pair is `session-share.catalog.list/read`, advertised in
+`features.methods`. Its list accepts `profileRelation`, but never `includeOriginalPath`;
+Gateway sources cannot supply original links. Receivers use the advertised catalog
+pair for every list/read, and the legacy pair only when the catalog pair is absent.
+These selectors narrow publication, not reader authority.
+See [Session Share](/plugins/session-share) for numbered setup and disclosure.

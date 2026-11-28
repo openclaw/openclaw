@@ -14,7 +14,7 @@ import { resolveLegacyStateDirs, resolveNewStateDir, resolveStateDir } from "../
 import { inspectPersistedInstalledPluginIndexInstallRecordsSync } from "../plugins/installed-plugin-index-record-state.js";
 import { clearPluginMetadataLifecycleCaches } from "../plugins/plugin-metadata-lifecycle.js";
 import { withArtifactPreservingStateReads } from "../state/openclaw-state-db-readonly.js";
-import { resolveUserPath } from "./home-dir.js";
+import { resolveRequiredOsHomeDir, resolveUserPath } from "./home-dir.js";
 import { resolveIdentityPathViaExistingAncestorSync } from "./path-existence.js";
 import { resolveLegacyProfileMigrationExceptions } from "./state-migrations.profile-scope.js";
 
@@ -193,7 +193,8 @@ export function resolveLegacyStateDirMigrationCandidates(params: {
   ) {
     return [];
   }
-  const homedir = params.homedir ?? os.homedir;
+  const home = resolveRequiredOsHomeDir(env, params.homedir ?? os.homedir);
+  const homedir = () => home;
   const target = resolveNewStateDir(homedir);
   return resolveLegacyStateDirs(homedir).map((source) => ({ source, target }));
 }
@@ -330,14 +331,19 @@ function migrateLegacyStateDirRoot(params: StateDirMigrationParams): StateDirMig
   return result();
 }
 
+/** Read-only: whether {@link renameLegacyConfigFile} would rename `clawdbot.json`. */
+export function hasPendingLegacyConfigFileRename(stateDir: string): boolean {
+  return (
+    Boolean(lstatIfPresent(path.join(stateDir, "clawdbot.json"))) &&
+    !lstatIfPresent(path.join(stateDir, "openclaw.json")) &&
+    !lstatIfPresent(path.join(path.dirname(stateDir), ".clawdbot"))
+  );
+}
+
 export function renameLegacyConfigFile(stateDir: string): string[] {
   const source = path.join(stateDir, "clawdbot.json");
   const target = path.join(stateDir, "openclaw.json");
-  if (
-    !lstatIfPresent(source) ||
-    lstatIfPresent(target) ||
-    lstatIfPresent(path.join(path.dirname(stateDir), ".clawdbot"))
-  ) {
+  if (!hasPendingLegacyConfigFileRename(stateDir)) {
     return [];
   }
   renameLegacyPath(source, target, "file");

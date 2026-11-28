@@ -2,10 +2,14 @@ import { setTimeout as delay } from "node:timers/promises";
 import { resolveTimerTimeoutMs } from "@openclaw/normalization-core/number-coercion";
 import { normalizeOptionalString } from "@openclaw/normalization-core/string-coerce";
 import { Option, type Command } from "commander";
+import { sanitizeTerminalText } from "../../../packages/terminal-core/src/safe-text.js";
 import { resolveCronCompletionStatus } from "../../cron/completion-status.js";
 import type { CronRunLogEntry } from "../../cron/run-log-types.js";
+import { danger } from "../../globals.js";
 import { defaultRuntime } from "../../runtime.js";
 import { getAsyncWorkSignal } from "../../shared/async-work-scope.js";
+import { formatCliCommand } from "../command-format.js";
+import { ExpectedCliError } from "../expected-cli-error.js";
 import type { GatewayRpcOpts } from "../gateway-rpc.js";
 import { addGatewayClientOptions, callGatewayFromCli } from "../gateway-rpc.js";
 import { exitCliAfterOutput } from "../one-shot-exit.js";
@@ -16,7 +20,7 @@ import { findCronJobByIdOrName } from "./list-jobs.js";
 import { createCronOutputCommand } from "./output-mode.js";
 import {
   enrichCronJsonWithStatus,
-  formatCronLookupMiss,
+  exitForCronLookupMiss,
   handleCronCliError,
   parseCronIntegerOption,
   printCronJson,
@@ -67,7 +71,7 @@ async function waitForCronRunCompletion(params: {
     params.signal?.throwIfAborted();
     const elapsedBeforePollMs = Math.floor(performance.now() - startedAt);
     if (hasPolled && elapsedBeforePollMs >= params.timeoutMs) {
-      throw new CronCliError(`timed out waiting for cron run ${params.runId}`);
+      break;
     }
     const remainingMs = Math.max(1, params.timeoutMs - elapsedBeforePollMs);
     const configuredTimeoutMs = parseTimeoutMs(params.opts.timeout);
@@ -89,12 +93,22 @@ async function waitForCronRunCompletion(params: {
     }
     const elapsedMs = Math.floor(performance.now() - startedAt);
     if (elapsedMs >= params.timeoutMs) {
-      throw new CronCliError(`timed out waiting for cron run ${params.runId}`);
+      break;
     }
     await delay(Math.min(params.pollIntervalMs, params.timeoutMs - elapsedMs), undefined, {
       signal: params.signal,
     });
   }
+  const message = `timed out waiting for cron run ${params.runId}`;
+  const historyCommand = formatCliCommand("openclaw automations runs");
+  throw new ExpectedCliError({
+    message,
+    machineOutput: message,
+    humanOutput: danger(
+      "OpenClaw stopped waiting, but didn’t cancel the automation run.\n" +
+        `To check the result on the same Gateway, use \`${historyCommand}\` with the automation ID and \`--run-id ${sanitizeTerminalText(params.runId)}\`.`,
+    ),
+  });
 }
 
 export function registerCronSimpleCommands(cron: Command) {
@@ -150,7 +164,7 @@ export function registerCronSimpleCommands(cron: Command) {
             includeDeliveryPreview: !opts.json,
           });
           if (!job) {
-            throw new CronCliError(formatCronLookupMiss(id));
+            exitForCronLookupMiss(id);
           }
           if (opts.json) {
             printCronJson(enrichCronJsonWithStatus(job));

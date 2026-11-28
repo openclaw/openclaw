@@ -109,7 +109,7 @@ function optionPresentation(options: ModelPresentationProps) {
     options.selectedModelValue,
     options.selectedAgentRuntime,
   );
-  const modelLabel = formatModelLabel(options.entry);
+  const modelLabel = formatModelLabel(options.entry.label, options.groupLabel);
   const runtime = formatModelRuntimeLabel(options.entry.provider, options.entry.agentRuntimeId, t);
   const runtimeLabel = runtime?.label ?? "";
   const routeDetail = runtime?.detail ?? "";
@@ -173,7 +173,7 @@ export function modelOptionSearchRow(
   const resetsPin = options.entry.isDefault && options.sessionModelPinned;
   return {
     key: modelPickerOptionKey(options.entry),
-    name: formatModelLabel(options.entry).toLocaleLowerCase(),
+    name: formatModelLabel(options.entry.label, options.groupLabel).toLocaleLowerCase(),
     keywords: [
       options.entry.isDefault ? defaultLabel : "",
       runtimeLabel,
@@ -186,6 +186,7 @@ export function modelOptionSearchRow(
       options.entry.presentation,
     ).toLocaleLowerCase(),
     reference: options.entry.value,
+    recommended: options.entry.recommended,
     selected,
     hasShortcut: !selected,
     disabled:
@@ -207,7 +208,9 @@ function ModelOptionButton(
     props.entry.isDefault ? t("chat.modelControls.default") : "",
   );
   const key = createMemo(() => props.rowKey ?? modelPickerOptionKey(props.entry));
-  const modelName = createMemo(() => formatModelLabel(props.entry).toLocaleLowerCase());
+  const modelName = createMemo(() =>
+    formatModelLabel(props.entry.label, props.groupLabel).toLocaleLowerCase(),
+  );
   // Query changes should reach only rows whose displayed search facts changed.
   const rank = createMemo(() => search?.row(key())?.rank);
   const hidden = createMemo(() => search?.row(key())?.hidden ?? false);
@@ -216,6 +219,8 @@ function ModelOptionButton(
     props.disabled ||
     props.presentation.blocked ||
     Boolean(props.entry.disabled && !props.presentation.resetsPin);
+  const reorderingEnabled = () => props.reorder && !props.reorder.disabled;
+  let pressedButton = false;
   function FavoriteButton() {
     const [popped, setPopped] = createSignal(false);
     return (
@@ -259,11 +264,28 @@ function ModelOptionButton(
       id={search?.optionId(key())}
       class={[
         "chat-controls__inline-select-option chat-controls__model-option",
+        props.reorder?.indicator ? `reorder-drop-${props.reorder.indicator}` : undefined,
         {
+          "reorder-dragging": props.reorder?.dragging,
           "chat-controls__inline-select-option--selected":
             props.presentation.selected && !props.presentation.blocked,
         },
       ]}
+      draggable={reorderingEnabled() ? "true" : undefined}
+      onPointerDown={(event) => {
+        pressedButton = event.target instanceof Element && Boolean(event.target.closest("button"));
+      }}
+      onDragStart={(event) => {
+        if (pressedButton) {
+          event.preventDefault();
+        } else {
+          props.reorder?.onDragStart(event);
+        }
+      }}
+      onDragEnd={() => props.reorder?.onDragEnd()}
+      onDragOver={(event) => props.reorder?.onDragOver(event)}
+      onDragLeave={(event) => props.reorder?.onDragLeave(event)}
+      onDrop={(event) => props.reorder?.onDrop(event)}
       data-chat-model-option={props.entry.value}
       data-chat-model-key={key()}
       data-chat-model-rank={rank()}
@@ -285,7 +307,14 @@ function ModelOptionButton(
         props.entry.provider,
       ).toLocaleLowerCase()}
       role="option"
-      aria-keyshortcuts={search?.row(key())?.shortcut?.toString()}
+      aria-keyshortcuts={
+        [
+          search?.row(key())?.shortcut,
+          reorderingEnabled() ? "Alt+ArrowUp Alt+ArrowDown" : undefined,
+        ]
+          .filter(Boolean)
+          .join(" ") || undefined
+      }
       aria-posinset={search?.row(key())?.position}
       aria-setsize={search?.row(key())?.size}
       hidden={hidden()}
@@ -303,7 +332,18 @@ function ModelOptionButton(
       data-chat-model-auth-blocked={props.presentation.needsAuth ? "" : undefined}
       data-chat-model-cooldown={props.presentation.coolingDown ? "" : undefined}
       onKeyDown={(event) => {
-        if (event.target === event.currentTarget && (event.key === "Enter" || event.key === " ")) {
+        if (event.target !== event.currentTarget) {
+          return;
+        }
+        if (
+          reorderingEnabled() &&
+          event.altKey &&
+          (event.key === "ArrowUp" || event.key === "ArrowDown")
+        ) {
+          event.preventDefault();
+          event.stopPropagation();
+          props.reorder?.onMove(event.key === "ArrowUp" ? -1 : 1);
+        } else if (event.key === "Enter" || event.key === " ") {
           event.preventDefault();
           if (!blocked()) {
             event.currentTarget.click();

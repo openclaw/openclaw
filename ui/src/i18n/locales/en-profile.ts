@@ -10,6 +10,8 @@ const enProfile = {
       description:
         "Connect your Discord identity to this profile. Your existing permissions and channel access rules still apply.",
       unavailable: "Discord account linking isn’t configured. Ask an admin to enable it.",
+      noGatewayAccount:
+        "An admin needs to set up a Discord account on this Gateway before you can link yours.",
       gatewayAccount: "Discord account",
       connect: "Connect Discord",
       connectShort: "Connect",
@@ -86,6 +88,7 @@ const enProfile = {
         "Verified sign-in identity, not permission to publish. Manage publishing access separately.",
       githubVerified: "Verified",
       githubUnavailable: "Unavailable",
+      githubSetup: "Sign in with GitHub through Cloudflare Access or Tailscale Serve to verify it.",
       githubUnavailableDescription:
         "No single verified GitHub sign-in account is available to display.",
       ownerGithubDescription:

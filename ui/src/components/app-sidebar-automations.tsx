@@ -14,6 +14,7 @@ import { formatCronCadence } from "../lib/presenter.ts";
 import { projectGateway } from "../lib/reactive/application.ts";
 import { useApplication } from "../lib/reactive/context.ts";
 import { registerEnglishCatalog, t } from "../lib/reactive/i18n.ts";
+import { createDocumentVisibility } from "../lib/reactive/platform.ts";
 import { createSectionItemsSource, sectionLocation } from "../lib/section-navigation.ts";
 import { resolveSessionNavigationAgentId } from "../lib/sessions/route-navigation.ts";
 import { normalizeAgentId } from "../lib/sessions/session-key.ts";
@@ -52,43 +53,52 @@ export function SidebarAutomations(props: {
   const [revision, setRevision] = createSignal(0);
   onSettled(() =>
     app.gateway.subscribeEvents((event) => {
-      if (event.event === "cron" || isCronInventoryInvalidation(event, app.gateway.snapshot)) {
+      if (event.event === "cron" || isCronInventoryInvalidation(event)) {
         setRevision((value) => value + 1);
       }
     }),
   );
-  const inventory = createMemo(
-    async (): Promise<{ jobs: CronCompactJob[]; error: string | null }> => {
-      revision();
-      gateway.revision();
-      const snapshot = app.gateway.snapshot;
-      if (!snapshot.client || !canCallGatewayMethod(snapshot, "cron.list", "operator.read")) {
-        return { jobs: [], error: null };
-      }
-      // The sidebar is the only list beside the Automations page, so it reads every page.
-      const rows: CronCompactJob[] = [];
-      let offset = 0;
-      try {
-        while (true) {
-          const page = await readCronInventory(snapshot.client, {
-            includeDisabled: true,
-            compact: true,
-            limit: 200,
-            offset,
-            sortBy: "name",
-            sortDir: "asc",
-          });
-          rows.push(...page.jobs);
-          if (!page.hasMore || !page.nextOffset || page.nextOffset <= offset) {
-            return { jobs: rows, error: null };
-          }
-          offset = page.nextOffset;
+  const visible = createDocumentVisibility();
+  type Inventory = { jobs: CronCompactJob[]; error: string | null };
+  const inventory = createMemo(async (previous?: Inventory): Promise<Inventory> => {
+    revision();
+    gateway.revision();
+    const snapshot = app.gateway.snapshot;
+    if (!snapshot.client || !canCallGatewayMethod(snapshot, "cron.list", "operator.read")) {
+      return { jobs: [], error: null };
+    }
+    // The inventory refuses reads for a hidden tab. Keep the rows it showed; returning reads again.
+    if (!visible()) {
+      return previous ?? { jobs: [], error: null };
+    }
+    // The sidebar is the only list beside the Automations page, so it reads every page.
+    const rows: CronCompactJob[] = [];
+    let offset = 0;
+    try {
+      while (true) {
+        const page = await readCronInventory(snapshot.client, {
+          includeDisabled: true,
+          compact: true,
+          limit: 200,
+          offset,
+          sortBy: "name",
+          sortDir: "asc",
+        });
+        rows.push(...page.jobs);
+        if (!page.hasMore || !page.nextOffset || page.nextOffset <= offset) {
+          return { jobs: rows, error: null };
         }
-      } catch (error) {
-        return { jobs: [], error: formatUiError(error) };
+        offset = page.nextOffset;
       }
-    },
-  );
+    } catch (error) {
+      // A read abandoned because the tab hid or the connection changed is not a failure; the
+      // visible or reconnected read that follows replaces it.
+      if (error instanceof DOMException && error.name === "AbortError") {
+        return previous ?? { jobs: [], error: null };
+      }
+      return { jobs: [], error: formatUiError(error) };
+    }
+  });
   // The automations of the filter's agent. Unset follows the agent selected now; automations
   // without one run on the default agent.
   const scoped = createMemo(() => {
@@ -139,10 +149,19 @@ export function SidebarAutomations(props: {
           : direction * (leftMs - rightMs);
       });
   });
+  const failing = (job: CronCompactJob) => job.autoDisabled || job.lastRunStatus === "error";
   const activeJobs = () =>
     automationsFilter().status === "paused" ? [] : shown().filter((job) => job.enabled);
   const pausedJobs = () =>
     automationsFilter().status === "active" ? [] : shown().filter((job) => !job.enabled);
+  const groupFailureIndicator = (jobs: CronCompactJob[]) =>
+    jobs.some(failing) ? (
+      <span
+        class="sidebar-session-group-attention sidebar-session-group-attention--danger"
+        role="img"
+        aria-label={t("common.failed")}
+      />
+    ) : undefined;
   const [activeOpen, setActiveOpen] = createSignal(true);
   const [pausedOpen, setPausedOpen] = createSignal(false);
   // What the page has open, as the page records it for returning to Automations.
@@ -169,7 +188,7 @@ export function SidebarAutomations(props: {
           <span class="sidebar-automations__name">{row.job.displayName ?? row.job.name}</span>
           <span class="sidebar-automations__byline">{automationByline(row.job)}</span>
         </span>
-        <Show when={row.job.autoDisabled || row.job.lastRunStatus === "error"}>
+        <Show when={failing(row.job)}>
           <span class="sidebar-automations__failed" role="img" aria-label={t("common.failed")} />
         </Show>
       </a>
@@ -225,20 +244,26 @@ export function SidebarAutomations(props: {
       <Show when={activeJobs().length > 0}>
         <SidebarListGroup
           label={t("cron.tabs.active")}
+          indicator={groupFailureIndicator(activeJobs())}
           open={activeOpen()}
           onToggle={() => setActiveOpen(!activeOpen())}
         >
-          <For each={activeJobs()}>{(job) => <Row job={job} />}</For>
+          <For each={activeJobs()} keyed={(job) => job.id}>
+            {(job) => <Row job={job()} />}
+          </For>
         </SidebarListGroup>
       </Show>
       <Show when={pausedJobs().length > 0}>
         <SidebarListGroup
           label={t("cron.tabs.paused")}
+          indicator={groupFailureIndicator(pausedJobs())}
           // Paused is the one group shown when the filter asks for it.
           open={pausedOpen() || automationsFilter().status === "paused"}
           onToggle={() => setPausedOpen(!pausedOpen())}
         >
-          <For each={pausedJobs()}>{(job) => <Row job={job} />}</For>
+          <For each={pausedJobs()} keyed={(job) => job.id}>
+            {(job) => <Row job={job()} />}
+          </For>
         </SidebarListGroup>
       </Show>
     </nav>

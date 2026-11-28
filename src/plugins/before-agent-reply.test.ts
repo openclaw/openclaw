@@ -118,7 +118,7 @@ describe("before_agent_reply runner boundary", () => {
       ),
     ).rejects.toThrow("root reassigned");
     expect(effect).not.toHaveBeenCalled();
-    expect(finalAuthority).toThrow("no longer active");
+    expect(finalAuthority).toThrow("The guarded request ended.");
   });
 
   it("preserves the complete reply payload", () => {

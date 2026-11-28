@@ -1,8 +1,7 @@
-// Coverage for provider replay tool-call sanitization.
-
 import type { Context } from "@openclaw/llm-core";
 import type { AgentMessage } from "openclaw/plugin-sdk/agent-core";
 import { describe, expect, it, vi } from "vitest";
+import * as pairingFacts from "../../../../packages/agent-core/src/harness/session/tool-pairing-facts.js";
 import * as pairing from "../../../../packages/agent-core/src/harness/session/tool-result-pairing.js";
 import { makeTextToolResult } from "../../../../test/helpers/text-tool-result.js";
 import { makeProviderModelFixture } from "../../test-helpers/provider-model-fixture.js";
@@ -86,7 +85,10 @@ function captureStream(content: string | unknown[] = []) {
   );
 }
 
-function forwardedMessages(baseFn: ReturnType<typeof captureStream>, index = 0): AgentMessage[] {
+function forwardedMessages(
+  baseFn: ReturnType<typeof captureStream>,
+  index: number,
+): AgentMessage[] {
   const call = baseFn.mock.calls[index];
   if (!call) {
     throw new Error("expected replay to reach the stream");
@@ -102,7 +104,7 @@ function sanitizeOpenAIResponsesReplayForStream(messages: AgentMessage[]): Agent
 }
 
 it("classifies paired replay once across sanitization and transport, rechecking mutations", () => {
-  const classify = vi.spyOn(pairing, "classifyToolUseResultPairing");
+  const classify = vi.spyOn(pairingFacts, "classifyToolPairingFacts");
   const extract = vi.spyOn(pairing, "extractToolCallsFromAssistant");
   try {
     const messages = [

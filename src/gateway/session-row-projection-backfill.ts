@@ -4,12 +4,14 @@ import {
   getGatewayRestartDrainSignal,
   getGatewayShutdownCleanupSignal,
 } from "../process/gateway-work-admission.js";
+import { deriveGoalSessionTitle } from "./derive-goal-session-title.js";
 import { yieldSessionListBackgroundWork } from "./session-projection-work.js";
 import { identity, type EntryRow, type Row } from "./session-row-projection-record.js";
 import {
   backfillSessionRowTranscriptFields,
   presentSessionRowTranscriptFields,
 } from "./session-row-transcript-backfill.js";
+import { readSessionTitleFieldsFromTranscriptAsync } from "./session-transcript-title-reader.js";
 
 function transcriptParams(row: Row, entry: EntryRow["entry"]) {
   return {
@@ -19,7 +21,7 @@ function transcriptParams(row: Row, entry: EntryRow["entry"]) {
     sessionKey: row.key,
     sessionId: entry.sessionId,
     sessionEntry: entry,
-    model: row.materialized && {
+    model: row.materialized?.source.selectedModel && {
       selectedProvider: row.materialized.source.selectedModel.provider,
       selectedModel: row.materialized.source.selectedModel.model,
       config: row.materialized.source.cfg,
@@ -34,7 +36,9 @@ export function createSessionRowProjectionBackfill(params: {
   current: (row: Row) => boolean;
   publish: (
     row: Row,
-    fields: NonNullable<Awaited<ReturnType<typeof backfillSessionRowTranscriptFields>>>,
+    fields: NonNullable<Awaited<ReturnType<typeof backfillSessionRowTranscriptFields>>> & {
+      fallbackTitle?: string | null;
+    },
   ) => void;
 }) {
   const inOwnerContext = AsyncLocalStorage.snapshot();
@@ -53,6 +57,7 @@ export function createSessionRowProjectionBackfill(params: {
     return {
       generation: row.generation,
       watermark: watermark?.activitySummaryWatermark,
+      needsFallbackTitle: entry.titleFallbackReady && !entry.displayName && !entry.label,
       fallback: entry.fallbackNotice && {
         status: entry.status,
         lastRunId: entry.lastRunId,
@@ -88,10 +93,16 @@ export function createSessionRowProjectionBackfill(params: {
         continue;
       }
       try {
-        const fields = await backfillSessionRowTranscriptFields(
-          transcriptParams(row, entry),
-          signal,
-        );
+        const scope = transcriptParams(row, entry);
+        const fields = await backfillSessionRowTranscriptFields(scope);
+        // Only a settled failure needs the first message. Keep this display fact in
+        // the resident row, never in the session title or the worktree name.
+        const fallbackTitle =
+          captured.needsFallbackTitle && !row.fallbackTitle
+            ? (deriveGoalSessionTitle(
+                (await readSessionTitleFieldsFromTranscriptAsync(scope)).firstUserMessage,
+              ) ?? null)
+            : row.fallbackTitle;
         const live = params.read(id);
         // A replacement/private-session revocation must not publish another session's text.
         if (!closed() && live?.entry && params.current(row)) {
@@ -103,18 +114,22 @@ export function createSessionRowProjectionBackfill(params: {
           if (fields && facts?.transcriptAssistantMessage === "unknown") {
             facts.transcriptAssistantMessage = fields.lastAssistantMessage ?? null;
           }
-          params.publish(
-            live,
+          if (fields && facts && facts.transcriptHasMessages === undefined) {
+            facts.transcriptHasMessages = fields.hasMessages;
+          }
+          const observed =
             facts?.transcriptPreview !== undefined &&
-              facts.transcriptAssistantMessage !== "unknown" &&
-              facts.transcriptTerminalModel !== undefined
+            facts.transcriptHasMessages !== undefined &&
+            facts.transcriptAssistantMessage !== "unknown" &&
+            facts.transcriptTerminalModel !== undefined
               ? presentSessionRowTranscriptFields(transcriptParams(live, live.entry), {
+                  hasMessages: facts.transcriptHasMessages,
                   lastMessagePreview: facts.transcriptPreview,
                   lastAssistantMessage: facts.transcriptAssistantMessage,
                   terminalModel: facts.transcriptTerminalModel,
                 })
-              : (fields ?? {}),
-          );
+              : (fields ?? {});
+          params.publish(live, { ...observed, fallbackTitle });
         }
       } catch {
         // A later owner publication retries optional fields; do not spin on a cold/error row.
@@ -152,6 +167,7 @@ export function createSessionRowProjectionBackfill(params: {
         params.publish(
           row,
           presentSessionRowTranscriptFields(transcriptParams(row, row.entry), {
+            hasMessages: facts.transcriptHasMessages,
             lastMessagePreview: facts.transcriptPreview,
             lastAssistantMessage:
               facts.transcriptAssistantMessage === "unknown"
@@ -160,7 +176,13 @@ export function createSessionRowProjectionBackfill(params: {
             terminalModel: facts.transcriptTerminalModel,
           }),
         );
-        if (facts.transcriptAssistantMessage !== "unknown") {
+        if (
+          facts.transcriptAssistantMessage !== "unknown" &&
+          facts.transcriptHasMessages !== undefined &&
+          (!next.needsFallbackTitle ||
+            row.fallbackTitle ||
+            (row.fallbackTitle === null && isDeepStrictEqual(revisions.get(id), next)))
+        ) {
           revisions.set(id, next);
           queued.delete(id);
           return;

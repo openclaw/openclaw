@@ -14,6 +14,10 @@ import { join, resolve } from "node:path";
 import { afterEach, expect } from "vitest";
 import { parse as parseYaml } from "yaml";
 import {
+  formatCandidateToolingLagWarning,
+  parseArgs,
+} from "../../scripts/full-release-validation-at-sha.mts";
+import {
   SCRIPT_PATH,
   testNodeExecPath,
   prepareDispatchRepository,
@@ -25,6 +29,30 @@ export {
   LEGACY_WORKFLOW_SOURCE,
   runGit,
 } from "./full-release-validation-at-sha.repository.test-support.js";
+
+export function rejectArgs(args: string[], error: string) {
+  expect(() => parseArgs(args)).toThrow(error);
+}
+
+export function expectCandidateToolingLagWarning() {
+  const candidateSha = "a".repeat(40);
+  const mainSha = "b".repeat(40);
+
+  expect(
+    formatCandidateToolingLagWarning(candidateSha, mainSha, 3508, 28162, [
+      "14.8% extensions/",
+      "1.3% scripts/",
+    ]),
+  ).toBe(
+    [
+      `WARNING: frozen qualification Q ${candidateSha} is 3508 non-merge commit(s) behind main ${mainSha}, with 28162 net changed path(s). Moving main cannot repair this harness; explicitly select and admit any replacement Q before dispatch.`,
+      "Largest changed areas (share of net changed paths):",
+      "14.8% extensions/",
+      "1.3% scripts/",
+      `Inspect every exact path: git diff --name-status ${candidateSha} ${mainSha}`,
+    ].join("\n"),
+  );
+}
 
 type DispatchWorkflow = { on?: { workflow_dispatch?: { inputs?: Record<string, unknown> } } };
 
@@ -101,8 +129,10 @@ export function createDispatchFixture(
     targetSource?: Record<string, string>;
     omitPurpose?: boolean;
     toolingLagFetchFailure?: boolean;
+    toolingLagComparisonFailure?: boolean;
     unreachableContributionRecord?: boolean;
     activeConcurrencyRun?: boolean;
+    activeInventory?: "short-once" | "short-always" | "short-invalid-row" | "malformed";
     completedConcurrencyHistory?: number;
     releaseNotes?: string;
     candidateOpenPrHead?: boolean;
@@ -192,6 +222,9 @@ for (const method of ["execFileSync", "spawnSync"]) {
       const mainFetches = fs.readFileSync(process.env.MOCK_GIT_CALLS, "utf8").trim().split("\\n")
         .filter((line) => line.includes("refs/heads/main:refs/remotes/origin/main"));
       if (mainFetches.length > 1) failure = "fixture origin/main fetch failed";
+    }
+    if (args[0] === "diff" && args.includes("--shortstat") && ${JSON.stringify(options.toolingLagComparisonFailure ?? false)}) {
+      failure = "fixture tooling comparison failed";
     }
     const bareFetch = args.includes("https://github.com/openclaw/openclaw.git");
     if (bareFetch && ${JSON.stringify(options.bareShaFetchFailure ?? false)}) {
@@ -575,7 +608,20 @@ if (args[0] === "api" && args[1] === "graphql" && fields.has("oid")) {
     }
     process.stdout.write(headers + "\\r\\n");
   }
-  console.log(JSON.stringify({ total_count: runs.length, workflow_runs: runs.slice((page - 1) * 20, page * 20) }));
+  let totalCount = runs.length;
+  const activeInventory = ${JSON.stringify(options.activeInventory)};
+  if (activeInventory && concurrencyInventory && fields.get("status") === "queued") {
+    const marker = runDiscoveryIndexPath + ".short-active-read";
+    if (activeInventory === "short-invalid-row") {
+      totalCount = 2;
+      runs.push({ ...runMetadata(0), status: "queued" });
+    } else if (activeInventory === "malformed") totalCount = -1;
+    else if (activeInventory === "short-always" || !fs.existsSync(marker)) {
+      totalCount++;
+      fs.writeFileSync(marker, "short page");
+    }
+  }
+  console.log(JSON.stringify({ total_count: totalCount, workflow_runs: runs.slice((page - 1) * 20, page * 20) }));
 } else if (args[0] === "api" && endpoint.endsWith("/actions/runs/123")) {
   const index = Number(fs.readFileSync(parentRunIndexPath, "utf8"));
   const state = parentRunStates[Math.max(0, Math.min(index, parentRunStates.length - 1))];

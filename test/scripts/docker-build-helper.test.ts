@@ -1374,22 +1374,6 @@ docker_build_run e2e-build -t demo-image .
   });
 
   it.each([
-    ["HEARTBEAT_SECONDS", "heartbeat_seconds"],
-    ["RETRIES", "retry_count"],
-  ])("normalizes zero-padded Docker build %s", (envSuffix, helperSuffix) => {
-    const script = repoRootShell`
-export ROOT_DIR
-export OPENCLAW_DOCKER_BUILD_${envSuffix}=08
-
-source "$ROOT_DIR/scripts/lib/docker-build.sh"
-
-[[ "$(docker_build_${helperSuffix})" = "8" ]]
-`;
-
-    execDockerSnippet(script);
-  });
-
-  it.each([
     [
       "retry count",
       "OPENCLAW_DOCKER_BUILD_RETRIES",
@@ -1681,6 +1665,7 @@ ${PACKAGE_BUILDER_NODE_SCRIPT}
 source "$ROOT_DIR/scripts/lib/docker-e2e-package.sh"
 
 docker() {
+  if [[ "$1" == info ]]; then echo 2; return; fi
   local last_arg=""
   local arg
   for arg in "$@"; do
@@ -1856,6 +1841,7 @@ ${PASSTHROUGH_TIMEOUT_SETUP}
 source "$ROOT_DIR/scripts/lib/docker-e2e-package.sh"
 
 docker() {
+  if [[ "$1" == info ]]; then echo 2; return; fi
   if [[ "$1" == "rm" ]]; then
     shift
     test "$1" = "-f"
@@ -2204,6 +2190,10 @@ unset OPENCLAW_DOCKER_E2E_MEMORY OPENCLAW_DOCKER_E2E_CPUS OPENCLAW_DOCKER_E2E_PI
 export OPENCLAW_DOCKER_E2E_AVAILABLE_CPUS=32
 
 docker() {
+  if [[ "$*" = "info --format {{.NCPU}}" ]]; then
+    echo 2
+    return
+  fi
   printf "%s\\n" "$*" >>"$TMPDIR/docker-seen"
 }
 export -f docker
@@ -2215,12 +2205,16 @@ OPENCLAW_DOCKER_E2E_MEMORY=12g OPENCLAW_DOCKER_E2E_CPUS=4 OPENCLAW_DOCKER_E2E_PI
 OPENCLAW_DOCKER_E2E_AVAILABLE_CPUS=8 OPENCLAW_DOCKER_E2E_MEMORY=12g OPENCLAW_DOCKER_E2E_CPUS=16 OPENCLAW_DOCKER_E2E_PIDS_LIMIT=512 docker_e2e_docker_cmd run demo
 docker_e2e_docker_cmd run --memory 2g --cpus 3 --pids-limit 99 demo
 OPENCLAW_DOCKER_E2E_DISABLE_RESOURCE_LIMITS=1 docker_e2e_docker_cmd run demo
+unset OPENCLAW_DOCKER_E2E_AVAILABLE_CPUS
+nproc() { echo 32; }
+docker_e2e_docker_cmd run demo
 
 [[ "$(sed -n '1p' "$TMPDIR/docker-seen")" = "run -e OPENCLAW_NO_AUTO_UPDATE=1 --memory 8g --cpus 16 --pids-limit 2048 demo" ]]
 [[ "$(sed -n '2p' "$TMPDIR/docker-seen")" = "run -e OPENCLAW_NO_AUTO_UPDATE=1 --memory 12g --cpus 4 --pids-limit 512 demo" ]]
 [[ "$(sed -n '3p' "$TMPDIR/docker-seen")" = "run -e OPENCLAW_NO_AUTO_UPDATE=1 --memory 12g --cpus 8 --pids-limit 512 demo" ]]
 [[ "$(sed -n '4p' "$TMPDIR/docker-seen")" = "run -e OPENCLAW_NO_AUTO_UPDATE=1 --memory 2g --cpus 3 --pids-limit 99 demo" ]]
 [[ "$(sed -n '5p' "$TMPDIR/docker-seen")" = "run -e OPENCLAW_NO_AUTO_UPDATE=1 demo" ]]
+[[ "$(sed -n '6p' "$TMPDIR/docker-seen")" = "run -e OPENCLAW_NO_AUTO_UPDATE=1 --memory 8g --cpus 2 --pids-limit 2048 demo" ]]
 `;
 
     execDockerSnippet(script);
@@ -2239,6 +2233,7 @@ OPENCLAW_DOCKER_E2E_DISABLE_RESOURCE_LIMITS=1 docker_e2e_docker_cmd run demo
       writeExecutables(join(workDir, "bin"), {
         node: `#!/bin/bash\nexec ${shellQuote(process.execPath)} "$@"\n`,
         docker: `#!/bin/bash
+if [[ "$1" == info ]]; then echo 2; exit 0; fi
 trap "" TERM HUP
 printf "%s\\n" "$$" >"$TMPDIR/docker-pid"
 printf "%s\\n" "$PPID" >"$TMPDIR/watchdog-pid"
@@ -3725,26 +3720,13 @@ exit ${exitCode}
   );
 
   it.each([
-    ...[
-      { publishedBaseline: false, scenario: "base", timeout: "" },
-      { publishedBaseline: true, scenario: "base", timeout: "" },
-      { publishedBaseline: false, scenario: "package-installed-recovery", timeout: "" },
-      { publishedBaseline: false, scenario: "package-installed-recovery", timeout: "1.5s" },
-      { publishedBaseline: false, scenario: "package-installed-recovery", timeout: "0" },
-    ].map((entry) => Object.assign(entry, { cut: "", schedulerOwned: false })),
-    ...[
-      { cut: "older-runtime", schedulerOwned: false },
-      { cut: "anchor-before", schedulerOwned: true },
-      { cut: "anchor-before", schedulerOwned: false },
-    ].map((entry) =>
-      Object.assign(
-        { publishedBaseline: false, scenario: "package-installed-recovery", timeout: "" },
-        entry,
-      ),
-    ),
+    { publishedBaseline: false, scenario: "base", timeout: "" },
+    { publishedBaseline: true, scenario: "base", timeout: "" },
+    { publishedBaseline: false, scenario: "base", timeout: "1.5s" },
+    { publishedBaseline: false, scenario: "base", timeout: "0" },
   ])(
-    "publishes on the host and preserves Docker outcomes/budget: $scenario, published=$publishedBaseline, timeout=$timeout, cut=$cut, scheduler=$schedulerOwned",
-    ({ publishedBaseline, scenario, timeout, cut, schedulerOwned }) => {
+    "publishes on the host and preserves Docker outcomes/budget: $scenario, published=$publishedBaseline, timeout=$timeout",
+    ({ publishedBaseline, scenario, timeout }) => {
       for (const [exitCode, capturePresent, summaryStatus] of [
         [42, true, null],
         [42, false, null],
@@ -3760,7 +3742,7 @@ exit ${exitCode}
         const publicRoot = join(workDir, "public");
         const binDir = join(workDir, "bin");
         mkdirSync(join(artifacts, "diagnostics"), { recursive: true });
-        chmodSync(artifacts, schedulerOwned ? 0o2770 : 0o700);
+        chmodSync(artifacts, 0o700);
         mkdirSync(registry);
         writeFileSync(
           join(artifacts, "diagnostics", "raw.json"),
@@ -3821,9 +3803,6 @@ exit ${exitCode}
 set -euo pipefail
 if [ "$1" = run ]; then
   printf "%s\\n" "$@" >"$TMPDIR/docker-args"
-  if [ -n "\${DOCKER_E2E_CONTAINER_CIDFILE:-}" ]; then
-    printf '%064d' 1 >"$DOCKER_E2E_CONTAINER_CIDFILE"
-  fi
   if [ ! -e "$TMPDIR/skip-optional-logs" ]; then
     test ! -e "$TMPDIR/public"
   fi
@@ -3868,25 +3847,18 @@ exit 0
               OPENCLAW_UPGRADE_SURVIVOR_SCENARIO: scenario,
               OPENCLAW_UPGRADE_SURVIVOR_COMMAND_TIMEOUT: timeout,
               OPENCLAW_E2E_COMMAND_TIMEOUT: "23s",
-              OPENCLAW_UPGRADE_SURVIVOR_BASELINE_SPEC:
-                scenario === "package-installed-recovery" ? "" : "openclaw@2026.7.1-2",
+              OPENCLAW_UPGRADE_SURVIVOR_BASELINE_SPEC: "openclaw@2026.7.1-2",
               OPENCLAW_UPGRADE_SURVIVOR_UPDATE_RESTART_MODE: "manual",
               OPENCLAW_UPGRADE_SURVIVOR_ROOT_MANAGED_VPS: "0",
               OPENCLAW_UPGRADE_SURVIVOR_LIVE_MODELS: "",
               OPENCLAW_UPGRADE_SURVIVOR_LIVE_OPENAI: "0",
-              OPENCLAW_UPGRADE_SURVIVOR_INSTALLED_RECOVERY_CUT: cut,
-              OPENCLAW_DOCKER_ALL_LANE_NAME: cut ? `package-installed-recovery-${cut}` : "",
-              DOCKER_E2E_CONTAINER_CIDFILE: schedulerOwned ? join(workDir, "producer.cid") : "",
               OPENCLAW_DOCKER_ALL_LOG_DIR: "public",
             },
           });
         const result = runWrapper();
         expect(result.status, result.stdout + result.stderr).toBe(exitCode);
         const dockerArgs = readFileSync(join(workDir, "docker-args"), "utf8");
-        const budgetEnv =
-          scenario === "package-installed-recovery"
-            ? "OPENCLAW_E2E_COMMAND_TIMEOUT"
-            : "OPENCLAW_UPGRADE_SURVIVOR_COMMAND_TIMEOUT";
+        const budgetEnv = "OPENCLAW_UPGRADE_SURVIVOR_COMMAND_TIMEOUT";
         // Docker keeps the last value when package arguments repeat an environment key.
         const effectiveBudget = dockerArgs
           .split("\n")
@@ -3895,13 +3867,8 @@ exit 0
         expect(dockerArgs).toContain(`${artifacts}:/tmp/openclaw-upgrade-survivor-artifacts`);
         expect(dockerArgs).not.toContain(publicRoot);
         expect(dockerArgs).not.toContain(":/tmp/openclaw-upgrade-survivor-artifacts/diagnostics");
-        expect(statSync(artifacts).mode & 0o7777).toBe(schedulerOwned ? 0o2770 : 0o777);
-        if (schedulerOwned) {
-          expect(dockerArgs).toContain("--group-add");
-          expect(readFileSync(join(workDir, "producer.cid"), "utf8")).toMatch(/^[a-f0-9]{64}$/u);
-          expect(existsSync(publicRoot)).toBe(false);
-          expect(result.stderr).not.toContain("diagnostics missing");
-        } else if (capturePresent) {
+        expect(statSync(artifacts).mode & 0o7777).toBe(0o777);
+        if (capturePresent) {
           const { text } = publishedDiagnostic(publicRoot, "failure.json");
           expect(text).toContain("startup failure");
           expect(text).not.toContain("HOST_PUBLICATION_SECRET");

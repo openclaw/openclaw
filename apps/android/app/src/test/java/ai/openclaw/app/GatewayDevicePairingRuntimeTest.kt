@@ -1,12 +1,13 @@
 package ai.openclaw.app
 
+import ai.openclaw.app.gateway.ErrorShape
 import ai.openclaw.app.gateway.GatewayEndpoint
 import ai.openclaw.app.gateway.GatewayRequestRejected
-import ai.openclaw.app.gateway.GatewaySession
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.runBlocking
 import kotlinx.coroutines.withTimeout
+import org.junit.After
 import org.junit.Assert.assertEquals
 import org.junit.Before
 import org.junit.Test
@@ -20,6 +21,13 @@ import java.util.UUID
 @RunWith(RobolectricTestRunner::class)
 @Config(sdk = [34])
 class GatewayDevicePairingRuntimeTest {
+  private val runtimes = mutableListOf<NodeRuntime>()
+
+  @After
+  fun closeRuntimes() {
+    runtimes.forEach(::closeNodeRuntimeTestFixture)
+  }
+
   @Before
   fun clearPlainPrefs() {
     RuntimeEnvironment
@@ -105,7 +113,7 @@ class GatewayDevicePairingRuntimeTest {
         when (method) {
           "device.pair.approve" -> {
             throw GatewayRequestRejected(
-              GatewaySession.ErrorShape("INVALID_REQUEST", "device pairing approval denied"),
+              ErrorShape("INVALID_REQUEST", "device pairing approval denied"),
             )
           }
 
@@ -133,7 +141,7 @@ class GatewayDevicePairingRuntimeTest {
         "openclaw.node.device.pairing.runtime.test.${UUID.randomUUID()}",
         android.content.Context.MODE_PRIVATE,
       )
-    return NodeRuntime(app, SecurePrefs(app, securePrefsOverride = securePrefs))
+    return NodeRuntime(app, SecurePrefs(app, securePrefsOverride = securePrefs)).also(runtimes::add)
   }
 
   private fun seedConnectedRuntime(runtime: NodeRuntime) {

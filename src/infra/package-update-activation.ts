@@ -380,13 +380,18 @@ export async function settlePendingPackageActivation(
   ) {
     throw new Error("Separate-helper settlement requires a verified device remount.");
   }
+  // Recorded generations under today's device numbers after a verified remount.
+  const previousIdentity =
+    identities?.currentIdentity(initial.descriptor.previous.identity) ??
+    initial.descriptor.previous.identity;
+  const candidateIdentity =
+    identities?.currentIdentity(initial.descriptor.candidate.identity) ??
+    initial.descriptor.candidate.identity;
   if (
     options?.automatic &&
     !complete &&
     !replacedInstallation &&
-    ![initial.descriptor.previous.identity, initial.descriptor.candidate.identity].includes(
-      replacementIdentity,
-    )
+    ![previousIdentity, candidateIdentity].includes(replacementIdentity)
   ) {
     return undefined;
   }
@@ -394,12 +399,6 @@ export async function settlePendingPackageActivation(
     !lease.current ||
     (initial.phase === "superseded" && initial.intent?.kind === "recovery-lease-missing");
   const leaseIdentityChanged = leaseWasMissing || lease.changed;
-  const previousIdentity =
-    identities?.currentIdentity(initial.descriptor.previous.identity) ??
-    initial.descriptor.previous.identity;
-  const candidateIdentity =
-    identities?.currentIdentity(initial.descriptor.candidate.identity) ??
-    initial.descriptor.candidate.identity;
   const manualReplacement = ![previousIdentity, candidateIdentity].includes(replacementIdentity);
   const reason = manualReplacement
     ? "superseded-by-manual-install"

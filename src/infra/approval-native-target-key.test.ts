@@ -31,15 +31,20 @@ describe("buildChannelApprovalNativeTargetKey", () => {
   });
 
   it("normalizes numeric thread ids through the shared route key", () => {
-    expect(
-      buildChannelApprovalNativeTargetKey({
-        to: "telegram:-100123",
-        threadId: 42.9,
-      }),
-    ).toBe(
+    const key = buildChannelApprovalNativeTargetKey({
+      to: "telegram:-100123",
+      threadId: 42.9,
+    });
+    expect(key).toBe(
       buildChannelApprovalNativeTargetKey({
         to: " telegram:-100123 ",
         threadId: "42",
+      }),
+    );
+    expect(key).not.toBe(
+      buildChannelApprovalNativeTargetKey({
+        to: "telegram:-100123",
+        threadId: "43",
       }),
     );
   });

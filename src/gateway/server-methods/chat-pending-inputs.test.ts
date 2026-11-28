@@ -1,6 +1,7 @@
 import fs from "node:fs";
 import { DatabaseSync } from "node:sqlite";
 import { expectDefined } from "@openclaw/normalization-core";
+import { sha256StableValue } from "@openclaw/normalization-core/node-crypto";
 import { asOptionalRecord } from "@openclaw/normalization-core/record-coerce";
 import { describe, expect, it, onTestFinished, vi } from "vitest";
 import {
@@ -13,6 +14,7 @@ import {
   appendTranscriptMessages,
   bindSessionPendingInputSources,
   listSessionPendingInputs,
+  patchSessionEntryCore,
   stageSessionPendingInput,
   upsertSessionEntryCore,
   loadTranscriptEvents,
@@ -24,6 +26,7 @@ import type { CronJob } from "../../cron/types.js";
 import { retireSessionControllerSourceCancellation } from "../../sessions/session-controller.mailbox.js";
 import { requestRpcSourceCancellation } from "../../sessions/session-controller.rpc-sources.js";
 import { rpcSourceTesting } from "../../sessions/session-lifecycle-admission.test-support.js";
+import { OPENCLAW_AGENT_SCHEMA_VERSION } from "../../state/openclaw-agent-db-contract.js";
 import { withAgentDatabaseMaintenanceLease } from "../../state/openclaw-agent-db-maintenance-lease.js";
 import { migrateOpenClawAgentDatabaseForMaintenance } from "../../state/openclaw-agent-db-maintenance.js";
 import {
@@ -38,13 +41,14 @@ import { ensureProfileForEmail } from "../../state/user-profiles.js";
 import { requireNativeSqliteDatabase } from "../../test-utils/native-sqlite.js";
 import { withOpenClawTestState } from "../../test-utils/openclaw-test-state.js";
 import { createSessionGoalFixture } from "../session-goal.test-support.js";
+import { sharingPolicyClient } from "../session-sharing.test-utils.js";
 import { createRpcSourceForTest } from "../test-helpers.rpc-source.js";
 import { historyPayload, historyRpc } from "./chat-history-fixture.test-support.js";
 import { createHistoryReadContext } from "./chat-history.test-helpers.js";
 import { createChatMetadataHarness } from "./chat-metadata-runtime.test-support.js";
-import { readChatPendingInputs } from "./chat-pending-inputs.js";
+import * as pendingHistory from "./chat-pending-inputs.js";
 import { captureRpcTargetForTest } from "./rpc-source-fixtures.test-support.js";
-import type { GatewayRequestContext } from "./types.js";
+import type { GatewayClient, GatewayRequestContext } from "./types.js";
 
 async function createScope(name: string, sessionId = name) {
   await captureRuntimeConfigAsyncReader()();
@@ -105,11 +109,164 @@ async function read(
   context: GatewayRequestContext,
   params: Record<string, unknown>,
   method: "chat.history" | "chat.startup" | "chat.message.get" = "chat.history",
+  client: GatewayClient | null = null,
 ) {
-  return historyPayload(await historyRpc(context, "")(method, params));
+  return historyPayload(await historyRpc(context, "")(method, params, { client }));
+}
+
+function queueObservationClient(optIn: boolean) {
+  const client = sharingPolicyClient({});
+  client.connect.caps = ["chat-queue-status", ...(optIn ? ["chat-history-queue-observation"] : [])];
+  return client;
 }
 
 describe("pending input read boundary", () => {
+  it.each([false, true])("pairs terminal history and the queue with opt-in=%s", (optIn) =>
+    withOpenClawTestState({ scenario: "minimal" }, async () => {
+      const scope = await createScope("paired-terminal-queue");
+      await patchSessionEntryCore(scope, () => ({ status: "done", lastRunId: "previous-run" }));
+      await using inputs = pendingInputs(scope);
+      const context = await createHistoryReadContext();
+      // Startup projection runs after the original pending read but before the final row read.
+      const rendezvous = vi.fn(async () => {
+        await inputs.stage("followup");
+        await patchSessionEntryCore(scope, () => ({ status: "done", lastRunId: "in-flight" }));
+        return undefined;
+      });
+      context.readChatStartupProjection = rendezvous;
+      const payload = await read(
+        context,
+        { sessionKey: scope.sessionKey },
+        "chat.history",
+        queueObservationClient(optIn),
+      );
+      expect(rendezvous).toHaveBeenCalledOnce();
+      expect(payload.sessionInfo).toMatchObject({ status: "done", lastRunId: "in-flight" });
+      expect(payload.pendingInputs).toMatchObject({ total: 1, items: [{ state: "queued" }] });
+    }),
+  );
+
+  it.each([
+    { page: "full", transitions: 1 },
+    { page: "delta", transitions: 1 },
+    { page: "full", transitions: 2 },
+  ])("keeps $page history consistent (run changes = $transitions)", ({ page, transitions }) =>
+    withOpenClawTestState({ scenario: "minimal" }, async () => {
+      const scope = await createScope("stale-terminal-queue");
+      const context = await createHistoryReadContext();
+      const request = historyRpc(context, scope.sessionKey);
+      const client = queueObservationClient(page === "delta");
+      await using inputs = pendingInputs(scope);
+      await appendTranscriptMessage(scope, { message: { role: "user", content: "First turn" } });
+      const params =
+        page === "delta"
+          ? { cursor: historyPayload(await request("chat.history", {}, { client })).deltaCursor }
+          : {};
+      const readPendingInputs = pendingHistory.readChatPendingInputs;
+      using barrier = vi.spyOn(pendingHistory, "readChatPendingInputs");
+      for (let run = 1; run <= transitions; run++) {
+        barrier.mockImplementationOnce(async (...args) => {
+          const pending = await readPendingInputs(...args);
+          await inputs.stage(`followup-${run}`);
+          await appendTranscriptMessage(scope, {
+            message: { role: "assistant", content: `Finished turn ${run}` },
+          });
+          await patchSessionEntryCore(scope, () => ({ status: "done", lastRunId: `run-${run}` }));
+          return pending;
+        });
+      }
+      const response = await request("chat.history", params, { client });
+      if (transitions === 2) {
+        expect(response).toHaveBeenCalledExactlyOnceWith(
+          false,
+          undefined,
+          expect.objectContaining({ code: "UNAVAILABLE", retryable: true }),
+        );
+      } else {
+        const reply = expect.objectContaining({ content: "Finished turn 1" });
+        expect(historyPayload(response)).toMatchObject({
+          ...(page === "delta"
+            ? { kind: "delta", messages: [{ message: reply }] }
+            : { messages: expect.arrayContaining([reply]) }),
+          sessionInfo: { status: "done", lastRunId: "run-1" },
+          pendingInputs: { items: [{ runId: "followup-1", state: "queued" }] },
+        });
+      }
+    }),
+  );
+
+  it("preserves the legacy pending shape and revision without the new capability", () =>
+    withOpenClawTestState({ scenario: "minimal" }, async () => {
+      const scope = await createScope("legacy-queue-observation");
+      await appendTranscriptMessage(scope, { message: { role: "user", content: "Hello" } });
+      const context = await createHistoryReadContext();
+      const legacyPage = { items: [], total: 0, queuedCount: 0 };
+      const call = (optIn: boolean, options: Record<string, unknown> = {}) =>
+        read(
+          context,
+          { sessionKey: scope.sessionKey, knownState: {}, ...options },
+          "chat.startup",
+          queueObservationClient(optIn),
+        );
+      const legacy = await call(false);
+      expect(legacy.pendingInputs).toEqual(legacyPage);
+      expect(legacy.stateRevision).toMatchObject({
+        pendingInputs: sha256StableValue(legacyPage).digest,
+      });
+      const modern = await call(true, {
+        cursor: legacy.deltaCursor,
+        knownState: legacy.stateRevision,
+      });
+      expect(modern).toMatchObject({
+        kind: "delta",
+        pendingInputs: { ...legacyPage, hasQueuedInput: false },
+      });
+      const warmLegacy = await call(false, {
+        cursor: legacy.deltaCursor,
+        knownState: legacy.stateRevision,
+      });
+      expect(warmLegacy).toMatchObject({ kind: "delta" });
+      expect(warmLegacy.pendingInputs).toBeUndefined();
+    }));
+
+  it.each(["durable", "incognito"])(
+    "reports %s queued work outside the displayed history page",
+    (backend) =>
+      withOpenClawTestState({ scenario: "minimal" }, async () => {
+        const scope = await createScope(
+          backend === "incognito" ? "dashboard:incognito-off-page-queue" : "off-page-queue",
+          "off-page-queue",
+        );
+        await patchSessionEntryCore(scope, () => ({
+          status: "done",
+          lastRunId: "prior-run",
+          updatedAt: Date.now(),
+        }));
+        await using inputs = pendingInputs(scope);
+        const older = await inputs.stage("older");
+        const newer = await inputs.stage("newer");
+        newer.finish("cancelled", "failed");
+        await newer.settled?.();
+        const context = await createHistoryReadContext();
+        const page = () =>
+          read(
+            context,
+            { sessionKey: scope.sessionKey, limit: 1 },
+            "chat.history",
+            queueObservationClient(true),
+          );
+        const displayed = {
+          total: 2,
+          queuedCount: 0,
+          items: [{ id: newer.inputId, state: "cancelled" }],
+        };
+        expect((await page()).pendingInputs).toMatchObject({ ...displayed, hasQueuedInput: true });
+        older.finish("cancelled", "failed");
+        await older.settled?.();
+        expect((await page()).pendingInputs).toMatchObject({ ...displayed, hasQueuedInput: false });
+      }),
+  );
+
   it("omits retained startup state while delivering changed pending inputs and session metadata", () =>
     withOpenClawTestState({ scenario: "minimal" }, async () => {
       const scope = await createScope("warm-metadata");
@@ -409,7 +566,7 @@ describe("pending input read boundary", () => {
       });
       receipt.finish("cancelled", "failed");
       await receipt.settled?.();
-      const page = await readChatPendingInputs(scope, { limit: 1, maxChars: 50 });
+      const page = await pendingHistory.readChatPendingInputs(scope, { limit: 1, maxChars: 50 });
       const displayId = `pending:${receipt.inputId}`;
       expect(page).toMatchObject({
         total: 1,
@@ -456,6 +613,7 @@ describe("pending input read boundary", () => {
       {
         using old = new DatabaseSync(filename);
         old.exec(`
+          ALTER TABLE session_members DROP COLUMN access;
           ALTER TABLE session_pending_inputs DROP COLUMN end_cause;
           ALTER TABLE session_pending_inputs DROP COLUMN origin_source_json;
           PRAGMA user_version = 42;
@@ -478,17 +636,21 @@ describe("pending input read boundary", () => {
         log: { info: vi.fn(), warn: vi.fn() },
       });
       const admitted = openOpenClawAgentDatabase(options).db;
-      expect(admitted.prepare("PRAGMA user_version").get()).toEqual({ user_version: 43 });
+      expect(admitted.prepare("PRAGMA user_version").get()).toEqual({
+        user_version: OPENCLAW_AGENT_SCHEMA_VERSION,
+      });
       expect(
         admitted.prepare("SELECT schema_version FROM schema_meta WHERE meta_key = 'primary'").get(),
-      ).toEqual({ schema_version: 43 });
+      ).toEqual({ schema_version: OPENCLAW_AGENT_SCHEMA_VERSION });
       expect(
         admitted
           .prepare("SELECT message_json FROM session_pending_inputs WHERE input_id = ?")
           .get(receipt.inputId),
       ).toEqual({ message_json: legacyMessage });
       // Dismiss availability is derived from this canonical cause, not private message metadata.
-      expect(await readChatPendingInputs(scope, { limit: 20, maxChars: 1_000 })).toMatchObject({
+      expect(
+        await pendingHistory.readChatPendingInputs(scope, { limit: 20, maxChars: 1_000 }),
+      ).toMatchObject({
         total: 1,
         items: [
           {
@@ -510,7 +672,13 @@ describe("pending input read boundary", () => {
         content: "Internal continuation",
         idempotencyKey: "hidden:user",
       });
-      expect((await readChatPendingInputs(scope, { limit: 20, maxChars: 100 })).items).toEqual([]);
+      expect(
+        await pendingHistory.readChatPendingInputs(scope, {
+          limit: 20,
+          maxChars: 100,
+          queuedRunIds: new Set(["hidden-run"]),
+        }),
+      ).toMatchObject({ items: [], queuedCount: 0 });
       const message = await read(
         await createHistoryReadContext(),
         {

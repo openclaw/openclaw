@@ -8,7 +8,7 @@ import {
   type WorkerOptions,
 } from "node:worker_threads";
 import { toErrorObject } from "@openclaw/normalization-core/error-coercion";
-import { createSpawnBrokerHost, type SpawnBrokerHost } from "../process/spawn-broker/host.js";
+import { createAttachmentBrokerHost } from "../process/spawn-broker/host.js";
 import { attachBrokerNativeResource } from "../process/spawn-broker/resource-client.js";
 import { createDeferredCore } from "../shared/deferred.js";
 import { runInDetachedAsyncContext } from "../shared/detached-async-context.js";
@@ -29,6 +29,7 @@ import {
   type SqliteDatabaseAdmissionCursor,
 } from "./sqlite-database-admission.js";
 import { createCpuTrackedWorker, receiveWorkerMemoryPort } from "./worker-cpu.js";
+import { captureWorkerMemoryBudgetEnvironmentData } from "./worker-memory-budget.js";
 import { observeWorkerMessage, workerMessagePayloadBytes } from "./worker-message-metrics.js";
 import { NativeWorker } from "./worker-native-handle.js";
 import {
@@ -70,18 +71,25 @@ export type RetainedNativeWorkerSource = {
     input?: unknown,
   ): Promise<{
     port: MessagePort;
+    ref(this: void): void;
+    unref(this: void): void;
     retainBrokerUntilProcessExit(this: void): void;
     close(): Promise<void>;
   }>;
   /** The domain joins admitted work and its resources before shared native cleanup. */
   retain(owner: object, closeOwner: () => Promise<void>): void;
+  /** Stop remaining shared-host endpoints only after the domains using them have drained. */
+  retainSharedHost(closeEndpoints: () => Promise<void>): void;
   /** Join an idle broker without closing registered domains or their independent work. */
   retireIdleBroker(): Promise<boolean>;
+  /** Let successive native captures reuse the broker before attempting to join it. */
+  scheduleIdleBrokerRetirement(): void;
 };
 
 type NativeBrokerLifetime = {
-  host?: SpawnBrokerHost;
+  host?: ReturnType<typeof createAttachmentBrokerHost>;
   closing?: Promise<void>;
+  idleTimer?: ReturnType<typeof setTimeout>;
   retainedUntilProcessExit?: boolean;
 };
 
@@ -108,6 +116,7 @@ const lifetime = resolveGlobalSingleton(
     defaultBroker: {},
   }),
   closeDefaultRetainedNativeWorkerSource,
+  "native-workers",
 );
 
 /** Terminal process cleanup joins the existing unbound owner without starting another. */
@@ -129,15 +138,24 @@ function nativeCleanupFailures(results: PromiseSettledResult<unknown>[]): unknow
   return results.flatMap((result) => (result.status === "rejected" ? [result.reason] : []));
 }
 
-function nativeResourceBroker(source: NativeSource): SpawnBrokerHost {
+const NATIVE_BROKER_IDLE_MS = 60_000;
+
+function nativeResourceBroker(source: NativeSource) {
+  clearTimeout(source.broker.idleTimer);
+  source.broker.idleTimer = undefined;
   return (source.broker.host ??= runInDetachedAsyncContext(() =>
-    createSpawnBrokerHost({ nativeResources: true, workerUrl: source.brokerModuleUrl }),
+    createAttachmentBrokerHost(source.brokerModuleUrl),
   ));
 }
 
 async function retireNativeResourceBroker(source: NativeSource): Promise<boolean> {
   const brokerLifetime = source.broker;
-  await brokerLifetime.closing;
+  clearTimeout(brokerLifetime.idleTimer);
+  brokerLifetime.idleTimer = undefined;
+  // Publish each join before yielding so concurrent release hooks cannot replace it.
+  while (brokerLifetime.closing) {
+    await brokerLifetime.closing;
+  }
   if (
     source.hasActiveWorkers ||
     brokerLifetime.retainedUntilProcessExit ||
@@ -146,8 +164,11 @@ async function retireNativeResourceBroker(source: NativeSource): Promise<boolean
     return false;
   }
   const broker = brokerLifetime.host;
+  if (!broker) {
+    return true;
+  }
   brokerLifetime.host = undefined;
-  await (brokerLifetime.closing = broker?.close());
+  await (brokerLifetime.closing = broker.close());
   brokerLifetime.closing = undefined;
   return true;
 }
@@ -348,6 +369,25 @@ export function captureRetainedNativeWorkerSource(options?: {
     retireIdleBroker() {
       return retireNativeResourceBroker(source);
     },
+    scheduleIdleBrokerRetirement() {
+      const broker = source.broker;
+      if (
+        broker.idleTimer ||
+        !broker.host ||
+        broker.retainedUntilProcessExit ||
+        broker.host.hasOpenNativeResourceClaims
+      ) {
+        return;
+      }
+      broker.idleTimer = runInDetachedAsyncContext(() =>
+        setTimeout(function retireNativeBrokerAfterIdle() {
+          broker.idleTimer = undefined;
+          void retireNativeResourceBroker(source).catch((error: unknown) =>
+            process.emitWarning(`Native resource broker retirement failed: ${String(error)}`),
+          );
+        }, NATIVE_BROKER_IDLE_MS).unref(),
+      );
+    },
     close() {
       return (closingOwners ??= Promise.resolve().then(async () => {
         try {
@@ -356,6 +396,7 @@ export function captureRetainedNativeWorkerSource(options?: {
           if (errors.length) {
             throw new AggregateError(errors, "Native worker execution owner cleanup failed");
           }
+          await closeSharedHost?.();
           if (source.hasActiveWorkers) {
             throw new Error("Native worker execution owners have not joined");
           }
@@ -426,8 +467,21 @@ export function captureRetainedNativeWorkerSource(options?: {
         fail,
       );
       let closed = false;
+      let closing = false;
       const resource = {
         port: port2,
+        ref() {
+          lease.setReferenced(true);
+          port2.ref();
+        },
+        unref() {
+          // A late operation acknowledgment cannot release an in-progress close.
+          if (closing) {
+            return;
+          }
+          lease.setReferenced(false);
+          port2.unref();
+        },
         retainBrokerUntilProcessExit() {
           // Loaded native images retain physical tokens after domain ports close.
           // The broker already unrefs idle handles and joins on the host's real exit.
@@ -437,6 +491,8 @@ export function captureRetainedNativeWorkerSource(options?: {
           if (closed) {
             return;
           }
+          closing = true;
+          resource.ref();
           if (!attachment.dispatched) {
             lease.abandonUnattached();
           } else {
@@ -495,11 +551,15 @@ export function captureRetainedNativeWorkerSource(options?: {
           : undefined,
       });
     },
+    retainSharedHost(closeEndpoints) {
+      closeSharedHost = closeEndpoints;
+    },
     retain(owner, closeOwner) {
       owners.set(owner, closeOwner);
       captured.runtimeGeneration?.retain(source, () => source.close());
     },
   };
+  let closeSharedHost: (() => Promise<void>) | undefined;
   const owners = new Map<object, () => Promise<void>>();
   let closingOwners: Promise<void> | undefined;
   if (captured.runtimeGeneration) {
@@ -560,7 +620,10 @@ function startNativeWorker(
         type: "create",
         id,
         filename: { kind: filename instanceof URL ? "url" : "path", value: String(filename) },
-        environmentData: captureSqliteWorkerEnvironmentData(databaseAdmissions),
+        environmentData: [
+          ...captureSqliteWorkerEnvironmentData(databaseAdmissions),
+          captureWorkerMemoryBudgetEnvironmentData(),
+        ],
         options: {
           ...captured,
           environment: { ...(env === SHARE_ENV ? process.env : (env ?? process.env)) },

@@ -33,7 +33,6 @@ import { readBuiltGatewayBuildId } from "../../infra/update-git-runtime.js";
 import {
   createGlobalInstallEnv,
   resolveGlobalInstallSpec,
-  verifyPackageUpdateRecovery,
   type ResolvedGlobalInstallTarget,
 } from "../../infra/update-global.js";
 import type { UpdateRecoveryBaselineRef } from "../../infra/update-recovery-baseline-capture.js";
@@ -308,61 +307,6 @@ export async function runPackageUpdateDoctor(params: PackageDoctorOptions) {
     throw outcome.error;
   }
   return outcome.step;
-}
-
-/** Keep package staging open until its source owner publishes the validated checkout. */
-export async function prepareGitPackageExposure(
-  params: Omit<Parameters<typeof runGlobalPackageUpdateSteps>[0], "beforeActivate">,
-) {
-  const prepared = createDeferredCore();
-  const activation = createDeferredCore<boolean>();
-  const cancellation = new Error("Source activation cancelled before global exposure");
-  const completed = runGlobalPackageUpdateSteps({
-    ...params,
-    beforeActivate: async () => {
-      prepared.resolve();
-      if (!(await activation.promise)) {
-        throw cancellation;
-      }
-    },
-  });
-  const outcome = await Promise.race([prepared.promise.then(() => null), completed]);
-  if (outcome) {
-    const failure = outcome.failedStep;
-    throw new UpdatePreMutationError(
-      outcome.reason ??
-        (failure
-          ? normalizeFallbackFailureReason(failure.name)
-          : "source-exposure-preparation-failed"),
-      failure?.stderrTail ?? "Global source exposure did not reach the activation gate",
-      {
-        failureFacts: failure?.failureFacts,
-        stepResult: { steps: outcome.steps, failedStep: failure ?? undefined },
-      },
-    );
-  }
-  return {
-    activate: () => {
-      activation.resolve(true);
-      return completed;
-    },
-    cancel: async () => {
-      activation.resolve(false);
-      try {
-        return await completed;
-      } catch (error) {
-        if (error !== cancellation) {
-          throw error;
-        }
-        // Only this gate's cancellation leaves the package untouched. Recheck
-        // it after staging cleanup without masking the source owner's failure.
-        return {
-          steps: [],
-          recovery: await verifyPackageUpdateRecovery(params.installTarget.packageRoot),
-        };
-      }
-    },
-  };
 }
 
 export type PackageInstallUpdateParams = Omit<PackageDoctorOptions, "results"> & {

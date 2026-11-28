@@ -1,6 +1,6 @@
 import { expectDefined } from "@openclaw/normalization-core";
 import { Virtualizer } from "@tanstack/virtual-core";
-import { createEffect, createRoot, createSignal } from "solid-js";
+import { action, createEffect, createRoot, createSignal } from "solid-js";
 import { afterEach, expect, it, onTestFinished, vi } from "vitest";
 import type { ApplicationContext } from "../../../app/context.ts";
 import { flush } from "../../../test-helpers/solid-settle.ts";
@@ -316,6 +316,44 @@ it("admits an incoming row above the reader once it is measured", async () => {
   ).toBe(false);
 });
 
+it("keeps the displayed reader still when a predecessor is measured during a pending refresh", async () => {
+  const { host, viewport, virtualizer } = await mountPane(false, 120, undefined, 500);
+  const style = document.createElement("style");
+  style.textContent =
+    '.geometry-transcript-fixture .chat-virtual-row[data-index="2"] { height: 98px; }';
+  host.append(style);
+  scrollReader(viewport, 499);
+  await Promise.resolve();
+  flush();
+  viewport.dispatchEvent(new Event("scrollend"));
+  const predecessor = requireElement(host, '.chat-virtual-row[data-index="2"][data-prepared-row]');
+  const retained = requireElement(host, '.chat-virtual-row[data-index="4"]');
+  const top = retained.getBoundingClientRect().top;
+  const offset = viewport.scrollTop;
+  const refresh = Promise.withResolvers<void>();
+  // Native measurement lands while Solid still displays the previous row window.
+  const pending = action(function* () {
+    virtualizer.resizeItem(2, predecessor.getBoundingClientRect().height);
+    yield refresh.promise;
+  })();
+  try {
+    await new Promise(requestAnimationFrame);
+    expect(Math.abs(retained.getBoundingClientRect().top - top)).toBeLessThanOrEqual(1);
+  } finally {
+    refresh.resolve();
+    await pending;
+  }
+  await expect
+    .poll(
+      () =>
+        host.querySelector('.chat-virtual-row[data-index="2"]:not([data-prepared-row])') !== null,
+    )
+    .toBe(true);
+  expect(viewport.scrollTop).toBe(offset - 22);
+  const settled = requireElement(host, '.chat-virtual-row[data-index="4"]');
+  expect(Math.abs(settled.getBoundingClientRect().top - top)).toBeLessThanOrEqual(1);
+});
+
 it.each([
   { name: "interior", offset: 100, height: 1600, resize: false, expected: 100 },
   { name: "clamped", offset: 1400, height: 1600, resize: true, expected: 1200 },
@@ -474,6 +512,36 @@ it.each([
   },
 );
 
+it("keeps measured rows aligned when the cold viewport admits a shorter predecessor", async () => {
+  const { host, viewport, virtualizer } = await mountPane(
+    true,
+    72,
+    undefined,
+    0,
+    geometryMessages(30),
+  );
+  const incoming = '.chat-virtual-row[data-index="23"]:not([data-prepared-row])';
+  expect(host.querySelector(incoming)).toBeNull();
+  const retained = requireElement(host, '.chat-virtual-row[data-index="28"]');
+  const before = retained.getBoundingClientRect().top;
+  const offset = viewport.scrollTop;
+  const distance = 72;
+  // A native offset update during disclosure can extend the cold window before
+  // the first reader gesture. Sample its row commit before resize delivery.
+  requestAnimationFrame(() => {
+    virtualizer.scrollToOffset(offset - distance, { behavior: "instant" });
+    viewport.dispatchEvent(new Event("scroll"));
+  });
+  const firstFrame = await new Promise<number>((resolve) => {
+    requestAnimationFrame(() => resolve(retained.getBoundingClientRect().top));
+  });
+  expect(Math.abs(firstFrame - (before + distance))).toBeLessThanOrEqual(2);
+  await expect.poll(() => host.querySelector(incoming)?.getBoundingClientRect().height).toBe(72);
+  expect(Math.abs(retained.getBoundingClientRect().top - (before + distance))).toBeLessThanOrEqual(
+    2,
+  );
+});
+
 it.each([120, 360, 1200])(
   "prepares only the tail window while initial %ipx rows settle",
   async (rowHeight) => {
@@ -549,7 +617,6 @@ it("parks retained rows at zero size and restores their resized geometry and nes
   );
   expect(session.revealMessage("geometry-answer")).toBe(true);
   await expect.poll(() => host.querySelector('[data-entry-id="geometry-answer"]')).not.toBeNull();
-  session.cancelScroll();
   const row = expectDefined(
     requireElement(host, '[data-entry-id="geometry-answer"]').closest<HTMLElement>(
       ".chat-virtual-row",
@@ -564,6 +631,7 @@ it("parks retained rows at zero size and restores their resized geometry and nes
       virtualizer.resizeItem(index, 120);
     }
   }
+  session.cancelScroll();
   virtualizer.scrollToIndex(targetIndex, { align: "start", behavior: "auto" });
   await settleLayout();
   // Other fixture rows have fixed heights. This row uses its real Markdown

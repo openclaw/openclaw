@@ -165,6 +165,11 @@ Replacement and Gateway restart invalidate old tokens even if a remote file
 cannot be removed. The directory is not a security boundary against compromised
 Harness code running as the same OS user: the callback's restricted authority is
 still required. TLS verification remains enabled and redirects are refused.
+If hook processes can reach the Gateway only through an explicit HTTP proxy, set
+Node's `NODE_USE_ENV_PROXY=1` with `HTTPS_PROXY` (and `NO_PROXY` as needed) in
+their environment. The callback then connects through the proxy's CONNECT
+tunnel on its own unpooled socket; TLS stays end to end, so the proxy sees only
+the Gateway host and port.
 
 When Codex app-server approvals are enabled (`approvalPolicy` is not
 `"never"`), the default injected native hook config omits `PermissionRequest`

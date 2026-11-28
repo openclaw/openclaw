@@ -200,7 +200,21 @@ The exporter also bounds input size:
 - session (transcript) sources: 50 MiB, whether read from the SQLite transcript store or a session file
 - runtime events per export: 200,000
 - total exported events: 250,000
-- individual runtime event lines are truncated above 256 KiB
+- persisted runtime records are capped at 256 KiB each; oversized events that cannot be split are truncated
+
+Large prepared conversation snapshots use bounded internal records when the
+whole group fits the existing capture window. Export reassembles complete,
+hash-matching groups before redaction. Missing or evicted records leave explicit
+partial markers. A single oversized message and existing field limits still
+truncate normally. A reconstructed export event can span several stored records;
+this does not recover data discarded by earlier captures.
+
+Older readers that can open the same database do not reconstruct these groups.
+Their exports include separate redacted snapshot fragments and a partial
+completion event. Their session tail output also counts and displays fragment
+rows. Use the current exporter for a complete snapshot. This format behavior
+does not guarantee database compatibility when rolling back across other schema
+changes.
 
 The general runtime string limit is 65,536 UTF-16 code units (JavaScript string
 length). Longer strings are replaced with an explicit truncation marker.

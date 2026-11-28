@@ -21,6 +21,7 @@ import { parseArgs } from "node:util";
 import { createAdmittedRunOperatorAuthority } from "../../src/agents/admitted-run-context.js";
 import type { ReplyToolAuthorityInput } from "../../src/auto-reply/reply/reply-tool-authority.types.js";
 import { captureRuntimeConfig } from "../../src/config/runtime-source-projection.js";
+import { decideTurnGrant } from "../../src/gateway/operator-admission.js";
 import type { ReplyToolAuthorityOverlay } from "../../src/sessions/session-controller.contracts.js";
 
 const { values } = parseArgs({
@@ -43,13 +44,11 @@ const {
     : "../../src/auto-reply/reply/reply-tool-authority.js"
 );
 const route = { provider: "synthetic", model: "synthetic-model" };
-let authorityChecks = 0;
 const authority = createAdmittedRunOperatorAuthority({
+  canonicalIdentity: null,
   profileId: "synthetic-operator",
   scopes: ["operator.read", "operator.write", "operator.admin"],
-  assertCurrent() {
-    authorityChecks++;
-  },
+  grant: decideTurnGrant(["operator.read", "operator.write", "operator.admin"]),
 });
 const config = captureRuntimeConfig({
   plugins: {
@@ -123,7 +122,6 @@ async function workload(count: number) {
 }
 await workload(256);
 globalThis.gc();
-authorityChecks = 0;
 const inspector = new Session();
 inspector.connect();
 if (values.mode !== "timing") {
@@ -157,7 +155,6 @@ const result = {
   mode: values.mode,
   attemptProperties: Object.keys(input.run).length,
   fingerprint,
-  authorityChecks,
   hostLoad,
   elapsedMs,
   cpuMs: (cpuUsage.user + cpuUsage.system) / 1000,

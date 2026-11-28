@@ -60,6 +60,7 @@ export function createDreamingViewProps(
     dreamDiaryActionArchivePath: null,
     dreamDiaryContent: null,
     memoryWikiEnabled: true,
+    onOpenKnowledge: undefined,
     wikiImportInsightsLoading: false,
     wikiImportInsights: null,
     wikiOverviewLoading: false,

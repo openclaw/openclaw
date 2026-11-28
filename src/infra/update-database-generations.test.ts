@@ -6,6 +6,7 @@ import { fileURLToPath } from "node:url";
 import { configureFsSafeNative, getFsSafeNativeConfig } from "@openclaw/fs-safe/config";
 import { afterEach, expect, it, vi } from "vitest";
 import { useAutoCleanupTempDirTracker } from "../../test/helpers/temp-dir.js";
+import { hashFileDescriptorSync } from "./file-descriptor.js";
 import * as nodeSqlite from "./node-sqlite.js";
 import * as fileGeneration from "./sqlite-file-generation.js";
 import {
@@ -294,19 +295,95 @@ it.each([
   expect(fs.readdirSync(staging)).toEqual([]);
 });
 
-it("refuses a generation when a writer commits during the read", () => {
-  const { file, staging } = generationFixture("wal-absent");
-  const writer = new DatabaseSync(file);
+// Readers that outlive the last writer retain its index, even after a checkpoint.
+function retainedWalFixture(checkpointed = false) {
+  const fixture = generationFixture("wal");
+  const writer = new DatabaseSync(fixture.file);
+  writer.exec("INSERT INTO receipt VALUES ('retained');");
+  const reader = openReader(fixture.file);
+  if (checkpointed) {
+    writer.exec("PRAGMA wal_checkpoint(TRUNCATE);");
+  }
+  writer.close();
+  reader.close();
+  if (checkpointed) {
+    expect(fs.statSync(`${fixture.file}-wal`).size).toBe(0);
+  } else {
+    expect(fs.statSync(`${fixture.file}-wal`).size).toBeGreaterThan(32);
+  }
+  expect(fs.readFileSync(`${fixture.file}-shm`).readUInt32LE(8)).not.toBe(0);
+  return fixture;
+}
+
+it("hashes SQLite's lock bytes as the zeros SQLite leaves", () => {
+  // Windows enforces SQLite's EXCLUSIVE lock on these 512 bytes: reading them fails with EBUSY.
+  const lockBytes = 0x4000_0000;
+  const file = path.join(dirs.make("update-generation-lock-bytes-"), "state.sqlite");
+  fs.writeFileSync(file, "SQLite format 3\0");
+  fs.truncateSync(file, lockBytes + 4096);
+  const fd = fs.openSync(file, "r+");
   try {
-    duringGenerationRead(() => writer.exec("INSERT INTO receipt VALUES ('during')"));
-    expect(() => readUpdateDatabaseGenerationPair([file])).toThrow(
-      /SQLite file generation changed while reading/,
-    );
+    const fullRead = hashFileDescriptorSync(fd).sha256;
+    fs.writeSync(fd, Buffer.alloc(512, 0xff), 0, 512, lockBytes);
+    expect(createSqliteFileGenerationReader()(file).database.sha256).toBe(fullRead);
   } finally {
-    writer.close();
+    fs.closeSync(fd);
+  }
+});
+
+it("binds a WAL index an outside reader rebuilds over retained frames during the read", () => {
+  const { file, staging } = retainedWalFixture();
+  const live = readUpdateDatabaseGenerationPair([file]);
+  let rebuilt: DatabaseSync | undefined;
+  duringGenerationRead(() => {
+    rebuilt = openReader(file);
+  });
+  try {
+    const pair = readUpdateDatabaseGenerationPair([file]);
+    expect(fs.readFileSync(`${file}-shm`).readUInt32LE(8)).toBe(0);
+    expect(pair.committed[file]).not.toBe(live.committed[file]);
+    expect(pair.committed[file]).toBe(live.rebuiltIndexAlternates[file]);
+    expect(readUpdateDatabaseGenerationPair([file]).committed).toEqual(pair.committed);
+  } finally {
+    rebuilt?.close();
   }
   expect(fs.readdirSync(staging)).toEqual([]);
 });
+
+it.each([false, true])(
+  "refuses a writer committing during the read (checkpointed=%s)",
+  (checkpointed) => {
+    const { file, staging } = checkpointed
+      ? retainedWalFixture(true)
+      : generationFixture("wal-absent");
+    const writer = new DatabaseSync(file);
+    let reader: DatabaseSync | undefined;
+    if (checkpointed) {
+      expect(fs.readFileSync(`${file}-shm`).readUInt32LE(8)).not.toBe(0);
+    }
+    try {
+      duringGenerationRead(() => {
+        writer.exec("INSERT INTO receipt VALUES ('during')");
+        if (checkpointed) {
+          writer.exec("PRAGMA wal_checkpoint(TRUNCATE);");
+          writer.close();
+          reader = openReader(file);
+        }
+      });
+      expect(() => readUpdateDatabaseGenerationPair([file])).toThrow(
+        checkpointed
+          ? /SQLite (?:file generation changed while reading|WAL commit publication could not be verified)/
+          : /SQLite file generation changed while reading/,
+      );
+    } finally {
+      reader?.close();
+      if (writer.isOpen) {
+        writer.close();
+      }
+    }
+    expect(fs.readdirSync(staging)).toEqual([]);
+  },
+);
 
 it("reuses a receipt when a reader opens without committing during verification", () => {
   const { file, staging } = generationFixture("wal-absent");
@@ -407,7 +484,7 @@ it("refuses a malformed engine anchor from the captured image and cleans up", as
   const database = new DatabaseSync(file);
   database.exec(
     "CREATE TABLE openclaw_engine_anchor (store_id TEXT, engine TEXT, schema TEXT);" +
-      "INSERT INTO openclaw_engine_anchor VALUES ('test-store', 'postgres', 'invalid-schema');",
+      "INSERT INTO openclaw_engine_anchor VALUES ('test-store', 'postgres', 'invalid.schema');",
   );
   database.close();
   const before = fs.readFileSync(file);
