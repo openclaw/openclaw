@@ -84,9 +84,11 @@ suite.define(() => {
           }
           await expect.poll(() => page.locator(".session-bar-title").count()).toBe(step.count);
           await expect
-            .poll(async () => (await value.textContent())?.trim(), step.stage)
+            .poll(async () => (await value.textContent())?.trim(), { message: step.stage })
             .toBe(step.value);
-          await expect.poll(() => hintButton.count(), step.stage).toBe(step.missing ? 1 : 0);
+          await expect
+            .poll(() => hintButton.count(), { message: step.stage })
+            .toBe(step.missing ? 1 : 0);
           if (!step.missing) {
             continue;
           }
