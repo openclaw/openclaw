@@ -96,13 +96,21 @@ async function fixture(
 it.each([
   [false, "ok", true],
   [true, "error", true],
+  [false, "error", true],
   [true, "ok", false],
 ] as const)(
   "preserves explicit SDK deleteAfterRun=%s on %s across restart",
   async (deleteAfterRun, status, retained) => {
     await using f = await fixture({
       nowMs: () => atMs,
-      runSessionEvent: async () => ({ status }),
+      runSessionEvent: async () =>
+        status === "error"
+          ? {
+              status,
+              error: "Session admission refused",
+              errorClassification: { kind: "permanent" },
+            }
+          : { status },
     });
     const pluginId = "scheduled-turn-contract";
     const handle = await schedulePluginSessionTurn({
@@ -121,6 +129,9 @@ it.each([
       throw new Error("Plugin did not schedule its turn");
     }
     try {
+      if (status === "error") {
+        await f.cron.update(handle.id, { failureAlert: deleteAfterRun ? { after: 8 } : false });
+      }
       await f.tick(atMs);
       await f.restart();
       if (retained) {
@@ -129,6 +140,15 @@ it.each([
         expect(f.cron.getJob(handle.id)).toBeUndefined();
       }
       expect(f.history(handle.id)).toMatchObject([{ status }]);
+      if (status === "error") {
+        expect(f.cron.getJob(handle.id)?.state.nextRunAtMs).toBeUndefined();
+        expect(f.deps.enqueueSessionEvent).toHaveBeenCalledExactlyOnceWith(
+          expect.stringContaining("Run Now or reschedule"),
+          expect.objectContaining({
+            contextKey: `cron:${handle.id}:${deleteAfterRun ? "failure-alert" : "auto-disabled"}`,
+          }),
+        );
+      }
     } finally {
       deletePluginSessionSchedulerJob({ pluginId, jobId: handle.id });
     }

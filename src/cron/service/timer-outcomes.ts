@@ -257,16 +257,19 @@ export function applyJobResult(
       runFailed &&
       !preserveOneShotSchedule &&
       result.failureNotificationDetail?.kind === "inference-account-retired";
-    const shouldDelete =
-      (job.pluginDeleteAfterRun === undefined ||
-        (job.pluginDeleteAfterRun && completionStatus === "succeeded")) &&
+    const oneTimeEnded =
       ownsSchedule &&
       !preserveOneShotSchedule &&
       (job.schedule.kind === "at" ||
         (job.schedule.kind === "on-exit" && opts.onExitWatcherCompletion === true)) &&
       job.state.nextRunAtMs === undefined;
+    const shouldDelete =
+      oneTimeEnded &&
+      (job.pluginDeleteAfterRun === undefined ||
+        (job.pluginDeleteAfterRun && completionStatus === "succeeded"));
+    const disposition = shouldDelete ? "retired" : "retained";
     const terminalOneShot =
-      shouldDelete &&
+      oneTimeEnded &&
       completionStatus !== "succeeded" &&
       (result.status !== "skipped" || alertConfig?.includeSkipped === true) &&
       result.errorClassification?.kind !== "aborted";
@@ -280,7 +283,7 @@ export function applyJobResult(
             result,
             completionStatus,
             terminalOneShot,
-            oneTimeEnded: shouldDelete,
+            oneTimeDisposition: oneTimeEnded ? disposition : undefined,
             pendingTransientRetry,
             replay: opts.replay,
             deferredNotifications: opts.deferredNotifications,
@@ -288,13 +291,14 @@ export function applyJobResult(
     if (
       terminalOneShot &&
       !result.parentUnavailable &&
+      (!accountUnavailable || shouldDelete) &&
       failureNotification !== "queued" &&
       !opts.replay
     ) {
       opts.deferredNotifications.push({
         kind: "auto-disabled",
         job: cronNotificationJob(job),
-        text: buildOneTimeCronFailureNotice(job, result.failureNotificationDetail),
+        text: buildOneTimeCronFailureNotice(job, disposition, result.failureNotificationDetail),
       });
     }
     // A newer operator edit owns enablement, so a stale result changes nothing.

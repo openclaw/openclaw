@@ -277,8 +277,11 @@ function isLocalProviderCronSkip(job: CronJob): boolean {
   );
 }
 
+type OneTimeDisposition = "retained" | "retired";
+
 export function buildOneTimeCronFailureNotice(
   job: CronJob,
+  disposition: OneTimeDisposition,
   detail?: CronFailureNotificationDetail,
 ): string {
   return [
@@ -286,7 +289,9 @@ export function buildOneTimeCronFailureNotice(
     ...(isLocalProviderCronSkip(job)
       ? localProviderRecovery
       : cronFailureDetailLines(job.state.lastErrorReason, detail)),
-    "Check the run in Automations → Run history before retrying.",
+    disposition === "retired"
+      ? "Check the run in Automations → Run history before retrying."
+      : "The automation is disabled. After fixing the cause, use Run Now or reschedule it.",
   ].join("\n");
 }
 
@@ -299,7 +304,7 @@ function buildFailureAlertPayload(params: {
   route: ResolvedFailureAlert;
   status: "error" | "skipped";
   localProviderUnavailable?: boolean;
-  oneTimeEnded?: boolean;
+  oneTimeDisposition?: OneTimeDisposition;
 }) {
   const safeJobName = params.job.name || params.job.id;
   const errorReason = params.status === "error" ? params.errorReason : undefined;
@@ -321,8 +326,12 @@ function buildFailureAlertPayload(params: {
               : "After restoring the provider, use Run Now or reschedule this automation.",
           ]
         : cronFailureDetailLines(errorReason, params.failureNotificationDetail);
-  const text = params.oneTimeEnded
-    ? buildOneTimeCronFailureNotice(params.job, params.failureNotificationDetail)
+  const text = params.oneTimeDisposition
+    ? buildOneTimeCronFailureNotice(
+        params.job,
+        params.oneTimeDisposition,
+        params.failureNotificationDetail,
+      )
     : [
         params.consecutiveErrors > 1
           ? `Automation "${safeJobName}" ${statusVerb} ${params.consecutiveErrors} times in a row`
@@ -444,7 +453,7 @@ function maybeEmitFailureAlert(
     runAtMs: number;
     consecutiveCount: number;
     terminalOneShot?: boolean;
-    oneTimeEnded: boolean;
+    oneTimeDisposition?: OneTimeDisposition;
     deferredNotifications: DeferredCronNotifications;
   },
 ): "queued" | undefined {
@@ -491,7 +500,7 @@ function maybeEmitFailureAlert(
       route: alertConfig,
       status: params.status,
       localProviderUnavailable,
-      oneTimeEnded: params.oneTimeEnded,
+      oneTimeDisposition: params.oneTimeDisposition,
     }),
     runAtMs: params.runAtMs,
     route: alertConfig,
@@ -565,7 +574,7 @@ export function finalizeCronFailureNotifications(
     };
     completionStatus: CronCompletionStatus;
     terminalOneShot?: boolean;
-    oneTimeEnded: boolean;
+    oneTimeDisposition?: OneTimeDisposition;
     /** A quick re-run for a provider outage is scheduled; alert/repair wait for its outcome. */
     pendingTransientRetry?: boolean;
     replay?: boolean;
@@ -601,7 +610,7 @@ export function finalizeCronFailureNotifications(
           ? params.job.state.consecutiveSkipped
           : params.job.state.consecutiveErrors) ?? 0,
       terminalOneShot: params.terminalOneShot,
-      oneTimeEnded: params.oneTimeEnded,
+      oneTimeDisposition: params.oneTimeDisposition,
       deferredNotifications: params.deferredNotifications,
     });
   } else if (
