@@ -1,6 +1,7 @@
 import type { PortalSummary } from "@openclaw/gateway-protocol";
 import { expect, it } from "vitest";
 import {
+  controlUiBundledSettingsStorageKey,
   controlUiSessionUrl,
   defaultControlUiFeatureMethods,
   installMockGateway,
@@ -9,6 +10,23 @@ import {
   createControlUiE2eContextOptions,
   createControlUiE2eSuite,
 } from "./control-ui-e2e-suite.test-support.ts";
+
+function endingFitsOnOneLine(label: Element) {
+  const text = label.querySelector("bdi")?.firstChild;
+  if (!(text instanceof Text) || text.data !== label.getAttribute("title")) {
+    return false;
+  }
+  const range = document.createRange();
+  range.selectNodeContents(text);
+  // Chromium can report the ellipsized text and its visible fragment on the same line.
+  if (new Set(Array.from(range.getClientRects(), (rect) => rect.top)).size !== 1) {
+    return false;
+  }
+  range.setStart(text, text.data.lastIndexOf(" ") + 1);
+  const ending = range.getBoundingClientRect();
+  const bounds = label.getBoundingClientRect();
+  return ending.width > 0 && ending.left >= bounds.left - 1 && ending.right <= bounds.right + 1;
+}
 
 const suite = createControlUiE2eSuite({ name: "Control UI Portals layout" });
 suite.define(() => {
@@ -151,7 +169,7 @@ suite.define(() => {
           origin = new URL(suite.server.baseUrl).origin;
         const portal = {
           id: "p3000",
-          title: "Seeded app",
+          title: "Documentation preview for the autumn release handoff · Amber",
           port: 3000,
           listenPort: 43_123,
           tokenQuery: "openclaw_portal=e2e",
@@ -160,20 +178,49 @@ suite.define(() => {
           description: "Layout fixture app.",
           createdAtMs: 1_000,
         } satisfies PortalSummary;
-        await page.route(`**${fixturePath}*`, (route) =>
+        const second = {
+          ...portal,
+          id: "p3001",
+          title: portal.title.replace("Amber", "Cobalt"),
+          publicUrl: portal.publicUrl + "/cobalt",
+          url: portal.publicUrl + "/cobalt?" + portal.tokenQuery,
+        };
+        await page.route(`**${fixturePath}**`, (route) =>
           route.fulfill({
             status: 200,
             contentType: "text/html",
-            body: '<!doctype html><title>Portal fixture</title><body style="margin:0">portal</body>',
+            body:
+              '<!doctype html><title>Portal fixture</title><body style="margin:0">' +
+              (new URL(route.request().url()).pathname.endsWith("/cobalt") ? "Cobalt" : "Amber") +
+              "</body>",
           }),
         );
-        await installMockGateway(page, {
+        const sessionKey = "agent:main:session-a";
+        const gateway = await installMockGateway(page, {
+          sessionKey,
           featureMethods: [...defaultControlUiFeatureMethods, "portal.close", "portal.list"],
-          methodResponses: { "portal.list": { portals: [portal] } },
+          methodResponses: {
+            "portal.list": { portals: [portal, second] },
+          },
         });
         await page.goto(`${suite.server.baseUrl}portals`);
         await page.locator(".portals-rail").waitFor();
         await page.locator(".portals-preview__frame").waitFor();
+        const choices = page
+          .getByRole("complementary", { name: "Active portals" })
+          .getByRole("button");
+        expect(await choices.count()).toBe(2);
+        for (const name of await choices.locator(".portals-rail__title").all()) {
+          expect(await name.evaluate(endingFitsOnOneLine)).toBe(true);
+        }
+        await choices.nth(1).focus();
+        await page.keyboard.press("Enter");
+        await expect.poll(() => choices.nth(1).getAttribute("aria-current")).toBe("true");
+        await page
+          .getByTitle(second.title + " portal preview")
+          .contentFrame()
+          .getByText("Cobalt", { exact: true })
+          .waitFor();
         const geometry = await page.locator(".portals-layout").evaluate((layout) => {
           const content = layout.closest("main.content");
           const preview = layout.querySelector(".portals-preview");
@@ -223,6 +270,28 @@ suite.define(() => {
             expect(Math.abs(panel.left - geometry.contentInnerLeft)).toBeLessThanOrEqual(1);
             expect(Math.abs(panel.right - geometry.contentInnerRight)).toBeLessThanOrEqual(1);
           }
+          await page.addInitScript(
+            (key) => localStorage.setItem(key, JSON.stringify({ textScale: 140 })),
+            controlUiBundledSettingsStorageKey(suite.server.baseUrl),
+          );
+          await page.goto(controlUiSessionUrl(suite.server.baseUrl, sessionKey));
+          await page.locator(".agent-chat__composer-combobox textarea").waitFor();
+          await gateway.emitGatewayEvent("ui.command", {
+            command: { kind: "panel", panel: "portal", open: true, portalId: second.id },
+            sessionKey,
+          });
+          await page
+            .frameLocator("openclaw-portals-page[embedded] iframe")
+            .getByText("Cobalt", { exact: true })
+            .waitFor();
+          const headerName = page.locator(
+            ".portals-page--embedded[data-mobile] .portals-embedded__name",
+          );
+          expect(await headerName.textContent()).toBe(second.title);
+          expect(await headerName.evaluate(endingFitsOnOneLine)).toBe(true);
+          expect(await headerName.evaluate((label) => getComputedStyle(label).fontSize)).toBe(
+            "19.6px",
+          );
         }
       },
     );
