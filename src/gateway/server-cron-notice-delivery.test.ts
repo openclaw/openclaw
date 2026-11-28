@@ -4,6 +4,7 @@ import { expect, it, vi } from "vitest";
 import * as sessionEventHandoff from "../auto-reply/reply/session-event-handoff.js";
 import { getRuntimeConfigSnapshot, setRuntimeConfigSnapshot } from "../config/runtime-snapshot.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
+import { peekSystemEvents } from "../infra/system-events.js";
 import { readVisibleSessionTranscriptMessageEntries } from "../plugin-sdk/session-transcript-runtime.js";
 import { captureSessionGeneration } from "../sessions/session-notice.js";
 import { projectChatDisplayMessages } from "./chat-display-projection.core.js";
@@ -77,6 +78,8 @@ it("shows a cron system notice once when the owner conversation's model cannot r
     expect(settled.status).not.toBe("completed");
     // Shown once, as the posted notice rather than the turn's input.
     expect(await shownNoticeRoles()).toEqual(["assistant"]);
+    // The failed repair turn recorded no input, so the next turn gets the notice as context.
+    expect(peekSystemEvents(SESSION)).toEqual([NOTICE]);
   } finally {
     handoff.mockRestore();
   }

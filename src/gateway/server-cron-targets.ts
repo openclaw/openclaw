@@ -19,8 +19,11 @@ import { resolveCronJobEffectiveAgentId } from "../cron/agent-id.js";
 import type { CronServiceDeps } from "../cron/service/state.js";
 import { resolveCronSessionTargetSessionKey } from "../cron/session-target.js";
 import { resolveMainScopedEventSessionKey } from "../infra/event-session-routing.js";
-import { withSystemEventOwner } from "../infra/system-event-ownership.js";
-import { enqueueAutomationSystemEvent } from "../infra/system-events.js";
+import {
+  resolveSystemEventQueueKey,
+  withSystemEventOwner,
+} from "../infra/system-event-ownership.js";
+import { enqueueAutomationSystemEvent, enqueueSystemEvent } from "../infra/system-events.js";
 import {
   normalizeAgentId,
   resolveEventSessionKey,
@@ -249,8 +252,14 @@ export function createGatewayCronTargetResolver(
           : { source: "cron" as const }),
       });
       void receipt.settled.then((result) => {
-        if (result.status !== "completed") {
-          log.warn({ result }, "Session event did not complete");
+        if (result.status === "completed") {
+          return;
+        }
+        log.warn({ result }, "Session event did not complete");
+        // The posted notice row is not replayed to the model. A repair turn that failed for good
+        // before it started recorded no input, so the next turn gets the notice as context.
+        if (posted && result.status === "failed" && !result.executionStarted && !result.retryable) {
+          enqueueSystemEvent(text, { sessionKey: resolveSystemEventQueueKey(sessionKey, agentId) });
         }
       });
       return await receipt.accepted;
