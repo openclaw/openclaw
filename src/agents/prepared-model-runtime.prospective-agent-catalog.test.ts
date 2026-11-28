@@ -119,4 +119,48 @@ describe("prospective agent creation inherits published subscription catalog", (
       expect.objectContaining({ api: "openai-chatgpt-responses" }),
     );
   });
+
+  it("does not inherit the default agent's catalog when effective account credentials differ", async () => {
+    const { mocks } = fixture;
+    mocks.configuredAgentIds = ["main"];
+    const subscriptionEntry: ModelCatalogEntry = {
+      provider: "openai",
+      id: "gpt-6.1-terra",
+      name: "GPT-6.1 Terra",
+      api: "openai-chatgpt-responses",
+      contextWindow: 128000,
+      reasoning: true,
+    };
+    mocks.runPreparedModelCatalogWorker.mockResolvedValue({
+      entries: [subscriptionEntry],
+      routeVariants: [subscriptionEntry],
+    });
+    const config: OpenClawConfig = {
+      agents: { defaults: { model: "openai/gpt-6.1-terra" }, entries: { main: {} } },
+    };
+    await refreshPreparedModelRuntimeSnapshots(config, {
+      gatewayLifecycle: true,
+      catalogMode: "static",
+    });
+    const mainPublished = await prepareModelRuntimeSnapshot(fixture.agentInput("main", config));
+    await mainPublished.loadFullModelCatalog!({ refresh: true, wait: true });
+
+    // Simulate prospective agent having distinct local account credentials.
+    mocks.authStorage.getAll.mockReturnValueOnce({
+      openai: { type: "api_key", key: "account-b-key" },
+    });
+    const candidate = applyAgentConfig(config, { agentId: "research" });
+    const mainDir = fixture.agentInput("main", config).agentDir;
+    await using readOnlyLease = await acquireReadOnlyPreparedModelRuntime(
+      {
+        ...fixture.agentInput("research", candidate),
+        inheritedAuthDir: mainDir,
+      },
+      { catalogMode: "static" },
+    );
+    const readOnlyCatalog = readAdmittedPublishedModelCatalog(readOnlyLease.snapshot);
+    expect(readOnlyCatalog?.entries ?? []).not.toContainEqual(
+      expect.objectContaining({ api: "openai-chatgpt-responses" }),
+    );
+  });
 });
