@@ -2,7 +2,11 @@ import { type ChildProcess, spawn } from "node:child_process";
 import process from "node:process";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { computeBackoff } from "../infra/backoff.js";
-import type { GatewayScheduler, GatewaySchedulerScope } from "../infra/gateway-scheduler.js";
+import type {
+  GatewayScheduledJob,
+  GatewayScheduler,
+  GatewaySchedulerScope,
+} from "../infra/gateway-scheduler.js";
 import { createSubsystemLogger } from "../logging/subsystem.js";
 import { releaseChildProcessOutputAfterExit } from "../process/child-process.js";
 import { formatCommandResult } from "../process/command-error.js";
@@ -26,6 +30,7 @@ import {
 
 const log = createSubsystemLogger("gmail-watcher");
 const GMAIL_WATCHER_STDERR_TAIL_CHARS = 512;
+const GMAIL_WATCH_RETRY_BACKOFF = { initialMs: 60_000, factor: 2, jitter: 0 };
 const GMAIL_BIND_RETRY_LIMIT = 3;
 const GMAIL_BIND_BACKOFF = { initialMs: 5_000, maxMs: 20_000, factor: 2, jitter: 0 };
 
@@ -403,12 +408,42 @@ export async function startGmailWatcherService(
   const renewMs = runtimeConfig.renewEveryMinutes * 60_000;
   const renewal = options.scheduler.scope();
   renewalScope = renewal;
+  // A failed start or renewal retries with capped backoff instead of waiting a full renewal
+  // interval; Gmail stops pushing once a watch is 7 days old or was never established.
+  // Rescheduling the same id replaces a pending retry, so only one retry chain exists.
+  const retryBackoff = { ...GMAIL_WATCH_RETRY_BACKOFF, maxMs: renewMs };
+  let retry: GatewayScheduledJob | undefined;
+  const scheduleRetry = (attempt: number) => {
+    retry = renewal.schedule({
+      id: "gmail-watch-retry",
+      delayMs: computeBackoff(retryBackoff, attempt),
+      run: () => renewWatch(attempt + 1),
+    });
+  };
+  // One start at a time: a renewal that comes due while a retry runs joins it.
+  let inFlight: Promise<void> | undefined;
+  const renewWatch = (attempt: number) =>
+    (inFlight ??= (async () => {
+      try {
+        if (!(await startGmailWatch(runtimeConfig, executable, { signal: renewal.signal }))) {
+          scheduleRetry(attempt);
+        }
+      } finally {
+        inFlight = undefined;
+      }
+    })());
   renewal.schedule({
     id: "gmail-watch-renewal",
     delayMs: renewMs,
     everyMs: renewMs,
-    run: () => startGmailWatch(runtimeConfig, executable, { signal: renewal.signal }),
+    run: () => {
+      retry?.cancel();
+      return renewWatch(1);
+    },
   });
+  if (!watchStarted) {
+    scheduleRetry(1);
+  }
 
   log.info(
     `gmail watcher started for ${runtimeConfig.account} (renew every ${runtimeConfig.renewEveryMinutes}m)`,
