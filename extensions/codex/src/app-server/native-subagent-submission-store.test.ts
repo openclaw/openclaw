@@ -34,6 +34,7 @@ import {
 } from "./native-subagent-monitor.test-support.js";
 import type { CodexNativeSubagentPendingAssignment as Assignment } from "./native-subagent-pending-assignments.js";
 import type { CodexNativeSubagentSubmission as Submission } from "./native-subagent-submission.js";
+import { buildCodexAppServerRuntimeFingerprint } from "./plugin-app-cache-key.js";
 import { scopeCodexRunBindingStore } from "./session-binding-scope.js";
 import { createLazyCodexAppServerBindingStore } from "./session-binding-store.js";
 import {
@@ -844,4 +845,120 @@ describe("native subagent submission receipts in the binding store", () => {
       expect(reopenedState.lookup(key)).toEqual(before);
     },
   );
+
+  it("migrates pending assignments and unmatched submissions across a legacy local runtime upgrade on SQLite cold readback", async () => {
+    const root = tempDirs.make("codex-native-sqlite-upgrade-");
+    const appServer = {
+      start: {
+        transport: "stdio" as const,
+        command: "codex",
+        args: ["app-server"],
+        headers: {},
+      },
+      connectionClass: "local-loopback" as const,
+    };
+    const codexHomeA = path.join(root, "codex-home-a");
+    const codexHomeB = path.join(root, "codex-home-b");
+    const upgradedFp = buildCodexAppServerRuntimeFingerprint({
+      appServer,
+      appServerVersion: "0.172.1",
+      runtimeIdentity: {
+        serverVersion: "0.172.1",
+        userAgent: "openclaw/0.172.1 (linux)",
+        codexHome: codexHomeA,
+        platformFamily: "unix",
+        platformOs: "linux",
+      },
+    });
+    const legacyFp = JSON.stringify({
+      ...JSON.parse(upgradedFp),
+      appServerVersion: "0.172.0",
+      runtimeIdentity: {
+        serverVersion: "0.172.0",
+        userAgent: "openclaw/0.172.0 (linux)",
+        codexHome: codexHomeA,
+        platformFamily: "unix",
+        platformOs: "linux",
+      },
+    });
+    const otherHomeFp = buildCodexAppServerRuntimeFingerprint({
+      appServer,
+      appServerVersion: "0.172.1",
+      runtimeIdentity: {
+        serverVersion: "0.172.1",
+        userAgent: "openclaw/0.172.1 (linux)",
+        codexHome: codexHomeB,
+        platformFamily: "unix",
+        platformOs: "linux",
+      },
+    });
+    const legacyBinding: CodexAppServerThreadBinding = {
+      ...binding,
+      appServerRuntimeFingerprint: legacyFp,
+    };
+    const legacyOwner = createCodexNativeSubagentHistoryOwner({
+      parentThreadId: binding.threadId,
+      sessionId: identity.sessionId,
+      lifecycleRevision: "sqlite-rev-1",
+      binding: legacyBinding,
+    })!;
+
+    const initial = await reopenStore(root);
+    await initial.store.mutate(identity, { kind: "set", binding: legacyBinding });
+    expect(
+      await initial.store.mutate(
+        identity,
+        {
+          kind: "record-native-subagent-assignment",
+          owner: legacyOwner,
+          assignment: makeAssignment(legacyOwner),
+        },
+        currentAuthority,
+      ),
+    ).toBe(true);
+    expect(
+      await initial.store.mutate(
+        identity,
+        { kind: recordSubmission, owner: legacyOwner, receipt },
+        currentAuthority,
+      ),
+    ).toBe(true);
+
+    const upgraded = await reopenStore(root);
+    expect(
+      await upgraded.store.mutate(identity, {
+        kind: "patch",
+        threadId: binding.threadId,
+        patch: { appServerRuntimeFingerprint: upgradedFp },
+      }),
+    ).toBe(true);
+
+    const cold = await reopenStore(root);
+    const persisted = await cold.store.readAsync(identity);
+    expect(persisted?.appServerRuntimeFingerprint).toBe(upgradedFp);
+    const upgradedOwner = createCodexNativeSubagentHistoryOwner({
+      parentThreadId: binding.threadId,
+      sessionId: identity.sessionId,
+      lifecycleRevision: "sqlite-rev-1",
+      binding: persisted!,
+    })!;
+    expect(upgradedOwner.connectionFingerprint).not.toBe(legacyOwner.connectionFingerprint);
+    expect(await cold.store.readNativeSubagentAssignments?.(identity, upgradedOwner)).toEqual([
+      makeAssignment(upgradedOwner),
+    ]);
+    expect(await cold.store.readNativeSubagentSubmissions(identity, upgradedOwner)).toEqual([
+      receipt,
+    ]);
+
+    expect(
+      await cold.store.mutate(identity, {
+        kind: "patch",
+        threadId: binding.threadId,
+        patch: { appServerRuntimeFingerprint: otherHomeFp },
+      }),
+    ).toBe(true);
+    const coldAfterHomeChange = await reopenStore(root);
+    expect(coldAfterHomeChange.state.lookup(key)).not.toHaveProperty("nativeSubagentAssignments");
+    expect(coldAfterHomeChange.state.lookup(key)).not.toHaveProperty("nativeSubagentSubmissions");
+  });
 });

@@ -17,14 +17,17 @@ import {
 } from "./native-subagent-history-owner.js";
 import {
   matchesNativeAssignmentLifecycle,
+  migrateNativePendingAssignmentsConnection,
   readNativePendingAssignments,
   type CodexNativeSubagentPendingAssignment,
 } from "./native-subagent-pending-assignments.js";
 import {
   matchesCodexNativeSubagentSubmissionOwner,
+  migrateCodexNativeSubagentSubmissionsConnection,
   readCodexNativeSubagentSubmissions,
   type CodexNativeSubagentSubmission,
 } from "./native-subagent-submission.js";
+import { normalizeCodexAppServerLocalRuntimeFingerprint } from "./plugin-app-cache-key.js";
 import {
   legacyAppPolicyEntrySchema,
   readStoredCodexAppServerBinding,
@@ -228,15 +231,62 @@ export function matchesCodexNativeSubagentSubmissionBinding(
   );
 }
 
+function isCompatibleLocalRuntimeConnectionMigration(
+  current: CodexAppServerThreadBinding,
+  next: CodexAppServerThreadBinding,
+): boolean {
+  if (
+    current.connectionScope === "supervision" ||
+    next.connectionScope === "supervision" ||
+    (current.connectionScope ?? null) !== (next.connectionScope ?? null) ||
+    (current.authProfileId ?? null) !== (next.authProfileId ?? null) ||
+    !current.appServerRuntimeFingerprint ||
+    !next.appServerRuntimeFingerprint
+  ) {
+    return false;
+  }
+  const normalizedCurrent = normalizeCodexAppServerLocalRuntimeFingerprint(
+    current.appServerRuntimeFingerprint,
+  );
+  const normalizedNext = normalizeCodexAppServerLocalRuntimeFingerprint(
+    next.appServerRuntimeFingerprint,
+  );
+  return Boolean(normalizedCurrent && normalizedNext && normalizedCurrent === normalizedNext);
+}
+
 /** Unknown metadata stays opaque through ordinary binding writes. */
 export function preserveCodexNativeSubagentSubmissions(
   currentBinding: CodexAppServerThreadBinding,
   nextBinding: CodexAppServerThreadBinding,
   value: unknown,
 ): unknown {
-  return currentBinding.threadId === nextBinding.threadId
-    ? preserveNativePendingAssignments(currentBinding, nextBinding, value)
-    : undefined;
+  if (
+    value === undefined ||
+    currentBinding.threadId !== nextBinding.threadId ||
+    !isDeepStrictEqual(
+      currentBinding.pendingSupervisionBranch,
+      nextBinding.pendingSupervisionBranch,
+    )
+  ) {
+    return undefined;
+  }
+  const previousConnection = codexNativeSubagentHistoryConnectionFingerprint(currentBinding);
+  const nextConnection = codexNativeSubagentHistoryConnectionFingerprint(nextBinding);
+  if (previousConnection === nextConnection) {
+    return value;
+  }
+  if (
+    previousConnection &&
+    nextConnection &&
+    isCompatibleLocalRuntimeConnectionMigration(currentBinding, nextBinding)
+  ) {
+    return migrateCodexNativeSubagentSubmissionsConnection(
+      value,
+      previousConnection,
+      nextConnection,
+    );
+  }
+  return undefined;
 }
 
 export async function readCurrentCodexNativeSubagentSubmissions(
@@ -299,11 +349,25 @@ export function preserveNativePendingAssignments(
   next: CodexAppServerThreadBinding,
   value: unknown,
 ): unknown {
-  return codexNativeSubagentHistoryConnectionFingerprint(current) ===
-    codexNativeSubagentHistoryConnectionFingerprint(next) &&
-    isDeepStrictEqual(current.pendingSupervisionBranch, next.pendingSupervisionBranch)
-    ? value
-    : undefined;
+  if (
+    value === undefined ||
+    !isDeepStrictEqual(current.pendingSupervisionBranch, next.pendingSupervisionBranch)
+  ) {
+    return undefined;
+  }
+  const previousConnection = codexNativeSubagentHistoryConnectionFingerprint(current);
+  const nextConnection = codexNativeSubagentHistoryConnectionFingerprint(next);
+  if (previousConnection === nextConnection) {
+    return value;
+  }
+  if (
+    previousConnection &&
+    nextConnection &&
+    isCompatibleLocalRuntimeConnectionMigration(current, next)
+  ) {
+    return migrateNativePendingAssignmentsConnection(value, previousConnection, nextConnection);
+  }
+  return undefined;
 }
 
 export class CodexSupervisionBindingReplacementError extends Error {

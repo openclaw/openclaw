@@ -219,3 +219,38 @@ export function mutateNativePendingAssignments(params: {
     consumed: params.consume ? existing : undefined,
   };
 }
+
+/** Migrates pending assignment owner hashes across a compatible local runtime fingerprint upgrade. */
+export function migrateNativePendingAssignmentsConnection(
+  value: unknown,
+  previousConnectionFingerprint: string,
+  nextConnectionFingerprint: string,
+): unknown {
+  if (value === undefined) {
+    return undefined;
+  }
+  let parsed: ReturnType<typeof readNativePendingAssignments>;
+  try {
+    parsed = readNativePendingAssignments(value);
+  } catch {
+    return value;
+  }
+  if (!parsed) {
+    return undefined;
+  }
+  const assignments: CodexNativeSubagentPendingAssignment[] = [];
+  for (const entry of parsed.assignments) {
+    assignments.push(
+      entry.owner.connectionFingerprint === previousConnectionFingerprint
+        ? {
+            ...entry,
+            owner: {
+              ...entry.owner,
+              connectionFingerprint: nextConnectionFingerprint,
+            },
+          }
+        : entry,
+    );
+  }
+  return { version: 1 as const, assignments };
+}

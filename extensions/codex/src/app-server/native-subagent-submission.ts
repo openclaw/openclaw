@@ -157,3 +157,33 @@ export function adoptCodexNativeSubagentSubmissions(value: unknown): unknown {
   const parsed = submissionsSchema.safeParse(value);
   return !parsed.success || parsed.data.owner.lifecycleRevision ? value : undefined;
 }
+
+/** Migrates submission receipt owner hashes across a compatible local runtime fingerprint upgrade. */
+export function migrateCodexNativeSubagentSubmissionsConnection(
+  value: unknown,
+  previousConnectionFingerprint: string,
+  nextConnectionFingerprint: string,
+): unknown {
+  if (value === undefined) {
+    return undefined;
+  }
+  let parsed: CodexNativeSubagentSubmissions | undefined;
+  try {
+    parsed = readCodexNativeSubagentSubmissions(value);
+  } catch {
+    return value;
+  }
+  if (!parsed) {
+    return undefined;
+  }
+  if (parsed.owner.connectionFingerprint !== previousConnectionFingerprint) {
+    return parsed;
+  }
+  return {
+    ...parsed,
+    owner: {
+      ...parsed.owner,
+      connectionFingerprint: nextConnectionFingerprint,
+    },
+  };
+}

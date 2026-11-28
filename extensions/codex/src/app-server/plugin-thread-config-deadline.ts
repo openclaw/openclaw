@@ -9,12 +9,17 @@ import {
   type CodexAppInventoryCache,
 } from "./app-inventory-cache.js";
 import type { CodexAppServerClient } from "./client.js";
+import type { CodexAppServerConnectionClass } from "./config-contracts.js";
 import {
   resolveCodexPluginsPolicy,
   type CodexPluginConfig,
   type ResolvedCodexPluginsPolicy,
 } from "./config.js";
 import { disableCodexPluginThreadConfig } from "./dynamic-tool-build.js";
+import {
+  buildLegacyLocalCodexPluginAppCacheKeys,
+  normalizeCodexPluginAppCacheKeyForLocalBinding,
+} from "./plugin-app-cache-key.js";
 import {
   createCodexAppInventoryRequest,
   resolveRecoverableCodexPluginConfigKeys,
@@ -165,6 +170,7 @@ async function buildCodexPluginThreadConfigWithinDeadline(
     return buildCodexPluginThreadConfigTimeoutFallback({
       policy: buildParams.policy,
       appCacheKey: buildParams.appCacheKey,
+      bindingAppCacheKey: buildParams.bindingAppCacheKey,
       message: `Codex plugin discovery exceeded its ${timeoutMs} ms startup budget; plugin apps were disabled for this turn.`,
     });
   }
@@ -174,6 +180,7 @@ async function buildCodexPluginThreadConfigWithinDeadline(
 export function prepareCodexPluginThreadConfigStartupProvider(prepared: {
   startupPolicy: ReturnType<typeof resolveCodexPluginThreadConfigStartupPolicy>;
   appCacheKey: string;
+  connectionClass?: CodexAppServerConnectionClass;
   scheduledRuntimeAuthority?: EmbeddedRunAttemptParams["scheduledRuntimeAuthority"];
 }) {
   const { startupPolicy, appCacheKey } = prepared;
@@ -182,10 +189,38 @@ export function prepareCodexPluginThreadConfigStartupProvider(prepared: {
     return undefined;
   }
   const { pluginThreadConfigPluginConfig: pluginConfig, enabledPluginConfigKeys } = startupPolicy;
+  const bindingAppCacheKey =
+    prepared.connectionClass === "local-loopback"
+      ? (normalizeCodexPluginAppCacheKeyForLocalBinding(appCacheKey) ?? appCacheKey)
+      : appCacheKey;
   const inputFingerprint = buildScheduledCodexAppAuthorityInputFingerprint(
-    buildCodexPluginThreadConfigInputFingerprint({ policy, appCacheKey }),
+    buildCodexPluginThreadConfigInputFingerprint({ policy, appCacheKey: bindingAppCacheKey }),
     prepared.scheduledRuntimeAuthority,
   );
+  const matchesLegacyBindingInputFingerprint =
+    prepared.connectionClass === "local-loopback"
+      ? (binding: {
+          pluginAppsInputFingerprint?: string;
+          appServerRuntimeFingerprint?: string;
+        }) => {
+          if (!binding.pluginAppsInputFingerprint || !binding.appServerRuntimeFingerprint) {
+            return false;
+          }
+          return buildLegacyLocalCodexPluginAppCacheKeys({
+            currentAppCacheKey: appCacheKey,
+            legacyRuntimeFingerprint: binding.appServerRuntimeFingerprint,
+          }).some(
+            (legacyAppCacheKey) =>
+              buildScheduledCodexAppAuthorityInputFingerprint(
+                buildCodexPluginThreadConfigInputFingerprint({
+                  policy,
+                  appCacheKey: legacyAppCacheKey,
+                }),
+                prepared.scheduledRuntimeAuthority,
+              ) === binding.pluginAppsInputFingerprint,
+          );
+        }
+      : undefined;
   return (params: {
     requestTimeoutMs: number;
     signal: AbortSignal;
@@ -203,6 +238,7 @@ export function prepareCodexPluginThreadConfigStartupProvider(prepared: {
       // app IDs and tool/link overrides that can change between turns.
       requiresCurrentPolicyCheck: Boolean(policy.enabled || params.scheduledRuntimeAuthority),
       inputFingerprint,
+      ...(matchesLegacyBindingInputFingerprint ? { matchesLegacyBindingInputFingerprint } : {}),
       enabledPluginConfigKeys,
       accountAppRecoveryEnabled: policy.allowAllPlugins,
       recoverablePluginConfigKeys: resolveRecoverableCodexPluginConfigKeys({
@@ -217,6 +253,7 @@ export function prepareCodexPluginThreadConfigStartupProvider(prepared: {
           pluginConfig,
           policy,
           appCacheKey,
+          bindingAppCacheKey,
           threadId: buildOptions?.threadId,
           appCache: appCache ?? defaultCodexAppInventoryCache,
           metadataCache,

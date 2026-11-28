@@ -57,6 +57,7 @@ export type CodexPluginThreadConfigProvider = {
   /** Rebuild before reuse so live policy can narrow or revoke stored authority. */
   requiresCurrentPolicyCheck?: boolean;
   inputFingerprint?: string;
+  matchesLegacyBindingInputFingerprint?: (binding: CodexAppServerThreadBinding) => boolean;
   enabledPluginConfigKeys?: readonly string[];
   recoverablePluginConfigKeys?: readonly string[];
   accountAppRecoveryEnabled?: boolean;

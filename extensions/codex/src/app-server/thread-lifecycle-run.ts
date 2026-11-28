@@ -11,10 +11,7 @@ import { injectCodexHistoryDelta } from "./context-engine-history.js";
 import { joinPresentSections } from "./developer-instruction-sections.js";
 import { hasCodexNativeToolCatalog, loadCodexNativeToolCatalog } from "./native-tool-catalog.js";
 import { buildCodexAppServerConnectionFingerprint } from "./plugin-app-cache-key.js";
-import {
-  isCodexPluginThreadBindingStale,
-  type CodexPluginThreadConfig,
-} from "./plugin-thread-config.js";
+import type { CodexPluginThreadConfig } from "./plugin-thread-config.js";
 import {
   assertCodexBindingMayBeReplaced,
   type CodexAppServerPendingSupervisionBranch,
@@ -25,6 +22,7 @@ import {
   shouldRecheckRecoverablePluginBinding,
   shouldRotateCodexAppServerBindingForRuntime,
   shouldRotateCodexGpt56MultiAgentBinding,
+  shouldRotateCodexPluginThreadBinding,
 } from "./thread-binding-policy.js";
 import { isContextEngineBindingCompatible } from "./thread-context-engine.js";
 import {
@@ -528,15 +526,7 @@ export async function startOrResumeThread(
         binding.networkProxyProfileName !== params.appServer.networkProxy?.profileName
       ) {
         rotateStaleBinding(binding, "network proxy config");
-      } else if (
-        isCodexPluginThreadBindingStale({
-          codexPluginsEnabled: params.pluginThreadConfig?.enabled ?? false,
-          bindingFingerprint: binding.pluginAppsFingerprint,
-          bindingInputFingerprint: binding.pluginAppsInputFingerprint,
-          currentInputFingerprint: params.pluginThreadConfig?.inputFingerprint,
-          hasBindingPolicyContext: Boolean(binding.pluginAppPolicyContext),
-        })
-      ) {
+      } else if (shouldRotateCodexPluginThreadBinding(binding, params.pluginThreadConfig)) {
         rotateStaleBinding(binding, "plugin app config");
       } else if (
         binding.dynamicToolsFingerprint &&

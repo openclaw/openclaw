@@ -15,6 +15,7 @@ import {
 } from "./protocol.js";
 import type { CodexBindingAuthority, CodexAppServerThreadBinding } from "./session-binding.js";
 import { retainSharedCodexAppServerClientByInstanceId } from "./shared-client-lifecycle.js";
+import { areCodexAppServerRuntimeFingerprintsCompatible } from "./thread-binding-policy.js";
 import { codexDynamicToolsFingerprint } from "./thread-fingerprints.js";
 
 export function hasCodexNativeToolCatalog(
@@ -190,7 +191,12 @@ export async function loadCodexNativeToolCatalog(params: {
     (!hasCodexNativeToolCatalog(binding) && !hasProtectedManagedCatalog(binding, client)) ||
     !binding.dynamicToolsFingerprint ||
     !home ||
-    binding.appServerRuntimeFingerprint !== runtimeFingerprint
+    !binding.appServerRuntimeFingerprint ||
+    !areCodexAppServerRuntimeFingerprintsCompatible({
+      connectionClass: appServer.connectionClass,
+      current: runtimeFingerprint,
+      binding: binding.appServerRuntimeFingerprint,
+    })
   ) {
     throw new Error(
       "Saved Codex declarations require the original verified local binding and selected native connection; the thread is preserved.",
