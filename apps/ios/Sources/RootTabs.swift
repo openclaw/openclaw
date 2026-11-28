@@ -330,7 +330,6 @@ struct RootTabs: View {
             // Agent identity pill owns the chat header (prototype parity).
             ChatProTab(
                 headerSidebarAction: self.sidebarHeaderAction,
-                openSettings: { self.selectSidebarDestination(.gateway) },
                 startFirstGatewaySetup: self.hasNeverHadGateway
                     ? { self.evaluateOnboardingPresentation(force: true) }
                     : nil)
