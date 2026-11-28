@@ -21,6 +21,7 @@ import { readAgentRuntimeExecutionLineage } from "../../../gateway/agent-runtime
 import type { AgentRuntimeIdentity } from "../../../gateway/agent-runtime-identity-token.js";
 import { callGateway } from "../../../gateway/call.js";
 import { createGatewayInstanceRuntime } from "../../../gateway/server-instance-runtime.js";
+import { registerGatewayLifecycleRuntime } from "../../../gateway/server-lifecycle-runtime-context.js";
 import { createRequestGatewayMethodRegistry } from "../../../gateway/server-methods.js";
 import type { GatewayRequestContext } from "../../../gateway/server-methods/types.js";
 import {
@@ -275,11 +276,20 @@ async function createBoundGateway(bound: Awaited<ReturnType<typeof createBoundPa
     return validateRuntimeAuthority(identity);
   };
   const methodRegistry = createRequestGatewayMethodRegistry();
-  const runtime = createGatewayInstanceRuntime({
+  const instanceRuntime = createGatewayInstanceRuntime({
     getContext: () => context,
     getMethodRegistry: () => methodRegistry,
     isDispatchAvailable: () => true,
   });
+  // This fixture stands in for the listening Gateway, which owns the process lifecycle runtime.
+  const releaseLifecycleRuntime = registerGatewayLifecycleRuntime(instanceRuntime.lifecycle);
+  const runtime = {
+    ...instanceRuntime,
+    close: () => {
+      instanceRuntime.close();
+      releaseLifecycleRuntime();
+    },
+  };
   context.createAgentTurnFacade = runtime.createAgentTurnFacade;
   context.lifecycleRuntime = runtime.lifecycle;
   vi.spyOn(runtime.lifecycle, "waitForAgent").mockResolvedValue({ status: "pending" });

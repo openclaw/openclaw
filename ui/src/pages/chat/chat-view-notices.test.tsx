@@ -72,6 +72,7 @@ it.each([false, true])(
       { runError: { summary: "First diagnostic\nAdditional detail" } },
       mobile,
     );
+    await vi.dynamicImportSettled();
     const message = await waitForElement(container, ".app-toast__message", "first diagnostic");
     expect(message.textContent).toBe("First diagnostic\nAdditional detail");
     publish({ messages: [], runError: { summary: "Second diagnostic\nReplacement detail" } });

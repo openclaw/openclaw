@@ -51,7 +51,11 @@ struct ChatInfoGallery: View {
             LazyVGrid(columns: Array(repeating: GridItem(.flexible(), spacing: 3), count: 4), spacing: 3) {
                 ForEach(self.media, id: \.id) { item in
                     ChatInfoMediaButton(
-                        visit: self.visit, item: item, stripVisible: true, requestedID: self.$requestedID)
+                        visit: self.visit,
+                        item: item,
+                        stripVisible: true,
+                        isOpening: self.requestedID != nil,
+                        open: { self.requestedID = item.id })
                         .aspectRatio(1, contentMode: .fit)
                 }
             }.padding(.top, 8)

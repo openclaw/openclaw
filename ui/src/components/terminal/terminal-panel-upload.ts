@@ -374,6 +374,17 @@ export function createTerminalPanelUpload(host: {
       }
       uploadFiles(Array.from(event.dataTransfer?.files ?? []));
     },
+    handlePaste(event: ClipboardEvent): void {
+      // WebKit exposes pasted screenshots only through items; text stays native paste.
+      const files = Array.from(event.clipboardData?.items ?? [])
+        .filter((item) => item.type.startsWith("image/"))
+        .map((item) => item.getAsFile())
+        .filter((file): file is File => file !== null);
+      if (files.length) {
+        event.preventDefault();
+        uploadFiles(files);
+      }
+    },
     insertCompleted(this: void): void {
       const batch = activeBatch;
       if (batch?.state === "failed" && batch.paths.length > 0) {

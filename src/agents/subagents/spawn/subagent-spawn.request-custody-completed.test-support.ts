@@ -269,6 +269,7 @@ export function registerCompletedRequestCustodySpawnCases(options: RequestCustod
       const stopObserving = subscribeSubagentRunChanges("persistence", inspectTerminal);
       const loop = await import("../../embedded-agent-runner/run-loop.js");
       const native = await import("../../embedded-agent-runner/run-orchestrator.js");
+      let nativeCompletion: ReturnType<typeof native.runEmbeddedAgent> | undefined;
       const model = vi
         .spyOn(loop, "runPreparedEmbeddedLoop")
         .mockImplementationOnce(async (_refresh, input) => {
@@ -309,6 +310,7 @@ export function registerCompletedRequestCustodySpawnCases(options: RequestCustod
         });
       options.runEmbeddedAgent.mockImplementationOnce((params) => {
         const result = native.runEmbeddedAgent(params);
+        nativeCompletion = result;
         void result.then(
           (completed) => {
             nativeStatus = "resolved";
@@ -377,6 +379,11 @@ export function registerCompletedRequestCustodySpawnCases(options: RequestCustod
             completion: { resultText: "Completed child result" },
           });
           await withinTest(waitForExecSession(runningCommand), signal);
+          // Process exit can precede retirement of the native request owner.
+          await withinTest(
+            expectDefined(nativeCompletion, "native child completion"),
+            signal,
+          ).catch(reportNativeFailure);
           expect(runningCommand.exited).toBe(true);
           expect(
             isPidDefinitelyDead(expectDefined(runningCommand.pid, "completed child command pid")),

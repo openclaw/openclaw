@@ -225,6 +225,9 @@ OAuth refresh settlement remains owned by the OAuth manager.
     auth but has no usable usage token, and OpenClaw must skip generic
     API-key/OAuth fallback. Return `null` or `undefined` when the provider did
     not handle the request and OpenClaw should continue with generic fallback.
+    `ctx.configuredCliBackends` lists the plugin's CLI backends that config routes
+    agent turns through; a configured backend also admits the hook without an
+    OpenClaw credential, so read a backend's own login only when it is listed.
 
     Declare the provider id in `contracts.usageProviders`. When that manifest
     contract and **both** hooks are present, OpenClaw automatically includes

@@ -21,6 +21,25 @@ const suite = createControlUiE2eSuite({
 });
 
 suite.define(() => {
+  it("opens and reopens the chat actions menu by touch", async () => {
+    await using context = await webkitBrowser!.newContext({
+      viewport: { width: 390, height: 844 },
+      isMobile: true,
+      hasTouch: true,
+    });
+    const page = await context.newPage();
+    await installMockGateway(page);
+    await page.goto(suite.server.baseUrl + "chat");
+    const trigger = page.locator(".agent-chat__header--mobile .chat-header-session-menu__trigger");
+    const menu = page.locator(".agent-chat__header--mobile").getByRole("menu");
+    for (const position of [undefined, { x: 4, y: 4 }]) {
+      await trigger.tap({ position });
+      await menu.getByRole("menuitem").first().waitFor();
+      await page.keyboard.press("Escape");
+      await menu.waitFor({ state: "hidden" });
+    }
+  });
+
   it("keeps WebKit responsive when a rail tooltip hands off to a pinned page's tooltip", async () => {
     const context = await webkitBrowser!.newContext({
       viewport: { width: 1100, height: 860 },

@@ -131,17 +131,22 @@ function interruptionScript(eventsPath: string, options: InterruptionOptions) {
           if (${Boolean(archiveSignal)}) {
             const { DatabaseSync } = await import("node:sqlite");
             const { createHash } = await import("node:crypto");
+            const { OPENCLAW_AGENT_SCHEMA_SQL } = await import(${JSON.stringify(new URL("../../state/openclaw-agent-schema.js", registrar).href)});
             const { migrateCanonicalTranscriptArchives } = await import(${JSON.stringify(new URL("../../infra/state-migrations.transcript-directives-archives.js", registrar).href)});
             const database = new DatabaseSync(":memory:");
             const bytes = Buffer.from("{}\\n");
             const digest = createHash("sha256").update(bytes).digest("hex");
             let visited = 0;
             try {
-              database.exec("CREATE TABLE session_transcript_archives (session_id TEXT, generation TEXT, archive_blob BLOB, archive_name TEXT, archive_sha256 TEXT, encoding TEXT, published_at INTEGER)");
-              const insert = database.prepare("INSERT INTO session_transcript_archives VALUES (?, 'retained', ?, ?, ?, 'identity', NULL)");
+              database.exec(OPENCLAW_AGENT_SCHEMA_SQL);
+              const insert = database.prepare(\`
+                INSERT INTO session_transcript_archives
+                  (session_id, generation, session_key, reason, encoding, archive_blob, archive_name, archive_sha256, created_at)
+                VALUES (?, 'retained', ?, 'reset', 'identity', ?, ?, ?, 0)
+              \`);
               for (let index = 0; index < 202; index++) {
                 const session = "session-" + String(index).padStart(3, "0");
-                insert.run(session, bytes, session + ".jsonl", digest);
+                insert.run(session, "agent:main:" + session, bytes, session + ".jsonl", digest);
               }
               await migrateCanonicalTranscriptArchives({
                 agentId: "main", database, pathname: root + "/agent.sqlite",

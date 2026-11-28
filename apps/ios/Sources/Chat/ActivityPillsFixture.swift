@@ -239,7 +239,6 @@ enum ActivityPillsFixture {
 
     static func decorate(
         sessions: inout [OpenClawChatSessionEntry],
-        parentKey: String,
         stoppedAt: [String: Double] = [:])
     {
         guard self.isEnabled, !self.pullRequestsOnly, !self.goalOnly, !sessions.isEmpty else { return }
@@ -451,7 +450,7 @@ enum ActivityPillsFixture {
         if self.holdsReads { try await Task.sleep(for: .seconds(120)) }
         if self.failsReads { throw URLError(.notConnectedToInternet) }
         var rows = [OpenClawChatSessionEntry(key: parentKey)]
-        self.decorate(sessions: &rows, parentKey: parentKey, stoppedAt: stoppedAt)
+        self.decorate(sessions: &rows, stoppedAt: stoppedAt)
         return OpenClawChatChildSessionsResult(rows: Array(rows.dropFirst()), isComplete: true)
     }
 

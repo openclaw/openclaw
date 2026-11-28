@@ -88,19 +88,34 @@ enum CleanChatComposerMetrics {
     static let footerInlineInset: CGFloat = 8
     static let footerBlockInset: CGFloat = 6
     static let rowGap: CGFloat = 4
+    #if !os(iOS) && !os(macOS)
     static let regularModelMaxWidth: CGFloat = 148
     static let effortTrailingPadding: CGFloat = 6
     static let compactModelWidth: CGFloat = controlTouchSize
+    #endif
 }
 
 #if !os(macOS)
+/// The speed mark shared by the composer dial and the speed menu. Standard keeps the needle.
+enum ChatSpeedBolt: String {
+    case fast = "on"
+    case ultrafast
+
+    var image: Image {
+        switch self {
+        case .fast: Image(systemName: "bolt.fill")
+        case .ultrafast: Image("zapDouble", bundle: .module)
+        }
+    }
+}
+
 /// The Control UI effort gauge on the web icon's 24-unit grid: a 240° dial open at the
 /// bottom, a filled arc up to the selected level, and a needle from the hub.
 struct CleanChatEffortGauge: View {
     @Environment(\.accessibilityReduceMotion) private var reduceMotion
     /// Needle angle in degrees, from -120 (lowest level) to 120 (highest).
     let angle: Double
-    let fastModeEnabled: Bool
+    let speedBolt: ChatSpeedBolt?
     let accentProgress: Bool
     let width: CGFloat
     let ink: Color
@@ -111,7 +126,7 @@ struct CleanChatEffortGauge: View {
         let stroke = StrokeStyle(lineWidth: 2 * unit, lineCap: .round)
         let fraction = min(max((self.angle + 120) / 240, 0), 1)
         // Fast mode replaces the needle, so the lowest level keeps a dot at the dial's start.
-        let progress = fraction > 0 ? fraction : (self.fastModeEnabled ? 0.001 : 0)
+        let progress = fraction > 0 ? fraction : (self.speedBolt != nil ? 0.001 : 0)
         ZStack {
             CleanChatEffortGaugeDial()
                 .stroke(self.ink.opacity(0.32), style: stroke)
@@ -125,12 +140,20 @@ struct CleanChatEffortGauge: View {
                             endPoint: .trailing))
                         : AnyShapeStyle(self.ink),
                     style: stroke)
-            if self.fastModeEnabled {
-                Image(systemName: "bolt.fill")
+            switch self.speedBolt {
+            case .ultrafast:
+                ChatSpeedBolt.ultrafast.image
+                    .resizable()
+                    .scaledToFit()
+                    .frame(width: 14 * unit, height: 16 * unit)
+                    .foregroundStyle(OpenClawChatTheme.accent)
+                    .offset(x: -0.25 * unit, y: 1.75 * unit)
+            case .fast:
+                ChatSpeedBolt.fast.image
                     .font(.system(size: 9.5 * unit, weight: .semibold))
                     .foregroundStyle(OpenClawChatTheme.accent)
                     .offset(y: 2.5 * unit)
-            } else {
+            case nil:
                 CleanChatEffortGaugeNeedle(angle: self.angle)
                     .stroke(self.needleInk, style: stroke)
             }

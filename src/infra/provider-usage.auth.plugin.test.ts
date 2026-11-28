@@ -45,9 +45,18 @@ vi.mock("../plugins/provider-runtime.js", async () => ({
   )),
   resolveProviderUsageAuthWithPlugin: resolvePlugin,
 }));
-vi.mock("../plugins/manifest-contract-eligibility.js", () => ({
+vi.mock("../plugins/manifest-contract-eligibility.js", async () => ({
+  ...(await vi.importActual<typeof import("../plugins/manifest-contract-eligibility.js")>(
+    "../plugins/manifest-contract-eligibility.js",
+  )),
   loadManifestMetadataSnapshot: () => ({
     plugins: [
+      {
+        id: "anthropic",
+        origin: "bundled",
+        providers: ["anthropic"],
+        cliBackends: ["claude-cli"],
+      },
       {
         id: "minimax",
         origin: "bundled",
@@ -274,6 +283,96 @@ describe("provider usage auth boundary", () => {
     expect(loadLocalStore).toHaveBeenCalledOnce();
     expect(loadStore).not.toHaveBeenCalled();
     expect(resolvePlugin).not.toHaveBeenCalled();
+  });
+
+  describe("configured CLI backend credential source", () => {
+    const claudeCliRuntime = {
+      agents: {
+        defaults: {
+          model: { primary: "anthropic/claude-opus-5-5" },
+          models: { "anthropic/*": { agentRuntime: { id: "claude-cli" } } },
+        },
+      },
+    };
+    const legacyClaudeCliRef = {
+      agents: { defaults: { model: { primary: "claude-cli/claude-opus-5-5" } } },
+    };
+    const resolveWith = (config: object) =>
+      resolveProviderAuths({
+        providers: ["anthropic"],
+        env: {},
+        config,
+        agentDir: "/tmp/openclaw-agent",
+      });
+
+    it.each([
+      ["agent runtime", claudeCliRuntime],
+      ["legacy backend model ref", legacyClaudeCliRef],
+    ])(
+      "asks the owning plugin when config selects its CLI backend (%s)",
+      async (_label, config) => {
+        let storedOAuth: unknown = "unset";
+        resolvePlugin.mockImplementationOnce(async ({ context }) => {
+          storedOAuth = await context.resolveOAuthToken();
+          return { token: "native-login-token", subscriptionType: "max" };
+        });
+        expect(await resolveWith(config)).toEqual([
+          { provider: "anthropic", token: "native-login-token", subscriptionType: "max" },
+        ]);
+        expect(
+          resolvePlugin.mock.calls.map(([params]) => [
+            params.provider,
+            params.context.configuredCliBackends,
+          ]),
+        ).toEqual([["anthropic", ["claude-cli"]]]);
+        // The backend owns its login; the empty OpenClaw profile store stays closed.
+        expect(storedOAuth).toBeNull();
+        expect(loadStore).not.toHaveBeenCalled();
+        expect(loadLocalStore).not.toHaveBeenCalled();
+      },
+    );
+
+    it.each([
+      ["no config", {}],
+      [
+        "direct Anthropic runtime",
+        { agents: { defaults: { model: { primary: "anthropic/claude-opus-5-5" } } } },
+      ],
+      [
+        "another provider's backend",
+        { agents: { defaults: { model: { primary: "minimax/minimax-m3" } } } },
+      ],
+    ])("skips the plugin without a configured CLI backend (%s)", async (_label, config) => {
+      expect(await resolveWith(config)).toEqual([]);
+      expect(resolvePlugin).not.toHaveBeenCalled();
+    });
+
+    it("tells the plugin no CLI backend is routed when only an API key admits it", async () => {
+      resolvePlugin.mockResolvedValueOnce({ handled: true });
+      expect(
+        await resolveProviderAuths({
+          providers: ["anthropic"],
+          env: { ANTHROPIC_API_KEY: "sk-ant-api03-inference" },
+          config: {},
+          agentDir: "/tmp/openclaw-agent",
+        }),
+      ).toEqual([]);
+      expect(
+        resolvePlugin.mock.calls.map(([params]) => params.context.configuredCliBackends),
+      ).toEqual([[]]);
+    });
+
+    it("does not open other providers through an unrelated CLI backend", async () => {
+      expect(
+        await resolveProviderAuths({
+          providers: ["minimax", "openai"],
+          env: {},
+          config: claudeCliRuntime,
+          agentDir: "/tmp/openclaw-agent",
+        }),
+      ).toEqual([]);
+      expect(resolvePlugin).not.toHaveBeenCalled();
+    });
   });
 
   it("honors a plugin's refusal instead of falling back to an inference key", async () => {

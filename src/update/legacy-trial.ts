@@ -131,10 +131,7 @@ export async function disarmLegacyTrial(
   return receipt;
 }
 
-export async function recoverLegacyTrialRun(
-  receipt: LegacyTrialReceipt,
-  onCompleted: (runId: string) => void,
-): Promise<boolean> {
+export async function recoverLegacyTrialRun(receipt: LegacyTrialReceipt): Promise<boolean> {
   const context = captureOpenClawStateWorkerContext();
   const result = await persistInterruptedUpdateObservationAsync(context, {
     legacyReady: receipt,
@@ -152,9 +149,6 @@ export async function recoverLegacyTrialRun(
   });
   if (result?.updateResult) {
     void sendUpdateResultTelemetry(result.updateResult, { env: context.environment });
-  }
-  if (result?.run) {
-    onCompleted(result.run.runId);
   }
   return result !== undefined && !result.retry;
 }

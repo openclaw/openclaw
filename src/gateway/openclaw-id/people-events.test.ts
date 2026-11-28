@@ -61,7 +61,6 @@ async function fixture() {
     service,
     effects,
     clients,
-    local,
     owner,
     events,
     broadcast,
