@@ -162,23 +162,24 @@ export function doctorConfigRepairsPendingInputs(
         }
         return pending;
       });
-  // Each transform runs inside the plugin metadata scope exactly where the flow runs it there.
-  type TransformOptions = { reportsWarnings?: false; pluginMetadata?: false };
-  const inScope = <T>(chain: RepairsChain, options: TransformOptions, run: () => T): T =>
-    options.pluginMetadata === false ? run() : chain.runWithPluginMetadata(chain.candidate, run);
+  // Every stage runs inside the checks' own plugin metadata scope, so the caches and readers
+  // its metadata reads acquire are retired with the scope.
+  type TransformOptions = { reportsWarnings?: false };
+  const inScope = <T>(chain: RepairsChain, run: () => T): T =>
+    chain.runWithPluginMetadata(chain.candidate, run);
   const flowTransform = (id: DoctorConfigFlowTransformId, options: TransformOptions = {}) =>
     decideStage(async (chain) => {
       const { runDoctorConfigFlowTransform } = await import("./doctor/shared/config-transforms.js");
-      const result = await inScope(chain, options, () =>
+      const result = await inScope(chain, () =>
         runDoctorConfigFlowTransform(id, chain.candidate, chain.context),
       );
       return { pending: decideResult(result, options), result };
     });
-  const repairTransform = (id: DoctorRepairSequenceTransformId, options: TransformOptions = {}) =>
+  const repairTransform = (id: DoctorRepairSequenceTransformId) =>
     decideStage(async (chain) => {
       const { runDoctorRepairSequenceTransform } =
         await import("./doctor/shared/config-transforms.js");
-      const result = await inScope(chain, options, () =>
+      const result = await inScope(chain, () =>
         runDoctorRepairSequenceTransform(id, chain.candidate, chain.context),
       );
       return { pending: decideResult(result), result };
@@ -251,7 +252,9 @@ export function doctorConfigRepairsPendingInputs(
       check: decideStage(async (chain) => {
         const { recoverInstalledPluginConfigIds } =
           await import("./doctor/shared/installed-plugin-id-recovery.js");
-        const recovery = await recoverInstalledPluginConfigIds(chain.candidate, env);
+        const recovery = await inScope(chain, () =>
+          recoverInstalledPluginConfigIds(chain.candidate, env),
+        );
         chain.installedPluginPreserveIds = recovery.preservePluginIds;
         const result = { ...recovery, warnings: recovery.notices };
         return { pending: decideResult(result), result };
@@ -271,7 +274,7 @@ export function doctorConfigRepairsPendingInputs(
     },
     {
       id: "config-repairs.hooks-token-reuse",
-      check: flowTransform("hooks-token-reuse", { reportsWarnings: false, pluginMetadata: false }),
+      check: flowTransform("hooks-token-reuse", { reportsWarnings: false }),
     },
     {
       id: "config-repairs.system-agent-workspace",
@@ -279,10 +282,12 @@ export function doctorConfigRepairsPendingInputs(
         const { repairSystemAgentWorkspacePin, resolveSystemAgentWorkspaceRepairOptions } =
           await import("./doctor/shared/system-agent-workspace-repair.js");
         // Without `applyFiles` the repair only describes the files it would copy.
-        const result = await repairSystemAgentWorkspacePin(chain.candidate, env, {
-          ...resolveSystemAgentWorkspaceRepairOptions(chain.snapshot),
-          applyFiles: false,
-        });
+        const result = await inScope(chain, () =>
+          repairSystemAgentWorkspacePin(chain.candidate, env, {
+            ...resolveSystemAgentWorkspaceRepairOptions(chain.snapshot),
+            applyFiles: false,
+          }),
+        );
         // A pin carries on to later stages; a pending copy leaves the config unchanged.
         return { pending: decideResult(result), result };
       }),
@@ -291,7 +296,7 @@ export function doctorConfigRepairsPendingInputs(
     { id: "config-repairs.channel-repairs", check: channelHook("repairConfig") },
     {
       id: "config-repairs.bundled-plugin-load-paths",
-      check: repairTransform("bundled-plugin-load-paths", { pluginMetadata: false }),
+      check: repairTransform("bundled-plugin-load-paths"),
     },
     // Rewrites managed npm packages and symlinks; neither has a read-only predicate yet.
     { id: "config-repairs.stale-managed-npm-plugins" },
@@ -356,7 +361,7 @@ export function doctorConfigRepairsPendingInputs(
         }
         const { repairStaleAgentModelRefs } =
           await import("./doctor/shared/stale-agent-model-ref-repair.js");
-        const result = repairStaleAgentModelRefs(chain.candidate, { env });
+        const result = inScope(chain, () => repairStaleAgentModelRefs(chain.candidate, { env }));
         return { pending: decideResult(result), result };
       }),
     },
