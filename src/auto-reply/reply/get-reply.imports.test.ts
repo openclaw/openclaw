@@ -38,6 +38,7 @@ describe("get-reply module imports", () => {
       false,
     );
     expect(paths.has(resolve(dirname(getReplyPath), "../../agents/openclaw-tools.ts"))).toBe(false);
+    expect(paths.has(resolve(dirname(getReplyPath), "../../agents/btw.ts"))).toBe(false);
   });
 
   it("keeps skill discovery and dispatch out of the inline-actions static import closure", () => {
