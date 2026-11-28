@@ -1,0 +1,2126 @@
+{
+  "language": "zh-Hant",
+  "tabs": [
+    {
+      "tab": "快速入門",
+      "groups": [
+        {
+          "group": "概覽",
+          "pages": [
+            "zh-TW/index",
+            "zh-TW/start/why-openclaw",
+            "zh-TW/start/why-openclaw/the-trust-boundary",
+            "zh-TW/start/why-openclaw/policy-as-code",
+            "zh-TW/start/why-openclaw/identity-and-roles",
+            "zh-TW/start/why-openclaw/secrets",
+            "zh-TW/start/why-openclaw/versioned-state-guarded-upgrades",
+            "zh-TW/start/why-openclaw/provenance",
+            "zh-TW/start/why-openclaw/openclaw-and-hermes-agent",
+            "zh-TW/concepts/features",
+            "zh-TW/start/hubs",
+            "zh-TW/start/docs-directory"
+          ]
+        },
+        {
+          "group": "初次使用",
+          "pages": [
+            "zh-TW/start/getting-started",
+            "zh-TW/start/onboarding-overview",
+            "zh-TW/start/wizard",
+            "zh-TW/start/onboarding"
+          ]
+        },
+        {
+          "group": "設定指南與參考",
+          "pages": [
+            "zh-TW/start/openclaw",
+            "zh-TW/start/multiplayer",
+            "zh-TW/start/wizard-cli-reference",
+            "zh-TW/start/wizard-cli-automation"
+          ]
+        }
+      ]
+    },
+    {
+      "tab": "安裝",
+      "groups": [
+        {
+          "group": "安裝概覽",
+          "pages": [
+            "zh-TW/install/index",
+            "zh-TW/install/installer"
+          ]
+        },
+        {
+          "group": "執行環境",
+          "pages": [
+            "zh-TW/install/node",
+            "zh-TW/install/node-compatibility",
+            "zh-TW/install/bun",
+            "zh-TW/install/bun-compatibility",
+            "zh-TW/install/standalone",
+            "zh-TW/install/nix"
+          ]
+        },
+        {
+          "group": "維護",
+          "pages": [
+            "zh-TW/install/backups",
+            "zh-TW/install/updating",
+            {
+              "group": "更新",
+              "pages": [
+                "zh-TW/install/updating/update-methods",
+                "zh-TW/install/updating/automatic-updates",
+                "zh-TW/install/updating/rollback-and-recovery"
+              ]
+            },
+            "zh-TW/install/update-troubleshooting",
+            {
+              "group": "移轉",
+              "pages": [
+                "zh-TW/install/migrating",
+                "zh-TW/install/migrating-claude",
+                "zh-TW/install/migrating-hermes",
+                "zh-TW/prose"
+              ]
+            },
+            "zh-TW/install/uninstall",
+            "zh-TW/install/development-channels"
+          ]
+        },
+        {
+          "group": "容器",
+          "pages": [
+            "zh-TW/install/docker",
+            {
+              "group": "Docker",
+              "pages": [
+                "zh-TW/install/docker/environment-variables",
+                "zh-TW/install/docker/networking-and-storage",
+                "zh-TW/install/docker/compose-operations",
+                "zh-TW/install/docker/sandbox-and-troubleshooting"
+              ]
+            },
+            "zh-TW/install/podman"
+          ]
+        },
+        {
+          "group": "託管",
+          "pages": [
+            "zh-TW/vps",
+            {
+              "group": "應用程式平台",
+              "pages": [
+                "zh-TW/install/boat",
+                "zh-TW/install/cloudflare",
+                "zh-TW/install/daytona",
+                "zh-TW/install/exe-dev",
+                "zh-TW/install/fly",
+                "zh-TW/install/northflank",
+                "zh-TW/install/railway",
+                "zh-TW/install/render",
+                "zh-TW/install/upstash"
+              ]
+            },
+            {
+              "group": "雲端伺服器",
+              "pages": [
+                "zh-TW/install/azure",
+                "zh-TW/install/digitalocean",
+                "zh-TW/install/gcp",
+                "zh-TW/install/hetzner",
+                "zh-TW/install/hostinger",
+                "zh-TW/install/oracle"
+              ]
+            },
+            {
+              "group": "自架與本機部署",
+              "pages": [
+                "zh-TW/install/ansible",
+                "zh-TW/install/docker-vm-runtime",
+                "zh-TW/install/jetson",
+                "zh-TW/install/kubernetes",
+                "zh-TW/install/macos-vm",
+                "zh-TW/install/raspberry-pi"
+              ]
+            }
+          ]
+        },
+        {
+          "group": "進階設定",
+          "pages": [
+            "zh-TW/start/setup"
+          ]
+        }
+      ]
+    },
+    {
+      "tab": "訊息管道",
+      "groups": [
+        {
+          "group": "概覽",
+          "pages": [
+            "zh-TW/channels/index"
+          ]
+        },
+        {
+          "group": "主流通訊平台",
+          "pages": [
+            {
+              "group": "Discord",
+              "pages": [
+                "zh-TW/channels/discord",
+                "zh-TW/channels/discord/setup",
+                "zh-TW/channels/discord/access-control",
+                "zh-TW/channels/discord/messaging",
+                "zh-TW/channels/discord/threads-and-sessions",
+                "zh-TW/channels/discord/rich-messages",
+                "zh-TW/channels/discord/events",
+                "zh-TW/channels/discord/voice-channels",
+                "zh-TW/channels/discord/voice-transcripts",
+                "zh-TW/channels/discord/voice-follow",
+                "zh-TW/channels/discord/troubleshooting",
+                "zh-TW/channels/discord-activities"
+              ]
+            },
+            "zh-TW/channels/googlechat",
+            {
+              "group": "iMessage",
+              "pages": [
+                "zh-TW/channels/imessage",
+                "zh-TW/channels/imessage/setup",
+                "zh-TW/channels/imessage/private-api",
+                "zh-TW/channels/imessage/access-control",
+                "zh-TW/channels/imessage/deployment",
+                "zh-TW/channels/imessage/media",
+                "zh-TW/channels/imessage/rich-messages",
+                "zh-TW/channels/imessage/messaging",
+                "zh-TW/channels/imessage/troubleshooting",
+                "zh-TW/channels/imessage-from-bluebubbles",
+                "zh-TW/announcements/bluebubbles-imessage"
+              ]
+            },
+            {
+              "group": "Matrix",
+              "pages": [
+                "zh-TW/channels/matrix",
+                "zh-TW/channels/matrix/setup",
+                "zh-TW/channels/matrix/access-control",
+                "zh-TW/channels/matrix/messaging",
+                "zh-TW/channels/matrix/rich-messages",
+                "zh-TW/channels/matrix/encryption",
+                "zh-TW/channels/matrix/threads-and-sessions",
+                "zh-TW/channels/matrix/accounts-and-homeservers",
+                "zh-TW/channels/matrix-migration",
+                "zh-TW/channels/matrix-presentation",
+                "zh-TW/channels/matrix-push-rules"
+              ]
+            },
+            {
+              "group": "Microsoft Teams",
+              "pages": [
+                "zh-TW/channels/msteams",
+                "zh-TW/channels/msteams/setup",
+                "zh-TW/channels/msteams/access-control",
+                "zh-TW/channels/msteams/authentication",
+                "zh-TW/channels/msteams/manifest-and-permissions",
+                "zh-TW/channels/msteams/configuration",
+                "zh-TW/channels/msteams/messaging",
+                "zh-TW/channels/msteams/cards-and-actions",
+                "zh-TW/channels/msteams/troubleshooting"
+              ]
+            },
+            "zh-TW/channels/signal",
+            {
+              "group": "Slack",
+              "pages": [
+                "zh-TW/channels/slack",
+                "zh-TW/channels/slack/setup",
+                "zh-TW/channels/slack/transports",
+                "zh-TW/channels/slack/enterprise-grid",
+                "zh-TW/channels/slack/manifest-and-scopes",
+                "zh-TW/channels/slack/access-control",
+                "zh-TW/channels/slack/threads-and-sessions",
+                "zh-TW/channels/slack/messaging",
+                "zh-TW/channels/slack/media",
+                "zh-TW/channels/slack/rich-messages",
+                "zh-TW/channels/slack/events",
+                "zh-TW/channels/slack/troubleshooting"
+              ]
+            },
+            "zh-TW/channels/sms",
+            {
+              "group": "Telegram",
+              "pages": [
+                "zh-TW/channels/telegram",
+                "zh-TW/channels/telegram/setup",
+                "zh-TW/channels/telegram/access-control",
+                "zh-TW/channels/telegram/messaging",
+                "zh-TW/channels/telegram/threads-and-sessions",
+                "zh-TW/channels/telegram/rich-messages",
+                "zh-TW/channels/telegram/media",
+                "zh-TW/channels/telegram/events",
+                "zh-TW/channels/telegram/transports",
+                "zh-TW/channels/telegram/mini-app",
+                "zh-TW/channels/telegram/troubleshooting"
+              ]
+            },
+            "zh-TW/channels/whatsapp",
+            "zh-TW/channels/x"
+          ]
+        },
+        {
+          "group": "開發者與自架平台",
+          "pages": [
+            "zh-TW/channels/a2a",
+            "zh-TW/channels/buzz",
+            "zh-TW/channels/clickclack",
+            "zh-TW/channels/irc",
+            "zh-TW/channels/mattermost",
+            "zh-TW/channels/nextcloud-talk",
+            "zh-TW/channels/nostr",
+            "zh-TW/channels/raft",
+            "zh-TW/channels/reef",
+            "zh-TW/channels/synology-chat",
+            "zh-TW/channels/tlon",
+            "zh-TW/channels/twitch"
+          ]
+        },
+        {
+          "group": "區域性平台",
+          "pages": [
+            {
+              "group": "飛書",
+              "pages": [
+                "zh-TW/channels/feishu",
+                "zh-TW/channels/feishu/setup",
+                "zh-TW/channels/feishu/access-control",
+                "zh-TW/channels/feishu/advanced-configuration",
+                "zh-TW/channels/feishu/dynamic-agents",
+                "zh-TW/channels/feishu/messaging",
+                "zh-TW/channels/feishu/configuration-reference",
+                "zh-TW/channels/feishu/troubleshooting"
+              ]
+            },
+            "zh-TW/channels/line",
+            "zh-TW/channels/qqbot",
+            "zh-TW/channels/wechat",
+            "zh-TW/channels/wecom",
+            "zh-TW/channels/yuanbao",
+            "zh-TW/channels/zalo",
+            "zh-TW/channels/zaloclawbot",
+            "zh-TW/channels/zalouser"
+          ]
+        },
+        {
+          "group": "組態設定",
+          "pages": [
+            "zh-TW/channels/pairing",
+            "zh-TW/channels/access-groups",
+            "zh-TW/channels/bot-loop-protection",
+            "zh-TW/channels/groups",
+            "zh-TW/channels/group-messages",
+            "zh-TW/channels/ambient-room-events",
+            "zh-TW/channels/broadcast-groups",
+            "zh-TW/channels/channel-routing",
+            "zh-TW/channels/location",
+            "zh-TW/channels/troubleshooting"
+          ]
+        }
+      ]
+    },
+    {
+      "tab": "代理程式",
+      "groups": [
+        {
+          "group": "代理程式執行環境",
+          "pages": [
+            "zh-TW/concepts/agents-and-templates",
+            "zh-TW/concepts/architecture",
+            "zh-TW/concepts/agent",
+            "zh-TW/concepts/agent-loop",
+            "zh-TW/concepts/agent-runtimes",
+            "zh-TW/concepts/system-prompt",
+            "zh-TW/concepts/context",
+            "zh-TW/concepts/context-engine",
+            "zh-TW/concepts/soul"
+          ]
+        },
+        {
+          "group": "代理程式工作區",
+          "pages": [
+            "zh-TW/concepts/agent-workspace",
+            "zh-TW/concepts/managed-worktrees",
+            "zh-TW/concepts/storage-locations",
+            "zh-TW/concepts/oauth",
+            "zh-TW/start/bootstrapping",
+            "zh-TW/concepts/experimental-features"
+          ]
+        },
+        {
+          "group": "工作階段與記憶",
+          "pages": [
+            "zh-TW/concepts/main-session",
+            "zh-TW/concepts/multi-user",
+            "zh-TW/concepts/session",
+            "zh-TW/concepts/session-controller",
+            "zh-TW/concepts/session-attachment",
+            "zh-TW/concepts/session-search",
+            "zh-TW/concepts/session-pruning",
+            "zh-TW/concepts/session-state",
+            "zh-TW/concepts/session-tool",
+            {
+              "group": "記憶",
+              "pages": [
+                "zh-TW/concepts/memory",
+                "zh-TW/concepts/memory-architecture",
+                "zh-TW/concepts/memory-provenance",
+                "zh-TW/concepts/user-model",
+                "zh-TW/concepts/standing-intents",
+                "zh-TW/concepts/memory-builtin",
+                "zh-TW/concepts/memory-honcho",
+                "zh-TW/concepts/memory-search",
+                "zh-TW/concepts/active-memory",
+                {
+                  "group": "主動記憶",
+                  "pages": [
+                    "zh-TW/concepts/active-memory/enabling",
+                    "zh-TW/concepts/active-memory/how-it-works",
+                    "zh-TW/concepts/active-memory/session-controls",
+                    "zh-TW/concepts/active-memory/tuning",
+                    "zh-TW/concepts/active-memory/memory-tools",
+                    "zh-TW/concepts/active-memory/advanced-options",
+                    "zh-TW/concepts/active-memory/configuration",
+                    "zh-TW/concepts/active-memory/recommended-setup",
+                    "zh-TW/concepts/active-memory/troubleshooting"
+                  ]
+                },
+                "zh-TW/concepts/dreaming"
+              ]
+            },
+            "zh-TW/concepts/compaction"
+          ]
+        },
+        {
+          "group": "多代理程式",
+          "pages": [
+            "zh-TW/concepts/multi-agent",
+            "zh-TW/concepts/agent-bindings",
+            "zh-TW/concepts/parallel-specialist-lanes",
+            "zh-TW/concepts/presence",
+            "zh-TW/concepts/delegate-architecture"
+          ]
+        },
+        {
+          "group": "訊息與傳遞",
+          "pages": [
+            "zh-TW/concepts/messages",
+            "zh-TW/concepts/streaming",
+            "zh-TW/concepts/typing-indicators",
+            "zh-TW/concepts/progress-drafts",
+            "zh-TW/concepts/retry",
+            "zh-TW/concepts/queue",
+            "zh-TW/concepts/queue-steering"
+          ]
+        }
+      ]
+    },
+    {
+      "tab": "功能",
+      "groups": [
+        {
+          "group": "概覽",
+          "pages": [
+            "zh-TW/tools/index"
+          ]
+        },
+        {
+          "group": "外掛",
+          "pages": [
+            "zh-TW/tools/plugin",
+            "zh-TW/plugins/manage-plugins",
+            "zh-TW/plugins/community",
+            "zh-TW/plugins/bundles"
+          ]
+        },
+        {
+          "group": "外掛指南",
+          "pages": [
+            "zh-TW/plugins/agent-guidance",
+            "zh-TW/plugins/agentsapi",
+            {
+              "group": "Codex",
+              "pages": [
+                "zh-TW/plugins/codex-computer-use",
+                "zh-TW/plugins/codex-harness",
+                {
+                  "group": "Codex 控制框架",
+                  "pages": [
+                    "zh-TW/plugins/codex-harness/placement",
+                    "zh-TW/plugins/codex-harness/routing",
+                    "zh-TW/plugins/codex-harness/configuration",
+                    "zh-TW/plugins/codex-harness/app-server",
+                    "zh-TW/plugins/codex-harness/config-fields",
+                    "zh-TW/plugins/codex-harness/commands",
+                    "zh-TW/plugins/codex-harness/runtime-behavior",
+                    "zh-TW/plugins/codex-harness/native-features",
+                    "zh-TW/plugins/codex-harness/troubleshooting"
+                  ]
+                },
+                "zh-TW/plugins/codex-native-plugins",
+                "zh-TW/plugins/codex-supervision",
+                "zh-TW/specs/codex-supervision"
+              ]
+            },
+            "zh-TW/plugins/copilot",
+            "zh-TW/plugins/muse",
+            {
+              "group": "會議與通話",
+              "pages": [
+                "zh-TW/plugins/meeting-plugins",
+                "zh-TW/plugins/facetime",
+                "zh-TW/plugins/facetime-recovery",
+                "zh-TW/plugins/google-meet",
+                {
+                  "group": "Google Meet",
+                  "pages": [
+                    "zh-TW/plugins/google-meet/transports",
+                    "zh-TW/plugins/google-meet/oauth-and-artifacts",
+                    "zh-TW/plugins/google-meet/config",
+                    "zh-TW/plugins/google-meet/tool-and-modes",
+                    "zh-TW/plugins/google-meet/troubleshooting"
+                  ]
+                },
+                "zh-TW/plugins/teams-meetings",
+                "zh-TW/plugins/slack-huddles",
+                "zh-TW/plugins/voice-call",
+                {
+                  "group": "語音通話",
+                  "pages": [
+                    "zh-TW/plugins/voice-call/configuration",
+                    "zh-TW/plugins/voice-call/realtime-and-streaming",
+                    "zh-TW/plugins/voice-call/tts-and-inbound-calls",
+                    "zh-TW/plugins/voice-call/security-and-interfaces",
+                    "zh-TW/plugins/voice-call/troubleshooting"
+                  ]
+                },
+                "zh-TW/plugins/zoom-meetings"
+              ]
+            },
+            {
+              "group": "模型與記憶",
+              "pages": [
+                "zh-TW/plugins/apple-fm",
+                "zh-TW/plugins/gbrain",
+                "zh-TW/plugins/knowledge",
+                {
+                  "group": "知識",
+                  "pages": [
+                    "zh-TW/plugins/knowledge/stores-and-access",
+                    "zh-TW/plugins/knowledge/memory-provider",
+                    "zh-TW/plugins/knowledge/tools",
+                    "zh-TW/plugins/knowledge/records-and-ontology",
+                    "zh-TW/plugins/knowledge/retrieval",
+                    "zh-TW/plugins/knowledge/evidence",
+                    "zh-TW/plugins/knowledge/ingestion",
+                    "zh-TW/plugins/knowledge/corrections",
+                    "zh-TW/plugins/knowledge/local-history",
+                    "zh-TW/plugins/knowledge/maintenance",
+                    "zh-TW/plugins/knowledge/scribes",
+                    "zh-TW/plugins/knowledge/control-ui"
+                  ]
+                },
+                "zh-TW/plugins/llama-cpp",
+                "zh-TW/plugins/memory-lancedb",
+                "zh-TW/plugins/memory-wiki",
+                "zh-TW/plugins/onnx",
+                "zh-TW/plugins/subq",
+                "zh-TW/plugins/typesafe"
+              ]
+            },
+            {
+              "group": "機密資訊與保管庫",
+              "pages": [
+                "zh-TW/plugins/onepassword",
+                "zh-TW/plugins/vault"
+              ]
+            },
+            {
+              "group": "自動化與整合",
+              "pages": [
+                "zh-TW/plugins/admin-http-rpc",
+                "zh-TW/plugins/beam",
+                "zh-TW/plugins/cloudflare",
+                "zh-TW/plugins/geolocation",
+                "zh-TW/plugins/logbook",
+                "zh-TW/plugins/mcp-relay",
+                "zh-TW/plugins/oc-path",
+                "zh-TW/plugins/session-share",
+                "zh-TW/plugins/workboard",
+                "zh-TW/plugins/zalouser"
+              ]
+            }
+          ]
+        },
+        {
+          "group": "開發外掛",
+          "pages": [
+            "zh-TW/plugins/building-plugins",
+            "zh-TW/plugins/runtime-compatibility",
+            "zh-TW/plugins/feature-plugins",
+            "zh-TW/plugins/tool-plugins",
+            "zh-TW/plugins/sdk-channel-plugins",
+            {
+              "group": "訊息管道外掛",
+              "pages": [
+                "zh-TW/plugins/sdk-channel-plugins/message-adapter",
+                "zh-TW/plugins/sdk-channel-plugins/durable-ingress",
+                "zh-TW/plugins/sdk-channel-plugins/status-and-media",
+                "zh-TW/plugins/sdk-channel-plugins/sessions-and-bindings",
+                "zh-TW/plugins/sdk-channel-plugins/approvals",
+                "zh-TW/plugins/sdk-channel-plugins/setup-and-config",
+                "zh-TW/plugins/sdk-channel-plugins/mention-policy"
+              ]
+            },
+            "zh-TW/plugins/sdk-provider-plugins",
+            {
+              "group": "供應商外掛",
+              "pages": [
+                "zh-TW/plugins/sdk-provider-plugins/model-catalogs",
+                "zh-TW/plugins/sdk-provider-plugins/hook-families",
+                "zh-TW/plugins/sdk-provider-plugins/runtime-hooks",
+                "zh-TW/plugins/sdk-provider-plugins/voice-and-audio",
+                "zh-TW/plugins/sdk-provider-plugins/media-and-search"
+              ]
+            },
+            "zh-TW/plugins/cli-backend-plugins",
+            "zh-TW/plugins/hooks",
+            {
+              "group": "外掛掛鉤",
+              "pages": [
+                "zh-TW/plugins/hooks/reference",
+                "zh-TW/plugins/hooks/tool-policy",
+                "zh-TW/plugins/hooks/prompt-and-session",
+                "zh-TW/plugins/hooks/messages",
+                "zh-TW/plugins/hooks/lifecycle"
+              ]
+            },
+            "zh-TW/plugins/plugin-permission-requests",
+            "zh-TW/plugins/adding-capabilities"
+          ]
+        },
+        {
+          "group": "技能",
+          "pages": [
+            "zh-TW/tools/skills",
+            "zh-TW/tools/custodian-skills",
+            "zh-TW/tools/skill-workshop",
+            "zh-TW/tools/skill-workshop/personal-library",
+            "zh-TW/tools/self-learning",
+            "zh-TW/tools/creating-skills",
+            "zh-TW/tools/skills-config",
+            "zh-TW/tools/slash-commands"
+          ]
+        },
+        {
+          "group": "自動化",
+          "pages": [
+            "zh-TW/automation/index",
+            "zh-TW/gateway/heartbeat",
+            "zh-TW/automation/cron-jobs",
+            {
+              "group": "自動化工作",
+              "pages": [
+                "zh-TW/automation/cron-jobs/how-it-works",
+                "zh-TW/automation/cron-jobs/schedules",
+                "zh-TW/automation/cron-jobs/payloads",
+                "zh-TW/automation/cron-jobs/delivery",
+                "zh-TW/automation/cron-jobs/managing-jobs",
+                "zh-TW/automation/cron-jobs/webhooks",
+                "zh-TW/automation/cron-jobs/gmail",
+                "zh-TW/automation/cron-jobs/troubleshooting"
+              ]
+            },
+            "zh-TW/automation/imap",
+            "zh-TW/automation/mcp-events",
+            "zh-TW/automation/standing-orders",
+            "zh-TW/automation/hooks",
+            {
+              "group": "掛鉤",
+              "pages": [
+                "zh-TW/automation/hooks/writing-hooks",
+                "zh-TW/automation/hooks/configuration",
+                "zh-TW/automation/hooks/bundled-hooks",
+                "zh-TW/automation/hooks/event-types",
+                "zh-TW/automation/hooks/troubleshooting"
+              ]
+            }
+          ]
+        },
+        {
+          "group": "工具",
+          "pages": [
+            {
+              "group": "執行程式碼與核准",
+              "pages": [
+                "zh-TW/tools/apply-patch",
+                "zh-TW/tools/code-execution",
+                "zh-TW/tools/diffs",
+                "zh-TW/tools/elevated",
+                "zh-TW/tools/exec",
+                "zh-TW/tools/exec-approvals",
+                "zh-TW/tools/exec-approvals-advanced",
+                "zh-TW/tools/permission-modes",
+                "zh-TW/tools/secrets"
+              ]
+            },
+            {
+              "group": "媒體與文件",
+              "pages": [
+                "zh-TW/tools/media-overview",
+                "zh-TW/tools/image-generation",
+                "zh-TW/tools/music-generation",
+                "zh-TW/tools/pdf",
+                "zh-TW/tools/tts",
+                {
+                  "group": "文字轉語音",
+                  "pages": [
+                    "zh-TW/tools/tts/quickstart",
+                    "zh-TW/tools/tts/configuration",
+                    "zh-TW/tools/tts/personas",
+                    "zh-TW/tools/tts/commands",
+                    "zh-TW/tools/tts/output",
+                    "zh-TW/tools/tts/field-reference",
+                    "zh-TW/tools/tts/api"
+                  ]
+                },
+                "zh-TW/tools/video-generation"
+              ]
+            },
+            {
+              "group": "工具目錄與工作流程",
+              "pages": [
+                "zh-TW/tools/code-mode",
+                {
+                  "group": "程式碼模式",
+                  "pages": [
+                    "zh-TW/tools/code-mode/quickstart",
+                    "zh-TW/tools/code-mode/executors",
+                    "zh-TW/tools/code-mode/configuration",
+                    "zh-TW/tools/code-mode/tool-surface",
+                    "zh-TW/tools/code-mode/guest-api",
+                    "zh-TW/tools/code-mode/output",
+                    "zh-TW/tools/code-mode/internals",
+                    "zh-TW/tools/code-mode/troubleshooting",
+                    "zh-TW/tools/code-mode/maintainers"
+                  ]
+                },
+                "zh-TW/tools/autoreview",
+                "zh-TW/tools/llm-task",
+                "zh-TW/tools/lobster",
+                "zh-TW/tools/mcp",
+                "zh-TW/tools/tool-search"
+              ]
+            },
+            {
+              "group": "上下文與推理",
+              "pages": [
+                "zh-TW/tools/loop-detection",
+                "zh-TW/tools/thinking",
+                "zh-TW/tools/tokenjuice",
+                "zh-TW/tools/trajectory"
+              ]
+            },
+            {
+              "group": "聊天與介面工具",
+              "pages": [
+                "zh-TW/tools/ask-user",
+                "zh-TW/tools/btw",
+                "zh-TW/tools/progress-card",
+                "zh-TW/tools/reactions",
+                "zh-TW/tools/screen",
+                "zh-TW/tools/show-widget",
+                "zh-TW/tools/theme"
+              ]
+            },
+            {
+              "group": "瀏覽與擷取網頁",
+              "pages": [
+                "zh-TW/tools/browser",
+                {
+                  "group": "瀏覽器",
+                  "pages": [
+                    "zh-TW/tools/browser/setup",
+                    "zh-TW/tools/browser/profiles",
+                    "zh-TW/tools/browser/existing-session",
+                    "zh-TW/tools/browser/configuration",
+                    "zh-TW/tools/browser/remote",
+                    "zh-TW/tools/browser/lightweight",
+                    "zh-TW/tools/browser/security",
+                    "zh-TW/tools/browser/isolation",
+                    "zh-TW/tools/browser/agent-tools",
+                    "zh-TW/tools/browser/troubleshooting"
+                  ]
+                },
+                "zh-TW/tools/browser-control",
+                "zh-TW/tools/browser-linux-troubleshooting",
+                "zh-TW/tools/browser-login",
+                "zh-TW/tools/browser-wsl2-windows-remote-cdp-troubleshooting",
+                "zh-TW/tools/chrome-extension",
+                "zh-TW/tools/firecrawl",
+                "zh-TW/tools/web-fetch"
+              ]
+            },
+            {
+              "group": "網路搜尋",
+              "pages": [
+                "zh-TW/tools/web",
+                "zh-TW/tools/deep-research",
+                "zh-TW/tools/brave-search",
+                "zh-TW/tools/duckduckgo-search",
+                "zh-TW/tools/exa-search",
+                "zh-TW/tools/gemini-search",
+                "zh-TW/tools/grok-search",
+                "zh-TW/tools/kimi-search",
+                "zh-TW/tools/minimax-search",
+                "zh-TW/tools/ollama-search",
+                "zh-TW/tools/parallel-search",
+                "zh-TW/tools/perplexity-search",
+                "zh-TW/tools/searxng-search",
+                "zh-TW/tools/tavily"
+              ]
+            }
+          ]
+        },
+        {
+          "group": "代理程式協作",
+          "pages": [
+            "zh-TW/tools/agent-send",
+            "zh-TW/tools/goal",
+            "zh-TW/tools/steer",
+            "zh-TW/tools/subagents",
+            {
+              "group": "子代理程式",
+              "pages": [
+                "zh-TW/tools/subagents/slash-command",
+                "zh-TW/tools/subagents/tool-reference",
+                "zh-TW/tools/subagents/thread-bound-sessions",
+                "zh-TW/tools/subagents/nesting",
+                "zh-TW/tools/subagents/announce",
+                "zh-TW/tools/subagents/tool-policy",
+                "zh-TW/tools/subagents/operations"
+              ]
+            },
+            "zh-TW/tools/swarm",
+            "zh-TW/tools/acp-agents",
+            {
+              "group": "ACP 代理程式",
+              "pages": [
+                "zh-TW/tools/acp-agents/quickstart",
+                "zh-TW/tools/acp-agents/runbook",
+                "zh-TW/tools/acp-agents/bindings",
+                "zh-TW/tools/acp-agents/sessions",
+                "zh-TW/tools/acp-agents/delivery",
+                "zh-TW/tools/acp-agents/controls",
+                "zh-TW/tools/acp-agents/troubleshooting"
+              ]
+            },
+            "zh-TW/tools/acp-agents-setup",
+            "zh-TW/tools/multi-agent-sandbox-tools"
+          ]
+        }
+      ]
+    },
+    {
+      "tab": "模型",
+      "groups": [
+        {
+          "group": "概覽",
+          "pages": [
+            "zh-TW/providers/index",
+            "zh-TW/providers/models"
+          ]
+        },
+        {
+          "group": "概念與組態設定",
+          "pages": [
+            "zh-TW/concepts/models",
+            "zh-TW/concepts/recommended-models",
+            "zh-TW/concepts/decision-models",
+            "zh-TW/concepts/model-providers",
+            {
+              "group": "模型供應商",
+              "pages": [
+                "zh-TW/concepts/model-providers/quick-rules",
+                "zh-TW/concepts/model-providers/control-ui-and-keys",
+                "zh-TW/concepts/model-providers/official-provider-plugins",
+                "zh-TW/concepts/model-providers/custom-providers"
+              ]
+            },
+            "zh-TW/concepts/model-failover"
+          ]
+        },
+        {
+          "group": "供應商",
+          "pages": [
+            {
+              "group": "聊天與程式設計模型",
+              "pages": [
+                "zh-TW/providers/abliteration",
+                "zh-TW/providers/alibaba",
+                "zh-TW/providers/anthropic",
+                "zh-TW/plugins/reference/anthropic-vertex",
+                "zh-TW/providers/arcee",
+                "zh-TW/providers/baseten",
+                "zh-TW/providers/bedrock",
+                "zh-TW/providers/bedrock-mantle",
+                "zh-TW/providers/cerebras",
+                "zh-TW/providers/chutes",
+                "zh-TW/providers/cohere",
+                "zh-TW/providers/deepinfra",
+                "zh-TW/providers/deepseek",
+                "zh-TW/providers/featherless",
+                "zh-TW/providers/fireworks",
+                "zh-TW/providers/github-copilot",
+                "zh-TW/providers/gmi",
+                "zh-TW/providers/google",
+                "zh-TW/providers/google-vertex",
+                "zh-TW/providers/groq",
+                "zh-TW/providers/huggingface",
+                "zh-TW/providers/levanto",
+                "zh-TW/providers/longcat",
+                "zh-TW/providers/meta",
+                "zh-TW/providers/minimax",
+                "zh-TW/providers/mistral",
+                "zh-TW/providers/moonshot",
+                "zh-TW/providers/novita",
+                "zh-TW/providers/nvidia",
+                "zh-TW/providers/ollama-cloud",
+                "zh-TW/providers/openai",
+                {
+                  "group": "OpenAI",
+                  "pages": [
+                    "zh-TW/providers/openai/setup",
+                    "zh-TW/providers/openai/authentication",
+                    "zh-TW/providers/openai/models",
+                    "zh-TW/providers/openai/runtimes",
+                    "zh-TW/providers/openai/coverage-and-cost",
+                    "zh-TW/providers/openai/image-and-video",
+                    "zh-TW/providers/openai/voice-and-speech",
+                    "zh-TW/providers/openai/azure",
+                    "zh-TW/providers/openai/advanced"
+                  ]
+                },
+                "zh-TW/providers/opencode",
+                "zh-TW/providers/opencode-go",
+                "zh-TW/providers/particle",
+                "zh-TW/providers/perplexity-provider",
+                "zh-TW/providers/poolside",
+                "zh-TW/providers/qianfan",
+                "zh-TW/providers/qwen",
+                "zh-TW/providers/radius",
+                "zh-TW/providers/stepfun",
+                "zh-TW/providers/synthetic",
+                "zh-TW/providers/telnyx",
+                "zh-TW/providers/tencent",
+                "zh-TW/providers/together",
+                "zh-TW/providers/venice",
+                "zh-TW/providers/volcengine",
+                "zh-TW/providers/xai",
+                "zh-TW/providers/xiaomi",
+                "zh-TW/providers/zai"
+              ]
+            },
+            {
+              "group": "決策模型",
+              "pages": [
+                "zh-TW/providers/celeris",
+                "zh-TW/providers/fastino",
+                "zh-TW/providers/liquid-ai",
+                "zh-TW/providers/nace",
+                "zh-TW/providers/rerank"
+              ]
+            },
+            {
+              "group": "語音與音訊",
+              "pages": [
+                "zh-TW/providers/azure-speech",
+                "zh-TW/providers/deepgram",
+                "zh-TW/providers/elevenlabs",
+                "zh-TW/providers/fish-audio",
+                "zh-TW/providers/gradium",
+                "zh-TW/providers/inworld",
+                "zh-TW/providers/senseaudio"
+              ]
+            },
+            {
+              "group": "影像、影片與音樂",
+              "pages": [
+                "zh-TW/providers/comfy",
+                "zh-TW/providers/fal",
+                "zh-TW/providers/kie",
+                "zh-TW/providers/pixverse",
+                "zh-TW/providers/runway",
+                "zh-TW/providers/vydra"
+              ]
+            },
+            {
+              "group": "閘道與路由器",
+              "pages": [
+                "zh-TW/providers/bifrost",
+                "zh-TW/providers/claude-max-api-proxy",
+                "zh-TW/providers/clawrouter",
+                "zh-TW/providers/cloudflare-ai-gateway",
+                "zh-TW/providers/kilocode",
+                "zh-TW/providers/liquid-inference",
+                "zh-TW/providers/litellm",
+                "zh-TW/providers/neon",
+                "zh-TW/providers/openrouter",
+                "zh-TW/providers/requesty",
+                "zh-TW/providers/vercel-ai-gateway"
+              ]
+            },
+            {
+              "group": "本機執行環境",
+              "pages": [
+                "zh-TW/providers/ds4",
+                "zh-TW/providers/llmman",
+                "zh-TW/providers/lmstudio",
+                "zh-TW/providers/ollama",
+                {
+                  "group": "Ollama",
+                  "pages": [
+                    "zh-TW/providers/ollama/setup",
+                    "zh-TW/providers/ollama/model-discovery",
+                    "zh-TW/providers/ollama/node-local-inference",
+                    "zh-TW/providers/ollama/vision",
+                    "zh-TW/providers/ollama/configuration",
+                    "zh-TW/providers/ollama/recipes",
+                    "zh-TW/providers/ollama/web-search",
+                    "zh-TW/providers/ollama/advanced",
+                    "zh-TW/providers/ollama/troubleshooting"
+                  ]
+                },
+                "zh-TW/providers/omlx",
+                "zh-TW/providers/sglang",
+                "zh-TW/providers/vllm"
+              ]
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "tab": "平台",
+      "groups": [
+        {
+          "group": "平台概覽",
+          "pages": [
+            "zh-TW/platforms/index",
+            "zh-TW/platforms/macos",
+            "zh-TW/platforms/linux",
+            "zh-TW/platforms/omarchy",
+            "zh-TW/platforms/windows",
+            "zh-TW/platforms/android",
+            "zh-TW/platforms/chromeos",
+            "zh-TW/platforms/ios",
+            "zh-TW/platforms/ios-healthkit",
+            "zh-TW/platforms/easyrunner"
+          ]
+        },
+        {
+          "group": "macOS 配套應用程式",
+          "pages": [
+            {
+              "group": "設定",
+              "pages": [
+                "zh-TW/platforms/mac/dev-setup",
+                "zh-TW/platforms/mac/menu-bar",
+                "zh-TW/platforms/mac/icon",
+                "zh-TW/platforms/mac/permissions",
+                "zh-TW/platforms/mac/signing",
+                "zh-TW/platforms/mac/remote",
+                "zh-TW/reference/device-models"
+              ]
+            },
+            {
+              "group": "執行環境",
+              "pages": [
+                "zh-TW/platforms/mac/bundled-gateway",
+                "zh-TW/platforms/mac/health",
+                "zh-TW/platforms/mac/logging",
+                "zh-TW/platforms/mac/xpc"
+              ]
+            },
+            {
+              "group": "功能",
+              "pages": [
+                "zh-TW/platforms/mac/voicewake",
+                "zh-TW/platforms/mac/voice-overlay",
+                "zh-TW/platforms/mac/webchat",
+                "zh-TW/platforms/mac/canvas",
+                "zh-TW/platforms/mac/skills",
+                "zh-TW/platforms/mac/peekaboo"
+              ]
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "tab": "閘道與維運",
+      "groups": [
+        {
+          "group": "閘道",
+          "pages": [
+            "zh-TW/gateway/index",
+            {
+              "group": "組態設定",
+              "pages": [
+                "zh-TW/gateway/configuration",
+                {
+                  "group": "組態設定",
+                  "pages": [
+                    "zh-TW/gateway/configuration/common-tasks",
+                    "zh-TW/gateway/configuration/hot-reload",
+                    "zh-TW/gateway/configuration/config-rpc",
+                    "zh-TW/gateway/configuration/environment-variables"
+                  ]
+                },
+                "zh-TW/gateway/configuration-reference",
+                "zh-TW/gateway/config-agents",
+                {
+                  "group": "代理程式",
+                  "pages": [
+                    "zh-TW/gateway/config-agents/workspace-and-bootstrap",
+                    "zh-TW/gateway/config-agents/models",
+                    "zh-TW/gateway/config-agents/runtime-and-cli-backends",
+                    "zh-TW/gateway/config-agents/heartbeat-compaction-and-streaming",
+                    "zh-TW/gateway/config-agents/sandbox",
+                    "zh-TW/gateway/config-agents/entries-and-multi-agent",
+                    "zh-TW/gateway/config-agents/sessions",
+                    "zh-TW/gateway/config-agents/messages-and-talk"
+                  ]
+                },
+                "zh-TW/gateway/config-automation",
+                "zh-TW/gateway/config-browser-ui-desktop",
+                "zh-TW/gateway/config-channels",
+                {
+                  "group": "訊息管道",
+                  "pages": [
+                    "zh-TW/gateway/config-channels/shared-policies",
+                    "zh-TW/gateway/config-channels/personal-messaging",
+                    "zh-TW/gateway/config-channels/workplace-chat",
+                    "zh-TW/gateway/config-channels/community-chat",
+                    "zh-TW/gateway/config-channels/mention-gating-and-history",
+                    "zh-TW/gateway/config-channels/commands"
+                  ]
+                },
+                "zh-TW/gateway/config-cloud-workers",
+                "zh-TW/gateway/config-extensions",
+                "zh-TW/gateway/config-gateway",
+                "zh-TW/gateway/config-hooks",
+                "zh-TW/gateway/config-observability",
+                "zh-TW/gateway/config-runtime",
+                "zh-TW/gateway/config-secrets-env",
+                "zh-TW/gateway/config-tools",
+                {
+                  "group": "工具",
+                  "pages": [
+                    "zh-TW/gateway/config-tools/tool-policy",
+                    "zh-TW/gateway/config-tools/github-identity",
+                    "zh-TW/gateway/config-tools/built-in-tools",
+                    "zh-TW/gateway/config-tools/sessions-and-subagents",
+                    "zh-TW/gateway/config-tools/custom-providers",
+                    "zh-TW/gateway/config-tools/provider-examples"
+                  ]
+                },
+                "zh-TW/gateway/configuration-examples"
+              ]
+            },
+            {
+              "group": "驗證與機密資訊",
+              "pages": [
+                "zh-TW/gateway/authentication",
+                "zh-TW/auth-credential-semantics",
+                "zh-TW/gateway/secrets",
+                {
+                  "group": "機密資訊管理",
+                  "pages": [
+                    "zh-TW/gateway/secrets/runtime-model",
+                    "zh-TW/gateway/secrets/secretref-contract",
+                    "zh-TW/gateway/secrets/secret-store-and-egress",
+                    "zh-TW/gateway/secrets/integration-examples",
+                    "zh-TW/gateway/secrets/operations"
+                  ]
+                },
+                "zh-TW/gateway/1password",
+                "zh-TW/gateway/secrets-plan-contract",
+                "zh-TW/gateway/trusted-proxy-auth"
+              ]
+            },
+            {
+              "group": "健康狀態與診斷",
+              "pages": [
+                "zh-TW/gateway/health",
+                "zh-TW/gateway/doctor",
+                {
+                  "group": "Doctor",
+                  "pages": [
+                    "zh-TW/gateway/doctor/running",
+                    "zh-TW/gateway/doctor/checks",
+                    "zh-TW/gateway/doctor/config-migrations",
+                    "zh-TW/gateway/doctor/provider-repairs",
+                    "zh-TW/gateway/doctor/state-and-sessions",
+                    "zh-TW/gateway/doctor/gateway-and-services",
+                    "zh-TW/gateway/doctor/workspace-and-dreams"
+                  ]
+                },
+                "zh-TW/gateway/audit",
+                "zh-TW/gateway/telemetry",
+                "zh-TW/logging",
+                "zh-TW/gateway/opentelemetry",
+                {
+                  "group": "OpenTelemetry",
+                  "pages": [
+                    "zh-TW/gateway/opentelemetry/setup",
+                    "zh-TW/gateway/opentelemetry/configuration",
+                    "zh-TW/gateway/opentelemetry/privacy-and-trace-context",
+                    "zh-TW/gateway/opentelemetry/model-calls-and-metrics",
+                    "zh-TW/gateway/opentelemetry/spans-and-events"
+                  ]
+                },
+                "zh-TW/gateway/prometheus",
+                "zh-TW/gateway/logging",
+                "zh-TW/gateway/diagnostics",
+                "zh-TW/gateway/troubleshooting",
+                {
+                  "group": "疑難排解",
+                  "pages": [
+                    "zh-TW/gateway/troubleshooting/updates-and-rollbacks",
+                    "zh-TW/gateway/troubleshooting/skills-and-model-providers",
+                    "zh-TW/gateway/troubleshooting/agent-replies-and-control-ui",
+                    "zh-TW/gateway/troubleshooting/gateway-service-and-process",
+                    "zh-TW/gateway/troubleshooting/config-validation-and-probes",
+                    "zh-TW/gateway/troubleshooting/channel-delivery-and-tools"
+                  ]
+                }
+              ]
+            },
+            {
+              "group": "擴充與維運",
+              "pages": [
+                "zh-TW/gateway/gateway-lock",
+                "zh-TW/gateway/background-process",
+                "zh-TW/gateway/restart-recovery",
+                "zh-TW/gateway/cloud-sessions",
+                "zh-TW/gateway/cloud-workers",
+                {
+                  "group": "雲端 Worker",
+                  "pages": [
+                    "zh-TW/gateway/cloud-workers/warm-images",
+                    "zh-TW/gateway/cloud-workers/environment-file",
+                    "zh-TW/gateway/cloud-workers/per-project-default-profiles",
+                    "zh-TW/gateway/cloud-workers/setup-and-bundle-installation",
+                    "zh-TW/gateway/cloud-workers/verify-the-profile",
+                    "zh-TW/gateway/cloud-workers/dispatching-a-session",
+                    "zh-TW/gateway/cloud-workers/placement-and-machine-selection",
+                    "zh-TW/gateway/cloud-workers/session-lifecycle",
+                    "zh-TW/gateway/cloud-workers/desktop",
+                    "zh-TW/gateway/cloud-workers/security-model",
+                    "zh-TW/gateway/cloud-workers/native-inference",
+                    "zh-TW/gateway/cloud-workers/troubleshooting"
+                  ]
+                },
+                "zh-TW/gateway/multiple-gateways"
+              ]
+            },
+            {
+              "group": "安全性與沙箱",
+              "pages": [
+                "zh-TW/gateway/security/index",
+                "zh-TW/gateway/security/trust-model",
+                "zh-TW/gateway/security/running-the-audit",
+                "zh-TW/gateway/security/audit-checks",
+                "zh-TW/gateway/security/hardened-baseline",
+                "zh-TW/gateway/security/access-control",
+                "zh-TW/gateway/security/prompt-injection",
+                "zh-TW/gateway/security/tool-permissions",
+                "zh-TW/gateway/security/browser-control",
+                "zh-TW/gateway/security/network-exposure",
+                "zh-TW/gateway/security/secrets-and-storage",
+                "zh-TW/gateway/security/exposure-runbook",
+                "zh-TW/gateway/security/rate-limiting",
+                "zh-TW/gateway/security/operator-incident-response",
+                "zh-TW/gateway/security/secure-file-operations",
+                "zh-TW/gateway/operator-scopes",
+                "zh-TW/gateway/sandboxing",
+                {
+                  "group": "沙箱隔離",
+                  "pages": [
+                    "zh-TW/gateway/sandboxing/what-gets-sandboxed",
+                    "zh-TW/gateway/sandboxing/modes-scope-and-backend",
+                    "zh-TW/gateway/sandboxing/supported-capability-matrix",
+                    "zh-TW/gateway/sandboxing/docker-backend",
+                    "zh-TW/gateway/sandboxing/podman-backend",
+                    "zh-TW/gateway/sandboxing/ssh-backend",
+                    "zh-TW/gateway/sandboxing/openshell-backend",
+                    "zh-TW/gateway/sandboxing/crabbox-backend",
+                    "zh-TW/gateway/sandboxing/workspace-access",
+                    "zh-TW/gateway/sandboxing/multiple-folders-for-one-agent",
+                    "zh-TW/gateway/sandboxing/images-and-setup",
+                    "zh-TW/gateway/sandboxing/setup-command"
+                  ]
+                },
+                "zh-TW/gateway/openshell",
+                "zh-TW/gateway/sandbox-vs-tool-policy-vs-elevated",
+                "zh-TW/gateway/permission-modes"
+              ]
+            },
+            {
+              "group": "通訊協定與 API",
+              "pages": [
+                "zh-TW/gateway/clients",
+                "zh-TW/gateway/external-apps",
+                "zh-TW/gateway/protocol",
+                {
+                  "group": "閘道通訊協定",
+                  "pages": [
+                    "zh-TW/gateway/protocol/transport",
+                    "zh-TW/gateway/protocol/handshake",
+                    "zh-TW/gateway/protocol/presence",
+                    "zh-TW/gateway/protocol/rpc-methods",
+                    "zh-TW/gateway/protocol/rpc-system-and-channels",
+                    "zh-TW/gateway/protocol/rpc-talk-config-and-agents",
+                    "zh-TW/gateway/protocol/rpc-session-control",
+                    "zh-TW/gateway/protocol/rpc-devices-nodes-and-approvals",
+                    "zh-TW/gateway/protocol/rpc-bootstrap-and-events",
+                    "zh-TW/gateway/protocol/ledgers",
+                    "zh-TW/gateway/protocol/operator-methods",
+                    "zh-TW/gateway/protocol/versioning",
+                    "zh-TW/gateway/protocol/auth"
+                  ]
+                },
+                "zh-TW/gateway/embedding",
+                "zh-TW/gateway/openai-http-api",
+                "zh-TW/gateway/openresponses-http-api",
+                "zh-TW/gateway/tools-invoke-http-api"
+              ]
+            },
+            {
+              "group": "模型與本機供應商",
+              "pages": [
+                "zh-TW/gateway/cli-backends",
+                "zh-TW/gateway/local-models",
+                "zh-TW/gateway/local-model-services"
+              ]
+            },
+            {
+              "group": "網路與探索",
+              "pages": [
+                "zh-TW/network",
+                "zh-TW/gateway/pairing",
+                "zh-TW/gateway/discovery",
+                "zh-TW/gateway/bonjour"
+              ]
+            }
+          ]
+        },
+        {
+          "group": "遠端存取",
+          "pages": [
+            "zh-TW/gateway/remote",
+            "zh-TW/gateway/stable-https-url",
+            "zh-TW/gateway/tailscale",
+            "zh-TW/gateway/cloudflare-access"
+          ]
+        },
+        {
+          "group": "安全性",
+          "pages": [
+            "zh-TW/security/network-proxy",
+            "zh-TW/security/formal-verification",
+            "zh-TW/security/incident-response",
+            "zh-TW/security/THREAT-MODEL-ATLAS",
+            "zh-TW/security/THREAT-MODEL-ATLAS/reconnaissance",
+            "zh-TW/security/THREAT-MODEL-ATLAS/initial-access",
+            "zh-TW/security/THREAT-MODEL-ATLAS/execution",
+            "zh-TW/security/THREAT-MODEL-ATLAS/persistence",
+            "zh-TW/security/THREAT-MODEL-ATLAS/defense-evasion",
+            "zh-TW/security/THREAT-MODEL-ATLAS/discovery",
+            "zh-TW/security/THREAT-MODEL-ATLAS/collection-and-exfiltration",
+            "zh-TW/security/THREAT-MODEL-ATLAS/impact",
+            "zh-TW/security/CONTRIBUTING-THREAT-MODEL"
+          ]
+        },
+        {
+          "group": "節點與媒體",
+          "pages": [
+            "zh-TW/nodes/index",
+            "zh-TW/nodes/pairing-and-status",
+            "zh-TW/nodes/node-host",
+            "zh-TW/nodes/node-exec",
+            "zh-TW/nodes/mcp-and-skills",
+            "zh-TW/nodes/session-hosting",
+            "zh-TW/nodes/session-catalogs",
+            "zh-TW/nodes/file-transfers",
+            "zh-TW/nodes/command-policy",
+            "zh-TW/nodes/device-commands",
+            "zh-TW/nodes/presence",
+            "zh-TW/nodes/troubleshooting",
+            {
+              "group": "媒體功能",
+              "pages": [
+                "zh-TW/nodes/media-understanding",
+                "zh-TW/nodes/media-playback",
+                "zh-TW/nodes/images",
+                "zh-TW/nodes/audio",
+                "zh-TW/nodes/camera"
+              ]
+            },
+            {
+              "group": "節點功能",
+              "pages": [
+                "zh-TW/nodes/computer-use",
+                "zh-TW/nodes/talk",
+                {
+                  "group": "對話模式",
+                  "pages": [
+                    "zh-TW/nodes/talk/realtime-sessions",
+                    "zh-TW/nodes/talk/session-ownership",
+                    "zh-TW/nodes/talk/macos-relay",
+                    "zh-TW/nodes/talk/client-ui"
+                  ]
+                },
+                "zh-TW/nodes/voicewake",
+                "zh-TW/nodes/location-command"
+              ]
+            }
+          ]
+        },
+        {
+          "group": "網頁介面",
+          "pages": [
+            "zh-TW/web/index",
+            "zh-TW/web/control-ui",
+            {
+              "group": "控制介面",
+              "pages": [
+                "zh-TW/web/control-ui/connect-and-pair",
+                "zh-TW/web/control-ui/sessions-and-sidebar",
+                "zh-TW/web/control-ui/chat",
+                "zh-TW/web/control-ui/panels",
+                "zh-TW/web/control-ui/settings",
+                "zh-TW/web/control-ui/feature-reference",
+                "zh-TW/web/control-ui/offline-and-reconnect",
+                "zh-TW/web/control-ui/security-model",
+                "zh-TW/web/control-ui/development"
+              ]
+            },
+            "zh-TW/gateway/portals",
+            "zh-TW/web/notifications",
+            "zh-TW/web/dashboard",
+            "zh-TW/web/dashboards",
+            "zh-TW/web/dashboard-architecture",
+            "zh-TW/web/urls",
+            "zh-TW/web/webchat",
+            "zh-TW/web/tui",
+            "zh-TW/web/lobster"
+          ]
+        }
+      ]
+    },
+    {
+      "tab": "參考資料",
+      "groups": [
+        {
+          "group": "CLI 指令",
+          "pages": [
+            "zh-TW/cli/index",
+            {
+              "group": "執行服務",
+              "pages": [
+                "zh-TW/cli/daemon",
+                "zh-TW/cli/gateway",
+                {
+                  "group": "閘道",
+                  "pages": [
+                    "zh-TW/cli/gateway/running",
+                    "zh-TW/cli/gateway/restart-and-supervision",
+                    "zh-TW/cli/gateway/query",
+                    "zh-TW/cli/gateway/service",
+                    "zh-TW/cli/gateway/discovery"
+                  ]
+                },
+                "zh-TW/cli/health",
+                "zh-TW/cli/logs",
+                "zh-TW/cli/status"
+              ]
+            },
+            {
+              "group": "設定與維護",
+              "pages": [
+                "zh-TW/cli/backup",
+                "zh-TW/cli/migrate",
+                "zh-TW/cli/onboard",
+                "zh-TW/cli/openclaw",
+                "zh-TW/cli/reset",
+                "zh-TW/cli/setup",
+                "zh-TW/cli/storage",
+                "zh-TW/cli/uninstall",
+                "zh-TW/cli/update",
+                {
+                  "group": "更新",
+                  "pages": [
+                    "zh-TW/cli/update/status-and-history",
+                    "zh-TW/cli/update/repair-and-recovery",
+                    "zh-TW/cli/update/how-updates-run"
+                  ]
+                }
+              ]
+            },
+            {
+              "group": "診斷與安全性",
+              "pages": [
+                "zh-TW/cli/doctor",
+                {
+                  "group": "Doctor",
+                  "pages": [
+                    "zh-TW/cli/doctor/running",
+                    "zh-TW/cli/doctor/recovery",
+                    "zh-TW/cli/doctor/lint",
+                    "zh-TW/cli/doctor/health-contract",
+                    "zh-TW/cli/doctor/state-migrations",
+                    "zh-TW/cli/doctor/sqlite-maintenance",
+                    "zh-TW/cli/doctor/checks"
+                  ]
+                },
+                "zh-TW/cli/secrets",
+                "zh-TW/cli/security",
+                "zh-TW/cli/triage"
+              ]
+            },
+            {
+              "group": "代理程式、模型與工作階段",
+              "pages": [
+                "zh-TW/cli/agent",
+                "zh-TW/cli/agents",
+                "zh-TW/cli/templates",
+                "zh-TW/cli/infer",
+                "zh-TW/cli/memory",
+                "zh-TW/cli/models",
+                "zh-TW/cli/promos",
+                "zh-TW/cli/sessions",
+                "zh-TW/cli/transcripts",
+                "zh-TW/cli/wiki"
+              ]
+            },
+            {
+              "group": "事件與稽核紀錄",
+              "pages": [
+                "zh-TW/cli/audit",
+                "zh-TW/cli/hooks",
+                "zh-TW/cli/message",
+                "zh-TW/cli/system"
+              ]
+            },
+            {
+              "group": "訊息管道與通訊",
+              "pages": [
+                "zh-TW/cli/channels",
+                "zh-TW/cli/directory",
+                "zh-TW/cli/pairing",
+                "zh-TW/cli/pair",
+                "zh-TW/cli/qr",
+                "zh-TW/cli/users",
+                "zh-TW/cli/voicecall"
+              ]
+            },
+            {
+              "group": "工具與執行",
+              "pages": [
+                "zh-TW/cli/approvals",
+                "zh-TW/cli/browser",
+                "zh-TW/cli/cron",
+                "zh-TW/cli/connect",
+                "zh-TW/cli/devices",
+                "zh-TW/cli/id",
+                "zh-TW/cli/node",
+                "zh-TW/cli/nodes",
+                "zh-TW/cli/sandbox",
+                "zh-TW/cli/worker"
+              ]
+            },
+            {
+              "group": "組態設定",
+              "pages": [
+                "zh-TW/cli/config",
+                "zh-TW/cli/configure",
+                "zh-TW/cli/webhooks"
+              ]
+            },
+            {
+              "group": "外掛與技能",
+              "pages": [
+                "zh-TW/cli/plugins",
+                {
+                  "group": "外掛 CLI",
+                  "pages": [
+                    "zh-TW/cli/plugins/authoring",
+                    "zh-TW/cli/plugins/install",
+                    "zh-TW/cli/plugins/list",
+                    "zh-TW/cli/plugins/uninstall-and-update",
+                    "zh-TW/cli/plugins/inspect-and-diagnose",
+                    "zh-TW/cli/plugins/marketplace"
+                  ]
+                },
+                "zh-TW/cli/file-transfer",
+                "zh-TW/cli/path",
+                "zh-TW/cli/policy",
+                {
+                  "group": "原則",
+                  "pages": [
+                    "zh-TW/cli/policy/authoring",
+                    "zh-TW/cli/policy/rules",
+                    "zh-TW/cli/policy/scopes",
+                    "zh-TW/cli/policy/running-checks",
+                    "zh-TW/cli/policy/attestation",
+                    "zh-TW/cli/policy/findings"
+                  ]
+                },
+                "zh-TW/cli/skills",
+                "zh-TW/cli/workboard"
+              ]
+            },
+            {
+              "group": "介面",
+              "pages": [
+                "zh-TW/cli/attach",
+                "zh-TW/cli/dashboard",
+                "zh-TW/cli/resume",
+                "zh-TW/cli/tui"
+              ]
+            },
+            {
+              "group": "公用工具",
+              "pages": [
+                "zh-TW/cli/acp",
+                "zh-TW/cli/clawbot",
+                "zh-TW/cli/completion",
+                "zh-TW/cli/dns",
+                "zh-TW/cli/docs",
+                "zh-TW/cli/mcp",
+                {
+                  "group": "MCP",
+                  "pages": [
+                    "zh-TW/cli/mcp/serve",
+                    "zh-TW/cli/mcp/registry",
+                    "zh-TW/cli/mcp/json-output",
+                    "zh-TW/cli/mcp/transports",
+                    "zh-TW/cli/mcp/control-ui",
+                    "zh-TW/cli/mcp/apps"
+                  ]
+                },
+                "zh-TW/cli/proxy"
+              ]
+            }
+          ]
+        },
+        {
+          "group": "RPC 與 API",
+          "pages": [
+            "zh-TW/reference/rpc"
+          ]
+        },
+        {
+          "group": "Codex 執行環境參考",
+          "pages": [
+            "zh-TW/plugins/codex-harness-reference",
+            {
+              "group": "Codex 控制框架參考",
+              "pages": [
+                "zh-TW/plugins/codex-harness-reference/supervision",
+                "zh-TW/plugins/codex-harness-reference/app-server-transport",
+                "zh-TW/plugins/codex-harness-reference/approval-and-sandbox",
+                "zh-TW/plugins/codex-harness-reference/auth",
+                "zh-TW/plugins/codex-harness-reference/dynamic-tools",
+                "zh-TW/plugins/codex-harness-reference/timeouts",
+                "zh-TW/plugins/codex-harness-reference/model-discovery",
+                "zh-TW/plugins/codex-harness-reference/restricted-turns",
+                "zh-TW/plugins/codex-harness-reference/workspace-bootstrap-files"
+              ]
+            },
+            "zh-TW/plugins/codex-harness-runtime",
+            {
+              "group": "Codex 控制框架執行環境",
+              "pages": [
+                "zh-TW/plugins/codex-harness-runtime/recovery",
+                "zh-TW/plugins/codex-harness-runtime/threads",
+                "zh-TW/plugins/codex-harness-runtime/replies",
+                "zh-TW/plugins/codex-harness-runtime/hooks",
+                "zh-TW/plugins/codex-harness-runtime/sandbox-streaming",
+                "zh-TW/plugins/codex-harness-runtime/v1-support-contract",
+                "zh-TW/plugins/codex-harness-runtime/permissions",
+                "zh-TW/plugins/codex-harness-runtime/queue-and-feedback",
+                "zh-TW/plugins/codex-harness-runtime/compaction"
+              ]
+            }
+          ]
+        },
+        {
+          "group": "外掛參考",
+          "pages": [
+            "zh-TW/plugins/plugin-inventory",
+            "zh-TW/plugins/reference",
+            "zh-TW/plugins/dependency-resolution"
+          ]
+        },
+        {
+          "group": "外掛 SDK 參考",
+          "pages": [
+            "zh-TW/plugins/sdk-overview",
+            {
+              "group": "外掛 SDK 概覽",
+              "pages": [
+                "zh-TW/plugins/sdk-overview/imports",
+                "zh-TW/plugins/sdk-overview/capabilities",
+                "zh-TW/plugins/sdk-overview/tools-and-commands",
+                "zh-TW/plugins/sdk-overview/infrastructure",
+                "zh-TW/plugins/sdk-overview/host-hooks",
+                "zh-TW/plugins/sdk-overview/cli-and-discovery",
+                "zh-TW/plugins/sdk-overview/memory-and-context",
+                "zh-TW/plugins/sdk-overview/events-and-hooks"
+              ]
+            },
+            "zh-TW/plugins/manifest",
+            {
+              "group": "外掛資訊清單",
+              "pages": [
+                "zh-TW/plugins/manifest/models",
+                "zh-TW/plugins/manifest/providers",
+                "zh-TW/plugins/manifest/setup-and-auth",
+                "zh-TW/plugins/manifest/capabilities",
+                "zh-TW/plugins/manifest/surfaces",
+                "zh-TW/plugins/manifest/config-and-secrets",
+                "zh-TW/plugins/manifest/package-json"
+              ]
+            },
+            "zh-TW/plugins/sdk-subpaths",
+            "zh-TW/plugins/sdk-gateway-ingress",
+            "zh-TW/plugins/sdk-entrypoints",
+            {
+              "group": "外掛進入點",
+              "pages": [
+                "zh-TW/plugins/sdk-entrypoints/tool-policy-and-sandbox",
+                "zh-TW/plugins/sdk-entrypoints/package-entries",
+                "zh-TW/plugins/sdk-entrypoints/define-tool-plugin",
+                "zh-TW/plugins/sdk-entrypoints/define-plugin-entry",
+                "zh-TW/plugins/sdk-entrypoints/native-providers",
+                "zh-TW/plugins/sdk-entrypoints/define-channel-plugin-entry",
+                "zh-TW/plugins/sdk-entrypoints/define-setup-plugin-entry",
+                "zh-TW/plugins/sdk-entrypoints/registration-mode"
+              ]
+            },
+            "zh-TW/plugins/sdk-runtime",
+            {
+              "group": "外掛執行環境輔助工具",
+              "pages": [
+                "zh-TW/plugins/sdk-runtime/config-and-utilities",
+                "zh-TW/plugins/sdk-runtime/agent",
+                "zh-TW/plugins/sdk-runtime/models",
+                "zh-TW/plugins/sdk-runtime/background-work",
+                "zh-TW/plugins/sdk-runtime/gateway-and-nodes",
+                "zh-TW/plugins/sdk-runtime/media",
+                "zh-TW/plugins/sdk-runtime/state-and-system",
+                "zh-TW/plugins/sdk-runtime/channel"
+              ]
+            },
+            "zh-TW/plugins/sdk-agent-harness",
+            {
+              "group": "代理程式控制框架外掛",
+              "pages": [
+                "zh-TW/plugins/sdk-agent-harness/core-ownership",
+                "zh-TW/plugins/sdk-agent-harness/registration",
+                "zh-TW/plugins/sdk-agent-harness/selection-policy",
+                "zh-TW/plugins/sdk-agent-harness/attempt-runtime",
+                "zh-TW/plugins/sdk-agent-harness/user-input-and-execution",
+                "zh-TW/plugins/sdk-agent-harness/native-inventories",
+                "zh-TW/plugins/sdk-agent-harness/runtime-config",
+                "zh-TW/plugins/sdk-agent-harness/sessions-and-results"
+              ]
+            },
+            "zh-TW/plugins/sdk-setup",
+            "zh-TW/plugins/sdk-testing"
+          ]
+        },
+        {
+          "group": "外掛內部機制",
+          "pages": [
+            "zh-TW/plugins/architecture",
+            "zh-TW/plugins/architecture-internals",
+            {
+              "group": "外掛架構內部機制",
+              "pages": [
+                "zh-TW/plugins/architecture-internals/load-pipeline",
+                "zh-TW/plugins/architecture-internals/provider-hooks",
+                "zh-TW/plugins/architecture-internals/runtime-helpers",
+                "zh-TW/plugins/architecture-internals/gateway-routes",
+                "zh-TW/plugins/architecture-internals/channel-surfaces",
+                "zh-TW/plugins/architecture-internals/packaging",
+                "zh-TW/plugins/architecture-internals/context-engines",
+                "zh-TW/plugins/architecture-internals/new-capability"
+              ]
+            },
+            "zh-TW/plugins/sdk-migration",
+            {
+              "group": "外掛 SDK 移轉",
+              "pages": [
+                "zh-TW/plugins/sdk-migration/how-to-migrate",
+                "zh-TW/plugins/sdk-migration/sqlite-async",
+                "zh-TW/plugins/sdk-migration/import-paths",
+                "zh-TW/plugins/sdk-migration/removed-surfaces",
+                "zh-TW/plugins/sdk-migration/talk",
+                "zh-TW/plugins/sdk-migration/async-transcript-and-tts",
+                "zh-TW/plugins/sdk-migration/compatibility-policy",
+                "zh-TW/plugins/sdk-migration/removal-timeline"
+              ]
+            },
+            "zh-TW/plugins/compatibility",
+            "zh-TW/plugins/install-overrides",
+            "zh-TW/plugins/sdk-channel-outbound",
+            "zh-TW/plugins/sdk-channel-inbound",
+            "zh-TW/plugins/sdk-channel-ingress",
+            "zh-TW/plugins/message-presentation"
+          ]
+        },
+        {
+          "group": "範本",
+          "pages": [
+            "zh-TW/reference/AGENTS.default",
+            "zh-TW/reference/templates/AGENTS",
+            "zh-TW/reference/templates/BOOT",
+            "zh-TW/reference/templates/BOOTSTRAP",
+            "zh-TW/reference/templates/IDENTITY",
+            "zh-TW/reference/templates/SOUL",
+            "zh-TW/reference/templates/USER",
+            {
+              "group": "開發用代理程式範本",
+              "pages": [
+                "zh-TW/reference/templates/AGENTS.dev",
+                "zh-TW/reference/templates/IDENTITY.dev",
+                "zh-TW/reference/templates/SOUL.dev",
+                "zh-TW/reference/templates/USER.dev"
+              ]
+            },
+            {
+              "group": "已停用的工作區檔案",
+              "pages": [
+                "zh-TW/reference/templates/HEARTBEAT",
+                "zh-TW/reference/templates/TOOLS"
+              ]
+            }
+          ]
+        },
+        {
+          "group": "技術參考",
+          "pages": [
+            "zh-TW/agent-runtime-architecture",
+            "zh-TW/openclaw-agent-runtime",
+            "zh-TW/reference/openclaw-ai",
+            "zh-TW/reference/token-use",
+            "zh-TW/reference/api-usage-costs",
+            "zh-TW/concepts/usage-tracking",
+            "zh-TW/reference/prompt-caching",
+            "zh-TW/reference/session-management-compaction",
+            {
+              "group": "深入瞭解工作階段管理",
+              "pages": [
+                "zh-TW/reference/session-management-compaction/store",
+                "zh-TW/reference/session-management-compaction/maintenance",
+                "zh-TW/reference/session-management-compaction/schema",
+                "zh-TW/reference/session-management-compaction/compaction",
+                "zh-TW/reference/session-management-compaction/housekeeping",
+                "zh-TW/reference/session-management-compaction/resident-history"
+              ]
+            },
+            "zh-TW/reference/transcript-hygiene",
+            "zh-TW/reference/memory-config",
+            "zh-TW/reference/database-engines",
+            "zh-TW/reference/database-schemas",
+            {
+              "group": "資料庫結構描述",
+              "pages": [
+                "zh-TW/reference/database-schemas/layout",
+                "zh-TW/reference/database-schemas/versioning",
+                "zh-TW/reference/database-schemas/personal-data",
+                "zh-TW/reference/database-schemas/storage-changes",
+                "zh-TW/reference/database-schemas/agent-schema-history",
+                "zh-TW/reference/database-schemas/state-schema-history",
+                "zh-TW/reference/database-schemas/integrity-and-recovery"
+              ]
+            },
+            "zh-TW/reference/rich-output-protocol",
+            "zh-TW/reference/secretref-credential-surface",
+            "zh-TW/reference/secret-placeholder-conventions",
+            "zh-TW/date-time",
+            "zh-TW/concepts/timezone"
+          ]
+        },
+        {
+          "group": "結構描述與格式",
+          "pages": [
+            "zh-TW/concepts/typebox",
+            "zh-TW/concepts/markdown-formatting"
+          ]
+        },
+        {
+          "group": "專案與貢獻",
+          "pages": [
+            "zh-TW/reference/credits",
+            "zh-TW/reference/pull-request-review-flow",
+            {
+              "group": "維護者指令碼",
+              "pages": [
+                "zh-TW/reference/scripts/pr-preparation",
+                "zh-TW/reference/scripts/pr-tooling",
+                "zh-TW/reference/scripts/remote-gates",
+                "zh-TW/reference/scripts/github-transport",
+                "zh-TW/reference/scripts/prior-ci",
+                "zh-TW/reference/scripts/merge-admission",
+                "zh-TW/reference/scripts/merge-recovery"
+              ]
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "tab": "版本發布",
+      "groups": [
+        {
+          "group": "版本資訊",
+          "pages": [
+            "zh-TW/releases/index",
+            "zh-TW/releases/2026.11.6",
+            "zh-TW/releases/2026.11.5",
+            "zh-TW/releases/2026.11.4",
+            "zh-TW/releases/2026.11.3",
+            "zh-TW/releases/2026.11.2",
+            "zh-TW/releases/2026.11.1",
+            "zh-TW/releases/2026.10.10",
+            "zh-TW/releases/2026.10.9",
+            "zh-TW/releases/2026.10.8",
+            "zh-TW/releases/2026.10.7",
+            "zh-TW/releases/2026.10.6",
+            "zh-TW/releases/2026.10.5",
+            "zh-TW/releases/2026.10.4",
+            "zh-TW/releases/2026.10.3",
+            "zh-TW/releases/2026.10.2",
+            "zh-TW/releases/2026.10.1",
+            "zh-TW/releases/2026.9.9",
+            "zh-TW/releases/2026.9.8",
+            "zh-TW/releases/2026.9.7",
+            "zh-TW/releases/2026.9.6",
+            "zh-TW/releases/2026.9.5",
+            "zh-TW/releases/2026.9.4",
+            "zh-TW/releases/2026.9.3",
+            "zh-TW/releases/2026.9.2",
+            "zh-TW/releases/2026.9.1",
+            "zh-TW/releases/2026.8.2",
+            "zh-TW/releases/2026.8.1",
+            "zh-TW/releases/2026.7.1",
+            "zh-TW/releases/2026.6.11"
+          ]
+        },
+        {
+          "group": "發布流程",
+          "pages": [
+            "zh-TW/reference/RELEASING",
+            "zh-TW/reference/full-release-validation",
+            {
+              "group": "完整版本驗證",
+              "pages": [
+                "zh-TW/reference/full-release-validation/dispatch",
+                "zh-TW/reference/full-release-validation/continuation",
+                "zh-TW/reference/full-release-validation/extended-stable",
+                "zh-TW/reference/full-release-validation/stages",
+                "zh-TW/reference/full-release-validation/release-checks",
+                "zh-TW/reference/full-release-validation/profiles",
+                "zh-TW/reference/full-release-validation/evidence"
+              ]
+            },
+            "zh-TW/reference/release-performance-sweep",
+            "zh-TW/gateway/security/dependency-locking"
+          ]
+        }
+      ]
+    },
+    {
+      "tab": "參與貢獻",
+      "groups": [
+        {
+          "group": "成熟度",
+          "pages": [
+            "zh-TW/maturity/scorecard",
+            "zh-TW/maturity/taxonomy"
+          ]
+        },
+        {
+          "group": "測試與 CI",
+          "pages": [
+            "zh-TW/reference/test",
+            {
+              "group": "測試",
+              "pages": [
+                "zh-TW/reference/test/local",
+                "zh-TW/reference/test/lanes",
+                "zh-TW/reference/test/docker",
+                "zh-TW/reference/test/performance",
+                "zh-TW/reference/test/runner-internals",
+                "zh-TW/reference/test/remote-proof"
+              ]
+            },
+            "zh-TW/ci",
+            {
+              "group": "CI",
+              "pages": [
+                "zh-TW/ci/pipeline",
+                "zh-TW/ci/watching-runs",
+                "zh-TW/ci/checkout",
+                "zh-TW/ci/scope-and-routing",
+                {
+                  "group": "範圍與路由",
+                  "pages": [
+                    "zh-TW/ci/scope-and-routing/selection",
+                    "zh-TW/ci/scope-and-routing/node-test-lanes",
+                    "zh-TW/ci/scope-and-routing/job-budgets",
+                    "zh-TW/ci/scope-and-routing/manual-dispatches"
+                  ]
+                },
+                "zh-TW/ci/runners",
+                "zh-TW/ci/capacity",
+                "zh-TW/ci/release-validation",
+                {
+                  "group": "版本驗證",
+                  "pages": [
+                    "zh-TW/ci/release-validation/full-release-validation",
+                    "zh-TW/ci/release-validation/live-and-e2e-shards",
+                    "zh-TW/ci/release-validation/package-acceptance",
+                    "zh-TW/ci/release-validation/install-smoke-and-docker-e2e",
+                    "zh-TW/ci/release-validation/plugin-prerelease"
+                  ]
+                },
+                "zh-TW/ci/scheduled-workflows",
+                "zh-TW/ci/local-proof"
+              ]
+            },
+            "zh-TW/help/scripts",
+            "zh-TW/concepts/qa-e2e-automation",
+            {
+              "group": "品質保證工具組",
+              "pages": [
+                "zh-TW/concepts/qa-e2e-automation/command-surface",
+                "zh-TW/concepts/qa-e2e-automation/operator-flow",
+                "zh-TW/concepts/qa-e2e-automation/scenario-coverage",
+                "zh-TW/concepts/qa-e2e-automation/channel-qa-reference",
+                "zh-TW/concepts/qa-e2e-automation/slack-qa",
+                "zh-TW/concepts/qa-e2e-automation/whatsapp-and-credentials",
+                "zh-TW/concepts/qa-e2e-automation/extending-the-stack",
+                "zh-TW/concepts/qa-e2e-automation/qa-reporting"
+              ]
+            },
+            "zh-TW/concepts/personal-agent-benchmark-pack",
+            "zh-TW/help/testing",
+            {
+              "group": "測試指南",
+              "pages": [
+                "zh-TW/help/testing/suites",
+                "zh-TW/help/testing/live-workflows",
+                "zh-TW/help/testing/docker",
+                "zh-TW/help/testing/qa-runners",
+                "zh-TW/help/testing/contracts",
+                "zh-TW/help/testing/writing-tests"
+              ]
+            },
+            "zh-TW/help/testing-updates-plugins",
+            "zh-TW/help/testing-live",
+            {
+              "group": "即時測試指南",
+              "pages": [
+                "zh-TW/help/testing-live/quick-smokes",
+                "zh-TW/help/testing-live/model-smoke",
+                "zh-TW/help/testing-live/cli-backends",
+                "zh-TW/help/testing-live/acp-and-codex",
+                "zh-TW/help/testing-live/long-context-and-matrix",
+                "zh-TW/help/testing-live/media-providers"
+              ]
+            },
+            "zh-TW/concepts/mantis",
+            "zh-TW/concepts/mantis-slack-desktop-runbook"
+          ]
+        }
+      ]
+    },
+    {
+      "tab": "說明",
+      "groups": [
+        {
+          "group": "從這裡開始",
+          "pages": [
+            "zh-TW/help/index",
+            "zh-TW/help/support",
+            "zh-TW/help/troubleshooting",
+            "zh-TW/help/debugging"
+          ]
+        },
+        {
+          "group": "常見問題",
+          "pages": [
+            "zh-TW/help/faq",
+            {
+              "group": "常見問題主題",
+              "pages": [
+                "zh-TW/help/faq/what-is-openclaw",
+                "zh-TW/help/faq/skills-and-automation",
+                "zh-TW/help/faq/sandboxing-and-memory",
+                "zh-TW/help/faq/where-things-live-on-disk",
+                "zh-TW/help/faq/config-basics",
+                "zh-TW/help/faq/remote-gateways-and-nodes",
+                "zh-TW/help/faq/env-vars",
+                "zh-TW/help/faq/sessions-and-chats",
+                "zh-TW/help/faq/gateway-ports-and-remote-mode",
+                "zh-TW/help/faq/logging-and-debugging",
+                "zh-TW/help/faq/media-and-attachments",
+                "zh-TW/help/faq/security-and-access-control",
+                "zh-TW/help/faq/chat-commands-and-stopping"
+              ]
+            },
+            "zh-TW/help/faq-first-run",
+            {
+              "group": "首次執行常見問題",
+              "pages": [
+                "zh-TW/help/faq-first-run/quick-start",
+                "zh-TW/help/faq-first-run/providers-and-hosting"
+              ]
+            },
+            "zh-TW/help/faq-models"
+          ]
+        },
+        {
+          "group": "診斷",
+          "pages": [
+            "zh-TW/help/environment",
+            "zh-TW/diagnostics/flags"
+          ]
+        },
+        {
+          "group": "社群與專案資訊",
+          "pages": [
+            "zh-TW/start/lore"
+          ]
+        }
+      ]
+    }
+  ]
+}
