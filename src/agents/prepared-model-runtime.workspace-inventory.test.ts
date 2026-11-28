@@ -113,8 +113,8 @@ it.each([
     if (!direct) {
       mocks.authStorage.getAll.mockReturnValue(storedAccount(credential.mainAccount));
     }
-    const { configured, dispatch } = await publishMainCatalog(main);
-    await using _dispatch = dispatch;
+    const published = await publishMainCatalog(main);
+    await using dispatch = published.dispatch;
     if (!direct) {
       mocks.authStorage.getAll.mockReturnValue(
         credential.runAccount ? storedAccount(credential.runAccount) : {},
@@ -127,7 +127,7 @@ it.each([
       name,
     );
 
-    expect(worktree.snapshot).not.toBe(configured);
+    expect(worktree.snapshot).not.toBe(published.configured);
     expect(outcomesOf(worktree.snapshot)).toEqual(
       expected.map((row) => expect.objectContaining(row)),
     );
@@ -137,8 +137,7 @@ it.each([
 it("drops the account facts on the next worktree turn after the credential rotates", async () => {
   mocks.authStorage.getAll.mockReturnValue(storedAccount("acct-a"));
   const main = config(undefined);
-  const { dispatch } = await publishMainCatalog(main);
-  await using _dispatch = dispatch;
+  await using dispatch = (await publishMainCatalog(main)).dispatch;
   {
     await using first = await acquireWorktree(main, dispatch.pluginGeneration, "rotation");
     expect(outcomesOf(first.snapshot)).toEqual([expect.objectContaining(ready)]);
