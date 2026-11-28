@@ -50,6 +50,7 @@ public struct OpenClawChatView: View {
     @State private var reactionPickerMessage: OpenClawChatMessage?
     #if os(iOS)
     @State private var selectTextMessage: OpenClawChatMessage?
+    @State private var selectedWork: ChatToolSheetSelection?
     #endif
     @State private var turnRecapResolver = ChatTurnRecapResolver()
     @State private var turnRecap: ChatTurnRecap?
@@ -80,26 +81,6 @@ public struct OpenClawChatView: View {
     private let speech: OpenClawChatSpeechController?
     private let mediaPlaybackAllowed: @MainActor @Sendable () -> Bool
     private let firstConnectionNotice: OpenClawChatFirstConnectionNotice?
-
-    private enum Layout {
-        static let newTurnAnchor = UnitPoint(x: 0.5, y: ChatReadingPolicy.turnAnchor)
-        static let liveEdgeThreshold: CGFloat = 48
-        #if os(macOS)
-        static let outerPaddingVertical: CGFloat = 0
-        static let swarmPaddingVertical: CGFloat = 8
-        static let stackSpacing: CGFloat = 0
-        static let messageSpacing: CGFloat = 6
-        static let messageListPaddingTop: CGFloat = 12
-        static let messageListPaddingBottom: CGFloat = 16
-        #else
-        static let outerPaddingVertical: CGFloat = 6
-        static let swarmPaddingVertical: CGFloat = 0
-        static let stackSpacing: CGFloat = 6
-        static let messageSpacing: CGFloat = 12
-        static let messageListPaddingTop: CGFloat = 10
-        static let messageListPaddingBottom: CGFloat = 6
-        #endif
-    }
 
     private var collapsesCompletedWork: Bool {
         #if os(iOS)
@@ -203,6 +184,17 @@ public struct OpenClawChatView: View {
                 markdownVariant: self.markdownVariant)
         }
         #if os(iOS)
+        .sheet(item: self.$selectedWork) { selection in
+            ChatToolGroupPresentation(
+                selection: selection,
+                transcript: self.transcriptPresentation,
+                viewModel: self.viewModel,
+                displayOptions: self.displayOptions)
+            { key in
+                self.selectedWork = nil
+                self.viewModel.switchSession(to: key)
+            }
+        }
         .sheet(item: self.$selectTextMessage) {
             ChatSelectableTextSheet(text: ChatMessageVisibleText.copyText(in: $0))
         }
@@ -677,13 +669,19 @@ extension OpenClawChatView {
             transcript: transcript,
             groups: self.runGroups(transcript)[...],
             hasVisibleContent: hasVisibleContent)
+            .environment(\.openClawToolRowContext, transcript.tools)
     }
 
     private func runGroups(_ transcript: TranscriptPresentation) -> [ChatAssistantRunGroup] {
         let liveRunIDs = Set(self.viewModel.liveAdvertisedRunIDs).union(self.viewModel.liveLocalRunIDs)
+        #if os(iOS)
+        let tools: [OpenClawChatPendingToolCall] = [] // Already merged before activity-run grouping.
+        #else
+        let tools = self.displayOptions.contains(.toolActivity) ? self.viewModel.toolActivities : []
+        #endif
         return ChatAssistantRunGroup.build(
             transcript.rows,
-            tools: self.displayOptions.contains(.toolActivity) ? self.viewModel.toolActivities : [],
+            tools: tools,
             liveRunID: liveRunIDs.count == 1 ? liveRunIDs.first : nil,
             hasLiveContent: self.showsWorkingIndicator || self.hasVisibleStreamingAssistantText,
             searchActive: self.isSearchPresented)
@@ -779,7 +777,7 @@ extension OpenClawChatView {
                 isGrouped: cell.group.runID != nil,
                 answerID: cell.group.answerID)
         } else {
-            self.liveAssistantContent
+            self.liveAssistantContent.chatBehaviorProbe(.runTail)
         }
     }
     #endif
@@ -837,6 +835,11 @@ extension OpenClawChatView {
         case let .historyDivider(divider):
             ChatHistoryDividerRow(divider: divider)
                 .frame(maxWidth: .infinity)
+        #if os(iOS)
+        case let .completedWork(work) where work.isActivityRun:
+            let live = Set(work.messages.compactMap(\.workRunID)).flatMap { inputs.liveToolCalls[$0] ?? [] }
+            ChatToolGroupRow(work: work, liveTools: live) { self.selectedWork = .work(work) }
+        #endif
         case let .completedWork(work):
             ChatCompletedWorkDisclosure(work: work) { message in
                 self.messageRow(
@@ -967,6 +970,11 @@ extension OpenClawChatView {
                 #endif
             }
             .frame(maxWidth: .infinity, alignment: isUser ? .trailing : .leading)
+            #if os(iOS)
+            .environment(\.openClawOpenToolSheet) {
+                self.selectedWork = .calls($0, source: msg.id, runID: msg.workRunID)
+            }
+            #endif
             #if os(iOS)
             if msg.presentationOwnsFooter {
                 if isAssistant, !self.viewModel.messageReactions(for: msg).isEmpty {
@@ -1134,10 +1142,7 @@ extension OpenClawChatView {
         }
     }
 
-    private struct TranscriptPresentation {
-        let rows: [ChatTranscriptRow]
-        let metadata: [UUID: ChatMessageMetadata]
-    }
+    private typealias TranscriptPresentation = ChatTranscriptPresentation
 
     private var readerPresentationMessages: [OpenClawChatMessage] {
         let current = self.viewModel.transcriptMessages
@@ -1159,38 +1164,14 @@ extension OpenClawChatView {
         } else {
             base = messages
         }
-        var rows = ChatTranscriptRow.build(from: ChatTranscriptRow.mergeToolResults(in: base))
-        let runWorking = self.viewModel.hasBlockingRunActivity || self.viewModel.hasStreamingAssistantText
-        let activeRunIDs = Set(self.viewModel.liveAdvertisedRunIDs).union(self.viewModel.liveLocalRunIDs)
-        // One duration map serves the reply footers and the "Worked for" summaries.
-        let runDurations = ChatTranscriptRow.runDurations(in: rows, activeRunIDs: activeRunIDs)
-        // Footers and visible rows share the merged, onboarding-trimmed input, before work moves into disclosures.
-        let metadata = ChatTranscriptRow.footerMetadata(
-            in: rows,
-            activeRunIDs: activeRunIDs,
-            runWorking: runWorking,
-            runDurations: runDurations,
-            isMessageVisible: self.shouldDisplayMessage)
-        if self.collapsesCompletedWork {
-            rows = ChatTranscriptRow.collapseCompletedWork(
-                rows,
-                runWorking: runWorking,
-                activeRunIDs: activeRunIDs,
-                searchActive: self.isSearchPresented,
-                runDurations: runDurations)
-        }
-        rows = rows.compactMap { row in
-            switch row {
-            case let .message(message):
-                return self.shouldDisplayMessage(message) ? row : nil
-            case let .completedWork(work):
-                let visible = work.messages.filter(self.shouldDisplayMessage)
-                return visible.isEmpty ? nil : .completedWork(work.replacingMessages(visible))
-            default:
-                return row
-            }
-        }
-        return TranscriptPresentation(rows: rows, metadata: metadata)
+        return TranscriptPresentation.project(
+            base,
+            model: self.viewModel,
+            includesTools: self.displayOptions.contains(.toolActivity),
+            searchActive: self.isSearchPresented,
+            collapsesWork: self.collapsesCompletedWork,
+            streamingTextRunID: self.hasVisibleStreamingAssistantText ? self.viewModel.streamingAssistantRunID : nil,
+            isMessageVisible: { message, _ in self.shouldDisplayMessage(message) })
     }
 
     private var latestVisibleTurnStartID: UUID? {

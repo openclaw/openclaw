@@ -322,6 +322,7 @@ public enum OpenClawChatGatewayPayloadCodec {
         case health
         case chat
         case sessionMessage = "session.message"
+        case sessionTool = "session.tool"
         case agent
         case progressCardChanged = "progressCard.changed"
         case questionRequested = "question.requested"
@@ -394,7 +395,8 @@ public enum OpenClawChatGatewayPayloadCodec {
                     activeRunIdsPresent: message.activeRunIdsPresent))
             }
             return .sessionMessage(message)
-        case .agent:
+        // The Gateway mirrors the same tool payload under session.tool for attached viewers.
+        case .agent, .sessionTool:
             return decode(OpenClawAgentEventPayload.self).map(OpenClawChatTransportEvent.agent)
         case .progressCardChanged:
             return decode(ProgressCardChangedEvent.self).map(OpenClawChatTransportEvent.progressCardChanged)
