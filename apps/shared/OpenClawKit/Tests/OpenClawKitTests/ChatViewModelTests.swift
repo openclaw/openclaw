@@ -8304,7 +8304,7 @@ struct ChatViewModelTests {
         #expect(await transport.sessionSettingsPatches().count == 1)
         #expect(await MainActor.run { !vm.composerCapabilityMutationDisabled })
         #expect(await MainActor.run { vm.composerPermissionMode } == .full)
-        #expect(await MainActor.run { vm.composerCapabilityNotice } == "New permissions apply to the next run.")
+        #expect(await MainActor.run { vm.composerCapabilityNotice } == "New permissions apply to the next reply.")
         await MainActor.run { vm.dismissComposerCapabilityNotice() }
         #expect(await MainActor.run { vm.composerCapabilityNotice } == nil)
 
@@ -8314,7 +8314,7 @@ struct ChatViewModelTests {
         #expect(await MainActor.run { !vm.composerCapabilityMutationDisabled })
         #expect(await MainActor.run { !vm.composerWebSearchEnabled })
         #expect(await MainActor.run { vm.composerCapabilityNotice } ==
-            "Tool changes apply to the next run.")
+            "Tool changes apply to the next reply.")
         await MainActor.run { vm.dismissComposerCapabilityNotice() }
 
         await MainActor.run { vm.toggleComposerSkill(skill) }
@@ -8332,7 +8332,7 @@ struct ChatViewModelTests {
         #expect((patches[2].expectedToolOverrides ?? nil)?.webSearch == false)
         #expect((patches[2].toolOverrides ?? nil)?.skills["release"] == false)
         #expect(await MainActor.run { vm.composerCapabilityNotice } ==
-            "Tool changes apply to the next run.")
+            "Tool changes apply to the next reply.")
     }
 
     @Test func `restrictive composer patch serializes ahead of immediate send`() async throws {
@@ -8653,7 +8653,7 @@ struct ChatViewModelTests {
         #expect(await MainActor.run { !vm.composerCapabilityMutationDisabled })
         #expect(await (transport.sessionSettingsPatches())[2].toolOverrides == .some(nil))
         #expect(await MainActor.run { vm.composerCapabilityNotice } ==
-            "Tool overrides will be cleared for the next run.")
+            "Tool overrides will be cleared for the next reply.")
     }
 
     @Test func `composer tool toggles use authoritative session denial instead of catalog baseline`() async throws {
@@ -8825,6 +8825,22 @@ struct ChatViewModelTests {
         #expect(await transport.sessionSettingsPatches()[2].toolOverrides == .some(nil))
     }
 
+    @Test func `a failed capability load names the access reason, not a save`() async {
+        let catalog = OpenClawChatComposerCapabilityCatalog(
+            sessionSettingsAvailable: true,
+            sessionSettingsCASAvailable: true)
+        let (_, vm) = await makeViewModel(
+            historyResponses: [historyPayload()],
+            composerCapabilityCatalog: catalog)
+        await vm.loadComposerCapabilities()
+
+        #expect(await MainActor.run { vm.composerCapabilityErrorMessage } != nil)
+        #expect(await MainActor.run { vm.composerPermissionMutationDisabledReason } ==
+            "You need write access to change permissions.")
+        #expect(await MainActor.run { vm.composerToolOverrideMutationDisabledReason } ==
+            "You need admin access to change tools.")
+    }
+
     @Test func `composer capability reasons name access and skill blockers`() async {
         let missing = OpenClawChatComposerSkill(
             key: "missing",
@@ -8860,11 +8876,9 @@ struct ChatViewModelTests {
         await vm.loadComposerCapabilities()
 
         #expect(await MainActor.run { vm.composerPermissionMutationDisabledReason } ==
-            "Changing permissions requires operator.write or operator.admin access.")
-        #expect(await MainActor.run { vm.composerPermissionDisabledReason(.full) } ==
-            "You don’t have permission to turn on Full access.")
+            "You need write access to change permissions.")
         #expect(await MainActor.run { vm.composerToolOverrideMutationDisabledReason } ==
-            "Session tool controls require operator.admin access.")
+            "You need admin access to change tools.")
         #expect(await MainActor.run { vm.composerWebSearchMutationDisabledReason } ==
             "Could not load Web Search.")
         #expect(await MainActor.run { vm.composerSkillDisabledReason(missing) } == "Missing dependencies.")
@@ -8947,7 +8961,7 @@ struct ChatViewModelTests {
         #expect(await transport.sessionSettingsPatches().isEmpty)
         #expect(await MainActor.run { !vm.composerWebSearchEnabled })
         #expect(await MainActor.run { vm.composerWebSearchMutationDisabledReason } ==
-            "Web Search is disabled in the Gateway configuration.")
+            "Web search is off in the Gateway configuration.")
     }
 
     @Test func `composer capability mutation rejects a replaced session before dispatch`() async throws {
@@ -9529,6 +9543,44 @@ struct ChatViewModelTests {
         #expect(vm.modelChoices == [current])
         #expect(vm.canSelectModel(current.selectionID))
         #expect(vm.modelCatalogMessage == nil)
+    }
+
+    @Test @MainActor func `Recent lists the models of other chats, newest first`() async throws {
+        let current = modelChoice(id: "gpt-5.4", name: "GPT-5.4", provider: "openai")
+        let other = modelChoice(id: "claude-opus-4-6", name: "Claude Opus 4.6", provider: "anthropic")
+        let third = modelChoice(id: "gpt-5.5", name: "GPT-5.5", provider: "openai")
+        let (_, vm) = await makeViewModel(
+            historyResponses: [historyPayload()],
+            sessionsResponses: [sessionsResponse([
+                sessionEntry(key: "main", updatedAt: 1, model: current.modelID, modelProvider: current.provider),
+                sessionEntry(key: "mac-chat", updatedAt: 3, model: other.modelID, modelProvider: other.provider),
+                sessionEntry(key: "older", updatedAt: 2, model: third.modelID, modelProvider: third.provider),
+            ])],
+            modelResponses: [[current, other, third]])
+        try await loadAndWaitBootstrap(vm: vm)
+
+        // Nothing picked on this device: the chats give Recent; this chat's model leads with the check.
+        let recents = vm.modelPickerCatalog().recents.map(\.selectionID)
+        #expect(recents == [current.selectionID, other.selectionID, third.selectionID])
+        #expect(vm.modelPickerStore.recents.isEmpty)
+    }
+
+    @Test @MainActor func `the picker shows the session's model in Recent without storing it`() async throws {
+        let current = modelChoice(id: "gpt-5.4", name: "GPT-5.4", provider: "openai")
+        // A second provider, so the root lists providers rather than one provider's models.
+        let other = modelChoice(id: "claude-opus-4-6", name: "Claude Opus 4.6", provider: "anthropic")
+        let (_, vm) = await makeViewModel(
+            historyResponses: [historyPayload()],
+            sessionsResponses: [sessionsResponse(
+                sessionEntry(key: "main", updatedAt: 1, model: current.modelID, modelProvider: current.provider))],
+            modelResponses: [[current, other]])
+        try await loadAndWaitBootstrap(vm: vm)
+
+        // Never picked on this device, so nothing is stored; the root still shows it, checked.
+        #expect(vm.modelPickerCatalog().recents.map(\.selectionID) == [current.selectionID])
+        #expect(vm.isCurrentPickerModel(current))
+        #expect(vm.modelPickerRecents.isEmpty)
+        #expect(vm.modelPickerStore.recents.isEmpty)
     }
 
     @Test @MainActor func `unavailable picker rows cannot change the selected model`() async throws {
@@ -12841,6 +12893,30 @@ struct ChatViewModelTests {
         #expect(await transport.patchedThinkingLevels() == ["medium", "high"])
 
         #expect(await MainActor.run { vm.thinkingLevel } == "high")
+    }
+
+    @Test func `quick effort changes send only the latest after the one in flight`() async throws {
+        let (transport, vm) = await makeViewModel(
+            historyResponses: [historyPayloadWithoutRunState()],
+            setSessionThinkingHook: { level in
+                if level == "medium" {
+                    try await Task.sleep(for: .milliseconds(200))
+                }
+            })
+        try await loadAndWaitBootstrap(vm: vm, sessionId: "sess-main")
+
+        await MainActor.run { vm.selectThinkingLevel("medium") }
+        await transport.waitForState { $0.patchedThinkingLevels.count >= 1 }
+        await MainActor.run {
+            vm.selectThinkingLevel("high")
+            vm.selectThinkingLevel("low")
+        }
+        // The answer for medium arrives while low is waiting; the screen keeps low.
+        #expect(await MainActor.run { vm.thinkingLevel } == "low")
+
+        await vm.waitForPendingSessionSettings(in: "main")
+        #expect(await transport.patchedThinkingLevels() == ["medium", "low"])
+        #expect(await MainActor.run { vm.thinkingLevel } == "low")
     }
 
     @Test func `default settings patch returns accepted thinking state`() async throws {
