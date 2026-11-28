@@ -1,0 +1,2 @@
+# Prove a wedged Gateway keeps retrying the challenge, so MCP tool calls need a bounded readiness wait.
+29

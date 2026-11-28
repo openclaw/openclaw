@@ -4,6 +4,11 @@ import {
   normalizeLowercaseStringOrEmpty,
   normalizeOptionalLowercaseString,
 } from "@openclaw/normalization-core/string-coerce";
+import {
+  DEFAULT_GATEWAY_REQUEST_TIMEOUT_MS,
+  addSafeTimeoutDelayGraceMs,
+  resolveConnectChallengeTimeoutMs,
+} from "../../packages/gateway-client/src/timeouts.js";
 import type { EventFrame } from "../../packages/gateway-protocol/src/index.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import type { GatewayClient } from "../gateway/client.js";
@@ -50,6 +55,28 @@ const QUEUE_LIMIT = 1_000;
 const PENDING_CLAUDE_PERMISSION_TTL_MS = 60 * 60 * 1_000;
 const PENDING_APPROVAL_DEFAULT_TTL_MS = 30 * 60 * 1_000;
 const PENDING_SWEEP_INTERVAL_MS = 5 * 60 * 1_000;
+/** Budget for the readiness subscription request the bridge issues right after hello. */
+const GATEWAY_SUBSCRIPTION_REQUEST_TIMEOUT_MS = Math.max(
+  DEFAULT_GATEWAY_REQUEST_TIMEOUT_MS,
+  180_000,
+);
+/** Grace on top of the supported budgets so a slow-but-valid startup is never cut short. */
+const GATEWAY_READY_TIMEOUT_GRACE_MS = 15_000;
+
+/**
+ * Bounded readiness wait: the connect challenge budget plus one subscription request budget.
+ * A wedged endpoint keeps retrying the challenge, so without this deadline tool calls never fail;
+ * deriving it from the same timeout owners keeps every supported startup budget intact.
+ */
+export function resolveGatewayReadyTimeoutMs(configuredPreauthTimeoutMs?: number): number {
+  const challengeMs = resolveConnectChallengeTimeoutMs(undefined, {
+    configuredTimeoutMs: configuredPreauthTimeoutMs ?? null,
+  });
+  return addSafeTimeoutDelayGraceMs(
+    challengeMs + GATEWAY_SUBSCRIPTION_REQUEST_TIMEOUT_MS,
+    GATEWAY_READY_TIMEOUT_GRACE_MS,
+  );
+}
 
 /** Connects the MCP server surface to a Gateway client and queues channel events for polling. */
 export class OpenClawChannelBridge {
@@ -68,6 +95,8 @@ export class OpenClawChannelBridge {
   private started = false;
   private retryingInitialConnect = false;
   private readonly readiness = createDeferredCore();
+  private gatewayEndpoint = "the configured Gateway";
+  private gatewayReadyTimeoutMs = resolveGatewayReadyTimeoutMs(undefined);
 
   constructor(
     private readonly cfg: OpenClawConfig,
@@ -121,6 +150,8 @@ export class OpenClawChannelBridge {
       return;
     }
 
+    this.gatewayEndpoint = bootstrap.url;
+    this.gatewayReadyTimeoutMs = resolveGatewayReadyTimeoutMs(bootstrap.preauthHandshakeTimeoutMs);
     this.gateway = new GatewayClientCtor({
       url: bootstrap.url,
       deviceAuthScope: bootstrap.deviceAuthScope,
@@ -135,7 +166,7 @@ export class OpenClawChannelBridge {
       mode: GATEWAY_CLIENT_MODES.CLI,
       caps: [GATEWAY_CLIENT_CAPS.APPROVALS],
       scopes: [READ_SCOPE, WRITE_SCOPE, APPROVALS_SCOPE],
-      requestTimeoutMs: 180_000,
+      requestTimeoutMs: GATEWAY_SUBSCRIPTION_REQUEST_TIMEOUT_MS,
       onEvent: (event) => {
         void this.dispatchGatewayEvent(event);
       },
@@ -171,6 +202,34 @@ export class OpenClawChannelBridge {
     await this.readiness.promise;
   }
 
+  /**
+   * Ready wait for tool calls: an endpoint that keeps TCP open without answering would otherwise
+   * leave every tool call pending with no output, so this deadline turns that into a real error.
+   * The connection keeps retrying, so a Gateway that recovers inside the window still serves later calls.
+   */
+  private async awaitReadyForToolCall(): Promise<void> {
+    let timer: NodeJS.Timeout | undefined;
+    const deadline = new Promise<never>((_, reject) => {
+      timer = setTimeout(() => reject(this.gatewayReadyTimeoutError()), this.gatewayReadyTimeoutMs);
+      timer.unref?.();
+    });
+    try {
+      await Promise.race([this.readiness.promise, deadline]);
+    } finally {
+      if (timer) {
+        clearTimeout(timer);
+      }
+    }
+  }
+
+  private gatewayReadyTimeoutError(): Error {
+    return new Error(
+      `Gateway did not complete its handshake with ${this.gatewayEndpoint} within ${Math.round(this.gatewayReadyTimeoutMs / 1000)}s. ` +
+        "The endpoint accepted the connection but never answered, so tool calls cannot proceed. " +
+        "Run `openclaw gateway status --deep --require-rpc` to inspect Gateway health.",
+    );
+  }
+
   /** Stop Gateway IO and release waiters so MCP shutdown cannot hang on pending polls. */
   async close(): Promise<void> {
     if (this.closed) {
@@ -200,7 +259,7 @@ export class OpenClawChannelBridge {
     includeDerivedTitles?: boolean;
     includeLastMessage?: boolean;
   }): Promise<ConversationDescriptor[]> {
-    await this.waitUntilReady();
+    await this.awaitReadyForToolCall();
     const response: SessionListResult = await this.requestGateway("sessions.list", {
       limit: params?.limit ?? 50,
       search: params?.search,
@@ -219,7 +278,7 @@ export class OpenClawChannelBridge {
     if (!normalizedSessionKey) {
       return null;
     }
-    await this.waitUntilReady();
+    await this.awaitReadyForToolCall();
     const response: SessionDescribeResult = await this.requestGateway("sessions.describe", {
       key: normalizedSessionKey,
       includeDerivedTitles: true,
@@ -232,7 +291,7 @@ export class OpenClawChannelBridge {
     sessionKey: string,
     limit = 20,
   ): Promise<NonNullable<ChatHistoryResult["messages"]>> {
-    await this.waitUntilReady();
+    await this.awaitReadyForToolCall();
     const response: ChatHistoryResult = await this.requestGateway("sessions.get", {
       key: sessionKey,
       limit,
@@ -241,7 +300,7 @@ export class OpenClawChannelBridge {
   }
 
   async readMessage(sessionKey: string, messageId: string) {
-    await this.waitUntilReady();
+    await this.awaitReadyForToolCall();
     const result = await this.requestGateway("chat.message.get", {
       sessionKey,
       messageId,
