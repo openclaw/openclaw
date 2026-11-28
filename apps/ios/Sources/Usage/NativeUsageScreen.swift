@@ -34,6 +34,7 @@ struct NativeUsageScreen: View {
     @State private var refresh = 0
     @State private var agent: Agent?
     @State private var showDashboard = false
+    @State private var editingDates = false
     @State private var period: Period
     @State private var customStart: Date
     @State private var customEnd: Date
@@ -74,14 +75,9 @@ struct NativeUsageScreen: View {
                 if self.agentID == nil { self.planLimits }
                 NativeUsagePeriodControl(
                     period: self.$period,
-                    dates: self.dates,
                     displayedDates: self.loadedDates ?? self.dates,
                     isUpdating: self.report != nil && self.loadedQuery != self.query && self.reportError == nil)
-                { dates in
-                    self.customStart = dates.lowerBound
-                    self.customEnd = dates.upperBound
-                    self.period = .custom
-                }
+                { self.editingDates = true }
                 if let report {
                     let updating = self.loadedQuery != self.query
                     if let reportError {
@@ -134,6 +130,13 @@ struct NativeUsageScreen: View {
             async let report: Void = self.loadReport()
             async let plans: Void = self.loadPlans()
             _ = await (report, plans)
+        }
+        .sheet(isPresented: self.$editingDates) {
+            NativeUsageCustomDates(dates: self.dates) { dates in
+                self.customStart = dates.lowerBound
+                self.customEnd = dates.upperBound
+                self.period = .custom
+            }
         }
         .sheet(item: self.$agent) { agent in
             NavigationStack {

@@ -2,18 +2,16 @@ import SwiftUI
 
 struct NativeUsagePeriodControl: View {
     @Binding var period: NativeUsageScreen.Period
-    let dates: ClosedRange<Date>
     let displayedDates: ClosedRange<Date>
     let isUpdating: Bool
-    let applyCustom: (ClosedRange<Date>) -> Void
-    @State private var editingDates = false
+    let editDates: () -> Void
 
     var body: some View {
         Section {
             Menu {
                 ForEach(NativeUsageScreen.Period.allCases) { option in
                     Button {
-                        if option == .custom { self.editingDates = true } else { self.period = option }
+                        if option == .custom { self.editDates() } else { self.period = option }
                     } label: {
                         let title: LocalizedStringKey = option == .custom ? "Custom range…" : option.title
                         if option == self.period {
@@ -54,13 +52,10 @@ struct NativeUsagePeriodControl: View {
                 .identifier)
                 .font(OpenClawType.caption)
         }
-        .sheet(isPresented: self.$editingDates) {
-            NativeUsageCustomDates(dates: self.dates, apply: self.applyCustom)
-        }
     }
 }
 
-private struct NativeUsageCustomDates: View {
+struct NativeUsageCustomDates: View {
     @Environment(\.dismiss) private var dismiss
     @State private var start: Date
     @State private var end: Date
