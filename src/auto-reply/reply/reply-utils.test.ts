@@ -347,6 +347,17 @@ it("streams whitespace-only chunks after visible text", () => {
   expect(streamed + (accumulator.consume("", { final: true })?.text ?? "")).toBe(chunks.join(""));
 });
 
+it.each([
+  ["NO_REPLY\r\nanswer"],
+  ["NO_REPLY\r", "\nanswer"],
+  ["NO_REPLY\r", "answer"],
+  ["NO_REPLY", "\r\nanswer"],
+])("strips a leading NO_REPLY line split at %j", (...chunks) => {
+  const accumulator = createStreamingDirectiveAccumulator();
+  const streamed = chunks.map((chunk) => accumulator.consume(chunk)?.text ?? "").join("");
+  expect(streamed + (accumulator.consume("", { final: true })?.text ?? "")).toBe("answer");
+});
+
 it("propagates explicit reply ids until the assistant message resets", () => {
   const accumulator = createStreamingDirectiveAccumulator();
   expect(accumulator.consume("[[reply_to: a]]")).toBeNull();
