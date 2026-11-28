@@ -514,6 +514,11 @@ creation. Keeping the app open lets creation finish when the agent is ready.
 
 Inside **Settings**, the dedicated sidebar puts the **Settings** title, agent picker, and any back arrow on one row, followed by a **Search settings** field for quickly finding settings sections. **Ask OpenClaw** sits above the **Preferences** group.
 
+To check an error in a ready **Ask OpenClaw** chat, send `explain error:` followed
+by the error text with private values removed. OpenClaw explains recognized
+errors and suggests one next step without running it or asking the configured
+model. If the panel can't start, use the [terminal command](/cli/openclaw#explain-an-error-without-a-model).
+
 Form edits save automatically. If the connection changes while edits are pending,
 autosave pauses until you choose **Save** to keep them or **Reload Config** to
 discard them and load the current configuration. A successful reload resumes

@@ -34,7 +34,7 @@ import {
 } from "../../internal-event-contract.js";
 import type { ReplyExpectation } from "../../reply-completion.js";
 import {
-  isIncompleteAnnounceAgentResultError,
+  failedBeforeVisibleReply,
   summarizeDeliveryError,
 } from "./subagent-announce-delivery-retry.js";
 import type {
@@ -232,7 +232,7 @@ export function resolveFailedAnnounceResponse(
     (context.shouldDeliverAgentFinal ||
       context.subagentDirectMessageCompletionRequiresMessageTool) &&
     context.isSubagentCompletion &&
-    isIncompleteAnnounceAgentResultError(error)
+    failedBeforeVisibleReply(error)
     ? { action: "send-text", unavailable: failure }
     : failure;
 }

@@ -1,4 +1,5 @@
 import { emitTrustedDiagnosticEvent } from "../infra/diagnostic-events.js";
+import { MAX_SESSION_ROW_AUDIENCES } from "../shared/session-list-limits.js";
 import { SessionListViewCache } from "./session-list-view-cache.js";
 import type * as records from "./session-row-projection-record.js";
 import type { SessionRowProjection } from "./session-row-projection.js";
@@ -10,6 +11,23 @@ export type SessionRowView = {
   row: Readonly<GatewaySessionRow>;
   modelRows?: Readonly<GatewaySessionRow>[];
 };
+
+export function retainSessionRowView(
+  views: Map<string, SessionRowView[]>,
+  signature: string,
+  view: SessionRowView,
+) {
+  const variants = views.get(signature);
+  if (!variants) {
+    views.set(signature, [view]);
+    return;
+  }
+  // A live shared row can outlast many distinct child visibility combinations.
+  if (variants.length === MAX_SESSION_ROW_AUDIENCES) {
+    variants.shift();
+  }
+  variants.push(view);
+}
 
 type Publication = {
   factsRevision: number;

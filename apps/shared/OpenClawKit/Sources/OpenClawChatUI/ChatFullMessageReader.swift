@@ -73,13 +73,19 @@ struct ChatFullMessageReader: View {
             .frame(maxWidth: .infinity, maxHeight: .infinity)
             .navigationTitle("Full Message")
             .toolbar {
+                #if os(iOS)
+                OpenClawSheetCloseItem { self.dismiss() }
+                #else
                 ToolbarItem(placement: .confirmationAction) {
                     Button("Close") { self.dismiss() }
                 }
+                #endif
             }
         }
-        #if os(macOS)
-        .frame(minWidth: 560, minHeight: 420)
+        #if os(iOS)
+        .openClawSheetHeaderEdge()
+        #elseif os(macOS)
+            .frame(minWidth: 560, minHeight: 420)
         #endif
         .task(id: self.request.id) {
             await self.loadMessage()

@@ -51,5 +51,5 @@ export const composerEditorTheme = EditorView.theme({
   ".cm-selectionBackground, &.cm-focused > .cm-scroller > .cm-selectionLayer .cm-selectionBackground":
     { backgroundColor: "var(--selection-bg)" },
   ".cm-line": { padding: "0" },
-  ".cm-placeholder": { color: "var(--muted)" },
+  ".cm-placeholder": { color: "var(--chat-composer-placeholder)" },
 });

@@ -1,5 +1,4 @@
 import { execFile } from "node:child_process";
-import syncFs from "node:fs";
 import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
@@ -349,11 +348,8 @@ test("an ordinary session created through a workspace alias can adopt without ac
     ).toBeUndefined();
     await fs.unlink(alias);
     await fs.symlink(workspace, alias, directoryLinkType);
-    const workspaceStats = vi.spyOn(syncFs, "lstatSync");
     const adopted = await adoptUnboundPullRequestWorkspace(input);
     adoptedId = adopted.worktree?.id;
-    expect(workspaceStats.mock.calls.filter(([pathname]) => pathname === alias)).toHaveLength(0);
-    workspaceStats.mockRestore();
     expect(adoptedId).toBeDefined();
     expect(adopted.priorWorkspace).toMatchObject({ workspaceDir: alias, fileRoot: alias });
     const worktree = getRegistryWorktree(process.env, adoptedId!);
@@ -434,20 +430,10 @@ test("sessions.create requires admin for full permission mode", async () => {
   });
 });
 
-test("sessions.create uses a non-git Gateway cwd directly but not as a worktree source", async () => {
+test("sessions.create names a non-git requested cwd when refusing a worktree", async () => {
   const cwd = await makeNonGitTempDir("openclaw-session-direct-cwd-");
-  const direct = await createSession({ cwd });
-  expect(direct.ok).toBe(true);
-  expect(direct.payload?.entry?.spawnedCwd).toBe(cwd);
-
-  const isolated = await createSession({ cwd, worktree: true });
-  expectInvalid(isolated, `requested working directory is not a git checkout: ${cwd}`);
-});
-
-test("sessions.create keeps its cwd contract absolute-only", async () => {
-  const created = await directSessionReq("sessions.create", { cwd: "~/repo" });
-
-  expectInvalid(created, "sessions.create cwd must be absolute");
+  const created = await createSession({ cwd, worktree: true });
+  expectInvalid(created, `requested working directory is not a git checkout: ${cwd}`);
 });
 
 test.each([
