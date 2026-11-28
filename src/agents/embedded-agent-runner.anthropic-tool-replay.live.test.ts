@@ -121,6 +121,7 @@ describeLive("embedded agent anthropic replay sanitization (live)", () => {
         ANTHROPIC_TIMEOUT_MS,
       );
 
+      expect(["stop", "length", "toolUse"]).toContain(response.stopReason);
       const text = extractEmbeddedAssistantText(response);
       logLiveCache(`anthropic ${label} replay live result=${JSON.stringify(text)}`);
       if (shouldSkipEmptyAnthropicReplayResult(skipLabel, text)) {
@@ -190,9 +191,9 @@ describeLive("embedded agent anthropic replay sanitization (live)", () => {
         ANTHROPIC_TIMEOUT_MS,
       );
 
+      expect(["stop", "length", "toolUse"]).toContain(response.stopReason);
       const text = extractEmbeddedAssistantText(response);
       logLiveCache(`anthropic replay live result=${JSON.stringify(text)}`);
-      expect(response.content.length).toBeGreaterThanOrEqual(0);
     },
     6 * 60_000,
   );
