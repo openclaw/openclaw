@@ -18,6 +18,8 @@ import {
 import { log } from "./logger.js";
 import {
   estimateMessageChars,
+  formatImageOmissionNotice,
+  TOOL_IMAGE_CHARS,
   TOOL_RESULT_CHARS_PER_TOKEN_ESTIMATE,
 } from "./tool-result-char-estimator.js";
 import {
@@ -62,6 +64,28 @@ function keepEnds(text: string, chars: number, context: number) {
 }
 
 /**
+ * Context the guard spends beside the text: every non-text block when they fit the share, else
+ * the images it keeps (as many as fit, first ones first) and its image-omission notice. Text
+ * bounded to the rest passes the guard uncut, so its frames and notice survive.
+ */
+function guardReserve(content: unknown[], share: number): number {
+  const isImage = (block: unknown) => isRecord(block) && block.type === "image";
+  const images = content.filter(isImage).length;
+  for (let kept = Math.min(images, Math.floor(share / TOOL_IMAGE_CHARS)); ; kept -= 1) {
+    let seen = 0;
+    const reserved = contextChars([
+      ...content.filter(
+        (block) => !isToolResultTextBlock(block) && (!isImage(block) || ++seen <= kept),
+      ),
+      ...(kept < images ? [{ type: "text", text: formatImageOmissionNotice(images, kept) }] : []),
+    ]);
+    if (reserved < share || kept <= 0) {
+      return reserved;
+    }
+  }
+}
+
+/**
  * Bounds a result whose text carries untrusted-content frames (one per text block, or several
  * wrapped values inside one JSON block). It fails closed: text and whole frames are kept in order
  * while they fit; the first piece that does not fit keeps its head and tail (a frame keeps its
@@ -74,7 +98,7 @@ function cutFrames<T extends { content: unknown[] }>(
   result: T,
   frames: ExternalContentFrame[][],
   budget: ToolResultBudget,
-  nonText: number,
+  reserved: number,
   suffix: (omittedChars: number) => string,
 ): T {
   const allText = result.content.reduce<number>(
@@ -83,11 +107,8 @@ function cutFrames<T extends { content: unknown[] }>(
   );
   const largestNotice = `\n\n${suffix(allText)}`;
   let chars = budget.maxChars - estimateToolResultTextChars(largestNotice);
-  // Images the share cannot hold at all are dropped by the context guard; text must then fit alone.
   let context =
-    budget.maxContextChars -
-    (nonText < budget.maxContextChars ? nonText : 0) -
-    estimateToolResultTextChars(largestNotice, WEIGHTED);
+    budget.maxContextChars - reserved - estimateToolResultTextChars(largestNotice, WEIGHTED);
   const take = (text: string) => {
     const textChars = estimateToolResultTextChars(text);
     const textContext = estimateToolResultTextChars(text, WEIGHTED);
@@ -200,7 +221,13 @@ export async function boundToolResult<T extends { content: unknown[]; details?: 
     result.content.filter((block) => isToolResultTextBlock(block)).length === 1 ? 0 : undefined;
   const cut = (suffix: (omittedChars: number) => string = formatOmittedCharsNotice) => {
     if (frames.some((found) => found.length > 0)) {
-      return cutFrames(result, frames, budget, nonText, suffix);
+      return cutFrames(
+        result,
+        frames,
+        budget,
+        guardReserve(result.content, budget.maxContextChars),
+        suffix,
+      );
     }
     const loose = truncateToolResultMessage(result, budget.maxChars, { suffix, minKeepChars });
     // Images that cannot fit at all stay with the context guard, which drops them.

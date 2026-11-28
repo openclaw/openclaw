@@ -1,7 +1,9 @@
 import fs from "node:fs/promises";
 import { describe, expect, it } from "vitest";
+import { makeTextToolResult } from "../../../test/helpers/text-tool-result.js";
 import { wrapExternalContent, wrapWebContent } from "../../security/external-content.js";
 import { boundToolResult } from "./tool-result-bound.js";
+import { installToolResultContextGuard } from "./tool-result-context-guard.js";
 
 type Block = { type: string; text?: string; data?: string; mimeType?: string };
 
@@ -16,8 +18,8 @@ const textOf = (content: unknown[]) =>
 /**
  * The fail-closed contract: untrusted text (every payload carries `UNTRUSTED-` and long filler
  * runs) appears only inside a whole frame, every start marker has its end marker, one trusted
- * notice sits outside every frame with the true omitted count, and the text is a fixed point of
- * the bound (an image the share cannot hold is the context guard's to drop).
+ * notice sits outside every frame with the true omitted count, and the context guard that runs
+ * next passes every text block unchanged (it may only drop images, with its own notice).
  */
 async function expectFailClosed(
   content: Block[],
@@ -43,9 +45,25 @@ async function expectFailClosed(
   const elided = texts.join("").split(ELISION).length - 1;
   const original = textOf(content).join("").length;
   expect(Number(notice[1])).toBe(original - (sent - elided * ELISION.length));
-  const textOnly = bounded.content.filter((block) => (block as Block).type === "text");
-  const again = await boundToolResult({ content: textOnly }, contextWindowTokens, false);
-  expect(again.content).toBe(textOnly);
+  const agent = { transformContext: async (messages: unknown[]) => messages };
+  const cleanup = installToolResultContextGuard({ agent: agent as never, contextWindowTokens });
+  let seen: unknown[] = [];
+  try {
+    seen = await agent.transformContext([
+      { ...makeTextToolResult("c1", "fixture", "", false, 1), ...bounded },
+    ]);
+  } finally {
+    cleanup();
+  }
+  const textBlocks = (blocks: unknown[]) =>
+    blocks
+      .filter((block) => (block as Block).type === "text")
+      .map((block) => (block as Block).text);
+  expect(
+    textBlocks((seen[0] as { content: unknown[] }).content).filter(
+      (text) => !/^\[\d+ images? omitted from context/u.test(text ?? ""),
+    ),
+  ).toEqual(textBlocks(bounded.content));
   return { bounded, shown, notice };
 }
 
@@ -133,8 +151,9 @@ describe("untrusted-content frames survive the bound", () => {
     },
   );
 
-  // An image takes most of a small window's share next to a wrapped page.
-  it.each([8_000, 16_000])(
+  // At 4k and 8k the image alone exceeds the share: the guard drops it and adds its notice, which
+  // the bound reserved, so the guard does not cut the frame again (a browser snapshot's shape).
+  it.each([4_000, 8_000, 16_000])(
     "an image beside a wrapped page: %i-token window",
     async (contextWindowTokens) => {
       await expectFailClosed(
