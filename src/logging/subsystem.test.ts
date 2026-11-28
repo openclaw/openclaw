@@ -1,5 +1,6 @@
 import fs from "node:fs";
 import util from "node:util";
+import { runInNewContext } from "node:vm";
 import { afterAll, afterEach, beforeAll, describe, expect, it, vi } from "vitest";
 import { setVerbose } from "../global-state.js";
 import {
@@ -423,43 +424,53 @@ describe("createSubsystemLogger().isEnabled", () => {
     expect(warnLine).not.toContain("skipped=");
     expect(consoleLine(error)).toContain("catalog failed reason=timeout");
   });
-  it("retains lifecycle error diagnostics in the file and pretty console sinks", async () => {
-    const file = logPathTracker.nextPath();
-    setLoggerOverride({ level: "warn", consoleLevel: "warn", consoleStyle: "pretty", file });
-    const warn = installConsoleMethodSpy("warn");
-    const failure = Object.assign(new Error("Pending input ownership ended"), {
-      name: "SessionPendingInputCustodyError",
-      code: "CUSTODY_ENDED",
-      syscall: "synthetic-settle",
-      requestId: "synthetic-request",
-      request: { body: "synthetic private completion" },
-      config: { data: "synthetic private tool input" },
-      stack:
-        "Error: Pending input ownership ended\n    at settle (fixture.ts:1:1)\n    at wake (fixture.ts:2:1)\n    at complete (fixture.ts:3:1)\n    at parent (fixture.ts:4:1)\n    at lifecycle (fixture.ts:5:1)\n    at omitted (fixture.ts:6:1)",
-    });
-    const expectedError = {
-      name: "SessionPendingInputCustodyError",
-      message: "Pending input ownership ended",
-      errorCode: "CUSTODY_ENDED",
-      stack: failure.stack.split("\n").slice(0, 6).join("\n"),
-    };
-    createSubsystemLogger("agents/subagent-registry").warn("lifecycle event handler failed", {
-      err: failure,
-      runId: "synthetic-child",
-    });
-    await flushLogger();
-    const record = JSON.parse(fs.readFileSync(file, "utf8").trim());
-    expect(record["1"]).toEqual({
-      err: { ...expectedError, stack: failure.stack },
-      runId: "synthetic-child",
-    });
-    const line = consoleLine(warn);
-    const errorStart = line.indexOf("err=") + "err=".length;
-    expect(JSON.parse(line.slice(errorStart, line.lastIndexOf(" runId=")))).toEqual(expectedError);
-    expectText(line, ["runId=synthetic-child"], ["omitted", "synthetic private"]);
-    expect(fs.readFileSync(file, "utf8")).not.toContain("synthetic private");
-    expect(failure.stack).toContain("omitted");
-  });
+  it.each(["same realm", "VM realm"])(
+    "retains %s lifecycle error diagnostics in the file and pretty console sinks",
+    async (realm) => {
+      const file = logPathTracker.nextPath();
+      setLoggerOverride({ level: "warn", consoleLevel: "warn", consoleStyle: "pretty", file });
+      const warn = installConsoleMethodSpy("warn");
+      const sourceError: Error =
+        realm === "same realm"
+          ? new Error("Pending input ownership ended")
+          : runInNewContext('new Error("Pending input ownership ended")');
+      expect(sourceError instanceof Error).toBe(realm === "same realm");
+      const failure = Object.assign(sourceError, {
+        name: "SessionPendingInputCustodyError",
+        code: "CUSTODY_ENDED",
+        syscall: "synthetic-settle",
+        requestId: "synthetic-request",
+        request: { body: "synthetic private completion" },
+        config: { data: "synthetic private tool input" },
+        stack:
+          "Error: Pending input ownership ended\n    at settle (fixture.ts:1:1)\n    at wake (fixture.ts:2:1)\n    at complete (fixture.ts:3:1)\n    at parent (fixture.ts:4:1)\n    at lifecycle (fixture.ts:5:1)\n    at omitted (fixture.ts:6:1)",
+      });
+      const expectedError = {
+        name: "SessionPendingInputCustodyError",
+        message: "Pending input ownership ended",
+        errorCode: "CUSTODY_ENDED",
+        stack: failure.stack.split("\n").slice(0, 6).join("\n"),
+      };
+      createSubsystemLogger("agents/subagent-registry").warn("lifecycle event handler failed", {
+        err: failure,
+        runId: "synthetic-child",
+      });
+      await flushLogger();
+      const record = JSON.parse(fs.readFileSync(file, "utf8").trim());
+      expect(record["1"]).toEqual({
+        err: { ...expectedError, stack: failure.stack },
+        runId: "synthetic-child",
+      });
+      const line = consoleLine(warn);
+      const errorStart = line.indexOf("err=") + "err=".length;
+      expect(JSON.parse(line.slice(errorStart, line.lastIndexOf(" runId=")))).toEqual(
+        expectedError,
+      );
+      expectText(line, ["runId=synthetic-child"], ["omitted", "synthetic private"]);
+      expect(fs.readFileSync(file, "utf8")).not.toContain("synthetic private");
+      expect(failure.stack).toContain("omitted");
+    },
+  );
   it("masks key-aware sensitive fields in the console tail", () => {
     const warn = consoleLogging();
     createSubsystemLogger("gateway").warn("provider retry", {
