@@ -92,7 +92,70 @@ function decodeHostReadText(buffer: Buffer): string | undefined {
   }
 }
 
-function getValidatedHostReadText(buffer?: Buffer): string | undefined {
+function decodeHostReadCsv(buffer: Buffer, filePath?: string): string | undefined {
+  if (getFileExtension(filePath) !== ".csv") {
+    return undefined;
+  }
+  let text: string;
+  try {
+    // WHATWG shift_jis includes the Windows-31J (CP932) Excel export mappings.
+    text = new TextDecoder("shift_jis", { fatal: true }).decode(buffer);
+  } catch {
+    return undefined;
+  }
+  // Decoding alone is insufficient: many binary byte pairs are valid Shift JIS.
+  // Require printable, rectangular CSV records before admitting this fallback.
+  if (textPrintableRatio(text) !== 1 || hasHtmlDocumentShape(text)) {
+    return undefined;
+  }
+  let state: "start" | "plain" | "quoted" | "closed" = "start";
+  let columns = 1;
+  let width = 0;
+  let rows = 0;
+  for (let index = 0; index <= text.length; index += 1) {
+    const char = text[index];
+    if (state === "quoted") {
+      if (char === undefined) {
+        return undefined;
+      }
+      if (char === '"') {
+        if (text[index + 1] === '"') {
+          index += 1;
+        } else {
+          state = "closed";
+        }
+      }
+      continue;
+    }
+    if (char === undefined || char === "\r" || char === "\n") {
+      if (char === undefined && columns === 1 && state === "start") {
+        break;
+      }
+      width ||= columns;
+      if (columns < 2 || columns !== width) {
+        return undefined;
+      }
+      rows += 1;
+      columns = 1;
+      state = "start";
+      if (char === "\r" && text[index + 1] === "\n") {
+        index += 1;
+      }
+    } else if (char === ",") {
+      columns += 1;
+      state = "start";
+    } else if (char === '"' && state === "start") {
+      state = "quoted";
+    } else if (char === '"' || state === "closed") {
+      return undefined;
+    } else {
+      state = "plain";
+    }
+  }
+  return rows >= 2 ? text : undefined;
+}
+
+function getValidatedHostReadText(buffer?: Buffer, filePath?: string): string | undefined {
   if (!buffer) {
     return undefined;
   }
@@ -100,10 +163,10 @@ function getValidatedHostReadText(buffer?: Buffer): string | undefined {
     return "";
   }
   const text = decodeHostReadText(buffer);
-  if (text === undefined) {
-    return undefined;
+  if (text !== undefined && textPrintableRatio(text) > 0.95) {
+    return text;
   }
-  return textPrintableRatio(text) > 0.95 ? text : undefined;
+  return decodeHostReadCsv(buffer, filePath);
 }
 
 function hasHtmlDocumentShape(text: string): boolean {
@@ -181,7 +244,7 @@ export function assertHostReadMediaAllowed(params: {
       isAllowedHostReadTextAlias(declaredMime, params.filePath) &&
       !params.sniffedContentType &&
       params.buffer &&
-      getValidatedHostReadText(params.buffer) !== undefined
+      getValidatedHostReadText(params.buffer, params.filePath) !== undefined
     ) {
       return;
     }
@@ -215,7 +278,7 @@ export function assertHostReadMediaAllowed(params: {
     normalizedMime &&
     isAllowedHostReadTextAlias(normalizedMime, params.filePath) &&
     params.buffer &&
-    getValidatedHostReadText(params.buffer) !== undefined
+    getValidatedHostReadText(params.buffer, params.filePath) !== undefined
   ) {
     return;
   }
