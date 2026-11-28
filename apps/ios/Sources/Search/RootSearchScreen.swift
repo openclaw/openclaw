@@ -11,6 +11,8 @@ struct RootSearchScreen: View {
 
     @State private var model = RootSearchModel()
     @State private var tab: RootSearchTab = .all
+    @State private var sessionKeys: [String]?
+    @State private var pageIDs: [String] = []
     @FocusState private var isFieldFocused: Bool
 
     private static let allSectionLimit = 5
@@ -18,7 +20,7 @@ struct RootSearchScreen: View {
     var body: some View {
         let results = self.results
         let hasMoreResults = self.tab == .all &&
-            max(results.pages.count, results.sessions.count, results.messages.count) > Self.allSectionLimit
+            max(results.pages.count, results.sessionCount, results.messages.count) > Self.allSectionLimit
         ScrollView {
             VStack(alignment: .leading, spacing: 0) {
                 self.content(results)
@@ -43,8 +45,18 @@ struct RootSearchScreen: View {
         .onChange(of: self.appModel.isOperatorGatewayConnected, initial: true) { _, connected in
             self.model.setOffline(!connected)
         }
-        .onChange(of: self.model.normalizedQuery) { _, _ in
+        .onChange(of: self.model.query, initial: true) { _, _ in
             self.tab = .all
+            self.captureSessionOrder()
+            self.pageIDs = self.rankedPages.map(\.id)
+        }
+        .onChange(of: self.rankedPages.map(\.id)) { _, ranked in
+            // Late catalog answers can fill vacant places, not displace a visible page.
+            let seen = Set(self.pageIDs)
+            self.pageIDs += ranked.filter { !seen.contains($0) }.prefix(max(0, ranked.count - seen.count))
+        }
+        .onChange(of: self.sidebarModel.sessions.isEmpty) { _, empty in
+            if !empty, self.sessionKeys == nil { self.captureSessionOrder() }
         }
         .task(id: self.model.serverSearchID) {
             await self.model.runServerSearch(appModel: self.appModel) {
@@ -97,16 +109,41 @@ struct RootSearchScreen: View {
     private var results: Results {
         let query = self.model.normalizedQuery
         guard !query.isEmpty else { return Results() }
-        let catalog = self.settingsPages + self.automationPages + self.model.skills + self.model.plugins
+        let pages = Dictionary(
+            (self.basePages + self.catalogPages).map { ($0.id, $0) },
+            uniquingKeysWith: { first, _ in first })
+        let sessions = self.sessionsByKey
         return Results(
-            pages: RootSearchRanking.pages(base: self.basePages, catalog: catalog, query: query),
-            sessions: RootSearchRanking.sessions(self.searchableSessions, query: query),
-            archived: self.model.archived.filter { archived in
-                !self.searchableSessions.contains { $0.key == archived.key }
-            },
+            pages: self.pageIDs.compactMap { pages[$0] },
+            sessions: (self.sessionKeys ?? []).compactMap { sessions[$0] },
+            archived: self.model.archived.filter { sessions[$0.key]?.isArchived != false },
             messages: self.model.messages,
             sessionsLoading: self.sidebarModel.isRefreshing && self.sidebarModel.sessions.isEmpty,
             messagePhase: self.model.messagePhase)
+    }
+
+    private var catalogPages: [RootSearchPage] {
+        self.settingsPages + self.automationPages + self.model.skills + self.model.plugins
+    }
+
+    private var rankedPages: [RootSearchPage] {
+        RootSearchRanking.pages(base: self.basePages, catalog: self.catalogPages, query: self.model.normalizedQuery)
+    }
+
+    private var sessionsByKey: [String: OpenClawChatSessionEntry] {
+        Dictionary(self.sidebarModel.sessions.map { ($0.key, $0) }, uniquingKeysWith: { first, _ in first })
+    }
+
+    /// Capture the identities selected by the ranking limit, not a copy of the row content.
+    /// A later roster can rename a match, but cannot move it or evict it from the top ten.
+    private func captureSessionOrder() {
+        guard !self.sidebarModel.sessions.isEmpty else {
+            self.sessionKeys = nil
+            return
+        }
+        let rows = self.model.normalizedQuery.isEmpty ? self.recentSessions :
+            RootSearchRanking.sessions(self.searchableSessions, query: self.model.normalizedQuery)
+        self.sessionKeys = rows.map(\.key)
     }
 
     private var searchableSessions: [OpenClawChatSessionEntry] {
@@ -193,7 +230,8 @@ struct RootSearchScreen: View {
     private func content(_ results: Results) -> some View {
         let query = self.model.normalizedQuery
         if query.isEmpty {
-            let recent = self.recentSessions
+            let sessions = self.sessionsByKey
+            let recent = (self.sessionKeys ?? []).compactMap { sessions[$0] }
             if !recent.isEmpty {
                 Text(String(localized: "Recent"))
                     .font(OpenClawType.headlineBold)
@@ -225,6 +263,7 @@ struct RootSearchScreen: View {
         }
     }
 
+    @ViewBuilder
     private func allContent(_ results: Results, query: String) -> some View {
         ForEach(results.allSections, id: \.self) { section in
             switch section {
@@ -232,19 +271,36 @@ struct RootSearchScreen: View {
                 self.sectionHeader(section.title, more: results.pages.count > Self.allSectionLimit ? .pages : nil)
                 self.pagesContent(results.pages, query: query, limit: Self.allSectionLimit)
             case .sessions:
-                self.sectionHeader(section.title, more: results.sessions.count > Self.allSectionLimit ? .sessions : nil)
-                self.sessionsContent(results, query: query, limit: Self.allSectionLimit)
+                if !results.sessions.isEmpty || results.sessionsLoading {
+                    self.sectionHeader(
+                        section.title,
+                        more: results.sessionCount > Self.allSectionLimit ? .sessions : nil)
+                    self.sessionsContent(results, query: query, limit: Self.allSectionLimit)
+                }
             case .messages:
-                self.sectionHeader(section.title, more: results.messages.count > Self.allSectionLimit ? .messages : nil)
-                self.messagesContent(results, query: query, limit: Self.allSectionLimit)
+                if results.messages.contains(where: { !$0.session.isArchived }) || results.messagePhase != .done {
+                    self.sectionHeader(
+                        section.title,
+                        more: results.messages.count > Self.allSectionLimit ? .messages : nil)
+                    self.messagesContent(results, query: query, limit: Self.allSectionLimit)
+                }
             case .all:
                 EmptyView()
             }
         }
+        let archived = results.archived.prefix(max(0, Self.allSectionLimit - results.sessions.count))
+        let archivedMessages = results.messages.prefix(Self.allSectionLimit).filter(\.session.isArchived)
+        if !archived.isEmpty || !archivedMessages.isEmpty {
+            let moreMessages = results.messages.count > Self.allSectionLimit && archivedMessages.count == Self
+                .allSectionLimit
+            self.sectionHeader(String(localized: "Archived"), more: moreMessages ? .messages : nil)
+            ForEach(archived) { self.sessionRow($0, query: query, quiet: true) }
+            ForEach(archivedMessages) { self.messageRow($0, query: query) }
+        }
     }
 
     private func pagesContent(_ pages: [RootSearchPage], query: String, limit: Int?) -> some View {
-        ForEach(pages.prefix(limit ?? pages.count).reversed()) { page in
+        ForEach(pages.prefix(limit ?? pages.count)) { page in
             self.resultButton(target: page.target, title: page.title) {
                 self.rowLabel(systemImage: page.systemImage, title: page.title, query: query, quiet: false) {
                     if let kind = page.kind.label {
@@ -264,19 +320,12 @@ struct RootSearchScreen: View {
         if results.sessionsLoading, results.sessions.isEmpty {
             self.loadingRow(String(localized: "Searching sessions…"))
         }
-        if !results.archived.isEmpty, limit.map({ results.sessions.count <= $0 }) ?? true {
-            if limit == nil {
-                self.sectionHeader(String(localized: "Archived"))
-            }
-            ForEach(results.archived.reversed()) { session in
-                self.sessionRow(session, query: query, quiet: true)
-            }
-            if limit == nil, !results.sessions.isEmpty {
-                self.sectionHeader(String(localized: "Sessions"))
-            }
-        }
-        ForEach(results.sessions.prefix(limit ?? results.sessions.count).reversed()) { session in
+        ForEach(results.sessions.prefix(limit ?? results.sessions.count)) { session in
             self.sessionRow(session, query: query, quiet: false)
+        }
+        if limit == nil, !results.archived.isEmpty {
+            self.sectionHeader(String(localized: "Archived"))
+            ForEach(results.archived) { self.sessionRow($0, query: query, quiet: true) }
         }
     }
 
@@ -304,14 +353,16 @@ struct RootSearchScreen: View {
             }
             .padding(.horizontal, 10)
         default:
-            ForEach(results.messages.prefix(limit ?? results.messages.count).reversed()) { message in
-                self.resultButton(
-                    target: .session(message.session),
-                    title: SessionPresentation.title(message.session))
-                {
-                    self.messageLabel(message, query: query)
-                }
+            ForEach(results.messages.prefix(limit ?? results.messages.count)) { message in
+                if limit == nil || !message.session.isArchived { self.messageRow(message, query: query) }
             }
+        }
+    }
+
+    private func messageRow(_ match: RootSearchMessage, query: String) -> some View {
+        let session = self.sidebarModel.sessions.first { $0.key == match.id } ?? match.session
+        return self.resultButton(target: .session(session), title: SessionPresentation.title(session)) {
+            self.messageLabel(RootSearchMessage(session: session, snippet: match.snippet), query: query)
         }
     }
 
@@ -482,8 +533,10 @@ struct RootSearchScreen: View {
                     self.tabButton(tab, results: results)
                 }
             }
-            .padding(.horizontal, 10)
+            .padding(.horizontal, 4)
         }
+        .glassEffect(.regular, in: Capsule())
+        .padding(.horizontal, 10)
         .padding(.bottom, 4)
     }
 

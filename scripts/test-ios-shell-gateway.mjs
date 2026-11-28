@@ -53,6 +53,8 @@ const workspacePreviewText = {
 // OPENCLAW_IOS_SESSION_MUTATION_FIXTURE_URL=http://127.0.0.1:<port> and
 // OPENCLAW_IOS_LIVE_SETUP_CODE via TEST_RUNNER_. Each run needs a fresh fixture.
 const sessionMutationMode = process.argv.includes("--session-mutations");
+// Root search UI tests: --search-order, with OPENCLAW_IOS_SEARCH_FIXTURE_URL via TEST_RUNNER_.
+const searchOrderMode = process.argv.includes("--search-order");
 let sessionListRejected = false;
 let pinRejected = true;
 let railShortcuts = [];
@@ -193,6 +195,28 @@ const sessions = Array.from(
     outputTokens: 20,
   }),
 );
+const searchTitles = [
+  "Release checklist",
+  "Release notes",
+  "Keyboard",
+  "Settings",
+  "Sidebar",
+  "Tabs",
+  "Icons",
+  "Onboarding",
+  "Activity",
+  "Navigation",
+].map((title) => "iOS " + title);
+const searchRows = searchTitles.map((label, i) => ({
+  ...sessions[i + 1],
+  label,
+  sessionId: "search-" + i,
+}));
+const archivedSearchRow = { ...sessions[15], label: "iOS Release archive", archived: true };
+const searchMessages = [
+  { ...sessions[16], label: "Release discussion" },
+  { ...sessions[17], label: "Past discussion", archived: true },
+];
 const methods = [
   "health",
   "config.get",
@@ -217,6 +241,7 @@ const methods = [
     ? ["agents.workspace.list", "agents.workspace.get"]
     : []),
   ...(sessionMutationMode ? ["users.prefs.get", "users.prefs.set"] : []),
+  ...(searchOrderMode ? ["sessions.search", "skills.status"] : []),
   ...(attachmentMode ? ["artifacts.download"] : []),
 ];
 
@@ -369,6 +394,22 @@ const server = createServer((req, res) => {
     workspacePageWaiters.add(waiter);
     res.once("close", () => workspacePageWaiters.delete(waiter));
     notifyWorkspacePageWaiters();
+    return;
+  }
+  if (searchOrderMode && req.method === "POST" && url.pathname === "/search-update") {
+    const row = searchRows[1];
+    row.label = "iOS Release notes updated";
+    row.updatedAt = Date.now() + 1000;
+    const event = {
+      type: "event",
+      event: "sessions.changed",
+      payload: { sessionKey: row.key, session: row },
+    };
+    for (const ws of wss.clients) {
+      if (ws.readyState === WebSocket.OPEN && ws.proofRole === "operator")
+        ws.send(JSON.stringify(event));
+    }
+    res.end(JSON.stringify({ updated: row.key }));
     return;
   }
   if (sessionMutationMode && url.pathname === "/session-mutations") {
@@ -619,6 +660,7 @@ wss.on("connection", (ws) => {
                     "exec.approval.requested",
                     "tick",
                     ...(connectionStateMode ? ["chat"] : []),
+                    ...(searchOrderMode ? ["sessions.changed"] : []),
                   ],
                   ...(connectionStateMode ? { capabilities: ["chat-send-routing-contract"] } : {}),
                 },
@@ -699,7 +741,37 @@ wss.on("connection", (ws) => {
           agents: [{ id: "main", name: "Navigation proof" }],
         });
         break;
+      case "skills.status":
+        if (searchOrderMode) reply({ skills: [{ name: "iOS design" }, { name: "iOS builds" }] });
+        else fail("Unsupported synthetic method");
+        break;
+      case "sessions.search":
+        if (searchOrderMode)
+          reply({
+            sessions: searchMessages,
+            results: searchMessages.map((row, i) => ({
+              sessionKey: row.key,
+              snippet: "iOS release planning",
+              score: 2 - i,
+            })),
+          });
+        else fail("Unsupported synthetic method");
+        break;
       case "sessions.list": {
+        if (searchOrderMode) {
+          const rows =
+            params.archived === true
+              ? [archivedSearchRow]
+              : [sessions[0], ...searchRows, searchMessages[0]];
+          reply({
+            ts: created,
+            count: rows.length,
+            totalCount: rows.length,
+            defaults: {},
+            sessions: rows,
+          });
+          break;
+        }
         if (sessionMutationMode && sessionListRejected) {
           fail("Synthetic session list refused");
           break;

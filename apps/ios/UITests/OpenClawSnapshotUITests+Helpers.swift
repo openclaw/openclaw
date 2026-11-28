@@ -369,7 +369,8 @@ extension OpenClawSnapshotUITests {
 
     func startPairedLiveGatewayApp(
         initialTab: String,
-        initialDestination: String) throws -> XCUIApplication
+        initialDestination: String,
+        appearance: String? = nil) throws -> XCUIApplication
     {
         try XCTSkipUnless(
             ProcessInfo.processInfo.environment["OPENCLAW_IOS_LIVE_GATEWAY"] == "1",
@@ -389,6 +390,7 @@ extension OpenClawSnapshotUITests {
             "-AppleLanguages", "(en)",
             "-AppleLocale", "en_US",
         ]
+        if let appearance { app.launchArguments += ["--openclaw-appearance", appearance] }
         app.launch()
         self.app = app
 

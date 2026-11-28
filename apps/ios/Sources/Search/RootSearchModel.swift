@@ -130,7 +130,11 @@ enum RootSearchRanking {
     {
         var seen = titleMatches
         let byKey = Dictionary(sessions.map { ($0.key, $0) }, uniquingKeysWith: { first, _ in first })
-        return hits.sorted { $0.score > $1.score }.compactMap { hit in
+        return hits.sorted { lhs, rhs in
+            let lhsArchived = byKey[lhs.sessionKey]?.isArchived == true
+            let rhsArchived = byKey[rhs.sessionKey]?.isArchived == true
+            return lhsArchived == rhsArchived ? lhs.score > rhs.score : !lhsArchived
+        }.compactMap { hit in
             guard let session = byKey[hit.sessionKey], seen.insert(hit.sessionKey).inserted else { return nil }
             let snippet = hit.snippet.split(whereSeparator: \.isWhitespace).joined(separator: " ")
             return RootSearchMessage(session: session, snippet: snippet)
