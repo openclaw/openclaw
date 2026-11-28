@@ -18,9 +18,22 @@ export type JsoncValue =
   | { readonly kind: "object"; readonly entries: readonly JsoncEntry[]; readonly line?: number }
   | { readonly kind: "array"; readonly items: readonly JsoncValue[]; readonly line?: number }
   | { readonly kind: "string"; readonly value: string; readonly line?: number }
-  | { readonly kind: "number"; readonly value: number; readonly line?: number }
+  | {
+      readonly kind: "number";
+      readonly value: number;
+      readonly integerText?: string;
+      readonly line?: number;
+    }
   | { readonly kind: "boolean"; readonly value: boolean; readonly line?: number }
   | { readonly kind: "null"; readonly line?: number };
+
+export function jsoncScalarText(
+  value: Extract<JsoncValue, { kind: "string" | "number" | "boolean" }>,
+): string {
+  return value.kind === "number" && value.integerText !== undefined
+    ? value.integerText
+    : String(value.value);
+}
 
 /** Object key/value entry. Keys are unquoted; quoting happens at emit. */
 export interface JsoncEntry {

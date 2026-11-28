@@ -12,7 +12,7 @@ import { isMap, isScalar, isSeq, type Document, type Node, type Pair } from "yam
 import type { AstBlock, AstItem, MdAst } from "./ast.js";
 import { walkMdFrontmatter } from "./find-md-frontmatter.js";
 import type { OnMatch, Slot, SlotSub, WalkContext } from "./find-types.js";
-import type { JsoncValue } from "./jsonc/ast.js";
+import { jsoncScalarText, type JsoncValue } from "./jsonc/ast.js";
 import { resolveJsoncPositionalSegment } from "./jsonc/resolve-value.js";
 import type { JsonlAst, JsonlLine } from "./jsonl/ast.js";
 import { keepOnlyLineAddressInSection, pickJsonlLine } from "./jsonl/line.js";
@@ -721,11 +721,8 @@ function jsoncChildFieldText(
     return null;
   }
   const v = e.value;
-  if (v.kind === "string") {
-    return v.value;
-  }
-  if (v.kind === "number" || v.kind === "boolean") {
-    return String(v.value);
+  if (v.kind === "string" || v.kind === "number" || v.kind === "boolean") {
+    return jsoncScalarText(v);
   }
   return v.kind === "null" ? nullText : null;
 }

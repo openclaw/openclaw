@@ -21,7 +21,7 @@ import { OcPathEditError } from "./edit-error.js";
 import { setMdOcPath } from "./edit.js";
 import { insertMdSource } from "./emit.js";
 import { formatFrontmatterValue } from "./frontmatter-format.js";
-import type { JsoncAst, JsoncEntry, JsoncValue } from "./jsonc/ast.js";
+import { jsoncScalarText, type JsoncAst, type JsoncEntry, type JsoncValue } from "./jsonc/ast.js";
 import { insertJsoncOcPath, setJsoncOcPath } from "./jsonc/edit.js";
 import { resolveJsoncOcPath } from "./jsonc/resolve.js";
 import type { JsonlAst } from "./jsonl/ast.js";
@@ -241,7 +241,7 @@ function jsoncValueToMatch(value: JsoncValue, line: number): OcMatch {
   }
   return {
     kind: "leaf",
-    valueText: value.kind === "null" ? "null" : String(value.value),
+    valueText: value.kind === "null" ? "null" : jsoncScalarText(value),
     leafType: value.kind,
     line,
   };
