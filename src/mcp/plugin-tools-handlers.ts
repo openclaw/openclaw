@@ -10,6 +10,7 @@ import {
   wrapToolWithBeforeToolCallHook,
 } from "../agents/agent-tools.before-tool-call.js";
 import { getBeforeToolCallHookContext } from "../agents/before-tool-call-metadata.js";
+import { boundToolResult } from "../agents/embedded-agent-runner/tool-result-bound.js";
 import { isToolResultError } from "../agents/tool-result-error.js";
 import { isAutomationsToolName } from "../agents/tools/automations-tool-name.js";
 import type { AnyAgentTool } from "../agents/tools/common.js";
@@ -102,8 +103,12 @@ export function createPluginToolsMcpHandlers(tools: AnyAgentTool[]) {
       }
       const toolCallId = `mcp-${randomUUID()}`;
       try {
-        const result = await entry.tool.execute(toolCallId, params.arguments ?? {}, signal);
-        const isError = isToolResultError(result);
+        const raw = await entry.tool.execute(toolCallId, params.arguments ?? {}, signal);
+        const isError = isToolResultError(raw);
+        // The one tool-result bound; MCP clients read with their own tools, so no Gateway path.
+        // Plain strings and other JSON keep their existing normalization.
+        const result =
+          raw && Array.isArray(raw.content) ? await boundToolResult(raw, undefined, false) : raw;
         const rawContent =
           result && typeof result === "object" && "content" in result
             ? (result as { content?: unknown }).content

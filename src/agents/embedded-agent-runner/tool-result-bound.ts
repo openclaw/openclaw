@@ -34,37 +34,64 @@ const SHAPE: AgentMessage = {
 };
 const contextChars = (content: unknown[]) => estimateMessageChars(SHAPE, content);
 
-const withText = <T extends { content: unknown[] }>(result: T, index: number, text: string): T => ({
+const withContent = <T extends { content: unknown[] }>(result: T, content: unknown[]): T => ({
   ...result,
-  content: result.content.map((block, i) =>
-    i === index && isToolResultTextBlock(block) ? { ...block, text } : block,
-  ),
+  content,
 });
 
-const textAt = (content: unknown[], index: number) => {
-  const block = content[index];
-  return isToolResultTextBlock(block) ? block : undefined;
+// Carried on an unwrapped body block through the truncator, which copies a block's own
+// enumerable keys (symbols included) into every block it derives from it.
+const FRAME = Symbol("untrusted-content frame");
+
+const frameOf = (block: unknown) => {
+  const frame: unknown = isRecord(block) ? Reflect.get(block, FRAME) : undefined;
+  return isRecord(frame) && typeof frame.open === "string" && typeof frame.close === "string"
+    ? { open: frame.open, close: frame.close }
+    : undefined;
 };
 
-/** The one text block, when it is exactly one untrusted-content envelope. */
-function findEnvelope(content: unknown[]) {
-  const texts = content.flatMap((block, index) => (isToolResultTextBlock(block) ? [index] : []));
-  const index = texts.length === 1 ? texts[0]! : -1;
-  const block = textAt(content, index);
-  // A block that mirrors its text in `content` would keep the unwrapped copy there.
-  const parts =
-    block && typeof Reflect.get(block, "content") !== "string"
-      ? splitExternalContentEnvelope(block.text)
-      : undefined;
-  return parts && { index, ...parts };
+/** Replaces each text block that is exactly one untrusted-content envelope by its body. */
+function unwrapEnvelopes(content: unknown[]) {
+  let frameChars = 0;
+  let frameContext = 0;
+  const unwrapped = content.map((block) => {
+    // A block that mirrors its text in `content` would keep the unwrapped copy there.
+    if (!isToolResultTextBlock(block) || typeof Reflect.get(block, "content") === "string") {
+      return block;
+    }
+    const parts = splitExternalContentEnvelope(block.text);
+    if (!parts) {
+      return block;
+    }
+    const frame = `${parts.open}${parts.close}`;
+    frameChars += estimateToolResultTextChars(frame);
+    frameContext += contextChars([{ type: "text", text: frame }]);
+    return { ...block, text: parts.body, [FRAME]: { open: parts.open, close: parts.close } };
+  });
+  return { unwrapped, frameChars, frameContext };
 }
+
+/** Puts each surviving body (or the notice that replaced it) back inside its whole frame. */
+const rewrapEnvelopes = (content: unknown[]) =>
+  content.map((block) => {
+    const frame = frameOf(block);
+    if (!frame || !isToolResultTextBlock(block)) {
+      return block;
+    }
+    // Object.entries drops the symbol tag.
+    return {
+      ...Object.fromEntries(Object.entries(block)),
+      text: `${frame.open}${block.text}${frame.close}`,
+    };
+  });
 
 /**
  * Bounds a fresh tool result once, before its first send, on every route. The budget is the
  * strictest one the result meets later: the per-result cap and the context guard's weighted
  * share (images and other blocks reserved first), so neither re-cuts a bounded result.
- * Head and tail are kept; an untrusted-content envelope whose frame fits keeps its warning and
- * both markers whole and only its body is cut. The full text goes to a private file (a producer's own file
+ * Head and tail are kept. Every text block that is one untrusted-content envelope keeps its
+ * warning and both markers whole when the frames fit; only bodies are cut, and a body the
+ * truncator drops is replaced inside its frame. The full text goes to a private file (a producer's own file
  * is reused). `spill: false` (a reader that cannot open the file) or a failed write keeps the
  * same cut with a size-only notice.
  */
@@ -84,20 +111,17 @@ export async function boundToolResult<T extends { content: unknown[]; details?: 
   ) {
     return result;
   }
-  const found = findEnvelope(result.content);
-  const frame = found ? `${found.open}${found.close}` : "";
-  const frameChars = estimateToolResultTextChars(frame);
-  const frameContext = found ? contextChars([{ type: "text", text: frame }]) : 0;
+  const { unwrapped, frameChars, frameContext } = unwrapEnvelopes(result.content);
   const nonText = contextChars(result.content.filter((block) => !isToolResultTextBlock(block)));
-  // A frame that does not fit beside the other blocks (hostile metadata, or an image that
-  // takes the share) is cut as plain text instead.
-  const envelope =
-    found && frameChars < budget.maxChars && nonText + frameContext < budget.maxContextChars
-      ? found
-      : undefined;
-  const source = envelope ? withText(result, envelope.index, envelope.body) : result;
-  const maxChars = envelope ? budget.maxChars - frameChars : budget.maxChars;
-  const reserved = nonText + (envelope ? frameContext : 0);
+  // Frames that do not fit beside the other blocks (hostile metadata, or an image that takes
+  // the share) are cut as plain text instead.
+  const framed =
+    frameChars > 0 &&
+    frameChars < budget.maxChars &&
+    nonText + frameContext < budget.maxContextChars;
+  const source = framed ? withContent(result, unwrapped) : result;
+  const maxChars = framed ? budget.maxChars - frameChars : budget.maxChars;
+  const reserved = nonText + (framed ? frameContext : 0);
   // One text block keeps head and tail at every budget (a whole-prefix cut loses the end, and
   // an end marker with it); several blocks keep the truncator's short-record rules.
   const minKeepChars =
@@ -106,7 +130,7 @@ export async function boundToolResult<T extends { content: unknown[]; details?: 
     const loose = truncateToolResultMessage(source, maxChars, { suffix, minKeepChars });
     // Images that cannot fit at all stay with the context guard, which drops them.
     const inner =
-      contextChars(loose.content) + (envelope ? frameContext : 0) <= budget.maxContextChars ||
+      contextChars(loose.content) + (framed ? frameContext : 0) <= budget.maxContextChars ||
       reserved >= budget.maxContextChars
         ? loose
         : truncateToolResultMessage(source, Math.min(maxChars, budget.maxContextChars - reserved), {
@@ -117,11 +141,7 @@ export async function boundToolResult<T extends { content: unknown[]; details?: 
     if (inner === source) {
       return result;
     }
-    if (!envelope) {
-      return inner;
-    }
-    const body = textAt(inner.content, envelope.index)?.text ?? "";
-    return withText(inner, envelope.index, `${envelope.open}${body}${envelope.close}`);
+    return framed ? withContent(inner, rewrapEnvelopes(inner.content)) : inner;
   };
   const sizeOnly = cut();
   if (sizeOnly === result) {

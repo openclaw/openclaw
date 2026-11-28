@@ -6,6 +6,7 @@ import { isRecord } from "@openclaw/normalization-core/record-coerce";
 import { copyInternalToolResultState } from "../../packages/agent-core/src/internal-hooks.js";
 import { runWithSessionMcpToolCallAuthority } from "../agents/agent-bundle-mcp-request-context.js";
 import { runBeforeToolCallHook, type HookContext } from "../agents/agent-tools.before-tool-call.js";
+import { boundToolResult } from "../agents/embedded-agent-runner/tool-result-bound.js";
 import { extractToolErrorMessage } from "../agents/embedded-agent-tool-results.js";
 import { createGatewayToolPolicyAssertion } from "../agents/gateway-tool-policy.js";
 import { runAgentHarnessAfterToolCallHook } from "../agents/harness/hook-helpers.js";
@@ -243,10 +244,16 @@ export async function handleMcpJsonRpc(params: {
           result,
           failureKind ? (extractToolErrorMessage(result) ?? "Tool execution failed") : undefined,
         );
+        // The one tool-result bound; MCP clients read with their own tools, so no Gateway path.
+        // Plain strings and other JSON keep their existing normalization.
+        const presented =
+          result && Array.isArray(result.content)
+            ? await boundToolResult(result, undefined, false)
+            : result;
         return copyInternalToolResultState(
           result,
           jsonRpcResult(id, {
-            content: normalizeToolCallContent(result),
+            content: normalizeToolCallContent(presented),
             isError: failureKind !== undefined,
           }),
         );
