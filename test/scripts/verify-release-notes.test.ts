@@ -34,7 +34,6 @@ import {
   pullRequestTitleFromCommitSubject,
   releaseNoteReferences,
   releasePullRequestReferencesToSuppress,
-  releaseProvenanceMarkers,
   recoverUnavailablePullRequests,
   recoverUnavailableIssues,
   loadHistoricalIssueSnapshot,
@@ -1340,7 +1339,6 @@ Release provenance for ${hash} -> #3`
     if (mode === "CLI") {
       expect(args).toEqual([payload]);
     } else {
-      expect(releaseProvenanceMarkers(body)).toEqual([{ commit: hash, pullRequests: [1, 2] }]);
       expect(resolvedReleasePullRequests([3], [], false, [1, 2])).toEqual([1, 2]);
       expect(releasePullRequestReferencesToSuppress([], "fix: subject (#3)", [1, 2], true)).toEqual(
         [3],
@@ -1395,6 +1393,55 @@ Release provenance for ${hash} -> #3`
       }
     },
   );
+
+  it("repairs consolidated commit provenance only with that commit's matching CLI mapping", () => {
+    const releaseCommit = "a".repeat(40);
+    const otherCommit = "b".repeat(40);
+    const body = [
+      `Release provenance: ${"c".repeat(40)} -> #1; ${"d".repeat(40)} -> #2`,
+      `Release provenance: ${otherCommit} -> #3`,
+    ].join("\n");
+    const commits = [
+      { body, hash: releaseCommit },
+      { body: "", hash: otherCommit },
+    ];
+
+    expect(() => collectReleaseProvenanceOverrides(commits)).toThrow(
+      "invalid release provenance marker",
+    );
+    expect(() => collectReleaseProvenanceOverrides(commits, [`${otherCommit} -> #1, #2`])).toThrow(
+      "invalid release provenance marker",
+    );
+    expect(() => collectReleaseProvenanceOverrides(commits, [`${releaseCommit} -> #1`])).toThrow(
+      "invalid release provenance marker",
+    );
+    for (const malformed of [
+      `Release provenance: ${otherCommit} -> #bad`,
+      `${body.split("\n")[0]}; unreadable`,
+    ]) {
+      expect(() =>
+        collectReleaseProvenanceOverrides(
+          [{ body: malformed, hash: releaseCommit }],
+          [`${releaseCommit} -> #1, #2`],
+        ),
+      ).toThrow("invalid release provenance marker");
+    }
+    expect(() =>
+      collectReleaseProvenanceOverrides(commits, [`${releaseCommit} -> #1, #2, #4`]),
+    ).toThrow("invalid release provenance marker");
+    for (const pullRequests of [
+      [1, 2],
+      [2, 1],
+    ]) {
+      const mapping = `${releaseCommit} -> ${pullRequests.map((number) => `#${number}`).join(", ")}`;
+      expect(collectReleaseProvenanceOverrides(commits, [mapping])).toEqual(
+        new Map([
+          [releaseCommit, pullRequests],
+          [otherCommit, [3]],
+        ]),
+      );
+    }
+  });
 
   it("requires main provenance PRs to be merged into current main", () => {
     const releaseCommit = "a".repeat(40);
