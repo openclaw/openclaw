@@ -24,6 +24,61 @@ const frozenBaselines = {
 };
 const npmVersionsArgs = ["view", "openclaw", "versions", "--json", "--silent", "--prefer-online"];
 
+it.each([true, false])(
+  "only freezes original artifacts for the same candidate: %s",
+  async (sameCandidate) => {
+    const f = createDispatchFixture({ candidateOwned: true, ghRoute: "path" });
+    const selection = publicationSelectionFixture();
+    const baselines = JSON.stringify(frozenBaselines);
+    const priorSha = sameCandidate ? f.targetSha : "e".repeat(40);
+    const plan = {
+      targetSha: priorSha,
+      parentRunId: "51",
+      parentRunAttempt: 1,
+      candidate: { package: { packageSha256: "b".repeat(64) } },
+      qualificationInputs: {
+        ...f.workflowInputDefaults,
+        ref: priorSha,
+        expected_sha: priorSha,
+        target_context_ref: "release/2026.8.1",
+        allow_unreleased_changelog: "false",
+        provider: "openai",
+        mode: "both",
+        release_profile: "stable",
+        run_release_soak: "true",
+        rerun_group: "all",
+        reuse_evidence: "false",
+        fail_fast: "false",
+      },
+      sourceAdmission: {
+        candidateSha: priorSha,
+        runId: "51",
+        validationPurpose: "publish",
+        targetContextRef: "release/2026.8.1",
+        publicationSelection: selection,
+        coverage: { qualification_baselines_json: baselines },
+      },
+    };
+    const zip = new JSZip();
+    zip.file("full-release-execution-plan.json", JSON.stringify(plan));
+    writeFileSync(f.priorPlanZipPath, await zip.generateAsync({ type: "nodebuffer" }));
+    const result = f.run([
+      "-f",
+      "validation_purpose=publish",
+      "-f",
+      "publication_selection_json=" + JSON.stringify(selection),
+      "-f",
+      "qualification_baselines_json=" + baselines,
+    ]);
+    expect(result.status, result.stderr).toBe(0);
+    const envelope = JSON.parse(f.readPayload().body.inputs.trusted_workflow_json!);
+    expect(envelope.laneInputs.publication_artifact_source_json).toBe(
+      sameCandidate ? JSON.stringify({ runId: "51", runAttempt: 1 }) : undefined,
+    );
+    expect(dispatches(f)).toEqual([P, Q]);
+  },
+);
+
 function dispatches(fixture: ReturnType<typeof createDispatchFixture>) {
   return fixture.readCalls(fixture.ghCallsPath).filter(isWorkflowDispatch).map(ghApiEndpoint);
 }

@@ -1243,6 +1243,90 @@ function parseGhHttpResponse(output: string) {
   return { status: Number(match[1]), headers, body: match[3]! };
 }
 
+function findPriorPublicationArtifactSource(
+  match: {
+    targetSha: string;
+    targetContextRef: string;
+    publicationSelection: PublicationSelection;
+    qualificationBaselines: string;
+    extensionTestExcludes?: string;
+    wireInputs: Record<string, string>;
+    workflowSha: string;
+  },
+  runs: unknown[],
+  readPlan: (runId: string) => unknown,
+) {
+  const effectiveWorkload = (inputs: Record<string, unknown>) =>
+    Object.fromEntries(
+      Object.entries(inputs)
+        .filter(
+          ([key, value]) =>
+            value !== "" &&
+            !["trusted_workflow_json", "reuse_evidence", "fail_fast", "run_release_soak"].includes(
+              key,
+            ),
+        )
+        .map(([key, value]) => [key, String(value)]),
+    );
+  const soak = (inputs: Record<string, unknown>) =>
+    String(inputs.run_release_soak) === "true" ||
+    inputs.release_profile === "stable" ||
+    inputs.release_profile === "full";
+  for (const priorRun of runs) {
+    if (
+      !isJsonRecord(priorRun) ||
+      !Number.isSafeInteger(priorRun.id) ||
+      Number(priorRun.id) <= 0 ||
+      priorRun.run_attempt !== 1 ||
+      priorRun.status !== "completed" ||
+      !["success", "failure"].includes(String(priorRun.conclusion)) ||
+      typeof priorRun.head_branch !== "string" ||
+      !priorRun.head_branch.startsWith("release-ci/")
+    ) {
+      continue;
+    }
+    const runId = String(priorRun.id);
+    const plan = readPlan(runId);
+    if (
+      !isJsonRecord(plan) ||
+      plan.targetSha !== match.targetSha ||
+      plan.parentRunId !== runId ||
+      plan.parentRunAttempt !== 1 ||
+      !isJsonRecord(plan.candidate) ||
+      !isJsonRecord(plan.qualificationInputs) ||
+      !isJsonRecord(plan.sourceAdmission) ||
+      plan.publicationArtifactSource !== undefined
+    ) {
+      continue;
+    }
+    const source = plan.sourceAdmission;
+    if (
+      source.runId !== runId ||
+      source.candidateSha !== match.targetSha ||
+      source.validationPurpose !== "publish" ||
+      source.targetContextRef !== match.targetContextRef ||
+      !isDeepStrictEqual(source.publicationSelection, match.publicationSelection) ||
+      !isJsonRecord(source.coverage) ||
+      source.coverage.qualification_baselines_json !== match.qualificationBaselines ||
+      (source.coverage.extension_test_exclude_patterns_json ?? "[]") !==
+        (match.extensionTestExcludes ?? "[]") ||
+      !isDeepStrictEqual(
+        effectiveWorkload(plan.qualificationInputs),
+        effectiveWorkload(match.wireInputs),
+      ) ||
+      soak(plan.qualificationInputs) !== soak(match.wireInputs)
+    ) {
+      continue;
+    }
+    // Keep the whole-parent route available for an exact-Q success. Otherwise
+    // nominate only the original bytes, not the old aggregate verdict.
+    return priorRun.conclusion === "success" && priorRun.head_sha === match.workflowSha
+      ? undefined
+      : { runId, runAttempt: 1 };
+  }
+  return undefined;
+}
+
 function readDispatchRuns(request: DispatchRequest) {
   const runs: Record<string, unknown>[] = [];
   let total: number | undefined;
@@ -2443,7 +2527,69 @@ async function main() {
     ...(targetContextRef !== targetSha ? { target_context_ref: targetContextRef } : {}),
     ...args.inputs,
   };
-  const selection = resolveDispatchSelection(workflowSha, dispatchInputs);
+  let selection = resolveDispatchSelection(workflowSha, dispatchInputs);
+  if (
+    candidateOwned &&
+    publicationIntent.publicationSelection &&
+    args.inputs.rerun_group === "all" &&
+    args.inputs.reuse_evidence === "true" &&
+    args.inputs.preflight_first !== "true" &&
+    !args.inputs.publication_artifact_source_json
+  ) {
+    // GitHub indexes workflow runs by Q, not C. Read only a bounded recent
+    // inventory; the existing hosted artifact-source gate authenticates the
+    // selected plan, Q admission, producer receipts, and exact package bytes.
+    const inventory: unknown = JSON.parse(
+      readGhApi(`repos/${REPOSITORY}/actions/workflows/${WORKFLOW}/runs`, [
+        "-f",
+        "event=workflow_dispatch",
+        "-f",
+        "status=completed",
+        "-f",
+        "per_page=10",
+      ]),
+    );
+    requireDispatch(
+      isJsonRecord(inventory) && Array.isArray(inventory.workflow_runs),
+      "Invalid publication artifact source inventory; no release was dispatched",
+    );
+    const { createReleaseEvidenceClient } = await import("./release-ci-summary.mjs");
+    const client = createReleaseEvidenceClient(REPOSITORY);
+    const prior = findPriorPublicationArtifactSource(
+      {
+        targetSha,
+        targetContextRef,
+        publicationSelection: publicationIntent.publicationSelection,
+        qualificationBaselines: args.inputs.qualification_baselines_json,
+        extensionTestExcludes: args.inputs.extension_test_exclude_patterns_json,
+        wireInputs: selection.wireInputs,
+        workflowSha,
+      },
+      inventory.workflow_runs,
+      (runId) => {
+        try {
+          return client.loadExecutionPlanEvidence(runId).plan;
+        } catch (error) {
+          if (
+            commandFailureMessage(error) ===
+            "publication original execution plan is missing or ambiguous; use a fresh parent"
+          ) {
+            return undefined;
+          }
+          throw error;
+        }
+      },
+    );
+    if (prior) {
+      console.log(
+        `Retaining publication artifacts from ${prior.runId}/${prior.runAttempt} for ${targetSha}`,
+      );
+      selection = resolveDispatchSelection(workflowSha, {
+        ...dispatchInputs,
+        publication_artifact_source_json: JSON.stringify(prior),
+      });
+    }
+  }
   const requestId = randomUUID();
   const requestPath = resolve(
     args.requestFile || join(".artifacts", "full-release-validation", `${requestId}.json`),

@@ -126,6 +126,7 @@ export function createDispatchFixture(
   const witnessReadIndexPath = join(root, "witness-read-index.txt");
   const acceptedRunPath = join(root, "accepted-run.json");
   const artifactFixturePath = join(root, "artifact-fixture.cjs");
+  const priorPlanZipPath = join(root, "prior-plan.zip");
   const admissionCapturePath = join(root, "admission-payload.json");
   const admissionReceiptPath = join(root, "admission-receipt.json");
   const admissionFixturePath = resolve(
@@ -408,7 +409,8 @@ const runMetadata = (id, state = parentRunStates[0]) => {
     ...${JSON.stringify(options.runIdentityOverrides ?? {})},
   };
 };
-if (args[0] === "api" && method === "GET" && !hasNoCache) {
+const priorPlanEndpoint = endpoint.includes("/actions/runs/51/artifacts?") || endpoint.includes("/actions/artifacts/8051");
+if (args[0] === "api" && method === "GET" && !hasNoCache && !priorPlanEndpoint) {
   fail("authoritative reads require Cache-Control: max-age=0", 18);
 }
 const admissionEndpoint = endpoint.includes("/actions/workflows/openclaw-release-prepare.yml") ||
@@ -542,6 +544,13 @@ if (args[0] === "api" && args[1] === "graphql" && fields.has("oid")) {
 } else if (args[0] === "api" && endpoint.endsWith("/actions/workflows/full-release-validation.yml")) {
   console.log(JSON.stringify({ id: 17, path: ".github/workflows/full-release-validation.yml" }));
 } else if (args[0] === "api" && /\\/actions\\/workflows\\/(?:17|full-release-validation.yml)\\/runs$/.test(endpoint)) {
+  if (fields.get("status") === "completed" && fields.get("per_page") === "10" && fs.existsSync(${JSON.stringify(priorPlanZipPath)})) {
+    console.log(JSON.stringify({ total_count: 1, workflow_runs: [{
+      ...runMetadata(51, { status: "completed", conclusion: "failure" }),
+      head_sha: "a".repeat(40), head_branch: "release-ci/prior-tooling",
+    }] }));
+    process.exit(0);
+  }
   const concurrencyInventory = fields.has("status");
   if (!concurrencyInventory && fs.existsSync(${JSON.stringify(admissionCapturePath)} + ".ref-read-failed")) {
     fs.writeFileSync(${JSON.stringify(admissionCapturePath)} + ".recovery-inventory", "authority revoked during recovery inventory");
@@ -594,6 +603,15 @@ if (args[0] === "api" && args[1] === "graphql" && fields.has("oid")) {
     }
   }
   console.log(JSON.stringify({ total_count: totalCount, workflow_runs: runs.slice((page - 1) * 20, page * 20) }));
+} else if (args[0] === "api" && priorPlanEndpoint) {
+  const bytes = fs.readFileSync(${JSON.stringify(priorPlanZipPath)});
+  const metadata = {
+    id: 8051, name: "full-release-execution-plan-51", expired: false,
+    size_in_bytes: bytes.length, workflow_run: { id: 51 },
+    digest: "sha256:" + require("node:crypto").createHash("sha256").update(bytes).digest("hex"),
+  };
+  if (endpoint.endsWith("/zip")) process.stdout.write(bytes);
+  else console.log(JSON.stringify(endpoint.includes("/runs/51/") ? { total_count: 1, artifacts: [metadata] } : metadata));
 } else if (args[0] === "api" && endpoint.endsWith("/actions/runs/123")) {
   const index = Number(fs.readFileSync(parentRunIndexPath, "utf8"));
   const state = parentRunStates[Math.max(0, Math.min(index, parentRunStates.length - 1))];
@@ -770,6 +788,13 @@ if (args[0] === "api" && args[1] === "graphql" && fields.has("oid")) {
   fixtureCleanups.add(cleanup);
   return {
     checkout,
+    priorPlanZipPath,
+    workflowInputDefaults: Object.fromEntries(
+      Object.entries(workflow.on?.workflow_dispatch?.inputs ?? {}).map(([key, definition]) => {
+        const input = definition as { default?: string | boolean | number; type?: string };
+        return [key, String(input.default ?? (input.type === "boolean" ? false : ""))];
+      }),
+    ),
     acceptedRunPath,
     admissionReceiptPath,
     npmCallsPath,
