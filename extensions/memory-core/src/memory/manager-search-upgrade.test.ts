@@ -25,6 +25,7 @@ import {
   resolveConfiguredScopeHash,
   type MemoryIndexMeta,
 } from "./manager-reindex-state.js";
+import { MemorySourceIndexKernel } from "./manager-source-index-kernel.js";
 
 const { closeAllMemorySearchManagers, getMemorySearchManager } = await import("./index.js");
 const embeddings = await import("./embeddings.js");
@@ -564,3 +565,100 @@ it.each(["chunking upgrade", "content change", "orphan cache"] as const)(
     }
   },
 );
+
+it("force rebuild replaces legacy NUL chunks rather than retaining their old hashes", async () => {
+  await fixture.seedSessionTranscript({
+    sessionId: "legacy-nul",
+    messages: [
+      {
+        role: "user",
+        senderIsOwner: true,
+        timestamp: 1,
+        content: "Alphanulmarker\u0000Betanulmarker",
+      },
+    ],
+  });
+  const cfg = fixture.createConfig({
+    provider: "none",
+    sources: ["sessions"],
+    sessionMemory: true,
+    vectorEnabled: false,
+  });
+  const manager = await fixture.getFreshManager(cfg, "cli");
+  await manager.sync({ reason: "cli", force: true });
+  const dbPath = manager.status().dbPath!;
+  await closeManager(manager);
+  const canonical = withDatabase(dbPath, (db) =>
+    db
+      .prepare("SELECT event_json, event_zstd FROM transcript_events ORDER BY session_id, seq")
+      .all(),
+  );
+  const legacyText = "User: Alphanulmarker\u0000Betanulmarker";
+  const legacyHash = hashText(legacyText);
+  withDatabase(dbPath, (db) => {
+    const old = db
+      .prepare(
+        "SELECT path, model, start_line, end_line FROM memory_index_chunks WHERE source = 'sessions' LIMIT 1",
+      )
+      .get()!;
+    // Model an existing pre-normalization publication through its owning source-index kernel.
+    db.exec("BEGIN IMMEDIATE");
+    new MemorySourceIndexKernel(db, {
+      vector: { enabled: false, available: false },
+      fts: { enabled: true, available: true },
+      hasVectorTable: false,
+    }).replaceRows(
+      {
+        source: "sessions",
+        agentId: "main",
+        sessionId: "legacy-nul",
+        entry: {
+          path: String(old.path),
+          hash: "legacy-export",
+          mtimeMs: 1,
+          size: legacyText.length,
+        },
+        model: String(old.model),
+        now: 1,
+        vectorReady: false,
+      },
+      [
+        {
+          chunk: {
+            text: legacyText,
+            hash: legacyHash,
+            startLine: Number(old.start_line),
+            endLine: Number(old.end_line),
+            importance: null,
+            triggers: null,
+            projectKey: null,
+          },
+          embedding: [],
+        },
+      ],
+    );
+    db.exec("COMMIT");
+    expect(
+      db.prepare("SELECT text, hash FROM memory_index_chunks WHERE source = 'sessions'").get(),
+    ).toEqual({ text: legacyText, hash: legacyHash });
+  });
+  const reopened = await fixture.getFreshManager(cfg, "cli");
+  await reopened.sync({ reason: "cli", force: true });
+  for (const marker of ["Alphanulmarker", "Betanulmarker"]) {
+    expect(await reopened.search(marker, { lexicalOnly: true, minScore: 0 })).not.toEqual([]);
+  }
+  await closeManager(reopened);
+  withDatabase(dbPath, (db) => {
+    expect(
+      db.prepare("SELECT text, hash FROM memory_index_chunks WHERE source = 'sessions'").get(),
+    ).toEqual({
+      text: "User: Alphanulmarker Betanulmarker",
+      hash: hashText("User: Alphanulmarker Betanulmarker"),
+    });
+    expect(
+      db
+        .prepare("SELECT event_json, event_zstd FROM transcript_events ORDER BY session_id, seq")
+        .all(),
+    ).toEqual(canonical);
+  });
+});
