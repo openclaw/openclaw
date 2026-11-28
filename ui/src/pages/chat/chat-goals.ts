@@ -302,14 +302,20 @@ export function bindChatGoalActions(
   const { sessionKey, currentSessionId } = host;
   const expectedResumeStatus = goal?.status;
   const presentedId = goal?.id;
-  return (goalId: string, action: ChatGoalAction) => {
+  return (goalId: string, action: ChatGoalAction, note?: string) => {
     if (
       isCurrentAgent() &&
       host.sessionKey === sessionKey &&
       host.currentSessionId === currentSessionId &&
       presentedId === goalId
     ) {
-      void mutateChatGoal(host, { action, goalId, expectedResumeStatus });
+      const trimmed = note?.trim();
+      void mutateChatGoal(host, {
+        action,
+        goalId,
+        expectedResumeStatus,
+        ...(trimmed ? { note: trimmed } : {}),
+      });
     }
   };
 }
@@ -422,6 +428,11 @@ export async function submitChatGoalDraft(
   );
 }
 
+function resumeNote(action: ChatGoalMutationAction): string | undefined {
+  const note = action.action === "resume" ? action.note?.trim() : undefined;
+  return note || undefined;
+}
+
 export async function mutateChatGoal(
   host: ChatHost,
   action?: ChatGoalMutationAction & { expectedResumeStatus?: SessionGoal["status"] },
@@ -476,6 +487,8 @@ export async function mutateChatGoal(
       ("action" in params ? params.action : "clear") !== action.action ||
       ((action.action === "edit" || action.action === "replace") &&
         (!("objective" in params) || params.objective !== action.objective)) ||
+      (action.action === "resume" &&
+        ("note" in params ? params.note : undefined) !== resumeNote(action)) ||
       (action.action === "replace" &&
         (!("action" in params) ||
           params.action !== "replace" ||
@@ -537,7 +550,13 @@ export async function mutateChatGoal(
               }
             : action.action === "edit"
               ? { ...identity, action: "edit", objective: action.objective }
-              : { ...identity, action: action.action },
+              : action.action === "resume"
+                ? {
+                    ...identity,
+                    action: "resume",
+                    ...(resumeNote(action) ? { note: resumeNote(action) } : {}),
+                  }
+                : { ...identity, action: action.action },
       pending: false,
     };
     const validate =
