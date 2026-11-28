@@ -58,6 +58,31 @@ describe("handleCompactCommand", () => {
     expect(vi.mocked(compactEmbeddedAgentSession)).not.toHaveBeenCalled();
   });
 
+  it.each([
+    ["an ACP session key", "agent:main:acp:28be091c", undefined],
+    ["a stored ACP binding", "agent:main:discord:thread:1", { backend: "acpx" }],
+  ] as const)(
+    "refuses to compact %s instead of reporting success (#207039)",
+    async (_, key, acp) => {
+      vi.mocked(compactEmbeddedAgentSession).mockResolvedValueOnce({ ok: true, compacted: true });
+      const params = compactParams({
+        sessionKey: key,
+        sessionEntry: { sessionId: "session-1", updatedAt: Date.now(), acp } as never,
+      });
+      const result = await handleCompactCommand(params, true);
+      expect(result).toEqual({
+        shouldContinue: false,
+        sessionCompaction: { compacted: false, reason: expect.stringContaining("ACP harness") },
+        reply: {
+          text: "⚙️ Compaction unavailable: this conversation is bound to an ACP harness, which manages its own context; nothing was compacted.",
+          isStatusNotice: true,
+        },
+      });
+      expect(vi.mocked(compactEmbeddedAgentSession)).not.toHaveBeenCalled();
+      expect(vi.mocked(incrementCompactionCount)).not.toHaveBeenCalled();
+    },
+  );
+
   it("routes manual compaction with explicit trigger and context metadata", async () => {
     vi.mocked(compactEmbeddedAgentSession).mockResolvedValueOnce({
       ok: true,
