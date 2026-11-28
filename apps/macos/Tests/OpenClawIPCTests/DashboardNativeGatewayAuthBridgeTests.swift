@@ -277,12 +277,22 @@ extension DashboardNativeGatewayAuthBridgeTests {
     @Test(arguments: [false, true])
     func retainedClosedDashboardUnloadsAndReopensItsTrustedRoute(reopenImmediately: Bool) async throws {
         _ = AppKitTestSupport.application
+        var documentRequests: [String] = []
+        // Like the Gateway app shell, the fixture restores a session-entry return path in place.
         let server = try await DashboardHTTPFixture.start(
             html: """
             <!doctype html><html><body><script>
             window.fixtureDocument = crypto.randomUUID();
+            if (location.pathname === '/control/__openclaw__/session-entry') {
+              history.replaceState({}, '', new URLSearchParams(location.search).get('path') + location.hash);
+            }
             </script></body></html>
-            """, contentSecurityPolicy: "default-src 'none'; script-src 'unsafe-inline'")
+            """,
+            contentSecurityPolicy: "default-src 'none'; script-src 'unsafe-inline'",
+            requestHandler: { request in
+                documentRequests += request.components(separatedBy: " ").dropFirst().prefix(1)
+                return nil
+            })
         defer { server.stop() }
         let auth = DashboardWindowAuth.nativeDevice(
             gatewayUrl: server.websocketURL("/control/").absoluteString,
@@ -316,7 +326,7 @@ extension DashboardNativeGatewayAuthBridgeTests {
         let original = try #require(try await webView.evaluateJavaScript("window.fixtureDocument") as? String)
         let otherDocument = try #require(try await other.webView.evaluateJavaScript("window.fixtureDocument") as? String)
         _ = try await webView.evaluateJavaScript("""
-        history.replaceState({}, '', '/control/chat/main/main?panel=privacy');
+        history.replaceState({}, '', '/control/chat/main/main?dashboard=expanded#panel=privacy');
         sessionStorage.setItem('closed-dashboard-draft', 'keep this draft');
         """)
         let route = try #require(webView.url)
@@ -332,6 +342,7 @@ extension DashboardNativeGatewayAuthBridgeTests {
         #expect(try await webView.evaluateJavaScript("window.fixtureDocument") as? String == original)
         _ = try await webView.callAsyncJavaScript(grantScript, in: nil, contentWorld: .page)
         controller.show()
+        documentRequests.removeAll()
         window.performClose(nil)
         #expect(!controller.isWindowOpen)
         #expect(!controller.canDeliverNativeCommands)
@@ -353,6 +364,11 @@ extension DashboardNativeGatewayAuthBridgeTests {
         try await waitForNativeDashboardDocument(controller)
         #expect(controller.window === window)
         #expect(controller.webView === webView)
+        // A direct /chat document load is the Gateway's public reader; the private route re-enters the app shell.
+        #expect(documentRequests.count == 1)
+        let reopened = try #require(documentRequests.first.flatMap { URLComponents(string: $0) })
+        #expect(reopened.path == "/control/__openclaw__/session-entry")
+        #expect(reopened.queryItems == [.init(name: "path", value: "/control/chat/main/main?dashboard=expanded")])
         #expect(webView.url == route)
         #expect(try await webView.evaluateJavaScript("window.fixtureDocument") as? String != original)
         #expect(try await webView.evaluateJavaScript(

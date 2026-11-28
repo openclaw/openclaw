@@ -21,6 +21,64 @@ struct WebChatRoute: Equatable, Sendable {
 }
 
 extension WebChatRoute {
+    @MainActor
+    static func recoveryDocumentURL(for url: URL, baseURL: URL) -> URL? {
+        guard url.user == nil, url.password == nil,
+              ControlUIDocumentHost.isTrustedLinkSource(url, dashboardURL: baseURL),
+              let path = ControlUIDocumentHost.appPath(
+                  fromDocumentPath: url.path(percentEncoded: true), baseURL: baseURL)
+        else { return nil }
+        // Mirror the Gateway's public-reader routing: only those chat documents need the private entry.
+        guard path.hasPrefix("/chat/"), path != "/chat/",
+              let route = URLComponents(url: url, resolvingAgainstBaseURL: false)
+        else { return url }
+        guard !Self.isCatalogThread(path: path, route: route) else { return url }
+        guard let entry = DashboardRouteMap.dashboardURL(
+            byAppendingSameAppPath: "/__openclaw__/session-entry", to: baseURL),
+            var components = URLComponents(url: entry, resolvingAgainstBaseURL: false)
+        else { return nil }
+        // Match the Gateway's session-entry return-query contract. Keep raw
+        // encoding (including '+' semantics), and credentials only in the outer hash.
+        let query = route.percentEncodedQuery?.components(separatedBy: "&").filter { field in
+            let decodedField = field.replacingOccurrences(of: "+", with: "%20")
+            guard let item = URLComponents(string: "?" + decodedField)?.queryItems?.first,
+                  route.queryItems?.filter({ $0.name == item.name }).count == 1
+            else { return false }
+            return Self.isRecoveryQueryItem(item)
+        }.joined(separator: "&")
+        let search = query.flatMap { $0.isEmpty ? nil : "?" + $0 } ?? ""
+        components.queryItems = [.init(name: "path", value: route.percentEncodedPath + search)]
+        components.percentEncodedQuery = components.percentEncodedQuery?.replacingOccurrences(of: "+", with: "%2B")
+        components.percentEncodedFragment = route.percentEncodedFragment
+        return components.url
+    }
+
+    /// External catalog threads on an agent's main chat are app-shell documents, never public publications.
+    private static func isCatalogThread(path: String, route: URLComponents) -> Bool {
+        let agentPath = path.dropFirst("/chat/".count)
+        guard !(agentPath.hasSuffix("/") ? agentPath.dropLast() : agentPath).contains("/") else { return false }
+        let items = route.queryItems ?? []
+        return ["catalog", "host", "thread"].allSatisfy { key in
+            let values = items.filter { $0.name == key }
+            return values.count == 1 &&
+                values[0].value?.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty == false
+        }
+    }
+
+    private static func isRecoveryQueryItem(_ item: URLQueryItem) -> Bool {
+        let value = item.value ?? ""
+        switch item.name {
+        case "dashboard": return value == "expanded"
+        case "draft": return true
+        case "openclaw_mount_recovery": return !value.isEmpty && value.utf8.allSatisfy { (48...57).contains($0) }
+        case "__openclawSessionFacePreference", "__openclawComposerFocus": return value == "1"
+        case "__openclawSessionKey":
+            return !value.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty &&
+                !value.unicodeScalars.contains { $0.value < 32 || $0.value == 127 }
+        default: return false
+        }
+    }
+
     static func documentURL(sessionKey: String, agentID: String?, draft: String?, baseURL: URL) -> URL? {
         guard let path = self.dashboardPath(sessionKey: sessionKey, agentID: agentID),
               let destination = DashboardRouteMap.dashboardURL(byAppendingSameAppPath: path, to: baseURL),

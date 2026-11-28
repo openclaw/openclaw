@@ -58,7 +58,8 @@ private final class DashboardSignInNavigationObserver: NSObject, WKNavigationDel
 
 @MainActor
 struct DashboardBrowserSignInRecoveryTests {
-    @Test func `live browser identity sign-in reloads the chat in its own cookie store`() async throws {
+    @Test(arguments: [false, true])
+    func `live browser identity recovery enters the private chat in its own cookie store`(reload: Bool) async throws {
         var receivedIdentityCookie = false
         var receivedRenewedCookie = false
         let server = try await DashboardHTTPFixture.start(requestHandler: { request in
@@ -78,7 +79,10 @@ struct DashboardBrowserSignInRecoveryTests {
                     receivedRenewedCookie ? image : "Sign-in required",
                     type: receivedRenewedCookie ? "image/svg+xml" : "text/plain")
             }
-            let recovered = request.hasPrefix("GET /control/chat/fixture?view=thread ") &&
+            let target = request.components(separatedBy: " ").dropFirst().first ?? ""
+            let entry = URLComponents(string: target)
+            let recovered = entry?.path == "/control/__openclaw__/session-entry" &&
+                entry?.queryItems == [.init(name: "path", value: "/control/chat/fixture?dashboard=expanded")] &&
                 cookie.contains("sign-in-fixture=retained")
             if recovered { receivedIdentityCookie = true }
             return Self.response(
@@ -100,7 +104,7 @@ struct DashboardBrowserSignInRecoveryTests {
         controller.webView.navigationDelegate = observer
         try await observer.navigate { controller.show(url: baseURL, auth: auth) }
         _ = try await controller.webView.evaluateJavaScript("""
-        history.replaceState({}, '', '/control/chat/fixture?view=thread');
+        history.replaceState({}, '', '/control/chat/fixture?dashboard=expanded#panel=details');
         localStorage.setItem('sign-in-draft', 'Keep this unsent draft');
         document.querySelector('textarea').value = localStorage.getItem('sign-in-draft');
         document.cookie = 'sign-in-fixture=retained; path=/';
@@ -109,7 +113,11 @@ struct DashboardBrowserSignInRecoveryTests {
         try await Self.capture(controller.webView, name: "browser-sign-in-before")
 
         try await observer.navigate {
-            controller.reconnectGateway(.primary)
+            if reload {
+                controller.reloadDashboard()
+            } else {
+                controller.reconnectGateway(.primary)
+            }
             // The old signed-out-only entry point returns without navigating.
             try #require(controller.webView.isLoading)
         }
@@ -166,11 +174,15 @@ struct DashboardBrowserSignInRecoveryTests {
         border:1px solid #52616e; border-radius:10px; font:18px -apple-system }
         footer { margin-top:26px; font-size:14px; color:#aab9c6 }
         </style><header>OpenClaw · Synthetic native WebKit sign-in fixture</header><main>
-        <h1>\(title)</h1><p>Current conversation: /control/chat/fixture?view=thread</p>
+        <h1>\(title)</h1><p>Current conversation: /control/chat/fixture?dashboard=expanded</p>
         <article><p>Please keep this conversation and its draft open while restoring the attachment.</p>
         \(attachment)<label for="draft">Unsent draft</label><textarea id="draft" rows="2"></textarea></article>
-        <footer>Real macOS WKWebView and native reconnect owner. Synthetic HTTP authentication; no live account.</footer>
-        </main><script>document.querySelector('textarea').value = localStorage.getItem('sign-in-draft') || '';</script>
+        <footer>Real macOS WKWebView and native reconnect owner.
+        Synthetic HTTP authentication; no live account.</footer>
+        </main><script>
+        if (\(recovered)) history.replaceState({}, '', '/control/chat/fixture?dashboard=expanded' + location.hash);
+        document.querySelector('textarea').value = localStorage.getItem('sign-in-draft') || '';
+        </script>
         </html>
         """
     }
@@ -227,7 +239,7 @@ struct DashboardBrowserSignInRecoveryTests {
         controller.webView.navigationDelegate = observer
         try await observer.navigate { controller.show(url: baseURL, auth: auth) }
         _ = try await controller.webView.evaluateJavaScript(
-            "history.replaceState({}, '', '/control/chat/fixture?view=thread')")
+            "history.replaceState({}, '', '/control/chat/fixture?dashboard=expanded#panel=details')")
         let chatURL = try #require(controller.webView.url)
 
         // Close synchronously after admission, before the sign-in task can
