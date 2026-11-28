@@ -4,17 +4,15 @@ import { openEngineStore, readEngineAnchor } from "./open.js";
 import type { PortDescriptor } from "./port-descriptor.js";
 import { withLegacyPostgresIndexOrdering } from "./postgres-index-ordering.js";
 
-/** Restore the previous generated index policy without upgrading a recovery image. */
-export function historicalIndexOrderingPort(
+/** Reopen an exact historical schema without allowing current-owner migrations. */
+export function historicalPortVersion(
   descriptor: PortDescriptor,
   version: number,
   postgres: string,
-  policy: "sqlite" | "schema-nullability" = "sqlite",
 ): PortDescriptor {
   return {
     ...descriptor,
     version,
-    postData: withLegacyPostgresIndexOrdering(descriptor.postData, policy, descriptor.preData),
     inspectSqliteSource: undefined,
     migrateSqliteSource: undefined,
     admit(file, input) {
@@ -30,7 +28,7 @@ export function historicalIndexOrderingPort(
             id: descriptor.id,
             version,
             sqlite: descriptor.sqlite,
-            postgres: withLegacyPostgresIndexOrdering(postgres, policy),
+            postgres,
           },
           existingOnly: true,
           inspectSqlite: () => ({
@@ -46,4 +44,21 @@ export function historicalIndexOrderingPort(
       });
     },
   };
+}
+
+/** Restore the previous generated index policy without upgrading a recovery image. */
+export function historicalIndexOrderingPort(
+  descriptor: PortDescriptor,
+  version: number,
+  postgres: string,
+  policy: "sqlite" | "schema-nullability" = "sqlite",
+): PortDescriptor {
+  return historicalPortVersion(
+    {
+      ...descriptor,
+      postData: withLegacyPostgresIndexOrdering(descriptor.postData, policy, descriptor.preData),
+    },
+    version,
+    withLegacyPostgresIndexOrdering(postgres, policy),
+  );
 }

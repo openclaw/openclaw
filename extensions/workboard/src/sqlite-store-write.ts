@@ -155,6 +155,7 @@ export function insertCard(
     execution_started_at: () => bindNull(execution?.startedAt),
     execution_updated_at: () => bindNull(execution?.updatedAt),
     automation_json: () => jsonValue(metadata?.automation),
+    common_work_json: () => jsonValue(metadata?.commonWork),
     claim_json: () => jsonValue(metadata?.claim),
     template_id: () => bindNull(metadata?.templateId),
     archived_at: () => bindNull(metadata?.archivedAt),

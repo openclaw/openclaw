@@ -1,4 +1,5 @@
 import type {
+  CommonWorkRecord,
   WorkboardBoardSummary,
   WorkboardCard,
   WorkboardDiagnostic,
@@ -47,6 +48,7 @@ export type WorkboardOwnedCardPatch = WorkboardCardPatch & {
 };
 export type WorkboardUpdateCardOptions = {
   automationLaunch?: WorkboardLaunchState;
+  commonWork?: CommonWorkRecord;
   /** Replaces automation.verifications; built only by workboard_verify. */
   automationVerifications?: WorkboardVerification[];
   allowMetadataDependencyLinks?: boolean;

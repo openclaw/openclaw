@@ -9,6 +9,7 @@ const SUPPORTED_METADATA_KEYS: Record<keyof WorkboardMetadata, true> = {
   automation: true,
   claim: true,
   comments: true,
+  commonWork: true,
   diagnostics: true,
   failureCount: true,
   lifecycleStatusSourceUpdatedAt: true,

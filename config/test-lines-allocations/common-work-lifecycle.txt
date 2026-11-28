@@ -1,0 +1,3 @@
+# Exact branch-level overage for T01-T31 and the focused dispatcher-boundary suite;
+# split files preserve responsibility boundaries while covering positive and negative authority paths.
+682
