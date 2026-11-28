@@ -502,7 +502,7 @@ describe("plugin update authority", () => {
         });
         const npmInstall = vi.spyOn(installer, "installPluginFromNpmSpec");
         for (const revoke of [true, false]) {
-          await withUpdater(state, true, async (fence) => {
+          await withUpdater(state, async (fence) => {
             const unlink = fs.unlink.bind(fs);
             const removal = vi.spyOn(fs, "unlink").mockImplementation(async (file) => {
               await unlink(file);

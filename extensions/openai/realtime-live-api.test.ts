@@ -2,6 +2,7 @@ import { createDeferred } from "openclaw/plugin-sdk/extension-shared";
 import type { RealtimeVoiceGatewayControl } from "openclaw/plugin-sdk/realtime-voice";
 import { expect, it, onTestFinished, vi } from "vitest";
 import { publicDelegation } from "./realtime-quicksilver-events.test-support.js";
+import { OPENAI_QUICKSILVER_PROGRESS_INSTRUCTIONS } from "./realtime-quicksilver-instructions.js";
 import {
   createBroker,
   emitSideband,
@@ -134,7 +135,7 @@ it("accepts an audio and application offer and drains final text before closing"
   expect(JSON.parse(init.body)).toEqual({
     session: {
       model: "gpt-live-1",
-      instructions: "Answer briefly.",
+      instructions: `Answer briefly.\n\n${OPENAI_QUICKSILVER_PROGRESS_INSTRUCTIONS}`,
       audio: { output: { voice: "marin" } },
       delegation: { type: "client" },
       input: [

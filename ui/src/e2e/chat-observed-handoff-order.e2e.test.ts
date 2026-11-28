@@ -131,7 +131,10 @@ suite.define(() => {
             messageId,
             messageSeq,
           });
-          await thread.getByText(message.content, { exact: true }).waitFor();
+          await thread
+            .locator(".chat-bubble")
+            .getByText(message.content, { exact: true })
+            .waitFor();
         }
         // Capture the real before-state too, before the regression assertion fails.
         if (process.env.OPENCLAW_CAPTURE_UI_PROOF === "1") {

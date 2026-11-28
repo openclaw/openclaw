@@ -10,10 +10,10 @@ import { useAutoCleanupTempDirTracker } from "../../test/helpers/temp-dir.js";
 import { createDeferredCore } from "../shared/deferred.js";
 import { findOpenFixtureFiles } from "../state/openclaw-state-ownership.test-support.js";
 import {
-  classifyGatewayLockProcessNamespace,
   GATEWAY_OWNER_HEARTBEAT_STALE_MS,
   readGatewayLockProcessNamespace,
 } from "./gateway-lock-payload.js";
+import { classifyGatewayLockProcessNamespace } from "./gateway-lock-recovery-namespace.js";
 import { acquireGatewayLock } from "./gateway-lock.js";
 import { startGatewayStateOwnerHeartbeat } from "./gateway-state-owner-heartbeat.js";
 import type { GatewayStateOwnerHeartbeatData } from "./gateway-state-owner-heartbeat.runtime.js";

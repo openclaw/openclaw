@@ -1317,6 +1317,7 @@ public struct OpenClawPendingAttachment: Identifiable {
     public let type: String
     public let preview: OpenClawPlatformImage?
     public let durationSeconds: Double?
+    var videoPixelSize: CGSize?
 
     public init(
         url: URL?,
