@@ -7,6 +7,7 @@ import {
   classifyOAuthRefreshFailureError,
 } from "../../agents/auth-profiles/oauth-refresh-failure.js";
 import { CliCredentialRemovedError } from "../../agents/cli-runner/auth-profile-preparation-error.js";
+import { classifyProviderRuntimeFailureKind } from "../../agents/embedded-agent-helpers/provider-runtime-failure.js";
 import { sanitizeUserFacingText } from "../../agents/embedded-agent-helpers/sanitize-user-facing-text.js";
 import {
   renderAgentHarnessPreflightUserMessage,
@@ -47,6 +48,7 @@ import {
 } from "../../agents/failover/user-copy.js";
 import { isAgentHarnessPreflightError } from "../../agents/harness/errors.js";
 import { isProviderAuthError } from "../../agents/model-auth-runtime-shared.js";
+import { MODEL_FALLBACK_SKIPPED_CODE } from "../../agents/model-fallback.types.js";
 import {
   createMissingReplyNotice,
   MISSING_REPLY_NOTICE_TEXT,
@@ -357,20 +359,49 @@ export function buildExternalRunFailureReply(
     authMode: failoverFacts.authMode,
   });
   if (oauthRefreshFailure) {
+    const [firstAttempt, ...fallbackCandidates] = readFallbackAttempts(error);
+    const failedFallbacks = fallbackCandidates.filter(
+      (attempt) => attempt.code !== MODEL_FALLBACK_SKIPPED_CODE,
+    );
+    const primaryAttempt =
+      failedFallbacks.length > 0 && firstAttempt?.code !== MODEL_FALLBACK_SKIPPED_CODE
+        ? firstAttempt
+        : undefined;
+    // Attempt diagnostics remain verbose-gated; the chain exposes only classified copy.
+    const primaryCopy = primaryAttempt
+      ? (renderAssistantRequestFailureCopy({ reason: primaryAttempt.reason }) ??
+        "OpenClaw couldn't finish this reply.")
+      : undefined;
+    const fallbackContext = primaryCopy
+      ? `Primary attempt failed: ${primaryCopy.replace(/^⚠️\s*/u, "")} ${failedFallbacks.length > 1 ? `${failedFallbacks.length} fallback attempts failed. Last fallback: ` : "Fallback: "}`
+      : "";
+    const lastAttempt = failedFallbacks.at(-1);
+    const providerText = oauthRefreshFailure.provider ? ` for ${oauthRefreshFailure.provider}` : "";
+    if (
+      primaryAttempt &&
+      !oauthRefreshFailure.reason &&
+      lastAttempt?.provider === oauthRefreshFailure.provider &&
+      lastAttempt?.error &&
+      classifyProviderRuntimeFailureKind(lastAttempt.error) === "refresh_timeout"
+    ) {
+      return {
+        text: `⚠️ ${fallbackContext}Login refresh${providerText} timed out. Please try again. For details, open Settings → Logs in the Control UI or run \`openclaw logs --follow\`.`,
+        isGenericRunnerFailure: false,
+      };
+    }
     // A reason means the sign-in was refused; without one the refresh may succeed on retry.
     if (oauthRefreshFailure.reason && providerLoginRecovery) {
       return {
-        text: `⚠️ ${providerLoginRecovery.hint}`,
+        text: `⚠️ ${fallbackContext}${providerLoginRecovery.hint}`,
         presentation: providerLoginRecovery.presentation,
         isGenericRunnerFailure: false,
       };
     }
-    const providerText = oauthRefreshFailure.provider ? ` for ${oauthRefreshFailure.provider}` : "";
     const loginCommand = buildOAuthRefreshFailureLoginCommand(oauthRefreshFailure.provider, {
       surface: "chat",
     });
     return {
-      text: `⚠️ Model login failed on the gateway${providerText}. Please try again. If this keeps happening, send ${formatInlineCodeSpan(loginCommand)} from a private chat or the OpenClaw app.`,
+      text: `⚠️ ${fallbackContext}Model login failed on the gateway${providerText}. Please try again. If this keeps happening, send ${formatInlineCodeSpan(loginCommand)} from a private chat or the OpenClaw app.`,
       isGenericRunnerFailure: false,
     };
   }

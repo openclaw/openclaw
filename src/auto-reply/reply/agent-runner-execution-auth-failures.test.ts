@@ -3,6 +3,7 @@ import { OAuthRefreshFailureError } from "../../agents/auth-profiles/oauth-refre
 import { CliCredentialRemovedError } from "../../agents/cli-runner/auth-profile-preparation-error.js";
 import { FailoverError } from "../../agents/failover-error.js";
 import { MissingProviderAuthError, ProviderAuthError } from "../../agents/model-auth.js";
+import { MODEL_FALLBACK_SKIPPED_CODE } from "../../agents/model-fallback.types.js";
 import type { TemplateContext } from "../templating.js";
 import {
   setupAgentRunnerExecutionTestState,
@@ -107,6 +108,160 @@ describe("executeAgentTurn: authentication failures", () => {
       expect(result.payload.presentation).toEqual(PROVIDER_LOGIN_PRESENTATION);
     }
   });
+
+  it.each([
+    {
+      name: "OAuth refresh timeout",
+      message: 'OAuth refresh call "refreshOAuthCredential(xai)" exceeded hard timeout (120000ms)',
+      expected: "timed out",
+      intermediateAttempts: 0,
+      needsLogin: false,
+    },
+    {
+      name: "OAuth refresh timeout after several fallbacks",
+      message: 'OAuth refresh call "refreshOAuthCredential(xai)" exceeded hard timeout (120000ms)',
+      expected: "3 fallback attempts failed",
+      intermediateAttempts: 2,
+      needsLogin: false,
+    },
+    {
+      name: "OAuth refresh timeout before a skipped candidate",
+      message: 'OAuth refresh call "refreshOAuthCredential(xai)" exceeded hard timeout (120000ms)',
+      expected: "timed out",
+      intermediateAttempts: 0,
+      needsLogin: false,
+      trailingSkip: true,
+    },
+    {
+      name: "primary login failure before a skipped candidate",
+      message: "invalid_grant",
+      expected: "needs a new login",
+      intermediateAttempts: 0,
+      needsLogin: true,
+      trailingSkip: true,
+      primaryOnly: true,
+    },
+    {
+      name: "expired fallback login",
+      message: "invalid_grant",
+      expected: "needs a new login",
+      intermediateAttempts: 0,
+      needsLogin: true,
+    },
+    {
+      name: "transient fallback refresh failure",
+      message: "temporary upstream issue",
+      expected: "Model login failed",
+      intermediateAttempts: 0,
+      needsLogin: false,
+    },
+    {
+      name: "fallback transport failure without a timeout",
+      message: "fetch failed",
+      expected: "Model login failed",
+      intermediateAttempts: 0,
+      needsLogin: false,
+    },
+  ])(
+    "retains the primary failure for $name",
+    async ({
+      message,
+      expected,
+      intermediateAttempts,
+      needsLogin,
+      trailingSkip = false,
+      primaryOnly = false,
+    }) => {
+      const refreshError = new OAuthRefreshFailureError({
+        provider: "xai",
+        profileId: "xai:private-profile-canary",
+        message,
+      });
+      state.runEmbeddedAgentMock.mockRejectedValueOnce(
+        createTestFallbackSummaryError({
+          message: "All models failed (2): private-runtime-diagnostic-canary",
+          attempts: [
+            ...(primaryOnly
+              ? []
+              : [
+                  {
+                    provider: "openai",
+                    model: "primary-model",
+                    reason: "unknown" as const,
+                    error:
+                      "MCP runtime cleanup could not confirm closure: private-runtime-diagnostic-canary",
+                  },
+                ]),
+            ...Array.from({ length: intermediateAttempts }, () => ({
+              provider: "anthropic",
+              model: "intermediate-model",
+              reason: "server_error" as const,
+              error: "private-intermediate-diagnostic-canary",
+            })),
+            {
+              provider: "xai",
+              model: "fallback-model",
+              reason: "auth",
+              authMode: "oauth",
+              status: 401,
+              error: refreshError.message,
+            },
+            ...(trailingSkip
+              ? [
+                  {
+                    provider: "anthropic",
+                    model: "cooldown-model",
+                    reason: "auth" as const,
+                    code: MODEL_FALLBACK_SKIPPED_CODE,
+                    error: "cooldown-skip-diagnostic-canary",
+                  },
+                ]
+              : []),
+          ],
+          cause: refreshError,
+        }),
+      );
+
+      const executeAgentTurn = await getExecuteAgentTurnForTest();
+      const params = createMinimalRunAgentTurnParams();
+      const result = await executeAgentTurn({
+        ...params,
+        sessionCtx: {
+          ...params.sessionCtx,
+          Provider: "discord",
+          Surface: "discord",
+          ChatType: "channel",
+          MessageSid: "msg",
+        },
+      });
+
+      expect(result.kind).toBe("final");
+      if (result.kind === "final") {
+        if (primaryOnly) {
+          expect(result.payload.text).not.toMatch(/Primary attempt failed|\bfallback\b/iu);
+        } else {
+          expect(result.payload.text).toContain("Primary attempt failed");
+          expect(result.payload.text).toMatch(/\bfallback\b/iu);
+        }
+        if (trailingSkip) {
+          expect(result.payload.text).not.toContain("2 fallback attempts failed");
+          expect(result.payload.text).not.toContain("cooldown-skip-diagnostic-canary");
+        }
+        expect(result.payload.text).toContain("xai");
+        expect(result.payload.text).toContain(expected);
+        expect(result.payload.text).not.toMatch(/private-.*canary|401/u);
+        if (needsLogin) {
+          expect(result.payload.presentation).toEqual(providerLoginPresentation("/login xai"));
+        } else {
+          expect(result.payload.text).not.toContain("expired");
+          expect(result.payload.presentation).toBeUndefined();
+        }
+        if (expected === "Model login failed") {
+          expect(result.payload.text).not.toContain("timed out");
+        }
+      }
+    },
+  );
 
   it("omits OAuth profile ids from group reauth guidance", async () => {
     state.runEmbeddedAgentMock.mockRejectedValueOnce(
