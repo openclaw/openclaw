@@ -77,7 +77,8 @@ function dnsLabel(raw: string, fallback: string): string {
     .replace(/^-+/, "")
     .replace(/-+$/, "");
   const out = normalized.length > 0 ? normalized : fallback;
-  return out.length <= 63 ? out : out.slice(0, 63);
+  // Truncation can expose a trailing hyphen the earlier strip already passed.
+  return out.length <= 63 ? out : out.slice(0, 63).replace(/-+$/, "");
 }
 
 function txtQuote(value: string): string {
