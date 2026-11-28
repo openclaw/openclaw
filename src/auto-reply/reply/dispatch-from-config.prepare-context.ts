@@ -408,12 +408,12 @@ export async function prepareDispatchOperationContext(state: PrepareDispatchDeli
       return onSettled?.();
     };
     const onAbandoned = lifecycle.onAbandoned;
-    lifecycle.onAbandoned = () => {
+    lifecycle.onAbandoned = (cause) => {
       // Release before ingress retries, including abandonment before commit.
       if (!state.inboundDedupeReplayUnsafe && !state.turnAdoptionState?.adopted) {
         inboundDedupeClaim.release();
       }
-      return onAbandoned?.();
+      return onAbandoned?.(cause);
     };
   }
   const finishReplyOperationBusyDispatch = (opts?: {

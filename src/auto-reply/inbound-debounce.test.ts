@@ -1,5 +1,6 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { createDeferred } from "../../test/helpers/promise.js";
+import { bindIngressLifecycleToReplyOptions } from "../channels/message/ingress-drain-lifecycle.js";
 import { enqueueCommandInLane } from "../process/command-queue.js";
 import {
   GatewayDrainingError,
@@ -345,6 +346,23 @@ describe("createInboundDebouncer", () => {
       expect(started).toEqual(["1", "2"]);
     },
   );
+
+  it("forwards queued cancellation through the debounce flush to ingress", async () => {
+    const onCancelled = vi.fn();
+    const onAbandoned = vi.fn();
+    const debouncer = lifecycleDebouncer(
+      async (_id, turn) => {
+        await bindIngressLifecycleToReplyOptions(turn).turnAdoptionLifecycle.onAbandoned(
+          "cancelled",
+        );
+      },
+      { lifecycle: { onCancelled, onAbandoned } },
+    );
+    await debouncer.enqueue({ key: "lane", id: "cancelled" });
+    await debouncer.drain();
+    expect(onCancelled).toHaveBeenCalledOnce();
+    expect(onAbandoned).not.toHaveBeenCalled();
+  });
 
   it("releases a keyed chain at admission and drains full flush completions", async () => {
     const { started, finished, release, run } = blockedWork();

@@ -210,11 +210,11 @@ export function enqueueFollowupRun(
       const lifecycle = run.turnAdoptionLifecycle;
       if (lifecycle) {
         const onAbandoned = lifecycle.onAbandoned;
-        lifecycle.onAbandoned = () => {
+        lifecycle.onAbandoned = (cause) => {
           if (mailbox.recentSources.get(recentMessageIdKey)?.inputInstance === inputInstance) {
             mailbox.recentSources.delete(recentMessageIdKey);
           }
-          return onAbandoned?.();
+          return onAbandoned?.(cause);
         };
         const onDropped = lifecycle.onDropped;
         if (onDropped) {

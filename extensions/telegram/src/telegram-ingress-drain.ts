@@ -461,6 +461,10 @@ export function createTelegramIngressMonitor(params: CreateTelegramIngressMonito
                   );
                   return;
                 }
+                if (terminal.kind === "cancelled") {
+                  await telegramLifecycle.onCancelled();
+                  return;
+                }
                 if (terminal.kind === "failed-retryable") {
                   await telegramLifecycle.onFailed(terminal.error);
                   return;
@@ -495,6 +499,10 @@ export function createTelegramIngressMonitor(params: CreateTelegramIngressMonito
           return { kind: "deferred" };
         }
         const outcome = result.value;
+        if (outcome?.kind === "cancelled") {
+          await telegramLifecycle.onCancelled();
+          return { kind: "transferred" };
+        }
         if (outcome?.kind === "failed-retryable") {
           return { kind: "failed-retryable", error: wrapFailure(outcome.error) };
         }

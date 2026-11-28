@@ -163,7 +163,7 @@ export type TurnAdoptionLifecycle = {
   /** Requested cadence for pre-adoption heartbeats. */
   deferredHeartbeatIntervalMs?: number;
   /** Deferred turn finished without owning the reply lane. */
-  onAbandoned?: () => void | Promise<void>;
+  onAbandoned?: (cause?: "cancelled") => void | Promise<void>;
   /** Explicit queue-cap loss; unlike abandonment, this is a terminal policy decision. */
   onDropped?: (reason: FollowupQueueDisposition) => void | Promise<void>;
   /** Always fires when the followup ownership cycle ends (admitted or not). Gateway cleanup. */

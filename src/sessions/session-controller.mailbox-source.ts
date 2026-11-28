@@ -400,6 +400,7 @@ export function abortSessionControllerInput(
       committed ||= operation?.abortSignal.aborted === true;
       if (committed) {
         const cause = reason ?? operation?.abortSignal.reason;
+        input.custody.abandonmentCause = "cancelled";
         input[inputCancellation].abort(cause);
         input.claim?.abortController.abort(cause);
         input.sourceAdapter?.cancel?.(cause);
@@ -550,7 +551,7 @@ function notifySessionControllerSourceAbandonment(
     const completion =
       dropReason && run.turnAdoptionLifecycle?.onDropped
         ? run.turnAdoptionLifecycle.onDropped(dropReason)
-        : run.turnAdoptionLifecycle?.onAbandoned?.();
+        : run.turnAdoptionLifecycle?.onAbandoned?.(state.abandonmentCause);
     if (completion) {
       notification.completion = Promise.resolve(completion);
       void notification.completion.catch(() => {});

@@ -283,6 +283,7 @@ describe("createSlackMessageHandler", () => {
 
   it.each([
     ["adopted", undefined],
+    ["cancelled", undefined],
     ["queue-cap-old", undefined],
     ["queue-cap-new", "async"],
     ["queue-cap-new", "sync"],
@@ -298,6 +299,7 @@ describe("createSlackMessageHandler", () => {
       });
       const turnAdoptionLifecycle = {
         ...lifecycle(),
+        onCancelled: vi.fn(),
         onSessionRouted: vi.fn(async () => {}),
         onDropped: vi.fn(() => {
           const failure = new Error("terminal settlement failed");
@@ -345,6 +347,10 @@ describe("createSlackMessageHandler", () => {
       if (outcome === "adopted") {
         await prepared.turnAdoptionLifecycle?.onAdopted();
         expect(turnAdoptionLifecycle.onAdopted).toHaveBeenCalledOnce();
+      } else if (outcome === "cancelled") {
+        await prepared.turnAdoptionLifecycle?.onAbandoned?.("cancelled");
+        expect(turnAdoptionLifecycle.onCancelled).toHaveBeenCalledOnce();
+        expect(turnAdoptionLifecycle.onAbandoned).not.toHaveBeenCalled();
       } else {
         const drop = prepared.turnAdoptionLifecycle?.onDropped?.(outcome);
         if (outcome === "queue-cap-new") {
@@ -356,8 +362,9 @@ describe("createSlackMessageHandler", () => {
         expect(peerDrop).toHaveBeenCalledExactlyOnceWith(outcome);
         expect(turnAdoptionLifecycle.onAbandoned).not.toHaveBeenCalled();
       }
-      expect(handle.commit).toHaveBeenCalledTimes(outcome === "queue-cap-new" ? 0 : 1);
-      expect(handle.release).toHaveBeenCalledTimes(outcome === "queue-cap-new" ? 1 : 0);
+      const released = outcome === "queue-cap-new" || outcome === "cancelled";
+      expect(handle.commit).toHaveBeenCalledTimes(released ? 0 : 1);
+      expect(handle.release).toHaveBeenCalledTimes(released ? 1 : 0);
       expect(turnAdoptionLifecycle.onDeferred).toHaveBeenCalledOnce();
     },
   );

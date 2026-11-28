@@ -305,10 +305,14 @@ export function createSlackMessageHandler(params: {
                   ...(deferredHeartbeatIntervals.length > 0
                     ? { deferredHeartbeatIntervalMs: Math.min(...deferredHeartbeatIntervals) }
                     : {}),
-                  onAbandoned: () => {
+                  onAbandoned: (cause) => {
                     settlementHandedOff = true;
                     releaseClaims();
                     // Slack has no owner-local teardown gated on core claim release.
+                    if (cause === "cancelled" && turnAdoptionLifecycle?.onCancelled) {
+                      void admissionLifecycle.onAbandoned();
+                      return turnAdoptionLifecycle.onCancelled();
+                    }
                     void turnAdoptionLifecycle?.onAbandoned();
                     void admissionLifecycle.onAbandoned();
                   },

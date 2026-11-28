@@ -392,7 +392,7 @@ export async function handleTelegramInteractiveCallback(params: {
     });
     return { ctx: buildSyntheticContext(ctx, message), message };
   };
-  const processSubmitText = async (text: string): Promise<"completed" | "skipped" | "dropped"> => {
+  const processSubmitText = async (text: string) => {
     const synthetic = buildSynthetic(text);
     const participant = isTelegramSpooledReplayUpdate(synthetic.ctx.update)
       ? (getTelegramSpooledReplayDeferredParticipant() ??

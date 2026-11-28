@@ -1,4 +1,5 @@
 import { text } from "node:stream/consumers";
+import { expectDefined } from "@openclaw/normalization-core";
 import { afterEach, expect, it } from "vitest";
 import { startOpenAiResponsesModelServer } from "../../test/helpers/openai-responses-model-fixture.js";
 import {
@@ -14,7 +15,10 @@ import {
   bindIngressLifecycleToReplyOptions,
   createChannelIngressDrain,
 } from "../channels/message/ingress-drain.js";
-import { createTestIngressQueue } from "../channels/message/ingress-drain.test-helpers.js";
+import {
+  createTestIngressQueue,
+  observeChannelIngressQueueWrite,
+} from "../channels/message/ingress-drain.test-helpers.js";
 import { executeExistingOpenClawStateRead } from "../state/openclaw-state-db-readonly.js";
 import {
   createSubagentStopFixture,
@@ -48,6 +52,12 @@ it("bounds public child Stop while yielded queued-input cleanup remains pending"
       const parsed = JSON.parse(body) as unknown;
       if (body.includes(queuedInput)) {
         queuedInputRequests += 1;
+        writeOpenAiResponsesText(response, {
+          text: "Queued input processed.",
+          responseId: `response-${++responseSequence}`,
+          messageId: `message-${responseSequence}`,
+        });
+        return;
       }
       // Only the fresh child attempt carries its task without a prior tool result.
       if (body.includes(childTask) && !body.includes("function_call_output")) {
@@ -90,7 +100,7 @@ it("bounds public child Stop while yielded queued-input cleanup remains pending"
   cfg.messages = { queue: { mode: "followup" } };
   const childTerminal = createDeferred();
   let childSessionKey: string | undefined;
-  const gateway = await start((event) => {
+  let gateway = await start((event) => {
     const payload = event.payload as { sessionKey?: unknown; state?: unknown } | undefined;
     if (
       event.event === "chat" &&
@@ -126,6 +136,16 @@ it("bounds public child Stop while yielded queued-input cleanup remains pending"
 
       // Keep real ingress custody while the reply runner defers behind the child.
       const queue = createTestIngressQueue(state.stateDir);
+      const eventId = "queued-child-input";
+      const receivedAt = Date.now() - 25 * 60 * 60_000;
+      await queue.enqueue(eventId, { text: queuedInput }, { laneKey: childSessionKey, receivedAt });
+      for (let attempt = 0; attempt < 7; attempt++) {
+        const claim = expectDefined(await queue.claim(eventId), "seeded retry claim");
+        await queue.release(claim, {
+          lastError: "previous delivery failed",
+          releasedAt: receivedAt + attempt + 1,
+        });
+      }
       const release = queue.release.bind(queue);
       queue.release = async (...args) => {
         releaseStarted.resolve();
@@ -138,34 +158,31 @@ it("bounds public child Stop while yielded queued-input cleanup remains pending"
         }
       };
       let deferredMode: "followup" | "steer" | undefined;
-      drain = createChannelIngressDrain({
-        queue,
-        dispatchClaimedEvent: async (event, lifecycle) => {
-          const result = await dispatchReplyWithBufferedBlockDispatcherCore({
-            ctx: buildTestCtx({
-              AgentId: "main",
-              Provider: "test",
-              Surface: "test",
-              From: "user:queued-cleanup",
-              To: "channel:queued-cleanup",
-              SessionKey: event.payload.text,
-              MessageSid: event.id,
-              Body: queuedInput,
-              CommandBody: queuedInput,
-            }),
-            cfg,
-            dispatcherOptions: { deliver: async () => undefined },
-            replyOptions: bindIngressLifecycleToReplyOptions(lifecycle),
-          });
-          deferredMode = result.deferredToActiveRun;
-          return result.deferredToActiveRun ? { kind: "deferred" } : { kind: "completed" };
-        },
-      });
-      await queue.enqueue(
-        "queued-child-input",
-        { text: childSessionKey },
-        { laneKey: childSessionKey },
-      );
+      const startDrain = (source: typeof queue) =>
+        createChannelIngressDrain({
+          queue: source,
+          dispatchClaimedEvent: async (event, lifecycle) => {
+            const result = await dispatchReplyWithBufferedBlockDispatcherCore({
+              ctx: buildTestCtx({
+                AgentId: "main",
+                Provider: "test",
+                Surface: "test",
+                From: "user:queued-cleanup",
+                To: "channel:queued-cleanup",
+                SessionKey: expectDefined(event.laneKey, "queued session key"),
+                MessageSid: event.id,
+                Body: event.payload.text,
+                CommandBody: event.payload.text,
+              }),
+              cfg,
+              dispatcherOptions: { deliver: async () => undefined },
+              replyOptions: bindIngressLifecycleToReplyOptions(lifecycle),
+            });
+            deferredMode = result.deferredToActiveRun;
+            return result.deferredToActiveRun ? { kind: "deferred" } : { kind: "completed" };
+          },
+        });
+      drain = startDrain(queue);
       await expect(drain.drainOnce()).resolves.toEqual({ started: 1 });
       await drain.waitForIdle();
       expect(deferredMode).toBe("followup");
@@ -173,8 +190,14 @@ it("bounds public child Stop while yielded queued-input cleanup remains pending"
 
       allowYield.resolve();
       await childTerminal.promise;
+      const failed = observeChannelIngressQueueWrite(queue, "fail", eventId);
       stopResponse = postSubagentKill(gateway.port, childSessionKey);
-      await releaseStarted.promise;
+      expect(
+        await Promise.race([
+          releaseStarted.promise.then(() => "release"),
+          failed.then(() => "dead-letter"),
+        ]),
+      ).toBe("release");
       expect(await stopResponse).toMatchObject({
         status: 503,
         body: {
@@ -211,9 +234,33 @@ it("bounds public child Stop while yielded queued-input cleanup remains pending"
       await expect(queue.listPending()).resolves.toEqual([
         expect.objectContaining({
           id: "queued-child-input",
-          payload: { text: child.childSessionKey },
+          attempts: 7,
+          payload: { text: queuedInput },
         }),
       ]);
+      expect(queuedInputRequests).toBe(0);
+      drain.dispose();
+      await disconnectGatewayClient(gateway.client);
+      await gateway.server.close({ reason: "verify durable replay" });
+      gateway = await start();
+      await gateway.server.startupSettled;
+      const reopened = createTestIngressQueue(state.stateDir);
+      const pendingAfterRestart = await reopened.listPending();
+      expect(pendingAfterRestart).toMatchObject([{ id: eventId, attempts: 7 }]);
+      drain = startDrain(reopened);
+      expect(await drain.drainOnce()).toEqual({ started: 1 });
+      await drain.waitForIdle();
+      expect(await reopened.listPending()).toEqual([]);
+      expect(await reopened.listClaims()).toEqual([]);
+      expect(await reopened.listFailed?.()).toEqual([]);
+      const receipt = await reopened.enqueue(eventId, { text: queuedInput });
+      expect(receipt.kind).toBe("completed");
+      expect(queuedInputRequests).toBe(1);
+      console.log("Gateway Stop/restart replay", {
+        pendingAttemptsAfterRestart: pendingAfterRestart[0]?.attempts,
+        replayReceipt: receipt.kind,
+        replayModelRequests: queuedInputRequests,
+      });
     },
     () => releaseCleanup.resolve(),
     () => stopResponse?.catch(() => undefined),
@@ -223,5 +270,4 @@ it("bounds public child Stop while yielded queued-input cleanup remains pending"
     () => model.close(),
     () => state.cleanup(),
   );
-  expect(queuedInputRequests).toBe(0);
 });

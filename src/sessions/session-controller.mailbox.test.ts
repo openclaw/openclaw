@@ -463,6 +463,31 @@ function earlySource(adapter?: Parameters<typeof reserveSessionControllerSource>
 }
 
 describe("early source injection custody", () => {
+  it.each(["declined", "consumed"] as const)(
+    "settles an explicitly cancelled steer only after its native outcome (%s)",
+    async (outcome) => {
+      const run = source("queued steering input");
+      const onAbandoned = vi.fn();
+      const onSettled = vi.fn();
+      run.turnAdoptionLifecycle = { onAdopted() {}, onAbandoned, onSettled };
+      const steer = reserveSteerCandidate(key, run, { mode: "steer" }, async () => {});
+      assert(steer && run.controllerInput, "Expected a parked steering input");
+      const input = run.controllerInput;
+      expect(await steer.admit()).toBe("steer");
+      expect(abortSessionControllerInput(input, "stop")).toBe(true);
+      expect(onAbandoned).not.toHaveBeenCalled();
+      expect(onSettled).not.toHaveBeenCalled();
+      if (outcome === "declined") {
+        steer.fallback();
+      } else {
+        steer.consume("consumed");
+      }
+      await input.settlement.promise;
+      expect(onAbandoned.mock.calls).toEqual(outcome === "declined" ? [["cancelled"]] : []);
+      expect(onSettled).toHaveBeenCalledOnce();
+    },
+  );
+
   it("lets a steer inject behind an older source committed to a later turn", async () => {
     const settings = { mode: "steer" as const, debounceMs: 0 };
     const older = source("queued for the next turn");

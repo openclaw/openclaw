@@ -521,6 +521,8 @@ export type SessionControllerSourceCustody = {
   enqueued?: boolean;
   adopted?: boolean;
   adopting?: Promise<void>;
+  /** Explicit Stop can precede the native steering outcome that decides source settlement. */
+  abandonmentCause?: "cancelled";
   /** Cancellation may notify abandonment before raw preparation releases source custody. */
   abandonment?: { completion?: Promise<void>; failure?: { error: unknown } };
   work?: Set<Promise<unknown>>;

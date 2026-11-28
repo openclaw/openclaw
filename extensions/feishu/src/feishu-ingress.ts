@@ -211,13 +211,13 @@ export function buildFeishuFlushIngressLifecycle(
       claim.release({ error: new Error("feishu-ingress-not-adopted") });
     }
   };
-  const abandonAll = async () => {
+  const releaseAll = async (settleTransport: () => void | Promise<void>) => {
     if (settled) {
       return;
     }
     settled = true;
     releaseReplayClaims();
-    await transportLifecycle.onAbandoned();
+    await settleTransport();
   };
   const commitReplayClaims = async () => {
     const results = await Promise.allSettled(replayClaims.map((claim) => claim.commit()));
@@ -279,8 +279,14 @@ export function buildFeishuFlushIngressLifecycle(
       },
       onAbandoned: async () => {
         handedOff = true;
-        await abandonAll();
+        await releaseAll(() => transportLifecycle.onAbandoned());
       },
+      onCancelled: transportLifecycle.onCancelled
+        ? async () => {
+            handedOff = true;
+            await releaseAll(() => transportLifecycle.onCancelled?.());
+          }
+        : undefined,
       onDropped: transportLifecycle.onDropped
         ? async (reason) => {
             handedOff = true;
@@ -345,6 +351,16 @@ export function createFeishuDurableIngress(options: FeishuIngressOptions) {
     deliver: async (rawEnvelope, lifecycle, claim) => {
       const handoff = createDeferred();
       // The message debounce owner releases its logical claim before transport abandonment.
+      const releaseUnadopted = async (settle: () => void | Promise<void>) => {
+        try {
+          await Promise.resolve()
+            .then(() => wrappedLifecycle.onBeforeAbandon?.())
+            .catch(() => undefined);
+          await settle();
+        } finally {
+          handoff.resolve();
+        }
+      };
       const wrappedLifecycle: FeishuIngressLifecycle = {
         ...lifecycle,
         onDeferred: () => {
@@ -358,16 +374,10 @@ export function createFeishuDurableIngress(options: FeishuIngressOptions) {
             handoff.resolve();
           }
         },
-        onAbandoned: async () => {
-          try {
-            await Promise.resolve()
-              .then(() => wrappedLifecycle.onBeforeAbandon?.())
-              .catch(() => undefined);
-            await lifecycle.onAbandoned();
-          } finally {
-            handoff.resolve();
-          }
-        },
+        onAbandoned: () => releaseUnadopted(() => lifecycle.onAbandoned()),
+        onCancelled: lifecycle.onCancelled
+          ? () => releaseUnadopted(() => lifecycle.onCancelled?.())
+          : undefined,
         onDropped: async (reason) => {
           try {
             await lifecycle.onDropped?.(reason);
