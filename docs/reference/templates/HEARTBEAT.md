@@ -18,7 +18,19 @@ openclaw automations scratch <jobId> --file notes.md
 openclaw automations scratch <jobId> --unset
 ```
 
-If an older workspace still contains `HEARTBEAT.md`, run `openclaw doctor --fix`. Doctor imports its instructions into monitor scratch, converts valid legacy `tasks:` entries into cron jobs, archives the original under the state directory, and removes the workspace file.
+If an older workspace still contains `HEARTBEAT.md`, run `openclaw doctor --fix`.
+Doctor imports supported instructions into monitor scratch and converts valid
+legacy `tasks:` entries into cron jobs. When the legacy file can be retired,
+Doctor archives it under the state directory before removing it from the workspace.
+
+A retained file does not necessarily mean migration failed. If importing it
+would replace different operator-owned scratch or undo an explicit scratch
+unset, Doctor keeps that state and the file for review. Files recreated after
+completed migration are also retained without changing the automation.
+Review Doctor's notices and the retained instructions before copying anything
+into job scratch; editing `HEARTBEAT.md` does not change the running monitor.
+See [Heartbeat migration](/gateway/heartbeat#upgrade-an-existing-monitor) for
+retained files and blocked imports.
 
 ## Related
 
