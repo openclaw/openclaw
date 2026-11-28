@@ -16,6 +16,7 @@ import {
   completePromptCacheObservation,
   declarePromptSystemPromptRebuild,
   recordAggregateTruncation,
+  readLastPromptCacheKeyFact,
   recordRuntimeContextProjection,
 } from "./prompt-cache-observability.js";
 import {
@@ -205,6 +206,33 @@ describe("prompt cache observability", () => {
     });
     const candidates = [{ name: "write" }, { name: "" }, {}, unreadableTool, { name: " read " }];
     expect(collectPromptCacheTools(candidates)).toEqual([{ name: "read" }, { name: "write" }]);
+  });
+
+  it("records whether the session's last request carried a cache key, with or without usage", () => {
+    const identity = { sessionId: scopedKey("last-cache-key"), sessionKey: "agent:main:cache-key" };
+    const send = (payload: Record<string, unknown>, modelApi = "openai-completions") => {
+      beginOpenAIObservation({ ...identity, modelApi });
+      const { encoded: _encoded, ...fingerprint } = prepareProviderPrompt({
+        payload,
+        encode: true,
+      });
+      // A relay that reports no cache usage still records the request it was sent.
+      completePromptCacheObservation({
+        ...identity,
+        providerPrompt: { scopeDigest: "scope", ...fingerprint },
+      });
+      return readLastPromptCacheKeyFact(identity.sessionKey);
+    };
+    expect(readLastPromptCacheKeyFact(identity.sessionKey)).toBeUndefined();
+    expect(send({ model: "gpt-5.4", messages: [] })).toEqual({
+      provider: "openai",
+      modelId: "gpt-5.4",
+      modelApi: "openai-completions",
+      cacheKeyPresent: false,
+    });
+    expect(
+      send({ model: "gpt-5.4", input: [], prompt_cache_key: "session" }, "openai-responses"),
+    ).toMatchObject({ modelApi: "openai-responses", cacheKeyPresent: true });
   });
 
   it("preserves canonical schema identity when descriptors become published", () => {

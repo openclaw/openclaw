@@ -247,9 +247,9 @@ function disarmInstallationLegacyTrial(observer: InstallationObserver): Promise<
       if (!prepared.publish().coreReady) {
         return;
       }
-      const { announceReady, observeLegacyTrialReadiness } =
+      const { announceReady, observeLegacyTrialReadiness, schedulePluginMaintenance } =
         await import("../update/gateway-trial.js");
-      await announceReady(observer.running.buildId);
+      await announceReady(observer.running.buildId).finally(schedulePluginMaintenance);
       observer.recoverTrialHistory = await observeLegacyTrialReadiness(
         observer.running.buildId,
         observer.root,

@@ -22,6 +22,11 @@ export class TranscriptRowRefs {
   }
 
   observeConnected(): void {
+    // A missing window means scroll attachment is pending, not no observers.
+    // The host replays retained refs after _willUpdate attaches the window.
+    if (!this.virtualizer.targetWindow) {
+      return;
+    }
     let prepared = false;
     for (const [row, key] of this.mountedRows) {
       if (

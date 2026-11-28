@@ -23,8 +23,8 @@ Design trades correctness against complexity and performance. Choose deliberatel
 
 Task defines scope and authorization; chosen workflow owns execution, review, publication, recovery, and cleanup.
 Explicit user instructions override skill guidelines and workflow defaults; host limits and required authorization boundaries still apply.
-Read nearest scoped `AGENTS.md` and matching guides below in full, including for callers outside owner's directory.
-Update instructions at owner; no competing rules here.
+Read scoped `AGENTS.md` and relevant guides in full, including outside callers.
+Edit the owning guide, without competing rules here. [Skill setup](.agents/skills/AGENTS.md).
 
 ## Design priorities
 

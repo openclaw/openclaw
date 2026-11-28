@@ -46,13 +46,11 @@ describe("Gemini memory embedding adapter", () => {
   });
 
   it.each([
-    ["gemini-embedding-2", true],
-    ["gemini-embedding-2-preview", true],
-    ["gemini-embedding-001", false],
-  ] as const)("resolves multimodal support for %s", (model, expected) => {
-    expect(geminiMemoryEmbeddingProviderAdapter.supportsMultimodalEmbeddings?.({ model })).toBe(
-      expected,
-    );
+    ["gemini-embedding-2", ["image", "audio"]],
+    ["gemini-embedding-2-preview", ["image", "audio"]],
+    ["gemini-embedding-001", []],
+  ] as const)("resolves media modalities for %s", (model, expected) => {
+    expect(geminiMemoryEmbeddingProviderAdapter.mediaModalities?.({ model })).toEqual(expected);
   });
 
   it.each(["client-version", "semantic-header"])("keys memory identity by %s", async (change) => {

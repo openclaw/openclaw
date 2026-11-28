@@ -76,6 +76,44 @@ struct SidebarGatewayPickerTests {
         #expect(presentation.rowTitle(Self.entry("current")) == "current — Needs attention")
     }
 
+    @Test func `the control shows the green dot only when online, and speaks every state`() {
+        func status(_ state: GatewayDisplayState, problem: String? = nil, switching: Bool = false) -> String {
+            SidebarGatewayPresentation(
+                registry: .init(activeStableID: "a", entries: [Self.entry("a")]),
+                connectionID: nil,
+                connectedID: nil,
+                state: state,
+                problemText: problem).accessibilityStatus(isSwitching: switching)
+        }
+
+        #expect(status(.connected) == "Online")
+        #expect(status(.connected, switching: true) == "Connecting")
+        #expect(status(.connecting) == "Connecting")
+        #expect(status(.disconnected) == "Offline")
+        #expect(status(.error, problem: "Connection refused") == "Connection refused")
+        #expect(status(.error) == "Needs attention")
+        let unsaved = SidebarGatewayPresentation(
+            registry: .empty, connectionID: nil, connectedID: nil, state: .disconnected)
+        #expect(unsaved.accessibilityStatus(isSwitching: false).isEmpty)
+
+        func dot(_ state: GatewayDisplayState, switching: Bool = false) -> Bool {
+            SidebarGatewayPresentation(
+                registry: .init(activeStableID: "a", entries: [Self.entry("a")]),
+                connectionID: nil,
+                connectedID: nil,
+                state: state).showsOnlineDot(isSwitching: switching)
+        }
+
+        #expect(dot(.connected))
+        #expect(!dot(.connected, switching: true))
+        #expect(!dot(.connecting))
+        #expect(!dot(.disconnected))
+        #expect(!dot(.error))
+        let unsavedOnline = SidebarGatewayPresentation(
+            registry: .empty, connectionID: nil, connectedID: nil, state: .connected)
+        #expect(!unsavedOnline.showsOnlineDot(isSwitching: false))
+    }
+
     @Test func `an unknown route does not select another saved gateway`() {
         let presentation = SidebarGatewayPresentation(
             registry: .init(activeStableID: "saved", entries: [Self.entry("saved"), Self.entry("other")]),

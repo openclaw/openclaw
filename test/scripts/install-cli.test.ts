@@ -509,6 +509,8 @@ fi
         ensure_git() { :; }
         install_openclaw() { mkdir -p "$PREFIX/bin"; cp "$ROOT/cli" "$PREFIX/bin/openclaw"; }
         refresh_gateway_service_if_loaded() { printf '%s' "\${TMPDIR-<unset>}" > "$ROOT/refresh-temp"; }
+        has_controlling_tty() { return 0; }
+        controlling_tty_path() { printf '%s\\n' /dev/null; }
         main --onboard --prefix "$ROOT/prefix"
         printf '%s' "\${TMPDIR-<unset>}" > "$ROOT/caller-temp"
       `,
@@ -529,6 +531,124 @@ fi
       expect(existsSync(installTemp)).toBe(false);
     },
   );
+
+  it.each(["redirected", "json", "inherited"])(
+    "gives onboarding interactive input and output (%s)",
+    (mode) => {
+      const f = makeFixture("onboard-tty");
+      f.shell(
+        "cli",
+        `
+if [[ "$1" == --version ]]; then
+  echo 2026.9.12
+else
+  [[ "$1" == onboard && -t 0 && -t 1 ]] || exit 41
+  echo "wizard output"
+  touch "$ROOT/onboarded"
+fi
+`,
+      );
+      const launcher = f.shell(
+        "run-onboard",
+        `
+source "$INSTALLER"
+install_node() { :; }
+ensure_git() { :; }
+install_openclaw() { mkdir -p "$PREFIX/bin"; cp "$ROOT/cli" "$PREFIX/bin/openclaw"; }
+refresh_gateway_service_if_loaded() { :; }
+main ${mode === "json" ? "--json" : ""} --onboard --prefix "$ROOT/prefix"
+`,
+      );
+      const log = join(f.root, "output");
+      // A session can inherit terminal descriptors without owning a controlling terminal.
+      const result = spawnSync(
+        "python3",
+        [
+          "-c",
+          `
+import fcntl, os, pty, subprocess, sys, termios
+launcher, mode, log = sys.argv[1:]
+master, slave = pty.openpty()
+os.setsid()
+inherited = mode == "inherited"
+if not inherited:
+    fcntl.ioctl(slave, termios.TIOCSCTTY, 0)
+with open(log, "wb") as output:
+    child = subprocess.run([launcher], stdin=slave if inherited else subprocess.DEVNULL,
+                           stdout=slave if inherited else output, timeout=15)
+sys.exit(child.returncode)
+`,
+          launcher,
+          mode,
+          log,
+        ],
+        {
+          encoding: "utf8",
+          env: {
+            ...process.env,
+            ROOT: f.root,
+            HOME: f.root,
+            INSTALLER: join(process.cwd(), SCRIPT_PATH),
+            OPENCLAW_INSTALL_CLI_SH_NO_RUN: "1",
+            BASH_ENV: "",
+            ENV: "",
+          },
+        },
+      );
+      expect(result.status, result.stderr).toBe(0);
+      expect(existsSync(join(f.root, "onboarded"))).toBe(true);
+      const output = readFileSync(log, "utf8");
+      expect(output).not.toContain("wizard output");
+      if (mode === "json") {
+        const events = output
+          .trimEnd()
+          .split("\n")
+          .map((line) => JSON.parse(line) as Record<string, unknown>);
+        expect(events.at(-1)).toEqual({ event: "done", ok: true, version: "2026.9.12" });
+      }
+    },
+  );
+
+  it("defers onboarding without a terminal and keeps exit status and JSON output clean", () => {
+    const f = makeFixture("onboard-no-tty");
+    f.shell(
+      "cli",
+      `
+printf '%s\\n' "$*" >> "$ROOT/commands"
+if [[ "$1" == --version ]]; then
+  printf '2026.9.12\\n'
+fi
+`,
+    );
+    const result = f.run(
+      `
+      install_node() { :; }
+      ensure_git() { :; }
+      install_openclaw() { mkdir -p "$PREFIX/bin"; cp "$ROOT/cli" "$PREFIX/bin/openclaw"; }
+      refresh_gateway_service_if_loaded() { :; }
+      has_controlling_tty() { return 1; }
+      main --json --onboard --prefix "$ROOT/prefix"
+    `,
+      { HOME: f.root },
+    );
+    expect(result.status, result.stdout + result.stderr).toBe(0);
+    expect(readFileSync(join(f.root, "commands"), "utf8").trim().split("\n")).toEqual([
+      "--version",
+    ]);
+    const events = result.stdout
+      .trimEnd()
+      .split("\n")
+      .map((line) => JSON.parse(line) as Record<string, unknown>);
+    expect(events).toContainEqual({
+      event: "step",
+      name: "onboarding",
+      status: "skip",
+      reason: "no-terminal",
+    });
+    expect(events[events.length - 1]).toEqual({ event: "done", ok: true, version: "2026.9.12" });
+    expect(result.stderr).toContain("openclaw onboard");
+    expect(result.stderr).toContain("No terminal available");
+  });
 
   it("re-execs a streamed installer on Darwin Bash 5.3+ without leaving a temp file", (context) => {
     const bash = findDarwinReexecBash();

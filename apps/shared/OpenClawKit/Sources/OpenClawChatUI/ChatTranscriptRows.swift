@@ -4,8 +4,7 @@ enum ChatTranscriptRow: Hashable, Identifiable {
     enum SystemNoticeKind: Hashable {
         case restartRecovery
         case gatewayRestarted
-        case injectedContext
-        case backgroundTask
+        case disclosure(label: String)
         case generic
     }
 
@@ -21,10 +20,8 @@ enum ChatTranscriptRow: Hashable, Identifiable {
                 String(localized: "System · restart recovery")
             case .gatewayRestarted:
                 String(localized: "System · gateway restarted")
-            case .injectedContext:
-                String(localized: "System · injected context")
-            case .backgroundTask:
-                String(localized: "System · background task")
+            case let .disclosure(label):
+                label
             case .generic:
                 String(localized: "System")
             }
@@ -34,9 +31,9 @@ enum ChatTranscriptRow: Hashable, Identifiable {
             "cpu"
         }
 
-        /// Bulky harness payloads (continuation summaries, task output) open on demand, as in the Control UI.
         var collapsesBody: Bool {
-            self.kind == .injectedContext || self.kind == .backgroundTask
+            if case .disclosure = self.kind { return true }
+            return false
         }
     }
 
@@ -161,10 +158,14 @@ enum ChatTranscriptRow: Hashable, Identifiable {
                 kind = .gatewayRestarted
                 body = Self.strippingSystemPrefix(from: ChatMessageVisibleText.visibleText(in: message))
             case "cli_harness_context":
-                kind = .injectedContext
+                #if os(iOS)
+                return nil
+                #else
+                kind = .disclosure(label: String(localized: "System · injected context"))
                 body = Self.strippingSystemPrefix(from: ChatMessageVisibleText.visibleText(in: message))
+                #endif
             case "claude_cli_task_notification":
-                kind = .backgroundTask
+                kind = .disclosure(label: String(localized: "System · background task"))
                 body = Self.strippingSystemPrefix(from: ChatMessageVisibleText.visibleText(in: message))
             default:
                 kind = .generic

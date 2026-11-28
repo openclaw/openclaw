@@ -4,6 +4,7 @@ import type {
   WorkerOperationHandlers,
 } from "../state/worker-operation-registry.js";
 import { gitCommitPrefixesMatch } from "./git-commit.js";
+import type { RestartSentinelPayload } from "./restart-sentinel-codec.js";
 import {
   deleteRestartSentinelRowSync,
   recordManagedHandoffSentinelOutcomeRowSync,
@@ -14,7 +15,6 @@ import {
   writeUpdateInstallReceiptRowSync,
   type RestartSentinel,
   type ManagedHandoffSentinelOutcome,
-  type RestartSentinelPayload,
 } from "./restart-sentinel-store.js";
 import type { EngineConnection } from "./sql-connection.js";
 

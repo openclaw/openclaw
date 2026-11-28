@@ -346,15 +346,12 @@ async function runSubagentAnnounceFlowBound(
     const taskLabel = params.label || params.task || "task";
     const statusLabel = killed
       ? describeChildrenEndedWithoutResult([taskLabel])
-      : outcome.status === "ok"
-        ? "completed; ready for parent review"
-        : outcome.status === "timeout"
-          ? outcome.error
-            ? `timed out: ${outcome.error}`
-            : "timed out"
-          : outcome.status === "error"
-            ? `failed: ${outcome.error || "unknown error"}`
-            : "finished with unknown status";
+      : {
+          ok: "completed; ready for parent review",
+          timeout: outcome.error ? `timed out: ${outcome.error}` : "timed out",
+          error: `failed: ${outcome.error || "unknown error"}`,
+          unknown: "finished with unknown status",
+        }[outcome.status];
 
     const announceSessionId =
       childSessionCurrent && childSessionEffectsAllowed() ? childSessionId || "unknown" : "unknown";
@@ -533,13 +530,11 @@ async function runSubagentAnnounceFlowBound(
       throw err;
     }
     defaultRuntime.error(`Subagent announce failed: ${String(err)}`);
-    if (!obligation.reported) {
-      await reportDeliveryResult({
-        delivered: false,
-        path: "none",
-        error: summarizeDeliveryError(err),
-      });
-    }
+    await reportDeliveryResult({
+      delivered: false,
+      path: "none",
+      error: summarizeDeliveryError(err),
+    });
   } finally {
     if (params.controllerInput && !params.controllerInput.custody.rpcAdopted) {
       retireSessionControllerInput(params.controllerInput);

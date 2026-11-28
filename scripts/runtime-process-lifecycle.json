@@ -1,4 +1,12 @@
 {
+  "controlUiFile": {
+    "assetReads": {
+      "owner": "src/gateway/server-control-ui-root.ts",
+      "start": "lazy",
+      "retire": "Retire workers after ten idle minutes or earlier under memory pressure. Stopping an asset root aborts and joins its reads. Gateway close or restart joins the shared pool.",
+      "memory": { "scope": "worker-heap", "expectedMiB": null }
+    }
+  },
   "cronReadOnly": {
     "retainedReads": {
       "owner": "src/cron/store/read-only.ts",
@@ -96,6 +104,14 @@
       "owner": "src/agents/prepared-model-catalog-worker.ts",
       "start": "lazy",
       "retire": "Retain the worker without an idle timeout. On owner retirement or shutdown, drain pending captures, join the worker, and release its watch channel and captured source.",
+      "memory": { "scope": "worker-heap", "expectedMiB": null }
+    }
+  },
+  "publicSessionCard": {
+    "cardRenders": {
+      "owner": "src/gateway/control-ui-public-session-card.ts",
+      "start": "lazy",
+      "retire": "Retire after one idle minute, extended to five on adaptive reuse, or sooner under memory pressure. HTTP request-handler disposal requests pool close.",
       "memory": { "scope": "worker-heap", "expectedMiB": null }
     }
   },
