@@ -98,8 +98,9 @@ struct ChatSubagentBotGlyph: Shape {
     }
 }
 
-/// Up to three working children, overlapping, as the web's subagents pill leads with them. Each tile takes a
-/// small hop in turn on one shared clock; the label and the stack’s footprint stay still.
+/// Up to three working children, overlapping, as the web's subagents pill leads with them. With three or more
+/// working, each tile takes a small hop in turn on one shared clock; one or two stay still, so a lone helper
+/// does not draw the eye every few seconds. The label and the stack’s footprint never move.
 struct ChatSubagentAvatarStack: View {
     let keys: [String]
     let canWave: Bool
@@ -125,7 +126,7 @@ struct ChatSubagentAvatarStack: View {
     var body: some View {
         let shown = Array(self.keys.prefix(3))
         Group {
-            if self.canWave, self.isVisible, self.scenePhase == .active, !self.reduceMotion, !shown.isEmpty {
+            if self.canWave, self.isVisible, self.scenePhase == .active, !self.reduceMotion, shown.count >= 3 {
                 let duration = Self.hop.duration + Double(shown.count - 1) * Self.stagger
                 KeyframeAnimator(initialValue: 0.0, trigger: self.wave) { elapsed in
                     self.avatars(shown, elapsed: elapsed)
