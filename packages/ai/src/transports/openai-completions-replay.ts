@@ -120,7 +120,7 @@ function sanitizeOpenRouterReasoningReplayFields(record: ReasoningReplayMessage)
     delete record.reasoning_details;
   }
 
-  // Empty reasoning artifacts are rejected by OpenRouter/DeepSeek replay.
+  // Strip empty reasoning artifacts by default.
   for (const field of ["reasoning", "reasoning_content"] as const) {
     if (field in record && (typeof record[field] !== "string" || record[field] === "")) {
       delete record[field];
@@ -161,6 +161,8 @@ export function applyCompletionsReplay(
   },
 ): void {
   injectToolCallThoughtSignatures(outgoingMessages, context, model);
+  const requiresReasoningContent =
+    model.compat?.requiresReasoningContentOnAssistantMessages === true;
   const preserveOpenRouterReasoning =
     compat.thinkingFormat === "openrouter" && shouldPreserveOpenRouterReasoningReplay(model);
   const preserveReasoningContent =
@@ -175,12 +177,19 @@ export function applyCompletionsReplay(
     if (message.role !== "assistant") {
       continue;
     }
+    const record: ReasoningReplayMessage = message;
     if (preserveOpenRouterReasoning) {
-      sanitizeOpenRouterReasoningReplayFields(message);
+      sanitizeOpenRouterReasoningReplayFields(record);
+      if (requiresReasoningContent) {
+        // Match the explicit endpoint contract without discarding structured OpenRouter details.
+        const reasoningContent =
+          record.reasoning_content ?? record.reasoning ?? (model.reasoning ? "" : undefined);
+        if (typeof reasoningContent === "string") {
+          record.reasoning_content = reasoningContent;
+        }
+        delete record.reasoning;
+      }
     } else {
-      const record: ReasoningReplayMessage = message;
-      const requiresReasoningContent =
-        model.compat?.requiresReasoningContentOnAssistantMessages === true;
       if (preserveReasoningContent && requiresReasoningContent) {
         // Only an explicit endpoint contract overrides the server's emitted field name.
         for (const field of ["reasoning_content", "reasoning", "reasoning_text"] as const) {
