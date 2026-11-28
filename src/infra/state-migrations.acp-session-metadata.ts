@@ -74,7 +74,7 @@ type LegacyAcpMetadataInput = Omit<
 };
 
 /** Retained JSON is input history, not authority to reopen a completed ACP import. */
-export function importLegacyAcpSessionMetadata(params: LegacyAcpMetadataInput): boolean {
+function importLegacyAcpSessionMetadata(params: LegacyAcpMetadataInput): boolean {
   const sessionKey = params.sessionKey.trim();
   if (!sessionKey) {
     return false;
@@ -237,7 +237,7 @@ async function migrateLegacyAcpSessionMetadataPass(
   // is restored below as metadata without re-adding rejected raw paths.
   const targets = resolveLegacyAcpMetadataSessionStoreTargets(discoveryCfg, env);
   const mainKey = normalizeMainKey(params.cfg.session?.mainKey);
-  const scope = params.cfg.session?.scope as SessionScope | undefined;
+  const scope: SessionScope | undefined = params.cfg.session?.scope;
   const storeGroups: Array<{
     target: (typeof targets)[number];
     sourcePath: string;
@@ -326,6 +326,7 @@ async function migrateLegacyAcpSessionMetadataPass(
       target,
       env,
     });
+    // SAFETY: a prototype-free object only ever receives string session keys below.
     const normalized = Object.create(null) as Record<string, SessionEntry>;
     let migrated = 0;
     let consumed = 0;
