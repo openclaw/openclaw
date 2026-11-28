@@ -793,9 +793,7 @@ suite.define(() => {
           "details.cron-advanced:not([open]) .cron-alert-summary",
         );
         const savedSummary = await collapsedSummary.textContent();
-        expect(savedSummary).toBe(
-          "Notify the specified destination · Default run failure threshold",
-        );
+        expect(savedSummary).toBe("Specified destination · Default run failure threshold");
         await advanced.click();
         await page.locator("#cron-failure-alert-to").fill("https://[bad]/job-token");
         await advanced.click();
