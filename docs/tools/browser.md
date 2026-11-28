@@ -14,6 +14,8 @@ OpenClaw can run a **dedicated Chrome/Brave/Edge/Chromium profile** that the age
 - The agent opens tabs, reads pages, clicks, and types in this isolated lane.
 - The built-in `user` profile attaches to your real signed-in Chrome session instead, via Chrome DevTools MCP.
 
+If you already use [OpenCode Browse with Chrome](/cli/mcp/registry#opencode-browse-with-chrome), connect it separately as an MCP server. It does not use OpenClaw's browser profiles or Browser panel.
+
 This page is an index. The browser documentation is split across nine pages,
 one per reader job. Open the page that matches your task.
 
