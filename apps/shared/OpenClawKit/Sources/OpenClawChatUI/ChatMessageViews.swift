@@ -811,10 +811,11 @@ extension ChatMessageBubble {
         if preview != nil {
             Button {
                 #if os(iOS)
-                // Reveal the rest below the reader instead of following the taller row to its end.
+                // Keep the reading position and replace the preview in one layout. Animating the
+                // list cell’s height briefly clips the paragraphs that were already on screen.
                 let position = self.readingPosition
                 position?.disclosureWillToggle()
-                ChatScrollSignpost.disclosureToggle(.easeOut(duration: 0.16), self.onToggleUserMessageExpanded) {
+                ChatScrollSignpost.disclosureToggle(nil, self.onToggleUserMessageExpanded) {
                     position?.disclosureDidSettle()
                 }
                 #else
