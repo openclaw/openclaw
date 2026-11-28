@@ -49,7 +49,10 @@ export function createSpeechProviderRegistry(resolver: SpeechProviderRegistryRes
       cfg?: OpenClawConfig,
     ): SpeechProviderId | undefined => {
       const normalized = normalizeSpeechProviderId(providerId);
-      return normalized ? (getProvider(normalized, cfg)?.id ?? normalized) : undefined;
+      // Every caller that wants the raw input preserved on a miss already writes its own
+      // `?? providerId` fallback; echoing it here instead makes an unknown id indistinguishable
+      // from a resolved one, so callers that validate via `if (!canonicalized)` never see it.
+      return normalized ? getProvider(normalized, cfg)?.id : undefined;
     },
     getSpeechProvider: getProvider,
     listSpeechProviders: (cfg?: OpenClawConfig): SpeechProviderPlugin[] => [
