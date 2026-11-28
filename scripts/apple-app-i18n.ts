@@ -890,7 +890,15 @@ export async function verifyAppleAppI18n() {
     }
   }
 
-  const macosBuild = await readAppleCatalogBuild(MACOS_CATALOG_PATH, buildMacosCatalog);
+  const [existingCatalogSource, nativeInventorySource] = await Promise.all([
+    readFile(path.join(ROOT, MACOS_CATALOG_PATH), "utf8"),
+    readFile(path.join(ROOT, NATIVE_SOURCE_PATH), "utf8"),
+  ]);
+  const macosBuild = buildMacosCatalog(
+    JSON.parse(existingCatalogSource) as Catalog,
+    parseNativeI18nInventory(nativeInventorySource),
+    [],
+  );
   const macosKeys = validateAppleCatalog(MACOS_CATALOG_PATH, macosBuild.catalog);
 
   process.stdout.write(`apple-app-i18n: sourceMacosKeys=${macosKeys}\n`);

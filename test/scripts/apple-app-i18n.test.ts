@@ -1,9 +1,12 @@
-import { mkdtemp, readFile, readdir, rm } from "node:fs/promises";
+import { mkdir, mkdtemp, readFile, readdir, rm, writeFile } from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
 import { expectDefined } from "@openclaw/normalization-core/expect";
 import { expect, it, onTestFailed, vi } from "vitest";
 import * as apple from "../../scripts/apple-app-i18n.ts";
+import { NATIVE_I18N_LOCALES } from "../../scripts/native-i18n-locales.ts";
+import { decodeXml } from "../../src/shared/xml.ts";
+
 type Entry = Parameters<typeof apple.buildIosCatalog>[1][number];
 const emptyCatalog = { sourceLanguage: "en", strings: {}, version: "1.0" };
 const unit = (value: string, state = "translated") => ({ stringUnit: { state, value } });
@@ -21,6 +24,7 @@ function artifact(translations: Record<string, string>) {
 
 const probe = vi.hoisted(() => ({
   source: "",
+  nativeTranslationFixture: "",
   catalogs: new Map<string, string>(),
   captureWrites: false,
   paths: [
@@ -45,6 +49,13 @@ vi.mock("node:fs/promises", async (importOriginal) => {
         ? source + "\n" + probe.source
         : source;
     },
+    readdir: (...args: Parameters<typeof actual.readdir>) => {
+      const directory = typeof args[0] === "string" ? path.resolve(args[0]) : "";
+      if (directory === path.resolve("apps/.i18n/native") && probe.nativeTranslationFixture) {
+        return actual.readdir(probe.nativeTranslationFixture, { withFileTypes: true });
+      }
+      return actual.readdir(...args);
+    },
     writeFile: async (...args: Parameters<typeof actual.writeFile>) => {
       if (probe.captureWrites && typeof args[0] === "string" && typeof args[1] === "string") {
         probe.catalogs.set(path.resolve(args[0]), args[1]);
@@ -55,9 +66,82 @@ vi.mock("node:fs/promises", async (importOriginal) => {
   };
 });
 
+const appleLocaleDirectories: Readonly<Record<string, string>> = {
+  "ja-JP": "ja",
+  "zh-CN": "zh-Hans",
+  "zh-TW": "zh-Hant",
+};
+
+async function installNativeTranslationFixture(missingLocale?: string) {
+  probe.catalogs.clear();
+  probe.nativeTranslationFixture = "";
+  const root = await mkdtemp(path.join(os.tmpdir(), "openclaw-apple-native-i18n-"));
+  const directory = path.join(root, "native");
+  await mkdir(directory);
+  for (const locale of NATIVE_I18N_LOCALES) {
+    if (locale === missingLocale) {
+      continue;
+    }
+    const fixtureArtifact = {
+      glossaryHash: "synthetic-fixture",
+      locale,
+      translations: {},
+      version: 2,
+    };
+    const contents = JSON.stringify(fixtureArtifact);
+    await writeFile(path.join(directory, `${locale}.json`), contents);
+    probe.catalogs.set(path.resolve(`apps/.i18n/native/${locale}.json`), contents);
+  }
+  probe.nativeTranslationFixture = directory;
+  return root;
+}
+
+async function installInfoPlistOutputFixtures() {
+  const sourcePaths = [
+    "apps/ios/Sources/Info.plist",
+    "apps/ios/WatchApp/Info.plist",
+    "apps/ios/ShareExtension/Info.plist",
+    "apps/ios/ActivityWidget/Info.plist",
+  ];
+  for (const sourcePath of sourcePaths) {
+    const source = await readFile(sourcePath, "utf8");
+    const entries = [...source.matchAll(/<key>([^<]+)<\/key>\s*<string>([\s\S]*?)<\/string>/gu)]
+      .map((match) => ({
+        key: decodeXml(match[1] ?? ""),
+        source: decodeXml(match[2] ?? ""),
+      }))
+      .filter(
+        ({ key }) => key.endsWith("UsageDescription") || key === "NSScreenCaptureDescription",
+      );
+    const contents = `${entries
+      .map(({ key, source: sourceValue }) =>
+        [
+          `/* OpenClaw source: ${JSON.stringify(sourceValue)} */`,
+          `${JSON.stringify(key)} = ${JSON.stringify(sourceValue)};`,
+        ].join("\n"),
+      )
+      .join("\n")}\n`;
+    for (const locale of NATIVE_I18N_LOCALES) {
+      const localeDirectory = appleLocaleDirectories[locale] ?? locale;
+      probe.catalogs.set(
+        path.resolve(path.dirname(sourcePath), `${localeDirectory}.lproj`, "InfoPlist.strings"),
+        contents,
+      );
+    }
+  }
+}
+
+async function removeNativeTranslationFixture(root: string) {
+  probe.source = "";
+  probe.nativeTranslationFixture = "";
+  probe.catalogs.clear();
+  await rm(root, { recursive: true, force: true });
+}
+
 it("verification and compile-macos reject raw macOS interpolation and retain shared/iOS coverage", async () => {
-  const root = await mkdtemp(path.join(os.tmpdir(), "openclaw-apple-runtime-"));
+  const root = await installNativeTranslationFixture();
   const output = path.join(root, "output");
+  await installInfoPlistOutputFixtures();
   const gates = [() => apple.verifyAppleAppI18n(), () => apple.compileMacosLocalizations(output)];
   try {
     probe.source = 'Label("Expires in \\(minutes) minutes", systemImage: "clock")';
@@ -86,9 +170,26 @@ it("verification and compile-macos reject raw macOS interpolation and retain sha
     for (const key of ["Expires in %lld minutes", "^[%lld message](inflect: true)"]) {
       expect(english).toContain(`"${key}" = "${key}";`);
     }
+    await expect(readdir(path.join(output, "fr.lproj"))).resolves.toEqual(
+      expect.arrayContaining(["Localizable.strings", "InfoPlist.strings"]),
+    );
   } finally {
-    probe.source = "";
-    await rm(root, { recursive: true, force: true });
+    await removeNativeTranslationFixture(root);
+  }
+});
+
+it("verifies source without a missing locale artifact while strict Apple paths reject it", async () => {
+  const root = await installNativeTranslationFixture("fr");
+  const output = path.join(root, "missing-output");
+  try {
+    await expect(apple.verifyAppleAppI18n()).resolves.toBeUndefined();
+    await expect(apple.checkAppleAppI18n()).rejects.toThrow("Apple/native locale parity drift");
+    await expect(apple.compileMacosLocalizations(output)).rejects.toThrow(
+      "Apple/native locale parity drift",
+    );
+    await expect(readdir(output)).rejects.toMatchObject({ code: "ENOENT" });
+  } finally {
+    await removeNativeTranslationFixture(root);
   }
 });
 
@@ -117,6 +218,7 @@ it("checks both app catalogs through the public strict and obsolete-warning path
       ),
     );
   });
+  const root = await installNativeTranslationFixture();
   try {
     // Source PRs defer generated locale files; normalize all sibling artifacts in memory.
     probe.captureWrites = true;
@@ -158,7 +260,7 @@ it("checks both app catalogs through the public strict and obsolete-warning path
     }
   } finally {
     probe.captureWrites = false;
-    probe.catalogs.clear();
+    await removeNativeTranslationFixture(root);
   }
 });
 
