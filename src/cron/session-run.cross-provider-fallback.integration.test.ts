@@ -23,6 +23,7 @@ import { resetSessionControllerStateForTest } from "../sessions/session-lifecycl
 import { withOpenClawTestState } from "../test-utils/openclaw-test-state.js";
 import {
   apiKeyProfile,
+  connectPersonalAccountWithSharedCooldown,
   completedSse,
   listenLoopbackProvider,
   loopbackModelRuntime,
@@ -66,7 +67,10 @@ type FallbackRun = {
 };
 
 async function runSessionFallback(
-  params: { primary: "live" | "removed" | "replaced"; backup?: "answers" | "fails" | "none" },
+  params: {
+    primary: "live" | "removed" | "replaced" | "personal";
+    backup?: "answers" | "fails" | "none";
+  },
   check: (run: FallbackRun) => void | Promise<void>,
 ) {
   await withOpenClawTestState(
@@ -154,16 +158,21 @@ async function runSessionFallback(
             sessionStartedAt: Date.now(),
           },
         );
-        const model = "openai/gpt-4.1@openai:primary";
+        const personal =
+          params.primary === "personal"
+            ? await connectPersonalAccountWithSharedCooldown(state)
+            : undefined;
+        const selectedProfileId = personal?.authProfileId ?? "openai:primary";
+        const model = `openai/gpt-4.1@${selectedProfileId}`;
         const captured = await captureAuthProfileAuthorization({
           cfg,
           agentDir: state.agentDir(),
-          profileId: "openai:primary",
+          profileId: selectedProfileId,
           assertCurrent() {},
         });
         const modelAuthProfileAuthorizationId = captured.authorizationId;
         captured.dispose();
-        if (params.primary !== "live") {
+        if (params.primary === "removed" || params.primary === "replaced") {
           expect(
             await removeAuthProfilesAcrossOwnerStores({ profileIds: ["openai:primary"] }),
           ).toBe(true);
@@ -191,6 +200,7 @@ async function runSessionFallback(
             delivery: { mode: "none" },
             payload: { kind: "agentTurn", message: "Reply.", model },
           }),
+          ...(personal ? { ownerProfileId: personal.ownerProfileId } : {}),
           modelAuthProfileAuthorizationId,
         };
         const result = await runCronSessionTurn({
@@ -215,12 +225,16 @@ async function runSessionFallback(
   );
 }
 
-it.each(["live", "removed"] as const)(
+it.each([
+  ["live", ["Bearer key-primary"]],
+  ["removed", []],
+  ["personal", ["Bearer key-personal"]],
+] as const)(
   "a session-target job fails over to another provider's live account (%s)",
-  async (primary) => {
+  async (primary, expectedPrimary) => {
     await runSessionFallback({ primary }, ({ hits, result }) => {
       // A removed recorded account refuses only its own candidate; it is never replaced.
-      expect(hits.primary).toEqual(primary === "live" ? ["Bearer key-primary"] : []);
+      expect(hits.primary).toEqual(expectedPrimary);
       expect(result.status, result.error).toBe("ok");
       expect(result.errorClassification).toBeUndefined();
       expect(hits.backup).toEqual(["Bearer key-backup-other"]);

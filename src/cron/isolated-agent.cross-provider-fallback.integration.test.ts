@@ -18,6 +18,7 @@ import {
 } from "../test-utils/openclaw-test-state.js";
 import {
   apiKeyProfile,
+  connectPersonalAccountWithSharedCooldown,
   completedSse,
   listenLoopbackProvider,
   loopbackModelRuntime,
@@ -250,5 +251,19 @@ it("keeps the recorded provider on its recorded account", async () => {
     const result = await run(job);
     expect(result.status, result.error).toBe("ok");
     expect(hits.primary).toEqual(["Bearer key-primary"]);
+  });
+});
+
+it("uses its healthy personal account when the shared primary account is disabled", async () => {
+  await withFallbackFixture(async ({ cfg, state, hits, reload, run, setPrimary }) => {
+    const { authProfileId, ownerProfileId } = await connectPersonalAccountWithSharedCooldown(state);
+    const job = await reload({
+      ...(await boundJob(cfg, "personal-primary", { model: `openai/gpt-4.1@${authProfileId}` })),
+      ownerProfileId,
+    });
+    setPrimary("ok");
+    const result = await run(job);
+    expect(result.status, result.error).toBe("ok");
+    expect(hits).toEqual({ primary: ["Bearer key-personal"], backup: [] });
   });
 });
