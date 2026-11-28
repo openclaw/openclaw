@@ -18,7 +18,10 @@ import {
   ensureDeliveryState,
   hasConsumedRequesterInput,
 } from "../registry/subagent-delivery-state.js";
-import { SUBAGENT_ENDED_REASON_KILLED } from "../registry/subagent-lifecycle-events.js";
+import {
+  SUBAGENT_ENDED_REASON_GATEWAY_RESTART,
+  SUBAGENT_ENDED_REASON_KILLED,
+} from "../registry/subagent-lifecycle-events.js";
 import { subagentRegistryLog } from "../registry/subagent-registry-lifecycle-log.js";
 import {
   getSubagentRunsForChildSession,
@@ -68,19 +71,22 @@ const NEXT_ACTION =
 async function formatChildStatus(child: SubagentRunRecord, budget: number): Promise<string> {
   const outcome = child.execution.outcome;
   const killed = child.endedReason === SUBAGENT_ENDED_REASON_KILLED;
+  const interrupted = child.endedReason === SUBAGENT_ENDED_REASON_GATEWAY_RESTART;
   const status = killed
     ? "killed"
-    : outcome?.status === "ok"
-      ? "completed"
-      : outcome?.status === "timeout"
-        ? `timed out${outcome.error ? `: ${outcome.error}` : ""}`
-        : outcome?.status === "error"
-          ? outcome.error === "Gateway stopped"
-            ? "interrupted by Gateway restart"
-            : `failed: ${outcome.error || "unknown error"}`
-          : "ended with unknown status";
+    : interrupted
+      ? (outcome?.error ?? "Gateway tracking interrupted; worker outcome unknown")
+      : outcome?.status === "ok"
+        ? "completed"
+        : outcome?.status === "timeout"
+          ? `timed out${outcome.error ? `: ${outcome.error}` : ""}`
+          : outcome?.status === "error"
+            ? outcome.error === "Gateway stopped"
+              ? "interrupted by Gateway restart"
+              : `failed: ${outcome.error || "unknown error"}`
+            : "ended with unknown status";
   const label = child.label?.trim() || child.task?.trim() || "child task";
-  const nextAction = killed || outcome?.status === "ok" ? "" : NEXT_ACTION;
+  const nextAction = killed || interrupted || outcome?.status === "ok" ? "" : NEXT_ACTION;
   // Every rendered part, its "\n\n" joins and the truncation note count against `budget`.
   const actionChars = nextAction ? nextAction.length + 2 : 0;
   const header = truncateUtf16Safe(

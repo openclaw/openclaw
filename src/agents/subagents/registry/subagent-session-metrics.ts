@@ -1,5 +1,8 @@
 import { asFiniteNumber } from "@openclaw/normalization-core/number-coercion";
-import { SUBAGENT_ENDED_REASON_KILLED } from "./subagent-lifecycle-events.js";
+import {
+  SUBAGENT_ENDED_REASON_GATEWAY_RESTART,
+  SUBAGENT_ENDED_REASON_KILLED,
+} from "./subagent-lifecycle-events.js";
 import type { SubagentRunRecord } from "./subagent-registry.types.js";
 import { isSubagentPausedByYield } from "./subagent-requester-turn-custody.js";
 
@@ -80,7 +83,10 @@ export function resolveSubagentDisplayStatus(
   entry: SubagentSessionStatusRecord,
   pendingDescendants = 0,
 ): string {
-  const status = resolveSubagentSessionStatus(entry) ?? "done";
+  const status =
+    entry.endedReason === SUBAGENT_ENDED_REASON_GATEWAY_RESTART
+      ? "interrupted"
+      : (resolveSubagentSessionStatus(entry) ?? "done");
   const pending = Math.max(0, pendingDescendants);
   const waiting = `waiting on ${pending} ${pending === 1 ? "child" : "children"}`;
   if (isSubagentRunPausedForContinuation(entry)) {

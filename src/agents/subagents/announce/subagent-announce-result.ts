@@ -11,7 +11,10 @@ import { wrapPromptDataBlock } from "../../sanitize-for-prompt.js";
 import { extractStoredAssistantText } from "../../tools/chat-history-text.js";
 import { resolveSubagentCompletionResultText } from "../completion/subagent-completion-result.js";
 import { resolveSubagentChildAgentId } from "../registry/subagent-child-owner-match.js";
-import { SUBAGENT_ENDED_REASON_KILLED } from "../registry/subagent-lifecycle-events.js";
+import {
+  SUBAGENT_ENDED_REASON_GATEWAY_RESTART,
+  SUBAGENT_ENDED_REASON_KILLED,
+} from "../registry/subagent-lifecycle-events.js";
 import type { SubagentRunRecord } from "../registry/subagent-registry.types.js";
 import { isSameSubagentRunOwner } from "../registry/subagent-run-generation.js";
 import { withSubagentSessionSource } from "../spawn/subagent-session-source.js";
@@ -151,6 +154,9 @@ export async function readSubagentRunFinalAnswerUsing(
 
 function describeSubagentOutcome(child: ChildCompletionRow): string {
   const outcome = child.execution.outcome;
+  if (child.endedReason === SUBAGENT_ENDED_REASON_GATEWAY_RESTART) {
+    return outcome?.error ?? "Gateway tracking interrupted; worker outcome unknown";
+  }
   if (child.endedReason === SUBAGENT_ENDED_REASON_KILLED) {
     const error = outcome?.error?.trim();
     return error ? `cancelled: ${error}` : "cancelled";

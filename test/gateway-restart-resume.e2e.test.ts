@@ -482,7 +482,10 @@ it.skipIf(process.platform === "win32").for(["SIGKILL", "SIGTERM"] as const)(
         const row = db
           .prepare("SELECT run_id, payload_json FROM subagent_runs WHERE requester_session_key = ?")
           .get(sessionKey);
-        assert(row && typeof row.payload_json === "string", "Spawn must persist the child");
+        assert(
+          row && typeof row.run_id === "string" && typeof row.payload_json === "string",
+          "Spawn must persist the child",
+        );
         const payload = asRecord(JSON.parse(row.payload_json));
         return { runId: row.run_id, ...asRecord(payload.parentCompletion ?? payload) };
       } finally {
@@ -558,6 +561,12 @@ it.skipIf(process.platform === "win32").for(["SIGKILL", "SIGTERM"] as const)(
             ),
         );
         expect(notices).toHaveLength(1);
+        if (killSignal === "SIGKILL") {
+          const statuses = notices[0]?.input.match(/run=[\w-]+; status=[\w-]+; execution=[\w-]+;/g);
+          expect(statuses).toContain(
+            `run=${original.runId}; status=interrupted; execution=unknown;`,
+          );
+        }
         expect(provider.calls.filter((call) => call.name === "child")).toHaveLength(1);
       },
       () => client?.stopAndWait(),

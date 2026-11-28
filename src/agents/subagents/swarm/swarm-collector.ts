@@ -7,7 +7,10 @@ import {
 } from "../../tools/structured-output-tool.js";
 import { resolveSubagentChildSessionOwner } from "../registry/subagent-child-session-owner.js";
 import { ensureCompletionState } from "../registry/subagent-delivery-state.js";
-import { SUBAGENT_ENDED_REASON_KILLED } from "../registry/subagent-lifecycle-events.js";
+import {
+  SUBAGENT_ENDED_REASON_GATEWAY_RESTART,
+  SUBAGENT_ENDED_REASON_KILLED,
+} from "../registry/subagent-lifecycle-events.js";
 import { updateSubagentArchiveAtMs } from "../registry/subagent-registry-helpers.js";
 import type { SwarmCollectorStatus } from "../registry/subagent-registry-read.types.js";
 import type { SubagentRunRecord } from "../registry/subagent-registry.types.js";
@@ -16,6 +19,9 @@ function resolveStatus(
   entry: SubagentRunRecord,
   hasStructuredResult: boolean,
 ): SwarmCollectorStatus {
+  if (entry.endedReason === SUBAGENT_ENDED_REASON_GATEWAY_RESTART) {
+    return "interrupted";
+  }
   if (entry.endedReason === SUBAGENT_ENDED_REASON_KILLED) {
     return "killed";
   }

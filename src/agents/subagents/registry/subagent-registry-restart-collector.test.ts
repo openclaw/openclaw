@@ -86,7 +86,7 @@ it.each(["crash", "shutdown"] as const)(
             { runId: "captured", status: "done", result: "saved result" },
             ...entries.slice(1).map((entry) => ({
               runId: entry.runId,
-              status: restart === "shutdown" ? "killed" : "failed",
+              status: restart === "shutdown" ? "killed" : "interrupted",
               error: expect.stringMatching(/restart|Gateway stopped/),
             })),
           ],

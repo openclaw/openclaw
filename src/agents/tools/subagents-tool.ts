@@ -32,6 +32,7 @@ import {
   observeSubagentExecution,
   resolveYieldedLeafPausedForMs,
 } from "../subagents/registry/subagent-execution-observation.js";
+import { subagentWorkerOutcomeStatus } from "../subagents/registry/subagent-lifecycle-events.js";
 import {
   buildSubagentList,
   readSubagentListSessionEntries,
@@ -95,7 +96,7 @@ function mapRun(
     status: isSubagentPausedByYield(run) ? "waiting" : run.execution.status,
     outcome: run.execution.outcome
       ? {
-          status: run.execution.outcome.status,
+          status: subagentWorkerOutcomeStatus(run.endedReason, run.execution.outcome),
           error:
             sanitizeRunStatusText(run.execution.outcome.error, {
               errorContext: true,

@@ -10,6 +10,7 @@ import { boundedJsonUtf8Bytes } from "../infra/json-utf8-bytes.js";
 import {
   readCollectedSubagentCompletions,
   readCollectionErrorCount,
+  SUBAGENT_COMPLETION_OUTCOMES,
 } from "../shared/subagent-completion.js";
 
 export const NESTED_TOOL_ACTIVITY_CUSTOM_TYPE = "openclaw.nested-tool.v1";
@@ -33,7 +34,7 @@ const activityDetails = z
           runId: correlationId,
           sessionKey: correlationId,
           label: z.string().optional(),
-          outcome: z.enum(["failed", "killed", "timeout"]).optional(),
+          outcome: z.enum(SUBAGENT_COMPLETION_OUTCOMES).optional(),
         }),
       )
       .optional(),

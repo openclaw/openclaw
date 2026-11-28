@@ -156,6 +156,12 @@ function formatGeneratedMediaDirectiveLines(
   ];
 }
 
+function backgroundTaskSummary(event: AgentTaskCompletionInternalEvent): string {
+  return event.source === "subagent" && event.status === "unknown"
+    ? "The Gateway could not confirm a background task's outcome."
+    : "A background task completed.";
+}
+
 function formatTaskCompletionEvent(
   event: AgentTaskCompletionInternalEvent,
   mode: TaskCompletionPromptMode,
@@ -184,7 +190,7 @@ function formatTaskCompletionEvent(
     mode !== "plain"
       ? ["[Internal task completion event]"]
       : [
-          "A background task completed. Use this result to reply to the user in your normal assistant voice.",
+          `${backgroundTaskSummary(event)} Use this result to reply to the user in your normal assistant voice.`,
           "",
         ];
   lines.push(
@@ -228,7 +234,7 @@ export function buildAgentInternalEventContext(
     ...(events ?? []).flatMap((event): RuntimeContextFragment[] => [
       {
         kind: "runtime-instruction",
-        text: "A background task completed. Keep internal details private and use its result to reply in your normal assistant voice.",
+        text: `${backgroundTaskSummary(event)} Keep internal details private and use its result to reply in your normal assistant voice.`,
       },
       { kind: "conversation-data", text: formatTaskCompletionEvent(event, "data") },
       { kind: "runtime-instruction", text: event.replyInstruction },

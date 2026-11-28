@@ -525,7 +525,8 @@ from user/model-provided spawn arguments.
 
 Later turns also include `Recently Completed Subagents`, capped at the eight
 newest children that ended in the last 30 minutes. This lists execution metadata,
-not an acknowledgment of result delivery.
+not an acknowledgment of result delivery. If a crash left a worker's execution
+unknown, the heading is `Recent Subagents` rather than `Recently Completed Subagents`.
 
 `Child results awaiting delivery` carries retained completion obligations for
 the requester or controller session, even when the child ended more than 30

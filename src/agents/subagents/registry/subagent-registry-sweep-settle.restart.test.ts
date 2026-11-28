@@ -1,7 +1,7 @@
 import { afterEach, beforeEach, expect, it, vi } from "vitest";
 import { getAgentEventLifecycleGeneration } from "../../../infra/agent-events.js";
 import { createSubagentRunRecord } from "../../subagent-test-fixtures.test-helpers.js";
-import { SUBAGENT_ENDED_REASON_ERROR } from "./subagent-lifecycle-events.js";
+import { SUBAGENT_ENDED_REASON_GATEWAY_RESTART } from "./subagent-lifecycle-events.js";
 import { subagentRegistryLog } from "./subagent-registry-lifecycle-log.js";
 import { subagentRuns } from "./subagent-registry-memory.js";
 import { markSubagentRunPausedAfterYield } from "./subagent-registry-run-pause.js";
@@ -73,7 +73,7 @@ it("fails a running child restored from an earlier Gateway so its requester wake
       endedAt: NOW,
       outcome: { status: "error", error: SUBAGENT_RESTART_INTERRUPTED_ERROR },
       terminalReply: { disposition: "empty" },
-      reason: SUBAGENT_ENDED_REASON_ERROR,
+      reason: SUBAGENT_ENDED_REASON_GATEWAY_RESTART,
       sendFarewell: true,
       accountId: "primary",
       triggerCleanup: true,

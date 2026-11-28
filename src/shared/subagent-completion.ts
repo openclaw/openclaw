@@ -4,16 +4,16 @@ import { normalizeOptionalString } from "@openclaw/normalization-core/string-coe
 import { unwrapToolCallForDisplay } from "../agents/tool-display-call.js";
 import { readTranscriptDisplayPosition } from "../chat/transcript-display-position.js";
 
-/** Producer-confirmed completion, independent of the child's later session state. */
+/** A recorded child result, independent of the child's later session state. */
 export type SubagentCompletion = {
   runId: string;
   sessionKey: string;
   label?: string;
-  /** Absent for a finished child; a collected child that ended without finishing. */
+  /** Absent for success; interrupted means tracking ended without a confirmed worker outcome. */
   outcome?: SubagentCompletionOutcome;
 };
 
-const SUBAGENT_COMPLETION_OUTCOMES = ["failed", "killed", "timeout"] as const;
+export const SUBAGENT_COMPLETION_OUTCOMES = ["failed", "interrupted", "killed", "timeout"] as const;
 type SubagentCompletionOutcome = (typeof SUBAGENT_COMPLETION_OUTCOMES)[number];
 
 function readOutcome(value: unknown): SubagentCompletionOutcome | undefined {

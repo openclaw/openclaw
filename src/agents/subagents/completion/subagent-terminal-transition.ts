@@ -17,6 +17,7 @@ import {
 import {
   SUBAGENT_ENDED_REASON_COMPLETE,
   SUBAGENT_ENDED_REASON_ERROR,
+  SUBAGENT_ENDED_REASON_GATEWAY_RESTART,
   SUBAGENT_ENDED_REASON_KILLED,
 } from "../registry/subagent-lifecycle-events.js";
 import { resolveKilledSubagentTaskEndedAt } from "../registry/subagent-registry-completion.js";
@@ -94,7 +95,7 @@ function resolveTerminalRequest(
       ? completeParams.startedAt
       : undefined;
   const effectiveEndedAt = resolveSubagentRunEffectiveEndedAt(entry, endedAt, observedStartedAt);
-  if (effectiveEndedAt < endedAt) {
+  if (effectiveEndedAt < endedAt && completionReason !== SUBAGENT_ENDED_REASON_GATEWAY_RESTART) {
     endedAt = effectiveEndedAt;
     completionOutcome = { status: "timeout" };
     completionReason = SUBAGENT_ENDED_REASON_COMPLETE;
