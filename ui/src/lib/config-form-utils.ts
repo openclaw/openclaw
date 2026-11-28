@@ -26,6 +26,7 @@ export type JsonSchema = {
   items?: JsonSchema | JsonSchema[];
   additionalItems?: JsonSchema | boolean;
   additionalProperties?: JsonSchema | boolean;
+  patternProperties?: Record<string, JsonSchema>;
   enum?: unknown[];
   enumIncludesNull?: boolean;
   const?: unknown;

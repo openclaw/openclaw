@@ -626,6 +626,117 @@ describe("config form renderer", () => {
     },
   );
 
+  it("renders provider-pattern model maps with the map editor instead of Raw mode", async () => {
+    // #202721: bundled providers contribute patternProperties to the models map;
+    // the map must render the editable map editor, and edits must patch by key path.
+    const analysis = analyze({
+      models: {
+        type: "object",
+        propertyNames: { type: "string" },
+        additionalProperties: object({ alias: { type: "string" } }),
+        patternProperties: {
+          "^vllm/.+$": {
+            type: "object",
+            properties: {
+              params: object({ priorityScheduling: { type: "boolean" } }),
+            },
+          },
+        },
+      },
+    });
+    expect(analysis.unsupportedPaths).toEqual([]);
+    renderForm(analysis, {
+      activeSection: "models",
+      value: { models: { "vllm/local": { alias: "Local vLLM" } } },
+    });
+    await waitForSolid(() => expect(container.querySelector(".cfg-map")).not.toBeNull());
+    expect(container.textContent).not.toContain("Unsupported schema node");
+
+    const input = inputWithValue("Local vLLM", ".cfg-map input.settings-input[type='text']");
+    edit(input, "Renamed vLLM");
+    expect(onPatch).toHaveBeenCalledWith(["models", "vllm/local", "alias"], "Renamed vLLM");
+  });
+
+  it("keeps the Raw-mode notice for pattern-only object maps", async () => {
+    // Review counterexample (#202730): the knowledge plugin stores schema defines
+    // every entry through patternProperties with additionalProperties:false, which
+    // the map editor cannot render, so the Raw-mode notice must remain.
+    const analysis = analyze({
+      stores: {
+        type: "object",
+        additionalProperties: false,
+        patternProperties: {
+          "^[a-z][a-z0-9-]{0,47}$": object(
+            { label: { type: "string" }, agents: { type: "array", items: { type: "string" } } },
+            { required: ["agents"] },
+          ),
+        },
+      },
+    });
+    expect(analysis.unsupportedPaths).toEqual(["stores"]);
+    renderForm(analysis, {
+      activeSection: "stores",
+      value: { stores: { team: { agents: ["main"] } } },
+    });
+    await waitForSolid(() =>
+      expect(container.textContent).toContain(
+        "Edit this setting in the Raw tab of Advanced settings.",
+      ),
+    );
+    expect(container.querySelector(".cfg-map")).toBeNull();
+    expect(onPatch).not.toHaveBeenCalled();
+  });
+
+  it("keeps the Raw-mode notice for mixed named and pattern-defined entries", async () => {
+    // Review finding (#202730): named properties alone do not make a pattern-refined
+    // map renderable — with additionalProperties:false the editor shows only `default`
+    // and would silently hide pattern-defined entries like vllm/local.
+    const analysis = analyze({
+      models: {
+        type: "object",
+        properties: { default: { type: "string" } },
+        additionalProperties: false,
+        patternProperties: { "^vllm/.+$": { type: "string" } },
+      },
+    });
+    expect(analysis.unsupportedPaths).toEqual(["models"]);
+    renderForm(analysis, {
+      activeSection: "models",
+      value: { models: { default: "main", "vllm/local": "local" } },
+    });
+    await waitForSolid(() =>
+      expect(container.textContent).toContain(
+        "Edit this setting in the Raw tab of Advanced settings.",
+      ),
+    );
+    expect(container.querySelector(".cfg-map")).toBeNull();
+    expect(onPatch).not.toHaveBeenCalled();
+  });
+
+  it("keeps the Raw-mode notice when a pattern value shape differs from the map entry", async () => {
+    // Review counterexample (#202730 round 3): a string-valued map with a boolean
+    // pattern refinement would render a string control that the validator rejects.
+    const analysis = analyze({
+      flags: {
+        type: "object",
+        additionalProperties: { type: "string" },
+        patternProperties: { "^flag$": { type: "boolean" } },
+      },
+    });
+    expect(analysis.unsupportedPaths).toEqual(["flags"]);
+    renderForm(analysis, {
+      activeSection: "flags",
+      value: { flags: { flag: true } },
+    });
+    await waitForSolid(() =>
+      expect(container.textContent).toContain(
+        "Edit this setting in the Raw tab of Advanced settings.",
+      ),
+    );
+    expect(container.querySelector(".cfg-map")).toBeNull();
+    expect(onPatch).not.toHaveBeenCalled();
+  });
+
   it("filters by authored metadata tags without rendering field chips", () => {
     renderForm(rootAnalysis, {
       uiHints: {

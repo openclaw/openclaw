@@ -143,7 +143,21 @@ function shouldNormalizeAllOfBranch(schema: JsonSchema): boolean {
 
 function hasOnlySupportedFormKeywords(schema: JsonSchema): boolean {
   if (!hasOnlySupportedKeywords(schema, SUPPORTED_FORM_SCHEMA_KEYS)) {
-    return false;
+    // Provider model maps refine selected keys with patternProperties (e.g. bundled
+    // vLLM models); admit the keyword only where the existing editor can still render
+    // the node (named properties or an object-valued/true additionalProperties), so
+    // pattern-only maps keep their Raw-mode fallback instead of rendering empty.
+    if (
+      !isRecord(schema.patternProperties) ||
+      !hasRenderableObjectStructure(schema) ||
+      !patternValuesCompatibleWithMapEntry(schema)
+    ) {
+      return false;
+    }
+    const { patternProperties: _patternRefinements, ...withoutPatternRefinements } = schema;
+    if (!hasOnlySupportedKeywords(withoutPatternRefinements, SUPPORTED_FORM_SCHEMA_KEYS)) {
+      return false;
+    }
   }
   if (schema.not === undefined) {
     return true;
@@ -171,6 +185,45 @@ function hasOnlySupportedKeywords(schema: JsonSchema, supported: ReadonlySet<str
         normalizeSchemaNode({ type: "string", ...schema.propertyNames }, []).unsupportedPaths
           .length === 0),
   );
+}
+
+function hasRenderableObjectStructure(schema: JsonSchema): boolean {
+  // The map editor only enumerates dynamic entries from an object-valued (or `true`,
+  // normalized to `{}` here) additionalProperties. Named properties alone are not
+  // enough: pattern-defined entries would vanish from the form without a Raw notice.
+  const additional = schema.additionalProperties;
+  return additional === true || isRecord(additional);
+}
+
+function patternValuesCompatibleWithMapEntry(schema: JsonSchema): boolean {
+  const additional = schema.additionalProperties;
+  if (additional === true) {
+    return true;
+  }
+  if (!isRecord(additional)) {
+    return false;
+  }
+  // The editor renders every map entry with the additionalProperties schema, so a
+  // pattern whose value shape differs (e.g. boolean flags under a string map) would
+  // render controls the validator rejects. Refinements must keep the entry's type
+  // and not require keys the editor cannot render.
+  const entryTypes = inferredSchemaTypes(additional);
+  return Object.values(schema.patternProperties ?? {}).every((pattern) => {
+    if (!isRecord(pattern)) {
+      return false;
+    }
+    if (entryTypes.size > 0) {
+      for (const patternType of inferredSchemaTypes(pattern)) {
+        if (!entryTypes.has(patternType)) {
+          return false;
+        }
+      }
+    }
+    if (isRecord(additional.properties) && Array.isArray(pattern.required)) {
+      return pattern.required.every((key) => key in (additional.properties ?? {}));
+    }
+    return true;
+  });
 }
 
 function schemaAllowsNull(schema: JsonSchema): boolean {
