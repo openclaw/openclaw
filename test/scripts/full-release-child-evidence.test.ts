@@ -1,6 +1,6 @@
 import { spawnSync } from "node:child_process";
 import { createHash } from "node:crypto";
-import { chmodSync, mkdirSync, readFileSync, writeFileSync } from "node:fs";
+import { chmodSync, existsSync, mkdirSync, readFileSync, writeFileSync } from "node:fs";
 import { delimiter, join, resolve } from "node:path";
 import { afterEach, describe, expect, it } from "vitest";
 import { parse } from "yaml";
@@ -26,6 +26,7 @@ function fixture(role = "normalCi") {
     run_attempt: 1,
     status: conclusion === null ? "in_progress" : "completed",
     conclusion,
+    html_url: `https://github.com/openclaw/openclaw/actions/runs/101/job/${id}`,
   });
   const jobs = [job(1, "resolve target"), job(2, "node tests"), job(3, PUBLISHER, null)];
   return {
@@ -226,7 +227,7 @@ describe("full release child evidence producer", () => {
     expect(evidence.jobs).toHaveLength(102);
   });
 
-  it("composes retried workloads with retained jobs and excludes publishers", () => {
+  it("seals a focused rerun with runnerless shard projections without masking the CI gate", () => {
     const data = fixture();
     data.run.run_attempt = 2;
     data.run.status = "queued";
@@ -238,26 +239,49 @@ describe("full release child evidence producer", () => {
     data.jobs.push({ ...data.jobs[1]!, id: 99, status: "queued", conclusion: null });
     Object.assign(data.jobs.at(-1)!, { runner_id: null, runner_name: null });
     data.attempts.push([
-      { ...data.jobs[1]!, run_attempt: 2, conclusion: "success" },
+      {
+        ...data.jobs[1]!,
+        id: 5,
+        run_attempt: 2,
+        conclusion: "success",
+        html_url: "https://github.com/openclaw/openclaw/actions/runs/101/job/5",
+      },
+      { ...data.jobs.at(-1)!, id: 6, run_attempt: 2 },
+      { ...data.jobs.at(-1)!, id: 7, run_attempt: 2 },
+      { ...data.jobs[1]!, id: 8, name: "openclaw/ci-gate", run_attempt: 2 },
       { ...data.jobs[2]!, id: 4, run_attempt: 2, status: "in_progress", conclusion: null },
     ]);
     const { evidence } = sealed(data, 2);
     expect(evidence).toMatchObject({
-      workloadConclusion: "success",
+      workloadConclusion: "failure",
       effectiveRunAttempt: 2,
       triggeringActor: "release-maintainer",
       publisher: { jobId: "4" },
     });
     expect(evidence.observedRunAttempts).toEqual([1, 2]);
-    expect(
-      evidence.jobs.map((job: { name: string; acceptedRunAttempt: number }) => [
-        job.name,
-        job.acceptedRunAttempt,
-      ]),
-    ).toEqual([
-      ["node tests", 2],
-      ["resolve target", 1],
+    expect(evidence.jobs).toMatchObject([
+      {
+        name: "node tests",
+        acceptedRunAttempt: 2,
+        conclusion: "success",
+        url: "https://github.com/openclaw/openclaw/actions/runs/101/job/5",
+      },
+      { name: "openclaw/ci-gate", acceptedRunAttempt: 2, conclusion: "failure" },
+      { name: "resolve target", acceptedRunAttempt: 1, conclusion: "success" },
     ]);
+  });
+
+  it("identifies nonterminal predecessors and leaves the receipt unwritten", () => {
+    const data = fixture();
+    Object.assign(data.jobs[0]!, { status: "queued", conclusion: null });
+    Object.assign(data.jobs[1]!, { status: "in_progress", conclusion: null });
+    const { result, receipt, output } = seal(data);
+    expect(result.status).toBe(1);
+    expect(result.stderr).toContain("attempt 1");
+    expect(result.stderr).toContain('"resolve target" (id=1, status="queued")');
+    expect(result.stderr).toContain('"node tests" (id=2, status="in_progress")');
+    expect(existsSync(receipt)).toBe(false);
+    expect(existsSync(output)).toBe(false);
   });
 
   it.each<[string, (data: ReturnType<typeof fixture>) => void, string]>([
@@ -283,11 +307,6 @@ describe("full release child evidence producer", () => {
       "foreign child repository",
       (data) => void (data.run.repository.full_name = "other/repository"),
       "provenance changed",
-    ],
-    [
-      "active predecessor",
-      (data) => void (data.jobs[1]!.status = "in_progress"),
-      "predecessor jobs are active",
     ],
     [
       "ambiguous publisher",

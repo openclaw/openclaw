@@ -110,9 +110,19 @@ async function seal() {
       }
       publisher = publishers[0];
     }
-    const jobs = resolvedJobs.filter((job) => job.name !== PUBLISHER_JOB);
-    if (jobs.some((job) => job.status !== "completed")) {
-      throw new Error("Child evidence cannot seal while predecessor jobs are active");
+    const activeJobs = resolvedJobs.filter(
+      (job) => job.name !== PUBLISHER_JOB && job.status !== "completed",
+    );
+    if (activeJobs.length > 0) {
+      const examples = activeJobs
+        .slice(0, 5)
+        .map(
+          (job) =>
+            `${JSON.stringify(job.name.slice(0, 160))} (id=${JSON.stringify(job.id)}, status=${JSON.stringify(job.status)})`,
+        );
+      throw new Error(
+        `Child evidence cannot seal while predecessor jobs are active in attempt ${attempt} (${activeJobs.length}): ${examples.join(", ")}`,
+      );
     }
     attempts.push({ runAttempt: attempt, jobs: allJobs });
   }
