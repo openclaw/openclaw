@@ -2,12 +2,109 @@ import Vision
 import XCTest
 
 extension OpenClawSnapshotUITests {
+    func testHistoryReloadDoesNotDuplicateTheWorkingTools() throws {
+        try self.assertImportedTools()
+    }
+
+    func testReconnectKeepsTheRunningToolNameAndCompletedSteps() throws {
+        try self.assertImportedTools(reconnect: true)
+    }
+
+    func testReconnectFinishesTheCallThatEndedWhileOffline() throws {
+        try self.assertImportedTools(reconnect: true, finishedOffline: true)
+    }
+
+    private func assertImportedTools(reconnect: Bool = false, finishedOffline: Bool = false) throws {
+        var arguments = ["--openclaw-tool-run-fixture", "--openclaw-imported-tool-fixture"]
+        if reconnect { arguments.append("--openclaw-reconnect-tool-fixture") }
+        if finishedOffline { arguments.append("--openclaw-finish-tool-offline") }
+        self.launchApp(for: Self.chatScreenshotTarget, additionalArguments: arguments)
+        let app = try XCTUnwrap(self.app)
+        let note = app.staticTexts["Checking the sample shelves."]
+        XCTAssertTrue(note.waitForExistence(timeout: 12), "History did reload")
+        let claw = app.descendants(matching: .any)["chat-working-status"].firstMatch
+        XCTAssertTrue(claw.waitForExistence(timeout: 3))
+        if finishedOffline {
+            XCTAssertEqual(claw.label, "Thinking")
+        } else {
+            XCTAssertEqual(claw.label, "Running cat west.txt")
+        }
+        XCTAssertGreaterThanOrEqual(claw.frame.minY, note.frame.maxY, "The claw stays below the saved transcript")
+        let captureRow = reconnect && !finishedOffline
+        let attachment = XCTAttachment(screenshot: captureRow ? claw.screenshot() : app.screenshot())
+        attachment.name = captureRow ? "working-row-after-reconnect" : "imported-tools"
+        attachment.lifetime = .keepAlways
+        add(attachment)
+        let rows = app.buttons.matching(NSPredicate(format: "identifier BEGINSWITH %@", "chat-tool-activity-"))
+        for file in ["north.txt", "east.txt"] {
+            XCTAssertLessThanOrEqual(rows.matching(NSPredicate(format: "value CONTAINS %@", file)).count, 1)
+        }
+        if !finishedOffline {
+            XCTAssertEqual(rows.matching(NSPredicate(format: "value CONTAINS %@", "west.txt")).count, 0)
+        }
+        for row in rows.allElementsBoundByIndex {
+            XCTAssertLessThanOrEqual(row.frame.maxY, claw.frame.minY)
+        }
+        XCTAssertEqual(claw.elementType, .button, "The run’s calls remain inspectable after reconnect")
+        claw.tap()
+        for shelf in ["north", "east", "west"] {
+            let step = app.buttons.matching(identifier: "chat-tool-step-toolu_sample_" + shelf)
+            XCTAssertTrue(step.firstMatch.waitForExistence(timeout: 4), "Keep the whole run inspectable")
+            XCTAssertEqual(step.count, 1)
+            if reconnect {
+                let verb = shelf == "west" && !finishedOffline ? "Running" : "Ran"
+                XCTAssertTrue(step.firstMatch.label.contains(verb + " cat " + shelf + ".txt"), step.firstMatch.label)
+            }
+        }
+    }
+
+    func testWorkingClawNarratesTheOnlyActiveToolRow() throws {
+        self.launchApp(for: Self.chatScreenshotTarget, additionalArguments: [
+            "--openclaw-tool-run-fixture", "--openclaw-tool-run-interval-ms", "3000",
+        ])
+        let app = try XCTUnwrap(self.app)
+        let claw = app.buttons["chat-working-status"]
+        guard claw.waitForExistence(timeout: 10) else { return XCTFail("The working claw must own the tool action") }
+        var frame: CGRect?
+        for file in ["icons.txt", "buttons.txt", "forms.txt"] {
+            expectation(for: NSPredicate(format: "label == %@", "Running cat " + file), evaluatedWith: claw)
+            waitForExpectations(timeout: 22)
+            XCTAssertEqual(app.buttons.matching(identifier: "chat-working-status").count, 1)
+            XCTAssertEqual(app.buttons.matching(NSPredicate(format: "label CONTAINS %@", file)).count, 1)
+            if let frame { XCTAssertEqual(claw.frame, frame, "A new call must not move the claw or its hit target") }
+            XCTAssertGreaterThanOrEqual(claw.frame.height, 44, "The claw needs a full-size touch target")
+            frame = claw.frame
+        }
+        XCTAssertTrue(app.buttons["chat-tool-activity-slot-index"].exists, "Commentary settled the first stretch")
+        XCTAssertFalse(app.buttons["chat-tool-activity-slot-outline"].exists)
+    }
+
+    func testOpenWorkingClawListKeepsCallsAcrossCommentary() throws {
+        self.launchApp(for: Self.chatScreenshotTarget, additionalArguments: [
+            "--openclaw-tool-run-fixture", "--openclaw-tool-run-interval-ms", "3000",
+            // XCUITest waits for foreground and root readiness before looking for this early call.
+            "--openclaw-tool-run-start-delay-ms", "12000",
+        ])
+        let app = try XCTUnwrap(self.app)
+        let current = app.buttons["chat-working-status"]
+        expectation(for: NSPredicate(format: "label == %@", "Running cat outline.txt"), evaluatedWith: current)
+        waitForExpectations(timeout: 20)
+        current.tap()
+        XCTAssertTrue(app.buttons["chat-tool-step-slot-outline"].waitForExistence(timeout: 4))
+        XCTAssertTrue(app.buttons["chat-tool-step-slot-index"].exists, "The list starts at the beginning of the run")
+        XCTAssertTrue(app.buttons["chat-tool-step-slot-palette"].waitForExistence(timeout: 8))
+        let tail = app.buttons["chat-tool-step-slot-menus"]
+        XCTAssertTrue(tail.waitForExistence(timeout: 24))
+        XCTAssertTrue(tail.isHittable, "Watching the live list follows calls past the first viewport")
+    }
+
     func testSettledSingleCallOpensDetailAndBackFindsItInTheTurn() throws {
         self.launchApp(
             for: Self.chatScreenshotTarget,
             additionalArguments: ["--openclaw-tool-run-fixture", "--openclaw-tool-run-interval-ms", "80"])
         let app = try XCTUnwrap(self.app)
         XCTAssertTrue(app.staticTexts["All checks passed."].waitForExistence(timeout: 12))
+        XCTAssertFalse(app.buttons["chat-working-status"].exists)
         XCTAssertEqual(app.buttons.matching(identifier: "chat-tool-group").count, 1)
         let selected = app.buttons["chat-tool-activity-slot-report"]
         XCTAssertTrue(selected.exists)

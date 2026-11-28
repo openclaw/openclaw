@@ -249,7 +249,10 @@ extension LocalFixtureChatStore {
             "report",
         ]
         let narration = [1: "I’ll check the components next.", files.count - 1: "One last check on the report."]
-        try? await Task.sleep(for: .seconds(3))
+        let initialDelay = arguments.firstIndex(of: "--openclaw-tool-run-start-delay-ms").flatMap {
+            arguments.indices.contains($0 + 1) ? Int(arguments[$0 + 1]) : nil
+        } ?? 3000
+        try? await Task.sleep(for: .milliseconds(initialDelay))
         for (index, file) in files.enumerated() {
             let now = Date().timeIntervalSince1970 * 1000
             let call = "slot-\(file)"

@@ -743,7 +743,7 @@ extension OpenClawSnapshotUITests {
             NSPredicate(format: "label CONTAINS %@", "keep the mobile workflow connected to the gateway"))
             .firstMatch
         XCTAssertTrue(reply.waitForExistence(timeout: 8))
-        XCTAssertTrue(app.staticTexts["Writing"].waitForNonExistence(timeout: 1))
+        XCTAssertTrue(app.descendants(matching: .any)["chat-working-status"].waitForNonExistence(timeout: 1))
         let visibleArea = visibleAreaAboveKeyboard()
         XCTAssertTrue(reply.frame.intersects(visibleArea))
         XCTAssertLessThanOrEqual(reply.frame.maxY, keyboard.frame.minY + 1)
@@ -773,7 +773,7 @@ extension OpenClawSnapshotUITests {
             "I can help with",
             "Keep this reply anchored.")).firstMatch
         XCTAssertTrue(response.waitForExistence(timeout: 8))
-        XCTAssertTrue(app.staticTexts["Writing"].waitForNonExistence(timeout: 5))
+        XCTAssertTrue(app.descendants(matching: .any)["chat-working-status"].waitForNonExistence(timeout: 5))
 
         let jumpToLatest = app.buttons["Jump to latest reply"]
         let questionAndReplyStartVisible = XCTNSPredicateExpectation(
