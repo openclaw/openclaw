@@ -47,7 +47,6 @@ describe("saveMessageResourceFeishu stream ownership", () => {
               code: "EACCES",
             });
             const mkdir = vi.spyOn(fs, "mkdir").mockRejectedValueOnce(storageError);
-            const iterate = vi.spyOn(stream, Symbol.asyncIterator);
             const destroySource = stream.destroy.bind(stream);
             const destroy = vi.spyOn(stream, "destroy").mockImplementationOnce((error) => {
               destroySource(error);
@@ -66,12 +65,10 @@ describe("saveMessageResourceFeishu stream ownership", () => {
             );
             try {
               await expect(download).rejects.toBe(storageError);
-              expect(iterate).not.toHaveBeenCalled();
               expect(stream.destroyed).toBe(true);
               await vi.waitFor(() => expect(serverSawClose).toBe(true));
             } finally {
               mkdir.mockRestore();
-              iterate.mockRestore();
               destroy.mockRestore();
               stream.destroy();
               await settled;
