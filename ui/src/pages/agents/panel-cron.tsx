@@ -26,6 +26,7 @@ import { registerCronEnglish } from "../../i18n/locales/en-cron.ts";
 import { registerSettingsEnglish } from "../../i18n/locales/en-settings.ts";
 import type { AgentContext } from "../../lib/agents/display.ts";
 import type { AgentsPanel } from "../../lib/agents/index.ts";
+import { createCronSessionTargetLabel } from "../../lib/cron/session-target-label.ts";
 import type { CronState } from "../../lib/cron/types.ts";
 import { formatUiError } from "../../lib/format-error.ts";
 import {
@@ -117,6 +118,7 @@ export function AgentCron(
     onSelectPanel: (panel: AgentsPanel) => void;
   },
 ) {
+  const targetLabel = createCronSessionTargetLabel();
   const [running, setRunning] = createOptimistic<CronState | null>(null);
   const run = action(function* (receipt: AgentCronRead) {
     setRunning(receipt.scope);
@@ -230,7 +232,7 @@ export function AgentCron(
                   [
                     job().description,
                     formatCronSchedule(job()),
-                    job().sessionTarget,
+                    targetLabel(job().sessionTarget),
                     formatCronState(job()),
                     formatCronPayload(job()),
                   ]

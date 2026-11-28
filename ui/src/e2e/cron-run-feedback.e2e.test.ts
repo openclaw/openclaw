@@ -1,7 +1,9 @@
 import { expect, it } from "vitest";
 import type { CronJob } from "../api/types.ts";
+import { evaluateControlUiContext } from "../test-helpers/control-ui-e2e-context.ts";
 import { defaultControlUiFeatureMethods } from "../test-helpers/control-ui-e2e-defaults.ts";
 import { installMockGateway } from "../test-helpers/control-ui-e2e.ts";
+import { createControlUiSessionRow } from "../test-helpers/control-ui-session-fixtures.ts";
 import { cronListResponseFixture } from "../test-helpers/cron.ts";
 import { agentRoster as createAgentRoster } from "./agent-roster.test-support.ts";
 import {
@@ -15,6 +17,7 @@ import {
   openAutomation,
   openAutomationActivity,
 } from "./cron-fixtures.test-support.ts";
+import { captureUiProof } from "./session-management.test-support.ts";
 
 const suite = createControlUiE2eSuite({
   name: "Control UI automation run feedback ownership",
@@ -38,6 +41,59 @@ function cronResponses(jobs: CronJob[]) {
 }
 
 suite.define(() => {
+  it("names held targets in the agent inventory without reading sessions per job", async () => {
+    await suite.withPage(createControlUiE2eContextOptions(), async ({ page }) => {
+      const jobs = Array.from({ length: 50 }, (_, index) =>
+        cronJob(`garden-${index}`, `Garden automation ${index}`, {
+          agentId: "main",
+          sessionTarget: `session:agent:main:dashboard:garden-${index}`,
+          payload: { kind: "agentTurn", message: "Check the garden inventory." },
+        }),
+      );
+      const sessions = jobs
+        .slice(0, 25)
+        .map((_, index) =>
+          createControlUiSessionRow(
+            `agent:main:dashboard:garden-${index}`,
+            `Garden plan ${index}`,
+            Date.now() - index,
+          ),
+        );
+      const gateway = await installMockGateway(page, {
+        featureMethods: [...cronSidebarFeatureMethods, "cron.status", "sessions.describe"],
+        sessions,
+        methodResponses: {
+          ...cronResponses(jobs),
+          "agents.list": createAgentRoster({ main: "Main agent" }, "main", "agent"),
+        },
+      });
+      await page.goto(suite.server.baseUrl + "settings/agents/main/cron");
+      await expect
+        .poll(() =>
+          evaluateControlUiContext(page, (app) => app.sessions.state.result?.sessions.length),
+        )
+        .toBe(25);
+      const rows = page
+        .locator("#agent-panel .settings-row")
+        .filter({ hasText: "Garden automation" });
+      await expect.poll(() => rows.count()).toBe(50);
+      await captureUiProof(suite, page, "agent-automations.png");
+      await expect
+        .poll(async () => {
+          const descriptions = await rows.allTextContents();
+          return {
+            names: descriptions.filter((text) => text.includes("Garden plan ")).length,
+            keys: descriptions.filter((text) =>
+              text.includes("session:agent:main:dashboard:garden-"),
+            ).length,
+          };
+        })
+        .toEqual({ names: 25, keys: 25 });
+      expect(await gateway.getRequests("sessions.describe")).toHaveLength(0);
+      expect(await gateway.getRequests("sessions.list")).toHaveLength(1);
+    });
+  });
+
   it.each([
     { reason: "queued", selection: "same" },
     { reason: "error", selection: "other" },
