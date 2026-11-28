@@ -28,6 +28,7 @@ import {
   isPluginActivityToolName,
   PLUGIN_ACTIVITY_ICON_MAX_BYTES,
 } from "../plugins/portable-icon-paths.js";
+import { monotonicNow } from "../shared/monotonic-time.js";
 import { parseControlUiResourcePath } from "./control-ui-contract.js";
 import { respondNotFound as sendNotFound } from "./control-ui-http-utils.js";
 import { loadControlUiLinkMetadata } from "./control-ui-link-preview.js";
@@ -97,7 +98,7 @@ function rememberIcon(
   return promise.then((result) => {
     if (!result && pluginIconCache.peek(cacheKey) === entry) {
       if (retainFailureForMs) {
-        entry.expiresAt = Date.now() + retainFailureForMs;
+        entry.expiresAt = monotonicNow() + retainFailureForMs;
       } else {
         pluginIconCache.delete(cacheKey);
       }
@@ -430,7 +431,7 @@ export async function handlePluginIconHttpRequest(
         ? `file:${pluginIcon.rootPath}\0${pluginIcon.path}`
         : remoteIconUrl
   }`;
-  const cached = readCachedIcon(cacheKey, Date.now());
+  const cached = readCachedIcon(cacheKey, monotonicNow());
   const load = () =>
     Array.isArray(pluginIcon)
       ? loadPluginIcon(pluginIcon)
@@ -452,7 +453,7 @@ export async function handlePluginIconHttpRequest(
       : await rememberIcon(
           cacheKey,
           faviconHostname ? linkFaviconFetchLimit(load) : load(),
-          Date.now() + PLUGIN_ICON_CACHE_TTL_MS,
+          monotonicNow() + PLUGIN_ICON_CACHE_TTL_MS,
           faviconHostname ? LINK_FAVICON_NEGATIVE_CACHE_TTL_MS : undefined,
         );
   if (!icon) {
