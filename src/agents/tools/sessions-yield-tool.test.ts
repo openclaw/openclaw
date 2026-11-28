@@ -7,7 +7,7 @@ import {
   isResumingAlreadyPendingSessionsYieldResult,
 } from "./sessions-yield-tool.js";
 
-function setup(options: Parameters<typeof createSessionsYieldTool>[0] = {}) {
+function setup(options: Parameters<typeof createSessionsYieldTool>[0]) {
   const onYield = vi.fn();
   const tool = createSessionsYieldTool({ sessionId: "test-session", onYield, ...options });
   return { onYield, tool, execute: (args = {}) => tool.execute("call-1", args) };

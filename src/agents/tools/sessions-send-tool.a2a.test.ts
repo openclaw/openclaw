@@ -40,7 +40,7 @@ function deliveredReceipt(runId: string) {
 }
 
 type FlowOptions = Parameters<typeof runSessionsSendA2AFlow>[0];
-function runFlow(options: Partial<FlowOptions> = {}) {
+function runFlow(options: Partial<FlowOptions>) {
   const targetSessionKey = options.targetSessionKey ?? requesterDeliveryGeneration.sessionKey;
   return runSessionsSendA2AFlow({
     targetAgentId: "main",
