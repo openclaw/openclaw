@@ -22,8 +22,15 @@ function updateRunLastActivity(record: UpdateRunRecord): number {
   );
 }
 
-export function hasUnrecordedUpdateRunDriver(record: UpdateRunRecord): boolean {
+function hasUnrecordedUpdateRunDriver(record: UpdateRunRecord): boolean {
   return record.steps.some((step) => step.step === "driver:identity-unavailable");
+}
+
+export function isUpdateRunContinuationCandidate(
+  record: UpdateRunRecord,
+  inheritedRunId: string | undefined,
+): boolean {
+  return record.runId === inheritedRunId?.trim() && !hasUnrecordedUpdateRunDriver(record);
 }
 
 export function isStaleIdentitylessUpdateRun(record: UpdateRunRecord): boolean {

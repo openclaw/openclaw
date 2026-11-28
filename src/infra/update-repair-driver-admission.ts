@@ -1,8 +1,8 @@
 import { inspectSelfAndAncestorPidsSync } from "./restart-stale-pids.js";
 import {
   formatUpdateRunOwnership,
-  hasUnrecordedUpdateRunDriver,
   inspectUpdateRunDriverAbandonment,
+  isUpdateRunContinuationCandidate,
   recordedUpdateRunDrivers,
 } from "./update-run-activity.js";
 import { inspectUpdateRunDriver, type UpdateRunDriver } from "./update-run-driver.js";
@@ -26,7 +26,7 @@ function inspectCurrentUpdateRunContinuation(
   record: UpdateRunRecord,
   inheritedRunId: string | undefined,
 ): UpdateRunContinuationCheck {
-  if (record.runId !== inheritedRunId?.trim() || hasUnrecordedUpdateRunDriver(record)) {
+  if (!isUpdateRunContinuationCandidate(record, inheritedRunId)) {
     return "not-continuation";
   }
   let ownsDriver = false;

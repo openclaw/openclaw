@@ -62,7 +62,7 @@ it("refuses a source replaced while update metadata code loads before opening SQ
 });
 
 it("selects reconciliation candidates without loading Gateway process cleanup", async () => {
-  // The SQLite child reads recorded driver liveness. Only repair admission checks ancestry.
+  // mock-isolation: Fail on import to catch Gateway process cleanup loading in the SQLite reader.
   vi.doMock("../infra/restart-stale-pids.js", () => {
     throw new Error("Gateway process cleanup loaded during update reconciliation");
   });
