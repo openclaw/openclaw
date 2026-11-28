@@ -3656,6 +3656,7 @@
     {"path":"apps/android/wear/src/main/res/values/strings.xml","kind":"resource-string","surface":"android","id":"native.android.2b81a72f3b4b37c9","source":"Gateway credentials and identity stay on the paired phone. The watch only uses the Wear Data Layer."},
     {"path":"apps/android/wear/src/main/res/values/strings.xml","kind":"resource-string","surface":"android","id":"native.android.9246a0bf9cf3b80d","source":"Gateway offline"},
     {"path":"apps/android/wear/src/main/res/values/strings.xml","kind":"resource-string","surface":"android","id":"native.android.cee2b043b9ff723d","source":"Groups"},
+    {"path":"apps/android/wear/src/main/res/values/strings.xml","kind":"resource-string","surface":"android","id":"native.android.b6d478bc81620948","source":"Here’s the start of the reply. %1$s"},
     {"path":"apps/android/wear/src/main/res/values/strings.xml","kind":"resource-string","surface":"android","id":"native.android.be96059c8075e3a2","source":"Hold"},
     {"path":"apps/android/wear/src/main/res/values/strings.xml","kind":"resource-string","surface":"android","id":"native.android.2dcc7fee47983489","source":"Idle"},
     {"path":"apps/android/wear/src/main/res/values/strings.xml","kind":"resource-string","surface":"android","id":"native.android.672a43ee89f50390","source":"Keep the paired phone nearby and install the matching OpenClaw app."},

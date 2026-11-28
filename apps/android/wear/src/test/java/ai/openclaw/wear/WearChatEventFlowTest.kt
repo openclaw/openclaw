@@ -1808,6 +1808,25 @@ class WearChatEventFlowTest {
 
   @Test
   @Config(qualifiers = "w400dp-h800dp-mdpi")
+  fun truncatedReplyIsIdentifiedInAutomaticAndManualSpeech() =
+    withFlow { flow ->
+      flow.observeApp(autoSpeak = true)
+      val speech = shadowOf(checkNotNull(ShadowTextToSpeech.getLastTextToSpeechInstance()))
+      speech.onInitListener.onInit(TextToSpeech.SUCCESS)
+      flow.submitFromApp("Hello")
+      val run = flow.runId
+      flow.historyMessages = """[{"id":"reply","role":"assistant","content":"First paragraph","textTruncated":true,"idempotencyKey":"$run"}]"""
+      flow.emit("final", eventRunId = run)
+      val expected = "Here’s the start of the reply. First paragraph"
+      assertEquals(expected, speech.lastSpokenText)
+      speech.clearLastSpokenText()
+      flow.clickAppAction("Speak latest reply")
+      flow.idle()
+      assertEquals(expected, speech.lastSpokenText)
+    }
+
+  @Test
+  @Config(qualifiers = "w400dp-h800dp-mdpi")
   fun appAbortOfForeignRunDoesNotCancelOwnAutomaticReplySpeech() =
     withFlow { flow ->
       flow.observeApp(autoSpeak = true)
