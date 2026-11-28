@@ -29,6 +29,13 @@ import { readCodexPluginConfig } from "./app-server/config-parsing.js";
 import { assertCodexAppServerConnectionSecurity } from "./app-server/config-security.js";
 import { requestCodexAppServerJson } from "./app-server/request.js";
 import { normalizeEndpoints, type NormalizedSupervisionEndpoint } from "./supervision-endpoints.js";
+import {
+  FinalAnswerParamsSchema,
+  readCompatNextCursor,
+  readCompatThreadId,
+  readCompletedFinalAnswer,
+  readFinalAnswerSelector,
+} from "./supervision-history.js";
 
 class CodexSupervisionPolicyError extends Error {}
 
@@ -55,6 +62,7 @@ const SessionReadParamsSchema = Type.Object(
     endpoint_id: Type.Optional(Type.String()),
     thread_id: Type.String(),
     include_turns: Type.Optional(Type.Boolean()),
+    final_answer: Type.Optional(FinalAnswerParamsSchema),
   },
   { additionalProperties: false },
 );
@@ -95,8 +103,6 @@ const ALL_CODEX_THREAD_SOURCE_KINDS = [
 const DEFAULT_MAX_STORED_SESSIONS = 200;
 const PAGE_LIMIT = 100;
 const MAX_COMPAT_PAGINATION_PAGES = 100;
-const MAX_COMPAT_CURSOR_LENGTH = 4096;
-const MAX_COMPAT_THREAD_ID_LENGTH = 4096;
 
 type CodexSupervisorTurnMode = "auto" | "start" | "steer";
 type CodexSupervisionRequestPolicy = "enabled" | "raw-transcripts" | "write-controls";
@@ -147,27 +153,6 @@ type CodexSupervisionToolsOptions = {
 
 function asRecordArray(value: unknown): Record<string, unknown>[] {
   return Array.isArray(value) ? value.filter(isRecord) : [];
-}
-
-function isCompatString(value: unknown, maxLength: number): value is string {
-  return typeof value === "string" && value.trim().length > 0 && value.length <= maxLength;
-}
-
-function readCompatNextCursor(value: unknown, method: string): string | undefined {
-  if (value === null || value === undefined) {
-    return undefined;
-  }
-  if (!isCompatString(value, MAX_COMPAT_CURSOR_LENGTH)) {
-    throw new Error(`Codex ${method} returned an invalid nextCursor`);
-  }
-  return value;
-}
-
-function readCompatThreadId(value: unknown, method: string, index: number): string {
-  if (!isCompatString(value, MAX_COMPAT_THREAD_ID_LENGTH)) {
-    throw new Error(`Codex ${method} returned an invalid thread id at data[${index}]`);
-  }
-  return value;
 }
 
 function readLoadedThreadIds(data: unknown[]): string[] {
@@ -986,12 +971,22 @@ export function createCodexSupervisionTools(options: CodexSupervisionToolsOption
         const { endpoints } = await requireLiveToolPolicy(options, "raw-transcripts");
         const params = isRecord(rawParams) ? rawParams : {};
         const threadId = readStringParam(params, "thread_id", { required: true });
+        const finalAnswer = readFinalAnswerSelector(params.final_answer, threadId);
         const endpoint = await resolveEndpointForThread({
           endpoints,
           request: rawTranscriptRequest,
           endpointId: readStringParam(params, "endpoint_id"),
           threadId,
         });
+        if (finalAnswer) {
+          const response = await readCompletedFinalAnswer({
+            request: (method, requestParams) =>
+              rawTranscriptRequest(endpoint, method, requestParams),
+            threadId,
+            selector: finalAnswer,
+          });
+          return jsonResult({ summary: `codex final answer: ${threadId}`, response });
+        }
         const thread = await readThread({
           request: rawTranscriptRequest,
           endpoint,

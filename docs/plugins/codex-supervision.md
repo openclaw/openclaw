@@ -653,6 +653,18 @@ additionally asks Codex for turns. Permitted session metadata and transcript
 content preserve tool arguments and results without secret masking. Endpoint
 configuration credentials remain masked.
 
+For bounded completed-result recovery, set `final_answer: {}` instead of reading
+the full transcript. The reader requests one newest-first turn page and one
+newest-first item page, then returns only an `agentMessage` whose phase is
+`final_answer`. Set `final_answer.turn_id` to isolate a known completed turn.
+If the response includes `nextTurnCursor` or `nextItemCursor`, repeat the read
+with `turn_cursor` or `item_cursor` respectively; keep the selected `turn_id`
+while paging items. Long answer text is returned in bounded chunks with
+`textSha256`, `textOffset`, and `nextTextOffset`. Continue with `text_offset` and
+the same `text_sha256`, keeping the `turn_cursor` and `item_cursor` used to find
+the answer, if any. The read fails if the retained answer changed. This mode does
+not fall back to a full-thread read when native paginated history is unavailable.
+
 `codex_session_send` and `codex_session_interrupt` require
 `allowWriteControls`. Send accepts `mode: "auto" | "start" | "steer"`, but
 `"start"` is always refused and both `"auto"` and `"steer"` can only steer a
