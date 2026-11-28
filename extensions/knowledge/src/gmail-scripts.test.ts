@@ -1,5 +1,5 @@
 import { execFileSync, spawnSync } from "node:child_process";
-import { chmod, mkdir, readFile, writeFile } from "node:fs/promises";
+import { chmod, mkdir, readdir, readFile, writeFile } from "node:fs/promises";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
 import { expect, it } from "vitest";
@@ -319,7 +319,8 @@ it("normalizes a Gmail thread into chat JSONL the transcript and manifest tools 
 
 // A stand-in Composio CLI that records each call and answers from a scripted mailbox.
 const FAKE_CLI = String.raw`#!/usr/bin/env node
-const { appendFileSync } = require("node:fs");
+const { appendFileSync, mkdirSync, writeFileSync } = require("node:fs");
+const path = require("node:path");
 const args = process.argv.slice(2);
 appendFileSync(process.env.FAKE_LOG, JSON.stringify(args) + "\n");
 const mode = process.env.FAKE_MODE ?? "ok";
@@ -328,7 +329,18 @@ if (args[0] === "whoami") {
   process.exit(0);
 }
 const input = JSON.parse(args[args.indexOf("-d") + 1]);
-const answer = (data) => process.stdout.write(JSON.stringify({ successful: true, data }));
+// In stored mode a thread's answer is saved to a file, as the CLI does for large answers.
+const answer = (data) => {
+  if (mode !== "stored" || args[1] !== "GMAIL_FETCH_MESSAGE_BY_THREAD_ID") {
+    process.stdout.write(JSON.stringify({ successful: true, data }));
+    return;
+  }
+  const folder = path.resolve("saved", input.page_token ?? "first");
+  mkdirSync(folder, { recursive: true });
+  const outputFilePath = path.join(folder, "answer.json");
+  writeFileSync(outputFilePath, JSON.stringify({ successful: true, data }));
+  process.stdout.write(JSON.stringify({ successful: true, storedInFile: true, outputFilePath, sizeBytes: 1, tokenCount: 1 }));
+};
 if (mode === "unlinked") {
   process.stdout.write(JSON.stringify({ successful: false, error: "No connected account found for toolkit gmail. Run composio link gmail" }));
   process.exit(1);
@@ -434,6 +446,16 @@ it("reads Gmail through the Composio CLI with read-only tools only", async () =>
     threadId: "18c0ffee0001",
     messages: [{ messageId: "m1" }, { messageId: "m2" }],
   });
+  // An answer the CLI saved to a file is read whole, and the file and its folder are removed.
+  const stored = read(["threads", "--id", "18c0ffee0001", "--output-dir", "s"], "stored");
+  expect(stored.status).toBe(0);
+  expect(
+    JSON.parse(await readFile(path.join(dir, "s", "18c0ffee0001.json"), "utf8")),
+  ).toStrictEqual({
+    threadId: "18c0ffee0001",
+    messages: [{ messageId: "m1" }, { messageId: "m2" }],
+  });
+  expect(await readdir(path.join(dir, "saved"))).toStrictEqual([]);
   // Every tool the script ran reads Gmail; nothing else reached the CLI.
   const slugs = new Set(
     [...listCalls, ...(await calls())].flatMap((call) =>

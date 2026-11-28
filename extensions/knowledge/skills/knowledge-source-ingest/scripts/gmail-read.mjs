@@ -1,6 +1,6 @@
 #!/usr/bin/env node
 import { execFile } from "node:child_process";
-import { mkdir, writeFile } from "node:fs/promises";
+import { mkdir, readFile, rm, rmdir, writeFile } from "node:fs/promises";
 import path from "node:path";
 
 const USAGE =
@@ -76,6 +76,35 @@ const LINK_WORDS =
 const LOGIN_WORDS =
   /\b(?:composio login|not (?:logged|signed) in|log in again|unauthori[sz]ed|api key)\b/i;
 
+// The CLI saves a large answer to a file and prints only where it is (storedInFile and
+// outputFilePath). Read the whole answer from that file, then remove the file and its folder,
+// which hold the owner's mail.
+async function storedAnswer(stored, slug) {
+  const file = stored.outputFilePath;
+  if (typeof file !== "string" || !path.isAbsolute(file)) {
+    throw new ReadError(
+      "gmail-error",
+      slug + ": the answer was saved to a file the CLI did not name",
+    );
+  }
+  let answer;
+  try {
+    answer = JSON.parse(await readFile(file, "utf8"));
+  } catch (error) {
+    throw new ReadError(
+      "gmail-error",
+      slug +
+        ": could not read the answer the CLI saved to a file (" +
+        String(error?.code ?? error) +
+        ")",
+    );
+  } finally {
+    await rm(file, { force: true });
+    await rmdir(path.dirname(file)).catch(() => {});
+  }
+  return answer;
+}
+
 // Run one allowlisted read and return its data. `tool` is a key of READS, never a slug.
 async function read(tool, input, account) {
   const slug = READS[tool];
@@ -92,6 +121,9 @@ async function read(tool, input, account) {
     result = JSON.parse(stdout);
   } catch {
     result = undefined;
+  }
+  if (result?.storedInFile === true) {
+    result = await storedAnswer(result, slug);
   }
   const error =
     typeof result?.error === "string" ? result.error : JSON.stringify(result?.error ?? "");
