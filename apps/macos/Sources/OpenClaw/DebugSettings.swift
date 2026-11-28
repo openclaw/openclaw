@@ -68,14 +68,13 @@ struct DebugSettings: View {
     private var launchdSection: some View {
         Section("Gateway startup") {
             VStack(alignment: .leading, spacing: 8) {
-                Toggle("Attach only (skip launchd install)", isOn: self.$launchAgentWriteDisabled)
-                    .onChange(of: self.launchAgentWriteDisabled) { _, newValue in
+                Toggle("Attach only (skip launchd install)", isOn: Binding(
+                    get: { self.launchAgentWriteDisabled },
+                    set: { newValue in
                         self.launchAgentWriteError = GatewayLaunchAgentManager.setLaunchAgentWriteDisabled(newValue)
-                        if self.launchAgentWriteError != nil {
-                            self.launchAgentWriteDisabled = GatewayLaunchAgentManager.isLaunchAgentWriteDisabled()
-                            return
-                        }
-                    }
+                        self.launchAgentWriteDisabled = self.launchAgentWriteError == nil
+                            ? newValue : GatewayLaunchAgentManager.isLaunchAgentWriteDisabled()
+                    }))
 
                 Text(String(
                     format: String(localized: """
