@@ -25,6 +25,7 @@ import {
 } from "./chat-history-retry.ts";
 import {
   chatHistoryRequests,
+  shouldRequestCompactOpening,
   getChatHistoryLoadState,
   setChatHistoryLoad,
   setChatHistoryRetrying,
@@ -289,6 +290,7 @@ async function synchronizeSelectedSessionMessageSubscription(
               cursor,
               readChatInputRunIds(state),
               readChatHistoryState(state, cursor),
+              shouldRequestCompactOpening(state),
             )
           : undefined;
         admit();

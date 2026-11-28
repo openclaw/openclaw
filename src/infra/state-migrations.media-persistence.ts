@@ -1,4 +1,3 @@
-import path from "node:path";
 import { resolveSqliteTranscriptArchiveDirectory } from "../config/sessions/session-accessor.sqlite-scope.js";
 import { reconcileSessionTranscriptIndexInTransaction } from "../config/sessions/session-transcript-index.js";
 import {
@@ -73,10 +72,11 @@ import { refreshSqlitePlannerStatistics } from "./sqlite-planner-statistics.js";
 import { resolveSqliteInspectionSignal } from "./sqlite-readonly-worker-context.js";
 import { runSqliteImmediateTransactionSync } from "./sqlite-transaction.js";
 import { readSqliteUserVersion } from "./sqlite-user-version.js";
+import { planUnchangedAgentDatabases } from "./state-migrations.agent-database-plan.js";
 import { createMigrationDatabaseHandle } from "./state-migrations.agent-database.js";
 import { formatAgentDatabaseCorruptionRepairHint } from "./state-migrations.agent-owner-guidance.js";
 import { recoverMisplacedAgentDatabaseCopies } from "./state-migrations.agent-owner-recovery.js";
-import { migrateTranscriptArchive } from "./state-migrations.media-persistence-archive-source.js";
+import { migrateLegacyTranscriptArchiveFiles } from "./state-migrations.media-persistence-archive-source.js";
 import {
   mediaRowsNeedMigration,
   scanTranscriptRows,
@@ -87,7 +87,6 @@ import {
   inspectPostgresMediaPersistence,
 } from "./state-migrations.media-persistence-inspection.js";
 import {
-  listTranscriptArchives,
   prepareAgentDatabaseMigrationDiscovery,
   agentDatabaseMigrationAdvisory,
   resolveAgentDatabaseMigrationTargets,
@@ -503,6 +502,28 @@ export async function migrateLegacyMediaPersistence(
       params.onPreparedRepairTargets?.([]);
       return advisory;
     }
+    // Read-only first: a database whose every condition is none is not opened for
+    // writing, leased or unsealed. Any other answer runs the pass below unchanged.
+    const unchanged = await planUnchangedAgentDatabases({
+      env,
+      configuredAgentDatabaseTargets: params.configuredAgentDatabaseTargets ?? [],
+      preparedDiscovery,
+      integrityCheck: params.integrityCheck,
+      isSessionEntryStatePrepared: params.prepareSessionEntryState
+        ? (target) => params.isSessionEntryStatePrepared?.(target) === true
+        : undefined,
+    });
+    // The full pass of an unchanged current database finishes admitted and undeferred.
+    const recordUnchanged = (entry: AgentDatabaseMigrationTarget) => {
+      preparedRepairTargets.push(entry);
+      admittedTargets.push(entry);
+    };
+    if (unchanged.all) {
+      unchanged.targets.forEach(recordUnchanged);
+      params.onPreparedRepairTargets?.(preparedRepairTargets);
+      params.onAdmittedTargets?.(admittedTargets);
+      return { changes, warnings };
+    }
     const { discovery, recoveries } = await withAgentDatabaseMaintenanceLease(
       { env, processBound: true },
       async (maintenance) => {
@@ -564,6 +585,10 @@ export async function migrateLegacyMediaPersistence(
         continue;
       }
       seenPaths.add(entry.realPath);
+      if (unchanged.has(entry)) {
+        recordUnchanged(entry);
+        continue;
+      }
       try {
         const migrateWithLease = (sessionEntryStatePrepared: boolean) =>
           withAgentDatabaseMaintenanceLease({ env, processBound: true }, async (maintenance) => {
@@ -655,45 +680,17 @@ export async function migrateLegacyMediaPersistence(
     }
 
     if (archiveDirectories.size > 0) {
-      await withAgentDatabaseMaintenanceLease({ env, processBound: true }, async (maintenance) => {
-        for (const directory of archiveDirectories) {
-          inspectionSignal?.throwIfAborted();
-          if (refusedArchiveDirectories.has(directory)) {
-            continue;
-          }
-          let archives: string[];
-          try {
-            archives = listTranscriptArchives(directory);
-          } catch (error) {
-            warnings.push(
-              `Could not enumerate transcript archives in ${directory}: ${String(error)}`,
-            );
-            recoverableWarningCount += 1;
-            continue;
-          }
-          for (const archive of archives) {
-            inspectionSignal?.throwIfAborted();
-            if (canonicalArchivePaths.has(path.resolve(archive))) {
-              continue;
-            }
-            try {
-              maintenance.renew?.();
-              if (migrateTranscriptArchive(archive)) {
-                changes.push(`Migrated archived transcript media in ${archive}.`);
-              }
-            } catch (error) {
-              if (inspectionSignal?.aborted && error === inspectionSignal.reason) {
-                throw error;
-              }
-              warnings.push(
-                `Skipped archived transcript media migration for ${archive}: ${String(error)}`,
-              );
-              leaseLoss ??= createUpdateErrorFact("media-persistence", error, env).leaseLoss;
-              recoverableWarningCount += 1;
-            }
-          }
-        }
+      const files = await migrateLegacyTranscriptArchiveFiles({
+        env,
+        directories: archiveDirectories,
+        refused: refusedArchiveDirectories,
+        canonical: canonicalArchivePaths,
+        changes,
+        warnings,
+        signal: inspectionSignal,
       });
+      recoverableWarningCount += files.recoverableWarnings;
+      leaseLoss ??= files.leaseLoss;
     }
   } catch (error) {
     if (inspectionSignal?.aborted && error === inspectionSignal.reason) {

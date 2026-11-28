@@ -327,8 +327,12 @@ jobs:
           test -f dist/plugin-sdk/qa-runtime.js
           test -f dist/extensions/qa-lab/runtime-api.js
 
+      # Split-Q runs need the known context contract even when omissions are forbidden.
       - name: Checkout frozen package source capabilities
-        if: inputs.allow_frozen_target_scenario_omissions && inputs.package_source_sha != '' && inputs.scenario == ''
+        if: >-
+          inputs.package_source_sha != '' && inputs.scenario == '' &&
+          (inputs.allow_frozen_target_scenario_omissions ||
+           (inputs.harness_ref != '' && inputs.harness_ref != inputs.package_source_sha))
         uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           ref: ${{ inputs.package_source_sha }}
@@ -345,11 +349,16 @@ jobs:
             qa/scenarios/channels/telegram-rich-inline-composition.yaml
             qa/scenarios/channels/telegram-repeated-command-authorization.yaml
             src/agents/embedded-agent-subscribe.ts
+            src/auto-reply/reply/commands-context-report.ts
 
       - name: Resolve frozen package Telegram scenarios
-        if: inputs.allow_frozen_target_scenario_omissions && inputs.package_source_sha != '' && inputs.scenario == ''
+        if: >-
+          inputs.package_source_sha != '' && inputs.scenario == '' &&
+          (inputs.allow_frozen_target_scenario_omissions ||
+           (inputs.harness_ref != '' && inputs.harness_ref != inputs.package_source_sha))
         env:
           OPENCLAW_SELECTED_SHA: ${{ inputs.package_source_sha }}
+          OPENCLAW_ALLOW_FROZEN_TARGET_SCENARIO_OMISSIONS: ${{ inputs.allow_frozen_target_scenario_omissions && '1' || '0' }}
         run: node --import tsx scripts/e2e/lib/npm-telegram-live/resolve-target-scenarios.mts .artifacts/frozen-telegram-target
 
       - name: Validate inputs and secrets

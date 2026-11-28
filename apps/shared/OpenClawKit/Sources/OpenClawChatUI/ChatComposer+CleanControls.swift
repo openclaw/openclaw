@@ -5,7 +5,7 @@ import UIKit
 
 extension OpenClawChatComposer {
     @ViewBuilder
-    var cleanAttachmentMenu: some View {
+    private var cleanAttachmentMenu: some View {
         #if os(macOS)
         Button {
             self.pickFilesMac()
@@ -65,16 +65,47 @@ extension OpenClawChatComposer {
     }
 
     #if os(iOS)
-    var cleanDraftRow: some View {
-        self.editorOverlay
-            .frame(maxWidth: .infinity, minHeight: self.textMinHeight, maxHeight: .infinity, alignment: .topLeading)
-            .padding(.horizontal, CleanChatComposerMetrics.editorInlineInset)
-            .padding(.top, self.draftTopInset)
-            // The room under a short draft belongs to the draft: a tap there starts typing.
-            .contentShape(Rectangle())
-            .onTapGesture { self.focusDraft() }
+    func cleanPhoneEditor(expanded: Bool) -> some View {
+        CleanComposerPhoneLayout(expanded: expanded) {
+            // Open, the field hugs its lines so the layout can place them; closed, it takes the
+            // controls' full height, which centers the line on them and keeps the whole pill tappable.
+            self.editorOverlay
+                .frame(maxWidth: .infinity, minHeight: expanded ? nil : self.cleanControlHeight, alignment: .leading)
+                .contentShape(Rectangle())
+                .onTapGesture { self.focusDraft() }
+            HStack(spacing: 0) {
+                if expanded {
+                    self.cleanLeadingControls
+                } else {
+                    self.cleanAttachmentMenu
+                }
+            }
+            HStack(spacing: 0) {
+                if expanded {
+                    self.cleanTrailingControls
+                } else {
+                    self.cleanCaptureAndPrimaryControls
+                }
+            }
+        }
     }
     #endif
+
+    var compactEditor: some View {
+        HStack(alignment: .center, spacing: 4) {
+            self.cleanAttachmentMenu
+
+            if self.viewModel.sessionBranches.count > 1 {
+                self.branchMenu
+            }
+
+            self.editorOverlay
+                .frame(maxWidth: .infinity, minHeight: self.cleanControlHeight, alignment: .leading)
+                .layoutPriority(1)
+
+            self.cleanCaptureAndPrimaryControls
+        }
+    }
 
     @ViewBuilder
     var cleanLeadingControls: some View {
@@ -100,16 +131,17 @@ extension OpenClawChatComposer {
         .help("Composer options")
         .accessibilityLabel("Composer options")
         .accessibilityIdentifier("chat-attachment-picker")
-        #else
+        #elseif os(iOS)
         self.cleanAttachmentMenu
-        #if os(iOS)
         if self.viewModel.supportsComposerCapabilities {
             self.cleanInlinePermissionMenu
         }
-        #endif
+        #else
+        self.cleanAttachmentMenu
         #endif
     }
 
+    #if !os(iOS)
     @ViewBuilder
     var cleanContextUsageMenu: some View {
         if let usage = self.viewModel.contextUsage {
@@ -121,6 +153,8 @@ extension OpenClawChatComposer {
         }
     }
 
+    #endif
+
     var cleanTrailingControls: some View {
         ViewThatFits(in: .horizontal) {
             self.cleanInlineControls(compactModel: false)
@@ -129,8 +163,10 @@ extension OpenClawChatComposer {
     }
 
     private func cleanInlineControls(compactModel: Bool) -> some View {
-        HStack(spacing: CleanChatComposerMetrics.footerControlGap) {
+        HStack(spacing: 0) {
+            #if !os(iOS)
             self.cleanContextUsageMenu
+            #endif
             // Camera switching only displaces settings in the compact iOS footer.
             #if os(macOS)
             self.cleanInlineModelPicker(compact: compactModel)
@@ -267,6 +303,15 @@ extension OpenClawChatComposer {
         #endif
     }
 
+    #if os(iOS)
+    private var cleanPhoneMenuChevron: some View {
+        Image(systemName: "chevron.down")
+            .font(OpenClawChatTypography.composerChevronGlyph)
+            .opacity(0.8)
+            .accessibilityHidden(true)
+    }
+    #endif
+
     private var cleanInlineEffortMenu: some View {
         #if os(macOS)
         OpenClawChatEffortControl(
@@ -397,6 +442,11 @@ extension OpenClawChatComposer {
 
     @ViewBuilder
     private var cleanCaptureAndPrimaryContent: some View {
+        #if os(iOS)
+        let micWidth: CGFloat? = CleanChatComposerMetrics.glyphControlWidth
+        #else
+        let micWidth: CGFloat? = nil
+        #endif
         let showsTalkMicrophone = self.talkControl?.isEnabled == true &&
             self.talkControl?.toggleMicrophone != nil
         // Live Talk owns its microphone control in the activity strip, not the dictation slot.
@@ -409,6 +459,7 @@ extension OpenClawChatComposer {
                 isComposerEnabled: self.isComposerEnabled,
                 isAttachmentInputEnabled: self.isAttachmentInputEnabled,
                 controlSize: self.cleanControlHeight,
+                controlWidth: micWidth,
                 onCancelDictation: {
                     ChatDictationActions.cancel(task: self.$dictationTask, control: self.dictationControl)
                 },
@@ -435,5 +486,98 @@ extension OpenClawChatComposer {
     private var cleanShowsCameraFlip: Bool {
         guard let talkControl = self.talkControl else { return false }
         return ChatCameraFlipButton.isAvailable(for: talkControl)
+    }
+}
+
+#if os(iOS)
+/// Lay out the same text view across focus changes so its responder, selection, and draft survive.
+private struct CleanComposerPhoneLayout: Layout {
+    let expanded: Bool
+
+    func sizeThatFits(proposal: ProposedViewSize, subviews: Subviews, cache _: inout ()) -> CGSize {
+        let width = proposal.width ?? 320
+        let frames = self.frames(width: width, subviews: subviews)
+        return CGSize(width: width, height: (frames.map(\.maxY).max() ?? 0) + self.trailingInset)
+    }
+
+    private var leadingInset: CGFloat {
+        self.expanded ? CleanChatComposerMetrics.expandedLeadingControlInset :
+            CleanChatComposerMetrics.collapsedControlInset
+    }
+
+    /// Also the bottom inset, so the primary disc stays concentric with the corner.
+    private var trailingInset: CGFloat {
+        self.expanded ? CleanChatComposerMetrics.expandedControlInset :
+            CleanChatComposerMetrics.collapsedControlInset
+    }
+
+    func placeSubviews(in bounds: CGRect, proposal _: ProposedViewSize, subviews: Subviews, cache _: inout ()) {
+        for (view, frame) in zip(subviews, self.frames(width: bounds.width, subviews: subviews)) {
+            view.place(
+                at: CGPoint(x: bounds.minX + frame.minX, y: bounds.minY + frame.minY),
+                anchor: .topLeading,
+                proposal: ProposedViewSize(frame.size))
+        }
+    }
+
+    private func frames(width: CGFloat, subviews: Subviews) -> [CGRect] {
+        let leadingEdge = self.leadingInset
+        let trailingEdge = self.trailingInset
+        let gap = CleanChatComposerMetrics.rowGap
+        let top = self.expanded ? CleanChatComposerMetrics.expandedEditorTopInset : trailingEdge
+        let leading = subviews[1].sizeThatFits(.unspecified)
+        let trailingWidth = max(0, width - leadingEdge - trailingEdge - leading.width)
+        let trailing = subviews[2].sizeThatFits(ProposedViewSize(
+            width: self.expanded ? trailingWidth : nil, height: nil))
+        let fieldX = self.expanded ? CleanChatComposerMetrics.editorInlineInset : leadingEdge + leading.width
+        let fieldEnd = self.expanded ? width - fieldX : width - trailingEdge - trailing.width - gap
+        let fieldWidth = max(0, fieldEnd - fieldX)
+        let field = subviews[0].sizeThatFits(ProposedViewSize(width: fieldWidth, height: nil))
+        let controlsHeight = max(leading.height, trailing.height)
+        let height = self.expanded ? controlsHeight : max(controlsHeight, field.height)
+        let controlsY = self.expanded ? top + field.height + CleanChatComposerMetrics.expandedControlsGap : top
+        let fieldY = self.expanded ? top : top + (height - field.height) / 2
+        return [
+            CGRect(x: fieldX, y: fieldY, width: fieldWidth, height: field.height),
+            CGRect(
+                x: leadingEdge,
+                y: controlsY + (height - leading.height) / 2,
+                width: leading.width,
+                height: leading.height),
+            CGRect(
+                x: width - trailingEdge - trailing.width,
+                y: controlsY + (height - trailing.height) / 2,
+                width: trailing.width,
+                height: trailing.height),
+        ]
+    }
+}
+#endif
+
+struct SlashPanelHeightKey: PreferenceKey {
+    static let defaultValue: CGFloat = 0
+    static func reduce(value: inout CGFloat, nextValue: () -> CGFloat) {
+        value = max(value, nextValue())
+    }
+}
+
+struct ChatNewSessionSlashOption: View {
+    let optionsPresented: Binding<Bool>
+    let dismissInput: () -> Void
+
+    var body: some View {
+        Divider()
+        Button {
+            self.optionsPresented.wrappedValue = true
+            self.dismissInput()
+        } label: {
+            Label("New session options…", systemImage: "slider.horizontal.3")
+                .font(OpenClawChatTypography.footnoteSemiBold)
+                .frame(maxWidth: .infinity, minHeight: 44, alignment: .leading)
+                .padding(.horizontal, 14)
+                .contentShape(Rectangle())
+        }
+        .buttonStyle(.plain)
+        .accessibilityIdentifier("chat-new-session-options")
     }
 }

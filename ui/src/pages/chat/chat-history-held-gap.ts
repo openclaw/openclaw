@@ -6,6 +6,7 @@ import {
   nativeHistoryMessageSourceId,
   prependUniqueNativeMessages,
 } from "../../lib/chat/history-message-identity.ts";
+import { visibleChatHistoryMessages } from "../../lib/chat/message-visibility.ts";
 import {
   nativeHistoryMessagePosition,
   type ChatHistoryPagination,
@@ -50,6 +51,59 @@ function retainedRawHistoryStart(pagination: ChatHistoryPagination): number | nu
   return asSafeIntegerInRange(start, { min: 1 }) ?? null;
 }
 
+function findHistoryTailEdge(messages: unknown[], previousMessages: unknown[], sameLeaf: boolean) {
+  const edge = oldestPositionedHistoryMessage(messages);
+  const previousEdge = oldestPositionedHistoryMessage(previousMessages);
+  if (
+    (!sameLeaf && !edge) ||
+    (edge && previousEdge && edge.position.source !== previousEdge.position.source)
+  ) {
+    return null;
+  }
+  const edgeMessage = edge?.message ?? messages[0];
+  const firstSource = nativeHistoryMessageSourceIdentity(edgeMessage);
+  const overlap = firstSource
+    ? previousMessages.findIndex((message) => {
+        const position = nativeHistoryMessagePosition(message);
+        return (
+          nativeHistoryMessageSourceIdentity(message) === firstSource &&
+          (!edge ||
+            (position?.source === edge.position.source && position.rawSeq === edge.position.rawSeq))
+        );
+      })
+    : previousMessages.indexOf(edgeMessage);
+  return { edge, overlap };
+}
+
+export function compactOpeningOverlapsSavedHistory(state: ChatState, result: ChatHistoryResult) {
+  if (
+    result.windowReset ||
+    !state.currentSessionId ||
+    state.currentSessionId !== historySessionId(result)
+  ) {
+    return false;
+  }
+  const previousTotal = state.chatHistoryPagination.totalMessages;
+  if (
+    previousTotal !== undefined &&
+    result.totalMessages !== undefined &&
+    result.totalMessages < previousTotal
+  ) {
+    return false;
+  }
+  const sameLeaf =
+    state.chatDisplayedLeafEntryId === undefined ||
+    !Object.hasOwn(result.sessionInfo ?? {}, "activeLeafEntryId") ||
+    state.chatDisplayedLeafEntryId === (result.sessionInfo?.activeLeafEntryId?.trim() || null);
+  const previousMessages = sameLeaf
+    ? state.chatMessages
+    : state.chatMessages.filter(nativeHistoryMessageSourceId);
+  const messages = visibleChatHistoryMessages(
+    Array.isArray(result.messages) ? result.messages : [],
+  );
+  return (findHistoryTailEdge(messages, previousMessages, sameLeaf)?.overlap ?? -1) >= 0;
+}
+
 export function reconcileHistoryTail(options: {
   sameLeaf: boolean;
   nextMessages: unknown[];
@@ -81,13 +135,7 @@ export function reconcileHistoryTail(options: {
     return (identity ? previousByIdentity.get(identity)?.shift() : undefined) ?? message;
   });
   const reconciled = { messages, pagination: options.nextPagination };
-  const edge = oldestPositionedHistoryMessage(messages);
-  const previousEdge = oldestPositionedHistoryMessage(previousMessages);
-  if (
-    !options.nextPagination.hasMore ||
-    (!options.sameLeaf && !edge) ||
-    (edge && previousEdge && edge.position.source !== previousEdge.position.source)
-  ) {
+  if (!options.nextPagination.hasMore) {
     return reconciled;
   }
   const previousTotal = options.previousPagination.totalMessages;
@@ -95,19 +143,12 @@ export function reconcileHistoryTail(options: {
   if (previousTotal !== undefined && nextTotal !== undefined && nextTotal < previousTotal) {
     return reconciled;
   }
+  const matched = findHistoryTailEdge(messages, previousMessages, options.sameLeaf);
+  if (!matched) {
+    return reconciled;
+  }
   const nextStart = retainedRawHistoryStart(options.nextPagination);
-  const edgeMessage = edge?.message ?? messages[0];
-  const firstSource = nativeHistoryMessageSourceIdentity(edgeMessage);
-  const overlap = firstSource
-    ? previousMessages.findIndex((message) => {
-        const position = nativeHistoryMessagePosition(message);
-        return (
-          nativeHistoryMessageSourceIdentity(message) === firstSource &&
-          (!edge ||
-            (position?.source === edge.position.source && position.rawSeq === edge.position.rawSeq))
-        );
-      })
-    : previousMessages.indexOf(edgeMessage);
+  const { edge, overlap } = matched;
   // Matching source IDs prove overlap without interpreting native sequences as
   // CLI ordinals. An empty visible window needs authoritative raw coverage;
   // a hidden page still advances the admitted oldest edge.

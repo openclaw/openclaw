@@ -1,6 +1,10 @@
 import type { AssistantMessageEvent, Context, Model, ToolCall } from "openclaw/plugin-sdk/llm";
 import { expect, it } from "vitest";
 import { mergePluginTextTransforms, wrapStreamFnTextTransforms } from "./plugin-text-transforms.js";
+import {
+  getRuntimeContextDataRanges,
+  setRuntimeContextDataRanges,
+} from "./runtime-context-data-ranges.js";
 import { makeAgentAssistantMessage } from "./test-helpers/agent-message-fixtures.js";
 import { createQueuedAssistantStream } from "./test-helpers/assistant-event-stream.test-support.js";
 
@@ -103,6 +107,32 @@ it.each([undefined, false])(
     expect(result.content).toEqual([{ type: "text", text: "final red basket on the left shelf" }]);
   },
 );
+
+it("omits a mixed replacement without losing the next independently labelled quote", async () => {
+  const text = 'Keep: "first" and "second".';
+  const message = { role: "user" as const, timestamp: 0, content: text };
+  const ranges = ['"first"', '"second"'].map((quote) => ({
+    start: text.indexOf(quote),
+    end: text.indexOf(quote) + quote.length,
+  }));
+  setRuntimeContextDataRanges(message, ranges);
+  const { input } = await runTransform(
+    { input: [{ from: /: "first"/, to: ": rewritten" }] },
+    { messages: [message] },
+    [{ type: "done", reason: "stop", message: makeAssistantMessage("ok") }],
+  );
+  const row = input?.messages[0];
+  if (row?.role !== "user" || typeof row.content !== "string") {
+    throw new Error("expected the rewritten carrier");
+  }
+  const rewritten = row.content;
+  expect(rewritten).toBe('Keep: rewritten and "second".');
+  expect(
+    getRuntimeContextDataRanges(row)?.map(({ start, end }) => rewritten.slice(start, end)),
+  ).toEqual(['"second"']);
+  expect(getRuntimeContextDataRanges({ ...row, content: "A later rewrite" })).toBeUndefined();
+  expect(getRuntimeContextDataRanges(message)).toEqual(ranges);
+});
 
 it("applies output replacements to structured tool-call arguments", async () => {
   const partialToolCall = toolCall("search", {

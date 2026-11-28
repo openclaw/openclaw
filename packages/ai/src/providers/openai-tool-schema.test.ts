@@ -1,13 +1,6 @@
-import { deepStrictEqual } from "node:assert/strict";
 import { describe, expect, it } from "vitest";
-import { projectOpenAITools } from "./openai-tool-projection.js";
 import { normalizeOpenAIStrictCompatSchema } from "./openai-tool-schema-compat.js";
-import {
-  findOpenAIStrictSchemaViolations,
-  isStrictOpenAIJsonSchemaCompatible,
-  normalizeStrictOpenAIJsonSchema,
-  resolveOpenAIProjectedToolsStrictToolFlag,
-} from "./openai-tool-schema.js";
+import { findOpenAIStrictSchemaViolations } from "./openai-tool-schema.js";
 
 function objectSchema(properties: Record<string, unknown> = {}) {
   return {
@@ -22,7 +15,7 @@ const literalArray = () => ({ ["__proto__"]: { type: "array" } });
 const violations = (schema: unknown) =>
   findOpenAIStrictSchemaViolations(schema, "parameters", { requireObjectRoot: true });
 
-describe("OpenAI strict tool schema normalization", () => {
+describe("OpenAI strict tool schema detection", () => {
   const pathProperties = { path: { type: "string" } };
   it.each([
     [
@@ -35,41 +28,11 @@ describe("OpenAI strict tool schema normalization", () => {
       { ...literalArray(), properties: pathProperties, description: null },
       { ...literalArray(), properties: pathProperties, type: "object" },
     ],
-    [
-      normalizeStrictOpenAIJsonSchema,
-      { ...objectSchema(valueObject().properties), ...literalArray(), nullable: false },
-      { ...objectSchema(valueObject().properties), ...literalArray() },
-    ],
   ] as const)("preserves literal keys during normalization %#", (normalize, schema, expected) => {
     const before = structuredClone(schema);
     expect(normalize(schema)).toStrictEqual(expected);
     expect(schema).toStrictEqual(before);
   });
-
-  it.each(["anyOf", "oneOf"])("preserves literal properties when flattening %s", (unionKey) => {
-    const properties = {
-      ["__proto__"]: { type: "string", minLength: 1 },
-      constructor: { type: "integer" },
-      toString: { type: "boolean" },
-    };
-    const required = Object.keys(properties);
-    const schema = {
-      [unionKey]: [
-        { type: "object", properties, required },
-        { type: "object", properties: { ["__proto__"]: { type: "string" } }, required },
-      ],
-      additionalProperties: false,
-    };
-
-    deepStrictEqual(normalizeStrictOpenAIJsonSchema(schema), objectSchema(properties));
-  });
-
-  it.each([{ type: "object" }, { type: "object", properties: [] }])(
-    "repairs object properties: %j",
-    (schema) => {
-      expect(normalizeStrictOpenAIJsonSchema(schema)).toEqual(objectSchema());
-    },
-  );
 
   it("walks named schema maps without treating definition names as keywords", () => {
     const schema = {
@@ -79,8 +42,6 @@ describe("OpenAI strict tool schema normalization", () => {
     };
 
     expect(violations(schema)).toEqual([]);
-    const projection = projectOpenAITools([{ name: "lookup", parameters: schema }]);
-    expect(resolveOpenAIProjectedToolsStrictToolFlag(projection, true)).toBe(true);
   });
 
   it("walks legacy and content schema applicators", () => {
@@ -96,10 +57,39 @@ describe("OpenAI strict tool schema normalization", () => {
         ["additionalProperties", "required"].map((key) => `parameters.${path}.${key}`),
       ),
     );
-    expect(isStrictOpenAIJsonSchemaCompatible(schema)).toBe(false);
   });
 
   it.each(["^[a-z]+$", "\\(?=a"])("accepts non-lookaround pattern %s", (pattern) => {
     expect(findOpenAIStrictSchemaViolations({ type: "string", pattern }, "value")).toEqual([]);
+  });
+
+  // OpenAI rejected dispatch_action with "additionalProperties must be false" at args/type/0.
+  it("holds a nullable object key to the object rules", () => {
+    const schema = {
+      type: "object",
+      additionalProperties: false,
+      required: ["args"],
+      properties: { args: { type: ["object", "null"], patternProperties: { "^.*$": {} } } },
+    };
+    expect(findOpenAIStrictSchemaViolations(schema, "parameters")).toContain(
+      "parameters.properties.args.additionalProperties",
+    );
+  });
+
+  it("rejects optional keys, an open root, union keys and untyped values", () => {
+    const optional = {
+      type: "object",
+      properties: { path: { type: "string" }, limit: { type: "number" } },
+      required: ["path"],
+      additionalProperties: false,
+    };
+    expect(violations(optional)).not.toEqual([]);
+    expect(violations(objectSchema({ path: { type: "string" } }))).toEqual([]);
+    const open = { type: "object", properties: { q: { type: "string" } }, required: ["q"] };
+    expect(violations(open)).not.toEqual([]);
+    const union = objectSchema({ mode: { anyOf: [{ enum: ["auto"] }, { type: "integer" }] } });
+    expect(violations(union)).not.toEqual([]);
+    expect(violations(objectSchema({ value: {} }))).not.toEqual([]);
+    expect(violations(objectSchema({ limit: { type: ["integer", "null"] } }))).toEqual([]);
   });
 });

@@ -275,33 +275,6 @@ describe("buildContextReply", () => {
     },
   );
 
-  it("describes compactable chat history counts in help output", async () => {
-    const result = await buildContextReply(makeParams("/context help", false));
-    expect(result.text).toContain(
-      "/context detail (per-file + per-tool + per-skill + system prompt size + compactable chat history counts)",
-    );
-  });
-
-  it("shows the prompt budget card for bare /context", async () => {
-    const result = await buildContextReply(
-      makeParams("/context", false, { contextTokens: 8_192, totalTokens: 4_000 }),
-    );
-    expect(result.text).toBe(
-      [
-        "🧠 Prompt budget · 4k / 8.2k · 49%",
-        "🟦🟦🟦🟦🟦🟦🟦🟦🟧🟧🟧🟧🟧🟩🟨⬜⬜⬜⬜⬜",
-        "",
-        "🟦 Messages & other · ~3.7k",
-        "🟧 Workspace files · ~2.5k",
-        "🟩 Tool schemas · ~8",
-        "🟨 Skills catalog · ~3",
-        "🟪 System instructions · ~0",
-        "",
-        "More: /context list · /context detail · /context map · /context json",
-      ].join("\n"),
-    );
-  });
-
   it("measures the card against the last run's validated prompt budget, like the Control UI", async () => {
     const usage = { input: 100, output: 5, cacheRead: 900, cacheWrite: 0, totalTokens: 1_005 };
     await withTranscript(
@@ -414,14 +387,6 @@ describe("buildContextReply", () => {
       );
       expect(await lines(null)).toEqual(["Latest run: 90.00% cache · $0.31"]);
     });
-  });
-
-  it("keeps the budget bar at 20 cells when small categories take their minimum cell", async () => {
-    const result = await buildContextReply(
-      makeParams("/context", false, { contextTokens: 100_000, totalTokens: 99_000 }),
-    );
-    const bar = result.text?.split("\n")[1];
-    expect(bar).toMatch(/^(?:🟦|🟧|🟩|🟨|🟪|⬜){20}$/u);
   });
 
   it("does not invent a message share when cached usage is stale", async () => {

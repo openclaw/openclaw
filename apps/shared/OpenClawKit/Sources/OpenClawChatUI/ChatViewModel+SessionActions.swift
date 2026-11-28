@@ -1082,3 +1082,125 @@ extension OpenClawChatViewModel {
         }
     }
 }
+
+extension OpenClawChatViewModel {
+    /// A new conversation has a stable local address before its first submission.
+    /// Keeping it out of the roster avoids empty server-side sessions on navigation.
+    struct NewChatDraft {
+        let key: String
+        let agentID: String?
+        var settings = OpenClawChatSessionSettingsPatch()
+        var settingsApplied = false
+        var requestsComposerFocus = false
+
+        var entry: OpenClawChatSessionEntry {
+            var entry = OpenClawChatSessionEntry(
+                key: self.key,
+                agentId: self.agentID,
+                isMain: false,
+                thinkingLevel: self.settings.thinkingLevel.flatMap(\.self),
+                verboseLevel: self.settings.verboseLevel.flatMap(\.self),
+                model: self.settings.model.flatMap(\.self))
+            entry.fastMode = self.settings.fastMode.flatMap(\.self)
+            entry.effectiveFastMode = entry.fastMode
+            entry.permissionMode = self.settings.permissionMode.flatMap(\.self)
+            entry.toolOverrides = self.settings.toolOverrides.flatMap(\.self)
+            return entry
+        }
+    }
+
+    public var isNewChatDraft: Bool {
+        self.newChatDraft?.key == self.sessionKey &&
+            !self.messages.contains(where: { $0.role == "user" })
+    }
+
+    @discardableResult
+    public func startNewChatDraft(agentID: String? = nil, focusComposer: Bool = false) -> Bool {
+        guard !self.isCreatingSession, self.canCreateSessionForImmediateSwitch() else { return false }
+        let preservedInput = self.isNewChatDraft && agentID != nil ? self.input : nil
+        let agentID = ChatPayloadDecoding.trimmedNonEmptyString(agentID)?.lowercased()
+            ?? self.selectedAgentID
+        let key = self.generatedNewSessionKey(agentID: agentID)
+        self.newChatDraft = NewChatDraft(key: key, agentID: agentID, requestsComposerFocus: focusComposer)
+        self.switchSession(to: key)
+        if self.sessionKey == key, let preservedInput { self.input = preservedInput }
+        return self.sessionKey == key
+    }
+
+    func newChatDraftSettingsLease(for target: ModelPatchTarget) -> OpenClawChatSessionSettingsRouteLease? {
+        guard let draft = self.newChatDraft, draft.key == self.sessionKey,
+              self.matchesCurrentSessionKey(incoming: target.canonicalSessionKey, current: draft.key)
+        else { return nil }
+        let key = draft.key
+        return OpenClawChatSessionSettingsRouteLease { [weak self] _, _, patch in
+            guard let self else { throw CancellationError() }
+            return try await self.stageNewChatDraftSettings(patch, expectedKey: key)
+        }
+    }
+
+    func stageNewChatDraftSettings(
+        _ patch: OpenClawChatSessionSettingsPatch,
+        expectedKey: String) throws -> OpenClawChatModelPatchResult?
+    {
+        guard self.newChatDraft?.key == expectedKey, self.sessionKey == expectedKey else {
+            throw CancellationError()
+        }
+        return self.stageNewChatDraftSettings(patch)
+    }
+
+    @discardableResult
+    func stageNewChatDraftSettings(_ patch: OpenClawChatSessionSettingsPatch) -> OpenClawChatModelPatchResult? {
+        guard var draft = self.newChatDraft, draft.key == self.sessionKey else { return nil }
+        let previous = draft.settings
+        draft.settings = OpenClawChatSessionSettingsPatch(
+            model: patch.model == nil ? previous.model : patch.model,
+            thinkingLevel: patch.thinkingLevel == nil ? previous.thinkingLevel : patch.thinkingLevel,
+            fastMode: patch.fastMode == nil ? previous.fastMode : patch.fastMode,
+            verboseLevel: patch.verboseLevel == nil ? previous.verboseLevel : patch.verboseLevel,
+            permissionMode: patch.permissionMode == nil ? previous.permissionMode : patch.permissionMode,
+            toolOverrides: patch.toolOverrides == nil ? previous.toolOverrides : patch.toolOverrides)
+        draft.settingsApplied = false
+        self.newChatDraft = draft
+        let entry = draft.entry
+        return OpenClawChatModelPatchResult(
+            key: entry.key,
+            modelProvider: entry.modelProvider,
+            model: entry.model,
+            thinkingLevel: entry.thinkingLevel,
+            fastMode: entry.fastMode,
+            effectiveFastMode: entry.effectiveFastMode,
+            verboseLevel: entry.verboseLevel,
+            permissionMode: entry.permissionMode,
+            toolOverrides: entry.toolOverrides)
+    }
+
+    func prepareNewChatDraftSettings(for session: SessionSnapshot) async -> Bool {
+        guard self.newChatDraft?.key == session.key else { return true }
+        await self.waitForPendingSessionSettings(for: self.currentModelPatchTarget())
+        guard self.isCurrentSession(session), let draft = self.newChatDraft, draft.key == session.key else {
+            return false
+        }
+        let settings = draft.settings
+        guard !draft.settingsApplied, settings != OpenClawChatSessionSettingsPatch() else { return true }
+        if !self.healthOK {
+            await self.pollHealthIfNeeded(force: true, sessionSnapshot: session)
+        }
+        guard self.isCurrentSession(session) else { return false }
+        guard self.healthOK else {
+            return false
+        }
+        do {
+            guard let lease = await self.transport.acquireSessionSettingsRouteLease(),
+                  self.isCurrentSession(session)
+            else { throw OpenClawChatTransportSendError.notDispatched }
+            // This UUID belongs to the local draft. Retrying the same settings
+            // on that address is idempotent even if an earlier reply was lost.
+            _ = try await lease.patchSessionSettings(session.key, session.deliveryAgentID, settings)
+            guard self.isCurrentSession(session), self.newChatDraft?.key == session.key else { return false }
+            self.newChatDraft?.settingsApplied = true
+            return true
+        } catch {
+            return false
+        }
+    }
+}

@@ -39,12 +39,13 @@ import {
 } from "../lib/settings-navigation.ts";
 import type { GatewayStatusProps } from "./gateway-status.ts";
 import { isIconName } from "./icon-data.ts";
+import { createSettingsAgentTrigger } from "./settings-agent-trigger.ts";
 import {
   SettingsSaveIndicator,
   type SettingsSaveIndicatorProps,
 } from "./settings-save-indicator.tsx";
-import { SidebarBuildChip } from "./sidebar-build-chip.tsx";
 import "./agent-select-registration.ts";
+import { SidebarBuildChip } from "./sidebar-build-chip.tsx";
 import "../styles/settings.css";
 import { GatewayStatus } from "./solid/gateway-status.tsx";
 import { IconButton } from "./solid/icon-button.tsx";
@@ -65,6 +66,7 @@ export type SettingsSidebarProps = {
   activePluginTab?: GatewayControlUiPluginTab;
   embeddedPluginTitle?: string;
   agents: readonly AgentRosterRow[];
+  agentRosterRead?: Promise<unknown> | null;
   agentIdentity: AgentIdentityCapability;
   settingsAgentSelection: AgentSelectionCapability;
   activePathname?: string;
@@ -264,6 +266,7 @@ function SettingsAgentSelector(props: SettingsSidebarProps & { inHeader?: boolea
       void source.ensure(ids);
     },
   );
+  const triggerAttrs = createSettingsAgentTrigger(() => props.agentRosterRead);
   const roster = createMemo(() => props.agents);
   const agents = createMemo(() =>
     listSelectableAgents(roster()).map((agent) =>
@@ -287,6 +290,7 @@ function SettingsAgentSelector(props: SettingsSidebarProps & { inHeader?: boolea
     <div class={["settings-sidebar__agent", { "settings-sidebar__agent--header": props.inHeader }]}>
       <openclaw-agent-select
         prop:options={options()}
+        prop:triggerAttrs={triggerAttrs}
         prop:identityTargetsRef={(read) => {
           readIdentityTargets = read;
         }}

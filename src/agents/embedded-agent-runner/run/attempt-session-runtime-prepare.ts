@@ -516,6 +516,7 @@ export async function prepareEmbeddedAttemptSessionRuntime(input: {
     ...sessionPreparation,
     activeSession,
     computerContextEpoch,
+    spillOwner: toolBase.spillOwner,
     dropThinkingBlocksForEstimate: transcriptPolicy.dropThinkingBlocks,
     effectiveFsWorkspaceOnly,
     getPrePromptMessageCount: () => state.prePromptMessageCount,
