@@ -80,11 +80,10 @@ export function createNewerSqliteSchemaVersionError(
   context: SqliteSchemaErrorContext = "runtime",
 ): Error {
   const newerWriter = isNewerSqliteWriterVersion(writerAppVersion);
+  // The schema is newer even when the writer's release label is not, so Doctor cannot repair it (#200886).
   const writerDetail = newerWriter
     ? `; it is newer than this Gateway (${VERSION}).`
-    : context === "runtime"
-      ? "; run openclaw doctor --fix to inspect this database."
-      : ".";
+    : ", a different build with a newer schema (such as a source or development build).";
   return new SqliteSchemaVersionError(
     "This OpenClaw build cannot open your existing data.\n" +
       `${databaseLabel} ${pathname} uses newer schema version ${schemaVersion}; this build supports ${supportedVersion}.\n` +
