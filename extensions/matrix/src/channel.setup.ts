@@ -4,6 +4,7 @@ import {
   createScopedChannelConfigAdapter,
 } from "openclaw/plugin-sdk/channel-config-helpers";
 import type { ChannelPlugin } from "openclaw/plugin-sdk/channel-core";
+import { normalizeStringEntries } from "openclaw/plugin-sdk/string-normalization-runtime";
 import { MatrixChannelConfigSchema } from "./config-schema.js";
 import {
   listMatrixAccountIds,
@@ -13,7 +14,7 @@ import {
   resolveMatrixAccountConfig,
   type ResolvedMatrixAccount,
 } from "./matrix/accounts.js";
-import { normalizeMatrixAllowList } from "./matrix/monitor/allowlist.js";
+import { normalizeMatrixUserId } from "./matrix/monitor/allowlist.js";
 import { createMatrixSetupWizardProxy, matrixSetupContract } from "./setup-core.js";
 
 const matrixSetupWizard = createMatrixSetupWizardProxy(async () => ({
@@ -76,7 +77,7 @@ export const matrixPluginBase = {
         "initialSyncLimit",
       ],
       resolveAllowFrom: (account) => account.dm?.allowFrom,
-      formatAllowFrom: normalizeMatrixAllowList,
+      formatAllowFrom: (entries) => normalizeStringEntries(entries).map(normalizeMatrixUserId),
     }),
     resolveAccountAsync: adaptScopedAccountAccessor(resolveMatrixAccountAsync),
     isConfigured: (account) => account.configured,

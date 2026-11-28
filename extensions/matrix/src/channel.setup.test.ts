@@ -1,4 +1,10 @@
-import { createRuntimeEnv } from "openclaw/plugin-sdk/plugin-test-runtime";
+import { resolveCommandAuthorizationAsync } from "openclaw/plugin-sdk/command-auth-native";
+import {
+  createRuntimeEnv,
+  createTestRegistry,
+  resetPluginRuntimeStateForTest,
+  setActivePluginRegistry,
+} from "openclaw/plugin-sdk/plugin-test-runtime";
 import { withEnv, withEnvAsync } from "openclaw/plugin-sdk/test-env";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 
@@ -19,6 +25,51 @@ function config(matrix: NonNullable<CoreConfig["channels"]>["matrix"]): CoreConf
 }
 const auth = { homeserver: "https://matrix.example.org", userId: "@flurry:example.org" };
 const authEnv = { MATRIX_HOMESERVER: auth.homeserver, MATRIX_ACCESS_TOKEN: "env-token" };
+
+it("compares Matrix command owners as case-sensitive sender identities", async ({
+  onTestFinished,
+}) => {
+  const registry = createTestRegistry([
+    { pluginId: "matrix", plugin: matrixSetupPlugin, source: "test" },
+  ]);
+  onTestFinished(() => resetPluginRuntimeStateForTest());
+  setActivePluginRegistry(registry);
+  const sender = "@Alice:Example.org";
+  for (const entry of [sender, `matrix:${sender}`, `user:${sender}`, `matrix:user:${sender}`]) {
+    const result = await resolveCommandAuthorizationAsync({
+      cfg: { commands: { ownerAllowFrom: [entry] } },
+      ctx: { Provider: "matrix", SenderId: sender, ChatType: "group" },
+      commandAuthorized: true,
+    });
+    expect(result, entry).toMatchObject({
+      ownerList: [sender],
+      senderIsOwner: true,
+      isAuthorizedSender: true,
+    });
+  }
+  for (const entry of [
+    "user:@alice:Example.org",
+    "user:@Alice:example.org",
+    "user:@Bob:Example.org",
+    "room:!room:Example.org",
+    "discord:user:@Alice:Example.org",
+    "*",
+  ]) {
+    const result = await resolveCommandAuthorizationAsync({
+      cfg: {
+        commands: { ownerAllowFrom: [entry], allowFrom: { matrix: ["user:@Bob:Example.org"] } },
+      },
+      ctx: {
+        Provider: "matrix",
+        SenderId: sender,
+        From: "matrix:room:!room:Example.org",
+        ChatType: "group",
+      },
+      commandAuthorized: true,
+    });
+    expect(result, entry).toMatchObject({ senderIsOwner: false, isAuthorizedSender: false });
+  }
+});
 
 describe("matrix setup post-write bootstrap", () => {
   const runtime = createRuntimeEnv();
