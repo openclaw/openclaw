@@ -35,7 +35,7 @@ export async function prepareSkillLibrarySessionCreation(
         getConfig: typeof cfg === "function" ? cfg : () => cfg,
         assertCurrent: () => {
           if (ownerDevice && currentOwnerDevicePrincipal(client) === undefined) {
-            throw new Error("OpenClaw ID owner authority changed");
+            throw new Error("OpenClaw ID owner device changed. Reconnect and try again.");
           }
         },
       })),

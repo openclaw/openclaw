@@ -26,7 +26,6 @@ import {
   bindPluginRegistryRuntime,
   call,
   conversationBindingMocks,
-  createPluginRuntime,
   hoisted,
   resetSessionCatalogTestState,
   resolveRegisteredCatalogCreateTarget,
@@ -305,6 +304,7 @@ describe("session catalog Gateway methods", () => {
       sessions: ["owned", "missing", "external"].map((id) =>
         catalogSession(`${id}-thread`, {
           ...(id !== "external" ? { sessionKey: `agent:main:${id}` } : {}),
+          ...(id === "owned" ? { originalUrl: "https://source.example/chat/main/owned" } : {}),
           createdActor: { type: "human", id: "provider-spoof" },
         }),
       ),
@@ -334,6 +334,8 @@ describe("session catalog Gateway methods", () => {
     const projectedSessions = [
       expect.objectContaining({
         threadId: "owned-thread",
+        // A provider-supplied source link survives the same streamed and final projection.
+        originalUrl: "https://source.example/chat/main/owned",
         createdActor: {
           type: "agent",
           id: "worker-1",
@@ -351,36 +353,6 @@ describe("session catalog Gateway methods", () => {
       { dropIfSlow: true },
     );
     expectCatalogHost(respond, { sessions: projectedSessions });
-  });
-
-  it("shares one lazy Gateway node snapshot across catalog providers", async () => {
-    const dispatchNodeList = vi.fn(async () => ({
-      nodes: [{ nodeId: "shared-node", connected: true }],
-    }));
-    bindPluginRegistryRuntime(
-      hoisted.activeRegistry as PluginRegistry,
-      createPluginRuntime({
-        nodes: {
-          list: dispatchNodeList,
-          invoke: vi.fn(async () => undefined),
-          openDuplex: vi.fn(),
-        },
-      }),
-    );
-    const catalogUsingNodes = (id: string) =>
-      provider(id, {
-        list: vi.fn(async ({ listNodes }) => {
-          expect(await listNodes?.()).toEqual({
-            nodes: [{ nodeId: "shared-node", connected: true }],
-          });
-          return [];
-        }),
-      });
-    useCatalogs(catalogUsingNodes("zeta"), catalogUsingNodes("alpha"));
-
-    await listCatalogs();
-
-    expect(dispatchNodeList).toHaveBeenCalledOnce();
   });
 
   it("rejects host cursors without a catalog selector", async () => {
@@ -672,7 +644,9 @@ it("keeps a delayed source off the catalog RPC path", async () => {
     const current = request();
     await vi.advanceTimersByTimeAsync(0);
     await current.completion;
-    expect(current.respond.mock.calls[0]?.[1]?.catalogs[0]?.hosts[0]?.sessions).toEqual([row]);
+    expect(current.respond.mock.calls[0]?.[1]?.catalogs[0]?.hosts[0]?.sessions).toEqual([
+      { ...row, exportPolicy: { origin: "federated", automatic: false } },
+    ]);
     expect(invokeNode).toHaveBeenCalledTimes(2);
     invokeNode
       .mockRejectedValueOnce(new Error("Paired node did not respond"))

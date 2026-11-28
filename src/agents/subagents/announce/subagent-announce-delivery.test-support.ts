@@ -1,12 +1,10 @@
 export * from "./subagent-announce-delivery.js";
 
 import { expect, it, vi } from "vitest";
-import { hasAnnounceSendEvidence } from "./subagent-announce-delivery-retry.js";
 import { setSubagentAnnounceDeliveryDepsForTest } from "./subagent-announce-overrides.test-support.js";
 
 export const testing = {
   setDepsForTest: setSubagentAnnounceDeliveryDepsForTest,
-  hasAnnounceSendEvidence,
 };
 
 type RunDescendantWake = typeof import("./subagent-announce-descendant-wake.js").runDescendantWake;

@@ -179,6 +179,30 @@ describe("resolveGatewayProbeSnapshot", () => {
     },
   );
 
+  it("preserves a connected scope denial without another probe", async () => {
+    const warning =
+      "Gateway connected, but this CLI lacks operator.read. Reconnect with credentials granted operator.read, then run openclaw gateway status --deep.";
+    mocks.waitForGatewayDiagnosticReadiness.mockResolvedValue({
+      healthy: false,
+      waitOutcome: "connected-no-operator-scope",
+      operatorScopeWarning: warning,
+    });
+    const result = await resolveGatewayProbeSnapshot();
+    expect(result).toMatchObject({
+      gatewayReachable: true,
+      localGatewayHealthy: false,
+      gatewayProbe: {
+        ok: false,
+        gatewayReached: true,
+        error: `${warning}; warn`,
+        auth: { capability: "connected_no_operator_scope" },
+      },
+    });
+    expect(result.gatewayProbe?.startupPhase).toBeUndefined();
+    expect(mocks.probeGateway).not.toHaveBeenCalled();
+    expect(mocks.callGateway).not.toHaveBeenCalled();
+  });
+
   it.each([
     { observation: "plugin-errors", healthy: true },
     { observation: "probe-failed", healthy: false },

@@ -1,9 +1,7 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import * as runtimeConfig from "../../config/runtime-snapshot.js";
-import {
-  createAdmittedRunOperatorAuthority,
-  prepareSystemAgentRunAdmission,
-} from "../admitted-run-context.js";
+import { prepareSystemAgentRunAdmission } from "../admitted-run-context.js";
+import { createTestOperatorAuthority } from "../admitted-run-context.test-support.js";
 import * as authStoreRuntime from "../auth-profiles/store-runtime.js";
 import type { AuthProfileStore } from "../auth-profiles/types.js";
 import { isProfileInCooldown, markAuthProfileFailure } from "../auth-profiles/usage.js";
@@ -117,10 +115,9 @@ describe("runEmbeddedAgentEntry cyber failover", () => {
   ])(
     "honors $scope authority and ceiling $grants for automatic fallback",
     async ({ scope, grants, allowed }) => {
-      const authority = createAdmittedRunOperatorAuthority({
+      const authority = createTestOperatorAuthority({
         profileId: "fallback-role",
         scopes: [scope],
-        assertCurrent() {},
         rolePolicy: {
           sessionAccessCap: "none",
           sandboxRequired: false,

@@ -6,18 +6,13 @@ vi.mock("./openclaw-plugin-tools.js", async (importOriginal) => ({
   ...(await importOriginal<typeof import("./openclaw-plugin-tools.js")>()),
   resolveOpenClawPluginToolsForOptions: () => [],
 }));
-const spawnToolOptions = vi.hoisted(
-  () => [] as Array<{ senderIsOwner?: boolean; assertSenderOwnerCurrent?: () => void }>,
-);
+const spawnToolOptions = vi.hoisted(() => [] as Array<{ senderIsOwner?: boolean }>);
 vi.mock("./tools/sessions-spawn-tool.js", async (importOriginal) => {
   const actual = await importOriginal<typeof import("./tools/sessions-spawn-tool.js")>();
   return {
     ...actual,
     createSessionsSpawnTool: (options: Parameters<typeof actual.createSessionsSpawnTool>[0]) => {
-      spawnToolOptions.push({
-        senderIsOwner: options?.senderIsOwner,
-        assertSenderOwnerCurrent: options?.assertSenderOwnerCurrent,
-      });
+      spawnToolOptions.push({ senderIsOwner: options?.senderIsOwner });
       return actual.createSessionsSpawnTool(options);
     },
   };
@@ -62,7 +57,6 @@ it.each([
   "records occurrence owner bit %s (run sender bit %s) on scheduled spawns",
   (spawnSenderIsOwner, senderIsOwner, expected) => {
     spawnToolOptions.length = 0;
-    const assertOwnerCurrent = () => {};
     createOpenClawTools({
       agentSessionKey: "agent:main:cron:job-1",
       runSessionKey: "agent:main:cron:job-1:run:run-session",
@@ -71,17 +65,12 @@ it.each([
       scheduledToolTargets: {
         boardSessionKey: PARENT_KEY,
         assertCurrent: () => {},
-        assertOwnerCurrent,
         ...(spawnSenderIsOwner === undefined ? {} : { spawnSenderIsOwner }),
       },
     });
     expect(spawnToolOptions.length).toBeGreaterThan(0);
     expect(new Set(spawnToolOptions.map((options) => options.senderIsOwner))).toEqual(
       new Set([expected]),
-    );
-    // An owner bit taken from the occurrence is rechecked against its requester per spawn.
-    expect(new Set(spawnToolOptions.map((options) => options.assertSenderOwnerCurrent))).toEqual(
-      new Set([spawnSenderIsOwner ? assertOwnerCurrent : undefined]),
     );
   },
 );

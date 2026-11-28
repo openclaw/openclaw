@@ -25,6 +25,27 @@ export function registerPublicationBatchTests(
 ): void {
   const execute: ReturnType<typeof bindSqliteWorkerBackend>["execute"] = (command) =>
     getBackend().execute(command);
+  it("commits the final file metadata after staging a PostgreSQL source", () => {
+    withEngineStoreAdmission(() => {
+      const input = replacement("atomic-save");
+      const verifiedFile = { mtimeMs: 123.75, size: input.entry.size };
+      input.entry.size = 1;
+      const { header, fragments } = memoryPublicationInline(input)!;
+      execute({ type: "stage.start", input: { header } });
+      execute({ type: "stage.append", input: { fragments } });
+      expect(execute({ type: "source.replace", input: { state, verifiedFile } })).toMatchObject({
+        ok: true,
+      });
+      expect(
+        pg()
+          .prepare(
+            "SELECT s.mtime, s.size, p.observed_at FROM memory_index_sources s JOIN memory_index_chunks c USING (source, path) JOIN memory_index_chunk_provenance p ON p.chunk_id = c.id WHERE s.path = ?",
+          )
+          .get(input.entry.path),
+      ).toMatchObject({ mtime: verifiedFile.mtimeMs, size: verifiedFile.size, observed_at: 123 });
+    });
+  });
+
   it.each(["group", "staged"] as const)(
     "batches ten sources into one write per row family through %s publication",
     (mode) =>

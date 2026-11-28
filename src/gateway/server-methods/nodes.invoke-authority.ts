@@ -14,20 +14,19 @@ export async function captureNodeSystemRunEventSource(
   input: Pick<GatewayRequestHandlerOptions, "client" | "context" | "hasCurrentClientAuthority">,
   sessionKey: string,
 ): Promise<NodeSystemRunEventSource | undefined> {
-  const captured = await captureGatewayOperatorContinuation(input);
+  const cfg = input.context.getRuntimeConfig();
+  const { canonicalKey, agentId } = resolveSessionStoreIdentity({ cfg, sessionKey });
+  const captured = await captureGatewayOperatorContinuation({ ...input, agentId });
   if (!captured && !getGatewayToolCallerIdentity()) {
     return undefined;
   }
   try {
-    const cfg = input.context.getRuntimeConfig();
-    const { canonicalKey, agentId } = resolveSessionStoreIdentity({ cfg, sessionKey });
     const destination = resolveEventSessionKeyForPolicy(
       canonicalKey,
       resolveEventSessionRoutingPolicy({ cfg, sessionKey: canonicalKey }),
     );
     const expectedTarget = await captureSessionEventTargetForHost(agentId, destination, {
       operatorAuthority: captured?.authority,
-      assertCurrent: captured?.authority.assertCurrent,
       retainRequesterOwner: true,
     });
     return { expectedTarget, release: captured?.release ?? (() => {}) };

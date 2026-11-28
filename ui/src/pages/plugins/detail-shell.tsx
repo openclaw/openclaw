@@ -92,7 +92,7 @@ export function PluginReadmeWell(props: {
 }
 
 export function renderPluginDetailShell(props: {
-  registerRemovalHeading?: (heading: HTMLHeadingElement) => () => void;
+  registerHeading?: (heading: HTMLHeadingElement) => void | (() => void);
   id: string;
   name: string;
   summary?: string;
@@ -112,7 +112,7 @@ export function renderPluginDetailShell(props: {
   rail?: boolean;
 }): JSX.Element {
   let heading!: HTMLHeadingElement;
-  onSettled(() => props.registerRemovalHeading?.(heading));
+  onSettled(() => props.registerHeading?.(heading));
   const titleId = () => `${props.id}-title`;
   const summary = () =>
     props.summary ? <p class="plugin-catalog-detail__summary">{props.summary}</p> : undefined;

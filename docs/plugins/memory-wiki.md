@@ -348,6 +348,12 @@ plugin supports corpus selection.
 
 ## Browsing the wiki in the Control UI
 
+With Knowledge selected as the memory engine, open **Memory → Dreams → Memory wiki**.
+Select **Browse Knowledge** or enter a keyword in **Search Knowledge records**.
+Both actions open the [Knowledge reader](/plugins/knowledge/control-ui) for
+the selected agent under your existing access. You do not need to import the
+records, compile the wiki, or change `search.corpus`.
+
 The [Control UI](/web/control-ui) can browse the compiled wiki directly: open
 the Memory page, then **Dreams → Diary → Memory Wiki**. The tab clusters
 synthesis, entity, and concept pages — plus source and report pages that

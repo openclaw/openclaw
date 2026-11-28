@@ -10,7 +10,7 @@ import {
 } from "../infra/delivery-queue-sqlite.js";
 import { computeBackoffMs } from "../infra/delivery-recovery.shared.js";
 import type { GatewayScheduler } from "../infra/gateway-scheduler.js";
-import { isConstrainedProcessLowOnMemory } from "../infra/host-memory.js";
+import { isMemoryPressureHigh } from "../infra/host-memory.js";
 import type { DeliverOutboundPayloadsParams } from "../infra/outbound/deliver.js";
 import {
   schedulePendingSessionDeliveries,
@@ -128,7 +128,7 @@ export function scheduleGatewayPostReadyMaintenance(params: {
     delayMs: params.delayMs,
     retryDelayMs: Math.max(1_000, params.delayMs),
     isClosing: () => params.signal.aborted || params.isClosing(),
-    isBusy: () => isRecovering() || isConstrainedProcessLowOnMemory(),
+    isBusy: () => isRecovering() || isMemoryPressureHigh(),
     waitForReady: params.waitForPostReadyWork,
     log: params.log,
   };
@@ -146,7 +146,7 @@ export function scheduleGatewayPostReadyMaintenance(params: {
       errorMessage: "database page-cache probe failed",
       run: async (signal) => {
         void sweepAgentExecCgroups();
-        if (isConstrainedProcessLowOnMemory()) {
+        if (isMemoryPressureHigh()) {
           return;
         }
         try {
@@ -194,13 +194,17 @@ export function scheduleGatewayPostReadyMaintenance(params: {
   params.scheduler.schedule({
     id: "startup:maintenance",
     delayMs: params.delayMs,
-    run: () => {
+    run: async () => {
       if (params.isClosing()) {
+        return undefined;
+      }
+      // Wait outside admission: a root held here would keep lean's post-ready release busy.
+      await params.waitForPostReadyWork();
+      if (params.isClosing() || params.signal.aborted) {
         return undefined;
       }
       return runWithGatewayIndependentRootWorkAdmission(
         async () => {
-          await params.waitForPostReadyWork();
           if (params.isClosing() || params.signal.aborted) {
             return;
           }

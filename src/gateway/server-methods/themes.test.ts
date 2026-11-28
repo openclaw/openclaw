@@ -16,8 +16,6 @@ import {
   createPersonalThemeToolCaller,
   withPersonalToolTurn,
 } from "../../auto-reply/reply/personal-tool-turn.test-support.js";
-import * as workerAdmission from "../../infra/sqlite-worker-operation-admission.js";
-import { sqliteWorkerOwnerProbe as probe } from "../../infra/sqlite-worker-owner-probe.test-support.js";
 import { closeOpenClawStateDatabaseAsync } from "../../state/openclaw-state-db-cache.js";
 import * as userPreferences from "../../state/user-preferences.js";
 import {
@@ -202,15 +200,6 @@ const daylight = () => ({
   light: themePalette(),
 });
 
-function beforeWorkerCommit(checkpoint: () => void) {
-  probe.admission(workerAdmission, (request, grant, admit) => {
-    if (request.stage === "commit") {
-      checkpoint();
-    }
-    admit(request, grant);
-  });
-}
-
 function afterSnapshot(checkpoint: () => void | Promise<void>) {
   const readPreferences = userPreferences.getCanonicalUserPreferences;
   vi.spyOn(userPreferences, "getCanonicalUserPreferences").mockImplementationOnce(
@@ -254,39 +243,6 @@ async function withConcurrentPreferenceSnapshots<T>(count: number, run: () => Pr
     read.mockRestore();
   }
 }
-
-it("lists descriptive choices and inspects a plugin definition without exposing palettes in list entries", async () => {
-  const entry = {
-    ...pluginTheme(),
-    artwork: {
-      hats: {
-        beret: { url: "/__openclaw__/plugin-theme-art/space-pack/xenovessel/hat/beret?v=abc" },
-      },
-      critters: {
-        ferris: {
-          url: "/__openclaw__/plugin-theme-art/space-pack/xenovessel/critter/ferris?v=def",
-          title: "a crab, allegedly",
-          crossMs: 15000,
-        },
-      },
-    },
-  };
-  pluginThemes.push(entry);
-  const { definition, ...descriptor } = entry;
-  await expectRpc(invoke("themes.list", {}), {
-    current: { id: "claw", mode: "system", scope: "profile", overrides: {} },
-    themes: expect.arrayContaining([
-      expect.objectContaining({ id: "claw", description: expect.stringMatching(/\S/) }),
-      descriptor,
-    ]),
-  });
-  await expectRpc(invoke("themes.get", { id: descriptor.id }), {
-    theme: descriptor,
-    definition,
-    artwork: entry.artwork,
-  });
-  expect(await invoke("themes.get", { id: "claw" })).not.toHaveProperty("payload.artwork");
-});
 
 it("imports and applies in one durable profile mutation, preserving other preferences and notifying only that profile", async () => {
   seedPreferences({ "ui.accent": "#aabbcc", "ui.fontFamily": "serif" });
@@ -609,7 +565,6 @@ it("keeps every personal theme action scoped to the selected accepted turn parti
   const owner = { profileId: requesterId, senderId: "alice-sender", name: "Alice" };
   const steerer = { profileId: otherId, senderId: "bob-sender", name: "Bob" };
   const ownerChoice = `Alice (user: ${owner.profileId})`;
-  const revoked = "Bob's access changed; ask them again";
   const synthetic = client();
   const execute = await createPersonalThemeToolCaller((method, params) =>
     invoke(method, params, { client: synthetic }),
@@ -663,20 +618,6 @@ it("keeps every personal theme action scoped to the selected accepted turn parti
       "ui.theme": "user/personal",
     });
 
-    const saved = getUserPreferences(otherId);
-    const revokeBeforeCommit = vi.fn(() => turn.revoke(steerer.profileId));
-    beforeWorkerCommit(revokeBeforeCommit);
-    await expect(execute({ action: "set", id: "claw" }, steerer.profileId)).rejects.toThrow(
-      revoked,
-    );
-    expect(revokeBeforeCommit).toHaveBeenCalled();
-    preferences(saved, otherId);
-    for (const action of actions) {
-      await expect(execute(action, steerer.profileId)).rejects.toThrow(revoked);
-    }
-    expect(await execute({ action: "get" }, owner.profileId)).toMatchObject({
-      current: { id: "rose" },
-    });
     await turn.complete();
     await expect(execute({ action: "get" }, owner.profileId)).rejects.toThrow();
   });

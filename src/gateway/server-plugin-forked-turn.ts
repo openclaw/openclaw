@@ -8,7 +8,7 @@ import {
 import { resolveAgentWorkspaceDir, resolveSessionAgentIdsStrict } from "../agents/agent-scope.js";
 import { splitTrailingAuthProfile } from "../agents/model-ref-profile.js";
 import type { ModelRef } from "../agents/model-ref-shared.js";
-import { resolveSessionModelRef } from "../agents/session-model-ref.js";
+import { NO_MODEL_CONFIGURED_MESSAGE } from "../agents/model-selection-config.js";
 import { normalizeToolPolicyName } from "../agents/tool-policy.js";
 import type { NormalizedUsage } from "../agents/usage.js";
 import type { SessionEntry } from "../config/sessions/types.js";
@@ -56,8 +56,8 @@ export async function runPluginForkedTurn<T>(
   const { resolveGatewayContext } = deps;
   // Trust rule: a plugin may let a fork run tools it uniquely registered, plus read, ls and exec.
   // Those three never join the plugin grant, which widens the session's tool profile: the
-  // source session's own policy must already allow them (checked below), and exec runs only on
-  // the owner's turns. Other core tools and other plugins' tools are refused.
+  // source session's own policy must already allow them (checked below), and exec runs only for
+  // a caller with owner authority. Other core tools and other plugins' tools are refused.
   // Host-captured registration of the calling plugin; a reload or disable revokes it.
   const assertOwnerCurrent = scope?.assertSystemOwnerCurrent;
   if (!assertOwnerCurrent) {
@@ -81,7 +81,25 @@ export async function runPluginForkedTurn<T>(
     sessionKey: params.sessionKey,
     config: context.getRuntimeConfig(),
   });
+  // A session-scoped RPC admitted this existing session for writing; its fork runs as that
+  // session's own run, whatever other scopes the caller holds. Without that admission the fork
+  // stays a sessionless agent launch: a session key named by a plugin is not an execution grant.
+  const resource = scope?.sessionResourceForFork;
+  const source = resource?.target;
+  if (source && (source.sessionKey !== params.sessionKey || source.agentId !== agentId)) {
+    throw new Error("Plugin fork must use the admitted session.");
+  }
+  // The fork may outlive its RPC. Let the resource owner fence resets and replacements.
+  const sessionLifetime = resource?.retainSession();
+  using _ = sessionLifetime && { [Symbol.dispose]: sessionLifetime.release };
+  const sessionRun = source && {
+    sessionKey: source.sessionKey,
+    sessionId: source.sessionId,
+    lifecycleRevision: source.lifecycleRevision ?? null,
+    runId,
+  };
   const execution = await prepareInProcessAgentExecution({
+    sessionRun,
     agentId,
     pluginRuntimeOwnerId: pluginId,
     resolveGatewayContext,
@@ -89,6 +107,7 @@ export async function runPluginForkedTurn<T>(
   try {
     const assertExecutionCurrent = () => {
       assertOwnerCurrent();
+      sessionLifetime?.assertCurrent();
       runtimeLifetime?.throwIfAborted();
       execution.assertCurrent();
       assertConversationAccess(execution.context.getRuntimeConfig());
@@ -146,7 +165,7 @@ export async function runPluginForkedTurn<T>(
           timeoutMs: resolveTimerTimeoutMs(params.timeoutMs, 120_000),
           ...(params.maxTokens !== undefined ? { maxTokens: params.maxTokens } : {}),
           abortSignal: AbortSignal.any(
-            [params.signal, runtimeLifetime, execution.signal].filter(
+            [params.signal, runtimeLifetime, execution.signal, sessionLifetime?.signal].filter(
               (candidate): candidate is AbortSignal => candidate !== undefined,
             ),
           ),
@@ -163,8 +182,9 @@ export async function runPluginForkedTurn<T>(
 
 /**
  * One plugin-owned session fork through an active entry of a loaded session: the anchored
- * turn supplies the requester and model, the session's policy admits the tools, then
- * `runSessionFork` runs it. `forkSession` and `runForkedTurn` both fork through here.
+ * turn supplies the conversation facts and model, the caller's admitted authority the owner
+ * flag, the session's policy admits the tools, then `runSessionFork` runs it. `forkSession`
+ * and `runForkedTurn` both fork through here.
  */
 export async function forkPluginSession<T>(input: {
   cfg: OpenClawConfig;
@@ -191,7 +211,7 @@ export async function forkPluginSession<T>(input: {
   // Lazy: the fork runtime stays out of the Gateway startup chunk.
   const [
     { readActiveTranscriptEntryAnchorAsync },
-    { readSessionForkTurn, prepareSessionFork, runSessionFork },
+    { readSessionForkTurn, prepareSessionFork, resolveSessionForkModel, runSessionFork },
     { SessionManager },
   ] = await Promise.all([
     import("../config/sessions/session-transcript-anchor-read.js"),
@@ -219,7 +239,7 @@ export async function forkPluginSession<T>(input: {
   if (!source) {
     throw new Error(`Session "${session.key}" has no active entry "${entryId}".`);
   }
-  // The anchored turn supplies its own requester and model, never the plugin.
+  // The anchored turn supplies its own conversation facts and model, never the plugin.
   const turn = await readSessionForkTurn(source, input.abortSignal);
   assertCurrent();
   if (!turn && input.tools.length > 0) {
@@ -227,28 +247,32 @@ export async function forkPluginSession<T>(input: {
     // tool-free fork runs nothing, so it proceeds on the session's own facts.
     throw new Error(`Session "${session.key}" no longer holds the input of entry "${entryId}".`);
   }
-  const sessionModel = resolveSessionModelRef(cfg, session.entry, agentId);
-  const turnModel = turn?.model ?? sessionModel;
+  const {
+    sessionModel,
+    turnModel,
+    model: sessionForkModel,
+  } = resolveSessionForkModel({
+    cfg,
+    agentId,
+    entry: session.entry,
+    turnModel: turn?.model,
+  });
   const override = input.override ? splitTrailingAuthProfile(input.override.model) : undefined;
-  // On the session's own provider the fork runs on the credential the session's turns use (a
-  // user pin or an automatic rotation): its internal session has no stored selection, so
-  // without this it could bill another profile and miss the turn's cache.
-  const sessionProfile =
-    turnModel.provider === sessionModel.provider
-      ? session.entry.authProfileOverride?.trim()
-      : undefined;
   const model = override
     ? {
         provider: expectDefined(input.override?.provider, "override provider"),
         model: override.model,
         ...(override.profile ? { authProfileId: override.profile } : {}),
       }
-    : { ...turnModel, ...(sessionProfile ? { authProfileId: sessionProfile } : {}) };
+    : sessionForkModel;
+  if (!model) {
+    throw new Error(NO_MODEL_CONFIGURED_MESSAGE);
+  }
   // Running on the turn's or session's own model needs no override trust.
   const ownModel =
     !override?.profile &&
     [turnModel, sessionModel].some(
-      (own) => own.provider === model.provider && own.model === model.model,
+      (own) => own !== undefined && own.provider === model.provider && own.model === model.model,
     );
   if (override && !ownModel) {
     expectDefined(input.authorizeModelOverride, "model override authorization")(
@@ -257,13 +281,20 @@ export async function forkPluginSession<T>(input: {
     );
   }
   assertOperatorModelAllowed(input.operatorAuthority, model);
+  // Owner authority is the caller's, decided once here: stored rows record who typed an
+  // input, and internal wakes are never owner-attributed. Explicit, since consumers restrict
+  // on `false` and treat a missing flag as unknown.
+  const requester = {
+    ...turn?.requester,
+    senderIsOwner: input.operatorAuthority?.grant.owner === true,
+  };
   const prepared = await prepareSessionFork({
     config: cfg,
     source,
     tools: input.tools,
     model,
     workspaceDir: resolveAgentWorkspaceDir(cfg, agentId),
-    ...(turn?.requester ? { requester: turn.requester } : {}),
+    requester,
     ...(input.runtimePluginToolGrant
       ? { runtimePluginToolGrant: input.runtimePluginToolGrant }
       : {}),
@@ -285,7 +316,7 @@ export async function forkPluginSession<T>(input: {
         owner: `plugin:${input.pluginId}`,
         model,
         workspaceDir: prepared.workspaceDir,
-        ...(turn?.requester ? { requester: turn.requester } : {}),
+        requester,
         ...(input.runtimePluginToolGrant
           ? { runtimePluginToolGrant: input.runtimePluginToolGrant }
           : {}),

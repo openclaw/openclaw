@@ -140,9 +140,10 @@ ledger after the last repair pass. Completed obligations leave the final summary
 and persisted warning steps; pending obligations keep their retry command.
 If the ledger cannot be read, the summary retains the warnings. Messages already
 printed during an earlier phase can remain in the terminal scrollback.
-Repeated warnings appear once in the final report. If update Doctor deferred
-agent database path repair to preserve the rollback inventory, its warning points
-to `openclaw doctor --fix` without telling you to wait for the completed update.
+Repeated warnings appear once in the final report. Update Doctor defers agent
+database path repair to preserve the rollback inventory. It warns only when a
+registration needs that repair; the warning gives the count and points to
+`openclaw doctor --fix` without telling you to wait for the completed update.
 
 Status shows each [owed step](/cli/update/how-updates-run#owed-steps) as a warning
 with its reason and what settles it. A successful update's headline counts it
@@ -247,8 +248,15 @@ and a redacted diagnostic in the run history as well as the Gateway log. Status
 and the bounded run report show the cause after the campaign clears. This requires
 the updated Gateway; older runs cannot recover a cause that was never recorded.
 
-An admitted `openclaw update --json` includes `runId` and the `run` record. `openclaw update status --json`
-includes `activeRun` when a run is active and `lastRun` when history exists.
+For release updates, `openclaw update --json` returns the observed run record
+directly. If no status was observed after Gateway
+acknowledgement, they return `{ "status": "unknown", "runId": "..." }`. A status
+lookup error retains the ID in the CLI error response. A capability-consent retry
+reports its own acknowledged ID. An ID alone does not confirm completion.
+The in-place updater reports `runId` and adds the record under `run` when history
+is readable.
+`openclaw update status --json` includes `activeRun` when a run is active and
+`lastRun` when history exists.
 An automatic-update campaign stops showing as applying when its own admitted run
 finishes, including when a managed handoff fails before restarting the Gateway.
 The Gateway reconciles the exact campaign run, so newer unrelated runs do not

@@ -21,6 +21,7 @@ import {
   SESSION_MCP_RUNTIME_SWEEP_INTERVAL_MS,
   type CreateSessionMcpRuntime,
 } from "./agent-bundle-mcp-runtime-shared.js";
+import { createSessionMcpStoreClaims } from "./agent-bundle-mcp-store-owner.js";
 import type { SessionMcpConfigReload, SessionMcpRuntime } from "./agent-bundle-mcp-types.js";
 import { recordAgentCleanupFailure } from "./run-cleanup-timeout.js";
 
@@ -39,6 +40,7 @@ type RuntimeDisposalReceipt = {
 };
 
 type SessionMcpRuntimeManagerStore = SessionMcpCatalogStore & {
+  storeClaims: ReturnType<typeof createSessionMcpStoreClaims>;
   configReload?: SessionMcpConfigPublication;
   runtimesBySessionId: Map<string, SessionMcpRuntime>;
   sessionIdBySessionKey: Map<string, string>;
@@ -86,6 +88,7 @@ export function createSessionMcpRuntimeManagerLifecycle(
   const catalogs = createSessionMcpCatalogStore(runtimesBySessionId, () => store.scheduler.now());
   const store: SessionMcpRuntimeManagerStore = {
     ...catalogs.store,
+    storeClaims: createSessionMcpStoreClaims(SESSION_MCP_MAX_LIVE_RUNTIMES),
     // Keys are bare sessionId for static runtimes, or requester composite JSON keys.
     runtimesBySessionId,
     sessionIdBySessionKey: new Map<string, string>(),
@@ -200,12 +203,18 @@ export function createSessionMcpRuntimeManagerLifecycle(
     };
     receipt.agentId ??= runtimeAgentId(runtime);
     store.pendingDisposals.set(runtimeKey, receipt);
-    try {
+    // Replacement and requester revocation can close a transport without a queued
+    // session disposal. Publish the physical close before it can yield or reenter.
+    const closing = Promise.resolve().then(async () => {
       await runtime.dispose();
       if (!runtime.joinCleanup) {
         throw new Error("MCP runtime does not expose cleanup ownership");
       }
       await runtime.joinCleanup();
+    });
+    receipt.pending.add(closing);
+    try {
+      await closing;
       const slot = store.runtimeSlots.get(runtime);
       if (releaseSlot && slot) {
         store.liveRuntimeSlots.delete(slot);
@@ -217,6 +226,7 @@ export function createSessionMcpRuntimeManagerLifecycle(
       recordAgentCleanupFailure();
       throw error;
     } finally {
+      receipt.pending.delete(closing);
       if (receipt.pending.size === 0 && !receipt.failure) {
         store.pendingDisposals.delete(runtimeKey);
       }
@@ -281,6 +291,7 @@ export function createSessionMcpRuntimeManagerLifecycle(
       ...[...store.catalogByRuntimeKey.values()].map((entry) => entry.sessionId),
       ...store.advertisedScopedCatalogBySessionId.keys(),
     ]);
+    store.storeClaims.prune(ownedSessionIds, retainedSessionIds);
     for (const [sessionKey, sessionId] of store.sessionIdBySessionKey) {
       if (!ownedSessionIds.has(sessionId) && !retainedSessionIds.has(sessionId)) {
         store.sessionIdBySessionKey.delete(sessionKey);
@@ -446,7 +457,7 @@ export function createSessionMcpRuntimeManagerLifecycle(
       preserveRequiredRetirement?: boolean;
       requireStoppedScheduler?: boolean;
       expectedRuntimes?: ReadonlyMap<string, SessionMcpRuntime>;
-      catalogsAreCurrent?: () => boolean;
+      captureIsCurrent?: () => boolean;
       preserveActiveLeases?: boolean;
       assertCurrent?: () => void;
       agentDeletion?: {
@@ -477,7 +488,7 @@ export function createSessionMcpRuntimeManagerLifecycle(
       await priorDisposal;
       opts?.assertCurrent?.();
       const expectedRuntimes = opts?.expectedRuntimes;
-      if (opts?.catalogsAreCurrent && !opts.catalogsAreCurrent()) {
+      if (opts?.captureIsCurrent && !opts.captureIsCurrent()) {
         return;
       }
       if (
@@ -541,6 +552,7 @@ export function createSessionMcpRuntimeManagerLifecycle(
         return;
       }
       // Clear bookkeeping after admitted acquisitions finish, before successors run.
+      store.storeClaims.forget(sessionId);
       if (sessionId === undefined) {
         clearIdleSweepTimer();
         store.configReload = undefined;
@@ -582,7 +594,7 @@ export function createSessionMcpRuntimeManagerLifecycle(
       }
     });
     const disposal = trackDisposal(runtimeKeys, () => queued).catch((error: unknown) => {
-      if (opts?.agentDeletion || opts?.assertCurrent) {
+      if (opts?.agentDeletion || opts?.assertCurrent || opts?.captureIsCurrent) {
         throw error;
       }
     });

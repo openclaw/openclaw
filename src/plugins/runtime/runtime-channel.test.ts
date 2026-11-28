@@ -1,6 +1,8 @@
 import { getEventListeners } from "node:events";
 import { describe, expect, it, vi } from "vitest";
 import type { GetReplyOptions } from "../../auto-reply/get-reply-options.types.js";
+import type { InternalGetReplyOptions } from "../../auto-reply/reply/get-reply.types.js";
+import { replyCallbackCustody } from "../../auto-reply/reply/reply-callback-custody.js";
 import { createReplyDispatcher } from "../../auto-reply/reply/reply-dispatcher.js";
 import { replaceSessionEntrySync } from "../../config/sessions/session-accessor.js";
 import { withOpenClawTestState } from "../../test-utils/openclaw-test-state.js";
@@ -167,19 +169,46 @@ describe("inbound dispatch", () => {
     }
   });
 
-  it("does not add adoption ownership to plain source options", async () => {
-    const { owner, dispatch } = createOwnedInboundFixture();
-    const source = new AbortController();
+  it.each([false, true])(
+    "preserves source options without adoption ownership (prewrapped=%s)",
+    async (prewrapped) => {
+      const { owner, dispatch } = createOwnedInboundFixture();
+      const source = new AbortController();
+      try {
+        const options = { abortSignal: source.signal };
+        await dispatch(prewrapped ? owner.wrap(options) : options);
+        const turn = dispatchRoutedChannelTurn.mock.calls.at(-1)?.[0];
+        expect(turn?.replyOptions?.abortSignal).toBe(source.signal);
+        // Plain user turns detach this source signal when queued; a lifecycle would attach it.
+        expect(
+          turn?.turnAdoptionLifecycle ?? turn?.replyOptions?.turnAdoptionLifecycle,
+        ).toBeUndefined();
+        expect(owner.hasRetainedConsumers).toBe(false);
+      } finally {
+        await owner.dispose();
+      }
+    },
+  );
+
+  it("keeps a callback-only queued turn alive until settlement", async () => {
+    const { owner, delivered, dispatch } = createOwnedInboundFixture();
+    let release: (() => void) | undefined;
+    dispatchRoutedChannelTurn.mockImplementationOnce(async (turn) => {
+      const options: InternalGetReplyOptions | undefined = turn.replyOptions;
+      release = options?.[replyCallbackCustody]?.retain();
+      return { status: "handled" };
+    });
     try {
-      await dispatch({ abortSignal: source.signal });
-      const turn = dispatchRoutedChannelTurn.mock.calls.at(-1)?.[0];
-      expect(turn?.replyOptions?.abortSignal).toBe(source.signal);
-      // Plain user turns detach this source signal when queued; a lifecycle would attach it.
-      expect(
-        turn?.turnAdoptionLifecycle ?? turn?.replyOptions?.turnAdoptionLifecycle,
-      ).toBeUndefined();
+      await dispatch({ onPreparedAgentRunStart: delivered });
+      const queued = dispatchRoutedChannelTurn.mock.calls.at(-1)?.[0];
+      const start = { runId: "queued-observer-run", transcriptStart: null };
+      queued?.replyOptions?.onPreparedAgentRunStart?.(start);
+      expect(delivered).toHaveBeenCalledExactlyOnceWith(start);
+      release?.();
+      release = undefined;
       expect(owner.hasRetainedConsumers).toBe(false);
     } finally {
+      release?.();
       await owner.dispose();
     }
   });
@@ -188,6 +217,8 @@ describe("inbound dispatch", () => {
     const { owner, delivered, dispatch } = createOwnedInboundFixture(observerOnly);
     let settle: (() => void | Promise<void>) | undefined;
     dispatchRoutedChannelTurn.mockImplementationOnce(async (turn) => {
+      const options: InternalGetReplyOptions | undefined = turn.replyOptions;
+      settle = options?.[replyCallbackCustody]?.retain();
       const lifecycle = turn.turnAdoptionLifecycle ?? turn.replyOptions?.turnAdoptionLifecycle;
       lifecycle?.onDeferred?.();
       return { status: "handled" };
@@ -198,8 +229,6 @@ describe("inbound dispatch", () => {
       if (!queued) {
         throw new Error("Dispatch did not retain the queued source");
       }
-      settle = (queued.turnAdoptionLifecycle ?? queued.replyOptions?.turnAdoptionLifecycle)
-        ?.onSettled;
       const batch = {
         kind: "queued-followup" as const,
         runId: "queued-run",

@@ -80,6 +80,101 @@ beforeEach(() => resetChatThreadState("input-order"));
 afterEach(() => resetChatThreadState("input-order"));
 
 describe("transcript input order", () => {
+  it.each([
+    { timestamp: 100, withHistory: true, stopped: "none" },
+    { timestamp: -100, withHistory: true, stopped: "none" },
+    { timestamp: 100, withHistory: false, stopped: "none" },
+    { timestamp: 100, withHistory: false, stopped: "first" },
+    { timestamp: 100, withHistory: false, stopped: "last" },
+  ] as const)(
+    "keeps an observed handoff before canonical turns (timestamp=$timestamp, history=$withHistory, stopped=$stopped)",
+    ({ timestamp, withHistory, stopped }) => {
+      const earlier = withHistory
+        ? [
+            makeMessage("user", "Earlier input", 10, { id: "earlier-input", seq: 1 }),
+            makeMessage("assistant", "Earlier reply", 20, { id: "earlier-reply", seq: 2 }),
+          ]
+        : [];
+      const pendingInputs: PendingInput[] = [
+        {
+          id: "handoff",
+          runId: "handoff-run",
+          acceptedAt: 30,
+          state: "queued",
+          message: nativeMessage(
+            "assistant",
+            "Worker handoff",
+            30,
+            { id: "pending:handoff" },
+            {
+              provenance: { kind: "inter_session", sourceTool: "sessions_send" },
+              senderSession: { sessionKey: "agent:helper:main" },
+            },
+          ),
+        },
+      ];
+      if (stopped !== "none") {
+        const cancelled = acceptedInput("Stopped request", 20, "cancelled");
+        if (stopped === "first") {
+          pendingInputs.unshift(cancelled);
+        } else {
+          pendingInputs.push(cancelled);
+        }
+      }
+      const stoppedRows =
+        stopped === "none"
+          ? []
+          : [
+              "Stopped request",
+              "Cancelled before the agent started it. It will not run automatically; copy it and send again.",
+            ];
+      const rows = (messages: unknown[], searchQuery = "") =>
+        visibleRows(
+          { messages, pendingInputs, searchOpen: Boolean(searchQuery), searchQuery },
+          buildCachedChatItems,
+        );
+      const earlierText = withHistory ? ["Earlier input", "Earlier reply"] : [];
+      expect(rows(earlier)).toEqual([...earlierText, ...stoppedRows, "Worker handoff"]);
+
+      // Loading an older page is not a new successor of already visible custody.
+      const history = withHistory
+        ? [makeMessage("user", "Older page", 0, { id: "older-page", seq: 0 }), ...earlier]
+        : [];
+      const historyText = withHistory ? ["Older page", ...earlierText] : [];
+      expect(rows(history)).toEqual([...historyText, ...stoppedRows, "Worker handoff"]);
+      const next = makeMessage("user", "New canonical input", timestamp, {
+        id: "next-input",
+        seq: 3,
+        idempotencyKey: "next:user",
+      });
+      const expected = [...historyText, ...stoppedRows, "Worker handoff", "New canonical input"];
+      expect(rows([...history, next])).toEqual(expected);
+      const reply = makeMessage("assistant", "New canonical reply", timestamp + 1, {
+        id: "next-reply",
+        seq: 4,
+        runId: "next",
+      });
+      const completed = [...history, next, reply];
+      expect(rows(completed)).toEqual([...expected, "New canonical reply"]);
+      expect(rows(completed, "Worker handoff")).toEqual(["Worker handoff"]);
+      expect(rows(completed)).toEqual([...expected, "New canonical reply"]);
+
+      // Losing all observed history anchors is not an empty-transcript startup.
+      expect(
+        rows([makeMessage("user", "Disjoint older page", -200, { id: "disjoint", seq: 0 })]),
+      ).toEqual(["Disjoint older page", ...stoppedRows, "Worker handoff"]);
+
+      // A new pane has never observed this custody ahead of the saved turn.
+      resetChatThreadState("input-order");
+      expect(rows(completed)).toEqual([
+        ...historyText,
+        ...stoppedRows,
+        "New canonical input",
+        "New canonical reply",
+        "Worker handoff",
+      ]);
+    },
+  );
   it("keeps interleaved tool bursts within each observed input", () => {
     const rows = visibleRows({
       runId: "live",

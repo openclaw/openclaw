@@ -1,25 +1,25 @@
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import { createDeferred } from "../../../test/helpers/promise.js";
-import { createAdmittedRunOperatorAuthority } from "../../agents/admitted-run-context.js";
+import { createTypingCallbacks } from "../../channels/typing.js";
 import {
   resolveSessionTranscriptReadFence,
   runWithSessionTranscriptReadFence,
 } from "../../config/sessions/session-transcript-read-fence.js";
+import { decideTurnGrant } from "../../gateway/operator-admission.js";
+import { OperatorRefusalError } from "../../gateway/operator-refusal.js";
 import { createChatSendLateFollowupDisposition } from "../../gateway/server-methods/chat-send-late-followup.js";
 import { GatewayOperatorAccessUnavailableError } from "../../infra/operator-authority-error.js";
 import {
   getPluginRuntimeGatewayRequestScope,
   withPluginRuntimeGatewayRequestScope,
 } from "../../plugins/runtime/gateway-request-scope.js";
-import { defaultRuntime } from "../../runtime.js";
 import { getReplyPayloadMetadata, setReplyPayloadMetadata } from "../reply-payload.js";
 import type { ReplyPayload } from "../types.js";
 import type { FollowupExecutionResult } from "./followup-turn-execution.js";
 import type { FollowupRun } from "./queue.js";
 import { createQueueTestRun } from "./queue.test-helpers.js";
 import type { QueuedFollowupReplyBatch } from "./queue/types.js";
-import type { AdmittedFollowupTurn } from "./reply-agent-turn-preparation.js";
-import { createMockTypingController } from "./test-helpers.js";
+import type { AdmittedFollowupTurn, FollowupRunnerParams } from "./reply-agent-turn-preparation.js";
 
 const state = vi.hoisted(() => ({
   account: vi.fn(),
@@ -30,6 +30,7 @@ const state = vi.hoisted(() => ({
   execute: vi.fn(),
   recordFailure: vi.fn(),
   resolveDecision: vi.fn(),
+  route: vi.fn(),
 }));
 
 vi.mock("../../agents/embedded-agent-runner/delivery-evidence.js", () => ({
@@ -75,13 +76,16 @@ vi.mock("../../sessions/session-run-error.js", async (importOriginal) => ({
   recordGatewaySessionRunFailure: state.recordFailure,
 }));
 
+vi.mock("./route-reply.js", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("./route-reply.js")>()),
+  routeReply: (...args: unknown[]) => state.route(...args),
+}));
+
 const { createFollowupRunner } = await import("./followup-runner.js");
 let turn: ReturnType<typeof createTurn>;
-let typing: ReturnType<typeof createMockTypingController>;
 
 function createRunner(overrides: Partial<Parameters<typeof createFollowupRunner>[0]> = {}) {
   return createFollowupRunner({
-    typing,
     typingMode: "never",
     defaultModel: "claude",
     ...overrides,
@@ -97,11 +101,6 @@ function attachSource(source: ReturnType<typeof createTurn>) {
   const deliver = vi.fn(async () => {});
   source.queued.queuedFollowupReplyDisposition = { kind: "deliver", deliver };
   return deliver;
-}
-
-function expectTypingComplete() {
-  expect(typing.markRunComplete).toHaveBeenCalledOnce();
-  expect(typing.markDispatchIdle).toHaveBeenCalledOnce();
 }
 
 function createTurn(
@@ -166,7 +165,6 @@ function createExecution(
 beforeEach(() => {
   vi.clearAllMocks();
   turn = createTurn();
-  typing = createMockTypingController();
   admitTurn(turn);
   state.completedSourceDelivery = false;
   state.account.mockResolvedValue(undefined);
@@ -205,6 +203,30 @@ describe("createFollowupRunner", () => {
       );
     },
   );
+
+  it("shows typing for the queued turn after the source dispatch stopped its callbacks", async () => {
+    vi.useFakeTimers();
+    try {
+      const start = vi.fn(async () => {});
+      const callbacks = createTypingCallbacks({ start, onStartError: () => {} });
+      // The source dispatch returned on enqueue and stopped the shared channel callbacks.
+      callbacks.onIdle?.();
+      state.execute.mockImplementationOnce(
+        async ({ defaults }: { defaults: FollowupRunnerParams }) => {
+          await defaults.typing.startTypingLoop();
+          return createExecution();
+        },
+      );
+      await createRunner({
+        opts: { onReplyStart: callbacks.onReplyStart, onTypingCleanup: callbacks.onCleanup },
+      })(turn.queued);
+      expect(start).toHaveBeenCalledOnce();
+      await vi.advanceTimersByTimeAsync(30_000);
+      expect(start).toHaveBeenCalledOnce();
+    } finally {
+      vi.useRealTimers();
+    }
+  });
 
   it("reads the current transcript without borrowing the interrupted turn's admission fence", async () => {
     const admission = {
@@ -449,7 +471,6 @@ describe("createFollowupRunner", () => {
       }
       expect(state.execute).not.toHaveBeenCalled();
       expect(turn.operation.complete).toHaveBeenCalledTimes(kind === "owned skip" ? 1 : 0);
-      expectTypingComplete();
       expect(end).toHaveBeenCalledExactlyOnceWith({
         visibleReplySent: false,
         failed: true,
@@ -460,44 +481,32 @@ describe("createFollowupRunner", () => {
 
   it.each([
     "unrecorded authority",
-    "unrecorded assertion",
-    "revoked before admission",
-    "revoked after admission",
-    "revoked without target",
+    "unrecorded failure",
     "user abort",
     "progress failure",
   ] as const)(
     "settles %s without replay and preserves its visible classification",
     async (phase) => {
       const unrecorded = phase.startsWith("unrecorded");
-      const revoked = phase.startsWith("revoked");
-      const admitted = !unrecorded && phase !== "revoked before admission";
+      const admitted = !unrecorded;
       const failure =
         phase === "unrecorded authority"
           ? new GatewayOperatorAccessUnavailableError()
-          : new Error(revoked ? "original operator role changed" : phase);
-      if (phase === "revoked after admission" || phase === "user abort") {
+          : new Error(phase);
+      if (phase === "user abort") {
         turn = createTurn([], { kind: "aborted", code: "aborted_by_user" });
       }
       const deliver = attachSource(turn);
-      if (phase === "revoked without target") {
-        turn.queued.run.sessionKey = undefined;
-        turn.queued.run.sessionId = "";
-      }
-      if (revoked || unrecorded) {
+      if (unrecorded) {
         const authority = {
+          canonicalIdentity: null,
           profileId: "guest",
           scopes: ["operator.write"],
-          assertCurrent: () => {
-            throw failure;
-          },
+          grant: decideTurnGrant(["operator.write"]),
         };
-        turn.queued.operatorAuthority = unrecorded
-          ? { ...authority, signal: new AbortController().signal }
-          : createAdmittedRunOperatorAuthority(authority);
+        turn.queued.operatorAuthority = { ...authority, signal: new AbortController().signal };
       }
       const refuse = async () => {
-        turn.queued.operatorAuthority?.assertCurrent();
         throw failure;
       };
       if (!admitted) {
@@ -520,14 +529,6 @@ describe("createFollowupRunner", () => {
         return;
       }
       await expect(createRunner()(turn.queued)).resolves.toBeUndefined();
-      if (phase === "revoked without target") {
-        expect(state.recordFailure).not.toHaveBeenCalled();
-        expect(defaultRuntime.error).toHaveBeenCalledWith(
-          expect.stringContaining(
-            '"recorded":"none","nonOutcomes":["history: no cron receipt handle","session-notice: no session target"]',
-          ),
-        );
-      }
       expect(state.execute).toHaveBeenCalledTimes(admitted ? 1 : 0);
       expect(turn.operation.fail.mock.calls).toEqual(
         admitted && phase !== "user abort" ? [["run_failed", failure]] : [],
@@ -540,13 +541,57 @@ describe("createFollowupRunner", () => {
               : {
                   kind: "failed",
                   error: failure.message,
-                  ...(revoked ? { notice: `withheld: ${failure.message}` } : {}),
                 },
           payloads: [],
         }),
       );
       expect(state.completeLifecycle).toHaveBeenCalledWith(turn.queued);
-      expectTypingComplete();
+    },
+  );
+
+  it.each([
+    { sendPolicy: "allow", silent: false, send: true },
+    { sendPolicy: "deny", silent: false, send: false },
+    { sendPolicy: "allow", silent: true, send: false },
+  ] as const)(
+    "records a queued refusal and respects channel delivery (policy $sendPolicy, silent $silent)",
+    async ({ sendPolicy, silent, send }) => {
+      if (silent) {
+        turn.queued.run.sessionEventOrigin = { deliver: false };
+      }
+      const refusal = new OperatorRefusalError("role-denies", {
+        action: "run your queued request",
+      });
+      // The send policy that counts is the current one, not the config captured at enqueue.
+      Object.assign(turn.queued, {
+        originatingChannel: "telegram",
+        originatingTo: "telegram:1234",
+        originatingAccountId: "default",
+        readAdmissionConfig: () => ({ session: { sendPolicy: { default: sendPolicy } } }),
+      });
+      state.admit.mockRejectedValueOnce(refusal);
+      state.route.mockResolvedValue({ ok: true, delivered: true });
+      await createRunner({ sessionKey: "main" })(turn.queued);
+      expect(state.execute).not.toHaveBeenCalled();
+      expect(state.recordFailure).toHaveBeenCalledWith(
+        expect.objectContaining({ notice: refusal.message }),
+      );
+      expect(state.route.mock.calls).toEqual(
+        send
+          ? [
+              [
+                expect.objectContaining({
+                  payload: { text: refusal.message, isError: true },
+                  channel: "telegram",
+                  to: "telegram:1234",
+                  accountId: "default",
+                  mirror: false,
+                }),
+              ],
+            ]
+          : [],
+      );
+      expect(state.completeLifecycle).toHaveBeenCalledWith(turn.queued);
     },
   );
 

@@ -4,6 +4,7 @@ import {
   GATEWAY_CLIENT_MODES,
   GATEWAY_CLIENT_NAMES,
 } from "../../packages/gateway-protocol/src/client-info.js";
+import { tryResolveLegacyCompatibilityAgentId } from "../agents/agent-scope-config.js";
 import {
   resolveAgentIdByWorkspacePath,
   resolveAgentWorkspaceDir,
@@ -22,6 +23,7 @@ const GATEWAY_SKILLS_MUTATION_TIMEOUT_MS = 30_000;
 type ResolveSkillsWorkspaceOptions = {
   agentId?: string;
   bestEffort?: boolean;
+  useSystemAgent?: boolean;
 };
 
 export type ResolvedSkillsWorkspace = Awaited<ReturnType<typeof resolveSkillsWorkspace>>;
@@ -57,7 +59,7 @@ export function normalizeExplicitAgentId(agentId?: string): string | undefined {
 export async function resolveSkillsWorkspace(options?: ResolveSkillsWorkspaceOptions) {
   // Prefer explicit --agent, then infer from cwd, then fall back to configured default agent.
   const config = options?.bestEffort
-    ? await readBestEffortConfig({ observe: false, skipPluginValidation: true })
+    ? await readBestEffortConfig({ observe: false, pluginValidation: "core-only" })
     : await captureRuntimeConfigAsyncReader()();
   const explicitAgentId = normalizeExplicitAgentId(options?.agentId);
   const inferredAgentId = explicitAgentId
@@ -66,6 +68,9 @@ export async function resolveSkillsWorkspace(options?: ResolveSkillsWorkspaceOpt
   const agentId = explicitAgentId
     ? resolveConfiguredAgentId(config, explicitAgentId)
     : (inferredAgentId ??
+      (options?.useSystemAgent && config.agents?.ownership === "explicit"
+        ? tryResolveLegacyCompatibilityAgentId(config)
+        : undefined) ??
       resolveDefaultAgentId(config, { surface: "the skills command", hint: "Pass --agent <id>." }));
   return {
     config,

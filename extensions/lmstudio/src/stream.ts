@@ -193,7 +193,7 @@ export function wrapLmstudioInferencePreload(ctx: ProviderWrapStreamFnContext): 
               return created;
             })());
 
-      let preparedModel: LmstudioPreparedModel | undefined;
+      let preparedModel: Pick<LmstudioPreparedModel, "modelKey" | "instanceId"> | undefined;
       let failure = cooldownEntry;
       if (preloadPromise) {
         try {

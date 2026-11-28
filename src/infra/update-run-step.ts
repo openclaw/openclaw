@@ -160,10 +160,10 @@ export function updateRunStepsFromResultStep(step: ResultStep): UpdateRunStep[] 
 }
 
 /** Project current warnings and late diagnostics without reopening or regrading history. */
-export function projectUpdateRunResultSteps(
-  record: UpdateRunRecord,
+export function projectUpdateRunResultSteps<T extends Pick<UpdateRunRecord, "steps">>(
+  record: T,
   additionalSteps: readonly UpdateStepResult[],
-): UpdateRunRecord {
+): T {
   if (additionalSteps.length === 0) {
     return record;
   }
@@ -187,11 +187,17 @@ export function projectUpdateRunResultSteps(
 }
 
 export function updateRunWarningMessages(steps: readonly UpdateRunStep[]): string[] {
+  // Earlier updates stored a completed retirement as a warning as well as a
+  // normal completion receipt. Treat the durable receipt as settled on read.
+  const modelRetirementCompleted = steps.some(
+    (step) => step.step === "finalize:doctor:model-retirement" && step.status === "completed",
+  );
   return [
     ...new Set(
       steps.flatMap((step) =>
         (step.step === "reconcile:settle" ||
           (step.status === "completed" && step.step.startsWith("warning:"))) &&
+        !(modelRetirementCompleted && step.step === "warning:finalize:doctor:model-retirement") &&
         step.detail
           ? [step.detail]
           : [],

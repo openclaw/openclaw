@@ -33,6 +33,7 @@ import { ensureProfileForEmail } from "../../state/user-profiles.js";
 import { useUserProfileCatalogForTest } from "../../test-utils/user-profile-catalog.js";
 import { refusePendingInputCommit } from "../pending-input-commit.test-support.js";
 import { handleGatewayRequest } from "../server-methods.js";
+import * as storeLookup from "../session-utils-store-lookup.js";
 import { dispatchInboundMessageMock, installGatewayTestHooks } from "../test-helpers.js";
 import { createWorkerSessionPlacementStore } from "../worker-environments/placement-store.js";
 import { registerChatCollectedInputReplayCases } from "./chat-send-collected-input-replay.test-support.js";
@@ -330,6 +331,65 @@ describe("ordinary chat input admission", () => {
     },
   );
 
+  it("stamps a typed message with the model the session inherits from its parent", async () => {
+    await using fixture = await createBrowserFollowupFixture({
+      sessionKey: "agent:main:dashboard:inherit-child",
+    });
+    const parentKey = "agent:main:dashboard:inherit-parent";
+    replaceSessionEntrySync(
+      { ...fixture.scope, sessionKey: parentKey },
+      {
+        sessionId: "inherit-parent",
+        updatedAt: Date.now(),
+        providerOverride: "openai",
+        modelOverride: "parent-pick",
+        modelOverrideSource: "user",
+        modelOverrideRouteResolution: "resolved",
+      },
+    );
+    // No selection of its own: the session's turns run on the parent's pick.
+    await patchSessionEntryCore(fixture.scope, () => ({ parentSessionKey: parentKey }));
+    fixture.params.queueMode = "followup";
+
+    expectStarted(await fixture.send());
+    const recorder = await fixture.dispatchedRecorder;
+    const committed = await recorder.persistApproved();
+
+    const inherited = { provider: "openai", model: "parent-pick" };
+    expect(committed?.message["__openclaw"]).toMatchObject({ modelSelection: inherited });
+    expect(loadSessionEntry(fixture.scope)?.lastSubmittedModel).toEqual(inherited);
+    expect(loadSessionEntry(fixture.scope)).not.toHaveProperty("modelOverride");
+  });
+
+  it("stops a session without reading the parent it inherits its model from", async () => {
+    await using fixture = await createBrowserFollowupFixture({
+      sessionKey: "agent:main:dashboard:inherit-child",
+    });
+    await patchSessionEntryCore(fixture.scope, () => ({
+      parentSessionKey: "agent:main:dashboard:inherit-parent",
+    }));
+    const lookup = storeLookup.resolveGatewaySessionStoreTargetWithStoreAsync;
+    using _ = vi
+      .spyOn(storeLookup, "resolveGatewaySessionStoreTargetWithStoreAsync")
+      .mockImplementation(async (params) => {
+        if (params.key.includes("inherit-parent")) {
+          throw new Error("parent session database unavailable");
+        }
+        return await lookup(params);
+      });
+
+    const respond = await fixture.send(vi.fn(), undefined, {
+      ...fixture.params,
+      message: "/stop",
+      idempotencyKey: "stop-inheriting-child",
+    });
+
+    expect(respond.mock.calls[0]?.slice(0, 2)).toEqual([
+      true,
+      expect.objectContaining({ aborted: true }),
+    ]);
+  });
+
   it.each([{ acp: false }, { acp: true }, { acp: true, restart: true }])(
     "keeps idle input custody with its runtime (%j)",
     async ({ acp, restart }) => {
@@ -484,39 +544,22 @@ describe("ordinary chat input admission", () => {
     }
   });
 
-  it.each(["cancellation", "lifecycle rotation", "session replacement", "session access"] as const)(
+  it.each(["cancellation", "lifecycle rotation", "session replacement"] as const)(
     "revalidates %s after message approval before committing custody",
     async (change) => {
       await using fixture = await createBrowserFollowupFixture();
       const baseline = { provider: "openai", model: "previous-model" };
       await patchSessionEntryCore(fixture.scope, () => ({ lastSubmittedModel: baseline }));
-      if (change === "session access") {
-        setClientProfile(
-          fixture.client,
-          ensureProfileForEmail("pending-input-caller@example.test"),
-        );
-        fixture.client.connect.scopes = ["operator.read", "operator.write"];
-        await patchSessionEntryCore(fixture.scope, () => ({
-          createdActor: { type: "human", source: "profile", id: "another-profile" },
-          visibility: "shared",
-        }));
-      }
       fixture.beforeApprove.mockImplementation(() => {
         if (change === "lifecycle rotation") {
           rotateAgentEventLifecycleGeneration();
           return;
         }
-        if (change === "session replacement" || change === "session access") {
-          const current = loadSessionEntry(fixture.scope);
-          if (!current) {
-            throw new Error("Expected the session to exist before input approval");
-          }
-          replaceSessionEntrySync(
-            fixture.scope,
-            change === "session replacement"
-              ? { sessionId: "successor-session", updatedAt: Date.now() }
-              : { ...current, visibility: "draft" },
-          );
+        if (change === "session replacement") {
+          replaceSessionEntrySync(fixture.scope, {
+            sessionId: "successor-session",
+            updatedAt: Date.now(),
+          });
           return;
         }
         const active = rpcSourceTesting.get(fixture.params.idempotencyKey);
@@ -536,7 +579,7 @@ describe("ordinary chat input admission", () => {
         active.adapter.abortStopReason = "rpc";
         requestRpcSourceCancellation(active);
       });
-      const respond = await fixture.send(undefined, change === "session access" ? {} : undefined);
+      const respond = await fixture.send();
       expect(fixture.beforeApprove).toHaveBeenCalledOnce();
       expectNotStarted(respond);
       expect(dispatchInboundMessageMock).not.toHaveBeenCalled();

@@ -20,7 +20,11 @@ import { createDeferredCore } from "../../shared/deferred.js";
 import { resolveCommandAuthorizationAsync } from "../command-auth.js";
 import { isNativeCommandTurn } from "../command-turn-context.js";
 import { waitForReplyDispatcherSettlement } from "../dispatch-dispatcher.js";
-import { markCommandReplyForDelivery, type ReplyPayload } from "../reply-payload.js";
+import {
+  markCommandReplyForDelivery,
+  setReplyPayloadMetadata,
+  type ReplyPayload,
+} from "../reply-payload.js";
 import {
   DispatchReplyOperationAbortedError,
   runWithDispatchAbortSignal,
@@ -70,11 +74,7 @@ export async function prepareDispatchOperation(state: PrepareDispatchOperationCo
   const input = readReplySourceInput(params.replyOptions);
   const assertRequestCurrent = () => {
     params.replyOptions?.assertChannelAuthority?.();
-    const sourceAuthority = input?.sourceAdapter?.authority;
-    sourceAuthority?.assertCurrent();
-    if (params.replyOptions?.operatorAuthority !== sourceAuthority) {
-      params.replyOptions?.operatorAuthority?.assertCurrent();
-    }
+    input?.sourceAdapter?.authority?.assertCurrent?.();
     params.replyOptions?.internalEventExecution?.assertCurrent?.();
     if (isPreDispatchOperationAborted() || input?.retirementRequested) {
       throw new DispatchReplyOperationAbortedError();
@@ -143,17 +143,23 @@ export async function prepareDispatchOperation(state: PrepareDispatchOperationCo
     let queuedFinal = false;
     let routedFinalCount = 0;
     if (!suppressDelivery && fast.payload) {
+      const contextFreeCommand = fast.logKind === "fast_approve";
+      if (contextFreeCommand) {
+        setReplyPayloadMetadata(fast.payload, { commandReply: true, contextFreeCommand: true });
+      }
       const selectedModel = resolveSessionModelRef(cfg, sessionStoreEntry.entry, sessionAgentId);
-      const modelSelection = {
+      const modelSelection = selectedModel && {
         ...selectedModel,
         thinkLevel: sessionStoreEntry.entry?.thinkingLevel,
       };
       const responsePrefixContext = {
         identityName: normalizeOptionalString(resolveAgentIdentity(cfg, sessionAgentId)?.name),
-        ...resolveModelResponsePrefixContext({
-          ...selectedModel,
-          thinkLevel: modelSelection.thinkLevel ?? "off",
-        }),
+        // A model-less session has no model facts for the prefix.
+        ...(modelSelection &&
+          resolveModelResponsePrefixContext({
+            ...modelSelection,
+            thinkLevel: modelSelection.thinkLevel ?? "off",
+          })),
       };
       const commandId = scopeCommandTranscriptId(
         normalizeOptionalString(state.messageIdForHook),
@@ -167,6 +173,7 @@ export async function prepareDispatchOperation(state: PrepareDispatchOperationCo
               expectedSessionId: sessionStoreEntry.entry?.sessionId,
               commandText: ctx.commandText,
               commandId,
+              ...(contextFreeCommand ? { contextFreeCommand: true as const } : {}),
               text: fast.payload.text,
               preferText: true,
               idempotencyKey: `${fast.logKind}:${commandId}`,
@@ -191,7 +198,9 @@ export async function prepareDispatchOperation(state: PrepareDispatchOperationCo
         }
       } else {
         state.markInboundDedupeReplayUnsafe();
-        params.replyOptions?.onModelSelected?.(modelSelection);
+        if (modelSelection) {
+          params.replyOptions?.onModelSelected?.(modelSelection);
+        }
         const sent = sendReplyWithTranscriptMirror({
           dispatcher,
           cfg,

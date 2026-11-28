@@ -346,10 +346,6 @@ function captureOwnedHttpExchange(
   const method = params.method;
   const transport = params.transport;
   const responseStatus = params.response.status;
-  const requestBody =
-    typeof params.requestBody === "string" || Buffer.isBuffer(params.requestBody)
-      ? params.requestBody
-      : null;
   const rawRequestContentType = params.requestHeaders
     ? isHeadersLike(params.requestHeaders)
       ? (params.requestHeaders.get("content-type") ?? undefined)
@@ -368,6 +364,13 @@ function captureOwnedHttpExchange(
   let meta: unknown;
   let requestWrite: void | Promise<void>;
   try {
+    const body = params.requestBody;
+    const requestBody =
+      typeof body === "string" || Buffer.isBuffer(body)
+        ? body
+        : body instanceof Uint8Array
+          ? Buffer.from(body.buffer, body.byteOffset, body.byteLength)
+          : null;
     responseHeadersJson =
       params.response.headers && typeof params.response.headers.entries === "function"
         ? runtime.safeJsonString(redactedCaptureHeaders(params.response.headers))

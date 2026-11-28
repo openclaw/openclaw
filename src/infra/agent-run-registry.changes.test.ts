@@ -21,17 +21,27 @@ it("publishes affected session identities for registration, moves, models, and r
   runs.registerAgentRunContext("moving", before);
   expectChanges({ ...before, scope: "runtime" });
   runs.registerAgentRunContext("moving", { ...before, sessionId: "admitted-session" });
-  expectChanges({ ...before, scope: "runtime" });
+  const admitted = {
+    ...before,
+    scope: "runtime" as const,
+    runtimeSession: { sessionId: "admitted-session", agentId: before.agentId },
+  };
+  expectChanges(admitted);
   runs.registerAgentRunContext("moving", after);
-  expectChanges({ ...before, scope: "runtime" }, { ...after, scope: "runtime" });
+  const moved = {
+    ...after,
+    scope: "runtime" as const,
+    runtimeSession: { sessionId: "admitted-session", agentId: after.agentId },
+  };
+  expectChanges(admitted, moved);
   runs.recordAgentRunModel("moving", { provider: "openai", model: "test-model" });
-  expectChanges({ ...after, scope: "runtime" });
+  expectChanges(moved);
   runs.recordAgentRunModel("moving", { provider: "openai", model: "test-model" });
   expectChanges();
   const claim = runs.claimAgentRunContext("moving", after, { trackOwner: true, ownsContext: true });
   changed.mockClear();
   runs.releaseAgentRunContext("moving", claim);
-  expectChanges({ ...after, scope: "runtime" });
+  expectChanges(moved);
   runs.clearAgentRunContext("missing");
   expectChanges();
 });

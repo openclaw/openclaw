@@ -22,10 +22,7 @@ export function createWorkboardCardMutations(
     const record = asRecord(rawParams);
     const id = readStringParam(record, "id", { required: true });
     const token = readStringValue(record.token);
-    const card = await store.get(id);
-    if (!card) {
-      throw new Error(`card not found: ${id}`);
-    }
+    const card = await store.requireCardByIdOrPrefix(id);
     const claim = card.metadata?.claim;
     if (claim && claim.ownerId !== ownerId && !safeEqualSecret(token, claim.token)) {
       throw new Error(`card is claimed by ${claim.ownerId ?? "another agent"}.`);
@@ -33,7 +30,7 @@ export function createWorkboardCardMutations(
     if (requireClaim && !claim) {
       throw new Error("card must be claimed before lifecycle completion.");
     }
-    return { record, id, scope: { ownerId, token, runId } };
+    return { record, id: card.id, scope: { ownerId, token, runId } };
   };
   const cardMutation =
     (mutate: WorkboardCardMutation, requireClaim = false) =>
@@ -50,7 +47,7 @@ export function createWorkboardCardMutations(
 }
 
 export function cardIdField() {
-  return Type.String({ description: "Workboard card id." });
+  return Type.String({ description: "Workboard card ID or unique prefix." });
 }
 
 export function claimTokenField(description = "Claim token returned by workboard_claim.") {

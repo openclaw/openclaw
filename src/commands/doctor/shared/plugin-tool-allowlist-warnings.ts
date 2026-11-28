@@ -298,8 +298,8 @@ function nonSandboxToolPoliciesBlockMcp(params: {
   ].map((byProvider) =>
     resolveProviderToolPolicy({
       byProvider,
-      modelProvider: modelRef.provider,
-      modelId: modelRef.model,
+      modelProvider: modelRef?.provider,
+      modelId: modelRef?.model,
     }),
   );
   const profilePolicy = {

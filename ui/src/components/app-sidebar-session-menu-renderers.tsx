@@ -5,9 +5,11 @@ import { isMobileNavLayout } from "../app/mobile-nav-layout.ts";
 import { registerSessionMenuEnglish } from "../i18n/locales/en-session-menu.ts";
 import { handleNavigationClick } from "../lib/navigation-click.ts";
 import { t } from "../lib/reactive/i18n.ts";
+import { listen } from "../lib/reactive/listener.ts";
 import { readSessionMethodAccess } from "../lib/session-method-access.ts";
 import type { CatalogProjectGrouping } from "../lib/sessions/catalog-project-grouping.ts";
 import type { SidebarSessionsGrouping } from "../lib/sessions/grouping.ts";
+import { showToast } from "../lib/toast.ts";
 import { SETTINGS_ROUTE_TARGETS } from "../pages/config/route-data.ts";
 import { SidebarDropdown } from "./app-sidebar-dropdown.tsx";
 import { countSidebarSessionFilters } from "./app-sidebar-session-filter-summary.tsx";
@@ -15,8 +17,8 @@ import {
   DEFAULT_SIDEBAR_SESSION_SORT_MODE,
   SIDEBAR_SESSION_SORT_OPTIONS,
   SIDEBAR_SESSION_STATUS_OPTIONS,
+  setStoredSessionCatalogHidden,
 } from "./app-sidebar-session-types.ts";
-import { createPersonalSessionGroupActions } from "./personal-session-group-actions.ts";
 import type { PickerFocusHandle } from "./select-picker-types.ts";
 import {
   archiveSessionGroupFromMenu,
@@ -187,6 +189,40 @@ export function renderSidebarSessionGroupMenuForMenus(
   );
 }
 
+function hidePersonalSidebarCatalog(host: SidebarMenusOwner, catalogId: string): void {
+  const label =
+    host.sessionData.sessionCatalogs.find((catalog) => catalog.id === catalogId)?.label ??
+    catalogId;
+  setStoredSessionCatalogHidden(catalogId, true);
+  // Reuse the settings-search destination for the Sidebar preferences block so the
+  // toast opens the same place the rest of the app calls "Appearance > Sidebar".
+  const recovery = SETTINGS_ROUTE_TARGETS.appearanceSidebar;
+  const recoveryHref =
+    pathForRoute(recovery.routeId, host.basePath) + recovery.search + recovery.hash;
+  // The section disappears instantly and its only standing recovery lives on another
+  // page, so the outcome is announced where the action happened: undo here, plus a
+  // link that opens the re-enable block for after the toast is gone. Longer than the
+  // 6s default because that text is a recovery instruction, not an acknowledgement.
+  const message = host.ownerDocument.createDocumentFragment();
+  const recoveryLink = host.ownerDocument.createElement("a");
+  recoveryLink.className = "session-link";
+  recoveryLink.href = recoveryHref;
+  recoveryLink.textContent = t("chat.sidebar.sectionHiddenRecovery");
+  listen(recoveryLink, "click", (event) =>
+    handleNavigationClick(event, () =>
+      host.onNavigate?.(recovery.routeId, { search: recovery.search, hash: recovery.hash }),
+    ),
+  );
+  message.append(t("chat.sidebar.sectionHidden", { section: label }), " ", recoveryLink);
+  showToast({
+    severity: "success",
+    message,
+    actionLabel: t("common.undo"),
+    onAction: () => setStoredSessionCatalogHidden(catalogId, false),
+    durationMs: 12_000,
+  });
+}
+
 export function renderSidebarCatalogViewMenuForMenus(
   menus: SidebarMenus,
   host: SidebarMenusOwner,
@@ -274,7 +310,7 @@ export function renderSidebarCatalogViewMenuForMenus(
         } else if (value === "involving-me") {
           setOwnerFilter(null, true);
         } else if (value === "hide-catalog" && menus.catalogViewMenuPosition === position) {
-          host.hideSessionCatalog(position.catalogId);
+          hidePersonalSidebarCatalog(host, position.catalogId);
           menus.closePositionedMenu("catalogView");
         }
       }}
@@ -495,24 +531,6 @@ export function renderSidebarSessionSortMenuForMenus(
             )}
           </section>
           <footer class="sidebar-session-menu-footer">
-            <button
-              ref={(element) => controls.set("new-collection", element)}
-              type="button"
-              class="sidebar-session-filter-footer"
-              disabled={!host.connected}
-              onClick={() => {
-                const context = host.sessionDataContext;
-                if (context && host.connected) {
-                  menus.closePositionedMenu("sessionSort");
-                  void createPersonalSessionGroupActions(context).edit();
-                }
-              }}
-            >
-              <span aria-hidden="true">
-                <Icon name="plus" />
-              </span>
-              {t("sessionsView.personalGroupNew")}
-            </button>
             <a
               ref={(element) => controls.set("all-sessions", element)}
               class="sidebar-session-filter-footer"

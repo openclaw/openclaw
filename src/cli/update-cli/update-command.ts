@@ -17,6 +17,7 @@ import type { createUpdateProgress } from "./progress.js";
 import { confirmUpdateDowngrade, type UpdateCommandOptions } from "./shared.js";
 import {
   reportPreMutationUpdateResult,
+  tryRunReleaseUpdateCommand,
   withUpdateAdmissionReporting,
 } from "./update-command-admission-report.js";
 import { runAdmittedUpdate } from "./update-command-admitted.js";
@@ -96,7 +97,6 @@ async function updateCommandWithRuntime(
       ),
     );
   }
-  const reportHints: NonNullable<Parameters<typeof withUpdateAdmissionReporting>[3]> = {};
   return await withUpdateAdmissionReporting(
     inputOpts,
     async () => {
@@ -114,8 +114,9 @@ async function updateCommandWithRuntime(
       return await withUpdateDatabaseEngine(
         env,
         async (configReadable, malformedConfig) => {
-          // Late admission refusals retain the captured malformed-source report decision.
-          reportHints.writeArtifacts = !malformedConfig;
+          if (await tryRunReleaseUpdateCommand(inputOpts, prepared, env)) {
+            return;
+          }
           if (inputOpts.dryRun && resolveDebugProxySettings(env).enabled) {
             defaultRuntime.error("Warning: Debug HTTP capture is disabled during update dry runs.");
           }
@@ -177,7 +178,6 @@ async function updateCommandWithRuntime(
       );
     },
     "unknown",
-    reportHints,
   );
 }
 

@@ -24,7 +24,10 @@ import {
   resolveDirectBundledProviderPolicySurface,
   type BundledProviderPolicySurface,
 } from "./provider-policy-surface.js";
-import { resolveProviderPolicySurface } from "./provider-public-artifacts.js";
+import {
+  prepareTrustedExternalProviderPolicySurfaces,
+  resolveProviderPolicySurface,
+} from "./provider-public-artifacts.js";
 
 type ProviderModelRouteObservation = {
   modelId?: string;
@@ -37,6 +40,21 @@ type ProviderModelRoutesResolver = (
   observed?: ProviderModelRouteObservation,
 ) => ProviderModelRouteResolution | null;
 
+function currentProviderModelPolicyMetadata() {
+  return getCurrentPluginMetadataSnapshotRequiredRuntime({
+    allowScopedSnapshot: true,
+    allowWorkspaceScopedSnapshot: true,
+  });
+}
+
+/** Doctor's source custody needs installed owners prepared before synchronous identity reads. */
+export async function prepareProviderModelPolicySurfaces(): Promise<void> {
+  const metadata = currentProviderModelPolicyMetadata();
+  if (metadata) {
+    await prepareTrustedExternalProviderPolicySurfaces(metadata);
+  }
+}
+
 /** Resolves policy through the bundled or selected trusted installed owner. */
 export function resolveProviderModelPolicySurface(
   providerId: string,
@@ -47,12 +65,7 @@ export function resolveProviderModelPolicySurface(
   if (bundled) {
     return bundled;
   }
-  const metadata =
-    metadataSnapshot ??
-    getCurrentPluginMetadataSnapshotRequiredRuntime({
-      allowScopedSnapshot: true,
-      allowWorkspaceScopedSnapshot: true,
-    });
+  const metadata = metadataSnapshot ?? currentProviderModelPolicyMetadata();
   return metadata
     ? resolveProviderPolicySurface(provider, {
         manifestRegistry: metadata,

@@ -12,15 +12,14 @@ import { createGatewayDispatchStartupTrace } from "../cli/startup-trace.js";
 import { writeOpenClawConfig } from "../config/test-helpers.js";
 import { withAgentDatabaseStartupAdmission } from "../state/agent-database-startup.js";
 import { OPENCLAW_AGENT_SCHEMA_VERSION } from "../state/openclaw-agent-db-contract.js";
+import { OPENCLAW_AGENT_SCHEMA_V24_SQL } from "../state/openclaw-agent-schema-v24.test-support.js";
 import { openOpenClawStateDatabase } from "../state/openclaw-state-db.js";
 import { cleanupSessionStateForTest } from "../test-utils/session-state-cleanup.js";
 import { withDoctorConfigPreflightHome } from "./doctor-config-preflight.test-support.js";
 import * as schemaMigrations from "./doctor-schema-migrations.js";
 
-// The copy-and-swap upgrade at Gateway start brings these databases current before the
-// activation repair can see them. This file covers the repair path that remains for starts the
-// upgrade skips (for example a database under a symlinked directory), so the upgrade is off here.
-// mock-isolation: the startup upgrade must not run so the in-place activation repair stays reachable.
+// Startup migration normally brings these databases current before activation repair.
+// mock-isolation: Keep Doctor's offline activation repair reachable without startup migrations.
 vi.mock("../state/state-upgrade-startup.js", () => ({
   upgradeStateOnGatewayStart: vi.fn(async () => {}),
 }));
@@ -52,12 +51,7 @@ async function fixture(run: (pathname: string, home: string) => Promise<void>) {
     await fs.mkdir(path.dirname(pathname), { recursive: true });
     {
       using db = new DatabaseSync(pathname);
-      db.exec(
-        await fs.readFile(
-          new URL("../../test/fixtures/sqlite/openclaw-agent-schema-v24.sql", import.meta.url),
-          "utf8",
-        ),
-      );
+      db.exec(OPENCLAW_AGENT_SCHEMA_V24_SQL);
       db.exec(`PRAGMA user_version=24;
         INSERT INTO schema_meta (meta_key, role, schema_version, agent_id, created_at, updated_at)
         VALUES ('primary', 'agent', 24, 'openclaw', 1, 1);

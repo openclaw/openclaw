@@ -113,48 +113,6 @@ describe("managed plugin catalog", () => {
     mockHostedOfficialCatalog(mocks.officialCatalog, []);
   });
 
-  it.each([true, false])(
-    "reports native web UI from the selected installed manifest (%s)",
-    async (native) => {
-      const snapshot = metadataSnapshot({ enabled: false });
-      snapshot.plugins[0]!.uiCapabilities = ["page"];
-      if (native) {
-        snapshot.plugins[0]!.controlUi = { entry: "dist/browser/index.js" };
-      }
-      mocks.metadata.mockReturnValue(snapshot);
-      const result = await listLocalPlugins();
-      expect(result.plugins[0]).toMatchObject({ id: "workboard", hasNativeUi: native });
-    },
-  );
-
-  it("projects the bundled sidebar hint and external install time", async () => {
-    const bundled = metadataSnapshot({ enabled: true });
-    bundled.plugins[0]!.catalog = { sidebar: true };
-    mocks.metadata.mockReturnValue(bundled);
-    expect((await listLocalPlugins()).plugins[0]).toMatchObject({ id: "workboard", sidebar: true });
-    expect((await listLocalPlugins()).plugins[0]).not.toHaveProperty("installedAt");
-
-    clearManagedPluginCatalogCache();
-    mocks.metadata.mockReturnValue(
-      metadataSnapshot({
-        enabled: true,
-        id: "calendar",
-        origin: "global",
-        installRecord: {
-          source: "path",
-          installPath: "/tmp/calendar",
-          installedAt: "2026-11-17T10:00:00.000Z",
-        },
-      }),
-    );
-    const [external] = (await listLocalPlugins()).plugins;
-    expect(external).toMatchObject({
-      id: "calendar",
-      installedAt: Date.parse("2026-11-17T10:00:00.000Z"),
-    });
-    expect(external).not.toHaveProperty("sidebar");
-  });
-
   describe("authored credential validation", () => {
     const secretRef = { source: "store", provider: "default", id: "TEST_PLUGIN_KEY" };
     const configured = (config?: Record<string, unknown>, enabled = true): OpenClawConfig => ({
@@ -321,36 +279,6 @@ describe("managed plugin catalog", () => {
         expectedRegistry ? [{ kind: "clawhub", baseUrl: expectedRegistry, packageName }] : [],
       );
       expect(local.plugins[0]?.hasIcon).toBe(expectedRegistry ? true : undefined);
-    },
-  );
-
-  it.each([
-    { enabled: true, contracts: { videoGenerationProviders: ["video"] }, expected: ["media"] },
-    { enabled: true, contracts: { imageGenerationProviders: ["image"] }, expected: ["media"] },
-    { enabled: true, contracts: { musicGenerationProviders: ["music"] }, expected: ["media"] },
-    { enabled: false, contracts: { videoGenerationProviders: ["video"] }, expected: undefined },
-    { enabled: true, contracts: { speechProviders: ["speech"] }, expected: undefined },
-  ])(
-    "derives Media discovery only for enabled generation plugins (%j)",
-    async ({ enabled, contracts, expected }) => {
-      mockMetadata({
-        enabled,
-        id: "model-provider",
-        categories: ["models"],
-        contracts,
-      });
-      const catalog = await listLocalPlugins({
-        plugins: { entries: { "model-provider": { enabled } } },
-      });
-      const plugin = expectDefined(catalog.plugins[0], "managed model provider");
-      expect(plugin.categories).toEqual(["models"]);
-      expect(plugin.enabled).toBe(enabled);
-      if (expected) {
-        expect(plugin).toHaveProperty("capabilityCategories", expected);
-      } else {
-        expect(plugin).not.toHaveProperty("capabilityCategories");
-      }
-      expect(mocks.pluginVersionCategories).not.toHaveBeenCalled();
     },
   );
 

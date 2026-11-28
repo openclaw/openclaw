@@ -73,12 +73,13 @@ function publicationFor(scope: Awaited<ReturnType<typeof creditSession>>, host: 
       session_key: scope.sessionKey,
       branch: "work",
       title: "Prepared change",
+      body: null,
     },
     storePath: resolveSessionStorePathForScope(scope, {}),
     accountId: 999,
     assertCurrent: () => {},
     readCurrentEntry: () => loadSessionEntryReadOnly(scope),
-    description: "Synthetic publication",
+    defaultDescription: "Synthetic publication",
   });
 }
 

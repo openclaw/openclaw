@@ -34,13 +34,13 @@ private actor OlderHistoryGate {
     }
 }
 
-private func historyRow(_ text: String, id: String? = nil, seq: Int) -> AnyCodable {
+private func historyRow(_ text: String, id: String? = nil, seq: Int, timestamp: Double? = nil) -> AnyCodable {
     var metadata: [String: Any] = ["seq": seq]
     if let id { metadata["id"] = id }
     return AnyCodable([
         "role": "assistant",
         "content": [["type": "text", "text": text]],
-        "timestamp": Double(seq * 1000),
+        "timestamp": timestamp ?? Double(seq * 1000),
         "__openclaw": metadata,
     ])
 }
@@ -114,6 +114,24 @@ struct ChatViewModelOlderHistoryTests {
         #expect(model.historyOlderCursor == nil)
         #expect(await !(model.loadOlderHistory()))
         #expect(await log.cursors == ["page-1"])
+    }
+
+    @Test @MainActor
+    func `older page keeps equal rows with distinct sequences and skips the loaded overlap`() async {
+        let overlap = historyRow("echo", seq: 3, timestamp: 1000)
+        let (_, model) = self.fixture(
+            newest: [historyPage([overlap], olderCursor: "page-1")],
+            older: ["page-1": historyPage([
+                historyRow("echo", seq: 1, timestamp: 1000),
+                historyRow("echo", seq: 2, timestamp: 1000),
+                overlap,
+            ])])
+        defer { model.detachTransport() }
+        #expect(await model.refreshHistoryAfterRun().applied)
+
+        #expect(await model.loadOlderHistory())
+
+        #expect(model.messages.map { $0.sourceMetadata?.seq } == [1, 2, 3])
     }
 
     @Test @MainActor

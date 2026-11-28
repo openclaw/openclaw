@@ -1,6 +1,5 @@
 import { expectDefined } from "@openclaw/normalization-core";
 /* @vitest-environment jsdom */
-import { createComponent } from "solid-js";
 import { afterEach, beforeEach, expect, it, vi } from "vitest";
 import type {
   ThemesGetResult,
@@ -17,9 +16,6 @@ import {
   createThemeDefinitionFixture,
   createThemePaletteFixture,
 } from "../../../test/helpers/theme-fixture.js";
-import { AgentIdentityAvatar } from "../components/solid/identity-avatar.tsx";
-import { mountSolid } from "../test-helpers/mount-solid.ts";
-import { flush } from "../test-helpers/solid-settle.ts";
 import { createApplicationTheme } from "./bootstrap-theme.ts";
 import { initializeControlUiDocumentHead } from "./control-ui-document-head.ts";
 import {
@@ -141,78 +137,6 @@ it.each([
     }
   },
 );
-
-it("publishes the catalog without reapplying a built-in palette", async () => {
-  patchSettings({ theme: "claw", themeMode: "light" });
-  const { gateway, current } = createGatewayStoreTestStore();
-  const theme = createApplicationTheme(loadSettings(), gateway);
-  const palette = theme.appliedPalette;
-  const styleWrites = vi.spyOn(document.documentElement.style, "setProperty");
-  gateway.start();
-  current().request.mockImplementation(async (method) =>
-    method === "themes.get" ? catalog() : builtinCatalog(),
-  );
-  current().testOptions.onHello?.(GATEWAY_STORE_TEST_HELLO);
-  try {
-    await vi.waitFor(() =>
-      expect(theme.catalog?.palettes?.get(descriptor.id)?.dark.bg).toBe("#111122"),
-    );
-    expect(theme.appliedPalette).toBe(palette);
-    expect(styleWrites).not.toHaveBeenCalled();
-    current().testOptions.onEvent?.(createGatewayEvent("plugins.changed"));
-    await vi.waitFor(() =>
-      expect(
-        current().request.mock.calls.filter(([method]) => method === "themes.list"),
-      ).toHaveLength(2),
-    );
-    expect(theme.appliedPalette).toBe(palette);
-    expect(styleWrites).not.toHaveBeenCalled();
-  } finally {
-    theme.dispose();
-    gateway.stop();
-    styleWrites.mockRestore();
-  }
-});
-
-it("notifies leaf branding consumers when a newly selected built-in palette loads", async () => {
-  const { gateway, current } = createGatewayStoreTestStore();
-  const theme = createApplicationTheme(loadSettings(), gateway);
-  const { container, unmount } = mountSolid(() =>
-    createComponent(AgentIdentityAvatar, { agent: { id: "openclaw" } }),
-  );
-  const renderMark = vi.fn();
-  const unsubscribe = theme.subscribe(renderMark);
-  gateway.start();
-  current().request.mockResolvedValue(
-    catalog({ ...definition, mascot: "none", avatarHat: "fedora" }),
-  );
-  current().testOptions.onHello?.(GATEWAY_STORE_TEST_HELLO);
-  try {
-    await vi.dynamicImportSettled();
-    flush();
-    expect(container.querySelector(".identity-avatar--neutral")).not.toBeNull();
-    renderMark.mockClear();
-    patchSettings({ theme: "knot" });
-    flush();
-    expect(theme.settings.theme).toBe("knot");
-    expect(renderMark).toHaveBeenCalledTimes(1);
-    expect(container.querySelector("img")?.getAttribute("src")).toBe("/favicon.svg");
-    const palette = document.getElementById("openclaw-theme-palette-knot")!;
-    expect(document.documentElement.dataset.themeId).toBe(descriptor.id);
-    palette.dispatchEvent(new Event("load"));
-    flush();
-    expect(renderMark).toHaveBeenCalledTimes(2);
-    expect(document.documentElement.dataset.themeId).toBe("knot");
-    expect(document.documentElement.dataset.themeAvatarHat).toBeUndefined();
-    expect(container.querySelector("img")?.getAttribute("src")).toBe("/favicon.svg");
-  } finally {
-    unsubscribe();
-    theme.dispose();
-    gateway.stop();
-    unmount();
-    document.getElementById("openclaw-theme-palette-knot")?.remove();
-  }
-});
 
 it("applies routed profile updates and plugin hot reloads, restoring an unavailable selection", async () => {
   const { gateway, current, clients } = createGatewayStoreTestStore();

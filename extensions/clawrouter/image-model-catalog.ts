@@ -12,9 +12,60 @@ import {
   normalizeOptionalString,
 } from "openclaw/plugin-sdk/string-coerce-runtime";
 import {
+  type ClawRouterCapabilityOffer,
   fetchClawRouterCapabilityOffers,
   resolveClawRouterCapabilityHttpContext,
 } from "./capability-offers.js";
+
+export const CLAWROUTER_IMAGE_TIMEOUT_MS = 180_000;
+export const GOOGLE_IMAGE_MODELS = ["google/gemini-3.1-flash-image", "google/gemini-3-pro-image"];
+export const GOOGLE_IMAGE_CAPABILITIES: ImageGenerationProvider["capabilities"] = {
+  generate: {
+    maxCount: 1,
+    supportsSize: true,
+    supportsAspectRatio: true,
+    supportsResolution: true,
+  },
+  edit: {
+    enabled: true,
+    maxCount: 1,
+    maxInputImages: 5,
+    supportsSize: true,
+    supportsAspectRatio: true,
+    supportsResolution: true,
+  },
+  geometry: {
+    sizes: ["1024x1024", "1024x1536", "1536x1024", "1024x1792", "1792x1024"],
+    aspectRatios: ["1:1", "2:3", "3:2", "3:4", "4:3", "4:5", "5:4", "9:16", "16:9", "21:9"],
+    resolutions: ["1K", "2K", "4K"],
+  },
+};
+
+export function isClawRouterGoogleImageModel(model: string) {
+  return GOOGLE_IMAGE_MODELS.includes(model);
+}
+
+export function qualifiedGoogleImageOffers(offers: ClawRouterCapabilityOffer[]) {
+  return offers
+    .filter((offer) => {
+      const upstream = offer.model?.upstream;
+      return (
+        offer.providerId === "google-gemini" &&
+        offer.endpoint === "image_generate" &&
+        offer.path === "/v1beta/models/${model}:generateContent" &&
+        (offer.routeKind === "native" || offer.routeKind === "manifest") &&
+        offer.methods.includes("POST") &&
+        offer.requestFormat === "google.image_generate" &&
+        offer.responseFormat === "google.image" &&
+        typeof upstream === "string" &&
+        offer.model?.id === "google/" + upstream &&
+        isClawRouterGoogleImageModel("google/" + upstream) &&
+        Array.isArray(offer.model.capabilities) &&
+        offer.model.capabilities.includes("image.generate")
+      );
+    })
+    .toSorted((a, b) => Number(a.routeKind === "manifest") - Number(b.routeKind === "manifest"));
+}
 
 // Qualified by ClawRouter's JSON Images API contract; not a list of key grants.
 const SUPPORTED_IMAGE_MODELS = new Set([
@@ -56,7 +107,7 @@ type ImageLimits = {
   maxAspectRatio: number;
 };
 type ImageCatalogEntry = UnifiedModelCatalogEntry<ImageGenerationProvider["capabilities"]> & {
-  limits: ImageLimits;
+  limits?: ImageLimits;
 };
 
 function parseImageLimits(value: unknown): ImageLimits | undefined {
@@ -160,8 +211,26 @@ export async function fetchClawRouterImageModels(params: {
   signal?: AbortSignal;
   ssrfPolicy?: ImageGenerationRequest["ssrfPolicy"];
 }): Promise<ImageCatalogEntry[]> {
-  const offers = await fetchClawRouterCapabilityOffers(params);
+  const offers = await fetchClawRouterCapabilityOffers({
+    ...params,
+    requireFreshProxyCatalog: true,
+  });
   const result = new Map<string, ImageCatalogEntry>();
+  for (const offer of qualifiedGoogleImageOffers(offers)) {
+    const model = String(offer.model!.id);
+    if (result.has(model)) {
+      continue;
+    }
+    result.set(model, {
+      kind: "image_generation",
+      provider: "clawrouter",
+      model,
+      label: normalizeOptionalString(offer.model?.displayName) ?? model,
+      source: "live",
+      modes: ["generate", "edit"],
+      capabilities: GOOGLE_IMAGE_CAPABILITIES,
+    });
+  }
   for (const offer of offers) {
     const model = offer.model;
     const id = normalizeOptionalString(model?.id);

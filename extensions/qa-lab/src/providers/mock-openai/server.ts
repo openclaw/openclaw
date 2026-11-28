@@ -29,6 +29,8 @@ import {
 } from "./mock-openai-assistant-text.js";
 import { planAutomationScenarioTurn } from "./mock-openai-automation-turns.js";
 import {
+  QA_COMPACTION_RETRY_DURABLE_MARKER,
+  QA_COMPACTION_RETRY_BULKY_MARKER,
   QA_COMPACTION_EMPTY_OUTPUT_ONCE_MARKER_RE,
   QA_COMPACTION_REASONING_ONLY_OUTPUT_ONCE_MARKER_RE,
   hasCompactionOutputRecoveryMarker,
@@ -232,41 +234,6 @@ const MOCK_HTTP_POST_ROUTES = new Map([
 const QA_COMPACTION_RETRY_PROMPT_RE = /compaction retry mutating tool check/i;
 const QA_COMPACTION_RETRY_OVERFLOW_THRESHOLD_BYTES = 256 * 1024;
 const QA_COMPACTION_OUTPUT_RECOVERY_OVERFLOW_THRESHOLD_BYTES = 96 * 1024;
-const QA_COMPACTION_RETRY_DURABLE_MARKER = "QA-COMPACTION-DURABLE-MARKER";
-const QA_COMPACTION_RETRY_BULKY_MARKER = "QA-COMPACTION-BULKY-HISTORICAL-MARKER";
-const QA_COMPACTION_RETRY_HISTORICAL_PHRASE = "post-marker historical user block";
-const QA_COMPACTION_RETRY_SUMMARY = `## Decisions
-- Continue the compaction retry from durable context without replaying a completed mutation.
-
-## Open TODOs
-- Write compaction-retry-summary.txt exactly once.
-- Return the final replay-safety marker.
-
-## Constraints/Rules
-- Preserve ${QA_COMPACTION_RETRY_DURABLE_MARKER}.
-- Write exactly: Replay safety: unsafe after write.
-
-## Pending user asks
-- Create compaction-retry-summary.txt, then reply exactly: Protocol note: replay unsafe after write.
-
-## Exact identifiers
-- ${QA_COMPACTION_RETRY_DURABLE_MARKER}
-- compaction-retry-summary.txt`;
-const QA_COMPACTION_RETRY_HISTORICAL_SUMMARY = `## Decisions
-- Preserve the latest ${QA_COMPACTION_RETRY_HISTORICAL_PHRASE} context through staged compaction.
-
-## Open TODOs
-- Continue summarizing the ${QA_COMPACTION_RETRY_HISTORICAL_PHRASE} sequence.
-
-## Constraints/Rules
-- Keep historical content distinct from live task state.
-- Do not invent durable context absent from the summarized history.
-
-## Pending user asks
-- Retain the ${QA_COMPACTION_RETRY_HISTORICAL_PHRASE} details.
-
-## Exact identifiers
-- None captured.`;
 const QA_RESTART_CHECKPOINT_COUNT = 3;
 const QA_RESTART_FINAL_TEXT = "RESTART-CODE-MODE-WAIT-OK";
 const QA_FAILED_TOOL_TERMINAL_RECOVERY_PROMPT_RE = /failed tool terminal recovery qa check/i;
@@ -441,14 +408,7 @@ async function buildResponsesPayload(
         "reasoning_compaction_summary_fault",
       );
     }
-    return buildAssistantEvents(
-      hasCompactionRetryDurableContext
-        ? QA_COMPACTION_RETRY_SUMMARY
-        : allInputText.includes(QA_COMPACTION_RETRY_BULKY_MARKER) ||
-            allInputText.includes(QA_COMPACTION_RETRY_HISTORICAL_PHRASE)
-          ? QA_COMPACTION_RETRY_HISTORICAL_SUMMARY
-          : resolveCompactionRecoverySummary(allInputText),
-    );
+    return buildAssistantEvents(resolveCompactionRecoverySummary(allInputText));
   }
   if (
     QA_COMPACTION_RETRY_PROMPT_RE.test(allInputText) ||

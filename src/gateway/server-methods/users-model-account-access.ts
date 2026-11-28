@@ -192,7 +192,7 @@ export async function prepareSessionModelAccountAccess(
       throw new ModelAccountConnectAuthorityError();
     }
     const assertCurrent = composeSessionSourceAssertion(
-      [requestAuthority.assertCurrent, operatorAuthority.assertCurrent, caller?.assertCurrent],
+      [requestAuthority.assertCurrent, caller?.assertCurrent],
       (assertSources) => {
         try {
           assertAdmittedRunOperatorAuthority(operatorAuthority);

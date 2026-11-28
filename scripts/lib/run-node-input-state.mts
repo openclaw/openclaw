@@ -303,6 +303,27 @@ function generatedControlUiManifest(deps: RunNodeInputDeps, file: string) {
   );
 }
 
+function installedModulesInputs(contents: Buffer<ArrayBuffer>): Buffer<ArrayBuffer> {
+  try {
+    const metadata: unknown = JSON.parse(contents.toString());
+    if (
+      isRecord(metadata) &&
+      typeof metadata.packageManager === "string" &&
+      metadata.packageManager.startsWith("pnpm@12.") &&
+      metadata.layoutVersion === 5 &&
+      typeof metadata.prunedAt === "string"
+    ) {
+      // pnpm 12 writes JSON here. Cache-pruning time is not a compiler input;
+      // retain the complete dependency/layout metadata, including unknown fields.
+      const { prunedAt: _prunedAt, ...inputs } = metadata;
+      return Buffer.from(JSON.stringify(inputs));
+    }
+  } catch {
+    // Unrecognized metadata keeps its existing byte-for-byte identity.
+  }
+  return contents;
+}
+
 /** Identifies effective production inputs, independently of transport-carrier commits. */
 export function resolveRunNodeInputSignature(
   deps: RunNodeInputDeps,
@@ -331,6 +352,9 @@ export function resolveRunNodeInputSignature(
       try {
         const link = deps.fs.lstatSync(absolute, { bigint: true });
         let contents = deps.fs.readFileSync(absolute);
+        if (file === "node_modules/.modules.yaml") {
+          contents = installedModulesInputs(contents);
+        }
         if (generatedManifest) {
           const manifest: unknown = JSON.parse(contents.toString());
           if (!isRecord(manifest)) {

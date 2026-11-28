@@ -25,7 +25,7 @@ import { showInputDialog } from "./input-dialog.tsx";
 import {
   confirmWithBoundAutomations,
   withBoundAutomationNotice,
-} from "./session-automation-confirm.ts";
+} from "./session-automation-confirm.tsx";
 import type { SessionMenuAction } from "./session-menu-solid.tsx";
 import { archiveSessionsWithUndo } from "./session-organizer-archive.runtime.ts";
 import {

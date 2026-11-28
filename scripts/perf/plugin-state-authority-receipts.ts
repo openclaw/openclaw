@@ -27,6 +27,7 @@ import path from "node:path";
 import { parseArgs } from "node:util";
 import { GCProfiler } from "node:v8";
 import type { SessionActor } from "../../src/config/sessions/session-actor-contract.js";
+import { startCollectedHeapSampling } from "../lib/heap-sampling.ts";
 
 const { values } = parseArgs({
   options: {
@@ -181,12 +182,7 @@ await withOpenClawTestState({ scenario: "minimal", label: "authority-census" }, 
     const memoryBefore = process.memoryUsage();
     const loadBefore = loadavg();
     if (inspector) {
-      inspector.connect();
-      await inspector.post("HeapProfiler.startSampling", {
-        samplingInterval: 4096,
-        includeObjectsCollectedByMajorGC: true,
-        includeObjectsCollectedByMinorGC: true,
-      });
+      await startCollectedHeapSampling(inspector, 4096);
     }
     const gc = new GCProfiler();
     gc.start();

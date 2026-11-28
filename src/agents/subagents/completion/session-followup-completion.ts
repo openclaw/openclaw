@@ -10,6 +10,7 @@ import { materializeErrorStack } from "../../../infra/error-graph-internal.js";
 import { createDeferredCore, type Deferred } from "../../../shared/deferred.js";
 import { resolveGlobalSingleton } from "../../../shared/global-singleton.js";
 import { buildAgentRunTerminalOutcomeFromWaitResult } from "../../agent-run-terminal-outcome.js";
+import { isSubagentCompletionCancelled } from "../registry/subagent-control-kill-intent.js";
 import type { SubagentRunRecord } from "../registry/subagent-registry.types.js";
 import { isSameSubagentRunOwner } from "../registry/subagent-run-generation.js";
 import { getFollowupCohortOwner, bindFollowupCohortOwner } from "./session-followup-cohort.js";
@@ -169,9 +170,10 @@ export class SessionFollowupCompletion implements FollowupCompletionOwner {
   ): FollowupSuccessor {
     const cohort =
       this.cohort ?? (this.execution.runId === runId ? this.execution.admittedCohort : undefined);
+    // The settle wake offers the cohort's last partition; earlier partitions already settled.
     if (
       !cohort ||
-      cohort.entries.length !== entries.length ||
+      entries.length === 0 ||
       !entries.every((entry) =>
         cohort.entries.some((current) => isSameSubagentRunOwner(current, entry)),
       )
@@ -190,9 +192,7 @@ export class SessionFollowupCompletion implements FollowupCompletionOwner {
             !entry ||
             getFollowupCohortOwner(entry) !== this ||
             entry.requesterSettleWake?.rearmGeneration !== cohort.generation ||
-            entry.killIntent ||
-            entry.killReconciliation ||
-            entry.suppressCompletionDelivery
+            isSubagentCompletionCancelled(entry)
           );
         })
       ) {

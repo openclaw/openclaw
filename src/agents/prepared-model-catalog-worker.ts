@@ -9,6 +9,7 @@ import { WorkerTaskError, WorkerTaskPool } from "../infra/worker-task-pool.js";
 import type { Model } from "../llm/types.js";
 import { createSubsystemLogger } from "../logging/subsystem.js";
 import { captureRemoteModelCatalogSnapshot } from "../model-catalog/remote-overlay.js";
+import { captureRemoteModelCatalogWorkerTransfer } from "../model-catalog/remote-startup-snapshot.js";
 import { resolveInstalledManifestRegistryIndexFingerprint } from "../plugins/manifest-registry-installed.js";
 import {
   getPluginCacheRetirementSignal,
@@ -66,6 +67,10 @@ import type { AuthStorageData } from "./sessions/auth-storage.js";
 
 const log = createSubsystemLogger("agents/prepared-model-runtime");
 const WATCHDOG_TICK_MS = 1_000;
+const EMPTY_CATALOG_FACTS = {
+  configuredModelRefs: [],
+  configuredRuntimeModels: [],
+} as const satisfies PreparedModelCatalogWorkerInput["catalogFacts"];
 
 /**
  * Calls `expire` once the catalog budget of running time passes without `refresh`. A tick that
@@ -541,7 +546,26 @@ export function createPreparedModelCatalogWorker(
           if (shared) {
             shared.validate = receiveResult;
           }
-          return { context, value: reuse ? requestInput : workerInput, request: workerRequest };
+          let taskInput: PreparedModelCatalogWorkerTask["value"] = reuse
+            ? requestInput
+            : workerInput;
+          if (!reuse && workerInput.remoteCatalog) {
+            // A queued generation may have retired; share only the publication current at dispatch.
+            const transfer = captureRemoteModelCatalogWorkerTransfer(workerInput.remoteCatalog);
+            if (transfer !== workerInput.remoteCatalog) {
+              taskInput = { ...workerInput, remoteCatalog: transfer };
+            }
+          }
+          // Auth refresh returns before catalog discovery. Keep configured rows in the parent
+          // for the next catalog task, including when both commands reuse one worker.
+          return {
+            context,
+            value:
+              command.kind === "auth-refresh"
+                ? { ...taskInput, catalogFacts: EMPTY_CATALOG_FACTS }
+                : taskInput,
+            request: workerRequest,
+          };
         },
         {
           signal: controller.signal,

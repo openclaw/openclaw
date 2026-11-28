@@ -132,12 +132,15 @@ async function withListing(
                 },
                 lifecycleRevision: "parent-revision",
                 operatorAuthority: source.authority,
-                assertCurrent: source.authority.assertCurrent,
+                assertCurrent: () => source.authority.signal?.throwIfAborted(),
                 prepareSpawn: async () => {
                   throw new Error("listing must not admit a new spawn");
                 },
               },
-              { pluginId: "test-plugin", assertCurrent: source.authority.assertCurrent },
+              {
+                pluginId: "test-plugin",
+                assertCurrent: () => source.authority.signal?.throwIfAborted(),
+              },
             );
             await run(expectDefined(native.list, "native list"));
           },

@@ -654,7 +654,6 @@ describe("owner approval across transport failures", () => {
       }
       return result;
     });
-    return original;
   };
 
   // The first sealed send fails as the connection drops; the claw has already applied the change.

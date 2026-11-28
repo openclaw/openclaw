@@ -55,6 +55,8 @@ When the agent hits a delivery or provider error, the error policy controls whet
 
 Per-account, per-group, and per-topic overrides are supported (same inheritance as other Telegram config keys).
 
+If a gateway restart interrupts a reply saved for recovery, Telegram says “Restarting. I'll finish this reply when I'm back.” You don't need to resend the request. If delivery fails and the reply wasn't saved, Telegram still asks you to ask again.
+
 ```json5
 {
   channels: {

@@ -674,6 +674,7 @@ describe.each([
     title: "Zoom",
     plugin: zoomMeetingsPlugin,
     url: "https://zoom.us/j/12345678903?pwd=node",
+    otherRoom: "https://zoom.us/j/12345678904",
     tabId: "zoom-tab",
     nodeCommand: "zoommeetings.chrome",
     admissionReason: "zoom-admission-required",
@@ -683,6 +684,7 @@ describe.each([
     title: "Teams",
     plugin: teamsMeetingsPlugin,
     url: "https://teams.microsoft.com/l/meetup-join/19%3ameeting_node_resume%40thread.v2/0",
+    otherRoom: "https://teams.microsoft.com/l/meetup-join/19%3ameeting_other_room%40thread.v2/0",
     tabId: "teams-tab",
     nodeCommand: "teamsmeetings.chrome",
     admissionReason: "teams-admission-required",
@@ -705,7 +707,7 @@ describe.each([
   describe("node realtime recovery", () => {
     const testState = useMeetingTestState(createOpenClawTestState);
 
-    it("starts the node bridge after manual admission becomes route-ready", async () => {
+    it("keeps the requester through another room’s failed join and manual admission", async () => {
       const engines: Array<{ getHealth(): { bridgeClosed: boolean }; stop(): Promise<void> }> = [];
       engineMocks.speak.mockReset();
       engineMocks.startAgent
@@ -753,13 +755,33 @@ describe.each([
       });
       testState.track(runtime, { readWarnings: () => logger.warn.mock.calls });
 
-      const joined = await runtime.join({
+      const waiting = createDeferredCore();
+      const resume = createDeferredCore();
+      const nodes = await harness.runtime.nodes.list();
+      vi.mocked(harness.runtime.nodes.list)
+        .mockImplementationOnce(async () => {
+          waiting.resolve();
+          await resume.promise;
+          return nodes;
+        })
+        .mockRejectedValueOnce(new Error("unavailable node inventory"));
+      const joining = runtime.join({
         ...(isZoom ? { agentId: "support" } : {}),
         mode: "agent",
         requesterSessionKey: "agent:support:session:caller",
         transport: "chrome-node",
         url: entry.url,
       });
+      try {
+        await Promise.race([waiting.promise, joining]);
+        await expect(
+          runtime.join({ url: entry.otherRoom, transport: "chrome-node" }),
+        ).rejects.toThrow("node inventory unavailable");
+      } finally {
+        resume.resolve();
+      }
+      const joined = await joining;
+      expect(JSON.stringify(runtime.list())).not.toContain("agent:support:session:caller");
       expect(joined.session.chrome?.audioBridge).toBeUndefined();
       harness.state.inCall = true;
 

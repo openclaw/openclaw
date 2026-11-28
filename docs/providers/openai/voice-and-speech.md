@@ -335,6 +335,10 @@ sidebarTitle: "Voice and speech"
     `openai` API-key profile, then `OPENAI_API_KEY`. Create the OAuth profile
     with `openclaw models auth login --provider openai`.
 
+    Select `gpt-live-1.1-codex` to request GPT-Live 1.1. It uses the same
+    Codex WebRTC route and voices, but requires ChatGPT sign-in. It does not
+    fall back to a Platform API key.
+
     Discord uses this same Gateway-owned WebRTC bridge when
     `channels.discord.voice.realtime.model` is `gpt-live-1-codex`. Set
     `channels.discord.voice.realtime.speakerVoice` to `cove` for the Codex

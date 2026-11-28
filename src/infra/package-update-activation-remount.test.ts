@@ -353,6 +353,39 @@ test.each(["settle", "archive-interrupted", "journal-mode"] as const)(
   },
 );
 
+test("settles a remounted publication after brew cleanup pruned its launcher copies", async () => {
+  const f = await prepareRemountedPublication(
+    fixture,
+    root,
+    false,
+    "equal-symlinks",
+    "candidate",
+    true,
+  );
+  // Homebrew's prefix prune: unlink dangling symlinks, then remove empty directories.
+  const prune = (directory: string): boolean => {
+    for (const entry of fs.readdirSync(directory, { withFileTypes: true })) {
+      const file = path.join(directory, entry.name);
+      if (entry.isSymbolicLink() && !fs.existsSync(file)) {
+        fs.unlinkSync(file);
+      } else if (entry.isDirectory() && prune(file)) {
+        fs.rmdirSync(file);
+      }
+    }
+    return fs.readdirSync(directory).length === 0;
+  };
+  expect(fs.existsSync(path.join(f.anchor, "launchers"))).toBe(true);
+  prune(f.anchor);
+  expect(fs.readdirSync(f.anchor)).toEqual(["previous"]);
+  const launcher = fs.readlinkSync(f.launcher);
+  await expect(settle(f)).resolves.toMatchObject({
+    reason: "publication-settled-external-change",
+  });
+  expect(fs.existsSync(f.journalPath)).toBe(false);
+  expect(fs.readlinkSync(f.launcher)).toBe(launcher);
+  expect(() => assertNoPendingPackageActivation(f.packageRoot)).not.toThrow();
+});
+
 test.each(["before-commit", "before-archive"] as const)(
   "refuses settlement after ownership reassignment: %s",
   async (scenario) => {

@@ -26,7 +26,7 @@ import {
   authorizeControlUiReadRequestOrReply,
   authorizeControlUiSessionOwnerReadRequestOrReply,
 } from "./http-utils.js";
-import { resolveRequesterProject } from "./project-access.js";
+import { projectRequesterForProfile, resolveRequesterProject } from "./project-access.js";
 import { withReadySessionRows, type SessionRowReadView } from "./session-row-prepared-read.js";
 import { getSessionRowProjection } from "./session-row-projection-access.js";
 import { resolveSessionStoreIdentity } from "./session-store-key.js";
@@ -181,7 +181,6 @@ export async function handleWorkspaceIconHttpRequest(
   if (!requestAuth) {
     return true;
   }
-  requestAuth.assertCurrent();
 
   if (!parsed.value) {
     res.setHeader("cache-control", "no-store");
@@ -217,10 +216,8 @@ export async function handleWorkspaceIconHttpRequest(
     };
   };
   const selected = await withReadySessionRows(projection, queries, select);
-  requestAuth.assertCurrent();
   const icon = selected.root ? await resolveWorkspaceIcon(selected.root) : null;
   await withReadySessionRows(projection, queries, (read) => {
-    requestAuth.assertCurrent();
     const current = select(read);
     if (
       current.generation !== selected.generation ||
@@ -271,17 +268,19 @@ export async function handleProjectIconHttpRequest(
   if (!auth) {
     return true;
   }
-  auth.assertCurrent();
   const project = parsed.value
-    ? await resolveRequesterProject(opts.config, parsed.value, {
-        kind: "operator",
-        scopes: auth.operatorScopes,
-      })
+    ? await resolveRequesterProject(
+        opts.config,
+        parsed.value,
+        projectRequesterForProfile(
+          opts.config,
+          auth.operatorScopes,
+          auth.authenticatedUserProfile?.profileId,
+        ),
+      )
     : undefined;
   const root = localWorkspaceRoot(project?.repoRoot);
   const icon = root ? await resolveWorkspaceIcon(root) : null;
-  // Paired device tokens can be revoked while the registry and icon reads are pending.
-  await auth.revalidate();
   if (!icon) {
     res.setHeader("cache-control", root ? "private, max-age=60" : "no-store");
     res.setHeader("vary", "Authorization, Cookie");

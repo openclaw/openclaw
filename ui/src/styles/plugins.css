@@ -1275,10 +1275,6 @@
 .plugin-catalog-detail__readme-section > h2 {
   margin-bottom: var(--space-3);
 }
-/* Headings stay left on a phone, where the shared header stacks and centers its copy. */
-.plugin-capabilities .settings-section__header.oc-settings-section-header {
-  align-items: stretch;
-}
 .plugin-capability__disclosure > summary {
   list-style: none;
 }
@@ -1612,8 +1608,8 @@
     padding: 0;
   }
 
-  /* Refresh sits beside the page menu here, not at the end of the row. */
-  openclaw-skills-page .skill-library-search__action .refresh-button {
+  /* Center beside an inline menu; with the menu in the header, use the trailing refresh line. */
+  openclaw-skills-page .skill-library-search__action:not(:last-child) .refresh-button {
     justify-items: center;
   }
 
@@ -2011,6 +2007,48 @@
   margin-inline-start: 0;
 }
 
+/* Skills and Templates share the card surface, but only plugin entries pair a
+   package name and badge with a separately actionable publisher handle. */
+.plugin-catalog-entry {
+  .plugin-catalog-row__main {
+    flex-wrap: wrap;
+  }
+
+  .plugin-catalog-row__text {
+    flex-basis: 9em;
+  }
+
+  .plugin-card-title-row {
+    flex-wrap: wrap;
+    gap: 3px 8px;
+    line-height: calc(20px * var(--control-ui-text-scale));
+  }
+
+  .plugin-catalog-row__name {
+    display: flex;
+    align-items: baseline;
+    gap: 6px;
+    min-width: 0;
+    max-width: 100%;
+
+    /* Names such as “Workspace Synchronization Amber” differ at the end. */
+    h3 {
+      direction: rtl;
+      text-align: match-parent;
+    }
+  }
+
+  .plugin-card-title-row .plugin-card-author {
+    flex: none;
+    margin-inline-start: 0;
+    font-size: calc(12.5px * var(--control-ui-text-scale));
+  }
+
+  .plugin-catalog-card__action {
+    margin-inline-start: auto;
+  }
+}
+
 .settings-page.oc-app-surface .plugin-catalog-results--rows .btn.plugin-catalog-card__install {
   height: 28px;
   min-height: 28px;
@@ -2070,16 +2108,11 @@
     gap: 2px;
   }
 
+  /* Row previews show six cards on tablets; the base grid already hides later cards. */
   .plugin-catalog-results--rows
     .plugin-catalog-section--expandable
-    .plugin-catalog-card:nth-child(n + 5) {
+    .plugin-catalog-card:nth-child(-n + 6) {
     display: grid;
-  }
-
-  .plugin-catalog-results--rows
-    .plugin-catalog-section--expandable
-    .plugin-catalog-card:nth-child(n + 7) {
-    display: none;
   }
 }
 
@@ -2087,12 +2120,6 @@
 @media (max-width: 640px) {
   .plugin-catalog-results--rows .plugin-catalog-results__body {
     gap: 26px;
-  }
-
-  .plugin-catalog-results--rows
-    .plugin-catalog-section--expandable
-    .plugin-catalog-card:nth-child(n + 3) {
-    display: grid;
   }
 
   .plugin-catalog-results--rows
@@ -2113,6 +2140,11 @@
   .plugin-catalog-results--rows .plugin-catalog-row__main {
     align-items: flex-start;
     gap: 12px;
+  }
+
+  /* Refillable phone rows reserve the title, its gap and both allowed summary lines. */
+  .plugin-catalog-grid--continuable .plugin-catalog-row__main {
+    min-height: calc(20px + 1px + 2.8 * var(--control-ui-text-md));
   }
 
   .plugin-catalog-results--rows .plugin-catalog-card__art {
@@ -2387,7 +2419,7 @@
   align-self: center;
 }
 
-.plugin-catalog-detail--rail .plugin-capability__icon {
+.plugin-catalog-detail--rail .settings-row > .plugin-capability__icon {
   flex: 0 0 36px;
   border: 0;
   border-radius: calc(10px * var(--openclaw-corner-radius-scale));
@@ -2395,7 +2427,7 @@
   color: var(--muted-strong);
 }
 
-.plugin-catalog-detail--rail .plugin-capability__icon svg {
+.plugin-catalog-detail--rail .settings-row > .plugin-capability__icon svg {
   width: 16px;
   height: 16px;
 }
