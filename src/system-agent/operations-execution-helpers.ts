@@ -2,6 +2,7 @@ import { isDeepStrictEqual } from "node:util";
 import { getAtPath, parseConfigSetPath } from "../cli/config-cli-path.js";
 import { hashConfigRaw } from "../config/io.read-helpers.js";
 import { ConfigWritePostCommitError } from "../config/io.write-errors.js";
+import type { RuntimeConfigWriteApplicationStatus } from "../config/runtime-write-application.js";
 import type { ConfigFileSnapshot, OpenClawConfig } from "../config/types.openclaw.js";
 import { coerceSecretRef } from "../config/types.secrets.js";
 import { formatErrorMessage } from "../infra/errors.js";
@@ -229,6 +230,7 @@ type PersistentApplyContext = {
 
 type PersistentApplyOutcome = {
   summary: string;
+  runtimeApplication?: RuntimeConfigWriteApplicationStatus;
   bootstrapPending?: boolean;
   agentId?: string;
   details?: Record<string, unknown>;
@@ -286,6 +288,7 @@ export async function applyPersistentOperation(params: {
   );
   return {
     applied: true,
+    ...(outcome.runtimeApplication ? { runtimeApplication: outcome.runtimeApplication } : {}),
     ...(outcome.bootstrapPending === undefined
       ? {}
       : { bootstrapPending: outcome.bootstrapPending }),
@@ -296,9 +299,17 @@ export async function applyPersistentOperation(params: {
 export async function runConfigSetOperation(params: {
   operation: Extract<SystemAgentOperation, { kind: "config-set" | "config-set-ref" }>;
   ctx: PersistentApplyContext;
-}): Promise<{ storeEntry?: string; storeProvider?: string }> {
+}): Promise<{
+  storeEntry?: string;
+  storeProvider?: string;
+  runtimeApplication?: RuntimeConfigWriteApplicationStatus;
+}> {
   const { operation, ctx } = params;
   const { runConfigSet } = await import("../cli/config-cli.js");
+  let runtimeApplication: RuntimeConfigWriteApplicationStatus | undefined;
+  const onRuntimeApplication = (status: RuntimeConfigWriteApplicationStatus) => {
+    runtimeApplication = status;
+  };
   const beforePersistentApply = ctx.assertPersistentApply
     ? { beforePersistentApply: ctx.assertPersistentApply }
     : {};
@@ -306,6 +317,7 @@ export async function runConfigSetOperation(params: {
     await ctx.commit(() =>
       runConfigSet({
         runtime: createNoExitRuntime(ctx.runtime),
+        onRuntimeApplication,
         throwOnError: operation.kind === "config-set-ref" && operation.secret !== undefined,
         path: operation.path,
         ...(operation.kind === "config-set"
@@ -320,7 +332,7 @@ export async function runConfigSetOperation(params: {
         ...beforePersistentApply,
       }),
     );
-    return {};
+    return { runtimeApplication };
   }
   const secret = operation.secret;
   const snapshot = await readConfigFileSnapshotLazy();
@@ -357,6 +369,7 @@ export async function runConfigSetOperation(params: {
   try {
     await runConfigSet({
       runtime: createNoExitRuntime(ctx.runtime),
+      onRuntimeApplication,
       throwOnError: true,
       path: operation.path,
       cliOptions: { refProvider, refSource: "store", refId: storeEntry },
@@ -397,7 +410,7 @@ export async function runConfigSetOperation(params: {
       { cause: error },
     );
   }
-  return { storeEntry, storeProvider: refProvider };
+  return { storeEntry, storeProvider: refProvider, runtimeApplication };
 }
 
 async function verifyCurrentSetupInference(runtime: RuntimeEnv): Promise<{

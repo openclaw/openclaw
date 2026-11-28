@@ -530,6 +530,7 @@ describe("Full Access delegated chat", () => {
           value: "18789",
           cliOptions: {},
           beforePersistentApply: expect.any(Function),
+          onRuntimeApplication: expect.any(Function),
           runtime: expect.objectContaining({ log: expect.any(Function) }),
           throwOnError: false,
         });

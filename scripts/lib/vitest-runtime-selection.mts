@@ -66,6 +66,7 @@ const runtimeOnlyUnitFiles = new Set([
   "src/gateway/server.plugin-reload-send-continuation.product.test.ts",
   "src/gateway/server.plugin-reload-send-revocation.product.test.ts",
   "src/gateway/server.sessions.fixture-lifecycle.test.ts",
+  "src/gateway/server.setup-config-application.product.test.ts",
   "src/gateway/server.startup-fixture-lifetime.test.ts",
   "src/gateway/server.subagent-transcript-conflict.test.ts",
   "src/gateway/session-row-projection.subagent-index.test.ts",

@@ -155,6 +155,7 @@ it.each([
     files: [
       "src/gateway/server.plugin-reload-send-continuation.product.test.ts",
       "src/gateway/server.plugin-reload-send-revocation.product.test.ts",
+      "src/gateway/server.setup-config-application.product.test.ts",
     ],
     runtime: true,
   },
