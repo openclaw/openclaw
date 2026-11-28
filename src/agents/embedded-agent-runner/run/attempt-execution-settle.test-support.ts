@@ -133,6 +133,7 @@ export function createFixture(mocks: {
       stopAcceptingSteerMessages: vi.fn(),
       getBeforeAgentFinalizeRevisionReason,
       getBeforeAgentFinalizeRevisionEntryId,
+      getFinalPresentation: () => undefined,
     },
     timeout: {
       getRunAbortDeadlineAtMs: vi.fn(() => 123),
@@ -284,10 +285,8 @@ export function createFixture(mocks: {
   mocks.clearActiveEmbeddedRun.mockImplementation(() => order.push("clear-active-run"));
 
   return {
-    cacheTrace,
     clearTimers,
     detachBackend,
-    getBeforeAgentFinalizeRevisionReason,
     input,
     order,
     queueHandle,
@@ -295,8 +294,6 @@ export function createFixture(mocks: {
     sessionManager,
     sessionRuntimeState,
     state,
-    subscription,
-    trajectoryRecorder,
     unsubscribe,
   };
 }
@@ -304,8 +301,8 @@ export function createFixture(mocks: {
 export async function createPersistedImageNoteFixture(
   mocks: Parameters<typeof createFixture>[0],
   testState: OpenClawTestState,
-  storage: "file-backed" | "incognito" = "file-backed",
-  reopen = false,
+  storage: "file-backed" | "incognito",
+  reopen: boolean,
 ) {
   const fixture = createFixture(mocks);
   const target = {

@@ -1,7 +1,9 @@
 import { normalizeOptionalString } from "@openclaw/normalization-core/string-coerce";
+import { truncateUtf16Safe } from "@openclaw/normalization-core/utf16-slice";
 import type { SessionToolOverrides } from "../config/sessions/types.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import type { PluginManifestRegistry } from "../plugins/manifest-registry.js";
+import type { PluginMetadataSnapshot } from "../plugins/plugin-metadata-snapshot.types.js";
 import { getPluginToolMeta, setPluginToolMeta } from "../plugins/tool-metadata.js";
 import type { McpToolCatalog } from "./agent-bundle-mcp-catalog.types.js";
 import {
@@ -19,7 +21,12 @@ import {
   buildConfiguredRequesterConnectCatalog,
   mergeMcpConnectCatalog,
 } from "./agent-bundle-mcp-requester-connect.js";
+import { createMcpRunView } from "./agent-bundle-mcp-run-view.js";
 import { loadSessionMcpConfig } from "./agent-bundle-mcp-runtime-config.js";
+import {
+  profileMcpRequesterScope,
+  readWebchatMcpRequester,
+} from "./agent-bundle-mcp-webchat-requester.js";
 import type { CodexMcpServersConfig } from "./codex-mcp-config.types.js";
 import {
   prepareConversationCapabilityProfile,
@@ -141,6 +148,8 @@ function applyConfiguredMcpApproval(
 }
 
 type MaterializeRequesterScopedMcpToolsForHarnessRunParams = {
+  /** Private host-issued carrier for a committed session store. */
+  storeAdmission?: object;
   sessionId: string;
   sessionKey?: string;
   agentId?: string;
@@ -148,6 +157,8 @@ type MaterializeRequesterScopedMcpToolsForHarnessRunParams = {
   agentDir?: string;
   cfg?: OpenClawConfig;
   manifestRegistry?: Pick<PluginManifestRegistry, "plugins">;
+  metadata?: PluginMetadataSnapshot;
+  isTurnTainted?: () => boolean;
   toolOverrides?: Pick<SessionToolOverrides, "mcpServers" | "mcpToolsDeny">;
   requesterSenderId?: string | null;
   agentAccountId?: string | null;
@@ -258,6 +269,7 @@ export async function materializeStaticMcpToolsForHarnessRunCore(
 ): Promise<StaticHarnessMcpTools> {
   const conversationCapabilityProfile = await resolveHarnessCapabilityProfile(params);
   const acquisition = await acquireSessionMcpRuntime({
+    storeAdmission: params.storeAdmission,
     sessionId: params.sessionId,
     sessionKey: params.sessionKey,
     agentId: params.agentId ?? conversationCapabilityProfile?.agentId,
@@ -279,18 +291,31 @@ export async function materializeStaticMcpToolsForHarnessRunCore(
   const liveRuntime = await materializeBundleMcpToolsForRun({
     ...acquisition,
     agentId: params.agentId,
+    operatorConnect: params.cfg
+      ? {
+          cfg: params.cfg,
+          metadata: params.metadata,
+          senderIsOwner:
+            params.policyContext?.senderIsOwner ?? conversationCapabilityProfile?.sender.isOwner,
+          chatType: params.policyContext?.chatType,
+          isTurnTainted: params.isTurnTainted,
+          toolOverrides: params.toolOverrides,
+          toolDenylist: conversationCapabilityProfile?.policy.explicitToolDenylist,
+        }
+      : undefined,
     reservedToolNames: params.reservedToolNames,
     ...(retireSnapshotRuntime ? { disposeRuntime: retireSnapshotRuntime } : {}),
   });
   try {
-    // Policy warnings describe inputs; only actual omissions make configured MCP incomplete.
+    // Explicit configured tool exclusions define the expected catalog. Only unexpected
+    // omissions make that catalog incomplete.
     const omissions: string[] = [];
     const policyParams = {
       ...params,
       conversationCapabilityProfile,
       onFilter: (event: ToolPolicyFilterEvent) => {
         const omittedCount = event.before.length - event.after.length;
-        if (omittedCount > 0) {
+        if (omittedCount > 0 && event.step.source?.kind !== "config") {
           omissions.push(
             `${event.step.label}: ${omittedCount} configured MCP tool(s) omitted by policy`,
           );
@@ -332,7 +357,7 @@ export async function materializeStaticMcpToolsForHarnessRunCore(
     ];
     const runLabel = params.requestInteractiveCodexApproval ? "this run" : "this scheduled run";
     const bounded = [...new Set(messages)]
-      .map((message) => message.replaceAll(/\s+/g, " ").trim().slice(0, 180))
+      .map((message) => truncateUtf16Safe(message.replaceAll(/\s+/g, " ").trim(), 180))
       .filter(Boolean)
       .slice(0, 4);
     const diagnosticNotice =
@@ -359,11 +384,22 @@ export async function materializeStaticMcpToolsForHarnessRunCore(
 export async function materializeRequesterScopedMcpToolsForHarnessRunCore(
   params: MaterializeRequesterScopedMcpToolsForHarnessRunParams,
 ): Promise<RequesterScopedHarnessMcpTools | undefined> {
+  const webchatRequester = readWebchatMcpRequester(params);
+  let closed = false;
+  const assertRequesterCurrent =
+    webchatRequester &&
+    (() => {
+      if (closed) {
+        throw new Error("Requester MCP harness view has been released.");
+      }
+      webchatRequester.assertCurrent();
+    });
   const policyParams = {
     ...params,
     conversationCapabilityProfile: await resolveHarnessCapabilityProfile(params),
   };
   const scopedRuntimeHandle = await acquireRequesterScopedMcpRuntime({
+    storeAdmission: params.storeAdmission,
     sessionId: params.sessionId,
     sessionKey: params.sessionKey,
     agentId: params.agentId ?? policyParams.conversationCapabilityProfile?.agentId,
@@ -375,6 +411,8 @@ export async function materializeRequesterScopedMcpToolsForHarnessRunCore(
     requesterSenderId: params.requesterSenderId,
     agentAccountId: params.agentAccountId,
     messageChannel: params.messageChannel,
+    ...(webchatRequester && profileMcpRequesterScope(webchatRequester)),
+    assertRequesterCurrent,
     toolDenylist: policyParams.conversationCapabilityProfile?.policy.explicitToolDenylist,
   });
   const scopedRuntime = scopedRuntimeHandle?.runtime;
@@ -386,24 +424,30 @@ export async function materializeRequesterScopedMcpToolsForHarnessRunCore(
       liveRuntime = await materializeBundleMcpToolsForRun({
         runtime: scopedRuntime,
         releaseLease: scopedRuntimeHandle?.releaseLease,
+        assertRequesterCurrent,
         agentId: params.agentId,
         reservedToolNames: params.reservedToolNames,
       });
-      liveCatalog = scopedRuntime.peekCatalog() ?? (await scopedRuntime.getCatalog());
+      const view = createMcpRunView(scopedRuntime, assertRequesterCurrent);
+      liveCatalog = view.peekCatalog() ?? (await view.getCatalog());
+      assertRequesterCurrent?.();
       if (liveCatalog.tools.length > 0 && scopedRuntimeHandle) {
         rememberAdvertisedScopedMcpCatalog(scopedRuntimeHandle, liveCatalog);
       }
     }
 
-    const hasRequester = normalizeOptionalString(params.requesterSenderId) !== undefined;
-    const advertisedCatalog =
-      getAdvertisedScopedMcpCatalog(params.sessionId) ??
-      (liveCatalog
-        ? mergeMcpConnectCatalog(liveCatalog, scopedRuntime?.requesterConnect)
-        : hasRequester
-          ? undefined
-          : buildSenderlessConnectCatalog(params));
+    const hasRequester =
+      webchatRequester !== undefined ||
+      normalizeOptionalString(params.requesterSenderId) !== undefined;
+    const baseAdvertisedCatalog =
+      getAdvertisedScopedMcpCatalog(webchatRequester?.sessionId ?? params.sessionId) ?? liveCatalog;
+    const advertisedCatalog = baseAdvertisedCatalog
+      ? mergeMcpConnectCatalog(baseAdvertisedCatalog, scopedRuntime?.requesterConnect)
+      : hasRequester
+        ? undefined
+        : buildSenderlessConnectCatalog(params);
     if (!advertisedCatalog || advertisedCatalog.tools.length === 0) {
+      closed = true;
       await liveRuntime?.dispose();
       return undefined;
     }
@@ -411,7 +455,8 @@ export async function materializeRequesterScopedMcpToolsForHarnessRunCore(
     const reservedToolNames = params.reservedToolNames
       ? Array.from(params.reservedToolNames)
       : undefined;
-    const requesterConnect = scopedRuntime?.requesterConnect;
+    const requesterConnect =
+      scopedRuntime && createMcpRunView(scopedRuntime, assertRequesterCurrent).requesterConnect;
     const advertisedTools = buildBundleMcpToolsFromCatalog({
       catalog: advertisedCatalog,
       reservedToolNames,
@@ -442,9 +487,13 @@ export async function materializeRequesterScopedMcpToolsForHarnessRunCore(
     return {
       tools: executableTools,
       advertisedTools: filteredAdvertised,
-      dispose: liveRuntime?.dispose ?? (async () => {}),
+      dispose: async () => {
+        closed = true;
+        await liveRuntime?.dispose();
+      },
     };
   } catch (error) {
+    closed = true;
     await liveRuntime?.dispose();
     throw error;
   }

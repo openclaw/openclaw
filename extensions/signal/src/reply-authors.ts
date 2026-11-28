@@ -2,6 +2,7 @@ import { DEFAULT_ACCOUNT_ID } from "openclaw/plugin-sdk/account-id";
 import type { MediaPlaceholderTextFact } from "openclaw/plugin-sdk/channel-inbound";
 import { pruneMapToMaxSize } from "openclaw/plugin-sdk/collection-runtime";
 import { KeyedAsyncQueue } from "openclaw/plugin-sdk/keyed-async-queue";
+import { createSubsystemLogger } from "openclaw/plugin-sdk/runtime-env";
 import {
   asPositiveSafeInteger,
   normalizeLowercaseStringOrEmpty,
@@ -16,11 +17,19 @@ const PERSISTENT_MAX_ENTRIES = 5000;
 const DEFAULT_REPLY_AUTHOR_TTL_MS = 7 * 24 * 60 * 60 * 1000;
 
 type SignalPersistedReplyContext =
-  | { author: string; body?: string; media?: MediaPlaceholderTextFact[]; ambiguous?: never }
+  | {
+      author: string;
+      body?: string;
+      media?: MediaPlaceholderTextFact[];
+      sentByOpenClaw?: true;
+      ambiguous?: never;
+    }
   | { ambiguous: true; author?: never; body?: never };
 
 const { memoryReplyContexts } = signalReplyAuthorState;
 const replyContextWrites = new KeyedAsyncQueue();
+// The plugin runtime child logger only writes the file log; operators read the console.
+const replyAuthorLog = createSubsystemLogger("signal/reply-author-state");
 
 function openSignalReplyAuthorStore() {
   const runtime = getOptionalSignalRuntime();
@@ -31,9 +40,9 @@ function openSignalReplyAuthorStore() {
       defaultTtlMs: DEFAULT_REPLY_AUTHOR_TTL_MS,
     });
   } catch (error) {
-    runtime?.logging
-      .getChildLogger({ plugin: "signal", feature: "reply-author-state" })
-      .warn("Signal persistent reply author state unavailable", { error: String(error) });
+    replyAuthorLog.warn("Signal persistent reply author state unavailable", {
+      error: String(error),
+    });
     return undefined;
   }
 }
@@ -87,6 +96,7 @@ function resolveReplyContext(
     author,
     ...(body ? { body } : {}),
     ...(media?.length ? { media } : {}),
+    ...(record.sentByOpenClaw === true ? { sentByOpenClaw: true } : {}),
   };
 }
 
@@ -104,10 +114,19 @@ function mergeReplyContext(
     return next;
   }
   if (current.author !== next.author) {
-    const { author: _author, body: _body, media: _media, ...identity } = next;
+    const {
+      author: _author,
+      body: _body,
+      media: _media,
+      sentByOpenClaw: _sent,
+      ...identity
+    } = next;
     return { ...identity, kind: "ambiguous" };
   }
-  return next.sourceTimestamp >= current.sourceTimestamp ? next : current;
+  const latest = next.sourceTimestamp >= current.sourceTimestamp ? next : current;
+  return current.sentByOpenClaw || next.sentByOpenClaw
+    ? { ...latest, sentByOpenClaw: true }
+    : latest;
 }
 
 export async function registerSignalReplyContext(params: {
@@ -118,6 +137,8 @@ export async function registerSignalReplyContext(params: {
   body?: string | null;
   media?: readonly MediaPlaceholderTextFact[] | null;
   sourceTimestamp?: number | null;
+  /** Set only after OpenClaw successfully sends this message. */
+  sentByOpenClaw?: true;
 }): Promise<void> {
   const store = openSignalReplyAuthorStore();
   const identity = resolveSignalReplyIdentity(params);
@@ -141,6 +162,7 @@ export async function registerSignalReplyContext(params: {
     author,
     ...(body ? { body } : {}),
     ...(media?.length ? { media } : {}),
+    ...(params.sentByOpenClaw ? { sentByOpenClaw: true as const } : {}),
     ...replyIdentity,
     sourceTimestamp,
     registeredAt,
@@ -158,9 +180,9 @@ export async function registerSignalReplyContext(params: {
         await store.register(key, next);
       }
     } catch (error) {
-      getOptionalSignalRuntime()
-        ?.logging.getChildLogger({ plugin: "signal", feature: "reply-author-state" })
-        .warn("Signal persistent reply author state failed", { error: String(error) });
+      replyAuthorLog.warn("Signal persistent reply author state failed", {
+        error: String(error),
+      });
     }
     // The plugin serializes its own writes; foreign writes during this read/write are best effort.
     memoryReplyContexts.set(key, { ...next, expiresAt });
@@ -186,9 +208,9 @@ export async function resolveSignalReplyContextWithPersistence(params: {
   try {
     return resolveReplyContext(await store.lookup(key));
   } catch (error) {
-    getOptionalSignalRuntime()
-      ?.logging.getChildLogger({ plugin: "signal", feature: "reply-author-state" })
-      .warn("Signal persistent reply author lookup failed", { error: String(error) });
+    replyAuthorLog.warn("Signal persistent reply author lookup failed", {
+      error: String(error),
+    });
     return undefined;
   }
 }

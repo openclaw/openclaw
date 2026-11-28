@@ -1,14 +1,12 @@
 import { measuredRequestPressure } from "@openclaw/ai/internal/openai";
 import type { FirstStreamEventInternalOptions } from "@openclaw/ai/internal/runtime";
 import type { CompactionReplayRejection } from "@openclaw/ai/transports";
-import { setInternalRepetitionGuard } from "../../../../packages/agent-core/src/internal-hooks.js";
 import { resolveDiagnosticModelContentCapturePolicy } from "../../../infra/diagnostic-llm-content.js";
 import { DEFAULT_UNDICI_STREAM_TIMEOUT_MS } from "../../../infra/net/undici-global-dispatcher.js";
 import type { AssistantMessage } from "../../../llm/types.js";
 import type { DiagnosticEmbeddedRunOwner } from "../../../logging/diagnostic-run-activity.js";
 import { resolveToolCallArgumentsEncoding } from "../../../plugins/provider-model-compat.js";
 import { captureAsyncWorkTracker } from "../../../shared/async-work-scope.js";
-import { isSmallModel } from "../../../shared/model-param-b.js";
 import {
   assertOperatorModelAllowed,
   readRunOperatorAuthority,
@@ -20,7 +18,6 @@ import type { StreamFn } from "../../runtime/index.js";
 import type { FixedRequestTokenPressure } from "../../sessions/context-token-pressure.js";
 import { withSessionManagerWrite } from "../../sessions/session-manager-write-admission.js";
 import { resolveAgentTimeoutMs } from "../../timeout.js";
-import { UNKNOWN_TOOL_THRESHOLD } from "../../tool-loop-detection.js";
 import type { NormalizedUsage } from "../../usage.js";
 import { log } from "../logger.js";
 import { createPromptCacheRequestObserver } from "../prompt-cache-request-observer.js";
@@ -110,6 +107,8 @@ export function installEmbeddedAttemptStreamGuards(
     onRejectedProviderReplayRepaired: () => void;
     onIdleTimeout: (error: Error) => void;
     diagnosticOwner: DiagnosticEmbeddedRunOwner;
+    /** Whether stopping at this request boundary leaves the tool batch continuable. */
+    isToolBoundarySafe: () => boolean;
   },
 ) {
   const { attempt } = input;
@@ -130,7 +129,6 @@ export function installEmbeddedAttemptStreamGuards(
       providerTextTransforms,
     },
   } = input.prepared.sessionRuntime;
-  setInternalRepetitionGuard(session.agent, isSmallModel);
   const { liveAllowedToolNames, replayAllowedToolNames } =
     input.prepared.toolCatalog.toolSearchRunPlan;
   const installStreamWrapper = <Args extends unknown[]>(
@@ -331,7 +329,7 @@ export function installEmbeddedAttemptStreamGuards(
   installStreamWrapper(wrapStreamFnPromoteStandaloneTextToolCalls, liveAllowedToolNames);
   installStreamWrapper(wrapStreamFnTrimToolCallNames, liveAllowedToolNames, {
     // Unknown-tool recovery stays active even when configurable loop detection is disabled.
-    unknownToolThreshold: UNKNOWN_TOOL_THRESHOLD,
+    unknownToolThreshold: 10,
   });
 
   if (
@@ -439,6 +437,7 @@ export function installEmbeddedAttemptStreamGuards(
     diagnosticOwner: callbacks.diagnosticOwner,
     onAgentEvent: attempt.onAgentEvent,
     onSucceeded: contextGuards.recordCacheTouch,
+    onOutputDelta: attempt.onMemoryFlushModelProgress,
     onTerminal: () => {
       modelResponseTerminal = true;
     },
@@ -488,6 +487,7 @@ export function installEmbeddedAttemptStreamGuards(
         previousRequest,
         measuredContextTokens:
           previous?.requestIndex === request.requestIndex - 1 ? previous.contextTokens : undefined,
+        boundarySafe: callbacks.isToolBoundarySafe,
       });
       if (args[0].api === "openai-completions") {
         measuredRequestPressure.set(

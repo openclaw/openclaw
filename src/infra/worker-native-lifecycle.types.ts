@@ -7,6 +7,8 @@ import type {
 import type { captureSqliteWorkerEnvironmentData } from "./bun-sqlite-library.js";
 import type { NativeWorkerFailure } from "./worker-native-error.js";
 
+export const NATIVE_WORKER_LIFETIMES_KEY = Symbol.for("openclaw.nativeWorkerLifetimes");
+
 export type { NativeWorkerEvents, RetainedNativeWorker } from "@openclaw/worker-runtime/lifecycle";
 
 /** The host endpoint never crosses the supervisor transport. */

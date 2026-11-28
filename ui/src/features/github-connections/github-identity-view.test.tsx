@@ -3,6 +3,7 @@ import { getQueriesForElement } from "@solidjs/testing-library";
 import { createSignal } from "solid-js";
 import { afterEach, beforeEach, describe, expect, it, onTestFinished, vi } from "vitest";
 import { createDeferred } from "../../../../test/helpers/promise.ts";
+import type { ToolsGitHubStatusResult } from "../../api/types.ts";
 import { mountRouterOutlet, settleRouterOutlet } from "../../app/router-outlet.test-support.tsx";
 import { createGitHubIdentityView } from "../../lib/reactive/domain-github-identity.ts";
 import { createTestGatewayClient } from "../../test-helpers/gateway-client.ts";
@@ -107,6 +108,34 @@ describe("GitHub identity view", () => {
     expect(view.getByRole("button", { name: "Continue with GitHub" })).toBeTruthy();
   });
 
+  it("keeps cancellation uncertainty and details separate while allowing another attempt", async () => {
+    const cancel = vi.fn().mockRejectedValueOnce(new Error("Synthetic Gateway detail"));
+    cancel.mockResolvedValueOnce({ cancelled: true });
+    const { identity } = setupRequest({
+      "tools.github.authorize.start": () => authorizationCode,
+      "tools.github.authorize.cancel": cancel,
+    });
+    const view = mountSolid(() => <GitHubConnectionSetup identity={identity} />);
+    await identity.startAuthorization();
+    flush();
+    view.getByRole("button", { name: "Cancel" }).click();
+    await vi.advanceTimersByTimeAsync(0);
+    flush();
+
+    expect(view.getByText("Couldn’t confirm cancellation")).toBeTruthy();
+    expect(view.getByText("Sign-in may still be active.")).toBeTruthy();
+    const details = view.container.querySelector("details");
+    expect(details?.open).toBe(false);
+    expect(details?.textContent).toContain("Synthetic Gateway detail");
+    expect(view.getByText("Synthetic Gateway detail").closest("details")).toBe(details);
+
+    view.getByRole("button", { name: "Try canceling again" }).click();
+    await vi.advanceTimersByTimeAsync(0);
+    flush();
+    expect(cancel).toHaveBeenCalledTimes(2);
+    expect(view.getByRole("button", { name: "Continue with GitHub" })).toBeTruthy();
+  });
+
   it("retires the owned status request when its view unmounts", async () => {
     const pending = createDeferred<ReturnType<typeof availableStatus>>();
     const client = createTestGatewayClient(vi.fn().mockReturnValue(pending.promise));
@@ -156,6 +185,8 @@ describe("GitHub identity view", () => {
     flush();
     expect(view.getByRole("alert").textContent).toContain("Synthetic GitHub status unavailable");
     expect(view.getByText("Couldn’t load account status. Try again.")).toBeTruthy();
+    expect(view.queryByText("No verified account")).toBeNull();
+    expect(view.queryByText("Uses the shared agent account")).toBeNull();
     identity.showPatFallback();
     await identity.configure();
     flush();
@@ -172,6 +203,46 @@ describe("GitHub identity view", () => {
     flush();
     expect(view.getByText("@managed-user")).toBeTruthy();
     expect(view.getByText("Verified")).toBeTruthy();
+  });
+
+  it("shows account absence only after a successful status read and retires it on access loss", async () => {
+    const pending = createDeferred<ToolsGitHubStatusResult>();
+    const { identity, sync } = setupRequest(() => pending.promise, { context: { scope: "agent" } });
+    const view = mountSolid(() => (
+      <GitHubIdentity identity={identity} onOpenConnections={vi.fn()} />
+    ));
+    const expectUnknown = () => {
+      expect(view.queryByText("No verified account")).toBeNull();
+      expect(view.queryByText("Uses the shared agent account")).toBeNull();
+    };
+    flush();
+    expectUnknown();
+    expect(view.getByText("Status not loaded")).toBeTruthy();
+    const reading = identity.verify();
+    flush();
+    expectUnknown();
+    expect(view.getByText("Loading account status…")).toBeTruthy();
+    const empty = {
+      ...availableStatus().effective,
+      source: "system-detected" as const,
+      credentialState: "unavailable" as const,
+      account: null,
+    };
+    pending.resolve({
+      agentId: "main",
+      selectedScope: "agent",
+      selected: { scope: "agent", configured: false, identity: null },
+      effective: empty,
+    });
+    await reading;
+    await vi.advanceTimersByTimeAsync(0);
+    flush();
+    expect(view.getByText("No verified account")).toBeTruthy();
+    expect(view.getByText("Uses the shared agent account")).toBeTruthy();
+    sync({ statusReadable: false, configurable: false, authorizable: false });
+    flush();
+    expectUnknown();
+    expect(view.getByText("Status not loaded")).toBeTruthy();
   });
 
   it("shows one shared error when the other identity read is still pending", async () => {
@@ -210,9 +281,7 @@ describe("GitHub identity view", () => {
     );
     identity.showPatFallback();
     identity.setDraft("token", "synthetic-first-token");
-    const view = mountSolid(() => (
-      <GitHubIdentity identity={identity} onOpenConnections={vi.fn()} />
-    ));
+    const view = mountSolid(() => <GitHubConnectionSetup identity={identity} />);
     const oldSaving = identity.configure();
     await vi.advanceTimersByTimeAsync(0);
     flush();
@@ -254,7 +323,13 @@ describe("GitHub identity view", () => {
               identity = createGitHubIdentityView({
                 runExternalMutation: createMutationRunner(client),
               });
-              return <GitHubIdentity identity={identity} onOpenConnections={vi.fn()} />;
+              // Profile shows the account summary with its setup beneath it.
+              return (
+                <>
+                  <GitHubIdentity identity={identity} onOpenConnections={vi.fn()} />
+                  <GitHubConnectionSetup identity={identity} />
+                </>
+              );
             },
           }),
         }),
@@ -416,9 +491,7 @@ describe("GitHub identity view", () => {
       },
     );
     identity.showPatFallback();
-    const view = mountSolid(() => (
-      <GitHubIdentity identity={identity} onOpenConnections={vi.fn()} />
-    ));
+    const view = mountSolid(() => <GitHubConnectionSetup identity={identity} />);
     const input = view.container.querySelector<HTMLInputElement>(".settings-secret input")!;
     input.focus();
     input.value = "synthetic-pat";

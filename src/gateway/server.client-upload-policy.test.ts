@@ -6,7 +6,7 @@ import { awaitGateBeforeSettlement, createDeferred } from "../../test/helpers/pr
 import { getMediaDir } from "../media/store.js";
 import { authorizationClient } from "./server-methods.authorization.test-support.js";
 import { handleGatewayRequest } from "./server-methods.js";
-import { agentHandlers } from "./server-methods/agent.js";
+import { agentRunHandler } from "./server-methods/agent-run-handler.js";
 import { handleChatAbortRequest } from "./server-methods/chat-abort-handler.js";
 import * as chatDispatch from "./server-methods/chat-send-agent-dispatch.js";
 import { handleDirectExternalChatSend } from "./server-methods/chat-send-external-entry.js";
@@ -17,11 +17,15 @@ import {
   installAgentAuthorityProofFixture,
   PNG,
 } from "./server.agent-runtime-authority-proof.test-support.js";
-import { agentCommandMock, dispatchInboundMessageMock } from "./test-helpers.js";
+import {
+  agentCommandMock,
+  dispatchInboundMessageMock,
+  mockGetReplyFromConfigOnce,
+} from "./test-helpers.js";
 
 const handlers: Record<string, GatewayRequestHandler> = {
   "chat.send": handleDirectExternalChatSend,
-  agent: agentHandlers.agent!,
+  agent: agentRunHandler,
   "sessions.send": sessionMessagingHandlers["sessions.send"]!,
   "sessions.create": sessionCreateHandlers["sessions.create"]!,
 };
@@ -116,6 +120,7 @@ it.each(["chat.send", "sessions.send", "sessions.steer", "sessions.create"] as c
       attachments: [attachment()],
     };
     const send = (requestParams = params) => invoke(request(f, method, requestParams, true));
+    mockGetReplyFromConfigOnce(async () => ({ text: "Upload received." }));
     const accepted = await send();
     expect(accepted.mock.calls.at(-1)?.[0]).toBe(true);
     await f.drain();

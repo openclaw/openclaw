@@ -292,6 +292,23 @@ describe("image-generation runtime", () => {
     });
   });
 
+  it("ignores an explicit resolution for a model with no resolutions", async () => {
+    useProvider("minimax", {
+      capabilities: geometryCapabilities(
+        { resolutions: [], resolutionsByModel: { "image-hd": ["1K", "4K"] } },
+        { supportsResolution: true },
+      ),
+    });
+
+    const result = await runGenerateImage({
+      cfg: imageConfig("minimax/image-01"),
+      resolution: "4K",
+    });
+
+    expect(seenRequest?.resolution).toBeUndefined();
+    expect(result.ignoredOverrides).toEqual([{ key: "resolution", value: "4K" }]);
+  });
+
   const legacyOutput: ImageGenerationProvider["capabilities"]["output"] = {
     qualities: ["low"],
     formats: ["png"],

@@ -1,4 +1,5 @@
 import type { WorkerOptions } from "node:worker_threads";
+import { withWorkerPreload } from "../../../test/helpers/runtime-preload.js";
 
 export function cleanupFaultWorker(actual: typeof import("node:worker_threads")) {
   return {
@@ -39,12 +40,5 @@ function withCleanupDeleteFault(options: WorkerOptions | undefined): WorkerOptio
       return prepare.call(this, sql);
     };
   `;
-  return {
-    ...options,
-    execArgv: [
-      ...(options?.execArgv ?? []),
-      "--import",
-      `data:text/javascript,${encodeURIComponent(preload)}`,
-    ],
-  };
+  return withWorkerPreload(options, preload);
 }

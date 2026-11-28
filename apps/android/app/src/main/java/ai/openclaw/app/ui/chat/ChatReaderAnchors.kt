@@ -1,11 +1,18 @@
 package ai.openclaw.app.ui.chat
 
+import ai.openclaw.app.chat.ChatComposerOwner
+import ai.openclaw.app.chat.ChatController
+import ai.openclaw.app.chat.ChatMessage
+import ai.openclaw.app.chat.ChatMessageContent
 import androidx.compose.foundation.lazy.LazyListLayoutInfo
 import androidx.compose.foundation.lazy.LazyListState
+import androidx.compose.foundation.lazy.rememberLazyListState
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.CompositionLocalProvider
 import androidx.compose.runtime.DisposableEffect
+import androidx.compose.runtime.SideEffect
 import androidx.compose.runtime.getValue
+import androidx.compose.runtime.key
 import androidx.compose.runtime.mutableIntStateOf
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.setValue
@@ -227,6 +234,184 @@ internal class ChatReaderAnchor(
       placement++
       row.owner.placed()
     }
+}
+
+// Only the live assistant text part can hand a viewport to a newly delivered entry.
+// Row-local saveable state continues to own ordinary history and recycled readers.
+internal class ChatCodeReaderHandoff(
+  val owner: ChatComposerOwner,
+  val key: String,
+  var runId: String,
+  messages: List<ChatMessage>,
+) {
+  private fun ChatMessage.belongsToRun() = role == "assistant" && !isSyntheticDisplay && runId == this@ChatCodeReaderHandoff.runId
+
+  var liveText: String? = null
+  private val earlier by lazy(LazyThreadSafetyMode.NONE) { messages.mapTo(mutableSetOf()) { it.entryId ?: it.id } }
+  var destination: String? = null
+    private set
+
+  private data class Block(
+    val code: String,
+    val language: String?,
+    val position: () -> Pair<Int, Int>,
+  )
+
+  private val blocks = mutableMapOf<String, Block>()
+  val hasBlocks: Boolean get() = blocks.isNotEmpty()
+
+  fun resolveEntry(
+    messages: List<ChatMessage>,
+    visibleContent: (ChatMessage) -> List<ChatMessageContent>,
+  ): String? {
+    destination?.let { return it }
+    val text = liveText?.takeIf(String::isNotEmpty) ?: return null
+    // A run can deliver commentary before its answer, including the very same fences.
+    val message =
+      messages.singleOrNull { candidate ->
+        candidate.belongsToRun() && (candidate.entryId ?: candidate.id) !in earlier &&
+          visibleContent(candidate).firstOrNull { it.type == "text" && it.toolActivity == null && !it.text.isNullOrBlank() }?.text?.startsWith(text) == true
+      }
+    return message?.let { it.entryId ?: it.id }
+  }
+
+  private fun bind(entry: String) {
+    destination = entry
+    earlier.clear()
+    liveText = null
+  }
+
+  fun initialPosition(
+    path: String?,
+    code: String,
+    language: String?,
+  ): Pair<Int, Int>? = blocks[path]?.takeIf { it.code == code && it.language == language }?.position?.invoke()
+
+  fun consume(
+    path: String?,
+    entry: String,
+  ) {
+    bind(entry)
+    blocks.remove(path)
+  }
+
+  fun observe(
+    path: String,
+    code: String,
+    language: String?,
+    scroll: LazyListState,
+  ): () -> Unit {
+    val block = Block(code, language) { scroll.firstVisibleItemIndex to scroll.firstVisibleItemScrollOffset }
+    blocks[path] = block
+    return {
+      // History may arrive a frame after the live row leaves the composition.
+      if (blocks[path] === block) {
+        val position = block.position()
+        if (position.first == 0 && position.second == 0) blocks.remove(path) else blocks[path] = block.copy(position = { position })
+      }
+    }
+  }
+}
+
+internal data class ChatCodeReaderRow(
+  val run: ChatCodeReaderHandoff,
+  val entry: String? = null,
+)
+
+internal val LocalChatCodeReaderHandoff = staticCompositionLocalOf<ChatCodeReaderRow?> { null }
+
+@Composable
+internal fun rememberChatCodeReaderForRow(
+  messages: List<ChatMessage>,
+  stream: ChatController.StreamingAssistant?,
+  owner: ChatComposerOwner,
+  activeRunCount: Int,
+  visibleContent: (ChatMessage) -> List<ChatMessageContent>,
+): (ChatTimelineItem) -> ChatCodeReaderRow? {
+  val runs = remember(owner) { linkedMapOf<String, ChatCodeReaderHandoff>() }
+  val identity = stream?.owner?.takeIf { it.owner == owner }
+  val readerKey = stream?.readerKey?.takeIf { identity != null }
+  val live =
+    remember(runs, readerKey) {
+      readerKey?.let { runs[it] ?: ChatCodeReaderHandoff(owner, it, checkNotNull(identity).runId, messages) }
+    }
+  val settled =
+    remember(runs, messages, live, visibleContent) {
+      buildMap {
+        for (run in runs.values) {
+          if (run !== live && run.hasBlocks) run.resolveEntry(messages, visibleContent)?.let { put(it, run) }
+        }
+      }
+    }
+  val expired =
+    remember(runs, messages, live) {
+      runs.values.filter { run ->
+        run !== live && (!run.hasBlocks || run.destination?.let { entry -> messages.none { (it.entryId ?: it.id) == entry } } == true)
+      }
+    }
+  SideEffect {
+    runs.values.removeAll(expired)
+    if (live != null && identity != null) {
+      live.runId = identity.runId
+      live.liveText = stream.text
+      if (runs.values.lastOrNull() !== live) {
+        runs.remove(live.key)
+        runs[live.key] = live
+        // Retire abandoned streams when another one starts. Both sides of a
+        // terminal/history gap can still arrive while no run is active.
+        val pending = runs.filterValues { it.destination == null }
+        pending.keys.take((pending.size - activeRunCount - 1).coerceAtLeast(0)).forEach(runs::remove)
+      }
+    }
+  }
+  return { item ->
+    when (item) {
+      is ChatTimelineItem.StreamingAssistant -> {
+        live?.let { ChatCodeReaderRow(it) }
+      }
+
+      is ChatTimelineItem.Message -> {
+        val id = item.message.entryId ?: item.message.id
+        settled[id]?.takeIf { item.message.runId == it.runId && !item.message.isSyntheticDisplay }?.let { ChatCodeReaderRow(it, id) }
+      }
+
+      else -> {
+        null
+      }
+    }
+  }
+}
+
+@Composable
+internal fun rememberFenceScroll(
+  path: String?,
+  code: String,
+  language: String?,
+  live: Boolean,
+): LazyListState {
+  val row = LocalChatCodeReaderHandoff.current
+  val handoff = row?.run
+  return key(if (live) handoff?.owner else null, if (live) handoff?.key else null) {
+    val initial = remember { if (live) handoff?.initialPosition(path, code, language) else null }
+    val scroll = rememberLazyListState(initial?.first ?: 0, initial?.second ?: 0)
+    if (row?.entry != null) {
+      SideEffect {
+        row.run.initialPosition(path, code, language)?.let { (index, offset) ->
+          // History can arrive before settlement and already have its own reading position.
+          if (scroll.firstVisibleItemIndex == 0 && scroll.firstVisibleItemScrollOffset == 0) {
+            scroll.requestScrollToItem(index, offset)
+          }
+          row.run.consume(path, row.entry)
+        }
+      }
+    }
+    if (live && handoff != null && path != null) {
+      DisposableEffect(handoff, path, code, language, scroll) {
+        onDispose(handoff.observe(path, code, language, scroll))
+      }
+    }
+    scroll
+  }
 }
 
 private val LocalChatReaderRow = staticCompositionLocalOf<ChatReaderAnchors.Row?> { null }

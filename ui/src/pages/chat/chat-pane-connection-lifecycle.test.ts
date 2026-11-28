@@ -5,6 +5,7 @@ import type { SessionSuggestionsListResult } from "../../../../packages/gateway-
 /* @vitest-environment-options {"url":"http://chat-pane-connection-lifecycle.test/"} */
 import { GATEWAY_OWNER_PROFILE_ID } from "../../../../packages/gateway-protocol/src/schema/user-profile-constants.js";
 import { createDeferred } from "../../../../test/helpers/promise.js";
+import { GatewayRequestError } from "../../api/gateway-connect-errors.ts";
 import type { GatewayBrowserClient } from "../../api/gateway.ts";
 import { makeBootRoster } from "../../app/bootstrap.test-support.ts";
 import * as draftStore from "../../lib/chat/composer-draft-store.runtime.ts";
@@ -20,6 +21,7 @@ import { chatHistoryRequests } from "./chat-history-state.ts";
 import { syncSelectedSessionMessageSubscription } from "./chat-history-subscription.ts";
 import { applyChatAgentsList, loadChatHistory } from "./chat-history.ts";
 import { makeRequestMock, requestCalls } from "./chat-host.test-support.ts";
+import { inlineCommandPresentation } from "./chat-inline-command-presentation.ts";
 import {
   createTestChatPane,
   connectPaneTestView,
@@ -183,6 +185,36 @@ const setConnected = (pane: TestChatPane, value: boolean) =>
   Object.defineProperty(pane, "isConnected", { configurable: true, value });
 
 describe("chat pane connection lifecycle", () => {
+  it("reasserts inline-output interest before recovery on reconnect without changing the draft", async () => {
+    const { pane, state, request } = reconnectPane({ messages: [], sessionId: "inline-reconnect" });
+    state.settings = { ...state.settings, chatInlineCommands: true };
+    state.inlineCommandPresentation = await inlineCommandPresentation();
+    state.chatMessage = "Unsent reconnect draft";
+    pane.connectedClient = null;
+    const connected = pane.context.gateway.snapshot;
+    let previousSubscription = state.chatSessionMessageSubscription;
+    for (let connection = 0; connection < 2; connection++) {
+      pane.applyGatewaySnapshot(connected);
+      await waitForSolid(() => {
+        expect(state.chatSessionMessageSubscription?.includeLiveToolOutput).toBe(true);
+        expect(requestCalls(request, "chat.startup")).toHaveLength(connection + 1);
+      });
+      expect(state.chatSessionMessageSubscription).not.toBe(previousSubscription);
+      previousSubscription = state.chatSessionMessageSubscription;
+      expect(state.chatMessage).toBe("Unsent reconnect draft");
+      const subscriptions = requestCalls(request, "sessions.messages.subscribe");
+      expect(subscriptions).toHaveLength(connection + 1);
+      expect(subscriptions.at(-1)?.[1]).toMatchObject({ includeLiveToolOutput: true });
+      const methods = request.mock.calls.map(([method]) => method);
+      expect(methods.lastIndexOf("sessions.messages.subscribe")).toBeLessThan(
+        methods.lastIndexOf("chat.startup"),
+      );
+      disconnect(pane);
+      expect(state.connected).toBe(false);
+      expect(state.sessions.captureConnectionScope()).toBeNull();
+    }
+  });
+
   it.each([true, false])(
     "reactivation retries failed live admission only when retryable (%s)",
     async (retryable) => {
@@ -234,9 +266,13 @@ describe("chat pane connection lifecycle", () => {
     },
   );
 
-  it.each(["foreground", "retry"] as const)(
-    "retries a failed approval upgrade via %s",
-    async (entry) => {
+  it.each([
+    ["foreground", "timeout"],
+    ["retry", "timeout"],
+    ["retry", "session change"],
+  ] as const)(
+    "keeps the message subscription and recovers approval updates via %s after a %s",
+    async (entry, cause) => {
       const h = openingPane(true);
       h.dispatchConnect();
       await h.requested;
@@ -247,16 +283,30 @@ describe("chat pane connection lifecycle", () => {
       h.pane.applyGatewaySnapshot(h.connected);
       await h.approvalRequested;
       h.approval.reject(
-        new GatewayProtocolRequestTimeoutError({
-          method: "sessions.messages.subscribe",
-          timeoutMs: 30_000,
-          requestSent: true,
-        }),
+        cause === "session change"
+          ? new GatewayRequestError({
+              code: "INVALID_REQUEST",
+              message: "session changed before sessions.messages.subscribe; retry the request",
+              details: {
+                code: "SESSION_MUTATION_AUTHORIZATION_CHANGED",
+                method: "sessions.messages.subscribe",
+                sessionKey: h.state.sessionKey,
+              },
+            })
+          : new GatewayProtocolRequestTimeoutError({
+              method: "sessions.messages.subscribe",
+              timeoutMs: 30_000,
+              requestSent: true,
+            }),
       );
       await waitForSolid(() =>
         expect(chatHistoryRequests(h.state).historyLoad).toMatchObject({
           phase: "failed",
           retryable: true,
+          message:
+            cause === "session change"
+              ? "This session changed before OpenClaw could finish checking for updates. Try again."
+              : "Couldn’t load the conversation in time. Try again.",
         }),
       );
       expect(h.state.chatSessionMessageSubscription?.key).toBe(h.state.sessionKey);
@@ -371,7 +421,7 @@ describe("chat pane connection lifecycle", () => {
           "sessions.messages.subscribe",
           expect.objectContaining({
             key: h.state.sessionKey,
-            initialHistory: expect.objectContaining({ limit: 80 }),
+            initialHistory: expect.objectContaining({ limit: 24 }),
           }),
           expect.anything(),
         ],

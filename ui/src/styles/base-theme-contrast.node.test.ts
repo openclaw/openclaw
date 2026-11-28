@@ -129,7 +129,6 @@ describe("Control UI theme contrast", () => {
   const controls = (
     [
       ["components.css", ".btn.active", "var(--accent-subtle)"],
-      ["sessions.css", ".session-label-chip"],
       ["sessions.css", ".session-kind--direct"],
     ] satisfies [string, string, string?][]
   ).flatMap(([file, selector, tint]) =>
@@ -215,6 +214,33 @@ describe("Control UI theme contrast", () => {
     }
   });
 
+  it("keeps composer placeholders readable and quieter than draft text", () => {
+    const chatSelector = ".agent-chat__composer-placeholder";
+    const chatRules = cssRules(readStyle("chat/composer-surface.css"));
+    const chatPlaceholder = readPaint(
+      readRule(
+        chatRules.filter((rule) => rule.selector === chatSelector),
+        chatSelector,
+      ),
+      "color",
+    );
+    const palettePlaceholder = readPaint(
+      readRule(componentsRules, ".cmd-palette__input::placeholder"),
+      "color",
+    );
+    expect(palettePlaceholder).toBe(chatPlaceholder);
+    for (const [theme, tokens] of themes) {
+      const surface = resolveOpaqueColor("var(--chat-composer-surface)", tokens);
+      const onComposer = (ink: string) => contrastRatio(resolveOpaqueColor(ink, tokens), surface);
+      const placeholderContrast = onComposer(chatPlaceholder);
+      expectFloor(placeholderContrast, contrastFloor(theme), theme);
+      expect(placeholderContrast, theme).toBeLessThan(onComposer("var(--text-strong)"));
+      if (theme === "light" || theme.endsWith("-light")) {
+        expect(placeholderContrast, theme).toBeLessThan(onComposer("var(--muted)"));
+      }
+    }
+  });
+
   it("keeps user code block syntax colors at AA over every sender bubble", () => {
     const toHex = (rgb: RGB) =>
       `#${rgb.map((value) => Math.round(value).toString(16).padStart(2, "0")).join("")}`;
@@ -275,23 +301,19 @@ describe("Control UI theme contrast", () => {
   });
 
   it("keeps the markdown code chip separated from every surface it sits on", () => {
-    // --secondary matched --card and hid code chips in dark user bubbles.
+    // --secondary matched --card and hid code chips in dark user bubbles. The chip
+    // has no outline, so its fill has to clear every host by itself.
     const rule = readRule(textRules, ".chat-text :where(:not(pre, a.markdown-file-link) > code)");
-    for (const [property, minimum] of [
-      ["background", 1.05],
-      ["border", 1.25],
-    ] as const) {
-      const paint = required(readPaint(rule, property).match(/var\(.+\)/u)?.[0], property);
-      for (const [theme, tokens] of themes) {
-        const color = resolveColor(paint, tokens);
-        for (const hostToken of ["--card", "--bg"]) {
-          const host = resolveOpaqueColor(`var(${hostToken})`, tokens);
-          expectFloor(
-            contrastRatio(composite(color, host), host),
-            minimum,
-            `${theme}/${hostToken} chip ${property}`,
-          );
-        }
+    const paint = required(readPaint(rule, "background").match(/var\(.+\)/u)?.[0], "background");
+    for (const [theme, tokens] of themes) {
+      const color = resolveColor(paint, tokens);
+      for (const hostToken of ["--card", "--bg"]) {
+        const host = resolveOpaqueColor(`var(${hostToken})`, tokens);
+        expectFloor(
+          contrastRatio(composite(color, host), host),
+          1.05,
+          `${theme}/${hostToken} chip fill`,
+        );
       }
     }
   });

@@ -5,16 +5,20 @@ import fsp from "node:fs/promises";
 import path from "node:path";
 import { quoteCliArg } from "../cli/quote-cli-arg.js";
 import { captureUpdateCommandExecutorAuthority } from "../cli/update-cli/update-command-executor.js";
+import { UpdateCommandRecoveryPendingError } from "../cli/update-cli/update-command-recovery-error.js";
 import { resolveBunRuntimeInfo } from "../daemon/runtime-paths.js";
 import { requireDirectorySync, syncDirectory } from "./directory-durability.js";
+import { ignoreMissingPath } from "./errno.js";
 import { formatErrorMessage } from "./errors.js";
 import { retainMutationAuthority } from "./mutation-authority.js";
 import {
   completePackageActivationCustody,
   inspectPackageActivationCustody,
+  packageActivationIdentityOrAbsent,
 } from "./package-update-activation-custody.js";
 import {
   type PackageActivationDescriptor,
+  type PackageActivationJournal,
   type PackageActivationRecord,
   createPackageActivationJournal,
   openPackageActivationSettlementJournal,
@@ -29,6 +33,10 @@ import {
 } from "./package-update-activation-journal.js";
 import { packageActivationRuntimeIdentity } from "./package-update-activation-paths.js";
 import { packageActivationRuntimeEntrypoint } from "./package-update-activation-runtime-assets.js";
+import {
+  inspectPackageActivationLease,
+  isUnpublishedPreparation,
+} from "./package-update-activation-settlement.js";
 import {
   packageActivationSqliteEnvironment,
   readPackageActivationSqliteLibrary,
@@ -69,7 +77,7 @@ function packageActivationRecoveryCommand(
   return `${prefix}${quoteCliArg(node)} ${quoteCliArg(helper)} --anchor ${quoteCliArg(anchor)} --operation ${quoteCliArg(operationId)}`;
 }
 
-export function resolvePackageActivationRecoveryCommand(record: PackageActivationRecord): string {
+function readRecordedPackageActivationHelper(record: PackageActivationRecord) {
   const anchor = resolvePackageActivationAnchor(record.descriptor.authority.installKey);
   let helper = resolvePackageActivationHelper(anchor);
   if (record.phase === "preparing") {
@@ -83,18 +91,135 @@ export function resolvePackageActivationRecoveryCommand(record: PackageActivatio
     }
     helper = custody.moved ? custody.destination : custody.source;
   }
-  const node = record.descriptor.recoveryNodePath;
   const bytes = fs.readFileSync(helper);
   if (createHash("sha256").update(bytes).digest("hex") !== record.descriptor.helperDigest) {
     throw new Error("Package recovery helper digest changed.");
   }
+  return { anchor, helper, bytes };
+}
+
+export function resolvePackageActivationRecoveryCommand(record: PackageActivationRecord): string {
+  const { anchor, helper, bytes } = readRecordedPackageActivationHelper(record);
   return packageActivationRecoveryCommand(
-    node,
+    record.descriptor.recoveryNodePath,
     anchor,
     record.descriptor.operationId,
     helper,
     readPackageActivationSqliteLibrary(bytes),
   );
+}
+
+/**
+ * Whether this build sealed the recorded recovery helper. Its own recovery code
+ * is then that helper's, so resuming the operation in process runs what the
+ * printed recovery command would. Any other build leaves it to that command.
+ */
+function isPackageActivationHelperBuild(record: PackageActivationRecord): boolean {
+  const { bytes } = readRecordedPackageActivationHelper(record);
+  let own: Buffer;
+  try {
+    own = fs.readFileSync(resolveRuntimeWorkerUrl(packageActivationRuntimeEntrypoint));
+  } catch (error) {
+    // A source checkout has no built helper, so it sealed none.
+    return ignoreMissingPath(error) ?? false;
+  }
+  return sealPackageActivationSqliteLibrary(own, readPackageActivationSqliteLibrary(bytes)).equals(
+    bytes,
+  );
+}
+
+const REINSTALL_NEXT_STEP =
+  "reinstall openclaw with your package manager (https://docs.openclaw.ai/install/updating/update-methods#alternative-manual-npm-pnpm-or-bun), then run openclaw update, which retires the superseded operation";
+
+/**
+ * Says how resuming a killed publication ends, or nothing when this update must
+ * not resume it. Resuming runs the recovery the printed command runs, under a
+ * fresh claim on the recorded lease store: that claim is what proves the original
+ * updater gone, so the store must be the recorded one. It never replaces an
+ * installed package: the untouched previous one stays and the publication aborts,
+ * or none is installed and the recorded candidate is published into the gap.
+ */
+export function inspectResumablePackagePublication(
+  journal: Pick<PackageActivationJournal, "inspectRemount">,
+  record: PackageActivationRecord,
+): "abort" | "publish" | undefined {
+  const installed = packageActivationIdentityOrAbsent(record.descriptor.authority.installKey, true);
+  // Only a publication under way displaces the package it then replaces.
+  const resumable =
+    installed === null
+      ? record.phase === "publishing"
+      : installed === record.descriptor.previous.identity &&
+        ["preparing", "prepared", "publishing"].includes(record.phase) &&
+        !isUnpublishedPreparation(record, installed);
+  const lease = resumable && inspectPackageActivationLease(record.descriptor.authority);
+  if (
+    !lease ||
+    !lease.current ||
+    lease.changed ||
+    journal.inspectRemount(record) ||
+    !isPackageActivationHelperBuild(record)
+  ) {
+    return undefined;
+  }
+  return installed === null ? "publish" : "abort";
+}
+
+/** Adds what resuming a killed publication did to the settlement that closed it. */
+export function noteResumedPackagePublication<T extends { detail: string | undefined }>(
+  settled: T,
+  outcome: "abort" | "publish",
+  preview = false,
+) {
+  const resumed = `${
+    outcome === "abort"
+      ? "The publication was interrupted before its candidate was installed and is aborted: the installed package is kept and the unpublished candidate is discarded."
+      : "The publication was interrupted after the previous package left the package path: its recorded candidate is published."
+  }${preview ? " A real update does this only after it claims the installation, which the original updater must have released." : ""}`;
+  return { ...settled, resumed, detail: settled.detail ? `${resumed} ${settled.detail}` : resumed };
+}
+
+/** A dry run's settlement: what a real update would resume, which it cannot claim to prove. */
+export function previewResumedPackagePublication(
+  record: PackageActivationRecord,
+  outcome: "abort" | "publish",
+) {
+  return noteResumedPackagePublication(
+    {
+      operationId: record.descriptor.operationId,
+      reason:
+        outcome === "abort" ? "publication-not-started" : "publication-settled-external-change",
+      retained: undefined,
+      detail: undefined,
+    },
+    outcome,
+    true,
+  );
+}
+
+/** A resumption its own recovery refused: keep the reason and name a step that works. */
+export function refusePackagePublicationResume(record: PackageActivationRecord, cause: unknown) {
+  // Losing the claim is its own refusal, with its own next step.
+  return cause instanceof UpdateCommandRecoveryPendingError
+    ? cause
+    : new Error(
+        `Package publication ${record.descriptor.operationId} cannot be resumed: its recorded recovery refuses the installation as it is now. Retry once; if it refuses again, ${REINSTALL_NEXT_STEP}. Cause: ${formatErrorMessage(cause)}`,
+        { cause },
+      );
+}
+
+/** Without the recorded lease store, replaced or missing, nothing proves the original updater gone. */
+export function explainLostPublicationLease(error: unknown): unknown {
+  return error instanceof Error &&
+    "code" in error &&
+    (error.code === "managed-handoff-lease-identity-changed" || error.code === "ENOENT")
+    ? Object.assign(
+        new Error(
+          `${error.message} If repair reports the same, no updater can prove that this unfinished package publication's original updater has exited: ${REINSTALL_NEXT_STEP}.`,
+          { cause: error },
+        ),
+        { code: error.code },
+      )
+    : error;
 }
 
 export async function preparePackageActivationJournal(

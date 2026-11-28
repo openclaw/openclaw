@@ -43,7 +43,8 @@ it("pops in for new work but continues a claw that another one just handed off",
   const now = vi.spyOn(performance, "now").mockReturnValue(10_000);
   const isContinued = (view: ReturnType<typeof indicator>) =>
     view.find(".chat-working-indicator")?.classList.contains("chat-working-indicator--continued");
-  const preview = indicator("handoff");
+  const preview = indicator("handoff", { workingIndicator: "claw" });
+  expect(preview.find(".chat-reading-indicator svg .claw-icon__jaw")).not.toBeNull();
   expect(isContinued(preview)).toBe(false);
   preview.unmount();
   now.mockReturnValue(10_200);
@@ -57,7 +58,8 @@ it("keeps status text visible when the working glyph is hidden", () => {
   });
   expect(find(bubbleSelector)).toBeNull();
   expect(find(".chat-working-indicator__status > span")?.classList.contains("sr-only")).toBe(false);
-  expect(container.textContent).toContain("Working");
+  expect(find(".chat-working-indicator__status > span")?.textContent).toBe("Working");
+  expect(container.querySelector('[role="status"]')?.getAttribute("aria-live")).toBe("off");
 });
 
 it.each<Options>([

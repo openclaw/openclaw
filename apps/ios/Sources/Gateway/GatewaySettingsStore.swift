@@ -253,6 +253,9 @@ enum GatewaySettingsStore {
     {
         let stableID = self.authenticationOwnerID(routeStableID: gatewayStableID)
         guard !stableID.isEmpty else { return false }
+        if service == self.gatewayCustomHeadersService {
+            self.invalidateShareRelayTransport(gatewayStableID: stableID)
+        }
         let sanitized = GatewayCustomHeaders.sanitized(headers)
         guard !sanitized.isEmpty else {
             return self.clearGatewayCustomHeaders(gatewayStableID: stableID, service: service)
@@ -277,6 +280,9 @@ enum GatewaySettingsStore {
     {
         let stableID = self.authenticationOwnerID(routeStableID: gatewayStableID)
         guard !stableID.isEmpty else { return false }
+        if service == self.gatewayCustomHeadersService {
+            self.invalidateShareRelayTransport(gatewayStableID: stableID)
+        }
         let account = self.customHeadersAccount(stableID: stableID)
         let canonicalDeleted = GenericPasswordKeychainStore.delete(service: service, account: account)
         var legacyCleared = true
@@ -296,7 +302,19 @@ enum GatewaySettingsStore {
     /// Full onboarding reset is the explicit forget boundary for every gateway's proxy secrets.
     @discardableResult
     static func clearGatewayCustomHeaders(service: String = GatewaySettingsStore.gatewayCustomHeadersService) -> Bool {
-        GenericPasswordKeychainStore.deleteAll(service: service)
+        if service == self.gatewayCustomHeadersService {
+            ShareGatewayRelaySettings.clearConfig()
+        }
+        return GenericPasswordKeychainStore.deleteAll(service: service)
+    }
+
+    private static func invalidateShareRelayTransport(gatewayStableID: String) {
+        guard GatewayStableIdentifier.matches(
+            ShareGatewayRelaySettings.loadConfig()?.gatewayStableID, gatewayStableID)
+        else { return }
+        // Reconnect republishes the accepted transport. Until then, a removed
+        // service token must not survive in the extension's shared bundle.
+        ShareGatewayRelaySettings.clearConfig()
     }
 
     private static func customHeadersAccount(stableID: String) -> String {
@@ -357,13 +375,6 @@ enum GatewaySettingsStore {
             instanceId: trimmedInstanceID)
     }
 
-    static func saveLegacyGatewayTokenForMigrationTest(_ token: String, instanceId: String) {
-        _ = GenericPasswordKeychainStore.saveString(
-            token,
-            service: self.gatewayService,
-            account: self.gatewayTokenAccount(instanceId: instanceId))
-    }
-
     private struct LegacyLastGatewayConnectionData: Codable {
         var kind: GatewayRegistryEntry.Kind
         var stableID: String
@@ -390,6 +401,11 @@ enum GatewaySettingsStore {
             GatewayStableIdentifier.matches($0.stableID, normalized.stableID)
         }) {
             var replacement = normalized
+            let saved = registry.entries[index]
+            // Connection and discovery callbacks supply defaults, not user edits.
+            if !saved.hasAutomaticAddressName, saved.name != saved.stableID {
+                replacement.name = saved.name
+            }
             // Connection/Bonjour updates do not own ingress identity. Retain the
             // last admitted origin until its owner retires or replaces the grant.
             replacement.accessOrigin = replacement.accessOrigin ?? registry.entries[index].accessOrigin

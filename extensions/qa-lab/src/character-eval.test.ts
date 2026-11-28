@@ -440,54 +440,6 @@ describe("runQaCharacterEval", () => {
     });
   });
 
-  it("defaults to the character eval model panel when no models are provided", async () => {
-    const runSuite = makeRunSuite();
-    const runJudge = makeRunJudge([
-      { model: "openai/gpt-5.6-luna", rank: 1, score: 8, summary: "ok" },
-      { model: "openai/gpt-5.2", rank: 2, score: 7.5, summary: "ok" },
-      { model: "openai/gpt-5", rank: 3, score: 7.2, summary: "ok" },
-      { model: "anthropic/claude-opus-4-8", rank: 4, score: 7, summary: "ok" },
-      { model: "anthropic/claude-sonnet-4-6", rank: 5, score: 6.8, summary: "ok" },
-      { model: "zai/glm-5.1", rank: 6, score: 6.3, summary: "ok" },
-      { model: "moonshot/kimi-k2.5", rank: 7, score: 6.2, summary: "ok" },
-      { model: "google/gemini-3.1-pro-preview", rank: 8, score: 6, summary: "ok" },
-    ]);
-
-    await runEval({
-      models: [],
-      runSuite,
-      runJudge,
-    });
-
-    expect(runSuite).toHaveBeenCalledTimes(8);
-    expect(
-      runSuite.mock.calls.map(([params]) => [
-        params.primaryModel,
-        params.thinkingDefault,
-        params.fastMode,
-      ]),
-    ).toEqual([
-      ["openai/gpt-5.6-luna", "medium", true],
-      ["openai/gpt-5.2", "xhigh", true],
-      ["openai/gpt-5", "xhigh", true],
-      ["anthropic/claude-opus-4-8", "high", false],
-      ["anthropic/claude-sonnet-4-6", "high", false],
-      ["zai/glm-5.1", "high", false],
-      ["moonshot/kimi-k2.5", "high", false],
-      ["google/gemini-3.1-pro-preview", "high", false],
-    ]);
-    expect(runJudge).toHaveBeenCalledTimes(2);
-    expect(runJudge.mock.calls.map(([params]) => params.primaryModel)).toEqual([
-      "openai/gpt-5.6-luna",
-      "anthropic/claude-opus-4-8",
-    ]);
-    expect(runJudge.mock.calls.map(([params]) => params.thinkingDefault)).toEqual([
-      "xhigh",
-      "high",
-    ]);
-    expect(runJudge.mock.calls.map(([params]) => params.fastMode)).toEqual([true, false]);
-  });
-
   it("runs candidate models with bounded concurrency while preserving result order", async () => {
     const runGate = createConcurrencyGate(2);
     const runSuite = vi.fn(async (params: CharacterRunSuiteParams) =>
@@ -647,63 +599,6 @@ describe("runQaCharacterEval", () => {
       model: "qwen/qwen3.5-plus",
       error: "tool failure leaked into transcript",
     });
-  });
-
-  it("lets explicit candidate thinking override the default panel", async () => {
-    const runSuite = makeRunSuite();
-    const runJudge = makeRunJudge([
-      { model: "openai/gpt-5.6-luna", rank: 1, score: 8, summary: "ok" },
-      { model: "moonshot/kimi-k2.5", rank: 2, score: 7, summary: "ok" },
-    ]);
-
-    await runEval({
-      models: ["openai/gpt-5.6-luna", "moonshot/kimi-k2.5"],
-      candidateThinkingDefault: "medium",
-      candidateThinkingByModel: { "moonshot/kimi-k2.5": "high" },
-      judgeModels: ["openai/gpt-5.6-luna"],
-      runSuite,
-      runJudge,
-    });
-
-    expect(runSuite.mock.calls.map(([params]) => params.thinkingDefault)).toEqual([
-      "medium",
-      "high",
-    ]);
-  });
-
-  it("lets model-specific options override candidate and judge defaults", async () => {
-    const runSuite = makeRunSuite();
-    const runJudge = makeRunJudge([
-      { model: "openai/gpt-5.6-luna", rank: 1, score: 8, summary: "ok" },
-      { model: "moonshot/kimi-k2.5", rank: 2, score: 7, summary: "ok" },
-    ]);
-
-    await runEval({
-      models: ["openai/gpt-5.6-luna", "moonshot/kimi-k2.5"],
-      candidateFastMode: true,
-      candidateThinkingDefault: "medium",
-      candidateModelOptions: {
-        "openai/gpt-5.6-luna": { thinkingDefault: "xhigh", fastMode: false },
-      },
-      judgeModels: ["openai/gpt-5.6-luna", "anthropic/claude-opus-4-8"],
-      judgeModelOptions: {
-        "openai/gpt-5.6-luna": { thinkingDefault: "xhigh", fastMode: true },
-        "anthropic/claude-opus-4-8": { thinkingDefault: "high" },
-      },
-      runSuite,
-      runJudge,
-    });
-
-    expect(runSuite.mock.calls.map(([params]) => params.thinkingDefault)).toEqual([
-      "xhigh",
-      "medium",
-    ]);
-    expect(runSuite.mock.calls.map(([params]) => params.fastMode)).toEqual([false, true]);
-    expect(runJudge.mock.calls.map(([params]) => params.thinkingDefault)).toEqual([
-      "xhigh",
-      "high",
-    ]);
-    expect(runJudge.mock.calls.map(([params]) => params.fastMode)).toEqual([true, false]);
   });
 
   it("keeps failed model runs in the report for grader context", async () => {

@@ -14,9 +14,11 @@ export type GatewayStateOwnerVerification = {
   current: boolean;
   error?: string;
 };
-export type GatewayStateOwnerHeartbeatLoss = { type: "lost"; error: string };
+export type GatewayStateOwnerHeartbeatLoss = { type: "lost"; lockPath: string; error: string };
 
 type HeartbeatCommand = "stop" | [string, string] | { type: "verify"; id: number; paths: string[] };
+
+export const heartbeatStartup = { pending: 0, active: 1, cancelled: 2 } as const;
 
 export type GatewayStateOwnerHeartbeatData = {
   clock?: "epoch";
@@ -25,6 +27,8 @@ export type GatewayStateOwnerHeartbeatData = {
   failureMs: number;
   lastBeat: SharedArrayBuffer;
   events: MessagePort;
+  /** Older retained drivers can start this worker without the cold-stop handoff. */
+  startup?: Int32Array<SharedArrayBuffer>;
 };
 
 function selectHeartbeatClock(data: GatewayStateOwnerHeartbeatData, seed: bigint) {
@@ -135,9 +139,25 @@ export function runGatewayStateOwnerHeartbeat(
       forget(lockPath);
     }
     data.events.close();
+    parent?.postMessage("closed", []);
     parent?.close();
   };
   let parentLost = false;
+  const lost = (lockPath: string) => {
+    data.events.postMessage(
+      {
+        type: "lost",
+        lockPath,
+        error: `${lockPath}: owner lock was removed or replaced`,
+      } satisfies GatewayStateOwnerHeartbeatLoss,
+      [],
+    );
+    if (lockPath === rootPath) {
+      stop();
+    } else {
+      forget(lockPath);
+    }
+  };
   const beat = () => {
     // Keep renewing custody while cancellation settles; peers must not race its rollback.
     if (!parentLost && owner?.pid === process.pid && isGatewayMaintenanceParentStale(owner)) {
@@ -156,18 +176,10 @@ export function runGatewayStateOwnerHeartbeat(
         const renewalStartedAt = now();
         const stamp = new Date(clock === "epoch" ? Number(renewalStartedAt) : Date.now());
         if (!renewGatewayStateOwnerLock(fd, lockPath, raw, stamp)) {
+          lost(lockPath);
           if (lockPath === rootPath) {
-            data.events.postMessage(
-              {
-                type: "lost",
-                error: `${lockPath}: owner lock was removed or replaced`,
-              } satisfies GatewayStateOwnerHeartbeatLoss,
-              [],
-            );
-            stop();
             return;
           }
-          forget(lockPath);
           continue;
         }
         if (renewedAt === undefined || renewalStartedAt < renewedAt) {
@@ -175,18 +187,10 @@ export function runGatewayStateOwnerHeartbeat(
         }
       } catch (error) {
         if (hasErrnoCode(error, "ENOENT")) {
+          lost(lockPath);
           if (lockPath === rootPath) {
-            data.events.postMessage(
-              {
-                type: "lost",
-                error: `${lockPath}: owner lock was removed or replaced`,
-              } satisfies GatewayStateOwnerHeartbeatLoss,
-              [],
-            );
-            stop();
             return;
           }
-          forget(lockPath);
           continue;
         }
         failure ??= `${lockPath}: utimes renewal failed: ${coerceErrorMessage(error)}`;
@@ -194,6 +198,14 @@ export function runGatewayStateOwnerHeartbeat(
     }
     data.events.postMessage(failure, []);
     if (failure && remainingMs() <= 0) {
+      data.events.postMessage(
+        {
+          type: "lost",
+          lockPath: rootPath ?? "",
+          error: failure,
+        } satisfies GatewayStateOwnerHeartbeatLoss,
+        [],
+      );
       stop();
       return;
     }
@@ -247,6 +259,14 @@ export function runGatewayStateOwnerHeartbeat(
     }
   });
   parent?.on("close", stop);
+  if (
+    data.startup &&
+    Atomics.compareExchange(data.startup, 0, heartbeatStartup.pending, heartbeatStartup.active) !==
+      heartbeatStartup.pending
+  ) {
+    stop();
+    return;
+  }
   beat();
   parent?.postMessage(null, []);
 }

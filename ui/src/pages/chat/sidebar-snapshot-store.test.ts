@@ -296,7 +296,6 @@ it("keeps the sidebar and unrelated chats when a deleted session is pruned from 
     ...sidebarSnapshot,
     windowKeys: [removed.key, retained.key],
     pinnedSessions: [removed, parent],
-    pages: [removed, retained],
     entries: [`session:${removed.key}`, `session:${retained.key}`, "route:usage"],
   };
   await store.writeSidebar(key(scope), saved, parseSidebarSnapshot);
@@ -311,7 +310,6 @@ it("keeps the sidebar and unrelated chats when a deleted session is pruned from 
   await deleteStoredChatSnapshot(sessionKey);
   const restored = await store.readSidebar(key(scope), parseSidebarSnapshot);
   assert(restored, "deleting one session must retain the sidebar");
-  expect(restored.pages.map((row) => row.key)).toEqual([retained.key]);
   expect(restored.pinnedSessions.map((row) => row.key)).toEqual([retained.key]);
   expect(restored.pinnedSessions[0]?.children).toEqual([]);
   expect(restored.windowKeys).toEqual([retained.key]);

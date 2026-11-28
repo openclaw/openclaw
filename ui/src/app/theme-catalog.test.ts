@@ -1,6 +1,5 @@
 import { expectDefined } from "@openclaw/normalization-core";
 /* @vitest-environment jsdom */
-import { createComponent } from "solid-js";
 import { afterEach, beforeEach, expect, it, vi } from "vitest";
 import type {
   ThemesGetResult,
@@ -17,9 +16,6 @@ import {
   createThemeDefinitionFixture,
   createThemePaletteFixture,
 } from "../../../test/helpers/theme-fixture.js";
-import { AgentIdentityAvatar } from "../components/solid/identity-avatar.tsx";
-import { mountSolid } from "../test-helpers/mount-solid.ts";
-import { flush } from "../test-helpers/solid-settle.ts";
 import { createApplicationTheme } from "./bootstrap-theme.ts";
 import { initializeControlUiDocumentHead } from "./control-ui-document-head.ts";
 import {
@@ -141,46 +137,6 @@ it.each([
     }
   },
 );
-
-it("notifies leaf branding consumers when a newly selected built-in palette loads", async () => {
-  const { gateway, current } = createGatewayStoreTestStore();
-  const theme = createApplicationTheme(loadSettings(), gateway);
-  const { container, unmount } = mountSolid(() =>
-    createComponent(AgentIdentityAvatar, { agent: { id: "openclaw" } }),
-  );
-  const renderMark = vi.fn();
-  const unsubscribe = theme.subscribe(renderMark);
-  gateway.start();
-  current().request.mockResolvedValue(
-    catalog({ ...definition, mascot: "none", avatarHat: "fedora" }),
-  );
-  current().testOptions.onHello?.(GATEWAY_STORE_TEST_HELLO);
-  try {
-    await vi.dynamicImportSettled();
-    flush();
-    expect(container.querySelector(".identity-avatar--neutral")).not.toBeNull();
-    renderMark.mockClear();
-    patchSettings({ theme: "knot" });
-    flush();
-    expect(theme.settings.theme).toBe("knot");
-    expect(renderMark).toHaveBeenCalledTimes(1);
-    expect(container.querySelector("img")?.getAttribute("src")).toBe("/favicon.svg");
-    const palette = document.getElementById("openclaw-theme-palette-knot")!;
-    expect(document.documentElement.dataset.themeId).toBe(descriptor.id);
-    palette.dispatchEvent(new Event("load"));
-    flush();
-    expect(renderMark).toHaveBeenCalledTimes(2);
-    expect(document.documentElement.dataset.themeId).toBe("knot");
-    expect(document.documentElement.dataset.themeAvatarHat).toBeUndefined();
-    expect(container.querySelector("img")?.getAttribute("src")).toBe("/favicon.svg");
-  } finally {
-    unsubscribe();
-    theme.dispose();
-    gateway.stop();
-    unmount();
-    document.getElementById("openclaw-theme-palette-knot")?.remove();
-  }
-});
 
 it("applies routed profile updates and plugin hot reloads, restoring an unavailable selection", async () => {
   const { gateway, current, clients } = createGatewayStoreTestStore();
@@ -364,7 +320,7 @@ it("retries a failed selected palette only after an explicit catalog retry", asy
   }
 });
 
-it("does not report a previous palette failure after a local theme switch", async () => {
+it("reports an unavailable preview without replacing the newly selected palette", async () => {
   const replacement: ThemeDescriptor = {
     ...descriptor,
     id: "space-pack/afterglow",
@@ -426,7 +382,7 @@ it("does not report a previous palette failure after a local theme switch", asyn
     retired.reject(new Error("Previous palette is unavailable"));
     await retired.promise.catch(() => undefined);
     expect(document.documentElement.dataset.themeId).toBe(replacement.id);
-    expect(applicationTheme.catalog?.error).toBeNull();
+    expect(applicationTheme.catalog?.error).toBe("Previous palette is unavailable");
     expect(paletteReads).toBe(2);
   } finally {
     applicationTheme.dispose();
@@ -478,7 +434,7 @@ it("keeps a local palette selected during catalog refresh and reloads later vers
     const delayed = createDeferred<ThemesGetResult>();
     paletteResponse = delayed.promise;
     current().testOptions.onEvent?.(createGatewayEvent("plugins.changed", { generation: 2 }));
-    await vi.waitFor(() => expect(paletteReads).toBe(2));
+    await vi.waitFor(() => expect(paletteReads).toBe(3));
     expect(document.documentElement.dataset.themeId).toBe(descriptor.id);
     expect(document.getElementById("openclaw-custom-theme")?.textContent).toContain(
       "--bg: #111122;",
@@ -494,7 +450,7 @@ it("keeps a local palette selected during catalog refresh and reloads later vers
     const failed = createDeferred<ThemesGetResult>();
     paletteResponse = failed.promise;
     current().testOptions.onEvent?.(createGatewayEvent("plugins.changed", { generation: 3 }));
-    await vi.waitFor(() => expect(paletteReads).toBe(3));
+    await vi.waitFor(() => expect(paletteReads).toBe(4));
     failed.reject(new Error("Palette refresh temporarily failed"));
     await failed.promise.catch(() => undefined);
     expect(document.documentElement.dataset.themeId).toBe(descriptor.id);
@@ -503,7 +459,7 @@ it("keeps a local palette selected during catalog refresh and reloads later vers
     );
     expect(applicationTheme.catalog?.error).toBe("Palette refresh temporarily failed");
     patchSettings({ textScale: 110 });
-    expect(paletteReads).toBe(3);
+    expect(paletteReads).toBe(4);
 
     paletteResponse = undefined;
     palette = createThemeDefinitionFixture({

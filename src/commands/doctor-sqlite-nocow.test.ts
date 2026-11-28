@@ -10,6 +10,7 @@ import { registerAgentDatabaseReaderCloser } from "../infra/agent-database-reade
 import { createClientCredentialMigrationFixture } from "../infra/client-credential-migration.test-support.js";
 import { runClientCredentialOperation } from "../infra/client-credential-store.js";
 import { openNodeSqliteDatabase } from "../infra/node-sqlite.js";
+import { SQLITE_READONLY_CHILD_ARG } from "../infra/runtime-process-entrypoints.js";
 import {
   listSessionSqliteMigrationManifestPaths,
   readSessionSqliteMigrationManifest,
@@ -22,11 +23,18 @@ import { openOpenClawStateDatabase } from "../state/openclaw-state-db.js";
 import { withOpenClawTestState } from "../test-utils/openclaw-test-state.js";
 import { prepareDoctorDatabasePreflight } from "./doctor-database-preflight.js";
 import { beginDoctorMaintenance } from "./doctor-maintenance.js";
-import { completeDoctorMigrationBackups } from "./doctor-migration-backup-artifacts.js";
+import {
+  checkDoctorMigrationBackupsPending,
+  completeDoctorMigrationBackups,
+} from "./doctor-migration-backup-artifacts.js";
 import { backupDoctorMigrationDatabases } from "./doctor-migration-backup.js";
 import { inspectSessionSqliteRecovery } from "./doctor-session-sqlite-recovery-inventory.js";
 import { retireSessionSqliteRecovery } from "./doctor-session-sqlite-retirement.js";
-import { inspectDoctorSqliteNoCow, repairDoctorSqliteNoCow } from "./doctor-sqlite-nocow.js";
+import {
+  checkDoctorSqliteNoCowPending,
+  inspectDoctorSqliteNoCow,
+  repairDoctorSqliteNoCow,
+} from "./doctor-sqlite-nocow.js";
 import {
   baseAcl,
   inheritedDefaultAcl,
@@ -34,10 +42,13 @@ import {
 } from "./doctor-sqlite-nocow.test-support.js";
 import * as updateCaptureCleanup from "./update-capture-cleanup.js";
 
-vi.mock("node:child_process", async (importOriginal) => ({
-  ...(await importOriginal<typeof import("node:child_process")>()),
-  spawnSync: vi.fn(),
-}));
+vi.mock("node:child_process", async (importOriginal) => {
+  const actual = await importOriginal<
+    typeof import("node:child_process") & { default: typeof import("node:child_process") }
+  >();
+  const overrides = { spawnSync: vi.fn() };
+  return { ...actual, ...overrides, default: { ...actual.default, ...overrides } };
+});
 vi.mock("../infra/sqlite-wal-filesystem.js", async (importOriginal) => ({
   ...(await importOriginal<typeof import("../infra/sqlite-wal-filesystem.js")>()),
   isSqlitePathOnBtrfs: vi.fn(() => true),
@@ -258,6 +269,26 @@ it("reports existing CoW stores, skips other filesystems and explains missing to
   expect(inspectDoctorSqliteNoCow([sqlitePath]).notes).toEqual([]);
   vi.mocked(isSqlitePathOnBtrfs).mockReturnValue(true);
   expect(inspectDoctorSqliteNoCow([sqlitePath]).notes.join(",")).toContain("lsattr is unavailable");
+});
+
+it("decides pending NOCOW work without changing the store", () => {
+  seedDatabase();
+  const family = [directory, sqlitePath, `${sqlitePath}-wal`, `${sqlitePath}-shm`];
+  const snapshot = () =>
+    family.map((pathname) => {
+      const stat = fs.statSync(pathname, { bigint: true });
+      return [pathname, stat.isFile() ? fs.readFileSync(pathname) : null, stat.mtimeNs, stat.ino];
+    });
+  const before = snapshot();
+  const decide = () => checkDoctorSqliteNoCowPending(inspectDoctorSqliteNoCow([sqlitePath]));
+
+  expect(decide()).toBe("work");
+  fixture.attributes = true;
+  expect(decide()).toBe("none");
+  fixture.tools = "unavailable";
+  expect(decide()).toBe("undecidable");
+
+  expect(snapshot()).toEqual(before);
 });
 
 it.each(["exchange-timeout", "different-owner"] as const)(
@@ -559,8 +590,63 @@ describe("Doctor NOCOW recovery identities", () => {
       runs: [],
       latestCompletedStartedAt: Date.now() + 86_400_000,
       latestVerifiedStartedAt: 0,
+      latestVerifiedFinishedAt: 0,
+      latestVerifiedSuccessStartedAt: 0,
+      hasUnfinishedRun: false,
       hasPendingRecovery: false,
     });
+  });
+
+  it("has backup completion pending only under schema maintenance until it is recorded", async () => {
+    const maintenance = createOpenClawDatabaseMaintenanceScope({
+      schemaMaintenance: true,
+      assertOwnerCurrent: () => {},
+    });
+    try {
+      await maintenance.run(() =>
+        backupDoctorMigrationDatabases({
+          env,
+          pendingDatabasePaths: [sqlitePath],
+          databasePaths: [sqlitePath],
+        }),
+      );
+      const [manifestPath] = listSessionSqliteMigrationManifestPaths(env);
+      const recorded = fs.readFileSync(manifestPath!);
+      // Without schema maintenance the completion is never recorded.
+      expect(checkDoctorMigrationBackupsPending(env, [sqlitePath])).toBe("none");
+      await maintenance.run(async () => {
+        expect(checkDoctorMigrationBackupsPending(env, [sqlitePath])).toBe("work");
+        expect(fs.readFileSync(manifestPath!)).toEqual(recorded);
+        expect(readSessionSqliteMigrationManifest(manifestPath!)?.completedAt).toBeUndefined();
+
+        completeDoctorMigrationBackups(env, [sqlitePath]);
+        expect(readSessionSqliteMigrationManifest(manifestPath!)?.completedAt).toEqual(
+          expect.any(String),
+        );
+        expect(checkDoctorMigrationBackupsPending(env, [sqlitePath])).toBe("none");
+      });
+    } finally {
+      await maintenance.close();
+    }
+  });
+
+  it("retains recovery originals when the SQLite generation probe fails", async () => {
+    const backupPath = await prepareCompletedBackup();
+    expect((await rewrite()).changes).toHaveLength(1);
+    const execute = vi.mocked(spawnSync).getMockImplementation()!;
+    vi.mocked(spawnSync).mockImplementation((command, args, options) => {
+      if (command === process.execPath && args?.includes(SQLITE_READONLY_CHILD_ARG)) {
+        throw new Error("injected SQLite generation probe failure");
+      }
+      return execute(command, args, options);
+    });
+    const result = await retire();
+    expect(result.artifacts.find((item) => item.path === backupPath)).toMatchObject({
+      outcome: "blocked",
+      reason: "destination-verification-failed",
+      detail: expect.stringContaining("injected SQLite generation probe failure"),
+    });
+    expect(fs.existsSync(backupPath)).toBe(true);
   });
 
   it.each([false, true])(

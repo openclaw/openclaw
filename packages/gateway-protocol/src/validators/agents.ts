@@ -1,6 +1,7 @@
 import * as Checks from "../compiled/protocol.generated/validators-agents.js";
 import { createProtocolValidator } from "../protocol-validator.js";
 import * as S from "../schema-modules.js";
+import { ModelsAuthProfileRenameParamsSchema } from "../schema/model-auth-profile.js";
 
 export const validateAgentParams = createProtocolValidator(
   S.AgentParamsSchema,
@@ -73,6 +74,10 @@ export const validateModelsAuthLogoutParams = createProtocolValidator(
 export const validateModelsAuthOrderSetParams = createProtocolValidator(
   S.ModelsAuthOrderSetParamsSchema,
   Checks.isModelsAuthOrderSetParams,
+);
+export const validateModelsAuthProfileRenameParams = createProtocolValidator(
+  ModelsAuthProfileRenameParamsSchema,
+  Checks.isModelsAuthProfileRenameParams,
 );
 export const validateModelsAuthRefreshParams = createProtocolValidator(
   S.ModelsAuthRefreshParamsSchema,
@@ -162,6 +167,10 @@ export const validateSkillsUpdateParams = createProtocolValidator(
   S.SkillsUpdateParamsSchema,
   Checks.isSkillsUpdateParams,
 );
+export const validateSkillsCategoriesParams = createProtocolValidator(
+  S.SkillsCategoriesParamsSchema,
+  Checks.isSkillsCategoriesParams,
+);
 export const validateSkillsSearchParams = createProtocolValidator(
   S.SkillsSearchParamsSchema,
   Checks.isSkillsSearchParams,
@@ -209,4 +218,19 @@ export const validateSkillsFileGetParams = createProtocolValidator(
 export const validateModelsProbeParams = createProtocolValidator(
   S.ModelsProbeParamsSchema,
   Checks.isModelsProbeParams,
+);
+
+export const validateToolUsageStatusParams = createProtocolValidator(
+  S.ToolUsageStatusParamsSchema,
+  Checks.isToolUsageStatusParams,
+);
+
+export const validateToolUsageImportParams = createProtocolValidator(
+  S.ToolUsageImportParamsSchema,
+  Checks.isToolUsageImportParams,
+);
+
+export const validateToolUsageResetParams = createProtocolValidator(
+  S.ToolUsageResetParamsSchema,
+  Checks.isToolUsageResetParams,
 );

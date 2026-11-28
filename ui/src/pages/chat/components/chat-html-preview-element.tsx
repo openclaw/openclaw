@@ -215,6 +215,9 @@ export const ChatHtmlPreview = defineSolidBridge<HtmlPreviewProps>(
           frame,
           sandboxUrl: preview.url,
           sandboxOrigin: preview.origin,
+          sandboxShellHtml: preview.preparedCsp?.sandboxPath
+            ? undefined
+            : preview.document.sandboxShellHtml,
           documentKey: String(generation),
           allowScripts,
           loadDocument: async (signal) => {
@@ -284,18 +287,21 @@ export const ChatHtmlPreview = defineSolidBridge<HtmlPreviewProps>(
               {t("chat.detailPanel.assetsUnavailable", { count: String(omittedAssets()) })}
             </div>
           </Show>
-          <Show when={!rendered()}>
-            <HtmlPreviewLoading />
-          </Show>
-          <iframe
-            ref={(element) => (frame = element)}
-            class="chat-html-preview__frame"
-            title={props.title}
-            src={preview.url}
-            sandbox="allow-scripts allow-same-origin allow-forms"
-            referrerpolicy="origin"
-            onError={() => fail(new Error(t("board.widget.sandboxUnavailable")))}
-          />
+          <div class="chat-html-preview__viewport">
+            <Show when={!rendered()}>
+              <HtmlPreviewLoading overlay />
+            </Show>
+            <iframe
+              ref={(element) => (frame = element)}
+              class="chat-html-preview__frame"
+              style={{ visibility: rendered() ? undefined : "hidden" }}
+              title={props.title}
+              src={preview.url}
+              sandbox="allow-scripts allow-same-origin allow-forms"
+              referrerpolicy="origin"
+              onError={() => fail(new Error(t("board.widget.sandboxUnavailable")))}
+            />
+          </div>
         </Show>
       );
     };
@@ -371,7 +377,7 @@ export const ChatHtmlPreview = defineSolidBridge<HtmlPreviewProps>(
             const url = resolveSandboxHostUrl(
               preparedCsp?.sandboxPath ?? document.sandboxUrl,
               document.sandboxPort,
-              document.sandboxOrigin,
+              preparedCsp?.sandboxPath ? preparedCsp.sandboxOrigin : document.sandboxOrigin,
               context.gateway.connection.gatewayUrl,
               window.location.origin,
               undefined,

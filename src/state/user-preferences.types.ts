@@ -11,9 +11,13 @@ export type UserPreferenceError =
     };
 
 export type PreparedUserPreferenceUpdate = {
+  /** Set only by the failure acknowledgement handler after reading the visible job. */
+  cronFailure?: { jobId: string; failedAtMs: number; adopt: boolean };
   serialized: Array<{ prefKey: string; valueJson: string }>;
   deletionKeys: string[];
   expected: Array<{ prefKey: string; valueJson: string | null }>;
+  /** RPC-owned policy projection for atomic comparison with the details shown in Profile. */
+  organizationPolicy?: string | null;
 };
 
 export type CanonicalUserPreferences = {
@@ -29,6 +33,8 @@ export type UserPreferenceCoauthorMutation = {
 export type UserPreferenceWorkerOperations = {
   "userPreferences.write": {
     input: { profileId: string; update: PreparedUserPreferenceUpdate };
-    output: Result<{ profileId: string }, UserPreferenceError> | undefined;
+    output:
+      | Result<{ profileId: string; acknowledgedAtMs?: number }, UserPreferenceError>
+      | undefined;
   };
 };

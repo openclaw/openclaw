@@ -1,4 +1,10 @@
+import fs from "node:fs/promises";
 import { expect, it, vi } from "vitest";
+import {
+  awaitGateBeforeSettlement,
+  createDeferred,
+  withinTest,
+} from "../../test/helpers/promise.js";
 import { runManagerStartupIdentityReconcile } from "../acp/control-plane/manager.startup-identity-reconcile.js";
 import { createEmptyPluginRegistry } from "../plugins/registry-empty.js";
 import { createPluginRecord } from "../plugins/status.test-helpers.js";
@@ -8,6 +14,7 @@ import {
   recordAgentDatabaseAdmissions,
 } from "../state/agent-database-admission.js";
 import type { OpenClawTestState } from "../test-utils/openclaw-test-state.js";
+import type { PreparedReadinessChecker } from "./health/types.js";
 import { STARTUP_UNAVAILABLE_GATEWAY_METHODS } from "./methods/core-method-policy.js";
 import type { GatewayStartupModuleMocks } from "./server-startup-module-mocks.test-support.js";
 import type { startGatewayPostAttachRuntime } from "./server-startup-post-attach.js";
@@ -15,7 +22,8 @@ import type { postAttachMocks } from "./server-startup-post-attach.mocks.test-su
 import { logGatewayReady } from "./server-startup-readiness.js";
 import type { startGatewaySidecars } from "./server-startup-sidecars.js";
 import type { GatewayStartupTrace } from "./server-startup-trace.js";
-import type { ReadinessChecker } from "./server/readiness.js";
+import { createReadinessChecker } from "./server/readiness.js";
+import { createPreparedReadinessFixture } from "./server/readiness.test-support.js";
 
 type PostAttachParams = Parameters<typeof startGatewayPostAttachRuntime>[0];
 
@@ -45,6 +53,49 @@ export function registerGatewayStartupReadinessTests(params: {
     "getAcpRuntimeBackend" | "reconcilePendingSessionIdentities"
   >;
 }): void {
+  it.for([false, true])(
+    "announces prepared readiness only before close (closing=%s)",
+    async (stop, { signal }) => {
+      const entered = createDeferred();
+      const release = createDeferred();
+      const stat = fs.stat;
+      const heldStat = vi.spyOn(fs, "stat").mockImplementation(async (...args) => {
+        const result = await stat(...args);
+        if (args[0] === process.execPath) {
+          entered.resolve();
+          await release.promise;
+        }
+        return result;
+      });
+      let closing = false;
+      const log = { info: vi.fn() };
+      const getReadiness = createReadinessChecker({
+        startedAt: Date.now(),
+        channelManager: {
+          getRuntimeSnapshot: () => ({ channels: {}, channelAccounts: {} }),
+          getAutostartSuppression: () => null,
+          isAmbientAutostartSuppressed: () => false,
+        },
+      });
+      const logging = logGatewayReady({ getReadiness, log, isClosing: () => closing });
+      try {
+        await withinTest(
+          awaitGateBeforeSettlement(entered.promise, logging, "readiness did not prepare runtime"),
+          signal,
+        );
+        expect(log.info).not.toHaveBeenCalled();
+        closing = stop;
+        release.resolve();
+        await logging;
+        expect(log.info.mock.calls).toEqual(stop ? [] : [["gateway ready"]]);
+      } finally {
+        release.resolve();
+        heldStat.mockRestore();
+        await logging;
+      }
+    },
+  );
+
   it.each([
     { name: "I/O failure", error: new Error("EIO: session scan failed") },
     { name: "parse failure", error: new SyntaxError("invalid session metadata") },
@@ -149,12 +200,12 @@ export function registerGatewayStartupReadinessTests(params: {
     async (updateCanary) => {
       const startup = params.createParams({
         updateCanary,
-        getReadiness: () => ({
+        getReadiness: createPreparedReadinessFixture(() => ({
           ready: false,
           coreReady: false,
           failing: ["agent-database:main"],
           uptimeMs: 0,
-        }),
+        })),
       });
       const runtime = await params.start(startup);
       await runtime.startupSettled;
@@ -177,15 +228,15 @@ export function registerGatewayStartupReadinessTests(params: {
     expect(trace.mark).toHaveBeenCalledWith("sidecars.ready");
     expect(trace.detail).toHaveBeenCalledWith("sidecars.ready", [
       ["loadedPluginCount", 2],
-      ["postReadySidecarCount", 3],
+      ["postReadySidecarCount", 4],
     ]);
   });
 }
 
-export function expectCoreAgentDatabaseReadiness(
-  getReadiness: ReadinessChecker,
+export async function expectCoreAgentDatabaseReadiness(
+  getReadiness: PreparedReadinessChecker,
   state: OpenClawTestState,
-): void {
+): Promise<void> {
   expect(getReadiness()).toMatchObject({ ready: true, failing: [] });
   try {
     for (const agentId of ["worker", "main", "openclaw", "crestodian"]) {
@@ -196,7 +247,7 @@ export function expectCoreAgentDatabaseReadiness(
       });
       recordAgentDatabaseAdmissions([refusal], { source: "startup", env: state.env });
       const log = { info: vi.fn() };
-      logGatewayReady({ getReadiness, log });
+      await logGatewayReady({ getReadiness, log });
       expect(log.info).toHaveBeenCalledTimes(agentId === "worker" ? 1 : 0);
       expect(getReadiness()).toMatchObject(
         agentId === "worker"

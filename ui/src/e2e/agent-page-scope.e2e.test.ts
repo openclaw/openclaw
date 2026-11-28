@@ -1,6 +1,10 @@
 import type { Locator } from "playwright";
 import { expect, it } from "vitest";
-import { installMockGateway, waitForControlUiRoute } from "../test-helpers/control-ui-e2e.ts";
+import {
+  defaultControlUiFeatureMethods,
+  installMockGateway,
+  waitForControlUiRoute,
+} from "../test-helpers/control-ui-e2e.ts";
 import { createControlUiE2eSuite } from "./control-ui-e2e-suite.test-support.ts";
 const suite = createControlUiE2eSuite({
   name: "Control UI agent page scope",
@@ -51,6 +55,7 @@ suite.define(() => {
         const gateway = await installMockGateway(page, {
           authMode: ordering === "route before hello" ? "token" : undefined,
           deferredMethods: ordering === "route before hello" ? ["connect"] : [],
+          featureMethods: [...defaultControlUiFeatureMethods, "agents.list", "models.list"],
           methodResponses: {
             "agents.list": roster,
             "sessions.usage": emptyUsage,

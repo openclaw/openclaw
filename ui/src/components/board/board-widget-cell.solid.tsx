@@ -188,6 +188,8 @@ function BoardWidgetCellContent(
       ? getPluginWidgetKindContribution(props.widget.pluginKind, activeKinds())
       : null,
   );
+  // Layout must not replace the widget binding observed by frames and plugins.
+  const layoutWidget = () => props.layoutPreview ?? props.widget;
   const fixedReport = () =>
     props.widget?.heightMode === "fixed" && contribution()?.kind === "session:report";
   const [reportEntered, setReportEntered] = createSignal(false);
@@ -250,7 +252,7 @@ function BoardWidgetCellContent(
         ([preset]) => preset === value.slice(7),
       )?.[1];
       if (size) {
-        runAction(() => callbacks.resizeTo(widget, size.w, size.h));
+        runAction(() => callbacks.resizeTo(widget, size.w, size.h, "preset"));
       }
     } else if (value === "height:auto") {
       runAction(() =>
@@ -537,7 +539,7 @@ function BoardWidgetCellContent(
       props.dragging || props.pageChrome || props.widget!.contentKind !== "html"
         ? undefined
         : exactBoardWidgetHeightPx(
-            props.widget!,
+            layoutWidget()!,
             props.contentHeightPx,
             boardChromeRowPx(),
             props.fitAutoContent ? BOARD_DOCUMENT_AUTO_MAX_ROWS : undefined,
@@ -588,6 +590,7 @@ function BoardWidgetCellContent(
             "board-widget--page-chrome": props.pageChrome,
             "board-widget--dragging": props.dragging,
             "board-widget--fixed-report": fixedReport(),
+            "board-widget--fit-content": contribution()?.fitsContent === true,
           },
           presentation() && `board-widget--${presentation()}`,
         ]}
@@ -613,7 +616,6 @@ function BoardWidgetCellContent(
                 <span
                   class="board-widget__drag-handle"
                   aria-hidden="true"
-                  title={t("board.widget.moveHandle", { title: label() })}
                   onPointerDown={(event) => props.callbacks!.movePointerDown(props.widget!, event)}
                 >
                   <span aria-hidden="true">⠿</span>
@@ -632,7 +634,7 @@ function BoardWidgetCellContent(
               <BoardGrantedCapabilities widget={props.widget!} />
               <Show when={canMutate() && (!fixedReport() || reportEntered())}>
                 <BoardWidgetMenu
-                  widget={props.widget!}
+                  widget={layoutWidget()!}
                   tabs={props.tabs ?? []}
                   disabled={props.busy || actionPending()}
                   onSelect={selectMenuItem}
@@ -671,7 +673,6 @@ function BoardWidgetCellContent(
           <span
             class="board-widget__resize-handle"
             aria-hidden="true"
-            title={t("board.widget.resizeHandle", { title: label() })}
             onPointerDown={(event) => props.callbacks!.resizePointerDown(props.widget!, event)}
           />
         </Show>
@@ -689,6 +690,7 @@ export const BoardWidgetCell = defineSolidBridge<BoardWidgetCellProps, BoardWidg
   {
     properties: {
       widget: { default: undefined, attribute: false },
+      layoutPreview: { default: undefined, attribute: false },
       boardRevision: { default: 0, type: Number },
       rect: { default: undefined, attribute: false },
       contentHeightPx: { default: undefined, attribute: false },

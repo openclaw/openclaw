@@ -14,7 +14,6 @@ import {
 } from "../../cron/isolated-agent/run-admission.js";
 import { revokeMessageActionTurnCapability } from "../../gateway/message-action-turn-capability.js";
 import { emitAgentEvent } from "../../infra/agent-events.js";
-import { clearAgentRunTerminalWriteContext } from "../../infra/agent-run-terminal-writes.js";
 import { RUN_STALE_TAKEOVER_MS } from "../../logging/diagnostic-run-activity.js";
 import { CommandLane } from "../../process/lanes.js";
 import { resolveSessionPinnedHarnessId } from "../../sessions/agent-harness-session-key.js";
@@ -110,10 +109,15 @@ export async function runAgentFallbackCandidates(params: AgentFallbackCycleParam
   });
   const selection = resolveModelFallbackOptions(params.effectiveRun, params.runtimeConfig);
   // A scheduled run resolves candidates on the runtime its account was captured for.
-  const runtimeSessionEntry = () => {
+  // The recorded provider runs on its account; other providers select one live.
+  const scheduledAuthProfileId = (provider: string) => {
+    const scheduled = params.scheduledInference?.runParams(provider);
+    return scheduled && "authProfileId" in scheduled ? scheduled.authProfileId : undefined;
+  };
+  const runtimeSessionEntry = (provider: string) => {
     const entry = params.liveModelSwitchRuntimeEntry ?? turn.getActiveSessionEntry();
     return entry && params.scheduledInference
-      ? params.scheduledInference.runtimeSessionEntry(entry)
+      ? params.scheduledInference.runtimeSessionEntry(entry, provider)
       : entry;
   };
   const resolveCandidateRuntime = (
@@ -133,8 +137,7 @@ export async function runAgentFallbackCandidates(params: AgentFallbackCycleParam
         provider,
         model,
         agentId: turn.followupRun.run.agentId,
-        authProfileId:
-          params.scheduledInference?.runParams.authProfileId ?? selectedAuthProfile.authProfileId,
+        authProfileId: scheduledAuthProfileId(provider) ?? selectedAuthProfile.authProfileId,
         sessionRuntimeOverride,
         pinnedHarnessId: resolveSessionPinnedHarnessId(activeEntry),
       }),
@@ -177,7 +180,7 @@ export async function runAgentFallbackCandidates(params: AgentFallbackCycleParam
         resolveRuntimeOverride: (provider) =>
           resolveSessionRuntimeOverrideForProvider({
             provider,
-            entry: runtimeSessionEntry(),
+            entry: runtimeSessionEntry(provider),
             cfg: params.runtimeConfig,
           }),
         resolveContextEngineHost: (provider, model, runtimeOverride) => {
@@ -239,7 +242,6 @@ export async function runAgentFallbackCandidates(params: AgentFallbackCycleParam
           config: params.runtimeConfig,
           workspaceDir: turn.followupRun.run.workspaceDir,
         });
-        clearAgentRunTerminalWriteContext(params.preparedRunAdmission.operationalRunInstance);
         params.state.maintenanceAuthProfile = undefined;
         params.state.compactionRequestBudget = undefined;
         invalidateTurnCompactionContext(params.state.compaction);
@@ -267,7 +269,7 @@ export async function runAgentFallbackCandidates(params: AgentFallbackCycleParam
           modelId: model,
           agentId: turn.followupRun.run.agentId,
           sessionKey: turn.followupRun.run.runtimePolicySessionKey ?? turn.sessionKey,
-          sessionEntry: runtimeSessionEntry(),
+          sessionEntry: runtimeSessionEntry(provider),
           agentRuntime: runOptions.agentHarnessRuntimeOverride,
         });
         params.scheduledInference?.assertCandidate(

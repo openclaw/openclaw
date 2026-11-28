@@ -78,7 +78,7 @@ export function createProfileCard(
     if (!pubkey) {
       return t("common.na");
     }
-    return pubkey.length <= 20 ? pubkey : `${pubkey.slice(0, 8)}...${pubkey.slice(-8)}`;
+    return pubkey.length <= 20 ? pubkey : `${pubkey.slice(0, 8)}…${pubkey.slice(-8)}`;
   }
 
   function NostrAccount(props: { account: ChannelAccountSnapshot }) {
@@ -96,7 +96,7 @@ export function createProfileCard(
         accountId={account().accountId}
         facts={[
           `${t("common.configured")}: ${account().configured ? t("common.yes") : t("common.no")}`,
-          `${t("common.publicKey")}: ${truncatePubkey(publicKey())}`,
+          `${t("channels.nostr.publicKey")}: ${truncatePubkey(publicKey())}`,
         ]}
         status={{
           kind: boolStatusKind(account().running),
@@ -132,7 +132,7 @@ export function createProfileCard(
       return accountProfile ?? nostr()?.profile ?? null;
     });
     function ProfileSection() {
-      const hasAnyProfileData = () =>
+      const hasDisplayedProfileData = () =>
         profile()?.picture || PROFILE_FIELDS.some((field) => profile()?.[field]);
 
       return (
@@ -140,21 +140,25 @@ export function createProfileCard(
           <SettingsRow
             title={t("channels.nostr.profile")}
             description={
-              hasAnyProfileData() ? undefined : (
-                <>
-                  {t("channels.nostr.noProfile")} {t("channels.nostr.noProfileHint")}
-                </>
-              )
+              !state().snapshot.canAdmin
+                ? t("channels.nostr.readOnlyProfile")
+                : hasDisplayedProfileData()
+                  ? undefined
+                  : t(configured() ? "channels.nostr.noProfileHint" : "channels.nostr.setupProfile")
             }
             control={
               configured() ? (
-                <button class="btn btn--sm" onClick={() => controller.edit(accountId(), profile())}>
+                <button
+                  class="btn btn--sm"
+                  disabled={!state().snapshot.canAdmin}
+                  onClick={() => controller.edit(accountId(), profile())}
+                >
                   {t("channels.nostr.editProfile")}
                 </button>
               ) : undefined
             }
           />
-          <Show when={hasAnyProfileData()}>
+          <Show when={hasDisplayedProfileData()}>
             <dl class="settings-kv">
               <Show when={profile()?.picture} keyed>
                 {(picture) => (
@@ -183,7 +187,7 @@ export function createProfileCard(
                   <Show when={profile()?.[field]}>
                     {(value) => (
                       <>
-                        <dt>{field === "nip05" ? "NIP-05" : t(`channels.nostr.${field}`)}</dt>
+                        <dt>{t(`channels.nostr.${field}`)}</dt>
                         <dd>{value()}</dd>
                       </>
                     )}
@@ -208,7 +212,7 @@ export function createProfileCard(
             <Show when={publicKey() || lastStart()}>
               <dl class="settings-kv">
                 <Show when={publicKey()}>
-                  <dt>{t("common.publicKey")}</dt>
+                  <dt>{t("channels.nostr.publicKey")}</dt>
                   <dd>
                     <code title={publicKey() ?? ""}>{truncatePubkey(publicKey())}</code>
                   </dd>

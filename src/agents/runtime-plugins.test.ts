@@ -51,7 +51,6 @@ import {
   setGatewayPluginMetadataSnapshot,
 } from "../plugins/current-plugin-metadata-snapshot.js";
 import { selectCurrentPluginMetadataCache } from "../plugins/current-plugin-metadata-state.js";
-import { validatePluginConfig } from "../plugins/loader-shared.js";
 import {
   bindPluginMetadataSnapshotCache,
   createPluginCache,
@@ -70,6 +69,7 @@ import {
   getPluginRuntimeLoadContext,
   setPluginRuntimeLoadContext,
 } from "../plugins/runtime/load-context.js";
+import { validatePluginConfig } from "../plugins/schema-validator.js";
 import { createPluginRecord } from "../plugins/status.test-helpers.js";
 import { ensureSelectedAgentHarnessPlugin } from "./harness/runtime-plugin.js";
 import {
@@ -298,6 +298,7 @@ describe("agent runtime plugin registries", () => {
   it("reuses the published Gateway registry inside the reload operation cache", async () => {
     const { config, workspaceDir, metadataSnapshot, activeRegistry } =
       createGatewayRegistryFixture();
+    const getConfiguredHarnessRuntimes = vi.fn(() => []);
     const previousCache = getProcessPluginCache();
     await using operationCache = createPluginCache();
     await using publishedCache = createPluginCache();
@@ -317,10 +318,12 @@ describe("agent runtime plugin registries", () => {
             createPreparedInboundRegistryLoader()(
               { allowGatewaySubagentBinding: true, config, workspaceDir },
               metadataSnapshot,
+              getConfiguredHarnessRuntimes,
             ),
           ),
         ).toBe(activeRegistry);
         expect(hoisted.loadPluginRegistryHandle).not.toHaveBeenCalled();
+        expect(getConfiguredHarnessRuntimes).not.toHaveBeenCalled();
       });
     } finally {
       selectCurrentPluginMetadataCache(previousCache);

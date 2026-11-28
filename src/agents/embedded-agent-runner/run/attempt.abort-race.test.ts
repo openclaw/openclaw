@@ -1,7 +1,9 @@
 import { expectDefined } from "@openclaw/normalization-core";
 import { expect, it, vi } from "vitest";
-import { createDeferred } from "../../../../test/helpers/promise.js";
+import { awaitGateBeforeSettlement, createDeferred } from "../../../../test/helpers/promise.js";
+import { AgentRunTerminalOutcomeError } from "../../agent-run-terminal-error.js";
 import { createAgentCleanupScope } from "../../run-cleanup-timeout.js";
+import { createStubTool } from "../../test-helpers/agent-tool-stubs.js";
 import { useContextEngineAttemptHarness } from "./attempt-context-engine.test-support.js";
 const { hoisted, runAttempt } = useContextEngineAttemptHarness("agent:main:triage:cleanup");
 
@@ -117,4 +119,51 @@ it("preserves a run-budget timeout when abort blocks prompt submission", async (
   });
 
   expect(result.terminal).toMatchObject({ kind: "timeout" });
+});
+
+it("classifies timeout during pending LSP acquisition through the full attempt", async () => {
+  const bundle = await import("../../agent-bundle-lsp-runtime.js");
+  const acquired = createDeferred();
+  const acquisition = createDeferred<never>();
+  void acquisition.promise.catch(() => {});
+  const controller = new AbortController();
+  const reason = new Error("LSP preparation timeout");
+  reason.name = "TimeoutError";
+  vi.spyOn(bundle, "createBundleLspToolRuntime").mockImplementationOnce(({ abortSignal }) => {
+    const onAbort = () => acquisition.reject(abortSignal?.reason);
+    abortSignal?.addEventListener("abort", onAbort, { once: true });
+    if (abortSignal?.aborted) {
+      onAbort();
+    }
+    acquired.resolve();
+    return acquisition.promise.finally(() => abortSignal?.removeEventListener("abort", onAbort));
+  });
+  const cleanup = vi.fn(async (_reason: string) => {});
+  hoisted.createOpenClawCodingToolsMock.mockImplementation((options) => {
+    options?.registerRunCleanup?.(cleanup);
+    return [createStubTool("read")];
+  });
+  const outcome = runAttempt({
+    sessionKey: "agent:main:lsp-acquisition-timeout",
+    attemptOverrides: { abortSignal: controller.signal, disableTools: false },
+  }).then(
+    () => undefined,
+    (error: unknown) => error,
+  );
+  try {
+    await awaitGateBeforeSettlement(
+      acquired.promise,
+      outcome,
+      "Attempt completed before LSP acquisition",
+    );
+    controller.abort(reason);
+    const error = await outcome;
+    expect(cleanup).toHaveBeenCalledExactlyOnceWith("timeout");
+    expect(error).toBeInstanceOf(AgentRunTerminalOutcomeError);
+    expect(error).toMatchObject({ cause: reason, terminalOutcome: { status: "timeout" } });
+    expect(hoisted.createAgentSessionMock).not.toHaveBeenCalled();
+  } finally {
+    acquisition.reject(reason);
+    await outcome;
+  }
 });

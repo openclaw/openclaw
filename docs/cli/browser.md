@@ -92,7 +92,7 @@ openclaw browser --browser-profile openclaw reset-profile
 
 ## If the command is missing
 
-If `openclaw browser` is an unknown command, check `plugins.allow` in `~/.openclaw/openclaw.json`. When `plugins.allow` is present, list the bundled browser plugin explicitly unless the config already has a root `browser` block:
+If `openclaw browser` is an unknown command, check `plugins.allow` in `~/.openclaw/openclaw.json`. When `plugins.allow` is present, you can list the bundled browser plugin explicitly:
 
 ```json5
 {
@@ -103,6 +103,11 @@ If `openclaw browser` is an unknown command, check `plugins.allow` in `~/.opencl
 ```
 
 An explicit root `browser` block (for example `browser.enabled=true` or `browser.profiles.<name>`) also activates the bundled browser plugin under a restrictive plugin allowlist.
+
+A block containing only `browser.extensionRelay.allowLegacyAuth=false` is an exception:
+it hardens relay authentication without activating the plugin or adding it to
+`plugins.allow`. Set `browser.enabled=true` as well if you want to activate browser
+control. Existing browser plugin entries and explicit browser tool references still apply.
 
 Related: [Browser tool](/tools/browser/setup#missing-browser-command-or-tool)
 
@@ -127,6 +132,8 @@ openclaw browser delete-profile --name work
 ```
 
 Use a specific profile with `--browser-profile <name>` on any subcommand, for example `openclaw browser --browser-profile work tabs`.
+
+Automatic local profile creation skips CDP ports already occupied by another process. The check does not reserve the port; browser launch still checks availability. Explicit ports and CDP URLs remain unchanged.
 
 On macOS, `system-profiles` lists real Chrome, Brave, Edge, or Chromium profiles available on the host. `import-profile` decrypts their cookies after one macOS Keychain/Touch ID consent prompt and injects them into a fresh OpenClaw-managed profile. It imports cookies only. Local storage and IndexedDB are unchanged. Some Google sessions use device-bound session credentials (DBSC) and can still require re-authentication after import.
 

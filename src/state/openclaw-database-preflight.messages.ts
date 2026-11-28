@@ -1,4 +1,5 @@
 import { SqliteReadOnlyInspectionContentionError } from "../infra/sqlite-readonly-worker-protocol.js";
+import { isSqliteSnapshotCapacityError } from "../infra/sqlite-snapshot-capacity-error.js";
 import {
   describeRunningOpenClawBuild,
   isNewerSqliteWriterVersion,
@@ -55,11 +56,16 @@ function formatIncompatibleDatabaseSchemas(
   );
 }
 
-export function formatIndeterminateDatabaseReadiness(
+export function createIndeterminateDatabaseReadinessError(
   indeterminate: readonly IndeterminateOpenClawDatabase[],
   operation: OpenClawDatabaseSchemaPreflightOperation,
   causes: WeakMap<IndeterminateOpenClawDatabase, unknown>,
-): string {
+): unknown {
+  const failures = indeterminate.flatMap((row) => (causes.has(row) ? [causes.get(row)] : []));
+  // Preserve a single strict inspection's typed refusal; multiple rows keep the complete report.
+  if (operation === "gateway-startup" && indeterminate.length === 1 && failures.length === 1) {
+    return failures[0];
+  }
   const shown = indeterminate
     .toSorted((left, right) => left.path.localeCompare(right.path))
     .map((database) => {
@@ -68,7 +74,9 @@ export function formatIndeterminateDatabaseReadiness(
           ? ""
           : causes.get(database) instanceof SqliteReadOnlyInspectionContentionError
             ? " Wait a moment for write activity to settle, then retry the inspection."
-            : " Stop OpenClaw processes, then restore the affected database from a verified backup.";
+            : isSqliteSnapshotCapacityError(causes.get(database))
+              ? " Free snapshot disk space or quota, then retry the inspection."
+              : " Stop OpenClaw processes, then restore the affected database from a verified backup.";
       return `${database.kind}${database.agentId ? ` ${database.agentId}` : ""} ${database.path}: ${database.reason}${guidance}`;
     });
   const action =
@@ -77,7 +85,10 @@ export function formatIndeterminateDatabaseReadiness(
       : operation === "gateway-startup"
         ? "Gateway refused startup"
         : "Gateway refused restart";
-  return `${action} because persisted database readiness could not be verified:\n${shown.join("\n")}${operation === "doctor" ? "" : "\nStop the Gateway and other OpenClaw processes, run openclaw doctor --fix, then retry."}`;
+  return new Error(
+    `${action} because persisted database readiness could not be verified:\n${shown.join("\n")}${operation === "doctor" ? "" : "\nStop the Gateway and other OpenClaw processes, run openclaw doctor --fix, then retry."}`,
+    { cause: new AggregateError(failures) },
+  );
 }
 
 export function describeDeferredStateSchemaPublication(

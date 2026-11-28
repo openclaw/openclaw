@@ -1,0 +1,3 @@
+# Shipped regressions: artifact visibility, AI host, memory settlement,
+# disk custody, effective policy, live config, and update/lease identity.
+693

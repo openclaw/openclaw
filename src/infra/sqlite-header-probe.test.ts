@@ -1,8 +1,71 @@
 import childProcess from "node:child_process";
+import fs from "node:fs/promises";
+import path from "node:path";
 import { afterEach, expect, it, vi } from "vitest";
+import { useAutoCleanupTempDirTracker } from "../../test/helpers/temp-dir.js";
+import { shortenHomePath } from "../utils.js";
 import { probeSqliteDatabaseHeaders } from "./sqlite-header-probe.js";
+import { injectHeaderReadFailure } from "./sqlite-header-probe.test-support.js";
+import { createUpdateErrorFact } from "./update-failure-facts.js";
+import { preparePublicUpdateFailureIdentifiers } from "./update-failure-public-identifiers.js";
+import { prepareUpdateFailureReport } from "./update-failure-report-prepare.js";
+import { failedUpdateRun } from "./update-failure-report.test-support.js";
 
-afterEach(() => vi.restoreAllMocks());
+await preparePublicUpdateFailureIdentifiers();
+
+const tempDirs = useAutoCleanupTempDirTracker(afterEach);
+afterEach(() => {
+  vi.restoreAllMocks();
+  vi.unstubAllEnvs();
+});
+
+it.each(["EBUSY", "EPERM"])(
+  "retries transient Windows %s reads without losing SQLite classification",
+  async (code) => {
+    const directory = tempDirs.make("sqlite-header-probe-");
+    const candidate = path.join(directory, "candidate.db");
+    await fs.writeFile(candidate, "SQLite format 3\0");
+    const trace = await injectHeaderReadFailure(directory, candidate, code, 2);
+    expect(probeSqliteDatabaseHeaders([candidate]).get(candidate)).toBe(true);
+    expect(await trace()).toEqual({ reads: 3, delays: [50, 100] });
+  },
+);
+
+it.each([
+  ["EBUSY", "win32", 3],
+  ["EPERM", "win32", 3],
+  ["EACCES", "win32", 1],
+  ["EIO", "win32", 1],
+  ["EBUSY", "linux", 1],
+] as const)("names the path and %s on %s after bounded reads", async (code, platform, reads) => {
+  const directory = tempDirs.make("sqlite-header-probe-");
+  vi.stubEnv("OPENCLAW_HOME", directory);
+  const candidate = path.join(directory, "unreadable.db");
+  await fs.writeFile(candidate, "SQLite format 3\0");
+  const trace = await injectHeaderReadFailure(directory, candidate, code, 100, platform);
+  let failure: unknown;
+  try {
+    probeSqliteDatabaseHeaders([candidate]);
+  } catch (error) {
+    failure = error;
+  }
+  if (!(failure instanceof Error)) {
+    throw new Error("Expected an unreadable-source failure");
+  }
+  expect(failure.message).toContain(shortenHomePath(candidate));
+  expect(failure.message).toContain(code);
+  expect(failure.cause).toMatchObject({ code, path: candidate, errno: -4082 });
+  expect(await trace()).toEqual({ reads, delays: reads === 3 ? [50, 100] : [] });
+});
+
+it.each(["ENOENT", "ELOOP"])("keeps %s classification without retrying", async (code) => {
+  const directory = tempDirs.make("sqlite-header-probe-");
+  const candidate = path.join(directory, "missing-or-link.db");
+  await fs.writeFile(candidate, "SQLite format 3\0");
+  const trace = await injectHeaderReadFailure(directory, candidate, code, 100);
+  expect(probeSqliteDatabaseHeaders([candidate]).get(candidate)).toBe(false);
+  expect(await trace()).toEqual({ reads: 1, delays: [] });
+});
 
 const child = { pid: 1, output: [], stderr: "" };
 const answered = (...answers: boolean[]) => ({
@@ -32,6 +95,46 @@ it.each([
     expect.objectContaining({ cause: failure.error, message: expect.stringMatching(message) }),
   );
 });
+
+const unreadable = {
+  ...child,
+  stdout: "",
+  status: 3,
+  signal: null,
+  stderr: JSON.stringify({ code: "EACCES", path: "/Users/jdoe/acme/state/openclaw.sqlite" }),
+};
+
+it.each([
+  [failed("ETIMEDOUT"), "backup-sqlite-probe-timeout", "headers timed out (ETIMEDOUT)"],
+  [unreadable, "backup-sqlite-probe-failed", "Check read access to the state directory"],
+] as const)(
+  "publishes the backup probe's fixed sentence, never its path: %$",
+  async (result, code, sentence) => {
+    vi.spyOn(childProcess, "spawnSync").mockReturnValue(result);
+    let failure: unknown;
+    try {
+      probeSqliteDatabaseHeaders(["/Users/jdoe/acme/state/openclaw.sqlite"]);
+    } catch (error) {
+      failure = error;
+    }
+    const { body } = await prepareUpdateFailureReport(
+      failedUpdateRun({
+        steps: [
+          {
+            step: "package-update",
+            status: "failed",
+            exitCode: 1,
+            failureFacts: [createUpdateErrorFact("package-update", failure, {})],
+          },
+        ],
+      }),
+      { env: {}, stateDir: "/report-test-state" },
+    );
+    expect(body).toContain(`(${code})`);
+    expect(body).toContain(sentence);
+    expect(body).not.toMatch(/jdoe|acme/u);
+  },
+);
 
 it("splits a batch that misses its deadline so slow storage still gets an answer", () => {
   const spawn = vi.spyOn(childProcess, "spawnSync").mockReturnValueOnce(failed("ETIMEDOUT"));

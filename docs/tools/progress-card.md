@@ -99,19 +99,17 @@ proceed; keep any other unresolved dependencies in the note.
 
 ## Format the note
 
-For eligible multi-step work with a known total, prefer a leading progress bar using observed completed/total counts: PRs reviewed, tests finished, files processed, or other meaningful work units. Prefer those counts over coarse phase counts such as "1 of 3 steps." Label exactly what the count measures: reviewed PRs are not merged PRs, and finished tests are not necessarily passing tests. Never invent percentages or infer completion from elapsed time. When the total is unknown, use a compact status note or table instead.
+For eligible multi-step work with a known total, prefer a leading progress bar using observed completed/total counts: PRs reviewed, tests finished, files processed, or other meaningful work units. Prefer those counts over coarse phase counts such as "1 of 3 steps." Label exactly what the count measures: reviewed PRs are not merged PRs, and finished tests are not necessarily passing tests. Never invent percentages or infer completion from elapsed time. When the total is unknown, use a compact status note instead.
 
-Follow the bar with a short result, blocker, or next action. Use tables for comparisons and a checklist only when the work is genuinely sequential. Omit the checklist when a table, bar, or sentence says it better, and do not repeat the same facts across the plan and Markdown. Update after meaningful batches or state changes, keeping the bar and its label current in every replacement. Markdown accepts ordinary formatting, links, and progress bars:
+Follow the bar with a short result, blocker, or next action. Use a checklist only when the work is genuinely sequential. Omit the checklist when a bar or sentence says it better, and do not repeat the same facts across the plan and Markdown. Update after meaningful batches or state changes, keeping the bar and its label current in every replacement. Markdown accepts ordinary formatting, links, and progress bars:
 
 ```md
 <progress aria-label="Checks finished · 3/7" value="3" max="7"></progress>
 
 Tests are running.
 
-| check      | state   |
-| ---------- | ------- |
-| unit tests | passed  |
-| live flow  | running |
+- Unit tests: passed.
+- Live flow: running.
 ```
 
 Put one progress bar first and give it a short `aria-label` with its purpose and current/total values. The session hovercard shows a compact note and the current step; it omits progress bars. Other raw HTML is stripped by the Markdown sanitizer.
@@ -139,7 +137,7 @@ In the Control UI, **Dismiss progress card** (×) hides the card only in the cha
 
 The click does not write to the Gateway or change the saved card, other clients, dashboard widgets, the conversation, or the active run. Updates to the same card stay hidden in that pane, including when switching away and back between sessions. A newly created card appears again after the Gateway confirms the previous card was cleared. Reloading the page or changing Gateway connections restores the saved card.
 
-Users with write access can instead select **Clear saved progress for everyone** in the task progress options menu in Details, or use the trash action in an embedded composer. This retains the revision-checked shared clear: if a newer card revision has arrived, it is kept rather than erased. Agents can also clear saved progress with the `progress_card` tool and both fields empty.
+Users with write access can instead select **Clear saved progress for everyone** in the task progress options menu in Details, or use the trash action in an embedded composer. The selected revision disappears immediately in that browser. Other clients see the clear after the Gateway confirms it. If the write fails, the browser shows the saved card again unless access was lost. A newer revision is kept rather than erased. Agents can also clear saved progress with the `progress_card` tool and both fields empty.
 
 A full in-place conversation reset (`/reset` without `soft`, or `sessions.reset`) also clears the previous task’s card. The clear commits with the reset boundary and refreshes subscribed clients; a fresh page load also sees no old card. Writes admitted before that reset cannot restore it. Reset preserves transcript history and dashboard layout. Automatic continuity resets that preserve prior context do not clear the card.
 

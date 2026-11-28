@@ -878,7 +878,9 @@ describe("external shared-state ownership", () => {
         "INSERT INTO config_machine_state (state_key, value_json, updated_at_ms) VALUES (?, ?, ?)",
       )
       .run(STATE_SUPERVISION_KEY, malformed, Date.now());
-    database.db.exec("ALTER TABLE worktrees ADD COLUMN unexpected_claim_column TEXT DEFAULT NULL;");
+    database.db.exec(
+      "ALTER TABLE worktrees ADD COLUMN unexpected_claim_column TEXT DEFAULT 'legacy';",
+    );
     const databasePath = database.path;
     closeOpenClawStateDatabaseForTest();
 

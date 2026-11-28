@@ -4,7 +4,7 @@ import fs from "node:fs/promises";
 import path from "node:path";
 import { promisify } from "node:util";
 import { gzipSync } from "node:zlib";
-import * as tar from "tar";
+import * as tar from "tar/raw";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { useAutoCleanupTempDirTracker } from "../../test/helpers/temp-dir.js";
 import { resolveRuntimeWorkerArgv, resolveRuntimeWorkerUrl } from "../infra/runtime-worker-url.js";
@@ -103,13 +103,11 @@ describe("worker bundle archive", () => {
       const probe = `
       import assert from "node:assert/strict";
       import fs from "node:fs";
-      import { syncBuiltinESMExports } from "node:module";
       const createReadStream = fs.createReadStream;
       let input;
       // Exercise header-boundary cancellation without a transfer-sized fixture.
       fs.createReadStream = (file, options) =>
         (input = createReadStream(file, { ...options, highWaterMark: 1024 }));
-      syncBuiltinESMExports();
       const { readWorkerBundleArchiveManifest } = await import(${JSON.stringify(archiveUrl.href)});
       await assert.rejects(
         readWorkerBundleArchiveManifest(process.argv[1], ${JSON.stringify(scenarioLimits)}),

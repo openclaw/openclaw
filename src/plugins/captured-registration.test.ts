@@ -328,7 +328,10 @@ describe("captured plugin registration", () => {
     await registration.handler({ ...event, toolName: "exec" }, { runtime: "openclaw" });
     await registration.handler({ ...event, toolName: "exec" }, { runtime: "codex" });
 
-    expect(handler).toHaveBeenCalledOnce();
+    expect(handler).toHaveBeenCalledExactlyOnceWith(
+      { ...event, toolName: "exec" },
+      { runtime: "codex" },
+    );
   });
 
   it("returns synthetic scheduled-turn ids independent of human-readable names", async () => {

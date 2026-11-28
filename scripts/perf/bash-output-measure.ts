@@ -9,6 +9,7 @@ import {
   type PerformanceEntry,
 } from "node:perf_hooks";
 import { setTimeout as delay } from "node:timers/promises";
+import { pathToFileURL } from "node:url";
 import { parseArgs } from "node:util";
 import {
   addSession,
@@ -20,7 +21,10 @@ import {
   type ProcessSession,
 } from "../../src/agents/bash-process-registry.js";
 import { chunkString } from "../../src/agents/bash-tools.shared.js";
-import { createStreamingBinaryOutputSanitizer } from "../../src/agents/shell-utils.js";
+import {
+  createStreamingBinaryOutputSanitizer,
+  sanitizeBinaryOutput,
+} from "../../src/agents/shell-utils.js";
 import { createProcessSupervisor } from "../../src/process/supervisor/supervisor.js";
 import { startCollectedHeapSampling } from "../lib/heap-sampling.ts";
 import { parseStrictIntegerOption } from "../lib/strict-integer-option.js";
@@ -32,26 +36,79 @@ const { values } = parseArgs({
     phase: { type: "string", default: "cpu" },
     scenario: { type: "string", default: "burst" },
     turns: { type: "string" },
+    concurrency: { type: "string" },
     mib: { type: "string" },
     "chunk-bytes": { type: "string" },
     "start-at": { type: "string" },
     "max-output": { type: "string" },
     "sampling-interval": { type: "string" },
     updates: { type: "boolean", default: false },
+    fixture: { type: "string", default: "plain" },
+    "sanitizer-module": { type: "string" },
+    "verify-against": { type: "string" },
     output: { type: "string" },
   },
 });
 assert(values.phase === "cpu" || values.phase === "allocation" || values.phase === "buffers");
 assert(values.scenario === "burst" || values.scenario === "build");
+assert(values.fixture === "plain" || values.fixture === "ansi");
+const createSanitizer: typeof createStreamingBinaryOutputSanitizer = values["sanitizer-module"]
+  ? (await import(pathToFileURL(values["sanitizer-module"]).href))
+      .createStreamingBinaryOutputSanitizer
+  : createStreamingBinaryOutputSanitizer;
+if (values["verify-against"]) {
+  const baseline = await import(pathToFileURL(values["verify-against"]).href);
+  const corpus = [
+    "plain\ttext\rprogress\n👩‍💻\u200c\u200b\ud800\udc00\ud800",
+    "A\x1b]title\x1b\\B\x9dtitle\x07C\x1b[6n\x1b[?1hD\x1b[?1l",
+    "A\x1b[6\x07nB\x1b[31\x18mC\x1b[[31mD\x1b(31mE\x1b[unfinished",
+  ];
+  // Include every Unicode code point, including lone surrogates and C0/C1 controls.
+  for (let start = 0; start <= 0x10ffff; start += 4096) {
+    corpus.push(
+      Array.from({ length: 4096 }, (_, index) => String.fromCodePoint(start + index)).join(""),
+    );
+  }
+  for (const input of corpus) {
+    for (const ansiMode of ["standard", "compat"] as const) {
+      assert.equal(
+        sanitizeBinaryOutput(input, { ansiMode }),
+        baseline.sanitizeBinaryOutput(input, { ansiMode }),
+      );
+    }
+    for (const width of [1, 2, 7, 64, 4096]) {
+      const controls: string[] = [];
+      const expectedControls: string[] = [];
+      const sanitize = createStreamingBinaryOutputSanitizer((sequence) => controls.push(sequence));
+      const expected = baseline.createStreamingBinaryOutputSanitizer((sequence: string) =>
+        expectedControls.push(sequence),
+      );
+      for (let offset = 0; offset < input.length; offset += width) {
+        const chunk = input.slice(offset, offset + width);
+        assert.equal(sanitize(chunk), expected(chunk));
+      }
+      assert.deepEqual(controls, expectedControls);
+    }
+  }
+  console.log(`Verified ${corpus.length} corpus entries against ${values["verify-against"]}`);
+}
 assert(global.gc, "run with --expose-gc");
 function option(
-  name: "turns" | "mib" | "chunk-bytes" | "start-at" | "max-output" | "sampling-interval",
+  name:
+    | "turns"
+    | "concurrency"
+    | "mib"
+    | "chunk-bytes"
+    | "start-at"
+    | "max-output"
+    | "sampling-interval",
   fallback: number,
   min = 1,
 ) {
   return parseStrictIntegerOption({ raw: values[name], fallback, label: name, min });
 }
 const turns = option("turns", values.scenario === "build" ? 1 : 10);
+const concurrency = option("concurrency", 1);
 const mib = option("mib", 50);
 const chunkBytes = option("chunk-bytes", 4096);
 const maxOutputChars = option("max-output", 200_000);
@@ -67,8 +124,23 @@ let decodedCallbacks = 0;
 let updateReads = 0;
 let outputBytes = 0;
 let verifiedCharacters = 0;
-const line = "[build] Compiling synthetic/module.ts ... complete\n";
-const sourceChunk = line.repeat(Math.ceil(chunkBytes / line.length)).slice(0, chunkBytes);
+let sanitizerMs = 0;
+const plainLine = "[build] Compiling synthetic/module.ts ... complete\n";
+const line =
+  values.fixture === "ansi"
+    ? "\x1b[32mPASS\x1b[0m src/example.test.ts (12 tests)\n\r\x1b[2KProgress: resolved 125, reused 120\tadded 5\nnoise:\x00\x07\x7f\n"
+    : plainLine;
+const cleanLine =
+  values.fixture === "ansi"
+    ? "PASS src/example.test.ts (12 tests)\n\rProgress: resolved 125, reused 120\tadded 5\nnoise:\\x00\\x07\\x7f\n"
+    : plainLine;
+const repeats = Math.floor(chunkBytes / line.length);
+const padding = " ".repeat(chunkBytes - repeats * line.length);
+const sourceChunk =
+  values.fixture === "plain"
+    ? line.repeat(Math.ceil(chunkBytes / line.length)).slice(0, chunkBytes)
+    : line.repeat(repeats) + padding;
+const cleanChunk = values.fixture === "plain" ? sourceChunk : cleanLine.repeat(repeats) + padding;
 
 function tails(samples: number[]) {
   const sorted = samples.toSorted((a, b) => a - b);
@@ -98,7 +170,7 @@ async function runTurn(bytes: number, intervalMs: number) {
     cursorKeyMode: "normal",
   });
   addSession(session);
-  const sanitize = createStreamingBinaryOutputSanitizer();
+  const sanitize = createSanitizer();
   const childSource = `
     const { once } = require('node:events');
     const { setTimeout: delay } = require('node:timers/promises');
@@ -121,7 +193,10 @@ async function runTurn(bytes: number, intervalMs: number) {
       onStdout(data) {
         decodedCallbacks++;
         outputBytes += Buffer.byteLength(data);
-        for (const chunk of chunkString(sanitize(data))) {
+        const sanitizeStarted = performance.now();
+        const sanitized = sanitize(data);
+        sanitizerMs += performance.now() - sanitizeStarted;
+        for (const chunk of chunkString(sanitized)) {
           appendOutput(session, "stdout", chunk);
           appendCalls++;
           // Foreground updates read this field after each append in the real exec callback.
@@ -140,15 +215,16 @@ async function runTurn(bytes: number, intervalMs: number) {
     assert.equal(result.exitCode, 0);
     assert.equal(result.reason, "exit");
     markExited(session, result.exitCode, result.exitSignal, "completed", result.reason);
-    assert.equal(session.totalOutputChars, bytes);
-    const retainedChars = Math.min(bytes, maxOutputChars);
-    const repeated = sourceChunk.repeat(Math.ceil(retainedChars / sourceChunk.length) + 1);
+    const cleanChars = (bytes / chunkBytes) * cleanChunk.length;
+    assert.equal(session.totalOutputChars, cleanChars);
+    const retainedChars = Math.min(cleanChars, maxOutputChars);
+    const repeated = cleanChunk.repeat(Math.ceil(retainedChars / cleanChunk.length) + 1);
     const expected = repeated.slice(-retainedChars);
     assert.equal(session.aggregated, expected);
     assert.equal(session.tail, expected.slice(-2000));
     const poll = prepareSessionPoll(session, undefined);
-    assert.equal(poll.output, repeated.slice(-Math.min(bytes, 30_000, maxOutputChars)));
-    assert.equal(poll.outputDropped, bytes > Math.min(30_000, maxOutputChars));
+    assert.equal(poll.output, repeated.slice(-Math.min(cleanChars, 30_000, maxOutputChars)));
+    assert.equal(poll.outputDropped, cleanChars > Math.min(30_000, maxOutputChars));
     verifiedCharacters += retainedChars;
   } finally {
     deleteSession(session.id);
@@ -177,6 +253,7 @@ function recordGc(entries: PerformanceEntry[]) {
 try {
   await runTurn(chunkBytes * 256, 0);
   appendCalls = decodedCallbacks = updateReads = outputBytes = verifiedCharacters = 0;
+  sanitizerMs = 0;
   global.gc();
   const observer = new PerformanceObserver((list) => recordGc(list.getEntries()));
   observer.observe({ entryTypes: ["gc"] });
@@ -228,10 +305,14 @@ try {
   const memoryBefore = process.memoryUsage();
   const turnLatencies: number[] = [];
   started = performance.now();
-  for (let index = 0; index < turns; index++) {
-    const turnStarted = performance.now();
-    await runTurn(bytesPerTurn, values.scenario === "build" ? 1 : 0);
-    turnLatencies.push(performance.now() - turnStarted);
+  for (let index = 0; index < turns; index += concurrency) {
+    await Promise.all(
+      Array.from({ length: Math.min(concurrency, turns - index) }, async () => {
+        const turnStarted = performance.now();
+        await runTurn(bytesPerTurn, values.scenario === "build" ? 1 : 0);
+        turnLatencies.push(performance.now() - turnStarted);
+      }),
+    );
   }
   ended = performance.now();
   for (const restore of restoreBuffers) {
@@ -283,8 +364,10 @@ try {
   const result = {
     phase: values.phase,
     scenario: values.scenario,
+    fixture: values.fixture,
     updates: values.updates,
     turns,
+    concurrency,
     bytesPerTurn,
     chunkBytes,
     maxOutputChars,
@@ -294,6 +377,7 @@ try {
     decodedCallbacks,
     updateReads,
     verifiedCharacters,
+    sanitizerMsPerMiB: sanitizerMs / (outputBytes / 1024 / 1024),
     elapsedMs: ended - started,
     cpuMsPerMiB: (cpu.user + cpu.system) / 1000 / (outputBytes / 1024 / 1024),
     mainThreadCpuMsPerMiB: (threadCpu.user + threadCpu.system) / 1000 / (outputBytes / 1024 / 1024),

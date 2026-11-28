@@ -11,7 +11,8 @@ import {
 import { getPluginToolMeta } from "../../plugins/tool-metadata.js";
 import { GATEWAY_OWNER_ONLY_CORE_TOOLS } from "../../security/dangerous-tools.js";
 import { admitEventOccurrence } from "../event-occurrence-admission.js";
-import { TEST_SCHEDULED_OCCURRENCE } from "../scheduled-occurrence.test-support.js";
+import { admitScheduledOccurrence } from "../execution-context-admission.js";
+import { unadmittedScheduledOccurrence } from "../scheduled-occurrence.js";
 import type { CronJob } from "../types.js";
 import {
   prepareAuthorityConfig,
@@ -105,8 +106,8 @@ function readActionEnum(tool: { parameters?: unknown }): string[] {
 async function runAndTouchSibling(params: {
   trigger: "cron" | "event";
   toolsAllow?: string[];
-  /** Event turns admit through `admitEventOccurrence` unless set to "unadmitted". */
-  ingressBoundary?: "gateway.hooks.agent" | "unadmitted";
+  /** Event turns admit through `admitEventOccurrence` at this boundary. */
+  ingressBoundary?: "gateway.hooks.agent";
   /** The automations call to make; defaults to removing a sibling job. */
   call?: Record<string, unknown>;
 }): Promise<AutomationsOutcome> {
@@ -157,14 +158,14 @@ async function runAndTouchSibling(params: {
   );
   const job = hookShapedJob(params.toolsAllow);
   const occurrence =
-    params.trigger === "event" && params.ingressBoundary !== "unadmitted"
+    params.trigger === "event"
       ? await admitEventOccurrence({
           cfg: config,
           job,
           agentId: "main",
           ...(params.ingressBoundary ? { ingressBoundary: params.ingressBoundary } : {}),
         })
-      : TEST_SCHEDULED_OCCURRENCE;
+      : await admitScheduledOccurrence({ cfg: config, job, agentId: "main", trigger: "cron" });
   await runCronIsolatedAgentTurn({
     cfg: config,
     deps: {},
@@ -209,10 +210,37 @@ it("event-triggered hook turns cannot act on another automation", async () => {
   expect(gatewayDispatches).toEqual([]);
 });
 
-it("event-triggered turns without an admitted context cannot use automations", async () => {
-  const outcome = await runAndTouchSibling({ trigger: "event", ingressBoundary: "unadmitted" });
-  expect(outcome).toEqual({ offered: true, actions: expect.any(Array), gated: true });
-  // Refused before any automations Gateway RPC, so nothing can be read or removed.
+// Every job creator gets the same answer: a run whose occurrence admission failed does
+// not start, and its record carries the cause and the next step.
+it.each(
+  ["owner", "admin", "member"].flatMap((creator) =>
+    (["cron", "event"] as const).map((trigger) => ({ creator, trigger })),
+  ),
+)("refuses a $trigger run created by $creator whose admission failed", async (cell) => {
+  const storePath = path.join(stateDir, "agents", "main", "sessions", "sessions.json");
+  const config = await prepareAuthorityConfig({ session: { store: storePath } });
+  resolveCronSessionMock.mockReturnValue(makeCronSession({ storePath }));
+  const result = await runCronIsolatedAgentTurn({
+    cfg: config,
+    deps: {},
+    occurrence: unadmittedScheduledOccurrence("automation has no effective agent"),
+    job: {
+      ...hookShapedJob(),
+      createdActor: { type: "human", source: "profile", id: cell.creator },
+    },
+    trigger: cell.trigger,
+    deliveryAttemptFence: null,
+    message: "Summarize the webhook payload",
+    sessionKey: "hook:event-trigger-scope",
+    agentId: "main",
+  });
+  expect(result).toMatchObject({
+    status: "error",
+    error: expect.stringContaining(
+      "(automation has no effective agent), so the run did not start. Recreate the automation",
+    ),
+  });
+  expect(runEmbeddedAgentMock).not.toHaveBeenCalled();
   expect(gatewayDispatches).toEqual([]);
 });
 

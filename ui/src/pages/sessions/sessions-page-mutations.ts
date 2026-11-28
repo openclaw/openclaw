@@ -7,13 +7,13 @@ import { showConfirmDialog } from "../../components/confirm-dialog.ts";
 import {
   confirmWithBoundAutomations,
   withBoundAutomationNotice,
-} from "../../components/session-automation-confirm.ts";
+} from "../../components/session-automation-confirm.tsx";
 import {
   formatBatchSessionRemovalError,
   withSessionWorkspaceRecovery,
 } from "../../components/session-workspace-recovery.runtime.ts";
 import { t } from "../../i18n/index.ts";
-import { registerSessionOrganizationSharedEnglish } from "../../i18n/locales/en-session-organization-shared.ts";
+import { registerSessionOrganizationEnglish } from "../../i18n/locales/en-session-organization.ts";
 import {
   readSessionMethodAccess,
   type SessionMethodAccessRequest,
@@ -29,6 +29,7 @@ import type {
   SessionDeleteTarget,
   SessionListOptions,
 } from "../../lib/sessions/session-capability.ts";
+import { sessionDeleteConfirmationMessage } from "../../lib/sessions/session-delete-confirmation.ts";
 import { resolveUiSessionRowAgentId } from "../../lib/sessions/session-key.ts";
 import { formatPreservedWorktreesNotice } from "../../lib/sessions/worktree-preservation.ts";
 import { runControlUiPluginAction } from "../../plugins/control-ui-actions.ts";
@@ -38,7 +39,7 @@ import type { SessionsPageRequestScope } from "./request-scope.ts";
 import { settleSelectedSession, type SessionDeleteRow } from "./selection.ts";
 import type { SessionsPageState } from "./sessions-page-state.types.ts";
 
-registerSessionOrganizationSharedEnglish();
+registerSessionOrganizationEnglish();
 
 type SessionsPageMutationHost = {
   application: ApplicationContext;
@@ -160,11 +161,11 @@ export function createSessionsPageMutations(host: SessionsPageMutationHost) {
             title: t("sessionsView.deleteSessionTitle", {
               session: normalizeOptionalString(only.label) ?? only.key,
             }),
-            message: t("sessionsView.deleteSelectedConfirmOne"),
+            message: sessionDeleteConfirmationMessage(rows),
           }
         : {
             title: t("sessionsView.deleteSessionsTitle", { count: String(rows.length) }),
-            message: t("sessionsView.deleteSelectedConfirm"),
+            message: sessionDeleteConfirmationMessage(rows),
           };
     if (!(await confirmDelete(prompt, rows, scope)) || !isRequestScopeCurrent(scope)) {
       return;
@@ -314,9 +315,9 @@ export function createSessionsPageMutations(host: SessionsPageMutationHost) {
       const listed = await fetchPagedSessionRows({
         list: (offset) => scope.sessions.list({ ...listOptions, limit: 1000, offset }),
         isCurrent: () => isRequestScopeCurrent(scope),
-        missingResultError: "archived session enumeration returned no result",
-        stalledPaginationError: "archived session enumeration did not advance",
-        incompletePaginationError: "archived session enumeration was incomplete",
+        missingResultError: t("sessionsView.deleteArchivedListMissing"),
+        stalledPaginationError: t("sessionsView.deleteArchivedListStalled"),
+        incompletePaginationError: t("sessionsView.deleteArchivedListIncomplete"),
       });
       if (!listed) {
         return;
@@ -332,7 +333,7 @@ export function createSessionsPageMutations(host: SessionsPageMutationHost) {
     if (
       !(await confirmMutation({
         title: t("sessionsView.deleteAllArchivedTitle", { count: String(archivedRows.length) }),
-        message: t("sessionsView.deleteSessionsConfirm"),
+        message: sessionDeleteConfirmationMessage(archivedRows),
         signal: scope.signal,
       })) ||
       !isRequestScopeCurrent(scope)
@@ -350,7 +351,7 @@ export function createSessionsPageMutations(host: SessionsPageMutationHost) {
       !(await confirmDelete(
         {
           title: t("sessionsView.deleteSessionTitle", { session: label }),
-          message: t("sessionsView.deleteSessionConfirm"),
+          message: sessionDeleteConfirmationMessage([row]),
         },
         [row],
         scope,

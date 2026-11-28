@@ -1,21 +1,38 @@
-import { describe, expect, it } from "vitest";
+import { describe, expect, it, vi } from "vitest";
+import { z } from "zod";
+import { OpenClawSchema } from "./zod-schema.js";
 import { OpenClawSchemaShape } from "./zod-schema.root-shape.js";
 
-const lightpandaProfile = {
+const externalProfile = {
   engine: "lightpanda",
   cdpUrl: "ws://127.0.0.1:9222/",
   attachOnly: true,
 };
 
-describe("browser engine config", () => {
+it("constructs the profile name validator once, when the browser shape is needed", () => {
+  const browser = OpenClawSchemaShape.browser.unwrap();
+  const clone = browser.clone();
+  using profileNameRegex = vi.spyOn(z.ZodString.prototype, "regex", "get");
+
+  expect(OpenClawSchema.safeParse({}).success).toBe(true);
+  expect(profileNameRegex).not.toHaveBeenCalled();
+  expect(OpenClawSchema.safeParse({ browser: {} }).success).toBe(true);
+  expect(profileNameRegex).toHaveBeenCalledTimes(1);
+
+  expect(clone.shape.profiles).toBe(browser.shape.profiles);
+  expect(browser.toJSONSchema().properties).toHaveProperty("profiles");
+  expect(profileNameRegex).toHaveBeenCalledTimes(1);
+});
+
+describe.each(["lightpanda", "kitesurf"] as const)("%s browser engine config", (engine) => {
   it.each([
     ["cdpUrl", undefined],
     ["attachOnly", undefined],
     ["driver", "extension"],
     ["userDataDir", "/tmp/chrome-profile"],
-  ])("rejects incompatible Lightpanda %s=%s", (key, value) => {
+  ])("rejects incompatible external engine %s=%s", (key, value) => {
     const result = OpenClawSchemaShape.browser.safeParse({
-      profiles: { lightweight: { ...lightpandaProfile, [key as string]: value } },
+      profiles: { lightweight: { ...externalProfile, engine, [key as string]: value } },
     });
     expect(result.success).toBe(false);
     if (!result.success) {
@@ -25,10 +42,10 @@ describe("browser engine config", () => {
     }
   });
 
-  it("rejects a Lightpanda endpoint shared with Chromium", () => {
+  it("rejects an external endpoint shared with Chromium", () => {
     const result = OpenClawSchemaShape.browser.safeParse({
       profiles: {
-        lightweight: lightpandaProfile,
+        lightweight: { ...externalProfile, engine },
         alias: { engine: "chromium", cdpUrl: "ws://127.0.0.1:9222", attachOnly: true },
       },
     });

@@ -1,7 +1,7 @@
 import fs from "node:fs/promises";
 import path from "node:path";
 import { DatabaseSync } from "node:sqlite";
-import * as tar from "tar";
+import * as tar from "tar/raw";
 import { afterAll, beforeAll, describe, expect, it } from "vitest";
 import { withDaemonRuntimePinStore } from "../daemon/runtime-pin-store.js";
 import { buildBackupArchivePath } from "../infra/backup-archive-path-policy.js";

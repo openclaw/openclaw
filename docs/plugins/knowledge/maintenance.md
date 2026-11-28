@@ -77,7 +77,7 @@ A configured time that does not exist during the forward jump is skipped.
 An invalid schedule or time zone does not disable the plugin: the pass is not
 scheduled, a warning is logged, and **Settings → Maintenance** shows the error.
 
-Each pass visits every store and every conversation partition in it, in pages of
+Each pass visits every store and the knowledge kept separately for each session in it, in pages of
 500 claims. Stores that do not exist yet or are not ready are skipped and never
 created. One failing store does not stop the others. A plugin reload or store
 reassignment ends the current pass.
@@ -86,6 +86,12 @@ The next slot and the last results persist in
 `<state dir>/knowledge/registry.sqlite`. If a slot passes while the Gateway is
 down, the pass catches up 60 seconds after the next start. Two passes never run
 at once.
+
+With the `lean` resource profile, initialization waits for Knowledge's first
+use, including an authorized maintenance-status read. Catch-up is scheduled 60
+seconds after that activation instead of Gateway startup. Status reads await
+initialization before reporting saved results. See
+[Lean resource policy](/plugins/knowledge#lean-resource-policy).
 
 ## Status
 
@@ -106,12 +112,12 @@ an unsupported guess.
 ## Agent review
 
 Relink leaves claims that name no page, or more than one. Maintenance does not
-review them: it runs relink only and never starts an agent turn. An agent
-review handles them on its own schedule: an automation whose agent turn follows
+review them: it runs relink only and never runs an agent. An agent review
+handles them on its own schedule: an automation whose agent reply follows
 the `knowledge-claim-consolidation` skill over every private claim with no linked
 page and no source page, whichever tool saved it. It runs weekly by default
 (Sundays at 3:45 AM) or, if you choose, nightly at 3:45 AM, after the default
-3:30 AM maintenance pass. Each run is an agent turn over every unlinked claim,
+3:30 AM maintenance pass. Each run is one agent reply over every unlinked claim,
 so nightly costs more; a run that finds nothing left stops right away. The
 retired `maintenance.reviewJobId` setting fails validation; run
 `openclaw doctor --fix` to remove it.
@@ -119,18 +125,18 @@ retired `maintenance.reviewJobId` setting fails validation; run
 The review edits private knowledge, so its automation must run in a session
 with the owner's private access. Turn on **Knowledge Consolidation** from the
 [Scribes](/plugins/knowledge/scribes) tab of the Knowledge page. To start it
-without the Control UI, open a new conversation in the owner's direct chat and
+without the Control UI, start a session in the owner’s direct chat and
 send the prompt the Scribes tab would send; the
 [example prompt](/plugins/knowledge/scribes#example-prompt) shows it. Its
 settings are plain bullets, so set your schedule (`45 3 * * 0` weekly or
 `45 3 * * *` nightly) and IANA time zone there.
 
-The conversation creates the automation, targets itself, and ends with a
-`Scribe status: on — …` line. Each scheduled run receives the automation's run
-message, which you can edit on the Automations page. To fix a broken setup,
-use **Repair** on the Scribes tab. If the scribe's conversation is reset or
-removed, it loses access: start the scribe again from a new conversation.
-Conversation partitions are not reviewed.
+The agent creates the automation, which opens a fresh session for each run, and ends with a `Scribe status: on — …` line.
+Each scheduled run receives the automation's run message, which you can edit on
+the Automations page. To fix a broken setup,
+use **Repair** on the Scribes tab. If the scribe’s session is reset or
+removed, it loses access: start the scribe again from a new session.
+The scribe doesn’t review knowledge kept separately for individual sessions.
 
 The `knowledge-claim-consolidation` skill is the agent workflow for the claims relink
 leaves unlinked. It chooses subject pages with judgment, creates pages for
@@ -138,5 +144,11 @@ substantial missing subjects, retires exact duplicates, supersedes explicitly
 replaced claims and status snapshots by their outcome, and folds durable
 outcomes into page State. The same skill runs as a claim consolidation review
 over other scopes when you ask for one: the claims on one hub or oversized page,
-or the claims about one subject since a date. Scribe runs only review the
-unlinked residue.
+or the claims about one subject since a date. A one-page review ends by
+reviewing that page against its type's layout. The default result is no
+change: a page with a current State and sections that fit its type only gets
+fixes such as a broken citation or a fact a newer claim contradicts.
+Restructuring or splitting a page needs a reason the report names, and dated
+sections and written Timelines are retired into State, claims and source notes
+without losing any citation. Scribe runs review the unlinked residue, retire up
+to 10 written Timelines, and review up to 5 pages, tracked on a checkpoint note.

@@ -34,6 +34,7 @@ export async function resolveCodexDoctorStartOptions(params: {
   for (const agentId of listAgentIds(params.cfg)) {
     const model = resolveDefaultModelForAgent({ cfg: params.cfg, agentId });
     if (
+      !model ||
       resolveEffectiveAgentRuntime({
         cfg: params.cfg,
         provider: model.provider,

@@ -1,5 +1,6 @@
 import { terminalText } from "../../packages/terminal-core/src/safe-text.js";
 import { listAgentIds, resolveConfiguredAgentId } from "../agents/agent-scope-config.js";
+import { throwExpectedCliError } from "../cli/expected-cli-error.js";
 import { captureRuntimeConfigAsyncReader } from "../config/config.js";
 import { resolveStateDir } from "../config/paths.js";
 import { formatErrorMessage } from "../infra/errors.js";
@@ -49,7 +50,7 @@ async function resolveCreateDatabases(options: BackupGitCreateOptions) {
       (options.agents ?? []).map((agent) => {
         const trimmed = agent.trim();
         if (!trimmed) {
-          throw new Error("--agent must not be blank");
+          throwExpectedCliError("--agent must not be blank");
         }
         return normalizeAgentId(trimmed);
       }),
@@ -57,10 +58,12 @@ async function resolveCreateDatabases(options: BackupGitCreateOptions) {
   ];
   const explicit = options.global === true || normalizedAgents.length > 0;
   if (options.all && explicit) {
-    throw new Error("Use --all by itself, or select --global and --agent scopes explicitly.");
+    throwExpectedCliError("Use --all by itself, or select --global and --agent scopes explicitly.");
   }
   if (!options.all && !explicit) {
-    throw new Error("Choose at least one Git backup scope: --all, --global, or --agent <id>.");
+    throwExpectedCliError(
+      "Choose at least one Git backup scope: --all, --global, or --agent <id>.",
+    );
   }
   const globalPath = options.all || options.global ? resolveOpenClawStateSqlitePath() : undefined;
   if (globalPath) {
@@ -97,16 +100,16 @@ function resolveOneIdentity(options: BackupGitScopeOptions): GitBackupIdentity {
   const agent = options.agent?.trim();
   const store = options.store?.trim();
   if (options.store !== undefined && !store) {
-    throw new Error("--store must not be blank");
+    throwExpectedCliError("--store must not be blank");
   }
   const scopes = Number(options.global === true) + Number(Boolean(agent)) + Number(Boolean(store));
   if (scopes > 1) {
-    throw new Error(
+    throwExpectedCliError(
       "Choose exactly one Git backup scope: --global, --agent <id>, or --store <id>.",
     );
   }
   if (scopes === 0) {
-    throw new Error("Choose a Git backup scope: --global, --agent <id>, or --store <id>.");
+    throwExpectedCliError("Choose a Git backup scope: --global, --agent <id>, or --store <id>.");
   }
   if (store) {
     return { role: "generic", id: store };

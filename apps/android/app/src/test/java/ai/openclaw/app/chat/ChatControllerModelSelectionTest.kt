@@ -1,6 +1,7 @@
 package ai.openclaw.app.chat
 
 import ai.openclaw.app.GatewayModelUnavailableReason
+import ai.openclaw.app.gateway.ErrorShape
 import ai.openclaw.app.gateway.GatewayRequestOutcomeUnknown
 import ai.openclaw.app.gateway.GatewayRequestRejected
 import ai.openclaw.app.gateway.GatewaySession
@@ -2292,7 +2293,7 @@ class ChatControllerModelSelectionTest {
         listOf(
           CancellationException("caller cancelled"),
           GatewayRequestOutcomeUnknown("request timeout"),
-          GatewayRequestRejected(GatewaySession.ErrorShape("UNAVAILABLE", "metadata unavailable")),
+          GatewayRequestRejected(ErrorShape("UNAVAILABLE", "metadata unavailable")),
         )
       for (failure in failures) {
         var nextFailure: Throwable? = null

@@ -1,4 +1,6 @@
 import fs from "node:fs";
+import { syncBuiltinESMExports } from "node:module";
+import path from "node:path";
 import { DatabaseSync } from "node:sqlite";
 import { aroundEach, expect, it, vi } from "vitest";
 import { observeHostDataSql } from "../../../test/helpers/sqlite-statement-execution-counter.js";
@@ -35,6 +37,7 @@ aroundEach(async (runTest) => {
     });
   } finally {
     vi.restoreAllMocks();
+    syncBuiltinESMExports();
     snapshots.clearRuntimeAuthProfileStoreSnapshots();
   }
 });
@@ -164,3 +167,53 @@ it.each(["reply", "caller", "source"] as const)(
     expect(ownership()).toEqual(committedOwner);
   },
 );
+
+it("prepares a cold shared auth write without synchronous source metadata", async () => {
+  await prepareActor();
+  const exists = vi.spyOn(fs, "existsSync");
+  const stat = vi.spyOn(fs, "statSync");
+  syncBuiltinESMExports();
+  await prepare();
+  expect(exists.mock.calls.filter(([file]) => String(file).startsWith(sourceDir))).toEqual([]);
+  expect(stat.mock.calls.filter(([file]) => String(file) === sourcePath)).toEqual([]);
+  expect(ownership()).toEqual(committedOwner);
+});
+
+it("keeps the event loop responsive and refuses revoked authority while source admission waits", async () => {
+  await prepareActor();
+  const entered = Promise.withResolvers<void>();
+  const release = Promise.withResolvers<void>();
+  const access = fs.promises.access;
+  let probes = 0;
+  let revoked = false;
+  vi.spyOn(fs.promises, "access").mockImplementation(async (...args) => {
+    if (String(args[0]) === path.join(sourceDir, "auth-profiles.json") && ++probes === 2) {
+      entered.resolve();
+      await release.promise;
+    }
+    return access(...args);
+  });
+  const pending = prepare(() => {
+    if (revoked) {
+      throw new Error("Synthetic caller revoked during source admission");
+    }
+  });
+  try {
+    await Promise.race([
+      entered.promise,
+      pending.then(() => {
+        throw new Error("Bootstrap skipped the source admission barrier");
+      }),
+    ]);
+    await new Promise<void>((resolve) => {
+      setImmediate(resolve);
+    });
+    revoked = true;
+    release.resolve();
+    await expect(pending).rejects.toThrow(/caller revoked during source admission/);
+    expect(ownership()).toBeUndefined();
+  } finally {
+    release.resolve();
+    await Promise.allSettled([pending]);
+  }
+});

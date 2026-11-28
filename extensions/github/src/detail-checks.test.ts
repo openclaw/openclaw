@@ -16,6 +16,8 @@ function pull(headSha: unknown = sha) {
     comments: 0,
     review_comments: 0,
     changed_files: 0,
+    // These reads are queued in order; the author's picture has its own test.
+    user: { login: "steipete" },
     head: { sha: headSha, ref: "feature/checks" },
     base: { sha: "b".repeat(40), ref: "main" },
     merge_commit_sha: "c".repeat(40),
@@ -121,7 +123,7 @@ describe("GitHub PR checks through the document loader", () => {
       state: "failure",
       total: 4,
       truncated: false,
-      summary: "1 failed · 1 pending · 1 passed · 1 skipped or neutral",
+      summary: "1 failed · 1 in progress · 1 passed · 1 skipped or neutral",
       items: [
         { name: "Deploy", state: "failure", detail: "Failed" },
         { name: "Build", state: "pending", detail: "In progress" },
@@ -134,7 +136,7 @@ describe("GitHub PR checks through the document loader", () => {
 
   it.each([
     [503, "success", "unavailable", "Checks incomplete · 1 passed", "Passed"],
-    [403, "pending", "pending", "Checks incomplete · 1 pending", "Pending"],
+    [403, "pending", "pending", "Checks incomplete · 1 in progress", "Pending"],
   ] as const)("keeps the PR after HTTP %s", async (status, legacy, state, summary, label) => {
     const detail = await readChecks(
       json({ message: "sensitive upstream diagnostic" }, status),
@@ -166,6 +168,8 @@ describe("GitHub PR checks through the document loader", () => {
   it.each([undefined, "../main"])("rejects invalid head %s", async (headSha) => {
     const fetchMock = publicFetch(runs(), statuses(), {
       ...pull(),
+      // These reads are queued in order; the author's picture has its own test.
+      user: { login: "steipete" },
       head: { sha: headSha, ref: "feature/checks" },
     });
     const detail = await loadGitHubDetail(target(), undefined, fetchMock);
@@ -210,7 +214,7 @@ describe("GitHub PR checks through the document loader", () => {
   );
 
   it("keeps refreshed failures over late reads, then recovers and expires them", async () => {
-    const now = vi.spyOn(Date, "now").mockReturnValue(1000);
+    const now = vi.spyOn(performance, "now").mockReturnValue(1000);
     const deferred = createDeferred<Response>();
     const requested = createDeferred<void>();
     const read = reader(

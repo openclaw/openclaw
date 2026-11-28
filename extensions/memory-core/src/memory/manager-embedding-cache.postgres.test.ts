@@ -156,7 +156,7 @@ describe.skipIf(!connection)("PostgreSQL memory embedding cache", () => {
         String(row["QUERY PLAN"]),
       );
       const scan = plan.find((line) => line.includes("idx_memory_embedding_cache_updated_at"));
-      expect(scan, plan.join("\n")).toMatch(/Index Scan.*actual .*rows=11 loops=1/);
+      expect(scan, plan.join("\n")).toMatch(/Index Scan.*actual .*rows=11(?:\.0+)? loops=1\b/);
       expect(plan.some((line) => line.includes("Seq Scan"))).toBe(false);
     });
   });

@@ -236,7 +236,10 @@ it("reuses unchanged descriptions across readers while sampling pending titles l
     const generation = createDeferredCore<boolean>();
     const pending = sessionTitleRequests.run(
       { storePath: record.storeTarget.storePath, sessionKey: targetKey, sessionId: "original" },
-      () => generation.promise,
+      (markStarted) => {
+        markStarted();
+        return generation.promise;
+      },
     );
     try {
       expectSession(await describe(), { titlePending: true, sharingRole: "viewer" });
@@ -329,7 +332,6 @@ it("projects current target, lineage, children and placement after committed cha
       model: "gpt-5.5",
       modelOverrideSource: "inherited",
       placement: { state: "requested" },
-      childSessions: undefined,
       swarm: {
         groups: [
           {
@@ -340,6 +342,7 @@ it("projects current target, lineage, children and placement after committed cha
         ],
       },
     });
+    expect(response).not.toHaveProperty("session.childSessions");
     expect(JSON.stringify(response)).not.toContain("synthetic retained");
   }));
 
@@ -471,7 +474,8 @@ it("does not promote historical control after the current executor retires", () 
       execution[Symbol.dispose]();
       clock.mockReturnValue(now + 1);
     });
-    expectSession(response, { controlOwnerSessionKey: undefined });
+    expectSession(response, {});
+    expect(response).not.toHaveProperty("session.controlOwnerSessionKey");
   }));
 
 it.each(["executor", "reservation"] as const)(
@@ -522,7 +526,8 @@ it.each(["executor", "reservation"] as const)(
             expect(withdrawn).toBe(true);
           }
         });
-        expectSession(response, { hasActiveSubagentRun: undefined });
+        expectSession(response, {});
+        expect(response).not.toHaveProperty("session.hasActiveSubagentRun");
       } finally {
         releaseAgentRunContext(run.runId, claim);
         const hold = holdQueuedSwarmRun(run.runId);

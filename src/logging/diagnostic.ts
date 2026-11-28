@@ -24,7 +24,6 @@ import {
   type DiagnosticLivenessSample,
 } from "./diagnostic-liveness.js";
 import {
-  emitDiagnosticMemorySample,
   createDiagnosticMemorySampler,
   type EmitDiagnosticMemorySample,
 } from "./diagnostic-memory.js";
@@ -543,7 +542,7 @@ export function startGatewayDiagnosticHeartbeat(
     reconcileObservations();
   };
   reconcileObservations();
-  const sampleMemory = createDiagnosticMemorySampler(
+  const { sampleMemory, checkPressure } = createDiagnosticMemorySampler(
     () => !scheduler.signal.aborted && heartbeatJob === job && observing,
   );
   const tick = () => {
@@ -702,13 +701,13 @@ export function startGatewayDiagnosticHeartbeat(
             }
             state[warningAgeField] = attentionAgeMs;
           }
+          // Stalls are reported only by the `session.stalled` event; the controller owns recovery.
           const label =
-            classification.eventType === "session.stuck"
-              ? "stuck session"
-              : classification.eventType === "session.stalled"
-                ? "stalled session"
-                : "long-running session";
-          if (!isIncognitoDiagnosticSession(state)) {
+            classification.eventType === "session.stuck" ? "stuck session" : "long-running session";
+          if (
+            classification.eventType !== "session.stalled" &&
+            !isIncognitoDiagnosticSession(state)
+          ) {
             void logWithSessionDiagnosticContext({
               level:
                 classification.eventType === "session.long_running" && queueDepth <= 0
@@ -819,7 +818,7 @@ export function startGatewayDiagnosticHeartbeat(
     everyMs: MEMORY_PRESSURE_INTERVAL_MS,
     run: () => {
       if (!scheduler.signal.aborted && heartbeatJob === job) {
-        emitDiagnosticMemorySample(undefined, false);
+        checkPressure();
       }
     },
   });

@@ -5,6 +5,7 @@ import Security
 
 enum GatewayTLSFingerprintProbeFailure: Equatable {
     case endpointUnreachable
+    case endpointRefused
     case tlsHandshakeTimeout
     case tlsUnavailable
     case certificateUnavailable
@@ -125,9 +126,10 @@ private final class GatewayTLSFingerprintProbe: NSObject, URLSessionDelegate, UR
         switch URLError.Code(rawValue: nsError.code) {
         case .timedOut:
             return .tlsHandshakeTimeout
+        case .cannotConnectToHost:
+            return .endpointRefused
         case .cannotFindHost,
              .dnsLookupFailed,
-             .cannotConnectToHost,
              .notConnectedToInternet,
              .internationalRoamingOff,
              .callIsActive,

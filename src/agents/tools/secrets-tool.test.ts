@@ -372,6 +372,19 @@ describe("secrets tool", () => {
     );
   });
 
+  it("follows replacement text without treating it as a credential", async () => {
+    const gateway = requestGateway({
+      "question.waitAnswer": async () => ({ status: "cancelled" }),
+      "question.get": async () => ({
+        question: { status: "cancelled", resolvedBy: "chat-composer-replacement" },
+      }),
+    });
+    const result = await secretTool(gateway).execute("replacement", secretRequest);
+    expect(result.details).toEqual({ status: "no_answer" });
+    expect(JSON.stringify(result)).toContain("Follow the new message");
+    expect(methodCalls(gateway, "secrets.store.set")).toHaveLength(0);
+  });
+
   it.each(["pending", "cancelled"] as const)(
     "returns no_answer when a credential request is %s",
     async (status) => {

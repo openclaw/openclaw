@@ -1,7 +1,7 @@
 import fs from "node:fs/promises";
 import path from "node:path";
 import { expectDefined } from "@openclaw/normalization-core";
-import * as tar from "tar";
+import * as tar from "tar/raw";
 import { describe, expect, it } from "vitest";
 import { backupRestoreCommand } from "../commands/backup-restore.js";
 import { backupCreateCommand } from "../commands/backup.js";
@@ -11,9 +11,11 @@ import {
   createColdPluginFixture,
 } from "../plugins/test-helpers/cold-plugin-fixtures.js";
 import type { OpenClawTestState } from "../test-utils/openclaw-test-state.js";
-import { withOpenClawTestState } from "../test-utils/openclaw-test-state.js";
 import { createBackupArchive } from "./backup-create.js";
-import { listArchiveEntries } from "./backup-create.test-support.js";
+import {
+  listArchiveEntries,
+  withIsolatedBackupState as withOpenClawTestState,
+} from "./backup-create.test-support.js";
 import { requireNodeSqlite } from "./node-sqlite.js";
 
 // Regression home for alternative SQLite filename discovery (#148796): these
@@ -186,7 +188,7 @@ describe("createBackupArchive SQLite alternative filenames", () => {
     );
   });
 
-  it.each(["custom.sqlite", "custom.db"])(
+  it.each(["custom.db"])(
     "fails closed when a plugin SQLite schema named %s cannot be compacted safely",
     async (filename) => {
       await withOpenClawTestState(

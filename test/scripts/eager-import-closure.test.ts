@@ -14,7 +14,8 @@ import {
 } from "node:fs";
 import { dirname, join, posix, relative } from "node:path";
 import { pathToFileURL } from "node:url";
-import { afterEach, expect, it } from "vitest";
+import { afterEach, expect, it, vi } from "vitest";
+import * as nativeTypeScript from "../../scripts/lib/native-typescript.mts";
 import {
   collectRuntimeImportClosure,
   createRuntimeImportGraph,
@@ -26,6 +27,7 @@ import { resolveTestNodeExecPath } from "../../src/test-utils/node-process.js";
 import { useAutoCleanupTempDirTracker } from "../helpers/temp-dir.js";
 import { prepareCopiedSourceModules } from "./copied-source-modules.test-support.js";
 import {
+  anchoredStdio,
   copyPrRoutingWrapperSources,
   copyPrWrapperSources,
   linkPrWrapperDependencies,
@@ -108,6 +110,24 @@ it("keeps packaged scripts closed over runtime imports", () => {
     closure.filter((file) => !files.includes(file)),
     "Package lifecycle scripts must ship their guarded imports and transitive dependencies.",
   ).toEqual([]);
+});
+
+it("keeps update lease payload schemas out of Gateway ownership checks", () => {
+  const files = collectRuntimeImportClosure(process.cwd(), [
+    "src/infra/gateway-state-owner-heartbeat.runtime.ts",
+    "src/infra/state-lease-process-owner.ts",
+  ]);
+  expect(files).toContain("src/infra/update-managed-service-handoff-boot-schema.ts");
+  expect(files).not.toContain("src/infra/update-managed-service-handoff-schema.ts");
+});
+
+it("keeps legacy lease inspection out of the file-lock heartbeat", () => {
+  const files = collectRuntimeImportClosure(process.cwd(), [
+    "src/infra/gateway-state-owner-heartbeat.runtime.ts",
+  ]);
+  expect(files).toContain("src/infra/gateway-lock-payload.ts");
+  expect(files).not.toContain("src/infra/kysely-sync.ts");
+  expect(files).not.toContain("src/infra/node-sqlite.ts");
 });
 
 it("keeps the PR wrapper inventory closed over runtime imports", () => {
@@ -332,7 +352,7 @@ itPosix.each(["empty", "legacy", "outdated"])(
               OPENCLAW_PR_ANCHOR_CREATOR_PID: String(process.pid),
               OPENCLAW_PR_ANCHOR_FD: "9",
             },
-            stdio: ["ignore", "pipe", "pipe", ...Array<"ignore">(6).fill("ignore"), descriptor],
+            stdio: anchoredStdio(descriptor),
           },
         );
       const result = materialize();
@@ -503,6 +523,49 @@ it("traverses runtime sources in mixed inventories and still rejects missing run
   );
 });
 
+it("reuses overlapping runtime edges only within the same native snapshot", () => {
+  const root = tempDirs.make("openclaw-runtime-graph-reuse-");
+  writeFixture(root, {
+    "tsconfig.json": { compilerOptions: { module: "NodeNext", moduleResolution: "NodeNext" } },
+    "entry.mts": 'import "./shared.mjs";',
+    "other.mts": 'import "./shared.mjs";',
+    "shared.mts": 'import "./leaf.mjs";',
+    "leaf.mts": "export {};",
+    "extra.mts": 'import "./entry.mjs";',
+  });
+  const openProject = nativeTypeScript.createNativeTypeScriptProject;
+  let session: ReturnType<typeof openProject> | undefined;
+  using projectSpy = vi
+    .spyOn(nativeTypeScript, "createNativeTypeScriptProject")
+    .mockImplementation((options) => {
+      session = openProject({ ...options, observer: () => {} });
+      return session;
+    });
+  using graph = createRuntimeImportGraph(root, ["entry.mts", "other.mts"]);
+  expect(projectSpy).toHaveBeenCalledOnce();
+  const requests = () => session!.api.getTimingInfo().totals.requestCount;
+  const baseline = requests();
+  const measurementOverhead = requests() - baseline;
+  expect(graph.collect(["entry.mts", "other.mts"])).toEqual([
+    "entry.mts",
+    "leaf.mts",
+    "other.mts",
+    "shared.mts",
+  ]);
+  const beforeReuse = requests();
+  expect(graph.collect(["entry.mts"])).toEqual(["entry.mts", "leaf.mts", "shared.mts"]);
+  expect(requests() - beforeReuse).toBe(measurementOverhead);
+
+  // Admitting a root replaces the compiler snapshot; old edge answers must be discarded.
+  graph.dependencies("extra.mts");
+  const beforeRefresh = requests();
+  expect(graph.collect(["entry.mts"])).toEqual(["entry.mts", "leaf.mts", "shared.mts"]);
+  expect(requests() - beforeRefresh).toBeGreaterThan(measurementOverhead);
+  const afterRefresh = requests();
+  graph.collect(["entry.mts"]);
+  expect(requests() - afterRefresh).toBe(measurementOverhead);
+});
+
 it("preserves declaration resolution for source-import graphs", () => {
   const root = tempDirs.make("openclaw-source-declarations-");
   writeFixture(root, {
@@ -590,6 +653,15 @@ const sessionMemoryOwners: string[] = [
 ];
 
 const deferredOwnerCases: Array<[string, string[], string[], boolean?]> = [
+  [
+    "persisted operator recovery schemas",
+    ["src/gateway/operator-run-recovery-source.codec.ts", "src/cron/store/read-only.worker.ts"],
+    [
+      "src/config/zod-schema.gateway.ts",
+      "src/config/zod-schema.root-support.ts",
+      "src/config/zod-schema.memory-search.ts",
+    ],
+  ],
   [
     "operator role policy",
     ["src/gateway/operator-role-policy.ts"],

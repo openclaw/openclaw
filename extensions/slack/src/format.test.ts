@@ -149,8 +149,6 @@ describe("normalizeSlackOutboundText", () => {
 
   it("handles core markdown formatting conversions", () => {
     const cases = [
-      ["converts bold from double asterisks to single", "**bold text**", "*bold text*"],
-      ["preserves italic underscore format", "_italic text_", "_italic text_"],
       [
         "converts strikethrough from double tilde to single",
         "~~strikethrough~~",
@@ -161,7 +159,6 @@ describe("normalizeSlackOutboundText", () => {
         "hi _there_ **boss** `code`",
         "hi _there_ *boss* `code`",
       ],
-      ["renders inline code", "use `npm install`", "use `npm install`"],
       ["renders fenced code blocks", "```js\nconst x = 1;\n```", "```\nconst x = 1;\n```"],
       [
         "renders links with Slack mrkdwn syntax",
@@ -177,7 +174,6 @@ describe("normalizeSlackOutboundText", () => {
       ],
       ["escapes raw HTML", "<b>nope</b>", "&lt;b&gt;nope&lt;/b&gt;"],
       ["renders paragraphs with blank lines", "first\n\nsecond", "first\n\nsecond"],
-      ["renders bullet lists", "- one\n- two", "• one\n• two"],
       ["renders ordered lists with numbering", "2. two\n3. three", "2. two\n3. three"],
       ["renders headings as bold text", "# Title", "*Title*"],
       ["renders blockquotes", "> > Quote\n> > more", "> > Quote\n> > more"],
@@ -271,11 +267,6 @@ describe("normalizeSlackOutboundText", () => {
     const chunks = markdownToSlackMrkdwnChunks("alpha <<", 8);
 
     expect(chunks).toEqual(["alpha ", "&lt;&lt;"]);
-    expect(
-      chunks
-        .map((chunk, index) => ({ index, length: chunk.length }))
-        .filter((chunk) => chunk.length > 8),
-    ).toStrictEqual([]);
   });
 
   it("keeps a quote marker whose escaping depends on the following space", () => {

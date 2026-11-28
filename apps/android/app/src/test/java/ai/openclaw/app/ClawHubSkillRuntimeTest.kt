@@ -1,10 +1,11 @@
 package ai.openclaw.app
 
+import ai.openclaw.app.gateway.ErrorShape
 import ai.openclaw.app.gateway.GatewayEndpoint
 import ai.openclaw.app.gateway.GatewayErrorDetails
 import ai.openclaw.app.gateway.GatewayRequestOutcomeUnknown
 import ai.openclaw.app.gateway.GatewayRequestRejected
-import ai.openclaw.app.gateway.GatewaySession
+import ai.openclaw.app.gateway.RpcResult
 import kotlinx.coroutines.CompletableDeferred
 import kotlinx.coroutines.Job
 import kotlinx.coroutines.channels.Channel
@@ -54,18 +55,18 @@ class ClawHubSkillRuntimeTest {
   @Test
   fun installResultsPreserveGatewayMessagesAndAuditWarnings() {
     val success =
-      GatewaySession.RpcResult(
+      RpcResult(
         ok = true,
         payloadJson = """{"message":"Installed @alice/alpha.","warning":"  ClawHub audit details.\n "}""",
         error = null,
       )
     val rejections =
       listOf("Blocked by ClawHub.", "Security verification unavailable.").map { message ->
-        GatewaySession.RpcResult(
+        RpcResult(
           ok = false,
           payloadJson = null,
           error =
-            GatewaySession.ErrorShape(
+            ErrorShape(
               code = "UNAVAILABLE",
               message = message,
               details =
@@ -189,7 +190,7 @@ class ClawHubSkillRuntimeTest {
         listOf(
           GatewayRequestOutcomeUnknown("response lost"),
           GatewayRequestRejected(
-            GatewaySession.ErrorShape(code = "UNAVAILABLE", message = "Install still running", details = null),
+            ErrorShape(code = "UNAVAILABLE", message = "Install still running", details = null),
           ),
           null,
         )
@@ -232,7 +233,6 @@ class ClawHubSkillRuntimeTest {
           assertNull(runtime.clawHubSkillSearchState.value.errorText)
           assertTrue(
             checkNotNull(runtime.skillsState.value.summary)
-              .skills
               .isEmpty(),
           )
           assertEquals(1, installCalls.get())

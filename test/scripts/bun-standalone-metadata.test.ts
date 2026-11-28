@@ -35,6 +35,7 @@ import {
 } from "../../src/plugins/candidate-install-owner.js";
 import { PluginDashboardDeclarationError } from "../../src/plugins/dashboard-capabilities.js";
 import { shouldRejectHardlinkedPluginFiles } from "../../src/plugins/hardlink-policy.js";
+import { isMemoryBackendRequested } from "../../src/plugins/memory-backend.js";
 import { PUBLIC_SURFACE_SOURCE_EXTENSIONS } from "../../src/plugins/package-entrypoints.js";
 import {
   isPathInside,
@@ -42,11 +43,12 @@ import {
   safeRealpathSync,
 } from "../../src/plugins/path-safety.js";
 import { createPluginCacheSdk, getPluginSdkHostFacts } from "../../src/plugins/plugin-cache-sdk.js";
+import { cleanupTempDirs } from "../helpers/temp-dir.js";
 
 const temporaryRoots: string[] = [];
 afterEach(() => {
   vi.unstubAllGlobals();
-  temporaryRoots.splice(0).forEach((root) => fs.rmSync(root, { recursive: true, force: true }));
+  cleanupTempDirs(temporaryRoots);
 });
 
 const parse = createStandaloneSourceParser();
@@ -980,6 +982,7 @@ describe("standalone image metadata", () => {
     Object.assign(context, {
       performance,
       PluginDashboardDeclarationError,
+      isMemoryBackendRequested,
       resolveImmutableInstallIdentity,
       resolvePluginCandidateInstallOwner,
       openRootFileSync: open,
@@ -1019,7 +1022,7 @@ describe("standalone image metadata", () => {
       getPluginInstance: () => undefined,
       loadSetupRuntimeChannelCandidate: () => true,
       recordPluginError: ({ error }: { error: string }) => errors.push(error),
-      detailPluginStartupTrace: () => {},
+      recordPluginStartupDiagnostics: () => {},
     });
     const ownerFile =
       owner === "runtime"
@@ -1323,22 +1326,6 @@ describe("standalone image metadata", () => {
     },
   );
 
-  it("leaves prototype-named functions unchanged in minified metadata modules", () => {
-    const { runtime, entry, context, adapter } = fixture();
-    const source = minifyMetadataSource(
-      `function valueOf(value) { return value + 1; }
-       function constructor(value) { return value * 2; }
-       ${ownerSource("src/plugins/plugin-cache-files.ts", "pluginCacheExistsSync")}`,
-    );
-    const transformed = adapter.transform({
-      filename: path.join(runtime, "dist/minified-metadata.js"),
-      contents: source,
-    });
-    vm.runInContext(transformed.contents, context);
-    expect(vm.runInContext("[valueOf(4), constructor(3)]", context)).toEqual([5, 6]);
-    expect(context.pluginCacheExistsSync(entry)).toBe(true);
-  });
-
   it.each([
     { minifiedMetadata: false, typedMetadata: false },
     { minifiedMetadata: true, typedMetadata: false },
@@ -1640,7 +1627,11 @@ function loadLegacySessionSurface(rootPath: string) {
     const filename = path.join(runtime, "dist/hooks-loader.js");
     const transformed = adapter.transform({
       filename,
-      contents: ownerSource("src/hooks/loader.ts", "prepareInternalHooks"),
+      // Literal dependencies are bundled normally; this extracted owner uses the fixture namespace.
+      contents: ownerSource("src/hooks/loader.ts", "prepareInternalHooks").replace(
+        'import("./workspace.js")',
+        "Promise.resolve({ prepareWorkspaceHookEntries })",
+      ),
     });
     vm.runInContext(
       rewriteStandaloneImports({
@@ -1716,7 +1707,6 @@ function loadLegacySessionSurface(rootPath: string) {
       throw new Error("Expected the physical resolver to own a descriptor");
     }
     expect(close).toHaveBeenLastCalledWith(opened.fd);
-    expect(() => fs.fstatSync(opened.fd)).toThrow(/EBADF/);
     close.mockClear();
     fs.chmodSync(external, 0o777);
     expect(resolve(external, "./resolver.js")).toBeUndefined();

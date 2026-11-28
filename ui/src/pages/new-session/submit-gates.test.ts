@@ -191,6 +191,7 @@ describe("DraftSubmissionFlow submit gates", () => {
               : Promise.resolve({ repositoryStatus: "not_git", branches: [] }),
       });
       const read = place.browser.refreshProjects();
+      expectGate(flow, "preference-restore", "Restoring your last session setup…");
       await flow.submit();
       expect(context.sessions.createResult).not.toHaveBeenCalled();
       discovery.reject(new Error("Project discovery unavailable"));
@@ -198,7 +199,7 @@ describe("DraftSubmissionFlow submit gates", () => {
       place.restorePreferenceSelections();
 
       expect(place.preferenceSelection().projectId).toBe("registered");
-      expect(flow.canSubmit()).toBe(false);
+      expectGate(flow, "preference-restore", "Your saved project didn’t load. Choose a workspace.");
       await flow.submit();
       await flow.submit(undefined, true);
       expect(context.sessions.createResult).not.toHaveBeenCalled();
@@ -209,7 +210,9 @@ describe("DraftSubmissionFlow submit gates", () => {
         projects = Promise.resolve({
           projects: [{ id: "registered", displayName: "Registered", source: "registered" }],
         });
-        await place.browser.refreshProjects();
+        const retry = place.browser.refreshProjects();
+        expectGate(flow, "preference-restore", "Restoring your last session setup…");
+        await retry;
         place.restorePreferenceSelections();
         availability.resolve({ current: true, worktree: true });
         await availability.promise;
@@ -375,6 +378,8 @@ describe("DraftSubmissionFlow submit gates", () => {
     if (!(SILENT_SUBMIT_GATES as readonly string[]).includes(block?.gate ?? "")) {
       expect(block?.reason).toBeTruthy();
       expect(flow.submitDisabledReason()).toBe(block?.reason);
+      flow.noteBlockedSubmitAttempt();
+      expect(flow.blockedSubmitNotice({ includePageRendered: true })).toBe(block?.reason);
     }
   });
 
@@ -592,5 +597,61 @@ describe("DraftSubmissionFlow submit gates", () => {
 
     expectGate(fixture.flow, "device-runtime", "This runtime doesn’t support paired devices");
     expect(fixture.request).not.toHaveBeenCalledWith("node.list", expect.anything());
+  });
+
+  it.each([
+    {
+      checkFailed: false,
+      pickerReason: "This session can’t use this project.",
+      submitReason: "This session can’t use this project. Choose another project or workspace.",
+    },
+    {
+      checkFailed: true,
+      pickerReason: "Couldn’t check the checkout. Select the project again to retry.",
+      submitReason: "Couldn’t check the checkout. Select the project again to retry.",
+    },
+  ])(
+    "guides composer recovery for an unavailable project (checkFailed=$checkFailed)",
+    async ({ checkFailed, pickerReason, submitReason }) => {
+      const { place, flow } = withMessage({
+        methods: projectMethods,
+        request: replies({
+          "projects.list": async () => ({
+            projects: [{ id: "garden", displayName: "Garden plans", source: "registered" }],
+          }),
+          "projects.checkoutOptions": async () => {
+            if (checkFailed) {
+              throw new Error("Checkout options unavailable");
+            }
+            return { current: false, worktree: false };
+          },
+        }),
+      });
+      await place.browser.refreshProjects();
+      place.selectProjectId("garden");
+      await place.repositoryState.checkoutRead?.completed.catch(() => undefined);
+
+      expect(place.currentCheckoutUnavailableReason).toBe(pickerReason);
+      expectGate(flow, "folder", submitReason);
+    },
+  );
+
+  it("keeps read-only submit copy and neutral picker copy for an unavailable project", async () => {
+    const { place, flow } = withMessage({
+      scopes: ["operator.read"],
+      methods: projectMethods,
+      request: replies({
+        "projects.list": async () => ({
+          projects: [{ id: "garden", displayName: "Garden plans", source: "registered" }],
+        }),
+        "projects.checkoutOptions": async () => ({ current: false, worktree: false }),
+      }),
+    });
+    await place.browser.refreshProjects();
+    place.selectProjectId("garden");
+    await place.repositoryState.checkoutRead?.completed.catch(() => undefined);
+
+    expect(place.currentCheckoutUnavailableReason).toBe("This session can’t use this project.");
+    expectGate(flow, "access", "You don’t have permission to create a session.");
   });
 });

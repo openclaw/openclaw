@@ -1,6 +1,7 @@
 import path from "node:path";
 import { toStringifiedError } from "@openclaw/normalization-core/error-coercion";
 import {
+  createRuntimeConfigReader,
   getRuntimeConfigSnapshot,
   getRuntimeConfigSnapshotMetadata,
   hashRuntimeConfigValue,
@@ -9,7 +10,6 @@ import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { captureRemoteModelCatalogStartupSnapshot } from "../model-catalog/remote-overlay.js";
 import { groupPluginRecords as groupRecords } from "../plugins/record-groups.js";
 import { createDeferredCore } from "../shared/deferred.js";
-import { isReservedSystemAgentId } from "../system-agent/agent-id.js";
 import {
   getPreparedSharedAuthStoreOwnership,
   prepareSharedAuthStoreOwnership,
@@ -20,11 +20,12 @@ import {
 } from "./harness/runtime-plugin-load-plan.js";
 import { resolveLegacyInheritedAuthDir } from "./legacy-inherited-auth-dir.js";
 import { preparePublishedModelCatalogOwnerIdentity } from "./prepared-model-catalog-owner.js";
-import { copyPreparedModelRuntimeAuthBindings } from "./prepared-model-runtime-auth.js";
 import {
   startSerializedSnapshotBuildBatch,
   type PreparedModelRuntimeBuildResult,
 } from "./prepared-model-runtime.build.js";
+import { stampPreparedModelRuntimeSnapshotConfig } from "./prepared-model-runtime.capture.js";
+import { findConfiguredOwnerCandidates } from "./prepared-model-runtime.configured-owner.js";
 import {
   assertPreparedModelRuntimeInputCurrent,
   capturePreparedModelRuntimeRefreshError,
@@ -63,7 +64,11 @@ function publishPreparedModelRuntimeOwnerSnapshot(
   owner: PreparedModelRuntimeOwner,
   snapshot: PreparedModelRuntimeSnapshot,
 ): PreparedModelRuntimeSnapshot {
-  const published = stampPreparedModelRuntimeSnapshotConfig(snapshot, owner.input.config);
+  const published = stampPreparedModelRuntimeSnapshotConfig(
+    snapshot,
+    owner.input.config,
+    owner.input.readPolicyConfig,
+  );
   if (owner.snapshot) {
     ownersBySnapshot.delete(owner.snapshot);
   }
@@ -93,7 +98,10 @@ export function prepareModelRuntimeOwner(
 ): PreparedModelRuntimeOwner {
   // Preparation precedes async discovery; neither an old nor unpublished snapshot owns these facts.
   return Object.assign(existing ?? { generation: 0, needsRefresh: true, catalogStale: false }, {
-    input,
+    input: {
+      ...input,
+      readPolicyConfig: input.readPolicyConfig ?? createRuntimeConfigReader(input.config),
+    },
     catalogOwner: preparePublishedModelCatalogOwnerIdentity(input),
     environmentFingerprint: effectiveEnvironmentFingerprint(input),
     catalogMode,
@@ -105,30 +113,6 @@ export {
   PreparedModelRuntimeOwnerNotPublishedError,
   PreparedModelRuntimePublicationSupersededError,
 };
-
-function findConfiguredOwnerCandidates(
-  owners: Map<string, PreparedModelRuntimeOwner>,
-  input: PreparedModelRuntimeInput,
-): PreparedModelRuntimeOwner[] {
-  const configured = [...owners.values()].filter((owner) => owner.provenance === "configured");
-  const identityCandidates =
-    input.agentId === undefined
-      ? []
-      : configured.filter((owner) => owner.input.agentId === input.agentId);
-  const exactCandidates = identityCandidates.filter(
-    (owner) => owner.input.agentDir === input.agentDir,
-  );
-  const directoryCandidates = configured.filter((owner) => owner.input.agentDir === input.agentDir);
-  // Unbound inputs and reserved setup identities derive ownership from the configured directory.
-  // Ordinary agent runs stay bound to their explicit identity, even when handed a stale directory.
-  const canRebindByDirectory =
-    input.agentId === undefined || isReservedSystemAgentId(input.agentId);
-  return exactCandidates.length > 0
-    ? exactCandidates
-    : canRebindByDirectory && directoryCandidates.length > 0
-      ? directoryCandidates
-      : identityCandidates;
-}
 
 export function resolveConfiguredOwner(
   owners: Map<string, PreparedModelRuntimeOwner>,
@@ -163,6 +147,7 @@ export function rebindInputToCommittedConfiguredOwner(
     ...(agentId ? { agentId } : {}),
     agentDir: owner.input.agentDir,
     config: owner.input.config,
+    readPolicyConfig: owner.input.readPolicyConfig,
     inheritedAuthDir: owner.input.inheritedAuthDir,
     env: owner.input.env,
     workspaceDir: preserveWorkspaceDir ? input.workspaceDir : owner.input.workspaceDir,
@@ -194,18 +179,6 @@ function modelRuntimeConfigFingerprint(config: OpenClawConfig): string {
   return published ? published.fingerprint : hashRuntimeConfigValue(config);
 }
 
-function stampPreparedModelRuntimeSnapshotConfig(
-  snapshot: PreparedModelRuntimeSnapshot,
-  config: OpenClawConfig,
-): PreparedModelRuntimeSnapshot {
-  if (snapshot.config === config) {
-    return snapshot;
-  }
-  const stamped = Object.freeze({ ...snapshot, config });
-  copyPreparedModelRuntimeAuthBindings(snapshot, stamped);
-  return stamped;
-}
-
 export function advancePreparedModelRuntimeOwnerConfig(
   owner: PreparedModelRuntimeOwner,
   config: OpenClawConfig,
@@ -225,8 +198,12 @@ export function normalizeOptionalDir(dirname: string | undefined): string | unde
 export async function prepareModelRuntimeInput(
   input: PreparedModelRuntimeInput,
 ): Promise<PreparedModelRuntimeInput> {
+  const preparedInput = {
+    ...input,
+    readPolicyConfig: input.readPolicyConfig ?? createRuntimeConfigReader(input.config),
+  };
   await prepareSharedAuthStoreOwnership(input.env);
-  return normalizePreparedModelRuntimeInput(input);
+  return normalizePreparedModelRuntimeInput(preparedInput);
 }
 
 export function normalizePreparedModelRuntimeInput(
@@ -347,6 +324,24 @@ function configuredOwnerCandidates(
   return byAgent.get(agentId) ?? [];
 }
 
+let gatewayLifecycleActive = false;
+
+/** Gateway lifecycles own configured-agent inventory; standalone hosts stay workspace-scoped. */
+export const isPreparedModelRuntimeGatewayLifecycleActive = () => gatewayLifecycleActive;
+export const setPreparedModelRuntimeGatewayLifecycleActive = (active: boolean) => {
+  gatewayLifecycleActive = active;
+};
+
+/** Gateway inventory belongs to the configured agent; the session cwd only controls execution. */
+export function resolveInventoryInput(
+  input: PreparedModelRuntimeInput,
+  configuredOwner?: PreparedModelRuntimeOwner,
+): PreparedModelRuntimeInput {
+  return gatewayLifecycleActive
+    ? { ...input, workspaceDir: configuredOwner?.input.workspaceDir }
+    : input;
+}
+
 export function resolvePublishedOwner(
   owners: Map<string, PreparedModelRuntimeOwner>,
   input: PreparedModelRuntimeInput,
@@ -432,6 +427,81 @@ export function hasSameLifecycleInput(
   );
 }
 
+// Catalog callbacks retain this guard. Capture only its generation, not the batch's
+// previous catalog, candidates or transient publication callbacks.
+function createPreparedModelRuntimeGenerationGuard(
+  owner: PreparedModelRuntimeOwner,
+  generation: number,
+  key: string,
+  owners: Map<string, PreparedModelRuntimeOwner>,
+  isOwnerRegistered?: (key: string, owner: PreparedModelRuntimeOwner) => boolean,
+): () => boolean {
+  return () =>
+    owner.generation === generation &&
+    (isOwnerRegistered?.(key, owner) ?? owners.get(key) === owner);
+}
+
+// Catalog and auth loaders retain these callbacks after publication. Keep their lexical
+// scope separate from the batch so a live candidate cannot pin the previous remote catalog.
+function createPreparedModelRuntimePublicationCandidate(
+  owner: PreparedModelRuntimeOwner,
+  input: PreparedModelRuntimeInput,
+  owners: Map<string, PreparedModelRuntimeOwner>,
+  isPublicationCurrent: (() => boolean) | undefined,
+  isOwnerRegistered: ((key: string, owner: PreparedModelRuntimeOwner) => boolean) | undefined,
+  isBuildCurrent: (() => boolean) | undefined,
+  registerEntriesAfterBuildStart: boolean | undefined,
+) {
+  const generation = owner.generation;
+  const key = ownerKey(input);
+  let registered = owners.get(key) === owner;
+  // Scoped reloads retain unaffected generations beyond their creating publication epoch.
+  // Persistent catalog/auth callbacks must retire only with this exact registered generation.
+  const isGenerationCurrent = createPreparedModelRuntimeGenerationGuard(
+    owner,
+    generation,
+    key,
+    owners,
+    isOwnerRegistered,
+  );
+  const isCurrent = () => (isPublicationCurrent?.() ?? true) && isGenerationCurrent();
+  return {
+    catalogMode: owner.catalogMode,
+    input,
+    catalogOwner: owner.catalogOwner,
+    inventoryOwner: owner,
+    // Account entitlement belongs to the agent and credential, not the workspace. The retention
+    // guards decide which of the configured owner's rows hold for this input.
+    seedInventory:
+      owner.provenance === "configured"
+        ? undefined
+        : resolveConfiguredOwner(owners, input)?.catalogInventory,
+    pluginGeneration: owner.pendingPluginGeneration,
+    prepareInboundPluginRegistry: owner.provenance === "configured",
+    inspectRegistry:
+      owner.provenance === "run" || (owner.provenance === "ephemeral" && input.readOnly === true),
+    isGenerationCurrent,
+    retirementSignal: capturePreparedModelRuntimeGeneration(owner),
+    isBuildCurrent: isBuildCurrent ?? isCurrent,
+    onBeforeAuthCapture: () => {
+      if (owner.generation === generation) {
+        owner.authCaptureStarted = true;
+      }
+    },
+    isEligible: () =>
+      (isPublicationCurrent?.() ?? true) &&
+      owner.generation === generation &&
+      (registered ? owners.get(key) === owner : registerEntriesAfterBuildStart === true),
+    isCurrent,
+    key,
+    generation,
+    markRegistered: () => {
+      registered = true;
+    },
+    owner,
+  };
+}
+
 export async function publishPreparedModelRuntimeOwnerBatch(
   params: {
     ownersToPublish: readonly PreparedModelRuntimeOwner[];
@@ -468,46 +538,15 @@ export async function publishPreparedModelRuntimeOwnerBatch(
     owner.needsRefresh = true;
     owner.refreshError = undefined;
     owner.pendingPluginGeneration = params.selectPluginGeneration?.(owner);
-    const generation = owner.generation;
-    const key = ownerKey(input);
-    let registered = params.owners.get(key) === owner;
-    // Scoped reloads retain unaffected generations beyond their creating publication epoch.
-    // Persistent catalog/auth callbacks must retire only with this exact registered generation.
-    const isGenerationCurrent = () =>
-      owner.generation === generation &&
-      (params.isOwnerRegistered?.(key, owner) ?? params.owners.get(key) === owner);
-    const isCurrent = () => (params.isPublicationCurrent?.() ?? true) && isGenerationCurrent();
-    return {
-      catalogMode: owner.catalogMode,
-      input,
-      catalogOwner: owner.catalogOwner,
-      inventoryOwner: owner,
-      pluginGeneration: owner.pendingPluginGeneration,
-      prepareInboundPluginRegistry: owner.provenance === "configured",
-      inspectRegistry:
-        owner.provenance === "run" || (owner.provenance === "ephemeral" && input.readOnly === true),
-      isGenerationCurrent,
-      retirementSignal: capturePreparedModelRuntimeGeneration(owner),
-      isBuildCurrent: params.isBuildCurrent ?? isCurrent,
-      onBeforeAuthCapture: () => {
-        if (owner.generation === generation) {
-          owner.authCaptureStarted = true;
-        }
-      },
-      isEligible: () =>
-        (params.isPublicationCurrent?.() ?? true) &&
-        owner.generation === generation &&
-        (registered
-          ? params.owners.get(key) === owner
-          : params.registerEntriesAfterBuildStart === true),
-      isCurrent,
-      key,
-      generation,
-      markRegistered: () => {
-        registered = true;
-      },
+    return createPreparedModelRuntimePublicationCandidate(
       owner,
-    };
+      input,
+      params.owners,
+      params.isPublicationCurrent,
+      params.isOwnerRegistered,
+      params.isBuildCurrent,
+      params.registerEntriesAfterBuildStart,
+    );
   });
   const groups = groupRecords(candidates, (candidate) => candidate.catalogMode);
   const results = new Map<PreparedModelRuntimeOwner, PreparedModelRuntimeBuildResult>();

@@ -21,14 +21,17 @@ import { resolveEffectiveAgentRuntime } from "../agents/thinking-runtime.js";
 import type { SessionEntry } from "../config/sessions/types.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { workerInferencePlacement } from "../gateway/worker-environments/inference-placement.js";
-import { type CronInferenceBinding, describeCronInferenceBinding } from "./inference-binding.js";
+import {
+  CRON_INFERENCE_ACCOUNT_RETIRED_CODE,
+  type CronInferenceBinding,
+} from "./inference-binding.js";
 import { resolveCronCandidateExecution } from "./isolated-agent/candidate-execution.js";
 import {
   resolveCronModelSelection,
   resolveCronModelSelectionOwner,
 } from "./isolated-agent/model-selection.js";
 
-/** Capture a current owner; null means an explicit, validated native CLI account selection. */
+/** Capture a current owner; null means a validated configured-key or native CLI selection. */
 export async function captureCronInferenceBinding(params: {
   cfg: OpenClawConfig;
   agentId: string;
@@ -213,7 +216,16 @@ export async function captureCronInferenceBinding(params: {
     if (attempt?.kind !== "profile") {
       // A configured key keeps the job unbound, the same rule its runs follow.
       const source = attempt?.plan.credentialSource;
-      if (source?.kind === "direct" && !isConfiguredKeyAuthSource(source)) {
+      if (isConfiguredKeyAuthSource(source)) {
+        const { runtime } = resolveExecution(params.runtimeSessionEntry);
+        if (params.recordedRuntime && params.recordedRuntime !== runtime) {
+          throw new Error(
+            `The automation runs on runtime ${params.recordedRuntime}, which is unavailable for this account; the edit would move it to runtime ${runtime}.`,
+          );
+        }
+        return null;
+      }
+      if (source?.kind === "direct") {
         throw new Error(
           "Automation requires a stored inference account or a key in the environment or provider config. Select an account with model@profile.",
         );
@@ -288,7 +300,13 @@ export async function acquireCronInferenceAuthorization(params: {
   binding: CronInferenceBinding;
   cfg: OpenClawConfig;
   agentDir: string;
+  /** Names the automation and its real id in the recovery command. */
+  job?: { id: string; name?: string };
 }) {
+  const label = params.job
+    ? `Automation ${params.job.name?.trim() ? `"${params.job.name.trim()}" (${params.job.id})` : params.job.id}`
+    : "This automation";
+  const jobId = params.job?.id ?? "<jobId>";
   let authority: AuthProfileAuthorization | undefined;
   try {
     authority = await captureAuthProfileAuthorization({
@@ -298,8 +316,12 @@ export async function acquireCronInferenceAuthorization(params: {
       assertCurrent() {},
     });
     if (authority.authorizationId !== params.binding.authorizationId) {
-      throw new Error(
-        `Automation inference ${describeCronInferenceBinding(params.binding)} was replaced. Explicitly select an authorized account again.`,
+      // Only an edit can record the new authorization, so no later occurrence can run either.
+      throw Object.assign(
+        new Error(
+          `${label} runs on account ${params.binding.profileId}, which was signed in again or replaced since the job recorded it. To keep using it: openclaw automations edit ${jobId} --model <provider/model>@${params.binding.profileId}.`,
+        ),
+        { code: CRON_INFERENCE_ACCOUNT_RETIRED_CODE },
       );
     }
     authority.assertCurrent();
@@ -312,10 +334,16 @@ export async function acquireCronInferenceAuthorization(params: {
       error instanceof AuthProfileAuthorizationError &&
       error.code === "MCP_AUTHORIZATION_RETIRED"
     ) {
-      throw new Error(
-        `Automation inference ${describeCronInferenceBinding(params.binding)} was removed or signed out. Explicitly select an authorized account again.`,
+      // The code survives fallback summaries, which keep each attempt's code but only the
+      // last attempt's error. A retirement that only ended this capture's owner (for example
+      // a state database lifecycle change) can pass at the next occurrence, so it carries none.
+      const refusal = new Error(
+        `${label} runs on account ${params.binding.profileId}, which was removed or signed out. Sign in again, or choose another account: openclaw automations edit ${jobId} --model <provider/model>@<profileId> (list accounts: openclaw gateway call models.authStatus). To use a key in the environment or provider config instead: openclaw automations edit ${jobId} --model <provider/model>.`,
         { cause: error },
       );
+      throw error.accountGone
+        ? Object.assign(refusal, { code: CRON_INFERENCE_ACCOUNT_RETIRED_CODE })
+        : refusal;
     }
     throw error;
   }

@@ -11,19 +11,16 @@ import {
 } from "openclaw/plugin-sdk/agent-harness-runtime";
 import { listRegisteredPluginAgentPromptGuidance } from "openclaw/plugin-sdk/plugin-runtime";
 import { asOptionalRecord } from "openclaw/plugin-sdk/string-coerce-runtime";
-import { deniesCodexNativeDelegation } from "../../native-tool-policy.js";
 import { readCodexConfigValue } from "./config-layer-policy.js";
-import { joinPresentSections } from "./developer-instruction-sections.js";
+import { joinPresentSections, renderCodexThreadPolicy } from "./developer-instruction-sections.js";
 import {
   isMessageOnlyCodexSourceReply,
   isSystemAgentOnlyCodexDynamicToolAllowlist,
-  shouldDisableCodexToolSearchForModel,
 } from "./dynamic-tool-profile.js";
 import {
   CODEX_OPENCLAW_DIRECT_DYNAMIC_TOOL_NAMESPACE,
   type CodexDynamicToolSpec,
 } from "./protocol.js";
-import { isCodexResponsesOAuthRun } from "./responses-oauth.js";
 import type { CodexThreadConfigurationOptions } from "./thread-configuration-options.js";
 
 export type CodexThreadPromptContext = Pick<
@@ -139,7 +136,7 @@ function buildCodexBaseInstructions(
 }
 
 // Neither key has a Codex default, so a string in the effective config is authored.
-function hasAuthoredCodexBaseInstructions(
+export function hasAuthoredCodexBaseInstructions(
   options: Pick<CodexThreadConfigurationOptions, "config" | "nativeConfig">,
 ): boolean {
   return ["model_instructions_file", "instructions"].some((key) =>
@@ -189,13 +186,18 @@ export function placeCodexBaseInstructions(
   ringZero: { baseInstructions?: string },
 ): { baseInstructions?: string; developerInstructions: string } {
   if (isCodexRingZeroThread(params, options.hostSystemAgentActive)) {
-    return { ...ringZero, developerInstructions };
+    return { ...ringZero, developerInstructions: renderCodexThreadPolicy(developerInstructions) };
   }
   const baseInstructions = resolveCodexOpenClawBaseInstructions(params, options);
   if (hasAuthoredCodexBaseInstructions(options)) {
-    return { developerInstructions: joinPresentSections(baseInstructions, developerInstructions) };
+    return {
+      developerInstructions: renderCodexThreadPolicy(baseInstructions, developerInstructions),
+    };
   }
-  return { baseInstructions: baseInstructions ?? "", developerInstructions };
+  return {
+    baseInstructions: baseInstructions ?? "",
+    developerInstructions: renderCodexThreadPolicy(developerInstructions),
+  };
 }
 
 /** Move only the exact section annotated by its producer; later policy additions survive. */
@@ -233,10 +235,14 @@ export function buildCodexConversationTurnInstructions(
     spec.type === "namespace" ? spec.tools.map((tool) => `${spec.name}.${tool.name}`) : [spec.name],
   );
   return [
-    "Current OpenClaw conversation instructions (replace earlier conversation context, not persistent policy):",
+    "## OpenClaw conversation instructions",
+    "Instructions in the following conversation_instructions block supersede earlier versions of this block delivered as developer instructions.",
+    "<conversation_instructions>",
     splitCodexExtraSystemPrompt(params).turn ??
       "No additional conversation instructions for this turn.",
+    "### Tool Bindings",
     `Current OpenClaw tool bindings for this turn (accepted declarations alone do not grant execution): ${availableNames.length ? availableNames.toSorted().join(", ") : "none"}.`,
+    "</conversation_instructions>",
   ].join("\n\n");
 }
 
@@ -305,25 +311,15 @@ export function buildDeveloperInstructions(
     params.toolsAllow?.length !== 0 &&
     params.delegationCapability !== "report_only" &&
     !isMessageOnlyCodexSourceReply(params);
-  const nativeDelegationAvailable =
-    delegationGuidanceAvailable &&
-    options.nativeCodeModeEnabled !== false &&
-    params.delegationCapability !== "host_only" &&
-    params.pluginHarnessToolPolicyRestricted !== true &&
-    !deniesCodexNativeDelegation(params.pluginHarnessToolPolicySafeDeniedTools) &&
-    params.requireWorkspaceOnly !== true &&
-    !isCodexResponsesOAuthRun(params) &&
-    !isSystemAgentOnlyCodexDynamicToolAllowlist(params.toolsAllow) &&
-    !shouldDisableCodexToolSearchForModel(params.modelId);
-  const deferredToolDiscoveryGuidance =
-    (options.nativeCodeModeEnabled === true ? deferredToolNames.size > 0 : toolNames.size > 0) ||
-    nativeDelegationAvailable
-      ? options.nativeCodeModeEnabled === true
-        ? options.nativeCodeModeOnlyEnabled === true
-          ? "Deferred tools may be absent from the direct tool list. Use Codex's native JavaScript `exec` to filter `ALL_TOOLS` by name and description, then invoke the matching entry through `tools`. `ALL_TOOLS` and `tools` are JavaScript globals, not shell environment variables. OpenClaw shell command tools are separate from this JavaScript runner. Call directly listed tools by their exact qualified names."
-          : "Call directly listed tools by their exact qualified names. Use `tool_search` for deferred tools when it is directly callable. Otherwise use Codex's native JavaScript `exec` to filter `ALL_TOOLS` and invoke the matching entry through `tools`. `ALL_TOOLS` and `tools` are JavaScript globals, not shell environment variables. OpenClaw shell command tools are separate from this JavaScript runner. Do not repeat a completed call to retrieve a result you already have."
-        : "Call the supplied OpenClaw tools by their exact qualified names. Shell command tools execute operating-system commands, not JavaScript tool discovery."
-      : undefined;
+  const deferredToolDiscoveryGuidance = (
+    options.nativeCodeModeEnabled === true ? deferredToolNames.size > 0 : toolNames.size > 0
+  )
+    ? options.nativeCodeModeEnabled === true
+      ? options.nativeCodeModeOnlyEnabled === true
+        ? "Deferred tools may be absent from the direct tool list. Use Codex's native JavaScript `exec` to filter `ALL_TOOLS` by name and description, then invoke the matching entry through `tools`. `ALL_TOOLS` and `tools` are JavaScript globals, not shell environment variables. OpenClaw shell command tools are separate from this JavaScript runner. Call directly listed tools by their exact qualified names."
+        : "Call directly listed tools by their exact qualified names. Use `tool_search` for deferred tools when it is directly callable. Otherwise use Codex's native JavaScript `exec` to filter `ALL_TOOLS` and invoke the matching entry through `tools`. `ALL_TOOLS` and `tools` are JavaScript globals, not shell environment variables. OpenClaw shell command tools are separate from this JavaScript runner. Do not repeat a completed call to retrieve a result you already have."
+      : "Call the supplied OpenClaw tools by their exact qualified names. Shell command tools execute operating-system commands, not JavaScript tool discovery."
+    : undefined;
   const sections = [
     policyInDeveloperCarrier
       ? "You are a personal agent running inside OpenClaw. OpenClaw has dynamic tools for OpenClaw-owned messaging, cron, sessions, media, gateway, and nodes."
@@ -335,14 +331,6 @@ export function buildDeveloperInstructions(
       : undefined,
     deferredToolDiscoveryGuidance,
     policyInDeveloperCarrier ? listToolPromptGuidance(toolNames.keys()).join("\n\n") : undefined,
-    // Deferred native tools still need discovery. Inherited dynamic schemas do
-    // not give native children OpenClaw executors, so choose that owner up front.
-    nativeDelegationAvailable
-      ? `Use Codex native \`spawn_agent\` for work that only needs Codex-native tools. \`spawn_agent\` and the other native collaboration tools may be deferred. Native children cannot execute OpenClaw-owned dynamic tools, even when they inherit their schemas.${managedDelegationTool ? ` For new delegated work that needs OpenClaw tools, use ${managedDelegationTool} from the start.` : " Keep work needing OpenClaw tools in this session when no managed worker route is available."} For follow-up work on an existing native child, use the native collaboration tool that starts or queues a new turn. Do not respawn existing work to switch tool routes.`
-      : undefined,
-    hasSessionsYield && nativeDelegationAvailable
-      ? "When a native child's result belongs in a later turn, end the current turn with `openclaw_direct.sessions_yield`; the completion arrives as the next model-visible input. Use native `wait_agent` only for an intentional same-turn wait when the immediate next step is blocked on the child. Never loop-poll for native child completion."
-      : undefined,
     delegationGuidanceAvailable
       ? buildDelegationGuidanceSection({
           mode: resolveMainSessionDelegationMode({
@@ -352,11 +340,9 @@ export function buildDeveloperInstructions(
           }),
           // Subagent/none prompt modes stay lean and must not be told to delegate further.
           isMinimal: params.promptMode === "minimal" || params.promptMode === "none",
-          hiddenDelegationTool: nativeDelegationAvailable
-            ? `native \`spawn_agent\` for Codex-native work${managedDelegationTool ? `, or ${managedDelegationTool} for new work needing OpenClaw tools` : ""}`
-            : sessionsSpawnTool
-              ? (managedDelegationTool ?? `\`${sessionsSpawnTool.name}\``)
-              : "",
+          hiddenDelegationTool: sessionsSpawnTool
+            ? (managedDelegationTool ?? `\`${sessionsSpawnTool.name}\``)
+            : "",
           hasVisibleSessionSpawn: hasSessionsSpawn,
           hasSessionsYield,
           hasSubagentsList: toolNames.has("subagents"),

@@ -2,6 +2,8 @@ import { beforeEach, describe, expect, it, onTestFinished, vi } from "vitest";
 import { awaitGateBeforeSettlement, createDeferred } from "../../../../test/helpers/promise.js";
 import * as sessionEntryWriter from "../../../config/sessions/session-accessor.sqlite-entry.js";
 import { getAgentEventLifecycleGeneration } from "../../../infra/agent-events.js";
+import { createAgentRunDirectAbortError } from "../../run-termination.js";
+import { findReplaySafeRunAbort } from "../transcript-conflict.js";
 import { normalizeEmbeddedRunAttempt } from "./attempt-normalization.js";
 import {
   makeAttempt,
@@ -15,6 +17,34 @@ import {
   resetNoRealConversationTokenSnapshot,
 } from "./session-bootstrap.js";
 import { createEmbeddedRunSessionPromptState } from "./session-prompt-state.js";
+
+it.each(["safe", "effectful", "opaque", "prior-effect", "refresh"] as const)(
+  "retains only positive whole-run replay evidence on caller cancellation: %s",
+  async (kind) => {
+    const input = makeNormalizationInput(
+      makeAttempt(undefined, {
+        replayMetadata:
+          kind === "opaque"
+            ? undefined
+            : {
+                replaySafe: kind !== "effectful",
+                hadPotentialSideEffects: kind === "effectful",
+              },
+      }),
+    );
+    input.replayState.hadPotentialSideEffects = kind === "prior-effect";
+    input.runInput.runParams.pluginRuntimeRefreshContinuation =
+      kind === "refresh" ? true : undefined;
+    const controller = new AbortController();
+    const reason = createAgentRunDirectAbortError();
+    input.runInput.laneController.throwIfAborted = () => controller.signal.throwIfAborted();
+    controller.abort(reason);
+    const failure = await normalizeEmbeddedRunAttempt(input).catch((error: unknown) => error);
+    expect(Boolean(findReplaySafeRunAbort(failure))).toBe(kind === "safe");
+    expect(failure).toMatchObject({ name: "AbortError", message: reason.message });
+    expect(findReplaySafeRunAbort(reason)).toBeUndefined();
+  },
+);
 
 const fixedStoreConfig = {
   agents: {

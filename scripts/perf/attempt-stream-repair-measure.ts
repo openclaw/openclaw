@@ -24,6 +24,7 @@ import type { StreamFn } from "../../src/agents/runtime/index.js";
 import { createDiagnosticTraceContext } from "../../src/infra/diagnostic-trace-context.js";
 import { createDiagnosticEmbeddedRunOwner } from "../../src/logging/diagnostic-run-activity.js";
 import { createStageTimingTracker } from "../../src/shared/stage-timing.js";
+import { startCollectedHeapSampling } from "../lib/heap-sampling.ts";
 import { parseStrictIntegerOption } from "../lib/strict-integer-option.js";
 
 const { values } = parseArgs({
@@ -133,6 +134,7 @@ async function run(turnCount: number) {
         } as unknown as EmbeddedAttemptExecutionPhaseInput;
         owner.installEmbeddedAttemptStreamGuards(input, {
           onRejectedProviderReplayRepaired: () => assert.fail("unexpected repair"),
+          isToolBoundarySafe: () => false,
           onIdleTimeout: (error) => {
             throw error;
           },
@@ -177,12 +179,7 @@ await run(Math.min(turns, 8));
 globalThis.gc?.();
 const inspector = values.mode === "allocation" ? new Session() : undefined;
 if (inspector) {
-  inspector.connect();
-  await inspector.post("HeapProfiler.startSampling", {
-    samplingInterval: 16_384,
-    includeObjectsCollectedByMajorGC: true,
-    includeObjectsCollectedByMinorGC: true,
-  });
+  await startCollectedHeapSampling(inspector, 16_384);
 }
 const hostLoadBefore = loadavg();
 const cpuStart = process.cpuUsage();

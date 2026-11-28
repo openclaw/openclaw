@@ -1,7 +1,8 @@
 import { setImmediate as nextTurn } from "node:timers/promises";
-import { promiseHooks, queryObjects } from "node:v8";
+import { promiseHooks } from "node:v8";
 import { expect, it, vi } from "vitest";
 import { createDeferredCore } from "../../shared/deferred.js";
+import { forceFullGc } from "../../test-utils/retention.js";
 import { makeStallingStream } from "../http-body.test-support.js";
 import { responseWithAbortSignal, wrapGuardedBodyStream } from "./guarded-body-stream.js";
 
@@ -27,7 +28,7 @@ it("releases abandoned bodies before and after attaching their abort listener", 
   const control = new WeakRef({});
   // End the creation job before collecting; the signal and upstream bodies stay live.
   await nextTurn();
-  queryObjects(WeakRef);
+  forceFullGc();
   expect(control.deref()).toBeUndefined();
   for (const body of abandoned) {
     expect(body.reference.deref()).toBeUndefined();

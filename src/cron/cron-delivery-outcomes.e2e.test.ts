@@ -270,7 +270,7 @@ describe("cron delivery outcomes", { concurrent: false }, () => {
         body: {
           jobId: job.id,
           jobName: "60-second monitor",
-          message: 'Automation "60-second monitor" failed 2 times\nLast error: monitor failed',
+          message: 'Automation "60-second monitor" failed\nLast error: monitor failed',
         },
       });
       await expectState(storePath, job.id, {
@@ -351,7 +351,7 @@ describe("cron delivery outcomes", { concurrent: false }, () => {
             await expect(delivery).rejects.toThrow(expectedError);
             expect(enqueueSystemEvent).not.toHaveBeenCalled();
             expect(enqueueSessionEvent).toHaveBeenCalledExactlyOnceWith(
-              expect.stringContaining('Automation "fallback owner" failed 1 times'),
+              expect.stringContaining('Automation "fallback owner" failed'),
               {
                 agentId: "work",
                 sessionKey,
@@ -399,8 +399,7 @@ describe("cron delivery outcomes", { concurrent: false }, () => {
         body: {
           jobId: job.id,
           jobName: "skipped run alert",
-          message:
-            'Automation "skipped run alert" skipped 1 times\nSkip reason: requests-in-flight',
+          message: 'Automation "skipped run alert" skipped\nSkip reason: requests-in-flight',
         },
       });
       await vi.waitFor(() =>

@@ -22,10 +22,30 @@ export const WizardStartParamsSchema = closedObject({
   channel: Type.Optional(NonEmptyString),
 });
 
-export const McpAuthLoginParamsSchema = closedObject({
-  sessionId: NonEmptyString,
-  serverName: NonEmptyString,
-});
+export const McpAuthLoginParamsSchema = Type.Union([
+  closedObject({
+    sessionId: NonEmptyString,
+    serverName: NonEmptyString,
+  }),
+  closedObject({
+    serverName: NonEmptyString,
+    callbackUrl: Type.Optional(NonEmptyString),
+  }),
+]);
+
+const McpAuthLoginLinkResultSchema = Type.Union([
+  closedObject({
+    status: Type.Union([Type.Literal("authorized"), Type.Literal("expired")]),
+    serverName: NonEmptyString,
+  }),
+  closedObject({
+    status: Type.Literal("redirect"),
+    serverName: NonEmptyString,
+    authorizationUrl: NonEmptyString,
+    redirectUrl: NonEmptyString,
+    usesPublicOrigin: Type.Boolean(),
+  }),
+]);
 
 /** Clears the shared operator OAuth credentials of one MCP server. */
 export const McpAuthLogoutParamsSchema = closedObject({
@@ -79,6 +99,9 @@ export const WizardStepSchema = closedObject({
   title: Type.Optional(Type.String()),
   message: Type.Optional(Type.String()),
   progressMessage: Type.Optional(Type.String()),
+  // Typed sign-in failure reason (ProviderAuthFailureReason) on progress reported while the
+  // step stays open, such as a browser refusal; clients show it with its recovery.
+  reason: Type.Optional(NonEmptyString),
   format: Type.Optional(Type.Union([Type.Literal("plain")])),
   options: Type.Optional(Type.Array(WizardStepOptionSchema)),
   initialValue: Type.Optional(Type.Unknown()),
@@ -100,6 +123,9 @@ const WizardResultFields = {
   step: Type.Optional(WizardStepSchema),
   status: Type.Optional(WizardRunStatusSchema),
   error: Type.Optional(Type.String()),
+  // Typed provider sign-in failure reason (ProviderAuthFailureReason) on an error result;
+  // clients pick their one recovery action from it.
+  reason: Type.Optional(NonEmptyString),
   // What the flow actually configured; set on the terminal result of
   // wizard.start flow "channels" sessions so clients run channel-specific
   // completion (e.g. WhatsApp QR linking for the right account) from the
@@ -131,6 +157,11 @@ export const WizardStartResultSchema = closedObject({
   ...WizardResultFields,
 });
 
+export const McpAuthLoginResultSchema = Type.Union([
+  WizardStartResultSchema,
+  McpAuthLoginLinkResultSchema,
+]);
+
 /** Minimal status poll result used when the client does not need the next step. */
 export const WizardStatusResultSchema = closedObject({
   status: WizardRunStatusSchema,
@@ -141,6 +172,8 @@ export const WizardStatusResultSchema = closedObject({
 // pull in the ProtocolSchemas registry.
 export type WizardStartParams = Static<typeof WizardStartParamsSchema>;
 export type McpAuthLoginParams = Static<typeof McpAuthLoginParamsSchema>;
+export type McpAuthLoginLinkResult = Static<typeof McpAuthLoginLinkResultSchema>;
+export type McpAuthLoginResult = Static<typeof McpAuthLoginResultSchema>;
 export type McpAuthLogoutParams = Static<typeof McpAuthLogoutParamsSchema>;
 export type WizardAnswer = Static<typeof WizardAnswerSchema>;
 export type WizardNextParams = Static<typeof WizardNextParamsSchema>;

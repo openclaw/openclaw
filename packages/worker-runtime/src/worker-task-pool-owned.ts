@@ -197,12 +197,14 @@ function startCloseOwnedWorkerTask<Input, Output>(
       } finally {
         owner.closed = true;
         owner.complete = undefined;
+        owner.onCloseError = undefined;
         task.input = undefined;
         task.options = {};
         task.abort = () => {};
       }
       closing.resolve();
     } catch (error) {
+      owner.onCloseError?.(error);
       closing.reject(error);
     } finally {
       advancing = false;

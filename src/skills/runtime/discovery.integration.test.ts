@@ -7,6 +7,8 @@ import { setImmediate as nextImmediate } from "node:timers/promises";
 import { afterEach, beforeEach, expect, it, vi } from "vitest";
 import { createDeferred, withinTest } from "../../../test/helpers/promise.js";
 import { useAutoCleanupTempDirTracker } from "../../../test/helpers/temp-dir.js";
+import { readInstalledSkill } from "../../agents/installed-skill-catalog.js";
+import { prepareInstalledSkillCatalog } from "../../agents/installed-skill-runtime.js";
 import {
   clearRuntimeConfigSnapshot,
   setRuntimeConfigSnapshot,
@@ -19,6 +21,7 @@ import { WorkerTaskPool } from "../../infra/worker-task-pool.js";
 import { prepareWorkspaceSkillStatus } from "../discovery/status.js";
 import { resolveSkillDiscoveryLimits } from "../loading/skill-root-discovery.js";
 import type { WorkspaceSkillSourceRequest } from "../loading/workspace-skill-sources.types.js";
+import { syncWorkspaceSkills } from "../loading/workspace-skill-sync.runtime.js";
 import { writeSkill } from "../test-support/e2e-test-helpers.js";
 import { completePassiveScan } from "./discovery.test-support.js";
 import * as remoteRefresh from "./refresh-remote.js";
@@ -69,19 +72,45 @@ const descriptions = async (input = request(), watch = true) =>
 const write = (description: string, dir = workspace, relative = "skills/guide") =>
   writeSkill({ dir: path.join(dir, relative), name: path.basename(relative), description });
 async function waitForLiveWatch(directory: string, workspaceDir = workspace) {
-  const version = getSkillsResourceVersion(workspaceDir);
+  const tasks = vi.spyOn(WorkerTaskPool.prototype, "run");
   const marker = path.join(directory, ".watch-ready");
   // Native registration can miss startup writes. Establish the live stream before
   // the single edit under test; missed events are covered by safety reconciliation.
+  // A marker changes no synced skill bytes, so wait for this workspace's passive scan.
+  const scanned = () =>
+    tasks.mock.calls.some(([input]) => {
+      const serialized = JSON.stringify(input);
+      return (
+        serialized.includes('"kind":"scan"') && serialized.includes(JSON.stringify(workspaceDir))
+      );
+    });
   const pulse = setInterval(() => writeFileSync(marker, "ready"), 100);
   try {
-    await expect
-      .poll(() => getSkillsResourceVersion(workspaceDir), { timeout: 10_000 })
-      .toBeGreaterThan(version);
+    await expect.poll(scanned, { timeout: 10_000 }).toBe(true);
   } finally {
     clearInterval(pulse);
+    tasks.mockRestore();
     await fs.rm(marker, { force: true });
   }
+}
+function observeWatchAdmission() {
+  const admitted = Promise.withResolvers<void>();
+  const open = directoryWatch.watchDirectory;
+  const watch = vi
+    .spyOn(directoryWatch, "watchDirectory")
+    .mockImplementation((dir, listener, recursive) =>
+      open(
+        dir,
+        (event, filename) => {
+          listener(event, filename);
+          if (event === "change" && filename === undefined) {
+            admitted.resolve();
+          }
+        },
+        recursive,
+      ),
+    );
+  return { watch, ready: admitted.promise };
 }
 function trackSettlement(promise: Promise<unknown>) {
   const settled = vi.fn();
@@ -196,6 +225,7 @@ it("retires idle discovery workers while retaining the catalog and explicit refr
   signal,
 }) => {
   vi.useRealTimers();
+  using clock = vi.spyOn(performance, "now").mockReturnValue(0);
   const created = vi.spyOn(workerCpu, "createCpuTrackedWorker");
   const entry = String(resolveRuntimeProcessEntrypointUrl("skillsDiscovery"));
   const observedWorkers = () =>
@@ -215,6 +245,7 @@ it("retires idle discovery workers while retaining the catalog and explicit refr
       throw new Error("Expected the real discovery worker");
     }
     const exited = once(worker, "exit", { signal: AbortSignal.timeout(5_000) });
+    clock.mockReturnValue(1_000);
     channel("openclaw.memory.critical").publish(undefined);
     await expect(
       withinTest(exited, signal),
@@ -478,11 +509,39 @@ it("keeps watch=false passive state fixed while explicit refresh remains immedia
   expect(await descriptions(request(), false)).toEqual(["Explicit only"]);
 });
 
+it("refreshes companion authority after byte-identical skill directory replacement", async () => {
+  const directory = path.join(workspace, "skills", "guide");
+  await write("Unchanged instructions");
+  await fs.writeFile(path.join(directory, "reference.md"), "Original companion");
+  const { ready } = observeWatchAdmission();
+  const original = await prepareLocalSkillSources(request());
+  await ready;
+  await completePassiveScan(50);
+  const project = (sources: typeof original) =>
+    projectSkillSnapshot({ workspaceDir: workspace, eligible: sources.entries });
+  const bind = (snapshot: Awaited<ReturnType<typeof project>>) =>
+    prepareInstalledSkillCatalog({ snapshot, workspaceDir: workspace });
+  const snapshot = await project(original);
+  const catalog = bind(snapshot);
+  const version = getSkillsSnapshotVersion(workspace);
+  await fs.rename(directory, path.join(temporary.make("retired-skill-"), "guide"));
+  await write("Unchanged instructions");
+  await fs.writeFile(path.join(directory, "reference.md"), "Replacement companion");
+  await expect(readInstalledSkill(catalog, "guide", undefined, "reference.md")).rejects.toThrow();
+  await completePassiveScan();
+  expect(getSkillsSnapshotVersion(workspace)).toBeGreaterThan(version);
+  const refreshed = await project(await prepareLocalSkillSources(request()));
+  expect(refreshed.prompt).toBe(snapshot.prompt);
+  await expect(
+    readInstalledSkill(bind(refreshed), "guide", undefined, "reference.md"),
+  ).resolves.toMatchObject({ content: "Replacement companion" });
+});
+
 it("rediscovers replaced workspaces and roots that disappear and return", async () => {
   await write("Original");
   expect(await descriptions(request(), false)).toEqual(["Original"]);
   const platform = Object.getOwnPropertyDescriptor(process, "platform")!;
-  const watch = vi.spyOn(directoryWatch, "watchDirectory");
+  const { watch, ready } = observeWatchAdmission();
   // Register the Windows observation on an already prepared source, so this
   // exercises its handle boundary without changing worker launch semantics.
   Object.defineProperty(process, "platform", { ...platform, value: "win32" });
@@ -491,6 +550,7 @@ it("rediscovers replaced workspaces and roots that disappear and return", async 
   } finally {
     Object.defineProperty(process, "platform", platform);
   }
+  await ready;
   expect(watch).toHaveBeenCalledOnce();
   expect(watch.mock.calls[0]![0]).toBe(workspace);
   await fs.rename(workspace, path.join(temporary.make("skills-retired-"), "workspace"));
@@ -515,19 +575,23 @@ it.each([false, true])(
     input.sourcePlan.roots = [{ dir: skills, source: "openclaw-workspace", tier: "workspace" }];
     expect(await descriptions(input, false)).toEqual(missing ? [] : ["Personal"]);
     const platform = Object.getOwnPropertyDescriptor(process, "platform")!;
-    const watch = vi.spyOn(directoryWatch, "watchDirectory");
+    const { watch, ready } = observeWatchAdmission();
     Object.defineProperty(process, "platform", { ...platform, value: "win32" });
     try {
       await descriptions(input);
-      const opened = watch.mock.calls.filter(
-        (_, index) => watch.mock.results[index]?.type === "return",
+      await ready;
+      expect(watch.mock.calls.map(([directory, , recursive]) => [directory, recursive])).toEqual(
+        missing
+          ? [
+              [skills, true],
+              [path.dirname(skills), false],
+              [home, false],
+            ]
+          : [[skills, true]],
       );
-      expect(opened.map(([directory, , recursive]) => [directory, recursive])).toEqual([
-        [missing ? home : skills, !missing],
-      ]);
       if (missing) {
         await write("Created later", home, ".agents/skills/guide");
-        opened[0]![1]("rename", ".agents");
+        watch.mock.calls.at(-1)![1]("rename", ".agents");
         await completePassiveScan();
         expect(await descriptions(input)).toEqual(["Created later"]);
         expect(watch.mock.calls.at(-1)?.[0]).toBe(skills);
@@ -548,6 +612,37 @@ it("refreshes supporting resources without publishing an unchanged catalog", asy
   await descriptions();
   expect(getSkillsSnapshotVersion(workspace)).toBe(version);
   expect(getSkillsResourceVersion(workspace)).toBeGreaterThan(resources);
+});
+
+it("recopies sandbox skill files after a safety pass only when their bytes changed", async () => {
+  const target = temporary.make("skills-sandbox-");
+  const skill = path.join(workspace, "skills", "guide");
+  const synced = path.join(target, "skills", "guide");
+  await write("Guide");
+  await fs.writeFile(path.join(skill, "helper.txt"), "before");
+  // Without native events, only the 30-minute safety pass can observe these edits.
+  vi.spyOn(directoryWatch, "watchDirectory").mockReturnValue({ close() {}, on() {} });
+  const sync = () =>
+    syncWorkspaceSkills({
+      sourceWorkspaceDir: workspace,
+      targetWorkspaceDir: target,
+      config: { plugins: { enabled: false } },
+      bundledSkillsDir: path.join(workspace, ".bundled"),
+      managedSkillsDir: path.join(workspace, ".managed"),
+    });
+  await sync();
+  // Reconciliation removes files the source lacks, so the marker survives only a reuse.
+  const marker = path.join(synced, "marker.txt");
+  await fs.writeFile(marker, "kept");
+
+  await completePassiveScan();
+  await sync();
+  expect(await fs.readFile(marker, "utf8")).toBe("kept");
+
+  await fs.writeFile(path.join(skill, "helper.txt"), "after!");
+  await completePassiveScan();
+  await sync();
+  expect(await fs.readFile(path.join(synced, "helper.txt"), "utf8")).toBe("after!");
 });
 
 it("invalidates an evicted workspace before accepting its next snapshot", async () => {

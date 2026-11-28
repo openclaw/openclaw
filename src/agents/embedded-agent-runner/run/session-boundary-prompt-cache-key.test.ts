@@ -42,6 +42,7 @@ describe("resolveSessionBoundaryPromptCacheKey", () => {
     expect(new Set(keys).size).toBe(keys.length);
     for (const [boundaryCount, key] of keys.entries()) {
       expect(key).toBeDefined();
+      expect(key).toBe(`internal-session-effects-${"🦞".repeat(37)}:${boundaryCount}`);
       expect(Array.from(key ?? "").length).toBeLessThanOrEqual(64);
       expect(key?.endsWith(`:${boundaryCount}`)).toBe(true);
     }

@@ -1,2 +1,0 @@
-# Extend existing recovery and retirement regressions; preserve pending workspace discovery.
-42

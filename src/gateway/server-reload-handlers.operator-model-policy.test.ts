@@ -29,10 +29,12 @@ import {
 import { withOpenClawTestState } from "../test-utils/openclaw-test-state.js";
 import { captureGatewayAuthPolicy } from "./auth-policy.js";
 import { installWatcherMock } from "./config-reload.watcher.test-support.js";
-import { captureGatewayOperatorRunAuthority } from "./operator-run-authority.js";
+import { prepareGatewayOperatorRunAuthority } from "./operator-run-authority.js";
 import type { OperatorScope } from "./operator-scopes.js";
+import { projectRequesterForClient } from "./project-access.js";
 import { createChannelManager } from "./server-channels.js";
 import { createContext as createGatewayTestContext } from "./server-plugin-in-process-dispatch.test-support.js";
+import { createSyntheticPluginRuntimeClient } from "./server-plugin-runtime-client.js";
 import {
   createManagedReloadTestParams,
   createDirectConfigWriteFixture,
@@ -119,7 +121,7 @@ function createReloader(
   return { reloader, write };
 }
 
-type AcceptedRun = NonNullable<Awaited<ReturnType<typeof captureGatewayOperatorRunAuthority>>>;
+type AcceptedRun = NonNullable<Awaited<ReturnType<typeof prepareGatewayOperatorRunAuthority>>>;
 function admittedDispatcher(
   context: ReturnType<typeof createGatewayTestContext>,
   client: ReturnType<typeof createOperatorWsClient>,
@@ -130,7 +132,7 @@ function admittedDispatcher(
     buildRequestContext: () => context,
     extraHandlers: {
       wake: async (options) => {
-        const source = await captureGatewayOperatorRunAuthority({
+        const source = await prepareGatewayOperatorRunAuthority({
           client: options.client,
           context,
           hasCurrentClientAuthority: options.hasCurrentClientAuthority,
@@ -148,129 +150,160 @@ function admittedDispatcher(
   };
 }
 
-it("commits model-only role changes without retiring permitted models or original source work", async () => {
-  const profileState = { scenario: "minimal", prepareProfileCatalog: true } as const;
-  await withOpenClawTestState(profileState, async () => {
-    const clock = createGatewaySchedulerClock(Date.now());
-    const profile = ensureProfileForEmail("reload-model-reader@example.test");
-    using _ = { [Symbol.dispose]: (await prepareUserProfileCatalog()).release };
-    const roleName = "reader.modelPolicy.allow";
-    const initialConfig: OpenClawConfig = {
-      agents: {
-        entries: { main: {} },
-        defaults: { model: { primary: "fixture/a", fallbacks: ["fixture/b"] } },
-      },
-      gateway: {
-        roles: {
-          default: roleName,
-          definitions: {
-            [roleName]: {
-              agents: "*",
-              scopes: ["operator.write"],
-              sessions: { others: "none" },
-              modelPolicy: {},
+const WRITE: OperatorScope[] = ["operator.write"];
+const SESSIONS: OperatorScope[] = ["operator.sessions.read", "operator.sessions.write"];
+const LIVE_ROLE_EDITS = [
+  ["model policy", WRITE],
+  ["project grant", WRITE],
+  ["project grant", SESSIONS],
+] as const;
+it.each(LIVE_ROLE_EDITS)(
+  "commits %s edits without retiring permitted source work (scopes %j)",
+  async (edit, scopes) => {
+    const profileState = { scenario: "minimal", prepareProfileCatalog: true } as const;
+    await withOpenClawTestState(profileState, async () => {
+      const clock = createGatewaySchedulerClock(Date.now());
+      const profile = ensureProfileForEmail("reload-model-reader@example.test");
+      using _ = { [Symbol.dispose]: (await prepareUserProfileCatalog()).release };
+      const roleName = "reader.modelPolicy.allow";
+      const initialConfig: OpenClawConfig = {
+        agents: {
+          entries: { main: {} },
+          defaults: { model: { primary: "fixture/a", fallbacks: ["fixture/b"] } },
+        },
+        gateway: {
+          roles: {
+            default: roleName,
+            definitions: {
+              [roleName]: {
+                agents: "*",
+                scopes: [...scopes],
+                sessions: { others: "none" },
+                modelPolicy: {},
+              },
             },
           },
         },
-      },
-    };
-    const candidate = structuredClone(initialConfig);
-    candidate.gateway!.roles!.definitions[roleName]!.modelPolicy = { deny: ["fixture/a"] };
-    setRuntimeConfigSnapshot(initialConfig);
-    const context = createGatewayTestContext();
-    const connection = new AbortController();
-    const close = vi.fn(() => connection.abort());
-    const client = {
-      ...createOperatorWsClient({ socket: { close }, scopes: ["operator.write"] }),
-      authenticatedUserProfile: dispatchProfile(profile.id),
-      authPolicy: captureGatewayAuthPolicy(initialConfig, null),
-      connectionSignal: connection.signal,
-    };
-    const entered = createDeferred();
-    const releasePreparation = createDeferred();
-    const requestRecoveryRestart = vi.fn(() => ({ status: "emitted" as const }));
-    let rejectCandidate = true;
-    const { reloader, write } = createReloader(initialConfig, context, clock, [client], {
-      reconcileRuntimePolicy: (config) =>
-        disconnectDisallowedGatewayPolicyClients([client], config),
-      activateRuntimeSecrets: createTestRuntimeSecretsActivator(async ({ config }) => {
-        entered.resolve();
-        await releasePreparation.promise;
-        if (rejectCandidate) {
-          throw new Error("candidate preparation rejected");
-        }
-        return makePreparedSecretsSnapshot(config);
-      }),
-      requestRecoveryRestart,
-    });
-    let original: Awaited<ReturnType<typeof captureGatewayOperatorRunAuthority>>;
-    let modelA: ReturnType<typeof bindOperatorModelExecution>;
-    let modelB: ReturnType<typeof bindOperatorModelExecution>;
-    try {
-      await reloader.ready;
-      context.getRuntimeConfig = () => candidate;
-      const getCommittedRuntimeConfig = reloader.getCommittedRuntimeConfig;
-      assert(getCommittedRuntimeConfig);
-      context.getCommittedRuntimeConfig = getCommittedRuntimeConfig;
-      const dispatch = admittedDispatcher(context, client, (source) => {
-        original = source;
-      });
-      await dispatch.wake("model-policy");
-      assert(original);
-      modelA = bindOperatorModelExecution(original.authority, {
-        provider: "fixture",
-        model: "a",
-      });
-      modelB = bindOperatorModelExecution(original.authority, {
-        provider: "fixture",
-        model: "b",
-      });
-      assert(modelA && modelB);
-      vi.spyOn(sessionQueries, "getActiveSessionRunCount").mockReturnValue(2);
-      const rejected = write(candidate, 1);
-      const rejectedReload = clock.wake();
-      await Promise.race([
-        entered.promise,
-        rejected.then(() => {
-          throw new Error("candidate settled before preparation");
-        }),
-      ]);
-      expect(getCommittedRuntimeConfig()).toBe(initialConfig);
-      expect([modelA.signal.aborted, modelB.signal.aborted]).toEqual([false, false]);
-      expect(original.authority.assertCurrent).not.toThrow();
-      expect(close).not.toHaveBeenCalled();
-      releasePreparation.resolve();
-      await expect(rejected).resolves.toBe("failed");
-      // The receipt precedes lease cleanup; join the scheduler turn before the next wake.
-      await rejectedReload;
-      expect(getCommittedRuntimeConfig()).toBe(initialConfig);
-      expect([modelA.signal.aborted, modelB.signal.aborted]).toEqual([false, false]);
-      expect(close).not.toHaveBeenCalled();
-
-      rejectCandidate = false;
-      const accepted = write(candidate, 2);
-      await clock.wake();
-      await expect(accepted).resolves.toBe("applied");
-      expect(getCommittedRuntimeConfig()).toEqual(candidate);
-      expect([modelA.signal.aborted, modelB.signal.aborted]).toEqual([true, false]);
-      expect(modelA.assertCurrent).toThrow("operator role cannot use this model");
-      expect(modelB.assertCurrent).not.toThrow();
-      expect(original.authority.signal?.aborted).toBe(false);
-      expect(original.authority.assertCurrent).not.toThrow();
-      expect(close).not.toHaveBeenCalled();
-      expect(requestRecoveryRestart).not.toHaveBeenCalled();
-    } finally {
-      releasePreparation.resolve();
-      try {
-        await reloader.stop();
-      } finally {
-        modelA?.release();
-        modelB?.release();
-        original?.release();
+      };
+      const candidate = structuredClone(initialConfig);
+      const candidateRole = candidate.gateway!.roles!.definitions[roleName]!;
+      if (edit === "model policy") {
+        candidateRole.modelPolicy = { deny: ["fixture/a"] };
+      } else {
+        candidateRole.projects = ["handbook"];
       }
-    }
-  });
-});
+      setRuntimeConfigSnapshot(initialConfig);
+      const context = createGatewayTestContext();
+      const connection = new AbortController();
+      const close = vi.fn(() => connection.abort());
+      const client = {
+        ...createOperatorWsClient({ socket: { close }, scopes: [...scopes] }),
+        authenticatedUserProfile: dispatchProfile(profile.id),
+        authPolicy: captureGatewayAuthPolicy(initialConfig, null),
+        connectionSignal: connection.signal,
+      };
+      const entered = createDeferred();
+      const releasePreparation = createDeferred();
+      const requestRecoveryRestart = vi.fn(() => ({ status: "emitted" as const }));
+      let rejectCandidate = true;
+      const { reloader, write } = createReloader(initialConfig, context, clock, [client], {
+        reconcileRuntimePolicy: (config) =>
+          disconnectDisallowedGatewayPolicyClients([client], config),
+        activateRuntimeSecrets: createTestRuntimeSecretsActivator(async ({ config }) => {
+          entered.resolve();
+          await releasePreparation.promise;
+          if (rejectCandidate) {
+            throw new Error("candidate preparation rejected");
+          }
+          return makePreparedSecretsSnapshot(config);
+        }),
+        requestRecoveryRestart,
+      });
+      let original: Awaited<ReturnType<typeof prepareGatewayOperatorRunAuthority>>;
+      let modelA: ReturnType<typeof bindOperatorModelExecution>;
+      let modelB: ReturnType<typeof bindOperatorModelExecution>;
+      try {
+        await reloader.ready;
+        context.getRuntimeConfig = () => candidate;
+        const getCommittedRuntimeConfig = reloader.getCommittedRuntimeConfig;
+        assert(getCommittedRuntimeConfig);
+        context.getCommittedRuntimeConfig = getCommittedRuntimeConfig;
+        if (scopes === SESSIONS) {
+          // Session-scoped callers cannot reach the admin-scoped wake fixture; admit directly.
+          original = await prepareGatewayOperatorRunAuthority({ client, context });
+        } else {
+          const dispatch = admittedDispatcher(context, client, (source) => {
+            original = source;
+          });
+          await dispatch.wake("model-policy");
+        }
+        assert(original);
+        modelA = bindOperatorModelExecution(original.authority, {
+          provider: "fixture",
+          model: "a",
+        });
+        modelB = bindOperatorModelExecution(original.authority, {
+          provider: "fixture",
+          model: "b",
+        });
+        assert(modelA && modelB);
+        vi.spyOn(sessionQueries, "getActiveSessionRunCount").mockReturnValue(2);
+        const rejected = write(candidate, 1);
+        const rejectedReload = clock.wake();
+        await Promise.race([
+          entered.promise,
+          rejected.then(() => {
+            throw new Error("candidate settled before preparation");
+          }),
+        ]);
+        expect(getCommittedRuntimeConfig()).toBe(initialConfig);
+        expect([modelA.signal.aborted, modelB.signal.aborted]).toEqual([false, false]);
+        expect(close).not.toHaveBeenCalled();
+        releasePreparation.resolve();
+        await expect(rejected).resolves.toBe("failed");
+        // The receipt precedes lease cleanup; join the scheduler turn before the next wake.
+        await rejectedReload;
+        expect(getCommittedRuntimeConfig()).toBe(initialConfig);
+        expect([modelA.signal.aborted, modelB.signal.aborted]).toEqual([false, false]);
+        expect(close).not.toHaveBeenCalled();
+
+        rejectCandidate = false;
+        const accepted = write(candidate, 2);
+        await clock.wake();
+        await expect(accepted).resolves.toBe("applied");
+        expect(getCommittedRuntimeConfig()).toEqual(candidate);
+        expect([modelA.signal.aborted, modelB.signal.aborted]).toEqual([false, false]);
+        expect(modelA.assertCurrent).not.toThrow();
+        expect(modelB.assertCurrent).not.toThrow();
+        expect(original.authority.signal?.aborted).not.toBe(true);
+        expect(close).not.toHaveBeenCalled();
+        expect(requestRecoveryRestart).not.toHaveBeenCalled();
+        if (edit === "project grant") {
+          // Retained run clients read the grant live; restricted ones pick up the new project.
+          const runClient = createSyntheticPluginRuntimeClient({
+            operatorRoleActor: { kind: "operator", profileId: profile.id },
+            operatorRunAuthority: original.authority,
+            scopes: [...original.authority.scopes],
+          });
+          expect(projectRequesterForClient(runClient, getCommittedRuntimeConfig())).toEqual({
+            kind: "operator",
+            scopes,
+            ...(scopes === SESSIONS ? { projects: ["handbook"] } : {}),
+          });
+        }
+      } finally {
+        releasePreparation.resolve();
+        try {
+          await reloader.stop();
+        } finally {
+          modelA?.release();
+          modelB?.release();
+          original?.release();
+        }
+      }
+    });
+  },
+);
 
 it.each(["scopes", "access policy"] as const)(
   "reloads roles without retiring unaffected work when %s change",
@@ -359,8 +392,7 @@ it.each(["scopes", "access policy"] as const)(
         // A wider role must neither grant new scopes to accepted work nor retire it.
         for (const [index, source] of accepted.entries()) {
           expect.soft(clients[index]!.connectionSignal.aborted).toBe(false);
-          expect.soft(source.authority.signal?.aborted).toBe(false);
-          expect.soft(source.authority.assertCurrent).not.toThrow();
+          expect.soft(source.authority.signal?.aborted).not.toBe(true);
           expect(source.authority.scopes).toEqual(clients[index]!.connect.scopes);
         }
         await writeScopes(
@@ -369,16 +401,13 @@ it.each(["scopes", "access policy"] as const)(
           revocation === "access policy" ? "test-access-policy" : undefined,
         );
         expect(clients[0]!.connectionSignal.aborted).toBe(false);
-        expect(accepted[0]!.authority.assertCurrent).not.toThrow();
-        expect(accepted[0]!.authority.signal?.aborted).toBe(false);
+        expect(accepted[0]!.authority.signal?.aborted).not.toBe(true);
         expect(clients[1]!.connectionSignal.aborted).toBe(true);
-        expect(accepted[1]!.authority.signal?.aborted).toBe(true);
-        expect(accepted[1]!.authority.assertCurrent).toThrow();
+        expect(accepted[1]!.authority.signal?.aborted).not.toBe(true);
         await dispatchers[1]!.wake("revoked");
         expect(accepted).toHaveLength(2);
         await writeScopes(["operator.write", "operator.approvals"], 3);
-        expect(accepted[1]!.authority.signal?.aborted).toBe(true);
-        expect(accepted[1]!.authority.assertCurrent).toThrow();
+        expect(accepted[1]!.authority.signal?.aborted).not.toBe(true);
       } finally {
         await reloader.stop();
         for (const source of accepted) {

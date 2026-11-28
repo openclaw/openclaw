@@ -1,8 +1,3 @@
-import {
-  bindsClaudeThinkingPrefix,
-  resolveClaudeModelIdentity,
-  resolveClaudeOpus5ModelIdentity,
-} from "@openclaw/llm-core";
 import { normalizeLowercaseStringOrEmpty } from "@openclaw/normalization-core/string-coerce";
 import type { AgentMessage } from "../agents/runtime/index.js";
 import { warnSessionPersistenceDeprecation } from "../agents/sessions/session-persistence-deprecation.js";
@@ -86,9 +81,13 @@ export function buildStrictAnthropicReplayPolicy(
         }
       : {}),
     preserveSignatures: true,
-    appendOnlyRuntimeContext:
-      options.inHistorySystemUpdates || options.appendOnlyRuntimeContext || false,
-    ...(options.inHistorySystemUpdates ? { inHistorySystemUpdates: true } : {}),
+    // Retained carriers are the host default; only an explicit provider opt-out disables them,
+    // and in-history system updates always need them.
+    ...(options.inHistorySystemUpdates
+      ? { appendOnlyRuntimeContext: true, inHistorySystemUpdates: true }
+      : options.appendOnlyRuntimeContext === false
+        ? { appendOnlyRuntimeContext: false }
+        : {}),
     repairToolUseResultPairing: true,
     validateAnthropicTurns: true,
     allowSyntheticToolResults: true,
@@ -96,34 +95,14 @@ export function buildStrictAnthropicReplayPolicy(
   };
 }
 
-function shouldDropClaudeThinkingBlocks(
-  modelId?: string,
-  model?: Pick<ProviderRuntimeModel, "params">,
-): boolean {
-  const ref = { id: modelId, params: model?.params };
-  const canonicalId = resolveClaudeModelIdentity(ref);
-  const isClaude =
-    canonicalId.startsWith("claude-") || resolveClaudeOpus5ModelIdentity(ref) !== undefined;
-  const preservesThinking =
-    bindsClaudeThinkingPrefix(ref) ||
-    resolveClaudeOpus5ModelIdentity(ref) !== undefined ||
-    /(?:^|-)claude-(?:fable-5|mythos-(?:5|preview)|opus-4-(?:5|6|7|8)|sonnet-(?:5|4-6))(?=$|[^a-z0-9])/.test(
-      canonicalId,
-    );
-  return isClaude && !preservesThinking;
-}
-
 /** @deprecated Anthropic-family provider replay helper; prefer provider-local replay hooks. */
 export function buildAnthropicReplayPolicyForModel(
-  modelId?: string,
-  model?: Pick<ProviderRuntimeModel, "params">,
+  _modelId?: string,
+  _model?: Pick<ProviderRuntimeModel, "params">,
   inHistorySystemUpdates = false,
 ): ProviderReplayPolicy {
-  return buildStrictAnthropicReplayPolicy({
-    inHistorySystemUpdates,
-    dropThinkingBlocks: shouldDropClaudeThinkingBlocks(modelId, model),
-    appendOnlyRuntimeContext: bindsClaudeThinkingPrefix({ id: modelId, params: model?.params }),
-  });
+  // Stored thinking replays as stored; the API strips what a model does not read.
+  return buildStrictAnthropicReplayPolicy({ inHistorySystemUpdates });
 }
 
 /** @deprecated Anthropic-family provider replay helper; prefer provider-local replay hooks. */
@@ -141,19 +120,11 @@ export function buildNativeAnthropicReplayPolicyForModel(
 /** @deprecated Provider replay helper; prefer provider-local replay hooks. */
 export function buildHybridAnthropicOrOpenAIReplayPolicy(
   ctx: ProviderReplayPolicyContext,
-  options: { anthropicModelDropThinkingBlocks?: boolean } = {},
+  // Public SDK option kept for third-party callers; Anthropic replay keeps stored thinking.
+  _options: { anthropicModelDropThinkingBlocks?: boolean } = {},
 ): ProviderReplayPolicy | undefined {
   if (ctx.modelApi === "anthropic-messages" || ctx.modelApi === "bedrock-converse-stream") {
-    return buildStrictAnthropicReplayPolicy({
-      inHistorySystemUpdates: ctx.inHistorySystemUpdates,
-      appendOnlyRuntimeContext: bindsClaudeThinkingPrefix({
-        id: ctx.modelId,
-        params: ctx.model?.params,
-      }),
-      dropThinkingBlocks:
-        options.anthropicModelDropThinkingBlocks &&
-        shouldDropClaudeThinkingBlocks(ctx.modelId, ctx.model),
-    });
+    return buildStrictAnthropicReplayPolicy({ inHistorySystemUpdates: ctx.inHistorySystemUpdates });
   }
 
   return buildOpenAICompatibleReplayPolicy(ctx.modelApi, { modelId: ctx.modelId });

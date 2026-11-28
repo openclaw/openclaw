@@ -78,6 +78,12 @@ async function prepareExternalization(
   }
   const chunks = selected.value;
   let envelopeBytes = 0;
+  const admitEnvelope = (byteLength: number) => {
+    envelopeBytes += byteLength;
+    if (envelopeBytes > maxEnvelopeBytes) {
+      throw new ColdArchiveBudgetError();
+    }
+  };
   for (const file of chunks.length ? chunks : [archive]) {
     const embedded = chunks.length
       ? withOpenClawAgentDatabaseReadOnly(
@@ -101,17 +107,9 @@ async function prepareExternalization(
         archive_blob: embedded?.found ? (embedded.value ?? null) : archive.archive_blob,
       },
     });
-    // A window is indivisible; its files are bounded independently of the remaining pass budget.
-    envelopeBytes += zlib.zstdDecompressSync(bytes, {
-      maxOutputLength: MAX_COLD_ARCHIVE_BYTES,
-    }).byteLength;
-    if (envelopeBytes > maxEnvelopeBytes) {
-      throw new ColdArchiveBudgetError();
-    }
-    for (const record of decodeSessionColdRecords(bytes, {
-      ...file,
-      generation: archive.generation,
-    })) {
+    // A window is indivisible. Check its remaining budget before validating each decoded file.
+    const metadata = { ...file, generation: archive.generation };
+    for (const record of decodeSessionColdRecords(bytes, metadata, admitEnvelope)) {
       void record;
     }
     const directory = path.dirname(
@@ -134,6 +132,8 @@ export async function prepareSessionColdBatchInWorker(
 ): Promise<SessionColdBatchPrepared> {
   const result: SessionColdBatchPrepared = {
     freePages: 0,
+    cleanupSessionIds: [],
+    needsReconcile: false,
     protectionKeys: [],
     prepared: [],
     externalizations: [],
@@ -145,6 +145,12 @@ export async function prepareSessionColdBatchInWorker(
     return result;
   }
   result.freePages = selection.value.freePages;
+  result.cleanupSessionIds = selection.value.cleanupSessionIds;
+  result.cleanupCursor = selection.value.cleanupCursor;
+  result.needsReconcile = selection.value.needsReconcile;
+  if (result.needsReconcile) {
+    return result;
+  }
   const maxBytes = Math.min(input.maxBytes, MAX_COLD_ARCHIVE_BYTES);
   const candidates = [
     ...selection.value.externalizations.map((archive) => ({

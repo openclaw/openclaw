@@ -25,6 +25,16 @@ struct ChatSessionRosterSnapshot: Sendable {
         self.isComplete = isComplete
     }
 
+    /// User-facing notice for a partial roster (a later page failed or a scan bound was hit),
+    /// letting consumers keep the retained rows visible while offering a refresh path.
+    /// `nil` when the snapshot is complete or served from cache. Completeness compares the rows the
+    /// Gateway returned with its total, before lists hide subagent runs. The sentence carries no count:
+    /// that total includes hidden runs, so no number in it would be about sessions a person can see.
+    var incompleteLoadMessage: String? {
+        guard !self.isComplete, !self.isCached else { return nil }
+        return String(localized: "Couldn’t load some sessions. Try again.")
+    }
+
     @MainActor
     static func collect(
         fetchPage: @MainActor (Int) async throws -> OpenClawChatSessionsListResponse) async throws -> Self
@@ -123,14 +133,30 @@ extension NodeAppModel {
                 // Every page belongs to one physical authenticated Gateway route;
                 // reconnects and gateway switches must never splice two rosters.
                 snapshot = try await ChatSessionRosterSnapshot.collect { offset in
-                    let request = OpenClawChatGatewayRequests.sessionsList(
+                    let base = OpenClawChatGatewayRequests.sessionsList(
                         limit: limit,
                         search: nil,
                         archived: archived,
                         agentID: sourceAgentID,
                         offset: offset)
+                    // ui/src/lib/sessions/session-list-query.ts:54: lists ask for titles derived from the first message.
+                    var params = base.params
+                    params["includeDerivedTitles"] = AnyCodable(true)
+                    let request = OpenClawChatGatewayRequest(
+                        method: base.method, params: params, timeoutMs: base.timeoutMs)
                     let data = try await self.operatorSession.request(request, ifCurrentRoute: route)
-                    return try JSONDecoder().decode(OpenClawChatSessionsListResponse.self, from: data)
+                    let response: Result<OpenClawChatSessionsListResponse, Error>
+                    do {
+                        response = try await .success(GatewayPayloadDecoding.decode(
+                            OpenClawChatSessionsListResponse.self, from: data))
+                    } catch {
+                        response = .failure(error)
+                    }
+                    // Decoding suspends this owner; a retired page or error cannot publish a partial roster.
+                    guard await self.operatorSession.currentRoute(ifGatewayID: sourceGatewayID) == route else {
+                        throw CancellationError()
+                    }
+                    return try response.get()
                 }
                 guard GatewayStableIdentifier.matches(self.chatTranscriptCacheGatewayID, sourceGatewayID),
                       self.chatDeliveryAgentId == sourceAgentID
@@ -185,6 +211,8 @@ final class RootSidebarModel {
 
     /// The drawer asks for the selected and main keys once per row, and each answer scans the roster.
     @ObservationIgnored private var resolvedSessionKeys: [[String?]: String] = [:]
+    /// Last seen run state of hidden subagent sessions, so only their start and stop reload the roster.
+    @ObservationIgnored private var hiddenRunActivity: [String: Bool] = [:]
 
     func resolvedSessionKey(
         current: String,
@@ -251,7 +279,8 @@ final class RootSidebarModel {
         groups: [OpenClawChatSessionGroup],
         rosterIsComplete: Bool = false,
         sessionRoutingContract: String? = nil,
-        now: Date = .now) -> [ChatSessionSidebarModel.Section]
+        now: Date = .now,
+        personalPins: IOSSidebarPins? = nil) -> [ChatSessionSidebarModel.Section]
     {
         let selectedSessionKey = ChatSessionSidebarModel.selectedSessionKey(
             sessions: sessions,
@@ -263,8 +292,9 @@ final class RootSidebarModel {
             .map { $0.isArchived || $0.isSnoozed(at: now) } ?? rosterIsComplete
         // Resolve aliases before keeping the selected automation reachable.
         let isSearching = !query.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
-        let browsingSessions = sessions.filter {
-            !$0.isArchived && !$0.isSnoozed(at: now) && (isSearching || $0.key == selectedSessionKey ||
+        let projected = personalPins.map { sessions.map($0.project) } ?? sessions
+        let browsingSessions = projected.filter {
+            !$0.isArchived && !$0.isSnoozed(at: now) && (isSearching || $0.isPinned || $0.key == selectedSessionKey ||
                 !OpenClawChatSessionListVisibility.isAutomationSession($0))
         }
         return ChatSessionSidebarModel.sections(
@@ -274,7 +304,10 @@ final class RootSidebarModel {
             mainSessionKey: mainSessionKey,
             activeAgentID: activeAgentID,
             groups: groups,
+            pinnedOrder: personalPins?.positions,
             excludesMainSession: true,
+            // Empty headers are move targets while browsing, not search results.
+            includeEmptyGroups: !isSearching,
             query: query,
             sessionRoutingContract: sessionRoutingContract)
     }
@@ -343,6 +376,7 @@ final class RootSidebarModel {
     }
 
     func refreshSessions(appModel: NodeAppModel) async {
+        await appModel.sessionGroups.refresh(appModel: appModel)
         self.rosterGeneration &+= 1
         self.sessionChangesDuringLoad = [:]
         let rosterGeneration = self.rosterGeneration
@@ -359,6 +393,7 @@ final class RootSidebarModel {
         switch loadedRoster {
         case let .success(roster):
             self.applyRoster(roster, activeAgentID: appModel.chatDeliveryAgentId)
+            appModel.sessionGroups.pruneCollapsed(for: self.sessions)
         case let .failure(message):
             self.sessionErrorText = message
         case .cancelled:
@@ -389,10 +424,17 @@ final class RootSidebarModel {
     }
 
     func observeSessionEvents(appModel: NodeAppModel) async {
-        defer { self.sessionRefreshCoordinator.cancel() }
+        var subscription: GatewayServerEventSubscription?
+        defer {
+            subscription?.cancel()
+            self.sessionRefreshCoordinator.cancel()
+        }
         await Self.consumeSubscribedSessionEvents(
             makeStream: {
-                await appModel.operatorSession.subscribeServerEvents(bufferingNewest: 200)
+                subscription?.cancel()
+                let current = await Self.makeSessionEventSubscription(gateway: appModel.operatorSession)
+                subscription = current
+                return current.events
             },
             subscribe: {
                 let request = OpenClawChatGatewayRequests.subscribeSessions(timeoutMs: 12000)
@@ -407,6 +449,17 @@ final class RootSidebarModel {
             declareObserverVisibility: { [weak self] visible in
                 await self?.setSessionObserverVisibility(appModel: appModel, visible: visible)
             })
+    }
+
+    static func makeSessionEventSubscription(gateway: GatewayNodeSession) async -> GatewayServerEventSubscription {
+        // Filter on the Gateway actor, before unrelated chat payloads enter this
+        // MainActor consumer or displace a roster update in its bounded buffer.
+        await gateway.makeServerEventSubscription(bufferingNewest: 200, matching: { frame in
+            switch frame.event {
+            case "sessions.changed", "session.observer", "seqGap": true
+            default: false
+            }
+        })
     }
 
     static func consumeSubscribedSessionEvents(
@@ -483,12 +536,20 @@ final class RootSidebarModel {
         }
         switch event {
         case let .sessionsChanged(change):
-            if change.reason != "delete", let row = change.session,
-               row.key == change.sessionKey, row.sessionId != nil, row.kind != nil, !row.isArchived,
-               ChatSessionSidebarModel.isSessionInActiveAgentScope(
-                   key: row.key, agentID: row.agentId, activeAgentID: appModel.chatDeliveryAgentId),
-               let updated = ChatSessionSidebarModel.applying(
-                   sessionChange: change, to: self.sessions, activeAgentId: appModel.chatDeliveryAgentId)
+            if let key = change.session?.key ?? change.sessionKey, CommandCenterTab.isSubagentSessionKey(key) {
+                // A hidden run never becomes a row. When it starts or stops, reload so the parent's working
+                // state follows it; streaming updates in between change nothing on screen.
+                let running = change.session.map { $0.hasActiveRun == true || $0.hasActiveSubagentRun == true } ?? false
+                if change.reason == "delete" || running != (self.hiddenRunActivity[key] ?? false) {
+                    self.hiddenRunActivity[key] = running
+                    self.scheduleSessionRefresh(appModel: appModel)
+                }
+            } else if change.reason != "delete", let row = change.session,
+                      row.key == change.sessionKey, row.sessionId != nil, row.kind != nil, !row.isArchived,
+                      ChatSessionSidebarModel.isSessionInActiveAgentScope(
+                          key: row.key, agentID: row.agentId, activeAgentID: appModel.chatDeliveryAgentId),
+                      let updated = ChatSessionSidebarModel.applying(
+                          sessionChange: change, to: self.sessions, activeAgentId: appModel.chatDeliveryAgentId)
             {
                 self.sessions = updated
                 // Replay rows received after an in-flight roster took its snapshot.
@@ -537,10 +598,6 @@ final class RootSidebarModel {
         }
     }
 
-    func reportSessionError(_ error: any Error) {
-        self.sessionErrorText = error.localizedDescription
-    }
-
     static func tokenUsageSummary(
         for sessions: [OpenClawChatSessionEntry],
         rosterIsComplete: Bool = true) -> TokenUsageSummary
@@ -562,6 +619,13 @@ final class RootSidebarModel {
                 sessionChange: change, to: sessions, activeAgentId: activeAgentID) ?? sessions
         }
         self.sessionChangesDuringLoad = [:]
+        // The one roster owner for the sidebar, the Sessions list and search: hidden runs never list.
+        // Their run state seeds the baseline that decides when a later event needs a reload.
+        self.hiddenRunActivity = Dictionary(
+            sessions.filter { CommandCenterTab.isSubagentSessionKey($0.key) }
+                .map { ($0.key, $0.hasActiveRun == true || $0.hasActiveSubagentRun == true) },
+            uniquingKeysWith: { first, _ in first })
+        sessions = CommandCenterTab.listedSessions(sessions)
         let heldRows = Dictionary(self.sessions.map { ($0.key, $0) }, uniquingKeysWith: { _, latest in latest })
         self.sessions = sessions.map { row in
             guard row.sessionId != nil, row.kind != nil, let held = heldRows[row.key] else { return row }
@@ -571,20 +635,7 @@ final class RootSidebarModel {
                 activeAgentId: activeAgentID)?.first ?? held
         }
         self.isSessionRosterComplete = roster.isComplete
-        guard !roster.isComplete, !roster.isCached else {
-            self.sessionErrorText = nil
-            return
-        }
-        if let totalCount = roster.totalCount {
-            // Localization: arguments (20, 100) mean 20 displayed out of 100 total, with 80 still to load.
-            // Keep the displayed count first; rephrase the sentence instead of reversing argument roles.
-            self.sessionErrorText = String(
-                format: String(localized: "Showing %lld sessions; %lld total. Refresh to load the rest."),
-                roster.sessions.count,
-                totalCount)
-        } else {
-            self.sessionErrorText = String(localized: "Some sessions could not be loaded. Refresh to try again.")
-        }
+        self.sessionErrorText = roster.incompleteLoadMessage
     }
 
     private func loadRoster(
@@ -633,7 +684,7 @@ final class RootSidebarModel {
         return snapshot?.jobs
     }
 
-    private func request<T: Decodable>(
+    private func request<T: Decodable & Sendable>(
         _ type: T.Type,
         appModel: NodeAppModel,
         method: String,
@@ -644,7 +695,7 @@ final class RootSidebarModel {
                 method: method,
                 paramsJSON: paramsJSON,
                 timeoutSeconds: 12)
-            return try JSONDecoder().decode(type, from: data)
+            return try await GatewayPayloadDecoding.decode(type, from: data)
         } catch {
             return nil
         }

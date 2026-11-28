@@ -87,6 +87,45 @@ export function retireCustodianQuestions(
   return answered;
 }
 
+export async function dismissCustodianQuestion(
+  owner: {
+    messages: readonly CustodianMessage[];
+    dismissedQuestions: Set<string>;
+    readonly canSend: boolean;
+    readonly operationEpoch: number;
+    exitSetup(): void;
+    send(text: string, display: string, questionReply: boolean): Promise<string>;
+  },
+  message: CustodianMessage,
+  publish: () => void,
+): Promise<void> {
+  const question = message.question;
+  if (!question) {
+    return;
+  }
+  if (question.skipAction === "exit") {
+    owner.exitSetup();
+    return;
+  }
+  if (!owner.canSend || !owner.messages.includes(message)) {
+    return;
+  }
+  const key = `${message.id}:${question.id}`;
+  const pending = owner.send(
+    question.isOther ? t("optionCard.skip") : "cancel",
+    t("optionCard.skip"),
+    true,
+  );
+  const epoch = owner.operationEpoch;
+  owner.dismissedQuestions.add(key);
+  publish();
+  // An uncertain send must not offer a duplicate answer; rejoin resolves the live prompt.
+  if ((await pending) === "rejected" && owner.operationEpoch === epoch) {
+    owner.dismissedQuestions.delete(key);
+    publish();
+  }
+}
+
 export function custodianErrorMessage(error: unknown): string {
   return formatUiError(error, t("custodian.requestFailed"));
 }

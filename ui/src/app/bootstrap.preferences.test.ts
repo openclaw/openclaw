@@ -4,8 +4,9 @@ import { GatewayBrowserClient } from "../api/gateway.ts";
 import { captureI18nStateForTesting } from "../i18n/lib/translate.test-support.ts";
 import { createStorageMock } from "../test-helpers/storage.ts";
 import { bootstrapApplication, type ApplicationRuntime } from "./bootstrap.ts";
+import { setNativeControlHost } from "./native-web-chrome.ts";
 import { resetServerUiPrefsSync } from "./server-prefs.ts";
-import { loadSettings, persistSessionToken } from "./settings.ts";
+import { loadSettings, persistSessionToken, saveSettings } from "./settings.ts";
 
 let runtime: ApplicationRuntime | undefined;
 const originalUrl = window.location.href;
@@ -46,6 +47,7 @@ afterEach(async () => {
   runtime?.stop();
   runtime = undefined;
   resetServerUiPrefsSync();
+  setNativeControlHost(false);
   document.documentElement.removeAttribute(CONTROL_UI_BOOTSTRAP_CONFIG_ATTRIBUTE);
   await vi.dynamicImportSettled();
   window.history.replaceState({}, "", originalUrl);
@@ -62,7 +64,6 @@ it("uses the viewer's document preferences before hello without loading editable
     themeMode: "light",
     locale: "de",
     sidebarEntries: ["route:sessions"],
-    personalSessionGroups: [{ id: "focus", label: "Focus", sessionKeys: ["agent:main:work"] }],
   });
   expect(document.documentElement.dataset.themeMode).toBe("light");
   expect(runtime.context.runtimeConfig.state.configSnapshot).toBeNull();
@@ -76,5 +77,33 @@ it("does not adopt navigation-authenticated preferences for a selected bearer id
   runtime = bootstrapApplication();
   expect(runtime.context.runtimeConfig.state.bootstrapConfig).toBeNull();
   expect(runtime.context.theme.settings.themeMode).not.toBe("light");
-  expect(runtime.context.theme.settings.personalSessionGroups).toEqual([]);
+  expect(runtime.context.theme.settings.sidebarEntries).not.toEqual(["route:sessions"]);
 });
+
+it.each([null, "synthetic-native-token"])(
+  "keeps native target appearance and credentials (token: %s)",
+  (token) => {
+    const previous = loadSettings();
+    const target = "wss://native-theme.example.test/";
+    saveSettings({
+      ...previous,
+      gatewayUrl: target,
+      theme: "space-pack/xenovessel",
+      themeMode: "dark",
+    });
+    saveSettings({ ...previous, theme: "claw", themeMode: "system" }, { selectGateway: true });
+    persistSessionToken(target, "synthetic-stored-token");
+    window["__OPENCLAW_NATIVE_CONTROL_AUTH__"] = { gatewayUrl: target, token };
+    runtime = bootstrapApplication();
+    expect(runtime.context.gateway.connection.token).toBe(token ?? "");
+    expect(loadSettings(target)).toMatchObject({
+      theme: "space-pack/xenovessel",
+      themeMode: "dark",
+    });
+    expect(runtime.context.theme.settings).toMatchObject({
+      gatewayUrl: target,
+      theme: "space-pack/xenovessel",
+      themeMode: "dark",
+    });
+  },
+);

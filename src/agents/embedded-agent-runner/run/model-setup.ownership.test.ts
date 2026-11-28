@@ -13,7 +13,7 @@ import {
   replaceSessionEntry,
   replaceSessionEntrySync,
 } from "../../../config/sessions/session-accessor.js";
-import { projectionLane } from "../../../config/sessions/session-transcript-worker-resources.js";
+import { sessionStoreLane } from "../../../config/sessions/session-transcript-worker-resources.js";
 import type { OpenClawConfig } from "../../../config/types.openclaw.js";
 import { createReplyOperation } from "../../../sessions/session-controller.js";
 import { sessionChanges } from "../../../sessions/session-row-changes.js";
@@ -46,6 +46,38 @@ vi.mock("../../harness/runtime-plugin.js", () => ({
 }));
 
 describe("model chat and native model ownership", () => {
+  it("preserves native catalog capabilities for a turn", async () => {
+    const fixture = await createFixture();
+    const row = {
+      provider: fixture.generation.provider,
+      id: fixture.generation.modelId,
+      name: "Native fixture",
+      nativeRuntime: "codex",
+      reasoning: false,
+      input: ["text" as const],
+      contextWindow: 65_536,
+    };
+    const catalog = { entries: [row], routeVariants: [row] };
+    const source: PreparedModelRuntimeSnapshot = {
+      ...fixture.generation.preparedModelRuntime,
+      modelCatalog: catalog,
+      readFullModelCatalog: () => catalog,
+    };
+    const setup = await fixture.resolve(
+      undefined,
+      capturePreparedModelRuntimeCatalog(source, source),
+    );
+    expect(setup.nativeModelOwned).toBe(true);
+    expect(setup.model).toMatchObject({
+      name: "Native fixture",
+      reasoning: false,
+      input: ["text"],
+      contextWindow: 65_536,
+      maxTokens: 32_768,
+    });
+    expect(fixture.generation.resolveDynamicModel).not.toHaveBeenCalled();
+  });
+
   it.each([true, false])(
     "prepares native ownership through the async hook (sync hook present: %s)",
     async (hasSyncHook) => {
@@ -354,7 +386,6 @@ describe("model chat and native model ownership", () => {
     for (const observation of [undefined, "codex", "openclaw"]) {
       if (observation) {
         const prepared = prepareSessionUsageUpdate({
-          cfg: fixture.runParams.config,
           modelUsed: "fixture-model",
           providerUsed: "openai",
           agentHarnessId: observation,
@@ -377,9 +408,9 @@ describe("model chat and native model ownership", () => {
               if (!completion || !prepared) {
                 throw new Error("Missing usage completion owner");
               }
-              completion.patch((entry) => ({
+              completion.patch(() => ({
                 kind: "usage",
-                update: { ...prepared.update, estimatedCostUsd: prepared.estimateCost(entry) },
+                update: prepared,
                 updatedAt: Date.now(),
               }));
             },
@@ -636,7 +667,7 @@ describe("model chat and native model ownership", () => {
       previousSessionId: "initial-predecessor",
     }));
     const admission = await assertAgentHarnessRunAdmission(fixture.runParams);
-    const workerRead = vi.spyOn(projectionLane.pool, "run");
+    const workerRead = vi.spyOn(sessionStoreLane.pool, "run");
     let setup: Awaited<ReturnType<typeof fixture.resolve>>;
     try {
       setup = await fixture.resolve(undefined, undefined, admission);

@@ -183,6 +183,10 @@ extension GatewayConnectionController {
                 """),
                 host,
                 String(port))
+        case .endpointRefused:
+            kind = .connectionRefused
+            title = "Gateway refused the connection"
+            message = GatewayConnectionIssue.refusedMessage(host: host, port: port)
         case .tlsHandshakeTimeout:
             kind = .timeout
             title = "TLS verification timed out"
@@ -213,6 +217,7 @@ extension GatewayConnectionController {
                 host,
                 String(port))
         }
+        let refused = failure == .endpointRefused
         return GatewayConnectionProblem(
             kind: kind,
             owner: .network,
@@ -220,8 +225,30 @@ extension GatewayConnectionController {
             message: message,
             actionLabel: "Retry",
             messagePresentation: .verbatim(message),
-            docsURL: URL(string: "https://docs.openclaw.ai/gateway/troubleshooting"),
+            actionCommand: refused ? GatewayConnectionIssue.refusedActionCommand : nil,
+            docsURL: (refused ? GatewayConnectionIssue.refusedDocsURL(host: host) : nil)
+                ?? URL(string: "https://docs.openclaw.ai/gateway/troubleshooting"),
             retryable: true,
             pauseReconnect: false)
+    }
+}
+
+/// Connection failures already worded for the person. The host-switch toast shows these as they are
+/// and rewords the rest (`GatewaySwitchFailureToast`).
+enum GatewayFailureText {
+    static var hostUnavailable: String {
+        String(localized: "This host isn’t available anymore.")
+    }
+
+    static var checkAddress: String {
+        String(localized: "Couldn’t connect. Check this host’s address.")
+    }
+
+    static var couldntSwitch: String {
+        String(localized: "Couldn’t switch hosts.")
+    }
+
+    static func notFound(_ name: String) -> String {
+        String(format: String(localized: "Couldn’t find %@ on this network."), name)
     }
 }

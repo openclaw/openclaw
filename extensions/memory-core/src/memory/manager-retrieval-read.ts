@@ -12,6 +12,11 @@ import {
   getNodeSqliteKysely,
   tableExists,
 } from "openclaw/plugin-sdk/sqlite-worker-runtime";
+import {
+  EMBEDDING_REFUSAL_META_KEY,
+  parseMemoryEmbeddingRefusal,
+  type MemoryEmbeddingRefusal,
+} from "./manager-embedding-refusal.js";
 import type { MemoryIndexMeta } from "./manager-reindex-state.js";
 import { loadMemorySourceFileState } from "./manager-source-state.js";
 import {
@@ -31,6 +36,7 @@ export type MemoryDatabaseFacts = {
   invalidatedSources: MemorySource[];
   hasVectorTable: boolean;
   vectorState: ReturnType<typeof resolveMemoryVectorIndexState>;
+  embeddingRefusal: MemoryEmbeddingRefusal | null;
 };
 
 const corpusFacts = new WeakMap<
@@ -68,6 +74,11 @@ export function readMemoryDatabaseFacts(
           .select("value")
           .where("key", "=", VECTOR_REBUILD_META_KEY)
           .as("vectorMarker"),
+        eb
+          .selectFrom("memory_index_meta")
+          .select("value")
+          .where("key", "=", EMBEDDING_REFUSAL_META_KEY)
+          .as("embeddingRefusal"),
         eb.exists(eb.selectFrom("memory_index_chunks").select("model")).as("hasIndexedChunks"),
         ...(
           [
@@ -133,6 +144,7 @@ export function readMemoryDatabaseFacts(
       metaVectorDims: metadata.meta?.vectorDims,
       hasSemanticChunks: Boolean(row.hasSemanticChunks),
     }),
+    embeddingRefusal: parseMemoryEmbeddingRefusal(row.embeddingRefusal),
   };
 }
 

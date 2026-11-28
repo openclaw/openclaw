@@ -1,4 +1,7 @@
 import SwiftUI
+#if canImport(UIKit)
+import UIKit
+#endif
 
 /// Gateway color names also match Claude Code's /color palette. These are
 /// decorative session hues, independent of warning/error status colors.
@@ -66,24 +69,6 @@ public struct OpenClawSessionColorStripe: View {
     }
 }
 
-public struct OpenClawSessionColorDot: View {
-    @Environment(\.colorScheme) private var colorScheme
-    private let color: String?
-
-    public init(color: String?) {
-        self.color = color
-    }
-
-    public var body: some View {
-        if let color = OpenClawSessionColor(name: self.color) {
-            Circle()
-                .fill(color.tint(in: self.colorScheme))
-                .frame(width: 7, height: 7)
-                .accessibilityLabel(String(localized: "Session color") + ": " + color.label)
-        }
-    }
-}
-
 public struct OpenClawSessionColorMenu: View {
     @Environment(\.colorScheme) private var colorScheme
     private let color: String?
@@ -108,9 +93,7 @@ public struct OpenClawSessionColorMenu: View {
                         Text(color.label)
                             .font(OpenClawChatTypography.body)
                     } icon: {
-                        Image(systemName: "circle.fill")
-                            .symbolRenderingMode(.palette)
-                            .foregroundStyle(color.tint(in: self.colorScheme))
+                        self.swatch(for: color)
                     }
                     .tag(Optional(color.rawValue))
                 }
@@ -123,5 +106,19 @@ public struct OpenClawSessionColorMenu: View {
             Label("Color", systemImage: "paintpalette")
                 .font(OpenClawChatTypography.body)
         }
+    }
+
+    @ViewBuilder
+    private func swatch(for color: OpenClawSessionColor) -> some View {
+        let tint = color.tint(in: self.colorScheme)
+        #if canImport(UIKit)
+        // UIKit menus consume an image snapshot and drop the SwiftUI foreground style.
+        if let symbol = UIImage(systemName: "circle.fill") {
+            Image(uiImage: symbol.withTintColor(UIColor(tint), renderingMode: .alwaysOriginal))
+        }
+        #else
+        Image(systemName: "circle.fill")
+            .foregroundStyle(tint)
+        #endif
     }
 }
