@@ -32,6 +32,7 @@ export const databaseWorkerCoreTestFiles = [
   // A real channel plugin install acquires the host-owned lifecycle lease.
   "src/cli/channels-add-install.test.ts",
   "src/cli/skills-cli.workshop-contract.test.ts",
+  "src/cli/qr-node-only.test.ts",
   "src/auto-reply/reply/commands.workshop-contract.test.ts",
   // Real fork recap delivery uses the host-owned SQLite broker.
   "src/auto-reply/reply/commands-fork.test.ts",

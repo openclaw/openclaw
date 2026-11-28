@@ -19,6 +19,7 @@ openclaw qr --json
 openclaw qr --remote
 openclaw qr --limited
 openclaw qr --voice-node
+openclaw qr --node-only --json --url wss://gateway.example/node
 openclaw qr --url wss://gateway.example/ws
 ```
 
@@ -42,11 +43,12 @@ The printed approval commands preserve the active profile or container context.
 - `--password <password>`: override the gateway password the bootstrap flow authenticates against
 - `--limited`: omit administrative Gateway access from the handed-off operator token
 - `--voice-node`: issue node credentials plus only `operator.read` and `operator.talk`
+- `--node-only`: issue a node pairing code with no operator access. With `--json`, the output also includes `setupId` and `expiresAtMs` so an installer can track pairing completion. Use the same profile or `OPENCLAW_STATE_DIR` and configuration as the Gateway.
 - `--setup-code-only`: print only the setup code; `--json` takes precedence and emits the JSON document instead
 - `--no-ascii`: skip ASCII QR rendering
 - `--json`: emit JSON (`setupCode`, `gatewayUrl`, optional `gatewayUrls`, `auth`, `access`, optional `accessDowngraded`, `urlSource`)
 
-`--token` and `--password` are mutually exclusive. `--limited` and `--voice-node` are mutually exclusive.
+`--token` and `--password` are mutually exclusive. Choose at most one of `--limited`, `--voice-node`, and `--node-only`.
 
 ## Setup code contents
 
