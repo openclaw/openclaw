@@ -171,7 +171,7 @@
       ]
     },
     {
-      "tab": "工具",
+      "tab": "能力",
       "groups": [
         {
           "group": "概览",
@@ -189,7 +189,138 @@
             "zh-CN/tools/lobster",
             "zh-CN/tools/reactions",
             "zh-CN/tools/thinking",
-            "zh-CN/tools/web"
+            "zh-CN/tools/web",
+            {
+              "group": "运行代码与审批",
+              "pages": [
+                "zh-CN/tools/apply-patch",
+                "zh-CN/tools/code-execution",
+                "zh-CN/tools/diffs",
+                "zh-CN/tools/elevated",
+                "zh-CN/tools/exec",
+                "zh-CN/tools/exec-approvals",
+                "zh-CN/tools/exec-approvals-advanced",
+                "zh-CN/tools/permission-modes",
+                "zh-CN/tools/secrets"
+              ]
+            },
+            {
+              "group": "媒体与文档",
+              "pages": [
+                "zh-CN/tools/media-overview",
+                "zh-CN/tools/image-generation",
+                "zh-CN/tools/music-generation",
+                "zh-CN/tools/pdf",
+                "zh-CN/tools/tts",
+                "zh-CN/tools/video-generation",
+                {
+                  "group": "文本转语音",
+                  "pages": [
+                    "zh-CN/tools/tts/quickstart",
+                    "zh-CN/tools/tts/configuration",
+                    "zh-CN/tools/tts/personas",
+                    "zh-CN/tools/tts/commands",
+                    "zh-CN/tools/tts/output",
+                    "zh-CN/tools/tts/field-reference",
+                    "zh-CN/tools/tts/api"
+                  ]
+                }
+              ]
+            },
+            {
+              "group": "工具目录与工作流",
+              "pages": [
+                "zh-CN/tools/code-mode",
+                "zh-CN/tools/autoreview",
+                "zh-CN/tools/llm-task",
+                "zh-CN/tools/lobster",
+                "zh-CN/tools/mcp",
+                "zh-CN/tools/session-project",
+                "zh-CN/tools/tool-search",
+                {
+                  "group": "代码模式",
+                  "pages": [
+                    "zh-CN/tools/code-mode/quickstart",
+                    "zh-CN/tools/code-mode/executors",
+                    "zh-CN/tools/code-mode/configuration",
+                    "zh-CN/tools/code-mode/tool-surface",
+                    "zh-CN/tools/code-mode/guest-api",
+                    "zh-CN/tools/code-mode/output",
+                    "zh-CN/tools/code-mode/internals",
+                    "zh-CN/tools/code-mode/troubleshooting",
+                    "zh-CN/tools/code-mode/maintainers"
+                  ]
+                }
+              ]
+            },
+            {
+              "group": "上下文与推理",
+              "pages": [
+                "zh-CN/tools/loop-detection",
+                "zh-CN/tools/thinking",
+                "zh-CN/tools/tokenjuice",
+                "zh-CN/tools/trajectory"
+              ]
+            },
+            {
+              "group": "聊天与界面工具",
+              "pages": [
+                "zh-CN/tools/ask-user",
+                "zh-CN/tools/btw",
+                "zh-CN/tools/progress-card",
+                "zh-CN/tools/reactions",
+                "zh-CN/tools/screen",
+                "zh-CN/tools/show-widget",
+                "zh-CN/tools/theme"
+              ]
+            },
+            {
+              "group": "浏览与抓取网页",
+              "pages": [
+                "zh-CN/tools/browser",
+                "zh-CN/tools/browser-control",
+                "zh-CN/tools/browser-linux-troubleshooting",
+                "zh-CN/tools/browser-login",
+                "zh-CN/tools/browser-wsl2-windows-remote-cdp-troubleshooting",
+                "zh-CN/tools/chrome-extension",
+                "zh-CN/tools/firecrawl",
+                "zh-CN/tools/web-fetch",
+                {
+                  "group": "浏览器",
+                  "pages": [
+                    "zh-CN/tools/browser/setup",
+                    "zh-CN/tools/browser/profiles",
+                    "zh-CN/tools/browser/existing-session",
+                    "zh-CN/tools/browser/configuration",
+                    "zh-CN/tools/browser/remote",
+                    "zh-CN/tools/browser/lightweight",
+                    "zh-CN/tools/browser/security",
+                    "zh-CN/tools/browser/isolation",
+                    "zh-CN/tools/browser/agent-tools",
+                    "zh-CN/tools/browser/troubleshooting"
+                  ]
+                }
+              ]
+            },
+            {
+              "group": "网页搜索",
+              "pages": [
+                "zh-CN/tools/web",
+                "zh-CN/tools/deep-research",
+                "zh-CN/tools/brave-search",
+                "zh-CN/tools/duckduckgo-search",
+                "zh-CN/tools/exa-search",
+                "zh-CN/tools/gemini-search",
+                "zh-CN/tools/grok-search",
+                "zh-CN/tools/kimi-search",
+                "zh-CN/tools/minimax-search",
+                "zh-CN/tools/ollama-search",
+                "zh-CN/tools/parallel-search",
+                "zh-CN/tools/perplexity-search",
+                "zh-CN/tools/searxng-search",
+                "zh-CN/tools/tavily"
+              ]
+            }
           ]
         },
         {
@@ -201,11 +332,35 @@
           ]
         },
         {
-          "group": "代理协作",
+          "group": "智能体协作",
           "pages": [
             "zh-CN/tools/agent-send",
             "zh-CN/tools/subagents",
-            "zh-CN/tools/multi-agent-sandbox-tools"
+            "zh-CN/tools/multi-agent-sandbox-tools",
+            {
+              "group": "子智能体",
+              "pages": [
+                "zh-CN/tools/subagents/slash-command",
+                "zh-CN/tools/subagents/tool-reference",
+                "zh-CN/tools/subagents/thread-bound-sessions",
+                "zh-CN/tools/subagents/nesting",
+                "zh-CN/tools/subagents/announce",
+                "zh-CN/tools/subagents/tool-policy",
+                "zh-CN/tools/subagents/operations"
+              ]
+            },
+            {
+              "group": "ACP 智能体",
+              "pages": [
+                "zh-CN/tools/acp-agents/quickstart",
+                "zh-CN/tools/acp-agents/runbook",
+                "zh-CN/tools/acp-agents/bindings",
+                "zh-CN/tools/acp-agents/sessions",
+                "zh-CN/tools/acp-agents/delivery",
+                "zh-CN/tools/acp-agents/controls",
+                "zh-CN/tools/acp-agents/troubleshooting"
+              ]
+            }
           ]
         },
         {
@@ -219,17 +374,119 @@
           ]
         },
         {
-          "group": "扩展",
+          "group": "插件指南",
           "pages": [
             "zh-CN/plugins/voice-call",
             "zh-CN/plugins/zalouser",
             "zh-CN/plugins/manifest",
-            "zh-CN/prose"
+            "zh-CN/prose",
+            {
+              "group": "会议与通话",
+              "pages": [
+                "zh-CN/plugins/meeting-plugins",
+                "zh-CN/plugins/facetime",
+                "zh-CN/plugins/facetime-recovery",
+                "zh-CN/plugins/google-meet",
+                "zh-CN/plugins/teams-meetings",
+                "zh-CN/plugins/slack-huddles",
+                "zh-CN/plugins/voice-call",
+                "zh-CN/plugins/zoom-meetings",
+                {
+                  "group": "语音通话",
+                  "pages": [
+                    "zh-CN/plugins/voice-call/configuration",
+                    "zh-CN/plugins/voice-call/realtime-and-streaming",
+                    "zh-CN/plugins/voice-call/tts-and-inbound-calls",
+                    "zh-CN/plugins/voice-call/security-and-interfaces",
+                    "zh-CN/plugins/voice-call/troubleshooting"
+                  ]
+                }
+              ]
+            },
+            {
+              "group": "模型与记忆",
+              "pages": [
+                "zh-CN/plugins/apple-fm",
+                "zh-CN/plugins/gbrain",
+                "zh-CN/plugins/knowledge",
+                "zh-CN/plugins/llama-cpp",
+                "zh-CN/plugins/memory-lancedb",
+                "zh-CN/plugins/memory-wiki",
+                "zh-CN/plugins/onnx",
+                "zh-CN/plugins/subq",
+                "zh-CN/plugins/typesafe",
+                {
+                  "group": "知识库",
+                  "pages": [
+                    "zh-CN/plugins/knowledge/stores-and-access",
+                    "zh-CN/plugins/knowledge/memory-provider",
+                    "zh-CN/plugins/knowledge/tools",
+                    "zh-CN/plugins/knowledge/records-and-ontology",
+                    "zh-CN/plugins/knowledge/retrieval",
+                    "zh-CN/plugins/knowledge/evidence",
+                    "zh-CN/plugins/knowledge/ingestion",
+                    "zh-CN/plugins/knowledge/corrections",
+                    "zh-CN/plugins/knowledge/local-history",
+                    "zh-CN/plugins/knowledge/maintenance",
+                    "zh-CN/plugins/knowledge/scribes",
+                    "zh-CN/plugins/knowledge/control-ui"
+                  ]
+                }
+              ]
+            },
+            {
+              "group": "密钥与保险库",
+              "pages": [
+                "zh-CN/plugins/onepassword",
+                "zh-CN/plugins/vault"
+              ]
+            },
+            {
+              "group": "自动化与集成",
+              "pages": [
+                "zh-CN/plugins/admin-http-rpc",
+                "zh-CN/plugins/beam",
+                "zh-CN/plugins/cloudflare",
+                "zh-CN/plugins/geolocation",
+                "zh-CN/plugins/logbook",
+                "zh-CN/plugins/mcp-relay",
+                "zh-CN/plugins/oc-path",
+                "zh-CN/plugins/session-share",
+                "zh-CN/plugins/workboard",
+                "zh-CN/plugins/zalouser"
+              ]
+            }
           ]
         },
         {
           "group": "自动化与任务",
-          "pages": ["zh-CN/automation/hooks", "zh-CN/automation/cron-jobs"]
+          "pages": [
+            "zh-CN/automation/hooks",
+            "zh-CN/automation/cron-jobs",
+            {
+              "group": "自动化任务",
+              "pages": [
+                "zh-CN/automation/cron-jobs/how-it-works",
+                "zh-CN/automation/cron-jobs/schedules",
+                "zh-CN/automation/cron-jobs/payloads",
+                "zh-CN/automation/cron-jobs/delivery",
+                "zh-CN/automation/cron-jobs/managing-jobs",
+                "zh-CN/automation/cron-jobs/webhooks",
+                "zh-CN/automation/cron-jobs/gmail",
+                "zh-CN/automation/cron-jobs/troubleshooting"
+              ]
+            },
+            {
+              "group": "钩子",
+              "pages": [
+                "zh-CN/automation/hooks/writing-hooks",
+                "zh-CN/automation/hooks/configuration",
+                "zh-CN/automation/hooks/bundled-hooks",
+                "zh-CN/automation/hooks/event-types",
+                "zh-CN/automation/hooks/troubleshooting"
+              ]
+            }
+          ]
         },
         {
           "group": "媒体与设备",
@@ -258,7 +515,39 @@
           "pages": [
             "zh-CN/plugins/building-plugins",
             "zh-CN/plugins/feature-plugins",
-            "zh-CN/plugins/tool-plugins"
+            "zh-CN/plugins/tool-plugins",
+            {
+              "group": "渠道插件",
+              "pages": [
+                "zh-CN/plugins/sdk-channel-plugins/message-adapter",
+                "zh-CN/plugins/sdk-channel-plugins/durable-ingress",
+                "zh-CN/plugins/sdk-channel-plugins/status-and-media",
+                "zh-CN/plugins/sdk-channel-plugins/sessions-and-bindings",
+                "zh-CN/plugins/sdk-channel-plugins/approvals",
+                "zh-CN/plugins/sdk-channel-plugins/setup-and-config",
+                "zh-CN/plugins/sdk-channel-plugins/mention-policy"
+              ]
+            },
+            {
+              "group": "提供商插件",
+              "pages": [
+                "zh-CN/plugins/sdk-provider-plugins/model-catalogs",
+                "zh-CN/plugins/sdk-provider-plugins/hook-families",
+                "zh-CN/plugins/sdk-provider-plugins/runtime-hooks",
+                "zh-CN/plugins/sdk-provider-plugins/voice-and-audio",
+                "zh-CN/plugins/sdk-provider-plugins/media-and-search"
+              ]
+            },
+            {
+              "group": "插件钩子",
+              "pages": [
+                "zh-CN/plugins/hooks/reference",
+                "zh-CN/plugins/hooks/tool-policy",
+                "zh-CN/plugins/hooks/prompt-and-session",
+                "zh-CN/plugins/hooks/messages",
+                "zh-CN/plugins/hooks/lifecycle"
+              ]
+            }
           ]
         }
       ]
