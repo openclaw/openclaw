@@ -539,7 +539,10 @@ the turn remains active. Refreshing stops when the run completes, including
 terminal failure or cancellation. The controller seals and cleans up when the
 reply dispatcher reports idle, or after a short safety timeout if that signal
 does not arrive. Turns for which the existing typing and suppression policy
-disables typing do not start this activity.
+disables typing do not start this activity. Accepted outbound messages clear
+chat typing immediately; turn cleanup also sends `paused`, including when no
+visible reply was produced. Presence failures do not delay or retry an accepted
+message.
 
 Typing presence is ephemeral, best-effort activity feedback. It is not a
 persisted message, delivery receipt, or guarantee that every WhatsApp client

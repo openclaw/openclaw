@@ -1,5 +1,7 @@
 import { createStatusReactionController } from "openclaw/plugin-sdk/channel-feedback";
 import { createChannelPartialDeliveryError } from "openclaw/plugin-sdk/channel-inbound";
+import { createTypingController } from "openclaw/plugin-sdk/reply-payload-testing";
+import { createReplyDispatcherWithTyping } from "openclaw/plugin-sdk/reply-runtime";
 import { loadWebMedia } from "openclaw/plugin-sdk/web-media";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import { createAcceptedWhatsAppSendResult } from "../../inbound/send-result.test-helper.js";
@@ -625,4 +627,31 @@ describe("WhatsApp main route", () => {
     ).toBe("+15550002222");
     expect(resolveWhatsAppDmRouteTarget({ msg, normalizeE164: () => null })).toBe("+15550003333");
   });
+});
+
+it("clears typing when a silent run completes and its dispatcher becomes idle", async () => {
+  const sendComposing = vi.fn(async () => {});
+  const { plan, deliverReply } = await fixture({ msg: message({ platform: { sendComposing } }) });
+  const flow = createReplyDispatcherWithTyping({
+    ...plan.dispatcherOptions,
+    deliver: plan.delivery.deliver,
+  });
+  const typing = createTypingController({
+    onReplyStart: flow.replyOptions.onReplyStart,
+    onCleanup: flow.replyOptions.onTypingCleanup,
+  });
+  flow.replyOptions.onTypingController?.(typing);
+  try {
+    await typing.startTypingLoop();
+    expect(sendComposing.mock.calls).toEqual([[]]);
+    flow.markRunComplete();
+    expect(typing.isActive()).toBe(true);
+    flow.dispatcher.markComplete();
+    await flow.dispatcher.waitForIdle();
+    expect(typing.isActive()).toBe(false);
+    expect(sendComposing.mock.calls).toEqual([[], ["paused"]]);
+    expect(deliverReply).not.toHaveBeenCalled();
+  } finally {
+    typing.cleanup();
+  }
 });
