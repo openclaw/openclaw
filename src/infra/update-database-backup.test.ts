@@ -101,8 +101,9 @@ function runSqlitePeer(file: string, readOnly: boolean, sql = "") {
   expect(probe.status, probe.stderr).toBe(0);
 }
 
-async function fixture(externalAgents = false) {
-  const root = await fs.realpath(dirs.make("update-database-backup-preflight-"));
+async function fixture(externalAgents = false, deepPath = false) {
+  const temp = await fs.realpath(dirs.make("update-database-backup-preflight-"));
+  const root = deepPath ? path.join(temp, "a".repeat(96), "b".repeat(96)) : temp;
   const stateDir = path.join(root, "state");
   const shared = path.join(stateDir, "state/openclaw.sqlite");
   const backupRoot = path.join(root, "retained-package");
@@ -227,10 +228,14 @@ it.each([undefined, "quick"] as const)(
   },
 );
 
-it.each(["auto", "off"] as const)(
-  "captures stopped databases without a payload audit (native copy %s)",
-  async (mode) => {
-    const f = await fixture(true);
+it.each([
+  { mode: "auto", deepPath: false },
+  { mode: "off", deepPath: false },
+  ...(process.platform === "linux" ? [{ mode: "auto", deepPath: true } as const] : []),
+] as const)(
+  "captures stopped databases without a payload audit (native copy $mode, deep paths: $deepPath)",
+  async ({ mode, deepPath }) => {
+    const f = await fixture(true, deepPath);
     const previous = getFsSafeNativeConfig();
     const audit = vi.spyOn(sqliteIntegrity, "assertSqliteIntegrity");
     const generations = vi.spyOn(generationReads, "readUpdateDatabaseGeneration");
@@ -1020,17 +1025,14 @@ it.each(["tight", "unknown"] as const)(
       );
       // The image volume is measured; source volumes are restore's own check, made when it runs.
       expect(backup.warnings).toEqual([]);
-      const retainedAgentFiles = (
-        await listDirectoryTreeStrict(backup.directory).then((inventory) =>
-          inventory.map((entry) => entry.relativePath),
-        )
-      )
-        .filter((file) => file.endsWith("agent.sqlite"))
-        .toSorted();
-      expect(retainedAgentFiles).toEqual([
-        expect.stringMatching(/[\\/]external-a[\\/]agent\.sqlite$/u),
-        expect.stringMatching(/[\\/]external-b[\\/]agent\.sqlite$/u),
-      ]);
+      const retainedDatabases = (await listDirectoryTreeStrict(backup.directory))
+        .map((entry) => entry.relativePath)
+        .filter((file) => file.endsWith(".sqlite"));
+      expect(retainedDatabases).toEqual(
+        backup.databases
+          .map((entry) => path.relative(backup.directory, entry.snapshotPath))
+          .toSorted(),
+      );
       for (const entry of backup.databases) {
         await expectSnapshot(entry, [
           entry.path === f.shared ? "retained" : path.basename(path.dirname(entry.path)),
