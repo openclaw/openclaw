@@ -163,6 +163,7 @@ function createLeaseFixture() {
       coordinationKey: actor.key,
       databasePath: actor.databasePath,
       identity: { key: actor.key, canonicalPath: actor.databasePath },
+      isCurrent: () => true,
       assertCurrent: () => {},
     },
     environment: { OPENCLAW_STATE_DIR: "/synthetic" },
