@@ -1,0 +1,262 @@
+name: FRV2 node worker memo candidate validation
+run-name: FRV2 memo candidate at df22eeb1 (push ${{ github.sha }})
+
+# This task-only workflow is never installed on the default branch. Publish once
+# to a new branch; neither later pushes nor manual reruns execute the test again.
+on:
+  push:
+    branches: ["**"]
+    paths:
+      - .github/workflows/frv2-node-worker-memo-candidate.yml
+      - .github/diagnostics/frv2-node-worker-launch-wire-phase.patch
+      - .github/diagnostics/frv2-node-worker-memo-backport.patch
+
+permissions:
+  contents: read
+
+env:
+  FORCE_JAVASCRIPT_ACTIONS_TO_NODE24: "true"
+  SOURCE_COMMIT: df22eeb1f74e935ab3d7877742a1332779cdb1b6
+  SOURCE_TREE: bd74b84e7c4e7e3328418f1216a11364716e90a7
+  REPAIR_TREE: cc0269b4191debfa4375c0f15f1b23e946f7f65e
+  REPAIR_SHA256: d0fde1290cccccca88116f2dc7d4ebc2d2c425a7ec211294bc78b56744a82bee
+  PATCHED_TREE: b37861d92652f8bbff5e3cc8b7f8cec2862d6503
+  PATCH_SHA256: f1f2336cd004c08afd450cbe95fa83b0c947960221845fcc499df4a8b3cffb6b
+  TEST_FILE: test/e2e/qa-lab/runtime/node-worker-launch-wire.e2e.test.ts
+
+jobs:
+  diagnostic:
+    if: >-
+      github.repository == 'openclaw/openclaw' &&
+      github.ref_name != github.event.repository.default_branch &&
+      github.event.created && !github.event.deleted && github.run_attempt == 1
+    runs-on: ubuntu-24.04
+    timeout-minutes: 30
+    defaults:
+      run:
+        shell: bash
+    steps:
+      - name: Record runner and diagnostic identity
+        env:
+          ARTIFACT_DIR: ${{ runner.temp }}/frv2-node-worker-memo-candidate
+        run: |
+          set -euo pipefail
+          printf 'ARTIFACT_DIR=%s\n' "$ARTIFACT_DIR" >> "$GITHUB_ENV"
+          mkdir -p "$ARTIFACT_DIR"
+          {
+            date -u +%FT%TZ
+            printf 'original_run=41801390334 original_job=126478301449 phase_baseline_run=41812802068\n'
+            printf 'diagnostic_head=%s run=%s attempt=%s\n' "$GITHUB_SHA" "$GITHUB_RUN_ID" "$GITHUB_RUN_ATTEMPT"
+            printf 'source_commit=%s source_tree=%s repair_tree=%s repair_sha256=%s phase_sha256=%s\n' "$SOURCE_COMMIT" "$SOURCE_TREE" "$REPAIR_TREE" "$REPAIR_SHA256" "$PATCH_SHA256"
+            printf 'runner_os=%s runner_arch=%s runner_environment=%s\n' "$RUNNER_OS" "$RUNNER_ARCH" "$RUNNER_ENVIRONMENT"
+            printf 'image_os=%s image_version=%s\n' "${ImageOS:-unknown}" "${ImageVersion:-unknown}"
+            test "$RUNNER_ENVIRONMENT" = github-hosted
+            uname -srmo
+            cat /etc/os-release
+            lscpu
+            free -b
+            df -P -B1 "$GITHUB_WORKSPACE" "$RUNNER_TEMP"
+            df -Pi "$GITHUB_WORKSPACE" "$RUNNER_TEMP"
+            cat /proc/self/cgroup
+          } 2>&1 | tee "$ARTIFACT_DIR/runner-before.log"
+
+      - name: Checkout exact frozen candidate
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          ref: df22eeb1f74e935ab3d7877742a1332779cdb1b6
+          fetch-depth: 1
+          persist-credentials: false
+
+      - name: Checkout diagnostic inputs separately
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          ref: ${{ github.sha }}
+          path: .diagnostic-input
+          fetch-depth: 1
+          persist-credentials: false
+          sparse-checkout-cone-mode: false
+          sparse-checkout: |
+            /.github/diagnostics/frv2-node-worker-launch-wire-phase.patch
+            /.github/diagnostics/frv2-node-worker-memo-backport.patch
+            /.github/workflows/frv2-node-worker-memo-candidate.yml
+
+      - name: Verify complete source and apply exact reviewed repair and phase patch
+        id: patch
+        run: |
+          set -euo pipefail
+          {
+            test "$(git rev-parse HEAD)" = "$SOURCE_COMMIT"
+            test "$(git write-tree)" = "$SOURCE_TREE"
+            git diff --no-ext-diff --exit-code
+            git diff --cached --no-ext-diff --exit-code "$SOURCE_COMMIT"
+            test "$(git -C .diagnostic-input rev-parse HEAD)" = "$GITHUB_SHA"
+            repair=.diagnostic-input/.github/diagnostics/frv2-node-worker-memo-backport.patch
+            patch=.diagnostic-input/.github/diagnostics/frv2-node-worker-launch-wire-phase.patch
+            printf '%s  %s\n' "$REPAIR_SHA256" "$repair" | sha256sum --check --strict
+            printf '%s  %s\n' "$PATCH_SHA256" "$patch" | sha256sum --check --strict
+            cp "$repair" "$ARTIFACT_DIR/repair.patch"
+            git apply --check --index "$repair"
+            git apply --index "$repair"
+            test "$(git write-tree)" = "$REPAIR_TREE"
+            printf '%s  %s\n' ccbf5c7299a7dc71c8b081f42a962059068b9e2fb93af7ba16b9c79499c41c83 "$TEST_FILE" | sha256sum --check --strict
+            git diff --cached --no-ext-diff --binary "$SOURCE_COMMIT" > "$ARTIFACT_DIR/repair-applied.patch"
+            cp "$patch" "$ARTIFACT_DIR/phase.patch"
+            cat "$ARTIFACT_DIR/phase.patch"
+            sha256sum "$TEST_FILE" > "$ARTIFACT_DIR/test-before.sha256"
+            printf 'source_commit=%s\nbefore_tree=%s\ndiagnostic_head=%s\n' "$SOURCE_COMMIT" "$SOURCE_TREE" "$GITHUB_SHA" > "$ARTIFACT_DIR/source-identity.txt"
+            sha256sum .diagnostic-input/.github/workflows/frv2-node-worker-memo-candidate.yml >> "$ARTIFACT_DIR/source-identity.txt"
+            git apply --check --index "$patch"
+            git apply --index "$patch"
+            test "$(git diff --cached --name-only "$REPAIR_TREE")" = "$TEST_FILE"
+            test "$(git write-tree)" = "$PATCHED_TREE"
+            git diff --no-ext-diff --exit-code
+            printf 'repair_tree=%s\nrepair_sha256=%s\nafter_tree=%s\nphase_sha256=%s\n' "$REPAIR_TREE" "$REPAIR_SHA256" "$PATCHED_TREE" "$PATCH_SHA256" >> "$ARTIFACT_DIR/source-identity.txt"
+            sha256sum "$TEST_FILE" > "$ARTIFACT_DIR/test-after.sha256"
+            git diff --cached --no-ext-diff --binary "$SOURCE_COMMIT" > "$ARTIFACT_DIR/applied.patch"
+            cat "$ARTIFACT_DIR/source-identity.txt" "$ARTIFACT_DIR/test-before.sha256" "$ARTIFACT_DIR/test-after.sha256"
+            echo 'verified=true' >> "$GITHUB_OUTPUT"
+          } 2>&1 | tee "$ARTIFACT_DIR/source-verification.log"
+
+      # Match the original Node/pnpm and restore-only cache setup. The original
+      # privileged semantic-check setup is deliberately off: this task uses no sudo.
+      - name: Setup frozen candidate Node environment
+        id: setup
+        uses: ./.github/actions/setup-node-env
+        with:
+          node-version: "24.22.1"
+          install-bun: "false"
+          install-deps: "false"
+          semantic-checks: "false"
+          cache-mode: restore
+          vitest-fs-cache: "true"
+          node-compile-cache: "true"
+
+      - name: Record exact runtime versions
+        run: |
+          set -euo pipefail
+          {
+            date -u +%FT%TZ
+            test "$(node -p 'process.versions.node')" = 24.22.1
+            test "$(pnpm --version)" = 12.15.0
+            node --version
+            pnpm --version
+            node -p 'JSON.stringify(process.versions)'
+            printf 'cache_mode=restore semantic_checks=false bun=false\n'
+            printf 'scope=one file; waves=3; turns_per_wave=12; inventory=4096; test_timeout_ms=240000\n'
+          } 2>&1 | tee "$ARTIFACT_DIR/runtime.log"
+
+      - name: Install frozen dependencies with the original setup owner
+        id: install
+        env:
+          CI: "true"
+          DEPENDENCY_CACHE: "false"
+          DEPENDENCY_CACHE_HIT: ""
+          FROZEN_LOCKFILE: "true"
+        run: |
+          set -euo pipefail
+          { time -p bash .github/actions/setup-node-env/install-dependencies.sh; } 2>&1 | tee "$ARTIFACT_DIR/install.log"
+
+      - name: Build only the private QA runtime
+        id: build
+        env:
+          NODE_OPTIONS: --max-old-space-size=8192
+          OPENCLAW_BUILD_PRIVATE_QA: "1"
+          OPENCLAW_RUN_NODE_SKIP_DTS_BUILD: "1"
+          VITEST: "1"
+        run: |
+          set -euo pipefail
+          { time -p pnpm build qaRuntime; } 2>&1 | tee "$ARTIFACT_DIR/build.log"
+
+      - name: Run the unchanged three-wave candidate test once
+        id: test
+        env:
+          NODE_OPTIONS: --max-old-space-size=8192
+          OPENCLAW_VITEST_RUNTIME: node
+          OPENCLAW_VITEST_MAX_WORKERS: "3"
+          OPENCLAW_E2E_WORKERS: "1"
+          OPENCLAW_E2E_VERBOSE: "1"
+          OPENCLAW_E2E_USE_PREBUILT_DIST: "1"
+          OPENCLAW_VITEST_NO_OUTPUT_TIMEOUT_MS: "300000"
+        run: |
+          set -euo pipefail
+          test "$(git rev-parse HEAD)" = "$SOURCE_COMMIT"
+          test "$(git write-tree)" = "$PATCHED_TREE"
+          git diff --no-ext-diff --exit-code
+          { time -p node scripts/run-vitest.mjs run "$TEST_FILE" --config test/vitest/vitest.e2e.config.ts --reporter=verbose; } 2>&1 | tee "$ARTIFACT_DIR/test.log"
+
+      - name: Confirm tracked source stayed identical after preparation and test
+        if: ${{ always() && steps.patch.outputs.verified == 'true' }}
+        run: |
+          set -euo pipefail
+          {
+            test "$(git rev-parse HEAD)" = "$SOURCE_COMMIT"
+            test "$(git write-tree)" = "$PATCHED_TREE"
+            git diff --no-ext-diff --exit-code
+            printf 'final_head=%s\nfinal_tree=%s\n' "$SOURCE_COMMIT" "$PATCHED_TREE"
+          } 2>&1 | tee "$ARTIFACT_DIR/source-final.log"
+
+      - name: Collect phase intervals and final runner evidence
+        if: ${{ always() }}
+        env:
+          ARTIFACT_DIR: ${{ runner.temp }}/frv2-node-worker-memo-candidate
+          PATCH_OUTCOME: ${{ steps.patch.outcome }}
+          SETUP_OUTCOME: ${{ steps.setup.outcome }}
+          INSTALL_OUTCOME: ${{ steps.install.outcome }}
+          BUILD_OUTCOME: ${{ steps.build.outcome }}
+          TEST_OUTCOME: ${{ steps.test.outcome }}
+        run: |
+          set -euo pipefail
+          mkdir -p "$ARTIFACT_DIR"
+          {
+            date -u +%FT%TZ
+            free -b
+            df -P -B1 "$GITHUB_WORKSPACE" "$RUNNER_TEMP"
+            df -Pi "$GITHUB_WORKSPACE" "$RUNNER_TEMP"
+            for file in /sys/fs/cgroup/memory.peak /sys/fs/cgroup/memory.events /proc/pressure/cpu /proc/pressure/memory /proc/pressure/io; do
+              if [[ -r "$file" ]]; then printf '\n%s\n' "$file"; cat "$file"; fi
+            done
+          } 2>&1 | tee "$ARTIFACT_DIR/runner-after.log"
+          python3 - <<'PY'
+          import json, os, pathlib, re
+          root = pathlib.Path(os.environ["ARTIFACT_DIR"])
+          log = root / "test.log"
+          phases = []
+          if log.exists():
+              for line in log.read_text().splitlines():
+                  match = re.search(r'\[node-worker-launch-wire\] (\{.*\})', line)
+                  if match:
+                      phases.append(json.loads(match.group(1)))
+          for index, item in enumerate(phases):
+              item["intervalToNextMarkMs"] = phases[index + 1]["elapsedMs"] - item["elapsedMs"] if index + 1 < len(phases) else None
+          result = {
+              "sourceCommit": os.environ["SOURCE_COMMIT"],
+              "diagnosticHead": os.environ["GITHUB_SHA"],
+              "originalRun": "41801390334",
+              "originalJob": "126478301449",
+              "phaseBaselineRun": "41812802068",
+              "repairTree": os.environ["REPAIR_TREE"],
+              "repairSha256": os.environ["REPAIR_SHA256"],
+              "outcomes": {key: os.environ[key + "_OUTCOME"] for key in ["PATCH", "SETUP", "INSTALL", "BUILD", "TEST"]},
+              "note": "Single candidate validation. Intervals are between phase marks, not automatic causal attribution or a flakiness verdict. The final mark has no measured end.",
+              "phases": phases,
+          }
+          (root / "phase-timings.json").write_text(json.dumps(result, indent=2) + "\n")
+          print(json.dumps(result, indent=2))
+          with open(os.environ["GITHUB_STEP_SUMMARY"], "a") as summary:
+              summary.write("## Reviewed FRV2 memo candidate validation\n\n")
+              summary.write("Source: df22eeb1f74e935ab3d7877742a1332779cdb1b6 plus reviewed memo fast-path/ctime backport. One original three-wave invocation; 240000 ms test timeout unchanged.\n\n")
+              summary.write("Outcomes: " + json.dumps(result["outcomes"]) + "\n\n")
+              summary.write(result["note"] + "\n\n| Phase | Elapsed ms | To next mark ms | Aborted |\n| --- | ---: | ---: | --- |\n")
+              for item in phases:
+                  duration = item["intervalToNextMarkMs"]
+                  summary.write(f'| {item["phase"]} | {item["elapsedMs"]} | {duration if duration is not None else "unmeasured"} | {item["aborted"]} |\n')
+          PY
+
+      - name: Upload only synthetic diagnostic evidence
+        if: ${{ always() }}
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7
+        with:
+          name: frv2-node-worker-memo-candidate-${{ github.run_id }}
+          path: ${{ runner.temp }}/frv2-node-worker-memo-candidate/
+          if-no-files-found: error
+          retention-days: 7
