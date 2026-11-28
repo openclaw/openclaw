@@ -143,7 +143,8 @@ publication; retain existing `npm`/`clawhub` descriptors unchanged when present.
 Each entry supplies `packageName`, `version`, `sourceSha`, `reason`, and original
 Actions job URL `evidence`. Allowed reasons: `npm-eneedauth` or
 `npm-trusted-publisher-exchange-http-404` (verified token-exchange failure,
-not arbitrary registry 404). Human-approved parent receipts bind source/tooling run.
+not arbitrary registry 404). The protected `npm-release` approval receipt binds
+the source and tooling run.
 
 Verify the complete original roster/artifacts, including deferrals; publish
 all nondeferred packages before core. Readback retains failures and deferred

@@ -54,7 +54,7 @@ Use [publication recovery](../../release-openclaw-maintainer/references/publicat
 
 #### Approval receipts
 
-- Parent `npm-release` approval mints attested `openclaw-release-approval-v1-<parent run>-<attempt>`. Bot children verify via `scripts/release-approval-receipt.mjs verify` before gates: one human approval per release.
+- Regular publication needs one parent `npm-release` approval from a reviewer eligible under the GitHub environment rules. A release automation account can use its own credentials if GitHub grants it reviewer access and the receipt accepts its login. The approval mints attested `openclaw-release-approval-v1-<parent run>-<attempt>`; children verify it via `scripts/release-approval-receipt.mjs verify` before publishing. Fast-track publication follows the separate approval rules above.
 - Verified ClawHub OIDC child skips `clawhub-plugin-release`, then uses its own publication authorization. Core completion/failure must not strand authorized ClawHub; retain lane-local live-authority/exact-byte checks.
 - npm children (`Plugin NPM Release`, `openclaw-npm-release.yml`) skip `npm-release` approval on verified route and publish in trusted-publisher-bound `npm-publish`. Immediately before publication, wait for parent attempt's receipt and require that attempt `in_progress`.
 - `npm-publish` has no reviewers; admits only protected `release-publish/<sha12>-<n>` tags. Real manual/recovery npm dispatches require that tooling tag and their own `npm-release` approval. Read-only OIDC preflight also uses `npm-publish`/tag; artifact-only preflights retain refs/no environment.
