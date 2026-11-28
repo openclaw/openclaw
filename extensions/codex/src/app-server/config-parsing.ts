@@ -137,6 +137,13 @@ const codexPluginConfigSchema = z.strictObject({
     .optional(),
   codexPlugins: z.unknown().optional(),
   supervision: codexSupervisionConfigSchema.optional(),
+  resetCreditRecovery: z
+    .strictObject({
+      enabled: z.boolean().optional(),
+      // Enforced atomically by the future owner-persisted admission adapter.
+      maxPer24Hours: z.number().int().min(1).max(10).optional(),
+    })
+    .optional(),
   appServer: z
     .strictObject({
       mode: z.enum(["yolo", "guardian"]).optional(),
