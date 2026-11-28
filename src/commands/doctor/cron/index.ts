@@ -4,6 +4,7 @@ import { isRecord } from "@openclaw/normalization-core/record-coerce";
 import { note } from "../../../../packages/terminal-core/src/note.js";
 import { formatCliCommand } from "../../../cli/command-format.js";
 import type { OpenClawConfig } from "../../../config/types.openclaw.js";
+import { isJobEnabled } from "../../../cron/service/jobs-scheduling.js";
 import { resolveCronJobsStorePath } from "../../../cron/store.js";
 import type { HealthFinding } from "../../../flows/health-checks.js";
 import { formatErrorMessage as errorMessage } from "../../../infra/errors.js";
@@ -112,7 +113,7 @@ function dockerStreamInventory(state: LegacyCronRepairState): HealthFinding[] {
   }
   for (const job of state.loadedJobs) {
     if (job.streamSandbox?.backendId === "docker") {
-      inventory.set(job.id, job.enabled === false ? "is paused" : "is configured");
+      inventory.set(job.id, isJobEnabled(job) ? "is configured" : "is paused");
     }
   }
   if (state.ownerRows.length > state.loadedJobs.length) {
@@ -186,7 +187,8 @@ async function dockerStreamCleanupFindings(selectedStoreKey?: string): Promise<H
       {
         ...source,
         requirement: "cron-sandbox-stream-cleanup-readable",
-        message: "Doctor could not read the Docker stream cleanup records.",
+        message: `Doctor could not read the Docker stream cleanup records. ${errorMessage(err)}`,
+        fixHint: `Check read access to the Gateway state database and rerun ${formatCliCommand("openclaw doctor --lint --only core/doctor/legacy-cron-store")}. If the read still fails, report the error.`,
       },
     ];
   }

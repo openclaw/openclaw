@@ -153,7 +153,7 @@ function expectNoNoteContaining(message: string, title = "Cron"): void {
 describe("collectLegacyCronStoreHealthFindings", () => {
   it("lists Docker streams as inventory and warns only about unconfirmed container cleanup", async () => {
     const schedule = { kind: "stream", command: ["watch", "private-argument"] };
-    const job = createCurrentCronJob({ schedule, sessionTarget: "main" });
+    const job = createCurrentCronJob({ schedule, sessionTarget: "main", enabled: undefined });
     const stored = { ...schedule, kind: "sandbox-stream" };
     const streamSandbox = makeCronStreamSandboxTarget();
     const docker = { ...job, id: "docker", schedule: stored, streamSandbox };
@@ -189,8 +189,27 @@ describe("collectLegacyCronStoreHealthFindings", () => {
       ["info", "quarantined", undefined],
       ["warning", removed.ownerKey, expect.stringContaining("original Docker daemon")],
     ]);
+    expect(findings.find((f) => f.target === "docker")?.message).toContain("is configured");
     expect(findings.find((f) => f.target === "raw-3")?.message).toContain("did not load");
     expect(JSON.stringify(findings)).not.toMatch(/private-argument|private-detail/);
+  });
+
+  it("reports the cleanup query error and how to retry the read", async () => {
+    vi.stubEnv("OPENCLAW_STATE_DIR", tempRoot!);
+    openOpenClawStateDatabase().db.exec(
+      "CREATE TABLE sandbox_persistent_execs (owner_key TEXT PRIMARY KEY)",
+    );
+    await closeOpenClawStateDatabaseAsync();
+
+    const findings = await collectLegacyCronStoreHealthFindings({ cfg: createCronConfig() });
+    expect(
+      findings.find((f) => f.requirement === "cron-sandbox-stream-cleanup-readable"),
+    ).toMatchObject({
+      message: expect.stringMatching(/no such column: .*phase/iu),
+      fixHint: expect.stringContaining(
+        "openclaw doctor --lint --only core/doctor/legacy-cron-store",
+      ),
+    });
   });
 
   it("reports alias-only Gateway exec jobs with recreation guidance", async () => {
