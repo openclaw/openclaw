@@ -118,9 +118,6 @@ export async function captureCronUpdatedInferenceBinding(
   const selection = model
     ? resolveSimpleCompletionSelectionForAgent({ cfg, agentId, modelRef: model })
     : null;
-  if (systemEventAccountEdit && !selection?.profileId) {
-    throw new TypeError("Select a stored account for the main session’s current model.");
-  }
   let recoverMissingAccount = false;
   if (
     model &&
@@ -159,6 +156,9 @@ export async function captureCronUpdatedInferenceBinding(
       })
     : undefined;
   if (!model || !selection || (!selection.profileId && !recoverMissingAccount)) {
+    if (systemEventAccountEdit) {
+      throw new TypeError("Select a stored account for the main session’s current model.");
+    }
     if (patch.agentId !== undefined && nextJob.inferenceBinding) {
       // A move may keep the account only when the new agent sees the same credential owner.
       const authority = await acquireCronInferenceAuthorization({
@@ -207,13 +207,6 @@ export async function captureCronUpdatedInferenceBinding(
     { cfg, agentId, model, runtimeSessionEntry, recordedRuntime },
     caller,
   );
-  if (
-    systemEventAccountEdit &&
-    (!inference.inferenceBinding || inference.inferenceBinding.profileId !== selection.profileId)
-  ) {
-    inference.disposeInferenceAuthorization();
-    throw new TypeError("The selected stored account is unavailable for this system event.");
-  }
   if (recoverMissingAccount) {
     if (inference.inferenceBinding === null) {
       return inference;
@@ -222,6 +215,13 @@ export async function captureCronUpdatedInferenceBinding(
     throw new Error(
       "Recover this automation with a model using a key in the environment or provider config, or select a stored account explicitly with model@profile.",
     );
+  }
+  if (
+    systemEventAccountEdit &&
+    (!inference.inferenceBinding || inference.inferenceBinding.profileId !== selection.profileId)
+  ) {
+    inference.disposeInferenceAuthorization();
+    throw new TypeError("The selected stored account is unavailable for this system event.");
   }
   if (inference.inferenceBinding === undefined) {
     if (cliExecution && !nextJob.inferenceBinding) {

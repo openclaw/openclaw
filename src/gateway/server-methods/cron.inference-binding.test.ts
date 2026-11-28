@@ -94,6 +94,38 @@ describe("cron handler inference binding persistence", () => {
     );
     expect(await fixture.reload()).toEqual(after);
   });
+
+  it("recovers a bound system event onto an environment key after account removal", async ({
+    fixture,
+  }) => {
+    const payload = { kind: "systemEvent", text: "Reminder" } as const;
+    await fixture.invoke("cron.add", { ...createParams(), sessionTarget: "main", payload });
+    const before = await fixture.reload();
+    expect(before.inferenceBinding?.profileId).toBe(platformId);
+
+    await fixture.useUnstoredCredential("openai");
+    await withEnvAsync({ OPENAI_API_KEY: "synthetic-recovery-key" }, async () => {
+      await fixture.invoke(
+        "cron.update",
+        {
+          id: before.id,
+          patch: { payload: { kind: "agentTurn", model: "openai/different-model" } },
+        },
+        null,
+        { expectedSuccess: false },
+      );
+      await updateModel(fixture, before.id, "openai/gpt-4.1");
+    });
+    const after = await fixture.reload();
+    expect(after.inferenceBinding).toBeUndefined();
+    expect(after.payload).toEqual(payload);
+    expect(after).toMatchObject({
+      id: before.id,
+      schedule: before.schedule,
+      sessionTarget: "main",
+    });
+  });
+
   it("replaces a stored account with an explicit native CLI login without replacing the job", async ({
     fixture,
   }) => {

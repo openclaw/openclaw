@@ -164,7 +164,7 @@ export const cronHandlers: GatewayRequestHandlers = {
       respondCronJobNotFound(respond, jobId);
       return;
     }
-    // Released clients encode a model-only account selection as an agentTurn patch.
+    // Released clients encode account selection and key recovery as model-only agentTurn patches.
     // Authorize the original request, but persist only the binding for a system event.
     const accountOnly =
       currentJob.payload.kind === "systemEvent" &&
@@ -172,7 +172,7 @@ export const cronHandlers: GatewayRequestHandlers = {
       typeof patch.payload.model === "string" &&
       Object.keys(patch).length === 1 &&
       Object.keys(patch.payload).length === 2 &&
-      Boolean(splitTrailingAuthProfile(patch.payload.model).profile);
+      Boolean(currentJob.inferenceBinding || splitTrailingAuthProfile(patch.payload.model).profile);
     const definitionPatch = accountOnly ? {} : patch;
     const expectedRevision =
       p.expectedConfigRevision ??
