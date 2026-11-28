@@ -20,17 +20,8 @@ export function publicationScope(
     case "pluginState.register":
     case "pluginState.registerIfAbsent":
     case "pluginState.replaceEntry":
-    case "pluginState.compareUpdate": {
-      const { pluginId, namespace, key, overflowPolicy } = command.input;
-      // These policies cannot evict another live key; readers already filter expiry.
-      return {
-        pluginId,
-        namespace,
-        ...(overflowPolicy === "reject-new" || isRetainedPluginStateNamespace(namespace)
-          ? { key }
-          : {}),
-      };
-    }
+    case "pluginState.compareUpdate":
+      return registrationPublicationScope(command.input);
     case "pluginState.observe":
     case "pluginState.consume":
     case "pluginState.delete":
@@ -49,6 +40,24 @@ export function publicationScope(
       // Compound operations retain database-wide denial without an exact write scope.
       return undefined;
   }
+}
+
+/** Scope of a keyed registration, which may evict other keys only under an evicting policy. */
+export function registrationPublicationScope(input: {
+  pluginId: string;
+  namespace: string;
+  key: string;
+  overflowPolicy?: string;
+}): PluginStatePublicationScope {
+  const { pluginId, namespace, key, overflowPolicy } = input;
+  // These policies cannot evict another live key; readers already filter expiry.
+  return {
+    pluginId,
+    namespace,
+    ...(overflowPolicy === "reject-new" || isRetainedPluginStateNamespace(namespace)
+      ? { key }
+      : {}),
+  };
 }
 
 export function prepareCommandOrder(
