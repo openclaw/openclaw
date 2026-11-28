@@ -3,6 +3,9 @@
 const REASONING_CONTENT_REPLAY_MODEL_IDS = new Set([
   "deepseek-v4-flash",
   "deepseek-v4-pro",
+  // V4.1 Flash shipped under the short vendor id; without it the replay contract is lost on
+  // routes that resolve without a catalog row and multi-turn tool calls fail with 400.
+  "deepseek-flash",
   "kimi-for-coding",
   "kimi-k2.5",
   "kimi-k2.6",
