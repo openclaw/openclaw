@@ -10,7 +10,7 @@ import { formatErrorMessage } from "../infra/errors.js";
 import type { RuntimeEnv } from "../runtime.js";
 import { resolveHomeDir } from "../utils.js";
 import { resolveCleanupPlanForDryRun, resolveCleanupPlanForRemoval } from "./cleanup-plan.js";
-import { stopGatewayForCleanup } from "./cleanup-service.js";
+import { stopGatewayForCleanup, stopNodeServiceForCleanup } from "./cleanup-service.js";
 import { removePath, removeStateAndLinkedPaths, removeWorkspaceDirs } from "./cleanup-utils.js";
 
 type UninstallScope = "service" | "state" | "workspace" | "app";
@@ -65,7 +65,7 @@ export async function uninstallCommand(runtime: RuntimeEnv, opts: UninstallOptio
         options: [
           {
             value: "service",
-            label: "Gateway service",
+            label: "Gateway and node services",
             hint: "launchd / systemd / schtasks",
           },
           { value: "state", label: "State + config", hint: "~/.openclaw" },
@@ -131,11 +131,16 @@ export async function uninstallCommand(runtime: RuntimeEnv, opts: UninstallOptio
   if (scopes.has("service")) {
     if (dryRun) {
       runtime.log("[dry-run] remove gateway service");
-    } else if (!(await stopGatewayForCleanup(runtime, "uninstall"))) {
-      // Service removal may prevent relaunch even when runtime termination is
-      // uncertain; preserve mutable user data until teardown can be verified.
-      serviceSafe = false;
-      failed = true;
+      runtime.log("[dry-run] remove node service");
+    } else {
+      const gatewaySafe = await stopGatewayForCleanup(runtime, "uninstall");
+      const nodeSafe = await stopNodeServiceForCleanup(runtime);
+      if (!gatewaySafe || !nodeSafe) {
+        // Service removal may prevent relaunch even when runtime termination is
+        // uncertain; preserve mutable user data until teardown can be verified.
+        serviceSafe = false;
+        failed = true;
+      }
     }
   }
 
@@ -148,7 +153,7 @@ export async function uninstallCommand(runtime: RuntimeEnv, opts: UninstallOptio
       failed = true;
     }
   } else if (removesLocalData) {
-    runtime.error("State and workspace cleanup blocked because gateway service teardown failed.");
+    runtime.error("State and workspace cleanup blocked because service teardown failed.");
   }
 
   if (scopes.has("state") && cleanupPlan) {

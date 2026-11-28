@@ -10,7 +10,7 @@ title: "Uninstall"
 Remove the service and selected local data first, then [any remaining CLI install](#remove-the-cli). State deletion can also remove installation files nested inside that directory. Choose:
 
 - **Easy path** if `openclaw` is still installed.
-- **Manual service removal** if the CLI is gone but the service is still running.
+- **Manual service removal** if the CLI is gone but the Gateway or node host service is still running.
 
 ## Easy path (CLI still installed)
 
@@ -31,7 +31,8 @@ them.
 openclaw uninstall
 ```
 
-The interactive prompt preselects only the Gateway service. For complete local
+The interactive prompt preselects only service teardown, which removes both the
+Gateway and any node host service. For complete local
 removal, also select state, workspace, and app in the prompt, or run
 `openclaw uninstall --all`. State removal preserves configured workspace
 directories unless you also select `--workspace`.
@@ -56,7 +57,7 @@ openclaw uninstall --all --yes --non-interactive
 npx -y openclaw uninstall --all --yes --non-interactive
 ```
 
-Flags: `--service`, `--state`, `--workspace`, `--app` select individual scopes; `--all` selects all four.
+Flags: `--service`, `--state`, `--workspace`, `--app` select individual scopes; `--all` selects all four. `--service` also stops and removes a node host service installed with `openclaw node install`.
 
 Unlike `openclaw uninstall --state`, manual state deletion does not preserve
 workspaces. Stop and uninstall the service successfully before deleting files.
@@ -72,6 +73,14 @@ openclaw gateway stop
 
 ```bash
 openclaw gateway uninstall
+```
+
+If you also ran `openclaw node install`, remove its node host service. It is
+registered separately and otherwise keeps relaunching after the state and CLI
+are gone:
+
+```bash
+openclaw node uninstall
 ```
 
 3. Decide whether to preserve the workspace.
@@ -108,7 +117,10 @@ rm -rf /Applications/OpenClaw.app
 
 ## Manual service removal (CLI not installed)
 
-Use this if the gateway service keeps running but `openclaw` is missing.
+Use this if the gateway service keeps running but `openclaw` is missing. A node
+host service installed with `openclaw node install` is separate: remove its
+`ai.openclaw.node` LaunchAgent, `openclaw-node` systemd unit, or "OpenClaw Node"
+Scheduled Task even if you never used the Gateway service.
 
 ### macOS (launchd)
 
@@ -154,7 +166,7 @@ If you used a profile, delete the matching task name and the `gateway.cmd` /
 
 ## Remove the CLI
 
-Remove the Gateway service **before** deleting a checkout, launcher, or prefix. Inspect the resolved command and its target first; if ownership is unclear, leave it in place. Check [Installer internals](/install/installer) for custom checkout and prefix options.
+Remove the Gateway and node host services **before** deleting a checkout, launcher, or prefix. Inspect the resolved command and its target first; if ownership is unclear, leave it in place. Check [Installer internals](/install/installer) for custom checkout and prefix options.
 
 | Installation method                               | CLI owner and removal                                                                                                                                                                                                                                                                                                               |
 | ------------------------------------------------- | ----------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |

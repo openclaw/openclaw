@@ -4,6 +4,7 @@ import {
   cleanupCommandErrorMessages,
   createCleanupCommandRuntime,
   gatewayService,
+  nodeService,
   removePath,
   removeStateAndLinkedPaths,
   removeWorkspaceDirs,
@@ -85,6 +86,35 @@ describe("uninstallCommand", () => {
     expect(gatewayService.uninstall).toHaveBeenCalledOnce();
     expect(removeStateAndLinkedPaths).toHaveBeenCalledOnce();
     expect(removeWorkspaceDirs).toHaveBeenCalledOnce();
+  });
+
+  it("stops and removes an installed node service with the service scope", async () => {
+    await runUninstall({ all: true });
+
+    expect(nodeService.stop).toHaveBeenCalledOnce();
+    expect(nodeService.uninstall).toHaveBeenCalledOnce();
+    expect(removeStateAndLinkedPaths).toHaveBeenCalledOnce();
+  });
+
+  it("skips an absent node service without blocking cleanup", async () => {
+    nodeService.isAbsent.mockResolvedValue(true);
+
+    await runUninstall({ all: true });
+
+    expect(nodeService.stop).not.toHaveBeenCalled();
+    expect(nodeService.uninstall).not.toHaveBeenCalled();
+    expect(removeStateAndLinkedPaths).toHaveBeenCalledOnce();
+  });
+
+  it("preserves user data when node service teardown fails", async () => {
+    nodeService.uninstall.mockRejectedValue(new Error("node uninstall failed"));
+
+    await expectFailure({ all: true });
+
+    expectDataPreserved();
+    expect(cleanupCommandErrorMessages(runtime).join("\n")).toContain(
+      "Node service cleanup failed",
+    );
   });
 
   it("preserves workspace dirs during state-only uninstall", async () => {

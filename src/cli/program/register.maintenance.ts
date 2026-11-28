@@ -390,7 +390,7 @@ export function registerMaintenanceCommands(
     .command("uninstall")
     .description("Uninstall the gateway service + local data")
     .addHelpText("after", () => formatDocsHelp("/cli/uninstall"))
-    .option("--service", "Remove the gateway service", false)
+    .option("--service", "Remove the gateway and node host services", false)
     .option("--state", "Remove state + config", false)
     .option("--workspace", "Remove workspace dirs", false)
     .option("--app", "Remove the macOS app", false)
