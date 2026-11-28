@@ -1271,6 +1271,7 @@
     {"path":"apps/ios/Sources/Usage/NativeUsageScreen.swift","kind":"ui-call","surface":"apple","id":"native.apple.d4d40add2415ce06","source":"Try again"},
     {"path":"apps/ios/Sources/Usage/NativeUsageScreen.swift","kind":"ui-call","surface":"apple","id":"native.apple.5af18a49d9d0bc61","source":"Updating date range…"},
     {"path":"apps/ios/Sources/Usage/NativeUsageScreen.swift","kind":"ui-localized-call","surface":"apple","id":"native.apple.ab53d7a0e2b868a1","source":"%@ left"},
+    {"path":"apps/ios/Sources/Usage/NativeUsageScreen.swift","kind":"ui-localized-call","surface":"apple","id":"native.apple.9baca4ac8f8373cf","source":"Plan: %@"},
     {"path":"apps/ios/Sources/Usage/NativeUsageScreen.swift","kind":"ui-localized-call","surface":"apple","id":"native.apple.77f8ca43d524247b","source":"Resets %@"},
     {"path":"apps/ios/Sources/Usage/NativeUsageScreen.swift","kind":"ui-localized-call","surface":"apple","id":"native.apple.a1a7ab287543f646","source":"Showing %@ through %@."},
     {"path":"apps/ios/Sources/Usage/NativeUsageScreen.swift","kind":"ui-localized-call","surface":"apple","id":"native.apple.a13096a68a6c17c6","source":"Usage"},

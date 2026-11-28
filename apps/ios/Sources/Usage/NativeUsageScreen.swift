@@ -107,6 +107,14 @@ struct NativeUsageScreen: View {
                     ProgressView { Text("Loading usage…").font(OpenClawType.subhead) }
                 }
 
+                if self.agentID == nil, self.appModel.hasOperatorAdminScope {
+                    Section {
+                        Button { self.showDashboard = true } label: {
+                            Label { Text("Full report in web app").font(OpenClawType.body) }
+                                icon: { Image(systemName: "globe") }
+                        }
+                    }
+                }
             } else {
                 ContentUnavailableView {
                     Label { Text("Gateway disconnected").font(OpenClawType.title3) }
@@ -117,14 +125,6 @@ struct NativeUsageScreen: View {
         .listStyle(.insetGrouped)
         .navigationTitle(self.agentID ?? String(localized: "Usage"))
         .toolbar {
-            if self.agentID == nil, self.connected, self.appModel.hasOperatorAdminScope {
-                ToolbarItem(placement: .topBarTrailing) {
-                    Button { self.showDashboard = true } label: {
-                        Label { Text("Full report in web app").font(OpenClawType.body) }
-                            icon: { Image(systemName: "arrow.up.right.square") }
-                    }
-                }
-            }
             if let headerSidebarAction {
                 OpenClawSidebarToolbarItem(action: headerSidebarAction, placement: .topBarLeading)
             }
@@ -163,10 +163,20 @@ struct NativeUsageScreen: View {
 
     private var periodControls: some View {
         Section {
-            Picker(selection: self.$period) {
-                ForEach(Period.allCases) { period in Text(period.title).font(OpenClawType.caption).tag(period) }
-            } label: { Text("Date range").font(OpenClawType.body) }
-                .pickerStyle(.segmented)
+            VStack(alignment: .leading, spacing: 8) {
+                Picker(selection: self.$period) {
+                    ForEach(Period.allCases) { period in Text(period.title).font(OpenClawType.caption).tag(period) }
+                } label: { Text("Date range").font(OpenClawType.body) }
+                    .pickerStyle(.segmented)
+                let dates = self.dates
+                let interval = dates.lowerBound..<dates.upperBound
+                Text(verbatim: interval.formatted(.interval.year().month(.abbreviated).day()) + " · " + TimeZone.current
+                    .identifier)
+                    .font(OpenClawType.caption).foregroundStyle(.secondary)
+            }
+            .listRowInsets(EdgeInsets(top: 0, leading: 0, bottom: 0, trailing: 0))
+            .listRowBackground(Color.clear)
+            .listRowSeparator(.hidden)
             if self.period == .custom {
                 DatePicker(selection: self.$customStart, in: ...self.customEnd, displayedComponents: .date) {
                     Text("Start date").font(OpenClawType.body)
@@ -179,12 +189,6 @@ struct NativeUsageScreen: View {
                     Text("End date").font(OpenClawType.body)
                 }
             }
-        } footer: {
-            let dates = self.dates
-            let interval = dates.lowerBound..<dates.upperBound
-            Text(verbatim: interval.formatted(.interval.year().month(.abbreviated).day()) + " · " + TimeZone.current
-                .identifier)
-                .font(OpenClawType.caption)
         }
         .onChange(of: self.period) { old, new in
             if new == .custom, old != .custom {
@@ -199,9 +203,12 @@ struct NativeUsageScreen: View {
             Section {
                 ForEach(Array(plans.providers.enumerated()), id: \.offset) { _, provider in
                     VStack(alignment: .leading, spacing: 8) {
-                        Text(verbatim: provider.displayName).font(OpenClawType.headline)
-                        if let plan = provider
-                            .plan { Text(verbatim: plan).font(OpenClawType.footnote).foregroundStyle(.secondary) }
+                        LabeledContent {
+                            if let plan = provider.plan {
+                                Text(String(format: String(localized: "Plan: %@"), plan))
+                                    .font(OpenClawType.footnote).foregroundStyle(.secondary)
+                            }
+                        } label: { Text(verbatim: provider.displayName).font(OpenClawType.headline) }
                         if let summary = provider.summary { Text(verbatim: summary).font(OpenClawType.subhead) }
                         if let error = provider
                             .error
@@ -243,11 +250,6 @@ struct NativeUsageScreen: View {
         let left = min(1, max(0, 1 - window.usedPercent / 100))
         let tone = left <= 0.10 ? OpenClawBrand.danger : left <= 0.25 ? OpenClawBrand.warn : Color.primary
         return HStack(spacing: 10) {
-            ZStack {
-                Circle().stroke(tone.opacity(0.18), lineWidth: 3)
-                Circle().trim(from: 0, to: left).stroke(tone, style: StrokeStyle(lineWidth: 3, lineCap: .round))
-                    .rotationEffect(.degrees(-90))
-            }.frame(width: 22, height: 22).accessibilityHidden(true)
             VStack(alignment: .leading, spacing: 2) {
                 Text(verbatim: [window.groupLabel, window.label].compactMap(\.self).joined(separator: " · "))
                     .font(OpenClawType.subhead)
@@ -259,6 +261,11 @@ struct NativeUsageScreen: View {
                 }
             }
             Spacer(minLength: 6)
+            ZStack {
+                Circle().stroke(tone.opacity(0.18), lineWidth: 3)
+                Circle().trim(from: 0, to: left).stroke(tone, style: StrokeStyle(lineWidth: 3, lineCap: .round))
+                    .rotationEffect(.degrees(-90))
+            }.frame(width: 22, height: 22).accessibilityHidden(true)
             Text(String(format: String(localized: "%@ left"), left.formatted(.percent.precision(.fractionLength(0)))))
                 .font(OpenClawType.subheadMedium).foregroundStyle(tone).monospacedDigit()
         }.accessibilityElement(children: .combine)

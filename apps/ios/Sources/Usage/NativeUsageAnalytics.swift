@@ -230,7 +230,7 @@ struct NativeUsageAnalytics: View {
                 ForEach(Array(self.report.aggregates.byAgent.enumerated()), id: \.offset) { _, group in
                     if let name = group.agentId {
                         Button { self.selectAgent(name) } label: {
-                            HStack {
+                            HStack(alignment: .center, spacing: 12) {
                                 VStack(alignment: .leading, spacing: 4) {
                                     self.ranking(name, tokens: group.totals.totalTokens)
                                     let share = Double(group.totals.totalTokens) / Double(max(
@@ -242,7 +242,10 @@ struct NativeUsageAnalytics: View {
                                     ].compactMap(\.self).joined(separator: " · "))
                                         .font(OpenClawType.caption).foregroundStyle(.secondary)
                                 }
-                                Image(systemName: "chevron.right").imageScale(.small).foregroundStyle(.tertiary)
+                                .frame(maxWidth: .infinity, alignment: .leading)
+                                Image(systemName: "chevron.right")
+                                    .imageScale(.small).foregroundStyle(.secondary)
+                                    .frame(width: 18).accessibilityHidden(true)
                             }
                             .frame(maxWidth: .infinity, alignment: .leading)
                             .contentShape(Rectangle())
