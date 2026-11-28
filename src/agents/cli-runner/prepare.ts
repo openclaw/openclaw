@@ -18,10 +18,6 @@ import {
   createMcpLoopbackServerConfig,
   getActiveMcpLoopbackRuntime,
 } from "../../gateway/mcp-http.loopback-runtime.js";
-import {
-  resolveMcpLoopbackPolicyTools,
-  resolveMcpLoopbackScopedTools,
-} from "../../gateway/mcp-http.runtime.js";
 import { buildSystemAgentToolsMcpServerConfig } from "../../mcp/openclaw-tools-serve-config.js";
 import { CliBackendAuthProfilePreparationError } from "../../plugins/cli-backend-errors.js";
 import type {
@@ -738,8 +734,6 @@ async function prepareCliRunContextWithinReadFence(
           ...(mcpToolAuth?.agentDir ? { authProfileStoreAgentDir: mcpToolAuth.agentDir } : {}),
         },
         forGrant: turnAudience.forGrant,
-        resolvePolicyTools: resolveMcpLoopbackPolicyTools,
-        resolveScopedTools: resolveMcpLoopbackScopedTools,
       })
     : { params, tools: [], grantAudience: undefined };
   params = await retainPolicyAllowedManagedNativeTools(

@@ -29,6 +29,18 @@ function collectStaticImportPaths(entryPath: string): Set<string> {
 }
 
 describe("get-reply module imports", () => {
+  it("keeps Gateway tool construction out of text command handler imports", () => {
+    const paths = collectStaticImportPaths(
+      resolve(dirname(getReplyPath), "commands-handlers.runtime.ts"),
+    );
+
+    expect(paths.has(resolve(dirname(getReplyPath), "../../gateway/mcp-http.runtime.ts"))).toBe(
+      false,
+    );
+    expect(paths.has(resolve(dirname(getReplyPath), "../../agents/openclaw-tools.ts"))).toBe(false);
+    expect(paths.has(resolve(dirname(getReplyPath), "../../agents/btw.ts"))).toBe(false);
+  });
+
   it("keeps skill discovery and dispatch out of the inline-actions static import closure", () => {
     const skillsRoot = resolve(dirname(getReplyPath), "../../skills");
     const paths = collectStaticImportPaths(

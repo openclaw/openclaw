@@ -48,6 +48,7 @@ const { values } = parseArgs({
     "workspace-dir": { type: "string" },
     help: { type: "boolean", short: "h" },
     resources: { type: "boolean", default: false },
+    "listener-help": { type: "boolean", default: false },
     "cpu-profile": { type: "boolean", default: false },
     "tool-invocations": { type: "boolean", default: false },
     "tool-argument-bytes": { type: "string", default: "65536" },
@@ -62,12 +63,20 @@ const { values } = parseArgs({
 });
 if (values.help) {
   console.log(
+    "--listener-help --entry openclaw.mjs measures two built-in help commands, a quiet listener checkpoint, and cold/warm write-tool turns on Linux; it needs no QA-channel build.",
+  );
+  console.log(
     "Usage: node --import ./scripts/tsx.mjs scripts/bench-channel-turn.mts [--entry dist/entry.js] [--tool-args-chars N]\nRuns one cold and ten warmed QA-channel turns with an isolated local mock provider. --mcp-list-delay-ms=-1|3000|0 uses a successful seed catalog then ten fresh-session sends against a hung, slow, or healthy MCP fixture. --mcp-first-ever also delays the seed listing.\nWith --tool-args-chars, each turn first streams a Chat Completions write call carrying N content characters.\nOr use --tool-invocations [--tool-argument-bytes 65536] [--tool-progress-events 500] [--tool-calls 200] [--tool-samples 5] [--tool-interval-ms 100] --tool-gc-log <stdout-log> with --expose-gc --trace-gc-nvp, redirecting stdout to that log, for real tool-owner allocation, promotion, GC and latency measurements without a Gateway.",
   );
   process.exit(0);
 }
 if (values["tool-invocations"]) {
   await measureToolInvocations();
+  process.exit(0);
+}
+if (values["listener-help"]) {
+  const { measureListenerHelp } = await import("./perf/listener-help-measure.ts");
+  await measureListenerHelp(values.entry);
   process.exit(0);
 }
 // A seeded catalog followed by a fresh session per turn exercises MCP materialization.

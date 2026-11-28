@@ -1,7 +1,6 @@
 /** Handles /btw side-question commands against the active session context. */
 import { randomUUID } from "node:crypto";
 import { resolveAgentDir } from "../../agents/agent-scope.js";
-import { runBtwSideQuestion } from "../../agents/btw.js";
 import { NO_MODEL_CONFIGURED_MESSAGE } from "../../agents/model-selection-config.js";
 import { toolPolicyRestrictsTools } from "../../agents/tool-policy.js";
 import { normalizeChatType } from "../../channels/chat-type.js";
@@ -63,6 +62,8 @@ export const handleBtwCommand: CommandHandler = defineAuthorizedTextCommand(
     }
 
     try {
+      // Other commands load this handler too; only a side question needs its runtime.
+      const { runBtwSideQuestion } = await import("../../agents/btw.js");
       const { images } = await resolveCurrentTurnImages({
         ctx: params.ctx,
         cfg: params.cfg,
