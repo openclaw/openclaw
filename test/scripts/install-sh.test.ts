@@ -3464,6 +3464,217 @@ EOF
     expect(result.stdout).toContain("main=main");
   });
 
+  it("applies --beta to the git install ref when no explicit version is given", () => {
+    const result = runInstallShell(`
+      set -euo pipefail
+      source "${SCRIPT_PATH}"
+      npm() {
+        if [[ "$1" == "view" && "$2" == "openclaw" ]]; then
+          case "$3" in
+            dist-tags.beta) printf '2026.5.12-beta.3\\n' ;;
+            dist-tags.latest) printf '2026.5.12\\n' ;;
+          esac
+          return 0
+        fi
+        return 1
+      }
+      USE_BETA=1 OPENCLAW_VERSION=latest
+      printf 'beta-latest=%s\\n' "$(resolve_git_openclaw_ref)"
+      USE_BETA=1
+      unset OPENCLAW_VERSION
+      printf 'beta-empty=%s\\n' "$(resolve_git_openclaw_ref)"
+      USE_BETA=1 OPENCLAW_VERSION=v2026.5.12-beta.3
+      printf 'beta-explicit=%s\\n' "$(resolve_git_openclaw_ref)"
+    `);
+
+    expect(result.status).toBe(0);
+    expect(result.stdout).toContain("beta-latest=v2026.5.12-beta.3");
+    expect(result.stdout).toContain("beta-empty=v2026.5.12-beta.3");
+    // An explicit version is never overridden by --beta.
+    expect(result.stdout).toContain("beta-explicit=v2026.5.12-beta.3");
+  });
+
+  it("falls back to the latest release when the beta tag cannot be resolved", () => {
+    const result = runInstallShell(`
+      set -euo pipefail
+      source "${SCRIPT_PATH}"
+      npm() {
+        if [[ "$1" == "view" && "$2" == "openclaw" ]]; then
+          case "$3" in
+            # Real npm exits 0 with an undefined/empty beta slot when no beta
+            # is published; only latest resolves.
+            dist-tags.beta) printf 'undefined\\n' ;;
+            dist-tags.latest) printf '2026.5.12\\n' ;;
+          esac
+          return 0
+        fi
+        return 1
+      }
+      USE_BETA=1
+      unset OPENCLAW_VERSION
+      printf 'beta-missing=%s\\n' "$(resolve_git_openclaw_ref)"
+    `);
+
+    expect(result.status).toBe(0);
+    expect(result.stdout).toContain("beta-missing=v2026.5.12");
+    expect(result.stderr).toContain("could not resolve the beta release tag");
+  });
+
+  it("falls back to main with a warning when beta and latest both fail on a cold host", () => {
+    const result = runInstallShell(`
+      set -euo pipefail
+      source "${SCRIPT_PATH}"
+      npm() { return 1; }
+      USE_BETA=1
+      unset OPENCLAW_VERSION
+      printf 'cold-beta=%s\\n' "$(resolve_git_openclaw_ref)"
+    `);
+
+    expect(result.status).toBe(0);
+    expect(result.stdout).toContain("cold-beta=main");
+    expect(result.stderr).toContain("could not resolve the beta release tag");
+    expect(result.stderr).toContain("falling back to the main branch");
+  });
+
+  it("warns when the latest release tag cannot be resolved instead of silently choosing main", () => {
+    const result = runInstallShell(`
+      set -euo pipefail
+      source "${SCRIPT_PATH}"
+      npm() { return 1; }
+      OPENCLAW_VERSION=latest
+      printf 'latest=%s\\n' "$(resolve_git_openclaw_ref)"
+    `);
+
+    expect(result.status).toBe(0);
+    expect(result.stdout).toContain("latest=main");
+    expect(result.stderr).toContain("could not resolve the latest release tag");
+  });
+
+  // Real selection→checkout chain through the shipped installer: the resolver
+  // picks the ref from release metadata (or the documented fallback) and the
+  // checkout owner applies it to a real clone of a real remote. Runs offline
+  // against local fixture remotes; npm presence is controlled through PATH.
+  it.each([
+    {
+      name: "warm host --beta selects the beta tag and checks it out",
+      scenario: "warm-beta",
+      expectRef: "v2026.5.12-beta.3",
+      expectKind: "immutable",
+    },
+    {
+      name: "cold host without npm falls back to main with a warning",
+      scenario: "cold-host",
+      expectRef: "main",
+      expectKind: "moving",
+    },
+    {
+      name: "explicit version pin wins over --beta on an existing checkout",
+      scenario: "explicit-pin",
+      expectRef: "v2026.5.12",
+      expectKind: "immutable",
+    },
+  ])("installer entry: $name", ({ scenario, expectRef, expectKind }) => {
+    const result = runInstallShell(
+      `
+      set -euo pipefail
+      source "${SCRIPT_PATH}"
+      tmp="$(mktemp -d)"
+      trap 'rm -rf "$tmp"' EXIT
+      remote="$tmp/remote.git"
+      seed="$tmp/seed"
+      repo="$tmp/repo"
+      git init --bare -q "$remote"
+      git -C "$remote" symbolic-ref HEAD refs/heads/main
+      git init -q --initial-branch=main "$seed"
+      git -C "$seed" config user.email test@example.invalid
+      git -C "$seed" config user.name test
+      printf 'base\\n' > "$seed/state.txt"
+      git -C "$seed" add state.txt
+      git -C "$seed" commit -qm base
+      printf 'stable\\n' > "$seed/state.txt"
+      git -C "$seed" commit -qam stable
+      stable_head="$(git -C "$seed" rev-parse HEAD)"
+      git -C "$seed" tag v2026.5.12
+      printf 'beta\\n' > "$seed/state.txt"
+      git -C "$seed" commit -qam beta
+      beta_head="$(git -C "$seed" rev-parse HEAD)"
+      git -C "$seed" tag v2026.5.12-beta.3
+      git -C "$seed" remote add origin "file://$remote"
+      git -C "$seed" push -q origin main "refs/tags/v2026.5.12" "refs/tags/v2026.5.12-beta.3"
+      main_head="$(git -C "$seed" rev-parse HEAD)"
+      git clone -q "$remote" "$repo"
+
+      expected_head=""
+      case "$SCENARIO" in
+        warm-beta)
+          npm() {
+            if [[ "$1" == "view" && "$2" == "openclaw" ]]; then
+              case "$3" in
+                dist-tags.beta) printf '2026.5.12-beta.3\\n' ;;
+                dist-tags.latest) printf '2026.5.12\\n' ;;
+              esac
+              return 0
+            fi
+            return 1
+          }
+          USE_BETA=1
+          unset OPENCLAW_VERSION
+          expected_head="$beta_head"
+          ;;
+        cold-host)
+          # Cold host: keep the chain's tools on PATH but drop the Node
+          # toolchain so the npm registry lookup fails like a fresh machine.
+          coldbin="$tmp/cold-bin"
+          mkdir -p "$coldbin"
+          for tool in git awk sed cat mktemp sleep rm; do
+            ln -sf "$(command -v "$tool")" "$coldbin/$tool"
+          done
+          export PATH="$coldbin"
+          command -v npm >/dev/null && { echo "cold-host PATH unexpectedly has npm" >&2; exit 1; }
+          USE_BETA=1
+          unset OPENCLAW_VERSION
+          expected_head="$main_head"
+          ;;
+        explicit-pin)
+          npm() {
+            if [[ "$1" == "view" && "$2" == "openclaw" && "$3" == "dist-tags.beta" ]]; then
+              printf '2026.5.12-beta.3\\n'
+              return 0
+            fi
+            return 1
+          }
+          USE_BETA=1
+          OPENCLAW_VERSION=v2026.5.12
+          expected_head="$stable_head"
+          ;;
+      esac
+
+      selected="$(resolve_git_openclaw_ref 2>"$tmp/resolve.err")"
+      printf 'selected=%s\\n' "$selected"
+      checkout_git_openclaw_ref "$repo" "$selected" >"$tmp/checkout.log" 2>&1
+      printf 'kind=%s head=%s\\n' "$GIT_REF_KIND" "$(git -C "$repo" rev-parse HEAD)"
+      [[ "$(git -C "$repo" rev-parse HEAD)" == "$expected_head" ]]
+      cat "$tmp/resolve.err"
+    `,
+      {
+        SCENARIO: scenario,
+        GIT_CONFIG_NOSYSTEM: "1",
+        GIT_CONFIG_GLOBAL: "/dev/null",
+        GIT_TERMINAL_PROMPT: "0",
+      },
+    );
+
+    expect(result.status, result.stdout + result.stderr).toBe(0);
+    expect(result.stdout).toContain(`selected=${expectRef}`);
+    expect(result.stdout).toContain(`kind=${expectKind} head=`);
+    if (scenario === "cold-host") {
+      // The resolver warning is captured to resolve.err and catted to stdout above.
+      expect(result.stdout).toContain("falling back to the main branch");
+    } else {
+      expect(result.stdout).not.toContain("falling back to the main branch");
+    }
+  });
+
   it.each(["bundle", "remote"] as const)("pins a full commit from a %s", (source) => {
     const result = runInstallShell(createInstallGitCommitFixtureScript(source), {
       OPENCLAW_INSTALLER_SCRIPT: SCRIPT_PATH,
