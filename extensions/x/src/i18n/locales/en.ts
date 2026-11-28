@@ -16,10 +16,10 @@ export default {
     updating: "Updating X replies",
     errors: {
       request: "Couldn’t manage X replies.",
-      list: "Couldn’t load X replies.",
-      add: "Couldn’t confirm that OpenClaw added the X account.",
-      remove: "Couldn’t confirm that OpenClaw removed the stored entry.",
-      guests: "Couldn’t confirm that OpenClaw changed guest mode.",
+      list: "Couldn’t load X replies. Select Refresh to try again.",
+      add: "Couldn’t confirm that OpenClaw added the X account. Select Refresh to check.",
+      remove: "Couldn’t confirm that OpenClaw removed the stored entry. Select Refresh to check.",
+      guests: "Couldn’t confirm that OpenClaw changed guest mode. Select Refresh to check.",
       handleRequired:
         "OpenClaw didn’t add the account. Enter an X handle with up to 15 letters, numbers, or underscores.",
       budget: "The X API budget is spent. Paid lookups can resume at {time}.",

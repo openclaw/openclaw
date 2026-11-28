@@ -250,12 +250,22 @@ it("keeps serial admission, a plain failure, and the draft through a held retry"
   await vi.waitFor(() => {
     flush();
     expect(container.querySelector('[role="alert"]')?.textContent).toBe(
-      "Couldn’t confirm that OpenClaw added the X account.",
+      "Couldn’t confirm that OpenClaw added the X account. Select Refresh to check.",
     );
   });
   expect(container.textContent).not.toContain("synthetic-private-token");
   expect(container.textContent).not.toContain("[REDACTED]");
   expect(input.value).toBe("new_user");
+
+  container.querySelector<HTMLButtonElement>("header button")!.click();
+  expect(request).toHaveBeenLastCalledWith("x.allowlist.list", { accountId: "example" });
+  await vi.waitFor(() => {
+    flush();
+    expect(container.querySelector('[role="alert"]')).toBeNull();
+    expect(input.disabled).toBe(false);
+  });
+  expect(input.value).toBe("new_user");
+
   const retry = Promise.withResolvers<XAllowlistSnapshot>();
   request.mockReturnValueOnce(retry.promise);
   form.dispatchEvent(new Event("submit", { bubbles: true, cancelable: true }));
