@@ -96,12 +96,15 @@ export function renderWorktreesView(model: WorktreesModel, view: () => Worktrees
     await Promise.resolve();
     return present(captured, operation, result, retired);
   }
-  const repositories = createMemo(() =>
-    [...new Set(view().records.map((record) => record.repoRoot))].map((value) => ({
-      value,
-      label: pathDisplayName(value),
-      description: value,
-    })),
+  const records = createMemo(() => view().records);
+  const repositories = createMemo(
+    () =>
+      Array.from(new Set(records().map((record) => record.repoRoot)), (value) => ({
+        value,
+        label: pathDisplayName(value),
+        description: value,
+      })),
+    { lazy: true },
   );
   const repoLabels = createMemo(() => {
     const paths = repositories().map(({ value }) => ({
@@ -299,10 +302,10 @@ export function renderWorktreesView(model: WorktreesModel, view: () => Worktrees
               >
                 {(latest(listRead), null)}
                 <Show
-                  when={view().records.length > 0}
+                  when={records().length > 0}
                   fallback={<SettingsEmpty message={t("worktrees.empty")} />}
                 >
-                  <For each={view().records} keyed={(record) => record.id}>
+                  <For each={records()} keyed={(record) => record.id}>
                     {(record) => (
                       <SettingsRow
                         title={
