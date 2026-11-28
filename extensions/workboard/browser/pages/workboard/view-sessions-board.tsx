@@ -2,7 +2,7 @@
 import type { WorkboardBoardSummary, WorkboardSessionFacts } from "@openclaw/workboard-contract";
 import { dynamic, type JSX } from "@solidjs/web";
 import type { ControlUiHost } from "openclaw/plugin-sdk/control-ui";
-import { createMemo, createSignal, createUniqueId, For, Show } from "solid-js";
+import { createMemo, createSignal, createUniqueId, For } from "solid-js";
 import { AgentAvatar, SelectPicker } from "../../components/host-components.tsx";
 import { icons } from "../../components/icons.tsx";
 import { t } from "../../i18n/index.ts";
@@ -43,59 +43,6 @@ function PullRequestBadge(props: { request: WorkboardSessionFacts["pullRequests"
       {props.request.state === "merged" ? icons.gitMerge : icons.gitPullRequest}#
       {props.request.number} · {t(`workboard.sessionsBoard.pullRequest.${props.request.state}`)}
     </Badge>
-  );
-}
-
-function HiddenSessionsControl(props: {
-  sessions: { key: string; title: string }[];
-  writable: boolean;
-  onShow: (sessionKey: string) => void;
-}) {
-  const id = `workboard-hidden-sessions-${createUniqueId()}`;
-  const popover = workboardPopoverRef("end");
-  return (
-    <>
-      <button
-        class="btn workboard-sessions__hidden-trigger"
-        type="button"
-        aria-haspopup="dialog"
-        aria-expanded="false"
-        popovertarget={id}
-      >
-        {icons.eyeOff}
-        {t("workboard.sessionsBoard.hiddenCount", { count: String(props.sessions.length) })}
-      </button>
-      <div
-        id={id}
-        popover="auto"
-        role="dialog"
-        aria-label={t("workboard.sessionsBoard.hiddenTitle")}
-        class="workboard-card__action-menu-panel workboard-sessions__hidden-panel"
-        ref={popover}
-        onClick={closeWorkboardPopoverOnAction}
-      >
-        <span class="workboard-sessions__hidden-heading">
-          {t("workboard.sessionsBoard.hiddenTitle")}
-        </span>
-        <div class="workboard-card__menu-group">
-          <For each={props.sessions} keyed={(session) => session.key}>
-            {(session) => (
-              <button
-                class="btn"
-                type="button"
-                title={t("workboard.sessionsBoard.showSession", { title: session().title })}
-                aria-label={t("workboard.sessionsBoard.showSession", { title: session().title })}
-                disabled={!props.writable}
-                onClick={() => props.onShow(session().key)}
-              >
-                {icons.eye}
-                <span>{session().title}</span>
-              </button>
-            )}
-          </For>
-        </div>
-      </div>
-    </>
   );
 }
 
@@ -169,7 +116,6 @@ export function SessionsBoard(props: SessionsBoardProps) {
       }));
     return {
       canWrite: host.connection.canWrite,
-      hiddenSessions: controller.hiddenSessions,
       boardOptions: [
         { value: "__all__", label: t("workboard.allBoards") },
         ...props.boards.map((board) => ({ value: board.id, label: workboardBoardName(board) })),
@@ -270,24 +216,15 @@ export function SessionsBoard(props: SessionsBoardProps) {
             onSelect={(value) => props.onBoardChange(value)}
           />
           <div class="workboard-agent-filter">{props.scopeControl}</div>
-          <div class="workboard-sessions__toolbar-end">
-            <Show when={state().hiddenSessions.length > 0}>
-              <HiddenSessionsControl
-                sessions={state().hiddenSessions}
-                writable={state().writable}
-                onShow={(sessionKey) => void props.controller.setHidden(sessionKey, false)}
-              />
-            </Show>
-            <SelectPicker
-              class="workboard-people-filter"
-              value={state().peopleFilter}
-              options={state().peopleOptions}
-              accessibleLabel={t("workboard.sessionsBoard.peopleFilter")}
-              searchable
-              disabled={state().peopleDisabled}
-              onSelect={(value) => props.controller.selectPeople(value)}
-            />
-          </div>
+          <SelectPicker
+            class="workboard-people-filter"
+            value={state().peopleFilter}
+            options={state().peopleOptions}
+            accessibleLabel={t("workboard.sessionsBoard.peopleFilter")}
+            searchable
+            disabled={state().peopleDisabled}
+            onSelect={(value) => props.controller.selectPeople(value)}
+          />
         </div>
         {state().visibleError ? (
           <div class="workboard-sessions__warning" role="alert">
@@ -489,7 +426,7 @@ export function SessionsBoard(props: SessionsBoardProps) {
               onClick={() => {
                 const sessionKey = menuKey();
                 if (sessionKey) {
-                  void props.controller.setHidden(sessionKey, true);
+                  void props.controller.hide(sessionKey);
                 }
               }}
             >

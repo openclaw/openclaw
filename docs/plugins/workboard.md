@@ -146,13 +146,14 @@ cards. By default, it includes sessions from all configured agents with activity
 in the last 72 hours and excludes archived sessions, automation (cron) sessions,
 system sessions, dock conversations, and each agent's home session. Subagent
 sessions are included by default. Under **Edit board**, choose which optional
-session types to show. These settings apply to the shared board only.
+session types to show. These settings apply to this board for everyone and do
+not change other boards.
 
 To hide one conversation, open its tile menu and choose **Hide from this board**.
-Use the hidden count beside the filters to show a session again. Hiding changes
-this board for everyone, but does not delete or archive the session, remove its
-column pin, or change other boards. A session you show again appears only if it
-still matches the board's scope and active filters.
+Hiding changes this board for everyone, but does not delete or archive the
+session, remove its column pin, or change other boards. To show a hidden session
+again, ask the Board agent. It reappears only if it still matches the board's
+scope and active filters.
 
 Each session appears in exactly one column. Open a tile to continue its conversation; the tile also shows
 its agent, run state, observer headline when available, pull requests, and recent

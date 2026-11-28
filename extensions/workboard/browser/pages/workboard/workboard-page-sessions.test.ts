@@ -125,6 +125,8 @@ it("hides a tile immediately and restores it if the shared board rejects the cha
     method === "workboard.sessionsBoard.update" ? pending.promise : request(method, params),
   );
   await page.connect();
+  const toolbar = expectDefined(page.container.querySelector(".workboard-toolbar"), "toolbar");
+  const initialToolbarButtons = Array.from(toolbar.querySelectorAll("button"));
   const tile = () => page.container.querySelector('[data-session-key="agent:main:working"]');
   expectDefined(tile()?.querySelector<HTMLButtonElement>("[popovertarget]"), "tile menu").click();
   await vi.advanceTimersByTimeAsync(0);
@@ -134,13 +136,10 @@ it("hides a tile immediately and restores it if the shared board rejects the cha
   ).click();
   await vi.advanceTimersByTimeAsync(0);
   expect(tile()).toBeNull();
-  expect(
-    page.container.querySelector(".workboard-sessions__hidden-trigger")?.textContent,
-  ).toContain("1 hidden");
+  expect(Array.from(toolbar.querySelectorAll("button"))).toEqual(initialToolbarButtons);
   pending.reject(new Error("Board update failed"));
   await vi.advanceTimersByTimeAsync(0);
   expect(tile()).not.toBeNull();
-  expect(page.container.querySelector(".workboard-sessions__hidden-trigger")).toBeNull();
   expect(page.container.querySelector('[role="alert"]')?.textContent).toContain(
     "Board update failed",
   );

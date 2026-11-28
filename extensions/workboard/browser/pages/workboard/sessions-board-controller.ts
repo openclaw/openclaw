@@ -86,8 +86,6 @@ export function createSessionsBoardController(host: BoardDockHost, notify: () =>
       // Browser storage is optional; the current view remains usable without it.
     }
   };
-  // Hidden sessions leave the board read, so remember titles seen while this view was open.
-  const hiddenTitles = new Map<string, string>();
   // Retain the created conversation if saving its reference fails, so Retry never creates a duplicate.
   let createdConversation: { boardId: string; sessionKey: string; agentId: string } | undefined;
   const current = (id: string, receipt: number) =>
@@ -291,7 +289,6 @@ export function createSessionsBoardController(host: BoardDockHost, notify: () =>
         error = undefined;
       };
       if (boardId !== nextId || active !== enabled) {
-        hiddenTitles.clear();
         invalidate();
         attempted = false;
         busy = false;
@@ -329,44 +326,24 @@ export function createSessionsBoardController(host: BoardDockHost, notify: () =>
       write(async (id) => {
         await host.request("workboard.sessionsBoard.move", { boardId: id, sessionKey, columnId });
       }),
-    get hiddenSessions() {
-      return (snapshot?.board.sessions.scope?.hiddenSessionKeys ?? []).map((key) => {
-        const row = host.sessions.rows.find((session) => session.key === key);
-        return {
-          key,
-          title:
-            row?.label || row?.displayName || row?.derivedTitle || hiddenTitles.get(key) || key,
-        };
-      });
-    },
-    setHidden: (sessionKey: string, hidden: boolean) =>
+    hide: (sessionKey: string) =>
       write(async (id, receipt) => {
         const previous = snapshot;
         if (!previous) {
           return;
         }
         const scope = previous.board.sessions.scope ?? {};
-        const keys = new Set(scope.hiddenSessionKeys);
-        if (hidden) {
-          const session = previous.sessions.find((row) => row.key === sessionKey);
-          hiddenTitles.set(sessionKey, session?.label || session?.derivedTitle || sessionKey);
-          keys.add(sessionKey);
-        } else {
-          keys.delete(sessionKey);
-        }
-        const nextScope = { ...scope, hiddenSessionKeys: [...keys] };
+        const nextScope = {
+          ...scope,
+          hiddenSessionKeys: [...new Set([...(scope.hiddenSessionKeys ?? []), sessionKey])],
+        };
         // Hiding takes effect at once; the read that follows the write reconciles the board.
-        if (hidden) {
-          snapshot = {
-            ...previous,
-            board: {
-              ...previous.board,
-              sessions: { ...previous.board.sessions, scope: nextScope },
-            },
-            sessions: previous.sessions.filter((row) => row.key !== sessionKey),
-          };
-          notify();
-        }
+        snapshot = {
+          ...previous,
+          board: { ...previous.board, sessions: { ...previous.board.sessions, scope: nextScope } },
+          sessions: previous.sessions.filter((row) => row.key !== sessionKey),
+        };
+        notify();
         try {
           const { board } = await host.request<{ board: WorkboardSessionsBoard }>(
             "workboard.sessionsBoard.update",
@@ -374,9 +351,6 @@ export function createSessionsBoardController(host: BoardDockHost, notify: () =>
           );
           if (current(id, receipt) && snapshot) {
             snapshot = { ...snapshot, board };
-            if (!hidden) {
-              hiddenTitles.delete(sessionKey);
-            }
           }
         } catch (cause) {
           if (current(id, receipt) && snapshot !== previous) {
