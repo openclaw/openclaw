@@ -12,6 +12,26 @@ on:
         description: Keep automated release mirroring non-blocking
         required: true
         type: boolean
+      tooling_sha:
+        description: Exact trusted Release Publish tooling commit
+        required: true
+        type: string
+      tooling_ref:
+        description: Release Publish tooling ref name
+        required: true
+        type: string
+      tooling_full_ref:
+        description: Full Release Publish tooling ref
+        required: true
+        type: string
+      release_publish_run_id:
+        description: Active Release Publish run containing this job
+        required: true
+        type: string
+      release_publish_run_attempt:
+        description: Exact active Release Publish run attempt
+        required: true
+        type: string
       version:
         description: Docker release version without the v prefix
         required: true
@@ -88,12 +108,60 @@ jobs:
     # Release mirroring is advisory; approved recovery must fail visibly.
     continue-on-error: ${{ inputs.advisory == true }}
     permissions:
+      actions: read
       contents: read
+    env:
+      GH_TOKEN: ${{ github.token }}
+      VCR_ADVISORY: ${{ inputs.advisory == true }}
     steps:
+      - name: Bind trusted registry tooling
+        id: tooling
+        env:
+          TOOLING_SHA: ${{ inputs.tooling_sha }}
+          TOOLING_REF: ${{ inputs.tooling_ref }}
+          TOOLING_FULL_REF: ${{ inputs.tooling_full_ref }}
+          RELEASE_PUBLISH_RUN_ID: ${{ inputs.release_publish_run_id }}
+          RELEASE_PUBLISH_RUN_ATTEMPT: ${{ inputs.release_publish_run_attempt }}
+        run: |
+          set -euo pipefail
+          if [[ "${VCR_ADVISORY}" == "true" ]]; then
+            for name in TOOLING_SHA TOOLING_REF TOOLING_FULL_REF RELEASE_PUBLISH_RUN_ID RELEASE_PUBLISH_RUN_ATTEMPT; do
+              if [[ -z "${!name}" ]]; then
+                echo "::error::${name} is required for automated VCR publication." >&2
+                exit 1
+              fi
+            done
+            writer_path=.github/workflows/openclaw-release-publish.yml
+          else
+            if [[ "${VCR_ADVISORY}" != "false" || "${GITHUB_REF}" != "refs/heads/main" || -n "${TOOLING_SHA}${TOOLING_REF}${TOOLING_FULL_REF}${RELEASE_PUBLISH_RUN_ID}${RELEASE_PUBLISH_RUN_ATTEMPT}" ]]; then
+              echo "::error::VCR recovery requires its own main-branch workflow dispatch." >&2
+              exit 1
+            fi
+            TOOLING_SHA="${GITHUB_WORKFLOW_SHA}"
+            TOOLING_REF="${GITHUB_REF_NAME}"
+            TOOLING_FULL_REF="${GITHUB_REF}"
+            RELEASE_PUBLISH_RUN_ID="${GITHUB_RUN_ID}"
+            RELEASE_PUBLISH_RUN_ATTEMPT="${GITHUB_RUN_ATTEMPT}"
+            writer_path=.github/workflows/vercel-container-registry-publish.yml
+          fi
+          if [[ "${GITHUB_EVENT_NAME}" != "workflow_dispatch" || "${TOOLING_SHA}" != "${GITHUB_WORKFLOW_SHA}" || "${TOOLING_REF}" != "${GITHUB_REF_NAME}" || "${TOOLING_FULL_REF}" != "${GITHUB_REF}" || "${RELEASE_PUBLISH_RUN_ID}" != "${GITHUB_RUN_ID}" || "${RELEASE_PUBLISH_RUN_ATTEMPT}" != "${GITHUB_RUN_ATTEMPT}" || "${GITHUB_WORKFLOW_REF}" != "${GITHUB_REPOSITORY}/${writer_path}@${TOOLING_FULL_REF}" ]]; then
+            echo "::error::VCR tooling and writer must match the exact executing workflow." >&2
+            exit 1
+          fi
+          echo "sha=${TOOLING_SHA}" >> "${GITHUB_OUTPUT}"
+          {
+            echo "VCR_TOOLING_SHA=${TOOLING_SHA}"
+            echo "VCR_TOOLING_REF=${TOOLING_REF}"
+            echo "VCR_TOOLING_FULL_REF=${TOOLING_FULL_REF}"
+            echo "VCR_WRITER_RUN_ID=${RELEASE_PUBLISH_RUN_ID}"
+            echo "VCR_WRITER_RUN_ATTEMPT=${RELEASE_PUBLISH_RUN_ATTEMPT}"
+            echo "VCR_WRITER_WORKFLOW_PATH=${writer_path}"
+          } >> "${GITHUB_ENV}"
+
       - name: Checkout trusted registry tooling
         uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
-          ref: ${{ github.sha }}
+          ref: ${{ steps.tooling.outputs.sha }}
           persist-credentials: false
 
       - name: Set up Docker Builder
@@ -143,6 +211,15 @@ jobs:
           VERCEL_TOKEN: ${{ secrets.VERCEL_TOKEN }}
         run: |
           set -euo pipefail
+          node scripts/release-tooling-identity.mjs verify \
+            --repository "${GITHUB_REPOSITORY}" \
+            --workflow-sha "${VCR_TOOLING_SHA}" \
+            --workflow-ref "${VCR_TOOLING_REF}" \
+            --workflow-full-ref "${VCR_TOOLING_FULL_REF}" \
+            --writer-run-id "${VCR_WRITER_RUN_ID}" \
+            --writer-run-attempt "${VCR_WRITER_RUN_ATTEMPT}" \
+            --writer-workflow-path "${VCR_WRITER_WORKFLOW_PATH}" \
+            --writer-workflow-event workflow_dispatch
           "${VERCEL_CLI}" vcr login docker \
             --project "${VERCEL_PROJECT_ID}" \
             --scope "${VERCEL_SCOPE}" \
@@ -190,6 +267,15 @@ jobs:
           retry_deadline=$((SECONDS + 600))
           attempt=1
           while true; do
+            node scripts/release-tooling-identity.mjs verify \
+              --repository "${GITHUB_REPOSITORY}" \
+              --workflow-sha "${VCR_TOOLING_SHA}" \
+              --workflow-ref "${VCR_TOOLING_REF}" \
+              --workflow-full-ref "${VCR_TOOLING_FULL_REF}" \
+              --writer-run-id "${VCR_WRITER_RUN_ID}" \
+              --writer-run-attempt "${VCR_WRITER_RUN_ATTEMPT}" \
+              --writer-workflow-path "${VCR_WRITER_WORKFLOW_PATH}" \
+              --writer-workflow-event workflow_dispatch
             set +e
             output="$(
               "${SANDBOX_CLI}" run \
