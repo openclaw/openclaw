@@ -136,7 +136,7 @@ export async function runTemplatesInspectCommand(
     emitTemplateFailure(opts.json, formatTemplateDiagnostics(result.diagnostics), {
       schemaVersion: TEMPLATE_INSPECT_RESULT_SCHEMA_VERSION,
       stability: TEMPLATE_OUTPUT_STABILITY,
-      valid: false,
+      ok: false,
       diagnostics: result.diagnostics,
     });
     return;
@@ -148,7 +148,7 @@ export async function runTemplatesInspectCommand(
   const payload = {
     schemaVersion: TEMPLATE_INSPECT_RESULT_SCHEMA_VERSION,
     stability: TEMPLATE_OUTPUT_STABILITY,
-    valid,
+    ok: valid,
     source: result.source,
     manifest: result.manifest,
     inventory,
@@ -271,7 +271,7 @@ async function runTemplatesAddFromSource(
     emitTemplateFailure(opts.json, formatTemplateDiagnostics(result.diagnostics), {
       schemaVersion: TEMPLATE_ADD_PLAN_SCHEMA_VERSION,
       stability: TEMPLATE_OUTPUT_STABILITY,
-      valid: false,
+      ok: false,
       diagnostics: result.diagnostics,
     });
     return;
@@ -313,6 +313,7 @@ async function runTemplatesAddFromSource(
   });
 
   const preview = {
+    ok: plan.blockers.length === 0,
     ...plan,
     ...(trust
       ? {

@@ -26,7 +26,7 @@ it("rejects retired profiles with a migration diagnostic", async () => {
   const exit = vi.spyOn(defaultRuntime, "exit").mockImplementation(() => {});
   await runTemplatesInspectCommand(join(root, "CLAW.md"), { json: true });
   expect(values[0]).toMatchObject({
-    valid: false,
+    ok: false,
     diagnostics: [expect.objectContaining({ code: "retired_template_configuration" })],
   });
   expect(exit).toHaveBeenCalledWith(1);

@@ -278,7 +278,7 @@ describe("templates cli", () => {
     expect(output()).toMatchObject({
       schemaVersion: "openclaw.templateInspect.v1",
       stability: "experimental",
-      valid: true,
+      ok: true,
       source: { kind: "development", version: "0.0.0-development" },
       manifest: { schemaVersion: 1, agent: { id: "demo-agent" } },
     });
@@ -300,6 +300,7 @@ describe("templates cli", () => {
     expect(output()).toMatchObject({
       schemaVersion: "openclaw.templateAddPlan.v1",
       stability: "experimental",
+      ok: false,
       template: { kind: "package", name: "@acme/demo-agent", version: "1.2.3" },
       agent: {
         requestedId: "demo-agent",
