@@ -6,7 +6,6 @@ import { registerNewSessionSetupEnglish } from "../../i18n/locales/en-new-sessio
 import { normalizeAgentTargetLabel } from "../../lib/agents/display.ts";
 import { t } from "../../lib/reactive/i18n.ts";
 import { liveValue } from "../../lib/reactive/live-value.ts";
-import { createMediaQuery } from "../../lib/reactive/platform.ts";
 import { normalizeAgentId } from "../../lib/sessions/session-key.ts";
 import * as catalog from "./catalog-target.ts";
 import { CheckoutChip } from "./checkout-chip.tsx";
@@ -22,35 +21,20 @@ import { WhereChip } from "./where-chip.tsx";
 registerNewSessionSetupEnglish();
 
 function CheckoutLoadingRow() {
-  const stacked = createMediaQuery("(max-width: 768px)");
-  const motion = createMediaQuery("(prefers-reduced-motion: no-preference)");
   return (
-    <>
-      {stacked() ? (
-        <span class="new-session-page__select">
-          <span
-            class="new-session-page__trigger new-session-page__checkout-skeleton"
-            role="status"
-            aria-label={t("common.loading")}
-            style={{ "pointer-events": "none" }}
-          >
-            <span class="new-session-page__target-icon" aria-hidden="true">
-              <Icon name="gitBranch" />
-            </span>
-            <span
-              class="new-session-page__skeleton-bar"
-              aria-hidden="true"
-              style={{
-                width: "80px",
-                animation: motion()
-                  ? "new-session-placeholder-pulse 1.4s ease-in-out infinite"
-                  : undefined,
-              }}
-            />
-          </span>
+    <span class="new-session-page__select new-session-page__checkout-loading">
+      <span
+        class="new-session-page__trigger new-session-page__checkout-skeleton"
+        role="status"
+        aria-label={t("common.loading")}
+        style={{ "pointer-events": "none" }}
+      >
+        <span class="new-session-page__target-icon" aria-hidden="true">
+          <Icon name="gitBranch" />
         </span>
-      ) : undefined}
-    </>
+        <span class="new-session-page__skeleton-bar" aria-hidden="true" style={{ width: "80px" }} />
+      </span>
+    </span>
   );
 }
 
@@ -141,7 +125,6 @@ export function NewSessionPlaceControls(props: {
   let terminal: HTMLElement | undefined;
   let where: PopoverHandle | undefined;
   let workspace: HTMLDivElement | undefined;
-  let deviceFolder: HTMLLabelElement | undefined;
   onSettled(() => {
     props.ref?.(() =>
       [
@@ -150,30 +133,40 @@ export function NewSessionPlaceControls(props: {
         where?.overlay.trigger?.parentElement ?? undefined,
         where?.overlay.surface,
         workspace,
-        deviceFolder,
       ].filter((element): element is HTMLElement => element?.isConnected === true),
     );
   });
   const folderValue = liveValue(() => props.params.place.folder);
-  const deviceFolderValue = liveValue(() => props.params.place.deviceFolder?.path ?? "");
   const view = createMemo(() => {
     const { context, data, gateway, place } = props.params;
     const browser = place.browser;
     const nativeTerminal = catalog.isTarget(data);
     const cloudProfiles = nativeTerminal ? [] : gateway.cloudProfiles;
     const projects = nativeTerminal ? [] : browser.projects;
+    const workspacePath = place.workspacePath();
     const recents = nativeTerminal
       ? []
       : browser.resolveProjectRecents({
           sessions: context?.sessions.state.result?.sessions ?? [],
-          workspace: place.workspacePath(),
+          workspace: workspacePath,
           workspaceRoots: place.knownWorkspaceRoots(),
           isAdmin: place.isAdmin(),
         });
     const whereState = resolveWhereChip(draftWhereChipParams(place, gateway, cloudProfiles));
+    const agentRoster = context?.agents.state;
+    const projectLabelPending = Boolean(
+      agentRoster?.agentsLoading &&
+      !agentRoster.agentsList &&
+      !workspacePath &&
+      !place.folder &&
+      !place.deviceFolder &&
+      !place.freshWorkspace &&
+      !browser.remoteProject &&
+      !browser.projectId,
+    );
     const projectState = resolveProjectChip({
       folder: place.deviceFolder?.path ?? place.folder,
-      workspace: place.workspacePath(),
+      workspace: workspacePath,
       projectId: browser.projectId,
       selectedRemoteProject: browser.remoteProject,
       projects,
@@ -186,6 +179,11 @@ export function NewSessionPlaceControls(props: {
       browser,
       whereState,
       projectState,
+      projectLabelPending,
+      // The mobile tray stacks above the composer. Reserve the possible
+      // checkout row while the default workspace's Git status is still unknown.
+      checkoutPending:
+        projectLabelPending && !nativeTerminal && !place.hostedEnvironment && place.canWrite(),
     };
   });
   return (
@@ -247,42 +245,20 @@ export function NewSessionPlaceControls(props: {
               <ProjectChip
                 params={props.params}
                 state={view().projectState}
+                labelPending={view().projectLabelPending}
                 nativeTerminal={view().nativeTerminal}
                 focus={view().browser.projectFocus}
               />
             )}
-            {props.params.place.checkoutVisible &&
+            {(view().checkoutPending || props.params.place.checkoutVisible) &&
             !(view().nativeTerminal && props.params.place.terminalOnNode) ? (
-              props.params.place.repositoryState.checkoutPending ? (
+              view().checkoutPending || props.params.place.repositoryState.checkoutPending ? (
                 <CheckoutLoadingRow />
               ) : (
                 <CheckoutChip params={props.params} folderLabel={view().projectState.label} />
               )
             ) : undefined}
           </div>
-          {props.params.place.deviceFolder ? (
-            <label
-              class="new-session-page__select new-session-page__menu-field new-session-page__device-folder"
-              ref={(element) => {
-                deviceFolder = element;
-              }}
-            >
-              <span>{t("newSession.deviceFolderPath")}</span>
-              <input
-                aria-label={t("newSession.deviceFolderPath")}
-                placeholder={t("newSession.deviceFolderPathPlaceholder")}
-                ref={deviceFolderValue}
-                disabled={props.params.submitting || props.params.pendingPlacement}
-                onInput={(event) =>
-                  props.params.place.setDeviceFolderPath(event.currentTarget.value)
-                }
-              />
-              <span class="muted">
-                {props.params.place.deviceFolderRuntimeUnsupportedReason ??
-                  t("newSession.deviceFolderDescription")}
-              </span>
-            </label>
-          ) : undefined}
         </>
       )}{" "}
     </>

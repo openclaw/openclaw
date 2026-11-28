@@ -13,6 +13,7 @@ import {
 } from "../agents/agent-scope.js";
 import { resolveConversationCapabilityProfile } from "../agents/conversation-capability-profile.js";
 import { isConversationToolAllowed } from "../agents/conversation-tool-policy-pipeline.js";
+import { DEFAULT_PROVIDER } from "../agents/defaults.js";
 import { resolveRunEntryCliRuntime } from "../agents/embedded-agent-runner/run-entry-runtime.js";
 import { resolveExecDefaults } from "../agents/exec-defaults.js";
 import { hasUnrestrictedGatewayExecution } from "../agents/execution-authority.js";
@@ -347,7 +348,7 @@ function resolveGatewayAgentModel(
 ): NonNullable<GatewayAgentRow["model"]> {
   // Agent rows expose model identity to clients; credential-profile binding stays in
   // canonical config and is consumed only by execution-time model selection.
-  const primary = `${resolvedModel.provider}/${resolvedModel.model}`;
+  const primary = resolvedModel && `${resolvedModel.provider}/${resolvedModel.model}`;
   const utilityOnly =
     !resolveConfiguredPrimaryModelForAgent({ cfg, agentId }) &&
     readUtilityModelSetting(cfg, agentId).kind === "explicit";
@@ -360,7 +361,7 @@ function resolveGatewayAgentModel(
     normalizeLowercaseStringOrEmpty,
   );
   return {
-    ...(utilityOnly ? {} : { primary }),
+    ...(utilityOnly || !primary ? {} : { primary }),
     ...(fallbacks.length > 0 ? { fallbacks } : {}),
   };
 }
@@ -382,7 +383,7 @@ function resolvedPermissionLabel(
 function resolveAgentDefaultPermissionLabel(params: {
   cfg: OpenClawConfig;
   agentId: string;
-  model: ReturnType<typeof resolveDefaultModelForAgent>;
+  model: NonNullable<ReturnType<typeof resolveDefaultModelForAgent>>;
   execApprovals: ExecApprovalsFile;
 }): GatewayAgentRow["defaultPermissionMode"] {
   const { cfg, agentId, model } = params;
@@ -531,8 +532,9 @@ export async function listAgentsForGateway(
       // This label must never overstate permissiveness. When sandbox policy can vary
       // by session, the effective policy is unknowable at agent scope: omit the label.
       const defaultPermissionMode =
+        resolvedModel &&
         resolveSandboxRuntimeSettings(cfg.agents?.defaults?.sandbox, agentConfig?.sandbox).mode ===
-        "off"
+          "off"
           ? resolveAgentDefaultPermissionLabel({
               cfg,
               agentId: id,
@@ -542,7 +544,11 @@ export async function listAgentsForGateway(
           : undefined;
       const model = resolveGatewayAgentModel(cfg, id, resolvedModel);
       const utilitySetting = readUtilityModelSetting(cfg, id);
-      const selectionParams = { cfg, agentId: id, defaultProvider: resolvedModel.provider };
+      const selectionParams = {
+        cfg,
+        agentId: id,
+        defaultProvider: resolvedModel?.provider ?? DEFAULT_PROVIDER,
+      };
       const utility =
         utilitySetting.kind === "explicit"
           ? resolveModelRefFromString({
@@ -552,40 +558,45 @@ export async function listAgentsForGateway(
             })?.ref
           : undefined;
       const sessionKey = resolveAgentMainSessionKey({ cfg, agentId: id });
-      const agentRuntime = projectWorkerPlacementAgentRuntime(
-        resolveModelAgentRuntimeMetadata({
-          cfg,
-          agentId: id,
-          provider: resolvedModel.provider,
-          model: resolvedModel.model,
-          sessionKey,
-          acpRuntime: false,
-        }),
-      );
       const hasAgentCatalog = options?.modelCatalogByAgentId?.has(id);
       // Unconfigured system rows inherit the default catalog; keep its provider
       // policy attached. A configured owner with no catalog must not inherit it.
       const preparedCatalog = options?.modelCatalogByAgentId?.get(
         hasAgentCatalog ? id : basic.defaultId,
       );
-      const thinkingParams = {
-        cfg,
-        agentId: id,
-        provider: resolvedModel.provider,
-        model: resolvedModel.model,
-        modelCatalog: preparedCatalog?.entries,
-        sessionKey,
-        providerPolicySource: preparedCatalog?.pluginRegistry,
+      // Runtime and thinking describe the configured model; an agent without one has neither.
+      const modelFacts = resolvedModel && {
+        agentRuntime: projectWorkerPlacementAgentRuntime(
+          resolveModelAgentRuntimeMetadata({
+            cfg,
+            agentId: id,
+            provider: resolvedModel.provider,
+            model: resolvedModel.model,
+            sessionKey,
+            acpRuntime: false,
+          }),
+        ),
+        thinkingParams: {
+          cfg,
+          agentId: id,
+          provider: resolvedModel.provider,
+          model: resolvedModel.model,
+          modelCatalog: preparedCatalog?.entries,
+          sessionKey,
+          providerPolicySource: preparedCatalog?.pluginRegistry,
+        },
       };
-      const thinkingProfile = resolveGatewayModelThinkingProfile(thinkingParams);
+      const thinkingProfile =
+        modelFacts && resolveGatewayModelThinkingProfile(modelFacts.thinkingParams);
       // With its own override, thinkingDefault is that override; editors also need the level
       // clearing it would fall back to (per-model params, global default, model default).
-      const thinkingInheritedDefault = agentConfig?.thinkingDefault
-        ? resolveGatewayModelThinkingProfile({
-            ...thinkingParams,
-            withoutAgentThinkingDefault: true,
-          }).thinkingDefault
-        : undefined;
+      const thinkingInheritedDefault =
+        modelFacts && agentConfig?.thinkingDefault
+          ? resolveGatewayModelThinkingProfile({
+              ...modelFacts.thinkingParams,
+              withoutAgentThinkingDefault: true,
+            }).thinkingDefault
+          : undefined;
       const workspace = resolveAgentWorkspaceDir(cfg, id);
       // Must mirror the sessions.create worktree preflight: subdirectory workspaces inside a
       // repo are worktree-capable, so the UI toggle and the create path cannot diverge.
@@ -605,11 +616,15 @@ export async function listAgentsForGateway(
           identity: identityById.get(id),
           workspace,
           workspaceGit,
-          agentRuntime,
-          // Preserve the established serialized projection order for byte-stable responses.
-          thinkingLevels: thinkingProfile.thinkingLevels,
-          thinkingOptions: thinkingProfile.thinkingLevels.map((level) => level.label),
-          thinkingDefault: thinkingProfile.thinkingDefault,
+          ...(modelFacts && thinkingProfile
+            ? {
+                agentRuntime: modelFacts.agentRuntime,
+                // Preserve the established serialized projection order for byte-stable responses.
+                thinkingLevels: thinkingProfile.thinkingLevels,
+                thinkingOptions: thinkingProfile.thinkingLevels.map((level) => level.label),
+                thinkingDefault: thinkingProfile.thinkingDefault,
+              }
+            : {}),
           ...(thinkingInheritedDefault ? { thinkingInheritedDefault } : {}),
         },
         { model },

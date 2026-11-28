@@ -1,4 +1,5 @@
 export const FLAG_TERMINATOR: "--";
+export const ROOT_VALUE_FLAGS: ReadonlySet<string>;
 
 export function isValueToken(arg: string | undefined): boolean;
 export function consumeRootOptionToken(args: ReadonlyArray<string>, index: number): number;

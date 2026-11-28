@@ -155,11 +155,18 @@ keeps canonical order and runs each selected stage once. Omitting the option
 retains the complete check. `--base`, `--include-test-types`, and
 `--include-architecture` keep their usual meaning.
 
-The npm source preflight runs `preflight`, `typecheck`, and `policy` in one
-worker and `lint` (including formatting) in another. The aggregate source receipt
-requires both workers to succeed. Frozen sources whose successful help output
-does not advertise `--stage` run the original complete check once instead; they
-do not gain stage parallelism. Capability-probe failures remain failures.
+The npm source preflight uses five isolated workers: ordered `preflight` and
+`policy` in one invocation, full production/test `typecheck`, core lint, plugin
+lint, and scripts lint with controller, i18n, stylesheet, and formatting checks.
+The lint workers reuse the canonical `--only` selectors; per-runner shard and
+memory limits stay unchanged. The aggregate source receipt requires every
+worker to succeed. This trades three extra checkout/install setups for overlap,
+not less source coverage or guaranteed full-release wall-time savings.
+
+Frozen sources whose successful help output does not advertise `--stage`, or
+whose lint runner lacks `--only` selectors, run the original complete check
+once in the guards worker instead. The other workers report an intentional
+no-op. Capability-probe failures remain failures.
 
 ### Delegating changed compilers in CI
 
@@ -338,10 +345,11 @@ all unsuppressed over-cap files.
 `pnpm check:baseline-ratchets --base <commit> --no-merge-base` runs the CI
 ratchets in two managed child slots, retaining all results after ordinary
 failures. `RATCHET_PR_HEAD_SHA` adds the existing PR-only line-cap comparison.
-The database-worker inventory starts first and shares the runner with at most
-one smaller check; it never runs two semantic inventories concurrently. When
-the complete current and historical source snapshots have identical paths and
-contents, its fresh current analysis also supplies the comparison counts.
+One slot runs the database-worker inventory and then the database-dialect
+ratchet so their large TypeScript snapshots never overlap. The other slot runs
+smaller checks; both slots drain that queue once the database checks finish.
+When current and historical source snapshots have identical paths and contents,
+the worker inventory reuses its fresh current analysis for comparison counts.
 Changed snapshots retain both full analyses and historical-cache validation.
 Frozen targets without the aggregate command retain their original commands.
 
@@ -351,6 +359,12 @@ do not compare identities and are excluded; adjacent comparisons between IDs
 and explicit pin names still count. Its per-file allowlist may only shrink.
 After removing counted sites, run the checker with `--prune` and verify again
 without pruning.
+
+`pnpm check:provider-branching-ratchet` rejects growth in request and history
+branches keyed on a provider id, model id, API name or URL in `src/agents`,
+`packages/ai`, `packages/llm-core` and the provider replay helpers. Declare the
+behavior as model compat in the owning plugin instead. Its per-file allowlist
+may only shrink; after removing branches, run the checker with `--prune`.
 
 <a id="test-line-budget" />
 

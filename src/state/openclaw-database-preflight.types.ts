@@ -83,7 +83,14 @@ export type OpenClawDatabaseSchemaPreflightOperation =
   | "gateway-restart"
   | "gateway-startup";
 
+export type StartupStateSchemaReader = () =>
+  | ReturnType<
+      typeof import("./openclaw-agent-schema-inspection-worker.js").createAgentSchemaInspectionWorker
+    >
+  | undefined;
+
 export type OpenClawDatabasePreflightOptions = {
+  takeStateSchemaReader?: StartupStateSchemaReader;
   env: NodeJS.ProcessEnv;
   onAgentDatabaseDiscovery?: (prepared: PreparedAgentDatabaseMigrationDiscovery) => void;
   onAgentInspection?: (stats: AgentDatabasePreflightStats) => void;
@@ -112,6 +119,7 @@ export type OpenClawDatabasePreflightOptions = {
 };
 
 export type OpenClawDatabaseReadinessOptions = {
+  takeStateSchemaReader?: StartupStateSchemaReader;
   env: NodeJS.ProcessEnv;
   onAgentInspection?: (stats: AgentDatabasePreflightStats) => void;
   onRegisteredAgentDatabases?: OpenClawDatabasePreflightOptions["onRegisteredAgentDatabases"];

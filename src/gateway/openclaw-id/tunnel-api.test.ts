@@ -290,7 +290,7 @@ describe("OpenClaw ID tunnel API", () => {
     await service.stop();
   });
 
-  it("refuses unknown-role and unlisted peers on every route before disclosing or mutating", async () => {
+  it("admits members independently of membership role and refuses unlisted peers on every route", async () => {
     const claw = await linkedClaw();
     const peer = formatIrohEndpointKey(randomBytes(32));
     expect(
@@ -311,7 +311,17 @@ describe("OpenClaw ID tunnel API", () => {
     const inviteBody = { cap: invite.cap, proof_key: bytesToBase64url(invite.proofKey) };
     const before = await claw.authority.ownerView(claw.w1);
     try {
-      for (const caller of [peer, formatIrohEndpointKey(randomBytes(32))]) {
+      expect(await call(peer, "GET", "membership")).toMatchObject({
+        status: 200,
+        body: { account_id: "acct-guest", role: "unconfigured-role" },
+      });
+      for (const route of ["invites", "node-invites"]) {
+        expect(await call(peer, "POST", route, inviteBody)).toMatchObject({
+          status: 403,
+          body: { error: { code: "not_owner_device" } },
+        });
+      }
+      for (const caller of [formatIrohEndpointKey(randomBytes(32))]) {
         for (const [method, route, body] of [
           ["GET", "membership", undefined],
           ["POST", "statements", { statement: change }],

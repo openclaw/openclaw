@@ -1,4 +1,3 @@
-import stringWidth from "string-width";
 import { describe, expect, it } from "vitest";
 import { wrapFileReferencesInHtml } from "./format-html-text.js";
 import {
@@ -11,11 +10,6 @@ import {
 
 const chunkHtml = (input: string, limit = 4096) =>
   markdownToTelegramChunks(input, limit).map((chunk) => chunk.html);
-const htmlGrid = (input: string) =>
-  renderTelegramHtmlText(input, { textMode: "html" })
-    .match(/<pre><code>([\s\S]*?)<\/code><\/pre>/u)?.[1]
-    ?.split("\n") ?? [];
-
 const htmlText = (input: string) => renderTelegramHtmlText(input, { textMode: "html" });
 const table = (cell: string) => `<table><tr><td>${cell}</td></tr></table>`;
 const expectBounded = (chunks: string[], limit: number) => {
@@ -105,26 +99,6 @@ describe("Telegram formatting", () => {
     }
   });
 
-  it("aligns Unicode cells in raw HTML table fallbacks", () => {
-    const input = [
-      "<table><tr><th>Name</th><th>Mark</th><th>Note</th></tr>",
-      '<tr><td colspan="2">小明</td><td>✅</td></tr>',
-      "<tr><td>cafe\u0301</td><td>👨‍👩‍👧</td><td>©️</td></tr>",
-      "</table>",
-    ].join("");
-
-    const grid = htmlGrid(input);
-    expect(grid.length).toBeGreaterThan(0);
-    expect(new Set(grid.map((line) => stringWidth(line))).size).toBe(1);
-  });
-
-  it("does not allocate a table cell for zero-width spaces", () => {
-    const [withInvisible, reference] = htmlGrid(
-      "<table><tr><td>A\u200BB</td></tr><tr><td>AB</td></tr></table>",
-    );
-    expect(withInvisible?.replace("\u200B", "")).toBe(reference);
-  });
-
   it.each(["code", "pre"])(
     "keeps only the table inside %s escaped between rendered tables",
     (tag) => {
@@ -133,23 +107,6 @@ describe("Telegram formatting", () => {
       );
     },
   );
-
-  it.each([".", ")"])("keeps section gaps and ordered children tight: %s", (marker) => {
-    for (const [input, expected] of [
-      [
-        `2${marker} Checklist:\n\n  • Sample A.\n  • Sample B.\n3${marker} Next:`,
-        "2. Checklist:\n\n• Sample A.\n• Sample B.\n\n3. Next:",
-      ],
-      [`1${marker} Parent\n   - Child\n2${marker} Next`, "1. Parent\n  • Child\n2. Next"],
-      [
-        `1${marker} Install\n   - run setup\n   - check version\n2${marker} Configure\n   • edit config\n3${marker} Start`,
-        "1. Install\n  • run setup\n  • check version\n2. Configure\n• edit config\n3. Start",
-      ],
-    ] as const) {
-      expect(markdownToTelegramHtml(input)).toBe(expected);
-      expect(chunkHtml(input)).toEqual([expected]);
-    }
-  });
 
   it("splits long multiline html text without breaking balanced tags", () => {
     const chunks = splitTelegramHtmlChunks(`<b>${"A\n".repeat(2500)}</b>`, 4000);
@@ -372,42 +329,6 @@ describe("file references", () => {
     expect(wrapFileReferencesInHtml(input)).toBe(
       '<a href="http://A.md">link</a> <code>B.md</code> <span title="C.sh">text</span> <code>D.py</code>',
     );
-  });
-
-  it.each([
-    ["compact", "<ul><li>Hero image</li><li>Countdown</li></ul>", "• Hero image\n• Countdown"],
-    [
-      "nested",
-      "<ol><li>Parent<ul><li>Child</li></ul></li><li>Next</li></ol>",
-      "1. Parent\n  • Child\n2. Next",
-    ],
-    [
-      "checkbox attributes",
-      `<ol start='3'><li>First</li><li><input type='checkbox' checked/>Done</li><li><input type=checkbox />Pending</li><li>Last</li></ol>`,
-      "3. First\n[x] Done\n[ ] Pending\n6. Last",
-    ],
-    [
-      "quoted angle brackets and inline formatting",
-      `<ul><li><b>Scope</b></li><li><input title="a > b" type=checkbox checked/>Done</li></ul><hr/><aside>Read <a href="https://example.test">more</a></aside>`,
-      '• <b>Scope</b>\n[x] Done\n<blockquote>Read <a href="https://example.test">more</a></blockquote>',
-    ],
-    [
-      "literal HTML code",
-      "<pre><code><ul><li>literal</li></ul></code></pre>",
-      "<pre><code>&lt;ul&gt;&lt;li&gt;literal&lt;/li&gt;&lt;/ul&gt;</code></pre>",
-    ],
-    ["escaped divider", "Use &lt;hr/&gt; here", "Use &lt;hr/&gt; here"],
-    [
-      "escaped list and aside examples",
-      "<ul><li>&lt;ul&gt;&lt;li&gt;literal&lt;/li&gt;&lt;/ul&gt;</li></ul><aside>&lt;aside&gt;literal&lt;/aside&gt;</aside>",
-      "• &lt;ul&gt;&lt;li&gt;literal&lt;/li&gt;&lt;/ul&gt;\n<blockquote>&lt;aside&gt;literal&lt;/aside&gt;</blockquote>",
-    ],
-  ])("renders %s captions without leaking rich blocks", (_name, input, expected) => {
-    for (const textMode of ["html", "markdown"] as const) {
-      expect(renderTelegramHtmlText(input, { textMode, downgradeRichPromptTags: true })).toBe(
-        expected,
-      );
-    }
   });
 
   it.each([

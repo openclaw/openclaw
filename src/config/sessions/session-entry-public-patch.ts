@@ -27,6 +27,9 @@ function generationValidPrivateFieldsForSameSession(
     ...(existingEntry.activeWriterRunId !== undefined
       ? { activeWriterRunId: existingEntry.activeWriterRunId }
       : {}),
+    ...(existingEntry.lifecycleRestartScope !== undefined
+      ? { lifecycleRestartScope: existingEntry.lifecycleRestartScope }
+      : {}),
     ...(existingEntry.lifecycleRunId !== undefined
       ? { lifecycleRunId: existingEntry.lifecycleRunId }
       : {}),

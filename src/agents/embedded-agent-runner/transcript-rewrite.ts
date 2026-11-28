@@ -9,6 +9,7 @@ import type {
 } from "../../context-engine/types.js";
 import type { AgentMessage } from "../runtime/index.js";
 import { getRawSessionAppendMessageAsync } from "../session-raw-append-message.js";
+import { sessionManagerReadTranscriptBranch } from "../sessions/session-manager-view-types.js";
 import type { SessionManager } from "../sessions/session-manager.js";
 
 type SessionBranchEntry = ReturnType<SessionManager["getBranch"]>[number];
@@ -159,7 +160,8 @@ export async function rewriteTranscriptEntriesInSessionManager(params: {
     return unchangedRewrite("no replacements requested");
   }
 
-  const activeBranch = params.sessionManager.getBranch();
+  // Matching and replay only read entries; keep sealed payloads shared through rewrite snapshots.
+  const activeBranch = params.sessionManager[sessionManagerReadTranscriptBranch]();
   if (activeBranch.length === 0) {
     return unchangedRewrite("empty session");
   }
@@ -175,7 +177,7 @@ export async function rewriteTranscriptEntriesInSessionManager(params: {
 
   const rewrite = await params.sessionManager.prepareTranscriptRewriteAsync();
   const rewriteManager = rewrite.sessionManager;
-  const branch = rewriteManager.getBranch();
+  const branch = rewriteManager[sessionManagerReadTranscriptBranch]();
   if (
     branch.length !== activeBranch.length ||
     branch.some((entry, index) => entry.id !== activeBranch[index]?.id)

@@ -38,9 +38,11 @@ import {
   canUseSecretsRuntimeFastPath,
   collectCandidateAgentDirs,
   createEmptyRuntimeWebToolsMetadata,
+  hasRuntimeWebToolConfigSurface,
   mergeSecretsRuntimeEnv,
   resolveRefreshAgentDirs,
 } from "./runtime-fast-path.js";
+import { hasPluginConfigValues } from "./runtime-secret-scan.js";
 import type { SecretResolverWarning } from "./runtime-shared.js";
 import {
   activateProviderAuthRuntimeSnapshot,
@@ -91,11 +93,14 @@ async function resolveLoadablePluginOrigins(params: {
 
 function shouldLoadPluginMetadataForSecrets(config: OpenClawConfig): boolean {
   const entries = config.plugins?.entries;
-  if (isRecord(entries) && Object.keys(entries).length > 0) {
+  if (isRecord(entries) && Object.values(entries).some(hasPluginConfigValues)) {
     return true;
   }
   const channels = config.channels;
   if (isRecord(channels) && Object.keys(channels).some((channelId) => channelId !== "defaults")) {
+    return true;
+  }
+  if (hasRuntimeWebToolConfigSurface(config)) {
     return true;
   }
   const providers = config.secrets?.providers;
@@ -212,7 +217,7 @@ export async function prepareSecretsRuntimeSnapshot(params: {
       includeConfigRefs,
       includeAuthStoreRefs,
       loadAuthStore: fastPathLoadAuthStore,
-      loadablePluginOrigins: params.loadablePluginOrigins ?? new Map<string, PluginOrigin>(),
+      loadablePluginOrigins: params.loadablePluginOrigins,
       ...(manifestRegistry ? { manifestRegistry } : {}),
     });
     return snapshot;
@@ -227,18 +232,21 @@ export async function prepareSecretsRuntimeSnapshot(params: {
   const { listSecretAssignmentOwners, resolveAndApplySecretAssignments } =
     await loadRuntimeOwnerAssignmentHelpers();
   let manifestRegistry = params.manifestRegistry ?? params.pluginMetadataSnapshot?.manifestRegistry;
-  if (!manifestRegistry && shouldLoadPluginMetadataForSecrets(sourceConfig)) {
-    const { resolveConfigWidePluginManifestRegistry } = await loadRuntimeManifestHelpers();
-    manifestRegistry = resolveConfigWidePluginManifestRegistry({
-      config: sourceConfig,
-      env: runtimeEnv,
-    });
+  if (
+    !manifestRegistry &&
+    (shouldLoadPluginMetadataForSecrets(sourceConfig) ||
+      (params.assignmentConfig && shouldLoadPluginMetadataForSecrets(assignmentSourceConfig)))
+  ) {
+    const { resolveConfigWidePluginMetadataSnapshotAsync } = await loadRuntimeManifestHelpers();
+    manifestRegistry = (
+      await resolveConfigWidePluginMetadataSnapshotAsync({ config: sourceConfig, env: runtimeEnv })
+    ).manifestRegistry;
   }
   const loadablePluginOrigins =
     params.loadablePluginOrigins ??
     (manifestRegistry
       ? await resolveLoadablePluginOrigins({ plugins: manifestRegistry })
-      : new Map<string, PluginOrigin>());
+      : undefined);
   const context = createResolverContext({
     sourceConfig,
     env: runtimeEnv,
@@ -586,7 +594,6 @@ function createSecretsRuntimeSnapshotActivation(snapshot: PreparedSecretsRuntime
       explicitAgentDirs: null,
       includeAuthStoreRefs: snapshot.authStores.length > 0,
       loadAuthStore: loadSecretsRuntimeAuthStore,
-      loadablePluginOrigins: new Map<string, PluginOrigin>(),
     } satisfies SecretsRuntimeRefreshContext);
 
   return {

@@ -573,6 +573,17 @@ suite.define(() => {
         const menuButton = row.locator("[data-sidebar-session-menu]");
         // Allow only roundoff from the drawer's translated box coordinates.
         await expectSessionGeometry(row, true);
+        const toolbarGlyph = await box(
+          page.locator(".sidebar-session-toolbar .sidebar-new-session svg"),
+        );
+        const toolbarCenter = toolbarGlyph.x + toolbarGlyph.width / 2;
+        const groupActions = page.locator(
+          '[data-session-section="category:Research"] .sidebar-recent-sessions__head .sidebar-session-group-actions svg',
+        );
+        for (const glyph of [menuButton.locator("svg"), groupActions.last()]) {
+          const target = await box(glyph);
+          expect(Math.abs(target.x + target.width / 2 - toolbarCenter)).toBeLessThanOrEqual(1);
+        }
         // Empty metadata must not reserve a second row just for the menu.
         expect((await box(plainRow)).height).toBeCloseTo(44, 1);
         expect(

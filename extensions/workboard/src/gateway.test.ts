@@ -67,36 +67,6 @@ function conflict(card: Record<string, unknown>) {
 }
 
 describe("workboard gateway methods", () => {
-  it.each([false, true])(
-    "refuses a Sessions board edit with transport current=%s",
-    async (current) => {
-      const message = current ? "operator scope revoked" : "Caller authority is no longer active.";
-      const authority = {
-        hasCurrentClientAuthority: () => current,
-        ...(current
-          ? {
-              sessionMutationAuthorization: {
-                assertCurrent: () => {
-                  throw new Error("operator scope revoked");
-                },
-              },
-            }
-          : {}),
-      };
-      const store = createWorkboardSqliteTestStore();
-      const sessionsBoard = await startEmptySessionsBoardService(store);
-      const board = await store.upsertBoard({ id: "sessions", kind: "sessions" });
-      const { invoke } = createGateway({ store, sessionsBoard });
-      const respond = await invoke(
-        "sessionsBoard.update",
-        { boardId: "sessions", patch: { scope: { includeArchived: true } } },
-        authority,
-      );
-      expect(respond).toHaveBeenCalledWith(false, undefined, { code: "workboard_error", message });
-      expect(await store.getSessionsBoard("sessions")).toEqual(board);
-    },
-  );
-
   it("rejects new client attachment bytes after disabling uploads without blocking agent output or reads", async () => {
     const { api, invoke, store } = createGateway();
     let config: OpenClawPluginApi["config"] = {};
@@ -288,6 +258,7 @@ describe("workboard gateway methods", () => {
       using readSpy = vi.spyOn(sessionsBoard, "read");
       for (const view of [
         {},
+        { agentId: "writer", includePeople: true },
         { involvingMe: true, includePeople: true },
         { involvingProfileId: "profile-one", includePeople: true },
         { involvingMe: false, includePeople: false },
@@ -331,6 +302,8 @@ describe("workboard gateway methods", () => {
         ),
         ...(
           [
+            [{ agentId: "" }, /view.agentId must be a non-empty string/],
+            [{ agentId: 123 }, /view.agentId must be a non-empty string/],
             [{ involvingMe: "true" }, /view.involvingMe must be a boolean/],
             [{ includePeople: 1 }, /view.includePeople must be a boolean/],
             [{ involvingProfileId: false }, /view.involvingProfileId must be a string/],

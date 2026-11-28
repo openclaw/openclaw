@@ -115,11 +115,7 @@ export const handleConfigCommand: CommandHandler = defineAuthorizedTextCommand(
 
     const path = parsedWritePath ?? [];
     try {
-      const changed = await mutateConfigPath(
-        path,
-        configCommand,
-        params.command.assertOwnerCurrent,
-      );
+      const changed = await mutateConfigPath(path, configCommand);
       if (configCommand.action === "unset") {
         return commandReply(
           changed

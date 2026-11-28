@@ -174,7 +174,8 @@ describe("agent event handler", () => {
     });
     await h.emitMany("run-widgets", [
       ["tool", { phase: "result", name: "show_widget", result: widgetResult("alpha") }],
-      ["tool", { phase: "result", name: "show_widget", result: widgetResult("beta") }],
+      // Claude CLI reports the raw MCP content-block array.
+      ["tool", { phase: "result", name: "show_widget", result: widgetResult("beta").content }],
       ["tool", { phase: "result", name: "show_widget", result: widgetResult("alpha") }],
       ["assistant", { text: "" }],
       ["lifecycle", { phase: "end" }],

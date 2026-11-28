@@ -16,7 +16,7 @@ describe("isolated Vitest build selection", () => {
     },
     {
       args: ["src/channels/plugins/contracts/plugin-shape.contract.test.ts"],
-      expected: { profile: "qaRuntime", privateQa: true },
+      expected: undefined,
     },
     {
       args: [

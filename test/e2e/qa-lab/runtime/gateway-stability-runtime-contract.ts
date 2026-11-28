@@ -1,4 +1,4 @@
-// Pure CLI contract shared by the Gateway stability script and fast unit coverage.
+// Pure artifact-destination CLI contract shared by Gateway QA scripts and fast unit coverage.
 import path from "node:path";
 
 export type GatewayStabilityRuntimeOptions = {

@@ -1,0 +1,3 @@
+# Native cleaner framing and size limits, conditional HTTP retries after lost acknowledgements,
+# and retained SQLite enrollment, release fencing, and publisher credential rotation.
+391

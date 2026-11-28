@@ -170,13 +170,13 @@ export async function detectZaiEndpoint(params: {
         endpoint: `coding-${endpoint}`,
         baseUrl: codingBaseUrl,
         modelId: ZAI_CODING_DEFAULT_MODEL_ID,
-        note: `Verified GLM-5.3 on coding-${endpoint} endpoint.`,
+        note: `Verified GLM-5.4 on coding-${endpoint} endpoint.`,
       },
       {
         endpoint: `coding-${endpoint}`,
         baseUrl: codingBaseUrl,
         modelId: "glm-5.1",
-        note: `Verified GLM-5.1 on coding-${endpoint} endpoint; GLM-5.3 is unavailable.`,
+        note: `Verified GLM-5.1 on coding-${endpoint} endpoint; GLM-5.4 is unavailable.`,
         fallback: true,
       },
     ]);
@@ -184,7 +184,7 @@ export async function detectZaiEndpoint(params: {
       endpoint: `coding-${endpoint}`,
       baseUrl: codingBaseUrl,
       modelId: "glm-4.7",
-      note: `Coding Plan${endpoint === "cn" ? " CN" : ""} endpoint verified, but this key/plan does not expose GLM-5.3 or GLM-5.1 there. Defaulting to GLM-4.7.`,
+      note: `Coding Plan${endpoint === "cn" ? " CN" : ""} endpoint verified, but this key/plan does not expose GLM-5.4 or GLM-5.1 there. Defaulting to GLM-4.7.`,
       fallback: true,
     }));
 

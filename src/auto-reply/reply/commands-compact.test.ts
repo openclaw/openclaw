@@ -111,6 +111,7 @@ describe("handleCompactCommand", () => {
       sessionKey: "agent:main:main",
       allowGatewaySubagentBinding: true,
       trigger: "manual",
+      currentTokenCount: 12_345,
       customInstructions: "focus on decisions\nAda: keep this label",
       messageChannel: "whatsapp",
       groupId: "group-1",
@@ -130,12 +131,18 @@ describe("handleCompactCommand", () => {
     expect(call.ownerNumbers?.at(-1)).toBe("owner");
     expect(call).not.toHaveProperty("senderIsOwner");
     expect(params.command.ownerList).toEqual(ownerIds);
+    expect(result?.reply?.text).toBe("⚙️ Compaction skipped: no reason reported • Context 12.1k");
   });
 
   it.each([
     ["already under target", "skipped: context is already under the compaction target", true],
     ["no real conversation messages", "failed: nothing compactable in this session yet", false],
     ["already_compacted", "skipped: session is already compacted", true],
+    [
+      "already under target: 11.5k raw tokens outside the fresh tail are below the 20k leaf chunk",
+      "skipped: context is already under the compaction target (11.5k raw tokens outside the fresh tail are below the 20k leaf chunk)",
+      true,
+    ],
   ] as const)("reports manual compaction reason %s", async (reason, message, statusNotice) => {
     vi.mocked(compactEmbeddedAgentSession).mockResolvedValueOnce({
       ok: false,

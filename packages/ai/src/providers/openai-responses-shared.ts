@@ -10,7 +10,6 @@ import {
   suppressOpenAIResponsesCompaction,
   type OpenAIResponsesReplayMode,
 } from "../transports/openai-responses-compaction-replay.js";
-import { recordResponsesContextUsage } from "../transports/openai-responses-context-usage.js";
 import {
   responsesServiceTierObserver,
   type OpenAIResponsesRequestParams,
@@ -69,13 +68,13 @@ export {
 
 export function applyResponsesServiceTierPricing(
   usage: Usage,
-  serviceTier: ResponseCreateParamsStreaming["service_tier"] | undefined,
+  serviceTier: ResponseCreateParamsStreaming["service_tier"] | "fast" | undefined,
   model: Pick<Model, "id">,
 ): void {
   let multiplier = 1;
   if (serviceTier === "flex") {
     multiplier = 0.5;
-  } else if (serviceTier === "priority") {
+  } else if (serviceTier === "priority" || serviceTier === "fast") {
     multiplier = model.id === "gpt-5.5" ? 2.5 : 2;
   } else if (
     serviceTier === "ultrafast" &&
@@ -284,7 +283,7 @@ export async function runResponsesStreamLifecycle<TApi extends Api>(params: {
             signal: options?.signal,
           }
         : undefined;
-    const terminal = await processResponsesStream(hookedOpenAIStream, output, stream, model, {
+    await processResponsesStream(hookedOpenAIStream, output, stream, model, {
       ...processStreamOptions,
       promptCacheTtl: requestParams.prompt_cache_options?.ttl,
       resolveServiceTier: (responseTier, originalTier) =>
@@ -299,17 +298,6 @@ export async function runResponsesStreamLifecycle<TApi extends Api>(params: {
         sessionId: options?.sessionId,
       }),
     });
-
-    if (terminal && admittedRequest && !options?.signal?.aborted) {
-      recordResponsesContextUsage(
-        output,
-        model,
-        options,
-        admittedRequest,
-        terminal.output,
-        "provider",
-      );
-    }
     finalizeTransportStream({ stream, output, signal: options?.signal });
   } catch (error) {
     itemRecovery?.reject(error);

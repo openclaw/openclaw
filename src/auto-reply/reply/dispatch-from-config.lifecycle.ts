@@ -210,11 +210,7 @@ export function createDispatchReplyOperationCoordinator(
   ): Promise<DispatchReplyOperationAcquisition> => {
     const input = readReplySourceInput(params.replyOptions);
     const assertRequestCurrent = () => {
-      const sourceAuthority = input?.sourceAdapter?.authority;
-      sourceAuthority?.assertCurrent();
-      if (params.replyOptions?.operatorAuthority !== sourceAuthority) {
-        params.replyOptions?.operatorAuthority?.assertCurrent();
-      }
+      input?.sourceAdapter?.authority?.assertCurrent?.();
       params.replyOptions?.internalEventExecution?.assertCurrent?.();
     };
     const commandTurn = resolveCommandTurnContext(params.ctx);

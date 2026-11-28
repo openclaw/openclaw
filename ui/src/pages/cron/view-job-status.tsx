@@ -1,6 +1,8 @@
 import type { CronJob } from "../../api/types.ts";
 import { Icon } from "../../components/solid/icon.tsx";
 import { isCronJobRunning } from "../../lib/cron-status.ts";
+import { hasUnchangedCronSchedule } from "../../lib/cron/form-schedule.ts";
+import type { CronFormState } from "../../lib/cron/types.ts";
 import { formatUiExternalText } from "../../lib/format-error.ts";
 import { formatMs, formatRelativeTimestamp } from "../../lib/format.ts";
 import { formatCronSchedule } from "../../lib/presenter.ts";
@@ -42,6 +44,18 @@ export function describeJobNextRun(job: CronJob, absolute = false): string {
     : absolute
       ? t("cron.form.nextRunAt", { at: formatMs(next) })
       : t("cron.jobState.nextRelative", { at: formatRelativeTimestamp(next) });
+}
+
+/** The saved one-shot’s runtime belongs in the header, never in the authored time field. */
+export function describeEditedOneShotStatus(job: CronJob | undefined, form: CronFormState) {
+  if (job?.schedule.kind !== "at" || !hasUnchangedCronSchedule(form, job)) {
+    return undefined;
+  }
+  const status = describeJobNextRun(job, true);
+  // If the displayed time agrees with the input, there is no new information to show.
+  return status === t("cron.form.nextRunAt", { at: formatMs(Date.parse(job.schedule.at)) })
+    ? undefined
+    : status;
 }
 
 export function TriggerIndicator() {

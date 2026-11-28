@@ -27,6 +27,77 @@ const authStatus = (profileId: string, email: string) =>
   modelAuthStatus([{ profileId, type: "oauth", status: "ok", displayName: accountLabel, email }]);
 
 suite.define(() => {
+  it("loads accounts independently of the catalog and only enables the picker when ready", async () => {
+    await suite.withPage({ viewport: { width: 1280, height: 900 } }, async ({ page }) => {
+      const models = [{ id: "shared-alpha", name: "OpenAI Standard", provider: "openai" }];
+      const modelResult = {
+        models,
+        accountSelection: { kind: "automatic", label: "Automatic account selection" },
+      };
+      const gateway = await installMockGateway(page, {
+        agentModel: "openai/shared-alpha",
+        models,
+        methodResponses: {
+          "models.list": { models },
+        },
+      });
+      await page.goto(new URL("chat", suite.server.baseUrl).href);
+      const { picker, trigger } = modelPicker(page);
+      await trigger.waitFor();
+      await gateway.waitForRequest("models.list");
+      const rpc = "users.listModelAccounts";
+      const catalogReads = await gateway.deferNext("models.list");
+      const accountReads = await gateway.deferNext(rpc, {});
+      await gateway.emitGatewayEvent("chat.metadata.changed", { modelCatalogChanged: true });
+      await gateway.waitForRequest("models.list", { after: catalogReads });
+      expect(await gateway.getRequests(rpc)).toHaveLength(accountReads);
+      await trigger.click();
+      expect((await gateway.waitForRequest(rpc, { after: accountReads })).params).toEqual({});
+      await gateway.resolveDeferred("models.list", modelResult);
+      const accountToggle = picker.getByRole("button", { name: "Account", exact: true });
+      await polledText(accountToggle).toContain("Account: Auto");
+      await expect.poll(() => accountToggle.isDisabled()).toBe(true);
+      await polledVisible(accountToggle.locator(".chat-controls__account-spinner")).toBe(true);
+      const popover = picker.locator(".chat-controls__account-popover:popover-open");
+      expect(await popover.isVisible()).toBe(false);
+      const loadingWidth = await accountToggle.evaluate((button) => button.clientWidth);
+      expect(await gateway.getRequests(rpc)).toHaveLength(accountReads + 1);
+      await gateway.rejectDeferred(rpc, { message: "Saved accounts are temporarily unavailable" });
+      await expect.poll(() => accountToggle.isEnabled()).toBe(true);
+      await accountToggle.press("Enter");
+      await polledText(popover.getByRole("alert")).toContain(
+        "Saved accounts are temporarily unavailable",
+      );
+      const retryReads = await gateway.deferNext(rpc, {});
+      await popover.getByRole("button", { name: "Retry", exact: true }).click();
+      await gateway.waitForRequest(rpc, { after: retryReads });
+      expect(await accountToggle.isEnabled()).toBe(true);
+      await gateway.resolveDeferred(rpc, {
+        profileId: "test-person",
+        accounts: [
+          {
+            authProfileId: "openai:work",
+            label: "Work account",
+            provider: "openai",
+            authType: "oauth",
+            selected: false,
+          },
+        ],
+        links: [],
+      });
+      await expect.poll(() => accountToggle.isEnabled()).toBe(true);
+      await polledVisible(accountToggle.locator("svg")).toBe(true);
+      expect(await accountToggle.evaluate((button) => button.clientWidth)).toBe(loadingWidth);
+      const alternate = popover.getByRole("option", { name: "Work account" });
+      await polledVisible(alternate).toBe(true);
+      await accountToggle.click();
+      await polledVisible(popover).toBe(false);
+      await accountToggle.click();
+      await polledVisible(alternate).toBe(true);
+      expect(await gateway.getRequests(rpc)).toHaveLength(accountReads + 2);
+    });
+  });
+
   it("refreshes the mounted composer's account identity after an auth publication", async () => {
     await suite.withPage({ viewport: { width: 1280, height: 900 } }, async ({ page }) => {
       const models = [{ id: "shared-alpha", name: "Shared Alpha", provider: "openai" }];

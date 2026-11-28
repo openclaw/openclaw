@@ -3,13 +3,13 @@ import { constants, type BigIntStats, type Stats } from "node:fs";
 import fs, { type FileHandle } from "node:fs/promises";
 import path from "node:path";
 import { sameFileIdentity } from "@openclaw/fs-safe/advanced";
-import type { HeaderData } from "tar";
+import type { HeaderData } from "tar/raw";
 import { ignoreMissingPath } from "./errno.js";
 import { assertExpectedContent, type SqliteFileContent } from "./sqlite-snapshot-file.js";
 
 /** Open sources before emitting headers so a vanished name cannot leave a partial entry. */
 export async function* walkBackupTar(params: {
-  tar: Pick<typeof import("tar"), "Header" | "Pax">;
+  tar: Pick<typeof import("tar/raw"), "Header" | "Pax">;
   paths: readonly string[];
   signal?: AbortSignal;
   skip: (sourcePath: string) => boolean;

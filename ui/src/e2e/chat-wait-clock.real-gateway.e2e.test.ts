@@ -234,7 +234,7 @@ suite.define(() => {
           await expect.poll(() => provider.requests.length).toBeGreaterThan(0);
           await provider.waitForChild(signal);
           await expect.poll(async () => (await rows()).parent.endedAt ?? 0).toBeGreaterThan(0);
-          await waiting.getByText("Wait for subagents", { exact: true }).waitFor();
+          await waiting.getByText("Waiting for subagents", { exact: true }).waitFor();
           expect(await waiting.count()).toBe(1);
           expect(await clocks(parent)).toEqual([]);
           expect(

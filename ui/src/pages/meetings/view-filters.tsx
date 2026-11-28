@@ -1,4 +1,7 @@
-import { normalizeNullableString } from "@openclaw/normalization-core/string-coerce";
+import {
+  normalizeNullableString,
+  readStringValue,
+} from "@openclaw/normalization-core/string-coerce";
 import { createMemo, onSettled, Show } from "solid-js";
 import { Icon } from "../../components/solid/icon.tsx";
 import { createPhoneSheetLayout, PhoneSheet } from "../../components/solid/phone-sheet.tsx";
@@ -6,6 +9,7 @@ import { Popover, type PopoverHandle } from "../../components/solid/popover.tsx"
 import { t } from "../../lib/reactive/i18n.ts";
 import { liveValue } from "../../lib/reactive/live-value.ts";
 import {
+  isTranscriptQueryTooLong,
   TRANSCRIPT_ADVANCED_FILTER_KEYS,
   TRANSCRIPT_FILTER_KEYS,
   TRANSCRIPT_QUERY_LIMIT,
@@ -13,7 +17,13 @@ import {
 import type { TranscriptsViewProps } from "./view-types.ts";
 
 function FilterField(
-  props: TranscriptsViewProps & { name: string; label: string; type?: string; compact?: boolean },
+  props: TranscriptsViewProps & {
+    name: string;
+    label: string;
+    type?: string;
+    compact?: boolean;
+    invalid?: boolean;
+  },
 ) {
   let input!: HTMLInputElement;
   onSettled(() => (props.name === "query" ? props.onFocusTarget?.("search", input) : undefined));
@@ -31,7 +41,9 @@ function FilterField(
         type={props.type ?? "search"}
         aria-label={props.label}
         placeholder={props.compact ? props.label : undefined}
-        maxlength={TRANSCRIPT_QUERY_LIMIT}
+        maxlength={props.name === "query" ? undefined : TRANSCRIPT_QUERY_LIMIT}
+        aria-invalid={props.invalid ? "true" : undefined}
+        aria-describedby={props.invalid ? "transcript-query-length-error" : undefined}
         ref={[liveValue(() => props.drafts[props.name] ?? ""), (element) => (input = element)]}
         onInput={(event) => props.onDraft(props.name, event.currentTarget.value)}
       />
@@ -64,7 +76,7 @@ function AdvancedFilterFields(props: TranscriptsViewProps & { hint: string }) {
   );
 }
 
-export function Filters(props: TranscriptsViewProps & { phone: boolean }) {
+export function Filters(props: TranscriptsViewProps & { phone: boolean; queryTooLong: boolean }) {
   // The sheet stays inside the form, so its fields submit with the search field.
   let popover: PopoverHandle | undefined;
   const phoneSheet = createPhoneSheetLayout();
@@ -99,8 +111,13 @@ export function Filters(props: TranscriptsViewProps & { phone: boolean }) {
       onSubmit={(event) => {
         event.preventDefault();
         const data = new FormData(event.currentTarget);
-        const patch: Record<string, string | null> = { cursor: null };
-        for (const key of TRANSCRIPT_FILTER_KEYS) {
+        const query = readStringValue(data.get("query")) ?? "";
+        if (isTranscriptQueryTooLong(query)) {
+          props.onDraft("query", query);
+          return;
+        }
+        const patch: Record<string, string | null> = { cursor: null, query: query || null };
+        for (const key of TRANSCRIPT_ADVANCED_FILTER_KEYS) {
           patch[key] = normalizeNullableString(data.get(key));
         }
         popover?.hide();
@@ -110,6 +127,7 @@ export function Filters(props: TranscriptsViewProps & { phone: boolean }) {
       <FilterField
         {...props}
         name="query"
+        invalid={props.queryTooLong}
         label={t("transcripts.titleFilter")}
         compact={props.phone}
       />

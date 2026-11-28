@@ -40,7 +40,10 @@ export async function withResolvedMatrixSendClient<T>(
       // A pre-resolved client used to skip this guard. Retirement aborts the
       // monitor signal while that client can still belong to another monitor.
       const monitorSignal = getMatrixMonitorTaskSignal();
-      if (!opts.signal && !opts.assertDirectAdapterHandoff && !monitorSignal) {
+      const signals = [opts.signal, monitorSignal, abortSignal].filter(
+        (signal): signal is AbortSignal => signal !== undefined,
+      );
+      if (signals.length === 0 && !opts.assertDirectAdapterHandoff) {
         return run(client, abortSignal);
       }
       return withMatrixSendCurrentness(
@@ -54,6 +57,7 @@ export async function withResolvedMatrixSendClient<T>(
           abortSignal?.throwIfAborted();
         },
         () => run(client, abortSignal),
+        signals.length > 0 ? AbortSignal.any(signals) : undefined,
       );
     },
   );

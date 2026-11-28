@@ -97,7 +97,7 @@ describe("plugin forked turns through the real Gateway", () => {
               args: { note: "fork saw the turn" },
               backgroundRun: { sourceSessionKey: sessionKey, ownerPluginId: "fork-proof" },
               runId,
-              // The authenticated operator's turn keeps its owner authority in the fork.
+              // The admin caller's owner authority reaches the fork's tools.
               senderIsOwner: true,
             },
           ]);
@@ -165,9 +165,10 @@ describe("plugin forked turns through the real Gateway", () => {
             ok: true,
             result: { status: "settled" },
           });
-          // A channel sender's turn does not gain owner authority in the fork.
+          // Owner authority is the caller's, never the turn's: the admin's fork of a channel
+          // sender's turn runs as owner, while sender policy still follows the turn.
           expect(fixture.proof.toolCalls).toEqual([
-            expect.objectContaining({ senderIsOwner: false }),
+            expect.objectContaining({ senderIsOwner: true }),
           ]);
           // The fork runs on the model the anchored turn ran on.
           expect(fixture.forkRequests[0]?.model).toBe(fixture.foregroundRequests.at(-1)?.model);
@@ -229,6 +230,8 @@ describe("plugin forked turns through the real Gateway", () => {
             await expect(
               fixture.fork(allowed, { provider: "mock-openai", model: "fork-proof" }, writer),
             ).resolves.toMatchObject({ ok: true, result: { status: "settled" } });
+            // A caller without owner authority forks as an explicit non-owner.
+            expect(fixture.proof.toolCalls.at(-1)).toMatchObject({ senderIsOwner: false });
           } finally {
             await disconnectGatewayClient(writer);
           }
@@ -547,6 +550,26 @@ describe("plugin forked turns through the real Gateway", () => {
             ok: true,
             result: { status: "settled" },
           });
+
+          // A delivery mirror is an assistant row no provider answered. A fork through it runs
+          // on the model of the turn's last provider response, never on the mirror's marker.
+          const mirrored = await storedTurn([
+            { role: "user", content: "Hello", timestamp: 1 },
+            assistant("Hi"),
+            {
+              ...assistant("Hi"),
+              api: "openclaw-transcript",
+              provider: "openclaw",
+              model: "delivery-mirror",
+              timestamp: 3,
+            },
+          ]);
+          await expect(fixture.fork(mirrored, {})).resolves.toMatchObject({
+            ok: true,
+            result: { status: "settled" },
+          });
+          // Settlement carries the run's own outcome; a fork sent to the marker fails there.
+          expect(fixture.proof.settled.at(-1)).toMatchObject({ ok: true, error: undefined });
 
           // Steering joins the running turn; policy follows the initiating sender (42).
           const steered = await storedTurn([

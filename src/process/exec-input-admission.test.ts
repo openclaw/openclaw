@@ -3,6 +3,7 @@ import { once } from "node:events";
 import { existsSync } from "node:fs";
 import path from "node:path";
 import process from "node:process";
+import { Writable } from "node:stream";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { createDeferred, nextEventLoopTurn, withinTest } from "../../test/helpers/promise.js";
 import { useAutoCleanupTempDirTracker } from "../../test/helpers/temp-dir.js";
@@ -308,15 +309,14 @@ describe("child input admission", () => {
       const argv = [
         process.execPath,
         "-e",
-        "require('node:fs').closeSync(0);process.on('message',()=>process.exit(0));require('node:fs').writeSync(1,'ready')",
+        "const fs=require('node:fs');fs.closeSync(0);fs.readFile(3,'utf8',(error,text)=>process.exit(!error&&text==='finish'?0:1));fs.writeSync(1,'ready')",
       ];
       const spawnOptions = {
         buffer: false,
         detached: true,
         encoding: "buffer",
-        ipc: true,
         reject: false,
-        stdio: ["pipe", "pipe", "pipe"],
+        stdio: ["pipe", "pipe", "pipe", "pipe"],
       } satisfies Parameters<typeof execSpawn.spawnCommandWithInvocation>[1];
       const spawned = execSpawn.spawnCommandWithInvocation<{ buffer: false }>(argv, spawnOptions);
       let restoreSpawn: (() => void) | undefined;
@@ -331,9 +331,13 @@ describe("child input admission", () => {
             return spawned;
           });
         restoreSpawn = () => spawnSpy.mockRestore();
+        const control = spawned.child.nodeChildProcess.stdio[3];
+        if (!(control instanceof Writable)) {
+          throw new Error("Expected a writable child control pipe");
+        }
         const beforeInput = vi.fn(() => {
-          // Keep the peer alive through input publication; cancellation may win the reply.
-          setImmediate(() => spawned.child.nodeChildProcess.send("finish", () => {}));
+          // Release the control pipe only after admission has published stdin.
+          setImmediate(() => control.end("finish"));
         });
         const work = runCommandWithTimeout(argv, {
           input,

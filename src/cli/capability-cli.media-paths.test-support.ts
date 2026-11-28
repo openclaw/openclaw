@@ -1,10 +1,15 @@
 import fs from "node:fs/promises";
 import path from "node:path";
 import { expect, it, type Mock } from "vitest";
-import type { describeVideoFile, transcribeAudioFile } from "../media-understanding/runtime.js";
+import type {
+  describeVideoFile,
+  runMediaFileWithModel,
+  transcribeAudioFile,
+} from "../media-understanding/runtime.js";
+import { defaultRuntime } from "../runtime.js";
 import { runCap } from "./capability-cli.test-harness.js";
 
-/** Audio and video `--file` paths resolve through symlinked parents the way the OS does. */
+/** Audio and video `--file` paths resolve like the OS does; `--model` pins the requested model. */
 export function registerMediaPathCapabilityCliTests({
   mocks,
   tempDirs,
@@ -13,6 +18,7 @@ export function registerMediaPathCapabilityCliTests({
   mocks: {
     transcribeAudioFile: Mock<typeof transcribeAudioFile>;
     describeVideoFile: Mock<typeof describeVideoFile>;
+    runMediaFileWithModel: Mock<typeof runMediaFileWithModel>;
   };
   tempDirs: { make: (prefix: string) => string };
   firstJsonOutput: () => Record<string, unknown> | undefined;
@@ -55,4 +61,50 @@ export function registerMediaPathCapabilityCliTests({
       expect(mocks.transcribeAudioFile).not.toHaveBeenCalled();
     },
   );
+
+  it("reports the recorded reason audio transcription was skipped", async () => {
+    mocks.transcribeAudioFile.mockResolvedValueOnce({
+      text: undefined,
+      decision: {
+        capability: "audio",
+        outcome: "skipped",
+        attachments: [
+          {
+            attachmentIndex: 0,
+            attempts: [
+              { type: "cli", outcome: "skipped", reason: "maxBytes: Exceeds 4096 bytes." },
+            ],
+          },
+        ],
+      },
+    });
+    await expect(runCap("infer", "audio", "transcribe", "--file", "memo.wav")).rejects.toThrow(
+      "exit 1",
+    );
+    expect(defaultRuntime.error).toHaveBeenCalledWith(
+      expect.stringContaining("Exceeds 4096 bytes."),
+    );
+  });
+
+  it("pins --model, reports actual audio attribution and forwards request hints", async () => {
+    const hints = { language: "en", prompt: "Focus on names" };
+    mocks.runMediaFileWithModel.mockResolvedValueOnce({
+      text: "meeting notes",
+      provider: "fixture-asr",
+      model: "fixture-actual-model",
+    });
+    const args = ["--model", "openai/whisper-1", "--language", "en", "--prompt", hints.prompt];
+    await runCap("infer", "audio", "transcribe", "--file", "memo.m4a", ...args, "--json");
+    expect(mocks.transcribeAudioFile).not.toHaveBeenCalled();
+    expect(mocks.runMediaFileWithModel.mock.calls[0]?.[0]).toMatchObject({
+      ...hints,
+      capability: "audio",
+      modelOverride: { provider: "openai", model: "whisper-1" },
+    });
+    expect(firstJsonOutput()).toMatchObject({
+      provider: "fixture-asr",
+      model: "fixture-actual-model",
+      outputs: [{ path: path.resolve("memo.m4a"), text: "meeting notes" }],
+    });
+  });
 }

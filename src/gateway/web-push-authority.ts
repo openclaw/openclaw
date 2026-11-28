@@ -19,7 +19,11 @@ import {
   prepareOpenClawIdTunnelPrincipalLookup,
   type OpenClawIdTunnelPrincipal,
 } from "./openclaw-id/tunnel-principal.js";
-import { isNamedOperatorRoleEnforcementEnabled } from "./operator-role-enforcement.js";
+import {
+  isNamedOperatorRoleEnforcementEnabled,
+  isOperatorRoleEnforcedFor,
+  operatorRoleSubject,
+} from "./operator-role-enforcement.js";
 import { resolveOperatorRolePolicyForAssignment } from "./operator-role-policy.js";
 import type { GatewayClient } from "./server-methods/types.js";
 import type { PreparedSessionMutationFacts } from "./session-sharing-policy.js";
@@ -106,10 +110,15 @@ export function listCurrentWebPushTargets(
             profile?.role ?? null,
             cfg,
             profile?.githubLogin ?? null,
+            operatorRoleSubject(profile),
           )
         : undefined,
     );
-    if (isNamedOperatorRoleEnforcementEnabled(cfg) && !rolePolicy && principal?.kind !== "owner") {
+    if (
+      isOperatorRoleEnforcedFor(cfg, operatorRoleSubject(profile)) &&
+      !rolePolicy &&
+      principal?.kind !== "owner"
+    ) {
       return [];
     }
     const scopesAllowed = (requestedScopes: readonly string[]) =>

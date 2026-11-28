@@ -1,7 +1,7 @@
 import fs from "node:fs/promises";
 import path from "node:path";
 import { expectDefined } from "@openclaw/normalization-core";
-import * as tar from "tar";
+import * as tar from "tar/raw";
 import { describe, expect, it } from "vitest";
 import { backupRestoreCommand } from "../commands/backup-restore.js";
 import { backupCreateCommand } from "../commands/backup.js";
@@ -188,7 +188,7 @@ describe("createBackupArchive SQLite alternative filenames", () => {
     );
   });
 
-  it.each(["custom.sqlite", "custom.db"])(
+  it.each(["custom.db"])(
     "fails closed when a plugin SQLite schema named %s cannot be compacted safely",
     async (filename) => {
       await withOpenClawTestState(

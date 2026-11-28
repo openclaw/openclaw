@@ -1,5 +1,5 @@
 import { beforeEach, describe, expect, it, vi } from "vitest";
-import { createAdmittedRunOperatorAuthority } from "../../agents/admitted-run-context.js";
+import { createTestOperatorAuthority } from "../../agents/admitted-run-context.test-support.js";
 import { FailoverError } from "../../agents/failover-error.js";
 import { prepareOperatorModelPolicy } from "../../agents/operator-model-policy.js";
 import { createDiagnosticLogRecordCapture } from "../../logging/test-helpers/diagnostic-log-capture.js";
@@ -129,6 +129,39 @@ describe("generateConversationLabel", () => {
       }
     } finally {
       clock.mockRestore();
+      logs.cleanup();
+      warningLog.cleanup();
+    }
+  });
+
+  it("makes no utility attempt or warning when the role refuses every utility model", async () => {
+    const warningLog = createWarnLogCapture("conversation-label");
+    const logs = createDiagnosticLogRecordCapture();
+    const cfg = {
+      agents: {
+        entries: { main: {} },
+        defaults: modelConfig("openai/gpt-main", "openai/gpt-mini", []).agents.defaults,
+      },
+    };
+    const operatorAuthority = createTestOperatorAuthority({
+      profileId: "label-guest",
+      scopes: ["operator.write"],
+      modelPolicy: prepareOperatorModelPolicy({
+        cfg,
+        policy: { sourceAgent: "main", allow: ["openai/gpt-main"] },
+        manifestPlugins: [],
+      }),
+    });
+    try {
+      await expect(generate({ cfg, agentId: "main", operatorAuthority })).resolves.toBe(
+        "Topic label",
+      );
+      await logs.flush();
+      expect(
+        logs.records.filter((record) => record.message.includes("Conversation label generation")),
+      ).toEqual([]);
+      expectCompletion({ model: "gpt-main", operatorAuthority });
+    } finally {
       logs.cleanup();
       warningLog.cleanup();
     }
@@ -295,10 +328,9 @@ describe("generateConversationLabelWithFallback", () => {
         ).agents.defaults,
       },
     };
-    const operatorAuthority = createAdmittedRunOperatorAuthority({
+    const operatorAuthority = createTestOperatorAuthority({
       profileId: "label-reader",
       scopes: ["operator.write"],
-      assertCurrent: () => {},
       modelPolicy: prepareOperatorModelPolicy({
         cfg,
         policy: {

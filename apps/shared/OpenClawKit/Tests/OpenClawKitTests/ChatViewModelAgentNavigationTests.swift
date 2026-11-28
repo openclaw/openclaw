@@ -303,23 +303,62 @@ struct ChatViewModelAgentNavigationTests {
         #expect(model.sessionKey == "agent:main:current")
     }
 
-    @Test func `agent management lists another owner without navigating or replacing the draft`() async throws {
-        let rows = try JSONDecoder().decode(OpenClawChatSessionsListResponse.self, from: Data(#"""
-        {"sessions":[{"key":"agent:research:plan","agentId":"research","sessionId":"plan"}]}
-        """#.utf8)).sessions
+    @Test(arguments: [false, true])
+    func `main and scoped management reads preserve pin order without navigating or replacing the draft`(
+        legacy: Bool) async throws
+    {
+        func roster(_ agent: String) -> [OpenClawChatSessionEntry] {
+            let alpha = OpenClawChatSessionEntry(
+                key: "alpha",
+                agentId: agent,
+                updatedAt: 10,
+                sessionId: "\(agent)-a",
+                pinned: true,
+                pinnedAt: legacy ? 9 : nil)
+            let beta = OpenClawChatSessionEntry(
+                key: "beta",
+                agentId: agent,
+                updatedAt: 20,
+                sessionId: "\(agent)-b",
+                pinned: true,
+                pinnedAt: legacy ? 5 : nil)
+            return (legacy ? [beta, alpha] : [alpha, beta]) + [
+                .init(key: "older", agentId: agent, updatedAt: 1), .init(key: "recent", agentId: agent, updatedAt: 100),
+            ]
+        }
         let transport = AgentNavigationTransport(
             catalogs: [.success(self.catalog())],
-            sessionsByAgentID: ["research": rows])
+            sessionsByAgentID: ["main": roster("main"), "research": roster("research")])
         let fixture = AgentNavigationFixture(transport: transport, sessionKey: "agent:main:current")
         defer { fixture.close() }
         let model = fixture.viewModel
+        model.enableSidebarData()
         model.input = "Keep this draft"
-        let result = await model.fetchSessionList(search: nil, archived: false, agentID: "research")
-        #expect(result.map(\.key) == ["agent:research:plan"])
-        #expect(await transport.listedAgentIDs.last == "research")
+        await model.fetchSessions(limit: 50)
+        let expected = ["alpha", "beta", "recent", "older"]
+        #expect(model.sessions.map(\.key) == expected)
+        let owner = try #require(model.sidebarData)
+        let read = owner.beginRead()
+        let result = await model.fetchSessionList(
+            search: nil, archived: false, agentID: "research", preservingPersonalPinOrder: true)
+        let scoped = owner.project(owner.receive(result, read: read))
+        #expect(scoped.map(\.key) == expected)
+        #expect(scoped.first?.sessionId == "research-a")
+        #expect(model.sessions.first?.sessionId == "main-a")
+        model.handleTransportEvent(.sessionsChanged(.init(
+            sessionKey: "beta",
+            agentId: "main",
+            phase: "start",
+            session: .init(key: "beta", agentId: "main", updatedAt: 30, sessionId: "main-b", status: "running"))))
+        #expect(model.sessions.first { $0.key == "beta" }?.status == "running")
+        #expect(model.sessions.map(\.key) == expected)
+        #expect(await transport.listedAgentIDs == ["main", "research"])
         #expect(model.sessionKey == "agent:main:current")
         #expect(model.input == "Keep this draft")
-        _ = await model.fetchSessionList(search: nil, archived: false)
+        let pickerOrder = legacy ? ["alpha", "beta"] : ["beta", "alpha"]
+        #expect(model.sessionChoices.filter(\.isPinned).map(\.key) == pickerOrder)
+        let ordinary = await model.fetchSessionList(search: nil, archived: false)
+        #expect(ordinary.filter(\.isPinned).map(\.key) == pickerOrder)
         #expect(await transport.listedAgentIDs.last == "main")
     }
 
@@ -410,7 +449,7 @@ struct ChatViewModelAgentNavigationTests {
 
     @Test(arguments: ["per-sender|inbox|main", "global|inbox|main"])
     func `bare global selection preserves its owner and distinct drafts after default changes`(
-        contract: String) async throws
+        contract: String) async
     {
         let transport = AgentNavigationTransport(catalogs: [.success(self.catalog(contract: contract))])
         let fixture = AgentNavigationFixture(transport: transport, routingContract: contract)
@@ -498,7 +537,7 @@ struct ChatViewModelAgentNavigationTests {
         #expect(vm.input == "Ordinary global draft")
     }
 
-    @Test func `an abort keeps its captured global owner across navigation between runs`() async throws {
+    @Test func `an abort keeps its captured global owner across navigation between runs`() async {
         let gate = AgentNavigationGate()
         let transport = AgentNavigationTransport(catalogs: [.success(self.catalog())], firstAbortGate: gate)
         let fixture = AgentNavigationFixture(transport: transport)
@@ -539,7 +578,7 @@ struct ChatViewModelAgentNavigationTests {
     }
 
     @Test(arguments: ["per-agent|inbox|main", "global|inbox|main"])
-    func `agent selection reopens its main and keeps sends and new chats on that agent`(contract: String) async throws {
+    func `agent selection reopens its main and keeps sends and new chats on that agent`(contract: String) async {
         let transport = AgentNavigationTransport(catalogs: [.success(self.catalog(contract: contract))])
         let fixture = AgentNavigationFixture(transport: transport, routingContract: contract)
         defer { fixture.close() }
@@ -593,7 +632,7 @@ struct ChatViewModelAgentNavigationTests {
     }
 
     @Test(arguments: ["per-agent|inbox|main", "global|inbox|main"])
-    func `deleting a selected agent thread returns to that agents primary conversation`(contract: String) async throws {
+    func `deleting a selected agent thread returns to that agents primary conversation`(contract: String) async {
         let transport = AgentNavigationTransport(catalogs: [.success(self.catalog(contract: contract))])
         let fixture = AgentNavigationFixture(
             transport: transport,
@@ -647,7 +686,7 @@ struct ChatViewModelAgentNavigationTests {
     }
 
     @Test(arguments: [false, true])
-    func `reconnect discards a previous route catalog response`(replacement: Bool) async throws {
+    func `reconnect discards a previous route catalog response`(replacement: Bool) async {
         let gate = AgentNavigationGate()
         let updated = OpenClawChatAgentsListResponse(defaultId: "new", agents: [.init(id: "new")])
         let transport = AgentNavigationTransport(

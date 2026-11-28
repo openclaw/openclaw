@@ -1,17 +1,54 @@
-import fs from "node:fs/promises";
-import path from "node:path";
 import { expect, it } from "vitest";
 import {
   createUpdateRun,
   finishUpdateRun,
+  getUpdateRun,
+  recordUpdateRunOwedStep,
   recordUpdateRunStep,
 } from "../../infra/update-run-ledger.js";
 import { printResult } from "./progress.js";
 import { updateStatusCommand } from "./status.js";
 
 export function registerUpdateStatusWarningTests(readConsoleOutput: () => string) {
-  it.each(["summary", "report", "status"] as const)(
-    "shows every recorded warning and recovery path in the human %s",
+  for (const surface of ["summary", "status"] as const) {
+    it.each(["completed", "failed", "skipped", undefined] as const)(
+      `settles historical retirement warnings only with a completed receipt in ${surface} (receipt=%s)`,
+      async (status) => {
+        const run = createUpdateRun({ trigger: "cli" });
+        const retirement = "finalize:doctor:model-retirement";
+        const completion = "Deferred model retirement repair completed after plugin convergence.";
+        const unrelated = "Other repair still pending.";
+        if (status) {
+          recordUpdateRunStep(run.runId, { step: retirement, status });
+        }
+        recordUpdateRunStep(run.runId, {
+          step: `warning:${retirement}`,
+          status: "completed",
+          detail: completion,
+        });
+        recordUpdateRunStep(run.runId, {
+          step: "warning:doctor",
+          status: "completed",
+          detail: unrelated,
+        });
+        const saved = finishUpdateRun(run.runId, { status: "succeeded" });
+        if (surface === "status") {
+          await updateStatusCommand({});
+        } else {
+          await printResult(
+            { runId: run.runId, status: "ok", mode: "npm", steps: [], durationMs: 0 },
+            {},
+          );
+        }
+        expect(readConsoleOutput()).toContain(`Warning: ${unrelated}`);
+        expect(readConsoleOutput().includes(`Warning: ${completion}`)).toBe(status !== "completed");
+        expect(getUpdateRun(run.runId)?.steps).toEqual(saved.steps);
+      },
+    );
+  }
+
+  it.each(["summary", "status"] as const)(
+    "retains every recorded warning and recovery path after the human %s",
     async (surface) => {
       const run = createUpdateRun({ trigger: "cli" });
       const snapshotDirectory = `/fixture/${"long-installation-prefix/".repeat(16)}.openclaw.package-backup-test.databases`;
@@ -25,7 +62,7 @@ export function registerUpdateStatusWarningTests(readConsoleOutput: () => string
         {
           step: "warning:database snapshot",
           detail:
-            "Database changed during capture; its snapshot requires manual recovery: /fixture/agents/analyst/agent/openclaw-agent.sqlite",
+            "Database write generation changed or could not be confirmed during capture (the running Gateway may have written to it); automatic rollback keeps the live database instead of this snapshot: /fixture/agents/analyst/agent/openclaw-agent.sqlite",
         },
         {
           step: "warning:database snapshot:3",
@@ -44,6 +81,7 @@ export function registerUpdateStatusWarningTests(readConsoleOutput: () => string
       for (const warning of warnings) {
         recordUpdateRunStep(run.runId, { ...warning, status: "completed" });
       }
+      recordUpdateRunOwedStep(run.runId, "shell-completion", "Completion directory is read-only.");
       finishUpdateRun(run.runId, { status: "succeeded" });
       if (surface === "status") {
         await updateStatusCommand({});
@@ -53,17 +91,19 @@ export function registerUpdateStatusWarningTests(readConsoleOutput: () => string
           {},
         );
       }
-      const output =
-        surface === "report"
-          ? await fs.readFile(
-              path.join(process.env.OPENCLAW_STATE_DIR!, "update-reports", `${run.runId}.md`),
-              "utf8",
-            )
-          : readConsoleOutput();
-      for (const { detail } of warnings) {
-        expect.soft(output).toContain(`Warning: ${detail}`);
-        expect.soft(output.indexOf(`Warning: ${detail}`)).toBeLessThan(output.indexOf(diagnostic));
+      expect(readConsoleOutput()).toContain("OpenClaw updated");
+      expect(readConsoleOutput()).toContain("Shell completion refresh is owed");
+      expect(readConsoleOutput()).toContain("openclaw update repair");
+      const recorded = getUpdateRun(run.runId);
+      for (const warning of warnings) {
+        expect(readConsoleOutput()).toContain(warning.detail);
+        expect(recorded?.steps).toContainEqual(
+          expect.objectContaining({ ...warning, status: "completed" }),
+        );
       }
+      expect(recorded?.steps).toContainEqual(
+        expect.objectContaining({ step: "diagnostic:database snapshot", detail: diagnostic }),
+      );
     },
   );
 }

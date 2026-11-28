@@ -101,6 +101,7 @@ export const GATEWAY_CLIENT_CAPS = {
   RUN_TOOL_BINDINGS: "run-tool-bindings",
   ROSTER_MESSAGE_BODIES_OPTIONAL: "roster-message-bodies-optional",
   SESSION_SCOPED_EVENTS: "session-scoped-events",
+  PERSONAL_SESSION_PINS: "personal-session-pins",
   SESSION_ROW_DELTAS: "session-row-deltas",
   SESSION_EVENT_FIELD_REFS: "session-event-field-refs",
   PLUGIN_APPROVALS: "plugin-approvals",

@@ -40,7 +40,7 @@ function start(
   const completion = runRespawnChildWithSignalBridge({
     command: "/usr/bin/node",
     args: ["/repo/openclaw/dist/entry.js"],
-    env: { OPENCLAW_NODE_OPTIONS_READY: "1" },
+    env: { OPENCLAW_NODE_EXTRA_CA_CERTS_READY: "1" },
     onError,
     detachForProcessTree: options.detached,
   });

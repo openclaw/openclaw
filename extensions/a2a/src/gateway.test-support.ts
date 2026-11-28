@@ -40,13 +40,11 @@ export function createA2aGatewayFixture(
     unresolvedPeers: [],
     unresolvedOutboundPeers: [],
   };
-  const statusPatchSink = vi.fn();
   const ctx = createStartAccountContext({
     account,
     cfg: options.cfg,
     abortSignal: controller.signal,
-    statusPatchSink,
   });
   ctx.channelRuntime = runtime.channel;
-  return { registry, runtime, controller, account, statusPatchSink, ctx };
+  return { registry, controller, account, ctx };
 }

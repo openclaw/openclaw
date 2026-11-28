@@ -540,22 +540,9 @@ async function wakeMediaGenerationTaskCompletionOnce(
   if (delivery.delivered) {
     return { status: "delivered" };
   }
-  if (delivery.disposition === "session_queued") {
+  // The durable media queue owns the handoff; its receipt settles this completion.
+  if (delivery.path === "queued") {
     return { status: "queued" };
-  }
-  if (delivery.disposition === "retryable" || delivery.reason === "completion_handoff_pending") {
-    return { status: "pending" };
-  }
-  if (delivery.disposition === "ambiguous") {
-    log.warn("Media generation completion delivery stopped after terminal fallback", {
-      taskId: handle.taskId,
-      runId: handle.runId,
-      toolName: params.toolName,
-      error: delivery.error,
-    });
-    // Send evidence makes another attempt unsafe even when the transport's
-    // terminal acknowledgment failed, so settle without risking a duplicate.
-    return { status: "delivered" };
   }
   if (delivery.error) {
     log.error("Media generation completion wake failed; requester session was not woken", {

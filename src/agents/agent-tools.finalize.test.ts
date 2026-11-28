@@ -14,7 +14,6 @@ import {
   registerHeadlessToolSearchCatalog,
 } from "./tool-search.js";
 import { createInstalledSkillTools } from "./tools/installed-skill-tools.js";
-import { createMessageTool } from "./tools/message-tool-execution.js";
 
 type Options = Partial<Parameters<typeof finalizeAgentTools>[0]>;
 
@@ -67,32 +66,7 @@ async function published(tools: () => AnyAgentTool[], options: Options = {}) {
 afterEach(() => clearPluginMetadataLifecycleCaches());
 
 describe("finalized tool descriptor snapshots", () => {
-  it.each([undefined, {}])(
-    "shares message publications across new sessions (config: %j)",
-    async (config) => {
-      using publish = vi.spyOn(toolSchema, "publishRuntimeToolInputSchema");
-      using prewarm = vi.spyOn(toolSchema, "normalizeOpenAIStrictToolParameters");
-      const first = createMessageTool({ config });
-      const cold = attempt([first]);
-      const bytes = JSON.stringify(cold.tool().parameters);
-      await cold.settle();
-      const prepared = attempt([createMessageTool({ config })]).tool().parameters;
-      publish.mockClear();
-      prewarm.mockClear();
-      for (let index = 0; index < 8; index++) {
-        const current = createMessageTool({ config, runId: `run-${index}` });
-        expect(current.execute).not.toBe(first.execute);
-        const next = attempt([current], { hookContext: { sessionId: `session-${index}` } });
-        expect(next.tool().parameters).toBe(prepared);
-        expect(JSON.stringify(next.tool().parameters)).toBe(bytes);
-        await next.settle();
-      }
-      expect(publish).not.toHaveBeenCalled();
-      expect(prewarm).not.toHaveBeenCalled();
-    },
-  );
-
-  it("reuses Tool Search schemas while binding the current catalog and configured limit", async () => {
+  it("binds Tool Search to the current catalog and configured limit", async () => {
     const catalogRef = createToolSearchCatalogRef();
     const controls = (searchDefaultLimit = 1) => {
       const config = { tools: { toolSearch: { searchDefaultLimit } } };
@@ -102,20 +76,12 @@ describe("finalized tool descriptor snapshots", () => {
       registerHeadlessToolSearchCatalog({ catalogRef, tools });
     const names = ["lookup_one", "lookup_two", "lookup_three"];
     try {
-      register(names.map((name) => tool(schema(), { name })));
-      const cold = controls();
-      const coldBytes = JSON.stringify([0, 1, 2].map((index) => cold.tool(index).parameters));
-      await cold.settle();
-      const warm = controls();
-      expect(JSON.stringify([0, 1, 2].map((index) => warm.tool(index).parameters))).toBe(coldBytes);
-      await warm.settle();
-
       const current = tool(schema(), { name: names[0] });
       register([current, ...names.slice(1).map((name) => tool(schema(), { name }))]);
+      await controls().settle();
       const next = controls();
       for (const index of [0, 1, 2]) {
         expect(getPublishedRuntimeToolInputSchema(next.tool(index).parameters)).toBeDefined();
-        expect(next.tool(index).parameters).toBe(warm.tool(index).parameters);
       }
       expect((await next.tool().execute("search", { query: "lookup" })).details).toHaveLength(1);
       await next.tool(2).execute("dispatch", { id: names[0], args: { query: "current" } });

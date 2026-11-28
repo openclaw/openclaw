@@ -21,6 +21,7 @@ import {
   openOpenClawStateDatabase,
   runOpenClawStateWriteTransaction,
 } from "../state/openclaw-state-db.js";
+import { prepareUserProfileCatalog } from "../state/user-profile-list.js";
 import { listProfiles } from "../state/user-profile-reads.js";
 import {
   ensureCanonicalUserProfileForEmail,
@@ -190,6 +191,7 @@ export async function createGitHubPublicationRequesterFixture(params: {
       client.internal.operatorRoleActor = { kind: "system" };
     }
   }
+  onTestFinished((await prepareUserProfileCatalog()).release);
   prepareGatewayConnectOperatorAccess(client);
   const context = {
     getRuntimeConfig: currentGitHubPublicationConfig,
@@ -242,13 +244,16 @@ async function createRequesterPolicySources(
   const maintainerSource = await capture(maintainerProfile, ["operator.admin"]);
   const database = openOpenClawStateDatabase();
   const publishedTitles: string[] = [];
+  const publishedBodies: string[] = [];
   const externalWrites: string[] = [];
   overrideCommands((argv, input) => {
     if (argv.includes("push") || argv.includes("POST") || argv.includes("graphql")) {
       externalWrites.push(argv.join(" "));
     }
     if (argv.includes("POST") && argv.some((arg) => arg.endsWith("/pulls"))) {
-      publishedTitles.push(JSON.parse(input!).title);
+      const { title, body } = JSON.parse(input!);
+      publishedTitles.push(title);
+      publishedBodies.push(body);
     }
   });
   return {
@@ -262,6 +267,7 @@ async function createRequesterPolicySources(
     maintainerSource,
     maintainerProfile,
     publishedTitles,
+    publishedBodies,
     externalWrites,
     async revoke() {
       await setCanonicalUserProfileRole(guestProfile, "revoked");
@@ -444,7 +450,7 @@ export function withPublicationGuestRole(
   };
 }
 
-export async function prepareVisitorPublicationFixture(f: {
+async function prepareVisitorPublicationFixture(f: {
   config: OpenClawConfig;
   session: { sessionKey: string };
   maintainer: Requester;

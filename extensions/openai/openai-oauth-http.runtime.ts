@@ -1,5 +1,7 @@
 import { fetchWithSsrFGuard } from "openclaw/plugin-sdk/ssrf-runtime";
 
+export const OPENAI_CODEX_CLIENT_ID = "app_EMoamEEZ73f0CkXaXp7hrann";
+
 export async function withOpenAIOAuthResponse<T>(
   request: Parameters<typeof fetchWithSsrFGuard>[0],
   consume: (response: Response) => Promise<T>,

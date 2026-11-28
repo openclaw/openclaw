@@ -92,6 +92,7 @@ export type GatewayLifecycleRuntime = {
     to: string;
     accountId?: string;
     threadId?: string | number;
+    replyToId?: string;
     text: string;
     idempotencyKey: string;
     isCurrent?: (cfg: OpenClawConfig) => boolean;

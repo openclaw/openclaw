@@ -1,3 +1,4 @@
+import path from "node:path";
 import { expectDefined } from "@openclaw/normalization-core";
 import { afterEach, beforeAll, beforeEach, expect, it, vi } from "vitest";
 import {
@@ -6,6 +7,7 @@ import {
   makeTool,
 } from "../../packages/agent-core/src/agent-loop.test-support.js";
 import { createDeferred } from "../../test/helpers/promise.js";
+import { useAutoCleanupTempDirTracker } from "../../test/helpers/temp-dir.js";
 import { clearRuntimeConfigSnapshot, setRuntimeConfigSnapshot } from "../config/io.js";
 import { createOpenClawCodingTools } from "./agent-tools.js";
 import {
@@ -72,6 +74,7 @@ vi.mock("../process/supervisor/index.js", async () =>
 let createExecTool: typeof import("./bash-tools.exec-run.js").createExecTool;
 let toToolDefinitions: typeof import("./agent-tool-definition-adapter.js").toToolDefinitions;
 const testExtensionContext = {} as ExtensionContext;
+const tempDirs = useAutoCleanupTempDirTracker(afterEach);
 
 function createTestExecTool(options: Parameters<typeof createExecTool>[0]) {
   return createExecTool({ security: "full", ask: "off", ...options });
@@ -190,6 +193,29 @@ it("merges filtered plugin env into gateway execution and approval-visible reque
   expect(mocks.gatewayParams[0]?.env.OPENCLAW_CLI).toBe("1");
   expect(mocks.gatewayParams[0]?.env.PATH).not.toBe("/tmp/plugin-bin");
 });
+
+it.each([false, true])(
+  "keeps explicit temp overrides approval-bound without injected scratch (plugin=%s)",
+  async (plugin) => {
+    const cwd = tempDirs.make("exec-scratch-env-");
+    const requested = { TMPDIR: path.join(cwd, "requested") };
+    const resolved = plugin ? { TMPDIR: path.join(cwd, "plugin") } : requested;
+    if (plugin) {
+      installResolveExecEnvHook(resolved);
+    }
+    await createTestExecTool({ host: "gateway", cwd }).execute("scratch-env", {
+      command: "echo ok",
+      env: requested,
+      awaitResults: true,
+    });
+    expect(mocks.gatewayParams[0]?.requestedEnv).toEqual(resolved);
+    expect(mocks.spawnInputs[0]?.env).toMatchObject({
+      ...resolved,
+      TMP: path.join(cwd, ".openclaw", "tmp"),
+      TEMP: path.join(cwd, ".openclaw", "tmp"),
+    });
+  },
+);
 
 it("retains plugin env when prepared arguments are prepared again", async () => {
   installResolveExecEnvHook({ PLUGIN_SAFE: "yes" });

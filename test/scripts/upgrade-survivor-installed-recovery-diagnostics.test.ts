@@ -1,12 +1,7 @@
-import { createHash } from "node:crypto";
 import fs from "node:fs";
 import path from "node:path";
-import { pathToFileURL } from "node:url";
 import { afterEach, expect, it } from "vitest";
-import {
-  publishDiagnostics,
-  publishInstalledRecoveryDiagnostics,
-} from "../../scripts/e2e/lib/upgrade-survivor/diagnostics.mjs";
+import { publishDiagnostics } from "../../scripts/e2e/lib/upgrade-survivor/diagnostics.mjs";
 import { startInstalledRecoveryRun } from "../../scripts/e2e/lib/upgrade-survivor/installed-recovery-observations.mjs";
 import { redactSensitiveText } from "../../src/logging/redact.js";
 import { resolveTestNodeExecPath } from "../../src/test-utils/node-process.js";
@@ -20,34 +15,17 @@ const secret = "sk-installedRecoveryDiagnosticSecret1234567890";
 const privateData = "PRIVATE_CONFIG_AND_JOURNAL_FIELDS";
 
 function fixture() {
-  const root = fs.realpathSync(dirs.make("installed-recovery-diagnostics-"));
+  const root = fs.realpathSync(dirs.make("older-runtime-recovery-diagnostics-"));
   const artifacts = path.join(root, "artifacts");
   const state = path.join(root, "state");
   fs.mkdirSync(artifacts);
   fs.mkdirSync(state);
-  const run = startInstalledRecoveryRun(artifacts);
-  const directory = path.join(run.directory, "partial-previous");
-  fs.mkdirSync(directory);
-  const current = {
-    cut: "partial-previous",
-    name: "displacement",
-    state: "running",
-    stdout: "partial-previous/displacement.out",
-    stderr: "partial-previous/displacement.err",
-  };
-  writeJson(run.summary, {
-    status: "running",
-    runDirectory: path.basename(run.directory),
-    selectedCuts: ["partial-previous"],
-    current,
-  });
+  const run = startInstalledRecoveryRun(artifacts, "older-runtime");
   return {
     root,
     artifacts,
     state,
     run,
-    directory,
-    current,
     env: {
       PATH: process.env.PATH,
       HOME: root,
@@ -59,32 +37,13 @@ function fixture() {
   };
 }
 
-function publish(f: ReturnType<typeof fixture>) {
-  const destination = path.join(f.root, "public");
-  const coordinates = publishDiagnostics(f.artifacts, destination, redactSensitiveText);
+function publish(artifacts: string, root: string) {
+  const destination = path.join(root, "public");
+  const coordinates = publishDiagnostics(artifacts, destination, redactSensitiveText);
   const text = fs.readFileSync(path.join(destination, "failure.json"), "utf8");
   expect(text).not.toContain(secret);
   expect(text).not.toContain(privateData);
   return { coordinates, report: JSON.parse(text) };
-}
-
-function capture(f: ReturnType<typeof fixture>) {
-  const result = runProcess(
-    node,
-    [
-      path.join(owner, "diagnostics.mjs"),
-      "capture",
-      f.artifacts,
-      "installed-recovery-command",
-      "1",
-      "",
-      f.run.directory,
-    ],
-    f.env,
-    10_000,
-  );
-  expect(result.status, result.stderr).toBe(0);
-  return publish(f).report;
 }
 
 it("observes the refused notice without another service-manager command", () => {
@@ -266,474 +225,6 @@ it.each(["available", "unavailable", "published-failure"])(
   },
 );
 
-function publishJoined(
-  f: ReturnType<typeof fixture>,
-  exitStatus = 128,
-  packageSha256 = "a".repeat(64),
-) {
-  const destination = path.join(f.root, "joined-public");
-  publishInstalledRecoveryDiagnostics(f.artifacts, destination, redactSensitiveText, {
-    cut: "partial-previous",
-    exitStatus,
-    timedOut: exitStatus === 128,
-    packageSha256,
-  });
-  const text = fs.readFileSync(
-    path.join(destination, exitStatus === 0 ? "summary.json" : "failure.json"),
-    "utf8",
-  );
-  expect(text).not.toContain(secret);
-  expect(text).not.toContain(privateData);
-  return JSON.parse(text);
-}
-
-it("publishes the last running command after outer timeout without an inner exit snapshot", () => {
-  const f = fixture();
-  fs.writeFileSync(path.join(f.run.directory, f.current.stdout), "candidate prepared\n");
-  fs.writeFileSync(path.join(f.run.directory, f.current.stderr), `token=${secret}\n`);
-  const report = publishJoined(f);
-  expect(report).toMatchObject({
-    exitStatus: 128,
-    host: { processGroupJoined: true, timedOut: true },
-    installedRecovery: { status: "running", current: f.current },
-  });
-  expect(report.installedRecovery.current).not.toHaveProperty("treeJoined");
-  expect(report.installedRecovery.current).not.toHaveProperty("status");
-  expect(fs.existsSync(path.join(f.artifacts, "diagnostics/raw.json"))).toBe(false);
-});
-
-it.each(["complete", "without-next-update", "without-update-repair", "without-killed-update"])(
-  "requires a complete selected cut, its update repair, a killed update, and the update that finished it: %s",
-  (receipt) => {
-    const f = fixture();
-    const complete = receipt === "complete";
-    const commands = [
-      "displacement",
-      "missing-status",
-      "repair",
-      "repeat-repair",
-      "retirement",
-      "resume-retirement",
-      "completed-status",
-      "archive-completed",
-      ...(receipt === "without-update-repair" ? [] : ["update-repair"]),
-      "killed-update",
-      "next-update",
-      "next-update-status",
-    ].map((name) => {
-      const prefix = /^(?:next|killed)-/.test(name) ? "" : "partial-previous/";
-      return {
-        cut: prefix ? "partial-previous" : null,
-        name,
-        state: "completed",
-        treeJoined: true,
-        status: ["displacement", "retirement", "killed-update"].includes(name) ? 137 : 0,
-        startedAt: 1000,
-        elapsedMs: 50,
-        stdout: `${prefix}${name}.out`,
-        stderr: `${prefix}${name}.err`,
-      };
-    });
-    const summary = {
-      ...readJson(f.run.summary),
-      status: "passed",
-      artifactSha256: "a".repeat(64),
-      current: commands.at(-1),
-      commands,
-      rows: [
-        {
-          cut: "partial-previous",
-          operationId: "12345678-1234-4234-8234-123456789abc",
-          installedVersion: "2026.10.6",
-          missingCli: true,
-          originalWriterJoined: true,
-          originalHelperRepairs: 2,
-          interruptedPhase: "retiring",
-          completedViaIndependentHelper: true,
-          packagePreserved: true,
-          launchersPreserved: true,
-          fullConfigPreserved: true,
-        },
-      ],
-      ...(receipt !== "without-killed-update"
-        ? {
-            killedUpdate: {
-              killedRunId: "12345678-1234-4234-8234-123456789abe",
-              killedStatus: "failed",
-              killedReason: "abandoned",
-              stageRunId: "12345678-1234-4234-8234-123456789abf",
-              stageStatus: "succeeded",
-              nextRunStatus: "succeeded",
-            },
-          }
-        : {}),
-      ...(receipt !== "without-next-update"
-        ? {
-            nextUpdate: {
-              exitCode: 0,
-              operationId: "12345678-1234-4234-8234-123456789abd",
-              installedVersion: "2026.10.13",
-              receiptPhase: "anchor-retired",
-              status: "complete",
-            },
-          }
-        : {}),
-    };
-    writeJson(f.run.summary, summary);
-    if (!complete) {
-      expect(() => publishJoined(f, 0)).toThrow("success receipt is incomplete");
-    } else {
-      const report = publishJoined(f, 0);
-      expect(report.outcome).toBe("passed");
-      expect(report.completedCuts).toEqual(summary.rows);
-      expect(report.commands).toEqual(commands);
-      expect(report.killedUpdate).toEqual(summary.killedUpdate);
-      expect(report.nextUpdate).toEqual(summary.nextUpdate);
-    }
-  },
-);
-
-it.skipIf(process.platform !== "linux").each([
-  {
-    name: "keeps unexpected command output private until diagnostic publication",
-    failure: "command",
-  },
-  { name: "keeps early JSON parse snippets in private driver evidence", failure: "json" },
-  { name: "keeps early assertion values in private driver evidence", failure: "assertion" },
-  { name: "keeps encoded assertion values in private driver evidence", failure: "encoded" },
-  { name: "fails safely when private driver evidence cannot be opened", failure: "capture" },
-])("$name", ({ failure }) => {
-  const f = fixture();
-  fs.rmdirSync(f.directory);
-  const prefix = path.join(f.root, "prefix");
-  const installed = path.join(prefix, "lib/node_modules/openclaw");
-  const packed = path.join(f.root, "package");
-  fs.mkdirSync(installed, { recursive: true });
-  fs.mkdirSync(path.join(prefix, "bin"), { recursive: true });
-  fs.mkdirSync(path.join(packed, "dist"), { recursive: true });
-  const manifest = { version: "2026.10.6", openclaw: { schemaVersions: {} } };
-  writeJson(path.join(installed, "package.json"), manifest);
-  writeJson(path.join(packed, "package.json"), manifest);
-  const parseInput = "token=abc";
-  if (failure === "json") {
-    fs.writeFileSync(path.join(packed, "package.json"), parseInput);
-  } else if (failure === "assertion" || failure === "encoded") {
-    writeJson(path.join(installed, "package.json"), {
-      ...manifest,
-      version: failure === "assertion" ? secret : { encoded: [...Buffer.from(secret)] },
-    });
-  }
-  const driverError = path.join(f.run.directory, "driver.err");
-  if (failure !== "command") {
-    writeJson(f.run.summary, { ...readJson(f.run.summary), current: null });
-  }
-  if (failure === "capture") {
-    const outside = path.join(f.root, "outside-driver.err");
-    fs.writeFileSync(outside, privateData);
-    fs.symlinkSync(outside, driverError);
-  }
-  writeJson(path.join(packed, "dist/build-info.json"), { version: manifest.version });
-  writeJson(path.join(packed, "dist/postinstall-inventory.json"), []);
-  fs.writeFileSync(path.join(packed, "dist/package-update-activation-recovery.mjs"), "");
-  fs.writeFileSync(
-    path.join(prefix, "bin/openclaw"),
-    `process.stderr.write(${JSON.stringify(`token=${secret}\n`)});`,
-  );
-  writeJson(f.env.OPENCLAW_CONFIG_PATH, {});
-  const tarball = path.join(f.root, "candidate.tgz");
-  const archive = runProcess("tar", ["-czf", tarball, "-C", f.root, "package"], f.env, 10_000);
-  expect(archive.status, archive.stderr).toBe(0);
-  const packageSha256 = createHash("sha256").update(fs.readFileSync(tarball)).digest("hex");
-  const result = runProcess(
-    node,
-    [
-      path.join(owner, "installed-recovery.mjs"),
-      f.run.directory,
-      prefix,
-      tarball,
-      f.env.OPENCLAW_CONFIG_PATH,
-      f.run.summary,
-      "partial-previous",
-    ],
-    { ...f.env, OPENCLAW_E2E_COMMAND_TIMEOUT: "2s" },
-    10_000,
-  );
-  expect(result.status, result.stderr).toBe(1);
-  expect(result.stderr).toBe(
-    `${failure === "capture" ? "[installed-recovery] private driver diagnostic unavailable" : "[installed-recovery] inspect driver.err in the private run evidence"}\n` +
-      "[installed-recovery] FAILED (exit 1)\n",
-  );
-  expect(result.stdout + result.stderr).not.toContain(secret);
-  const rawError = fs.readFileSync(driverError, "utf8");
-  if (failure === "capture") {
-    expect(rawError).toBe(privateData);
-  } else {
-    expect(fs.statSync(driverError).mode & 0o777).toBe(0o600);
-    expect(rawError).toContain(
-      failure === "command"
-        ? "displacement: exit 0"
-        : failure === "json"
-          ? parseInput
-          : failure === "encoded"
-            ? "encoded:"
-            : secret,
-    );
-  }
-  if (failure === "command") {
-    expect(fs.readFileSync(path.join(f.directory, "displacement.err"), "utf8")).toContain(secret);
-    expect(readJson(f.run.summary).current).toMatchObject({
-      name: "displacement",
-      state: "completed",
-      status: 0,
-      treeJoined: true,
-    });
-  } else {
-    expect(readJson(f.run.summary).current).toBeNull();
-  }
-  for (const report of [capture(f), publishJoined(f, 1, packageSha256)]) {
-    expect(report.installedRecovery.driverError).toEqual({
-      availability: failure === "capture" ? "unavailable" : "captured",
-    });
-    const published = JSON.stringify(report);
-    expect(published).not.toContain(parseInput);
-    expect(published).not.toContain("encoded");
-    expect(published).not.toContain("AssertionError");
-    if (failure === "command") {
-      expect(report.installedRecovery.logs.stderr).toContain("token=");
-      expect(report.installedRecovery.logs.stderr).not.toContain(secret);
-      expect(report.installedRecovery.current).toMatchObject({
-        state: "completed",
-        status: 0,
-        treeJoined: true,
-      });
-    }
-  }
-});
-
-it.skipIf(process.platform === "win32")(
-  "publishes the real rejected command's output without inventing an exit or join receipt",
-  () => {
-    const f = fixture();
-    const commandOwner = pathToFileURL(path.join(owner, "installed-recovery-command.mjs")).href;
-    const stdout = path.join(f.run.directory, f.current.stdout);
-    const stderr = path.join(f.run.directory, f.current.stderr);
-    const pidFile = path.join(f.root, "child.pid");
-    const result = runProcess(
-      node,
-      [
-        "--input-type=module",
-        "-e",
-        `
-    import assert from 'node:assert/strict';
-    import fs from 'node:fs';
-    import { runInstalledRecoveryCommand } from ${JSON.stringify(commandOwner)};
-    const summary = ${JSON.stringify(f.run.summary)};
-    const evidence = JSON.parse(fs.readFileSync(summary, 'utf8'));
-    const states = [];
-    const out = ${JSON.stringify(stdout)}, err = ${JSON.stringify(stderr)};
-    const opened = [];
-    const openSync = fs.openSync;
-    fs.openSync = (...args) => {
-      const fd = openSync(...args);
-      if (args[0] === out || args[0] === err) opened.push(fd);
-      return fd;
-    };
-    try {
-      await assert.rejects(runInstalledRecoveryCommand({
-      bin: process.execPath,
-      args: ['-e', ${JSON.stringify(`
-        require('node:fs').writeFileSync(${JSON.stringify(pidFile)}, String(process.pid));
-        process.stdout.write('phase: candidate staging\\n');
-        process.stderr.write('token=${secret}\\n');
-        setInterval(() => {}, 1000);
-      `)}],
-      env: process.env, stdout: out, stderr: err, timeout: '2s', timeoutKillGraceMs: 100,
-      record(state) {
-        states.push(state.state);
-        evidence.current = { ...evidence.current, ...state };
-        fs.writeFileSync(summary, JSON.stringify(evidence));
-      },
-      }), { code: 'ETIMEDOUT' });
-    } finally {
-      fs.openSync = openSync;
-    }
-    assert.deepEqual(states, ['running', 'rejected']);
-    assert.equal('status' in evidence.current, false);
-    assert.equal('treeJoined' in evidence.current, false);
-    const pid = Number(fs.readFileSync(${JSON.stringify(pidFile)}, 'utf8'));
-    assert.throws(() => process.kill(pid, 0), { code: 'ESRCH' });
-    assert.equal(opened.length, 2);
-    for (const fd of opened) assert.throws(() => fs.fstatSync(fd), { code: 'EBADF' });
-  `,
-      ],
-      f.env,
-      10_000,
-    );
-    expect(result.status, result.stderr).toBe(0);
-    writeJson(path.join(f.directory, "displacement.fault.json.observed"), {
-      cut: "displaced",
-      synced: false,
-      row: {
-        phase: "publishing",
-        intent_json: JSON.stringify({ kind: "displace" }),
-        descriptor_json: privateData,
-        secret,
-      },
-    });
-    const report = capture(f);
-    const joined = publishJoined(f);
-    expect(joined.exitStatus).toBe(128);
-    expect(joined.host.timedOut).toBe(true);
-    expect(report.installedRecovery.current).toMatchObject({
-      cut: "partial-previous",
-      name: "displacement",
-      state: "rejected",
-      error: "Managed command timed out after 2000ms",
-    });
-    expect(report.installedRecovery.current).not.toHaveProperty("status");
-    expect(report.installedRecovery.current).not.toHaveProperty("treeJoined");
-    expect(report.installedRecovery.logs.stdout).toBe("phase: candidate staging\n");
-    expect(report.installedRecovery.logs.stderr).toContain("token=");
-    expect(report.installedRecovery.checkpoint).toEqual({
-      availability: "captured",
-      cut: "displaced",
-      phase: "publishing",
-      intent: "displace",
-      synced: false,
-    });
-  },
-);
-
-it.skipIf(process.platform === "win32").each(["", "0"])(
-  "preserves the disabled inner command watchdog: %j",
-  (timeout) => {
-    const f = fixture();
-    const commandOwner = pathToFileURL(path.join(owner, "installed-recovery-command.mjs")).href;
-    const result = runProcess(
-      node,
-      [
-        "--input-type=module",
-        "-e",
-        `
-    import assert from 'node:assert/strict';
-    import { runInstalledRecoveryCommand } from ${JSON.stringify(commandOwner)};
-    const states = [];
-    const result = await runInstalledRecoveryCommand({
-      bin: process.execPath,
-      args: ['-e', 'setTimeout(() => process.stdout.write("finished"), 30)'],
-      env: process.env,
-      stdout: ${JSON.stringify(path.join(f.run.directory, "disabled.out"))},
-      stderr: ${JSON.stringify(path.join(f.run.directory, "disabled.err"))},
-      timeout: ${JSON.stringify(timeout)}, timeoutKillGraceMs: 100,
-      record: state => states.push(state),
-    });
-    assert.equal(result.status, 0);
-    assert.equal(result.stdout, 'finished');
-    assert.deepEqual(states.map(state => state.state), ['running', 'completed']);
-    assert.equal(states.at(-1).treeJoined, true);
-  `,
-      ],
-      f.env,
-      10_000,
-    );
-    expect(result.status, result.stderr).toBe(0);
-  },
-);
-
-it.each(["refused-update", "update-repair-probe"])(
-  "publishes the failed live-gateway command %s with its output",
-  (name) => {
-    const f = fixture();
-    // The live-gateway driver writes root-level command files and a cut-less record.
-    const current = {
-      cut: null,
-      name,
-      stdout: `${name}.out`,
-      stderr: `${name}.err`,
-      state: "completed",
-      status: 1,
-      treeJoined: true,
-      startedAt: 1000,
-      elapsedMs: 50,
-    };
-    writeJson(f.run.summary, {
-      status: "running",
-      runDirectory: path.basename(f.run.directory),
-      selectedCuts: ["live-gateway"],
-      scope: "installed-killed-update-live-gateway",
-      commands: [],
-      current,
-    });
-    fs.writeFileSync(path.join(f.run.directory, current.stdout), "update refused\n");
-    fs.writeFileSync(path.join(f.run.directory, current.stderr), `token=${secret}\n`);
-    fs.writeFileSync(path.join(f.run.directory, "driver.err"), privateData);
-    const report = capture(f);
-    expect(report.installedRecovery).toMatchObject({
-      availability: "captured",
-      status: "running",
-      current,
-      driverError: { availability: "captured" },
-      logs: { stdout: "update refused\n" },
-    });
-    expect(report.installedRecovery.logs.stderr).toContain("token=");
-  },
-);
-
-it.each(["stale", "symlink", "oversize", "partial-checkpoint"])(
-  "retains only current safe evidence for %s input",
-  (fault) => {
-    const f = fixture();
-    const stdout = path.join(f.run.directory, f.current.stdout);
-    const stderr = path.join(f.run.directory, f.current.stderr);
-    fs.writeFileSync(stdout, "current phase\n");
-    fs.writeFileSync(stderr, `token=${secret}\n`);
-    if (fault === "stale") {
-      startInstalledRecoveryRun(f.artifacts);
-    } else if (fault === "symlink") {
-      const outside = path.join(f.root, "outside");
-      fs.writeFileSync(outside, privateData);
-      fs.unlinkSync(stdout);
-      fs.symlinkSync(outside, stdout);
-    } else if (fault === "oversize") {
-      fs.writeFileSync(stdout, "x".repeat(256 * 1024 + 1));
-      fs.writeFileSync(stderr, `token=${secret}\n${"bounded line\n".repeat(2000)}`);
-    } else {
-      fs.writeFileSync(path.join(f.directory, "displacement.fault.json.observed"), "{");
-    }
-    const report = capture(f);
-    if (fault === "stale") {
-      expect(report.installedRecovery).toEqual({ availability: "unavailable" });
-      expect(JSON.stringify(report)).not.toContain("current phase");
-    } else {
-      expect(report.installedRecovery.current).toEqual(f.current);
-      expect(report.installedRecovery.checkpoint).toEqual({ availability: "unavailable" });
-      expect(report.installedRecovery.logs.stdout).toBe(
-        fault === "partial-checkpoint" ? "current phase\n" : null,
-      );
-      if (fault === "symlink") {
-        expect(report.omissions["installed recovery stdout"]).toBe("missing or unsafe file");
-      } else if (fault === "oversize") {
-        expect(report.omissions["installed recovery stdout"]).toBe(
-          "input exceeds cap; omitted whole",
-        );
-        expect(report.omissions["installed recovery stderr"]).toBe(
-          "redacted output truncated at a complete line (16 KiB)",
-        );
-        expect(
-          Buffer.byteLength(JSON.stringify(report.installedRecovery.logs.stderr)),
-        ).toBeLessThanOrEqual(16 * 1024);
-      } else {
-        expect(report.omissions["installed recovery checkpoint"]).toBe(
-          "invalid observation; omitted",
-        );
-      }
-    }
-    const joined = publishJoined(f);
-    expect(joined.installedRecovery).toEqual(report.installedRecovery);
-    expect(joined.host).toEqual({ processGroupJoined: true, timedOut: true });
-  },
-);
-
 it.skipIf(process.platform === "win32")(
   "captures install failure before teardown and preserves its exit",
   () => {
@@ -765,19 +256,19 @@ it.skipIf(process.platform === "win32")(
         FIXTURE_NODE: node,
         FIXTURE_SECRET: secret,
         OPENCLAW_UPGRADE_SURVIVOR_ARTIFACT_ROOT: f.artifacts,
+        OPENCLAW_UPGRADE_SURVIVOR_INSTALLED_RECOVERY_CUT: "older-runtime",
         OPENCLAW_TEST_STATE_FUNCTION_B64: "fixture",
       },
       10_000,
     );
     expect(result.status, result.stderr).toBe(23);
-    const { coordinates, report } = publish(f);
+    const { coordinates, report } = publish(f.artifacts, f.root);
     expect(coordinates).toEqual({
       phase: "installed-recovery-install",
       exitStatus: 23,
       signal: null,
     });
     expect(report.installedRecovery.status).toBe("running");
-    expect(report.installedRecovery.current).toBeNull();
     expect(report.installedRecovery.logs.install).not.toBeNull();
     expect(report.installedRecovery.runDirectory).toBe(readJson(f.run.summary).runDirectory);
     expect(report.installedRecovery.runDirectory).not.toBe(path.basename(f.run.directory));

@@ -1,7 +1,7 @@
 import path from "node:path";
+import { resolveCompactionThreshold } from "@openclaw/ai/internal/shared";
 import { isPathRelativeEscape } from "@openclaw/fs-safe/path";
 import { MAX_IMAGE_BYTES } from "@openclaw/media-core/constants";
-import { resolveCompactionThreshold } from "../../../../packages/agent-core/src/harness/compaction/compaction-threshold.js";
 import { getRuntimeConfigSnapshot } from "../../../config/config.js";
 import type { ModelCompatConfig } from "../../../config/zod-schema.model-compat.js";
 import { OPENCLAW_EMBEDDED_CONTEXT_ENGINE_HOST } from "../../../context-engine/host-compat.js";
@@ -51,6 +51,8 @@ import type { guardSessionManager } from "../../session-tool-result-guard-wrappe
 import { sanitizeToolUseResultPairingForModel } from "../../session-transcript-repair.js";
 import { agentSessionDeferThresholdCompaction } from "../../sessions/agent-session-types.js";
 import type { AgentSession } from "../../sessions/index.js";
+import { boundSessionToolResult } from "../../sessions/session-tool-result-preparation.js";
+import type { SpillOwner } from "../../sessions/tools/private-temp-file.js";
 import { invalidateComputerFrameIfMissing } from "../../tools/computer-tool-shared.js";
 import { resolveAttemptWorkspaceSandbox } from "../../workspace-sandbox.js";
 import { isCacheTtlEligibleProvider, readLastCacheTtlTimestamp } from "../cache-ttl.js";
@@ -253,6 +255,7 @@ export function installEmbeddedAttemptContextGuards(input: {
   agentDir: string;
   attempt: EmbeddedRunAttemptInternalParams;
   computerContextEpoch: { value: number };
+  spillOwner?: SpillOwner;
   dropThinkingBlocksForEstimate: boolean;
   effectiveCwd: string;
   effectiveFsWorkspaceOnly: boolean;
@@ -302,10 +305,11 @@ export function installEmbeddedAttemptContextGuards(input: {
   const previousCacheTtlTransform = activeSession.agent.transformContext;
   const cacheTouch = createCacheTouchRecorder(
     cacheTtlSettings
-      ? readLastCacheTtlTimestamp(input.sessionManager, {
-          provider: attempt.provider,
-          modelId: attempt.modelId,
-        })
+      ? readLastCacheTtlTimestamp(
+          input.sessionManager,
+          { provider: attempt.provider, modelId: attempt.modelId },
+          attempt.promptCacheKeepWarm,
+        )
       : null,
   );
   if (cacheTtlSettings) {
@@ -365,6 +369,11 @@ export function installEmbeddedAttemptContextGuards(input: {
           }
         : {}),
       getPrePromptMessageCount: input.getPrePromptMessageCount,
+      getCurrentUserIdempotencyKey: () =>
+        (
+          attempt.userTurnTranscriptRecorder?.getPersistedMessage?.() ??
+          attempt.userTurnTranscriptRecorder?.message
+        )?.idempotencyKey,
       // Only the outer accepted-turn owner may advance an admitted engine.
       deferredTurn: attempt.onContextEngineTurnCandidate
         ? {
@@ -390,10 +399,11 @@ export function installEmbeddedAttemptContextGuards(input: {
               messagesSnapshot: messages,
               prePromptMessageCount,
               retention: input.getPromptCacheRetention(),
-              fallbackLastCacheTouchAt: readLastCacheTtlTimestamp(input.sessionManager, {
-                provider: attempt.provider,
-                modelId: attempt.modelId,
-              }),
+              fallbackLastCacheTouchAt: readLastCacheTtlTimestamp(
+                input.sessionManager,
+                { provider: attempt.provider, modelId: attempt.modelId },
+                attempt.promptCacheKeepWarm,
+              ),
             }),
         }),
       runtimeSettings,
@@ -403,6 +413,28 @@ export function installEmbeddedAttemptContextGuards(input: {
     agent: activeSession.agent,
     contextWindowTokens: contextTokenBudget,
   });
+
+  // Bound every executed result before its first send, after result hooks ran.
+  const spill =
+    input.sandbox?.enabled && input.sandbox.fsBridge
+      ? { sandbox: { root: input.sandbox.workspaceDir, bridge: input.sandbox.fsBridge } }
+      : { owner: input.spillOwner };
+  const previousAfterToolCall = activeSession.agent.afterToolCall;
+  activeSession.agent.afterToolCall = async (context, signal) => {
+    const update = await previousAfterToolCall?.call(activeSession.agent, context, signal);
+    const result =
+      update?.content === undefined && update?.details === undefined
+        ? context.result
+        : {
+            ...context.result,
+            content: update.content ?? context.result.content,
+            details: update.details ?? context.result.details,
+          };
+    const bounded = await boundSessionToolResult(input.sessionManager, result, spill);
+    return bounded === result
+      ? update
+      : { ...update, content: bounded.content, details: bounded.details };
+  };
 
   const previousContextTransform = activeSession.agent.transformContext;
   activeSession.agent.transformContext = async (messages, signal) => {
@@ -474,6 +506,7 @@ export function installEmbeddedAttemptContextGuards(input: {
             }).messages,
             contextWindowTokens: contextTokenBudget,
             maxCharsOverride: toolResultMaxChars,
+            preserveSentToolResults: true,
           }).maxReducibleChars,
         contextTokenBudget,
         reserveTokens: deferThreshold
@@ -514,6 +547,7 @@ export function installEmbeddedAttemptContextGuards(input: {
     recordCacheTouch: cacheTouch.recordCacheTouch,
     remove: () => {
       activeSession.agent.transformContext = previousContextTransform;
+      activeSession.agent.afterToolCall = previousAfterToolCall;
       removeToolResultGuard();
       removeContextEngineLoopHook?.();
       activeSession.agent.transformContext = previousCacheTtlTransform;

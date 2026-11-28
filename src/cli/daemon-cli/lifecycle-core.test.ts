@@ -288,31 +288,60 @@ it("fails restart with the container hint when no service is installed", async (
   expect(hasInstalledDefinition).toHaveBeenCalledWith({ env: process.env });
 });
 
-it("runs the service mutation guard before restarting a loaded service", async () => {
-  const beforeServiceMutation = vi.fn();
+it.each(["start", "restart"] as const)(
+  "releases custody reopened by the native %s preflight before dispatch",
+  async (action) => {
+    let custodyHeld = false;
+    const beforeServiceMutation = vi.fn(async () => {
+      custodyHeld = false;
+    });
+    const nativeDispatch = async (args: Parameters<typeof service.start>[0]) => {
+      custodyHeld = true;
+      await args.beforeMutation?.();
+      if (custodyHeld) {
+        throw new Error("Native preflight retained database custody at dispatch.");
+      }
+    };
+    service.start.mockImplementation(nativeDispatch);
+    service.restart.mockImplementation(async (args) => {
+      await nativeDispatch(args);
+      return { outcome: "completed" };
+    });
 
-  await restart({ beforeServiceMutation });
+    await (action === "start" ? start : restart)({ beforeServiceMutation });
 
-  expect(beforeServiceMutation).toHaveBeenCalledTimes(1);
-  expect(beforeServiceMutation.mock.invocationCallOrder[0]).toBeLessThan(
-    service.restart.mock.invocationCallOrder[0] ?? Number.POSITIVE_INFINITY,
-  );
-});
+    expect(beforeServiceMutation).toHaveBeenCalledTimes(action === "restart" ? 2 : 1);
+    if (action === "restart") {
+      expect(beforeServiceMutation.mock.invocationCallOrder[0]).toBeLessThan(
+        service.restart.mock.invocationCallOrder[0] ?? Number.POSITIVE_INFINITY,
+      );
+    }
+  },
+);
 
-it("aborts loaded-service mutation when the service guard rejects", async () => {
-  const repairLoadedService = vi.fn();
-
-  await expect(
-    restart({
-      beforeServiceMutation: () => {
-        throw new Error("service mutation denied");
-      },
-      repairLoadedService,
-    }),
-  ).rejects.toThrow("service mutation denied");
-
-  expectNoCalls(writeGatewayRestartIntentSync, repairLoadedService, service.restart);
-});
+it.each([false, true])(
+  "aborts native mutation when custody release rejects (async=%s)",
+  async (async) => {
+    const repairLoadedService = vi.fn();
+    await expect(
+      restart({
+        beforeServiceMutation: () => {
+          const error = new Error("state custody could not be released");
+          if (async) {
+            return Promise.reject(error);
+          }
+          throw error;
+        },
+        repairLoadedService,
+      }),
+    ).rejects.toThrow("__exit__:1");
+    expectNoCalls(repairLoadedService, service.restart);
+    expect(readJsonLog()).toMatchObject({
+      ok: false,
+      error: expect.stringContaining("state custody could not be released"),
+    });
+  },
+);
 
 it("repairs managed port drift before restarting", async () => {
   service.readRuntime.mockResolvedValue({ status: "running", pid: 1234 });

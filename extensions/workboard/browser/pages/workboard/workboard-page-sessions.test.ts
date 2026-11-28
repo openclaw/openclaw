@@ -423,7 +423,7 @@ it("loads the next Sessions board page and refreshes the loaded window after a w
   });
   await page.connect();
   expect(page.container.querySelectorAll(".workboard-session-tile")).toHaveLength(1);
-  expect(page.container.textContent).toContain("1 of 2 sessions loaded");
+  expect(page.container.textContent).toContain("Showing 1 of 2 sessions");
   button(page, "Load more sessions").click();
   await vi.advanceTimersByTimeAsync(0);
   expect(page.request).toHaveBeenCalledWith("workboard.sessionsBoard.read", {

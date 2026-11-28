@@ -3,6 +3,12 @@ import type { Message } from "grammy/types";
 import type { ChannelMessageActionContext } from "openclaw/plugin-sdk/channel-contract";
 import type { OpenClawConfig } from "openclaw/plugin-sdk/config-contracts";
 import { createDeferred } from "openclaw/plugin-sdk/extension-shared";
+import {
+  createTestRegistry,
+  getActivePluginRegistry,
+  resetPluginRuntimeStateForTest,
+  setActivePluginRegistry,
+} from "openclaw/plugin-sdk/plugin-test-runtime";
 import { resolveStorePath } from "openclaw/plugin-sdk/session-store-runtime";
 import { captureEnv } from "openclaw/plugin-sdk/test-env";
 import { awaitGateBeforeSettlement, withinTest } from "openclaw/plugin-sdk/test-fixtures";
@@ -14,14 +20,16 @@ import {
   resolveTelegramMessageCacheScope,
 } from "./message-cache-persistence.js";
 import { createTelegramMessageCache } from "./message-cache.js";
-import { parseTelegramAgentCallbackData } from "./native-command-callback-data.js";
 import { recordOutboundMessageForPromptContext } from "./outbound-message-context.js";
 import { setTelegramPluginStateRuntimeForTests } from "./runtime-state.test-support.js";
 import {
   clearTelegramRuntimeForTest,
   resetTelegramMessageCacheForTest,
 } from "./runtime.test-support.js";
-import { useTelegramHttpFixture } from "./send.telegram-http.test-support.js";
+import {
+  resolveTelegramTestUpload,
+  useTelegramHttpFixture,
+} from "./send.telegram-http.test-support.js";
 import { getTopicName, resolveTelegramDirectTopicNameCacheScope } from "./topic-name-cache.js";
 
 describe("Telegram registered action authority and input contracts", () => {
@@ -84,6 +92,30 @@ describe("Telegram registered action authority and input contracts", () => {
       type: "custom_emoji",
       custom_emoji_id: String(9000 + id),
     }));
+
+  it("uploads media using the selected agent without a producing session", async () => {
+    cfg.agents = { ownership: "explicit", entries: { main: {}, ops: {} } };
+    cfg.bindings = [{ agentId: "ops", match: { channel: "telegram", accountId: "default" } }];
+    const context = { agentId: "ops", mediaAccess: { localRoots: [fixture.mediaDir] } };
+    const previousRegistry = getActivePluginRegistry();
+    setActivePluginRegistry(
+      createTestRegistry([{ pluginId: "telegram", source: "test", plugin: telegramPlugin }]),
+    );
+    try {
+      await invoke("send", sendInput, context);
+      await invoke("send", { ...sendInput, media: fixture.photoPath }, context);
+      expect(requests.map(({ method }) => method)).toEqual(["sendMessage", "sendPhoto"]);
+      const fields = requests[1]!.fields;
+      expect(fields).toMatchObject({ chat_id: "123", caption: "Shipped" });
+      expect(resolveTelegramTestUpload(fields, "photo").size).toBe(68);
+    } finally {
+      if (previousRegistry) {
+        setActivePluginRegistry(previousRegistry);
+      } else {
+        resetPluginRuntimeStateForTest();
+      }
+    }
+  });
   it.each([
     { label: "true", params: { silent: true }, notification: { disable_notification: true } },
     { label: "false", params: { silent: false }, notification: {} },
@@ -564,26 +596,6 @@ describe("Telegram registered action authority and input contracts", () => {
       expect(requests).toEqual([]);
     },
   );
-
-  it("renders typed callbacks in message-action edits as agent-owned controls", async () => {
-    const button = { label: "Pick", action: { type: "callback", value: "pick:a" } };
-    await invoke(
-      "edit",
-      {
-        chatId: "telegram:-1001:topic:77",
-        messageId: 456,
-        message: "Choose",
-        presentation: { blocks: [{ type: "buttons", buttons: [button] }] },
-      },
-      trusted,
-    );
-    const markup = requests.at(-1)?.fields.reply_markup as {
-      inline_keyboard: Array<Array<{ callback_data?: string }>>;
-    };
-    expect(parseTelegramAgentCallbackData(markup.inline_keyboard[0]?.[0]?.callback_data)).toBe(
-      "pick:a",
-    );
-  });
 
   it("rejects sending without a configured credential", async () => {
     cfg = {};

@@ -996,9 +996,7 @@ describe("gateway chat metadata lifecycle composition", () => {
 
   it("adopts a prepared owner that publishes after attachment", async () => {
     const lifecycle = await attachLifecycle();
-    await expect(lifecycle.readMain()).rejects.toThrow(
-      'prepared chat metadata is unavailable for agent "main"',
-    );
+    await expect(lifecycle.readMain()).rejects.toThrow("Chat metadata is starting; retry shortly.");
 
     await publishOwner();
 

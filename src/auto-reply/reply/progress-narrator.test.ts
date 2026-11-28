@@ -1,6 +1,8 @@
 import { performance } from "node:perf_hooks";
 import { afterEach, beforeEach, expect, it, vi } from "vitest";
 import { createDeferred } from "../../../test/helpers/promise.js";
+import { createTestOperatorAuthority } from "../../agents/admitted-run-context.test-support.js";
+import { prepareOperatorModelPolicy } from "../../agents/operator-model-policy.js";
 import { PROGRESS_STATUS_PREAMBLE_FRESH_MS } from "../../channels/progress-draft-compositor.js";
 import { PluginInstance } from "../../plugins/plugin-instance.js";
 import { PluginInvocationScope } from "../../plugins/plugin-invocation-scope.js";
@@ -507,6 +509,30 @@ it.each([
 ])("returns options unchanged: $name", ({ cfg, disabled }) => {
   const opts: ReplyOptions = { onNarrationUpdate: vi.fn(), onToolStart: vi.fn() };
   expect(attachNarrator({ cfg, disabled, agentId: "main", opts })).toBe(opts);
+});
+
+it("returns options unchanged when the turn's role refuses every utility model", () => {
+  const cfg = {
+    agents: {
+      entries: { main: {} },
+      defaults: { model: "openai/gpt-main", utilityModel: "openai/gpt-5.5-mini" },
+    },
+  };
+  const operatorAuthority = createTestOperatorAuthority({
+    profileId: "narration-guest",
+    scopes: ["operator.write"],
+    modelPolicy: prepareOperatorModelPolicy({
+      cfg,
+      policy: { sourceAgent: "main", allow: ["openai/gpt-main"] },
+      manifestPlugins: [],
+    }),
+  });
+  const opts: ReplyOptions = {
+    onNarrationUpdate: vi.fn(),
+    onToolStart: vi.fn(),
+    operatorAuthority,
+  };
+  expect(attachNarrator({ cfg, agentId: "main", opts })).toBe(opts);
 });
 
 it("tees tool events while preserving the channel callback results", async () => {

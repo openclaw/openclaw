@@ -22,6 +22,7 @@ export async function searchProjectedSessionTranscripts(params: {
   query: string;
   limit?: number;
   scope: NonNullable<SessionsSearchParams["scope"]>;
+  personalPins?: ReadonlyMap<string, number> | null;
   context: GatewayRequestContext;
   client: GatewayClient | null;
   onResult: (result: SessionsSearchResult) => void;
@@ -32,6 +33,7 @@ export async function searchProjectedSessionTranscripts(params: {
     const { prepared, presentation, filters } = prepareProjectedSessionList({
       projection,
       opts: params.scope,
+      personalPins: params.personalPins,
       context: params.context,
       client: params.client,
       now: Date.now(),
@@ -160,7 +162,8 @@ export async function searchProjectedSessionTranscripts(params: {
             ...target,
             storePath: target.storeTarget.storePath,
           });
-          const row = record && refreshed.presentation.present(record);
+          const row =
+            record && refreshed.presentation.present(record, { personalPins: params.personalPins });
           return row ? [row] : [];
         });
         const archivedTranscriptsExcluded = pages.reduce(

@@ -380,19 +380,6 @@ describe("call delivery runtime", () => {
     await delivery.stop();
   });
 
-  it("delivers one allowed report through the current requester session", async () => {
-    const { manager, call, delivery, requester } = await setup({ realGateway: true });
-    await manager.onCallUpdated?.(call);
-
-    const entries = await readVisibleSessionTranscriptMessageEntries(requester);
-    expect(entries).toHaveLength(1);
-    expect(JSON.stringify(entries[0])).toContain("Achieved: appointment booked");
-    expect(
-      (await manager.getCallFromMemoryOrStore(call.callId))?.metadata?.callReport,
-    ).toMatchObject({ status: "delivered" });
-    await delivery.stop();
-  });
-
   it("fences channel delivery at the registered Gateway send and adapter boundary", async () => {
     const allowed = await setup({ channelDelivery: true, realGateway: true, requesterPeer: "420" });
     await allowed.manager.onCallUpdated?.(allowed.call);

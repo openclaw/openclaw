@@ -140,9 +140,12 @@ export function captureConfigReadEnvMutation<T>(
   run: () => T,
   retainRestore?: (restore: () => void) => void,
 ): T {
+  const scope = configReadEnvChanges.getStore();
+  if (!retainRestore && !scope) {
+    return run();
+  }
   const before = snapshotEnvProperties(env);
   const beforeOwned = snapshotConfigEnvOwnership(env, before);
-  const scope = configReadEnvChanges.getStore();
   try {
     return run();
   } finally {

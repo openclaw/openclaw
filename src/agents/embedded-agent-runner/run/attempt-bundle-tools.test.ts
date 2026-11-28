@@ -6,7 +6,11 @@ import {
 import { withDiagnosticsTimelineObserver } from "../../../infra/diagnostics-timeline.js";
 import { setPluginToolMeta } from "../../../plugins/tool-metadata.js";
 import { withStateDirEnv } from "../../../test-helpers/state-dir-env.js";
+import { readAdmittedRunOperatorAuthority } from "../../admitted-run-context.js";
+import { createTestAdmittedRunContext } from "../../admitted-run-context.test-support.js";
+import { gateAgentToolExecution } from "../../agent-tool-availability.js";
 import { resolveConversationCapabilityProfile } from "../../conversation-capability-profile.js";
+import { prepareParticipationTestRun } from "../../participation-ceiling.test-support.js";
 import { createAgentCleanupScope } from "../../run-cleanup-timeout.js";
 import { createClientToolDefinition, createStubTool } from "../../test-helpers/agent-tool-stubs.js";
 import { attachToolAllowlistIntersection } from "../../tool-policy.js";
@@ -67,6 +71,7 @@ describe("prepareEmbeddedAttemptBundleTools", () => {
     return {
       agentDir: "/tmp/agent",
       attempt: {
+        admittedRunContext: createTestAdmittedRunContext("run"),
         config: {},
         model: {},
         modelId: "model",
@@ -108,6 +113,40 @@ describe("prepareEmbeddedAttemptBundleTools", () => {
     setPluginToolMeta(tool, { pluginId, optional: false });
     return tool;
   }
+
+  it.each([
+    { tools: undefined, allowed: false },
+    { tools: [], allowed: false },
+    { tools: ["fixture__*"], allowed: true },
+    { tools: ["group:plugins"], allowed: true },
+    { tools: ["*"], allowed: true },
+  ])(
+    "starts MCP only when participant policy $tools can admit its tools",
+    async ({ tools, allowed }) => {
+      const input = createInput();
+      input.attempt.config = { mcp: { servers: { fixture: { command: "unused" } } } };
+      input.attempt.admittedRunContext = await prepareParticipationTestRun({
+        kind: "send",
+        profileId: "participant",
+        sessionKey: "agent:main:participant",
+        tools,
+      }).preparedRunAdmission.admit("embedded");
+      input.preparedToolBase.runtimeCapabilityProfile = resolveConversationCapabilityProfile({
+        config: input.attempt.config,
+        pluginExecutionAuthority: readAdmittedRunOperatorAuthority(
+          input.attempt.admittedRunContext,
+        ),
+      });
+      const actual = await vi.importActual<typeof import("../effective-tool-policy.js")>(
+        "../effective-tool-policy.js",
+      );
+      mocks.applyFinalEffectiveToolPolicy.mockImplementation(actual.applyFinalEffectiveToolPolicy);
+      mockMcp([pluginTool("fixture__read", "bundle-mcp")]);
+      const result = await prepare(input);
+      expect(mocks.acquireSessionMcpRuntime).toHaveBeenCalledTimes(Number(allowed));
+      expect(toolNames(result.uncompactedEffectiveTools)).toEqual(allowed ? ["fixture__read"] : []);
+    },
+  );
 
   it.each(["memory flush", "disabled tools", "raw", "model", "global denial"])(
     "does not widen %s with auxiliary tools",
@@ -245,6 +284,34 @@ describe("prepareEmbeddedAttemptBundleTools", () => {
         expect(inherited.includes("message")).toBe(mode === "available");
       }),
   );
+
+  it("never delegates or captures a listed tool this turn refuses", async () =>
+    await withStateDirEnv("refused-tool-capture-", async () => {
+      const inherited = ["read", "exec"];
+      const exec = gateAgentToolExecution(createStubTool("exec"), "exec is refused");
+      const input = createInput(inherited, [createStubTool("read"), exec]);
+      input.preparedToolBase.cronCreatorToolAllowlist.push({ name: "read" }, { name: "exec" });
+      const result = await prepare(input);
+      expect(toolNames(result.uncompactedEffectiveTools)).toEqual(["read", "exec"]);
+      expect(inherited).toEqual(["read"]);
+      expect(
+        input.preparedToolBase.cronCreatorToolAllowlist.map((entry) =>
+          typeof entry === "string" ? entry : entry.name,
+        ),
+      ).toEqual(["read"]);
+    }));
+
+  it("omits an unavailable message tool from a fixed listing", async () => {
+    // `agent --local` without a channel: no source, no configured route.
+    const input = createInput([], [createStubTool("message")]);
+    input.preparedToolBase = {
+      ...input.preparedToolBase,
+      messageToolAvailable: false,
+      fixedListing: true,
+    } as typeof input.preparedToolBase;
+    const result = await prepare(input);
+    expect(toolNames(result.uncompactedEffectiveTools)).not.toContain("message");
+  });
 
   it.each([
     { runtime: undefined, publicationAllowed: true },

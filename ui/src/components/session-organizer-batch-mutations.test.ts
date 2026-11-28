@@ -311,7 +311,7 @@ describe("patchSessionRows", () => {
       "operator.write missing",
       { scopes: ["operator.read"] },
       { archived: true },
-      "This action requires operator.write access.",
+      "You don’t have permission to do this.",
     ],
   ])("sends no mutation when %s", async (_name, options, patch, error) => {
     const h = createHarness(options);
@@ -750,7 +750,8 @@ describe("session organizer destructive confirmations", () => {
             : "Automations linked to 2 of these conversations may keep running after deletion.",
         );
       expect.soft(document.body.textContent).toContain("Disable or remove them separately.");
-      expect(document.body.textContent).toContain("Nightly digest (job-1)");
+      expect(document.body.textContent).toContain("Nightly digest");
+      expect(document.body.textContent).not.toContain("job-1");
       expect(document.body.querySelector(".exec-approval-skip")).toBeNull();
       expect(actions.textContent).toContain("Delete anyway");
       answerConfirmDialog(actions, "cancel");

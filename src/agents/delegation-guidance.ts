@@ -39,6 +39,7 @@ export function buildSubagentPromptGuidance(params: {
   availableTools: ReadonlySet<string>;
   sessionKey?: string;
   resolveToolName: (normalized: string) => string;
+  workerPlacement?: boolean;
 }) {
   const { availableTools } = params;
   const hasSessionsSpawn = availableTools.has("sessions_spawn");
@@ -54,23 +55,25 @@ export function buildSubagentPromptGuidance(params: {
           : "Fire-and-forget is valid when child output is the deliverable.",
       ].join(" ")
     : undefined;
-  return {
+  const delegationSection = buildDelegationGuidanceSection({
+    mode: params.mode,
+    isMinimal: params.isMinimal,
+    hiddenDelegationTool: hasSessionsSpawn && !params.workerPlacement ? "`sessions_spawn`" : "",
+    hasVisibleSessionSpawn: hasSessionsSpawn,
+    workerPlacement: params.workerPlacement,
+    hasSessionsYield,
     inTurnCollectionGuidance,
-    delegationSection: buildDelegationGuidanceSection({
-      mode: params.mode,
-      isMinimal: params.isMinimal,
-      hiddenDelegationTool: hasSessionsSpawn ? "`sessions_spawn`" : "",
-      hasVisibleSessionSpawn: hasSessionsSpawn,
-      hasSessionsYield,
-      inTurnCollectionGuidance,
-      hasSubagentsList: availableTools.has("subagents"),
-      hasSessionsSend: availableTools.has("sessions_send"),
-      sessionsCreateToolName: availableTools.has("sessions_create")
-        ? params.resolveToolName("sessions_create")
-        : undefined,
-      // suggest_task is run-granted: the granting turn lists it, so the cached prompt omits it.
-    }),
-  };
+    hasSubagentsList: availableTools.has("subagents"),
+    hasSessionsSend: availableTools.has("sessions_send"),
+    sessionsCreateToolName: availableTools.has("sessions_create")
+      ? params.resolveToolName("sessions_create")
+      : undefined,
+    // suggest_task is run-granted: the granting turn lists it, so the cached prompt omits it.
+  });
+  const sessionsSpawnHint = hasSessionsSpawn
+    ? "Execute work directly by default; delegate bounded independent work via `sessions_spawn`. Keep dependent steps with one owner."
+    : "";
+  return { inTurnCollectionGuidance, delegationSection, sessionsSpawnHint };
 }
 
 export function buildDelegationGuidanceSection(params: {
@@ -78,6 +81,8 @@ export function buildDelegationGuidanceSection(params: {
   isMinimal: boolean;
   hiddenDelegationTool: string;
   hasVisibleSessionSpawn: boolean;
+  /** Worker-placed `sessions_spawn` has no hidden children: every child is visible, and its brief is `task`. */
+  workerPlacement?: boolean;
   hasSessionsYield: boolean;
   inTurnCollectionGuidance?: string;
   hasSubagentsList: boolean;
@@ -95,13 +100,11 @@ export function buildDelegationGuidanceSection(params: {
       ? [
           "## Session routing",
           createToolName
-            ? `- Explicit requests to start/create a session or task, including "spin up a new task", use \`${createToolName}\`. Supply \`message\` to start work; omit it to create an idle session. This is a normal, independent, persistent visible session, not a supervised child: no completion event or yield expectation.`
+            ? `Explicit requests to start a session or task: \`${createToolName}\`.`
             : "",
-          hiddenDelegationTool
-            ? `- Actual delegated helpers use ${hiddenDelegationTool}; use hidden children by default.`
-            : "",
-          params.hasVisibleSessionSpawn
-            ? "- `sessions_spawn` with `visible=true` is for deliberately supervised child work the user needs to revisit or steer, not ordinary independent session creation."
+          hiddenDelegationTool ? `Delegated helpers: hidden ${hiddenDelegationTool} children.` : "",
+          params.workerPlacement && params.hasVisibleSessionSpawn
+            ? "Delegated helpers: visible `sessions_spawn` children."
             : "",
           params.suggestTaskToolName
             ? `- Proactive, unrequested follow-up proposals use \`${params.suggestTaskToolName}\`: record a suggestion card; nothing starts until the user accepts. An explicit request to start work is not a proposal.`
@@ -123,7 +126,9 @@ export function buildDelegationGuidanceSection(params: {
       ? "- Use subagents for internal QA, research, coding, review, and test lanes; keep their results in the parent task. A PR/report, long runtime, or isolated worktree alone does not justify a sidebar session."
       : "",
     params.hasVisibleSessionSpawn
-      ? "- For deliberately supervised child work the user needs to revisit or steer, spawn `sessions_spawn` with `visible=true` (persistent, in the user's sidebar); reply with the link. A request to use subagents does not request separate sessions."
+      ? params.workerPlacement
+        ? "- Multi-step or slow work: delegate via `sessions_spawn`; every child is a visible session in the user's sidebar, and its whole brief (objective, output, write scope, verification) goes in `task`. Reply with the link."
+        : "- For deliberately supervised child work the user needs to revisit or steer, spawn `sessions_spawn` with `visible=true` (persistent, in the user's sidebar); reply with the link. A request to use subagents does not request separate sessions."
       : "",
     params.inTurnCollectionGuidance
       ? ""

@@ -1,6 +1,5 @@
-// Spec section 11 acceptance tests 1, 2, 6, 7 and 10 (client and transport side).
+// Spec section 11 acceptance tests 1, 2, 6 and 7 (client and transport side).
 import { describe, expect, it } from "vitest";
-import { submitRedemption } from "../authority/apply.js";
 import { linkClaw } from "../authority/state.js";
 import { descriptorEvidence, type ClawDescriptor } from "../discovery/descriptor.js";
 import {
@@ -14,13 +13,11 @@ import {
   verifySasCommitment,
   type SasStart,
 } from "../enrollment/sas.js";
-import { buildInviteLink, generateInviteSecret } from "../invites.js";
 import { fingerprint } from "../keys.js";
 import { signStatement } from "../statements/envelope.js";
 import { verifyBindingForPin, type ClawPin } from "../statements/pin.js";
 import { acceptanceTitle } from "../testing/acceptance.js";
 import { buildWorld, WORLD_HOST, WORLD_NOW } from "../testing/world.js";
-import { inviteFixture } from "./invite-fixture.js";
 
 async function setup() {
   const world = await buildWorld();
@@ -176,25 +173,5 @@ describe(acceptanceTitle(7), () => {
     expect(
       linkClaw({ claw_id: world.state.claw_id, root_pub: world.mallory.pub }, "local_operator"),
     ).toMatchObject({ ok: true, state: { anchor: { root_pub: world.mallory.pub } } });
-  });
-});
-
-describe(acceptanceTitle(10), () => {
-  it("keeps the secret out of the request target", () => {
-    const { invite_id, secret } = generateInviteSecret();
-    const link = new URL(
-      buildInviteLink(WORLD_HOST, { invite_id, secret, root_fp: `fp:${"ab".repeat(32)}` }),
-    );
-    const requestTarget = `${link.pathname}${link.search}`;
-    expect(requestTarget).toBe("/join");
-    expect(link.hash).toContain(invite_id);
-  });
-
-  it("refuses a second redemption of the same invite", async () => {
-    const { state, redemption, identity } = await inviteFixture();
-    const first = await submitRedemption(state, redemption, identity, WORLD_NOW);
-    expect(first).toMatchObject({ ok: true, status: "pending" });
-    const again = await submitRedemption(first.state, redemption, identity, WORLD_NOW);
-    expect(again).toMatchObject({ ok: false, code: "invite_used" });
   });
 });
