@@ -23,23 +23,38 @@ final class NativeUsageUITests: XCTestCase {
             XCTAssertTrue(summary.waitForExistence(timeout: 12))
             self.capture(app, "usage-overview-" + appearance)
             let original = summary.label
-            app.buttons["7 days"].tap()
+            let period = app.buttons["Usage.Period"]
+            XCTAssertEqual(period.label, "Last 30 days")
+            let position = period.frame.midY
+            period.tap()
+            app.buttons["Last 7 days"].tap()
             let changed = XCTNSPredicateExpectation(
                 predicate: NSPredicate(format: "exists == YES AND label != %@", original),
                 object: summary)
             XCTAssertEqual(XCTWaiter.wait(for: [changed], timeout: 6), .completed)
             self.capture(app, "usage-week-" + appearance)
-            app.buttons["Custom"].tap()
+            XCTAssertEqual(period.label, "Last 7 days")
+            XCTAssertEqual(period.frame.midY, position, accuracy: 2)
+            period.tap()
+            app.buttons["Custom range…"].tap()
             XCTAssertTrue(app.descendants(matching: .any)["Start date"].firstMatch.waitForExistence(timeout: 4))
             self.capture(app, "usage-custom-" + appearance)
+            XCTAssertTrue(app.descendants(matching: .any)["End date"].firstMatch.exists)
+            app.buttons["Cancel"].tap()
+            XCTAssertEqual(period.label, "Last 7 days")
             let agent = app.buttons["Usage.Agent.Research"]
-            for _ in 0..<6 where !agent.isHittable {
+            for _ in 0..<4 where !agent.isHittable || agent.frame.maxY > app.frame.maxY - 50 {
                 app.swipeUp()
             }
             XCTAssertTrue(agent.isHittable)
-            agent.tap()
+            agent.coordinate(withNormalizedOffset: CGVector(dx: 0.3, dy: 0.35)).tap()
             XCTAssertTrue(app.navigationBars["Research"].waitForExistence(timeout: 5))
             self.capture(app, "usage-agent-" + appearance)
+            XCTAssertEqual(period.label, "Last 7 days")
+            period.tap()
+            app.buttons["Custom range…"].tap()
+            app.buttons["Apply"].tap()
+            XCTAssertEqual(period.label, "Custom range")
             app.buttons["Done"].tap()
             XCTAssertTrue(app.navigationBars["Usage"].exists)
             app.terminate()

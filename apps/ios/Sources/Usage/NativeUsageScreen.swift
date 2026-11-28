@@ -10,11 +10,11 @@ struct NativeUsageScreen: View {
 
         var title: LocalizedStringKey {
             switch self {
-            case .week: "7 days"
-            case .month: "30 days"
-            case .quarter: "90 days"
-            case .year: "1 year"
-            case .custom: "Custom"
+            case .week: "Last 7 days"
+            case .month: "Last 30 days"
+            case .quarter: "Last 90 days"
+            case .year: "Last year"
+            case .custom: "Custom range"
             }
         }
     }
@@ -24,6 +24,7 @@ struct NativeUsageScreen: View {
     @Environment(NodeAppModel.self) private var appModel
     @State private var report: NativeUsageReport?
     @State private var loadedQuery: NativeUsageQuery?
+    @State private var loadedDates: ClosedRange<Date>?
     @State private var plans: NativeUsagePlans?
     @State private var reportError: String?
     @State private var plansFailed = false
@@ -71,26 +72,23 @@ struct NativeUsageScreen: View {
         List {
             if self.connected {
                 if self.agentID == nil { self.planLimits }
-                self.periodControls
+                NativeUsagePeriodControl(
+                    period: self.$period,
+                    dates: self.dates,
+                    displayedDates: self.loadedDates ?? self.dates,
+                    isUpdating: self.report != nil && self.loadedQuery != self.query && self.reportError == nil)
+                { dates in
+                    self.customStart = dates.lowerBound
+                    self.customEnd = dates.upperBound
+                    self.period = .custom
+                }
                 if let report {
                     let updating = self.loadedQuery != self.query
-                    if updating {
-                        Section {
-                            if let reportError {
-                                Text(verbatim: reportError).font(OpenClawType.footnote).foregroundStyle(.secondary)
-                                Button { self.refresh += 1 } label: { Text("Try again").font(OpenClawType.body) }
-                            } else {
-                                ProgressView { Text("Updating date range…").font(OpenClawType.subhead) }
-                            }
-                        } footer: {
-                            Text(String(
-                                format: String(localized: "Showing %@ through %@."),
-                                report.startDate,
-                                report.endDate))
-                                .font(OpenClawType.caption)
-                        }
-                    } else if let reportError {
+                    if let reportError {
                         Text(verbatim: reportError).font(OpenClawType.footnote).foregroundStyle(.secondary)
+                        if updating {
+                            Button { self.refresh += 1 } label: { Text("Try again").font(OpenClawType.body) }
+                        }
                     }
                     NativeUsageAnalytics(report: report, showsAgents: self.agentID == nil) { id in
                         self.agent = Agent(id: id)
@@ -157,46 +155,6 @@ struct NativeUsageScreen: View {
                 path: DashboardRouteMap.usagePagePath,
                 title: String(localized: "Usage"),
                 onClose: { self.showDashboard = false })
-        }
-    }
-
-    private var periodControls: some View {
-        Group {
-            Section {
-                Picker(selection: self.$period) {
-                    ForEach(Period.allCases) { period in Text(period.title).font(OpenClawType.caption).tag(period) }
-                } label: { Text("Date range").font(OpenClawType.body) }
-                    .pickerStyle(.segmented)
-                    .listRowInsets(EdgeInsets())
-                    .listRowBackground(Color.clear)
-                    .listRowSeparator(.hidden)
-            } footer: {
-                let dates = self.dates
-                let interval = dates.lowerBound..<dates.upperBound
-                Text(verbatim: interval.formatted(.interval.year().month(.abbreviated).day()) + " · " + TimeZone.current
-                    .identifier)
-                    .font(OpenClawType.caption)
-            }
-            if self.period == .custom {
-                Section {
-                    DatePicker(selection: self.$customStart, in: ...self.customEnd, displayedComponents: .date) {
-                        Text("Start date").font(OpenClawType.body)
-                    }
-                    DatePicker(
-                        selection: self.$customEnd,
-                        in: self.customStart...max(self.customStart, Date.now),
-                        displayedComponents: .date)
-                    {
-                        Text("End date").font(OpenClawType.body)
-                    }
-                }
-            }
-        }
-        .onChange(of: self.period) { old, new in
-            if new == .custom, old != .custom {
-                self.customEnd = Calendar.current.startOfDay(for: .now)
-                self.customStart = Self.start(of: old, end: self.customEnd)
-            }
         }
     }
 
@@ -319,8 +277,10 @@ struct NativeUsageScreen: View {
         guard self.connected else {
             self.report = nil
             self.loadedQuery = nil
+            self.loadedDates = nil
             return
         }
+        let dates = self.dates
         let query = self.query
         self.reportError = nil
         do {
@@ -330,6 +290,7 @@ struct NativeUsageScreen: View {
             guard self.query == query, self.reportRequest == request else { return }
             self.report = result
             self.loadedQuery = query
+            self.loadedDates = dates
         } catch {
             guard !Task.isCancelled, self.query == query, self.reportRequest == request else { return }
             self.reportError = error.localizedDescription
