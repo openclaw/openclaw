@@ -37,7 +37,10 @@ beforeAll(() => {
   runtimeRoot = createBuiltRuntime(fixtures.createTempDir("doctor-agent-database-runtime-"));
 });
 afterAll(() => fixtures.cleanup());
-const CHILD_TIMEOUT_MS = 60_000;
+// Deadlock guard, not a speed budget: one real Doctor run here takes 22-27 s idle and
+// waits on ~23 read-only SQLite children plus worker threads. The 2-core runtime shard
+// runs another Doctor process file beside it, which has pushed a progressing run past 60 s.
+const CHILD_TIMEOUT_MS = 120_000;
 
 function seedHistoricalDatabase(pathname: string, agentId?: string): void {
   fs.mkdirSync(path.dirname(pathname), { recursive: true });
