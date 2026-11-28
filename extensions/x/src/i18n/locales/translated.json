@@ -1,0 +1,1850 @@
+{
+  "zh-CN": {
+    "xReplies": {
+      "title": "X 回复",
+      "subtitle": "选择智能体可以公开回复哪些用户的提及。",
+      "refresh": "刷新",
+      "disconnected": "请连接到 Gateway 以管理 X 回复。",
+      "adminRequired": "你需要管理员权限才能管理 X 回复。",
+      "xAccount": "X 账号",
+      "selectAccount": "选择账号",
+      "accountOption": "{account}（{accountId}）",
+      "addByHandle": "通过 X 用户名添加",
+      "handlePlaceholder": "@handle",
+      "addAccount": "添加账号",
+      "lookupHint": "查询一个 X 用户名需花费 $0.01。配置文件中的条目在此处为只读。",
+      "updating": "正在更新 X 回复",
+      "errors": {
+        "request": "无法管理 X 回复。",
+        "list": "无法加载 X 回复。请选择“刷新”重试。",
+        "add": "无法确认 OpenClaw 是否已添加该 X 账号。请选择“刷新”查看。",
+        "remove": "无法确认 OpenClaw 是否已移除存储的条目。请选择“刷新”查看。",
+        "guests": "无法确认 OpenClaw 是否已更改访客模式。请选择“刷新”查看。",
+        "handleRequired": "OpenClaw 未添加该账号。请输入不超过 15 个字符的 X 用户名，仅限字母、数字或下划线。",
+        "budget": "X API 预算已用尽。付费查询可于 {time} 恢复。"
+      },
+      "notices": {
+        "added": "账号已添加。该账号的提及现在可以收到回复。",
+        "removed": "已移除存储的条目。其他允许列表来源仍然有效。",
+        "guestsBlocked": "访客模式已开启。请完成下方设置，访客才能收到回复。",
+        "guestsOn": "访客模式已开启。访客回复遵循已配置的仓库访问限制和用量限制。",
+        "guestsOff": "访客模式已关闭。只有维护者可以收到回复。"
+      },
+      "guests": {
+        "title": "访客模式",
+        "subtitle": "允许任何人提问有关 OpenClaw 仓库的问题。",
+        "on": "开启",
+        "off": "关闭",
+        "perGuestLimit": "每位访客每日提及次数（按 UTC 计算）",
+        "admittedToday": "今日已受理",
+        "rateLimitedToday": "今日已限流",
+        "hint": "适用于所选的 X 账号。访客可通过该账号的智能体及其隐藏子智能体获取仓库相关问题的解答。他们无法执行写入操作、运行命令、开启可见会话或使用其他智能体。维护者保留其正常访问权限。",
+        "docsLink": "访客设置与限制"
+      },
+      "spend": {
+        "label": "X API 支出",
+        "today": "今日（UTC）",
+        "cycle": "自 {date} 起的计费周期",
+        "exhausted": "已达到 X API 预算上限。付费请求将于 {time} 恢复。"
+      },
+      "allowlist": {
+        "account": "账号",
+        "source": "来源",
+        "addedBy": "添加者",
+        "actions": "操作",
+        "configAndStored": "配置文件 + 已存储",
+        "config": "配置文件",
+        "stored": "已存储",
+        "remove": "移除",
+        "removeLabel": "移除 {account} 的已存储条目",
+        "readOnly": "只读",
+        "empty": "暂无手动添加的条目。请通过 X 用户名添加账号。"
+      },
+      "github": {
+        "title": "来自 GitHub",
+        "verifiedThrough": "已通过 {repo} 验证。要为自己启用此功能，请将你的 X 用户名添加到 GitHub 个人资料中。",
+        "profileSetup": "个人资料设置",
+        "stale": "同步数据已过期。",
+        "neverSynced": "尚未成功同步。",
+        "lastSync": "上次成功同步：{time}。",
+        "lastGoodSetActive": "上次有效的条目集仍然生效。",
+        "readOnly": "条目会自动更新，在此处为只读。",
+        "unresolved": "在 X 上找不到 {handles}。请检查这些 GitHub 个人资料中的 X 用户名是否正确。",
+        "xAccount": "X 账号",
+        "githubAccount": "GitHub 账号",
+        "permission": "权限",
+        "lastSyncColumn": "上次同步",
+        "empty": "暂无来自 GitHub 的账号。"
+      },
+      "footer": {
+        "guestsBlocked": "完成上述设置后，才能向访客回复。",
+        "guestsOn": "白名单中的用户视为维护者。其他用户只能获得有限的访客回复。",
+        "guestsOff": "访客模式已关闭。仅向白名单中的维护者回复。"
+      }
+    }
+  },
+  "zh-TW": {
+    "xReplies": {
+      "title": "X 回覆",
+      "subtitle": "選擇代理程式可以公開回覆哪些人的提及。",
+      "refresh": "重新整理",
+      "disconnected": "請連線至 Gateway 以管理 X 回覆。",
+      "adminRequired": "您需要管理員權限才能管理 X 回覆。",
+      "xAccount": "X 帳號",
+      "selectAccount": "選擇帳號",
+      "accountOption": "{account} ({accountId})",
+      "addByHandle": "透過 X 使用者名稱新增",
+      "handlePlaceholder": "@handle",
+      "addAccount": "新增帳號",
+      "lookupHint": "查詢 X 使用者名稱需花費 $0.01。來自設定檔的項目在此處為唯讀。",
+      "updating": "正在更新 X 回覆",
+      "errors": {
+        "request": "無法管理 X 回覆。",
+        "list": "無法載入 X 回覆。請選擇「重新整理」再試一次。",
+        "add": "無法確認 OpenClaw 是否已新增該 X 帳號。請選擇「重新整理」以確認。",
+        "remove": "無法確認 OpenClaw 是否已移除儲存的項目。請選擇「重新整理」以確認。",
+        "guests": "無法確認 OpenClaw 是否已變更訪客模式。請選擇「重新整理」以確認。",
+        "handleRequired": "OpenClaw 未新增該帳號。請輸入最多 15 個字元的 X 使用者名稱，僅限英文字母、數字或底線。",
+        "budget": "X API 預算已用完。付費查詢可於 {time} 恢復。"
+      },
+      "notices": {
+        "added": "已新增帳號。現在可回覆其提及。",
+        "removed": "已移除儲存的項目。其他允許清單來源仍然適用。",
+        "guestsBlocked": "訪客模式已開啟。請完成下方設定，訪客才能收到回覆。",
+        "guestsOn": "訪客模式已開啟。訪客回覆會套用已設定的儲存庫限制與額度。",
+        "guestsOff": "訪客模式已關閉。只有維護者能收到回覆。"
+      },
+      "guests": {
+        "title": "訪客模式",
+        "subtitle": "讓任何人都能詢問有關 OpenClaw 儲存庫的問題。",
+        "on": "開啟",
+        "off": "關閉",
+        "perGuestLimit": "每位訪客每日（UTC）的提及次數",
+        "admittedToday": "今日已允許",
+        "rateLimitedToday": "今日受速率限制",
+        "hint": "適用於所選的 X 帳號。訪客會從該帳號的代理程式及隱藏的子代理程式取得儲存庫相關解答。他們無法寫入、執行指令、開啟可見的工作階段或使用其他代理程式。維護者仍保有原有的存取權限。",
+        "docsLink": "訪客設定與限制"
+      },
+      "spend": {
+        "label": "X API 費用",
+        "today": "今天（UTC）",
+        "cycle": "自 {date} 起的計費週期",
+        "exhausted": "已達 X API 預算上限。付費請求將於 {time} 恢復。"
+      },
+      "allowlist": {
+        "account": "帳號",
+        "source": "來源",
+        "addedBy": "新增者",
+        "actions": "操作",
+        "configAndStored": "設定檔 + 已儲存",
+        "config": "設定檔",
+        "stored": "已儲存",
+        "remove": "移除",
+        "removeLabel": "移除 {account} 的已儲存項目",
+        "readOnly": "唯讀",
+        "empty": "尚無手動新增的項目。請使用 X 使用者名稱新增帳號。"
+      },
+      "github": {
+        "title": "來自 GitHub",
+        "verifiedThrough": "已透過 {repo} 驗證。若要啟用自己的帳號，請將您的 X 使用者名稱加入 GitHub 個人檔案。",
+        "profileSetup": "個人檔案設定",
+        "stale": "同步資料已過期。",
+        "neverSynced": "尚未成功同步。",
+        "lastSync": "上次成功同步：{time}。",
+        "lastGoodSetActive": "上次成功同步的資料集仍然有效。",
+        "readOnly": "項目會自動更新，在此僅供檢視。",
+        "unresolved": "在 X 上找不到 {handles}。請確認這些 GitHub 個人檔案中的 X 使用者名稱是否正確。",
+        "xAccount": "X 帳號",
+        "githubAccount": "GitHub 帳號",
+        "permission": "權限",
+        "lastSyncColumn": "上次同步",
+        "empty": "尚無來自 GitHub 的帳號。"
+      },
+      "footer": {
+        "guestsBlocked": "完成上述設定前，不會回覆訪客。",
+        "guestsOn": "允許名單中的使用者視為維護者。其他使用者僅能收到有限的訪客回覆。",
+        "guestsOff": "訪客模式已關閉。只有允許名單中的維護者會收到回覆。"
+      }
+    }
+  },
+  "pt-BR": {
+    "xReplies": {
+      "title": "Respostas no X",
+      "subtitle": "Escolha de quem são as menções que o agente pode responder publicamente.",
+      "refresh": "Atualizar",
+      "disconnected": "Conecte-se ao Gateway para gerenciar as respostas no X.",
+      "adminRequired": "Você precisa de acesso de administrador para gerenciar as respostas no X.",
+      "xAccount": "Conta do X",
+      "selectAccount": "Selecione uma conta",
+      "accountOption": "{account} ({accountId})",
+      "addByHandle": "Adicionar pelo nome de usuário do X",
+      "handlePlaceholder": "@handle",
+      "addAccount": "Adicionar conta",
+      "lookupHint": "Consultar um nome de usuário do X custa US$ 0,01. As entradas do arquivo de configuração são somente leitura aqui.",
+      "updating": "Atualizando as respostas no X",
+      "errors": {
+        "request": "Não foi possível gerenciar as respostas no X.",
+        "list": "Não foi possível carregar as respostas no X. Selecione Atualizar para tentar novamente.",
+        "add": "Não foi possível confirmar que o OpenClaw adicionou a conta do X. Selecione Atualizar para verificar.",
+        "remove": "Não foi possível confirmar que o OpenClaw removeu a entrada armazenada. Selecione Atualizar para verificar.",
+        "guests": "Não foi possível confirmar que o OpenClaw alterou o modo de convidado. Selecione Atualizar para verificar.",
+        "handleRequired": "O OpenClaw não adicionou a conta. Insira um nome de usuário do X com até 15 letras, números ou sublinhados.",
+        "budget": "O orçamento da API do X se esgotou. As consultas pagas poderão ser retomadas em {time}."
+      },
+      "notices": {
+        "added": "Conta adicionada. As menções dessa conta agora podem receber respostas.",
+        "removed": "Entrada armazenada removida. Qualquer outra fonte da lista de permissões continua válida.",
+        "guestsBlocked": "O modo de convidados está ativado. Conclua a configuração abaixo para que convidados possam receber respostas.",
+        "guestsOn": "O modo de convidados está ativado. As respostas a convidados seguem as restrições de repositório e os limites configurados.",
+        "guestsOff": "O modo de convidados está desativado. Apenas mantenedores podem receber respostas."
+      },
+      "guests": {
+        "title": "Modo de convidados",
+        "subtitle": "Permita que qualquer pessoa faça perguntas sobre o repositório OpenClaw.",
+        "on": "Ativado",
+        "off": "Desativado",
+        "perGuestLimit": "Menções por convidado, por dia em UTC",
+        "admittedToday": "Admitidos hoje",
+        "rateLimitedToday": "Limitados por taxa hoje",
+        "hint": "Aplica-se à conta do X selecionada. Os convidados recebem respostas sobre o repositório do agente dessa conta e de seus subagentes ocultos. Eles não podem gravar dados, executar comandos, abrir sessões visíveis nem usar outros agentes. Os mantenedores mantêm seu acesso normal.",
+        "docsLink": "Configuração e limites para convidados"
+      },
+      "spend": {
+        "label": "Gastos com a API do X",
+        "today": "Hoje (UTC)",
+        "cycle": "Ciclo de faturamento desde {date}",
+        "exhausted": "Orçamento da API do X atingido. As solicitações pagas serão retomadas às {time}."
+      },
+      "allowlist": {
+        "account": "Conta",
+        "source": "Fonte",
+        "addedBy": "Adicionado por",
+        "actions": "Ações",
+        "configAndStored": "Arquivo de configuração + salvo",
+        "config": "Arquivo de configuração",
+        "stored": "Salvo",
+        "remove": "Remover",
+        "removeLabel": "Remover entrada salva de {account}",
+        "readOnly": "Somente leitura",
+        "empty": "Ainda não há entradas manuais. Adicione uma conta pelo nome de usuário no X."
+      },
+      "github": {
+        "title": "Do GitHub",
+        "verifiedThrough": "Verificado por meio de {repo}. Para habilitar sua conta, adicione seu nome de usuário do X ao seu perfil do GitHub.",
+        "profileSetup": "Configuração do perfil",
+        "stale": "A sincronização está desatualizada.",
+        "neverSynced": "Ainda não houve nenhuma sincronização bem-sucedida.",
+        "lastSync": "Última sincronização bem-sucedida: {time}.",
+        "lastGoodSetActive": "O último conjunto válido permanece ativo.",
+        "readOnly": "As entradas são atualizadas automaticamente e são somente leitura aqui.",
+        "unresolved": "Não foi possível encontrar {handles} no X. Verifique se os nomes de usuário do X nesses perfis do GitHub estão corretos.",
+        "xAccount": "Conta do X",
+        "githubAccount": "Conta do GitHub",
+        "permission": "Permissão",
+        "lastSyncColumn": "Última sincronização",
+        "empty": "Ainda não há contas provenientes do GitHub."
+      },
+      "footer": {
+        "guestsBlocked": "As respostas a convidados estão bloqueadas até que a configuração acima seja concluída.",
+        "guestsOn": "Os usuários na lista de permissões são mantenedores. Os demais usuários recebem respostas limitadas como convidados.",
+        "guestsOff": "O modo de convidados está desativado. Somente mantenedores na lista de permissões recebem respostas."
+      }
+    }
+  },
+  "de": {
+    "xReplies": {
+      "title": "Antworten auf X",
+      "subtitle": "Wählen Sie aus, auf wessen Erwähnungen der Agent öffentlich antworten darf.",
+      "refresh": "Aktualisieren",
+      "disconnected": "Verbinden Sie sich mit dem Gateway, um Antworten auf X zu verwalten.",
+      "adminRequired": "Sie benötigen Administratorzugriff, um Antworten auf X zu verwalten.",
+      "xAccount": "X-Konto",
+      "selectAccount": "Konto auswählen",
+      "accountOption": "{account} ({accountId})",
+      "addByHandle": "Über X-Benutzernamen hinzufügen",
+      "handlePlaceholder": "@handle",
+      "addAccount": "Konto hinzufügen",
+      "lookupHint": "Das Nachschlagen eines X-Benutzernamens kostet 0,01 $. Einträge aus der Konfigurationsdatei können hier nur gelesen werden.",
+      "updating": "Antworten auf X werden aktualisiert",
+      "errors": {
+        "request": "Antworten auf X konnten nicht verwaltet werden.",
+        "list": "Antworten auf X konnten nicht geladen werden. Wählen Sie „Aktualisieren“, um es erneut zu versuchen.",
+        "add": "Es konnte nicht bestätigt werden, dass OpenClaw das X-Konto hinzugefügt hat. Wählen Sie „Aktualisieren“, um dies zu überprüfen.",
+        "remove": "Es konnte nicht bestätigt werden, dass OpenClaw den gespeicherten Eintrag entfernt hat. Wählen Sie „Aktualisieren“, um dies zu überprüfen.",
+        "guests": "Es konnte nicht bestätigt werden, dass OpenClaw den Gastmodus geändert hat. Wählen Sie „Aktualisieren“, um dies zu überprüfen.",
+        "handleRequired": "OpenClaw hat das Konto nicht hinzugefügt. Geben Sie einen X-Benutzernamen mit bis zu 15 Buchstaben, Ziffern oder Unterstrichen ein.",
+        "budget": "Das Budget für die X API ist aufgebraucht. Kostenpflichtige Abfragen sind ab {time} wieder möglich."
+      },
+      "notices": {
+        "added": "Konto hinzugefügt. Seine Erwähnungen können jetzt beantwortet werden.",
+        "removed": "Gespeicherter Eintrag entfernt. Andere Quellen der Zulassungsliste gelten weiterhin.",
+        "guestsBlocked": "Der Gastmodus ist aktiviert. Schließen Sie die Einrichtung unten ab, damit Gäste Antworten erhalten können.",
+        "guestsOn": "Der Gastmodus ist aktiviert. Für Antworten an Gäste gelten die konfigurierten Repository-Beschränkungen und Limits.",
+        "guestsOff": "Der Gastmodus ist deaktiviert. Nur Maintainer können Antworten erhalten."
+      },
+      "guests": {
+        "title": "Gastmodus",
+        "subtitle": "Erlauben Sie allen, Fragen zum OpenClaw-Repository zu stellen.",
+        "on": "Ein",
+        "off": "Aus",
+        "perGuestLimit": "Erwähnungen pro Gast und UTC-Tag",
+        "admittedToday": "Heute zugelassen",
+        "rateLimitedToday": "Heute durch Ratenlimit begrenzt",
+        "hint": "Gilt für das ausgewählte X-Konto. Gäste erhalten Antworten zum Repository von dessen Agenten und verborgenen Unteragenten. Sie können weder schreiben noch Befehle ausführen, sichtbare Sitzungen öffnen oder andere Agenten verwenden. Maintainer behalten ihren normalen Zugriff.",
+        "docsLink": "Gasteinrichtung und Limits"
+      },
+      "spend": {
+        "label": "Ausgaben für die X API",
+        "today": "Heute (UTC)",
+        "cycle": "Abrechnungszeitraum seit {date}",
+        "exhausted": "Budget für die X API erreicht. Kostenpflichtige Anfragen sind ab {time} wieder möglich."
+      },
+      "allowlist": {
+        "account": "Konto",
+        "source": "Quelle",
+        "addedBy": "Hinzugefügt von",
+        "actions": "Aktionen",
+        "configAndStored": "Konfigurationsdatei + gespeichert",
+        "config": "Konfigurationsdatei",
+        "stored": "Gespeichert",
+        "remove": "Entfernen",
+        "removeLabel": "Gespeicherten Eintrag für {account} entfernen",
+        "readOnly": "Schreibgeschützt",
+        "empty": "Noch keine manuellen Einträge. Fügen Sie ein Konto über seinen X-Nutzernamen hinzu."
+      },
+      "github": {
+        "title": "Von GitHub",
+        "verifiedThrough": "Über {repo} verifiziert. Um sich selbst freizuschalten, fügen Sie Ihren X-Nutzernamen zu Ihrem GitHub-Profil hinzu.",
+        "profileSetup": "Profileinrichtung",
+        "stale": "Der Synchronisierungsstand ist veraltet.",
+        "neverSynced": "Noch keine erfolgreiche Synchronisierung.",
+        "lastSync": "Letzte erfolgreiche Synchronisierung: {time}.",
+        "lastGoodSetActive": "Der letzte gültige Datenbestand bleibt aktiv.",
+        "readOnly": "Einträge werden automatisch aktualisiert und sind hier schreibgeschützt.",
+        "unresolved": "{handles} konnten auf X nicht gefunden werden. Prüfen Sie, ob die X-Nutzernamen in den betreffenden GitHub-Profilen korrekt sind.",
+        "xAccount": "X-Konto",
+        "githubAccount": "GitHub-Konto",
+        "permission": "Berechtigung",
+        "lastSyncColumn": "Letzte Synchronisierung",
+        "empty": "Noch keine aus GitHub übernommenen Konten."
+      },
+      "footer": {
+        "guestsBlocked": "Antworten an Gäste sind blockiert, bis die obige Einrichtung abgeschlossen ist.",
+        "guestsOn": "Nutzer auf der Zulassungsliste sind Maintainer. Andere Nutzer erhalten eingeschränkte Antworten als Gäste.",
+        "guestsOff": "Der Gastmodus ist deaktiviert. Nur Maintainer auf der Zulassungsliste erhalten Antworten."
+      }
+    }
+  },
+  "es": {
+    "xReplies": {
+      "title": "Respuestas en X",
+      "subtitle": "Elige a quién puede responder públicamente el agente cuando lo mencionen.",
+      "refresh": "Actualizar",
+      "disconnected": "Conéctate al Gateway para gestionar las respuestas en X.",
+      "adminRequired": "Necesitas acceso de administrador para gestionar las respuestas en X.",
+      "xAccount": "Cuenta de X",
+      "selectAccount": "Selecciona una cuenta",
+      "accountOption": "{account} ({accountId})",
+      "addByHandle": "Añadir por nombre de usuario de X",
+      "handlePlaceholder": "@handle",
+      "addAccount": "Añadir cuenta",
+      "lookupHint": "Buscar un nombre de usuario de X cuesta $0.01. Las entradas del archivo de configuración son de solo lectura aquí.",
+      "updating": "Actualizando las respuestas en X",
+      "errors": {
+        "request": "No se pudieron gestionar las respuestas en X.",
+        "list": "No se pudieron cargar las respuestas en X. Selecciona Actualizar para volver a intentarlo.",
+        "add": "No se pudo confirmar que OpenClaw haya añadido la cuenta de X. Selecciona Actualizar para comprobarlo.",
+        "remove": "No se pudo confirmar que OpenClaw haya eliminado la entrada guardada. Selecciona Actualizar para comprobarlo.",
+        "guests": "No se pudo confirmar que OpenClaw haya cambiado el modo de invitado. Selecciona Actualizar para comprobarlo.",
+        "handleRequired": "OpenClaw no añadió la cuenta. Introduce un nombre de usuario de X de hasta 15 letras, números o guiones bajos.",
+        "budget": "Se ha agotado el presupuesto de la API de X. Las búsquedas de pago podrán reanudarse a las {time}."
+      },
+      "notices": {
+        "added": "Cuenta añadida. Sus menciones ya pueden recibir respuestas.",
+        "removed": "Entrada almacenada eliminada. Cualquier otra fuente de la lista de permitidos sigue siendo válida.",
+        "guestsBlocked": "El modo de invitados está activado. Completa la configuración a continuación para que los invitados puedan recibir respuestas.",
+        "guestsOn": "El modo de invitados está activado. Las respuestas a invitados usan las restricciones y los límites configurados para el repositorio.",
+        "guestsOff": "El modo de invitados está desactivado. Solo los responsables del mantenimiento pueden recibir respuestas."
+      },
+      "guests": {
+        "title": "Modo de invitados",
+        "subtitle": "Permite que cualquiera haga preguntas sobre el repositorio de OpenClaw.",
+        "on": "Activado",
+        "off": "Desactivado",
+        "perGuestLimit": "Menciones por invitado y por día UTC",
+        "admittedToday": "Admitidas hoy",
+        "rateLimitedToday": "Limitadas hoy por frecuencia",
+        "hint": "Se aplica a la cuenta de X seleccionada. Los invitados reciben respuestas sobre el repositorio del agente de esa cuenta y de sus subagentes ocultos. No pueden escribir, ejecutar comandos, abrir sesiones visibles ni usar otros agentes. Los responsables del mantenimiento conservan su acceso habitual.",
+        "docsLink": "Configuración y límites para invitados"
+      },
+      "spend": {
+        "label": "Gasto en la API de X",
+        "today": "Hoy (UTC)",
+        "cycle": "Ciclo de facturación desde {date}",
+        "exhausted": "Se ha alcanzado el presupuesto de la API de X. Las solicitudes de pago se reanudarán a las {time}."
+      },
+      "allowlist": {
+        "account": "Cuenta",
+        "source": "Fuente",
+        "addedBy": "Añadido por",
+        "actions": "Acciones",
+        "configAndStored": "Archivo de configuración + guardado",
+        "config": "Archivo de configuración",
+        "stored": "Guardado",
+        "remove": "Eliminar",
+        "removeLabel": "Eliminar la entrada guardada de {account}",
+        "readOnly": "Solo lectura",
+        "empty": "Aún no hay entradas manuales. Añade una cuenta con su nombre de usuario de X."
+      },
+      "github": {
+        "title": "Desde GitHub",
+        "verifiedThrough": "Verificado a través de {repo}. Para habilitar tu cuenta, añade tu nombre de usuario de X a tu perfil de GitHub.",
+        "profileSetup": "Configuración del perfil",
+        "stale": "La sincronización está desactualizada.",
+        "neverSynced": "Aún no se ha completado ninguna sincronización correctamente.",
+        "lastSync": "Última sincronización correcta: {time}.",
+        "lastGoodSetActive": "El último conjunto válido sigue activo.",
+        "readOnly": "Las entradas se actualizan automáticamente y aquí son de solo lectura.",
+        "unresolved": "No se ha podido encontrar a {handles} en X. Comprueba que los nombres de usuario de X en esos perfiles de GitHub sean correctos.",
+        "xAccount": "Cuenta de X",
+        "githubAccount": "Cuenta de GitHub",
+        "permission": "Permiso",
+        "lastSyncColumn": "Última sincronización",
+        "empty": "Aún no hay cuentas obtenidas de GitHub."
+      },
+      "footer": {
+        "guestsBlocked": "Las respuestas a invitados están bloqueadas hasta que se complete la configuración anterior.",
+        "guestsOn": "Los usuarios de la lista de permitidos son responsables del mantenimiento. Los demás usuarios reciben respuestas limitadas como invitados.",
+        "guestsOff": "El modo de invitados está desactivado. Solo reciben respuestas los responsables del mantenimiento incluidos en la lista de permitidos."
+      }
+    }
+  },
+  "ja-JP": {
+    "xReplies": {
+      "title": "Xでの返信",
+      "subtitle": "エージェントが公開で返信できるメンションの送信者を選択します。",
+      "refresh": "更新",
+      "disconnected": "Xでの返信を管理するには、Gatewayに接続してください。",
+      "adminRequired": "Xでの返信を管理するには、管理者権限が必要です。",
+      "xAccount": "Xアカウント",
+      "selectAccount": "アカウントを選択",
+      "accountOption": "{account} ({accountId})",
+      "addByHandle": "Xのユーザー名で追加",
+      "handlePlaceholder": "@handle",
+      "addAccount": "アカウントを追加",
+      "lookupHint": "Xのユーザー名の検索には$0.01かかります。設定ファイルから読み込まれた項目は、ここでは読み取り専用です。",
+      "updating": "Xでの返信設定を更新中",
+      "errors": {
+        "request": "Xでの返信を管理できませんでした。",
+        "list": "Xでの返信設定を読み込めませんでした。「更新」を選択して再試行してください。",
+        "add": "OpenClawがXアカウントを追加したことを確認できませんでした。「更新」を選択して確認してください。",
+        "remove": "OpenClawが保存済みの項目を削除したことを確認できませんでした。「更新」を選択して確認してください。",
+        "guests": "OpenClawがゲストモードを変更したことを確認できませんでした。「更新」を選択して確認してください。",
+        "handleRequired": "OpenClawはアカウントを追加しませんでした。英数字またはアンダースコアで構成される15文字以内のXのユーザー名を入力してください。",
+        "budget": "X APIの予算を使い切りました。有料検索は{time}に再開できます。"
+      },
+      "notices": {
+        "added": "アカウントを追加しました。このアカウントからのメンションに返信できるようになりました。",
+        "removed": "保存済みのエントリを削除しました。他の許可リストのソースは引き続き適用されます。",
+        "guestsBlocked": "ゲストモードがオンになっています。ゲストが返信を受け取れるようにするには、以下の設定を完了してください。",
+        "guestsOn": "ゲストモードがオンになっています。ゲストへの返信には、設定済みのリポジトリ制限と上限が適用されます。",
+        "guestsOff": "ゲストモードがオフになっています。返信を受け取れるのはメンテナーのみです。"
+      },
+      "guests": {
+        "title": "ゲストモード",
+        "subtitle": "誰でもOpenClawリポジトリについて質問できるようにします。",
+        "on": "オン",
+        "off": "オフ",
+        "perGuestLimit": "ゲスト1人あたりの1日のメンション数（UTC基準）",
+        "admittedToday": "今日の受け付け数",
+        "rateLimitedToday": "今日のレート制限数",
+        "hint": "選択したXアカウントに適用されます。ゲストは、そのアカウントのエージェントと非表示のサブエージェントからリポジトリに関する回答を受け取れます。書き込み、コマンドの実行、表示されるセッションの開始、他のエージェントの使用はできません。メンテナーは通常のアクセス権を維持します。",
+        "docsLink": "ゲストの設定と制限"
+      },
+      "spend": {
+        "label": "X API利用額",
+        "today": "今日（UTC）",
+        "cycle": "{date}からの請求期間",
+        "exhausted": "X APIの予算上限に達しました。有料リクエストは{time}に再開されます。"
+      },
+      "allowlist": {
+        "account": "アカウント",
+        "source": "ソース",
+        "addedBy": "追加者",
+        "actions": "操作",
+        "configAndStored": "設定ファイル + 保存済み",
+        "config": "設定ファイル",
+        "stored": "保存済み",
+        "remove": "削除",
+        "removeLabel": "{account} の保存済みエントリを削除",
+        "readOnly": "読み取り専用",
+        "empty": "手動で追加されたエントリはまだありません。X のハンドル名でアカウントを追加してください。"
+      },
+      "github": {
+        "title": "GitHub から",
+        "verifiedThrough": "{repo} を通じて確認済みです。自分のアカウントを有効にするには、GitHub プロフィールに X のハンドル名を追加してください。",
+        "profileSetup": "プロフィール設定",
+        "stale": "同期情報が古くなっています。",
+        "neverSynced": "同期はまだ一度も成功していません。",
+        "lastSync": "前回の同期成功日時: {time}。",
+        "lastGoodSetActive": "最後に正常に同期されたエントリは引き続き有効です。",
+        "readOnly": "エントリは自動更新され、ここでは読み取り専用です。",
+        "unresolved": "X で {handles} が見つかりませんでした。該当する GitHub プロフィールの X ハンドル名が正しいことを確認してください。",
+        "xAccount": "X アカウント",
+        "githubAccount": "GitHub アカウント",
+        "permission": "権限",
+        "lastSyncColumn": "最終同期",
+        "empty": "GitHub から取得したアカウントはまだありません。"
+      },
+      "footer": {
+        "guestsBlocked": "上記の設定が完了するまで、ゲストへの返信はブロックされます。",
+        "guestsOn": "許可リストに登録されたユーザーはメンテナーとして扱われます。その他のユーザーには、ゲストとして制限付きで返信されます。",
+        "guestsOff": "ゲストモードはオフです。許可リストに登録されたメンテナーにのみ返信されます。"
+      }
+    }
+  },
+  "ko": {
+    "xReplies": {
+      "title": "X 답글",
+      "subtitle": "에이전트가 누구의 멘션에 공개적으로 답글을 달 수 있는지 선택하세요.",
+      "refresh": "새로고침",
+      "disconnected": "X 답글을 관리하려면 Gateway에 연결하세요.",
+      "adminRequired": "X 답글을 관리하려면 관리자 권한이 필요합니다.",
+      "xAccount": "X 계정",
+      "selectAccount": "계정 선택",
+      "accountOption": "{account} ({accountId})",
+      "addByHandle": "X 사용자 아이디로 추가",
+      "handlePlaceholder": "@handle",
+      "addAccount": "계정 추가",
+      "lookupHint": "X 사용자 아이디를 조회하면 $0.01의 비용이 발생합니다. 설정 파일의 항목은 여기에서 읽기 전용으로 표시됩니다.",
+      "updating": "X 답글 업데이트 중",
+      "errors": {
+        "request": "X 답글을 관리하지 못했습니다.",
+        "list": "X 답글을 불러오지 못했습니다. 새로고침을 선택하여 다시 시도하세요.",
+        "add": "OpenClaw가 X 계정을 추가했는지 확인하지 못했습니다. 새로고침을 선택하여 확인하세요.",
+        "remove": "OpenClaw가 저장된 항목을 삭제했는지 확인하지 못했습니다. 새로고침을 선택하여 확인하세요.",
+        "guests": "OpenClaw가 게스트 모드를 변경했는지 확인하지 못했습니다. 새로고침을 선택하여 확인하세요.",
+        "handleRequired": "OpenClaw가 계정을 추가하지 않았습니다. 영문자, 숫자 또는 밑줄로 이루어진 15자 이하의 X 사용자 아이디를 입력하세요.",
+        "budget": "X API 예산이 소진되었습니다. {time}부터 유료 조회를 재개할 수 있습니다."
+      },
+      "notices": {
+        "added": "계정이 추가되었습니다. 이제 이 계정의 멘션에 답글을 보낼 수 있습니다.",
+        "removed": "저장된 항목이 삭제되었습니다. 다른 허용 목록 출처는 계속 적용됩니다.",
+        "guestsBlocked": "게스트 모드가 켜져 있습니다. 게스트가 답글을 받으려면 아래 설정을 완료하세요.",
+        "guestsOn": "게스트 모드가 켜져 있습니다. 게스트 답글에는 설정된 저장소 제한 사항과 한도가 적용됩니다.",
+        "guestsOff": "게스트 모드가 꺼져 있습니다. 유지관리자만 답글을 받을 수 있습니다."
+      },
+      "guests": {
+        "title": "게스트 모드",
+        "subtitle": "누구나 OpenClaw 저장소에 대해 질문할 수 있도록 허용합니다.",
+        "on": "켜짐",
+        "off": "꺼짐",
+        "perGuestLimit": "게스트당 일일 멘션 수(UTC 기준)",
+        "admittedToday": "오늘 허용된 요청",
+        "rateLimitedToday": "오늘 요청 한도로 제한된 요청",
+        "hint": "선택한 X 계정에 적용됩니다. 게스트는 해당 계정의 에이전트와 숨겨진 하위 에이전트로부터 저장소 관련 답변을 받습니다. 쓰기 작업, 명령 실행, 표시되는 세션 열기 또는 다른 에이전트 사용은 할 수 없습니다. 유지관리자는 기존 접근 권한을 유지합니다.",
+        "docsLink": "게스트 설정 및 한도"
+      },
+      "spend": {
+        "label": "X API 지출",
+        "today": "오늘(UTC)",
+        "cycle": "{date}부터 시작된 청구 주기",
+        "exhausted": "X API 예산 한도에 도달했습니다. 유료 요청은 {time}에 재개됩니다."
+      },
+      "allowlist": {
+        "account": "계정",
+        "source": "출처",
+        "addedBy": "추가한 사용자",
+        "actions": "작업",
+        "configAndStored": "설정 파일 + 저장된 항목",
+        "config": "설정 파일",
+        "stored": "저장된 항목",
+        "remove": "삭제",
+        "removeLabel": "{account}의 저장된 항목 삭제",
+        "readOnly": "읽기 전용",
+        "empty": "아직 수동으로 추가한 항목이 없습니다. X 사용자 아이디로 계정을 추가하세요."
+      },
+      "github": {
+        "title": "GitHub에서 가져옴",
+        "verifiedThrough": "{repo}를 통해 인증되었습니다. 본인 계정을 활성화하려면 GitHub 프로필에 X 사용자 아이디를 추가하세요.",
+        "profileSetup": "프로필 설정",
+        "stale": "동기화 정보가 오래되었습니다.",
+        "neverSynced": "아직 동기화에 성공한 적이 없습니다.",
+        "lastSync": "마지막 동기화 성공: {time}.",
+        "lastGoodSetActive": "마지막으로 정상 동기화된 목록이 계속 활성 상태로 유지됩니다.",
+        "readOnly": "항목은 자동으로 업데이트되며 여기서는 읽기 전용입니다.",
+        "unresolved": "X에서 {handles} 계정을 찾을 수 없습니다. 해당 GitHub 프로필의 X 사용자 아이디가 올바른지 확인하세요.",
+        "xAccount": "X 계정",
+        "githubAccount": "GitHub 계정",
+        "permission": "권한",
+        "lastSyncColumn": "마지막 동기화",
+        "empty": "아직 GitHub에서 가져온 계정이 없습니다."
+      },
+      "footer": {
+        "guestsBlocked": "위 설정이 완료될 때까지 게스트에게는 답변이 제공되지 않습니다.",
+        "guestsOn": "허용 목록에 있는 사용자는 유지관리자입니다. 다른 사용자는 제한된 게스트 답변을 받습니다.",
+        "guestsOff": "게스트 모드가 꺼져 있습니다. 허용 목록에 있는 유지관리자만 답변을 받습니다."
+      }
+    }
+  },
+  "fr": {
+    "xReplies": {
+      "title": "Réponses sur X",
+      "subtitle": "Choisissez les personnes aux mentions desquelles l’agent peut répondre publiquement.",
+      "refresh": "Actualiser",
+      "disconnected": "Connectez-vous à Gateway pour gérer les réponses sur X.",
+      "adminRequired": "Vous devez disposer d’un accès administrateur pour gérer les réponses sur X.",
+      "xAccount": "Compte X",
+      "selectAccount": "Sélectionner un compte",
+      "accountOption": "{account} ({accountId})",
+      "addByHandle": "Ajouter par nom d’utilisateur X",
+      "handlePlaceholder": "@handle",
+      "addAccount": "Ajouter un compte",
+      "lookupHint": "La recherche d’un nom d’utilisateur X coûte 0,01 $. Les entrées du fichier de configuration sont en lecture seule ici.",
+      "updating": "Mise à jour des réponses sur X",
+      "errors": {
+        "request": "Impossible de gérer les réponses sur X.",
+        "list": "Impossible de charger les réponses sur X. Sélectionnez Actualiser pour réessayer.",
+        "add": "Impossible de confirmer qu’OpenClaw a ajouté le compte X. Sélectionnez Actualiser pour vérifier.",
+        "remove": "Impossible de confirmer qu’OpenClaw a supprimé l’entrée enregistrée. Sélectionnez Actualiser pour vérifier.",
+        "guests": "Impossible de confirmer qu’OpenClaw a modifié le mode invité. Sélectionnez Actualiser pour vérifier.",
+        "handleRequired": "OpenClaw n’a pas ajouté le compte. Saisissez un nom d’utilisateur X comportant au maximum 15 lettres, chiffres ou traits de soulignement.",
+        "budget": "Le budget de l’API X est épuisé. Les recherches payantes pourront reprendre à {time}."
+      },
+      "notices": {
+        "added": "Compte ajouté. Ses mentions peuvent désormais recevoir des réponses.",
+        "removed": "Entrée enregistrée supprimée. Toute autre source de la liste d’autorisation reste applicable.",
+        "guestsBlocked": "Le mode invité est activé. Terminez la configuration ci-dessous pour que les invités puissent recevoir des réponses.",
+        "guestsOn": "Le mode invité est activé. Les réponses aux invités respectent les restrictions et les limites configurées pour le dépôt.",
+        "guestsOff": "Le mode invité est désactivé. Seuls les responsables de maintenance peuvent recevoir des réponses."
+      },
+      "guests": {
+        "title": "Mode invité",
+        "subtitle": "Permettez à tout le monde de poser des questions sur le dépôt OpenClaw.",
+        "on": "Activé",
+        "off": "Désactivé",
+        "perGuestLimit": "Mentions par invité et par jour UTC",
+        "admittedToday": "Acceptées aujourd’hui",
+        "rateLimitedToday": "Limitées aujourd’hui",
+        "hint": "S’applique au compte X sélectionné. Les invités reçoivent des réponses sur le dépôt de la part de son agent et de ses sous-agents masqués. Ils ne peuvent pas écrire, exécuter des commandes, ouvrir des sessions visibles ni utiliser d’autres agents. Les responsables de maintenance conservent leur accès habituel.",
+        "docsLink": "Configuration et limites du mode invité"
+      },
+      "spend": {
+        "label": "Dépenses liées à l’API X",
+        "today": "Aujourd’hui (UTC)",
+        "cycle": "Cycle de facturation depuis le {date}",
+        "exhausted": "Budget de l’API X atteint. Les requêtes payantes reprendront à {time}."
+      },
+      "allowlist": {
+        "account": "Compte",
+        "source": "Source",
+        "addedBy": "Ajouté par",
+        "actions": "Actions",
+        "configAndStored": "Fichier de configuration + enregistrement",
+        "config": "Fichier de configuration",
+        "stored": "Enregistré",
+        "remove": "Supprimer",
+        "removeLabel": "Supprimer l’entrée enregistrée pour {account}",
+        "readOnly": "Lecture seule",
+        "empty": "Aucune entrée manuelle pour le moment. Ajoutez un compte à l’aide de son identifiant X."
+      },
+      "github": {
+        "title": "Depuis GitHub",
+        "verifiedThrough": "Vérifié via {repo}. Pour activer votre accès, ajoutez votre identifiant X à votre profil GitHub.",
+        "profileSetup": "Configuration du profil",
+        "stale": "La synchronisation n’est plus à jour.",
+        "neverSynced": "Aucune synchronisation réussie pour le moment.",
+        "lastSync": "Dernière synchronisation réussie : {time}.",
+        "lastGoodSetActive": "Le dernier ensemble valide reste actif.",
+        "readOnly": "Les entrées sont mises à jour automatiquement et sont en lecture seule ici.",
+        "unresolved": "Impossible de trouver {handles} sur X. Vérifiez que les identifiants X indiqués sur ces profils GitHub sont corrects.",
+        "xAccount": "Compte X",
+        "githubAccount": "Compte GitHub",
+        "permission": "Autorisation",
+        "lastSyncColumn": "Dernière synchronisation",
+        "empty": "Aucun compte issu de GitHub pour le moment."
+      },
+      "footer": {
+        "guestsBlocked": "Les réponses aux invités sont bloquées tant que la configuration ci-dessus n’est pas terminée.",
+        "guestsOn": "Les utilisateurs figurant sur la liste d’autorisation sont des responsables de maintenance. Les autres utilisateurs reçoivent des réponses limitées en tant qu’invités.",
+        "guestsOff": "Le mode invité est désactivé. Seuls les responsables de maintenance figurant sur la liste d’autorisation reçoivent des réponses."
+      }
+    }
+  },
+  "hi": {
+    "xReplies": {
+      "title": "X पर जवाब",
+      "subtitle": "चुनें कि एजेंट किन लोगों के मेंशन का सार्वजनिक रूप से जवाब दे सकता है।",
+      "refresh": "रीफ़्रेश करें",
+      "disconnected": "X पर जवाबों को प्रबंधित करने के लिए Gateway से कनेक्ट करें।",
+      "adminRequired": "X पर जवाबों को प्रबंधित करने के लिए आपके पास एडमिन ऐक्सेस होना चाहिए।",
+      "xAccount": "X खाता",
+      "selectAccount": "खाता चुनें",
+      "accountOption": "{account} ({accountId})",
+      "addByHandle": "X हैंडल से जोड़ें",
+      "handlePlaceholder": "@handle",
+      "addAccount": "खाता जोड़ें",
+      "lookupHint": "X हैंडल खोजने का शुल्क $0.01 है। कॉन्फ़िगरेशन फ़ाइल की प्रविष्टियाँ यहाँ केवल पढ़ी जा सकती हैं।",
+      "updating": "X पर जवाबों की सेटिंग अपडेट हो रही है",
+      "errors": {
+        "request": "X पर जवाबों को प्रबंधित नहीं किया जा सका।",
+        "list": "X पर जवाबों की सेटिंग लोड नहीं हो सकी। फिर से कोशिश करने के लिए रीफ़्रेश करें चुनें।",
+        "add": "पुष्टि नहीं हो सकी कि OpenClaw ने X खाता जोड़ा है। जाँचने के लिए रीफ़्रेश करें चुनें।",
+        "remove": "पुष्टि नहीं हो सकी कि OpenClaw ने सहेजी गई प्रविष्टि हटाई है। जाँचने के लिए रीफ़्रेश करें चुनें।",
+        "guests": "पुष्टि नहीं हो सकी कि OpenClaw ने अतिथि मोड बदला है। जाँचने के लिए रीफ़्रेश करें चुनें।",
+        "handleRequired": "OpenClaw ने खाता नहीं जोड़ा। अधिकतम 15 अक्षरों, अंकों या अंडरस्कोर वाला X हैंडल दर्ज करें।",
+        "budget": "X API का बजट समाप्त हो गया है। शुल्क वाली खोजें {time} पर फिर से शुरू हो सकती हैं।"
+      },
+      "notices": {
+        "added": "खाता जोड़ दिया गया। अब इसके उल्लेखों का जवाब दिया जा सकता है।",
+        "removed": "सहेजी गई प्रविष्टि हटा दी गई। अनुमति सूची का कोई अन्य स्रोत अब भी लागू रहेगा।",
+        "guestsBlocked": "अतिथि मोड चालू है। अतिथियों को जवाब मिल सकें, इसके लिए नीचे दिया गया सेटअप पूरा करें।",
+        "guestsOn": "अतिथि मोड चालू है। अतिथियों को दिए जाने वाले जवाबों पर रिपॉज़िटरी के कॉन्फ़िगर किए गए प्रतिबंध और सीमाएँ लागू होती हैं।",
+        "guestsOff": "अतिथि मोड बंद है। केवल अनुरक्षकों को जवाब मिल सकते हैं।"
+      },
+      "guests": {
+        "title": "अतिथि मोड",
+        "subtitle": "किसी को भी OpenClaw रिपॉज़िटरी के बारे में सवाल पूछने दें।",
+        "on": "चालू",
+        "off": "बंद",
+        "perGuestLimit": "प्रति अतिथि, प्रति UTC दिन उल्लेखों की संख्या",
+        "admittedToday": "आज स्वीकार किए गए",
+        "rateLimitedToday": "आज अनुरोध दर सीमा के कारण रोके गए",
+        "hint": "चुने गए X खाते पर लागू होता है। अतिथियों को इसके एजेंट और छिपे हुए उप-एजेंटों से रिपॉज़िटरी से जुड़े जवाब मिलते हैं। वे लिख नहीं सकते, कमांड नहीं चला सकते, दिखाई देने वाले सत्र नहीं खोल सकते या अन्य एजेंटों का उपयोग नहीं कर सकते। अनुरक्षकों की सामान्य पहुँच बनी रहती है।",
+        "docsLink": "अतिथि सेटअप और सीमाएँ"
+      },
+      "spend": {
+        "label": "X API पर खर्च",
+        "today": "आज (UTC)",
+        "cycle": "{date} से शुरू हुआ बिलिंग चक्र",
+        "exhausted": "X API की बजट सीमा पूरी हो गई है। सशुल्क अनुरोध {time} पर फिर से शुरू होंगे।"
+      },
+      "allowlist": {
+        "account": "खाता",
+        "source": "स्रोत",
+        "addedBy": "जोड़ने वाला",
+        "actions": "कार्रवाइयाँ",
+        "configAndStored": "कॉन्फ़िगरेशन फ़ाइल + सहेजा गया",
+        "config": "कॉन्फ़िगरेशन फ़ाइल",
+        "stored": "सहेजा गया",
+        "remove": "हटाएँ",
+        "removeLabel": "{account} की सहेजी गई प्रविष्टि हटाएँ",
+        "readOnly": "केवल पढ़ने के लिए",
+        "empty": "अभी तक कोई मैन्युअल प्रविष्टि नहीं है। X हैंडल से कोई खाता जोड़ें।"
+      },
+      "github": {
+        "title": "GitHub से",
+        "verifiedThrough": "{repo} के माध्यम से सत्यापित। अपने लिए सक्षम करने हेतु, अपनी GitHub प्रोफ़ाइल में अपना X हैंडल जोड़ें।",
+        "profileSetup": "प्रोफ़ाइल सेटअप",
+        "stale": "सिंक पुराना है।",
+        "neverSynced": "अभी तक कोई सफल सिंक नहीं हुआ है।",
+        "lastSync": "पिछला सफल सिंक: {time}।",
+        "lastGoodSetActive": "पिछला मान्य समूह सक्रिय रहता है।",
+        "readOnly": "प्रविष्टियाँ अपने आप अपडेट होती हैं और यहाँ केवल पढ़ी जा सकती हैं।",
+        "unresolved": "X पर {handles} नहीं मिले। जाँचें कि उन GitHub प्रोफ़ाइलों पर दिए गए X हैंडल सही हैं।",
+        "xAccount": "X खाता",
+        "githubAccount": "GitHub खाता",
+        "permission": "अनुमति",
+        "lastSyncColumn": "पिछला सिंक",
+        "empty": "अभी तक GitHub से प्राप्त कोई खाता नहीं है।"
+      },
+      "footer": {
+        "guestsBlocked": "ऊपर दिया गया सेटअप पूरा होने तक अतिथियों को जवाब देना बंद है।",
+        "guestsOn": "अनुमति सूची में शामिल उपयोगकर्ता अनुरक्षक हैं। अन्य उपयोगकर्ताओं को अतिथि के रूप में सीमित जवाब मिलते हैं।",
+        "guestsOff": "अतिथि मोड बंद है। केवल अनुमति सूची में शामिल अनुरक्षकों को जवाब मिलते हैं।"
+      }
+    }
+  },
+  "ar": {
+    "xReplies": {
+      "title": "الردود على X",
+      "subtitle": "اختر الأشخاص الذين يمكن للوكيل الرد علنًا على إشاراتهم.",
+      "refresh": "تحديث",
+      "disconnected": "اتصل بـ Gateway لإدارة الردود على X.",
+      "adminRequired": "تحتاج إلى صلاحيات مسؤول لإدارة الردود على X.",
+      "xAccount": "حساب X",
+      "selectAccount": "اختر حسابًا",
+      "accountOption": "{account} ({accountId})",
+      "addByHandle": "إضافة باستخدام اسم المستخدم على X",
+      "handlePlaceholder": "@handle",
+      "addAccount": "إضافة حساب",
+      "lookupHint": "تبلغ تكلفة البحث عن اسم مستخدم على X ‏$0.01. الإدخالات من ملف الإعدادات متاحة للقراءة فقط هنا.",
+      "updating": "جارٍ تحديث الردود على X",
+      "errors": {
+        "request": "تعذّرت إدارة الردود على X.",
+        "list": "تعذّر تحميل الردود على X. اختر تحديث للمحاولة مجددًا.",
+        "add": "تعذّر التأكد من أن OpenClaw أضاف حساب X. اختر تحديث للتحقق.",
+        "remove": "تعذّر التأكد من أن OpenClaw أزال الإدخال المحفوظ. اختر تحديث للتحقق.",
+        "guests": "تعذّر التأكد من أن OpenClaw غيّر وضع الضيف. اختر تحديث للتحقق.",
+        "handleRequired": "لم يُضف OpenClaw الحساب. أدخل اسم مستخدم على X لا يتجاوز 15 حرفًا أو رقمًا أو شرطة سفلية.",
+        "budget": "نفدت ميزانية واجهة برمجة تطبيقات X. يمكن استئناف عمليات البحث المدفوعة في {time}."
+      },
+      "notices": {
+        "added": "تمت إضافة الحساب. يمكن الآن الرد على الإشارات الواردة منه.",
+        "removed": "تمت إزالة الإدخال المحفوظ. تظل أي مصادر أخرى لقائمة السماح سارية.",
+        "guestsBlocked": "وضع الضيوف مفعّل. أكمل الإعداد أدناه ليتمكن الضيوف من تلقي الردود.",
+        "guestsOn": "وضع الضيوف مفعّل. تخضع الردود على الضيوف لقيود المستودع والحدود التي تم إعدادها.",
+        "guestsOff": "وضع الضيوف معطّل. يمكن للمشرفين على الصيانة فقط تلقي الردود."
+      },
+      "guests": {
+        "title": "وضع الضيوف",
+        "subtitle": "اسمح للجميع بطرح أسئلة حول مستودع OpenClaw.",
+        "on": "مفعّل",
+        "off": "معطّل",
+        "perGuestLimit": "الإشارات لكل ضيف، يوميًا حسب التوقيت العالمي المنسق (UTC)",
+        "admittedToday": "المقبولة اليوم",
+        "rateLimitedToday": "المقيّدة اليوم بسبب حد المعدّل",
+        "hint": "ينطبق على حساب X المحدد. يحصل الضيوف على إجابات حول المستودع من وكيل الحساب ووكلائه الفرعيين المخفيين. لا يمكنهم الكتابة أو تشغيل الأوامر أو فتح جلسات مرئية أو استخدام وكلاء آخرين. يحتفظ المشرفون على الصيانة بصلاحيات وصولهم المعتادة.",
+        "docsLink": "إعداد الضيوف وحدود الاستخدام"
+      },
+      "spend": {
+        "label": "الإنفاق على واجهة برمجة تطبيقات X",
+        "today": "اليوم (UTC)",
+        "cycle": "دورة الفوترة منذ {date}",
+        "exhausted": "تم بلوغ ميزانية واجهة برمجة تطبيقات X. تُستأنف الطلبات المدفوعة عند {time}."
+      },
+      "allowlist": {
+        "account": "الحساب",
+        "source": "المصدر",
+        "addedBy": "أُضيف بواسطة",
+        "actions": "الإجراءات",
+        "configAndStored": "ملف الإعدادات + المخزّن",
+        "config": "ملف الإعدادات",
+        "stored": "مخزّن",
+        "remove": "إزالة",
+        "removeLabel": "إزالة الإدخال المخزّن للحساب {account}",
+        "readOnly": "للقراءة فقط",
+        "empty": "لا توجد إدخالات يدوية بعد. أضف حسابًا باستخدام اسم المستخدم الخاص به على X."
+      },
+      "github": {
+        "title": "من GitHub",
+        "verifiedThrough": "تم التحقق عبر {repo}. لتفعيل حسابك، أضف اسم المستخدم الخاص بك على X إلى ملفك الشخصي على GitHub.",
+        "profileSetup": "إعداد الملف الشخصي",
+        "stale": "المزامنة غير محدّثة.",
+        "neverSynced": "لم تنجح أي مزامنة بعد.",
+        "lastSync": "آخر مزامنة ناجحة: {time}.",
+        "lastGoodSetActive": "تظل آخر مجموعة صالحة نشطة.",
+        "readOnly": "تُحدَّث الإدخالات تلقائيًا، وهي للقراءة فقط هنا.",
+        "unresolved": "تعذّر العثور على {handles} على X. تحقّق من صحة أسماء مستخدمي X في تلك الملفات الشخصية على GitHub.",
+        "xAccount": "حساب X",
+        "githubAccount": "حساب GitHub",
+        "permission": "الصلاحية",
+        "lastSyncColumn": "آخر مزامنة",
+        "empty": "لا توجد حسابات مستمدة من GitHub بعد."
+      },
+      "footer": {
+        "guestsBlocked": "الردود على الضيوف محظورة حتى يكتمل الإعداد أعلاه.",
+        "guestsOn": "المستخدمون المدرجون في قائمة السماح هم مشرفو الصيانة. يتلقى المستخدمون الآخرون ردودًا محدودة بصفتهم ضيوفًا.",
+        "guestsOff": "وضع الضيف متوقف. يتلقى الردود فقط مشرفو الصيانة المدرجون في قائمة السماح."
+      }
+    }
+  },
+  "it": {
+    "xReplies": {
+      "title": "Risposte su X",
+      "subtitle": "Scegli alle menzioni di chi l’agente può rispondere pubblicamente.",
+      "refresh": "Aggiorna",
+      "disconnected": "Connettiti al Gateway per gestire le risposte su X.",
+      "adminRequired": "Per gestire le risposte su X sono necessari i permessi di amministratore.",
+      "xAccount": "Account X",
+      "selectAccount": "Seleziona un account",
+      "accountOption": "{account} ({accountId})",
+      "addByHandle": "Aggiungi tramite nome utente X",
+      "handlePlaceholder": "@handle",
+      "addAccount": "Aggiungi account",
+      "lookupHint": "La ricerca di un nome utente X costa 0,01 $. Le voci del file di configurazione sono di sola lettura in questa sezione.",
+      "updating": "Aggiornamento delle risposte su X",
+      "errors": {
+        "request": "Impossibile gestire le risposte su X.",
+        "list": "Impossibile caricare le risposte su X. Seleziona Aggiorna per riprovare.",
+        "add": "Impossibile confermare che OpenClaw abbia aggiunto l’account X. Seleziona Aggiorna per verificare.",
+        "remove": "Impossibile confermare che OpenClaw abbia rimosso la voce memorizzata. Seleziona Aggiorna per verificare.",
+        "guests": "Impossibile confermare che OpenClaw abbia modificato la modalità ospite. Seleziona Aggiorna per verificare.",
+        "handleRequired": "OpenClaw non ha aggiunto l’account. Inserisci un nome utente X composto da un massimo di 15 lettere, numeri o trattini bassi.",
+        "budget": "Il budget per l’API di X è esaurito. Le ricerche a pagamento potranno riprendere alle {time}."
+      },
+      "notices": {
+        "added": "Account aggiunto. Le sue menzioni possono ora ricevere risposte.",
+        "removed": "Voce memorizzata rimossa. Le altre fonti dell'elenco degli account autorizzati restano valide.",
+        "guestsBlocked": "La modalità ospite è attiva. Completa la configurazione qui sotto prima che gli ospiti possano ricevere risposte.",
+        "guestsOn": "La modalità ospite è attiva. Le risposte agli ospiti rispettano le restrizioni e i limiti configurati per il repository.",
+        "guestsOff": "La modalità ospite è disattivata. Solo i manutentori possono ricevere risposte."
+      },
+      "guests": {
+        "title": "Modalità ospite",
+        "subtitle": "Consenti a chiunque di fare domande sul repository OpenClaw.",
+        "on": "Attiva",
+        "off": "Disattivata",
+        "perGuestLimit": "Menzioni per ospite, per giorno UTC",
+        "admittedToday": "Ammesse oggi",
+        "rateLimitedToday": "Limitate oggi per superamento della frequenza consentita",
+        "hint": "Si applica all'account X selezionato. Gli ospiti ricevono risposte sul repository dal suo agente e dai subagenti nascosti. Non possono scrivere, eseguire comandi, aprire sessioni visibili o usare altri agenti. I manutentori mantengono il consueto accesso.",
+        "docsLink": "Configurazione e limiti per gli ospiti"
+      },
+      "spend": {
+        "label": "Spesa per l'API di X",
+        "today": "Oggi (UTC)",
+        "cycle": "Ciclo di fatturazione dal {date}",
+        "exhausted": "Budget per l'API di X raggiunto. Le richieste a pagamento riprenderanno alle {time}."
+      },
+      "allowlist": {
+        "account": "Account",
+        "source": "Fonte",
+        "addedBy": "Aggiunto da",
+        "actions": "Azioni",
+        "configAndStored": "File di configurazione + salvato",
+        "config": "File di configurazione",
+        "stored": "Salvato",
+        "remove": "Rimuovi",
+        "removeLabel": "Rimuovi la voce salvata per {account}",
+        "readOnly": "Sola lettura",
+        "empty": "Non ci sono ancora voci manuali. Aggiungi un account tramite il suo nome utente su X."
+      },
+      "github": {
+        "title": "Da GitHub",
+        "verifiedThrough": "Verificato tramite {repo}. Per abilitare il tuo account, aggiungi il tuo nome utente su X al tuo profilo GitHub.",
+        "profileSetup": "Configurazione del profilo",
+        "stale": "La sincronizzazione non è aggiornata.",
+        "neverSynced": "Nessuna sincronizzazione riuscita finora.",
+        "lastSync": "Ultima sincronizzazione riuscita: {time}.",
+        "lastGoodSetActive": "L’ultimo insieme di dati validi rimane attivo.",
+        "readOnly": "Le voci si aggiornano automaticamente e qui sono di sola lettura.",
+        "unresolved": "Impossibile trovare {handles} su X. Verifica che i nomi utente di X su quei profili GitHub siano corretti.",
+        "xAccount": "Account X",
+        "githubAccount": "Account GitHub",
+        "permission": "Autorizzazione",
+        "lastSyncColumn": "Ultima sincronizzazione",
+        "empty": "Non ci sono ancora account importati da GitHub."
+      },
+      "footer": {
+        "guestsBlocked": "Le risposte agli ospiti sono bloccate finché la configurazione qui sopra non è completata.",
+        "guestsOn": "Gli utenti nell'elenco degli autorizzati sono manutentori. Gli altri utenti ricevono risposte limitate come ospiti.",
+        "guestsOff": "La modalità ospite è disattivata. Solo i manutentori nell'elenco degli autorizzati ricevono risposte."
+      }
+    }
+  },
+  "tr": {
+    "xReplies": {
+      "title": "X yanıtları",
+      "subtitle": "Ajanın kimlerden gelen bahsetmelere herkese açık yanıt verebileceğini seçin.",
+      "refresh": "Yenile",
+      "disconnected": "X yanıtlarını yönetmek için Gateway'e bağlanın.",
+      "adminRequired": "X yanıtlarını yönetmek için yönetici erişiminiz olmalıdır.",
+      "xAccount": "X hesabı",
+      "selectAccount": "Bir hesap seçin",
+      "accountOption": "{account} ({accountId})",
+      "addByHandle": "X kullanıcı adıyla ekle",
+      "handlePlaceholder": "@handle",
+      "addAccount": "Hesap ekle",
+      "lookupHint": "Bir X kullanıcı adını sorgulamanın maliyeti 0,01 ABD dolarıdır. Yapılandırma dosyasındaki kayıtlar burada salt okunurdur.",
+      "updating": "X yanıtları güncelleniyor",
+      "errors": {
+        "request": "X yanıtları yönetilemedi.",
+        "list": "X yanıtları yüklenemedi. Tekrar denemek için Yenile'yi seçin.",
+        "add": "OpenClaw'ın X hesabını eklediği doğrulanamadı. Kontrol etmek için Yenile'yi seçin.",
+        "remove": "OpenClaw'ın kayıtlı girdiyi kaldırdığı doğrulanamadı. Kontrol etmek için Yenile'yi seçin.",
+        "guests": "OpenClaw'ın misafir modunu değiştirdiği doğrulanamadı. Kontrol etmek için Yenile'yi seçin.",
+        "handleRequired": "OpenClaw hesabı eklemedi. En fazla 15 harf, rakam veya alt çizgiden oluşan bir X kullanıcı adı girin.",
+        "budget": "X API bütçesi tükendi. Ücretli sorgulamalar {time} itibarıyla devam edebilir."
+      },
+      "notices": {
+        "added": "Hesap eklendi. Artık bu hesabın bahsetmelerine yanıt verilebilir.",
+        "removed": "Kayıtlı girdi kaldırıldı. Diğer izin listesi kaynakları geçerliliğini korur.",
+        "guestsBlocked": "Misafir modu açık. Misafirlerin yanıt alabilmesi için aşağıdaki kurulumu tamamlayın.",
+        "guestsOn": "Misafir modu açık. Misafir yanıtları, yapılandırılan depo kısıtlamalarına ve sınırlara tabidir.",
+        "guestsOff": "Misafir modu kapalı. Yalnızca bakım sorumluları yanıt alabilir."
+      },
+      "guests": {
+        "title": "Misafir modu",
+        "subtitle": "Herkesin OpenClaw deposu hakkında soru sormasına izin verin.",
+        "on": "Açık",
+        "off": "Kapalı",
+        "perGuestLimit": "UTC gününe göre misafir başına bahsetme sayısı",
+        "admittedToday": "Bugün kabul edilenler",
+        "rateLimitedToday": "Bugün hız sınırına takılanlar",
+        "hint": "Seçili X hesabı için geçerlidir. Misafirler, hesabın aracısından ve gizli alt aracılarından depoyla ilgili yanıtlar alır. Yazma işlemi yapamaz, komut çalıştıramaz, görünür oturum açamaz veya başka aracıları kullanamazlar. Bakım sorumlularının normal erişimi korunur.",
+        "docsLink": "Misafir kurulumu ve sınırları"
+      },
+      "spend": {
+        "label": "X API harcaması",
+        "today": "Bugün (UTC)",
+        "cycle": "{date} tarihinde başlayan fatura dönemi",
+        "exhausted": "X API bütçesi tükendi. Ücretli istekler {time} itibarıyla devam edecek."
+      },
+      "allowlist": {
+        "account": "Hesap",
+        "source": "Kaynak",
+        "addedBy": "Ekleyen",
+        "actions": "İşlemler",
+        "configAndStored": "Yapılandırma dosyası + kayıtlı",
+        "config": "Yapılandırma dosyası",
+        "stored": "Kayıtlı",
+        "remove": "Kaldır",
+        "removeLabel": "{account} için kayıtlı girdiyi kaldır",
+        "readOnly": "Salt okunur",
+        "empty": "Henüz elle eklenmiş bir girdi yok. X kullanıcı adıyla bir hesap ekleyin."
+      },
+      "github": {
+        "title": "GitHub'dan",
+        "verifiedThrough": "{repo} üzerinden doğrulandı. Kendi hesabınızı etkinleştirmek için X kullanıcı adınızı GitHub profilinize ekleyin.",
+        "profileSetup": "Profil kurulumu",
+        "stale": "Eşitleme güncel değil.",
+        "neverSynced": "Henüz başarılı bir eşitleme yapılmadı.",
+        "lastSync": "Son başarılı eşitleme: {time}.",
+        "lastGoodSetActive": "Son geçerli liste etkin kalır.",
+        "readOnly": "Girdiler otomatik olarak güncellenir ve burada salt okunurdur.",
+        "unresolved": "{handles} X'te bulunamadı. İlgili GitHub profillerindeki X kullanıcı adlarının doğru olduğunu kontrol edin.",
+        "xAccount": "X hesabı",
+        "githubAccount": "GitHub hesabı",
+        "permission": "İzin",
+        "lastSyncColumn": "Son eşitleme",
+        "empty": "Henüz GitHub'dan alınan hesap yok."
+      },
+      "footer": {
+        "guestsBlocked": "Yukarıdaki kurulum tamamlanana kadar misafirlere yanıt verilmez.",
+        "guestsOn": "İzin listesindeki kullanıcılar bakım sorumlusu olarak kabul edilir. Diğer kullanıcılar sınırlı misafir yanıtları alır.",
+        "guestsOff": "Misafir modu kapalı. Yalnızca izin listesindeki bakım sorumluları yanıt alır."
+      }
+    }
+  },
+  "uk": {
+    "xReplies": {
+      "title": "Відповіді в X",
+      "subtitle": "Виберіть, на чиї згадки агент може відповідати публічно.",
+      "refresh": "Оновити",
+      "disconnected": "Підключіться до Gateway, щоб керувати відповідями в X.",
+      "adminRequired": "Для керування відповідями в X потрібні права адміністратора.",
+      "xAccount": "Обліковий запис X",
+      "selectAccount": "Виберіть обліковий запис",
+      "accountOption": "{account} ({accountId})",
+      "addByHandle": "Додати за іменем користувача X",
+      "handlePlaceholder": "@handle",
+      "addAccount": "Додати обліковий запис",
+      "lookupHint": "Пошук за іменем користувача X коштує $0.01. Записи з файлу конфігурації тут доступні лише для читання.",
+      "updating": "Оновлення відповідей у X",
+      "errors": {
+        "request": "Не вдалося керувати відповідями в X.",
+        "list": "Не вдалося завантажити відповіді в X. Натисніть «Оновити», щоб повторити спробу.",
+        "add": "Не вдалося підтвердити, що OpenClaw додав обліковий запис X. Натисніть «Оновити», щоб перевірити.",
+        "remove": "Не вдалося підтвердити, що OpenClaw видалив збережений запис. Натисніть «Оновити», щоб перевірити.",
+        "guests": "Не вдалося підтвердити, що OpenClaw змінив гостьовий режим. Натисніть «Оновити», щоб перевірити.",
+        "handleRequired": "OpenClaw не додав обліковий запис. Введіть ім’я користувача X завдовжки до 15 символів: літер, цифр або знаків підкреслення.",
+        "budget": "Бюджет X API вичерпано. Платний пошук можна буде відновити о {time}."
+      },
+      "notices": {
+        "added": "Обліковий запис додано. Тепер його згадки можуть отримувати відповіді.",
+        "removed": "Збережений запис видалено. Інші джерела списку дозволених і далі діють.",
+        "guestsBlocked": "Гостьовий режим увімкнено. Завершіть налаштування нижче, щоб гості могли отримувати відповіді.",
+        "guestsOn": "Гостьовий режим увімкнено. Для відповідей гостям діють налаштовані обмеження репозиторію та ліміти.",
+        "guestsOff": "Гостьовий режим вимкнено. Лише супроводжувачі можуть отримувати відповіді."
+      },
+      "guests": {
+        "title": "Гостьовий режим",
+        "subtitle": "Дозвольте будь-кому ставити запитання про репозиторій OpenClaw.",
+        "on": "Увімкнено",
+        "off": "Вимкнено",
+        "perGuestLimit": "Згадок на гостя за добу за UTC",
+        "admittedToday": "Допущено сьогодні",
+        "rateLimitedToday": "Обмежено за частотою сьогодні",
+        "hint": "Застосовується до вибраного облікового запису X. Гості отримують відповіді про репозиторій від його агента та прихованих субагентів. Вони не можуть виконувати запис, запускати команди, відкривати видимі сеанси чи використовувати інших агентів. Супроводжувачі зберігають звичайний доступ.",
+        "docsLink": "Налаштування та ліміти для гостей"
+      },
+      "spend": {
+        "label": "Витрати на X API",
+        "today": "Сьогодні (UTC)",
+        "cycle": "Розрахунковий період із {date}",
+        "exhausted": "Бюджет X API вичерпано. Платні запити відновляться о {time}."
+      },
+      "allowlist": {
+        "account": "Обліковий запис",
+        "source": "Джерело",
+        "addedBy": "Хто додав",
+        "actions": "Дії",
+        "configAndStored": "Файл конфігурації + збережені записи",
+        "config": "Файл конфігурації",
+        "stored": "Збережені записи",
+        "remove": "Видалити",
+        "removeLabel": "Видалити збережений запис для {account}",
+        "readOnly": "Лише для читання",
+        "empty": "Записів, доданих вручну, ще немає. Додайте обліковий запис за іменем користувача в X."
+      },
+      "github": {
+        "title": "З GitHub",
+        "verifiedThrough": "Підтверджено через {repo}. Щоб увімкнути цю функцію для себе, додайте своє ім’я користувача в X до профілю GitHub.",
+        "profileSetup": "Налаштування профілю",
+        "stale": "Дані синхронізації застаріли.",
+        "neverSynced": "Успішної синхронізації ще не було.",
+        "lastSync": "Остання успішна синхронізація: {time}.",
+        "lastGoodSetActive": "Останній коректний набір залишається активним.",
+        "readOnly": "Записи оновлюються автоматично й тут доступні лише для читання.",
+        "unresolved": "Не вдалося знайти {handles} в X. Перевірте, чи правильно вказано імена користувачів X у цих профілях GitHub.",
+        "xAccount": "Обліковий запис X",
+        "githubAccount": "Обліковий запис GitHub",
+        "permission": "Дозвіл",
+        "lastSyncColumn": "Остання синхронізація",
+        "empty": "Облікових записів, отриманих із GitHub, ще немає."
+      },
+      "footer": {
+        "guestsBlocked": "Відповіді гостям заблоковано, доки не буде завершено налаштування вище.",
+        "guestsOn": "Користувачі зі списку дозволених є супроводжувачами. Інші користувачі отримують обмежені відповіді як гості.",
+        "guestsOff": "Гостьовий режим вимкнено. Відповіді отримують лише супроводжувачі зі списку дозволених."
+      }
+    }
+  },
+  "id": {
+    "xReplies": {
+      "title": "Balasan X",
+      "subtitle": "Pilih sebutan dari siapa saja yang boleh dibalas agen secara publik.",
+      "refresh": "Muat ulang",
+      "disconnected": "Hubungkan ke Gateway untuk mengelola balasan X.",
+      "adminRequired": "Anda memerlukan akses admin untuk mengelola balasan X.",
+      "xAccount": "Akun X",
+      "selectAccount": "Pilih akun",
+      "accountOption": "{account} ({accountId})",
+      "addByHandle": "Tambahkan berdasarkan nama pengguna X",
+      "handlePlaceholder": "@handle",
+      "addAccount": "Tambahkan akun",
+      "lookupHint": "Pencarian nama pengguna X dikenakan biaya $0.01. Entri dari file konfigurasi hanya dapat dibaca di sini.",
+      "updating": "Memperbarui balasan X",
+      "errors": {
+        "request": "Tidak dapat mengelola balasan X.",
+        "list": "Tidak dapat memuat balasan X. Pilih Muat ulang untuk mencoba lagi.",
+        "add": "Tidak dapat memastikan bahwa OpenClaw telah menambahkan akun X. Pilih Muat ulang untuk memeriksa.",
+        "remove": "Tidak dapat memastikan bahwa OpenClaw telah menghapus entri tersimpan. Pilih Muat ulang untuk memeriksa.",
+        "guests": "Tidak dapat memastikan bahwa OpenClaw telah mengubah mode tamu. Pilih Muat ulang untuk memeriksa.",
+        "handleRequired": "OpenClaw tidak menambahkan akun. Masukkan nama pengguna X yang terdiri dari maksimal 15 huruf, angka, atau garis bawah.",
+        "budget": "Anggaran API X telah habis. Pencarian berbayar dapat dilanjutkan pada {time}."
+      },
+      "notices": {
+        "added": "Akun ditambahkan. Sebutannya kini dapat menerima balasan.",
+        "removed": "Entri tersimpan dihapus. Sumber daftar izin lainnya tetap berlaku.",
+        "guestsBlocked": "Mode tamu aktif. Selesaikan penyiapan di bawah ini agar tamu dapat menerima balasan.",
+        "guestsOn": "Mode tamu aktif. Balasan untuk tamu mengikuti pembatasan repositori dan batas yang telah dikonfigurasi.",
+        "guestsOff": "Mode tamu nonaktif. Hanya pengelola yang dapat menerima balasan."
+      },
+      "guests": {
+        "title": "Mode tamu",
+        "subtitle": "Izinkan siapa saja mengajukan pertanyaan tentang repositori OpenClaw.",
+        "on": "Aktif",
+        "off": "Nonaktif",
+        "perGuestLimit": "Sebutan per tamu, per hari UTC",
+        "admittedToday": "Diizinkan hari ini",
+        "rateLimitedToday": "Dibatasi frekuensinya hari ini",
+        "hint": "Berlaku untuk akun X yang dipilih. Tamu mendapatkan jawaban tentang repositori dari agen akun tersebut dan subagen tersembunyi. Mereka tidak dapat menulis, menjalankan perintah, membuka sesi yang terlihat, atau menggunakan agen lain. Pengelola tetap memiliki akses seperti biasa.",
+        "docsLink": "Penyiapan dan batas untuk tamu"
+      },
+      "spend": {
+        "label": "Pengeluaran X API",
+        "today": "Hari ini (UTC)",
+        "cycle": "Siklus penagihan sejak {date}",
+        "exhausted": "Batas anggaran X API tercapai. Permintaan berbayar dilanjutkan pada {time}."
+      },
+      "allowlist": {
+        "account": "Akun",
+        "source": "Sumber",
+        "addedBy": "Ditambahkan oleh",
+        "actions": "Tindakan",
+        "configAndStored": "File konfigurasi + tersimpan",
+        "config": "File konfigurasi",
+        "stored": "Tersimpan",
+        "remove": "Hapus",
+        "removeLabel": "Hapus entri tersimpan untuk {account}",
+        "readOnly": "Hanya baca",
+        "empty": "Belum ada entri manual. Tambahkan akun menggunakan nama pengguna X-nya."
+      },
+      "github": {
+        "title": "Dari GitHub",
+        "verifiedThrough": "Diverifikasi melalui {repo}. Agar akun Anda diaktifkan, tambahkan nama pengguna X Anda ke profil GitHub Anda.",
+        "profileSetup": "Pengaturan profil",
+        "stale": "Sinkronisasi sudah kedaluwarsa.",
+        "neverSynced": "Belum ada sinkronisasi yang berhasil.",
+        "lastSync": "Sinkronisasi terakhir yang berhasil: {time}.",
+        "lastGoodSetActive": "Kumpulan data valid terakhir tetap aktif.",
+        "readOnly": "Entri diperbarui secara otomatis dan hanya dapat dibaca di sini.",
+        "unresolved": "Tidak dapat menemukan {handles} di X. Pastikan nama pengguna X di profil GitHub tersebut sudah benar.",
+        "xAccount": "Akun X",
+        "githubAccount": "Akun GitHub",
+        "permission": "Izin",
+        "lastSyncColumn": "Sinkronisasi terakhir",
+        "empty": "Belum ada akun yang berasal dari GitHub."
+      },
+      "footer": {
+        "guestsBlocked": "Balasan untuk tamu diblokir hingga pengaturan di atas selesai.",
+        "guestsOn": "Pengguna dalam daftar yang diizinkan adalah pengelola. Pengguna lain menerima balasan tamu yang terbatas.",
+        "guestsOff": "Mode tamu nonaktif. Hanya pengelola dalam daftar yang diizinkan yang menerima balasan."
+      }
+    }
+  },
+  "pl": {
+    "xReplies": {
+      "title": "Odpowiedzi na X",
+      "subtitle": "Wybierz, na czyje wzmianki agent może odpowiadać publicznie.",
+      "refresh": "Odśwież",
+      "disconnected": "Połącz się z Gateway, aby zarządzać odpowiedziami na X.",
+      "adminRequired": "Do zarządzania odpowiedziami na X wymagane są uprawnienia administratora.",
+      "xAccount": "Konto na X",
+      "selectAccount": "Wybierz konto",
+      "accountOption": "{account} ({accountId})",
+      "addByHandle": "Dodaj według nazwy użytkownika na X",
+      "handlePlaceholder": "@nazwa_użytkownika",
+      "addAccount": "Dodaj konto",
+      "lookupHint": "Wyszukanie nazwy użytkownika na X kosztuje 0,01 USD. Wpisy z pliku konfiguracyjnego są tutaj dostępne tylko do odczytu.",
+      "updating": "Aktualizowanie odpowiedzi na X",
+      "errors": {
+        "request": "Nie udało się zarządzać odpowiedziami na X.",
+        "list": "Nie udało się wczytać odpowiedzi na X. Wybierz Odśwież, aby spróbować ponownie.",
+        "add": "Nie udało się potwierdzić, że OpenClaw dodał konto na X. Wybierz Odśwież, aby to sprawdzić.",
+        "remove": "Nie udało się potwierdzić, że OpenClaw usunął zapisany wpis. Wybierz Odśwież, aby to sprawdzić.",
+        "guests": "Nie udało się potwierdzić, że OpenClaw zmienił tryb gościa. Wybierz Odśwież, aby to sprawdzić.",
+        "handleRequired": "OpenClaw nie dodał konta. Wpisz nazwę użytkownika na X składającą się z maksymalnie 15 liter, cyfr lub znaków podkreślenia.",
+        "budget": "Budżet na X API został wyczerpany. Płatne wyszukiwania będą ponownie dostępne o {time}."
+      },
+      "notices": {
+        "added": "Dodano konto. Wzmianki z tego konta mogą teraz otrzymywać odpowiedzi.",
+        "removed": "Usunięto zapisany wpis. Pozostałe źródła listy dozwolonych kont nadal obowiązują.",
+        "guestsBlocked": "Tryb gościa jest włączony. Dokończ konfigurację poniżej, aby goście mogli otrzymywać odpowiedzi.",
+        "guestsOn": "Tryb gościa jest włączony. Odpowiedzi dla gości podlegają skonfigurowanym ograniczeniom repozytorium i limitom.",
+        "guestsOff": "Tryb gościa jest wyłączony. Tylko opiekunowie projektu mogą otrzymywać odpowiedzi."
+      },
+      "guests": {
+        "title": "Tryb gościa",
+        "subtitle": "Pozwól wszystkim zadawać pytania o repozytorium OpenClaw.",
+        "on": "Włączony",
+        "off": "Wyłączony",
+        "perGuestLimit": "Liczba wzmianek na gościa dziennie (UTC)",
+        "admittedToday": "Dopuszczone dzisiaj",
+        "rateLimitedToday": "Ograniczone dzisiaj przez limit",
+        "hint": "Dotyczy wybranego konta X. Goście otrzymują odpowiedzi dotyczące repozytorium od agenta tego konta i ukrytych subagentów. Nie mogą zapisywać danych, uruchamiać poleceń, otwierać widocznych sesji ani korzystać z innych agentów. Opiekunowie projektu zachowują swój standardowy dostęp.",
+        "docsLink": "Konfiguracja i limity trybu gościa"
+      },
+      "spend": {
+        "label": "Wydatki na API X",
+        "today": "Dzisiaj (UTC)",
+        "cycle": "Cykl rozliczeniowy od {date}",
+        "exhausted": "Osiągnięto limit budżetu na API X. Płatne żądania zostaną wznowione o {time}."
+      },
+      "allowlist": {
+        "account": "Konto",
+        "source": "Źródło",
+        "addedBy": "Dodane przez",
+        "actions": "Działania",
+        "configAndStored": "Plik konfiguracyjny + zapisane",
+        "config": "Plik konfiguracyjny",
+        "stored": "Zapisane",
+        "remove": "Usuń",
+        "removeLabel": "Usuń zapisany wpis dla konta {account}",
+        "readOnly": "Tylko do odczytu",
+        "empty": "Nie ma jeszcze ręcznych wpisów. Dodaj konto, podając jego nazwę użytkownika w X."
+      },
+      "github": {
+        "title": "Z GitHub",
+        "verifiedThrough": "Weryfikacja za pośrednictwem {repo}. Aby uzyskać dostęp, dodaj swoją nazwę użytkownika w X do profilu GitHub.",
+        "profileSetup": "Konfiguracja profilu",
+        "stale": "Dane synchronizacji są nieaktualne.",
+        "neverSynced": "Nie przeprowadzono jeszcze udanej synchronizacji.",
+        "lastSync": "Ostatnia udana synchronizacja: {time}.",
+        "lastGoodSetActive": "Ostatni poprawny zestaw pozostaje aktywny.",
+        "readOnly": "Wpisy aktualizują się automatycznie i są tutaj dostępne tylko do odczytu.",
+        "unresolved": "Nie udało się znaleźć {handles} w X. Sprawdź, czy nazwy użytkowników w X podane na tych profilach GitHub są poprawne.",
+        "xAccount": "Konto X",
+        "githubAccount": "Konto GitHub",
+        "permission": "Uprawnienie",
+        "lastSyncColumn": "Ostatnia synchronizacja",
+        "empty": "Nie ma jeszcze kont pochodzących z GitHub."
+      },
+      "footer": {
+        "guestsBlocked": "Odpowiedzi dla gości są zablokowane do czasu ukończenia powyższej konfiguracji.",
+        "guestsOn": "Użytkownicy z listy dozwolonych są opiekunami projektu. Pozostali użytkownicy otrzymują odpowiedzi w ograniczonym zakresie jako goście.",
+        "guestsOff": "Tryb gościa jest wyłączony. Odpowiedzi otrzymują tylko opiekunowie projektu z listy dozwolonych."
+      }
+    }
+  },
+  "th": {
+    "xReplies": {
+      "title": "การตอบกลับบน X",
+      "subtitle": "เลือกว่าจะให้เอเจนต์ตอบกลับการกล่าวถึงจากใครได้แบบสาธารณะ",
+      "refresh": "รีเฟรช",
+      "disconnected": "เชื่อมต่อกับ Gateway เพื่อจัดการการตอบกลับบน X",
+      "adminRequired": "คุณต้องมีสิทธิ์ผู้ดูแลระบบเพื่อจัดการการตอบกลับบน X",
+      "xAccount": "บัญชี X",
+      "selectAccount": "เลือกบัญชี",
+      "accountOption": "{account} ({accountId})",
+      "addByHandle": "เพิ่มด้วยชื่อผู้ใช้ X",
+      "handlePlaceholder": "@handle",
+      "addAccount": "เพิ่มบัญชี",
+      "lookupHint": "การค้นหาชื่อผู้ใช้ X มีค่าใช้จ่าย $0.01 รายการจากไฟล์กำหนดค่าจะอ่านได้อย่างเดียวที่นี่",
+      "updating": "กำลังอัปเดตการตอบกลับบน X",
+      "errors": {
+        "request": "ไม่สามารถจัดการการตอบกลับบน X ได้",
+        "list": "ไม่สามารถโหลดการตอบกลับบน X ได้ เลือกรีเฟรชเพื่อลองอีกครั้ง",
+        "add": "ไม่สามารถยืนยันได้ว่า OpenClaw เพิ่มบัญชี X แล้ว เลือกรีเฟรชเพื่อตรวจสอบ",
+        "remove": "ไม่สามารถยืนยันได้ว่า OpenClaw ลบรายการที่บันทึกไว้แล้ว เลือกรีเฟรชเพื่อตรวจสอบ",
+        "guests": "ไม่สามารถยืนยันได้ว่า OpenClaw เปลี่ยนโหมดผู้เยี่ยมชมแล้ว เลือกรีเฟรชเพื่อตรวจสอบ",
+        "handleRequired": "OpenClaw ไม่ได้เพิ่มบัญชี โปรดป้อนชื่อผู้ใช้ X ที่ประกอบด้วยตัวอักษร ตัวเลข หรือขีดล่างไม่เกิน 15 ตัว",
+        "budget": "ใช้งบประมาณ X API หมดแล้ว จะกลับมาค้นหาแบบเสียค่าใช้จ่ายได้อีกครั้งเมื่อ {time}"
+      },
+      "notices": {
+        "added": "เพิ่มบัญชีแล้ว การกล่าวถึงจากบัญชีนี้จะได้รับการตอบกลับได้แล้ว",
+        "removed": "ลบรายการที่บันทึกไว้แล้ว แหล่งรายการอนุญาตอื่น ๆ ยังคงมีผล",
+        "guestsBlocked": "โหมดผู้เยี่ยมชมเปิดอยู่ โปรดตั้งค่าด้านล่างให้เสร็จก่อนที่ผู้เยี่ยมชมจะได้รับการตอบกลับ",
+        "guestsOn": "โหมดผู้เยี่ยมชมเปิดอยู่ การตอบกลับผู้เยี่ยมชมจะใช้ข้อจำกัดของที่เก็บโค้ดและขีดจำกัดที่กำหนดไว้",
+        "guestsOff": "โหมดผู้เยี่ยมชมปิดอยู่ เฉพาะผู้ดูแลเท่านั้นที่จะได้รับการตอบกลับ"
+      },
+      "guests": {
+        "title": "โหมดผู้เยี่ยมชม",
+        "subtitle": "ให้ทุกคนถามคำถามเกี่ยวกับที่เก็บโค้ด OpenClaw ได้",
+        "on": "เปิด",
+        "off": "ปิด",
+        "perGuestLimit": "จำนวนการกล่าวถึงต่อผู้เยี่ยมชมต่อวันตามเวลา UTC",
+        "admittedToday": "ที่อนุญาตวันนี้",
+        "rateLimitedToday": "ที่ถูกจำกัดอัตราการใช้งานวันนี้",
+        "hint": "ใช้กับบัญชี X ที่เลือก ผู้เยี่ยมชมจะได้รับคำตอบเกี่ยวกับที่เก็บโค้ดจากเอเจนต์และเอเจนต์ย่อยที่ซ่อนอยู่ของบัญชีนั้น ผู้เยี่ยมชมไม่สามารถเขียนข้อมูล เรียกใช้คำสั่ง เปิดเซสชันที่มองเห็นได้ หรือใช้เอเจนต์อื่นได้ ผู้ดูแลยังคงมีสิทธิ์เข้าถึงตามปกติ",
+        "docsLink": "การตั้งค่าและขีดจำกัดสำหรับผู้เยี่ยมชม"
+      },
+      "spend": {
+        "label": "ค่าใช้จ่าย X API",
+        "today": "วันนี้ (UTC)",
+        "cycle": "รอบการเรียกเก็บเงินตั้งแต่ {date}",
+        "exhausted": "ใช้จ่ายถึงงบประมาณ X API แล้ว คำขอที่มีค่าใช้จ่ายจะกลับมาใช้งานได้ในเวลา {time}"
+      },
+      "allowlist": {
+        "account": "บัญชี",
+        "source": "แหล่งที่มา",
+        "addedBy": "เพิ่มโดย",
+        "actions": "การดำเนินการ",
+        "configAndStored": "ไฟล์การกำหนดค่า + ที่จัดเก็บไว้",
+        "config": "ไฟล์การกำหนดค่า",
+        "stored": "ที่จัดเก็บไว้",
+        "remove": "ลบ",
+        "removeLabel": "ลบรายการที่จัดเก็บไว้สำหรับ {account}",
+        "readOnly": "อ่านอย่างเดียว",
+        "empty": "ยังไม่มีรายการที่เพิ่มด้วยตนเอง เพิ่มบัญชีโดยใช้ชื่อผู้ใช้ X"
+      },
+      "github": {
+        "title": "จาก GitHub",
+        "verifiedThrough": "ยืนยันผ่าน {repo} หากต้องการเปิดใช้งานสำหรับตัวคุณเอง ให้เพิ่มชื่อผู้ใช้ X ในโปรไฟล์ GitHub ของคุณ",
+        "profileSetup": "การตั้งค่าโปรไฟล์",
+        "stale": "ข้อมูลที่ซิงค์ไม่เป็นปัจจุบัน",
+        "neverSynced": "ยังไม่มีการซิงค์ที่สำเร็จ",
+        "lastSync": "ซิงค์สำเร็จครั้งล่าสุด: {time}",
+        "lastGoodSetActive": "ชุดข้อมูลล่าสุดที่สมบูรณ์ยังคงใช้งานอยู่",
+        "readOnly": "รายการจะอัปเดตโดยอัตโนมัติ และอ่านได้อย่างเดียวที่นี่",
+        "unresolved": "ไม่พบ {handles} บน X โปรดตรวจสอบว่าชื่อผู้ใช้ X ในโปรไฟล์ GitHub เหล่านั้นถูกต้อง",
+        "xAccount": "บัญชี X",
+        "githubAccount": "บัญชี GitHub",
+        "permission": "สิทธิ์",
+        "lastSyncColumn": "ซิงค์ล่าสุด",
+        "empty": "ยังไม่มีบัญชีที่ได้มาจาก GitHub"
+      },
+      "footer": {
+        "guestsBlocked": "การตอบกลับผู้ใช้ทั่วไปจะถูกบล็อกจนกว่าการตั้งค่าข้างต้นจะเสร็จสมบูรณ์",
+        "guestsOn": "ผู้ใช้ในรายชื่อที่อนุญาตถือเป็นผู้ดูแล ส่วนผู้ใช้อื่นจะได้รับการตอบกลับแบบจำกัดสำหรับผู้ใช้ทั่วไป",
+        "guestsOff": "โหมดผู้ใช้ทั่วไปปิดอยู่ เฉพาะผู้ดูแลในรายชื่อที่อนุญาตเท่านั้นที่จะได้รับการตอบกลับ"
+      }
+    }
+  },
+  "vi": {
+    "xReplies": {
+      "title": "Trả lời trên X",
+      "subtitle": "Chọn những người mà tác nhân có thể trả lời công khai khi họ nhắc đến bạn.",
+      "refresh": "Làm mới",
+      "disconnected": "Kết nối với Gateway để quản lý việc trả lời trên X.",
+      "adminRequired": "Bạn cần quyền quản trị để quản lý việc trả lời trên X.",
+      "xAccount": "Tài khoản X",
+      "selectAccount": "Chọn tài khoản",
+      "accountOption": "{account} ({accountId})",
+      "addByHandle": "Thêm bằng tên người dùng X",
+      "handlePlaceholder": "@handle",
+      "addAccount": "Thêm tài khoản",
+      "lookupHint": "Tra cứu tên người dùng X có phí $0.01. Các mục từ tệp cấu hình chỉ có thể đọc tại đây.",
+      "updating": "Đang cập nhật việc trả lời trên X",
+      "errors": {
+        "request": "Không thể quản lý việc trả lời trên X.",
+        "list": "Không thể tải thông tin trả lời trên X. Chọn Làm mới để thử lại.",
+        "add": "Không thể xác nhận rằng OpenClaw đã thêm tài khoản X. Chọn Làm mới để kiểm tra.",
+        "remove": "Không thể xác nhận rằng OpenClaw đã xóa mục đã lưu. Chọn Làm mới để kiểm tra.",
+        "guests": "Không thể xác nhận rằng OpenClaw đã thay đổi chế độ khách. Chọn Làm mới để kiểm tra.",
+        "handleRequired": "OpenClaw chưa thêm tài khoản. Nhập tên người dùng X có tối đa 15 ký tự gồm chữ cái, chữ số hoặc dấu gạch dưới.",
+        "budget": "Đã dùng hết ngân sách X API. Có thể tiếp tục tra cứu trả phí vào {time}."
+      },
+      "notices": {
+        "added": "Đã thêm tài khoản. Giờ đây, các lượt đề cập từ tài khoản này có thể nhận được phản hồi.",
+        "removed": "Đã xóa mục đã lưu. Các nguồn danh sách cho phép khác vẫn có hiệu lực.",
+        "guestsBlocked": "Chế độ khách đang bật. Hoàn tất thiết lập bên dưới để khách có thể nhận được phản hồi.",
+        "guestsOn": "Chế độ khách đang bật. Phản hồi cho khách tuân theo các hạn chế và giới hạn đã cấu hình cho kho mã.",
+        "guestsOff": "Chế độ khách đang tắt. Chỉ người bảo trì mới có thể nhận được phản hồi."
+      },
+      "guests": {
+        "title": "Chế độ khách",
+        "subtitle": "Cho phép mọi người đặt câu hỏi về kho mã OpenClaw.",
+        "on": "Bật",
+        "off": "Tắt",
+        "perGuestLimit": "Số lượt đề cập cho mỗi khách trong mỗi ngày UTC",
+        "admittedToday": "Được tiếp nhận hôm nay",
+        "rateLimitedToday": "Bị giới hạn tần suất hôm nay",
+        "hint": "Áp dụng cho tài khoản X đã chọn. Khách nhận câu trả lời về kho mã từ tác nhân và các tác nhân phụ ẩn của tài khoản đó. Họ không thể ghi dữ liệu, chạy lệnh, mở phiên hiển thị hoặc sử dụng các tác nhân khác. Người bảo trì vẫn giữ quyền truy cập thông thường.",
+        "docsLink": "Thiết lập và giới hạn dành cho khách"
+      },
+      "spend": {
+        "label": "Chi phí X API",
+        "today": "Hôm nay (UTC)",
+        "cycle": "Chu kỳ thanh toán từ {date}",
+        "exhausted": "Đã đạt giới hạn ngân sách X API. Các yêu cầu trả phí sẽ tiếp tục lúc {time}."
+      },
+      "allowlist": {
+        "account": "Tài khoản",
+        "source": "Nguồn",
+        "addedBy": "Được thêm bởi",
+        "actions": "Thao tác",
+        "configAndStored": "Tệp cấu hình + đã lưu",
+        "config": "Tệp cấu hình",
+        "stored": "Đã lưu",
+        "remove": "Xóa",
+        "removeLabel": "Xóa mục đã lưu cho {account}",
+        "readOnly": "Chỉ đọc",
+        "empty": "Chưa có mục nào được thêm thủ công. Thêm tài khoản bằng tên người dùng X."
+      },
+      "github": {
+        "title": "Từ GitHub",
+        "verifiedThrough": "Được xác minh qua {repo}. Để tự kích hoạt, hãy thêm tên người dùng X vào hồ sơ GitHub của bạn.",
+        "profileSetup": "Thiết lập hồ sơ",
+        "stale": "Dữ liệu đồng bộ đã cũ.",
+        "neverSynced": "Chưa đồng bộ thành công lần nào.",
+        "lastSync": "Lần đồng bộ thành công gần nhất: {time}.",
+        "lastGoodSetActive": "Bộ dữ liệu hợp lệ gần nhất vẫn được sử dụng.",
+        "readOnly": "Các mục được cập nhật tự động và chỉ có thể xem tại đây.",
+        "unresolved": "Không tìm thấy {handles} trên X. Hãy kiểm tra xem tên người dùng X trên các hồ sơ GitHub đó có chính xác không.",
+        "xAccount": "Tài khoản X",
+        "githubAccount": "Tài khoản GitHub",
+        "permission": "Quyền",
+        "lastSyncColumn": "Lần đồng bộ gần nhất",
+        "empty": "Chưa có tài khoản nào được lấy từ GitHub."
+      },
+      "footer": {
+        "guestsBlocked": "Tính năng trả lời khách bị chặn cho đến khi hoàn tất thiết lập ở trên.",
+        "guestsOn": "Người dùng trong danh sách cho phép là người bảo trì. Những người dùng khác nhận được câu trả lời giới hạn dành cho khách.",
+        "guestsOff": "Chế độ khách đang tắt. Chỉ những người bảo trì trong danh sách cho phép mới nhận được câu trả lời."
+      }
+    }
+  },
+  "nl": {
+    "xReplies": {
+      "title": "X-antwoorden",
+      "subtitle": "Kies op wiens vermeldingen de agent openbaar mag reageren.",
+      "refresh": "Vernieuwen",
+      "disconnected": "Maak verbinding met de Gateway om X-antwoorden te beheren.",
+      "adminRequired": "Je hebt beheerdersrechten nodig om X-antwoorden te beheren.",
+      "xAccount": "X-account",
+      "selectAccount": "Selecteer een account",
+      "accountOption": "{account} ({accountId})",
+      "addByHandle": "Toevoegen via X-gebruikersnaam",
+      "handlePlaceholder": "@handle",
+      "addAccount": "Account toevoegen",
+      "lookupHint": "Een X-gebruikersnaam opzoeken kost $0.01. Vermeldingen uit het configuratiebestand zijn hier alleen-lezen.",
+      "updating": "X-antwoorden bijwerken",
+      "errors": {
+        "request": "X-antwoorden konden niet worden beheerd.",
+        "list": "X-antwoorden konden niet worden geladen. Selecteer Vernieuwen om het opnieuw te proberen.",
+        "add": "Er kon niet worden bevestigd dat OpenClaw het X-account heeft toegevoegd. Selecteer Vernieuwen om dit te controleren.",
+        "remove": "Er kon niet worden bevestigd dat OpenClaw de opgeslagen vermelding heeft verwijderd. Selecteer Vernieuwen om dit te controleren.",
+        "guests": "Er kon niet worden bevestigd dat OpenClaw de gastmodus heeft gewijzigd. Selecteer Vernieuwen om dit te controleren.",
+        "handleRequired": "OpenClaw heeft het account niet toegevoegd. Voer een X-gebruikersnaam in met maximaal 15 letters, cijfers of onderstrepingstekens.",
+        "budget": "Het budget voor de X API is op. Betaalde zoekopdrachten kunnen om {time} worden hervat."
+      },
+      "notices": {
+        "added": "Account toegevoegd. Vermeldingen van dit account kunnen nu antwoorden ontvangen.",
+        "removed": "Opgeslagen vermelding verwijderd. Andere bronnen voor de lijst met toegestane accounts blijven van toepassing.",
+        "guestsBlocked": "Gastmodus is ingeschakeld. Voltooi de onderstaande configuratie voordat gasten antwoorden kunnen ontvangen.",
+        "guestsOn": "Gastmodus is ingeschakeld. Voor antwoorden aan gasten gelden de ingestelde repositorybeperkingen en limieten.",
+        "guestsOff": "Gastmodus is uitgeschakeld. Alleen beheerders kunnen antwoorden ontvangen."
+      },
+      "guests": {
+        "title": "Gastmodus",
+        "subtitle": "Laat iedereen vragen stellen over de OpenClaw-repository.",
+        "on": "Aan",
+        "off": "Uit",
+        "perGuestLimit": "Vermeldingen per gast, per UTC-dag",
+        "admittedToday": "Vandaag toegelaten",
+        "rateLimitedToday": "Vandaag beperkt door aanvraaglimiet",
+        "hint": "Geldt voor het geselecteerde X-account. Gasten krijgen antwoorden over de repository van de bijbehorende agent en verborgen subagents. Ze kunnen niet schrijven, opdrachten uitvoeren, zichtbare sessies openen of andere agents gebruiken. Beheerders behouden hun normale toegang.",
+        "docsLink": "Gastconfiguratie en limieten"
+      },
+      "spend": {
+        "label": "X API-uitgaven",
+        "today": "Vandaag (UTC)",
+        "cycle": "Factureringsperiode sinds {date}",
+        "exhausted": "X API-budget bereikt. Betaalde aanvragen worden om {time} hervat."
+      },
+      "allowlist": {
+        "account": "Account",
+        "source": "Bron",
+        "addedBy": "Toegevoegd door",
+        "actions": "Acties",
+        "configAndStored": "Configuratiebestand + opgeslagen",
+        "config": "Configuratiebestand",
+        "stored": "Opgeslagen",
+        "remove": "Verwijderen",
+        "removeLabel": "Opgeslagen vermelding voor {account} verwijderen",
+        "readOnly": "Alleen-lezen",
+        "empty": "Nog geen handmatige vermeldingen. Voeg een account toe via de X-gebruikersnaam."
+      },
+      "github": {
+        "title": "Van GitHub",
+        "verifiedThrough": "Geverifieerd via {repo}. Voeg je X-gebruikersnaam toe aan je GitHub-profiel om jezelf toegang te geven.",
+        "profileSetup": "Profiel instellen",
+        "stale": "Synchronisatie is verouderd.",
+        "neverSynced": "Nog geen geslaagde synchronisatie.",
+        "lastSync": "Laatste geslaagde synchronisatie: {time}.",
+        "lastGoodSetActive": "De laatste geldige set blijft actief.",
+        "readOnly": "Vermeldingen worden automatisch bijgewerkt en zijn hier alleen-lezen.",
+        "unresolved": "Kan {handles} niet vinden op X. Controleer of de X-gebruikersnamen op die GitHub-profielen kloppen.",
+        "xAccount": "X-account",
+        "githubAccount": "GitHub-account",
+        "permission": "Toegangsrecht",
+        "lastSyncColumn": "Laatste synchronisatie",
+        "empty": "Nog geen accounts afkomstig van GitHub."
+      },
+      "footer": {
+        "guestsBlocked": "Antwoorden aan gasten worden geblokkeerd totdat de bovenstaande configuratie is voltooid.",
+        "guestsOn": "Gebruikers op de toestemmingslijst zijn beheerders. Andere gebruikers ontvangen een beperkt aantal antwoorden als gast.",
+        "guestsOff": "De gastmodus is uitgeschakeld. Alleen beheerders op de toestemmingslijst ontvangen antwoorden."
+      }
+    }
+  },
+  "fa": {
+    "xReplies": {
+      "title": "پاسخ‌های X",
+      "subtitle": "انتخاب کنید عامل بتواند به اشاره‌های چه کسانی به‌صورت عمومی پاسخ دهد.",
+      "refresh": "تازه‌سازی",
+      "disconnected": "برای مدیریت پاسخ‌های X به Gateway متصل شوید.",
+      "adminRequired": "برای مدیریت پاسخ‌های X به دسترسی مدیر نیاز دارید.",
+      "xAccount": "حساب X",
+      "selectAccount": "یک حساب انتخاب کنید",
+      "accountOption": "{account} ({accountId})",
+      "addByHandle": "افزودن با شناسهٔ X",
+      "handlePlaceholder": "@handle",
+      "addAccount": "افزودن حساب",
+      "lookupHint": "جست‌وجوی شناسهٔ X مبلغ $0.01 هزینه دارد. موارد موجود در فایل پیکربندی در اینجا فقط خواندنی هستند.",
+      "updating": "در حال به‌روزرسانی پاسخ‌های X",
+      "errors": {
+        "request": "مدیریت پاسخ‌های X ممکن نشد.",
+        "list": "بارگیری پاسخ‌های X ممکن نشد. برای تلاش دوباره، «تازه‌سازی» را انتخاب کنید.",
+        "add": "تأیید اینکه OpenClaw حساب X را اضافه کرده است ممکن نشد. برای بررسی، «تازه‌سازی» را انتخاب کنید.",
+        "remove": "تأیید اینکه OpenClaw مورد ذخیره‌شده را حذف کرده است ممکن نشد. برای بررسی، «تازه‌سازی» را انتخاب کنید.",
+        "guests": "تأیید اینکه OpenClaw حالت مهمان را تغییر داده است ممکن نشد. برای بررسی، «تازه‌سازی» را انتخاب کنید.",
+        "handleRequired": "OpenClaw حساب را اضافه نکرد. یک شناسهٔ X شامل حداکثر ۱۵ حرف، عدد یا زیرخط وارد کنید.",
+        "budget": "بودجهٔ API مربوط به X تمام شده است. جست‌وجوهای پولی می‌توانند در {time} از سر گرفته شوند."
+      },
+      "notices": {
+        "added": "حساب اضافه شد. اکنون می‌توان به منشن‌های آن پاسخ داد.",
+        "removed": "ورودی ذخیره‌شده حذف شد. سایر منابع فهرست مجاز همچنان اعمال می‌شوند.",
+        "guestsBlocked": "حالت مهمان روشن است. پیش از اینکه مهمان‌ها بتوانند پاسخ دریافت کنند، تنظیمات زیر را تکمیل کنید.",
+        "guestsOn": "حالت مهمان روشن است. پاسخ‌های مهمان‌ها تابع محدودیت‌ها و سقف‌های پیکربندی‌شده برای مخزن هستند.",
+        "guestsOff": "حالت مهمان خاموش است. فقط نگهدارندگان می‌توانند پاسخ دریافت کنند."
+      },
+      "guests": {
+        "title": "حالت مهمان",
+        "subtitle": "به همه اجازه دهید دربارهٔ مخزن OpenClaw سؤال بپرسند.",
+        "on": "روشن",
+        "off": "خاموش",
+        "perGuestLimit": "تعداد منشن‌ها برای هر مهمان در هر روز به وقت UTC",
+        "admittedToday": "پذیرفته‌شده در امروز",
+        "rateLimitedToday": "مشمول محدودیت نرخ در امروز",
+        "hint": "برای حساب انتخاب‌شدهٔ X اعمال می‌شود. مهمان‌ها پاسخ‌های مربوط به مخزن را از عامل آن و زیرعامل‌های پنهان دریافت می‌کنند. آن‌ها نمی‌توانند بنویسند، فرمان اجرا کنند، نشست‌های قابل‌مشاهده باز کنند یا از عامل‌های دیگر استفاده کنند. دسترسی معمول نگهدارندگان حفظ می‌شود.",
+        "docsLink": "تنظیمات و محدودیت‌های مهمان"
+      },
+      "spend": {
+        "label": "هزینهٔ API سرویس X",
+        "today": "امروز (UTC)",
+        "cycle": "دورهٔ صورتحساب از {date}",
+        "exhausted": "سقف بودجهٔ API سرویس X پر شده است. درخواست‌های پولی در {time} از سر گرفته می‌شوند."
+      },
+      "allowlist": {
+        "account": "حساب",
+        "source": "منبع",
+        "addedBy": "افزوده‌شده توسط",
+        "actions": "عملیات",
+        "configAndStored": "فایل پیکربندی + ذخیره‌شده",
+        "config": "فایل پیکربندی",
+        "stored": "ذخیره‌شده",
+        "remove": "حذف",
+        "removeLabel": "حذف ورودی ذخیره‌شده برای {account}",
+        "readOnly": "فقط‌خواندنی",
+        "empty": "هنوز هیچ ورودی دستی وجود ندارد. یک حساب را با نام کاربری آن در X اضافه کنید."
+      },
+      "github": {
+        "title": "از GitHub",
+        "verifiedThrough": "از طریق {repo} تأیید شده است. برای فعال‌سازی دسترسی خود، نام کاربری X خود را به نمایهٔ GitHub خود اضافه کنید.",
+        "profileSetup": "تنظیم نمایه",
+        "stale": "همگام‌سازی به‌روز نیست.",
+        "neverSynced": "هنوز همگام‌سازی موفقی انجام نشده است.",
+        "lastSync": "آخرین همگام‌سازی موفق: {time}.",
+        "lastGoodSetActive": "آخرین مجموعهٔ معتبر همچنان فعال است.",
+        "readOnly": "ورودی‌ها به‌طور خودکار به‌روز می‌شوند و در اینجا فقط‌خواندنی هستند.",
+        "unresolved": "{handles} در X پیدا نشد. بررسی کنید که نام‌های کاربری X در آن نمایه‌های GitHub درست باشند.",
+        "xAccount": "حساب X",
+        "githubAccount": "حساب GitHub",
+        "permission": "مجوز",
+        "lastSyncColumn": "آخرین همگام‌سازی",
+        "empty": "هنوز هیچ حسابی از GitHub دریافت نشده است."
+      },
+      "footer": {
+        "guestsBlocked": "تا زمانی که راه‌اندازی بالا کامل نشود، پاسخ‌دهی به مهمانان مسدود است.",
+        "guestsOn": "کاربران فهرست مجاز، نگهدارنده محسوب می‌شوند. سایر کاربران پاسخ‌های محدود ویژهٔ مهمانان را دریافت می‌کنند.",
+        "guestsOff": "حالت مهمان خاموش است. فقط نگهدارندگان فهرست مجاز پاسخ دریافت می‌کنند."
+      }
+    }
+  },
+  "ru": {
+    "xReplies": {
+      "title": "Ответы в X",
+      "subtitle": "Выберите, на чьи упоминания агент может отвечать публично.",
+      "refresh": "Обновить",
+      "disconnected": "Подключитесь к Gateway, чтобы управлять ответами в X.",
+      "adminRequired": "Для управления ответами в X нужны права администратора.",
+      "xAccount": "Аккаунт X",
+      "selectAccount": "Выберите аккаунт",
+      "accountOption": "{account} ({accountId})",
+      "addByHandle": "Добавить по имени пользователя в X",
+      "handlePlaceholder": "@handle",
+      "addAccount": "Добавить аккаунт",
+      "lookupHint": "Поиск по имени пользователя в X стоит $0.01. Записи из файла конфигурации здесь доступны только для чтения.",
+      "updating": "Обновление ответов в X",
+      "errors": {
+        "request": "Не удалось изменить настройки ответов в X.",
+        "list": "Не удалось загрузить настройки ответов в X. Нажмите «Обновить», чтобы повторить попытку.",
+        "add": "Не удалось подтвердить, что OpenClaw добавил аккаунт X. Нажмите «Обновить», чтобы проверить.",
+        "remove": "Не удалось подтвердить, что OpenClaw удалил сохранённую запись. Нажмите «Обновить», чтобы проверить.",
+        "guests": "Не удалось подтвердить, что OpenClaw изменил гостевой режим. Нажмите «Обновить», чтобы проверить.",
+        "handleRequired": "OpenClaw не добавил аккаунт. Введите имя пользователя в X длиной до 15 символов, состоящее из букв, цифр или знаков подчёркивания.",
+        "budget": "Бюджет на X API исчерпан. Платный поиск снова будет доступен в {time}."
+      },
+      "notices": {
+        "added": "Аккаунт добавлен. Теперь на упоминания от него можно отвечать.",
+        "removed": "Сохранённая запись удалена. Другие источники списка разрешённых аккаунтов по-прежнему действуют.",
+        "guestsBlocked": "Гостевой режим включён. Завершите настройку ниже, чтобы гости могли получать ответы.",
+        "guestsOn": "Гостевой режим включён. К ответам гостям применяются настроенные ограничения репозитория и лимиты.",
+        "guestsOff": "Гостевой режим выключен. Только сопровождающие могут получать ответы."
+      },
+      "guests": {
+        "title": "Гостевой режим",
+        "subtitle": "Разрешите всем задавать вопросы о репозитории OpenClaw.",
+        "on": "Вкл.",
+        "off": "Выкл.",
+        "perGuestLimit": "Упоминаний на гостя в сутки по UTC",
+        "admittedToday": "Допущено сегодня",
+        "rateLimitedToday": "Ограничено по частоте сегодня",
+        "hint": "Применяется к выбранному аккаунту X. Гости получают ответы о репозитории от его агента и скрытых субагентов. Они не могут вносить изменения, выполнять команды, открывать видимые сеансы или использовать других агентов. Сопровождающие сохраняют обычный доступ.",
+        "docsLink": "Настройка гостевого режима и лимиты"
+      },
+      "spend": {
+        "label": "Расходы на X API",
+        "today": "Сегодня (UTC)",
+        "cycle": "Расчётный период с {date}",
+        "exhausted": "Бюджет X API исчерпан. Платные запросы возобновятся в {time}."
+      },
+      "allowlist": {
+        "account": "Аккаунт",
+        "source": "Источник",
+        "addedBy": "Кем добавлено",
+        "actions": "Действия",
+        "configAndStored": "Файл конфигурации + сохранённая запись",
+        "config": "Файл конфигурации",
+        "stored": "Сохранённая запись",
+        "remove": "Удалить",
+        "removeLabel": "Удалить сохранённую запись для {account}",
+        "readOnly": "Только для чтения",
+        "empty": "Записей, добавленных вручную, пока нет. Добавьте аккаунт по имени пользователя в X."
+      },
+      "github": {
+        "title": "Из GitHub",
+        "verifiedThrough": "Подтверждено через {repo}. Чтобы получить доступ, добавьте своё имя пользователя в X в свой профиль GitHub.",
+        "profileSetup": "Настройка профиля",
+        "stale": "Данные синхронизации устарели.",
+        "neverSynced": "Успешных синхронизаций пока не было.",
+        "lastSync": "Последняя успешная синхронизация: {time}.",
+        "lastGoodSetActive": "Последний успешно полученный набор остаётся активным.",
+        "readOnly": "Записи обновляются автоматически и здесь доступны только для чтения.",
+        "unresolved": "Не удалось найти {handles} в X. Проверьте правильность имён пользователей X в этих профилях GitHub.",
+        "xAccount": "Аккаунт X",
+        "githubAccount": "Аккаунт GitHub",
+        "permission": "Разрешение",
+        "lastSyncColumn": "Последняя синхронизация",
+        "empty": "Пока нет учётных записей, полученных из GitHub."
+      },
+      "footer": {
+        "guestsBlocked": "Ответы гостям заблокированы до завершения настройки выше.",
+        "guestsOn": "Пользователи из списка разрешённых считаются сопровождающими. Остальные пользователи получают ответы в ограниченном гостевом режиме.",
+        "guestsOff": "Гостевой режим отключён. Ответы получают только сопровождающие из списка разрешённых."
+      }
+    }
+  },
+  "sv": {
+    "xReplies": {
+      "title": "Svar på X",
+      "subtitle": "Välj vilkas omnämnanden agenten får svara på offentligt.",
+      "refresh": "Uppdatera",
+      "disconnected": "Anslut till Gateway för att hantera svar på X.",
+      "adminRequired": "Du behöver administratörsbehörighet för att hantera svar på X.",
+      "xAccount": "X-konto",
+      "selectAccount": "Välj ett konto",
+      "accountOption": "{account} ({accountId})",
+      "addByHandle": "Lägg till via användarnamn på X",
+      "handlePlaceholder": "@handle",
+      "addAccount": "Lägg till konto",
+      "lookupHint": "Att slå upp ett användarnamn på X kostar 0,01 USD. Poster från konfigurationsfilen är skrivskyddade här.",
+      "updating": "Uppdaterar svar på X",
+      "errors": {
+        "request": "Det gick inte att hantera svar på X.",
+        "list": "Det gick inte att läsa in svar på X. Välj Uppdatera för att försöka igen.",
+        "add": "Det gick inte att bekräfta att OpenClaw lade till X-kontot. Välj Uppdatera för att kontrollera.",
+        "remove": "Det gick inte att bekräfta att OpenClaw tog bort den sparade posten. Välj Uppdatera för att kontrollera.",
+        "guests": "Det gick inte att bekräfta att OpenClaw ändrade gästläget. Välj Uppdatera för att kontrollera.",
+        "handleRequired": "OpenClaw lade inte till kontot. Ange ett användarnamn på X med högst 15 bokstäver, siffror eller understreck.",
+        "budget": "Budgeten för X API är förbrukad. Betalda uppslagningar kan återupptas vid {time}."
+      },
+      "notices": {
+        "added": "Kontot har lagts till. Dess omnämnanden kan nu få svar.",
+        "removed": "Den sparade posten har tagits bort. Andra källor till tillåtelselistan gäller fortfarande.",
+        "guestsBlocked": "Gästläget är på. Slutför konfigurationen nedan innan gäster kan få svar.",
+        "guestsOn": "Gästläget är på. Svar till gäster använder de konfigurerade begränsningarna för kodarkivet och användningen.",
+        "guestsOff": "Gästläget är av. Endast projektansvariga kan få svar."
+      },
+      "guests": {
+        "title": "Gästläge",
+        "subtitle": "Låt vem som helst ställa frågor om OpenClaw-kodarkivet.",
+        "on": "På",
+        "off": "Av",
+        "perGuestLimit": "Omnämnanden per gäst och dygn (UTC)",
+        "admittedToday": "Tillåtna idag",
+        "rateLimitedToday": "Frekvensbegränsade idag",
+        "hint": "Gäller det valda X-kontot. Gäster får svar om kodarkivet från kontots agent och dolda underagenter. De kan inte skriva, köra kommandon, öppna synliga sessioner eller använda andra agenter. Projektansvariga behåller sin vanliga åtkomst.",
+        "docsLink": "Konfiguration och gränser för gäster"
+      },
+      "spend": {
+        "label": "Kostnad för X API",
+        "today": "Idag (UTC)",
+        "cycle": "Faktureringsperiod sedan {date}",
+        "exhausted": "Budgeten för X API har nåtts. Betalda anrop återupptas {time}."
+      },
+      "allowlist": {
+        "account": "Konto",
+        "source": "Källa",
+        "addedBy": "Tillagd av",
+        "actions": "Åtgärder",
+        "configAndStored": "Konfigurationsfil + sparad",
+        "config": "Konfigurationsfil",
+        "stored": "Sparad",
+        "remove": "Ta bort",
+        "removeLabel": "Ta bort sparad post för {account}",
+        "readOnly": "Skrivskyddad",
+        "empty": "Inga manuella poster ännu. Lägg till ett konto med dess användarnamn på X."
+      },
+      "github": {
+        "title": "Från GitHub",
+        "verifiedThrough": "Verifierad via {repo}. Lägg till ditt användarnamn på X i din GitHub-profil för att aktivera åtkomst för dig själv.",
+        "profileSetup": "Profilinställningar",
+        "stale": "Synkroniseringen är inaktuell.",
+        "neverSynced": "Ingen synkronisering har lyckats ännu.",
+        "lastSync": "Senaste lyckade synkronisering: {time}.",
+        "lastGoodSetActive": "De senast verifierade posterna förblir aktiva.",
+        "readOnly": "Posterna uppdateras automatiskt och är skrivskyddade här.",
+        "unresolved": "Kunde inte hitta {handles} på X. Kontrollera att användarnamnen på X i dessa GitHub-profiler är korrekta.",
+        "xAccount": "X-konto",
+        "githubAccount": "GitHub-konto",
+        "permission": "Behörighet",
+        "lastSyncColumn": "Senaste synkronisering",
+        "empty": "Inga konton har hämtats från GitHub ännu."
+      },
+      "footer": {
+        "guestsBlocked": "Svar till gäster är blockerade tills konfigurationen ovan är klar.",
+        "guestsOn": "Användare på tillåtelselistan är underhållare. Övriga användare får begränsade svar som gäster.",
+        "guestsOff": "Gästläget är avstängt. Endast underhållare på tillåtelselistan får svar."
+      }
+    }
+  },
+  "ca": {
+    "xReplies": {
+      "title": "Respostes a X",
+      "subtitle": "Trieu les persones a les mencions de les quals l’agent pot respondre públicament.",
+      "refresh": "Actualitza",
+      "disconnected": "Connecteu-vos al Gateway per gestionar les respostes a X.",
+      "adminRequired": "Necessiteu accés d’administrador per gestionar les respostes a X.",
+      "xAccount": "Compte de X",
+      "selectAccount": "Seleccioneu un compte",
+      "accountOption": "{account} ({accountId})",
+      "addByHandle": "Afegeix per nom d’usuari de X",
+      "handlePlaceholder": "@handle",
+      "addAccount": "Afegeix un compte",
+      "lookupHint": "Consultar un nom d’usuari de X costa 0,01 $. Les entrades del fitxer de configuració són de només lectura aquí.",
+      "updating": "S’estan actualitzant les respostes a X",
+      "errors": {
+        "request": "No s’han pogut gestionar les respostes a X.",
+        "list": "No s’han pogut carregar les respostes a X. Seleccioneu Actualitza per tornar-ho a provar.",
+        "add": "No s’ha pogut confirmar que OpenClaw hagi afegit el compte de X. Seleccioneu Actualitza per comprovar-ho.",
+        "remove": "No s’ha pogut confirmar que OpenClaw hagi eliminat l’entrada desada. Seleccioneu Actualitza per comprovar-ho.",
+        "guests": "No s’ha pogut confirmar que OpenClaw hagi canviat el mode de convidat. Seleccioneu Actualitza per comprovar-ho.",
+        "handleRequired": "OpenClaw no ha afegit el compte. Introduïu un nom d’usuari de X de fins a 15 lletres, números o guions baixos.",
+        "budget": "S’ha esgotat el pressupost de l’API de X. Les consultes de pagament es podran reprendre a les {time}."
+      },
+      "notices": {
+        "added": "Compte afegit. Les seves mencions ja poden rebre respostes.",
+        "removed": "Entrada desada eliminada. Les altres fonts de la llista de comptes permesos continuen sent aplicables.",
+        "guestsBlocked": "El mode de convidats està activat. Completa la configuració següent perquè els convidats puguin rebre respostes.",
+        "guestsOn": "El mode de convidats està activat. Les respostes als convidats utilitzen les restriccions del repositori i els límits configurats.",
+        "guestsOff": "El mode de convidats està desactivat. Només els mantenidors poden rebre respostes."
+      },
+      "guests": {
+        "title": "Mode de convidats",
+        "subtitle": "Permet que qualsevol persona faci preguntes sobre el repositori d’OpenClaw.",
+        "on": "Activat",
+        "off": "Desactivat",
+        "perGuestLimit": "Mencions per convidat i dia UTC",
+        "admittedToday": "Admeses avui",
+        "rateLimitedToday": "Limitades avui per excés de freqüència",
+        "hint": "S’aplica al compte d’X seleccionat. Els convidats reben respostes sobre el repositori del seu agent i dels subagents ocults. No poden escriure, executar ordres, obrir sessions visibles ni utilitzar altres agents. Els mantenidors conserven el seu accés habitual.",
+        "docsLink": "Configuració i límits dels convidats"
+      },
+      "spend": {
+        "label": "Despesa de l’API d’X",
+        "today": "Avui (UTC)",
+        "cycle": "Cicle de facturació des de {date}",
+        "exhausted": "S’ha arribat al límit del pressupost de l’API d’X. Les sol·licituds de pagament es reprendran a les {time}."
+      },
+      "allowlist": {
+        "account": "Compte",
+        "source": "Font",
+        "addedBy": "Afegit per",
+        "actions": "Accions",
+        "configAndStored": "Fitxer de configuració + desat",
+        "config": "Fitxer de configuració",
+        "stored": "Desat",
+        "remove": "Elimina",
+        "removeLabel": "Elimina l'entrada desada de {account}",
+        "readOnly": "Només de lectura",
+        "empty": "Encara no hi ha entrades manuals. Afegeix un compte amb el seu nom d'usuari d'X."
+      },
+      "github": {
+        "title": "Des de GitHub",
+        "verifiedThrough": "Verificat a través de {repo}. Per habilitar el teu compte, afegeix el teu nom d'usuari d'X al teu perfil de GitHub.",
+        "profileSetup": "Configuració del perfil",
+        "stale": "La sincronització està desactualitzada.",
+        "neverSynced": "Encara no s'ha completat cap sincronització correctament.",
+        "lastSync": "Última sincronització completada correctament: {time}.",
+        "lastGoodSetActive": "L'últim conjunt vàlid continua actiu.",
+        "readOnly": "Les entrades s'actualitzen automàticament i aquí són només de lectura.",
+        "unresolved": "No s'han pogut trobar {handles} a X. Comprova que els noms d'usuari d'X d'aquests perfils de GitHub siguin correctes.",
+        "xAccount": "Compte d'X",
+        "githubAccount": "Compte de GitHub",
+        "permission": "Permís",
+        "lastSyncColumn": "Última sincronització",
+        "empty": "Encara no hi ha comptes provinents de GitHub."
+      },
+      "footer": {
+        "guestsBlocked": "Les respostes als convidats estan bloquejades fins que es completi la configuració anterior.",
+        "guestsOn": "Els usuaris de la llista de permesos són mantenidors. La resta d'usuaris reben respostes limitades com a convidats.",
+        "guestsOff": "El mode de convidat està desactivat. Només els mantenidors de la llista de permesos reben respostes."
+      }
+    }
+  }
+}

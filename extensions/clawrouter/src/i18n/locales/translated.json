@@ -1,0 +1,1938 @@
+{
+  "zh-CN": {
+    "common": {
+      "refresh": "刷新"
+    },
+    "clawrouter": {
+      "pool": {
+        "subtitle": "已配置策略下的订阅剩余额度、模型访问权限和流量。",
+        "disconnected": "连接到 Gateway 以查看 ClawRouter 池。",
+        "readAccessRequired": "您需要读取权限才能查看 ClawRouter 池。",
+        "loadFailed": "无法加载 ClawRouter 池。请选择“刷新”重试。",
+        "notLoaded": "刷新以加载池状态。",
+        "loading": "正在加载池状态",
+        "refreshing": "正在刷新",
+        "observed": "观测时间：{date}",
+        "observedWithPolicy": "观测时间：{date} · 策略：{policy}"
+      },
+      "values": {
+        "notReported": "未报告",
+        "enabled": "已启用",
+        "disabled": "已禁用",
+        "enabledNotReported": "未报告启用状态",
+        "percent": "{value}%",
+        "percentFree": "剩余 {value}%",
+        "minorUnits": "{amount} 个最小货币单位",
+        "minorUnitsWithCurrency": "{amount} 个最小货币单位（{currency}）"
+      },
+      "summary": {
+        "title": "池概览",
+        "subscriptions": "订阅",
+        "routingStrategy": "路由策略",
+        "includedQuotaReserve": "内含配额预留量",
+        "environmentFallback": "环境回退",
+        "paidFallbackRequests": "付费回退请求数",
+        "paidFallbackValue": "付费回退金额",
+        "paidFallbackHint": "付费回退汇总了 API 密钥通道和环境通道的流量，包括直接付费流量。金额按 API 等值美元计算。",
+        "modelsTitle": "允许的模型及剩余容量",
+        "modelsHint": "ClawRouter 报告的可用资格已考虑配额预留量和凭据健康状况。",
+        "modelHeadroom": "{count} 个订阅有剩余容量",
+        "modelHeadroomWithUnknown": "{count} 个订阅有剩余容量 · {unknown} 个状态未知",
+        "noModels": "此策略未报告任何允许的模型。",
+        "trafficTitle": "池流量",
+        "trafficTitleWithDays": "池流量 · 最近 {days} 天",
+        "trafficHint": "付费回退按报告的通道显示。API 等值金额以美元计。",
+        "unspecifiedLane": "未指定通道",
+        "noTraffic": "未报告任何流量。",
+        "grantsTitle": "订阅与授权",
+        "noGrants": "此策略未报告任何订阅。"
+      },
+      "traffic": {
+        "requests": "请求数",
+        "inputTokens": "输入词元数",
+        "outputTokens": "输出词元数",
+        "cacheReadTokens": "缓存读取词元数",
+        "cacheWriteTokens": "缓存写入词元数",
+        "apiValue": "API 等值费用"
+      },
+      "grant": {
+        "account": "账户",
+        "plan": "套餐",
+        "credential": "凭据",
+        "subscription": "订阅",
+        "rateLimitTier": "速率限制等级",
+        "lastSelected": "上次选中时间",
+        "quotaLabel": "订阅配额周期",
+        "quotaTitle": "剩余配额",
+        "quotaRemaining": "{window}剩余配额",
+        "allModels": "所有模型",
+        "modelScopeNotReported": "未报告模型范围",
+        "resets": "于 {date} 重置",
+        "noQuotaWindows": "未报告配额周期。",
+        "extraUsage": "额外用量",
+        "extraUsageSpend": "已用 {used} / 每月限额 {limit}",
+        "spendLimitReached": "已达到支出限额",
+        "eligibilityLabel": "各模型使用资格",
+        "eligibilityTitle": "模型使用资格",
+        "noModels": "未报告允许使用的模型。",
+        "trafficLabel": "订阅流量",
+        "trafficTitle": "流量",
+        "selections": "选择次数：{count}。API 等值费用不属于订阅收费。"
+      },
+      "windows": {
+        "fallback": "配额周期",
+        "fiveHour": "5 小时",
+        "weekly": "每周",
+        "modelWeekly": "{models} 每周"
+      }
+    }
+  },
+  "zh-TW": {
+    "common": {
+      "refresh": "重新整理"
+    },
+    "clawrouter": {
+      "pool": {
+        "subtitle": "已設定政策的訂閱剩餘額度、模型存取權與流量。",
+        "disconnected": "連線至 Gateway 以查看 ClawRouter 集區。",
+        "readAccessRequired": "您需要讀取權限才能查看 ClawRouter 集區。",
+        "loadFailed": "無法載入 ClawRouter 集區。請選取「重新整理」再試一次。",
+        "notLoaded": "請重新整理以載入集區狀態。",
+        "loading": "正在載入集區狀態",
+        "refreshing": "正在重新整理",
+        "observed": "觀測時間：{date}",
+        "observedWithPolicy": "觀測時間：{date} · 政策：{policy}"
+      },
+      "values": {
+        "notReported": "未回報",
+        "enabled": "已啟用",
+        "disabled": "已停用",
+        "enabledNotReported": "未回報啟用狀態",
+        "percent": "{value}%",
+        "percentFree": "剩餘 {value}%",
+        "minorUnits": "{amount} 個最小貨幣單位",
+        "minorUnitsWithCurrency": "{amount} 個最小貨幣單位（{currency}）"
+      },
+      "summary": {
+        "title": "集區摘要",
+        "subscriptions": "訂閱",
+        "routingStrategy": "路由策略",
+        "includedQuotaReserve": "內含配額保留量",
+        "environmentFallback": "環境備援",
+        "paidFallbackRequests": "付費備援請求數",
+        "paidFallbackValue": "付費備援金額",
+        "paidFallbackHint": "付費備援彙總了 API 金鑰與環境通道的流量，包含直接付費流量。金額以等值 API 費用計算，單位為美元。",
+        "modelsTitle": "允許的模型與剩餘容量",
+        "modelsHint": "ClawRouter 回報的可用資格考量了配額保留量與憑證健康狀態。",
+        "modelHeadroom": "{count} 個訂閱有剩餘容量",
+        "modelHeadroomWithUnknown": "{count} 個訂閱有剩餘容量 · {unknown} 個狀態不明",
+        "noModels": "此原則未回報任何允許的模型。",
+        "trafficTitle": "資源池流量",
+        "trafficTitleWithDays": "資源池流量 · 最近 {days} 天",
+        "trafficHint": "付費備援依回報的通道顯示。等值 API 費用以美元計算。",
+        "unspecifiedLane": "未指定的通道",
+        "noTraffic": "尚無流量回報。",
+        "grantsTitle": "訂閱與授權",
+        "noGrants": "此原則未回報任何訂閱。"
+      },
+      "traffic": {
+        "requests": "請求數",
+        "inputTokens": "輸入詞元數",
+        "outputTokens": "輸出權杖數",
+        "cacheReadTokens": "快取讀取權杖數",
+        "cacheWriteTokens": "快取寫入權杖數",
+        "apiValue": "API 等值金額"
+      },
+      "grant": {
+        "account": "帳號",
+        "plan": "方案",
+        "credential": "憑證",
+        "subscription": "訂閱",
+        "rateLimitTier": "速率限制層級",
+        "lastSelected": "上次選取時間",
+        "quotaLabel": "訂閱配額週期",
+        "quotaTitle": "剩餘配額",
+        "quotaRemaining": "{window}剩餘配額",
+        "allModels": "所有模型",
+        "modelScopeNotReported": "未回報模型範圍",
+        "resets": "於 {date} 重設",
+        "noQuotaWindows": "未回報配額週期。",
+        "extraUsage": "額外用量",
+        "extraUsageSpend": "已使用 {used} / 每月上限 {limit}",
+        "spendLimitReached": "已達支出上限",
+        "eligibilityLabel": "各模型使用資格",
+        "eligibilityTitle": "模型使用資格",
+        "noModels": "未回報任何允許使用的模型。",
+        "trafficLabel": "訂閱流量",
+        "trafficTitle": "流量",
+        "selections": "選取次數：{count}。API 等值金額並非訂閱費用。"
+      },
+      "windows": {
+        "fallback": "配額週期",
+        "fiveHour": "5 小時",
+        "weekly": "每週",
+        "modelWeekly": "{models} 每週"
+      }
+    }
+  },
+  "pt-BR": {
+    "common": {
+      "refresh": "Atualizar"
+    },
+    "clawrouter": {
+      "pool": {
+        "subtitle": "Capacidade disponível nas assinaturas, acesso a modelos e tráfego para a política configurada.",
+        "disconnected": "Conecte-se ao Gateway para visualizar o pool do ClawRouter.",
+        "readAccessRequired": "Você precisa de acesso de leitura para visualizar o pool do ClawRouter.",
+        "loadFailed": "Não foi possível carregar o pool do ClawRouter. Selecione Atualizar para tentar novamente.",
+        "notLoaded": "Atualize para carregar o status do pool.",
+        "loading": "Carregando o status do pool",
+        "refreshing": "Atualizando",
+        "observed": "Observado em {date}",
+        "observedWithPolicy": "Observado em {date} · Política {policy}"
+      },
+      "values": {
+        "notReported": "Não informado",
+        "enabled": "Ativado",
+        "disabled": "Desativado",
+        "enabledNotReported": "Estado de ativação não informado",
+        "percent": "{value}%",
+        "percentFree": "{value}% disponível",
+        "minorUnits": "{amount} unidades monetárias fracionárias",
+        "minorUnitsWithCurrency": "{amount} unidades monetárias fracionárias ({currency})"
+      },
+      "summary": {
+        "title": "Resumo do pool",
+        "subscriptions": "Assinaturas",
+        "routingStrategy": "Estratégia de roteamento",
+        "includedQuotaReserve": "Reserva de cota incluída",
+        "environmentFallback": "Alternativa via ambiente",
+        "paidFallbackRequests": "Requisições pela alternativa paga",
+        "paidFallbackValue": "Valor da alternativa paga",
+        "paidFallbackHint": "A alternativa paga agrega as rotas de chave de API e de ambiente, incluindo o tráfego pago direto. Os valores são equivalentes aos da API em USD.",
+        "modelsTitle": "Modelos permitidos e capacidade disponível",
+        "modelsHint": "A elegibilidade informada pelo ClawRouter considera as reservas de cota e a integridade das credenciais.",
+        "modelHeadroom": "{count} assinaturas com capacidade disponível",
+        "modelHeadroomWithUnknown": "{count} assinaturas com capacidade disponível · {unknown} com capacidade desconhecida",
+        "noModels": "Nenhum modelo permitido informado para esta política.",
+        "trafficTitle": "Tráfego do pool",
+        "trafficTitleWithDays": "Tráfego do pool · últimos {days} dias",
+        "trafficHint": "A alternativa paga é exibida de acordo com a rota informada. Os valores equivalentes aos da API estão em USD.",
+        "unspecifiedLane": "Rota não especificada",
+        "noTraffic": "Nenhum tráfego informado.",
+        "grantsTitle": "Assinaturas e concessões",
+        "noGrants": "Nenhuma assinatura informada para esta política."
+      },
+      "traffic": {
+        "requests": "Requisições",
+        "inputTokens": "Tokens de entrada",
+        "outputTokens": "Tokens de saída",
+        "cacheReadTokens": "Tokens de leitura do cache",
+        "cacheWriteTokens": "Tokens de gravação no cache",
+        "apiValue": "Valor equivalente na API"
+      },
+      "grant": {
+        "account": "Conta",
+        "plan": "Plano",
+        "credential": "Credencial",
+        "subscription": "Assinatura",
+        "rateLimitTier": "Nível de limite de requisições",
+        "lastSelected": "Última seleção",
+        "quotaLabel": "Períodos de cota da assinatura",
+        "quotaTitle": "Cota disponível",
+        "quotaRemaining": "Cota restante de {window}",
+        "allModels": "Todos os modelos",
+        "modelScopeNotReported": "Escopo de modelos não informado",
+        "resets": "Renova em {date}",
+        "noQuotaWindows": "Nenhum período de cota informado.",
+        "extraUsage": "Uso extra",
+        "extraUsageSpend": "{used} usados / {limit} de limite mensal",
+        "spendLimitReached": "Limite de gastos atingido",
+        "eligibilityLabel": "Elegibilidade por modelo",
+        "eligibilityTitle": "Elegibilidade dos modelos",
+        "noModels": "Nenhum modelo permitido informado.",
+        "trafficLabel": "Tráfego da assinatura",
+        "trafficTitle": "Tráfego",
+        "selections": "Seleções: {count}. O valor equivalente ao uso da API não é uma cobrança da assinatura."
+      },
+      "windows": {
+        "fallback": "Período da cota",
+        "fiveHour": "5 horas",
+        "weekly": "Semanal",
+        "modelWeekly": "{models} semanal"
+      }
+    }
+  },
+  "de": {
+    "common": {
+      "refresh": "Aktualisieren"
+    },
+    "clawrouter": {
+      "pool": {
+        "subtitle": "Verfügbare Abonnementkapazität, Modellzugriff und Datenverkehr für Ihre konfigurierte Richtlinie.",
+        "disconnected": "Verbinden Sie sich mit dem Gateway, um den ClawRouter-Pool anzuzeigen.",
+        "readAccessRequired": "Sie benötigen Lesezugriff, um den ClawRouter-Pool anzuzeigen.",
+        "loadFailed": "Der ClawRouter-Pool konnte nicht geladen werden. Wählen Sie „Aktualisieren“, um es erneut zu versuchen.",
+        "notLoaded": "Aktualisieren Sie, um den Poolstatus zu laden.",
+        "loading": "Poolstatus wird geladen",
+        "refreshing": "Wird aktualisiert",
+        "observed": "Erfasst am {date}",
+        "observedWithPolicy": "Erfasst am {date} · Richtlinie {policy}"
+      },
+      "values": {
+        "notReported": "Nicht gemeldet",
+        "enabled": "Aktiviert",
+        "disabled": "Deaktiviert",
+        "enabledNotReported": "Aktivierungsstatus nicht gemeldet",
+        "percent": "{value} %",
+        "percentFree": "{value} % frei",
+        "minorUnits": "{amount} Währungsuntereinheiten",
+        "minorUnitsWithCurrency": "{amount} Währungsuntereinheiten ({currency})"
+      },
+      "summary": {
+        "title": "Poolübersicht",
+        "subscriptions": "Abonnements",
+        "routingStrategy": "Routing-Strategie",
+        "includedQuotaReserve": "Reserve des enthaltenen Kontingents",
+        "environmentFallback": "Fallback über Umgebungsvariablen",
+        "paidFallbackRequests": "Kostenpflichtige Fallback-Anfragen",
+        "paidFallbackValue": "Wert des kostenpflichtigen Fallbacks",
+        "paidFallbackHint": "Der kostenpflichtige Fallback fasst API-Schlüssel- und Umgebungspfade zusammen, einschließlich direkt abgerechneten Datenverkehrs. Die Werte entsprechen den API-Kosten in USD.",
+        "modelsTitle": "Zugelassene Modelle und freie Kapazität",
+        "modelsHint": "Die von ClawRouter gemeldete Verfügbarkeit berücksichtigt Kontingentreserven und den Status der Zugangsdaten.",
+        "modelHeadroom": "{count} Abonnements mit freier Kapazität",
+        "modelHeadroomWithUnknown": "{count} Abonnements mit freier Kapazität · {unknown} unbekannt",
+        "noModels": "Für diese Richtlinie wurden keine zugelassenen Modelle gemeldet.",
+        "trafficTitle": "Pool-Datenverkehr",
+        "trafficTitleWithDays": "Pool-Datenverkehr · letzte {days} Tage",
+        "trafficHint": "Der kostenpflichtige Fallback wird nach dem gemeldeten Pfad angezeigt. Die API-äquivalenten Werte sind in USD angegeben.",
+        "unspecifiedLane": "Nicht angegebener Pfad",
+        "noTraffic": "Kein Datenverkehr gemeldet.",
+        "grantsTitle": "Abonnements und Berechtigungen",
+        "noGrants": "Für diese Richtlinie wurden keine Abonnements gemeldet."
+      },
+      "traffic": {
+        "requests": "Anfragen",
+        "inputTokens": "Eingabetokens",
+        "outputTokens": "Ausgabetokens",
+        "cacheReadTokens": "Aus dem Cache gelesene Tokens",
+        "cacheWriteTokens": "In den Cache geschriebene Tokens",
+        "apiValue": "API-Gegenwert"
+      },
+      "grant": {
+        "account": "Konto",
+        "plan": "Tarif",
+        "credential": "Zugangsdaten",
+        "subscription": "Abonnement",
+        "rateLimitTier": "Stufe der Ratenbegrenzung",
+        "lastSelected": "Zuletzt ausgewählt",
+        "quotaLabel": "Kontingentzeiträume des Abonnements",
+        "quotaTitle": "Verbleibendes Kontingent",
+        "quotaRemaining": "Verbleibendes Kontingent für {window}",
+        "allModels": "Alle Modelle",
+        "modelScopeNotReported": "Modellumfang nicht gemeldet",
+        "resets": "Zurücksetzung: {date}",
+        "noQuotaWindows": "Keine Kontingentzeiträume gemeldet.",
+        "extraUsage": "Zusätzliche Nutzung",
+        "extraUsageSpend": "{used} verbraucht / {limit} monatliches Limit",
+        "spendLimitReached": "Ausgabenlimit erreicht",
+        "eligibilityLabel": "Berechtigung pro Modell",
+        "eligibilityTitle": "Modellberechtigung",
+        "noModels": "Keine zugelassenen Modelle gemeldet.",
+        "trafficLabel": "Abo-Datenverkehr",
+        "trafficTitle": "Datenverkehr",
+        "selections": "Auswahlen: {count}. Der API-äquivalente Wert ist keine Abo-Gebühr."
+      },
+      "windows": {
+        "fallback": "Kontingentzeitraum",
+        "fiveHour": "5 Stunden",
+        "weekly": "Wöchentlich",
+        "modelWeekly": "{models} wöchentlich"
+      }
+    }
+  },
+  "es": {
+    "common": {
+      "refresh": "Actualizar"
+    },
+    "clawrouter": {
+      "pool": {
+        "subtitle": "Capacidad disponible de las suscripciones, acceso a modelos y tráfico según la política configurada.",
+        "disconnected": "Conéctate a Gateway para ver el grupo de ClawRouter.",
+        "readAccessRequired": "Necesitas acceso de lectura para ver el grupo de ClawRouter.",
+        "loadFailed": "No se pudo cargar el grupo de ClawRouter. Selecciona Actualizar para volver a intentarlo.",
+        "notLoaded": "Actualiza para cargar el estado del grupo.",
+        "loading": "Cargando el estado del grupo",
+        "refreshing": "Actualizando",
+        "observed": "Observado el {date}",
+        "observedWithPolicy": "Observado el {date} · Política {policy}"
+      },
+      "values": {
+        "notReported": "Sin datos",
+        "enabled": "Activado",
+        "disabled": "Desactivado",
+        "enabledNotReported": "Sin datos sobre el estado de activación",
+        "percent": "{value}%",
+        "percentFree": "{value}% disponible",
+        "minorUnits": "{amount} unidades monetarias menores",
+        "minorUnitsWithCurrency": "{amount} unidades monetarias menores ({currency})"
+      },
+      "summary": {
+        "title": "Resumen del grupo",
+        "subscriptions": "Suscripciones",
+        "routingStrategy": "Estrategia de enrutamiento",
+        "includedQuotaReserve": "Reserva de cuota incluida",
+        "environmentFallback": "Alternativa del entorno",
+        "paidFallbackRequests": "Solicitudes de la alternativa de pago",
+        "paidFallbackValue": "Valor de la alternativa de pago",
+        "paidFallbackHint": "La alternativa de pago agrega las vías de clave de API y de entorno, incluido el tráfico de pago directo. Los valores se expresan en USD equivalentes al uso de la API.",
+        "modelsTitle": "Modelos permitidos y capacidad disponible",
+        "modelsHint": "La elegibilidad indicada por ClawRouter tiene en cuenta las reservas de cuota y el estado de las credenciales.",
+        "modelHeadroom": "{count} suscripciones con capacidad disponible",
+        "modelHeadroomWithUnknown": "{count} suscripciones con capacidad disponible · {unknown} con capacidad desconocida",
+        "noModels": "No se han indicado modelos permitidos para esta política.",
+        "trafficTitle": "Tráfico del grupo",
+        "trafficTitleWithDays": "Tráfico del grupo · últimos {days} días",
+        "trafficHint": "La alternativa de pago se muestra según la vía indicada. Los valores equivalentes al uso de la API se expresan en USD.",
+        "unspecifiedLane": "Vía sin especificar",
+        "noTraffic": "No se ha registrado tráfico.",
+        "grantsTitle": "Suscripciones y autorizaciones",
+        "noGrants": "No se han indicado suscripciones para esta política."
+      },
+      "traffic": {
+        "requests": "Solicitudes",
+        "inputTokens": "Tokens de entrada",
+        "outputTokens": "Tokens de salida",
+        "cacheReadTokens": "Tokens de lectura de caché",
+        "cacheWriteTokens": "Tokens de escritura de caché",
+        "apiValue": "Valor equivalente en la API"
+      },
+      "grant": {
+        "account": "Cuenta",
+        "plan": "Plan",
+        "credential": "Credencial",
+        "subscription": "Suscripción",
+        "rateLimitTier": "Nivel de límite de solicitudes",
+        "lastSelected": "Última selección",
+        "quotaLabel": "Períodos de cuota de la suscripción",
+        "quotaTitle": "Cuota disponible",
+        "quotaRemaining": "Cuota restante de {window}",
+        "allModels": "Todos los modelos",
+        "modelScopeNotReported": "No se ha informado del alcance de modelos",
+        "resets": "Se restablece el {date}",
+        "noQuotaWindows": "No se han informado períodos de cuota.",
+        "extraUsage": "Uso adicional",
+        "extraUsageSpend": "{used} utilizados / {limit} de límite mensual",
+        "spendLimitReached": "Límite de gasto alcanzado",
+        "eligibilityLabel": "Elegibilidad por modelo",
+        "eligibilityTitle": "Elegibilidad de los modelos",
+        "noModels": "No se han indicado modelos permitidos.",
+        "trafficLabel": "Tráfico de la suscripción",
+        "trafficTitle": "Tráfico",
+        "selections": "Selecciones: {count}. El valor equivalente en la API no es un cargo de la suscripción."
+      },
+      "windows": {
+        "fallback": "Período de cuota",
+        "fiveHour": "5 horas",
+        "weekly": "Semanal",
+        "modelWeekly": "{models} semanal"
+      }
+    }
+  },
+  "ja-JP": {
+    "common": {
+      "refresh": "更新"
+    },
+    "clawrouter": {
+      "pool": {
+        "subtitle": "設定済みポリシーのサブスクリプションの残り容量、モデルへのアクセス、トラフィック。",
+        "disconnected": "ClawRouterプールを表示するには、Gatewayに接続してください。",
+        "readAccessRequired": "ClawRouterプールを表示するには、読み取り権限が必要です。",
+        "loadFailed": "ClawRouterプールを読み込めませんでした。「更新」を選択して再試行してください。",
+        "notLoaded": "更新してプールのステータスを読み込んでください。",
+        "loading": "プールのステータスを読み込み中",
+        "refreshing": "更新中",
+        "observed": "観測日時：{date}",
+        "observedWithPolicy": "観測日時：{date} · ポリシー：{policy}"
+      },
+      "values": {
+        "notReported": "未報告",
+        "enabled": "有効",
+        "disabled": "無効",
+        "enabledNotReported": "有効状態は未報告",
+        "percent": "{value}%",
+        "percentFree": "残り{value}%",
+        "minorUnits": "{amount}補助通貨単位",
+        "minorUnitsWithCurrency": "{amount}補助通貨単位（{currency}）"
+      },
+      "summary": {
+        "title": "プールの概要",
+        "subscriptions": "サブスクリプション",
+        "routingStrategy": "ルーティング戦略",
+        "includedQuotaReserve": "付属クォータの予約枠",
+        "environmentFallback": "環境フォールバック",
+        "paidFallbackRequests": "有料フォールバックのリクエスト数",
+        "paidFallbackValue": "有料フォールバックの換算額",
+        "paidFallbackHint": "有料フォールバックには、直接の有料トラフィックを含む API キー経路と環境経路が集計されます。金額は API 相当の米ドル換算額です。",
+        "modelsTitle": "許可されたモデルと残り容量",
+        "modelsHint": "ClawRouter が報告する利用可否には、クォータの予約枠と認証情報の健全性が考慮されています。",
+        "modelHeadroom": "残り容量のあるサブスクリプション：{count} 件",
+        "modelHeadroomWithUnknown": "残り容量のあるサブスクリプション：{count} 件 · 不明：{unknown} 件",
+        "noModels": "このポリシーで許可されたモデルは報告されていません。",
+        "trafficTitle": "プールのトラフィック",
+        "trafficTitleWithDays": "プールのトラフィック · 過去 {days} 日間",
+        "trafficHint": "有料フォールバックは、報告された経路別に表示されます。API 相当の換算額は米ドル表示です。",
+        "unspecifiedLane": "未指定の経路",
+        "noTraffic": "トラフィックは報告されていません。",
+        "grantsTitle": "サブスクリプションと利用権限",
+        "noGrants": "このポリシーのサブスクリプションは報告されていません。"
+      },
+      "traffic": {
+        "requests": "リクエスト数",
+        "inputTokens": "入力トークン数",
+        "outputTokens": "出力トークン数",
+        "cacheReadTokens": "キャッシュ読み取りトークン数",
+        "cacheWriteTokens": "キャッシュ書き込みトークン数",
+        "apiValue": "API換算額"
+      },
+      "grant": {
+        "account": "アカウント",
+        "plan": "プラン",
+        "credential": "認証情報",
+        "subscription": "サブスクリプション",
+        "rateLimitTier": "レート制限ティア",
+        "lastSelected": "最終選択日時",
+        "quotaLabel": "サブスクリプションのクォータ期間",
+        "quotaTitle": "クォータの残量",
+        "quotaRemaining": "{window}のクォータ残量",
+        "allModels": "すべてのモデル",
+        "modelScopeNotReported": "対象モデルの情報は報告されていません",
+        "resets": "{date}にリセット",
+        "noQuotaWindows": "クォータ期間の情報は報告されていません。",
+        "extraUsage": "追加利用",
+        "extraUsageSpend": "{used}利用済み / 月額上限 {limit}",
+        "spendLimitReached": "利用金額の上限に達しました",
+        "eligibilityLabel": "モデルごとの利用可否",
+        "eligibilityTitle": "モデルの利用可否",
+        "noModels": "利用可能なモデルは報告されていません。",
+        "trafficLabel": "サブスクリプションのトラフィック",
+        "trafficTitle": "トラフィック",
+        "selections": "選択回数：{count}。API換算額はサブスクリプションの請求額ではありません。"
+      },
+      "windows": {
+        "fallback": "クォータの集計期間",
+        "fiveHour": "5時間",
+        "weekly": "週間",
+        "modelWeekly": "{models}の週間枠"
+      }
+    }
+  },
+  "ko": {
+    "common": {
+      "refresh": "새로고침"
+    },
+    "clawrouter": {
+      "pool": {
+        "subtitle": "설정된 정책의 구독 잔여 용량, 모델 접근 권한 및 트래픽입니다.",
+        "disconnected": "ClawRouter 풀을 보려면 Gateway에 연결하세요.",
+        "readAccessRequired": "ClawRouter 풀을 보려면 읽기 권한이 필요합니다.",
+        "loadFailed": "ClawRouter 풀을 불러오지 못했습니다. 새로고침을 선택하여 다시 시도하세요.",
+        "notLoaded": "풀 상태를 불러오려면 새로고침하세요.",
+        "loading": "풀 상태 불러오는 중",
+        "refreshing": "새로고침 중",
+        "observed": "관측 시점 {date}",
+        "observedWithPolicy": "관측 시점 {date} · 정책 {policy}"
+      },
+      "values": {
+        "notReported": "보고되지 않음",
+        "enabled": "활성화됨",
+        "disabled": "비활성화됨",
+        "enabledNotReported": "활성화 상태가 보고되지 않음",
+        "percent": "{value}%",
+        "percentFree": "{value}% 남음",
+        "minorUnits": "{amount} 최소 화폐 단위",
+        "minorUnitsWithCurrency": "{amount} 최소 화폐 단위 ({currency})"
+      },
+      "summary": {
+        "title": "풀 요약",
+        "subscriptions": "구독",
+        "routingStrategy": "라우팅 전략",
+        "includedQuotaReserve": "포함된 할당량 예비분",
+        "environmentFallback": "환경 폴백",
+        "paidFallbackRequests": "유료 폴백 요청",
+        "paidFallbackValue": "유료 폴백 금액",
+        "paidFallbackHint": "유료 폴백은 직접 유료 트래픽을 포함하여 API 키 경로와 환경 경로를 합산합니다. 금액은 API 요금 기준으로 환산한 USD입니다.",
+        "modelsTitle": "허용된 모델 및 잔여 여유량",
+        "modelsHint": "ClawRouter가 보고하는 사용 가능 여부에는 할당량 예비분과 인증 정보 상태가 반영됩니다.",
+        "modelHeadroom": "여유량이 있는 구독 {count}개",
+        "modelHeadroomWithUnknown": "여유량이 있는 구독 {count}개 · 알 수 없음 {unknown}개",
+        "noModels": "이 정책에 대해 보고된 허용 모델이 없습니다.",
+        "trafficTitle": "풀 트래픽",
+        "trafficTitleWithDays": "풀 트래픽 · 최근 {days}일",
+        "trafficHint": "유료 폴백은 보고된 경로별로 표시됩니다. API 요금 기준 환산 금액의 단위는 USD입니다.",
+        "unspecifiedLane": "지정되지 않은 경로",
+        "noTraffic": "보고된 트래픽이 없습니다.",
+        "grantsTitle": "구독 및 권한 부여",
+        "noGrants": "이 정책에 대해 보고된 구독이 없습니다."
+      },
+      "traffic": {
+        "requests": "요청",
+        "inputTokens": "입력 토큰",
+        "outputTokens": "출력 토큰",
+        "cacheReadTokens": "캐시 읽기 토큰",
+        "cacheWriteTokens": "캐시 쓰기 토큰",
+        "apiValue": "API 환산 금액"
+      },
+      "grant": {
+        "account": "계정",
+        "plan": "요금제",
+        "credential": "인증 정보",
+        "subscription": "구독",
+        "rateLimitTier": "요청 제한 등급",
+        "lastSelected": "마지막 선택",
+        "quotaLabel": "구독 할당량 적용 기간",
+        "quotaTitle": "남은 할당량",
+        "quotaRemaining": "{window} 잔여 할당량",
+        "allModels": "모든 모델",
+        "modelScopeNotReported": "모델 범위가 보고되지 않음",
+        "resets": "{date}에 초기화",
+        "noQuotaWindows": "보고된 할당량 적용 기간이 없습니다.",
+        "extraUsage": "추가 사용량",
+        "extraUsageSpend": "{used} 사용 / 월 한도 {limit}",
+        "spendLimitReached": "지출 한도 도달",
+        "eligibilityLabel": "모델별 이용 가능 여부",
+        "eligibilityTitle": "모델 이용 가능 여부",
+        "noModels": "보고된 허용 모델이 없습니다.",
+        "trafficLabel": "구독 트래픽",
+        "trafficTitle": "트래픽",
+        "selections": "선택 횟수: {count}. API 요금으로 환산한 금액은 구독 청구 금액이 아닙니다."
+      },
+      "windows": {
+        "fallback": "할당량 적용 기간",
+        "fiveHour": "5시간",
+        "weekly": "주간",
+        "modelWeekly": "{models} 주간"
+      }
+    }
+  },
+  "fr": {
+    "common": {
+      "refresh": "Actualiser"
+    },
+    "clawrouter": {
+      "pool": {
+        "subtitle": "Capacité disponible des abonnements, accès aux modèles et trafic pour votre politique configurée.",
+        "disconnected": "Connectez-vous au Gateway pour afficher le pool ClawRouter.",
+        "readAccessRequired": "Vous devez disposer d’un accès en lecture pour afficher le pool ClawRouter.",
+        "loadFailed": "Impossible de charger le pool ClawRouter. Sélectionnez Actualiser pour réessayer.",
+        "notLoaded": "Actualisez pour charger l’état du pool.",
+        "loading": "Chargement de l’état du pool",
+        "refreshing": "Actualisation en cours",
+        "observed": "Observé le {date}",
+        "observedWithPolicy": "Observé le {date} · Politique {policy}"
+      },
+      "values": {
+        "notReported": "Non renseigné",
+        "enabled": "Activé",
+        "disabled": "Désactivé",
+        "enabledNotReported": "État d’activation non renseigné",
+        "percent": "{value} %",
+        "percentFree": "{value} % disponibles",
+        "minorUnits": "{amount} unités monétaires mineures",
+        "minorUnitsWithCurrency": "{amount} unités monétaires mineures ({currency})"
+      },
+      "summary": {
+        "title": "Résumé du pool",
+        "subscriptions": "Abonnements",
+        "routingStrategy": "Stratégie de routage",
+        "includedQuotaReserve": "Réserve de quota inclus",
+        "environmentFallback": "Repli sur l’environnement",
+        "paidFallbackRequests": "Requêtes de repli payant",
+        "paidFallbackValue": "Valeur du repli payant",
+        "paidFallbackHint": "Le repli payant regroupe les voies utilisant une clé API et celles utilisant l’environnement, y compris le trafic payant direct. Les valeurs sont exprimées en USD, à l’équivalent des tarifs de l’API.",
+        "modelsTitle": "Modèles autorisés et capacité disponible",
+        "modelsHint": "L’éligibilité indiquée par ClawRouter tient compte des réserves de quota et de l’état des identifiants.",
+        "modelHeadroom": "{count} abonnements avec de la capacité disponible",
+        "modelHeadroomWithUnknown": "{count} abonnements avec de la capacité disponible · {unknown} avec une capacité inconnue",
+        "noModels": "Aucun modèle autorisé n’est signalé pour cette politique.",
+        "trafficTitle": "Trafic du pool",
+        "trafficTitleWithDays": "Trafic du pool · {days} derniers jours",
+        "trafficHint": "Le repli payant est affiché selon la voie signalée. Les valeurs équivalentes aux tarifs de l’API sont exprimées en USD.",
+        "unspecifiedLane": "Voie non précisée",
+        "noTraffic": "Aucun trafic signalé.",
+        "grantsTitle": "Abonnements et droits accordés",
+        "noGrants": "Aucun abonnement n’est signalé pour cette politique."
+      },
+      "traffic": {
+        "requests": "Requêtes",
+        "inputTokens": "Tokens d’entrée",
+        "outputTokens": "Tokens de sortie",
+        "cacheReadTokens": "Tokens lus dans le cache",
+        "cacheWriteTokens": "Tokens écrits dans le cache",
+        "apiValue": "Valeur équivalente via l’API"
+      },
+      "grant": {
+        "account": "Compte",
+        "plan": "Offre",
+        "credential": "Identifiant d’authentification",
+        "subscription": "Abonnement",
+        "rateLimitTier": "Niveau de limitation du débit",
+        "lastSelected": "Dernière sélection",
+        "quotaLabel": "Périodes de quota de l’abonnement",
+        "quotaTitle": "Quota disponible",
+        "quotaRemaining": "Quota restant pour {window}",
+        "allModels": "Tous les modèles",
+        "modelScopeNotReported": "Modèles couverts non indiqués",
+        "resets": "Réinitialisation le {date}",
+        "noQuotaWindows": "Aucune période de quota indiquée.",
+        "extraUsage": "Utilisation supplémentaire",
+        "extraUsageSpend": "{used} utilisés / {limit} de limite mensuelle",
+        "spendLimitReached": "Limite de dépenses atteinte",
+        "eligibilityLabel": "Éligibilité par modèle",
+        "eligibilityTitle": "Éligibilité des modèles",
+        "noModels": "Aucun modèle autorisé signalé.",
+        "trafficLabel": "Trafic de l’abonnement",
+        "trafficTitle": "Trafic",
+        "selections": "Sélections : {count}. La valeur équivalente via l’API ne constitue pas des frais d’abonnement."
+      },
+      "windows": {
+        "fallback": "Période de quota",
+        "fiveHour": "5 heures",
+        "weekly": "Hebdomadaire",
+        "modelWeekly": "{models} — hebdomadaire"
+      }
+    }
+  },
+  "hi": {
+    "common": {
+      "refresh": "रीफ़्रेश करें"
+    },
+    "clawrouter": {
+      "pool": {
+        "subtitle": "आपकी कॉन्फ़िगर की गई नीति के लिए सब्सक्रिप्शन की शेष क्षमता, मॉडल की उपलब्धता और ट्रैफ़िक।",
+        "disconnected": "ClawRouter पूल देखने के लिए Gateway से कनेक्ट करें।",
+        "readAccessRequired": "ClawRouter पूल देखने के लिए आपको पढ़ने की अनुमति चाहिए।",
+        "loadFailed": "ClawRouter पूल लोड नहीं हो सका। दोबारा कोशिश करने के लिए रीफ़्रेश करें चुनें।",
+        "notLoaded": "पूल की स्थिति लोड करने के लिए रीफ़्रेश करें।",
+        "loading": "पूल की स्थिति लोड हो रही है",
+        "refreshing": "रीफ़्रेश हो रहा है",
+        "observed": "{date} को देखा गया",
+        "observedWithPolicy": "{date} को देखा गया · नीति {policy}"
+      },
+      "values": {
+        "notReported": "जानकारी नहीं दी गई",
+        "enabled": "सक्षम",
+        "disabled": "अक्षम",
+        "enabledNotReported": "सक्षम होने की स्थिति की जानकारी नहीं दी गई",
+        "percent": "{value}%",
+        "percentFree": "{value}% उपलब्ध",
+        "minorUnits": "{amount} लघु मुद्रा इकाइयाँ",
+        "minorUnitsWithCurrency": "{amount} लघु मुद्रा इकाइयाँ ({currency})"
+      },
+      "summary": {
+        "title": "पूल का सारांश",
+        "subscriptions": "सब्सक्रिप्शन",
+        "routingStrategy": "रूटिंग रणनीति",
+        "includedQuotaReserve": "शामिल कोटे का आरक्षित हिस्सा",
+        "environmentFallback": "एनवायरनमेंट फ़ॉलबैक",
+        "paidFallbackRequests": "सशुल्क फ़ॉलबैक अनुरोध",
+        "paidFallbackValue": "सशुल्क फ़ॉलबैक का मूल्य",
+        "paidFallbackHint": "सशुल्क फ़ॉलबैक में API-कुंजी और एनवायरनमेंट लेन का डेटा एकत्र किया जाता है, जिसमें सीधे सशुल्क ट्रैफ़िक का डेटा भी शामिल है। मूल्य API-समतुल्य USD में हैं।",
+        "modelsTitle": "अनुमत मॉडल और शेष क्षमता",
+        "modelsHint": "ClawRouter द्वारा बताई गई पात्रता में कोटे का आरक्षित हिस्सा और क्रेडेंशियल की स्थिति शामिल हैं।",
+        "modelHeadroom": "{count} सदस्यताओं में क्षमता शेष है",
+        "modelHeadroomWithUnknown": "{count} सदस्यताओं में क्षमता शेष है · {unknown} की स्थिति अज्ञात है",
+        "noModels": "इस नीति के लिए किसी अनुमत मॉडल की जानकारी नहीं मिली।",
+        "trafficTitle": "पूल ट्रैफ़िक",
+        "trafficTitleWithDays": "पूल ट्रैफ़िक · पिछले {days} दिन",
+        "trafficHint": "सशुल्क फ़ॉलबैक उसकी रिपोर्ट की गई लेन के अनुसार दिखाया जाता है। API-समतुल्य मूल्य USD में हैं।",
+        "unspecifiedLane": "अनिर्दिष्ट लेन",
+        "noTraffic": "किसी ट्रैफ़िक की जानकारी नहीं मिली।",
+        "grantsTitle": "सदस्यताएँ और अनुदान",
+        "noGrants": "इस नीति के लिए किसी सदस्यता की जानकारी नहीं मिली।"
+      },
+      "traffic": {
+        "requests": "अनुरोध",
+        "inputTokens": "इनपुट टोकन",
+        "outputTokens": "आउटपुट टोकन",
+        "cacheReadTokens": "कैश से पढ़े गए टोकन",
+        "cacheWriteTokens": "कैश में लिखे गए टोकन",
+        "apiValue": "API के समतुल्य मूल्य"
+      },
+      "grant": {
+        "account": "खाता",
+        "plan": "प्लान",
+        "credential": "क्रेडेंशियल",
+        "subscription": "सदस्यता",
+        "rateLimitTier": "दर सीमा स्तर",
+        "lastSelected": "पिछली बार चुना गया",
+        "quotaLabel": "सदस्यता कोटे की समयावधियाँ",
+        "quotaTitle": "उपलब्ध कोटा",
+        "quotaRemaining": "{window} का शेष कोटा",
+        "allModels": "सभी मॉडल",
+        "modelScopeNotReported": "मॉडल के दायरे की जानकारी नहीं दी गई",
+        "resets": "{date} को रीसेट होगा",
+        "noQuotaWindows": "कोटे की समयावधियों की जानकारी नहीं दी गई है।",
+        "extraUsage": "अतिरिक्त उपयोग",
+        "extraUsageSpend": "{used} उपयोग किया गया / {limit} मासिक सीमा",
+        "spendLimitReached": "खर्च की सीमा पूरी हो गई",
+        "eligibilityLabel": "प्रति-मॉडल पात्रता",
+        "eligibilityTitle": "मॉडल की पात्रता",
+        "noModels": "किसी अनुमत मॉडल की जानकारी नहीं मिली।",
+        "trafficLabel": "सदस्यता ट्रैफ़िक",
+        "trafficTitle": "ट्रैफ़िक",
+        "selections": "चयन: {count}। API-समतुल्य मूल्य सदस्यता शुल्क नहीं है।"
+      },
+      "windows": {
+        "fallback": "कोटा अवधि",
+        "fiveHour": "5 घंटे",
+        "weekly": "साप्ताहिक",
+        "modelWeekly": "{models} साप्ताहिक"
+      }
+    }
+  },
+  "ar": {
+    "common": {
+      "refresh": "تحديث"
+    },
+    "clawrouter": {
+      "pool": {
+        "subtitle": "السعة المتبقية للاشتراكات وإمكانية الوصول إلى النماذج وحركة المرور وفقًا للسياسة التي أعددتها.",
+        "disconnected": "اتصل بـ Gateway لعرض مجموعة ClawRouter.",
+        "readAccessRequired": "تحتاج إلى صلاحية القراءة لعرض مجموعة ClawRouter.",
+        "loadFailed": "تعذّر تحميل مجموعة ClawRouter. اختر تحديث للمحاولة مجددًا.",
+        "notLoaded": "حدّث لتحميل حالة المجموعة.",
+        "loading": "جارٍ تحميل حالة المجموعة",
+        "refreshing": "جارٍ التحديث",
+        "observed": "تم الرصد في {date}",
+        "observedWithPolicy": "تم الرصد في {date} · السياسة {policy}"
+      },
+      "values": {
+        "notReported": "لم يتم الإبلاغ",
+        "enabled": "مفعّل",
+        "disabled": "معطّل",
+        "enabledNotReported": "لم يتم الإبلاغ عن حالة التفعيل",
+        "percent": "{value}%",
+        "percentFree": "{value}% متاح",
+        "minorUnits": "{amount} من الوحدات النقدية الصغرى",
+        "minorUnitsWithCurrency": "{amount} من الوحدات النقدية الصغرى ({currency})"
+      },
+      "summary": {
+        "title": "ملخص المجموعة",
+        "subscriptions": "الاشتراكات",
+        "routingStrategy": "استراتيجية التوجيه",
+        "includedQuotaReserve": "احتياطي الحصة المشمولة",
+        "environmentFallback": "المسار البديل عبر البيئة",
+        "paidFallbackRequests": "طلبات المسار البديل المدفوع",
+        "paidFallbackValue": "قيمة المسار البديل المدفوع",
+        "paidFallbackHint": "يجمع المسار البديل المدفوع مسارات مفاتيح API والبيئة، بما فيها حركة الطلبات المدفوعة المباشرة. القيم بالدولار الأمريكي وفق التكلفة المكافئة لاستخدام API.",
+        "modelsTitle": "النماذج المسموح بها والسعة المتبقية",
+        "modelsHint": "تراعي الأهلية التي يبلغ عنها ClawRouter احتياطيات الحصص وصلاحية بيانات الاعتماد.",
+        "modelHeadroom": "{count} من الاشتراكات لديها سعة متبقية",
+        "modelHeadroomWithUnknown": "{count} من الاشتراكات لديها سعة متبقية · {unknown} غير معروفة",
+        "noModels": "لم يُبلّغ عن أي نماذج مسموح بها لهذه السياسة.",
+        "trafficTitle": "حركة طلبات المجموعة",
+        "trafficTitleWithDays": "حركة طلبات المجموعة · آخر {days} أيام",
+        "trafficHint": "يُعرض الاستخدام البديل المدفوع حسب المسار المُبلّغ عنه. القيم المكافئة لاستخدام API بالدولار الأمريكي.",
+        "unspecifiedLane": "مسار غير محدد",
+        "noTraffic": "لم يُبلّغ عن أي حركة طلبات.",
+        "grantsTitle": "الاشتراكات والمنح",
+        "noGrants": "لم يُبلّغ عن أي اشتراكات لهذه السياسة."
+      },
+      "traffic": {
+        "requests": "الطلبات",
+        "inputTokens": "رموز الإدخال",
+        "outputTokens": "رموز الإخراج",
+        "cacheReadTokens": "رموز القراءة من ذاكرة التخزين المؤقت",
+        "cacheWriteTokens": "رموز الكتابة إلى ذاكرة التخزين المؤقت",
+        "apiValue": "القيمة المكافئة عبر واجهة برمجة التطبيقات"
+      },
+      "grant": {
+        "account": "الحساب",
+        "plan": "الخطة",
+        "credential": "بيانات الاعتماد",
+        "subscription": "الاشتراك",
+        "rateLimitTier": "مستوى حد المعدل",
+        "lastSelected": "آخر اختيار",
+        "quotaLabel": "الفترات الزمنية لحصة الاشتراك",
+        "quotaTitle": "الحصة المتاحة",
+        "quotaRemaining": "الحصة المتبقية لفترة {window}",
+        "allModels": "جميع النماذج",
+        "modelScopeNotReported": "لم يُبلّغ عن نطاق النماذج",
+        "resets": "تُعاد التعيين في {date}",
+        "noQuotaWindows": "لم يُبلّغ عن أي فترات زمنية للحصة.",
+        "extraUsage": "الاستخدام الإضافي",
+        "extraUsageSpend": "المستخدم: {used} / الحد الشهري: {limit}",
+        "spendLimitReached": "تم بلوغ حد الإنفاق",
+        "eligibilityLabel": "الأهلية لكل نموذج",
+        "eligibilityTitle": "أهلية النماذج",
+        "noModels": "لم يُبلّغ عن أي نماذج مسموح بها.",
+        "trafficLabel": "حركة طلبات الاشتراك",
+        "trafficTitle": "حركة الطلبات",
+        "selections": "الاختيارات: {count}. القيمة المكافئة لاستخدام واجهة API ليست رسوم اشتراك."
+      },
+      "windows": {
+        "fallback": "فترة الحصة",
+        "fiveHour": "5 ساعات",
+        "weekly": "أسبوعيًا",
+        "modelWeekly": "{models} أسبوعيًا"
+      }
+    }
+  },
+  "it": {
+    "common": {
+      "refresh": "Aggiorna"
+    },
+    "clawrouter": {
+      "pool": {
+        "subtitle": "Capacità residua degli abbonamenti, accesso ai modelli e traffico per la policy configurata.",
+        "disconnected": "Connettiti al Gateway per visualizzare il pool di ClawRouter.",
+        "readAccessRequired": "Devi disporre dell’accesso in lettura per visualizzare il pool di ClawRouter.",
+        "loadFailed": "Impossibile caricare il pool di ClawRouter. Seleziona Aggiorna per riprovare.",
+        "notLoaded": "Aggiorna per caricare lo stato del pool.",
+        "loading": "Caricamento dello stato del pool",
+        "refreshing": "Aggiornamento in corso",
+        "observed": "Rilevato il {date}",
+        "observedWithPolicy": "Rilevato il {date} · Policy {policy}"
+      },
+      "values": {
+        "notReported": "Non segnalato",
+        "enabled": "Abilitato",
+        "disabled": "Disabilitato",
+        "enabledNotReported": "Stato di abilitazione non segnalato",
+        "percent": "{value}%",
+        "percentFree": "{value}% disponibile",
+        "minorUnits": "{amount} unità frazionarie",
+        "minorUnitsWithCurrency": "{amount} unità frazionarie ({currency})"
+      },
+      "summary": {
+        "title": "Riepilogo del pool",
+        "subscriptions": "Abbonamenti",
+        "routingStrategy": "Strategia di instradamento",
+        "includedQuotaReserve": "Riserva della quota inclusa",
+        "environmentFallback": "Fallback tramite ambiente",
+        "paidFallbackRequests": "Richieste di fallback a pagamento",
+        "paidFallbackValue": "Valore del fallback a pagamento",
+        "paidFallbackHint": "Il fallback a pagamento aggrega i canali con chiave API e quelli dell'ambiente, incluso il traffico diretto a pagamento. I valori sono espressi in USD equivalenti alle tariffe API.",
+        "modelsTitle": "Modelli consentiti e capacità residua",
+        "modelsHint": "L'idoneità segnalata da ClawRouter tiene conto delle riserve di quota e dello stato delle credenziali.",
+        "modelHeadroom": "{count} abbonamenti con capacità residua",
+        "modelHeadroomWithUnknown": "{count} abbonamenti con capacità residua · {unknown} con capacità sconosciuta",
+        "noModels": "Nessun modello consentito segnalato per questa policy.",
+        "trafficTitle": "Traffico del pool",
+        "trafficTitleWithDays": "Traffico del pool · ultimi {days} giorni",
+        "trafficHint": "Il fallback a pagamento è mostrato in base al canale segnalato. I valori equivalenti alle tariffe API sono espressi in USD.",
+        "unspecifiedLane": "Canale non specificato",
+        "noTraffic": "Nessun traffico segnalato.",
+        "grantsTitle": "Abbonamenti e autorizzazioni",
+        "noGrants": "Nessun abbonamento segnalato per questa policy."
+      },
+      "traffic": {
+        "requests": "Richieste",
+        "inputTokens": "Token di input",
+        "outputTokens": "Token di output",
+        "cacheReadTokens": "Token letti dalla cache",
+        "cacheWriteTokens": "Token scritti nella cache",
+        "apiValue": "Valore equivalente tramite API"
+      },
+      "grant": {
+        "account": "Account",
+        "plan": "Piano",
+        "credential": "Credenziale",
+        "subscription": "Abbonamento",
+        "rateLimitTier": "Livello del limite di richieste",
+        "lastSelected": "Ultima selezione",
+        "quotaLabel": "Finestre temporali delle quote dell’abbonamento",
+        "quotaTitle": "Quota disponibile",
+        "quotaRemaining": "Quota rimanente per {window}",
+        "allModels": "Tutti i modelli",
+        "modelScopeNotReported": "Ambito dei modelli non indicato",
+        "resets": "Si reimposta il {date}",
+        "noQuotaWindows": "Nessuna finestra temporale delle quote indicata.",
+        "extraUsage": "Utilizzo aggiuntivo",
+        "extraUsageSpend": "{used} utilizzati / {limit} di limite mensile",
+        "spendLimitReached": "Limite di spesa raggiunto",
+        "eligibilityLabel": "Idoneità per modello",
+        "eligibilityTitle": "Idoneità dei modelli",
+        "noModels": "Nessun modello consentito segnalato.",
+        "trafficLabel": "Traffico dell’abbonamento",
+        "trafficTitle": "Traffico",
+        "selections": "Selezioni: {count}. Il valore equivalente tramite API non è un addebito sull’abbonamento."
+      },
+      "windows": {
+        "fallback": "Periodo della quota",
+        "fiveHour": "5 ore",
+        "weekly": "Settimanale",
+        "modelWeekly": "{models} settimanale"
+      }
+    }
+  },
+  "tr": {
+    "common": {
+      "refresh": "Yenile"
+    },
+    "clawrouter": {
+      "pool": {
+        "subtitle": "Yapılandırdığınız politika için kalan abonelik kapasitesi, model erişimi ve trafik.",
+        "disconnected": "ClawRouter havuzunu görüntülemek için Gateway'e bağlanın.",
+        "readAccessRequired": "ClawRouter havuzunu görüntülemek için okuma erişiminiz olmalıdır.",
+        "loadFailed": "ClawRouter havuzu yüklenemedi. Tekrar denemek için Yenile'yi seçin.",
+        "notLoaded": "Havuz durumunu yüklemek için yenileyin.",
+        "loading": "Havuz durumu yükleniyor",
+        "refreshing": "Yenileniyor",
+        "observed": "Gözlem zamanı: {date}",
+        "observedWithPolicy": "Gözlem zamanı: {date} · Politika: {policy}"
+      },
+      "values": {
+        "notReported": "Bildirilmedi",
+        "enabled": "Etkin",
+        "disabled": "Devre dışı",
+        "enabledNotReported": "Etkinlik durumu bildirilmedi",
+        "percent": "%{value}",
+        "percentFree": "%{value} kullanılabilir",
+        "minorUnits": "{amount} alt para birimi",
+        "minorUnitsWithCurrency": "{amount} alt para birimi ({currency})"
+      },
+      "summary": {
+        "title": "Havuz özeti",
+        "subscriptions": "Abonelikler",
+        "routingStrategy": "Yönlendirme stratejisi",
+        "includedQuotaReserve": "Dahil edilen kota rezervi",
+        "environmentFallback": "Ortam üzerinden yedek erişim",
+        "paidFallbackRequests": "Ücretli yedek erişim istekleri",
+        "paidFallbackValue": "Ücretli yedek erişim tutarı",
+        "paidFallbackHint": "Ücretli yedek erişim, doğrudan ücretli trafik dahil olmak üzere API anahtarı ve ortam kanallarını toplu olarak kapsar. Tutarlar, USD cinsinden API eşdeğeridir.",
+        "modelsTitle": "İzin verilen modeller ve kullanılabilir kapasite",
+        "modelsHint": "ClawRouter tarafından bildirilen uygunluk, kota rezervlerini ve kimlik bilgilerinin durumunu dikkate alır.",
+        "modelHeadroom": "Kullanılabilir kapasitesi olan {count} abonelik",
+        "modelHeadroomWithUnknown": "Kullanılabilir kapasitesi olan {count} abonelik · {unknown} bilinmiyor",
+        "noModels": "Bu politika için izin verilen model bildirilmedi.",
+        "trafficTitle": "Havuz trafiği",
+        "trafficTitleWithDays": "Havuz trafiği · son {days} gün",
+        "trafficHint": "Ücretli yedek erişim, bildirildiği kanala göre gösterilir. API eşdeğeri tutarlar USD cinsindendir.",
+        "unspecifiedLane": "Belirtilmemiş kanal",
+        "noTraffic": "Trafik bildirilmedi.",
+        "grantsTitle": "Abonelikler ve erişim yetkileri",
+        "noGrants": "Bu politika için abonelik bildirilmedi."
+      },
+      "traffic": {
+        "requests": "İstekler",
+        "inputTokens": "Girdi tokenları",
+        "outputTokens": "Çıktı tokenları",
+        "cacheReadTokens": "Önbellekten okunan tokenlar",
+        "cacheWriteTokens": "Önbelleğe yazılan tokenlar",
+        "apiValue": "API eşdeğeri değer"
+      },
+      "grant": {
+        "account": "Hesap",
+        "plan": "Plan",
+        "credential": "Kimlik bilgisi",
+        "subscription": "Abonelik",
+        "rateLimitTier": "İstek sınırı seviyesi",
+        "lastSelected": "Son seçilme",
+        "quotaLabel": "Abonelik kota dönemleri",
+        "quotaTitle": "Kalan kota",
+        "quotaRemaining": "{window} için kalan kota",
+        "allModels": "Tüm modeller",
+        "modelScopeNotReported": "Model kapsamı bildirilmedi",
+        "resets": "Sıfırlanma tarihi: {date}",
+        "noQuotaWindows": "Kota dönemi bildirilmedi.",
+        "extraUsage": "Ek kullanım",
+        "extraUsageSpend": "{used} kullanıldı / {limit} aylık sınır",
+        "spendLimitReached": "Harcama sınırına ulaşıldı",
+        "eligibilityLabel": "Model bazında uygunluk",
+        "eligibilityTitle": "Model uygunluğu",
+        "noModels": "İzin verilen model bildirilmedi.",
+        "trafficLabel": "Abonelik trafiği",
+        "trafficTitle": "Trafik",
+        "selections": "Seçimler: {count}. API eşdeğeri değer, abonelik ücreti değildir."
+      },
+      "windows": {
+        "fallback": "Kota dönemi",
+        "fiveHour": "5 saatlik",
+        "weekly": "Haftalık",
+        "modelWeekly": "{models} haftalık"
+      }
+    }
+  },
+  "uk": {
+    "common": {
+      "refresh": "Оновити"
+    },
+    "clawrouter": {
+      "pool": {
+        "subtitle": "Запас ресурсів підписок, доступ до моделей і трафік для налаштованої політики.",
+        "disconnected": "Підключіться до Gateway, щоб переглянути пул ClawRouter.",
+        "readAccessRequired": "Для перегляду пулу ClawRouter потрібен доступ на читання.",
+        "loadFailed": "Не вдалося завантажити пул ClawRouter. Натисніть «Оновити», щоб повторити спробу.",
+        "notLoaded": "Оновіть, щоб завантажити стан пулу.",
+        "loading": "Завантаження стану пулу",
+        "refreshing": "Оновлення",
+        "observed": "Зафіксовано {date}",
+        "observedWithPolicy": "Зафіксовано {date} · Політика {policy}"
+      },
+      "values": {
+        "notReported": "Не вказано",
+        "enabled": "Увімкнено",
+        "disabled": "Вимкнено",
+        "enabledNotReported": "Стан увімкнення не вказано",
+        "percent": "{value}%",
+        "percentFree": "{value}% вільно",
+        "minorUnits": "{amount} дрібних грошових одиниць",
+        "minorUnitsWithCurrency": "{amount} дрібних грошових одиниць ({currency})"
+      },
+      "summary": {
+        "title": "Зведення пулу",
+        "subscriptions": "Підписки",
+        "routingStrategy": "Стратегія маршрутизації",
+        "includedQuotaReserve": "Резерв включеної квоти",
+        "environmentFallback": "Резервний маршрут через середовище",
+        "paidFallbackRequests": "Запити через платні резервні маршрути",
+        "paidFallbackValue": "Вартість платних резервних маршрутів",
+        "paidFallbackHint": "Платні резервні маршрути об’єднують канали з ключами API та канали середовища, включно з прямим платним трафіком. Значення наведено в USD за еквівалентними тарифами API.",
+        "modelsTitle": "Дозволені моделі та запас квоти",
+        "modelsHint": "Під час визначення доступності ClawRouter враховує резерви квоти та стан облікових даних.",
+        "modelHeadroom": "Підписки із запасом квоти: {count}",
+        "modelHeadroomWithUnknown": "Підписки із запасом квоти: {count} · із невідомим запасом: {unknown}",
+        "noModels": "Немає даних про дозволені моделі для цієї політики.",
+        "trafficTitle": "Трафік пулу",
+        "trafficTitleWithDays": "Трафік пулу · за останні {days} дн.",
+        "trafficHint": "Платні резервні маршрути відображаються за відповідними каналами зі звіту. Значення за еквівалентними тарифами API наведено в USD.",
+        "unspecifiedLane": "Невказаний канал",
+        "noTraffic": "Немає даних про трафік.",
+        "grantsTitle": "Підписки та надані дозволи",
+        "noGrants": "Немає даних про підписки для цієї політики."
+      },
+      "traffic": {
+        "requests": "Запити",
+        "inputTokens": "Вхідні токени",
+        "outputTokens": "Вихідні токени",
+        "cacheReadTokens": "Токени, прочитані з кешу",
+        "cacheWriteTokens": "Токени, записані в кеш",
+        "apiValue": "Еквівалентна вартість через API"
+      },
+      "grant": {
+        "account": "Обліковий запис",
+        "plan": "Тарифний план",
+        "credential": "Облікові дані",
+        "subscription": "Підписка",
+        "rateLimitTier": "Рівень обмеження частоти запитів",
+        "lastSelected": "Востаннє вибрано",
+        "quotaLabel": "Періоди квот підписки",
+        "quotaTitle": "Залишок квоти",
+        "quotaRemaining": "Залишок квоти за період {window}",
+        "allModels": "Усі моделі",
+        "modelScopeNotReported": "Перелік доступних моделей не надано",
+        "resets": "Скидається {date}",
+        "noQuotaWindows": "Дані про періоди квот не надано.",
+        "extraUsage": "Понадлімітне використання",
+        "extraUsageSpend": "Використано {used} / місячний ліміт {limit}",
+        "spendLimitReached": "Досягнуто ліміту витрат",
+        "eligibilityLabel": "Доступність для кожної моделі",
+        "eligibilityTitle": "Доступність моделей",
+        "noModels": "Немає даних про дозволені моделі.",
+        "trafficLabel": "Трафік за підпискою",
+        "trafficTitle": "Трафік",
+        "selections": "Кількість виборів: {count}. Еквівалентна вартість за тарифами API не є платою за підписку."
+      },
+      "windows": {
+        "fallback": "Період квоти",
+        "fiveHour": "5-годинний",
+        "weekly": "Тижневий",
+        "modelWeekly": "{models}: тижневий"
+      }
+    }
+  },
+  "id": {
+    "common": {
+      "refresh": "Muat ulang"
+    },
+    "clawrouter": {
+      "pool": {
+        "subtitle": "Sisa kapasitas langganan, akses model, dan lalu lintas untuk kebijakan yang Anda konfigurasi.",
+        "disconnected": "Hubungkan ke Gateway untuk melihat kumpulan ClawRouter.",
+        "readAccessRequired": "Anda memerlukan akses baca untuk melihat kumpulan ClawRouter.",
+        "loadFailed": "Tidak dapat memuat kumpulan ClawRouter. Pilih Muat ulang untuk mencoba lagi.",
+        "notLoaded": "Muat ulang untuk memuat status kumpulan.",
+        "loading": "Memuat status kumpulan",
+        "refreshing": "Memuat ulang",
+        "observed": "Diamati pada {date}",
+        "observedWithPolicy": "Diamati pada {date} · Kebijakan {policy}"
+      },
+      "values": {
+        "notReported": "Tidak dilaporkan",
+        "enabled": "Diaktifkan",
+        "disabled": "Dinonaktifkan",
+        "enabledNotReported": "Status pengaktifan tidak dilaporkan",
+        "percent": "{value}%",
+        "percentFree": "{value}% tersedia",
+        "minorUnits": "{amount} satuan terkecil mata uang",
+        "minorUnitsWithCurrency": "{amount} satuan terkecil mata uang ({currency})"
+      },
+      "summary": {
+        "title": "Ringkasan kumpulan",
+        "subscriptions": "Langganan",
+        "routingStrategy": "Strategi perutean",
+        "includedQuotaReserve": "Cadangan kuota yang disertakan",
+        "environmentFallback": "Jalur cadangan lingkungan",
+        "paidFallbackRequests": "Permintaan jalur cadangan berbayar",
+        "paidFallbackValue": "Nilai jalur cadangan berbayar",
+        "paidFallbackHint": "Jalur cadangan berbayar menggabungkan jalur kunci API dan lingkungan, termasuk lalu lintas berbayar langsung. Nilai dinyatakan dalam USD yang setara dengan penggunaan API.",
+        "modelsTitle": "Model yang diizinkan dan kapasitas tersisa",
+        "modelsHint": "Kelayakan yang dilaporkan oleh ClawRouter mencakup cadangan kuota dan kondisi kredensial.",
+        "modelHeadroom": "{count} langganan dengan kapasitas tersisa",
+        "modelHeadroomWithUnknown": "{count} langganan dengan kapasitas tersisa · {unknown} tidak diketahui",
+        "noModels": "Tidak ada model yang diizinkan yang dilaporkan untuk kebijakan ini.",
+        "trafficTitle": "Lalu lintas kumpulan",
+        "trafficTitleWithDays": "Lalu lintas kumpulan · {days} hari terakhir",
+        "trafficHint": "Jalur cadangan berbayar ditampilkan sesuai jalur yang dilaporkan. Nilai setara penggunaan API dinyatakan dalam USD.",
+        "unspecifiedLane": "Jalur tidak ditentukan",
+        "noTraffic": "Tidak ada lalu lintas yang dilaporkan.",
+        "grantsTitle": "Langganan dan pemberian akses",
+        "noGrants": "Tidak ada langganan yang dilaporkan untuk kebijakan ini."
+      },
+      "traffic": {
+        "requests": "Permintaan",
+        "inputTokens": "Token masukan",
+        "outputTokens": "Token keluaran",
+        "cacheReadTokens": "Token pembacaan cache",
+        "cacheWriteTokens": "Token penulisan cache",
+        "apiValue": "Nilai setara API"
+      },
+      "grant": {
+        "account": "Akun",
+        "plan": "Paket",
+        "credential": "Kredensial",
+        "subscription": "Langganan",
+        "rateLimitTier": "Tingkat batas laju",
+        "lastSelected": "Terakhir dipilih",
+        "quotaLabel": "Periode kuota langganan",
+        "quotaTitle": "Sisa kuota",
+        "quotaRemaining": "Sisa kuota {window}",
+        "allModels": "Semua model",
+        "modelScopeNotReported": "Cakupan model tidak dilaporkan",
+        "resets": "Direset {date}",
+        "noQuotaWindows": "Tidak ada periode kuota yang dilaporkan.",
+        "extraUsage": "Penggunaan tambahan",
+        "extraUsageSpend": "{used} terpakai / batas bulanan {limit}",
+        "spendLimitReached": "Batas pengeluaran tercapai",
+        "eligibilityLabel": "Kelayakan per model",
+        "eligibilityTitle": "Kelayakan model",
+        "noModels": "Tidak ada model yang diizinkan yang dilaporkan.",
+        "trafficLabel": "Lalu lintas langganan",
+        "trafficTitle": "Lalu lintas",
+        "selections": "Pilihan: {count}. Nilai setara API bukan biaya langganan."
+      },
+      "windows": {
+        "fallback": "Periode kuota",
+        "fiveHour": "5 jam",
+        "weekly": "Mingguan",
+        "modelWeekly": "{models} mingguan"
+      }
+    }
+  },
+  "pl": {
+    "common": {
+      "refresh": "Odśwież"
+    },
+    "clawrouter": {
+      "pool": {
+        "subtitle": "Dostępne limity subskrypcji, dostęp do modeli i ruch zgodnie ze skonfigurowaną polityką.",
+        "disconnected": "Połącz się z Gateway, aby wyświetlić pulę ClawRouter.",
+        "readAccessRequired": "Aby wyświetlić pulę ClawRouter, potrzebujesz uprawnień do odczytu.",
+        "loadFailed": "Nie udało się wczytać puli ClawRouter. Wybierz Odśwież, aby spróbować ponownie.",
+        "notLoaded": "Odśwież, aby wczytać stan puli.",
+        "loading": "Wczytywanie stanu puli",
+        "refreshing": "Odświeżanie",
+        "observed": "Zarejestrowano {date}",
+        "observedWithPolicy": "Zarejestrowano {date} · Polityka {policy}"
+      },
+      "values": {
+        "notReported": "Nie podano",
+        "enabled": "Włączone",
+        "disabled": "Wyłączone",
+        "enabledNotReported": "Nie podano stanu włączenia",
+        "percent": "{value}%",
+        "percentFree": "{value}% dostępne",
+        "minorUnits": "{amount} jednostek zdawkowych",
+        "minorUnitsWithCurrency": "{amount} jednostek zdawkowych ({currency})"
+      },
+      "summary": {
+        "title": "Podsumowanie puli",
+        "subscriptions": "Subskrypcje",
+        "routingStrategy": "Strategia routingu",
+        "includedQuotaReserve": "Rezerwa limitu w ramach subskrypcji",
+        "environmentFallback": "Środowisko jako opcja zapasowa",
+        "paidFallbackRequests": "Żądania w płatnym trybie zapasowym",
+        "paidFallbackValue": "Wartość płatnego trybu zapasowego",
+        "paidFallbackHint": "Płatny tryb zapasowy obejmuje łącznie ścieżki kluczy API i środowiska, w tym bezpośredni ruch płatny. Wartości podano w USD jako równowartość kosztów API.",
+        "modelsTitle": "Dozwolone modele i zapas limitu",
+        "modelsHint": "Dostępność zgłaszana przez ClawRouter uwzględnia rezerwy limitów i stan danych uwierzytelniających.",
+        "modelHeadroom": "Subskrypcje z zapasem limitu: {count}",
+        "modelHeadroomWithUnknown": "Subskrypcje z zapasem limitu: {count} · o nieznanym stanie: {unknown}",
+        "noModels": "Nie zgłoszono dozwolonych modeli dla tej polityki.",
+        "trafficTitle": "Ruch w puli",
+        "trafficTitleWithDays": "Ruch w puli · ostatnie {days} dni",
+        "trafficHint": "Płatny tryb zapasowy jest wyświetlany według zgłoszonej ścieżki. Wartości odpowiadające kosztom API podano w USD.",
+        "unspecifiedLane": "Nieokreślona ścieżka",
+        "noTraffic": "Nie zgłoszono ruchu.",
+        "grantsTitle": "Subskrypcje i przyznane uprawnienia",
+        "noGrants": "Nie zgłoszono subskrypcji dla tej polityki."
+      },
+      "traffic": {
+        "requests": "Żądania",
+        "inputTokens": "Tokeny wejściowe",
+        "outputTokens": "Tokeny wyjściowe",
+        "cacheReadTokens": "Tokeny odczytane z pamięci podręcznej",
+        "cacheWriteTokens": "Tokeny zapisane w pamięci podręcznej",
+        "apiValue": "Równowartość według stawek API"
+      },
+      "grant": {
+        "account": "Konto",
+        "plan": "Plan",
+        "credential": "Dane uwierzytelniające",
+        "subscription": "Subskrypcja",
+        "rateLimitTier": "Poziom limitu żądań",
+        "lastSelected": "Ostatnio wybrano",
+        "quotaLabel": "Okresy limitów subskrypcji",
+        "quotaTitle": "Dostępny zapas limitu",
+        "quotaRemaining": "Pozostały limit ({window})",
+        "allModels": "Wszystkie modele",
+        "modelScopeNotReported": "Nie podano zakresu modeli",
+        "resets": "Reset: {date}",
+        "noQuotaWindows": "Nie podano okresów limitów.",
+        "extraUsage": "Dodatkowe użycie",
+        "extraUsageSpend": "Wykorzystano {used} / miesięczny limit: {limit}",
+        "spendLimitReached": "Osiągnięto limit wydatków",
+        "eligibilityLabel": "Uprawnienia dla poszczególnych modeli",
+        "eligibilityTitle": "Uprawnienia do modeli",
+        "noModels": "Nie zgłoszono żadnych dozwolonych modeli.",
+        "trafficLabel": "Ruch w ramach subskrypcji",
+        "trafficTitle": "Ruch",
+        "selections": "Liczba wyborów: {count}. Wartość odpowiadająca kosztowi korzystania z API nie jest opłatą za subskrypcję."
+      },
+      "windows": {
+        "fallback": "Okres limitu",
+        "fiveHour": "5-godzinny",
+        "weekly": "Tygodniowy",
+        "modelWeekly": "{models} — tygodniowy"
+      }
+    }
+  },
+  "th": {
+    "common": {
+      "refresh": "รีเฟรช"
+    },
+    "clawrouter": {
+      "pool": {
+        "subtitle": "โควตาคงเหลือของการสมัครสมาชิก การเข้าถึงโมเดล และทราฟฟิกสำหรับนโยบายที่คุณกำหนดไว้",
+        "disconnected": "เชื่อมต่อกับ Gateway เพื่อดูพูล ClawRouter",
+        "readAccessRequired": "คุณต้องมีสิทธิ์อ่านเพื่อดูพูล ClawRouter",
+        "loadFailed": "ไม่สามารถโหลดพูล ClawRouter ได้ เลือกรีเฟรชเพื่อลองอีกครั้ง",
+        "notLoaded": "รีเฟรชเพื่อโหลดสถานะพูล",
+        "loading": "กำลังโหลดสถานะพูล",
+        "refreshing": "กำลังรีเฟรช",
+        "observed": "ตรวจพบเมื่อ {date}",
+        "observedWithPolicy": "ตรวจพบเมื่อ {date} · นโยบาย {policy}"
+      },
+      "values": {
+        "notReported": "ไม่มีการรายงาน",
+        "enabled": "เปิดใช้งาน",
+        "disabled": "ปิดใช้งาน",
+        "enabledNotReported": "ไม่มีการรายงานสถานะการเปิดใช้งาน",
+        "percent": "{value}%",
+        "percentFree": "เหลือ {value}%",
+        "minorUnits": "{amount} หน่วยย่อย",
+        "minorUnitsWithCurrency": "{amount} หน่วยย่อย ({currency})"
+      },
+      "summary": {
+        "title": "สรุปพูล",
+        "subscriptions": "การสมัครสมาชิก",
+        "routingStrategy": "กลยุทธ์การกำหนดเส้นทาง",
+        "includedQuotaReserve": "โควตาสำรองที่รวมอยู่ในแพ็กเกจ",
+        "environmentFallback": "ช่องทางสำรองจากสภาพแวดล้อม",
+        "paidFallbackRequests": "คำขอผ่านช่องทางสำรองแบบเสียค่าใช้จ่าย",
+        "paidFallbackValue": "มูลค่าการใช้ช่องทางสำรองแบบเสียค่าใช้จ่าย",
+        "paidFallbackHint": "ช่องทางสำรองแบบเสียค่าใช้จ่ายรวมช่องทางคีย์ API และช่องทางจากสภาพแวดล้อม รวมถึงการใช้งานแบบเสียค่าใช้จ่ายโดยตรง มูลค่าแสดงเป็น USD เทียบเท่าการใช้ API",
+        "modelsTitle": "โมเดลที่อนุญาตและโควตาที่เหลือ",
+        "modelsHint": "สิทธิ์การใช้งานที่ ClawRouter รายงานคำนึงถึงโควตาสำรองและสถานะข้อมูลรับรอง",
+        "modelHeadroom": "การสมัครสมาชิก {count} รายการมีโควตาเหลือ",
+        "modelHeadroomWithUnknown": "การสมัครสมาชิก {count} รายการมีโควตาเหลือ · ไม่ทราบสถานะ {unknown} รายการ",
+        "noModels": "ไม่มีรายงานโมเดลที่อนุญาตสำหรับนโยบายนี้",
+        "trafficTitle": "การใช้งานพูล",
+        "trafficTitleWithDays": "การใช้งานพูล · {days} วันที่ผ่านมา",
+        "trafficHint": "การใช้ช่องทางสำรองแบบเสียค่าใช้จ่ายแสดงแยกตามช่องทางที่รายงาน มูลค่าเทียบเท่าการใช้ API แสดงเป็น USD",
+        "unspecifiedLane": "ช่องทางที่ไม่ได้ระบุ",
+        "noTraffic": "ไม่มีรายงานการใช้งาน",
+        "grantsTitle": "การสมัครสมาชิกและสิทธิ์ที่ได้รับ",
+        "noGrants": "ไม่มีรายงานการสมัครสมาชิกสำหรับนโยบายนี้"
+      },
+      "traffic": {
+        "requests": "คำขอ",
+        "inputTokens": "โทเค็นขาเข้า",
+        "outputTokens": "โทเค็นขาออก",
+        "cacheReadTokens": "โทเค็นที่อ่านจากแคช",
+        "cacheWriteTokens": "โทเค็นที่เขียนลงแคช",
+        "apiValue": "มูลค่าเทียบเท่าการใช้ API"
+      },
+      "grant": {
+        "account": "บัญชี",
+        "plan": "แผน",
+        "credential": "ข้อมูลรับรอง",
+        "subscription": "การสมัครสมาชิก",
+        "rateLimitTier": "ระดับขีดจำกัดอัตราการใช้งาน",
+        "lastSelected": "เลือกล่าสุด",
+        "quotaLabel": "ช่วงเวลาโควต้าของการสมัครสมาชิก",
+        "quotaTitle": "โควต้าคงเหลือ",
+        "quotaRemaining": "โควต้าคงเหลือสำหรับ {window}",
+        "allModels": "ทุกรุ่นโมเดล",
+        "modelScopeNotReported": "ไม่มีรายงานขอบเขตโมเดล",
+        "resets": "รีเซ็ต {date}",
+        "noQuotaWindows": "ไม่มีรายงานช่วงเวลาโควต้า",
+        "extraUsage": "การใช้งานเพิ่มเติม",
+        "extraUsageSpend": "ใช้ไป {used} / วงเงินรายเดือน {limit}",
+        "spendLimitReached": "ถึงขีดจำกัดค่าใช้จ่ายแล้ว",
+        "eligibilityLabel": "สิทธิ์การใช้งานแยกตามโมเดล",
+        "eligibilityTitle": "สิทธิ์การใช้งานโมเดล",
+        "noModels": "ไม่มีรายงานโมเดลที่อนุญาตให้ใช้งาน",
+        "trafficLabel": "ปริมาณการใช้งานผ่านการสมัครสมาชิก",
+        "trafficTitle": "ปริมาณการใช้งาน",
+        "selections": "จำนวนครั้งที่เลือก: {count} มูลค่าเทียบเท่า API ไม่ใช่ค่าบริการสมัครสมาชิก"
+      },
+      "windows": {
+        "fallback": "ช่วงเวลาโควตา",
+        "fiveHour": "5 ชั่วโมง",
+        "weekly": "รายสัปดาห์",
+        "modelWeekly": "{models} รายสัปดาห์"
+      }
+    }
+  },
+  "vi": {
+    "common": {
+      "refresh": "Làm mới"
+    },
+    "clawrouter": {
+      "pool": {
+        "subtitle": "Hạn mức gói đăng ký còn lại, quyền truy cập mô hình và lưu lượng theo chính sách bạn đã cấu hình.",
+        "disconnected": "Kết nối với Gateway để xem nhóm tài nguyên ClawRouter.",
+        "readAccessRequired": "Bạn cần quyền đọc để xem nhóm tài nguyên ClawRouter.",
+        "loadFailed": "Không thể tải nhóm tài nguyên ClawRouter. Chọn Làm mới để thử lại.",
+        "notLoaded": "Làm mới để tải trạng thái nhóm tài nguyên.",
+        "loading": "Đang tải trạng thái nhóm tài nguyên",
+        "refreshing": "Đang làm mới",
+        "observed": "Ghi nhận lúc {date}",
+        "observedWithPolicy": "Ghi nhận lúc {date} · Chính sách {policy}"
+      },
+      "values": {
+        "notReported": "Chưa được báo cáo",
+        "enabled": "Đã bật",
+        "disabled": "Đã tắt",
+        "enabledNotReported": "Trạng thái bật chưa được báo cáo",
+        "percent": "{value}%",
+        "percentFree": "Còn trống {value}%",
+        "minorUnits": "{amount} đơn vị tiền tệ nhỏ nhất",
+        "minorUnitsWithCurrency": "{amount} đơn vị tiền tệ nhỏ nhất ({currency})"
+      },
+      "summary": {
+        "title": "Tổng quan nhóm tài nguyên",
+        "subscriptions": "Gói đăng ký",
+        "routingStrategy": "Chiến lược định tuyến",
+        "includedQuotaReserve": "Hạn mức đi kèm được dự phòng",
+        "environmentFallback": "Phương án dự phòng từ môi trường",
+        "paidFallbackRequests": "Yêu cầu dự phòng trả phí",
+        "paidFallbackValue": "Giá trị dự phòng trả phí",
+        "paidFallbackHint": "Dự phòng trả phí tổng hợp các luồng dùng khóa API và môi trường, bao gồm cả lưu lượng trả phí trực tiếp. Giá trị được tính bằng USD tương đương khi dùng API.",
+        "modelsTitle": "Mô hình được phép và hạn mức còn lại",
+        "modelsHint": "Điều kiện sử dụng do ClawRouter báo cáo có tính đến hạn mức dự phòng và tình trạng thông tin xác thực.",
+        "modelHeadroom": "{count} gói đăng ký còn hạn mức",
+        "modelHeadroomWithUnknown": "{count} gói đăng ký còn hạn mức · {unknown} chưa xác định",
+        "noModels": "Không có mô hình được phép nào được báo cáo cho chính sách này.",
+        "trafficTitle": "Lưu lượng của nhóm",
+        "trafficTitleWithDays": "Lưu lượng của nhóm · {days} ngày qua",
+        "trafficHint": "Dự phòng trả phí được hiển thị theo luồng được báo cáo. Giá trị tương đương khi dùng API được tính bằng USD.",
+        "unspecifiedLane": "Luồng chưa xác định",
+        "noTraffic": "Không có lưu lượng được báo cáo.",
+        "grantsTitle": "Gói đăng ký và quyền được cấp",
+        "noGrants": "Không có gói đăng ký nào được báo cáo cho chính sách này."
+      },
+      "traffic": {
+        "requests": "Yêu cầu",
+        "inputTokens": "Token đầu vào",
+        "outputTokens": "Token đầu ra",
+        "cacheReadTokens": "Token đọc từ bộ nhớ đệm",
+        "cacheWriteTokens": "Token ghi vào bộ nhớ đệm",
+        "apiValue": "Giá trị tương đương API"
+      },
+      "grant": {
+        "account": "Tài khoản",
+        "plan": "Gói",
+        "credential": "Thông tin xác thực",
+        "subscription": "Gói đăng ký",
+        "rateLimitTier": "Cấp giới hạn tốc độ",
+        "lastSelected": "Lần chọn gần nhất",
+        "quotaLabel": "Các kỳ hạn ngạch của gói đăng ký",
+        "quotaTitle": "Hạn ngạch còn lại",
+        "quotaRemaining": "Hạn ngạch còn lại trong {window}",
+        "allModels": "Tất cả mô hình",
+        "modelScopeNotReported": "Chưa có thông tin về phạm vi mô hình",
+        "resets": "Đặt lại vào {date}",
+        "noQuotaWindows": "Chưa có thông tin về các kỳ hạn ngạch.",
+        "extraUsage": "Mức sử dụng bổ sung",
+        "extraUsageSpend": "Đã dùng {used} / giới hạn hàng tháng {limit}",
+        "spendLimitReached": "Đã đạt giới hạn chi tiêu",
+        "eligibilityLabel": "Điều kiện sử dụng theo mô hình",
+        "eligibilityTitle": "Điều kiện sử dụng mô hình",
+        "noModels": "Không có mô hình nào được báo cáo là được phép.",
+        "trafficLabel": "Lưu lượng gói đăng ký",
+        "trafficTitle": "Lưu lượng",
+        "selections": "Số lượt chọn: {count}. Giá trị quy đổi tương đương API không phải là phí gói đăng ký."
+      },
+      "windows": {
+        "fallback": "Khoảng thời gian áp dụng hạn mức",
+        "fiveHour": "5 giờ",
+        "weekly": "Hằng tuần",
+        "modelWeekly": "{models} hằng tuần"
+      }
+    }
+  },
+  "nl": {
+    "common": {
+      "refresh": "Vernieuwen"
+    },
+    "clawrouter": {
+      "pool": {
+        "subtitle": "Beschikbare abonnementsruimte, modeltoegang en verkeer voor je ingestelde beleid.",
+        "disconnected": "Maak verbinding met de Gateway om de ClawRouter-pool te bekijken.",
+        "readAccessRequired": "Je hebt leestoegang nodig om de ClawRouter-pool te bekijken.",
+        "loadFailed": "De ClawRouter-pool kon niet worden geladen. Selecteer Vernieuwen om het opnieuw te proberen.",
+        "notLoaded": "Vernieuw om de poolstatus te laden.",
+        "loading": "Poolstatus laden",
+        "refreshing": "Vernieuwen",
+        "observed": "Waargenomen op {date}",
+        "observedWithPolicy": "Waargenomen op {date} · Beleid {policy}"
+      },
+      "values": {
+        "notReported": "Niet gerapporteerd",
+        "enabled": "Ingeschakeld",
+        "disabled": "Uitgeschakeld",
+        "enabledNotReported": "Inschakelstatus niet gerapporteerd",
+        "percent": "{value}%",
+        "percentFree": "{value}% beschikbaar",
+        "minorUnits": "{amount} kleinste valuta-eenheden",
+        "minorUnitsWithCurrency": "{amount} kleinste valuta-eenheden ({currency})"
+      },
+      "summary": {
+        "title": "Pooloverzicht",
+        "subscriptions": "Abonnementen",
+        "routingStrategy": "Routeringsstrategie",
+        "includedQuotaReserve": "Reserve voor inbegrepen quota",
+        "environmentFallback": "Terugval via omgeving",
+        "paidFallbackRequests": "Betaalde terugvalverzoeken",
+        "paidFallbackValue": "Waarde van betaalde terugval",
+        "paidFallbackHint": "Betaalde terugval omvat routes via API-sleutels en de omgeving, inclusief direct betaald verkeer. De waarden zijn API-equivalenten in USD.",
+        "modelsTitle": "Toegestane modellen en beschikbare capaciteit",
+        "modelsHint": "ClawRouter houdt bij het bepalen van de inzetbaarheid rekening met quotareserves en de status van toegangsgegevens.",
+        "modelHeadroom": "{count} abonnementen met beschikbare capaciteit",
+        "modelHeadroomWithUnknown": "{count} abonnementen met beschikbare capaciteit · {unknown} onbekend",
+        "noModels": "Geen toegestane modellen gemeld voor dit beleid.",
+        "trafficTitle": "Poolverkeer",
+        "trafficTitleWithDays": "Poolverkeer · afgelopen {days} dagen",
+        "trafficHint": "Betaalde terugval wordt weergegeven per gemelde route. API-equivalente waarden zijn in USD.",
+        "unspecifiedLane": "Niet-gespecificeerde route",
+        "noTraffic": "Geen verkeer gemeld.",
+        "grantsTitle": "Abonnementen en toekenningen",
+        "noGrants": "Er zijn geen abonnementen gemeld voor dit beleid."
+      },
+      "traffic": {
+        "requests": "Verzoeken",
+        "inputTokens": "Invoertokens",
+        "outputTokens": "Uitvoertokens",
+        "cacheReadTokens": "Uit cache gelezen tokens",
+        "cacheWriteTokens": "Naar cache geschreven tokens",
+        "apiValue": "Equivalente API-waarde"
+      },
+      "grant": {
+        "account": "Account",
+        "plan": "Abonnementsvorm",
+        "credential": "Toegangsgegeven",
+        "subscription": "Abonnement",
+        "rateLimitTier": "Niveau van aanvraaglimiet",
+        "lastSelected": "Laatst geselecteerd",
+        "quotaLabel": "Quotaperiodes van abonnement",
+        "quotaTitle": "Resterende quotaruimte",
+        "quotaRemaining": "Resterend quotum voor {window}",
+        "allModels": "Alle modellen",
+        "modelScopeNotReported": "Modelbereik niet gemeld",
+        "resets": "Wordt opnieuw ingesteld op {date}",
+        "noQuotaWindows": "Geen quotaperiodes gemeld.",
+        "extraUsage": "Extra gebruik",
+        "extraUsageSpend": "{used} verbruikt / {limit} maandelijkse limiet",
+        "spendLimitReached": "Bestedingslimiet bereikt",
+        "eligibilityLabel": "Toelating per model",
+        "eligibilityTitle": "Modeltoelating",
+        "noModels": "Geen toegestane modellen gemeld.",
+        "trafficLabel": "Abonnementsverkeer",
+        "trafficTitle": "Verkeer",
+        "selections": "Selecties: {count}. De equivalente API-waarde wordt niet als abonnementskosten in rekening gebracht."
+      },
+      "windows": {
+        "fallback": "Quotumperiode",
+        "fiveHour": "5 uur",
+        "weekly": "Wekelijks",
+        "modelWeekly": "{models} wekelijks"
+      }
+    }
+  },
+  "fa": {
+    "common": {
+      "refresh": "تازه‌سازی"
+    },
+    "clawrouter": {
+      "pool": {
+        "subtitle": "ظرفیت باقی‌ماندهٔ اشتراک، دسترسی به مدل‌ها و ترافیک برای سیاست پیکربندی‌شدهٔ شما.",
+        "disconnected": "برای مشاهدهٔ مخزن ClawRouter به Gateway متصل شوید.",
+        "readAccessRequired": "برای مشاهدهٔ مخزن ClawRouter به دسترسی خواندن نیاز دارید.",
+        "loadFailed": "بارگذاری مخزن ClawRouter انجام نشد. برای تلاش دوباره، تازه‌سازی را انتخاب کنید.",
+        "notLoaded": "برای بارگذاری وضعیت مخزن، تازه‌سازی کنید.",
+        "loading": "در حال بارگذاری وضعیت مخزن",
+        "refreshing": "در حال تازه‌سازی",
+        "observed": "مشاهده‌شده در {date}",
+        "observedWithPolicy": "مشاهده‌شده در {date} · سیاست {policy}"
+      },
+      "values": {
+        "notReported": "گزارش نشده",
+        "enabled": "فعال",
+        "disabled": "غیرفعال",
+        "enabledNotReported": "وضعیت فعال بودن گزارش نشده",
+        "percent": "{value}٪",
+        "percentFree": "{value}٪ آزاد",
+        "minorUnits": "{amount} واحد پولی خرد",
+        "minorUnitsWithCurrency": "{amount} واحد پولی خرد ({currency})"
+      },
+      "summary": {
+        "title": "خلاصهٔ مخزن",
+        "subscriptions": "اشتراک‌ها",
+        "routingStrategy": "راهبرد مسیریابی",
+        "includedQuotaReserve": "ذخیرهٔ سهمیهٔ مشمول طرح",
+        "environmentFallback": "مسیر جایگزین محیط",
+        "paidFallbackRequests": "درخواست‌های مسیر جایگزین پولی",
+        "paidFallbackValue": "ارزش مسیر جایگزین پولی",
+        "paidFallbackHint": "مسیر جایگزین پولی، مسیرهای کلید API و محیط را همراه با ترافیک مستقیم پولی تجمیع می‌کند. مقادیر، معادل دلاری استفاده از API هستند.",
+        "modelsTitle": "مدل‌های مجاز و ظرفیت آزاد",
+        "modelsHint": "وضعیت واجد شرایط بودن که ClawRouter گزارش می‌کند، ذخایر سهمیه و سلامت اطلاعات احراز هویت را در نظر می‌گیرد.",
+        "modelHeadroom": "{count} اشتراک دارای ظرفیت آزاد",
+        "modelHeadroomWithUnknown": "{count} اشتراک دارای ظرفیت آزاد · {unknown} نامشخص",
+        "noModels": "هیچ مدل مجازی برای این خط‌مشی گزارش نشده است.",
+        "trafficTitle": "ترافیک مجموعه",
+        "trafficTitleWithDays": "ترافیک مجموعه · {days} روز گذشته",
+        "trafficHint": "مسیر جایگزین پولی بر اساس مسیر گزارش‌شدهٔ آن نمایش داده می‌شود. مقادیر معادل استفاده از API به دلار آمریکا هستند.",
+        "unspecifiedLane": "مسیر نامشخص",
+        "noTraffic": "هیچ ترافیکی گزارش نشده است.",
+        "grantsTitle": "اشتراک‌ها و مجوزهای اعطاشده",
+        "noGrants": "هیچ اشتراکی برای این خط‌مشی گزارش نشده است."
+      },
+      "traffic": {
+        "requests": "درخواست‌ها",
+        "inputTokens": "توکن‌های ورودی",
+        "outputTokens": "توکن‌های خروجی",
+        "cacheReadTokens": "توکن‌های خوانده‌شده از حافظهٔ نهان",
+        "cacheWriteTokens": "توکن‌های نوشته‌شده در حافظهٔ نهان",
+        "apiValue": "ارزش معادل API"
+      },
+      "grant": {
+        "account": "حساب",
+        "plan": "طرح",
+        "credential": "اطلاعات احراز هویت",
+        "subscription": "اشتراک",
+        "rateLimitTier": "سطح محدودیت نرخ",
+        "lastSelected": "آخرین انتخاب",
+        "quotaLabel": "بازه‌های سهمیهٔ اشتراک",
+        "quotaTitle": "ظرفیت باقی‌ماندهٔ سهمیه",
+        "quotaRemaining": "سهمیهٔ باقی‌ماندهٔ {window}",
+        "allModels": "همهٔ مدل‌ها",
+        "modelScopeNotReported": "دامنهٔ مدل‌ها گزارش نشده است",
+        "resets": "بازنشانی در {date}",
+        "noQuotaWindows": "هیچ بازهٔ سهمیه‌ای گزارش نشده است.",
+        "extraUsage": "مصرف اضافی",
+        "extraUsageSpend": "{used} مصرف‌شده / سقف ماهانهٔ {limit}",
+        "spendLimitReached": "به سقف هزینه رسیده‌اید",
+        "eligibilityLabel": "واجد شرایط بودن هر مدل",
+        "eligibilityTitle": "واجد شرایط بودن مدل",
+        "noModels": "هیچ مدل مجازی گزارش نشده است.",
+        "trafficLabel": "ترافیک اشتراک",
+        "trafficTitle": "ترافیک",
+        "selections": "انتخاب‌ها: {count}. ارزش معادل API، هزینهٔ اشتراک محسوب نمی‌شود."
+      },
+      "windows": {
+        "fallback": "بازهٔ سهمیه",
+        "fiveHour": "۵ ساعته",
+        "weekly": "هفتگی",
+        "modelWeekly": "هفتگی {models}"
+      }
+    }
+  },
+  "ru": {
+    "common": {
+      "refresh": "Обновить"
+    },
+    "clawrouter": {
+      "pool": {
+        "subtitle": "Оставшиеся лимиты подписок, доступ к моделям и трафик для настроенной политики.",
+        "disconnected": "Подключитесь к Gateway, чтобы просмотреть пул ClawRouter.",
+        "readAccessRequired": "Для просмотра пула ClawRouter необходим доступ на чтение.",
+        "loadFailed": "Не удалось загрузить пул ClawRouter. Нажмите «Обновить», чтобы повторить попытку.",
+        "notLoaded": "Нажмите «Обновить», чтобы загрузить состояние пула.",
+        "loading": "Загрузка состояния пула",
+        "refreshing": "Обновление",
+        "observed": "Данные на {date}",
+        "observedWithPolicy": "Данные на {date} · Политика {policy}"
+      },
+      "values": {
+        "notReported": "Нет данных",
+        "enabled": "Включено",
+        "disabled": "Отключено",
+        "enabledNotReported": "Нет данных о состоянии включения",
+        "percent": "{value}%",
+        "percentFree": "Свободно {value}%",
+        "minorUnits": "{amount} в дробных денежных единицах",
+        "minorUnitsWithCurrency": "{amount} в дробных денежных единицах ({currency})"
+      },
+      "summary": {
+        "title": "Сводка по пулу",
+        "subscriptions": "Подписки",
+        "routingStrategy": "Стратегия маршрутизации",
+        "includedQuotaReserve": "Резерв включённой квоты",
+        "environmentFallback": "Резервный доступ через окружение",
+        "paidFallbackRequests": "Запросы через платный резервный доступ",
+        "paidFallbackValue": "Стоимость платного резервного доступа",
+        "paidFallbackHint": "Платный резервный доступ объединяет каналы с ключами API и каналы окружения, включая прямой платный трафик. Стоимость указана в USD в эквиваленте тарифов API.",
+        "modelsTitle": "Разрешённые модели и запас квоты",
+        "modelsHint": "Доступность, указанная ClawRouter, учитывает резервы квоты и состояние учётных данных.",
+        "modelHeadroom": "Подписки с запасом квоты: {count}",
+        "modelHeadroomWithUnknown": "Подписки с запасом квоты: {count} · с неизвестным статусом: {unknown}",
+        "noModels": "Нет данных о разрешённых моделях для этой политики.",
+        "trafficTitle": "Трафик пула",
+        "trafficTitleWithDays": "Трафик пула · за последние {days} дн.",
+        "trafficHint": "Платный резервный доступ отображается по указанному каналу. Стоимость в эквиваленте тарифов API указана в USD.",
+        "unspecifiedLane": "Неуказанный канал",
+        "noTraffic": "Нет данных о трафике.",
+        "grantsTitle": "Подписки и предоставленные права доступа",
+        "noGrants": "Нет данных о подписках для этой политики."
+      },
+      "traffic": {
+        "requests": "Запросы",
+        "inputTokens": "Входные токены",
+        "outputTokens": "Выходные токены",
+        "cacheReadTokens": "Токены, прочитанные из кэша",
+        "cacheWriteTokens": "Токены, записанные в кэш",
+        "apiValue": "Эквивалентная стоимость по тарифам API"
+      },
+      "grant": {
+        "account": "Аккаунт",
+        "plan": "Тариф",
+        "credential": "Учётные данные",
+        "subscription": "Подписка",
+        "rateLimitTier": "Уровень ограничения частоты запросов",
+        "lastSelected": "Последний выбор",
+        "quotaLabel": "Периоды квот подписки",
+        "quotaTitle": "Остаток квоты",
+        "quotaRemaining": "Остаток квоты за период {window}",
+        "allModels": "Все модели",
+        "modelScopeNotReported": "Сведения об охватываемых моделях отсутствуют",
+        "resets": "Сброс {date}",
+        "noQuotaWindows": "Нет данных о периодах квот.",
+        "extraUsage": "Использование сверх квоты",
+        "extraUsageSpend": "Использовано {used} / месячный лимит {limit}",
+        "spendLimitReached": "Лимит расходов достигнут",
+        "eligibilityLabel": "Доступность по моделям",
+        "eligibilityTitle": "Доступность моделей",
+        "noModels": "Нет данных о разрешённых моделях.",
+        "trafficLabel": "Трафик по подписке",
+        "trafficTitle": "Трафик",
+        "selections": "Выбрано: {count}. Эквивалентная стоимость по тарифам API не является платой за подписку."
+      },
+      "windows": {
+        "fallback": "Период квоты",
+        "fiveHour": "5 часов",
+        "weekly": "За неделю",
+        "modelWeekly": "{models} за неделю"
+      }
+    }
+  },
+  "sv": {
+    "common": {
+      "refresh": "Uppdatera"
+    },
+    "clawrouter": {
+      "pool": {
+        "subtitle": "Återstående abonnemangskapacitet, modellåtkomst och trafik för din konfigurerade policy.",
+        "disconnected": "Anslut till Gateway för att visa ClawRouter-poolen.",
+        "readAccessRequired": "Du behöver läsbehörighet för att visa ClawRouter-poolen.",
+        "loadFailed": "Det gick inte att läsa in ClawRouter-poolen. Välj Uppdatera för att försöka igen.",
+        "notLoaded": "Uppdatera för att läsa in poolstatus.",
+        "loading": "Läser in poolstatus",
+        "refreshing": "Uppdaterar",
+        "observed": "Observerad {date}",
+        "observedWithPolicy": "Observerad {date} · Policy {policy}"
+      },
+      "values": {
+        "notReported": "Ej rapporterat",
+        "enabled": "Aktiverad",
+        "disabled": "Inaktiverad",
+        "enabledNotReported": "Aktiveringsstatus ej rapporterad",
+        "percent": "{value} %",
+        "percentFree": "{value} % ledigt",
+        "minorUnits": "{amount} mindre valutaenheter",
+        "minorUnitsWithCurrency": "{amount} mindre valutaenheter ({currency})"
+      },
+      "summary": {
+        "title": "Poolsammanfattning",
+        "subscriptions": "Abonnemang",
+        "routingStrategy": "Routningsstrategi",
+        "includedQuotaReserve": "Reserv för inkluderad kvot",
+        "environmentFallback": "Reservalternativ via miljön",
+        "paidFallbackRequests": "Förfrågningar via betalda reservalternativ",
+        "paidFallbackValue": "Värde för betalda reservalternativ",
+        "paidFallbackHint": "Betalda reservalternativ omfattar både API-nyckel- och miljöbaserade vägar, inklusive direkt betald trafik. Värdena anges i USD motsvarande API-kostnaden.",
+        "modelsTitle": "Tillåtna modeller och återstående kapacitet",
+        "modelsHint": "Tillgängligheten som rapporteras av ClawRouter tar hänsyn till kvotreserver och autentiseringsuppgifternas status.",
+        "modelHeadroom": "{count} abonnemang med återstående kapacitet",
+        "modelHeadroomWithUnknown": "{count} abonnemang med återstående kapacitet · {unknown} okända",
+        "noModels": "Inga tillåtna modeller har rapporterats för den här policyn.",
+        "trafficTitle": "Pooltrafik",
+        "trafficTitleWithDays": "Pooltrafik · senaste {days} dagarna",
+        "trafficHint": "Betalda reservalternativ visas efter rapporterad väg. Värden motsvarande API-kostnaden anges i USD.",
+        "unspecifiedLane": "Ospecificerad väg",
+        "noTraffic": "Ingen trafik har rapporterats.",
+        "grantsTitle": "Abonnemang och tilldelningar",
+        "noGrants": "Inga abonnemang har rapporterats för den här policyn."
+      },
+      "traffic": {
+        "requests": "Förfrågningar",
+        "inputTokens": "Indatatoken",
+        "outputTokens": "Utdatatoken",
+        "cacheReadTokens": "Token lästa från cache",
+        "cacheWriteTokens": "Token skrivna till cache",
+        "apiValue": "Motsvarande API-värde"
+      },
+      "grant": {
+        "account": "Konto",
+        "plan": "Abonnemang",
+        "credential": "Autentiseringsuppgift",
+        "subscription": "Prenumeration",
+        "rateLimitTier": "Nivå för anropsbegränsning",
+        "lastSelected": "Senast vald",
+        "quotaLabel": "Prenumerationens kvotperioder",
+        "quotaTitle": "Återstående kvot",
+        "quotaRemaining": "Återstående kvot för {window}",
+        "allModels": "Alla modeller",
+        "modelScopeNotReported": "Modellomfattning har inte rapporterats",
+        "resets": "Återställs {date}",
+        "noQuotaWindows": "Inga kvotperioder har rapporterats.",
+        "extraUsage": "Extra användning",
+        "extraUsageSpend": "{used} använt / {limit} månadsgräns",
+        "spendLimitReached": "Utgiftsgränsen har nåtts",
+        "eligibilityLabel": "Behörighet per modell",
+        "eligibilityTitle": "Modellbehörighet",
+        "noModels": "Inga tillåtna modeller har rapporterats.",
+        "trafficLabel": "Prenumerationstrafik",
+        "trafficTitle": "Trafik",
+        "selections": "Val: {count}. Det API-motsvarande värdet är inte en prenumerationsavgift."
+      },
+      "windows": {
+        "fallback": "Kvotperiod",
+        "fiveHour": "5 timmar",
+        "weekly": "Veckovis",
+        "modelWeekly": "{models} veckovis"
+      }
+    }
+  },
+  "ca": {
+    "common": {
+      "refresh": "Actualitza"
+    },
+    "clawrouter": {
+      "pool": {
+        "subtitle": "Capacitat disponible de les subscripcions, accés als models i trànsit segons la política configurada.",
+        "disconnected": "Connecteu-vos al Gateway per veure el grup de ClawRouter.",
+        "readAccessRequired": "Cal tenir accés de lectura per veure el grup de ClawRouter.",
+        "loadFailed": "No s'ha pogut carregar el grup de ClawRouter. Seleccioneu Actualitza per tornar-ho a provar.",
+        "notLoaded": "Actualitzeu per carregar l'estat del grup.",
+        "loading": "S'està carregant l'estat del grup",
+        "refreshing": "S'està actualitzant",
+        "observed": "Observat: {date}",
+        "observedWithPolicy": "Observat: {date} · Política: {policy}"
+      },
+      "values": {
+        "notReported": "No s'ha informat",
+        "enabled": "Activat",
+        "disabled": "Desactivat",
+        "enabledNotReported": "No s'ha informat de l'estat d'activació",
+        "percent": "{value}%",
+        "percentFree": "{value}% disponible",
+        "minorUnits": "{amount} unitats fraccionàries",
+        "minorUnitsWithCurrency": "{amount} unitats fraccionàries ({currency})"
+      },
+      "summary": {
+        "title": "Resum del grup",
+        "subscriptions": "Subscripcions",
+        "routingStrategy": "Estratègia d'encaminament",
+        "includedQuotaReserve": "Reserva de quota inclosa",
+        "environmentFallback": "Alternativa de l'entorn",
+        "paidFallbackRequests": "Sol·licituds de l'alternativa de pagament",
+        "paidFallbackValue": "Valor de l'alternativa de pagament",
+        "paidFallbackHint": "L'alternativa de pagament agrupa les vies de clau d'API i d'entorn, inclòs el trànsit de pagament directe. Els valors són equivalents als de l'API, en USD.",
+        "modelsTitle": "Models permesos i capacitat disponible",
+        "modelsHint": "L'elegibilitat indicada per ClawRouter té en compte les reserves de quota i l'estat de les credencials.",
+        "modelHeadroom": "{count} subscripcions amb capacitat disponible",
+        "modelHeadroomWithUnknown": "{count} subscripcions amb capacitat disponible · {unknown} amb capacitat desconeguda",
+        "noModels": "No s'ha indicat cap model permès per a aquesta política.",
+        "trafficTitle": "Trànsit del grup",
+        "trafficTitleWithDays": "Trànsit del grup · darrers {days} dies",
+        "trafficHint": "L'alternativa de pagament es mostra segons la via indicada. Els valors equivalents als de l'API s'expressen en USD.",
+        "unspecifiedLane": "Via no especificada",
+        "noTraffic": "No s'ha registrat cap trànsit.",
+        "grantsTitle": "Subscripcions i autoritzacions",
+        "noGrants": "No s'ha indicat cap subscripció per a aquesta política."
+      },
+      "traffic": {
+        "requests": "Sol·licituds",
+        "inputTokens": "Tokens d'entrada",
+        "outputTokens": "Tokens de sortida",
+        "cacheReadTokens": "Tokens de lectura de la memòria cau",
+        "cacheWriteTokens": "Tokens d'escriptura a la memòria cau",
+        "apiValue": "Valor equivalent de l'API"
+      },
+      "grant": {
+        "account": "Compte",
+        "plan": "Pla",
+        "credential": "Credencial",
+        "subscription": "Subscripció",
+        "rateLimitTier": "Nivell de limitació de sol·licituds",
+        "lastSelected": "Última selecció",
+        "quotaLabel": "Períodes de quota de la subscripció",
+        "quotaTitle": "Quota disponible",
+        "quotaRemaining": "Quota restant de {window}",
+        "allModels": "Tots els models",
+        "modelScopeNotReported": "No s'ha indicat l'abast dels models",
+        "resets": "Es restableix el {date}",
+        "noQuotaWindows": "No s'ha informat de cap període de quota.",
+        "extraUsage": "Ús addicional",
+        "extraUsageSpend": "{used} utilitzats / {limit} de límit mensual",
+        "spendLimitReached": "S'ha assolit el límit de despesa",
+        "eligibilityLabel": "Elegibilitat per model",
+        "eligibilityTitle": "Elegibilitat dels models",
+        "noModels": "No s'ha informat de cap model permès.",
+        "trafficLabel": "Trànsit de la subscripció",
+        "trafficTitle": "Trànsit",
+        "selections": "Seleccions: {count}. El valor equivalent de l'API no és un càrrec de la subscripció."
+      },
+      "windows": {
+        "fallback": "Període de quota",
+        "fiveHour": "5 hores",
+        "weekly": "Setmanal",
+        "modelWeekly": "{models} setmanal"
+      }
+    }
+  }
+}
