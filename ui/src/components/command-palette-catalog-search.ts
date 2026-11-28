@@ -163,33 +163,26 @@ export function filterCommandPaletteItems(params: {
     return baseItems;
   }
   const query = normalizeLowercaseStringOrEmpty(params.query).normalize("NFC");
+  const metadataRank = 1;
   const matchRank = (item: CommandPaletteItem) => {
     const label = normalizeLowercaseStringOrEmpty(item.label).normalize("NFC");
-    if (label === query) {
-      return 3;
+    const position = label.indexOf(query);
+    if (position >= 0) {
+      return label === query ? 4 : position === 0 ? 3 : 2;
     }
-    if (label.startsWith(query)) {
-      return 2;
-    }
-    return label.includes(query) ||
-      normalizeLowercaseStringOrEmpty(item.description).normalize("NFC").includes(query) ||
+    return normalizeLowercaseStringOrEmpty(item.description).normalize("NFC").includes(query) ||
       normalizeLowercaseStringOrEmpty(item.searchText).normalize("NFC").includes(query) ||
       (params.primaryModelSearch &&
         normalizeLowercaseStringOrEmpty(item.primaryModel).normalize("NFC").includes(query))
-      ? 1
+      ? metadataRank
       : 0;
   };
-  const matchesName = (item: CommandPaletteItem) =>
-    normalizeLowercaseStringOrEmpty(item.label).normalize("NFC").includes(query);
   const ranked = (items: readonly CommandPaletteItem[]) =>
     items
-      .map((item) => ({ item, rank: matchRank(item), named: matchesName(item) }))
+      .map((item) => ({ item, rank: matchRank(item) }))
       .filter(({ rank }) => rank > 0)
       .toSorted(
-        (left, right) =>
-          Number(right.named) - Number(left.named) ||
-          right.rank - left.rank ||
-          left.item.label.localeCompare(right.item.label),
+        (left, right) => right.rank - left.rank || left.item.label.localeCompare(right.item.label),
       );
   const commandMatches = [
     ...ranked(baseItems),
@@ -200,12 +193,12 @@ export function filterCommandPaletteItems(params: {
   // Commands you named, your sessions, archived sessions, loose command matches by
   // description or keyword, then message text.
   return [
-    ...commandMatches.filter(({ named }) => named).map(({ item }) => item),
+    ...commandMatches.filter(({ rank }) => rank > metadataRank).map(({ item }) => item),
     ...sessions("chats"),
     ...sessions("archived"),
     // A separate group keeps loose matches from joining a named match's group up top.
     ...commandMatches
-      .filter(({ named }) => !named)
+      .filter(({ rank }) => rank === metadataRank)
       .map(({ item }): CommandPaletteItem =>
         Object.assign({}, item, { category: "more" as const }),
       ),
