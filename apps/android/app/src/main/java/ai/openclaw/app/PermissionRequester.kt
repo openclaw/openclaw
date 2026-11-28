@@ -102,6 +102,12 @@ class PermissionRequester internal constructor(
     }
   }
 
+  internal suspend fun requestRecordAudioFromComposer(): Boolean =
+    requestIfMissing(
+      listOf(Manifest.permission.RECORD_AUDIO),
+      timeoutMs = Long.MAX_VALUE,
+    )[Manifest.permission.RECORD_AUDIO] == true
+
   /**
    * Request missing Android runtime permissions and return the final grant state for every requested permission.
    */
