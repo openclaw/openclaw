@@ -363,6 +363,15 @@ export function registerOnboardCommand(program: Command): void {
           );
           return;
         }
+        if (opts.agentName !== undefined) {
+          const { validateFirstOnboardingAgentName } =
+            await import("../../commands/onboard-agent.js");
+          const error = validateFirstOnboardingAgentName(opts.agentName as string);
+          if (error) {
+            rejectOption(`Invalid --agent-name: ${error}`);
+            return;
+          }
+        }
         if (opts.nonInteractive && opts.acceptRisk !== true) {
           rejectOption(
             [
