@@ -3,6 +3,7 @@ import {
   billingSource,
   messageRows,
   failoverSignalRows,
+  patternsSource,
   reason,
   retrySource,
 } from "./failover-classification.corpus.test-support.js";
@@ -39,6 +40,23 @@ export const rateLimitOverloadCases = [
       status: 402,
     },
     { id: "billing-http402-rate-limit", message: "HTTP 402 Payment Required: rate limit exceeded" },
+  ]),
+  ...messageRows(patternsSource, reason("rate_limit"), [
+    {
+      id: "patterns-claude-cli-session-limit",
+      provider: "claude-cli",
+      message: "You've hit your session limit · resets 2:50pm (America/New_York)",
+    },
+    {
+      id: "patterns-claude-cli-plain-limit",
+      provider: "claude-cli",
+      message: "You've hit your limit · resets 5pm (Europe/Berlin)",
+    },
+    {
+      id: "patterns-claude-cli-five-hour-limit",
+      provider: "claude-cli",
+      message: "You've hit your 5-hour limit · resets 3pm (UTC)",
+    },
   ]),
   {
     id: "retry-429-insufficient-quota-short",
