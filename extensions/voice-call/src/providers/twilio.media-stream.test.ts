@@ -224,6 +224,30 @@ describe("TwilioProvider", () => {
     }
   });
 
+  it("synthesizes stream playback with the call's TTS config", async () => {
+    const provider = createProvider();
+    provider.registerCallStream("CA-route", "MZ-route");
+    provider.setMediaStreamHandler({
+      queueTts: async (_streamSid: string, playFn: (signal: AbortSignal) => Promise<void>) =>
+        await playFn(new AbortController().signal),
+      sendAudio: () => true,
+      sendMarkAndWait: async () => {},
+      clearAudio: vi.fn(),
+    } as never);
+    const synthesizeForTelephony = vi.fn(async () => Buffer.alloc(160, 0xff));
+    provider.setTTSProvider({ synthesisTimeoutMs: 5000, synthesizeForTelephony });
+    const tts = { provider: "openai", providers: { openai: { voice: "alloy" } } };
+
+    await provider.playTts({
+      callId: "call-route",
+      providerCallId: "CA-route",
+      text: "Routed line",
+      tts,
+    });
+
+    expect(synthesizeForTelephony).toHaveBeenCalledWith("Routed line", tts);
+  });
+
   it("stops and clears real stream playback on the first failed audio chunk", async () => {
     await withStreamingProvider(async (f) => {
       f.synthesize.mockResolvedValueOnce({

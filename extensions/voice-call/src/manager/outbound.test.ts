@@ -309,6 +309,9 @@ it.each([
     providerCallId: "provider-1",
     text: "hello",
     voice,
+    tts: expect.objectContaining({
+      providers: provider === "telnyx" ? { telnyx: { voiceId: voice } } : { openai: { voice } },
+    }),
     listenAfterPlayback: true,
   });
   expect(call).toMatchObject({

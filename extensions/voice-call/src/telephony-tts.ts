@@ -37,9 +37,10 @@ export async function createTelephonyTtsProvider(params: {
 
   return {
     synthesisTimeoutMs,
-    synthesizeForTelephony: async (text: string) => {
+    synthesizeForTelephony: async (text: string, callTts?: VoiceCallTtsConfig) => {
       const prepared = await runtime.prepareTtsRequest({
         cfg: preparedConfig.cfg,
+        override: callTts,
         text,
       });
       const directives = prepared.directives;

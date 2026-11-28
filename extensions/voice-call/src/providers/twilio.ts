@@ -4,7 +4,7 @@ import { sleepWithAbort } from "openclaw/plugin-sdk/runtime-env";
 import { safeEqualSecret } from "openclaw/plugin-sdk/security-runtime";
 import { normalizeOptionalString } from "openclaw/plugin-sdk/string-coerce-runtime";
 import { raceWithTimeout } from "openclaw/plugin-sdk/time-runtime";
-import type { WebhookSecurityConfig } from "../config.js";
+import type { VoiceCallTtsConfig, WebhookSecurityConfig } from "../config.js";
 import { getHeader } from "../http-headers.js";
 import { generateDtmfRedirectTwiml } from "../manager/twiml.js";
 import type { MediaStreamHandler } from "../media-stream.js";
@@ -603,7 +603,7 @@ export class TwilioProvider implements VoiceCallProvider {
       }
 
       try {
-        await this.playTtsViaStream(input.text, streamSid);
+        await this.playTtsViaStream(input.text, streamSid, input.tts);
         return;
       } catch (err) {
         console.warn(`[voice-call] Telephony TTS failed callId=${input.callId}`);
@@ -640,7 +640,11 @@ export class TwilioProvider implements VoiceCallProvider {
     );
   }
 
-  private async playTtsViaStream(text: string, streamSid: string): Promise<void> {
+  private async playTtsViaStream(
+    text: string,
+    streamSid: string,
+    tts: VoiceCallTtsConfig | undefined,
+  ): Promise<void> {
     if (!this.ttsProvider || !this.mediaStreamHandler) {
       throw new Error("TTS provider and media stream handler required");
     }
@@ -665,7 +669,7 @@ export class TwilioProvider implements VoiceCallProvider {
       const synthTimeoutMs = ttsProvider.synthesisTimeoutMs;
       try {
         muLawAudio = await raceWithTimeout(
-          ttsProvider.synthesizeForTelephony(text),
+          ttsProvider.synthesizeForTelephony(text, tts),
           synthTimeoutMs,
           () => {
             throw new Error(`Telephony TTS synthesis timed out after ${synthTimeoutMs}ms`);
