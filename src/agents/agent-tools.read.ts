@@ -2,7 +2,6 @@ import path from "node:path";
 import { asPositiveFiniteNumber } from "@openclaw/normalization-core/number-coercion";
 import type { Static, TSchema } from "typebox";
 import { Value } from "typebox/value";
-import { toErrorObject } from "../infra/errors.js";
 import { sniffMimeFromBase64 } from "../media/sniff-mime-from-base64.js";
 import { clampNumber } from "../utils.js";
 import {
@@ -20,9 +19,9 @@ import {
   createSandboxReadOperations,
 } from "./agent-tools.read.operations.js";
 import type { AnyAgentTool } from "./agent-tools.types.js";
+import { assertSandboxPathWithinAnyRoot } from "./agent-tools.workspace-roots.js";
 import {
   type ApplyPatchContainmentSource,
-  isSandboxRootEscapeError,
   withWorkspaceRecoveryHint,
 } from "./apply-patch-containment-hint.js";
 import { collectTextContentBlocks } from "./content-blocks.js";
@@ -38,7 +37,6 @@ import {
   resolveSandboxPathMapping,
 } from "./path-policy.js";
 import type { AgentTool, AgentToolResult } from "./runtime/index.js";
-import { assertSandboxPath } from "./sandbox-paths.js";
 import type { SandboxFsBridge } from "./sandbox/fs-bridge.js";
 import {
   createEditTool,
@@ -428,43 +426,6 @@ function normalizeReadResultDetails(
   return { ...result, details: { kind: "text", content: displayText } };
 }
 
-async function assertSandboxPathWithinAnyRoot(params: {
-  cwd?: string;
-  filePath: string;
-  roots: readonly string[];
-  allowLinkedWorktrees?: boolean;
-}) {
-  let firstRootEscapeError: unknown;
-  const seen = new Set<string>();
-  for (const [index, candidateRoot] of params.roots.entries()) {
-    if (!candidateRoot) {
-      continue;
-    }
-    const root = path.resolve(candidateRoot);
-    if (seen.has(root)) {
-      continue;
-    }
-    seen.add(root);
-    try {
-      return await assertSandboxPath({
-        filePath: params.filePath,
-        cwd: index === 0 ? (params.cwd ?? root) : root,
-        root,
-        ...(index === 0 && params.allowLinkedWorktrees ? { allowLinkedWorktrees: true } : {}),
-      });
-    } catch (error) {
-      if (!isSandboxRootEscapeError(error)) {
-        throw error;
-      }
-      firstRootEscapeError ??= error;
-    }
-  }
-  throw toErrorObject(
-    firstRootEscapeError ?? new Error("Path guard has no configured roots."),
-    "Non-Error thrown",
-  );
-}
-
 /** Wrap a file tool with workspace guards and optional container path mapping. */
 export function wrapToolWorkspaceRootGuardWithOptions<TDetails>(
   tool: AnyAgentTool<TDetails>,
@@ -483,6 +444,7 @@ export function wrapToolWorkspaceRootGuardWithOptions<TDetails>(
     containmentSource?: ApplyPatchContainmentSource;
     bridge?: SandboxFsBridge;
     readPathValidation?: "bridge";
+    ownFile?: (resolvedHostPath: string) => Promise<string | undefined>;
   },
 ): AnyAgentTool<TDetails> {
   // v2026.9.4 exposed bridges without descriptors. Preserve their host-root
@@ -535,14 +497,20 @@ export function wrapToolWorkspaceRootGuardWithOptions<TDetails>(
         const guardedRoot = workspaceMapping?.mapping.hostRoot ?? root;
         const sandboxPath = workspaceMapping?.hostPath ?? candidate;
         const additionalRoots = workspaceMapping ? [] : (options?.additionalRoots ?? []);
-        let sandboxResult: Awaited<ReturnType<typeof assertSandboxPathWithinAnyRoot>> | undefined;
+        let sandboxResult: { resolved: string } | undefined;
+        const ownPath = options?.bridge
+          ? undefined
+          : await options?.ownFile?.(path.resolve(sandboxPath));
         try {
           if (options?.bridge && !legacyBridge && !workspaceMapping) {
             throw new Error(
               `Path escapes sandbox root (${options.containerWorkdir ?? root}): ${guardPath}`,
             );
           }
-          if (!options?.bridge || legacyBridge || options.readPathValidation !== "bridge") {
+          if (
+            !ownPath &&
+            (!options?.bridge || legacyBridge || options.readPathValidation !== "bridge")
+          ) {
             sandboxResult = await assertSandboxPathWithinAnyRoot({
               cwd: !workspaceMapping ? options?.resolutionCwd : undefined,
               filePath: sandboxPath,
@@ -560,7 +528,7 @@ export function wrapToolWorkspaceRootGuardWithOptions<TDetails>(
         if (options?.normalizeGuardedPathParams && record) {
           normalizedRecord ??= { ...record };
           normalizedRecord[key] =
-            options.bridge && !legacyBridge ? guardPath : sandboxResult!.resolved;
+            options.bridge && !legacyBridge ? guardPath : (sandboxResult?.resolved ?? ownPath);
         }
       }
       return tool.execute(toolCallId, normalizedRecord ?? args, signal, onUpdate);

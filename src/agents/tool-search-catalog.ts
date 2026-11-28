@@ -21,12 +21,14 @@ import { filterParticipationTools } from "./participation-ceiling.js";
 import type { ToolDefinition } from "./sessions/index.js";
 import { isCoreCodingSurfaceToolName } from "./tool-catalog.js";
 import { compactToolInputHint, compactToolOutputHint } from "./tool-schema-hints.js";
+import { createFamilyVisibility, dispatchRepeatable } from "./tool-search-catalog-visibility.js";
 import {
   getToolSearchCatalogDescriptors,
   prepareToolSearchCatalogDescriptors,
   type ToolSearchCatalogDescriptor,
 } from "./tool-search-prepared-catalog.js";
 import {
+  TOOL_CALL_RAW_TOOL_NAME,
   TOOL_SEARCH_CONTROL_TOOL_NAMES,
   type CatalogSource,
   type CatalogVisibilityOptions,
@@ -234,7 +236,8 @@ export function isOnDemandCatalogTool(tool: CatalogTool): boolean {
  * Core file/shell primitives and caller-required names (e.g. message when it is
  * the only reply path) stay visible while remaining searchable. Both must
  * resolve to trusted OpenClaw tools: an MCP lookalike must never become a
- * direct delivery or core-coding tool.
+ * direct delivery or core-coding tool. Tools that poll by design stay deferred:
+ * dispatch_action carries their `repeatable` declarations to the repeat guard.
  */
 export function isDirectVisibleCatalogTool(
   tool: AnyAgentTool,
@@ -655,6 +658,16 @@ export function applyToolCatalogCompaction(
     isOnDemandCatalogTool(tool) &&
     (catalogRef.loadsOnDemandTools !== true ||
       catalogRef.promotedToolNames?.has(tool.name) === true);
+  const catalogsTool = (tool: AnyAgentTool) =>
+    shouldCatalogTool(tool) &&
+    !keepOnDemandDirect(tool) &&
+    (params.shouldCatalogTool?.(tool) ?? true) &&
+    selected({ ...classifyAgentToolSource(tool), name: tool.name });
+  const isDirectVisible = createFamilyVisibility({
+    tools,
+    catalogsTool,
+    isVisibleCatalogTool: params.isVisibleCatalogTool,
+  });
   for (const tool of tools) {
     if (params.isVisibleControlTool(tool)) {
       visible.push(
@@ -667,13 +680,8 @@ export function applyToolCatalogCompaction(
     if (TOOL_SEARCH_CONTROL_TOOL_NAMES.has(tool.name)) {
       continue;
     }
-    if (
-      shouldCatalogTool(tool) &&
-      !keepOnDemandDirect(tool) &&
-      (params.shouldCatalogTool?.(tool) ?? true) &&
-      selected({ ...classifyAgentToolSource(tool), name: tool.name })
-    ) {
-      const directVisible = params.isVisibleCatalogTool?.(tool) === true;
+    if (catalogsTool(tool)) {
+      const directVisible = isDirectVisible(tool);
       catalog.push({ ...toCatalogEntry(tool, undefined, toolHookContext), directVisible });
       if (!directVisible) {
         continue;
@@ -696,6 +704,11 @@ export function applyToolCatalogCompaction(
       .map((tool) => tool.name),
   );
   catalogRef.baselineDirectOnlyToolNames = catalogRef.directOnlyToolNames;
+  // dispatch_action executes any catalog entry, so it carries every entry's own declaration.
+  const dispatcher = visible.find((tool) => tool.name === TOOL_CALL_RAW_TOOL_NAME);
+  if (dispatcher) {
+    dispatcher.repeatable = dispatchRepeatable(catalog);
+  }
   return {
     tools: visible,
     compacted: catalog.length > 0,

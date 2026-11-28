@@ -35,7 +35,7 @@ import {
 } from "./subagent-registry.test-helpers.js";
 import type { SubagentRunRecord } from "./subagent-registry.types.js";
 
-function makeRun(runId: string, overrides: Partial<SubagentRunFixture> = {}): SubagentRunRecord {
+function makeRun(runId: string, overrides: Partial<SubagentRunFixture>): SubagentRunRecord {
   return createCanonicalSubagentRunFixture({
     runId,
     childSessionKey: `agent:main:subagent:${runId}`,

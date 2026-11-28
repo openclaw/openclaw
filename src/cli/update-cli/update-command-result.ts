@@ -39,7 +39,6 @@ import {
 import { resolveUpdateRunVerifiedServingVersion } from "../../infra/update-run-notice.js";
 import type { UpdateRunRecord } from "../../infra/update-run-record.js";
 import { loadUpdateRecovery } from "../../infra/update-run-recovery.js";
-import { updateRunReportInputFromResult } from "../../infra/update-run-report.js";
 import { updateRunStepsFromResultStep } from "../../infra/update-run-step.js";
 import { mutateRun } from "../../infra/update-run-write.js";
 import type { UpdateRunResult } from "../../infra/update-runner-types.js";
@@ -614,7 +613,24 @@ export function recordUpdateResultNextAction(
   const env = run?.env ?? params.ownedManagedUpdateEnv ?? process.env;
   const environment = { container: isContainerEnvironment(), stateDir: resolveStateDir(env) };
   const resolveNextAction = (active?: UpdateRunRecord) => {
-    const { verification, steps } = updateRunReportInputFromResult(result, active);
+    const recordedRecovery = active?.verification.recovery;
+    const verification = {
+      ...(result.verification ?? active?.verification),
+      recovery:
+        recordedRecovery?.serviceRestartSafe === false
+          ? recordedRecovery
+          : (result.recovery ?? (result.verification === undefined ? recordedRecovery : undefined)),
+    };
+    const observations = result.steps
+      .flatMap(updateRunStepsFromResultStep)
+      .filter(
+        (step) =>
+          step.step === "gateway verification" || step.step === "gateway recovery verification",
+      );
+    const steps =
+      result.verification !== undefined || observations.length
+        ? observations
+        : (active?.steps ?? []);
     const failedVerification = steps.findLast(
       (step) =>
         (step.step === "gateway verification" || step.step === "gateway recovery verification") &&

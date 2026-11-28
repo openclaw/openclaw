@@ -12,7 +12,7 @@ import type {
   TelegramAccountConfig,
 } from "openclaw/plugin-sdk/config-contracts";
 import type { ReplyPayload } from "openclaw/plugin-sdk/reply-payload";
-import type { GetReplyOptions } from "openclaw/plugin-sdk/reply-runtime";
+import type { GetReplyOptions, PreparedAgentRunStart } from "openclaw/plugin-sdk/reply-runtime";
 import type { RuntimeEnv } from "openclaw/plugin-sdk/runtime-env";
 import type { SessionEntry } from "openclaw/plugin-sdk/session-store-runtime";
 import type { readLatestAssistantTextByIdentity } from "openclaw/plugin-sdk/session-transcript-runtime";
@@ -156,6 +156,7 @@ export type TelegramDeliveryStateSlice = {
   transcriptMirrorSequence: number;
   transcriptMirrorTurnId: string;
   transcriptMirrorRunId?: string;
+  restartResumeTarget?: PreparedAgentRunStart["transcriptStart"];
   implicitQuoteReplyTargetId: string | undefined;
   currentMessageIdForQuoteReply: string | undefined;
 };
@@ -172,6 +173,7 @@ export type TelegramDispatchTurn = TelegramDispatchTurnConfig &
   TelegramProgressStateSlice &
   TelegramDeliveryStateSlice &
   TelegramReplyStateSlice & {
+    onRestartResumeSaved: (signal?: AbortSignal) => Promise<void>;
     finalDispatchClaimed: boolean;
     finalDeliveryError?: unknown;
     agentRunFailed?: boolean;

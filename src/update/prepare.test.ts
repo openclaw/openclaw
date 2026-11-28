@@ -1,5 +1,7 @@
 import { execFile } from "node:child_process";
+import { access as accessCallback, constants } from "node:fs";
 import fs from "node:fs/promises";
+import os from "node:os";
 import path from "node:path";
 import { promisify } from "node:util";
 import { describe, expect, it, vi } from "vitest";
@@ -143,7 +145,7 @@ process.exit(result.status ?? 1);
     );
   });
 
-  it("removes failed staging and Git registration while preserving the stderr tail", async () => {
+  it("preserves the bounded build failure diagnostics", async () => {
     const target = await repository(true);
     const staging = path.join(root, "staging");
     const result = await prepareGit({ ...target, staging, node, timeoutMs: 30_000 });
@@ -154,14 +156,12 @@ process.exit(result.status ?? 1);
     expect(result.reason).toBe("build-failed");
     expect(result.stderrTail).toContain("fixture build failed");
     expect(result.stderrTail.length).toBeLessThanOrEqual(8192);
-    await expect(fs.access(staging)).rejects.toMatchObject({ code: "ENOENT" });
-    expect((await exec("git", ["-C", target.checkout, "worktree", "list"])).stdout).not.toContain(
-      staging,
-    );
   });
 
   it("stores and reports the actual build error after ANSI-colored warnings", async () => {
     const { checkout } = await repository(true, ">=1", true);
+    const beforeWorktrees = (await exec("git", ["-C", checkout, "worktree", "list", "--porcelain"]))
+      .stdout;
     vi.stubEnv("OPENCLAW_STATE_DIR", path.join(root, "state"));
     vi.stubEnv("GIT_COMMIT", "");
     vi.spyOn(defaultRuntime, "log").mockImplementation(() => {});
@@ -187,6 +187,10 @@ process.exit(result.status ?? 1);
       expect(detail?.length).toBeLessThanOrEqual(1024);
       expect(error).toHaveBeenCalledWith(expect.stringContaining("fixture build failed"));
       expect(process.exitCode).toBe(1);
+      expect(await fs.readdir(path.join(resolvePrefix(), "releases"))).toEqual([]);
+      expect((await exec("git", ["-C", checkout, "worktree", "list", "--porcelain"])).stdout).toBe(
+        beforeWorktrees,
+      );
     } finally {
       process.exitCode = undefined;
       await closeOpenClawStateDatabaseAsync();
@@ -409,7 +413,6 @@ if (args[0] === 'pack') {
         await expect(fs.stat(path.join(root, "dependencies-installed"))).rejects.toMatchObject({
           code: "ENOENT",
         });
-        await expect(fs.stat(staging)).rejects.toMatchObject({ code: "ENOENT" });
         return;
       }
       expect(result.ok).toBe(true);
@@ -459,6 +462,16 @@ describe("package release conversion", () => {
       expect(outcome.status).toBe(releaseAware ? "pending" : "failed");
       if (releaseAware) {
         expect(await readTrial()).toMatchObject({ phase: "pending", runId: run.runId });
+        if (outcome.status !== "pending") {
+          throw new Error("Expected a published release");
+        }
+        const worktrees = (
+          await exec("git", ["-C", target.checkout, "worktree", "list", "--porcelain", "-z"])
+        ).stdout
+          .split("\0")
+          .filter((field) => field.startsWith("worktree "))
+          .map((field) => path.resolve(field.slice("worktree ".length)));
+        expect(worktrees).toContain(await fs.realpath(outcome.releaseRoot));
       } else {
         expect(outcome).toMatchObject({
           reason: "release-updates-unsupported",
@@ -920,7 +933,7 @@ describe("update preflight", () => {
     ).toMatchObject({ ok: false, reason: "dirty" });
   });
 
-  it("refuses insufficient installation and state disk space", async () => {
+  it("requires installation space but not a full copy of state databases", async () => {
     const target = await repository();
     const params = {
       kind: "git" as const,
@@ -933,38 +946,60 @@ describe("update preflight", () => {
       await preflight({ ...params, statfs: async () => ({ bavail: 1, bsize: 1 }) }),
     ).toMatchObject({ ok: false, reason: "insufficient-install-space" });
     await fs.mkdir(path.join(params.stateDir, "state"), { recursive: true });
-    await fs.writeFile(path.join(params.stateDir, "state", "openclaw.sqlite"), "database bytes");
+    const database = path.join(params.stateDir, "state", "openclaw.sqlite");
+    await fs.writeFile(database, "");
+    await fs.truncate(database, 3_000_000_000);
     expect(
       await preflight({
         ...params,
-        statfs: async (file) => ({ bavail: file === root ? 2_000_000_000 : 1, bsize: 1 }),
+        statfs: async () => ({ bavail: 2_000_000_000, bsize: 1 }),
       }),
-    ).toMatchObject({ ok: false, reason: "insufficient-state-space" });
+    ).toEqual({ ok: true });
   });
 
-  it("counts state databases past a dangling link a tool left in an agent home", async () => {
+  it.each([
+    ["EACCES", false, false],
+    ["EPERM", false, false],
+    ["EACCES", true, false],
+    ["EACCES", true, true],
+  ] as const)("reports %s ownership repair (%s, %s)", async (code, system, writeCheck) => {
     const target = await repository();
-    const stateDir = path.join(root, "data");
-    const shims = path.join(stateDir, "agents", "main", "agent", "codex-home", "tmp", "arg0");
-    await fs.mkdir(shims, { recursive: true });
-    await fs.symlink(path.join(root, "gone", "apply_patch"), path.join(shims, "apply_patch"));
-    await fs.writeFile(
-      path.join(stateDir, "agents", "main", "agent", "openclaw-agent.sqlite"),
-      "database bytes",
-    );
-    const params = {
-      kind: "git" as const,
-      target: { kind: "git" as const, ...target, version: "2026.11.21" },
-      prefix: root,
-      stateDir,
-      node,
-    };
+    const prefix = path.join(root, "user's install");
+    await fs.mkdir(prefix);
+    vi.spyOn(os, "userInfo").mockReturnValue({
+      ...os.userInfo(),
+      username: "update-user",
+      homedir: system ? path.join(root, "home") : root,
+    });
+    const stat = await fs.stat(prefix);
+    vi.spyOn(fs, "stat").mockResolvedValue(Object.assign(stat, { uid: 0 }));
+    if (writeCheck) {
+      const access = promisify(accessCallback);
+      vi.spyOn(fs, "access").mockImplementation(async (file, mode) => {
+        if (file === prefix && mode === constants.W_OK) {
+          throw Object.assign(new Error("permission denied"), { code });
+        }
+        return access(file, mode);
+      });
+    }
     expect(
       await preflight({
-        ...params,
-        statfs: async (file) => ({ bavail: file === root ? 2_000_000_000 : 1, bsize: 1 }),
+        kind: "git",
+        target: { kind: "git", ...target, version: "2026.11.21" },
+        prefix,
+        stateDir: root,
+        node,
+        statfs: async () => {
+          throw Object.assign(new Error("permission denied"), { code });
+        },
       }),
-    ).toMatchObject({ ok: false, reason: "insufficient-state-space" });
+    ).toEqual({
+      ok: false,
+      reason: "prefix-not-writable",
+      message: system
+        ? `The installation at '${prefix}' is owned by root. Run: sudo openclaw update`
+        : `Files in '${prefix}' are not writable by update-user. Fix ownership with: sudo chown -R update-user '${prefix.replaceAll("'", `'"'"'`)}'. Then retry the update.`,
+    });
   });
 
   it("prepares an install that runs inside a container", async () => {

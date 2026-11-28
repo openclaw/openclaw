@@ -212,6 +212,8 @@ suite.define(() => {
       await archived.waitFor();
       const activityRow = page.locator(".chat-tool-row, .chat-activity-group__summary").first();
       await activityRow.waitFor();
+      // A cold opening with visible rows, tool activity included, pages only on reader intent.
+      await page.getByRole("button", { name: "Show earlier", exact: true }).click();
       await gateway.waitForRequest("chat.history");
       if (process.env.OPENCLAW_CAPTURE_UI_PROOF === "1") {
         const directory = createControlUiE2eArtifactDir("archived-child");

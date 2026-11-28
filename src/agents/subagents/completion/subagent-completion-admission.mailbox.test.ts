@@ -46,7 +46,6 @@ function reservationState(
     return input;
   };
   return {
-    entry,
     inputs,
     reserve,
     database,

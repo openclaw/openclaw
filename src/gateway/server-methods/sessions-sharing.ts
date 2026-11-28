@@ -33,6 +33,7 @@ import {
   runSessionMutation,
 } from "../../sessions/session-controller.lifecycle.js";
 import { listResidentUserProfileDisplayFacts } from "../../state/user-profile-list.js";
+import { stopWorkStartedBy } from "../chat-abort-stop-work.js";
 import {
   encodePublicSessionShareLocator,
   loadPublicSessionShareTokenCodec,
@@ -328,6 +329,7 @@ function createSessionMemberMutationHandler(
       const managed = access.target;
       let addActor: SharingActorFacts | undefined;
       let refused = false;
+      let lostAccess: Parameters<typeof stopWorkStartedBy>[1] | undefined;
       if (action === "add") {
         const projection = requireSessionRowProjection(context);
         do {
@@ -403,6 +405,11 @@ function createSessionMemberMutationHandler(
           actor = actorIdentity(client);
         }
         if (action === "remove") {
+          lostAccess = {
+            profileId: params.identityId,
+            sessionKey: current.canonicalKey,
+            stopReason: "access-removed",
+          };
           publishSessionMemberAccessReduced({
             context,
             actor,
@@ -427,6 +434,10 @@ function createSessionMemberMutationHandler(
       });
       if (refused) {
         return;
+      }
+      // The new membership is committed, so the person's next message is admitted against it.
+      if (lostAccess) {
+        await stopWorkStartedBy(context, lostAccess);
       }
       respond(
         true,
@@ -631,6 +642,7 @@ export const sessionSharingHandlers: GatewayRequestHandlers = {
     validateSessionMemberSetAccessParams,
     async ({ params, respond, client, context }, access) => {
       let refused = false;
+      let lostAccess: Parameters<typeof stopWorkStartedBy>[1] | undefined;
       await runExclusiveSharingMutation(access.target, access.lifecycleStorePath, async () => {
         const { target } = access.current();
         const readGrant = () =>
@@ -668,6 +680,11 @@ export const sessionSharingHandlers: GatewayRequestHandlers = {
         const levels = ["read", "suggest", "send"];
         const ts = Date.now();
         if (levels.indexOf(params.access) < levels.indexOf(changed.previousAccess ?? "read")) {
+          lostAccess = {
+            profileId: params.identityId,
+            sessionKey: target.canonicalKey,
+            stopReason: "access-reduced",
+          };
           publishSessionMemberAccessReduced({
             context,
             actor,
@@ -691,6 +708,9 @@ export const sessionSharingHandlers: GatewayRequestHandlers = {
           });
         }
       });
+      if (lostAccess) {
+        await stopWorkStartedBy(context, lostAccess);
+      }
       if (!refused) {
         respond(true, {
           ok: true,

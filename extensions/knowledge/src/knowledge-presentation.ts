@@ -1,4 +1,5 @@
 import type { ControlUiAgent } from "openclaw/plugin-sdk/control-ui";
+import { t } from "./i18n/index.js";
 import { IDENTITY_KEY } from "./merge.js";
 import type { Envelope } from "./model.js";
 import { icon } from "./ui-icons.js";
@@ -49,7 +50,7 @@ export function confidenceView(
     if (compact) {
       node.hidden = true;
     } else {
-      node.append(icon("circleQuestionMark", 12), "Attribution confidence not recorded");
+      node.append(icon("circleQuestionMark", 12), t("knowledge.presentation.confidenceUnknown"));
     }
     return node;
   }
@@ -64,7 +65,7 @@ export function confidenceView(
   }
   node.append(
     bars,
-    `${confidence.level[0]!.toUpperCase()}${confidence.level.slice(1)}${compact ? "" : " attribution confidence"}`,
+    t(`knowledge.presentation.${compact ? "confidenceShort" : "confidence"}.${confidence.level}`),
   );
   return node;
 }
@@ -72,7 +73,7 @@ export function identityTag(status?: string) {
   const node = document.createElement("span");
   node.className = "knowledge-identity-tag";
   if (status === "partial") {
-    node.append(icon("shieldQuestion", 12), "Identity unresolved");
+    node.append(icon("shieldQuestion", 12), t("knowledge.presentation.identityUnresolved"));
   } else {
     node.hidden = true;
   }
@@ -80,14 +81,14 @@ export function identityTag(status?: string) {
 }
 export function assertionOrigin(value?: string, attribution?: string, agentName?: string) {
   return value === "source"
-    ? "From source"
+    ? t("knowledge.presentation.fromSource")
     : value === "user_belief"
       ? attribution
-        ? `Statement by ${attribution}`
-        : "Statement by an unidentified user"
+        ? t("knowledge.presentation.statementBy", { name: attribution })
+        : t("knowledge.presentation.statementUnknown")
       : value === "agent_inference"
         ? agentName
-          ? `${agentName} inferred`
-          : "Agent inference"
-        : "Origin not recorded";
+          ? t("knowledge.presentation.inferredBy", { agent: agentName })
+          : t("knowledge.presentation.agentInference")
+        : t("knowledge.presentation.originUnknown");
 }

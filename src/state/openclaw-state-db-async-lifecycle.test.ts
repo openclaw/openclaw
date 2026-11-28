@@ -85,8 +85,10 @@ describe("canonical shared-state resource drainage", () => {
     );
     expect(captured.admission.identity.key).toMatch(/^file:/);
     expect(captured.admission.coordinationKey).toBe(original.admission.coordinationKey);
+    expect(captured.admission.isCurrent()).toBe(true);
     captured.admission.assertCurrent();
     await closeOpenClawStateDatabaseByPathAsync(pathname);
+    expect(captured.admission.isCurrent()).toBe(false);
     expect(captured.admission.assertCurrent).toThrow(/admission changed/);
   });
 
@@ -159,8 +161,10 @@ describe("canonical shared-state resource drainage", () => {
       context.admission.assertCurrent();
       return { context, source: prepareOpenClawStateReadSource({ path: pathname }) };
     });
+    expect(restricted.context.admission.isCurrent()).toBe(false);
     expect(restricted.context.admission.assertCurrent).toThrow(/schema admission has ended/);
     expect(restricted.source.current).toThrow(/schema admission has ended/);
+    expect(ordinary.admission.isCurrent()).toBe(true);
     ordinary.admission.assertCurrent();
     captureOpenClawStateReadContext(pathname).admission.assertCurrent();
     await closeOpenClawStateDatabaseByPathAsync(pathname);

@@ -2,7 +2,6 @@
 // direct imports need the same wiring as the process-default stream facade.
 import { configureAiTransportHost, getDefaultAiTransportHost } from "@openclaw/ai";
 import { configureProviderErrorRedactor } from "@openclaw/ai/diagnostics";
-import { resolveOpenAIStrictToolSetting } from "../agents/openai-strict-tool-setting.js";
 import { getModelProviderLocalService } from "../agents/provider-local-service.js";
 import { getModelProviderRequestTransport } from "../agents/provider-request-config.js";
 import { unwrapModelHeaderSentinelsForProviderEgress } from "../agents/provider-secret-egress.js";
@@ -78,7 +77,6 @@ export function configureAiTransportBaseHost(): { runtime: boolean } {
       },
       redactToolPayloadText,
       normalizeAnthropicInlineContentBlocks,
-      resolveOpenAIStrictToolSetting,
       resolveModelRequestTimeoutMs: (model) => resolveModelRequestTimeoutMs(model, undefined),
       isLogEnabled: (subsystem, level) => transportLog(subsystem).isEnabled(level, "any"),
       logDebug: (subsystem, build) => {

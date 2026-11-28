@@ -36,7 +36,9 @@ function Content(props: { value: NativeContent }) {
   return (
     <>
       <Show when={fixture()?.search && fixture()}>
-        {(value) => <TranscriptSearch search={getTranscriptState(value().paneId).search} />}
+        {(value) => (
+          <TranscriptSearch search={getTranscriptState(value().paneId).search} chat={{}} />
+        )}
       </Show>
       <Show when={fixture()?.thread}>
         {(value) => <ChatThread props={value().props} transcript={value().transcript} />}

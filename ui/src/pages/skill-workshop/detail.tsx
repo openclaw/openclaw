@@ -89,6 +89,14 @@ export function Detail(props: {
       versions().some((version) => version.id === selected.versionId)
     );
   };
+  const moving = () => {
+    const move = props.view().membership;
+    return move?.name === target().name ? move : null;
+  };
+  const archiving = () => {
+    const move = moving();
+    return move ? move.destination === "archived" : Boolean(skill());
+  };
   const history = createMemo(() =>
     snapshot().changes.filter((change) => change.skillName === target().name),
   );
@@ -151,17 +159,18 @@ export function Detail(props: {
       summary={description()}
       byline={byline()}
       actions={
-        <Show when={skill() || canRestore()}>
+        <Show when={Boolean(moving() || skill() || canRestore())}>
           <MutationButton
             view={props.view}
-            label={t(skill() ? "skillWorkshop.viewer.archive" : "skillWorkshop.viewer.restore")}
-            title={skill() ? t("skillWorkshop.viewer.archiveTitle") : undefined}
+            label={t(archiving() ? "skillWorkshop.viewer.archive" : "skillWorkshop.viewer.restore")}
+            title={archiving() ? t("skillWorkshop.viewer.archiveTitle") : undefined}
             mutation={{
-              method: skill() ? "skills.workshop.archive" : "skills.workshop.restore",
+              method: archiving() ? "skills.workshop.archive" : "skills.workshop.restore",
               name: target().name,
             }}
-            actionKey={`${skill() ? "archive" : "restore"}:${target().name}`}
-            icon={skill() ? "archive" : "archiveRestore"}
+            actionKey={`${archiving() ? "archive" : "restore"}:${target().name}`}
+            destination={archiving() ? "archived" : "active"}
+            icon={archiving() ? "archive" : "archiveRestore"}
           />
         </Show>
       }
@@ -384,14 +393,12 @@ function Instructions(props: { view: WorkshopView; reads: WorkshopReads }) {
   );
 }
 
-/** Support files grouped by their folder; root files come first without a label. */
+/** Support files grouped by folder in encounter order; root files have no label. */
 function fileGroups(files: readonly string[]) {
-  const groups = new Map<string, string[]>();
-  for (const file of files) {
+  const groups = Map.groupBy(files, (file) => {
     const slash = file.lastIndexOf("/");
-    const folder = slash === -1 ? "" : file.slice(0, slash);
-    groups.set(folder, [...(groups.get(folder) ?? []), file]);
-  }
+    return slash === -1 ? "" : file.slice(0, slash);
+  });
   return [...groups].map(([folder, entries]) => ({ folder, entries }));
 }
 

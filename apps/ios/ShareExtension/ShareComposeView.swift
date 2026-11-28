@@ -1,8 +1,7 @@
+import OpenClawKit
 import UIKit
 
-/// Compose card UI for the share extension. This target cannot link the app
-/// design layer (`Sources/Design`), so the accent below mirrors
-/// `OpenClawBrand.activationPrimaryAction`; keep both in sync when rebranding.
+/// Compose card UI for the share extension.
 final class ShareComposeView: UIView, UITextViewDelegate {
     private enum Metric {
         static let pagePadding: CGFloat = 16
@@ -13,11 +12,7 @@ final class ShareComposeView: UIView, UITextViewDelegate {
         static let headerHeight: CGFloat = 48
     }
 
-    private static let accent = UIColor { traits in
-        traits.userInterfaceStyle == .dark
-            ? UIColor(red: 238 / 255, green: 82 / 255, blue: 76 / 255, alpha: 1)
-            : UIColor(red: 209 / 255, green: 54 / 255, blue: 51 / 255, alpha: 1)
-    }
+    private static let accent = OpenClawIOSBrand.accent
 
     var onSend: (() -> Void)?
     var onCancel: (() -> Void)?

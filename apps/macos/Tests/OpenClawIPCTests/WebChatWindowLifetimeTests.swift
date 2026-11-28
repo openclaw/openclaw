@@ -195,6 +195,9 @@ struct WebChatWindowLifetimeTests {
                 .connection(profileID: profile.id)
             weak var retiredConnection = connection
             await manager.openGatewayWindow(for: .profile(profile.id), newWindow: true).value
+            let window = try #require(NSApp.windows.first { $0.isVisible && $0.title == "\(profile.name) — OpenClaw" })
+            // AppKit may keep its previous key window alive after closing it.
+            defer { withExtendedLifetime(window) {} }
             if closeAll {
                 manager.close()
             } else {
