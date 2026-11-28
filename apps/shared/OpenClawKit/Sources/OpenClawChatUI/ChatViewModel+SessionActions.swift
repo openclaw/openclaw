@@ -6,6 +6,8 @@ private let chatSessionActionsLogger = Logger(
     category: "OpenClawChat")
 
 extension OpenClawChatViewModel {
+    static let sessionListFetchLimit = 200
+
     public func deleteSession(_ sessionKey: String, agentID: String? = nil) {
         let target = self.sessionMutationTarget(key: sessionKey, agentID: agentID)
         let transport = self.transport
