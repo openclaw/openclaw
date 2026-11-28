@@ -533,6 +533,11 @@ const skillsReadinessCheck: CoreHealthCheck = {
 };
 
 function unavailableSkillToFinding(skill: SkillStatusEntry): HealthFinding {
+  // doctor --fix preserves a skill whenever it has any missing local binary,
+  // because the binary may exist on a paired node (#178665). Recommending
+  // --fix would point at a command that intentionally leaves such skills
+  // enabled, so only offer it when no missing binary is involved.
+  const missingBinary = skill.missing.bins.length > 0 || skill.missing.anyBins.length > 0;
   return {
     checkId: "core/doctor/skills-readiness",
     category: "recommended",
@@ -540,8 +545,9 @@ function unavailableSkillToFinding(skill: SkillStatusEntry): HealthFinding {
     severity: "warning",
     message: `${skill.name} is allowed but unavailable: ${formatMissingSkillSummary(skill)}.`,
     path: skillReadinessPath(skill),
-    fixHint:
-      "Install/configure the missing requirement, or run `openclaw doctor --fix` to disable unused unavailable skills.",
+    fixHint: missingBinary
+      ? `Satisfy the listed requirements, or disable the skill by setting ${skillReadinessPath(skill)} to false. Doctor leaves the skill enabled because a paired node may provide the missing binaries.`
+      : "Satisfy the listed requirements, or run `openclaw doctor --fix` to disable unused unavailable skills.",
   };
 }
 
