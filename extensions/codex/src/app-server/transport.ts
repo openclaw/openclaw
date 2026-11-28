@@ -9,7 +9,6 @@ export type CodexAppServerCloseResult =
 type ContainmentOutcome = "natural" | "graceful" | "contained" | "uncertain";
 type TransportClose = {
   closing: Promise<ContainmentOutcome>;
-  outcome?: ContainmentOutcome;
   naturalExit: boolean;
   wasForced: () => boolean;
   exitWaitReady: Promise<void>;
@@ -115,7 +114,10 @@ function beginCodexAppServerTransportClose(
       return options.gracefulExit ? "graceful" : "natural";
     }
     try {
-      finishCodexAppServerTransportClose(child, options, forceKill, contained?.resume, forceKillAt);
+      // The root has already used its stdin-EOF grace. Escalate as soon as the
+      // descendant check finishes so cleanup can settle within the owner's budget.
+      const killAt = options.gracefulExit ? performance.now() : forceKillAt;
+      finishCodexAppServerTransportClose(child, options, forceKill, contained?.resume, killAt);
     } catch {
       forceKill();
     }
@@ -129,10 +131,7 @@ function beginCodexAppServerTransportClose(
     wasForced: () => forced,
     exitWaitReady: exitWaitReady.promise,
   };
-  void closing.then((outcome) => {
-    closure.outcome = outcome;
-    exitWaitReady.resolve();
-  }, exitWaitReady.reject);
+  void closing.then(() => exitWaitReady.resolve(), exitWaitReady.reject);
   CODEX_APP_SERVER_TRANSPORT_CLOSES.set(child, closure);
   return closure;
 }
@@ -191,21 +190,25 @@ export async function closeCodexAppServerTransportAndWait(
       )
     : undefined;
   const closure = beginCodexAppServerTransportClose(child, options);
-  // Each caller can observe physical exit on its own deadline while the
-  // transport retains the retry. A pending census leaves cleanup uncertain.
-  await closure.exitWaitReady;
+  // Startup diagnostics need the final close cause and drained pipes. Other
+  // callers can start their own exit wait while the transport owns a retry.
+  await (options.drainStdio ? closure.closing : closure.exitWaitReady);
   const settled = await waitForCodexAppServerTransportExit(
     child,
     options.exitTimeoutMs ?? 2_000,
-    drained,
+    closure.closing.then(
+      () => drained ?? true,
+      () => false,
+    ),
   );
-  if (settled) {
+  const exited = settled || (!options.drainStdio && hasCodexAppServerTransportExited(child));
+  if (exited) {
     await Promise.all([
       waitForCodexAppServerProcessRegistrationCleanup(child),
       child.waitForCleanup?.(),
     ]);
   }
-  const containment = closure.outcome;
+  const containment = settled ? await closure.closing : undefined;
   closure.naturalExit =
     containment === "natural" && settled && (child.exitCode != null || child.signalCode != null);
   if (options.drainStdio) {
@@ -215,7 +218,7 @@ export async function closeCodexAppServerTransportAndWait(
     child.stderr.destroy?.();
   }
   if (!settled) {
-    return { exited: false, cleanup: "uncertain" };
+    return { exited, cleanup: "uncertain" };
   }
   if (containment === "contained") {
     return {

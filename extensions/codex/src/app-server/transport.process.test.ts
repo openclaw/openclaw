@@ -273,6 +273,11 @@ process.stdin.on("end", () => process.exit(0));
     let inspection = 0;
     let descendantSignalled = false;
     let confirmationStalled = false;
+    let clockOffset = 0;
+    if (mode === "confirmation-timeout" || mode === "transient-scan-timeout") {
+      const now = performance.now.bind(performance);
+      vi.spyOn(performance, "now").mockImplementation(() => now() + clockOffset);
+    }
     const actualSnapshot = processSnapshot.readCodexAppServerProcessSnapshot;
     const actualProcess = processSnapshot.readCodexAppServerProcess;
     let rootStopObserved = false;
@@ -290,7 +295,7 @@ process.stdin.on("end", () => process.exit(0));
       // observation. A queued kill alone must not certify an uninterruptible child.
       if (descendantSignalled && mode === "confirmation-timeout" && !confirmationStalled) {
         confirmationStalled = true;
-        await delay(Math.max(1, inspectionDeadline - performance.now()));
+        clockOffset += Math.max(1, inspectionDeadline - performance.now() + 1);
         throw new processSnapshot.ProcessInspectionError("deadline");
       }
       if (descendantSignalled && mode !== "unconfirmed-termination") {
@@ -298,7 +303,11 @@ process.stdin.on("end", () => process.exit(0));
       }
       const rows = snapshots[Math.min(inspection++, snapshots.length - 1)];
       if (rows === "deadline") {
-        await delay(Math.max(1, inspectionDeadline - performance.now()));
+        if (mode === "transient-scan-timeout") {
+          clockOffset += Math.max(1, inspectionDeadline - performance.now() + 1);
+        } else {
+          await delay(Math.max(1, inspectionDeadline - performance.now()));
+        }
         throw new processSnapshot.ProcessInspectionError("deadline");
       }
       if (!rows) {

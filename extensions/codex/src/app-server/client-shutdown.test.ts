@@ -77,6 +77,10 @@ describe.skipIf(process.platform === "win32")("npm launcher shutdown", () => {
     if (cleanup === "joining deadline") {
       // Each waiter observes exit within its own deadline while the transport owns the retry.
       const later = harness.client.closeAndWait({ exitTimeoutMs: 150 });
+      let ownerSettled = false;
+      const owner = harness.client.closeAndWait({ exitTimeoutMs: 500 }).then(() => {
+        ownerSettled = true;
+      });
       try {
         await vi.advanceTimersByTimeAsync(2_301);
         await expect(closing).resolves.toEqual({ exited: false, cleanup: "uncertain" });
@@ -86,15 +90,17 @@ describe.skipIf(process.platform === "win32")("npm launcher shutdown", () => {
         harness.process.emit("exit", 0, null);
         await vi.advanceTimersByTimeAsync(50);
         await expect(later).resolves.toEqual({ exited: true, cleanup: "uncertain" });
+        expect(ownerSettled).toBe(false);
       } finally {
         resumeRetry.resolve();
       }
       await vi.advanceTimersByTimeAsync(75);
+      await owner;
       expect(kill).not.toHaveBeenCalledWith(-root.pid, "SIGKILL");
       return;
     }
     // The existing exit wait leaves time to observe a real asynchronous process exit.
-    await vi.advanceTimersByTimeAsync(cleanup === "deadline" ? 2_111 : 20);
+    await vi.advanceTimersByTimeAsync(cleanup === "deadline" ? 2_111 : 11);
     expect(kill).toHaveBeenCalledWith(-root.pid, "SIGKILL");
     await expect(closing).resolves.toEqual({
       exited: true,
