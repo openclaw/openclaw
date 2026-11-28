@@ -15,6 +15,7 @@ import {
 } from "./talk/audio.ts";
 import { describeRealtimeTalkInputError, RealtimeTalkInputOwner } from "./talk/input.ts";
 import { RealtimeTalkLevelSignal } from "./talk/level.ts";
+import type { SpeechInterruptHandoff } from "./talk/speech-interrupt.ts";
 
 registerEnglishCatalog(registerChatDictationEnglish);
 
@@ -176,6 +177,8 @@ function isAbortError(error: unknown): boolean {
 export class ComposerDictationSession {
   private readonly input = new RealtimeTalkInputOwner((detail) => this.reportFailure(detail));
   private context: AudioContext | null = null;
+  private handoff: SpeechInterruptHandoff | null = null;
+  private adoptedMedia: MediaStream | null = null;
   private readonly inputPump = new RealtimeTalkPcmInputPump();
   private inputMeter: RealtimeTalkMediaStreamMeter | null = null;
   // Live microphone level for the listening meter; lives with the lazily loaded capture.
@@ -205,6 +208,7 @@ export class ComposerDictationSession {
       sessionKey?: string;
       inputDeviceId?: string;
       silenceTimeoutMs?: number;
+      handoff?: SpeechInterruptHandoff;
     },
   ) {}
 
@@ -224,6 +228,12 @@ export class ComposerDictationSession {
       this.context = new AudioContext({ sampleRate: DICTATION_SAMPLE_RATE_HZ });
     } catch {
       this.context = null;
+    }
+    // Own a transferred microphone before awaiting admission: Stop or a rejected
+    // admission must always release the live stream, even before adoption.
+    if (this.options?.handoff) {
+      this.handoff = this.options.handoff;
+      this.adoptedMedia = this.input.adoptExternal(this.handoff.stream);
     }
     // Claim the Gateway session before the microphone opens. Stopped recordings
     // hold their sessions while they transcribe, so a full connection must refuse
@@ -284,7 +294,7 @@ export class ComposerDictationSession {
         this.reportFailure(t("chat.composer.dictationDisconnected"));
       }
     });
-    const media = await this.input.open(inputDeviceId);
+    const media = this.adoptedMedia ?? (await this.input.open(inputDeviceId));
     if (this.stopped || this.failed) {
       return;
     }
@@ -297,6 +307,10 @@ export class ComposerDictationSession {
       this.callbacks.onLevel?.(level);
     });
     this.inputMeter.start(media, context);
+    // Complete the barge-in transfer synchronously: stop the monitor pump, take
+    // everything it recorded (onset plus speech during admission), then start
+    // this pump in the same task so no samples are lost or duplicated.
+    const seed = this.handoff?.finish() ?? [];
     this.inputPump.start(media, context, (samples) => {
       if (this.stopped) {
         return;
@@ -304,6 +318,10 @@ export class ComposerDictationSession {
       this.queueAudio(samples);
       this.detectSilence(samples);
     });
+    for (const frame of seed) {
+      this.queueAudio(frame);
+      this.detectSilence(frame);
+    }
     this.callbacks.onReady();
   }
 
@@ -411,6 +429,10 @@ export class ComposerDictationSession {
       return;
     }
     this.stopped = true;
+    // Release a pending barge-in transfer (failed admission or Stop); a completed
+    // transfer already stopped the monitor pump, so this is a no-op then.
+    this.handoff?.release();
+    this.handoff = null;
     this.input.stop();
     this.inputPump.stop();
     this.unsubscribe?.();
