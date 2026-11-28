@@ -1,13 +1,18 @@
 import { clearPluginMetadataLifecycleCaches } from "../plugins/plugin-metadata-lifecycle.js";
 import { resolveLegacyCronDefaultStoreKey } from "../state/openclaw-state-db-cron-identity-migration.js";
-import { prepareOpenClawStateDatabaseSchema } from "../state/openclaw-state-db.js";
+import {
+  openOpenClawStateDatabaseForDoctor,
+  prepareOpenClawStateDatabaseSchema,
+} from "../state/openclaw-state-db.js";
 import { resolveOpenClawStateSqlitePath } from "../state/openclaw-state-db.paths.js";
+import { getOpenClawDatabaseMaintenanceScope } from "../state/openclaw-state-maintenance-context.js";
 import { SCHEMA_RECOVERY } from "./schema-migration-diagnostics.js";
 import type {
   LegacyStateMigrationEndpoint,
   LegacyStateMigrationMode,
   LegacyStateMigrationStep,
 } from "./state-migrations.types.js";
+import { hasUpdateDoctorMigrationCapture } from "./update-doctor-migration-context.js";
 
 export function createStateSchemaMigrationStep(params: {
   stateDir: string;
@@ -43,7 +48,19 @@ export function createStateSchemaMigrationStep(params: {
         // Schema repair can expose install records hidden from pre-upgrade discovery.
         clearPluginMetadataLifecycleCaches();
       }
-      return result.warnings.length > 0 ? { ...result, notices: [SCHEMA_RECOVERY] } : result;
+      if (result.warnings.length > 0) {
+        return { ...result, notices: [SCHEMA_RECOVERY] };
+      }
+      const maintenance = getOpenClawDatabaseMaintenanceScope();
+      if (maintenance?.ownsSchemaMaintenance && hasUpdateDoctorMigrationCapture()) {
+        // Schema maintenance retired the captured Doctor writer that prepareDoctorRuntimeChecks
+        // opened. Later steps write through the shared-state worker, whose connection stays open
+        // for the maintenance scope, and a later synchronous writer could then not take the
+        // capture's exclusive access. Reopen the writer while no other connection holds it.
+        await openOpenClawStateDatabaseForDoctor({ env: stateEnv });
+        maintenance.assertAdmission();
+      }
+      return result;
     },
   };
 }
