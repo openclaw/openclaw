@@ -361,7 +361,12 @@ export function doctorConfigRepairsPendingInputs(
         }
         const { repairStaleAgentModelRefs } =
           await import("./doctor/shared/stale-agent-model-ref-repair.js");
-        const result = inScope(chain, () => repairStaleAgentModelRefs(chain.candidate, { env }));
+        const result = inScope(chain, () =>
+          repairStaleAgentModelRefs(chain.candidate, {
+            modelReplacements: params.modelReplacements,
+            env,
+          }),
+        );
         return { pending: decideResult(result), result };
       }),
     },
