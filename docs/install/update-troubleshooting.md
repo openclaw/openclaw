@@ -158,13 +158,9 @@ native output are excluded.
 
 ## Confirming the Gateway actually stopped
 
-`pgrep -f "dist/index.js gateway"` is not a reliable check on macOS. Long argv
-matching truncates and can miss the real process (false negative), and the
-pattern can match unrelated agent or SSH processes (false positive). One
-observed host reported four remaining matches after the Gateway had already
-exited; another reported none while the Gateway was still serving requests.
-
-Check the port owner instead:
+Checking whether the Gateway has stopped by process name is unreliable: a
+pattern match can miss the real process or match unrelated ones. Check the
+port owner instead:
 
 ```bash
 lsof -nP -tiTCP:18789 -sTCP:LISTEN   # PID listening on the Gateway port
@@ -172,24 +168,9 @@ kill -0 <pid>                        # confirm that exact PID is alive
 ```
 
 An empty `lsof` result plus a failed `kill -0` means the Gateway is stopped.
-
-Graceful shutdown waits for active work to settle before closing, so a stop
-takes longer while a run is in flight than when the Gateway is idle. Do not
-conclude that `bootout` or `kickstart` failed within the first few seconds;
-allow a generous margin before retrying, and prefer stopping while the Gateway
-is idle. Check the port with `lsof` as described above rather than relying on
-elapsed time alone.
-
-## Replacing a running binary
-
-Do not overwrite a binary that the running Gateway is using (the Node binary or
-the package payload). An in-place overwrite of the same inode kills the process
-mid-write and leaves every subsequent `exec` failing with `write EPIPE`, while
-chat channels keep working and the agent still looks healthy.
-
-Stop the service first, confirm the port is free, then replace the file with
-`rm` followed by `cp` so the new copy gets a fresh inode. Start the service
-again and verify `readyz`.
+During a graceful shutdown the port may still be held while in-flight work
+settles, so allow a generous margin before concluding that a stop failed, and
+prefer stopping while the Gateway is idle.
 
 ## Node and global install permissions
 
