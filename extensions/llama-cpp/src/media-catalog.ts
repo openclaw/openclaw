@@ -48,12 +48,18 @@ const GLM_OCR_REPOSITORY = "ggml-org/GLM-OCR-GGUF";
 const GLM_OCR_REVISION = "65a42de1148dbed2297e922b5dbc7d9b70c36578";
 const SMOL_VLM2_REPOSITORY = "ggml-org/SmolVLM2-2.2B-Instruct-GGUF";
 const SMOL_VLM2_REVISION = "1bc3c9f74ceafd4c8d4411cc9cf188bba3798f91";
+const SMOL_VLM2_COMPACT_REPOSITORY = "ggml-org/SmolVLM2-500M-Video-Instruct-GGUF";
+const SMOL_VLM2_COMPACT_REVISION = "ccd7aae53bcb1997355c2f094959e72b3642ce17";
 
 // Pinned b10809 supports these GLM4V and Idefics3 projectors; every selected pair
 // still needs real inference verification on the Gateway before activation.
 // Memory includes both GGUFs, KV/compute buffers and bounded image encoding. The
 // router must load one model at a time; these budgets do not permit co-residency.
-export const LLAMA_CPP_MEDIA_RECIPES: readonly [LlamaCppMediaRecipe, LlamaCppMediaRecipe] = [
+export const LLAMA_CPP_MEDIA_RECIPES: readonly [
+  LlamaCppMediaRecipe,
+  LlamaCppMediaRecipe,
+  LlamaCppMediaRecipe,
+] = [
   {
     id: "glm-ocr-q8_0",
     name: "GLM-OCR (Q8_0)",
@@ -111,6 +117,34 @@ export const LLAMA_CPP_MEDIA_RECIPES: readonly [LlamaCppMediaRecipe, LlamaCppMed
       "Small English-focused vision model; complex diagrams and spatial reasoning may be inaccurate.",
     ],
   },
+  {
+    id: "smolvlm2-500m-video-instruct-q8_0",
+    name: "SmolVLM2 500M (Q8_0)",
+    capability: "vision",
+    model: artifact(
+      SMOL_VLM2_COMPACT_REPOSITORY,
+      SMOL_VLM2_COMPACT_REVISION,
+      "SmolVLM2-500M-Video-Instruct-Q8_0.gguf",
+      436_808_704,
+      "6f67b8036b2469fcd71728702720c6b51aebd759b78137a8120733b4d66438bc",
+    ),
+    projector: artifact(
+      SMOL_VLM2_COMPACT_REPOSITORY,
+      SMOL_VLM2_COMPACT_REVISION,
+      "mmproj-SmolVLM2-500M-Video-Instruct-Q8_0.gguf",
+      108_785_184,
+      "921dc7e259f308e5b027111fa185efcbf33db13f6e35749ddf7f5cdb60ef520b",
+    ),
+    minimumSystemMemoryBytes: 6 * GIB,
+    memoryBytes: 3 * GIB,
+    contextSize: 8192,
+    maxTokens: 2048,
+    imageMaxTokens: 1024,
+    limitations: [
+      "Compact English-focused vision model; complex diagrams and spatial reasoning may be inaccurate.",
+      "Managed local media accepts one still image per request, including with this video-capable model.",
+    ],
+  },
 ];
 
 export function resolveLlamaCppMediaArtifact(source: string): LlamaCppMediaArtifact | undefined {
@@ -136,6 +170,7 @@ type MediaRecommendation =
 
 export function recommendLlamaCppMedia(
   hardware: LlamaCppHardware,
+  backend: "cpu" | "metal",
   // The download owner supplies only artifacts whose size, checksum and format passed.
   cached: { artifactSha256?: ReadonlySet<string>; runtime?: boolean } = {},
 ): MediaRecommendation {
@@ -143,46 +178,58 @@ export function recommendLlamaCppMedia(
     kind: "unavailable",
     reason,
   });
-  const memoryBudgetBytes = resolveLlamaCppMemoryBudget(hardware, "cpu");
-  const rejections: string[] = [];
-  for (const recipe of LLAMA_CPP_MEDIA_RECIPES) {
-    if (hardware.totalMemoryBytes < recipe.minimumSystemMemoryBytes) {
-      rejections.push(
-        `${recipe.name} requires ${formatLlamaCppMemory(recipe.minimumSystemMemoryBytes)} total RAM; host has ${formatLlamaCppMemory(hardware.totalMemoryBytes)}.`,
-      );
-    }
-    if (memoryBudgetBytes < recipe.memoryBytes) {
-      rejections.push(
-        `${recipe.name} requires ${formatLlamaCppMemory(recipe.memoryBytes)} memory; the system memory budget is ${formatLlamaCppMemory(memoryBudgetBytes)} after host headroom and current memory pressure.`,
-      );
-    }
-  }
-  if (rejections.length > 0) {
+  const memoryBudgetBytes = resolveLlamaCppMemoryBudget(hardware, backend);
+  const [ocr, standardVision, compactVision] = LLAMA_CPP_MEDIA_RECIPES;
+  // Preserve the released Linux pair. Metal can use the smaller verified recipe
+  // when the standard pair exceeds current unified-memory or download capacity.
+  const visionCandidates = backend === "metal" ? [standardVision, compactVision] : [standardVision];
+  const minimumSystemMemory = Math.max(
+    ocr.minimumSystemMemoryBytes,
+    Math.min(...visionCandidates.map((recipe) => recipe.minimumSystemMemoryBytes)),
+  );
+  if (hardware.totalMemoryBytes < minimumSystemMemory) {
     return unavailable(
-      `${rejections.join(" ")} Close other applications or use a host with more memory and retry setup.`,
+      `Local OCR and vision require ${formatLlamaCppMemory(minimumSystemMemory)} total RAM; host has ${formatLlamaCppMemory(hardware.totalMemoryBytes)}. Use a host with more memory and retry setup.`,
     );
   }
-  const disk = resolveLlamaCppDiskBudget(hardware, "cpu", cached.runtime);
+  const candidates = visionCandidates.filter(
+    (recipe) =>
+      hardware.totalMemoryBytes >= recipe.minimumSystemMemoryBytes &&
+      memoryBudgetBytes >= recipe.memoryBytes,
+  );
+  if (memoryBudgetBytes < ocr.memoryBytes || candidates.length === 0) {
+    const required = Math.max(
+      ocr.memoryBytes,
+      Math.min(...visionCandidates.map((r) => r.memoryBytes)),
+    );
+    return unavailable(
+      `Local OCR and vision require at least ${formatLlamaCppMemory(required)} memory; the system memory budget is ${formatLlamaCppMemory(memoryBudgetBytes)} after host headroom and current memory pressure. Close other applications or use a host with more memory and retry setup.`,
+    );
+  }
+  const disk = resolveLlamaCppDiskBudget(hardware, backend, cached.runtime);
   if (disk.kind === "unavailable") {
     return unavailable(disk.reason);
   }
   const { modelDiskBudget, runtimeDiskBytes } = disk;
-  const [ocr, vision] = LLAMA_CPP_MEDIA_RECIPES;
-  const modelDiskBytes = [ocr.model, ocr.projector, vision.model, vision.projector].reduce(
-    (bytes, item) =>
-      bytes + (cached.artifactSha256?.has(item.expectedSha256) ? 0 : item.expectedSize),
-    0,
-  );
-  if (modelDiskBytes > modelDiskBudget) {
-    return unavailable(
-      `Missing OCR and vision models and projectors need ${formatLlamaCppMemory(modelDiskBytes)} disk space; ${formatLlamaCppMemory(Math.max(0, modelDiskBudget))} remains after the runtime reserve. Free space in the model cache and retry setup.`,
+  let requiredModelDiskBytes = Number.POSITIVE_INFINITY;
+  for (const vision of candidates) {
+    const modelDiskBytes = [ocr.model, ocr.projector, vision.model, vision.projector].reduce(
+      (bytes, item) =>
+        bytes + (cached.artifactSha256?.has(item.expectedSha256) ? 0 : item.expectedSize),
+      0,
     );
+    requiredModelDiskBytes = Math.min(requiredModelDiskBytes, modelDiskBytes);
+    if (modelDiskBytes <= modelDiskBudget) {
+      return {
+        kind: "recommended",
+        ocr,
+        vision,
+        requiredDiskBytes: modelDiskBytes + runtimeDiskBytes,
+        reason: `${ocr.name} (OCR, ${formatLlamaCppMemory(ocr.memoryBytes)}) and ${vision.name} (vision, ${formatLlamaCppMemory(vision.memoryBytes)}) fit the ${formatLlamaCppMemory(memoryBudgetBytes)} ${backend === "metal" ? "Metal unified memory" : "CPU memory"} budget. Load one model at a time, preserving the chat and embedding inventory. Images stay local; runtime verification must pass before activation.`,
+      };
+    }
   }
-  return {
-    kind: "recommended",
-    ocr,
-    vision,
-    requiredDiskBytes: modelDiskBytes + runtimeDiskBytes,
-    reason: `${ocr.name} (OCR, ${formatLlamaCppMemory(ocr.memoryBytes)}) and ${vision.name} (vision, ${formatLlamaCppMemory(vision.memoryBytes)}) fit the ${formatLlamaCppMemory(memoryBudgetBytes)} CPU memory budget. Load one model at a time, preserving the chat and embedding inventory. Images stay local; runtime verification must pass before activation.`,
-  };
+  return unavailable(
+    `Missing OCR and vision models and projectors need ${formatLlamaCppMemory(requiredModelDiskBytes)} disk space; ${formatLlamaCppMemory(Math.max(0, modelDiskBudget))} remains after the runtime reserve. Free space in the model cache and retry setup.`,
+  );
 }

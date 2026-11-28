@@ -2,6 +2,7 @@ import { execFile } from "node:child_process";
 import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
+import { asOptionalRecord } from "openclaw/plugin-sdk/string-coerce-runtime";
 import { resolveLlamaCppDataDir } from "./defaults.js";
 
 const GIB = 1024 ** 3;
@@ -24,6 +25,8 @@ type LlamaCppAccelerator =
 export type LlamaCppHardware = {
   platform: NodeJS.Platform;
   arch: string;
+  cpuModel?: string;
+  cpuCores?: number;
   totalMemoryBytes: number;
   availableMemoryBytes: number;
   availableDiskBytes?: number;
@@ -136,9 +139,44 @@ async function readAccelerator(
   platform: NodeJS.Platform,
   arch: string,
   signal?: AbortSignal,
+  verifyMetal = false,
 ): Promise<LlamaCppAccelerator> {
   if (platform === "darwin" && arch === "arm64") {
-    return { kind: "metal" };
+    // Preserve the shipped chat/embedding runtime selection when telemetry is unavailable.
+    // Media enrollment opts into qualification before downloading its model pair.
+    if (!verifyMetal) {
+      return { kind: "metal" };
+    }
+    const output = await runHardwareProbe(
+      "/usr/sbin/system_profiler",
+      ["SPDisplaysDataType", "-json"],
+      signal,
+    );
+    try {
+      const profile = asOptionalRecord(JSON.parse(output ?? "null"));
+      const displays = profile?.SPDisplaysDataType;
+      if (
+        Array.isArray(displays) &&
+        displays
+          .map(asOptionalRecord)
+          .some((display) =>
+            [display?.spdisplays_mtlgpufamilysupport, display?.spdisplays_metal].some(
+              (value) =>
+                typeof value === "string" &&
+                /^(?:spdisplays_metal(?:\d+|featureset\w*)|spdisplays_supported)$/u.test(value),
+            ),
+          )
+      ) {
+        return { kind: "metal" };
+      }
+    } catch {
+      // Missing or malformed telemetry must not qualify a virtualized/unsupported GPU.
+    }
+    return {
+      kind: "cpu",
+      reason:
+        "Cannot confirm Apple Metal support. Check system_profiler SPDisplaysDataType on the Gateway Mac, use a native arm64 Node runtime, and retry setup on a Metal-capable host.",
+    };
   }
   if (platform !== "linux" && platform !== "win32") {
     return { kind: "cpu", reason: "No managed GPU backend is available for this host." };
@@ -191,6 +229,7 @@ async function readAccelerator(
 export async function detectLlamaCppHardware(params: {
   cacheDir: string;
   signal?: AbortSignal;
+  verifyMetal?: boolean;
 }): Promise<LlamaCppHardware> {
   params.signal?.throwIfAborted();
   const platform = os.platform();
@@ -203,12 +242,14 @@ export async function detectLlamaCppHardware(params: {
     readAvailableMemory(platform, params.signal),
     readAvailableDisk(params.cacheDir, platform, params.signal),
     readAvailableDisk(resolveLlamaCppDataDir(), platform, params.signal),
-    readAccelerator(platform, arch, params.signal),
+    readAccelerator(platform, arch, params.signal, params.verifyMetal),
   ]);
   params.signal?.throwIfAborted();
   return {
     platform,
     arch,
+    cpuModel: os.cpus()[0]?.model,
+    cpuCores: os.availableParallelism(),
     totalMemoryBytes,
     availableMemoryBytes: Math.min(
       totalMemoryBytes,

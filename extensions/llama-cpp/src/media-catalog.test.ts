@@ -32,7 +32,12 @@ describe("managed local media catalog", () => {
       const [repository, revision]: [string, string] =
         recipe.capability === "ocr"
           ? ["ggml-org/GLM-OCR-GGUF", "65a42de1148dbed2297e922b5dbc7d9b70c36578"]
-          : ["ggml-org/SmolVLM2-2.2B-Instruct-GGUF", "1bc3c9f74ceafd4c8d4411cc9cf188bba3798f91"];
+          : recipe.id === "smolvlm2-500m-video-instruct-q8_0"
+            ? [
+                "ggml-org/SmolVLM2-500M-Video-Instruct-GGUF",
+                "ccd7aae53bcb1997355c2f094959e72b3642ce17",
+              ]
+            : ["ggml-org/SmolVLM2-2.2B-Instruct-GGUF", "1bc3c9f74ceafd4c8d4411cc9cf188bba3798f91"];
       for (const artifact of [recipe.model, recipe.projector]) {
         expect(artifact).toMatchObject({
           source: `hf:${repository}/${artifact.filename}#${revision}`,
@@ -50,7 +55,7 @@ describe("managed local media catalog", () => {
   });
 
   it("rejects incomplete pairs under total and available memory limits", () => {
-    expect(recommendLlamaCppMedia(hardware({ totalMemoryBytes: 4 * GIB }))).toMatchObject({
+    expect(recommendLlamaCppMedia(hardware({ totalMemoryBytes: 4 * GIB }), "cpu")).toMatchObject({
       kind: "unavailable",
       reason: expect.stringMatching(/total RAM/u),
     });
@@ -62,16 +67,18 @@ describe("managed local media catalog", () => {
       availableRuntimeDiskBytes: 2 * GIB,
       sharedDisk: false,
     });
-    expect(recommendLlamaCppMedia(host).kind).toBe("recommended");
-    expect(recommendLlamaCppMedia({ ...host, sharedDisk: true }).kind).toBe("unavailable");
-    expect(recommendLlamaCppMedia({ ...host, availableRuntimeDiskBytes: GIB })).toMatchObject({
+    expect(recommendLlamaCppMedia(host, "cpu").kind).toBe("recommended");
+    expect(recommendLlamaCppMedia({ ...host, sharedDisk: true }, "cpu").kind).toBe("unavailable");
+    expect(
+      recommendLlamaCppMedia({ ...host, availableRuntimeDiskBytes: GIB }, "cpu"),
+    ).toMatchObject({
       kind: "unavailable",
       reason: expect.stringContaining("runtime directory"),
     });
   });
 
   it("credits verified models and projectors independently on retry", () => {
-    const initial = recommendLlamaCppMedia(hardware());
+    const initial = recommendLlamaCppMedia(hardware(), "cpu");
     assert(initial.kind === "recommended");
     const artifacts = [initial.ocr, initial.vision].flatMap(({ model, projector }) => [
       model,
@@ -79,27 +86,83 @@ describe("managed local media catalog", () => {
     ]);
     const artifactSha256 = new Set(artifacts.map((artifact) => artifact.expectedSha256));
     const host = hardware({ availableDiskBytes: 1024 ** 2, availableRuntimeDiskBytes: 1024 ** 2 });
-    expect(recommendLlamaCppMedia(host, { artifactSha256, runtime: true })).toMatchObject({
+    expect(recommendLlamaCppMedia(host, "cpu", { artifactSha256, runtime: true })).toMatchObject({
       kind: "recommended",
       requiredDiskBytes: 0,
     });
     artifactSha256.delete(initial.vision.projector.expectedSha256);
-    expect(recommendLlamaCppMedia(host, { artifactSha256, runtime: true }).kind).toBe(
+    expect(recommendLlamaCppMedia(host, "cpu", { artifactSha256, runtime: true }).kind).toBe(
       "unavailable",
     );
-    expect(recommendLlamaCppMedia(hardware(), { artifactSha256, runtime: true })).toMatchObject({
+    expect(
+      recommendLlamaCppMedia(hardware(), "cpu", { artifactSha256, runtime: true }),
+    ).toMatchObject({
       kind: "recommended",
       requiredDiskBytes: initial.vision.projector.expectedSize,
     });
-    expect(recommendLlamaCppMedia(host, { artifactSha256 }).kind).toBe("unavailable");
+    expect(recommendLlamaCppMedia(host, "cpu", { artifactSha256 }).kind).toBe("unavailable");
   });
 
   it("does not guess when runtime free space is unknown", () => {
     expect(
-      recommendLlamaCppMedia(hardware({ availableRuntimeDiskBytes: undefined })),
+      recommendLlamaCppMedia(hardware({ availableRuntimeDiskBytes: undefined }), "cpu"),
     ).toMatchObject({
       kind: "unavailable",
       reason: expect.stringContaining("permissions"),
+    });
+  });
+
+  it.each([
+    ["metal", 5, "smolvlm2-2.2b-instruct-q4_k_m"],
+    ["metal", 4, "smolvlm2-500m-video-instruct-q8_0"],
+    ["metal", 3.5, undefined],
+    ["cpu", 5, "smolvlm2-2.2b-instruct-q4_k_m"],
+    ["cpu", 4, undefined],
+  ] as const)(
+    "selects a complete %s pair within %s GiB available memory",
+    (backend, available, vision) => {
+      const result = recommendLlamaCppMedia(
+        hardware({
+          platform: backend === "metal" ? "darwin" : "linux",
+          arch: backend === "metal" ? "arm64" : "x64",
+          totalMemoryBytes: 16 * GIB,
+          availableMemoryBytes: available * GIB,
+          accelerator:
+            backend === "metal" ? { kind: "metal" } : { kind: "cpu", reason: "CPU host" },
+        }),
+        backend,
+      );
+      if (vision) {
+        expect(result).toMatchObject({
+          kind: "recommended",
+          ocr: { id: "glm-ocr-q8_0" },
+          vision: { id: vision },
+        });
+      } else {
+        expect(result).toMatchObject({
+          kind: "unavailable",
+          reason: expect.stringMatching(/memory|RAM/u),
+        });
+      }
+    },
+  );
+
+  it("selects the smaller Metal vision pair when only its downloads fit the shared volume", () => {
+    const result = recommendLlamaCppMedia(
+      hardware({
+        platform: "darwin",
+        arch: "arm64",
+        accelerator: { kind: "metal" },
+        availableDiskBytes: 4 * GIB,
+        availableRuntimeDiskBytes: 4 * GIB,
+      }),
+      "metal",
+    );
+    expect(result).toMatchObject({
+      kind: "recommended",
+      ocr: { id: "glm-ocr-q8_0" },
+      vision: { id: "smolvlm2-500m-video-instruct-q8_0" },
+      requiredDiskBytes: 1_980_430_944 + 2 * GIB,
     });
   });
 });
