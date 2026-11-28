@@ -3,7 +3,7 @@ import { expectText } from "../test-utils/text-assertions.js";
 import { prepareUpdateFailureReport } from "./update-failure-report-prepare.js";
 import type { UpdateRunRecord } from "./update-run-record.js";
 
-function run(patch: Partial<UpdateRunRecord> = {}): UpdateRunRecord {
+function run(patch: Partial<UpdateRunRecord>): UpdateRunRecord {
   return {
     runId: "6631ecee-adbf-41e8-a0e3-1b88b28b0a59",
     createdAtMs: 1,
@@ -26,7 +26,7 @@ function run(patch: Partial<UpdateRunRecord> = {}): UpdateRunRecord {
   };
 }
 
-function failed(patch: Partial<UpdateRunRecord> = {}) {
+function failed(patch: Partial<UpdateRunRecord>) {
   return run({ status: "failed", ...patch });
 }
 
@@ -54,7 +54,7 @@ function serving(version: string, reason: RecoveryReason) {
 }
 function observedFailure(
   verification: UpdateRunRecord["verification"],
-  patch: Partial<UpdateRunRecord> = {},
+  patch: Partial<UpdateRunRecord>,
 ) {
   return failed({ steps: [recoveryStep], verification, ...patch });
 }

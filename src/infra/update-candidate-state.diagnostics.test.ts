@@ -1,5 +1,4 @@
-import fs from "node:fs";
-import { afterEach, beforeEach, expect, it, vi } from "vitest";
+import { expect, it } from "vitest";
 import {
   createUpdateStateInspectionDiagnostics,
   formatUpdateStateInspectionError,
@@ -7,10 +6,6 @@ import {
 import { findUpdateCaptureSpaceError, UpdateCaptureSpaceError } from "./update-capture-space.js";
 import { createUpdateErrorFact } from "./update-failure-facts.js";
 import { UPDATE_STATE_INSPECTION_PROGRESS_PREFIX } from "./update-state-inspection-protocol.js";
-
-beforeEach(() => {
-  vi.spyOn(fs, "writeSync").mockReturnValue(0);
-});
 
 const privateRoot = "/synthetic/private operator";
 const stateDir = `${privateRoot}/.openclaw`;
@@ -40,11 +35,6 @@ function workerFailure(error: Error, warning = "") {
 function progressChunk(value: object) {
   return Buffer.from(`${UPDATE_STATE_INSPECTION_PROGRESS_PREFIX}${JSON.stringify(value)}\n`);
 }
-
-afterEach(() => {
-  vi.useRealTimers();
-  vi.restoreAllMocks();
-});
 
 it("reports the active worker step for SIGILL without blaming storage", () => {
   const source = `${stateDir}/agents/main/agent/openclaw-agent.sqlite`;
