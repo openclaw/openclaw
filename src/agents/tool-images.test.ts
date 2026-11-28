@@ -24,11 +24,11 @@ vi.mock("@openclaw/media-core/base64", async (importOriginal) => {
   return { ...actual, canonicalizeBase64: vi.fn(actual.canonicalizeBase64) };
 });
 
-function imageBlock(data: Buffer | string, mimeType = "image/png") {
+function imageBlock(data: Buffer | string) {
   return {
     type: "image" as const,
     data: typeof data === "string" ? data : data.toString("base64"),
-    mimeType,
+    mimeType: "image/png",
   };
 }
 function omitted(text: string) {
