@@ -315,8 +315,17 @@ describe("resolvePluginVersionDriftTargets for ClawHub installs", () => {
   ])("withholds repair while a newer ClawHub beta is selected: %s %j", async (...args) => {
     // The beta channel's own choice between beta and latest needs the package tags.
     vi.mocked(fetchClawHubPackageDetail).mockResolvedValue({
-      package: { tags: { beta: "2026.9.4-beta.1" } },
-    } as Awaited<ReturnType<typeof fetchClawHubPackageDetail>>);
+      package: {
+        name: "@openclaw/whatsapp",
+        displayName: "WhatsApp",
+        family: "code-plugin",
+        channel: "official",
+        isOfficial: true,
+        createdAt: 0,
+        updatedAt: 0,
+        tags: { beta: "2026.9.4-beta.1" },
+      },
+    });
     const entry = await hubEntry(...args);
     expect(entry.targetResolution?.status).toBe("unresolved");
     expect(entry.targetResolution).toMatchObject({
