@@ -12,6 +12,10 @@ import {
 import type { ModelDefinitionConfig } from "openclaw/plugin-sdk/provider-onboard";
 import { fetchWithSsrFGuard } from "openclaw/plugin-sdk/ssrf-runtime";
 import {
+  isCloudMetadataIpAddress,
+  isLinkLocalIpAddress,
+} from "openclaw/plugin-sdk/ssrf-runtime-internal";
+import {
   isHostedOllamaCloud,
   OLLAMA_CLOUD_DEFAULT_MODELS,
   OLLAMA_DEFAULT_BASE_URL,
@@ -72,6 +76,18 @@ const ollamaModelShowInfoCache = createStaleWhileRevalidateCache<OllamaModelShow
 });
 const OLLAMA_ALWAYS_BLOCKED_HOSTNAMES = new Set(["metadata.google.internal"]);
 
+function isOllamaBlockedBaseHost(hostname: string): boolean {
+  const host = hostname
+    .trim()
+    .toLowerCase()
+    .replace(/^\[|\]$/gu, "");
+  return (
+    OLLAMA_ALWAYS_BLOCKED_HOSTNAMES.has(host) ||
+    isLinkLocalIpAddress(host) ||
+    isCloudMetadataIpAddress(host)
+  );
+}
+
 export function buildOllamaBaseUrlSsrFPolicy(baseUrl: string) {
   const trimmed = baseUrl.trim();
   if (!trimmed) {
@@ -81,7 +97,7 @@ export function buildOllamaBaseUrlSsrFPolicy(baseUrl: string) {
   if (
     !parsed ||
     (parsed.protocol !== "http:" && parsed.protocol !== "https:") ||
-    OLLAMA_ALWAYS_BLOCKED_HOSTNAMES.has(parsed.hostname)
+    isOllamaBlockedBaseHost(parsed.hostname)
   ) {
     return undefined;
   }
