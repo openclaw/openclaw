@@ -202,10 +202,7 @@ export function ensurePersonalGitHubPublicationSchema(db: EngineConnection): voi
   });
 }
 
-/**
- * Complete first-use columns before a STRICT rebuild or in a private port copy.
- * Both require canonical layouts; ordinary admission leaves these columns lazy.
- */
+/** Complete first-use columns for the canonical STRICT rebuild. */
 export function ensureFirstUseAdditiveStateColumnsForStrictMigration(db: DatabaseSync): void {
   for (const {
     columnName,

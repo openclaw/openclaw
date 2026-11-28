@@ -42,7 +42,7 @@ it.each([
   ["agent", false],
   ["state", true],
 ] as const)(
-  "accepts legal first-use absence in %s inspection (columns absent: %s) and completes only the private copy",
+  "accepts compatible column absence in %s inspection (columns absent: %s) and completes only the private copy",
   async (family, missingColumns) => {
     const directory = tempDirs.make("port-first-use-");
     const sourcePath = path.join(directory, "source.sqlite");
@@ -64,6 +64,9 @@ it.each([
           ALTER TABLE worker_workspace_pending_results DROP COLUMN repository_workspace_id;
           ALTER TABLE user_profile_identities DROP COLUMN verified_email_json;
           ALTER TABLE agent_deletion_journal DROP COLUMN phase;
+          INSERT INTO user_profiles (id, role, created_at, updated_at) VALUES ('profile', 'operator', 1, 1);
+          INSERT INTO user_profile_identities (provider, subject, profile_id, created_at)
+          VALUES ('openclaw.id', 'account', 'profile', 1);
           INSERT INTO agent_deletion_journal (agent_id, agent_dir, workspace_dir, sessions_dir, created_at)
           VALUES ('retired', '/retired/agent', '/retired/workspace', '/retired/sessions', 17);`),
     );
@@ -93,6 +96,14 @@ it.each([
           ? { current_session_id: "retained-session", legacy_acp_migration_json: null }
           : { agent_id: "retired", phase: null },
       );
+      if (family === "state") {
+        expect(
+          db
+            .prepare(`SELECT user_profiles.role, user_profile_identities.subject, user_profile_identities.verified_email_json
+            FROM user_profile_identities JOIN user_profiles ON user_profiles.id = user_profile_identities.profile_id`)
+            .get(),
+        ).toEqual({ role: "operator", subject: "account", verified_email_json: null });
+      }
     }
     expect(await hash(sourcePath)).toBe(original);
     {

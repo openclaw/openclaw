@@ -6,6 +6,13 @@ type LazyColumn = readonly [
   firstUseOnly?: true,
 ];
 
+// Profile readers select this from existing tables before any profile write.
+const profileIdentityDisplayColumn = [
+  "user_profile_identities",
+  "verified_email_json",
+  "TEXT",
+] as const satisfies LazyColumn;
+
 // Added after v6 shipped; first-use-only columns stay absent until their feature writes.
 const lazyColumns = [
   ["workspace_setup_state", "bootstrap_deferred", "INTEGER", true],
@@ -14,7 +21,7 @@ const lazyColumns = [
   ["user_profile_identities", "canonical_login", "TEXT"],
   ["user_profile_identities", "authorization_id", "TEXT"],
   ["user_profile_identities", "authorization_basis_json", "TEXT"],
-  ["user_profile_identities", "verified_email_json", "TEXT", true],
+  profileIdentityDisplayColumn,
   ["template_installs", "bootstrap_content_digest", "TEXT"],
   ["template_installs", "bootstrap_source_path", "TEXT"],
   ["worker_environments", "desktop_json", "TEXT"],
@@ -55,15 +62,25 @@ const lazyColumns = [
   ["cron_jobs", "grant_definition_updated_at", "INTEGER"],
 ] as const satisfies readonly LazyColumn[];
 
+function lazyColumnDefinition([tableName, columnName, dataType]: LazyColumn) {
+  return { columnName, dataType, tableName };
+}
+
 function lazyColumnDefinitions(firstUseOnly?: boolean) {
   return lazyColumns
     .filter((definition) => firstUseOnly === undefined || Boolean(definition[3]) === firstUseOnly)
-    .map(([tableName, columnName, dataType]) => ({ columnName, dataType, tableName }));
+    .map(lazyColumnDefinition);
 }
 
 export const CLAW_LAZY_ADDITIVE_STATE_COLUMN_DEFINITIONS = lazyColumnDefinitions();
 export const CLAW_STARTUP_ADDITIVE_STATE_COLUMN_DEFINITIONS = lazyColumnDefinitions(false);
 export const CLAW_FIRST_USE_ADDITIVE_STATE_COLUMN_DEFINITIONS = lazyColumnDefinitions(true);
+
+// Offline port must still accept stores that predate the display column's startup repair.
+export const CLAW_PORT_ADDITIVE_STATE_COLUMN_DEFINITIONS = [
+  ...CLAW_FIRST_USE_ADDITIVE_STATE_COLUMN_DEFINITIONS,
+  lazyColumnDefinition(profileIdentityDisplayColumn),
+];
 
 // Historical repairs retain these groups at their original backfill boundaries.
 export const ORDERED_STARTUP_ADDITIVE_STATE_COLUMNS = {

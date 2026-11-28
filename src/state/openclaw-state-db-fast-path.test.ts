@@ -14,6 +14,10 @@ import {
   restorePreTemplateStateIdentifiersForTest,
   withStateMigrationBackupForTest,
 } from "./openclaw-state-schema.test-support.js";
+import { selectUserProfileIdentityInDatabase } from "./user-profile-identity.read.js";
+import { readOpenClawIdProfileLinksInDatabase } from "./user-profile-openclaw-id.read.js";
+import { openClawIdProfileProvider } from "./user-profile-openclaw-id.types.js";
+import { ensureUserProfilesSchema } from "./user-profiles-schema.js";
 
 const dirs = useAutoCleanupTempDirTracker((cleanup) =>
   afterEach(() => {
@@ -163,6 +167,57 @@ it("detects and completes startup columns in present lazy tables", async () => {
   ).toBeUndefined();
   await expect(needsOpenClawStateDatabaseSchemaRepair(pathname)).resolves.toBe(false);
 });
+
+it.each([true, false])(
+  "keeps identity links readable after opening current state (missing display column=%s)",
+  async (missingColumn) => {
+    const env = { OPENCLAW_STATE_DIR: dirs.make("state-profile-identity-startup-") };
+    const opened = state.openOpenClawStateDatabase({ env });
+    ensureUserProfilesSchema({ env }, opened);
+    const pathname = opened.path;
+    await state.closeOpenClawStateDatabaseAsync();
+    const profileId = "fixture-profile";
+    const accountId = "fixture-account";
+    const email = "fixture@example.test";
+    const expected = [{ profileId, accountId, email: missingColumn ? null : email }];
+    {
+      using database = new DatabaseSync(pathname);
+      database
+        .prepare("INSERT INTO user_profiles(id, role, created_at, updated_at) VALUES (?, ?, 1, 1)")
+        .run(profileId, "operator");
+      database
+        .prepare(
+          "INSERT INTO user_profile_identities(provider, subject, profile_id, created_at, verified_email_json) VALUES (?, ?, ?, 1, ?)",
+        )
+        .run(
+          openClawIdProfileProvider,
+          accountId,
+          profileId,
+          JSON.stringify({ kind: "openclaw-id-display", email }),
+        );
+      if (missingColumn) {
+        database.exec("ALTER TABLE user_profile_identities DROP COLUMN verified_email_json");
+      }
+      expect(database.prepare("PRAGMA user_version").get()?.user_version).toBe(
+        OPENCLAW_STATE_SCHEMA_VERSION,
+      );
+    }
+    const needsRepair = await needsOpenClawStateDatabaseSchemaRepair(pathname);
+    const repaired = state.openOpenClawStateDatabase({ env });
+    expect(selectUserProfileIdentityInDatabase(repaired.db, profileId)).toEqual({
+      profileId,
+      role: "operator",
+      aliases: new Set([profileId]),
+      openclawIdAccountIds: [accountId],
+    });
+    expect(readOpenClawIdProfileLinksInDatabase(repaired.db, [profileId])).toEqual(expected);
+    expect(needsRepair).toBe(missingColumn);
+    await state.closeOpenClawStateDatabaseAsync();
+    await expect(needsOpenClawStateDatabaseSchemaRepair(pathname)).resolves.toBe(false);
+    const reopened = state.openOpenClawStateDatabase({ env });
+    expect(readOpenClawIdProfileLinksInDatabase(reopened.db, [profileId])).toEqual(expected);
+  },
+);
 
 it.each([
   { table: "secret_store_entries", column: "allowed_hosts" },

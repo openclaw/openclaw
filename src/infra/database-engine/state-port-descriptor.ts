@@ -1,4 +1,4 @@
-import { CLAW_FIRST_USE_ADDITIVE_STATE_COLUMN_DEFINITIONS } from "../../state/openclaw-state-db-additive-columns.js";
+import { CLAW_PORT_ADDITIVE_STATE_COLUMN_DEFINITIONS } from "../../state/openclaw-state-db-additive-columns.js";
 import {
   DOCTOR_OWNED_STATE_TABLES,
   OPENCLAW_STATE_SCHEMA_VERSION,
@@ -9,7 +9,7 @@ import {
   stateEngineSchema,
 } from "../../state/openclaw-state-db-engine.js";
 import { assertOpenClawStateDatabaseForMaintenance } from "../../state/openclaw-state-db-maintenance.js";
-import { ensureFirstUseAdditiveStateColumnsForStrictMigration } from "../../state/openclaw-state-db-schema-additive.js";
+import { ensureColumn } from "../../state/openclaw-state-db-schema-helpers.js";
 import { withLegacyStateHeadLayout } from "../../state/openclaw-state-db-schema-v26-layout.js";
 import { withLegacyStateWriteIndexes } from "../../state/openclaw-state-db-schema-v27-indexes.js";
 import { withLegacyPublicationDraft } from "../../state/openclaw-state-db-schema-v28-publication.js";
@@ -279,14 +279,20 @@ function createStatePortDescriptor(
       return {
         version,
         migrationRequired: false,
-        pendingColumns: pendingSqliteColumns(db, CLAW_FIRST_USE_ADDITIVE_STATE_COLUMN_DEFINITIONS),
+        pendingColumns: pendingSqliteColumns(db, CLAW_PORT_ADDITIVE_STATE_COLUMN_DEFINITIONS),
       };
     },
     migrateSqliteSource(file, _version, assertCurrent) {
       using db = openNodeSqliteDatabase(file);
       admitSqliteSchema(db);
       assertCurrent();
-      ensureFirstUseAdditiveStateColumnsForStrictMigration(db);
+      for (const {
+        tableName,
+        columnName,
+        dataType,
+      } of CLAW_PORT_ADDITIVE_STATE_COLUMN_DEFINITIONS) {
+        ensureColumn(db, tableName, `${columnName} ${dataType}`);
+      }
     },
     async admit(file, input) {
       // Historical SQLite images use their descriptor; restored PG anchors still
