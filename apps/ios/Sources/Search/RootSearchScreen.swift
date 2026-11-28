@@ -14,6 +14,8 @@ struct RootSearchScreen: View {
     @State private var sessionKeys: [String]?
     @State private var pageIDs: [String] = []
     @FocusState private var isFieldFocused: Bool
+    @Environment(\.accessibilityReduceMotion) private var reduceMotion
+    @Namespace private var tabSelection
 
     private static let allSectionLimit = 5
 
@@ -528,18 +530,20 @@ struct RootSearchScreen: View {
 
     private func tabs(_ results: Results) -> some View {
         ScrollView(.horizontal, showsIndicators: false) {
-            HStack(spacing: 4) {
+            HStack(spacing: 0) {
                 ForEach(RootSearchTab.allCases, id: \.self) { tab in
                     self.tabButton(tab, results: results)
                 }
             }
             .padding(.horizontal, 4)
+            .animation(self.reduceMotion ? nil : .snappy(duration: 0.25), value: self.tab)
         }
         .defaultScrollAnchor(.center, for: .alignment)
         .scrollEdgeEffectStyle(.soft, for: .horizontal)
         .clipShape(Capsule())
-        .glassEffect(.regular, in: Capsule())
-        .padding(.horizontal, 10)
+        // Same glass and height as the field row below, edges aligned with it.
+        .glassEffect(.regular.interactive(), in: Capsule())
+        .padding(.horizontal, 12)
         .padding(.bottom, 4)
     }
 
@@ -556,19 +560,35 @@ struct RootSearchScreen: View {
             self.tab = tab
         } label: {
             HStack(spacing: 4) {
-                Text(verbatim: tab.title)
-                    .font(isSelected ? OpenClawType.subheadSemiBold : OpenClawType.subheadMedium)
+                // The semibold width is always reserved, so selecting a tab never nudges its neighbors.
+                ZStack {
+                    Text(verbatim: tab.title)
+                        .font(OpenClawType.subheadSemiBold)
+                        .hidden()
+                        .accessibilityHidden(true)
+                    Text(verbatim: tab.title)
+                        .font(isSelected ? OpenClawType.subheadSemiBold : OpenClawType.subheadMedium)
+                }
                 if let number {
                     Text(verbatim: "\(number)")
                         .font(OpenClawType.subhead)
+                        .monospacedDigit()
                         .foregroundStyle(OpenClawSidebarPalette.muted)
                 }
             }
             .foregroundStyle(isSelected ? OpenClawSidebarPalette.textStrong : OpenClawSidebarPalette.text)
             .padding(.horizontal, 12)
-            .frame(minHeight: 36)
-            .background(isSelected ? OpenClawSidebarPalette.selection : Color.clear, in: Capsule())
-            .frame(minHeight: 44)
+            .frame(minHeight: 40)
+            .background {
+                // An ink tint lifts the selection off the glass in both themes; the opaque
+                // sidebar selection color reads as a hole in dark glass.
+                if isSelected {
+                    Capsule()
+                        .fill(OpenClawSidebarPalette.textStrong.opacity(0.1))
+                        .matchedGeometryEffect(id: "selection", in: self.tabSelection)
+                }
+            }
+            .frame(minHeight: 48)
             .contentShape(Rectangle())
         }
         .buttonStyle(.plain)
