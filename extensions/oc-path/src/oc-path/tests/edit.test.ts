@@ -151,6 +151,20 @@ describe("setOcPath", () => {
     expect(() => edit(raw, address, value)).toThrow(expect.objectContaining({ reason }));
   });
 
+  it.each([
+    ['---\n"title": original\n---\n', "[frontmatter]/+title"],
+    ["---\n'owner': me\n---\n", "[frontmatter]/+owner"],
+  ])("refuses to insert %s again under its quoted spelling", (raw, address) => {
+    expect(() => edit(raw, address, "new")).toThrow(
+      expect.objectContaining({ reason: "type-mismatch" }),
+    );
+  });
+
+  it("updates a quoted frontmatter key instead of adding a second spelling", () => {
+    const result = edit('---\n"title": original\n---\nBody\n', "[frontmatter]/title", "new");
+    expect(result.raw).toBe('---\n"title": new\n---\nBody\n');
+  });
+
   it("rejects substring-embedded sentinel on item kv", () => {
     expect(() =>
       edit(

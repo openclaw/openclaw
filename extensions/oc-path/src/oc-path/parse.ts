@@ -101,11 +101,12 @@ function detectFrontmatter(lines: readonly string[]): FrontmatterRange | null {
       }
       const keyLine = lineCounter.linePos(key.range[0]).line;
       const source = expectDefined(frontmatter.at(keyLine - 1), "frontmatter key source line");
-      const match = /^([a-zA-Z_][a-zA-Z0-9_-]*)\s*:\s*(.*)$/.exec(source);
+      const match = FRONTMATTER_KEY_LINE_RE.exec(source);
       if (match !== null) {
-        const capture = expectDefined(match[2], "frontmatter value capture").trim();
+        const capture = expectDefined(match[1], "frontmatter value capture").trim();
         entries.push({
-          key: expectDefined(match[1], "frontmatter key capture"),
+          // Address a quoted key by its YAML value, so `"title"` and `title` are one key.
+          key: String(key.value),
           value: isScalar(value)
             ? scalarText(value)
             : isCollection(value) && value.flow && value.range
@@ -125,10 +126,11 @@ function detectFrontmatter(lines: readonly string[]): FrontmatterRange | null {
   }
   // Malformed, hand-authored frontmatter retains the tolerant line reader.
   for (const [offset, line] of frontmatter.entries()) {
-    const m = /^([a-zA-Z_][a-zA-Z0-9_-]*)\s*:\s*(.*)$/.exec(line);
+    const m = FRONTMATTER_KEY_LINE_RE.exec(line);
     if (m !== null) {
-      const key = expectDefined(m[1], "frontmatter key capture");
-      const capture = expectDefined(m[2], "frontmatter value capture").trim();
+      const spelling = FRONTMATTER_KEY_SPELLING_RE.exec(line);
+      const key = unquote(expectDefined(spelling?.[1], "frontmatter key spelling"));
+      const capture = expectDefined(m[1], "frontmatter value capture").trim();
       const value =
         capture === "" || BLOCK_SCALAR_HEADER_RE.test(capture)
           ? (readIndentedValue(frontmatter, offset) ?? unquote(capture))
@@ -140,6 +142,13 @@ function detectFrontmatter(lines: readonly string[]): FrontmatterRange | null {
 }
 
 const BLOCK_SCALAR_HEADER_RE = /^[|>](?:[+-]?\d*|\d*[+-]?)\s*(?:#.*)?$/;
+
+// Frontmatter lines whose key is a bare identifier or a quoted YAML scalar, so a
+// quoted spelling addresses the same key as its plain form.
+const FRONTMATTER_KEY_LINE_RE =
+  /^(?:"(?:[^"\\]|\\.)*"|'(?:[^']|'')*'|[a-zA-Z_][a-zA-Z0-9_-]*)\s*:\s*(.*)$/;
+const FRONTMATTER_KEY_SPELLING_RE =
+  /^("(?:[^"\\]|\\.)*"|'(?:[^']|'')*'|[a-zA-Z_][a-zA-Z0-9_-]*)\s*:/;
 
 // Reparse the key line plus its indented continuation: unquote("|") parses to
 // "", dropping block scalars and block collections when the document has errors.

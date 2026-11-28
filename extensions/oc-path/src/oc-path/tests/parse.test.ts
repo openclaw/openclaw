@@ -44,6 +44,14 @@ describe("parseMd", () => {
       expect(ast.raw).toBe(raw);
     }
   });
+  it("addresses quoted frontmatter keys by their YAML value", () => {
+    const ast = parseMd("---\n\"title\": original\n'owner': me\n---\n");
+    expect(ast.frontmatter).toEqual([
+      { key: "title", value: "original", line: 2 },
+      { key: "owner", value: "me", line: 3 },
+    ]);
+  });
+
   it("derives the same slug for mixed underscores, punctuation, and hyphens", () => {
     const raw = "## Alpha_ ?_-Beta\u00a0__Gamma\n";
     const ast = parseMd(raw);
