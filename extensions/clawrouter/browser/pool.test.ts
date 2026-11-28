@@ -162,6 +162,22 @@ it("retains accepted pool content through refresh failure and clears the alert d
   expect(f.summary()).toBeNull();
 });
 
+it("allows Refresh after the Gateway reports the pool is unavailable", async () => {
+  const f = await fixture();
+  const message = "Couldn’t load ClawRouter pool status. Select Refresh to try again.";
+  f.first.resolve({ status: "unavailable", message });
+  await vi.waitFor(() =>
+    expect(f.container.querySelector('[role="status"]')?.textContent).toBe(message),
+  );
+  expect(f.alert()).toBeNull();
+
+  f.request.mockResolvedValueOnce(pool);
+  f.button.click();
+  await vi.waitFor(() => expect(f.summary()).not.toBeNull());
+  expect(f.request).toHaveBeenCalledTimes(2);
+  expect(f.container.textContent).not.toContain(message);
+});
+
 it("retires reads when hidden or access changes without publishing their late result", async () => {
   const f = await fixture();
   f.update(false);

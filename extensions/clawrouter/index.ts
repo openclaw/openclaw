@@ -359,7 +359,7 @@ const TIMEOUT_MS = 10_000;
 const MAX_BYTES = 1024 * 1024;
 const unavailable = (): ClawRouterPoolResult => ({
   status: "unavailable",
-  message: "Couldn’t load ClawRouter pool status.",
+  message: "Couldn’t load ClawRouter pool status. Select Refresh to try again.",
 });
 const unsupported = (): ClawRouterPoolResult => ({
   status: "unsupported",

@@ -66,7 +66,7 @@ it("resolves configured runtime auth and returns the bounded pool snapshot", asy
 const unsupported = "This ClawRouter deployment doesn’t provide pool status.";
 const unauthorized =
   "ClawRouter rejected the API key. Ask an admin to replace the key OpenClaw uses.";
-const unavailable = "Couldn’t load ClawRouter pool status.";
+const unavailable = "Couldn’t load ClawRouter pool status. Select Refresh to try again.";
 const hidden = "Ask your ClawRouter admin to enable pool status for this policy.";
 
 it.each([
@@ -95,10 +95,10 @@ it("reports absent auth without making a request or exposing resolver diagnostic
 
 it("maps timeout and oversized response failures without returning raw errors", async () => {
   mocks.fetch.mockRejectedValueOnce(new DOMException("fixture-key", "TimeoutError"));
-  expect(await invoke()).toMatchObject({ status: "unavailable" });
+  expect(await invoke()).toEqual({ status: "unavailable", message: unavailable });
   vi.mocked(request.respond).mockClear();
   respondWith(new Response("x".repeat(1024 * 1024 + 1)));
-  expect(await invoke()).toMatchObject({ status: "unavailable" });
+  expect(await invoke()).toEqual({ status: "unavailable", message: unavailable });
   expect(mocks.release).toHaveBeenCalledOnce();
   expect(JSON.stringify(vi.mocked(request.respond).mock.calls)).not.toContain("fixture-key");
 });
