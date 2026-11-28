@@ -504,7 +504,7 @@ describe("talk realtime gateway relay", () => {
       ...options,
     });
     await Promise.resolve();
-    return { session, captured, events, bridge, closed };
+    return { session, captured, events, closed };
   }
 
   async function createMockRelay(

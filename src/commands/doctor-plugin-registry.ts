@@ -23,7 +23,10 @@ import {
 } from "../plugins/installed-plugin-index-records.js";
 import { preservePluginSourceAdmissions } from "../plugins/installed-plugin-index-source-admissions.js";
 import { resolveInstalledPluginIndexStateDatabaseOptions } from "../plugins/installed-plugin-index-store-path.js";
-import { writePersistedInstalledPluginIndex } from "../plugins/installed-plugin-index-store-write.js";
+import {
+  projectInstalledPluginIndexForStore,
+  writePersistedInstalledPluginIndex,
+} from "../plugins/installed-plugin-index-store-write.js";
 import type { InstalledPluginIndexStoreOptions } from "../plugins/installed-plugin-index-store.js";
 import {
   loadInstalledPluginIndex,
@@ -48,6 +51,7 @@ import {
 } from "../plugins/stale-local-bundled-plugin-install-records.js";
 import { normalizeOptionalTrimmedStringRecord } from "../shared/collection-input.js";
 import { shortenHomePath } from "../utils.js";
+import type { DoctorMaintenancePending } from "./doctor-maintenance-pending.js";
 import {
   resolveDoctorPluginNpmRoots,
   listPluginOpenClawHostLinkIssues,
@@ -55,9 +59,9 @@ import {
 } from "./doctor-plugin-host-links.js";
 import type { DoctorPrompter } from "./doctor-prompter.js";
 import {
-  InvalidPluginInstallRecordStateError,
   migrateOfficialPluginInstallProvenance,
   preflightPluginRegistryDoctorMigration,
+  readPluginRegistryDoctorMigration,
 } from "./doctor/shared/plugin-registry-migration.js";
 
 const PLUGIN_REGISTRY_CHECK_ID = "core/doctor/plugin-registry";
@@ -614,6 +618,44 @@ export function pluginRegistryIssueToRepairEffect(
 }
 
 /**
+ * Read-only: "none" when a repair run would leave the persisted plugin registry as it is. The
+ * complete inventory is rediscovered and compared in the form the store keeps; raw discovery
+ * carries build metadata the store drops, which made every healthy run rewrite the registry.
+ */
+export async function checkPluginRegistryRepairPending(
+  input: PluginRegistryDoctorRepairParams,
+): Promise<DoctorMaintenancePending> {
+  const params = resolveControlPlaneRegistryParams(input);
+  const cache = createPluginCache();
+  try {
+    return await withPluginCache(cache, async () => {
+      // Invalid records are reported by the repair under its lease.
+      const preflight = readPluginRegistryDoctorMigration(params);
+      if (preflight?.action !== "skip-existing") {
+        return preflight ? "work" : "undecidable";
+      }
+      const current = loadInstalledPluginIndex({
+        ...params,
+        config: withoutPluginInstallRecords(params.config),
+        installRecords: await loadRepairedPluginInstallRecords(params, []),
+      });
+      preservePluginSourceAdmissions(preflight.current, current);
+      const stored = projectInstalledPluginIndexForStore({
+        ...current,
+        generatedAtMs: preflight.current.generatedAtMs,
+        refreshReason: preflight.current.refreshReason,
+      });
+      return isDeepStrictEqual(preflight.current, stored) &&
+        (await detectPluginRegistryHealthIssues(params)).length === 0
+        ? "none"
+        : "work";
+    });
+  } finally {
+    await retirePluginCache(cache);
+  }
+}
+
+/**
  * Runs plugin registry doctor repairs and refreshes the persisted plugin index when needed.
  *
  * Stale bundled shadows are removed before registry migration so the rebuilt index resolves the
@@ -623,17 +665,8 @@ export async function maybeRepairPluginRegistryState(
   input: PluginRegistryDoctorRepairParams,
 ): Promise<PluginRegistryDoctorRepairResult> {
   const params = resolveControlPlaneRegistryParams(input);
-  const readPreflight = () => {
-    try {
-      return preflightPluginRegistryDoctorMigration(params);
-    } catch (error) {
-      if (!(error instanceof InvalidPluginInstallRecordStateError)) {
-        throw error;
-      }
-      note(error.message, "Plugin registry");
-      return undefined;
-    }
-  };
+  const readPreflight = () =>
+    readPluginRegistryDoctorMigration(params, (message) => note(message, "Plugin registry"));
   // Invalid input must not bootstrap state; only leased facts can authorize repair.
   const initial = readPreflight();
   if (!initial) {
@@ -642,34 +675,10 @@ export async function maybeRepairPluginRegistryState(
   if (!params.prompter.shouldRepair) {
     return await inspectOrRepairPluginRegistryState(params, initial);
   }
-  const cache = createPluginCache();
-  try {
-    const unchanged = await withPluginCache(cache, async () => {
-      const preflight = readPreflight();
-      if (preflight?.action !== "skip-existing") {
-        return false;
-      }
-      // Rediscover the complete inventory. Even acquiring and releasing a
-      // durable plugin lease dirties SQLite, so stop before that write on a no-op.
-      const current = loadInstalledPluginIndex({
-        ...params,
-        config: withoutPluginInstallRecords(params.config),
-        installRecords: await loadRepairedPluginInstallRecords(params, []),
-      });
-      preservePluginSourceAdmissions(preflight.current, current);
-      return (
-        isDeepStrictEqual(preflight.current, {
-          ...current,
-          generatedAtMs: preflight.current.generatedAtMs,
-          refreshReason: preflight.current.refreshReason,
-        }) && (await detectPluginRegistryHealthIssues(params)).length === 0
-      );
-    });
-    if (unchanged) {
-      return { config: params.config };
-    }
-  } finally {
-    await retirePluginCache(cache);
+  // Even acquiring and releasing a durable plugin lease dirties SQLite, so stop before that
+  // write on a no-op.
+  if ((await checkPluginRegistryRepairPending(input)) === "none") {
+    return { config: params.config };
   }
   return await withPluginLifecycleLease(
     resolveInstalledPluginIndexStateDatabaseOptions(params),

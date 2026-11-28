@@ -1,9 +1,10 @@
 /** Process close owns every admitted model runtime and native catalog worker. */
 import { createDeferredCore } from "../shared/deferred.js";
 import { resolveGlobalSingleton } from "../shared/global-singleton.js";
-import type {
-  PreparedModelRuntimeOwner,
-  PreparedModelRuntimeReplacement,
+import {
+  PREPARED_MODEL_RUNTIME_LIFETIMES_KEY,
+  type PreparedModelRuntimeOwner,
+  type PreparedModelRuntimeReplacement,
 } from "./prepared-model-runtime.types.js";
 
 export class PreparedModelRuntimeClosedError extends Error {
@@ -63,7 +64,7 @@ class ProcessModelRuntimeLifetimes {
 }
 
 const lifetimes = resolveGlobalSingleton(
-  Symbol.for("openclaw.preparedModelRuntimeLifetimes"),
+  PREPARED_MODEL_RUNTIME_LIFETIMES_KEY,
   () => new ProcessModelRuntimeLifetimes(),
   () => closePreparedModelRuntimeSnapshots(),
 );

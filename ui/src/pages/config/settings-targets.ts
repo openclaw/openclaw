@@ -409,6 +409,8 @@ export const SETTINGS_SEARCH_TARGETS = {
       "configView.chatPrefs.openLinksExternallyHint",
       "configView.chatPrefs.messageWidth",
       "configView.chatPrefs.messageWidthHint",
+      "configView.chatPrefs.compactSessionOpening",
+      "configView.chatPrefs.compactSessionOpeningHint",
       "configView.chatPrefs.showTaskProgress",
       "configView.chatPrefs.showTaskProgressHint",
       "configView.chatPrefs.collapseTaskProgress",

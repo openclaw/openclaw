@@ -10,14 +10,7 @@ import * as gatewayService from "../../daemon/service.js";
 import { gatewayHealthResponse } from "../../gateway/health-response.test-support.js";
 import { gitReleaseSlot } from "../../infra/git-release-paths.js";
 import * as stale from "../../infra/restart-stale-pids.js";
-import { prepareUpdateFailureReport } from "../../infra/update-failure-report-prepare.js";
 import { recordUpdateRunVerification } from "../../infra/update-run-ledger.js";
-import type { UpdateRunRecord } from "../../infra/update-run-record.js";
-import { readUpdateRunReportHealth } from "../../infra/update-run-report-health.js";
-import {
-  renderUpdateRunReport,
-  updateRunReportInputFromResult,
-} from "../../infra/update-run-report.js";
 import { isUpdateRunVerificationConfirmed } from "../../infra/update-run-verification.js";
 import { CommandProcessCleanupError } from "../../process/exec-result.js";
 import { defaultRuntime } from "../../runtime.js";
@@ -39,9 +32,6 @@ vi.mock("../../infra/update-run-ledger.js", async (importOriginal) => ({
   recordUpdateRunPhase: vi.fn(),
   recordUpdateRunStep: vi.fn(),
   recordUpdateRunVerification: vi.fn(),
-}));
-vi.mock("../../infra/update-run-report-health.js", () => ({
-  readUpdateRunReportHealth: vi.fn(async () => ({ kind: "unavailable" })),
 }));
 vi.mock("../../runtime.js", () => ({
   defaultRuntime: { log: vi.fn(), error: vi.fn() },
@@ -170,8 +160,6 @@ async function verifyHealth(
     waitForStartup: false,
   });
 }
-const reportFor = (input: ReturnType<typeof resultFixture>) =>
-  renderUpdateRunReport(updateRunReportInputFromResult(input)).markdown;
 
 beforeEach(() => {
   controller = new AbortController();
@@ -296,10 +284,6 @@ it.each(["transient-timeout", "mixed"])(
       channelsReady: false,
     });
     expect(facts && isUpdateRunVerificationConfirmed(facts)).toBe(true);
-    const report = reportFor(result);
-    expect(report).toContain("telegram: health collection timed out after 7000ms");
-    expect(report).toContain("openclaw channels status --probe");
-    expect(report).toContain("openclaw health --json");
     expect(result.steps[0]?.warnings?.join("\n")).toContain(`telegram: ${timeout}`);
   },
 );
@@ -473,11 +457,10 @@ it.each([true, false])(
       code: "timeout",
       message,
     });
-    expect(reportFor(result)).toContain(message);
   },
 );
 
-it("prefers a pending recovery observation over previously saved healthy facts", async () => {
+it("keeps a pending recovery observation unverified", async () => {
   result.status = "error";
   await expect(
     verifyGateway({
@@ -489,30 +472,13 @@ it("prefers a pending recovery observation over previously saved healthy facts",
       health: pendingHealth("still-starting", 19101),
     }),
   ).resolves.toMatchObject({ ok: false, stopReason: "still-starting" });
-  const saved: UpdateRunRecord["verification"] = {
-    versionMatch: true,
-    readyz: true,
-    settled: true,
-    runningVersion: "2026.9.5",
-    recovery: { serviceRestartSafe: true, service: "healthy", version: "2026.9.5" },
-  };
-  const input = updateRunReportInputFromResult(result);
-  const report = renderUpdateRunReport(input);
-  expect(report.markdown).not.toContain("verified serving");
-  expect(report.markdown).toContain("readiness is pending");
-  const publicReport = await prepareUpdateFailureReport(
-    {
-      attemptId: "pending-recovery",
-      result,
-      recordedRun: { runId: "pending-recovery", steps: input.steps, verification: saved },
-    },
-    { env: {}, stateDir: "/fixture/state" },
-  );
-  expect(publicReport.body).not.toContain("verified serving");
-  expect(publicReport.body).toContain("readiness is pending");
-  expect(readUpdateRunReportHealth).toHaveBeenLastCalledWith(
-    expect.objectContaining({ readyz: false, settled: false, port: 19101 }),
-    expect.anything(),
+  expect(result.verification).toMatchObject({ readyz: false, settled: false });
+  expect(result.steps).toContainEqual(
+    expect.objectContaining({
+      advisory: expect.objectContaining({
+        message: expect.stringContaining("readiness is pending"),
+      }),
+    }),
   );
 });
 
@@ -684,7 +650,7 @@ it.each([true, false, undefined])(
     expect(result.verification).toMatchObject({ readyz: false, channelsReady: false });
     if (coreReady === true) {
       expect(result.steps[0]).toMatchObject({ exitCode: 0 });
-      expect(reportFor(result)).toContain("telegram");
+      expect(result.steps[0]?.warnings?.join("\n")).toContain("telegram");
       expect(result.verification).toMatchObject({ coreReady: true, settled: true });
     }
   },
@@ -718,13 +684,13 @@ it.each([false, true])("warns about stopped channels after repair (json=%s)", as
   );
   expect(validation.ok).toBe(true);
   expect(result.steps[0]).toMatchObject({ exitCode: 0 });
-  const report = reportFor(result);
+  const warnings = result.steps[0]?.warnings?.join("\n") ?? "";
   for (const id of ["telegram/suppressed", "telegram/stopped", "discord"]) {
-    expect(report).toContain(id);
+    expect(warnings).toContain(id);
   }
-  expect(report).toContain("restart-loop breaker tripped");
-  expect(report).not.toContain("telegram/disabled");
-  expect(report).not.toContain("telegram/unconfigured");
+  expect(warnings).toContain("restart-loop breaker tripped");
+  expect(warnings).not.toContain("telegram/disabled");
+  expect(warnings).not.toContain("telegram/unconfigured");
   expect(validation.summary).toContain("channel warnings");
   if (json) {
     expectNoCalls(defaultRuntime.log);

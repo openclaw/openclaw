@@ -6,7 +6,7 @@ import type {
   AgentToolResultMiddlewareEvent,
   OpenClawAgentToolResult,
 } from "../../plugins/agent-tool-result-middleware-types.js";
-import { createLazyPromiseLoader } from "../../shared/lazy-promise.js";
+import { listAgentToolResultMiddlewareRegistrations } from "../../plugins/agent-tool-result-middleware.js";
 import { truncateUtf16Safe } from "../../utils.js";
 import { readEmbeddedMessageDeliveryFact } from "../embedded-agent-message-delivery.js";
 import { isDeliveredMessagingToolResult } from "../embedded-agent-message-tool-source-reply.js";
@@ -241,28 +241,14 @@ export function createAgentToolResultMiddlewareApplier(
   ctx: AgentToolResultMiddlewareContext,
   handlers?: AgentToolResultMiddleware[],
 ) {
-  const handlersLoader = createLazyPromiseLoader(async () => {
-    const [
-      { loadAgentToolResultMiddlewareRegistrationsForRuntime },
-      { agentToolResultMiddlewareRegistrationCoversTool },
-    ] = await Promise.all([
-      import("../../plugins/agent-tool-result-middleware-loader.js"),
-      import("../../plugins/agent-tool-result-middleware.js"),
-    ]);
-    const registrations = await loadAgentToolResultMiddlewareRegistrationsForRuntime({
-      runtime: ctx.runtime,
-    });
-    return (toolName: string) =>
-      registrations
-        .filter((entry) =>
-          agentToolResultMiddlewareRegistrationCoversTool(entry, ctx.runtime, toolName),
-        )
-        .map((entry) => entry.handler);
-  });
   return async (
     event: AgentToolResultMiddlewareEvent,
   ): Promise<OpenClawAgentToolResult | undefined> => {
-    const handlersForRun = handlers ?? (await handlersLoader.load())(event.toolName);
+    const handlersForRun =
+      handlers ??
+      listAgentToolResultMiddlewareRegistrations(ctx.runtime, event.toolName).map(
+        (entry) => entry.handler,
+      );
     if (handlersForRun.length === 0) {
       return undefined;
     }

@@ -3,6 +3,40 @@ import Vision
 import XCTest
 
 extension OpenClawSnapshotUITests {
+    func testLiveGatewayNewChatDraftAndSlashCommandCompletion() throws {
+        try XCTSkipUnless(UIDevice.current.userInterfaceIdiom == .phone, "Phone drawer")
+        let app = try self.launchPairedLiveGatewayApp(initialTab: "chat", initialDestination: "chat")
+        let input = self.chatMessageInput(in: app)
+        XCTAssertTrue(input.waitForExistence(timeout: 8))
+        try self.startNewChatFromSidebar()
+        XCTAssertTrue(app.keyboards.firstMatch.waitForExistence(timeout: 5))
+        print("NEW_CHAT_PROOF sidebar draft is open without sending")
+        input.typeText("/ne")
+        XCTAssertEqual(input.value as? String, "/ne")
+        let newCommand = app.buttons["/new"]
+        XCTAssertTrue(newCommand.waitForExistence(timeout: 8))
+        input.typeText("w")
+        XCTAssertEqual(input.value as? String, "/new")
+        self.attachScreenshot(named: "new-command-completion")
+        XCTAssertTrue(newCommand.waitForExistence(timeout: 5), "The standard /new suggestion stays visible")
+    }
+
+    func testNewChatFromSidebarFocusesDraft() throws {
+        try XCTSkipUnless(UIDevice.current.userInterfaceIdiom == .phone, "Phone drawer")
+        self.launchApp(for: Self.chatScreenshotTarget, appearance: "light", additionalArguments: [
+            "--openclaw-empty-chat-fixture",
+        ])
+        let app = try XCTUnwrap(self.app)
+        let input = self.chatMessageInput(in: app)
+        XCTAssertTrue(input.waitForExistence(timeout: 8))
+        XCTAssertFalse(app.keyboards.firstMatch.exists)
+        try self.startNewChatFromSidebar()
+        XCTAssertTrue(app.keyboards.firstMatch.waitForExistence(timeout: 5))
+        self.attachScreenshot(named: "01-new-chat-teclado")
+        app.typeText("Hello")
+        XCTAssertEqual(input.value as? String, "Hello")
+    }
+
     func testChatComposerAccessibilityControls() throws {
         self.launchApp(for: ScreenshotTarget(
             initialTab: "chat", initialDestination: "chat", name: "chat-accessibility-controls"))
@@ -49,7 +83,6 @@ extension OpenClawSnapshotUITests {
         let controls = [
             app.buttons["chat-attachment-picker"],
             app.buttons["chat-composer-inline-permissions"],
-            app.buttons["chat-context-usage"],
             model,
             app.buttons["chat-composer-inline-effort"],
             app.buttons["chat-dictation-control"],
@@ -151,7 +184,50 @@ extension OpenClawSnapshotUITests {
         self.attachScreenshot(named: "stop-guard-deliberate-stop-cancelled-response")
     }
 
-    func testTextDraftKeepsStopAvailableDuringActiveResponse() throws {
+    func testSendLongPressKeepsKeyboardUpDuringActiveResponse() throws {
+        self.launchApp(
+            for: ScreenshotTarget(initialTab: "chat", initialDestination: "chat", name: "chat-send-menu"),
+            additionalArguments: [
+                "--openclaw-hold-initial-chat-run",
+                "--openclaw-queue-menu-fixture",
+                "--openclaw-empty-chat-fixture",
+            ])
+        let app = try XCTUnwrap(self.app)
+        let input = self.chatMessageInput(in: app)
+        XCTAssertTrue(input.waitForExistence(timeout: 8))
+        input.tap()
+        input.typeText("Keep the reply running.")
+        let send = app.buttons["chat-send-message"].firstMatch
+        self.waitForEnabled(send)
+        send.tap()
+        let stop = app.buttons["chat-stop-response"].firstMatch
+        XCTAssertTrue(stop.waitForExistence(timeout: 8))
+        input.tap()
+        input.typeText("Send this next.")
+        self.waitForEnabled(send)
+        let keyboard = app.keyboards.firstMatch
+        XCTAssertTrue(keyboard.exists)
+        let inputBottom = input.frame.maxY
+        self.attachScreenshot(named: "send-menu-before-press")
+        send.press(forDuration: 0.8)
+        let queueNext = app.buttons["Queue next"].firstMatch
+        XCTAssertTrue(queueNext.waitForExistence(timeout: 5))
+        self.attachScreenshot(named: "send-menu-open")
+        XCTAssertTrue(queueNext.isHittable, "Queue next must be available in the menu")
+        // UIKit retains an accessibility keyboard even after its keys slide offscreen.
+        // A dismissed keyboard also drops the composer to the bottom safe area.
+        XCTAssertTrue(keyboard.exists)
+        XCTAssertEqual(input.frame.maxY, inputBottom, accuracy: 2, "The composer dropped when the keyboard closed")
+
+        // Dismiss the options, then use the same menu-backed Send with an ordinary tap.
+        app.coordinate(withNormalizedOffset: CGVector(dx: 0.1, dy: 0.35)).tap()
+        XCTAssertTrue(queueNext.waitForNonExistence(timeout: 3))
+        send.tap()
+        XCTAssertTrue(send.waitForNonExistence(timeout: 5), "A plain tap must submit the follow-up draft")
+        XCTAssertFalse(queueNext.exists, "A plain tap must not open the menu")
+    }
+
+    func testTextDraftKeepsOnePrimaryButtonDuringActiveResponse() throws {
         self.launchApp(
             for: ScreenshotTarget(
                 initialTab: "chat",
@@ -174,11 +250,11 @@ extension OpenClawSnapshotUITests {
         input.tap()
         input.typeText("Keep this follow-up draft")
         self.attachScreenshot(named: "text-draft-during-active-response")
+        // One primary button. This fixture has no outbox, so the draft waits for the reply and the
+        // button stays Stop; Send never appears beside it.
         XCTAssertTrue(stop.exists, "Drafting must keep the current response stoppable")
-        XCTAssertTrue(stop.isHittable)
-        XCTAssertTrue(send.exists)
+        XCTAssertFalse(send.exists, "Stop and Send must never show together")
         self.assertMinimumTouchTarget(stop)
-        self.assertNoHorizontalOverlap([stop, send])
 
         stop.tap()
         XCTAssertTrue(stop.waitForNonExistence(timeout: 8))
@@ -190,12 +266,17 @@ extension OpenClawSnapshotUITests {
 
     func testVoiceNoteDraftKeepsStopAvailableDuringActiveResponse() throws {
         try XCTSkipIf(UIDevice.current.userInterfaceIdiom != .phone, "Phone voice-note composer proof only")
+        // Start from an undecided microphone, so a simulator left denied or granted by an earlier run
+        // can't change what this test sees.
+        XCUIApplication().resetAuthorizationStatus(for: .microphone)
         self.launchApp(
             for: ScreenshotTarget(
                 initialTab: "chat",
                 initialDestination: "chat",
                 name: "chat-voice-note-stop-active-response"),
-            additionalArguments: ["--openclaw-hold-initial-chat-run"])
+            // Lab Macs have no audio input, so a real recording can't start in the simulator. The fixture
+            // keeps the permission request and records silence.
+            additionalArguments: ["--openclaw-hold-initial-chat-run", "--openclaw-voice-note-fixture"])
 
         let app = try XCTUnwrap(self.app)
         let input = self.chatMessageInput(in: app)
@@ -219,9 +300,21 @@ extension OpenClawSnapshotUITests {
         let recordVoiceNote = app.buttons["Record Voice Note"]
         XCTAssertTrue(recordVoiceNote.waitForExistence(timeout: 5))
         recordVoiceNote.tap()
+        // The first recording asks for the microphone. Allow it, as a person would, so the recorder
+        // really starts.
+        let microphoneAlert = XCUIApplication(bundleIdentifier: "com.apple.springboard").alerts.firstMatch
+        let microphonePrompt = microphoneAlert.staticTexts.matching(
+            NSPredicate(format: "label CONTAINS[c] %@", "microphone")).firstMatch
+        XCTAssertTrue(microphonePrompt.waitForExistence(timeout: 8))
+        // The system alert nests each button in a second button with the same label.
+        let allow = microphoneAlert.buttons["Allow"].firstMatch
+        XCTAssertTrue(allow.wait(for: \.isHittable, toEqual: true, timeout: 5))
+        allow.tap()
+        XCTAssertTrue(microphoneAlert.waitForNonExistence(timeout: 5))
 
         let finishVoiceNote = app.buttons["Finish voice note"]
         XCTAssertTrue(finishVoiceNote.waitForExistence(timeout: 8))
+        self.attachScreenshot(named: "voice-note-recording-active-response")
         finishVoiceNote.tap()
 
         let voiceNote = app.staticTexts["Voice note"]
@@ -902,25 +995,33 @@ extension OpenClawSnapshotUITests {
         let app = try XCTUnwrap(self.app)
         self.sendFixtureChatMessage(prompt)
 
-        let thumbsUp = app.buttons["chat-reaction-👍"]
-        XCTAssertTrue(thumbsUp.waitForExistence(timeout: 5))
-        XCTAssertTrue(thumbsUp.isSelected)
-        XCTAssertTrue(thumbsUp.label.contains("You, Casey"))
-        XCTAssertTrue(app.buttons["chat-reaction-🚀"].exists)
+        // All of a message's reactions share one pill; it opens the picker that toggles yours.
+        let pill = app.buttons.matching(NSPredicate(
+            format: "identifier BEGINSWITH %@ AND label CONTAINS %@", "chat-message-reactions-", "👍")).firstMatch
+        XCTAssertTrue(pill.waitForExistence(timeout: 5))
+        XCTAssertTrue(pill.label.contains("You, Casey reacted with 👍"))
+        XCTAssertTrue(pill.label.contains("Morgan reacted with 🚀"))
         self.attachScreenshot(named: "ios-reactions-prompt-after")
 
+        let thumbsUp = app.buttons["chat-reaction-👍"]
+        let picker = app.descendants(matching: .any)["chat-reaction-picker"].firstMatch
+        pill.tap()
+        XCTAssertTrue(thumbsUp.waitForExistence(timeout: 3))
+        XCTAssertTrue(thumbsUp.isSelected)
         thumbsUp.tap()
+        XCTAssertTrue(picker.waitForNonExistence(timeout: 3))
+        pill.tap()
         XCTAssertTrue(thumbsUp.wait(for: \.isSelected, toEqual: false, timeout: 5))
         XCTAssertEqual(thumbsUp.label, "Casey reacted with 👍")
         thumbsUp.tap()
-        XCTAssertTrue(thumbsUp.wait(for: \.isSelected, toEqual: true, timeout: 5))
+        XCTAssertTrue(picker.waitForNonExistence(timeout: 3))
 
         app.staticTexts[prompt].press(forDuration: 0.8)
         let addReaction = app.buttons["chat-add-reaction"]
         XCTAssertTrue(addReaction.waitForExistence(timeout: 3))
         addReaction.tap()
-        let picker = app.descendants(matching: .any)["chat-reaction-picker"].firstMatch
         XCTAssertTrue(picker.waitForExistence(timeout: 3))
+        XCTAssertTrue(thumbsUp.isSelected)
         let quickEmoji = ["👍", "❤️", "🎉", "👀", "🚀", "😂"]
         let choices = quickEmoji.map { app.buttons["chat-reaction-choice-\($0)"] }
         for choice in choices {
@@ -935,12 +1036,12 @@ extension OpenClawSnapshotUITests {
 
         app.buttons["chat-reaction-choice-😂"].tap()
         XCTAssertTrue(picker.waitForNonExistence(timeout: 3))
-        let addedReaction = app.buttons["chat-reaction-😂"]
-        XCTAssertTrue(addedReaction.waitForExistence(timeout: 5))
-        XCTAssertTrue(addedReaction.isSelected)
+        XCTAssertTrue(app.buttons.matching(NSPredicate(
+            format: "identifier BEGINSWITH %@ AND label CONTAINS %@", "chat-message-reactions-", "😂"))
+            .firstMatch.waitForExistence(timeout: 5))
     }
 
-    func testAssistantLongPressKeepsTranscriptVisibleAndActionsReachable() throws {
+    func testAssistantReplyHoldOffersActionsInMenu() throws {
         try XCTSkipIf(UIDevice.current.userInterfaceIdiom != .phone, "Phone message interaction proof only")
         self.launchApp(for: ScreenshotTarget(
             initialTab: "chat",
@@ -952,21 +1053,18 @@ extension OpenClawSnapshotUITests {
             "Ready when you are. I can check a project, coordinate an agent, or prepare the next step.",
         ]
         XCTAssertTrue(assistant.waitForExistence(timeout: 8))
-        XCTAssertFalse(app.buttons["chat-message-actions"].exists)
-        assistant.press(forDuration: 0.8)
-        XCTAssertTrue(assistant.exists)
-        XCTAssertTrue(app.otherElements["chat-composer-surface"].exists)
-        XCTAssertTrue(app.buttons["Copy Message"].waitForExistence(timeout: 3))
-        XCTAssertTrue(app.buttons["chat-add-reaction"].exists)
-        self.attachScreenshot(named: "assistant-message-actions")
+        // An unreacted reply has no footer or action bar at rest.
+        for action in ["Copy Message", "Reply", "Listen", "chat-add-reaction"] {
+            XCTAssertFalse(app.buttons[action].exists, action)
+        }
 
-        app.buttons["Select Text"].tap()
-        let selectableText = app.textViews["chat-selectable-text"]
-        XCTAssertTrue(selectableText.waitForExistence(timeout: 3))
-        XCTAssertTrue((selectableText.value as? String)?.contains("Ready when you are") == true)
-        self.attachScreenshot(named: "assistant-select-text")
-        app.buttons["Close"].tap()
-        XCTAssertTrue(selectableText.waitForNonExistence(timeout: 3))
+        // Holding the reply opens its menu instead of selecting a word.
+        assistant.press(forDuration: 0.8)
+        XCTAssertTrue(app.buttons["Copy Message"].waitForExistence(timeout: 3))
+        for action in ["chat-add-reaction", "Select Text", "Reply", "Listen"] {
+            XCTAssertTrue(app.buttons[action].exists, action)
+        }
+        self.attachScreenshot(named: "assistant-message-menu")
     }
 
     func testCodeBlockCopyButtonCopiesRawCode() throws {

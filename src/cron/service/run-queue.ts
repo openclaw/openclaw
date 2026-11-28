@@ -373,7 +373,7 @@ export async function drainCronRunQueue(state: CronServiceState): Promise<void> 
             schedulingPaused: state.schedulingPaused || isGatewayRestartDraining(),
             preparingAgentIds: preparingCronAgentIds(state.deps.env),
             busyConversationJobIds: busyConversationCronJobIds(state),
-            memoryAllowsExtraRun: cronMemoryAllowsExtraRun(),
+            memoryAllowsExtraRun: cronMemoryAllowsExtraRun(state),
             providerBackoff: captureCronProviderBackoff(),
             requests: getCronRunQueueRequests(state, { includePendingEvents: true }),
             hostProcessId: currentPluginCommandHostProcessId(),

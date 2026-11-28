@@ -30,4 +30,6 @@
 # OPENCLAW_INTERNAL_WORKER_TMPDIR directs the confined worker to its private temporary directory.
 # OPENCLAW_NODE_WORKER_EXECUTION carries launcher-selected settings to its dedicated worker.
 # OPENCLAW_WORKER_TOOL_DATA supplies node-selected public data to local tools.
+# OPENCLAW_GATEWAY_REQUIRE_NAMESPACE_PROOF lets a supervisor require verified Linux namespace recovery.
+# OPENCLAW_NODE_OPTIONS_READY was removed with the warning-only CLI respawn.
 470

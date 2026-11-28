@@ -7,7 +7,11 @@ import { extractErrorCode } from "@openclaw/normalization-core/error-coercion";
 import { isRecord } from "@openclaw/normalization-core/record-coerce";
 import { getCliParentPid } from "../../cli-parent-lifetime.mjs";
 import { isForegroundGatewayRunArgv } from "../../gateway-run-argv.mjs";
-import { getFileLockProcessStartTime, isPidAlive } from "../shared/pid-alive.js";
+import {
+  getFileLockProcessStartTime,
+  getProcessStartTime,
+  isPidAlive,
+} from "../shared/pid-alive.js";
 import { resolveOpenClawStateDirForDatabasePath } from "../state/openclaw-state-db.paths.js";
 import { readProcessMachineIdentity } from "./current-machine-identity.js";
 import { acquireFileLockSync } from "./file-lock-manager.js";
@@ -28,6 +32,7 @@ import {
 } from "./gateway-state-owner-directory.js";
 import {
   GatewayStateOwnerContentionError,
+  isTransientStateSchemaOwner,
   StateDatabaseAccessError,
   StateDatabaseAdmissionPendingError,
   StateDatabaseOfflineMaintenanceError,
@@ -54,13 +59,17 @@ function comparableStateOwnerStaleReason(
 }
 
 /** Reclamation uses native identity for local owners and heartbeat expiry across namespaces. */
-export function isGatewayStateOwnerDefinitelyStale(value: unknown, lockPath?: string): boolean {
+export function isGatewayStateOwnerDefinitelyStale(
+  value: unknown,
+  lockPath?: string,
+  databasePath?: string,
+): boolean {
   const payload = isRecord(value) ? value : null;
   if (!payload) {
     // Exclusive creation precedes publication; an incomplete record still owns its lock.
     return false;
   }
-  const namespace = classifyGatewayLockProcessNamespace(payload, lockPath);
+  const namespace = classifyGatewayLockProcessNamespace(payload, lockPath, databasePath);
   if (namespace === "unknown") {
     throw new GatewayLockNamespaceError(payload, lockPath);
   }
@@ -111,7 +120,7 @@ export function assertPersistedStateDatabaseAccessAllowed(params: {
   }
   // Ordinary SQLite access does not reclaim the owner or borrow schema custody.
   // Unknown namespaces retain maintenance contention without probing a local PID.
-  const namespace = classifyGatewayLockProcessNamespace(owner, ownerPath);
+  const namespace = classifyGatewayLockProcessNamespace(owner, ownerPath, databasePath);
   const staleReason = comparableStateOwnerStaleReason(owner, namespace);
   if (staleReason) {
     if (inspection && staleReason === "owner-process-exited") {
@@ -138,7 +147,7 @@ export function assertPersistedStateDatabaseAccessAllowed(params: {
     return;
   }
   const maintenancePending = `OpenClaw state at ${databasePath} is undergoing offline maintenance by ${role} process ${owner.pid}, started ${owner.createdAt}; retry when it finishes. For update progress, run \`openclaw update status --json\`. ${describeGatewayLockHolder(owner, ownerPath, namespace === "same" ? "live" : "unknown")}`;
-  if (owner.stateOwnerKind === "schema" && owner.role === "sqlite-maintenance") {
+  if (isTransientStateSchemaOwner(owner)) {
     throw new StateDatabaseAdmissionPendingError(databasePath, maintenancePending);
   }
   throw new StateDatabaseOfflineMaintenanceError(databasePath, maintenancePending);
@@ -157,6 +166,7 @@ export function defaultPayload(databasePath: string): LockPayload {
     configPath: path.join(stateDir, "openclaw.json"),
     role: "sqlite-maintenance",
     processNamespace: readGatewayLockProcessNamespace(),
+    pidNsInitStartTicks: getProcessStartTime(1) ?? undefined,
     machineIdentity: process.platform === "darwin" ? readProcessMachineIdentity() : undefined,
     ...(parentPid === undefined ? {} : { parentPid }),
     ...(parentStartTime === null ? {} : { parentStartTime }),
@@ -251,7 +261,7 @@ export function acquireGatewayStateOwnerFile(
   const observed: { holder: LockPayload | null } = { holder: null };
   const stale = ({ payload: value }: { payload: unknown }) => {
     observed.holder = LockPayloadSchema.safeParse(value).data ?? null;
-    return isGatewayStateOwnerDefinitelyStale(observed.holder, pathname);
+    return isGatewayStateOwnerDefinitelyStale(observed.holder, pathname, databasePath);
   };
   if (busyTimeoutMs > 0) {
     try {
@@ -260,7 +270,7 @@ export function acquireGatewayStateOwnerFile(
       ));
       if (
         previous &&
-        !isGatewayStateOwnerDefinitelyStale(previous, pathname) &&
+        !isGatewayStateOwnerDefinitelyStale(previous, pathname, databasePath) &&
         (previous.pid === process.pid ||
           ((previous.role ?? "gateway") === "gateway" && isPidAlive(previous.pid)))
       ) {
@@ -315,7 +325,9 @@ export function acquireGatewayStateOwnerFile(
           databasePath,
           error,
           holderDetail,
-          holder ? { pid: holder.pid, role: holder.role } : undefined,
+          holder
+            ? { pid: holder.pid, role: holder.role, stateOwnerKind: holder.stateOwnerKind }
+            : undefined,
         );
       }
       throw error;

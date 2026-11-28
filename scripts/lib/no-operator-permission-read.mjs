@@ -5,7 +5,7 @@ import {
 } from "./type-assertion-guard-scope.mjs";
 
 // Live reads of an operator's role, role policy and profile access. A run admits once and then
-// keeps the frozen facts on its admitted operator authority (AGENTS.md "Choose good compromises").
+// keeps the frozen facts on its admitted operator authority (AGENTS.md "Decide authority once").
 const READERS = new Set([
   "authorizeCurrentOperatorRoleScopes",
   "captureResidentUserProfileAccess",
@@ -15,77 +15,143 @@ const READERS = new Set([
   "resolveOperatorRolePolicyForProfile",
   "resolveOperatorRoleSelection",
 ]);
+// The one constructor of run authority. A new caller is how a second decision or a revocation
+// signal gets into a started run (#204847).
+const MINTER = "createAdmittedRunOperatorAuthority";
+const MINTER_OWNER = "src/agents/admitted-run-context.ts";
 
-// Owners and work starts that may read live permissions. Shrink only: a new file takes its
-// scopes, role and policy from the admitted operator authority instead of joining this list.
-export const ADMISSION_FILES = new Set([
-  "src/commands/doctor/cron/execution-context-check.ts",
-  "src/flows/doctor-member-roles.store.ts",
-  "src/gateway/agent-turn/agent-session-persist.ts",
-  "src/gateway/assistant-media-policy.ts",
-  "src/gateway/channel-operator-authority.ts",
-  "src/gateway/control-ui-session-pr-read.ts",
-  "src/gateway/factory-github-proof.ts",
-  "src/gateway/github-publication-inspect-reader.ts",
-  "src/gateway/github-publication-requester.ts",
-  "src/gateway/http-auth-user-profile.ts",
-  "src/gateway/human-mention-policy.ts",
-  "src/gateway/ios-approval-push-authority.ts",
-  "src/gateway/openclaw-id/member-profiles.ts",
-  "src/gateway/openclaw-id/member-role-change.ts",
-  "src/gateway/operator-access-policy.ts",
-  "src/gateway/operator-admission.ts",
-  "src/gateway/operator-model-presentation.ts",
-  "src/gateway/operator-role-policy.ts",
-  "src/gateway/operator-run-authority.ts",
-  "src/gateway/project-access.ts",
-  "src/gateway/question-session-access.ts",
-  "src/gateway/remote-control-ui-ingress.ts",
-  "src/gateway/repository-integration-identity.ts",
-  "src/gateway/server-chat-metadata-lifecycle.ts",
-  "src/gateway/server-methods/agents.ts",
-  "src/gateway/server-methods/chat-history-handler.ts",
-  "src/gateway/server-methods/cron-wake.ts",
-  "src/gateway/server-methods/device-scope-upgrade.ts",
-  "src/gateway/server-methods/environments.profiles.ts",
-  "src/gateway/server-methods/github-personal-authorization.ts",
-  "src/gateway/server-methods/method-authorization.ts",
-  "src/gateway/server-methods/models.ts",
-  "src/gateway/server-methods/personal-profile-authorization.ts",
-  "src/gateway/server-methods/send-role-authorization.ts",
-  "src/gateway/server-methods/sessions-sharing-permissions.ts",
-  "src/gateway/server-methods/templates-drafts.ts",
-  "src/gateway/server-methods/users-background.ts",
-  "src/gateway/server-methods/users-model-account-access.ts",
-  "src/gateway/server-methods/users-personal-file.ts",
-  "src/gateway/server-methods/users-profile-access.ts",
-  "src/gateway/server-methods/users-role.ts",
-  "src/gateway/server/ws-connection/authenticated-request-dispatch.ts",
-  "src/gateway/server/ws-connection/connect-hello.ts",
-  "src/gateway/server/ws-connection/connect-openclaw-id-member-grant.ts",
-  "src/gateway/server/ws-connection/connect-operator-access.ts",
-  "src/gateway/server/ws-connection/connect-session.ts",
-  "src/gateway/server/ws-origin-policy.ts",
-  "src/gateway/session-access-authority.ts",
-  "src/gateway/session-activity-summary-authority.ts",
-  "src/gateway/session-communication-approval.ts",
-  "src/gateway/session-companion-rpc.ts",
-  "src/gateway/session-permission-authorization.ts",
-  "src/gateway/session-sharing-policy.ts",
-  "src/gateway/session-sharing-read.ts",
-  "src/gateway/tools-invoke-shared.ts",
-  "src/gateway/web-push-authority.ts",
-  "src/skills/library/store.ts",
-  "src/state/user-profile-list.ts",
+// Each list maps a file to the references it has today. Shrink only: lower a count when a
+// reference goes away. New code takes scopes, role, policy and liveness from the admitted
+// operator authority instead of raising a count or joining a list.
+
+// Owners and work starts that may read live permissions.
+export const ADMISSION_FILES = new Map([
+  ["src/commands/doctor/cron/execution-context-check.ts", 3],
+  ["src/flows/doctor-member-roles.store.ts", 2],
+  ["src/gateway/agent-turn/agent-session-persist.ts", 2],
+  ["src/gateway/assistant-media-policy.ts", 2],
+  ["src/gateway/channel-operator-authority.ts", 6],
+  ["src/gateway/control-ui-session-pr-read.ts", 4],
+  ["src/gateway/factory-github-proof.ts", 2],
+  ["src/gateway/github-publication-inspect-reader.ts", 2],
+  ["src/gateway/github-publication-requester.ts", 3],
+  ["src/gateway/http-auth-user-profile.ts", 5],
+  ["src/gateway/human-mention-policy.ts", 7],
+  ["src/gateway/ios-approval-push-authority.ts", 2],
+  ["src/gateway/openclaw-id/member-profiles.ts", 2],
+  ["src/gateway/openclaw-id/member-role-change.ts", 2],
+  ["src/gateway/operator-access-policy.ts", 4],
+  ["src/gateway/operator-admission.ts", 5],
+  ["src/gateway/operator-model-presentation.ts", 2],
+  // Includes the existing role-loss comparison moved from the role RPC module.
+  ["src/gateway/operator-role-policy.ts", 26],
+  ["src/gateway/operator-run-authority.ts", 3],
+  ["src/gateway/project-access.ts", 2],
+  ["src/gateway/question-session-access.ts", 4],
+  ["src/gateway/remote-control-ui-ingress.ts", 4],
+  ["src/gateway/repository-integration-identity.ts", 2],
+  ["src/gateway/server-chat-metadata-lifecycle.ts", 2],
+  ["src/gateway/server-methods/agents.ts", 6],
+  ["src/gateway/server-methods/chat-history-handler.ts", 2],
+  ["src/gateway/server-methods/cron-wake.ts", 2],
+  ["src/gateway/server-methods/device-scope-upgrade.ts", 3],
+  ["src/gateway/server-methods/environments.profiles.ts", 2],
+  ["src/gateway/server-methods/github-personal-authorization.ts", 2],
+  ["src/gateway/server-methods/method-authorization.ts", 2],
+  ["src/gateway/server-methods/models.ts", 2],
+  ["src/gateway/server-methods/personal-profile-authorization.ts", 6],
+  ["src/gateway/server-methods/send-role-authorization.ts", 2],
+  ["src/gateway/server-methods/sessions-sharing-permissions.ts", 4],
+  ["src/gateway/server-methods/templates-drafts.ts", 2],
+  ["src/gateway/server-methods/users-background.ts", 2],
+  ["src/gateway/server-methods/users-model-account-access.ts", 2],
+  ["src/gateway/server-methods/users-personal-file.ts", 2],
+  ["src/gateway/server-methods/users-profile-access.ts", 2],
+  // Profile enumeration presents effective roles; the policy owner compares role changes.
+  ["src/gateway/server-methods/users-role.ts", 2],
+  ["src/gateway/server/ws-connection/authenticated-request-dispatch.ts", 2],
+  ["src/gateway/server/ws-connection/connect-hello.ts", 4],
+  ["src/gateway/server/ws-connection/connect-openclaw-id-member-grant.ts", 2],
+  ["src/gateway/server/ws-connection/connect-operator-access.ts", 4],
+  ["src/gateway/server/ws-connection/connect-session.ts", 2],
+  ["src/gateway/server/ws-origin-policy.ts", 3],
+  ["src/gateway/session-access-authority.ts", 4],
+  ["src/gateway/session-activity-summary-authority.ts", 4],
+  ["src/gateway/session-communication-approval.ts", 2],
+  ["src/gateway/session-companion-rpc.ts", 2],
+  ["src/gateway/session-permission-authorization.ts", 2],
+  ["src/gateway/session-sharing-policy.ts", 4],
+  ["src/gateway/session-sharing-read.ts", 9],
+  ["src/gateway/tools-invoke-shared.ts", 5],
+  ["src/gateway/web-push-authority.ts", 2],
+  ["src/skills/library/store.ts", 2],
+  ["src/state/user-profile-list.ts", 1],
+]);
+
+// Files that build run authority. Admission is the owner; the others pass admitted authority on.
+export const MINT_FILES = new Map([
+  ["src/gateway/cron-stream-sandbox-authority.ts", 2],
+  ["src/gateway/operator-admission.ts", 2],
+  ["src/gateway/operator-run-authority.ts", 4],
+  ["src/gateway/operator-run-invocation.ts", 3],
+  ["src/gateway/operator-run-recovery.ts", 2],
+  ["src/plugin-sdk/plugin-test-runtime.ts", 2],
+]);
+
+// Requests that re-check their connection's access after admission.
+export const ACCESS_RECHECK_FILES = new Map([
+  ["src/gateway/question-session-access.ts", 3],
+  ["src/gateway/session-communication-approval.ts", 1],
+]);
+
+// Stop on access loss is a command from a permission writer, never a decision. Its module selects
+// work by the recorded requester only; reading admission, roles or membership there would turn it
+// into a mid-run re-check.
+const STOP_MODULES = new Set([
+  "src/gateway/chat-abort-stop-work.ts",
+  `${BOUNDARY_GUARD_FIXTURE_ROOT}/stop-work-authority-read-violation.ts`,
+]);
+const STOP_FORBIDDEN = new Set([
+  ...READERS,
+  "decideOperatorAdmission",
+  "decideTurnGrant",
+  "prepareOperatorAdmission",
+  "readSessionMembersInWorker",
+  "readSessionMembershipFactsInDatabase",
+  "resolveSessionSharingMembership",
 ]);
 
 const ROOTS = ["src", "extensions", "packages", BOUNDARY_GUARD_FIXTURE_ROOT];
+
+const CHECKS = {
+  read: {
+    files: ADMISSION_FILES,
+    message: (name) =>
+      `Permission read: ${name} reads live operator permissions after admission. Use the scopes, role and policy on the admitted operator authority; permissions are checked once when work starts.`,
+  },
+  mint: {
+    files: MINT_FILES,
+    message: () =>
+      `Run authority minted: ${MINTER} outside admission. Pass the admitted run authority on; a started run keeps it until it ends.`,
+  },
+  recheck: {
+    files: ACCESS_RECHECK_FILES,
+    message: () =>
+      "Access re-check: operatorAccessAuthority.assertCurrent() after the request started. Access is checked once when the request is admitted; a started request finishes.",
+  },
+  stop: {
+    files: new Map(),
+    message: (name) =>
+      `Stop authority read: ${name} in the stop-on-access-loss module. It selects work by the recorded requester; the permission writer decides the loss.`,
+  },
+};
 
 export default {
   meta: {
     type: "problem",
     docs: {
-      description: "Only admission files may read live operator permissions.",
+      description:
+        "Only admission files may read live operator permissions, mint run authority or re-check access.",
     },
     schema: [
       {
@@ -101,21 +167,42 @@ export default {
     const repoPath = filename.startsWith(`${cwd}/`) ? filename.slice(cwd.length + 1) : filename;
     if (
       !ROOTS.some((root) => pathMatchesTypeAssertionRoot(repoPath, root)) ||
-      isSkippedTypeAssertionTestPath(repoPath) ||
-      (context.options[0]?.ignoreAllowlists !== true && ADMISSION_FILES.has(repoPath))
+      isSkippedTypeAssertionTestPath(repoPath)
     ) {
       return {};
     }
-    const reported = new Set();
+    const ignoreAllowlists = context.options[0]?.ignoreAllowlists === true;
+    const seen = new Set();
+    const counts = { read: 0, mint: 0, recheck: 0, stop: 0 };
+    const stopModule = STOP_MODULES.has(repoPath);
+    const report = (kind, node) => {
+      // Shorthand import, export and destructuring specifiers share one span.
+      if (seen.has(node.start)) {
+        return;
+      }
+      seen.add(node.start);
+      counts[kind] += 1;
+      if (ignoreAllowlists || counts[kind] > (CHECKS[kind].files.get(repoPath) ?? 0)) {
+        context.report({ node, message: CHECKS[kind].message(node.name) });
+      }
+    };
     return {
       Identifier(node) {
-        // Shorthand import, export and destructuring specifiers share one span.
-        if (READERS.has(node.name) && !reported.has(node.start)) {
-          reported.add(node.start);
-          context.report({
-            node,
-            message: `${node.name} reads live operator permissions after admission. Use the scopes, role and policy on the admitted operator authority; permissions are checked once when work starts.`,
-          });
+        if (stopModule && STOP_FORBIDDEN.has(node.name)) {
+          report("stop", node);
+        } else if (READERS.has(node.name)) {
+          report("read", node);
+        } else if (node.name === MINTER && repoPath !== MINTER_OWNER) {
+          report("mint", node);
+        }
+      },
+      MemberExpression(node) {
+        if (
+          node.property.name === "assertCurrent" &&
+          node.object.type === "MemberExpression" &&
+          node.object.property.name === "operatorAccessAuthority"
+        ) {
+          report("recheck", node.property);
         }
       },
     };

@@ -35,10 +35,11 @@ import { coordinateWorkerPlacementDispatch } from "./worker-environments/placeme
 import { createHarness } from "./worker-environments/placement-dispatch-test-harness.js";
 import { createWorkerSessionPlacementStore } from "./worker-environments/placement-store.js";
 import { writePlacementEnvironmentFixture } from "./worker-environments/placement-test-fixtures.js";
-import { createRepositoryPolicySource } from "./worker-environments/repository-policy-node.test-support.js";
+import {
+  createRepositoryPolicyReconciler,
+  createRepositoryPolicySource,
+} from "./worker-environments/repository-policy-node.test-support.js";
 import { deriveEnvironmentIntent } from "./worker-environments/service-contract.js";
-import { captureWorkspaceManifest } from "./worker-environments/workspace-manifest-worker.js";
-import { serializeWorkerWorkspaceManifest } from "./worker-environments/workspace-manifest.js";
 
 const { createSessionStoreDir } = setupGatewaySessionsHandlerTestHarness();
 afterEach(() => {
@@ -205,37 +206,7 @@ test.each(["allowed", "policy", "source", "stop"] as const)(
           baseManifestRef: prepared.result.manifestRef,
         };
       },
-      reconcileWorkspace: async (input) => {
-        if (input.source.kind !== "repository") {
-          throw new Error("Expected repository");
-        }
-        const manifest = await captureWorkspaceManifest({
-          root: input.remoteWorkspaceDir,
-          baseCommit,
-        });
-        const checkpoint = await input.source.prepareCheckpoint({
-          stagingRoot: input.remoteWorkspaceDir,
-          baseManifestRaw: serializeWorkerWorkspaceManifest(base.manifest),
-          currentManifestRaw: serializeWorkerWorkspaceManifest(manifest.manifest),
-          baseManifestRef: base.manifestRef,
-          currentManifestRef: manifest.manifestRef,
-        });
-        return {
-          manifestRef: manifest.manifestRef,
-          changed: false,
-          verifyStable: async () => {
-            expect(
-              (await captureWorkspaceManifest({ root: input.remoteWorkspaceDir, baseCommit }))
-                .manifestRef,
-            ).toBe(manifest.manifestRef);
-          },
-          verifyLocalStable: () => checkpoint.verify(),
-          publishStagedResult: async () => {
-            await checkpoint.publish();
-          },
-          discardPreparedStagedResult: () => checkpoint.discard(),
-        };
-      },
+      reconcileWorkspace: createRepositoryPolicyReconciler({ base, baseCommit }),
     });
     const originalDispatch = harness.service.dispatch;
     harness.service.dispatch = (...args) => {

@@ -4,7 +4,7 @@ import type { GatewayConfig } from "../config/types.gateway.js";
 import { createSubsystemLogger } from "../logging/subsystem.js";
 import { resolveGlobalSingleton } from "../shared/global-singleton.js";
 import type { GatewayResourceProfile } from "./gateway-resource-profile.js";
-import { findCgroupV2MemoryLimitDirectory, readCgroupV2WorkingSetBytes } from "./host-memory.js";
+import { captureCgroupV2WorkingSetReader } from "./host-memory.js";
 import { forEachTrackedWorker, getWorkerPoolId } from "./worker-cpu.js";
 import { workerScriptName } from "./worker-diagnostic-script.js";
 import {
@@ -69,12 +69,10 @@ export function initializeWorkerMemoryBudget(
   if (profile.profile !== "lean") {
     return;
   }
-  const directory =
-    profile.memoryLimitSource === "cgroup-v2" ? findCgroupV2MemoryLimitDirectory() : undefined;
+  const readCgroupUsage =
+    profile.memoryLimitSource === "cgroup-v2" ? captureCgroupV2WorkingSetReader() : undefined;
   // Without a container, measure the Gateway process itself, not other programs on the host.
-  const readUsageBytes = directory
-    ? () => readCgroupV2WorkingSetBytes(directory)
-    : () => process.memoryUsage.rss();
+  const readUsageBytes = readCgroupUsage ?? (() => process.memoryUsage.rss());
   const configured = resources?.memoryBudgetMiB;
   const basis = configured
     ? "configured"
@@ -93,7 +91,7 @@ export function initializeWorkerMemoryBudget(
     basis,
     readUsageBytes,
     baselineBytes: readUsageBytes() ?? 0,
-    usageSource: directory ? "cgroup-v2-working-set" : "process-rss",
+    usageSource: readCgroupUsage ? "cgroup-v2-working-set" : "process-rss",
     countLive: () => {
       const pools = new Map<number, number>();
       const direct = new Map<string, number>();

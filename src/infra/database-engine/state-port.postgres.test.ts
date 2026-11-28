@@ -55,6 +55,8 @@ describe.skipIf(!connection)("shared-state database port", () => {
     source.exec(`PRAGMA user_version = ${OPENCLAW_STATE_SCHEMA_VERSION};
       INSERT INTO schema_meta VALUES ('primary', 'global', ${OPENCLAW_STATE_SCHEMA_VERSION}, NULL, NULL, 1, 1);
       INSERT INTO config_machine_state VALUES ('state.schema.contentVersion', '${OPENCLAW_STATE_SCHEMA_VERSION - 1}', 1);
+      INSERT INTO skill_workshop_activity (agent_id, skill_name, changed_at_ms) VALUES
+        ('alpha', 'deploy', 1794000000123), ('beta', 'deploy', 1794000000456);
       INSERT INTO state_leases VALUES ('test', 'lease', 'synthetic', 2, 1, NULL, 1, 1);
       INSERT INTO secret_store_entries VALUES ('team', '', 'synthetic', 'retained', 'secret', 1, 1, NULL, NULL, NULL);
       INSERT INTO plugin_blob_entries VALUES ('test', 'test', 'ttl', '{}', X'00ff80', 1, 2);
@@ -110,7 +112,16 @@ describe.skipIf(!connection)("shared-state database port", () => {
     expect(await rows(`SELECT sequence FROM "${namespace}".audit_events`)).toEqual([
       { sequence: "9007199254740993" },
     ]);
-    expect(Object.keys(staged.tables)).toHaveLength(137);
+    expect(Object.keys(staged.tables)).toHaveLength(138);
+    // PostgreSQL returns bigint as text; compare the same lossless representation on both engines.
+    const activityQuery = (schema?: string) =>
+      `SELECT agent_id, skill_name, CAST(changed_at_ms AS TEXT) AS changed_at_ms
+         FROM ${schema ? `"${schema}".` : ""}skill_workshop_activity ORDER BY agent_id`;
+    const expectedActivity = [
+      { agent_id: "alpha", skill_name: "deploy", changed_at_ms: "1794000000123" },
+      { agent_id: "beta", skill_name: "deploy", changed_at_ms: "1794000000456" },
+    ];
+    expect(await rows(activityQuery(namespace))).toEqual(expectedActivity);
     expect(await rows(`SELECT display_name, avatar FROM "${namespace}".user_profiles`)).toEqual([
       { display_name: "Café 🦞", avatar: Buffer.from([0, 255, 128]) },
     ]);
@@ -131,6 +142,7 @@ describe.skipIf(!connection)("shared-state database port", () => {
           assertCurrent() {},
         }),
       ).toEqual(staged);
+      expect(destination.prepare(activityQuery()).all()).toEqual(expectedActivity);
       expect(destination.prepare("SELECT display_name, avatar FROM user_profiles").get()).toEqual({
         display_name: "Café 🦞",
         avatar: Uint8Array.from([0, 255, 128]),
@@ -178,6 +190,7 @@ describe.skipIf(!connection)("shared-state database port", () => {
       });
       namespaces.add(restored.namespace);
       expect(await plannerRows(restored.namespace)).toEqual([{ reltuples: 1 }]);
+      expect(await rows(activityQuery(restored.namespace))).toEqual(expectedActivity);
       expect(readBackupEngine(restoredPath)).toEqual({
         engine: "postgres",
         storeId,
@@ -257,7 +270,7 @@ describe.skipIf(!connection)("shared-state database port", () => {
     });
     expect(
       await rows(
-        "SELECT tablename FROM pg_tables WHERE schemaname = $1 AND tablename IN ('agent_deletion_journal', 'user_profiles')",
+        "SELECT tablename FROM pg_tables WHERE schemaname = $1 AND tablename IN ('agent_deletion_journal', 'user_profiles', 'skill_workshop_activity')",
         [namespace],
       ),
     ).toEqual([]);
@@ -272,7 +285,7 @@ describe.skipIf(!connection)("shared-state database port", () => {
     expect(
       destination
         .prepare(
-          "SELECT name FROM sqlite_schema WHERE name IN ('agent_deletion_journal', 'user_profiles')",
+          "SELECT name FROM sqlite_schema WHERE name IN ('agent_deletion_journal', 'user_profiles', 'skill_workshop_activity')",
         )
         .all(),
     ).toEqual([]);

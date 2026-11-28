@@ -41,7 +41,6 @@ import {
   buildOpenAIResponsesReasoningReplayMetadata,
   captureOpenAIResponsesCompaction,
 } from "../../packages/ai/src/transports/openai-responses-compaction-replay.js";
-import { recordResponsesContextUsage } from "../../packages/ai/src/transports/openai-responses-context-usage.js";
 import { cloneResponsesInputForPayloadHook } from "../../packages/ai/src/transports/openai-responses-replay-messages-internal.js";
 import { resolveCompletedResponsesToolCall } from "../../packages/ai/src/transports/openai-responses-stream-terminal-internal.js";
 import { sanitizeResponsesImagePayload } from "../../packages/ai/src/transports/responses-image-payload-sanitizer.js";
@@ -51,6 +50,7 @@ import { resolveProjectedRequestPressure } from "../../src/agents/embedded-agent
 import { transformTransportMessages } from "../../src/agents/transport-message-transform.js";
 import { createOpenAIResponsesContextManagementWrapper } from "../../src/llm/providers/stream-wrappers/openai.js";
 import { freezeJsonSnapshot, isDeeplyFrozenPlainData } from "../../src/shared/immutable-data.js";
+import { startCollectedHeapSampling } from "../lib/heap-sampling.ts";
 import { recordGcCollections } from "../lib/perf-gc-collections.ts";
 
 const iterations = Number(process.argv[process.argv.indexOf("--iterations") + 1]) || 2000;
@@ -316,7 +316,6 @@ if (contextUsage) {
     buildOpenAIResponsesReasoningReplayMetadata(model, identity),
   );
   messages.unshift(checkpoint);
-  const request = buildOpenAIResponsesParams(model, context, options);
   const measured = {
     ...assistant,
     content: [{ type: "text" as const, text: "Completed inspection" }],
@@ -326,7 +325,6 @@ if (contextUsage) {
       contextUsage: { state: "available" as const, promptTokens: 100_000, totalTokens: 100_100 },
     },
   };
-  recordResponsesContextUsage(measured, model, identity, request, [], "transport");
   messages.push(measured, { role: "user", content: "Continue inspection", timestamp: 999 });
   if (frozen) {
     messages.forEach(freezeJsonSnapshot);
@@ -382,12 +380,7 @@ const observer = new PerformanceObserver((list) =>
 observer.observe({ entryTypes: ["gc"] });
 const inspector = new Session();
 if (allocation) {
-  inspector.connect();
-  await inspector.post("HeapProfiler.startSampling", {
-    samplingInterval: 8192,
-    includeObjectsCollectedByMajorGC: true,
-    includeObjectsCollectedByMinorGC: true,
-  });
+  await startCollectedHeapSampling(inspector, 8192);
 }
 const hostLoadBefore = loadavg();
 const cpu = process.cpuUsage();

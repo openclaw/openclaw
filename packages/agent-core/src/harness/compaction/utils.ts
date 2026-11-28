@@ -1,4 +1,8 @@
-import { hasRuntimeContextMarker, type AssistantMessage, type Message } from "@openclaw/llm-core";
+import {
+  hasRuntimeContextMarker,
+  type AssistantMessage,
+  type Message,
+} from "@openclaw/llm-core/types";
 import { estimateStringChars } from "@openclaw/normalization-core/cjk-chars";
 import { asOptionalRecord as asRecord } from "@openclaw/normalization-core/record-coerce";
 import { sliceUtf16Safe, truncateUtf16Safe } from "@openclaw/normalization-core/utf16-slice";

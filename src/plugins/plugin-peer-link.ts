@@ -24,10 +24,6 @@ import {
   safeRealpath,
   type PluginPeerLinkLogger,
 } from "./plugin-peer-link-target.js";
-import {
-  loadPluginCohortProtectedArtifacts,
-  type PluginCohortProtectedArtifacts,
-} from "./update-cohort-protected-artifacts.js";
 
 type RelinkManagedNpmRootResult = {
   repaired: number;
@@ -282,16 +278,6 @@ export async function reconcileRegisteredOpenClawHostLinks(
     beforePersistentEffect?: () => void | Promise<void>;
   },
 ): Promise<RegisteredOpenClawHostLinkResult> {
-  return await reconcileRegisteredHostLinks(
-    params,
-    params.mode === "repair" ? await loadPluginCohortProtectedArtifacts(params) : undefined,
-  );
-}
-
-async function reconcileRegisteredHostLinks(
-  params: Parameters<typeof reconcileRegisteredOpenClawHostLinks>[0],
-  protectedArtifacts: PluginCohortProtectedArtifacts | undefined,
-): Promise<RegisteredOpenClawHostLinkResult> {
   const extensionsRoot = path.resolve(params.extensionsDir);
   const extensionsRootRealPath = await safeRealpath(extensionsRoot);
   const gitEnv = params.stateDir
@@ -318,7 +304,7 @@ async function reconcileRegisteredHostLinks(
       if (issue) {
         issues.push(issue);
       }
-      if (params.mode !== "repair" || protectedArtifacts?.includesPackageDir(checkout)) {
+      if (params.mode !== "repair") {
         continue;
       }
       const host = resolveOpenClawHostRoot();
@@ -389,9 +375,6 @@ async function reconcileRegisteredHostLinks(
     if (params.mode !== "repair") {
       continue;
     }
-    if (record.source === "npm" && protectedArtifacts?.includesPackageDir(packageDir)) {
-      continue;
-    }
 
     const result = await linkOpenClawPeerDependencies({
       installedDir: packageDir,
@@ -422,20 +405,16 @@ export async function repairInstalledOpenClawHostLinks(
     beforePersistentEffect?: () => void | Promise<void>;
   },
 ): Promise<{ managedRepaired: number; registeredRepaired: number }> {
-  const protectedArtifacts = await loadPluginCohortProtectedArtifacts(params);
   const onPackageReadError = params.onPackageReadError;
   const results = await Promise.allSettled(
     params.managedNpmRoots.map((npmRoot) =>
-      relinkManagedNpmRoot(
-        {
-          ...params,
-          npmRoot,
-          onPackageReadError: onPackageReadError
-            ? (error, packageDir) => onPackageReadError(error, packageDir, "managed npm")
-            : undefined,
-        },
-        protectedArtifacts,
-      ),
+      relinkManagedNpmRoot({
+        ...params,
+        npmRoot,
+        onPackageReadError: onPackageReadError
+          ? (error, packageDir) => onPackageReadError(error, packageDir, "managed npm")
+          : undefined,
+      }),
     ),
   );
   let managedRepaired = 0;
@@ -445,16 +424,13 @@ export async function repairInstalledOpenClawHostLinks(
     }
     managedRepaired += result.value.repaired;
   }
-  const registered = await reconcileRegisteredHostLinks(
-    {
-      ...params,
-      mode: "repair",
-      onPackageReadError: onPackageReadError
-        ? (error, packageDir) => onPackageReadError(error, packageDir, "registered")
-        : undefined,
-    },
-    protectedArtifacts,
-  );
+  const registered = await reconcileRegisteredOpenClawHostLinks({
+    ...params,
+    mode: "repair",
+    onPackageReadError: onPackageReadError
+      ? (error, packageDir) => onPackageReadError(error, packageDir, "registered")
+      : undefined,
+  });
   return { managedRepaired, registeredRepaired: registered.repaired };
 }
 
@@ -467,16 +443,12 @@ export async function relinkOpenClawPeerDependenciesInManagedNpmRoot(
     beforePersistentEffect?: () => void | Promise<void>;
   },
 ): Promise<RelinkManagedNpmRootResult> {
-  return await relinkManagedNpmRoot(params, await loadPluginCohortProtectedArtifacts(params));
+  return await relinkManagedNpmRoot(params);
 }
 
 async function relinkManagedNpmRoot(
   params: Parameters<typeof relinkOpenClawPeerDependenciesInManagedNpmRoot>[0],
-  protectedArtifacts: PluginCohortProtectedArtifacts,
 ): Promise<RelinkManagedNpmRootResult> {
-  if (protectedArtifacts.includesNpmRoot(params.npmRoot)) {
-    return { repaired: 0 };
-  }
   let repaired = 0;
   for (const packageDir of await listManagedNpmRootPackageDirs(params.npmRoot)) {
     const openClawLinkDependencies = await readPackageOpenClawLinkDependencies(

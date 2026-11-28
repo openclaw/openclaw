@@ -1,5 +1,6 @@
 package ai.openclaw.app
 
+import ai.openclaw.app.gateway.ErrorShape
 import ai.openclaw.app.gateway.GatewayEndpoint
 import ai.openclaw.app.gateway.GatewayErrorDetails
 import ai.openclaw.app.gateway.GatewayRequestOutcomeUnknown
@@ -1751,7 +1752,7 @@ class GatewayExecApprovalRuntimeTest {
     code: String,
     message: String,
     reason: String? = null,
-  ): GatewayRequestRejected = GatewayRequestRejected(GatewaySession.ErrorShape(code, message, reason?.let(::gatewayErrorDetails)))
+  ): GatewayRequestRejected = GatewayRequestRejected(ErrorShape(code, message, reason?.let(::gatewayErrorDetails)))
 
   private val unifiedMethods = setOf("approval.get", "approval.resolve", "exec.approval.list")
   private val legacyMethods = setOf("exec.approval.list", "exec.approval.get", "exec.approval.resolve")

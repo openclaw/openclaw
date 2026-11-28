@@ -35,10 +35,8 @@ import {
   restoreActivePluginRegistrySnapshot,
   setActivePluginRegistry,
 } from "../plugins/runtime.js";
-import {
-  getPluginRuntimeGenerationRegistry,
-  withPluginRuntimeGenerationScope,
-} from "../plugins/runtime/generation-scope.js";
+import { withPluginRuntimeGenerationScope } from "../plugins/runtime/generation-scope.js";
+import { getPluginRuntimeGenerationRegistry } from "../plugins/runtime/generation-state.js";
 import { createPluginRecord } from "../plugins/status.test-helpers.js";
 import { AsyncWorkScope, isAsyncWorkScopeActiveHere } from "../shared/async-work-scope.js";
 import { forceFullGc } from "../test-utils/retention.js";
@@ -55,6 +53,7 @@ import {
 } from "./prepared-model-runtime-generation-scope.js";
 import { PreparedModelRuntimePublicationSupersededError } from "./prepared-model-runtime.errors.js";
 import {
+  acquireAgentRunPreparedModelRuntime,
   advancePreparedModelRuntimeConfig,
   beginPreparedModelRuntimePluginDrain,
   loadPublishedGatewayReplyDispatchRuntime as loadPublishedDispatch,
@@ -676,6 +675,51 @@ describe("auth publication generation recovery", () => {
       mocks.resolveAmbientCredentials.mockImplementation(() => ({}));
       await expect(loadDispatch()).resolves.toMatchObject({ agentId: "default" });
       expect((await prepare(input)).isCurrent()).toBe(true);
+    },
+  );
+
+  it.for(["default", "worker"] as const)(
+    "recovers a %s owner stranded by an exhausted auth refresh at run admission",
+    async (agentId) => {
+      // `worker` inherits `default` credentials, so one default-store write invalidates both.
+      const { config, snapshot } = await publishOwner(["default", "worker"]);
+      const owner = resolvePreparedModelRuntimeOwnerBySnapshot(snapshot)!;
+      mocks.loadAgentRuntimePluginRegistryHandle.mockImplementation(
+        (params) => params.reusableRegistry ?? createEmptyPluginRegistry(),
+      );
+      const failed = createDeferred<Error>();
+      using _ = {
+        [Symbol.dispose]: registerPreparedModelRuntimePublicationListener((event) => {
+          if (event.phase === "failed") {
+            failed.resolve(event.error);
+          }
+        }),
+      };
+      mocks.resolveAmbientCredentials.mockClear().mockImplementation(() => {
+        throw new PreparedModelRuntimePublicationSupersededError("synthetic superseded");
+      });
+      mocks.mutationListener?.({ agentDir: owner.input.agentDir, affectsInheritedStores: false });
+      await expect(failed.promise).resolves.toMatchObject({
+        message: expect.stringContaining("after 2 fresh-generation retries"),
+      });
+      mocks.resolveAmbientCredentials.mockClear().mockImplementation(() => ({}));
+      // No reply dispatch runs first: OpenAI-compatible and worker turns admit runs directly.
+      const acquire = () =>
+        acquireAgentRunPreparedModelRuntime(fixture.agentInput(agentId, config), {
+          catalogMode: "static",
+        });
+      const first = await acquire();
+      try {
+        expect(first.snapshot.isCurrent()).toBe(true);
+        expect(first.snapshot.agentId).toBe(agentId);
+      } finally {
+        await first[Symbol.asyncDispose]();
+      }
+      const recoveryBuilds = mocks.resolveAmbientCredentials.mock.calls.length;
+      expect(recoveryBuilds).toBeGreaterThan(0);
+      // Once recovered, later turns reuse the committed generation instead of rebuilding.
+      await (await acquire())[Symbol.asyncDispose]();
+      expect(mocks.resolveAmbientCredentials).toHaveBeenCalledTimes(recoveryBuilds);
     },
   );
 

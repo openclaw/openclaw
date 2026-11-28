@@ -60,6 +60,8 @@ import { finalizeCodexToolAvailability } from "./dynamic-tool-availability.js";
 import {
   assertCodexDynamicToolInputMatchesSchema,
   createCodexDynamicToolSpecs,
+  dedupeQuarantinedDynamicTools,
+  omitUndeclaredTimeoutArguments,
   projectCodexDynamicTools,
   type CodexDynamicToolSchemaQuarantine,
   type CodexToolDescriptor,
@@ -334,8 +336,9 @@ export function createCodexDynamicToolBridge(params: {
         });
       }
       const { tool, name: toolName } = toolEntry;
+      const callArguments = omitUndeclaredTimeoutArguments(toolEntry, call.arguments);
       const rawArguments =
-        toolName === "automations" ? resolveAutomationsToolsAllow(call.arguments) : call.arguments;
+        toolName === "automations" ? resolveAutomationsToolsAllow(callArguments) : callArguments;
       const args = asNonArrayRecord(rawArguments);
       const invocationStartedAt = Date.now();
       const signal = options?.signal
@@ -752,15 +755,6 @@ function reportQuarantinedDynamicTools(params: {
   }
 }
 
-function dedupeQuarantinedDynamicTools(
-  tools: readonly CodexDynamicToolSchemaQuarantine[],
-): CodexDynamicToolSchemaQuarantine[] {
-  const byName = new Map<string, CodexDynamicToolSchemaQuarantine>();
-  for (const { tool, violations } of tools) {
-    byName.set(tool, { tool, violations });
-  }
-  return [...byName.values()];
-}
 function toToolResultHookContext(
   ctx: CodexDynamicToolHookContext | undefined,
 ): CodexToolResultHookContext {

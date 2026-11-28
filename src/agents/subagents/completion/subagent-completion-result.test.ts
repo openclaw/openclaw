@@ -1,90 +1,64 @@
 import { describe, expect, it } from "vitest";
 import { resolveSubagentCompletionResultText } from "./subagent-completion-result.js";
 
+const stale = { resultText: "NO_REPLY", fallbackResultText: "older visible fallback" };
+
 describe("resolveSubagentCompletionResultText", () => {
   it.each([
-    {
-      name: "visible",
-      terminalReply: {
-        disposition: "visible",
-        text: "authoritative reply",
-        modelRouteChange: "Model route changed: requested/model → actual/model.",
-      } as const,
-      expected: "authoritative reply",
-    },
-    {
-      name: "visible prepared token text",
-      terminalReply: { disposition: "visible", text: "NO_REPLY" } as const,
-      expected: "NO_REPLY",
-    },
-    {
-      name: "silent",
-      terminalReply: { disposition: "silent" } as const,
-      expected: undefined,
-    },
-    {
-      name: "empty",
-      terminalReply: { disposition: "empty" } as const,
-      expected: undefined,
-    },
-  ])(
-    "uses $name terminal evidence before retained fallback text",
-    ({ terminalReply, expected }) => {
-      expect(
-        resolveSubagentCompletionResultText({
-          completion: {
-            resultText: "NO_REPLY",
-            fallbackResultText: "older visible fallback",
-            terminalReply,
-          },
-          execution: { outcome: { status: "ok" } },
-        }),
-      ).toBe(expected);
-    },
-  );
-
-  it("keeps legacy result selection when producer terminal evidence is absent", () => {
-    expect(
-      resolveSubagentCompletionResultText({
-        completion: {
-          resultText: "NO_REPLY",
-          fallbackResultText: "legacy fallback",
+    [
+      "visible",
+      {
+        ...stale,
+        terminalReply: {
+          disposition: "visible",
+          text: "authoritative reply",
+          modelRouteChange: "Model route changed: requested/model → actual/model.",
         },
-        execution: { outcome: { status: "ok" } },
-      }),
-    ).toBe("legacy fallback");
+      },
+      "ok",
+      "authoritative reply",
+    ],
+    [
+      "visible prepared token text",
+      { ...stale, terminalReply: { disposition: "visible", text: "NO_REPLY" } },
+      "ok",
+      "NO_REPLY",
+    ],
+    ["silent", { ...stale, terminalReply: { disposition: "silent" } }, "ok", undefined],
+    ["empty", { ...stale, terminalReply: { disposition: "empty" } }, "ok", undefined],
+    [
+      "legacy fallback",
+      { resultText: "NO_REPLY", fallbackResultText: "legacy fallback" },
+      "ok",
+      "legacy fallback",
+    ],
+    ...(["error", "timeout", "unknown"] as const).map(
+      (status) =>
+        [
+          `${status} visible token text`,
+          { terminalReply: { disposition: "visible", text: "NO_REPLY" } },
+          status,
+          "NO_REPLY",
+        ] as const,
+    ),
+    ...(
+      [
+        { status: "error", resultText: " \n\t " },
+        { status: "timeout", resultText: "" },
+        { status: "unknown", resultText: " \n\t " },
+      ] as const
+    ).map(
+      ({ status, resultText }) =>
+        [
+          `${status} captured findings`,
+          { resultText, fallbackResultText: "  actionable captured findings  " },
+          status,
+          "actionable captured findings",
+        ] as const,
+    ),
+  ] as const)("selects %s", (_name, completion, status, expected) => {
+    expect(
+      resolveSubagentCompletionResultText({ completion, execution: { outcome: { status } } }),
+    ).toBe(expected);
   });
-
-  it.each(["error", "timeout", "unknown"] as const)(
-    "preserves a %s outcome even when its captured reply is NO_REPLY",
-    (status) => {
-      expect(
-        resolveSubagentCompletionResultText({
-          completion: {
-            terminalReply: { disposition: "visible", text: "NO_REPLY" },
-          },
-          execution: { outcome: { status } },
-        }),
-      ).toBe("NO_REPLY");
-    },
-  );
-
-  it.each([
-    { status: "error", resultText: " \n\t " },
-    { status: "timeout", resultText: "" },
-    { status: "unknown", resultText: " \n\t " },
-  ] as const)(
-    "preserves captured findings when a $status completion has blank primary text ($#)",
-    ({ status, resultText }) => {
-      expect(
-        resolveSubagentCompletionResultText({
-          completion: {
-            resultText,
-            fallbackResultText: "  actionable captured findings  ",
-          },
-          execution: { outcome: { status } },
-        }),
-      ).toBe("actionable captured findings");
-    },
-  );
 });

@@ -501,3 +501,58 @@ it("projects recorded subagent completions without exposing the private continua
   expect(JSON.stringify(direct)).not.toContain(collected.result);
   expect(projectChatDisplayMessages([direct])[0]?.subagentCompletions).toEqual([completion]);
 });
+
+it("hides sessions_send delivery failure notices from history, live, and pending chat without hiding human quotes", () => {
+  const sendProvenance = {
+    kind: "inter_session" as const,
+    sourceSessionKey: "agent:main:dashboard:target",
+    sourceTool: "sessions_send",
+  };
+  const deliveryFailureText =
+    "sessions_send delivery to agent:main:dashboard:target failed. The target may not have received the message; retry or report the failure instead of assuming delivery succeeded.";
+  const targetFailureText =
+    "sessions_send target run for agent:main:dashboard:target failed: aborted. The target's final reply was already delivered to its source conversation. Do not resend; report the run failure.";
+  const deliveryFailure = {
+    role: "user" as const,
+    content: annotateInterSessionPromptText(deliveryFailureText, sendProvenance),
+    provenance: sendProvenance,
+  };
+  const targetFailure = {
+    role: "user" as const,
+    content: targetFailureText,
+    provenance: sendProvenance,
+  };
+  const peerReply = {
+    role: "user" as const,
+    content: annotateInterSessionPromptText("Actual peer reply.", sendProvenance),
+    provenance: sendProvenance,
+  };
+  const humanQuote = { role: "user", content: deliveryFailureText };
+  const answer = assistantTextMessage("The target session was stopped.", 4);
+
+  expectProjection(
+    [deliveryFailure, targetFailure, peerReply, humanQuote, answer],
+    [
+      expect.objectContaining({ role: "assistant", content: "Actual peer reply." }),
+      humanQuote,
+      answer,
+    ],
+  );
+  expect(
+    projectSessionMessagePayload({ message: deliveryFailure, sessionKey: "agent:main:main" })
+      .payload,
+  ).toBeUndefined();
+  expect(
+    projectPendingInputMessage(
+      {
+        id: "delivery-fail-1",
+        runId: "delivery-fail-run",
+        message: { ...deliveryFailure, timestamp: 5 },
+        acceptedAt: 5,
+        state: "queued",
+      },
+      20_000,
+      (projected) => projected,
+    ),
+  ).toBeUndefined();
+});

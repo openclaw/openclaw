@@ -266,7 +266,7 @@ it("adds author profile names with one lookup per distinct author and keeps fail
     ],
     has_more: false,
   });
-  const { messages } = await readSlackMessages("C1", { client, includeAuthorProfiles: true });
+  const { messages } = await readSlackMessages("C1", { client, includeUserProfiles: true });
   expect(info.mock.calls.map(([args]) => args.user)).toEqual(["U1", "U2", "U3"]);
   expect(messages).toEqual([
     {
@@ -286,6 +286,45 @@ it("adds author profile names with one lookup per distinct author and keeps fail
     { ts: "5", user: "U4", user_profile: ownProfile, text: "five" },
     { ts: "6", bot_id: "B1", text: "six" },
   ]);
+});
+
+it("names the users messages mention, sharing lookups with authors and keeping unresolved IDs", async () => {
+  resetSlackUserProfileCache("default");
+  const client = createClient();
+  const info = vi.fn(async ({ user }: { user: string }) => {
+    if (user === "U2") {
+      throw new Error("user_not_found");
+    }
+    return { user: { name: `handle-${user}`, profile: { display_name: `Name ${user}` } } };
+  });
+  Object.assign(client, { users: { info } });
+  const text = "<@U1> and <@U2> please review, cc <@U3|old-label>";
+  const blocks = [
+    {
+      type: "rich_text",
+      elements: [{ type: "rich_text_section", elements: [{ type: "user", user_id: "U4" }] }],
+    },
+  ];
+  client.conversations.history.mockResolvedValueOnce({
+    messages: [
+      { ts: "1", user: "U1", text },
+      { ts: "2", user: "U5", text: "see above", blocks },
+    ],
+    has_more: false,
+  });
+  const result = await readSlackMessages("C1", { client, includeUserProfiles: true });
+  // U1 writes and is mentioned: one lookup. U2's lookup fails, so it keeps only its ID.
+  expect(info.mock.calls.map(([args]) => args.user).toSorted()).toEqual([
+    "U1",
+    "U2",
+    "U3",
+    "U4",
+    "U5",
+  ]);
+  const named = (id: string) => ({ display_name: `Name ${id}`, name: `handle-${id}` });
+  expect(result.userProfiles).toEqual({ U1: named("U1"), U3: named("U3"), U4: named("U4") });
+  // Message text stays as Slack sent it.
+  expect(result.messages[0]).toEqual({ ts: "1", user: "U1", text, user_profile: named("U1") });
 });
 
 it("skips author lookups unless requested", async () => {
@@ -324,7 +363,7 @@ it("reuses author lookups across reads for one account, team and token, never ac
     const { messages } = await readSlackMessages("C1", {
       client,
       ...scope,
-      includeAuthorProfiles: true,
+      includeUserProfiles: true,
     });
     return messages.map((message) => message.user_profile?.display_name);
   };

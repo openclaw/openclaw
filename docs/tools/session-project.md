@@ -17,6 +17,11 @@ the user asks to work on a matching project, the agent moves the conversation
 before starting work. Once the conversation is bound to a project or another
 workspace, the tool is removed from its tool list.
 
+In [Home](/concepts/main-session#home), the tool only lists projects. Asking Home
+to work on a project starts the work in a separate project session when one can
+be created; it does not move Home. This does not change the explicit **Move to
+project…** operator action or undo a move that already happened.
+
 ## Actions
 
 | Action | Input                            | Result                                                                              |

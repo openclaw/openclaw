@@ -118,6 +118,8 @@ export type SessionEventOptions = {
   sourceRunId?: string;
   completedToolCall?: InputProvenance["completedToolCall"];
   deliveryContext?: DeliveryContext;
+  /** Host-owned original reply anchor paired with an interrupted request's saved route. */
+  restartReplyToId?: string;
   abortSignal?: AbortSignal;
   expectedTarget?: SessionEventTarget;
   /** Authorized fresh work may create an absent session; captured completions may not. */

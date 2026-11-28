@@ -1,16 +1,22 @@
 import { isDeepStrictEqual } from "node:util";
-import { resolveCompactionThreshold } from "@openclaw/ai/internal/shared";
+import { isToolChoiceCacheNeutral, resolveCompactionThreshold } from "@openclaw/ai/internal/shared";
 import {
   captureOpenAIResponsesCompaction,
   requestPreparedOpenAIResponsesCompaction,
+  resolveCompletionTokenReservation,
   usesNativeOpenAICodexResponsesBackend,
 } from "@openclaw/ai/transports";
-import type { AssistantHistoryMessage, Context, Model } from "@openclaw/llm-core";
+import {
+  hasRuntimeContextMarker,
+  type AssistantHistoryMessage,
+  type Context,
+  type Model,
+} from "@openclaw/llm-core";
 import { extractSummaryText } from "../../../../packages/agent-core/src/harness/compaction/utils.js";
 import { consumeAgentCoreStream } from "../../../../packages/agent-core/src/runtime-deps.js";
 import type { OpenClawConfig } from "../../../config/types.openclaw.js";
 import { formatErrorMessage } from "../../../infra/errors.js";
-import { decideContextPressure } from "../../context-pressure.js";
+import { decideContextPressure, deferBoundaryMaintenanceOnce } from "../../context-pressure.js";
 import type { StreamFn } from "../../runtime/index.js";
 import { getRawSessionAppendMessageAsync } from "../../session-raw-append-message.js";
 import {
@@ -91,6 +97,7 @@ export function createRequestBoundaryCompaction(params: {
   config?: OpenClawConfig;
   contextTokenBudget: number;
   reserveTokens: number;
+  maxOutputTokens?: number;
   runId?: string;
   /** Soft fallbacks and text commits may stop only where the tool batch can continue. */
   isToolBoundarySafe?: () => boolean;
@@ -175,9 +182,29 @@ export function createRequestBoundaryCompaction(params: {
         resolveCompactionThreshold({ contextWindowTokens: contextTokens, reserveTokensFloor: 0 }),
       ),
     );
+    const conservativeInputTokens = Math.max(
+      outgoing.estimatedPromptTokens,
+      maintenance.estimatedPromptTokens,
+    );
+    if (conservativeInputTokens < softTriggerTokens) {
+      return undefined;
+    }
+    const maxOutputTokens = resolveCompletionTokenReservation(
+      model,
+      options?.thinkingBudgets
+        ? model.maxTokens
+        : (options?.maxTokens ?? params.maxOutputTokens ?? model.maxTokens),
+      options?.reasoning,
+    );
     if (
-      Math.max(outgoing.estimatedPromptTokens, maintenance.estimatedPromptTokens) <
-      softTriggerTokens
+      !failed &&
+      context.messages.findLast((message) => !hasRuntimeContextMarker(message))?.role ===
+        "toolResult" &&
+      params.session.agent.state.pendingToolCalls.size === 0 &&
+      params.isToolBoundarySafe?.() === true &&
+      maxOutputTokens > 0 &&
+      conservativeInputTokens + maxOutputTokens <= contextTokens &&
+      deferBoundaryMaintenanceOnce(params.runId)
     ) {
       return undefined;
     }
@@ -247,6 +274,13 @@ export function createRequestBoundaryCompaction(params: {
         });
       }
       let failure = "compaction did not complete";
+      // A tool-only reply ends this boundary but not later ones: the call was never run.
+      let toolOnlyReply = false;
+      // The warm request may differ only outside the cached prefix. Where the protocol keeps
+      // `tool_choice` out of its cache key, forbid a tool call the summary would never run.
+      const summaryOptions = isToolChoiceCacheNeutral(model.api)
+        ? { ...requestOptions, toolChoice: "none" as const }
+        : requestOptions;
       const compacted = await params.session[agentSessionRunWarmCompaction](
         async (instructions, signal) => {
           try {
@@ -269,7 +303,7 @@ export function createRequestBoundaryCompaction(params: {
                         },
                       ],
                     },
-                    { ...requestOptions, signal: timeoutSignal },
+                    { ...summaryOptions, signal: timeoutSignal },
                   ),
                 ),
               params.timeoutMs,
@@ -280,12 +314,13 @@ export function createRequestBoundaryCompaction(params: {
               },
             );
             recordSessionModelUsage(params.session.sessionManager, response.usage);
+            // Summary text beside a tool call is the summary; the call is never executed.
             const summary =
-              response.stopReason === "stop" &&
-              !response.content.some((block) => block.type === "toolCall")
+              response.stopReason === "stop" || response.stopReason === "toolUse"
                 ? extractSummaryText(response)
                 : undefined;
             if (summary === undefined) {
+              toolOnlyReply = response.stopReason === "toolUse";
               throw new Error(
                 `the reply ended with ${response.stopReason} and no usable summary${
                   response.errorMessage ? `: ${response.errorMessage}` : ""
@@ -302,7 +337,7 @@ export function createRequestBoundaryCompaction(params: {
       );
       assertActive();
       if (!compacted) {
-        failed = true;
+        failed = !toolOnlyReply;
         return fallback(failure);
       }
       if (params.postCompaction) {

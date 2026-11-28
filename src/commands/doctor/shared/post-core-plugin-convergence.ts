@@ -18,7 +18,6 @@ import {
 import { withPluginLifecycleLease } from "../../../plugins/plugin-lifecycle-lease.js";
 import { repairInstalledOpenClawHostLinks } from "../../../plugins/plugin-peer-link.js";
 import { detectPluginVersionDrift } from "../../../plugins/plugin-version-drift.js";
-import { pruneStaleLocalBundledPluginInstallRecords } from "../../../plugins/stale-local-bundled-plugin-install-records.js";
 import type { PluginUpdateOutcome } from "../../../plugins/update.js";
 import { resolveUserPath } from "../../../utils.js";
 import { resolveCompatibilityHostVersion } from "../../../version.js";
@@ -134,12 +133,6 @@ async function runPostCorePluginConvergenceWithLease(
   });
   const convergenceBaseline =
     staleManagedNpmBundledPluginRepair?.installRecords ?? params.baselineInstallRecords;
-  const prunedBaseline = convergenceBaseline
-    ? pruneStaleLocalBundledPluginInstallRecords({
-        installRecords: convergenceBaseline,
-        env,
-      })
-    : null;
 
   const warnings: PostCoreConvergenceWarning[] = [];
   const repair = await repairMissingConfiguredPluginInstalls(
@@ -150,7 +143,7 @@ async function runPostCorePluginConvergenceWithLease(
       timeoutMs: params.timeoutMs,
       workTimeoutMs: params.workTimeoutMs,
       env,
-      ...(prunedBaseline ? { baselineRecords: prunedBaseline.records } : {}),
+      ...(convergenceBaseline ? { baselineRecords: convergenceBaseline } : {}),
       onCapabilityConsent: params.onCapabilityConsent,
       onWarning: ({ message, pluginId }) => {
         warnings.push({
@@ -308,9 +301,6 @@ async function runPostCorePluginConvergenceWithLease(
     changes: [
       ...(staleManagedNpmBundledPluginRepair?.removedPluginIds.map(
         (pluginId) => `Removed stale managed install record for bundled plugin "${pluginId}".`,
-      ) ?? []),
-      ...(prunedBaseline?.stale.map(
-        (record) => `Removed stale local bundled plugin install record "${record.pluginId}".`,
       ) ?? []),
       ...repair.changes,
       ...peerLinkChanges,

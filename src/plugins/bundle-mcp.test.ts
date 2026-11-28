@@ -368,7 +368,7 @@ describe("loadEnabledBundleMcpConfig", () => {
     await writeAgentBundle(homeDir, "isolated-agent-mcp", {
       servers: {
         valid: remote(),
-        invalid: stdio({ command: "node --inspect", env: { PLUGIN_ROOT: "override" } }),
+        invalid: stdio({ command: "node --inspect" }),
       },
     });
 

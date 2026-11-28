@@ -302,11 +302,12 @@ export async function prepareEmbeddedAttemptBundleTools(params: {
         sessionId: params.attempt.sessionId,
       });
       // Presentation-only absence must not become a delegated capability denial.
-      // Capture after final policy/quarantine, then omit from the model surface,
-      // unless the session lists one fixed set (the call then fails visibly).
-      return !params.preparedToolBase.messageToolAvailable && !params.preparedToolBase.fixedListing
-        ? schemaProjection.tools.filter((tool) => tool.name !== "message")
-        : schemaProjection.tools;
+      // Capture after final policy/quarantine, then omit from the model surface. Availability
+      // comes from session and config facts (source channel, configured routes), so a fixed
+      // listing stays fixed for the session.
+      return params.preparedToolBase.messageToolAvailable
+        ? schemaProjection.tools
+        : schemaProjection.tools.filter((tool) => tool.name !== "message");
     };
     phases.mark("attempt.bundle-tools.project");
     const uncompactedEffectiveTools = await withRuntimeToolSchemaQuarantine((record) =>
