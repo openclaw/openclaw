@@ -35,10 +35,7 @@ vi.mock("./auth-profile-success.js", () => ({
   reportEmbeddedRunSuccessfulAuthBinding: vi.fn(),
 }));
 
-async function resolveTerminal(
-  overrides: Partial<EmbeddedRunAttemptResult> = {},
-  commentary?: string,
-) {
+async function resolveTerminal(overrides: Partial<EmbeddedRunAttemptResult>, commentary?: string) {
   const assistant = buildEmbeddedRunnerAssistant({
     stopReason: "toolUse",
     content: [

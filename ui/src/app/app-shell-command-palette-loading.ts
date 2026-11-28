@@ -56,7 +56,7 @@ export class ShellCommandPaletteOwner {
   readonly open = (event?: Event): void => {
     this.synchronizeScope();
     this.loading.stage(commandPaletteOpenAttachments(event));
-    if (!this.loading.active() && this.loading.hasAttachments()) {
+    if (!this.loading.active() && this.loading.hasDraft()) {
       this.loading.begin();
     }
     const palette = this.#host.elements.commandPalette;
@@ -100,7 +100,7 @@ export class ShellCommandPaletteOwner {
   toggle(): void {
     if (this.loading.active() || this.#actions.pending()) {
       this.closePending();
-    } else if (this.loading.hasAttachments()) {
+    } else if (this.loading.hasDraft()) {
       this.open();
     } else if (this.#host.elements.commandPalette?.isConnected) {
       this.#host.elements.commandPalette.togglePalette();
@@ -130,7 +130,7 @@ export class ShellCommandPaletteOwner {
       event.defaultPrevented ||
       event.isComposing ||
       event.keyCode === 229 ||
-      (!this.loading.active() && !this.loading.hasAttachments()) ||
+      (!this.loading.active() && !this.loading.hasDraft()) ||
       !isCommandPaletteShortcut(event)
     ) {
       return false;
@@ -267,6 +267,7 @@ function createCommandPaletteLoading(host: Pick<CommandPaletteShellHost, "contex
       presentation();
       return attachmentFiles.length > 0 || staged.length > 0;
     },
+    hasDraft: () => Boolean(loading.value()) || loading.hasAttachments(),
     submitRequested: () => presentation().submitRequested,
     waitingForComposition: () => handoffPending,
     begin(): void {
@@ -469,18 +470,17 @@ function createCommandPaletteLoading(host: Pick<CommandPaletteShellHost, "contex
       return () => (captured === generation ? take() : undefined);
     },
     dismiss(): void {
-      // Accepted files stay in this custody until the canonical draft takes them.
-      // Dismissal cancels Send and composition, while context retirement clears all.
+      if (!active()) {
+        return;
+      }
+      // Keep the draft, never a queued Send or an unfinished handoff.
+      const draft = current.mode === "compose" || loading.hasAttachments() ? snapshot() : undefined;
       const files = attachmentFiles;
       const attachments = staged;
-      const draft = files.length || attachments.length ? snapshot() : undefined;
       reset();
-      if (files.length || attachments.length) {
-        attachmentFiles = files;
-        staged = attachments;
-        current = { ...current, draft };
-      }
-      write(current);
+      attachmentFiles = files;
+      staged = attachments;
+      publish({ ...current, draft });
     },
     clear(): void {
       reset();

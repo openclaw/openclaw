@@ -97,7 +97,6 @@ it.each([
     "a row this process created",
     (entry: SubagentRunRecord) => {
       entry.createdAt = PROCESS_STARTED_AT + 1;
-      subagentRuns.retireCompletionAuthority(entry);
     },
   ],
   [
@@ -109,7 +108,6 @@ it.each([
         endedAt: NOW - 1,
         outcome: { status: "ok" },
       };
-      subagentRuns.retireCompletionAuthority(entry);
     },
   ],
   [

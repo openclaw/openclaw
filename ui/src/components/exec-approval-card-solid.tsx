@@ -223,9 +223,21 @@ export function SidebarApprovalRow(props: SidebarApprovalRowProps) {
             data-issue-row-focus
             tabindex="-1"
           >
-            <span class="sidebar-issues-panel__entity" title={sessionTitle()}>
-              {sessionTitle()}
-            </span>
+            {props.openSessionHref && props.onOpenSession ? (
+              <a
+                ref={sidebarAttentionFocusRef()}
+                class="sidebar-issues-panel__entity sidebar-approval-row__open-session"
+                href={props.openSessionHref}
+                title={sessionTitle()}
+                onClick={(event) => props.onOpenSession?.(event)}
+              >
+                {sessionTitle()}
+              </a>
+            ) : (
+              <span class="sidebar-issues-panel__entity" title={sessionTitle()}>
+                {sessionTitle()}
+              </span>
+            )}
             <openclaw-approval-countdown
               style={{ display: "contents" }}
               class={[
@@ -285,18 +297,6 @@ export function SidebarApprovalRow(props: SidebarApprovalRowProps) {
                 );
               }}
             </For>
-            {props.openSessionHref && props.onOpenSession ? (
-              <a
-                ref={sidebarAttentionFocusRef()}
-                class="sidebar-approval-row__open-session"
-                href={props.openSessionHref}
-                aria-label={t("sessionsView.openSession")}
-                title={t("sessionsView.openSession")}
-                onClick={(event) => props.onOpenSession?.(event)}
-              >
-                <Icon name="arrowUpRight" />
-              </a>
-            ) : undefined}
           </div>
           {props.connected && !canGrant() ? (
             <div class="sidebar-approval-row__message" role={grantError() ? "alert" : "note"}>

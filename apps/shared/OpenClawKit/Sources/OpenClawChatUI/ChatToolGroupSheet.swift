@@ -28,8 +28,16 @@ extension ChatTranscriptPresentation {
     }
 
     func toolItems(for run: String, live: [OpenClawChatPendingToolCall]) -> [ChatToolActivityItem] {
-        self.toolItems(
-            in: self.inspectionRows.lazy.compactMap(\.workMessage).filter { $0.workRunID == run },
+        var joined = self.narratedStretch.flatMap { $0.run == run ? $0.messages : nil } ?? []
+        // An open live sheet follows its stretch when history replaces it with a settled disclosure.
+        for row in self.rows {
+            if case let .completedWork(work) = row, work.isActivityRun,
+               work.messages.contains(where: { $0.workRunID == run })
+            { joined.formUnion(work.messages.map(\.id)) }
+        }
+        return self.toolItems(
+            in: self.inspectionRows.lazy.compactMap(\.workMessage)
+                .filter { $0.workRunID == run || joined.contains($0.id) },
             live: live)
     }
 }
@@ -146,6 +154,8 @@ struct ChatToolGroupRow: View {
                 Text(verbatim: ChatCompletedWorkSummary.label(work: self.work, liveTools: self.liveTools))
                     .lineLimit(1)
             }
+            // Keep the settled label on the working line’s baseline without moving the answer below it.
+            .padding(.bottom, ChatTypingIndicatorBubble.inspectionPadding)
             .frame(maxWidth: .infinity, minHeight: 44, alignment: .leading)
             .contentShape(Rectangle())
         }

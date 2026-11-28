@@ -1328,6 +1328,7 @@ public struct OpenClawChatPendingToolCall: Identifiable, Hashable, Sendable {
     var activity: OpenClawAgentActivityItem?
     var isComplete: Bool = false
     var runID: String?
+    var parentToolCallID: String?
 }
 
 public struct OpenClawGatewayHealthOK: Codable, Sendable {
