@@ -300,6 +300,56 @@ it("preserves recalled secret-shaped session text", async () => {
   });
 });
 
+it("returns cancellation metadata without the stopped request on an anchored pending page", async () => {
+  const anchor = { role: "assistant", content: "Current reply", __openclaw: { id: "anchor" } };
+  const cancelled = { id: "stopped", state: "cancelled", acceptedAt: 1, endCause: "user-stop" };
+  const queued = { id: "next", state: "queued", acceptedAt: 2 };
+  const interrupted = { id: "saved", state: "interrupted", acceptedAt: 3 };
+  const media = [{ kind: "image", url: "media://inbound/next-sketch" }];
+  const { tool } = historyFixture({
+    messages: [anchor],
+    pendingInputs: {
+      items: [
+        {
+          ...cancelled,
+          message: {
+            role: "user",
+            content: [{ type: "text", text: "Draw a withdrawn sketch in /fixture/withdrawn.png" }],
+            __openclaw: { media: [{ kind: "image", url: "media://inbound/withdrawn-sketch" }] },
+          },
+        },
+        {
+          ...queued,
+          message: { role: "user", content: "Draw the next sketch", __openclaw: { media } },
+        },
+        { ...interrupted, message: { role: "user", content: "Inspect the saved sketch" } },
+      ],
+      total: 5,
+      nextBefore: 2,
+    },
+  });
+  const result = await tool.execute("stopped-input", {
+    sessionKey: "main",
+    messageId: "anchor",
+    pendingBefore: 5,
+  });
+
+  expect(result.details).toMatchObject({
+    messages: [anchor],
+    truncated: false,
+    pendingInputs: {
+      items: [
+        { ...cancelled, message: null },
+        { ...queued, message: { role: "user", content: "Draw the next sketch", media } },
+        { ...interrupted, message: { role: "user", content: "Inspect the saved sketch" } },
+      ],
+      total: 5,
+      nextBefore: 2,
+    },
+  });
+  expect(JSON.stringify(result)).not.toContain("withdrawn");
+});
+
 it("keeps accepted inputs separate, bounded, and addressable by their own cursor", async () => {
   const items = Array.from({ length: 20 }, (_, index) => ({
     id: `00000000-0000-0000-0000-${String(index).padStart(12, "0")}`,

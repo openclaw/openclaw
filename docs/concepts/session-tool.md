@@ -171,9 +171,14 @@ byte caps still apply.
 Durably admitted inputs from `sessions_send` or the Gateway `agent` method
 appear separately in `pendingInputs`, not in transcript `messages`. Each row
 records `queued`, `cancelled`, or `interrupted`.
-Cancelled inputs never run automatically. Interrupted inputs are retained for
-inspection; the Gateway can re-admit an unconsumed ordinary peer send that has
-durable delivery ownership, as described below. Other interrupted inputs do not
+Cancelled inputs never run automatically. For a cancelled input, `sessions_history`
+returns `id`, `state`, `acceptedAt`, and `endCause` when available. Its `message`
+is `null` instead of the original text or attachments. Visible cancelled inputs
+still show their content in the Control UI.
+
+Interrupted inputs are retained for inspection; the Gateway can re-admit an
+unconsumed ordinary peer send that has durable delivery ownership, as described
+below. Other interrupted inputs do not
 run automatically. Built-in and CLI agent turns also receive bounded text previews of recent
 visible interrupted inputs as historical context, even when session-history tools
 are unavailable. These previews do not consume input, restore old permissions, or

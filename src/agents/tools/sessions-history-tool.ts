@@ -187,6 +187,13 @@ function boundPendingInputs(page: ChatPendingInputsPage) {
   );
   let truncated = false;
   const items = page.items.map((item, index) => {
+    if (item.state === "cancelled") {
+      return {
+        ...metadata[index],
+        message: null,
+        ...(item.endCause ? { endCause: item.endCause } : {}),
+      };
+    }
     const result = sanitizeHistoryMessage(item.message, Math.max(1, Math.floor(messageBudget / 8)));
     const record = asOptionalRecord(result.message);
     const media = asOptionalRecord(record?.["__openclaw"])?.media;
