@@ -80,9 +80,7 @@ const apiKey = (provider: string, key = "direct-openai-key"): AuthProfileCredent
   key,
 });
 
-const resolveMedia = (
-  overrides: Partial<Parameters<typeof resolveOpenAiImageMediaCandidate>[0]> = {},
-) =>
+const resolveMedia = (overrides: Partial<Parameters<typeof resolveOpenAiImageMediaCandidate>[0]>) =>
   resolveOpenAiImageMediaCandidate({
     authStore: store({}),
     openAiModel: MODEL,
