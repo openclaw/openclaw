@@ -297,8 +297,10 @@ See [Plugins](/tools/plugin) and [Tools](/tools) for the full plugin system.
 
 Type `$` in the Control UI composer to search the skills available to the
 current agent. Selecting a result inserts its stable command name, for example
-`$release_notes`, without replacing the rest of your message. A prompt can
-reference more than one skill:
+`$release_notes`, without replacing the rest of your message. Chat and New session
+show the selected skill as a highlighted display name without the `$`. The whole
+name acts as one unit when moving the caret or deleting; copying and sending keep
+the original `$release_notes` reference. A prompt can reference more than one skill:
 
 ```text
 Use $github and $release_notes to summarize this change for the release.
