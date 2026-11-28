@@ -69,6 +69,26 @@ export class WorkboardBoardStore extends WorkboardStoreRuntime {
 
   async list(options: WorkboardListOptions = {}): Promise<WorkboardCard[]> {
     const boardId = normalizeBoardId(options.boardId);
+    if (options.lifecycle === true) {
+      return readCards(this.store, {
+        kind: "lifecycle",
+        ...(boardId === undefined ? {} : { boardId }),
+      });
+    }
+    const sessionKey =
+      typeof options.sessionKey === "string" && options.sessionKey.trim()
+        ? options.sessionKey.trim()
+        : undefined;
+    const runId =
+      typeof options.runId === "string" && options.runId.trim() ? options.runId.trim() : undefined;
+    if (sessionKey !== undefined || runId !== undefined) {
+      return readCards(this.store, {
+        kind: "lifecycle-event",
+        ...(sessionKey === undefined ? {} : { sessionKey }),
+        ...(runId === undefined ? {} : { runId }),
+        ...(boardId === undefined ? {} : { boardId }),
+      });
+    }
     return readCards(this.store, boardId === undefined ? undefined : { kind: "board", boardId });
   }
 
