@@ -276,6 +276,19 @@ function unfinishedStatus(row: GatewaySessionRow): ChatSubagentActivity["status"
   return row.status === "queued" ? "queued" : isSessionRunStateActive(row) ? "running" : "waiting";
 }
 
+export function hasListedDetailsSubagents(
+  input: SubagentRoster & { selectedSession?: GatewaySessionRow },
+) {
+  const session = input.selectedSession;
+  return Boolean(
+    session &&
+    !session.archived &&
+    directChildren(session, input).some(
+      (row) => !isDashboardSessionKey(row.key) && isSubagentsPanelSession(row),
+    ),
+  );
+}
+
 /**
  * Every direct subagent the pane's own child query returned, finished ones
  * included. Dashboard children are sessions in their own right and are left out.

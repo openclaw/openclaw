@@ -10,10 +10,8 @@ import { registerEnglishCatalog, t } from "../../../lib/reactive/i18n.ts";
 import { ChatLazyBoundary } from "./chat-lazy-boundary.tsx";
 import "../../../styles/chat/automation-mobile.css";
 import "../../../styles/chat/summary-automations.css";
-import {
-  SessionAutomationRead,
-  type SessionAutomationInventory,
-} from "./chat-summary-automations.tsx";
+import { SessionAutomationRead } from "./chat-summary-automations.tsx";
+import type { SessionAutomationInventory } from "./session-automation-inventory.tsx";
 
 registerEnglishCatalog(registerChatSessionOptionalEnglish);
 

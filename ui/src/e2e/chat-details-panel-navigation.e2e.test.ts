@@ -146,7 +146,7 @@ suite.define(() => {
     await suite.withPage(
       { colorScheme: "dark", viewport: { width: 1920, height: 960 } },
       async ({ page }) => {
-        await installMockGateway(page, {
+        const gateway = await installMockGateway(page, {
           sessionKey,
           sessions: [
             { key: sessionKey, label: "Release checklist review", kind: "direct", updatedAt: 1 },
@@ -158,7 +158,8 @@ suite.define(() => {
               "Yes. The project notes and release checklist are ready. The only item left is confirming the rollout owner.",
             ),
           ],
-          featureMethods: ["chat.history", "chat.metadata", "chat.startup"],
+          featureMethods: ["chat.history", "chat.metadata", "chat.startup", "progressCard.get"],
+          methodResponses: { "progressCard.get": { card: null } },
         });
         await page.goto(controlUiSessionUrl(suite.server.baseUrl, sessionKey));
         const pane = page.locator(".chat-pane-cache__pane--active");
@@ -171,31 +172,63 @@ suite.define(() => {
         await pane
           .getByText("Is the release checklist ready to review?", { exact: true })
           .waitFor();
-        await details.waitFor();
-        const composerWidth = (await layoutBox(composerShell)).width;
+        await gateway.waitForRequest("progressCard.get");
+        expect(await trigger.isVisible()).toBe(false);
+        expect(await details.isVisible()).toBe(false);
         await openProgressHomeDock(page);
         await home.waitFor();
         await waitForLayoutSettled(
           page,
           ".assistant-panel--right, .chat-main__conversation-frame, .chat-details",
         );
+        const frame = pane.locator(".chat-main__conversation-frame");
+        expect(
+          await frame.evaluate((el) =>
+            getComputedStyle(el).getPropertyValue("--chat-details-space").trim(),
+          ),
+        ).toBe("0px");
+        if (captureUiProofEnabled) {
+          const shot = await takeControlUiScreenshotFrame(
+            page,
+            page.locator(".shell"),
+            [composer, home],
+            { animations: "disabled" },
+          );
+          await writeFile(path.join(suite.artifactDir, "empty.png"), shot.png);
+        }
+        // A late first row must use the live layout transition, not cached restoration.
+        const gutterEntrances = await frame.evaluateHandle((el) => {
+          const events: string[] = [];
+          el.addEventListener("transitionrun", (event) => {
+            if (
+              event instanceof TransitionEvent &&
+              event.target === el &&
+              event.propertyName === "--chat-details-space"
+            ) {
+              events.push(event.propertyName);
+            }
+          });
+          return events;
+        });
+        await gateway.setMethodResponse("progressCard.get", {
+          card: {
+            sessionKey,
+            revision: 1,
+            updatedAt: 1,
+            steps: [{ step: "Confirm rollout owner", status: "in_progress" }],
+          },
+        });
+        await gateway.emitGatewayEvent("progressCard.changed", { sessionKey, revision: 1 });
+        await details.locator('[data-progress-card-placement="details"]').waitFor();
+        await waitForLayoutSettled(page, ".chat-main__conversation-frame, .chat-details");
+        expect(await gutterEntrances.jsonValue()).toEqual(["--chat-details-space"]);
+        await gutterEntrances.dispose();
+        const composerWidth = (await layoutBox(composerShell)).width;
         expect(await trigger.getAttribute("aria-expanded")).toBe("true");
         expect(await details.getAttribute("role")).toBe("complementary");
         const panel = await layoutBox(details);
-        expect((await layoutBox(composerShell)).width).toBeCloseTo(composerWidth, 0);
         expect(right(await layoutBox(transcript))).toBeLessThanOrEqual(panel.x);
         expect(right(panel)).toBeLessThanOrEqual((await layoutBox(home)).x);
-        const empty = details.getByText("No session details to show.", { exact: true });
-        await empty.waitFor();
-        if (captureUiProofEnabled) {
-          const frame = await takeControlUiScreenshotFrame(
-            page,
-            page.locator(".shell"),
-            [composer, empty, home],
-            { animations: "disabled" },
-          );
-          await writeFile(path.join(suite.artifactDir, "after.png"), frame.png);
-        }
 
         // At 1650px Home leaves 1158px for chat, below the old 1200px cutoff.
         await page.setViewportSize({ width: 1650, height: 960 });
@@ -212,6 +245,13 @@ suite.define(() => {
         await expect.poll(() => details.getAttribute("role")).toBe("complementary");
         expect(await composer.inputValue()).toBe("Keep this draft while resizing.");
         expect(await home.isVisible()).toBe(true);
+        await trigger.focus();
+        await gateway.setMethodResponse("progressCard.get", { card: null });
+        await gateway.emitGatewayEvent("progressCard.changed", { sessionKey, revision: 2 });
+        await details.waitFor({ state: "hidden" });
+        expect(await trigger.isVisible()).toBe(false);
+        expect(await composer.evaluate((el) => el === document.activeElement)).toBe(true);
+        expect(await composer.inputValue()).toBe("Keep this draft while resizing.");
       },
     );
   });
@@ -226,7 +266,6 @@ suite.define(() => {
         }
         const details = await openChatDetails(page);
         await openOutputs(details);
-        expect(await details.locator(".chat-details-desktop-empty").isVisible()).toBe(false);
         await details.getByRole("button", { name: "View all", exact: true }).click();
         try {
           await page.locator('[data-panel-slot="workspace"][data-region="side"]').waitFor();

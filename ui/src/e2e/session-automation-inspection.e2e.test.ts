@@ -76,6 +76,23 @@ async function installSessionFixture(page: Page, jobs: CronJob[]) {
   return gateway;
 }
 suite.define(() => {
+  it("discovers a session automation before opening Details without reading it twice", async () => {
+    await withPage(async ({ page }) => {
+      const selected = job("release", { name: "Release review" });
+      const gateway = await installSessionFixture(page, [selected]);
+      const session = { sessionKey: key, sessionAgentId: "main" };
+      const scope = page.locator(".chat-pane-cache__pane--active");
+      const trigger = scope.locator(".chat-details-toggle");
+      await trigger.waitFor();
+      expect(await trigger.getAttribute("aria-expanded")).toBe("false");
+      expect(await scope.locator(".chat-details-session").count()).toBe(0);
+      expect(await gateway.getRequests("cron.list", session)).toHaveLength(1);
+      const details = await openChatDetails(scope);
+      await details.getByRole("link", { name: /Release review/ }).waitFor();
+      expect(await gateway.getRequests("cron.list", session)).toHaveLength(1);
+    }, 1120);
+  });
+
   it.each([
     { width: 1440, entry: "desktop" },
     { width: 390, entry: "single" },

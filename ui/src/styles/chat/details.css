@@ -9,6 +9,7 @@ openclaw-chat-details[mobile] {
   display: contents;
 }
 
+openclaw-chat-details[hidden],
 .chat-details-toggle[hidden],
 .chat-gutter-header[hidden],
 .chat-details[hidden] {

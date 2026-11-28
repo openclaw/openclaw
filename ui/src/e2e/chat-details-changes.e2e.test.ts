@@ -37,7 +37,6 @@ suite.define(() => {
         },
       });
       await page.goto(suite.server.baseUrl + "chat");
-      await openChatDetails(page);
       await openChatSidePanelType(page, "Review");
       const panel = page.locator('[data-panel-slot="detail"]:not([hidden])');
       if (captureUiProof) {

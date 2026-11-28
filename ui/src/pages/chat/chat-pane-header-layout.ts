@@ -18,8 +18,9 @@ import { chatDetailsDockingLayout } from "./chat-snapshot-prewarm.ts";
 import type { ChatPageHost } from "./chat-state-host.ts";
 import { listSubagents } from "./chat-subagent-wait.ts";
 import type { ChatProps } from "./chat-view.tsx";
+import type { ChatDetailsElements } from "./components/chat-details-geometry.ts";
 import type { ChatDetailsProps } from "./components/chat-details-types.ts";
-import type { ChatDetailsElements, ChatDetailsViewProps } from "./components/chat-details.tsx";
+import type { ChatDetailsViewProps } from "./components/chat-details.tsx";
 import type { ChatPaneHeaderProps } from "./components/chat-pane-header.types.ts";
 import {
   chatPullRequestId,

@@ -5,7 +5,6 @@ const enChatDetails = {
   chat: {
     sessionDetails: {
       session: "Session details",
-      empty: "No session details to show.",
       environment: "Environment",
       context: "Context",
       contextMessages: "Messages & other",

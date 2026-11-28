@@ -45,6 +45,7 @@ export type ChatDetailsEnvironmentProps = {
 };
 
 export type ChatDetailsEnvironmentDesktopProps = ChatDetailsEnvironmentProps & {
+  observing?: boolean;
   work?: ChatPullRequestsProps;
   /** Forward the native header's placement facts/actions; mobile has its own destination. */
   placement?: ChatPanePlacementProps;

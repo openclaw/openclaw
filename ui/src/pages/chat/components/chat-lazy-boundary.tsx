@@ -9,20 +9,24 @@ import { LazyViewError } from "../../../components/solid/lazy-view-error.tsx";
 export function ChatLazyBoundary(props: {
   children: Element;
   fallback?: Element;
+  errorContent?: Element;
   onClose?: () => void;
 }) {
   return (
     <Errored
       fallback={(error, reset) => (
-        <LazyViewError
-          error={error()}
-          stale={isStaleChunkImportError(error())}
-          onRetry={() =>
-            isStaleChunkImportError(error()) ? void retryStaleChunkReloadWhenReachable() : reset()
-          }
-          onClose={props.onClose}
-          inline
-        />
+        <>
+          {props.errorContent}
+          <LazyViewError
+            error={error()}
+            stale={isStaleChunkImportError(error())}
+            onRetry={() =>
+              isStaleChunkImportError(error()) ? void retryStaleChunkReloadWhenReachable() : reset()
+            }
+            onClose={props.onClose}
+            inline
+          />
+        </>
       )}
     >
       <Loading fallback={props.fallback}>{props.children}</Loading>

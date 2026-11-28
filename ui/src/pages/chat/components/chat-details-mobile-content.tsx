@@ -55,10 +55,8 @@ import {
   type ChatSessionVersionsMobileProps,
 } from "./chat-session-versions-mobile.tsx";
 import "../../../styles/chat/details.css";
-import {
-  SessionAutomationRead,
-  type SessionAutomationInventory,
-} from "./chat-summary-automations.tsx";
+import { SessionAutomationRead } from "./chat-summary-automations.tsx";
+import type { SessionAutomationInventory } from "./session-automation-inventory.tsx";
 
 registerEnglishCatalog(registerChatSessionEnglish);
 

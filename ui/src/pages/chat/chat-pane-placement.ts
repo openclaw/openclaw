@@ -7,6 +7,7 @@ import {
   sessionPlacementActionReason,
   sessionPlacementRetry,
 } from "../../components/session-placement-action.ts";
+import { isCloudWorkerPlacementState } from "../../components/session-row-badge-presentation.ts";
 import { t } from "../../i18n/index.ts";
 import { registerNewSessionRuntimeEnglish } from "../../i18n/locales/en-new-session-runtime.ts";
 import { registerSessionOrganizationSharedEnglish } from "../../i18n/locales/en-session-organization-shared.ts";
@@ -19,6 +20,13 @@ registerSessionOrganizationSharedEnglish();
 registerNewSessionRuntimeEnglish();
 
 registerSessionPlacementEnglish();
+
+export function showsChatMachineMenu(session: GatewaySessionRow | undefined) {
+  return (
+    isCloudWorkerPlacementState(session?.placement?.state ?? "local") ||
+    repositorySessionNeedsWorker(session)
+  );
+}
 
 type ChatPanePlacementComposerState =
   | { kind: "ready" }

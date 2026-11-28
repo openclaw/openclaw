@@ -26,6 +26,10 @@ import { createChatToolIcons, type PluginToolIcons } from "./chat-tool-icon-cont
 import type { ChatProps } from "./chat-view.tsx";
 import { publishChatWorkContext } from "./chat-work-context.ts";
 import { getChatComposerState } from "./components/chat-composer-state.ts";
+import {
+  registerChatDetailsElement,
+  type ChatDetailsElements,
+} from "./components/chat-details-geometry.ts";
 import type { SidebarRegionCallbacks } from "./components/chat-sidebar-region-types.ts";
 import { resolveAssistantDisplayAvatar } from "./components/chat-welcome.ts";
 import { resolveChatLinkFaviconFetcher } from "./link-favicon-loader.ts";
@@ -68,21 +72,10 @@ type ChatPaneLayoutRenderParams = {
 };
 
 export abstract class ChatPaneLayoutRender extends ChatPaneHeaderLayout {
-  private readonly detailsElements: import("./components/chat-details.tsx").ChatDetailsElements = {
+  private readonly detailsElements: ChatDetailsElements = {
     getComposerInput: () => getChatComposerState(this.presentationId).composerInput,
+    focusComposer: () => this.focusComposerInput(),
   };
-
-  private registerDetailsElement(
-    name: "pane" | "header" | "frame" | "footer",
-    element: HTMLElement,
-  ) {
-    this.detailsElements[name] = element;
-    return () => {
-      if (this.detailsElements[name] === element) {
-        delete this.detailsElements[name];
-      }
-    };
-  }
 
   protected readonly onSidebarPanelOpened = (slot: SidebarSlotId) => {
     const destination = this.mobilePresentation.destination;
@@ -239,8 +232,10 @@ export abstract class ChatPaneLayoutRender extends ChatPaneHeaderLayout {
       chatProps.disabledBanner?.presentation === "compact";
     const canShowNewMessages = this.sessionPresentation !== "desktop" || conversationVisible;
     const paneChatProps: ChatProps = merge(chatProps, {
-      onConversationFrameRef: (element) => this.registerDetailsElement("frame", element),
-      onFooterElementRef: (element) => this.registerDetailsElement("footer", element),
+      onConversationFrameRef: (element) =>
+        registerChatDetailsElement(this.detailsElements, "frame", element),
+      onFooterElementRef: (element) =>
+        registerChatDetailsElement(this.detailsElements, "footer", element),
       disabledBanner:
         subagentStopInNotice && chatProps.disabledBanner
           ? { ...chatProps.disabledBanner, stop: subagentStop }
@@ -672,7 +667,7 @@ export abstract class ChatPaneLayoutRender extends ChatPaneHeaderLayout {
       visualPresentation: headerPresentation,
       onRegionElementRef: (element) => {
         this.sidebarRegionElement = element;
-        const release = this.registerDetailsElement("pane", element);
+        const release = registerChatDetailsElement(this.detailsElements, "pane", element);
         return () => {
           release();
           if (this.sidebarRegionElement === element) {
@@ -680,7 +675,8 @@ export abstract class ChatPaneLayoutRender extends ChatPaneHeaderLayout {
           }
         };
       },
-      onHeaderElementRef: (element) => this.registerDetailsElement("header", element),
+      onHeaderElementRef: (element) =>
+        registerChatDetailsElement(this.detailsElements, "header", element),
       onRegionViewRef: (element) => {
         this.sidebarRegionView = element;
         return () => {

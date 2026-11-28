@@ -10,41 +10,18 @@
   display: flex;
 }
 
-/* A cached pane can reserve the column before the lazy body arrives. */
-.chat-details[data-desktop]:has(> .chat-details-desktop-body):not(
-    :has(.chat-details-desktop-empty, .chat-details-desktop-loading, .lazy-view-error)
-  ) {
-  background-color: transparent;
-  border-color: transparent;
-  box-shadow: none;
-}
-
-/* Real sections replace both placeholders; while facts load, show only the skeleton. */
+/* Real sections and read errors take precedence over the first-load skeleton. */
 .chat-details-desktop-body__content:has(
-  [data-details-group],
-  [data-progress-card-placement="details"],
-  .chat-details__muted,
-  .chat-details__creator,
-  .lazy-view-error
-) {
-  & > .chat-details-desktop-loading,
-  & > .chat-details-desktop-empty {
-    display: none;
-  }
-}
-
-.chat-details-desktop-body__content:has(> .chat-details-desktop-loading)
-  > .chat-details-desktop-empty {
+    [data-details-group],
+    [data-progress-card-placement="details"],
+    .chat-details__muted,
+    .chat-details__creator,
+    .lazy-view-error,
+    .chat-summary__automation-error,
+    .chat-details-processes__error
+  )
+  > .chat-details-desktop-loading {
   display: none;
-}
-
-.chat-details-desktop-empty {
-  display: flex;
-  align-items: center;
-  min-height: 38px;
-  margin: 0;
-  color: var(--muted);
-  font-size: var(--details-meta-font-size);
 }
 
 .chat-details-desktop-loading {

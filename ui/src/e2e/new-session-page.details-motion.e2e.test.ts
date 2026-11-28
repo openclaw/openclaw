@@ -18,7 +18,7 @@ const suite = createNewSessionPageE2eSuite();
 const openPage = createPageOpener(suite);
 
 suite.define(() => {
-  it("keeps the first message visible and grows compact Details as content arrives", async () => {
+  it("keeps the first message visible and Details absent until the first session fact arrives", async () => {
     const page = await openPage({
       ...createControlUiE2eContextOptions(),
       viewport: { width: 1700, height: 960 },
@@ -108,25 +108,19 @@ suite.define(() => {
     await page.locator("openclaw-pending-session-create").waitFor();
     await gateway.resolveDeferred("sessions.create");
     await module.request;
-    const details = page.locator(".chat-pane-cache__pane--active .chat-details[data-open]");
-    const loading = details.getByRole("status", { name: "Loading…", exact: true });
-    await loading.waitFor();
-    const readSurface = () =>
-      details.evaluate((panel) => {
-        const { height, x, y } = panel.getBoundingClientRect();
-        const { backgroundColor, borderTopColor, boxShadow } = getComputedStyle(panel);
-        return { height, x, y, backgroundColor, borderTopColor, boxShadow };
-      });
-    await expect.poll(() => details.evaluate((panel) => panel.getAnimations().length)).toBe(0);
-    const before = await readSurface();
-    expect(before.height).toBe(48);
-    expect(before.boxShadow).not.toBe("none");
+    const pane = page.locator(".chat-pane-cache__pane--active");
+    const details = pane.locator(".chat-details[data-desktop]");
+    const trigger = pane.locator(".chat-details-toggle");
+    await details.waitFor({ state: "attached" });
+    await nextPaint(page);
+    expect(await trigger.isVisible()).toBe(false);
+    expect(await details.isVisible()).toBe(false);
 
     module.release();
     await details.locator("section.chat-details-session").waitFor({ state: "attached" });
     await nextPaint(page);
-    await loading.waitFor();
-    expect(await readSurface()).toEqual(before);
+    expect(await trigger.isVisible()).toBe(false);
+    expect(await details.isVisible()).toBe(false);
 
     const sessionId = await page.evaluate(
       () =>
@@ -155,11 +149,8 @@ suite.define(() => {
     await expect
       .poll(() => details.evaluate((panel) => panel.getAnimations({ subtree: true }).length))
       .toBe(0);
-    const loaded = await readSurface();
-    expect(loaded.height).toBeGreaterThan(before.height);
-    expect(loaded).toMatchObject({ x: before.x, y: before.y });
-    expect(loaded.backgroundColor).toBe(before.backgroundColor);
-    await loading.waitFor({ state: "hidden" });
+    expect(await trigger.isVisible()).toBe(true);
+    expect(await details.isVisible()).toBe(true);
     const samples = await probe.evaluate((value) => value.stop());
     await probe.dispose();
     expect(samples.length).toBeGreaterThan(2);
@@ -183,8 +174,20 @@ suite.define(() => {
           ? { recordVideo: { dir: suite.artifactDir, size: { width: 1700, height: 1000 } } }
           : {}),
       });
+      const key = "agent:main:new-session-details-motion";
       const gateway = await installMockGateway(page, {
         heldMethods: ["sessions.create"],
+        methodResponses: {
+          "sessions.create": { key, runStarted: true, runId: "details-motion" },
+          "progressCard.get": {
+            card: {
+              sessionKey: key,
+              revision: 1,
+              updatedAt: 1,
+              steps: [{ step: "Check the session layout", status: "in_progress" }],
+            },
+          },
+        },
         historyMessages: [timedText("user", "Check the session layout")],
       });
       await page.goto(`${suite.server.baseUrl}new`);

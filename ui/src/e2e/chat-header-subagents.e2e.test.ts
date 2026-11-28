@@ -37,6 +37,7 @@ suite.define(() => {
           kind: "direct",
           sharingRole: "owner",
           label: "Review the backend",
+          worktree: { id: "example", branch: "feature/review", repoRoot: "/workspace/example" },
           status: "done",
           hasActiveRun: false,
           hasActiveSubagentRun: false,

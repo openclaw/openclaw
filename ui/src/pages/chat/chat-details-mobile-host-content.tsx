@@ -39,7 +39,7 @@ import { syncSessionPanelInputs, useSessionPanel } from "./components/chat-sessi
 import { createChatSessionSharingMobileAdapter } from "./components/chat-session-sharing-mobile-adapter.ts";
 import type { PreparedChatSessionSharing } from "./components/chat-session-sharing-shared.tsx";
 import type { ChatSessionVersionsMobileProps } from "./components/chat-session-versions-mobile.tsx";
-import { createSessionAutomationInventory } from "./components/chat-summary-automations.tsx";
+import { createSessionAutomationInventory } from "./components/session-automation-inventory.tsx";
 import { ProcessesPanelData } from "./processes-panel-data.ts";
 
 registerEnglishCatalog(registerChatSessionEnglish);
