@@ -163,7 +163,7 @@ describe("announce loop guard (#18264)", () => {
     child: string,
     sessionId: string,
     ages: [number, number, number],
-    overrides: Partial<SubagentRunRecord> = {},
+    overrides: Partial<SubagentRunRecord>,
   ): SubagentRunRecord => {
     const now = Date.now();
     return {

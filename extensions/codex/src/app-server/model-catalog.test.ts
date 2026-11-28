@@ -399,6 +399,27 @@ describe("Codex app-server model catalog", () => {
     expect(listModelsMock).toHaveBeenCalledTimes(4);
   });
 
+  it("lists again for each account an unowned app-server switches to without notifying", async () => {
+    // Same client and account revision: only the account Codex reports changes.
+    const accounts = {
+      a: { account: { type: "chatgpt", email: "a@example.test" }, requiresOpenaiAuth: true },
+      b: { account: { type: "apiKey" }, requiresOpenaiAuth: true },
+    };
+    const listed: string[] = [];
+    let current: keyof typeof accounts = "a";
+    rpc.request.mockImplementation(async () => accounts[current]);
+    listModelsMock.mockImplementation(async () => {
+      listed.push(current);
+      return opaqueCatalog();
+    });
+    for (const account of ["a", "a", "b", "b", "a"] as const) {
+      current = account;
+      await owner.load(catalogParams, undefined);
+    }
+    // One listing per account change; a repeat on the same account reuses its own list.
+    expect(listed).toEqual(["a", "b", "a"]);
+  });
+
   it("revokes prior readiness on failed or disabled refresh", async () => {
     listModelsMock.mockResolvedValue(opaqueCatalog());
     await owner.load(catalogParams, undefined);

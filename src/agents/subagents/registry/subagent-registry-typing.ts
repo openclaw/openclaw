@@ -1,3 +1,4 @@
+import { getLoadedChannelPluginById } from "../../../channels/plugins/registry-loaded.js";
 import { readSessionEntryReadOnlyInWorker } from "../../../config/sessions/session-entry-read-runtime.js";
 import { captureSessionEntrySourceAssertion } from "../../../config/sessions/session-entry-source-authority.js";
 import type { PreparedSessionSourceAuthority } from "../../../config/sessions/session-source-authority.js";
@@ -25,8 +26,9 @@ export async function startSubagentTyping(
   const runtime = resolveGatewayContext?.()?.lifecycleRuntime;
   if (
     !source ||
-    origin?.channel !== "telegram" ||
+    !origin?.channel ||
     !origin.to ||
+    !getLoadedChannelPluginById(origin.channel)?.heartbeat?.sendTypingGuarded ||
     entry.expectsCompletionMessage !== true ||
     entry.collect ||
     !entry.requesterAgentId ||
@@ -116,7 +118,7 @@ export async function startSubagentTyping(
     assertHostCurrent();
     stopTyping = runtime.startTyping({
       ...origin,
-      channel: "telegram",
+      channel: origin.channel,
       to: origin.to,
       agentId: entry.requesterAgentId,
       runId: entry.runId,

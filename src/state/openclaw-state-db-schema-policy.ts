@@ -83,7 +83,11 @@ export function captureOpenClawStateSchemaReadAdmission(pathname: string) {
     return undefined;
   }
   isExistingOpenClawStateSchema(pathname);
-  return { path: scope.path, assertCurrent: () => assertSchemaScopeActive(scope) };
+  return {
+    path: scope.path,
+    isCurrent: () => scope.active,
+    assertCurrent: () => assertSchemaScopeActive(scope),
+  };
 }
 
 /** Check supplied and cached handles before exposing them to another admission policy. */

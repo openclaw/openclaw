@@ -17,8 +17,8 @@ import {
   getSubagentSessionListReadSnapshotIdentity,
   prepareOptionalSubagentSessionListReadCache,
 } from "../../agents/subagents/registry/subagent-registry-state.js";
-import { readSessionPendingInputReceiptsInWorker } from "../../config/sessions/session-pending-input-receipts.js";
 import type { TranscriptPreambleSource } from "../../config/sessions/transcript-tool-preamble.js";
+import { isTerminalSessionStatus } from "../../config/sessions/types.js";
 import {
   measureDiagnosticsTimelineSpan,
   measureDiagnosticsTimelineSpanSync,
@@ -49,8 +49,10 @@ import { prepareProjectedSessionPresentation } from "../session-row-presentation
 import { getSessionRowProjection } from "../session-row-projection-access.js";
 import { resolveGatewayModelThinkingProfile } from "../session-utils-model.js";
 import { getSessionDefaults, resolveSessionModelRef } from "../session-utils.js";
+import type { GatewaySessionRow } from "../session-utils.types.js";
 import { withPreparedSessionResolve } from "../sessions-resolve.js";
 import { readChatHistoryDelta } from "./chat-history-delta.js";
+import { readChatHistoryPendingInputs } from "./chat-history-pending-inputs.js";
 import {
   resolveEmbeddedAgentRunRecoverySnapshot,
   respondChatHistoryUnavailable,
@@ -63,7 +65,6 @@ import {
   readChatHistoryRequestPage,
 } from "./chat-history-session-read.js";
 import { handleChatMetadataRequest } from "./chat-metadata-handler.js";
-import { captureQueuedChatInputRunIds, readChatPendingInputs } from "./chat-pending-inputs.js";
 import { withChatStartupDiagnostics } from "./chat-server-timing.js";
 import { resolveVisibleActiveSessionRunState } from "./session-active-runs.js";
 import { resolveGatewayModelSelectionPolicy } from "./session-model-selection-policy.js";
@@ -175,14 +176,6 @@ export async function handleChatHistoryRequest({
       physicalPaths: rowProjection.physicalPaths,
       resolveGatewayContext: context.resolveGatewayContext,
     };
-    const queuedRunIds = sessionId
-      ? captureQueuedChatInputRunIds({
-          ...runtimeScope,
-          sessionKey: canonicalKey,
-          sessionId,
-          agentId: sessionAgentId,
-        })
-      : undefined;
     const isCurrentSession = sessionId === entry?.sessionId;
     const historyEntry = isCurrentSession ? entry : undefined;
     const resolvedSessionModel = resolveSessionModelRef(cfg, entry, sessionAgentId, {
@@ -193,43 +186,6 @@ export async function handleChatHistoryRequest({
     const maxHistoryBytes = Math.min(maxBytes ?? Infinity, getMaxChatHistoryMessagesBytes());
     const maxResponseBytes = Math.min(maxBytes ?? 512 * 1024, maxHistoryBytes);
     const effectiveMaxChars = resolveEffectiveChatHistoryMaxChars(maxChars);
-    const pendingInputs =
-      sessionId && isCurrentSession
-        ? await measureDiagnosticsTimelineSpan(`gateway.${method}.pending_inputs`, () =>
-            readChatPendingInputs(
-              { agentId: sessionAgentId, sessionKey: canonicalKey, sessionId, storePath },
-              {
-                before: pendingBefore,
-                audience: { profileId: client?.authenticatedUserProfile?.profileId ?? "" },
-                limit: max,
-                maxChars: effectiveMaxChars,
-                queuedRunIds,
-                cronStorePath: context.cronStorePath,
-                ...runtimeScope,
-              },
-            ),
-          )
-        : { items: [], total: 0 };
-    // Receipts belong to the currently selected physical session, never archived history.
-    const inputReceipts = inputRunIds
-      ? !messageId && sessionId && isCurrentSession
-        ? (
-            await readSessionPendingInputReceiptsInWorker(
-              { agentId: sessionAgentId, sessionKey: canonicalKey, sessionId, storePath },
-              { runIds: inputRunIds },
-            )
-          ).map((receipt) =>
-            receipt.state === "pending" && !receipt.cancelled && queuedRunIds?.has(receipt.runId)
-              ? { runId: receipt.runId, state: receipt.state, queued: true as const }
-              : receipt,
-          )
-        : []
-      : undefined;
-    const inputConsumptions = inputReceipts?.flatMap((receipt) =>
-      receipt.state === "consumed"
-        ? [{ runId: receipt.runId, consumedByEventId: receipt.consumedByEventId }]
-        : [],
-    );
     const projectMentions = createChannelMentionProjector(context, client, canonicalKey);
     // Internal adapters may inspect message objects before responding.
     const encodeResponse = acceptsSerializedJson && method === req.method;
@@ -268,6 +224,23 @@ export async function handleChatHistoryRequest({
     const compatibilityOwnerAgentId = tryResolveSessionCompatibilityOwnerAgentId(cfg, sessionKey);
     const startupProjection = await (startupProjectionPromise ?? readStartupProjection());
     const startupMetadata = method === "chat.startup" ? startupProjection?.metadata : undefined;
+    const { pendingInputs, inputReceipts, inputConsumptions, hasCompatibleQueue } =
+      await readChatHistoryPendingInputs(
+        { agentId: sessionAgentId, sessionKey: canonicalKey, sessionId, storePath },
+        {
+          ...runtimeScope,
+          before: pendingBefore,
+          limit: max,
+          maxChars: effectiveMaxChars,
+          cronStorePath: context.cronStorePath,
+          isCurrentSession,
+          inputRunIds,
+          messageId,
+          client,
+          method,
+          respond,
+        },
+      );
     const { sessionModelCatalog, defaultModelCatalog } = startupProjection ?? {};
     const modelReadScope = {
       context,
@@ -305,6 +278,30 @@ export async function handleChatHistoryRequest({
           ? { sessionInfo: undefined, sessionInfoSnapshotAt: projected.sessionInfo?.snapshotAt }
           : {}),
       };
+    };
+    const readActiveRun = (read: SessionRowReadView) =>
+      resolveVisibleActiveSessionRunState({
+        ...runtimeScope,
+        physicalPaths: read.physicalPaths,
+        requestedKey: sessionKey,
+        canonicalKey,
+        sessionId,
+        ...(sessionAgentId ? { agentId: sessionAgentId } : {}),
+        defaultAgentId: compatibilityOwnerAgentId,
+        // History stays active until the terminal row is queryable or its write fails.
+        includeTerminalPersistence: true,
+      });
+    const applyActiveRun = (
+      sessionInfo: GatewaySessionRow,
+      active: ReturnType<typeof readActiveRun>,
+    ) => {
+      sessionInfo.hasActiveRun = active.active;
+      if (active.runIds !== undefined) {
+        sessionInfo.activeRunIds = active.runIds;
+      }
+      if (active.active) {
+        sessionInfo.status = active.status ?? "running";
+      }
     };
     const [unsavedAcpMeta] = entry
       ? []
@@ -353,25 +350,10 @@ export async function handleChatHistoryRequest({
         );
         return undefined;
       }
-      const activeRunState = resolveVisibleActiveSessionRunState({
-        ...scopedRuntime,
-        requestedKey: sessionKey,
-        canonicalKey,
-        sessionId,
-        ...(sessionAgentId ? { agentId: sessionAgentId } : {}),
-        defaultAgentId: compatibilityOwnerAgentId,
-        // History stays active until the terminal row is queryable or its write fails.
-        includeTerminalPersistence: true,
-      });
+      const activeRunState = readActiveRun(read);
       if (sessionInfo) {
         Object.assign(sessionInfo, currentSharing);
-        sessionInfo.hasActiveRun = activeRunState.active;
-        if (activeRunState.runIds !== undefined) {
-          sessionInfo.activeRunIds = activeRunState.runIds;
-        }
-        if (activeRunState.active) {
-          sessionInfo.status = activeRunState.status ?? "running";
-        }
+        applyActiveRun(sessionInfo, activeRunState);
       }
       // A native controller turn may have no visible chat RPC source. Omit
       // activeRunIds to preserve the exact-chat-send identity contract (coordination
@@ -528,6 +510,21 @@ export async function handleChatHistoryRequest({
               respond(true, delta);
               return undefined;
             }
+            if (
+              !sessionInfo.hasActiveRun &&
+              sessionInfo.lastRunId &&
+              isTerminalSessionStatus(sessionInfo.status)
+            ) {
+              const current = readActiveRun(publicationRead);
+              if (current.active) {
+                // The previous exact IDs no longer describe this live run.
+                sessionInfo.activeRunIds = current.runIds;
+                applyActiveRun(sessionInfo, current);
+              }
+            }
+            if (!hasCompatibleQueue(sessionInfo)) {
+              return undefined;
+            }
             sessionInfo.activeLeafEntryId = delta.activeLeafEntryId;
             const boundedInFlightRun = boundInFlightRunSnapshotForChatHistory({
               snapshot: inFlightRun,
@@ -550,6 +547,9 @@ export async function handleChatHistoryRequest({
             return undefined;
           });
         };
+      }
+      if (!hasCompatibleQueue(sessionInfo)) {
+        return undefined;
       }
       const boundedInFlightRun = boundInFlightRunSnapshotForChatHistory({
         snapshot: inFlightRun,

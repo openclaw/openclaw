@@ -1136,6 +1136,7 @@ src/infra/gateway-owner-lease.read.ts
 src/infra/gateway-owner-lease.worker.ts
 src/infra/gateway-owner-lease.ts
 src/infra/gateway-lock-payload.ts
+src/infra/gateway-lock-recovery-namespace.ts
 src/infra/gateway-service-installation-context.ts
 src/infra/gateway-state-owner-cold-admission.ts
 src/infra/gateway-state-owner-directory.ts
@@ -3060,7 +3061,6 @@ src/infra/sqlite-migration-scoped-snapshot.ts
 src/infra/update-candidate-plugin-code-links.ts
 src/agents/cli-backends.ts
 src/agents/plugin-text-transforms.ts
-src/agents/runtime-context-data-ranges.ts
 src/agents/stream-iterator-wrapper.ts
 src/llm/utils/stream-wrapper.ts
 src/plugins/api-builder.ts

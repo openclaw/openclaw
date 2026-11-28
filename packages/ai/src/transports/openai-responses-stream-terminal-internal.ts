@@ -420,6 +420,8 @@ export function createResponsesTerminalController(params: {
       };
     } else {
       output.usage.usageReport = { state: "unavailable" };
+      // A terminal response without usage measured nothing.
+      output.usage.contextUsage = { state: "unavailable" };
     }
     calculateCost(model, output.usage);
     applyResponsesCacheWritePricing(output.usage, response.usage, options?.promptCacheTtl);

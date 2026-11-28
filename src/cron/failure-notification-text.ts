@@ -80,6 +80,10 @@ export function cronFailureDetailLines(
     // The refusal names the stored account; keep it in automation history, not in chat.
     return [operatorRefusalText("automation-account-unrecorded", "run this automation")];
   }
+  if (failureNotificationDetail.kind === "inference-account-retired") {
+    // Failed runs pause with their own notice; an aborted run keeps the detail for its alert.
+    return ["Cause: the account this automation runs on was removed, signed out or replaced."];
+  }
   if (failureNotificationDetail.kind === "invalid-target") {
     return [
       "Cause: invalid automation target. Update agentId or sessionTarget before re-enabling.",

@@ -19,8 +19,14 @@ export type NotificationOwnerProps = {
   onWebPushSubscribe: () => void;
   onWebPushUnsubscribe: () => void;
   onWebPushTest: () => void;
-  onWebPushSetUserPreferences: (preferences: Push.WebPushNotificationPreferences) => void;
-  onWebPushSetDevicePreferences: (preferences: Push.WebPushDevicePreferences) => void;
+  onWebPushSetUserPreferences: (
+    preferences: Push.WebPushNotificationPreferences,
+    field?: "agentIds",
+  ) => void;
+  onWebPushSetDevicePreferences: (
+    preferences: Push.WebPushDevicePreferences,
+    field?: "agentIds",
+  ) => void;
 };
 
 export function notificationProps(
@@ -45,9 +51,9 @@ export function notificationProps(
     onWebPushSubscribe: () => void context.webPush.run({ kind: "enable" }),
     onWebPushUnsubscribe: () => void context.webPush.run({ kind: "disable" }),
     onWebPushTest: () => void context.webPush.run({ kind: "test" }),
-    onWebPushSetUserPreferences: (preferences) =>
-      void context.webPush.run({ kind: "set", scope: "user", preferences }),
-    onWebPushSetDevicePreferences: (preferences) =>
-      void context.webPush.run({ kind: "set", scope: "device", preferences }),
+    onWebPushSetUserPreferences: (preferences, field) =>
+      void context.webPush.run({ kind: "set", scope: "user", preferences, field }),
+    onWebPushSetDevicePreferences: (preferences, field) =>
+      void context.webPush.run({ kind: "set", scope: "device", preferences, field }),
   };
 }

@@ -78,7 +78,8 @@ function isSidebarCronJob(job: unknown): job is SidebarCronJob {
     (autoDisabled === undefined ||
       (isRecord(autoDisabled) &&
         (autoDisabled.reason === "consecutive-failures" ||
-          autoDisabled.reason === "schedule-errors") &&
+          autoDisabled.reason === "schedule-errors" ||
+          autoDisabled.reason === "account-unavailable") &&
         typeof autoDisabled.atMs === "number" &&
         Number.isFinite(autoDisabled.atMs) &&
         autoDisabled.atMs >= 0 &&
@@ -305,7 +306,10 @@ export class SidebarAttentionStoreOwner implements StoreOwner {
         ...(this.#openClawIdAttention?.items(now) ?? []),
       ],
       outbox,
-      mentions: this.mentions.snapshot.items,
+      // Keep the Gateway snapshot intact for rollback; every Inbox surface sees the same count.
+      mentions: this.mentions.snapshot.items.filter(
+        (item) => !this.mentions.snapshot.dismissing.includes(item.id),
+      ),
       scopeUpgrade,
       update,
     });

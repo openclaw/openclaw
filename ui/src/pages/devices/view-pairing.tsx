@@ -479,7 +479,14 @@ export function DevicePairSetup(props: DevicePairSetupProps) {
                 disabled={refreshing()}
                 onClick={() => void refresh()}
               >
-                <Icon name="refresh" /> {t(needsSecureAccess() ? "common.retry" : "common.reload")}
+                <Icon name="refresh" />{" "}
+                {t(
+                  error()?.source === "status"
+                    ? "devices.pairing.checkConnectionStatus"
+                    : needsSecureAccess()
+                      ? "common.retry"
+                      : "devices.pairing.generateCode",
+                )}
               </button>
             </Show>
             <Show when={setup()}>

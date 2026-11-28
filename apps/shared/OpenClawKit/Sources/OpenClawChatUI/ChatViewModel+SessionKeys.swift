@@ -8,6 +8,13 @@ struct ChatLiveRunState: Equatable, Sendable {
 }
 
 extension OpenClawChatViewModel {
+    var resolvedMainSessionKey: String {
+        if let agentID = self.explicitSessionAgentID ?? OpenClawChatSessionKey.agentID(from: self.sessionKey) {
+            return self.mainSessionKey(forAgent: agentID)
+        }
+        return ChatPayloadDecoding.trimmedNonEmptyString(self.sessionDefaults?.mainSessionKey) ?? "main"
+    }
+
     /// Sequence and token telemetry do not change which runs are active.
     var liveRunStateByRunID: [String: ChatLiveRunState] {
         get {
@@ -290,6 +297,26 @@ extension OpenClawChatViewModel {
             sessionRoutingContract: routeContract)
     }
 
+    func sessionSettingsPatchTarget(
+        in sessionKey: String,
+        canonicalSessionKey: String?,
+        agentID: String?,
+        sessionRoutingContract: String?) -> ModelPatchTarget
+    {
+        if canonicalSessionKey == nil,
+           agentID == nil,
+           sessionRoutingContract == nil,
+           sessionKey == self.sessionKey
+        {
+            return self.currentModelPatchTarget()
+        }
+        return self.modelPatchTarget(
+            sessionKey: sessionKey,
+            canonicalSessionKey: canonicalSessionKey,
+            agentID: agentID,
+            sessionRoutingContract: sessionRoutingContract)
+    }
+
     func sessionEntryForThinking(
         sessionKey: String,
         canonicalSessionKey: String?,
@@ -389,7 +416,7 @@ extension OpenClawChatViewModel {
         let now = Date().timeIntervalSince1970 * 1000
         let cutoff = now - (24 * 60 * 60 * 1000)
         let sorted = OpenClawChatSessionListOrganizer.organize(sessions)
-        let mainSessionKey = resolvedMainSessionKey
+        let mainSessionKey = self.resolvedMainSessionKey
 
         var result: [OpenClawChatSessionEntry] = []
         var included = Set<String>()
@@ -427,7 +454,7 @@ extension OpenClawChatViewModel {
             incoming: incoming,
             agentId: agentId,
             current: current,
-            mainSessionKey: resolvedMainSessionKey,
+            mainSessionKey: self.resolvedMainSessionKey,
             activeAgentId: self.explicitSessionAgentID ?? activeAgentId,
             sessionRoutingContract: self.agentCatalog?.sessionRoutingContract ?? self.sessionRoutingContract)
     }

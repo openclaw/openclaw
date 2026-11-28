@@ -15,8 +15,8 @@ const { batchRunIds, rearmGeneration: generation } = identity;
 const retryId = "announce:requester-settle:main:agent:main:main:run-b:yield-1:retry-1";
 type Child = ReturnType<typeof makeSettledChild>;
 function child(
-  overrides: Partial<Child> = {},
-  wakeOverrides: Partial<NonNullable<Child["requesterSettleWake"]>> = {},
+  overrides: Partial<Child>,
+  wakeOverrides: Partial<NonNullable<Child["requesterSettleWake"]>>,
 ) {
   return makeSettledChild({
     runId: "run-b",
