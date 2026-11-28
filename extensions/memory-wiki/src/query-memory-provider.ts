@@ -1,5 +1,5 @@
 import { resolveSessionAgentIdStrict } from "openclaw/plugin-sdk/agent-scope-runtime";
-import { resolveDefaultAgentId } from "openclaw/plugin-sdk/memory-host-core";
+import { resolveAgentOperationAgentId } from "openclaw/plugin-sdk/memory-core-host-runtime-core";
 import {
   getActiveMemoryProvider,
   isActiveMemoryProviderNative,
@@ -30,7 +30,7 @@ export function resolveActiveMemoryAgentId(params: SharedMemoryCaller): string |
       config: params.appConfig,
     });
   }
-  return resolveDefaultAgentId(params.appConfig);
+  return resolveAgentOperationAgentId(params.appConfig);
 }
 
 /** Reports whether the slot owner serves this query natively; legacy owners keep their manager path. */

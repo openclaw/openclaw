@@ -4,7 +4,7 @@ import type { Command } from "commander";
 import { getAsyncWorkSignal } from "openclaw/plugin-sdk/concurrency-runtime";
 import { readRegularFile } from "openclaw/plugin-sdk/file-access-runtime";
 import { callGatewayFromCli } from "openclaw/plugin-sdk/gateway-runtime";
-import { resolveDefaultAgentId } from "openclaw/plugin-sdk/memory-host-core";
+import { resolveAgentOperationAgentId } from "openclaw/plugin-sdk/memory-core-host-runtime-core";
 import { parseStrictPositiveInteger } from "openclaw/plugin-sdk/number-runtime";
 import {
   isRecord,
@@ -527,7 +527,7 @@ export function registerWikiCli(program: Command, registration: MemoryWikiCliReg
       (registration.config.vault.scope === "agent" || currentAppConfig)
     ) {
       try {
-        agentId = resolveDefaultAgentId(currentAppConfig ?? {});
+        agentId = resolveAgentOperationAgentId(currentAppConfig ?? {});
       } catch {
         throw new Error(
           "No default memory-wiki agent is configured. Pass --agent <id>, or add an agent with `openclaw agents add`.",
