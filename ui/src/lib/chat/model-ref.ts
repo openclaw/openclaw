@@ -166,28 +166,32 @@ function resolveCatalogDisplayName(entry: ModelCatalogEntry): string {
 type ChatModelDisplayLookup = ReadonlyMap<string, string>;
 
 export function buildCatalogDisplayLookup(catalog: ModelCatalogEntry[]): Map<string, string> {
-  const nameToValues = new Map<string, Set<string>>();
+  // Provider icons and provider groups already identify the route, so only models
+  // sharing a display name within the same provider group need disambiguation.
+  const nameGroupToValues = new Map<string, Set<string>>();
   const nameProviderToValues = new Map<string, Set<string>>();
   const entries = catalog.map((entry) => {
     const name = resolveCatalogDisplayName(entry);
+    const nameKey = name.toLowerCase();
+    const provider = entry.provider?.trim().toLowerCase() ?? "";
     return {
       entry,
       name,
       qualifiedKey: normalizeAgentModelRefForConfig(
         buildQualifiedChatModelValue(entry.id, entry.provider),
       ),
-      nameKey: name.toLowerCase(),
-      providerKey: `${name.toLowerCase()}\u0000${entry.provider?.trim().toLowerCase() ?? ""}`,
+      groupKey: `${nameKey}\u0000${normalizeChatModelProviderId(entry.provider)}`,
+      providerKey: `${nameKey}\u0000${provider}`,
     };
   });
 
-  for (const { name, qualifiedKey, nameKey, providerKey } of entries) {
+  for (const { name, qualifiedKey, groupKey, providerKey } of entries) {
     if (!name) {
       continue;
     }
-    const nameValues = nameToValues.get(nameKey) ?? new Set<string>();
-    nameValues.add(qualifiedKey);
-    nameToValues.set(nameKey, nameValues);
+    const groupValues = nameGroupToValues.get(groupKey) ?? new Set<string>();
+    groupValues.add(qualifiedKey);
+    nameGroupToValues.set(groupKey, groupValues);
 
     const nameProviderValues = nameProviderToValues.get(providerKey) ?? new Set<string>();
     nameProviderValues.add(qualifiedKey);
@@ -195,13 +199,13 @@ export function buildCatalogDisplayLookup(catalog: ModelCatalogEntry[]): Map<str
   }
 
   return new Map(
-    entries.map(({ entry, name, qualifiedKey, nameKey, providerKey }) => {
+    entries.map(({ entry, name, qualifiedKey, groupKey, providerKey }) => {
       let label = name || formatRawCatalogLabel(entry);
-      if (name && (nameToValues.get(nameKey)?.size ?? 0) > 1) {
+      if (name && (nameGroupToValues.get(groupKey)?.size ?? 0) > 1) {
         const detail =
           (nameProviderToValues.get(providerKey)?.size ?? 0) <= 1
             ? entry.provider?.trim() || entry.id
-            : formatRawCatalogLabel(entry);
+            : entry.id;
         label = `${name} · ${detail}`;
       }
       return [qualifiedKey, label];

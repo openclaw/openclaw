@@ -47,20 +47,28 @@ describe("chat-model-ref helpers", () => {
     });
   });
 
-  it("keeps case-distinct catalog display identities with shared names", () => {
-    const labels = ["Shared name · model-a · custom", "Shared name · Model-A · custom"];
-    const entries = ["model-a", "Model-A"].map((id) => ({
-      id,
-      name: "Shared name",
-      provider: "custom",
-    }));
+  it("keeps shared names model-only across providers while disambiguating duplicates within one provider", () => {
+    const entries = [
+      { id: "claude-opus-5-5", name: "Claude Opus 5.5", provider: "anthropic" },
+      {
+        id: "anthropic/claude-opus-5-5",
+        name: "Claude Opus 5.5 via ClawRouter",
+        provider: "clawrouter",
+      },
+      { id: "model-a", name: "Shared name", provider: "custom" },
+      { id: "Model-A", name: "Shared name", provider: "custom" },
+    ];
     const lookup = buildCatalogDisplayLookup(entries);
 
     expect(entries.map((entry) => buildChatModelOptionFromLookup(entry, lookup))).toEqual([
-      { value: "custom/model-a", label: labels[0] },
-      { value: "custom/Model-A", label: labels[1] },
+      { value: "anthropic/claude-opus-5-5", label: "Claude Opus 5.5" },
+      { value: "clawrouter/anthropic/claude-opus-5-5", label: "Claude Opus 5.5" },
+      { value: "custom/model-a", label: "Shared name · model-a" },
+      { value: "custom/Model-A", label: "Shared name · Model-A" },
     ]);
-    expect(formatCatalogChatModelDisplayFromLookup("CUSTOM/Model-A", lookup)).toBe(labels[1]);
+    expect(formatCatalogChatModelDisplayFromLookup("CUSTOM/Model-A", lookup)).toBe(
+      "Shared name · Model-A",
+    );
     expect(formatCatalogChatModelDisplayFromLookup("custom/MODEL-A", lookup)).toBe(
       "MODEL-A · custom",
     );

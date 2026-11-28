@@ -107,6 +107,11 @@ suite.define(() => {
         agentModel: `clawrouter/${id}`,
         models: [
           {
+            id: "claude-opus-5-5",
+            name: "Claude Opus 5.5",
+            provider: "anthropic",
+          },
+          {
             id,
             name,
             alias: name,
@@ -143,8 +148,9 @@ suite.define(() => {
       await trigger.click();
       const option = page.locator(`[data-chat-model-option="clawrouter/${id}"]`);
       await option.waitFor({ state: "visible" });
-      expect(await option.textContent()).toContain("Claude Opus 5.5");
-      expect(await option.textContent()).not.toContain("via ClawRouter");
+      expect(await option.locator(".chat-controls__model-option-name").textContent()).toBe(
+        "Claude Opus 5.5",
+      );
       expect(await option.getAttribute("aria-selected")).toBe("true");
       await page.keyboard.press("Escape");
       // A fresh canonical descriptor must preserve the same model and effort facts.
