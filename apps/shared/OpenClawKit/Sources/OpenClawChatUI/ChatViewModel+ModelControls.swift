@@ -443,27 +443,6 @@ extension OpenClawChatViewModel {
         return self.normalizedModelSelectionID(selectionID) ?? selectionID
     }
 
-    public func isSelectedModel(_ selectionID: String) -> Bool {
-        Self.modelSelectionMatches(
-            selectionID: selectionID,
-            currentSelectionID: self.modelSelectionID,
-            choices: self.modelChoices)
-    }
-
-    static func modelSelectionMatches(
-        selectionID: String,
-        currentSelectionID: String,
-        choices: [OpenClawChatModelChoice]) -> Bool
-    {
-        if selectionID == self.defaultModelSelectionID {
-            return currentSelectionID == self.defaultModelSelectionID
-        }
-        guard let choice = choices.first(where: { $0.selectionID == selectionID }) else {
-            return currentSelectionID == selectionID
-        }
-        return currentSelectionID == choice.selectionID || currentSelectionID == choice.modelID
-    }
-
     public var composerInlineEffortLabel: String {
         let effort = self.thinkingOverrideIsInherited
             ? String(

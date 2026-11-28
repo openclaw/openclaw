@@ -2,10 +2,12 @@ import Foundation
 import OpenClawKit
 
 extension OpenClawChatViewModel {
+    #if !os(iOS) && !os(macOS)
     var hasActiveRunForComposerSettings: Bool {
         self.pendingRunCount > 0 || self.hasAdvertisedLiveRun ||
             self.hasActiveSessionRunWithoutChatSnapshot
     }
+    #endif
 
     public func selectThinkingLevel(_ level: String) {
         guard self.composerEffortMutationAvailable else { return }
