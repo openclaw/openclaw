@@ -1,5 +1,6 @@
 import { expect, test, vi } from "vitest";
 import { cleanupTempDirs } from "../../test/helpers/temp-dir.js";
+import { disposeAllSessionMcpRuntimes } from "../agents/agent-bundle-mcp-manager-api.js";
 import { bindSessionMcpRuntimeTestScheduler } from "../agents/agent-bundle-mcp-manager.test-support.js";
 import { createMcpProbeFixture } from "../agents/agent-bundle-mcp-probe.test-support.js";
 import { createDefaultDeps } from "../cli/deps.js";
@@ -50,7 +51,12 @@ test("a running cron service can call an MCP server added after startup", async 
       await cron.run(job.id, "force");
       expect((await cron.readJob(job.id))?.state).toMatchObject({ triggerState: "called" });
     } finally {
-      await cron.stopAndDrain?.();
+      try {
+        await cron.stopAndDrain?.();
+      } finally {
+        // A trigger can finish after its cleanup grace but before MCP retirement.
+        await disposeAllSessionMcpRuntimes();
+      }
     }
   });
 });

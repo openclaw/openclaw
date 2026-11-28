@@ -693,6 +693,8 @@ export const gatewayServerIsolatedTestFiles = [
   "src/gateway/server.agent-artifact-apis.test.ts",
   // Exercise real config publication without neighboring Gateway module mocks.
   "src/gateway/server.agents.config-readiness.test.ts",
+  // Exercise real cron trigger and MCP modules without the cron adapter mocks.
+  "src/gateway/server-cron.mcp-reload.test.ts",
   "src/gateway/server-worker-environment-startup.state.test.ts",
   // A failed native close permanently fences this process's metadata owner.
   "src/gateway/server-close.agent-databases.test.ts",
