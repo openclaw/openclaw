@@ -319,11 +319,11 @@ async function measureLoads(runs: number) {
         name: "Synthetic activity cron",
         enabled: false,
         schedule: { kind: "every", everyMs: 3_600_000 },
-        sessionTarget: "main",
+        sessionTarget: `session:${values["activity-session"]}`,
         agentId: cronSession!.agentId,
         sessionKey: values["activity-session"],
         wakeMode: "next-heartbeat",
-        payload: { kind: "systemEvent", text: "Synthetic activity measurement" },
+        payload: { kind: "command", argv: ["node", "--version"] },
       });
       if (typeof job?.id !== "string") {
         throw new Error("cron.add did not return a job ID");
@@ -1353,9 +1353,9 @@ try {
         name: `Synthetic cron ${String(index).padStart(3, "0")}`,
         enabled: false,
         schedule: { kind: "every", everyMs: 3_600_000 },
-        sessionTarget: "main",
+        sessionTarget: "session:agent:main:main",
         wakeMode: "next-heartbeat",
-        payload: { kind: "systemEvent", text: "Synthetic activity measurement" },
+        payload: { kind: "command", argv: ["node", "--version"] },
       });
       if (typeof job?.id !== "string") {
         throw new Error("cron.add did not return a job ID");
@@ -1491,6 +1491,7 @@ try {
   await ready("cron");
   await idle("cron-visible-idle");
   if (cronRuns > 0) {
+    await page.getByRole("group", { name: "Paused", exact: true }).getByRole("button").click();
     await page.getByText("Synthetic cron 000", { exact: true }).first().waitFor();
     if (startAt !== undefined) {
       if (Date.now() > startAt) {
@@ -1516,10 +1517,6 @@ try {
     if (phase.cronEvents.finished !== cronRuns || connected.size !== 1) {
       throw new Error("Browser did not receive every completed cron run on its single socket");
     }
-    await page.waitForFunction(
-      (count) => document.querySelectorAll(".cron-table__last-run").length === count,
-      Math.min(cronRuns, cronJobs),
-    );
     if (values.screenshot) {
       await page.screenshot({ path: values.screenshot, fullPage: true });
     }

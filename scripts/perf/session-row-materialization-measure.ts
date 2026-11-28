@@ -169,11 +169,11 @@ async function measure() {
       name: "Synthetic materialization",
       enabled: false,
       schedule: { kind: "every", everyMs: 3_600_000 },
-      sessionTarget: "main",
+      sessionTarget: `session:${keys[0]}`,
       sessionKey: keys[0],
       agentId: "main",
       wakeMode: "next-heartbeat",
-      payload: { kind: "systemEvent", text: "Synthetic materialization control" },
+      payload: { kind: "command", argv: [process.execPath, "--version"] },
     });
     assert(isRecord(job) && typeof job.id === "string");
     const list = async () => {

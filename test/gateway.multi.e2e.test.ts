@@ -219,9 +219,13 @@ describe("gateway multi-instance e2e", () => {
             name: "shared-store edit target",
             enabled: true,
             schedule: { kind: "cron", expr: "0 6 * * *" },
-            sessionTarget: "main",
+            sessionTarget: "session:agent:main:main",
             wakeMode: "now",
-            payload: { kind: "systemEvent", text: "edit target" },
+            payload: {
+              kind: "agentTurn",
+              message: "edit target",
+              model: `${model.modelRef}@${profileId}`,
+            },
           });
 
           await managerClient.request("cron.list", { includeDisabled: true });
