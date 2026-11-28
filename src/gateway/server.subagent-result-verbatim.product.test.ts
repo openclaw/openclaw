@@ -126,7 +126,11 @@ async function relayChildAnswer(childReply: string, source: "chat" | "agent" = "
       },
       { interval: 50, timeout: 10_000 },
     );
-    return { prompt, relayed, final };
+    const replay =
+      source === "agent"
+        ? await gateway.client.request("agent", input, { expectFinal: true })
+        : undefined;
+    return { prompt, relayed, final, replay };
   } finally {
     await disconnectGatewayClient(gateway.client);
     await gateway.server.close({ reason: "subagent result verbatim proof complete" });
@@ -138,12 +142,13 @@ async function relayChildAnswer(childReply: string, source: "chat" | "agent" = "
 afterEach(() => resetSubagentRegistryForTests({ persist: false }));
 
 it("returns the parent continuation to the original Gateway agent request after yield", async () => {
-  const { final, relayed } = await relayChildAnswer(childAnswer, "agent");
+  const { final, relayed, replay } = await relayChildAnswer(childAnswer, "agent");
   expect(relayed).toBe(childAnswer);
   expect(final).toMatchObject({
     status: "ok",
     result: { payloads: [{ text: childAnswer }] },
   });
+  expect(replay).toEqual(final);
 });
 
 it("relays a child's completion result to its requester with the original characters", async () => {

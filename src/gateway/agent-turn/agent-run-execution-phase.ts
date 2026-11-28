@@ -537,6 +537,7 @@ async function executeAgentRun(
                       sessionId,
                     });
                     updateRpcSourceSessionId(prepared.activeRunAbort.entry, sessionId);
+                    yieldReply?.updateSessionId(sessionId);
                   }
                 },
                 workspaceDir: workspaceOverride ?? replyDispatchRuntime.workspaceDir,
@@ -549,6 +550,7 @@ async function executeAgentRun(
               },
               runId: params.runId,
               dedupeKeys: params.agentDedupeKeys,
+              retainYieldedReplay: yieldReply?.retainReplay,
               abortController: prepared.activeRunAbort.controller,
               cleanupAbortController: cleanupAdmittedRun,
               io: { ...params.io, emitFinal: deferFinal },

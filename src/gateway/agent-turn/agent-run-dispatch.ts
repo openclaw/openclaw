@@ -62,7 +62,7 @@ import {
   resolveGatewayAgentAbortStopReason,
   resolveResolvedAgentTimeoutStopReason,
 } from "./agent-run-dispatch-outcome.js";
-import type { AgentTurnContext, AgentTurnIo } from "./types.js";
+import type { AgentTurnContext, AgentTurnFrame, AgentTurnIo } from "./types.js";
 
 type AgentRunMediaCustody = Pick<
   ReturnType<typeof createAssistantCommentaryMediaCustody>,
@@ -83,6 +83,7 @@ export function dispatchAgentRunFromGateway(params: {
   runId: string;
   cronCreatorAuthority?: GatewayCronCreatorAuthorityAdmission;
   dedupeKeys: readonly string[];
+  retainYieldedReplay?: ((publish: (frame: AgentTurnFrame) => void) => boolean) | undefined;
   /**
    * Controller whose signal is wired into `ingressOpts.abortSignal`. Used on
    * completion to retire the matching controller source without
@@ -518,7 +519,31 @@ export function dispatchAgentRunFromGateway(params: {
         });
         return { terminalOutcome, settled };
       }
-      persistTerminalDedupe();
+      const retainedReplay =
+        responseStatus === "ok" && result?.meta?.yielded === true && params.retainYieldedReplay;
+      const reservations = retainedReplay
+        ? params.dedupeKeys.map((key) => ({ key, entry: params.context.dedupe.get(key) }))
+        : [];
+      if (
+        !retainedReplay ||
+        !retainedReplay(([ok, finalPayload, error]) => {
+          // Settle only the reservation from the original admission, never a later retry's owner.
+          const keys = reservations
+            .filter(
+              ({ key, entry: reservation }) =>
+                reservation && params.context.dedupe.get(key) === reservation,
+            )
+            .map(({ key }) => key);
+          setGatewayDedupeEntries({
+            dedupe: params.context.dedupe,
+            keys,
+            session: captureJobSession(),
+            entry: diagnostics.forReplay({ ts: Date.now(), ok, payload: finalPayload, error }),
+          });
+        })
+      ) {
+        persistTerminalDedupe();
+      }
       // A final response resumes durable delivery cleanup. Release the terminal
       // run owner first so exact-session deletion cannot race this admission.
       await cleanupRunOwner();

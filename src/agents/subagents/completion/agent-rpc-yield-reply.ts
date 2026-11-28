@@ -9,7 +9,10 @@ import { getSubagentRunRuntimeKey } from "../registry/subagent-run-generation.js
 
 type AgentRpcYieldReply = NonNullable<AgentTurnIo["yieldReply"]>;
 type Reply = {
-  destination: AgentRpcYieldReply | undefined;
+  destination:
+    | (Omit<AgentRpcYieldReply, "publish"> & { publish?: AgentRpcYieldReply["publish"] })
+    | undefined;
+  replay?: (frame: AgentTurnFrame) => void;
   originalRunId: string;
   sessionId: string;
   sessionKey: string;
@@ -74,8 +77,27 @@ export function withAgentRpcYieldSuccessor<T>(
 
 function closeReply(reply: Reply) {
   reply.destination = undefined;
+  reply.replay = undefined;
   reply.close?.();
   reply.close = undefined;
+}
+
+function publishReply(reply: Reply, [ok, payload, error]: AgentTurnFrame) {
+  const destination = reply.destination;
+  const replay = reply.replay;
+  closeReply(reply);
+  if (reply.generation !== getAgentRunLifecycleGeneration()) {
+    return;
+  }
+  const frame: AgentTurnFrame = [
+    ok,
+    payload && typeof payload === "object" ? { ...payload, runId: reply.originalRunId } : payload,
+    error,
+  ];
+  replay?.(frame);
+  if (!destination?.signal.aborted) {
+    destination?.publish?.(frame, reply.originalRunId);
+  }
 }
 
 /** A definitively retired wake never reached the execution's final-frame handler. */
@@ -84,13 +106,7 @@ export function finishUnstartedAgentRpcYieldSuccessor(entries: readonly Subagent
   if (!execution || execution.successorStarted) {
     return;
   }
-  const { reply } = execution;
-  const destination = reply.destination;
-  closeReply(reply);
-  destination?.publish(
-    [true, { status: "error", summary: "failed" }, undefined],
-    reply.originalRunId,
-  );
+  publishReply(execution.reply, [true, { status: "error", summary: "failed" }, undefined]);
 }
 
 export function observeAgentRpcYieldExecution(params: {
@@ -108,7 +124,7 @@ export function observeAgentRpcYieldExecution(params: {
       ? successor.execution.reply
       : yieldReply && sessionId && sessionKey
         ? {
-            destination: yieldReply,
+            destination: { ...yieldReply },
             originalRunId: runId,
             sessionId,
             sessionKey,
@@ -128,8 +144,17 @@ export function observeAgentRpcYieldExecution(params: {
       state.executions.delete(runId);
     }
   };
-  const close = () => closeReply(reply);
   return {
+    updateSessionId(nextSessionId: string) {
+      reply.sessionId = nextSessionId;
+    },
+    retainReplay: (publish: (frame: AgentTurnFrame) => void) => {
+      if (!execution.parked || reply.originalRunId !== runId) {
+        return false;
+      }
+      reply.replay = publish;
+      return true;
+    },
     finish(frame: AgentTurnFrame) {
       release();
       const destination = reply.destination;
@@ -141,32 +166,35 @@ export function observeAgentRpcYieldExecution(params: {
         payload?.status === "ok" &&
         asOptionalRecord(result?.meta)?.yielded === true;
       if (!parked) {
-        close();
         if (reply.originalRunId !== runId) {
-          destination?.publish(frame, reply.originalRunId);
+          publishReply(reply, frame);
+        } else {
+          closeReply(reply);
         }
         return false;
       }
       if (destination && !reply.close) {
+        const detach = () => {
+          delete destination.publish;
+        };
         if (destination.signal.aborted) {
-          close();
-          return true;
+          detach();
         }
         const timer = setTimeout(
           () => {
-            close();
-            destination.publish(
-              [true, { status: "timeout", summary: "aborted", stopReason: "timeout" }, undefined],
-              reply.originalRunId,
-            );
+            publishReply(reply, [
+              true,
+              { status: "timeout", summary: "aborted", stopReason: "timeout" },
+              undefined,
+            ]);
           },
           Math.max(0, destination.deadline - Date.now()),
         );
         timer.unref();
-        destination.signal.addEventListener("abort", close, { once: true });
+        destination.signal.addEventListener("abort", detach, { once: true });
         reply.close = () => {
           clearTimeout(timer);
-          destination.signal.removeEventListener("abort", close);
+          destination.signal.removeEventListener("abort", detach);
         };
       }
       // Suppress only the parked RPC's physical frame; internal wake observers still need theirs.
