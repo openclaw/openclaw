@@ -444,6 +444,8 @@ describe("settle step after the installed updater exits", () => {
     cgroupEvents?: string;
     /** No cgroup hierarchy systemd tracks units in is mounted. */
     noCgroupHierarchy?: boolean;
+    /** Checks for which the Doctor child's account migration still runs after the updater died. */
+    accountWorkChecks?: number;
     account: Record<string, [number, string]>;
   };
 
@@ -461,6 +463,8 @@ describe("settle step after the installed updater exits", () => {
     const payload = {
       mode,
       driverPid: 1,
+      doctorPid: 2,
+      doctorStartedAt: "777",
       root: "/opt/openclaw",
       candidateVersion: "2026.11.16",
       candidateBuildId: "build-candidate",
@@ -484,10 +488,33 @@ describe("settle step after the installed updater exits", () => {
         if (file === `${payload.root}/dist/build-info.json`) {
           return JSON.stringify({ buildId: world.buildId ?? "build-candidate" });
         }
+        if (file === "/proc/4242/cmdline") {
+          return [
+            "/usr/sbin/runuser",
+            "-u",
+            "openclaw",
+            "--",
+            "node",
+            "-e",
+            "loader",
+            payload.envFile,
+          ].join("\0");
+        }
         if (file.endsWith("/cgroup.events") && world.cgroupEvents !== undefined) {
           return world.cgroupEvents;
         }
         throw Object.assign(new Error("missing"), { code: "ENOENT" });
+      },
+      readdirSync: (dir: string) => {
+        if (dir !== "/proc") {
+          throw Object.assign(new Error("missing"), { code: "ENOENT" });
+        }
+        if ((world.accountWorkChecks ?? 0) > 0) {
+          world.accountWorkChecks = (world.accountWorkChecks ?? 0) - 1;
+          events.push("account migration still running");
+          return ["4242"];
+        }
+        return [];
       },
       statfsSync: (dir: string) => ({
         type: dir === "/sys/fs/cgroup" && !world.noCgroupHierarchy ? 0x63677270 : 0,
@@ -541,7 +568,8 @@ describe("settle step after the installed updater exits", () => {
         },
       },
       console: { log: (message: string) => events.push(`log ${message}`) },
-      setTimeout,
+      // Each wait runs the next check at once.
+      setTimeout: (next: () => void) => next(),
     });
     return events;
   }
@@ -635,6 +663,24 @@ describe("settle step after the installed updater exits", () => {
 
     expect(events).not.toContain("systemctl start openclaw-gateway.service");
     expect(events.includes("as openclaw: update restore")).toBe(restoreRuns);
+  });
+
+  it("restores only after the account migration that outlived the updater has ended", async () => {
+    const events = runSettle(await settleScript(), "settle", {
+      version: "2026.11.10",
+      active: "active",
+      accountWorkChecks: 2,
+      account: { restore: ok("restored") },
+    });
+
+    expect(events.filter((event) => !event.startsWith("log "))).toEqual([
+      "account migration still running",
+      "account migration still running",
+      "systemctl stop openclaw-gateway.service",
+      "as openclaw: update restore",
+      "systemctl start openclaw-gateway.service",
+      "rm /tmp/handoff",
+    ]);
   });
 
   it("starts the previous package when the migration never backed anything up", async () => {

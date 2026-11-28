@@ -74,6 +74,16 @@ const fs = require("node:fs");
 const { spawnSync } = require("node:child_process");
 const log = (message) => console.log(message);
 const alive = (pid) => { try { process.kill(pid, 0); return true; } catch { return false; } };
+// A PID is the same process only with the same start time; PIDs are reused.
+const startedAt = (pid) => { try { const stat = fs.readFileSync("/proc/" + pid + "/stat", "utf8"); return stat.slice(stat.lastIndexOf(")") + 2).split(" ")[19]; } catch { return undefined; } };
+// The Doctor child and the account work it started (runuser and the account's loader carry
+// this handoff's env file in their argv) can outlive the updater; nothing settles before they end.
+const accountWorkRunning = () => {
+  if (startedAt(p.doctorPid) === p.doctorStartedAt) return true;
+  let pids = [];
+  try { pids = fs.readdirSync("/proc").filter((name) => /^[0-9]+$/.test(name) && Number(name) !== process.pid); } catch { return true; }
+  return pids.some((pid) => { try { return fs.readFileSync("/proc/" + pid + "/cmdline", "utf8").split("\0").includes(p.envFile); } catch { return false; } });
+};
 const systemctl = (...args) => spawnSync("/usr/bin/systemctl", args, { stdio: "inherit" }).status === 0;
 const show = (property) => String(spawnSync("/usr/bin/systemctl", ["show", "-p", property, "--value", p.unit], { encoding: "utf8" }).stdout || "").trim();
 // The account's answer is untrusted: success needs exit 0 and the expected status word in
@@ -148,10 +158,10 @@ const settle = () => {
   else log("restore did not confirm; " + p.unit + " left stopped, backup kept at " + p.backupRoot);
 };
 const tick = () => {
-  if (alive(p.driverPid)) {
+  if (alive(p.driverPid) || accountWorkRunning()) {
     if (Date.now() < deadline) { setTimeout(tick, 1000); return; }
     // The package is not final while the updater runs; keep the backup for the operator.
-    log("the installed updater is still running; nothing settled, backup kept at " + p.backupRoot);
+    log("the installed updater or its account work is still running; nothing settled, backup kept at " + p.backupRoot);
     fs.rmSync(p.handoffDir, { recursive: true, force: true });
     return;
   }
@@ -159,6 +169,16 @@ const tick = () => {
 };
 tick();
 `;
+
+/** Field 22 of /proc/<pid>/stat, the process start time; it pairs with the PID. */
+async function readProcessStartedAt(pid: number): Promise<string | null> {
+  try {
+    const stat = await fs.readFile(`/proc/${pid}/stat`, "utf8");
+    return stat.slice(stat.lastIndexOf(")") + 2).split(" ")[19] ?? null;
+  } catch {
+    return null;
+  }
+}
 
 /** The account's own client, aimed at the port the unit's ExecStart chose. */
 function healthArgs(execution: ServiceAccountExecution): string[] {
@@ -181,6 +201,9 @@ async function scheduleSettle(
     mode,
     // The installed updater that started this Doctor child; it restores the package, if at all.
     driverPid: process.ppid,
+    // This Doctor child, which may outlive that updater while its account work runs.
+    doctorPid: process.pid,
+    doctorStartedAt: await readProcessStartedAt(process.pid),
     // The installation path as the unit uses it, not its target: a release-slot install
     // selects the previous release by moving this link.
     root: params.root,

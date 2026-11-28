@@ -460,7 +460,7 @@ describe("candidate admission run as the unit's account", () => {
       code: 0,
     });
     setAdmissionBudget(12_000);
-    vi.mocked(process.uptime).mockReturnValue(6);
+    vi.spyOn(process, "uptime").mockReturnValue(6);
 
     const verdict = await admit();
 
