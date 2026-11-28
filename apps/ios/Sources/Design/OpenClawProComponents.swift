@@ -243,6 +243,7 @@ struct OpenClawRoundNavigationButton<Glyph: View>: View {
 
 struct OpenClawSidebarControlButton: View {
     let action: OpenClawSidebarHeaderAction
+    var glass: Glass = .identity
 
     private static let chatMenuGlyph = UIGraphicsImageRenderer(size: CGSize(width: 16, height: 8)).image { _ in
         UIColor.black.setFill()
@@ -252,6 +253,7 @@ struct OpenClawSidebarControlButton: View {
 
     var body: some View {
         self.identified(self.button.buttonStyle(.plain))
+            .glassEffect(self.glass, in: Circle())
             .opacity(self.action.isShown ? 1 : 0)
     }
 
@@ -304,6 +306,7 @@ struct OpenClawSidebarControlButton: View {
 struct OpenClawSidebarToolbarItem: ToolbarContent {
     let action: OpenClawSidebarHeaderAction
     let placement: ToolbarItemPlacement
+    var glass: Glass = .identity
 
     @ToolbarContentBuilder
     var body: some ToolbarContent {
@@ -316,10 +319,9 @@ struct OpenClawSidebarToolbarItem: ToolbarContent {
 
     private var item: some ToolbarContent {
         ToolbarItem(placement: self.placement) {
-            OpenClawSidebarControlButton(action: self.action)
+            OpenClawSidebarControlButton(action: self.action, glass: self.glass)
         }
-        // Sidebar reveal is intentionally background-free in every host;
-        // suppress the toolbar's automatic glass so it cannot reappear.
+        // The button owns its background; do not add a second one in the toolbar.
         .sharedBackgroundVisibility(.hidden)
     }
 }
