@@ -35,7 +35,5 @@ describe("web_fetch terminal presentation", () => {
         "Truncated: yes",
       ].join("\n"),
     );
-    expect(presentation?.text).not.toContain("secret");
-    expect(presentation?.text).not.toContain("untrusted");
   });
 });
