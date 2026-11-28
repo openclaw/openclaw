@@ -106,14 +106,44 @@ function resolvePeerName(request: IncomingMessage, config: A2aChannelConfig): st
   return undefined;
 }
 
-function resolveRequestOrigin(request: IncomingMessage): string {
-  const encrypted = "encrypted" in request.socket && request.socket.encrypted;
+function socketIsEncrypted(request: IncomingMessage): boolean {
+  return "encrypted" in request.socket && request.socket.encrypted === true;
+}
+
+/** Origin of the socket that accepted the connection, never a client-chosen Host. */
+function originFromLocalSocket(request: IncomingMessage): string | undefined {
+  const address = request.socket.localAddress;
+  const port = request.socket.localPort;
+  if (!address || !port) {
+    return undefined;
+  }
+  const scheme = socketIsEncrypted(request) ? "https" : "http";
+  const host = address.includes(":") ? `[${address}]` : address;
+  const defaultPort = scheme === "https" ? 443 : 80;
   try {
-    return new URL(`${encrypted ? "https" : "http"}://${request.headers.host ?? "localhost"}`)
+    return new URL(port === defaultPort ? `${scheme}://${host}` : `${scheme}://${host}:${port}`)
       .origin;
   } catch {
-    return `${encrypted ? "https" : "http"}://localhost`;
+    return undefined;
   }
+}
+
+function resolveRequestOrigin(request: IncomingMessage): string {
+  const scheme = socketIsEncrypted(request) ? "https" : "http";
+  const localOrigin = originFromLocalSocket(request);
+  const hostHeader = request.headers.host;
+  // The discovery card is unauthenticated. A caller-supplied Host is published
+  // only when it is the address this socket is actually bound to.
+  if (localOrigin && typeof hostHeader === "string" && hostHeader.trim()) {
+    try {
+      if (new URL(`${scheme}://${hostHeader}`).origin === localOrigin) {
+        return localOrigin;
+      }
+    } catch {
+      // Ignore a malformed Host and fall through to the local socket.
+    }
+  }
+  return localOrigin ?? `${scheme}://localhost`;
 }
 
 const a2aGatewayRoutePaths = [
