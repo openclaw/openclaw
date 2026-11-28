@@ -1136,6 +1136,7 @@ src/infra/gateway-owner-lease.read.ts
 src/infra/gateway-owner-lease.worker.ts
 src/infra/gateway-owner-lease.ts
 src/infra/gateway-lock-payload.ts
+src/infra/gateway-lock-recovery-namespace.ts
 src/infra/gateway-service-installation-context.ts
 src/infra/gateway-state-owner-cold-admission.ts
 src/infra/gateway-state-owner-directory.ts

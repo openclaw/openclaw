@@ -15,6 +15,7 @@ import {
 import { listDirectoryTreeStrictSync } from "../../infra/directory-walk.js";
 import * as gatewayNamespace from "../../infra/gateway-lock-payload.js";
 import * as processes from "../../infra/gateway-lock-process.js";
+import * as gatewayLockRecovery from "../../infra/gateway-lock-recovery-namespace.js";
 import { acquireGatewayStateOwner } from "../../infra/gateway-state-owner.js";
 import * as packageFilesystem from "../../infra/package-update-filesystem.js";
 import { writePackageRoot } from "../../infra/package-update-steps.test-support.js";
@@ -47,9 +48,9 @@ function withHostPlatform<T>(run: () => T): T {
 beforeEach(() => {
   // Service platform mocks retain the host's process identity and namespace.
   vi.spyOn(gatewayNamespace, "readGatewayLockProcessNamespace").mockReturnValue(hostNamespace);
-  const classifyNamespace = gatewayNamespace.classifyGatewayLockProcessNamespace;
-  vi.spyOn(gatewayNamespace, "classifyGatewayLockProcessNamespace").mockImplementation((...args) =>
-    withHostPlatform(() => classifyNamespace(...args)),
+  const classifyNamespace = gatewayLockRecovery.classifyGatewayLockProcessNamespace;
+  vi.spyOn(gatewayLockRecovery, "classifyGatewayLockProcessNamespace").mockImplementation(
+    (...args) => withHostPlatform(() => classifyNamespace(...args)),
   );
   for (const key of ["isPidAlive", "isPidDefinitelyDead"] as const) {
     const original = processIdentity[key];
