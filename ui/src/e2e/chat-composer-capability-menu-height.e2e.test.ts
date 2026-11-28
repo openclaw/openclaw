@@ -176,7 +176,22 @@ suite.define(() => {
       }
       await expectVisibleFocus(dropdown.locator('[data-value="skill:skill-36"]'));
 
+      const skillsHeight = await panel.evaluate((node) => node.style.height);
       await dropdown.locator('[data-value="back"]').click();
+      await expect.poll(() => dropdown.getAttribute("data-view")).toBe("root");
+      // The root rows mount before the top-anchored panel finishes shrinking. Wait for
+      // its new measured height so the pointer does not click a moving target.
+      await expect
+        .poll(() =>
+          panel.evaluate((node, previousHeight) => {
+            const height = Number.parseFloat(node.style.height);
+            return (
+              node.style.height !== previousHeight &&
+              Math.abs(node.getBoundingClientRect().height - height) <= 1
+            );
+          }, skillsHeight),
+        )
+        .toBe(true);
       await dropdown.locator('[data-value="open-connectors"]').click();
       await expect.poll(() => dropdown.getAttribute("data-view")).toBe("connectors");
       await expectScrollable();
