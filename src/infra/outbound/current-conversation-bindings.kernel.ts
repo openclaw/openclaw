@@ -195,6 +195,7 @@ function createCurrentConversationBindingQueries(db: EngineConnection) {
         "candidate.target_session_key",
         "candidate.record_json",
       ] as const;
+      // Untyped PostgreSQL parameters resolve to text, making the false discriminator truthy.
       return requested
         .selectFrom("requested")
         .innerJoin(
@@ -203,7 +204,7 @@ function createCurrentConversationBindingQueries(db: EngineConnection) {
           "requested.binding_key",
         )
         .select(columns)
-        .select((eb) => eb.val(1).as("is_exact"))
+        .select((eb) => eb.lit<number>(1).as("is_exact"))
         .unionAll((selection) =>
           selection
             .selectFrom("requested")
@@ -215,7 +216,7 @@ function createCurrentConversationBindingQueries(db: EngineConnection) {
                 .on("candidate.conversation_kind", "=", CURRENT_BINDING_CONVERSATION_KIND),
             )
             .select(columns)
-            .select((eb) => eb.val(0).as("is_exact"))
+            .select((eb) => eb.lit<number>(0).as("is_exact"))
             .where((eb) =>
               eb.not(
                 eb.exists(

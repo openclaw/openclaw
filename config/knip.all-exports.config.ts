@@ -134,6 +134,8 @@ const ROOT_TEST_ENTRY_GLOBS = [
   "src/infra/database-engine/physical-facts-worker.test-support.ts!",
   // The PostgreSQL namespace isolation test resolves this worker through resolveRuntimeWorkerUrl.
   "src/infra/database-engine/multi-namespace.worker.test-support.ts!",
+  // The PostgreSQL write-admission test resolves this worker through resolveRuntimeWorkerUrl.
+  "src/infra/postgres-sync/write-admission-worker.test-support.ts!",
   // The state-read admission test launches this Worker from computed source and dist paths.
   "src/infra/database-engine/state-read-admission.worker.test-support.ts!",
   // The state admission tests spawn this peer update-ledger writer by path.

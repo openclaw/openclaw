@@ -21,7 +21,7 @@ const transactionBoundaries = new Map<string, { callback?: number; options?: num
   ["runOpenClawAgentWriteTransaction", { callback: 0 }],
   ["runOpenClawAgentWriteWithYieldingAdmission", { callback: 0 }],
   ["runOpenClawStateWriteTransaction", { callback: 0 }],
-  ["runPostgresTransactionSync", { callback: 1, options: 2 }],
+  ["runPostgresTransactionSync", { callback: 1, options: 3 }],
   ["runSqliteReservedTransactionSync", { callback: 1, options: 2 }],
   ["runSqliteDeferredTransactionSync", { callback: 1, options: 2 }],
   ["runSqliteReadSnapshotSync", { callback: 1, options: 2 }],

@@ -28,6 +28,7 @@ import {
   ensureTranscriptSessionRoot,
 } from "../../config/sessions/session-accessor.sqlite-transcript-state.js";
 import { prepareIncrementalSuffixIdempotencyMutation } from "../../config/sessions/session-accessor.sqlite-transcript-suffix-idempotency.js";
+import { withTranscriptWriteSequence } from "../../config/sessions/session-accessor.sqlite-transcript-write.js";
 import { reconcileSessionTranscriptIndexInTransaction } from "../../config/sessions/session-transcript-index.js";
 import { searchSessionTranscripts } from "../../config/sessions/session-transcript-search.js";
 import { createTranscriptEventInserter } from "../../config/sessions/transcript-payload.js";
@@ -544,6 +545,94 @@ for (const engine of ["sqlite", "postgres"] as const) {
         expect((await searchSessionTranscripts(query)).hits).toHaveLength(1);
         expect(stored().slice(0, before.length)).toEqual(before);
       });
+
+      it.each([false, true])(
+        "retains hot mirror identity facts with a source run: %s",
+        async (withSourceRun) => {
+          const scope = withEngineStoreAdmission(() => ({
+            agentId: "main",
+            sessionId: `mirror-discriminator-${withSourceRun}`,
+            sessionKey: `agent:main:mirror-discriminator-${withSourceRun}`,
+            storePath: openOpenClawAgentDatabase({ agentId: "main" }).path,
+          }));
+          await upsertSessionEntryCore(scope, { sessionId: scope.sessionId, updatedAt: 1 });
+          const runId = "mirror-discriminator-run";
+          const keys = [`${runId}:user`, `${runId}:assistant`];
+          const messages = [
+            {
+              role: "user",
+              content: "synthetic mirror question",
+              idempotencyKey: keys[0],
+              timestamp: 1,
+            },
+            {
+              role: "assistant",
+              content: "synthetic mirror answer",
+              idempotencyKey: keys[1],
+              timestamp: 2,
+              __openclaw: { runId },
+            },
+          ];
+          const appended: Array<
+            NonNullable<Awaited<ReturnType<typeof appendSessionTranscriptMessageByIdentity>>>
+          > = [];
+          for (const [index, transcriptMessage] of messages.entries()) {
+            const result = await appendSessionTranscriptMessageByIdentity({
+              ...scope,
+              eventId: `mirror-message-${index}`,
+              message: transcriptMessage,
+            });
+            expect(result?.appended).toBe(true);
+            expect(result?.anchor).toBeDefined();
+            appended.push(result!);
+          }
+          withEngineStoreAdmission(() => {
+            readSessionTranscriptModelContext(scope);
+            const database = openOpenClawAgentDatabase({ agentId: "main" });
+            const state = database.db
+              .prepare(
+                "SELECT indexed_seq, needs_rebuild, (SELECT max(seq) FROM transcript_events WHERE session_id = ?) AS latest FROM session_transcript_index_state WHERE session_id = ?",
+              )
+              .get(scope.sessionId, scope.sessionId);
+            expect(state).toMatchObject({ needs_rebuild: 0 });
+            expect(state?.indexed_seq).toBe(state?.latest);
+          });
+          // The second stored key crosses the real 900-key SQL batch boundary.
+          const requested = withSourceRun
+            ? [keys[0]!, ...Array.from({ length: 899 }, (_, index) => `absent-${index}`), keys[1]!]
+            : (keys as string[]);
+          const facts = await withTranscriptWriteSequence(scope, (context) =>
+            context.readMessageFacts({
+              idempotencyKeys: requested,
+              ...(withSourceRun ? { sourceRunId: runId } : {}),
+            }),
+          );
+          expect([...facts.existingIdempotencyKeys]).toEqual(keys);
+          expect([...facts.messagesByIdempotencyKey]).toEqual(
+            keys.map((key, index) => [key, messages[index]]),
+          );
+          expect([...facts.anchorsByIdempotencyKey]).toEqual(
+            keys.map((key, index) => [key, appended[index]!.anchor]),
+          );
+          if (withSourceRun) {
+            expect(facts.sourceEvents).toMatchObject([
+              { id: "mirror-message-1", message: messages[1] },
+            ]);
+          } else {
+            expect(facts.sourceEvents).toBeUndefined();
+          }
+          const replay = await appendSessionTranscriptMessageByIdentity({
+            ...scope,
+            eventId: "mirror-message-1",
+            message: messages[1],
+          });
+          expect(replay).toMatchObject({
+            appended: false,
+            messageId: "mirror-message-1",
+            message: messages[1],
+          });
+        },
+      );
 
       it("advances mutation time beyond both prior mutation and observation with nullable fields", () =>
         withEngineStoreAdmission(() => {

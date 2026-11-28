@@ -36,7 +36,7 @@ vi.mock("../state/openclaw-state-worker-error.js", () =>
   effects.forbid("retainOpenClawStateWorkerErrorPayload"),
 );
 // mock-isolation: Pure settlement must not retain native admission.
-vi.mock("./sqlite-transaction.js", () => effects.forbid("retainSqliteWriteAdmissionService"));
+vi.mock("./sqlite-write-admission.js", () => effects.forbid("retainSqliteWriteAdmissionService"));
 // mock-isolation: Pure settlement must not create transfer owners.
 vi.mock("./sqlite-worker-transfer.js", () =>
   effects.forbid("createSqliteWorkerTransferOwner", "createSqliteWorkerTransferReceiver"),

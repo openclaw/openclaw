@@ -9,11 +9,118 @@ import {
 import { beginPostgresReadSnapshotScope } from "../sqlite-schema-facts.js";
 import { hasSqliteWorkerOutcomeUnknown } from "../sqlite-worker-contract.js";
 import { currentSqliteWorkerOperationAdmission } from "../sqlite-worker-operation-settlement.js";
+import { readSqliteWriteAdmissionServices } from "../sqlite-write-admission.js";
+import { decodePostgresError, readPostgresSqlState } from "./protocol.js";
 
 function assertPostgresOperationCurrent(): void {
   const scope = currentSqliteWorkerOperationAdmission.getStore();
   if (scope && (!scope.active || scope.owner.refusal)) {
     throw scope.owner.refusal ?? new Error("PostgreSQL worker operation is no longer active");
+  }
+}
+
+type AdmissionTimeout = "lock_timeout" | "statement_timeout" | "transaction_timeout";
+
+function beginPostgresWrite(db: PostgresSqlConnection, requestTimeoutMs: number): void {
+  const services = readSqliteWriteAdmissionServices(db.anchor);
+  const begin = "BEGIN ISOLATION LEVEL READ COMMITTED";
+  const lock = `SELECT pg_advisory_xact_lock(${db.advisoryLockKey})`;
+  if (!services) {
+    db.exec(`${begin}; ${lock}`);
+    return;
+  }
+  const started = performance.now();
+  const settings = db
+    .prepare(
+      "SELECT name, setting FROM pg_settings WHERE name IN ('lock_timeout', 'statement_timeout', 'transaction_timeout')",
+    )
+    .all();
+  const timeout = (name: AdmissionTimeout) =>
+    Number(settings.find((row) => row.name === name)?.setting ?? 0);
+  const lockTimeout = timeout("lock_timeout");
+  const statementTimeout = timeout("statement_timeout");
+  const transactionTimeout = timeout("transaction_timeout");
+  const budget = [
+    { name: "transaction_timeout", ms: transactionTimeout || Infinity },
+    { name: "statement_timeout", ms: statementTimeout || Infinity },
+    { name: "lock_timeout", ms: lockTimeout || Infinity },
+    { name: "bridge request deadline", ms: requestTimeoutMs },
+  ].reduce((first, next) => (first.ms <= next.ms ? first : next));
+  const deadline = started + budget.ms;
+  let lastLockError: Error | undefined;
+  const assertBudget = () => {
+    if (performance.now() < deadline) {
+      return;
+    }
+    if (db.isTransaction) {
+      db.exec("ROLLBACK");
+    }
+    if (budget.name === "lock_timeout" && lastLockError) {
+      throw lastLockError;
+    }
+    if (budget.name === "bridge request deadline") {
+      throw new Error(
+        "PostgreSQL writer admission exceeded the bridge request deadline before the transaction began",
+      );
+    }
+    if (budget.name === "transaction_timeout") {
+      // Retire the rolled-back logical handle; the healthy pooled backend can be reused.
+      db.close();
+    }
+    throw decodePostgresError({
+      name: "error",
+      code:
+        budget.name === "transaction_timeout"
+          ? "25P04"
+          : budget.name === "lock_timeout"
+            ? "55P03"
+            : "57014",
+      message: `PostgreSQL writer admission exceeded ${budget.name} before the transaction began`,
+    });
+  };
+  const assertIdle = () => {
+    assertPostgresOperationCurrent();
+    if (!db.isOpen || db.isTransaction) {
+      throw new Error("PostgreSQL writer admission requires an open idle connection");
+    }
+    assertBudget();
+  };
+  while (true) {
+    assertIdle();
+    try {
+      db.exec(begin);
+      assertBudget();
+      if (transactionTimeout > 0) {
+        const remaining = Math.max(1, Math.ceil(started + transactionTimeout - performance.now()));
+        // PG17 only arms an inactive timer. Restore the visible GUC without
+        // resetting that timer, so admission retries cannot extend the body budget.
+        db.exec(
+          `SET LOCAL transaction_timeout = 0; SET LOCAL transaction_timeout = '${remaining}ms'; SET LOCAL transaction_timeout = '${transactionTimeout}ms'`,
+        );
+      }
+      assertBudget();
+      const slice = Math.max(1, Math.min(25, Math.ceil(deadline - performance.now())));
+      db.exec(`SET LOCAL lock_timeout = '${slice}ms'; ${lock}`);
+      assertBudget();
+      db.exec(`SET LOCAL lock_timeout = '${lockTimeout}ms'`);
+      assertBudget();
+      return;
+    } catch (error) {
+      if (!(error instanceof Error) || readPostgresSqlState(error) !== "55P03") {
+        throw error;
+      }
+      // A failed advisory wait leaves an aborted transaction. Never service a
+      // host-dependent worker while a contender request or transaction is live.
+      if (db.isTransaction) {
+        db.exec("ROLLBACK");
+      }
+      lastLockError = error;
+      assertIdle();
+      for (const service of services) {
+        service();
+        assertIdle();
+      }
+    }
   }
 }
 
@@ -29,6 +136,7 @@ export function tryReservePostgresTransactionSync(db: PostgresSqlConnection): bo
 export function runPostgresTransactionSync<T>(
   db: PostgresSqlConnection,
   operation: () => T,
+  requestTimeoutMs: number,
   options?: PostgresTransactionOptions,
   readOnly = false,
   reserved = false,
@@ -46,11 +154,11 @@ export function runPostgresTransactionSync<T>(
       if (nested) {
         db.exec("SAVEPOINT openclaw_tx_nested");
       } else if (!db.isTransaction) {
-        db.exec(
-          readOnly
-            ? "BEGIN ISOLATION LEVEL REPEATABLE READ READ ONLY"
-            : `BEGIN ISOLATION LEVEL READ COMMITTED; SELECT pg_advisory_xact_lock(${db.advisoryLockKey})`,
-        );
+        if (readOnly) {
+          db.exec("BEGIN ISOLATION LEVEL REPEATABLE READ READ ONLY");
+        } else {
+          beginPostgresWrite(db, requestTimeoutMs);
+        }
       }
       const previousTimeout =
         options?.maintenance && nested

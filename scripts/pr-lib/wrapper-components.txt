@@ -1413,6 +1413,7 @@ src/infra/sqlite-wal-reclamation.ts
 src/infra/sqlite-wal-split-brain.ts
 src/infra/sqlite-wal-write-admission.ts
 src/infra/sqlite-wal.ts
+src/infra/sqlite-write-admission.ts
 src/infra/sqlite-worker-broker-admission.ts
 src/infra/sqlite-worker-broker-lifecycle.ts
 src/infra/sqlite-worker-broker-reply.ts

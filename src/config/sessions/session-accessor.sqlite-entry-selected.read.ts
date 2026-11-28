@@ -97,9 +97,10 @@ export function readSelectedSessionEntriesInDatabase(
     // Warm admission permits raw metadata changes. The listing contract still
     // rejects delivery-canonical sibling drift, so include its existing dirty set.
     // Older readers have no dirty set and retain their full validation inventory.
+    // Keep the false discriminator numeric when PostgreSQL has no predicate to infer its type.
     const selectedQuery = query.select((eb) =>
       options.transcriptSessionIds === undefined
-        ? eb.val(0).as("transcript_selected")
+        ? eb.lit<number>(0).as("transcript_selected")
         : eb("session_key", "in", selected).as("transcript_selected"),
     );
     const rows = iterateSqliteQuerySync(

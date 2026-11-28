@@ -19,8 +19,8 @@ import {
   runSqliteImmediateTransaction as prepareWrite,
   runSqliteImmediateTransactionSync as transaction,
   runSqliteReadSnapshotSync as snapshot,
-  withSqliteWriteAdmissionService,
 } from "./sqlite-transaction.js";
+import { withSqliteWriteAdmissionService } from "./sqlite-write-admission.js";
 
 const resources = sqliteMaintenanceFixture();
 const { open: openDatabase, entries: createDatabase } = resources;

@@ -20,9 +20,9 @@ import {
   formatSqliteErrorCodeSuffix,
   isSqliteLockError,
 } from "../infra/sqlite-error-diagnostics.js";
-import { retainSqliteWriteAdmissionService } from "../infra/sqlite-transaction.js";
 import { readDatabasePathIdentitySync } from "../infra/sqlite-worker-identity.js";
 import { createSqliteDatabaseAdmissionRelay } from "../infra/sqlite-worker-operation-admission.js";
+import { retainSqliteWriteAdmissionService } from "../infra/sqlite-write-admission.js";
 import { createCpuTrackedWorker } from "../infra/worker-cpu.js";
 import { createSubsystemLogger } from "../logging/subsystem.js";
 import { createDeferredCore } from "../shared/deferred.js";

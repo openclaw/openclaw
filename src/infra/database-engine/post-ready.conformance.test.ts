@@ -18,7 +18,10 @@ import {
   readConversation,
   registerConversationAddresses as registerAddresses,
 } from "../../config/sessions/conversation-registry.js";
-import { appendSessionTranscriptReport } from "../../config/sessions/session-accessor.js";
+import {
+  appendSessionTranscriptReport,
+  listSessionEntriesCore,
+} from "../../config/sessions/session-accessor.js";
 import {
   listSessionPendingInputs,
   readSessionPendingInput,
@@ -40,6 +43,10 @@ import {
 import { readTranscriptStatsFromDatabase } from "../../config/sessions/session-accessor.sqlite-transcript-stats.js";
 import { replaceSqliteTranscriptEventsInTransaction } from "../../config/sessions/session-accessor.sqlite-transcript-store.js";
 import { appendTranscriptMessage } from "../../config/sessions/session-accessor.sqlite-transcript-write.js";
+import {
+  assertCanonicalSqliteSessionKeysCurrent,
+  markCanonicalSessionValidationPending,
+} from "../../config/sessions/session-canonical-key.js";
 import { discardSessionPendingInput } from "../../config/sessions/session-pending-input-withdrawal.js";
 import { CURRENT_SESSION_VERSION } from "../../config/sessions/version.js";
 import type { PluginInstallRecord } from "../../config/types.plugins.js";
@@ -660,5 +667,60 @@ conformance("conversation batches", () => {
         await listBindings(targets, accountId ? { channel: "demo", accountId } : undefined),
       ).toEqual(expected);
     }
+  });
+});
+
+conformance("selection discriminators", () => {
+  it("does not mistake a different parent for an exact conversation binding", async () => {
+    const record: SessionBindingRecord = {
+      bindingId: "fixture:parented",
+      conversation: {
+        channel: "demo",
+        accountId: "default",
+        conversationId: "child",
+        parentConversationId: "parent-a",
+      },
+      targetSessionKey: "agent:main:parented-binding",
+      targetKind: "session",
+      status: "active",
+      boundAt: 1,
+      metadata: {},
+    };
+    await bind({ record });
+    expect(
+      await selectBindings([
+        record.conversation,
+        { ...record.conversation, parentConversationId: "parent-b" },
+      ]),
+    ).toEqual([record, null]);
+  });
+
+  it("validates pending siblings without adding them to explicit entry selections", async () => {
+    const database = admit(() => openOpenClawAgentDatabase({ agentId: "main" }));
+    const scope = { agentId: "main", storePath: database.path, includeParticipants: false };
+    const selected = "agent:main:selected-discriminator";
+    const unrelated = "agent:main:pending-discriminator";
+    for (const key of [selected, unrelated]) {
+      await upsertSessionEntryCore({ ...scope, sessionKey: key }, { sessionId: key, updatedAt: 1 });
+    }
+    admit(() => {
+      markCanonicalSessionValidationPending(database, [unrelated]);
+      assertCanonicalSqliteSessionKeysCurrent(database);
+      expect(
+        database.db
+          .prepare(
+            "SELECT session_key FROM session_canonical_validation_pending WHERE session_key = ?",
+          )
+          .all(unrelated),
+      ).toEqual([{ session_key: unrelated }]);
+      for (const clone of [true, false]) {
+        expect(
+          listSessionEntriesCore({ ...scope, clone, sessionKeys: [selected] }).map(
+            (row) => row.sessionKey,
+          ),
+        ).toEqual([selected]);
+        expect(listSessionEntriesCore({ ...scope, clone, sessionKeys: [] })).toEqual([]);
+      }
+    });
   });
 });

@@ -59,9 +59,13 @@ vi.mock("../../infra/sqlite-busy-timeout.js", () => ({
 vi.mock("../../infra/sqlite-error-diagnostics.js", () => ({
   isSqliteLockError: boundary.native,
 }));
+// mock-isolation: Lifetime tests must fail before entering a native transaction.
 vi.mock("../../infra/sqlite-transaction.js", () => ({
   runSqliteImmediateTransactionSync: boundary.native,
-  withSqliteWriteAdmissionService: boundary.native,
+}));
+// mock-isolation: Synthetic lifetimes must not register paths in process-wide admission state.
+vi.mock("../../infra/sqlite-write-admission.js", () => ({
+  retainSqliteWriteAdmissionService: boundary.native,
 }));
 
 afterEach(() => {

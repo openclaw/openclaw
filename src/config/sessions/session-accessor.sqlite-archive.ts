@@ -16,8 +16,8 @@ import {
 } from "../../infra/runtime-worker-url.js";
 import { trackSqliteDatabaseAdmissionWorker } from "../../infra/sqlite-database-admission.js";
 import { createSqliteLifecycleAggregateError } from "../../infra/sqlite-lifecycle-errors.js";
-import { retainSqliteWriteAdmissionService } from "../../infra/sqlite-transaction.js";
 import { createSqliteDatabaseAdmissionRelay } from "../../infra/sqlite-worker-operation-admission.js";
+import { retainSqliteWriteAdmissionService } from "../../infra/sqlite-write-admission.js";
 import { createCpuTrackedWorker, receiveWorkerMemoryPort } from "../../infra/worker-cpu.js";
 import { createSubsystemLogger } from "../../logging/subsystem.js";
 import { resolveQuarantineStorePath } from "../../state/openclaw-state-db.paths.js";

@@ -86,7 +86,7 @@ it.each([
       close() {},
       releaseIdleTransport() {},
       runTransaction(operation, options, ...modes) {
-        return runPostgresTransactionSync(this, operation, options, ...modes);
+        return runPostgresTransactionSync(this, operation, 120_000, options, ...modes);
       },
     };
     const admit = () =>

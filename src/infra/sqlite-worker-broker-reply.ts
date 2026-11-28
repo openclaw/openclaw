@@ -28,7 +28,6 @@ import {
   retainPreparedSqliteDatabaseAdmissionLocation,
   resolveSqliteDatabaseFilePath,
 } from "./sqlite-database-admission.js";
-import { retainSqliteWriteAdmissionService } from "./sqlite-transaction.js";
 import {
   prepareSqliteWorkerActorContext,
   captureSqliteWorkerCreationPaths,
@@ -63,6 +62,7 @@ import {
   type SqliteWorkerTransferFrame,
   type SqliteWorkerTransferHandle,
 } from "./sqlite-worker-transfer.js";
+import { retainSqliteWriteAdmissionService } from "./sqlite-write-admission.js";
 import { ownedWorkerBytes } from "./worker-transfer-bytes.js";
 
 export async function dispatchSqliteWorkerJob(

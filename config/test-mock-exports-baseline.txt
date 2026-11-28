@@ -3901,7 +3901,6 @@
 ["src/config/sessions/session-accessor.sqlite-worker-request.lifetime.test.ts","../../infra/node-sqlite.js","0ebae6899949128a7aeb381847b1a07141d7cfc5d69bbeb168e11b2f3a771ff3",1]
 ["src/config/sessions/session-accessor.sqlite-worker-request.lifetime.test.ts","../../infra/sqlite-busy-timeout.js","6978110230873184ecdc21e721b71407a9742e8468b704f5ef922e362907679b",1]
 ["src/config/sessions/session-accessor.sqlite-worker-request.lifetime.test.ts","../../infra/sqlite-error-diagnostics.js","22e9b6cc8ee5599f9adaa79fc6085c95330f71773205081f095acd8ffd2570a3",1]
-["src/config/sessions/session-accessor.sqlite-worker-request.lifetime.test.ts","../../infra/sqlite-transaction.js","c9ffc7aa2b3fbe62e8d1a5f0b703f0be1d1033bcd18a27efd468de61e5dba66c",1]
 ["src/config/sessions/session-accessor.sqlite-worker-request.lifetime.test.ts","../../state/openclaw-agent-db-validation-cache.js","cb6fbdccb5332447f6fedfd8971bca27d970e49fa2ee4daa14a3173e1cea5d09",1]
 ["src/config/sessions/session-accessor.sqlite-worker-request.lifetime.test.ts","../../state/openclaw-state-db.paths.js","adbac1ba7af51b6377cdfd9745a08aa1f6cc3c8f1184562ff4c571b492b51831",1]
 ["src/config/sessions/session-cold-storage-read.test.ts","./session-cold-storage.js","7ab279a05ebd52245fe94fd4dd6e759b598d3f09cf78942530c6f6835c53d85e",1]

@@ -119,6 +119,7 @@ export class PostgresSyncConnection implements PostgresSqlConnection {
       return runPostgresTransactionSync(
         this,
         operation,
+        this.requestTimeoutMs,
         options,
         this.admissionReadOnly || modes[0],
         modes[1],
@@ -175,6 +176,15 @@ export class PostgresSyncConnection implements PostgresSqlConnection {
     }
   }
 
+  private get requestTimeoutMs(): number {
+    // Admission and transport share the connection's configured or maintenance budget.
+    return (
+      (this.maintenance
+        ? POSTGRES_MAINTENANCE_STATEMENT_TIMEOUT_MS
+        : (this.bridgeParameters.statementTimeoutMs ?? POSTGRES_STATEMENT_TIMEOUT_MS)) + 30_000
+    );
+  }
+
   private request(
     request: Extract<BridgeCommand, { operation: "recovery-generation" }>,
     outcomeUnknown?: boolean,
@@ -202,10 +212,7 @@ export class PostgresSyncConnection implements PostgresSqlConnection {
     // connection before this deadline resets its whole service. Fingerprints span
     // many SQL statements in one bridge request; their migration owner retains the
     // maintenance budget through beforeCommit as well as the migration SQL itself.
-    const deadlineMs =
-      (this.maintenance
-        ? POSTGRES_MAINTENANCE_STATEMENT_TIMEOUT_MS
-        : (this.bridgeParameters.statementTimeoutMs ?? POSTGRES_STATEMENT_TIMEOUT_MS)) + 30_000;
+    const deadlineMs = this.requestTimeoutMs;
     const deadline = performance.now() + deadlineMs;
     const retainedIdle = bridge.inTransaction === false;
     const reconnectIfIdle =
