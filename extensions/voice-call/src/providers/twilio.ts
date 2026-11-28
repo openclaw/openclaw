@@ -386,11 +386,9 @@ export class TwilioProvider implements VoiceCallProvider {
   <Pause length="30"/>
 </Response>`;
 
-  private static readonly QUEUE_TWIML = `<?xml version="1.0" encoding="UTF-8"?>
-<Response>
-  <Say voice="alice">Please hold while we connect you.</Say>
-  <Enqueue waitUrl="/voice/hold-music">hold-queue</Enqueue>
-</Response>`;
+  // Calls are served one media stream at a time; an overlapping inbound caller hears busy.
+  private static readonly BUSY_TWIML =
+    '<?xml version="1.0" encoding="UTF-8"?><Response><Reject reason="busy"/></Response>';
 
   private generateTwimlResponse(ctx: WebhookContext): string {
     const params = new URLSearchParams(ctx.rawBody);
@@ -422,7 +420,7 @@ export class TwilioProvider implements VoiceCallProvider {
     }
     if (direction === "inbound") {
       if (this.callStreamMap.size > 0) {
-        return TwilioProvider.QUEUE_TWIML;
+        return TwilioProvider.BUSY_TWIML;
       }
     } else if (!(callId && direction?.startsWith("outbound")) && callStatus !== "in-progress") {
       return TwilioProvider.EMPTY_TWIML;

@@ -551,18 +551,6 @@ export class VoiceCallWebhookServer {
   ): Promise<WebhookResponsePayload | null> {
     const url = buildRequestUrl(req.url);
 
-    if (url.pathname === "/voice/hold-music") {
-      return {
-        statusCode: 200,
-        headers: { "Content-Type": "text/xml" },
-        body: `<?xml version="1.0" encoding="UTF-8"?>
-<Response>
-  <Say voice="alice">All agents are currently busy. Please hold.</Say>
-  <Play loop="0">https://s3.amazonaws.com/com.twilio.music.classical/BusyStrings.mp3</Play>
-</Response>`,
-      };
-    }
-
     if (normalizeWebhookPath(url.pathname) !== normalizeWebhookPath(webhookPath)) {
       return { statusCode: 404, body: "Not Found" };
     }
