@@ -24,11 +24,15 @@ import {
 } from "openclaw/plugin-sdk/string-coerce-runtime";
 import { collectFeishuDoctorAgentIds } from "./doctor-agent-roster.js";
 import { legacyConfigRules, normalizeCompatibilityConfig } from "./doctor-contract.js";
+import {
+  type FeishuTranscriptFinding,
+  inspectTranscriptEntries,
+  invalidSessionTranscriptFinding,
+} from "./doctor-transcript-validation.js";
 import { collectFeishuWebhookNotes } from "./webhook-route.js";
 
 const FEISHU_STATE_DIR = "feishu";
 const BACKUP_PREFIX = "feishu-state-repair";
-const BLANK_USER_MESSAGE_REPAIR_THRESHOLD = 3;
 const SESSION_FILE_INSPECTION_MAX_BYTES = 16 * 1024 * 1024;
 
 type FeishuDoctorFinding =
@@ -41,20 +45,10 @@ type FeishuDoctorFinding =
       sessionKey: string;
       storePath: string;
     }
-  | {
-      kind: "invalid-session-transcript";
-      sessionKey: string;
-      storePath: string;
-      path: string;
-      reason: string;
-    }
-  | {
-      kind: "blank-user-message-run";
-      sessionKey: string;
-      storePath: string;
-      path: string;
-      count: number;
-    };
+  | FeishuTranscriptFinding;
+type FeishuTranscriptInspection =
+  | FeishuDoctorFinding
+  | { kind: "unverified-session-transcript"; sessionKey: string };
 
 type FeishuSessionTarget = {
   agentId: string;
@@ -269,91 +263,6 @@ function resolveSessionTranscriptPath(params: {
     : undefined;
 }
 
-function isSessionHeader(value: unknown): boolean {
-  return isRecord(value) && value.type === "session" && typeof value.id === "string";
-}
-
-function isBlankUserMessage(value: unknown): boolean {
-  if (!isUserMessage(value)) {
-    return false;
-  }
-  const content = value.message.content;
-  if (typeof content === "string") {
-    return content.trim().length === 0;
-  }
-  return Array.isArray(content) && content.length === 0;
-}
-
-function isUserMessage(value: unknown): value is { message: Record<string, unknown> } {
-  return (
-    isRecord(value) &&
-    value.type === "message" &&
-    isRecord(value.message) &&
-    value.message.role === "user"
-  );
-}
-
-function invalidSessionTranscriptFinding(
-  params: { sessionKey: string; storePath: string },
-  transcriptPath: string,
-  reason: string,
-): FeishuDoctorFinding {
-  return {
-    kind: "invalid-session-transcript",
-    sessionKey: params.sessionKey,
-    storePath: params.storePath,
-    path: transcriptPath,
-    reason,
-  };
-}
-
-function inspectTranscriptEntries(params: {
-  sessionKey: string;
-  storePath: string;
-  transcriptPath: string;
-  entries: unknown[];
-  allowMissingSessionHeader?: boolean;
-  malformedLines?: number;
-}): FeishuDoctorFinding | null {
-  let blankUserMessageRun = 0;
-  let maxBlankUserMessageRun = 0;
-  for (const entry of params.entries) {
-    if (isBlankUserMessage(entry)) {
-      blankUserMessageRun += 1;
-      maxBlankUserMessageRun = Math.max(maxBlankUserMessageRun, blankUserMessageRun);
-    } else if (isUserMessage(entry)) {
-      blankUserMessageRun = 0;
-    }
-  }
-
-  if (params.entries.length === 0 && params.allowMissingSessionHeader) {
-    return null;
-  }
-  const firstEntry = params.entries[0];
-  const invalidReason =
-    params.entries.length === 0
-      ? "empty transcript"
-      : !isSessionHeader(firstEntry) &&
-          (!params.allowMissingSessionHeader || !isUserMessage(firstEntry))
-        ? "invalid session header"
-        : (params.malformedLines ?? 0) > 0
-          ? `${params.malformedLines} malformed JSONL line(s)`
-          : undefined;
-  if (invalidReason) {
-    return invalidSessionTranscriptFinding(params, params.transcriptPath, invalidReason);
-  }
-  if (maxBlankUserMessageRun >= BLANK_USER_MESSAGE_REPAIR_THRESHOLD) {
-    return {
-      kind: "blank-user-message-run",
-      sessionKey: params.sessionKey,
-      storePath: params.storePath,
-      path: params.transcriptPath,
-      count: maxBlankUserMessageRun,
-    };
-  }
-  return null;
-}
-
 function inspectSessionTranscript(params: {
   sessionKey: string;
   storePath: string;
@@ -399,7 +308,7 @@ async function inspectCanonicalSessionTranscript(params: {
   sessionId: string;
   sessionKey: string;
   storePath: string;
-}): Promise<FeishuDoctorFinding | null> {
+}): Promise<FeishuTranscriptInspection | null> {
   let entries: unknown[];
   try {
     entries = await loadTranscriptEvents({
@@ -409,7 +318,8 @@ async function inspectCanonicalSessionTranscript(params: {
       storePath: params.storePath,
     });
   } catch {
-    return invalidSessionTranscriptFinding(params, params.storePath, "unreadable");
+    // Storage, worker, and hydration failures do not prove that history can be safely removed.
+    return { kind: "unverified-session-transcript", sessionKey: params.sessionKey };
   }
   return inspectTranscriptEntries({
     sessionKey: params.sessionKey,
@@ -425,7 +335,7 @@ async function collectFeishuSessionFindings(params: {
   sessionKey: string;
   storePath: string;
   entry: FeishuSessionEntry;
-}): Promise<FeishuDoctorFinding[]> {
+}): Promise<FeishuTranscriptInspection[]> {
   const sessionId = typeof params.entry.sessionId === "string" ? params.entry.sessionId.trim() : "";
   if (sessionId) {
     const finding = await inspectCanonicalSessionTranscript({
@@ -498,6 +408,7 @@ async function inspectFeishuDoctorState(params: { cfg: OpenClawConfig; env?: Nod
   const stateDir = resolveStateDir(env, os.homedir);
   const feishuStateDir = path.join(stateDir, FEISHU_STATE_DIR);
   const findings: FeishuDoctorFinding[] = collectCorruptFeishuStateJsonFindings(feishuStateDir);
+  const unreadableSessions: string[] = [];
   const sessionEntries: FeishuDoctorSessionEntry[] = [];
 
   for (const target of collectFeishuSessionTargets({ cfg: params.cfg, env, stateDir })) {
@@ -518,14 +429,18 @@ async function inspectFeishuDoctorState(params: { cfg: OpenClawConfig; env?: Nod
         agentId: target.agentId,
         entry,
       });
-      findings.push(
-        ...(await collectFeishuSessionFindings({
-          sessionKey: key,
-          storePath: target.storePath,
-          agentId: target.agentId,
-          entry,
-        })),
-      );
+      for (const finding of await collectFeishuSessionFindings({
+        sessionKey: key,
+        storePath: target.storePath,
+        agentId: target.agentId,
+        entry,
+      })) {
+        if (finding.kind === "unverified-session-transcript") {
+          unreadableSessions.push(finding.sessionKey);
+        } else {
+          findings.push(finding);
+        }
+      }
     }
   }
 
@@ -533,6 +448,7 @@ async function inspectFeishuDoctorState(params: { cfg: OpenClawConfig; env?: Nod
     stateDir,
     feishuStateDir,
     findings,
+    unreadableSessions,
     sessionEntries,
   };
 }
@@ -758,15 +674,24 @@ async function runFeishuDoctorSequence(params: {
   const inspection = params.cfg.channels?.feishu
     ? await inspectFeishuDoctorState(params)
     : undefined;
+  const warningNotes = [...notes.warningNotes];
+  if (inspection?.unreadableSessions.length) {
+    const { unreadableSessions } = inspection;
+    const preview = unreadableSessions.slice(0, 5).join(", ");
+    const remaining = unreadableSessions.length - 5;
+    warningNotes.push(
+      `- Feishu transcript history could not be read for: ${preview}${remaining > 0 ? ` (and ${remaining} more)` : ""}. Affected sessions and history were left unchanged. Run "openclaw doctor" to check again.`,
+    );
+  }
   if (!inspection || inspection.findings.length === 0) {
-    return { changeNotes: [], ...notes };
+    return { changeNotes: [], ...notes, warningNotes };
   }
 
   if (!params.shouldRepair) {
     return {
       changeNotes: [],
       ...notes,
-      warningNotes: [...notes.warningNotes, formatPreviewWarning(inspection)],
+      warningNotes: [...warningNotes, formatPreviewWarning(inspection)],
     };
   }
 
@@ -774,7 +699,7 @@ async function runFeishuDoctorSequence(params: {
   return {
     changeNotes: [formatRepairChange(report)],
     ...notes,
-    warningNotes: [...notes.warningNotes, ...report.warnings],
+    warningNotes: [...warningNotes, ...report.warnings],
   };
 }
 

@@ -2,6 +2,7 @@ import fs from "node:fs";
 import path from "node:path";
 import { DatabaseSync } from "node:sqlite";
 import * as secretRefReadOnly from "openclaw/plugin-sdk/secret-ref-readonly";
+import * as sessionStoreRuntime from "openclaw/plugin-sdk/session-store-runtime";
 import {
   listSessionEntries,
   normalizeSessionDeliveryState,
@@ -187,7 +188,7 @@ describe("Feishu doctor state repair", () => {
     testState = undefined;
   });
 
-  it("repairs SQLite-backed Feishu sessions with corrupt transcript rows", async () => {
+  it("preserves SQLite-backed Feishu sessions when malformed rows make inspection fail", async () => {
     const session = await seedSession("sess-sqlite-corrupt", ["bad row follows"], {
       sessionKey: "agent:main:feishu:direct:ou_sqlite_corrupt",
     });
@@ -196,9 +197,39 @@ describe("Feishu doctor state repair", () => {
         .prepare("UPDATE transcript_events SET event_json = ? WHERE session_id = ?")
         .run("{", session.sessionId);
     });
-    const result = await repair();
-    expect(result.changeNotes.join("\n")).toContain("Removed 1 Feishu-scoped session entry");
-    expect(readStoreEntries(session.storePath)[session.sessionKey]).toBeUndefined();
+    const result = await runDoctor(true);
+    expect(result.changeNotes).toEqual([]);
+    expectNotes(result.warningNotes, "could not be read", "left unchanged");
+    expectPaths(stateDir(), { backups: false });
+    expect(readStoreEntries(session.storePath)[session.sessionKey]?.sessionId).toBe(
+      session.sessionId,
+    );
+  });
+
+  it("preserves a Feishu session and its model override when its transcript read fails", async () => {
+    const modelOverride = "fixture-model";
+    const session = await seedSession("sess-sqlite-unverified", ["keep this message"], {
+      entry: { providerOverride: "openai", modelOverride },
+    });
+    const failure = Object.assign(new Error("Database is busy"), { code: "SQLITE_BUSY" });
+    const read = vi.spyOn(sessionStoreRuntime, "loadTranscriptEvents").mockRejectedValue(failure);
+    try {
+      const result = await runDoctor(true);
+      expect(read).toHaveBeenCalledWith(
+        expect.objectContaining({ sessionKey: session.sessionKey }),
+      );
+      expect(result.changeNotes).toEqual([]);
+      expectNotes(result.warningNotes, "could not be read", "left unchanged");
+    } finally {
+      read.mockRestore();
+    }
+    expectPaths(stateDir(), { backups: false });
+    expect(readStoreEntries(session.storePath)[session.sessionKey]).toMatchObject({
+      sessionId: session.sessionId,
+      providerOverride: "openai",
+      modelOverride,
+    });
+    await expect(readTranscript(session)).resolves.toHaveLength(2);
   });
 
   it("warns before repair when Feishu local state is corrupt", async () => {

@@ -1,6 +1,7 @@
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import type { OpenClawConfig } from "../../../config/types.openclaw.js";
 import { normalizeResolvedSecretInputString } from "../../../config/types.secrets.js";
+import { withDeferredPluginDoctorMigrations } from "../../../plugins/doctor-contract-registry.js";
 import {
   collectChannelDoctorCompatibilityMutations,
   collectChannelDoctorMutableAllowlistWarnings,
@@ -205,6 +206,31 @@ describe("channel doctor compatibility mutations", () => {
         shouldRepair: false,
       }),
     ).resolves.toEqual(notes);
+  });
+
+  it("does not run channel repairs from a plugin that is waiting for package convergence", async () => {
+    const feishuRepair = vi.fn(() => ({ changeNotes: ["feishu repair"], warningNotes: [] }));
+    const matrixRepair = vi.fn(() => ({ changeNotes: ["matrix repair"], warningNotes: [] }));
+    mockReadOnlyPlugins({
+      feishu: { runConfigSequence: feishuRepair },
+      matrix: { runConfigSequence: matrixRepair },
+    });
+    const params = {
+      cfg: { channels: { feishu: { enabled: true }, matrix: { enabled: true } } },
+      env: {},
+      shouldRepair: true,
+    };
+
+    const deferred = await withDeferredPluginDoctorMigrations(["feishu"], () =>
+      runChannelDoctorConfigSequences(params),
+    );
+    expect(deferred.changeNotes).toEqual(["matrix repair"]);
+    expect(feishuRepair).not.toHaveBeenCalled();
+    expect(matrixRepair).toHaveBeenCalledOnce();
+
+    const converged = await runChannelDoctorConfigSequences(params);
+    expect(converged.changeNotes).toEqual(["feishu repair", "matrix repair"]);
+    expect(feishuRepair).toHaveBeenCalledOnce();
   });
 
   it("keeps unresolved SecretRef preview reads non-fatal", async () => {

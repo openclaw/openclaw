@@ -15,6 +15,7 @@ import type { OpenClawConfig } from "../../../config/types.openclaw.js";
 import { isUnresolvedSecretInputError } from "../../../config/types.secrets.js";
 import { findUninspectedPluginDiagnostic } from "../../../plugins/discovery-availability.js";
 import { applyPluginDoctorCompatibilitySequence } from "../../../plugins/doctor-compatibility-migration.js";
+import { isPluginDoctorMigrationDeferred } from "../../../plugins/doctor-contract-registry.js";
 import { loadManifestMetadataSnapshot } from "../../../plugins/manifest-contract-eligibility.js";
 import { PluginSetupPreparationRequiredError } from "../../../plugins/plugin-setup-module.js";
 import { listDoctorConfiguredChannelIds } from "./configured-channel-ids.js";
@@ -207,6 +208,10 @@ export async function runChannelDoctorConfigSequences(
   const infoNotes: string[] = [];
   const warningNotes: string[] = [];
   for (const entry of await listChannelDoctorEntries(params)) {
+    // The updating parent still owns the pending package; don't let its old adapter repair state.
+    if (params.shouldRepair && isPluginDoctorMigrationDeferred(entry.id)) {
+      continue;
+    }
     const result = await entry.doctor.runConfigSequence?.(params);
     if (!result) {
       continue;
