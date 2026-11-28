@@ -204,9 +204,22 @@ describe("ProjectsPage", () => {
       "mainAgent workspace/home/openclaw/.openclaw/workspaceadmincontractorguestoperator",
     );
     const search = page.element.querySelector<HTMLInputElement>('input[type="search"]')!;
-    search.value = "openclaw/site";
-    search.dispatchEvent(new Event("input", { bubbles: true }));
-    await waitForSolid(() => expect(page.element.querySelectorAll("tbody tr")).toHaveLength(1));
+    for (const [query, expectedNames] of [
+      ["openclaw/site", ["site"]],
+      ["/srv/openclaw", ["docs"]],
+      ["missing", []],
+      [" ", ["docs", "main", "site"]],
+    ] as const) {
+      search.value = query;
+      search.dispatchEvent(new Event("input", { bubbles: true }));
+      await waitForSolid(() =>
+        expect(
+          [...page.element.querySelectorAll("tbody td:first-child > div:first-child")].map(
+            (name) => name.textContent,
+          ),
+        ).toEqual(expectedNames),
+      );
+    }
   });
 
   it("matches a final-sigma project name from either sigma query", async () => {
