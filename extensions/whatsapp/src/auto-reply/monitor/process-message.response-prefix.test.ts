@@ -1,3 +1,4 @@
+import fs from "node:fs/promises";
 import path from "node:path";
 import { escapeRegExp, formatEnvelopeTimestamp } from "openclaw/plugin-sdk/channel-test-helpers";
 import { createPluginRuntimeMock } from "openclaw/plugin-sdk/plugin-test-runtime";
@@ -30,14 +31,26 @@ describe("WhatsApp inbound and outbound response-prefix boundary", () => {
     setWhatsAppRuntime(createPluginRuntimeMock());
   });
 
-  it.each(["unknown quote sender", "timestamps"])(
+  it.each(["unknown quote sender", "timestamps", "mapped lid quote sender"] as const)(
     "formats the inbound envelope at the reply boundary (%s)",
     async (scenario) => {
       await withBoundaryHome(async (root) => {
         const peer = boundaryPeer;
+        if (scenario === "mapped lid quote sender") {
+          await fs.mkdir(path.join(root, "auth"), { recursive: true });
+          await fs.writeFile(
+            path.join(root, "auth", "lid-mapping-888_reverse.json"),
+            JSON.stringify("1888"),
+          );
+        }
         const boundary = await createReplyBoundary(root, peer, {
+          channel:
+            scenario === "mapped lid quote sender"
+              ? { groupPolicy: "open", groups: { "*": { requireMention: false } } }
+              : undefined,
           account: { contextVisibility: "all" },
           agents: { defaults: { userTimezone: "UTC" } },
+          kind: scenario === "mapped lid quote sender" ? "group" : "direct",
         });
         const replyResolver = vi.fn<ReplyResolver>(async () => undefined);
         const registration = registerReplyBoundary({
@@ -53,15 +66,41 @@ describe("WhatsApp inbound and outbound response-prefix boundary", () => {
             const msg = createTestWebInboundMessage({
               event: { id: `envelope-${scenario}-${index}`, timestamp },
               payload: { body },
-              platform: { chatJid: peer, recipientJid: self },
-              admission: { accountId, conversation: { kind: "direct", id: peer } },
-              quote: scenario === "unknown quote sender" ? { body: "original" } : undefined,
+              platform:
+                scenario === "mapped lid quote sender"
+                  ? { chatJid: "123@g.us", senderE164: peer, recipientJid: self }
+                  : { chatJid: peer, recipientJid: self },
+              admission:
+                scenario === "mapped lid quote sender"
+                  ? {
+                      accountId,
+                      conversation: { kind: "group", id: "123@g.us" },
+                      sender: { id: peer },
+                    }
+                  : { accountId, conversation: { kind: "direct", id: peer } },
+              quote:
+                scenario === "unknown quote sender"
+                  ? { body: "original" }
+                  : scenario === "mapped lid quote sender"
+                    ? {
+                        context: {
+                          id: "q-lid",
+                          body: "original lid quote",
+                          sender: { lid: "888@lid", label: "888@lid" },
+                        },
+                      }
+                    : undefined,
             });
             expect(await boundary.process(msg, replyResolver)).toBe(false);
             await Promise.all(boundary.backgroundTasks);
             const envelope = replyResolver.mock.calls[index]?.[0].Body;
             if (scenario === "unknown quote sender") {
               expect(envelope).toContain("[Replying to unknown sender]\noriginal\n[/Replying]");
+            } else if (scenario === "mapped lid quote sender") {
+              expect(envelope).toContain(
+                "[Replying to +1888 id:q-lid]\noriginal lid quote\n[/Replying]",
+              );
+              expect(envelope).not.toContain("888@lid");
             } else {
               const expectedTimestamp = formatEnvelopeTimestamp(new Date(timestamp), "utc");
               expect(envelope).toMatch(

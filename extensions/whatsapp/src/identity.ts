@@ -48,7 +48,7 @@ function isLidJid(jid: string | null | undefined): boolean {
 }
 
 export function resolveComparableIdentity(
-  identity: WhatsAppIdentity | WhatsAppSelfIdentity | null | undefined,
+  identity: WhatsAppIdentity | null | undefined,
   authDir?: string,
 ): WhatsAppIdentity {
   const rawJid = normalizeDeviceScopedJid(identity?.jid);
@@ -61,13 +61,10 @@ export function resolveComparableIdentity(
       : ((jid ? jidToE164(jid, authDir ? { authDir } : undefined) : null) ??
         (lid ? jidToE164(lid, authDir ? { authDir } : undefined) : null));
   const rawLabel = identity?.label;
+  const normalizedLabel = normalizeDeviceScopedJid(rawLabel);
   const isRawIdentifier =
-    rawLabel != null &&
-    (rawLabel === rawJid ||
-      rawLabel === rawLid ||
-      rawLabel === lid ||
-      rawLabel === jid ||
-      isLidJid(rawLabel));
+    normalizedLabel != null &&
+    (normalizedLabel === lid || normalizedLabel === jid || isLidJid(normalizedLabel));
   const label = isRawIdentifier && e164 ? e164 : rawLabel;
   return {
     ...identity,

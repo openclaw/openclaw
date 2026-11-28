@@ -72,6 +72,18 @@ it("resolves quoted LID sender to phone number via authDir mapping", () => {
       e164: "+15555550123",
       label: "+15555550123",
     });
+    const deviceScoped = describeReplyContext(
+      extended({
+        stanzaId: "q2",
+        participant: "15555550123:2@s.whatsapp.net",
+        quotedMessage: { conversation: "hello device" },
+      }),
+    );
+    expect(deviceScoped?.sender).toMatchObject({
+      jid: "15555550123@s.whatsapp.net",
+      e164: "+15555550123",
+      label: "+15555550123",
+    });
   } finally {
     fs.rmSync(tempDir, { recursive: true, force: true });
   }
