@@ -6,7 +6,7 @@ import { fixtureReceiptWorkerClientSource } from "../../test/helpers/fixture-rec
 import type { AgentModelEntryConfig } from "../config/types.agent-defaults.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import type { PluginEntryConfig } from "../config/types.plugins.js";
-import { prepareSharedAuthStoreOwnership } from "./auth-profiles/path-resolve.js";
+import { prepareSharedAuthStoreOwnership } from "./auth-profiles/path-resolve.async.js";
 import { replaceRuntimeAuthProfileStoreSnapshots } from "./auth-profiles/runtime-snapshots.js";
 import { ensureAuthProfileStore } from "./auth-profiles/store-runtime.js";
 import type { AuthProfileStore } from "./auth-profiles/types.js";

@@ -5,7 +5,7 @@ import {
   withCanonicalAuthProfileCredentialObserver,
   type CanonicalAuthProfileCredentialObservation,
 } from "./auth-profiles/credential-observation.js";
-import { resolveSharedAuthStoreOwnershipAsync } from "./auth-profiles/path-resolve.js";
+import { resolveSharedAuthStoreOwnershipAsync } from "./auth-profiles/path-resolve.async.js";
 import { resolveSharedMainAuthAgentDir } from "./auth-profiles/shared-main-dir.js";
 import {
   loadPersistedAuthProfileStoreFromRows,

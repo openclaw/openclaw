@@ -3,7 +3,7 @@ import { mkdir, writeFile } from "node:fs/promises";
 import path from "node:path";
 import { pathToFileURL } from "node:url";
 import { withTestTimeout } from "../../test/helpers/promise.js";
-import { reloadSharedAuthStoreOwnership } from "../agents/auth-profiles/path-resolve.js";
+import { reloadSharedAuthStoreOwnership } from "../agents/auth-profiles/path-resolve.async.js";
 import { loadAuthProfileStoreForRuntime } from "../agents/auth-profiles/store-runtime.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { resolveRuntimeProcessEntrypointUrl } from "../infra/runtime-process-url.js";

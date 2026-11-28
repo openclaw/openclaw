@@ -1,9 +1,11 @@
 import path from "node:path";
 import { afterEach, beforeEach, expect, it, vi } from "vitest";
 import { useAutoCleanupTempDirTracker } from "../../test/helpers/temp-dir.js";
-import { noteCommittedSharedAuthStoreOwnership } from "../agents/auth-profiles/path-resolve.js";
+import {
+  noteCommittedSharedAuthStoreOwnership,
+  SHARED_AUTH_STORE_STATE_KEY,
+} from "../agents/auth-profiles/path-resolve.js";
 import { clearRuntimeAuthProfileStoreSnapshots } from "../agents/auth-profiles/runtime-snapshots.js";
-import { SHARED_AUTH_STORE_STATE_KEY } from "../agents/auth-profiles/sqlite-json.js";
 import {
   closeAuthProfileReadPool,
   readPersistedSharedAuthProfileStoreRaw,

@@ -20,10 +20,8 @@ import {
   prepareAuthProfileMigrationCandidates,
 } from "./legacy-source-diagnostic.js";
 import { resolveLegacyAuthProfileSourceCandidates } from "./legacy-source-files.js";
-import {
-  resolveSharedAuthStoreOwnershipAsync,
-  resolveSharedAuthStorePath,
-} from "./path-resolve.js";
+import { resolveSharedAuthStoreOwnershipAsync } from "./path-resolve.async.js";
+import { resolveSharedAuthStorePath } from "./path-resolve.js";
 import { capturePersonalAuthProfileAuthorization } from "./personal-authorization.js";
 import { mergeLocalAuthProfileStoreWithInheritedStore } from "./runtime-snapshot-owner.js";
 import {

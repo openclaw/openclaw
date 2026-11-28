@@ -11,7 +11,7 @@ import {
   type ActiveRemoteModelCatalog,
   type RemoteCatalogPublicationResult,
 } from "../model-catalog/remote-overlay.js";
-import { prepareSharedAuthStoreOwnership } from "./auth-profiles/path-resolve.js";
+import { prepareSharedAuthStoreOwnership } from "./auth-profiles/path-resolve.async.js";
 import { PreparedModelRuntimePublicationSupersededError } from "./prepared-model-runtime.errors.js";
 import {
   recordPreparedModelCatalogReplacement,

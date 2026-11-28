@@ -4,7 +4,7 @@ import { promisify } from "node:util";
 import { afterEach, expect, it, vi } from "vitest";
 import { useAutoCleanupTempDirTracker } from "../../test/helpers/temp-dir.js";
 import { refreshAuthProfileFileState } from "../agents/auth-profiles/file-state.js";
-import { prepareSharedAuthStoreOwnership } from "../agents/auth-profiles/path-resolve.js";
+import { prepareSharedAuthStoreOwnership } from "../agents/auth-profiles/path-resolve.async.js";
 import {
   getRuntimeAuthProfileStoreCredentialsRevision,
   getRuntimeAuthProfileStoreSnapshotCore as getRuntimeStore,

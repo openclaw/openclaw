@@ -9,7 +9,7 @@ import { createPluginMetadataSnapshotFixture } from "../plugins/plugin-metadata.
 import { MODEL_SELECTION_LOCKED_MESSAGE } from "../sessions/model-overrides.js";
 import { resolvePreferredSessionKeyForSessionIdMatches } from "../sessions/session-id-resolution.js";
 import { normalizeSessionDeliveryState } from "../utils/delivery-context.shared.js";
-import { prepareSharedAuthStoreOwnership } from "./auth-profiles/path-resolve.js";
+import { prepareSharedAuthStoreOwnership } from "./auth-profiles/path-resolve.async.js";
 import {
   createMockConfig,
   expectSpawnedSessionLookupCalls,

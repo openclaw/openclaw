@@ -5,10 +5,8 @@ import { withPluginMetadataSnapshotScope } from "../plugins/current-plugin-metad
 import { resolvePluginMetadataSnapshotAsync } from "../plugins/plugin-metadata-snapshot.js";
 import { runOutsidePluginRuntimeGenerationScope } from "../plugins/runtime/generation-scope.js";
 import { isReservedSystemAgentId } from "../system-agent/agent-id.js";
-import {
-  getPreparedSharedAuthStoreOwnership,
-  prepareSharedAuthStoreOwnership,
-} from "./auth-profiles/path-resolve.js";
+import { prepareSharedAuthStoreOwnership } from "./auth-profiles/path-resolve.async.js";
+import { getPreparedSharedAuthStoreOwnership } from "./auth-profiles/path-resolve.js";
 import { assertPreparedModelRuntimeAdmissionCanWait } from "./prepared-model-runtime-admission.js";
 import { getPreparedModelRuntimePolicyConfigReader } from "./prepared-model-runtime-auth.js";
 import {

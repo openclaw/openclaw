@@ -1,7 +1,7 @@
 // Session patch tests cover model/provider edits, subagent patching, provider
 // aliases, model catalog validation, and rejected invalid patch payloads.
 import { afterEach, beforeAll, beforeEach, describe, expect, test, vi } from "vitest";
-import { prepareSharedAuthStoreOwnership } from "../agents/auth-profiles/path-resolve.js";
+import { prepareSharedAuthStoreOwnership } from "../agents/auth-profiles/path-resolve.async.js";
 import * as authStore from "../agents/auth-profiles/store-runtime.js";
 import type { ModelCatalogEntry } from "../agents/model-catalog.types.js";
 import * as modelSelection from "../agents/model-selection.js";

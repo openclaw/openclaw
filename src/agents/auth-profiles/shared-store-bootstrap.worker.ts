@@ -15,13 +15,12 @@ import { withExistingOpenClawStateDatabaseReadOnly } from "../../state/openclaw-
 import type { DB as OpenClawStateKyselyDatabase } from "../../state/openclaw-state-db.generated.js";
 import { runOpenClawStateWriteTransaction } from "../../state/openclaw-state-db.js";
 import type { WorkerOperationContext } from "../../state/worker-operation-registry.js";
-import { parseSharedAuthStoreOwnership } from "./path-resolve.js";
+import { parseSharedAuthStoreOwnership, SHARED_AUTH_STORE_STATE_KEY } from "./path-resolve.js";
 import {
   hasPendingSharedAuthCleanupInDatabase,
   readSharedAuthLegacyRowsFromDatabase,
   SHARED_AUTH_STORE_MIGRATION_KIND,
 } from "./shared-store-bootstrap.js";
-import { SHARED_AUTH_STORE_STATE_KEY } from "./sqlite-json.js";
 import type {
   AuthProfileBootstrapInput,
   AuthProfileBootstrapResult,

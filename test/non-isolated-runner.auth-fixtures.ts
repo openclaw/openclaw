@@ -7,6 +7,9 @@ export function authOwnershipFixtureFiles(
   const owner = JSON.stringify(
     path.join(repoRoot, "src", "agents", "auth-profiles", "path-resolve.ts"),
   );
+  const asyncOwner = JSON.stringify(
+    path.join(repoRoot, "src", "agents", "auth-profiles", "path-resolve.async.ts"),
+  );
   const context = `
 import { createRequire } from "node:module";
 const env = { ...process.env, OPENCLAW_STATE_DIR: ${JSON.stringify(path.join(fixtureRoot, "auth-ownership-state"))} };
@@ -33,7 +36,8 @@ afterAll(() => {
 `,
     "12-auth-b-observer.test.ts": `
 import { expect, it } from "vitest";
-import { getPreparedSharedAuthStoreOwnership, prepareSharedAuthStoreOwnership } from ${owner};
+import { getPreparedSharedAuthStoreOwnership } from ${owner};
+import { prepareSharedAuthStoreOwnership } from ${asyncOwner};
 ${context}
 it("retires prior auth facts and prepares fresh ownership", async () => {
   expect(getPreparedSharedAuthStoreOwnership(env), "prior file auth ownership must retire").toBeUndefined();

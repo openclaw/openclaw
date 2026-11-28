@@ -17,7 +17,8 @@ import {
   recordRuntimeAuthProfileStorePersistedMutation,
   resolveRuntimeStoreKey,
 } from "./mutation-lineage.js";
-import { captureAuthProfileOwnerScope, prepareSharedAuthStoreOwnership } from "./path-resolve.js";
+import { prepareSharedAuthStoreOwnership } from "./path-resolve.async.js";
+import { captureAuthProfileOwnerScope } from "./path-resolve.js";
 import { prepareSharedAuthStoreOwnershipForNative } from "./path-resolve.native.js";
 import { removePersonalAuthProfileReferences } from "./runtime-external-profile-references.js";
 import { createRuntimeAuthProfileFileObservation } from "./runtime-file-observation.js";

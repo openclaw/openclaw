@@ -1,7 +1,7 @@
 import { randomUUID } from "node:crypto";
 import { afterEach, beforeAll, expect, it, vi } from "vitest";
 import { useAutoCleanupTempDirTracker } from "../../test/helpers/temp-dir.js";
-import { prepareSharedAuthStoreOwnership } from "../agents/auth-profiles/path-resolve.js";
+import { prepareSharedAuthStoreOwnership } from "../agents/auth-profiles/path-resolve.async.js";
 import { saveAuthProfileStore } from "../agents/auth-profiles/store-runtime.js";
 import * as authStore from "../agents/auth-profiles/store.js";
 import type { SessionEntry } from "../config/sessions.js";

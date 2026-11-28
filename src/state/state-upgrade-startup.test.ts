@@ -3,7 +3,7 @@ import path from "node:path";
 import { DatabaseSync } from "node:sqlite";
 import { afterEach, expect, it, vi } from "vitest";
 import { useAutoCleanupTempDirTracker } from "../../test/helpers/temp-dir.js";
-import { prepareSharedAuthStoreOwnership } from "../agents/auth-profiles/path-resolve.js";
+import { prepareSharedAuthStoreOwnership } from "../agents/auth-profiles/path-resolve.async.js";
 import { bindFreshClientCredentialStore } from "../infra/client-credential-migration.js";
 import { openClientCredentialCustody } from "../infra/client-credential-store.js";
 import * as processRole from "../infra/database-engine/admission-scope.js";

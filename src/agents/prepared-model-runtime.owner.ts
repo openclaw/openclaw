@@ -10,10 +10,8 @@ import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { captureRemoteModelCatalogStartupSnapshot } from "../model-catalog/remote-overlay.js";
 import { groupPluginRecords as groupRecords } from "../plugins/record-groups.js";
 import { createDeferredCore } from "../shared/deferred.js";
-import {
-  getPreparedSharedAuthStoreOwnership,
-  prepareSharedAuthStoreOwnership,
-} from "./auth-profiles/path-resolve.js";
+import { prepareSharedAuthStoreOwnership } from "./auth-profiles/path-resolve.async.js";
+import { getPreparedSharedAuthStoreOwnership } from "./auth-profiles/path-resolve.js";
 import {
   resolveSelectedAgentHarnessRuntime,
   type AgentHarnessPluginSelection,

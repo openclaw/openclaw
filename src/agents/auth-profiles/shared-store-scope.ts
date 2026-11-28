@@ -1,9 +1,7 @@
 import { captureOpenClawStateWorkerContext } from "../../state/openclaw-state-worker-context.js";
 import { captureAuthProfileCredentialAuthority } from "../../state/user-model-account-authority.js";
-import {
-  resolveSharedAuthStoreOwnership,
-  resolveSharedAuthStoreOwnershipAsync,
-} from "./path-resolve.js";
+import { resolveSharedAuthStoreOwnershipAsync } from "./path-resolve.async.js";
+import { resolveSharedAuthStoreOwnership } from "./path-resolve.js";
 import { resolveAuthProfilePortability } from "./portability.js";
 import {
   createEmptyAuthProfileStore,

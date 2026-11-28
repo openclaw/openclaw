@@ -1,6 +1,6 @@
 import path from "node:path";
 import { afterAll, afterEach, describe, expect, it, vi } from "vitest";
-import { prepareSharedAuthStoreOwnership } from "../../agents/auth-profiles/path-resolve.js";
+import { prepareSharedAuthStoreOwnership } from "../../agents/auth-profiles/path-resolve.async.js";
 import { clearRuntimeAuthProfileStoreSnapshotCore } from "../../agents/auth-profiles/runtime-snapshots.js";
 import * as authStore from "../../agents/auth-profiles/store.js";
 import type { ModelCatalogEntry } from "../../agents/model-catalog.types.js";

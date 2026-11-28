@@ -21,7 +21,8 @@ import {
   removeOAuthRefreshGenerationPeers,
   type OAuthRefreshGenerationPeer,
 } from "./oauth-refresh-peers.js";
-import { prepareSharedAuthStoreOwnership, resolveSharedAuthStorePath } from "./path-resolve.js";
+import { prepareSharedAuthStoreOwnership } from "./path-resolve.async.js";
+import { resolveSharedAuthStorePath } from "./path-resolve.js";
 import { preparePersonalAuthProfileUsage } from "./personal-usage.js";
 import { dedupeProfileIds, listProfilesForProvider } from "./profile-list.js";
 import { removeRuntimeExternalProfileReferences } from "./runtime-external-profile-references.js";

@@ -13,10 +13,8 @@ import {
   hasLegacyAuthProfileCredentialSource,
   hasLegacyAuthProfileCredentialSourceAsync,
 } from "./legacy-source-diagnostic.js";
-import {
-  resolveSharedAuthStoreOwnershipAsync,
-  resolveSharedAuthStorePath,
-} from "./path-resolve.js";
+import { resolveSharedAuthStoreOwnershipAsync } from "./path-resolve.async.js";
+import { resolveSharedAuthStorePath } from "./path-resolve.js";
 import { prepareSharedAuthStoreOwnershipForNative } from "./path-resolve.native.js";
 import { coercePersistedAuthProfileStore } from "./persisted.js";
 import { withAuthProfileReaderCleanup } from "./reader-cleanup.js";

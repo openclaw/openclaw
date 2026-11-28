@@ -105,8 +105,8 @@ vi.mock("../config/sessions/legacy-main-session-migration.js", () => ({
   migrateLegacyMainSessionKeys: mocks.migrateLegacyMainSessionKeys,
 }));
 
-vi.mock("./auth-profiles/path-resolve.js", async (importOriginal) => ({
-  ...(await importOriginal<typeof import("./auth-profiles/path-resolve.js")>()),
+vi.mock("./auth-profiles/path-resolve.async.js", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("./auth-profiles/path-resolve.async.js")>()),
   prepareSharedAuthStoreOwnership: mocks.prepareSharedAuthStoreOwnership,
 }));
 

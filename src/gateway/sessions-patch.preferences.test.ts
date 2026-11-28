@@ -1,6 +1,6 @@
 import { beforeAll, expect, test } from "vitest";
 import type { SessionsPatchParams } from "../../packages/gateway-protocol/src/index.js";
-import { prepareSharedAuthStoreOwnership } from "../agents/auth-profiles/path-resolve.js";
+import { prepareSharedAuthStoreOwnership } from "../agents/auth-profiles/path-resolve.async.js";
 import {
   expectPatchError,
   expectPatchOk,
