@@ -181,3 +181,62 @@ it.each([
     nextState: { selectedModel: selected, activeModel: activeModelRef },
   });
 });
+
+const hops = [
+  attempt,
+  { provider: "second", model: "b", error: "upstream", reason: "timeout" as const },
+  { provider: "third", model: "c", error: "busy", reason: "overloaded" as const },
+];
+const chain = { ...pair("primary", "a", "fourth", "d"), attempts: hops };
+
+it("names every failed hop with its model and reason", () => {
+  const { reasonSummary, attemptSummaries } = transition(chain);
+  expect(reasonSummary).toBe("primary/a rate limit; second/b timeout; third/c overloaded");
+  expect(reasonSummary).toBe(attemptSummaries.join("; "));
+  expect(buildFallbackNotice(chain)).toBe(
+    "↪️ Model Fallback: fourth/d (selected primary/a; primary/a rate limit; second/b timeout; third/c overloaded)",
+  );
+});
+
+it("shows at most three hops and counts the rest", () => {
+  const six = Array.from({ length: 6 }, (_, i) => ({ ...attempt, provider: `p${i}`, model: "m" }));
+  expect(transition({ attempts: six }).reasonSummary).toBe(
+    "p0/m rate limit; p1/m rate limit; p2/m rate limit (+3 more attempts)",
+  );
+});
+
+it("keeps the single-attempt notice unchanged", () => {
+  const params = { ...pair("primary", "a", "fallback", "b"), attempts: [attempt] };
+  expect(buildFallbackNotice(params)).toBe(
+    "↪️ Model Fallback: fallback/b (selected primary/a; rate limit)",
+  );
+});
+
+it("keeps each hop's reason when the model ref is long", () => {
+  const model =
+    "arn:aws:bedrock:us-east-1:123456789012:application-inference-profile/my-claude-profile";
+  const timeout = { provider: "second", model: "b", error: "upstream", reason: "timeout" as const };
+  expect(
+    transition({ attempts: [{ ...attempt, provider: "amazon-bedrock", model }, timeout] })
+      .reasonSummary,
+  ).toBe("amazon-bedrock/arn:…le/my-claude-profile rate limit; second/b timeout");
+});
+
+it("truncates each hop's long reason separately", () => {
+  const verbose = { ...attempt, error: `429 ${"x".repeat(100)}` };
+  const parts = transition({ attempts: [verbose, verbose] }).reasonSummary.split("; ");
+  expect(parts).toHaveLength(2);
+  for (const part of parts) {
+    expect(part).toMatch(/^primary\/a HTTP 429: x+…$/);
+    expect(part).toHaveLength(80);
+  }
+});
+
+it("does not repeat a notice for the same failed chain", () => {
+  const first = transition(chain);
+  const state = notice(first.selectedModelRef, first.activeModelRef, first.reasonSummary);
+  expect(transition({ ...chain, state })).toMatchObject({
+    fallbackTransitioned: false,
+    stateChanged: false,
+  });
+});
