@@ -97,7 +97,7 @@ function stripWrapMarkers(value: unknown): unknown {
 
 const normalize = (result: Record<string, unknown>, provider = "external-demo") =>
   normalizeWebSearchOutput({ provider, query: "q", result });
-const resultRow = (extra: Record<string, unknown> = {}) => ({
+const resultRow = (extra: Record<string, unknown>) => ({
   title: "result title",
   url: "https://example.com/result",
   ...extra,

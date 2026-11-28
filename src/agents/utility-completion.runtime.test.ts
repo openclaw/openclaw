@@ -255,7 +255,7 @@ const answer = {
   owner: { kind: "harness", id: "openclaw" },
 };
 type Request = Parameters<typeof runUtilityCompletion>[0];
-const request = async (overrides: Partial<Request> = {}): Promise<Request> => ({
+const request = async (overrides: Partial<Request>): Promise<Request> => ({
   ...(await prepareUtilityCompletionForAgent({
     cfg,
     agentId: "main",
