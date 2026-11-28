@@ -40,11 +40,13 @@ export function renderSidebarOutboxItem(
     sessions.revision();
     const entry = params.entry;
     const row = findUiSessionRow(context, entry.sessionKey, entry.agentId);
-    // Global previews omit the old tab/Gateway queue's private message and attachment text.
-    const conversation = clampText(
-      row?.displayName?.trim() || row?.label?.trim() || t("attention.outbox.conversation"),
-      100,
-    );
+    // Use only known titles, not raw keys or the private message and attachment text.
+    const title =
+      row &&
+      [row.label, row.displayName, row.derivedTitle]
+        .map((name) => name?.trim())
+        .find((name) => name && name !== row.key && name !== entry.sessionKey);
+    const conversation = clampText(title ?? t("attention.outbox.conversation"), 100);
     const agent = context.agents.state.agentsList?.agents.find((item) => item.id === entry.agentId);
     const scope = agent
       ? `${clampText(normalizeAgentLabel(agent), 60)} · ${conversation}`
@@ -61,6 +63,7 @@ export function renderSidebarOutboxItem(
       face: "chat",
       sessionKey: entry.sessionKey,
       agentId: entry.agentId,
+      row: row ?? null,
       exactKey: true,
       focusComposer: true,
     });

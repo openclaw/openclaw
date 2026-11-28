@@ -1,7 +1,9 @@
 import { expect, it } from "vitest";
+import type { GatewaySessionRow, SessionsListResult } from "../../api/types.ts";
 import type { ApplicationContext } from "../../app/context.ts";
 import { buildCatalogSessionKey } from "./catalog-key.ts";
 import {
+  findUiSessionRow,
   resolveSessionPreferredFaceForKey,
   SESSION_FACE_PREFERENCE_PARAM,
   SESSION_NAVIGATION_KEY_PARAM,
@@ -114,4 +116,45 @@ it("treats another agent's cached global row as uncached", () => {
     pathname: "/chat/research",
     search: `?${SESSION_FACE_PREFERENCE_PARAM}=1`,
   });
+});
+
+it("keeps main aliases and case-sensitive native threads in the current roster", () => {
+  const lower = buildCatalogSessionKey(catalog("thread:a/b"), "main");
+  const upper = buildCatalogSessionKey(catalog("Thread:A/B"), "main");
+  const row = (key: string, derivedTitle: string): GatewaySessionRow => ({
+    key,
+    derivedTitle,
+    kind: "direct",
+    updatedAt: 1,
+  });
+  let rowReads = 0;
+  const roster = new Proxy(
+    [row("agent:main:main", "Home"), row(lower, "Lower"), row(upper, "Upper")],
+    {
+      get(target, key, receiver) {
+        if (typeof key === "string" && /^[0-9]+$/.test(key)) {
+          rowReads += 1;
+        }
+        return Reflect.get(target, key, receiver);
+      },
+    },
+  );
+  const state = {
+    agentId: "main",
+    result: { sessions: roster } satisfies Pick<SessionsListResult, "sessions">,
+  };
+  const context = { sessions: { state } } as ApplicationContext;
+  expect(findUiSessionRow(context, "main")?.derivedTitle).toBe("Home");
+  expect(rowReads).toBe(roster.length);
+  expect(findUiSessionRow(context, lower)?.derivedTitle).toBe("Lower");
+  expect(findUiSessionRow(context, upper)?.derivedTitle).toBe("Upper");
+  expect(findUiSessionRow(context, buildCatalogSessionKey(catalog("Thread:a/B"), "main"))).toBe(
+    undefined,
+  );
+
+  expect(rowReads).toBe(roster.length);
+
+  state.result = { sessions: [row(upper, "Renamed upper")] };
+  expect(findUiSessionRow(context, lower)).toBeUndefined();
+  expect(findUiSessionRow(context, upper)?.derivedTitle).toBe("Renamed upper");
 });

@@ -1,5 +1,8 @@
+import { writeFile } from "node:fs/promises";
+import path from "node:path";
 import type { Locator, Page } from "playwright";
 import { expect, it } from "vitest";
+import { takeControlUiScreenshotFrame } from "../test-helpers/control-ui-e2e-screenshot.ts";
 import type { ControlUiMockGatewayScenario } from "../test-helpers/control-ui-e2e.ts";
 import {
   controlUiSessionUrl,
@@ -82,7 +85,7 @@ suite.define(() => {
       const sessionKey = "agent:main:release-notes";
       const { gateway, composer } = await openOutbox(page, {
         sessionKey,
-        sessions: [outboxSession(sessionKey, "Release notes")],
+        sessions: [{ key: sessionKey, derivedTitle: "Release notes", kind: "direct" }],
         methodResponses: {
           "chat.history": {
             messages: [],
@@ -107,6 +110,17 @@ suite.define(() => {
       await page.locator("#sidebar-issues-tab-system").click();
       const incident = page.locator('[data-attention-kind="outbox"]');
       await incident.getByText("Couldn’t send your message.", { exact: true }).waitFor();
+      if (process.env.OPENCLAW_UI_E2E_ARTIFACT_DIR) {
+        const frame = await takeControlUiScreenshotFrame(page, page.locator(".shell"), [incident], {
+          animations: "disabled",
+          elements: [incident.locator(".sidebar-issues-panel__state")],
+        });
+        await writeFile(path.join(suite.artifactDir, "outbox-conversation.png"), frame.png);
+        await writeFile(
+          path.join(suite.artifactDir, "outbox-conversation-bounds.json"),
+          JSON.stringify(frame.elements[0]!.bounds),
+        );
+      }
       expect(await incident.textContent()).toContain("Release notes");
       expect(await incident.textContent()).not.toContain(
         "Please review the release notes before publishing.",

@@ -7,10 +7,10 @@ import type { ApplicationNavigationOptions, ApplicationContext } from "../../app
 import type { BoardFace } from "../board/settings.ts";
 import { catalogSessionSearch, parseCatalogSessionKey } from "./catalog-key.ts";
 import {
-  areUiSessionKeysEquivalent,
   buildAgentMainSessionKey,
   isUiGlobalSessionKey,
   normalizeAgentId,
+  normalizeDefaultMainSessionAliasForUi,
   parseAgentSessionKey,
   resolveUiConfiguredMainKey,
   resolveUiDefaultAgentId,
@@ -43,20 +43,42 @@ export function resolveSessionPreferredFace(
   return row?.boardFace === "dashboard" ? "dashboard" : "chat";
 }
 
+const navigationRowsByRoster = new WeakMap<
+  readonly GatewaySessionRow[],
+  ReadonlyMap<string, GatewaySessionRow>
+>();
+
 export function findUiSessionRow<TRouteId extends string>(
   context: Pick<ApplicationContext<TRouteId>, "sessions" | "agents" | "agentSelection" | "gateway">,
   sessionKey: string,
   agentId?: string | null,
 ): GatewaySessionRow | undefined {
-  const row = context.sessions.state.result?.sessions.find((candidate) =>
-    areUiSessionKeysEquivalent(candidate.key, sessionKey),
-  );
+  const state = context.sessions.state;
+  const roster = state.result?.sessions;
+  const key = normalizeDefaultMainSessionAliasForUi(sessionKey);
+  if (!roster || !key) {
+    return undefined;
+  }
+  let index = navigationRowsByRoster.get(roster);
+  if (!index) {
+    // Build only on demand and preserve the roster's first match for aliases.
+    const rows = new Map<string, GatewaySessionRow>();
+    for (const row of roster) {
+      const rowKey = normalizeDefaultMainSessionAliasForUi(row.key);
+      if (!rows.has(rowKey)) {
+        rows.set(rowKey, row);
+      }
+    }
+    navigationRowsByRoster.set(roster, rows);
+    index = rows;
+  }
+  const row = index.get(key);
   if (!row || !isUiGlobalSessionKey(row.key)) {
     return row;
   }
   // A canonical global row carries no owner in its key. Only reuse it while
   // the list's scope matches the navigation owner or its board face can leak across agents.
-  const resultAgentId = context.sessions.state.agentId?.trim();
+  const resultAgentId = state.agentId?.trim();
   const navigationAgentId = resolveSessionNavigationAgentId(context, agentId);
   return resultAgentId && normalizeAgentId(resultAgentId) === normalizeAgentId(navigationAgentId)
     ? row
@@ -118,7 +140,7 @@ export function sessionNavigationTarget<TRouteId extends string>(
         >;
         agentId?: string;
         fallbackAgentId?: never;
-        row?: never;
+        row?: Pick<GatewaySessionRow, "displayName" | "key"> | null;
         mainKey?: never;
       })
     | (SessionNavigationTargetOptions & {
@@ -146,7 +168,10 @@ export function sessionNavigationTarget<TRouteId extends string>(
     fallbackAgentId = resolveSessionNavigationAgentId(context, params.agentId);
     basePath = params.basePath ?? context.basePath;
     mainKey = resolveUiConfiguredMainKey(defaults);
-    row = findUiSessionRow(context, sessionKey, fallbackAgentId);
+    row =
+      params.row === undefined
+        ? findUiSessionRow(context, sessionKey, fallbackAgentId)
+        : (params.row ?? undefined);
   } else {
     fallbackAgentId = params.fallbackAgentId;
     basePath = params.basePath ?? "";
