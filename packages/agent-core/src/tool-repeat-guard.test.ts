@@ -58,6 +58,30 @@ describe("observeToolRepeat", () => {
     expect(verdicts.at(-1)).toMatchObject({ kind: "note", toolName: "ghost", count: 3 });
   });
 
+  it("applies a dispatcher's declaration for the target its call names", () => {
+    const dispatcher: AgentTool = {
+      ...makeTool("dispatch"),
+      repeatable: {
+        dispatch: {
+          idArgument: "id",
+          inputArgument: "args",
+          targets: { wait: true, jobs: { actions: ["status"] } },
+        },
+      },
+    };
+    const verdictAt = (args: Record<string, unknown>) => {
+      const state = createToolRepeatState();
+      return Array.from({ length: TOOL_REPEAT_NOTE_AT }, () =>
+        observeToolRepeat(state, call("dispatch", args), dispatcher),
+      ).at(-1);
+    };
+    expect(verdictAt({ id: "wait", args: { ids: ["a"] } })).toBeUndefined();
+    expect(verdictAt({ id: "jobs", args: { action: "status" } })).toBeUndefined();
+    expect(verdictAt({ id: "jobs", args: { action: "cancel" } })).toMatchObject({ kind: "note" });
+    expect(verdictAt({ id: "read", args: {} })).toMatchObject({ kind: "note" });
+    expect(verdictAt({ id: "toString", args: {} })).toMatchObject({ kind: "note" });
+  });
+
   it("skips tools that declare themselves repeatable and resets the streak", () => {
     const state = createToolRepeatState();
     const read = makeTool("read");

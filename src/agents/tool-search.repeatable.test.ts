@@ -1,6 +1,7 @@
-// Tools that poll by design stay direct under Tool Search, so the repeat guard reads their
-// own `repeatable` declaration instead of dispatch_action's. Their catalog family follows
-// them: a split family reads as the whole capability and hides the deferred member.
+// Tools that poll by design stay deferred under Tool Search: dispatch_action carries their
+// `repeatable` declarations, so the repeat guard exempts a poll through it as it would a
+// direct call. Their catalog family is deferred with them: a split family reads as the
+// whole capability and hides the deferred member.
 import { Type } from "typebox";
 import { afterEach, expect, it } from "vitest";
 import { captureAgent, makeCall } from "../../packages/agent-core/src/agent-loop.test-support.js";
@@ -84,11 +85,12 @@ function surface(
 }
 
 it.each(["tools", "directory"] as const)(
-  "%s: keeps polling tools and their delegation family in the provider tool list and defers the rest",
+  "%s: defers polling tools with their whole delegation family",
   (mode) => {
     const { sent } = surface(mode);
-    expect(sent).toEqual(expect.arrayContaining(["agents_wait", "subagents", "sessions_spawn"]));
-    expect(sent).not.toContain("lookup");
+    for (const name of [...delegationFamily, "lookup"]) {
+      expect(sent).not.toContain(name);
+    }
   },
 );
 
@@ -109,23 +111,42 @@ it.each(["tools", "directory"] as const)(
         expect([0, members.length]).toContain(sent.length);
       }
     }
-    // With no polling member left, the spawner stays deferred.
-    expect(surface(mode, [], ["sessions_spawn"]).sent).not.toContain("sessions_spawn");
   },
 );
 
-it("lets 25 identical agents_wait polls run with no note and no stop", async () => {
-  const executed: string[] = [];
-  const { agent } = captureAgent(surface("tools", executed).tools, {}, [
-    ...turns(25, "agents_wait", { ids: ["child-1"], timeoutSeconds: 30 }),
+it.each([
+  ["agents_wait", "agents_wait", { ids: ["child-1"], timeoutSeconds: 30 }],
+  ["agents_wait", "openclaw:core:agents_wait", { ids: ["child-1"], timeoutSeconds: 30 }],
+  ["subagents", "subagents", { action: "list" }],
+] as const)(
+  "lets 25 identical %s polls through dispatch_action (id %s) run with no note and no stop",
+  async (name, id, args) => {
+    const executed: string[] = [];
+    const { agent } = captureAgent(surface("tools", executed).tools, {}, [
+      ...turns(25, "dispatch_action", { id, args }),
+      answer,
+    ]);
+
+    await agent.prompt("start");
+
+    expect(executed).toEqual(Array.from({ length: 25 }, () => name));
+    expect(JSON.stringify(agent.state.messages)).not.toContain("[System note:");
+    expect(agent.state.messages.at(-1)).toMatchObject({ role: "assistant", stopReason: "stop" });
+  },
+);
+
+it("still stops a polling tool's non-polling action repeated through dispatch_action", async () => {
+  const { agent } = captureAgent(surface("tools").tools, {}, [
+    ...turns(TOOL_REPEAT_STOP_AT, "dispatch_action", {
+      id: "subagents",
+      args: { action: "kill", target: "child-1" },
+    }),
     answer,
   ]);
 
   await agent.prompt("start");
 
-  expect(executed).toEqual(Array.from({ length: 25 }, () => "agents_wait"));
-  expect(JSON.stringify(agent.state.messages)).not.toContain("[System note:");
-  expect(agent.state.messages.at(-1)).toMatchObject({ role: "assistant", stopReason: "stop" });
+  expect(agent.state.messages.at(-1)).toMatchObject({ errorCode: TOOL_REPEAT_LIMIT_CODE });
 });
 
 it("still stops a non-repeatable target repeated through dispatch_action at the twentieth call", async () => {

@@ -16,18 +16,19 @@ import {
   getBeforeToolCallHookContext,
 } from "./before-tool-call-metadata.js";
 import { disposeCodeModeResults } from "./code-mode-results.js";
-import { resolveCoreToolFacts } from "./core-tool-facts.js";
 import { applyGatewayToolPolicy } from "./gateway-tool-policy.js";
 import { filterParticipationTools } from "./participation-ceiling.js";
 import type { ToolDefinition } from "./sessions/index.js";
 import { isCoreCodingSurfaceToolName } from "./tool-catalog.js";
 import { compactToolInputHint, compactToolOutputHint } from "./tool-schema-hints.js";
+import { createFamilyVisibility, dispatchRepeatable } from "./tool-search-catalog-visibility.js";
 import {
   getToolSearchCatalogDescriptors,
   prepareToolSearchCatalogDescriptors,
   type ToolSearchCatalogDescriptor,
 } from "./tool-search-prepared-catalog.js";
 import {
+  TOOL_CALL_RAW_TOOL_NAME,
   TOOL_SEARCH_CONTROL_TOOL_NAMES,
   type CatalogSource,
   type CatalogVisibilityOptions,
@@ -232,12 +233,11 @@ export function isOnDemandCatalogTool(tool: CatalogTool): boolean {
 }
 
 /**
- * Core file/shell primitives, caller-required names (e.g. message when it is
- * the only reply path) and tools that poll by design stay visible while
- * remaining searchable. A polling tool behind dispatch_action would hide its
- * `repeatable` declaration from the repeat guard. All must resolve to trusted
- * OpenClaw tools: an MCP lookalike must never become a direct delivery or
- * core-coding tool.
+ * Core file/shell primitives and caller-required names (e.g. message when it is
+ * the only reply path) stay visible while remaining searchable. Both must
+ * resolve to trusted OpenClaw tools: an MCP lookalike must never become a
+ * direct delivery or core-coding tool. Tools that poll by design stay deferred:
+ * dispatch_action carries their `repeatable` declarations to the repeat guard.
  */
 export function isDirectVisibleCatalogTool(
   tool: AnyAgentTool,
@@ -247,7 +247,6 @@ export function isDirectVisibleCatalogTool(
   return (
     classified.source === "openclaw" &&
     (directToolNames.has(tool.name) ||
-      (tool.repeatable !== undefined && !isOnDemandCatalogTool(tool)) ||
       (isCoreCodingSurfaceToolName(tool.name) && classified.sourceName === "core"))
   );
 }
@@ -664,32 +663,11 @@ export function applyToolCatalogCompaction(
     !keepOnDemandDirect(tool) &&
     (params.shouldCatalogTool?.(tool) ?? true) &&
     selected({ ...classifyAgentToolSource(tool), name: tool.name });
-  // A core tool family is shown or deferred as one unit: a visible member reads as the
-  // whole capability, so a deferred sibling looks unavailable (`sessions_spawn` beside
-  // `subagents`). A member shown for its family never shadows a same-named tool.
-  const coreFamily = (tool: AnyAgentTool) => {
-    const { source, sourceName } = classifyAgentToolSource(tool);
-    return source === "openclaw" && sourceName === "core"
-      ? resolveCoreToolFacts(tool.name)?.catalogFamily
-      : undefined;
-  };
-  const nameCounts = new Map<string, number>();
-  const visibleFamilies = new Set<string>();
-  for (const tool of tools) {
-    nameCounts.set(tool.name, (nameCounts.get(tool.name) ?? 0) + 1);
-    const family = coreFamily(tool);
-    // A member outside the catalog (selector-kept, for example) is sent directly too.
-    if (family && (!catalogsTool(tool) || params.isVisibleCatalogTool?.(tool) === true)) {
-      visibleFamilies.add(family);
-    }
-  }
-  const isDirectVisible = (tool: AnyAgentTool) => {
-    const family = coreFamily(tool);
-    return (
-      params.isVisibleCatalogTool?.(tool) === true ||
-      (family !== undefined && visibleFamilies.has(family) && nameCounts.get(tool.name) === 1)
-    );
-  };
+  const isDirectVisible = createFamilyVisibility({
+    tools,
+    catalogsTool,
+    isVisibleCatalogTool: params.isVisibleCatalogTool,
+  });
   for (const tool of tools) {
     if (params.isVisibleControlTool(tool)) {
       visible.push(
@@ -726,6 +704,11 @@ export function applyToolCatalogCompaction(
       .map((tool) => tool.name),
   );
   catalogRef.baselineDirectOnlyToolNames = catalogRef.directOnlyToolNames;
+  // The registered catalog (possibly reused) is the one dispatch_action calls into.
+  const dispatcher = visible.find((tool) => tool.name === TOOL_CALL_RAW_TOOL_NAME);
+  if (dispatcher) {
+    dispatcher.repeatable = dispatchRepeatable(catalogRef.current?.entries ?? catalog);
+  }
   return {
     tools: visible,
     compacted: catalog.length > 0,

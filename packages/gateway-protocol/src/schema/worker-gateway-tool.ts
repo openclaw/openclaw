@@ -22,6 +22,15 @@ export const WORKER_GATEWAY_TOOL_METHODS = {
 } as const;
 
 const JsonObjectSchema = Type.Record(Type.String(), Type.Unknown());
+const RepeatableTargetSchemas = [
+  Type.Literal(true),
+  closedObject({
+    actions: Type.Array(Type.String({ minLength: 1, maxLength: 64 }), {
+      minItems: 1,
+      maxItems: 16,
+    }),
+  }),
+];
 const ToolSearchSelectorSchema = Type.Object(
   {
     source: Type.Optional(Type.Enum(["openclaw", "mcp", "client"])),
@@ -116,14 +125,20 @@ export const WorkerToolSurfaceSchema = closedObject({
         executionMode: Type.Optional(Type.Enum(["sequential", "parallel"])),
         catalogMode: Type.Optional(Type.Literal("direct-only")),
         async: Type.Optional(Type.Literal(false)),
-        // Tool-owned repeat-guard exemption: always, or only for the listed `action` values.
+        // Tool-owned repeat-guard exemption: always, only for the listed `action` values, or a
+        // dispatcher's per-target exemptions.
         repeatable: Type.Optional(
           Type.Union([
-            Type.Literal(true),
+            ...RepeatableTargetSchemas,
             closedObject({
-              actions: Type.Array(Type.String({ minLength: 1, maxLength: 64 }), {
-                minItems: 1,
-                maxItems: 16,
+              dispatch: closedObject({
+                idArgument: Type.String({ minLength: 1, maxLength: 64 }),
+                inputArgument: Type.String({ minLength: 1, maxLength: 64 }),
+                targets: Type.Record(
+                  Type.String({ minLength: 1, maxLength: 256 }),
+                  Type.Union(RepeatableTargetSchemas),
+                  { maxProperties: 512 },
+                ),
               }),
             }),
           ]),
