@@ -25,23 +25,20 @@ import {
 } from "./session-message-cache.ts";
 import { handleAgentEvent } from "./tool-stream.ts";
 
-function createState(handler: (params?: unknown) => unknown) {
-  return makeChatHost({
+const createState = (handler: (params?: unknown) => unknown) =>
+  makeChatHost({
     requestHandlers: { "chat.history": handler },
     sessionKey: "main",
     connectionEpoch: 1,
   });
-}
 
-function message(
+const message = (
   role: "assistant" | "user",
   content: unknown,
   id: string,
   seq: number,
   metadata = {},
-) {
-  return { role, content, __openclaw: { id, seq, ...metadata } };
-}
+) => ({ role, content, __openclaw: { id, seq, ...metadata } });
 const sessionInfo = (overrides: Partial<GatewaySessionRow> = {}): GatewaySessionRow => ({
   key: "main",
   kind: "direct",
@@ -105,8 +102,7 @@ describe("chat history cursor revalidation", () => {
     );
     const first = createState(handler);
     const second = createState(handler);
-    second.client = first.client;
-    second.sessions = first.sessions;
+    Object.assign(second, { client: first.client, sessions: first.sessions });
     const cache = seedCachedHistory(first, [cached], "cursor-1");
     seedCachedHistory(second, [cached], "cursor-1");
     second.chatMessagesBySession = cache;
@@ -118,7 +114,7 @@ describe("chat history cursor revalidation", () => {
     expect(handler).toHaveBeenLastCalledWith(expect.objectContaining({ cursor: "cursor-1" }));
   });
 
-  it.each(["session", "agent", "transcript", "reset"] as const)(
+  it.each(["session", "agent", "transcript", "reset", "anonymous"] as const)(
     "does not reuse a pane cursor after its %s changes",
     async (transition) => {
       const handler = vi.fn(async () => ({
@@ -129,7 +125,9 @@ describe("chat history cursor revalidation", () => {
       state.sessionKey = "global";
       state.assistantAgentId = "main";
       seedCachedHistory(state, [message("user", "Previous history", "previous", 1)], "old-cursor");
-      if (transition === "session") {
+      if (transition === "anonymous") {
+        seedCachedHistory(state, [{ role: "assistant", content: "cached" }], "old-cursor");
+      } else if (transition === "session") {
         state.sessionKey = "agent:main:other";
       } else if (transition === "agent") {
         state.assistantAgentId = "other";
