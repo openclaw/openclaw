@@ -18,10 +18,7 @@ import { registerActivityEnglish } from "../../i18n/locales/en-activity.ts";
 import { formatUiError } from "../../lib/format-error.ts";
 import "../../components/solid/viewer-facepile.tsx";
 import { formatTimeAgo } from "../../lib/format.ts";
-import {
-  groupPresenceConnections,
-  presenceConnectionDescriptions,
-} from "../../lib/presence-connections.ts";
+import { projectPresenceConnections } from "../../lib/presence-connections.ts";
 import {
   presenceViewerActivity,
   presenceActivityLabel,
@@ -172,13 +169,9 @@ function IdentityHeader(props: {
     getLocale();
     return online() ? presenceActivityLabel(activity()) : t("activityFeed.offline");
   };
-  const descriptions = createMemo(() => {
-    getLocale();
-    return presenceConnectionDescriptions(entries());
-  });
   const connections = createMemo(() => {
     getLocale();
-    return groupPresenceConnections(entries());
+    return projectPresenceConnections(entries());
   });
   const viewing = createMemo(() => resolveViewingNow(props.identity, props.rows));
   return (
@@ -201,9 +194,9 @@ function IdentityHeader(props: {
           label={status()}
         />
       </div>
-      {descriptions().length ? (
+      {connections().descriptions.length ? (
         <div class="activity-feed__connection-summary">
-          <For each={descriptions()}>{(description) => <span>{description}</span>}</For>
+          <For each={connections().descriptions}>{(description) => <span>{description}</span>}</For>
         </div>
       ) : undefined}
       <div class="activity-feed__viewing">
@@ -226,7 +219,7 @@ function IdentityHeader(props: {
             {t("activityFeed.connectionDetails", { count: String(entries().length) })}
           </summary>
           <div class="activity-feed__connections">
-            <For each={connections()} keyed={false}>
+            <For each={connections().groups} keyed={false}>
               {(group) => (
                 <div class="activity-feed__connection">
                   <strong>
