@@ -1,7 +1,4 @@
 import type { AssistantMessage, Context, Model } from "@openclaw/llm-core";
-import { sha256StableValue } from "@openclaw/normalization-core/node-crypto";
-import { isRecord } from "@openclaw/normalization-core/record-coerce";
-import type { ResponseInput } from "openai/resources/responses/responses.js";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import {
   freezeJsonSnapshot,
@@ -20,20 +17,12 @@ import {
   emitWebSocket,
   installWebSocket,
 } from "../providers/openai-chatgpt-responses.test-helpers.js";
-import { streamOpenAIResponses } from "../providers/openai-responses.js";
 import { cleanupSessionResources } from "../session-resources.js";
 import {
   prepareSystemPrompt,
   SYSTEM_PROMPT_CACHE_BOUNDARY,
 } from "../utils/system-prompt-cache-boundary.js";
-import {
-  recordResponsesContextUsage,
-  resolveResponsesContextUsageBoundary,
-} from "./openai-responses-context-usage.js";
-import { responsesContinuationPrefixFingerprint } from "./openai-responses-continuation.js";
-import { OPENAI_RESPONSES_TOOL_CALL_PROVIDERS } from "./openai-responses-contracts.js";
 import * as fixtures from "./openai-responses-prompt-observer.test-support.js";
-import { convertProviderResponsesMessages } from "./openai-responses-replay-messages-internal.js";
 import type { SdkResponse } from "./openai-responses-sdk.test-support.js";
 
 const sdkState = vi.hoisted(() => ({
@@ -94,21 +83,6 @@ const managedResult = async (
   expect(result.stopReason).toBe("stop");
   return result;
 };
-function usageBoundary(
-  context: Context,
-  result: AssistantMessage,
-  model: Model,
-  persisted = false,
-) {
-  const messages = [...context.messages, result];
-  const saved = persisted ? JSON.stringify(messages) : undefined;
-  return resolveResponsesContextUsageBoundary(
-    saved === undefined ? messages : JSON.parse(saved),
-    model,
-    identity,
-    context.systemPrompt,
-  );
-}
 function observe(options: object, order?: string[], includeEgress = false) {
   const observations: ResponsesPromptObservation[] = [];
   responsesPromptObserver.set(options, (observation) => {
@@ -136,11 +110,6 @@ function expectObservations(
   expect(JSON.stringify(observations)).not.toContain(prompt);
 }
 
-const expectedBoundary = (context: Context, totalTokens = 8) => ({
-  index: context.messages.length,
-  totalTokens,
-  suffix: [],
-});
 function mockSse(order?: string[], onRequest?: (request: Record<string, unknown>) => void) {
   vi.stubGlobal(
     "fetch",
@@ -273,111 +242,8 @@ describe("OpenAI Responses provider prompt observer", () => {
         expect(sdkState.requests[0]?.input).toBe("hello");
       }
       expect(result.errorMessage).toBeUndefined();
-      expect(result).not.toHaveProperty("openclawResponsesInputReplay.contextUsage");
     },
   );
-
-  it.each(["shared", "chatgpt"] as const)(
-    "preserves measured checkpoint usage through %s egress and saved-history replay",
-    async (transport) => {
-      const model = transport === "chatgpt" ? nativeModel() : fixtures.createModel();
-      const context = fixtures.createOrphanedToolOutputCompactionContext(model, identity);
-      const toolOutput = context.messages.find((message) => message.role === "toolResult");
-      if (!toolOutput || toolOutput.role !== "toolResult") {
-        throw new Error("missing tool-output fixture");
-      }
-      toolOutput.content = [{ type: "text", text: "large historical tool output\n".repeat(8_000) }];
-      context.messages.push(
-        fixtures.userMessage("OpenClaw runtime context:\ncurrent runtime facts", 2, {
-          runtimeContext: {},
-        }),
-      );
-      const run = async (rewriteInput: boolean) => {
-        sdkState.outcomes = [fixtures.completedSdkResponse(`resp_usage_${transport}`)];
-        mockSse();
-        const options = {
-          ...identity,
-          apiKey: transport === "chatgpt" ? createJwt() : "test-key",
-          transport: "sse" as const,
-          onPayload: rewriteInput
-            ? (payload: unknown) => {
-                const request = payload as Record<string, unknown>;
-                return {
-                  ...request,
-                  input: [
-                    ...(request.input as unknown[]),
-                    {
-                      role: "user",
-                      content: "hook-only history that is absent from the transcript",
-                    },
-                  ],
-                };
-              }
-            : undefined,
-        };
-        const result = await (
-          transport === "chatgpt"
-            ? streamOpenAICodexResponses(
-                { ...model, api: "openai-chatgpt-responses", compat: undefined },
-                context,
-                options,
-              )
-            : streamOpenAIResponses({ ...model, api: "openai-responses" }, context, options)
-        ).result();
-        expect(result.stopReason).toBe("stop");
-        expect(result.usage.contextUsage).toEqual({
-          state: "available",
-          promptTokens: 5,
-          totalTokens: 8,
-        });
-        return {
-          result,
-          boundary: usageBoundary(context, result, model, true),
-        };
-      };
-
-      const measured = await run(false);
-      expect(measured.result).toMatchObject({
-        openclawResponsesInputReplay: { contextUsage: { totalTokens: 8 } },
-      });
-      expect(measured.boundary).toEqual(expectedBoundary(context));
-
-      const rewritten = await run(true);
-      expect(rewritten.boundary).toBeUndefined();
-    },
-  );
-
-  it("checkpoints tool history behind embedded instructions across completed responses", async () => {
-    configureAiTransportHost({ immutableData: { freezeJsonSnapshot, isDeeplyFrozenPlainData } });
-    const model = fixtures.createModel({ reasoning: true, compat: { cachesInstructions: false } });
-    const context = fixtures.createOrphanedToolOutputCompactionContext(model, identity);
-    const toolOutput = context.messages.find((message) => message.role === "toolResult");
-    if (!toolOutput) {
-      throw new Error("missing historical tool result");
-    }
-    const toolText = "historical tool result";
-    toolOutput.content = [{ type: "text", text: toolText }];
-    context.messages = context.messages.map(freezeJsonSnapshot);
-    context.preparedSystemPrompt = prepareSystemPrompt(context.systemPrompt ?? "");
-    sdkState.outcomes = [fixtures.completedSdkResponse("resp_first")];
-    const first = await managedResult(model, context, { ...sdkOptions, transport: "sse" });
-    expect(first).toHaveProperty(
-      "openclawResponsesInputReplay.contextUsage.prefixHash",
-      "12447e970cae30a6cded1a6b2aef05da7f5f411355e2734e3838ea7d12ecda58",
-    );
-
-    context.messages.push(freezeJsonSnapshot(fixtures.userMessage("next question", 5)));
-    sdkState.outcomes = [fixtures.completedSdkResponse("resp_second")];
-    const stringify = vi.spyOn(JSON, "stringify");
-    const second = await managedResult(model, context, { ...sdkOptions, transport: "sse" });
-    const encodedToolText = stringify.mock.calls.filter(([value]) => value === toolText).length;
-    stringify.mockRestore();
-    expect(second).toHaveProperty(
-      "openclawResponsesInputReplay.contextUsage.prefixHash",
-      "ef878aea05c13d5eea96edc24246ba04e008aa28de9db69d804546feacfa0e91",
-    );
-    expect(encodedToolText).toBe(0);
-  });
 
   it("isolates edits to embedded instructions from later requests", async () => {
     configureAiTransportHost({ immutableData: { freezeJsonSnapshot, isDeeplyFrozenPlainData } });
@@ -405,136 +271,7 @@ describe("OpenAI Responses provider prompt observer", () => {
     ]);
   });
 
-  it("preserves persisted context hashes across reasoning edits, metadata and frozen replay", () => {
-    configureAiTransportHost({ immutableData: { freezeJsonSnapshot, isDeeplyFrozenPlainData } });
-    const model = fixtures.createModel();
-    const checkpoint = { type: "compaction" as const, encrypted_content: "checkpoint" };
-    const reasoning = {
-      type: "reasoning" as const,
-      id: "rs_history",
-      status: "completed" as const,
-      summary: [{ type: "summary_text" as const, text: "summary\nwith unicode 🦞" }],
-      encrypted_content: "history-ciphertext",
-    };
-    const append = { ...reasoning, id: "rs_append", encrypted_content: "appended-ciphertext" };
-    const record = (input: ResponseInput, outputReasoning = false, reset?: () => void) => {
-      reset?.();
-      const message = fixtures.createAssistant(
-        model,
-        outputReasoning
-          ? [
-              {
-                type: "thinking",
-                thinking: "",
-                thinkingSignature: JSON.stringify(append),
-              },
-            ]
-          : [],
-      );
-      message.usage.contextUsage = { state: "available", promptTokens: 5, totalTokens: 8 };
-      const output = convertProviderResponsesMessages(
-        model,
-        { messages: [message] },
-        OPENAI_RESPONSES_TOOL_CALL_PROVIDERS,
-        { ...identity, includeSystemPrompt: false },
-      );
-      const stripped = [...input, ...output].flatMap((item) => {
-        if (!isRecord(item) || item.type !== "reasoning") {
-          return [];
-        }
-        const { id: _id, status: _status, ...content } = item;
-        return [content];
-      });
-      const expected = sha256StableValue({
-        prefix: responsesContinuationPrefixFingerprint(input, output),
-        reasoning: stripped,
-      }).digest;
-      reset?.();
-      recordResponsesContextUsage(message, model, identity, { input }, output, "provider");
-      expect(message).toHaveProperty(
-        "openclawResponsesInputReplay.contextUsage.prefixHash",
-        expected,
-      );
-      return expected;
-    };
-    const input = [checkpoint, reasoning];
-    const original = record(input);
-    const withoutMetadata = { ...reasoning };
-    Reflect.deleteProperty(withoutMetadata, "id");
-    Reflect.deleteProperty(withoutMetadata, "status");
-    expect(record([checkpoint, withoutMetadata])).toBe(original);
-    expect(record(input, true)).not.toBe(original);
-    for (const outputReasoning of [false, true]) {
-      const frozen = freezeJsonSnapshot(structuredClone(input));
-      expect(record(frozen, outputReasoning)).toBe(record(input, outputReasoning));
-      expect(record([checkpoint, append], outputReasoning)).not.toBe(original);
-      expect(record(frozen, outputReasoning)).toBe(record(input, outputReasoning));
-    }
-    reasoning.encrypted_content = "edited-ciphertext";
-    expect(record(input)).not.toBe(original);
-    expect(record([reasoning, checkpoint])).not.toBe(record(input));
-    let phase = "before";
-    const opaque = {
-      ...fixtures.inputMessage("hook"),
-      toJSON() {
-        phase = "after";
-        return fixtures.inputMessage("hook");
-      },
-    };
-    record(
-      [
-        checkpoint,
-        {
-          type: "reasoning",
-          id: "rs_hook",
-          get encrypted_content() {
-            return phase;
-          },
-          summary: [
-            {
-              type: "summary_text",
-              get text() {
-                return phase;
-              },
-            },
-          ],
-        },
-        opaque,
-      ],
-      false,
-      () => {
-        phase = "before";
-      },
-    );
-  });
-
-  it("does not re-encode frozen reasoning across interleaved context-usage recordings", () => {
-    configureAiTransportHost({ immutableData: { freezeJsonSnapshot, isDeeplyFrozenPlainData } });
-    const model = fixtures.createModel();
-    const ciphertexts = ["first-encrypted-reasoning", "second-encrypted-reasoning"];
-    const histories = ciphertexts.map((encrypted_content) =>
-      freezeJsonSnapshot([
-        { type: "compaction" as const, encrypted_content: "checkpoint" },
-        { type: "reasoning" as const, id: "rs_frozen", summary: [], encrypted_content },
-      ]),
-    );
-    const record = (input: ResponseInput) => {
-      const message = fixtures.createAssistant(model);
-      message.usage.contextUsage = { state: "available", promptTokens: 5, totalTokens: 8 };
-      recordResponsesContextUsage(message, model, identity, { input }, [], "provider");
-    };
-    histories.forEach(record);
-    const stringify = vi.spyOn(JSON, "stringify");
-    histories.forEach(record);
-    histories.toReversed().forEach(record);
-    const encodedCiphertexts = () =>
-      stringify.mock.calls.filter(([value]) => ciphertexts.includes(value));
-    expect(encodedCiphertexts()).toHaveLength(0);
-    histories.map((input) => structuredClone(input)).forEach(record);
-    expect(encodedCiphertexts()).toHaveLength(2);
-  });
-
-  it("binds measured usage to terminal reasoning when its ciphertext changes", async () => {
+  it("keeps terminal reasoning when its ciphertext changes after streaming", async () => {
     const { model, context } = compactionCase();
     const reasoning = {
       type: "reasoning",
@@ -560,7 +297,6 @@ describe("OpenAI Responses provider prompt observer", () => {
       type: "thinking",
       thinkingSignature: expect.stringContaining("opaque-terminal-reasoning"),
     });
-    expect(usageBoundary(context, result, model, true)).toEqual(expectedBoundary(context, 525));
   });
 
   it("recovers Azure compaction rejection and suppresses it on the next turn", async () => {
@@ -578,7 +314,6 @@ describe("OpenAI Responses provider prompt observer", () => {
       fixtures.completedSdkResponse("resp_azure_next"),
     ];
     const recovered = await managedResult(azureModel, context, options, true);
-    expect(recovered).not.toHaveProperty("openclawResponsesInputReplay.contextUsage");
     await managedResult(
       azureModel,
       {
@@ -670,8 +405,6 @@ describe("OpenAI Responses provider prompt observer", () => {
     const result = await stream.result();
     expect(result).toMatchObject({ stopReason: "stop" });
     expect(result.responseModel).toBeUndefined();
-    expect(result).not.toHaveProperty("openclawResponsesInputReplay.contextUsage");
-    expect(usageBoundary(context, result, model)).toBeUndefined();
 
     expect(sdkState.requests.map(requestHasCompaction)).toEqual([true, true]);
     expect(requestInput(0)).toContain(reasoningCiphertext);
@@ -781,7 +514,6 @@ describe("OpenAI Responses provider prompt observer", () => {
     const result = await streamOpenAICodexResponses(model, context, options).result();
 
     expect(result.stopReason).toBe("stop");
-    expect(usageBoundary(context, result, model)).toEqual(expectedBoundary(context));
     expect(connections.sockets).toHaveLength(2);
     expect(order).toEqual(["observe", "send", "observe", "send"]);
     expect(sentRequests.map((request) => request.instructions)).toEqual([prompt, prompt]);

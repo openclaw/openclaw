@@ -1,3 +1,4 @@
+import { AsyncLocalStorage } from "node:async_hooks";
 import crypto from "node:crypto";
 import { hasNonEmptyString } from "@openclaw/normalization-core/string-coerce";
 import { hasOutboundReplyContent } from "openclaw/plugin-sdk/reply-payload";
@@ -164,6 +165,10 @@ async function executeAgentTurnInternalLoop(
         ? { projectSessionActive: false, projectSessionLifecycle: false }
         : {}),
       completionSource: params.completionSource,
+      ...(params.opts?.onRestartResumeSaved &&
+      params.opts.sourceReplyDeliveryMode !== "message_tool_only"
+        ? { onRestartResumeSaved: AsyncLocalStorage.bind(params.opts.onRestartResumeSaved) }
+        : {}),
       sessionEventDelivery: resolveReplySessionEventDelivery(params.opts, params.followupRun.run),
     });
     bindAgentRunTerminalWriteSettlement(preparedRunAdmission.operationalRunInstance);

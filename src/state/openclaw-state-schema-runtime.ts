@@ -32,7 +32,9 @@ export function getOpenClawStateRuntimeSchema(
 ): string {
   const { includeVersionLazyAdditiveTables, includeAgentDeletionJournal = true } = options;
   // Catalog generation interleaves historical sources with current runtime requests.
-  const sourceKey = schemaSql === OPENCLAW_STATE_SCHEMA_SQL ? "current" : schemaSql;
+  // Sharing this comparison keeps the bundler from inlining the full SQL at both use sites.
+  const isCurrentSchema = schemaSql === OPENCLAW_STATE_SCHEMA_SQL;
+  const sourceKey = isCurrentSchema ? "current" : schemaSql;
   const key = `${includeVersionLazyAdditiveTables}:${includeAgentDeletionJournal}:${sourceKey}`;
   const cached = runtimeSchemaCache.get(key);
   if (cached !== undefined) {
@@ -48,10 +50,7 @@ export function getOpenClawStateRuntimeSchema(
     : LAZY_ADDITIVE_STATE_INDEXES;
   for (const tableName of omittedTables) {
     // Historical source layouts can predate today's optional tables.
-    if (
-      schemaSql !== OPENCLAW_STATE_SCHEMA_SQL &&
-      !schema.includes(`CREATE TABLE IF NOT EXISTS ${tableName} (`)
-    ) {
+    if (!isCurrentSchema && !schema.includes(`CREATE TABLE IF NOT EXISTS ${tableName} (`)) {
       continue;
     }
     schema = schema.replace(

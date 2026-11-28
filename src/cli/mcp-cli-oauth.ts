@@ -1,3 +1,4 @@
+import { safeParseJsonRecord } from "@openclaw/normalization-core/json-coercion";
 import { asNullableRecord as asRecord } from "@openclaw/normalization-core/record-coerce";
 import type { Command } from "commander";
 import type { McpAuthLoginLinkResult } from "../../packages/gateway-protocol/src/schema/wizard.js";
@@ -17,6 +18,7 @@ import {
 } from "../infra/oauth-loopback-callback.js";
 import { defaultRuntime } from "../runtime.js";
 import { formatCliCommand } from "./command-format.js";
+import { shouldShowDebugDetails } from "./failure-output.js";
 import { runWithLocalStateOwner } from "./local-state-owner.js";
 
 const MCP_OAUTH_CALLBACK_TIMEOUT_MS = 5 * 60 * 1000;
@@ -157,7 +159,20 @@ async function loginMcpServer(
   const manualCommand = formatCliCommand(`openclaw mcp login ${name} --code <code>`);
   try {
     owner.assertCurrent();
-    const session = await startMcpOAuthAuthorization(identity, resolved, {});
+    const session = await startMcpOAuthAuthorization(identity, resolved, {}).catch(
+      async (error: unknown) => {
+        const { OAuthErrorCode, RegistrationRejectedError } =
+          await import("@modelcontextprotocol/client");
+        if (!(error instanceof RegistrationRejectedError) || shouldShowDebugDetails()) {
+          throw error;
+        }
+        const providerCode = safeParseJsonRecord(error.body)?.error;
+        const oauthCode = Object.values(OAuthErrorCode).find((value) => value === providerCode);
+        return fail(
+          `OAuth server rejected dynamic client registration for "${name}" (HTTP ${error.status})${oauthCode ? `: ${oauthCode}` : ""}. Check the provider's client registration settings before retrying.`,
+        );
+      },
+    );
     owner.assertCurrent();
     if (session.status === "authorized") {
       defaultRuntime.log(`MCP OAuth credentials saved for "${name}".`);

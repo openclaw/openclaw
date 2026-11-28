@@ -47,7 +47,10 @@ struct WatchMessageJournalView: View {
             }
             Section {
                 Text(
-                    "Dismiss hides cards; receipts still expire after 48 hours. Needs review stays until discarded.")
+                    """
+                    Dismiss hides finished messages; receipts expire after 48 hours. \
+                    Messages marked “Needs review” stay until you discard them.
+                    """)
                     .font(OpenClawType.footnote)
                     .foregroundStyle(.secondary)
             }
@@ -150,14 +153,14 @@ struct WatchMessageJournalView: View {
             case let .failed(code, _):
                 if code == "expired" { return String(localized: "Expired") }
                 return entry.acceptedRunID == nil ? String(localized: "Not sent") :
-                    String(localized: "Gateway run failed")
+                    String(localized: "Run failed")
             case .uncertain: return String(localized: "Delivery uncertain")
             }
         }
         switch entry.phase {
         case .queued: return String(localized: "Queued on iPhone")
         case .sending: return String(localized: "Sending")
-        case .accepted: return String(localized: "Accepted by Gateway")
+        case .accepted: return String(localized: "Accepted")
         case .receiptReady, .received: return String(localized: "Result saved")
         case .needsReview: return String(localized: "Needs review")
         case .tombstone: return String(localized: "Discarded")
@@ -201,7 +204,7 @@ struct WatchMessageJournalView: View {
         self.entries = []
         self.didLoad = true
         if self.notice == nil {
-            self.notice = String(localized: "Could not load saved Watch messages. Try again after unlocking iPhone.")
+            self.notice = String(localized: "Couldn’t load saved Watch messages. Unlock your iPhone and try again.")
         }
     }
 
@@ -221,7 +224,7 @@ struct WatchMessageJournalView: View {
         } catch {
             self
                 .notice =
-                String(localized: "The message could not be updated. Refresh the delivery status and try again.")
+                String(localized: "Couldn’t update the message. Refresh and try again.")
         }
     }
 }

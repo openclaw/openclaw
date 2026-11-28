@@ -2,6 +2,13 @@ import type { InternalSessionEntry } from "./types.js";
 
 type RestartResumeMarker = NonNullable<InternalSessionEntry["resumeAfterRestart"]>;
 
+export function restartResumeMarkerMatchesRun(
+  marker: RestartResumeMarker,
+  runId: string | undefined,
+): boolean {
+  return marker.sourceRunId === undefined || marker.sourceRunId === runId;
+}
+
 export type PendingSessionShellCalls = {
   runId: string;
   calls: { callId: string; key: string }[];

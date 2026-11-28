@@ -9,7 +9,7 @@ struct SlashFilterCache {
 }
 
 private let chatSendingLogger = Logger(subsystem: "ai.openclaw", category: "OpenClawChatUI")
-private let localSessionCommands: Set<String> = ["/new", "/reset", "/clear", "/compact"]
+let localSessionCommands: Set<String> = ["/new", "/reset", "/clear", "/compact"]
 
 extension OpenClawChatViewModel {
     public var canSend: Bool {
@@ -322,6 +322,7 @@ extension OpenClawChatViewModel {
             self.applyDeferredExternalStateIfReady()
         }
 
+        guard await self.prepareNewChatDraftSettings(for: draft.session) else { return }
         guard await self.prepareLiveRoute(for: draft) else { return }
         guard await self.validateAttachmentBudgetForSend(draft.attachments, session: draft.session) else { return }
         guard self.composerModelAvailabilityMessage == nil else {
@@ -740,6 +741,7 @@ extension OpenClawChatViewModel {
     }
 
     private func finishAcceptedComposerSend(_ draft: SendDraft) {
+        if self.newChatDraft?.key == draft.session.key { self.newChatDraft = nil }
         self.recordSuccessfulInput(
             draft.trimmed,
             transcriptEcho: draft.outgoingMessageText,

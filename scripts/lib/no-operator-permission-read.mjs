@@ -43,7 +43,8 @@ export const ADMISSION_FILES = new Map([
   ["src/gateway/operator-access-policy.ts", 4],
   ["src/gateway/operator-admission.ts", 5],
   ["src/gateway/operator-model-presentation.ts", 2],
-  ["src/gateway/operator-role-policy.ts", 25],
+  // Includes the existing role-loss comparison moved from the role RPC module.
+  ["src/gateway/operator-role-policy.ts", 26],
   ["src/gateway/operator-run-authority.ts", 3],
   ["src/gateway/project-access.ts", 2],
   ["src/gateway/question-session-access.ts", 4],
@@ -66,8 +67,8 @@ export const ADMISSION_FILES = new Map([
   ["src/gateway/server-methods/users-model-account-access.ts", 2],
   ["src/gateway/server-methods/users-personal-file.ts", 2],
   ["src/gateway/server-methods/users-profile-access.ts", 2],
-  // The role writer compares the old and new effective role to decide an access loss.
-  ["src/gateway/server-methods/users-role.ts", 3],
+  // Profile enumeration presents effective roles; the policy owner compares role changes.
+  ["src/gateway/server-methods/users-role.ts", 2],
   ["src/gateway/server/ws-connection/authenticated-request-dispatch.ts", 2],
   ["src/gateway/server/ws-connection/connect-hello.ts", 4],
   ["src/gateway/server/ws-connection/connect-openclaw-id-member-grant.ts", 2],

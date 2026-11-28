@@ -19,7 +19,6 @@ import {
 import type {
   OpenClawSkillMetadata,
   ParsedSkillFrontmatter,
-  SkillEntry,
   SkillInstallSpec,
   SkillInvocationPolicy,
 } from "../types.js";
@@ -161,8 +160,4 @@ export function resolveSkillInvocationPolicy(
       false,
     ),
   };
-}
-
-export function resolveSkillKey(entry: SkillEntry): string {
-  return entry.metadata?.skillKey ?? entry.skill.name;
 }

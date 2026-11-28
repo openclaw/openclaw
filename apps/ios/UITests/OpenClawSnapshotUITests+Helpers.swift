@@ -80,7 +80,7 @@ extension OpenClawSnapshotUITests {
         case "overview": app.staticTexts["Agent session"]
         case "chat": app.otherElements["chat-composer-surface"]
         case "agents": app.buttons["agent-status-filter-menu"]
-        case "settings": app.descendants(matching: .any)["SettingsHub.Fallback"]
+        case "settings": app.descendants(matching: .any)["SettingsHub.Native"]
         case "gateway": app.navigationBars["Gateway"]
         default: self.readinessMarker(in: app)
         }

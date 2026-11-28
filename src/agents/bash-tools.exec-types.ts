@@ -17,11 +17,13 @@ import type { EmbeddedFullAccessBlockedReason } from "./embedded-agent-runner/ty
 import type { ExecApprovalTransport } from "./exec-approval-transport.js";
 import type { ExecReviewerConfig } from "./exec-auto-reviewer.js";
 import type { PreparedGitHubToolEnvironment } from "./github-tool-identity.types.js";
+import type { SpillOwner } from "./sessions/tools/private-temp-file.js";
 
 /** Restart notification policy captured only for a durable launch. */
 export type DurableExecOptions = { notifyOnExit: boolean; notifyOnExitEmptySuccess: boolean };
 
 export type ExecToolDefaults = ExecToolRoutingDefaults & {
+  spillOwner?: SpillOwner;
   /** Host-stamped participation context, never a tool argument. */
   participation?: boolean;
   /** Installed only by the managed embedded session that owns restart recovery. */
@@ -121,6 +123,7 @@ export type ExecToolDefaults = ExecToolRoutingDefaults & {
 /** Request and approval context shared by Gateway and node execution hosts. */
 export type ExecHostCommandParams = {
   admitShellDispatch?: () => Promise<RecordDeferredShellOutcome | undefined>;
+  spillOwner?: SpillOwner;
   approvalTransport?: ExecApprovalTransport;
   command: string;
   env: Record<string, string>;

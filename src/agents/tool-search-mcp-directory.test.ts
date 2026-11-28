@@ -157,7 +157,7 @@ describe("MCP directory in the system prompt", () => {
     expect(capped).not.toMatch(/[\uD800-\uDBFF](?![\uDC00-\uDFFF])/u);
   });
 
-  it("degrades to input signatures, then names, then per-server counts, without dropping servers", () => {
+  it("degrades to names, then per-server counts, without dropping servers", () => {
     const longDescription =
       "Does something useful for the caller with a fairly long description text.";
     const names = apply(
@@ -245,24 +245,68 @@ describe("MCP directory in the system prompt", () => {
     );
   });
 
-  it("keeps inputs for the smallest servers when every input does not fit", () => {
-    const typed = (server: string, name: string) =>
+  describe("when not every input fits", () => {
+    const tool = (server: string, name: string) =>
       Object.assign(mcpTool(server, name, "x".repeat(90)), {
         parameters: Type.Object(
-          { project: Type.String(), limit: Type.Optional(Type.Integer()) },
+          {
+            project: Type.String(),
+            limit: Type.Optional(Type.Integer({ minimum: 1, maximum: 100 })),
+            format: Type.Optional(Type.Union([Type.Literal("json"), Type.Literal("csv")])),
+          },
           { additionalProperties: false },
         ),
       });
-    const directory = apply([
-      typed("small", "get"),
-      ...Array.from({ length: 60 }, (_, i) => typed("big", `op_${i}`)),
-    ]).directory;
-    expect(Buffer.byteLength(directory)).toBeLessThanOrEqual(4_096);
-    expect(directory).toContain("- mcp:small:small__get { project: string");
-    expect(directory).toContain("- mcp:big:big__op_0\n");
-    expect(directory.split("\n")[0]).toContain(
-      "For a name listed without input, call tool_describe first.",
-    );
+    /** Rows with an input per server, among its listed rows. */
+    const signedPerServer = (directory: string) => {
+      const counts = new Map<string, number>();
+      for (const row of directory.split("\n").filter((line) => line.startsWith("- mcp:"))) {
+        const server = row.split(":")[1] ?? "";
+        counts.set(server, (counts.get(server) ?? 0) + (row.includes(" { ") ? 1 : 0));
+      }
+      return counts;
+    };
+
+    it("shares inputs across servers, whatever their size or name", () => {
+      // The needed server is both the largest and last by name; inputs are equally wide.
+      const directory = apply([
+        ...["alpha", "bravo", "charlie", "delta"].flatMap((server) =>
+          Array.from({ length: 6 }, (_, i) => tool(server, `op_${i}`)),
+        ),
+        ...Array.from({ length: 35 }, (_, i) => tool("tracker", `op_${i}`)),
+      ]).directory;
+      expect(Buffer.byteLength(directory)).toBeLessThanOrEqual(4_096);
+      const counts = [...signedPerServer(directory).values()];
+      expect(counts).toHaveLength(5);
+      // Taking turns: every server gets inputs, none more than one ahead of another.
+      expect(Math.min(...counts)).toBeGreaterThan(0);
+      expect(Math.max(...counts) - Math.min(...counts)).toBeLessThanOrEqual(1);
+      expect(directory.split("\n")[0]).toContain(
+        "For a name listed without input, call tool_describe first.",
+      );
+    });
+
+    it("stays within the byte budget with an instruction row when names barely fit", () => {
+      for (let size = 90; size <= 130; size += 1) {
+        const guided = tool("guided", "query");
+        setPluginToolMeta(guided, {
+          pluginId: "bundle-mcp",
+          optional: false,
+          mcp: {
+            serverName: "guided",
+            safeServerName: "guided",
+            toolName: "query",
+            operation: "tool",
+            instructions: "Read the guide first.",
+          },
+        });
+        const directory = apply([
+          guided,
+          ...Array.from({ length: size }, (_, i) => tool("big", `operation_${i}`)),
+        ]).directory;
+        expect(Buffer.byteLength(directory)).toBeLessThanOrEqual(4_096);
+      }
+    });
   });
 
   it("is deterministic across turns and changes only with the MCP inventory", () => {
