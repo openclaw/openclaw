@@ -72,7 +72,10 @@ async function mountSuggestions(conversations: ConversationListItem[]) {
         // A real ID must survive even when another account uses it as a name.
         { accountId: "ops", name: "work" },
       ],
-      discord: [{ accountId: "discord-account", name: "Discord account" }],
+      discord: [
+        { accountId: " default ", name: "Discord default" },
+        { accountId: "discord-account", name: "Discord account" },
+      ],
     },
     channelDefaultAccountId: { telegram: "default", discord: "discord-account" },
   };
@@ -117,6 +120,7 @@ it.each([
               "https://example.test/conversation-shaped-url",
             ].toSorted(),
       );
+      expect(suggestions(page, "cron-failure-alert-to-suggestions")).toEqual(recipients);
       expect(suggestions(page, "cron-delivery-account-suggestions")).toEqual(accounts);
     });
     expect(suggestions(page, "cron-tz-suggestions")).toContain("Etc/GMT+12");
