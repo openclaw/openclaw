@@ -53,7 +53,7 @@ afterAll(() => fixtureSuite.cleanup());
 type Providers = Record<string, ModelProviderConfig>;
 type ModelsJson = { providers: Providers };
 
-function provider(fields: Partial<ModelProviderConfig> = {}): ModelProviderConfig {
+function provider(fields: Partial<ModelProviderConfig>): ModelProviderConfig {
   return { baseUrl: "https://api.openai.com/v1", api: "openai-completions", models: [], ...fields };
 }
 const protectedSecrets = {

@@ -4,8 +4,6 @@ import type { InternalHookEvent } from "../hooks/internal-hooks.js";
 type TriggerInternalHookMock = (event: InternalHookEvent) => Promise<void>;
 
 const mocks = vi.hoisted(() => ({
-  logInfo: vi.fn(),
-  logWarn: vi.fn(),
   listChannelPlugins: vi.fn((): Array<{ id: "telegram" | "discord" }> => []),
   disposeAllCodeModeRuns: vi.fn(),
   disposeAgentHarnesses: vi.fn<() => Promise<void>>(async () => undefined),
