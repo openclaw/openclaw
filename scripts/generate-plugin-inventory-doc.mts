@@ -185,6 +185,7 @@ function humanizeId(value: string) {
     ["line", "LINE"],
     ["litellm", "LiteLLM"],
     ["llm", "LLM"],
+    ["llmman", "llmman"],
     ["lmstudio", "LM Studio"],
     ["longcat", "LongCat"],
     ["mdns", "mDNS"],

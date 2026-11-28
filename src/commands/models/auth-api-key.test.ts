@@ -895,3 +895,15 @@ it("keeps the active OAuth connection when saving an explicit backup profile", a
   expect((await readConfig()).models?.providers?.sample).toEqual(provider);
   expect(savedProfile("sample:backup")).toMatchObject({ key: "backup-key" });
 });
+
+it("stores the llmman local marker as the provider's key without writing a connection", async () => {
+  expect(await save("llmman-local", undefined, { provider: "llmman" })).toMatchObject({
+    profileId: "llmman:manual",
+  });
+  expect(savedProfile("llmman:manual")).toMatchObject({
+    type: "api_key",
+    provider: "llmman",
+    key: "llmman-local",
+  });
+  expect((await readConfig()).models?.providers?.llmman).toBeUndefined();
+});

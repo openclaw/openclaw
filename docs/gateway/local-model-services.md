@@ -122,7 +122,7 @@ During `memory_search`, managed embedding startup uses `readyTimeoutMs` instead 
 
 ## llmman example
 
-llmman is a custom OpenAI-compatible `/v1` backend, so the same `localService` API works with an `llmman` provider entry. It listens on `127.0.0.1:17434` by default; `LLMMAN_HOST` overrides the bind address, while `LLMMAN_LLM_LIBRARY` overrides GPU auto-detection. Off loopback it refuses to start without `LLMMAN_API_KEYS`, so keep the default loopback bind unless you need remote access. llmman has no `/health` route; use `/v1/models` or `/api/version` as `healthUrl`.
+llmman is an OpenAI-compatible `/v1` backend, so the same `localService` API works with an `llmman` provider entry. It listens on `127.0.0.1:17434` by default; `LLMMAN_HOST` overrides the bind address, while `LLMMAN_LLM_LIBRARY` overrides GPU auto-detection. Off loopback it refuses to start without `LLMMAN_API_KEYS`, so keep the default loopback bind unless you need remote access. llmman has no `/health` route; use `/v1/models` or `/api/version` as `healthUrl`.
 
 ```json5
 {

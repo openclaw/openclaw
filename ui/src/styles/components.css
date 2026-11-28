@@ -3825,6 +3825,12 @@ select.data-table-pagination__size {
   color: var(--brand-google);
 }
 
+/* Full-color mark: render as an image, not the currentColor mask of monochrome icons. */
+.provider-brand-icon[data-provider-icon="llmman"] {
+  background: var(--provider-icon-url) center / contain no-repeat;
+  mask: none;
+}
+
 .provider-brand-icon[data-provider-icon="llamacpp"],
 .provider-brand-icon[data-provider-icon="lmstudio"],
 .provider-brand-icon[data-provider-icon="ollama"],

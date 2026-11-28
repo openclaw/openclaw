@@ -24,8 +24,7 @@ Three modes are supported:
 
 | Property         | Value                                                                         |
 | ---------------- | ----------------------------------------------------------------------------- |
-| Provider id      | `llmman` (custom; configure under `models.providers.llmman`)                  |
-| Plugin           | none; not a bundled OpenClaw provider plugin, so models are listed explicitly |
+| Provider id      | `llmman` (bundled; manual config: `models.providers.llmman`)                  |
 | API              | OpenAI-compatible (`api: "openai-completions"`)                               |
 | Default base URL | `http://127.0.0.1:17434/v1`                                                   |
 | Auth             | none on loopback; off loopback a key is required, sent as the `apiKey` bearer |
@@ -57,6 +56,10 @@ Version scope: this page is verified against [llmman v0.1.334](https://github.co
 </AccordionGroup>
 
 ## Getting started
+
+<Note>
+In the Control UI, pick **llmman** under **Models** → **Add provider** and enter `llmman-local` (or a key from `LLMMAN_API_KEYS`). For a server on another host, use the manual config below.
+</Note>
 
 <Steps>
   <Step title="Install llmman">
@@ -157,7 +160,7 @@ Qwen3.8 on a local llmman server:
 
 ## Model discovery
 
-llmman is not a bundled OpenClaw plugin, so there is no implicit discovery. List every model you want under `models.providers.llmman.models` with a provider-local `id` (no `llmman/` prefix).
+With a saved key (**Add provider**, or `LLMMAN_API_KEY` in the Gateway environment) and no `models.providers.llmman` entry, OpenClaw discovers models from `http://127.0.0.1:17434/v1/models` on the Gateway host. Display names drop `docker.io/ai/` and `:latest` (`docker.io/ai/qwen3.8:latest` shows as `qwen3.8`); ids are unchanged. A `models.providers.llmman` entry takes precedence: only the models you declare are used, at its `baseUrl`, unless `agents.defaults.models` also has `"llmman/*": {}`, which adds every model that server reports. Declare models under `models.providers.llmman.models` with a provider-local `id` (no `llmman/` prefix).
 
 | Behavior     | Detail                                                                                                                                                                   |
 | ------------ | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------ |
