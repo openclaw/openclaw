@@ -1397,6 +1397,7 @@ export const databaseWorkerCoreTestFiles = [
   "src/plugin-state/plugin-state-store.test.ts",
   "src/plugin-state/plugin-state-store.retained.test.ts",
   "src/plugin-state/plugin-state-store.runtime.test.ts",
+  "src/realtime-transcription/vocabulary-collections.integration.test.ts",
   "test/e2e/qa-lab/runtime/gateway-tls-pinning.test.ts",
   "src/plugin-state/plugin-state-operation.test.ts",
   "src/plugin-state/plugin-state-worker.test.ts",

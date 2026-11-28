@@ -3,6 +3,8 @@ import { parseFiniteNumber as readFiniteNumber } from "@openclaw/normalization-c
 import { formatErrorMessage as formatError } from "../../infra/errors.js";
 import type { RealtimeTranscriptionProviderPlugin } from "../../plugins/types.js";
 import type { RealtimeTranscriptionProviderConfig } from "../../realtime-transcription/provider-types.js";
+import type { VocabularyEgress } from "../../realtime-transcription/vocabulary-snapshot.js";
+import { VocabularyError } from "../../realtime-transcription/vocabulary-types.js";
 import { recordTalkObservabilityEvent } from "../../talk/observability.js";
 import {
   type TalkEvent,
@@ -61,6 +63,8 @@ type TranscriptionRelaySession = {
   receivedAudio: boolean;
   draining: boolean;
   releaseAuthority?: () => void;
+  vocabulary?: VocabularyEgress;
+  detachVocabulary?: () => void;
 };
 
 type CreateTalkTranscriptionRelaySessionParams = {
@@ -69,6 +73,8 @@ type CreateTalkTranscriptionRelaySessionParams = {
   sessionKey?: string;
   assertCurrent: () => void;
   releaseAuthority?: () => void;
+  /** Prepared by the vocabulary owner; never accepted as client-supplied authority. */
+  vocabulary?: VocabularyEgress;
 } & (
   | {
       provider: RealtimeTranscriptionProviderPlugin;
@@ -78,6 +84,11 @@ type CreateTalkTranscriptionRelaySessionParams = {
 );
 
 const transcriptionSessions = new Map<string, TranscriptionRelaySession>();
+
+/** Provider failures may echo submitted hints; keep both RPC and event errors private. */
+function redactTranscriptionError(error: unknown, vocabulary?: VocabularyEgress): unknown {
+  return vocabulary ? new VocabularyError("unavailable") : error;
+}
 
 /** Verifies provider config matches the audio format the browser relay emits. */
 function assertRelayInputAudioConfig(providerConfig: RealtimeTranscriptionProviderConfig): void {
@@ -155,10 +166,13 @@ function closeTranscriptionSession(
   transcriptionSessions.delete(session.id);
   forgetUnifiedTalkSession(session.id);
   clearTimeout(session.cleanupTimer);
+  session.detachVocabulary?.();
   try {
     if (!session.draining || "finish" in session.sttSession) {
       session.sttSession.close();
     }
+  } catch (error) {
+    throw redactTranscriptionError(error, session.vocabulary);
   } finally {
     // Provider teardown may throw, but the owner-visible terminal event must
     // still complete so disconnect cleanup cannot leave ambiguous state.
@@ -184,10 +198,12 @@ function assertTranscriptionAuthority(session: TranscriptionRelaySession): void 
   }
 }
 
-function failTranscriptionSession(session: TranscriptionRelaySession, message: string): void {
+function failTranscriptionSession(session: TranscriptionRelaySession, error: unknown): void {
   if (transcriptionSessions.get(session.id) !== session) {
     return;
   }
+  const failure = redactTranscriptionError(error, session.vocabulary);
+  const message = failure instanceof Error ? failure.message : String(failure);
   broadcastToOwner(
     session,
     { type: "error", message },
@@ -204,7 +220,9 @@ function closeTalkTranscriptionRelaySessionsForConnection(connId: string): Promi
     closeSession: (session) => closeTranscriptionSession(session, "completed"),
     onCloseError: (error, session) => {
       session.context.logGateway.warn(
-        `failed to close transcription relay session after connection disconnect: ${formatError(error)}`,
+        session.vocabulary
+          ? "failed to close vocabulary-bound transcription relay after connection disconnect"
+          : `failed to close transcription relay session after connection disconnect: ${formatError(error)}`,
       );
     },
   });
@@ -227,6 +245,12 @@ export function createTalkTranscriptionRelaySession(
     assertRelayInputAudioConfig(params.providerConfig);
   }
   const providerId = "provider" in params ? params.provider.id : params.file.provider;
+  if (params.vocabulary) {
+    if (params.vocabulary.providerId !== providerId || params.vocabulary.lineage.stage !== "stt") {
+      throw new VocabularyError("unavailable");
+    }
+    params.vocabulary.claimDispatch();
+  }
   const transcriptionSessionId = randomUUID();
   const expiresAtMs = Date.now() + TRANSCRIPTION_SESSION_TTL_MS;
   const talk = createTalkSessionController(
@@ -255,6 +279,7 @@ export function createTalkTranscriptionRelaySession(
       throw new Error("Transcription Talk session is no longer active");
     }
     params.assertCurrent();
+    params.vocabulary?.assertCurrent();
   };
   const getActiveRelay = (): TranscriptionRelaySession | undefined => {
     const relay = relayRef.current;
@@ -271,6 +296,13 @@ export function createTalkTranscriptionRelaySession(
   const onTranscript = (text: string, final: boolean) => {
     const relay = getActiveRelay();
     if (!relay) {
+      return;
+    }
+    try {
+      // Hinted STT is shared-derived too; a revoked result is never a raw fallback.
+      relay.vocabulary?.assertCanPublish();
+    } catch {
+      closeTranscriptionSession(relay, "error");
       return;
     }
     const turnId = ensureTranscriptionTurn(relay);
@@ -308,17 +340,22 @@ export function createTalkTranscriptionRelaySession(
       if (!relay) {
         return;
       }
-      failTranscriptionSession(relay, error.message);
+      failTranscriptionSession(relay, error);
     },
   };
-  const sttSession =
-    "file" in params
-      ? createTalkFileTranscriptionSession(params.file, callbacks, assertCurrent)
-      : params.provider.createSession({
-          cfg: params.context.getRuntimeConfig(),
-          providerConfig: params.providerConfig,
-          ...callbacks,
-        });
+  let sttSession: TranscriptionRelaySession["sttSession"];
+  try {
+    sttSession =
+      "file" in params
+        ? createTalkFileTranscriptionSession(params.file, callbacks, assertCurrent)
+        : params.provider.createSession({
+            cfg: params.context.getRuntimeConfig(),
+            providerConfig: params.providerConfig,
+            ...callbacks,
+          });
+  } catch (error) {
+    throw redactTranscriptionError(error, params.vocabulary);
+  }
   const relay: TranscriptionRelaySession = {
     id: transcriptionSessionId,
     connId: params.connId,
@@ -337,14 +374,32 @@ export function createTalkTranscriptionRelaySession(
     receivedAudio: false,
     draining: false,
     releaseAuthority: params.releaseAuthority,
+    vocabulary: params.vocabulary,
   };
   relayRef.current = relay;
   transcriptionSessions.set(transcriptionSessionId, relay);
+  if (params.vocabulary) {
+    try {
+      relay.detachVocabulary = params.vocabulary.onInvalidated(() =>
+        closeTranscriptionSession(relay, "error"),
+      );
+      assertCurrent();
+    } catch (error) {
+      closeTranscriptionSession(relay, "error");
+      throw redactTranscriptionError(error, params.vocabulary);
+    }
+  }
   registerTalkConnectionCleanup(params.connId, "transcription-relay", () =>
     closeTalkTranscriptionRelaySessionsForConnection(params.connId),
   );
-  sttSession
-    .connect()
+  let connected: Promise<void>;
+  try {
+    connected = sttSession.connect();
+  } catch (error) {
+    failTranscriptionSession(relay, error);
+    throw redactTranscriptionError(error, relay.vocabulary);
+  }
+  connected
     .then(() => {
       if (getActiveRelay() !== relay || relay.draining) {
         return;
@@ -356,7 +411,7 @@ export function createTalkTranscriptionRelaySession(
       if (active !== relay) {
         return;
       }
-      failTranscriptionSession(active, error instanceof Error ? error.message : String(error));
+      failTranscriptionSession(active, error);
     });
 
   return {
@@ -406,8 +461,8 @@ export function sendTalkTranscriptionRelayAudio(params: {
   try {
     session.sttSession.sendAudio(audio);
   } catch (error) {
-    failTranscriptionSession(session, error instanceof Error ? error.message : String(error));
-    throw error;
+    failTranscriptionSession(session, error);
+    throw redactTranscriptionError(error, session.vocabulary);
   }
   session.receivedAudio = true;
   broadcastToOwner(session, {
@@ -458,14 +513,21 @@ export function stopTalkTranscriptionRelaySession(params: {
   session.draining = true;
   clearTimeout(session.cleanupTimer);
   if ("finish" in session.sttSession) {
-    return session.sttSession.finish().then(
+    let finished: Promise<void>;
+    try {
+      finished = session.sttSession.finish();
+    } catch (error) {
+      failTranscriptionSession(session, error);
+      throw redactTranscriptionError(error, session.vocabulary);
+    }
+    return finished.then(
       () => closeTranscriptionSession(session, "completed"),
       (error: unknown) => {
         if (transcriptionSessions.get(session.id) !== session) {
           return;
         }
-        failTranscriptionSession(session, error instanceof Error ? error.message : String(error));
-        throw error;
+        failTranscriptionSession(session, error);
+        throw redactTranscriptionError(error, session.vocabulary);
       },
     );
   }
@@ -480,6 +542,6 @@ export function stopTalkTranscriptionRelaySession(params: {
     session.sttSession.close();
   } catch (error) {
     closeTranscriptionSession(session, "completed");
-    throw error;
+    throw redactTranscriptionError(error, session.vocabulary);
   }
 }
