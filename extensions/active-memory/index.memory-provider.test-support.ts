@@ -242,4 +242,18 @@ export function registerActiveMemoryProviderTests(params: MemoryProviderTestPara
     expect(params.logger.debug).toHaveBeenCalledWith(line);
     expect(params.logger.info).toHaveBeenCalledWith(line);
   });
+
+  it("escalates the German verb-first recall question through the default prompt hook", async () => {
+    params.registerPluginConfig({ mode: undefined });
+    const result = await params.runPromptBuild(
+      { prompt: "Hatten wir nicht schon mal entschieden, das Plugin zu sperren?" },
+      {
+        sessionKey: "agent:main:telegram:direct:owner",
+        messageProvider: "telegram",
+        channelId: "owner",
+      },
+    );
+    expect(params.runEmbeddedAgent).toHaveBeenCalledOnce();
+    params.expectPrependContextContains(result, "lemon pepper wings");
+  });
 }
