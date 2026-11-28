@@ -286,7 +286,9 @@ it.each([
           } else {
             expect.soft(result).toMatchObject({
               isError: true,
-              text: expect.stringContaining("confirmation was lost"),
+              text: expect.stringContaining(
+                "It was not sent again; check the conversation before retrying.",
+              ),
             });
             expect
               .soft(state.admission)

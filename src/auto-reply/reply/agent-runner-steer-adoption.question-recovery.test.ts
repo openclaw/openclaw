@@ -299,9 +299,10 @@ describe("question response custody through reply adoption", () => {
               status: "skipped",
               reason: "question-response-indeterminate",
             });
+            // The runtime error is a diagnostic; channels deliver this result to the sender.
             expect(result).toMatchObject({
               isError: true,
-              text: errorMessage,
+              text: "OpenClaw could not confirm that input. It was not sent again; check the conversation before retrying.",
             });
           }
           expect(adopted).toHaveBeenCalledOnce();
