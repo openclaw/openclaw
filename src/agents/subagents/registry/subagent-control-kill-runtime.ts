@@ -467,6 +467,8 @@ export async function mutateSubagentRunForKill(
           : { killed: false };
       }
       switch (admission) {
+        case "ready":
+          break;
         case "declined":
           return { killed: false, declined: true as const };
         case "busy":
