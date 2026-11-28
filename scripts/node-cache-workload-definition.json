@@ -1,0 +1,186 @@
+{
+  "version": 1,
+  "kind": "node-cache-workload-definition",
+  "workloadSha": "8cfbac51a27a1195176a3564f6d7cfd7d6994c85",
+  "workloadTree": "d2ac3496b32ec041292ec25b188b670e6f0cf460",
+  "pnpmVersion": "12.15.0",
+  "lane": {
+    "id": "contracts-plugin-registry",
+    "critical": true,
+    "config": "test/vitest/vitest.contracts-plugin.config.ts",
+    "files": [
+      "src/plugins/contracts/registry.contract.test.ts"
+    ]
+  },
+  "expected": [
+    {
+      "file": "src/plugins/contracts/registry.contract.test.ts",
+      "fullName": "plugin contract registry isolates nested capability metadata between snapshot reads",
+      "line": 22,
+      "column": 3,
+      "status": "passed"
+    },
+    {
+      "file": "src/plugins/contracts/registry.contract.test.ts",
+      "fullName": "plugin contract registry does not duplicate bundled provider ids",
+      "line": 82,
+      "column": 14,
+      "status": "passed"
+    },
+    {
+      "file": "src/plugins/contracts/registry.contract.test.ts",
+      "fullName": "plugin contract registry does not duplicate bundled worker provi…",
+      "line": 82,
+      "column": 14,
+      "status": "passed"
+    },
+    {
+      "file": "src/plugins/contracts/registry.contract.test.ts",
+      "fullName": "plugin contract registry does not duplicate bundled web fetch pr…",
+      "line": 82,
+      "column": 14,
+      "status": "passed"
+    },
+    {
+      "file": "src/plugins/contracts/registry.contract.test.ts",
+      "fullName": "plugin contract registry does not duplicate bundled web search p…",
+      "line": 82,
+      "column": 14,
+      "status": "passed"
+    },
+    {
+      "file": "src/plugins/contracts/registry.contract.test.ts",
+      "fullName": "plugin contract registry does not duplicate bundled migration pr…",
+      "line": 82,
+      "column": 14,
+      "status": "passed"
+    },
+    {
+      "file": "src/plugins/contracts/registry.contract.test.ts",
+      "fullName": "plugin contract registry does not duplicate bundled media provid…",
+      "line": 82,
+      "column": 14,
+      "status": "passed"
+    },
+    {
+      "file": "src/plugins/contracts/registry.contract.test.ts",
+      "fullName": "plugin contract registry does not duplicate bundled transcripts …",
+      "line": 82,
+      "column": 14,
+      "status": "passed"
+    },
+    {
+      "file": "src/plugins/contracts/registry.contract.test.ts",
+      "fullName": "plugin contract registry does not duplicate bundled realtime tra…",
+      "line": 82,
+      "column": 14,
+      "status": "passed"
+    },
+    {
+      "file": "src/plugins/contracts/registry.contract.test.ts",
+      "fullName": "plugin contract registry does not duplicate bundled realtime voi…",
+      "line": 82,
+      "column": 14,
+      "status": "passed"
+    },
+    {
+      "file": "src/plugins/contracts/registry.contract.test.ts",
+      "fullName": "plugin contract registry does not duplicate bundled image-genera…",
+      "line": 82,
+      "column": 14,
+      "status": "passed"
+    },
+    {
+      "file": "src/plugins/contracts/registry.contract.test.ts",
+      "fullName": "plugin contract registry does not duplicate bundled speech provider ids",
+      "line": 86,
+      "column": 3,
+      "status": "passed"
+    },
+    {
+      "file": "src/plugins/contracts/registry.contract.test.ts",
+      "fullName": "plugin contract registry declares canonical-first azure-speech speechProviderIds aliases",
+      "line": 95,
+      "column": 14,
+      "status": "passed"
+    },
+    {
+      "file": "src/plugins/contracts/registry.contract.test.ts",
+      "fullName": "plugin contract registry declares canonical-first volcengine speechProviderIds aliases",
+      "line": 95,
+      "column": 14,
+      "status": "passed"
+    },
+    {
+      "file": "src/plugins/contracts/registry.contract.test.ts",
+      "fullName": "plugin contract registry declares canonical-first xiaomi speechProviderIds aliases",
+      "line": 95,
+      "column": 14,
+      "status": "passed"
+    },
+    {
+      "file": "src/plugins/contracts/registry.contract.test.ts",
+      "fullName": "plugin contract registry declares canonical-first xai realtimeVoiceProviderIds aliases",
+      "line": 95,
+      "column": 14,
+      "status": "passed"
+    },
+    {
+      "file": "src/plugins/contracts/registry.contract.test.ts",
+      "fullName": "plugin contract registry keeps video-only provider auth choices out of text onboarding",
+      "line": 101,
+      "column": 3,
+      "status": "passed"
+    },
+    {
+      "file": "src/plugins/contracts/registry.contract.test.ts",
+      "fullName": "plugin contract registry exposes the GitHub Copilot non-interactive onboarding token flag from manifest metadata",
+      "line": 131,
+      "column": 3,
+      "status": "passed"
+    },
+    {
+      "file": "src/plugins/contracts/registry.contract.test.ts",
+      "fullName": "plugin contract registry covers every bundled web fetch plugin from the shared resolver",
+      "line": 173,
+      "column": 3,
+      "status": "passed"
+    },
+    {
+      "file": "src/plugins/contracts/registry.contract.test.ts",
+      "fullName": "plugin contract registry covers every bundled web search plugin from the shared resolver",
+      "line": 179,
+      "column": 3,
+      "status": "passed"
+    }
+  ],
+  "runtime": {
+    "node": "v24.22.1",
+    "v8": "13.6.233.17-node.58",
+    "platform": "linux",
+    "architecture": "x64",
+    "executableSha256": "e32e2d16081cf644f88392934288086e7662529d0d43277c34f7aad2207cfafb"
+  },
+  "sourceIdentities": [
+    {
+      "path": "src/plugins/contracts/registry.contract.test.ts",
+      "sha256": "c5671f1ef49ce594c49a428c494d43e7b54e95f56e9aa1638ec29474196edd52"
+    },
+    {
+      "path": "test/vitest/vitest.contracts-plugin.config.ts",
+      "sha256": "62c27e3dea0983c0808021bb44fbfaae2cb3b60dadcde614c0cff415b57e4779"
+    },
+    {
+      "path": "scripts/run-vitest.mjs",
+      "sha256": "eef40733f543ae496635a01ed8dc145bc3b2656025c328aa1e99a3832a4c3c01"
+    },
+    {
+      "path": "package.json",
+      "sha256": "5a1f209c07abc42fee014757738603ad20e55fc3c1a45aba7de5062aa5abce23"
+    },
+    {
+      "path": "pnpm-lock.yaml",
+      "sha256": "b08b615d19591e86d83d8a763dca0e707102c8bf40c74391c195bac2eb6f56f3"
+    }
+  ]
+}

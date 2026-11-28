@@ -295,7 +295,10 @@ native OpenClaw sessions from a source Gateway to a paired receiver Gateway.
 The source node host runs as the same user with the source Gateway's state
 directory. Enable the plugin on both sides, choose source session groups, and
 connect with only `openclaw.sessions.list.v1` and
-`openclaw.sessions.read.v1` in `--commands`.
+`openclaw.sessions.read.v1` in `--commands`. The optional
+`openclaw.sessions.catalog.list.v1` and `openclaw.sessions.catalog.read.v1` pair
+adds relationship filters and **Open original**; see
+[Session Share](/plugins/session-share#open-original-on-a-paired-node).
 
 The receiver shows read-only rows under the source node in **OpenClaw sessions**.
 Viewers need permission to view others' sessions on role-restricted Gateways.

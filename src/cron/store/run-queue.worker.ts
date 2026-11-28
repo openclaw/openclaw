@@ -1,6 +1,5 @@
 import { randomUUID } from "node:crypto";
 import { isAgentDeletionBlocked } from "../../agents/agent-lifecycle-registry.js";
-import { MAX_CRON_CONCURRENT_RUNS } from "../../config/cron-limits.js";
 import {
   executeSqliteQuerySync,
   executeSqliteQueryTakeFirstSync,
@@ -32,6 +31,12 @@ import { hasCanonicalCronDeliveryMode } from "./delivery-codec.js";
 import { readCronEventClaimInDatabase, transferCronEventInDatabase } from "./event-ingress.js";
 import { loadedCronStoreFromRows, loadCronRows, updateCronRuntimeRow } from "./row-codec.js";
 import { recordSkippedCronRequestInDatabase } from "./run-history.kernel.js";
+import {
+  createCronRunSlots,
+  isCheckingCondition,
+  startsWithoutRunSlot,
+  waitsForCronRunSlot,
+} from "./run-queue-slots.worker.js";
 import type {
   CronRunQueueOperations,
   CronRunRequestContext,
@@ -58,47 +63,6 @@ const MAX_CONCURRENT_CONDITION_CHECKS = 3;
 
 function query(db: EngineConnection) {
   return getNodeSqliteKysely<CronRunReceiptDatabase>(db);
-}
-
-/** A condition check is the opening phase of a run; at most three runs are in that phase. */
-function isCheckingCondition(job: CronStoredJob): boolean {
-  return (
-    job.state.runningAtMs !== undefined &&
-    job.state.conditionCheckReceiptId === job.state.runningReceiptId
-  );
-}
-
-/**
- * A timed check holds no run slot: it is short and bounded, and run slots are for payloads.
- * A requested check keeps the slot it was activated with. So does a script payload's check,
- * whose time budget cannot pause while it waits for a slot.
- */
-function startsWithoutRunSlot(job: CronStoredJob, receiptId: string): boolean {
-  return job.payload.kind !== "script" && parseCronScheduledRunId(receiptId) !== undefined;
-}
-
-/** A fired condition waiting for a run slot: it holds neither a check nor a slot. */
-function awaitsRunSlot(job: CronStoredJob | undefined, receiptId: string): boolean {
-  return (
-    job?.state.runningAtMs !== undefined &&
-    job.state.runningReceiptId === receiptId &&
-    job.state.runSlotWaitReceiptId === receiptId
-  );
-}
-
-function countRunSlotsInUse(
-  receipts: readonly { receiptId: string; jobId: string }[],
-  jobs: ReadonlyMap<string, CronStoredJob>,
-): number {
-  return receipts.filter((receipt) => {
-    const job = jobs.get(receipt.jobId);
-    return (
-      job?.state.runningReceiptId === receipt.receiptId &&
-      job.state.runningAtMs !== undefined &&
-      !awaitsRunSlot(job, receipt.receiptId) &&
-      !(isCheckingCondition(job) && startsWithoutRunSlot(job, receipt.receiptId))
-    );
-  }).length;
 }
 
 function loadJobs(db: EngineConnection, storeKey: string) {
@@ -411,13 +375,12 @@ function drainCronQueueInDatabase(
       error: row.error_text ?? "cron: queued request was cancelled",
     }));
   const receipts = rows.filter((row) => row.status === "running").map(receiptFromRow);
-  let activeCount = countRunSlotsInUse(receipts, jobs);
   // Fired conditions waiting for a run slot take their turn among queued runs by due time.
   const queued = receipts
     .filter(
       (receipt) =>
         jobs.get(receipt.jobId)?.state.queuedAtMs === receipt.startedAtMs ||
-        awaitsRunSlot(jobs.get(receipt.jobId), receipt.receiptId),
+        waitsForCronRunSlot(jobs.get(receipt.jobId), receipt.receiptId),
     )
     .toSorted((left, right) => {
       const leftSlot = parseCronScheduledRunId(left.receiptId)?.scheduledSlotMs ?? left.startedAtMs;
@@ -433,25 +396,24 @@ function drainCronQueueInDatabase(
   // At most three runs check a condition at once; the rest stay queued in due order with no
   // running marker, so they spend no run budget and keep their occurrence across a restart.
   let checkingCount = [...jobs.values()].filter(isCheckingCondition).length;
-  // Once every base slot is busy, one more run may start per drain while memory is free, so each
-  // later drain reads memory again with that run counted.
-  let extraRunOpen = input.memoryAllowsExtraRun === true;
-  const baseSlots = Math.max(1, input.maxConcurrentRuns);
-  const hasRunSlot = () =>
-    activeCount < baseSlots || (extraRunOpen && activeCount < MAX_CRON_CONCURRENT_RUNS);
-  const takeRunSlot = () => {
-    extraRunOpen &&= activeCount < baseSlots;
-    activeCount += 1;
-  };
+  const { hasRunSlot, takeRunSlot, promotedReceiptIds } = createCronRunSlots(
+    { ...input, db },
+    receipts,
+    jobs,
+  );
+  if (promotedReceiptIds.size > 0) {
+    result.promotedReceiptIds = [...promotedReceiptIds];
+  }
   for (const receipt of queued) {
     const handle = receiptHandle(receipt);
     const job = jobs.get(receipt.jobId)!;
-    if (awaitsRunSlot(job, receipt.receiptId)) {
-      // Its check already ran; the host waiting on it starts the payload once the mark is gone.
-      if (!input.schedulingPaused && hasRunSlot()) {
+    if (waitsForCronRunSlot(job, receipt.receiptId)) {
+      // The same occurrence resumes when its receipt gets a slot.
+      if (!input.schedulingPaused && hasRunSlot(job.state.runSlotWaitProvider)) {
         delete job.state.runSlotWaitReceiptId;
+        delete job.state.runSlotWaitProvider;
+        takeRunSlot(job, receipt.receiptId);
         updateCronRuntimeRow(db, input.storeKey, job);
-        takeRunSlot();
       }
       continue;
     }
@@ -502,9 +464,7 @@ function drainCronQueueInDatabase(
       );
       continue;
     }
-    const checksCondition =
-      job.trigger !== undefined &&
-      (context.mode === "scheduled" || context.evaluateTrigger === true);
+    const checksCondition = job.trigger !== undefined;
     if (
       input.preparingAgentIds?.includes(agentId) ||
       (timed && input.busyConversationJobIds?.includes(job.id))
@@ -580,8 +540,9 @@ function drainCronQueueInDatabase(
     delete job.state.queuedAtMs;
     job.state.runningAtMs = input.nowMs;
     job.state.runningReceiptId = runReceipt.receiptId;
-    // Both marks are bound to a receipt, so they lapse with the run and need no other cleanup.
     delete job.state.runSlotWaitReceiptId;
+    delete job.state.runSlotWaitProvider;
+    delete job.state.extraRunSlotReceiptId;
     if (checksCondition) {
       job.state.conditionCheckReceiptId = runReceipt.receiptId;
       checkingCount += 1;
@@ -589,11 +550,11 @@ function drainCronQueueInDatabase(
       delete job.state.conditionCheckReceiptId;
     }
     delete job.state.runningScheduleChangeId;
+    if (!withoutRunSlot) {
+      takeRunSlot(job, runReceipt.receiptId);
+    }
     updateCronRuntimeRow(db, input.storeKey, job, previousEnabled);
     result.launches.push({ job, runReceipt, migrationPending });
-    if (!withoutRunSlot) {
-      takeRunSlot();
-    }
   }
   return result;
 }
@@ -607,6 +568,7 @@ export function requestAndDrainCronRunsInWorker(
     | "requests"
     | "maxConcurrentRuns"
     | "memoryAllowsExtraRun"
+    | "providerBackoff"
     | "schedulingPaused"
     | "preparingAgentIds"
     | "busyConversationJobIds"
@@ -694,18 +656,25 @@ export function cancelCronRequestsInWorker(
   );
 }
 
-export function settleCronConditionCheckInWorker(
+export function reconcileCronRunSlotInWorker(
   database: OpenClawStateDatabase,
-  input: CronRunQueueOperations["cron.settleConditionCheck"]["input"],
-): CronRunQueueOperations["cron.settleConditionCheck"]["output"] {
+  input: CronRunQueueOperations["cron.reconcileRunSlot"]["input"],
+): CronRunQueueOperations["cron.reconcileRunSlot"]["output"] {
   return runOpenClawStateWriteTransaction(
     ({ db }) => {
       const job = loadJobs(db, input.storeKey).get(input.jobId);
       if (!job || job.state.runningReceiptId !== input.receiptId) {
         return { runSlot: false, stale: true };
       }
-      if (awaitsRunSlot(job, input.receiptId)) {
+      if (waitsForCronRunSlot(job, input.receiptId)) {
         return { runSlot: false };
+      }
+      if (input.parkProvider !== undefined && job.state.extraRunSlotReceiptId === input.receiptId) {
+        delete job.state.extraRunSlotReceiptId;
+        job.state.runSlotWaitReceiptId = input.receiptId;
+        job.state.runSlotWaitProvider = input.parkProvider;
+        updateCronRuntimeRow(db, input.storeKey, job);
+        return { job, runSlot: false };
       }
       if (!isCheckingCondition(job)) {
         // The queue handed it a run slot.
@@ -721,6 +690,6 @@ export function settleCronConditionCheckInWorker(
       return { job, runSlot: !waits };
     },
     { database, path: database.path, env: getSqliteWorkerStateContext().environment },
-    { operationLabel: "cron.settle-condition-check" },
+    { operationLabel: "cron.reconcile-run-slot" },
   );
 }

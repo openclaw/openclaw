@@ -5,6 +5,7 @@ import { FilePreviewModal } from "../../components/file-preview-modal.tsx";
 import { ModalDialog } from "../../components/modal-dialog.tsx";
 import { registerTemplatesEnglish } from "../../i18n/locales/en-templates.ts";
 import { formatUiError, UserFacingError } from "../../lib/format-error.ts";
+import type { GatewayConnectionScope } from "../../lib/gateway-connection-lifecycle.ts";
 import { canCallGatewayMethod } from "../../lib/gateway-methods.ts";
 import { loadPluginCatalog, loadPluginDiscoveryDetail } from "../../lib/plugins/index.ts";
 import { useApplication } from "../../lib/reactive/context.ts";
@@ -37,6 +38,10 @@ type TemplatesDialogProps = {
   modal?: boolean;
 };
 
+function pluginReleaseKey(ref: string, version: string) {
+  return `${ref}@${version}`;
+}
+
 class TemplatesCatalogModel {
   selected: TemplateCatalogEntry | null = null;
   detail: TemplateCatalogDetail | null = null;
@@ -46,8 +51,7 @@ class TemplatesCatalogModel {
     content: string | null;
     request: Promise<void>;
   } | null = null;
-  installedPluginPackages: ReadonlySet<string> = new Set();
-  pluginPresentation: Record<string, TemplatePluginPresentation> = {};
+  pluginPresentations: ReadonlyMap<string, TemplatePluginPresentation | null> = new Map();
   /** Why the last Add of a Template left nothing behind; shown with that Template. */
   addFailure: Pick<TemplateAddFailure, "entry" | "message"> | null = null;
   applying = false;
@@ -78,8 +82,10 @@ class TemplatesCatalogModel {
     this.cancelDetailRead();
     this.closePreview();
     this.detailRevision += 1;
-    this.installedPluginPackages = new Set();
-    this.pluginPresentation = {};
+    // A retained detail keeps settled names; retired reads cannot finish pending labels.
+    this.pluginPresentations = new Map(
+      [...this.pluginPresentations].filter(([, presentation]) => presentation !== null),
+    );
     this.applying = false;
     this.consentWarning = null;
     this.riskAcknowledged = false;
@@ -109,8 +115,7 @@ class TemplatesCatalogModel {
     }
     const revision = ++this.detailRevision;
     this.detail = null;
-    this.installedPluginPackages = new Set();
-    this.pluginPresentation = {};
+    this.pluginPresentations = new Map();
     const source = { packageName, ...(version ? { version } : {}) };
     this.presentDetailRequest(
       new Promise((resolve, reject) => {
@@ -121,9 +126,7 @@ class TemplatesCatalogModel {
             if (this.gateway.isCurrent(scope) && revision === this.detailRevision) {
               this.selected = detail;
               this.detail = detail;
-              if (detail.contents.integrations.some((item) => item.kind === "plugin")) {
-                void this.loadInstalledPlugins(revision);
-              }
+              void this.loadPluginPresentations(detail, scope, revision);
               resolve(detail);
             }
           },
@@ -137,59 +140,78 @@ class TemplatesCatalogModel {
     );
   }
 
-  private async loadInstalledPlugins(revision: number) {
-    const scope = this.gateway.capture();
-    if (!scope) {
+  private async loadPluginPresentations(
+    detail: TemplateCatalogDetail,
+    scope: GatewayConnectionScope,
+    revision: number,
+  ) {
+    const releases = new Map(
+      detail.contents.integrations.flatMap((item) =>
+        item.kind === "plugin" && item.source === "clawhub"
+          ? [[pluginReleaseKey(item.ref, item.version), item] as const]
+          : [],
+      ),
+    );
+    if (releases.size === 0) {
       return;
     }
-    try {
-      const result = await loadPluginCatalog(scope.client).catch(() => null);
-      if (!this.gateway.isCurrent(scope) || revision !== this.detailRevision) {
-        return;
-      }
-      this.installedPluginPackages = new Set(
-        (result?.plugins ?? []).flatMap((plugin) =>
-          plugin.installed && plugin.clawhubPackage && plugin.version
-            ? [`${plugin.clawhubPackage}@${plugin.version}`]
-            : [],
-        ),
-      );
-      await Promise.all(
-        (this.detail?.contents.integrations ?? []).map(async (item) => {
-          if (item.kind !== "plugin" || item.source !== "clawhub") {
-            return;
-          }
-          const local = result?.plugins.find(
-            (plugin) => plugin.installed && plugin.clawhubPackage === item.ref,
-          );
-          let presentation: TemplatePluginPresentation;
-          if (local) {
-            presentation = { name: local.name, ...(local.hasIcon ? { pluginId: local.id } : {}) };
-          } else {
-            const id =
-              "ch_" + btoa(item.ref).replaceAll("+", "-").replaceAll("/", "_").replaceAll("=", "");
-            const remote = await loadPluginDiscoveryDetail(
-              scope.client,
-              id,
-              undefined,
-              item.version,
-            ).catch(() => null);
-            if (!remote || remote.detail.packageName !== item.ref || remote.detail.remoteError) {
-              return;
-            }
+    this.pluginPresentations = new Map([...releases.keys()].map((key) => [key, null]));
+    const isCurrent = () =>
+      !this.disposed && this.gateway.isCurrent(scope) && revision === this.detailRevision;
+    const result = await loadPluginCatalog(scope.client).catch(() => null);
+    if (!isCurrent()) {
+      return;
+    }
+    const installed = new Map(
+      (result?.plugins ?? []).flatMap((plugin) =>
+        plugin.installed && plugin.clawhubPackage && plugin.version
+          ? [[pluginReleaseKey(plugin.clawhubPackage, plugin.version), plugin] as const]
+          : [],
+      ),
+    );
+    await Promise.all(
+      [...releases].map(async ([key, item]) => {
+        const local = installed.get(key);
+        let presentation: TemplatePluginPresentation | undefined;
+        if (local) {
+          presentation = {
+            name: local.name,
+            installed: true,
+            pluginId: local.hasIcon ? local.id : undefined,
+          };
+        } else {
+          const id =
+            "ch_" + btoa(item.ref).replaceAll("+", "-").replaceAll("/", "_").replaceAll("=", "");
+          const remote = await loadPluginDiscoveryDetail(
+            scope.client,
+            id,
+            undefined,
+            item.version,
+          ).catch(() => null);
+          const catalog = remote?.plugin?.catalog;
+          if (
+            remote?.detail?.packageName === item.ref &&
+            !remote.detail.remoteError &&
+            remote.detail.selectedRelease?.version === item.version &&
+            catalog?.name
+          ) {
             presentation = {
-              name: remote.plugin.catalog.name,
-              imageUrl: remote.plugin.catalog.imageUrl,
+              name: catalog.name,
+              imageUrl: catalog.imageUrl,
             };
           }
-          if (this.gateway.isCurrent(scope) && revision === this.detailRevision) {
-            this.pluginPresentation = { ...this.pluginPresentation, [item.name]: presentation };
+        }
+        if (isCurrent()) {
+          const next = new Map(this.pluginPresentations);
+          if (presentation) {
+            next.set(key, presentation);
+          } else {
+            next.delete(key);
           }
-        }),
-      );
-    } catch {
-      // Contents remain available when optional plugin presentation cannot load.
-    }
+          this.pluginPresentations = next;
+        }
+      }),
+    );
   }
 
   private resetSelection(selected: TemplateCatalogEntry | null = null) {
@@ -200,8 +222,7 @@ class TemplatesCatalogModel {
     this.selected = selected;
     this.detail = null;
     this.presentDetailRequest(undefined);
-    this.installedPluginPackages = new Set();
-    this.pluginPresentation = {};
+    this.pluginPresentations = new Map();
     this.addFailure = null;
     this.consentWarning = null;
     this.riskAcknowledged = false;
@@ -350,20 +371,39 @@ class TemplatesCatalogModel {
     }
   }
 
+  /** Reads one workspace file of the shown release for the page; a newer selection wins. */
+  async readInstruction(name: string): Promise<string> {
+    const source = this.source();
+    const scope = this.gateway.capture();
+    const revision = this.detailRevision;
+    if (!source || !scope) {
+      throw new UserFacingError(t("templatesCatalog.unavailable"));
+    }
+    const result = await readTemplatePreview(scope.client, source, { kind: "instruction", name });
+    if (!this.gateway.isCurrent(scope) || revision !== this.detailRevision) {
+      throw new UserFacingError(t("templatesCatalog.unavailable"));
+    }
+    return result.content ?? "";
+  }
+
   view(): Omit<TemplatesCatalogViewProps, "readDetail" | "detailRequest"> {
+    const presentations = this.pluginPresentations;
     return {
       basePath: this.context.basePath,
       selected: this.selected,
       detail: this.detail,
       preview: this.preview,
       onClosePreview: () => this.closePreview(),
-      installedPluginPackages: this.installedPluginPackages,
-      pluginPresentation: this.pluginPresentation,
+      readPluginPresentation: (item) =>
+        item.kind === "plugin" && item.source === "clawhub"
+          ? presentations.get(pluginReleaseKey(item.ref, item.version))
+          : undefined,
       addFailure: this.addFailure,
       applying: this.applying,
       canAdd: this.canAdd(),
       consentWarning: this.consentWarning,
       onOpenPreview: (kind, name) => void this.openPreview(kind, name),
+      readInstruction: (name) => this.readInstruction(name),
       onBack: () => this.back(),
       onRetryDetail: () => this.loadDetail(),
       onConfirm: () => {

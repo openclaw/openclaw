@@ -167,7 +167,9 @@ describe("ExecApprovalManager lifetime", () => {
       record: { decision: "allow-once", consumedBy: "cron.add:watcher" },
     });
     expect(manager.prepareConsumeAllowOnce(record.id, "cron.add:another-watcher")).toBeNull();
-    expect(() => prepared.assertCurrent()).toThrow("approval consumption is no longer available");
+    expect(() => prepared.assertCurrent()).toThrow(
+      "This approval is no longer available. Start a new turn to request approval again.",
+    );
   });
 
   it.for(["grace expires", "manager retires"] as const)(
@@ -187,7 +189,9 @@ describe("ExecApprovalManager lifetime", () => {
         manager.retire();
       }
 
-      expect(() => prepared.assertCurrent()).toThrow("approval consumption is no longer available");
+      expect(() => prepared.assertCurrent()).toThrow(
+        "This approval is no longer available. Start a new turn to request approval again.",
+      );
       expect(await getOperatorApprovalDetailed({ id: record.id, databaseOptions })).toMatchObject({
         outcome: "found",
         record: { decision: "allow-once", consumedAtMs: null },

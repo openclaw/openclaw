@@ -327,6 +327,38 @@
       }
     },
     {
+      "files": ["src/**/*.ts", "extensions/**/*.ts"],
+      "rules": {
+        "eslint/no-restricted-imports": [
+          "error",
+          {
+            "paths": [
+              {
+                "name": "@openclaw/ai/internal/runtime",
+                "importNames": ["claimConversationProviderState"],
+                "message": "Only the conversation writer claim (session-bootstrap.ts) may own provider state; other runs share affinity through sessionId and keep no state."
+              },
+              {
+                "name": "@openclaw/ai/internal/session-resources",
+                "importNames": ["claimConversationProviderState"],
+                "message": "Only the conversation writer claim (session-bootstrap.ts) may own provider state; other runs share affinity through sessionId and keep no state."
+              }
+            ]
+          }
+        ]
+      }
+    },
+    {
+      "files": [
+        "src/agents/embedded-agent-runner/run/session-bootstrap.ts",
+        "**/*.test.ts",
+        "**/*.test-support.ts"
+      ],
+      "rules": {
+        "eslint/no-restricted-imports": "off"
+      }
+    },
+    {
       "files": ["extensions/browser/src/browser/routes/*.ts"],
       "rules": {
         "oxc/no-async-endpoint-handlers": "off"
@@ -497,6 +529,14 @@
       "files": ["extensions/copilot/src/event-bridge.ts"],
       "rules": {
         "max-lines": ["error", { "max": 950, "skipBlankLines": true, "skipComments": true }]
+      }
+    },
+    {
+      "files": ["src/cli/gateway-cli/run-loop.ts"],
+      "rules": {
+        // #204868: inherited 1235 lines plus three for the stop-budget join and required import.
+        // The cohesive persistence/custody release block already moved to run-loop-cleanup.ts.
+        "max-lines": ["error", { "max": 1238, "skipBlankLines": true, "skipComments": true }]
       }
     },
     {

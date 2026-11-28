@@ -214,7 +214,6 @@ export type ChatComposerProps = ChatAttachmentControlsProps & {
   onComposerHoldToRecordChange?: (enabled: boolean) => void;
   onOpenTalkSettings?: () => void;
   onOpenDictationSettings?: () => void;
-  suggestionComposer?: boolean;
   onTypingChange?: (typing: boolean, preview?: string, cursor?: number) => void;
   composerControls?: Parameters<typeof ChatPaneModelControl>[0] & {
     component: typeof ChatPaneModelControl;
@@ -245,6 +244,7 @@ export type ChatComposerProps = ChatAttachmentControlsProps & {
   onUseSystemDefaultMicrophone?: () => Promise<void>;
   onAbort?: () => void;
   onQueueRemove: (id: string) => void;
+  onQueueCopy?: (id: string) => void;
   onQueueRetry?: (id: string) => void;
   onQueueSteer?: (id: string) => void;
   onQueueMove?: (id: string, targetId: string) => void;
@@ -302,6 +302,8 @@ export type ChatComposerState = {
   textareaRef: ((element?: Element) => void) | null;
   // The mounted composer's Escape stop policy, for Escape pressed outside the composer.
   stopRunFromEscape: (() => boolean) | null;
+  // The mounted composer's send, as Enter; false when it cannot send now.
+  sendDraft: (() => boolean) | null;
   dictation: ComposerDictationOwner | null;
   composerDraftScope: { key: string } | null;
   dictationSelection: { start: number; end: number; value: string } | null;

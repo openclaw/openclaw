@@ -7,7 +7,7 @@ import { splitTrailingAuthProfile } from "../agents/model-ref-profile.js";
 import { resolveSessionModelRef } from "../agents/session-model-ref.js";
 import { resolveSessionRuntimeOverrideForProvider } from "../agents/session-runtime-compat.js";
 import { createCrustaceanSlug } from "../agents/session-slug.js";
-import { resolveUtilityModelRefForAgent } from "../agents/utility-model.js";
+import { resolveUtilityModelSelectionForAgent } from "../agents/utility-model.js";
 import { withWorktreeSourceWait } from "../agents/worktrees/allocation.js";
 import type { WorktreeSourceStage, WorktreeWaitBudget } from "../agents/worktrees/types.js";
 import { patchSessionEntryCore } from "../config/sessions/session-accessor.js";
@@ -125,9 +125,12 @@ type SessionTitleParams = {
   onTitleStateChanged?: () => void;
 };
 
-function isAutoTitleSessionKey(sessionKey: string): boolean {
+function autoTitleSessionKind(sessionKey: string): "dashboard" | "native" | undefined {
   const rest = parseAgentSessionKey(sessionKey)?.rest ?? "";
-  return rest.startsWith("dashboard:") || rest.startsWith("ios-") || rest.startsWith("node-");
+  if (rest.startsWith("dashboard:")) {
+    return "dashboard";
+  }
+  return rest.startsWith("ios-") || rest.startsWith("node-") ? "native" : undefined;
 }
 
 /** True when this interactive chat key should receive an automatic topic title. */
@@ -136,7 +139,7 @@ export function isDashboardSessionTitleCandidate(params: {
   userMessage: string;
 }): boolean {
   const sourceText = params.userMessage.trim();
-  return Boolean(sourceText && isAutoTitleSessionKey(params.sessionKey));
+  return Boolean(sourceText && autoTitleSessionKind(params.sessionKey));
 }
 
 function resolveDashboardTitleAuthProfile(params: {
@@ -157,14 +160,14 @@ function resolveDashboardTitleAuthProfile(params: {
     return undefined;
   }
   const configuredModel = resolveSessionModelRef(params.cfg, undefined, params.agentId);
-  return configuredModel.provider === params.regularProvider ? configuredProfile : undefined;
+  return configuredModel?.provider === params.regularProvider ? configuredProfile : undefined;
 }
 
 // Introductions models put before the requested title, e.g. "Session title:",
 // "Concise title for this session:" or "Sitzungstitel:"; topics such as
 // "Fix button label:" stay part of the title.
 const TITLE_LEAD_IN =
-  /^(?:(?:concise|short|suggested|proposed|final|correct|session|chat|conversation|kurzer|kürzester|passender|richtiger|vorgeschlagener)\s+)?(?:(?:sitzungs|session-?|chat-?)?(?:title|titel)|label)(?:\s+(?:for|für)\s[^:]*)?\s*:\s*/iu;
+  /^(?:(?:concise|short|suggested|proposed|final|correct|session|chat|conversation|kurzer|kürzester|passender|richtiger|vorgeschlagener)\s+)?(?:(?:sitzungs|session-?|chat-?)?(?:title|titel)|label|título)(?:\s+(?:for|für)\s[^:]*)?\s*:\s*/iu;
 
 function stripTitleLeadIn(line: string): { text: string; introduced: boolean } {
   const collapsed = line.replace(/\s+/g, " ").trim();
@@ -287,8 +290,6 @@ async function generateDashboardSessionTitle(params: {
   entry?: DashboardSessionTitleModelEntry;
   sourceText: string;
   utilityOnly?: boolean;
-  /** The caller keeps its own name when no model answers, instead of a crustacean slug. */
-  callerFallback?: boolean;
   abortSignal?: AbortSignal;
   assertCurrent?: () => void;
   operatorAuthority?: AdmittedRunOperatorAuthority;
@@ -297,6 +298,11 @@ async function generateDashboardSessionTitle(params: {
 }): Promise<string | null> {
   const sourceText = params.sourceText;
   const regularModel = resolveSessionModelRef(params.cfg, params.entry, params.agentId);
+  if (!regularModel) {
+    // No configured model can write a title; report it like a failed model.
+    params.onFallback?.();
+    return null;
+  }
   const agentHarnessRuntimeOverride = resolveSessionRuntimeOverrideForProvider({
     provider: regularModel.provider,
     entry: params.entry,
@@ -311,12 +317,16 @@ async function generateDashboardSessionTitle(params: {
   const regularModelRef = `${regularModel.provider}/${regularModel.model}${
     preferredProfile ? `@${preferredProfile}` : ""
   }`;
-  const utilityModelRef = resolveUtilityModelRefForAgent({
+  // A role that refuses every utility model skips the utility pass without an attempt;
+  // the regular pass below is the session's own permitted model.
+  const utility = resolveUtilityModelSelectionForAgent({
     cfg: params.cfg,
     agentId: params.agentId,
     primaryProvider: regularModel.provider,
     primaryModelRef: regularModelRef,
+    modelPolicy: params.operatorAuthority?.modelPolicy,
   });
+  const utilityModelRef = "modelRef" in utility ? utility.modelRef : undefined;
   const generateLabel = async (): Promise<string | null> => {
     try {
       const { generateConversationLabelWithFallback } =
@@ -357,14 +367,9 @@ async function generateDashboardSessionTitle(params: {
   if (title) {
     return title;
   }
-  // Speculative utility-only naming must not persist a provisional title that
-  // would skip the healthy primary-model pass after send.
-  if (params.utilityOnly || params.callerFallback) {
-    return null;
-  }
-  // Saved titles also name Git branches; never persist raw prompt text as a fallback.
+  // The caller decides how to present an exhausted attempt. Never turn a raw prompt into a branch name.
   params.onFallback?.();
-  return createCrustaceanSlug();
+  return null;
 }
 
 /** Prepares a creation draft's title without creating or updating a session. */
@@ -408,9 +413,7 @@ export async function generateAutomationName(params: {
   operatorAuthority: AdmittedRunOperatorAuthority;
 }): Promise<string | null> {
   const sourceText = resolveSessionTitleSource(params.message);
-  return sourceText
-    ? await generateDashboardSessionTitle({ ...params, sourceText, callerFallback: true })
-    : null;
+  return sourceText ? await generateDashboardSessionTitle({ ...params, sourceText }) : null;
 }
 
 /** Worktree callers bound their own wait without cancelling another naming owner's request. */
@@ -481,18 +484,6 @@ export async function maybeGenerateSessionTitle(params: SessionTitleParams): Pro
     memory?.binding?.actor.assertReadable();
     memory?.authority.assertCurrent();
   };
-  const entry = await readSessionEntryReadOnlyInWorker(scope, assertMemoryCurrent);
-  if (entry?.sessionId !== params.sessionId || hasExplicitSessionName(entry)) {
-    return false;
-  }
-  const skillParams = {
-    cfg: params.cfg,
-    agentId: params.agentId,
-    entry,
-    sessionKey,
-    assertCurrent: assertMemoryCurrent,
-  };
-
   const requestTarget = {
     ...scope,
     sessionId: params.sessionId,
@@ -507,9 +498,12 @@ export async function maybeGenerateSessionTitle(params: SessionTitleParams): Pro
       : false;
   }
 
-  const finish = async (generation: Promise<string | null>) => {
-    const displayName = await generation;
-    if (!displayName) {
+  const finish = async (generation: Promise<string | null>, fallbackReady: boolean) => {
+    // Shipped native clients read saved names, not the dashboard's derived title.
+    const displayName =
+      (await generation) ??
+      (autoTitleSessionKind(sessionKey) === "native" ? createCrustaceanSlug() : null);
+    if (!displayName && fallbackReady) {
       return false;
     }
     const persist = async (assertSourceCurrent?: SessionSourceAssertion) => {
@@ -528,10 +522,16 @@ export async function maybeGenerateSessionTitle(params: SessionTitleParams): Pro
           if (current.sessionId !== params.sessionId || hasExplicitSessionName(current)) {
             return null;
           }
+          if (!displayName) {
+            // Record the outcome, never the prompt or a synthetic branch name.
+            return current.titleFallbackReady ? null : { titleFallbackReady: true };
+          }
           persisted = true;
           return { displayName };
         },
         {
+          // Naming is metadata, not activity that should reorder the sidebar.
+          preserveActivity: true,
           requireWriteSuccess: true,
           ...sessionEntryCommitGuardOptions(assertCommitAllowed),
         },
@@ -543,10 +543,23 @@ export async function maybeGenerateSessionTitle(params: SessionTitleParams): Pro
       : await persist();
   };
 
-  const run = async () => {
+  const run = async (markStarted: () => void) => {
+    // Own this session's eligibility read too. Otherwise a read of the unnamed
+    // row could return after the winning title is committed and its request evicted.
+    const entry = await readSessionEntryReadOnlyInWorker(scope, assertMemoryCurrent);
+    if (entry?.sessionId !== params.sessionId || hasExplicitSessionName(entry)) {
+      return false;
+    }
+    markStarted();
     // Select the first usable task, not an earlier control-only turn. Carry the
     // same prepared command metadata through history selection and generation.
-    const skillCommands = await prepareTitleSkillCommands(skillParams);
+    const skillCommands = await prepareTitleSkillCommands({
+      cfg: params.cfg,
+      agentId: params.agentId,
+      entry,
+      sessionKey,
+      assertCurrent: assertMemoryCurrent,
+    });
     const transcriptScope = {
       agentId: params.agentId,
       sessionEntry: entry,
@@ -586,7 +599,7 @@ export async function maybeGenerateSessionTitle(params: SessionTitleParams): Pro
     const withSource = params.withSource;
     if (!withSource) {
       params.commitGuard?.();
-      return await finish(generate());
+      return await finish(generate(), entry.titleFallbackReady === true);
     }
     return await runWithAsyncWorkResources(
       async () => {
@@ -601,7 +614,7 @@ export async function maybeGenerateSessionTitle(params: SessionTitleParams): Pro
           void completion.catch(() => undefined);
           return { completion };
         });
-        return await finish(pending.completion);
+        return await finish(pending.completion, entry.titleFallbackReady === true);
       },
       { cancelOnError: true },
     );

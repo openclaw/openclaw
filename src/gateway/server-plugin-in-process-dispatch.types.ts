@@ -1,6 +1,7 @@
 import type { AdmittedRunOperatorAuthority } from "../agents/admitted-run-context.js";
 import type { ReplyExpectation } from "../agents/reply-completion.js";
 import type { SubagentCompletionToolHandoffRegistration } from "../agents/subagents/announce/subagent-announce-handoff.js";
+import type { PluginRuntimeGatewayRequestScope } from "../plugins/runtime/gateway-request-scope.types.js";
 import type { PluginSubagentRequesterContext } from "../plugins/runtime/subagent-requester-context.js";
 import type { RuntimePluginToolGrant } from "../plugins/runtime/tool-grant.js";
 import type { SessionControllerInput } from "../sessions/session-controller.contracts.js";
@@ -9,6 +10,7 @@ import type {
   AgentTurnStartOwner,
   RequesterSettleWakeReplay,
 } from "./agent-turn/internal-facade.types.js";
+import type { PreparedSessionRun } from "./in-process-session-run.js";
 import type { GatewayOperatorRoleActor } from "./server-methods/shared-types.js";
 import type {
   GatewayAgentRunTaskOwner,
@@ -21,6 +23,8 @@ import type {
 import type { TrustedSessionCreation } from "./session-creation-provenance.js";
 
 export type PrepareInProcessAgentExecutionOptions = {
+  /** Captured by the host from an authorized existing fork source; never a wire field. */
+  sessionRun?: PreparedSessionRun;
   agentId: string;
   pluginRuntimeOwnerId: string;
   resolveGatewayContext?: GatewayContextResolver;
@@ -82,6 +86,7 @@ export type ResolvedInProcessGatewayDispatch = {
   delegatedToolPolicyHandoffId?: string;
   isWebchatConnect: NonNullable<GatewayRequestOptions["isWebchatConnect"]>;
   operatorSourceClient: NonNullable<GatewayRequestOptions["client"]>;
+  parentHttpRequestAuthority?: PluginRuntimeGatewayRequestScope["parentHttpRequestAuthority"];
   hasCurrentClientAuthority?: GatewayRequestOptions["hasCurrentClientAuthority"];
 };
 
@@ -96,4 +101,9 @@ export type OperatorToolGatewayAuthority = {
   assertCurrent?: () => void;
   /** Pure input policy; applies at effects, never settled results or cleanup. */
   assertInputCommitAllowed?: () => void;
+};
+
+/** Private continuation constraints captured by the accepting host owner. */
+export type OperatorContinuationOptions = {
+  retainRequester?: true;
 };

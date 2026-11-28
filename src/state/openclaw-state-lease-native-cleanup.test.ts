@@ -44,6 +44,7 @@ vi.mock("./openclaw-state-lease-worker-storage.js", () => ({
           key: "file:synthetic-native-cleanup",
           canonicalPath: "/synthetic-state/lease.sqlite",
         },
+        isCurrent: () => true,
         assertCurrent() {},
       },
     };

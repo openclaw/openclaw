@@ -9,6 +9,7 @@ import {
   controlUiSessionUrl,
   createChatFlowE2eSuite,
   installMockGateway,
+  openAiAuthor,
 } from "./chat-flow.test-support.ts";
 import { createControlUiE2eContextOptions } from "./control-ui-e2e-suite.test-support.ts";
 
@@ -45,6 +46,7 @@ suite.define(() => {
         userPrompt("Show preview.", "widget-prompt", runId, startedAt),
         {
           role: "assistant",
+          ...openAiAuthor,
           stopReason: "toolUse",
           content: [
             text("Preparing the interactive preview."),
@@ -82,7 +84,7 @@ suite.define(() => {
         sessionKey,
         historyMessages: messages,
         inFlightRun: { runId, startedAt, text: "" },
-        sessionInfo: { hasActiveRun: true, activeRunIds: [runId] },
+        sessionInfo: { key: sessionKey, hasActiveRun: true, activeRunIds: [runId] },
         methodResponses: { "canvas.document.view": canvasView(html) },
       });
       await page.goto(controlUiSessionUrl(suite.server.baseUrl, sessionKey));
@@ -102,6 +104,7 @@ suite.define(() => {
       const details = "Preview detail.\n\n".repeat(12);
       const finalMessage = {
         role: "assistant",
+        ...openAiAuthor,
         idempotencyKey: runId,
         stopReason: "stop",
         content: [

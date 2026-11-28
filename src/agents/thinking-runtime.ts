@@ -50,7 +50,7 @@ export function concretizeAgentRuntime(runtime: string): string {
   return runtime === "auto" ? "openclaw" : runtime;
 }
 
-/** Resolves an explicit session override before configured model/provider policy. */
+/** Resolves session and configured runtime policy, retaining placement for implicit selection. */
 export function resolveEffectiveAgentRuntime(
   params: {
     cfg: OpenClawConfig;
@@ -58,6 +58,10 @@ export function resolveEffectiveAgentRuntime(
     modelId: string;
     modelApi?: string | null;
     modelBaseUrl?: unknown;
+    /** Existing placement owns runtime selection only when policy is implicit. */
+    placementRuntime?: string;
+    /** Auto selection already resolved for the same provider and model without route hints. */
+    preparedAutoRuntime?: string;
     sessionEntry?: Pick<
       SessionEntry,
       "agentHarnessId" | "agentRuntimeOverride" | "modelSelectionLocked"
@@ -71,7 +75,7 @@ export function resolveEffectiveAgentRuntime(
     entry: params.sessionEntry,
     cfg: params.cfg,
   });
-  const runtime = resolveAvailableAgentHarnessPolicy({
+  const policy = resolveAvailableAgentHarnessPolicy({
     ...params,
     mode: params.mode ?? "projection",
     config: params.cfg,
@@ -81,19 +85,26 @@ export function resolveEffectiveAgentRuntime(
     },
     agentHarnessId: params.sessionEntry?.modelSelectionLocked ? sessionRuntime : undefined,
     agentHarnessRuntimeOverride: sessionRuntime,
-  }).runtime;
+  });
+  const runtime =
+    policy.runtimeSource === "implicit"
+      ? (params.placementRuntime ?? policy.runtime)
+      : policy.runtime;
   if (runtime === "auto") {
     // Reuse the loaded harness registry without triggering plugin discovery.
     // This keeps thinking policy aligned with the harness that would own the turn.
     return (
+      params.preparedAutoRuntime ??
       resolveAutoAgentHarnessId({
         provider: params.provider,
         modelId: params.modelId,
         config: params.cfg,
+        mode: params.mode,
         ...(params.agentScope
           ? { agentScope: params.agentScope, sessionKey: params.sessionKey }
           : {}),
-      }) ?? "openclaw"
+      }) ??
+      "openclaw"
     );
   }
   return concretizeAgentRuntime(runtime);

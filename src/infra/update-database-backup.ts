@@ -32,7 +32,7 @@ import { createPrivateSqliteDirectory } from "./sqlite-private-directory.js";
 import { retainSnapshotWork } from "./sqlite-readonly-location-cleanup.js";
 import type { PreparedSqliteSnapshotSource } from "./sqlite-readonly-location.types.js";
 import { measureUpdateStateFiles } from "./update-candidate-io.js";
-import { UpdateStateDatabaseOwnerSchema } from "./update-candidate-paths.js";
+import { UpdateStateDatabaseOwnerSchema, recoveryOwner } from "./update-candidate-paths.js";
 import type { UpdateStateInspectionProgress } from "./update-candidate-state.diagnostics.js";
 import {
   parseUpdateStateInspectionWorker,
@@ -197,7 +197,7 @@ async function canonicalDatabaseInventory(
         canonical = resolvePathViaExistingAncestorSync(spelling);
         missing.add(canonical);
       }
-      for (const owner of database.owners ?? []) {
+      for (const owner of database.owners?.flatMap(recoveryOwner) ?? []) {
         const entry = { path: canonical, ...owner };
         owners.set(JSON.stringify(entry), entry);
       }
@@ -601,7 +601,9 @@ export async function createUpdateDatabaseBackup({
     ? await (await import("./backup-database-discovery.js")).preparePostgresBackupDiscovery(input)
     : {
         // Read legacy SQLite registrations from the private inspection copy, before admission.
-        paths: await discoverBackupDatabasePaths({ ...input, agentRegistry: [] }),
+        paths: await withArtifactPreservingStateReads(() =>
+          discoverBackupDatabasePaths({ ...input, agentRegistry: [] }),
+        ),
         pluginOwners: undefined,
       };
   const additionalPaths = [...(input.additionalPaths ?? []), ...prepared.paths].map((file) =>

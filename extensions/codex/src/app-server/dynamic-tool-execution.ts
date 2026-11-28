@@ -7,6 +7,7 @@ import {
 } from "openclaw/plugin-sdk/agent-harness-runtime";
 import {
   copyInternalToolResultState,
+  readAutomationToolCreation,
   runWithAsyncWorkResources,
 } from "openclaw/plugin-sdk/agent-harness-tool-runtime";
 import { createDeferred } from "openclaw/plugin-sdk/extension-shared";
@@ -380,24 +381,28 @@ export function toCodexDynamicToolProtocolResponse(
 export function toCodexDynamicToolProgressResponse(
   response: CodexDynamicToolRuntimeResponse,
   protocolResponse: CodexDynamicToolCallResponse,
-): CodexDynamicToolCallResponse & {
-  details?: { async: true; status: "started" } | { mcpAppPreview: unknown };
-} {
+  toolName: string,
+) {
   const transcriptDetails = isJsonObject(response.transcriptDetails)
     ? response.transcriptDetails
     : undefined;
   const mcpAppPreview = isJsonObject(transcriptDetails?.mcpAppPreview)
     ? transcriptDetails.mcpAppPreview
     : undefined;
-  if (response.asyncStarted !== true && !mcpAppPreview) {
+  const automationCreation =
+    protocolResponse.success && !response.asyncStarted
+      ? readAutomationToolCreation(toolName, transcriptDetails)
+      : undefined;
+  if (response.asyncStarted !== true && !mcpAppPreview && !automationCreation) {
     return protocolResponse;
   }
   return {
     ...protocolResponse,
-    details:
-      response.asyncStarted === true
-        ? { ...(mcpAppPreview ? { mcpAppPreview } : {}), async: true, status: "started" }
-        : { mcpAppPreview },
+    details: {
+      ...(mcpAppPreview ? { mcpAppPreview } : {}),
+      ...(response.asyncStarted ? { async: true, status: "started" } : {}),
+      ...(automationCreation ? { automationCreation } : {}),
+    },
   };
 }
 
@@ -418,17 +423,15 @@ export function resolveDynamicToolCallTimeoutMs(params: {
         );
   }
   const args = isJsonObject(params.call.arguments) ? params.call.arguments : undefined;
-  if (params.call.tool === "node_exec") {
-    const executionTimeoutMs = params.toolBridge?.availableTools
-      .find((tool) => tool.name === params.call.tool)
-      ?.getExecutionTimeoutMs?.(params.call.arguments);
-    if (executionTimeoutMs !== undefined) {
-      // Foreground node execution owns its command and transport budgets.
-      return addSafeTimeoutDelayGraceMs(
-        executionTimeoutMs,
-        CODEX_DYNAMIC_TOOL_TIMEOUT_SECONDS_GRACE_MS,
-      );
-    }
+  const executionTimeoutMs = params.toolBridge?.availableTools
+    .find((tool) => tool.name === params.call.tool)
+    ?.getExecutionTimeoutMs?.(params.call.arguments);
+  if (executionTimeoutMs !== undefined) {
+    // The tool owns its operation budget, including any operator approval wait.
+    return addSafeTimeoutDelayGraceMs(
+      executionTimeoutMs,
+      CODEX_DYNAMIC_TOOL_TIMEOUT_SECONDS_GRACE_MS,
+    );
   }
   if (
     params.call.tool === "openclaw" ||

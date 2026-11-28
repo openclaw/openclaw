@@ -72,19 +72,20 @@ export function assertOpenFileIdentitySync(
 export function hashPublishedFileSync(
   filePath: string,
   expectedIdentity: FileIdentityStat,
+  hashDescriptor: (fileDescriptor: number) => SqliteFileContent = hashFileDescriptorSync,
 ): SqliteFileContent {
   const fileDescriptor = fsSync.openSync(filePath, "r");
   try {
     assertOpenFileIdentitySync(fileDescriptor, filePath, expectedIdentity);
     const initialStat = fsSync.fstatSync(fileDescriptor, { bigint: true });
-    const content = hashFileDescriptorSync(fileDescriptor);
+    const content = hashDescriptor(fileDescriptor);
     const finalStat = fsSync.fstatSync(fileDescriptor, { bigint: true });
     if (!sameFileMutationFingerprint(initialStat, finalStat)) {
       if (!sameFileStatFingerprint(initialStat, finalStat)) {
         throw new Error(`SQLite snapshot file changed while reading: ${filePath}`);
       }
       // FUSE may settle timestamps after publication; only matching bytes can admit that drift.
-      assertExpectedContent(hashFileDescriptorSync(fileDescriptor), content, filePath);
+      assertExpectedContent(hashDescriptor(fileDescriptor), content, filePath);
     }
     assertOpenFileIdentitySync(fileDescriptor, filePath, expectedIdentity);
     return content;

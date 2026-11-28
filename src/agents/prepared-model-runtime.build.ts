@@ -106,6 +106,7 @@ export type PreparedModelRuntimeBuildCandidate = Readonly<{
   input: PreparedModelRuntimeInput;
   catalogOwner: PreparedModelRuntimeSnapshot["catalogOwner"];
   inventoryOwner?: Parameters<typeof createFullModelCatalogAccess>[0]["inventoryOwner"];
+  seedInventory?: Parameters<typeof createFullModelCatalogAccess>[0]["seedInventory"];
   pluginGeneration?: PreparedModelRuntimePluginGeneration;
   prepareInboundPluginRegistry?: boolean;
   isGenerationCurrent?: () => boolean;
@@ -175,6 +176,7 @@ async function buildSnapshotBatch(
         isCurrent: candidate.isGenerationCurrent ?? (() => false),
         retirementSignal: candidate.retirementSignal,
         inventoryOwner: candidate.inventoryOwner ?? {},
+        seedInventory: candidate.seedInventory,
       },
       () => assertBuildCurrent(candidate.input),
     );
@@ -285,23 +287,13 @@ async function buildSnapshotBatch(
           // Otherwise file creation can retire the credentials this build just captured.
           // Discovery stays asynchronous; read-only admission must not borrow write permission.
           if (!readAgentDatabaseAdmissionRefusal(agentId, { env })) {
-            try {
-              await prepareOpenClawAgentDatabaseExecution(
-                { agentId, path: resolveAuthProfileDatabasePath(input.agentDir), env },
-                () => assertBuildCurrent(input),
-                candidate.retirementSignal,
-              );
-            } catch (error) {
-              // Database admission can return the retired generation's raw abort reason.
-              // Recover the owning publication's supersession before startup joins it.
-              if (
-                candidate.retirementSignal.aborted &&
-                error === candidate.retirementSignal.reason
-              ) {
-                assertBuildCurrent(input);
-              }
-              throw error;
-            }
+            // Admission belongs to this build, not the individual catalog generation.
+            // Auth changes can retire that generation while this publication drains them.
+            await prepareOpenClawAgentDatabaseExecution(
+              { agentId, path: resolveAuthProfileDatabasePath(input.agentDir), env },
+              () => assertBuildCurrent(input),
+              signal,
+            );
             assertBuildCurrent(input);
           }
         }

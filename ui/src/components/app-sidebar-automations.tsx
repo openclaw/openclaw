@@ -53,7 +53,7 @@ export function SidebarAutomations(props: {
   const [revision, setRevision] = createSignal(0);
   onSettled(() =>
     app.gateway.subscribeEvents((event) => {
-      if (event.event === "cron" || isCronInventoryInvalidation(event, app.gateway.snapshot)) {
+      if (event.event === "cron" || isCronInventoryInvalidation(event)) {
         setRevision((value) => value + 1);
       }
     }),
@@ -149,10 +149,19 @@ export function SidebarAutomations(props: {
           : direction * (leftMs - rightMs);
       });
   });
+  const failing = (job: CronCompactJob) => job.autoDisabled || job.lastRunStatus === "error";
   const activeJobs = () =>
     automationsFilter().status === "paused" ? [] : shown().filter((job) => job.enabled);
   const pausedJobs = () =>
     automationsFilter().status === "active" ? [] : shown().filter((job) => !job.enabled);
+  const groupFailureIndicator = (jobs: CronCompactJob[]) =>
+    jobs.some(failing) ? (
+      <span
+        class="sidebar-session-group-attention sidebar-session-group-attention--danger"
+        role="img"
+        aria-label={t("common.failed")}
+      />
+    ) : undefined;
   const [activeOpen, setActiveOpen] = createSignal(true);
   const [pausedOpen, setPausedOpen] = createSignal(false);
   // What the page has open, as the page records it for returning to Automations.
@@ -179,7 +188,7 @@ export function SidebarAutomations(props: {
           <span class="sidebar-automations__name">{row.job.displayName ?? row.job.name}</span>
           <span class="sidebar-automations__byline">{automationByline(row.job)}</span>
         </span>
-        <Show when={row.job.autoDisabled || row.job.lastRunStatus === "error"}>
+        <Show when={failing(row.job)}>
           <span class="sidebar-automations__failed" role="img" aria-label={t("common.failed")} />
         </Show>
       </a>
@@ -235,20 +244,26 @@ export function SidebarAutomations(props: {
       <Show when={activeJobs().length > 0}>
         <SidebarListGroup
           label={t("cron.tabs.active")}
+          indicator={groupFailureIndicator(activeJobs())}
           open={activeOpen()}
           onToggle={() => setActiveOpen(!activeOpen())}
         >
-          <For each={activeJobs()}>{(job) => <Row job={job} />}</For>
+          <For each={activeJobs()} keyed={(job) => job.id}>
+            {(job) => <Row job={job()} />}
+          </For>
         </SidebarListGroup>
       </Show>
       <Show when={pausedJobs().length > 0}>
         <SidebarListGroup
           label={t("cron.tabs.paused")}
+          indicator={groupFailureIndicator(pausedJobs())}
           // Paused is the one group shown when the filter asks for it.
           open={pausedOpen() || automationsFilter().status === "paused"}
           onToggle={() => setPausedOpen(!pausedOpen())}
         >
-          <For each={pausedJobs()}>{(job) => <Row job={job} />}</For>
+          <For each={pausedJobs()} keyed={(job) => job.id}>
+            {(job) => <Row job={job()} />}
+          </For>
         </SidebarListGroup>
       </Show>
     </nav>

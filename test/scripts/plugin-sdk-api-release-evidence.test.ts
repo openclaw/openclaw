@@ -321,6 +321,38 @@ describe("Plugin SDK API release evidence", () => {
     );
   });
 
+  it("publishes a moved predecessor only when the qualified predecessor is acknowledged", () => {
+    const receipt = evidence([{ change: "added", exportName: "newHelper" }]);
+    const reviewed = receipt.digest.slice(0, 8);
+    const validate = (acknowledgement: string, currentSelectorRef = "v2026.8.1-1") =>
+      validatePluginSdkApiReleaseEvidence({
+        acknowledgement,
+        currentSelectorRef,
+        currentSelectorSha: currentSelectorRef === "v2026.8.1" ? baseSha : "c".repeat(40),
+        evidence: receipt,
+        expectedHeadSha: headSha,
+        expectedWorkflowSha: workflowSha,
+        targetRef: "v2026.8.2",
+      });
+
+    expect(() => validate(reviewed)).toThrow(
+      "predecessor no longer matches the npm dist-tag (v2026.8.1 qualified, v2026.8.1-1 current); acknowledge <digest>@v2026.8.1",
+    );
+    expect(validate(`${reviewed}@v2026.8.1`)).toEqual({
+      acknowledgement: reviewed,
+      digest: receipt.digest,
+      hasChanges: true,
+      predecessorDrift: { qualifiedRef: "v2026.8.1", currentRef: "v2026.8.1-1" },
+      status: "checked",
+    });
+    expect(() => validate("@v2026.8.1")).toThrow(`require acknowledgement digest ${reviewed}`);
+    expect(() => validate(`${reviewed}@v2026.8.1-1`)).toThrow(
+      "names v2026.8.1-1, but the evidence compares against v2026.8.1",
+    );
+    expect(() => validate(`${reviewed}@`)).toThrow("must be <digest> or <digest>@<tag>");
+    expect(validate(`${reviewed}@v2026.8.1`, "v2026.8.1")).not.toHaveProperty("predecessorDrift");
+  });
+
   it("requires the selected channel's predecessor and acknowledgement", () => {
     const beta = evidence([{ change: "added", exportName: "betaOnly" }]);
     const latest = createPluginSdkApiReleaseEvidence({

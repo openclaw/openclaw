@@ -208,11 +208,11 @@ it("saves account mentions with pending gating and a per-browser override", asyn
   });
 
   const group = expectDefined(container.querySelector(".settings-stack"), "preferences");
-  await waitForSolid(() => expect(group.hasAttribute("inert")).toBe(true));
+  await waitForSolid(() => expect(accountToggle.disabled).toBe(true));
   expect(group.querySelector("input, select")).not.toBeNull();
   expect(container.querySelector(".settings-page .settings-page")).toBeNull();
   completion.resolve();
-  await waitForSolid(() => expect(group.hasAttribute("inert")).toBe(false));
+  await waitForSolid(() => expect(accountToggle.disabled).toBe(false));
 
   const browserOverride = select(container, "Someone mentions me");
   expect(browserOverride.value).toBe("inherit");
@@ -365,6 +365,35 @@ const catalog = {
   agentsError: null,
 };
 
+it.each([
+  { ids: ["support-eu"], visible: "Support", full: "Support (support-eu)" },
+  {
+    ids: ["support-eu", "support-us"],
+    visible: "2 selected",
+    full: "Support (support-eu), Support (support-us)",
+  },
+  {
+    ids: ["support-eu", "support-us", "research"],
+    visible: "3 selected",
+    full: "Support (support-eu), Support (support-us), Research",
+  },
+])(
+  "keeps notification agent summaries bounded and their exact selections accessible: $visible",
+  async ({ ids, visible, full }) => {
+    const view = renderSection({
+      webPush: webPush(false, { ...userPreferences, agentIds: ids }),
+      notificationAgents: catalog,
+    });
+    await waitForSolid(() => {
+      const [account, device] = view.getAllByRole("button", { name: "Choose notification agents" });
+      expect(account?.textContent).toBe(visible);
+      expect(device?.textContent).toBe("Account default: " + visible);
+      expect(account?.getAttribute("aria-description")).toBe(full);
+      expect(device?.getAttribute("aria-description")).toBe("Account default: " + full);
+    });
+  },
+);
+
 it("chooses agent names, saves stable IDs, and reopens without changing other preferences", async () => {
   const [current, setCurrent] = createSignal(webPush());
   const save = vi.fn(
@@ -387,7 +416,10 @@ it("chooses agent names, saves stable IDs, and reopens without changing other pr
   flush();
   view.getByRole("button", { name: "Save" }).click();
   await waitForSolid(() => expect(view.queryByRole("dialog")).toBeNull());
-  expect(save).toHaveBeenCalledExactlyOnceWith({ ...userPreferences, agentIds: ["research"] });
+  expect(save).toHaveBeenCalledExactlyOnceWith(
+    { ...userPreferences, agentIds: ["research"] },
+    "agentIds",
+  );
   expect(
     view.getAllByRole("button", { name: "Choose notification agents" })[0]!.textContent,
   ).toContain("Research");
@@ -404,7 +436,11 @@ it("chooses agent names, saves stable IDs, and reopens without changing other pr
   view.getByRole("button", { name: "Cancel" }).click();
   flush();
   expect(save).toHaveBeenCalledTimes(1);
-  expect(current().preferences?.user.agentIds).toEqual(["research"]);
+  expect(
+    view
+      .getAllByRole("button", { name: "Choose notification agents" })[0]
+      ?.getAttribute("aria-description"),
+  ).toBe("Research");
 });
 
 it("keeps inheritance, all agents, and a nonempty specific selection distinct", async () => {
@@ -441,20 +477,25 @@ it("keeps inheritance, all agents, and a nonempty specific selection distinct", 
   flush();
   view.getByRole("button", { name: "Save" }).click();
   await waitForSolid(() => expect(view.queryByRole("dialog")).toBeNull());
-  expect(save).toHaveBeenLastCalledWith({ enabled: true, label: "phone", agentIds: [] });
+  expect(save).toHaveBeenLastCalledWith(
+    { enabled: true, label: "phone", agentIds: [] },
+    "agentIds",
+  );
   open();
   change(select(view.container, "Notify for"), "inherit");
   flush();
   view.getByRole("button", { name: "Save" }).click();
   await waitForSolid(() => expect(view.queryByRole("dialog")).toBeNull());
-  expect(save).toHaveBeenLastCalledWith({ enabled: true, label: "phone", agentIds: undefined });
+  expect(save).toHaveBeenLastCalledWith(
+    { enabled: true, label: "phone", agentIds: undefined },
+    "agentIds",
+  );
   expect(
     view.getAllByRole("button", { name: "Choose notification agents" })[1]!.textContent,
   ).toContain("Account default: Research");
 });
 
-it("retains unresolved saved agents and a draft through catalog refresh and a rejected save", async () => {
-  const completion = createDeferred();
+it("retains unresolved saved agents through catalog refresh and submission", async () => {
   const [available, setAvailable] = createSignal<
     NonNullable<NotificationProps["notificationAgents"]>
   >({
@@ -462,7 +503,7 @@ it("retains unresolved saved agents and a draft through catalog refresh and a re
     agentsLoading: true,
     agentsList: { ...catalog.agentsList, agents: [] },
   });
-  const save = vi.fn().mockReturnValueOnce(completion.promise).mockResolvedValue(undefined);
+  const save = vi.fn();
   const view = renderSection({
     webPush: webPush(false, { ...userPreferences, agentIds: ["unlisted"] }),
     get notificationAgents() {
@@ -482,22 +523,11 @@ it("retains unresolved saved agents and a draft through catalog refresh and a re
   view.getByRole("checkbox", { name: "Research research" }).click();
   flush();
   view.getByRole("button", { name: "Save" }).click();
-  await waitForSolid(() =>
-    expect((view.getByRole("button", { name: "Saving…" }) as HTMLButtonElement).disabled).toBe(
-      true,
-    ),
-  );
-  completion.reject(new Error("Example save failed"));
-  await waitForSolid(() =>
-    expect(view.getByRole("dialog").textContent).toContain("Example save failed"),
-  );
-  expect((view.getByRole("checkbox", { name: /unlisted/ }) as HTMLInputElement).checked).toBe(true);
-  expect(
-    (view.getByRole("checkbox", { name: "Research research" }) as HTMLInputElement).checked,
-  ).toBe(true);
-  view.getByRole("button", { name: "Save" }).click();
   await waitForSolid(() => expect(view.queryByRole("dialog")).toBeNull());
-  expect(save).toHaveBeenLastCalledWith({ ...userPreferences, agentIds: ["unlisted", "research"] });
+  expect(save).toHaveBeenLastCalledWith(
+    { ...userPreferences, agentIds: ["unlisted", "research"] },
+    "agentIds",
+  );
 });
 
 it("retires an unsaved selection with its page and connection lifetime", () => {

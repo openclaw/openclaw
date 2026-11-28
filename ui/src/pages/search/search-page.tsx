@@ -71,6 +71,16 @@ registerRouteSubtitlesEnglish();
 
 registerEnglishCatalog(registerSettingsEnglish);
 
+const maxSearchQueryCodePoints = 500;
+
+function isSearchQueryTooLong(value: string): boolean {
+  // A code point uses at most two UTF-16 units. Avoid expanding a large paste.
+  return (
+    value.length > 2 * maxSearchQueryCodePoints ||
+    Array.from(value).length > maxSearchQueryCodePoints
+  );
+}
+
 /** Results arrive unvalidated, and the page renders these fields without further checks. */
 function isSearchStatus(value: unknown): value is WebSearchStatusResult {
   const status = asNullableRecord(value);
@@ -110,6 +120,7 @@ export function SearchPage() {
   // The localized default seeds an editable draft; locale changes must not replace user input.
   const initialQuery = i18n.t("searchPage.queryDefault");
   const [query, setQuery] = createSignal(initialQuery);
+  const queryTooLong = createMemo(() => isSearchQueryTooLong(query()));
   let selectedAgent = "";
   // Capture the initial receipt before the Gateway binding admits its first load.
   let configRevision = searchConfigRevision(context.runtimeConfig.state);
@@ -314,14 +325,15 @@ export function SearchPage() {
   });
 
   async function test(scope: GatewayConnectionScope | null) {
-    const queryText = (queryInput?.value ?? query()).trim();
+    const draft = queryInput?.value ?? query();
+    const queryText = draft.trim();
     const runtime = context.runtimeConfig;
     if (
       !scope ||
       !gateway.isCurrent(scope) ||
       !canEdit() ||
       !queryText ||
-      queryText.length > 500 ||
+      isSearchQueryTooLong(draft) ||
       !(result()?.testProvider || result()?.route.testable) ||
       activeTest ||
       !isSearchConfigSettled(runtime.state) ||
@@ -567,6 +579,15 @@ export function SearchPage() {
                         <Show when={canTestHere()}>
                           <SettingsRow
                             title={t("searchPage.query")}
+                            description={
+                              <Show when={queryTooLong()}>
+                                <span id="search-query-length-error">
+                                  {t("searchPage.queryTooLong", {
+                                    limit: String(maxSearchQueryCodePoints),
+                                  })}
+                                </span>
+                              </Show>
+                            }
                             control={
                               <input
                                 ref={(element) => {
@@ -574,7 +595,10 @@ export function SearchPage() {
                                 }}
                                 class="settings-input"
                                 aria-label={t("searchPage.query")}
-                                maxlength="500"
+                                aria-invalid={queryTooLong() ? "true" : undefined}
+                                aria-describedby={
+                                  queryTooLong() ? "search-query-length-error" : undefined
+                                }
                                 disabled={testing()}
                                 value={query()}
                                 placeholder={t("searchPage.queryPlaceholder")}
@@ -602,7 +626,7 @@ export function SearchPage() {
                                 disabled={
                                   !canEdit() ||
                                   !query().trim() ||
-                                  query().trim().length > 500 ||
+                                  queryTooLong() ||
                                   testing() ||
                                   loading() ||
                                   !isSearchConfigSettled(configState()) ||

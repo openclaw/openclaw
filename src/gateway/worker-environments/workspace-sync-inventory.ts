@@ -6,6 +6,7 @@ import { gitReadOnlyEnvironment } from "../../infra/git-exec.js";
 import { runGitWorkerOperation } from "../../infra/git-worker.js";
 import { hasNodeErrorCode } from "../../infra/path-guards.js";
 import { STAGED_INPUT_GIT_PATHSPEC } from "../../media/staged-inputs.js";
+import { idleIoPriorityArgv } from "../../process/idle-io-priority.js";
 import { killProcessTree } from "../../process/kill-tree.js";
 import { withGitProcessOperation } from "../../process/spawn-diagnostics.js";
 import { spawnProcessToFile } from "../../process/spawn-to-file.js";
@@ -85,6 +86,7 @@ export async function runWorkspaceInventoryCommandToFile(params: {
   timeoutMs: number;
   maxOutputBytes?: number;
   baseEnv?: NodeJS.ProcessEnv;
+  idleIoPriority?: boolean;
 }): Promise<void> {
   const [command, ...args] = params.argv;
   if (!command) {
@@ -103,12 +105,13 @@ export async function runWorkspaceInventoryCommandToFile(params: {
     input = params.inputPath ? await fs.open(params.inputPath, "r") : undefined;
     params.signal.throwIfAborted();
     const env = params.baseEnv ?? workerSshCommandOptions({ timeoutMs: params.timeoutMs }).baseEnv;
+    const argv = idleIoPriorityArgv(params.argv, params.idleIoPriority);
     const { child, output } = await withGitProcessOperation(
       "workspace.inventory",
       () =>
         spawnProcessToFile(
-          command,
-          args,
+          argv[0]!,
+          argv.slice(1),
           {
             env: command === "git" ? gitReadOnlyEnvironment(args, env) : env,
             stdio: [input ? "pipe" : "ignore", "pipe", "pipe"],

@@ -19,6 +19,7 @@ import { createOpenClawTestState } from "../test-utils/openclaw-test-state.js";
 import { getFreePort } from "../test-utils/ports.js";
 import { buildControlUiSessionEntryUrl } from "./control-ui-session-entry-path.js";
 import { createGatewayKernel } from "./server-kernel.js";
+import * as postReadyRelease from "./server-post-ready-release.js";
 import type { GatewayServer } from "./server-public.js";
 import * as restartResume from "./session-restart-resume.js";
 import * as rowReads from "./session-row-database-facts.js";
@@ -55,7 +56,11 @@ afterEach(async () => {
   await state?.cleanup();
 });
 
-async function createStartupState({ ui = false, anonymous = false } = {}) {
+async function createStartupState({
+  ui = false,
+  anonymous = false,
+  profile = "standard",
+}: { ui?: boolean; anonymous?: boolean; profile?: "standard" | "lean" } = {}) {
   const port = await getFreePort();
   state = await createOpenClawTestState({
     label: "startup-projection",
@@ -64,6 +69,7 @@ async function createStartupState({ ui = false, anonymous = false } = {}) {
   });
   await state.writeConfig({
     gateway: {
+      resources: { profile },
       auth: anonymous ? { mode: "none" } : { mode: "token", token },
       controlUi: ui
         ? { enabled: true, basePath, root: state.statePath("synthetic-ui") }
@@ -276,6 +282,132 @@ it("warms the recent page without gating startup and joins it before projection 
     await (closing ?? server?.close());
     await earlyEntryRequest?.catch(() => undefined);
     await entryRequest?.catch(() => undefined);
+  }
+});
+
+it.for(["release", "close", "startup-failure"] as const)(
+  "defers lean optional prewarm without holding real lists or cleanup (%s)",
+  async (outcome, { signal }) => {
+    const port = await createStartupState({ ui: true, profile: "lean" });
+    await state.writeText(
+      "synthetic-ui/index.html",
+      "<!doctype html><title>Startup fixture</title>",
+    );
+    replaceSessionEntrySync(
+      { agentId: "main", sessionKey: "agent:main:first-list" },
+      { sessionId: "first-list-session", updatedAt: 10, visibility: "shared" },
+    );
+    const disposed = observeProjectionDisposal();
+    const listProjectedSessions = sessionLists.listProjectedSessions;
+    const list = vi.spyOn(sessionLists, "listProjectedSessions");
+    let releasePostReadyWork: (() => void) | undefined;
+    vi.spyOn(postReadyRelease, "schedulePostReadyWorkRelease").mockImplementation((params) => {
+      expect(params.profile).toBe("lean");
+      releasePostReadyWork = params.release;
+    });
+    const failure = new Error("Synthetic startup failure after request initialization");
+    if (outcome === "startup-failure") {
+      const startupModule = await import("./server-startup-finish.js");
+      const finishStartup = startupModule.finishGatewayStartup;
+      vi.spyOn(startupModule, "finishGatewayStartup").mockImplementation(async (params) => {
+        await (
+          await finishStartup(params)
+        ).startupSettled;
+        throw failure;
+      });
+    }
+    let server: GatewayServer | undefined;
+    let client: Awaited<ReturnType<typeof connectGatewayClient>> | undefined;
+    const releaseFirstList = createDeferred();
+    let firstList: Promise<unknown> | undefined;
+    try {
+      const { startGatewayServerCore } = await import("./server-start.js");
+      const startup = startGatewayServerCore(port, {
+        ...authenticatedOptions,
+        controlUiEnabled: true,
+      });
+      if (outcome === "startup-failure") {
+        await expect(startup).rejects.toBe(failure);
+      } else {
+        server = await startup;
+        await server.startupSettled;
+        expect(releasePostReadyWork).toBeDefined();
+        expect(list).not.toHaveBeenCalled();
+        expect(getActiveGatewayRootWorkCount()).toBe(0);
+        if (outcome === "release") {
+          const firstListEntered = createDeferred();
+          const warmed = createDeferred();
+          list.mockImplementation(async (...args) => {
+            if (args[0].context) {
+              firstListEntered.resolve();
+              await releaseFirstList.promise;
+            }
+            const result = await listProjectedSessions(...args);
+            if (!args[0].context) {
+              warmed.resolve();
+            }
+            return result;
+          });
+          client = await connectGatewayClient({
+            url: `ws://127.0.0.1:${port}`,
+            token,
+            scopes: ["operator.admin"],
+          });
+          firstList = client.request("sessions.list", { limit: 100 });
+          await withinTest(
+            awaitGateBeforeSettlement(
+              firstListEntered.promise,
+              firstList,
+              "First list did not enter",
+            ),
+            signal,
+          );
+          expect(getActiveGatewayRootWorkCount()).toBeGreaterThan(0);
+          releaseFirstList.resolve();
+          expect(await firstList).toMatchObject({
+            sessions: [expect.objectContaining({ key: "agent:main:first-list" })],
+            totalCount: 1,
+          });
+          releasePostReadyWork!();
+          await withinTest(warmed.promise, signal);
+        }
+        await client?.stopAndWait();
+        client = undefined;
+        await server.close();
+        server = undefined;
+      }
+      if (outcome !== "release") {
+        expect(list).not.toHaveBeenCalled();
+      }
+      expect(disposed).toHaveBeenCalledOnce();
+      expect(getActiveGatewayRootWorkCount()).toBe(0);
+      expect(getActiveSecretsRuntimeConfigSnapshot()).toBeNull();
+    } finally {
+      releaseFirstList.resolve();
+      await firstList?.catch(() => undefined);
+      await client?.stopAndWait();
+      await server?.close();
+    }
+  },
+);
+
+it("keeps lean hostless kernel prewarm eager without an HTTP startup gate", async ({ signal }) => {
+  const port = await createStartupState({ ui: true, profile: "lean" });
+  const warmed = createDeferred();
+  const listProjectedSessions = sessionLists.listProjectedSessions;
+  vi.spyOn(sessionLists, "listProjectedSessions").mockImplementation(async (...args) => {
+    const result = await listProjectedSessions(...args);
+    warmed.resolve();
+    return result;
+  });
+  const kernel = await createGatewayKernel(port, {
+    ...authenticatedOptions,
+    controlUiEnabled: true,
+  });
+  try {
+    await withinTest(warmed.promise, signal);
+  } finally {
+    await kernel.closeOnStartupFailure();
   }
 });
 

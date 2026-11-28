@@ -17,14 +17,18 @@ import {
 } from "../config/sessions/session-accessor.js";
 import { seedUnindexedTranscriptForTest } from "../config/sessions/session-accessor.sqlite-import.test-support.js";
 import { readSessionEntryReadOnlyInWorker } from "../config/sessions/session-entry-read-runtime.js";
+import { assignSessionOwnerInWorker } from "../config/sessions/session-metadata-write.async.js";
 import { isSessionTranscriptIndexReconcileRunning } from "../config/sessions/session-transcript-reconcile.js";
 import * as transcriptWatermark from "../config/sessions/session-transcript-watermark.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import type { GatewayScheduler } from "../infra/gateway-scheduler.js";
 import { requireNodeSqlite } from "../infra/node-sqlite.js";
+import { resetLogger, setLoggerOverride } from "../logging/logger.js";
+import { createDiagnosticLogRecordCapture } from "../logging/test-helpers/diagnostic-log-capture.js";
 import { runWithAsyncWorkResources } from "../shared/async-work-resources.js";
 import { AsyncWorkScope, trackAsyncWork } from "../shared/async-work-scope.js";
 import { openOpenClawAgentDatabase } from "../state/openclaw-agent-db.js";
+import { ensureCanonicalUserProfileForEmail } from "../state/user-profile-writes.js";
 import {
   createGatewaySchedulerClock,
   createTestGatewayScheduler,
@@ -33,6 +37,7 @@ import {
   createOpenClawTestState,
   type OpenClawTestState,
 } from "../test-utils/openclaw-test-state.js";
+import { publishOperatorRoleConfigChange } from "./operator-role-policy.js";
 import { createDirectChatContext } from "./server-chat.agent-events.test-helpers.js";
 import {
   createSessionActivitySummaries,
@@ -180,6 +185,117 @@ describe("Activity recap admission, refresh, and provider recovery", () => {
     vi.restoreAllMocks();
     await testState.cleanup();
   });
+
+  it("makes no model attempt or retry for an owner whose role allows only the main model", async () => {
+    // A production team's default role allowed main-chat models and refused every utility model.
+    const profile = await ensureCanonicalUserProfileForEmail("recap-owner@example.test");
+    const member = {
+      agents: "*" as const,
+      scopes: ["operator.read" as const, "operator.write" as const],
+      sessions: { others: "none" as const },
+      modelPolicy: { allow: ["test/main"] },
+    };
+    cfg = {
+      agents: { defaults: { model: "test/main", utilityModel: "test/utility" } },
+      gateway: { roles: { default: "member", definitions: { member } } },
+    };
+    setRuntimeConfigSnapshot(cfg);
+    const target = await addSession(1);
+    await assignSessionOwnerInWorker(scope(target), {
+      expectedSessionId: scope(target).sessionId,
+      owner: { type: "human", id: profile.id },
+      assignedBy: { type: "system", id: "gateway" },
+    });
+    let armed = 0;
+    const time = await restartWithClock(() => (armed += 1));
+    // Each round outlives the old 120 s retry, which re-ran the refusal on main.
+    for (let round = 0; round < 4; round += 1) {
+      await appendMessage(
+        target,
+        `work-${round}`,
+        round ? `work-${round - 1}` : "message-1",
+        "More.",
+      );
+      const work = new AsyncWorkScope();
+      await work.track(() => ensureRecap(target));
+      await work.drain();
+      expect(view(target)).toMatchObject({ state: "unavailable" });
+      await time.advanceBy(130_000);
+    }
+    expect({ attempts: complete.mock.calls.length, retries: armed }).toEqual({
+      attempts: 0,
+      retries: 0,
+    });
+  });
+
+  it.each(["profile gone", "role cannot access this agent"] as const)(
+    "holds the owner's refusal (%s) without retries until config changes",
+    async (refusal) => {
+      const profile = await ensureCanonicalUserProfileForEmail("recap-owner@example.test");
+      const member = {
+        agents: (refusal === "profile gone" ? "*" : ["other"]) as "*" | string[],
+        scopes: ["operator.read" as const, "operator.write" as const],
+        sessions: { others: "none" as const },
+      };
+      cfg = {
+        agents: { defaults: { model: "test/main", utilityModel: "test/utility" } },
+        gateway: { roles: { default: "member", definitions: { member } } },
+      };
+      setRuntimeConfigSnapshot(cfg);
+      const target = await addSession(1);
+      await assignSessionOwnerInWorker(scope(target), {
+        expectedSessionId: scope(target).sessionId,
+        owner: {
+          type: "human",
+          id: refusal === "profile gone" ? "missing-recap-owner" : profile.id,
+        },
+        assignedBy: { type: "system", id: "gateway" },
+      });
+      let armed = 0;
+      const time = await restartWithClock(() => (armed += 1));
+      // Operator-owned recap deferrals log at info: the production signal of the old loop.
+      const deferrals = createDiagnosticLogRecordCapture();
+      setLoggerOverride({ level: "info", consoleLevel: "silent" });
+      const round = async (index: number) => {
+        await appendMessage(
+          target,
+          `work-${index}`,
+          index ? `work-${index - 1}` : "message-1",
+          "More.",
+        );
+        const work = new AsyncWorkScope();
+        await work.track(() => ensureRecap(target));
+        await work.drain();
+      };
+      try {
+        // Each round outlives the old 120 s retry, which re-ran the refusal on main.
+        for (let index = 0; index < 4; index += 1) {
+          await round(index);
+          expect(view(target)).toMatchObject({ state: "unavailable" });
+          await time.advanceBy(130_000);
+        }
+        await deferrals.flush();
+        expect({
+          attempts: complete.mock.calls.length,
+          retries: armed,
+          deferred: deferrals.records.filter((record) =>
+            record.message.includes("Activity recap deferred"),
+          ).length,
+        }).toEqual({ attempts: 0, retries: 0, deferred: 0 });
+      } finally {
+        deferrals.cleanup();
+        setLoggerOverride(null);
+        resetLogger();
+      }
+      if (refusal === "role cannot access this agent") {
+        // A committed config publication lifts the refusal on the next activity.
+        member.agents = "*";
+        publishOperatorRoleConfigChange({});
+        await round(4);
+        expect(complete).toHaveBeenCalledTimes(1);
+      }
+    },
+  );
 
   it("refreshes a recap after an in-process append without a post-write watermark read", async ({
     signal,

@@ -14,7 +14,7 @@ beforeEach(() => {
 });
 import { controlUiSessionUrl, installMockGateway } from "../test-helpers/control-ui-e2e.ts";
 import { useCanvasSandboxFixture } from "./canvas-sandbox.test-support.ts";
-import { waitForChatScrollIdle, chatMessage } from "./chat-flow.test-support.ts";
+import { waitForChatScrollIdle, chatMessage, openAiAuthor } from "./chat-flow.test-support.ts";
 import { createControlUiE2eSuite } from "./control-ui-e2e-suite.test-support.ts";
 
 declare global {
@@ -39,10 +39,10 @@ async function captureProof(page: import("playwright").Page, name: string) {
 suite.define(() => {
   const canvasView = useCanvasSandboxFixture();
   it.each(["saved", "live"] as const)(
-    "keeps inspected images in work and delivered media visible (%s)",
+    "folds image inspections into command activity and keeps delivered media visible (%s)",
     async (source) => {
       await suite.withPage(
-        { viewport: { width: 1200, height: 900 }, colorScheme: "dark" },
+        { viewport: { width: 1200, height: 900 }, colorScheme: "light" },
         async ({ page }) => {
           const sessionKey = "agent:main:dashboard:tool-media-work";
           const imageUrl = await page.evaluate(() => {
@@ -64,9 +64,11 @@ suite.define(() => {
             width: 640,
             height: 120,
           };
-          const inspect = (id: string) => [
+          const imageError = "Could not open the preview.";
+          const inspect = (id: string, error?: string) => [
             {
               role: "assistant",
+              ...openAiAuthor,
               stopReason: "toolUse",
               content: [
                 { type: "toolCall", id, name: "view_image", arguments: { path: id + ".png" } },
@@ -76,13 +78,42 @@ suite.define(() => {
               role: "toolResult",
               toolCallId: id,
               toolName: "view_image",
-              content: [{ type: "text", text: "Inspected screenshot" }, image],
+              isError: error !== undefined,
+              content: error
+                ? [{ type: "text", text: error }]
+                : [{ type: "text", text: "Inspected screenshot" }, image],
+            },
+          ];
+          const runCommand = (id: string, command: string) => [
+            {
+              role: "assistant",
+              ...openAiAuthor,
+              stopReason: "toolUse",
+              content: [{ type: "toolCall", id, name: "exec", arguments: { command } }],
+            },
+            {
+              role: "toolResult",
+              toolCallId: id,
+              toolName: "exec",
+              isError: false,
+              details: { exitCode: 0 },
+              content: [{ type: "text", text: "Command completed." }],
             },
           ];
           const messages = [
             { role: "user", content: "Check the preview and show the final image." },
-            { role: "assistant", phase: "commentary", content: "I will inspect both screenshots." },
+            {
+              role: "assistant",
+              ...openAiAuthor,
+              phase: "commentary",
+              content: "I will inspect both screenshots.",
+            },
+            ...runCommand("lint", "pnpm lint"),
             ...inspect("before"),
+            ...runCommand("build", "pnpm ui:build"),
+            ...inspect("missing", imageError),
+            ...inspect("after"),
+            ...runCommand("check", "pnpm tsgo:ui"),
             {
               role: "assistant",
               provider: "openclaw",
@@ -90,9 +121,9 @@ suite.define(() => {
               stopReason: "stop",
               content: "Published the preview update.",
             },
-            ...inspect("after"),
             {
               role: "assistant",
+              ...openAiAuthor,
               phase: "final_answer",
               stopReason: "stop",
               content: [{ type: "text", text: "The preview is ready." }, image],
@@ -110,16 +141,18 @@ suite.define(() => {
             ...(source === "live"
               ? {
                   inFlightRun: { runId, startedAt: 1_000, text: "" },
-                  sessionInfo: { hasActiveRun: true, activeRunIds: [runId] },
+                  sessionInfo: { key: sessionKey, hasActiveRun: true, activeRunIds: [runId] },
                 }
               : {}),
           });
           await page.goto(controlUiSessionUrl(suite.server.baseUrl, sessionKey));
           const inspectedImages = page.getByRole("button", { name: "Viewed image", exact: true });
+          const failedInspection = page.getByText("View image", { exact: true });
           if (source === "live") {
             await page.getByRole("button", { name: "Stop", exact: true }).waitFor();
-            await inspectedImages.nth(1).waitFor();
+            await page.getByText("Published the preview update.", { exact: true }).waitFor();
             expect(await page.locator(".chat-work-group").count()).toBe(0);
+            expect(await failedInspection.count()).toBe(0);
             const finalMessage = messages.at(-1)!;
             await gateway.setHistoryMessages(messages);
             await gateway.emitGatewayEvent("session.message", {
@@ -163,9 +196,6 @@ suite.define(() => {
             const work = page.locator(".chat-work-group > .chat-activity-group__summary");
             await work.waitFor();
             await waitForChatScrollIdle(page);
-            if (!reloaded) {
-              await captureProof(page, `tool-media-collapsed-${source}`);
-            }
             expect(await work.count()).toBe(1);
             expect(await work.getAttribute("aria-expanded")).toBe("false");
             expect(await inspectedImages.count()).toBe(0);
@@ -174,8 +204,25 @@ suite.define(() => {
             await waitForChatScrollIdle(page);
             expect(await work.getAttribute("aria-expanded")).toBe("true");
             await page.getByText("Published the preview update.", { exact: true }).waitFor();
+            if (!reloaded) {
+              await captureProof(page, `tool-media-activity-${source}`);
+            }
+            expect(await inspectedImages.count()).toBe(0);
+            expect(await failedInspection.count()).toBe(0);
+            const commands = page
+              .locator(".chat-activity-group__summary")
+              .filter({ hasText: /^Ran commands/ });
+            expect(await commands.count()).toBe(1);
+            await commands.click();
+            await inspectedImages.nth(1).waitFor();
             expect(await inspectedImages.count()).toBe(2);
+            await failedInspection.click();
+            await page.getByText(imageError, { exact: true }).waitFor();
+            await inspectedImages.nth(1).click();
+            await page.locator(".chat-activity-group__body img.chat-message-image").waitFor();
+            expect(await page.locator(".chat-thread img.chat-message-image").count()).toBe(2);
             expect(await answer.isVisible()).toBe(true);
+            await commands.click();
             await work.click();
             await waitForChatScrollIdle(page);
             expect(await page.locator(".chat-thread img.chat-message-image").count()).toBe(1);
@@ -225,6 +272,7 @@ suite.define(() => {
             return [
               {
                 role: "assistant",
+                ...openAiAuthor,
                 content: [{ type: "toolCall", id, name: "exec", arguments: {} }],
                 timestamp,
               },
@@ -261,6 +309,7 @@ suite.define(() => {
             ),
             {
               role: "assistant",
+              ...openAiAuthor,
               content: `[embed ref="${viewId}" title="Release confidence" height="1000" /]`,
               timestamp: browserFirst ? 4_000 : 3_000,
             },
@@ -291,6 +340,7 @@ suite.define(() => {
             ),
             {
               role: "assistant",
+              ...openAiAuthor,
               content: "The widget and release reference are ready.",
               timestamp: 6_000,
             },
@@ -408,6 +458,7 @@ suite.define(() => {
           { role: "user", content: "Check it.", timestamp: 1_000 },
           {
             role: "assistant",
+            ...openAiAuthor,
             content: [
               { type: "text", text: "Here is the visualization." },
               {
@@ -441,7 +492,7 @@ suite.define(() => {
             content: "ok",
             timestamp: 3_000,
           },
-          chatMessage("assistant", "Done.", { timestamp: 4_000 }),
+          chatMessage("assistant", "Done.", { ...openAiAuthor, timestamp: 4_000 }),
         ],
       });
 

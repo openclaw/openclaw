@@ -90,6 +90,8 @@ export type RunCliAgentParams = Pick<
    * background answers and must not reuse or mutate normal agent sessions.
    */
   executionMode?: CliBackendExecutionMode;
+  /** Host-generated turn input; see `CliBackendExecuteContext.promptOrigin`. Never authority. */
+  promptOrigin?: "host";
   /** Internal one-shot inference path: suppress transcript, hook, context-engine, and delivery work. */
   isolatedCompletion?: true;
   /** Diagnostic attribution only; must not change execution policy or timeout selection. */
@@ -274,8 +276,8 @@ export type PreparedCliRunContext = {
   /** Only the exact resumed native session may receive these newly committed conversation rows. */
   resumeContext?: string;
   transcriptCursor?: CliSessionBinding["transcriptCursor"];
-  /** Live owner of the transcript account-coverage checkpoint, independent of native continuity. */
-  cliHistoryWriter?: import("../../config/sessions/cli-history-boundary.js").CliExecutionHistoryWriter;
+  /** The account this turn runs under and whether saved history may enter its prompt. */
+  cliHistoryAdmission?: import("./history-boundary.js").CliHistoryAdmission;
   authEpoch?: string;
   /** Strict owner fingerprint captured for live inference verification only. */
   authBindingFingerprint?: string;

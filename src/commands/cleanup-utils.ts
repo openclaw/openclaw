@@ -19,7 +19,11 @@ import { resolveGatewayLockDir } from "../config/paths.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { formatErrorMessage, isMissingPathError } from "../infra/errors.js";
 import { movePathToTrash } from "../infra/fs-safe.js";
-import { acquireGatewayLock, GatewayLockError } from "../infra/gateway-lock.js";
+import {
+  acquireGatewayLock,
+  GatewayLockError,
+  type GatewayLockHandle,
+} from "../infra/gateway-lock.js";
 import { realpathViaExistingPrefix } from "../infra/path-containment.js";
 import {
   pathEntryExists as pathExists,
@@ -45,6 +49,9 @@ type CleanupResolvedPaths = {
   configInsideState: boolean;
   oauthInsideState: boolean;
 };
+
+type StateCleanupPaths = Pick<CleanupResolvedPaths, "configPath" | "stateDir">;
+type AgentSessionCleanup = StateCleanupPaths & { cfg: OpenClawConfig };
 
 type RemovalOptions = {
   dryRun?: boolean;
@@ -199,9 +206,7 @@ async function existingPaths(paths: readonly string[]): Promise<string[]> {
 }
 
 // Service-manager status is advisory; the state lock also covers externally supervised Gateways.
-async function acquireStateCleanupOwnership(
-  cleanup: Pick<CleanupResolvedPaths, "configPath" | "stateDir">,
-) {
+async function acquireStateCleanupOwnership(cleanup: StateCleanupPaths) {
   const env = {
     ...process.env,
     OPENCLAW_CONFIG_PATH: cleanup.configPath,
@@ -229,6 +234,22 @@ async function acquireStateCleanupOwnership(
     throw new Error("Cannot remove OpenClaw state without exclusive state ownership.");
   }
   return lock;
+}
+
+async function withStateCleanupOwnership<T>(
+  cleanup: StateCleanupPaths,
+  dryRun: boolean,
+  action: (lock?: GatewayLockHandle) => Promise<T>,
+): Promise<T> {
+  if (dryRun) {
+    return action();
+  }
+  const lock = await acquireStateCleanupOwnership(cleanup);
+  try {
+    return await lock.run(() => action(lock));
+  } finally {
+    await lock.release();
+  }
 }
 
 async function removePathPreserving(
@@ -274,8 +295,9 @@ async function removePathPreserving(
       }
       runtime.log(`Removed contents of ${displayLabel}`);
     } else {
+      const existed = await pathExists(resolved);
       await fs.rm(resolved, { recursive: true, force: true });
-      runtime.log(`Removed ${displayLabel}`);
+      runtime.log(existed ? `Removed ${displayLabel}` : `Not found: ${displayLabel}`);
     }
     return { ok: true };
   } catch (err) {
@@ -362,6 +384,12 @@ function linkedCleanupPaths(cleanup: CleanupResolvedPaths): string[] {
     cleanup.configInsideState ? undefined : cleanup.configPath,
     cleanup.oauthInsideState ? undefined : cleanup.oauthDir,
   ].filter((target): target is string => target !== undefined);
+}
+
+async function resolveStateCleanupLockPaths(lock: GatewayLockHandle): Promise<string[]> {
+  return Promise.all(
+    [...new Set([lock.lockPath, lock.stateLockPath])].map(resolveMoveToTrashSourcePath),
+  );
 }
 
 async function resolveLinkedCleanupPath(target: string, lockPaths: readonly string[]) {
@@ -479,9 +507,7 @@ export async function removeStateAndLinkedPaths(
     if (isUnsafeRemovalTarget(stateDir)) {
       throw new Error(`Refusing to remove unsafe path: ${shortenHomeInString(stateDir)}`);
     }
-    const lockPaths = await Promise.all(
-      [...new Set([lock.lockPath, lock.stateLockPath])].map(resolveMoveToTrashSourcePath),
-    );
+    const lockPaths = await resolveStateCleanupLockPaths(lock);
     const lockDirs = [...new Set(lockPaths.map((lockPath) => path.dirname(lockPath)))];
     for (const target of linkedCleanupPaths(cleanup)) {
       await resolveLinkedCleanupPath(target, lockPaths);
@@ -663,45 +689,81 @@ async function removeWorkspaceEntries(
 
 /** Reset canonical session history while preserving each database's unrelated state. */
 export async function removeAgentSessions(
-  cleanup: Pick<CleanupResolvedPaths, "configPath" | "stateDir"> & { cfg: OpenClawConfig },
+  cleanup: AgentSessionCleanup,
   runtime: RuntimeEnv,
-  opts?: { dryRun?: boolean },
+): Promise<void> {
+  await withStateCleanupOwnership(cleanup, false, () =>
+    removeAgentSessionStores(cleanup.cfg, runtime, false),
+  );
+}
+
+/** Hold state ownership across all three removals, continuing after individual cleanup failures. */
+export async function removeConfigCredentialsAndSessions(
+  cleanup: AgentSessionCleanup & Pick<CleanupResolvedPaths, "oauthDir">,
+  runtime: RuntimeEnv,
+  { dryRun }: { dryRun: boolean },
+): Promise<boolean> {
+  return withStateCleanupOwnership(cleanup, dryRun, async (lock) => {
+    const lockPaths = lock ? await resolveStateCleanupLockPaths(lock) : [];
+    let removed = true;
+    try {
+      await removeAgentSessionStores(cleanup.cfg, runtime, dryRun);
+    } catch (error) {
+      runtime.error(`Failed to reset session history: ${String(error)}`);
+      removed = false;
+    }
+    for (const target of [cleanup.configPath, cleanup.oauthDir]) {
+      let entry = target;
+      if (lock) {
+        try {
+          // Keep an explicitly configured path from deleting the lock itself.
+          entry = (await resolveLinkedCleanupPath(target, lockPaths)) ?? target;
+        } catch (error) {
+          runtime.error(`Failed to remove ${shortenHomeInString(target)}: ${String(error)}`);
+          removed = false;
+          continue;
+        }
+        lock.assertCurrent();
+      }
+      const result = await removePath(entry, runtime, { dryRun, label: target });
+      removed &&= result.ok;
+    }
+    return removed;
+  });
+}
+
+async function removeAgentSessionStores(
+  cfg: OpenClawConfig,
+  runtime: RuntimeEnv,
+  dryRun: boolean,
 ): Promise<void> {
   const { previewSessionStoreReset, resetSessionStore } =
     await import("../config/sessions/session-accessor.sqlite-reset.js");
   const { resolveAllAgentSessionStoreTargetsSync } = await import("../config/sessions/targets.js");
-  const lock = opts?.dryRun ? undefined : await acquireStateCleanupOwnership(cleanup);
-  const resetStores = async () => {
-    const failures: string[] = [];
-    for (const target of resolveAllAgentSessionStoreTargetsSync(cleanup.cfg)) {
-      try {
-        const preview = previewSessionStoreReset(target);
-        const label = shortenHomePath(preview.databasePath);
-        if (opts?.dryRun) {
-          runtime.log(
-            `[dry-run] remove session history from ${label}: ${preview.sessionKeys.length} sessions, ${preview.transcriptCount} transcripts, ${preview.archiveCount} retained archives`,
-          );
-          for (const sessionKey of preview.sessionKeys) {
-            runtime.log(`[dry-run] remove session ${sessionKey}`);
-          }
-          for (const artifact of preview.artifactPaths) {
-            runtime.log(`[dry-run] remove ${shortenHomePath(artifact)}`);
-          }
-        } else {
-          await resetSessionStore(target);
-          runtime.log(`Removed session history from ${label}`);
+  const failures: string[] = [];
+  for (const target of resolveAllAgentSessionStoreTargetsSync(cfg)) {
+    try {
+      const preview = previewSessionStoreReset(target);
+      const label = shortenHomePath(preview.databasePath);
+      if (dryRun) {
+        runtime.log(
+          `[dry-run] remove session history from ${label}: ${preview.sessionKeys.length} sessions, ${preview.transcriptCount} transcripts, ${preview.archiveCount} retained archives`,
+        );
+        for (const sessionKey of preview.sessionKeys) {
+          runtime.log(`[dry-run] remove session ${sessionKey}`);
         }
-      } catch (error) {
-        failures.push(`${shortenHomePath(target.storePath)}: ${String(error)}`);
+        for (const artifact of preview.artifactPaths) {
+          runtime.log(`[dry-run] remove ${shortenHomePath(artifact)}`);
+        }
+      } else {
+        await resetSessionStore(target);
+        runtime.log(`Removed session history from ${label}`);
       }
+    } catch (error) {
+      failures.push(`${shortenHomePath(target.storePath)}: ${String(error)}`);
     }
-    if (failures.length > 0) {
-      throw new Error(failures.join("\n"));
-    }
-  };
-  try {
-    await (lock ? lock.run(resetStores) : resetStores());
-  } finally {
-    await lock?.release();
+  }
+  if (failures.length > 0) {
+    throw new Error(failures.join("\n"));
   }
 }

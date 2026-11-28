@@ -103,23 +103,12 @@ export class DraftPlaceState {
     return canUseDeviceFolder(this.deviceId, this.devices());
   }
 
-  selectDeviceFolder() {
+  selectDeviceFolder(path: string) {
     selectDraftDeviceFolder(this.targetActions(), () => {
-      this.deviceFolderValue = "";
+      this.deviceFolderValue = path;
     });
   }
 
-  setDeviceFolderPath(path: string) {
-    if (
-      this.deviceFolderValue === null ||
-      this.read().submitting ||
-      this.read().pendingPlacementSessionKey
-    ) {
-      return;
-    }
-    this.deviceFolderValue = path;
-    this.callbacks.changed();
-  }
   readonly cloudMachines = new DraftCloudMachineState();
   agentsHydrated = false;
   private agentSelectedByUser = false;
@@ -311,6 +300,16 @@ export class DraftPlaceState {
       this.repositoryState,
       this.workspacePath(),
       this.folderValue,
+    );
+  }
+
+  get savedProjectLookupFailed(): boolean {
+    const { preferredProjectRestore, preferredRemoteProjectRestore } = this.selection;
+    return (
+      Boolean(preferredProjectRestore || preferredRemoteProjectRestore) &&
+      !this.browser.projectsReady &&
+      !this.browser.projectsLoading &&
+      this.browser.projectCatalogError != null
     );
   }
 
@@ -758,8 +757,12 @@ export class DraftPlaceState {
     this.repositoryState.synchronizeProjectCheckout();
   }
 
+  /** Gateway-host fs.listDir needs operator.write; outside agent workspaces it needs admin. */
   browseAvailable(): boolean {
-    return this.gateway.connected && (this.isAdmin() || Boolean(this.workspacePath()));
+    return (
+      this.gateway.connected &&
+      (this.isAdmin() || (this.canWrite() && Boolean(this.workspacePath())))
+    );
   }
 
   worktreeAvailable(): boolean {

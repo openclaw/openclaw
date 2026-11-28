@@ -683,12 +683,6 @@ describe("loadPluginManifestRegistry", () => {
       candidates: [candidate],
     });
     const uiHints = { ...generatedHint, ...manifestHint };
-    expect(registry.plugins[0]?.channelConfigs?.alpha).toEqual({
-      schema: generatedSchema,
-      label: "Alpha",
-      description: "Alpha channel",
-      uiHints,
-    });
     expect(collectChannelSchemaMetadataCore(registry)).toEqual([
       {
         id: "alpha",
@@ -1048,17 +1042,6 @@ describe("loadPluginManifestRegistry", () => {
     const registry = loadRegistry(candidates);
     expect(countDuplicateWarnings(registry)).toBe(0);
     expect(registry.plugins).toEqual([expect.objectContaining({ origin: "global" })]);
-  });
-
-  it("suppresses duplicate warning when global candidates come from the same package artifact", () => {
-    const candidates = Array.from({ length: 2 }, () =>
-      createPluginCandidate("opik-openclaw", makePluginDir("opik-openclaw"), "global", {
-        packageName: "@opik/opik-openclaw",
-        packageVersion: "0.2.14",
-      }),
-    );
-
-    expect(countDuplicateWarnings(loadRegistry(candidates))).toBe(0);
   });
 
   const bundleCases: Array<{

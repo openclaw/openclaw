@@ -5,6 +5,7 @@ import { createDeferred } from "openclaw/plugin-sdk/concurrency-runtime";
 import { flush } from "solid-js";
 import { describe, expect, it, onTestFinished, vi } from "vitest";
 import type { GatewayBrowserClient } from "../../api/gateway.ts";
+import { setWorkboardCards } from "../../lib/workboard/card-state.ts";
 import { resetWorkboardConnectionState } from "../../lib/workboard/runtime.ts";
 import {
   createGatewaySession,
@@ -24,6 +25,7 @@ import {
   textButton,
   inlineEditor,
   sessionPicker,
+  type SelectPicker,
   toast,
 } from "./view.test-support.ts";
 
@@ -51,6 +53,44 @@ function selectedLabels(container: Element) {
 }
 
 describe("WorkboardView", () => {
+  it("checks the bulk Add limit only for remaining cards and submits their opening revision", async () => {
+    const full = createWorkboardCard({
+      id: "full",
+      labels: Array.from({ length: 12 }, (_, i) => `label-${i}`),
+    });
+    const remaining = createWorkboardCard({ id: "remaining", labels: ["original"], updatedAt: 10 });
+    const request = vi.fn().mockRejectedValue(new Error("Card changed"));
+    const { state, container, renderView } = createWorkboardView({
+      client: { request },
+      canWrite: true,
+    });
+    setWorkboardCards(state, [full, remaining]);
+    state.selectedCardIds = new Set([full.id, remaining.id]);
+    renderView();
+    requireButton(container, "Edit properties").click();
+    flush();
+    const dialog = expectDefined(container.querySelector(".workboard-bulk-dialog"), "bulk editor");
+    const pickers = [...dialog.querySelectorAll<SelectPicker>("[data-test-select-picker]")];
+    const labelMode = pickers.find((picker) => picker.accessibleLabel === "Labels");
+    expectDefined(labelMode, "label mode").onSelect("add");
+    flush();
+    addLabel(container, "new");
+    expect(requireButton(container, "Apply changes").disabled).toBe(true);
+
+    setWorkboardCards(state, [{ ...remaining, labels: ["concurrent"], updatedAt: 11 }]);
+    renderView();
+    const apply = requireButton(container, "Apply changes");
+    expect(apply.disabled).toBe(false);
+    expect(request).not.toHaveBeenCalled();
+    apply.click();
+    await waitForFast(() => expect(state.bulkSaving).toBe(false));
+    expect(request).toHaveBeenCalledExactlyOnceWith("workboard.cards.update", {
+      id: remaining.id,
+      expectedUpdatedAt: remaining.updatedAt,
+      patch: { labels: ["original", "new"] },
+    });
+  });
+
   it("keeps a stale edit draft disabled until it is cancelled", async () => {
     const { host, state, container, renderView } = createWorkboardView();
     state.cards = [createWorkboardCard({ title: "Canonical title" })];
@@ -118,60 +158,6 @@ describe("WorkboardView", () => {
       expect(toast(container)?.querySelector("[role=status]")?.textContent?.trim()).toBe(
         "No cards were started.",
       ),
-    );
-  });
-
-  it("reapplies card templates after editing their text fields", async () => {
-    const client = createWorkboardTestClient({
-      "workboard.cards.create": { card: createWorkboardCard({ title: "Release: " }) },
-    });
-    const { state, container, renderView } = createWorkboardView({
-      client,
-      onRequestUpdate: () => undefined,
-    });
-    state.draftOpen = true;
-    renderView();
-    const template = textButton(container, "Release");
-    const fields = [
-      [".workboard-draft__title", "Release: "],
-      [".workboard-draft__notes", "Scope:\nVerification:\nCloseout:"],
-    ] as const;
-    template.click();
-    renderView();
-    for (const [selector, value] of fields) {
-      const input = expectDefined(
-        container.querySelector<HTMLInputElement | HTMLTextAreaElement>(selector),
-        selector,
-      );
-      expect(input.value).toBe(value);
-      input.value = `Edited ${value}`;
-      input.dispatchEvent(new InputEvent("input", { bubbles: true }));
-    }
-    addLabel(container, "custom draft");
-    expect(selectedLabels(container)).toEqual(["custom draft", "release"]);
-    template.click();
-    renderView();
-    expect(selectedLabels(container)).toEqual(["release"]);
-    for (const [selector, value] of fields) {
-      expect(container.querySelector<HTMLInputElement | HTMLTextAreaElement>(selector)?.value).toBe(
-        value,
-      );
-    }
-    const form = container.querySelector<HTMLFormElement>(".workboard-draft")!;
-    const submit = form.querySelector<HTMLButtonElement>(".workboard-draft__submit")!;
-    expect(submit.form).toBe(form);
-    expect(form.lastElementChild?.contains(submit)).toBe(true);
-    form.dispatchEvent(new Event("submit", { bubbles: true, cancelable: true }));
-    await waitForFast(() => expect(state.draftOpen).toBe(false));
-    expect(client.request).toHaveBeenCalledExactlyOnceWith(
-      "workboard.cards.create",
-      expect.objectContaining({
-        title: "Release: ",
-        notes: "Scope:\nVerification:\nCloseout:",
-        labels: ["release"],
-        priority: "urgent",
-        templateId: "release",
-      }),
     );
   });
 
@@ -272,25 +258,6 @@ describe("WorkboardView", () => {
     save.click();
     await waitForFast(() => expect(state.cards[0]?.notes).toBe("Edited notes"));
     expect(attempts).toBe(2);
-  });
-
-  it("keeps notes selectable and opens the editor only on a plain click", async () => {
-    const card = createWorkboardCard({ notes: "Copy me" });
-    const { state, container, renderView } = createWorkboardView({
-      client: createWorkboardTestClient({}),
-    });
-    state.cards = [card];
-    state.detailCardId = card.id;
-    renderView();
-    const { trigger, owner, open } = await inlineEditor(container, "notes");
-    const selection = expectDefined(document.getSelection(), "selection");
-    selection.selectAllChildren(trigger);
-    trigger.click();
-    flush();
-    expect(owner.querySelector("textarea")).toBeNull();
-    selection.removeAllRanges();
-    const textarea = await open();
-    expect(textarea.value).toBe("Copy me");
   });
 
   it("resumes dirty labels after light dismissal and clears them only on explicit cancel", async () => {
@@ -702,7 +669,11 @@ describe("WorkboardView", () => {
       const card = createWorkboardCard({ title: "Original title", notes: "Original notes" });
       const current = { ...card, priority: "high" as const, updatedAt: 2 };
       const message =
-        operation === "conflict" ? "Card changed. Review and retry." : `${operation} unavailable`;
+        operation === "conflict" ? "Internal card-revision diagnostic" : `${operation} unavailable`;
+      const displayMessage =
+        operation === "conflict"
+          ? "The card changed while you were editing. Review the latest values before saving your edits."
+          : message;
       const error =
         operation === "conflict"
           ? new GatewayProtocolRequestError({
@@ -745,7 +716,7 @@ describe("WorkboardView", () => {
           .dispatchEvent(new Event("submit", { bubbles: true, cancelable: true }));
       };
       submit();
-      await waitForFast(() => expect(state.error).toContain(message));
+      await waitForFast(() => expect(state.error).toBe(displayMessage));
       renderView();
       expect(client.request).toHaveBeenCalledWith(method, expect.anything());
       const errorToast = toast(container.querySelector("[data-test-dialog]")!);
@@ -754,7 +725,7 @@ describe("WorkboardView", () => {
         errorToast?.querySelector<HTMLElement>('[role="alert"]'),
         '[role="alert"]',
       );
-      expect(alert.textContent).toContain(message);
+      expect(alert.textContent).toBe(displayMessage);
       expect(alert.closest('[inert], [aria-hidden="true"]')).toBeNull();
       expect(errorToast.closest('[inert], [aria-hidden="true"]')).toBeNull();
       expect(container.querySelector<HTMLInputElement>(".workboard-draft__title")?.value).toBe(
@@ -764,7 +735,6 @@ describe("WorkboardView", () => {
         "Unsaved notes",
       );
       if (operation === "conflict") {
-        expect(alert.textContent).toContain("Your unsaved edits remain in the form.");
         expect(
           container.querySelector<HTMLInputElement>('input[name="priority"]:checked')?.value,
         ).toBe("high");

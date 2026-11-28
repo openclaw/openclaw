@@ -73,6 +73,21 @@ it("admits the delegated person on HTTP and WS independently of the static roste
   }
 });
 
+it("refuses delegation while Cloudflare Access JWT verification is on", async () => {
+  const { cfg, request } = fixture();
+  const trustedProxy = {
+    ...cfg.gateway!.auth!.trustedProxy!,
+    cloudflareAccessJwt: { issuer: "https://team.cloudflareaccess.com", audience: "aud" },
+  };
+  await expect(
+    authorizeHttpGatewayConnect({
+      auth: resolveGatewayAuth({ authConfig: { mode: "trusted-proxy", trustedProxy } }),
+      req: request(),
+      trustedProxies: cfg.gateway?.trustedProxies,
+    }),
+  ).resolves.toEqual({ ok: false, reason: "trusted_proxy_delegation_denied" });
+});
+
 it("refuses invalid delegation and alternate credentials", async () => {
   const { cfg, request, key, subject, credentialFile } = fixture();
   for (const delegation of [

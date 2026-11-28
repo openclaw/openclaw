@@ -1,5 +1,4 @@
 import {
-  DEFAULT_PROVIDER,
   parseModelRef,
   resolveAgentEffectiveModelPrimary,
   resolveDefaultModelForAgent,
@@ -235,7 +234,8 @@ export function getModelRef(
   const configuredDefaultModel = resolveAgentEffectiveModelPrimary(runtimeConfig, agentId)
     ? resolveDefaultModelForAgent({ cfg: runtimeConfig, agentId })
     : undefined;
-  const defaultProvider = configuredDefaultModel?.provider ?? DEFAULT_PROVIDER;
+  // Bare candidates take the agent's or the current run's provider; none means qualified refs only.
+  const defaultProvider = configuredDefaultModel?.provider ?? ctx?.modelProviderId;
   const candidates = [
     config.model,
     currentRunModel,
@@ -245,10 +245,10 @@ export function getModelRef(
     config.modelFallback,
   ];
   for (const candidate of candidates) {
-    if (candidate) {
-      return (
-        parseModelRef(candidate, defaultProvider) ?? { provider: defaultProvider, model: candidate }
-      );
+    const provider =
+      defaultProvider ?? (candidate?.includes("/") ? candidate.split("/")[0] : undefined);
+    if (candidate && provider) {
+      return parseModelRef(candidate, provider) ?? { provider, model: candidate };
     }
   }
   return undefined;

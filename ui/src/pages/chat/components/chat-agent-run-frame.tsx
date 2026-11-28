@@ -16,6 +16,7 @@ import {
   untrack,
   type Accessor,
 } from "solid-js";
+import { messageSubagentCompletions } from "../../../../../src/shared/subagent-completion.js";
 import type { MessageGroup as MessageGroupData } from "../../../lib/chat/chat-types.ts";
 import { extractChatSourcePreviews } from "../../../lib/chat/source-previews.ts";
 import { t } from "../../../lib/reactive/i18n.ts";
@@ -30,9 +31,9 @@ import {
   readProjectedContinuation,
   type ProjectedContinuationSource,
 } from "../chat-turn-boundary.ts";
-import { ChatHandoffResume } from "./chat-handoff-sessions.tsx";
-import { ChatInlineSwarm, type InlineSwarm } from "./chat-inline-swarm.tsx";
+import { ChatContinuationActivity } from "./chat-handoff-sessions.tsx";
 import { ChatLazyBoundary } from "./chat-lazy-boundary.tsx";
+import { McpConnectCards } from "./chat-mcp-connect-card.tsx";
 import {
   ActivityGroup,
   MessageGroup,
@@ -57,7 +58,6 @@ const ChatSourcePreviews = lazy(() => import("./chat-source-previews.tsx"), {
 type AgentRunFrameOptions = {
   basePath?: string;
   sessionPublicOrigin?: string;
-  swarms?: readonly InlineSwarm[];
   streamOptions: StreamGroupOptions;
   renderGroupOptions: (group: MessageGroupData) => NativeMessageGroupOptions;
   partDependencies: (part: BodyPart) => readonly unknown[];
@@ -266,10 +266,11 @@ function prepareFrame(frame: AgentRunFrameRenderItem, opts: AgentRunFrameOptions
               : [],
         )
         .at(0) ?? null);
+  const replyGroups = source.detachedGroups ? [...source.detachedGroups, ...groups] : groups;
   const sourcePreviews = actionOwner
     ? extractChatSourcePreviews({
         // Cited results can sit in an earlier rollup that no visible reply owns.
-        groups: frame.detachedGroups ? [...frame.detachedGroups, ...groups] : groups,
+        groups: replyGroups,
         answer: actionOwner.message,
         runId: frame.runId,
         basePath: opts.basePath,
@@ -281,7 +282,11 @@ function prepareFrame(frame: AgentRunFrameRenderItem, opts: AgentRunFrameOptions
   // A virtualized fragment scans its whole run: work may stop in an earlier one.
   const resumes = new Map<
     string,
-    { yieldedAt: number; resumedAt: number; source: ProjectedContinuationSource }
+    {
+      elapsed: number;
+      source: ProjectedContinuationSource;
+      receipt?: { key: string; elapsed: number };
+    }
   >();
   let stopped: unknown;
   const runParts = fragment
@@ -291,19 +296,27 @@ function prepareFrame(frame: AgentRunFrameRenderItem, opts: AgentRunFrameOptions
     : bodyParts;
   for (const part of runParts) {
     const partGroups = chatItemGroups(part);
-    const first = partGroups[0]?.messages[0]?.message;
+    const firstItem = partGroups[0]?.messages[0];
+    const first = firstItem?.message;
     const wokenBy = readProjectedContinuation(first);
     const resumedAt = rawMessageTimestamp(first);
     const yieldedAt = rawMessageTimestamp(stopped);
     // A spoken acknowledgment already marks where its handoff resumed.
     if (
+      firstItem &&
       wokenBy &&
       resumedAt &&
       yieldedAt &&
       yieldedAt < resumedAt &&
       !readHandoffDisplay(stopped)
     ) {
-      resumes.set(`${part.kind}:${part.key}`, { yieldedAt, resumedAt, source: wokenBy });
+      // A projected settle receipt already narrates this wake and carries its outcome.
+      const elapsed = resumedAt - yieldedAt;
+      const receipt =
+        wokenBy === "subagent" && messageSubagentCompletions(first).length > 0
+          ? { key: firstItem.key, elapsed }
+          : undefined;
+      resumes.set(`${part.kind}:${part.key}`, { elapsed, source: wokenBy, receipt });
     }
     stopped = partGroups.at(-1)?.messages.at(-1)?.message ?? stopped;
   }
@@ -314,28 +327,16 @@ function prepareFrame(frame: AgentRunFrameRenderItem, opts: AgentRunFrameOptions
     bodyParts,
     firstBubbleKey,
     sourcePreviews,
+    replyGroups,
     resumes,
   };
-}
-
-function FrameSwarms(props: { swarms: readonly InlineSwarm[] | undefined }) {
-  return (
-    <For each={props.swarms} keyed={(swarm) => swarm.group.groupId}>
-      {(swarm) => <ChatInlineSwarm swarm={swarm()} />}
-    </For>
-  );
 }
 
 export function AgentRunFrame(props: FrameProps) {
   const statusParts = createMemo(() => agentRunFrameActiveStatusParts(props.frame));
   return (
     <Show when={statusParts()} fallback={<RunFrame frame={props.frame} options={props.options} />}>
-      {(parts) => (
-        <>
-          <FrameSwarms swarms={props.options.swarms} />
-          <StreamGroup parts={parts()} options={props.options.streamOptions} />
-        </>
-      )}
+      {(parts) => <StreamGroup parts={parts()} options={props.options.streamOptions} />}
     </Show>
   );
 }
@@ -347,14 +348,14 @@ function RunFrame(props: FrameProps) {
   const footerReactionMessageKey = () =>
     shellOptions().bubbleMode ? undefined : state().actionOwner?.key;
   const firstBubbleKey = createMemo(() => state().firstBubbleKey);
+  const completedFragment = () => Boolean(props.frame.fragment && !props.frame.fragment.last);
   const frameContent = [
-    <FrameSwarms swarms={props.options.swarms} />,
     <FrameBody
       parts={state().bodyParts}
       options={props.options}
       // Completed nonfinal fragments cannot contain widgets. Keep the final
       // reply's owner unchanged as it transitions from active to completed.
-      completedFragment={Boolean(props.frame.fragment && !props.frame.fragment.last)}
+      completedFragment={completedFragment()}
     >
       {(input) => {
         const part = () => input().part;
@@ -364,6 +365,7 @@ function RunFrame(props: FrameProps) {
             return firstBubbleKey();
           },
         });
+        const resume = () => state().resumes.get(`${part().kind}:${part().key}`);
         const groupOptions = (group: MessageGroupData) => ({
           ...options().renderGroupOptions(group),
           firstBubbleKey: firstBubbleKey(),
@@ -388,12 +390,13 @@ function RunFrame(props: FrameProps) {
           const value = part();
           return value.kind === "group" ? value : undefined;
         };
-        const resume = () => state().resumes.get(`${part().kind}:${part().key}`);
         return (
           <>
             <Show when={resume()}>
               {(display) => (
-                <ChatHandoffResume handoff={display()} source={display().source} sessions={[]} />
+                <Show when={!display().receipt}>
+                  <ChatContinuationActivity source={display().source} elapsed={display().elapsed} />
+                </Show>
               )}
             </Show>
             <Switch>
@@ -454,6 +457,7 @@ function RunFrame(props: FrameProps) {
                   <MessageGroupContent
                     group={group()}
                     options={groupOptions(group())}
+                    completionDelay={resume()?.receipt}
                     footerReactionMessageKey={footerReactionMessageKey()}
                   />
                 )}
@@ -463,6 +467,9 @@ function RunFrame(props: FrameProps) {
         );
       }}
     </FrameBody>,
+    <Show when={props.frame.outcome.kind !== "active" && !completedFragment()}>
+      <McpConnectCards groups={state().replyGroups} />
+    </Show>,
     <Show when={state().sourcePreviews.length > 0}>
       <ChatLazyBoundary>
         <ChatSourcePreviews

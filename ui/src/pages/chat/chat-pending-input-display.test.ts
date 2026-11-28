@@ -13,8 +13,13 @@ function input(id: string, message: unknown): ChatPendingInputsPage["items"][num
   return { id, runId: id, message, acceptedAt: 100, state: "queued", queued: true };
 }
 
-it("keeps completion receipts out of the composer queue without hiding text or attachment-only input", () => {
+it("keeps completion receipts and hidden inputs out of the composer queue without hiding text or attachment-only input", () => {
   const receipt = input("completion", completion);
+  const hidden = input("hidden", {
+    role: "user",
+    display: false,
+    content: "sessions_send delivery to agent:main:dashboard:target failed.",
+  });
   const text = input("text", {
     role: "user",
     content: [{ type: "text", text: "Check the example" }],
@@ -33,7 +38,7 @@ it("keeps completion receipts out of the composer queue without hiding text or a
       ],
     },
   });
-  const inputs = [text, receipt, attachment];
+  const inputs = [text, receipt, hidden, attachment];
 
   const expected = [
     { id: "pending-input:text", text: "Check the example" },

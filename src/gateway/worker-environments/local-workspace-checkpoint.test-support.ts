@@ -324,7 +324,7 @@ async function proveLocalWorkspaceCaptures(
     vi.spyOn(nativeWorktreeFilesystem, "remove").mockImplementation(
       async (destination, options) => {
         expect(paused).toBe(false);
-        if (deferredCleanup) {
+        if (deferredCleanup && path.basename(destination).startsWith("checkpoint-retired-")) {
           removalStarted = true;
           removing.resolve();
           await releaseRemoval.promise;

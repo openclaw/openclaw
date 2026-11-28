@@ -2,25 +2,38 @@
 // captured while the occurrence is live, but queued CLI admission starts after it
 // ended and rechecks the sender's policy independently of the retired request scope.
 import { expectDefined } from "@openclaw/normalization-core";
-import { afterEach, beforeEach, describe, expect, it } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import {
   clearRuntimeConfigSnapshot,
   setRuntimeConfigSnapshot,
 } from "../../config/runtime-snapshot.js";
-import { invalidateGatewayDeviceRevocation } from "../../gateway/device-revocation.js";
+import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import {
   resolveMcpLoopbackPolicyTools,
   resolveMcpLoopbackScopedTools,
 } from "../../gateway/mcp-http.runtime.js";
-import { captureGatewayOperatorContinuation } from "../../gateway/operator-run-recovery.js";
+import { OperatorRefusalError } from "../../gateway/operator-refusal.js";
 import {
   pairedOperator,
+  persistDevices,
   recoveryFixture,
 } from "../../gateway/operator-run-recovery.test-support.js";
+import { captureOperatorToolGatewayContinuationContext } from "../../gateway/server-plugin-in-process-dispatch.js";
 import { createSyntheticPluginRuntimeClient } from "../../gateway/server-plugin-runtime-client.js";
-import { withPluginRuntimeGatewayRequestScope } from "../../plugins/runtime/gateway-request-scope.js";
-import { setUserProfileRole } from "../../state/user-profile-writes.worker.js";
+import {
+  resolveEventSessionKeyForPolicy,
+  resolveEventSessionRoutingPolicy,
+} from "../../infra/event-session-routing.js";
+import { setActivePluginRegistry } from "../../plugins/runtime.js";
+import {
+  getPluginRuntimeGatewayRequestScope,
+  withPluginRuntimeGatewayRequestScope,
+} from "../../plugins/runtime/gateway-request-scope.js";
 import { ensureProfileForEmail } from "../../state/user-profiles.js";
+import {
+  createChannelTestPluginBase,
+  createTestRegistry,
+} from "../../test-utils/channel-plugins.js";
 import { withOpenClawTestState } from "../../test-utils/openclaw-test-state.js";
 import { prepareSystemAgentRunAdmission } from "../admitted-run-context.js";
 import {
@@ -31,6 +44,11 @@ import {
   createCliRunnerPrepareFixture,
   createTestMcpLoopbackClientGrant,
 } from "../cli-runner.test-helpers.js";
+import {
+  createJsonlStdinBackendConfig,
+  mockCliMcpPreparation,
+  setRawCliBackendForPrepareTest,
+} from "./prepare-mcp.test-support.js";
 import { prepareCliRunContext } from "./prepare.js";
 import {
   resetCliRunnerPrepareTestDeps,
@@ -50,7 +68,6 @@ describe("CLI preparation for a turn handed off by a scheduled run", () => {
       getActiveMcpLoopbackRuntime: () => ({
         port: 31783,
         ownerToken: "loopback-owner-token",
-        nonOwnerToken: "loopback-non-owner-token",
       }),
       mintMcpLoopbackClientGrant: createTestMcpLoopbackClientGrant,
       bindMcpLoopbackClientGrantAdmission: () => true,
@@ -71,17 +88,9 @@ describe("CLI preparation for a turn handed off by a scheduled run", () => {
     cliBackendsTesting.resetDepsForTest();
   });
 
-  it.each<{ revocation: string; rejection?: RegExp }>([
-    { revocation: "none" },
-    {
-      revocation: "sender device removed",
-      rejection: /Restart recovery operator source policy changed/i,
-    },
-    { revocation: "sender role changed", rejection: /Restart recovery operator identity changed/i },
-    { revocation: "explicit stop", rejection: /agent run aborted/i },
-  ])(
-    "prepares the queued CLI turn after the occurrence ended ($revocation)",
-    ({ revocation, rejection }) =>
+  it.each(["none", "sender device removed", "sender role denied", "explicit stop"] as const)(
+    "prepares the queued CLI turn after the occurrence ended (%s)",
+    (revocation) =>
       withOpenClawTestState({ scenario: "minimal" }, async ({ stateDir }) => {
         const profile = ensureProfileForEmail("scheduled-sender@example.test");
         const occurrence = await recoveryFixture(stateDir, profile.id, {
@@ -105,36 +114,44 @@ describe("CLI preparation for a turn handed off by a scheduled run", () => {
           scopes: ["operator.write"],
         });
         const accepted = expectDefined(
-          await captureGatewayOperatorContinuation({
-            client: senderClient,
-            context: occurrence.context,
-          }),
+          await withPluginRuntimeGatewayRequestScope(
+            {
+              client: senderClient,
+              context: occurrence.context,
+              resolveGatewayContext: occurrence.context.resolveGatewayContext,
+              isWebchatConnect: () => false,
+            },
+            () => captureOperatorToolGatewayContinuationContext(),
+          ),
           "receiver continuation",
-        );
-        const admission = prepareSystemAgentRunAdmission(
-          {},
-          "queued-cli-turn",
-          "main",
-          "test",
-          undefined,
-          accepted.authority,
         );
         try {
           occurrence.retire();
-          expect(sender.authority.assertCurrent).toThrow();
           if (revocation === "sender device removed") {
-            invalidateGatewayDeviceRevocation(occurrence.context, "recovery-device", "operator");
-          } else if (revocation === "sender role changed") {
-            setUserProfileRole(profile.id, "new-role");
+            persistDevices(stateDir, [], "both");
+          } else if (revocation === "sender role denied") {
+            occurrence.setConfig({
+              gateway: {
+                roles: {
+                  default: "blocked",
+                  definitions: {
+                    blocked: { agents: "*", sessions: { others: "none" }, scopes: [] },
+                  },
+                },
+              },
+            });
           }
-          const prepare = withPluginRuntimeGatewayRequestScope(
-            {
-              context: occurrence.context,
-              client: senderClient,
-              isWebchatConnect: () => false,
-            },
-            () =>
-              fixture.prepare({
+          const prepare = accepted.runWithRequester(async () => {
+            const admission = prepareSystemAgentRunAdmission(
+              {},
+              "queued-cli-turn",
+              "main",
+              "test",
+              undefined,
+              getPluginRuntimeGatewayRequestScope()?.client?.internal?.operatorRunAuthority,
+            );
+            try {
+              const context = await fixture.prepare({
                 runId: "queued-cli-turn",
                 provider: "claude-cli",
                 model: "opus",
@@ -143,25 +160,163 @@ describe("CLI preparation for a turn handed off by a scheduled run", () => {
                   ? { abortSignal: AbortSignal.abort(new Error("agent run aborted")) }
                   : {}),
                 config: {},
-              }),
-          );
-          if (rejection) {
-            // Fresh admission refuses changed sender policy; explicit Stop also prevents start.
-            await expect(prepare).rejects.toThrow(rejection);
-            return;
-          }
-          const context = await prepare;
-          try {
-            expect(context.params.admittedRunContext).toBeDefined();
-          } finally {
-            await context.preparedBackend.cleanup?.();
+              });
+              try {
+                expect(context.params.admittedRunContext).toBeDefined();
+              } finally {
+                await context.preparedBackend.cleanup?.();
+              }
+            } finally {
+              admission.close();
+            }
+          });
+          if (revocation === "explicit stop") {
+            await expect(prepare).rejects.toThrow("agent run aborted");
+          } else if (revocation !== "none") {
+            await expect(prepare).rejects.toBeInstanceOf(OperatorRefusalError);
+          } else {
+            await prepare;
           }
         } finally {
-          admission.close();
           accepted.release();
           sender.release();
           await fixture.settle();
         }
       }),
+  );
+});
+
+describe("CLI preparation for a scheduled account", () => {
+  let fixture: ReturnType<typeof createCliRunnerPrepareFixture>;
+
+  beforeEach(() => {
+    mockCliMcpPreparation({ getActiveMcpLoopbackRuntime: () => undefined });
+    fixture = createCliRunnerPrepareFixture((params) => {
+      setRuntimeConfigSnapshot(params.config ?? {});
+      return prepareCliRunContext({ skillsSnapshot: { prompt: "", skills: [] }, ...params });
+    });
+  });
+
+  afterEach(async () => {
+    await fixture.cleanup();
+    clearRuntimeConfigSnapshot();
+    setActivePluginRegistry(createTestRegistry());
+    resetCliRunnerPrepareTestDeps();
+    cliBackendsTesting.resetDepsForTest();
+  });
+
+  it.each([
+    { name: "the delivery channel", configured: true, messageProvider: undefined },
+    {
+      name: "cross-channel delivery",
+      configured: false,
+      messageProvider: undefined,
+      messageChannel: "discord",
+      sessionKey: "agent:main:telegram:direct:123",
+    },
+    {
+      name: "a removed account",
+      configured: false,
+      messageProvider: undefined,
+      expectedProcessStatus: "account not listed",
+    },
+    {
+      name: "an explicit provider",
+      configured: true,
+      messageProvider: "slack",
+      expectedProcessStatus: "plugin not loaded",
+    },
+  ])(
+    "resolves scheduled CLI accounts with $name",
+    async ({
+      configured,
+      messageProvider,
+      expectedProcessStatus,
+      messageChannel = "telegram",
+      sessionKey = "agent:main:cron:scheduled-account",
+    }) => {
+      const config: OpenClawConfig = {
+        session: { dmScope: "main" },
+        channels: {
+          discord: { accounts: { scheduled: {} } },
+          telegram: {
+            allowFrom: ["123"],
+            accounts: { default: {}, ...(configured ? { scheduled: {} } : {}) },
+          },
+        },
+      };
+      setActivePluginRegistry(
+        createTestRegistry(
+          (["telegram", "discord"] as const).map((id) => ({
+            pluginId: id,
+            plugin: createChannelTestPluginBase({
+              id,
+              config: {
+                listAccountIds: (cfg) => Object.keys(cfg.channels?.[id]?.accounts ?? {}),
+              },
+            }),
+            source: "test",
+          })),
+          { config },
+        ),
+      );
+      setRawCliBackendForPrepareTest({
+        id: "selectable-cli",
+        pluginId: "selectable-plugin",
+        bundleMcp: false,
+        nativeToolMode: "selectable",
+        toolAvailabilityEnforcement: "execution-args",
+        resolveExecutionArgs: ({ baseArgs }) => [...baseArgs],
+        config: createJsonlStdinBackendConfig("selectable-cli"),
+      });
+      const projectTools = vi.fn((_scope: Parameters<typeof resolveMcpLoopbackPolicyTools>[0]) => ({
+        agentId: "main",
+        tools: [{ name: "read" }],
+      }));
+      setCliRunnerPrepareTestDeps({ resolveMcpLoopbackPolicyTools: projectTools });
+      const scheduledToolPolicy = {
+        version: 1,
+        mode: "account",
+        ownerSessionKey: "agent:main:maintenance",
+        ownerAccountId: "scheduled",
+        ownerOrigin: { kind: "local" },
+      } as const;
+      const run = fixture.prepare({
+        config,
+        provider: "selectable-cli",
+        sessionKey,
+        messageChannel,
+        messageProvider,
+        toolsAllow: ["read"],
+        scheduledToolPolicy,
+      });
+      if (expectedProcessStatus !== undefined) {
+        await expect(run).rejects.toThrow(
+          `Scheduled account "scheduled" is unavailable on channel "${messageProvider ?? messageChannel}". Process registry: ${expectedProcessStatus}; scoped registry: no scope.`,
+        );
+        return;
+      }
+      const context = await run;
+      expect(context.params.cliToolAvailability).toEqual({ native: [], openClaw: ["read"] });
+      expect(projectTools).toHaveBeenCalledWith(
+        expect.objectContaining({ context: expect.objectContaining({ toolsAllow: ["read"] }) }),
+      );
+      expect(context.params.scheduledToolPolicy).toEqual(scheduledToolPolicy);
+      expect(context.params.senderId).toBeUndefined();
+      if (messageChannel === "discord") {
+        expect(
+          resolveEventSessionKeyForPolicy(
+            sessionKey,
+            resolveEventSessionRoutingPolicy({
+              cfg: context.params.config,
+              sessionKey,
+              channel: context.params.messageProvider,
+              accountId: context.params.agentAccountId,
+            }),
+          ),
+        ).toBe("agent:main:main");
+      }
+      await context.preparedBackend.cleanup?.();
+    },
   );
 });

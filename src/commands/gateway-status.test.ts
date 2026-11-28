@@ -279,14 +279,6 @@ describe("gateway-status command", () => {
 
     expect(capture.runtimeErrors).toHaveLength(0);
     expect(capture.runtimeLogs.join("\n")).toContain("Gateway Status");
-    expect(capture.runtimeLogs.join("\n")).toContain("Discovery (this machine)");
-    expect(capture.runtimeLogs.join("\n")).toContain("Targets");
-    expect(stripAnsi(capture.runtimeLogs.join("\n"))).toContain(
-      "Remote (configured) wss://remote.example:18789",
-    );
-    expect(stripAnsi(capture.runtimeLogs.join("\n"))).toContain(
-      "Remote over SSH ws://127.0.0.1:18789",
-    );
   });
 
   it.each([

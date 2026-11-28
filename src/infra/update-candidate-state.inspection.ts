@@ -122,6 +122,9 @@ export async function runUpdateStateInspectionWorker(params: {
             ? undefined
             : JSON.stringify({
                 ...params.input,
+                ...(params.input.mode === "discover"
+                  ? { preserveSourceArtifacts: params.input.preserveSourceArtifacts ?? false }
+                  : {}),
                 resultPath,
                 ...(params.root === undefined &&
                 path.basename(params.stagingRoot).startsWith(SQLITE_SNAPSHOT_PREFIX)

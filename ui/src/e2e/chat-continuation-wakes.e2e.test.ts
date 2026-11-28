@@ -10,7 +10,6 @@ import {
   installMockGateway,
 } from "../test-helpers/control-ui-e2e.ts";
 import { textContent } from "./chat-flow.test-support.ts";
-import { swarmSnapshot } from "./chat-swarm.test-support.ts";
 import { createControlUiE2eSuite } from "./control-ui-e2e-suite.test-support.ts";
 import { recordedToolCall } from "./recorded-tool.test-support.ts";
 
@@ -111,7 +110,16 @@ function history() {
               sourceTool: "subagent_settle",
               sourceSessionKey: "agent:main:subagent:link-check",
             },
-      __openclaw: meta(runId),
+      __openclaw: meta(
+        runId,
+        source === "subagent"
+          ? {
+              subagentCompletions: [
+                { runId: "child-link-check", sessionKey: "agent:main:subagent:link-check" },
+              ],
+            }
+          : {},
+      ),
     });
   rows.push({
     role: "user",
@@ -154,57 +162,6 @@ function history() {
 }
 
 suite.define(() => {
-  it("keeps Swarms from earlier runs in the resumed turn after reload", async () => {
-    await suite.withPage(
-      { viewport: { width: 1280, height: 1400 }, locale: "en-US" },
-      async ({ page }) => {
-        const child = (id: string, status: string) => ({
-          key: "agent:main:subagent:" + id,
-          status,
-        });
-        const groups = [
-          ...swarmSnapshot(`swarm:${sessionKey}:preview`, now + 9 * minute, [
-            child("link-check", "done"),
-          ]).groups,
-          ...swarmSnapshot(`swarm:${sessionKey}:build`, now + 4 * minute, [
-            child("build-check", "running"),
-          ]).groups,
-        ];
-        await installMockGateway(page, {
-          sessionKey,
-          sessions: [
-            {
-              key: sessionKey,
-              sessionId: "docs-upgrade",
-              kind: "direct",
-              label: "Docs upgrade",
-              updatedAt: now + 18 * minute,
-              swarm: { groups, otherActiveGroups: 0 },
-            },
-          ],
-          historyMessages: history(),
-        });
-        const thread = page.locator(".chat-pane-cache__pane--active .chat-thread");
-        const resumedTurn = thread.locator(".chat-group.assistant").filter({
-          has: page.getByText(ANSWER, { exact: true }),
-        });
-        const swarms = resumedTurn.locator('[data-test-id="chat-inline-swarm"]');
-        await page.goto(controlUiSessionUrl(suite.server.baseUrl, sessionKey));
-        await page.getByText(ANSWER, { exact: true }).waitFor();
-        expect(await resumedTurn.count()).toBe(1);
-        expect(await resumedTurn.locator(".chat-handoff-resume__rule").count()).toBeGreaterThan(0);
-        await expect.poll(() => swarms.count()).toBe(2);
-        expect(await swarms.getByRole("status").allTextContents()).toEqual([
-          "Swarm0 of 1 settled",
-          "Swarm1 of 1 settled",
-        ]);
-        await page.reload();
-        await expect.poll(() => swarms.count()).toBe(2);
-        expect(await thread.locator('[data-test-id="chat-inline-swarm"]').count()).toBe(2);
-      },
-    );
-  });
-
   it("keeps self-woken work in the block of the prompt that started it", async () => {
     await suite.withPage({ viewport: { width: 1280, height: 1400 } }, async ({ page }) => {
       await page.clock.setFixedTime(now + 20 * minute);
@@ -254,19 +211,26 @@ suite.define(() => {
         console.log(`Screenshot: ${file}`);
       }
       // One assistant block per prompt; the earlier answer stays in place above
-      // a Resumed rule for each wake that continued the work.
+      // one activity row for each wake that continued the work.
       expect(await thread.locator(".chat-group.assistant").count()).toBe(2);
+      const agent = thread.locator(".chat-tool-row--subagent", { hasText: "An agent finished" });
+      expect(await agent.count()).toBe(1);
+      expect(await agent.locator(".chat-tool-row__detail").textContent()).toContain("4m 39s later");
       expect(
-        (await thread.locator(".chat-handoff-resume__rule").allTextContents()).map((text) =>
+        (await thread.locator(".chat-continuation-activity").allTextContents()).map((text) =>
           text.replace(/\s+/gu, " ").trim(),
         ),
       ).toEqual([
-        "Resumed · 3m 40s later · Background command finished",
-        "Resumed · 4m 30s later · Background command finished",
-        "Resumed · 4m 40s later · Agent finished",
-        "Resumed · 1m 40s later · Background command finished",
+        "A background command finished · 3m 40s later",
+        "A background command finished · 4m 30s later",
+        "A background command finished · 1m 40s later",
       ]);
       await thread.getByText(ANSWER, { exact: true }).waitFor();
+      await page.reload();
+      await agent.waitFor();
+      expect(await agent.count()).toBe(1);
+      expect(await agent.locator(".chat-tool-row__detail").textContent()).toContain("4m 39s later");
+      expect(await thread.locator(".chat-group.assistant").count()).toBe(2);
     });
   });
 });

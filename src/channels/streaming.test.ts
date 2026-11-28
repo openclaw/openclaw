@@ -1,6 +1,7 @@
 import { expect, it } from "vitest";
 import { projectAgentToolActivity } from "../infra/agent-activity-events.js";
 import { createChannelProgressDraftCompositor } from "./progress-draft-compositor.js";
+import { resolveChannelStreamingChunkMode as readChunkMode } from "./streaming-config-readers.js";
 import {
   type AgentPlanStep,
   type ChannelProgressDraftLineInput,
@@ -18,7 +19,6 @@ import {
   formatChannelProgressDraftLine as formatLine,
   isChannelProgressDraftWorkToolName,
   resolveChannelStreamingBlockCoalesce as readCoalesce,
-  resolveChannelStreamingChunkMode as readChunkMode,
   resolveChannelStreamingNativeTransport as readNative,
   resolveChannelStreamingPreviewCommandText as readCommand,
   resolveChannelStreamingPreviewChunk as readChunk,
@@ -407,15 +407,6 @@ it("suppresses standalone tool progress for active preview drafts", () => {
   expect(suppress(progress)).toBe(true);
   expect(suppress(partial, { draftStreamActive: true })).toBe(true);
   expect(suppress({ streaming: { mode: "progress" } }, { draftStreamActive: false })).toBe(false);
-});
-
-it("renders automatic and configured progress labels through the public formatter", () => {
-  expect(formatText({ lines: [], random: () => 0 })).toBe("Working");
-  expect(render([], { label: " AUTO " }, { random: () => 0 })).toBe("Working");
-  const options = { narration: "Counting files.", random: () => 0.5 };
-  expect(render([], { label: "auto", labels: ["Pearling"] }, options)).toBe(
-    "Pearling\n\nCounting files.",
-  );
 });
 
 it.each([

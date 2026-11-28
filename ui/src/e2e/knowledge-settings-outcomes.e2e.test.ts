@@ -41,6 +41,7 @@ suite.define(() => {
                 supported: true,
                 binding: applied && kind === "assignment" ? "named:team" : "agent:main",
               },
+              { id: "scout", name: "scout", supported: true, binding: "named:team" },
             ],
             stores: [
               {
@@ -57,8 +58,8 @@ suite.define(() => {
                 binding: "named:team",
                 kind: "named",
                 key: "team",
-                label: "Team",
-                members: applied && kind === "assignment" ? ["main"] : [],
+                label: "Field notes",
+                members: applied && kind === "assignment" ? ["main", "scout"] : ["scout"],
                 retained: false,
                 state: "ready",
                 records: 8,
@@ -142,7 +143,7 @@ suite.define(() => {
               .click();
             await root.getByRole("menuitem", { name: /^Use shared store/ }).click();
             panel = root.locator(".knowledge-store-dialog");
-            await panel.getByRole("button", { name: "Use Team", exact: true }).click();
+            await panel.getByRole("button", { name: "Use Field notes", exact: true }).click();
           } else {
             panel = root.locator(".knowledge-grants");
             await panel
@@ -154,9 +155,10 @@ suite.define(() => {
             .poll(() => feedback.textContent())
             .toContain(
               kind === "assignment"
-                ? "Could not confirm the assignment."
-                : "Could not confirm the access change.",
+                ? "Couldn’t confirm the assignment."
+                : "Couldn’t confirm the access change.",
             );
+          expect(await feedback.textContent()).not.toContain("Response interrupted");
           expect(mutations).toBe(1);
           if (kind === "assignment") {
             await panel.getByRole("button", { name: "Cancel", exact: true }).click();
@@ -165,7 +167,22 @@ suite.define(() => {
           if (kind === "assignment") {
             await expect
               .poll(() => root.locator(".knowledge-store-bar").textContent())
-              .toContain("Team");
+              .toContain("Field notes");
+            await root.getByRole("button", { name: "Recent", exact: true }).click();
+            await page.setViewportSize({ width: 390, height: 844 });
+            const scope = root.locator(".knowledge-store-context");
+            await scope.getByText("· Shared with scout", { exact: true }).waitFor();
+            await page.evaluate(() => document.fonts.ready);
+            expect(
+              await scope
+                .locator("strong, span")
+                .evaluateAll((nodes) => nodes.every((n) => n.scrollWidth <= n.clientWidth + 1)),
+            ).toBe(true);
+            await root.locator(".knowledge-agent-select select").focus();
+            await page.keyboard.press("Tab");
+            expect(await scope.evaluate((n) => document.activeElement === n)).toBe(true);
+            await page.keyboard.press("Enter");
+            await root.getByRole("table", { name: "Agent store assignments" }).waitFor();
           } else {
             await expect
               .poll(() =>

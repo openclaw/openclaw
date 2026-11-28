@@ -129,7 +129,7 @@ struct OpenClawApp: App {
                 Button(String(localized: "Reload")) {
                     DashboardManager.shared.reloadDashboard()
                 }
-                .keyboardShortcut("r", modifiers: .command)
+                .keyboardShortcut("r", modifiers: [.command, .shift])
 
                 Button("Systems") {
                     AppNavigationActions.openSelectedWebRoute(DashboardRouteMap.systemsPagePath)
@@ -398,38 +398,46 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
                 self.credentialLogger
                     .error("Credential startup failed: \(error.localizedDescription, privacy: .public)")
                 self.showCredentialStartupFailure(
-                    Self.credentialStartupRecovery(for: error, replacingAppManagedService: replacingAppManagedService))
+                    schemaMismatch: error as? NewerStateSchemaError,
+                    serviceRecovery: Self.credentialStartupRecovery(
+                        for: error, replacingAppManagedService: replacingAppManagedService))
             }
         }
     }
 
-    /// A forward schema migration refused under an older Gateway service (#201468) names its own
-    /// recovery, which Doctor cannot replace: Doctor meets the same refusal. Every other failure keeps
-    /// the generic recovery, as does the previous build's app-managed service, whose refusal names
-    /// `openclaw update`, which an app-owned install cannot run.
     static func credentialStartupRecovery(for error: Error, replacingAppManagedService: Bool) -> String? {
-        guard !replacingAppManagedService,
-              let preparation = error as? ClientCredentialStartup.PreparationError
-        else { return nil }
-        return preparation.schemaRefusal
+        // An app-owned service cannot use the CLI's update instruction.
+        guard !replacingAppManagedService else { return nil }
+        return (error as? ClientCredentialStartup.GatewayServiceSchemaRefusal)?.recoverySuggestion
     }
 
-    private func showCredentialStartupFailure(_ schemaRefusal: String?) {
-        let message = schemaRefusal ??
-            "Quit OpenClaw, run openclaw doctor --fix with the matching CLI, then reopen OpenClaw. " +
-            "If you restored a backup, restore its matching client credentials too."
-        if schemaRefusal == nil {
-            self.credentialLogger
-                .error("Client credentials unavailable. Run openclaw doctor --fix before reopening the app.")
-        }
+    private func showCredentialStartupFailure(schemaMismatch: NewerStateSchemaError?, serviceRecovery: String?) {
+        let title = schemaMismatch == nil
+            ? "OpenClaw client credentials need recovery"
+            : "OpenClaw app update required"
+        let message = schemaMismatch?.localizedDescription ?? serviceRecovery ??
+            ("Quit OpenClaw, run openclaw doctor --fix with the matching CLI, then reopen OpenClaw. " +
+                "If you restored a backup, restore its matching client credentials too.")
+        self.credentialLogger.error("\(title, privacy: .public). \(message, privacy: .public)")
         if AppLaunchRuntimePlan.current.allowsActivation {
             let alert = NSAlert()
             alert.alertStyle = .critical
-            alert.messageText = "OpenClaw client credentials need recovery"
+            alert.messageText = title
             alert.informativeText = message
-            AppActivation.shared.presentAlert(alert)
+            if schemaMismatch != nil, let releases = URL(string: "https://github.com/openclaw/openclaw/releases") {
+                // This path cannot depend on Sparkle or Gateway credentials having started.
+                alert.addButton(withTitle: "Open Downloads")
+                alert.addButton(withTitle: "Quit")
+                AppActivation.shared.presentAlert(alert) { response in
+                    if response == .alertFirstButtonReturn {
+                        AppActivation.shared.open(releases)
+                    }
+                }
+            } else {
+                AppActivation.shared.presentAlert(alert)
+            }
         } else {
-            fputs("OpenClaw client credentials need recovery. \(message)\n", stderr)
+            fputs("\(title). \(message)\n", stderr)
         }
         Self.requestTermination()
     }
@@ -602,7 +610,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
             joinedClaw: MacOpenClawIDJoinCompletion.primaryIsJoinedClaw(
                 mode: AppStateStore.shared.connectionMode,
                 remoteUrl: AppStateStore.shared.remoteUrl),
-            removedClaw: MacOpenClawIDDeviceStore.shared.lastRemoval() != nil,
+            removedClaw: MacOpenClawIDFeature.isEnabled && MacOpenClawIDDeviceStore.shared.lastRemoval() != nil,
             markComplete: { OnboardingController.markComplete() },
             show: {
                 DispatchQueue.main.asyncAfter(deadline: .now() + 0.6) {

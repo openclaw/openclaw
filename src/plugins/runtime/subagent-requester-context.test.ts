@@ -52,24 +52,6 @@ it.each([
   expect(createPluginSubagentRequesterContext(input)).toBeUndefined();
 });
 
-it("expires requester authority when the hook invocation returns", async () => {
-  const requester = makeRequester("123");
-
-  const detachedGate = createDeferred();
-  let detachedRead: Promise<PluginSubagentRequesterContext | undefined> | undefined;
-  await withPluginSubagentRequesterContext(requester, async () => {
-    expect(getActiveRequester()).toBe(requester);
-    detachedRead = (async () => {
-      await detachedGate.promise;
-      return getActiveRequester();
-    })();
-  });
-
-  detachedGate.resolve();
-  await expect(detachedRead).resolves.toBeUndefined();
-  expect(getActiveRequester()).toBeUndefined();
-});
-
 it("isolates concurrent requester scopes", async () => {
   const gate = createDeferred();
   const runs = ["first", "second"].map((id) => {

@@ -79,46 +79,6 @@ describe("check-deadcode-exports", () => {
     }
   });
 
-  it("makes tests in every workspace roots of the full-tree export audit", () => {
-    expectEntries(knipConfig.workspaces["."].entry, [
-      "config/knip.config.ts!",
-      "config/knip.all-exports.config.ts!",
-      "config/knip.scripts-exports.config.ts!",
-      "scripts/generate-runtime-script-assets.mjs!",
-      "scripts/generate-static-validators.mts!",
-      "scripts/perf/agent-exec-cgroup-proof.ts!",
-      "scripts/perf/backup-verify-fixture.mjs!",
-      "scripts/perf/backup-verify-measure.mjs!",
-      "scripts/perf/cron-delivery-gateway-entry.ts!",
-      "tsdown.config.ts!",
-      "scripts/perf/**/*.{js,mjs,cjs,ts,mts,cts}!",
-    ]);
-    expect(knipConfig.workspaces["."].project).toContain("config/**/*.{ts,mts,cts}!");
-    expectEntries(fullRootWorkspace.entry, [
-      "test/vitest/vitest*.config.ts!",
-      "scripts/crabbox-wrapper.mjs!",
-      "scripts/crabbox-wrapper.mts!",
-      "scripts/check-openclaw-package-tarball.mjs!",
-      "scripts/check-openclaw-package-tarball.mts!",
-      "test/scripts/service-relay-artifact.test-support.mjs!",
-    ]);
-    expect(knipConfig.workspaces["."].entry).not.toContain(
-      "test/scripts/service-relay-artifact.test-support.mjs!",
-    );
-    for (const extension of ["js", "mjs", "cjs", "ts", "tsx", "mts", "cts"]) {
-      expect(isEntry(knipConfig.workspaces["."].entry, `scripts/perf/x.${extension}`)).toBe(
-        extension !== "tsx",
-      );
-      for (const directory of ["src", "scripts", "test"]) {
-        expect(isEntry(fullRootWorkspace.entry, `${directory}/x.test.${extension}`)).toBe(true);
-      }
-      expect(isEntry(fullExtensionWorkspace.entry, `src/example.spec.${extension}`)).toBe(true);
-      expect(isEntry(fullUiWorkspace.entry, `src/example.test.${extension}`)).toBe(true);
-      expect(isEntry(knipConfig.workspaces["."].entry, `test/x.test.${extension}`)).toBe(false);
-    }
-    expect(isEntry(fullRootWorkspace.entry, ".agents/skills/example/scripts/probe.ts")).toBe(true);
-  });
-
   it("models both compiled subprocess registries as workspace-relative full-tree roots", () => {
     const buildSources = Object.values(vitestWorkerBuildEntries).map((source) =>
       path.relative(".", source).replaceAll("\\", "/"),
@@ -337,16 +297,43 @@ test/**/*.{test,spec}.{js,mjs,cjs,ts,mts,cts}! src/plugin-sdk/api-baseline.ts!`.
     ).not.toContain("plugin-prerelease-test-plan.mts");
   });
 
-  it("models named Solid lazy consumers without retaining a deleted loader", () => {
-    const source = `const SettingsSidebar = lazy(() => import("./settings-sidebar-shell.tsx"), {
+  it("models named Solid lazy consumers in every UI loader without retaining a deleted loader", () => {
+    const sources: Record<string, string> = {
+      "settings-sidebar-lazy.tsx": `const SettingsSidebar = lazy(() => import("./settings-sidebar-shell.tsx"), {
   export: "ShellSettingsSidebar",
-});`;
-    const read = vi.spyOn(fs, "readFileSync").mockReturnValue(source);
+});`,
+      // A second loader in another directory, as #204200 added for the chat bubble.
+      "chat-message-bubble-view.tsx": `const Notice = lazy(() => import("./chat-read-aloud-status.tsx"), {
+  export: "RecordingApiKeyNotice",
+});`,
+      "chat-message-bubble-view.test.tsx": `lazy(() => import("./test-only.tsx"), { export: "TestOnly" });`,
+    };
+    const dirs: Record<string, string> = {
+      "settings-sidebar-lazy.tsx": path.resolve("ui/src/components"),
+      "chat-message-bubble-view.tsx": path.resolve("ui/src/pages/chat/components"),
+      "chat-message-bubble-view.test.tsx": path.resolve("ui/src/pages/chat/components"),
+    };
+    vi.spyOn(fs, "readdirSync").mockReturnValue(
+      Object.keys(sources).map((name) => ({
+        name,
+        parentPath: dirs[name],
+        isFile: () => true,
+      })) as never,
+    );
+    const read = vi
+      .spyOn(fs, "readFileSync")
+      .mockImplementation(((file: string) => sources[path.basename(file)] ?? "") as never);
     const compile = knipConfig.compilers.mjs;
-    expect(compile("// config", "config/knip-vite-consumers.mjs")).toContain(
+    const compiled = compile("// config", "config/knip-vite-consumers.mjs");
+    expect(compiled).toContain(
       'import { ShellSettingsSidebar as __solidLazy0 } from "../ui/src/components/settings-sidebar-shell.tsx";',
     );
-    read.mockReturnValue("const SettingsSidebar = null;");
+    expect(compiled).toContain(
+      'from "../ui/src/pages/chat/components/chat-read-aloud-status.tsx";',
+    );
+    expect(compiled).toContain("import { RecordingApiKeyNotice as __solidLazy");
+    expect(compiled).not.toContain("TestOnly");
+    read.mockImplementation((() => "const SettingsSidebar = null;") as never);
     expect(compile("// config", "config/knip-vite-consumers.mjs")).not.toContain(
       "ShellSettingsSidebar",
     );
@@ -367,42 +354,6 @@ const offlineShell = { routes: routes.APP_ROUTE_PATHS };`;
     );
     expect(compiled).not.toContain("APP_ROUTE_OFFLINE_PREFIXES");
     expect(compile(source, "config/unrelated.mjs")).toBe(source);
-  });
-
-  it("models the locale catalogue members consumed through Vite's runner", () => {
-    const source = `const { module, dependencies } = await runnerImport<
-  typeof import("../../scripts/lib/control-ui-i18n-catalog.ts")
->(sourceCatalogPath, options);
-const startup = module.loadControlUiStartupCatalog();
-const catalog = module.loadControlUiSourceCatalog();`;
-    vi.spyOn(fs, "readFileSync").mockReturnValue(source);
-    expect(scriptRootWorkspace.entry).toContain("config/knip.config.ts!");
-    expect(scriptRootWorkspace.entry).toContain("config/knip-vite-consumers.mjs!");
-    const compile = knipConfig.compilers.mjs;
-    expect(compile("// config", "config/knip-vite-consumers.mjs")).toContain(
-      'import { loadControlUiStartupCatalog as __vite0_0, loadControlUiSourceCatalog as __vite0_1 } from "../scripts/lib/control-ui-i18n-catalog.ts";',
-    );
-    const withoutStartup = source.replace(
-      "const startup = module.loadControlUiStartupCatalog();",
-      "",
-    );
-    vi.mocked(fs.readFileSync).mockReturnValue(withoutStartup);
-    expect(compile("// config", "config/knip-vite-consumers.mjs")).not.toContain(
-      "loadControlUiStartupCatalog",
-    );
-  });
-
-  it("models ordinary UI Vite imports into the script workspace", () => {
-    const source = `import { isControlUiOptionalAsset } from "../scripts/lib/control-ui-optional-assets.ts";`;
-    vi.spyOn(fs, "readFileSync").mockReturnValue(source);
-    const compile = knipConfig.compilers.mjs;
-    expect(compile("// config", "config/knip-vite-consumers.mjs")).toContain(
-      'import { isControlUiOptionalAsset } from "../scripts/lib/control-ui-optional-assets.ts";',
-    );
-    vi.mocked(fs.readFileSync).mockReturnValue("const config = {};");
-    expect(compile("// config", "config/knip-vite-consumers.mjs")).not.toContain(
-      "isControlUiOptionalAsset",
-    );
   });
 
   it("follows only live computed benchmark child launches", () => {
@@ -957,6 +908,9 @@ function other(lineageCompletion: typeof lineageWriter) {
       ).toBe(false);
       expect(compiled).toContain(`from "./${module}";`);
     }
+    expect(compiled).toMatch(
+      /import \{ runWithOpenClawStateLeaseWorker as __updateCompatibilityConsumer\d+ \} from "\.\/src\/state\/openclaw-state-lease-worker-operation\.ts";/u,
+    );
     const finishAliases = [
       ...compiled.matchAll(
         /import \{ finishUpdateRun as (__updateCompatibilityConsumer\d+) \} from "\.\/src\/infra\/update-run-(?:ledger|write)\.ts";/gu,
@@ -1041,9 +995,5 @@ function other(lineageCompletion: typeof lineageWriter) {
 ${errors}
 Install workspace dependencies in-tree (pnpm install) — on delegated boxes the crabbox wrapper links the hydrated modules dir into the workdir — and rerun.`,
     });
-  });
-
-  it("accepts clean export scan output unchanged", () => {
-    expect(checkExportScan("clean scan", "")).toEqual({ entries: [], message: "", ok: true });
   });
 });

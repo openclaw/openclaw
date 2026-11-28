@@ -407,7 +407,13 @@ export function readSessionActorProjectionReceipt(params: {
   sessionId: string;
   sessionKey?: string;
 }): SessionTranscriptProjectionReceipt | undefined {
-  return readSessionActorProjectionReceiptFromCells(pool.cells.values(), touch, params);
+  return readSessionActorProjectionReceiptFromCells(
+    params.sessionKey === undefined
+      ? pool.cells.values()
+      : (pool.cellsBySessionKey.get(params.sessionKey) ?? []),
+    touch,
+    params,
+  );
 }
 
 function readCurrentEntryCell(target: FileTarget, admitted?: DatabasePathIdentity) {
@@ -479,7 +485,8 @@ function readCurrentEntryCellForPath(
   admitted?: DatabasePathIdentity,
 ) {
   ensureReplicaSubscription();
-  for (const { target } of sessionActorReplicaCellsForPath(pool.cells.values(), params.path)) {
+  const candidates = pool.cellsBySessionKey.get(params.sessionKey) ?? [];
+  for (const { target } of sessionActorReplicaCellsForPath(candidates, params.path)) {
     const { database, sessionKey } = target;
     if (database.kind === "file" && sessionKey === params.sessionKey) {
       return readCurrentEntryCell({ database, sessionKey }, admitted);
@@ -489,19 +496,19 @@ function readCurrentEntryCellForPath(
 }
 
 /** Only the complete actor postimage covers pending-input absence for its current window. */
-export function hasSessionActorEmptyPendingInputHistory(
+export function readSessionActorEmptyPendingInputHistory(
   admitted: DatabasePathIdentity,
   sessionKey: string,
   sessionId: string,
-): boolean {
+) {
   const snapshot = readCurrentEntryCellForPath(
     { path: admitted.canonicalPath, sessionKey },
     admitted,
   )?.cell.snapshot;
-  return (
-    snapshot?.entry?.sessionId === sessionId &&
+  return snapshot?.entry?.sessionId === sessionId &&
     snapshot.pendingInputs.every((row) => row.consumed_event_id !== null)
-  );
+    ? { status: snapshot.entry.status, lastRunId: snapshot.entry.lastRunId }
+    : undefined;
 }
 
 /** Borrow current physical facts; the admitted reader retains disclosure authority. */

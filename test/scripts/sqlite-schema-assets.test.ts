@@ -70,7 +70,8 @@ for (const file of files) fs.renameSync(file + '.held', file);
 const root = process.cwd();
 const retained = root + '.retained';
 const inventory = fs.readdirSync(root, { recursive: true, withFileTypes: true })
-  .filter(entry => entry.isFile()).map(entry => path.join(entry.parentPath, entry.name));
+  .filter(entry => entry.isFile()).map(entry => path.join(entry.parentPath, entry.name))
+  .map(file => ({ sourcePath: file, identityPath: file }));
 fs.cpSync(root, retained, { recursive: true });
 owner.retainUpdateRuntimeImports([{ sourceRoot: root, destinationRoot: retained }], inventory);
 const replacement = JSON.stringify({ tables: [], catalogs: {} });

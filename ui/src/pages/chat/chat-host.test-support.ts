@@ -37,11 +37,11 @@ export function registerChatHostCleanup(host: ChatHost, disposeEffects?: () => v
   });
 }
 
-export const historyBudget = {
-  limit: 80,
+export const historyBudget = (limit: 24 | 80) => ({
+  limit,
   maxBytes: 256 * 1024,
   toolResultMaxChars: 2_000,
-};
+});
 
 export function makeRequestMock(handlers: RequestHandlers = {}): GatewayRequestMock {
   return createGatewayRequestMock((method: string, params?: unknown) => {

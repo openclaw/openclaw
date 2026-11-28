@@ -22,7 +22,8 @@ const { createOpenClawCodingToolsAsyncMock, logWarnMock, makeBootstrapWarnMock }
 );
 
 // mock-isolation: Fix channel prompt facts without loading live channel plugin state.
-vi.mock("../../agents/runtime-capabilities.js", () => ({
+vi.mock("../../agents/runtime-capabilities.js", async (importOriginal) => ({
+  ...(await importOriginal<Record<string, unknown>>()),
   resolveRuntimeChannelPromptContext: vi.fn<typeof resolveRuntimeChannelPromptContext>(() => ({
     runtimeChannel: "telegram",
     runtimeCapabilities: ["voice"],

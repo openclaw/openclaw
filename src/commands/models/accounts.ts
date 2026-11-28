@@ -303,12 +303,18 @@ export async function modelsAccountsLoginCommand(
           options.provider,
           prompter,
         );
-        const method = await selectAccountChoice(
-          "Sign-in method",
-          provider.methods,
-          options.method,
-          prompter,
-        );
+        // `--method device-code` (documented through v2026.11.6) names the declared device-code
+        // sign-in, which the catalog lists under its own id; the Gateway resolves the alias.
+        const method =
+          options.method?.trim() === "device-code" &&
+          !provider.methods.some((entry) => entry.id === "device-code")
+            ? { id: "device-code" }
+            : await selectAccountChoice(
+                "Sign-in method",
+                provider.methods,
+                options.method,
+                prompter,
+              );
         signal.throwIfAborted();
         const result = await connectAccount(
           client,

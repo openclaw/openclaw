@@ -11,7 +11,9 @@ import { isRelativeAssistantMediaReference, splitMediaOutput } from "../media/pa
 import {
   isCompletionReportInputProvenance,
   normalizeInputProvenance,
+  stripInterSessionPromptPrefixForDisplay,
 } from "../sessions/input-provenance.js";
+import { isLegacySessionsSendFailureNoticeText } from "../sessions/sessions-send-failure-notice.js";
 import {
   extractAssistantPhaseText,
   isAssistantTextContentBlockType as isAssistantTextContentType,
@@ -317,6 +319,25 @@ export function userMessageStartsDisplayTurn(message: Record<string, unknown>): 
 
 export function isProjectedForwardedMessage(message: Record<string, unknown>): boolean {
   return message.role === "assistant" && hasForwardedMessageProvenance(message);
+}
+
+/** Legacy peer delivery failure notices were persisted without `display: false`. */
+export function isLegacySessionsSendFailureNoticeMessage(
+  message: Record<string, unknown>,
+): boolean {
+  if (message.role !== "user" && message.role !== "assistant") {
+    return false;
+  }
+  const provenance = normalizeInputProvenance(message.provenance);
+  return (
+    provenance?.kind === "inter_session" &&
+    provenance.sourceTool === "sessions_send" &&
+    isLegacySessionsSendFailureNoticeText(
+      stripInterSessionPromptPrefixForDisplay(
+        extractProjectedText(message.content ?? message.text),
+      ),
+    )
+  );
 }
 
 function hasForwardedMessageProvenance(message: Record<string, unknown>): boolean {

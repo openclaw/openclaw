@@ -120,6 +120,14 @@ export const GitHubPublicationReviewRequestSchema = closedObject({
   requestId: Type.Optional(PersonalGitHubGenerationSchema),
   expectedHeadCommit: Type.String({ pattern: "^[a-f0-9]{40}$" }),
 });
+export const GitHubPublicationAddAssigneeSchema = closedObject({
+  action: Type.Literal("add_assignee"),
+  pullRequestUrl: GitHubPublicationActionSchema.properties.pullRequestUrl,
+  publishingSessionKey: GitHubPublicationActionSchema.properties.publishingSessionKey,
+  requestId: GitHubPublicationActionSchema.properties.requestId,
+  expectedHeadCommit: GitHubPublicationReviewRequestSchema.properties.expectedHeadCommit,
+  assignee: SessionGitHubPullRequestInspectResultSchema.properties.author.properties.login,
+});
 export const GITHUB_PUBLICATION_EVIDENCE_MAX_BYTES = 10_000_000;
 export const GitHubPublicationEvidenceSchema = closedObject({
   path: Type.String({ minLength: 1, maxLength: 1024 }),
@@ -149,6 +157,11 @@ export const SessionGitHubActionParamsSchema = Type.Union([
     agentId: Type.Optional(NonEmptyString),
   }),
   closedObject({
+    ...GitHubPublicationAddAssigneeSchema.properties,
+    sessionKey: NonEmptyString,
+    agentId: Type.Optional(NonEmptyString),
+  }),
+  closedObject({
     ...GitHubPublicationEvidenceUploadSchema.properties,
     sessionKey: NonEmptyString,
     agentId: Type.Optional(NonEmptyString),
@@ -167,6 +180,13 @@ export const SessionGitHubActionParamsSchema = Type.Union([
     ...GitHubBaseRefreshSchema.properties,
     sessionKey: NonEmptyString,
     agentId: Type.Optional(NonEmptyString),
+  }),
+  closedObject({
+    action: Type.Literal("create_issue"),
+    sessionKey: NonEmptyString,
+    agentId: Type.Optional(NonEmptyString),
+    title: GitHubPublicationTitleSchema,
+    body: Type.Optional(GitHubPublicationBodySchema),
   }),
 ]);
 export const SessionGitHubBaseRefreshResultSchema = closedObject({
@@ -241,6 +261,12 @@ const SessionGitHubActionState = {
   ),
   title: Type.Optional(Type.String()),
   body: Type.Optional(Type.String()),
+  assignment: Type.Optional(
+    closedObject({
+      status: stringLiteralUnion(["assigned", "already_assigned"]),
+      login: NonEmptyString,
+    }),
+  ),
   evidence: Type.Optional(
     Type.Union([
       closedObject({

@@ -69,7 +69,7 @@ for the new tokenizer and account-bound thinking requirements.
 OpenClaw detects the available Anthropic credential and selects the matching usage surface:
 
 - OpenClaw-managed subscription/setup credentials show quota windows and optional extra-usage budget.
-- Native Claude CLI logins stay under Claude's exclusive refresh control, so OpenClaw does not poll their quota endpoint.
+- File-backed native Claude CLI logins show the same quota windows on demand (`/status`, `openclaw status --usage`, Control UI **Usage**) when no other Anthropic credential reports them and config routes Claude through `claude-cli`. Quota is fetched directly from Anthropic's usage endpoint and stays local (`openclaw models status` only prints usage next to stored OAuth/token profiles).
 - `ANTHROPIC_ADMIN_KEY` or `ANTHROPIC_ADMIN_API_KEY` shows 30 days of provider-reported organization cost and Messages API usage in Control UI **Usage**, including daily spend, token/cache totals, top models, and cost categories.
 - An `sk-ant-admin...` credential stored in the Anthropic provider profile is detected as an Admin API key automatically.
 
@@ -226,10 +226,10 @@ OpenClaw release:
         models available in the picker without a native `claude auth login`;
         switching models preserves the configured Claude CLI runtime.
         Existing sessions keep their account until you select another
-        or remove its saved profile. Native-tool approvals remain under OpenClaw
-        control. Schema-valid native calls pass through OpenClaw's shared
-        tool policy before native approval. Isolated side-question completions
-        and paired-node execution retain the supervised CLI path.
+        or remove its saved profile. Schema-valid native calls pass through
+        OpenClaw's `before_tool_call` policy; OpenClaw's exec approvals do not
+        gate Claude's own tools. Isolated side-question completions and
+        paired-node execution retain the supervised CLI path.
 
         Consecutive agent turns reuse the same warm Claude Code subprocess
         when their authenticated session and execution policy
@@ -1015,13 +1015,14 @@ OpenClaw supports Anthropic's prompt caching feature for API-key auth.
     following turn falls back to full local history.
 
     When `anthropicCompactThreshold` is omitted, OpenClaw uses
-    `max(50000, floor(budget * 0.7))`, where the budget is the model's
-    `contextTokens` cap when set and its `contextWindow` otherwise. Explicit session
-    context-window choices still apply when live model discovery is unavailable.
-    With the default trigger, Anthropic compacts before local preflight compaction
-    would. If a trigger falls inside the local compaction reserve, for example
-    the 50000 minimum on a small window, local compaction may run first; that
-    only skips server compaction, never overflows. An explicit
+    `max(50000, floor(budget * 0.85))`, where the budget is the model's
+    `contextTokens` cap when set and its `contextWindow` otherwise, the same
+    fraction as client compaction. Explicit session context-window choices still
+    apply when live model discovery is unavailable. On a 200,000-token window
+    the default trigger is 170,000 tokens. If a trigger falls inside the local
+    compaction reserve, for example the 50000 minimum on a small window, local
+    compaction may run first; that only skips server compaction, never
+    overflows. An explicit
     `anthropicServerCompaction: true` delays the outer pre-run check to the
     trigger; checkpoint safety guards can still compact locally first. To
     choose a different input-token trigger:

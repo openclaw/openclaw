@@ -247,7 +247,7 @@ describe("bootstrapApplication", () => {
     });
     expect(request).not.toHaveBeenCalled();
     expect(replaceRoute).toHaveBeenCalledOnce();
-    expect(replaceRoute).toHaveBeenCalledWith("model-setup", { search: "?firstRun=1" });
+    expect(replaceRoute).toHaveBeenCalledWith("model-providers", { search: "?firstRun=1" });
   });
 
   it("does not replace a user route with the deferred default chat location", async () => {
@@ -260,8 +260,7 @@ describe("bootstrapApplication", () => {
       history: { location: () => currentLocation, replace: vi.fn() },
       initialLocationReady: Promise.resolve(makeLocation("/chat/main")),
       installLocation,
-      shouldInstallLocation: () =>
-        isDefaultChatLanding(currentLocation, "", applicationRoutes.routeIdFromPath),
+      shouldInstallLocation: () => isDefaultChatLanding(currentLocation, ""),
     });
 
     expect(installLocation).not.toHaveBeenCalled();

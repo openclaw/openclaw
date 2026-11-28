@@ -178,12 +178,6 @@ export async function runIsolatedAgentRuntimeCompletion(params: {
     if (isLlmOperatorAuthorizationError(error)) {
       throw error;
     }
-    // Source revocation can win the abort race before the operation rechecks authority.
-    try {
-      params.operatorAuthority?.assertCurrent();
-    } catch (authorizationError) {
-      throw createLlmOperatorAuthorizationError(authorizationError);
-    }
     if (isLlmRuntimeLifecycleFailure(error)) {
       throw error;
     }

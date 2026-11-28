@@ -3,8 +3,8 @@ import { describe, expect, it, onTestFinished, vi } from "vitest";
 import { createDeferred } from "../../../../test/helpers/promise.js";
 import type { GatewayBrowserClient } from "../../api/gateway.ts";
 import { createStateWithRequest } from "./cron.test-support.ts";
+import { loadCronStatus } from "./editor-status.ts";
 import { getCronRunsViewState, loadCronRuns } from "./runs.ts";
-import { loadCronStatus } from "./state.ts";
 import type { CronState } from "./types.ts";
 
 function createRefreshHarness(method: "cron.status" | "cron.runs") {
@@ -54,7 +54,8 @@ function createRefreshHarness(method: "cron.status" | "cron.runs") {
       return read;
     },
     settle: () => Promise.all(loads),
-    error: () => (method === "cron.status" ? state.cronError : state.cronRunsError),
+    error: () =>
+      method === "cron.status" ? state.cronError : (state.cronRunsError?.detail ?? null),
     revision: () => (method === "cron.status" ? state.cronStatus?.jobs : state.cronRuns[0]?.ts),
   };
 }

@@ -1,6 +1,6 @@
 {
   "name": "@openclaw/codex",
-  "version": "2026.11.5",
+  "version": "2026.11.10",
   "description": "OpenClaw Codex app-server harness and native session supervision plugin.",
   "repository": {
     "type": "git",
@@ -8,8 +8,8 @@
   },
   "type": "module",
   "dependencies": {
-    "@openai/codex": "0.169.0",
-    "@openclaw/fs-safe": "0.27.1",
+    "@openai/codex": "0.172.0",
+    "@openclaw/fs-safe": "0.28.2",
     "acorn": "8.19.0",
     "semver": "7.8.5",
     "smol-toml": "1.9.1",
@@ -42,10 +42,10 @@
       ]
     },
     "compat": {
-      "pluginApi": ">=2026.11.5"
+      "pluginApi": ">=2026.11.10"
     },
     "build": {
-      "openclawVersion": "2026.11.5",
+      "openclawVersion": "2026.11.10",
       "workerEntries": [
         "./stdio.worker.ts",
         "./catalog-page.worker.ts",

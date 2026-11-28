@@ -1,4 +1,5 @@
 /* @vitest-environment jsdom */
+
 import { expectDefined } from "@openclaw/normalization-core/expect";
 import { createComponent } from "solid-js";
 import { afterEach, beforeEach, describe, expect, it, onTestFinished, vi } from "vitest";
@@ -22,8 +23,8 @@ import {
 import { activePlacementSession, createTestChatPane } from "../chat-pane.test-support.ts";
 import { createSessionCapabilityFixture } from "../chat-session-capability.test-support.ts";
 import * as chatThreadBuild from "../chat-thread-build.ts";
+import { openAIMessage } from "../chat-thread-fixtures.test-support.ts";
 import {
-  buildCachedChatItems,
   getExpandedToolCards,
   getExpandedUserMessages,
   getExpansionStateVersion,
@@ -426,7 +427,7 @@ describe("chat transcript invalidation", () => {
           toolName: "read",
           runId: completedRunId,
         }),
-        msg("assistant", "Workspace checked", 3_000, {
+        openAIMessage("Workspace checked", 3_000, {
           phase: "final_answer",
           stopReason: "stop",
           runId: completedRunId,
@@ -465,41 +466,10 @@ describe("chat transcript invalidation", () => {
       expect(find(container, '[data-entry-id="settled-final"]')).toBe(finalBubble);
       expect(finalBubble.textContent).toContain("Workspace checked");
       expect(workToggle.getAttribute("aria-expanded")).toBe("false");
-      expect(prepareFrame.mock.calls.filter(([group]) => group.runId === completedRunId)).toEqual(
-        [],
-      );
+      expect(prepareFrame.mock.calls.some(([group]) => group.runId === completedRunId)).toBe(false);
     } finally {
       transcript.dispose();
     }
-  });
-
-  it("keeps built row identities across an A to B to A presentation reset", () => {
-    const paneId = "pane-session-items";
-    const messagesA = [{ role: "assistant", content: "session A", timestamp: 1_000 }];
-    const messagesB = [{ role: "assistant", content: "session B", timestamp: 2_000 }];
-    const stableInputs = {
-      paneId,
-      runId: null,
-      toolMessages: [],
-      streamSegments: [],
-      stream: null,
-      streamStartedAt: null,
-      showToolCalls: true,
-    };
-    const buildSpy = vi.spyOn(chatThreadBuild, "buildChatItems");
-    const build = (sessionKey: string, messages: unknown[]) =>
-      buildCachedChatItems({
-        ...stableInputs,
-        sessionKey,
-        messages,
-      });
-    const itemsA = build("agent:main:session-a", messagesA);
-    resetTranscriptSession(paneId);
-    build("agent:main:session-b", messagesB);
-    resetTranscriptSession(paneId);
-    const restoredItemsA = build("agent:main:session-a", messagesA);
-    expect(buildSpy).toHaveBeenCalledTimes(2);
-    expect(restoredItemsA).toBe(itemsA);
   });
 
   it("keeps message rows prepared and refreshes failure actions when a retained transcript returns", async () => {

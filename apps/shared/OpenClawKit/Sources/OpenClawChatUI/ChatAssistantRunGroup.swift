@@ -54,13 +54,22 @@ struct ChatAssistantRunGroup: Identifiable {
         }.first
     }
 
-    static func build(
-        _ rows: [ChatTranscriptRow],
-        tools: [OpenClawChatPendingToolCall] = [],
-        liveRunID: String?,
-        hasLiveContent: Bool,
-        searchActive: Bool) -> [Self]
-    {
+    /// Merge live starts and durable receipts before either platform groups its rows.
+    static func orderedParts(_ rows: [ChatTranscriptRow], tools: [OpenClawChatPendingToolCall]) -> [Part] {
+        guard !tools.isEmpty else { return rows.map(Part.row) }
+        let liveOwners = Dictionary(grouping: tools, by: \.id).mapValues { Set($0.compactMap(\.runID)) }
+        let rows = rows.map { row -> ChatTranscriptRow in
+            // CLI history can retain a provider call ID without a Gateway run ID. Attribute only the
+            // presentation copy: a name or the position next to another run is never proof of ownership.
+            guard case var .message(message) = row, message.workRunID == nil,
+                  message.sourceMetadata?.importedFrom == "claude-cli" else { return row }
+            let ids = message.isToolResult ? [message.toolCallId].compactMap(\.self) :
+                message.content.filter { $0.isToolCall || $0.isToolResult }.compactMap(\.id)
+            let owners = ids.reduce(into: Set<String>()) { $0.formUnion(liveOwners[$1] ?? []) }
+            guard owners.count == 1, let owner = owners.first else { return row }
+            message.transcriptRunID = owner
+            return .message(message)
+        }
         var parts = rows.map(Part.row)
         // Use the producer's start time, not the active-first tool list order.
         // Persisted calls take over their live copy without duplicating activity.
@@ -71,8 +80,11 @@ struct ChatAssistantRunGroup: Identifiable {
             default: []
             }
             return messages.flatMap { message in
-                message.content.filter(\.isToolCall).compactMap { block in
-                    message.workRunID.map { "\($0):\(block.id ?? "")" }
+                // A nested call also stands for its retired dispatcher envelope.
+                message.content.filter(\.isToolCall).flatMap { block in
+                    [block.id ?? "", block.parentToolCallId].compactMap { id in
+                        id.flatMap { id in message.workRunID.map { "\($0):\(id)" } }
+                    }
                 }
             }
         })
@@ -81,11 +93,24 @@ struct ChatAssistantRunGroup: Identifiable {
             return ($0.startedAt ?? .infinity) < ($1.startedAt ?? .infinity)
         }) {
             if let runID = tool.runID, recordedCalls.contains("\(runID):\(tool.id)") { continue }
+            // Live yield context is never a tool row either (web chat-sessions-yield.ts:290-293).
+            if ChatToolActivityItem(live: tool).isYieldContext { continue }
             let index = tool.startedAt.flatMap { startedAt in
                 parts.firstIndex { ($0.timestamp.map { $0 > startedAt }) == true }
             } ?? parts.endIndex
             parts.insert(.tool(tool), at: index)
         }
+        return parts
+    }
+
+    static func build(
+        _ rows: [ChatTranscriptRow],
+        tools: [OpenClawChatPendingToolCall] = [],
+        liveRunID: String?,
+        hasLiveContent: Bool,
+        searchActive: Bool) -> [Self]
+    {
+        let parts = Self.orderedParts(rows, tools: tools)
         var groups: [Self] = []
         var boundaries: [String: UUID] = [:]
         var segments: [String: Int] = [:]
@@ -123,7 +148,18 @@ struct ChatAssistantRunGroup: Identifiable {
                     guard case let .run(runID, inputBoundary, _) = group.id else { return false }
                     return runID == liveRunID && inputBoundary == boundary
                 }) {
-                    groups[index].includesLive = true
+                    // The working line ends its turn. Output the Gateway stamped with no run (imported CLI
+                    // rows once their live calls end) stays above it; a new input or another run ends the turn.
+                    let unowned = groups[(index + 1)...].prefix { $0.runID == nil && $0.parts.first?.boundaryID == nil }
+                    if unowned.isEmpty {
+                        groups[index].includesLive = true
+                    } else {
+                        groups.insert(Self(
+                            id: .run(liveRunID, boundary, segments[liveRunID, default: 0]),
+                            runID: liveRunID,
+                            parts: [],
+                            includesLive: true), at: unowned.endIndex)
+                    }
                 } else {
                     groups.append(Self(
                         id: .run(liveRunID, boundary, segments[liveRunID, default: 0]),
@@ -149,6 +185,7 @@ extension ChatTranscriptRow {
         switch self {
         case let .message(message):
             guard !self.startsTurn,
+                  message.isNestedToolActivity ||
                   ["assistant", "tool", "toolresult", "tool_result"].contains(message.role.lowercased())
             else { return nil }
             return message.workRunID
@@ -163,11 +200,7 @@ extension ChatTranscriptRow {
 }
 
 struct ChatAssistantRunFrame<Content: View>: View {
-    let assistantName: String?
-    let assistantAvatarText: String?
-    let assistantAvatarTint: Color?
     let showsAssistantAvatar: Bool
-    let isClean: Bool
     var joinsAbove = false
     var joinsBelow = false
     @ViewBuilder let content: () -> Content
@@ -177,58 +210,45 @@ struct ChatAssistantRunFrame<Content: View>: View {
         HStack(alignment: .top, spacing: 8) {
             if self.showsAssistantAvatar {
                 if self.joinsAbove {
-                    ChatAgentAvatar(
-                        text: self.assistantAvatarText,
-                        name: self.assistantName,
-                        tint: self.assistantAvatarTint)
+                    ChatAssistantAvatar()
                         .hidden()
                         .frame(height: 0)
                         .clipped()
                         .accessibilityHidden(true)
                 } else {
-                    ChatAgentAvatar(
-                        text: self.assistantAvatarText,
-                        name: self.assistantName,
-                        tint: self.assistantAvatarTint)
+                    ChatAssistantAvatar()
                         .padding(.top, 5)
                 }
             }
             VStack(alignment: .leading, spacing: 8, content: self.content)
                 .environment(\.openClawAssistantRunContent, true)
-                .padding(.horizontal, self.isClean ? 4 : 12)
-                .padding(.top, self.joinsAbove ? 4 : (self.isClean ? 4 : 12))
-                .padding(.bottom, self.joinsBelow ? 4 : (self.isClean ? 4 : 12))
-                .assistantBubbleContainerStyle(
-                    isClean: self.isClean,
-                    joinsAbove: self.joinsAbove,
-                    joinsBelow: self.joinsBelow)
+                .padding(.top, self.joinsAbove ? 0 : 4)
+                .padding(.bottom, self.joinsBelow ? 0 : 4)
+                .focusable(false)
         }
         .frame(maxWidth: .infinity, alignment: .leading)
         // Include disclosure and action rows in the container's accessibility bounds.
         .contentShape(.accessibility, Rectangle())
         .accessibilityElement(children: .contain)
         .accessibilityIdentifier("chat-assistant-run")
-        .assistantSpeakerLabel(self.assistantName, avatarHidden: !self.showsAssistantAvatar)
+        .assistantSpeakerLabel(avatarHidden: !self.showsAssistantAvatar)
         #else
         HStack(alignment: .top, spacing: 8) {
             if self.showsAssistantAvatar {
-                ChatAgentAvatar(
-                    text: self.assistantAvatarText,
-                    name: self.assistantName,
-                    tint: self.assistantAvatarTint)
+                ChatAssistantAvatar()
                     .padding(.top, 5)
             }
             VStack(alignment: .leading, spacing: 8, content: self.content)
                 .environment(\.openClawAssistantRunContent, true)
-                .padding(self.isClean ? 4 : 12)
-                .assistantBubbleContainerStyle(isClean: self.isClean)
+                .padding(.vertical, 4)
+                .focusable(false)
         }
         .frame(maxWidth: .infinity, alignment: .leading)
         // Include disclosure and action rows in the container's accessibility bounds.
         .contentShape(.accessibility, Rectangle())
         .accessibilityElement(children: .contain)
         .accessibilityIdentifier("chat-assistant-run")
-        .assistantSpeakerLabel(self.assistantName, avatarHidden: !self.showsAssistantAvatar)
+        .assistantSpeakerLabel(avatarHidden: !self.showsAssistantAvatar)
         #endif
     }
 }

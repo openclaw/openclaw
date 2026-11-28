@@ -147,6 +147,7 @@ export function commitSessionEntryReplacementsInDatabase(
       { ...next },
       {
         ...(input.consumePendingReset ? { consumePendingReset: true } : {}),
+        archiveUndo: replacement.archiveUndo,
         previousEntry: selectedBefore ?? null,
         canonicalPreviousEntry: canonical?.entry ?? null,
         canonicalPreviousRow: canonical?.row,
@@ -183,6 +184,7 @@ export function commitSessionEntryReplacementsInDatabase(
         row: {
           ...postimage.row,
           member_ids_json: postimage.sideTables.memberIdsJson,
+          member_access_json: postimage.sideTables.memberAccessJson,
           board_present: postimage.sideTables.hasBoard ? 1 : 0,
         },
       });

@@ -59,6 +59,10 @@ export type GatewayServer = {
 };
 
 export type GatewayServerOptions = {
+  /** Internal to this startup; supplies a code-warm, unused state-schema inspector. */
+  stateSchemaReader?: ReturnType<
+    typeof import("../state/openclaw-agent-schema-inspection-worker.js").prestartGatewayStateSchemaReader
+  >;
   /** Retained run-loop ownership; direct servers acquire and release their own owner. */
   gatewayStateOwner?: Pick<
     import("../infra/gateway-lock.js").GatewayLockHandle,

@@ -33,10 +33,10 @@ other snapshot failure, Doctor still refuses.
 
 If state storage is not writable, Doctor reports the database or sidecar path
 that blocked preparation and gives ownership, permission, writable-mount, and
-immutable-file recovery guidance. It checks effective access rather than treating
-a different file owner or unsupported `chmod` as a storage failure. Doctor does
-not change ownership or clear immutable flags. Fix the reported access problem
-and rerun Doctor; use `openclaw doctor --lint` for read-only diagnostics meanwhile.
+immutable-file recovery guidance. It verifies write access to an existing state
+database even when no migration is pending. A different file owner or unsupported
+`chmod` alone is not a storage failure. Doctor does not change ownership or clear
+immutable flags. Fix the reported access problem and rerun Doctor; use `openclaw doctor --lint` for read-only diagnostics meanwhile.
 
 When the System agent runs Doctor, it uses a separate process from the same
 OpenClaw installation. Bulk diagnostic checks can then run without blocking the
@@ -162,6 +162,11 @@ are advisory, environment-sensitive, live-service dependent, account/workspace
 inventory, or historical cleanup. Use `doctor --lint --all` when you want the
 full registered lint audit, including those opt-in checks, or `--only <id>` for
 a targeted check.
+
+Doctor reads shared SQLite state directly when it verifies that a running
+Gateway owns the database. Offline reads preserve SQLite recovery files using
+private snapshots. Checks that initialize plugin runtime state still use a
+private copy so they can write safely during inspection.
 
 Heartbeat migration checks use the configured heartbeat agents and their real
 workspaces, including with `--all`. A `heartbeat-file-migration-blocked` error

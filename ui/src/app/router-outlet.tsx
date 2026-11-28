@@ -1,10 +1,14 @@
 import { Dynamic, type JSX as SolidJSX } from "@solidjs/web";
 import { createEffect, createMemo, createSignal, Errored, onSettled, Show } from "solid-js";
-import { isSessionRouteId } from "../app-route-paths.ts";
+import { isSessionRouteId, pathForRoute, pluginSlugCandidate } from "../app-route-paths.ts";
 import type { SolidRouteProps } from "../app-route-types.tsx";
 import type { ApplicationRouter } from "../app-routes.ts";
 import { createMcpAppUnmountGate } from "../components/mcp-app-unmount.ts";
-import { AgentStartupState, LazyViewError } from "../components/solid/lazy-view-error.tsx";
+import {
+  AgentStartupState,
+  LazyViewError,
+  PanelErrorState,
+} from "../components/solid/lazy-view-error.tsx";
 import { LoadingState } from "../components/solid/loading-state.tsx";
 import { isAgentDatabaseInspectionPendingError } from "../lib/gateway-availability.ts";
 import { t } from "../lib/reactive/i18n.ts";
@@ -38,6 +42,21 @@ type RouteErrorProps = {
 type RouteRenderBoundary = Pick<RouteErrorProps, "router" | "retryContext" | "routeId"> & {
   key: string;
 };
+
+function RouteNotFound(props: { href: string }) {
+  onSettled(() => finishBootFrame());
+  return (
+    <PanelErrorState
+      title={t("routeNotFound.title")}
+      subtitle={t("routeNotFound.description")}
+      actions={
+        <a class="btn" href={props.href}>
+          {t("routeNotFound.goToChat")}
+        </a>
+      }
+    />
+  );
+}
 
 function RouteError(props: RouteErrorProps) {
   onSettled(() => finishBootFrame());
@@ -205,6 +224,7 @@ type RouteContent =
       error?: RouteErrorProps;
     }
   | { state: "empty" | "startup"; error?: RouteErrorProps }
+  | { state: "not-found"; href: string }
   // A chat route's loading frame keeps the boot composer typeable.
   | { state: "loading"; composer?: boolean };
 
@@ -232,6 +252,10 @@ function RoutePresentation(props: {
   const composer = () => {
     const current = value();
     return "composer" in current && current.composer === true;
+  };
+  const notFound = () => {
+    const current = value();
+    return "state" in current && current.state === "not-found" ? current : undefined;
   };
   const page = (
     <>
@@ -262,6 +286,7 @@ function RoutePresentation(props: {
         )}
       </Show>
       <Show when={error()}>{(current) => <RouteError {...current()} />}</Show>
+      <Show when={notFound()}>{(current) => <RouteNotFound href={current().href} />}</Show>
       <Show when={state() === "startup"}>
         <AgentStartupState />
       </Show>
@@ -444,6 +469,20 @@ export function RouterOutlet(props: RouterOutletProps): SolidJSX.Element {
     const renderTransient = (): RouteContent => {
       if (snapshot.startupPending) {
         return { state: "startup" };
+      }
+      if (snapshot.status === "notFound") {
+        // Single-segment plugin routes need hello's registry before recovery
+        // can decide whether the requested page exists.
+        if (
+          props.notFoundRecoveryReady === false &&
+          pluginSlugCandidate(
+            router.getState().location?.pathname ?? "",
+            retryContext?.basePath ?? "",
+          )
+        ) {
+          return { state: "loading" };
+        }
+        return { state: "not-found", href: pathForRoute("chat", retryContext?.basePath ?? "") };
       }
       if (isSessionRouteId(renderedMatch?.routeId) && !scopeReady) {
         return !retiredSession && renderedMatch?.error !== undefined

@@ -995,6 +995,7 @@ describe("processGatewayAllowlist", () => {
   it("keeps a completed detached outcome terminal when agent follow-up registration fails", async () => {
     const unhandledRejections = captureProcessUnhandledRejections();
     const outcome = completedOutcome("completed output");
+    const observe = vi.fn();
     const approvalFollowup = vi.fn<ExecApprovalFollowupFactory>(() => undefined);
     mockApprovedDetachedExec(outcome);
     followupMock.mockRejectedValueOnce(
@@ -1005,11 +1006,13 @@ describe("processGatewayAllowlist", () => {
       await runDetached({
         command: "side-effecting-command",
         approvalFollowup,
+        admitShellDispatch: async () => observe,
       });
       await vi.waitFor(() => expect(approvalFollowup).toHaveBeenCalledOnce());
       await setImmediate();
 
       expect(approvalFollowup.mock.calls[0]?.[0].outcome).toEqual(outcome);
+      expect(observe).toHaveBeenCalledExactlyOnceWith({ kind: "exited", exitCode: 0 });
       expect(unhandledRejections.reasons).toEqual([]);
       expect(followupMock).toHaveBeenCalledOnce();
       expect(requireSentFollowupText()).toContain("completed output");
@@ -1042,14 +1045,17 @@ describe("processGatewayAllowlist", () => {
   it("fails closed when a detached allow-always authorization commit fails", async () => {
     approvalDecisionMock.mockResolvedValue("allow-always");
     commitAuthorizationMock.mockRejectedValueOnce(new Error("approval lock unavailable"));
+    const observe = vi.fn();
     const captured = captureSecurityEvents();
     try {
       const result = await runGatewayAllowlist({
+        admitShellDispatch: async () => observe,
         approvalFollowupMode: "agent",
         command: "echo approved",
       });
       expectPending(result);
       await waitForFollowup();
+      expect(observe).toHaveBeenCalledExactlyOnceWith({ kind: "not-dispatched" });
       expect(requireSentFollowupText()).toContain("approval-state-write-failed");
       expect(runExecProcessMock).not.toHaveBeenCalled();
       expect(commitAuthorizationMock).toHaveBeenCalledOnce();
@@ -1087,10 +1093,12 @@ describe("processGatewayAllowlist", () => {
       expect(getActiveGatewayRootWorkCount()).toBe(1);
     });
 
-    await runDetached();
+    const observe = vi.fn();
+    await runDetached({ admitShellDispatch: async () => observe });
     await vi.waitFor(() => expect(approvalDecisionMock).toHaveBeenCalledOnce());
     expect(getActiveGatewayRootWorkCount()).toBe(0);
 
+    expect(observe).not.toHaveBeenCalled();
     const suspension = tryBeginGatewaySuspendAdmission(() => {});
     expect(suspension?.commit()).toBe(true);
     approval.resolve("allow-once");
@@ -1109,8 +1117,10 @@ describe("processGatewayAllowlist", () => {
     expect(commitAuthorizationMock).toHaveBeenCalledOnce();
     expect(runExecProcessMock).toHaveBeenCalledOnce();
 
+    expect(observe).not.toHaveBeenCalled();
     outcome.resolve(completedOutcome());
     await waitForFollowup();
+    expect(observe).toHaveBeenCalledExactlyOnceWith({ kind: "exited", exitCode: 0 });
   });
 
   it("re-prompts durable detached gateway script approvals and rejects changed bytes", async () => {

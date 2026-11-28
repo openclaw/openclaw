@@ -23,6 +23,12 @@ mode expects a plugin to register. Part of the
 | `"setup-only"`     | Disabled/unconfigured channel                      | Unavailable | Channel registration only                                                                                       |
 | `"setup-runtime"`  | Setup flow with runtime available                  | Live        | Channel registration plus only the lightweight runtime needed during setup                                      |
 | `"cli-metadata"`   | Root help / CLI metadata capture                   | Unavailable | CLI descriptors only                                                                                            |
+| `"memory-backend"` | Opted-in memory plugin that does not own the slot  | Live        | `registerMemoryCapability({ providerRuntime })` only; every other registration is ignored                       |
+
+`"memory-backend"` loads a memory plugin as a passive
+[memory backend](/plugins/sdk-overview/memory-and-context#memory-backends) for
+the selected slot owner. Its services never start, so the provider runtime must
+initialize lazily.
 
 In `"cli-metadata"` and `"setup-only"` modes, accessing a runtime capability throws an error naming the plugin and mode. Defer runtime access out of `register()` or declare root commands in the manifest's `cliCommands` so CLI metadata can be collected without executing the plugin.
 

@@ -1,3 +1,4 @@
+import { isOpenAIResponsesApi } from "@openclaw/ai/transports";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import type { ProviderRuntimeModel } from "../../plugins/provider-runtime-model.types.js";
 import {
@@ -13,7 +14,7 @@ import {
   validateReplayTurnsForPolicy,
 } from "../embedded-agent-helpers/turns.js";
 import { resolveImageSanitizationLimits } from "../image-sanitization.js";
-import { annotateInterSessionUserMessages } from "../replay-provenance.js";
+import { annotateCrossSessionMessages } from "../replay-provenance.js";
 import type { AgentMessage } from "../runtime/index.js";
 import type { SessionManager } from "../sessions/index.js";
 import { resolveTranscriptPolicy } from "../transcript-policy.js";
@@ -97,17 +98,14 @@ export async function sanitizeSessionHistory(
 ): Promise<AgentMessage[]> {
   // Keep docs/reference/transcript-hygiene.md in sync with any logic changes here.
   const policy = resolveReplayPolicy(params);
-  const withInterSessionMarkers = annotateInterSessionUserMessages(params.messages);
+  const withCrossSessionMarkers = annotateCrossSessionMessages(params.messages);
   const signedThinkingProvider = providerRequiresSignedThinking(params.provider);
   const allowProviderOwnedThinkingReplay = shouldAllowProviderOwnedThinkingReplay({
     modelApi: params.modelApi,
     provider: params.provider,
     policy,
   });
-  const isOpenAIResponsesApi =
-    params.modelApi === "openai-responses" ||
-    params.modelApi === "openai-chatgpt-responses" ||
-    params.modelApi === "azure-openai-responses";
+  const responsesApi = isOpenAIResponsesApi(params.modelApi);
   const hasSnapshot = Boolean(params.provider || params.modelApi || params.modelId);
   const snapshotState = hasSnapshot
     ? readModelSnapshotState(params.sessionManager)
@@ -128,13 +126,13 @@ export async function sanitizeSessionHistory(
     : snapshotState.latestSwitchTimestamp;
   let messages = await sanitizeGenericReplayHistory(
     {
-      messages: withInterSessionMarkers,
+      messages: withCrossSessionMarkers,
       allowedToolNames: params.allowedToolNames,
       policy,
       imageLimits: resolveImageSanitizationLimits(params.config),
       signedThinkingProvider,
       allowProviderOwnedThinkingReplay,
-      isOpenAIResponsesApi,
+      isOpenAIResponsesApi: responsesApi,
       latestModelSwitchTimestamp,
       preserveLatestAssistantThinking: params.preserveLatestAssistantThinking,
     },
@@ -167,7 +165,10 @@ export async function sanitizeSessionHistory(
       replaySession.close();
     }
   }
-  messages = sanitizeReplayHistoryAfterProviderHooks(messages, { isOpenAIResponsesApi, policy });
+  messages = sanitizeReplayHistoryAfterProviderHooks(messages, {
+    isOpenAIResponsesApi: responsesApi,
+    policy,
+  });
 
   if (currentSnapshot && (!priorSnapshot || modelChanged)) {
     try {

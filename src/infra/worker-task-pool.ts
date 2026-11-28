@@ -76,6 +76,9 @@ export function createOwnedWorkerTaskPool<Input, Output>(
     closeResources: (key?: string) => core.startCloseResources(key).result,
     startCloseResources: (key?: string) => core.startCloseResources(key),
     startRotate: () => core.startRotate(),
+    get isClosed() {
+      return core.isClosed;
+    },
     getSnapshot: () => core.getSnapshot(),
     close: (error?: Error) => core.close(error),
   };

@@ -14,8 +14,14 @@ export const NATIVE_REASONING_BENCH_PREFIX = "REASONING_BENCH:";
 export async function measureNativeReasoningSubscription(
   options: { signal?: AbortSignal; runId?: string } = {},
 ) {
-  const chunks = Array.from({ length: 4096 }, (_, index) =>
-    (index === 0 ? NATIVE_REASONING_BENCH_PREFIX : "").padEnd(64, "x"),
+  // Distinct lines: the stream owner's repetition guard stops a repeated block.
+  const chunks = Array.from(
+    { length: 4096 },
+    (_, index) =>
+      `${index === 0 ? NATIVE_REASONING_BENCH_PREFIX : ""}step ${index} ${((index * 2654435761) >>> 0).toString(36)}`.padEnd(
+        63,
+        ".",
+      ) + "\n",
   );
   const model = makeProviderModelFixture({
     id: "reasoning-fixture",

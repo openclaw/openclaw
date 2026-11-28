@@ -3,15 +3,18 @@ import {
   formatMediaPlaceholderText,
   isChannelPartialDeliveryError,
 } from "openclaw/plugin-sdk/channel-inbound";
+import { resolveChannelMessageSourceReplyDeliveryMode } from "openclaw/plugin-sdk/channel-outbound";
 import { runInDetachedAsyncContext } from "openclaw/plugin-sdk/concurrency-runtime";
 import { getAgentScopedMediaLocalRoots } from "openclaw/plugin-sdk/media-runtime";
 import { getGlobalHookRunner } from "openclaw/plugin-sdk/plugin-runtime";
 import {
   generateConversationLabel as generateTopicLabel,
+  hasReplyRestartResume,
   resolveChunkMode,
 } from "openclaw/plugin-sdk/reply-dispatch-runtime";
 import { createSubsystemLogger, danger, logVerbose } from "openclaw/plugin-sdk/runtime-env";
 import { truncateUtf16Safe } from "openclaw/plugin-sdk/text-utility-runtime";
+import { runAuthorizedTelegramRequest } from "./account-throttler.js";
 import { resolveAutoTopicLabelConfig } from "./auto-topic-label-config.js";
 import type { TelegramMessageContext } from "./bot-message-context.js";
 import { resolveDispatchTelegramContext } from "./bot-message-dispatch-context.js";
@@ -21,8 +24,8 @@ import {
   finalizePendingAnswerBlockDraft,
 } from "./bot-message-dispatch-delivery.js";
 import { cleanupDrafts, createDraftState } from "./bot-message-dispatch-draft.js";
-import { createProgressState, settleFailedFinalDelivery } from "./bot-message-dispatch-progress.js";
-import { createReplyState } from "./bot-message-dispatch-reply.js";
+import { createProgressState, settleTelegramReplyNotice } from "./bot-message-dispatch-progress.js";
+import { createReplyState, shouldReportTelegramError } from "./bot-message-dispatch-reply.js";
 import {
   createFreshTelegramSessionEntryLoader,
   resolveTelegramReasoningLevel,
@@ -264,6 +267,7 @@ export const dispatchTelegramMessage = async (
   const draftState = createDraftState(turnConfig);
   const progressState = createProgressState(turnConfig, draftState, () => turn);
   const deliveryState = createDeliveryState({ ...turnConfig, lanes: draftState.lanes }, () => turn);
+  let restartResumeSaved = false;
   const turn: TelegramDispatchTurn = {
     ...turnConfig,
     ...draftState,
@@ -274,6 +278,42 @@ export const dispatchTelegramMessage = async (
     noVisibleReplyFallbackEligible: false,
     suppressSilentReplyFallback: false,
     hadErrorReplyFailureOrSkip: false,
+    onRestartResumeSaved: async (signal) => {
+      if (restartResumeSaved) {
+        return;
+      }
+      restartResumeSaved = true;
+      if (
+        isRoomEvent ||
+        turn.isSuperseded() ||
+        turn.sendPolicyDenied ||
+        turn.suppressSilentReplyFallback ||
+        turn.previewLifecycle.finalSuppressed ||
+        turn.finalHandoff !== undefined
+      ) {
+        return;
+      }
+      const visible =
+        turn.finalDeliveryError != null
+          ? turn.deliveryState.snapshot().failedNonSilent > 0
+          : !turn.finalDispatchClaimed &&
+            !turn.previewLifecycle.finalDelivered &&
+            resolveChannelMessageSourceReplyDeliveryMode({
+              cfg,
+              ctx: dispatchContext.ctxPayload,
+            }) === "automatic" &&
+            shouldReportTelegramError(turn, "restart resume");
+      if (!visible) {
+        return;
+      }
+      turn.progressCompositor.cancel();
+      await turn.draftEventQueue;
+      if (!signal?.aborted) {
+        await runAuthorizedTelegramRequest(signal && (() => signal.throwIfAborted()), () =>
+          settleTelegramReplyNotice(turn, true),
+        );
+      }
+    },
   };
 
   let shouldLabelDmTopic = false;
@@ -360,9 +400,24 @@ export const dispatchTelegramMessage = async (
     return { kind: "completed" };
   }
 
+  const deliveryError = turn.dispatchError ?? turn.finalDeliveryError;
+  if (
+    restartResumeSaved ||
+    (deliveryError != null &&
+      (await hasReplyRestartResume(
+        deliveryError,
+        turn.restartResumeTarget,
+        turn.transcriptMirrorRunId,
+      )))
+  ) {
+    // Recovery owns the answer even if Telegram couldn't display the status notice.
+    await turn.onRestartResumeSaved();
+    finalizeStatusInBackground("cancelled", "restart resume");
+    return { kind: "completed" };
+  }
   let deliverySummary = turn.deliveryState.snapshot();
   if (!turn.sendPolicyDenied && deliverySummary.failedNonSilent > 0) {
-    await settleFailedFinalDelivery(turn);
+    await settleTelegramReplyNotice(turn, false);
     deliverySummary = turn.deliveryState.snapshot();
   }
   let sentFallback = false;
@@ -384,7 +439,7 @@ export const dispatchTelegramMessage = async (
       : EMPTY_RESPONSE_FALLBACK;
     const result = await deliverFallback(
       turn,
-      [{ text: fallbackText }],
+      { text: fallbackText },
       telegramCfg.silentErrorReplies === true &&
         Boolean(terminalFailure || turn.hadErrorReplyFailureOrSkip),
     );
@@ -402,7 +457,7 @@ export const dispatchTelegramMessage = async (
     turn.finalHandoff === undefined &&
     turn.noVisibleReplyFallbackEligible
   ) {
-    sentFallback = (await deliverFallback(turn, [{ text: EMPTY_RESPONSE_FALLBACK }], false))
+    sentFallback = (await deliverFallback(turn, { text: EMPTY_RESPONSE_FALLBACK }, false))
       .delivered;
     silentReplyDispatchLogger.debug("telegram recovered eligible turn without visible response", {
       hasSessionKey: Boolean(dispatchContext.ctxPayload.SessionKey),

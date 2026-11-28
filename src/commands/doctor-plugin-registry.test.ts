@@ -15,6 +15,7 @@ import { cleanupTrackedTempDirs, makeTrackedTempDir } from "../plugins/test-help
 import * as stateDbReadOnly from "../state/openclaw-state-db-readonly.js";
 import { runOpenClawStateWriteTransaction } from "../state/openclaw-state-db.js";
 import {
+  checkPluginRegistryRepairPending,
   detectPluginRegistryHealthIssues,
   maybeRepairPluginRegistryState,
   maybeRepairStaleManagedNpmBundledPlugins,
@@ -96,6 +97,10 @@ async function createStaleLocalFixture() {
   const staleDir = path.join(stateDir, "old-checkout", "dist", "extensions", "discord");
   fs.mkdirSync(bundledDir, { recursive: true });
   fs.mkdirSync(staleDir, { recursive: true });
+  fs.writeFileSync(
+    path.join(stateDir, "old-checkout", "package.json"),
+    JSON.stringify({ name: "openclaw" }),
+  );
   createCandidate(staleDir, "discord");
   await writePersistedInstalledPluginIndex(
     createCurrentIndexWithPathRecord({
@@ -336,6 +341,74 @@ describe("maybeRepairPluginRegistryState", () => {
         prompter,
       }),
     ).resolves.toStrictEqual({ config: {} });
+  });
+
+  it("leaves a current registry untouched when discovery carries build metadata the store drops", async () => {
+    const stateDir = makeTempDir();
+    const pluginDir = path.join(stateDir, "bundled", "demo");
+    fs.mkdirSync(pluginDir, { recursive: true });
+    // Bundled packages declare worker entries and assets; the store keeps only bundledDist.
+    const build = {
+      bundledDist: true,
+      workerEntries: ["./worker.ts"],
+      openclawVersion: "2026.4.25",
+    };
+    const candidate = {
+      ...createBundledCandidate({
+        rootDir: pluginDir,
+        id: "demo",
+        packageName: "@openclaw/demo",
+        version: "2026.4.25",
+        bundledDist: true,
+      }),
+      packageManifest: { build },
+    };
+    fs.writeFileSync(
+      path.join(pluginDir, "package.json"),
+      JSON.stringify({ name: "@openclaw/demo", version: "2026.4.25", openclaw: { build } }),
+    );
+    const prompter = createDoctorPrompter({
+      runtime: { log: vi.fn(), error: vi.fn(), exit: vi.fn() },
+      options: { repair: true, nonInteractive: true },
+    });
+    const params = { stateDir, candidates: [candidate], env: hermeticEnv(), config: {}, prompter };
+    await maybeRepairPluginRegistryState(params);
+    const databasePath = resolveInstalledPluginIndexStorePath({ stateDir });
+    // The -shm index changes on every read, so only the database and its WAL are compared.
+    const store = () =>
+      [databasePath, `${databasePath}-wal`].map((file) =>
+        fs.existsSync(file)
+          ? {
+              file,
+              bytes: fs.readFileSync(file).toString("base64"),
+              mtimeMs: fs.statSync(file).mtimeMs,
+            }
+          : { file },
+      );
+    const healthy = store();
+
+    await expect(maybeRepairPluginRegistryState(params)).resolves.toStrictEqual({ config: {} });
+    expect(store()).toStrictEqual(healthy);
+    await expect(checkPluginRegistryRepairPending(params)).resolves.toBe("none");
+
+    const addedDir = path.join(stateDir, "plugins", "added");
+    fs.mkdirSync(addedDir, { recursive: true });
+    const withAdded = { ...params, candidates: [candidate, createCandidate(addedDir, "added")] };
+    await expect(checkPluginRegistryRepairPending(withAdded)).resolves.toBe("work");
+    await expect(maybeRepairPluginRegistryState(withAdded)).resolves.toStrictEqual({
+      config: {},
+      pluginInventoryChanged: true,
+    });
+    const persisted = await readRequiredPersistedInstalledPluginIndex(stateDir);
+    expect(persisted.plugins.map((plugin) => plugin.pluginId).toSorted()).toStrictEqual([
+      "added",
+      "demo",
+    ]);
+    expect(
+      persisted.plugins.find((plugin) => plugin.pluginId === "demo")?.packageBuild,
+    ).toStrictEqual({
+      bundledDist: true,
+    });
   });
 
   it("warns about stale managed npm packages that shadow bundled plugins", async () => {

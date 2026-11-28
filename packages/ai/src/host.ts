@@ -117,12 +117,6 @@ export type AiTransformTransportMessages = (
   },
 ) => Context["messages"];
 
-/** Strict-tool policy inputs for OpenAI-compatible routes. */
-export interface OpenAIStrictToolSettingOptions {
-  transport?: "stream" | "websocket";
-  supportsStrictMode?: boolean;
-}
-
 export type AiInlineTextBlock = { type: "text"; text: string };
 export type AiInlineImageBlock = { type: "image"; data: string; mimeType: string };
 export type AiInlineContentBlock = AiInlineTextBlock | AiInlineImageBlock;
@@ -153,14 +147,6 @@ export interface AiTransportHost {
   redactToolPayloadText(text: string): string;
   /** Normalizes Anthropic inline image blocks before provider payload construction. */
   normalizeAnthropicInlineContentBlocks?: AnthropicInlineContentNormalizer;
-  /**
-   * Resolves the host strict-tool default for OpenAI-compatible routes.
-   * undefined lets the request omit the strict flag entirely.
-   */
-  resolveOpenAIStrictToolSetting(
-    model: Pick<Model, "provider" | "api" | "baseUrl" | "id"> & { compat?: unknown },
-    options?: OpenAIStrictToolSettingOptions,
-  ): boolean | undefined;
   /** Provider-plugin operations required by the generic package transports. */
   plugin: AiTransportPluginHost;
   /** Builds provider-owned Copilot compatibility headers for one message turn. */
@@ -244,8 +230,6 @@ const inertAiTransportHost: ActiveAiTransportHost = {
   resolveSecretSentinel: (value) => value,
   redactToolPayloadText: (text) => text,
   normalizeAnthropicInlineContentBlocks: async (content) => [...content],
-  resolveOpenAIStrictToolSetting: (_model, options) =>
-    options?.supportsStrictMode ? false : undefined,
   plugin: {
     resolveProviderStream: () => undefined,
     resolveTransportTurnState: () => undefined,

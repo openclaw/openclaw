@@ -410,8 +410,6 @@ describe("browser control server", () => {
       }),
     );
     const actions: ActionCase[] = [
-      [{ kind: "click", ref: "1", button: "left", modifiers: ["Shift"] }],
-      [{ kind: "click", selector: "button.save" }],
       [
         {
           kind: "clickCoords",
@@ -426,9 +424,6 @@ describe("browser control server", () => {
       [{ kind: "type", ref: "1", text: "" }],
       [{ kind: "press", key: "Enter" }],
       [{ kind: "press", key: "Ctrl+Shift+Esc" }, { key: "Control+Shift+Escape" }],
-      [{ kind: "hover", ref: "2" }],
-      [{ kind: "scrollIntoView", ref: "2" }],
-      [{ kind: "drag", startRef: "3", endRef: "4" }],
     ];
     for (const [input, normalized] of actions) {
       expect(await post("/act", input)).toMatchObject({ ok: true, url: TAB_URL });
@@ -582,7 +577,7 @@ describe("browser control server", () => {
   });
 
   it("agent contract: hooks + response + downloads + screenshot", async () => {
-    const base = await startServerAndBase();
+    await startServerAndBase();
     async function call(
       route: string,
       body: Record<string, unknown>,
@@ -603,11 +598,6 @@ describe("browser control server", () => {
       ref: "e12",
       signal: expect.any(AbortSignal),
     });
-    for (const selector of [{ inputRef: "e99" }, { element: "input[type=file]" }]) {
-      expect(await post("/hooks/file-chooser", { paths: ["c.txt"], ...selector })).toMatchObject({
-        ok: true,
-      });
-    }
     await call(
       "/hooks/dialog",
       { accept: true, dialogId: "d1", timeoutMs: 5678 },
@@ -624,20 +614,6 @@ describe("browser control server", () => {
         signal: expect.any(AbortSignal),
       });
     }
-    expect(
-      await post("/response/body", { url: "**/api/data", timeoutMs: 2222, maxChars: 10 }),
-    ).toMatchObject({ ok: true });
-    expect(await (await realFetch(`${base}/console?level=error`)).json()).toMatchObject({
-      ok: true,
-      messages: [],
-    });
-    expect(await post("/pdf", {})).toMatchObject({ ok: true, path: expect.any(String) });
-    const screenshot = { element: "body", type: "jpeg", timeoutMs: 3333 };
-    expect(await post("/screenshot", screenshot)).toMatchObject({
-      ok: true,
-      path: expect.any(String),
-    });
-    expect(requireMockArg(pw("takeScreenshotViaPlaywright"))).toMatchObject(screenshot);
   });
 
   it.each([

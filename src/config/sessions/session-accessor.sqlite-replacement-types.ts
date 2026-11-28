@@ -1,3 +1,4 @@
+import type { LegacyOpenClawIdMemberRoleImport } from "../../gateway/openclaw-id/member-source-role-import.js";
 import type { RetainedWorkerTransactionAdmission } from "../../infra/sqlite-worker-operation-settlement.js";
 import type { SessionEntryReplacementPublication } from "./session-accessor.sqlite-entry-cache.types.js";
 import type { ResolvedSessionEntryRow } from "./session-accessor.sqlite-entry-read.js";
@@ -19,9 +20,11 @@ import type { SessionEntry } from "./types.js";
 
 export type SqliteSessionEntryReplacement = SessionEntryReplacement & {
   previousSessionKeys?: readonly string[];
+  archiveUndo?: import("./session-archive-undo.js").SessionArchiveUndoIntent;
 };
 
 export type SessionEntryReplacementCommit = {
+  memberSourceRoleImport?: LegacyOpenClawIdMemberRoleImport;
   creationOperation?: SessionCreationOperation;
   fieldPatch?: {
     fields: readonly (keyof SessionEntry)[];

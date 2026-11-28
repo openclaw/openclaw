@@ -13,7 +13,9 @@ then aborts executing work promptly. This includes accepted turns still preparin
 their runtime when shutdown begins. At the next startup, an interrupted root
 execution gets one ordinary system input asking the agent to inspect current
 state and continue. Recorded yield waits stay parked when their wake source
-survives; a lost source produces a visible failure instead.
+survives. A lost source settles a sub-agent with a visible failure; its registry
+completion wakes the requester. A root with no remaining child settlement or
+delivery receives the ordinary resume input to inspect and reconcile instead.
 The transcript remains the agent's context; the Gateway does not reconstruct or
 replay the old execution. For a captured interrupted turn, the shutdown marker
 retains its original requester's bounded authentication source. Startup revalidates
@@ -200,18 +202,18 @@ heartbeat observer works independently of the optional V8 flight recorder.
 | Running sub-agent                                                 | Stops quietly; its root requester receives the resume input                                            |
 | Session parked in `sessions_yield` with a surviving wake source   | Keeps its recorded wait, including dashboard roots; no startup model request                           |
 | Yielded requester whose descendants were stopped                  | Receives the root resume input to reconcile their work                                                 |
-| Yielded session whose external continuation source is gone        | Closes with a recorded, visible failure                                                                |
-| Background process                                                | Ends with the old process; its root session receives the resume input                                  |
+| Yielded sub-agent whose external continuation source is gone      | Closes with a recorded, visible failure; its requester receives the child settlement                   |
+| Background process                                                | Interrupted root resumes; finished root gets a lost-process exit notice if notifications are enabled   |
 | Already-produced outbound messages and media                      | Keep the existing delivery queue and delivery reconciliation                                           |
 | Scheduled jobs                                                    | Keep cron's own scheduling, catch-up, and interruption policy                                          |
 | ACP or external-harness session                                   | Keeps its harness owner's restart policy                                                               |
 | Update outcome                                                    | Remains a passive report in the originating conversation                                               |
 | Gateway terminal PTY                                              | Ends with the old process                                                                              |
 
-A session counts as running when its own agent loop is active, a descendant
-sub-agent is running, or it owns a running background process. The Gateway reads
-these facts from their live in-memory owners during shutdown. A child contributes
-to its top-level requester; the child does not receive an independent resume input.
+A session counts as running when its own agent loop or a descendant sub-agent is
+running. The Gateway reads these facts from their live in-memory owners during
+shutdown. A child contributes to its top-level requester; the child does not receive
+an independent resume input.
 Idle and finished sessions are not marked. Cron occurrence sessions and
 ACP/external-harness sessions are excluded.
 
@@ -232,7 +234,8 @@ regain current authority before they can execute.
 
 Crash recovery uses the nonterminal run marker committed with accepted plain
 chat input, before dispatch hooks or runtime start. The same commit records its
-writer identity; terminal settlement clears the run marker. Recovery is bounded
+writer identity; terminal settlement clears the run marker. Queued input records
+the run marker and its writer identity when its run starts. Recovery is bounded
 by the recorded crash intervals. Command persistence
 records activity only; commands gain recovery markers when their runs start.
 Commands that become runs, such as `/goal` or skill rewrites, remain unprotected
@@ -277,8 +280,8 @@ a recovering session waits until its resume input and retained FIFO inputs own
 their ordinary queue slots. Other sessions in the same agent can proceed.
 Incoming session events wait before reserving their FIFO position, so they cannot
 block the recovery input that must precede them. A shutdown marker still resumes
-the interrupted work when shutdown left the session marked as killed or when a
-completed reply had background commands, even when no queued input remains.
+the interrupted work when shutdown left the session marked as killed, even when
+no queued input remains.
 Stores prepared later install these waits before publishing database admission.
 This also applies when several logical agents share the same physical store. Database
 reads and writes retain their normal admission rules; recovery does not borrow
@@ -634,19 +637,17 @@ An installation stopped for longer than six hours before upgrading loses this
 one-time resume; send a new message to continue. Old execution and authority
 snapshots are not restored.
 
-Startup consumes the shutdown marker and orphaned run identity together and admits
-one new input through the normal session-event path:
-
-> The Gateway restarted while you were working. Resume your work: check the current state of anything that was in progress (files, processes, subagents, external actions) before repeating it, then continue.
+Startup consumes the shutdown marker and orphaned run identity together and sends
+one resume input. It does not replay the request or tool call. The input stays
+in history; external effects are not guaranteed exactly once.
 
 Background commands that were waiting to wake the conversation are reported
-separately, with a notice for each command, after any restart, including a crash. See
+separately, with a notice for each command, after any restart, including a crash.
+A finished root receives this lost-process exit notice instead of a resume input.
+Accepted edge case: an interrupted root with a notifying background command receives
+both inputs and may reply twice. This rare, visible, recoverable case is intentionally
+retained to keep restart recovery independent of process reporting. See
 [lost background commands](/gateway/background-process#lost-background-commands).
-
-This is a new input, not a replay of the original user prompt or unfinished tool
-call. Later model requests can contain the text as conversation history. The
-agent checks the transcript and current state before continuing; effects are not
-guaranteed exactly once.
 
 For a captured interrupted turn, the input revalidates the original requester's
 authentication source and current session access, bounded by that source's original
@@ -675,12 +676,11 @@ revalidation, never a saved grant.
 Sessions with no human principal use ordinary system-event authority; if it lacks
 a needed capability, the agent must ask for an authorized input.
 
-WebChat uses the same session and transcript. An unanswered accepted user prompt
-stays in history as its original entry, separate from the restart input. Channel
-sessions use their current delivery route so normal replies return to the
-conversation. The resume input does not replay an old browser connection or
-unfinished tool approval. Captured source facts are a revalidation basis, not a
-portable grant; markers without those facts use the legacy principal policy above.
+WebChat keeps the original prompt and restart input as separate transcript entries.
+Channel replies use the current route, except that an unresolved shell command’s
+reply uses its recorded route and reply anchor or stays local. Recovery does not
+replay a browser connection or pending approval. Captured sources are revalidated,
+not portable grants; older markers use the principal policy above.
 On a Gateway without roles, recovery still requires the current, revalidated
 authority of the recorded device. A resumed Control UI task
 can update pinned dashboard widgets under that admitted authority without a
@@ -708,7 +708,8 @@ is unchanged; Stop, cancellation, archive, and reset keep their normal meanings.
 Graceful shutdown marks the root requester of a running child, then cancels the
 child through the ordinary abort path. The child settles terminally without a
 shutdown completion announcement or a "subagent failed" notice to its parent.
-Children are not adopted or independently resumed at startup.
+Children are not adopted or independently resumed at startup. If a graceful
+restart interrupts a user’s request, the Gateway resumes it automatically.
 
 Collector children retain their captured results. If shutdown recorded a terminal
 child before its collector result finished publishing, startup completes that
@@ -749,6 +750,18 @@ keeps one requester authority, including when a paused child continues in a new
 turn. Normal delivery records the receipt so another restart cannot deliver it
 again. Archived, replaced, reset, or unauthorized requesters cannot acquire this
 custody.
+
+When the requester's access has ended (its saved grant or access record is gone,
+or its profile was deleted), startup settles that child's delivery once instead of
+retrying it at every restart. The run record keeps
+the result with the delivery marked discarded. The requesting chat, and no other,
+gets one notice: "I did not deliver a background task's result. The access of the
+person who started it has ended. Ask them or a Gateway admin to restore that access,
+then start the task again." Results whose latest recorded time (result capture,
+end, or delivery attempt; creation time only when nothing later exists) is more
+than 7 days old settle without a notice; the Gateway logs one count per recovery
+pass. Any other failure, including other refusals, an unavailable access policy or
+a busy database, leaves the delivery pending for the next restart.
 
 If shutdown interrupts the requester after a captured child result was committed
 to its transcript, that result is already delivered. The Gateway resumes the

@@ -1,5 +1,7 @@
 import { constants } from "node:os";
 import { performance } from "node:perf_hooks";
+import { createInterface } from "node:readline";
+import type { Readable } from "node:stream";
 import { printTimingSummary } from "./lib/check-timing-summary.mts";
 import { isDirectRunUrl } from "./lib/direct-run.mjs";
 import { runManagedCommand } from "./lib/managed-child-process.mts";
@@ -9,39 +11,51 @@ export async function main(argv = process.argv.slice(2)) {
   if (parseRatchetArgs(argv).prune) {
     throw new Error("CI baseline ratchets cannot prune baselines.");
   }
-  const checks = [
-    // Only one large semantic inventory runs; the second slot drains smaller checks.
+  // One slot owns the large compiler snapshots in sequence before it helps drain the shared queue.
+  const largeChecks = [
     { name: "database-worker", args: ["check:database-worker-ratchet", ...argv] },
+    { name: "database-dialect", args: ["check:database-dialect-ratchet", ...argv] },
+    // The SDK import closure reaches far outside src/plugin-sdk, so no path rule can tell which
+    // changes move the export surface; every PR checks it (#206995 merged an unbudgeted export).
+    { name: "plugin-sdk-surface", args: ["plugin-sdk:surface:check"] },
+  ];
+  const checks = [
     { name: "max-lines", args: ["check:max-lines-ratchet", ...argv] },
     ...(process.env.RATCHET_PR_HEAD_SHA
       ? [{ name: "line-cap", args: ["check:line-cap-ratchet", ...argv] }]
       : []),
     { name: "assertion-safety", args: ["check:assertion-safety", ...argv] },
-    { name: "database-dialect", args: ["check:database-dialect-ratchet", ...argv] },
     { name: "session-identity", args: ["check:session-identity-ratchet", ...argv] },
-    { name: "lifetime-check", args: ["check:lifetime-check-ratchet", ...argv] },
+    { name: "provider-branching", args: ["check:provider-branching-ratchet", ...argv] },
+    { name: "runtime-process-lifecycle", args: ["check:runtime-process-lifecycle", ...argv] },
     { name: "timeout-race", args: ["check:test-timeout-race-ratchet", ...argv] },
     { name: "mock-exports", args: ["check:test-mock-exports", ...argv] },
     { name: "test-lines", args: ["check:test-lines-ratchet", ...argv] },
     { name: "config-docs", args: ["config:docs:check"] },
     { name: "plugin-inventory", args: ["plugins:inventory:check"] },
+    { name: "plugin-sdk-exports", args: ["plugin-sdk:check-exports"] },
   ];
   const controller = new AbortController();
   const timings: Array<{ name: string; durationMs: number; status: number }> = [];
-  let next = 0;
   let stopped: number | undefined;
   const stop = (code: number) => {
     stopped ??= code;
     controller.abort();
   };
-  const worker = async () => {
-    while (next < checks.length) {
-      if (stopped !== undefined) {
+  const worker = async (reserved: typeof checks = []) => {
+    for (;;) {
+      const check = reserved.shift() ?? checks.shift();
+      if (!check || stopped !== undefined) {
         return;
       }
-      const check = checks[next++]!;
-      const output: Buffer[] = [];
       const started = performance.now();
+      // Stream each line as it arrives: a stuck check must show its last output before a deadline.
+      const prefix = (stream: Readable | null) =>
+        stream &&
+        createInterface({ input: stream, crlfDelay: Infinity }).on("line", (line) => {
+          console.log(`[${check.name}] ${line}`);
+        });
+      console.log(`[${check.name}] started`);
       let status = 1;
       try {
         status = await runManagedCommand({
@@ -51,8 +65,8 @@ export async function main(argv = process.argv.slice(2)) {
           requireProcessTreeExit: true,
           stdio: ["ignore", "pipe", "pipe"],
           onReady(child) {
-            child.stdout?.on("data", (chunk: Buffer) => output.push(chunk));
-            child.stderr?.on("data", (chunk: Buffer) => output.push(chunk));
+            prefix(child.stdout);
+            prefix(child.stderr);
           },
           onSignal(signal) {
             stop(128 + constants.signals[signal]);
@@ -60,24 +74,21 @@ export async function main(argv = process.argv.slice(2)) {
         });
       } catch (error) {
         if (!controller.signal.aborted) {
-          output.push(Buffer.from(`${String(error)}\n`));
+          console.log(`[${check.name}] ${String(error)}`);
         }
       }
       timings.push({ name: check.name, durationMs: performance.now() - started, status });
-      console.log(`::group::${check.name}`);
-      process.stdout.write(Buffer.concat(output));
       console.log(
         status === 0
           ? `[ok] ${check.name}`
           : `::error title=${check.name} failed::${check.name} failed (exit ${status})`,
       );
-      console.log("::endgroup::");
       if (status === 124 || status >= 128) {
         stop(status);
       }
     }
   };
-  await Promise.all([worker(), worker()]);
+  await Promise.all([worker(largeChecks), worker()]);
   printTimingSummary("baseline-ratchets", timings);
   return stopped ?? (timings.some((result) => result.status !== 0) ? 1 : 0);
 }

@@ -14,7 +14,7 @@ description: "Review, triage, repair, or land OpenClaw issues and pull requests 
 - Repair-and-land authority covers internal scheduling, database admission, lifecycle design, risk, verification. In-task bug fixes (including compatible SDK fixes) and backed-up repairs removing only invalid or unreachable data need no renewed approval.
 - Bulk close/reopen above 50 items needs explicit count and scope.
 - Advisory workflows need explicit security request.
-- Peter-instructed Team updates use the [release deployer](../update-team-server/SKILL.md); never edit live state outside its owner. Notify Night Watch of every deploy/restart; it coordinates restart timing, not update approval.
+- Peter-instructed Team updates use the [release deployer](https://github.com/openclaw/maintainers/blob/main/.agents/skills/update-team-server/SKILL.md); never edit live state outside its owner. Notify Night Watch of every deploy/restart; it coordinates restart timing, not update approval.
 
 ## Select the scope
 
@@ -47,6 +47,7 @@ ghx issue view <issue> --repo openclaw/openclaw \
 - **Useful PR:** improve editable branch; unsafe → authorized credited replacement before closure. Replaced ancestry → maintainer-owned replacement, never squash contributor PR.
 - **Uncertain/product decision:** state gap; no speculative merge/automatic out-of-scope close.
 - Proof + source-trust/host route: `$openclaw-testing`, [landing](references/landing.md#red-main-and-inherited-failures). Focused proof → ready PR; PR CI = broad proof. Prefer bounded local proof on a qualified, available host. Deliberate remote proof can cover expensive checks or environment gaps; queues → stop task-owned allocation, use PR CI or a safe local scope, preserve uncovered requirements. Never execute untrusted source locally. Optional live gaps → meaningful boundary proof + limitation; explicit live, external API, authenticated-risk proof mandatory. Mocks/skips/old head ≠ live.
+- Added or changed error, empty, or loading states: [state-by-state capture](references/media.md#error-empty-and-loading-states), including copy-only edits and real-channel notice/link forms.
 - Behavioral changes: [boundary-proof contract](../../../docs/help/testing/writing-tests.md#prove-behavior-at-the-owning-boundary) + `$test-audit`. Requested behavior and repo standards: check separately.
 
 ## CODEOWNERS review

@@ -1,0 +1,378 @@
+/* Settings → Team → Roles. Colors and radii come from base.css tokens. */
+.roles-raw {
+  font-family: var(--mono);
+  font-size: 11px;
+  color: var(--text-tertiary);
+  background: var(--surface-hover);
+  border-radius: var(--radius-sm);
+  padding: 0 5px;
+  overflow-wrap: anywhere;
+}
+
+.roles-chip {
+  padding: 1px 8px;
+  font-size: 11px;
+}
+
+.roles-list__title {
+  display: inline-flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 8px;
+}
+
+.roles-list__people {
+  display: inline-flex;
+  align-items: center;
+  gap: 10px;
+  color: var(--muted);
+  white-space: nowrap;
+}
+
+.roles-avatar {
+  position: relative;
+  display: inline-grid;
+  place-items: center;
+  flex: none;
+  inline-size: 24px;
+  block-size: 24px;
+  overflow: hidden;
+  border-radius: var(--radius-full);
+  background: var(--bg-hover);
+  color: var(--text-strong);
+  font-size: 10px;
+  font-weight: 600;
+}
+
+.roles-avatar img {
+  display: none;
+  position: absolute;
+  inset: 0;
+  inline-size: 100%;
+  block-size: 100%;
+  object-fit: cover;
+}
+
+.roles-avatar[data-avatar-state="loaded"] img {
+  display: block;
+}
+
+.roles-avatar[data-avatar-state="loaded"] .roles-avatar__initials {
+  visibility: hidden;
+}
+
+.roles-back svg,
+.roles-hint svg,
+.roles-warning svg {
+  flex: none;
+  inline-size: 14px;
+  block-size: 14px;
+  margin-block-start: 1px;
+}
+
+.roles-facepile {
+  display: inline-flex;
+}
+
+.roles-facepile .roles-avatar {
+  box-shadow: 0 0 0 2px var(--card);
+}
+
+.roles-facepile .roles-avatar + .roles-avatar {
+  margin-inline-start: -6px;
+}
+
+.roles-person {
+  display: inline-flex;
+  align-items: center;
+  gap: 10px;
+  min-width: 0;
+}
+
+.roles-person__text {
+  display: grid;
+  min-width: 0;
+}
+
+.roles-person__name {
+  color: var(--text-strong);
+  text-decoration: none;
+}
+
+.roles-person__name:is(a):hover {
+  text-decoration: underline;
+}
+
+.roles-person__source {
+  font-size: 12px;
+  color: var(--muted);
+}
+
+.roles-editor {
+  display: flex;
+  flex-direction: column;
+  gap: 20px;
+  padding-block-end: 88px;
+}
+
+.roles-back {
+  appearance: none;
+  align-self: flex-start;
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  padding: 0;
+  border: 0;
+  background: none;
+  color: var(--muted);
+  font: inherit;
+  font-size: 13px;
+}
+
+.roles-summary {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 1px;
+  background: var(--border);
+}
+
+.roles-summary__column {
+  padding: 12px 16px;
+  background: var(--card);
+}
+
+.roles-summary__column h3 {
+  margin: 0 0 6px;
+  font-size: 13px;
+  font-weight: 600;
+  color: var(--text-strong);
+}
+
+.roles-summary__column ul {
+  display: grid;
+  gap: 4px;
+  margin: 0;
+  padding-inline-start: 18px;
+  font-size: 13px;
+}
+
+.roles-summary__muted {
+  color: var(--muted);
+}
+
+.roles-summary__danger {
+  color: var(--danger);
+}
+
+.roles-checks {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px 18px;
+}
+
+.roles-checks--invalid {
+  outline: 1px solid color-mix(in srgb, var(--danger) 60%, transparent);
+  outline-offset: 6px;
+  border-radius: var(--radius-sm);
+}
+
+.roles-check,
+.roles-tool {
+  display: inline-flex;
+  align-items: flex-start;
+  gap: 8px;
+  font-size: 13px;
+}
+
+.roles-tools {
+  display: grid;
+  gap: 10px;
+  inline-size: 100%;
+}
+
+.roles-tools__grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fill, minmax(240px, 1fr));
+  gap: 6px 16px;
+}
+
+.roles-tool__text {
+  display: grid;
+  gap: 2px;
+}
+
+.roles-hint {
+  margin: 0;
+  font-size: 12px;
+  color: var(--muted);
+}
+
+.roles-hint--locked {
+  display: flex;
+  gap: 6px;
+  align-items: flex-start;
+}
+
+.roles-warning {
+  display: flex;
+  gap: 6px;
+  align-items: flex-start;
+  font-size: 12px;
+  color: var(--warn);
+}
+
+.roles-error {
+  font-size: 12px;
+  color: var(--danger);
+  flex-basis: 100%;
+}
+
+.roles-error--section {
+  display: block;
+  padding: 0 4px 8px;
+}
+
+.roles-scope {
+  display: flex;
+  gap: 12px;
+  align-items: flex-start;
+}
+
+.roles-scope--danger {
+  background: color-mix(in srgb, var(--danger) 6%, transparent);
+}
+
+.roles-savebar {
+  position: sticky;
+  inset-block-end: 16px;
+  z-index: 5;
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  padding: 10px 12px 10px 16px;
+  border: 1px solid var(--border-strong);
+  border-radius: var(--radius-lg);
+  background: var(--bg-elevated);
+  box-shadow: 0 10px 30px rgb(0 0 0 / 30%);
+}
+
+.roles-savebar__text {
+  display: grid;
+  flex: 1;
+  min-width: 0;
+  font-size: 12px;
+  color: var(--muted);
+}
+
+.roles-savebar__text strong {
+  font-size: 13px;
+  color: var(--text-strong);
+}
+
+.roles-dialog__body {
+  display: grid;
+  gap: 12px;
+}
+
+.roles-field {
+  display: grid;
+  gap: 6px;
+}
+
+.roles-presets {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 8px;
+}
+
+.roles-preset {
+  position: relative;
+  display: grid;
+  gap: 2px;
+  padding: 10px 12px;
+  border: 1px solid var(--border);
+  border-radius: var(--radius-md);
+  font-size: 12px;
+  color: var(--muted);
+}
+
+.roles-preset input {
+  position: absolute;
+  opacity: 0;
+}
+
+.roles-preset strong {
+  font-size: 13px;
+  color: var(--text-strong);
+}
+
+.roles-preset--selected {
+  border-color: var(--accent);
+  background: var(--accent-subtle);
+}
+
+.roles-preset:has(input:focus-visible) {
+  outline: 2px solid var(--accent);
+  outline-offset: 2px;
+}
+
+.roles-fieldset {
+  display: grid;
+  gap: 6px;
+  margin: 0;
+  padding: 8px 12px 10px;
+  border: 1px solid var(--border);
+  border-radius: var(--radius-md);
+}
+
+.roles-fieldset legend {
+  padding: 0 4px;
+  font-size: 12px;
+  color: var(--muted);
+}
+
+.roles-picker {
+  display: grid;
+  max-block-size: 300px;
+  margin: 0;
+  padding: 0;
+  overflow: auto;
+  list-style: none;
+}
+
+.roles-picker__row {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  padding: 6px 4px;
+  font-size: 13px;
+}
+
+.roles-picker__name {
+  flex: 1;
+  min-width: 0;
+  color: var(--text-strong);
+}
+
+@media (max-width: 640px) {
+  .roles-summary,
+  .roles-presets {
+    grid-template-columns: minmax(0, 1fr);
+  }
+
+  .roles-list__people > span:last-child {
+    display: none;
+  }
+
+  .roles-savebar {
+    flex-wrap: wrap;
+  }
+
+  .roles-savebar__text {
+    flex-basis: 100%;
+  }
+
+  .roles-savebar .btn {
+    flex: 1;
+  }
+}

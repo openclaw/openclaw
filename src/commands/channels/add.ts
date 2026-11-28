@@ -1,6 +1,7 @@
 import { parseStrictNonNegativeInteger } from "@openclaw/normalization-core/number-coercion";
 // Implements guided and non-interactive `openclaw channels add` account setup.
 import { normalizeOptionalLowercaseString } from "@openclaw/normalization-core/string-coerce";
+import { sanitizeTerminalText } from "../../../packages/terminal-core/src/safe-text.js";
 import {
   applyPreparedChannelAccountConfiguration,
   type ChannelAccountMutationPlugin,
@@ -202,12 +203,24 @@ export async function channelsAddCommand(
           prompter,
           workspaceDir,
           promptInstall: false,
+          failureOutput: "caller",
           ...effectContext(),
         });
-        nextConfig = result.cfg;
         if (!result.installed) {
+          const detail =
+            result.error ||
+            (result.status === "skipped"
+              ? "No usable install source."
+              : result.status === "timed_out"
+                ? "The install timed out."
+                : "");
+          runtime.error(
+            `Could not install the plugin for channel "${sanitizeTerminalText(catalogEntry.id)}". Install the plugin manually or verify the install source, then retry.${detail ? `\n${detail}` : ""}`,
+          );
+          runtime.exit(1);
           return;
         }
+        nextConfig = result.cfg;
         pluginRegistrySourceChanged = true;
         catalogEntry = {
           ...catalogEntry,

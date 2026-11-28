@@ -7,10 +7,19 @@ import {
   createApiKeyCredential,
   createAuthProfileStoreFixture,
 } from "../agents/auth-profiles/credential-fixtures.test-support.js";
+import { SHARED_AUTH_STORE_STATE_KEY } from "../agents/auth-profiles/sqlite-json.js";
 import { writePersistedAuthProfileStoreRaw } from "../agents/auth-profiles/sqlite.js";
 import type { AuthProfileStore } from "../agents/auth-profiles/types.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
-import { closeOpenClawStateDatabaseForTest } from "../state/openclaw-state-db.js";
+import { updateConfigMachineState } from "../state/config-machine-state-write.js";
+import {
+  closeOpenClawAgentDatabasesForTest,
+  openOpenClawAgentDatabase,
+} from "../state/openclaw-agent-db.js";
+import {
+  closeOpenClawStateDatabaseForTest,
+  openOpenClawStateDatabase,
+} from "../state/openclaw-state-db.js";
 import type { DoctorPrompter } from "./doctor-prompter.js";
 
 const authProfileMocks = vi.hoisted(() => ({
@@ -39,7 +48,12 @@ vi.mock("../agents/auth-profiles/doctor.js", () => ({
   formatAuthDoctorHint: vi.fn(async () => "Re-authenticate this profile."),
 }));
 
-import { collectAuthProfileHealthFindings, inspectAuthProfileHealth } from "./doctor-auth.js";
+import {
+  checkAuthProfileRefreshPending,
+  collectAuthProfileHealthFindings,
+  collectCopilotAmbientTokenFindings,
+  inspectAuthProfileHealth,
+} from "./doctor-auth.js";
 
 const tempDirs = useAutoCleanupTempDirTracker(afterEach);
 
@@ -339,6 +353,75 @@ describe("inspectAuthProfileHealth", () => {
         fixHint: "Paste the API key value, not an OpenClaw onboarding command.",
       }),
     ]);
+  });
+
+  it("has work only for an OAuth refresh or the unclaimed ambient-token notice", async () => {
+    const cfg = configForAgents("main");
+    const pending = (env: NodeJS.ProcessEnv = {}, inspectProfiles = true) =>
+      checkAuthProfileRefreshPending({ cfg, env, inspectProfiles });
+    useLocalStore(expiredStore("openai-codex:default", now - 60_000));
+    await expect(pending()).resolves.toBe("work");
+    // The check reads the store as lint does and never refreshes.
+    expect(authProfileMocks.resolveApiKeyForProfile).not.toHaveBeenCalled();
+    expect(authProfileMocks.loadAuthProfileStoreForRuntimeAsync).toHaveBeenCalledWith(
+      expect.any(String),
+      expect.objectContaining({ readOnly: true, allowKeychainPrompt: false }),
+    );
+    // Doctor skips the profile inspection when auth migration left the stores unready.
+    await expect(pending({}, false)).resolves.toBe("none");
+
+    useLocalStore(
+      createAuthProfileStoreFixture({
+        "openai:key": createApiKeyCredential("openai", "synthetic-key"),
+      }),
+    );
+    await expect(pending()).resolves.toBe("none");
+
+    const env = { OPENCLAW_STATE_DIR: tempDir, GH_TOKEN: "synthetic-ambient-token" };
+    await expect(pending(env)).resolves.toBe("work");
+    expect(await collectCopilotAmbientTokenFindings(cfg, env)).toHaveLength(1);
+    await expect(pending(env)).resolves.toBe("none");
+  });
+
+  it("cannot decide the profile inspection while its own state database is unheld", async () => {
+    // Doctor's env names another state root; the inspection, like the repair, reads this one.
+    openOpenClawStateDatabase();
+    closeOpenClawStateDatabaseForTest();
+    const sidecars = () =>
+      fs.readdirSync(path.join(tempDir, "state")).filter((name) => /-(wal|shm)$/u.test(name));
+    expect(sidecars()).toEqual([]);
+    useLocalStore(expiredStore("openai-codex:default", now - 60_000));
+
+    await expect(
+      checkAuthProfileRefreshPending({
+        cfg: configForAgents("main"),
+        env: { OPENCLAW_STATE_DIR: tempDirs.make("openclaw-doctor-auth-other-") },
+        inspectProfiles: true,
+      }),
+    ).resolves.toBe("undecidable");
+    expect(authProfileMocks.loadAuthProfileStoreForRuntimeAsync).not.toHaveBeenCalled();
+    expect(sidecars()).toEqual([]);
+  });
+
+  it("cannot decide the ambient-token notice while a legacy shared auth store is unheld", async () => {
+    const env = { OPENCLAW_STATE_DIR: tempDir, GH_TOKEN: "synthetic-ambient-token" };
+    // The shared store is still the legacy main agent database, and main is not configured.
+    updateConfigMachineState(SHARED_AUTH_STORE_STATE_KEY, () => ({ location: "legacy-main" }), {
+      env,
+    });
+    openOpenClawAgentDatabase({ agentId: "main", env });
+    closeOpenClawAgentDatabasesForTest();
+    const legacyMainDir = path.join(tempDir, "agents", "main", "agent");
+    const sidecars = () =>
+      fs.readdirSync(legacyMainDir).filter((name) => /-(wal|shm)$/u.test(name));
+    expect(sidecars()).toEqual([]);
+    useLocalStore(createAuthProfileStoreFixture({}));
+
+    await expect(
+      checkAuthProfileRefreshPending({ cfg: configForAgents("work"), env, inspectProfiles: false }),
+    ).resolves.toBe("undecidable");
+    expect(authProfileMocks.loadAuthProfileStoreForRuntimeAsync).not.toHaveBeenCalled();
+    expect(sidecars()).toEqual([]);
   });
 
   it.each([

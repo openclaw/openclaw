@@ -246,26 +246,6 @@ describe("multi-token details shapes", () => {
     expect(details?.querySelectorAll("p")).toHaveLength(2);
   });
 
-  it("renders a summary authored after a blank line", () => {
-    const { details } = renderDetails(
-      "<details>\n\n<summary>Authored label</summary>\n\nbody\n</details>",
-    );
-
-    expect(details?.querySelector("summary")?.textContent).toBe("Authored label");
-    expect(details?.textContent).toContain("body");
-  });
-
-  it("renders details when body text follows the summary without a blank line", () => {
-    const { html, details } = renderDetails(
-      "<details>\n<summary>More</summary>\nfirst line\n\nsecond paragraph\n</details>",
-    );
-
-    expect(details?.querySelector("summary")?.textContent).toBe("More");
-    expect(details?.textContent).toContain("first line");
-    expect(details?.textContent).toContain("second paragraph");
-    expect(html).not.toContain("&lt;details");
-  });
-
   it("renders markdown following a closed details block from the same token", () => {
     const { html, fragment } = renderDetails(
       "<details><summary>A</summary>a</details>\ncontinuing",

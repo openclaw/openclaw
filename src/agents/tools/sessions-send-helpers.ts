@@ -21,7 +21,7 @@ export type SessionDeliveryTarget = {
 };
 
 export function sendFailure(
-  status: "error" | "forbidden" | "timeout",
+  status: "error" | "forbidden",
   error: string,
   sessionKey?: string,
   runId: string = crypto.randomUUID(),
@@ -45,7 +45,7 @@ export function sendReplyResult(
       status: "no_reply" as const,
       message: sourceReplyDelivered
         ? "The target delivered its final reply directly to its source conversation. Do not resend."
-        : "No visible reply or pending delivery. Continue or retry if needed.",
+        : "The target finished its turn without a reply. It received the message; send a new one only if you still need an answer.",
     });
   }
   return jsonResult({

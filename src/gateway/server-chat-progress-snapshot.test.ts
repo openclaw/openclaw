@@ -2,6 +2,63 @@ import { expect, it, vi } from "vitest";
 import { projectInFlightRunSnapshot } from "./chat-inflight-snapshot.js";
 import { createChatRunState } from "./server-chat-state.js";
 
+it.each(["full", "summary"] as const)(
+  "retains only scheduler identity when %s recovery omits tool payloads",
+  (mode) => {
+    const state = createChatRunState();
+    const args = { action: "add", planId: "p", slotId: "s" };
+    const receipt = {
+      type: "automation_creation_result",
+      planId: "p",
+      slotId: "s",
+      status: "created",
+      jobId: "saved",
+    };
+    const privateBody = "private".repeat(16_000);
+    const event = { runId: "r", stream: "tool" as const, ts: 1 };
+    state.recordProgressEvent(
+      "r",
+      {
+        ...event,
+        seq: 1,
+        data: {
+          phase: "start",
+          name: "automations",
+          toolCallId: "call",
+          args: { ...args, job: { body: privateBody } },
+        },
+      },
+      mode,
+    );
+    state.recordProgressEvent(
+      "r",
+      {
+        ...event,
+        seq: 2,
+        data: {
+          phase: "result",
+          name: "automations",
+          toolCallId: "call",
+          isError: false,
+          result: { details: { automationCreation: receipt, body: privateBody } },
+        },
+      },
+      mode,
+    );
+    const events = projectInFlightRunSnapshot({ chatRunState: state, runId: "r" }).events;
+    expect(events?.map((e) => e.data)).toEqual([
+      { phase: "start", name: "automations", toolCallId: "call", args },
+      {
+        phase: "result",
+        name: "automations",
+        toolCallId: "call",
+        isError: false,
+        result: { details: { automationCreation: receipt } },
+      },
+    ]);
+  },
+);
+
 it("defers output replay decoding until recovery without rereading producers", () => {
   const state = createChatRunState();
   const tool = (seq: number, phase: string, toolCallId: string, data: Record<string, unknown>) =>
@@ -212,5 +269,41 @@ it.each([Number.NaN, Infinity, -Infinity, -0, undefined, Symbol("omitted")])(
     const events = projectInFlightRunSnapshot({ chatRunState: state, runId: "scalar-run" }).events;
     const expected = typeof value === "number" ? { value: Object.is(value, -0) ? 0 : null } : {};
     expect(events?.[0]?.data).toStrictEqual({ phase: "warning", ...expected });
+  },
+);
+
+it.each(["full", "summary"] as const)(
+  "replays only redacted approval status in %s mode",
+  (mode) => {
+    const state = createChatRunState();
+    const emit = (seq: number, phase: string, approvalId: string) =>
+      state.recordProgressEvent(
+        "r",
+        {
+          runId: "r",
+          seq,
+          ts: seq,
+          stream: "lifecycle",
+          data: {
+            phase,
+            approvalId,
+            toolCallId: "tool",
+            command: "private command",
+            decisionToken: "secret",
+          },
+        },
+        mode,
+      );
+    emit(1, "waiting-approval", "a");
+    emit(2, "waiting-approval", "b");
+    emit(3, "approval-resolved", "a");
+    emit(2, "waiting-approval", "a");
+    expect(
+      projectInFlightRunSnapshot({ chatRunState: state, runId: "r" }).events?.map((e) => e.data),
+    ).toEqual([{ phase: "waiting-approval", approvalId: "b", toolCallId: "tool" }]);
+    emit(4, "approval-resolved", "b");
+    expect(projectInFlightRunSnapshot({ chatRunState: state, runId: "r" }).events ?? []).toEqual(
+      [],
+    );
   },
 );
