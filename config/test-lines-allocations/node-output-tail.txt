@@ -1,0 +1,2 @@
+# Node output tail regressions: stdout failure summary, stderr marker, combined cap.
+44

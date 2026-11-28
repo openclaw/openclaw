@@ -66,7 +66,8 @@ export async function runCommand(
       killProcessTree: true,
       maxCombinedOutputBytes: OUTPUT_CAP,
       maxOutputBytes: OUTPUT_CAP,
-      outputCapture: "head",
+      // Keep the end, like Gateway exec: builds and tests report failures last.
+      outputCapture: "tail",
       input: Buffer.alloc(0),
       signal,
       timeoutMs: timeoutMs && timeoutMs > 0 ? timeoutMs : undefined,
