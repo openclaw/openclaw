@@ -352,7 +352,8 @@ const enCron = {
       failureAlertChannel: "Channel",
       failureAlertTo: "Recipient",
       failureAlertToPlaceholder: "Chat ID or webhook URL",
-      failureAlertToHelp: "Enter a recipient if the alert route doesn’t already specify one.",
+      failureAlertToHelp:
+        "Enter a chat ID, phone number, user ID, or webhook URL. Leave blank to use the default.",
       failureAlertMode: "Send alerts",
       failureAlertAnnounce: "To a chat",
       failureAlertWebhook: "To a webhook",
