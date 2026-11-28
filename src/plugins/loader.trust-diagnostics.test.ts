@@ -336,11 +336,7 @@ describe("recorded plugin trust diagnostics", () => {
         const warnings = warn.mock.calls.filter(([message]) =>
           String(message).includes("OpenClaw can't verify where this plugin came from"),
         );
-        if (
-          reason === "record-missing" ||
-          reason === "provenance-missing" ||
-          reason === "provenance-invalid"
-        ) {
+        if (reason === "provenance-missing" || reason === "provenance-invalid") {
           expect(warnings).toHaveLength(1);
           expect(warnings[0]![0]).toContain(`reason=${reason}`);
           expect(warnings[0]![0]).toContain(`openclaw plugins inspect ${plugin.id}`);
