@@ -209,7 +209,7 @@ describe("CLI preparation for a scheduled account", () => {
     { name: "the delivery channel", configured: true, messageProvider: undefined, refused: false },
     {
       name: "cross-channel delivery",
-      configured: true,
+      configured: false,
       messageProvider: undefined,
       messageChannel: "discord",
       sessionKey: "agent:main:telegram:direct:123",
