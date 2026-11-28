@@ -74,7 +74,10 @@ const SIGN_IN_CALLBACK_PATH = "/openclaw-id/callback";
 
 const PENDING_TTL_MS = 10 * 60_000;
 const MAX_PENDING = 16;
-const MAX_HELD = 64;
+// Device sign-ins and held tokens are kept up to a memory backstop, with no per-person limit. Only
+// a full map evicts, and then it takes from the person holding the most (see makeRoom).
+const MAX_DEVICE_SIGN_INS = 256;
+const MAX_HELD = 256;
 const DEVICE_GRANT = "urn:ietf:params:oauth:grant-type:device_code";
 // RFC 8628 section 3.2 defaults and the slow_down increment (section 3.5).
 const DEFAULT_DEVICE_INTERVAL_S = 5;
@@ -236,7 +239,7 @@ export function createOpenClawIdSignIn(
   const pendingDevices = new Map<string, PendingDeviceSignIn>();
   const held = new Map<string, HeldSignIn>();
 
-  // Drops expired sign-ins, then the oldest ones past the cap (Map keeps insertion order).
+  // Drops expired sign-ins, then the oldest popup sign-ins past the cap (Map keeps insertion order).
   const prune = () => {
     for (const [state, entry] of pending) {
       if (now() - entry.createdAt > PENDING_TTL_MS || pending.size >= MAX_PENDING) {
@@ -244,13 +247,32 @@ export function createOpenClawIdSignIn(
       }
     }
     for (const [state, entry] of pendingDevices) {
-      if (now() >= entry.expiresAt || pendingDevices.size >= MAX_PENDING) {
+      if (now() >= entry.expiresAt) {
         pendingDevices.delete(state);
       }
     }
     for (const [hash, entry] of held) {
-      if (entry.exp * 1000 <= now() || held.size >= MAX_HELD) {
+      if (entry.exp * 1000 <= now()) {
         held.delete(hash);
+      }
+    }
+  };
+
+  // Makes room for one more entry. Nothing goes until the map is full. Then the oldest entry of
+  // the owner holding the most goes, so a person with few entries is never dropped for one with many.
+  const makeRoom = <T extends { owner: string }>(map: Map<string, T>, max: number) => {
+    if (map.size < max) {
+      return;
+    }
+    const counts = new Map<string, number>();
+    for (const entry of map.values()) {
+      counts.set(entry.owner, (counts.get(entry.owner) ?? 0) + 1);
+    }
+    const most = Math.max(...counts.values());
+    for (const [key, entry] of map) {
+      if (counts.get(entry.owner) === most) {
+        map.delete(key);
+        return;
       }
     }
   };
@@ -458,6 +480,7 @@ export function createOpenClawIdSignIn(
       // Never hold a code longer than a popup sign-in, whatever the issuer offers.
       const expiresAt = now() + Math.min(body.expires_in * 1000, PENDING_TTL_MS);
       prune();
+      makeRoom(pendingDevices, MAX_DEVICE_SIGN_INS);
       pendingDevices.set(state, {
         issuer: meta.issuer,
         tokenEndpoint: meta.token_endpoint,
@@ -556,6 +579,7 @@ export function createOpenClawIdSignIn(
         return refusal("id_token_invalid", "the issuer returned an unusable ID token");
       }
       prune();
+      makeRoom(held, MAX_HELD);
       held.set(tokenHash(idToken), {
         owner: entry.owner,
         issuer: entry.issuer,

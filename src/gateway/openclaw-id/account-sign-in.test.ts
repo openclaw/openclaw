@@ -317,6 +317,14 @@ describe("createOpenClawIdSignIn", () => {
 function fakeDeviceIssuer(options: { idToken?: Record<string, unknown> } = {}) {
   let decision: "pending" | "approved" | "denied" = "pending";
   let slowDown = false;
+  let claims: Record<string, unknown> = options.idToken ?? {
+    iss: ISSUER,
+    aud: "ui",
+    sub: "acct-1",
+    exp: 1_700_036_000,
+    email: "person@example.test",
+    name: "Person",
+  };
   const tokenPolls: URLSearchParams[] = [];
   const fetchImpl = vi.fn(async (input: RequestInfo | URL, init?: RequestInit) => {
     const url = input instanceof Request ? input.url : String(input);
@@ -354,16 +362,7 @@ function fakeDeviceIssuer(options: { idToken?: Record<string, unknown> } = {}) {
         );
       }
       return Response.json({
-        id_token: jwt(
-          options.idToken ?? {
-            iss: ISSUER,
-            aud: "ui",
-            sub: "acct-1",
-            exp: 1_700_036_000,
-            email: "person@example.test",
-            name: "Person",
-          },
-        ),
+        id_token: jwt(claims),
         token_type: "Bearer",
       });
     }
@@ -377,6 +376,10 @@ function fakeDeviceIssuer(options: { idToken?: Record<string, unknown> } = {}) {
     },
     slowDown: () => {
       slowDown = true;
+    },
+    // The next approved sign-in gets a different ID token.
+    issueAs: (sub: string) => {
+      claims = { ...claims, sub };
     },
   };
 }
@@ -511,6 +514,150 @@ describe("device sign-in", () => {
     // Once its exp passes, the held token is refused and forgotten.
     time.advance(36_000_000);
     expect(signIn.verifyHeld(held)).toMatchObject(notHeld);
+  });
+
+  describe("device sign-in and held-token capacity", () => {
+    // The old global limits were 16 pending device sign-ins and 64 held tokens.
+    const OLD_PENDING = 16;
+    const OLD_HELD = 64;
+    const BACKSTOP = 256;
+    const poll = (
+      signIn: ReturnType<typeof createOpenClawIdSignIn>,
+      state: string,
+      owner: string,
+    ) => signIn.pollDevice({ state, owner });
+    const notFound = { ok: false, code: "state_mismatch" };
+
+    function setup() {
+      const time = clock();
+      const issuer = fakeDeviceIssuer();
+      const signIn = createOpenClawIdSignIn({ fetchImpl: issuer.fetchImpl, now: time.now });
+      return { time, issuer, signIn };
+    }
+
+    function redeemer() {
+      const { time, issuer, signIn } = setup();
+      issuer.decide("approved");
+      const redeem = async (owner: string, sub: string) => {
+        issuer.issueAs(sub);
+        const started = await beginDevice(signIn, owner);
+        time.advance(5_000);
+        const done = await poll(signIn, started.state, owner);
+        if (!("idToken" in done)) {
+          throw new Error("device sign-in did not finish");
+        }
+        return { idToken: done.idToken, owner, issuerUrl: ISSUER, clientId: "ui" };
+      };
+      return { signIn, redeem };
+    }
+
+    it("keeps one person's device code when another person starts more than the old limit", async () => {
+      const { signIn } = setup();
+      const mine = await beginDevice(signIn, "a");
+      for (let i = 0; i < OLD_PENDING + 20; i += 1) {
+        await beginDevice(signIn, "b");
+      }
+      expect(await poll(signIn, mine.state, "a")).toMatchObject({ pending: true });
+    });
+
+    it("keeps one person's held token when another person redeems more than the old limit", async () => {
+      const { signIn, redeem } = redeemer();
+      const mine = await redeem("a", "acct-a");
+      for (let i = 0; i < OLD_HELD + 6; i += 1) {
+        await redeem("b", `acct-b${i}`);
+      }
+      expect(signIn.verifyHeld(mine)).toHaveProperty("account");
+    });
+
+    it("lets one person hold more than 8 and more than the old limit of device sign-ins", async () => {
+      const { signIn } = setup();
+      const started = [];
+      for (let i = 0; i < OLD_PENDING + 4; i += 1) {
+        started.push(await beginDevice(signIn, "a"));
+      }
+      for (const one of started) {
+        expect(await poll(signIn, one.state, "a")).toMatchObject({ pending: true });
+      }
+    });
+
+    it("lets one person hold more than 8 and more than the old limit of tokens", async () => {
+      const { signIn, redeem } = redeemer();
+      const tokens = [];
+      for (let i = 0; i < OLD_HELD + 6; i += 1) {
+        tokens.push(await redeem("a", `acct-a${i}`));
+      }
+      for (const token of tokens) {
+        expect(signIn.verifyHeld(token)).toHaveProperty("account");
+      }
+    });
+
+    it("drops the oldest device sign-in of the heaviest person when the map is full", async () => {
+      const { signIn } = setup();
+      const light = await beginDevice(signIn, "a");
+      const heavy = [];
+      for (let i = 0; i < BACKSTOP - 1; i += 1) {
+        heavy.push(await beginDevice(signIn, "b"));
+      }
+      const newcomer = await beginDevice(signIn, "c");
+      const [oldest, second] = heavy;
+      if (!oldest || !second) {
+        throw new Error("no sign-ins started");
+      }
+      expect(await poll(signIn, oldest.state, "b")).toMatchObject(notFound);
+      expect(await poll(signIn, second.state, "b")).toMatchObject({ pending: true });
+      expect(await poll(signIn, light.state, "a")).toMatchObject({ pending: true });
+      expect(await poll(signIn, newcomer.state, "c")).toMatchObject({ pending: true });
+    });
+
+    it("drops the oldest entry when every person holds the same number", async () => {
+      const { signIn } = setup();
+      const all = [];
+      for (let i = 0; i < BACKSTOP; i += 1) {
+        all.push(await beginDevice(signIn, `p${i}`));
+      }
+      await beginDevice(signIn, "newcomer");
+      const [first, second] = all;
+      if (!first || !second) {
+        throw new Error("no sign-ins started");
+      }
+      expect(await poll(signIn, first.state, "p0")).toMatchObject(notFound);
+      expect(await poll(signIn, second.state, "p1")).toMatchObject({ pending: true });
+    });
+
+    it("drops the oldest held token of the heaviest person when the map is full", async () => {
+      const { signIn, redeem } = redeemer();
+      const light = await redeem("a", "acct-a");
+      const heavy = [];
+      for (let i = 0; i < BACKSTOP - 1; i += 1) {
+        heavy.push(await redeem("b", `acct-b${i}`));
+      }
+      const newcomer = await redeem("c", "acct-c");
+      const [oldest, second] = heavy;
+      if (!oldest || !second) {
+        throw new Error("no tokens redeemed");
+      }
+      expect(signIn.verifyHeld(oldest)).toMatchObject({ ok: false, code: "sign_in_not_held" });
+      expect(signIn.verifyHeld(second)).toHaveProperty("account");
+      expect(signIn.verifyHeld(light)).toHaveProperty("account");
+      expect(signIn.verifyHeld(newcomer)).toHaveProperty("account");
+    });
+
+    it("prunes expired device sign-ins, so they never count toward a full map", async () => {
+      const { time, signIn } = setup();
+      await beginDevice(signIn, "x");
+      time.advance(11 * 60_000);
+      const fresh = [];
+      for (let i = 0; i < BACKSTOP - 1; i += 1) {
+        fresh.push(await beginDevice(signIn, "a"));
+      }
+      await beginDevice(signIn, "b");
+      const [first] = fresh;
+      if (!first) {
+        throw new Error("no sign-ins started");
+      }
+      // With the expired entry still counted the map is full and the heaviest person's oldest goes.
+      expect(await poll(signIn, first.state, "a")).toMatchObject({ pending: true });
+    });
   });
 
   it("refuses an issuer without a device endpoint on its own origin", async () => {
