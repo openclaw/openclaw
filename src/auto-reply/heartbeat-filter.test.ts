@@ -351,3 +351,197 @@ describe("filterHeartbeatTranscriptArtifacts", () => {
     );
   });
 });
+
+describe("cron-execution heartbeat wakes", () => {
+  it("removes completed silent cron-based heartbeat artifacts", () => {
+    const jobId = "00000000-0000-4000-8000-000000000001";
+
+    const messages = [
+      {
+        role: "user",
+        content: `[cron:${jobId} heartbeat-main] synthetic wake`,
+        provenance: {
+          kind: "internal_system",
+          sourceTool: "cron_execution",
+          sourceSessionKey: "agent:main:main",
+          jobId,
+          runId: `cron:${jobId}:100`,
+        },
+      },
+      {
+        role: "assistant",
+        content: [
+          { type: "thinking", thinking: "Synthetic reasoning" },
+          { type: "text", text: "NO_REPLY" },
+        ],
+        stopReason: "stop",
+        display: false,
+        __openclaw: { runId: "model-run-1" },
+      },
+    ];
+
+    expect(filterHeartbeatTranscriptArtifacts(messages)).toEqual([]);
+  });
+
+  it("keeps cron execution turns that produce visible communication", () => {
+    const jobId = "00000000-0000-4000-8000-000000000001";
+
+    const messages = [
+      {
+        role: "user",
+        content: `[cron:${jobId} heartbeat-main] synthetic wake`,
+        provenance: {
+          kind: "internal_system",
+          sourceTool: "cron_execution",
+          sourceSessionKey: "agent:main:main",
+          jobId,
+          runId: `cron:${jobId}:100`,
+        },
+      },
+      {
+        role: "assistant",
+        content: [{ type: "text", text: "The report is ready." }],
+        stopReason: "stop",
+        display: true,
+        __openclaw: { runId: "model-run-1" },
+      },
+    ];
+
+    expect(filterHeartbeatTranscriptArtifacts(messages)).toEqual(messages);
+  });
+
+  it("does not treat external user text that only resembles a cron wake as a heartbeat", () => {
+    const messages = [
+      { role: "user", content: "[cron:00000000-0000-4000-8000-000000000001 hello] hi" },
+      { role: "assistant", content: "NO_REPLY" },
+    ];
+
+    expect(filterHeartbeatTranscriptArtifacts(messages)).toEqual(messages);
+  });
+
+  const jobId = "00000000-0000-4000-8000-000000000001";
+  const cronWake = {
+    role: "user",
+    content: `[cron:${jobId} heartbeat-main] synthetic wake`,
+    provenance: {
+      kind: "internal_system",
+      sourceTool: "cron_execution",
+      sourceSessionKey: "agent:main:main",
+      jobId,
+      runId: `cron:${jobId}:100`,
+    },
+  };
+  const silentAck = {
+    role: "assistant",
+    content: [{ type: "text", text: "NO_REPLY" }],
+    stopReason: "stop",
+    display: false,
+    __openclaw: { runId: "model-run-1" },
+  };
+
+  it("keeps cron turns whose visible message was delivered by the message tool", () => {
+    const messages = [
+      cronWake,
+      assistant([
+        toolCall("message", { to: "chat-1", text: "The report is ready." }, "call_message"),
+      ]),
+      toolResult("call_message", "delivered to chat-1"),
+      {
+        role: "assistant",
+        content: [{ type: "text", text: "Sent." }],
+        display: false,
+        openclawDeliveryMirror: {
+          kind: "message-tool-source-reply",
+          final: true,
+          sourceTurnId: "agent:main:work",
+          toolCallId: "call_message",
+        },
+      },
+      silentAck,
+    ];
+
+    expect(filterHeartbeatTranscriptArtifacts(messages)).toEqual(messages);
+  });
+
+  it("keeps cron turns interrupted before the terminal acknowledgement", () => {
+    const messages = [
+      cronWake,
+      assistant([toolCall("exec", { command: "deploy" }, "call_exec")]),
+      toolResult("call_exec", "deploy started"),
+    ];
+
+    expect(filterHeartbeatTranscriptArtifacts(messages)).toEqual(messages);
+  });
+
+  it("removes cron turns that completed quietly after tool activity", () => {
+    const messages = [
+      cronWake,
+      assistant([toolCall("exec", { command: "rotate logs" }, "call_exec")]),
+      toolResult("call_exec", "logs rotated"),
+      silentAck,
+    ];
+
+    expect(filterHeartbeatTranscriptArtifacts(messages)).toEqual([]);
+  });
+
+  it("keeps cron turns whose final assistant text is not a silent acknowledgement", () => {
+    const messages = [
+      cronWake,
+      {
+        role: "assistant",
+        content: [{ type: "text", text: "The report is ready." }],
+        stopReason: "stop",
+        display: false,
+        __openclaw: { runId: "model-run-1" },
+      },
+    ];
+
+    expect(filterHeartbeatTranscriptArtifacts(messages)).toEqual(messages);
+  });
+
+  it("keeps cron turns whose terminal row is empty and aborted", () => {
+    const messages = [
+      cronWake,
+      { role: "assistant", content: [], stopReason: "aborted", display: false },
+    ];
+
+    expect(filterHeartbeatTranscriptArtifacts(messages)).toEqual(messages);
+  });
+
+  it("keeps cron turns whose HEARTBEAT_OK ack carries a substantive suffix", () => {
+    const messages = [
+      cronWake,
+      {
+        role: "assistant",
+        content: [{ type: "text", text: "HEARTBEAT_OK\nDeployment failed" }],
+        stopReason: "stop",
+        display: false,
+      },
+    ];
+
+    expect(filterHeartbeatTranscriptArtifacts(messages)).toEqual(messages);
+  });
+
+  it("keeps cron turns that end in a truncated NO_REPLY token", () => {
+    const messages = [
+      cronWake,
+      { role: "assistant", content: [{ type: "text", text: "NO_RE" }], display: false },
+    ];
+
+    expect(filterHeartbeatTranscriptArtifacts(messages)).toEqual(messages);
+  });
+
+  it("removes cron turns that end in a bare HEARTBEAT_OK token", () => {
+    const messages = [
+      cronWake,
+      {
+        role: "assistant",
+        content: [{ type: "text", text: "HEARTBEAT_OK" }],
+        stopReason: "stop",
+        display: false,
+      },
+    ];
+
+    expect(filterHeartbeatTranscriptArtifacts(messages)).toEqual([]);
+  });
+});

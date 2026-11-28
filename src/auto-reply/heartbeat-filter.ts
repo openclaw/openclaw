@@ -3,7 +3,14 @@ import { safeParseJsonRecord } from "@openclaw/normalization-core/json-coercion"
 import { isRecord } from "@openclaw/normalization-core/record-coerce";
 import { normalizeOptionalString as readString } from "@openclaw/normalization-core/string-coerce";
 import { MESSAGE_TOOL_DELIVERY_HINTS } from "../plugin-sdk/message-tool-delivery-hints.js";
-import { isSilentAssistantTranscriptMessage } from "../shared/chat-message-content.js";
+import {
+  isCronExecutionInputProvenance,
+  normalizeInputProvenance,
+} from "../sessions/input-provenance.js";
+import {
+  isSilentAssistantTranscriptMessage,
+  readTerminalSourceReplyDeliveryMirror,
+} from "../shared/chat-message-content.js";
 import {
   collectToolCallIds,
   isContractToolCallBlock,
@@ -16,8 +23,9 @@ import {
   INTERNAL_WAKE_TRANSCRIPT_PROMPTS,
   isHeartbeatAcknowledgementText,
   resolveHeartbeatPromptForResponseTool,
+  stripHeartbeatToken,
 } from "./heartbeat.js";
-import { HEARTBEAT_TOKEN, SILENT_REPLY_TOKEN } from "./tokens.js";
+import { HEARTBEAT_TOKEN, SILENT_REPLY_TOKEN, isSilentReplyText } from "./tokens.js";
 
 // Saved transcripts retain calls to the retired response tool.
 const HEARTBEAT_RESPONSE_TOOL_NAME = "heartbeat_respond";
@@ -33,7 +41,12 @@ const HEARTBEAT_TASK_PROMPT_COMPLETIONS = [
   `After completing all due tasks, reply with exactly ${SILENT_REPLY_TOKEN} as the entire final answer.`,
   `After completing all due tasks, use ${HEARTBEAT_RESPONSE_TOOL_NAME}`,
 ];
-type HeartbeatTranscriptMessage = { role: string; content?: unknown; __openclaw?: unknown };
+type HeartbeatTranscriptMessage = {
+  role: string;
+  content?: unknown;
+  __openclaw?: unknown;
+  provenance?: unknown;
+};
 
 function isVisibleHeartbeatResponseToolCall(block: Record<string, unknown>): boolean {
   const nested = isRecord(block.function) ? block.function : undefined;
@@ -129,6 +142,21 @@ export function isHeartbeatUserMessage(
   if (message.role !== "user") {
     return false;
   }
+  // 2026.11.6+ cron execution wakes carry typed provenance (`internal_system` /
+  // `cron_execution`) and a `[cron:JOB-ID NAME]`-prefixed prompt. The legacy
+  // text markers below never match them, so completed silent heartbeat spans
+  // stayed in the model history (#204878). `heartbeatOnly` keeps its legacy
+  // meaning (only the strict heartbeat prompt), so cron provenance does not
+  // enable truncated-token matching there (PR #170972 preserves truncated
+  // tokens in ordinary cron output).
+  if (
+    !options.heartbeatOnly &&
+    isCronExecutionInputProvenance(
+      normalizeInputProvenance((message as { provenance?: unknown }).provenance),
+    )
+  ) {
+    return true;
+  }
   const { text } = resolveMessageText(message.content);
   const trimmed = text.trim();
   if (!trimmed) {
@@ -178,6 +206,49 @@ export function isHeartbeatOkResponse(
     !hasNonTextContent &&
     (isSilentAssistantTranscriptMessage(message) ||
       isHeartbeatAcknowledgementText(text, ackMaxChars, allowTruncated))
+  );
+}
+
+// Cron executions are ordinary automation turns: a span is eligible for
+// removal only when it demonstrably finished quietly. `display: false` is not
+// enough (cron turns stamp every non-error assistant row invisible), so the
+// terminal ack must be an actual full silent control token. The legacy
+// acknowledgement predicate is too permissive here: it accepts empty text and
+// `HEARTBEAT_OK` followed by up to `ackMaxChars` of trailing content, and it
+// accepts truncated `NO_REPLY` when `allowTruncated` is set. Aborted or
+// substantive cron turns must survive, so only a pure control token counts.
+function isCronSilentTerminalAck(message: HeartbeatTranscriptMessage): boolean {
+  if (message.role !== "assistant" || collectAssistantToolCalls(message).length > 0) {
+    return false;
+  }
+  const { text, hasNonTextContent } = resolveMessageText(message.content);
+  if (hasNonTextContent || !text.trim()) {
+    return false;
+  }
+  if (isSilentReplyText(text)) {
+    return true;
+  }
+  // Strip only a bare HEARTBEAT_OK: no empty text, no trailing suffix, no
+  // truncated-token acceptance for cron spans.
+  return stripHeartbeatToken(text, {
+    mode: "heartbeat",
+    maxAckChars: 0,
+    allowTruncated: false,
+  }).shouldSkip;
+}
+
+// Tool names that deliver user-visible messages. The delivery mirror on a
+// completed send is the authoritative signal; the names cover transcripts
+// persisted before mirrors existed.
+const MESSAGING_TOOL_NAMES = new Set(["message", "conversations_send", "conversations_turn"]);
+
+function hasVisibleDeliveryEvidence(
+  message: HeartbeatTranscriptMessage,
+  toolCalls: Array<Record<string, unknown>>,
+): boolean {
+  return (
+    readTerminalSourceReplyDeliveryMirror(message) !== undefined ||
+    toolCalls.some((block) => MESSAGING_TOOL_NAMES.has(readToolCallName(block) ?? ""))
   );
 }
 
@@ -231,8 +302,22 @@ function resolveHeartbeatArtifactSpanEnd(
   ackMaxChars?: number,
   allowTruncated = false,
 ): number | undefined {
+  // Cron-execution wakes are ordinary automation turns, not legacy heartbeat
+  // prompts: removal needs proof the run finished quietly and delivered
+  // nothing visible. Legacy spans keep the historical scanner behavior.
+  const cronWake = isCronExecutionInputProvenance(
+    normalizeInputProvenance(
+      (
+        expectDefined(messages[startIndex], "messages entry at startIndex") as {
+          provenance?: unknown;
+        }
+      ).provenance,
+    ),
+  );
   let index = startIndex + 1;
   let sawTerminalHeartbeatArtifact = false;
+  let sawCronSilentAck = false;
+  let sawVisibleDelivery = false;
   let sawNonTerminalAssistantOutput = false;
 
   while (index < messages.length) {
@@ -244,12 +329,23 @@ function resolveHeartbeatArtifactSpanEnd(
     if (message.role === "user" && !isEmbeddedToolResultOnlyContent(message.content)) {
       break;
     }
-    if (isHeartbeatOkResponse(message, ackMaxChars, allowTruncated)) {
-      sawTerminalHeartbeatArtifact = true;
+    const toolCalls = collectAssistantToolCalls(message);
+    if (cronWake && hasVisibleDeliveryEvidence(message, toolCalls)) {
+      sawVisibleDelivery = true;
+    }
+    if (
+      cronWake
+        ? isCronSilentTerminalAck(message)
+        : isHeartbeatOkResponse(message, ackMaxChars, allowTruncated)
+    ) {
+      if (cronWake) {
+        sawCronSilentAck = true;
+      } else {
+        sawTerminalHeartbeatArtifact = true;
+      }
       index = advancePastAdjacentToolResults(messages, index + 1);
       continue;
     }
-    const toolCalls = collectAssistantToolCalls(message);
     const heartbeatCalls = toolCalls.filter(
       (block) => readToolCallName(block) === HEARTBEAT_RESPONSE_TOOL_NAME,
     );
@@ -275,6 +371,15 @@ function resolveHeartbeatArtifactSpanEnd(
     index++;
   }
 
+  if (cronWake) {
+    // A cron span is removable only when it ended in an actual silent ack and
+    // nothing visible was delivered: interrupted runs and delivered messages
+    // stay in the following model context (#204878, #205126 review).
+    if (!sawCronSilentAck || sawVisibleDelivery || sawNonTerminalAssistantOutput) {
+      return undefined;
+    }
+    return index;
+  }
   if (sawNonTerminalAssistantOutput && !sawTerminalHeartbeatArtifact) {
     return undefined;
   }
