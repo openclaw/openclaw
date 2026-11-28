@@ -34,6 +34,7 @@ suite.define(() => {
           sessionKey,
           featureMethods: ["chat.metadata", "chat.startup", "chat.history", "chat.send"],
           sessions: [
+            { key: "agent:main:main", kind: "main", updatedAt: 1_700_000_000_000 },
             {
               key: sessionKey,
               label: "Parser review",
@@ -82,6 +83,8 @@ suite.define(() => {
         expect(await bubble.textContent()).not.toContain("Working context captured");
         await page.getByRole("button", { name: "Talk to your Home agent", exact: true }).click();
         const home = page.locator("openclaw-home-session");
+        await home.locator(".chat-bubble").filter({ hasText: text }).waitFor();
+        expect(await home.locator(".chat-context-attachment").isVisible()).toBe(false);
         const composer = home.locator(".agent-chat__composer-combobox textarea");
         await composer.fill("Please review the captured file.");
         await home.getByRole("button", { name: "Send message", exact: true }).click();
