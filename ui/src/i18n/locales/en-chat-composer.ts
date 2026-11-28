@@ -117,6 +117,8 @@ const catalog = {
       cameraBusy: "The camera is busy or unavailable to the browser.",
       cameraFallback: "Camera {number}",
       cameraInput: "Camera",
+      cameraInsecureContext:
+        "Camera access needs HTTPS or localhost. Open this dashboard over HTTPS, or at localhost on the computer running OpenClaw.",
       cameraListUnsupported: "This browser cannot list cameras.",
       cameraNoneFound: "No camera was found.",
       cameraPageInactive: "Cameras are unavailable while this page is inactive.",
@@ -133,6 +135,8 @@ const catalog = {
       microphoneFallback: "Microphone {number}",
       microphoneInput: "Microphone input",
       microphoneAppliesNextSession: "Changes apply when you start your next Talk session.",
+      microphoneInsecureContext:
+        "Microphone access needs HTTPS or localhost. Open this dashboard over HTTPS, or at localhost on the computer running OpenClaw.",
       microphoneListUnsupported: "This browser cannot list microphone inputs.",
       noCameras: "No additional cameras found",
       noMicrophones: "No additional microphones found",
