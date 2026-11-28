@@ -1849,6 +1849,7 @@ src/plugins/plugin-manifest-id-normalizer.ts
 src/plugins/plugin-metadata-contributions.ts
 src/plugins/plugin-metadata-env.ts
 src/plugins/plugin-metadata-lifecycle.ts
+src/plugins/plugin-metadata-memo-lifecycle.ts
 src/plugins/plugin-metadata-provider-facts.ts
 src/plugins/plugin-metadata-readers.runtime.ts
 src/plugins/plugin-metadata-snapshot-input.ts

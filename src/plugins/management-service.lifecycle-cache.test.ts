@@ -6,10 +6,8 @@ import type { OpenClawConfig } from "../config/types.openclaw.js";
 import * as bundledDiscoveryState from "./bundled-discovery-state.js";
 import { emptyMetadataSnapshot, hostedFeedDiffsEntry } from "./management-service.test-helpers.js";
 import type { PluginManifestRecord } from "./manifest-registry.js";
-import {
-  clearPluginMetadataLifecycleCaches,
-  registerPluginMetadataProcessMemoLifecycleClear,
-} from "./plugin-metadata-lifecycle.js";
+import { clearPluginMetadataLifecycleCaches } from "./plugin-metadata-lifecycle.js";
+import { registerPluginMetadataProcessMemoLifecycleClear } from "./plugin-metadata-memo-lifecycle.js";
 import { createPluginMetadataSnapshotFixture } from "./plugin-metadata.test-support.js";
 
 vi.mock("./install.js", () => {

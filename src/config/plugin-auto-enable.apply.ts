@@ -1,5 +1,5 @@
 import type { PluginManifestRegistry } from "../plugins/manifest-registry.js";
-import { registerPluginMetadataProcessMemoLifecycleClear } from "../plugins/plugin-metadata-lifecycle.js";
+import { registerPluginMetadataProcessMemoLifecycleClear } from "../plugins/plugin-metadata-memo-lifecycle.js";
 import { withPluginSetupPreparation } from "../plugins/plugin-setup-module.js";
 import { freezeJsonSnapshot } from "../shared/immutable-data.js";
 import { detectPluginAutoEnableCandidatesWithRegistry } from "./plugin-auto-enable.detect.js";

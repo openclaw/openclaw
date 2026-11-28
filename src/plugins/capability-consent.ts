@@ -38,7 +38,7 @@ import { createInstalledPluginOwnershipResolver } from "./installed-plugin-packa
 import { ManagedPluginLifecycleError } from "./management-lifecycle-error.js";
 import { isTrustedOfficialPluginInstallRecord } from "./official-external-install-records.js";
 import { withPluginLifecycleLeaseAsync } from "./plugin-lifecycle-lease.js";
-import { registerPluginMetadataProcessMemoLifecycleClear } from "./plugin-metadata-lifecycle.js";
+import { registerPluginMetadataProcessMemoLifecycleClear } from "./plugin-metadata-memo-lifecycle.js";
 import {
   resolvePluginMetadataSnapshot,
   type PluginMetadataSnapshot,

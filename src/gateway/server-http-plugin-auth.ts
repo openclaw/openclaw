@@ -1,6 +1,6 @@
 import { resolveBundledChannelGatewayAuthBypassPaths } from "../channels/plugins/gateway-auth-bypass.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
-import { registerPluginMetadataProcessMemoLifecycleClear } from "../plugins/plugin-metadata-lifecycle.js";
+import { registerPluginMetadataProcessMemoLifecycleClear } from "../plugins/plugin-metadata-memo-lifecycle.js";
 import type { PluginNodeCapabilitySurface } from "./plugin-node-capability.js";
 import {
   isProtectedPluginRoutePathFromContext,

@@ -20,12 +20,12 @@ import {
   withPluginCache,
   type PluginCache,
 } from "./plugin-cache.js";
+import { clearPluginMetadataMemos } from "./plugin-metadata-memo-lifecycle.js";
 import { retainPluginMetadataSnapshotReaders } from "./plugin-metadata-snapshot-readers.js";
 import type { PluginMetadataSnapshot } from "./plugin-metadata-snapshot.types.js";
 import { retainPluginSourceCaptureInstance } from "./plugin-source-capture-directory.js";
 import { PluginRuntimeCloseRetainedError } from "./runtime-close-error.js";
 
-const pluginMetadataProcessMemoClears = new Map<() => void, "process" | "operation">();
 type GatewayMetadataOwner = {
   cache?: PluginCache;
   phase: "booting" | "active" | "closing";
@@ -209,21 +209,9 @@ export function retainGatewayPluginMetadata(
 
 export type GatewayPluginMetadataOwner = ReturnType<typeof retainGatewayPluginMetadata>;
 
-/** Registers a metadata clear hook with the lifetime of its facts. */
-export function registerPluginMetadataProcessMemoLifecycleClear(
-  clearProcessMemo: () => void,
-  options: { owner: "process" | "operation" } = { owner: "process" },
-): void {
-  pluginMetadataProcessMemoClears.set(clearProcessMemo, options.owner);
-}
-
 /** Clears plugin metadata snapshots and registered process memo caches. */
 export function clearPluginMetadataLifecycleCaches(): void {
-  for (const [clearMemo, owner] of pluginMetadataProcessMemoClears) {
-    if (owner === "operation") {
-      clearMemo();
-    }
-  }
+  clearPluginMetadataMemos("operation");
   // Installs cannot retire a running inventory.
   // Pre-publication planning remains refreshable until boot metadata is pinned.
   if (
@@ -239,10 +227,6 @@ export function clearPluginMetadataLifecycleCaches(): void {
 
 function clearPluginMetadataCaches(): void {
   clearCurrentPluginMetadataSnapshot();
-  for (const [clearProcessMemo, owner] of pluginMetadataProcessMemoClears) {
-    if (owner === "process") {
-      clearProcessMemo();
-    }
-  }
+  clearPluginMetadataMemos("process");
   resetPluginCache();
 }
