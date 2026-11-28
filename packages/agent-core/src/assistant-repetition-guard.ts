@@ -10,6 +10,8 @@ import { RepetitionWatch } from "./repetition-guard.js";
  */
 export class AssistantRepetitionGuard {
   // `seen`: the block text the watch has seen. `deltaEnd`: block offset after the last delta.
+  // Length cannot tell a queued snapshot from one that is current, so a snapshot ahead of its
+  // deltas skews only the live watch; the full check at the next event without a delta re-feeds.
   private blocks = new Map<number, { watch: RepetitionWatch; seen: string; deltaEnd: number }>();
 
   check(
