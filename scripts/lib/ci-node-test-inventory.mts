@@ -493,12 +493,6 @@ export const SCHEDULED_COVERAGE_EXCEPTIONS: Array<{
       "Source inputs for tooling regression suites; shared Vitest configuration deliberately excludes fixtures.",
   },
   {
-    pattern: ".agents/skills/update-team-server/controller/*.test.*",
-    owner: "Team server deployment controller",
-    reason:
-      "Standalone Node/Python controller self-tests use the operator skill's runner, not Vitest; no scheduled controller runner exists.",
-  },
-  {
     pattern: ".agents/skills/plugin-sdk-impact/scripts/*.test.mjs",
     owner: "Plugin SDK impact tooling",
     reason:

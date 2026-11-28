@@ -164,6 +164,7 @@ export const baseProps = () => ({
   setTerminalFontFamily: vi.fn(),
   chatMessageMaxWidth: undefined,
   chatShowTaskProgress: true,
+  compactSessionOpening: false,
   chatCollapseTaskProgress: false,
   showAdvancedSettings: false,
   chatSendShortcut: "enter" as const,

@@ -819,6 +819,7 @@ it("keeps a cursor reset across failed hydration until authoritative retry commi
   request.mockResolvedValueOnce({ messages: [], windowReset: true });
   request.mockRejectedValueOnce(new Error("gateway unavailable"));
   request.mockResolvedValueOnce(historyPage([3, 4], { sessionId: "current" }));
+  Object.assign(state.settings, { compactSessionOpening: true });
   state.currentSessionId = "current";
   state.chatMessages = [1, 2, 3, 4].map((seq) => nativeHistoryMessage(seq));
   state.chatHistoryPagination = pagination(4, 2);
@@ -833,6 +834,10 @@ it("keeps a cursor reset across failed hydration until authoritative retry commi
   expect(request).toHaveBeenCalledTimes(3);
   expect(request.mock.calls[1]?.[1]).not.toHaveProperty("cursor");
   expect(request.mock.calls[2]?.[1]).not.toHaveProperty("cursor");
+  expect(request.mock.calls.slice(1).map(([, params]) => params)).toMatchObject([
+    { limit: 80 },
+    { limit: 80 },
+  ]);
 });
 
 it.each([
