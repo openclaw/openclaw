@@ -13,7 +13,7 @@ import {
   createClosedChunkStream,
   createStreamingResponse,
 } from "../test-support/streaming-error-response.js";
-import * as configApi from "./config-api.js";
+import * as credentials from "./credential-resolution.js";
 import { buildElevenLabsSpeechProvider } from "./speech-provider-factory.js";
 
 function mockFetch(response: Response) {
@@ -39,7 +39,7 @@ describe("elevenlabs tts diagnostics", () => {
   const provider = buildElevenLabsSpeechProvider({ formatErrorMessage });
   const streamSynthesize = expectDefined(provider.streamSynthesize, "streamSynthesize");
   beforeEach(() => {
-    vi.spyOn(configApi, "resolveElevenLabsApiKeyWithProfileFallback").mockReturnValue(null);
+    vi.spyOn(credentials, "resolveElevenLabsApiKeyWithProfileFallback").mockReturnValue(null);
   });
   const request: Parameters<typeof provider.synthesize>[0] = {
     text: "hello",
@@ -84,8 +84,8 @@ describe("elevenlabs tts diagnostics", () => {
         { layout: "home", env: { ELEVENLABS_API_KEY: envKey, XI_API_KEY: "xi-key" } },
         async (state) => {
           const home = vi.spyOn(os, "homedir").mockReturnValue(state.home);
-          vi.mocked(configApi.resolveElevenLabsApiKeyWithProfileFallback).mockRestore();
-          const profileLookup = vi.spyOn(configApi, "resolveElevenLabsApiKeyWithProfileFallback");
+          vi.mocked(credentials.resolveElevenLabsApiKeyWithProfileFallback).mockRestore();
+          const profileLookup = vi.spyOn(credentials, "resolveElevenLabsApiKeyWithProfileFallback");
           try {
             if (profile) {
               await writeFile(

@@ -24,7 +24,7 @@ import {
   normalizeLowercaseStringOrEmpty,
   parseBooleanValue,
 } from "openclaw/plugin-sdk/string-coerce-runtime";
-import { resolveElevenLabsApiKeyWithProfileFallback } from "./config-api.js";
+import { resolveElevenLabsApiKeyWithProfileFallback } from "./credential-resolution.js";
 import { isValidElevenLabsVoiceId, normalizeElevenLabsBaseUrl } from "./shared.js";
 const DEFAULT_ELEVENLABS_VOICE_ID = "pMsXgVXv3BLzUgSXRplE";
 const DEFAULT_ELEVENLABS_MODEL_ID = "eleven_multilingual_v2";
