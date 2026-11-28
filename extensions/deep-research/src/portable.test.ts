@@ -216,6 +216,27 @@ describe("portable research", () => {
     expect(result.status).toBe("partial");
   });
 
+  it("identifies the error behind a failed search or model call without copying its message", async () => {
+    const searchFailed = fixture().io;
+    vi.mocked(searchFailed.search).mockRejectedValueOnce(
+      Object.assign(new Error("provider detail"), { name: "TimeoutError" }),
+    );
+    const searched = await runPortableResearch({ question: "River length" }, searchFailed);
+    expect(searched.gaps).toContain("Search unavailable: river length (TimeoutError)");
+    const modelFailed = fixture().io;
+    vi.mocked(modelFailed.complete).mockRejectedValueOnce(
+      Object.assign(new Error("provider detail"), {
+        name: "LlmCompleteError",
+        code: "LLM_COMPLETION_TIMEOUT",
+      }),
+    );
+    const modeled = await runPortableResearch({ question: "River length" }, modelFailed);
+    expect(modeled.status).toBe("partial");
+    expect(modeled.gaps).toContain(
+      "The model did not produce a complete response (LLM_COMPLETION_TIMEOUT).",
+    );
+  });
+
   it("rejects malformed model data without attempting an unrequested repair call", async () => {
     const { io } = fixture();
     io.complete = vi.fn(async () => ({ text: '{"questions":"not an array"}' }));

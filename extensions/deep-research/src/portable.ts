@@ -158,6 +158,13 @@ function clampLists(value: unknown, limits: Record<string, number>): unknown {
 }
 class BudgetReached extends Error {}
 class ModelUnavailable extends Error {}
+// Codes and names identify the failure; messages can carry provider or page text into the report.
+const failureLabel = (error: unknown) =>
+  error instanceof Error
+    ? "code" in error && typeof error.code === "string"
+      ? error.code
+      : error.name
+    : "error";
 
 /** One controller owns all call admission, including parallel retrieval branches. */
 export async function runPortableResearch(
@@ -228,9 +235,11 @@ export async function runPortableResearch(
     let result: Awaited<ReturnType<ResearchIO["complete"]>>;
     try {
       result = await io.complete(prompt, signal);
-    } catch {
+    } catch (error) {
       current();
-      throw new ModelUnavailable("The model did not produce a complete response.");
+      throw new ModelUnavailable(
+        `The model did not produce a complete response (${failureLabel(error)}).`,
+      );
     }
     current();
     if (result.route) {
@@ -327,7 +336,7 @@ export async function runPortableResearch(
       };
     } catch (error) {
       current();
-      gaps.push(`Source unavailable: ${url} (${error instanceof Error ? error.name : "error"})`);
+      gaps.push(`Source unavailable: ${url} (${failureLabel(error)})`);
       return undefined;
     }
   };
@@ -347,9 +356,9 @@ export async function runPortableResearch(
         const hits = await io.search(query, signal);
         current();
         urls.push(...hits.map((hit) => hit.url));
-      } catch {
+      } catch (error) {
         current();
-        gaps.push(`Search unavailable: ${query}`);
+        gaps.push(`Search unavailable: ${query} (${failureLabel(error)})`);
       }
     }
     // A bounded worker pool shares the same admission counter, not one budget per branch.
