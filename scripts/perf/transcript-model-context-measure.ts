@@ -2,6 +2,7 @@
 // node --import ./scripts/tsx.mjs scripts/perf/transcript-model-context-measure.ts \
 //   --output .local/context-candidate --mode timing --iterations 2000
 // Add --owner-file .local/context-base.ts to substitute the exact baseline owner.
+// Add --navigation-owner-file .local/navigation-base.ts to compare navigation retention.
 // Run timing and allocation separately, counterbalancing base/candidate order.
 // --sessions 1 measures a warm navigation cache; the default 16 rotates transcripts.
 // Compacted identity history: --compacted-prefix-turns 4000 --turns 20 --sessions 2
@@ -38,6 +39,7 @@ const { values } = parseArgs({
   options: {
     output: { type: "string" },
     "owner-file": { type: "string" },
+    "navigation-owner-file": { type: "string" },
     mode: { type: "string", default: "timing" },
     iterations: { type: "string", default: "2000" },
     sessions: { type: "string", default: "16" },
@@ -86,9 +88,24 @@ const sourceUrl = values["owner-file"]
   ? pathToFileURL(path.resolve(values["owner-file"]))
   : ownerUrl;
 const wasOwnerReplaced = registerPerfOwnerReplacement(ownerUrl.href, values["owner-file"]);
+const navigationOwnerUrl = new URL(
+  "../../src/config/sessions/session-model-context-pages.ts",
+  import.meta.url,
+);
+const navigationSourceUrl = values["navigation-owner-file"]
+  ? pathToFileURL(path.resolve(values["navigation-owner-file"]))
+  : navigationOwnerUrl;
+const wasNavigationReplaced = registerPerfOwnerReplacement(
+  navigationOwnerUrl.href,
+  values["navigation-owner-file"],
+);
 const { readSessionTranscriptModelContext: read } =
   await import("../../src/config/sessions/session-accessor.sqlite-model-context.js");
 assert(!values["owner-file"] || wasOwnerReplaced(), "Baseline owner substitution was not loaded");
+assert(
+  !values["navigation-owner-file"] || wasNavigationReplaced(),
+  "Baseline navigation substitution was not loaded",
+);
 const { importSqliteSessionRowsBatch } =
   await import("../../src/config/sessions/session-accessor.sqlite-import.js");
 const { resolveOpenClawAgentSqlitePath, closeOpenClawAgentDatabasesAsync } =
@@ -279,6 +296,7 @@ try {
         sqliteReadSamples: probe ? sqliteReadSamples : undefined,
         limits,
         ownerSha256: hash("sha256", readFileSync(sourceUrl)),
+        navigationOwnerSha256: hash("sha256", readFileSync(navigationSourceUrl)),
         eventCount,
         statementCount,
         eventsPerRead: latest.events.length,
