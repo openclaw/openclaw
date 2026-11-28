@@ -19,6 +19,8 @@ import type { PreparedModelRuntimeInput } from "./prepared-model-runtime.types.j
 import type { AuthStorageData } from "./sessions/auth-storage.js";
 
 export type PreparedModelCatalogWorkerInput = Readonly<{
+  /** Exact normalized agent/directory identity captured once by the parent. */
+  owner?: string;
   remoteCatalog: ActiveRemoteModelCatalog | null;
   input: PreparedModelRuntimeInput & { env: NodeJS.ProcessEnv };
   sourceConfigForSecrets: PreparedModelRuntimeInput["config"];

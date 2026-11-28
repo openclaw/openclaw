@@ -21,7 +21,10 @@ import {
 import { forceFullGc } from "../test-utils/retention.js";
 import { writeAuthProfileJsonCell } from "./auth-profiles/sqlite-json-write.js";
 import type { AuthProfileStore } from "./auth-profiles/types.js";
-import { createPreparedModelCatalogWorker } from "./prepared-model-catalog-worker.js";
+import {
+  createPreparedModelCatalogWorker,
+  retirePreparedModelCatalogAgent,
+} from "./prepared-model-catalog-worker.js";
 import { catalogAgentFacts } from "./prepared-model-catalog-worker.shared.test-support.js";
 import type {
   PreparedModelCatalogWorkerTask,
@@ -30,8 +33,9 @@ import type {
 import { closePreparedModelRuntimeSnapshots } from "./prepared-model-runtime.lifecycle.js";
 
 const transport = vi.hoisted(() => ({
-  run: vi.fn<() => Promise<PreparedModelWorkerResult>>(),
+  run: vi.fn<(input: PreparedModelCatalogWorkerTask) => Promise<PreparedModelWorkerResult>>(),
   close: vi.fn(),
+  closeResources: vi.fn<(key?: string) => Promise<void>>(async () => {}),
   enqueued: vi.fn(),
 }));
 
@@ -68,7 +72,7 @@ vi.mock("./prepared-model-catalog-worker.pool.js", () => ({
           try {
             const prepared = typeof input === "function" ? input() : input;
             void Promise.resolve(prepared)
-              .then(() => transport.run())
+              .then((value) => transport.run(value))
               .then((result) => finish(undefined, result), finish);
           } catch (error) {
             finish(error);
@@ -86,7 +90,10 @@ vi.mock("./prepared-model-catalog-worker.pool.js", () => ({
     }
     async close() {
       this.isClosed = true;
-      transport.close();
+      await transport.close();
+    }
+    startCloseResources(key: string) {
+      return { result: transport.closeResources(key) };
     }
   },
 }));
@@ -100,7 +107,77 @@ afterEach(async () => {
   }
   transport.run.mockReset();
   transport.close.mockReset();
+  transport.closeResources.mockReset();
   transport.enqueued.mockReset();
+});
+
+const success: PreparedModelWorkerResult = {
+  status: "ok",
+  kind: "auth-refresh",
+  authStore: { version: 1, profiles: {} },
+  authModes: {},
+  credentials: {},
+  authCredentials: [],
+};
+
+it("re-reads acknowledgements at dispatch and rejects a pre-retirement reply's acknowledgement", async () => {
+  const { worker, createWorker } = fixture({ gatewayOwned: true });
+  const survivor = createWorker();
+  const firstEntered = createDeferredCore();
+  const nextQueued = createDeferredCore();
+  const first = createDeferredCore<PreparedModelWorkerResult>();
+  transport.enqueued.mockImplementationOnce(() => {}).mockImplementationOnce(nextQueued.resolve);
+  transport.run
+    .mockImplementationOnce(() => {
+      firstEntered.resolve();
+      return first.promise;
+    })
+    .mockResolvedValue(success);
+  const initial = worker.loadAuth({ providerIds: [] });
+  let queued: ReturnType<typeof survivor.loadAuth> | undefined;
+  try {
+    await firstEntered.promise;
+    queued = survivor.loadAuth({ providerIds: [], profileIds: ["survivor"] });
+    await nextQueued.promise;
+    // Even an identity without a current parent owner invalidates worker context acknowledgements.
+    await retirePreparedModelCatalogAgent("deleted", new Set(["/synthetic/deleted"]));
+    first.resolve(success);
+    await Promise.all([initial, queued]);
+    expect(transport.closeResources).toHaveBeenCalledOnce();
+    expect(transport.run.mock.calls[1]![0].value).toHaveProperty("pluginMetadataSnapshot");
+    await survivor.loadAuth({ providerIds: [], profileIds: ["again"] });
+    expect(transport.run.mock.calls[2]![0].value).not.toHaveProperty("pluginMetadataSnapshot");
+  } finally {
+    first.resolve(success);
+    await Promise.allSettled([initial, ...(queued ? [queued] : [])]);
+  }
+});
+
+it("waits for physical worker shutdown before acknowledging agent deletion", async () => {
+  const { worker } = fixture({ gatewayOwned: true });
+  transport.run.mockResolvedValue(success);
+  await worker.loadAuth({ providerIds: [] });
+  const closing = createDeferredCore();
+  const released = createDeferredCore();
+  transport.close.mockImplementation(() => {
+    closing.resolve();
+    return released.promise;
+  });
+  const shutdown = closePreparedModelRuntimeSnapshots();
+  await closing.promise;
+  const completed = vi.fn();
+  const retirement = retirePreparedModelCatalogAgent(
+    "deleted",
+    new Set(["/synthetic/deleted"]),
+  ).then(completed);
+  try {
+    await Promise.resolve();
+    expect(completed).not.toHaveBeenCalled();
+  } finally {
+    released.resolve();
+    await Promise.all([shutdown, retirement]);
+  }
+  expect(completed).toHaveBeenCalledOnce();
 });
 
 function fixture(options: { gatewayOwned?: true; isCurrent?: () => boolean } = {}) {

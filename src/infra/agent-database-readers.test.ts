@@ -69,6 +69,19 @@ describe("agent database reader requests", () => {
     expect(decode({ deleted: [{ path: databasePath }] })).toBeUndefined();
   });
 
+  it("routes foreign keys without parsing and accepts JSON whitespace before reader requests", () => {
+    using parse = vi.spyOn(JSON, "parse");
+    const foreign = ["state:identity", " \tworker:resource", "null", '"other"', "\u00a0[]"];
+    const decoded = foreign.map(decodeRequest);
+    expect(parse).not.toHaveBeenCalled();
+    expect(decoded).toEqual(foreign.map(() => undefined));
+    expect(decodeRequest(" \t\r\n[]")).toEqual({ ...close, candidates: [] });
+    const revive = { kind: "revive", agentIds: ["alpha"] };
+    expect(decodeRequest('\n {"revive":["alpha"]}')).toEqual(revive);
+    expect(decodeRequest("[}")).toBeUndefined();
+    expect(decodeRequest("{]")).toBeUndefined();
+  });
+
   it("runs every registered closer and keeps deleted databases closed until revived", async () => {
     const seen: string[][] = [];
     const pool = liveWorkerTaskPools.register({

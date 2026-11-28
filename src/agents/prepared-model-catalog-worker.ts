@@ -5,7 +5,7 @@ import {
 import { projectConfigOntoRuntimeSourceSnapshot } from "../config/runtime-source-projection.js";
 import { materializeErrorStack } from "../infra/error-graph-internal.js";
 import { formatErrorMessage } from "../infra/errors.js";
-import { WorkerTaskError, WorkerTaskPool } from "../infra/worker-task-pool.js";
+import { WorkerTaskError } from "../infra/worker-task-pool.js";
 import type { Model } from "../llm/types.js";
 import { createSubsystemLogger } from "../logging/subsystem.js";
 import { captureRemoteModelCatalogSnapshot } from "../model-catalog/remote-overlay.js";
@@ -23,17 +23,22 @@ import type { PreparedSyntheticAuthFacts } from "../plugins/provider-synthetic-a
 import type { PluginRegistry } from "../plugins/registry-types.js";
 import { withPluginRuntimeGenerationScope } from "../plugins/runtime/generation-scope.js";
 import { listManifestSyntheticAuthProviderRefs } from "../plugins/synthetic-auth.runtime.js";
+import { normalizeAgentId } from "../routing/session-key.js";
 import { resolveGlobalSingleton } from "../shared/global-singleton.js";
-import { getOrCreateWeakOwnerMap } from "../shared/weak-owner-map.js";
 import { getActiveSkillEnvKeysCore } from "../skills/runtime/env-overrides.js";
 import { captureOpenClawStateWorkerContext } from "../state/openclaw-state-worker-context.js";
 import { beginAuthProfileCredentialBatch } from "../state/user-model-account-authority.js";
 /** Runs complete model-catalog discovery outside the Gateway event loop. */
 import { captureTemplateInstallSchemaVersionFacts } from "../templates/provenance-runtime-read.js";
+import { normalizeAgentDirRegistryPath } from "./agent-dir-registry.js";
 import { cloneAuthProfileStore } from "./auth-profiles/clone.js";
 import { getPreparedSharedAuthStoreOwnership } from "./auth-profiles/path-resolve.js";
 import { PREPARED_MODEL_CATALOG_WORKER_TIMEOUT_MS } from "./model-catalog-timeouts.js";
 import { preparePluginModelCatalogSave } from "./plugin-model-catalog-save.js";
+import {
+  encodePreparedCatalogRetirement,
+  preparedCatalogOwnerKey,
+} from "./prepared-model-catalog-contexts.js";
 import { prepareModelCatalogWorkerContext } from "./prepared-model-catalog-fingerprints.js";
 import {
   CatalogWorkerTaskPool,
@@ -99,9 +104,20 @@ function startCatalogWatchdog(expire: () => void) {
     stop: () => clearTimeout(timer),
   };
 }
-type CatalogPool = WorkerTaskPool<PreparedModelCatalogWorkerTask, PreparedModelWorkerResult>;
-// Acknowledgements contain no payloads and expire with the physical singleton pool.
-const acknowledgedContexts = new WeakMap<CatalogPool, Map<string | undefined, string>>();
+type CatalogPool = CatalogWorkerTaskPool<PreparedModelCatalogWorkerTask, PreparedModelWorkerResult>;
+type CatalogAcknowledgements = {
+  workspaces: Map<string | undefined, { fingerprint: string; owner?: string }>;
+};
+const acknowledgedContexts = new WeakMap<CatalogPool, CatalogAcknowledgements>();
+
+function catalogAcknowledgements(pool: CatalogPool): CatalogAcknowledgements {
+  let receipts = acknowledgedContexts.get(pool);
+  if (!receipts) {
+    receipts = { workspaces: new Map() };
+    acknowledgedContexts.set(pool, receipts);
+  }
+  return receipts;
+}
 type CatalogPoolBorrower = {
   agentDir: string;
   isCurrent: () => boolean;
@@ -126,6 +142,36 @@ const gatewayCatalog = resolveGlobalSingleton<{
   // Process lifetime: a failed pool is replaced, so the replacement's own counters restart at zero.
   workerFailures?: number;
 }>(Symbol.for("openclaw.gatewayModelCatalogPool"), () => ({}));
+
+/** Parent owner admission is fenced before this definitive deletion notification. */
+export async function retirePreparedModelCatalogAgent(
+  agentId: string,
+  agentDirs: ReadonlySet<string>,
+): Promise<void> {
+  const pool = gatewayCatalog.current?.pool;
+  if (!pool) {
+    return;
+  }
+  if (pool.isClosed) {
+    // Closing fences admission before the worker and its native resources have exited.
+    await pool.close();
+    return;
+  }
+  const owners = [...agentDirs].map((agentDir) => preparedCatalogOwnerKey(agentId, agentDir));
+  const workspaces = acknowledgedContexts.get(pool)?.workspaces;
+  if (workspaces) {
+    // A different successful owner proves the workspace survives. Rotate the receipt
+    // identity so a reply already in flight cannot acknowledge a retired context.
+    acknowledgedContexts.set(pool, { workspaces });
+    const deleted = new Set(owners);
+    for (const [workspace, receipt] of workspaces) {
+      if (receipt.owner !== undefined && deleted.has(receipt.owner)) {
+        workspaces.delete(workspace);
+      }
+    }
+  }
+  await pool.startCloseResources(encodePreparedCatalogRetirement(owners)).result;
+}
 
 export function getPreparedModelCatalogWorkerPoolSnapshot() {
   return {
@@ -290,6 +336,14 @@ export function createPreparedModelCatalogWorkerInput(params: {
   const index = overlayPluginNativeAdmissions(pluginMetadataSnapshot.index, cache);
   const sharedAuthStoreOwnership = getPreparedSharedAuthStoreOwnership(params.agentFacts.env);
   return {
+    ...(source.agentId
+      ? {
+          owner: preparedCatalogOwnerKey(
+            normalizeAgentId(source.agentId),
+            normalizeAgentDirRegistryPath(source.agentDir, env),
+          ),
+        }
+      : {}),
     remoteCatalog: captureRemoteModelCatalogSnapshot(),
     input,
     sourceConfigForSecrets,
@@ -345,6 +399,7 @@ export function createPreparedModelCatalogWorker(
 ): PreparedModelCatalogWorker {
   const workerInput = createPreparedModelCatalogWorkerInput(params);
   const context = prepareModelCatalogWorkerContext(workerInput);
+  const acknowledgement = { fingerprint: context.fingerprint, owner: workerInput.owner };
   const {
     remoteCatalog: _remoteCatalog,
     pluginMetadataSnapshot: _metadata,
@@ -501,14 +556,15 @@ export function createPreparedModelCatalogWorker(
         shared?.pool ??
         pool ??
         new CatalogWorkerTaskPool(workerInput.input.env, (result) => receiveResult(result));
-      const contexts = getOrCreateWeakOwnerMap(acknowledgedContexts, requestPool);
       pending = requestPool.run(
         () => {
           assertCurrent();
-          const reuse = contexts.get(context.workspaceDir) === context.fingerprint;
+          const receipts = catalogAcknowledgements(requestPool!);
+          const reuse =
+            receipts.workspaces.get(context.workspaceDir)?.fingerprint === context.fingerprint;
           // Consume before dispatch: cancellation or a thrown worker failure cannot leave
           // a stale acknowledgement for the next queued request. Success republishes it.
-          contexts.delete(context.workspaceDir);
+          receipts.workspaces.delete(context.workspaceDir);
           // The existing budget now bounds idle admission, renewed only by verified members.
           expire = () => {
             const failure = new PreparedModelCatalogAdmissionStalledError(
@@ -539,8 +595,8 @@ export function createPreparedModelCatalogWorker(
             credentials = undefined;
             receiveResult = validate;
             validate(result);
-            if (result.status === "ok") {
-              contexts.set(context.workspaceDir, context.fingerprint);
+            if (result.status === "ok" && acknowledgedContexts.get(requestPool!) === receipts) {
+              receipts.workspaces.set(context.workspaceDir, acknowledgement);
             }
           };
           if (shared) {

@@ -351,9 +351,15 @@ export function tryNativeRequireModule(
 export function clearPluginSourceCaptureModuleCache(directory: string): void {
   // Jiti's Windows keys use forward slashes; containment follows filesystem identity.
   const urls = pathToFileURL(directory + path.sep).href;
+  // Normalizing an absolute POSIX path can remove components, but cannot add the capture name.
+  // Unrelated modules skip full containment. Windows aliases and case still require it.
+  const captureName = process.platform === "win32" ? "" : path.basename(path.resolve(directory));
   const cache = createRequire(import.meta.url).cache;
   for (const id of Object.keys(cache)) {
-    if (id.startsWith(urls) || (path.isAbsolute(id) && isPathInside(directory, id))) {
+    if (
+      id.startsWith(urls) ||
+      (path.isAbsolute(id) && id.includes(captureName) && isPathInside(directory, id))
+    ) {
       delete cache[id];
     }
   }

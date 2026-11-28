@@ -200,7 +200,7 @@ async function closeModelRuntime(error: Error): Promise<void> {
   throwSettledAggregate(results, "Prepared model work failed to close");
 }
 
-/** Retire deleted-agent publications before closing readers that their builds can reopen. */
+/** Withdraw agent publications before their pending builds can reopen a reader. */
 export async function retirePreparedModelRuntimeAgent(
   target: AgentRuntimeRetirement,
 ): Promise<void> {

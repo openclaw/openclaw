@@ -1,6 +1,8 @@
+import { throwIfSettledRejected } from "../infra/error-graph-internal.js";
 import type { PluginRegistry } from "../plugins/registry-types.js";
 import { normalizeAgentId } from "../routing/session-key.js";
 import { normalizeAgentDirRegistryPath } from "./agent-dir-registry.js";
+import { retirePreparedModelCatalogAgent } from "./prepared-model-catalog-worker.js";
 import { retirePreparedModelRuntimeGeneration } from "./prepared-model-runtime.lifecycle.js";
 import {
   releasePreparedPluginPublication,
@@ -9,7 +11,11 @@ import {
 import type { PreparedModelRuntimeOwner } from "./prepared-model-runtime.types.js";
 import type { PreparedReplyDispatchPublicationOwner } from "./prepared-reply-dispatch-runtime.js";
 
-export type AgentRuntimeRetirement = { agentId: string; agentDirs: readonly string[] };
+export type AgentRuntimeRetirement = {
+  agentId: string;
+  agentDirs: readonly string[];
+  deleted?: true;
+};
 
 export async function retirePreparedModelRuntimeAgentOwners(
   target: AgentRuntimeRetirement,
@@ -46,7 +52,20 @@ export async function retirePreparedModelRuntimeAgentOwners(
   const pendingBuilds = [...retiredAgentDirs]
     .map((agentDir) => context.agentBuildCompletions.get(agentDir))
     .filter((completion) => completion !== undefined);
-  await Promise.all(pendingBuilds);
+  // A degraded startup withdraws its publication while the configured agent still exists.
+  if (!target.deleted) {
+    await Promise.all(pendingBuilds);
+    return;
+  }
+  // Catalog contexts can outlive an ordinary parent owner or have no database paths.
+  // Notify the exact requested identities after fencing, even when no owner matched.
+  throwIfSettledRejected(
+    await Promise.allSettled([
+      retirePreparedModelCatalogAgent(targetId, targetDirs),
+      ...pendingBuilds,
+    ]),
+    "Deleted agent catalog retirement failed",
+  );
 }
 
 export function retirePreparedModelRuntimeOwnerIfUnused(

@@ -238,6 +238,35 @@ console.log("terminal error retained; new generation recovered");
     { node: true },
   );
 });
+it("evicts only the capture's modules across native path and file URL keys", async () => {
+  await expectProbe(
+    (
+      ownerUrl,
+      dir,
+    ) => `import { clearPluginSourceCaptureModuleCache as clear } from ${JSON.stringify(ownerUrl)};
+const cache = createRequire(import.meta.url).cache;
+const parent = ${JSON.stringify(dir)};
+const name = "capture % [雪]";
+const root = path.join(parent, name);
+const sibling = path.join(parent, name + "-neighbor");
+const file = "entry.cjs";
+const inside = [root, path.join(root, file), pathToFileURL(path.join(root, file)).href,
+  sibling + "/../" + name + "/" + file];
+const outside = [path.join(sibling, file), pathToFileURL(path.join(sibling, file)).href,
+  root + "/../neighbor/" + file, path.join(parent, "other", name, file), "foreign:key"];
+if (process.platform === "win32") inside.push(path.join(root, file).toUpperCase().replaceAll("\\\\", "/"));
+for (const key of [...inside, ...outside]) cache[key] = { id: key };
+clear(root + "/.");
+for (const key of inside) assert.equal(cache[key], undefined);
+for (const key of outside) assert.ok(cache[key]);
+clear(path.parse(root).root);
+assert.equal(cache[path.join(sibling, file)], undefined);
+console.log("capture keys revoked; neighbors preserved");`,
+    "capture keys revoked; neighbors preserved",
+    { node: true },
+  );
+});
+
 it("isJavaScriptModulePath only accepts JavaScript runtime extensions", () => {
   expect(isJavaScriptModulePath("/plugin/index.js")).toBe(true);
   expect(isJavaScriptModulePath("/plugin/index.mjs")).toBe(true);

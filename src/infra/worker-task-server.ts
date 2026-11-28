@@ -51,6 +51,8 @@ export function serveWorkerTasks<Output, Input = unknown>(
 type OwnedWorkerTaskServerOptions<Output> = {
   transferList?: (value: Output) => Transferable[];
   closeResource?: (key?: string) => void | Promise<void>;
+  /** Owner-specific retirement fences that can safely detach beside an active task. */
+  closesBesideExecution?: (key?: string) => boolean;
   encodeResourceError?: (error: unknown) => unknown;
   /** Unknown native state cannot publish a reusable task failure before isolate exit. */
   retireOnError?: boolean;
@@ -174,7 +176,11 @@ function serve<Output, Input>(
       // another agent's catalog build, which can take up to 180 s.
       closesBesideExecution: (key) => {
         const request = decodeAgentDatabaseReaderRequest(key);
-        return request?.kind === "revive" || (request?.kind === "close" && request.deleted);
+        return (
+          request?.kind === "revive" ||
+          (request?.kind === "close" && request.deleted) ||
+          options.closesBesideExecution?.(key) === true
+        );
       },
       closeResource: (key) =>
         runInEndpoint(() =>

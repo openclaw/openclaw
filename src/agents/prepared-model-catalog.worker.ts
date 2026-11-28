@@ -8,7 +8,7 @@ import {
 import { getRuntimeConfigSnapshot, setRuntimeConfigSnapshot } from "../config/runtime-snapshot.js";
 import { installDatabaseEngineSelection } from "../infra/database-engine/context.js";
 import { installDirectoryWatchPort } from "../infra/directory-watch-host.js";
-import { serveWorkerTasks } from "../infra/worker-task-server.js";
+import { serveOwnedWorkerTasks } from "../infra/worker-task-server.js";
 import type { Model } from "../llm/types.js";
 import { withRemoteModelCatalogSnapshot } from "../model-catalog/remote-overlay.js";
 import {
@@ -62,6 +62,10 @@ import { parseModelCatalogJson } from "./model-catalog-json.js";
 import { PREPARED_MODEL_CATALOG_WORKER_TIMEOUT_MS } from "./model-catalog-timeouts.js";
 import { resolveImplicitProviderDiscoveryScope } from "./models-config.providers.discovery-scope.js";
 import { prepareImplicitProviderStaticCatalog } from "./models-config.providers.implicit.js";
+import {
+  decodePreparedCatalogRetirement,
+  PreparedCatalogContexts,
+} from "./prepared-model-catalog-contexts.js";
 import { measurePreparedCatalogRetainedData } from "./prepared-model-catalog-retained-data.js";
 import type { PreparedModelCatalogWorkerData } from "./prepared-model-catalog-worker.pool.js";
 import type {
@@ -189,6 +193,7 @@ async function runCatalogRequest(
   work: AsyncWorkScope,
   prepareGeneration: () => Promise<WorkerGeneration>,
   beginDiscovery: () => Promise<void>,
+  contexts: PreparedCatalogContexts<WorkerGeneration>,
 ): Promise<PreparedModelWorkerOutcome> {
   const directoryOwner = value.input.agentId
     ? { agentId: value.input.agentId, agentDir: value.input.agentDir, env: value.input.env }
@@ -514,7 +519,7 @@ async function runCatalogRequest(
       const releasePrevious = prepared.release;
       Object.assign(prepared, acquiredGeneration);
       acquiredGeneration = undefined;
-      await releasePrevious();
+      await contexts.releaseGeneration(value.owner, prepared, releasePrevious);
     }
     if (discoveryPlan) {
       // Publish only after successful discovery/adoption; failed expansion must not
@@ -523,6 +528,8 @@ async function runCatalogRequest(
     }
     return result;
   } catch (error) {
+    // Preserve a retained native close before projecting the task error to wire text.
+    contexts.recordCleanupFailure(value.owner, error);
     return {
       status: "failed",
       error: error instanceof Error ? error.message : String(error),
@@ -533,7 +540,9 @@ async function runCatalogRequest(
       // Join that admitted work before releasing its plugin generation and source context.
       work.beginClose();
       await work.runWhenIdle(() => undefined);
-      await acquiredGeneration?.release();
+      if (acquiredGeneration) {
+        await contexts.releaseGeneration(value.owner, acquiredGeneration);
+      }
     } finally {
       // Registry retirement is admitted cleanup in this request; close only after it settles.
       await work.drain();
@@ -552,14 +561,11 @@ if (parentPort) {
   if (data.databaseEngineSelection) {
     installDatabaseEngineSelection(data.databaseEngineSelection);
   }
-  // Evicting another workspace recaptures native ESM graphs that Node cannot unload.
-  // Keep each workspace's current context within this inventory-owned worker lifetime.
-  const contexts = new Map<
-    string | undefined,
-    { fingerprint: string; registrationFingerprint: string; prepared: WorkerGeneration }
-  >();
+  // Ordinary requests reuse workspace registrations; only definitive last-owner
+  // retirement releases a context without replacing this inventory-owned worker.
+  const contexts = new PreparedCatalogContexts<WorkerGeneration>();
   let activeRequest: PreparedModelCatalogWorkerInput | undefined;
-  serveWorkerTasks(
+  serveOwnedWorkerTasks(
     async (input, channel) => {
       // SAFETY: The typed catalog host is the sole producer of this private task envelope.
       const task = input as PreparedModelCatalogWorkerTask;
@@ -615,84 +621,97 @@ if (parentPort) {
           async () => {
             const { result: outcome, receipts: authCredentials } =
               await captureAuthProfileCredentialCommits(async () => {
-                const { workspaceDir, fingerprint, registrationFingerprint } = context;
-                let previous = contexts.get(workspaceDir);
-                const config =
-                  previous?.registrationFingerprint === registrationFingerprint
-                    ? previous.prepared.config
-                    : freezeTrustedJsonSnapshot({
-                        // Freeze decoded inputs at admission; a fingerprint cannot protect mutable roots.
-                        runtime: value.input.config,
-                        source: value.sourceConfigForSecrets,
-                      });
-                let attempted: WorkerGeneration | undefined;
-                let replacing = false;
+                const admission = contexts.begin(context, value.owner);
                 try {
-                  const work = new AsyncWorkScope();
-                  const result = await withWorkerAuthProfileWrites(value.input.env, work, () =>
-                    withTemplateInstallSchemaVersionFacts(
-                      request.templateInstallSchemaVersions,
-                      () =>
-                        work.run(() =>
-                          runCatalogRequest(
-                            value,
-                            config,
-                            request,
-                            work,
-                            async () => {
-                              if (previous?.fingerprint === fingerprint) {
-                                return previous.prepared;
-                              }
-                              replacing =
-                                previous?.registrationFingerprint !== registrationFingerprint;
-                              return (attempted = await prepareWorkerGeneration(
-                                value,
-                                config,
-                                replacing ? undefined : previous?.prepared,
-                              ));
-                            },
-                            async () => {
-                              // Admission can outlast a refresh on slow filesystems; only completed
-                              // generation preparation starts the provider-discovery deadline.
-                              stopProgress();
-                              const response = await channel?.request(null);
-                              response?.consumed();
-                              if (response && response.input !== true) {
-                                throw new Error(
-                                  "prepared model catalog request retired before discovery",
-                                );
-                              }
-                            },
-                          ),
-                        ),
-                    ),
-                  );
-                  if (attempted && result.status === "ok") {
-                    contexts.set(workspaceDir, {
-                      fingerprint,
-                      registrationFingerprint,
-                      prepared: attempted,
-                    });
-                    attempted = undefined;
-                    replacing = false;
-                    // Acquire the replacement before releasing shared source registrations.
-                    await previous?.prepared.release();
-                    // Registry custody can retain this request's async context until retirement.
-                    // Drop the settled predecessor instead of retaining its callbacks through that scope.
-                    previous = undefined;
-                  }
-                  return result;
-                } finally {
+                  const { fingerprint, registrationFingerprint } = context;
+                  let previous = admission.previous;
+                  const config =
+                    previous?.registrationFingerprint === registrationFingerprint
+                      ? previous.prepared.config
+                      : freezeTrustedJsonSnapshot({
+                          // Freeze decoded inputs at admission; a fingerprint cannot protect mutable roots.
+                          runtime: value.input.config,
+                          source: value.sourceConfigForSecrets,
+                        });
+                  let attempted: WorkerGeneration | undefined;
+                  let replacing = false;
                   try {
-                    if (replacing) {
-                      // Registration can replace module-level API handles before a refresh fails.
-                      // Re-register the requested config next time instead of reusing that context.
-                      contexts.delete(workspaceDir);
-                      await previous?.prepared.release();
+                    const work = new AsyncWorkScope();
+                    const result = await withWorkerAuthProfileWrites(value.input.env, work, () =>
+                      withTemplateInstallSchemaVersionFacts(
+                        request.templateInstallSchemaVersions,
+                        () =>
+                          work.run(() =>
+                            runCatalogRequest(
+                              value,
+                              config,
+                              request,
+                              work,
+                              async () => {
+                                if (previous?.fingerprint === fingerprint) {
+                                  return previous.prepared;
+                                }
+                                replacing =
+                                  previous?.registrationFingerprint !== registrationFingerprint;
+                                return (attempted = await prepareWorkerGeneration(
+                                  value,
+                                  config,
+                                  replacing ? undefined : previous?.prepared,
+                                ));
+                              },
+                              async () => {
+                                contexts.assertCurrent(admission);
+                                // Admission can outlast a refresh on slow filesystems; only completed
+                                // generation preparation starts the provider-discovery deadline.
+                                stopProgress();
+                                const response = await channel?.request(null);
+                                response?.consumed();
+                                if (response && response.input !== true) {
+                                  throw new Error(
+                                    "prepared model catalog request retired before discovery",
+                                  );
+                                }
+                              },
+                              contexts,
+                            ),
+                          ),
+                      ),
+                    );
+                    if (admission.retired) {
+                      // Discovery may already have committed OAuth credentials. Return a
+                      // failed outcome so their receipts still reach the parent authority.
+                      return {
+                        status: "failed",
+                        error: "Prepared model catalog owner retired during discovery",
+                      } satisfies PreparedModelWorkerOutcome;
                     }
+                    if (attempted && result.status === "ok") {
+                      contexts.publish(admission, attempted);
+                      attempted = undefined;
+                      replacing = false;
+                    }
+                    return result;
                   } finally {
-                    await attempted?.release();
+                    try {
+                      if (replacing) {
+                        // Registration can replace module-level API handles before a refresh fails.
+                        // Re-register the requested config next time instead of reusing that context.
+                        contexts.invalidate(admission);
+                      }
+                    } finally {
+                      try {
+                        if (attempted) {
+                          await contexts.releaseGeneration(admission.owner, attempted);
+                        }
+                      } finally {
+                        previous = undefined;
+                      }
+                    }
                   }
+                } finally {
+                  // Disposal retains the request's source and credential scopes;
+                  // successful cleanup can publish credential commits of its own.
+                  await contexts.finish(admission);
                 }
               });
             return { ...outcome, authCredentials };
@@ -705,6 +724,13 @@ if (parentPort) {
       });
     },
     {
+      closesBesideExecution: (key) => decodePreparedCatalogRetirement(key) !== undefined,
+      closeResource: async (key) => {
+        const owners = decodePreparedCatalogRetirement(key);
+        if (owners) {
+          await contexts.retire(owners);
+        }
+      },
       retainedData: () => [
         ...measurePreparedCatalogRetainedData(
           Array.from(contexts.values(), ({ prepared }) => prepared.pluginGeneration),

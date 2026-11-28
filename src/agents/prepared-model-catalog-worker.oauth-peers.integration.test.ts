@@ -132,6 +132,46 @@ it("rolls back shared and historical OAuth claims when a later peer blocks catal
   );
 });
 
+it("preserves shared credential receipts when owner retirement overlaps an OAuth commit", async ({
+  signal,
+}) => {
+  await withHeldCatalogOAuthRefresh(
+    { makeTempDir, signal, sharedStatePeers: "matching", observeRetirement: true },
+    async (fixture) => {
+      await withinTest(fixture.waitForRefresh(), signal);
+      const retirement = fixture.retireOwner();
+      const joined = Promise.allSettled([retirement]);
+      try {
+        await expect.poll(fixture.retirementObserved).toBe(true);
+        fixture.releaseResponse();
+        const result = await withinTest(fixture.pending, signal);
+        expect(result).toMatchObject({
+          status: "failed",
+          error: "Prepared model catalog owner retired during discovery",
+        });
+        expect(fixture.readCredential()).toEqual(fixture.rotated);
+        expect(result.authCredentials).toContainEqual(
+          expect.objectContaining({
+            facts: new Map([
+              [
+                "store",
+                {
+                  kind: "postimage",
+                  value: expect.objectContaining({ profiles: { [profileId]: fixture.rotated } }),
+                },
+              ],
+            ]),
+          }),
+        );
+        await withinTest(retirement, signal);
+      } finally {
+        fixture.releaseResponse();
+        await joined;
+      }
+    },
+  );
+});
+
 const createRenewalFleetFixture = createCatalogFleetFixture(makeTempDir);
 const UNSEEN_NATIVE_PROVIDER = "native-only-fixture";
 const nativeRow = (revision: number) => ({
