@@ -33,7 +33,11 @@ import { assertSupportedSessionStoreEntry } from "../../../config/sessions/suppo
 import type { SessionEntry } from "../../../config/sessions/types.js";
 import { decodeQueuedOperatorRecoverySource } from "../../../gateway/operator-run-recovery-source.codec.js";
 import { withEngineStoreAdmission } from "../../../infra/database-engine/admission-scope.js";
-import { executeSqliteQuerySync, iterateSqliteQuerySync } from "../../../infra/kysely-sync.js";
+import {
+  executeSqliteQuerySync,
+  executeSqliteQueryTakeFirstSync,
+  iterateSqliteQuerySync,
+} from "../../../infra/kysely-sync.js";
 import { isPostgresSqlConnection } from "../../../infra/sql-connection.js";
 import {
   prepareArtifactPreservingSqliteRead,
@@ -53,6 +57,7 @@ import { withOpenClawAgentDatabaseReadOnly } from "../../../state/openclaw-agent
 import {
   runOpenClawAgentWriteTransaction,
   withOpenClawAgentDatabaseAsync,
+  type OpenClawAgentDatabase,
 } from "../../../state/openclaw-agent-db.js";
 import {
   getOpenClawDatabaseMaintenanceScope,
@@ -86,7 +91,7 @@ export async function scanDoctorSessionEntryRecords(
   scope: DoctorSessionScanScope,
   visit: (record: { sessionKey: string; entry: Record<string, unknown> }) => void,
   expectedIdentity: DatabaseFileIdentity,
-  visitStartupRow?: (row: StartupSessionRow) => void,
+  visitStartupRow?: (row: StartupSessionRow, database: Pick<OpenClawAgentDatabase, "db">) => void,
 ): Promise<void> {
   const resolved = resolveSqliteScope({ ...scope, sessionKey: "" });
   const databaseOptions = toDatabaseOptions(resolved);
@@ -149,7 +154,7 @@ export async function scanDoctorSessionEntryRecords(
               .select(["current_session_id", "updated_at"])
               .select(legacyState.as("legacy_state")),
           )) {
-            visitStartupRow(row);
+            visitStartupRow(row, database);
             if (row.legacy_state) {
               visitLegacyRow(row);
             }
@@ -201,16 +206,20 @@ export async function scanDoctorSessionEntryRecords(
   }
 }
 
-/** Startup normalizes legacy outcomes before canonical reads; clean stores stay read-only. */
-export async function repairLegacySessionRunOutcomes(
+/** Normalize legacy entries before canonical reads; clean stores stay read-only. */
+export async function repairLegacyStartupSessionEntries(
   scope: DoctorSessionScanScope,
   assertCurrent: () => void,
-  visitStartupRow: (row: StartupSessionRow) => void,
+  visitStartupEntry: (
+    entry: ReturnType<typeof parseSqliteSessionEntryRecord>,
+    sessionKey: string,
+  ) => void,
   warn: (message: string) => void,
 ): Promise<{ repaired: number; terminalUnmatched: number }> {
   assertCurrent();
   const expectedIdentity = readDatabasePathIdentitySync(scope.storePath);
-  const sessionKeys: string[] = [];
+  const runKeys = new Set<string>();
+  const cutSessions = new Map<string, string>();
   const tombstones = new Set<string>();
   const warnings = new Map<string, string>();
   let terminalUnmatched = 0;
@@ -242,14 +251,35 @@ export async function repairLegacySessionRunOutcomes(
         tombstones.has(sessionKey) ||
         (isRecord(resume) && ("queuedInputIds" in resume || "queuedInputSources" in resume))
       ) {
-        sessionKeys.push(sessionKey);
+        runKeys.add(sessionKey);
       }
     },
     expectedIdentity,
-    visitStartupRow,
+    (row, database) => {
+      const entry = parseSqliteSessionEntryRecord(row);
+      visitStartupEntry(entry, row.session_key);
+      // Old rewind/switch rotated the window, copied its tree and appended a leaf control.
+      // A fork didn't inherit a predecessor, and an ordinary rollover alone isn't a cut.
+      if (typeof entry?.previousSessionId !== "string" || entry.compactionCount !== undefined) {
+        return;
+      }
+      if (
+        executeSqliteQueryTakeFirstSync(
+          database.db,
+          getSessionKysely(database.db)
+            .selectFrom("transcript_event_identities")
+            .select("seq")
+            .where("session_id", "=", entry.sessionId)
+            .where("event_type", "=", "leaf")
+            .limit(1),
+        )
+      ) {
+        cutSessions.set(row.session_key, entry.sessionId);
+      }
+    },
   );
   assertCurrent();
-  if (sessionKeys.length === 0) {
+  if (runKeys.size === 0 && cutSessions.size === 0) {
     reportWarnings();
     return { repaired: 0, terminalUnmatched };
   }
@@ -271,13 +301,29 @@ export async function repairLegacySessionRunOutcomes(
     });
     assertRepairCurrent();
   }
+  const countCut = cutSessions.size
+    ? (await import("../../../config/sessions/session-accessor.sqlite-compaction-selection.js"))
+        .countRetainedCutCompactions
+    : undefined;
   const repair = () =>
     withEngineStoreAdmission(() => {
       assertRepairCurrent();
       return rewriteDoctorSessionEntries({
         scope,
-        sessionKeys,
-        rawTransform: (entry, sessionKey, updatedAt) => {
+        sessionKeys: [...runKeys, ...cutSessions.keys()],
+        rawTransform: (stored, sessionKey, updatedAt, database) => {
+          const cut = cutSessions.get(sessionKey);
+          const entry =
+            countCut &&
+            cut !== undefined &&
+            cut === stored.sessionId &&
+            typeof stored.previousSessionId === "string" &&
+            stored.compactionCount === undefined
+              ? { ...stored, compactionCount: countCut(database, cut) }
+              : stored;
+          if (!runKeys.has(sessionKey)) {
+            return { entry };
+          }
           const tombstone = inspectLegacyRestartTombstone(entry);
           if (tombstone && !tombstone.doctorOnly) {
             warnings.set(sessionKey, tombstone.warning);
@@ -349,6 +395,7 @@ export function rewriteDoctorSessionEntries(
           entry: Record<string, unknown>,
           sessionKey: string,
           updatedAt: number,
+          database: Pick<OpenClawAgentDatabase, "db">,
         ) => SessionEntryStateRepair;
         transform?: never;
       }
@@ -407,7 +454,7 @@ export function rewriteDoctorSessionEntries(
             const previousFields = new Map(
               Object.entries(entry).map(([key, value]) => [key, JSON.stringify(value)]),
             );
-            const repair = params.rawTransform(entry, sessionKey, row.updated_at);
+            const repair = params.rawTransform(entry, sessionKey, row.updated_at, database);
             const transformed = repair.entry;
             if (repair.pendingInputOrigins?.inputs.length) {
               for (const origin of repair.pendingInputOrigins.inputs) {

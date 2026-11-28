@@ -12,12 +12,10 @@ import {
 import { SqliteJsonlReadBudgetExceededError } from "../../infra/sqlite-jsonl-budget-error.js";
 import type { OpenClawAgentDatabase } from "../../state/openclaw-agent-db.js";
 import { scanSessionTranscriptNavigationTree } from "./session-accessor.sqlite-branch-summaries.js";
+import { selectActiveCompactionMarkers } from "./session-accessor.sqlite-compaction-selection.js";
 import { commitSqliteSessionDeletion } from "./session-accessor.sqlite-deletion.js";
 import { writeSessionEntry } from "./session-accessor.sqlite-entry-store.js";
-import {
-  getActiveTranscriptKysely,
-  selectActiveTranscriptEventRows,
-} from "./session-accessor.sqlite-projection-read.js";
+import { getActiveTranscriptKysely } from "./session-accessor.sqlite-projection-read.js";
 import { getSessionKysely, type ResolvedSqliteScope } from "./session-accessor.sqlite-scope.js";
 import {
   readNextTranscriptSeq,
@@ -287,17 +285,14 @@ function createSessionMessageCutReader(
       if (position == null) {
         return undefined;
       }
-      const type = transcriptPredicateSql(database.db, "navigation_last_type", "event");
       return summarizeSelectedCompactions(
         iterateSqliteQuerySync(
           database.db,
-          selectActiveTranscriptEventRows(database)
-            .select(["active.event_seq", type.as("type")])
-            .where("active.session_id", "=", sessionId)
-            .where("active.active_position", "<=", position)
-            .where("active.message_position", "is", null)
-            .where(type, "in", ["reset", "compaction"])
-            .orderBy("active.active_position", "asc"),
+          selectActiveCompactionMarkers(database, sessionId).where(
+            "active.active_position",
+            "<=",
+            position,
+          ),
         ),
         (row) => row.type,
         (row) => isDegradedCompactionSeq(row.event_seq),

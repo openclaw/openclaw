@@ -83,7 +83,7 @@ export type SessionMessageCutReader = {
 export function summarizeSelectedCompactions<T>(
   events: Iterable<T>,
   eventType: (event: T) => unknown,
-  isDegraded: (event: T) => boolean,
+  isDegraded?: (event: T) => boolean,
 ) {
   let count = 0;
   let degraded = false;
@@ -93,7 +93,7 @@ export function summarizeSelectedCompactions<T>(
       count = 0;
     } else if (type === "compaction") {
       count++;
-      degraded ||= isDegraded(event);
+      degraded ||= isDegraded?.(event) === true;
     }
   }
   return { count, degraded };
