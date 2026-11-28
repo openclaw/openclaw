@@ -38,7 +38,6 @@ function rewriteOperation(operation = "remove") {
   initializeGlobalHookRunner(
     createMockPluginRegistry([{ hookName: "before_tool_call", handler: hook }]),
   );
-  return hook;
 }
 
 async function expectContractFailure(result: Promise<unknown>, code = "output_contract") {
