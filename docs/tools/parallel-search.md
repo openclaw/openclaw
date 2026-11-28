@@ -12,10 +12,10 @@ The Parallel plugin provides two [Parallel](https://parallel.ai/) `web_search`
 providers, both returning ranked, LLM-optimized excerpts from a web index
 built for AI agents:
 
-| Provider               | id              | Auth                                                                                       |
-| ---------------------- | --------------- | ------------------------------------------------------------------------------------------ |
-| Parallel Search (Free) | `parallel-free` | None -- Parallel's free [Search MCP](https://docs.parallel.ai/integrations/mcp/search-mcp) |
-| Parallel Search        | `parallel`      | `PARALLEL_API_KEY` -- paid Search API, higher rate limits and objective tuning             |
+| Provider               | id              | Auth                                                                                                   |
+| ---------------------- | --------------- | ------------------------------------------------------------------------------------------------------ |
+| Parallel Search (Free) | `parallel-free` | None. Free search via the [Parallel MCP server](https://docs.parallel.ai/integrations/mcp/quickstart). |
+| Parallel Search        | `parallel`      | `PARALLEL_API_KEY` -- paid Search API, higher rate limits and objective tuning                         |
 
 Set `tools.web.search.provider` to `parallel-free` or `parallel` to select
 one explicitly. Paid Parallel can also be auto-detected from its API key;
@@ -93,7 +93,7 @@ environment. For a gateway install, put it in `~/.openclaw/.env`.
 ## Base URL override
 
 Applies to the paid `parallel` provider only; `parallel-free` always uses
-`https://search.parallel.ai/mcp` and ignores this setting.
+`https://mcp.parallel.ai/mcp` and ignores this setting.
 
 Set `plugins.entries.parallel.config.webSearch.baseUrl` to route paid
 requests through a compatible proxy or alternate endpoint (for example, the
@@ -126,9 +126,8 @@ Results to return (1-40).
 <ParamField path="session_id" type="string">
 Optional Parallel session id from a previous result's `sessionId`. Pass it on
 follow-up searches in the same task so Parallel groups related calls and
-improves subsequent results. Max 1000 chars on `parallel`; the free
-`parallel-free` Search MCP caps it at 100. An id past the limit is dropped
-(paid) or a fresh one is minted (free).
+improves subsequent results. Leave it out on the first search. Both providers
+accept IDs up to 1000 characters and omit longer values.
 </ParamField>
 
 <ParamField path="client_model" type="string">
@@ -145,11 +144,9 @@ family alias.
   content.
 - Result excerpts come back as the `excerpts` array and are also joined into
   `description` for compatibility with the generic `web_search` contract.
-- Both providers return a `session_id`; OpenClaw surfaces it as `sessionId` in
-  the tool payload so callers can group follow-up searches. A
-  Parallel-generated session id (one the caller did not supply) is excluded
-  from the cache entry, since unrelated tasks with identical queries should
-  not inherit it.
+- OpenClaw surfaces the server's `session_id` as `sessionId` when present so
+  callers can group follow-up searches. When a caller starts a new session,
+  its ID is excluded from cached results for unrelated searches.
 - `searchId`, `warnings`, and `usage` from Parallel are passed through when
   present.
 - OpenClaw always forwards a resolved result count to Parallel as
@@ -159,9 +156,6 @@ family alias.
   OpenClaw's generic `web_search` default (5) -- Parallel's own API defaults
   to 10.
 - Results are cached for 15 minutes by default (`cacheTtlMinutes`).
-- `parallel-free` mints a fresh `session_id` per call via its MCP handshake
-  when the caller does not supply one; `parallel` leaves it unset in that
-  case.
 
 ## Related
 

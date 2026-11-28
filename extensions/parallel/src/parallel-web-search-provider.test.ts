@@ -430,20 +430,25 @@ describe("parallel-free MCP transport", () => {
   });
   it("runs the handshake and skips invalid text blocks before mapping the public result", async () => {
     vi.stubEnv("PARALLEL_API_KEY", "par-should-be-ignored"); // pragma: allowlist secret
-    const callerSessionId = `sess-${"a".repeat(40)}`;
+    const callerSessionId = `sess-${"a".repeat(120)}`;
     pushMcpHandshake(
       {
         search_id: "search_abc",
+        session_id: "search-session-next",
         results: [EXAMPLE_RESULT, { url: "https://second.com", title: "Second", excerpts: ["yo"] }],
       },
       "server-session-1",
       "2025-03-26",
     );
-    const response = await freeTool({ timeoutSeconds: 7 }).execute({
+    const tool = freeTool({ timeoutSeconds: 7 });
+    expect(tool.parameters).toMatchObject({
+      properties: { session_id: { maxLength: 1000 } },
+    });
+    const response = await tool.execute({
       objective: "find examples",
       search_queries: ["example query"],
       count: 1,
-      client_model: "claude-opus-4-8",
+      client_model: "fixture-model-v1",
       session_id: callerSessionId,
     });
     expect(endpointMockState.calls.map((call) => readBody(call).method)).toEqual([
@@ -460,8 +465,6 @@ describe("parallel-free MCP transport", () => {
         "MCP-Protocol-Version": "2025-03-26",
       });
     }
-    expect(headerOf(endpointCall(0), "Authorization")).toBeUndefined();
-    expect(endpointCall(0).url).toBe("https://search.parallel.ai/mcp");
     expect(endpointCall(1).init.body).toBe(
       '{"jsonrpc":"2.0","method":"notifications/initialized"}',
     );
@@ -475,18 +478,21 @@ describe("parallel-free MCP transport", () => {
           objective: "find examples",
           search_queries: ["example query"],
           session_id: callerSessionId,
-          model_name: "claude-opus-4-8",
+          client_model: "fixture-model-v1",
         },
       },
     });
     for (const call of endpointMockState.calls) {
+      expect(call.url).toBe("https://mcp.parallel.ai/mcp");
+      expect(new Headers(call.init.headers).has("authorization")).toBe(false);
+      expect(new Headers(call.init.headers).has("x-api-key")).toBe(false);
       expect(headerOf(call, "User-Agent")).toMatch(/^openclaw-parallel\//);
       expect(call.timeoutSeconds).toBe(7);
     }
     expect(response).toMatchObject({
       provider: "parallel-free",
       searchId: "search_abc",
-      sessionId: callerSessionId,
+      sessionId: "search-session-next",
       results: [
         {
           url: "https://example.com",
@@ -498,16 +504,20 @@ describe("parallel-free MCP transport", () => {
     expect(response.results).toHaveLength(1);
     vi.unstubAllEnvs();
   });
-  it("supplies objective, search session and protocol defaults for a stateless server", async () => {
-    pushMcpHandshake({ results: [] }, null, null);
-    const response = await freeTool().execute({ search_queries: ["alpha", "beta"] });
-    expect(callArguments().objective).toBe("alpha beta");
-    expect(response.sessionId).toMatch(/^[0-9a-f-]{36}$/);
-    expect(callArguments().session_id).toBe(response.sessionId);
+  it("starts a search session on the server without sharing it through the cache", async () => {
+    pushMcpHandshake({ session_id: "new-search-session", results: [] }, null, null);
+    const tool = freeTool();
+    const args = { search_queries: ["alpha", "beta"] };
+    const response = await tool.execute(args);
+    expect(callArguments()).toEqual({ objective: "alpha beta", search_queries: ["alpha", "beta"] });
+    expect(response.sessionId).toBe("new-search-session");
     for (const call of endpointMockState.calls.slice(1)) {
       expect(headerOf(call, "Mcp-Session-Id")).toBeUndefined();
     }
     expect(headerOf(endpointCall(1), "MCP-Protocol-Version")).toBe("2025-06-18");
+    const cached = await tool.execute(args);
+    expect(cached.cached).toBe(true);
+    expect(cached).not.toHaveProperty("sessionId");
   });
   it("preserves HTTP status when tools/call fails", async () => {
     endpointMockState.responses.push(
