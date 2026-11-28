@@ -42,7 +42,7 @@ import {
   projectChatTranscriptMetadata,
   type ChatSessionSnapshot,
 } from "./session-message-cache.ts";
-export { openingHistoryLimit, chatHistoryRequestParams } from "./chat-history-request-params.ts";
+export { chatHistoryRequestParams } from "./chat-history-request-params.ts";
 
 export function captureChatHistoryRun(
   state: ChatState,

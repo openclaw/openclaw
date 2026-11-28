@@ -192,8 +192,7 @@ export async function hydrateChatHistory(
     // The snapshot covers activity emitted before the foreground observer was
     // admitted; subsequent activity arrives through its acknowledged full stream.
     const cursor = readChatHistoryCursor(state);
-    const compactReceipt =
-      state.settings?.compactSessionOpening === true && matchesOpeningReceipt(true);
+    const compactReceipt = matchesOpeningReceipt(true);
     const compactOpening = shouldRequestCompactOpening(state, compactReceipt);
     let compactPageRequested = compactOpening && (cursor === undefined || compactReceipt);
     let response = await request(cursor, compactOpening);

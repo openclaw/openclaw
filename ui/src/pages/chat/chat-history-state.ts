@@ -132,9 +132,6 @@ export function chatHistoryRequests(owner: object): ChatHistoryPaneRequests {
 }
 
 export function shouldRequestCompactOpening(state: ChatState, hasCompactReceipt = false): boolean {
-  if (state.settings?.compactSessionOpening !== true) {
-    return false;
-  }
   const requests = chatHistoryRequests(state);
   return (
     !requests.acceptedHistory &&
