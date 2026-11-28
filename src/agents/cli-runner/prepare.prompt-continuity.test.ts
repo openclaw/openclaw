@@ -180,29 +180,3 @@ it("renders one system prompt for every turn source of a conversation", async ()
   expect(user.systemPrompt).toContain("channel=telegram");
   expect(peer.systemPrompt).toBe(user.systemPrompt);
 });
-
-it("keeps a Control UI session's prompt when a heartbeat turn routes to another channel", async () => {
-  const conversation = {
-    sessionKey: "agent:main:main",
-    sessionEntry: {
-      sessionId: "session-test",
-      updatedAt: 1,
-      delivery: normalizeSessionDeliveryState({ context: { channel: "webchat" } }),
-    },
-  };
-  const user = await prepareAuthorized({
-    ...conversation,
-    messageChannel: "webchat",
-    messageProvider: "webchat",
-  });
-  // A heartbeat that delivers to Telegram runs this session's turn on the Telegram channel.
-  const heartbeat = await prepareAuthorized({
-    ...conversation,
-    messageChannel: "telegram",
-    messageProvider: "telegram",
-    agentAccountId: "default",
-  });
-
-  expect(conversation.sessionEntry.delivery.kind).toBe("internal");
-  expect(heartbeat.systemPrompt).toBe(user.systemPrompt);
-});

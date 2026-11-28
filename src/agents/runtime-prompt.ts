@@ -38,18 +38,13 @@ export async function resolveAgentRuntimePrompt(params: {
   /** Blind spawned child: the rendered prompt omits its model, identity and workspace path. */
   blind?: boolean;
 }) {
-  const promptRoute = resolveSessionPromptRoute({
-    sessionDelivery: params.sessionPromptDelivery ?? params.preparedSessionEntry?.delivery,
-    channel: params.channel,
-    accountId: params.accountId,
-    requester: params.requester,
-    chatType: params.chatType,
-  });
+  const promptRoute = resolveSessionPromptRoute(
+    params.sessionPromptDelivery ?? params.preparedSessionEntry?.delivery,
+    params,
+  );
   const channelPromptContext = resolveRuntimeChannelPromptContext({
+    ...promptRoute,
     cfg: params.config,
-    channel: promptRoute.channel,
-    accountId: promptRoute.accountId,
-    requester: promptRoute.requester,
   });
   const { runtimeChannel, runtimeCapabilities } = channelPromptContext;
   const defaultModel = resolveDefaultModelForAgent({

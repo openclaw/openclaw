@@ -99,33 +99,26 @@ export function collectRuntimeChannelCapabilities(params: {
  * delivery, so every turn source renders the same prompt; the current turn's routing and
  * authority stay with the run.
  */
-export function resolveSessionPromptRoute(params: {
-  sessionDelivery?: SessionDeliveryState;
-  channel?: string;
-  accountId?: string | null;
-  requester?: SpawnRequesterConversationSource;
-  chatType?: ChatType;
-}) {
-  const delivery = params.sessionDelivery;
+export function resolveSessionPromptRoute(
+  delivery: SessionDeliveryState | undefined,
+  current: {
+    channel?: string;
+    accountId?: string | null;
+    requester?: SpawnRequesterConversationSource;
+    chatType?: ChatType;
+  },
+) {
   if (delivery?.kind === "external") {
+    const { context } = delivery;
     return {
-      channel: delivery.context.channel,
-      accountId: delivery.context.accountId,
-      requester: { agentTo: delivery.context.to, agentThreadId: delivery.context.threadId },
+      channel: context.channel,
+      accountId: context.accountId,
+      requester: { agentTo: context.to, agentThreadId: context.threadId },
       chatType: delivery.origin.chatType,
     };
   }
-  return {
-    channel:
-      delivery?.kind === "internal"
-        ? INTERNAL_MESSAGE_CHANNEL
-        : delivery
-          ? undefined
-          : params.channel,
-    accountId: params.accountId,
-    requester: params.requester,
-    chatType: params.chatType,
-  };
+  const channel = delivery?.kind === "internal" ? INTERNAL_MESSAGE_CHANNEL : undefined;
+  return delivery ? { ...current, channel } : current;
 }
 
 /** Shared channel facts for ordinary and compaction system prompts. */

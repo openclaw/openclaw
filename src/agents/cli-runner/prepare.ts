@@ -1310,8 +1310,7 @@ async function prepareCliRunContextWithinReadFence(
       skipSkills: nodeClaudePlacement || claudeSkillsPlugin.args.length > 0,
       moduleUrl: import.meta.url,
     });
-    const promptRoute = resolveSessionPromptRoute({
-      sessionDelivery: params.sessionEntry?.delivery,
+    const promptRoute = resolveSessionPromptRoute(params.sessionEntry?.delivery, {
       channel: params.messageChannel ?? params.messageProvider,
       accountId: params.agentAccountId,
       requester: params,
@@ -1319,10 +1318,9 @@ async function prepareCliRunContextWithinReadFence(
     });
     const { runtimeChannel, runtimeCapabilities, customInlineButtonHint, messageToolHints } =
       resolveRuntimeChannelPromptContext({
+        ...promptRoute,
         cfg: params.config,
         channel: skipsTurnPrefix ? undefined : promptRoute.channel,
-        accountId: promptRoute.accountId,
-        requester: promptRoute.requester,
       });
     const operatorAuthority = readRunOperatorAuthority(params);
     const builtSystemPrompt = isSideQuestion
