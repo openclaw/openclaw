@@ -422,7 +422,14 @@ export function buildProviderReplayFamilyHooks(
     }
     case "google-gemini":
       return {
-        buildReplayPolicy: buildGoogleGeminiReplayPolicy,
+        buildReplayPolicy: (ctx: ProviderReplayPolicyContext) => ({
+          ...buildGoogleGeminiReplayPolicy(),
+          // Gemini 4 uses implicit caching, so moving an earlier carrier changes its cached prefix.
+          ...((ctx.model?.api ?? ctx.modelApi) === "google-generative-ai" &&
+          normalizeOptionalLowercaseString(ctx.model?.id ?? ctx.modelId)?.startsWith("gemini-4")
+            ? { appendOnlyRuntimeContext: true }
+            : {}),
+        }),
         // Retained adapter for third-party callers of the legacy family hook.
         sanitizeReplayHistory: sanitizeGoogleGeminiReplayHistory,
         sanitizeReplayHistoryAsync: sanitizeGoogleGeminiReplayHistoryAsync,
