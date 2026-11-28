@@ -282,7 +282,9 @@ describe("CLI preparation for a scheduled account", () => {
         scheduledToolPolicy,
       });
       if (refused) {
-        await expect(run).rejects.toThrow('Scheduled account "scheduled" is unavailable.');
+        await expect(run).rejects.toThrow(
+          `Scheduled account "scheduled" is unavailable on channel "${messageProvider ?? messageChannel}".`,
+        );
         return;
       }
       const context = await run;
