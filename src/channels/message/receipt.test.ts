@@ -174,6 +174,53 @@ describe("createMessageReceiptFromOutboundResults", () => {
     expect(receipt.parts.map((part) => part.replyToId)).toEqual(["reply-1", undefined]);
   });
 
+  it.each(["unknown", "suppressed"])(
+    "does not treat reserved placeholder %s as an identified platform send",
+    (placeholder) => {
+      const emptyReceipt = createMessageReceiptFromOutboundResults({ results: [] });
+      expect(emptyReceipt.platformMessageIds).toEqual([]);
+      expect(
+        resolveReceiptSourceId({
+          channel: "matrix",
+          messageId: placeholder,
+          receipt: emptyReceipt,
+        }),
+      ).toBeUndefined();
+    },
+  );
+
+  it("does not mint a platform ID from an unidentified adapter placeholder", () => {
+    const receipt = createMessageReceiptFromOutboundResults({
+      results: [{ channel: "matrix", messageId: "unknown" }],
+    });
+    expect(receipt.platformMessageIds).toEqual([]);
+    expect(receipt.parts).toEqual([]);
+    expect(receipt.primaryPlatformMessageId).toBeUndefined();
+  });
+
+  it("keeps real IDs from a mixed multi-part send and drops placeholders", () => {
+    const receipt = createMessageReceiptFromOutboundResults({
+      results: [
+        { channel: "matrix", messageId: "unknown" },
+        { channel: "matrix", messageId: "!real:example.org" },
+        {
+          channel: "matrix",
+          messageId: "!ignored:example.org",
+          receipt: {
+            platformMessageIds: ["suppressed", "!nested:example.org"],
+            parts: [{ platformMessageId: "!nested:example.org", kind: "text", index: 0 }],
+            sentAt: 123,
+          },
+        },
+      ],
+    });
+    expect(listMessageReceiptPlatformIds(receipt)).toEqual([
+      "!real:example.org",
+      "!nested:example.org",
+    ]);
+    expect(resolveMessageReceiptPrimaryId(receipt)).toBe("!real:example.org");
+  });
+
   it("normalizes receipt ids for compatibility edges", () => {
     const receipt = {
       primaryPlatformMessageId: " ",
