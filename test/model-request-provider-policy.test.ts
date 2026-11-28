@@ -5,6 +5,7 @@ import {
 } from "@openclaw/ai/transports";
 import { afterEach, beforeEach, expect, it, vi } from "vitest";
 import { createGoogleGenerativeAiTransportStreamFn } from "../extensions/google/api.js";
+import { runSummarizationCompletion } from "../packages/agent-core/src/harness/compaction/summarization-completion.js";
 import {
   PROVIDER_CONTEXT_HANDOFF,
   PROVIDER_MODEL_INPUT,
@@ -137,6 +138,77 @@ it("redacts only the provider-rewritten quote on a fresh and reopened chat", () 
       expect(JSON.stringify(body)).not.toContain("contextSpans");
     }
   }));
+
+it("keeps rendered source ranges for a compaction request at provider encoding", async () => {
+  const repeated = "green sample 📎";
+  const sentText = vi.fn<(text: string) => void>();
+  install(({ payload, contextSpans, requestKind }) => {
+    expect(requestKind).toBe("compaction");
+    expect(
+      contextSpans?.map(({ containerText, start, end }) => containerText.slice(start, end)),
+    ).toEqual([`[Tool result]: ${repeated}`, `[User]: ${repeated}`]);
+    const spans = contextSpans ?? [];
+    return {
+      payload: mapNestedStrings(payload, (text) =>
+        spans
+          .toReversed()
+          .reduce(
+            (current, { containerText, start, end }) =>
+              text === containerText
+                ? current.slice(0, start) + "[redacted]" + current.slice(end)
+                : current,
+            text,
+          ),
+      ),
+    };
+  });
+  wire.mockImplementation(async (...args) => {
+    const body = await new Request(...args).json();
+    sentText(body.input.at(-1).content[0].text);
+    return new Response(null, { status: 204 });
+  });
+  const model = makeProviderModelFixture({
+    provider: "openai",
+    api: "openai-responses",
+    id: "fixture",
+    baseUrl: "https://api.openai.com/v1",
+  });
+  const outside = {
+    role: "user" as const,
+    content: repeated,
+    timestamp: 2,
+    provenance: { kind: "external_user" },
+    __openclaw: { senderIsOwner: false },
+  };
+  const result = await runSummarizationCompletion({
+    messages: [
+      { role: "user", content: repeated, timestamp: 0 },
+      {
+        role: "toolResult",
+        content: [{ type: "text", text: repeated }],
+        toolName: "fixture",
+        toolCallId: "fixture",
+        isError: false,
+        timestamp: 1,
+      },
+      outside,
+    ],
+    prompt: `Keep the instructions: ${repeated}`,
+    streamFn: wrapStreamFnWithModelRequestGate(
+      createOpenAIResponsesTransportStreamFn(),
+      {},
+      "compaction",
+    ),
+    model,
+    apiKey: "fixture",
+    maxTokens: 512,
+    errorLabel: "Fixture compaction",
+  });
+  expect(sentText).toHaveBeenCalledExactlyOnceWith(
+    `<conversation>\n[User]: ${repeated}\n\n[redacted]\n\n[redacted]\n</conversation>\n\nKeep the instructions: ${repeated}`,
+  );
+  expect(result.ok).toBe(false); // The fixture provider deliberately returns no summary.
+});
 
 const data = "dGVzdC12aWRlbw==";
 const googleModel = (api: "google-interactions" | "google-generative-ai") =>

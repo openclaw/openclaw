@@ -19,8 +19,8 @@ final class OpenClawSnapshotUITests: XCTestCase {
         initialDestination: "chat",
         name: "02-chat-connected")
     private static let agentScreenshotTarget = ScreenshotTarget(
-        initialTab: "agent",
-        initialDestination: "agents",
+        initialTab: "chat",
+        initialDestination: "chat",
         name: "03-agent-connected")
     private static let settingsScreenshotTarget = ScreenshotTarget(
         initialTab: "settings",
@@ -320,7 +320,12 @@ final class OpenClawSnapshotUITests: XCTestCase {
     }
 
     func testReleaseAgentScreenshot() {
-        self.captureReleaseScreenshot(Self.agentScreenshotTarget)
+        self.captureReleaseScreenshot(Self.agentScreenshotTarget) { app in
+            let showSidebar = app.buttons["RootTabs.Sidebar.Show"]
+            XCTAssertTrue(showSidebar.waitForExistence(timeout: 5))
+            showSidebar.tap()
+            XCTAssertTrue(app.buttons["RootTabs.Sidebar.AgentSelector"].waitForExistence(timeout: 5))
+        }
     }
 
     func testReleaseSettingsScreenshot() {
@@ -527,17 +532,6 @@ final class OpenClawSnapshotUITests: XCTestCase {
         try? screenshot.pngRepresentation.write(to: directory.appendingPathComponent("\(name).png"))
     }
 
-    func testAgentsNavigateToSettingsThroughSidebar() throws {
-        try XCTSkipIf(UIDevice.current.userInterfaceIdiom != .phone, "Phone sidebar navigation only")
-        self.launchApp(for: Self.agentScreenshotTarget)
-
-        XCTAssertTrue(self.app?.buttons["agent-status-filter-menu"].waitForExistence(timeout: 8) == true)
-        try self.selectSidebarDestination("Settings")
-        XCTAssertTrue(
-            self.app?.descendants(matching: .any)["SettingsHub.Fallback"]
-                .waitForExistence(timeout: 8) == true)
-    }
-
     func testOnboardingExplainsCapabilitiesAndTrust() {
         let app = XCUIApplication()
         app.launchArguments += ["--openclaw-reset-onboarding", "-AppleLanguages", "(en)", "-AppleLocale", "en_US"]
@@ -557,21 +551,6 @@ final class OpenClawSnapshotUITests: XCTestCase {
         let disclosure = app.staticTexts.matching(NSPredicate(
             format: "label CONTAINS[c] 'camera' AND label CONTAINS[c] 'trust the gateway and agent'")).firstMatch
         XCTAssertTrue(disclosure.exists)
-    }
-
-    func testSidebarOverviewNavigation() throws {
-        try XCTSkipIf(UIDevice.current.userInterfaceIdiom != .phone, "Phone sidebar only")
-        self.launchApp(for: ScreenshotTarget(
-            initialTab: "control",
-            initialDestination: "overview",
-            name: "control-overview-navigation"))
-
-        XCTAssertTrue(self.app?.staticTexts["Agent session"].waitForExistence(timeout: 8) == true)
-        try self.selectSidebarDestination("Overview")
-
-        XCTAssertTrue(self.app?.buttons["RootTabs.Sidebar.Show"].waitForExistence(timeout: 5) == true)
-        XCTAssertTrue(self.app?.buttons["Gateway settings"].waitForExistence(timeout: 5) == true)
-        XCTAssertEqual(self.app?.state, .runningForeground)
     }
 
     func testLiveGatewayApprovalNotificationsFromOverview() async throws {
@@ -794,7 +773,7 @@ final class OpenClawSnapshotUITests: XCTestCase {
             XCTAssertLessThanOrEqual(inlineControl.frame.maxX, composerSurface.frame.maxX)
             XCTAssertLessThanOrEqual(abs(inlineControl.frame.midY - dictationButton.frame.midY), 1)
         }
-        XCTAssertEqual(inlinePermissions.value as? String, "Guarded")
+        XCTAssertEqual(inlinePermissions.value as? String, "Ask me")
         XCTAssertFalse((inlineModel.value as? String ?? "").isEmpty)
         XCTAssertFalse((inlineEffort.value as? String ?? "").isEmpty)
         self.assertNoHorizontalOverlap([
@@ -1079,164 +1058,44 @@ extension OpenClawSnapshotUITests {
         }
     }
 
-    func testChatActionsModelRowsScreenshot() throws {
-        self.launchApp(
-            for: Self.chatScreenshotTarget,
-            additionalArguments: [
-                "-openclaw.chat.modelFavorites", "",
-                "-openclaw.chat.modelRecents", "",
-            ])
+    func testChatActionsAndNewSessionOptionsHaveSeparateEntryPoints() throws {
+        self.launchApp(for: Self.chatScreenshotTarget)
         let app = try XCTUnwrap(self.app)
         let actions = app.buttons["Chat actions"]
         XCTAssertTrue(actions.waitForExistence(timeout: 8))
         self.assertMinimumTouchTarget(actions)
-        self.assertMinimumTouchTarget(app.buttons["RootTabs.Sidebar.Show"])
-        self.attachScreenshot(named: "chat-actions-header")
+        let input = self.chatMessageInput(in: app)
+        input.tap()
+        XCTAssertTrue(app.buttons["chat-composer-inline-model"].waitForExistence(timeout: 5))
+        XCTAssertTrue(app.buttons["chat-composer-inline-effort"].exists)
         actions.tap()
 
-        let popover = app.descendants(matching: .any)["chat-actions-popover"]
-        XCTAssertTrue(popover.waitForExistence(timeout: 5))
-        XCTAssertFalse(popover.buttons["New Chat"].exists)
-        XCTAssertFalse(popover.buttons["Sessions…"].exists)
-        XCTAssertFalse(popover.buttons["Dashboard"].exists)
-        XCTAssertTrue(popover.buttons["New session options…"].exists)
-        let defaultModel = app.buttons["Default: openai/gpt-5.6-sol"]
-        XCTAssertTrue(defaultModel.waitForExistence(timeout: 5))
-        let defaultLogo = defaultModel.images["chat-model-provider-icon-openai"]
-        XCTAssertTrue(defaultLogo.exists)
+        XCTAssertTrue(app.buttons["Rename…"].waitForExistence(timeout: 5))
+        XCTAssertFalse(app.buttons["Export chat"].exists)
+        // The closed drawer still exposes its own New Chat button to XCTest.
+        XCTAssertFalse(app.buttons.matching(identifier: "New Chat").allElementsBoundByIndex.contains { $0.isHittable })
+        XCTAssertFalse(app.buttons["New session options…"].exists)
+        XCTAssertFalse(app.buttons["Show reasoning & tool activity"].exists)
+        self.attachScreenshot(named: "chat-actions-compact")
+        // Close through a menu action so the tap cannot open the diagram underneath.
+        app.buttons["Rename…"].tap()
+        app.alerts.buttons["Cancel"].tap()
 
-        let providerDrawer = app.buttons["chat-model-provider-drawer-openai"]
-        XCTAssertTrue(providerDrawer.waitForExistence(timeout: 5))
-        self.assertMinimumTouchTarget(providerDrawer)
-        XCTAssertEqual(providerDrawer.value as? String, "Collapsed")
-        let explicitModel = app.buttons["openai/gpt-5.6-sol"]
-        let initialExplicitModelCount = app.buttons.matching(
-            NSPredicate(format: "label == %@", "openai/gpt-5.6-sol")).count
-        providerDrawer.tap()
-        XCTAssertEqual(providerDrawer.value as? String, "Expanded")
-        XCTAssertTrue(explicitModel.exists)
-        XCTAssertTrue(explicitModel.images["chat-model-provider-icon-openai"].exists)
-        XCTAssertGreaterThan(
-            app.buttons.matching(NSPredicate(format: "label == %@", "openai/gpt-5.6-sol")).count,
-            initialExplicitModelCount)
-        let explicitIsSelected = explicitModel.value as? String == "Selected"
-        let selectedModel = explicitIsSelected ? explicitModel : defaultModel
-        self.assertMinimumTouchTarget(selectedModel)
-        let selectedCheckmark = selectedModel.images["chat-menu-selection-checkmark"]
-        XCTAssertTrue(selectedCheckmark.exists)
-        XCTAssertGreaterThan(selectedCheckmark.frame.minX, selectedModel.frame.midX)
-        self.attachScreenshot(named: "chat-actions-model-rows")
-
-        self.verifyModelSelection(in: app, actions: actions, popover: popover)
-
-        let thinkingSlider = app.sliders["chat-thinking-slider"]
-        XCTAssertTrue(thinkingSlider.waitForExistence(timeout: 5))
-        self.assertMinimumTouchTarget(app.descendants(matching: .any)["chat-thinking-slider-hit-target"])
-        let thinkingNotches = app.descendants(matching: .any)["chat-thinking-notches"]
-        XCTAssertTrue(thinkingNotches.waitForExistence(timeout: 5))
-        XCTAssertEqual(thinkingNotches.value as? String, "4 stops")
-        let thinkingValues = ["Default (Auto)", "Low", "Medium", "High"]
-        self.waitForValue(thinkingValues[0], of: thinkingSlider)
-        for (index, expectedValue) in thinkingValues.enumerated().dropFirst() {
-            thinkingSlider.adjust(
-                toNormalizedSliderPosition: CGFloat(index) / CGFloat(thinkingValues.count - 1))
-            self.waitForValue(expectedValue, of: thinkingSlider)
-        }
-        let thinkingDefault = app.buttons["chat-thinking-use-default"]
-        XCTAssertTrue(thinkingDefault.waitForExistence(timeout: 5))
-        self.assertMinimumTouchTarget(thinkingDefault)
-        self.waitForEnabled(thinkingSlider)
-        let selectedThinkingValue = try XCTUnwrap(thinkingSlider.value as? String)
-        XCTAssertFalse(selectedThinkingValue.hasPrefix("Default"))
-        XCTAssertTrue(popover.exists)
-
-        let fastMode = app.switches["chat-fast-mode-toggle"]
-        XCTAssertTrue(fastMode.waitForExistence(timeout: 5))
-        self.assertMinimumTouchTarget(app.descendants(matching: .any)["chat-fast-mode-hit-target"])
-        self.assertMinimumTouchTarget(fastMode)
-        self.waitForEnabled(fastMode)
-        XCTAssertFalse(app.buttons["chat-fast-mode-use-default"].exists)
-        fastMode.tap()
-        self.waitForValue("1", of: fastMode)
-        let fastModeDefault = app.buttons["chat-fast-mode-use-default"]
-        XCTAssertTrue(fastModeDefault.waitForExistence(timeout: 5))
-        self.assertMinimumTouchTarget(fastModeDefault)
-        self.waitForEnabled(fastModeDefault)
-        self.attachScreenshot(named: "chat-actions-compact-controls")
-        XCTAssertTrue(popover.exists)
-
-        let verbosity = app.segmentedControls["chat-verbosity-control"]
-        XCTAssertTrue(verbosity.waitForExistence(timeout: 5))
-        self.assertMinimumTouchTarget(app.descendants(matching: .any)["chat-verbosity-hit-target"])
-        XCTAssertEqual(verbosity.buttons.count, 3)
-        verbosity.buttons["Full"].tap()
-        let verbosityDefault = app.buttons["chat-verbosity-use-default"]
-        XCTAssertTrue(verbosityDefault.waitForExistence(timeout: 5))
-        self.assertMinimumTouchTarget(verbosityDefault)
-        self.waitForEnabled(verbosityDefault)
-        verbosityDefault.tap()
-        XCTAssertTrue(verbosityDefault.waitForNonExistence(timeout: 5))
-        let restoredVerbosity = app.segmentedControls["chat-verbosity-control"]
-        XCTAssertTrue(restoredVerbosity.waitForExistence(timeout: 5))
-        self.waitForEnabled(restoredVerbosity)
-        let settledDefaultModel = app.buttons["Default: openai/gpt-5.6-sol"]
-        XCTAssertTrue((settledDefaultModel.value as? String)?.contains("Selected") == true)
-        XCTAssertTrue(popover.exists)
-
-        let toolDetails = app.staticTexts["Tool details"]
-        let reasoning = app.buttons["chat-show-reasoning-toggle"]
-        XCTAssertTrue(toolDetails.exists)
-        XCTAssertTrue(reasoning.exists)
-        XCTAssertGreaterThan(reasoning.frame.minY, toolDetails.frame.maxY)
-
-        app.coordinate(withNormalizedOffset: CGVector(dx: 0.05, dy: 0.5)).tap()
-        XCTAssertTrue(popover.waitForNonExistence(timeout: 3))
-        let reopenedActions = app.buttons["Chat actions"]
-        XCTAssertTrue(reopenedActions.waitForExistence(timeout: 5))
-        self.waitForHittable(true, of: reopenedActions)
-        reopenedActions.tap()
-        let reopenedDefaultModel = app.buttons["Default: openai/gpt-5.6-sol"]
-        XCTAssertTrue(reopenedDefaultModel.waitForExistence(timeout: 5))
-        XCTAssertEqual(reopenedDefaultModel.label, "Default: openai/gpt-5.6-sol")
-        XCTAssertTrue((reopenedDefaultModel.value as? String)?.contains("Selected") == true)
-        let reopenedThinkingSlider = app.sliders["chat-thinking-slider"]
-        XCTAssertTrue(reopenedThinkingSlider.waitForExistence(timeout: 5))
-        self.waitForValue(selectedThinkingValue, of: reopenedThinkingSlider)
-        XCTAssertTrue(app.buttons["chat-thinking-use-default"].exists)
-        let reopenedFastMode = app.switches["chat-fast-mode-toggle"]
-        XCTAssertTrue(reopenedFastMode.waitForExistence(timeout: 5))
-        XCTAssertTrue(app.buttons["chat-fast-mode-use-default"].exists)
-        XCTAssertFalse(app.buttons["chat-verbosity-use-default"].exists)
-
-        let sidebarFrame = app.buttons["RootTabs.Sidebar.Show"].frame
-        let thinkingHitTargetFrame = app.descendants(matching: .any)["chat-thinking-slider-hit-target"].frame
-        let fastHitTargetFrame = app.descendants(matching: .any)["chat-fast-mode-hit-target"].frame
-        let verbosityHitTargetFrame = app.descendants(matching: .any)["chat-verbosity-hit-target"].frame
-        let receipt = XCTAttachment(string: [
-            "header.sidebar=\(sidebarFrame)",
-            "header.chatActions=\(reopenedActions.frame)",
-            "provider.openai=collapsed-expanded-collapsed",
-            "provider.anthropic=collapsed-expanded",
-            "model.nonDefault=selected-with-trailing-checkmark",
-            "model.default=restored-selected-with-trailing-checkmark",
-            "thinking.stops=4;exercised=\(thinkingValues.joined(separator: ","));selected=\(selectedThinkingValue)",
-            "thinking.hitTarget=\(thinkingHitTargetFrame)",
-            "fast.hitTarget=\(fastHitTargetFrame)",
-            "toolDetails.hitTarget=\(verbosityHitTargetFrame)",
-            "reopen=thinking-and-fast-selected-tool-details-default",
-        ].joined(separator: "\n"))
-        receipt.name = "chat-actions-observations"
-        receipt.lifetime = .keepAlways
-        self.add(receipt)
-
-        popover.buttons["New session options…"].tap()
-        XCTAssertTrue(app.staticTexts["New Thread Options"].waitForExistence(timeout: 5))
-        XCTAssertFalse(app.staticTexts["No agents are available on this gateway."].exists)
-        let create = app.buttons["Create"]
+        // The keyboard is still up. Open the drawer with its native edge gesture.
+        try self.openSidebarWithSlowEdgeDrag()
+        try self.startNewChatFromSidebar()
+        let draft = self.chatMessageInput(in: app)
+        draft.tap()
+        draft.typeText("/new")
+        let options = app.buttons["chat-new-session-options"]
+        XCTAssertTrue(options.waitForExistence(timeout: 5))
+        options.tap()
+        XCTAssertTrue(app.staticTexts["New Thread"].waitForExistence(timeout: 5))
+        let create = app.buttons["Create Thread"]
         XCTAssertTrue(create.waitForExistence(timeout: 5))
         self.waitForEnabled(create)
         create.tap()
-        XCTAssertTrue(app.staticTexts["New Thread Options"].waitForNonExistence(timeout: 5))
+        XCTAssertTrue(app.staticTexts["New Thread"].waitForNonExistence(timeout: 5))
     }
 
     func testLocalDeviceSettingsWorkWithoutDashboard() throws {

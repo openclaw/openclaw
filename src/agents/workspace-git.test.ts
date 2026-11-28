@@ -56,6 +56,22 @@ it("refreshes workspace Git presentation after external metadata changes", async
   expect(await hasWorkspaceGitCheckout(workspace)).toBe(true);
 });
 
+it("rechecks host authority before initializing a new repository", async () => {
+  const workspace = tempDirs.make("workspace-git-refused-");
+  const refusal = new Error("workspace retired");
+  const assertHost = vi
+    .fn<() => void>()
+    .mockImplementationOnce(() => {})
+    .mockImplementation(() => {
+      throw refusal;
+    });
+
+  await expect(ensureGitRepo(workspace, true, { assertHost })).rejects.toBe(refusal);
+  await expect(fsPromises.lstat(path.join(workspace, ".git"))).rejects.toMatchObject({
+    code: "ENOENT",
+  });
+});
+
 it("caches workspace Git presentation between observation invalidations", async () => {
   const workspace = tempDirs.make("workspace-git-cache-");
   const listeners: Parameters<typeof directoryObservation.observeOwnedDirectory>[1][] = [];
