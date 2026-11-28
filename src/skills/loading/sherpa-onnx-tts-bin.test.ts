@@ -8,6 +8,8 @@ describe("skills/sherpa-onnx-tts bin script", () => {
     [[], "Missing runtime/model directory.\n"],
     [["--output", "", "hi"], ""],
     [["--output", "--model-dir", "/tmp/model", "hi"], ""],
+    [["--output", "-o", "intended.wav", "hi"], ""],
+    [["hi", "--text"], ""],
   ])("loads as ESM and exits with usage for %j", (args, reason) => {
     const scriptPath = path.resolve("skills", "sherpa-onnx-tts", "bin", "sherpa-onnx-tts");
     const result = spawnSync(process.execPath, [scriptPath, ...args], { encoding: "utf8" });

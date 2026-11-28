@@ -67,7 +67,7 @@ function prependEnvPath(current, next) {
 
 // A missing, empty or option-shaped value must not fall back to a default path.
 function optionValue(value) {
-  if (!value || value.startsWith("--")) {
+  if (!value || value.startsWith("--") || value === "-o") {
     usage();
   }
   return value;
@@ -115,7 +115,7 @@ for (let i = 0; i < args.length; i += 1) {
     continue;
   }
   if (arg === "--text") {
-    textParts.push(args[i + 1] || "");
+    textParts.push(optionValue(args[i + 1]));
     i += 1;
     continue;
   }
