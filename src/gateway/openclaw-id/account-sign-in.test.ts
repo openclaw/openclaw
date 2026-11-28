@@ -317,6 +317,14 @@ describe("createOpenClawIdSignIn", () => {
 function fakeDeviceIssuer(options: { idToken?: Record<string, unknown> } = {}) {
   let decision: "pending" | "approved" | "denied" = "pending";
   let slowDown = false;
+  let claims: Record<string, unknown> = options.idToken ?? {
+    iss: ISSUER,
+    aud: "ui",
+    sub: "acct-1",
+    exp: 1_700_036_000,
+    email: "person@example.test",
+    name: "Person",
+  };
   const tokenPolls: URLSearchParams[] = [];
   const fetchImpl = vi.fn(async (input: RequestInfo | URL, init?: RequestInit) => {
     const url = input instanceof Request ? input.url : String(input);
@@ -354,16 +362,7 @@ function fakeDeviceIssuer(options: { idToken?: Record<string, unknown> } = {}) {
         );
       }
       return Response.json({
-        id_token: jwt(
-          options.idToken ?? {
-            iss: ISSUER,
-            aud: "ui",
-            sub: "acct-1",
-            exp: 1_700_036_000,
-            email: "person@example.test",
-            name: "Person",
-          },
-        ),
+        id_token: jwt(claims),
         token_type: "Bearer",
       });
     }
@@ -377,6 +376,10 @@ function fakeDeviceIssuer(options: { idToken?: Record<string, unknown> } = {}) {
     },
     slowDown: () => {
       slowDown = true;
+    },
+    // The next approved sign-in gets a different ID token.
+    issueAs: (sub: string) => {
+      claims = { ...claims, sub };
     },
   };
 }
@@ -511,6 +514,99 @@ describe("device sign-in", () => {
     // Once its exp passes, the held token is refused and forgotten.
     time.advance(36_000_000);
     expect(signIn.verifyHeld(held)).toMatchObject(notHeld);
+  });
+
+  describe("per-owner limits", () => {
+    const PER_OWNER = 4;
+    const poll = (
+      signIn: ReturnType<typeof createOpenClawIdSignIn>,
+      state: string,
+      owner: string,
+    ) => signIn.pollDevice({ state, owner });
+
+    it("keeps one person's device code when others start more than the old global cap", async () => {
+      const time = clock();
+      const signIn = createOpenClawIdSignIn({
+        fetchImpl: fakeDeviceIssuer().fetchImpl,
+        now: time.now,
+      });
+      const mine = await beginDevice(signIn, "a");
+      for (let i = 0; i < 20; i += 1) {
+        await beginDevice(signIn, `other-${i}`);
+      }
+      expect(await poll(signIn, mine.state, "a")).toMatchObject({ pending: true });
+    });
+
+    it("drops only an owner's own oldest device sign-in past its cap", async () => {
+      const time = clock();
+      const signIn = createOpenClawIdSignIn({
+        fetchImpl: fakeDeviceIssuer().fetchImpl,
+        now: time.now,
+      });
+      const bystander = await beginDevice(signIn, "a");
+      const own = [];
+      for (let i = 0; i <= PER_OWNER; i += 1) {
+        own.push(await beginDevice(signIn, "b"));
+      }
+      const [oldest, ...rest] = own;
+      if (!oldest) {
+        throw new Error("no sign-ins started");
+      }
+      expect(await poll(signIn, oldest.state, "b")).toMatchObject({
+        ok: false,
+        code: "state_mismatch",
+      });
+      for (const started of rest) {
+        expect(await poll(signIn, started.state, "b")).toMatchObject({ pending: true });
+      }
+      expect(await poll(signIn, bystander.state, "a")).toMatchObject({ pending: true });
+    });
+
+    it("still prunes expired device sign-ins for every owner", async () => {
+      const time = clock();
+      const signIn = createOpenClawIdSignIn({
+        fetchImpl: fakeDeviceIssuer().fetchImpl,
+        now: time.now,
+      });
+      const old = await beginDevice(signIn, "a");
+      time.advance(11 * 60_000);
+      await beginDevice(signIn, "b");
+      expect(await poll(signIn, old.state, "a")).toMatchObject({
+        ok: false,
+        code: "state_mismatch",
+      });
+    });
+
+    it("holds each person's redeemed tokens apart, dropping only their own oldest", async () => {
+      const time = clock();
+      const issuer = fakeDeviceIssuer();
+      const signIn = createOpenClawIdSignIn({ fetchImpl: issuer.fetchImpl, now: time.now });
+      issuer.decide("approved");
+      const redeem = async (owner: string, sub: string) => {
+        issuer.issueAs(sub);
+        const started = await beginDevice(signIn, owner);
+        time.advance(5_000);
+        const done = await poll(signIn, started.state, owner);
+        if (!("idToken" in done)) {
+          throw new Error("device sign-in did not finish");
+        }
+        return { idToken: done.idToken, owner, issuerUrl: ISSUER, clientId: "ui" };
+      };
+      const bystander = await redeem("a", "acct-a");
+      const own = [];
+      for (let i = 0; i <= PER_OWNER; i += 1) {
+        own.push(await redeem("b", `acct-b${i}`));
+      }
+      const [oldest, ...rest] = own;
+      if (!oldest) {
+        throw new Error("no sign-ins redeemed");
+      }
+      expect(signIn.verifyHeld(oldest)).toMatchObject({ ok: false, code: "sign_in_not_held" });
+      for (const held of rest) {
+        expect(signIn.verifyHeld(held)).toHaveProperty("account");
+      }
+      expect(signIn.verifyHeld(bystander)).toHaveProperty("account");
+    });
   });
 
   it("refuses an issuer without a device endpoint on its own origin", async () => {

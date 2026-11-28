@@ -129,6 +129,21 @@ describe("device sign-in custody", () => {
     expect(await call(josh, { action: "device_poll", state })).toMatchObject({ ok: true });
   });
 
+  it("keeps one profile's device code when other profiles start more than the old limit", async () => {
+    const josh = personal("profile-josh", "c1");
+    live.add(josh);
+    const state = await begin(josh);
+    for (let i = 0; i < 20; i += 1) {
+      const other = personal(`profile-other-${i}`, `o${i}`);
+      live.add(other);
+      await call(other, { action: "device_begin" });
+    }
+    expect(await call(josh, { action: "device_poll", state })).toMatchObject({
+      ok: true,
+      payload: { account: { sub: "acct-1" } },
+    });
+  });
+
   it.each([
     ["the connection closes", (client: Client) => live.delete(client)],
     ["the connection is invalidated", (client: Client) => (client.invalidated = true)],

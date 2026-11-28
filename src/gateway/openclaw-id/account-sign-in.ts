@@ -74,7 +74,11 @@ const SIGN_IN_CALLBACK_PATH = "/openclaw-id/callback";
 
 const PENDING_TTL_MS = 10 * 60_000;
 const MAX_PENDING = 16;
-const MAX_HELD = 64;
+// Device sign-ins and held tokens belong to a person on a shared Gateway: each person gets a few,
+// and only their own oldest is dropped. The global limits are a memory backstop well above that.
+const MAX_PER_OWNER = 4;
+const MAX_DEVICE_SIGN_INS = 256;
+const MAX_HELD = 256;
 const DEVICE_GRANT = "urn:ietf:params:oauth:grant-type:device_code";
 // RFC 8628 section 3.2 defaults and the slow_down increment (section 3.5).
 const DEFAULT_DEVICE_INTERVAL_S = 5;
@@ -236,7 +240,7 @@ export function createOpenClawIdSignIn(
   const pendingDevices = new Map<string, PendingDeviceSignIn>();
   const held = new Map<string, HeldSignIn>();
 
-  // Drops expired sign-ins, then the oldest ones past the cap (Map keeps insertion order).
+  // Drops expired sign-ins, then the oldest popup sign-ins past the cap (Map keeps insertion order).
   const prune = () => {
     for (const [state, entry] of pending) {
       if (now() - entry.createdAt > PENDING_TTL_MS || pending.size >= MAX_PENDING) {
@@ -244,14 +248,42 @@ export function createOpenClawIdSignIn(
       }
     }
     for (const [state, entry] of pendingDevices) {
-      if (now() >= entry.expiresAt || pendingDevices.size >= MAX_PENDING) {
+      if (now() >= entry.expiresAt) {
         pendingDevices.delete(state);
       }
     }
     for (const [hash, entry] of held) {
-      if (entry.exp * 1000 <= now() || held.size >= MAX_HELD) {
+      if (entry.exp * 1000 <= now()) {
         held.delete(hash);
       }
+    }
+  };
+
+  // Makes room for one more entry of `owner`: past the per-owner cap only that owner's oldest
+  // goes, so one person's sign-ins never drop another person's. `max` is the memory backstop.
+  const makeRoom = <T extends { owner: string }>(
+    map: Map<string, T>,
+    owner: string,
+    max: number,
+  ) => {
+    let owned = 0;
+    for (const entry of map.values()) {
+      owned += entry.owner === owner ? 1 : 0;
+    }
+    for (const [key, entry] of map) {
+      if (owned < MAX_PER_OWNER) {
+        break;
+      }
+      if (entry.owner === owner) {
+        map.delete(key);
+        owned -= 1;
+      }
+    }
+    for (const key of map.keys()) {
+      if (map.size < max) {
+        break;
+      }
+      map.delete(key);
     }
   };
 
@@ -458,6 +490,7 @@ export function createOpenClawIdSignIn(
       // Never hold a code longer than a popup sign-in, whatever the issuer offers.
       const expiresAt = now() + Math.min(body.expires_in * 1000, PENDING_TTL_MS);
       prune();
+      makeRoom(pendingDevices, params.owner, MAX_DEVICE_SIGN_INS);
       pendingDevices.set(state, {
         issuer: meta.issuer,
         tokenEndpoint: meta.token_endpoint,
@@ -556,6 +589,7 @@ export function createOpenClawIdSignIn(
         return refusal("id_token_invalid", "the issuer returned an unusable ID token");
       }
       prune();
+      makeRoom(held, entry.owner, MAX_HELD);
       held.set(tokenHash(idToken), {
         owner: entry.owner,
         issuer: entry.issuer,
