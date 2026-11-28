@@ -1,6 +1,11 @@
+import { normalizeOptionalString } from "@openclaw/normalization-core/string-coerce";
 import { action, createOptimistic, For, Show } from "solid-js";
+import { sanitizeTerminalText } from "../../../../packages/terminal-core/src/safe-text.js";
 import { projectUpdateRunHistory } from "../../../../src/infra/update-run-history-projection.ts";
-import { isAcknowledgedAbandonedUpdateRun } from "../../../../src/infra/update-run-record.ts";
+import {
+  isAcknowledgedAbandonedUpdateRun,
+  isUpdateRepairRun,
+} from "../../../../src/infra/update-run-record.ts";
 import {
   classifyUpdateOutcome,
   isReportableUpdateRun,
@@ -8,11 +13,13 @@ import {
 import type { UpdateFailureReportNotice } from "../../app/overlays-types.ts";
 import { SettingsRow, SettingsSection } from "../../components/solid/settings-ui.tsx";
 import { UpdateRunView } from "../../components/update-run-view.tsx";
+import { registerSettingsEnglish } from "../../i18n/locales/en-settings.ts";
 import { registerUpdateActionsEnglish } from "../../i18n/locales/en-update-actions.ts";
 import { registerEnglishCatalog, t } from "../../lib/reactive/i18n.ts";
 import type { UpdatesCommandPresentation, UpdatesViewProps } from "./updates-types.ts";
 
 registerEnglishCatalog(registerUpdateActionsEnglish);
+registerEnglishCatalog(registerSettingsEnglish);
 
 export function RecordedAttempt(
   props: UpdatesViewProps & { confirming: boolean; checking: boolean },
@@ -36,6 +43,33 @@ export function RecordedAttempt(
   const run = () => props.update.updateRun;
   const serving = () =>
     props.connected ? { version: props.gatewayVersion, buildId: props.gatewayBuildId } : undefined;
+  const earlierSuccessHeadline = () => {
+    const currentRun = run();
+    const live = serving();
+    if (
+      currentRun?.status !== "succeeded" ||
+      currentRun.verification.serviceRunning !== true ||
+      !live ||
+      isUpdateRepairRun(currentRun)
+    ) {
+      return null;
+    }
+    // Compare the recorded serving process, independent of the package installed at the time.
+    for (const [kind, recordedValue, liveValue] of [
+      ["version", currentRun.verification.runningVersion, live.version],
+      ["build", currentRun.verification.runningBuildId, live.buildId],
+    ] as const) {
+      const recorded = normalizeOptionalString(recordedValue);
+      const current = normalizeOptionalString(liveValue);
+      if (recorded && current && recorded !== current) {
+        return t(`updates.page.earlierSuccess.${kind}`, {
+          recorded: sanitizeTerminalText(recorded).slice(0, 240),
+          current: sanitizeTerminalText(current).slice(0, 240),
+        });
+      }
+    }
+    return null;
+  };
   const failed = () => {
     const currentRun = run();
     return currentRun
@@ -80,7 +114,12 @@ export function RecordedAttempt(
           }
         >
           <div class="settings-row settings-row--stacked">
-            <UpdateRunView run={run()} connected={props.connected} serving={serving()} />
+            <UpdateRunView
+              run={run()}
+              connected={props.connected}
+              serving={serving()}
+              earlierSuccessHeadline={earlierSuccessHeadline()}
+            />
           </div>
         </Show>
         <Show when={failed() || props.update.updateStatusBanner?.source === "read"}>
