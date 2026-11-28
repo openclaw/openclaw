@@ -28,6 +28,7 @@ import { estimateCompactionHistoryTokens } from "../sessions/context-token-press
 import { withSessionCompactionPersistenceAsync as persistCompaction } from "../sessions/session-compaction-persistence.js";
 import { SessionManager } from "../sessions/session-manager.js";
 import { makeAssistantMessageFixture } from "../test-helpers/assistant-message-fixtures.js";
+import { makeProviderModelFixture } from "../test-helpers/provider-model-fixture.js";
 import { prepareHarnessContextMedia } from "./context-media-runtime.js";
 import type { AgentHarnessContextMediaRequest } from "./host-capability-types.js";
 import { bindBoundedSeed } from "./host-seed.js";
@@ -90,6 +91,8 @@ const allowance = {
 };
 type SeedCase = Partial<typeof allowance> & {
   name: string;
+  /** Model window that bounds the seed when no explicit budget is set. */
+  modelWindow?: number;
   summary?: string;
   expected?: number;
   revoke?: boolean;
@@ -109,6 +112,13 @@ it.each<SeedCase>([
   { name: "unsummarized history", oversizedTail: true },
   { name: "declined summary", summary: "existing", decline: true, oversizedTail: true },
   { ...allowance, name: "narrow delivery allowance", contextTokens: 1024 },
+  {
+    ...allowance,
+    name: "model window without a budget",
+    contextTokens: undefined,
+    requestTokens: undefined,
+    modelWindow: 128,
+  },
   { ...allowance, name: "larger allowance cannot widen host", requestTokens: 1024 },
   { ...allowance, name: "invalid allowance is ignored", requestTokens: Infinity },
   { ...allowance, name: "oversized summary is bounded again", oversizedSummary: true },
@@ -135,6 +145,7 @@ it.each<SeedCase>([
     decline,
     maxBytes = 1024,
     contextTokens,
+    modelWindow,
     requestTokens,
     expectedBytes = maxBytes,
     oversizedSummary,
@@ -257,6 +268,17 @@ it.each<SeedCase>([
       const maybePrepare = fixture.bind({
         sessionTarget: { ...target, expectedWriterRunId: "seed-writer" },
         contextTokenBudget: contextTokens,
+        ...(modelWindow
+          ? {
+              model: makeProviderModelFixture({
+                id: "seed-model",
+                provider: "seed",
+                baseUrl: "http://localhost",
+                api: "openai-completions",
+                contextWindow: modelWindow,
+              }),
+            }
+          : {}),
         config: seedConfig(maxBytes),
         userTurnTranscriptRecorder: recorder,
         onAgentEvent,
