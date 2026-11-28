@@ -6,6 +6,7 @@ import { createRenderedMessageBatchPlan } from "../../channels/message/rendered-
 import type { ChannelMessageDeferredDeliveryAdmissionResult } from "../../channels/message/types.js";
 import { resolveChannelDefaultAccountId } from "../../channels/plugins/helpers.js";
 import { createSubsystemLogger } from "../../logging/subsystem.js";
+import { HostReadMediaTypeError } from "../../media/local-media-access.js";
 import { getGlobalHookRunner } from "../../plugins/hook-runner-global.js";
 import {
   captureDeliveryQueueStateContext,
@@ -40,6 +41,7 @@ import { createQueuedDeliveryOwner } from "./deliver-queue-state.js";
 import type { OutboundDeliveryResult, OutboundPayloadDeliveryOutcome } from "./deliver-types.js";
 import { markDurableDeliveryQueued } from "./delivery-completion.js";
 import { startDeliveryProducerLease } from "./delivery-queue-lease.js";
+import { preflightUnqueuedOutboundMedia } from "./delivery-queue-media-preflight.js";
 import {
   claimReusableDeliveryPlatformSendAttempt,
   renewDeliveryPlatformSendLease,
@@ -484,7 +486,9 @@ async function runOutboundDeliveryWithQueue(
           if (
             queuePolicy === "required" ||
             collectNestedErrorCandidates(err).some(
-              (candidate) => candidate instanceof StableDeliveryPreparationLostError,
+              (candidate) =>
+                candidate instanceof StableDeliveryPreparationLostError ||
+                candidate instanceof HostReadMediaTypeError,
             )
           ) {
             emitPreQueueFailure();
@@ -499,6 +503,9 @@ async function runOutboundDeliveryWithQueue(
         });
 
   const queueId = queued?.id ?? null;
+  if (!queueId) {
+    await preflightUnqueuedOutboundMedia(deliveryParams);
+  }
   const queueOwner = queueId
     ? createQueuedDeliveryOwner(
         {

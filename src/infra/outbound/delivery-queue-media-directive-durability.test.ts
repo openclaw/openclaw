@@ -1,8 +1,9 @@
 import fs from "node:fs/promises";
 import path from "node:path";
-import { afterEach, beforeAll, beforeEach, describe, expect, it } from "vitest";
+import { afterEach, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
 import type { ReplyPayload } from "../../auto-reply/reply-payload.js";
 import type { ChannelOutboundAdapter } from "../../channels/plugins/types.adapters.js";
+import { loadWebMedia } from "../../media/web-media.js";
 import { createEmptyPluginRegistry } from "../../plugins/registry.js";
 import { resetPluginRuntimeStateForTest, setActivePluginRegistry } from "../../plugins/runtime.js";
 import { createOutboundTestPlugin, createTestRegistry } from "../../test-utils/channel-plugins.js";
@@ -154,4 +155,48 @@ describe("delivery-queue MEDIA-directive durability (end-to-end)", () => {
     expect(liveMediaPaths).toEqual([source]);
     await expectNoSpool();
   });
+
+  it.each(["best_effort", "skipQueue", "sensitive"] as const)(
+    "rejects the complete host-read batch before sending when %s",
+    async (mode) => {
+      const png = path.join(sourceDir, "image.png");
+      const html = path.join(sourceDir, "report.html");
+      await fs.writeFile(
+        png,
+        Buffer.from(
+          "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mP8/x8AAwMCAO+/a9sAAAAASUVORK5CYII=",
+          "base64",
+        ),
+      );
+      await fs.writeFile(html, "not an html document");
+      const sendMedia = vi.fn(
+        async (ctx: Parameters<NonNullable<ChannelOutboundAdapter["sendMedia"]>>[0]) => {
+          await loadWebMedia(ctx.mediaUrl!, {
+            localRoots: [sourceDir],
+            readFile: fs.readFile,
+            hostReadCapability: true,
+          });
+          return { channel: "matrix", messageId: "sent" };
+        },
+      );
+      installMediaAdapter(sendMedia);
+      await expect(
+        deliverOutboundPayloads({
+          cfg: {},
+          channel: "matrix",
+          to,
+          payloads: [
+            {
+              text: "caption",
+              mediaUrls: [png, html],
+              ...(mode === "sensitive" ? { sensitiveMedia: true } : {}),
+            },
+          ],
+          mediaAccess: { localRoots: [sourceDir], readFile: fs.readFile },
+          ...(mode === "skipQueue" ? { skipQueue: true } : {}),
+        }),
+      ).rejects.toThrow();
+      expect(sendMedia).not.toHaveBeenCalled();
+    },
+  );
 });

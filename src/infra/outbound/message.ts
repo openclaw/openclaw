@@ -24,6 +24,7 @@ import {
   assertOutboundHandoffCurrent,
   findOutboundHandoffRejectedError,
 } from "./deliver-handoff.js";
+import { attachmentFailureDetails } from "./deliver-types.js";
 import {
   resolveOutboundDurableFinalDeliverySupport,
   type OutboundDeliveryResult,
@@ -142,6 +143,11 @@ export type MessageSendResult = {
   /** Formatted send error when deliveryStatus is "failed" or "partial_failed". */
   error?: string;
   sentBeforeError?: boolean;
+  partialDelivery?: {
+    messageIds: string[];
+    failedAttachment?: string;
+    deliveryCertainty?: "unknown";
+  };
   payloadOutcomes?: SerializedDurableMessagePayloadOutcome[];
   dryRun?: boolean;
 };
@@ -432,6 +438,7 @@ export async function sendMessage(params: MessageSendParams): Promise<MessageSen
       if (send.status === "partial_failed") {
         throw createChannelPartialDeliveryError(send.error, {
           messageIds: send.results.map((result) => result.messageId),
+          ...attachmentFailureDetails(send.error),
           receipt: send.receipt,
           visibleReplySent: true,
         });
@@ -449,6 +456,14 @@ export async function sendMessage(params: MessageSendParams): Promise<MessageSen
       ...(send.status === "suppressed" ? { suppressionReason: send.reason } : {}),
       ...(send.status === "failed" || send.status === "partial_failed"
         ? { error: formatErrorMessage(send.error) }
+        : {}),
+      ...(send.status === "partial_failed"
+        ? {
+            partialDelivery: {
+              messageIds: send.results.map((result) => result.messageId),
+              ...attachmentFailureDetails(send.error),
+            },
+          }
         : {}),
       ...(sentBeforeError ? { sentBeforeError: true as const } : {}),
       ...(payloadOutcomes ? { payloadOutcomes } : {}),

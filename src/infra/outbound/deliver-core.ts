@@ -30,6 +30,7 @@ import {
   resolveChannelHandlerParams,
 } from "./deliver-payload.js";
 import {
+  OutboundAttachmentSendError,
   OutboundDeliveryError,
   type OutboundDeliveryResult,
   type OutboundPayloadDeliveryKind,
@@ -539,11 +540,16 @@ export async function deliverOutboundPayloadsCore(
         for (const unit of mediaUnits) {
           throwIfAborted(abortSignal);
           const resultIndex = results.length;
-          const delivery = await sendMedia(
-            unit.caption ?? "",
-            unit.mediaUrl,
-            withPreparedTarget(unit.overrides),
-          );
+          let delivery;
+          try {
+            delivery = await sendMedia(
+              unit.caption ?? "",
+              unit.mediaUrl,
+              withPreparedTarget(unit.overrides),
+            );
+          } catch (error) {
+            throw new OutboundAttachmentSendError(unit.mediaUrl, error);
+          }
           const recorded = await recordIdentifiedDeliveryResult(delivery);
           adoptSuccessfulResultsSince(resultIndex);
           if (recorded) {

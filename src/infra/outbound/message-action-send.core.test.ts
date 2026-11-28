@@ -113,6 +113,57 @@ describe("runMessageAction core send routing", () => {
     expect(sendText).toHaveBeenCalledOnce();
   });
 
+  it("returns confirmed media IDs and an uncertain failed attachment to the message tool", async () => {
+    const sendMedia = vi
+      .fn()
+      .mockResolvedValueOnce(receipt("testchat", "first-upload", "c1"))
+      .mockRejectedValueOnce(new Error("transport disconnected"));
+    registerTestChatPlugin({ deliveryMode: "direct", sendMedia, sendText: vi.fn() });
+    const result = await runMessageAction({
+      actionOrigin: "message-tool",
+      skipQueue: true,
+      params: {
+        message: "caption",
+        mediaUrls: ["https://example.com/first.png", "https://example.com/second.png"],
+      },
+    });
+    expect(sendMedia).toHaveBeenCalledTimes(2);
+    expect(result.payload).toMatchObject({
+      ok: false,
+      deliveryStatus: "partial_failed",
+      result: {
+        messageIds: ["first-upload"],
+        failedAttachment: "https://example.com/second.png",
+        deliveryCertainty: "unknown",
+      },
+    });
+  });
+
+  it("retains partial media details when best-effort delivery is requested", async () => {
+    const sendMedia = vi
+      .fn()
+      .mockResolvedValueOnce(receipt("testchat", "first-upload", "c1"))
+      .mockRejectedValueOnce(new Error("transport disconnected"));
+    registerTestChatPlugin({ deliveryMode: "direct", sendMedia, sendText: vi.fn() });
+    const result = await runMessageAction({
+      actionOrigin: "message-tool",
+      skipQueue: true,
+      params: {
+        message: "caption",
+        bestEffort: true,
+        mediaUrls: ["https://example.com/first.png", "https://example.com/second.png"],
+      },
+    });
+    expect(result.payload).toMatchObject({
+      deliveryStatus: "partial_failed",
+      partialDelivery: {
+        messageIds: ["first-upload"],
+        failedAttachment: "https://example.com/second.png",
+        deliveryCertainty: "unknown",
+      },
+    });
+  });
+
   it("does not misclassify send as poll when zero-valued poll params are present", async () => {
     const sendMedia = vi.fn().mockResolvedValue(receipt("testchat", "m2", "c1"));
     registerTestChatPlugin({
