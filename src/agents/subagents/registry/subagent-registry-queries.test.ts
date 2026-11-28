@@ -252,7 +252,7 @@ describe("subagent registry query regressions", () => {
     const updated = { ...last, cleanupCompletedAt: 100 };
     index = index.patch(toRunMap([updated]), new Map());
     expect(unrelatedReads).toBe(0);
-    expect(index.getDisplaySubagentRun("last")).toBe(updated);
+    expect(index.getSessionDisplayFacts("last")?.identity).toBe(updated);
 
     index = index.patch(new Map([[middle.runId, undefined]]), new Map());
     const replacement = { ...last, cleanupCompletedAt: 200 };
@@ -297,8 +297,8 @@ describe("subagent registry query regressions", () => {
     expect(index.revision).not.toBe(revision);
     const replay = buildSubagentRunReadIndexFromRuns(index.inputs);
     for (const view of [index, replay]) {
-      expect(view.getDisplaySubagentRun("child")).toBe(older);
-      expect(view.getDisplaySubagentRun("moved")).toBe(latest);
+      expect(view.getSessionDisplayFacts("child")?.identity).toBe(older);
+      expect(view.getSessionDisplayFacts("moved")?.identity).toBe(latest);
     }
     expect(runIds(index.runsByControllerSessionKey.get("parent"))).toEqual(["older"]);
     expect(runIds(index.runsByControllerSessionKey.get("controller"))).toEqual(["latest"]);
@@ -307,12 +307,12 @@ describe("subagent registry query regressions", () => {
     expect(descendants(index, "parent")).toEqual(["older"]);
     expect(descendants(index, "requester")).toEqual(["latest"]);
     index = index.patch(new Map(), new Map([[latest.runId, undefined]]));
-    expect(index.getDisplaySubagentRun("moved")).toBe(runs.get("latest"));
-    expect(buildSubagentRunReadIndexFromRuns(index.inputs).getDisplaySubagentRun("moved")).toBe(
-      runs.get("latest"),
-    );
+    expect(index.getSessionDisplayFacts("moved")?.identity).toBe(runs.get("latest"));
+    expect(
+      buildSubagentRunReadIndexFromRuns(index.inputs).getSessionDisplayFacts("moved")?.identity,
+    ).toBe(runs.get("latest"));
     index = index.patch(new Map([[latest.runId, undefined]]), new Map());
-    expect(index.getDisplaySubagentRun("moved")).toBeNull();
+    expect(index.getSessionDisplayFacts("moved")).toBeNull();
     expect(index.runsByControllerSessionKey.has("controller")).toBe(false);
     expect(index.swarmRunsByRequesterSessionKey.has("swarm")).toBe(false);
     expect(index.listDescendantRunsForRequester("requester")).toEqual([]);
@@ -351,11 +351,17 @@ describe("subagent registry query regressions", () => {
       const params = { runs: toRunMap([running, ended, live[1]!]), now };
       const index = buildSubagentRunReadIndexFromRuns(params);
       expect(index.atTime(now).countActiveDescendantRuns(root)).toBe(1);
+      expect(index.getSessionDisplayFacts(running.childSessionKey)?.active).toBe(true);
       release();
-      expect(index.getDisplaySubagentRun(running.childSessionKey)).toBe(running);
+      expect(index.getSessionDisplayFacts(running.childSessionKey)).toMatchObject({
+        identity: running,
+        active: false,
+      });
       expect(index.countActiveDescendantRuns(root)).toBe(0);
-      expect(index.atTime(now).getDisplaySubagentRun(running.childSessionKey)).toBe(ended);
-      expect(index.getDisplaySubagentRun(running.childSessionKey)).toBe(running);
+      expect(index.atTime(now).getSessionDisplayFacts(running.childSessionKey)?.identity).toBe(
+        ended,
+      );
+      expect(index.getSessionDisplayFacts(running.childSessionKey)?.identity).toBe(running);
     } finally {
       release();
       for (const entry of live) {

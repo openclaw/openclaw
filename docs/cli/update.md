@@ -312,11 +312,13 @@ After a final interactive update failure, **Diagnose update failure** and
 **Report update failure** are separate choices. Reporting first shows the exact
 sanitized issue body and defaults confirmation to **No**. After confirmation,
 OpenClaw checks the GitHub CLI's active `github.com` account with a silent,
-read-only request before issue creation. Fallback and pending outcomes retain the
-sanitized report locally; a confirmed issue keeps only its durable issue URL.
-If the CLI is missing, authentication is unavailable, or GitHub rejects the
-upload, OpenClaw keeps the sanitized report locally and returns to the previous
-action menu. Fix the problem, then choose **Report update failure** and confirm
+read-only request, then searches for the exact report before creating an issue.
+If a matching issue is found, OpenClaw returns its URL instead.
+The report is prepared from the failed
+update's recorded outcome and steps; no separate report file or publication receipt
+is saved. If the CLI is missing, authentication is unavailable, or GitHub rejects
+the upload, OpenClaw returns to the previous action menu.
+Fix the problem, then choose **Report update failure** and confirm
 again to retry the same report, or choose **Report in browser** to review and
 submit it with your browser's GitHub account. The browser choice is available
 when the prepared report fits a prefilled link and no uncertain upload is pending;
@@ -326,12 +328,11 @@ upload stays pending: **Check report status** looks for the existing issue witho
 creating another one, and no browser handoff is offered.
 Successful submission, explicit exit, and cancellation retain their normal
 behavior; Diagnose runs only when selected explicitly.
-In the Control UI, an interrupted
-pre-create preparation becomes retryable after its local reservation expires.
-After an uncertain creation result, OpenClaw checks for an issue matching the
-exact report. If neither a verified issue URL nor a definitive rejection is
-available, the report stays pending with no replay link because an issue may
-already exist.
+The Control UI uses the same recorded run and requires confirmation before
+submission. After an uncertain creation result, OpenClaw checks for an issue
+matching the exact report. If neither a verified issue URL nor a definitive
+rejection is available, the report stays pending with no replay link because an
+issue may already exist.
 `--yes`, `--json`, non-interactive runs, and managed-service handoffs never
 submit a report.
 

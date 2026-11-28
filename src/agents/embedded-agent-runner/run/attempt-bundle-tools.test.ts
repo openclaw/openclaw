@@ -301,8 +301,8 @@ describe("prepareEmbeddedAttemptBundleTools", () => {
       ).toEqual(["read"]);
     }));
 
-  it("keeps an unavailable message tool listed when the session lists one fixed set", async () => {
-    // A cron turn without a delivery route must not freeze a series without `message`.
+  it("omits an unavailable message tool from a fixed listing", async () => {
+    // `agent --local` without a channel: no source, no configured route.
     const input = createInput([], [createStubTool("message")]);
     input.preparedToolBase = {
       ...input.preparedToolBase,
@@ -310,7 +310,7 @@ describe("prepareEmbeddedAttemptBundleTools", () => {
       fixedListing: true,
     } as typeof input.preparedToolBase;
     const result = await prepare(input);
-    expect(toolNames(result.uncompactedEffectiveTools)).toContain("message");
+    expect(toolNames(result.uncompactedEffectiveTools)).not.toContain("message");
   });
 
   it.each([

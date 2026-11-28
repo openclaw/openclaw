@@ -6,6 +6,7 @@ import type {
   runMediaFileWithModel,
   transcribeAudioFile,
 } from "../media-understanding/runtime.js";
+import { defaultRuntime } from "../runtime.js";
 import { runCap } from "./capability-cli.test-harness.js";
 
 /** Audio and video `--file` paths resolve like the OS does; `--model` pins the requested model. */
@@ -60,6 +61,30 @@ export function registerMediaPathCapabilityCliTests({
       expect(mocks.transcribeAudioFile).not.toHaveBeenCalled();
     },
   );
+
+  it("reports the recorded reason audio transcription was skipped", async () => {
+    mocks.transcribeAudioFile.mockResolvedValueOnce({
+      text: undefined,
+      decision: {
+        capability: "audio",
+        outcome: "skipped",
+        attachments: [
+          {
+            attachmentIndex: 0,
+            attempts: [
+              { type: "cli", outcome: "skipped", reason: "maxBytes: Exceeds 4096 bytes." },
+            ],
+          },
+        ],
+      },
+    });
+    await expect(runCap("infer", "audio", "transcribe", "--file", "memo.wav")).rejects.toThrow(
+      "exit 1",
+    );
+    expect(defaultRuntime.error).toHaveBeenCalledWith(
+      expect.stringContaining("Exceeds 4096 bytes."),
+    );
+  });
 
   it("pins --model, reports actual audio attribution and forwards request hints", async () => {
     const hints = { language: "en", prompt: "Focus on names" };

@@ -34,9 +34,15 @@ import { withoutHostSql } from "./session-accessor.observation.test-support.js";
 import { memorySessionActorOwners } from "./session-actor-memory-owner.js";
 import { sessionTests } from "./session-entry-fixture.test-support.js";
 import { resolveSqliteTargetFromSessionStorePath } from "./session-sqlite-target.js";
+import { measureSessionStoreTargetInventoryInputBytes } from "./session-store-read-candidates.js";
 import { prepareSessionStoreTargetInventory } from "./session-store-target-inventory.js";
+import { captureSessionStoreTargetInventory } from "./session-store-target-routing.js";
 import { prepareSessionStoreTargetInventoryRead } from "./session-store-target-runtime.js";
-import { historyLane, sessionStoreLane } from "./session-transcript-worker-resources.js";
+import {
+  historyLane,
+  prepareSessionStoreCandidatesInWorker,
+  sessionStoreLane,
+} from "./session-transcript-worker-resources.js";
 import type { SessionEntry } from "./types.js";
 
 const it = sessionTests();
@@ -83,7 +89,7 @@ function selection(
 }
 
 function interceptReads(hooks: {
-  beforeRequest?: (request: unknown) => void;
+  beforeRequest?: (request: unknown, inputBytes?: number) => void;
   afterReply?: (reply: unknown) => Promise<void>;
 }) {
   const spies = [historyLane, sessionStoreLane].map(({ pool }) => {
@@ -95,7 +101,7 @@ function interceptReads(hooks: {
           ? new Proxy(prepare, {
               async apply(target, receiver, args) {
                 const request: unknown = await Reflect.apply(target, receiver, args);
-                hooks.beforeRequest?.(request);
+                hooks.beforeRequest?.(request, options?.inputBytes);
                 return request;
               },
             })
@@ -112,6 +118,70 @@ function interceptReads(hooks: {
   });
   return { [Symbol.dispose]: () => spies.forEach((spy) => spy.mockRestore()) };
 }
+
+it("sends only the captured state root for physical path observations", async ({ state }) => {
+  const env = {
+    HOME: state.statePath("routing-home"),
+    OPENCLAW_STATE_DIR: state.statePath("storage-root"),
+    SYNTHETIC_SETTING: "caller-only-inventory-value",
+  };
+  const cfg = fleet(["main"], { store: "~/shared.sqlite" });
+  const storePath = path.join(env.HOME, "shared.sqlite");
+  fs.mkdirSync(env.HOME);
+  fs.writeFileSync(storePath, "");
+  const inventory = captureSessionStoreTargetInventory(cfg, ["main"], env);
+  const directRequest = { inventory: true as const, ...inventory };
+  const observedRequest = { observePaths: { inventory, requiredPaths: [storePath] } };
+  const charges: Array<number | undefined> = [];
+  const requests: boolean[] = [];
+  const replies: boolean[] = [];
+  using _ = interceptReads({
+    beforeRequest(request, inputBytes) {
+      charges.push(inputBytes);
+      requests.push(serialize(request).includes(env.SYNTHETIC_SETTING));
+    },
+    async afterReply(reply) {
+      replies.push(serialize(reply).includes(env.SYNTHETIC_SETTING));
+    },
+  });
+
+  const direct = await prepareSessionStoreCandidatesInWorker(directRequest);
+  expect(direct.inventory?.env).toEqual(env);
+  expect(direct.inventory?.env).not.toBe(inventory.env);
+  expect(direct.inventory?.paths.get("main")?.configured).toBe(storePath);
+  expect(direct.candidates).toContainEqual(expect.objectContaining({ path: storePath }));
+  const observed = await prepareSessionStoreCandidatesInWorker(observedRequest);
+  expect("observations" in observed && observed.observations).toContainEqual(
+    expect.objectContaining({ lexicalPath: storePath }),
+  );
+  expect(observed.inventory).toBeUndefined();
+
+  // Raw routing still expands the caller's home and returns its complete environment.
+  const raw = await prepareSessionStoreCandidatesInWorker({ config: cfg, agentIds: ["main"], env });
+  expect(raw.inventory?.paths.get("main")?.configured).toBe(storePath);
+  expect(raw.inventory?.env).toEqual(env);
+  expect(charges.slice(0, 2)).toEqual([
+    measureSessionStoreTargetInventoryInputBytes(directRequest),
+    measureSessionStoreTargetInventoryInputBytes({ ...observedRequest, paths: inventory.paths }),
+  ]);
+  expect(requests).toEqual([true, false, true]);
+  expect(replies).toEqual([true, false, true]);
+});
+
+it("keeps incognito inventory qualification with the captured state root", async ({ state }) => {
+  const env = { HOME: state.statePath("captured-home"), OPENCLAW_PROFILE: "inventory" };
+  const store = resolveIncognitoOpenClawAgentSqlitePath({ agentId: "main", env });
+  const inventory = captureSessionStoreTargetInventory(fleet(["main"], { store }), ["main"], env);
+  expect(inventory.env.OPENCLAW_STATE_DIR).toBe(path.join(env.HOME, ".openclaw-inventory"));
+  for (const request of [
+    { inventory: true as const, ...inventory },
+    { observePaths: { inventory } },
+  ]) {
+    await expect(prepareSessionStoreCandidatesInWorker(request)).rejects.toThrow(
+      "Incognito session discovery requires its process-held owner",
+    );
+  }
+});
 
 it("keeps discovery payloads bounded by routing config while preserving shared ACP stores", async ({
   state,

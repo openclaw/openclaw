@@ -154,7 +154,6 @@ export type {
   AgentHarnessRuntimeArtifactBinding,
   AgentHarnessSideQuestionParams,
   AgentHarnessSideQuestionParamsV2,
-  AgentHarnessSideQuestionRequest,
   AgentHarnessSideQuestionResult,
   AgentHarnessSettledTurnFinalizationResult,
   AgentHarnessResetParams,
@@ -371,6 +370,7 @@ export {
 export { buildHarnessVisibleReplyGuidance } from "../auto-reply/source-reply-delivery-mode.js";
 export { buildCredentialSafetyPrompt } from "../agents/credential-safety-prompt.js";
 export { buildAgentHarnessBasePrompt } from "../agents/system-prompt-harness-base.js";
+export { compactCatalogForSkillRead } from "../agents/system-prompt-skills.js";
 export { buildUiPresentationPrompt } from "../agents/ui-presentation-prompt.js";
 export { normalizeQuestionTimeoutSeconds } from "../agents/tools/ask-user-tool-normalization.js";
 export { resolveAttemptFsWorkspaceOnly } from "../agents/embedded-agent-runner/run/attempt-prompt-helpers.js";

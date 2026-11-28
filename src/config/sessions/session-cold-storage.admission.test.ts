@@ -1,5 +1,9 @@
 import { AsyncLocalStorage } from "node:async_hooks";
+import { channel } from "node:diagnostics_channel";
+import { performance } from "node:perf_hooks";
 import { afterEach, expect, it, vi } from "vitest";
+import { getTrackedWorkerLifecycleSnapshot } from "../../infra/worker-cpu.js";
+import { createDeferredCore } from "../../shared/deferred.js";
 import { withOpenClawAgentDatabaseWrite } from "../../state/openclaw-agent-db-write.js";
 import { withOpenClawTestState } from "../../test-utils/openclaw-test-state.js";
 import { loadSqliteTrajectoryRuntimeEvents } from "../../trajectory/runtime-store.sqlite.js";
@@ -185,4 +189,78 @@ it("queues a borrowed foreground write while a cold Worker owns admission", asyn
     ]);
     expect(readSessionColdTranscript(fixture.database(), historicalId)).toBeDefined();
     expect(loadTranscriptEventsSync(writerScope)).toEqual(currentBefore);
+  }));
+
+it("releases only the idle archive carrier under pressure across two stores", async () =>
+  withOpenClawTestState({ scenario: "minimal" }, async (state) => {
+    const first = await createSessionColdStorageFixture(state.statePath("first.sqlite"));
+    const second = await createSessionColdStorageFixture(state.statePath("second.sqlite"));
+    const expectSweep = (fixture: typeof first, archivedTranscripts: number) =>
+      expect(
+        runSessionColdStorageMaintenance({ config: maintenanceConfig(fixture.scope.storePath) }),
+      ).resolves.toEqual({ archivedTranscripts, externalizedTranscripts: 0 });
+    const lifecycle = () =>
+      getTrackedWorkerLifecycleSnapshot().workerLifecycle.find(
+        ({ script }) => script === "session-accessor.sqlite-archive.worker.js",
+      );
+    const pressureRetirements = () =>
+      lifecycle()?.retired.find(({ reason }) => reason === "memory_pressure")?.count ?? 0;
+    const retired = pressureRetirements();
+    const before = lifecycle()?.started ?? 0;
+    const pressure = channel("openclaw.memory.critical");
+    const started = () => (lifecycle()?.started ?? 0) - before;
+    const clock = vi.spyOn(performance, "now");
+    clock.mockReturnValue(10_000);
+
+    for (const fixture of [first, second]) {
+      await expectSweep(fixture, 1);
+    }
+    for (let sweep = 0; sweep < 2; sweep++) {
+      for (const fixture of [first, second]) {
+        await expectSweep(fixture, 0);
+        pressure.publish(false);
+      }
+    }
+    expect(started()).toBe(1);
+
+    // Both the current FIFO owner and a reserved slot survive the handoff to another scope.
+    const release = createDeferredCore();
+    const holder = archiveWorkers.runExclusiveSqliteTranscriptArchiveWorker(() => release.promise);
+    const queued = archiveWorkers.runExclusiveSqliteTranscriptArchiveWorker(async () => "next");
+    try {
+      pressure.publish(true);
+    } finally {
+      release.resolve();
+    }
+    await expect(Promise.all([holder, queued])).resolves.toEqual([undefined, "next"]);
+
+    const runWorker = archiveWorkers.runSqliteTranscriptArchiveWorkerOperation;
+    let admissionPulses = 0;
+    vi.spyOn(archiveWorkers, "runSqliteTranscriptArchiveWorkerOperation").mockImplementation(
+      (params) =>
+        params.expectedMessageType === "reclaimed"
+          ? runWorker({
+              ...params,
+              withWriteAdmission: (...args) => {
+                admissionPulses++;
+                pressure.publish(true);
+                return params.withWriteAdmission(...args);
+              },
+            })
+          : runWorker(params),
+    );
+    await restoreSessionColdTranscript(first.scope);
+    expect(admissionPulses).toBeGreaterThan(0);
+    expect(first.snapshot()).toEqual(first.original);
+    expect(started()).toBe(1);
+    expect(pressureRetirements()).toBe(retired);
+
+    pressure.publish(true);
+    await vi.waitFor(() => expect(pressureRetirements()).toBe(retired + 1));
+    await restoreSessionColdTranscript(second.scope);
+    expect(second.snapshot()).toEqual(second.original);
+    expect(started()).toBe(2);
+    clock.mockReturnValue(11_000);
+    pressure.publish(false);
+    await vi.waitFor(() => expect(pressureRetirements()).toBe(retired + 2));
   }));

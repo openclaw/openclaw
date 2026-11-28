@@ -53,20 +53,20 @@ it("AppSidebar person activity card projects authorized facts and keeps links st
   const { sidebar } = await mountSidebar(gateway.gateway, sessions.sessions);
   sidebar.connected = true;
   await selectSidebarView(sidebar, "online");
-  // Withheld label, family, platform, mode, client ID, misleading host.
-  const devices: [string, string | undefined, string, string, string?, string?][] = [
-    ["Mac · Web app", "Mac", "MacIntel", "webchat"],
-    ["Mac · Web app", "Mac", "MacIntel", "webchat"],
-    ["iPad · Web app", "iPad", "MacIntel", "webchat"],
-    ["Mac · ARM · Web app", "Mac", "MacARM64", "webchat"],
-    ["Windows · Web app", "Windows", "win32", "webchat"],
-    ["Mac · Terminal", "Mac", "macos", "ui", "openclaw-tui", "openclaw-macos"],
-    ["Mac · App", "Mac", "macos", "ui", "openclaw-macos", "openclaw-tui"],
-    ["Linux · App", undefined, "linux", "ui", undefined, "openclaw-tui"],
-    ["FreeBSD · Command line", undefined, "freebsd", "cli"],
+  // Reported family, platform, mode, client ID, misleading host.
+  const devices: [string | undefined, string, string, string?, string?][] = [
+    ["Mac", "MacIntel", "webchat"],
+    ["Mac", "MacIntel", "webchat"],
+    ["iPad", "MacIntel", "webchat"],
+    ["Mac", "MacARM64", "webchat"],
+    ["Windows", "win32", "webchat"],
+    ["Mac", "macos", "ui", "openclaw-tui", "openclaw-macos"],
+    ["Mac", "macos", "ui", "openclaw-macos", "openclaw-tui"],
+    [undefined, "linux", "ui", undefined, "openclaw-tui"],
+    [undefined, "freebsd", "cli"],
   ];
   gateway.publishEvent("presence", {
-    presence: devices.map(([, deviceFamily, platform, mode, clientId, host], tab) => ({
+    presence: devices.map(([deviceFamily, platform, mode, clientId, host], tab) => ({
       ts: Date.now() - 500_000,
       lastInputSeconds: 3,
       instanceId: `private-tab-${tab}`,

@@ -904,7 +904,7 @@ packages/ai/src/providers/openai-responses-shared.ts	4
 packages/ai/src/providers/openai-responses-tools.ts	2
 packages/ai/src/providers/openai-responses.ts	1
 packages/ai/src/providers/openai-tool-schema-compat.ts	2
-packages/ai/src/providers/openai-tool-schema.ts	2
+packages/ai/src/providers/openai-tool-schema.ts	1
 packages/ai/src/providers/schema-keyword-strip.ts	1
 packages/ai/src/providers/simple-options.ts	1
 packages/ai/src/providers/tool-result-text.ts	2
@@ -923,7 +923,7 @@ packages/ai/src/transports/openai-responses-client.ts	8
 packages/ai/src/transports/openai-responses-compact-request.ts	2
 packages/ai/src/transports/openai-responses-contracts.ts	1
 packages/ai/src/transports/openai-responses-debug.ts	8
-packages/ai/src/transports/openai-responses-params-internal.ts	2
+packages/ai/src/transports/openai-responses-params-internal.ts	1
 packages/ai/src/transports/openai-responses-payload-policy.ts	2
 packages/ai/src/transports/openai-responses-prompt-observer-internal.ts	2
 packages/ai/src/transports/openai-responses-replay-internal.ts	10
@@ -1125,7 +1125,7 @@ src/agents/embedded-agent-runner/thinking.ts	3
 src/agents/embedded-agent-runner/tool-call-argument-decoding.ts	3
 src/agents/embedded-agent-runner/tool-result-char-estimator.ts	7
 src/agents/embedded-agent-runner/tool-result-context-guard.ts	4
-src/agents/embedded-agent-runner/tool-result-truncation.ts	6
+src/agents/embedded-agent-runner/tool-result-truncation.ts	3
 src/agents/embedded-agent-runner/tool-schema-runtime.ts	1
 src/agents/embedded-agent-runner/transcript-rewrite.ts	1
 src/agents/embedded-agent-subscribe.handlers.messages.lifecycle.ts	1
@@ -1222,7 +1222,6 @@ src/agents/sessions/tools/edit.ts	3
 src/agents/sessions/tools/tool-definition-wrapper.ts	1
 src/agents/shell-snapshot.ts	1
 src/agents/spawn-plan.ts	1
-src/agents/subagents/announce/subagent-announce-completion-delivery.ts	1
 src/agents/subagents/announce/subagent-announce-origin.ts	2
 src/agents/subagents/registry/subagent-registry-lifecycle-delivery.ts	2
 src/agents/subagents/registry/subagent-registry.ts	1
@@ -1496,7 +1495,7 @@ src/commands/doctor-telegram-general-topic-conversations.ts	2
 src/commands/doctor-tools-md-migration.ts	5
 src/commands/doctor-workspace.ts	1
 src/commands/doctor/cron/legacy-quarantine-migration.ts	1
-src/commands/doctor/cron/legacy-repair.ts	4
+src/commands/doctor/cron/legacy-repair.ts	3
 src/commands/doctor/cron/store-migration.ts	2
 src/commands/doctor/cron/warnings.ts	1
 src/commands/doctor/shared/allowfrom-fallback-migration.ts	1

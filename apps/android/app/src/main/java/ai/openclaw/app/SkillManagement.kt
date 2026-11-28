@@ -1,6 +1,6 @@
 package ai.openclaw.app
 
-import ai.openclaw.app.gateway.GatewaySession
+import ai.openclaw.app.gateway.ErrorShape
 import kotlinx.serialization.json.Json
 import kotlinx.serialization.json.JsonArray
 import kotlinx.serialization.json.JsonObject
@@ -176,7 +176,7 @@ internal fun parseClawHubInstallReview(
   )
 }
 
-internal fun clawHubInstallRejection(error: GatewaySession.ErrorShape): GatewayClawHubInstallRejection =
+internal fun clawHubInstallRejection(error: ErrorShape): GatewayClawHubInstallRejection =
   GatewayClawHubInstallRejection(
     message = error.message.ifBlank { "The Gateway rejected this ClawHub install." },
     warning =

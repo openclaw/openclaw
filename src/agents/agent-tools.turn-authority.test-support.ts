@@ -11,7 +11,7 @@ type GateableTool = {
  */
 export async function expectOwnerGated(tools: readonly GateableTool[], ...names: string[]) {
   for (const name of names) {
-    await expectGated(tools, name, `${name} needs the owner's authority`);
+    await expectGated(tools, name, `I did not run ${name}. It needs the Gateway owner's authority`);
   }
 }
 

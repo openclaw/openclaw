@@ -129,7 +129,9 @@ it("flushes HTTP 503 before closing when a WebSocket upgrade throws", async () =
   capture.socket.write(websocketRequest);
   const wire = await capture.response;
   expect(connected).not.toHaveBeenCalled();
-  expect(wire).toBe("HTTP/1.1 503 Service Unavailable\r\nConnection: close\r\n\r\n");
+  expect(wire).toBe(
+    "HTTP/1.1 503 Service Unavailable\r\nConnection: close\r\nCache-Control: no-store\r\nRetry-After: 1\r\n\r\n",
+  );
 });
 
 it("delivers an upgrade rejection after an ordinary response on a reused connection", async () => {
@@ -152,12 +154,24 @@ it("delivers an upgrade rejection after an ordinary response on a reused connect
         .once("error", reject)
         .end();
     });
-    return { status: res.statusCode, body: await text(res) };
+    return {
+      status: res.statusCode,
+      body: await text(res),
+      retryAfter: res.headers["retry-after"],
+      cacheControl: res.headers["cache-control"],
+    };
   };
-  await expect(readResponse(false)).resolves.toEqual({ status: 200, body: "ready" });
+  await expect(readResponse(false)).resolves.toEqual({
+    status: 200,
+    body: "ready",
+    retryAfter: undefined,
+    cacheControl: undefined,
+  });
   await expect(readResponse(true)).resolves.toEqual({
     status: 503,
     body: "Gateway websocket handlers unavailable",
+    retryAfter: "1",
+    cacheControl: "no-store",
   });
 });
 

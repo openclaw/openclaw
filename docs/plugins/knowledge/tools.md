@@ -382,7 +382,12 @@ Before authoring:
   relationships.
 - `knowledge_annotate` adds revision-fenced metadata (source page, identity
   uncertainty, attribution confidence, continuity links, fixture classification,
-  or extra evidence) without changing assertion text or lifecycle.
+  or extra evidence) without changing assertion text or lifecycle. `entities` and
+  `addEvidence` are top-level siblings beside `annotations`, not fields inside it.
+  Omit `annotations` for entity-only or evidence-only changes; `entities: []`
+  unlinks a claim. A call with no changes is rejected. Nested `entities` or
+  `addEvidence` are rejected with guidance naming the correct top-level fields;
+  the compact input hint also includes both fields within its size budget.
 - Creates never overwrite an assertion. Use
   [corrections](/plugins/knowledge/corrections) for lifecycle changes.
 

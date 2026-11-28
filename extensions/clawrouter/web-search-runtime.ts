@@ -73,6 +73,9 @@ export async function searchClawRouter(
   if (offer.requestFormat === "parallel.search" && query.length > 200) {
     throw new Error("ClawRouter Parallel search accepts at most 200 query characters");
   }
+  if (offer.requestFormat === "perplexity.search" && Buffer.byteLength(query, "utf8") > 8_192) {
+    throw new Error("ClawRouter Perplexity search accepts at most 8192 UTF-8 query bytes");
+  }
   const request = codec.request(offer.url, query, count);
   execution?.signal?.throwIfAborted();
   execution?.assertCurrent?.();

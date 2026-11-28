@@ -2,21 +2,29 @@
 
 Keep this file under 20,000 characters, the size OpenClaw loads whole. Put long rules in the owning guide and leave a one-line pointer here. A new rule cites an incident; see [instruction rules](.agents/skills/openclaw-writing/references/agent-instructions.md#instruction-rules).
 
+## Decide authority once
+
+`decideOperatorAdmission` (`src/gateway/operator-admission.ts`) decides authority once per turn or request into a frozen `TurnGrant`; tools, methods, continuations, retries and replays consume it. Stored tokens, signatures, expiry and IDs are not authority.
+
+- Without explicit maintainer buy-in, never add: role, owner, scope, source or policy re-reads after start; `assertCurrent()`-style re-checks; revocation generations; tool-time owner checks (`senderIsOwner`, `ownerAllowFrom`, socket scopes); refusal text outside `src/gateway/operator-refusal.ts`.
+- Allowed after start: data fences (revision, `expectedHead`, `requestId`, CAS) and the run's abort signal. Check authority one time, when work starts. A writer that removes a named person's access stops the work that person started. All other changes apply to the next request.
+- Why: a person got different answers by entry or timing (#203464, #206665).
+- Details, new permissions, lint: [Gateway admission](src/gateway/AGENTS.md#operator-admission).
+
 ## Choose good compromises
 
 Design trades correctness against complexity and performance. Choose deliberately.
 
 - Design for failures that occur: crashes, restarts, retries, two real writers, reported incidents.
-- Before adding complexity for a speculative or vanishingly unlikely race or security edge case, explain the concrete failure mode, likelihood, and complexity cost to the user and get their buy-in. Do not silently expand scope for theoretical robustness.
-- Check authority one time, when work starts. Revocation, removal and reload apply to the next request. A started request may finish. Queued, retried and replayed work starts through the same admission as new work.
-- Use cheap mechanisms: idempotency key, one check, retry, best-effort record with a warning. Fencing tokens, revocation generations, multi-phase admission, nonce-matched settlement and cross-thread handshakes need the buy-in above.
+- Speculative or vanishingly unlikely race or security edge case: before adding complexity, give the user its concrete failure mode, likelihood and complexity cost, and get their buy-in.
+- Use cheap mechanisms: idempotency key, one check, retry, best-effort record with a warning. Fencing tokens, nonce-matched settlement and cross-thread handshakes need the buy-in above.
 - Do not extract single-use helpers preemptively. Inline the logic at the call site unless the helper is reused, hides a genuinely complex boundary, or has a clear independent name that improves the caller.
 - Name an accepted edge case in a comment or the PR. Do not write code for it. A rare, visible, recoverable fault is better than permanent complexity.
 
 Task defines scope and authorization; chosen workflow owns execution, review, publication, recovery, and cleanup.
 Explicit user instructions override skill guidelines and workflow defaults; host limits and required authorization boundaries still apply.
-Read nearest scoped `AGENTS.md` and matching guides below in full, including for callers outside owner's directory.
-Update instructions at owner; no competing rules here.
+Read scoped `AGENTS.md` and relevant guides in full, including outside callers.
+Edit the owning guide, without competing rules here. [Skill setup](.agents/skills/AGENTS.md).
 
 ## Design priorities
 
@@ -66,7 +74,6 @@ Update instructions at owner; no competing rules here.
 - Runtime consumes canonical config/state; Doctor/migration owners normalize legacy shapes (plugin repairs stay plugin-owned). Config-invalidating changes ship their migration.
 - State and caches: SQLite, not new JSON/JSONL/sidecar stores. Files: named user artifacts, imports/exports, attachments, logs, backups, external-tool contracts.
 - Database/state code (SQL, workers, transactions, integrity checks, DB-backed caches): read the [rules for code changes](docs/reference/database-schemas/worker-access.md#rules-for-code-changes) first.
-- Security boundaries (credentials, approvals, tool/command execution, external side effects): the owner decides authority, per [compromises](#choose-good-compromises). Stored tokens, signatures, expiry and IDs are not authority. Internal bookkeeping: idempotency + one check.
 - Do less work: validate untrusted input once at its trust boundary, then trust internal data; no defensive copies, re-validation or re-reads of your own writes. Performance work follows [openclaw-performance](.agents/skills/openclaw-performance/SKILL.md): delete before batching, cache last.
 - Prompt prefix: within a session, tool definitions, system prompt and earlier history depend only on session and config facts; history only appends. Per-turn authority gates calls through `gateAgentToolExecution`, and per-turn facts go in that turn's message. A change to anything that reaches a provider request keeps `src/agents/agent-tools.prefix-stability.test.ts` green; [contract](docs/reference/prompt-caching.md#stable-tools-between-turns).
 - Cache identity: key every cache, memo, in-flight join, and shared snapshot by every input that changes its answer: scope (agent, account, credential, session, workspace) and request shape (provider set, mode, options, deadline). Callers asking different questions get separate slots; volatile values stay out of keys. Prove sharing with a work-count test where differing callers interleave.
@@ -85,7 +92,6 @@ Update instructions at owner; no competing rules here.
 - A red test is a question: is the test obsolete, or the change wrong? Decide before you edit. Never mask failures or claim passing replay proves fix ([policy](.agents/skills/openclaw-testing/SKILL.md#test-failure-policy)).
 - **PR CI = broad proof.** Pre-PR: touched tests + targeted typecheck/lint/format. Proof selection, reuse, gaps: [proof policy](.agents/skills/openclaw-testing/SKILL.md#proof-policy); docs-only: docs sanity + `git diff --check`. Test changes obey the [cost budget](docs/help/testing/writing-tests.md#cost-budget).
 - **Visual changes** need inspected, sanitized before/after screenshots in chat and embedded in PR before merge or completion ([gate](.agents/skills/openclaw-pr-maintainer/references/media.md#screenshot-completion-gate)).
-- Before nontrivial code commit/landing: follow [fresh review](.agents/skills/openclaw-pr-maintainer/SKILL.md#review-and-publish).
 - **Choose one review route.** Follow [local review](docs/reference/pull-request-review-flow.md#local-review-before-a-pr) for maintainer requirements, contributor guidance, and the hosted fallback. ClawSweeper is advisory. Address real findings together and request another hosted review only when needed, after branch, body, and proof are current. Reject findings that add restrictions without concrete harm and explain why. A maintainer's explicit land instruction does not wait for a pending or stale review ([review flow](docs/reference/pull-request-review-flow.md#clawsweeper)).
 
 ## Authority and safety
@@ -108,7 +114,7 @@ Update instructions at owner; no competing rules here.
 - **Plugins/SDK:** [plugins](extensions/AGENTS.md), [loader](src/plugins/AGENTS.md), [SDK](src/plugin-sdk/AGENTS.md) (owns public boundary expansion, including outside callers).
 - **Adding or changing an inference provider, model, picker or usage/cost:** apply [model listing](src/plugins/AGENTS.md#model-listing), [provider plugins](extensions/AGENTS.md#boundary-rules), [usage and cost](src/gateway/AGENTS.md#usage-and-cost) and the [model catalog contract](docs/plugins/sdk-provider-plugins/model-catalogs.md) before the first edit.
 - **Channels, message tools/actions, dispatch:** [channel boundary](src/channels/AGENTS.md), [channel responsibilities](docs/plugins/sdk-channel-plugins.md).
-- **Agent tools, prompts, tool results, admission, lifecycle:** [agents](src/agents/AGENTS.md), [Gateway](src/gateway/AGENTS.md).
+- **Agent tools, prompts, tool results, lifecycle:** [agents](src/agents/AGENTS.md), [Gateway](src/gateway/AGENTS.md).
 - **OpenClaw and OpenClaw Foundation logos:** see the [brand kit](https://github.com/openclaw/carapace/tree/main/brand-kit).
 - **Control UI:** [UI guide](ui/AGENTS.md), including state shared with other Gateway clients. Solid code anywhere (Control UI, plugin views, Canvas hosts): read the [Solid skill](.agents/skills/solid/SKILL.md) first.
 - **Storage:** [database schemas](docs/reference/database-schemas.md) and subpages; read approval checkpoint before schema, transaction, retention, recovery changes.

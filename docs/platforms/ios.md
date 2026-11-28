@@ -27,28 +27,30 @@ The app requires iOS 26.2 or iPadOS 26.2 or later.
 - Queues text messages sent while disconnected in a durable per-gateway outbox (up to 50): queued bubbles show in the transcript, flush in order on reconnect without duplicating sends on retries, remain durable until saved history confirms the send, retry with backoff before surfacing a retry/delete action, and expire instead of sending after 48 hours offline; reset/forget clears the queue with the cache.
 - Long-press a queued or **Not sent** message and choose **Edit** to move its text and attachments back into the composer, below anything you already typed. Edit is unavailable while the message is sending or confirming, or when delivery is unknown, because the Gateway may already have it. If the Gateway rejects a message on its final attempt, or it expires before it was ever sent, and chat history loaded afterward on the same connection does not contain it, the message returns to an empty, visible composer automatically with a **Not sent: … Your message is back in the composer.** note; otherwise it stays **Not sent** with Edit.
 - Send text while a reply is running: tapping Send uses the Gateway's configured queue mode, and `/steer` works as a normal slash command. Touch and hold Send to use the opposite action for that message: **Steer now** when the default is Queue, or **Queue next** when it is Steer. Both choices appear if the Gateway uses another mode or does not report its default. The follow-up appears immediately with its delivery status while the current reply keeps streaming. A menu choice survives reconnect and does not change the session default. Attachments and local session reset/compact commands still wait for the current reply to finish.
-- **Stop response** stays available while you draft a follow-up, alongside Send. Stopping the response preserves your draft.
-- Chat is the single text-and-voice surface. Chat actions can open the full Sessions screen without leaving Chat and can show or hide assistant reasoning and tool activity. Tap the microphone for draft dictation, open its menu to record a voice note, or use the inline Talk control for realtime voice; the Talk control animates from live microphone or playback level while listening or speaking.
+- Chat is the single text-and-voice surface. Chat actions can open the full Sessions screen without leaving Chat. In **Settings → Chat**, choose whether to show assistant reasoning and tool activity. Tap the microphone for draft dictation, open its menu to record a voice note, or use the inline Talk control for realtime voice; the Talk control animates from live microphone or playback level while listening or speaking.
 - Assistant reasoning is visible only with `/reasoning on` and the local **Show reasoning & tool activity** setting enabled. `/reasoning off` hides it after history reload and relaunch. Tool activity follows the local setting independently.
 - Sessions has **Active**, **Snoozed**, **Automations**, and **Archived** scopes. **All Sessions** includes the current agent’s existing main conversation alongside other chats; **Home** remains its permanent sidebar shortcut. Snoozed sessions stay out of the active sidebar and Overview until they wake.
 - Agent narration appears inline as each segment finishes, including after reconnect. Narration, tool activity, and the reply stay grouped in one response. Compact-width layouts hide the assistant avatar to leave more room for text; regular-width layouts keep a single top-aligned avatar. Completed standalone bubbles use sender-side tails where the avatar is hidden, and accessible reply containers retain the assistant’s name. Completed chat turns keep all assistant text and media visible in place on iPhone and iPad. Contiguous tool activity and reasoning fold into separate **Worked** disclosures between the visible parts. Collapsed headings list operation kinds and failed, blocked, skipped, or unknown outcomes; expanding a section also shows its total tool-call count. Tap one to inspect that stretch of work; loading older history keeps expanded sections open. Active or unanswered work stays expanded.
-- Chat accepts images from the photo picker, camera, Files, paste, and the iOS share sheet. Assistant-generated images render inline from short-lived Gateway artifact URLs, open in a full-screen preview, and remain available after reconnect or history reload without storing image bytes in the transcript cache.
-- Choose **+ → File** to attach audio, video, PDFs, text/code, CSV, JSON, Markdown, ZIP archives, and Office documents from Files. Removable chips show filenames and sizes. Files use the Gateway’s advertised attachment size limits and preserve their original bytes through the durable outbox. The file limit also caps the total attachment bytes per message, counting images after resizing; attachments already in an oversized draft stay in the composer when Send rejects their combined size. For older Gateways that do not advertise limits, native chat caps non-image files and the combined attachment budget at 19,464,192 bytes (the decoded budget for a 25 MiB frame), and processed images at 5 MB after resizing. Image source reads have a separate 64 MiB cap to bound resize-input memory; a larger source photo within that cap can be sent when its resized JPEG fits the image and batch budgets. Empty or unreadable files show **Could not attach**; oversized files show **Too large to send**. Sent uploads remain visible after history refresh; downloading inbound uploads from native history is not supported yet. Recorded voice notes keep their separate recording flow.
+- Chat accepts images from the photo picker, camera, Files, paste, and the iOS share sheet. Assistant-generated images render inline from short-lived Gateway artifact URLs, open in a full-screen preview, and remain available after reconnect or history reload without storing image bytes in the transcript cache. Each image's space is reserved at its final size before it loads, so the transcript does not move when it arrives, and an image already shown since the app launched draws again at once from memory. On iPhone, attachments you send sit above your message bubble, aligned to the right, as in the Control UI: one image at its own size, several as square tiles, other files as cards. Photos you sent show from the phone's copy while sending and from the Gateway's thumbnail afterward, including after a relaunch; opened full screen, each one sharpens to the original you sent. The full-screen bar shows a sent photo's file name only when it has one you chose, not a name the app made up when you picked it. A message with only attachments has no bubble. While a message is on its way it is dimmed and shows no time, and an attachment that is uploading shows a ring; when the Gateway confirms it, the time appears in the space kept for it. A message waiting behind a reply or for the connection says **Queued**; one that could not be sent says **Not sent** (tap to try again; touch and hold for Edit or Delete). The composer shows no sending line.
+- Choose **+ → File** to attach audio, video, PDFs, text/code, CSV, JSON, Markdown, ZIP archives, and Office documents from Files. Removable chips show filenames and sizes. Files use the Gateway’s advertised attachment size limits and preserve their original bytes through the durable outbox. The file limit also caps the total attachment bytes per message, counting images after resizing; attachments already in an oversized draft stay in the composer when Send rejects their combined size. For older Gateways that do not advertise limits, native chat caps non-image files and the combined attachment budget at 19,464,192 bytes (the decoded budget for a 25 MiB frame), and processed images at 5 MB after resizing. Image source reads have a separate 64 MiB cap to bound resize-input memory; a larger source photo within that cap can be sent when its resized JPEG fits the image and batch budgets. Empty or unreadable files show **Could not attach**; oversized files show **Too large to send**. Sent uploads remain visible after history refresh; sent photos load as thumbnails, while downloading other inbound uploads from native history is not supported yet. Recorded voice notes keep their separate recording flow.
 - If a file or video selected in native chat shows **Too large to send** while loading, it has not been attached. Check for its filename chip or thumbnail before sending any accompanying text; a later Send can send the text without the rejected selection. Reduce the file size or choose a smaller file, then select it again. Draft preservation on Send applies to attachments that were successfully added to the composer.
 - Assistant file attachments have a **Download file** action. Tap it to fetch the managed file and open the system share sheet, where you can choose **Save to Files** or another app. Downloads use the current Gateway connection and its scoped artifact access; an expired or removed file must be sent again. Documents are limited to 100 MB.
 - Dictation shows when it is starting and listening, a live microphone waveform, and the words recognized so far. Tap **Done** to add the transcript to your draft or **Cancel** to discard it. Attachments show **Preparing attachments…** while loading and **Sending attachments…** during delivery; failed photo loads show an error so you can select them again.
 - Preserves Markdown paragraph breaks, including before lists and while responses are streaming.
 - Renders completed Mermaid code fences as inline diagrams, with source/copy controls and a full-screen zoomable preview. Diagram rendering uses bundled assets and works offline.
-- Long-press a message and choose **Select Text** to select and copy any span in a native text view; code fences show a copy button that copies the raw code.
-- **Settings** opens the Dashboard settings pages when connected with `operator.admin`; the native Gateway screen remains available for connection and pairing.
-- Speaks assistant messages on demand: long-press a message in Chat and choose **Listen**. The app plays supported Gateway `tts.speak` clips with the configured TTS provider and falls back to on-device speech when Gateway audio is unavailable or unplayable. Playback stops on session switch or backgrounding.
+- Press and hold any message for its actions: **Add Reaction**, **Copy Message**, **Select Text**, **Reply**, **Listen** (assistant replies), and **Open Full Message** for a shortened reply. A held reply shows its opening lines above the menu, not a shrunken copy of the whole reply. **Select Text** opens the message in a native text view to select any span. Under a reply there is only its time, and its reactions when it has some. Code fences show a copy button that copies the raw code.
+- **Settings** in the sidebar opens native app settings. **Advanced** opens the Dashboard settings with full Gateway access.
+- Speaks assistant messages on demand: press and hold a reply and choose **Listen**. The app plays supported Gateway `tts.speak` clips with the configured TTS provider and falls back to on-device speech when Gateway audio is unavailable or unplayable. Playback stops on session switch or backgrounding.
 
 ## Chat text size
 
-Chat uses a 13.5-point base text size for a denser transcript. It still follows
-your system or per-app Dynamic Type setting, including accessibility text sizes.
-This makes chat text smaller than the previous 17-point base at the same setting;
-increase the app’s text size in iOS Settings if you prefer larger text.
+Chat text follows the system text styles, like Messages: message text is 17
+points at the default text size and follows your system or per-app Dynamic Type
+setting in both directions, including accessibility text sizes. Chat keeps its
+Inter typeface, which iOS scales on its curve for custom fonts, so message text
+is 15 points at the smallest setting and 37 points at the third accessibility
+size, where the system font would be 14 and 40. Timestamps, captions and other
+secondary chat text never render under 11 points.
 
 At accessibility text sizes, the composer shows a model icon instead of a cramped
 model name. Its accessibility label and value still identify the selected model.
@@ -68,20 +70,20 @@ and Gateway permissions are unchanged.
 
 ## Settings
 
-Open **Settings** in the sidebar to use the same Dashboard settings pages as the
-web and macOS apps. A connected operator session with `operator.admin` is required.
-The toolbar's **Device** button opens local appearance, notification delivery,
-camera access, keep-awake, Health summaries, Voice & Talk, and permission controls.
-These controls also appear under **Device Settings** at the top of the native
-fallback when offline, connected with Limited access, or using native Cloudflare
-Access authorization that cannot open the embedded Dashboard. They use the same
-native preferences, consent, and iOS permission prompts as the Dashboard; local
-access does not grant Gateway scopes or expose Gateway credentials.
+Open **Settings** in the sidebar to adjust this iPhone or iPad. **Appearance**,
+**Voice & Talk**, **Permissions**, **Accessories**, and **Keep screen awake**
+are available without a Dashboard connection. To choose which pages to pin,
+open **Sidebar** in Settings or tap the edit button next to **Pages** in the
+sidebar.
 
-Access comes from the current connection's accepted scopes, including when
-authenticated ingress does not issue a reusable Gateway token.
-The toolbar's **Gateway** button opens the native connection screen, including
-setup, paired Gateways, manual connection, and advanced connection options.
+**Storage** shows the size of the local chat cache. **Clear Cache** removes
+saved copies of conversations from this device without deleting messages on
+the Gateway or clearing local drafts.
+
+**Advanced** opens the Dashboard settings when the current connection has
+full access (`operator.admin`). In the **OpenClaw** section, tap the Gateway
+name or **Connection** to manage saved Gateways. **Connection details** has
+manual and advanced connection options.
 The sidebar footer also provides Gateway access: **Add Gateway** when none are
 saved, a direct connection-settings button when one is saved, and a quick picker
 when multiple Gateways are saved. The picker keeps saved Gateways available even
@@ -103,26 +105,24 @@ review page, while native exec and plugin approvals keep their existing actions.
 
 The Gateway must serve Dashboard pages that support the companion iOS app.
 If a loaded Settings page does not report that support, a native banner asks you
-to update the Gateway. **Open Gateway** opens the native connection screen;
-Gateway setup and pairing remain available. The offline **Device** section also
-remains available without Dashboard support.
+to update the Gateway. **Open Gateway settings** opens the native connection
+screen. Gateway setup and native Settings remain available without Dashboard
+support.
 
 Embedded Dashboard pages request native signatures instead of receiving the
 app's private device key or a stored device grant in their startup script. The
 connection response can carry a device token in memory, as required by the
 Gateway protocol; the native authentication path does not persist it in page storage.
 
-The **This iPhone** or **This iPad** page contains appearance, notification
-delivery, camera access, keep-awake behavior, and optional Health summaries.
 QR scanning requests camera permission on first use. If access was denied, the
 scanner offers **Open Settings**; allow **Camera** for OpenClaw, then return to
 the scanner. Screen Time or device-management restrictions must be changed by
 the person who manages those restrictions.
 
-Its **Permissions** page shows notification, camera, microphone, speech, location,
+The **Permissions** page shows notification, camera, microphone, speech, location,
 contacts, calendars, reminders, and photo access. Permission requests use native
 iOS prompts; Precise Location shows the system's current state and links to iOS
-Settings. The Dashboard **Talk** page contains this device's Voice Wake, Talk,
+Settings. **Voice & Talk** contains this device's Voice Wake, Talk,
 Talk control, background listening, and speakerphone settings. Enabling Voice
 Wake, camera access, Health summaries, or Always location first asks for native
 confirmation.
@@ -133,19 +133,11 @@ is cleared at startup. The default share instruction is also retired and cleared
 at startup. Share messages include only an instruction explicitly supplied for
 that share. These changes do not remove the Gateway's `talk.speechLocale` option.
 
-**This iPhone** and **This iPad** also open native **Apple Watch**, **Diagnostics**,
-**Licenses**, and **About** screens. When disconnected, connected without admin
-access, or running in demo or screenshot mode, Settings shows a native fallback:
-a **Device** section with **Device Settings** and those four rows, followed by
-the Gateway connection controls. These local screens remain available without
-loading the Dashboard. Connected admins can still use Dashboard settings normally.
-
-Channels (`/settings/channels`) and Skills (`/skills`) are managed in the
-Dashboard. Local device settings are also available natively without duplicating
-Gateway work pages. Provider, voice, speech language, and other Gateway
-configuration remain owned by the Dashboard and keep their existing admin gates.
-The system-agent settings chat remains removed. Agent selection and read-only
-Files browsing remain native.
+**Accessories** opens Apple Watch and ESP setup. **About** includes build
+information, **Diagnostics**, and third-party licenses. **Diagnostics** is
+also available on the Gateway connection screen. Channels (`/settings/channels`), Skills
+(`/skills`), providers, Talk configuration, and credential management remain
+in the Dashboard. **Advanced** opens the Dashboard settings.
 
 The sidebar opens these Gateway pages in the embedded Dashboard without web
 navigation chrome:
@@ -273,10 +265,12 @@ A colored session has a narrow leading stripe in session lists and a small dot b
 
 ## Reactions
 
-Saved prompts and assistant replies show emoji reaction chips with counts and
-reactor names for VoiceOver. Tap a chip to toggle your reaction, or long-press a
-message and choose **Add Reaction** for the quick palette. **More…** accepts one
-typed or pasted emoji. Reactions update live while the session is open and do
+Saved prompts and assistant replies show their reactions in one pill: up to three
+emoji, most used first, and the total once there is more than one reaction. On
+your own message the pill sits on the bubble's lower-left corner; under an
+assistant reply it sits before the time. VoiceOver reads who reacted with what. Tap the pill to see
+each reaction with its count and toggle yours, or choose **Add Reaction** in the
+message's long-press menu for the quick palette. **More…** accepts one typed or pasted emoji. Reactions update live while the session is open and do
 not create notifications. Reaction controls follow the Gateway's advertised
 methods, operator scopes, session cap, and current sharing role; sessions you
 can only view show the chips without reaction controls. Archived and catalog
@@ -330,9 +324,8 @@ the pinned renderer dependencies are available.
 
 On first launch the app walks through a short pairing explainer, then Gateway
 setup. It does not present an aggregate permissions page. Optional access is
-requested when you use the related feature, or from **Settings** -> **This iPhone**
-(**This iPad** on iPad) -> **Permissions**. A permission request presents the
-native iOS authorization prompt. You can
+requested when you use the related feature, or from **Settings → Permissions**.
+A permission request presents the native iOS authorization prompt. You can
 change granted access later in the iOS Settings app.
 
 1. Start an authenticated Gateway with a route your phone can reach. Tailscale
@@ -479,7 +472,7 @@ does not mean the phone accepted the message. The Watch records that outcome
 without retrying the command. Reconnecting the Watch or requesting Refresh
 also retries saved result delivery without submitting another chat.
 
-If delivery stalls, open **Settings -> This iPhone -> Apple Watch -> Message Delivery** on
+If delivery stalls, open **Settings → Accessories → Apple Watch → Message Delivery** on
 iPhone. **Delivery uncertain** means the phone cannot prove whether a send
 reached the Gateway; check the original conversation before resending. It does
 not automatically repeat that send. Saved messages that lack delivery context
@@ -551,7 +544,7 @@ tailnet-only route is not enough when the Watch is away from the phone.
    transport and a provider/authentication combination that supports
    `gateway-control-v1` and returns an ICE-lite answer with UDP candidates.
    Provider credentials stay on the Gateway.
-2. On iPhone, open **Settings -> This iPhone -> Apple Watch -> Connect Apple Watch**.
+2. On iPhone, open **Settings → Accessories → Apple Watch → Connect Apple Watch**.
    Voice access is included in normal Watch setup; there is no separate
    voice enable setting.
 3. Open OpenClaw on the Watch before the setup code expires. Open **Talk on
@@ -674,7 +667,7 @@ Requirements:
 
 Setup:
 
-1. On iPhone, open **Settings -> This iPhone -> Apple Watch** (or **Device -> Apple Watch** in the offline fallback).
+1. On iPhone, open **Settings → Accessories → Apple Watch**.
 2. Tap **Connect Apple Watch**.
 3. Open OpenClaw on the watch before the short-lived setup code expires.
 4. Verify the separate Apple Watch row with `openclaw nodes status`.
@@ -838,7 +831,7 @@ Agents can still operate the iOS app through OpenClaw by invoking node commands,
 
 ## Voice wake + talk mode
 
-- Voice wake and Talk mode are available on the Dashboard's **Settings -> Talk** page.
+- Voice Wake and Talk mode are available under **Settings → Voice & Talk**.
 - Voice wake sends recognized commands to the active session; use Talk mode for spoken assistant replies.
 - Switching chats or Gateways cancels pending Voice Wake commands and discards buffered recognition from the previous capture.
 - OpenAI realtime Talk uses client-owned WebRTC when `talk.realtime.transport` is `webrtc`; an explicit `gateway-relay` configuration remains Gateway-owned. See [Talk mode](/nodes/talk).

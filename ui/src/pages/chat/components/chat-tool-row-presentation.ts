@@ -166,10 +166,10 @@ export function resolveToolOperationLabel(
       action = result.status === "timeout" ? "replyTimedOut" : "unconfirmed";
     } else if (outcome === "succeeded") {
       action = "unconfirmed";
-      if (result.status === "ok" || result.status === "no_reply") {
+      if (result.status === "ok" || result.status === "no_reply" || result.status === "accepted") {
         action = "sent";
-      } else if (result.status === "accepted" || result.status === "queued") {
-        action = result.status;
+      } else if (result.status === "queued") {
+        action = "queued";
       } else if (
         result.status === "started" &&
         asNullableRecord(result.retained)?.acceptance === "not_accepted"

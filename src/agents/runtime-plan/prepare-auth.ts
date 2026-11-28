@@ -604,10 +604,23 @@ export function prepareAgentRuntimeAuth(
   };
   const rejectionError = (
     decision: Extract<ReturnType<typeof selectOpenAIModelRouteAuth>, { kind: "rejected" }>,
-  ) =>
-    decision.reason === "all-cooldown" && decision.source
-      ? createAuthProfileCooldownError(params, decision.source.profileId)
-      : new Error(decision.message);
+  ) => {
+    if (decision.reason === "all-cooldown" && decision.source) {
+      return createAuthProfileCooldownError(params, decision.source.profileId);
+    }
+    // Signing in again cannot fix a credential class the route does not accept; keep the
+    // selector's guidance. Required-profile text names the profile, so it stays diagnostic.
+    if (decision.authModeIncompatible && decision.reason !== "required-profile") {
+      return new FailoverError(decision.message, {
+        reason: "auth",
+        status: resolveFailoverStatus("auth"),
+        provider: params.provider,
+        model: params.modelId,
+        userMessage: decision.message,
+      });
+    }
+    return new Error(decision.message);
+  };
   const assertForwardedProfile = (profileId: string | undefined, plan: AgentRuntimeAuthPlan) => {
     if (profileId && harnessOwnsOpenAIAuth && plan.forwardedAuthProfileId !== profileId) {
       throw new Error(`Auth profile "${profileId}" cannot be forwarded to the codex runtime.`);

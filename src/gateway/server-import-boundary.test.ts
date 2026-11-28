@@ -287,10 +287,14 @@ console.log("prewarm-cold-selection-ok");`,
     }
   });
 
-  it("prepares chat.send without loading the media execution runtime", () => {
-    expect(
-      collectStaticValueImports("src/gateway/server-methods/chat-send-external-entry.ts"),
-    ).not.toContain("src/media-understanding/runtime.ts");
+  it("prepares chat.send without loading media execution or session cancellation", () => {
+    const modules = collectStaticValueImports(
+      "src/gateway/server-methods/chat-send-external-entry.ts",
+    );
+    expect(modules).not.toContain(path.normalize("src/media-understanding/runtime.ts"));
+    expect(modules).not.toContain(
+      path.normalize("src/gateway/server-methods/chat-abort-runtime.ts"),
+    );
   });
 
   it("keeps static method policy independent of session storage", () => {

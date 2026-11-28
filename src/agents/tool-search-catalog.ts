@@ -231,10 +231,12 @@ export function isOnDemandCatalogTool(tool: CatalogTool): boolean {
 }
 
 /**
- * Core file/shell primitives and caller-required names (e.g. message when it is
- * the only reply path) stay visible while remaining searchable. Both must
- * resolve to trusted OpenClaw tools: an MCP lookalike must never become a
- * direct delivery or core-coding tool.
+ * Core file/shell primitives, caller-required names (e.g. message when it is
+ * the only reply path) and tools that poll by design stay visible while
+ * remaining searchable. A polling tool behind dispatch_action would hide its
+ * `repeatable` declaration from the repeat guard. All must resolve to trusted
+ * OpenClaw tools: an MCP lookalike must never become a direct delivery or
+ * core-coding tool.
  */
 export function isDirectVisibleCatalogTool(
   tool: AnyAgentTool,
@@ -244,8 +246,55 @@ export function isDirectVisibleCatalogTool(
   return (
     classified.source === "openclaw" &&
     (directToolNames.has(tool.name) ||
+      (tool.repeatable !== undefined && !isOnDemandCatalogTool(tool)) ||
       (isCoreCodingSurfaceToolName(tool.name) && classified.sourceName === "core"))
   );
+}
+
+/**
+ * A run whose MCP tools need at most this many schema bytes declares them directly. Each
+ * avoided discovery step saves one re-sent request (about 51.5 KB measured on a fresh
+ * install) plus its tool_describe result (about 1 KB) and the directory rows, so over an
+ * eight-request session direct schemas break even near 8 KB. Measured catalogs: a 5-tool
+ * tracker 2.1 KB and server-everything 7.8 KB fit; filesystem 14 KB, github 16 KB and
+ * playwright 19 KB keep search.
+ */
+const MAX_DIRECT_MCP_SCHEMA_BYTES = 8_192;
+
+/**
+ * MCP tools a pinning runner declares directly. Without pinned names this chooses by the
+ * catalog's schema bytes, for a series' first request; with them it keeps exactly the MCP tools
+ * the session pin already sends, so the provider tool list stays fixed while server inventory
+ * changes reach the directory. A name another tool also uses stays deferred: a lookalike never
+ * shadows a trusted direct tool. A server with instructions stays deferred too: tool_describe is
+ * where the model reads them.
+ */
+export function selectDirectMcpToolNames(
+  tools: readonly AnyAgentTool[],
+  pinnedToolNames: ReadonlySet<string> | undefined,
+): ReadonlySet<string> {
+  const nameCounts = new Map<string, number>();
+  for (const tool of tools) {
+    nameCounts.set(tool.name, (nameCounts.get(tool.name) ?? 0) + 1);
+  }
+  const mcpTools = tools.filter((tool) => {
+    const { source, mcp } = classifyAgentToolSource(tool);
+    return source === "mcp" && !mcp?.instructions && nameCounts.get(tool.name) === 1;
+  });
+  if (pinnedToolNames) {
+    return new Set(
+      mcpTools.filter((tool) => pinnedToolNames.has(tool.name)).map((tool) => tool.name),
+    );
+  }
+  let bytes = 0;
+  for (const tool of mcpTools) {
+    const { name, description, parameters } = tool;
+    bytes += Buffer.byteLength(JSON.stringify({ name, description, parameters }), "utf8");
+    if (bytes > MAX_DIRECT_MCP_SCHEMA_BYTES) {
+      return new Set();
+    }
+  }
+  return new Set(mcpTools.map((tool) => tool.name));
 }
 
 export function registerHeadlessToolSearchCatalog(params: {
