@@ -50,6 +50,7 @@ export type SessionEventOutcome = {
       | "result"
       | "errorClassification"
       | "failureNotificationDetail"
+      | "rateLimitResetAt"
     >;
   /** Recorded by the turn owner before delivery/cleanup can flatten its cause. */
   terminalOutcome?: AgentRunTerminalOutcome;
@@ -109,7 +110,8 @@ export type SessionEventOptions = {
     // A yielded tool's result resuming its own conversation; hidden from chat display.
     | "tool_handoff"
     | "cron"
-    // The scheduler's repair request for a failing job; hidden from chat display.
+    // The scheduler's repair request for a failing job, or the repair turn of a job notice
+    // already posted to the chat; hidden from chat display.
     | "cron_failure_repair";
   contextKey?: string;
   /** Stable identity for durable host producers across restart handoffs. */

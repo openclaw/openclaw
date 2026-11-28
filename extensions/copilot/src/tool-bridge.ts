@@ -22,6 +22,7 @@ import {
   sanitizeToolResult,
 } from "openclaw/plugin-sdk/agent-harness-runtime";
 import {
+  boundAgentHarnessToolResult,
   createAgentHarnessToolSurfaceRuntimeAsync,
   type AgentHarnessToolSurfaceRuntime,
 } from "openclaw/plugin-sdk/agent-harness-tool-runtime";
@@ -302,6 +303,7 @@ async function buildOpenClawCodingToolsOptions(
   return {
     agentId: input.agentId,
     policyAgentId: a.sandboxAgentId ?? input.agentId,
+    spillOwner: resolveCopilotSpillOwner(input),
     ...buildEmbeddedAttemptToolRunContext(a),
     exec: {
       ...a.execOverrides,
@@ -365,6 +367,21 @@ async function buildOpenClawCodingToolsOptions(
       const target = input.sessionRef?.current;
       void target?.abort?.();
     },
+  };
+}
+
+/** Where a bounded result's full output goes so this run's own `read` can open it. */
+function resolveCopilotSpill(input: CopilotToolBridgeInput) {
+  const sandbox = input.sandbox;
+  return sandbox?.enabled && sandbox.fsBridge
+    ? { sandbox: { root: sandbox.workspaceDir, bridge: sandbox.fsBridge } }
+    : { owner: resolveCopilotSpillOwner(input) };
+}
+
+function resolveCopilotSpillOwner(input: CopilotToolBridgeInput) {
+  return {
+    agentId: input.agentId,
+    sessionKey: input.attemptParams.sessionKey?.trim() || input.sessionId,
   };
 }
 
@@ -448,9 +465,9 @@ function convertOpenClawToolToSdkTool(
       );
     }
 
-    let result: Awaited<ReturnType<AnyAgentTool["execute"]>>;
+    let rawResult: Awaited<ReturnType<AnyAgentTool["execute"]>>;
     try {
-      result = await sourceTool.execute(
+      rawResult = await sourceTool.execute(
         invocation.toolCallId,
         preparedArgs,
         input.attemptParams.abortSignal,
@@ -467,6 +484,12 @@ function convertOpenClawToolToSdkTool(
       );
     }
 
+    // The SDK forwards content unbounded: apply the one fresh tool-result bound here.
+    const result = await boundAgentHarnessToolResult(
+      rawResult,
+      input.attemptParams.contextTokenBudget ?? input.attemptParams.model?.contextWindow,
+      resolveCopilotSpill(input),
+    );
     const sanitizedResult = sanitizeToolResult(result);
     const resultIsError = isToolResultError(sanitizedResult);
     // The SDK only marks fulfilled tool results as failures when isError is forwarded.
@@ -478,7 +501,7 @@ function convertOpenClawToolToSdkTool(
     const terminal = input.attemptParams.observeToolTerminal?.({
       toolCallId: invocation.toolCallId,
       toolName: sourceTool.name,
-      result,
+      result: rawResult,
       arguments: preparedArgs,
       executionStarted: true,
       outcome: resultIsError ? "failure" : "success",

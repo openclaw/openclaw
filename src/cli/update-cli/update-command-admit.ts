@@ -126,8 +126,6 @@ async function inspectUpdateAdmission(
     const serviceAccount = await inspectSystemServiceAccountForAdmission({
       env: process.env,
       root,
-      packageManager: context.installation.packageManager,
-      candidateVersion,
     });
     if (serviceAccount) {
       return {

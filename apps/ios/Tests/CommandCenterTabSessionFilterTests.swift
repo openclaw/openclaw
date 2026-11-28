@@ -196,7 +196,12 @@ struct CommandCenterTabSessionFilterTests {
             SessionPresentation.title(
                 entry(key: "agent:main:ios-abc123", displayName: "Compare session naming"))
                 == "Compare session naming")
-        #expect(SessionPresentation.title(entry(key: "agent:main:ios-abc123")) == "iOS chat")
+        let untitled = entry(key: "agent:main:ios-abc123")
+        #expect(SessionPresentation.title(untitled) == "iOS chat")
+        #expect(SessionPresentation.title(untitled, includesRoutingFallback: false) == nil)
+        #expect(SessionPresentation.title(
+            entry(key: untitled.key, displayName: "Compare session naming"),
+            includesRoutingFallback: false) == "Compare session naming")
         #expect(
             SessionPresentation.title(
                 entry(
@@ -217,6 +222,43 @@ struct CommandCenterTabSessionFilterTests {
             SessionPresentation.title(
                 entry(key: nodeKey, displayName: "Compare session naming", label: manualLabel, autoLabel: autoLabel))
                 == manualLabel)
+    }
+
+    @Test func `the main session and pending dashboard sessions never show their raw key`() {
+        #expect(SessionPresentation.title(OpenClawChatSessionEntry(key: "agent:main:main")) == "Main chat")
+        #expect(SessionPresentation.title(OpenClawChatSessionEntry(key: "main")) == "Main chat")
+        #expect(SessionPresentation.title(OpenClawChatSessionEntry(key: "agent:work:main")) == "Main chat")
+        #expect(SessionPresentation.title(OpenClawChatSessionEntry(key: "agent:main:main:thread:1")) != "Main chat")
+        #expect(SessionPresentation.title(
+            OpenClawChatSessionEntry(key: "agent:main:dashboard:0f3c2b7e-1111-4222-8333-444455556666")) ==
+            "New session")
+        // The chat header keeps its own fallback (the agent's name) for an untitled main session.
+        #expect(SessionPresentation.title(
+            OpenClawChatSessionEntry(key: "agent:main:main"), includesRoutingFallback: false) == nil)
+        // A real title still wins.
+        #expect(SessionPresentation.title(
+            OpenClawChatSessionEntry(key: "agent:main:main", label: "Daily standup")) == "Daily standup")
+    }
+
+    @Test func `an untitled session reads as its derived title, its given name, or Untitled session`() {
+        var derived = OpenClawChatSessionEntry(key: "agent:main:ios-7d2ab138-a982-4b1a-8ecc-fd334a61f76a")
+        derived.derivedTitle = "Plan a weekend in Porto"
+        #expect(SessionPresentation.title(derived) == "Plan a weekend in Porto")
+        var mainWithDerived = OpenClawChatSessionEntry(key: "agent:main:main")
+        mainWithDerived.derivedTitle = "A friendly greeting"
+        #expect(SessionPresentation.title(mainWithDerived) == "Main chat")
+        // A tail someone named reads as the name, as on the web.
+        #expect(SessionPresentation.title(OpenClawChatSessionEntry(key: "agent:main:iv-lane-1")) == "iv-lane-1")
+        #expect(SessionPresentation.title(OpenClawChatSessionEntry(key: "agent:main:explicit:release-notes")) ==
+            "release-notes")
+        // An opaque id is not a name: never a fragment, never the key.
+        #expect(SessionPresentation.title(
+            OpenClawChatSessionEntry(key: "agent:main:run-0f3c2b7e-1111-4222-8333-444455556666")) == "Untitled session")
+        #expect(SessionPresentation.title(OpenClawChatSessionEntry(key: "agent:main:node-1234567890ab")) ==
+            "Untitled session")
+        #expect(SessionPresentation.title(OpenClawChatSessionEntry(key: "agent:main:abc123def4")) ==
+            "Untitled session")
+        #expect(SessionPresentation.title(OpenClawChatSessionEntry(key: "agent:main:abc123def")) == "abc123def")
     }
 
     @Test func `a key copied into the label or display name never becomes the session title`() throws {

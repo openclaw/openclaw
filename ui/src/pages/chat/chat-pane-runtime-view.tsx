@@ -343,7 +343,7 @@ export function createChatPaneView(runtime: ChatPaneRuntime) {
       const cacheProgress = () => {
         const { target, store, options } = runtime.readProgressCardScope();
         if (target && options.admitAutomaticRead()) {
-          runtime.cacheProgressCard(target, store.get(target));
+          runtime.cacheProgressCard(target, store.get(target, "saved"));
         }
       };
       onSettled(() => {

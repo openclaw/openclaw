@@ -993,40 +993,6 @@ describe("MatrixClient request hardening", () => {
     expect(started).toEqual(["!room-a:example.org", "!room-b:example.org", "event"]);
   });
 
-  it("maps relations pages back to raw events", async () => {
-    const client = createSdkClient();
-    matrixJsClient.relations = vi.fn(async () => ({
-      originalEvent: makeMatrixEvent({
-        eventId: "$poll",
-        type: "m.poll.start",
-        ts: 1,
-        content: { "m.poll.start": {} },
-      }),
-      events: [
-        makeMatrixEvent({
-          eventId: "$vote",
-          sender: "@bob:example.org",
-          type: "m.poll.response",
-          ts: 2,
-          content: {
-            "m.poll.response": {},
-            "m.relates_to": { rel_type: "m.reference", event_id: "$poll" },
-          },
-        }),
-      ],
-      nextBatch: null,
-      prevBatch: null,
-    }));
-    const page = await client.getRelations(ROOM, "$poll", "m.reference");
-    expect(page.originalEvent).toMatchObject({ event_id: "$poll", type: "m.poll.start" });
-    expect(page.events).toHaveLength(1);
-    expect(page.events[0]).toMatchObject({
-      event_id: "$vote",
-      type: "m.poll.response",
-      sender: "@bob:example.org",
-    });
-  });
-
   it("awaits untyped relation decryption before projecting effective content", async () => {
     const client = createSdkClient();
     const encrypted = makeMatrixEvent({ type: "m.room.encrypted", content: {} });

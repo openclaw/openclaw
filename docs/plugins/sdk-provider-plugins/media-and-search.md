@@ -65,6 +65,14 @@ merging a nested value such as voice settings.
     memory search. The retired memory-specific registrar and manifest
     contract are no longer accepted.
 
+    If a model embeds images or audio into the same space as text, return them
+    from `mediaModalities({ model })` (for example `["image", "audio"]`), and
+    send `inline-data` parts of `EmbeddingInput` in the request. Omitting media
+    capability means text only. Memory rejects unsupported configured modalities
+    unless the user sets `memory.search.multimodal.allowPartial`. The older
+    `supportsMultimodalEmbeddings({ model })` boolean is deprecated; `true` still
+    counts as image and audio.
+
     OpenAI-compatible endpoints can use `createRemoteEmbeddingProvider`
     from `openclaw/plugin-sdk/memory-core-host-engine-embeddings`. Its optional
     `buildRequestFields(kind)` callback returns extra JSON fields for

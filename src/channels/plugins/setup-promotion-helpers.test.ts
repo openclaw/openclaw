@@ -77,6 +77,7 @@ describe("setup promotion helpers", () => {
 
     const keys = resolveSingleAccountKeysToMove({
       channelKey: "demo",
+      resolveBundledSurface: resolveBundledSurfaceMock,
       channel: {
         accounts: {
           work: { enabled: true },
