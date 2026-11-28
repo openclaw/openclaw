@@ -7,8 +7,11 @@ import { getActiveAcpTurnCount } from "../acp/control-plane/active-turns.js";
 import { getActiveBackgroundExecSessionCount } from "../agents/bash-process-registry.js";
 import { getActiveMediaGenerationRunCount } from "../agents/media-generation-activity.js";
 import { getTotalPendingReplies } from "../auto-reply/reply/dispatcher-registry.js";
-import { getActiveCronJobCount } from "../cron/active-jobs.js";
-import { getSuspensionVisibleCronTaskRunCount } from "../cron/service/active-run-cancellation.js";
+import { getActiveCronJobCount, listActiveCronJobHolders } from "../cron/active-jobs.js";
+import {
+  getSuspensionVisibleCronTaskRunCount,
+  listSuspensionVisibleCronTaskRunHolders,
+} from "../cron/service/active-run-cancellation.js";
 import { getTotalQueueSize, listCommandLaneTotals } from "../process/command-queue.js";
 import {
   getActiveGatewayRootWorkCount,
@@ -17,6 +20,7 @@ import {
 import {
   getSessionMutationCount,
   getSessionControllerWorkCount,
+  listSessionControllerWorkHolders,
 } from "../sessions/session-controller.lifecycle.js";
 import { getActiveSessionRunCount } from "../sessions/session-controller.queries.js";
 import { getActiveAgentRunContextCount } from "./agent-run-registry.js";
@@ -27,9 +31,10 @@ export type GatewayActiveWorkSnapshot = ReturnType<typeof createGatewayActiveWor
 
 export type GatewayActiveWorkInspectors = Omit<
   typeof defaultInspectors,
-  "getRootRequestHolders"
+  "getRootRequestHolders" | "getCronRunHolders"
 > & {
   getRootRequestHolders?: () => string[];
+  getCronRunHolders?: () => string[];
   getChatRunHolders?: () => string[];
   getTerminalPersistenceHolders?: () => string[];
   getTerminalPersistenceDiagnostics?: () => { oldestAgeMs: number | null; runIds: string[] };
@@ -41,6 +46,12 @@ const defaultInspectors = {
   getEmbeddedRuns: getActiveSessionRunCount,
   getBackgroundExecSessions: getActiveBackgroundExecSessionCount,
   getCronRuns: () => Math.max(getActiveCronJobCount(), getSuspensionVisibleCronTaskRunCount()),
+  // Same max() as the count: a run has both a marker and a task core, so name one side.
+  getCronRunHolders: () => {
+    const jobs = listActiveCronJobHolders();
+    const tasks = listSuspensionVisibleCronTaskRunHolders();
+    return jobs.length >= tasks.length ? jobs : tasks;
+  },
   getAgentRuns: getActiveAgentRunContextCount,
   getAcpRuns: getActiveAcpTurnCount,
   getMediaRuns: getActiveMediaGenerationRunCount,
@@ -143,7 +154,14 @@ export function createGatewayActiveWorkSnapshot(
   add(counts.pendingReplies, "reply", "pending reply delivery operation(s)");
   add(counts.embeddedRuns, "embedded-run", "active embedded run(s)");
   add(counts.backgroundExecSessions, "background-exec", "active background exec session(s)");
-  add(counts.cronRuns, "cron-run", "active cron run(s)");
+  add(
+    counts.cronRuns,
+    "cron-run",
+    "active cron run(s)",
+    inspectors.getCronRuns && !inspectors.getCronRunHolders
+      ? undefined
+      : resolved.getCronRunHolders,
+  );
   add(counts.agentRuns, "agent-run", "admitted agent run(s)");
   add(counts.acpRuns, "acp-run", "active ACP turn(s)");
   add(counts.mediaRuns, "media-generation", "active media generation(s)");
@@ -155,7 +173,12 @@ export function createGatewayActiveWorkSnapshot(
       ? undefined
       : resolved.getRootRequestHolders,
   );
-  add(counts.sessionAdmissions, "session-admission", "admitted session turn(s)");
+  add(
+    counts.sessionAdmissions,
+    "session-admission",
+    "admitted session turn(s)",
+    inspectors.getSessionAdmissions ? undefined : listSessionControllerWorkHolders,
+  );
   add(counts.sessionMutations, "session-mutation", "active session lifecycle mutation(s)");
   add(counts.chatRuns, "chat-run", "active chat run(s)", resolved.getChatRunHolders);
   add(counts.queuedTurns, "queued-turn", "queued chat turn(s)");

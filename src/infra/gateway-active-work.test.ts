@@ -11,11 +11,15 @@ import { scheduleFollowupDrain } from "../auto-reply/reply/queue/drain.js";
 import { enqueueFollowupRun } from "../auto-reply/reply/queue/enqueue.js";
 import { clearFollowupQueue } from "../auto-reply/reply/queue/state.js";
 import { isFollowupRunAborted, type FollowupRun } from "../auto-reply/reply/queue/types.js";
+import { clearCronJobActive, markCronJobActive } from "../cron/active-jobs.js";
+import { trackActiveCronTaskRunSettlement } from "../cron/service/active-run-cancellation.js";
+import { createGatewayServerActiveWorkInspectors } from "../gateway/server-active-work.js";
 import { enqueueCommandInLane, setCommandLaneConcurrency } from "../process/command-queue.js";
 import {
   resetGatewayWorkAdmission,
   tryBeginGatewayRootWorkAdmission,
 } from "../process/gateway-work-admission.js";
+import { withSessionTurn } from "../sessions/session-controller.admission.js";
 import {
   createGatewayActiveWorkSnapshot,
   waitForGatewayActiveWork,
@@ -227,4 +231,72 @@ describe("waitForGatewayActiveWork", () => {
       }
     },
   );
+});
+
+it("names the cron runs and session turns that keep the gateway busy", async () => {
+  // Incident: suspension reported "1 active cron run(s)" for hours with no way to tell which.
+  // Use the live suspend path's inspectors, which override the cron count.
+  const inspectors = createGatewayServerActiveWorkInspectors({
+    cron: { getSuspensionBlockerCount: () => 0 },
+  } as unknown as Parameters<typeof createGatewayServerActiveWorkInspectors>[0]);
+  const marker = markCronJobActive("nightly", {
+    agentId: "main",
+    sessionKey: "agent:main:cron:nightly",
+  });
+  let settleCore!: () => void;
+  trackActiveCronTaskRunSettlement(
+    new Promise<void>((resolve) => {
+      settleCore = resolve;
+    }),
+    undefined,
+    "main",
+    "nightly",
+  );
+  try {
+    await withSessionTurn(
+      {
+        sessionKey: "agent:main:cron:nightly:run:r1",
+        sessionId: "r1",
+        agentId: "main",
+        storePath: "/nonexistent/holder-names",
+      },
+      async () => {
+        const { blockers } = createGatewayActiveWorkSnapshot(inspectors);
+        expect(blockers).toEqual(
+          expect.arrayContaining([
+            {
+              kind: "cron-run",
+              count: 1,
+              message: expect.stringMatching(
+                /^1 active cron run\(s\): job=nightly session=agent:main:cron:nightly age=\d+s$/,
+              ),
+            },
+            {
+              kind: "session-admission",
+              count: 1,
+              message:
+                "1 admitted session turn(s): agent:main:cron:nightly:run:r1 (active-turn, mailbox-claim, operations=1)",
+            },
+          ]),
+        );
+      },
+    );
+  } finally {
+    clearCronJobActive("nightly", marker);
+  }
+  // The turn's mailbox claim releases a few microtasks after the turn returns; then the
+  // unsettled core alone still blocks, by name, until it settles.
+  await vi.waitFor(() =>
+    expect(createGatewayActiveWorkSnapshot(inspectors).blockers).toEqual([
+      {
+        kind: "cron-run",
+        count: 1,
+        message: expect.stringMatching(
+          /^1 active cron run\(s\): task job=nightly agent=main age=\d+s$/,
+        ),
+      },
+    ]),
+  );
+  settleCore();
+  await vi.waitFor(() => expect(createGatewayActiveWorkSnapshot(inspectors).blockers).toEqual([]));
 });

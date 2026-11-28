@@ -93,6 +93,7 @@ export type CronActiveJobMarker = {
   stateIdentityKey?: string;
   generation: number;
   token: number;
+  startedAtMs?: number;
   cancellation?:
     | { kind: "bound"; cancel: (reason: string) => void }
     | { kind: "requested"; reason: string };
@@ -195,6 +196,7 @@ export function markCronJobActive(
     ...(opts?.stateIdentityKey ? { stateIdentityKey: opts.stateIdentityKey } : {}),
     generation: state.generation,
     token,
+    startedAtMs: Date.now(),
     ...(opts?.preserveAcrossGenerationAdvance ? { preserveAcrossGenerationAdvance: true } : {}),
   };
   state.activeJobs.set(jobId, marker);
@@ -420,6 +422,25 @@ export function isCronActiveJobMarkerCurrent(marker: CronActiveJobMarker | undef
 /** Returns the number of active cron runs in this process. */
 export function getActiveCronJobCount() {
   return getActiveCronJobCountForGeneration(getCronActiveJobState());
+}
+
+/** Names the markers behind getActiveCronJobCount for suspension diagnostics. */
+export function listActiveCronJobHolders(nowMs = Date.now()): string[] {
+  const state = getCronActiveJobState();
+  return [...state.activeJobs.values()]
+    .filter((marker) => isMarkerActiveInGeneration(marker, state.generation))
+    .map((marker) =>
+      [
+        `job=${marker.jobId}`,
+        marker.sessionKey ? `session=${marker.sessionKey}` : undefined,
+        marker.startedAtMs === undefined
+          ? undefined
+          : `age=${Math.round((nowMs - marker.startedAtMs) / 1000)}s`,
+        marker.idleAdmissionWait ? "waiting-for-idle" : undefined,
+      ]
+        .filter(Boolean)
+        .join(" "),
+    );
 }
 
 export async function waitForActiveCronJobs(timeoutMs: number): Promise<{

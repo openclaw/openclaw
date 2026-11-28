@@ -104,6 +104,7 @@ export {
   captureGatewaySessionControllerWork,
   getSessionControllerWorkCount,
   getSessionMutationCount,
+  listSessionControllerWorkHolders,
   isSessionMutationActive,
   hasOnlySessionMutationKindActive,
   collectSessionMutationIdentities,
