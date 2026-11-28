@@ -442,8 +442,11 @@ export async function runWithLocalStateOwner<T>(params: {
         if (resources) {
           // Detached work the command admitted (subagent completion, announcements) writes
           // through these databases; let it finish unless the user interrupts.
+          // The CLI signal gate aborts `controller`; `agent --local` owns SIGINT through its bridge.
           await waitForGatewayRootWorkIdle({
-            signal: params.signal,
+            signal: params.signal
+              ? AbortSignal.any([controller.signal, params.signal])
+              : controller.signal,
             onWaiting: (count) =>
               process.stderr.write(
                 `Waiting for ${count} background ${count === 1 ? "task" : "tasks"} to finish. Press Ctrl-C to stop.\n`,

@@ -24,6 +24,8 @@ import { createOpenClawDatabaseMaintenanceScope } from "../state/openclaw-state-
 import { closeOpenClawStateDatabaseForTest } from "../state/openclaw-state-db.js";
 import { withOpenClawTestState } from "../test-utils/openclaw-test-state.js";
 import { withLocalGatewayRequestScope } from "./local-request-context.js";
+import type { GatewayLifecycleRuntime } from "./server-instance-runtime.types.js";
+import { registerGatewayLifecycleRuntime } from "./server-lifecycle-runtime-context.js";
 import type { GatewayRequestContext } from "./server-methods/types.js";
 import {
   dispatchGatewayMethodInProcess,
@@ -150,6 +152,26 @@ describe("local gateway request context", () => {
         expect.any(Function),
       );
     });
+  });
+
+  it("owns dispatch facts and lifecycle reads only when no Gateway hosts the process", async () => {
+    await withConfig({}, async () => {
+      const oneShot = localContext();
+      expect(oneShot.loadReplyDispatchRuntime).toBeTypeOf("function");
+      expect(oneShot.lifecycleRuntime).toBeDefined();
+    });
+    // BOOT.md runs a local command inside a Gateway: that Gateway keeps both.
+    const hosting = { waitForAgent: vi.fn() } as unknown as GatewayLifecycleRuntime;
+    const release = registerGatewayLifecycleRuntime(hosting);
+    try {
+      await withConfig({}, async () => {
+        const hosted = localContext();
+        expect(hosted.loadReplyDispatchRuntime).toBeUndefined();
+        expect(hosted.lifecycleRuntime).toBe(hosting);
+      });
+    } finally {
+      release();
+    }
   });
 
   it("defaults local model catalog snapshot reads to read-only", async () => {

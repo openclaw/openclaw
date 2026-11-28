@@ -22,8 +22,8 @@ import { NodeRegistry } from "./node-registry.js";
 import type { ChannelRuntimeSnapshot } from "./server-channel-runtime.types.js";
 import { createChatRunState } from "./server-chat-state.js";
 import type { GatewayCronServiceContract } from "./server-cron-contract.js";
-import { createGatewayInstanceRuntime } from "./server-instance-runtime.js";
-import { createRequestGatewayMethodRegistry } from "./server-methods.js";
+import type { GatewayInstanceRuntime } from "./server-instance-runtime.types.js";
+import { getGatewayLifecycleRuntime } from "./server-lifecycle-runtime-context.js";
 import { readPreparedServerMethodModelCatalogs } from "./server-methods/optional-model-catalog.js";
 import type { GatewayRequestContext } from "./server-methods/types.js";
 import { registerGatewayModelCatalogPrivateAccess } from "./server-model-catalog-auth.js";
@@ -85,6 +85,9 @@ async function createLocalGatewayRequestContext(
   params: LocalGatewayRequestContextParams,
 ): Promise<GatewayRequestContext> {
   const logGateway = createSubsystemLogger("gateway/local");
+  // A Gateway hosting this process (BOOT.md runs local commands inside it) keeps owning dispatch
+  // facts, execution lifetime and lifecycle reads; only a one-shot process supplies its own.
+  const hostingGateway = getGatewayLifecycleRuntime();
   const resourceHost = getLegacyPluginSdkResourceHost();
   const cron: GatewayCronServiceContract = {
     ...unavailableCron,
@@ -110,17 +113,23 @@ async function createLocalGatewayRequestContext(
   });
   const context: GatewayRequestContext = {
     localEmbedded: true,
-    // No Gateway publishes dispatch facts here; admission prepares the target agent's run.
-    loadReplyDispatchRuntime: (loadParams) =>
-      loadRunReplyDispatchRuntime({ ...loadParams, config: params.getRuntimeConfig() }),
-    // Admitted turns (spawned children, completion continuations) outlive the caller's turn.
-    // Each turn is root work for its own run only, so a one-shot process keeps its databases
-    // open until it settles; detached follow-up admits its own root. A closed caller scope
-    // still refuses new execution.
-    trackExecution: (run) =>
-      trackAsyncWork(() =>
-        runWithGatewayIndependentRootWorkAdmission(async () => await run(), "local:agent-turn"),
-      ),
+    ...(hostingGateway
+      ? {}
+      : {
+          // No Gateway publishes dispatch facts here; admission prepares the target agent's run.
+          loadReplyDispatchRuntime: (loadParams) =>
+            loadRunReplyDispatchRuntime({ ...loadParams, config: params.getRuntimeConfig() }),
+        }),
+    // In a one-shot process, admitted turns (spawned children, completion continuations) outlive
+    // the caller's turn. Each is root work for its own run, so the process keeps its databases
+    // open until it settles; detached follow-up admits its own root. A closed caller scope still
+    // refuses new execution.
+    trackExecution: hostingGateway
+      ? trackAsyncWork
+      : (run) =>
+          trackAsyncWork(() =>
+            runWithGatewayIndependentRootWorkAdmission(async () => await run(), "local:agent-turn"),
+          ),
     deps: params.deps,
     configRevisionProjector: await loadGatewayConfigRevisionProjector({ env: process.env }),
     cron,
@@ -249,14 +258,31 @@ async function createLocalGatewayRequestContext(
   // The Gateway's own instance runtime serves agent turns and lifecycle reads (agent.wait,
   // chat.history) through the shared method registry. It claims no process-global state and
   // starts timers only on use, so late root work may still dispatch through it after the caller
-  // returns; it is collected with this context.
-  const instance = createGatewayInstanceRuntime({
-    getContext: () => context,
-    getMethodRegistry: () => createRequestGatewayMethodRegistry(),
-    isDispatchAvailable: () => true,
-  });
-  context.createAgentTurnFacade = instance.createAgentTurnFacade;
-  context.lifecycleRuntime = instance.lifecycle;
+  // returns; it is collected with this context. Loaded on first use: most one-shot turns never
+  // dispatch another turn, and the runtime and method registry cost cold start.
+  let instance: Promise<GatewayInstanceRuntime> | undefined;
+  const loadInstance = () =>
+    (instance ??= Promise.all([
+      import("./server-instance-runtime.js"),
+      import("./server-methods.js"),
+    ]).then(([{ createGatewayInstanceRuntime }, { createRequestGatewayMethodRegistry }]) =>
+      createGatewayInstanceRuntime({
+        getContext: () => context,
+        getMethodRegistry: () => createRequestGatewayMethodRegistry(),
+        isDispatchAvailable: () => true,
+      }),
+    ));
+  context.createAgentTurnFacade = async (principal) =>
+    (await loadInstance()).createAgentTurnFacade(principal);
+  context.lifecycleRuntime = hostingGateway ?? {
+    dispatchSessionMethod: async (method, payload, options) =>
+      await (await loadInstance()).lifecycle.dispatchSessionMethod(method, payload, options),
+    dispatchAgent: async (payload, timeoutMs, options) =>
+      await (await loadInstance()).lifecycle.dispatchAgent(payload, timeoutMs, options),
+    waitForAgent: async (payload, timeoutMs, signal) =>
+      await (await loadInstance()).lifecycle.waitForAgent(payload, timeoutMs, signal),
+    sendNotice: async (payload) => await (await loadInstance()).lifecycle.sendNotice(payload),
+  };
   return context;
 }
 

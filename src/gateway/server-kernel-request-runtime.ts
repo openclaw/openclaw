@@ -210,7 +210,7 @@ export async function prepareGatewayKernelRequestRuntime(params: {
     "gateway.instance-runtime-import",
     () => import("./server-instance-runtime.js"),
   );
-  const gatewayInstanceRuntime = createGatewayInstanceRuntime({
+  const instanceRuntime = createGatewayInstanceRuntime({
     getContext: () => gatewayRequestContext,
     getMethodRegistry: () => getAttachedGatewayMethodRegistry(),
     // Request entry fences new calls during the prelude. Retained principals
@@ -220,14 +220,15 @@ export async function prepareGatewayKernelRequestRuntime(params: {
   });
   // The listening Gateway is the process-global lifecycle owner; embedded hosts build the
   // same runtime for their own context without claiming it.
-  const releaseLifecycleRuntime = registerGatewayLifecycleRuntime(gatewayInstanceRuntime.lifecycle);
-  gatewayInstanceRuntimeRef.current = {
-    ...gatewayInstanceRuntime,
+  const releaseLifecycleRuntime = registerGatewayLifecycleRuntime(instanceRuntime.lifecycle);
+  const gatewayInstanceRuntime = {
+    ...instanceRuntime,
     close: () => {
-      gatewayInstanceRuntime.close();
+      instanceRuntime.close();
       releaseLifecycleRuntime();
     },
   };
+  gatewayInstanceRuntimeRef.current = gatewayInstanceRuntime;
   gatewayRequestContext.resolveGatewayContext = () =>
     gatewayInstanceRuntime.isAvailable() ? gatewayRequestContext : undefined;
   bindLegacyPluginSdkResourceHost(

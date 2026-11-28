@@ -149,7 +149,7 @@ export async function waitForGatewayRootWorkIdle(params: {
   onWaiting?: (count: number) => void;
 }): Promise<void> {
   let count = getActiveGatewayRootWorkCount({ excludeCurrent: true });
-  if (count === 0) {
+  if (count === 0 || params.signal?.aborted) {
     return;
   }
   params.onWaiting?.(count);
