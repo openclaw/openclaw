@@ -4,6 +4,7 @@ import { IDBFactory, indexedDB as fakeIndexedDB } from "fake-indexeddb";
 import { isStringArray } from "openclaw/plugin-sdk/collection-input-runtime";
 import { toErrorObject } from "openclaw/plugin-sdk/error-runtime";
 import { withFileLock } from "openclaw/plugin-sdk/file-lock";
+import type { PluginStateActionAuthority } from "openclaw/plugin-sdk/plugin-state-runtime";
 import { asOptionalObjectRecord } from "openclaw/plugin-sdk/string-coerce-runtime";
 import { getMatrixRuntime } from "../../runtime.js";
 import {
@@ -322,13 +323,16 @@ export async function persistIdbToDisk(params?: {
   snapshotPath?: string;
   databasePrefix?: string;
   strict?: boolean;
+  requireCryptoAccount?: boolean;
   abortSignal?: AbortSignal;
   stateRuntime?: MatrixSnapshotStateRuntime;
+  authority?: PluginStateActionAuthority;
 }): Promise<void> {
   const snapshotPath = params?.snapshotPath ?? resolveDefaultIdbSnapshotPath();
   let callbackStarted = false;
   try {
     const stateRuntime = params?.stateRuntime ?? getMatrixRuntime().state;
+    params?.authority?.assertCurrent();
     fs.mkdirSync(path.dirname(snapshotPath), { recursive: true });
     // withFileLock is acquire-or-throw; it never skips the callback on contention.
     await withFileLock(snapshotPath, MATRIX_IDB_SNAPSHOT_LOCK_OPTIONS, async () => {
@@ -336,6 +340,18 @@ export async function persistIdbToDisk(params?: {
       const storageRootDir = path.dirname(snapshotPath);
       const previousJson = (await readCanonicalSnapshot(snapshotPath, stateRuntime))?.snapshotJson;
       const snapshot = await dumpIndexedDatabases(params?.databasePrefix);
+      if (
+        params?.requireCryptoAccount &&
+        !snapshot.some((database) =>
+          database.stores.some(
+            (store) =>
+              store.name === "core" &&
+              store.records.some((record) => record.key === "account" && record.value != null),
+          ),
+        )
+      ) {
+        throw new Error("Matrix key upload has no durable crypto account");
+      }
       if (params?.abortSignal?.aborted || snapshot.length === 0) {
         return;
       }
@@ -350,6 +366,7 @@ export async function persistIdbToDisk(params?: {
         snapshotJson,
         databaseCount: snapshot.length,
         stateRuntime,
+        authority: params?.authority,
       });
     });
   } catch (err) {
@@ -364,6 +381,34 @@ export async function persistIdbToDisk(params?: {
       throw err;
     }
   }
+}
+
+export async function persistCryptoBeforeKeyUpload(params: {
+  resource: RequestInfo | URL;
+  init?: RequestInit;
+  snapshotPath?: string;
+  databasePrefix?: string;
+  stateRuntime?: MatrixSnapshotStateRuntime;
+  authority?: PluginStateActionAuthority;
+}): Promise<void> {
+  const { resource, init } = params;
+  if (!params.databasePrefix) {
+    throw new Error("Matrix key upload requires an account-scoped crypto database");
+  }
+  const signal = init?.signal ?? (resource instanceof Request ? resource.signal : undefined);
+  signal?.throwIfAborted();
+  // The server must never publish keys whose private account state can be
+  // lost before the periodic snapshot. A failed durable write denies I/O.
+  await persistIdbToDisk({
+    snapshotPath: params.snapshotPath,
+    databasePrefix: params.databasePrefix,
+    strict: true,
+    requireCryptoAccount: true,
+    abortSignal: signal ?? undefined,
+    stateRuntime: params.stateRuntime,
+    authority: params.authority,
+  });
+  signal?.throwIfAborted();
 }
 
 function throwIfLegacySnapshotNeedsDoctor(snapshotPath: string): void {
