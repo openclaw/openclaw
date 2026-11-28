@@ -2,6 +2,7 @@ import { execFile, spawnSync, type ChildProcess } from "node:child_process";
 import { accessSync, constants, statSync, type Stats } from "node:fs";
 import fs from "node:fs/promises";
 import path from "node:path";
+import { StringDecoder } from "node:string_decoder";
 import { sanitizeTerminalText } from "../../packages/terminal-core/src/safe-text.js";
 import { createSubsystemLogger } from "../logging/subsystem.js";
 import { getSpawnBroker } from "../process/spawn-broker/context-state.js";
@@ -333,6 +334,7 @@ export function observeChildRuntime(
   let started = false;
   let error: unknown;
   let stderr = "";
+  const stderrDecoder = new StringDecoder("utf8");
   child.once("message", () => {
     started = true;
     stderr = "";
@@ -342,10 +344,11 @@ export function observeChildRuntime(
   });
   const captureStderr = (chunk: Buffer | string) => {
     if (!started) {
-      stderr = (stderr + chunk.toString()).slice(-8_192);
+      const text = typeof chunk === "string" ? chunk : stderrDecoder.write(chunk);
+      stderr = (stderr + text).slice(-8_192);
     }
   };
-  child.stderr?.on("data", captureStderr);
+  child.stderr?.on("data", captureStderr).once("end", () => captureStderr(stderrDecoder.end()));
   return async () =>
     child.exitCode === 0 && !error
       ? undefined
