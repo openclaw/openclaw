@@ -1082,6 +1082,18 @@
   gap: 6px;
 }
 
+/* A quietly filled pin marks an agent pinned in the roster. */
+.sidebar-agent-menu__pinned-badge {
+  display: inherit;
+  color: var(--muted);
+}
+
+.sidebar-agent-menu__pinned-badge svg {
+  width: 14px;
+  height: 14px;
+  fill: currentColor;
+}
+
 /* Only the switcher list shrinks and scrolls; the action rows stay visible. */
 /* Agent rows: 36 tall around a 24px avatar. */
 .sidebar-agent-menu {

@@ -5,6 +5,7 @@ import type { NavigationRouteId } from "../app-navigation.ts";
 import { pathForAgentPanel } from "../app-route-paths.ts";
 import type { ApplicationNavigationOptions } from "../app/context.ts";
 import { normalizeAgentLabel, resolveAgentTextAvatar } from "../lib/agents/display.ts";
+import { orderAgentSwitcherRows } from "../lib/agents/switcher-order.ts";
 import { resolveAgentAvatarUrl } from "../lib/avatar.ts";
 import { t } from "../lib/reactive/i18n.ts";
 import { normalizeAgentId } from "../lib/sessions/session-key.ts";
@@ -30,6 +31,8 @@ type SidebarAgentMenuSwitcherParams = {
   agents: readonly GatewayAgentRow[];
   pendingAgent?: GatewayAgentRow;
   recentlyCreatedAgentId?: string;
+  /** Agents pinned in the sidebar roster; they lead the switcher in this order. */
+  pinnedAgentIds?: readonly string[];
   identities: ReadonlyMap<string, AgentIdentityResult>;
   resolveAvatarUrl: (url: string) => string | null;
   avatarErrorHandler: (url: string) => () => void;
@@ -138,6 +141,7 @@ function renderAgentRow(
   const identity = createMemo(() => params.identities.get(agentId()) ?? null);
   const label = createMemo(() => normalizeAgentLabel(readAgent(), identity()));
   const active = createMemo(() => agentId() === params.activeId && !params.allAgentsScope);
+  const pinned = createMemo(() => (params.pinnedAgentIds ?? []).includes(agentId()));
   const unread = createMemo(() =>
     agentId() === params.activeId ? 0 : params.agentUnreadCount(agentId()),
   );
@@ -153,7 +157,10 @@ function renderAgentRow(
     get class() {
       return [
         "sidebar-customize-menu__item sidebar-agent-menu__agent-switch agent-select__option",
-        { "sidebar-agent-menu__agent-switch--active": active() },
+        {
+          "sidebar-agent-menu__agent-switch--active": active(),
+          "sidebar-agent-menu__agent-switch--pinned": pinned(),
+        },
       ];
     },
     get attributes() {
@@ -172,6 +179,15 @@ function renderAgentRow(
           </span>
         </span>
         <span class="sidebar-agent-menu__agent-status">
+          {pinned() ? (
+            <span
+              class="sidebar-agent-menu__pinned-badge"
+              role="img"
+              aria-label={t("agentsHome.pinnedAgents")}
+            >
+              <Icon name="pin" />
+            </span>
+          ) : undefined}
           {unread() > 0 ? (
             <span class="session-unread-dot" role="img" aria-label={t("sessionsView.unread")} />
           ) : undefined}
@@ -207,14 +223,13 @@ function renderSidebarAgentMenuSwitcher(
   params: SidebarAgentMenuSwitcherParams,
   controls?: MenuControls,
 ): () => MenuEntry[] {
-  const agents = createMemo(() => {
-    const pending = params.pendingAgent;
-    const roster = pending
-      ? [pending, ...params.agents.filter((agent) => normalizeAgentId(agent.id) !== pending.id)]
-      : [...params.agents];
-    const firstId = pending?.id ?? params.recentlyCreatedAgentId;
-    return roster.toSorted((a, b) => Number(b.id === firstId) - Number(a.id === firstId));
-  });
+  const agents = createMemo(() =>
+    orderAgentSwitcherRows(params.agents, {
+      pendingAgent: params.pendingAgent,
+      recentlyCreatedAgentId: params.recentlyCreatedAgentId,
+      pinnedAgentIds: params.pinnedAgentIds,
+    }),
+  );
   const autofocusAll = createMemo(
     () => params.openMode === "click" && params.allAgentsScope && agents().length > 1,
   );
