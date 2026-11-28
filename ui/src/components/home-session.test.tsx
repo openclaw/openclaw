@@ -3,6 +3,8 @@
 import { createSignal } from "solid-js";
 import { afterEach, expect, it, vi } from "vitest";
 import { GatewayRequestError } from "../api/gateway.ts";
+import { AssistantDock } from "../app/assistant-dock.ts";
+import { chatInputOwnerForContext } from "../app/chat-input-owner.ts";
 import { ApplicationProvider } from "../lib/reactive/context.ts";
 import type { ChatWorkContext } from "../pages/chat/chat-work-context.ts";
 import { createContext, createGateway, createSessions } from "../test-helpers/app-sidebar.ts";
@@ -13,13 +15,28 @@ import { mountSolid } from "../test-helpers/mount-solid.ts";
 import { waitForSolid } from "../test-helpers/solid-settle.ts";
 import { HomeSession } from "./home-session-solid.tsx";
 
+const focusComposerInput = vi.fn(() => true);
+let mockComposerDisabled = false;
+
 // mock-isolation: Home owns attachment controls; its child chat renderer is opaque.
 vi.mock("../pages/chat/chat-pane.tsx", () => {
-  customElements.define("openclaw-chat-pane", class extends HTMLElement {});
+  customElements.define(
+    "openclaw-chat-pane",
+    class extends HTMLElement {
+      get composerElement() {
+        return { disabled: mockComposerDisabled } as HTMLTextAreaElement;
+      }
+      focusComposerInput() {
+        return focusComposerInput();
+      }
+    },
+  );
   return {};
 });
 
 afterEach(() => {
+  focusComposerInput.mockClear();
+  mockComposerDisabled = false;
   window.getSelection()?.removeAllRanges();
   document.body.replaceChildren();
 });
@@ -76,6 +93,72 @@ it("captures external text, clears it on context changes, and retains the conver
     expect(view.container.querySelector("pre")?.textContent).not.toContain("Selected source text");
   });
   expect(view.container.querySelector("openclaw-chat-pane")).toBe(pane);
+});
+
+it("registers as the Home dock selection target only while active as Home and writable", async () => {
+  const dock = new AssistantDock();
+  let homeOpen = true;
+  dock.attach({
+    openSession: () => {},
+    closeSession: () => {},
+    get openSessionKey() {
+      return null;
+    },
+    get homeOpen() {
+      return homeOpen;
+    },
+  });
+  const context = {
+    ...createContext(
+      createGateway(createTestGatewayClient(async () => ({}))),
+      createSessions("main", []),
+    ),
+    assistantDock: dock,
+  };
+  const [homeDock, setHomeDock] = createSignal(true);
+  const view = mountSolid(() => (
+    <ApplicationProvider value={context}>
+      <HomeSession
+        sessionKey="agent:main:main"
+        agentId="main"
+        homeDock={homeDock()}
+        workContext={{ page: "chat", title: "Active task" }}
+      />
+    </ApplicationProvider>
+  ));
+  await waitForSolid(() => expect(dock.canAttachHomeSelection()).toBe(true));
+  const homeHost = view.container.querySelector("openclaw-home-session")!;
+  const outsideNode = document.createElement("p");
+  expect(dock.canAttachHomeSelection(outsideNode)).toBe(true);
+  expect(dock.canAttachHomeSelection(homeHost)).toBe(false);
+
+  // Removing context first proves external selection re-enables it and focuses the dock composer.
+  view.getByRole("button", { name: "Remove work context" }).click();
+  await waitForSolid(() => expect(view.container.querySelector("pre")).toBeNull());
+  chatInputOwnerForContext(context).claim("page");
+  expect(dock.attachHomeSelection("Quoted from work chat")).toBe(true);
+  await waitForSolid(() =>
+    expect(view.container.querySelector("pre")?.textContent).toContain("Quoted from work chat"),
+  );
+  expect(chatInputOwnerForContext(context).current).toBe("dock");
+  expect(focusComposerInput).toHaveBeenCalledOnce();
+
+  // Read-only Home disables selection handoff.
+  mockComposerDisabled = true;
+  expect(dock.canAttachHomeSelection()).toBe(false);
+  expect(dock.attachHomeSelection("Ignored while read-only")).toBe(false);
+  mockComposerDisabled = false;
+  expect(dock.canAttachHomeSelection()).toBe(true);
+
+  // Plugin sessions rendered in the same dock do not claim Home selection handoff.
+  setHomeDock(false);
+  await waitForSolid(() => expect(dock.canAttachHomeSelection()).toBe(false));
+  setHomeDock(true);
+  await waitForSolid(() => expect(dock.canAttachHomeSelection()).toBe(true));
+
+  homeOpen = false;
+  expect(dock.canAttachHomeSelection()).toBe(false);
+  view.unmount();
 });
 
 it.each([

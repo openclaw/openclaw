@@ -42,6 +42,7 @@ const enChatMessageMetadata = {
       actions: "Message actions",
       selectionActions: "Selection actions",
       askInSideChat: "Ask in side chat",
+      addToHomeAgent: "Add to Home agent",
       askInNewSession: "Ask in new session",
       newSessionOption: "New session",
       addToChat: "Add to chat",

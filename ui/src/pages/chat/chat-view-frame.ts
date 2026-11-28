@@ -68,6 +68,7 @@ export type ChatProps = Omit<
   | "commentAttachments"
   | "commentsDisabled"
   | "onAddToChat"
+  | "resolveHomeAgentSelection"
   | "onCompanionSelection"
   | "onNewSessionSelection"
   | "onOpenSidebar"
@@ -308,6 +309,17 @@ export function createChatViewFrame(
     onSteerNow:
       props.connected && props.canSteerNow && historyState
         ? (runId: string) => void mutateChatPendingInput(historyState, { kind: "steer", runId })
+        : undefined,
+    resolveHomeAgentSelection:
+      props.canSend && !props.suggestionComposer
+        ? (sourceNode) => {
+            const dock = props.applicationContext?.assistantDock;
+            return dock?.canAttachHomeSelection(sourceNode)
+              ? (selection) => {
+                  dock.attachHomeSelection(selection.text);
+                }
+              : undefined;
+          }
         : undefined,
     onCompanionSelection:
       props.canSend && !props.suggestionComposer && props.onCompanionStageAttachment

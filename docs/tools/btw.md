@@ -97,12 +97,16 @@ Highlighting text inside a chat message in the Control UI opens a small
 selection popup with **Add to chat**, **Ask in side chat**, and **New session**:
 
 - **Ask in side chat** opens Side chat and pre-fills its composer with a quoted
-  draft so you can type your own question about the selection.
+  draft so you can type your own question about the selection. When the Home
+  agent sidebar is open alongside another chat, this button becomes **Add to
+  Home agent** and attaches the selection to Home's work context instead.
+  Closing the sidebar or switching to **Ask OpenClaw** restores **Ask in side
+  chat**.
 - **New session** opens the new-session launcher with the selection attached
   instead; that starts an ordinary session rather than a side question.
 
-The action follows normal `/btw` semantics: the question and answer stay out
-of session history and the main run is left untouched.
+**Ask in side chat** follows normal `/btw` semantics: the question and answer
+stay out of session history and the main run is left untouched.
 
 ## When to use it
 

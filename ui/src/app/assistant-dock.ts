@@ -3,15 +3,22 @@ import { createChangeListeners } from "../../../src/shared/listeners.js";
 
 type SessionParams = Parameters<NonNullable<ControlUiHost["dock"]>["openSession"]>[0];
 
+export type HomeSelectionTarget = {
+  attachSelection: (text: string) => boolean;
+  canAttachSelection?: (sourceNode?: Node | null) => boolean;
+};
+
 export type AssistantDockOwner = {
   openSession: (params: SessionParams, activation: object) => void;
   closeSession: (activation?: object) => void;
   readonly openSessionKey: string | null;
+  readonly homeOpen?: boolean;
 };
 
 /** Application-local adapter. The mounted assistant panel owns all dock state. */
 export class AssistantDock {
   private owner: AssistantDockOwner | undefined;
+  private homeSelectionTarget: HomeSelectionTarget | undefined;
   private readonly listeners = createChangeListeners();
 
   attach(owner: AssistantDockOwner): () => void {
@@ -20,6 +27,17 @@ export class AssistantDock {
     return () => {
       if (this.owner === owner) {
         this.owner = undefined;
+        this.notify();
+      }
+    };
+  }
+
+  attachHomeSelectionTarget(target: HomeSelectionTarget): () => void {
+    this.homeSelectionTarget = target;
+    this.notify();
+    return () => {
+      if (this.homeSelectionTarget === target) {
+        this.homeSelectionTarget = undefined;
         this.notify();
       }
     };
@@ -38,6 +56,25 @@ export class AssistantDock {
 
   get openSessionKey(): string | null {
     return this.owner?.openSessionKey ?? null;
+  }
+
+  get homeOpen(): boolean {
+    return this.owner?.homeOpen === true;
+  }
+
+  canAttachHomeSelection(sourceNode?: Node | null): boolean {
+    return (
+      this.homeOpen &&
+      this.homeSelectionTarget !== undefined &&
+      this.homeSelectionTarget.canAttachSelection?.(sourceNode) !== false
+    );
+  }
+
+  attachHomeSelection(text: string): boolean {
+    if (!this.canAttachHomeSelection()) {
+      return false;
+    }
+    return this.homeSelectionTarget?.attachSelection(text) ?? false;
   }
 
   readonly subscribe = this.listeners.subscribe;

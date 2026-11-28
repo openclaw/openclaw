@@ -1,6 +1,7 @@
 import { truncateUtf16Safe } from "@openclaw/normalization-core/utf16-slice";
 import { createMemo, createSignal, Loading, onSettled, Show } from "solid-js";
 import { formatChatWorkContext } from "../../../src/chat/work-context.js";
+import { chatInputOwnerForContext } from "../app/chat-input-owner.ts";
 import { registerAssistantContextEnglish } from "../i18n/locales/en-assistant-context.ts";
 import { projectGateway } from "../lib/reactive/application.ts";
 import { useApplication } from "../lib/reactive/context.ts";
@@ -11,6 +12,7 @@ import {
   resolveHomeSession,
 } from "../lib/sessions/home-session.ts";
 import { resolveUiConfiguredMainKey } from "../lib/sessions/session-key.ts";
+import type { ChatPaneElement } from "../pages/chat/chat-pane.tsx";
 import type { ChatWorkContext } from "../pages/chat/chat-work-context.ts";
 import { HomeSessionUnavailable } from "./home-session-unavailable.tsx";
 import { Icon } from "./solid/icon.tsx";
@@ -22,7 +24,26 @@ import { LoadingState } from "./solid/loading-state.tsx";
 
 registerEnglishCatalog(registerAssistantContextEnglish);
 
-type Props = { sessionKey: string; agentId: string; workContext: ChatWorkContext };
+type Props = {
+  sessionKey: string;
+  agentId: string;
+  homeDock?: boolean;
+  workContext: ChatWorkContext;
+};
+
+function HomeSelectionTargetRegistration(props: {
+  attachSelection: (text: string) => boolean;
+  canAttachSelection: (sourceNode?: Node | null) => boolean;
+}) {
+  const app = useApplication();
+  onSettled(() =>
+    app.assistantDock?.attachHomeSelectionTarget({
+      attachSelection: (text) => props.attachSelection(text),
+      canAttachSelection: (sourceNode) => props.canAttachSelection(sourceNode),
+    }),
+  );
+  return null;
+}
 
 /** The real Home conversation; its surrounding dock owns placement and focus. */
 export function HomeSession(input: Partial<Props>) {
@@ -31,6 +52,7 @@ export function HomeSession(input: Partial<Props>) {
   const defaultWorkContext: ChatWorkContext = { page: "chat" };
   const workContext = () => input.workContext ?? defaultWorkContext;
   let host!: HTMLElement;
+  let pane: ChatPaneElement | undefined;
   const app = useApplication();
   const gateway = projectGateway(app.gateway);
   const connection = createMemo(
@@ -86,6 +108,18 @@ export function HomeSession(input: Partial<Props>) {
     updateSelectionAvailability();
     return stop;
   });
+  const attachSelectionText = (text: string, focus = false): boolean => {
+    if (!text.trim()) {
+      return false;
+    }
+    setSelection(truncateUtf16Safe(text, 640));
+    setIncludeContext(true);
+    if (focus) {
+      chatInputOwnerForContext(app).claim("dock");
+      pane?.focusComposerInput?.();
+    }
+    return true;
+  };
   const attachSelection = (event: MouseEvent) => {
     // Capture on the explicit action before focus clears the selection.
     event.preventDefault();
@@ -93,8 +127,7 @@ export function HomeSession(input: Partial<Props>) {
     if (!selected) {
       return;
     }
-    setSelection(truncateUtf16Safe(selected.toString(), 640));
-    setIncludeContext(true);
+    attachSelectionText(selected.toString());
   };
   return (
     <openclaw-home-session ref={(element) => (host = element)}>
@@ -150,9 +183,19 @@ export function HomeSession(input: Partial<Props>) {
       </div>
       <Loading fallback={<LoadingState />}>
         <Show when={available()} fallback={<HomeSessionUnavailable agentId={agentId()} />}>
+          <Show when={input.homeDock}>
+            <HomeSelectionTargetRegistration
+              attachSelection={(text) => attachSelectionText(text, true)}
+              canAttachSelection={(sourceNode) =>
+                pane?.composerElement?.disabled !== true &&
+                (!sourceNode || !host.contains(sourceNode))
+              }
+            />
+          </Show>
           <Show when={owner()} keyed>
             {(identity) => (
               <openclaw-chat-pane
+                ref={(element) => (pane = element)}
                 prop:paneId={`home-dock:${identity}`}
                 prop:presentationId={`home-dock:${identity}`}
                 prop:sessionKey={sessionKey()}
