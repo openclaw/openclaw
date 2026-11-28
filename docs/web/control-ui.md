@@ -137,8 +137,8 @@ along its bottom edge or with **Tab** from its main input, without losing text.
 Search finds commands and sessions; Compose prepares a new background session.
 While you are in Search, text of 60 characters or more, a second line, or a file
 moves the palette to Compose; emptying that draft returns it to Search. Choosing
-Search again keeps it for the current draft. Reopening the palette returns to the
-mode you last chose, not to an automatic switch. That choice is remembered in this
+Search again keeps it for the current draft. An empty palette reopens in the
+mode you last chose, not an automatic one. That choice is remembered in this
 browser, including after a reload, when browser storage is available.
 **Cmd/Ctrl+Enter** starts a new background session from either mode using the
 current text and attachments; plain **Enter** still selects a search result.
@@ -159,9 +159,9 @@ explains the failure and only that file is removed. You can manually start a
 session with the remaining text and files; a rejected file cancels a pending
 automatic start. File admission and size limits match the chat composer.
 
-Closing the palette keeps its attachment draft in memory for the same Gateway
-and account. When files moved the palette to Compose, removing them and clearing
-the instructions returns it to Search.
+Closing the palette keeps unsent Compose text and attachments in memory for the
+same Gateway and account. When files moved the palette to Compose, removing them
+and clearing the instructions returns it to Search.
 Reloading or leaving the app does not preserve this in-memory draft.
 
 ## Choose a session workspace
@@ -304,7 +304,9 @@ Saved desktop Details also restores session attribution, participant counts, and
 
 The saved Details snapshot also retains the running-process preview while reconnecting, so Processes does not appear later and push Automations down. Saved process rows cannot stop processes. Live process reads refresh the preview, remove finished processes, and hide it if access is denied.
 
-A short transcript loads at most one older page automatically when you open or reload a chat. It stops once the visible area is filled, without filling the backscroll buffer. Scroll up or choose **Show earlier** to continue loading older messages, even if the transcript still fits on screen. A reader action checks up to three consecutive pages when entries are empty, overlapping, or hidden by display preferences; longer hidden intervals remain available through another action. Transient read failures retry within the existing one-minute history-recovery budget, honoring the server’s backoff. Permission denials are not automatically retried. The touch-friendly history control keeps keyboard focus during loading and ignores repeated activation. Failed reads show **Retry earlier messages** at that same boundary without removing the loaded conversation. The **Show earlier** label stays steady while reconnecting or loading. The control exposes its busy and unavailable state to assistive technology and ignores activation until ready.
+A chat without saved history opens with up to 24 messages. Scroll up or choose **Show earlier** to read older messages, even if the transcript fits on screen. Find also loads earlier pages as you type. Reopening a chat can reuse its saved messages.
+
+If the opening page has no visible messages, or a restored transcript does not fill the screen, the chat can load one older page automatically. It does not fill the backscroll buffer. A reader action checks up to three consecutive pages when entries are empty, overlapping, or hidden by display preferences; longer hidden intervals remain available through another action. Transient read failures retry within the existing one-minute history-recovery budget, honoring the server’s backoff. Permission denials are not automatically retried. The touch-friendly history control keeps keyboard focus during loading and ignores repeated activation. Failed reads show **Retry earlier messages** at that same boundary without removing the loaded conversation. The **Show earlier** label stays steady while reconnecting or loading. The control exposes its busy and unavailable state to assistive technology and ignores activation until ready.
 
 Earlier history is offered only when the Gateway provides a cursor or a loaded transcript entry can anchor the request. Tool activity summaries do not prevent loading older messages. If neither boundary exists, the control stays hidden and automatic loading stops without an error.
 
@@ -367,6 +369,8 @@ over the worker's bulk download, which resumes after page requests settle.
 If the selected session changes while its message subscription is being admitted, chat retries that read with fresh access checks for up to one minute. Saved replies load after the subscription succeeds, without resending your message. Switching chats or losing access stops recovery; a persistent failure leaves **Retry** available.
 
 Opening a nested session from a **Waiting on** link, a direct URL, or browser history expands its owning sidebar group and session ancestors so you can see where the session belongs. Other branches keep their disclosure state, and ordinary refreshes do not undo a branch you collapse while staying in the same session.
+
+On a page reload, the sidebar remembers branches you opened manually. Branches opened automatically for another chat start collapsed; the sidebar still reveals the path to the nested chat you're opening.
 
 Use **Snooze → Choose another time** in a session menu to pick a future date and time in your browser’s local time zone. After a successful snooze, **Custom** shows that exact date and time in other session menus for one hour. Choosing another custom time replaces it; presets and Undo leave the remembered choice unchanged. The browser stores this choice separately for each Gateway and signed-in account, and removes it when it expires or the wake time passes. If browser storage is unavailable, the choice remains reusable only in the current page.
 
@@ -684,9 +688,10 @@ Folders are not downloadable. Downloads require the Control UI and its Gateway
 connection to share an origin (including a same-origin Gateway proxy).
 
 Detected PDFs opened from chat file links or the Files panel use the same
-browser-native preview as PDF attachments, up to 16 MiB. Preview failures and
-larger PDFs retain **Download file**. Rendering depends on your browser's PDF
-support; the generic text and image inline-preview limit is unchanged.
+browser-native preview as PDF attachments, up to 16 MiB. In browsers that support
+these settings, the PDF fits the preview pane's width and opens with page
+thumbnails collapsed. Preview failures and larger PDFs retain **Download file**.
+The generic text and image inline-preview limit is unchanged.
 Refreshing unchanged file metadata keeps the PDF reader's page and scroll
 position. The preview still reads fresh bytes and checks file access; changed
 contents reload the document, and selecting a different source replaces it.

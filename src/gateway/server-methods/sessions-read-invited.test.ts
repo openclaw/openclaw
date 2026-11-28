@@ -274,9 +274,7 @@ it.for(["chat.history", "sessions.get", "sessions.preview"] as const)(
     }),
 );
 
-it("progressCard.get retains invited access and rechecks it before publishing a prepared card", async ({
-  signal,
-}) =>
+it("progressCard.get finishes an admitted invited read after revocation", async ({ signal }) =>
   withInvitedRead(async (fixture) => {
     await progressCardStore.put(sessionKey, { markdown: "Synthetic member-only plan" }, "main");
     const dispatch = (viewer = fixture.client) => {
@@ -321,7 +319,6 @@ it("progressCard.get retains invited access and rechecks it before publishing a 
       return card;
     });
     const request = dispatch();
-    const rejected = expect(request.pending).rejects.toMatchObject(hidden);
     try {
       await withinTest(
         awaitGateBeforeSettlement(
@@ -334,7 +331,14 @@ it("progressCard.get retains invited access and rechecks it before publishing a 
       await fixture.revoke();
     } finally {
       release.resolve();
-      await rejected;
+      await request.pending;
     }
-    expect(request.respond).not.toHaveBeenCalled();
+    expect(request.respond).toHaveBeenCalledWith(
+      true,
+      { card: expect.objectContaining({ markdown: "Synthetic member-only plan" }) },
+      undefined,
+    );
+    const next = dispatch();
+    await expect(next.pending).rejects.toMatchObject(hidden);
+    expect(next.respond).not.toHaveBeenCalled();
   }));

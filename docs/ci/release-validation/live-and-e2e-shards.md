@@ -51,3 +51,28 @@ The native live media shards run in `ghcr.io/openclaw/openclaw-live-media-runner
 Release and scheduled live checks forward `KIE_API_KEY`, `NOVITA_API_KEY`, and `PIXVERSE_API_KEY` to the media workflow and its isolated live profile. Configure those repository secrets to exercise their video plugins; missing credentials do not qualify the selected full-release coverage.
 
 Docker-backed live model/backend shards use a separate shared `ghcr.io/openclaw/openclaw-live-test:<sha>-<extensions>` image per selected commit. The live release workflow builds and pushes that image once, then the Docker live model, provider-sharded gateway, CLI backend, ACP bind, and Codex harness shards run with `OPENCLAW_SKIP_DOCKER_BUILD=1`. Gateway Docker shards carry explicit script-level `timeout` caps below the workflow job timeout so a stuck container or cleanup path fails fast instead of consuming the whole release-check budget. If those shards rebuild the full source Docker target independently, the release run is misconfigured and will waste wall clock on duplicate image builds.
+
+## Frozen native clients against candidate source
+
+The iOS and Android release E2E workflows accept a frozen published client
+(`client_sha` and `client_release_tag`) separately from candidate Gateway source
+(`target_sha`) and the workflow/harness revision. Source selection does not grant
+the candidate access to the qualification checkout or its evidence.
+
+Candidate dependency installation, runtime build, Gateway startup, and CLI calls
+use the same platform isolation owner. Linux uses a nonroot Docker container with
+a private volume and scoped network rules; macOS uses a private unprivileged UID
+and a default-deny Seatbelt profile. The qualification harness retains native
+client execution, provider fixtures, and authoritative result files outside that
+boundary. Only synthetic runtime configuration and provider access cross it.
+Each workflow first runs a hostile synthetic source through the production
+install/build/runtime path and requires protected evidence, private runtime state,
+provider connectivity, and cleanup checks to pass. A setup or cleanup failure is
+a failed qualification, not successful isolation.
+
+These lanes require their existing Linux Docker or macOS native runner. They do
+not silently fall back to same-user execution. macOS uses `sandbox-exec` as an
+additional restriction around UID separation; this is not a claim that it is a
+supported general-purpose Apple sandbox API. Candidate diagnostics are untrusted;
+the resulting proof attests independently observed compatibility, not honest
+internal implementation by arbitrary candidate code.

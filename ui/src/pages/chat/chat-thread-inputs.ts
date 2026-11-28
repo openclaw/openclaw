@@ -90,16 +90,32 @@ export function placeChatInputs(
   );
   const acceptedKeys = new Map(blocks.map((block) => [block.items[0]!.key, block]));
   const historyItems = new Map(items.map((item) => [item.key, item]));
-  const newLocalInput = blocks.length
-    ? items.find((item) => {
+  const observedKeys = blocks.length ? new Set(orderState.keys) : undefined;
+  const lastObservedHistory = observedKeys
+    ? items.findLastIndex((item) => !historicalKeys.has(item.key) && observedKeys.has(item.key))
+    : -1;
+  // An observed startup floor has only custody keys. Missing history anchors
+  // alone cannot prove this: a disjoint older page also drops those anchors.
+  const observedOnlyCustody =
+    observedKeys &&
+    orderState.keys.every(
+      (key) =>
+        historicalKeys.has(key) ||
+        blocks.some((block) => block.items.some((item) => item.key === key)),
+    );
+  const newInput = observedKeys
+    ? items.find((item, index) => {
         const identity = item.kind === "message" ? readSessionMessageIdentity(item.message) : null;
         return (
           identity?.role === "user" &&
-          identity.sendId &&
-          identity.id === null &&
-          identity.sequence === null &&
           !identity.isImported &&
-          !orderState.keys.includes(item.key)
+          !historicalKeys.has(item.key) &&
+          !observedKeys.has(item.key) &&
+          ((identity.sendId && identity.id === null && identity.sequence === null) ||
+            // New saved turns can arrive without a local optimistic send.
+            // Only append history: an older page is not a custody successor.
+            ((identity.id !== null || identity.sequence !== null) &&
+              (observedOnlyCustody || (lastObservedHistory >= 0 && index > lastObservedHistory))))
         );
       })
     : undefined;
@@ -115,8 +131,8 @@ export function placeChatInputs(
             item?.kind === "message" && readSessionMessageIdentity(item.message)?.role === "user"
           );
         }) ??
-        // An ACK can arrive before the next local send has a previous position.
-        newLocalInput?.key;
+        // A new input can arrive before it has a previous position in this pane.
+        newInput?.key;
     }
   }
   for (const queued of queue) {

@@ -280,7 +280,6 @@ main.content:where(.content--logs-page) .content-header {
     display: flex;
     flex: 1 1 auto;
     height: auto;
-    min-height: 0;
   }
 
   .content.content--logs-page openclaw-logs-page {
@@ -291,16 +290,12 @@ main.content:where(.content--logs-page) .content-header {
   .content.content--logs-page .settings-workspace--fill-height > .settings-workspace__body {
     display: flex;
     flex: 1 1 auto;
-    flex-direction: column;
     height: auto;
-    min-height: 0;
   }
 
   .content.content--logs-page .settings-workspace--fill-height .logs-card {
     display: flex;
     flex: 1 1 auto;
-    flex-direction: column;
-    min-height: 0;
   }
 
   .content.content--logs-page .settings-workspace--fill-height .log-stream {

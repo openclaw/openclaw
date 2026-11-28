@@ -132,11 +132,13 @@ async function executeAdmitted<Key extends keyof PluginStateWorkerOperations>(
       capturedContext ?? captureOpenClawStateWorkerContext({ path: databasePath, env });
     if (checks.readDependency) {
       const identity = context.admission.identity.key;
-      recordPluginStateReadDependency({
-        ...checks.readDependency,
-        identity: identity.startsWith("file:") ? identity : undefined,
-        assertCurrent: context.admission.assertCurrent,
-      });
+      recordPluginStateReadDependency(
+        {
+          ...checks.readDependency,
+          identity: identity.startsWith("file:") ? identity : undefined,
+        },
+        context.admission,
+      );
     }
     // SAFETY: Key and input are correlated by every caller; this forms the dispatch union.
     const typedCommand = command as PluginStateCommand;

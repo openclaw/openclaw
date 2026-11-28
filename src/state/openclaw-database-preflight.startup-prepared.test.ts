@@ -152,7 +152,13 @@ it("still refuses an unmigrated reserved store without a recovery hold", async (
   const pathname = fleet.agent("openclaw").path;
   closeDatabases();
   revokeSqliteDatabaseAdmissionsForPath(pathname);
-  execSql(pathname, `PRAGMA user_version=${supportedVersions.agent - 1};`);
+  execSql(
+    pathname,
+    `BEGIN IMMEDIATE;
+    PRAGMA user_version=${supportedVersions.agent - 1};
+    UPDATE schema_meta SET schema_version=${supportedVersions.agent - 1} WHERE meta_key='primary';
+    COMMIT;`,
+  );
   await withImmediateAdmission(async () => {
     await expect(fleet.ready(agentConfig(["main"], "main"))).rejects.toThrow(
       `uses schema version ${supportedVersions.agent - 1}`,

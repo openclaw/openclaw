@@ -255,6 +255,7 @@ export function* assembleOpenClawCodingTools(
       ? yield {
           coreTools: {
             abortSignal: options?.abortSignal,
+            spillOwner: options?.spillOwner,
             prepareHostFileMutation: options?.prepareHostFileMutation,
             attachmentReadRoot,
             codingRoot,
@@ -271,6 +272,7 @@ export function* assembleOpenClawCodingTools(
             execDefaults: {
               ...options?.exec,
               ...effectiveExecPolicy,
+              spillOwner: options?.spillOwner,
               config: options?.exec?.config ?? options?.config,
               preparedRunEnvironment: options?.exec?.preparedRunEnvironment,
               reviewer: options?.exec?.reviewer ?? execConfig.reviewer,
@@ -319,10 +321,11 @@ export function* assembleOpenClawCodingTools(
               timeoutSec: options?.exec?.timeoutSec ?? execConfig.timeoutSec,
               approvalRunningNoticeMs:
                 options?.exec?.approvalRunningNoticeMs ?? execConfig.approvalRunningNoticeMs,
-              // Participation has no authority to create an uncapped completion turn.
-              notifyOnExit: participationCeiling
-                ? false
-                : (options?.exec?.notifyOnExit ?? execConfig.notifyOnExit),
+              // Participation cannot create an uncapped turn; a one-shot CLI has no next turn.
+              notifyOnExit:
+                participationCeiling || options?.oneShotCliRun
+                  ? false
+                  : (options?.exec?.notifyOnExit ?? execConfig.notifyOnExit),
               approvalFollowupMode: participationCeiling
                 ? undefined
                 : options?.exec?.approvalFollowupMode,

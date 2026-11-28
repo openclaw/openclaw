@@ -4,6 +4,7 @@ import {
   errorShape,
   type SessionsCreateParams,
 } from "../../../packages/gateway-protocol/src/index.js";
+import { visibleParentInputProvenance } from "../../agents/subagents/spawn/subagent-capabilities.js";
 import { executionIdentitySpawnAdmission } from "../../audit/execution-identity-spawn-admission.js";
 import { reportCreatedVisibleWorkSession } from "../../auto-reply/reply/visible-work-sessions.js";
 import { resolveControlUiSessionUrl } from "../../config/control-ui-link-base.js";
@@ -102,6 +103,9 @@ export function prepareSessionCreateOpening(params: {
         kind: "inter_session" as const,
         sourceSessionKey: creation.requesterSessionKey,
         sourceTool: spawn ? "sessions_spawn" : "sessions_create",
+        ...(spawn
+          ? visibleParentInputProvenance(caller.sessionKey, session.key, session.entry)
+          : {}),
       },
       suppressCommandInterpretation: true,
     },

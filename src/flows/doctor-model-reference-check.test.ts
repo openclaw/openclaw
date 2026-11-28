@@ -1,7 +1,11 @@
 import { afterEach, beforeEach, expect, it, vi } from "vitest";
+import { UTILITY_MODEL_NOT_OFFERED_NOTE } from "../commands/models/list.status-utility.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import * as gateway from "../gateway/call.js";
 import * as gatewayLock from "../infra/gateway-lock.js";
+import { setCurrentPluginMetadataSnapshot } from "../plugins/current-plugin-metadata.test-support.js";
+import { resolveInstalledPluginIndexPolicyHash } from "../plugins/installed-plugin-index-policy.js";
+import { createPluginMetadataSnapshotFixture } from "../plugins/plugin-metadata.test-support.js";
 import { modelReferenceCheck } from "./doctor-model-reference-check.js";
 
 afterEach(() => vi.restoreAllMocks());
@@ -94,6 +98,37 @@ it("uses only prepared Gateway warnings in Doctor", async () => {
       },
     }),
   );
+});
+
+it("notes when the Gateway substituted the main model for an unoffered utility model", async () => {
+  const cfg: OpenClawConfig = { agents: { defaults: { model: "fixture/primary" } } };
+  setCurrentPluginMetadataSnapshot(
+    createPluginMetadataSnapshotFixture(
+      {
+        plugins: [
+          {
+            id: "fixture",
+            modelCatalog: {
+              providers: { fixture: { defaultUtilityModel: "small", models: [{ id: "small" }] } },
+            },
+          },
+        ],
+      },
+      resolveInstalledPluginIndexPolicyHash(cfg),
+    ),
+    { config: cfg },
+  );
+  try {
+    vi.spyOn(gateway, "callGateway").mockResolvedValue({
+      models: [],
+      utilityModel: { modelRef: "fixture/primary", source: "provider-default" },
+    });
+    expect(await detect(cfg)).toContainEqual(
+      expect.objectContaining({ severity: "info", message: UTILITY_MODEL_NOT_OFFERED_NOTE }),
+    );
+  } finally {
+    setCurrentPluginMetadataSnapshot(undefined);
+  }
 });
 
 it("does not execute Gateway secret providers without Doctor's allow-exec opt-in", async () => {

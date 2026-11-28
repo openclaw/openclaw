@@ -34,9 +34,19 @@ export function summarizeDeliveryError(error: unknown): string {
   }
 }
 
-export function isIncompleteAnnounceAgentResultError(error: unknown): boolean {
-  const message = summarizeDeliveryError(error);
-  return /(?:incomplete terminal response|code=incomplete_result)\b/i.test(message);
+/**
+ * The failed requester turn produced no reply: it never started, or the model ended without a
+ * usable terminal response.
+ */
+export function failedBeforeVisibleReply(error: unknown): boolean {
+  return collectErrorGraphCandidates(error, (candidate) => [
+    candidate.cause,
+    candidate.error,
+    candidate.reason,
+  ]).some((candidate) => {
+    const record = asOptionalObjectRecord(candidate);
+    return record?.providerStarted === false || record?.code === "incomplete_result";
+  });
 }
 
 /** A partly sent reply must not fall back to a second text send. */

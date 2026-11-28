@@ -303,6 +303,16 @@ export class DraftPlaceState {
     );
   }
 
+  get savedProjectLookupFailed(): boolean {
+    const { preferredProjectRestore, preferredRemoteProjectRestore } = this.selection;
+    return (
+      Boolean(preferredProjectRestore || preferredRemoteProjectRestore) &&
+      !this.browser.projectsReady &&
+      !this.browser.projectsLoading &&
+      this.browser.projectCatalogError != null
+    );
+  }
+
   get placementPreferenceReady(): boolean {
     return (
       Boolean(this.deviceFolder) ||
@@ -747,8 +757,12 @@ export class DraftPlaceState {
     this.repositoryState.synchronizeProjectCheckout();
   }
 
+  /** Gateway-host fs.listDir needs operator.write; outside agent workspaces it needs admin. */
   browseAvailable(): boolean {
-    return this.gateway.connected && (this.isAdmin() || Boolean(this.workspacePath()));
+    return (
+      this.gateway.connected &&
+      (this.isAdmin() || (this.canWrite() && Boolean(this.workspacePath())))
+    );
   }
 
   worktreeAvailable(): boolean {

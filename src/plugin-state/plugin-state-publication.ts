@@ -75,12 +75,20 @@ export type PluginStateReadDependency = {
   keys: readonly string[];
 };
 
+type ReadSource = Pick<OpenClawStateWorkerContext["admission"], "isCurrent" | "assertCurrent">;
 type PluginStateReadCapture = {
-  dependencies: PluginStateReadDependency[];
-  assertions: Array<() => void>;
+  dependencies?: PluginStateReadDependency[];
+  sources?: ReadSource[];
   accepting: boolean;
+  current: boolean;
   keyCount: number;
 };
+
+const emptyDependencies: readonly PluginStateReadDependency[] = Object.freeze([]);
+const activeReadCaptures = resolveGlobalSingleton(
+  Symbol.for("openclaw.pluginStateActiveReadCaptures"),
+  () => new Set<PluginStateReadCapture>(),
+);
 
 const state = resolveGlobalSingleton(Symbol.for("openclaw.pluginStatePublication"), () => ({
   reads: new AsyncLocalStorage<PluginStateReadCapture>(),
@@ -124,6 +132,17 @@ publication.subscribeFacts((change) => {
       change.identity,
       (reconciliation.epochs.get(change.identity) ?? 0) + 1,
     );
+  }
+  if (change.kind === "committed" || change.kind === "unknown") {
+    for (const capture of activeReadCaptures) {
+      if (
+        capture.dependencies &&
+        pluginStateReadDependenciesAffected(capture.dependencies, change)
+      ) {
+        capture.current = false;
+        activeReadCaptures.delete(capture);
+      }
+    }
   }
 });
 
@@ -183,9 +202,10 @@ export const pluginStatePublication = {
   subscribeFacts: publication.subscribeFacts,
 };
 
-/** Record the actual keyed store read without opening or inspecting another database. */
+/** Record the store's owned keys without opening or inspecting another database. */
 export function recordPluginStateReadDependency(
-  dependency: PluginStateReadDependency & { assertCurrent?: () => void },
+  dependency: PluginStateReadDependency,
+  source?: ReadSource,
 ): void {
   const capture = state.reads.getStore();
   if (!capture) {
@@ -198,10 +218,19 @@ export function recordPluginStateReadDependency(
   if (capture.keyCount > 10_000) {
     throw new Error("Plugin state ownership reads exceeded 10,000 dependency keys");
   }
-  const { assertCurrent, ...source } = dependency;
-  capture.dependencies.push({ ...source, keys: [...source.keys] });
-  if (assertCurrent) {
-    capture.assertions.push(assertCurrent);
+  if (capture.dependencies) {
+    capture.dependencies.push(dependency);
+  } else {
+    // A read can only overlap a receipt after it has recorded a dependency.
+    capture.dependencies = [dependency];
+    activeReadCaptures.add(capture);
+  }
+  if (source) {
+    if (capture.sources) {
+      capture.sources.push(source);
+    } else {
+      capture.sources = [source];
+    }
   }
 }
 
@@ -236,45 +265,28 @@ export function pluginStateReadDependenciesAffected(
 /** Keep the transient witness until its consumer installs the dependencies in its own cache. */
 export async function capturePluginStateReadDependencies<T>(read: () => Promise<T>) {
   const capture: PluginStateReadCapture = {
-    dependencies: [],
-    assertions: [],
     accepting: true,
+    current: true,
     keyCount: 0,
   };
-  let active = true;
-  let changed = false;
-  const stop = pluginStatePublication.subscribeFacts((change) => {
-    if (pluginStateReadDependenciesAffected(capture.dependencies, change)) {
-      changed = true;
-    }
-  });
   const release = () => {
-    active = false;
-    capture.accepting = false;
-    stop();
-  };
-  const assertCurrent = () => {
-    if (!active || changed) {
-      throw new Error("Plugin state changed while preparing session ownership");
-    }
-    for (const assertSourceCurrent of capture.assertions) {
-      assertSourceCurrent();
-    }
+    capture.current = capture.accepting = false;
+    activeReadCaptures.delete(capture);
   };
   try {
     const value = await state.reads.run(capture, read);
     capture.accepting = false;
     return {
       value,
-      dependencies: Object.freeze(capture.dependencies),
-      assertCurrent,
-      isCurrent() {
-        try {
-          assertCurrent();
-          return true;
-        } catch {
-          return false;
+      dependencies: capture.dependencies ? Object.freeze(capture.dependencies) : emptyDependencies,
+      assertCurrent() {
+        if (!capture.current) {
+          throw new Error("Plugin state changed while preparing session ownership");
         }
+        capture.sources?.forEach((source) => source.assertCurrent());
+      },
+      isCurrent() {
+        return capture.current && (capture.sources?.every((source) => source.isCurrent()) ?? true);
       },
       release,
     };

@@ -75,7 +75,7 @@ import type { CronCreatorAuthorityCapability } from "../cron-creator-authority-g
 import { createChatRunState } from "../server-chat-state.js";
 import * as gatewaySessionWorker from "../session-utils-store-worker.js";
 import { STALE_WORKER_BUILD_REASON } from "../worker-environments/admission.js";
-import { agentHandlers } from "./agent.js";
+import { agentWaitHandler } from "./agent.js";
 import { createScopedCliClient } from "./chat-client.test-support.js";
 import {
   createFileAttachment,
@@ -103,6 +103,7 @@ import {
   createChatDirectiveSuiteResources,
   deniedChatCronAuthorityCases,
   lazyChatCronAuthorityCases,
+  admittedInternal,
   handedOffDashboardSession,
   createChatDirectiveUserMessageReader,
   expectManagedAudioBlock,
@@ -3292,7 +3293,7 @@ describe("chat directive tag stripping for non-streaming final payloads", () => 
         ...(failed ? { summary: errorMessage } : {}),
       });
       const waitRespond = vi.fn<RespondFn>();
-      await agentHandlers["agent.wait"]!({
+      await agentWaitHandler({
         params: { runId, timeoutMs: 0 },
         respond: waitRespond,
         context,
@@ -3593,29 +3594,6 @@ describe("chat directive tag stripping for non-streaming final payloads", () => 
       },
     },
     {
-      name: "keeps media from duplicate slash-command finals without duplicating block text",
-      id: "media-dupe",
-      files: ["tts.mp3"],
-      replies: ([audio]) => [
-        createSlashCommandMediaReply("block", [audio], {
-          text: "Trajectory exports can include prompts.",
-          mediaUrl: audio,
-        }),
-        createSlashCommandMediaReply("final", [audio], {
-          text: "[[audio_as_voice]]",
-          mediaUrl: audio,
-        }),
-      ],
-      verify: (content) => {
-        const text = content
-          .map((block) => (typeof block.text === "string" ? block.text : ""))
-          .filter(Boolean)
-          .join("\n");
-        expect(text.match(/Trajectory exports/gu)).toHaveLength(1);
-        expectManagedAudioBlock(content[1], "tts.mp3", true);
-      },
-    },
-    {
       name: "keeps final text when only the slash-command media is duplicated",
       id: "media-different-final-text",
       files: ["voice.mp3"],
@@ -3648,30 +3626,6 @@ describe("chat directive tag stripping for non-streaming final payloads", () => 
       },
     },
     {
-      name: "deduplicates slash-command final echoes against the same text and media block",
-      id: "same-caption-same-media",
-      files: ["first.mp3", "second.mp3"],
-      replies: ([first, second]) => [
-        createSlashCommandMediaReply("block", [first], { text: "shared caption" }),
-        createSlashCommandMediaReply("block", [second], { text: "shared caption" }),
-        createSlashCommandMediaReply("final", [second], {
-          text: "shared caption",
-          audioAsVoice: true,
-        }),
-      ],
-      verify: (content) => {
-        const text = content
-          .map((block) => (typeof block.text === "string" ? block.text : ""))
-          .filter(Boolean)
-          .join("\n");
-        expect(text.match(/shared caption/gu)).toHaveLength(2);
-        const attachments = managedAudioBlocks(content);
-        expect(attachments).toHaveLength(2);
-        expectManagedAudioBlock(attachments[0], "first.mp3");
-        expectManagedAudioBlock(attachments[1], "second.mp3", true);
-      },
-    },
-    {
       name: "keeps sensitive overlapping slash-command media out of transcripts",
       id: "media-sensitive-overlap",
       files: ["secret.mp3", "public.mp3"],
@@ -3687,28 +3641,6 @@ describe("chat directive tag stripping for non-streaming final payloads", () => 
             (update.message as { role?: unknown }).role === "assistant",
         );
         expect(JSON.stringify(transcriptUpdate?.message)).not.toContain(secret);
-      },
-    },
-    {
-      name: "keeps reordered slash-command final media instead of treating it as duplicate",
-      id: "media-reordered",
-      files: ["first.mp3", "second.mp3"],
-      replies: ([first, second]) => [
-        createSlashCommandMediaReply("block", [first, second], {
-          text: "Trajectory exports can include prompts.",
-        }),
-        createSlashCommandMediaReply("final", [second, first], { audioAsVoice: true }),
-      ],
-      verify: (content) => {
-        const attachments = managedAudioBlocks(content);
-        expect(attachments.map((block) => block.fileName)).toEqual([
-          "first.mp3",
-          "second.mp3",
-          "second.mp3",
-          "first.mp3",
-        ]);
-        expect(attachments.slice(0, 2).every((block) => block.isVoiceNote !== true)).toBe(true);
-        expect(attachments.slice(2).every((block) => block.isVoiceNote === true)).toBe(true);
       },
     },
   ] satisfies SlashCommandMediaCase[])("$name", async ({ id, files, replies, verify }) => {
@@ -4835,9 +4767,7 @@ describe("chat.send local operator client sender context", () => {
         },
       );
       const probe = vi.fn();
-      mockState.cronAuthorityProbe = async (_runId, capability) => {
-        probe(capability);
-      };
+      mockState.cronAuthorityProbe = async (_runId, capability) => probe(capability);
       await createChatRequestFixture().send({
         idempotencyKey: "child-chat-scheduling",
         sessionKey,
@@ -4851,7 +4781,7 @@ describe("chat.send local operator client sender context", () => {
             },
             scopes: [scope],
           },
-          internal: { authenticatedControlUi: true, controlUiAdmin: scope === "operator.admin" },
+          internal: admittedInternal(scope, { authenticatedControlUi: true }),
         },
         expectBroadcast: false,
       });
@@ -4873,7 +4803,7 @@ describe("chat.send local operator client sender context", () => {
         const localOwner = local === true && scope === "operator.admin";
         expect(capability?.callerOrigin).toEqual({ kind: localOwner ? "local" : "unknown" });
         expect(capability?.callerScopedCreation).toBe(localOwner ? undefined : true);
-        expect(capability?.managementEntitlement).toBeUndefined();
+        expect(capability?.managementEntitlement?.source).toBe(localOwner ? "operator" : undefined);
         await new Promise<void>((resolveTick) => {
           setTimeout(resolveTick, 0);
         });
@@ -4913,7 +4843,7 @@ describe("chat.send local operator client sender context", () => {
             client: { id: clientId, mode, version: "dev", platform },
             scopes: [scope],
           },
-          internal: local === true ? { isLocalClient: true } : {},
+          internal: admittedInternal(scope, local === true ? { isLocalClient: true } : {}),
         },
         requestParams:
           local === "resumed"

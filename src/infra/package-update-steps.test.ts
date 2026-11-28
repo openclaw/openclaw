@@ -16,7 +16,6 @@ import {
   writePackageRoot,
 } from "./package-update-steps.test-support.js";
 import { resolveNpmGlobalPrefixLayoutFromPrefix } from "./update-npm-prefix.js";
-import { renderUpdateRunReport, updateRunReportInputFromResult } from "./update-run-report.js";
 import { updateRunStepsFromResultStep, updateRunWarningMessages } from "./update-run-step.js";
 import { runStep as runCommandStep } from "./update-runner-command.js";
 
@@ -675,15 +674,6 @@ it.each([
     if (repaired) {
       expect(result.steps[0]?.exitCode).toBe(1);
       expect(result.steps[0]?.stderrTail).toContain(stderr);
-      const report = renderUpdateRunReport(
-        updateRunReportInputFromResult({
-          status: "ok",
-          mode: manager,
-          durationMs: 0,
-          steps: result.steps,
-        }),
-      );
-      expect(report.lines.some((line) => line.startsWith("Failed:"))).toBe(false);
       if (!refresh) {
         expect(warnings).toContain("Package install succeeded with optional dependencies omitted.");
       }

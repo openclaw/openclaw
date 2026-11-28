@@ -1,6 +1,7 @@
 import assert from "node:assert/strict";
 import { once } from "node:events";
 import fs from "node:fs";
+import { registerHooks } from "node:module";
 import path from "node:path";
 import { setImmediate } from "node:timers/promises";
 import { isMainThread, parentPort, Worker, workerData } from "node:worker_threads";
@@ -121,7 +122,10 @@ async function proveDefaultTargets(): Promise<void> {
   process.env.OPENCLAW_STATE_DIR = path.join(unsafe, "rejected-state");
   applyLoggingConfig(undefined);
   await withoutSyncFs(async () => {
-    await assert.rejects(getResolvedLoggerSettings(), /No safe OpenClaw temp root/);
+    await assert.rejects(
+      getResolvedLoggerSettings(),
+      /is writable by group or others and has no sticky bit/,
+    );
     child.warn("refused default target");
     await fileLogTransport.flush();
   });
@@ -220,8 +224,26 @@ await runWithWorkerStartObserver(
       sourceMapPolicy,
       "Logger construction must preserve the environment captured by runtime workers",
     );
-    await fileLogTransport.flush();
+    let lateWriterImport: string | undefined;
+    // An in-place update can remove the old hashed writer chunk before this first flush.
+    const hooks = isMainThread
+      ? undefined
+      : registerHooks({
+          resolve(specifier, context, nextResolve) {
+            if (/\/logger-file-worker(?:-[\w-]+)?\.[cm]?js$/.test(specifier)) {
+              lateWriterImport = specifier;
+              throw new Error("The old writer chunk is no longer installed");
+            }
+            return nextResolve(specifier, context);
+          },
+        });
+    try {
+      await fileLogTransport.flush();
+    } finally {
+      hooks?.deregister();
+    }
     if (!isMainThread) {
+      assert.equal(lateWriterImport, undefined, "Worker logging must not load the writer pool");
       if (!workerData.interruptAppend) {
         await proveInFlightRescue();
       }

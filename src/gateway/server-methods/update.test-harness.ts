@@ -237,7 +237,9 @@ require(process.argv[1]);`,
   }
 }
 
-export const sendGatewayLifecycleNoticeMock = vi.fn(async () => true);
+export const sendGatewayLifecycleNoticeMock = vi.fn<
+  typeof import("../server-restart-sentinel-notice.js").sendGatewayLifecycleNotice
+>(async () => true);
 export const resolveGatewayLifecycleNoticeRouteMock = vi.fn(
   ({
     deliveryContext,

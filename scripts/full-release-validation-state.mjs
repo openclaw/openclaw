@@ -56,6 +56,7 @@ import {
   releaseManifestChildEvidence,
   releaseManifestRootPublication,
 } from "./lib/full-release-manifest.mjs";
+import { INITIAL_NPM_PREPARATION_JOB } from "./lib/full-release-publication-inputs.mjs";
 import {
   BETA_FINAL_EVIDENCE_REUSE_POLICY,
   promotionSourceIdentity,
@@ -187,6 +188,7 @@ async function githubAttemptJobs(runId, runAttempt, signal) {
 
 const EFFECTIVE_PARENT_GATE_ENV = new Map([
   ["Prepare release npm artifacts", "NPM_PREPARATION_RESULT"],
+  [INITIAL_NPM_PREPARATION_JOB, "NPM_PREPARATION_RESULT"],
   ["Qualify release npm artifacts", "NPM_QUALIFICATION_RESULT"],
   ["Prepare exact plugin npm artifacts", "PLUGIN_NPM_PREPARATION_RESULT"],
   ["Prepare release Docker artifacts", "DOCKER_PREPARATION_RESULT"],
@@ -763,6 +765,7 @@ function publicationKnownBudget(record, evidenceReuse, reusedManifest) {
   const context = manifestContextFromEnvironment(source);
   const candidateRequest = candidateRequestFromEnvironment();
   const inputs = {
+    qualificationInputs: source.qualificationInputs,
     childPhaseVersion: 3,
     parentRunId: source.runId,
     parentRunAttempt: source.runAttempt,

@@ -1,3 +1,4 @@
+import { isUtf8 } from "node:buffer";
 import fsSync from "node:fs";
 import fs from "node:fs/promises";
 import { homedir } from "node:os";
@@ -275,7 +276,12 @@ async function collectMemoryFilesFromDir(
   if (operationalFailure) {
     throw new MemorySourceScanError(operationalFailure.path, operationalFailure.error);
   }
-  files.push(...scan.entries.map((entry) => entry.path).toSorted());
+  // oxlint-disable-next-line unicorn/no-array-sort -- map creates a private path array.
+  const paths = scan.entries.map((entry) => entry.path).sort();
+  // One directory can contain more paths than a single function call accepts.
+  for (const file of paths) {
+    files.push(file);
+  }
 }
 
 export async function listMemoryFiles(
@@ -377,12 +383,9 @@ export async function listMemoryFiles(
   return deduped;
 }
 
-async function readIndexingBuffer(
-  read: () => ReturnType<typeof readRegularFile>,
-  label: string,
-): Promise<Buffer | null> {
+async function readIndexingFile(read: () => ReturnType<typeof readRegularFile>, label: string) {
   try {
-    return (await retryTransientMemoryRead(read, label)).buffer;
+    return await retryTransientMemoryRead(read, label);
   } catch (error) {
     if (isFileMissingError(error)) {
       return null;
@@ -396,17 +399,17 @@ export async function buildFileEntry(
   workspaceDir: string,
   multimodal?: MemoryMultimodalSettings,
 ): Promise<MemoryFileEntry | null> {
-  const stat = await statEnumerableMemoryFile(absPath);
-  if (!stat) {
+  const admission = await statEnumerableMemoryFile(absPath);
+  if (!admission) {
     return null;
   }
   const normalizedPath = path.relative(workspaceDir, absPath).replace(/\\/g, "/");
   const multimodalSettings = multimodal ?? DISABLED_MULTIMODAL_SETTINGS;
   const modality = classifyMemoryMultimodalPath(absPath, multimodalSettings);
-  if (modality && stat.size > multimodalSettings.maxFileBytes) {
+  if (modality && admission.size > multimodalSettings.maxFileBytes) {
     return null;
   }
-  const buffer = await readIndexingBuffer(
+  const read = await readIndexingFile(
     () =>
       readRegularFile({
         filePath: absPath,
@@ -414,9 +417,11 @@ export async function buildFileEntry(
       }),
     modality ? `read multimodal memory file ${absPath}` : `read memory index file ${absPath}`,
   );
-  if (buffer === null) {
+  if (!read) {
     return null;
   }
+  // An editor can replace the admitted path before the guarded read opens it.
+  const { buffer, stat } = read;
   if (modality) {
     const mimeType = await detectMime({ buffer: buffer.subarray(0, 512), filePath: absPath });
     if (!mimeType || !mimeType.startsWith(`${modality}/`)) {
@@ -450,7 +455,8 @@ export async function buildFileEntry(
     absPath,
     mtimeMs: stat.mtimeMs,
     size: stat.size,
-    hash: sha256Hex(buffer.toString("utf-8")),
+    // Existing indexes hash replacement characters for malformed UTF-8.
+    hash: sha256Hex(isUtf8(buffer) ? buffer : buffer.toString("utf-8")),
     kind: "markdown",
   };
 }
@@ -471,13 +477,14 @@ export async function buildMultimodalChunkForIndexing(
   if (regularFile.stat.size !== entry.size) {
     return null;
   }
-  const buffer = await readIndexingBuffer(
+  const read = await readIndexingFile(
     () => readRegularFile({ filePath: entry.absPath, maxBytes: entry.size }),
     `read multimodal indexing file ${entry.absPath}`,
   );
-  if (buffer === null) {
+  if (!read) {
     return null;
   }
+  const { buffer } = read;
   const dataHash = sha256Hex(buffer);
   if (entry.dataHash && entry.dataHash !== dataHash) {
     return null;

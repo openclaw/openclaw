@@ -92,7 +92,7 @@ Older or missing receipts require stopping the owned lease and allocating a
 fresh one through the wrapper. `OPENCLAW_TESTBOX_ALLOW_STALE` cannot bypass
 these checks. All providers require Crabbox 0.83.2 or newer.
 
-For direct and coordinator-managed leases, TTL is total lifetime from creation, including hydration; idle timeout is the inactivity window, and the earlier deadline wins. Crabbox defaults both to 30 minutes and the maximum to four hours; coordinator owner or organization overrides and trusted direct-provider configuration can allow up to 24 hours. Read effective policy and clamp notices rather than assuming the requested duration was granted. `--keep` skips normal command cleanup but does not prevent expiry. Plain heartbeats and manual desktop use do not extend total TTL; `run` requests bounded auto-extension only while the command executes. Creation-fixed providers need enough TTL at allocation. Extension refusals and budget exhaustion do not authorize another provider or an unlimited chain of leases.
+For ordinary provisioned/direct leases, TTL is total lifetime from creation, including hydration; idle timeout is the inactivity window once ready, and the earlier deadline wins. Registered broker leases and delegated/native routes retain their own lifetime contract. Crabbox defaults both to 30 minutes and the maximum to four hours; coordinator owner or organization overrides and trusted direct-provider configuration can allow up to 24 hours. Read effective policy and clamp notices rather than assuming the requested duration was granted. `--keep` skips normal command cleanup but does not prevent expiry. Plain heartbeats and manual desktop use do not extend total TTL; `run` requests bounded auto-extension only while the command executes. Creation-fixed providers need enough TTL at allocation. Extension refusals and budget exhaustion do not authorize another provider or an unlimited chain of leases.
 
 Crabbox trusted configuration owns `directLeases: deny` and its `directLeaseAllow` exceptions; use its configured coordinator route instead of direct credentials when denied. Coordinator-backed `crabbox list` shows live leases by default; `--retained` adds kept terminal resources whose cleanup is unconfirmed. Retain the exact lease ID and local recovery state until blocking `crabbox stop --provider <provider> --id <lease> --wait` confirms cleanup. A successful workload or a missing live-list row is not cleanup proof.
 
@@ -228,7 +228,7 @@ See [runner limits](/ci/runners#testbox-spending-limits) for queue behavior.
 
 ## Crabbox repository setup
 
-The [Crabbox skill](https://github.com/openclaw/openclaw/blob/main/.agents/skills/crabbox/SKILL.md)
+The [Crabbox skill](https://github.com/openclaw/agent-skills/blob/main/skills/crabbox/SKILL.md)
 owns portable lease, trust, sync, and cleanup procedures. This section owns the
 OpenClaw wrapper and workflow inputs. Routine task-needed Crabbox/Testbox use
 and task-owned worktrees do not require another confirmation; preserve unrelated

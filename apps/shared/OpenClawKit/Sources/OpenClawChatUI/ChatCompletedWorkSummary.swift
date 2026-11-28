@@ -4,8 +4,8 @@ import OpenClawKit
 enum ChatCompletedWorkSummary {
     /// Completed work names only its elapsed time (web chat-work-group-summary.tsx:56-62); an
     /// activity run names what it did.
-    static func label(work: ChatTranscriptRow.CompletedWork) -> String {
-        if work.isActivityRun { return self.activityHeadline(work.messages) }
+    static func label(work: ChatTranscriptRow.CompletedWork, liveTools: [OpenClawChatPendingToolCall] = []) -> String {
+        if work.isActivityRun { return self.activityHeadline(work.messages, liveTools: liveTools) }
         return self.workedFor(work.durationMilliseconds) ?? String(localized: "Worked")
     }
 
@@ -15,38 +15,70 @@ enum ChatCompletedWorkSummary {
             .map { String(format: String(localized: "Worked for %@"), $0) }
     }
 
-    /// "Ran commands, read files": each kind of operation once, in a fixed order, by its phase;
-    /// outcomes other than failure follow. Failures stay on their own rows
-    /// (web describeToolGroup and summarizeToolGroup, lib/chat/tool-call-grouping.ts:33-178).
-    static func activityHeadline(_ messages: [OpenClawChatMessage]) -> String {
+    /// "Read and changed files, ran commands": each kind of work once, in the web's order and words, by its
+    /// phase; outcomes other than failure follow. Failures stay on their own rows
+    /// (web describeToolGroup and summarizeToolGroup, ui/src/lib/chat/tool-call-grouping.ts, main 1b06bd7b898e).
+    static func activityHeadline(
+        _ messages: [OpenClawChatMessage],
+        liveTools: [OpenClawChatPendingToolCall] = []) -> String
+    {
         var seen = Set<[String]>()
         var items: [ChatToolActivityItem] = []
         for message in messages {
-            for item in ChatToolActivity.items(message: message) where item.isVisible {
+            let live = liveTools.filter { $0.runID == message.workRunID }
+            for item in ChatToolActivity.items(message: message, liveTools: live) where item.isVisible {
                 if seen.insert([message.workRunID ?? "", item.id]).inserted { items.append(item) }
             }
         }
+        return self.headline(items)
+    }
+
+    static func headline(_ items: [ChatToolActivityItem]) -> String {
         let grouped = Dictionary(grouping: items, by: Kind.init)
-        var otherTools: [String] = []
-        for item in grouped[.other] ?? [] {
-            let call = ToolDisplayRegistry.displayCall(name: item.name, args: item.arguments)
-            guard let name = call.name, name.lowercased() != "sessions_spawn" else { continue }
-            let title = ToolDisplayRegistry.resolve(name: name, args: call.args).title
-            if !otherTools.contains(title) { otherTools.append(title) }
+        func isRunning(_ item: ChatToolActivityItem) -> Bool {
+            item.displayState == .running
         }
+        func isCompleted(_ item: ChatToolActivityItem) -> Bool {
+            item.displayState == .finished ||
+                (![.blocked, .skipped].contains(item.displayState) && item.exitCode != nil)
+        }
+        func phase(_ actions: [ChatToolActivityItem]) -> Phase {
+            actions.contains(where: isRunning) ? .running : actions.contains(where: isCompleted) ? .summary : .pending
+        }
+        let reads = grouped[.reads] ?? []
+        let changes = grouped[.changes] ?? []
+        let hasFileWork = !reads.isEmpty || !changes.isEmpty
+        // Combine the same kind of work only when both verbs describe the recorded state.
+        let combineFiles = !reads.isEmpty && !changes.isEmpty && phase(reads) == phase(changes)
+        let meaningfulWork = grouped.contains { $0.key != .other && !$0.value.isEmpty }
         let phrases = Kind.allCases.compactMap { kind -> String? in
-            guard let members = grouped[kind], !members.isEmpty else { return nil }
-            let running = kind != .subagents && members.contains { $0.displayState == .running }
-            let completed = members.contains {
-                $0.displayState == .finished || ($0.displayState == .failed && $0.exitCode != nil)
+            guard let actions = grouped[kind], !actions.isEmpty, !(combineFiles && kind == .changes) else { return nil }
+            // Completed discovery supports file work; active, uncertain and write operations keep their labels.
+            if actions.allSatisfy({ isCompleted($0) && !isRunning($0) }) {
+                if kind == .other, meaningfulWork { return nil }
+                let discovery = kind == .searches || (kind == .memory && !actions.contains(where: \.updatesMemory))
+                if hasFileWork, discovery { return nil }
             }
-            if kind == .other, !otherTools.isEmpty {
-                let tools = otherTools.joined(separator: ", ")
-                return String(
-                    format: running ? String(localized: "Calling %@") : String(localized: "Called %@"),
-                    tools)
+            switch kind {
+            case .memory:
+                let updates = actions.filter(\.updatesMemory)
+                let memoryReads = actions.filter { !$0.updatesMemory }
+                if updates.contains(where: isRunning) { return String(localized: "Updating memory") }
+                if memoryReads.contains(where: isRunning) { return String(localized: "Reading memory") }
+                if updates.contains(where: isCompleted) {
+                    return memoryReads.contains(where: isCompleted)
+                        ? String(localized: "Read and updated memory") : String(localized: "Updated memory")
+                }
+                return memoryReads.contains(where: isCompleted)
+                    ? String(localized: "Read memory") : String(localized: "Memory operations")
+            case .subagents:
+                return actions.contains(where: isCompleted)
+                    ? String(localized: "Launched subagents") : String(localized: "Subagent launches")
+            case .reads where combineFiles:
+                return Kind.readChangesLabel(phase(actions))
+            default:
+                return kind.label(phase(actions))
             }
-            return running ? kind.running : completed ? kind.summary : kind.pending
         }
         let label = phrases.enumerated().map { index, phrase in
             index == 0 ? phrase : phrase.prefix(1).lowercased() + phrase.dropFirst()
@@ -60,24 +92,30 @@ enum ChatCompletedWorkSummary {
         return ([label] + outcomes).filter { !$0.isEmpty }.joined(separator: " · ")
     }
 
-    /// Order is the order a headline lists them (web describeToolGroup counts).
+    private enum Phase { case running, summary, pending }
+
+    /// Order is the order a headline lists them (web describeToolGroup groups).
     private enum Kind: CaseIterable {
-        case commands, reads, edits, writes, searches, fetches
-        case skillSearches, skillReads, waits, questions
-        case other, subagents
+        case reads, changes, commands, searches, fetches, memory, messages, waits, questions, other, subagents
 
         init(_ item: ChatToolActivityItem) {
             let call = ToolDisplayRegistry.displayCall(name: item.name, args: item.arguments)
-            switch call.name?.trimmingCharacters(in: .whitespacesAndNewlines).lowercased() ?? "" {
+            let name = call.name?.trimmingCharacters(in: .whitespacesAndNewlines).lowercased() ?? ""
+            if item.commandPreview != nil {
+                self = .commands
+                return
+            }
+            switch name {
             case "exec", "bash", "shell", "run_command", "run_terminal_cmd": self = .commands
-            case "read", "read_file", "readfile", "notebookread", "notebook_read": self = .reads
+            case "read", "read_file", "readfile", "notebookread", "notebook_read", "skills_read": self = .reads
             case "edit", "apply_patch", "applypatch", "patch", "edit_file", "multiedit", "multi_edit",
-                 "notebookedit", "notebook_edit": self = .edits
-            case "write", "write_file", "create_file": self = .writes
-            case "grep", "glob", "find", "ls", "list", "codebase_search", "web_search": self = .searches
+                 "notebookedit", "notebook_edit", "write", "write_file", "create_file": self = .changes
+            case "grep", "glob", "find", "ls", "list", "codebase_search", "web_search", "skills_search",
+                 "memory_search", "knowledge_grep": self = .searches
             case "web_fetch", "webfetch", "fetch": self = .fetches
-            case "skills_search": self = .skillSearches
-            case "skills_read": self = .skillReads
+            case "memory_get", "knowledge_record", "knowledge_records", "knowledge_lookup", "knowledge_remember",
+                 "knowledge_edit_body", "knowledge_save_page", "knowledge_create_claim": self = .memory
+            case "sessions_send", "conversations_send": self = .messages
             case "agents_wait": self = .waits
             case "ask_user": self = .questions
             case "sessions_spawn":
@@ -88,56 +126,70 @@ enum ChatCompletedWorkSummary {
             }
         }
 
-        /// web i18n/locales/en-chat-tool-labels.ts:93-171
-        var running: String {
-            switch self {
-            case .commands: String(localized: "Running commands")
-            case .reads: String(localized: "Reading files")
-            case .edits: String(localized: "Editing files")
-            case .writes: String(localized: "Writing files")
-            case .searches: String(localized: "Searching")
-            case .fetches: String(localized: "Fetching pages")
-            case .skillSearches: String(localized: "Searching skills")
-            case .skillReads: String(localized: "Reading skills")
-            case .waits: String(localized: "Waiting for agents")
-            case .questions: String(localized: "Asking questions")
-            case .other: String(localized: "Performing actions")
-            case .subagents: String(localized: "Launched subagents")
+        static func readChangesLabel(_ phase: Phase) -> String {
+            switch phase {
+            case .running: String(localized: "Reading and changing files")
+            case .summary: String(localized: "Read and changed files")
+            case .pending: String(localized: "File reads and changes")
             }
         }
 
-        var summary: String {
-            switch self {
-            case .commands: String(localized: "Ran commands")
-            case .reads: String(localized: "Read files")
-            case .edits: String(localized: "Edited files")
-            case .writes: String(localized: "Wrote files")
-            case .searches: String(localized: "Searched")
-            case .fetches: String(localized: "Fetched pages")
-            case .skillSearches: String(localized: "Searched skills")
-            case .skillReads: String(localized: "Read skills")
-            case .waits: String(localized: "Waited for agents")
-            case .questions: String(localized: "Asked questions")
-            case .other: String(localized: "Performed actions")
-            case .subagents: String(localized: "Launched subagents")
+        /// web i18n/locales/en-chat-tool-labels.ts `activity` (memory and subagents are phrased above).
+        func label(_ phase: Phase) -> String {
+            let (running, summary, pending): (String, String, String) = switch self {
+            case .reads: (
+                    String(localized: "Reading files"),
+                    String(localized: "Read files"),
+                    String(localized: "File reads"))
+            case .changes:
+                (
+                    String(localized: "Changing files"),
+                    String(localized: "Changed files"),
+                    String(localized: "File changes"))
+            case .commands:
+                (
+                    String(localized: "Running commands"),
+                    String(localized: "Ran commands"),
+                    String(localized: "Commands"))
+            case .searches: (
+                    String(localized: "Searching"),
+                    String(localized: "Searched"),
+                    String(localized: "Searches"))
+            case .fetches:
+                (
+                    String(localized: "Fetching pages"),
+                    String(localized: "Fetched pages"),
+                    String(localized: "Page fetches"))
+            case .messages:
+                (
+                    String(localized: "Sending messages"),
+                    String(localized: "Sent messages"),
+                    String(localized: "Message sends"))
+            case .waits: (
+                    String(localized: "Waiting for agents"),
+                    String(localized: "Waited for agents"),
+                    String(localized: "Wait for agents"))
+            case .questions: (
+                    String(localized: "Asking questions"),
+                    String(localized: "Asked questions"),
+                    String(localized: "Question requests"))
+            case .other, .memory, .subagents:
+                (String(localized: "Using tools"), String(localized: "Used tools"), String(localized: "Tool calls"))
+            }
+            return switch phase {
+            case .running: running
+            case .summary: summary
+            case .pending: pending
             }
         }
+    }
+}
 
-        var pending: String {
-            switch self {
-            case .commands: String(localized: "Commands")
-            case .reads: String(localized: "File reads")
-            case .edits: String(localized: "File edits")
-            case .writes: String(localized: "File writes")
-            case .searches: String(localized: "Searches")
-            case .fetches: String(localized: "Page fetches")
-            case .skillSearches: String(localized: "Skill searches")
-            case .skillReads: String(localized: "Skill reads")
-            case .waits: String(localized: "Wait for agents")
-            case .questions: String(localized: "Question requests")
-            case .other: String(localized: "Actions")
-            case .subagents: String(localized: "Subagent launches")
-            }
-        }
+extension ChatToolActivityItem {
+    /// Knowledge tools that change memory rather than read it (web MEMORY_UPDATE_TOOLS).
+    fileprivate var updatesMemory: Bool {
+        let call = ToolDisplayRegistry.displayCall(name: self.name, args: self.arguments)
+        return ["knowledge_remember", "knowledge_edit_body", "knowledge_save_page", "knowledge_create_claim"]
+            .contains(call.name?.trimmingCharacters(in: .whitespacesAndNewlines).lowercased() ?? "")
     }
 }

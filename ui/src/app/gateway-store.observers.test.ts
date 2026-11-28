@@ -14,6 +14,7 @@ import { invalidateModelCatalogCache } from "../lib/model-catalog-cache.ts";
 import { loadModelCatalog } from "../lib/model-catalog-store.ts";
 import { requestSessionList } from "../lib/sessions/session-requests.ts";
 import { cronJobsListResponse } from "../test-helpers/cron.ts";
+import { createGatewayControlUiReloadOptions } from "./gateway-control-ui-reload.ts";
 import {
   createGatewayEvent,
   createGatewayStoreTestStore as createStore,
@@ -21,7 +22,7 @@ import {
   stubGatewayStoreTestGlobals,
 } from "./gateway-store.test-support.ts";
 import { loadSettings } from "./settings.ts";
-import type { scheduleStaleChunkReload } from "./stale-chunk-reload.ts";
+import { reloadAfterRenderErrorOnce, type scheduleStaleChunkReload } from "./stale-chunk-reload.ts";
 
 const { scheduleStaleChunkReloadMock } = vi.hoisted(() => ({
   scheduleStaleChunkReloadMock: vi.fn<typeof scheduleStaleChunkReload>(async () => true),
@@ -45,6 +46,23 @@ vi.mock("../build-info.ts", () => ({
         ? identity.buildId !== "test"
         : Boolean(identity.version && identity.version !== "2026.7.19"),
 }));
+
+function stubReloadDocument() {
+  const replace = vi.fn();
+  const location = Object.assign(new URL("http://127.0.0.1:18789/chat/main"), { replace });
+  vi.stubGlobal("window", Object.assign(new EventTarget(), { location }));
+  vi.stubGlobal(
+    "document",
+    Object.assign(new EventTarget(), {
+      documentElement: { getAttribute: () => null },
+      querySelector: () => null,
+    }),
+  );
+  const probe = createDeferred<Response>();
+  const fetchMock = vi.fn<typeof fetch>(() => probe.promise);
+  vi.stubGlobal("fetch", fetchMock);
+  return { replace, probe, fetchMock };
+}
 
 describe("createApplicationGateway connection ownership", () => {
   let gateway: ReturnType<typeof createStore>["gateway"];
@@ -330,18 +348,8 @@ describe("createApplicationGateway connection ownership", () => {
     const actual =
       await vi.importActual<typeof import("./stale-chunk-reload.ts")>("./stale-chunk-reload.ts");
     scheduleStaleChunkReloadMock.mockImplementationOnce(actual.scheduleStaleChunkReload);
-    const fetchMock = vi.fn<typeof fetch>().mockResolvedValue(new Response(null, { status: 200 }));
-    vi.stubGlobal("fetch", fetchMock);
-    const replace = vi.fn();
-    const location = Object.assign(new URL("http://127.0.0.1:18789/chat/main"), { replace });
-    vi.stubGlobal("window", Object.assign(new EventTarget(), { location }));
-    vi.stubGlobal(
-      "document",
-      Object.assign(new EventTarget(), {
-        documentElement: { getAttribute: () => null },
-        querySelector: () => null,
-      }),
-    );
+    const { replace, fetchMock } = stubReloadDocument();
+    fetchMock.mockResolvedValue(new Response(null, { status: 200 }));
     ({ gateway, current } = createStore({
       clientOptions: { clientName: "openclaw-ios", mode: "ui" },
     }));
@@ -365,6 +373,50 @@ describe("createApplicationGateway connection ownership", () => {
     expect(current().testOptions.bootstrapProfile).toBeUndefined();
     expect(sessionStorage.getItem("openclaw.controlUi.staleChunkReloadBuildId")).toBeNull();
   });
+
+  it.each([
+    "first hello",
+    "reconnect",
+    "reauthentication",
+    "bootstrap token",
+    "bootstrap profile",
+    "stale build",
+  ])(
+    "settles pending render recovery under the current hello authority: %s",
+    async (transition) => {
+      const { replace, probe, fetchMock } = stubReloadDocument();
+      gateway.connect({
+        bootstrapToken: transition === "bootstrap token" ? "synthetic-bootstrap" : "",
+        bootstrapProfile: transition === "bootstrap profile" ? "owner" : undefined,
+      });
+      if (transition === "reconnect" || transition === "reauthentication") {
+        current().testOptions.onHello?.(HELLO);
+        current().testOptions.onClose?.({
+          code: transition === "reauthentication" ? 1008 : 1006,
+          reason: "connection lost",
+          willRetry: transition !== "reauthentication",
+          ...(transition === "reauthentication"
+            ? { error: { code: "PAIRING_REQUIRED", message: "Pair again" } }
+            : {}),
+        });
+        if (transition === "reauthentication") {
+          gateway.connect();
+        }
+      }
+      const recovery = reloadAfterRenderErrorOnce(createGatewayControlUiReloadOptions(gateway));
+      expect(fetchMock).toHaveBeenCalledOnce();
+      current().testOptions.onHello?.({
+        ...HELLO,
+        ...(transition === "stale build"
+          ? { server: { version: "2026.7.19", buildId: "replacement-build", connId: "test" } }
+          : {}),
+      });
+      probe.resolve(new Response(null, { status: 200 }));
+      const shouldReload = transition === "first hello";
+      expect(await recovery).toBe(shouldReload);
+      expect(replace).toHaveBeenCalledTimes(shouldReload ? 1 : 0);
+    },
+  );
 
   it("keeps legacy version fallback on reconnect instead of first admission", () => {
     gateway.start();

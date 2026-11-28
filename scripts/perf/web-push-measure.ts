@@ -19,6 +19,7 @@ import { parseArgs } from "node:util";
 import webPush from "web-push";
 import { prepareWebPushNotificationSender } from "../../src/infra/push-web.js";
 import { resolveSystemBin } from "../../src/infra/resolve-system-bin.js";
+import { startCollectedHeapSampling } from "../lib/heap-sampling.ts";
 
 const { values } = parseArgs({
   options: {
@@ -144,12 +145,7 @@ try {
     await send(params);
   }
   if (values.mode === "allocation") {
-    inspector.connect();
-    await inspector.post("HeapProfiler.startSampling", {
-      samplingInterval: 4096,
-      includeObjectsCollectedByMajorGC: true,
-      includeObjectsCollectedByMinorGC: true,
-    });
+    await startCollectedHeapSampling(inspector, 4096);
   }
   observer.observe({ entryTypes: ["gc"] });
   const blocked: number[] = [];

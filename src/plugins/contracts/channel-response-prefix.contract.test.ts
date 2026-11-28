@@ -26,6 +26,7 @@ describe("channel responsePrefix config admission", () => {
       for (const responsePrefix of ["[bot]", "auto", "", "[{model}]", 42]) {
         const values: Record<string, unknown>[] = [{ ...config, responsePrefix }];
         if (accounts) {
+          values.push({ accounts: { default: { ...config, responsePrefix } } });
           values.push({ responsePrefix, accounts: { default: { ...config, responsePrefix } } });
         }
         for (const value of values) {

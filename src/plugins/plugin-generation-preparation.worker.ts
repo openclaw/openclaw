@@ -314,6 +314,14 @@ function createPreparationSession(
             }
             for (const [key, receipt] of state.receipts) {
               sentReceipts.set(key, receipt);
+              // Transfer preserves shared member data but drops its frozen descriptor. Only
+              // distinct admission shells borrow a published index; live receipts keep their identity.
+              for (const [id, persisted] of Object.entries(receipt.nativeNamespaces)) {
+                const current = state.namespaces.get(id);
+                if (current && current !== persisted && current.members === persisted.members) {
+                  Object.freeze(current.members);
+                }
+              }
             }
             if (command.inspection) {
               // Inspection's host capture wrapper must stay outside worker bootstrap.
@@ -437,6 +445,17 @@ function createPreparationSession(
               });
               if (command.retainSourceCustody) {
                 result = { sourceDigest: artifact.sourceDigest };
+              } else if (command.independentOperationSource) {
+                // The host copies this pinned graph directly into its independent broker claim.
+                // Keep the seed and its native references until it acknowledges physical custody.
+                if (!artifact.describeSourceCustody) {
+                  throw new Error("Plugin operation source custody is unavailable");
+                }
+                const transfer = artifact.describeSourceCustody();
+                if (transfer.source.native) {
+                  own(transfer.source.native);
+                }
+                result = transfer;
               } else {
                 const custody = artifact.retainSourceCustody();
                 failedCapture = custody.source;

@@ -54,7 +54,8 @@ function createRefreshHarness(method: "cron.status" | "cron.runs") {
       return read;
     },
     settle: () => Promise.all(loads),
-    error: () => (method === "cron.status" ? state.cronError : state.cronRunsError),
+    error: () =>
+      method === "cron.status" ? state.cronError : (state.cronRunsError?.detail ?? null),
     revision: () => (method === "cron.status" ? state.cronStatus?.jobs : state.cronRuns[0]?.ts),
   };
 }

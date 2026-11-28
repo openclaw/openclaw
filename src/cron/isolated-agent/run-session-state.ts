@@ -18,6 +18,7 @@ import { readSessionTranscriptWatermarkAsync } from "../../config/sessions/sessi
 import type { SessionScheduledMemoryParent } from "../../config/sessions/types.js";
 import { isSessionWorkStartInvalidatedError } from "../../config/sessions/work-start-error.js";
 import { withSessionTurn } from "../../sessions/session-controller.admission.js";
+import { AmbiguousSessionControllerError } from "../../sessions/session-controller.contracts.js";
 import {
   beginSessionEffect,
   captureSessionTarget,
@@ -84,6 +85,7 @@ export type MutableCronSession = ReturnType<typeof resolveCronSession> & {
 export type CronSessionRowWriter = (params: {
   operation: Extract<SessionEntryPatchOperation, { kind: "cron-session" }>;
   resetBoundary?: SessionResetBoundaryWrite;
+  storeAdmission?: object;
   sessionKey: string;
   storePath: string;
   assertCommitAllowed?: () => void;
@@ -93,6 +95,7 @@ export type CronSessionRowWriter = (params: {
 export type PersistCronSessionEntry = (
   assertCommitAllowed?: () => void,
   entry?: SessionEntry,
+  storeAdmission?: object,
 ) => Promise<void>;
 
 /** Hidden exact-run row retained while detached cron work can still resume. */
@@ -163,6 +166,21 @@ export async function beginCronPreparationEffect(params: {
         throw new CronSessionLifecycleClaimError(agentSessionKey, archivedSessionError);
       }
     },
+  }).catch((cause: unknown) => {
+    if (!(cause instanceof AmbiguousSessionControllerError)) {
+      throw cause;
+    }
+    const previousId = initialSessionEntry?.sessionId;
+    const previousRunKey = previousId && `${agentSessionKey}:run:${previousId}`;
+    const previousRunHasWork =
+      params.usesDetachedRunSession &&
+      previousRunKey &&
+      previousRunKey !== runSessionKey &&
+      cause.hasWorkFor(previousRunKey);
+    cause.message = previousRunHasWork
+      ? "The agent didn’t start because work from the previous run was still active. Wait a moment, then try running it again."
+      : "The agent didn’t start because OpenClaw found conflicting session records for this run. Wait a moment, then try running it again.";
+    throw cause;
   });
 }
 
@@ -220,7 +238,8 @@ export function createPersistCronSessionEntry(params: {
   workspaceDir: string;
   persistSessionEntry: CronSessionRowWriter;
 }): PersistCronSessionEntry {
-  return async (assertCommitAllowed, liveEntry = params.cronSession.sessionEntry) => {
+  return async (assertCommitAllowed, entry, storeAdmission) => {
+    const liveEntry = entry ?? params.cronSession.sessionEntry;
     const resetBoundaryPending = params.cronSession.resetBoundaryPending !== undefined;
     // Reset admission completes before a CLI turn can own settlement.
     if (assertCommitAllowed && resetBoundaryPending) {
@@ -244,6 +263,7 @@ export function createPersistCronSessionEntry(params: {
       committedEntry = await params.persistSessionEntry({
         storePath: params.cronSession.storePath,
         sessionKey: params.agentSessionKey,
+        storeAdmission,
         operation: {
           kind: "cron-session",
           sessionKey: params.agentSessionKey,

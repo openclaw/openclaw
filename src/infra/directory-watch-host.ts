@@ -45,6 +45,23 @@ const state = resolveGlobalSingleton<{
 // rebuild per close.
 const MAX_RETIRED_WATCHES = 64;
 
+function reportWatchError(
+  host: Host | undefined,
+  watch: HostedWatch,
+  error: unknown,
+  pathUnavailable: boolean,
+) {
+  try {
+    watch.emit("error", error, pathUnavailable);
+  } finally {
+    // An error handler may immediately watch the nearest parent on this helper.
+    if (host && state.host === host && !host.watches.size) {
+      state.host = undefined;
+      host.child.stdin.end();
+    }
+  }
+}
+
 function startHost(): Host {
   const env = { ...process.env, NODE_OPTIONS: undefined };
   // The caller passes its PID so a helper that starts after it died still exits.
@@ -83,7 +100,7 @@ function startHost(): Host {
         watch.emit("change", message.event, message.filename ?? undefined);
       } else {
         started.watches.delete(message.id);
-        watch.emit("error", new Error("Directory watch host lost the watch"), true);
+        reportWatchError(started, watch, new Error("Directory watch host lost the watch"), true);
       }
     }
   });
@@ -129,8 +146,9 @@ export function watchDirectory(
   try {
     register((state.host ??= startHost()), id, watch);
   } catch (error) {
-    state.host?.watches.delete(id);
-    queueMicrotask(() => watch.emit("error", error, false));
+    const host = state.host;
+    host?.watches.delete(id);
+    queueMicrotask(() => reportWatchError(host, watch, error, false));
   }
   return Object.assign(watch, {
     close() {

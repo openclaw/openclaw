@@ -627,7 +627,6 @@ describe("MCP Events callback and subscription lifecycle", () => {
       [body, 401, "evt-1", signed(wrongSecret, body, "evt-1")],
       [body, 401, "evt-1", signed(secret, body, "evt-1", now - 301_000)],
       [body + " ", 401, "evt-1", signed(secret, body, "evt-1")],
-      [body, 400, "different-id"],
       [{ ...event(), name: "other.event" }, 400],
       [{ ...event(), timestamp: "2026-02-29T12:00:00Z" }, 400],
       [{ ...event(), timestamp: "2026-04-31T12:00:00+03:00" }, 400],
@@ -641,6 +640,16 @@ describe("MCP Events callback and subscription lifecycle", () => {
       expect((await post(raw, id, headers)).status).toBe(status);
     }
     expect(await pending()).toHaveLength(0);
+  });
+
+  it("accepts a per-message webhook-id and deduplicates retries by eventId", async () => {
+    await current!.start();
+    const body = JSON.stringify(event());
+    expect((await post(body, "msg_2KWPBgLlAfxdpx2AI54pPJ85f4W")).status).toBe(200);
+    now += 1_000;
+    expect((await post(body, "msg_2KWPBgLlAfxdpx2AI54pPJ85f4W")).status).toBe(200);
+    expect((await post(body, "msg_3LXQCh")).status).toBe(200);
+    expect((await pending()).map((row) => row.payload.eventId)).toEqual(["evt-1"]);
   });
 
   it.each(["2024-02-29T12:00:00Z", "2026-10-01T00:30:00+03:00", "2026-09-30T24:00:00Z"])(

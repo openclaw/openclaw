@@ -8,6 +8,7 @@ const catalog = {
       workingDetails: "Agent is working. View details",
     },
     composer: {
+      textOnlySuggestions: "Suggestions are text only.",
       composerInput: "Chat composer",
       workspaceRemoved: "This conversation’s workspace was removed.",
       predictionHint: "Tab to complete",
@@ -327,11 +328,14 @@ const catalog = {
         "Could not preview this file. Text previews require UTF-8 files up to 256 KiB. Download it to read the full file.",
       htmlPreviewUnavailable:
         "Could not preview this HTML file. HTML previews require UTF-8 files up to 2 MiB. Download it to read the full file.",
+      emptyFile: "OpenClaw can’t attach empty files.",
       readFailed: "Could not attach file. Try again.",
       imagesOnly: "Side chat accepts image attachments only.",
       tooLarge: "Too large to send: {names}{more}",
       tooLargeToast: "File too large. Try a smaller file.",
       openOriginal: "Open original",
+      compressionRequired: "Video is too large to send. Compress a copy or remove it.",
+      compressingVideo: "Compressing video…",
       compressToFit: "Compress to fit",
       retryCompression: "Retry compression",
       compressionHint: "Compress a smaller copy on this device. The original is unchanged.",

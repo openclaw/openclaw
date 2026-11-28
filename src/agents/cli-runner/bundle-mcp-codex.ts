@@ -236,6 +236,7 @@ export async function buildCodexUserMcpServersThreadConfigPatchForRun(params: {
     mcp: { ...run.config?.mcp, servers: configuredMcpServers },
   };
   const acquisition = await acquireSessionMcpRuntime({
+    storeAdmission: run.hostCapabilities,
     sessionId: run.sessionId,
     sessionKey: run.sessionKey,
     agentId,

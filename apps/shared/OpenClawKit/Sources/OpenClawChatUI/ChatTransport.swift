@@ -2,10 +2,22 @@ import Foundation
 import OpenClawKit
 import OpenClawProtocol
 
+enum OpenClawPersonalPinError: LocalizedError {
+    case unsupportedGateway, placementChanged
+
+    var errorDescription: String? {
+        switch self {
+        case .unsupportedGateway: String(localized: "Update the Gateway to change personal session pins.")
+        case .placementChanged: String(localized: "Pin placement changed. Refresh the list and retry.")
+        }
+    }
+}
+
 public enum OpenClawChatTransportEvent: Sendable {
     case health(ok: Bool)
     case tick
     case chatMetadataChanged(modelCatalogChanged: Bool = true, agentID: String? = nil)
+    case personalPinsChanged
     case modelSelectionChanged
     case sessionsChanged(OpenClawChatSessionsChangedEvent)
     case sessionObserver(SessionObserverDigest)
@@ -14,6 +26,7 @@ public enum OpenClawChatTransportEvent: Sendable {
     case sessionReaction(OpenClawChatReactionEvent)
     case agent(OpenClawAgentEventPayload)
     case progressCardChanged(ProgressCardChangedEvent)
+    case sessionPullRequestsChanged(OpenClawSessionPullRequestsChangedEvent)
     case questionRequested(QuestionRecord)
     case questionResolved(OpenClawQuestionResolvedEvent)
     case routeChanged
@@ -438,10 +451,12 @@ public struct OpenClawChatSessionMutationRouteLease: Sendable {
     public init(
         sessionTarget: @escaping @Sendable (String) -> OpenClawChatSessionTarget,
         unreadAckContract: Bool?,
+        allowPinWrites: Bool = true,
         receivesPatchReceipts: Bool = false,
         request: @escaping @Sendable (OpenClawChatGatewayRequest) async throws -> Data)
     {
         self.patchSessionImpl = { requested, id, unreadAt, label, category, color, pinned, archived, snooze, unread in
+            guard pinned == nil || allowPinWrites else { throw OpenClawPersonalPinError.unsupportedGateway }
             guard unread != false || unreadAckContract != nil else {
                 throw OpenClawChatTransportSendError.notDispatched
             }
@@ -584,7 +599,7 @@ public enum OpenClawChatTransportSendError: Error, Sendable {
 
 struct OpenClawChatQueueModeUnsupportedError: LocalizedError, Sendable {
     var errorDescription: String? {
-        String(localized: "This connection cannot send with Steer or Queue. Send normally or reconnect to the gateway.")
+        String(localized: "This connection can’t send with Steer or Queue. Send normally or reconnect.")
     }
 }
 
@@ -598,9 +613,9 @@ public enum OpenClawChatProgressCardError: LocalizedError, Sendable {
 
 public enum OpenClawChatTransportUpgradeMessage {
     public static let progressCardAgentScope =
-        String(localized: "Update the gateway to load progress cards for this agent.")
+        String(localized: "Update OpenClaw to see plans for this agent.")
     public static let routingContract = String(
-        localized: "Update the gateway before sending queued messages. This version requires safe delivery routing.")
+        localized: "Update OpenClaw before sending queued messages.")
 }
 
 public enum OpenClawChatRunTerminalState: Sendable, Equatable {
@@ -900,6 +915,9 @@ public protocol OpenClawChatTransport: Sendable {
         archived: Bool,
         agentID: String?) async throws -> OpenClawChatSessionsListResponse
     func listChildSessions(parentKey: String) async throws -> OpenClawChatChildSessionsResult
+    /// Watches these sessions' PRs on this connection, replacing the set it watched before. Nil: this
+    /// transport has no PR feed. Snapshots arrive as `.sessionPullRequestsChanged`.
+    func watchSessionPullRequests(sessionKeys: [String]) async throws -> Bool?
     func acquireSwarmRouteLease() async -> OpenClawChatSwarmRouteLease?
     func loadAgents(onUpdate: @escaping OpenClawChatAgentCatalogUpdate) async throws
     func acquireNewSessionRouteLease() async -> OpenClawChatNewSessionRouteLease?
@@ -1237,6 +1255,10 @@ extension OpenClawChatTransport {
         archived _: Bool) async throws -> OpenClawChatSessionsListResponse
     {
         throw Self.unsupportedOperation("sessions.list not supported by this transport")
+    }
+
+    public func watchSessionPullRequests(sessionKeys _: [String]) async throws -> Bool? {
+        nil
     }
 
     public func listChildSessions(parentKey _: String) async throws -> OpenClawChatChildSessionsResult {

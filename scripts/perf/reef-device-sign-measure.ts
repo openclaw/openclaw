@@ -16,6 +16,7 @@ import { registerHooks } from "node:module";
 import { loadavg } from "node:os";
 import { pathToFileURL } from "node:url";
 import { parseArgs } from "node:util";
+import { startCollectedHeapSampling } from "../lib/heap-sampling.ts";
 
 const { values } = parseArgs({
   options: { allocation: { type: "boolean" }, "owner-file": { type: "string" } },
@@ -48,12 +49,7 @@ function run(count: number) {
 run(512);
 const inspector = new Session();
 if (values.allocation) {
-  inspector.connect();
-  await inspector.post("HeapProfiler.startSampling", {
-    samplingInterval: 16384,
-    includeObjectsCollectedByMajorGC: true,
-    includeObjectsCollectedByMinorGC: true,
-  });
+  await startCollectedHeapSampling(inspector, 16384);
 }
 const cpuStart = process.cpuUsage();
 const start = performance.now();

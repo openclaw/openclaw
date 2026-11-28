@@ -16,12 +16,12 @@ describe("normalizePluginsConfigWithResolver", () => {
           },
         },
       },
-      (id) => id.trim().toUpperCase(),
+      (id) => `RESOLVED-${id.trim().toUpperCase()}`,
     );
 
-    expect(normalized.allow).toEqual(["alpha"]);
-    expect(normalized.deny).toEqual(["beta"]);
-    expect(normalized.entries).toHaveProperty("gamma");
+    expect(normalized.allow).toEqual(["resolved-alpha"]);
+    expect(normalized.deny).toEqual(["resolved-beta"]);
+    expect(normalized.entries).toHaveProperty("resolved-gamma");
   });
 });
 

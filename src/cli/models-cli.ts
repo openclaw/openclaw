@@ -1,6 +1,6 @@
 import { randomUUID } from "node:crypto";
 import type { Command } from "commander";
-import type { ModelsAuthSetApiKeyResult } from "../../packages/gateway-protocol/src/schema/agents-models-skills.js";
+import type { ModelsAuthSetApiKeyResult } from "../../packages/gateway-protocol/src/schema/models-auth.js";
 import { GATEWAY_SERVER_CAPS } from "../../packages/gateway-protocol/src/server-capabilities.js";
 import { sanitizeTerminalText } from "../../packages/terminal-core/src/safe-text.js";
 import type { ModelsAccountsOptions } from "../commands/models/accounts.js";
@@ -422,8 +422,8 @@ export function registerModelsCli(program: Command) {
       .description(`List ${noun} models`)
       .option("--json", "Output JSON", false)
       .option("--plain", "Plain output", false)
-      .action(async (opts) => {
-        await withModelsRuntime(async ({ defaultRuntime }) => {
+      .action(async (opts, command: Command) => {
+        await withGlobalModelsRuntime(command, `${name} list`, async ({ defaultRuntime }) => {
           const { listFallbacksCommand } = await import("../commands/models/fallbacks-shared.js");
           await listFallbacksCommand(
             params,

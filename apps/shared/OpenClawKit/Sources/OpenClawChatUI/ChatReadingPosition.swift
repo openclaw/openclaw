@@ -40,7 +40,11 @@ struct ChatReadingGeometry: Equatable {
     var contentHeight: CGFloat
     var viewportHeight: CGFloat
     var insetTop: CGFloat
+    /// The scroller's whole bottom inset, including `floorInset`.
     var insetBottom: CGFloat
+    /// Room under the content kept for a sent turn's reply (`ChatReadingPolicy.floor`); part of
+    /// `insetBottom` but not of the visible area.
+    var floorInset: CGFloat = 0
 
     var topOffset: CGFloat {
         -self.insetTop
@@ -50,12 +54,22 @@ struct ChatReadingGeometry: Equatable {
         max(self.topOffset, self.contentHeight - self.viewportHeight + self.insetBottom)
     }
 
+    /// The bottom offset without the reply's room.
+    var naturalBottomOffset: CGFloat {
+        max(self.topOffset, self.contentHeight - self.viewportHeight + self.baseInsetBottom)
+    }
+
+    /// The composer, keyboard and safe area: the bottom inset the reader cannot see through.
+    var baseInsetBottom: CGFloat {
+        self.insetBottom - self.floorInset
+    }
+
     var visibleMinY: CGFloat {
         self.offsetY + self.insetTop
     }
 
     var visibleMaxY: CGFloat {
-        self.offsetY + self.viewportHeight - self.insetBottom
+        self.offsetY + self.viewportHeight - self.baseInsetBottom
     }
 
     func clamped(_ y: CGFloat) -> CGFloat {
@@ -68,6 +82,39 @@ struct ChatReadingRow: Equatable {
     var key: ChatReadingRowKey
     var frame: CGRect
     var answerTop: CGFloat?
+}
+
+/// Where a sent turn rests while its reply begins.
+enum ChatSentTurnRest: Equatable {
+    /// Keyboard down: the turn's top at `ChatReadingPolicy.turnAnchor` of the visible height, with
+    /// the rest of the screen kept for the reply.
+    case anchor
+    /// Keyboard up: the turn's bottom `reserve` above the composer, room for the reply's first row.
+    case aboveComposer(reserve: CGFloat)
+}
+
+/// The send's springs. `rise` moves the offset and the bubble's height; `slide` the bubble's
+/// sideways move, faster, so the path bends to the trailing side first like the reference.
+struct ChatSendMotion: Equatable {
+    static let rise = ChatSendMotion(response: 0.34, dampingFraction: 0.88)
+    static let slide = ChatSendMotion(response: 0.24, dampingFraction: 1)
+    /// Past this the spring is within a tenth of a point on any phone travel; it ends exactly there.
+    static let settle: TimeInterval = 0.55
+
+    var response: TimeInterval
+    var dampingFraction: Double
+
+    /// 0 at rest, 1 at the target, starting with no velocity.
+    func progress(_ elapsed: TimeInterval) -> CGFloat {
+        guard elapsed > 0 else { return 0 }
+        guard elapsed < Self.settle else { return 1 }
+        let omega = 2 * Double.pi / self.response
+        let zeta = self.dampingFraction
+        let decay = exp(-zeta * omega * elapsed)
+        if zeta >= 1 { return CGFloat(1 - (1 + omega * elapsed) * decay) }
+        let damped = omega * (1 - zeta * zeta).squareRoot()
+        return CGFloat(1 - decay * (cos(damped * elapsed) + zeta * omega / damped * sin(damped * elapsed)))
+    }
 }
 
 struct ChatReadingWrite: Equatable {
@@ -134,10 +181,49 @@ struct ChatReadingPolicy {
         var passesSinceLanding: Int?
     }
 
+    /// The jump button's glide to the live edge, held as a distance from the end of the content:
+    /// List's compensation and a growing reply both move the end, and the glide lands wherever it is.
+    struct Jump: Equatable {
+        /// From farther away the glide starts this many viewports above the end, so List does not
+        /// realize every row in between.
+        static let maxViewports: CGFloat = 1.5
+        var distance: CGFloat
+        var duration: TimeInterval
+    }
+
+    /// The latest sent turn. Its room under the content lasts until the next send or session reset,
+    /// shrinking as the reply fills it, so neither the reply's first row nor its words move the turn.
+    struct SentTurn: Equatable {
+        var key: ChatReadingRowKey
+        var rest: ChatSentTurnRest
+        /// The last room computed; kept while the turn's row is not laid out.
+        var floor: CGFloat = 0
+        /// Content under the turn when its row first laid out (the list's end padding), before any
+        /// reply row: the reply's room is measured past it.
+        var tail: CGFloat?
+        /// Passes without the turn's row: sent while reading far up, it is not in the list yet.
+        var missingPasses = 0
+    }
+
+    /// A send's glide from where the transcript was to the turn's rest, on `ChatSendMotion.rise`.
+    struct Glide: Equatable {
+        /// Passes the glide waits for the turn's row before following goes on without it.
+        static let rowPassLimit = 4
+        /// From farther away the glide starts this many viewports from the rest (as `Jump`).
+        static let maxViewports: CGFloat = 1.5
+        /// Rest minus the offset when the turn's row first laid out; nil until then.
+        var distance: CGFloat?
+        var elapsed: TimeInterval = 0
+        var rowPasses = 0
+    }
+
     private(set) var mode: ScrollFollowTarget? = .latest
     private(set) var anchor: Anchor?
     private(set) var disclosure: Disclosure?
     private(set) var prepend: Prepend?
+    private(set) var jump: Jump?
+    private(set) var sentTurn: SentTurn?
+    private(set) var glide: Glide?
 
     /// While a prepend is pending every frame lays out, even if nothing changes: the reader's fling
     /// is re-read before the rows land, and once they land a later, unrelated content change
@@ -153,6 +239,78 @@ struct ChatReadingPolicy {
         self.anchor = nil
         self.disclosure = nil
         self.prepend = nil
+        self.jump = nil
+        self.glide = nil
+    }
+
+    /// A send: the turn rests at once (`glides` false) or glides there, and keeps the reply's room
+    /// under it, which holds it still until the reply outgrows the room. Then `follows` (keyboard
+    /// up) keeps the reply's end in view; otherwise the turn rises with the reply only up to the
+    /// turn anchor and stays there, so the reply reads from its start with Jump to latest below.
+    mutating func turnSent(_ id: UUID, rest: ChatSentTurnRest, follows: Bool, glides: Bool) {
+        self.setMode(follows ? .latest : .turn(id))
+        self.jump = nil
+        self.sentTurn = SentTurn(key: .cell(.row(id)), rest: rest)
+        self.glide = glides ? Glide() : nil
+    }
+
+    /// The room under the content that lets the sent turn reach its rest; zero once the reply fills
+    /// it. Computed before each layout write; the caller adds it to the scroller's bottom inset.
+    mutating func floor(_ geometry: ChatReadingGeometry, row: (ChatReadingRowKey) -> ChatReadingRow?) -> CGFloat {
+        guard var sent = self.sentTurn else { return 0 }
+        guard let turn = row(sent.key) else { return sent.floor }
+        let tail = sent.tail ?? max(0, geometry.contentHeight - turn.frame.maxY)
+        sent.tail = tail
+        let rest = Self.restOffset(sent.rest, turn: turn.frame, tail: tail, geometry: geometry)
+        sent.floor = max(0, (rest - geometry.naturalBottomOffset).rounded(.up))
+        self.sentTurn = sent
+        return sent.floor
+    }
+
+    /// A working row still under the sent turn's finished reply, in the passes before the run clears:
+    /// its height, which the transcript does not count, so it neither rises for the row nor falls
+    /// back when it goes. Only the reply row (whose marker can register a pass late) and the
+    /// working row may sit under the turn, and the working row no longer directly under it.
+    static func settlingTail(turn: ChatReadingRow, rows: [ChatReadingRow], workingRowOnly: Bool) -> CGFloat {
+        guard workingRowOnly else { return 0 }
+        let below = rows.filter { $0.key != turn.key && $0.frame.minY >= turn.frame.maxY - 0.5 }
+            .sorted { $0.frame.minY < $1.frame.minY }
+        guard let live = below.last, below.count <= 2,
+              live.key == .cell(.live) || live.key.answerRun != nil,
+              live.frame.minY > turn.frame.maxY + 1 else { return 0 }
+        for row in below.dropLast() {
+            guard case .cell(.row) = row.key else { return 0 }
+        }
+        return live.frame.height
+    }
+
+    /// The offset that puts a sent turn at its rest. `tail`: content under the turn that is not
+    /// reply (the list's end padding).
+    static func restOffset(
+        _ rest: ChatSentTurnRest,
+        turn: CGRect,
+        tail: CGFloat = 0,
+        geometry: ChatReadingGeometry) -> CGFloat
+    {
+        switch rest {
+        case .anchor:
+            let visible = geometry.viewportHeight - geometry.insetTop - geometry.baseInsetBottom
+            return turn.minY - (visible - turn.height) * Self.turnAnchor - geometry.insetTop
+        case let .aboveComposer(reserve):
+            return turn.maxY + tail + reserve - geometry.viewportHeight + geometry.baseInsetBottom
+        }
+    }
+
+    /// One display frame of the send's glide.
+    mutating func glideFrame(
+        _ geometry: ChatReadingGeometry,
+        elapsed: TimeInterval,
+        interacting: Bool,
+        row: (ChatReadingRowKey) -> ChatReadingRow?) -> ChatReadingWrite?
+    {
+        guard self.glide != nil else { return nil }
+        self.glide?.elapsed = elapsed
+        return self.layout(geometry, interacting: interacting, row: row, topRow: { nil })
     }
 
     /// The reader's scroll ended away from the live edge: hold the row now at the top.
@@ -190,9 +348,32 @@ struct ChatReadingPolicy {
             contentHeight: geometry.contentHeight)
     }
 
-    mutating func jumpToLatest(_ geometry: ChatReadingGeometry) -> ChatReadingWrite? {
+    /// Unanimated, one write to the bottom. Animated, the write is where the glide starts and
+    /// `jumpFrame` moves it from there.
+    mutating func jumpToLatest(_ geometry: ChatReadingGeometry, animated: Bool) -> ChatReadingWrite? {
         self.setMode(.latest)
-        return Self.write(geometry.bottomOffset, .jump, from: geometry)
+        self.jump = nil
+        guard animated else { return Self.write(geometry.bottomOffset, .jump, from: geometry) }
+        let viewport = geometry.viewportHeight - geometry.insetTop - geometry.baseInsetBottom
+        let limit = max(0, viewport) * Jump.maxViewports
+        let distance = min(geometry.bottomOffset - geometry.offsetY, limit)
+        guard distance > 0.5 else { return nil }
+        self.jump = Jump(distance: distance, duration: 0.26 + 0.16 * Double(distance / limit))
+        return Self.write(geometry.bottomOffset - distance, .jump, from: geometry)
+    }
+
+    /// One display frame of the glide, eased out. The last frame ends it and following takes over.
+    mutating func jumpFrame(_ geometry: ChatReadingGeometry, elapsed: TimeInterval) -> ChatReadingWrite? {
+        guard let jump else { return nil }
+        let progress = min(1, max(0, elapsed / jump.duration))
+        if progress >= 1 { self.jump = nil }
+        let remaining = pow(1 - progress, 3)
+        return Self.write(geometry.bottomOffset - jump.distance * remaining, .jump, from: geometry)
+    }
+
+    /// The reader touched the transcript mid-glide: their scroll owns the offset from here.
+    mutating func cancelJump() {
+        self.jump = nil
     }
 
     /// A content size, viewport size, inset or keyboard change, after List has laid out its cells.
@@ -205,13 +386,33 @@ struct ChatReadingPolicy {
     {
         switch self.mode {
         case .latest:
-            guard !interacting else { return nil }
-            return Self.write(geometry.bottomOffset, .follow, from: geometry)
+            if interacting { self.glide = nil }
+            // The glide owns the offset until it lands; a follow write would cut it short.
+            guard !interacting, self.jump == nil else { return nil }
+            // A send's glide starts from where the reader was once the turn's row and room exist.
+            if var glide = self.glide, glide.distance == nil, let sent = self.sentTurn, row(sent.key) == nil {
+                glide.rowPasses += 1
+                guard glide.rowPasses > Glide.rowPassLimit else {
+                    self.glide = glide
+                    return nil
+                }
+                self.glide = nil
+            }
+            return self.glided(geometry.bottomOffset, .follow, from: geometry)
         case let .turn(id):
-            guard !interacting, let turn = row(.cell(.row(id))) else { return nil }
-            let viewport = geometry.viewportHeight - geometry.insetTop - geometry.insetBottom
-            let desired = turn.frame.minY - (viewport - turn.frame.height) * Self.turnAnchor - geometry.insetTop
-            return Self.write(geometry.clamped(desired), .turn, from: geometry)
+            if interacting { self.glide = nil }
+            guard !interacting else { return nil }
+            guard let turn = row(.cell(.row(id))) else {
+                // Sent from far up: its row comes into the list at the end, where the turn is.
+                guard var sent = self.sentTurn, sent.key == .cell(.row(id)) else { return nil }
+                sent.missingPasses += 1
+                self.sentTurn = sent
+                guard sent.missingPasses > Glide.rowPassLimit else { return nil }
+                self.glide = nil
+                return Self.write(geometry.bottomOffset, .turn, from: geometry)
+            }
+            let desired = Self.restOffset(.anchor, turn: turn.frame, geometry: geometry)
+            return self.glided(geometry.clamped(desired), .turn, from: geometry)
         case nil:
             if interacting { self.disclosure = nil }
             if self.prepend != nil { return self.holdPrepend(geometry) }
@@ -282,6 +483,23 @@ struct ChatReadingPolicy {
         return write
     }
 
+    /// The target, or the glide's way to it: the distance left shrinks on the spring while the
+    /// target itself may move (rows sizing, the keyboard), so the glide lands wherever the rest is.
+    private mutating func glided(
+        _ target: CGFloat,
+        _ reason: ChatReadingWrite.Reason,
+        from geometry: ChatReadingGeometry) -> ChatReadingWrite?
+    {
+        guard var glide = self.glide else { return Self.write(target, reason, from: geometry) }
+        let visible = geometry.viewportHeight - geometry.insetTop - geometry.baseInsetBottom
+        let limit = max(0, visible) * Glide.maxViewports
+        let distance = glide.distance ?? min(max(target - geometry.offsetY, -limit), limit)
+        glide.distance = distance
+        let progress = ChatSendMotion.rise.progress(glide.elapsed)
+        self.glide = progress >= 1 ? nil : glide
+        return Self.write(target - distance * (1 - progress), reason, from: geometry)
+    }
+
     private static func write(
         _ y: CGFloat,
         _ reason: ChatReadingWrite.Reason,
@@ -311,10 +529,32 @@ final class ChatReadingPosition {
     private var rows: [ChatReadingRowKey: WeakMarker] = [:]
     private var blocks: [ObjectIdentifier: WeakMarker] = [:]
     private var reconciling = false
+    private var jumpClock: JumpClock?
     private var prependSignpost = ChatScrollSignpostInterval("OlderPagePrepend")
+    /// The sent turn's room, as added to the scroller's bottom inset, and the inset value written
+    /// with it. Another writer of the inset (SwiftUI) drops it; the next pass adds it again.
+    private var floorApplied: CGFloat = 0
+    private var floorWritten: CGFloat?
+    private var entrance: Entrance?
+    private var sendClock: JumpClock?
+    /// The run's live cell shows only the working row, no words.
+    var workingRowOnly = false
 
     private struct WeakMarker {
         weak var marker: Marker?
+    }
+
+    /// The sent message's way in. `travels`: from the composer field to its row, drawn by moving
+    /// the row's cell layer (render only; the row's layout and accessibility frame are at rest).
+    /// Otherwise a short fade in place.
+    private struct Entrance {
+        var key: ChatReadingRowKey
+        var travels: Bool
+        /// The cell's offset from its row at the start, in screen points; the spring takes it to zero.
+        var start: CGPoint = .zero
+        weak var layer: CALayer?
+        /// The working row under the slot, hidden while the message rises past it.
+        weak var working: CALayer?
     }
 
     var mode: ScrollFollowTarget? {
@@ -327,7 +567,7 @@ final class ChatReadingPosition {
     }
 
     func readerSettled() {
-        guard let collection = self.scroller, let geometry = Self.geometry(collection) else {
+        guard let collection = self.scroller, let geometry = self.geometry(collection) else {
             self.policy.setMode(nil)
             return
         }
@@ -335,18 +575,18 @@ final class ChatReadingPosition {
     }
 
     func disclosureWillToggle() {
-        guard let collection = self.scroller, let geometry = Self.geometry(collection) else { return }
+        guard let collection = self.scroller, let geometry = self.geometry(collection) else { return }
         self.policy.disclosureWillToggle(geometry, topRow: self.topRow(in: collection, geometry))
     }
 
     func disclosureDidSettle() {
-        guard let collection = self.scroller, let geometry = Self.geometry(collection) else { return }
+        guard let collection = self.scroller, let geometry = self.geometry(collection) else { return }
         self.policy.disclosureDidSettle(geometry)
     }
 
     func olderPageWillPrepend() {
         ChatBehaviorProbe.mark("older-prepend")
-        guard let collection = self.scroller, let geometry = Self.geometry(collection) else { return }
+        guard let collection = self.scroller, let geometry = self.geometry(collection) else { return }
         self.policy.olderPageWillPrepend(geometry)
         guard self.policy.prepend != nil else { return }
         self.prependSignpost.begin()
@@ -354,11 +594,32 @@ final class ChatReadingPosition {
     }
 
     func jumpToLatest() {
-        guard let collection = self.scroller, let geometry = Self.geometry(collection) else {
+        self.jumpClock?.stop()
+        self.jumpClock = nil
+        guard let collection = self.scroller, let geometry = self.geometry(collection) else {
             self.policy.setMode(.latest)
             return
         }
-        self.apply(self.policy.jumpToLatest(geometry), to: collection)
+        self.apply(
+            self.policy.jumpToLatest(geometry, animated: !UIAccessibility.isReduceMotionEnabled),
+            to: collection)
+        guard self.policy.jump != nil else { return }
+        self.jumpClock = JumpClock { [weak self] elapsed in self?.jumpFrame(elapsed) ?? false }
+    }
+
+    /// Returns false once the glide has landed or the reader took the scroll back.
+    private func jumpFrame(_ elapsed: TimeInterval) -> Bool {
+        guard let collection = self.scroller, let geometry = self.geometry(collection),
+              !collection.isTracking, !collection.isDragging
+        else {
+            self.policy.cancelJump()
+            return false
+        }
+        self.apply(self.policy.jumpFrame(geometry, elapsed: elapsed), to: collection)
+        guard self.policy.jump == nil else { return true }
+        // Landed: following settles the exact end in the next layout pass.
+        self.sentinel?.setNeedsLayout()
+        return false
     }
 
     /// Keyboard avoidance may move only the safe area; measure after it.
@@ -367,9 +628,250 @@ final class ChatReadingPosition {
     }
 
     func reset() {
+        self.jumpClock?.stop()
+        self.jumpClock = nil
+        self.finishEntrance()
         self.policy = ChatReadingPolicy()
+        self.removeFloor()
         self.prependSignpost.end()
         self.sentinel?.setNeedsLayout()
+    }
+
+    // MARK: Send
+
+    /// A message was sent: it rests in the next layout pass, the transcript glides there, and the
+    /// message travels from the composer field (`travels`, a touch on Send) or fades in place.
+    /// Reduce Motion: nothing moves or fades; the message is simply there.
+    /// A sent message rests this far above the composer: the reply's first row (the working row,
+    /// then its first line) fits under it without moving it.
+    static let replyRoom: CGFloat = 52
+
+    /// The sent turn is the last user message; finding it needs no presentation pass.
+    func turnSent(in messages: [OpenClawChatMessage], keyboardUp: Bool) {
+        guard let id = messages.last(where: { $0.role.lowercased() == "user" })?.presentationID else {
+            self.setMode(.latest)
+            return
+        }
+        self.turnSent(
+            id,
+            rest: .aboveComposer(reserve: Self.replyRoom),
+            follows: keyboardUp,
+            travels: ChatSendEntrance.takeComposerSend())
+    }
+
+    func turnSent(_ id: UUID, rest: ChatSentTurnRest, follows: Bool, travels: Bool) {
+        self.jumpClock?.stop()
+        self.jumpClock = nil
+        self.finishEntrance()
+        let reduceMotion = UIAccessibility.isReduceMotionEnabled
+        self.policy.turnSent(id, rest: rest, follows: follows, glides: !reduceMotion)
+        self.entrance = reduceMotion ? nil : Entrance(key: .cell(.row(id)), travels: travels)
+        self.sentinel?.setNeedsLayout()
+    }
+
+    /// The sent row laid out: put its cell at the composer field (or start its fade) in this pass,
+    /// before the frame renders, and run the spring from the next frame.
+    private func beginEntrance(in collection: UICollectionView) {
+        guard var entrance = self.entrance, entrance.layer == nil,
+              let cell = self.cell(for: entrance.key, in: collection) else { return }
+        entrance.layer = cell.layer
+        // A reply already under the turn: no travel across it, the message is simply in place.
+        if entrance.travels, self.hasRow(below: entrance.key, in: collection) {
+            self.entrance = nil
+            self.startSendClock()
+            return
+        }
+        if entrance.travels, let start = Self.travelStart(of: cell, in: collection) {
+            entrance.start = start
+            Self.translate(cell.layer, by: start)
+            self.entrance = entrance
+            self.holdWorkingRow(in: collection)
+        } else {
+            let fade = CABasicAnimation(keyPath: "opacity")
+            fade.fromValue = 0
+            fade.toValue = 1
+            fade.duration = 0.2
+            fade.timingFunction = CAMediaTimingFunction(controlPoints: 0.23, 1, 0.32, 1)
+            cell.layer.add(fade, forKey: "openclaw.sendArrival")
+            self.entrance = nil
+        }
+        self.startSendClock()
+    }
+
+    private func startSendClock() {
+        guard self.sendClock == nil, self.policy.glide != nil || self.entrance != nil else { return }
+        self.sendClock = JumpClock { [weak self] elapsed in self?.sendFrame(elapsed) ?? false }
+    }
+
+    /// One display frame of the send: the glide's offset, then the cell's remaining travel.
+    private func sendFrame(_ elapsed: TimeInterval) -> Bool {
+        guard let collection = self.scroller, let geometry = self.geometry(collection) else {
+            self.finishEntrance()
+            return false
+        }
+        if self.policy.glide != nil {
+            let interacting = collection.isTracking || collection.isDragging || collection.isDecelerating
+            self.apply(
+                self.policy.glideFrame(
+                    geometry,
+                    elapsed: elapsed,
+                    interacting: interacting,
+                    row: { self.row($0, in: collection) }),
+                to: collection)
+        }
+        if var entrance = self.entrance {
+            // A recycled cell gives the travel to the row's current cell.
+            if let cell = self.cell(for: entrance.key, in: collection), cell.layer !== entrance.layer {
+                entrance.layer.map { Self.translate($0, by: .zero) }
+                entrance.layer = cell.layer
+                self.entrance = entrance
+            }
+            let x = 1 - ChatSendMotion.slide.progress(elapsed)
+            let y = 1 - ChatSendMotion.rise.progress(elapsed)
+            // A reply that starts during the rise: the message lands at once rather than cross it.
+            if x <= 0 && y <= 0 || self.hasRow(below: entrance.key, in: collection) {
+                self.finishEntrance()
+            } else if let layer = entrance.layer {
+                self.holdWorkingRow(in: collection)
+                Self.translate(layer, by: CGPoint(x: entrance.start.x * x, y: entrance.start.y * y))
+            }
+        }
+        let running = self.policy.glide != nil || self.entrance != nil
+        if !running { self.sendClock = nil }
+        return running
+    }
+
+    private func finishEntrance() {
+        self.sendClock?.stop()
+        self.sendClock = nil
+        if let layer = self.entrance?.layer { Self.translate(layer, by: .zero) }
+        if let working = self.entrance?.working {
+            CATransaction.begin()
+            CATransaction.setDisableActions(true)
+            working.opacity = 1
+            CATransaction.commit()
+            let fade = CABasicAnimation(keyPath: "opacity")
+            fade.fromValue = 0
+            fade.toValue = 1
+            fade.duration = 0.2
+            working.add(fade, forKey: "openclaw.workingArrival")
+        }
+        self.entrance = nil
+    }
+
+    /// Like the reference's thinking mark, the working row appears once the message has landed.
+    private func holdWorkingRow(in collection: UICollectionView) {
+        guard var entrance = self.entrance, self.workingRowOnly,
+              let turn = self.row(entrance.key, in: collection),
+              let key = self.rows.keys.first(where: { key in
+                  (key == .cell(.live) || key.answerRun != nil) &&
+                      (self.row(key, in: collection)?.frame.minY ?? 0) >= turn.frame.maxY - 0.5
+              }),
+              let layer = self.cell(for: key, in: collection)?.layer else { return }
+        if entrance.working !== layer { entrance.working?.opacity = 1 }
+        CATransaction.begin()
+        CATransaction.setDisableActions(true)
+        layer.opacity = 0
+        CATransaction.commit()
+        entrance.working = layer
+        self.entrance = entrance
+    }
+
+    private static func translate(_ layer: CALayer, by offset: CGPoint) {
+        CATransaction.begin()
+        CATransaction.setDisableActions(true)
+        layer.sublayerTransform = offset == .zero
+            ? CATransform3DIdentity
+            : CATransform3DMakeTranslation(offset.x, offset.y, 0)
+        CATransaction.commit()
+    }
+
+    /// Where the sent cell starts, relative to where it rests: its bubble's first text line on the
+    /// field's first line (a message taller than the field: last lines together, so it rises out of
+    /// the field). Nil when the field is not on screen.
+    private static func travelStart(of cell: UICollectionViewCell, in collection: UICollectionView) -> CGPoint? {
+        guard let window = collection.window,
+              let field = composerField(in: window, excluding: collection), field.window != nil,
+              !field.isHidden, field.alpha > 0.01 else { return nil }
+        let inset = field.textContainerInset
+        let padding = field.textContainer.lineFragmentPadding
+        let box = field.convert(field.bounds, to: window)
+        let text = CGRect(
+            x: box.minX + inset.left + padding,
+            y: box.minY + inset.top,
+            width: box.width,
+            height: max(0, box.height - inset.top - inset.bottom))
+        guard let bubble = bubbleMarker(in: cell) else {
+            // Photos alone: the row rises from the field's top.
+            return CGPoint(x: 0, y: text.minY - cell.convert(cell.bounds, to: window).minY)
+        }
+        let frame = bubble.convert(bubble.bounds, to: window)
+        let lines = CGRect(
+            x: frame.minX + bubble.textInset.left,
+            y: frame.minY + bubble.textInset.top,
+            width: frame.width,
+            height: frame.height - bubble.textInset.top - bubble.textInset.bottom)
+        let dy = lines.height > text.height + 1 ? text.maxY - lines.maxY : text.minY - lines.minY
+        return CGPoint(x: text.minX - lines.minX, y: dy)
+    }
+
+    /// The composer's text view, outside the transcript.
+    private static func composerField(in view: UIView, excluding transcript: UIView) -> UITextView? {
+        for subview in view.subviews where subview !== transcript {
+            if let field = subview as? UITextView,
+               field.accessibilityIdentifier == "chat-message-input" { return field }
+            if let field = composerField(in: subview, excluding: transcript) { return field }
+        }
+        return nil
+    }
+
+    private static func bubbleMarker(in view: UIView) -> BubbleMarker? {
+        for subview in view.subviews {
+            if let marker = subview as? BubbleMarker { return marker }
+            if let marker = bubbleMarker(in: subview) { return marker }
+        }
+        return nil
+    }
+
+    private func settlingTail(in collection: UICollectionView) -> CGFloat {
+        guard self.workingRowOnly, let key = self.policy.sentTurn?.key,
+              let turn = self.row(key, in: collection) else { return 0 }
+        let rows = self.rows.compactMap { key, entry in
+            entry.marker.flatMap { Self.row(of: $0, key: key, in: collection) }
+        }
+        return ChatReadingPolicy.settlingTail(turn: turn, rows: rows, workingRowOnly: true)
+    }
+
+    /// A laid-out row under this one (the reply's first row).
+    private func hasRow(below key: ChatReadingRowKey, in collection: UICollectionView) -> Bool {
+        guard let turn = self.row(key, in: collection) else { return false }
+        return self.rows.contains { other, entry in
+            // The working row alone is not a reply: the message rises past it, hidden meanwhile.
+            if self.workingRowOnly, other == .cell(.live) || other.answerRun != nil { return false }
+            guard other != key, let marker = entry.marker,
+                  let row = Self.row(of: marker, key: other, in: collection) else { return false }
+            return row.frame.minY >= turn.frame.maxY - 0.5
+        }
+    }
+
+    private func cell(for key: ChatReadingRowKey, in collection: UICollectionView) -> UICollectionViewCell? {
+        guard let marker = self.rows[key]?.marker, marker.window != nil else { return nil }
+        var view: UIView? = marker
+        while let current = view, current !== collection, !(current is UICollectionViewCell) {
+            view = current.superview
+        }
+        guard let cell = view as? UICollectionViewCell, let index = collection.indexPath(for: cell),
+              collection.cellForItem(at: index) === cell else { return nil }
+        return cell
+    }
+
+    private func removeFloor() {
+        if let collection = self.scroller, self.floorApplied != 0 {
+            self.floorWritten = nil
+            collection.contentInset.bottom -= self.floorApplied
+        }
+        self.floorApplied = 0
+        self.floorWritten = nil
     }
 
     // MARK: Rows
@@ -387,6 +889,11 @@ final class ChatReadingPosition {
         }
         marker.key = key
         self.rows[key] = WeakMarker(marker: marker)
+        // A sent turn's row registers after the layout pass that added it; that pass found no
+        // row to place, so place it now instead of leaving it under the composer.
+        var awaited = key == self.policy.sentTurn?.key
+        if case let .turn(id) = self.policy.mode, key == .cell(.row(id)) { awaited = true }
+        if awaited { self.sentinel?.setNeedsLayout() }
     }
 
     func unregister(_ marker: Marker) {
@@ -498,20 +1005,29 @@ final class ChatReadingPosition {
             },
             collection.observe(\.contentInset, options: [.old, .new]) { [weak self] _, change in
                 guard change.oldValue != change.newValue else { return }
-                MainActor.assumeIsolated { self?.sentinel?.setNeedsLayout() }
+                MainActor.assumeIsolated {
+                    guard let self else { return }
+                    // Another writer replaced the inset, and the reply's room with it.
+                    if let written = self.floorWritten, change.newValue?.bottom != written {
+                        self.floorApplied = 0
+                        self.floorWritten = nil
+                    }
+                    self.sentinel?.setNeedsLayout()
+                }
             },
         ]
         sentinel.setNeedsLayout()
     }
 
-    private static func geometry(_ scroll: UIScrollView) -> ChatReadingGeometry? {
+    private func geometry(_ scroll: UIScrollView) -> ChatReadingGeometry? {
         guard scroll.window != nil, scroll.bounds.height > 0 else { return nil }
         return ChatReadingGeometry(
             offsetY: scroll.contentOffset.y,
             contentHeight: scroll.contentSize.height,
             viewportHeight: scroll.bounds.height,
             insetTop: scroll.adjustedContentInset.top,
-            insetBottom: scroll.adjustedContentInset.bottom)
+            insetBottom: scroll.adjustedContentInset.bottom,
+            floorInset: self.floorApplied)
     }
 
     /// Runs after the collection view's own layout pass, in the same commit.
@@ -528,8 +1044,20 @@ final class ChatReadingPosition {
             if self.policy.needsNextPass { self.sentinel?.setNeedsLayout() }
         }
         // A write re-lays out the cells, which can resize them again; converge within this pass.
+        defer { self.beginEntrance(in: collection) }
         for _ in 0..<3 {
-            guard let geometry = Self.geometry(collection) else { return }
+            guard var geometry = self.geometry(collection) else { return }
+            geometry.contentHeight -= self.settlingTail(in: collection)
+            // The sent turn's room first: it moves the end the writes below are measured from.
+            let floor = self.policy.floor(geometry, row: { self.row($0, in: collection) })
+            if abs(floor - self.floorApplied) > 0.5 {
+                let base = collection.contentInset.bottom - self.floorApplied
+                self.floorApplied = floor
+                self.floorWritten = base + floor
+                collection.contentInset.bottom = base + floor
+                collection.layoutIfNeeded()
+                continue
+            }
             let interacting = collection.isTracking || collection.isDragging || collection.isDecelerating ||
                 self.follow?.isUserScrolling == true
             guard let write = self.policy.layout(
@@ -551,7 +1079,8 @@ final class ChatReadingPosition {
         case .turn:
             ChatScrollWriter.perform("ReadingPosition.turn") { scroll.setContentOffset(point, animated: false) }
         case .jump:
-            // Unanimated: an animated write reports `.animating`, which releases following.
+            // Unanimated, also for each frame of the glide: UIKit's own animated write reports
+            // `.animating`, which releases following.
             ChatScrollWriter.perform("ReadingPosition.jump") { scroll.setContentOffset(point, animated: false) }
         case .anchor:
             // Assign rather than `setContentOffset(_:animated:)`, so an active fling continues.
@@ -588,6 +1117,33 @@ final class ChatReadingPosition {
         }
     }
 
+    /// Calls `frame` with the elapsed time once per display frame until it returns false.
+    @MainActor
+    private final class JumpClock: NSObject {
+        private var link: CADisplayLink?
+        private var start: CFTimeInterval?
+        private let frame: @MainActor (TimeInterval) -> Bool
+
+        init(frame: @escaping @MainActor (TimeInterval) -> Bool) {
+            self.frame = frame
+            super.init()
+            let link = CADisplayLink(target: self, selector: #selector(self.tick(_:)))
+            link.add(to: .main, forMode: .common)
+            self.link = link
+        }
+
+        func stop() {
+            self.link?.invalidate()
+            self.link = nil
+        }
+
+        @objc private func tick(_ link: CADisplayLink) {
+            let start = self.start ?? link.timestamp
+            self.start = start
+            if !self.frame(link.targetTimestamp - start) { self.stop() }
+        }
+    }
+
     /// Names one List cell for the owner. No layout callbacks and no geometry work.
     final class Marker: UIView {
         weak var owner: ChatReadingPosition?
@@ -598,6 +1154,51 @@ final class ChatReadingPosition {
             guard self.window != nil else { return }
             self.owner?.attach(from: self)
         }
+    }
+}
+
+/// The composer notes a send it starts with a touch on Send; that message travels from the field.
+/// Sends from a hardware key or a Shortcut leave no note and fade in place. One note for the app:
+/// a touch and the send it starts are one person's action, consumed by the next sent turn.
+@MainActor
+enum ChatSendEntrance {
+    private static var notedAt: CFTimeInterval?
+
+    static func composerWillSend() {
+        self.notedAt = CACurrentMediaTime()
+    }
+
+    /// True once per noted send. A send waits for at most a health check or an outbox write.
+    static func takeComposerSend() -> Bool {
+        defer { self.notedAt = nil }
+        guard let notedAt else { return false }
+        return CACurrentMediaTime() - notedAt < 5
+    }
+}
+
+extension ChatReadingPosition {
+    /// Names a user bubble and its text inset, so a send's travel lines its text up with the field.
+    final class BubbleMarker: UIView {
+        var textInset: UIEdgeInsets = .zero
+    }
+}
+
+struct ChatReadingBubbleMarker: UIViewRepresentable {
+    let textInset: EdgeInsets
+
+    func makeUIView(context: Context) -> ChatReadingPosition.BubbleMarker {
+        let marker = ChatReadingPosition.BubbleMarker()
+        marker.isUserInteractionEnabled = false
+        marker.accessibilityElementsHidden = true
+        return marker
+    }
+
+    func updateUIView(_ marker: ChatReadingPosition.BubbleMarker, context: Context) {
+        marker.textInset = UIEdgeInsets(
+            top: self.textInset.top,
+            left: self.textInset.leading,
+            bottom: self.textInset.bottom,
+            right: self.textInset.trailing)
     }
 }
 

@@ -9,6 +9,7 @@ export type GatewayLoopParams = {
   onProcessResourcesSettled?: (outcome: "drained" | "retained") => void;
   onRestartStartupFailure?: (error: unknown, signal: AbortSignal) => Promise<void>;
   ownsProcessLifecycle?: boolean;
+  resolveRestartPort?: () => Promise<number>;
 };
 
 export function registerGatewayRunCleanupReceiptTests({

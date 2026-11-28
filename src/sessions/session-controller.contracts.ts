@@ -6,7 +6,6 @@ import type {
 import type { MessagingToolSend } from "../agents/embedded-agent-messaging.types.js";
 import type { ReplyCompletion, ReplyExpectation } from "../agents/reply-completion.types.js";
 import type { RequesterOrigin } from "../agents/requester-origin.js";
-import type { resolveAgentTurnExecutionStatus } from "../auto-reply/reply/agent-runner-execution-status.js";
 import type { ReplyMessageInjectionOutcome } from "../auto-reply/reply/message-injection-authority.js";
 import type { FollowupQueueDisposition } from "../auto-reply/reply/queue-policy.js";
 import type { FollowupRunPayload } from "../auto-reply/reply/queue/followup-run-payload.types.js";
@@ -301,6 +300,24 @@ export type ReplyOperation = {
 };
 
 export const REPLY_RUN_IDLE_SETTLE_TIMEOUT_MS = 15_000;
+
+export class AmbiguousSessionControllerError extends Error {
+  readonly #workSessionKeys: string[];
+
+  constructor(matches: readonly SessionControllerEntry[]) {
+    super(
+      "OpenClaw found conflicting session records and couldn’t tell which session to use. Try again in a moment.",
+    );
+    // An owner's original key can outlive its work. Capture the effects' own targets instead.
+    this.#workSessionKeys = matches.flatMap(({ lifecycle }) =>
+      Array.from(lifecycle?.effects ?? [], (effect) => effect.ref.target.sessionKey),
+    );
+  }
+
+  hasWorkFor(sessionKey: string): boolean {
+    return this.#workSessionKeys.includes(sessionKey);
+  }
+}
 
 export class ReplyRunAlreadyActiveError extends Error {
   constructor(sessionKey: string) {
@@ -730,7 +747,6 @@ export type ReplyOperationRunState = {
   /** The Gateway accepted this question answer or rejected its values before commitment. */
   questionInputHandled?: true;
   messageInjectionAborted?: true;
-  agentTurn?: ReturnType<typeof resolveAgentTurnExecutionStatus>;
   agentTurnOwner?: ReplyOperation;
   messagingToolSentTargets?: MessagingToolSend[];
   backgroundWorkStarted?: boolean;

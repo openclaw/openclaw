@@ -47,19 +47,15 @@ export async function sendQueuedChatMessage(
   }
   const retrySessionKey = queued.sessionKey ?? queuedSessionKey;
   const retryAgentId = queued.agentId;
-  const retryOwnerIsCurrent = () => {
-    if (!options?.canDispatch || options.canDispatch()) {
-      return true;
-    }
-    deliveryStateWriter(host, storageMode, id)("failed", INTERRUPTED_SETTINGS_WAIT_ERROR);
-    surfaceChatDeliveryFailure(
-      host,
-      retrySessionKey,
-      retryAgentId,
-      INTERRUPTED_SETTINGS_WAIT_ERROR,
-    );
+  const failPreparation = (error: string) => {
+    deliveryStateWriter(host, storageMode, id)("failed", error);
+    surfaceChatDeliveryFailure(host, retrySessionKey, retryAgentId, error);
     return false;
   };
+  const retryOwnerIsCurrent = () =>
+    !options?.canDispatch ||
+    options.canDispatch() ||
+    failPreparation(INTERRUPTED_SETTINGS_WAIT_ERROR);
   if (!retryOwnerIsCurrent()) {
     return "failed";
   }
@@ -77,16 +73,12 @@ export async function sendQueuedChatMessage(
     }
     ({ item: queued, expectedLeafEntryId } = ready);
   }
-  // FIFO and visible history are admitted before preparing transport and the first reply.
-  const { sendPreparedChatQueueItem: sendPrepared, error: preparationError } = await Promise.all([
-    import("./chat-send-delivery.runtime.ts").then(
-      ({ sendPreparedChatQueueItem }) => sendPreparedChatQueueItem,
-    ),
-    loadStreamingMarkdown(),
-  ]).then(
-    ([sendPreparedChatQueueItem]) => ({ sendPreparedChatQueueItem, error: undefined }),
-    (error: unknown) => ({ sendPreparedChatQueueItem: undefined, error }),
-  );
+  // Live replies can use standard Markdown while the optional formatter loads.
+  void loadStreamingMarkdown().catch(() => undefined);
+  const { sendPreparedChatQueueItem: prepared } =
+    await import("./chat-send-delivery.runtime.ts").catch((error: unknown) => ({
+      sendPreparedChatQueueItem: { error },
+    }));
   if (!connectionIsCurrent()) {
     return "pending";
   }
@@ -97,13 +89,11 @@ export async function sendQueuedChatMessage(
   if (!retryOwnerIsCurrent()) {
     return "failed";
   }
-  if (!sendPrepared) {
-    const error = formatUiError(preparationError);
-    deliveryStateWriter(host, storageMode, id)("failed", error);
-    surfaceChatDeliveryFailure(host, retrySessionKey, retryAgentId, error);
+  if (typeof prepared !== "function") {
+    failPreparation(formatUiError(prepared.error));
     return "failed";
   }
-  return sendPrepared(
+  return prepared(
     host,
     current,
     expectedLeafEntryId,

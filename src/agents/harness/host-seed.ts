@@ -183,7 +183,15 @@ export function bindBoundedSeed(
             message,
             Buffer.byteLength(prepared.text ?? "", "utf8") +
               (prepared.text ? 2 : 0) +
-              prepared.images.length * IMAGE_BLOCK_TOKENS * 4,
+              prepared.images.reduce(
+                (bytes, image) =>
+                  bytes +
+                  Math.max(
+                    IMAGE_BLOCK_TOKENS * 4,
+                    Buffer.byteLength(JSON.stringify(image), "utf8"),
+                  ),
+                0,
+              ),
           );
         }
       }

@@ -6,7 +6,7 @@ import {
 } from "../agents/prompt-cache-keep-warm-candidates.js";
 import { getRuntimeConfig } from "../config/config.js";
 import type { GatewayScheduler, GatewaySchedulerScope } from "../infra/gateway-scheduler.js";
-import { isConstrainedProcessLowOnMemory } from "../infra/host-memory.js";
+import { isMemoryPressureHigh } from "../infra/host-memory.js";
 import { normalizeDatabasePath } from "../infra/sqlite-worker-identity.js";
 import { createSubsystemLogger } from "../logging/subsystem.js";
 import {
@@ -55,7 +55,7 @@ function startPromptCacheKeepWarm(signal: AbortSignal) {
     promptCacheKeepWarmState.candidates.clear();
     return;
   }
-  if (isConstrainedProcessLowOnMemory()) {
+  if (isMemoryPressureHigh()) {
     nextPromptCacheSweepAtMs = now + 60_000;
     return;
   }
@@ -84,7 +84,7 @@ function startPromptCacheKeepWarm(signal: AbortSignal) {
 
 async function sweep(signal: AbortSignal, getCronStorePath: () => string) {
   startPromptCacheKeepWarm(signal);
-  if (isConstrainedProcessLowOnMemory()) {
+  if (isMemoryPressureHigh()) {
     // Retention is best effort; leave scarce memory to requests before opening its workers.
     const now = scope?.now() ?? Date.now();
     if (nextHistorySweepAtMs <= now) {

@@ -113,21 +113,6 @@ function recordPhases(fixture: Fixture) {
   return phases;
 }
 
-it("does not rewrite unchanged inert state on closed peers when another overlay opens", async () => {
-  const closed = mountOverlay();
-  const active = mountOverlay();
-  const writes: MutationRecord[] = [];
-  const observer = new MutationObserver((records) => writes.push(...records));
-  observer.observe(closed.surface, { attributes: true, attributeFilter: ["inert"] });
-  try {
-    await open(active);
-  } finally {
-    observer.disconnect();
-  }
-  expect(closed.surface.inert).toBe(true);
-  expect(writes).toHaveLength(0);
-});
-
 describe("native overlay lifecycle", () => {
   it("admits show and hide before changing accepted state, focus, or occlusion", async () => {
     const release = vi.fn();

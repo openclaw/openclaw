@@ -89,13 +89,9 @@ To set a provider explicitly:
 
 Without an embedding provider, only keyword search is available.
 
-To force local GGUF embeddings, install and configure the official
+To force local GGUF embeddings, configure the bundled
 [llama.cpp provider](/plugins/llama-cpp), then point `local.modelPath` at a
 GGUF file:
-
-```bash
-openclaw plugins install @openclaw/llama-cpp-provider
-```
 
 ```json5
 {

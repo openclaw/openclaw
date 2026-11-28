@@ -234,7 +234,7 @@ describe("loadOpenClawPlugins", () => {
       "second-config=visible-to-second",
       "note=mutation-from-first",
     ]);
-    expect(event.context).toEqual({
+    expect(event.context).toStrictEqual({
       note: "mutation-from-first",
     });
 
@@ -263,9 +263,8 @@ describe("loadOpenClawPlugins", () => {
         label: "Failed Provider",
         auth: [],
       });
-      api.registerReload({
-        onConfigReload: async () => {},
-      });
+      api.registerReload({});
+      api.registerReload({ hotPrefixes: ["plugins.entries.failing-side-effects"] });
       api.registerNodeHostCommand({
         command: "failme",
         description: "failme",

@@ -10,6 +10,7 @@ import UIKit
 @MainActor
 struct ChatMermaidBlockView: View {
     let source: String
+    var bodyScale: CGFloat = 1
 
     @Environment(\.self) private var environment
     @Environment(\.displayScale) private var displayScale
@@ -130,7 +131,9 @@ struct ChatMermaidBlockView: View {
     }
 
     private var sourceView: some View {
-        ChatCodeBlockView(block: ChatCodeBlock(language: nil, code: self.source, isComplete: true))
+        ChatCodeBlockView(
+            block: ChatCodeBlock(language: nil, code: self.source, isComplete: true),
+            bodyScale: self.bodyScale)
     }
 
     private var rendered: ChatMermaidRenderedImage? {
@@ -212,7 +215,9 @@ private struct ChatMermaidPreviewView: View {
     var body: some View {
         VStack(spacing: 0) {
             HStack {
+                #if os(macOS)
                 Spacer()
+                #endif
                 Button {
                     self.dismiss()
                 } label: {
@@ -223,6 +228,10 @@ private struct ChatMermaidPreviewView: View {
                 .accessibilityLabel("Close diagram preview")
                 #if os(macOS)
                 .keyboardShortcut(.cancelAction)
+                #endif
+                // On iPhone the close sits at the leading edge, as in every sheet and the image viewer.
+                #if os(iOS)
+                Spacer()
                 #endif
             }
             if self.failed {

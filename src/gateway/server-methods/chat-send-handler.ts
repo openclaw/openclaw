@@ -108,7 +108,6 @@ export async function handleTrustedInternalChatSend(
                 admitted.managementEntitlement,
                 admitted.isCurrent,
                 undefined,
-                admitted.requesterOwner,
                 admitted.callerScopedCreation,
               )
             : undefined;

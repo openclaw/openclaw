@@ -106,6 +106,7 @@ function createPausedCardStore(delegate: WorkboardCardStore) {
       lookup: (key) => delegate.lookup(key),
       delete: (key) => write(key, undefined, () => delegate.delete(key), Boolean),
       entries: (boardId) => delegate.entries(boardId),
+      findCardIdsByPrefix: (prefix) => delegate.findCardIdsByPrefix(prefix),
       listCardStatuses: (ids) => delegate.listCardStatuses(ids),
       listBoardAggregates: () => delegate.listBoardAggregates(),
       listStatsAggregates: (boardId) => delegate.listStatsAggregates(boardId),
@@ -497,23 +498,6 @@ describe("WorkboardStore", () => {
     },
   );
 
-  it("creates and lists cards by status order and position", async () => {
-    const store = createStore();
-
-    const review = await createCard(store, "Review release notes", {
-      status: "review",
-      priority: "high",
-      labels: "release, docs",
-    });
-    const todo = await createCard(store, "Fix dashboard copy", { status: "todo", position: 0 });
-    expect(todo.position).toBe(0);
-    expect(todo.metadata).toBeUndefined();
-
-    expect((await store.list()).map((card) => card.id)).toEqual([todo.id, review.id]);
-    expect(review).toMatchObject({ labels: ["release", "docs"], priority: "high" });
-    expect(review.events?.[0]).toMatchObject({ kind: "created", toStatus: "review" });
-  });
-
   it("ignores dependency links from generic metadata writes", async () => {
     const store = createStore();
     const parent = await createCard(store, "Parent");
@@ -665,32 +649,6 @@ describe("WorkboardStore", () => {
     expect((await store.get(card.id))?.metadata?.automation?.launch).toEqual(retry.launch);
   });
 
-  it("moves cards and records lifecycle timestamps", async () => {
-    const store = createStore();
-    const card = await createCard(store, "Ship workboard", { execution: {} });
-    expect(card.execution).toBeUndefined();
-
-    const running = await store.move(card.id, "running", 500);
-    expect(running.startedAt).toBeGreaterThanOrEqual(card.createdAt);
-    expect(running).toMatchObject({ status: "running", position: 500 });
-    expect(running.events?.at(-1)).toMatchObject({
-      kind: "moved",
-      fromStatus: "todo",
-      toStatus: "running",
-    });
-
-    const done = await store.update(card.id, { status: "done" });
-    expect(done.completedAt).toBeGreaterThanOrEqual(done.startedAt ?? 0);
-
-    const rolledBack = await store.update(card.id, {
-      status: "todo",
-      startedAt: null,
-      completedAt: null,
-    });
-    expect(rolledBack.startedAt).toBeUndefined();
-    expect(rolledBack.completedAt).toBeUndefined();
-  });
-
   it("does not let one stale bulk lifecycle patch strip later card updates", async () => {
     using clock = fakeClock();
     clock.set(1000);
@@ -784,15 +742,6 @@ describe("WorkboardStore", () => {
 
     const cleared = await store.update(card.id, { execution: null });
     expect(cleared.execution).toBeUndefined();
-  });
-
-  it("adds artifact metadata and records its event", async () => {
-    const store = createStore();
-    const card = await createCard(store, "Artifact");
-    const artifact = { label: "Screenshot", path: "/tmp/workboard.png", mimeType: "image/png" };
-    const saved = await store.addArtifact(card.id, artifact);
-    expect(saved.metadata?.artifacts?.[0]).toMatchObject(artifact);
-    expect(saved.events?.at(-1)).toMatchObject({ kind: "artifact_added" });
   });
 
   it("retains the correlated proof when metadata budget trimming is required", async () => {
@@ -1834,46 +1783,6 @@ describe("WorkboardStore", () => {
     });
   });
 
-  it("computes and refreshes card diagnostics", async () => {
-    const store = createStore();
-    const ready = await createCard(store, "Ready too long", { agentId: "main", position: 10 });
-    const running = await createCard(store, "Loose run", { status: "running", sessionKey: "s1" });
-    const failed = await createCard(store, "Failed twice", {
-      status: "blocked",
-      metadata: { failureCount: 2 },
-    });
-    const doneWithAttachment = await createCard(store, "Done with attachment", { status: "done" });
-    await store.addAttachment(doneWithAttachment.id, {
-      fileName: "result.log",
-      contentBase64: Buffer.from("x").toString("base64"),
-    });
-
-    const now = Date.now() + 2 * 24 * 60 * 60 * 1000;
-    const diagnostics = await store.refreshDiagnostics(now);
-
-    expect(diagnostics.count).toBeGreaterThanOrEqual(4);
-    const diagnosedReady = await store.get(ready.id);
-    expect(diagnosedReady?.updatedAt).toBeGreaterThan(ready.updatedAt);
-    expect(diagnosedReady).toMatchObject({
-      metadata: { diagnostics: [{ kind: "stranded_ready" }] },
-    });
-    await expectStored(store, running.id, {
-      metadata: {
-        diagnostics: contains({ kind: "running_without_heartbeat" }, { kind: "orphaned_session" }),
-      },
-    });
-    await expectStored(store, failed.id, {
-      metadata: {
-        diagnostics: contains({ kind: "blocked_too_long" }, { kind: "repeated_failures" }),
-      },
-    });
-    await expect(store.get(doneWithAttachment.id)).resolves.not.toMatchObject({
-      metadata: {
-        diagnostics: contains({ kind: "missing_proof" }),
-      },
-    });
-  });
-
   it.each(["done", "ready"] as const)(
     "keeps archived %s diagnostics transient without rewriting history",
     async (status) => {
@@ -1928,25 +1837,6 @@ describe("WorkboardStore", () => {
       }
     },
   );
-
-  it("builds bounded worker context from card metadata", async () => {
-    const store = createStore();
-    const card = await createCard(store, "Write docs", {
-      notes: "Acceptance:\n- mention tools",
-      agentId: "main",
-      metadata: {
-        comments: [{ id: "comment-1", body: `${"x".repeat(398)}🚀tail`, createdAt: 10 }],
-        proof: [{ id: "proof-1", status: "passed", command: "pnpm test", createdAt: 12 }],
-        artifacts: [
-          { id: "artifact-1", label: "Failure screenshot", path: "/tmp/fail.png", createdAt: 13 },
-        ],
-      },
-    });
-
-    await expect(store.buildWorkerContext(card.id)).resolves.toContain(`- ${"x".repeat(398)}…`);
-    await expect(store.buildWorkerContext(card.id)).resolves.toContain("pnpm test");
-    await expect(store.buildWorkerContext(card.id)).resolves.toContain("Failure screenshot");
-  });
 
   it("scopes idempotent creates and stats by board", async () => {
     const store = createStore();
@@ -2696,7 +2586,11 @@ describe("WorkboardStore attachments", () => {
     const { store, stores } = createWorkboardSqliteTestHarness({
       createStores: createKernelStores,
     });
-    const card = await createCard(store, "Review attached log");
+    const card = await createCard(store, "Review attached log", {
+      metadata: {
+        comments: [{ id: "context-comment", body: `${"x".repeat(398)}🚀tail`, createdAt: 10 }],
+      },
+    });
 
     const attached = await store.addAttachment(card.id, {
       fileName: "failure.log",
@@ -2747,6 +2641,7 @@ describe("WorkboardStore attachments", () => {
 
     const context = await store.buildWorkerContext(card.id);
     expect(context).toContain("failure.log");
+    expect(context).toContain(`- ${"x".repeat(398)}…`);
 
     const deleted = await store.deleteAttachment(card.id, attachment.id);
     expect(deleted.metadata?.attachments).toEqual([

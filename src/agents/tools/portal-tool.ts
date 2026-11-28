@@ -49,15 +49,13 @@ export function formatPortalResult(
 export function createAvailablePortalTools(
   options: {
     sessionPortalTarget?: SessionPortalToolTarget;
-    senderIsOwner?: boolean;
     /** A worker-placed session only ever reaches its own worker. */
     workerScoped?: boolean;
   } = {},
 ): AnyAgentTool[] {
   const target = options.sessionPortalTarget;
-  // One definition for every turn keeps the session's prompt prefix stable; a
-  // non-owner turn is limited to the conversation's worker, or refused.
-  const ownerUnavailable = options.senderIsOwner === false && !target;
+  // One definition for every turn keeps the session's prompt prefix stable; the turn's
+  // owner-only tool gate refuses a non-owner call that has no conversation worker.
   return [
     {
       label: "Portal",
@@ -66,11 +64,6 @@ export function createAvailablePortalTools(
       parameters: options.workerScoped ? SessionPortalToolSchema : PortalToolSchema,
       outputSchema: PortalOutputSchema,
       execute: async (_toolCallId, rawArgs) => {
-        if (ownerUnavailable) {
-          throw new ToolInputError(
-            "portal needs the owner's authority, and this turn was not started by the owner",
-          );
-        }
         const params = rawArgs as Record<string, unknown>;
         target?.assertCurrent();
         const action = readToolStringParam(params, "action", { required: true });

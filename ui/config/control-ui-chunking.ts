@@ -194,7 +194,6 @@ export function controlUiStableChunkName(id: string): string | undefined {
     case "ui/src/components/confirm-dialog.ts":
     case "ui/src/components/confirm-dialog-loading.tsx":
     case "ui/src/components/menu-surface.ts":
-    case "ui/src/components/session-menu-access.ts":
     case "ui/src/components/session-menu-data.ts":
     case "ui/src/components/session-placement-action.ts":
     case "ui/src/lib/editor-links.ts":
@@ -327,7 +326,7 @@ export function controlUiStableChunkName(id: string): string | undefined {
     case "ui/src/pages/chat/chat-pane-session-operations.runtime.ts":
       return "chat-interaction-runtime";
     case "ui/src/pages/chat/components/chat-context-breakdown.tsx":
-    case "ui/src/pages/chat/components/chat-context-breakdown-model.ts":
+    case "src/shared/context-budget-categories.ts":
     case "ui/src/pages/chat/components/chat-context-report.tsx":
     case "ui/src/pages/chat/components/chat-details-environment-body.tsx":
     case "ui/src/lib/session-context-report.ts":

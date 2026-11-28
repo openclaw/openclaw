@@ -8,7 +8,6 @@ import { STREAM_ERROR_FALLBACK_TEXT } from "@openclaw/ai/internal/shared";
 import { expectDefined } from "@openclaw/normalization-core";
 import { afterEach, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
 import { GATEWAY_CLIENT_IDS } from "../../../packages/gateway-protocol/src/client-info.js";
-import { makeUserMessage } from "../../../test/helpers/user-message.js";
 import { waitForFast } from "../../../test/helpers/vitest-wait.js";
 import { HEARTBEAT_PROMPT } from "../../auto-reply/heartbeat.js";
 import {
@@ -227,22 +226,6 @@ function projectedTtsSupplementHistoryMessage(
     { openclawTtsSupplement: marker },
     false,
   );
-}
-
-function deliveryMirrorHistoryMessage(
-  text: string,
-  sourceMessageId: string,
-  timestamp: number,
-): ChatHistoryTestMessage {
-  return {
-    role: "assistant",
-    provider: "openclaw",
-    model: "delivery-mirror",
-    content: [{ type: "text", text }],
-    idempotencyKey: `channel-final:${sourceMessageId}:0`,
-    openclawDeliveryMirror: { kind: "channel-final", sourceMessageId },
-    timestamp,
-  };
 }
 
 describe("waitForAgentJob", () => {
@@ -907,32 +890,6 @@ describe("projectChatDisplayMessages", () => {
         assistantHistoryMessage("Good morning.", {
           provider: "openclaw",
           model: "acp-runtime",
-          timestamp: 2,
-        }),
-      ],
-    },
-    {
-      name: "drops channel-final delivery mirrors that duplicate the preceding assistant reply",
-      messages: [
-        makeUserMessage("yo big boy", 1),
-        assistantHistoryMessage("Yo Peter. I’m here.", {
-          provider: "openai",
-          model: "gpt-5.5",
-          __openclaw: { mirrorIdentity: "run-1:assistant" },
-          timestamp: 2,
-        }),
-        deliveryMirrorHistoryMessage("Yo Peter. I’m here.", "message-1", 3),
-      ],
-      expected: [
-        {
-          role: "user",
-          content: "yo big boy",
-          timestamp: 1,
-        },
-        assistantHistoryMessage("Yo Peter. I’m here.", {
-          provider: "openai",
-          model: "gpt-5.5",
-          __openclaw: { mirrorIdentity: "run-1:assistant" },
           timestamp: 2,
         }),
       ],

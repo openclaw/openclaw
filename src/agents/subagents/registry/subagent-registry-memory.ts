@@ -38,6 +38,7 @@ import {
 import { bindSubagentRunRecord } from "./subagent-registry.store.codec.js";
 import type { SubagentRunSqliteRow } from "./subagent-registry.store.row.js";
 import type { SubagentRunRecord } from "./subagent-registry.types.js";
+import { isSubagentPausedByYield } from "./subagent-requester-turn-custody.js";
 import {
   getSubagentRunRuntimeKey,
   copySubagentRunRuntimeOwner,
@@ -367,7 +368,10 @@ class SubagentRunMap extends Map<string, SubagentRunRecord> {
     }
   }
 
-  runWithCompletionAuthority<T>(observed: SubagentRunRecord, run: () => T): T {
+  runWithCompletionAuthority<T>(
+    observed: SubagentRunRecord,
+    run: (authority?: SubagentCompletionCustody["authority"]) => T,
+  ): T {
     const entry = this.currentValue(observed);
     this.assertCompletionEntryCurrent(entry);
     const custody = this.completionAuthorities.get(getSubagentRunRuntimeKey(entry));
@@ -386,7 +390,7 @@ class SubagentRunMap extends Map<string, SubagentRunRecord> {
       }
       return run();
     }
-    return custody ? custody.authority.run(run) : run();
+    return custody ? custody.authority.run(() => run(custody.authority)) : run();
   }
 
   selectCompletionAuthorityBatch(
@@ -401,7 +405,10 @@ class SubagentRunMap extends Map<string, SubagentRunRecord> {
     );
   }
 
-  runWithCompletionBatchAuthority<T>(observed: readonly SubagentRunRecord[], run: () => T): T {
+  runWithCompletionBatchAuthority<T>(
+    observed: readonly SubagentRunRecord[],
+    run: (authority?: SubagentCompletionCustody["authority"]) => T,
+  ): T {
     return runWithSubagentCompletionBatchAuthority(
       {
         batch: observed.map((entry) => this.currentValue(entry)),
@@ -471,7 +478,7 @@ class SubagentRunMap extends Map<string, SubagentRunRecord> {
         record.generation !== entry.generation ||
         ((!record.requesterTurnRunId || record.expectsCompletionMessage === false) &&
           !record.requesterSettleWake &&
-          record.pauseReason !== "sessions_yield" &&
+          !isSubagentPausedByYield(record) &&
           (record.cleanupCompletedAt !== undefined ||
             record.delivery?.status === "suspended" ||
             record.delivery?.status === "discarded" ||

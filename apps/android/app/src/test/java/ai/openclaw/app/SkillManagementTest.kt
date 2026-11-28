@@ -1,9 +1,10 @@
 package ai.openclaw.app
 
+import ai.openclaw.app.gateway.ErrorShape
 import ai.openclaw.app.gateway.GatewayErrorDetails
-import ai.openclaw.app.gateway.GatewaySession
 import kotlinx.serialization.json.Json
 import kotlinx.serialization.json.int
+import kotlinx.serialization.json.jsonArray
 import kotlinx.serialization.json.jsonObject
 import kotlinx.serialization.json.jsonPrimitive
 import org.junit.Assert.assertEquals
@@ -14,6 +15,42 @@ import org.junit.Test
 
 class SkillManagementTest {
   private val json = Json { ignoreUnknownKeys = true }
+
+  @Test
+  fun installedStatusPreservesFallbacksCountsAndPrimitiveFlags() {
+    assertTrue(parseSkillSummaries(null).isEmpty())
+    val skills =
+      parseSkillSummaries(
+        json
+          .parseToJsonElement(
+            """
+            [null, false, {}, {"name":" "}, {
+              "name":" Fixture skill ","skillKey":" ","source":" ",
+              "disabled":" true ","eligible":true,"blockedByAllowlist":"TRUE",
+              "blockedByAgentFilter":"true","bundled":1,
+              "missing":{"bins":["tool",null],"env":{},"config":[false],"os":[]},
+              "install":[null,{}],
+              "clawhub":{"valid":" true ","slug":" registry-skill ","ownerHandle":" publisher ",
+                "installedVersion":" 1.2.3 ","requestedReference":" skills-sh:example/skill "}
+            }, {"name":42}]
+            """.trimIndent(),
+          ).jsonArray,
+      )
+
+    assertEquals(listOf("Fixture skill", "42"), skills.map { it.name })
+    val skill = skills.first()
+    assertEquals("Fixture skill", skill.skillKey)
+    assertEquals("unknown", skill.source)
+    assertTrue(skill.disabled)
+    assertTrue(skill.eligible)
+    assertFalse(skill.blockedByAllowlist)
+    assertTrue(skill.blockedByAgentFilter)
+    assertFalse(skill.bundled)
+    assertEquals(3, skill.missingCount)
+    assertEquals(2, skill.installCount)
+    assertTrue(isClawHubSkillInstalled(skills, "@publisher/registry-skill", "1.2.3"))
+    assertTrue(isClawHubSkillInstalledByReference(skills, "skills-sh:example/skill"))
+  }
 
   @Test
   fun searchResultsKeepOnlyIdentifiedSkills() {
@@ -192,7 +229,7 @@ class SkillManagementTest {
     for (message in listOf("review required", "download blocked", "security verification unavailable")) {
       val rejection =
         clawHubInstallRejection(
-          GatewaySession.ErrorShape(
+          ErrorShape(
             code = "UNAVAILABLE",
             message = message,
             details =
@@ -216,7 +253,7 @@ class SkillManagementTest {
     for (warning in listOf(null, "", " \n ")) {
       val rejection =
         clawHubInstallRejection(
-          GatewaySession.ErrorShape(
+          ErrorShape(
             code = "UNAVAILABLE",
             message = " \n ",
             details =

@@ -140,10 +140,20 @@ suite.define(() => {
           }
         };
 
-        await page.clock.install();
+        // Loading the cached view and fonts can take longer than the connection grace on CI.
+        // Keep browser time under our control until we explicitly enter the slow state.
+        const bootTime = Date.now();
+        await page.clock.install({ time: bootTime - 60_000 });
+        await page.clock.pauseAt(bootTime);
         await page.reload({ waitUntil: "domcontentloaded" });
-        await gateway.waitForRequest("connect");
-        await conversation.waitFor();
+        await expect
+          .poll(async () => {
+            await page.clock.runFor(16);
+            return (
+              (await gateway.getRequests("connect")).length > 0 && (await conversation.isVisible())
+            );
+          })
+          .toBe(true);
         await page.evaluate(() => document.fonts.ready.then(() => undefined));
         expect.soft(await boundary.textContent()).toBe(finalBoundary);
         await capture("boot");
@@ -197,6 +207,7 @@ suite.define(() => {
           / · Saved conversation$/,
         );
         await capture("slow");
+        await page.clock.resume();
         await gateway.resolveDeferred("connect");
         await status.waitFor({ state: "hidden" });
         await header.locator(".chat-header-session-menu__trigger").waitFor();

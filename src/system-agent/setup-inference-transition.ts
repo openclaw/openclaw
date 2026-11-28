@@ -94,6 +94,8 @@ export function captureSetupInferenceFileUndo(
       writeOptions: copyRuntimeConfigWriteApplication(writeOptions, {
         ...writeOptions,
         expectedConfigPath: snapshot.path,
+        // The conditional inverse removes only this setup's own changes.
+        allowConfigSizeDrop: true,
       }),
       transform: (config) => ({
         nextConfig: restoreSetupInferenceConfig(config, snapshot.sourceConfig, candidate).config,

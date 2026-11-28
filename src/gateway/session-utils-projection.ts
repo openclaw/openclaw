@@ -20,7 +20,10 @@ import {
 import type { PluginMetadataSnapshot } from "../plugins/plugin-metadata-snapshot.types.js";
 import { parseAgentSessionKey } from "../routing/session-key.js";
 import { getOrCreateWeakOwnerMap } from "../shared/weak-owner-map.js";
-import type { SessionRuntimeResolution } from "./session-runtime-resolution.js";
+import {
+  resolveSessionProjectedAutoRuntime,
+  type SessionRuntimeResolution,
+} from "./session-runtime-resolution.js";
 import type { SessionTranscriptUsageSnapshot } from "./session-transcript-derived-readers.js";
 import {
   createSessionRowModelCacheKey,
@@ -108,14 +111,24 @@ export function buildProjectedSubagentActivity(
 }
 
 /** Child presentation needs live ownership and sharing facts, never the child's stored payload. */
-export function projectSessionRowChildLinks(links: readonly SessionChildLink[] | undefined) {
-  return links?.map(({ key, entry, agentId, storePath }) => ({
-    key,
-    agentId,
-    storePath,
-    parsedKey: parseAgentSessionKey(key),
-    entry: projectChildLinkEntry(entry),
-  }));
+export function projectSessionRowChildLinks(
+  links: readonly SessionChildLink[] | undefined,
+  previous?: readonly ProjectedSessionRowChildLink[],
+) {
+  return links?.map((link, index) => {
+    const retained = previous?.[index];
+    if (retained && sameSessionRowChildLink(link, retained)) {
+      return retained;
+    }
+    const { key, entry, agentId, storePath } = link;
+    return {
+      key,
+      agentId,
+      storePath,
+      parsedKey: parseAgentSessionKey(key),
+      entry: projectChildLinkEntry(entry),
+    };
+  });
 }
 
 function projectChildLinkEntry(entry: SessionEntry) {
@@ -137,6 +150,10 @@ function projectChildLinkEntry(entry: SessionEntry) {
 }
 
 type ChildLinkEntry = ReturnType<typeof projectChildLinkEntry>;
+type ProjectedSessionRowChildLink = Omit<SessionChildLink, "entry"> & {
+  parsedKey: ReturnType<typeof parseAgentSessionKey>;
+  entry: ChildLinkEntry;
+};
 const emptyChildLink = projectChildLinkEntry({ sessionId: "", updatedAt: 0 });
 // SAFETY: The compact producer emits the same keys even for absent facts.
 const childLinkFields = Object.keys(emptyChildLink) as (keyof ChildLinkEntry)[];
@@ -159,26 +176,24 @@ export function sameSessionRowChildLinkEntry(
   return true;
 }
 
+function sameSessionRowChildLink(link: SessionChildLink, previous: ProjectedSessionRowChildLink) {
+  return (
+    link.key === previous.key &&
+    link.agentId === previous.agentId &&
+    link.storePath === previous.storePath &&
+    sameSessionRowChildLinkEntry(link.entry, previous.entry)
+  );
+}
+
 /** The compact producer includes absent fields; compare its whole shape without retaining child entries. */
 export function reuseSessionRowChildLinks(
   links: readonly SessionChildLink[],
-  previous: Readonly<ReturnType<typeof projectSessionRowChildLinks>>,
+  previous: readonly ProjectedSessionRowChildLink[] | undefined,
 ) {
-  if (!previous || previous.length !== links.length) {
-    return links;
-  }
-  for (const [index, { key, entry, agentId, storePath }] of links.entries()) {
-    const before = previous[index]!;
-    if (
-      key !== before.key ||
-      agentId !== before.agentId ||
-      storePath !== before.storePath ||
-      !sameSessionRowChildLinkEntry(entry, before.entry)
-    ) {
-      return links;
-    }
-  }
-  return previous;
+  return previous?.length === links.length &&
+    links.every((link, index) => sameSessionRowChildLink(link, previous[index]!))
+    ? previous
+    : links;
 }
 
 export function resolveTranscriptUsageFallbacks(params: {
@@ -285,15 +300,17 @@ export function resolveGatewaySessionRuntimeProjection(params: {
       acpRuntime: acpMeta != null,
       acpBackend: acpMeta?.backend,
     });
-  if (agentRuntime.id === "auto" && entry) {
+  const configuredRuntime = agentRuntime.id;
+  let embeddedAutoRuntime: string | undefined;
+  if (configuredRuntime === "auto" && entry) {
     agentRuntime = {
       ...agentRuntime,
       id: resolveWorkerPlacementModelRuntime({
         ...params,
         entry,
-        resolveEmbeddedRuntime: runtimeResolution
-          ? () => runtimeResolution.effective(params)
-          : undefined,
+        resolveEmbeddedRuntime: () =>
+          (embeddedAutoRuntime =
+            runtimeResolution?.effective(params) ?? resolveSessionProjectedAutoRuntime(params)),
         preparedEnvironment: params.rowContext
           ? (params.rowContext.workerPlacementEnvironment ??= captureRuntimeStateEnvironment())
           : undefined,
@@ -303,6 +320,8 @@ export function resolveGatewaySessionRuntimeProjection(params: {
   return {
     acpMeta,
     agentRuntime,
+    configuredRuntime,
+    embeddedAutoRuntime,
     runtimeSelectionLocked: resolveGatewaySessionRuntimeSelectionLocked(entry, acpMeta),
   };
 }

@@ -28,6 +28,11 @@ if (!process.send || !process.disconnect) {
 }
 const send = (response: AgentSchemaInspectionResponse) => process.send?.(response);
 const disconnect = process.disconnect.bind(process);
+const preparedStateSchema = process.argv.includes("--preload-state-schema")
+  ? import("./openclaw-state-schema-preflight.js")
+  : undefined;
+// The first real request owns a loader failure. An unused preload owns no database.
+void preparedStateSchema?.catch(() => undefined);
 type InspectionRequest =
   | {
       type: "inspect";
@@ -48,7 +53,8 @@ async function inspectRequest(request: InspectionRequest): Promise<void> {
   try {
     if (request.type === "inspect-state") {
       const { input, snapshot } = request;
-      const { inspectStateDatabaseSchema } = await import("./openclaw-state-schema-preflight.js");
+      const { inspectStateDatabaseSchema } = await (preparedStateSchema ??
+        import("./openclaw-state-schema-preflight.js"));
       const inspect = (database: DatabaseSync) => inspectStateDatabaseSchema(database, input);
       let inspection;
       if (snapshot) {
@@ -101,11 +107,18 @@ async function inspectRequest(request: InspectionRequest): Promise<void> {
       const inspected = withDatabaseEngineSelection(request.databaseEngineSelection, () =>
         withEngineStoreAdmission(() =>
           withFreshOpenClawAgentDatabaseReadOnly(
-            ({ db }) => ({
-              version: readAgentDatabaseSchemaVersion(db),
-              integrityGateOutcome: "healthy" as const,
-              agentSchemaMeta: readExistingAgentSchemaMeta(db),
-            }),
+            ({ db }) => {
+              const metadata = readExistingAgentSchemaMeta(db);
+              const version = readAgentDatabaseSchemaVersion(db);
+              const minReader =
+                metadata?.minReader ?? Math.max(metadata?.schemaVersion ?? 0, version);
+              return {
+                version,
+                ...(minReader !== version ? { minReader } : {}),
+                integrityGateOutcome: "healthy" as const,
+                agentSchemaMeta: metadata,
+              };
+            },
             { agentId, path: input.pathname, env: input.env },
           ),
         ),

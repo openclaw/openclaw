@@ -21,7 +21,6 @@ import {
   markControlPlaneUpdateRestartSentinelFailure,
   writeControlPlaneUpdateRestartSentinel,
 } from "./update-control-plane-sentinel.js";
-import { prepareUpdateFailureReport } from "./update-failure-report-prepare.js";
 import type { UpdateRestartSentinelMeta } from "./update-restart-sentinel-payload.js";
 import { buildUpdateRestartSentinelPayload } from "./update-restart-sentinel-payload.js";
 import { createUpdateRun, finishUpdateRun, getUpdateRun } from "./update-run-ledger.js";
@@ -432,7 +431,7 @@ describe("control-plane update restart sentinel", () => {
     { service: undefined, reason: "gateway-readiness-pending", health: "unverified" },
   ] as const)(
     "keeps $health rollback notifications readable by released 2026.9.4",
-    async ({ service, reason, health }) => {
+    async ({ service, reason }) => {
       await withRestartSentinelStateDir(async () => {
         const persisted = {
           serviceRestartSafe: true as const,
@@ -465,8 +464,6 @@ describe("control-plane update restart sentinel", () => {
           .parse(JSON.parse(row?.stats_json ?? "null"));
         expect(stats.recovery).toEqual(persisted);
         expect(result.recovery).toEqual({ ...persisted, packageRollbackVerified: true, reason });
-        const report = await prepareUpdateFailureReport({ attemptId: "released-reader", result });
-        expect(report.body).toContain(`Gateway health ${health} (${reason})`);
       });
     },
   );

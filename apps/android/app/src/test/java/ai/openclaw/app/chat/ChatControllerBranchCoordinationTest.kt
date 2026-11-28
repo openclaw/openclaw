@@ -1,8 +1,8 @@
 package ai.openclaw.app.chat
 
+import ai.openclaw.app.gateway.ErrorShape
 import ai.openclaw.app.gateway.GatewayRequestOutcomeUnknown
 import ai.openclaw.app.gateway.GatewayRequestRejected
-import ai.openclaw.app.gateway.GatewaySession
 import ai.openclaw.app.ui.chat.outboxItemsForSession
 import androidx.room3.Room
 import kotlinx.coroutines.CompletableDeferred
@@ -496,7 +496,7 @@ class ChatControllerBranchCoordinationTest {
       gateway.respondWith("chat.history", historyResponse(sessionId = "main", messages = emptyList()))
       gateway.respond("sessions.branches.list") {
         throw GatewayRequestRejected(
-          GatewaySession.ErrorShape(
+          ErrorShape(
             code = "INVALID_REQUEST",
             message = "missing scope: operator.admin",
           ),
@@ -1700,7 +1700,7 @@ class ChatControllerBranchCoordinationTest {
         } else if (!canonicalAvailable.get()) {
           if (request != 1) {
             if (orphanRequests.incrementAndGet() == 1) firstOrphanJob.set(currentCoroutineContext()[Job])
-            throw GatewayRequestRejected(GatewaySession.ErrorShape("UNAVAILABLE", "history temporarily unavailable"))
+            throw GatewayRequestRejected(ErrorShape("UNAVAILABLE", "history temporarily unavailable"))
           }
           // An acknowledged pending input can precede canonical placement. The newest
           // remote run owns the snapshot; this process has no ownership of the older row.

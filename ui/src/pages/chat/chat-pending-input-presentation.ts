@@ -9,8 +9,11 @@ import { projectChatSystemNotice } from "./chat-system-notice.ts";
 
 const preparation = { t, describeChatQueueAttachmentLabels, projectChatSystemNotice };
 
-export function buildPendingInputQueueItems(inputs: ChatPendingInputsPage["items"]) {
-  return preparePendingInputQueueItems(inputs, preparation);
+export function buildPendingInputQueueItems(
+  inputs: ChatPendingInputsPage["items"],
+  cancelling?: ReadonlySet<string>,
+) {
+  return preparePendingInputQueueItems(inputs, preparation, cancelling);
 }
 
 export function buildPendingInputItems(

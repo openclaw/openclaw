@@ -116,13 +116,18 @@ describe("memory embedding policy", () => {
   });
 
   it("retries transient rate limit and 5xx errors", async () => {
+    const failure = Object.assign(new Error("openai embeddings failed: 429 rate limit"), {
+      status: 429,
+    });
     const run = vi.fn(async () => {
       const call = run.mock.calls.length;
       if (call === 1) {
-        throw new Error("openai embeddings failed: 429 rate limit");
+        throw failure;
       }
       if (call === 2) {
-        throw new Error("openai embeddings failed: 502 Bad Gateway (cloudflare)");
+        failure.message = "openai embeddings failed: 502 Bad Gateway (cloudflare)";
+        failure.status = 502;
+        throw failure;
       }
       return "ok";
     });
@@ -455,6 +460,29 @@ describe("memory embedding policy", () => {
     expect(run).toHaveBeenCalledOnce();
     expect(waitForRetry).not.toHaveBeenCalled();
     expect(onSuccess).not.toHaveBeenCalled();
+  });
+
+  it("does not retry or split a retired document batch on a transport failure", async () => {
+    const controller = new AbortController();
+    const retired = new Error("Manager retired");
+    const run = vi.fn(async () => {
+      controller.abort(retired);
+      throw new Error("fetch failed");
+    });
+    const waitForRetry = vi.fn(async () => {});
+    const onSplit = vi.fn();
+    await expect(
+      runMemoryEmbeddingBatchRetryWithSplit({
+        items: ["a", "b"],
+        signal: controller.signal,
+        run,
+        waitForRetry,
+        onSplit,
+      }),
+    ).rejects.toBe(retired);
+    expect(run).toHaveBeenCalledOnce();
+    expect(waitForRetry).not.toHaveBeenCalled();
+    expect(onSplit).not.toHaveBeenCalled();
   });
 
   it("splits recoverable transport failures and batch watchdog timeouts", async () => {

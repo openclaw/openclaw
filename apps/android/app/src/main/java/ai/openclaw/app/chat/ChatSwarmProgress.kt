@@ -1,7 +1,7 @@
 package ai.openclaw.app.chat
 
 import ai.openclaw.app.asJsonStringOrNull
-import ai.openclaw.app.node.asObjectOrNull
+import ai.openclaw.app.asObjectOrNull
 import kotlinx.serialization.json.JsonObject
 
 private const val MAX_TRACKED_SWARM_GROUPS = 10_000

@@ -9,11 +9,13 @@ import {
 } from "../../lib/sessions/route-navigation.ts";
 import {
   createGateway,
+  createGatewayHarness,
   createSessions,
   createSessionsHarness,
   mountSidebar,
   TWO_AGENTS,
 } from "../app-sidebar.ts";
+import { sidebarGatewayHello } from "../gateway-methods.ts";
 import { agentList, sessionList } from "./compact.test-support.ts";
 import { settleRoster } from "./roster.test-support.ts";
 import "../../components/app-sidebar.tsx";
@@ -86,6 +88,20 @@ it("honors deployment policy and existing Community dismissals", async () => {
     fetch.mockRestore();
     localStorage.removeItem("openclaw:control-ui:community-invite:v2");
   }
+});
+
+it("explains why a read-only connection cannot create a session", async () => {
+  const { gateway, publish } = createGatewayHarness({} as GatewayBrowserClient);
+  const hello = sidebarGatewayHello();
+  publish({ hello: { ...hello, auth: { role: "operator", scopes: ["operator.read"] } } });
+  const { sidebar, find } = await mountAgentSidebar(undefined, undefined, gateway);
+  sidebar.connected = true;
+  await sidebar.updateComplete;
+  const link = find(".sidebar-session-toolbar .sidebar-new-session")!;
+  expect(link.getAttribute("aria-disabled")).toBe("true");
+  expect(link.closest("openclaw-tooltip")?.content).toBe(
+    "You don’t have permission to create a session.",
+  );
 });
 
 it.each(["chip", "roster"] as const)(

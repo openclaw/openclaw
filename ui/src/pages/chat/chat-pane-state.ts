@@ -14,12 +14,12 @@ import type {
   SessionCapability,
   SessionRowObservation,
 } from "../../lib/sessions/session-capability.ts";
+import { chatGoalResumeBusy } from "./chat-goals.ts";
 import { getChatHistoryLoadState } from "./chat-history-state.ts";
 import { chatSendPendingReason } from "./chat-send-support.ts";
-import type { ChatState } from "./chat-state-contract.ts";
 import type { ChatPageHost } from "./chat-state-host.ts";
 import type { ChatProps } from "./chat-view.tsx";
-import { dismissChatRunError, hasDirectSessionRun, isChatBusy } from "./run-lifecycle.ts";
+import { dismissChatRunError } from "./run-lifecycle.ts";
 
 registerChatSessionEnglish();
 registerChatComposerEnglish();
@@ -195,18 +195,22 @@ export class SessionParticipationTracker {
     catalog: boolean;
     listLoading: boolean;
     sessionKey: string;
-    session: Pick<GatewaySessionRow, "sharingRole" | "visibility"> | undefined;
+    session: Pick<GatewaySessionRow, "sharingRole" | "visibility" | "invitedAccess"> | undefined;
   }): boolean {
     if (params.catalog) {
       return false;
     }
     if (params.session) {
       const blocked =
-        params.session.visibility === "draft"
-          ? params.session.sharingRole !== "admin" && params.session.sharingRole !== "owner"
-          : params.session.visibility !== undefined &&
-            params.session.visibility !== "shared" &&
-            params.session.sharingRole === "viewer";
+        params.session.invitedAccess !== undefined &&
+        params.session.sharingRole !== "owner" &&
+        params.session.sharingRole !== "admin"
+          ? params.session.invitedAccess !== "send"
+          : params.session.visibility === "draft"
+            ? params.session.sharingRole !== "admin" && params.session.sharingRole !== "owner"
+            : params.session.visibility !== undefined &&
+              params.session.visibility !== "shared" &&
+              params.session.sharingRole === "viewer";
       this.lastBlocked.delete(params.sessionKey);
       this.lastBlocked.set(params.sessionKey, blocked);
       if (this.lastBlocked.size > MAX_TRACKED_SESSION_ROWS) {
@@ -235,7 +239,7 @@ export function dismissChatError(state: { chatError?: string | null; lastError: 
 }
 
 export function chatSubmitState(
-  state: ChatState & Pick<ChatPageHost, "handleChatDraftChange" | "sessionsResult">,
+  state: ChatPageHost,
   unavailable: boolean,
   nativeChat: boolean,
   session?: GatewaySessionRow,
@@ -256,7 +260,9 @@ export function chatSubmitState(
       Boolean(
         state.chatSubmissions?.readInitial(state.sessionKey, state.client, state.currentSessionId),
       ),
-    goalResumeBusy: isChatBusy(state) || hasDirectSessionRun(state),
+    goalResumeBusy:
+      (session?.goal?.status === "active" && (!nativeChat || unavailable)) ||
+      chatGoalResumeBusy(state, session),
     ...(workspaceRemoved || routePending || (connectionPendingReason && !controlCommand)
       ? { canSend: false }
       : {}),

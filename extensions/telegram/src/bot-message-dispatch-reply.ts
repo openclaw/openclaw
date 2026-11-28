@@ -660,28 +660,29 @@ export function handleReplyError(
       turn.deliveryState.markDelivered();
     }
   }
+  if (shouldReportTelegramError(turn, err)) {
+    turn.deliveryState.markNonSilentFailure();
+    turn.runtime.error?.(danger(`telegram ${info.kind} reply failed: ${String(err)}`));
+  }
+}
+
+export function shouldReportTelegramError(turn: Turn, err: unknown): boolean {
   const errorPolicy = resolveTelegramErrorPolicy({
     accountConfig: turn.telegramCfg,
     groupConfig: turn.context.groupConfig,
     topicConfig: turn.context.topicConfig,
   });
-  if (errorPolicy.policy === "silent") {
-    return;
-  }
-  if (
-    errorPolicy.policy === "once" &&
-    shouldSuppressTelegramError({
-      scopeKey: buildTelegramErrorScopeKey({
-        accountId: turn.context.route.accountId,
-        chatId: turn.context.chatId,
-        threadSpec: turn.context.threadSpec,
-      }),
-      cooldownMs: errorPolicy.cooldownMs,
-      errorMessage: String(err),
-    })
-  ) {
-    return;
-  }
-  turn.deliveryState.markNonSilentFailure();
-  turn.runtime.error?.(danger(`telegram ${info.kind} reply failed: ${String(err)}`));
+  return (
+    errorPolicy.policy === "always" ||
+    (errorPolicy.policy === "once" &&
+      !shouldSuppressTelegramError({
+        scopeKey: buildTelegramErrorScopeKey({
+          accountId: turn.context.route.accountId,
+          chatId: turn.context.chatId,
+          threadSpec: turn.context.threadSpec,
+        }),
+        cooldownMs: errorPolicy.cooldownMs,
+        errorMessage: String(err),
+      }))
+  );
 }
