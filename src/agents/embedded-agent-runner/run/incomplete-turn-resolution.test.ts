@@ -61,6 +61,28 @@ describe("incomplete-turn terminal metadata", () => {
     );
   });
 
+  it("explains a code-only Responses policy stop after tools have run", () => {
+    const assistant = buildEmbeddedRunnerAssistant({
+      provider: "openai",
+      api: "openai-responses",
+      stopReason: "error",
+      errorCode: "cyber_policy",
+      errorType: "invalid_request",
+      errorMessage: "Synthetic private provider diagnostic.",
+    });
+    const attempt = makeEmbeddedRunnerAttempt({
+      currentAttemptAssistant: assistant,
+      lastAssistant: assistant,
+      replayMetadata: { hadPotentialSideEffects: true, replaySafe: false },
+    });
+    const notice = payloadText(attempt);
+
+    expect(notice).toBe(
+      "The provider stopped this reply under its cybersecurity policy. Check any tool results first.",
+    );
+    expect(resolveReplayInvalidFlag({ attempt, incompleteTurnText: notice })).toBe(true);
+  });
+
   it("keeps an explicitly replay-safe structured provider refusal replayable", () => {
     const attempt = refusalAttempt("openai", true);
     const incompleteTurnText = payloadText(attempt);

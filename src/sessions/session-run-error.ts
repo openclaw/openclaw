@@ -13,7 +13,11 @@ import type { CustomMessageReportAppend } from "../config/sessions/session-acces
 import type { SessionEntryCurrentCheck } from "../config/sessions/session-entry-current.types.js";
 import { withSessionTranscriptWriteAssertion } from "../config/sessions/transcript-write-context.js";
 import { classifyGatewayStorageFailure } from "../infra/sqlite-error-diagnostics.js";
-import { isProviderRefusalNoticeText } from "../shared/assistant-error-format.js";
+import {
+  formatProviderCyberPolicyText,
+  isProviderRefusalNoticeText,
+  PROVIDER_CYBER_POLICY_NOTICE,
+} from "../shared/assistant-error-format.js";
 import { HARNESS_UPDATE_REQUIRED_CODE, readRunFailureCause } from "../shared/run-failure-notice.js";
 import { sanitizeSessionRunError, truncateSessionRunError } from "./session-run-error-format.js";
 import { STATE_CONTENTION_SUMMARY } from "./session-run-error-presentation.js";
@@ -42,7 +46,13 @@ export async function recordGatewaySessionRunFailure(
 ): Promise<void> {
   const { runId } = params;
   const storageFailure = classifyGatewayStorageFailure(params.error);
-  const sanitized = sanitizeSessionRunError(params.error) || "unknown error";
+  const observedCode = isRecord(params.errorObservation)
+    ? params.errorObservation.providerErrorCode
+    : undefined;
+  const observedCyberPolicy = formatProviderCyberPolicyText(observedCode);
+  const sanitized =
+    observedCyberPolicy ?? (sanitizeSessionRunError(params.error) || "unknown error");
+  const cyberPolicy = sanitized === PROVIDER_CYBER_POLICY_NOTICE;
   const error = truncateSessionRunError(sanitized, 512);
   const cause = readRunFailureCause(params.errorObservation);
   const report: CustomMessageReportAppend = {
@@ -52,6 +62,7 @@ export async function recordGatewaySessionRunFailure(
         ? STATE_CONTENTION_SUMMARY
         : (params.notice ??
           renderAssistantRequestFailureCopy({ storageFailure }) ??
+          (cyberPolicy ? sanitized : undefined) ??
           // A host-created update error's message is the instruction the user needs.
           (cause?.code === HARNESS_UPDATE_REQUIRED_CODE ? sanitized : undefined) ??
           renderCodexAppServerFailureCopy(sanitized) ??
@@ -69,7 +80,9 @@ export async function recordGatewaySessionRunFailure(
     details: {
       runId,
       error,
-      ...(params.summaryAsTitle ? { summaryAsTitle: true } : {}),
+      ...(params.summaryAsTitle || (cyberPolicy && !params.notice && !params.errorKind)
+        ? { summaryAsTitle: true }
+        : {}),
       ...(params.desktopNotice ? { desktopNotice: params.desktopNotice } : {}),
       ...(params.errorKind ? { errorKind: params.errorKind } : {}),
       ...(cause ? { cause } : {}),

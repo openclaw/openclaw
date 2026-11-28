@@ -40,6 +40,12 @@ Good output, one line each:
   config-only summaries when it is not.
 - `openclaw logs --follow` shows steady activity, no repeating fatal errors.
 
+## A reply stopped under the AI provider's cybersecurity policy
+
+The AI provider ended the reply. If tools ran before the stop, check their
+results and any changes they made before continuing. The notice does not mean
+those actions were undone or tell you what triggered the provider's decision.
+
 ## Assistant feels limited or missing tools
 
 Check the effective tool profile:

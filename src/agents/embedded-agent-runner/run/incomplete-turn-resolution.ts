@@ -2,6 +2,7 @@ import { hasOnlyAssistantReasoningContent } from "@openclaw/ai/internal/shared";
 import { isProviderRefusalAssistantError } from "@openclaw/llm-core/diagnostics";
 import { getReplyPayloadMetadata } from "../../../auto-reply/reply-payload.js";
 import { formatErrorMessage } from "../../../infra/errors.js";
+import { formatProviderCyberPolicyText } from "../../../shared/assistant-error-format.js";
 import {
   hasAcceptedSessionSpawn,
   hasCompletionMessageSessionSpawn,
@@ -168,6 +169,13 @@ export function resolveIncompleteTurnPayloadText(params: {
   }
 
   const { promptError } = projectAgentRunAttemptTerminal(params.attempt.terminal);
+  if (!promptError && assistant?.stopReason === "error") {
+    const cyberPolicy = formatProviderCyberPolicyText(assistant.errorCode);
+    if (cyberPolicy) {
+      // This notice already tells the user how to handle possible tool side effects.
+      return cyberPolicy;
+    }
+  }
   if (
     !promptError &&
     assistant?.stopReason === "error" &&

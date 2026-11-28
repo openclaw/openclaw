@@ -46,6 +46,8 @@ const PROVIDER_PRECAUTION_NOTICE =
 // Older transcripts retain only the error code, so this copy is a live producer too.
 const PROVIDER_LEGACY_MISALIGNMENT_NOTICE =
   "The provider stopped this request as a safety precaution (misalignment).";
+export const PROVIDER_CYBER_POLICY_NOTICE =
+  "The provider stopped this reply under its cybersecurity policy. Check any tool results first.";
 const PROVIDER_REFUSAL_NOTICE_RE =
   /^The provider refused this request(?: \(category: [a-zA-Z0-9_-]{1,64}\))?\. Revise the request and try again\.$/u;
 
@@ -54,14 +56,24 @@ export function isProviderRefusalNoticeText(text: string): boolean {
   return (
     text === PROVIDER_PRECAUTION_NOTICE ||
     text === PROVIDER_LEGACY_MISALIGNMENT_NOTICE ||
+    text === PROVIDER_CYBER_POLICY_NOTICE ||
     PROVIDER_REFUSAL_NOTICE_RE.test(text)
   );
+}
+
+/** User-facing copy for the exact provider code; never use it for retry decisions. */
+export function formatProviderCyberPolicyText(errorCode: unknown): string | undefined {
+  return errorCode === "cyber_policy" ? PROVIDER_CYBER_POLICY_NOTICE : undefined;
 }
 
 export function formatProviderRefusalText(message: {
   diagnostics?: unknown;
   errorCode?: unknown;
 }): string | undefined {
+  const cyberPolicy = formatProviderCyberPolicyText(message.errorCode);
+  if (cyberPolicy) {
+    return cyberPolicy;
+  }
   const refusal = Array.isArray(message.diagnostics)
     ? message.diagnostics.find(
         (diagnostic) => asOptionalRecord(diagnostic)?.type === "provider_refusal",
