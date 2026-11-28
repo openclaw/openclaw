@@ -257,7 +257,7 @@ while the response is pending.
 
 ### Inference account continuity
 
-Main-session system events use the main session’s model, not the scheduled subagent model. When that model uses an eligible stored account, new jobs record the account and repairing Doctor adopts it for saved jobs. A configured API key needs no stored account. Without a configured model, the event cannot complete.
+Main-session system events use the main session’s model, not the scheduled subagent model. When that model uses an eligible stored account, new jobs record the account and repairing Doctor adopts it for saved jobs. An environment SecretRef needs no stored account. If Doctor imports a literal provider key into a stored account, it also adopts that account for the saved event. To record an account explicitly, run `openclaw automations edit <jobId> --model <current-session-model>@<profileId>`. This binds the account without pinning the model or changing the event text, schedule, or ID. Without a configured model, the event cannot complete.
 
 New isolated agent-turn jobs privately retain their selected stored inference account
 and compatible authentication route. OAuth and API keys can remain enabled together:

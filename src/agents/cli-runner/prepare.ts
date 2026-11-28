@@ -426,14 +426,14 @@ async function prepareCliRunContextWithinReadFence(
   // preflight, refresh, or forward OpenClaw's snapshot; the installed Claude
   // process validates and refreshes its own current login.
   const usesNativeAuthProfile =
-    backendAuthPolicy?.nativeAuthProfileIds !== undefined &&
     effectiveAuthProfileId !== undefined &&
-    backendAuthPolicy.nativeAuthProfileIds.includes(effectiveAuthProfileId);
+    backendAuthPolicy?.nativeAuthProfileIds?.includes(effectiveAuthProfileId);
   if (usesNativeAuthProfile) {
     effectiveAuthProfileId = undefined;
     authCredential = undefined;
   } else if (params.nativeAuthOnly && effectiveAuthProfileId) {
     throw createUnrecordedScheduledAccountRefusal({
+      jobId: params.jobId,
       runtime: backendResolved.id,
       modelRef: `${params.modelProvider ?? params.provider}/${params.model ?? "default"}`,
       profileId: effectiveAuthProfileId,

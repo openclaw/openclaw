@@ -298,6 +298,7 @@ export async function runCliFallbackCandidate(
           : await resolveLiveProfile();
         if (turn.followupRun.run.scheduledAutomation && !scheduledInference && authProfileId) {
           throw createUnrecordedScheduledAccountRefusal({
+            jobId: turn.followupRun.run.scheduledAutomation.job.id,
             runtime: params.cliExecutionProvider,
             modelRef: `${params.provider}/${params.model}`,
             profileId: authProfileId,

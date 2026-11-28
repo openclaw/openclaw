@@ -11,7 +11,7 @@ import { readDatabase } from "./observations.mjs";
 
 // Disposable published-driver prefix, fresh state root, packed candidate, full expected commit.
 const [prefix, root, tarball, commit, version, mode, rawPort] = process.argv.slice(2);
-assert(["stored", "configured-key", "no-model"].includes(mode));
+assert(["stored", "literal", "env-ref", "no-model"].includes(mode));
 assert.match(commit, /^[a-f0-9]{40}$/);
 const port = Number(rawPort);
 const run = promisify(execFile);
@@ -50,7 +50,10 @@ const config = {
 };
 const text = "Report the saved system event: upgrade-event-fixture";
 const requestLog = path.join(root, "requests.jsonl");
-const fixtureKey = "synthetic-automation-proof-only";
+const fixtureKey = "sk-test-synthetic-loopback-only-207275";
+if (mode === "env-ref") {
+  env.OPENCLAW_REMINDER_FIXTURE_KEY = fixtureKey;
+}
 const children = new Set();
 async function start(exe, args, name, extra = {}) {
   const log = await fs.open(path.join(root, name + ".log"), "w", 0o600);
@@ -108,6 +111,7 @@ function storedJob(id) {
     return {
       settings: { name, enabled, schedule, payload, agentId, sessionTarget, delivery },
       profile: inferenceBinding?.profileId ?? null,
+      source: inferenceBinding?.source ?? null,
     };
   });
 }
@@ -131,7 +135,10 @@ try {
         proof: {
           api: "openai-completions",
           baseUrl: "http://127.0.0.1:" + (port + 100) + "/v1",
-          apiKey: fixtureKey,
+          apiKey:
+            mode === "env-ref"
+              ? { source: "env", provider: "default", id: "OPENCLAW_REMINDER_FIXTURE_KEY" }
+              : fixtureKey,
           models: [{ id: "proof-model", name: "Proof", contextWindow: 128000, maxTokens: 4096 }],
         },
       },
@@ -150,7 +157,7 @@ try {
     );
   }
   await fs.writeFile(env.OPENCLAW_CONFIG_PATH, JSON.stringify(config), { mode: 0o600 });
-  async function saveAccount() {
+  async function saveAccount(profileId = "proof:fixture") {
     const child = spawn(
       cli,
       [
@@ -160,7 +167,7 @@ try {
         "--provider",
         "proof",
         "--profile-id",
-        "proof:fixture",
+        profileId,
         "--agent",
         "main",
       ],
@@ -173,6 +180,15 @@ try {
   const latestStable = version === "2026.11.10";
   if (mode === "stored" && !latestStable) {
     await saveAccount();
+  }
+  if (mode === "literal" || mode === "env-ref") {
+    const help = await call(["setup", "--help"]);
+    await call([
+      "setup",
+      ...(help.includes("--baseline") ? ["--baseline"] : []),
+      "--workspace",
+      path.join(root, "workspace"),
+    ]);
   }
   const old = await gateway("old-gateway");
   const job = JSON.parse(
@@ -225,9 +241,12 @@ try {
   assert.equal(installed, commit);
   const upgraded = storedJob(job.id);
   assert.deepEqual(upgraded.settings, original.settings);
-  assert.equal(upgraded.profile, mode === "stored" ? "proof:fixture" : null);
+  assert.equal(
+    upgraded.profile,
+    mode === "stored" ? "proof:fixture" : mode === "literal" ? "proof:default" : null,
+  );
   await fs.writeFile(requestLog, "");
-  await gateway("new-gateway");
+  const updatedGateway = await gateway("new-gateway");
   const retained = JSON.parse(
     await call(["cron", "runs", "--id", job.id, "--limit", "5", "--json"]),
   ).entries.find((row) => row.runAtMs === before.runAtMs && row.jobId === job.id);
@@ -240,8 +259,43 @@ try {
   const requests = (await fs.readFile(requestLog, "utf8"))
     .split("\n")
     .filter((line) => line.includes("upgrade-event-fixture")).length;
+  let recovery;
+  if (mode === "literal" || mode === "env-ref") {
+    let command = `openclaw automations edit ${job.id} --model proof/proof-model@proof:default`;
+    if (mode === "env-ref") {
+      // Introducing a stored account later exercises manual recovery without an intervening Doctor.
+      await stop(updatedGateway);
+      await saveAccount("proof:default");
+      await call(["config", "set", "models.providers.proof.apiKey", "proof:default"]);
+      await gateway("stored-account-gateway");
+      const refusal = await occurrence(job.id);
+      assert.equal(refusal.status, "error");
+      assert(refusal.error.includes(`Record the account with ${command}.`), refusal.error);
+      command = refusal.error.match(/Record the account with (.+?)\. For eligible/u)[1];
+    }
+    await call(command.split(" ").slice(1));
+    await fs.writeFile(requestLog, "");
+    const repaired = await occurrence(job.id);
+    assert.equal(repaired.status, "ok", repaired.error);
+    const persisted = storedJob(job.id);
+    assert.deepEqual(persisted.settings, original.settings);
+    assert.equal(persisted.profile, "proof:default");
+    assert.equal(persisted.source, "user");
+    const recoveryRequests = (await fs.readFile(requestLog, "utf8"))
+      .split("\n")
+      .filter((line) => line.includes("upgrade-event-fixture")).length;
+    assert.equal(recoveryRequests, 1);
+    recovery = {
+      command,
+      status: repaired.status,
+      profile: persisted.profile,
+      source: persisted.source,
+      requests: recoveryRequests,
+    };
+  }
   console.log(
     JSON.stringify({
+      recovery,
       version,
       mode,
       installed,

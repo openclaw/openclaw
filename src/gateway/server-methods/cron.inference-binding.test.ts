@@ -64,6 +64,36 @@ function captureAuthority(
 }
 
 describe("cron handler inference binding persistence", () => {
+  it("records the requested account without converting a main-session system event", async ({
+    fixture,
+  }) => {
+    await fixture.invoke("cron.add", {
+      ...createParams(),
+      sessionTarget: "main",
+      payload: { kind: "systemEvent", text: "Reminder" },
+    });
+    const before = await fixture.reload();
+    await updateModel(fixture, before.id, `openai/gpt-4.1@${subscriptionId}`);
+    const after = await fixture.reload();
+    expect(after).toMatchObject({
+      id: before.id,
+      sessionTarget: "main",
+      schedule: before.schedule,
+      payload: before.payload,
+      inferenceBinding: { profileId: subscriptionId, source: "user" },
+    });
+    expect(after.payload).toEqual(before.payload);
+    await fixture.invoke(
+      "cron.update",
+      {
+        id: before.id,
+        patch: { payload: { kind: "agentTurn", model: `openai/different-model@${platformId}` } },
+      },
+      null,
+      { expectedSuccess: false },
+    );
+    expect(await fixture.reload()).toEqual(after);
+  });
   it("replaces a stored account with an explicit native CLI login without replacing the job", async ({
     fixture,
   }) => {

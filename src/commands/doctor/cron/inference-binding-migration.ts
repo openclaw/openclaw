@@ -110,7 +110,7 @@ export async function maybeRepairCronInferenceBindings(params: {
       const label = `${normalizeOptionalString(definition.name) ?? stored.id} (${stored.id})`;
       const accountEditAdvice = () =>
         isSystemEvent
-          ? `To choose a different account for this job alone, explicitly convert it to an agent turn: openclaw automations edit ${quoteCliArg(stored.id)} --message '<reminder text>' --model ${quoteCliArg(`${modelRef ?? "<provider/model>"}@<profileId>`)}.`
+          ? `To bind a stored account for the main session’s model without changing the reminder, run openclaw automations edit ${quoteCliArg(stored.id)} --model ${quoteCliArg(`${modelRef ?? "<provider/model>"}@<profileId>`)}.`
           : `To choose the account, run openclaw automations edit ${quoteCliArg(stored.id)} --model ${quoteCliArg(`${modelRef ?? "<provider/model>"}@<profileId>`)}.`;
       try {
         // Malformed legacy rows must not abandon adoption for unrelated jobs or partitions.
