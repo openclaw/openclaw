@@ -68,6 +68,8 @@ export const CORE_FIELD_HELP: Record<string, string> = {
     "Diagnostics controls for targeted tracing, telemetry export, and cache inspection during debugging. Keep baseline diagnostics minimal in production and enable deeper signals only when investigating issues.",
   "diagnostics.otel":
     "OpenTelemetry export settings for traces, metrics, and logs emitted by gateway components. Use this when integrating with centralized observability backends and distributed tracing pipelines.",
+  "diagnostics.langfuse":
+    "Langfuse export settings layered on top of the existing OTEL exporter. Enable this to ship gateway wrapper traces to a Langfuse project; keep prompt capture off unless it is explicitly approved.",
   "diagnostics.cacheTrace":
     "Cache-trace logging settings for observing cache decisions and payload context in embedded runs. Enable this temporarily for debugging and disable afterward to reduce sensitive log footprint.",
   logging:

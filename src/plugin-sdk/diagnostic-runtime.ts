@@ -1,6 +1,6 @@
 import { redactSensitiveText } from "../logging/redact.js";
 
-const LOW_CARDINALITY_DIAGNOSTIC_VALUE_RE = /^[A-Za-z0-9_.:-]{1,120}$/u;
+const LOW_CARDINALITY_DIAGNOSTIC_VALUE_RE = /^[A-Za-z0-9_.:/-]{1,120}$/u;
 
 export function normalizeDiagnosticValue(value: string | undefined, fallback = "unknown"): string {
   if (!value) {

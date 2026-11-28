@@ -32,6 +32,49 @@ export function createHarnessRecorders(runtime: DiagnosticsRecorderRuntime) {
     ...(evt.channel ? { "openclaw.channel": normalizeDiagnosticValue(evt.channel) } : {}),
   });
 
+  // Gateway-side attribution for wrapper spans: which route served the run, whether
+  // it fell back, the gateway request id, and the token/cost the attempt consumed.
+  const harnessGatewaySpanAttrs = (
+    evt: HarnessRunDiagnosticEvent,
+  ): Record<string, string | number | boolean> => {
+    const attrs: Record<string, string | number | boolean> = {
+      "openclaw.wrapper": true,
+      "openclaw.status":
+        evt.type === "harness.run.error"
+          ? "error"
+          : evt.type === "harness.run.completed"
+            ? evt.outcome
+            : "started",
+    };
+    if (evt.selectedRoute) {
+      attrs["openclaw.selected_route"] = normalizeDiagnosticValue(evt.selectedRoute);
+    }
+    if (typeof evt.fallbackUsed === "boolean") {
+      attrs["openclaw.fallback_used"] = evt.fallbackUsed;
+    }
+    if (evt.runnerType) {
+      attrs["openclaw.runner_type"] = normalizeDiagnosticValue(evt.runnerType);
+    }
+    if (evt.requestId) {
+      attrs["openclaw.request_id"] = normalizeDiagnosticValue(evt.requestId);
+    }
+    if (evt.type !== "harness.run.started") {
+      attrs["openclaw.latency_ms"] = evt.durationMs;
+    }
+    if (evt.type === "harness.run.completed") {
+      if (typeof evt.usage?.input === "number") {
+        attrs["gen_ai.usage.input_tokens"] = evt.usage.input;
+      }
+      if (typeof evt.usage?.output === "number") {
+        attrs["gen_ai.usage.output_tokens"] = evt.usage.output;
+      }
+      if (typeof evt.costUsd === "number") {
+        attrs["openclaw.cost_usd"] = evt.costUsd;
+      }
+    }
+    return attrs;
+  };
+
   function recordHarnessRunFinished(
     evt: Extract<DiagnosticEventPayload, { type: "harness.run.completed" | "harness.run.error" }>,
     metadata: DiagnosticEventMetadata,
@@ -53,6 +96,7 @@ export function createHarnessRecorders(runtime: DiagnosticsRecorderRuntime) {
     }
     const spanAttrs: Record<string, string | number | boolean> = { ...attrs };
     runtime.addRunAttrs(spanAttrs, evt);
+    Object.assign(spanAttrs, harnessGatewaySpanAttrs(evt));
     if (evt.type === "harness.run.completed") {
       if (evt.resultClassification) {
         spanAttrs["openclaw.harness.result_classification"] = normalizeDiagnosticValue(
@@ -135,6 +179,7 @@ export function createHarnessRecorders(runtime: DiagnosticsRecorderRuntime) {
         ...harnessRunMetricAttrs(evt),
       };
       runtime.addRunAttrs(spanAttrs, evt);
+      Object.assign(spanAttrs, harnessGatewaySpanAttrs(evt));
       if (runtime.captureContent) {
         assignOtelContentAttr(spanAttrs, "input.value", privateData.harnessContent?.userPrompt);
       }

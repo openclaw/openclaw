@@ -127,3 +127,4 @@ Edit the owning guide, without competing rules here. [Skill setup](.agents/skill
 - **Releases, extended-stable:** release workflow and [release contract](docs/reference/RELEASING.md) ([line/retirement policy](docs/reference/RELEASING.md#release-channels)); preserve selected cut and identity through publication and verification.
 - **Secrets/advisories:** [secrets](docs/gateway/secrets.md), [auth](docs/auth-credential-semantics.md), [security reporting](SECURITY.md).
 - **Live channels/native apps:** scoped guide + [evidence policy](.agents/skills/openclaw-testing/SKILL.md#select-the-proof).
+- **Final reports:** [evidence-only reporting](.agents/skills/openclaw-testing/SKILL.md#report-only-evidenced-results).
