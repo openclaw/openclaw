@@ -650,9 +650,10 @@ export function createModelSetup(
     // Receipt-clear events retire restored wizard work before another activation can start.
     const stopFirstRun = firstRun.subscribe(notify);
     // Models on the same page (catalog sign-in, keys) can configure a model; rescan so
-    // first run offers its verification and onboarding handoff without a reload.
+    // first run offers its verification and onboarding handoff without a reload. A newer
+    // scan replaces one that began before the change; setup actions rescan when they settle.
     const stopCatalog = subscribeModelCatalogChanges(context.gateway, () => {
-      if (!state.detectionRequest && !actionsDisabled()) {
+      if (!actionsDisabled()) {
         void detect();
       }
     });
