@@ -2,7 +2,7 @@ import {
   GATEWAY_CLIENT_CAPS,
   hasGatewayClientCap,
 } from "../../../packages/gateway-protocol/src/client-info.js";
-import type { PendingInputHistoryRunState } from "../../config/sessions/session-pending-input-history.types.js";
+import type { PendingInputHistoryTerminalCheck } from "../../config/sessions/session-pending-input-history.types.js";
 import { readSessionPendingInputReceiptsInWorker } from "../../config/sessions/session-pending-input-receipts.js";
 import { isTerminalSessionStatus } from "../../config/sessions/types.js";
 import { measureDiagnosticsTimelineSpan } from "../../infra/diagnostics-timeline.js";
@@ -33,7 +33,7 @@ export async function readChatHistoryPendingInputs(
     resolveGatewayContext: options.resolveGatewayContext,
   };
   const queuedRunIds = current && captureQueuedChatInputRunIds({ ...current, ...runtimeScope });
-  let pendingRunState: PendingInputHistoryRunState | undefined;
+  let matchesTerminal: PendingInputHistoryTerminalCheck | undefined;
   const pendingInputs = current
     ? await measureDiagnosticsTimelineSpan(`gateway.${options.method}.pending_inputs`, () =>
         readChatPendingInputs(current, {
@@ -48,8 +48,8 @@ export async function readChatHistoryPendingInputs(
             options.client?.connect.caps,
             GATEWAY_CLIENT_CAPS.CHAT_HISTORY_QUEUE_OBSERVATION,
           ),
-          observeRunState: (runState) => {
-            pendingRunState = runState;
+          observeTerminalCheck: (check) => {
+            matchesTerminal = check;
           },
         }),
       )
@@ -80,8 +80,7 @@ export async function readChatHistoryPendingInputs(
         sessionInfo?.hasActiveRun === false &&
         sessionInfo.lastRunId &&
         isTerminalSessionStatus(sessionInfo.status) &&
-        (pendingRunState?.lastRunId !== sessionInfo.lastRunId ||
-          pendingRunState.status !== sessionInfo.status)
+        !matchesTerminal?.(sessionInfo.lastRunId, sessionInfo.status)
       ) {
         // Omission alone cannot protect clients that infer an empty queue from the display page.
         respondChatHistoryUnavailable(

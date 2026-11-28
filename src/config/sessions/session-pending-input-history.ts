@@ -13,8 +13,8 @@ import { withSessionActorStorage } from "./session-actor-storage-acquisition.js"
 import { captureSessionActorStorageOwner } from "./session-actor-storage-binding.js";
 import type {
   PendingInputHistoryQuery,
-  PendingInputHistoryRunState,
   PendingInputHistorySnapshot,
+  PendingInputHistoryTerminalCheck,
 } from "./session-pending-input-history.types.js";
 import { projectSessionPendingInput } from "./session-pending-input-value.js";
 import { captureSessionStoreReadTarget } from "./session-store-read-target.js";
@@ -180,7 +180,7 @@ export async function listSessionPendingInputs(
     audience?: import("./session-pending-input-audience.js").PendingInputAudience;
     observeQueue?: (
       hasQueuedInput: boolean | undefined,
-      runState: PendingInputHistoryRunState | undefined,
+      matchesTerminal: PendingInputHistoryTerminalCheck,
     ) => void;
   } = {},
 ): Promise<SessionPendingInputPage> {
@@ -189,7 +189,10 @@ export async function listSessionPendingInputs(
     ...query,
     ...(observeQueue && { includeQueueObservation: true }),
   });
-  observeQueue?.(total === 0 ? false : hasQueuedInput, runState);
+  observeQueue?.(
+    total === 0 ? false : hasQueuedInput,
+    (runId, status) => runState?.lastRunId === runId && runState.status === status,
+  );
   return {
     items: rows.toReversed().map(projectSessionPendingInput),
     total: total ?? 0,

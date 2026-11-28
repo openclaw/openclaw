@@ -5,7 +5,7 @@ import {
   listSessionPendingInputs,
   type SessionPendingInput,
 } from "../../config/sessions/session-accessor.js";
-import type { PendingInputHistoryRunState } from "../../config/sessions/session-pending-input-history.types.js";
+import type { PendingInputHistoryTerminalCheck } from "../../config/sessions/session-pending-input-history.types.js";
 import {
   getRpcSourceForGateway,
   getRpcSourceIdentity,
@@ -97,7 +97,7 @@ export async function readChatPendingInputs(
     maxChars: number;
     queuedRunIds?: ReadonlySet<string>;
     includeQueueObservation?: boolean;
-    observeRunState?: (runState: PendingInputHistoryRunState | undefined) => void;
+    observeTerminalCheck?: (matchesTerminal: PendingInputHistoryTerminalCheck) => void;
     cronStorePath?: string;
     resolveGatewayContext?: GatewayContextResolver;
     physicalPaths?: SessionRuntimeScope["physicalPaths"];
@@ -110,10 +110,10 @@ export async function readChatPendingInputs(
     limit: Math.min(options.limit, 20),
     audience: options.audience,
     observeQueue:
-      options.includeQueueObservation || options.observeRunState
-        ? (queued, runState) => {
+      options.includeQueueObservation || options.observeTerminalCheck
+        ? (queued, matchesTerminal) => {
             hasQueuedInput = queued;
-            options.observeRunState?.(runState);
+            options.observeTerminalCheck?.(matchesTerminal);
           }
         : undefined,
   });

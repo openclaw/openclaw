@@ -1,7 +1,12 @@
 import type { SessionPendingInputRow } from "./session-pending-input.types.js";
-import type { InternalSessionEntry } from "./types.js";
+import type { InternalSessionEntry, PersistedSessionRunStatus } from "./types.js";
 
 export type PendingInputHistoryRunState = Pick<InternalSessionEntry, "lastRunId" | "status">;
+
+export type PendingInputHistoryTerminalCheck = (
+  runId: string,
+  status: PersistedSessionRunStatus,
+) => boolean;
 
 export type PendingInputHistoryQuery = {
   sessionKey: string;
