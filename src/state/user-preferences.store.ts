@@ -29,6 +29,10 @@ import {
   iterateSqliteQuerySync,
 } from "../infra/kysely-sync.js";
 import type { EngineConnection } from "../infra/sql-connection.js";
+import {
+  validateVoiceSnippetCatalog,
+  VOICE_SNIPPETS_PREFERENCE_KEY,
+} from "../shared/voice-snippets.js";
 import { tableExists } from "./openclaw-state-db-schema-helpers.js";
 import type { DB as OpenClawStateKyselyDatabase } from "./openclaw-state-db.generated.js";
 import { createOpenClawStateSchemaEnsurer } from "./openclaw-state-feature-schema-ensure.js";
@@ -170,7 +174,8 @@ function userPreferenceKeyCount(keys: ReadonlySet<string>): number {
   return (
     keys.size -
     Number(keys.has(GIT_COAUTHOR_ORGANIZATION_PREFERENCE_KEY)) -
-    Number(keys.has(CRON_FAILURE_DISMISSALS_KEY))
+    Number(keys.has(CRON_FAILURE_DISMISSALS_KEY)) -
+    Number(keys.has(VOICE_SNIPPETS_PREFERENCE_KEY))
   );
 }
 
@@ -195,6 +200,7 @@ export function mergeUserPreferences(
       .orderBy("pref_key", "asc"),
   ).rows;
   for (const row of rows) {
+    let adoptedSnippetCatalog: string | undefined;
     if (row.pref_key === CRON_FAILURE_DISMISSALS_KEY) {
       const receipts = readCronFailureDismissals(JSON.parse(row.value_json));
       for (const [id, at] of readProfileCronFailureDismissals(database, targetProfileId)) {
@@ -203,11 +209,32 @@ export function mergeUserPreferences(
       saveProfileCronFailureDismissals(database, targetProfileId, receipts);
       continue;
     }
+    if (row.pref_key === VOICE_SNIPPETS_PREFERENCE_KEY && targetKeys.has(row.pref_key)) {
+      const source = validateVoiceSnippetCatalog(JSON.parse(row.value_json));
+      const target = validateVoiceSnippetCatalog(
+        readUserPreferences(database, targetProfileId, [row.pref_key])[row.pref_key],
+      );
+      if (source.snippets.length && target.snippets.length) {
+        throw new Error(
+          "Both profiles have voice snippets. Export and resolve their catalogs before merging profiles.",
+        );
+      }
+      if (source.snippets.length) {
+        adoptedSnippetCatalog = JSON.stringify({
+          ...source,
+          revision: Math.max(source.revision, target.revision) + 1,
+          enabled: target.enabled,
+        });
+        deleteUserPreference(database, targetProfileId, row.pref_key);
+        targetKeys.delete(row.pref_key);
+      }
+    }
     if (targetKeys.has(row.pref_key)) {
       continue;
     }
     if (
       row.pref_key !== GIT_COAUTHOR_ORGANIZATION_PREFERENCE_KEY &&
+      row.pref_key !== VOICE_SNIPPETS_PREFERENCE_KEY &&
       userPreferenceKeyCount(targetKeys) >= USER_PREFS_PROFILE_KEY_LIMIT
     ) {
       continue;
@@ -218,9 +245,10 @@ export function mergeUserPreferences(
         ? normalizeBackgroundPreference(JSON.parse(row.value_json))
         : undefined;
     const valueJson =
-      background && !isOwnedBackgroundPreference(database, targetProfileId, background)
+      adoptedSnippetCatalog ??
+      (background && !isOwnedBackgroundPreference(database, targetProfileId, background)
         ? JSON.stringify({ ...background, source: { kind: "none" } })
-        : row.value_json;
+        : row.value_json);
     executeSqliteQuerySync(
       database,
       db
@@ -253,6 +281,8 @@ export function readUserPreferences(
     .orderBy("pref_key", "asc");
   if (keys) {
     query = query.where("pref_key", "in", [...keys]);
+  } else {
+    query = query.where("pref_key", "!=", VOICE_SNIPPETS_PREFERENCE_KEY);
   }
   return Object.fromEntries(
     executeSqliteQuerySync(sqlite, query).rows.map((row) => [

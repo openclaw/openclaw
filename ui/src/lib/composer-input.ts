@@ -11,7 +11,7 @@ export type ComposerEditorBridge = {
   requestSync: () => void;
   focus: (options?: FocusOptions) => void;
   select: (start: number, end: number, direction?: "forward" | "backward" | "none") => void;
-  replace: (text: string, start: number, end: number) => void;
+  replace: (text: string, start: number, end: number, isolate?: true) => void;
   /** Replace the whole draft as one isolated history step. */
   replaceAll: (text: string) => void;
   /** Step the editor's own history back, restoring mention identities with the text. */
@@ -24,6 +24,25 @@ export function registerComposerActivation(input: HTMLTextAreaElement, activate:
   return () => activations.delete(input);
 }
 const editors = new WeakMap<HTMLTextAreaElement, ComposerEditorBridge>();
+const exactInsertions = new WeakSet<HTMLTextAreaElement>();
+
+/** Scope an accepted literal write through the existing input/recipient owner. */
+export function withExactComposerInsertion<T>(input: HTMLTextAreaElement, write: () => T): T {
+  const nested = exactInsertions.has(input);
+  exactInsertions.add(input);
+  try {
+    return write();
+  } finally {
+    if (!nested) {
+      exactInsertions.delete(input);
+    }
+  }
+}
+
+export function isExactComposerInsertion(input: HTMLTextAreaElement): boolean {
+  return exactInsertions.has(input);
+}
+
 export function registerComposerEditor(input: HTMLTextAreaElement, editor: ComposerEditorBridge) {
   editors.set(input, editor);
   return () => editors.delete(input);

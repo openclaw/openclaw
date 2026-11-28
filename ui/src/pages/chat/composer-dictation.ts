@@ -3,11 +3,13 @@ import { t } from "../../i18n/index.ts";
 import { formatUiError } from "../../lib/format-error.ts";
 import { listen } from "../../lib/reactive/listener.ts";
 import { GatewaySpeechPlayback } from "../../lib/speech-playback.ts";
+import { showVoiceSnippetCatalog } from "./components/voice-snippets.tsx";
 import type {
   ComposerDictationCommits,
   ComposerDictationSession,
   placeComposerDictation,
 } from "./composer-dictation-session.ts";
+import type { ComposerSnippetCapture, ComposerSnippetTarget } from "./composer-snippets.ts";
 import type { RealtimeTalkLevelSignal } from "./talk/level.ts";
 
 const HOLD_ARM_DELAY_MS = 150,
@@ -18,6 +20,12 @@ type DictationPhase = "idle" | "pressing" | "holding" | "connecting" | "recordin
 type ComposerDictationFailure = {
   kind: "interrupted" | "start" | "busy";
   preservesText: boolean;
+};
+
+/** Optional capture preparation consumes finals before they can enter an unsent draft. */
+export type ComposerDictationReviewCapture = {
+  finish(rawTranscript: string): void;
+  cancel(): void;
 };
 
 type ComposerDictationOwnerOptions = {
@@ -33,6 +41,9 @@ type ComposerDictationOwnerOptions = {
   onError: (message: string, failure: ComposerDictationFailure) => void;
   onTap?: () => void;
   onDictationUnavailable?: () => void;
+  captureSnippetTarget?: () => ComposerSnippetTarget | undefined;
+  captureReview?: () => ComposerDictationReviewCapture | false | undefined;
+  reviewPending?: () => boolean;
 };
 
 // Gesture and session admission must remain synchronous across pointer and media callbacks.
@@ -53,6 +64,11 @@ export class ComposerDictationOwner extends EventTarget {
   // Created with the lazy capture module, before the first transcript exists.
   private commits: ComposerDictationCommits | undefined;
   private disposed = false;
+  private snippetCapture: ComposerSnippetCapture | undefined;
+  private readonly stoppedSnippets = new Set<ComposerSnippetCapture>();
+  private snippetDialog: AbortController | undefined;
+  private generation = 0;
+  private reviewCapture: ComposerDictationReviewCapture | undefined;
 
   constructor(private options: ComposerDictationOwnerOptions) {
     super();
@@ -84,7 +100,20 @@ export class ComposerDictationOwner extends EventTarget {
   }
 
   get locksComposer(): boolean {
-    return this.phase !== "idle";
+    return this.phase !== "idle" || [...this.stoppedSnippets].some((capture) => capture.reviewing);
+  }
+
+  async openSnippetCatalog(): Promise<void> {
+    const client = this.options.client;
+    if (!client || !this.options.connected || this.locksComposer) {
+      return;
+    }
+    this.snippetDialog?.abort();
+    const dialog = new AbortController();
+    this.snippetDialog = dialog;
+    if (!dialog.signal.aborted && this.options.client === client) {
+      await showVoiceSnippetCatalog({ client, signal: dialog.signal });
+    }
   }
 
   /** Places a transcript in a draft; there is nothing to place before capture loads. */
@@ -99,7 +128,11 @@ export class ComposerDictationOwner extends EventTarget {
   }
 
   get transcript(): string {
-    return this.session?.transcriptSnapshot() ?? "";
+    return this.reviewCapture ? "" : (this.session?.transcriptSnapshot() ?? "");
+  }
+
+  get requiresReview(): boolean {
+    return this.reviewCapture !== undefined || this.commits?.hasReview === true;
   }
 
   // Returns the stop promise so the confirming control can remain tied to the
@@ -108,8 +141,26 @@ export class ComposerDictationOwner extends EventTarget {
     return this.stop({ commit: true });
   }
 
+  /** An enabled snippet capture always ends in an editable draft, including Send/Enter. */
+  async finishForSend(): Promise<boolean> {
+    const capture = this.snippetCapture;
+    const generation = this.generation;
+    const { client, draftKey, sessionKey } = this.options;
+    const requiresReview = this.requiresReview || capture?.requiresReview;
+    const committed = await this.finishActive();
+    return (
+      committed &&
+      !requiresReview &&
+      !capture?.requiresReview &&
+      this.generation === generation &&
+      this.options.client === client &&
+      this.options.draftKey === draftKey &&
+      this.options.sessionKey === sessionKey
+    );
+  }
+
   startDirect(): boolean {
-    if (this.phase !== "idle" || !this.canHold()) {
+    if (this.phase !== "idle" || !this.canHold() || this.options.reviewPending?.()) {
       return false;
     }
     // Surfaces without Talk do not need the hold discriminator. Enter the same
@@ -128,6 +179,13 @@ export class ComposerDictationOwner extends EventTarget {
       this.cancel();
     }
     this.options = options;
+    if (!options.connected || !options.enabled || options.realtimeTalkActive) {
+      this.snippetCapture?.cancel();
+      for (const capture of this.stoppedSnippets) {
+        capture.cancel();
+      }
+      this.snippetDialog?.abort();
+    }
     if (!options.connected) {
       this.commits?.markGatewayDisconnected();
     }
@@ -153,7 +211,12 @@ export class ComposerDictationOwner extends EventTarget {
       // A new press is explicit Stop, even if the held release was lost outside the window.
       this.clearClickSuppression();
     }
-    if (event.button !== 0 || this.phase !== "idle" || !this.canHold()) {
+    if (
+      event.button !== 0 ||
+      this.phase !== "idle" ||
+      !this.canHold() ||
+      this.options.reviewPending?.()
+    ) {
       return false;
     }
     event.preventDefault();
@@ -225,6 +288,13 @@ export class ComposerDictationOwner extends EventTarget {
   }
 
   cancel(): void {
+    this.snippetCapture?.cancel();
+    for (const capture of this.stoppedSnippets) {
+      capture.cancel();
+    }
+    this.snippetDialog?.abort();
+    this.reviewCapture?.cancel();
+    this.reviewCapture = undefined;
     this.clearClickSuppression();
     this.playback.stop();
     if (this.commits?.size) {
@@ -324,7 +394,16 @@ export class ComposerDictationOwner extends EventTarget {
     // the pointer, window focus, or page visibility; explicit controls still stop it.
     this.clearPointerGesture();
     const captureStart = {};
+    const generation = ++this.generation;
     this.captureStart = captureStart;
+    const review = this.options.captureReview?.();
+    if (review === false) {
+      // Required optional code is not ready. Never downgrade this capture to raw insertion.
+      await this.stop({ commit: false });
+      return;
+    }
+    this.reviewCapture = review;
+    const snippetTarget = review ? undefined : this.options.captureSnippetTarget?.();
     this.setPhase("connecting");
     if (this.captureStart !== captureStart) {
       return;
@@ -351,6 +430,28 @@ export class ComposerDictationOwner extends EventTarget {
       }
       describeStartError = describeDictationStartError;
       const commits = (this.commits ??= new ComposerDictationCommits());
+      if (!review && this.options.captureSnippetTarget) {
+        const { ComposerSnippetCapture } = await import("./composer-snippets.ts");
+        if (this.captureStart !== captureStart || this.disposed || !this.canHold()) {
+          return;
+        }
+        const capture = new ComposerSnippetCapture({
+          client,
+          captureId: crypto.randomUUID(),
+          generation,
+          target: snippetTarget,
+          isCurrent: () =>
+            !this.disposed &&
+            (this.snippetCapture === capture || this.stoppedSnippets.has(capture)),
+          changed: () => this.dispatchEvent(new Event("change")),
+          unavailable: () =>
+            this.options.onError(t("chat.dictation.snippets.error.unavailable"), {
+              kind: "interrupted",
+              preservesText: true,
+            }),
+        });
+        this.snippetCapture = capture;
+      }
       const session = new ComposerDictationSession(
         client,
         {
@@ -375,7 +476,11 @@ export class ComposerDictationOwner extends EventTarget {
             }
           },
         },
-        { sessionKey },
+        {
+          sessionKey,
+          refinement: this.snippetCapture !== undefined,
+          preserveTranscriptWhitespace: review !== undefined,
+        },
       );
       this.session = session;
       await session.start();
@@ -397,31 +502,68 @@ export class ComposerDictationOwner extends EventTarget {
     const wasActive = this.active;
     this.clearPointerGesture();
     const session = this.session;
+    const snippetCapture = this.snippetCapture;
+    this.snippetCapture = undefined;
+    const client = this.options.client;
+    const connection = client?.connectSent;
+    const draftKey = this.options.draftKey;
+    const sessionKey = this.options.sessionKey;
+    const commits = this.commits;
+    const admitsDelivery = () =>
+      !this.disposed &&
+      this.options.client === client &&
+      this.options.draftKey === draftKey &&
+      this.options.sessionKey === sessionKey &&
+      (!client?.connected || client.connectSent === connection) &&
+      this.options.enabled &&
+      !this.options.realtimeTalkActive &&
+      Boolean(session && commits?.has(session));
+    const review = this.reviewCapture;
+    this.reviewCapture = undefined;
     if (!session) {
+      snippetCapture?.cancel();
+      review?.cancel();
       this.setPhase("idle");
       this.releasePlayback();
       return Promise.resolve(false);
+    }
+    if (options.commit && snippetCapture) {
+      this.stoppedSnippets.add(snippetCapture);
     }
     this.setPhase("stopping");
     this.session = null;
     this.setPhase("idle");
     if (!options.commit) {
+      snippetCapture?.cancel();
+      review?.cancel();
       this.releasePlayback();
       void session.cancel().catch(() => undefined);
       return Promise.resolve(false);
     }
     // Capture and typing unlock immediately. Stopped recordings retain ownership
     // and commit in capture order, even when a later provider finishes first.
-    const committed = this.commits!.add(session, (lateTranscript) => {
+    const committed = this.commits!.add(session, review, async (lateTranscript) => {
       this.releasePlayback();
       this.pendingCommitsChanged();
-      if (
-        !lateTranscript ||
-        !wasActive ||
-        this.disposed ||
-        !this.options.enabled ||
-        this.options.realtimeTalkActive
-      ) {
+      if (!lateTranscript || !wasActive || !admitsDelivery()) {
+        review?.cancel();
+        return false;
+      }
+      // Literal and Developer captures belong to exact syntax review; snippets are a Prose path.
+      if (review) {
+        review.finish(lateTranscript);
+        this.dispatchEvent(new Event("change"));
+        return false;
+      }
+      if (snippetCapture) {
+        const outcome = await snippetCapture.finish(lateTranscript, session.refinementTranscript());
+        if (outcome !== undefined) {
+          return outcome;
+        }
+      }
+      // Catalog discovery can await even with snippets off; it cannot move a
+      // delayed raw result into a replacement account, draft, or agent route.
+      if (!admitsDelivery()) {
         return false;
       }
       if (this.active) {
@@ -433,7 +575,14 @@ export class ComposerDictationOwner extends EventTarget {
       return true;
     });
     this.pendingCommitsChanged();
-    return committed;
+    return committed.finally(() => {
+      if (snippetCapture) {
+        this.stoppedSnippets.delete(snippetCapture);
+        snippetCapture.cancel();
+      }
+      this.releasePlayback();
+      this.pendingCommitsChanged();
+    });
   }
 
   private releasePlayback(): void {

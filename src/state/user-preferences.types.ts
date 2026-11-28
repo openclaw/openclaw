@@ -1,7 +1,9 @@
 import type { Result } from "@openclaw/normalization-core/result";
+import type { VoiceSnippetValidationCode } from "../shared/voice-snippets.js";
 
 export type UserPreferenceError =
   | { code: "conflict" }
+  | { code: "invalid-snippet-catalog"; reason: VoiceSnippetValidationCode }
   | { code: "invalid-entry-count" }
   | { code: "invalid-key" | "invalid-value" | "value-too-large"; key: string }
   | {

@@ -1,0 +1,7 @@
+# M07: static catalog/revision/import contracts, protected refinement and stable receipt
+# conformance, real SQLite/Gateway ownership, dialog CRUD/recovery, captured draft
+# cancellation/encoding/length and real Send boundary regressions, browser journey.
+# Distinct user-requested AC01-AC11 proof boundaries; no duplicate snapshot suite.
+# Includes the full-capacity disable/export/import regression with metadata growth.
+# Includes actual authenticated dispatcher success/failure log privacy assertions.
+1631

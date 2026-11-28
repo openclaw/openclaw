@@ -357,6 +357,95 @@ should remain in the composer. Finish composing, then use the configured send
 shortcut or the send button to submit. Choose **Cmd/Ctrl+Enter** if you prefer
 plain Enter to add a line after composition has finished.
 
+## Voice snippets in dictation
+
+**Voice snippets** beside the microphone opens your personal catalog of reusable
+static text. A current signed-in personal connection with a durable profile is
+required. Definitions belong to that profile on the Gateway; the browser does
+not retain an offline catalog. Snippets start disabled. Create a definition with
+a name, language tag, one or more trigger names, and a body, then enable voice
+snippets when you want to use them. Search matches names and triggers.
+
+For example, save a trigger named `support reply`, then dictate the complete
+phrase **insert snippet support reply**. Stop recording and review the result.
+Choose **Add to draft** to insert it into the captured editable draft. The result
+remains editable, and sending is a separate action. Pressing Send or Enter during
+an enabled snippet capture finishes the review without sending the result.
+
+The automatic invocation boundary is the entire finalized capture, with stable
+transcription receipts. `I said insert snippet support reply` and quoted mentions
+remain prose. Use **literal insert snippet support reply** to insert the words
+`insert snippet support reply` without expanding them. Case, Unicode composition,
+and whitespace normalize according to the saved language. Punctuation and accents
+remain significant: `reply` and `reply!` are different triggers.
+
+For mixed prose or a provider that cannot supply stable segment receipts, select
+the exact invocation phrase in the review's source text and choose **Expand
+selected phrase**. Repeat for separate non-overlapping phrases. Selecting the
+same phrase again does not add a second expansion. Updated final receipts replace
+the same segment, and received source positions keep segments in order.
+
+Every enabled capture requires review, including first use, imported definitions,
+and sensitive content. The preview displays stored text literally, with readable
+line breaks. **Add to draft** returns keyboard focus to the draft without sending.
+If several enabled definitions in different languages match, choose
+the intended definition. The chooser shows at most ten matches; cancel and rename
+a trigger in **Voice snippets** to disambiguate a definition outside that list.
+Enabled definitions within one language cannot share a normalized trigger.
+
+### Static text and recovery
+
+Bodies are plain text. `{{name}}`, `<date>`, `00042`, dollar signs, URLs, shell
+commands, and apparent nested snippet invocations stay exactly as authored. The
+feature does not substitute variables or dates, run commands, consult the
+clipboard, perform lookups, or recursively expand another snippet. Stored bodies
+are protected from surrounding-prose transforms. The full catalog is never sent
+to a model. Speech recognition still uses the configured transcription route.
+
+A capture uses the catalog revision loaded when it starts. Editing, disabling,
+or deleting snippets affects future captures, not the result already in review.
+**Add to draft** and **Download plain text** use that capture's result without
+reloading the catalog. Canceling the capture or changing the signed-in connection
+prevents it from finishing. Later catalog changes do not alter text already in
+the draft.
+
+If the original draft changes, closes, becomes unavailable, or would exceed its
+text limit (including the side chat's 400 characters), insertion stops.
+Review the result and use **Download plain text** to recover it where offered; insertion
+is not retried automatically. Browser textareas normalize carriage returns and
+cannot faithfully represent NUL characters, so bodies containing those characters
+offer the exact UTF-8 download instead of lossy draft insertion. Leading and
+trailing whitespace, LF line endings, and valid Unicode remain literal in the
+draft. This workflow does not install a native application insertion adapter.
+
+### Import, export, and limits
+
+**Export JSON** downloads all definitions, including disabled and sensitive entries.
+Keep that file private. **Import JSON** previews a version 1 static-snippet export and
+replaces the definitions only after confirmation. It preserves the current
+feature-enabled setting. A malformed file, unsupported dynamic-template fields,
+oversize data, trigger collisions, or a concurrent edit rejects the entire write
+and retains the previous catalog. Reopen the catalog after a concurrent edit or
+authorization failure before saving again.
+
+The export has the shape `{ "schemaVersion": 1, "snippets": [...] }`. Each
+definition includes `schemaVersion`, stable `id`, optimistic `revision`, `name`,
+`locale`, `triggers`, `body`, `enabled`, and `sensitivity` (`normal` or `sensitive`).
+Use an exported file as the import template; additional fields are rejected.
+
+This version permits 500 definitions including disabled entries, one to eight
+trigger names per definition, 256 characters per name or trigger, a 16 KiB UTF-8
+body, a 9 MiB serialized catalog/import, and 64 KiB of expanded text per capture.
+These bounds are enforced at both the storage and expansion boundaries.
+The catalog reserves space for revision and enabled-state metadata so a full
+catalog can still be disabled and restored from its own export.
+
+Disabling voice snippets retains definitions and restores ordinary dictation.
+The existing profile database retains them across restarts and same-version
+upgrades. Export before downgrading: older binaries do not implement the reserved
+catalog's read restrictions. Profile merging refuses to discard either of two
+populated catalogs; export and consolidate those definitions first.
+
 ## Mobile message input
 
 On iPhone, iPad (including desktop mode), and Android, Return adds a line break;

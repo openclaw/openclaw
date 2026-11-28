@@ -1,3 +1,4 @@
+import fs from "node:fs";
 import { Worker } from "node:worker_threads";
 import { afterEach, expect, test, vi } from "vitest";
 import { GatewayErrorDetailCodes } from "../../../packages/gateway-protocol/src/index.js";
@@ -9,7 +10,16 @@ import {
   clearRuntimeConfigSnapshot,
   setRuntimeConfigSnapshot,
 } from "../../config/runtime-snapshot.js";
+import { isVerbose, setVerbose } from "../../global-state.js";
 import { requireNodeSqlite } from "../../infra/node-sqlite.js";
+import { createSuiteLogPathTracker } from "../../logging/log-test-helpers.js";
+import { flushLogger, resetLogger, setLoggerOverride } from "../../logging/logger.js";
+import { createSubsystemLogger } from "../../logging/subsystem.js";
+import {
+  createVoiceSnippetCatalog,
+  editVoiceSnippetCatalog,
+  VOICE_SNIPPETS_PREFERENCE_KEY,
+} from "../../shared/voice-snippets.js";
 import { holdNextReply } from "../../state/github-publication.worker.test-support.js";
 import {
   closeOpenClawStateDatabaseForTest,
@@ -42,7 +52,10 @@ import {
 } from "../server-plugin-in-process-dispatch.test-support.js";
 import { GatewayClientRegistry } from "../server/client-registry.js";
 import { createGatewayWsTestSocket } from "../server/ws-connection.test-helpers.js";
-import { createOperatorWsClient } from "../server/ws-connection/authenticated-request-dispatch.test-support.js";
+import {
+  createDispatchTestHarness,
+  createOperatorWsClient,
+} from "../server/ws-connection/authenticated-request-dispatch.test-support.js";
 import type { GatewayClient } from "./types.js";
 import { usersHandlers } from "./users.js";
 
@@ -760,4 +773,192 @@ test("merges concurrent failure receipts for the operator and never advances one
       [receiptKey]: { a: 20, b: 30 },
     });
   });
+});
+
+test("snippet preferences require a direct personal source and never appear in broad reads or events", async () => {
+  return withPreferenceState(async (prepareProfiles) => {
+    const profile = ensureProfileForEmail("snippet-owner@example.test");
+    await prepareProfiles();
+    const connId = profile.id;
+    const client = createOperatorClient({ profileId: profile.id, scopes: ["operator.admin"] });
+    client.connId = connId;
+    attachProfile(client, profile);
+    const notifications = vi.fn();
+    const context = createDirectChatContext({
+      getRuntimeConfig: () => ({}),
+      getClientConnIds: (filter) => new Set(!filter || filter(client) ? [connId] : []),
+      broadcastToConnIds: notifications,
+    });
+    const key = VOICE_SNIPPETS_PREFERENCE_KEY;
+    const catalog = editVoiceSnippetCatalog(createVoiceSnippetCatalog(), {
+      type: "save",
+      expectedRevision: null,
+      snippet: {
+        id: "private",
+        name: "Private",
+        locale: "en-US",
+        triggers: ["confidential trigger"],
+        body: "confidential body {{name}}",
+        enabled: true,
+        sensitivity: "sensitive",
+      },
+    });
+    const request = async (method: string, params: Record<string, unknown>) => {
+      const { respond, request: pending } = dispatch(client, method, params, context);
+      await pending;
+      return respond.mock.calls[0];
+    };
+    expect(
+      await request("users.prefs.set", {
+        entries: { [key]: catalog },
+        expectedEntries: { [key]: null },
+      }),
+    ).toEqual([true, { status: "ok" }, undefined]);
+    expect(await request("users.prefs.get", {})).toEqual(preferenceReply({}));
+    expect(await request("users.prefs.get", { keys: [key] })).toEqual(
+      preferenceReply({ [key]: catalog }),
+    );
+    expect(notifications).toHaveBeenCalledWith(
+      "users.prefs.changed",
+      { profileId: profile.id, keys: [key] },
+      new Set([connId]),
+    );
+    expect(JSON.stringify(notifications.mock.calls)).not.toContain("confidential");
+    client.internal = { syntheticClient: true };
+    expect(await request("users.prefs.get", { keys: [key] })).toMatchObject([
+      false,
+      undefined,
+      { message: expect.stringContaining("personal connection") },
+    ]);
+    expect(
+      await request("users.prefs.set", {
+        entries: { [key]: { ...catalog, revision: 2 } },
+        expectedEntries: { [key]: catalog },
+      }),
+    ).toMatchObject([
+      false,
+      undefined,
+      { message: expect.stringContaining("personal connection") },
+    ]);
+    expect(
+      (await preferences.getCanonicalUserPreferences(profile.id, [key]))?.entries[key],
+    ).toEqual(catalog);
+  });
+});
+
+test("authenticated snippet dispatch keeps authored text out of success and failure logs", async () => {
+  const logPaths = createSuiteLogPathTracker("users-prefs-logs-");
+  await logPaths.setup();
+  const file = logPaths.nextPath();
+  const verbose = isVerbose();
+  setVerbose(false);
+  setLoggerOverride({ level: "info", consoleLevel: "silent", file });
+  try {
+    await withPreferenceState(async (prepareProfiles) => {
+      const profile = ensureProfileForEmail("snippet-logs@example.test");
+      await prepareProfiles();
+      const client = createOperatorWsClient({ connId: "snippet-log-connection" });
+      attachProfile(client, profile);
+      const context = createDirectChatContext({
+        getRuntimeConfig: () => ({}),
+        getClientConnIds: (filter) => new Set(!filter || filter(client) ? [client.connId] : []),
+        logGateway: createSubsystemLogger("gateway"),
+      });
+      const harness = createDispatchTestHarness({
+        connId: client.connId,
+        extraHandlers: usersHandlers,
+        buildRequestContext: () => context,
+      });
+      const request = async (
+        id: string,
+        method: PreferenceMethod,
+        params: Record<string, unknown>,
+      ) => {
+        await harness.dispatcher.dispatch({ type: "req", id, method, params }, client);
+        return harness.awaitResponseFrame(id);
+      };
+      const readLogs = async () => {
+        await flushLogger();
+        const logs = fs.existsSync(file) ? fs.readFileSync(file, "utf8") : "";
+        const handlerLogs = JSON.stringify(
+          Object.values(harness.logGateway).flatMap((logger) => logger.mock.calls),
+        );
+        for (const marker of ["m07-private-trigger", "m07-private-body"]) {
+          expect(logs).not.toContain(marker);
+          expect(handlerLogs).not.toContain(marker);
+        }
+        return logs;
+      };
+      const key = VOICE_SNIPPETS_PREFERENCE_KEY;
+      const catalog = {
+        schemaVersion: 1,
+        revision: 1,
+        enabled: true,
+        snippets: [
+          {
+            schemaVersion: 1,
+            revision: 1,
+            id: "private-log-proof",
+            name: "Private log proof",
+            locale: "en-US",
+            triggers: ["m07-private-trigger"],
+            body: "m07-private-body {{name}} <date> $HOME",
+            enabled: true,
+            sensitivity: "sensitive",
+          },
+        ],
+      };
+      expect(
+        await request("snippet-save", "users.prefs.set", {
+          entries: { [key]: catalog },
+          expectedEntries: { [key]: null },
+        }),
+      ).toMatchObject({ ok: true, payload: { status: "ok" } });
+      expect(await request("snippet-read", "users.prefs.get", { keys: [key] })).toMatchObject({
+        ok: true,
+        payload: { status: "ok", entries: { [key]: catalog } },
+      });
+      // Fast successes may be silent at the default info level.
+      await readLogs();
+
+      expect(
+        await request("snippet-invalid", "users.prefs.set", {
+          entries: {
+            [key]: {
+              ...catalog,
+              revision: 2,
+              snippets: catalog.snippets.map((snippet) => ({
+                ...snippet,
+                revision: 2,
+                locale: "en_US",
+              })),
+            },
+          },
+          expectedEntries: { [key]: catalog },
+        }),
+      ).toMatchObject({
+        ok: false,
+        error: {
+          code: "INVALID_REQUEST",
+          details: { code: "INVALID_VOICE_SNIPPET_CATALOG", reason: "invalid-locale" },
+        },
+      });
+      expect(await readLogs()).toContain("snippet-invalid");
+
+      // Observe a real successful response without forcing an artificially slow request.
+      setLoggerOverride({ level: "debug", consoleLevel: "silent", file });
+      expect(await request("snippet-debug-read", "users.prefs.get", { keys: [key] })).toMatchObject(
+        {
+          ok: true,
+          payload: { status: "ok", entries: { [key]: catalog } },
+        },
+      );
+      expect(await readLogs()).toContain("snippet-debug-read");
+    });
+  } finally {
+    await flushLogger();
+    resetLogger();
+    setVerbose(verbose);
+    await logPaths.cleanup();
+  }
 });

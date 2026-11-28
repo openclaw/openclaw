@@ -1,0 +1,93 @@
+.voice-snippets-dialog {
+  --openclaw-modal-width: 720px;
+}
+
+.voice-snippets-dialog .oc-dialog {
+  height: min(720px, var(--openclaw-modal-height-limit));
+}
+
+.voice-snippets-dialog .oc-dialog__body {
+  display: grid;
+  gap: 16px;
+  overflow: auto;
+}
+
+.voice-snippets-toolbar,
+.voice-snippets-row,
+.voice-snippets-row__actions {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 8px;
+}
+
+.voice-snippets-toolbar {
+  justify-content: space-between;
+}
+
+.voice-snippets-list {
+  display: grid;
+  gap: 8px;
+  margin: 0;
+  padding: 0;
+  list-style: none;
+}
+
+.voice-snippets-row {
+  justify-content: space-between;
+  padding: 12px;
+  border: 1px solid var(--border);
+  border-radius: 8px;
+}
+
+.voice-snippets-row__copy {
+  min-width: 0;
+  overflow-wrap: anywhere;
+}
+
+.voice-snippets-row__copy p,
+.voice-snippets-dialog p {
+  margin: 0;
+}
+
+.voice-snippets-form {
+  display: grid;
+  gap: 12px;
+}
+
+.voice-snippets-field {
+  display: grid;
+  gap: 6px;
+}
+
+.voice-snippets-check {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}
+
+.voice-snippets-preview {
+  box-sizing: border-box;
+  width: 100%;
+  min-height: 160px;
+  max-height: 320px;
+  resize: vertical;
+  white-space: pre-wrap;
+  overflow-wrap: anywhere;
+  font-family: var(--mono);
+}
+
+.voice-snippets-import-preview {
+  display: grid;
+  gap: 8px;
+  max-height: 260px;
+  overflow: auto;
+}
+
+.voice-snippets-choices {
+  display: grid;
+  gap: 8px;
+  border: 1px solid var(--border);
+  border-radius: 8px;
+  padding: 12px;
+}

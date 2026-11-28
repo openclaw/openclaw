@@ -1,0 +1,135 @@
+{
+  "schemaVersion": 1,
+  "scope": "ClawSweeper-requested M07 design revisions; latest user authorizes commits and prohibits comments",
+  "collectedDateUtc": "2026-11-26",
+  "assembledAtUtc": "2026-11-26 16:16:00 UTC",
+  "sourceMain": {
+    "repository": "openclaw/openclaw",
+    "sha": "aa8288706247f3445242abf74395b9419100e665",
+    "refreshes": 1,
+    "priorPacketMain": "3c3a83bb62095dba9c7641acd033d4b87db6d820"
+  },
+  "issue": {
+    "url": "https://github.com/openclaw/openclaw/issues/205639",
+    "state": "open",
+    "updatedAt": "2026-11-26T00:15:56Z",
+    "labels": [
+      "P3",
+      "clawsweeper:no-new-fix-pr",
+      "clawsweeper:needs-product-decision",
+      "issue-rating: 🌊 off-meta tidepool"
+    ],
+    "commentsReturned": 1,
+    "commentsMetadata": 1,
+    "humanAcceptanceObserved": false
+  },
+  "durableReview": {
+    "url": "https://github.com/openclaw/openclaw/issues/205639#issuecomment-7178316740",
+    "author": "clawsweeper[bot]",
+    "createdAt": "2026-11-26T00:01:47Z",
+    "updatedAt": "2026-11-26T00:15:56Z",
+    "reviewedAt": "2026-11-26T00:15:21.209Z",
+    "reviewedImplementationSha": null,
+    "markerSha": "na",
+    "sourceCommit": "26898ee0732b9ef426d175503a07ea6c76be3324",
+    "sourceDigest": "5c1f4e28da06bf0b8f6e380fb482d225fde469eb84132e8646f478a8bfdd773f",
+    "digestKind": "content identity, not Git commit",
+    "requests": [
+      "Choose/accept narrow finalized-dictation extension versus manual draft plugin and first client.",
+      "Settle catalogue within existing preference limits before implementation.",
+      "Reconcile immediate in-flight feature revocation with request-start admission."
+    ]
+  },
+  "existingFork": {
+    "url": "https://github.com/CompleteDotTech/openclaw/pull/2",
+    "state": "open",
+    "draft": true,
+    "merged": false,
+    "head": {
+      "repo": "CompleteDotTech/openclaw",
+      "ref": "feat/dictation-voice-snippets",
+      "sha": "7d8c99e9683ab86d65452d3de71ed3aa8463e6cc"
+    },
+    "base": {
+      "repo": "CompleteDotTech/openclaw",
+      "ref": "main",
+      "sha": "b7bd237d00508e0999c7a3fc6e36bc32bf421098"
+    },
+    "parentTree": "be8015c31e952dec62bc716d9b77f7d5706a5699",
+    "updatedAt": "2026-11-26T08:02:08Z",
+    "reviewedPrSha": null,
+    "durableClawsweeperReviewObserved": false,
+    "reviewInventory": {
+      "observedAtUtc": "2026-11-26 16:08:12 UTC",
+      "restIssueComments": 0,
+      "restFormalReviews": 0,
+      "restInlineComments": 0,
+      "connectorReviews": 0,
+      "connectorThreads": 0,
+      "metadataComments": 0,
+      "metadataReviewComments": 0,
+      "page": 1,
+      "perPage": 100,
+      "limitation": "Dedicated connector tools expose no cursor/pageInfo. Empty REST pages and metadata corroborate returned zero inventories; later/inaccessible state not asserted."
+    },
+    "authorClaims": "225 cases, seven type configurations and benchmarks are historical PR-body assertions, not executions in this iteration."
+  },
+  "newSourceObservation": {
+    "path": "ui/src/pages/chat/composer-dictation-session.ts",
+    "url": "https://github.com/openclaw/openclaw/blob/aa8288706247f3445242abf74395b9419100e665/ui/src/pages/chat/composer-dictation-session.ts",
+    "finding": "Current prose placement trims/adds spaces and uses truncateUtf16Safe for maxLength. Exact literal snippet placement needs a whole-body preserve-or-refuse contract.",
+    "kind": "source inspection; runtime proof NOT COLLECTED"
+  },
+  "preferences": {
+    "valueSerializedUtf8Bytes": 4096,
+    "profileGenericKeys": 128,
+    "entriesPerUpdate": 32,
+    "proposedCatalogEntries": 8,
+    "proposedIdAscii": 16,
+    "proposedTriggerUtf8": 64,
+    "proposedBodyUtf8": 256,
+    "proposedPreferenceKey": null,
+    "expectedEntries": "Optional generic previous-value comparison; null expected means absent; null write deletes",
+    "currentHandler": "preparePersonalPreferences",
+    "storageScope": "Authenticated remote account profile; no per-plugin isolation assumed"
+  },
+  "policy": {
+    "proposedField": "UiSettings / UiPreferences.dictationPreparation",
+    "accepted": false,
+    "implemented": false,
+    "selfLimitBytes": 1024,
+    "serverSync": "Must remain outside SYNCED_PREFS and strict ui.prefs; configSync:false does not alone imply local-only",
+    "details": "current-owner-facts.md"
+  },
+  "publicationPlan": {
+    "repository": "CompleteDotTech/openclaw",
+    "branch": "feat/dictation-voice-snippets",
+    "parentSha": "7d8c99e9683ab86d65452d3de71ed3aa8463e6cc",
+    "onlyPathPrefix": "clawsweeperv2/M07-voice-snippets/",
+    "existingRootAbsentAtParent": true,
+    "strategy": "Add documentation to the existing branch using parent tree and a non-forced expected-head update; verify remote outcome",
+    "commentsAuthorized": false,
+    "productSourceChanges": false,
+    "newPr": false,
+    "merge": false,
+    "workflowDispatch": false
+  },
+  "provenance": {
+    "earlierScratchAvailable": false,
+    "description": "Earlier local packet/checkouts were absent from this resumed runtime. This is a fresh source-backed iteration informed by visible prior work, not a byte-for-byte recovery or re-verification of earlier ZIPs.",
+    "originalFilesMutated": false,
+    "archiveCreatedOrUploaded": false
+  },
+  "proof": {
+    "designArithmetic": "Recorded in catalogue-size-calculation.json; not product tests",
+    "runtime": "NOT COLLECTED",
+    "performance": "UNMEASURED",
+    "acceptance": "NEEDS MAINTAINER"
+  },
+  "limitations": [
+    "Separate read requests are not an atomic snapshot.",
+    "No root per-request timestamps were instrumented; assembly time is not retrieval time.",
+    "P02/M11/M08 links are coordination context; their full current discussions were not refreshed in this iteration.",
+    "No source test/build, secret scan, real microphone/provider/AT or compatibility execution is claimed."
+  ]
+}

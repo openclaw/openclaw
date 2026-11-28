@@ -21,6 +21,10 @@ final transcript before inserting text. If finalization times out, disconnects,
 or fails, it preserves the text already received. Canceling, switching drafts,
 or starting another voice action discards the pending insertion.
 
+The Control UI can also expand explicitly named [voice snippets](/web/control-ui/chat#voice-snippets-in-dictation)
+into an editable draft. This optional static-text workflow uses transcription-only
+mode and requires review; it does not run agent commands or send a message.
+
 Native Talk is a continuous loop. It listens for speech. It sends the transcript to the model through the active session. It waits for the response. It then speaks the response through the configured Talk provider (`talk.speak`).
 
 While the Gateway is preparing an agent after startup, native Talk keeps the spoken

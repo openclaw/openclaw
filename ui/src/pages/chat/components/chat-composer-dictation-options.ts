@@ -1,5 +1,11 @@
+import { requiresDeveloperDictationReview } from "../../../app/settings-developer-dictation.ts";
+import { loadSettings } from "../../../app/settings.ts";
 import { t } from "../../../i18n/index.ts";
-import { focusComposerInput, selectComposerInput } from "../../../lib/composer-input.ts";
+import {
+  focusComposerInput,
+  readComposerEditor,
+  selectComposerInput,
+} from "../../../lib/composer-input.ts";
 import type { ComposerMicrophoneOwner } from "../composer-microphone-picker.ts";
 import { adjustTextareaHeight } from "./chat-composer-dom.ts";
 import { commitComposerDraft, composerDraftKey } from "./chat-composer-state.ts";
@@ -12,6 +18,68 @@ export function createComposerDictationOptions(
   setError: (error: string | null) => void,
   onTap?: () => void,
 ) {
+  const onCommit = (transcript: string, late?: true, preservePreview?: true, exact?: true) => {
+    const target = state.composerTextarea;
+    const captured = state.dictationSelection;
+    // A newer recording may be painting a partial over its captured draft.
+    const liveValue = preservePreview
+      ? (captured?.value ?? props.getDraft?.() ?? props.draft)
+      : (target?.value ?? props.getDraft?.() ?? props.draft);
+    const insertion = state.dictation?.placeTranscript(
+      transcript,
+      captured,
+      {
+        start: target?.selectionStart ?? liveValue.length,
+        end: target?.selectionEnd ?? liveValue.length,
+        value: liveValue,
+        maxLength: target?.maxLength,
+      },
+      late,
+      preservePreview,
+      exact,
+    );
+    if (
+      !insertion ||
+      (exact && target && target.maxLength >= 0 && insertion.value.length > target.maxLength)
+    ) {
+      return false;
+    }
+    if (exact && target && captured) {
+      const editor = readComposerEditor(target);
+      if (editor) {
+        editor.replace(
+          insertion.value.slice(captured.start, insertion.caret),
+          captured.start,
+          captured.end,
+          true,
+        );
+        return target.value === insertion.value;
+      }
+      // The rich editor mounts lazily. Do not flatten a mention while it loads.
+      if ((props.getMentions?.() ?? props.mentions)?.length) {
+        return false;
+      }
+    }
+    if (target) {
+      target.value = insertion.value;
+      adjustTextareaHeight(target);
+    }
+    commitComposerDraft(props, insertion.value);
+    state.dictationSelection = insertion.captured;
+    if (exact) {
+      selectComposerInput(target, insertion.caret, insertion.caret);
+      return true;
+    }
+    queueMicrotask(() => {
+      const textarea = state.composerTextarea;
+      if (!textarea) {
+        return;
+      }
+      focusComposerInput(textarea, { preventScroll: true });
+      selectComposerInput(textarea, insertion.caret, insertion.caret);
+    });
+    return true;
+  };
   return {
     client: props.gatewayClient ?? null,
     sessionKey: props.sessionKey,
@@ -20,41 +88,50 @@ export function createComposerDictationOptions(
     enabled: props.composerHoldToRecord !== false,
     dictationAvailable: devicePicker.dictationStatus === "ready",
     realtimeTalkActive: props.realtimeTalkActive === true,
-    onCommit: (transcript: string, late?: true, preservePreview?: true) => {
-      const target = state.composerTextarea;
-      const captured = state.dictationSelection;
-      // A newer recording may be painting a partial over its captured draft.
-      const liveValue = preservePreview
-        ? (captured?.value ?? props.getDraft?.() ?? props.draft)
-        : (target?.value ?? props.getDraft?.() ?? props.draft);
-      const insertion = state.dictation?.placeTranscript(
-        transcript,
-        captured,
-        {
-          start: target?.selectionStart ?? liveValue.length,
-          end: target?.selectionEnd ?? liveValue.length,
-          value: liveValue,
-        },
-        late,
-        preservePreview,
-      );
-      if (!insertion) {
-        return;
-      }
-      if (target) {
-        target.value = insertion.value;
-        adjustTextareaHeight(target);
-      }
-      commitComposerDraft(props, insertion.value);
-      state.dictationSelection = insertion.captured;
-      queueMicrotask(() => {
-        const textarea = state.composerTextarea;
-        if (!textarea) {
-          return;
+    captureReview: () => {
+      if (state.developerSyntax) {
+        const review = state.developerSyntax.capture();
+        if (review) {
+          state.developerSyntaxHost?.request();
         }
-        focusComposerInput(textarea, { preventScroll: true });
-        selectComposerInput(textarea, insertion.caret, insertion.caret);
-      });
+        return review;
+      }
+      if (!requiresDeveloperDictationReview(loadSettings().developerDictation)) {
+        return undefined;
+      }
+      state.developerSyntaxHost?.request();
+      return false as const;
+    },
+    reviewPending: () => state.developerSyntax?.blocksSend ?? false,
+    onCommit,
+    captureSnippetTarget: () => {
+      const target = state.composerTextarea;
+      if (!target || target.disabled) {
+        return undefined;
+      }
+      const key = composerDraftKey(props);
+      const selection = {
+        value: target.value,
+        start: target.selectionStart,
+        end: target.selectionEnd,
+      };
+      const isCurrent = () =>
+        target.isConnected &&
+        state.composerTextarea === target &&
+        composerDraftKey(props) === key &&
+        (props.getDraft?.() ?? props.draft) === selection.value &&
+        target.value === selection.value &&
+        !target.disabled;
+      return {
+        isCurrent,
+        commit: (text: string) => {
+          if (!isCurrent()) {
+            return false;
+          }
+          state.dictationSelection = selection;
+          return onCommit(text, undefined, undefined, true) ? target : false;
+        },
+      };
     },
     onError: (
       message: string,

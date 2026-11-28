@@ -43,6 +43,10 @@ import { resolveConfiguredGitHubHost } from "../../agents/github-host.js";
 import { resolveSystemGitHubIdentityStatus } from "../../agents/github-tool-identity.js";
 import { formatErrorMessage } from "../../infra/errors.js";
 import { getActiveSecretsRuntimeConfigSnapshot } from "../../secrets/runtime-state.js";
+import {
+  VOICE_SNIPPETS_PREFERENCE_KEY,
+  VoiceSnippetValidationError,
+} from "../../shared/voice-snippets.js";
 import { UserChannelIdentityConflictError } from "../../state/user-channel-identities.js";
 import {
   changeCanonicalUserChannelIdentity,
@@ -100,6 +104,7 @@ import {
   prepareUserProfileAdministration,
 } from "./users-profile-access.js";
 import { handleUsersSetRole, listUserProfiles } from "./users-role.js";
+import { prepareSnippetPreferenceAccess } from "./users-snippet-preferences.js";
 import {
   assertValidParams,
   defineValidatedGatewayHandler,
@@ -425,7 +430,8 @@ export const usersHandlers: GatewayRequestHandlers = {
       respond(false, undefined, profileError(error));
     }
   },
-  "users.prefs.get": async ({ client, context, params, respond, sessionMutationAuthorization }) => {
+  "users.prefs.get": async (options) => {
+    const { client, context, params, respond, sessionMutationAuthorization } = options;
     if (!assertValidParams(params, validateUsersPrefsGetParams, "users.prefs.get", respond)) {
       return;
     }
@@ -440,14 +446,21 @@ export const usersHandlers: GatewayRequestHandlers = {
     }
     try {
       const assertCurrent = preparePersonalPreferences(client);
+      const snippetAccess = params.keys?.includes(VOICE_SNIPPETS_PREFERENCE_KEY)
+        ? await prepareSnippetPreferenceAccess(options)
+        : undefined;
       const preferences = await getCanonicalUserPreferences(profileId, params.keys);
       assertCurrent();
+      snippetAccess?.();
       sessionMutationAuthorization?.assertCurrent();
       if (!preferences) {
         respond(false, undefined, authenticatedProfileUnavailableError());
         return;
       }
       const entries = preferences.entries;
+      if (!snippetAccess) {
+        delete entries[VOICE_SNIPPETS_PREFERENCE_KEY];
+      }
       if (Object.hasOwn(entries, GIT_COAUTHOR_ORGANIZATION_PREFERENCE_KEY)) {
         const auth = context.getRuntimeConfig().gateway?.auth;
         const policy =
@@ -490,6 +503,11 @@ export const usersHandlers: GatewayRequestHandlers = {
     }
     try {
       const assertPersonal = preparePersonalPreferences(client);
+      const snippetAccess =
+        Object.hasOwn(params.entries, VOICE_SNIPPETS_PREFERENCE_KEY) ||
+        Object.hasOwn(params.expectedEntries ?? {}, VOICE_SNIPPETS_PREFERENCE_KEY)
+          ? await prepareSnippetPreferenceAccess(options)
+          : undefined;
       const backgroundAction = Object.hasOwn(params.entries, "ui.background")
         ? await prepareUserBackgroundAction(options, "operator.write")
         : undefined;
@@ -509,6 +527,7 @@ export const usersHandlers: GatewayRequestHandlers = {
       const organizationPolicy = compareOrganization ? readOrganizationPolicy() : undefined;
       const assertCurrent = () => {
         assertPersonal();
+        snippetAccess?.();
         options.sessionMutationAuthorization?.assertCurrent();
         backgroundAction?.assertCurrent();
         if (compareOrganization && readOrganizationPolicy() !== organizationPolicy) {
@@ -520,6 +539,7 @@ export const usersHandlers: GatewayRequestHandlers = {
         ...(compareOrganization ? { organizationPolicy } : {}),
         assertCurrent,
       });
+      snippetAccess?.();
       if (!result) {
         respond(false, undefined, authenticatedProfileUnavailableError());
         return;
@@ -541,6 +561,15 @@ export const usersHandlers: GatewayRequestHandlers = {
                 currentCount: result.error.currentCount,
               },
             },
+          );
+          return;
+        }
+        if (result.error.code === "invalid-snippet-catalog") {
+          respondError(
+            respond,
+            ErrorCodes.INVALID_REQUEST,
+            new VoiceSnippetValidationError(result.error.reason).message,
+            { details: { code: "INVALID_VOICE_SNIPPET_CATALOG", reason: result.error.reason } },
           );
           return;
         }

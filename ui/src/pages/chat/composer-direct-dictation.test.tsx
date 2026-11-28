@@ -39,6 +39,7 @@ const dictationHarness = vi.hoisted(() => {
       this.dispatchEvent(new Event("change"));
       return true;
     });
+    finishForSend = vi.fn(() => this.finishActive());
 
     constructor(
       private options: {
@@ -106,6 +107,44 @@ import {
   createDirectDictationTextarea,
   DirectDictationControl,
 } from "./composer-direct-dictation.ts";
+
+it.each([
+  { original: "", body: "x".repeat(401) },
+  { original: "x".repeat(398), body: "001" },
+])(
+  "refuses exact snippet insertion beyond the destination limit before mutating $original.length characters",
+  ({ original, body }) => {
+    const target = document.createElement("textarea");
+    target.maxLength = 400;
+    target.value = original;
+    target.setSelectionRange(original.length, original.length);
+    document.body.append(target);
+    onTestFinished(() => target.remove());
+    const onMessage = vi.fn();
+    const editor = createDirectDictationTextarea(() => target);
+    const captured = editor.captureSnippetTarget(placeComposerDictation, onMessage);
+    expect(captured?.commit(body)).toBe(false);
+    expect(target.value).toBe(original);
+    expect(onMessage).not.toHaveBeenCalled();
+  },
+);
+
+it("delivers one exact body through the existing direct draft writer and rejects a changed target", () => {
+  const target = document.createElement("textarea");
+  target.maxLength = 400;
+  document.body.append(target);
+  onTestFinished(() => target.remove());
+  const onMessage = vi.fn();
+  const editor = createDirectDictationTextarea(() => target);
+  const captured = editor.captureSnippetTarget(placeComposerDictation, onMessage);
+  const body = "\n00042 {{name}} <date>\n\n$HOME insert snippet other\n";
+  expect(captured?.commit(body)).toBe(target);
+  expect(target.value).toBe(body);
+  expect([target.selectionStart, target.selectionEnd]).toEqual([body.length, body.length]);
+  expect(onMessage).toHaveBeenCalledExactlyOnceWith(body);
+  expect(captured?.commit(body)).toBe(false);
+  expect(onMessage).toHaveBeenCalledOnce();
+});
 
 function fixture(
   options: Partial<ConstructorParameters<typeof DirectDictationControl>[0]> = {},

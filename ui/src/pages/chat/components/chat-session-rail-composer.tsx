@@ -150,8 +150,8 @@ export function SessionRailComposer(props: {
       return;
     }
     const sessionKey = props.sessionKey;
-    void active.finishActive().then(() => {
-      if (props.sessionKey === sessionKey) {
+    void active.finishForSend().then((maySend) => {
+      if (maySend && props.sessionKey === sessionKey) {
         props.submit();
       }
     });

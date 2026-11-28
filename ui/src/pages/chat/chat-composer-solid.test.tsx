@@ -607,7 +607,37 @@ it("keeps the open permission picker through parent updates", async () => {
   expect(trigger.getAttribute("aria-expanded")).toBe("true");
 });
 
-it("keeps a pending dictation send bound to the action that started it", async () => {
+it.each([true, false])(
+  "keeps a pending dictation send bound to its action and honors the review gate (send allowed: %s)",
+  async (maySend) => {
+    const controller = new ComposerDictationOwner({
+      client: null,
+      connected: false,
+      enabled: false,
+      realtimeTalkActive: false,
+      onCommit: () => {},
+      onError: () => {},
+    });
+    vi.spyOn(controller, "active", "get").mockReturnValue(true);
+    const finish = createDeferred<boolean>();
+    vi.spyOn(controller, "finishForSend").mockReturnValue(finish.promise);
+    const firstSend = vi.fn();
+    const laterSend = vi.fn();
+    const view = mountComponent(ComposerDictationSendAction, {
+      readDictation: () => controller,
+      onSend: firstSend,
+    });
+    onTestFinished(() => controller.dispose());
+    view.container.querySelector<HTMLButtonElement>("button")!.click();
+    view.update({ readDictation: () => controller, onSend: laterSend });
+    finish.resolve(maySend);
+    await Promise.resolve();
+    expect(firstSend).toHaveBeenCalledTimes(maySend ? 1 : 0);
+    expect(laterSend).not.toHaveBeenCalled();
+  },
+);
+
+it("never continues a finish-and-send gesture when its reviewed capture is cancelled while waiting", async () => {
   const controller = new ComposerDictationOwner({
     client: null,
     connected: false,
@@ -617,21 +647,20 @@ it("keeps a pending dictation send bound to the action that started it", async (
     onError: () => {},
   });
   vi.spyOn(controller, "active", "get").mockReturnValue(true);
+  const reviewed = vi.spyOn(controller, "requiresReview", "get").mockReturnValue(true);
   const finish = createDeferred<boolean>();
   vi.spyOn(controller, "finishActive").mockReturnValue(finish.promise);
-  const firstSend = vi.fn();
-  const laterSend = vi.fn();
+  const onSend = vi.fn();
   const view = mountComponent(ComposerDictationSendAction, {
     readDictation: () => controller,
-    onSend: firstSend,
+    onSend,
   });
   onTestFinished(() => controller.dispose());
   view.container.querySelector<HTMLButtonElement>("button")!.click();
-  view.update({ readDictation: () => controller, onSend: laterSend });
+  reviewed.mockReturnValue(false);
   finish.resolve(true);
   await Promise.resolve();
-  expect(firstSend).toHaveBeenCalledOnce();
-  expect(laterSend).not.toHaveBeenCalled();
+  expect(onSend).not.toHaveBeenCalled();
 });
 
 it("preserves keyboard input-history traversal with hydrated member evidence", () => {

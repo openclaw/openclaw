@@ -520,11 +520,12 @@ export function mountComposerEditor(
       view.contentDOM.focus(focusOptions);
     },
     select,
-    replace(text, from, to) {
+    replace(text, from, to, isolate) {
       sync();
       view.dispatch({
         changes: { from, to, insert: text },
         userEvent: "input.complete",
+        annotations: isolate ? isolateHistory.of("full") : undefined,
         selection: { anchor: from + text.length },
         scrollIntoView: true,
       });

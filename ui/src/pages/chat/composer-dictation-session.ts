@@ -1,12 +1,14 @@
 import { asOptionalObjectRecord } from "@openclaw/normalization-core/record-coerce";
 import { truncateUtf16Safe } from "@openclaw/normalization-core/utf16-slice";
+import { DictationTranscriptSegments } from "../../../../src/shared/dictation-transcript.js";
 import type { GatewayBrowserClient, GatewayEventFrame } from "../../api/gateway.ts";
 import { loadSettings } from "../../app/settings.ts";
 import { t } from "../../i18n/index.ts";
-import { registerChatDictationEnglish } from "../../i18n/locales/en-chat-dictation.ts";
+import { registerChatComposerEnglish } from "../../i18n/locales/en-chat-composer.ts";
 import { bytesToBase64 } from "../../lib/bytes-base64.ts";
 import { formatUiError, formatUiExternalText } from "../../lib/format-error.ts";
 import { registerEnglishCatalog } from "../../lib/reactive/i18n.ts";
+import type { ComposerDictationReviewCapture } from "./composer-dictation.ts";
 import {
   floatToG711Ulaw,
   measureRealtimeTalkAudioFrame,
@@ -16,7 +18,7 @@ import {
 import { describeRealtimeTalkInputError, RealtimeTalkInputOwner } from "./talk/input.ts";
 import { RealtimeTalkLevelSignal } from "./talk/level.ts";
 
-registerEnglishCatalog(registerChatDictationEnglish);
+registerEnglishCatalog(registerChatComposerEnglish);
 
 const FINAL_TRANSCRIPT_MAX_WAIT_MS = 10_000;
 const DICTATION_ENCODING = "g711_ulaw";
@@ -61,13 +63,25 @@ function formatDictationError(error: unknown): string {
  * when a later recording's provider finishes first.
  */
 export class ComposerDictationCommits {
-  private readonly sessions = new Set<ComposerDictationSession>();
+  private readonly sessions = new Map<
+    ComposerDictationSession,
+    ComposerDictationReviewCapture | undefined
+  >();
   private tail: Promise<unknown> = Promise.resolve();
   // Consumers place delivered and preview transcripts in their drafts.
   readonly place = placeComposerDictation;
 
   get size(): number {
     return this.sessions.size;
+  }
+
+  get hasReview(): boolean {
+    for (const review of this.sessions.values()) {
+      if (review) {
+        return true;
+      }
+    }
+    return false;
   }
 
   has(session: ComposerDictationSession): boolean {
@@ -77,16 +91,24 @@ export class ComposerDictationCommits {
   /** Delivers once earlier recordings settle; a retired recording resolves false. */
   add(
     session: ComposerDictationSession,
-    deliver: (transcript: string) => boolean,
+    review: ComposerDictationReviewCapture | undefined,
+    deliver: (transcript: string) => boolean | Promise<boolean>,
   ): Promise<boolean> {
     const previous = this.tail;
-    this.sessions.add(session);
+    this.sessions.set(session, review);
     const settled = session
       .finish(true)
       .catch(() => "")
       .then(async (transcript) => {
         await previous;
-        return this.sessions.delete(session) && deliver(transcript);
+        if (!this.sessions.has(session)) {
+          return false;
+        }
+        try {
+          return await deliver(transcript);
+        } finally {
+          this.sessions.delete(session);
+        }
       })
       .catch(() => false);
     this.tail = settled;
@@ -94,13 +116,14 @@ export class ComposerDictationCommits {
   }
 
   markGatewayDisconnected(): void {
-    for (const session of this.sessions) {
+    for (const session of this.sessions.keys()) {
       session.markGatewayDisconnected();
     }
   }
 
   retire(): void {
-    for (const session of this.sessions) {
+    for (const [session, review] of this.sessions) {
+      review?.cancel();
       void session.cancel().catch(() => undefined);
     }
     this.sessions.clear();
@@ -113,8 +136,9 @@ function insertComposerDictation(
   { value, start: selectionStart, end: selectionEnd }: DictationSelection,
   transcript: string,
   maxLength = -1,
+  exact = false,
 ): { value: string; caret: number } {
-  const spoken = transcript.trim();
+  const spoken = exact ? transcript : transcript.trim();
   if (!spoken) {
     return { value, caret: selectionEnd };
   }
@@ -127,7 +151,7 @@ function insertComposerDictation(
     after && !/^\s|^[,.;:!?)]/.test(after) && !/[\s([{]$/.test(spoken) ? " " : "";
   const replacement = `${leadingSpace}${spoken}${trailingSpace}`;
   const inserted =
-    maxLength < 0
+    exact || maxLength < 0
       ? replacement
       : truncateUtf16Safe(replacement, maxLength - before.length - after.length);
   return {
@@ -147,10 +171,11 @@ export function placeComposerDictation(
   live: DictationSelection & { maxLength?: number },
   late?: true,
   preservePreview?: true,
+  exact?: true,
 ): { value: string; caret: number; changed: boolean; captured: DictationSelection | null } {
   const selection =
     captured && (preservePreview || !late || captured.value === live.value) ? captured : live;
-  const insertion = insertComposerDictation(selection, transcript, live.maxLength);
+  const insertion = insertComposerDictation(selection, transcript, live.maxLength, exact);
   return {
     ...insertion,
     changed: insertion.value !== selection.value,
@@ -184,6 +209,8 @@ export class ComposerDictationSession {
   private sessionId: string | null = null;
   private transcriptionSessionId: string | null = null;
   private readonly finalTranscripts: string[] = [];
+  private lastTranscriptSequence = 0;
+  private readonly preserveTranscriptWhitespace: boolean;
   private currentPartial = "";
   private startPromise: Promise<void> | null = null;
   private appendChain: Promise<void> = Promise.resolve();
@@ -197,6 +224,7 @@ export class ComposerDictationSession {
   private resumeFinalDrain: (() => void) | null = null;
   private heardSpeech = false;
   private silentSamples = 0;
+  private readonly refinementSegments: DictationTranscriptSegments | undefined;
 
   constructor(
     private readonly client: GatewayBrowserClient,
@@ -205,8 +233,42 @@ export class ComposerDictationSession {
       sessionKey?: string;
       inputDeviceId?: string;
       silenceTimeoutMs?: number;
+      refinement?: boolean;
+      preserveTranscriptWhitespace?: boolean;
     },
-  ) {}
+  ) {
+    this.preserveTranscriptWhitespace = options?.preserveTranscriptWhitespace === true;
+    this.refinementSegments = options?.refinement ? new DictationTranscriptSegments() : undefined;
+  }
+
+  refinementTranscript() {
+    return this.refinementSegments?.snapshot();
+  }
+
+  private recordRefinementTranscript(payload: Record<string, unknown>): void {
+    if (!this.refinementSegments || typeof payload.text !== "string" || !payload.text) {
+      return;
+    }
+    const event = asOptionalObjectRecord(payload.talkEvent);
+    if (
+      !event ||
+      typeof event.turnId !== "string" ||
+      typeof event.seq !== "number" ||
+      event.mode !== "transcription" ||
+      event.brain !== "none" ||
+      (event.type !== "transcript.done" && event.type !== "transcript.delta")
+    ) {
+      this.refinementSegments.unqualified();
+      return;
+    }
+    this.refinementSegments.record({
+      id: event.turnId,
+      position: event.seq,
+      revision: event.seq,
+      text: payload.text.trim(),
+      final: event.type === "transcript.done",
+    });
+  }
 
   start(): Promise<void> {
     this.startPromise ??= this.startInternal();
@@ -261,7 +323,11 @@ export class ComposerDictationSession {
         (payload.type === "transcript" || payload.type === "partial") &&
         typeof payload.text === "string"
       ) {
-        const text = payload.text.trim();
+        if (!this.admitTranscriptEvent(payload)) {
+          return;
+        }
+        this.recordRefinementTranscript(payload);
+        const text = this.readTranscriptText(payload.text);
         if (payload.type === "partial" || payload.final !== true) {
           this.currentPartial = text;
         } else if (text) {
@@ -308,7 +374,30 @@ export class ComposerDictationSession {
   }
 
   transcriptSnapshot(): string {
-    return [...this.finalTranscripts, this.currentPartial].filter(Boolean).join(" ").trim();
+    return this.joinTranscripts([...this.finalTranscripts, this.currentPartial]);
+  }
+
+  private readTranscriptText(text: string): string {
+    return this.preserveTranscriptWhitespace ? text : text.trim();
+  }
+
+  private joinTranscripts(parts: readonly string[]): string {
+    if (!this.preserveTranscriptWhitespace) {
+      return parts.filter(Boolean).join(" ").trim();
+    }
+    // Keep provider chunk bytes. Supply a single word separator only when neither
+    // chunk boundary contains whitespace; never trim or replace supplied whitespace.
+    let joined = "";
+    for (const part of parts) {
+      if (!part) {
+        continue;
+      }
+      if (joined && !/\s/u.test(joined.at(-1)!) && !/\s/u.test(part[0]!)) {
+        joined += " ";
+      }
+      joined += part;
+    }
+    return joined;
   }
 
   async finish(requireTranscript?: true): Promise<string> {
@@ -459,7 +548,7 @@ export class ComposerDictationSession {
         this.resumeFinalDrain = null;
         resolve(text);
       };
-      const transcript = () => [...transcripts, partial].filter(Boolean).join(" ").trim();
+      const transcript = () => this.joinTranscripts([...transcripts, partial]);
       this.pauseFinalDrain = () => globalThis.clearTimeout(timer);
       this.resumeFinalDrain = () => {
         timer = globalThis.setTimeout(() => finish(transcript()), FINAL_TRANSCRIPT_MAX_WAIT_MS);
@@ -474,10 +563,14 @@ export class ComposerDictationSession {
           payload.type === "transcript" &&
           payload.final === true &&
           typeof payload.text === "string" &&
-          payload.text.trim()
+          this.admitTranscriptEvent(payload)
         ) {
-          transcripts.push(payload.text.trim());
-          partial = "";
+          this.recordRefinementTranscript(payload);
+          const text = this.readTranscriptText(payload.text);
+          if (text) {
+            transcripts.push(text);
+            partial = "";
+          }
         } else if (payload.type === "error" || payload.type === "close") {
           if (payload.type === "error" || payload.reason === "error") {
             this.reportFailure(
@@ -495,5 +588,28 @@ export class ComposerDictationSession {
       this.settleLateFinalDrain = (discard) =>
         finish(discard ? "" : this.failed ? initialTranscript : transcript());
     });
+  }
+
+  private admitTranscriptEvent(payload: Record<string, unknown>): boolean {
+    if (!this.preserveTranscriptWhitespace) {
+      // New replay protection is confined to the opted-in reviewed capture path.
+      return true;
+    }
+    const event = asOptionalObjectRecord(payload.talkEvent);
+    const sequence = event?.seq;
+    if (
+      event?.sessionId !== this.transcriptionSessionId ||
+      typeof sequence !== "number" ||
+      !Number.isSafeInteger(sequence) ||
+      sequence <= 0
+    ) {
+      // Older relays have no replay identity. Repeated text can be deliberate.
+      return true;
+    }
+    if (sequence <= this.lastTranscriptSequence) {
+      return false;
+    }
+    this.lastTranscriptSequence = sequence;
+    return true;
   }
 }

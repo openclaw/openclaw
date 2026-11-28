@@ -1,11 +1,16 @@
 import { roleScopesAllow } from "../../../../src/shared/operator-scope-compat.js";
 import type { GatewayBrowserClient } from "../../api/gateway.ts";
 import { patchSettings } from "../../app/settings.ts";
-import { focusComposerInput, selectComposerInput } from "../../lib/composer-input.ts";
+import {
+  focusComposerInput,
+  readComposerEditor,
+  selectComposerInput,
+} from "../../lib/composer-input.ts";
 import { listen } from "../../lib/reactive/listener.ts";
 import { adjustTextareaHeight } from "./components/chat-composer-dom.ts";
 import { ComposerDictationOwner } from "./composer-dictation.ts";
 import { ComposerMicrophoneOwner } from "./composer-microphone-picker.ts";
+import type { ComposerSnippetTarget } from "./composer-snippets.ts";
 
 type DirectDictationTextarea = ReturnType<typeof createDirectDictationTextarea>;
 type PlaceTranscript = ComposerDictationOwner["placeTranscript"];
@@ -13,7 +18,7 @@ type PlaceTranscript = ComposerDictationOwner["placeTranscript"];
 /** Caret mutations stay synchronous so partial and late transcripts target one draft snapshot. */
 export function createDirectDictationTextarea(read: () => HTMLTextAreaElement | null) {
   let capturedSelection: { start: number; end: number; value: string } | null = null;
-  return {
+  const owner = {
     /** Keep the pre-preview draft so partial dictation does not compound insertions. */
     captureSelection() {
       const textarea = read();
@@ -38,6 +43,7 @@ export function createDirectDictationTextarea(read: () => HTMLTextAreaElement | 
       transcript: string,
       late?: true,
       preservePreview?: true,
+      exact?: true,
     ): string | null {
       const target = read();
       // Delayed finals must not replace edits made after Stop unlocked this draft.
@@ -54,8 +60,13 @@ export function createDirectDictationTextarea(read: () => HTMLTextAreaElement | 
           },
           late,
           preservePreview,
+          exact,
         );
-      if (!target || !insertion) {
+      if (
+        !target ||
+        !insertion ||
+        (exact && target.maxLength >= 0 && insertion.value.length > target.maxLength)
+      ) {
         return null;
       }
       capturedSelection = insertion.captured;
@@ -64,22 +75,84 @@ export function createDirectDictationTextarea(read: () => HTMLTextAreaElement | 
       }
       target.value = insertion.value;
       adjustTextareaHeight(target);
-      queueMicrotask(() => {
-        if (target.isConnected) {
-          focusComposerInput(target, { preventScroll: true });
-          selectComposerInput(target, insertion.caret, insertion.caret);
-        }
-      });
+      if (exact) {
+        selectComposerInput(target, insertion.caret, insertion.caret);
+      } else {
+        queueMicrotask(() => {
+          if (target.isConnected) {
+            focusComposerInput(target, { preventScroll: true });
+            selectComposerInput(target, insertion.caret, insertion.caret);
+          }
+        });
+      }
       return insertion.value;
     },
+    captureSnippetTarget(
+      place: PlaceTranscript,
+      onMessage: (text: string) => void,
+    ): ComposerSnippetTarget | undefined {
+      const target = read();
+      if (!target || target.disabled) {
+        return undefined;
+      }
+      const selection = {
+        value: target.value,
+        start: target.selectionStart,
+        end: target.selectionEnd,
+      };
+      const isCurrent = () =>
+        target.isConnected &&
+        read() === target &&
+        target.value === selection.value &&
+        !target.disabled;
+      return {
+        isCurrent,
+        commit: (text) => {
+          if (!isCurrent()) {
+            return false;
+          }
+          const editor = readComposerEditor(target);
+          if (editor) {
+            const insertion = place(text, selection, selection, undefined, undefined, true);
+            if (
+              !insertion?.changed ||
+              (target.maxLength >= 0 && insertion.value.length > target.maxLength)
+            ) {
+              return false;
+            }
+            editor.replace(
+              insertion.value.slice(selection.start, insertion.caret),
+              selection.start,
+              selection.end,
+              true,
+            );
+            return target.value === insertion.value ? target : false;
+          }
+          // A mention-capable surface may not have mounted the rich editor yet.
+          const mentions = target.getAttribute("data-composer-mentions");
+          if (mentions && mentions !== "[]") {
+            return false;
+          }
+          capturedSelection = selection;
+          const value = owner.insertTranscript(place, text, undefined, undefined, true);
+          if (value === null) {
+            return false;
+          }
+          onMessage(value);
+          return target;
+        },
+      };
+    },
   };
+  return owner;
 }
 
 type DirectDictationOptions = {
   textarea: Pick<
     DirectDictationTextarea,
     "captureSelection" | "insertTranscript" | "previewTranscript"
-  >;
+  > &
+    Partial<Pick<DirectDictationTextarea, "captureSnippetTarget">>;
   getClient: () => GatewayBrowserClient | null;
   prepareSession?: () => Promise<string | undefined>;
   getSessionKey?: () => string | undefined;
@@ -160,6 +233,20 @@ export class DirectDictationControl extends EventTarget {
           : undefined,
       dictationAvailable: this.devicePicker.dictationStatus === "ready",
       realtimeTalkActive: false,
+      captureSnippetTarget: this.options.textarea.captureSnippetTarget
+        ? () => {
+            const target = this.options.textarea.captureSnippetTarget!(
+              this.place,
+              this.options.onMessage,
+            );
+            return target
+              ? {
+                  ...target,
+                  isCurrent: () => ownsDraft() && this.options.canCommit() && target.isCurrent(),
+                }
+              : undefined;
+          }
+        : undefined,
       onCommit: (transcript: string, late?: true, preservePreview?: true) => {
         // Owner changes replace draft ownership. Object identity keeps even an
         // A -> B -> A transition from accepting the prior owner's snapshot.

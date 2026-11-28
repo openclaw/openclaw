@@ -12,6 +12,14 @@ import {
   USER_PREFS_ENTRY_LIMIT,
   USER_PREFS_VALUE_BYTES,
 } from "../../packages/gateway-protocol/src/schema/user-profile-constants.js";
+import {
+  assertVoiceSnippetCatalogTransition,
+  createVoiceSnippetCatalog,
+  validateVoiceSnippetCatalog,
+  VOICE_SNIPPETS_PREFERENCE_KEY,
+  VOICE_SNIPPET_CATALOG_BYTES,
+  VoiceSnippetValidationError,
+} from "../shared/voice-snippets.js";
 import type {
   PreparedUserPreferenceUpdate,
   UserPreferenceError,
@@ -20,6 +28,7 @@ import type {
 function prepareEntries(
   entries: Record<string, unknown>,
   trustedProxyGitCoauthor = false,
+  expected = false,
 ): Result<Pick<PreparedUserPreferenceUpdate, "serialized" | "deletionKeys">, UserPreferenceError> {
   const rawEntries = Object.entries(entries);
   if (rawEntries.length > USER_PREFS_ENTRY_LIMIT) {
@@ -36,11 +45,17 @@ function prepareEntries(
     }
     // JSON null is the additive removal form for this record-shaped RPC.
     if (value === null) {
+      if (prefKey === VOICE_SNIPPETS_PREFERENCE_KEY && !expected) {
+        return err({ code: "invalid-snippet-catalog", reason: "invalid-schema" });
+      }
       deletionKeys.push(prefKey);
       continue;
     }
     let valueJson: string | undefined;
     try {
+      if (prefKey === VOICE_SNIPPETS_PREFERENCE_KEY) {
+        validateVoiceSnippetCatalog(value);
+      }
       const background =
         prefKey === USER_BACKGROUND_PREFERENCE_KEY
           ? normalizeBackgroundPreference(value)
@@ -56,13 +71,20 @@ function prepareEntries(
         return err({ code: "invalid-value", key: prefKey });
       }
       valueJson = JSON.stringify(credit ?? background ?? value);
-    } catch {
+    } catch (error) {
+      if (error instanceof VoiceSnippetValidationError) {
+        return err({ code: "invalid-snippet-catalog", reason: error.code });
+      }
       return err({ code: "invalid-value", key: prefKey });
     }
     if (valueJson === undefined) {
       return err({ code: "invalid-value", key: prefKey });
     }
-    if (Buffer.byteLength(valueJson, "utf8") > USER_PREFS_VALUE_BYTES) {
+    const valueLimit =
+      prefKey === VOICE_SNIPPETS_PREFERENCE_KEY
+        ? VOICE_SNIPPET_CATALOG_BYTES
+        : USER_PREFS_VALUE_BYTES;
+    if (Buffer.byteLength(valueJson, "utf8") > valueLimit) {
       return err({ code: "value-too-large", key: prefKey });
     }
     serialized.push({ prefKey, valueJson });
@@ -85,9 +107,25 @@ export function prepareUserPreferenceUpdate(
   if (!prepared.ok) {
     return prepared;
   }
-  const expected = prepareEntries(expectedEntries, true);
+  const expected = prepareEntries(expectedEntries, true, true);
   if (!expected.ok) {
     return expected;
+  }
+  if (Object.hasOwn(entries, VOICE_SNIPPETS_PREFERENCE_KEY)) {
+    if (!Object.hasOwn(expectedEntries, VOICE_SNIPPETS_PREFERENCE_KEY)) {
+      return err({ code: "conflict" });
+    }
+    try {
+      const previous = expectedEntries[VOICE_SNIPPETS_PREFERENCE_KEY];
+      assertVoiceSnippetCatalogTransition(
+        previous === null ? createVoiceSnippetCatalog() : validateVoiceSnippetCatalog(previous),
+        validateVoiceSnippetCatalog(entries[VOICE_SNIPPETS_PREFERENCE_KEY]),
+      );
+    } catch (error) {
+      return error instanceof VoiceSnippetValidationError && error.code === "conflict"
+        ? err({ code: "conflict" })
+        : err({ code: "invalid-snippet-catalog", reason: "invalid-schema" });
+    }
   }
   return ok({
     ...prepared.value,
