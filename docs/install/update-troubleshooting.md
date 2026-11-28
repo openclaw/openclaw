@@ -162,17 +162,34 @@ On macOS, checking whether the Gateway has stopped by process name is
 unreliable: `pgrep -f` truncates long argument vectors (false negatives) and
 can also match unrelated processes (false positives). This was observed on
 macOS arm64 hosts; behaviour on other platforms was not tested. Check the
-port owner instead:
+port owner instead.
+
+**Record the PID before you stop the service.** Shutdown closes the listening
+socket before the process finishes exiting, so a lookup performed only
+afterwards can legitimately return nothing even though the old process is still
+alive:
 
 ```bash
-lsof -nP -tiTCP:18789 -sTCP:LISTEN   # PID listening on the Gateway port
-kill -0 <pid>                        # confirm that exact PID is alive
+# 1) BEFORE stopping: capture the PID that owns the port
+lsof -nP -tiTCP:18789 -sTCP:LISTEN   # note this value
+
+# 2) Stop the service, then check that exact PID
+kill -0 <pid>; echo "rc=$?"
 ```
 
-An empty `lsof` result plus a failed `kill -0` means the Gateway is stopped.
-During a graceful shutdown the port may still be held while in-flight work
-settles, so allow a generous margin before concluding that a stop failed, and
-prefer stopping while the Gateway is idle.
+Interpret the exit status, because "not alive" and "could not check" are
+different answers:
+
+| `kill -0` result | Meaning |
+|---|---|
+| rc=0 | Process exists — still running (or still draining) |
+| rc=1 (`No such process`) | Process is gone — Gateway has exited |
+| rc=3 / `Operation not permitted` | Liveness could not be checked (PID owned by another user) — do not treat as stopped; re-check with sufficient privileges |
+
+An empty `lsof` result plus `kill -0` rc=1 means the Gateway is stopped. During
+a graceful shutdown the listener may close while in-flight work settles, so
+allow a generous margin before concluding that a stop failed, and prefer
+stopping while the Gateway is idle.
 
 ## Node and global install permissions
 
