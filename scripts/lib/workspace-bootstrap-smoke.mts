@@ -19,7 +19,7 @@ const REQUIRED_BOOTSTRAP_WORKSPACE_FILES = WORKSPACE_TEMPLATE_PACK_PATHS.map((fi
   basename(file),
 );
 
-const WORKSPACE_BOOTSTRAP_SMOKE_TIMEOUT_MS = 15_000;
+const WORKSPACE_BOOTSTRAP_SMOKE_TIMEOUT_MS = 45_000;
 const SAFE_UNIX_SMOKE_PATH = "/usr/bin:/bin";
 
 /**
@@ -98,24 +98,24 @@ export function runInstalledWorkspaceBootstrapSmoke(params: { packageRoot: strin
   const tempRoot = mkdtempSync(join(tmpdir(), "openclaw-workspace-bootstrap-smoke-"));
   const homeDir = join(tempRoot, "home");
   const cwd = join(tempRoot, "cwd");
+  const workspaceDir = join(homeDir, ".openclaw", "workspace");
   mkdirSync(homeDir, { recursive: true });
   mkdirSync(cwd, { recursive: true });
 
-  let combinedOutput = "";
   try {
+    // Agent creation seeds the workspace without model credentials. A one-shot
+    // agent turn deliberately skips starter files, even with a model selected.
     try {
       execFileSync(
         process.execPath,
         [
           join(params.packageRoot, "openclaw.mjs"),
-          "agent",
-          "--message",
-          "workspace bootstrap smoke",
-          "--session-id",
+          "agents",
+          "add",
           "workspace-bootstrap-smoke",
-          "--local",
-          "--timeout",
-          "1",
+          "--workspace",
+          workspaceDir,
+          "--non-interactive",
           "--json",
         ],
         {
@@ -128,21 +128,15 @@ export function runInstalledWorkspaceBootstrapSmoke(params: { packageRoot: strin
         },
       );
     } catch (error) {
-      combinedOutput = describeExecFailure(error);
+      throw new Error(`installed workspace bootstrap failed: ${describeExecFailure(error)}`, {
+        cause: error,
+      });
     }
 
-    if (combinedOutput.includes("Missing workspace template:")) {
-      throw new Error(
-        `installed workspace bootstrap failed before agent execution: ${combinedOutput}`,
-      );
-    }
-
-    const workspaceDir = join(homeDir, ".openclaw", "workspace");
     const missingFiles = collectMissingBootstrapWorkspaceFiles(workspaceDir);
     if (missingFiles.length > 0) {
-      const outputDetails = combinedOutput.length > 0 ? `\nCommand output:\n${combinedOutput}` : "";
       throw new Error(
-        `installed workspace bootstrap did not create required files in ${workspaceDir}: ${missingFiles.join(", ")}${outputDetails}`,
+        `installed workspace bootstrap did not create required files in ${workspaceDir}: ${missingFiles.join(", ")}`,
       );
     }
   } finally {
