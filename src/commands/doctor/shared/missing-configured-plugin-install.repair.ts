@@ -22,6 +22,7 @@ import {
 import {
   attachPluginInstallTransaction,
   copyPluginInstallTransactionRequest,
+  resolvePluginInstallOwnerMigrations,
   resolvePluginInstallTransactionRequest,
   retainPluginInstallTransaction,
   withPluginInstallTransactions,
@@ -333,6 +334,10 @@ async function repairMissingPluginInstallsWithLease(
   const deferredRepairDetails: string[] = [];
   const failedPlugins = new Map<string, PluginUpdateOutcome | undefined>();
   const repairedPluginIds = new Set<string>();
+  // Retired duplicate aliases committed by the updater in this same run, keyed
+  // by alias id. Restoring their original missing records would undo the
+  // updater's duplicate retirement (see #136025).
+  const retiredDuplicateAliasMigrations = new Map<string, string>();
   const { coreVersion, cohortSpecs, newerRecordedPluginIds, driftedPluginIds } =
     resolveConfiguredPluginRepairVersions({
       cfg: params.cfg,
@@ -514,17 +519,36 @@ async function repairMissingPluginInstallsWithLease(
         recordFailure(outcome.pluginId, [outcome.message], outcome.code);
       }
     }
+    // The updater validates the canonical payload before recording an owner
+    // migration. Only honor migrations whose canonical target was repaired in
+    // this same result; anything else keeps the previous restore behavior.
+    const committedOwnerMigrations = resolvePluginInstallOwnerMigrations(updateResult) ?? {};
+    for (const [aliasPluginId, canonicalPluginId] of Object.entries(committedOwnerMigrations)) {
+      if (repairedPluginIds.has(canonicalPluginId)) {
+        retiredDuplicateAliasMigrations.set(aliasPluginId, canonicalPluginId);
+      }
+    }
     if (repairedPluginIds.size > 0) {
       nextRecords = { ...(updateResult.config.plugins?.installs ?? nextRecords) };
       for (const [pluginId, record] of missingRecordedPlugins) {
-        if (!repairedPluginIds.has(pluginId)) {
+        if (!repairedPluginIds.has(pluginId) && !retiredDuplicateAliasMigrations.has(pluginId)) {
           nextRecords[pluginId] = record;
         }
+      }
+      for (const [aliasPluginId, canonicalPluginId] of retiredDuplicateAliasMigrations) {
+        changes.push(
+          `Kept retired duplicate "${aliasPluginId}" install record removed; "${canonicalPluginId}" is the canonical plugin id.`,
+        );
       }
     }
   }
 
   for (const candidate of installContext.collectInstallCandidates(nextRecords, deferredPluginIds)) {
+    // The updater retired this alias in favor of its canonical plugin; a
+    // reinstall here would recreate the duplicate the migration just removed.
+    if (retiredDuplicateAliasMigrations.has(candidate.pluginId)) {
+      continue;
+    }
     const repair = resolveConfiguredPluginCandidateRepair({
       candidate,
       records: nextRecords,
