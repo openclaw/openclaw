@@ -23,7 +23,6 @@ function fixture() {
   const currentPath = path.join(current, "dist", "extensions", "probe");
   return {
     root,
-    current,
     previous,
     currentPath,
     previousPath: path.join(previous, "dist", "extensions", "probe"),

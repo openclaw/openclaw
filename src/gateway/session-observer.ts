@@ -22,6 +22,7 @@ import { createSessionObserverCompanionSnapshotReader } from "./session-observer
 import {
   createSessionObserverCompletion,
   reportSessionObserverDegradation,
+  SessionObserverOwnerRefusal,
 } from "./session-observer-completion.js";
 import type { SessionObserverEvent, SessionObserverService } from "./session-observer-contract.js";
 import { createSessionObserverLifecycle } from "./session-observer-lifecycle.js";
@@ -259,6 +260,8 @@ export function createSessionObserver(deps: SessionObserverDeps): SessionObserve
     prepareModel: defaultPrepareModel,
     completeModel: defaultCompleteModel,
     isCurrent: modelStateIsCurrent,
+    readEntry: (state) =>
+      work.withCurrent(state.reader, state.sessionKey, state.agentId, (session) => session),
   });
 
   const schedule = (state: SessionObserverState, observedAudience?: ObservedAudience) => {
@@ -408,9 +411,13 @@ export function createSessionObserver(deps: SessionObserverDeps): SessionObserve
           if (!acceptDigestPublication(session)) {
             return;
           }
+          // The owner's role refused: the run stays off quietly, with no retry and no alarm.
+          const refused = error instanceof SessionObserverOwnerRefusal;
           state.consecutiveFailures += 1;
-          if (state.consecutiveFailures >= MAX_CONSECUTIVE_FAILURES) {
-            reportSessionObserverDegradation(state, error, deps.getConfig());
+          if (refused || state.consecutiveFailures >= MAX_CONSECUTIVE_FAILURES) {
+            if (!refused) {
+              reportSessionObserverDegradation(state, error, deps.getConfig());
+            }
             if (final || state.finalPending || state.terminalHealth) {
               retireTerminalState(state);
             } else {

@@ -487,8 +487,43 @@ if (!["applied", "already-current"].includes(expectedOutcome)) {
   throw new Error(`unknown expected update outcome ${expectedOutcome}`);
 }
 const noOp = expectedOutcome === "already-current";
-// Release-aware updaters (src/update) report their update run record instead.
-if (noOp && typeof payload.runId === "string") {
+function verifyInstalledBuild(expectedBuild = process.env.INSTALLED_BUILD_BEFORE) {
+  const fs = require("node:fs");
+  const before = String(process.env.INSTALLED_BUILD_BEFORE || "");
+  const after = JSON.parse(fs.readFileSync(String(process.env.BUILD_INFO || ""), "utf8")).buildId;
+  if (!before || before !== expectedBuild || after !== before) {
+    throw new Error(`already-current update changed or omitted installed build identity: ${before} -> ${after}`);
+  }
+}
+
+// A CLI result can wrap the run record and still carry its own runId.
+const wrappedRun = noOp && Object.hasOwn(payload, "run");
+if (wrappedRun) {
+  const run = payload.run;
+  if (typeof payload.runId !== "string" || !payload.runId || run?.runId !== payload.runId) {
+    throw new Error("unexpected wrapped update run identity");
+  }
+  if (run.phase !== "finished" || run.status !== "skipped" || run.reason !== "already-current") {
+    throw new Error("expected terminal skipped already-current update run");
+  }
+  if (!expectedUrl || run.target?.tag !== expectedUrl || run.target.version !== expectedVersion ||
+      run.target.channel !== "stable" || run.target.kind !== "package") {
+    throw new Error("unexpected wrapped update run target");
+  }
+  if (run.before?.version !== baselineVersion || run.after?.version !== expectedVersion ||
+      run.before.buildId !== payload.before?.buildId || run.after.buildId !== payload.after?.buildId) {
+    throw new Error("wrapped update run versions or builds disagree with CLI result");
+  }
+  // The wrapped ledger marks its validation phase skipped on the no-op path.
+  if (!Array.isArray(run.steps) || run.steps.some((step) =>
+    typeof step?.step !== "string" ||
+    ["activating", "restarting", "package-swap", "global install swap"].includes(step.step) ||
+    (step.step === "validating" && step.status !== "skipped")
+  )) {
+    throw new Error("wrapped update run had malformed steps or validated or activated a release");
+  }
+} else if (noOp && typeof payload.runId === "string") {
+  // Release-aware updaters (src/update) can report the bare update run record.
   if (payload.status !== "skipped" || payload.reason !== "already-current") {
     throw new Error(
       `expected skipped already-current update record, got ${JSON.stringify([payload.status, payload.reason, payload.phase])}`,
@@ -504,12 +539,7 @@ if (noOp && typeof payload.runId === "string") {
   if (recordSteps.some((step) => ["validating", "activating"].includes(step?.step))) {
     throw new Error("already-current update record validated or activated a release");
   }
-  const fs = require("node:fs");
-  const before = String(process.env.INSTALLED_BUILD_BEFORE || "");
-  const after = JSON.parse(fs.readFileSync(String(process.env.BUILD_INFO || ""), "utf8")).buildId;
-  if (!before || after !== before) {
-    throw new Error(`already-current update changed or omitted installed build identity: ${before} -> ${after}`);
-  }
+  verifyInstalledBuild();
   console.log("Verified already-current no-op: artifact staged, installed build unchanged, no activation");
   process.exit(0);
 }
@@ -542,7 +572,9 @@ if (!updateStep) {
 if (Number(updateStep.exitCode ?? 1) !== 0) {
   throw new Error(`package install step failed: ${JSON.stringify(updateStep)}`);
 }
-if (typeof updateStep.command !== "string" || !updateStep.command.includes(expectedUrl)) {
+if (typeof updateStep.command !== "string" || !(wrappedRun
+  ? updateStep.command.split(/\s+/).includes(expectedUrl)
+  : updateStep.command.includes(expectedUrl))) {
   throw new Error(`package install step missing expected tgz URL: ${JSON.stringify(updateStep)}`);
 }
 if (noOp && !legacySameVersionApply) {
@@ -555,6 +587,9 @@ if (noOp && !legacySameVersionApply) {
   if (cleanupSteps.length > 1 || cleanupSteps.some((step) => Number(step.exitCode ?? 1) !== 0) ||
       steps.some((step) => !allowedNoOpSteps.has(step?.name))) {
     throw new Error("already-current update performed unexpected activation or maintenance steps");
+  }
+  if (wrappedRun) {
+    verifyInstalledBuild(payload.before.buildId);
   }
   console.log("Verified already-current no-op: package staged, installed build unchanged, no activation");
   process.exit(0);

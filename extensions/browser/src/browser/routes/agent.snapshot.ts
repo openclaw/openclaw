@@ -54,10 +54,7 @@ import {
   withPlaywrightRouteContext,
   withRouteTabContext,
 } from "./agent.shared.js";
-import {
-  captureBrowserOperationTarget,
-  resolveOperationTargetOutcome,
-} from "./agent.snapshot-target.js";
+import * as snapshotTarget from "./agent.snapshot-target.js";
 import { resolveSnapshotPlan } from "./agent.snapshot.plan.js";
 import { EXISTING_SESSION_LIMITS } from "./existing-session-limits.js";
 import { readRoutePositiveInteger, readRouteTimerTimeoutMs } from "./route-numeric.js";
@@ -144,6 +141,7 @@ export function registerBrowserAgentSnapshotRoutes(
       ctx,
       targetId,
       run: async ({ profileCtx, tab, cdpUrl, signal, assertCurrent }) => {
+        await snapshotTarget.assertTabNotCrashed(ctx, profileCtx.profile.name, tab, signal);
         if (getBrowserProfileCapabilities(profileCtx.profile).usesChromeMcp) {
           const ssrfPolicyOpts = browserNavigationPolicyForProfile(ctx, profileCtx);
           await assertChromeMcpNavigationAllowed({ url, ...ssrfPolicyOpts });
@@ -162,7 +160,7 @@ export function registerBrowserAgentSnapshotRoutes(
         if (!pw) {
           return;
         }
-        const resolveRelayTarget = await captureBrowserOperationTarget({
+        const resolveRelayTarget = await snapshotTarget.captureBrowserOperationTarget({
           ctx,
           profileName: profileCtx.profile.name,
           targetId: tab.targetId,
@@ -183,7 +181,7 @@ export function registerBrowserAgentSnapshotRoutes(
               : {}),
             ...browserNavigationPolicyForProfile(ctx, profileCtx),
           });
-          const currentTargetId = await resolveOperationTargetOutcome({
+          const currentTargetId = await snapshotTarget.resolveOperationTargetOutcome({
             actedOnTargetId: tab.targetId,
             operationTargetId: result.targetId,
             resolveRelayTarget,
@@ -264,6 +262,7 @@ export function registerBrowserAgentSnapshotRoutes(
       preserveWarmup: toBoolean(req.query.operatorInput) === false,
       enforceCurrentUrlAllowed: true,
       run: async ({ profileCtx, tab, cdpUrl, signal }) => {
+        await snapshotTarget.assertTabNotCrashed(ctx, profileCtx.profile.name, tab, signal);
         const jsonScreenshot = (image: Awaited<ReturnType<typeof saveBrowserScreenshot>>) => {
           const { imagePath, imageType: _imageType, ...details } = image;
           res.json({ ok: true, path: imagePath, targetId: tab.targetId, url: tab.url, ...details });
@@ -411,6 +410,7 @@ export function registerBrowserAgentSnapshotRoutes(
             });
           }
           await req.assertCurrent?.(profileCtx.profile);
+          await snapshotTarget.assertTabNotCrashed(ctx, profileCtx.profile.name, tab, signal);
           const jsonSnapshot = (snapshot: Record<string, unknown>) =>
             res.json({
               ok: true,

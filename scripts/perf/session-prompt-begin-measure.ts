@@ -31,7 +31,6 @@ import {
   buildOpenAIResponsesReasoningReplayMetadata,
   captureOpenAIResponsesCompaction,
 } from "../../packages/ai/src/transports/openai-responses-compaction-replay.js";
-import { recordResponsesContextUsage } from "../../packages/ai/src/transports/openai-responses-context-usage.js";
 import {
   resolveResponsesContinuationRequest,
   type ResponsesContinuationState,
@@ -231,7 +230,6 @@ const providerFixtures = values["provider-requests"]
         promptTokens: 100_000,
         totalTokens: 100_100,
       };
-      recordResponsesContextUsage(measured, model, identity, lastRequest, [], "transport");
       context.messages.push(
         freezeJsonSnapshot(measured),
         freezeJsonSnapshot({

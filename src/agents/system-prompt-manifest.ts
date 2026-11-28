@@ -49,7 +49,7 @@ export const SYSTEM_PROMPT_SECTIONS = [
     owner: "promised-work-prompt.ts",
     region: "stable",
     includedWhen: "always",
-    budgetBytes: 620,
+    budgetBytes: 224,
   },
   {
     id: "provider_stable_prefix",
@@ -315,5 +315,20 @@ export const SYSTEM_PROMPT_SECTIONS = [
 
 export type SystemPromptSectionId = (typeof SYSTEM_PROMPT_SECTIONS)[number]["id"];
 
-/** @internal Fresh-install system-prompt ceiling: 12 KiB. */
-export const FRESH_INSTALL_SYSTEM_PROMPT_BUDGET_BYTES = 12_288;
+/**
+ * @internal Byte ceilings for what the embedded runtime sends on each measured route. Tests fail
+ * when a surface exceeds its ceiling. Route ceilings are the bytes measured on main when set, plus
+ * 5%, rounded up to 256 B; growth within that margin passes. Lower a ceiling when a change shrinks
+ * its surface. Tool bytes are compact JSON of the compacted tool set's
+ * `{ name, description, parameters }`; deferred tools reach the model by name only.
+ */
+export const PROMPT_BUDGET_BYTES = {
+  /** system-prompt.inventory-snapshot.test.ts: fresh-install renderer fixture (flat 12 KiB). */
+  freshInstallSystemPrompt: 12_288,
+  /** attempt-prompt-budget.test.ts: fresh Gateway WebChat turn. */
+  gatewayWebChatSystemPrompt: 14_336,
+  gatewayWebChatTools: 18_944,
+  /** attempt-prompt-budget.test.ts: configured Telegram agent with workspace files. */
+  configuredAgentSystemPrompt: 14_592,
+  configuredAgentTools: 22_272,
+} as const;

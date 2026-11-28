@@ -1,6 +1,11 @@
 import { buildModelCatalogMergeKey } from "@openclaw/model-catalog-core/model-catalog-refs";
+import { resolveDefaultAgentId, tryResolveAmbientOwnerAgentId } from "../agents/agent-scope.js";
 import { resolveKnownModelRefMigrationTarget } from "../commands/doctor/shared/codex-route-warnings.js";
 import { getModelCatalogWarnings, readModelCatalog } from "../commands/models/catalog-warnings.js";
+import {
+  isUtilityModelNotOffered,
+  UTILITY_MODEL_NOT_OFFERED_NOTE,
+} from "../commands/models/list.status-utility.js";
 import { hasActiveGatewayExecCredential } from "./doctor-gateway-exec-credential.js";
 import type { HealthCheck, HealthFinding } from "./health-checks.js";
 
@@ -16,6 +21,8 @@ export const modelReferenceCheck: HealthCheck = {
       ctx.allowExecSecretRefs !== true &&
       (await hasActiveGatewayExecCredential({ cfg: ctx.cfg, env: ctx.env }));
     const catalog = catalogSkipped ? undefined : await readModelCatalog(ctx.cfg);
+    // An unscoped models.list answers for the ambient owner agent; judge that agent's decision.
+    const agentId = tryResolveAmbientOwnerAgentId(ctx.cfg) ?? resolveDefaultAgentId(ctx.cfg);
     const findings = inspectConfiguredModelReferences({
       cfg: ctx.cfg,
       env: ctx.env,
@@ -75,6 +82,23 @@ export const modelReferenceCheck: HealthCheck = {
         fixHint: "Run openclaw doctor --allow-exec to permit configured secret execution.",
       });
       return findings;
+    }
+    // The Gateway's agent-scoped utility decision: nothing offered means the main model runs.
+    if (
+      isUtilityModelNotOffered({
+        cfg: ctx.cfg,
+        agentId,
+        utilityModel: catalog?.utilityModel,
+      })
+    ) {
+      findings.push({
+        checkId: "core/doctor/model-references",
+        severity: "info",
+        source: "doctor",
+        message: UTILITY_MODEL_NOT_OFFERED_NOTE,
+        fixHint:
+          "Configure agents.defaults.utilityModel with a model the catalog lists, or leave it unset to keep using the main model.",
+      });
     }
     for (const warning of getModelCatalogWarnings(catalog)) {
       findings.push({

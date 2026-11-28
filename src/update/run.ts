@@ -17,6 +17,7 @@ import { isBunRuntime } from "../daemon/runtime-binary.js";
 import { hasErrnoCode } from "../infra/errno.js";
 import { formatErrorMessage } from "../infra/errors.js";
 import { gitCommitPrefixesMatch, resolveLoadedCommitHash } from "../infra/git-commit.js";
+import { gitCommandArgv } from "../infra/git-exec.js";
 import { resolveNpmCommand } from "../infra/npm-command.js";
 import { compareSemverStrings } from "../infra/npm-registry-spec.js";
 import type { UpdateChannel } from "../infra/update-channels.js";
@@ -152,6 +153,7 @@ export async function prepareUpdate(params: {
     return { status: "failed", reason, message };
   };
   let staging: Awaited<ReturnType<typeof allocateStaging>> | undefined;
+  let gitCheckout: string | undefined;
   try {
     const lock = await acquireUpdateLock(
       { runId: params.runId, pid: process.pid, deadlineMs: timeoutMs },
@@ -345,6 +347,7 @@ export async function prepareUpdate(params: {
           { env },
         );
       };
+      gitCheckout = target.kind === "git" ? target.checkout : undefined;
       const prepared: PrepareResult =
         target.kind === "git"
           ? await prepareGit({
@@ -535,6 +538,14 @@ export async function prepareUpdate(params: {
       return { status: "pending", target: { version: prepared.version }, releaseRoot };
     } finally {
       if (staging) {
+        if (gitCheckout) {
+          // Candidate checks can fail after a successful build. Retire Git's registration
+          // before deleting the unpublished tree; published releases have left this owner.
+          await runCommandWithTimeout(
+            gitCommandArgv(gitCheckout, ["worktree", "remove", "--force", staging.releaseRoot]),
+            { timeoutMs: 30_000, killProcessTree: true },
+          ).catch(() => undefined);
+        }
         await fs.rm(staging.path, { recursive: true, force: true }).catch(() => undefined);
       }
       await releaseUpdateLock(prefix).catch(() => undefined);

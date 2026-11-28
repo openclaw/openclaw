@@ -3,6 +3,34 @@ import OpenClawChatUI
 import OpenClawProtocol
 
 enum ScreenshotFixtureMode {
+    static func clockMediaHistory() throws -> [AnyCodable]? {
+        guard ProcessInfo.processInfo.arguments.contains("--openclaw-clock-media-fixture") else { return nil }
+        let yesterday = Int(Date.now.timeIntervalSince1970 * 1000) - 86_400_000
+        // Exercise the sent-photo path with a synthetic mountain scene.
+        let landscape = "iVBORw0KGgoAAAANSUhEUgAAAEgAAAAwCAIAAAA9/qu8AAAA90lEQVR42u3WTQoCMQwF4HdAjyOMV3Gh"
+            + "Z5k7uBW8hyuRgUHoj2mbtkkm8JblkW8RGqzPl8nAYQ5z2NFh78d9ix3YTvqNelhURbc5TIyKaHOYw3zH"
+            + "jgoz+49Zvjzm3IqX23WLKdiuEmtDu0qmDe0kmTwwqkTZwKuSYwMvSQ4PnVTTbeinYrRVtKEfiYVX3YYB"
+            + "qjpbYyHGqIpsLJ0YQyLyGDsxWJWx8XZivCqcI/XmtJzDEGsxRZVJFJNKhgd1GCIS2j0pIWxgwqBlOGmY"
+            + "eljRBk/x1MAoizsXUwyTMy4bTCPpP0yvKglTTYrDDJAiMDOqL8wSxmGa8wGVuQPLJjNLDgAAAABJRU5E"
+            + "rkJggg=="
+        return try JSONDecoder().decode([AnyCodable].self, from: Data(#"""
+        [{"role":"user","timestamp":\#(yesterday),"__openclaw":{"id":"earlier"},
+          "content":[{"type":"text","text":"From yesterday"}]},
+         {"role":"user","timestamp":\#(yesterday + 1000),"__openclaw":{"id":"view"},
+          "content":[{"type":"text","text":"Here’s the view"}]},
+         {"role":"user","timestamp":\#(yesterday + 2000),"__openclaw":{"id":"landscape"},
+          "content":[{"type":"image","mimeType":"image/png","fileName":"landscape.png","alt":"Mountain view",
+                      "width":72,"height":48,"content":"\#(landscape)"}]}]
+        """#.utf8))
+    }
+
+    /// A process-local fixture store, never backed by an installed user's chat databases.
+    static let queueMenuOutbox: OpenClawChatSQLiteTranscriptCache? = {
+        guard ProcessInfo.processInfo.arguments.contains("--openclaw-queue-menu-fixture") else { return nil }
+        let directory = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
+        return try? OpenClawClientDatabases(directoryURL: directory).store(gatewayID: Self.gatewayID)
+    }()
+
     static var progressBarEnabled: Bool {
         ProcessInfo.processInfo.arguments.contains("--openclaw-progress-bar-fixture")
     }

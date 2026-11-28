@@ -80,7 +80,7 @@ extension OpenClawSnapshotUITests {
         case "overview": app.staticTexts["Agent session"]
         case "chat": app.otherElements["chat-composer-surface"]
         case "agents": app.buttons["agent-status-filter-menu"]
-        case "settings": app.descendants(matching: .any)["SettingsHub.Fallback"]
+        case "settings": app.descendants(matching: .any)["SettingsHub.Native"]
         case "gateway": app.navigationBars["Gateway"]
         default: self.readinessMarker(in: app)
         }
@@ -873,50 +873,6 @@ extension OpenClawSnapshotUITests {
         self.attachScreenshot(named: "chat-composer-compact")
     }
 
-    func verifyModelSelection(in app: XCUIApplication, actions: XCUIElement, popover: XCUIElement) {
-        let expandedProviderDrawer = app.buttons["chat-model-provider-drawer-openai"]
-        XCTAssertTrue(expandedProviderDrawer.waitForExistence(timeout: 5))
-        expandedProviderDrawer.tap()
-        let collapsedProviderDrawer = app.buttons["chat-model-provider-drawer-openai"]
-        self.waitForValue("Collapsed", of: collapsedProviderDrawer)
-        let anthropicDrawer = app.buttons["chat-model-provider-drawer-anthropic"]
-        XCTAssertTrue(anthropicDrawer.waitForExistence(timeout: 5))
-        self.assertMinimumTouchTarget(anthropicDrawer)
-        XCTAssertEqual(anthropicDrawer.value as? String, "Collapsed")
-        anthropicDrawer.tap()
-        let expandedAnthropicDrawer = app.buttons["chat-model-provider-drawer-anthropic"]
-        self.waitForValue("Expanded", of: expandedAnthropicDrawer)
-        let nonDefaultModel = app.buttons["anthropic/claude-opus-4-1"]
-        XCTAssertTrue(nonDefaultModel.waitForExistence(timeout: 5))
-        XCTAssertTrue(nonDefaultModel.images["chat-model-provider-icon-anthropic"].exists)
-        self.assertMinimumTouchTarget(nonDefaultModel)
-        nonDefaultModel.tap()
-        XCTAssertTrue(popover.waitForNonExistence(timeout: 3))
-
-        actions.tap()
-        let selectedNextModel = app.buttons["anthropic/claude-opus-4-1"]
-        XCTAssertTrue(selectedNextModel.waitForExistence(timeout: 5))
-        XCTAssertEqual(selectedNextModel.value as? String, "Selected")
-        XCTAssertGreaterThan(
-            selectedNextModel.images["chat-menu-selection-checkmark"].frame.minX,
-            selectedNextModel.frame.midX)
-        let restoredDefaultModel = app.buttons["Default: openai/gpt-5.6-sol"]
-        XCTAssertTrue(restoredDefaultModel.waitForExistence(timeout: 5))
-        restoredDefaultModel.tap()
-        XCTAssertTrue(popover.waitForNonExistence(timeout: 3))
-
-        actions.tap()
-        let reselectedDefaultModel = app.buttons["Default: openai/gpt-5.6-sol"]
-        XCTAssertTrue(reselectedDefaultModel.waitForExistence(timeout: 5))
-        XCTAssertEqual(reselectedDefaultModel.value as? String, "Selected")
-        XCTAssertGreaterThan(
-            reselectedDefaultModel.images["chat-menu-selection-checkmark"].frame.minX,
-            reselectedDefaultModel.frame.midX)
-    }
-
-    /// A fresh simulator can show this system alert before the scene becomes active.
-    /// Screenshot fixtures do not exercise notification authorization; leave the
-    /// readiness assertion intact and answer only that specific launch prompt.
     func dismissScreenshotNotificationPrompt() {
         let springboard = XCUIApplication(bundleIdentifier: "com.apple.springboard")
         let alert = springboard.alerts.firstMatch
