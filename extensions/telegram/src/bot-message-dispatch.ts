@@ -278,6 +278,7 @@ export const dispatchTelegramMessage = async (
     noVisibleReplyFallbackEligible: false,
     suppressSilentReplyFallback: false,
     hadErrorReplyFailureOrSkip: false,
+    emitsReasoningInContent: false,
     onRestartResumeSaved: async (signal) => {
       if (restartResumeSaved) {
         return;

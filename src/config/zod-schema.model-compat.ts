@@ -120,6 +120,13 @@ export const ModelCompatSchema = z
     seedField: z.union([z.literal("seed"), z.literal("random_seed")]).optional(),
     /** Whether streamed text may carry DeepSeek DSML tool-call markup. Default: true for the `deepseek` thinking format. */
     emitsDsmlToolCalls: z.boolean().optional(),
+    /**
+     * Whether the model emits its own reasoning into the OpenAI-compatible content stream
+     * (instead of a separate reasoning channel) when served through a compatible endpoint.
+     * When true, the channel keeps streamed reasoning out of the visible answer lane and the
+     * final delivery strips think-tag sections before sending. Default: false.
+     */
+    emitsReasoningInContent: z.boolean().optional(),
     /** Whether tool schemas must give every union branch an explicit `type`. Default: false. */
     requiresTypedUnionBranches: z.boolean().optional(),
     /** Whether every request must carry a non-empty user or assistant message. Default: false. */

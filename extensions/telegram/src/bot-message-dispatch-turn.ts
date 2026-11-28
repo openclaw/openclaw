@@ -46,6 +46,7 @@ import {
 import type { TelegramDispatchTurn as Turn } from "./bot-message-dispatch.types.js";
 import { TELEGRAM_CHAT_ACTION_INTERVAL_MS } from "./chat-action-timing.js";
 import { telegramInboundEventDelivery } from "./inbound-event-delivery.js";
+import { resolveEmitsReasoningInContent } from "./model-reasoning-compat.js";
 
 const TELEGRAM_MAX_CONSECUTIVE_TYPING_FAILURES = 5;
 
@@ -400,6 +401,15 @@ function createTelegramDispatchReplyOptions(
     onCompactionEnd: isRoomEvent
       ? undefined
       : (payload) => enqueueDraftEvent(turn, () => handleCompactionEnd(turn, payload)),
-    onModelSelected,
+    // Failover re-selects the active model mid-turn; the newest selection owns
+    // the flag so a fallback model's content-stream behavior gates its own text.
+    onModelSelected: (ctx) => {
+      turn.emitsReasoningInContent = resolveEmitsReasoningInContent(
+        turn.cfg,
+        ctx.provider,
+        ctx.model,
+      );
+      onModelSelected?.(ctx);
+    },
   };
 }

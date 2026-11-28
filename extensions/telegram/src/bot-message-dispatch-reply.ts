@@ -20,6 +20,7 @@ import {
   type ReplyPayload,
 } from "openclaw/plugin-sdk/reply-payload";
 import { danger } from "openclaw/plugin-sdk/runtime-env";
+import { stripReasoningTagsFromText } from "openclaw/plugin-sdk/text-chunking";
 import {
   deliverFinalAnswerText,
   handlePreviewFinalizedResult,
@@ -309,7 +310,29 @@ async function deliverReplyWithNormalization(
     return await settleTerminalNoVisibleDelivery(turn, info);
   }
   const controls = resolvePayloadTelegramControls(turn, deduped);
-  const effectivePayload = controls.payload;
+  let effectivePayload = controls.payload;
+  let strippedFinalToEmpty = false;
+  // Models flagged emitsReasoningInContent can carry tagged reasoning sections
+  // inside delivered text. Strip them before any delivery decision so a final
+  // whose text reduces to nothing settles as silent instead of leaking the tags.
+  if (
+    turn.emitsReasoningInContent &&
+    (info.kind === "final" || info.kind === "block") &&
+    payload.isError !== true &&
+    effectivePayload.channelData?.askUser === undefined &&
+    effectivePayload.interactive === undefined &&
+    typeof effectivePayload.text === "string"
+  ) {
+    const stripped = stripReasoningTagsFromText(effectivePayload.text, {
+      mode: "strict",
+      trim: "both",
+      recoverUnclosed: true,
+    });
+    if (stripped !== effectivePayload.text) {
+      effectivePayload = applyTextToPayload(effectivePayload, stripped);
+      strippedFinalToEmpty = info.kind === "final" && stripped.length === 0;
+    }
+  }
   const onMediaAccepted =
     info.kind === "block"
       ? (mediaUrls: readonly string[]) =>
@@ -329,6 +352,14 @@ async function deliverReplyWithNormalization(
   const reply = resolveSendableOutboundReplyParts(effectivePayload);
   const hasExecApproval = effectivePayload.channelData?.execApproval !== undefined;
   const hasMediaOrControls = reply.hasMedia || telegramButtons !== undefined || hasExecApproval;
+  if (strippedFinalToEmpty && !hasMediaOrControls && effectivePayload.presentation === undefined) {
+    // The final held only reasoning. Record it as an intentional suppression, as a
+    // silent final is, so cleanup reclaims retained pages and the turn settles silent
+    // rather than as an empty failure. A drained buffered answer keeps its delivery.
+    await flushBufferedFinalAnswer(turn);
+    turn.previewLifecycle.observeSuppression();
+    return toTelegramReplyDeliveryResult(turn, false);
+  }
   if (
     !hasMediaOrControls &&
     effectivePayload.interactive === undefined &&
@@ -350,6 +381,25 @@ async function deliverReplyWithNormalization(
       : effectivePayload;
   const split = splitTextIntoLaneSegments(turn, lanePayload.text, payload.isReasoning);
   const { segment } = split;
+  if (
+    turn.emitsReasoningInContent &&
+    info.kind === "block" &&
+    segment?.lane === "answer" &&
+    !hasMediaOrControls &&
+    payload.isError !== true &&
+    effectivePayload.interactive === undefined &&
+    effectivePayload.presentation === undefined &&
+    effectivePayload.channelData?.askUser === undefined &&
+    effectivePayload.isCompactionNotice !== true &&
+    effectivePayload.isStatusNotice !== true
+  ) {
+    // Untagged reasoning in a flagged model's text block reads like an answer, as it
+    // does in the partial preview. Report the block not visible and hold nothing:
+    // core then delivers the final, which carries the reply, and a silent final has
+    // no standalone block message left to reclaim.
+    dropQueuedAnswerBlockRotation(turn, payload, info.assistantMessageIndex);
+    return toTelegramReplyDeliveryResult(turn, false);
+  }
   if (info.kind === "final" && (reply.text.length > 0 || reply.hasMedia)) {
     turn.previewLifecycle.beginFinalDelivery();
   }
