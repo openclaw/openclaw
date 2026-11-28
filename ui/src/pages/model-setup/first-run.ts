@@ -42,7 +42,7 @@ export async function startModelSetupFirstRunRedirectAfterLocation(params: {
   const { context } = params;
   const isStillDefaultLanding = () => sameRouteLocation(params.history.location(), initialLocation);
   const redirect =
-    params.redirect ?? (() => context.replace("model-setup", { search: "?firstRun=1" }));
+    params.redirect ?? (() => context.replace("model-providers", { search: "?firstRun=1" }));
   let initialDecisionSettled = false;
   const settleInitialDecision = () => {
     if (!initialDecisionSettled) {

@@ -133,52 +133,76 @@ backup.
 A common Linux layout has an administrator-managed global npm package owned by
 root and a systemd system unit whose `User=` is a service account, with the
 service's state in that account's `HOME` or in the unit's `OPENCLAW_STATE_DIR`.
-`openclaw update` cannot back up and check that state for the service account:
-a plain `sudo openclaw update` would check root's own state, and
-`sudo env OPENCLAW_STATE_DIR=<service state> openclaw update` would write the
-service's state as root. So when the selected system unit runs the installation
-being updated as another account, the update is refused before the package is
-replaced. The package, the service state and the running Gateway are unchanged,
-and the refusal prints the commands below with the unit's name, account and
-selectors filled in. Single-account installs and system units that run as the
-updating account are not affected.
-
-If the refused run pointed `OPENCLAW_STATE_DIR` at the service's state, the
-installed updater still wrote its log and report there as root, and the service
-account's backup refuses directories it cannot read. Give those files back to the
-service account first; the refusal prints this command with the real path:
+For this layout, run the update as root:
 
 ```bash
-sudo find /var/lib/openclaw/.openclaw -xdev -user 0 -exec chown openclaw {} +
+sudo openclaw update --yes
 ```
 
-Update such an install by hand:
+When the installed system unit can be identified as running this package under
+another account, root replaces only the package and restarts that unit. This
+package-only branch does not open OpenClaw databases, run Doctor, create a state
+snapshot, or record an update run. CLI bootstrap can still load the selected
+state directory's `.env` before this branch runs.
+The service's own boot, running as `User=`, migrates its state and converges plugins.
+The unit's environment, profile, state selectors, and file ownership stay unchanged.
 
-1. Create a verified backup of the service state as the service account, with
-   the unit's `HOME`, `OPENCLAW_HOME`, `OPENCLAW_STATE_DIR`,
-   `OPENCLAW_CONFIG_PATH`, and profile selectors. Keep it until the updated
-   service is healthy.
+Before replacing the package, the CLI runs only the unit's recorded runtime's
+`--version` through `runuser` as the service account, without its loader environment.
+An incompatible runtime or failed probe refuses before replacement, with the
+cause and the runtime change needed. `runuser` from util-linux must be installed.
+
+The CLI checks that systemd reports the unit active and prints the commands to
+inspect the service. It does not assume HTTP when TLS is configured only in the
+service's state: active does not prove that startup migration has completed.
+
+```bash
+sudo systemctl status openclaw-gateway.service
+sudo journalctl -u openclaw-gateway.service
+```
+
+Use the installed unit's name if it differs. With `--no-restart`, only the
+package is replaced; the CLI tells you to restart and check the unit yourself.
+This package-only path does not change the service's saved update channel.
+Older installed updaters can still refuse this layout and print manual recovery
+guidance. Non-root cross-account updates remain refused.
+
+Before a significant update, create a verified backup as the service account
+with its existing selectors (see [Before updating](#before-updating-create-a-verified-backup)).
+
+### Older installed updaters
+
+If an older updater refuses this layout before installing the new package, do
+not repeat the same update command. Replace the package manually:
+
+1. If that run explicitly selected the service's state, its log or report may
+   now belong to root. Give those files back to the service account before
+   making the backup:
+
+   ```bash
+   sudo find /var/lib/openclaw/.openclaw -xdev -user 0 -exec chown openclaw {} +
+   ```
+
+2. Create a verified backup as the service account, preserving the unit's home,
+   state, config and profile selectors:
 
    ```bash
    sudo -u openclaw env HOME=/var/lib/openclaw OPENCLAW_STATE_DIR=/var/lib/openclaw/.openclaw \
      openclaw backup create --verify --output /var/lib/openclaw
    ```
 
-2. Replace the package. On npm 11.15 and earlier, omit `--allow-scripts=openclaw`.
+3. Replace the package with its owning package manager, then restart and inspect
+   the existing unit. For npm (omit `--allow-scripts=openclaw` on npm 11.15 and earlier):
 
    ```bash
    sudo npm install -g openclaw@latest --allow-scripts=openclaw
-   ```
-
-3. Restart the existing unit, using its installed name, and leave its service
-   configuration and file ownership unchanged:
-
-   ```bash
    sudo systemctl restart openclaw-gateway.service
+   sudo systemctl status openclaw-gateway.service
+   sudo journalctl -u openclaw-gateway.service
    ```
 
-4. Check the service as its account:
-   `sudo -u openclaw env HOME=/var/lib/openclaw OPENCLAW_STATE_DIR=/var/lib/openclaw/.openclaw openclaw gateway status --deep`.
+Substitute the actual account, paths, package manager, and unit name. Retain the
+verified backup until the updated service is healthy.
 
 Gateway startup migrates configuration and database schemas in the selected state
 directory, so no separate state copy, Doctor run, or account adoption is needed.
@@ -295,7 +319,8 @@ owner, then rerun the update. A stopped Gateway remains updatable.
 `discoverDatabases` is the state transaction inventory. Boot uses that inventory
 to plan pending canonical schema steps and their derived minimum reader floors
 before mutating live databases. A schema-version increase alone does not require
-a preimage: compatible steps run in place without one.
+a preimage: compatible steps run in place without one. Update preflight requires
+1.4 GB free on the installation filesystem, not space for a full copy of state.
 
 Shipped copy-based releases can leave a durable `.upgrade-*/plan.json` after an
 interrupted publication. Boot first settles that existing intent under exclusive
@@ -1844,9 +1869,9 @@ openclaw update
 ### Host prerequisites
 
 Before preparing a release, the updater checks that Node satisfies the target's
-requirements, required tools are available (Git and pnpm for source builds, npm
-for packages), and the install and state filesystems have room for the release
-and any required raised-floor preimages. Refusals name what to install or free.
+requirements, required tools are available (Git for source builds, npm for
+packages), and the installation filesystem has at least 1.4 GB free.
+Refusals name what to install or free.
 
 On macOS, if the updater selects `/usr/bin/git` and there is no active
 developer directory, run `xcode-select --install` to install the Command Line

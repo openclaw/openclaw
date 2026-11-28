@@ -429,6 +429,18 @@ it("paints every right-side user turn with the viewer accent and only peers with
   }
 });
 
+it("names a user turn only when its sender is recorded", () => {
+  const unattributed = createMessageGroup({ role: "user", content: "Hi" }, "user");
+  expect(prepareMessageGroupFrame(unattributed, { showReasoning: false }).showSenderName).toBe(
+    false,
+  );
+  const labeled = createMessageGroup({ role: "user", content: "Hi" }, "user", {
+    senderLabel: "Pat",
+  });
+  const frame = prepareMessageGroupFrame(labeled, { showReasoning: false });
+  expect([frame.showSenderName, frame.who]).toEqual([true, "Pat"]);
+});
+
 it("keeps distinct peer avatars and focused message content across group updates", async () => {
   const imageData =
     "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mP8/x8AAwMCAO+jRZkAAAAASUVORK5CYII=";

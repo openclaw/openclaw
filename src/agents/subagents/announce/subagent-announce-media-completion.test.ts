@@ -82,9 +82,8 @@ function expectNoExternalDelivery(
   expect(sendMessage).not.toHaveBeenCalled();
 }
 
-function createGatewayMock(response: Record<string, unknown> | Error = {}, onCall?: () => void) {
+function createGatewayMock(response: Record<string, unknown> | Error = {}) {
   return vi.fn(async (opts: Parameters<typeof runtimeCallGateway>[0]) => {
-    onCall?.();
     if (response instanceof Error) {
       throw response;
     }

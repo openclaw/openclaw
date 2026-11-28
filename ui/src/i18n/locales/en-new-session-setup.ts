@@ -205,7 +205,6 @@ const enNewSessionSetup = {
     projectSearchPlaceholder: "Search projects or paste a Git URL",
     searchProjects: "Search projects",
     githubProjects: "GitHub",
-    searchGithub: "Search GitHub",
     githubTokenHint:
       "No GitHub account is configured for the web app or Gateway. Only public GitHub results are shown.",
     cloneProject: "Clone",

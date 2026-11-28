@@ -1,11 +1,10 @@
 import { describe, expect, it, onTestFinished, vi } from "vitest";
-import { page, userEvent } from "vitest/browser";
+import { page } from "vitest/browser";
 import type { ProjectsRegisterResult } from "../../../../packages/gateway-protocol/src/index.js";
 import { createDeferred } from "../../../../test/helpers/promise.ts";
 import { waitForSolid } from "../../test-helpers/solid-settle.ts";
 import { createRepositoryFixture } from "./draft-place-state.test-support.ts";
 import { mountProjectChip } from "./project-chip.test-support.tsx";
-import "../../styles.css";
 
 const project: ProjectsRegisterResult = {
   id: "registered-workspace",
@@ -45,7 +44,7 @@ function mountBrowser() {
     selectedRemoteProject: null,
     projects: browser.projects,
     recents: [],
-    projectQuery: browser.projectQuery,
+    projectQuery: "",
   }));
   browser.synchronize();
   const open = async () => {
@@ -102,7 +101,7 @@ describe("project registration presentation", () => {
     retry.resolve(project);
     await waitForSolid(() => {
       expect(browser.browserOpen).toBe(false);
-      expect(view.getByRole("button", { name: "Registered workspace /workspace" })).not.toBeNull();
+      expect(view.getByRole("button", { name: "Registered workspace" })).not.toBeNull();
     });
   });
 
@@ -169,61 +168,5 @@ describe("project registration presentation", () => {
         expect(view.container.textContent).toContain("Current registration failed");
       });
     },
-  );
-});
-
-it("searches GitHub through a native action or Enter, never from typing", async () => {
-  const { browser, context, request, view } = mountBrowser();
-  await browser.projectRead;
-  Object.assign(context.gateway.snapshot.hello!, {
-    features: { methods: ["projects.list", "projects.searchRemote", "sessions.create"] },
-  });
-  const remote = {
-    name: "example",
-    fullName: "synthetic/example",
-    cloneUrl: "https://github.com/synthetic/example.git",
-    webUrl: "https://github.com/synthetic/example",
-    private: false,
-  };
-  request.mockImplementation(async (method) =>
-    method === "projects.searchRemote"
-      ? { credential: "configured", projects: [remote] }
-      : { projects: [project] },
-  );
-  await browser.refreshProjects();
-  const search = page.getByRole("searchbox", { name: "Search projects or paste a Git URL" });
-  await search.fill("example");
-  expect(request.mock.calls.filter(([method]) => method === "projects.searchRemote")).toHaveLength(
-    0,
-  );
-  await page.getByRole("button", { name: "Search GitHub", exact: true }).click();
-  await waitForSolid(() =>
-    expect(
-      view.container.querySelector('[data-value="remote-project:synthetic/example"]'),
-    ).not.toBeNull(),
-  );
-  await search.fill("another");
-  search
-    .element()
-    .dispatchEvent(
-      new KeyboardEvent("keydown", { key: "Enter", isComposing: true, bubbles: true }),
-    );
-  expect(request.mock.calls.filter(([method]) => method === "projects.searchRemote")).toHaveLength(
-    1,
-  );
-  await userEvent.keyboard("{Enter}");
-  await waitForSolid(() =>
-    expect(request).toHaveBeenCalledWith("projects.searchRemote", { query: "another" }),
-  );
-  await search.fill("https://github.com/synthetic/pasted.git");
-  await userEvent.keyboard("{Enter}");
-  await waitForSolid(() =>
-    expect(browser.remoteProject?.cloneUrl).toBe("https://github.com/synthetic/pasted.git"),
-  );
-  await search.fill("Registered");
-  await userEvent.keyboard("{ArrowDown}{Enter}");
-  await waitForSolid(() => expect(browser.projectId).toBe(project.id));
-  expect(request.mock.calls.filter(([method]) => method === "projects.searchRemote")).toHaveLength(
-    2,
   );
 });

@@ -54,6 +54,7 @@ function mountDuringSlowDiscovery(
   beforeMount?.(fixture.context);
   const page = createPage(fixture.context);
   page.routeData = { firstRun: true };
+  page.discoveryOpen = true;
   document.body.append(page);
   mountModelSetupPage(page);
   return { ...fixture, page, discovery };
@@ -112,10 +113,14 @@ describe("Model Setup known choices during discovery", () => {
     await waitForFast(() => expect(authButton(page, "provider-login")?.disabled).toBe(false));
     authButton(page, "provider-login")!.click();
     await waitForText(page, "Finish sign-in in your browser");
+    const wizardInput = page.querySelector<HTMLInputElement>("#model-setup-wizard-text-input")!;
+    expect(wizardInput).not.toBeNull();
 
     discovery.resolve(lateDiscovery);
-    await waitForElement(page, '[data-candidate-kind="codex-cli"]');
+    await discovery.promise;
+    await page.updateComplete;
     expect(page.textContent).toContain("Finish sign-in in your browser");
+    expect(page.querySelector("#model-setup-wizard-text-input")).toBe(wizardInput);
     expect(callsFor(request, "openclaw.setup.auth.start")).toHaveLength(1);
     expect(callsFor(request, "wizard.cancel")).toHaveLength(0);
   });
@@ -312,6 +317,8 @@ describe("Model Setup explicit discovery", () => {
       nativeSessionCatalogs: [{ pluginId: "codex", label: "Codex" }],
       manualProviders: [{ id: "provider-key", label: "API provider" }],
     });
+    page.discoveryOpen = true;
+    await page.updateComplete;
     expect(request).not.toHaveBeenCalled();
     expect(page.querySelector(".model-setup__native-discovery")).toBeNull();
     expect(page.querySelector("[data-selected]")).toBeNull();

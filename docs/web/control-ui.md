@@ -168,9 +168,6 @@ Reloading or leaving the app does not preserve this in-memory draft.
 
 Open **Workspace** on New session to choose a saved project, a recent folder, or
 a repository URL. The search/paste field opens immediately, even on short lists.
-The picker offers **Browse folders** and, when permitted, **Search GitHub**.
-GitHub search requires at least two characters. Administrators can open
-**Manage projects** to maintain the shared catalog.
 
 For a new worktree, type part of a branch name in **From** to filter the loaded
 repository branches. The menu lists the default and current branches first,
@@ -181,11 +178,10 @@ or commit, or leave it blank for the Gateway default.
 Saved repositories show a repository icon and their `org/repo` identity when the
 Gateway provides it. Search matches both that identity and the project display
 name, so repositories from different organizations are easier to distinguish.
-The **Local projects** section filters the Gateway’s saved project catalog immediately;
-it does not scan the filesystem or send a GitHub request while you type. Choose
-**Search GitHub** or press **Enter** with a plain-text query and no highlighted
-row to search remotely. Arrow keys highlight rows; **Enter** selects the highlighted
-row. Pasting a Git URL and pressing **Enter** selects that repository directly.
+**Local projects** filters saved projects as you type. With GitHub search access,
+type at least two characters and pause to see matching repositories. Use the arrow
+keys and **Enter** to select a result, or paste a Git URL and press **Enter** to
+select that repository directly.
 When saved entries share a name and repository identity, the picker distinguishes
 them by checkout path if the Gateway supplies it, or by project ID otherwise.
 GitHub search results appear separately, without repeating repositories already
@@ -298,6 +294,8 @@ When opened through OpenClaw ID, the Control UI waits for the Loader's live conn
 After the connection and saved conversation are ready, chat fetches updates while the rest of the page loads. A slow or unavailable cache keeps the normal loading path.
 
 The saved sidebar also retains the session rows for its initial viewport, along with unread marks, activity and attention glyphs, pull-request badges, and the Inbox count. Reload starts at the top of the sidebar. Live facts replace this display projection together with the rows; pins outside the roster retain their saved presentation until their own details arrive. The Inbox button reserves its place while connecting.
+
+In the Inbox, select an approval's session title to open the chat that requested it. Opening the chat leaves the approval pending.
 
 The Online sidebar loads people's open and running session counts when you open it. Switching to Sessions or Pages stops those count refreshes; opening Online again loads current counts. Restoring a Sessions sidebar does not wait for Online counts.
 

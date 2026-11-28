@@ -9,6 +9,7 @@ import {
   type SessionGitHubPullRequestPrepareResult,
   type SessionGitHubBaseRefreshResult,
   GitHubPublicationActionSchema,
+  GitHubPublicationAddAssigneeSchema,
   GitHubPublicationEditSchema,
   type GitHubPublicationEdit,
   GitHubPublicationEvidenceSchema,
@@ -48,9 +49,10 @@ import {
 import { callAgentToolGatewayRequest, callInProcessGatewayTool } from "./in-process-gateway.js";
 import type { SessionsYieldCallback } from "./sessions-yield-tool.js";
 
-const publicationOperatorActions = GitHubPublicationActionSchema.properties.action.anyOf.map(
-  (action) => action.const,
-);
+const publicationOperatorActions = [
+  ...GitHubPublicationActionSchema.properties.action.anyOf.map((action) => action.const),
+  GitHubPublicationAddAssigneeSchema.properties.action.const,
+];
 const publicationWorkspaceActions = [
   "publish",
   "readiness",
@@ -68,6 +70,7 @@ const publicationWorkspaceActions = [
 const commentIssueNumber = Type.Optional(
   SessionGitHubPullRequestInspectResultSchema.properties.number,
 );
+const assignee = Type.Optional(GitHubPublicationAddAssigneeSchema.properties.assignee);
 const GITHUB_PUBLISH_TOOL_TIMEOUT_MS = 600_000;
 
 export const githubPublishToolDefinition = {
@@ -147,6 +150,7 @@ function resolveGitHubPublishParameters(params: {
             title: Type.Optional(GitHubPublicationTitleSchema),
             body: GitHubPublicationEditSchema.properties.body,
             issueNumber: commentIssueNumber,
+            assignee,
             draft: Type.Optional(Type.Boolean()),
             ...(params.workspacePreparationAvailable
               ? { workspacePath: SessionGitHubPublishParamsSchema.properties.workspacePath }
@@ -168,6 +172,7 @@ function resolveGitHubPublishParameters(params: {
             title: Type.Optional(GitHubPublicationTitleSchema),
             body: SessionGitHubPublishParamsSchema.properties.body,
             issueNumber: commentIssueNumber,
+            assignee,
           },
           { additionalProperties: false },
         );
@@ -266,15 +271,20 @@ export function createGitHubPublishTool(
             | "refresh_base"
             | "edit"
             | "request_review"
+            | "add_assignee"
             | "upload_evidence"
             | GitHubPublicationAction["action"];
           pullRequestUrl?: string;
           issueNumber?: number;
+          assignee?: string;
           evidence?: GitHubPublicationEvidence;
           conflictsResolved?: boolean;
           baseCommit?: string;
         };
       const action = input.action ?? "publish";
+      if (input.assignee !== undefined && action !== "add_assignee") {
+        throw new Error("The assignee field is only accepted with action add_assignee.");
+      }
       if (options.observationOnly && action !== "readiness") {
         throw new Error(
           "Only publication readiness and existing receipt observation are available.",
@@ -521,7 +531,7 @@ export function createGitHubPublishTool(
         !["edit", "request_review", ...publicationOperatorActions].includes(action)
       ) {
         throw new Error(
-          `Use inspect_pr${prepareAvailable ? " or prepare_pr" : ""}, edit, request_review, inspect, ready, merge or close for a pullRequestUrl.`,
+          `Use inspect_pr${prepareAvailable ? " or prepare_pr" : ""}, edit, request_review, inspect, ready, merge, close or add_assignee for a pullRequestUrl.`,
         );
       }
       if (input.action === "request_review") {
@@ -664,6 +674,7 @@ export function createGitHubPublishTool(
             ...(input.requestId ? { requestId: input.requestId } : {}),
             ...(input.expectedHeadCommit ? { expectedHeadCommit: input.expectedHeadCommit } : {}),
             ...(input.mergeMethod ? { mergeMethod: input.mergeMethod } : {}),
+            ...(input.assignee !== undefined ? { assignee: input.assignee } : {}),
           }),
         );
       }

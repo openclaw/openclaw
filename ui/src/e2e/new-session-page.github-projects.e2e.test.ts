@@ -34,7 +34,6 @@ async function selectRemoteProject(page: Page, query: string, name: RegExp) {
   await page.locator("#new-session-project-trigger").click();
   const picker = page.locator(".oc-popover.new-session-page__project-popover");
   await picker.getByRole("searchbox", { name: "Search projects or paste a Git URL" }).fill(query);
-  await picker.getByRole("button", { name: "Search GitHub", exact: true }).click();
   await picker.getByRole("button", { name }).click();
 }
 const remoteSearchResult = {
@@ -345,8 +344,6 @@ suite.define(() => {
         name: "Search projects or paste a Git URL",
       });
       await search.fill("openclaw");
-      expect(await gateway.getRequests("projects.searchRemote")).toHaveLength(0);
-      await search.press("Enter");
 
       const searchRequest = await gateway.waitForRequest("projects.searchRemote");
       expect(searchRequest.params).toEqual({ query: "openclaw" });

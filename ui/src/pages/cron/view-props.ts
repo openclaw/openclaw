@@ -1,6 +1,6 @@
 import {
   normalizeSortedUniqueTrimmedStringList,
-  normalizeTrimmedStringList,
+  normalizeUniqueTrimmedStringList,
 } from "@openclaw/normalization-core/string-normalization";
 import { userProfileDisplayName } from "../../../../src/shared/user-profile-display-name.js";
 import type { GatewayAgentRow } from "../../api/types.ts";
@@ -55,7 +55,7 @@ export function buildCronViewProps(page: ReturnType<typeof createCronPage>) {
       ...savedDeliveryTargets,
       ...(cron.cronForm.deliveryMode === "announce" ? conversationTargets : []),
     ]);
-    const accountTargets = normalizeTrimmedStringList(
+    accountSuggestions = normalizeUniqueTrimmedStringList(
       (channel === "last"
         ? Object.values(channels.channelsSnapshot?.channelAccounts ?? {}).flat()
         : (channels.channelsSnapshot?.channelAccounts?.[channel] ?? [])
@@ -68,7 +68,6 @@ export function buildCronViewProps(page: ReturnType<typeof createCronPage>) {
     timezoneSuggestions = resolveTimezoneSuggestions(
       cron.cronJobs.map((job) => (job.schedule.kind === "cron" ? (job.schedule.tz ?? "") : "")),
     );
-    accountSuggestions = accountTargets;
     failureAlertToSuggestions = forDeliveryMode(savedDeliveryTargets);
     deliveryToSuggestions = forDeliveryMode(deliveryTargets);
   }

@@ -22,7 +22,7 @@ function result(name: string): ProjectsSearchRemoteResult {
   };
 }
 
-async function mountSearch(openSearch = true) {
+async function mountSearch() {
   vi.useFakeTimers();
   const fixture = createRepositoryFixture();
   const { browser, state: place, context, gateway } = fixture;
@@ -43,7 +43,7 @@ async function mountSearch(openSearch = true) {
   Object.assign(context.gateway.snapshot, {
     hello: {
       ...context.gateway.snapshot.hello,
-      features: { methods: ["projects.searchRemote", "sessions.create"] },
+      features: { methods: ["projects.searchRemote"] },
     },
   });
   vi.spyOn(browser, "projects", "get").mockReturnValue(projects);
@@ -66,11 +66,7 @@ async function mountSearch(openSearch = true) {
     recents: [],
     projectQuery: browser.projectQuery,
   }));
-  if (openSearch) {
-    await openProjectSearch(view.container);
-  } else {
-    await waitForSolid(() => expect(view.container.querySelector(".header-search")).not.toBeNull());
-  }
+  await openProjectSearch(view.container);
   const input = view.container.querySelector<HTMLInputElement>('input[type="search"]')!;
   const localRow = view.container.querySelector('[data-value="project:sample"]')!;
   const typeQuery = (query: string) => {
@@ -84,41 +80,7 @@ async function mountSearch(openSearch = true) {
 afterEach(() => vi.useRealTimers());
 
 describe("remote project search slot", () => {
-  it("exposes source choices and search immediately for a small catalog without an empty-query RPC", async () => {
-    const { browser, request, view, typeQuery, context, changed } = await mountSearch(false);
-    expect(view.container.querySelector('input[type="search"]')).not.toBeNull();
-    const search = view.getByRole<HTMLButtonElement>("button", {
-      name: /^Search GitHub$/u,
-    });
-    expect(search.disabled).toBe(true);
-    expect(view.getByRole("button", { name: /^Browse folders$/u })).not.toBeNull();
-    search.click();
-    expect(
-      request.mock.calls.filter(([method]) => method === "projects.searchRemote"),
-    ).toHaveLength(0);
-    expect(browser.projectQuery).toBe("");
-    typeQuery("x");
-    expect(search.disabled).toBe(true);
-    typeQuery("example");
-    expect(search.disabled).toBe(false);
-    typeQuery("https://github.com/synthetic/project.git");
-    expect(view.queryByRole("button", { name: /^Search GitHub$/u })).toBeNull();
-    const cloneRow = view.container.querySelector('[data-value="project-clone-url"]')!;
-    expect(cloneRow).not.toBeNull();
-    typeQuery("");
-    Object.assign(context.gateway.snapshot.hello!, {
-      auth: { role: "operator", scopes: ["operator.read"] },
-    });
-    changed();
-    await waitForSolid(() =>
-      expect(view.queryByRole("button", { name: /^Search GitHub$/u })).toBeNull(),
-    );
-    expect(
-      request.mock.calls.filter(([method]) => method === "projects.searchRemote"),
-    ).toHaveLength(0);
-  });
-
-  it("keeps input and local selection live through explicit search, loading, empty results, failure, and recovery", async () => {
+  it("keeps input and local selection live through debounce, loading, empty results, failure, and recovery", async () => {
     const { browser, request, view, input, localRow, typeQuery } = await mountSearch();
     const empty = () => view.queryByText("No additional GitHub repositories", { exact: true });
     input.focus();
@@ -142,10 +104,10 @@ describe("remote project search slot", () => {
       typeQuery(query);
       expect(empty()).toBeNull();
       expect(view.container.querySelectorAll('[data-value^="remote-project:"]')).toHaveLength(0);
-      await vi.advanceTimersByTimeAsync(PICKER_INPUT_DEBOUNCE_MS);
+      await vi.advanceTimersByTimeAsync(PICKER_INPUT_DEBOUNCE_MS - 1);
       expect(request).toHaveBeenCalledTimes(priorCalls);
       expect(view.container.querySelector(".new-session-page__project-status")).toBeNull();
-      view.getByRole("button", { name: /^Search GitHub$/u }).click();
+      await vi.advanceTimersByTimeAsync(1);
       await waitForSolid(() => expect(view.getByRole("status").textContent).toContain("Loading"));
       expect(input.disabled).toBe(false);
       expect(document.activeElement).toBe(input);
@@ -167,7 +129,8 @@ describe("remote project search slot", () => {
 
     request.mockRejectedValueOnce(new Error("Remote search unavailable"));
     typeQuery("failed");
-    view.getByRole("button", { name: /^Search GitHub$/u }).click();
+    expect(view.getByText("GitHub", { exact: true })).not.toBeNull();
+    await vi.advanceTimersByTimeAsync(PICKER_INPUT_DEBOUNCE_MS);
     await waitForSolid(() =>
       expect(view.getByRole("alert").textContent).toBe("Remote search unavailable"),
     );
@@ -176,7 +139,7 @@ describe("remote project search slot", () => {
     request.mockReturnValueOnce(recovered.promise);
     typeQuery("recovered");
     expect(view.queryByRole("alert")).toBeNull();
-    view.getByRole("button", { name: /^Search GitHub$/u }).click();
+    await vi.advanceTimersByTimeAsync(PICKER_INPUT_DEBOUNCE_MS);
     await waitForSolid(() => expect(view.getByRole("status").textContent).toContain("Loading"));
     recovered.resolve(result("recovered"));
     await waitForSolid(() =>
@@ -204,7 +167,7 @@ describe("remote project search slot", () => {
       const current = createDeferred<ProjectsSearchRemoteResult>();
       request.mockReturnValueOnce(previous.promise).mockReturnValueOnce(current.promise);
       typeQuery("scope");
-      view.getByRole("button", { name: /^Search GitHub$/u }).click();
+      await vi.advanceTimersByTimeAsync(PICKER_INPUT_DEBOUNCE_MS);
       await waitForSolid(() => expect(view.queryByRole("status")).not.toBeNull());
       if (scope === "client") {
         const replacement = {

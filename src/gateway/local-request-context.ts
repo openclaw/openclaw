@@ -1,5 +1,6 @@
 // Lets local agent paths reuse Gateway server methods without starting a server.
 import { listAgentIds } from "../agents/agent-scope-config.js";
+import { loadRunReplyDispatchRuntime } from "../agents/prepared-run-reply-dispatch-runtime.js";
 import type { CliDeps } from "../cli/deps.types.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { withLocalAgentCronJobsRemoved } from "../cron/local-service.js";
@@ -12,6 +13,7 @@ import {
   getPluginRuntimeGatewayRequestScope,
   withPluginRuntimeGatewayRequestScope,
 } from "../plugins/runtime/gateway-request-scope.js";
+import { runWithGatewayIndependentRootWorkAdmission } from "../process/gateway-work-admission.js";
 import { trackAsyncWork } from "../shared/async-work-scope.js";
 import { getOpenClawDatabaseMaintenanceScope } from "../state/openclaw-state-maintenance-context.js";
 import { createAgentRuntimeApprovalAuthorityValidator } from "./agent-runtime-approval-authority.js";
@@ -20,6 +22,8 @@ import { NodeRegistry } from "./node-registry.js";
 import type { ChannelRuntimeSnapshot } from "./server-channel-runtime.types.js";
 import { createChatRunState } from "./server-chat-state.js";
 import type { GatewayCronServiceContract } from "./server-cron-contract.js";
+import type { GatewayInstanceRuntime } from "./server-instance-runtime.types.js";
+import { getGatewayLifecycleRuntime } from "./server-lifecycle-runtime-context.js";
 import { readPreparedServerMethodModelCatalogs } from "./server-methods/optional-model-catalog.js";
 import type { GatewayRequestContext } from "./server-methods/types.js";
 import { registerGatewayModelCatalogPrivateAccess } from "./server-model-catalog-auth.js";
@@ -81,6 +85,9 @@ async function createLocalGatewayRequestContext(
   params: LocalGatewayRequestContextParams,
 ): Promise<GatewayRequestContext> {
   const logGateway = createSubsystemLogger("gateway/local");
+  // A Gateway hosting this process (BOOT.md runs local commands inside it) keeps owning dispatch
+  // facts, execution lifetime and lifecycle reads; only a one-shot process supplies its own.
+  const hostingGateway = getGatewayLifecycleRuntime();
   const resourceHost = getLegacyPluginSdkResourceHost();
   const cron: GatewayCronServiceContract = {
     ...unavailableCron,
@@ -106,7 +113,23 @@ async function createLocalGatewayRequestContext(
   });
   const context: GatewayRequestContext = {
     localEmbedded: true,
-    trackExecution: trackAsyncWork,
+    ...(hostingGateway
+      ? {}
+      : {
+          // No Gateway publishes dispatch facts here; admission prepares the target agent's run.
+          loadReplyDispatchRuntime: (loadParams) =>
+            loadRunReplyDispatchRuntime({ ...loadParams, config: params.getRuntimeConfig() }),
+        }),
+    // In a one-shot process, admitted turns (spawned children, completion continuations) outlive
+    // the caller's turn. Each is root work for its own run, so the process keeps its databases
+    // open until it settles; detached follow-up admits its own root. A closed caller scope still
+    // refuses new execution.
+    trackExecution: hostingGateway
+      ? trackAsyncWork
+      : (run) =>
+          trackAsyncWork(() =>
+            runWithGatewayIndependentRootWorkAdmission(async () => await run(), "local:agent-turn"),
+          ),
     deps: params.deps,
     configRevisionProjector: await loadGatewayConfigRevisionProjector({ env: process.env }),
     cron,
@@ -204,7 +227,12 @@ async function createLocalGatewayRequestContext(
       const release = async () => {
         await initializing?.catch(() => {});
         projection?.dispose();
-        await projection?.ensureMaterialized();
+        // Disposing cancels the projection; its in-flight refresh still settles before close.
+        // That refresh can lose its history read to the agent databases closing in the same
+        // phase, and a disposed projection has no reader, so its outcome cannot fail the command.
+        await projection?.ensureMaterialized().catch((error: unknown) => {
+          logGateway.debug(`disposed session projection refresh ended: ${String(error)}`);
+        });
       };
       // Resident reads use the command's database maintenance scope, so it retires them
       // before closing admission. Otherwise the same host retains embedded resources used
@@ -232,10 +260,33 @@ async function createLocalGatewayRequestContext(
     }
     return initializing;
   };
-  context.createAgentTurnFacade = async (principal) => {
-    const { createInternalAgentTurnFacade } =
-      await import("./agent-turn/internal-facade.runtime.js");
-    return createInternalAgentTurnFacade({ ...principal, getContext: () => context });
+  // The Gateway's own instance runtime serves agent turns and lifecycle reads (agent.wait,
+  // chat.history) through the shared method registry. It claims no process-global state and
+  // starts timers only on use, so late root work may still dispatch through it after the caller
+  // returns; it is collected with this context. Loaded on first use: most one-shot turns never
+  // dispatch another turn, and the runtime and method registry cost cold start.
+  let instance: Promise<GatewayInstanceRuntime> | undefined;
+  const loadInstance = () =>
+    (instance ??= Promise.all([
+      import("./server-instance-runtime.js"),
+      import("./server-methods.js"),
+    ]).then(([{ createGatewayInstanceRuntime }, { createRequestGatewayMethodRegistry }]) =>
+      createGatewayInstanceRuntime({
+        getContext: () => context,
+        getMethodRegistry: () => createRequestGatewayMethodRegistry(),
+        isDispatchAvailable: () => true,
+      }),
+    ));
+  context.createAgentTurnFacade = async (principal) =>
+    (await loadInstance()).createAgentTurnFacade(principal);
+  context.lifecycleRuntime = hostingGateway ?? {
+    dispatchSessionMethod: async (method, payload, options) =>
+      await (await loadInstance()).lifecycle.dispatchSessionMethod(method, payload, options),
+    dispatchAgent: async (payload, timeoutMs, options) =>
+      await (await loadInstance()).lifecycle.dispatchAgent(payload, timeoutMs, options),
+    waitForAgent: async (payload, timeoutMs, signal) =>
+      await (await loadInstance()).lifecycle.waitForAgent(payload, timeoutMs, signal),
+    sendNotice: async (payload) => await (await loadInstance()).lifecycle.sendNotice(payload),
   };
   return context;
 }

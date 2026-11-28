@@ -16,7 +16,7 @@ type BootstrapFile = Awaited<
 const budget = { agents: { defaults: { bootstrapMaxChars: 300, bootstrapTotalMaxChars: 300 } } };
 function prepare(
   files: BootstrapFile[],
-  params: Partial<Parameters<typeof prepareAgentWorkspaceContext>[0]> = {},
+  params: Partial<Parameters<typeof prepareAgentWorkspaceContext>[0]>,
 ) {
   vi.spyOn(bootstrapRuntime, "resolveBootstrapFilesForRun").mockResolvedValue(files);
   return prepareAgentWorkspaceContext({ workspaceDir, scope: "full", ...params });

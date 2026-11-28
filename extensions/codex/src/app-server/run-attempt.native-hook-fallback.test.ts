@@ -125,7 +125,7 @@ describe("Codex participant native admission", () => {
     { hooks: "disabled", lifecycle: "fresh", participants: "multiple", policy: "token-sharing" },
   ] as const)(
     "handles $participants participants with $hooks native admission on a $lifecycle $policy thread",
-    async ({ hooks, lifecycle, participants, policy }) => {
+    async ({ hooks, lifecycle, policy }) => {
       const params = participantParams("participant-model-hooks");
       params.sessionKey = undefined;
       if (policy === "token-sharing") {
@@ -214,21 +214,6 @@ describe("Codex participant native admission", () => {
                 nativeModelAdmission: resources.nativeModelAdmission,
                 buildFinalConfigPatch: resources.buildNativeHookRelayFinalConfigPatch,
               });
-            if (participants === "multiple" && policy === "normal") {
-              for (const message of [
-                "Alice's access changed; ask them again",
-                "This turn has ended; ask again in a new turn.",
-              ]) {
-                spawnFailure = new Error(message);
-                await expect(
-                  resources.buildNativeHookRelayFinalConfigPatch(
-                    { action: "start" },
-                    harness.client,
-                  ),
-                ).rejects.toBe(spawnFailure);
-              }
-              spawnFailure = undefined;
-            }
             const binding = await startThread();
             resources.state.thread = binding;
             const admission = await preflight.mock.results[0]?.value;
@@ -250,15 +235,8 @@ describe("Codex participant native admission", () => {
             expect(harness.request.mock.calls.some(([method]) => method === "turn/start")).toBe(
               false,
             );
-            if (policy === "token-sharing") {
-              expect(request).toMatchObject({ config: disabledDelegation });
-            } else {
-              for (const key of Object.keys(disabledDelegation)) {
-                expect(request).not.toHaveProperty(["config", key], false);
-              }
-            }
+            expect(request).toMatchObject({ config: disabledDelegation });
             if (hooks === "optional") {
-              expect(admission?.nativeModelInputTools).toContain("spawn_agent");
               const relayId = extractRelayIdFromThreadRequest(request);
               const generation = extractGenerationFromThreadRequest(request);
               resources.state.nativeHookRelay?.bindForegroundTurn(binding.threadId, "turn-1");
@@ -413,9 +391,7 @@ describe("Codex native hook Gateway fallback", () => {
       await run.waitForTurnAccepted();
       expect(registered.mock.calls[0]?.[1]?.supportsCrossProfileSteering).toBe(true);
       const request = harness.requests.find(({ method }) => method === "thread/start")?.params;
-      expect(request).toMatchObject({ config: { "features.multi_agent": false } });
-      expect(request).not.toHaveProperty(["config", "features.multi_agent_v2"], false);
-      expect(request).not.toHaveProperty(["config", "agents.enabled"], false);
+      expect(request).toMatchObject({ config: disabledDelegation });
       await harness.completeTurn({ threadId: "thread-1", turnId: "turn-1" });
       await run;
     } finally {

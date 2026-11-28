@@ -78,7 +78,7 @@ describe("deferred logical-turn lifecycle", () => {
   });
   const retryManager = (
     runId: string,
-    overrides: Partial<Parameters<typeof createEmbeddedAttemptDeferredLifecycleOwner>[0]> = {},
+    overrides: Partial<Parameters<typeof createEmbeddedAttemptDeferredLifecycleOwner>[0]>,
   ) => {
     const ref = { runId, sessionId, sessionKey };
     const operation = createReplyOperation({ ...ref, resetTriggered: false });

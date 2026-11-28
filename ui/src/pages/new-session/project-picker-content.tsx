@@ -24,6 +24,7 @@ import { isComposingKeyboardEvent, recordCompositionEnd } from "../../lib/ime.ts
 import { handleNavigationClick } from "../../lib/navigation-click.ts";
 import { pathDisplayName } from "../../lib/path-display.ts";
 import { t } from "../../lib/reactive/i18n.ts";
+import { createIntersectionObserver } from "../../lib/reactive/observers.ts";
 import { readSessionMethodAccess } from "../../lib/session-method-access.ts";
 import { SessionMenuItem } from "./cloud-target-view.tsx";
 import { findBrowsableDeviceFolderHost } from "./device-placement.ts";
@@ -35,7 +36,33 @@ import { PlaceBrowser } from "./place-browser.tsx";
 import { disambiguate } from "./place-labels.ts";
 import { projectCloneInput } from "./project-chip.ts";
 import type { ProjectChipProps } from "./project-chip.tsx";
-import { SavedProjectRow } from "./project-picker-saved-projects.tsx";
+import { ProjectFolderIcon } from "./project-folder-icon.tsx";
+import { ProjectIcon } from "./project-icon.tsx";
+
+function ProjectRowIcon(props: Parameters<typeof ProjectIcon>[0]) {
+  const [visible, setVisible] = createSignal(typeof IntersectionObserver === "undefined");
+  let glyph!: HTMLSpanElement;
+  createIntersectionObserver(
+    () => (visible() ? [] : [glyph]),
+    (entries) => {
+      if (entries.some((entry) => entry.isIntersecting)) {
+        setVisible(true);
+      }
+    },
+  );
+  return (
+    <span
+      class="project-picker-icon"
+      ref={(element) => {
+        glyph = element;
+      }}
+    >
+      <Show when={visible()} fallback={<ProjectFolderIcon />}>
+        <ProjectIcon context={props.context} projectId={props.projectId} />
+      </Show>
+    </span>
+  );
+}
 
 function DevicePathEntry(props: ProjectChipProps) {
   const [path, setPath] = createSignal(() => props.params.place.deviceFolder?.path ?? "");
@@ -364,23 +391,17 @@ export function ProjectPickerContent(props: ProjectChipProps) {
               props.params.place.browser.changeProjectQuery(query);
             }}
             onInputKeyDown={(event) => {
-              if (
-                navigation?.keydown(event) ||
-                event.key !== "Enter" ||
-                isComposingKeyboardEvent(event)
-              ) {
+              if (navigation?.keydown(event)) {
                 return;
               }
-              if (view().cloneInput && view().projectAddAvailable) {
-                event.preventDefault();
-                selectClone(view().cloneInput!);
-              } else if (
-                !view().cloneInput &&
-                view().query.length >= 2 &&
-                view().projectSearchAvailable
+              if (
+                event.key === "Enter" &&
+                !isComposingKeyboardEvent(event) &&
+                view().cloneInput &&
+                view().projectAddAvailable
               ) {
                 event.preventDefault();
-                props.params.place.browser.searchRemoteProjects();
+                selectClone(view().cloneInput!);
               }
             }}
           />
@@ -544,13 +565,30 @@ export function ProjectPickerContent(props: ProjectChipProps) {
                     </Show>
                   }
                 >
-                  {(project, index) => (
-                    <SavedProjectRow
-                      picker={props}
-                      project={project()}
-                      suffix={checkoutSuffixes()[index()]}
-                    />
-                  )}
+                  {(project, index) => {
+                    const subtitle = () => {
+                      const identity = project().repositoryIdentity;
+                      const suffix = checkoutSuffixes()[index()];
+                      return identity && suffix ? `${identity} · ${suffix}` : (identity ?? suffix);
+                    };
+                    const icon = (
+                      <ProjectRowIcon context={props.params.context} projectId={project().id} />
+                    );
+                    return (
+                      <SessionMenuItem
+                        item={{
+                          value: `project:${project().id}`,
+                          label: project().displayName,
+                          icon,
+                          sub: subtitle(),
+                          checked: props.params.place.browser.projectId === project().id,
+                          title: subtitle() ?? project().repoRoot,
+                          onSelect: () => props.params.place.selectProjectId(project().id),
+                        }}
+                        submitting={props.params.submitting}
+                      />
+                    );
+                  }}
                 </For>
               </Loading>
               <Show when={props.params.place.isAdmin() ? props.params.context : undefined}>
@@ -580,7 +618,7 @@ export function ProjectPickerContent(props: ProjectChipProps) {
                 submitting={props.params.submitting}
               />
             ) : undefined}
-            {projectSearchRead() ? (
+            {!view().cloneInput && view().query.length >= 2 && view().projectSearchAvailable ? (
               <>
                 <MenuHeading
                   class="new-session-page__menu-title"
@@ -649,7 +687,7 @@ export function ProjectPickerContent(props: ProjectChipProps) {
               <div class="new-session-page__menu-note">{t("newSession.projectsAdminHint")}</div>
             ) : undefined}
           </div>
-          {/* Gateway folder browsing and remote search require operator.write. */}
+          {/* Gateway-host folder browsing needs operator.write; restricted roles pick shared projects. */}
           <Show when={props.params.place.canWrite()}>
             <div class="new-session-page__picker-foot">
               {view().browseNeedsAdmin ? (
@@ -659,23 +697,6 @@ export function ProjectPickerContent(props: ProjectChipProps) {
               ) : (
                 browseButton()
               )}
-              <Show when={!view().cloneInput && view().projectSearchAvailable}>
-                <SessionMenuItem
-                  item={{
-                    value: "search-github",
-                    label: t("newSession.searchGithub"),
-                    icon: <Icon name="github" />,
-                    keepOpen: true,
-                    checked: false,
-                    onSelect: () => props.params.place.browser.searchRemoteProjects(),
-                  }}
-                  submitting={
-                    props.params.submitting ||
-                    props.params.pendingPlacement ||
-                    view().query.length < 2
-                  }
-                />
-              </Show>
             </div>
           </Show>
         </div>

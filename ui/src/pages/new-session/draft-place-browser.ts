@@ -18,7 +18,7 @@ import { pathDisplayName } from "../../lib/path-display.ts";
 import { projectsForGateway, type ProjectCatalog } from "../../lib/projects.ts";
 import type { DraftGatewayState } from "./draft-gateway-state.ts";
 import { isAbsolutePath, isKnownWorkspacePath } from "./path.ts";
-import { PlaceBrowserState } from "./place-browser-state.ts";
+import { PICKER_INPUT_DEBOUNCE_MS, PlaceBrowserState } from "./place-browser-state.ts";
 import { projectCloneInput, type DraftRemoteProject } from "./project-chip.ts";
 
 type ProjectSearchOutcome = { result: ProjectsSearchRemoteResult } | { error: unknown } | null;
@@ -65,7 +65,7 @@ export class DraftPlaceBrowser {
   #selectedProjectRecord: ProjectRecord | undefined;
   #projectQueryValue = "";
   #environmentQueryValue = "";
-  #submittedProjectQuery = "";
+  #debouncedProjectQuery = "";
   #browserMode: "browse" | "enter-path" | null = null;
   // Empty lists the Gateway host; otherwise the paired device whose folders are listed.
   #browserNodeIdValue = "";
@@ -77,6 +77,7 @@ export class DraftPlaceBrowser {
   } | null = null;
   #openPopoverValue: DraftPickerKind | null = null;
   #focusRequestId = 0;
+  #projectSearchTimer: ReturnType<typeof globalThis.setTimeout> | undefined;
 
   readonly browser: PlaceBrowserState;
 
@@ -170,7 +171,7 @@ export class DraftPlaceBrowser {
         "projects.searchRemote",
         "operator.write",
       ),
-      this.#submittedProjectQuery,
+      this.#debouncedProjectQuery,
       this.gateway.connectionEpoch,
     ] as const;
   }
@@ -412,19 +413,41 @@ export class DraftPlaceBrowser {
 
   changeProjectQuery(query: string) {
     this.#projectQueryValue = query;
-    this.#submittedProjectQuery = "";
-    this.#searchProjects();
-    this.callbacks.changed();
-  }
-
-  searchRemoteProjects() {
-    this.#submittedProjectQuery = this.#projectQueryValue.trim();
-    this.#searchProjects();
+    this.#clearProjectSearchTimer();
+    this.#debouncedProjectQuery = "";
+    this.#searchProjects([null, false, "", this.gateway.connectionEpoch]);
+    const normalized = query.trim();
+    const context = this.read().context;
+    if (
+      normalized.length < 2 ||
+      projectCloneInput(normalized) ||
+      !this.gateway.connected ||
+      !this.gateway.client ||
+      !context ||
+      !canCallGatewayMethod(context.gateway.snapshot, "projects.searchRemote", "operator.write")
+    ) {
+      this.callbacks.changed();
+      return;
+    }
+    const client = this.gateway.client;
+    const connectionEpoch = this.gateway.connectionEpoch;
+    this.#projectSearchTimer = globalThis.setTimeout(() => {
+      this.#projectSearchTimer = undefined;
+      if (client !== this.gateway.client || connectionEpoch !== this.gateway.connectionEpoch) {
+        return;
+      }
+      this.#debouncedProjectQuery = normalized;
+      this.#searchProjects();
+      this.callbacks.changed();
+    }, PICKER_INPUT_DEBOUNCE_MS);
     this.callbacks.changed();
   }
 
   resetProjectSearch() {
-    this.changeProjectQuery("");
+    this.#clearProjectSearchTimer();
+    this.#projectQueryValue = "";
+    this.#debouncedProjectQuery = "";
+    this.callbacks.changed();
   }
 
   resetProjects(resetSelection = true) {
@@ -553,7 +576,7 @@ export class DraftPlaceBrowser {
     this.#environmentQueryValue = "";
     this.browser.reset();
     this.#retireRegistration();
-    this.#submittedProjectQuery = "";
+    this.#clearProjectSearchTimer();
     this.#projectCatalogCleanup?.();
     this.#projectCatalogCleanup = undefined;
     this.#projectCatalogGateway = undefined;
@@ -577,6 +600,11 @@ export class DraftPlaceBrowser {
   #retireRegistration() {
     this.#browserRegistration?.retire();
     this.#browserRegistration = null;
+  }
+
+  #clearProjectSearchTimer() {
+    globalThis.clearTimeout(this.#projectSearchTimer);
+    this.#projectSearchTimer = undefined;
   }
 
   #focusProjectView(kind: keyof ProjectBrowserFocus) {

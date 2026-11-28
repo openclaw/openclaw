@@ -69,8 +69,11 @@ it.each([
   },
 );
 
-it("hides avatars for a subagent key before its session row loads", async () => {
-  const props = threadProps("spawn-key", "agent:main:subagent:child");
+it("hides avatars and the unknown sender label before a subagent row loads", async () => {
+  const props = threadProps("spawn-key", "agent:main:subagent:child", [
+    { role: "user", content: "Inspect the workspace", timestamp: 1_000 },
+    { role: "assistant", content: "Workspace inspected", timestamp: 2_000 },
+  ]);
   props.userId = "viewer";
   props.userName = "Example User";
   const transcript = createTestTranscript();
@@ -81,11 +84,10 @@ it("hides avatars for a subagent key before its session row loads", async () => 
   transcript.update();
   transcript.start();
   await flushDeferredRowPrune();
-  expect(container.querySelectorAll(".chat-group").length).toBeGreaterThan(0);
+  const userGroup = container.querySelector(".chat-group.user");
+  expect(userGroup?.textContent).toContain("Inspect the workspace");
   expect(container.querySelector(".chat-avatar, .chat-author-avatar")).toBeNull();
-  expect(container.querySelector(".chat-group.user .chat-sender-name")?.textContent).toBe(
-    "Message",
-  );
+  expect(userGroup?.querySelector(".chat-sender-name")).toBeNull();
   expect(container.querySelector(".chat-group.assistant .chat-sender-name")?.textContent).toBe(
     "Molty",
   );
