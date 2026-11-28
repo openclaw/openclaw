@@ -49,7 +49,7 @@ export const SYSTEM_PROMPT_SECTIONS = [
     owner: "promised-work-prompt.ts",
     region: "stable",
     includedWhen: "always",
-    budgetBytes: 416,
+    budgetBytes: 224,
   },
   {
     id: "provider_stable_prefix",

@@ -8,6 +8,7 @@ scenario:
       - agent-runtime.startup-instructions
   objective: Reuse a fact from an earlier conversation without mistaking its status report for the current state.
   successCriteria:
+    - The agent reuses the completed item lookup without reopening its catalog file.
     - One request produces the local label when today's receipt clears the earlier blocker.
     - The same request reports the item without writing a label when the receipt still says pending.
   docsRefs:
@@ -42,6 +43,14 @@ flow:
               - set: code
                 value:
                   expr: "'ITEM-' + randomUUID()"
+              - set: catalogFile
+                value:
+                  expr: "id + '.catalog'"
+              - call: fs.writeFile
+                args:
+                  - expr: "path.join(env.gateway.workspaceDir, catalogFile)"
+                  - ref: code
+                  - utf8
               - set: source
                 value:
                   expr: "'agent:qa:catalog-draft-' + id"
@@ -60,7 +69,7 @@ flow:
                   - sessionKey:
                       ref: source
                     message:
-                      expr: "'Draft handoff: item code ' + code + '. I stopped without creating the label because the review receipt was pending.'"
+                      expr: "'Catalog lookup complete (' + catalogFile + '): item code ' + (await fs.readFile(path.join(env.gateway.workspaceDir, catalogFile), 'utf8')) + '. The review receipt was pending, so no label was written.'"
               - call: fs.writeFile
                 args:
                   - expr: "path.join(env.gateway.workspaceDir, id + '.receipt')"
@@ -83,6 +92,9 @@ flow:
               - assert:
                   expr: "(turn.successfulToolCallCounts.sessions_history ?? 0) + (turn.successfulToolCallCounts.sessions_search ?? 0) > 0"
                   message: The item code must come from a successful session recall.
+              - assert:
+                  expr: "!(await readSessionToolActivity(env, destination)).some((call) => call.kind === 'tool' && ['read', 'grep', 'exec', 'exec_command'].includes(call.toolName) && JSON.stringify(call.input ?? {}).includes(catalogFile))"
+                  message: The current turn repeated the completed catalog lookup.
               - set: label
                 value:
                   expr: "await fs.readFile(path.join(env.gateway.workspaceDir, id + '.label'), 'utf8').then((s) => s.trim(), (err) => { if (err.code === 'ENOENT') return null; throw err; })"
@@ -90,4 +102,4 @@ flow:
                   expr: "String(turn.finalText).includes(code) && String(turn.finalText).toLowerCase().includes(status) && label === (status === 'approved' ? code : null)"
                   message:
                     expr: "'Expected the recalled code and current ' + status + ' receipt to determine the label; got ' + JSON.stringify({ label, reply: turn.finalText })"
-      detailsExpr: "'Verified approved and pending receipts in separate conversations.'"
+      detailsExpr: "'Reused the completed lookup in both turns. Approved: label written. Pending: label absent.'"
