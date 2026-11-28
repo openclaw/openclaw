@@ -90,7 +90,18 @@ it("reads configured models once across provider claims and skips auth profiles 
     },
     models: { providers: { " CONFIG ": { baseUrl: "https://example.test", models: [] } } },
   };
-  const primary = { id: "primary", channels: [], providers: ["mixed"] };
+  let toolDeclarationReads = 0;
+  const primary = {
+    id: "primary",
+    channels: [],
+    providers: ["mixed"],
+    contracts: {
+      get tools() {
+        toolDeclarationReads++;
+        return ["sample-tool"];
+      },
+    },
+  };
   const detect = (plugins: ManifestPlugin[]) =>
     detectPluginAutoEnableCandidates({ config, env, manifestRegistry: makeRegistry(plugins) });
   const modelCandidate = {
@@ -115,6 +126,7 @@ it("reads configured models once across provider claims and skips auth profiles 
   ]);
   expect(modelReads).toBe(2);
   expect(profileReads).toBe(1);
+  expect(toolDeclarationReads).toBe(0);
 });
 
 it("auto-enables selected web search provider plugins under restrictive allowlists", () => {

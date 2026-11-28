@@ -1,5 +1,10 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { observeHostDataSql } from "../../test/helpers/sqlite-statement-execution-counter.js";
+import {
+  beginPromptCacheObservation,
+  completePromptCacheObservation,
+} from "../agents/embedded-agent-runner/prompt-cache-observability.js";
+import { prepareProviderPrompt } from "../agents/embedded-agent-runner/provider-prompt-serialization.js";
 import { createModelRuntimeChoiceOwnerFixture } from "../agents/model-runtime-choice.test-support.js";
 import * as modelsConfig from "../agents/models-config-state.js";
 import * as preparedCatalog from "../agents/prepared-model-catalog.js";
@@ -661,6 +666,44 @@ describe("prepared status", () => {
     } else {
       await expect(result).rejects.toBe(error);
     }
+  });
+
+  it.each([
+    ["a keyless request to the selected relay model", "gpt-5.4", {}, true],
+    ["a request that carried a key", "gpt-5.4", { prompt_cache_key: "session" }, false],
+    ["a keyless request to another model", "gpt-5.4-mini", {}, false],
+  ] as const)("names the cache key only after %s", async (_, modelId, fields, shown) => {
+    const sessionId = `status-cache-key-${modelId}-${shown}`;
+    const sessionKey = `agent:main:${sessionId}`;
+    beginPromptCacheObservation({
+      sessionId,
+      sessionKey,
+      provider: "openai",
+      modelId,
+      modelApi: "openai-completions",
+      streamStrategy: "openai-completions",
+      systemPrompt: "",
+      tools: [],
+      messages: [],
+    });
+    const { encoded: _encoded, ...fingerprint } = prepareProviderPrompt({
+      payload: { model: modelId, messages: [], ...fields },
+      encode: true,
+    });
+    completePromptCacheObservation({
+      sessionId,
+      sessionKey,
+      providerPrompt: { scopeDigest: "scope", ...fingerprint },
+    });
+    const text = await buildStatusText(
+      params({
+        sessionKey,
+        sessionEntry: entry({ sessionId }),
+        provider: "openai",
+        model: "gpt-5.4",
+      }),
+    );
+    expect(text.includes("cache key: not sent")).toBe(shown);
   });
 });
 

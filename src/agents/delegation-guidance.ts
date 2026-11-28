@@ -70,13 +70,8 @@ export function buildSubagentPromptGuidance(params: {
       : undefined,
     // suggest_task is run-granted: the granting turn lists it, so the cached prompt omits it.
   });
-  // `## Delegation` owns the child brief, waiting and synthesis when it renders.
-  const delegationRenders = delegationSection.includes("## Delegation");
-  const spawnArguments = params.workerPlacement
-    ? "the whole child brief goes in `task`; `label` for UI"
-    : `${delegationRenders ? "" : "objective/output/write-scope/verification; "}\`context:"isolated"\` for clean context, \`context:"fork"\` for transcript; \`taskName\` for stable handle, \`label\` for UI; hidden by default unless user needs to steer`;
   const sessionsSpawnHint = hasSessionsSpawn
-    ? `Execute work directly by default; delegate bounded independent work via \`sessions_spawn\` (${spawnArguments}). Keep dependent steps with one owner${delegationRenders ? "." : " and synthesize child outputs."}`
+    ? "Execute work directly by default; delegate bounded independent work via `sessions_spawn`. Keep dependent steps with one owner."
     : "";
   return { inTurnCollectionGuidance, delegationSection, sessionsSpawnHint };
 }
@@ -105,15 +100,11 @@ export function buildDelegationGuidanceSection(params: {
       ? [
           "## Session routing",
           createToolName
-            ? `- Explicit requests to start a session or task ("spin up a new task"): \`${createToolName}\` (\`message\` starts work; omit for idle). It is an independent persistent visible session, not a supervised child: no completion event or yield.`
+            ? `Explicit requests to start a session or task: \`${createToolName}\`.`
             : "",
-          hiddenDelegationTool
-            ? `- Delegated helpers: hidden ${hiddenDelegationTool} children by default.`
-            : "",
-          params.hasVisibleSessionSpawn
-            ? params.workerPlacement
-              ? "- `sessions_spawn` children are always visible sidebar sessions; use it for delegated child work, not independent session creation."
-              : "- `sessions_spawn` `visible=true`: only for supervised child work the user will revisit or steer, not independent session creation."
+          hiddenDelegationTool ? `Delegated helpers: hidden ${hiddenDelegationTool} children.` : "",
+          params.workerPlacement && params.hasVisibleSessionSpawn
+            ? "Delegated helpers: visible `sessions_spawn` children."
             : "",
           params.suggestTaskToolName
             ? `- Proactive, unrequested follow-up proposals use \`${params.suggestTaskToolName}\`: record a suggestion card; nothing starts until the user accepts. An explicit request to start work is not a proposal.`

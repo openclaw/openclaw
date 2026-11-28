@@ -2294,11 +2294,11 @@ struct ChatViewModelTests {
         let oldRequest = vm.beginHistoryRequest()
         vm.clearProgressCard()
         vm.applyProgressCard(progressCard(sessionKey: "agent:research:global", revision: 1, markdown: "Retained"))
-        _ = vm.applyHistoryPayload(
+        _ = await vm.applyHistoryPayload(
             history,
             for: oldRequest,
             preservingOptimisticLocalMessages: false,
-            decodedMessages: await OpenClawChatViewModel.decodeMessages(
+            decodedMessages: OpenClawChatViewModel.decodeMessages(
                 history.messages ?? [], activity: history.activity))
         await vm.scheduleProgressCardFetch()?.value
         #expect(await capabilityReturned.current() == 1)
@@ -2338,11 +2338,11 @@ struct ChatViewModelTests {
         vm.handleTransportEvent(.health(ok: true))
         await historyGate.waitUntilBlocked()
         #expect(await historyCalls.current() == 1)
-        _ = vm.applyHistoryPayload(
+        _ = await vm.applyHistoryPayload(
             oldHistory,
             for: oldRequest,
             preservingOptimisticLocalMessages: false,
-            decodedMessages: await OpenClawChatViewModel.decodeMessages(
+            decodedMessages: OpenClawChatViewModel.decodeMessages(
                 oldHistory.messages ?? [], activity: oldHistory.activity))
         await historyGate.release()
         await recovery?.value
@@ -8079,6 +8079,52 @@ struct ChatViewModelTests {
         #expect(await transport.lastSentSessionKey()?.hasPrefix("agent:aiden:ios-") == true)
     }
 
+    @Test @MainActor
+    func `new chat draft defers creation and settings until send`() async {
+        let (transport, vm) = await makeViewModel(
+            sessionKey: "agent:main:main",
+            activeAgentId: "main",
+            historyResponses: [],
+            sessionsResponses: [sessionsResponse([])],
+            modelResponses: [[modelChoice(id: "draft-model", name: "Draft model")]],
+            historyResponseHook: { key, _, _ in
+                historyPayload(sessionKey: key, sessionId: nil)
+            })
+        vm.load()
+        await vm.bootstrapTask?.value
+
+        #expect(vm.startNewChatDraft())
+        let abandonedKey = vm.sessionKey
+        await vm.bootstrapTask?.value
+        #expect(vm.isNewChatDraft)
+        #expect(await transport.createdSessionKeys().isEmpty)
+        #expect(await transport.sentRunIds().isEmpty)
+
+        vm.input = "Keep this draft"
+        #expect(vm.startNewChatDraft(agentID: "reviewer"))
+        let submittedKey = vm.sessionKey
+        await vm.bootstrapTask?.value
+        #expect(vm.input == "Keep this draft")
+        #expect(submittedKey != abandonedKey)
+        #expect(submittedKey.hasPrefix("agent:reviewer:ios-"))
+        vm.selectModel("anthropic/draft-model")
+        vm.selectThinkingLevel("high")
+        await vm.waitForPendingSessionSettings(in: submittedKey)
+        #expect(await transport.sessionSettingsPatches().isEmpty)
+        #expect(await transport.createdSessionKeys().isEmpty)
+        #expect(vm.sessions.allSatisfy { $0.key != submittedKey && $0.key != abandonedKey })
+        #expect(vm.sessionChoices.allSatisfy { $0.key != submittedKey && $0.key != abandonedKey })
+
+        await sendUserMessage(vm, text: "First message")?.value
+        #expect(await transport.lastSentSessionKey() == submittedKey)
+        #expect(await transport.sentMessages() == ["First message"])
+        let patches = await transport.sessionSettingsPatches()
+        #expect(patches.count == 1)
+        #expect((patches.first?.model ?? nil) == "anthropic/draft-model")
+        #expect((patches.first?.thinkingLevel ?? nil) == "high")
+        #expect(!vm.isNewChatDraft)
+    }
+
     @Test func `new trigger falls back to reset when create session is unsupported`() async throws {
         let before = historyPayload(
             messages: [
@@ -8258,7 +8304,7 @@ struct ChatViewModelTests {
         #expect(await transport.sessionSettingsPatches().count == 1)
         #expect(await MainActor.run { !vm.composerCapabilityMutationDisabled })
         #expect(await MainActor.run { vm.composerPermissionMode } == .full)
-        #expect(await MainActor.run { vm.composerCapabilityNotice } == "New permissions apply to the next run.")
+        #expect(await MainActor.run { vm.composerCapabilityNotice } == "New permissions apply to the next reply.")
         await MainActor.run { vm.dismissComposerCapabilityNotice() }
         #expect(await MainActor.run { vm.composerCapabilityNotice } == nil)
 
@@ -8268,7 +8314,7 @@ struct ChatViewModelTests {
         #expect(await MainActor.run { !vm.composerCapabilityMutationDisabled })
         #expect(await MainActor.run { !vm.composerWebSearchEnabled })
         #expect(await MainActor.run { vm.composerCapabilityNotice } ==
-            "Tool changes apply to the next run.")
+            "Tool changes apply to the next reply.")
         await MainActor.run { vm.dismissComposerCapabilityNotice() }
 
         await MainActor.run { vm.toggleComposerSkill(skill) }
@@ -8286,7 +8332,7 @@ struct ChatViewModelTests {
         #expect((patches[2].expectedToolOverrides ?? nil)?.webSearch == false)
         #expect((patches[2].toolOverrides ?? nil)?.skills["release"] == false)
         #expect(await MainActor.run { vm.composerCapabilityNotice } ==
-            "Tool changes apply to the next run.")
+            "Tool changes apply to the next reply.")
     }
 
     @Test func `restrictive composer patch serializes ahead of immediate send`() async throws {
@@ -8607,7 +8653,7 @@ struct ChatViewModelTests {
         #expect(await MainActor.run { !vm.composerCapabilityMutationDisabled })
         #expect(await (transport.sessionSettingsPatches())[2].toolOverrides == .some(nil))
         #expect(await MainActor.run { vm.composerCapabilityNotice } ==
-            "Tool overrides will be cleared for the next run.")
+            "Tool overrides will be cleared for the next reply.")
     }
 
     @Test func `composer tool toggles use authoritative session denial instead of catalog baseline`() async throws {
@@ -8779,6 +8825,22 @@ struct ChatViewModelTests {
         #expect(await transport.sessionSettingsPatches()[2].toolOverrides == .some(nil))
     }
 
+    @Test func `a failed capability load names the access reason, not a save`() async {
+        let catalog = OpenClawChatComposerCapabilityCatalog(
+            sessionSettingsAvailable: true,
+            sessionSettingsCASAvailable: true)
+        let (_, vm) = await makeViewModel(
+            historyResponses: [historyPayload()],
+            composerCapabilityCatalog: catalog)
+        await vm.loadComposerCapabilities()
+
+        #expect(await MainActor.run { vm.composerCapabilityErrorMessage } != nil)
+        #expect(await MainActor.run { vm.composerPermissionMutationDisabledReason } ==
+            "You need write access to change permissions.")
+        #expect(await MainActor.run { vm.composerToolOverrideMutationDisabledReason } ==
+            "You need admin access to change tools.")
+    }
+
     @Test func `composer capability reasons name access and skill blockers`() async {
         let missing = OpenClawChatComposerSkill(
             key: "missing",
@@ -8814,11 +8876,9 @@ struct ChatViewModelTests {
         await vm.loadComposerCapabilities()
 
         #expect(await MainActor.run { vm.composerPermissionMutationDisabledReason } ==
-            "Changing permissions requires operator.write or operator.admin access.")
-        #expect(await MainActor.run { vm.composerPermissionDisabledReason(.full) } ==
-            "You don’t have permission to turn on Full access.")
+            "You need write access to change permissions.")
         #expect(await MainActor.run { vm.composerToolOverrideMutationDisabledReason } ==
-            "Session tool controls require operator.admin access.")
+            "You need admin access to change tools.")
         #expect(await MainActor.run { vm.composerWebSearchMutationDisabledReason } ==
             "Could not load Web Search.")
         #expect(await MainActor.run { vm.composerSkillDisabledReason(missing) } == "Missing dependencies.")
@@ -8901,7 +8961,7 @@ struct ChatViewModelTests {
         #expect(await transport.sessionSettingsPatches().isEmpty)
         #expect(await MainActor.run { !vm.composerWebSearchEnabled })
         #expect(await MainActor.run { vm.composerWebSearchMutationDisabledReason } ==
-            "Web Search is disabled in the Gateway configuration.")
+            "Web search is off in the Gateway configuration.")
     }
 
     @Test func `composer capability mutation rejects a replaced session before dispatch`() async throws {
@@ -14963,11 +15023,11 @@ struct ChatHistoryDeltaTests {
         await gate.waitUntilBlocked()
         await script.advance(to: 1)
         let first = try await script.read(sessionKey: "main", cursor: "0")
-        #expect(model.applyHistoryPayload(
+        #expect(await model.applyHistoryPayload(
             first,
             for: older,
             preservingOptimisticLocalMessages: true,
-            decodedMessages: await OpenClawChatViewModel.decodeHistoryDelta(first)))
+            decodedMessages: OpenClawChatViewModel.decodeHistoryDelta(first)))
         await script.advance(to: 2)
         await gate.release()
         #expect(await newer.value.applied)
@@ -14989,11 +15049,11 @@ struct ChatHistoryDeltaTests {
             thinkingLevel: nil,
             kind: "delta",
             deltaCursor: "broken-tip")
-        #expect(!model.applyHistoryPayload(
+        #expect(await !model.applyHistoryPayload(
             malformed,
             for: model.beginHistoryRequest(),
             preservingOptimisticLocalMessages: true,
-            decodedMessages: await OpenClawChatViewModel.decodeHistoryDelta(malformed)))
+            decodedMessages: OpenClawChatViewModel.decodeHistoryDelta(malformed)))
         #expect(model.historyDeltaCursor == "0")
         // Exercise the refresh owner too: the invalid row is not accepted by the wire-to-transcript path.
         let transport = TestChatTransport(historyResponses: [], historyCursorHook: { key, cursor in
@@ -15142,16 +15202,16 @@ struct ChatHistoryDeltaTests {
         let payload = try await script.read(
             sessionKey: "main",
             cursor: "0")
-        #expect(model.applyHistoryPayload(
+        #expect(await model.applyHistoryPayload(
             payload,
             for: newer,
             preservingOptimisticLocalMessages: true,
-            decodedMessages: await OpenClawChatViewModel.decodeHistoryDelta(payload)))
-        #expect(!model.applyHistoryPayload(
+            decodedMessages: OpenClawChatViewModel.decodeHistoryDelta(payload)))
+        #expect(await !model.applyHistoryPayload(
             payload,
             for: older,
             preservingOptimisticLocalMessages: true,
-            decodedMessages: await OpenClawChatViewModel.decodeHistoryDelta(payload)))
+            decodedMessages: OpenClawChatViewModel.decodeHistoryDelta(payload)))
         #expect(model.messages.count == 3)
         #expect(model.historyDeltaCursor == "2")
     }

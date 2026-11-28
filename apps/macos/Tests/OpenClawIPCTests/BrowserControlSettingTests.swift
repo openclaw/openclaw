@@ -216,8 +216,11 @@ struct BrowserControlSettingTests {
     {
         // ConfigStore overrides are process-wide; hold the shared lease as ConfigStoreTests does.
         try await TestIsolation.withIsolatedState(env: env) {
+            let state = AppStateStore.shared
+            let previousMode = state.connectionMode
+            state.connectionMode = .remote
+            defer { state.connectionMode = previousMode }
             await ConfigStore._testSetOverrides(.init(
-                isRemoteMode: { true },
                 loadRemote: { await selected.config.read() },
                 saveRemote: { try await selected.config.write($0) }))
             do {

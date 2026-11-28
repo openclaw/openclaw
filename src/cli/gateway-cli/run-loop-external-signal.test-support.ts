@@ -3,8 +3,51 @@ import {
   gatewayWorkAdmissionActual,
   runLoopFixture as mocks,
 } from "./run-loop-mocks.test-support.js";
+import { withLifecycleClock } from "./run-loop.test-support.js";
 
 export function registerExternalRestartSignalTests(waitForLoopTurn: () => Promise<void>): void {
+  it.each([true, false])(
+    "uses the external SIGUSR2 policy when the intent read times out (allowed: %s)",
+    async (allowed) => {
+      const intent = Promise.withResolvers<{ force: true }>();
+      mocks.consumeGatewayRestartIntentPayload.mockReturnValueOnce(intent.promise);
+      mocks.consumeGatewayRestartAuthorization.mockReturnValueOnce(false);
+      mocks.isGatewayRestartExternallyAllowed.mockReturnValueOnce(allowed);
+      await mocks.withRunningGateway(({ captureSignal, close }) =>
+        withLifecycleClock(async () => {
+          captureSignal("SIGUSR2")();
+          await vi.advanceTimersByTimeAsync(1_000);
+          expect(mocks.scheduleGatewayRestart).toHaveBeenCalledTimes(allowed ? 1 : 0);
+          intent.resolve({ force: true });
+          await vi.advanceTimersByTimeAsync(0);
+          expect(close).not.toHaveBeenCalled();
+        }),
+      );
+    },
+  );
+
+  it("accepts another SIGUSR2 after scheduling a timed-out signal throws", async () => {
+    const intent = Promise.withResolvers<null>();
+    mocks.consumeGatewayRestartIntentPayload.mockReturnValueOnce(intent.promise);
+    mocks.consumeGatewayRestartAuthorization.mockReturnValueOnce(false).mockReturnValueOnce(false);
+    mocks.isGatewayRestartExternallyAllowed.mockReturnValueOnce(true).mockReturnValueOnce(true);
+    mocks.scheduleGatewayRestart.mockImplementationOnce(() => {
+      throw new Error("scheduler unavailable");
+    });
+    await mocks.withRunningGateway(({ captureSignal }) =>
+      withLifecycleClock(async () => {
+        const restart = captureSignal("SIGUSR2");
+        restart();
+        await vi.advanceTimersByTimeAsync(1_000);
+        intent.resolve(null);
+        restart();
+        await vi.advanceTimersByTimeAsync(0);
+        expect(mocks.scheduleGatewayRestart).toHaveBeenCalledTimes(2);
+        expect(gatewayWorkAdmissionActual.isGatewayWorkAdmissionClosed()).toBe(false);
+      }),
+    );
+  });
+
   it.each([
     { allowed: false, publicationFails: false },
     { allowed: true, publicationFails: false },

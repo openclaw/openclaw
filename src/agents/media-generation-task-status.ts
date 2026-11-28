@@ -53,6 +53,8 @@ export const {
   promptCompletionLabel: "videos",
 });
 
+export const MEDIA_TASKS_HEADING = "## Media Generation Tasks";
+
 /** Shared by embedded and CLI prompts; all sections use this turn's owner snapshot. */
 export async function buildMediaTaskRuntimeContext(params: {
   capabilityToolNames: ReadonlySet<string>;
@@ -81,5 +83,5 @@ export async function buildMediaTaskRuntimeContext(params: {
     });
     return text ? [text] : params.includeEmptySnapshots ? [`- tool=${tool}; none`] : [];
   });
-  return facts.length ? ["## Media Generation Tasks", ...facts].join("\n") : undefined;
+  return facts.length ? [MEDIA_TASKS_HEADING, ...facts].join("\n") : undefined;
 }

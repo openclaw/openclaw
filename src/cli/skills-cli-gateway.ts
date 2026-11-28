@@ -59,7 +59,7 @@ export function normalizeExplicitAgentId(agentId?: string): string | undefined {
 export async function resolveSkillsWorkspace(options?: ResolveSkillsWorkspaceOptions) {
   // Prefer explicit --agent, then infer from cwd, then fall back to configured default agent.
   const config = options?.bestEffort
-    ? await readBestEffortConfig({ observe: false, skipPluginValidation: true })
+    ? await readBestEffortConfig({ observe: false, pluginValidation: "core-only" })
     : await captureRuntimeConfigAsyncReader()();
   const explicitAgentId = normalizeExplicitAgentId(options?.agentId);
   const inferredAgentId = explicitAgentId

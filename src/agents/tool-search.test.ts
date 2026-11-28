@@ -1414,7 +1414,8 @@ describe("Tool Search", () => {
 
   it("does not traverse remote schemas but detects a replacement schema object", () => {
     const tool = mcpPluginTool("remote_schema_swap", "Stable remote description");
-    const config = { tools: { toolSearch: true } } as never;
+    // Selectors keep the size-based direct MCP choice, which reads schemas, out of this check.
+    const config = { tools: { toolSearch: { include: [{ source: "mcp" }] } } } as never;
     const { ctx } = catalogFixture([tool], { config });
     tool.parameters = unreadableSchema(
       { type: "object", properties: {} },
@@ -1464,7 +1465,7 @@ describe("context-sized tool discovery", () => {
       validateInput: true,
     });
     await expect(runtime.call(entry.id, { limit: 2 })).rejects.toThrow(
-      "Expected input: { target: string; limit?: number /* integer */ }",
+      `Input schema: ${JSON.stringify(entry.parameters)}`,
     );
     expect(entry.tool.execute).not.toHaveBeenCalled();
     await runtime.call(entry.id, { target: "archive", limit: 2 });

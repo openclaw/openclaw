@@ -639,6 +639,17 @@ const reviewedOperations = new Map([
     ],
   ],
   [
+    "src/state/openclaw-state-db-delivery-queue-backfill.ts",
+    [
+      {
+        tier: "T3",
+        operations: ["hasLegacyDeliveryQueueFailureCompactionWork"],
+        evidence:
+          "Read-only Doctor plan only: hasDeliveryQueueBackfillWork, called from planOpenClawStateDatabaseDoctorRepair (Doctor schema preparation and its config-flow pending check) on a read-only connection; no Gateway runtime caller.",
+      },
+    ],
+  ],
+  [
     "src/state/openclaw-state-db-legacy-backfills.ts",
     [
       {
@@ -1406,6 +1417,18 @@ const reviewedOperations = new Map([
         ],
         evidence:
           "SQL readers execute only through gatewayBootReadOperations in the shared-state read worker or gatewayBootOperations begin/recover in the shared-state writer. Host lifecycle APIs dispatch these operations; remaining host imports from this kernel are pure helpers and constants.",
+      },
+    ],
+  ],
+  [
+    "src/infra/gateway-lock-payload.ts",
+    [
+      {
+        tier: "T2",
+        operations: ["classifyGatewayLockProcessNamespace"],
+        guard: "holder && databasePath && isLegacyGatewayLeaseLock(holder)",
+        evidence:
+          "Physical Gateway lock admission reads only the selected SQLite gateway-owner lease before reclaiming a namespace-less, explicit Gateway-role owner older than five minutes. Native callers are gateway-state-owner-record.ts stale-lock/access admission and gateway-lock.ts historical-lock admission/discovery. Modern owners never enter this branch; runtime lease renewals remain worker-owned.",
       },
     ],
   ],
@@ -3052,21 +3075,6 @@ const reviewedOperations = new Map([
         operations: ["deleteRestartSentinelRowSync", "readRestartSentinelSnapshotSync"],
         evidence:
           "Deletion and snapshot reads run in restart-sentinel.worker.ts or restart-sentinel.read.worker.ts; managed-handoff snapshot callers are also worker operations.",
-      },
-    ],
-  ],
-  [
-    "src/infra/update-failure-report-receipt-store.ts",
-    [
-      {
-        tier: "W",
-        operations: [
-          "replaceReceiptAtRevision",
-          "reserveUpdateFailureReportReceiptRowSync",
-          "completeUpdateFailureReportReceiptCleanupRowSync",
-        ],
-        evidence:
-          "Receipt mutations and authoritative revision rereads are called only by restart-sentinel.worker.ts; report submission and artifact sweep await that physical shared-state owner.",
       },
     ],
   ],

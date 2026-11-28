@@ -344,7 +344,7 @@ it("follows each session result once on presentation and clears session/gateway 
   expectRequest(gateway, {
     path: "/screenshot",
     target: "host",
-    query: { profile: "managed" },
+    query: { profile: "managed", operatorInput: false },
     body: { targetId: "t2", type: "png" },
   });
   const replacement = browserGateway();

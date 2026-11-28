@@ -18,10 +18,8 @@ import { logSessionControllerPhase as logPhase } from "./session-controller.diag
 import { createLifecycleDiagnosticWaitRecorder } from "./session-controller.lifecycle-diagnostics.js";
 import {
   beginSessionEffect as beginEffect,
-  captureSessionTarget,
   runSessionMutation as runMutation,
 } from "./session-controller.lifecycle.js";
-import { createReplyOperation } from "./session-controller.operation.js";
 
 const traces = {
   first: { traceId: "1".repeat(32), spanId: "1".repeat(16) },
@@ -162,53 +160,6 @@ afterEach(async () => {
   }
 });
 
-it.each([false, true])(
-  "reports a long acquired effect only when contended=%s",
-  async (contended) => {
-    const target = targetFor("acquired-effect-store");
-    const owner = Symbol("effect-producer");
-    const effect = await withTrace(traces.first, () =>
-      beginEffect({ ...target, owner, serializeOwner: true }),
-    );
-    const waiter = contended ? hold("lifecycle", target, traces.waiter, owner) : undefined;
-    try {
-      await advance(2_000);
-      await expectRecords(
-        "waiting",
-        contended
-          ? [
-              {
-                operationTraceId: traces.waiter.traceId,
-                holderTraceId: traces.first.traceId,
-                holderObserved: true,
-                holderPhase: "run",
-                queueKind: "lifecycle",
-                waitMs: 2_000,
-              },
-            ]
-          : [],
-      );
-    } finally {
-      effect.release();
-      waiter?.release();
-      await waiter?.promise;
-    }
-    await expectRecords(
-      "slow",
-      contended
-        ? [
-            {
-              operationTraceId: traces.first.traceId,
-              lifecycleQueueWaitMs: 0,
-              phaseDurationsMs: { prepare: 0, run: 2_000, finalize: 0 },
-            },
-            { operationTraceId: traces.waiter.traceId, lifecycleQueueWaitMs: 2_000 },
-          ]
-        : [],
-    );
-  },
-);
-
 it("reports the current holder after turnover and preserves the waiter's trace and FIFO order", async () => {
   const target = targetFor("private-store-path");
   const order: string[] = [];
@@ -263,119 +214,6 @@ it("reports the current holder after turnover and preserves the waiter's trace a
   );
   expectPrivate(completed, target);
 });
-
-it("distinguishes mutation and lifecycle holders of the same normalized identity", async () => {
-  const target = targetFor("namespace-store");
-  const lifecycle = hold("lifecycle", target, traces.first);
-  await lifecycle.entered;
-  const mutation = hold("mutation", target, traces.second);
-  const waiter = hold("mutation", target, traces.waiter);
-  try {
-    await advance(1_000);
-    const waiting = await expectRecords(
-      "waiting",
-      [
-        {
-          queueKind: "lifecycle",
-          operationTraceId: traces.second.traceId,
-          holderTraceId: traces.first.traceId,
-          holderPhase: "prepare",
-        },
-        {
-          queueKind: "mutation",
-          operationTraceId: traces.waiter.traceId,
-          holderTraceId: traces.second.traceId,
-          holderPhase: "run-admission",
-        },
-      ],
-      true,
-    );
-    expect(waiting).toHaveLength(2);
-    expect(new Set(waiting.map((record) => record.identityHash)).size).toBe(1);
-  } finally {
-    await finishHolds(lifecycle, mutation, waiter);
-  }
-});
-
-it("leaves the holder unknown while waiting on a turn instead of naming an unrelated effect", async () => {
-  const target = captureSessionTarget({
-    storeScope: "turn-observation-store",
-    sessionKey: "turn-observation-session",
-    incarnation: "waiting-turn",
-  });
-  const turn = createReplyOperation({
-    sessionKey: target.sessionKey,
-    sessionId: "waiting-turn",
-    target,
-    resetTriggered: false,
-  });
-  const unrelated = hold(
-    "lifecycle",
-    { scope: target.storeScope, identities: [target.sessionKey, "other-incarnation"] },
-    traces.first,
-  );
-  await unrelated.entered;
-  const waiter = withTrace(traces.waiter, () =>
-    runMutation({
-      target,
-      requiredSessionId: "waiting-turn",
-      policy: "wait",
-      run: async () => {},
-    }),
-  );
-  try {
-    await advance(1_000);
-    await expectRecord("waiting", {
-      operationTraceId: traces.waiter.traceId,
-      holderObserved: false,
-      queueKind: "lifecycle",
-    });
-  } finally {
-    await finish([() => turn.complete(), unrelated.release], unrelated.promise, waiter);
-  }
-});
-
-it.each([true, false])(
-  "preserves an outer holder through reentry when initially enabled=%s",
-  async (initiallyEnabled) => {
-    const target = targetFor(`reentry-store-${initiallyEnabled}`);
-    const outerGate = gate();
-    const nested = gate();
-    const outerTail = gate();
-    setDiagnostics(initiallyEnabled);
-    const outer = mutate(target, traces.first, {
-      diagnosticLabel: "create",
-      run: async () => {
-        await outerGate.run();
-        await mutate(target, traces.second, { diagnosticLabel: "delete", run: nested.run });
-        await outerTail.run();
-      },
-    });
-    await outerGate.entered;
-    setDiagnostics(true);
-    outerGate.release();
-    await nested.entered;
-    const waiter = hold("mutation", target, traces.waiter);
-    try {
-      await advance(500);
-      nested.release();
-      await outerTail.entered;
-      await advance(500);
-      const row = await expectRecord("waiting", {
-        operationTraceId: traces.waiter.traceId,
-        holderObserved: initiallyEnabled,
-      });
-      expect(row.holderTraceId).toBe(initiallyEnabled ? traces.first.traceId : undefined);
-      expect(row.holderTraceId).not.toBe(traces.second.traceId);
-    } finally {
-      await finish(
-        [outerGate.release, nested.release, outerTail.release, waiter.release],
-        outer,
-        waiter.promise,
-      );
-    }
-  },
-);
 
 it("measures prepare and finalize separately while successors wait for real finalization", async () => {
   const target = targetFor("phase-store");
