@@ -6,6 +6,7 @@ import {
 } from "openclaw/plugin-sdk/channel-send-result";
 import { expectDefined } from "openclaw/plugin-sdk/expect-runtime";
 import { createLazyRuntimeModule } from "openclaw/plugin-sdk/lazy-runtime";
+import { resolveMarkdownTableMode } from "openclaw/plugin-sdk/markdown-table-runtime";
 import { questionGatewayRuntime } from "openclaw/plugin-sdk/question-gateway-runtime";
 import {
   getReplyPayloadTtsSupplement,
@@ -20,6 +21,7 @@ import {
   normalizeLowercaseStringOrEmpty,
   normalizeOptionalStringifiedId,
 } from "openclaw/plugin-sdk/string-coerce-runtime";
+import { convertMarkdownTables } from "openclaw/plugin-sdk/text-chunking";
 import { truncateUtf16Safe } from "openclaw/plugin-sdk/text-utility-runtime";
 import { createDiscordActionGate } from "./accounts.js";
 import { formatDiscordApprovalDisplayValue } from "./approval-message-safety.js";
@@ -168,11 +170,14 @@ const loadDiscordComponentSendRuntime = createLazyRuntimeModule(
 
 export const discordOutbound: ChannelOutboundAdapter = {
   deliveryMode: "direct",
-  chunker: (text, limit, ctx) =>
-    chunkDiscordTextWithMode(text, {
+  chunker: (text, limit, ctx) => {
+    const tableMode = ctx?.formatting?.tableMode ?? "code";
+    const prepared = tableMode === "off" ? text : convertMarkdownTables(text, tableMode);
+    return chunkDiscordTextWithMode(prepared, {
       maxChars: limit,
       maxLines: ctx?.formatting?.maxLinesPerMessage ?? DISCORD_PRECHUNK_MAX_LINES,
-    }),
+    });
+  },
   textChunkLimit: DISCORD_TEXT_CHUNK_LIMIT,
   pollMaxOptions: 10,
   normalizePayload: ({ payload }) => normalizeDiscordApprovalPayload(payload),
@@ -313,9 +318,19 @@ export const discordOutbound: ChannelOutboundAdapter = {
         ? (discordData.embeds as DiscordSendEmbeds)
         : undefined;
     if (!literalText && !componentSpec && !nativeComponents && !embeds?.length && !filename) {
+      const tableMode =
+        payloadContext.formatting?.tableMode ??
+        resolveMarkdownTableMode({
+          cfg: payloadContext.cfg,
+          channel: "discord",
+          accountId: payloadContext.accountId,
+        });
       const result = await sendTextMediaPayload({
         channel: "discord",
-        ctx: payloadContext,
+        ctx: {
+          ...payloadContext,
+          formatting: { ...payloadContext.formatting, tableMode },
+        },
         adapter: discordOutbound,
       });
       return completeResult(result);

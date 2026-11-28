@@ -259,3 +259,85 @@ it.each([
     expect(onDeliveryResult).not.toHaveBeenCalled();
   }
 });
+
+describe("Discord markdown table chunking (#207086)", () => {
+  const countRawPipeLinesOutsideFences = (chunk: string) => {
+    let inFence = false;
+    let count = 0;
+    for (const line of chunk.split("\n")) {
+      if (/^\s{0,3}```/.test(line)) {
+        inFence = !inFence;
+        continue;
+      }
+      if (!inFence && /^\s*\|.*\|\s*$/.test(line)) {
+        count += 1;
+      }
+    }
+    return count;
+  };
+
+  const buildLongTableReply = () => {
+    const intro =
+      "Weekly summary.\n\n" +
+      "Lorem ipsum dolor sit amet, consectetur adipiscing elit. ".repeat(28) +
+      "\n\n";
+    const rows = Array.from(
+      { length: 12 },
+      (_, i) =>
+        `| Day ${String(i + 1).padStart(2, "0")} | Session ${i + 1} | ${(5 + i / 10).toFixed(1)} km | ${140 + i} bpm |`,
+    );
+    return (
+      intro +
+      "| Day | Session | Distance | HR |\n|---|---|---|---|\n" +
+      rows.join("\n") +
+      "\n\nEnd."
+    );
+  };
+
+  it.each(["code", "block", "bullets"] as const)(
+    "converts tables before splitting chunks in %s mode so continuation rows do not leak as raw pipes",
+    async (tableMode) => {
+      resetGlobalHookRunner();
+      const reply = buildLongTableReply();
+      const chunks = discordOutbound.chunker!(reply, 2000, {
+        formatting: { tableMode },
+      });
+      expect(chunks.length).toBeGreaterThan(1);
+      for (const chunk of chunks) {
+        expect(chunk.length).toBeLessThanOrEqual(2000);
+        expect(countRawPipeLinesOutsideFences(chunk)).toBe(0);
+      }
+      const joined = chunks.join("\n");
+      for (let i = 1; i <= 12; i += 1) {
+        expect(joined).toContain(`Day ${String(i).padStart(2, "0")}`);
+      }
+
+      const sentChunks: string[] = [];
+      const sendDiscord = vi.fn(async (_to: string, text: string) => {
+        sentChunks.push(text);
+        return { messageId: `dc-${sentChunks.length}`, channelId: "123456" };
+      });
+      await sendPayload({
+        cfg: { channels: { discord: { markdown: { tables: tableMode } } } },
+        to: "channel:123456",
+        text: "",
+        payload: { text: reply },
+        deps: { sendDiscord },
+      });
+      expect(sentChunks.length).toBeGreaterThan(1);
+      for (const chunk of sentChunks) {
+        expect(chunk.length).toBeLessThanOrEqual(2000);
+        expect(countRawPipeLinesOutsideFences(chunk)).toBe(0);
+      }
+    },
+  );
+
+  it("leaves raw markdown tables untouched when tableMode is off", () => {
+    const reply = buildLongTableReply();
+    const chunks = discordOutbound.chunker!(reply, 2000, {
+      formatting: { tableMode: "off" },
+    });
+    const rawPipes = chunks.reduce((sum, chunk) => sum + countRawPipeLinesOutsideFences(chunk), 0);
+    expect(rawPipes).toBeGreaterThan(0);
+  });
+});
