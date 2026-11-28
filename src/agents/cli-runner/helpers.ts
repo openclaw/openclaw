@@ -99,6 +99,7 @@ export function buildCliAgentSystemPrompt(params: {
   requireExplicitMessageTarget?: boolean;
   silentReplyPromptMode?: SilentReplyPromptMode;
   runtimeChannel?: string;
+  runtimeAccountId?: string | null;
   runtimeChatType?: ChatType;
   runtimeCapabilities?: string[];
   customInlineButtonHint?: boolean;
@@ -154,6 +155,8 @@ export function buildCliAgentSystemPrompt(params: {
     prepareSessionProjectGuidance: params.prepareSessionProjectGuidance,
     preparedModelRuntime: params.preparedModelRuntime,
     preparedTtsPreferences: params.preparedTtsPreferences,
+    sessionPromptDelivery: params.preparedSessionEntry?.delivery,
+    runtimeAccountId: params.runtimeAccountId,
     agentId: params.agentId,
     workspaceDir: params.workspaceDir,
     runtimeCwd,

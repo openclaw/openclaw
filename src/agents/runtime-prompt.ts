@@ -105,6 +105,8 @@ export async function resolveAgentRuntimePrompt(params: {
   return {
     ...systemPromptParams,
     ...channelPromptContext,
+    sessionPromptDelivery: delivery,
+    runtimeAccountId: params.accountId,
     runtimeChannel: normalizeMessageChannel(params.channel),
   };
 }

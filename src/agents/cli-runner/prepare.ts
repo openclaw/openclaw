@@ -1331,6 +1331,7 @@ async function prepareCliRunContextWithinReadFence(
             requireExplicitMessageTarget: bindingRequireExplicitMessageTarget,
             silentReplyPromptMode: params.silentReplyPromptMode,
             runtimeChannel,
+            runtimeAccountId: params.agentAccountId,
             runtimeChatType,
             runtimeCapabilities,
             customInlineButtonHint,

@@ -8,6 +8,7 @@ import { normalizeOptionalLowercaseString } from "@openclaw/normalization-core/s
 import { shouldHandleTextCommands } from "../auto-reply/commands-text-routing.js";
 import { isRestartEnabled } from "../config/commands.flags.js";
 import { resolveNativeCommandsEnabled } from "../config/commands.js";
+import type { SessionDeliveryState } from "../config/sessions/types.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { classifyAgentToolSource } from "../plugins/tool-metadata.js";
 import { describeSystemAgentConfigConflict } from "../system-agent/setup-config-snapshot.js";
@@ -23,6 +24,8 @@ type ConfiguredAgentSystemPromptParams = Parameters<typeof buildAgentSystemPromp
   agentId?: string;
   prepareSessionProjectGuidance?: () => Promise<string | undefined>;
   preparedTtsPreferences?: PreparedTtsPreferences;
+  sessionPromptDelivery?: SessionDeliveryState;
+  runtimeAccountId?: string | null;
   tools?: { name: string; parameters: unknown }[];
   preparedModelRuntime?: Pick<PreparedModelRuntimeSnapshot, "configuredModelAliases">;
 };
@@ -44,6 +47,8 @@ export async function buildConfiguredAgentSystemPrompt(params: ConfiguredAgentSy
     agentId: explicitAgentId,
     preparedModelRuntime,
     preparedTtsPreferences,
+    sessionPromptDelivery,
+    runtimeAccountId,
     prepareSessionProjectGuidance,
     ...renderParams
   } = params;
@@ -75,6 +80,16 @@ export async function buildConfiguredAgentSystemPrompt(params: ConfiguredAgentSy
     return buildAgentSystemPrompt(renderParams);
   }
   const channel = normalizeOptionalLowercaseString(renderParams.runtimeInfo?.channel) ?? "";
+  // Bound prompts follow the conversation even when a different account wakes the run.
+  const voiceScope =
+    sessionPromptDelivery?.kind === "external"
+      ? {
+          channelId: sessionPromptDelivery.context.channel,
+          accountId: sessionPromptDelivery.context.accountId,
+        }
+      : sessionPromptDelivery
+        ? undefined
+        : { channelId: channel, accountId: runtimeAccountId ?? undefined };
   const includeFullSections =
     renderParams.promptMode !== "minimal" && renderParams.promptMode !== "none";
   if (
@@ -104,6 +119,7 @@ export async function buildConfiguredAgentSystemPrompt(params: ConfiguredAgentSy
     }),
     ttsHint: includeFullSections
       ? await buildTtsSystemPromptHintAsync(config, agentId, {
+          ...voiceScope,
           preparedTtsPreferences,
           messageToolOnly: renderParams.sourceReplyDeliveryMode === "message_tool_only",
         })

@@ -231,6 +231,49 @@ async function preparePermissionPrompt({
 describe("buildAttemptSystemPrompt", () => {
   registerParityHostLifecycle();
 
+  it.each([
+    { accountId: "voice", tagged: true, turnAccountId: "quiet" },
+    { accountId: "quiet", tagged: false, turnAccountId: "voice" },
+  ])("uses saved $accountId voice settings in the provider request", async (params) => {
+    await withOpenClawTestState({ label: "scoped-voice-prompt" }, async () => {
+      const config = {
+        tts: { auto: "inbound" as const },
+        channels: {
+          feishu: {
+            tts: { auto: "tagged" },
+            accounts: { voice: {}, quiet: { tts: { auto: "off" } } },
+          },
+        },
+      };
+      const { prepared } = await preparePermissionPrompt({
+        attemptOverrides: {
+          config,
+          messageChannel: "feishu",
+          agentAccountId: params.turnAccountId,
+          preparedTtsPreferences: {},
+          sessionPromptDelivery: normalizeSessionDeliveryState({
+            context: { channel: "feishu", to: "user:ou_fixture", accountId: params.accountId },
+            origin: { provider: "feishu", surface: "feishu", chatType: "direct" },
+          }),
+        },
+      });
+      const { payload } = await captureAnthropicRequest("transport", {
+        model: { id: "claude-opus-4-6" },
+        cacheRetention: "none",
+        context: {
+          systemPrompt: prepared.systemPromptText,
+          messages: [{ role: "user", content: "Hello", timestamp: 1 }],
+        },
+      });
+      const system = JSON.stringify(payload.system);
+      expect(system.includes("Voice (TTS) is enabled.")).toBe(params.tagged);
+      expect(system.includes("Only use TTS when you include [[tts:")).toBe(params.tagged);
+      expect(system).not.toContain(
+        "Only use TTS when the user's last message includes audio/voice.",
+      );
+    });
+  });
+
   it("prepares current public links without materializing saved prompt snapshots", async () => {
     await withOpenClawTestState({ label: "prompt-link-projection" }, async ({ env }) => {
       const config = { gateway: { publicOrigin: "https://gateway.example" } };
