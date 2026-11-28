@@ -1,6 +1,9 @@
+import { randomUUID } from "node:crypto";
 import fs from "node:fs";
 import path from "node:path";
+import { getEnvironmentData } from "node:worker_threads";
 import { Command } from "commander";
+import pg from "pg";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { useAutoCleanupTempDirTracker } from "../../test/helpers/temp-dir.js";
 import { prepareCliDatabaseEngine } from "../cli/database-engine-selection.js";
@@ -19,12 +22,10 @@ import {
 import { resetDatabaseEngineSelectionForTest } from "../infra/database-engine/context.test-support.js";
 import { resolveDatabaseFamilyEngines } from "../infra/database-engine/registry.js";
 import { openNodeSqliteDatabase } from "../infra/node-sqlite.js";
+import { dropPostgresTestSchemas } from "../infra/postgres-sync/schema-cleanup.test-support.js";
 import * as stateReadonly from "../state/openclaw-state-db-readonly.js";
-import {
-  closeOpenClawStateDatabaseAsync,
-  openOpenClawStateDatabase,
-  runOpenClawStateWriteTransaction,
-} from "../state/openclaw-state-db.js";
+import { closeOpenClawStateDatabaseAsync } from "../state/openclaw-state-db.js";
+import { resolveOpenClawStateSqlitePath } from "../state/openclaw-state-db.paths.js";
 import * as stateWorkerStore from "../state/openclaw-state-worker-store.js";
 import type { DomainScope } from "../state/openclaw-state-worker-store.types.js";
 import { withEnvAsync } from "../test-utils/env.js";
@@ -35,17 +36,15 @@ import {
   resolvePluginCliRootOwnerIds,
 } from "./cli-registry-loader.js";
 import { registerPluginCliCommandsFromValidatedConfig } from "./cli.js";
-import {
-  publishPluginSourceAdmissionInDatabase,
-  refreshPersistedInstalledPluginIndex,
-} from "./installed-plugin-index-store-write.js";
+import { refreshPersistedInstalledPluginIndex } from "./installed-plugin-index-store-write.js";
 import { readPersistedInstalledPluginIndex } from "./installed-plugin-index-store.js";
 import { resetPluginLoaderTestStateForTest } from "./loader.test-fixtures.js";
 import { createPluginCache, retirePluginCache, withPluginCache } from "./plugin-cache.js";
 import { nativeSize } from "./plugin-generation-artifact.admission.test-support.js";
-import { readPluginMetadataStateRowsInDatabase } from "./plugin-metadata-state.kernel.js";
 import { settlePluginNativeAdmissions } from "./plugin-native-admission-state.js";
 
+const configured: unknown = getEnvironmentData("openclaw.test.state.conformance.connection");
+const connection = typeof configured === "string" ? configured : undefined;
 const sqliteOnlySelection = Object.freeze({
   effectiveEngines: Object.freeze(resolveDatabaseFamilyEngines({})),
 });
@@ -84,12 +83,12 @@ function createReceiptPluginFixture(pluginId = "receipt-memory", commandName = "
     configSchema: { type: "object" },
   });
   const cmdJson = JSON.stringify(commandName);
-  const entrySource = [
-    `export default { id: ${JSON.stringify(pluginId)}, ${isMemory ? 'kind: "memory",' : ""} register(api) {`,
-    `  api.registerCli(({ program }) => { const c = program.command(${cmdJson}); c.command("status").action(() => {}); c.command("index").action(() => {}); },`,
-    `    { descriptors: [{ name: ${cmdJson}, description: "CLI", hasSubcommands: true }] }); } };`,
-  ].join("\n");
-  fs.writeFileSync(path.join(pluginDir, "index.js"), `${entrySource}\n`);
+  fs.writeFileSync(
+    path.join(pluginDir, "index.js"),
+    `export default { id: ${JSON.stringify(pluginId)}, ${isMemory ? 'kind: "memory",' : ""} register(api) {\n` +
+      `  api.registerCli(({ program }) => { const c = program.command(${cmdJson}); c.command("status").action(() => {}); c.command("index").action(() => {}); },\n` +
+      `    { descriptors: [{ name: ${cmdJson}, description: "CLI", hasSubcommands: true }] }); } };\n`,
+  );
   fs.writeFileSync(path.join(pluginDir, "native.bin"), Buffer.alloc(nativeSize, "A"));
   const env: NodeJS.ProcessEnv = {
     HOME: root,
@@ -111,7 +110,7 @@ function createReceiptPluginFixture(pluginId = "receipt-memory", commandName = "
   return { stateDir, configPath, pluginId, env, makeConfig };
 }
 
-async function seedIndexedConfig(
+async function seedSqliteIndexedConfig(
   fixture: ReturnType<typeof createReceiptPluginFixture>,
   config: OpenClawConfig,
 ) {
@@ -157,8 +156,12 @@ function expectAnchorOnly(sqlitePath: string) {
   ]);
 }
 
-async function expectPersistedReceipts(env: NodeJS.ProcessEnv, pluginId: string) {
-  const persisted = await withDatabaseEngineSelection(sqliteOnlySelection, () =>
+async function expectPersistedReceipts(
+  selection: Parameters<typeof withDatabaseEngineSelection>[0],
+  env: NodeJS.ProcessEnv,
+  pluginId: string,
+) {
+  const persisted = await withDatabaseEngineSelection(selection, () =>
     withPluginCache(createPluginCache(), () => readPersistedInstalledPluginIndex({ env })),
   );
   const record = persisted?.plugins.find((plugin) => plugin.pluginId === pluginId);
@@ -189,126 +192,112 @@ async function runWithWarnings(
   return warnings;
 }
 
-async function withRemoteSqliteBacking<T>(
-  remoteEnv: NodeJS.ProcessEnv,
-  fn: (remote: ReturnType<typeof openOpenClawStateDatabase>) => Promise<T> | T,
-): Promise<T> {
-  return await withDatabaseEngineSelection(sqliteOnlySelection, async () => {
-    const remote = openOpenClawStateDatabase({ env: remoteEnv });
-    try {
-      return await fn(remote);
-    } finally {
-      await closeOpenClawStateDatabaseAsync();
-    }
+async function runMemorySubcommandFlow(
+  config: OpenClawConfig,
+  pluginId: string,
+  subcommand: "status" | "index",
+) {
+  expect(await prepareCliDatabaseEngine(["node", "openclaw", "memory", subcommand])).toBe(false);
+  expect(getDatabaseEngineSelection()).toBeUndefined();
+  const warnings = await runWithWarnings(async (session) => {
+    const snapshot = await resolveConfigWidePluginMetadataSnapshotAsync({
+      config,
+      env: process.env,
+    });
+    expect(snapshot.index.plugins.map((p) => p.pluginId)).toContain(pluginId);
+    expect(
+      await loadPluginCliDescriptors({ cfg: config, primaryCommand: "memory", session }),
+    ).toEqual([expect.objectContaining({ name: "memory" })]);
+    expect(
+      await resolvePluginCliRootOwnerIds({ cfg: config, primaryCommand: "memory", session }),
+    ).toEqual([pluginId]);
+    const { program, registeredCfg } = await registerLazyCli(
+      "memory",
+      session,
+      subcommand === "status",
+    );
+    setRuntimeConfigSnapshot(registeredCfg, config);
+    await ensureCliPluginRegistryLoaded({ scope: "memory", config: registeredCfg });
+    await program.parseAsync(["memory", subcommand], { from: "user" });
   });
-}
-
-function mockPortedPostgresStateBacking(remoteEnv: NodeJS.ProcessEnv) {
-  const capturedConnections: string[] = [];
-  const realRead = stateReadonly.executeExistingOpenClawStateRead;
-  vi.spyOn(stateReadonly, "executeExistingOpenClawStateRead").mockImplementation(
-    async (options, command, readOptions) => {
-      const selection = getDatabaseEngineSelection();
-      if (selection?.effectiveEngines.state !== "postgres") {
-        return realRead(options, command, readOptions);
-      }
-      capturedConnections.push(selection.postgres?.connection ?? "");
-      if (command.type === "plugins.deferredMigrations.read") {
-        return { ok: true as const, sourceAdmitted: true, type: command.type, pending: [] };
-      }
-      if (command.type !== "plugins.metadata.read") {
-        return realRead(options, command, readOptions);
-      }
-      const rows = await withRemoteSqliteBacking(remoteEnv, (remote) =>
-        readPluginMetadataStateRowsInDatabase(remote.db, command.input.stateKeys),
-      );
-      return { ok: true as const, sourceAdmitted: true, type: command.type, rows };
-    },
-  );
-  const realWorkerOp = stateWorkerStore.runOpenClawStateWorkerOperation;
-  vi.spyOn(stateWorkerStore, "runOpenClawStateWorkerOperation").mockImplementation(
-    async (context, operation, options) => {
-      if (context.databaseEngineSelection?.effectiveEngines.state !== "postgres") {
-        return realWorkerOp(context, operation, options);
-      }
-      capturedConnections.push(context.databaseEngineSelection.postgres?.connection ?? "");
-      return await withRemoteSqliteBacking(remoteEnv, (remote) => {
-        const execute: DomainScope["execute"] = (async (command: {
-          type: string;
-          input: Parameters<typeof publishPluginSourceAdmissionInDatabase>[1];
-        }) => {
-          if (command.type !== "plugins.metadata.sourceAdmission.publish") {
-            throw new Error(`Unexpected command: ${command.type}`);
-          }
-          return runOpenClawStateWriteTransaction(
-            ({ db }) => publishPluginSourceAdmissionInDatabase(db, command.input),
-            { database: remote, env: remoteEnv },
-          );
-        }) as DomainScope["execute"];
-        return operation({ execute });
-      });
-    },
-  );
-  return capturedConnections;
+  expect(warnings).toEqual([]);
+  expect(getDatabaseEngineSelection()).toBeUndefined();
 }
 
 describe("CLI plugin source receipt state-engine selection", () => {
   it.each(["status", "index"] as const)(
-    "records CLI plugin source receipts against a ported PostgreSQL state store for memory %s",
+    "forwards configured PostgreSQL state selection to source-receipt workers for memory %s",
     async (subcommand) => {
       const fixture = createReceiptPluginFixture();
-      const remoteRoot = fs.realpathSync(dirs.make("openclaw-remote-pg-backing-"));
-      const remoteEnv = { ...fixture.env, OPENCLAW_STATE_DIR: remoteRoot };
       const dsn = "postgresql://127.0.0.1:5432/openclaw_ported_test";
       const config = fixture.makeConfig({
         families: { state: { engine: "postgres" } },
         postgres: { connection: pgEnvConn("OPENCLAW_TEST_PG_DSN"), schemaPrefix: "openclaw" },
       });
-      await seedIndexedConfig(fixture, config);
-      fs.mkdirSync(path.join(remoteRoot, "state"), { recursive: true });
-      fs.copyFileSync(
-        path.join(fixture.stateDir, "state", "openclaw.sqlite"),
-        path.join(remoteRoot, "state", "openclaw.sqlite"),
-      );
       const anchorPath = writePostgresStateAnchor(fixture.stateDir);
-      const capturedConnections = mockPortedPostgresStateBacking(remoteEnv);
+      fs.writeFileSync(fixture.configPath, JSON.stringify(config));
+      const readConns: string[] = [];
+      const publishConns: string[] = [];
+      vi.spyOn(stateReadonly, "executeExistingOpenClawStateRead").mockImplementation(
+        async (_opts, command) => {
+          readConns.push(getDatabaseEngineSelection()?.postgres?.connection ?? "");
+          return command.type === "plugins.deferredMigrations.read"
+            ? { ok: true as const, sourceAdmitted: true, type: command.type, pending: [] }
+            : { ok: true as const, sourceAdmitted: true, type: command.type, rows: [] };
+        },
+      );
+      vi.spyOn(stateWorkerStore, "runOpenClawStateWorkerOperation").mockImplementation(
+        async (context, operation) => {
+          publishConns.push(context.databaseEngineSelection?.postgres?.connection ?? "");
+          const execute = (async () => ({ published: true })) as unknown as DomainScope["execute"];
+          return await operation({ execute });
+        },
+      );
 
-      await withEnvAsync({ ...fixture.env, OPENCLAW_TEST_PG_DSN: dsn }, async () => {
-        expect(await prepareCliDatabaseEngine(["node", "openclaw", "memory", subcommand])).toBe(
-          false,
-        );
-        expect(getDatabaseEngineSelection()).toBeUndefined();
-
-        const warnings = await runWithWarnings(async (session) => {
-          const snapshot = await resolveConfigWidePluginMetadataSnapshotAsync({
-            config,
-            env: process.env,
-          });
-          expect(snapshot.index.plugins.map((p) => p.pluginId)).toContain(fixture.pluginId);
-          expect(
-            await loadPluginCliDescriptors({ cfg: config, primaryCommand: "memory", session }),
-          ).toEqual([expect.objectContaining({ name: "memory" })]);
-          expect(
-            await resolvePluginCliRootOwnerIds({ cfg: config, primaryCommand: "memory", session }),
-          ).toEqual([fixture.pluginId]);
-
-          const { program, registeredCfg } = await registerLazyCli(
-            "memory",
-            session,
-            subcommand === "status",
-          );
-          setRuntimeConfigSnapshot(registeredCfg, config);
-          await ensureCliPluginRegistryLoaded({ scope: "memory", config: registeredCfg });
-          await program.parseAsync(["memory", subcommand], { from: "user" });
-        });
-
-        expect(warnings).toEqual([]);
-        expect(getDatabaseEngineSelection()).toBeUndefined();
-        expect(new Set(capturedConnections)).toEqual(new Set([dsn]));
-      });
-
-      await expectPersistedReceipts(remoteEnv, fixture.pluginId);
+      await withEnvAsync({ ...fixture.env, OPENCLAW_TEST_PG_DSN: dsn }, () =>
+        runMemorySubcommandFlow(config, fixture.pluginId, subcommand),
+      );
+      expect(new Set(readConns)).toEqual(new Set([dsn]));
+      expect(new Set(publishConns)).toEqual(new Set([dsn]));
       expectAnchorOnly(anchorPath);
+    },
+  );
+
+  it.skipIf(!connection).each(["status", "index"] as const)(
+    "persists CLI plugin source receipts to live PostgreSQL for memory %s",
+    async (subcommand) => {
+      const fixture = createReceiptPluginFixture();
+      const schemaPrefix = `cli_rcpt_${randomUUID().replaceAll("-", "").slice(0, 12)}`;
+      const config = fixture.makeConfig({
+        families: { state: { engine: "postgres" } },
+        postgres: { connection: pgEnvConn("OPENCLAW_TEST_PG_DSN"), schemaPrefix },
+      });
+      const env = { ...fixture.env, OPENCLAW_TEST_PG_DSN: connection! };
+      fs.writeFileSync(fixture.configPath, JSON.stringify(config));
+      const pgSelection = {
+        effectiveEngines: resolveDatabaseFamilyEngines(config),
+        postgres: { connection: connection!, schemaPrefix },
+      };
+      const client = new pg.Client({ connectionString: connection });
+      await client.connect();
+      try {
+        await withDatabaseEngineSelection(pgSelection, () =>
+          refreshPersistedInstalledPluginIndex({ config, env }),
+        );
+        await closeOpenClawStateDatabaseAsync();
+        resetPluginLoaderTestStateForTest();
+        bundledDiscovery.clearBundledDiscoveryModeMemo();
+
+        await withEnvAsync(env, () =>
+          runMemorySubcommandFlow(config, fixture.pluginId, subcommand),
+        );
+        await expectPersistedReceipts(pgSelection, env, fixture.pluginId);
+        expectAnchorOnly(resolveOpenClawStateSqlitePath(env));
+      } finally {
+        await closeOpenClawStateDatabaseAsync();
+        await dropPostgresTestSchemas(client, schemaPrefix);
+        await client.end();
+      }
     },
   );
 
@@ -318,7 +307,7 @@ describe("CLI plugin source receipt state-engine selection", () => {
       families: { state: { engine: "sqlite" }, workboard: { engine: "postgres" } },
       postgres: { connection: pgEnvConn("OPENCLAW_UNSET_WORKBOARD_DSN") },
     });
-    await seedIndexedConfig(fixture, config);
+    await seedSqliteIndexedConfig(fixture, config);
     const resolveSelection = vi.spyOn(dbEngineConfig, "resolveDatabaseEngineSelection");
 
     await withEnvAsync({ ...fixture.env, OPENCLAW_UNSET_WORKBOARD_DSN: undefined }, async () => {
@@ -330,7 +319,7 @@ describe("CLI plugin source receipt state-engine selection", () => {
       expect(resolveSelection).not.toHaveBeenCalled();
     });
 
-    await expectPersistedReceipts(fixture.env, fixture.pluginId);
+    await expectPersistedReceipts(sqliteOnlySelection, fixture.env, fixture.pluginId);
   });
 
   it("preserves caller-owned engine selection and avoids SQLite anchor warnings when PostgreSQL DSN is unresolved", async () => {
@@ -376,7 +365,7 @@ describe("CLI plugin source receipt state-engine selection", () => {
   it("persists CLI plugin source receipts normally on default SQLite state stores", async () => {
     const fixture = createReceiptPluginFixture();
     const config = fixture.makeConfig();
-    await seedIndexedConfig(fixture, config);
+    await seedSqliteIndexedConfig(fixture, config);
 
     await withEnvAsync(fixture.env, async () => {
       const warnings = await runWithWarnings(async (session) => {
@@ -387,6 +376,6 @@ describe("CLI plugin source receipt state-engine selection", () => {
       expect(warnings).toEqual([]);
     });
 
-    await expectPersistedReceipts(fixture.env, fixture.pluginId);
+    await expectPersistedReceipts(sqliteOnlySelection, fixture.env, fixture.pluginId);
   });
 });
