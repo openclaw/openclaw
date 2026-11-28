@@ -7,7 +7,7 @@ const project = (
   servers: Record<string, McpServerConfig>,
   options?: Parameters<typeof buildCodexUserMcpServersThreadConfigPatchForRuntime>[1],
 ) => buildCodexUserMcpServersThreadConfigPatchForRuntime({ mcp: { servers } }, options);
-const http = (url: string, options: Partial<McpServerConfig> = {}): McpServerConfig => ({
+const http = (url: string, options: Partial<McpServerConfig>): McpServerConfig => ({
   transport: "streamable-http",
   url,
   ...options,
