@@ -20,7 +20,7 @@ import { withAgentPromptProjects } from "../prompt-projects.js";
 import { awaitAgentHarnessAgentEndHook } from "./lifecycle-hook-helpers.js";
 import { resolveAgentHarnessBeforePromptBuildResult as buildBase } from "./prompt-compaction-hook-helpers.js";
 
-function buildPrompt(overrides: Partial<Parameters<typeof buildBase>[0]> = {}) {
+function buildPrompt(overrides: Partial<Parameters<typeof buildBase>[0]>) {
   return buildBase({
     prompt: "hello",
     developerInstructions: "base",
