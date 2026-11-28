@@ -725,7 +725,10 @@ test.each([
     config: { allowRequestSessionKey: true, allowedSessionKeyPrefixes: ["hook:"] },
     payload: { sessionKey: "hook:mode:42" },
     variants: [{ sessionMode: "isolated" }, { sessionMode: "persistent" }],
-    jobs: [{ sessionTarget: "isolated" }, { sessionTarget: "session:hook:mode:42" }],
+    jobs: [
+      { sessionTarget: "isolated", deleteAfterRun: true },
+      { sessionTarget: "session:hook:mode:42", deleteAfterRun: false },
+    ],
   },
   {
     scope: "account-id",

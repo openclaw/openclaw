@@ -1,8 +1,9 @@
 import { retireSessionMcpRuntime } from "../../agents/agent-bundle-mcp-tools.js";
 import { isSessionLifecycleChangedGatewayError } from "../../config/sessions/lifecycle.js";
-import { isCronSessionKey } from "../../routing/session-key.js";
+import { isCronSessionKey, parseAgentSessionKey } from "../../routing/session-key.js";
 import { createLazyImportLoader } from "../../shared/lazy-promise.js";
 import type { CronJob } from "../types.js";
+import { resolveCronAgentSessionKey } from "./session-key.js";
 
 const gatewayCallRuntimeLoader = createLazyImportLoader(
   () => import("../../agents/tools/in-process-gateway.js"),
@@ -41,7 +42,7 @@ export async function deleteCronSessionViaGateway(params: {
 }
 
 export async function cleanupCronRunSessionAfterRun(params: {
-  job: Pick<CronJob, "deleteAfterRun" | "sessionTarget">;
+  job: Pick<CronJob, "id" | "deleteAfterRun" | "sessionTarget">;
   agentSessionKey: string;
   sessionId: string;
   lifecycleRevision: string;
@@ -73,8 +74,21 @@ export async function cleanupCronRunSessionAfterRun(params: {
 }
 
 function shouldDeleteCronRunSessionAfterRun(params: {
-  job: Pick<CronJob, "deleteAfterRun" | "sessionTarget">;
+  job: Pick<CronJob, "id" | "deleteAfterRun" | "sessionTarget">;
   agentSessionKey: string;
 }): boolean {
-  return params.job.deleteAfterRun === true && isCronSessionKey(params.agentSessionKey);
+  if (params.job.deleteAfterRun !== true) {
+    return false;
+  }
+  if (params.job.sessionTarget !== "isolated") {
+    return isCronSessionKey(params.agentSessionKey);
+  }
+  // An isolated run owns only its cron:<jobId> session. A hook may name an existing
+  // cron: session, such as a stored automation's, which the run reuses but must keep.
+  const agentId = parseAgentSessionKey(params.agentSessionKey)?.agentId;
+  return (
+    agentId !== undefined &&
+    params.agentSessionKey ===
+      resolveCronAgentSessionKey({ sessionKey: `cron:${params.job.id}`, agentId })
+  );
 }
