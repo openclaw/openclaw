@@ -32,7 +32,7 @@ export {
 export { readFileWindowFully } from "@openclaw/fs-safe/advanced";
 export { inspectPathPermissions } from "@openclaw/fs-safe/permissions";
 export { writeFileWindowFully } from "../infra/file-descriptor.js";
-export { openRootFile } from "../infra/boundary-file-read.js";
+export { describeRootFileOpenFailure, openRootFile } from "../infra/boundary-file-read.js";
 export {
   ensureDurableDirectory,
   sha256File,

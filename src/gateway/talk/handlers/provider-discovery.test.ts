@@ -1,6 +1,5 @@
 import { expectDefined } from "@openclaw/normalization-core/expect";
 import { afterAll, afterEach, describe, expect, it } from "vitest";
-import { createDeferred } from "../../../../test/helpers/promise.js";
 import {
   cleanupPluginLoaderFixturesForTest,
   loadOpenClawPlugins,
@@ -10,6 +9,7 @@ import { captureGatewayRootWorkReleaseObserver } from "../../../process/gateway-
 import { createVoiceProviderFixture } from "../../../talk/provider-discovery.test-fixtures.js";
 import { listRealtimeVoiceProviders } from "../../../talk/provider-registry.js";
 import { withEnvAsync } from "../../../test-utils/env.js";
+import { createApprovalClient } from "../../server-methods/approval-request.test-support.js";
 import { callGatewayHandler } from "../../server-methods/skills.test-helpers.js";
 import { talkHandlers } from "./index.js";
 
@@ -27,23 +27,25 @@ describe("Talk catalog provider discovery", () => {
         "active provider fixture",
       ).provider;
       const isConfigured = expectDefined(activeProvider.isConfigured, "fixture readiness hook");
-      const catalogReleased = createDeferred<"settled" | "reset">();
       activeProvider.isConfigured = (context) => {
         expectDefined(
           captureGatewayRootWorkReleaseObserver(),
           "catalog refresh must own root work admission",
-        )(catalogReleased.resolve);
+        );
         return isConfigured(context);
       };
       const context = { getRuntimeConfig: () => cfg };
-      expect(await callGatewayHandler(talkHandlers, "talk.catalog", {}, { context })).toMatchObject(
-        {
-          ok: false,
-          error: { retryable: true, details: { reason: "talk-catalog-warming" } },
-        },
+      const client = createApprovalClient({
+        connId: "catalog-reader",
+        clientId: "cli",
+        scopes: ["operator.read"],
+      });
+      const result = await callGatewayHandler(
+        talkHandlers,
+        "talk.catalog",
+        {},
+        { context, client },
       );
-      expect(await catalogReleased.promise).toBe("settled");
-      const result = await callGatewayHandler(talkHandlers, "talk.catalog", {}, { context });
 
       expect(result).toMatchObject({
         ok: true,

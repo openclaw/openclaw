@@ -1,5 +1,8 @@
 import { getSpawnBroker, runWithSpawnBroker } from "../process/spawn-broker/context.js";
-import { sessionChanges } from "../sessions/session-row-changes.js";
+import {
+  sessionChanges,
+  sessionChangeScopeAffectsStoredRows,
+} from "../sessions/session-row-changes.js";
 import type { AsyncWorkScope } from "../shared/async-work-scope.js";
 import { runInDetachedAsyncContext } from "../shared/detached-async-context.js";
 import type {
@@ -9,6 +12,7 @@ import type {
 import { recordSessionPrDiagnostic } from "./control-ui-session-pr-diagnostics.js";
 import {
   prepareControlUiSessionPrServiceTarget,
+  receiptsOnlyTargetIdentity,
   type ControlUiSessionPrTarget,
   type ControlUiSessionPrReadContext,
 } from "./control-ui-session-pr-read.js";
@@ -77,7 +81,7 @@ export function addControlUiSessionPrMembership(
 }
 
 /** Retire the unused cell through the same owner that retains its prepared readers. */
-export function retireControlUiSessionPrState<
+function retireControlUiSessionPrState<
   State extends PreparedSessionPrState & { cancelRefresh?: () => void },
 >(state: State | undefined, keyStates: Map<string, State>): void {
   if (!state || state.prepared || state.connIds.size > 0) {
@@ -88,6 +92,59 @@ export function retireControlUiSessionPrState<
   if (keyStates.get(state.target.identity) === state) {
     keyStates.delete(state.target.identity);
   }
+}
+
+export function removeControlUiSessionPrMembership(
+  state: WatchedKeyState | undefined,
+  connId: string,
+  sessionKey: string,
+  keyStates: Map<string, WatchedKeyState>,
+): void {
+  const keys = state?.sessionKeysByConnId.get(connId);
+  keys?.delete(sessionKey);
+  if (keys?.size === 0) {
+    state?.sessionKeysByConnId.delete(connId);
+    state?.connIds.delete(connId);
+  }
+  retireControlUiSessionPrState(state, keyStates);
+}
+
+// The verified states each passive cell last reloaded for; a cache miss never retries per poll.
+const passiveReloads = new WeakMap<PreparedSessionPrState, string>();
+
+/**
+ * A full read verified task PR states that its watched receipt-only sibling still lacks.
+ * Reloading that sibling reuses the verified metadata cache and never starts a GitHub read.
+ */
+export function staleReceiptsOnlyCell(
+  keyStates: ReadonlyMap<string, PreparedSessionPrState>,
+  state: PreparedSessionPrState,
+  snapshot: ControlUiSessionPullRequestSnapshot,
+): string | undefined {
+  if (state.target.taskReceiptsOnly) {
+    return undefined;
+  }
+  const passiveKey = receiptsOnlyTargetIdentity(state.target.identity);
+  const passive = keyStates.get(passiveKey);
+  const verified = new Map(
+    snapshot.taskPullRequests?.flatMap((task) =>
+      task.pullRequest ? [[task.url, task.pullRequest.state] as const] : [],
+    ),
+  );
+  if (
+    !passive?.connIds.size ||
+    !passive.snapshot?.taskPullRequests?.some(
+      (task) => verified.has(task.url) && task.pullRequest?.state !== verified.get(task.url),
+    )
+  ) {
+    return undefined;
+  }
+  const signature = JSON.stringify([...verified]);
+  if (passiveReloads.get(passive) === signature) {
+    return undefined;
+  }
+  passiveReloads.set(passive, signature);
+  return passiveKey;
 }
 
 /** Retain only branch facts across audience/mode changes on the same physical source. */
@@ -320,26 +377,42 @@ export function createControlUiSessionPrPreparedRead<State extends PreparedSessi
   };
 
   const unsubscribeFacts = sessionChanges.subscribeFacts((change) => {
-    if (
-      "sessionKey" in change &&
-      (change.facts?.kind === "unchanged" ||
-        (change.scope === "runtime" && !change.facts && !change.factsInvalidated))
-    ) {
-      return;
+    if ("all" in change) {
+      if (change.scope !== "config" && !sessionChangeScopeAffectsStoredRows(change)) {
+        return;
+      }
+    } else {
+      const factsKind = change.facts?.kind;
+      if (
+        change.scope === "transcript" ||
+        change.factsInvalidated === "category" ||
+        factsKind === "unchanged" ||
+        factsKind === "category" ||
+        factsKind === "participants" ||
+        factsKind === "owner" ||
+        factsKind === "member" ||
+        factsKind === "acp" ||
+        (!sessionChangeScopeAffectsStoredRows(change) && !change.facts && !change.factsInvalidated)
+      ) {
+        return;
+      }
     }
     const affected =
       "sessionKey" in change
-        ? [...keyStates].filter(([, state]) => state.target.params.sessionKey === change.sessionKey)
-        : keyStates;
+        ? [...keyStates.values()].filter(
+            (state) => state.target.params.sessionKey === change.sessionKey,
+          )
+        : keyStates.values();
     const invalidated: Array<ControlUiSessionPrTarget["params"]> = [];
-    for (const [key, state] of affected) {
+    for (const state of affected) {
       state.branchSnapshot = undefined;
-      if (state?.prepared) {
+      if (state.prepared) {
+        state.prepared = false;
         state.snapshot = undefined;
-        if (state.connIds.size === 0) {
-          state.cacheLifetime.abort(null);
-          keyStates.delete(key);
-        }
+        preparedTargets.delete(
+          JSON.stringify([state.target.params.agentId, state.target.params.sessionKey]),
+        );
+        retireControlUiSessionPrState(state, keyStates);
         invalidated.push(state.target.params);
       }
     }
@@ -356,6 +429,9 @@ export function createControlUiSessionPrPreparedRead<State extends PreparedSessi
     publishSnapshot,
     publishBranchSnapshot,
     settle: () => Promise.allSettled(preparing.values()),
-    stop: unsubscribeFacts,
+    stop: () => {
+      unsubscribeFacts();
+      preparedTargets.clear();
+    },
   };
 }

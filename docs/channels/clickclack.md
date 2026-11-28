@@ -85,6 +85,10 @@ openclaw gateway
 Named accounts must use a configured token or token file; the shared env
 variable is intentionally limited to the default account.
 
+Ordinary channel status reads use configuration metadata and the running account's
+recorded health without reopening token files. Use `openclaw channels status --probe`
+for a live credential check.
+
 ## Configuration
 
 ### JSON5 reference

@@ -48,6 +48,8 @@ import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.platform.LocalContext
+import androidx.compose.ui.semantics.contentDescription
+import androidx.compose.ui.semantics.semantics
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.viewinterop.AndroidView
@@ -532,7 +534,7 @@ private fun MediaPlaybackPresentation.AudioPlayerSurface(
           color = ClawTheme.colors.primary,
           contentColor = ClawTheme.colors.primaryText,
         ) {
-          Box(modifier = Modifier.size(34.dp), contentAlignment = Alignment.Center) {
+          Box(modifier = Modifier.size(ClawTheme.spacing.touchTarget), contentAlignment = Alignment.Center) {
             if (loading) {
               CircularProgressIndicator(modifier = Modifier.size(16.dp), strokeWidth = 2.dp)
             } else {
@@ -550,11 +552,14 @@ private fun MediaPlaybackPresentation.AudioPlayerSurface(
             text = content.fileName?.takeIf { it.isNotBlank() && !isGeneratedVoiceNoteName(it) } ?: nativeString("Voice note"),
             style = ClawTheme.type.body,
             color = ClawTheme.colors.text,
+            maxLines = 1,
+            overflow = TextOverflow.Ellipsis,
           )
           MediaPlaybackStatus()
         }
       }
       Slider(
+        modifier = Modifier.semantics { contentDescription = nativeString("Audio position") },
         value = positionMs.coerceIn(0L, durationMs.coerceAtLeast(0L)).toFloat(),
         onValueChange = onSeek,
         valueRange = 0f..durationMs.coerceAtLeast(1L).toFloat(),

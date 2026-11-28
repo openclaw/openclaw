@@ -1,8 +1,8 @@
 import { randomUUID } from "node:crypto";
 import type { IncomingMessage, ServerResponse } from "node:http";
-import { isClientToolNameConflictError } from "../agents/agent-tool-definition-adapter.js";
 import type { ClientToolDefinition } from "../agents/command/shared-types.js";
 import type { ImageContent } from "../agents/command/types.js";
+import { isClientToolNameConflictError } from "../agents/embedded-agent-runner/tool-name-allowlist.js";
 import { toOpenAiResponsesUsage } from "../agents/usage.js";
 import { getRuntimeConfig } from "../config/io.js";
 import type { GatewayHttpResponsesConfig } from "../config/types.gateway.js";
@@ -17,8 +17,7 @@ import {
   extractImageContentFromSource,
 } from "../media/input-files.js";
 import type { ResolvedGatewayAuth } from "./auth.js";
-import { sendInvalidRequest, sendJson, sendUnauthorized, setSseHeaders } from "./http-common.js";
-import { assertGatewayHttpRequestCurrent } from "./http-request-authority.js";
+import { sendInvalidRequest, sendJson, setSseHeaders } from "./http-common.js";
 import { rejectDisabledGatewayUpload } from "./http-upload-policy.js";
 import {
   type AuthorizedGatewayHttpRequest,
@@ -61,6 +60,7 @@ import {
 } from "./openresponses-shape.js";
 import { authorizeGatewaySessionCreation } from "./operator-role-policy.js";
 import type { GatewayContextResolver } from "./server-methods/types.js";
+import { createSyntheticPluginRuntimeClient } from "./server-plugin-runtime-client.js";
 
 function resolveResponseSessionAuthSubject(params: {
   req: IncomingMessage;
@@ -109,7 +109,7 @@ export async function handleOpenResponsesHttpRequest(
   if (!handled) {
     return handled !== false;
   }
-  const { payload, abortController, senderIsOwner } = handled;
+  const { payload, abortController } = handled;
   const hasMedia =
     Array.isArray(payload.input) &&
     payload.input.some(
@@ -136,9 +136,11 @@ export async function handleOpenResponsesHttpRequest(
   }
   const creationAuth = authorizeGatewaySessionCreation({
     cfg: getRuntimeConfig(),
-    ...(handled.requestAuth.operatorRoleActor
-      ? { actor: handled.requestAuth.operatorRoleActor }
-      : { profileId: handled.requestAuth.authenticatedUserProfile?.profileId }),
+    client: createSyntheticPluginRuntimeClient({
+      authenticatedUserProfile: handled.requestAuth.authenticatedUserProfile,
+      operatorRoleActor: handled.requestAuth.operatorRoleActor,
+      openclawIdPrincipal: handled.requestAuth.openclawIdPrincipal,
+    }),
     agentId,
   });
   if (creationAuth) {
@@ -180,7 +182,6 @@ export async function handleOpenResponsesHttpRequest(
             if (part.type !== "input_image" && part.type !== "input_file") {
               continue;
             }
-            assertGatewayHttpRequestCurrent(handled.requestAuth);
             if (rejectDisabledGatewayUpload(res, hasMedia)) {
               return true;
             }
@@ -235,10 +236,6 @@ export async function handleOpenResponsesHttpRequest(
     }
   } catch (err) {
     if (abortController.signal.aborted) {
-      return true;
-    }
-    if (handled.requestAuth.hasCurrentClientAuthority?.() === false) {
-      sendUnauthorized(res);
       return true;
     }
     if (rejectDisabledGatewayUpload(res, hasMedia)) {
@@ -303,10 +300,6 @@ export async function handleOpenResponsesHttpRequest(
         responseId: payload.previous_response_id,
       })
     : undefined;
-  if (handled.requestAuth.hasCurrentClientAuthority?.() === false) {
-    sendUnauthorized(res);
-    return true;
-  }
   if (payload.previous_response_id !== undefined && !previousSessionKey) {
     sendInvalidRequest(
       res,
@@ -320,7 +313,7 @@ export async function handleOpenResponsesHttpRequest(
     agentId: resolved.agentId,
     sessionKey,
     requestAuth: handled.requestAuth,
-    senderIsOwner,
+    senderIsOwner: handled.grant.owner,
   });
   if (!sessionAuth.allowed) {
     sendJson(res, 403, { error: { message: sessionAuth.message, type: "forbidden" } });
@@ -371,9 +364,7 @@ export async function handleOpenResponsesHttpRequest(
       usage,
     });
   const rememberSession = () =>
-    rememberResponseSession({ ...responseSessionScope, responseId, sessionKey }, () =>
-      assertGatewayHttpRequestCurrent(handled.requestAuth),
-    );
+    rememberResponseSession({ ...responseSessionScope, responseId, sessionKey });
   const rememberSessionAfterFailure = async () => {
     try {
       await rememberSession();
@@ -401,7 +392,6 @@ export async function handleOpenResponsesHttpRequest(
         sessionKey,
         runId: responseId,
         messageChannel,
-        senderIsOwner,
         requestAuth: handled.requestAuth,
         operatorScopes: handled.operatorScopes,
         resolveGatewayContext: opts.resolveGatewayContext,
@@ -489,7 +479,10 @@ export async function handleOpenResponsesHttpRequest(
           mapped.status,
           createFailedResponse(
             {
-              code: incompleteTurnText === undefined ? mapped.error.type : "incomplete_turn",
+              code:
+                incompleteTurnText === undefined
+                  ? (mapped.error.code ?? mapped.error.type)
+                  : "incomplete_turn",
               message: mapped.error.message,
             },
             result === undefined ? undefined : extractUsageFromResult(result),
@@ -647,7 +640,7 @@ export async function handleOpenResponsesHttpRequest(
         type: "response.failed",
         response: createFailedResponse(
           {
-            code: incompleteTurnText === undefined ? error.type : "incomplete_turn",
+            code: incompleteTurnText === undefined ? (error.code ?? error.type) : "incomplete_turn",
             message: error.message,
           },
           result === undefined ? undefined : extractUsageFromResult(result),

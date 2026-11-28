@@ -9,6 +9,7 @@ import { t } from "../../i18n/index.ts";
 import { registerBrowserEnglish } from "../../i18n/locales/en-browser.ts";
 import { readBlobAsDataUrl } from "../../lib/blob-data-url.ts";
 import { browserInspectScript } from "./browser-inspect-script.ts";
+import { browserRouteParams, browserSessionTabScope } from "./browser-session-tab-list.ts";
 import {
   readBrowserTabTarget,
   type BrowserRoute,
@@ -121,8 +122,16 @@ export type BrowserInspectedNode = NonNullable<ReturnType<typeof readBrowserInsp
 type BrowserRequestEnvelope = {
   method: "GET" | "POST" | "DELETE";
   path: string;
+  query?: Record<string, unknown>;
   body?: unknown;
 };
+
+/**
+ * Marks a request as the person deliberately using the page (click, key, text, scroll,
+ * history, navigation). The Gateway shows the agent recent use and keeps a takeover alive
+ * from these only. Automatic panel requests may explicitly mark themselves as passive.
+ */
+const OPERATOR_INPUT = { operatorInput: true };
 
 function withoutBrowserTarget(value: unknown): Record<string, unknown> {
   const result = { ...asRecord(value) };
@@ -130,12 +139,6 @@ function withoutBrowserTarget(value: unknown): Record<string, unknown> {
     delete result[key];
   }
   return result;
-}
-
-export function browserRequestReferencedTabs(
-  tabs: readonly BrowserTabTarget[],
-): BrowserTabTarget[] {
-  return tabs.slice(-64);
 }
 
 /** Bind every browser operation to one route and one live panel scope. */
@@ -175,22 +178,16 @@ export function bindBrowserRequestClient(
         : route || dashboard || session
           ? {
               ...envelope,
-              ...(route
-                ? {
-                    target: route.target,
-                    ...(route.target === "node" ? { node: route.node } : {}),
-                    query: { ...asRecord(envelope?.query), profile: route.profile },
-                  }
-                : {}),
+              ...browserRouteParams(route, asRecord(envelope?.query)),
               ...(dashboard ? { dashboard } : {}),
               ...(session
                 ? {
-                    tabScope: {
-                      sessionKey: session.sessionKey,
-                      ...(envelope?.method === "GET" && envelope.path === "/tabs"
-                        ? { referencedTabs: browserRequestReferencedTabs(session.referencedTabs) }
-                        : {}),
-                    },
+                    tabScope: browserSessionTabScope(
+                      session.sessionKey,
+                      envelope?.method === "GET" && envelope.path === "/tabs"
+                        ? session.referencedTabs
+                        : undefined,
+                    ),
                   }
                 : {}),
             }
@@ -212,8 +209,17 @@ function browserRequest<T>(
     : client.request<T>(BROWSER_REQUEST_METHOD, envelope);
 }
 
-function browserAction(client: BrowserRequestClient, body: Record<string, unknown>) {
-  return browserRequest(client, { method: "POST", path: "/act", body });
+function browserAction(
+  client: BrowserRequestClient,
+  body: Record<string, unknown>,
+  operatorInput?: boolean,
+) {
+  return browserRequest(client, {
+    method: "POST",
+    path: "/act",
+    ...(operatorInput === undefined ? {} : { query: { operatorInput } }),
+    body,
+  });
 }
 
 function stringOrEmpty(value: unknown): string {
@@ -240,8 +246,9 @@ function normalizeTab(value: unknown): BrowserPanelTab | null {
   };
 }
 
-export async function listBrowserTabs(client: BrowserRequestClient) {
-  const result = asRecord(await browserRequest(client, { method: "GET", path: "/tabs" }));
+export async function listBrowserTabs(client: BrowserRequestClient, prepared?: Promise<unknown>) {
+  const request = () => browserRequest(client, { method: "GET", path: "/tabs" });
+  const result = asRecord(await (prepared ? prepared.catch(request) : request()));
   const tabs = Array.isArray(result?.tabs)
     ? result.tabs.flatMap((tab) => normalizeTab(tab) ?? [])
     : [];
@@ -252,8 +259,30 @@ export async function listBrowserTabs(client: BrowserRequestClient) {
   };
 }
 
-export async function startBrowser(client: BrowserRequestClient): Promise<void> {
-  await browserRequest(client, { method: "POST", path: "/start", body: {} });
+export type BrowserOperatorControl = { available: boolean; controlled: boolean; byYou: boolean };
+
+/** Read, take or release operator control; while this connection holds it, other input waits. */
+export async function requestBrowserOperatorControl(
+  client: BrowserRequestClient,
+  action: "read" | "take" | "release",
+): Promise<BrowserOperatorControl> {
+  const method = action === "read" ? "GET" : action === "take" ? "POST" : "DELETE";
+  const result = asRecord(await browserRequest(client, { method, path: "/control" }));
+  if (
+    typeof result?.available !== "boolean" ||
+    typeof result.controlled !== "boolean" ||
+    typeof result.byYou !== "boolean"
+  ) {
+    throw new Error(t("browser.controlInvalidReply"));
+  }
+  return { available: result.available, controlled: result.controlled, byYou: result.byYou };
+}
+
+export async function startBrowser(
+  client: BrowserRequestClient,
+  path: "/start" | "/prewarm" = "/start",
+): Promise<void> {
+  await browserRequest(client, { method: "POST", path, body: {} });
 }
 
 export async function openBrowserTab(
@@ -261,7 +290,12 @@ export async function openBrowserTab(
   url: string,
 ): Promise<BrowserPanelTab | null> {
   return normalizeTab(
-    await browserRequest(client, { method: "POST", path: "/tabs/open", body: { url } }),
+    await browserRequest(client, {
+      method: "POST",
+      path: "/tabs/open",
+      query: OPERATOR_INPUT,
+      body: { url },
+    }),
   );
 }
 
@@ -308,7 +342,12 @@ export async function navigateBrowser(
   client: BrowserRequestClient,
   params: { url: string; targetId?: string },
 ): Promise<void> {
-  await browserRequest(client, { method: "POST", path: "/navigate", body: params });
+  await browserRequest(client, {
+    method: "POST",
+    path: "/navigate",
+    query: OPERATOR_INPUT,
+    body: params,
+  });
 }
 
 export async function requestBrowserScreencast(
@@ -327,13 +366,24 @@ export async function requestBrowserScreencast(
   return wsPath;
 }
 
-export function isBrowserScreencastUnsupportedError(error: unknown): boolean {
+function hasBrowserErrorCode(error: unknown, code: string): boolean {
   const record = asRecord(error);
   const details = asRecord(record?.details);
   return (
-    details?.code === "SCREENCAST_UNSUPPORTED" ||
-    asRecord(details?.body)?.code === "SCREENCAST_UNSUPPORTED" ||
-    asRecord(record?.body)?.code === "SCREENCAST_UNSUPPORTED"
+    details?.code === code ||
+    asRecord(details?.body)?.code === code ||
+    asRecord(record?.body)?.code === code
+  );
+}
+
+export function isBrowserCapabilityUnsupportedError(error: unknown): boolean {
+  return hasBrowserErrorCode(error, "BROWSER_CAPABILITY_UNSUPPORTED");
+}
+
+export function isBrowserScreencastUnsupportedError(error: unknown): boolean {
+  return (
+    hasBrowserErrorCode(error, "SCREENCAST_UNSUPPORTED") ||
+    isBrowserCapabilityUnsupportedError(error)
   );
 }
 
@@ -342,6 +392,7 @@ export async function captureBrowserScreenshot(client: BrowserRequestClient, tar
     await browserRequest(client, {
       method: "POST",
       path: "/screenshot",
+      query: { operatorInput: false },
       body: { targetId, type: "png" },
     }),
   );
@@ -359,19 +410,23 @@ export async function clickBrowserCoords(
   client: BrowserRequestClient,
   params: { targetId: string; x: number; y: number },
 ) {
-  await browserAction(client, {
-    kind: "clickCoords",
-    targetId: params.targetId,
-    x: Math.max(0, Math.round(params.x)),
-    y: Math.max(0, Math.round(params.y)),
-  });
+  await browserAction(
+    client,
+    {
+      kind: "clickCoords",
+      targetId: params.targetId,
+      x: Math.max(0, Math.round(params.x)),
+      y: Math.max(0, Math.round(params.y)),
+    },
+    true,
+  );
 }
 
 export async function pressBrowserKey(
   client: BrowserRequestClient,
   params: { targetId: string; key: string },
 ) {
-  await browserAction(client, { kind: "press", targetId: params.targetId, key: params.key });
+  await browserAction(client, { kind: "press", targetId: params.targetId, key: params.key }, true);
 }
 
 export async function insertBrowserText(
@@ -379,31 +434,90 @@ export async function insertBrowserText(
   params: { targetId: string; text: string },
 ) {
   try {
-    await browserAction(client, { kind: "insertText", ...params });
+    await browserAction(client, { kind: "insertText", ...params }, true);
   } catch {
     // Transport errors can echo request bodies containing pasted passwords.
     throw new Error(t("browser.errors.pasteFailed"));
   }
 }
 
+export type BrowserOperatorInput =
+  | { kind: "press"; key: string }
+  | { kind: "insertText"; text: string }
+  | { kind: "clickCoords"; x: number; y: number };
+
+/** Existing-session profiles have no operator input route; the panel acts per input there. */
+export function isBrowserOperatorInputUnsupportedError(error: unknown): boolean {
+  return (
+    error instanceof GatewayRequestError &&
+    asRecord(error.details)?.code === "OPERATOR_INPUT_UNSUPPORTED"
+  );
+}
+
+// Transport errors can echo request bodies containing pasted passwords.
+function redactOperatorInputError(error: unknown, inputs: BrowserOperatorInput[]): unknown {
+  return isBrowserOperatorInputUnsupportedError(error) ||
+    !inputs.some((input) => input.kind === "insertText")
+    ? error
+    : new Error(t("browser.errors.pasteFailed"));
+}
+
+/** Send one ordered burst of operator input; reports whether a navigation withheld the rest. */
+export async function sendBrowserOperatorInput(
+  client: BrowserRequestClient,
+  params: { targetId: string; inputs: BrowserOperatorInput[] },
+): Promise<{ sent: number; navigated: boolean; blockedByDialog: boolean }> {
+  const result = asRecord(
+    await browserRequest(client, {
+      method: "POST",
+      path: "/operator/input",
+      query: OPERATOR_INPUT,
+      body: {
+        targetId: params.targetId,
+        inputs: params.inputs.map((input) =>
+          input.kind === "clickCoords"
+            ? { ...input, x: Math.max(0, Math.round(input.x)), y: Math.max(0, Math.round(input.y)) }
+            : input,
+        ),
+      },
+    }).catch((error: unknown) => {
+      throw redactOperatorInputError(error, params.inputs);
+    }),
+  );
+  return {
+    sent: typeof result?.sent === "number" ? result.sent : 0,
+    navigated: result?.navigated === true,
+    blockedByDialog: result?.blockedByDialog === true,
+  };
+}
+
 export async function resizeBrowserViewport(
   client: BrowserRequestClient,
   params: { targetId: string; width: number; height: number },
 ) {
-  await browserAction(client, {
-    kind: "resize",
-    targetId: params.targetId,
-    width: Math.round(params.width),
-    height: Math.round(params.height),
-  });
+  await browserAction(
+    client,
+    {
+      kind: "resize",
+      targetId: params.targetId,
+      width: Math.round(params.width),
+      height: Math.round(params.height),
+    },
+    false,
+  );
 }
 
 async function evaluateInBrowser<T>(
   client: BrowserRequestClient,
   params: { targetId: string; fn: string },
+  operatorInput?: boolean,
 ): Promise<T | null> {
   const result = asRecord(
-    await browserAction(client, { kind: "evaluate", targetId: params.targetId, fn: params.fn }),
+    await browserAction(
+      client,
+      { kind: "evaluate", targetId: params.targetId, fn: params.fn },
+      operatorInput,
+    ),
   );
   return (result?.result as T | undefined) ?? null;
 }
@@ -471,28 +585,30 @@ export async function scrollBrowserBy(
   window.scrollBy(${dx}, ${dy});
   return true;
 }`;
-  await evaluateInBrowser(client, {
-    targetId: params.targetId,
-    fn,
-  });
+  await evaluateInBrowser(client, { targetId: params.targetId, fn }, true);
 }
 
 export async function goBrowserHistory(
   client: BrowserRequestClient,
   params: { targetId: string; delta: -1 | 1 },
 ) {
-  await evaluateInBrowser(client, {
-    targetId: params.targetId,
-    fn: `() => { history.go(${params.delta}); return true; }`,
-  });
+  await evaluateInBrowser(
+    client,
+    { targetId: params.targetId, fn: `() => { history.go(${params.delta}); return true; }` },
+    true,
+  );
 }
 
 export async function readBrowserPageMetrics(client: BrowserRequestClient, targetId: string) {
   const result = asRecord(
-    await evaluateInBrowser(client, {
-      targetId,
-      fn: "() => ({ cssWidth: window.innerWidth, cssHeight: window.innerHeight, title: document.title, url: location.href })",
-    }),
+    await evaluateInBrowser(
+      client,
+      {
+        targetId,
+        fn: "() => ({ cssWidth: window.innerWidth, cssHeight: window.innerHeight, title: document.title, url: location.href })",
+      },
+      false,
+    ),
   );
   const cssWidth = asFiniteNumber(result?.cssWidth);
   const cssHeight = asFiniteNumber(result?.cssHeight);

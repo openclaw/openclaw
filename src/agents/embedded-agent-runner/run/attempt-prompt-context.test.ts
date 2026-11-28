@@ -1,6 +1,10 @@
 import { QUEUED_USER_MESSAGE_MARKER } from "openclaw/plugin-sdk/agent-runtime-test-contracts";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import {
+  captureAnthropicRequest,
+  registerParityHostLifecycle,
+} from "../../../../packages/ai/src/provider-transport-parity.test-support.js";
+import {
   clearRuntimeConfigSnapshot,
   setRuntimeConfigSnapshot,
 } from "../../../config/runtime-snapshot.js";
@@ -10,6 +14,7 @@ import { addSession, appendOutput, deleteSession } from "../../bash-process-regi
 import { createProcessSessionFixture } from "../../bash-process-registry.test-helpers.js";
 import * as mediaTaskStatus from "../../media-generation-task-status.js";
 import type { AgentMessage } from "../../runtime/index.js";
+import { convertToLlm } from "../../sessions/messages.js";
 import { resetSubagentRegistryForTests } from "../../subagents/registry/subagent-registry.test-helpers.js";
 import { makeAgentAssistantMessage } from "../../test-helpers/agent-message-fixtures.js";
 import type { ToolResultPromptProjectionState } from "../session-prompt-state.js";
@@ -35,7 +40,9 @@ vi.mock("../tool-result-truncation.js", () => ({
   truncateOversizedToolResultsInMessages: hoisted.truncateOversizedToolResultsInMessages,
 }));
 
+import { normalizeMessagesForLlmBoundary } from "./attempt-llm-boundary.js";
 import { prepareEmbeddedAttemptPromptContext as prepareContext } from "./attempt-prompt-build.js";
+import { buildSystemUpdateMessage } from "./runtime-context-prompt.js";
 
 const temporalContext = "## Temporal Context\nCurrent date: 2026-10-09\nTime zone: UTC";
 const inboundRuntimeContext = `Conversation info: channel=telegram\n\n${temporalContext}`;
@@ -139,6 +146,131 @@ afterEach(async () => {
 });
 
 describe("prepareEmbeddedAttemptPromptContext", () => {
+  registerParityHostLifecycle();
+
+  it.each([3, 4])(
+    "reports unavailable MCP servers only in the current version %i turn without rewriting history",
+    async (sessionVersion) => {
+      const fixture = createInput();
+      const history = JSON.stringify(fixture.input.messages);
+      const prepared = await prepareContext({
+        ...fixture.input,
+        sessionVersion,
+        appendOnlyRuntimeContext: true,
+        mcpDiagnostics: [
+          {
+            serverName: "fixture",
+            safeServerName: "fixture",
+            launchSummary: "synthetic server",
+            message: "MCP tool listing timed out after 10000ms",
+          },
+        ],
+      });
+      expect(prepared.runtimeContextMessageForCurrentTurn?.content).toContain(
+        "MCP server fixture unavailable: MCP tool listing timed out after 10000ms",
+      );
+      expect(prepared.runtimeContextMessageForCurrentTurn?.content).toContain(
+        "openclaw mcp status --verbose",
+      );
+      expect(JSON.stringify(fixture.input.messages)).toBe(history);
+      expect(prepared.systemPromptForHook).toBe("Base system prompt");
+      const recovered = await prepareContext({ ...fixture.input, sessionVersion });
+      expect(recovered.runtimeContextMessageForCurrentTurn?.content).not.toContain(
+        "MCP server fixture unavailable",
+      );
+    },
+  );
+
+  it("preserves fallback context envelopes and canonical input across route switches and replay", async () => {
+    const original = "Describe the attached landscape.";
+    const recorder = createUserTurnTranscriptRecorder({
+      input: { text: original, idempotencyKey: "fallback-envelope:user", timestamp: 123 },
+      target: () => undefined,
+    });
+    recorder.markSentToProvider?.();
+    const canonicalUser: AgentMessage = {
+      ...recorder.message!,
+      content: [
+        { type: "text", text: original },
+        { type: "image", data: "aW1n", mimeType: "image/png" },
+      ],
+    };
+    const initialContext = buildSystemUpdateMessage(
+      "Original runtime facts",
+      "runtime-context",
+      true,
+    );
+    const fixture = createInput({
+      attempt: createAttempt({ userTurnTranscriptRecorder: recorder, fallbackActive: true }),
+      preparedUserTurnMessage: canonicalUser,
+      messages: [canonicalUser, initialContext],
+      prompt: createPrompt({
+        effectivePrompt: original,
+        effectiveTranscriptPrompt: original,
+        promptBuildAppendContext: "Use the fallback route's current instructions.",
+      }),
+    });
+    const prepared = await prepareContext({
+      ...fixture.input,
+      sessionVersion: 4,
+      appendOnlyRuntimeContext: true,
+      inHistorySystemUpdates: false,
+    });
+    const fallback = prepared.runtimeContextMessageForCurrentTurn!;
+    expect(prepared.isDispatchedCanonicalFallback).toBe(true);
+    expect(fallback.details).toMatchObject({ replay: "append" });
+    const source = [...fixture.input.messages, fallback];
+    const before = JSON.stringify(source);
+    const capture = async (native: boolean, history = source) => {
+      const { payload } = await captureAnthropicRequest("provider", {
+        model: {
+          id: "claude-opus-5",
+          baseUrl: native ? "https://api.anthropic.com" : "https://proxy.example/v1",
+          input: ["text", "image"],
+        },
+        cacheRetention: "none",
+        context: {
+          systemPrompt: "Stable system prompt",
+          messages: convertToLlm(
+            normalizeMessagesForLlmBoundary(history, {
+              sessionVersion: 4,
+              appendOnlyRuntimeContext: true,
+              inHistorySystemUpdates: native,
+              includeTimestamp: false,
+            }),
+          ),
+        },
+      });
+      if (!Array.isArray(payload.messages)) {
+        throw new Error("Expected serialized provider messages");
+      }
+      expect(
+        JSON.stringify(payload.messages).match(/Describe the attached landscape\./g),
+      ).toHaveLength(1);
+      expect(JSON.stringify(payload.messages).match(/"type":"image"/g)).toHaveLength(1);
+      return payload.messages;
+    };
+    const native = await capture(true);
+    expect(native.at(-1)).toEqual({
+      role: "system",
+      content: [{ type: "text", text: fallback.content }],
+      clear_at: "next_user_message",
+    });
+    const proxy = await capture(false);
+    expect(proxy.at(-1)).toEqual({
+      role: "user",
+      content: `OpenClaw runtime context:\n${fallback.content}\nEnd OpenClaw runtime context.`,
+    });
+    expect(await capture(true)).toEqual(native);
+    const replay = await capture(false, [
+      ...source,
+      makeAgentAssistantMessage({ content: [{ type: "text", text: "Done." }] }),
+      { role: "user", content: "Next question", timestamp: 124 },
+    ]);
+    expect(replay.slice(0, proxy.length)).toEqual(proxy);
+    expect(JSON.stringify(source)).toBe(before);
+  });
+
   it("preserves attempt then system fragment bytes without changing either source", async () => {
     const attemptFragments = [{ kind: "runtime-instruction" as const, text: "Turn instruction" }];
     const systemFragments = [{ kind: "conversation-data" as const, text: "System context" }];
@@ -245,8 +377,9 @@ describe("prepareEmbeddedAttemptPromptContext", () => {
     const fixture = createInput();
     fixture.input.capabilityToolNames.add("process");
     const idle = await prepareContext(fixture.input);
-    expect(idle.runtimeContextMessageForCurrentTurn?.content ?? "").not.toContain(
-      "Active exec sessions at turn start (snapshot):",
+    // A first turn carries no earlier snapshot, so the empty form is sent.
+    expect(idle.runtimeContextMessageForCurrentTurn?.content).toContain(
+      "No active exec-tool sessions in this scope at turn start.",
     );
     for (const id of ["exec-z", "exec-a"]) {
       const session = createProcessSessionFixture({ id, backgrounded: true });
@@ -280,7 +413,7 @@ describe("prepareEmbeddedAttemptPromptContext", () => {
     expect(fixture.replaceSessionMessages).not.toHaveBeenCalled();
   });
 
-  it("supersedes retained active facts with explicit empty snapshots", async () => {
+  it("supersedes changed snapshots with empty forms and omits unchanged ones", async () => {
     const fixture = createInput();
     fixture.input.capabilityToolNames = new Set(["process", "sessions_spawn", "image_generate"]);
     const process = createProcessSessionFixture({ id: "exec-a", backgrounded: true });
@@ -310,14 +443,107 @@ describe("prepareEmbeddedAttemptPromptContext", () => {
     expect(empty.runtimeContextMessageForCurrentTurn?.content).toContain(
       "persistent automations and other background work are not included.",
     );
-    expect(empty.runtimeContextMessageForCurrentTurn?.content).toContain(
-      "## Active Subagents\nnone",
-    );
+    // The empty subagent snapshot is already in the retained carrier, so it is not sent again.
+    expect(empty.runtimeContextMessageForCurrentTurn?.content).not.toContain("## Active Subagents");
     expect(empty.runtimeContextMessageForCurrentTurn?.content).toContain(
       "- tool=image_generate; none",
     );
     expect(empty.runtimeContextMessageForCurrentTurn?.content).not.toContain("image-1");
   });
+
+  it("does not replay unchanged state snapshots into the next turn's history", async () => {
+    const fixture = createInput();
+    fixture.input.capabilityToolNames = new Set(["process", "sessions_spawn", "session_status"]);
+    const first = await prepareContext({ ...fixture.input, appendOnlyRuntimeContext: true });
+    const firstCarrier = first.runtimeContextMessageForCurrentTurn!;
+    expect(firstCarrier.content).toContain("## Temporal Context");
+    const history = [
+      ...messages,
+      firstCarrier,
+      makeAgentAssistantMessage({ content: [{ type: "text", text: "Done." }], timestamp: 200 }),
+      { role: "user", content: "Previous request 2", timestamp: 300 },
+    ] as AgentMessage[];
+    const second = await prepareContext({
+      ...fixture.input,
+      appendOnlyRuntimeContext: true,
+      messages: history,
+    });
+    // Nothing changed since the snapshot already in history, so this turn adds no snapshot bytes.
+    const secondContent = second.runtimeContextMessageForCurrentTurn?.content ?? "";
+    expect(secondContent).not.toContain("## Temporal Context");
+    expect(secondContent).not.toContain("## Active Subagents");
+    expect(secondContent).not.toContain("Active exec sessions at turn start (snapshot):");
+  });
+
+  it("adds no second snapshot copy when an attempt is retried within one turn", async () => {
+    const fixture = createInput();
+    fixture.input.capabilityToolNames = new Set(["process", "sessions_spawn"]);
+    const first = await prepareContext({ ...fixture.input, appendOnlyRuntimeContext: true });
+    // The failed attempt persisted its user turn and carrier before the retry prepares again.
+    const retry = await prepareContext({
+      ...fixture.input,
+      appendOnlyRuntimeContext: true,
+      messages: [
+        ...messages,
+        { role: "user", content: "Visible request", timestamp: 123 } as AgentMessage,
+        first.runtimeContextMessageForCurrentTurn!,
+      ],
+    });
+    const retryContent = retry.runtimeContextMessageForCurrentTurn?.content ?? "";
+    expect(retryContent).not.toContain("## Active Subagents");
+    expect(retryContent).not.toContain("Active exec sessions at turn start (snapshot):");
+    expect(retryContent).not.toContain("## Temporal Context");
+  });
+
+  it("sends every snapshot, empty forms included, on the first turn after compaction", async () => {
+    const fixture = createInput();
+    fixture.input.capabilityToolNames = new Set(["process", "sessions_spawn"]);
+    const compacted = await prepareContext({
+      ...fixture.input,
+      appendOnlyRuntimeContext: true,
+      // Compaction summarized the earlier carriers away; the summary may describe stale state.
+      messages: [
+        { role: "compactionSummary", summary: "exec-a was running", timestamp: 0, tokensBefore: 0 },
+        ...messages,
+      ] as AgentMessage[],
+    });
+    const content = compacted.runtimeContextMessageForCurrentTurn?.content ?? "";
+    expect(content).toContain("No active exec-tool sessions in this scope at turn start.");
+    expect(content).toContain("## Active Subagents\nnone");
+    expect(content).toContain("## Temporal Context");
+  });
+
+  it.each([
+    { clears: false, resent: false },
+    { clears: true, resent: true },
+  ])(
+    "resends snapshots from turn-scoped updates only when the route clears them: $clears",
+    async ({ clears, resent }) => {
+      const fixture = createInput();
+      fixture.input.capabilityToolNames = new Set(["sessions_spawn"]);
+      const route = {
+        appendOnlyRuntimeContext: true,
+        inHistorySystemUpdates: true,
+        clearsTurnScopedSystemUpdates: clears,
+      };
+      const first = await prepareContext({ ...fixture.input, ...route });
+      const second = await prepareContext({
+        ...fixture.input,
+        ...route,
+        messages: [
+          ...messages,
+          first.runtimeContextMessageForCurrentTurn!,
+          makeAgentAssistantMessage({ content: [{ type: "text", text: "Done." }], timestamp: 200 }),
+          { role: "user", content: "Previous request 2", timestamp: 300 },
+        ] as AgentMessage[],
+      });
+      expect(second.runtimeContextMessageForCurrentTurn?.content ?? "").toEqual(
+        resent
+          ? expect.stringContaining("## Active Subagents")
+          : expect.not.stringContaining("## Active Subagents"),
+      );
+    },
+  );
 
   it("quotes producer data in the new-session model prompt while retaining transcript bytes", async () => {
     const fixture = createInput();
@@ -415,9 +641,6 @@ describe("prepareEmbeddedAttemptPromptContext", () => {
       expect(result.promptSubmission.runtimeOnly).toBe(true);
       expect(result.promptForSession).toBe("Continue the OpenClaw runtime event.");
       expect(result.promptForModel).toBe(result.promptForSession);
-      expect(result.runtimeContextMessageForCurrentTurn?.content ?? "").not.toContain(
-        "Active exec sessions at turn start (snapshot):",
-      );
       expect(result.runtimeContextMessageForCurrentTurn?.content).toContain("Runtime room event");
       expect(result.runtimeContextMessageForCurrentTurn?.content).toContain(
         "Room conversation data",

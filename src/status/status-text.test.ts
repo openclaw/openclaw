@@ -1,6 +1,12 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { observeHostDataSql } from "../../test/helpers/sqlite-statement-execution-counter.js";
+import {
+  beginPromptCacheObservation,
+  completePromptCacheObservation,
+} from "../agents/embedded-agent-runner/prompt-cache-observability.js";
+import { prepareProviderPrompt } from "../agents/embedded-agent-runner/provider-prompt-serialization.js";
 import { createModelRuntimeChoiceOwnerFixture } from "../agents/model-runtime-choice.test-support.js";
+import * as modelsConfig from "../agents/models-config-state.js";
 import * as preparedCatalog from "../agents/prepared-model-catalog.js";
 import {
   seedSubagentRunForReadTest,
@@ -24,7 +30,10 @@ import {
   SessionTranscriptStorageUnavailableError,
 } from "../config/sessions/session-transcript-projection-error.js";
 import { waitForSessionTranscriptProjection } from "../config/sessions/session-transcript-reconcile.js";
-import type { InternalSessionEntry as Entry } from "../config/sessions/types.js";
+import {
+  SESSION_TOTAL_TOKENS_VERSION,
+  type InternalSessionEntry as Entry,
+} from "../config/sessions/types.js";
 import * as transcriptTail from "../gateway/session-transcript-readers.js";
 import * as transcriptUsage from "../gateway/session-transcript-usage.js";
 import { clearAgentRunContext, registerAgentRunContext } from "../infra/agent-run-registry.js";
@@ -66,7 +75,7 @@ const modelLimits = (provider: string, id: string, contextWindow?: number) => ({
 const tokenUsage = {
   totalTokens: 45_000,
   totalTokensFresh: true,
-  totalTokensVersion: 1,
+  totalTokensVersion: SESSION_TOTAL_TOKENS_VERSION,
 } satisfies Partial<Entry>;
 const fallback = "fallback/small-model";
 const fallbackNotice = {
@@ -148,6 +157,33 @@ describe("prepared status", () => {
     await state.cleanup();
   });
 
+  it.each([
+    {
+      name: "recorded zero",
+      usage: { inputTokens: 100, estimatedCostUsd: 0 },
+      cost: "Cost: $0.0000",
+    },
+    {
+      name: "unavailable usage",
+      usage: { usageReport: { state: "unavailable" as const } },
+      cost: undefined,
+    },
+    { name: "no token usage", usage: {}, cost: undefined },
+  ])("renders $name without optional pricing preparation", async ({ usage, cost }) => {
+    using preparation = vi.spyOn(modelsConfig, "captureModelsJsonCostSource");
+    const text = await render({
+      ...selected,
+      thinkingCatalog: catalog,
+      sessionEntry: entry({ ...modelEntry(selected), ...usage }),
+    });
+    expect(preparation).not.toHaveBeenCalled();
+    if (cost) {
+      expect(text).toContain(cost);
+    } else {
+      expect(text).not.toContain("Cost:");
+    }
+  });
+
   it("bounds catalog identity work per status reply and renews changed provider policies", async () => {
     const entries = Array.from({ length: 24 }, (_, index) => ({
       provider: "fixture",
@@ -224,6 +260,20 @@ describe("prepared status", () => {
       );
     },
   );
+
+  it.each([
+    [undefined, "off", "channels.telegram.widgets=true"],
+    [true, "on", "Bot API 10.4 message widgets"],
+  ] as const)("renders the Telegram widgets setting (%s)", async (widgets, enabled, hint) => {
+    await expectText(
+      render({
+        cfg: { channels: { telegram: { widgets } } },
+        statusChannel: "telegram",
+        sessionEntry: entry({}),
+      }),
+      [`Telegram widgets: ${enabled}`, hint],
+    );
+  });
 
   it("shows the selected global agent's children instead of the default agent's", async () => {
     const cfg: Params["cfg"] = {
@@ -544,21 +594,19 @@ describe("prepared status", () => {
     await expectText(terminal(patch), ["Context: 45k/1.0m"], [`Fallback: ${fallback}`]);
   });
 
-  it("uses the admitted effective cap for the terminal pair", async () => {
+  it.each([false, true])("caps the terminal window (choice=%s)", async (choice) => {
+    const activeLimits = {
+      ...catalog[1]!,
+      contextTokens: 96_000,
+      contextWindows: choice ? [{ id: "50k", label: "50K", contextWindow: 50_000 }] : [],
+      contextWindowDefault: choice ? "50k" : undefined,
+    };
     await expectText(
       terminal({
         entry: { providerOverride: selected.provider, modelOverride: selected.model },
-        status: {
-          ...active,
-          thinkingCatalog: catalog.map(({ provider, id, contextWindow }) => ({
-            provider,
-            id,
-            contextWindow,
-            contextTokens: id === active.model ? 96_000 : contextWindow,
-          })),
-        },
+        status: { ...active, thinkingCatalog: [catalog[0]!, activeLimits] },
       }),
-      [`Fallback: ${fallback}`, "Context: 45k/96k"],
+      [`Fallback: ${fallback}`, `Context: 45k/${choice ? "50k" : "96k"}`],
     );
   });
 
@@ -618,6 +666,44 @@ describe("prepared status", () => {
     } else {
       await expect(result).rejects.toBe(error);
     }
+  });
+
+  it.each([
+    ["a keyless request to the selected relay model", "gpt-5.4", {}, true],
+    ["a request that carried a key", "gpt-5.4", { prompt_cache_key: "session" }, false],
+    ["a keyless request to another model", "gpt-5.4-mini", {}, false],
+  ] as const)("names the cache key only after %s", async (_, modelId, fields, shown) => {
+    const sessionId = `status-cache-key-${modelId}-${shown}`;
+    const sessionKey = `agent:main:${sessionId}`;
+    beginPromptCacheObservation({
+      sessionId,
+      sessionKey,
+      provider: "openai",
+      modelId,
+      modelApi: "openai-completions",
+      streamStrategy: "openai-completions",
+      systemPrompt: "",
+      tools: [],
+      messages: [],
+    });
+    const { encoded: _encoded, ...fingerprint } = prepareProviderPrompt({
+      payload: { model: modelId, messages: [], ...fields },
+      encode: true,
+    });
+    completePromptCacheObservation({
+      sessionId,
+      sessionKey,
+      providerPrompt: { scopeDigest: "scope", ...fingerprint },
+    });
+    const text = await buildStatusText(
+      params({
+        sessionKey,
+        sessionEntry: entry({ sessionId }),
+        provider: "openai",
+        model: "gpt-5.4",
+      }),
+    );
+    expect(text.includes("cache key: not sent")).toBe(shown);
   });
 });
 

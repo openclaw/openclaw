@@ -211,6 +211,15 @@ describe("rethrowTelegramSendError", () => {
     expect(caught).toMatchObject({ message: expect.stringContaining(String(migratedChatId)) });
   });
 
+  it("preserves retryable no-send proof for a flood refusal", () => {
+    const error = errorWithTelegramCode("Too Many Requests: retry after 8", 429);
+    expect(captureTelegramSendError(error)).toMatchObject({
+      name: "PlatformMessageNotDispatchedError",
+      retryable: true,
+      cause: error,
+    });
+  });
+
   it.each(["chat not found", "message thread not found"])(
     "preserves retryable no-send proof for an exact %s rejection",
     (reason) => {
@@ -228,7 +237,6 @@ describe("rethrowTelegramSendError", () => {
   );
 
   it.each([
-    ["rate limit", errorWithTelegramCode("Too Many Requests", 429)],
     ["server failure", errorWithTelegramCode("Bad Gateway", 502)],
     ["unrelated client rejection", errorWithTelegramCode("Bad Request: message is empty", 400)],
     ["ambiguous network failure", errorWithCode("read ECONNRESET", "ECONNRESET")],

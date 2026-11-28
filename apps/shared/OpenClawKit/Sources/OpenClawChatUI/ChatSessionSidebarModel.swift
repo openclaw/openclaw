@@ -147,6 +147,24 @@ public enum ChatSessionSidebarModel {
         }
     }
 
+    /// A depth-preserving projection for flat native row containers.
+    public struct Row: Identifiable, Equatable, Sendable {
+        public let node: Node
+        public let depth: Int
+        public var id: String {
+            self.node.id
+        }
+    }
+
+    /// Rows with a parent's sub-sessions left out unless `showsChildren` says they are open.
+    public static func rows(_ nodes: [Node], depth: Int = 0, showsChildren: (Node) -> Bool) -> [Row] {
+        nodes.flatMap { node in
+            [Row(node: node, depth: depth)] + (showsChildren(node)
+                ? self.rows(node.children, depth: depth + 1, showsChildren: showsChildren)
+                : [])
+        }
+    }
+
     public struct Section: Identifiable, Equatable, Sendable {
         public let id: String
         public let title: String?
@@ -173,7 +191,9 @@ public enum ChatSessionSidebarModel {
         mainSessionKey: String = "main",
         activeAgentID: String? = nil,
         groups: [OpenClawChatSessionGroup] = [],
+        pinnedOrder: [String: Int]? = nil,
         excludesMainSession: Bool = false,
+        includeEmptyGroups: Bool = false,
         query: String,
         rankedSearch: Bool = false,
         sessionRoutingContract: String? = nil,
@@ -266,20 +286,24 @@ public enum ChatSessionSidebarModel {
             return sections
             #endif
         }
-        // Pin state owns first placement. Group sections then preserve the
-        // same tree builder, so grouped parent/child rosters still nest.
-        let pinned = self.tree(
-            from: OpenClawChatSessionListOrganizer.organize(visible.filter { $0.pinned == true }),
-            identity: identity)
+        // Explicit pin and category placement takes precedence over ancestry.
+        let pinnedRows = visible.filter { $0.pinned == true }
+        // A personal pin is an independent shortcut even when both parent and child are pinned.
+        let pinned = if let pinnedOrder {
+            pinnedRows.sorted { (pinnedOrder[$0.key] ?? .max) < (pinnedOrder[$1.key] ?? .max) }
+                .map { self.node(session: $0, children: []) }
+        } else {
+            self.tree(from: OpenClawChatSessionListOrganizer.organize(pinnedRows), identity: identity)
+        }
         let unpinned = visible.filter { $0.pinned != true }
         let orderedGroups = groups.sorted { lhs, rhs in
             lhs.position == rhs.position ? lhs.name < rhs.name : lhs.position < rhs.position
         }
         let groupNames = Set(orderedGroups.map(\.name))
-        let recent = self.tree(from: unpinned.filter { session in
+        let recent = unpinned.filter { session in
             guard let category = session.category else { return true }
             return !groupNames.contains(category)
-        }, identity: identity)
+        }
 
         var result: [Section] = []
         if !pinned.isEmpty {
@@ -288,7 +312,7 @@ public enum ChatSessionSidebarModel {
         for group in orderedGroups {
             let nodes = self.tree(
                 from: unpinned.filter { $0.category == group.name }, identity: identity)
-            if !nodes.isEmpty {
+            if !nodes.isEmpty || includeEmptyGroups {
                 result.append(Section(id: "group:\(group.name)", title: group.name, nodes: nodes))
             }
         }
@@ -296,7 +320,7 @@ public enum ChatSessionSidebarModel {
             result.append(Section(
                 id: "recent",
                 title: result.isEmpty ? nil : "Recent",
-                nodes: recent))
+                nodes: self.tree(from: recent, identity: identity)))
         }
         return result
     }

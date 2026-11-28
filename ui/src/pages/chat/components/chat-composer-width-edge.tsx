@@ -10,6 +10,7 @@ import { transcriptColumnWidth, type ComposerWidthOptions } from "./chat-compose
  */
 export function ResizeEdge(props: { options: () => ComposerWidthOptions }) {
   const options = () => props.options();
+  // Callback replacements and transcript row updates do not change edge geometry.
   const geometry = createMemo(
     () => ({
       width: options().chatMessageMaxWidth ?? undefined,
@@ -38,7 +39,7 @@ export function ResizeEdge(props: { options: () => ComposerWidthOptions }) {
     }
     return parent;
   };
-  const availableWidth = (current: ComposerWidthOptions) => {
+  const availableWidth = (transcript: HTMLElement | null | undefined) => {
     const parent = region();
     const style = getComputedStyle(parent);
     const shellStyle = getComputedStyle(shell()!);
@@ -50,14 +51,13 @@ export function ResizeEdge(props: { options: () => ComposerWidthOptions }) {
       Number.parseFloat(style.paddingLeft) -
       Number.parseFloat(style.paddingRight) -
       2 * inset;
-    const transcript = current.getTranscriptElement?.();
     if (transcript?.isConnected) {
       available = Math.min(available, transcriptColumnWidth(transcript));
     }
     return Math.max(0, available);
   };
   const clampWidth = (value: number) => {
-    const available = availableWidth(options());
+    const available = availableWidth(options().getTranscriptElement?.());
     return Math.round(Math.max(Math.min(minimumWidth, available), Math.min(available, value)));
   };
   const writable = () => !retired && edge?.isConnected && Boolean(options().onComposerWidthChange);
@@ -68,13 +68,13 @@ export function ResizeEdge(props: { options: () => ComposerWidthOptions }) {
       options().onComposerWidthChange?.(value);
     }
   };
-  const measure = (current: ComposerWidthOptions) => {
+  const measure = (transcript: HTMLElement | null | undefined) => {
     const host = shell();
     const field = input();
     if (retired || !edge?.isConnected || !host || !field) {
       return;
     }
-    const available = availableWidth(current);
+    const available = availableWidth(transcript);
     const inputBox = field.getBoundingClientRect();
     const shellBox = host.getBoundingClientRect();
     edge.style.top = `${inputBox.top - shellBox.top + 18}px`;
@@ -89,7 +89,6 @@ export function ResizeEdge(props: { options: () => ComposerWidthOptions }) {
     edge.setAttribute("aria-valuemax", String(Math.round(available)));
   };
   const schedule = createLayoutMeasurement(
-    // Streaming replaces callbacks without changing the geometry to measure.
     geometry,
     (next) => {
       if (!next) {
@@ -101,12 +100,12 @@ export function ResizeEdge(props: { options: () => ComposerWidthOptions }) {
         refreshMinimum = true;
       }
       lastWidth = width;
-      measure(options());
+      measure(next.transcript);
     },
     {
-      targets: () =>
-        [shell(), input(), shell() && region(), options().getTranscriptElement?.()].filter(
-          (node): node is Element => Boolean(node),
+      targets: (next) =>
+        [shell(), input(), shell() && region(), next?.transcript].filter((node): node is Element =>
+          Boolean(node),
         ),
       changeTiming: "sync",
     },

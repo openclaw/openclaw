@@ -8,6 +8,7 @@ import {
 import { setRuntimeConfigSnapshot } from "../../config/runtime-snapshot.js";
 import {
   appendTranscriptMessage,
+  persistSessionTranscriptTurn,
   upsertSessionEntryCore,
 } from "../../config/sessions/session-accessor.js";
 import type { SessionHistoryWorkerRequest } from "../../config/sessions/session-history-types.js";
@@ -41,15 +42,16 @@ afterEach(() => vi.restoreAllMocks());
 
 async function withInvitedRead(
   run: (fixture: Awaited<ReturnType<typeof readFixture>>) => Promise<void>,
+  invitation = false,
 ) {
   await withOpenClawTestState({ scenario: "minimal", prepareProfileCatalog: true }, async () => {
-    const fixture = await readFixture();
+    const fixture = await readFixture(invitation);
     using _ = { [Symbol.dispose]: (await prepareUserProfileCatalog()).release };
     await run(fixture);
   });
 }
 
-async function readFixture() {
+async function readFixture(invitation = false) {
   const cfg: OpenClawConfig = {
     agents: { entries: { main: {} } },
     gateway: {
@@ -59,7 +61,6 @@ async function readFixture() {
           guest: {
             agents: "*",
             scopes: ["operator.sessions.read"],
-            // @ts-expect-error Runtime invitation policy precedes config enum activation in step 13.
             sessions: { others: "invited" },
           },
         },
@@ -84,8 +85,40 @@ async function readFixture() {
     visibility: "shared",
     createdActor: { type: "human", source: "profile", id: owner.id },
   });
-  await appendTranscriptMessage(scope, { message: { role: "user", content, timestamp: 1 } });
-  await addSessionMember(scope, { identityId: member.id, addedBy: owner.id });
+  if (invitation) {
+    await persistSessionTranscriptTurn(scope, {
+      expectedSessionId: sessionId,
+      messages: [
+        {
+          message: {
+            role: "user",
+            content: `@Member ${content}`,
+            timestamp: 1,
+            __openclaw: { humanMentions: [{ profileId: member.id, start: 0, end: 7 }] },
+          },
+          workerPreparation: {
+            prepareMentionInvitation: () => ({
+              invitation: {
+                addedBy: owner.id,
+                expectedEntry: {
+                  sessionId,
+                  visibility: "shared",
+                  incognito: undefined,
+                  createdActor: { type: "human", source: "profile", id: owner.id },
+                },
+                profiles: [{ profileId: member.id, aliases: [member.id], tokens: ["@Member"] }],
+              },
+              assertCurrent() {},
+            }),
+          },
+        },
+      ],
+      updateMode: "none",
+    });
+  } else {
+    await appendTranscriptMessage(scope, { message: { role: "user", content, timestamp: 1 } });
+    await addSessionMember(scope, { identityId: member.id, addedBy: owner.id });
+  }
   const context = await createHistoryReadContext({ getRuntimeConfig: () => cfg });
   return {
     context,
@@ -159,6 +192,23 @@ function expectHidden(method: Method, respond: ReturnType<typeof vi.fn<RespondFn
   expect(JSON.stringify(respond.mock.calls)).not.toContain(content);
 }
 
+it("a committed original invitation grants history access and revocation hides the next read", () =>
+  withInvitedRead(async (fixture) => {
+    const member = fixture.dispatch("chat.history");
+    await member.pending;
+    expect(member.respond.mock.calls[0]?.[0]).toBe(true);
+    expect(member.respond.mock.calls[0]?.[1]).toMatchObject({
+      messages: [expect.objectContaining({ content: `@Member ${content}` })],
+    });
+    const outsider = fixture.dispatch("chat.history", fixture.nonmember);
+    await outsider.pending;
+    expectHidden("chat.history", outsider.respond);
+    await fixture.revoke();
+    const revoked = fixture.dispatch("chat.history");
+    await revoked.pending;
+    expectHidden("chat.history", revoked.respond);
+  }, true));
+
 it.for(methods)("%s exposes member content and hides the same session from nonmembers", (method) =>
   withInvitedRead(async (fixture) => {
     const member = fixture.dispatch(method);
@@ -224,9 +274,7 @@ it.for(["chat.history", "sessions.get", "sessions.preview"] as const)(
     }),
 );
 
-it("progressCard.get retains invited access and rechecks it before publishing a prepared card", async ({
-  signal,
-}) =>
+it("progressCard.get finishes an admitted invited read after revocation", async ({ signal }) =>
   withInvitedRead(async (fixture) => {
     await progressCardStore.put(sessionKey, { markdown: "Synthetic member-only plan" }, "main");
     const dispatch = (viewer = fixture.client) => {
@@ -271,7 +319,6 @@ it("progressCard.get retains invited access and rechecks it before publishing a 
       return card;
     });
     const request = dispatch();
-    const rejected = expect(request.pending).rejects.toMatchObject(hidden);
     try {
       await withinTest(
         awaitGateBeforeSettlement(
@@ -284,7 +331,14 @@ it("progressCard.get retains invited access and rechecks it before publishing a 
       await fixture.revoke();
     } finally {
       release.resolve();
-      await rejected;
+      await request.pending;
     }
-    expect(request.respond).not.toHaveBeenCalled();
+    expect(request.respond).toHaveBeenCalledWith(
+      true,
+      { card: expect.objectContaining({ markdown: "Synthetic member-only plan" }) },
+      undefined,
+    );
+    const next = dispatch();
+    await expect(next.pending).rejects.toMatchObject(hidden);
+    expect(next.respond).not.toHaveBeenCalled();
   }));

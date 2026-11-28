@@ -8,28 +8,44 @@ import type { ModelDefinitionConfig, ModelProviderConfig } from "../config/types
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { validateConfigObjectRaw } from "../config/validation-core.js";
 import { planEffectiveModelCatalogRows } from "../model-catalog/index.js";
-import { finalizePluginMetadataSnapshot } from "../plugins/plugin-metadata-snapshot.js";
+import { resolveRemoteCatalogUrl } from "../model-catalog/remote-config.js";
+import { withRemoteModelCatalogSnapshot } from "../model-catalog/remote-overlay.js";
+import {
+  buildOpenAICompatibleLiveProviderCatalog,
+  clearLiveCatalogCacheForTests,
+} from "../plugin-sdk/provider-catalog-live-runtime.js";
+import * as pluginMetadata from "../plugins/plugin-metadata-snapshot.js";
 import type { PluginMetadataSnapshot } from "../plugins/plugin-metadata-snapshot.types.js";
 import {
   createPluginManifestRecordFixture,
   createPluginMetadataSnapshotFixture,
 } from "../plugins/plugin-metadata.test-support.js";
+import { copyProviderCatalogOutcomes } from "../plugins/provider-catalog-result.js";
 import {
   PREPARED_THINKING_POLICY,
   type ThinkingCatalogPolicyCarrier,
 } from "../plugins/provider-thinking-catalog.js";
 import { withPluginRuntimeGenerationScope } from "../plugins/runtime/generation-scope.js";
+import { collectForRetentionCheck } from "../test-utils/retention.js";
+import { createEmptyPreparedModelRuntimeFixture } from "./embedded-agent-runner/model.fixture.test-support.js";
+import {
+  createEmptyAgentDiscoveryStores,
+  resolveModelAsync,
+} from "./embedded-agent-runner/model.js";
 import { resolveOAuthApiKeyMarker } from "./model-auth-markers.js";
 import { modelDefinition as configuredModel } from "./model-auth.fixtures.test-support.js";
 import { enrichHarnessRows, modelCatalogRowToEntry } from "./model-catalog-entry.js";
 import { row } from "./model-catalog-fixtures.test-support.js";
+import { findModelCatalogEntry } from "./model-catalog-lookup.js";
 import { overlayCatalogMetadata } from "./model-catalog-metadata.js";
+import {
+  resolveLogicalVisibleModelCatalog,
+  resolveLogicalModelCatalogEntryState,
+} from "./model-catalog-visibility.js";
 import {
   buildPreparedModelCatalogSnapshot,
   type BuildPreparedModelCatalogParams,
-  findModelCatalogEntry,
   loadManifestModelCatalog,
-  modelSupportsVision,
   overlayConfiguredModelCatalog,
 } from "./model-catalog.js";
 import type { ModelCatalogEntry } from "./model-catalog.types.js";
@@ -38,7 +54,7 @@ import { AuthStorage } from "./sessions/auth-storage.js";
 import { ModelRegistry } from "./sessions/model-registry.js";
 
 type AugmentModelCatalogWithProviderPlugins =
-  typeof import("../plugins/provider-runtime.js").augmentModelCatalogWithProviderPlugins;
+  typeof import("../plugins/provider-runtime.runtime.js").augmentModelCatalogWithProviderPlugins;
 
 const mocks = vi.hoisted(() => ({
   augmentModelCatalogWithProviderPlugins: vi.fn<AugmentModelCatalogWithProviderPlugins>(
@@ -127,7 +143,164 @@ const customRoute = {
 beforeEach(() => {
   mocks.augmentModelCatalogWithProviderPlugins.mockReset();
   mocks.augmentModelCatalogWithProviderPlugins.mockResolvedValue([]);
+  // Live rows are cached by provider, endpoint and credential; cases must not share a listing.
+  clearLiveCatalogCacheForTests();
 });
+
+it("publishes a listed row without capability metadata as unknown, not excluded", async () => {
+  const baseUrl = "https://synthetic.invalid/v1";
+  const discovered = await buildOpenAICompatibleLiveProviderCatalog({
+    providerId: "synthetic",
+    providerConfig: { baseUrl, api: "openai-completions", models: [] },
+    discoveryMode: "strict",
+    fetchGuard: async () => ({
+      response: Response.json({ data: [{ id: "voice-v2" }] }),
+      finalUrl: `${baseUrl}/models`,
+      release: async () => {},
+    }),
+  });
+  expect(discovered && "provider" in discovered && discovered.provider.models).toEqual([
+    expect.not.objectContaining({ inference: expect.anything() }),
+  ]);
+});
+
+it("keeps an unlikely-chat bare row out of the default view but runs a typed ref", async () => {
+  const baseUrl = "https://synthetic.invalid/v1";
+  const config: OpenClawConfig = { plugins: { enabled: false } };
+  const discovered = await buildOpenAICompatibleLiveProviderCatalog({
+    providerId: "synthetic",
+    providerConfig: { baseUrl, api: "openai-completions", models: [] },
+    discoveryMode: "strict",
+    fetchGuard: async () => ({
+      response: Response.json({ data: [{ id: "voice-tts-2" }, { id: "chat-v2" }] }),
+      finalUrl: `${baseUrl}/models`,
+      release: async () => {},
+    }),
+  });
+  if (!discovered || !("provider" in discovered)) {
+    throw new Error("Expected provider discovery");
+  }
+  const snapshot = await build({
+    config,
+    entries: discovered.provider.models.map((model) => ({ ...model, provider: "synthetic" })),
+    providerOutcomes: copyProviderCatalogOutcomes(discovered),
+  });
+  const listed = async (view: "default" | "all") =>
+    (
+      await resolveLogicalVisibleModelCatalog({
+        cfg: config,
+        catalog: snapshot.entries,
+        routeVariants: snapshot.routeVariants,
+        defaultProvider: "synthetic",
+        view,
+        metadataSnapshot,
+        evaluateEntry: async () =>
+          resolveLogicalModelCatalogEntryState({
+            evaluation: { availability: true, routeResolution: null },
+          }),
+      })
+    ).map(({ id }) => id);
+  expect(await listed("default")).toEqual(["chat-v2"]);
+  expect((await listed("all")).toSorted()).toEqual(["chat-v2", "voice-tts-2"]);
+  const preparedModelRuntime = {
+    ...createEmptyPreparedModelRuntimeFixture({
+      config,
+      agentDir: "unused:unlikely-chat",
+      metadataSnapshot,
+      createStores: createEmptyAgentDiscoveryStores,
+    }),
+    modelCatalog: snapshot,
+  };
+  // The pre-run chat check passes; this fixture's empty registry has no transport for the row.
+  const resolution = await resolveModelAsync(
+    "synthetic",
+    "voice-tts-2",
+    preparedModelRuntime.agentDir,
+    config,
+    { preparedModelRuntime, skipAgentDiscovery: true },
+  );
+  expect(resolution.error).toMatch(/^Unknown model: synthetic\/voice-tts-2\./);
+});
+
+it.each([{ input: ["text"], output: ["audio"] }])(
+  "keeps an excluded pin with metadata %j and rejects it before execution",
+  async (modalities) => {
+    const baseUrl = "https://synthetic.invalid/v1";
+    const config: OpenClawConfig = {
+      plugins: { enabled: false },
+      agents: {
+        defaults: {
+          model: { primary: "synthetic/voice-v2" },
+          models: { "synthetic/voice-v2": {} },
+        },
+      },
+    };
+    const originalConfig = JSON.stringify(config);
+    const discovered = await buildOpenAICompatibleLiveProviderCatalog({
+      providerId: "synthetic",
+      providerConfig: { baseUrl, api: "openai-completions", models: [] },
+      discoveryMode: "strict",
+      fetchGuard: async () => ({
+        response: Response.json({
+          data: [
+            { id: "voice-v2", modalities },
+            { id: "chat-v2", modalities: { input: ["text"], output: ["text"] } },
+          ],
+        }),
+        finalUrl: `${baseUrl}/models`,
+        release: async () => {},
+      }),
+    });
+    expect(discovered && "provider" in discovered).toBe(true);
+    if (!discovered || !("provider" in discovered)) {
+      throw new Error("Expected provider discovery");
+    }
+    const snapshot = await build({
+      config,
+      entries: discovered.provider.models.map((model) => ({
+        ...model,
+        provider: "synthetic",
+        baseUrl,
+      })),
+      providerOutcomes: copyProviderCatalogOutcomes(discovered),
+    });
+    const visible = await resolveLogicalVisibleModelCatalog({
+      cfg: config,
+      catalog: snapshot.entries,
+      routeVariants: snapshot.routeVariants,
+      defaultProvider: "synthetic",
+      defaultModel: "voice-v2",
+      retainedModel: { provider: "synthetic", model: "voice-v2" },
+      view: "all",
+      metadataSnapshot,
+      evaluateEntry: async () =>
+        resolveLogicalModelCatalogEntryState({
+          evaluation: { availability: true, routeResolution: null },
+        }),
+    });
+    expect(visible.map(({ id }) => id)).toEqual(["chat-v2"]);
+    const preparedModelRuntime = {
+      ...createEmptyPreparedModelRuntimeFixture({
+        config,
+        agentDir: "unused:non-chat",
+        metadataSnapshot,
+        createStores: createEmptyAgentDiscoveryStores,
+      }),
+      modelCatalog: snapshot,
+    };
+    await expect(
+      resolveModelAsync("synthetic", "voice-v2", preparedModelRuntime.agentDir, config, {
+        preparedModelRuntime,
+        skipAgentDiscovery: true,
+      }),
+    ).rejects.toMatchObject({
+      reason: "format",
+      code: "model_chat_unsupported",
+      message: "This model doesn't support chat; pick another model.",
+    });
+    expect(JSON.stringify(config)).toBe(originalConfig);
+  },
+);
 
 it("keeps replace publication closed to a warm refreshable inventory", async () => {
   mocks.augmentModelCatalogWithProviderPlugins.mockResolvedValue([
@@ -153,6 +326,23 @@ it("keeps replace publication closed to a warm refreshable inventory", async () 
   });
   expect([snapshot.entries, snapshot.routeVariants]).toEqual([[], []]);
   expect(mocks.augmentModelCatalogWithProviderPlugins).not.toHaveBeenCalled();
+});
+
+it("uses captured suppression rules without resolving ambient plugin metadata", async () => {
+  const supplied = createManifestSnapshot("demo", {
+    suppressions: [{ provider: "demo", model: "hidden" }],
+  });
+  using ambient = vi
+    .spyOn(pluginMetadata, "resolvePluginMetadataSnapshot")
+    .mockReturnValue(metadataSnapshot);
+  const snapshot = await build({
+    metadataSnapshot: supplied,
+    entries: [row("demo", "hidden"), row("demo", "visible")],
+  });
+
+  expect(snapshot.entries.map(({ id }) => id)).toEqual(["visible"]);
+  expect(snapshot.routeVariants.map(({ id }) => id)).toEqual(["visible"]);
+  expect(ambient).not.toHaveBeenCalled();
 });
 
 it("preserves ready provider membership without replenishing it from metadata", async () => {
@@ -324,16 +514,22 @@ it("uses an explicitly ready live catalog order across entries and route variant
   const entries = ["second", "first", "new"].map((id) =>
     row("demo", id, { api: "openai-responses" }),
   );
-  const modelOrder = ["second", "new", "first", "absent"];
+  const modelOrder = ["second", "second", "new", "first", "absent"];
+  const traversals = vi.spyOn(modelOrder, Symbol.iterator);
   const snapshot = await build({
     entries,
     metadataSnapshot: manifestSnapshot,
-    providerOutcomes: [{ provider: "demo", status: "ready", modelOrder }],
+    providerOutcomes: [
+      { provider: "demo", status: "ready", modelOrder: ["first"] },
+      { provider: " DEMO ", status: "ready", modelOrder },
+    ],
   });
 
+  expect(traversals).toHaveBeenCalledTimes(1);
   expect(snapshot.entries.map(({ id }) => id)).toEqual(["second", "new", "first"]);
   expect(snapshot.routeVariants.map(({ id }) => id)).toEqual(["second", "new", "first"]);
   expect(snapshot.entries.map(({ providerOrder }) => providerOrder)).toEqual([0, 1, 2]);
+  expect(snapshot.entries[0]).not.toBe(snapshot.routeVariants[0]);
   expect(snapshot.entries).toHaveLength(entries.length);
 
   const withoutOptIn = await build({ entries, metadataSnapshot: manifestSnapshot });
@@ -541,16 +737,6 @@ it("uses the lifecycle auth snapshot for provider catalog augmentation", async (
   );
 });
 
-it("reports image capability from the prepared row", () => {
-  const entry: ModelCatalogEntry = {
-    id: "media",
-    name: "Media",
-    provider: "test",
-    input: ["text", "image", "document"],
-  };
-  expect(modelSupportsVision(entry)).toBe(true);
-});
-
 describe("model catalog metadata projection", () => {
   it("retains runtime capabilities without exporting request credentials", () => {
     const capabilities = row("custom", "configured-model", {
@@ -701,7 +887,7 @@ describe("catalog declaration planning", () => {
   const normalize = vi.mocked(normalizeModelCatalogProviderRows);
   let config: OpenClawConfig;
   function catalog(discovery: "static" | "runtime", ...modelIds: string[]) {
-    const planningMetadata = finalizePluginMetadataSnapshot(
+    const planningMetadata = pluginMetadata.finalizePluginMetadataSnapshot(
       providerManifestSnapshot("catalog-fixture", discovery, modelIds),
     );
     const params = { config, metadataSnapshot: planningMetadata };
@@ -744,6 +930,52 @@ describe("catalog declaration planning", () => {
         normalize.mock.results.map(({ type, value }) => (type === "return" ? value.length : type)),
       ).toEqual([2]);
     });
+  });
+  function hostedPublication() {
+    return {
+      sourceUrl: resolveRemoteCatalogUrl(config),
+      generatedAt: 1,
+      revision: "fixture",
+      providers: {},
+      recommendations: {},
+      pricing: {},
+      upstreamPricing: {},
+    };
+  }
+  it("reuses declaration rows only for the current hosted publication or its absence", () => {
+    const { load } = catalog("static", "manifest-model");
+    const hosted = hostedPublication();
+    const absent = withRemoteModelCatalogSnapshot(null, load);
+    const published = withRemoteModelCatalogSnapshot(hosted, load);
+    expect(published).not.toBe(absent);
+    expect(withRemoteModelCatalogSnapshot(hosted, load)).toBe(published);
+
+    const replacement = withRemoteModelCatalogSnapshot({ ...hosted }, load);
+    expect(replacement).not.toBe(published);
+    const withdrawn = withRemoteModelCatalogSnapshot(null, load);
+    expect(withdrawn).not.toBe(replacement);
+    expect(withRemoteModelCatalogSnapshot(null, load)).toBe(withdrawn);
+  });
+  it("releases generated declaration rows when their hosted publication expires", async () => {
+    const { load } = catalog("static", "manifest-model");
+    function observe(source: ReturnType<typeof hostedPublication>) {
+      const rows = withRemoteModelCatalogSnapshot(source, load);
+      expect(rows.map((entry) => entry.id)).toEqual(["manifest-model"]);
+      return { source: new WeakRef(source), rows: new WeakRef(rows), row: new WeakRef(rows[0]!) };
+    }
+
+    const expired = observe(hostedPublication());
+    // Keep the config and metadata live without replacing the expired cache entry.
+    await collectForRetentionCheck("expired manifest declaration rows");
+    expect(expired.source.deref()).toBeUndefined();
+    expect([Boolean(expired.rows.deref()), Boolean(expired.row.deref())]).toEqual([false, false]);
+
+    const hosted = hostedPublication();
+    const live = observe(hosted);
+    await collectForRetentionCheck("live manifest declaration rows");
+    const current = withRemoteModelCatalogSnapshot(hosted, load);
+    expect(live.rows.deref()).toBe(current);
+    expect(live.row.deref()).toBe(current[0]);
   });
   it("keeps the old declaration cache when replacement planning fails", async () => {
     const initial = catalog("static", "initial");

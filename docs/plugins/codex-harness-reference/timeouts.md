@@ -26,7 +26,8 @@ still cancels shared startup.
 
 OpenClaw-owned dynamic tool calls are bounded independently from
 `appServer.requestTimeoutMs`. Ordinary Codex `item/tool/call` requests use the
-first available timeout in this order:
+first available timeout in this order (a tool whose schema allows no extra
+properties and does not declare the timeout argument does not receive it):
 
 - A positive per-call `timeoutMs` argument.
 - A positive integer per-call `timeoutSeconds` argument, plus 30000 ms for setup
@@ -115,6 +116,11 @@ An unlimited native wait ends only on a native terminal outcome, an
 authoritative failure, or explicit Stop. Startup, app-server control requests,
 approvals, dynamic tools, and cancellation retain their independent deadlines.
 `/btw` side questions retain their separate ten-minute completion budget.
+
+When native ownership ends, OpenClaw gives the run its normal six-minute semantic
+stall window to finish instead of counting the native wait as inactivity. A run
+that remains stuck is still stopped. Explicit execution deadlines and the separate
+local-settlement budget below remain in effect.
 
 On receipt of the exact native terminal event, OpenClaw starts an absolute
 two-minute local-settlement budget before asynchronous transcript and media

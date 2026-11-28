@@ -20,6 +20,7 @@ Context is _not the same thing_ as "memory": memory can be stored on disk and re
 ## Quick start (inspect context)
 
 - `/status` → quick "how full is my window?" view + session settings.
+- `/context` → prompt budget card: how full the window is and where it goes (messages, workspace files, tool schemas, skills catalog, system instructions), plus cache hit rate and cost for the latest run and the whole session. Same categories and cache rates as the Control UI context popover, on every chat channel; cost is the per-token estimate that `/usage cost` reports. `/context help` lists the modes.
 - `/context list` → what's injected + rough sizes (per file + totals).
 - `/context detail` → deeper breakdown: per-file, per-tool schema sizes, per-skill entry sizes, system prompt size, and compactable transcript message counts.
 - `/context map` → WinDirStat-style treemap image of the current session's tracked context contributors.
@@ -38,6 +39,11 @@ Status, context reports, and session lists use the selected model's discovered
 capacity and configured limits. If neither current metadata nor a matching
 verified budget is available, the denominator is `?` (`null` in session-list
 JSON); reports do not substitute a generic window or another model's capacity.
+
+For models with selectable windows, `/status` and `session_status` use the selected
+window or the catalog's default window, rather than the model's larger scalar
+capacity. This also applies to the active fallback model; a smaller configured
+runtime cap still takes precedence.
 
 The Control UI context meter uses the last run's prompt budget when it still
 matches the selected model and effective context cap. This budget leaves room
@@ -65,6 +71,26 @@ OpenClaw-provided tools, and unmeasured sizes remain unverified rather than zero
 ## Example output
 
 Values vary by model, provider, tool policy, and what's in your workspace.
+
+### `/context`
+
+```text
+🧠 Prompt budget · 121.6k / 980k · 12%
+🟦🟧🟩🟨🟪⬜⬜⬜⬜⬜⬜⬜⬜⬜⬜⬜⬜⬜⬜⬜
+
+🟦 Messages & other · ~88.3k
+🟧 Workspace files · ~11.8k
+🟩 Tool schemas · ~5.9k
+🟨 Skills catalog · ~7.2k
+🟪 System instructions · ~8.4k
+
+Latest run: 97.76% cache · $0.31
+Session total: 95.13% cache · $154.52
+
+More: /context list · /context detail · /context map · /context json
+```
+
+The bar spans the prompt budget: the last run's prompt budget before the compaction reserve when one is recorded for the current model, else the context window. Every non-empty category keeps at least one cell. Sizes are character estimates. **Messages & other** is the cached session total minus the tracked prompt, so it shows `unknown` while that total is stale. **Latest run** covers every model call since your last message. **Session total** covers the current session instance, the same total as `/usage cost`; a partly priced total shows as a lower bound (`≥`) and usage with no price shows `unpriced`.
 
 ### `/context list`
 
@@ -172,6 +198,10 @@ The system prompt includes a compact **skills list** (name + description + locat
 
 `/context` counts the catalog included in the rendered system prompt, not every installed skill. In the embedded runtime without Code Mode, denying both `read` and `skills_read` omits the catalog and reports zero skills.
 
+Code Mode also omits the catalog when installed skill search and reading are
+available. Its report then shows zero listed skills, while the agent can still
+search eligible skills and read their complete instructions on demand.
+
 Skill instructions are _not_ included by default. The model is expected to `read` the skill's `SKILL.md` **only when needed**.
 
 ## Tools: there are two costs
@@ -185,13 +215,15 @@ Tools affect context in two ways:
 
 ## Commands, directives, and "inline shortcuts"
 
-Slash commands are handled by the Gateway. There are a few different behaviors:
+Slash commands are handled by the Gateway. Text commands, directives, and shortcuts
+require sender text starting with `/` (leading whitespace and channel-owned bot
+addressing are allowed). There are a few different behaviors:
 
 - **Standalone commands**: a message that is only `/...` runs as a command.
 - **Directives**: `/think`, `/fast`, `/verbose`, `/trace`, `/reasoning`, `/elevated`, `/exec`, `/model`, `/queue` are stripped before the model sees the message.
   - Directive-only messages persist session settings.
-  - Inline directives in a normal message act as per-message hints.
-- **Inline shortcuts** (allowlisted senders only): certain `/...` tokens inside a normal message can run immediately (example: "hey /status"), and are stripped before the model sees the remaining text.
+  - In slash-starting messages with task text, most directives act as per-message hints; model selections can still persist to the session.
+- **Inline shortcuts** (allowlisted senders only): certain `/...` tokens can accompany task text in slash-starting messages (example: `/status check this`), run immediately, and are stripped before the model sees the remaining text.
 
 Details: [Slash commands](/tools/slash-commands).
 
@@ -202,6 +234,10 @@ What persists across messages depends on the mechanism:
 - **Normal history** persists in the session transcript until compacted/pruned by policy.
 - **Compaction** persists a summary into the transcript and keeps recent messages intact.
 - **Pruning** drops old tool results from the _in-memory_ prompt to free context-window space, but does not rewrite the session transcript - the full history is still inspectable on disk.
+
+Reduced tool results preserve previously disclosed paths to saved output. Context
+assembly does not check whether those files still exist; if temporary-file cleanup
+has removed one, a later read reports that it is unavailable.
 
 ### Runtime context and provider roles
 

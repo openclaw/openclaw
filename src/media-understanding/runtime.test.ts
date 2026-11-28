@@ -2,22 +2,29 @@
 // state, cleanup, remote references, and direct model-backed image calls.
 import { MAX_TIMER_TIMEOUT_MS } from "@openclaw/normalization-core/number-coercion";
 import { afterEach, describe, expect, it, vi } from "vitest";
+import type { MediaUnderstandingOutput } from "../../packages/media-understanding-common/src/types.js";
 import type { OpenClawConfig } from "../config/types.js";
 import type { ImageCompressionModelPolicy } from "../media/web-media.js";
+import { createEmptyPluginRegistry } from "../plugins/registry-empty.js";
 import {
+  captureActivePluginRegistrySnapshot,
+  restoreActivePluginRegistrySnapshot,
+  setActivePluginRegistry,
+} from "../plugins/runtime.js";
+import { withPluginRuntimeGatewayRequestScope } from "../plugins/runtime/gateway-request-scope.js";
+import type { MediaUnderstandingProvider } from "./provider-types.js";
+import {
+  createAudioInputBudgetReader,
   describeVideoFile,
   describeImageFile,
   describeImageFileWithModel,
+  describePreparedImageWithModel,
   extractStructuredWithModel,
   runMediaUnderstandingFile,
   transcribeAudioFile,
   resolveAudioInputBudget,
 } from "./runtime.js";
-import type {
-  MediaAttachment,
-  MediaUnderstandingOutput,
-  MediaUnderstandingProvider,
-} from "./types.js";
+import type { MediaAttachment } from "./types.js";
 
 const mocks = vi.hoisted(() => {
   const cleanup = vi.fn(async () => {});
@@ -34,7 +41,9 @@ const mocks = vi.hoisted(() => {
     normalizeMediaProviderId: vi.fn((provider: string) => provider.trim().toLowerCase()),
     buildMediaUnderstandingRegistry: vi.fn(() => new Map()),
     getMediaUnderstandingProvider: vi.fn(),
-    describeImageWithModel: vi.fn(async () => ({ text: "generic image ok", model: "vision" })),
+    describeImageWithModel: vi.fn<typeof import("./image-runtime.js").describeImageWithModel>(
+      async () => ({ text: "generic image ok", model: "vision" }),
+    ),
     convertHeicToJpeg: vi.fn(async () => Buffer.from("jpeg-normalized")),
     resolveImageCompressionModelPolicy: vi.fn(
       async (): Promise<ImageCompressionModelPolicy> => ({}),
@@ -131,15 +140,7 @@ describe("media-understanding runtime", () => {
         capability: "image",
         filePath: "/tmp/sample.jpg",
         mime: "image/jpeg",
-        cfg: {
-          tools: {
-            media: {
-              image: {
-                enabled: false,
-              },
-            },
-          },
-        } as OpenClawConfig,
+        cfg: { tools: { media: { image: { enabled: false } } } } as OpenClawConfig,
         agentDir: "/tmp/agent",
       }),
     ).resolves.toEqual({
@@ -158,6 +159,19 @@ describe("media-understanding runtime", () => {
     });
 
     expect(mocks.buildProviderRegistry).not.toHaveBeenCalled();
+    expect(mocks.runCapability).not.toHaveBeenCalled();
+  });
+
+  it.each([
+    ["audio", transcribeAudioFile],
+    ["video", describeVideoFile],
+  ] as const)("refuses canceled %s before preparing media", async (_kind, describeFile) => {
+    const signal = AbortSignal.abort(new Error("Media request interrupted"));
+    const execution = { signal, assertCurrent: () => signal.throwIfAborted() };
+    await expect(describeFile({ filePath: "/tmp/media", cfg: {} }, execution)).rejects.toBe(
+      signal.reason,
+    );
+    expect(mocks.createMediaAttachmentCache).not.toHaveBeenCalled();
     expect(mocks.runCapability).not.toHaveBeenCalled();
   });
 
@@ -203,34 +217,29 @@ describe("media-understanding runtime", () => {
     });
   });
 
-  it("passes workspaceDir through audio and video file helpers", async () => {
-    for (const [capability, filePath, mime, runFile] of [
-      ["video", "/tmp/sample.mp4", "video/mp4", describeVideoFile],
-      ["audio", "/tmp/sample.ogg", "audio/ogg", transcribeAudioFile],
-    ] as const) {
-      if (capability === "audio") {
-        mocks.runCapability.mockReset();
-      }
-      mocks.runCapability.mockResolvedValue({
-        outputs: [],
-        decision: { capability, outcome: "skipped", attachments: [] },
-      });
-      mocks.normalizeMediaAttachments.mockReturnValue([{ index: 0, path: filePath, mime }]);
+  it.each([
+    ["video", "/tmp/sample.mp4", "video/mp4", describeVideoFile],
+    ["audio", "/tmp/sample.ogg", "audio/ogg", transcribeAudioFile],
+  ] as const)("passes %s workspaceDir", async (capability, filePath, mime, runFile) => {
+    mocks.runCapability.mockResolvedValue({
+      outputs: [],
+      decision: { capability, outcome: "skipped", attachments: [] },
+    });
+    mocks.normalizeMediaAttachments.mockReturnValue([{ index: 0, path: filePath, mime }]);
 
-      await runFile({
-        filePath,
-        mime,
-        cfg: {} as OpenClawConfig,
-        agentDir: "/tmp/agent",
-        workspaceDir: "/tmp/workspace",
-      });
+    await runFile({
+      filePath,
+      mime,
+      cfg: {} as OpenClawConfig,
+      agentDir: "/tmp/agent",
+      workspaceDir: "/tmp/workspace",
+    });
 
-      expect(requireRunCapabilityRequest()).toMatchObject({
-        capability,
-        agentDir: "/tmp/agent",
-        workspaceDir: "/tmp/workspace",
-      });
-    }
+    expect(requireRunCapabilityRequest()).toMatchObject({
+      capability,
+      agentDir: "/tmp/agent",
+      workspaceDir: "/tmp/workspace",
+    });
   });
 
   it("passes per-request image prompts into media understanding config", async () => {
@@ -393,6 +402,25 @@ describe("media-understanding runtime", () => {
     );
   });
 
+  it("cancels an admitted explicit image provider request", async () => {
+    const controller = new AbortController();
+    const reason = new DOMException("interrupted", "AbortError");
+    mocks.describeImageWithModel.mockImplementationOnce(async (request) => {
+      controller.abort(reason);
+      request.signal?.throwIfAborted();
+      return { text: "late result", model: "vision" };
+    });
+    await expect(
+      describePreparedImageWithModel(
+        {
+          ...IMAGE_MODEL_DEFAULTS,
+          image: { buffer: Buffer.from("image"), fileName: "image.png" },
+        },
+        { signal: controller.signal, assertCurrent: () => controller.signal.throwIfAborted() },
+      ),
+    ).rejects.toBe(reason);
+  });
+
   it("caps explicit structured extraction timeouts before provider execution", async () => {
     const extractStructured = vi.fn<NonNullable<MediaUnderstandingProvider["extractStructured"]>>(
       async () => ({
@@ -538,6 +566,33 @@ describe("media-understanding audio input budget", () => {
       expect(mocks.runCapability).not.toHaveBeenCalled();
     },
   );
+
+  it("refreshes inferred upload limits when the active or request-scoped provider registry changes", () => {
+    const cfg: OpenClawConfig = {
+      tools: {
+        media: { audio: { maxBytes: 4096 }, models: [{ provider: "example", maxBytes: 8192 }] },
+      },
+    };
+    const previous = captureActivePluginRegistrySnapshot();
+    try {
+      mocks.buildProviderRegistry.mockReturnValue(new Map());
+      const readBudget = createAudioInputBudgetReader(() => cfg);
+      expect(readBudget()).toEqual({ enabled: true, maxBytes: 4096 });
+      const audioProvider = new Map([["example", { capabilities: ["audio"] }]]);
+      mocks.buildProviderRegistry.mockReturnValue(audioProvider);
+      setActivePluginRegistry(createEmptyPluginRegistry());
+      expect(readBudget()).toEqual({ enabled: true, maxBytes: 8192 });
+      mocks.buildProviderRegistry.mockReturnValue(new Map());
+      withPluginRuntimeGatewayRequestScope(
+        { pluginRegistry: createEmptyPluginRegistry(), isWebchatConnect: () => false },
+        () => expect(readBudget()).toEqual({ enabled: true, maxBytes: 4096 }),
+      );
+      mocks.buildProviderRegistry.mockReturnValue(audioProvider);
+      expect(readBudget()).toEqual({ enabled: true, maxBytes: 8192 });
+    } finally {
+      restoreActivePluginRegistrySnapshot(previous);
+    }
+  });
 
   it("does not load providers to prepare disabled audio input", async () => {
     await expect(

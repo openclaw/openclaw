@@ -3,7 +3,7 @@ import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
 import { expectDefined } from "@openclaw/normalization-core";
-import * as tar from "tar";
+import * as tar from "tar/raw";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { backupRestoreCommand } from "../commands/backup-restore.js";
 import { backupVerifyCommand, verifyBackupArchive } from "../commands/backup-verify.js";
@@ -36,6 +36,7 @@ import {
   isolatedBackupCase as backupCase,
   withIsolatedBackupState as withOpenClawTestState,
 } from "./backup-create.test-support.js";
+import type { BackupProgressEvent } from "./backup-progress.js";
 import { classifyBackupSqliteSource } from "./backup-sqlite-snapshot.js";
 import { writeTarArchiveWithRetry } from "./backup-tar-retry.js";
 import * as backupTarWalk from "./backup-tar-walk.js";
@@ -740,6 +741,44 @@ describe("createBackupArchive", () => {
   );
 
   it(
+    "reports bounded backup stages through real SQLite capture and archive verification",
+    withState(async (state) => {
+      openOpenClawStateDatabase({ env: state.env });
+      closeOpenClawStateDatabase();
+      const events: BackupProgressEvent[] = [];
+      const archive = await createBackupArchive({
+        output: state.path("backup.tar.gz"),
+        includeWorkspace: false,
+        onProgress: (event) => events.push(event),
+      });
+      await verifyBackupArchive(archive.archivePath, [], (event) => events.push(event));
+
+      for (const stage of [
+        "plan",
+        "sqlite-source-integrity",
+        "sqlite-online-copy",
+        "sqlite-vacuum",
+        "sqlite-hash",
+        "sqlite-published-integrity",
+        "archive-write",
+        "verify-archive-read",
+        "verify-sqlite-integrity",
+      ] as const) {
+        expect(events).toContainEqual(expect.objectContaining({ stage, phase: "start" }));
+        expect(events).toContainEqual(expect.objectContaining({ stage, phase: "done" }));
+      }
+      expect(
+        events.every((event) =>
+          Object.values(event).every(
+            (value) => typeof value !== "number" || Number.isFinite(value),
+          ),
+        ),
+      ).toBe(true);
+      expect(JSON.stringify(events)).not.toContain(state.root);
+    }),
+  );
+
+  it(
     "rejects stale secondary indexes before creating a backup archive",
     withState(async (state) => {
       const outputDir = state.path("backups");
@@ -1142,7 +1181,7 @@ describe("createBackupArchive", () => {
   );
 
   it(
-    "fails when declared plugin SQLite appears after snapshot discovery: late.sqlite",
+    "refuses malformed declared plugin SQLite even when it appears after snapshot discovery",
     withState(async (state) => {
       const { outputDir, dbPath: latePath } = await pluginDatabaseFixture(state, "late.sqlite");
 
@@ -1179,7 +1218,7 @@ describe("createBackupArchive", () => {
 
       try {
         await expect(createStateArchive(outputDir)).rejects.toThrow(
-          /SQLite state appeared after snapshot discovery/,
+          /SQLite database cannot be compacted safely for backup/,
         );
         expect(createdLatePath).toBe(true);
         expect(stagedArchiveCleanupAttempts).toBeGreaterThanOrEqual(2);
@@ -1645,6 +1684,7 @@ describe("createBackupArchive", () => {
     "omits reinstallable runtime trees and plugin dependencies while keeping plugin files",
     withState(async (state) => {
       const outputDir = state.path("backups");
+      const managedRoots = ["dev", "git", "npm-runtime", "plugin-runtime-deps", "tmp", "tools"];
       const durablePaths = [
         "developer",
         "dev-backup",
@@ -1668,9 +1708,7 @@ describe("createBackupArchive", () => {
         "dev/openclaw/dist/entry.js",
         "dev/openclaw/invalid.sqlite",
         ...durablePaths.map((durablePath) => `${durablePath}/keep.txt`),
-        ...["dev", "git", "npm-runtime", "tmp", "tools"].map(
-          (root) => `${root}/runtime/fixture.sqlite`,
-        ),
+        ...managedRoots.map((root) => `${root}/runtime/fixture.sqlite`),
       ]) {
         await state.writeText(relativePath, "synthetic runtime fixture\n");
       }
@@ -1685,7 +1723,7 @@ describe("createBackupArchive", () => {
       expect(entrySuffixes).toContain("/state/extensions/demo/src/index.js");
       expect(entrySuffixes).toContain("/state/node_modules/root-dep/index.js");
       expect(entrySuffixes).toContain("/state/node_modules/root-dep/fixture.sqlite");
-      for (const managedRoot of ["dev", "git", "npm", "npm-runtime", "tmp", "tools"]) {
+      for (const managedRoot of ["npm", ...managedRoots]) {
         expect(
           entrySuffixes.some(
             (entry) =>

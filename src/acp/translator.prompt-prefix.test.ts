@@ -1,4 +1,4 @@
-/** Tests ACP prompt cwd redaction, timeout metadata, and provenance fallback. */
+/** Tests ACP prompt cwd redaction, timeout metadata, provenance fallback, and deliver subscriptions. */
 import os from "node:os";
 import path from "node:path";
 import { createInMemorySessionStore } from "@openclaw/acp-core/session";
@@ -21,7 +21,7 @@ function fixture(provenanceMode?: "meta+receipt") {
     sessionKey,
     cwd: path.join(os.homedir(), "openclaw-test"),
   });
-  const request = vi.fn(async (method: string) => {
+  const request = vi.fn(async (method: string, _params?: unknown) => {
     if (method === "chat.send") {
       throw new Error("stop-after-send");
     }
@@ -93,5 +93,31 @@ describe("acp prompt metadata", () => {
     const retry = payload(request, 1);
     expect(retry.systemInputProvenance).toBeUndefined();
     expect(retry.systemProvenanceReceipt).toBeUndefined();
+  });
+
+  it("subscribes once per connection before deliver prompts and releases on close", async () => {
+    const { agent, request } = fixture();
+    const send = async (deliver: boolean) =>
+      expect(agent.prompt(createPromptRequest(sessionId, "hello", { deliver }))).rejects.toThrow(
+        "stop-after-send",
+      );
+    await send(false);
+    await send(true);
+    await send(true);
+    // A new Gateway connection starts without the old connection's subscriptions.
+    agent.handleGatewayDisconnect("1006: test");
+    agent.handleGatewayReconnect();
+    await send(true);
+    await agent.closeSession({ sessionId });
+    const subscription = { key: sessionKey, subscriptionId: `acp:${sessionId}` };
+    expect(request.mock.calls.map(([method, params]) => [method, params])).toEqual([
+      ["chat.send", expect.objectContaining({ deliver: false })],
+      ["sessions.messages.subscribe", subscription],
+      ["chat.send", expect.objectContaining({ deliver: true })],
+      ["chat.send", expect.objectContaining({ deliver: true })],
+      ["sessions.messages.subscribe", subscription],
+      ["chat.send", expect.objectContaining({ deliver: true })],
+      ["sessions.messages.unsubscribe", subscription],
+    ]);
   });
 });

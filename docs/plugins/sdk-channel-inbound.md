@@ -71,6 +71,14 @@ replacement. Accepted control and close results still settle after revocation;
 revocation blocks the next effect. The optional callback preserves existing
 callers that do not carry channel-request authority.
 
+Results from `resolveCommandAuthorization(...)` and the preferred
+`await resolveCommandAuthorizationAsync(...)` also expose
+`assertAuthorizedCurrent?: () => void`. This rechecks the original command
+admission against current command policy; `isAuthorizedSender` remains an
+admission snapshot. Retain this callback across awaited preparation and recheck
+it before a command effect, including for non-owner senders. It does not grant
+ownership or replace channel, pairing, or `assertOwnerCurrent` checks.
+
 For intentional skips, `logInboundDrop({ log, channel, reason, target?, onceKey?, hint? })`
 formats a diagnostic through the supplied logger. Use a default-level logger and
 an actionable `hint` for mention-gated groups. Set `onceKey` to an account/conversation

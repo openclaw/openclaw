@@ -1,5 +1,6 @@
 import { AsyncLocalStorage } from "node:async_hooks";
 import { expect, it, vi } from "vitest";
+import { nextEventLoopTurn } from "../../test/helpers/promise.js";
 import { captureSqliteReadOnlyWorkerScope } from "../infra/sqlite-readonly-worker-context.js";
 import {
   createSqliteReadOnlyWorkerScope,
@@ -128,7 +129,7 @@ it("drains returned work, admits existing cleanup, and never adopts a replacemen
   const closing = trackCompletion(owner.instance.dispose());
   try {
     expect(() => owner.run(() => "new work")).toThrow("reloaded or disabled");
-    await Promise.resolve();
+    await nextEventLoopTurn();
     expect(closing.done).toBe(false);
     gate.resolve("settled");
     await expect(pending).resolves.toBe("settled");

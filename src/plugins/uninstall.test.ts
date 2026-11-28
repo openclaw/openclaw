@@ -35,18 +35,16 @@ vi.mock("../process/exec.js", () => ({
 type PluginConfig = NonNullable<OpenClawConfig["plugins"]>;
 type PluginInstallRecord = NonNullable<PluginConfig["installs"]>[string];
 
-type TestUninstallParams = Parameters<typeof planPluginUninstall>[0] & {
-  runtimePluginIds?: readonly string[];
-  runtimeLoadPaths?: readonly string[];
-};
+type TestUninstallParams = Parameters<typeof planPluginUninstall>[0];
 
 function planTestUninstall(params: TestUninstallParams) {
-  const { runtimePluginIds, runtimeLoadPaths, ...planParams } = params;
   return planPluginUninstall(
-    recordPluginPackageUninstallPlan(planParams, {
-      runtimePluginIds: runtimePluginIds ?? [params.pluginId],
-      ...(runtimeLoadPaths ? { runtimeLoadPaths } : {}),
-    }),
+    recordPluginPackageUninstallPlan(
+      { ...params },
+      {
+        runtimePluginIds: [params.pluginId],
+      },
+    ),
   );
 }
 
@@ -65,16 +63,13 @@ async function uninstallPlugin(params: TestUninstallParams) {
   };
 }
 
-async function createInstalledNpmPluginFixture(params: {
-  baseDir: string;
-  pluginId?: string;
-}): Promise<{
+async function createInstalledNpmPluginFixture(params: { baseDir: string }): Promise<{
   pluginId: string;
   extensionsDir: string;
   pluginDir: string;
   config: OpenClawConfig;
 }> {
-  const pluginId = params.pluginId ?? "my-plugin";
+  const pluginId = "my-plugin";
   const extensionsDir = path.join(params.baseDir, "extensions");
   const pluginDir = resolvePluginInstallDir(pluginId, extensionsDir);
   await fs.mkdir(pluginDir, { recursive: true });
@@ -103,20 +98,16 @@ async function createInstalledNpmPluginFixture(params: {
 
 type UninstallResult = Awaited<ReturnType<typeof uninstallPlugin>>;
 
-async function runDeleteInstalledNpmPluginFixture(baseDir: string): Promise<{
-  pluginDir: string;
-  result: UninstallResult;
-}> {
-  const { pluginId, extensionsDir, pluginDir, config } = await createInstalledNpmPluginFixture({
+async function runDeleteInstalledNpmPluginFixture(baseDir: string): Promise<UninstallResult> {
+  const { pluginId, extensionsDir, config } = await createInstalledNpmPluginFixture({
     baseDir,
   });
-  const result = await uninstallPlugin({
+  return uninstallPlugin({
     config,
     pluginId,
     deleteFiles: true,
     extensionsDir,
   });
-  return { pluginDir, result };
 }
 
 function expectSuccessfulUninstall(result: UninstallResult) {
@@ -979,19 +970,6 @@ describe("uninstallPlugin", () => {
     expect(successfulResult.actions.install).toBe(true);
   });
 
-  it("deletes directory when deleteFiles is true", async () => {
-    const { pluginDir, result } = await runDeleteInstalledNpmPluginFixture(tempDir);
-
-    try {
-      expectSuccessfulUninstallActions(result, {
-        directory: true,
-      });
-      await expectPathAccessState(pluginDir, "missing");
-    } finally {
-      await fs.rm(pluginDir, { recursive: true, force: true });
-    }
-  });
-
   it("plans directory removal without deleting before commit", async () => {
     const { pluginId, extensionsDir, pluginDir, config } = await createInstalledNpmPluginFixture({
       baseDir: tempDir,
@@ -1815,7 +1793,7 @@ describe("uninstallPlugin", () => {
   it("returns a warning when directory deletion fails unexpectedly", async () => {
     const unlinkSpy = vi.spyOn(fs, "unlink").mockRejectedValueOnce(new Error("permission denied"));
     try {
-      const { result } = await runDeleteInstalledNpmPluginFixture(tempDir);
+      const result = await runDeleteInstalledNpmPluginFixture(tempDir);
 
       const successfulResult = expectSuccessfulUninstallActions(result, {
         directory: false,

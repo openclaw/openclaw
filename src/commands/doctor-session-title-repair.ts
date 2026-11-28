@@ -15,8 +15,10 @@ import {
   listExistingAgentDatabaseTargets,
   type ExistingAgentDatabaseTarget,
 } from "../infra/session-sqlite-migration-readers.js";
+import { prepareArtifactPreservingSqliteRead } from "../infra/sqlite-snapshot-source.js";
 import { isIncognitoSessionKey, isSubagentSessionKey } from "../routing/session-key.js";
 import { hasInterSessionUserProvenance } from "../sessions/input-provenance.js";
+import { getActiveOpenClawStateDatabaseReadSnapshotAsync } from "../state/openclaw-state-db-readonly.js";
 import { runDoctorAgentDatabaseOperation } from "./doctor-agent-database-operation.js";
 import type { DoctorSqliteMaintenanceAuthority } from "./doctor-sqlite-maintenance-lock.js";
 
@@ -24,9 +26,12 @@ function readLegacySessionTitle(
   scope: Parameters<typeof readSessionTranscriptBoundedMessageTailPage>[0],
 ) {
   try {
+    // Read-only: a writer open records the agent database's admission and registration in
+    // the state database, so every candidate would write even when it yields no title.
     const { totalMessages } = readSessionTranscriptMessageEventPage(scope, {
       maxMessages: 0,
       offset: 0,
+      readOnly: true,
     });
     if (!totalMessages) {
       return undefined;
@@ -35,6 +40,7 @@ function readLegacySessionTitle(
       maxMessages: 100,
       maxBytes: 64 * 1024,
       offset: Math.max(0, totalMessages - 100),
+      readOnly: true,
     });
     // A skipped first message must not let a later task become the session title.
     if (head.totalMessages !== totalMessages || head.events.length !== head.scannedMessages) {
@@ -85,11 +91,13 @@ export async function repairLegacySessionTitles(params: {
     scannedStores: 0,
     warnings,
   };
+  await getActiveOpenClawStateDatabaseReadSnapshotAsync({ env: params.env });
   for (const target of params.targets ?? listExistingAgentDatabaseTargets(params.cfg, params.env)) {
     if (params.apply) {
       assertRepairAuthority();
     }
     report.scannedStores++;
+    await prepareArtifactPreservingSqliteRead(target.sqlitePath);
     const scope = { agentId: target.agentId, storePath: target.storePath, env: params.env };
     const scan = runDoctorAgentDatabaseOperation({
       agentId: target.agentId,

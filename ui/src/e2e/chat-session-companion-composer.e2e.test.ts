@@ -1,3 +1,4 @@
+import { asRecord } from "@openclaw/normalization-core/record-coerce";
 import type { Locator, Page } from "playwright";
 import { expect, it } from "vitest";
 import type { ChatSendShortcut } from "../app/settings.ts";
@@ -130,7 +131,7 @@ suite.define(() => {
         details: { reason: "image-input-unsupported" },
       });
       await text(
-        "This Side chat model cannot read images. Choose an image-capable model, then retry.",
+        "This side chat model can’t read images. Choose a model that supports images, then try again.",
       ).waitFor();
       expect(await text("No utility model is configured for this session.").count()).toBe(0);
       const retry = side.getByRole("button", { name: "Retry", exact: true });
@@ -140,7 +141,12 @@ suite.define(() => {
       await gateway.deferNext(ask);
       await retry.click();
       await expect.poll(async () => (await gateway.getRequests(ask)).length).toBe(2);
-      expect((await gateway.getRequests(ask))[1]?.params).toEqual(original.params);
+      const { askId: originalId, ...originalInput } = asRecord(original.params);
+      const { askId: retryId, ...retryInput } = asRecord(
+        (await gateway.getRequests(ask))[1]?.params,
+      );
+      expect(retryInput).toEqual(originalInput);
+      expect(retryId).not.toBe(originalId);
       const answer = "The image shows a sunny landscape.";
       await gateway.resolveDeferred(ask, { answer, ts: 2 });
       await text(answer).waitFor();

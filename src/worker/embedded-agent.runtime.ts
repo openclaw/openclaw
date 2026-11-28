@@ -11,6 +11,7 @@ import { wrapToolWithBeforeToolCallHook } from "../agents/agent-tools.before-too
 import { projectMemoryFlushTools } from "../agents/agent-tools.memory-flush.js";
 import { listRunningSessions } from "../agents/bash-process-registry.js";
 import type { ExecToolDefaults } from "../agents/bash-tools.exec-types.js";
+import { readCodeModeSkill } from "../agents/code-mode-skills.js";
 import { disposeAllCodeModeRuns } from "../agents/code-mode-state.js";
 import { createNativeModelOwnedRuntimeModel } from "../agents/defaults.js";
 import { classifyAssistantTurn } from "../agents/embedded-agent-runner/run/incomplete-turn-classification.js";
@@ -25,9 +26,9 @@ import { createAgentHarnessToolSurfaceRuntimeCore } from "../agents/harness/tool
 import { projectRuntimeContextFragments } from "../agents/internal-runtime-context.js";
 import { buildExecutionHostRuntimeFacts } from "../agents/runtime-execution-facts.js";
 import { guardSessionManager } from "../agents/session-tool-result-guard-wrapper.js";
-import { AuthStorage } from "../agents/sessions/auth-storage.js";
+import { AuthStorage } from "../agents/sessions/auth-storage.core.js";
 import { convertToLlm } from "../agents/sessions/messages.js";
-import { ModelRegistry } from "../agents/sessions/model-registry.js";
+import { ModelRegistry } from "../agents/sessions/model-registry.core.js";
 import { DefaultResourceLoader } from "../agents/sessions/resource-loader.js";
 import { createAgentSession } from "../agents/sessions/sdk.js";
 import { SessionManager } from "../agents/sessions/session-manager.js";
@@ -54,8 +55,10 @@ import type { createWorkerInferenceStreamAdapter } from "./inference-stream.runt
 import type { WorkerLaunchPlan } from "./launch-descriptor.js";
 import { createNativeInferenceStreamGuard } from "./native-inference-stream.js";
 import type { NativeRuntimeResolved } from "./native-runtime.js";
+import type { NodeExecutionContext } from "./node-execution-context.js";
 import { WORKER_PROVIDER_REPLAY_LOCAL_RETRY_MESSAGE } from "./transcript-message.js";
 import { createWorkerGatewayToolProxies } from "./worker-gateway-tools.js";
+import { createWorkerLocalMcpTool, type WorkerLocalMcpCall } from "./worker-local-mcp.js";
 import { createWorkerPlacementTools, WORKER_TOOL_CONFIG } from "./worker-placement-tools.js";
 
 function toWorkerAgentError(value: unknown, fallback: string): Error {
@@ -76,6 +79,7 @@ type RunWorkerEmbeddedTurnParams = Omit<
   workerContainmentRoot: string;
   stateDir: string;
   github?: PreparedGitHubToolEnvironment;
+  nodeExecution?: NodeExecutionContext;
   sessionId: string;
   sessionKey: string;
   inference: { stream: ReturnType<typeof createWorkerInferenceStreamAdapter> };
@@ -85,6 +89,8 @@ type RunWorkerEmbeddedTurnParams = Omit<
   gatewayTools: Parameters<typeof createWorkerGatewayToolProxies>[1];
   toolSurface: WorkerToolSurface;
   allowedToolNames: readonly string[];
+  mcpTools?: WorkerLaunchPlan["assignment"]["toolAuthority"]["mcpTools"];
+  localMcp?: WorkerLocalMcpCall;
   execAuthority: WorkerLaunchPlan["assignment"]["toolAuthority"]["exec"];
   createApprovalTransport?: ExecToolDefaults["createApprovalTransport"];
   browserRuntime?: WorkerBrowserRuntime;
@@ -112,7 +118,17 @@ export async function runWorkerEmbeddedTurn(params: RunWorkerEmbeddedTurnParams)
     if (params.operationalRunInstance.runId !== params.runId) {
       throw new Error("worker operational run instance disagrees with the admitted turn");
     }
-    const toolSurface = params.toolSurface;
+    const toolSurface = resources
+      ? {
+          ...params.toolSurface,
+          presentation: {
+            ...params.toolSurface.presentation,
+            skills: params.toolSurface.presentation.skills?.map((skill) =>
+              Object.assign({}, skill, { location: resources.rewriteReferences(skill.location) }),
+            ),
+          },
+        }
+      : params.toolSurface;
     const model =
       params.nativeInference?.model ??
       createNativeModelOwnedRuntimeModel({
@@ -224,6 +240,7 @@ export async function runWorkerEmbeddedTurn(params: RunWorkerEmbeddedTurnParams)
       ? AbortSignal.any([params.signal, turnLifetime.signal])
       : turnLifetime.signal;
     let computerCleanup: ((reason: string) => Promise<void>) | undefined;
+    const liveRuntime = createWorkerLiveRuntime(params.live);
     let toolSurfaceRuntime: ReturnType<typeof createAgentHarnessToolSurfaceRuntimeCore> | undefined;
     function disposeTools(failure: Error): Promise<Error>;
     function disposeTools(failure?: Error): Promise<Error | undefined>;
@@ -269,16 +286,46 @@ export async function runWorkerEmbeddedTurn(params: RunWorkerEmbeddedTurnParams)
           ].map((tool) => [tool.name, tool]),
         );
         const gatewayTools = new Map(
-          createWorkerGatewayToolProxies(toolSurface, params.gatewayTools).map((tool) => [
-            tool.name,
-            tool,
-          ]),
+          createWorkerGatewayToolProxies(
+            toolSurface,
+            params.gatewayTools,
+            resources
+              ? {
+                  rewriteReferences: resources.rewriteReferences,
+                  readInstructions: async (name, location, signal) => {
+                    const workerLocation = resources.rewriteReferences(location);
+                    const skill = resources.snapshot.resolvedSkills.find(
+                      (candidate) =>
+                        candidate.name === name && candidate.filePath === workerLocation,
+                    );
+                    if (!skill) {
+                      return undefined;
+                    }
+                    return {
+                      name,
+                      location: workerLocation,
+                      content: await readCodeModeSkill(
+                        {
+                          name,
+                          description: skill.description,
+                          location: workerLocation,
+                          source: skill,
+                        },
+                        signal,
+                      ),
+                    };
+                  },
+                }
+              : undefined,
+          ).map((tool) => [tool.name, tool]),
         );
         const tools = toolSurface.tools.map((entry) => {
           if (entry.execution === "gateway") {
             return wrapToolWithAbortSignal(gatewayTools.get(entry.definition.name)!, toolSignal);
           }
-          const source = localTools.get(entry.definition.name);
+          const source = entry.plugin?.mcp
+            ? createWorkerLocalMcpTool(entry, params.mcpTools, params.localMcp)
+            : localTools.get(entry.definition.name);
           if (!source) {
             throw new Error(`Worker placement tool unavailable: ${entry.definition.name}`);
           }
@@ -296,7 +343,6 @@ export async function runWorkerEmbeddedTurn(params: RunWorkerEmbeddedTurnParams)
                 sessionKey: params.sessionKey,
                 sessionId: params.sessionId,
                 runId: params.runId,
-                requester: { senderIsOwner: true },
               }),
               toolSignal,
             ),
@@ -315,6 +361,7 @@ export async function runWorkerEmbeddedTurn(params: RunWorkerEmbeddedTurnParams)
           sessionKey: params.sessionKey,
           runId: params.runId,
           abortSignal: toolSignal,
+          executeTool: liveRuntime.executeTool,
           presentation: toolSurface.presentation,
           supportsDeferredToolCalls: false,
           modelToolsEnabled: tools.length > 0,
@@ -331,8 +378,11 @@ export async function runWorkerEmbeddedTurn(params: RunWorkerEmbeddedTurnParams)
           os: resolveRuntimeOsLabel(),
           arch: os.arch(),
           node: process.version,
-          shell: detectRuntimeShell() ?? path.basename(getShellConfig().shell),
-          repoRoot: resolveSystemPromptRepoRoot({ workspaceDir: params.cwd, cwd: params.cwd }),
+          shell: detectRuntimeShell() ?? path.basename((await getShellConfig()).shell),
+          repoRoot: await resolveSystemPromptRepoRoot({
+            workspaceDir: params.cwd,
+            cwd: params.cwd,
+          }),
         });
         return await createAgentSession({
           systemPrompt: resources?.rewriteReferences(systemPrompt) ?? systemPrompt,
@@ -346,6 +396,9 @@ export async function runWorkerEmbeddedTurn(params: RunWorkerEmbeddedTurnParams)
           settingsManager,
           resourceLoader,
           withSessionWriteSettlement: transcriptRuntime.withSessionWriteSettlement,
+          // The Gateway resolves tools.loopDetection.enabled into the surface policy, and
+          // tool definitions carry their own `repeatable` exemptions over the wire.
+          toolRepeatPolicy: { enabled: toolSurface.policy.toolRepeatGuard !== false },
         });
       } catch (error) {
         throw await disposeTools(toWorkerAgentError(error, "Worker agent setup failed."));
@@ -382,7 +435,6 @@ export async function runWorkerEmbeddedTurn(params: RunWorkerEmbeddedTurnParams)
       });
     };
 
-    const liveRuntime = createWorkerLiveRuntime(params.live);
     const completion = subscribeEmbeddedAgentSession({
       session,
       runId: params.runId,

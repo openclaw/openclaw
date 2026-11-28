@@ -19,7 +19,7 @@ const SERVICE_INSPECTION_MESSAGES = {
   "windows-task-inspection-failed":
     "Effective Scheduled Task service command could not be inspected. Verify that Windows Task Scheduler is available and that this account can query the task, then run openclaw gateway status --deep before retrying.",
   "launchd-gui-domain-unavailable":
-    "The launchd GUI domain is unavailable for this account. Manage its LaunchAgent from the target user's logged-in macOS desktop session.",
+    "Could not inspect the macOS launchd GUI domain for this account; it may be missing or inaccessible. From the Gateway owner's account, check launchctl print gui/$(id -u). If the domain is missing, log in to the macOS desktop as that user, then retry over SSH. SSH alone does not create a GUI session.",
   "launchd-system-domain-unavailable":
     "The launchd system domain cannot be queried by this account. Ask root to inspect it with sudo launchctl print system/<label>. OpenClaw manages user LaunchAgents, not custom system LaunchDaemons.",
   "launchd-system-owned":
@@ -129,6 +129,45 @@ export class ServiceOwnershipRefusalError extends Error {
   }
 }
 
+export const SYSTEMD_STATE_SELECTOR_KEYS = [
+  "HOME",
+  "OPENCLAW_HOME",
+  "OPENCLAW_STATE_DIR",
+  "OPENCLAW_CONFIG_PATH",
+  "OPENCLAW_PROFILE",
+] as const;
+
+/** A loaded system unit observed running under an account other than this process. */
+export type SystemdServiceAccountMismatch = {
+  unitName: string;
+  unitPath: string;
+  serviceUser: string;
+  programArguments: string[];
+  workingDirectory: string;
+  /** State selectors from inline Environment= only; other values, such as tokens, are not kept. */
+  selectors: Partial<Record<(typeof SYSTEMD_STATE_SELECTOR_KEYS)[number], string>>;
+  /** EnvironmentFile= or UnsetEnvironment= may change the selectors and were not read. */
+  selectorsIncomplete: boolean;
+};
+
+/** The same refusal, carrying what was observed so callers can name the unit and its account. */
+export class SystemdServiceAccountRefusalError extends ServiceOwnershipRefusalError {
+  constructor(readonly mismatch: SystemdServiceAccountMismatch) {
+    super("systemd-account-refused");
+  }
+}
+
+export function findSystemdServiceAccountMismatch(
+  error: unknown,
+): SystemdServiceAccountMismatch | undefined {
+  for (const candidate of collectNestedErrorCandidates(error)) {
+    if (candidate instanceof SystemdServiceAccountRefusalError) {
+      return candidate.mismatch;
+    }
+  }
+  return undefined;
+}
+
 export function findServiceOwnershipRefusal(
   error: unknown,
 ): ServiceOwnershipRefusalError | undefined {
@@ -181,6 +220,13 @@ export class ServiceDefinitionInspectionError extends Error {
 
 export class GatewayServiceStopUnsafeError extends Error {
   override name = "GatewayServiceStopUnsafeError";
+}
+
+/** The Gateway that answers a maintenance drain is not the process its caller inspected. */
+export class GatewayMaintenanceResidentChangedError extends Error {
+  constructor() {
+    super("Gateway process changed during maintenance drain");
+  }
 }
 
 /** Native preparation can wrap a custody refusal alongside an authority or cleanup failure. */

@@ -113,6 +113,11 @@ export function scopeControlUiHost(
       check();
       return host.locale;
     },
+    get recoveryStorage() {
+      check();
+      const storage = host.recoveryStorage;
+      return storage ? services(storage) : storage;
+    },
     request: async <T>(method: string, params?: Record<string, unknown>): Promise<T> => {
       check();
       const result = await host.request<T>(method, params);

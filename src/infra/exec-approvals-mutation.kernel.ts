@@ -1,9 +1,9 @@
-import { stripExecApprovalsSocketCredentials } from "./exec-approvals-config.js";
 import type {
   ExecApprovalsAgent,
   ExecApprovalsDefaults,
   ExecApprovalsFile,
 } from "./exec-approvals-core.js";
+import { stripExecApprovalsSocketCredentials } from "./exec-approvals-core.js";
 import { maxAsk, minSecurity } from "./exec-approvals-policy.js";
 import { resolveExecApprovalsFromFileInternal } from "./exec-approvals-resolver.js";
 

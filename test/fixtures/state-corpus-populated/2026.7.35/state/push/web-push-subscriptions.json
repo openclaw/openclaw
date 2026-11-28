@@ -1,0 +1,14 @@
+{
+  "subscriptionsByEndpointHash": {
+    "c5b2ad9b66af74d094f304cc1d581c52": {
+      "subscriptionId": "a3f75702-4a2a-4af1-85da-90acc3357055",
+      "endpoint": "https://push.example.invalid/corpus-1",
+      "keys": {
+        "p256dh": "BNcRdreALRFXTkOOUHK1EtK2wtaz5Ry4YfYCA_0QTpQtUbVlUls0VJXg7A8u-Ts1XbjhazAkj7I99e8QcYP7DkM",
+        "auth": "tBHItJI5svbpez7KI4CCXg"
+      },
+      "createdAtMs": 1794580982665,
+      "updatedAtMs": 1794580982665
+    }
+  }
+}

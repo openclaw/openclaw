@@ -360,6 +360,9 @@ struct AppStateRemoteConfigTests {
             let state = AppState(preview: true)
             state._testEnableGatewayConfigSync()
             let nextURL = try #require(URL(string: "wss://gateway-b.example.test:443"))
+            let expectedURL = try #require(URL(string: promoteProfile
+                    ? "wss://gateway-b.example.test:443"
+                    : "wss://gateway-b.example.test"))
             let adapter = DashboardPrimaryGatewayAdapter(
                 state: state,
                 endpoint: { _ in
@@ -382,7 +385,7 @@ struct AppStateRemoteConfigTests {
             await state._testAwaitGatewayConfigSync()
 
             let persisted = OpenClawConfigFile.loadDict()
-            #expect(GatewayRemoteConfig.resolveGatewayUrl(root: persisted) == nextURL)
+            #expect(GatewayRemoteConfig.resolveGatewayUrl(root: persisted) == expectedURL)
             #expect(GatewayRemoteConfig.resolveTokenString(root: persisted) ==
                 (promoteProfile ? "gateway-b-token" : nil))
             if !promoteProfile {
@@ -398,7 +401,7 @@ struct AppStateRemoteConfigTests {
             #expect(GatewayRemoteConfig.resolveTLSFingerprint(root: persisted) == nil)
             #expect(state.connectionMode == .remote)
             #expect(state.remoteTransport == .direct)
-            #expect(state.remoteUrl == nextURL.absoluteString)
+            #expect(state.remoteUrl == expectedURL.absoluteString)
             #expect(state.remoteToken == (promoteProfile ? "gateway-b-token" : ""))
             #expect(!state.remoteTokenUnsupported)
             #expect(state.gatewayConfigIsCurrentForRouting)
@@ -581,7 +584,10 @@ struct AppStateRemoteConfigTests {
             let root = OpenClawConfigFile.loadDict()
             let expectedHost = interruption == "cancel" || interruption == "observed-file-round-trip" ? "previous" :
                 canPromote ? "delayed" : "newer"
-            #expect(GatewayRemoteConfig.resolveUrlString(root: root) == "wss://\(expectedHost).example:443")
+            let expectedURL = interruption == "selection"
+                ? "wss://newer.example"
+                : "wss://\(expectedHost).example:443"
+            #expect(GatewayRemoteConfig.resolveUrlString(root: root) == expectedURL)
             #expect(GatewayRemoteConfig.resolveTokenString(root: root) == "\(expectedHost)-token")
             if interruption != "cancel", interruption != "selection" {
                 #expect((root["agents"] as? [String: [String: String]])?["defaults"]?["workspace"] ==
@@ -1431,11 +1437,8 @@ extension AppStateRemoteConfigTests {
 }
 
 extension AppStateRemoteConfigTests {
-    @Test(arguments: [false, true], ["local", "clear-mode", "clear-url"])
-    func `primary saves authorize removal only for an explicit unconfigured selection`(
-        fromCLI: Bool,
-        selection: String) async throws
-    {
+    @Test(arguments: ["local", "clear-mode", "clear-url"])
+    func `CLI primary saves authorize removal only for an explicit clear`(selection: String) async throws {
         let configPath = TestIsolation.tempConfigPath()
         defer { try? FileManager.default.removeItem(atPath: configPath) }
         try await TestIsolation.withIsolatedState(env: ["OPENCLAW_CONFIG_PATH": configPath]) {
@@ -1453,27 +1456,161 @@ extension AppStateRemoteConfigTests {
                 return false
             })
             state._testEnableGatewayConfigSync()
-            if fromCLI {
-                let selection: PrimaryGatewayControlConfiguration = unconfigured ? .clear : .local
-                #expect(throws: PrimaryGatewayControlError.self) {
-                    try state.setPrimaryGateway(selection)
-                }
-            } else {
-                state.connectionMode = unconfigured ? .unconfigured : .local
-                await state._testAwaitGatewayConfigSync()
-                #expect(state.gatewayConfigSyncFailure != nil)
-                #expect(!state.gatewayConfigIsCurrentForRouting)
+            let configuration: PrimaryGatewayControlConfiguration = unconfigured ? .clear : .local
+            #expect(throws: PrimaryGatewayControlError.self) {
+                try state.setPrimaryGateway(configuration)
             }
             #expect(removalPermissions == [unconfigured && hadMode])
+            #expect(NSDictionary(dictionary: OpenClawConfigFile.loadDict()).isEqual(to: original))
+        }
+    }
+
+    /// "Set up later" is kept in the app's defaults (#187841): the file's `gateway.mode` belongs to
+    /// whichever Gateway runs from it, so the selection must not write, and the re-read after the
+    /// sync must not snap the app back to the file's mode.
+    @Test(arguments: ["local", "remote"])
+    func `set up later leaves the config file untouched and holds across re-reads`(fileMode: String) async throws {
+        let configPath = TestIsolation.tempConfigPath()
+        defer { try? FileManager.default.removeItem(atPath: configPath) }
+        try await TestIsolation.withIsolatedState(env: ["OPENCLAW_CONFIG_PATH": configPath]) {
+            var gateway: [String: Any] = ["mode": fileMode, "auth": ["token": "local-token"]]
+            if fileMode == "remote" {
+                gateway["remote"] = ["transport": "direct", "url": "wss://gateway.example"]
+            }
+            let original: [String: Any] = ["gateway": gateway]
+            try JSONSerialization.data(withJSONObject: original).write(to: URL(fileURLWithPath: configPath))
+            var saves = 0
+            let state = AppState(preview: true, gatewayConfigSaver: { _, _ in
+                saves += 1
+                return false
+            })
+            state._testEnableGatewayConfigSync()
+            state.connectionMode = fileMode == "remote" ? .remote : .local
+            await state._testAwaitGatewayConfigSync()
+
+            state.connectionMode = .unconfigured
+            state.applyConfigOverrides(original)
+            #expect(state._testDirtyGatewayConfigFields.contains("gateway.mode"))
+            await state._testAwaitGatewayConfigSync()
+
+            #expect(saves == 0)
+            #expect(state.gatewayConfigSyncFailure == nil)
+            #expect(state.gatewayConfigIsCurrentForRouting)
+            #expect(state.connectionMode == .unconfigured)
+            #expect(state._testDirtyGatewayConfigFields.isEmpty)
+            #expect(NSDictionary(dictionary: OpenClawConfigFile.loadDict()).isEqual(to: original))
+
+            // The file watcher re-reads the unchanged file: the deferral holds.
+            state.applyConfigOverrides(original)
+            #expect(state.connectionMode == .unconfigured)
+
+            // Another writer edits the gateway section: the deferral lapses and the file wins.
+            var edited = gateway
+            edited["mode"] = "local"
+            edited["port"] = 19001
+            state.applyConfigOverrides(["gateway": edited])
+            #expect(state.connectionMode == .local)
+        }
+    }
+
+    /// An explicit selection through the control CLI wins over a deferred choice even when it
+    /// leaves the file as it is (the file already says local).
+    @Test
+    func `explicit primary selection retires a deferral without a file change`() async throws {
+        let configPath = TestIsolation.tempConfigPath()
+        defer { try? FileManager.default.removeItem(atPath: configPath) }
+        try await TestIsolation.withIsolatedState(env: ["OPENCLAW_CONFIG_PATH": configPath]) {
+            let original: [String: Any] = ["gateway": ["mode": "local", "auth": ["token": "local-token"]]]
+            try JSONSerialization.data(withJSONObject: original).write(to: URL(fileURLWithPath: configPath))
+            var saves = 0
+            let state = AppState(preview: true, gatewayConfigSaver: { _, _ in
+                saves += 1
+                return false
+            })
+            state._testEnableGatewayConfigSync()
+            state.connectionMode = .unconfigured
+            await state._testAwaitGatewayConfigSync()
+            #expect(state.connectionMode == .unconfigured)
+
+            try state.setPrimaryGateway(.local)
+
+            #expect(saves == 0)
+            #expect(state.connectionMode == .local)
+            // A later re-read of the unchanged file keeps the explicit choice.
+            state.applyConfigOverrides(original)
+            #expect(state.connectionMode == .local)
             #expect(NSDictionary(dictionary: OpenClawConfigFile.loadDict()).isEqual(to: original))
         }
     }
 }
 
 @MainActor
+struct ConnectionModeResolverDeferralTests {
+    private func isolatedDefaults() throws -> (UserDefaults, String) {
+        let suiteName = "ai.openclaw.tests.resolver-deferral.\(UUID().uuidString)"
+        return try (#require(UserDefaults(suiteName: suiteName)), suiteName)
+    }
+
+    @Test
+    func `deferred primary outranks the file while its gateway section is unchanged`() throws {
+        let (defaults, suiteName) = try isolatedDefaults()
+        defer { defaults.removePersistentDomain(forName: suiteName) }
+        let root: [String: Any] = ["gateway": ["mode": "local", "port": 18789]]
+        defaults.set(ConnectionModeResolver.gatewayRoutingFingerprint(root), forKey: primaryGatewayDeferredFingerprintKey)
+
+        let resolved = ConnectionModeResolver.resolve(root: root, defaults: defaults)
+        #expect(resolved == EffectiveConnectionMode(mode: .unconfigured, source: .deferredPrimary))
+        // Bookkeeping outside the gateway section does not retire the deferral.
+        let touched: [String: Any] = ["gateway": ["mode": "local", "port": 18789], "meta": ["lastTouchedAt": "now"]]
+        #expect(ConnectionModeResolver.resolve(root: touched, defaults: defaults).source == .deferredPrimary)
+    }
+
+    @Test(arguments: ["mode", "port"])
+    func `an edited gateway section retires the deferral`(edit: String) throws {
+        let (defaults, suiteName) = try isolatedDefaults()
+        defer { defaults.removePersistentDomain(forName: suiteName) }
+        let root: [String: Any] = ["gateway": ["mode": "local", "port": 18789]]
+        defaults.set(ConnectionModeResolver.gatewayRoutingFingerprint(root), forKey: primaryGatewayDeferredFingerprintKey)
+
+        let editedGateway: [String: Any] = edit == "mode"
+            ? ["mode": "remote", "remote": ["url": "wss://gateway.example"]]
+            : ["mode": "local", "port": 19001]
+        let resolved = ConnectionModeResolver.resolve(root: ["gateway": editedGateway], defaults: defaults)
+        #expect(resolved.source == .configMode)
+        #expect(resolved.mode == (edit == "mode" ? .remote : .local))
+    }
+
+    @Test
+    func `the deferral record is a digest and carries no credential bytes`() throws {
+        let root: [String: Any] = [
+            "gateway": ["mode": "local", "auth": ["token": "super-secret-token"], "remote": ["token": "remote-secret"]],
+        ]
+        let fingerprint = try #require(ConnectionModeResolver.gatewayRoutingFingerprint(root))
+        #expect(fingerprint.count == 32)
+        let text = String(decoding: fingerprint, as: UTF8.self)
+        #expect(!text.contains("super-secret-token"))
+        #expect(!text.contains("remote-secret"))
+        #expect(!text.contains("gateway"))
+        // Same section, same digest; a token change changes it.
+        #expect(ConnectionModeResolver.gatewayRoutingFingerprint(root) == fingerprint)
+        let rotated: [String: Any] = ["gateway": ["mode": "local", "auth": ["token": "other"], "remote": ["token": "remote-secret"]]]
+        #expect(ConnectionModeResolver.gatewayRoutingFingerprint(rotated) != fingerprint)
+    }
+
+    @Test
+    func `without a deferral the file mode wins over a stored unconfigured mode`() throws {
+        let (defaults, suiteName) = try isolatedDefaults()
+        defer { defaults.removePersistentDomain(forName: suiteName) }
+        defaults.set(AppState.ConnectionMode.unconfigured.rawValue, forKey: connectionModeKey)
+        let resolved = ConnectionModeResolver.resolve(root: ["gateway": ["mode": "local"]], defaults: defaults)
+        #expect(resolved == EffectiveConnectionMode(mode: .local, source: .configMode))
+    }
+}
+
+@MainActor
 struct AppStateGatewaySyncDraftTests {
     @Test(arguments: [false, true], [false, true])
-    func `unconfigured draft authorizes only an owned mode removal`(hadMode: Bool, ownsMode: Bool) {
+    func `unconfigured draft keeps gateway.mode and gateway.remote`(hadMode: Bool, ownsMode: Bool) {
         var gateway: [String: Any] = [
             "remote": ["url": "wss://previous.example", "token": "previous-remote-token"],
             "auth": ["token": "local-token"],
@@ -1490,16 +1627,18 @@ struct AppStateGatewaySyncDraftTests {
                 remoteUrl: "wss://gateway.example",
                 remoteToken: "",
                 dirtyFields: ownsMode ? [.mode, .remoteUrl] : [.remoteUrl]))
-        #expect(replacement.removesGatewayMode == (hadMode && ownsMode))
         let nextGateway = replacement.root["gateway"] as? [String: Any]
         #expect((nextGateway?["auth"] as? [String: String])?["token"] == "local-token")
+        #expect(nextGateway?["mode"] as? String == (hadMode ? "local" : nil))
         if ownsMode {
-            #expect(nextGateway?["remote"] == nil)
+            // "Set up later": the file is left exactly as it was.
+            #expect(!replacement.changed)
+            #expect(NSDictionary(dictionary: replacement.root).isEqual(to: root))
         } else {
+            // A remote edit while unconfigured still persists its own fields.
+            #expect(replacement.changed)
             #expect((nextGateway?["remote"] as? [String: String])?["url"] == "wss://gateway.example")
         }
-        #expect((replacement.root["gateway"] as? [String: Any])?["mode"] as? String ==
-            (hadMode && !ownsMode ? "local" : nil))
     }
 
     @Test
@@ -1518,7 +1657,7 @@ struct AppStateGatewaySyncDraftTests {
     }
 
     @Test(arguments: [AppState.ConnectionMode.local, .remote])
-    func `configured drafts never authorize mode removal`(mode: AppState.ConnectionMode) {
+    func `configured drafts write their mode`(mode: AppState.ConnectionMode) {
         let replacement = AppState.syncedGatewayRoot(
             currentRoot: ["gateway": ["mode": "remote"]],
             draft: .init(
@@ -1529,7 +1668,8 @@ struct AppStateGatewaySyncDraftTests {
                 remoteUrl: "wss://gateway.example",
                 remoteToken: "",
                 dirtyFields: [.mode]))
-        #expect(!replacement.removesGatewayMode)
+        // The file already says remote: a remote draft is a no-op, a local draft rewrites the mode.
+        #expect(replacement.changed == (mode == .local))
         #expect((replacement.root["gateway"] as? [String: Any])?["mode"] as? String == mode.rawValue)
     }
 }

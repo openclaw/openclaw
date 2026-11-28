@@ -36,6 +36,61 @@ const { prepare, preparePlan, expectAuthError } = createPreparationFixture(prepa
 type Params = Parameters<typeof prepare>[0];
 const xaiKey = (key: string) => createApiKeyCredential("xai", key);
 const pair = () => ({ "openai:platform": apiKey(), "openai:chatgpt": oauth() });
+const routedAlias = {
+  config: providerConfig("arcee", { baseUrl: "https://api.openai.com/v1" }),
+  metadataSnapshot: createPluginMetadataSnapshotFixture({
+    plugins: [
+      {
+        id: "arcee",
+        origin: "bundled",
+        providerAuthAliases: {
+          arcee: { provider: "openai", baseUrls: ["https://api.openai.com/v1"] },
+        },
+      },
+    ],
+  }),
+};
+
+it.each(["anthropic", "openai", "arcee"])(
+  "resolves fallback auth with a session pin owned by %s",
+  async (provider) => {
+    const store = authStore(
+      {
+        "session:work": createApiKeyCredential(provider, "synthetic-pinned-key"),
+        "openai:default": apiKey("synthetic-fallback-key"),
+      },
+      { openai: ["openai:default", "session:work"] },
+    );
+    const { plan, attempts } = prepare({
+      ...platform,
+      ...routedAlias,
+      ...userPin("session:work"),
+      authProfileStore: store,
+      allowAuthProfileFallback: false,
+    });
+    const auth = await getApiKeyForModelCore({
+      model: authModel(plan),
+      cfg: {},
+      store,
+      profileId: attempts[0]?.profileId,
+      lockedProfile: plan.forwardedAuthProfileSource === "user",
+    });
+    expect(auth).toMatchObject({
+      profileId: provider === "openai" ? "session:work" : "openai:default",
+      apiKey: provider === "openai" ? "synthetic-pinned-key" : "synthetic-fallback-key",
+    });
+    expect(plan.forwardedAuthProfileSource).toBe(provider === "openai" ? "user" : "auto");
+  },
+);
+
+it("keeps a same-provider pin strict when an endpoint alias changes its credential realm", () => {
+  expectAuthError({
+    ...routedAlias,
+    provider: " Arcee ",
+    ...userPin("session:work"),
+    profiles: oneProfile("session:work", createApiKeyCredential("arcee", "synthetic-pin")),
+  }).toThrow(/not configured/u);
+});
 
 // Provider-hook behavior is covered by its owner suites.
 vi.mock("../../plugins/provider-runtime.js", () => ({
@@ -237,6 +292,60 @@ it("does not defer identity-only login to native Codex", () => {
 });
 
 it.each([
+  ["observed", false, false],
+  ["observed", true, false],
+  ["authored", false, true],
+  ["authored", true, true],
+] as const)(
+  "explains incompatible Codex auth for %s route (explicit order=%s)",
+  (_name, explicitOrder, authored) => {
+    const message = `${
+      explicitOrder
+        ? "Explicit auth order for openai has no usable profiles."
+        : "No route-compatible authentication source is configured for openai."
+    } Selected model route requires api-key authentication (openai-responses); configured profiles support subscription authentication. Select a model route compatible with the configured account, or select a compatible account.`;
+    // Chat replies show userMessage; without it the text classifies as a failed sign-in.
+    expectAuthError({
+      ...codexHarness,
+      harnessAuthBootstrap: "harness",
+      modelId: "fixture-account-only-model",
+      profiles: oneProfile("openai:private-account", oauth({ access: "private-access-token" })),
+      ...(explicitOrder ? { order: { openai: ["openai:private-account"] } } : {}),
+      ...(authored
+        ? {
+            config: openAIConfig({
+              api: "openai-responses",
+              baseUrl: "https://private.example/v1",
+            }),
+          }
+        : {
+            observedRoutes: [{}, { api: "openai-responses", baseUrl: "https://api.openai.com/v1" }],
+          }),
+    }).toThrow(expect.objectContaining({ message, reason: "auth", userMessage: message }));
+  },
+);
+
+it("still forwards the selected OAuth profile on an observed subscription route", () => {
+  expect(
+    preparePlan({
+      ...codexHarness,
+      harnessAuthBootstrap: "harness",
+      modelId: "fixture-account-only-model",
+      observedRoutes: [
+        {},
+        { api: "openai-chatgpt-responses", baseUrl: "https://chatgpt.com/backend-api/codex" },
+      ],
+      profiles: oneProfile("openai:chatgpt", oauth()),
+      order: { openai: ["openai:chatgpt"] },
+    }),
+  ).toMatchObject({
+    forwardedAuthProfileId: "openai:chatgpt",
+    selectedAuthMode: "oauth",
+    modelRoute: { api: "openai-chatgpt-responses", authRequirement: "subscription" },
+  });
+});
+
+it.each([
   { provider: "anthropic", mode: "api_key" as const },
   { provider: "openai", mode: "oauth" as const },
 ])("rejects conflicting binding metadata $provider/$mode", ({ mode, provider }) => {
@@ -428,6 +537,12 @@ it.each(["profile", "secret-ref"] as const)(
       vi.stubEnv("OPENAI_API_KEY", "");
       vi.stubEnv("OPENAI_PLATFORM_KEY", "secret-ref-platform-key");
     }
+    const readAmbientKey = vi.fn(() => undefined);
+    const env = Object.defineProperty(
+      { OPENAI_PLATFORM_KEY: "secret-ref-platform-key" },
+      "OPENAI_API_KEY",
+      { get: readAmbientKey },
+    );
     const config = openAIConfig({
       apiKey: profile
         ? "configured-platform-key"
@@ -441,13 +556,14 @@ it.each(["profile", "secret-ref"] as const)(
       ...subscription,
       config,
       authProfileStore: store,
-      env: profile ? {} : process.env,
+      env,
     });
     expect(plan).toMatchObject({
       selectedAuthMode: profile ? "api_key" : "api-key",
       modelRoute: apiRoute,
     });
     if (profile) {
+      expect(readAmbientKey).toHaveBeenCalled();
       expect(plan).toMatchObject({
         forwardedAuthProfileId: id,
         forwardedAuthProfileCandidateIds: [id],
@@ -475,6 +591,7 @@ it.each(["profile", "secret-ref"] as const)(
         { kind: "direct", evidence: "provider-config", authorization: "declared" },
       ]);
     } else {
+      expect(readAmbientKey).not.toHaveBeenCalled();
       expect(attempts).toEqual([
         {
           kind: "direct",
@@ -570,12 +687,13 @@ it("keeps retries behind virtual Codex user pins", () => {
   ]);
 });
 
-it.each(["incompatible", "missing"] as const)("rejects %s virtual Codex pins", (failure) => {
+it.each(["incompatible", "missing"] as const)("rejects %s virtual Codex selections", (failure) => {
   const incompatible = failure === "incompatible",
     profileId = incompatible ? "amazon-bedrock:default" : "openai:missing";
   expectAuthError({
     ...nativeCodex,
     ...userPin(profileId),
+    ...(incompatible ? { requiredAuthProfileId: profileId } : {}),
     config: {
       auth: {
         profiles: {

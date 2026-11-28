@@ -2,6 +2,7 @@
 import type { FetchLike } from "@modelcontextprotocol/client";
 import { normalizeOptionalString } from "@openclaw/normalization-core/string-coerce";
 import { racePromiseWithAbortSignal } from "../../packages/retry/src/index.js";
+import type { OpenClawStateLeaseWorkerAuthority } from "../state/openclaw-state-lease-worker-owner.js";
 import {
   type OpenClawStateAsyncLeaseContext,
   withOpenClawStateLeaseAsync,
@@ -10,7 +11,7 @@ import { captureOpenClawStateWorkerContext } from "../state/openclaw-state-worke
 import type { OpenClawStateWorkerContext } from "../state/openclaw-state-worker-context.types.js";
 import { buildMcpOAuthAuthorizationFetch, buildMcpOAuthHttpFetch } from "./mcp-http-fetch.js";
 import {
-  mcpOAuthSignInHint,
+  McpOAuthDiagnosticError,
   requesterMcpOAuthStoreKeyPrefix,
   type McpOAuthIdentity,
 } from "./mcp-oauth-identity.js";
@@ -191,9 +192,7 @@ export async function resolveMcpOAuthAccessToken(
         return tokens.access_token;
       }
       if (!tokens.refresh_token) {
-        throw new Error(
-          `MCP server "${params.identity.serverName}" has expired OAuth credentials. ${mcpOAuthSignInHint(params.identity)}`,
-        );
+        throw new McpOAuthDiagnosticError(params.identity, "has expired OAuth credentials.");
       }
 
       const { auth } = await import("@modelcontextprotocol/client");
@@ -231,9 +230,7 @@ export async function resolveMcpOAuthAccessToken(
       await lease.assertOwned();
       const refreshedTokens = await provider.tokens();
       if (result !== "AUTHORIZED" || !refreshedTokens?.access_token) {
-        throw new Error(
-          `MCP server "${params.identity.serverName}" could not refresh OAuth credentials. ${mcpOAuthSignInHint(params.identity)}`,
-        );
+        throw new McpOAuthDiagnosticError(params.identity, "could not refresh OAuth credentials.");
       }
       return refreshedTokens.access_token;
     },
@@ -279,42 +276,55 @@ export async function recordMcpOAuthAuthorizationRequired(params: {
   );
 }
 
-/** Deletes one OAuth session without racing an in-flight refresh or login. */
-export async function clearMcpOAuthCredentials(identity: McpOAuthIdentity): Promise<void> {
-  await clearMcpOAuthStoreKey(identity.storeKey);
+/**
+ * Deletes one OAuth session without racing an in-flight refresh or login. Callers acting for
+ * a requester pass its live authority; the lease wait can outlast that authority.
+ */
+export async function clearMcpOAuthCredentials(
+  identity: McpOAuthIdentity,
+  authority?: OpenClawStateLeaseWorkerAuthority,
+): Promise<void> {
+  await clearMcpOAuthStoreKey(identity.storeKey, captureOpenClawStateWorkerContext(), authority);
 }
 
 async function clearMcpOAuthStoreKey(
   storeKey: string,
-  context: OpenClawStateWorkerContext = captureOpenClawStateWorkerContext(),
+  context: OpenClawStateWorkerContext,
+  authority?: OpenClawStateLeaseWorkerAuthority,
 ): Promise<void> {
+  authority?.assertCurrent();
   await withMcpOAuthLease(
     storeKey,
     async (lease) => {
-      await clearMcpOAuthStore({ storeKey, lease, context });
+      await clearMcpOAuthStore({ storeKey, lease, context }, authority);
     },
-    undefined,
+    authority?.signal,
     context,
   );
 }
 
 /** Clear operator and requester credentials bound to one configured server URL. */
-export async function clearMcpOAuthServer(identity: McpOAuthIdentity): Promise<void> {
+export async function clearMcpOAuthServer(
+  identity: McpOAuthIdentity,
+  authority?: OpenClawStateLeaseWorkerAuthority,
+): Promise<void> {
   const context = captureOpenClawStateWorkerContext();
-  await clearMcpOAuthStoreKey(identity.storeKey, context);
-  await clearMcpOAuthRequesters(identity, context);
+  await clearMcpOAuthStoreKey(identity.storeKey, context, authority);
+  await clearMcpOAuthRequesters(identity, context, authority);
 }
 
 /** Clear requester credentials without changing the operator row for this server URL. */
 export async function clearMcpOAuthRequesters(
   identity: McpOAuthIdentity,
   context: OpenClawStateWorkerContext = captureOpenClawStateWorkerContext(),
+  authority?: OpenClawStateLeaseWorkerAuthority,
 ): Promise<void> {
   const prefix = requesterMcpOAuthStoreKeyPrefix(identity.serverName, identity.serverUrl);
   const requesterKeys = await listMcpOAuthStoreKeysByPrefix(prefix, context);
   for (const storeKey of requesterKeys) {
-    await clearMcpOAuthStoreKey(storeKey, context);
+    await clearMcpOAuthStoreKey(storeKey, context, authority);
   }
+  authority?.assertCurrent();
   await deleteMcpOAuthPendingAuthorizationsByPrefix(prefix, context);
 }
 

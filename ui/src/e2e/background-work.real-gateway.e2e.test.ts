@@ -1,6 +1,7 @@
 import { createHash } from "node:crypto";
 import fs from "node:fs/promises";
 import path from "node:path";
+import type { GatewaySessionMessageSubscription } from "@openclaw/gateway-client/browser";
 import type { Locator, Page } from "playwright";
 import { expect, it } from "vitest";
 import type {
@@ -11,6 +12,7 @@ import type { OpenClawTestInstance } from "../../../test/helpers/openclaw-test-i
 import { runQaGatewayFixture } from "../../../test/helpers/qa-gateway-cleanup.ts";
 import type { SessionsListResult } from "../api/types.ts";
 import type { ChatHistoryResult } from "../pages/chat/chat-history-snapshot.ts";
+import { openChatPanels } from "../test-helpers/chat-layout-menu.ts";
 import { pairControlUiPage } from "../test-helpers/control-ui-browser-pairing.ts";
 import { createControlUiE2eArtifactDir } from "../test-helpers/control-ui-e2e-artifacts.ts";
 import { waitForControlUiGatewayReady } from "../test-helpers/control-ui-e2e-readiness.ts";
@@ -267,16 +269,24 @@ suite.define(() => {
         const detail = subagents.locator(".chat-subagent-detail");
         proof.stage = "wait for child task transcript";
         await detail.getByText(fixture.childTask, { exact: false }).waitFor();
-        proof.stage = "observe child in-flight startup response";
-        const history = payloadOf(
-          await wire.waitFor(
-            (rpc) =>
-              rpc.request.method === "chat.startup" &&
-              paramsOf(rpc).sessionKey === childKey &&
-              Boolean((rpc.response.payload as ChatHistoryResult | undefined)?.inFlightRun),
-          ),
-        ) as ChatHistoryResult;
-        const run = history.inFlightRun!;
+        proof.stage = "observe child in-flight history subscription";
+        const subscription = payloadOf(
+          await wire.waitFor((rpc) => {
+            const history = (rpc.response.payload as GatewaySessionMessageSubscription | undefined)
+              ?.initialHistory;
+            return (
+              rpc.request.method === "sessions.messages.subscribe" &&
+              paramsOf(rpc).key === childKey &&
+              history?.ok === true &&
+              Boolean((history.payload as ChatHistoryResult).inFlightRun)
+            );
+          }),
+        ) as GatewaySessionMessageSubscription;
+        const history = subscription.initialHistory;
+        if (!history?.ok) {
+          throw new Error("Child history subscription did not succeed");
+        }
+        const run = (history.payload as ChatHistoryResult).inFlightRun!;
         proof.childHistory = { runId: run.runId, sessionAbortable: run.sessionAbortable ?? false };
         expect(run.runId).toBeTruthy();
         expect(run.runId).not.toBe(parentRunId);
@@ -317,11 +327,15 @@ suite.define(() => {
         });
         await capture(page, "desktop-process-output", processStop);
         await assertParent();
-        const switchTab = async (label: string) => {
-          await parent
-            .locator(".side-panel__header .tabstrip-tab")
-            .filter({ hasText: label })
+        const switchMobileTab = async (label: string) => {
+          const panels = parent.locator(
+            '.sidebar-region--mobile-host > .chat-mobile-host[aria-label="Panels"]',
+          );
+          await panels
+            .locator(":scope > .chat-mobile-host__header")
+            .getByRole("button", { name: "Panels", exact: true })
             .click();
+          await panels.getByRole("tab").filter({ hasText: label }).click();
         };
         expect(await parent.locator(".side-panel__header .tabstrip-tab").allTextContents()).toEqual(
           expect.arrayContaining([
@@ -332,7 +346,8 @@ suite.define(() => {
 
         proof.stage = "mobile child Stop through history-owned exact run";
         await page.setViewportSize({ width: 390, height: 844 });
-        await switchTab("Subagents");
+        await openChatPanels(page, "mobile");
+        await switchMobileTab("Subagents");
         const mobileChildStop = detail.getByRole("button", {
           name: `Stop ${fixture.childLabel}`,
           exact: true,
@@ -396,7 +411,7 @@ suite.define(() => {
           .waitFor();
 
         proof.stage = "mobile exact process Stop and retained terminal output";
-        await switchTab("Processes");
+        await switchMobileTab("Processes");
         await processStop.waitFor();
         await capture(page, "mobile-process-output", processStop);
         const beforeProcessStop = wire.completed.length;
@@ -444,7 +459,7 @@ suite.define(() => {
         expect(terminal.tail).toContain(fixture.output);
         await processes.getByText("Stopped", { exact: true }).waitFor();
         await processStop.waitFor({ state: "hidden" });
-        await processes.getByRole("button", { name: "Back to Processes", exact: true }).click();
+        await processes.getByRole("button", { name: "Back to processes", exact: true }).click();
         const finishedToggle = processes.getByRole("button", { name: "Finished 1", exact: true });
         await finishedToggle.waitFor();
         expect(await finishedToggle.getAttribute("aria-expanded")).toBe("false");
@@ -455,7 +470,7 @@ suite.define(() => {
         await capture(
           page,
           "mobile-process-stopped-output",
-          processes.getByRole("button", { name: "Back to Processes", exact: true }),
+          processes.getByRole("button", { name: "Back to processes", exact: true }),
         );
         await assertParent();
         proof.processStop = {
@@ -481,9 +496,9 @@ suite.define(() => {
         await capture(
           page,
           "desktop-reloaded-process-output",
-          processes.getByRole("button", { name: "Back to Processes", exact: true }),
+          processes.getByRole("button", { name: "Back to processes", exact: true }),
         );
-        await switchTab("Subagents");
+        await openChatSidePanelType(parent, "Subagents");
         await childOpen.click();
         await detail.getByText(fixture.childText, { exact: true }).waitFor();
         await assertParent();

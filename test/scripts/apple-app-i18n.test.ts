@@ -2,14 +2,11 @@ import { mkdir, mkdtemp, readFile, readdir, rm, writeFile } from "node:fs/promis
 import os from "node:os";
 import path from "node:path";
 import { expectDefined } from "@openclaw/normalization-core/expect";
-import { expect, it, vi } from "vitest";
+import { expect, it, onTestFailed, vi } from "vitest";
 import * as apple from "../../scripts/apple-app-i18n.ts";
-import { parseNativeI18nInventory } from "../../scripts/native-i18n-inventory.ts";
 import { NATIVE_I18N_LOCALES } from "../../scripts/native-i18n-locales.ts";
 import { decodeXml } from "../../src/shared/xml.ts";
 
-const readInventory = async () =>
-  parseNativeI18nInventory(await readFile("apps/.i18n/native-source.json", "utf8"));
 type Entry = Parameters<typeof apple.buildIosCatalog>[1][number];
 const emptyCatalog = { sourceLanguage: "en", strings: {}, version: "1.0" };
 const unit = (value: string, state = "translated") => ({ stringUnit: { state, value } });
@@ -29,6 +26,7 @@ const probe = vi.hoisted(() => ({
   source: "",
   nativeTranslationFixture: "",
   catalogs: new Map<string, string>(),
+  captureWrites: false,
   paths: [
     "apps/macos/Sources/OpenClaw/OnboardingAISetupView.swift",
     "apps/ios/Sources/Gateway/ExecApprovalPromptDialog.swift",
@@ -57,6 +55,13 @@ vi.mock("node:fs/promises", async (importOriginal) => {
         return actual.readdir(probe.nativeTranslationFixture, { withFileTypes: true });
       }
       return actual.readdir(...args);
+    },
+    writeFile: async (...args: Parameters<typeof actual.writeFile>) => {
+      if (probe.captureWrites && typeof args[0] === "string" && typeof args[1] === "string") {
+        probe.catalogs.set(path.resolve(args[0]), args[1]);
+        return;
+      }
+      await actual.writeFile(...args);
     },
   };
 });
@@ -188,98 +193,186 @@ it("verifies source without a missing locale artifact while strict Apple paths r
   }
 });
 
-it("warns only when obsolete Apple keys are the entire catalog drift", async () => {
-  const root = await installNativeTranslationFixture();
-  await installInfoPlistOutputFixtures();
-  try {
-    const inventory = await readInventory();
-    const translations = await Promise.all(
-      NATIVE_I18N_LOCALES.map(async (locale) =>
-        JSON.parse(await readFile(`apps/.i18n/native/${locale}.json`, "utf8")),
+it("checks both app catalogs through the public strict and obsolete-warning paths", async () => {
+  const stages: Array<{ stage: string; started: number; finished?: number }> = [];
+  const startStage = (stage: string) => {
+    const record: (typeof stages)[number] = { stage, started: performance.now() };
+    if (stages.length < 45) {
+      stages.push(record);
+    }
+    return () => {
+      record.finished = performance.now();
+    };
+  };
+  // Keep failure diagnostics bounded without wrapping or rescheduling the real checks.
+  onTestFailed(() => {
+    const observedAt = performance.now();
+    console.error(
+      "Apple catalog drift stages:",
+      JSON.stringify(
+        stages.map(({ stage, started, finished }) => ({
+          stage,
+          elapsedMs: Math.round((finished ?? observedAt) - started),
+          completed: finished !== undefined,
+        })),
       ),
     );
-    const catalogs = await Promise.all(
-      Object.entries({
-        "apps/ios/Resources/Localizable.xcstrings": apple.buildIosCatalog,
-        "apps/macos/Sources/OpenClaw/Resources/Localizable.xcstrings": apple.buildMacosCatalog,
-      }).map(async ([file, buildCatalog]) => {
-        const filePath = path.resolve(file);
-        const existing = JSON.parse(await readFile(filePath, "utf8"));
-        return { filePath, catalog: buildCatalog(existing, inventory, translations).catalog };
-      }),
-    );
-    for (const { filePath, catalog } of catalogs) {
-      probe.catalogs.set(filePath, apple.serializeAppleCatalog(catalog));
-    }
-    for (const { filePath, catalog } of catalogs) {
-      const warnings: string[] = [];
-      const options = { reportObsolete: (message: string) => warnings.push(message) };
-      const strings = expectDefined(catalog.strings, "active catalog strings");
-      const activeKey = expectDefined(
-        Object.keys(strings).find((key) => key.includes("%@")),
-        "active format key",
-      );
-      const retired = "Retired empty title";
-      const obsolete: typeof catalog & { strings: typeof strings } = {
-        ...catalog,
-        strings: {
-          ...strings,
-          "Retired synthetic %@": { localizations: { en: unit("", "new") } },
-          [retired]: {},
-        },
-      };
-      const serialized = apple.serializeAppleCatalog(obsolete);
-      const reject = async (invalid: string) => {
-        probe.catalogs.set(filePath, invalid);
-        await expect(apple.checkAppleAppI18n(options)).rejects.toThrow();
-      };
-      probe.catalogs.set(filePath, serialized);
-      await expect(apple.checkAppleAppI18n()).rejects.toThrow("is stale");
-      await expect(apple.checkAppleAppI18n(options)).resolves.toBeUndefined();
-      expect(warnings).toEqual([
-        `Apple obsolete catalog rows: ${path.relative(process.cwd(), filePath).replaceAll("\\", "/")} (keys=2)`,
-      ]);
-
-      for (const row of [
-        "null",
-        "42",
-        '{"localizations":null}',
-        '{"localizations":{"en":42}}',
-        '{"localizations":{"en":{"stringUnit":null}}}',
-        '{"localizations":{"en":{"stringUnit":{"state":"new"}}}}',
-        '{"localizations":{"en":{"stringUnit":{"state":42,"value":"Retired"}}}}',
-        '{"comment":42}',
-        '{"localizations":{"en":{"variations":{}}}}',
-      ]) {
-        await reject(serialized.replace(`"${retired}": {}`, `"${retired}": ${row}`));
-      }
-
-      const mutate = (change: (copy: typeof obsolete, row: (typeof strings)[string]) => void) => {
-        const copy = structuredClone(obsolete);
-        change(copy, expectDefined(copy.strings[activeKey], "active catalog entry"));
-        return apple.serializeAppleCatalog(copy);
-      };
-      for (const invalid of [
-        mutate((copy) => delete copy.strings[activeKey]),
-        mutate((_copy, row) => delete row.localizations?.de),
-        mutate((_copy, row) => {
-          expectDefined(row.localizations?.de?.stringUnit, "German format unit").value =
-            "Missing format argument";
+  });
+  const root = await installNativeTranslationFixture();
+  try {
+    // Source PRs defer generated locale files; normalize all sibling artifacts in memory.
+    probe.captureWrites = true;
+    const finishSync = startStage("sync");
+    const { build, macosBuild } = await apple.syncAppleAppI18n();
+    finishSync();
+    for (const [platform, filePath, catalog] of [
+      ["ios", path.resolve("apps/ios/Resources/Localizable.xcstrings"), build.catalog],
+      [
+        "macos",
+        path.resolve("apps/macos/Sources/OpenClaw/Resources/Localizable.xcstrings"),
+        macosBuild.catalog,
+      ],
+    ] as const) {
+      const finishPrepare = startStage(`${platform}:prepare`);
+      probe.catalogs.set(
+        filePath,
+        apple.serializeAppleCatalog({
+          ...catalog,
+          strings: { ...catalog.strings, "Retired empty title": {} },
         }),
-        mutate((_copy, row) => Object.assign(row, { comment: "Unexpected metadata" })),
-        apple.serializeAppleCatalog({ ...obsolete, sourceLanguage: "fr" }),
-        apple.serializeAppleCatalog({ ...obsolete, version: "2.0" }),
-        `${serialized}\n`,
-        `${serialized}malformed\n`,
-      ]) {
-        await reject(invalid);
-      }
+      );
+      finishPrepare();
+      const finishStrict = startStage(`${platform}:strict-stale`);
+      await expect(apple.checkAppleAppI18n()).rejects.toThrow("is stale");
+      finishStrict();
+      const finishWarning = startStage(`${platform}:obsolete-warning`);
+      const warnings: string[] = [];
+      await expect(
+        apple.checkAppleAppI18n({ reportObsolete: (message) => warnings.push(message) }),
+      ).resolves.toBeUndefined();
+      expect(warnings).toEqual([
+        `Apple obsolete catalog rows: ${path.relative(process.cwd(), filePath).replaceAll("\\", "/")} (keys=1)`,
+      ]);
+      finishWarning();
+      const finishRestore = startStage(`${platform}:restore`);
       probe.catalogs.set(filePath, apple.serializeAppleCatalog(catalog));
+      finishRestore();
     }
   } finally {
+    probe.captureWrites = false;
     await removeNativeTranslationFixture(root);
   }
 });
+
+it.each(["ios", "macos"] as const)(
+  "warns only when obsolete %s keys are the entire catalog drift",
+  (platform) => {
+    const buildCatalog = platform === "ios" ? apple.buildIosCatalog : apple.buildMacosCatalog;
+    const inventory = [makeEntry("format", "Active %@", [site("ui-call", platform)])];
+    const { catalog } = buildCatalog(emptyCatalog, inventory, []);
+    const strings = expectDefined(catalog.strings, "active catalog strings");
+    const activeKey = "Active %@";
+    const active = expectDefined(strings[activeKey], "active catalog entry");
+    expectDefined(active.localizations, "active localizations").de = unit("Aktiv %@");
+    const retired = "Retired empty title";
+    const obsolete: typeof catalog & { strings: typeof strings } = {
+      ...catalog,
+      strings: {
+        ...strings,
+        "Retired synthetic %@": { localizations: { en: unit("", "new") } },
+        [retired]: {},
+      },
+    };
+    const serialized = apple.serializeAppleCatalog(obsolete);
+    const warnings: string[] = [];
+    const reportObsolete = (message: string) => warnings.push(message);
+    const check = (actual: string, report?: (message: string) => void) => {
+      // Rebuild from each input: translated units survive generation and must still pass
+      // semantic validation after comparison, just as in the public check.
+      const build = buildCatalog(JSON.parse(actual) as typeof catalog, inventory, []);
+      apple.assertAppleCatalogCurrent(platform, actual, build.catalog, report);
+      apple.validateAppleCatalog(platform, build.catalog);
+    };
+    expect(() => check(serialized)).toThrow("is stale");
+    expect(() => check(serialized, reportObsolete)).not.toThrow();
+    expect(warnings).toEqual([`Apple obsolete catalog rows: ${platform} (keys=2)`]);
+
+    for (const row of [
+      "null",
+      "42",
+      '{"localizations":null}',
+      '{"localizations":{"en":42}}',
+      '{"localizations":{"en":{"stringUnit":null}}}',
+      '{"localizations":{"en":{"stringUnit":{"state":"new"}}}}',
+      '{"localizations":{"en":{"stringUnit":{"state":42,"value":"Retired"}}}}',
+      '{"comment":42}',
+      '{"localizations":{"en":{"variations":{}}}}',
+    ]) {
+      expect(() =>
+        check(serialized.replace(`"${retired}": {}`, `"${retired}": ${row}`), reportObsolete),
+      ).toThrow();
+    }
+
+    const mutate = (change: (copy: typeof obsolete, row: (typeof strings)[string]) => void) => {
+      const copy = structuredClone(obsolete);
+      change(copy, expectDefined(copy.strings[activeKey], "active catalog entry"));
+      return apple.serializeAppleCatalog(copy);
+    };
+    const invalidCatalogs = [
+      mutate((copy) => delete copy.strings[activeKey]),
+      mutate((_copy, row) => delete row.localizations?.de),
+      mutate((_copy, row) => {
+        expectDefined(row.localizations?.de?.stringUnit, "German format unit").value =
+          "Missing format argument";
+      }),
+      mutate((_copy, row) => Object.assign(row, { comment: "Unexpected metadata" })),
+      apple.serializeAppleCatalog({ ...obsolete, sourceLanguage: "fr" }),
+      apple.serializeAppleCatalog({ ...obsolete, version: "2.0" }),
+      `${serialized}\n`,
+      `${serialized}malformed\n`,
+    ];
+    for (const invalid of invalidCatalogs) {
+      expect(() => check(invalid, reportObsolete)).toThrow();
+    }
+
+    const translated = structuredClone(catalog);
+    expectDefined(
+      translated.strings?.[activeKey]?.localizations?.de?.stringUnit,
+      "translated German unit",
+    ).value = "Anderer gültiger %@";
+    expect(() => check(apple.serializeAppleCatalog(translated))).not.toThrow();
+    expect(() =>
+      check(
+        apple.serializeAppleCatalog({
+          ...obsolete,
+          strings: {
+            ...obsolete.strings,
+            [activeKey]: expectDefined(translated.strings?.[activeKey], "translated entry"),
+          },
+        }),
+        reportObsolete,
+      ),
+    ).not.toThrow();
+
+    const invalidTranslation = structuredClone(translated);
+    expectDefined(
+      invalidTranslation.strings?.[activeKey]?.localizations?.de?.stringUnit,
+      "translated German unit",
+    ).value = "Missing format argument";
+    const invalidBuild = buildCatalog(invalidTranslation, inventory, []);
+    // A translated value can be current byte-for-byte and still violate placeholders.
+    expect(() =>
+      apple.assertAppleCatalogCurrent(
+        platform,
+        apple.serializeAppleCatalog(invalidTranslation),
+        invalidBuild.catalog,
+      ),
+    ).not.toThrow();
+    expect(() => apple.validateAppleCatalog(platform, invalidBuild.catalog)).toThrow(
+      "placeholder drift in de",
+    );
+  },
+);
 
 it("routes merged sites by coupled path and kind while preserving shipped translations", () => {
   const coveredMacosEntries: Entry[] = [

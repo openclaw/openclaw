@@ -1,7 +1,17 @@
 /* @vitest-environment jsdom */
 
 import { afterEach, expect, it, vi } from "vitest";
+import {
+  buildUsageModelCohortReport,
+  prepareUsageModelCohorts,
+  selectUsageModelCohorts,
+} from "../../../../src/shared/usage-model-cohorts.js";
+import {
+  buildUsageOverview,
+  compactUsageOverviewSession,
+} from "../../../../src/shared/usage-overview.js";
 import * as downloads from "../../lib/download.ts";
+import * as toasts from "../../lib/toast.ts";
 import { selectUsageExport } from "./export-menu.test-support.ts";
 import type { UsageJsonExport } from "./types.ts";
 import {
@@ -11,11 +21,12 @@ import {
   loadUsagePage,
   showRecentSessions,
   queryUsagePage,
+  selectUsageSession,
   settleUsagePage,
   usageCalls,
 } from "./usage-page.test-support.ts";
-import { texts } from "./view-render.test-support.ts";
-import { buildAggregatesFromSessions } from "./view.test-support.ts";
+import { openUsageFilter, texts } from "./view-render.test-support.ts";
+import { buildAggregatesFromSessions, usageTotals } from "./view.test-support.ts";
 
 afterEach(cleanupUsagePageTest);
 const sortedKeys = (labels: string[]) =>
@@ -118,25 +129,26 @@ it.each<
     }
     if (menuProvider) {
       expect(texts(page.element, ".session-bar-title")).toEqual(["Team Planning"]);
-      const trigger = page.querySelector<HTMLButtonElement>(
-        '[id="usage-filter-provider:trigger"]',
-      )!;
-      trigger.click();
-      await vi.waitFor(() => expect(trigger.getAttribute("aria-expanded")).toBe("true"));
-      page
-        .querySelector<HTMLButtonElement>(
-          '[id="usage-filter-provider:content"] [data-value="option:openai"]',
-        )!
+      const { surface } = openUsageFilter(page, "Provider");
+      await vi.waitFor(() =>
+        expect(
+          surface.querySelector('[role="menuitemcheckbox"][aria-label="openai"]'),
+        ).not.toBeNull(),
+      );
+      surface
+        .querySelector<HTMLButtonElement>('[role="menuitemcheckbox"][aria-label="openai"]')!
         .click();
       await vi.waitFor(() =>
         expect(usageCalls(request).at(-1)?.[1]).toMatchObject({
-          query: page.querySelector<HTMLInputElement>(".usage-query-input")!.value.trim(),
+          query: page
+            .querySelector<HTMLInputElement>(".usage-filter-menu__query input")!
+            .value.trim(),
         }),
       );
       await settleUsagePage(page);
-      trigger.click();
+      page.querySelector<HTMLButtonElement>(".usage-filter-menu__trigger")!.click();
       expect
-        .soft(page.querySelector<HTMLInputElement>(".usage-query-input")!.value)
+        .soft(page.querySelector<HTMLInputElement>(".usage-filter-menu__query input")!.value)
         .toBe(`${query} provider:openai `);
       expect.soft(texts(page.element, ".usage-metric-badge strong")).toEqual(["100", "$1.00", "1"]);
     }
@@ -208,3 +220,213 @@ it.each<
     }
   },
 );
+
+it.each([false, true])(
+  "requires a refresh before exporting a replaced physical session (selected: %s)",
+  async (selected) => {
+    const { result } = cacheSnapshot("fresh");
+    const key = "agent:main:reused";
+    let sessionId = "first-instance";
+    const request = async (method: string) =>
+      method === "sessions.usage"
+        ? {
+            ...result,
+            sessions: [
+              {
+                key,
+                agentId: "main",
+                sessionId,
+                label: "Notebook",
+                usage: result.totals,
+                contextWeight: contextWeight(sessionId),
+              },
+            ],
+          }
+        : { providers: [], points: [], logs: [] };
+    const download = vi.spyOn(downloads, "downloadTextFile").mockImplementation(() => {});
+    const toast = vi.spyOn(toasts, "showToast").mockReturnValue(true);
+    const { page } = await loadUsagePage(request);
+    await showRecentSessions(page);
+    if (selected) {
+      selectUsageSession(page);
+      await settleUsagePage(page);
+    }
+    expect(page.read().data.sessions[0]?.sessionId).toBe("first-instance");
+    const exportJson = () => selectUsageExport(page.querySelector(".usage-export-menu")!, "json");
+    sessionId = "replacement-instance";
+    await exportJson();
+    await settleUsagePage(page);
+    expect(download).not.toHaveBeenCalled();
+    expect(toast).toHaveBeenCalledWith(
+      expect.objectContaining({ message: expect.stringContaining("Refresh usage and try again") }),
+    );
+
+    await page.refresh();
+    await settleUsagePage(page);
+    expect(page.read().data.sessions[0]?.sessionId).toBe(sessionId);
+    await exportJson();
+    await vi.waitFor(() => expect(download).toHaveBeenCalledOnce());
+    const payload = JSON.parse(download.mock.calls[0]![1]) as UsageJsonExport;
+    expect(payload.sessions).toMatchObject([
+      { key, sessionId, contextWeight: contextWeight(sessionId) },
+    ]);
+  },
+);
+
+it.each([false, true])("exports unchanged cohorts (tied agents: %s)", async (tiedAgents) => {
+  const { result } = cacheSnapshot("fresh");
+  const rows = [
+    ...(tiedAgents ? [{ agentId: "B", model: "gamma", cost: 0.06 }] : []),
+    { agentId: "A", model: "alpha", cost: 0.02 },
+    { agentId: "A", model: "beta", cost: 0.01 },
+    { agentId: "A", model: "alpha", cost: 0.03 },
+  ].map(({ agentId, model, cost }, i) => ({
+    key: `agent:${agentId}:session-${i}`,
+    sessionId: `instance-${i}`,
+    agentId,
+    model,
+    usage: usageTotals(1, cost),
+  }));
+  const dayBucket = { mode: "utc-offset", utcOffsetMinutes: 0 } as const;
+  const cohorts = prepareUsageModelCohorts(rows, dayBucket);
+  const selection = selectUsageModelCohorts(cohorts, {})!;
+  const overview = buildUsageModelCohortReport(
+    selection,
+    {},
+    dayBucket,
+    rows.map((row) => compactUsageOverviewSession(row, new Set())),
+  );
+  const details = buildUsageOverview({ rows, options: {}, dayBucket, compact: false });
+  expect(selection.cohorts).toHaveLength(tiedAgents ? 3 : 2);
+  expect(overview.aggregates.byAgent.map((row) => row.agentId)).toEqual(
+    tiedAgents ? ["A", "B"] : ["A"],
+  );
+  expect(details.aggregates.byAgent.map((row) => row.agentId)).toEqual(
+    tiedAgents ? ["B", "A"] : ["A"],
+  );
+
+  const download = vi.spyOn(downloads, "downloadTextFile").mockImplementation(() => {});
+  const { page } = await loadUsagePage(async (method: string, params?: { projection?: string }) =>
+    method === "sessions.usage"
+      ? { ...result, ...(params?.projection === "overview" ? overview : details) }
+      : { providers: [] },
+  );
+  expect(page.read().filters.selectedSessions).toHaveLength(0);
+  expect(page.read().data.totals?.totalCost).toBe(overview.totals.totalCost);
+  await selectUsageExport(page.querySelector(".usage-export-menu")!, "json");
+  await vi.waitFor(() => expect(download).toHaveBeenCalledOnce());
+  const payload = JSON.parse(download.mock.calls[0]![1]) as UsageJsonExport;
+  expect(payload.aggregates.byAgent).toEqual(details.aggregates.byAgent);
+  expect(payload.sessions).toHaveLength(rows.length);
+  expect(new Set(payload.sessions.map((row) => row.sessionId))).toEqual(
+    new Set(rows.map((row) => row.sessionId)),
+  );
+  expect(payload.totals).toMatchObject({
+    totalTokens: rows.length,
+    totalCost: tiedAgents ? 0.12 : 0.06,
+  });
+});
+
+it("exports the detailed latency percentile after refreshing the overview", async () => {
+  const { result } = cacheSnapshot("fresh");
+  const totals = usageTotals(101, 12.625);
+  let count = 101;
+  const { page } = await loadUsagePage(async (method: string, params?: { projection?: string }) => {
+    if (method !== "sessions.usage") {
+      return { providers: [] };
+    }
+    // Two quarters contain 100 replies at 100 ms and one at 10,000 ms, respectively.
+    const latency = {
+      count,
+      minMs: 100,
+      maxMs: 10_000,
+      avgMs: 20_000 / 101,
+      p95Ms: params?.projection === "overview" ? 10_000 : 100,
+    };
+    const sessions = [
+      {
+        key: "agent:main:notebook",
+        sessionId: "notebook",
+        usage: { ...totals, latency, dailyLatency: [{ date: result.startDate, ...latency }] },
+      },
+    ];
+    return { ...result, sessions, totals, aggregates: buildAggregatesFromSessions(sessions) };
+  });
+  const download = vi.spyOn(downloads, "downloadTextFile").mockImplementation(() => {});
+  const toast = vi.spyOn(toasts, "showToast").mockReturnValue(true);
+  const exportJson = () => selectUsageExport(page.querySelector(".usage-export-menu")!, "json");
+  await page.refresh();
+  await settleUsagePage(page);
+  expect(page.read().data.aggregates?.latency?.p95Ms).toBe(10_000);
+  await exportJson();
+  await vi.waitFor(() => expect(download).toHaveBeenCalledOnce());
+  const payload = JSON.parse(download.mock.calls[0]![1]) as UsageJsonExport;
+  expect(payload.aggregates.latency?.p95Ms).toBe(100);
+  expect(payload.aggregates.dailyLatency).toMatchObject([{ date: result.startDate, p95Ms: 100 }]);
+  expect(payload.sessions[0]?.usage?.latency?.p95Ms).toBe(100);
+
+  count++;
+  await exportJson();
+  await vi.waitFor(() =>
+    expect(toast).toHaveBeenCalledWith(
+      expect.objectContaining({ message: expect.stringContaining("Refresh usage and try again") }),
+    ),
+  );
+  expect(download).toHaveBeenCalledOnce();
+});
+
+it("requires a refresh when an unbilled message changes the displayed usage", async () => {
+  const { result } = cacheSnapshot("fresh");
+  let userMessages = 0;
+  const read = () => {
+    const row = {
+      key: "agent:main:notebook",
+      sessionId: "notebook",
+      usage: {
+        ...usageTotals(7, 0.75),
+        messageCounts: {
+          total: 1 + userMessages,
+          user: userMessages,
+          assistant: 1,
+          toolCalls: 0,
+          toolResults: 0,
+          errors: 0,
+        },
+      },
+    };
+    return {
+      ...result,
+      sessions: [row],
+      totals: usageTotals(7, 0.75),
+      aggregates: buildAggregatesFromSessions([row]),
+    };
+  };
+  const { page } = await loadUsagePage(async (method: string) =>
+    method === "sessions.usage" ? read() : { providers: [] },
+  );
+  const download = vi.spyOn(downloads, "downloadTextFile").mockImplementation(() => {});
+  const toast = vi.spyOn(toasts, "showToast").mockReturnValue(true);
+  const exportJson = () => selectUsageExport(page.querySelector(".usage-export-menu")!, "json");
+  expect(page.read().data.aggregates?.messages.total).toBe(1);
+  userMessages++;
+  await exportJson();
+  await vi.waitFor(() =>
+    expect(toast).toHaveBeenCalledWith(
+      expect.objectContaining({ message: expect.stringContaining("Refresh usage and try again") }),
+    ),
+  );
+  expect(download).not.toHaveBeenCalled();
+
+  await page.refresh();
+  await settleUsagePage(page);
+  expect(page.read().data.aggregates?.messages.total).toBe(2);
+  await exportJson();
+  await vi.waitFor(() => expect(download).toHaveBeenCalledOnce());
+  const payload = JSON.parse(download.mock.calls[0]![1]) as UsageJsonExport;
+  expect(payload.totals).toMatchObject({ totalTokens: 7, totalCost: 0.75 });
+  expect(payload.sessions[0]).toMatchObject({
+    sessionId: "notebook",
+    usage: { messageCounts: { user: 1 } },
+  });
+  expect(payload.aggregates.messages.total).toBe(2);
+});

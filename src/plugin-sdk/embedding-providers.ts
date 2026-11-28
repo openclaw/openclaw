@@ -4,7 +4,7 @@ export {
   EMBEDDING_DEADLINE_CONTROL,
   type EmbeddingDeadlineControl,
   type EmbeddingDeadlineControlOptions,
-} from "../plugins/embedding-provider-types.js";
+} from "../plugins/embedding-provider-runtime-types.js";
 
 export {
   getEmbeddingProvider,
@@ -14,11 +14,14 @@ export {
 export type {
   EmbeddingInput,
   EmbeddingProvider,
-  EmbeddingProviderAdapter,
   EmbeddingProviderCallOptions,
-  EmbeddingProviderCreateOptions,
-  EmbeddingProviderCreateResult,
   EmbeddingProviderIndexIdentity,
   EmbeddingProviderRuntime,
   EmbeddingUsage,
-} from "../plugins/embedding-providers.js";
+} from "../plugins/embedding-provider-runtime-types.js";
+export type {
+  EmbeddingMediaModality,
+  EmbeddingProviderAdapter,
+  EmbeddingProviderCreateOptions,
+  EmbeddingProviderCreateResult,
+} from "../plugins/embedding-provider-types.js";

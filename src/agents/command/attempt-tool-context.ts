@@ -1,4 +1,4 @@
-import { resolveConfiguredCommandOwners } from "../../auto-reply/command-auth.js";
+import { resolveConfiguredCommandOwners } from "../../auto-reply/command-owner-facts.js";
 import { resolveOwnerPromptNumbers } from "../owner-display.js";
 import type { AgentAttemptParams } from "./attempt-execution.types.js";
 
@@ -25,6 +25,7 @@ export function buildCommandAttemptToolContext(
     currentInboundAudio: params.runContext.currentInboundAudio,
     replyToMode: params.runContext.replyToMode,
     senderId: params.runContext.senderId,
+    mcpRequesterProfileId: params.runContext.mcpRequesterProfileId,
     senderIsOwner: params.opts.senderIsOwner,
     // Owners are a config fact, so completion turns render the user turn's prompt section.
     ownerNumbers: resolveOwnerPromptNumbers({

@@ -72,6 +72,10 @@ it("orders personal instructions in a remapped workspace", async () => {
     expect(turn.includes("alice preferences.")).toBe(profile === "alice");
     expect(turn.includes("bob preferences.")).toBe(profile === "bob");
     expect(turn.includes("belongs to this session")).toBe(Boolean(profile));
+    const personal = context.personalPersonaInstructions ?? "";
+    expect(personal).not.toContain("Shared preferences.");
+    expect(personal.includes("<AGENT_SOUL>")).toBe(Boolean(profile));
+    expect(personal.includes(`${profile} preferences.`)).toBe(Boolean(profile));
     expect(context.personaFiles).toEqual([
       { path: path.join(projectedWorkspace, "SOUL.md"), content: "Agent voice." },
       { path: path.join(projectedWorkspace, "IDENTITY.md"), content: "Agent identity." },
@@ -103,6 +107,32 @@ it("routes root memory before budgeting and keeps nested memory as context", asy
   expect(context.promptContextFiles).toEqual([contextFile(nestedMemory)]);
   expect(context.instructionSnapshot.files).toEqual([contextFile(instructions)]);
 });
+
+it.each(["full", "instructions-only"] as const)(
+  "keeps only root instructions in the projected %s snapshot",
+  async (scope) => {
+    const context = await prepare(
+      [
+        bootstrapFile("AGENTS.md", "Root operating rules."),
+        bootstrapFile("AGENTS.md", "Nested project rules.", "pkg/AGENTS.md"),
+      ],
+      {
+        scope,
+        projectPath: (filePath) => path.join("/sandbox", path.relative(workspaceDir, filePath)),
+      },
+    );
+    expect(context.instructionSnapshot.files).toEqual([
+      { path: path.join("/sandbox", "AGENTS.md"), content: "Root operating rules." },
+    ]);
+    expect(context.instructionSnapshot.instructions).toContain("Root operating rules.");
+    expect(context.instructionSnapshot.instructions).not.toContain("Nested project rules.");
+    expect(context.promptContextFiles).toEqual(
+      scope === "full"
+        ? [{ path: path.join("/sandbox", "pkg", "AGENTS.md"), content: "Nested project rules." }]
+        : [],
+    );
+  },
+);
 
 it("passes agent context to memory guidance without MEMORY.md", async () => {
   const promptBuilder = (context: {

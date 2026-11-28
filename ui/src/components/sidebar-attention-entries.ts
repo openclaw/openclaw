@@ -21,16 +21,19 @@ type SidebarInboxEntryBase<
   severity: Severity;
 };
 
-export type SidebarAttentionItem = SidebarInboxEntryBase<"automations" | "system"> & {
+export type SidebarAttentionItem = SidebarInboxEntryBase<"system"> & {
   type: "attention";
-  kind: Exclude<SidebarAttentionKind, "scopeUpgrade" | "updateAvailable" | "outbox">;
+  kind: Exclude<SidebarAttentionKind, "scopeUpgrade" | "outbox">;
   icon: IconName;
   label: string;
   detail: string;
-  meta?: { context?: string; status: string; time: string };
+  meta?: { context?: string; status: string };
+  arrivedAtMs?: number;
   action:
-    | { kind: "navigate"; routeId: NavigationRouteId }
-    | { kind: "askCustodian"; alert: CustodianAlert };
+    | { kind: "navigate"; routeId: NavigationRouteId; search?: string }
+    | { kind: "askCustodian"; alert: CustodianAlert }
+    | { kind: "openClawIdRecovery"; label: string }
+    | { kind: "openClawIdBrowserApproval"; remote: boolean; label: string };
   inlineAction?: { label: string; routeId: NavigationRouteId };
   signature: string;
 };
@@ -54,7 +57,11 @@ export type SidebarInboxEntry =
       held: boolean;
       command: boolean;
     })
-  | (SidebarInboxEntryBase<"system"> & { type: "update" });
+  | (SidebarInboxEntryBase<"system"> & {
+      type: "update";
+      /** A stored dismissal kept while the row is shown without offering it. */
+      retainedDismissal?: SidebarAttentionDismissal | null;
+    });
 
 export function buildScopeUpgradeInboxEntry(params: {
   scopes: readonly string[] | undefined;
@@ -72,6 +79,19 @@ export function buildScopeUpgradeInboxEntry(params: {
       params.state.phase === "error" || params.state.phase === "rejected" ? "error" : "warning",
     state: params.state,
   };
+}
+
+function inboxEntryArrivedAt(entry: SidebarInboxEntry): number | undefined {
+  switch (entry.type) {
+    case "approval":
+      return entry.approval.createdAtMs;
+    case "mention":
+      return entry.mention.createdAt;
+    case "attention":
+      return entry.arrivedAtMs;
+    default:
+      return undefined;
+  }
 }
 
 export function buildSidebarInboxEntries(params: {
@@ -102,8 +122,8 @@ export function buildSidebarInboxEntries(params: {
       requiresAction: true,
       severity: "neutral",
     }));
-  // Preserve the Inbox's action-first order while every tab reads one list.
-  return [
+  // Newest first. Live states have no arrival time, so they stay on top; ties keep action order.
+  const entries: SidebarInboxEntry[] = [
     ...approvals,
     ...(params.outbox ?? []),
     ...(params.update?.severity === "error" ? [params.update] : []),
@@ -113,6 +133,11 @@ export function buildSidebarInboxEntries(params: {
     ...warnings,
     ...mentions,
   ];
+  return entries.toSorted((left, right) => {
+    const leftAt = inboxEntryArrivedAt(left) ?? Infinity;
+    const rightAt = inboxEntryArrivedAt(right) ?? Infinity;
+    return leftAt === rightAt ? 0 : rightAt - leftAt;
+  });
 }
 
 export function sidebarInboxEntryMatchesTab(entry: SidebarInboxEntry, tab: IssueTab): boolean {
@@ -127,7 +152,6 @@ export function sidebarInboxTabCounts(
     all: actionEntries.length,
     approvals: actionEntries.filter((entry) => entry.category === "approvals").length,
     mentions: actionEntries.filter((entry) => entry.category === "mentions").length,
-    automations: actionEntries.filter((entry) => entry.category === "automations").length,
-    system: actionEntries.filter((entry) => entry.category === "system").length,
+    system: actionEntries.filter((entry) => sidebarInboxEntryMatchesTab(entry, "system")).length,
   };
 }

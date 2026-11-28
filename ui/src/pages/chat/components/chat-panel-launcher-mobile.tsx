@@ -1,8 +1,8 @@
 import { createMemo, For, Show } from "solid-js";
-import { Icon } from "../../../components/solid/icon.tsx";
 import { elementRef } from "../../../lib/reactive/element-ref.ts";
 import { t } from "../../../lib/reactive/i18n.ts";
 import type { SidebarSlotId } from "../sidebar-layout.ts";
+import { PanelIcon } from "./chat-panel-icon.tsx";
 import type {
   SidebarPanelDefinition,
   RegionProps,
@@ -10,7 +10,10 @@ import type {
 } from "./chat-sidebar-region-types.ts";
 import "./chat-panel-launcher-mobile.css";
 
-type LauncherDefinition = Pick<SidebarPanelDefinition, "slot" | "label" | "icon" | "available">;
+type LauncherDefinition = Pick<
+  SidebarPanelDefinition,
+  "slot" | "label" | "icon" | "iconSvg" | "available" | "prepare"
+>;
 
 export type MobilePanelLauncherProps = {
   definitions: readonly LauncherDefinition[];
@@ -39,10 +42,15 @@ function LauncherOption(props: {
       type="button"
       class="chat-panel-launcher-mobile__option"
       disabled={!props.definition.available}
-      onClick={() => props.onOpen(props.definition.slot)}
+      onPointerEnter={() => props.definition.prepare?.()}
+      onFocus={() => props.definition.prepare?.()}
+      onClick={() => {
+        props.definition.prepare?.();
+        props.onOpen(props.definition.slot);
+      }}
     >
       <span class="chat-panel-launcher-mobile__icon" aria-hidden="true">
-        <Icon name={props.definition.icon} />
+        <PanelIcon icon={props.definition.icon} iconSvg={props.definition.iconSvg} size={20} />
       </span>
       <span class="chat-panel-launcher-mobile__label">{props.definition.label}</span>
     </button>

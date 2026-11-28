@@ -3,7 +3,7 @@ import { expect, test, vi } from "vitest";
 import { createDeferred } from "../../test/helpers/promise.js";
 import { resolveAgentDir, resolveAgentWorkspaceDir } from "../agents/agent-scope.js";
 import type { AgentCommandGatewayIngressOpts } from "../agents/command/types.js";
-import type { ModelCatalogEntry } from "../agents/model-catalog.js";
+import type { ModelCatalogEntry } from "../agents/model-catalog.types.js";
 import { loadSessionEntry } from "../config/sessions/session-accessor.js";
 import { clearAgentRunContext, registerAgentRunContext } from "../infra/agent-run-registry.js";
 import { subscribePluginSessionsChanged } from "../plugins/services.test-support.js";
@@ -225,7 +225,7 @@ test("sessions.list uses persisted usage and selected model fields", async () =>
   expect(parent?.childSessions).toEqual(["agent:main:dashboard:child"]);
   expect(child).toMatchObject({
     parentSessionKey: "agent:main:main",
-    totalTokens: 3_000,
+    totalTokens: 3_500,
     totalTokensFresh: true,
     estimatedCostUsd: 0.0042,
     modelProvider: "anthropic",
@@ -492,7 +492,7 @@ test("sessions.changed includes live usage metadata without inventing an unprice
     sessionKey: "agent:main:main",
     reason: "patch",
     effectiveResponseUsage: "off",
-    totalTokens: 6_643,
+    totalTokens: 8_470,
     totalTokensFresh: true,
     contextTokens: 123_456,
     estimatedCostUsd: undefined,
@@ -513,22 +513,21 @@ test("sessions.changed mutation events include session management metadata", asy
       }),
     },
   });
+  for (const color of ["purple", null]) {
+    const event = await expectManagementPatch({ color }, { color });
+    const wire: unknown = await Response.json(event).json();
+    for (const field of ["pinned", "pinnedAt", "session.pinned", "session.pinnedAt"]) {
+      expect(wire).not.toHaveProperty(field);
+    }
+  }
   for (const archived of [true, false]) {
     await expectManagementPatch(
       { expectedSessionId: "sess-dev", archived },
       {
         archived,
         archivedAt: archived ? expect.any(Number) : null,
-        ...(archived
-          ? { pinned: false, pinnedAt: null, unread: false, lastReadAt: 20, lastActivityAt: 5 }
-          : {}),
+        ...(archived ? { unread: false, lastReadAt: 20, lastActivityAt: 5 } : {}),
       },
-    );
-  }
-  for (const pinned of [true, false]) {
-    await expectManagementPatch(
-      { pinned },
-      { pinned, pinnedAt: pinned ? expect.any(Number) : null },
     );
   }
   const markUnread = (expected: Record<string, unknown> = {}) =>

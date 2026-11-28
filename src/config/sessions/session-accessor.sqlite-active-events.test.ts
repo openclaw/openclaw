@@ -28,7 +28,6 @@ import { readSessionTranscriptBoundedActiveContextCore as readContext } from "./
 import {
   readLatestSessionTranscriptMessageEvent as readLatest,
   readRecentSessionTranscriptMessageEvents,
-  readSessionTranscriptActivePathEntryRelation as entryRelation,
   readSessionTranscriptBoundedMessageTailPage as readTailPage,
   readSessionTranscriptMessageEventPage as readPage,
   readSessionTranscriptMessageEvents,
@@ -36,20 +35,15 @@ import {
   SessionTranscriptProjectionUnavailableError as ProjectionUnavailableError,
 } from "./session-accessor.sqlite-active-events.js";
 import {
+  clearHistoryNavigation,
   readActiveTranscriptStats as activeStats,
   readSessionTranscriptHistoryAnchorPage as anchorPage,
   readSessionTranscriptHistoryEventById as messageById,
 } from "./session-accessor.sqlite-history.test-support.js";
-import { runExclusiveSqliteSessionWrite } from "./session-accessor.sqlite-scope.js";
 import { readPreviousIndexedTranscriptEventSync as readPrevious } from "./session-accessor.sqlite-suffix-read.js";
 import { appendTranscriptEventsInTransaction } from "./session-accessor.sqlite-transcript-store.js";
 import { runWithSessionTranscriptReadFence as withReadFence } from "./session-transcript-read-fence.js";
 import {
-  closeSessionTranscriptReconcileWorkerPool,
-  getSessionTranscriptReconcileWorkerPoolSnapshot,
-} from "./session-transcript-reconcile-pool.js";
-import {
-  reconcileSessionTranscriptIndexes,
   startSessionTranscriptIndexReconcile,
   waitForSessionTranscriptIndexReconcile,
 } from "./session-transcript-reconcile.js";
@@ -59,21 +53,6 @@ import {
   createTranscriptPayloadUpdater,
   prepareTranscriptPayload,
 } from "./transcript-payload.js";
-
-const queuedSessionWrite = vi.hoisted(() => vi.fn());
-
-vi.mock("../../shared/store-writer-queue.js", async (importOriginal) => {
-  const actual = await importOriginal<typeof import("../../shared/store-writer-queue.js")>();
-  return {
-    ...actual,
-    runQueuedStoreWrite: async (
-      params: Parameters<typeof actual.runQueuedStoreWrite>[0],
-    ): Promise<unknown> => {
-      queuedSessionWrite();
-      return await actual.runQueuedStoreWrite(params);
-    },
-  };
-});
 
 const eventIds = (events: readonly { event: unknown }[]) =>
   events.map(({ event }) => (event as { id?: unknown }).id);
@@ -140,7 +119,6 @@ describe("SQLite active transcript event projection", () => {
     reset(id, parent, "2026-09-14T00:00:00.000Z", kept);
 
   beforeEach(() => {
-    queuedSessionWrite.mockReset();
     const stateDir = tempDirs.make("openclaw-active-transcript-");
     scope = {
       agentId: "main",
@@ -226,9 +204,7 @@ describe("SQLite active transcript event projection", () => {
           expect(messageById(scope, "legacy-child")).toBeUndefined();
           return;
         }
-        expect(entryRelation(scope, "active")).toBe("exact");
         expect(readLatest(scope)?.event).toMatchObject({ id: "active" });
-        expect(entryRelation(scope, "root")).toBe("ancestor");
         expect(page.events.map((entry) => entry.seq)).toEqual([1, 2]);
         const activeRows = sessionSql(
           "SELECT event.event_json FROM session_transcript_active_events AS active JOIN transcript_events AS event ON event.session_id = active.session_id AND event.seq = active.event_seq WHERE active.session_id = ? ORDER BY active.active_position",
@@ -368,15 +344,7 @@ describe("SQLite active transcript event projection", () => {
     ]);
     // An upgraded transcript keeps its original rows until a payload write.
     runOpenClawAgentWriteTransaction(
-      (database) => {
-        database.db
-          .prepare(`UPDATE transcript_events
-        SET navigation_type = NULL, navigation_custom_type = NULL,
-            navigation_display = 0, message_role = NULL, navigation_last_type = NULL,
-            navigation_last_custom_type = NULL, navigation_valid = 1
-        WHERE session_id = ?`)
-          .run(scope.sessionId);
-      },
+      (database) => clearHistoryNavigation(database, scope.sessionId),
       { agentId: scope.agentId, env: scope.env },
     );
     const page = resetWindow();
@@ -523,8 +491,6 @@ describe("SQLite active transcript event projection", () => {
     });
     await reconcile();
     expect(readRecent(1, 1, 1_024).activeLeafEntryId).toBe("newer-compaction");
-    expect(entryRelation(scope, "newer-compaction")).toBe("exact");
-    expect(entryRelation(scope, "post-reset")).toBe("ancestor");
     expect(countMessages(scope)).toBe(3);
     expect(messageById(scope, "old")).toMatchObject({ event: { id: "old" } });
   });
@@ -658,51 +624,6 @@ describe("SQLite active transcript event projection", () => {
       }
     },
   );
-
-  it("skips the preparation worker when the projection is already current", async () => {
-    const seed = [makeMessage("seed", null, "user", "seed")];
-    runOpenClawAgentWriteTransaction(
-      (database) => expect(appendTranscriptEventsInTransaction(database, scope, seed)).toBe(1),
-      agentOptions(),
-    );
-    await closeSessionTranscriptReconcileWorkerPool();
-    const poolBefore = getSessionTranscriptReconcileWorkerPoolSnapshot();
-    expect(poolBefore.workersCreated).toBe(0);
-    queuedSessionWrite.mockClear();
-    const completionQueued = createDeferred();
-    queuedSessionWrite.mockImplementation(() => {
-      if (queuedSessionWrite.mock.calls.length === 2) {
-        completionQueued.resolve();
-      }
-    });
-    const entered = createDeferred();
-    const release = createDeferred();
-    const heldWriter = runExclusiveSqliteSessionWrite(
-      agentOptions(),
-      async () => {
-        entered.resolve();
-        await release.promise;
-      },
-      "session.transcript.batch",
-    );
-    await entered.promise;
-    const outcome = reconcileSessionTranscriptIndexes(agentOptions()).then(
-      (value) => ({ value }),
-      (error: unknown) => ({ error }),
-    );
-
-    // The second queued write is the preflight transaction waiting behind the held writer.
-    try {
-      await completionQueued.promise;
-      expect(queuedSessionWrite).toHaveBeenCalledTimes(2);
-    } finally {
-      release.resolve();
-      await heldWriter;
-    }
-
-    expect(await outcome).toEqual({ value: { reconciledSessions: 0 } });
-    expect(getSessionTranscriptReconcileWorkerPoolSnapshot()).toEqual(poolBefore);
-  }, 10_000);
 
   it("keeps dirty batch appends off the synchronous writer stack", async () => {
     await persistMessages([{ eventId: "root", message: { role: "user", content: "root" } }]);

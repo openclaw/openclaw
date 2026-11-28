@@ -18,18 +18,20 @@ export function spawnProcess(
   options: SpawnOptions,
   initiateSpawn?: SpawnInitiation,
   executionIntent: ProcessExecutionIntent = "gateway-internal",
+  executionScopeKey?: string,
 ): ChildProcess {
   assertAppContainerSpawnSupported(options.stdio);
   const broker = getSpawnBroker();
+  const brokerable = broker && brokerSpawnOptions(options);
   // Anonymous secret pipes and inherited numeric descriptors belong to this process.
   const child =
-    broker && brokerSpawnOptions(options)
+    broker && brokerable
       ? broker.spawn(
           command,
           args,
           options,
           initiateSpawn,
-          executionIntent === "agent-tool" ? getAgentExecCgroup() : undefined,
+          executionIntent === "agent-tool" ? getAgentExecCgroup(executionScopeKey) : undefined,
         )
       : initiateSpawn
         ? initiateSpawn(() =>
@@ -39,7 +41,13 @@ export function spawnProcess(
   if (!options.shell && options.argv0 !== undefined) {
     prepareOomScoreAdjustedSpawn(command, args, options).afterSpawn?.(child.pid);
   }
-  recordChildProcessSpawn(command, child, undefined, args);
+  recordChildProcessSpawn(
+    command,
+    child,
+    undefined,
+    args,
+    brokerable ? "broker" : broker ? "native.stdio" : "native.no-broker",
+  );
   return child;
 }
 
@@ -48,6 +56,7 @@ export async function spawnAndWait(params: {
   assertCurrent?: () => void;
   initiateSpawn?: SpawnInitiation;
   executionIntent?: ProcessExecutionIntent;
+  executionScopeKey?: string;
   argv: string[];
   options: SpawnOptions;
   spawnImpl?: typeof spawnProcess;
@@ -62,6 +71,7 @@ export async function spawnAndWait(params: {
     params.options,
     params.initiateSpawn,
     params.executionIntent,
+    params.executionScopeKey,
   );
   await once(child, "spawn");
   return child;

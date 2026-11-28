@@ -11,7 +11,6 @@ describe("question custom id", () => {
 
     expect(customId).toBe(`ocq:id=${questionId};i=3`);
     expect(customId).toHaveLength(47);
-    expect(customId?.length).toBeLessThanOrEqual(100);
     const parsed = parseCustomId(customId ?? "");
     expect(parsed.key).toBe("ocq");
     expect(parseDiscordQuestionData(parsed.data)).toEqual({ questionId, optionIndex: 3 });

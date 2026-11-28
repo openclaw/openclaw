@@ -1,3 +1,7 @@
+import { EventEmitter } from "node:events";
+import nodeFs from "node:fs";
+import fs from "node:fs/promises";
+import path from "node:path";
 import { vi } from "vitest";
 import type { CodexAppServerStartOptions } from "./app-server/config-contracts.js";
 import type { CodexCatalogIndexRow } from "./session-catalog-index-row.js";
@@ -53,4 +57,45 @@ export function memoryCatalogState({ clone = false } = {}) {
 
 export function catalogWebSocketOptions(url: string): CodexAppServerStartOptions {
   return { transport: "websocket", command: "codex", args: ["app-server"], url, headers: {} };
+}
+
+class ControlledWatcher extends EventEmitter {
+  close = vi.fn();
+  ref() {
+    return this;
+  }
+  unref() {
+    return this;
+  }
+}
+export function watchWithControlledEvents(platform: NodeJS.Platform) {
+  vi.spyOn(process, "platform", "get").mockReturnValue(platform);
+  const watchers: ControlledWatcher[] = [];
+  const watch = vi.spyOn(nodeFs, "watch").mockImplementation(() => {
+    const watcher = new ControlledWatcher();
+    watchers.push(watcher);
+    return watcher;
+  });
+  return {
+    watchers,
+    watch,
+    notifyRename: (file: string) => {
+      const index = watch.mock.calls.findLastIndex(
+        ([directory]) => directory === path.dirname(file),
+      );
+      watchers[index]!.emit("change", "rename", path.basename(file));
+    },
+  };
+}
+export function freezeCatalogDirectoryClocks() {
+  const lstat = fs.lstat;
+  vi.spyOn(fs, "lstat").mockImplementation(async (...args) => {
+    const stat = await lstat(...args);
+    // Delivered events must invalidate healthy caches even on coarse directory clocks.
+    if (stat.isDirectory()) {
+      stat.ctimeMs = 0;
+      stat.mtimeMs = 0;
+    }
+    return stat;
+  });
 }

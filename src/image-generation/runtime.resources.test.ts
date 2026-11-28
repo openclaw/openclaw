@@ -15,8 +15,8 @@ import { clearPluginMetadataLifecycleCaches } from "../plugins/plugin-metadata-l
 import { withPluginRuntimeRegistryScope } from "../plugins/runtime/gateway-request-scope.js";
 import { createDeferredCore } from "../shared/deferred.js";
 import { withEnvAsync } from "../test-utils/env.js";
+import type { ImageGenerationRequest } from "./provider-types.js";
 import { generateImage, type GenerateImageParams } from "./runtime.js";
-import type { ImageGenerationRequest } from "./types.js";
 
 const png = Buffer.from("synthetic-image");
 const cleanups: Array<() => Promise<void>> = [];

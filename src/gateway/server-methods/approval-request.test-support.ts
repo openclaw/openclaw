@@ -3,6 +3,7 @@ import {
   awaitGateBeforeSettlement as awaitGate,
   createDeferred,
 } from "../../../test/helpers/promise.js";
+import { isApprovalRecordVisibleToClient } from "./approval-record-lookup.js";
 import type { GatewayClient, GatewayRequestContext, RespondFn } from "./types.js";
 
 type ApprovalClientLookup = NonNullable<GatewayRequestContext["getApprovalClientConnIds"]>;
@@ -25,11 +26,16 @@ export function createApprovalClient(params: {
   } as GatewayClient;
 }
 
-export function createApprovalClientLookup(clients: GatewayClient[]): ApprovalClientLookup {
+export function createApprovalClientLookup(
+  clients: GatewayClient[],
+  access: Pick<Parameters<typeof isApprovalRecordVisibleToClient>[0], "cfg" | "sessionAccess"> = {},
+): ApprovalClientLookup {
   return (opts = {}) =>
     new Set(
       clients.flatMap((client) =>
         (opts.excludeConnId && client.connId === opts.excludeConnId) ||
+        (opts.record &&
+          !isApprovalRecordVisibleToClient({ record: opts.record, client, ...access })) ||
         !(opts.filter?.(client, opts.record) ?? true) ||
         typeof client.connId !== "string" ||
         !client.connId.length

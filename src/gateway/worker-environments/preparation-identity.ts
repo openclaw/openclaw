@@ -2,10 +2,11 @@ import { sha256Hex } from "@openclaw/normalization-core/node-crypto";
 import { stableStringify } from "@openclaw/normalization-core/stable-stringify";
 import { NODE_WORKER_WORKSPACE_PREPARE_COMMAND } from "../../infra/node-commands.js";
 import type { WorkerProfile } from "../../plugins/types.js";
+import type { WorkerRetentionPolicy } from "../../plugins/worker-retention.types.js";
 import type { EnvironmentRecipe } from "./environment-recipe.js";
 import {
   WorkerPreparationTargetSchema,
-  type WorkerEmptyPreparationIdentity,
+  type WorkerRuntimePreparationIdentity,
   type WorkerPreparationArtifacts,
   type WorkerProjectPreparationIdentity,
 } from "./preparation-identity.schema.js";
@@ -13,13 +14,14 @@ import type { WorkerProjectSnapshot } from "./workspace-git-base.js";
 
 export type WorkerProviderPreparedIntent = {
   providerId: string;
+  retainedPolicy?: WorkerRetentionPolicy;
   profileSnapshot: WorkerProfile &
     (
       | {
           project?: WorkerProjectSnapshot & { preparation?: WorkerProjectPreparationIdentity };
           runtimePreparation?: never;
         }
-      | { project?: never; runtimePreparation: WorkerEmptyPreparationIdentity }
+      | { project?: never; runtimePreparation: WorkerRuntimePreparationIdentity }
     );
 };
 
@@ -29,6 +31,7 @@ export function createWorkerPreparationIdentity(params: {
   profileId: string;
   profileSnapshot: WorkerProfile;
   project?: WorkerProjectSnapshot;
+  imageReserve?: true;
   target: WorkerProjectPreparationIdentity["target"];
   artifacts: WorkerPreparationArtifacts;
   setupRecipe?: string;
@@ -70,12 +73,14 @@ export function createWorkerPreparationIdentity(params: {
     // Providers own the disk fingerprint; unknown providers conservatively retain
     // their settings. Installation and execution mode belong to runtime readiness.
     profile: facts.target.profileKey ?? params.profileSnapshot.settings,
-    project: params.project ? { key: params.project.key } : { source: "empty" },
+    project: params.project
+      ? { key: params.project.key }
+      : { source: params.imageReserve ? "image" : "empty" },
     workspaceProtocol: NODE_WORKER_WORKSPACE_PREPARE_COMMAND,
   };
   const digest = (value: unknown) => sha256Hex(stableStringify(value));
-  // Ready workers still bind exact runtime, profile and commit facts; reusable
-  // disks only need compatible setup and boot inputs.
+  // Ready workers bind exact runtime and profile facts. Their unbound checkout
+  // can advance through the same content preparation used by snapshot forks.
   return {
     key: digest({
       ...compatibility,
@@ -85,10 +90,6 @@ export function createWorkerPreparationIdentity(params: {
         ...profile,
         machineClass: facts.target.machineClass,
         executionMode: params.profileSnapshot.executionMode ?? "worker-turn",
-      },
-      project: {
-        ...compatibility.project,
-        ...(params.project ? { baseCommit: params.project.baseCommit } : {}),
       },
     }),
     cacheKey: digest(compatibility),

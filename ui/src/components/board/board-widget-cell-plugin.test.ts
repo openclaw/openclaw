@@ -532,7 +532,7 @@ describe("plugin board widget cells", () => {
         cell,
         progressTag,
         index === 1
-          ? "No progress card yet"
+          ? "No progress yet."
           : index === 0
             ? "Run focused checks"
             : `Progress for ${resolvedKey}`,

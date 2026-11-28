@@ -367,8 +367,23 @@ it.each([
         : undefined;
     let termination: ReturnType<typeof markSubagentRunTerminated> | undefined;
     let pending: ReturnType<typeof killSubagentRunAdmin> | undefined;
+    let replacement: ReturnType<typeof registerAbort> | undefined;
     let callerAuthorized = true;
     const onResult = callback ? undefined : vi.fn(() => undefined);
+    if (mode === "replacement") {
+      const lifecycle = await import("../../../sessions/session-controller.lifecycle.js");
+      const waitForSettlement = lifecycle.waitForSessionControllerSettlement;
+      vi.spyOn(lifecycle, "waitForSessionControllerSettlement").mockImplementation(
+        (settled, timeoutMs) => {
+          const draining = waitForSettlement(settled, timeoutMs);
+          // Retire the idle fixture only after Stop selects and begins draining it.
+          if (replacement?.entry?.input.settlement.promise === settled) {
+            replacement.cleanup();
+          }
+          return draining;
+        },
+      );
+    }
     try {
       if (mode === "already terminal") {
         termination = markSubagentRunTerminated({ runId, reason: "killed" });
@@ -414,30 +429,27 @@ it.each([
       callerAuthorized = false;
       if (mode === "replacement") {
         rpcSourceTesting.deleteExpected(runId, owner);
-        registerAbort(target);
+        replacement = registerAbort(target);
+        expect(getRpcSource(runId)?.input.abortSignal.aborted).toBe(false);
       }
       releaseTail.resolve();
-      await expect(pending).rejects.toThrow("Caller control revoked");
+      // A revocation after the Stop was admitted applies to the caller's next request.
+      await expect(pending).resolves.toMatchObject({ found: true });
       expect(settlement.status).toBe("fulfilled");
       expect(subagentRuns.get(runId)?.execution.status).toBe("terminal");
       expect(subagentRuns.get(runId)?.endedReason).toBe(SUBAGENT_ENDED_REASON_KILLED);
-      expect(onResult).not.toHaveBeenCalled();
+      expect(onResult).toHaveBeenCalledTimes(1);
       if (mode === "replacement") {
-        expect(getRpcSource(runId)?.input.abortSignal.aborted).toBe(false);
+        expect(replacement?.controller.signal.aborted).toBe(false);
       } else if (mode === "already terminal") {
         expect(owner.input.abortSignal.aborted).toBe(false);
       }
     } finally {
       releaseTail.resolve();
       admission?.release();
+      replacement?.cleanup();
       await Promise.allSettled([termination, pending, execution]);
       registration.cleanup();
-      if (mode === "replacement") {
-        const replacement = getRpcSource(runId);
-        if (replacement) {
-          retireSessionControllerInput(replacement.input);
-        }
-      }
       expectIdle();
     }
   },
@@ -531,12 +543,13 @@ it.for(["canonical", "raw"] as const)(
       expect(untouchedSettlement.status).toBe("pending");
       expect(untouched.controller.signal.aborted).toBe(false);
       releaseCancelled.resolve();
-      await expect(withinTest(pending, signal)).rejects.toThrow("Caller control revoked");
+      // The admitted Stop finishes and reports, although its own abort revoked the caller.
+      await expect(withinTest(pending, signal)).resolves.toMatchObject({ found: true });
       expect(cancelledSettlement.status).toBe("fulfilled");
       expect(untouchedSettlement.status).toBe("pending");
       expect(untouched.controller.signal.aborted).toBe(false);
       expect(untouched.entry!.input.retirementRequested).not.toBe(true);
-      expect(onResult).not.toHaveBeenCalled();
+      expect(onResult).toHaveBeenCalledTimes(1);
     } finally {
       releaseCancelled.resolve();
       releaseUntouched.resolve();

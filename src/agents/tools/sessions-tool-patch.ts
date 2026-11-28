@@ -19,12 +19,8 @@ const SESSIONS_TOOL_RESULT_MAX_BYTES = 3_840;
 const RESOLVED_OMITTED_REASON = "response_budget_exceeded";
 
 function sessionsToolResultFitsBudget(payload: Record<string, unknown>): boolean {
-  const compactSize = boundedJsonUtf8Bytes(payload, SESSIONS_TOOL_RESULT_MAX_BYTES);
-  return (
-    compactSize.complete &&
-    compactSize.bytes <= SESSIONS_TOOL_RESULT_MAX_BYTES &&
-    Buffer.byteLength(JSON.stringify(payload, null, 2), "utf8") <= SESSIONS_TOOL_RESULT_MAX_BYTES
-  );
+  const size = boundedJsonUtf8Bytes(payload, SESSIONS_TOOL_RESULT_MAX_BYTES);
+  return size.complete && size.bytes <= SESSIONS_TOOL_RESULT_MAX_BYTES;
 }
 
 export function withBoundedSessionsResolved(
@@ -76,6 +72,15 @@ export function readSessionsToolPatch(params: Record<string, unknown>): Sessions
       patch[field] = value;
     }
   }
+  if (params.snoozedUntil !== undefined) {
+    const until = params.snoozedUntil;
+    if (until !== null && (typeof until !== "number" || !Number.isInteger(until) || until < 1)) {
+      throw new ToolInputError(
+        "snoozedUntil must be a positive epoch millisecond timestamp or null",
+      );
+    }
+    patch.snoozedUntil = until;
+  }
   if (params.model !== undefined) {
     patch.model =
       normalizeToolModelOverride(readToolStringParam(params, "model", { required: true })) ?? null;
@@ -83,7 +88,11 @@ export function readSessionsToolPatch(params: Record<string, unknown>): Sessions
   if (params.thinkingLevel !== undefined) {
     patch.thinkingLevel = readToolStringParam(params, "thinkingLevel", { required: true });
   }
-  if (Object.keys(patch).length === 0) {
+  const fields = Object.keys(patch);
+  if (patch.pinned !== undefined && fields.length > 1) {
+    throw new ToolInputError("Send pinned separately from shared session settings.");
+  }
+  if (fields.length === 0) {
     throw new ToolInputError("Patch setting required");
   }
   return patch;
@@ -121,8 +130,16 @@ export async function runSessionsToolPatchMany(params: {
           "Archive the current session with a single patch; it is deferred until this run finishes.",
         );
       }
+      if (typeof params.patch.snoozedUntil === "number" && target.isRequesterSession) {
+        throw new ToolInputError(
+          "Snooze the current session with a single patch; it is deferred until this run finishes.",
+        );
+      }
       const expectedSessionId = readToolStringParam(input, "expectedSessionId");
-      if (typeof params.patch.archived === "boolean" && !expectedSessionId) {
+      if (
+        (typeof params.patch.archived === "boolean" || params.patch.snoozedUntil !== undefined) &&
+        !expectedSessionId
+      ) {
         throw new ToolInputError("Session lifecycle action requires a durable session identity");
       }
       targets.push({

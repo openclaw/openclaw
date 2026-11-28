@@ -6,14 +6,25 @@ import {
   encodeMemoryEmbedding,
   hashText,
   MEMORY_CHUNKING_VERSION,
+  normalizeExtraMemoryPathEntries,
 } from "openclaw/plugin-sdk/memory-core-host-engine-storage";
+import { defaultRuntime } from "openclaw/plugin-sdk/memory-core-host-runtime-cli";
+import { registerEmbeddingProvider } from "openclaw/plugin-sdk/plugin-test-runtime";
 import {
   closeOpenClawAgentDatabasesAsync,
   closeOpenClawAgentDatabasesForTest,
 } from "openclaw/plugin-sdk/sqlite-runtime-testing";
 import { expect, it, vi } from "vitest";
+import { runMemoryIndex } from "../cli-index-search.runtime.js";
+import { runMemoryStatus } from "../cli-status.runtime.js";
+import { runInMemoryTestBackgroundContext } from "./background-context.test-support.js";
+import { keepPublishedCacheDuplicates } from "./manager-cache-retention.test-support.js";
 import { createManagerIndexFixture } from "./manager-index.test-support.js";
-import { MEMORY_INDEX_PROVENANCE_VERSION, type MemoryIndexMeta } from "./manager-reindex-state.js";
+import {
+  MEMORY_INDEX_PROVENANCE_VERSION,
+  resolveConfiguredScopeHash,
+  type MemoryIndexMeta,
+} from "./manager-reindex-state.js";
 
 const { closeAllMemorySearchManagers, getMemorySearchManager } = await import("./index.js");
 const embeddings = await import("./embeddings.js");
@@ -28,6 +39,11 @@ const versionKeys = ["chunkingVersion", "provenanceVersion"] as const;
 const versions = {
   chunkingVersion: MEMORY_CHUNKING_VERSION,
   provenanceVersion: MEMORY_INDEX_PROVENANCE_VERSION,
+};
+const stableMultimodal = {
+  enabled: false,
+  modalities: [] as Array<"image" | "audio" | "all">,
+  maxFileBytes: 20 * 1024 * 1024,
 };
 type VersionKey = keyof typeof versions;
 async function closeManager(manager: Awaited<ReturnType<typeof fixture.getFreshManager>>) {
@@ -58,6 +74,22 @@ function updateMeta(db: DatabaseSync, meta: MemoryIndexMeta) {
     JSON.stringify(meta),
   );
 }
+function legacyLocaleScopeHash(workspaceDir: string, extraPaths: string[]) {
+  const normalizedPaths = normalizeExtraMemoryPathEntries(workspaceDir, extraPaths)
+    .map((entry) => {
+      const normalizedPath = entry.path.replaceAll("\\", "/");
+      return entry.pattern ? { path: normalizedPath, pattern: entry.pattern } : normalizedPath;
+    })
+    // v2026.11.5 used the process locale; zh-CN recreates the persisted ordering
+    // that differs from the canonical en-US ordering for these CJK paths.
+    .toSorted((left, right) => JSON.stringify(left).localeCompare(JSON.stringify(right), "zh-CN"));
+  return hashText(
+    JSON.stringify({
+      extraPaths: normalizedPaths,
+      multimodal: { ...stableMultimodal, modalities: [...stableMultimodal.modalities].toSorted() },
+    }),
+  );
+}
 async function publishIndex(
   cfg: ReturnType<typeof createConfig>,
   versionKey?: VersionKey,
@@ -77,10 +109,11 @@ async function publishIndex(
   }
   return dbPath;
 }
-it("rebuilds unchanged prior-version content on the first default search", async () => {
+it("rebuilds unchanged version 6 content on the first default search", async () => {
   const cfg = createConfig();
-  const dbPath = await publishIndex(cfg, "chunkingVersion");
+  const dbPath = await publishIndex(cfg, "chunkingVersion", 6 - MEMORY_CHUNKING_VERSION);
   const manager = await fixture.getFreshManager(cfg, "default");
+  expect(withDatabase(dbPath, readMeta).chunkingVersion).toBe(6);
   expect(await manager.search("alpha", { lexicalOnly: true })).toEqual(alphaResult);
   expect(manager.status().custom?.indexIdentity).toEqual({ status: "valid" });
   expect(withDatabase(dbPath, readMeta).chunkingVersion).toBe(MEMORY_CHUNKING_VERSION);
@@ -99,31 +132,196 @@ it("rebuilds unchanged prior-version content on the first default search", async
   expect(publication()).toEqual(rebuilt);
 });
 
-it("keeps status inspection read-only during an upgrade", async () => {
+it("keeps status inspection read-only during a version 6 upgrade", async () => {
   const cfg = createConfig();
-  const dbPath = await publishIndex(cfg, "chunkingVersion");
+  const dbPath = await publishIndex(cfg, "chunkingVersion", 6 - MEMORY_CHUNKING_VERSION);
   const manager = await fixture.getFreshManager(cfg, "status");
   expect(manager.status().custom?.indexIdentity).toMatchObject({
     status: "mismatched",
     code: "chunking_version",
     owner: "openclaw",
   });
-  expect(withDatabase(dbPath, readMeta).chunkingVersion).toBe(MEMORY_CHUNKING_VERSION - 1);
+  expect(withDatabase(dbPath, readMeta).chunkingVersion).toBe(6);
 });
 
-it.each(versionKeys)("preserves newer %s indexes until explicit reindex", async (versionKey) => {
-  const cfg = createConfig();
-  const dbPath = await publishIndex(cfg, versionKey, 1);
-  const manager = await fixture.getFreshManager(cfg);
-  const embedded = provider.embedBatchCalls;
-  await manager.sync({ reason: "search", force: true });
-  expect(await manager.search("alpha", { lexicalOnly: true })).toEqual([]);
-  expect(withDatabase(dbPath, readMeta)[versionKey]).toBe(versions[versionKey] + 1);
-  expect(provider.embedBatchCalls).toBe(embedded);
-  await manager.sync({ reason: "cli", force: true });
-  expect(await manager.search("alpha", { lexicalOnly: true })).not.toEqual([]);
-  expect(withDatabase(dbPath, readMeta)[versionKey]).toBe(versions[versionKey]);
+it("rebuilds a persisted v2026.11.5 CJK scope hash on normal search", async () => {
+  const extraPaths = ["notes/备", "notes/阿"];
+  const cfg = fixture.createConfig({
+    extraPaths,
+    multimodal: stableMultimodal,
+    vectorEnabled: false,
+  });
+  const dbPath = await publishIndex(cfg);
+  const persistedLegacyHash = legacyLocaleScopeHash(fixture.paths.workspace, extraPaths);
+  const configuredHash = resolveConfiguredScopeHash({
+    workspaceDir: fixture.paths.workspace,
+    extraPaths,
+    multimodal: stableMultimodal,
+  });
+  expect(persistedLegacyHash).not.toBe(configuredHash);
+  withDatabase(dbPath, (db) => updateMeta(db, { ...readMeta(db), scopeHash: persistedLegacyHash }));
+  const previousChunkCount = withDatabase(
+    dbPath,
+    (db) => db.prepare("SELECT count(*) AS count FROM memory_index_chunks").get()?.count,
+  );
+
+  const manager = await fixture.getFreshManager(cfg, "default");
+  expect(await manager.search("alpha", { lexicalOnly: true })).toEqual(alphaResult);
+  expect(manager.status().custom?.indexIdentity).toEqual({ status: "valid" });
+  expect(withDatabase(dbPath, readMeta).scopeHash).toBe(configuredHash);
+  expect(
+    withDatabase(
+      dbPath,
+      (db) => db.prepare("SELECT count(*) AS count FROM memory_index_chunks").get()?.count,
+    ),
+  ).toBe(previousChunkCount);
+  await closeManager(manager);
+
+  const reopened = await fixture.getFreshManager(cfg, "default");
+  expect(await reopened.search("alpha", { lexicalOnly: true })).toEqual(alphaResult);
+  expect(reopened.status().custom?.indexIdentity).toEqual({ status: "valid" });
+  await closeManager(reopened);
 });
+
+it("keeps an existing media index until partial indexing is explicitly enabled", async () => {
+  const media = path.join(fixture.paths.workspace, "media");
+  await fs.mkdir(media);
+  await fs.writeFile(path.join(media, "diagram.png"), "png");
+  await fs.writeFile(path.join(media, "meeting.wav"), "wav");
+  registerEmbeddingProvider({
+    id: "gemini",
+    mediaModalities: ({ model }) =>
+      model === "both" ? ["image", "audio"] : model === "image-only" ? ["image"] : [],
+    create: async () => ({ provider: null }),
+  });
+  const config = (model: string, allowPartial?: boolean) =>
+    fixture.createConfig({
+      provider: "gemini",
+      model,
+      extraPaths: [media],
+      fallback: "none",
+      multimodal: { enabled: true, allowPartial, modalities: ["all"] },
+    });
+  const dbPath = await publishIndex(config("both"));
+  const rows = () =>
+    withDatabase(dbPath, (db) =>
+      db
+        .prepare("SELECT DISTINCT path FROM memory_index_chunks ORDER BY path")
+        .all()
+        .map((row) => row.path),
+    );
+  const note = "memory/2026-01-12.md";
+  expect(rows()).toEqual(["media/diagram.png", "media/meeting.wav", note]);
+  const host = { runInBackgroundContext: runInMemoryTestBackgroundContext };
+  const report = vi.spyOn(defaultRuntime, "writeJson").mockImplementation(() => {});
+  const error = vi.spyOn(defaultRuntime, "error").mockImplementation(() => {});
+  const exitCode = process.exitCode;
+  try {
+    config("image-only");
+    await runMemoryStatus({ agent: "main", json: true }, host);
+    expect(error).toHaveBeenLastCalledWith(
+      expect.stringContaining("Unsupported modalities: audio"),
+    );
+    expect(report).toHaveBeenLastCalledWith([]);
+    expect(process.exitCode).toBe(1);
+    process.exitCode = exitCode;
+    await runMemoryIndex({ agent: "main", force: true }, host);
+    expect(error).toHaveBeenLastCalledWith(
+      expect.stringContaining("Unsupported modalities: audio"),
+    );
+    expect(process.exitCode).toBe(1);
+    expect(rows()).toEqual(["media/diagram.png", "media/meeting.wav", note]);
+    expect(withDatabase(dbPath, readMeta).model).toBe("both");
+    process.exitCode = exitCode;
+
+    for (const [model, skipped, expectedPaths] of [
+      ["image-only", ["audio"], ["media/diagram.png", note]],
+      ["text-only", ["image", "audio"], [note]],
+    ] as const) {
+      const cfg = config(model, true);
+      const before = rows();
+      await runMemoryStatus({ agent: "main", json: true }, host);
+      expect(report).toHaveBeenLastCalledWith([
+        expect.objectContaining({
+          skippedMultimodalModalities: skipped,
+          status: expect.objectContaining({
+            custom: expect.objectContaining({
+              indexIdentity: expect.objectContaining({ status: "mismatched", code: "model" }),
+            }),
+          }),
+        }),
+      ]);
+      expect(rows()).toEqual(before);
+      await runMemoryIndex({ agent: "main", force: true }, host);
+      expect(rows()).toEqual(expectedPaths);
+      expect(withDatabase(dbPath, readMeta).model).toBe(model);
+      const reopened = await fixture.getFreshManager(cfg, "default");
+      expect(reopened.status().custom?.indexIdentity).toEqual({ status: "valid" });
+      expect(await reopened.search("alpha")).toEqual(alphaResult);
+      await closeManager(reopened);
+    }
+  } finally {
+    process.exitCode = exitCode;
+    error.mockRestore();
+    report.mockRestore();
+  }
+});
+
+it("rebuilds changed extra-path scope without serving stale rows", async () => {
+  const oldPath = path.join(fixture.paths.workspace, "notes", "old");
+  const newPath = path.join(fixture.paths.workspace, "notes", "new");
+  await fs.mkdir(oldPath, { recursive: true });
+  await fs.mkdir(newPath, { recursive: true });
+  await fs.writeFile(path.join(oldPath, "entry.md"), "Retired quokka token.");
+  await fs.writeFile(path.join(newPath, "entry.md"), "Current wibble token.");
+  const oldConfig = fixture.createConfig({
+    extraPaths: [oldPath],
+    multimodal: stableMultimodal,
+    vectorEnabled: false,
+  });
+  const dbPath = await publishIndex(oldConfig);
+  const newConfig = fixture.createConfig({
+    extraPaths: [newPath],
+    multimodal: stableMultimodal,
+    vectorEnabled: false,
+  });
+
+  const manager = await fixture.getFreshManager(newConfig, "default");
+  expect(await manager.search("quokka", { lexicalOnly: true })).toEqual([]);
+  expect(await manager.search("wibble", { lexicalOnly: true })).toEqual(
+    expect.arrayContaining([expect.objectContaining({ path: "notes/new/entry.md" })]),
+  );
+  expect(manager.status().custom?.indexIdentity).toEqual({ status: "valid" });
+  expect(withDatabase(dbPath, readMeta).scopeHash).toBe(
+    resolveConfiguredScopeHash({
+      workspaceDir: fixture.paths.workspace,
+      extraPaths: [newPath],
+      multimodal: stableMultimodal,
+    }),
+  );
+  await closeManager(manager);
+});
+
+it.each(
+  versionKeys.flatMap((versionKey) =>
+    (["default", "cli"] as const).map((purpose) => ({ versionKey, purpose })),
+  ),
+)(
+  "preserves newer $versionKey indexes during $purpose search until explicit reindex",
+  async ({ versionKey, purpose }) => {
+    const cfg = createConfig();
+    const dbPath = await publishIndex(cfg, versionKey, 1);
+    const manager = await fixture.getFreshManager(cfg, purpose);
+    const embedded = provider.embedBatchCalls;
+    await manager.sync({ reason: "search", force: true });
+    expect(await manager.search("alpha", { lexicalOnly: true })).toEqual([]);
+    expect(withDatabase(dbPath, readMeta)[versionKey]).toBe(versions[versionKey] + 1);
+    expect(provider.embedBatchCalls).toBe(embedded);
+    await manager.sync({ reason: "cli", force: true });
+    expect(await manager.search("alpha", { lexicalOnly: true })).not.toEqual([]);
+    expect(withDatabase(dbPath, readMeta)[versionKey]).toBe(versions[versionKey]);
+  },
+);
 
 it.each(versionKeys)("serves compatible rows after failed %s rebuild", async (versionKey) => {
   const cfg = createConfig();
@@ -148,6 +346,7 @@ it.each([
 ])(
   "re-embeds unchanged legacy $model cache rows once on ordinary search",
   async ({ model, document, query }) => {
+    keepPublishedCacheDuplicates();
     const cfg = fixture.createConfig({
       model,
       cacheEnabled: true,

@@ -1,6 +1,6 @@
 import { expect, vi } from "vitest";
 import { createDeferred } from "../../test/helpers/promise.js";
-import type { CronJob } from "../cron/types.js";
+import type { CronJob, CronStoredJob } from "../cron/types.js";
 import type {
   ManagedRun,
   ProcessSupervisor,
@@ -25,8 +25,8 @@ export const streamStateArgs = (patch: Partial<CronJob["state"]>) => [
   expect.any(String),
 ];
 
-export function job(overrides: Partial<CronJob> = {}): CronJob {
-  const base: CronJob = {
+export function job(overrides: Partial<CronStoredJob> = {}): CronStoredJob {
+  const base: CronStoredJob = {
     id: "stream-job",
     agentId: "main",
     name: "stream job",
@@ -92,6 +92,7 @@ export function fakeSupervisor() {
     acquireScopeCleanup: vi.fn(() => vi.fn(async () => {})),
     spawn,
     cancel: vi.fn(),
+    release: vi.fn(async () => undefined),
     cancelScope: vi.fn(),
   } satisfies ProcessSupervisor;
   return { inputs, runs, exits, spawn, supervisor };

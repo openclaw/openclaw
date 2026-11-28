@@ -121,7 +121,7 @@ it.each(["failed", "stale"] as const)(
       );
       await submitInputDialog("Keep this name");
       await vi.waitFor(() =>
-        expect(document.body.querySelector(".exec-approval-error")).not.toBeNull(),
+        expect(document.body.querySelector(".oc-dialog .callout.danger")).not.toBeNull(),
       );
       expect((await waitForInputDialog()).value).toBe("Keep this name");
       expect(document.body.textContent).toContain(

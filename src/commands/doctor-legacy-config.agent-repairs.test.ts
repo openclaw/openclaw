@@ -14,7 +14,7 @@ describe("legacy agent config repairs", () => {
         beta: { workspace: "/beta" },
         gamma: {},
       };
-      const res = normalizeCompatibilityConfigValues({
+      const res = await normalizeCompatibilityConfigValues({
         agents: {
           [kind]: kind === "entries" ? entries : Object.values(entries),
         },

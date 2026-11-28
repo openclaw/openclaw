@@ -1,9 +1,11 @@
 import fs from "node:fs/promises";
 import path from "node:path";
 import { gzipSync } from "node:zlib";
-import { expect, it } from "vitest";
+import { expect, it, onTestFinished } from "vitest";
+import { createSolidPngBuffer } from "../../test/helpers/image-fixtures.js";
 import { resolveOutboundAttachmentFromUrl } from "../media/outbound-attachment.js";
 import { withOpenClawTestState } from "../test-utils/openclaw-test-state.js";
+import { resolveManagedImageOriginalPath } from "./managed-image-attachments.custody.js";
 import { createManagedOutgoingMediaBlocks } from "./managed-image-attachments.js";
 import { listManagedImageRecordEntries } from "./managed-image-record-store.js";
 
@@ -106,4 +108,43 @@ it.each(["path denied", "storage unavailable"])(
       expect(await listManagedImageRecordEntries({ stateDir })).toEqual([]);
       expect(await fs.readFile(source)).toEqual(bytes);
     }),
+);
+
+it.each([false, true])("uses the sender reader for relative images (denied=%s)", (denied) =>
+  withOpenClawTestState({ scenario: "minimal" }, async ({ stateDir, workspaceDir }) => {
+    const gatewayDir = await fs.mkdtemp(path.join(process.cwd(), ".managed-image-reader-"));
+    onTestFinished(() => fs.rm(gatewayDir, { recursive: true, force: true }));
+    const source = path.relative(process.cwd(), path.join(gatewayDir, "chart.png"));
+    const senderPath = path.join(workspaceDir, source);
+    const image = createSolidPngBuffer(3, 2, { r: 20, g: 100, b: 180 });
+    await fs.mkdir(path.dirname(senderPath), { recursive: true });
+    await fs.writeFile(senderPath, image);
+    await fs.writeFile(
+      path.join(gatewayDir, "chart.png"),
+      createSolidPngBuffer(1, 1, { r: 200, g: 20, b: 20 }),
+    );
+    const readFile = async (file: string) => {
+      expect(file).toBe(senderPath);
+      if (denied) {
+        throw new Error("sender denied");
+      }
+      return fs.readFile(file);
+    };
+    const result = createManagedOutgoingMediaBlocks({
+      sessionKey: "agent:main:main",
+      stateDir,
+      items: [{ url: source, trustedLocal: false }],
+      mediaAccess: { workspaceDir, localRoots: [workspaceDir], readFile },
+    });
+    if (denied) {
+      await expect(result).rejects.toThrow(/could not be prepared/i);
+    } else {
+      await result;
+    }
+    const records = await listManagedImageRecordEntries({ stateDir });
+    expect(records).toHaveLength(denied ? 0 : 1);
+    if (!denied) {
+      expect(await fs.readFile(resolveManagedImageOriginalPath(records[0]!.record))).toEqual(image);
+    }
+  }),
 );

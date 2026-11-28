@@ -1,5 +1,7 @@
 export * from "./schema/users-background.js";
 export {
+  UsersChannelIdentityParamsSchema,
+  UsersChannelIdentityResultSchema,
   GATEWAY_OWNER_PROFILE_ID,
   GIT_COAUTHOR_PREFERENCE_KEY,
   PR_ATTRIBUTION_PREFERENCE_KEY,

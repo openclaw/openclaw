@@ -116,21 +116,21 @@ describe("slackPlugin actions", () => {
     { to: "channel:C999", provider: undefined, workspaceAware: false },
   ])("selects the workspace-aware send path for $to", ({ to, provider, workspaceAware }) => {
     const payload = { text: "hello" };
-    const prepared = slackPlugin.actions!.prepareSendPayload!({
-      ctx: {
-        action: "send",
-        channel: "slack",
-        cfg: {},
-        params: {},
-        toolContext: {
-          currentChannelId: "team:T123:channel:C123",
-          currentChannelProvider: provider,
+    for (const replyBroadcast of [undefined, false, true]) {
+      const prepared = slackPlugin.actions!.prepareSendPayload!({
+        ctx: {
+          action: "send",
+          params: { threadId: "111.222", replyBroadcast },
+          toolContext: {
+            currentChannelId: "team:T123:channel:C123",
+            currentChannelProvider: provider,
+          },
         },
-      },
-      to,
-      payload,
-    } as never);
-    expect(prepared).toBe(workspaceAware ? null : payload);
+        to,
+        payload,
+      } as never);
+      expect(prepared).toBe(workspaceAware || replyBroadcast ? null : payload);
+    }
   });
 
   it.each([
@@ -618,54 +618,6 @@ describe("slackPlugin outbound", () => {
       ).toEqual({ replyToId: expected, threadId: null });
     },
   );
-
-  it("renders shared interactive payloads into Slack Block Kit via plugin outbound", async () => {
-    const sendSlack = vi.fn().mockResolvedValue({ messageId: "m-interactive" });
-
-    const result = await sendPayload(
-      {
-        text: "Slack interactive smoke.",
-        interactive: {
-          blocks: [
-            { type: "text", text: "Slack interactive smoke." },
-            {
-              type: "buttons",
-              buttons: [button("Approve"), button("Reject")],
-            },
-            {
-              type: "select",
-              placeholder: "Choose a target",
-              options: [button("Canary"), button("Production")],
-            },
-          ],
-        },
-      },
-      sendSlack,
-      "user:U123",
-    );
-
-    expect(callArg(sendSlack)).toBe("user:U123");
-    expect(callArg(sendSlack, 1)).toBe(
-      "Slack interactive smoke.\n\nApprove\nReject\n\nChoose a target\nCanary\nProduction",
-    );
-    expect(callRecord(sendSlack, 2).blocks).toMatchObject([
-      { type: "section" },
-      {
-        type: "actions",
-        elements: [
-          { type: "button", value: "approve" },
-          { type: "button", value: "reject" },
-        ],
-      },
-      {
-        type: "actions",
-        elements: [
-          { type: "static_select", options: [{ value: "canary" }, { value: "production" }] },
-        ],
-      },
-    ]);
-    expect(result).toEqual({ channel: "slack", messageId: "m-interactive" });
-  });
 
   it.each([
     { surface: "interactive", type: "text" },

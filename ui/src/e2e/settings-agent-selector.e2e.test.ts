@@ -6,7 +6,7 @@ import { createControlUiE2eSuite } from "./control-ui-e2e-suite.test-support.ts"
 
 const suite = createControlUiE2eSuite({ name: "Control UI shared Settings agent selector" });
 
-function installSettingsGateway(page: Page) {
+function installSettingsGateway(page: Page, holdAgentRoster = false) {
   const config = {
     agents: {
       defaults: { model: { primary: "openai/gpt-4.1" } },
@@ -14,6 +14,7 @@ function installSettingsGateway(page: Page) {
     },
   };
   return installMockGateway(page, {
+    heldMethods: holdAgentRoster ? ["agents.list"] : [],
     assistantName: "Clawd",
     agentModel: "openai/gpt-4.1",
     models: [{ id: "gpt-4.1", name: "GPT-4.1", provider: "openai" }],
@@ -61,7 +62,7 @@ function withSettingsPage(
   width: number,
   routeId: Parameters<typeof pathForRoute>[0],
   run: (page: Page, gateway: Awaited<ReturnType<typeof installSettingsGateway>>) => Promise<void>,
-  touch = false,
+  { touch = false, holdAgentRoster = false } = {},
 ) {
   return suite.withPage(
     {
@@ -75,7 +76,7 @@ function withSettingsPage(
     async ({ page }) => {
       const pageErrors: string[] = [];
       page.on("pageerror", (error) => pageErrors.push(error.message));
-      const gateway = await installSettingsGateway(page);
+      const gateway = await installSettingsGateway(page, holdAgentRoster);
       await page.goto(`${suite.server.baseUrl}${pathForRoute(routeId).slice(1)}`);
       await waitForControlUiRoute(page, { routeId });
       await run(page, gateway);
@@ -92,27 +93,72 @@ async function expectAgentRoute(page: Page, agentId: "main" | "research") {
 async function chooseAgent(page: Page, name: string | RegExp) {
   const picker = page.locator(".settings-sidebar openclaw-agent-select");
   await picker.locator(".agent-select__trigger").click();
-  await picker.getByRole("menuitemradio", { name, exact: true }).click();
+  await picker.getByRole("option", { name, exact: true }).click();
 }
 
 suite.define(() => {
   it.each([1440, 390])("closes only the agent menu on Escape at %ipx", async (width) => {
-    await withSettingsPage(width, "appearance", async (page) => {
-      if (width === 390) {
-        await page.locator(".topbar-nav-toggle").click();
-      }
-      const picker = page.locator(".settings-sidebar openclaw-agent-select");
-      const trigger = picker.locator(".agent-select__trigger");
-      await trigger.focus();
-      await page.keyboard.press("Enter");
-      await picker.getByRole("menuitemradio", { name: "Research", exact: true }).waitFor();
-      await page.keyboard.press("Escape");
-      await expect.poll(() => trigger.getAttribute("aria-expanded")).toBe("false");
-      expect(new URL(page.url()).pathname).toBe("/settings/appearance");
-      expect(await trigger.isVisible()).toBe(true);
-      expect(await trigger.evaluate((element) => element === document.activeElement)).toBe(true);
-    });
+    await withSettingsPage(
+      width,
+      "appearance",
+      async (page, gateway) => {
+        if (width === 390) {
+          await page.locator(".topbar-nav-toggle").press("Enter");
+        }
+        const picker = page.locator(".settings-sidebar openclaw-agent-select");
+        const trigger = picker.locator(".agent-select__trigger");
+        await gateway.waitForRequest("agents.list");
+        await trigger.focus();
+        await page.keyboard.press("Enter");
+        await gateway.resolveDeferred("agents.list");
+        await picker.getByRole("option", { name: "Research", exact: true }).waitFor();
+        await page.keyboard.press("Escape");
+        await expect.poll(() => trigger.getAttribute("aria-expanded")).toBe("false");
+        expect(new URL(page.url()).pathname).toBe("/settings/appearance");
+        expect(await trigger.isVisible()).toBe(true);
+        expect(await trigger.evaluate((element) => element === document.activeElement)).toBe(true);
+      },
+      { holdAgentRoster: true },
+    );
   });
+
+  it.each(["focus moved", "no agents", "one agent"] as const)(
+    "does not open after an early Enter with %s",
+    async (scenario) => {
+      await withSettingsPage(
+        1440,
+        "appearance",
+        async (page, gateway) => {
+          const trigger = page.locator(".settings-sidebar .agent-select__trigger");
+          await gateway.waitForRequest("agents.list");
+          await trigger.focus();
+          expect(await trigger.evaluate((element) => element === document.activeElement)).toBe(
+            true,
+          );
+          await page.keyboard.press("Enter");
+          if (scenario === "focus moved") {
+            const search = page.locator(".settings-sidebar__search-input");
+            await search.focus();
+            await gateway.resolveDeferred("agents.list");
+            await expectSelectedAgent(page, "Clawd");
+            expect(await search.evaluate((element) => element === document.activeElement)).toBe(
+              true,
+            );
+          } else {
+            await gateway.resolveDeferred("agents.list", {
+              defaultId: "main",
+              mainKey: "main",
+              scope: "per-sender",
+              agents: scenario === "no agents" ? [] : [{ id: "main", name: "Clawd" }],
+            });
+            await expect.poll(() => trigger.isDisabled()).toBe(true);
+          }
+          expect(await trigger.getAttribute("aria-expanded")).toBe("false");
+        },
+        { holdAgentRoster: true },
+      );
+    },
+  );
 
   it("retains the Settings agent across pages and history without changing the chat agent", async () => {
     await withSettingsPage(1440, "model-providers", async (page, gateway) => {
@@ -122,9 +168,14 @@ suite.define(() => {
 
       const picker = page.locator("openclaw-agent-select");
       await picker.locator(".agent-select__trigger").press("Enter");
-      const selectedOption = picker.getByRole("menuitemradio", { name: /^Clawd(?:,|$)/ });
+      const selectedOption = picker.getByRole("option", { name: /^Clawd(?:,|$)/ });
       await expect
-        .poll(() => selectedOption.evaluate((element) => element.matches(":focus")))
+        .poll(() =>
+          selectedOption.evaluate(
+            (element) =>
+              document.activeElement?.getAttribute("aria-activedescendant") === element.id,
+          ),
+        )
         .toBe(true);
       await page.keyboard.press("ArrowDown");
       await page.keyboard.press("Enter");
@@ -145,16 +196,20 @@ suite.define(() => {
       await gateway.waitForRequest("models.list", {
         match: { agentId: "research", view: "configured" },
       });
+      await page.locator(".agents-page-menu__trigger").click();
       await expect
-        .poll(() => page.getByRole("button", { name: "Set Default", exact: true }).isEnabled())
+        .poll(() => page.getByRole("menuitem", { name: "Set default", exact: true }).isEnabled())
         .toBe(true);
+      await page.keyboard.press("Escape");
       await expectSidebarPickerOnly(page);
 
       await chooseAgent(page, /^Clawd(?:,|$)/);
       await expectAgentRoute(page, "main");
+      await page.locator(".agents-page-menu__trigger").click();
       await expect
-        .poll(() => page.getByRole("button", { name: "Default", exact: true }).isDisabled())
+        .poll(() => page.getByRole("menuitem", { name: "Default", exact: true }).isDisabled())
         .toBe(true);
+      await page.keyboard.press("Escape");
       await chooseAgent(page, "Research");
       await expectAgentRoute(page, "research");
       await page.goBack();
@@ -187,7 +242,7 @@ suite.define(() => {
         await page.locator(".topbar-nav-toggle").tap();
         const picker = page.locator(".settings-sidebar openclaw-agent-select");
         await picker.locator(".agent-select__trigger").tap();
-        await picker.getByRole("menuitemradio", { name: "Research", exact: true }).tap();
+        await picker.getByRole("option", { name: "Research", exact: true }).tap();
         await expectSelectedAgent(page, "Research");
         await gateway.waitForRequest("models.authStatus", { match: { agentId: "research" } });
         await page.locator(`.settings-sidebar__item[href="${pathForRoute("memory")}"]`).tap();
@@ -198,7 +253,7 @@ suite.define(() => {
         await expectSelectedAgent(page, "Research");
         await expectSidebarPickerOnly(page);
       },
-      true,
+      { touch: true },
     );
   });
 });

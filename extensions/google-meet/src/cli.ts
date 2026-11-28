@@ -2,12 +2,13 @@ import type { Command } from "commander";
 import type { MeetingSetupCheck } from "openclaw/plugin-sdk/meeting-runtime";
 import { parseStrictNonNegativeInteger } from "openclaw/plugin-sdk/number-runtime";
 import { generateHexPkceVerifierChallenge } from "openclaw/plugin-sdk/provider-auth";
-import { generateOAuthState } from "openclaw/plugin-sdk/provider-auth-runtime";
+import { generateOAuthState } from "openclaw/plugin-sdk/provider-oauth-runtime";
 import {
   addGoogleMeetArtifactOptions,
   addGoogleMeetOAuthOptions,
   callGoogleMeetRuntime,
   resolveCliMeetingInput as resolveMeetingInput,
+  readGoogleMeetRuntime,
   resolveCliParams,
   type GoogleMeetCliCommandContext,
 } from "./cli-command-context.js";
@@ -19,13 +20,11 @@ import {
 } from "./cli-export.js";
 import {
   parseGoogleMeetBrowserTransport,
-  parseGoogleMeetMode,
-  parseGoogleMeetTransport,
   parseOptionalNumber,
   parsePositiveIntegerOption,
   parsePositiveNumber,
   promptInput,
-  resolveCliJoinRequest,
+  readCliJoinOptions,
   resolveGoogleMeetOAuthCallbackTimeoutMs,
   type DoctorOptions,
   type JoinOptions,
@@ -46,6 +45,7 @@ import {
   registerGoogleMeetCreateCommands,
 } from "./cli-space-commands.js";
 import { resolveGoogleMeetGatewayOperationTimeoutMs, type GoogleMeetConfig } from "./config.js";
+import { parseGoogleMeetMode, parseGoogleMeetTransport } from "./join-options.js";
 import { createGoogleMeetSpace, fetchGoogleMeetSpace } from "./meet-api.js";
 import type { GoogleMeetOAuthRuntime } from "./oauth-owner.js";
 import {
@@ -324,7 +324,10 @@ export function registerGoogleMeetCli(params: {
     .option("--pin <pin>", "Meet phone PIN; # is appended if omitted")
     .option("--dtmf-sequence <sequence>", "Explicit Twilio DTMF sequence")
     .action(async (url: string | undefined, options: JoinOptions) => {
-      const payload = resolveCliJoinRequest(resolveMeetingInput(context.config, url), options);
+      const payload = {
+        url: resolveMeetingInput(context.config, url),
+        ...readCliJoinOptions(options),
+      };
       const result = await callGoogleMeetRuntime(
         context,
         "googlemeet.join",
@@ -498,11 +501,15 @@ export function registerGoogleMeetCli(params: {
     .argument("[session-id]", "Meet session ID")
     .option("--json", "Print JSON output", false)
     .action(async (sessionId?: string) => {
-      writeStdoutJson(
-        await callGoogleMeetRuntime(context, "googlemeet.status", { sessionId }, (rt) =>
-          rt.status(sessionId),
-        ),
+      const status = await readGoogleMeetRuntime(
+        context,
+        "googlemeet.status",
+        { sessionId },
+        (rt) => rt.status(sessionId),
       );
+      if (status) {
+        writeStdoutJson(status);
+      }
     });
 
   root
@@ -516,12 +523,15 @@ export function registerGoogleMeetCli(params: {
       if (options.since !== undefined && sinceIndex === undefined) {
         throw new Error("--since must be a non-negative safe integer");
       }
-      const result = await callGoogleMeetRuntime(
+      const result = await readGoogleMeetRuntime(
         context,
         "googlemeet.transcript",
         { sessionId, ...(sinceIndex === undefined ? {} : { sinceIndex }) },
         (rt) => rt.transcript(sessionId, sinceIndex === undefined ? {} : { sinceIndex }),
       );
+      if (!result) {
+        return;
+      }
       if (!result.found) {
         throw new Error("session not found");
       }
@@ -569,12 +579,15 @@ export function registerGoogleMeetCli(params: {
         writeOAuthDoctorReport(report);
         return;
       }
-      const status = await callGoogleMeetRuntime(
+      const status = await readGoogleMeetRuntime(
         context,
         "googlemeet.status",
         { sessionId },
         (rt) => rt.status(sessionId),
       );
+      if (!status) {
+        return;
+      }
       if (options.json) {
         writeStdoutJson(status);
         return;

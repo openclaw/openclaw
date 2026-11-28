@@ -163,7 +163,7 @@ export function assertExistingOpenClawStateSchemaCacheAdmission(
 export function assertOpenClawStateSchemaRepairAllowed(pathname: string): void {
   if (isExistingOpenClawStateSchema(pathname)) {
     throw new Error(
-      `Shared-state schema repair is owned by the existing installation at ${pathname}; update that installation before retrying the managed node.`,
+      `Shared-state schema repair is owned by the existing installation at ${pathname}; run openclaw doctor --fix with that installation. The managed node retries automatically.`,
     );
   }
 }

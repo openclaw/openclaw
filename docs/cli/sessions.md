@@ -36,6 +36,9 @@ names and flags wrap without being truncated, and Unicode keys stay aligned.
 Long keys show their beginning and end; use `openclaw sessions --json` for complete
 session keys.
 
+Relative ages round each displayed unit directly from elapsed milliseconds:
+89.5 seconds displays as `1m ago`, and 2.49 days displays as `2d ago`.
+
 Token counts below 1,000 appear as whole numbers; larger counts use compact `k`
 or `m` labels. JSON output retains exact numeric counts.
 
@@ -390,7 +393,7 @@ openclaw sessions cleanup --json
   for active work to finish, or explicitly delete sessions you no longer want
   to retain.
 
-Optional cold transcript extraction has its own background worker and
+Cold transcript extraction is enabled by default after 30 inactive days, with its own background worker and
 **Run now** action in
 [Settings → Agent Defaults → Session](/gateway/config-agents/sessions#cold-storage).
 It uses `session.maintenance.coldStorage.afterDays` and preserves inactive

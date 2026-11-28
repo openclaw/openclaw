@@ -59,6 +59,7 @@ type ChatHistoryLoadState =
         promise: Promise<ObservedChatHistoryResult | undefined>;
         startup: boolean;
         deferBranches: boolean;
+        version: number;
       };
     } & ChatHistoryLoadRequest)
   | {
@@ -87,6 +88,7 @@ type ChatHistoryPaneRequests = {
   subscriptionError?: string;
   subscriptionRetry?: AbortController;
   initialHistory?: InitialChatHistoryReceipt;
+  compactOpeningSessionKey?: string;
   historyRead?: AbortController;
   syncRetries: Map<
     "subscription" | "history",
@@ -127,6 +129,18 @@ export function chatHistoryRequests(owner: object): ChatHistoryPaneRequests {
     chatHistoryPaneRequests.set(owner, requests);
   }
   return requests;
+}
+
+export function shouldRequestCompactOpening(state: ChatState, hasCompactReceipt = false): boolean {
+  if (state.settings?.compactSessionOpening !== true) {
+    return false;
+  }
+  const requests = chatHistoryRequests(state);
+  return (
+    !requests.acceptedHistory &&
+    !requests.windowReset?.isCurrent() &&
+    (hasCompactReceipt || (!state.currentSessionId && state.chatMessages.length === 0))
+  );
 }
 
 export function setChatHistoryRetrying(
@@ -260,6 +274,14 @@ export function getChatHistoryLoadState(state: ChatState): ChatHistoryLoadState 
   return requests.historyLoad;
 }
 
+/** A global key routes to the selected agent, so another agent's read proves nothing about it. */
+function isAcceptedForSelectedAgent(state: ChatState, requestAgentId: string | undefined) {
+  return (
+    !isUiSelectedGlobalSessionKey(state, state.sessionKey) ||
+    resolveUiSelectedSessionAgentId(state) === requestAgentId
+  );
+}
+
 /** Same-session refreshes retain the accepted transcript's identity until replacement commits. */
 export function getAcceptedChatHistorySession(state: ChatState) {
   const accepted = chatHistoryRequests(state).acceptedHistory;
@@ -269,23 +291,20 @@ export function getAcceptedChatHistorySession(state: ChatState) {
     state.sessions === accepted.sessions &&
     state.connectionEpoch === accepted.connectionEpoch &&
     state.sessionKey === accepted.sessionKey &&
-    (!isUiSelectedGlobalSessionKey(state, state.sessionKey) ||
-      resolveUiSelectedSessionAgentId(state) === accepted.requestAgentId) &&
+    isAcceptedForSelectedAgent(state, accepted.requestAgentId) &&
     accepted.sessionInfo?.sessionId &&
     state.currentSessionId === accepted.sessionInfo.sessionId
     ? accepted.sessionInfo
     : undefined;
 }
 
-/** A successful scoped read can prove an ephemeral session is gone; roster absence cannot. */
-export function isExpiredIncognitoSession(
+/** A successful read on this connection can prove a session has no row; roster absence cannot. */
+export function isChatSessionProvenAbsent(
   state: ChatState,
   sessionKey = state.sessionKey,
 ): boolean {
   const accepted = chatHistoryRequests(state).acceptedHistory;
-  const creation = state.chatSubmissions?.creation;
   return (
-    isIncognitoSessionKey(sessionKey) &&
     accepted?.sessionId === null &&
     state.connected &&
     state.client === accepted.client &&
@@ -293,6 +312,19 @@ export function isExpiredIncognitoSession(
     state.connectionEpoch === accepted.connectionEpoch &&
     state.sessionKey === sessionKey &&
     accepted.sessionKey === sessionKey &&
+    isAcceptedForSelectedAgent(state, accepted.requestAgentId)
+  );
+}
+
+/** A successful scoped read can prove an ephemeral session is gone; roster absence cannot. */
+export function isExpiredIncognitoSession(
+  state: ChatState,
+  sessionKey = state.sessionKey,
+): boolean {
+  const creation = state.chatSubmissions?.creation;
+  return (
+    isIncognitoSessionKey(sessionKey) &&
+    isChatSessionProvenAbsent(state, sessionKey) &&
     !(creation?.sessionKey === sessionKey && !creation.admitted) &&
     !state.hasPendingInitialTurn?.(sessionKey)
   );
@@ -310,8 +342,7 @@ export function isInitialChatHistoryUnavailable(state: ChatState): boolean {
     state.sessions === accepted.sessions &&
     (!state.connected || state.connectionEpoch === accepted.connectionEpoch) &&
     accepted.sessionKey === state.sessionKey &&
-    (!isUiSelectedGlobalSessionKey(state, state.sessionKey) ||
-      resolveUiSelectedSessionAgentId(state) === accepted.requestAgentId) &&
+    isAcceptedForSelectedAgent(state, accepted.requestAgentId) &&
     accepted.sessionInfo?.sessionId === state.currentSessionId
   ) {
     return false;
@@ -366,7 +397,11 @@ export function acceptsHistoryResult(
   );
 }
 
-export function resetChatHistoryProjection(state: ChatState, agentId?: string): void {
+export function resetChatHistoryProjection(
+  state: ChatState,
+  agentId?: string,
+  retainedHistory: unknown[] = [],
+): void {
   retireChatHistoryRead(state);
   retireInitialChatSnapshot(state);
   retirePullRequestRefreshes(state);
@@ -376,6 +411,7 @@ export function resetChatHistoryProjection(state: ChatState, agentId?: string): 
   // snapshot owner and its coalesced request before creating the next epoch.
   requests.historyVersion += 1;
   delete requests.initialHistory;
+  delete requests.compactOpeningSessionKey;
   delete requests.windowReset;
   // Keep the presentation accessor installed when clearing accepted history.
   requests.acceptedHistory = undefined;
@@ -385,6 +421,15 @@ export function resetChatHistoryProjection(state: ChatState, agentId?: string): 
   // Destructive operations keep the public session key, so only an explicit
   // reducer reset can prevent old live or pending rows from crossing epochs.
   reduceChatSessionProjection(state, { type: "sessionReset" }, { scope });
+  if (retainedHistory.length) {
+    // A successful rewind proves its unchanged prefix. Publish it in the same
+    // turn as the epoch reset so the mounted transcript never becomes empty.
+    reduceChatSessionProjection(
+      state,
+      { type: "snapshotLoaded", messages: retainedHistory },
+      { scope },
+    );
+  }
 }
 
 export function setChatError(
@@ -417,7 +462,8 @@ export function readChatTranscriptAttachmentSource(state: ChatState) {
     messages: state.chatMessages,
     pagination: state.chatHistoryPagination,
     coverage: known ? (state.chatHistoryPagination.hasMore ? "partial" : "complete") : "unknown",
-    loading: isChatHistoryLoading(load),
+    // Refreshing an accepted window does not make its attachment coverage unknown.
+    loading: !known && isChatHistoryLoading(load),
     error: load.phase === "failed" ? load.message : undefined,
   } as const;
 }

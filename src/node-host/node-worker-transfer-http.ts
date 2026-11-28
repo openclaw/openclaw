@@ -9,6 +9,7 @@ import {
   buildCloudflareAccessHeaders,
   type CloudflareAccessCredentials,
 } from "../../packages/gateway-client/src/cloudflare-access.js";
+import { parseUnixGatewayUrl } from "../../packages/gateway-client/src/unix-target.js";
 import { MAX_WORKSPACE_INVENTORY_TOTAL_BYTES } from "../gateway/worker-environments/workspace-inventory-limits.js";
 import type { Root } from "../infra/fs-safe.js";
 import { isPathInside } from "../infra/path-guards.js";
@@ -53,18 +54,9 @@ function transferUrl(gatewayUrl: string, routePath: string): URL {
   return url;
 }
 
-function waitForTlsPin(request: ClientRequest, expectedRaw?: string): Promise<void> {
-  if (!expectedRaw?.trim()) {
-    return Promise.resolve();
-  }
-  const expected = normalizeTlsFingerprint(expectedRaw);
+function waitForTlsPin(request: ClientRequest, expected: string): Promise<void> {
   if (!expected) {
-    return Promise.reject(
-      new NodeWorkerTransferHttpError(
-        "invalid-tls-fingerprint",
-        "worker transfer gateway TLS fingerprint is invalid",
-      ),
-    );
+    return Promise.resolve();
   }
   return new Promise<void>((resolve, reject) => {
     let settled = false;
@@ -134,15 +126,26 @@ export async function withNodeWorkerTransferHttpRequest<T>(
   params: NodeWorkerTransferHttpRequest,
   consume: (response: IncomingMessage) => Promise<T>,
 ): Promise<T> {
-  const url = transferUrl(params.gatewayUrl, params.routePath);
+  const unix = parseUnixGatewayUrl(params.gatewayUrl);
+  const url = unix
+    ? new URL(`http://localhost${unix.path.replace(/\/$/u, "")}${params.routePath}`)
+    : transferUrl(params.gatewayUrl, params.routePath);
   if (params.cloudflareAccess && url.protocol !== "https:") {
     throw new NodeWorkerTransferHttpError(
       "cloudflare-access-requires-tls",
       "Cloudflare Access credentials require HTTPS worker transfer",
     );
   }
+  const tlsFingerprint = normalizeTlsFingerprint(params.tlsFingerprint);
+  if (url.protocol === "https:" && params.tlsFingerprint?.trim() && !tlsFingerprint) {
+    throw new NodeWorkerTransferHttpError(
+      "invalid-tls-fingerprint",
+      "worker transfer gateway TLS fingerprint is invalid",
+    );
+  }
   const transport = url.protocol === "https:" ? https : http;
   const request = transport.request(url, {
+    ...(unix ? { socketPath: unix.socketPath } : {}),
     method: params.method,
     headers: {
       ...params.headers,
@@ -150,7 +153,7 @@ export async function withNodeWorkerTransferHttpRequest<T>(
       ...(params.cloudflareAccess ? buildCloudflareAccessHeaders(params.cloudflareAccess) : {}),
     },
     signal: params.signal,
-    ...(url.protocol === "https:" && params.tlsFingerprint
+    ...(url.protocol === "https:" && tlsFingerprint
       ? { rejectUnauthorized: false, session: Buffer.alloc(0) }
       : {}),
   });
@@ -196,7 +199,7 @@ export async function withNodeWorkerTransferHttpRequest<T>(
   });
   const send = async () => {
     if (url.protocol === "https:") {
-      await waitForTlsPin(request, params.tlsFingerprint);
+      await waitForTlsPin(request, tlsFingerprint);
     }
     writerSignal.throwIfAborted();
     await params.writeBody?.(async (chunk) => {

@@ -333,7 +333,7 @@ function itemObservedOutputText(
   outputTextByItem?: ReadonlyMap<string, string>,
 ): string | undefined {
   if (item.type === "commandExecution") {
-    return item.aggregatedOutput ?? outputTextByItem?.get(item.id);
+    return item.aggregatedOutput ?? outputTextByItem?.get(item.id) ?? "";
   }
   if (item.type === "dynamicToolCall") {
     return collectDynamicToolContentText(item.contentItems);

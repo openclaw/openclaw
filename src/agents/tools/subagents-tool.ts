@@ -8,9 +8,13 @@ import { getRuntimeConfig } from "../../config/config.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import { createAbortError } from "../../infra/abort-signal.js";
 import { captureOpenClawStateWorkerContext } from "../../state/openclaw-state-worker-context.js";
+import { bindAgentToolExecutionLocation } from "../agent-tool-metadata.js";
 import { sanitizeRunStatusText } from "../run-status-text.js";
 import { optionalPositiveIntegerSchema, optionalStringEnum } from "../schema/typebox.js";
-import { resolveSubagentChildAgentId } from "../subagents/registry/subagent-child-owner-match.js";
+import {
+  matchesSubagentChildSessionOwner,
+  resolveSubagentChildAgentId,
+} from "../subagents/registry/subagent-child-owner-match.js";
 import {
   ensureSubagentControllerOwnsRun,
   listControlledSubagentRunFacts,
@@ -42,6 +46,7 @@ import {
   prepareSubagentSessionListReadCache,
 } from "../subagents/registry/subagent-registry-state.js";
 import type { SubagentRunRecord } from "../subagents/registry/subagent-registry.types.js";
+import { isSubagentPausedByYield } from "../subagents/registry/subagent-requester-turn-custody.js";
 import { isSameSubagentRunOwner } from "../subagents/registry/subagent-run-generation.js";
 import {
   jsonResult,
@@ -80,14 +85,14 @@ function mapRun(
   // Observe announced children from the snapshot, as the list does; a parent waiting on them is not a leaf.
   const pausedForMs = resolveYieldedLeafPausedForMs(
     run,
-    observeSubagentExecution(run, run.pauseReason === "sessions_yield" ? snapshot.values() : []),
+    observeSubagentExecution(run, isSubagentPausedByYield(run) ? snapshot.values() : []),
     now,
   );
   return {
     runId: run.runId,
     sessionKey: run.childSessionKey,
     label: sanitizeRunStatusText(run.label, { maxChars: 80 }) || undefined,
-    status: run.pauseReason === "sessions_yield" ? "waiting" : run.execution.status,
+    status: isSubagentPausedByYield(run) ? "waiting" : run.execution.status,
     outcome: run.execution.outcome
       ? {
           status: run.execution.outcome.status,
@@ -99,11 +104,29 @@ function mapRun(
         }
       : undefined,
     deliveryStatus: run.delivery?.status,
+    requesterDelivery: run.delivery?.requesterDelivery,
     startedAt: run.execution.startedAt,
     endedAt: run.execution.endedAt,
     ...(pausedForMs === undefined ? {} : { pausedForMs }),
   };
 }
+
+// Only the current tree grants visibility. A settled predecessor cannot extend it.
+function isReadablePredecessor(run: SubagentRunRecord, readable: SubagentRunReadRecord[]): boolean {
+  if (run.execution.status !== "terminal" || isSubagentPausedByYield(run)) {
+    return false;
+  }
+  return readable.some(
+    (current) =>
+      current.requesterSessionKey === run.requesterSessionKey &&
+      current.requesterAgentId === run.requesterAgentId &&
+      current.requesterStorePath === run.requesterStorePath &&
+      current.controllerSessionKey === run.controllerSessionKey &&
+      current.controllerStorePath === run.controllerStorePath &&
+      matchesSubagentChildSessionOwner(current, run.childSessionKey, run.childAgentId),
+  );
+}
+
 function waitForSelectedRuns(params: {
   runIds: string[];
   readRuns: (snapshot: ReadonlyMap<string, SubagentRunRecord>) => SubagentRunRecord[];
@@ -127,7 +150,7 @@ function waitForSelectedRuns(params: {
       return task.delivery?.status === "suspended" || wait?.kind === "external";
     });
     const completed = tasks.filter(
-      (task) => task.execution.status === "terminal" && task.pauseReason !== "sessions_yield",
+      (task) => task.execution.status === "terminal" && !isSubagentPausedByYield(task),
     );
     return {
       reason: unavailable.length
@@ -292,12 +315,13 @@ export function createSubagentsTool(opts: SubagentsToolOptions = {}): AnyAgentTo
     }
     return { cfg, controller, readable: [...readable.values()], controlled };
   };
-  return {
+  const tool: AnyAgentTool = {
     label: "Subagents",
     name: "subagents",
     parameters: SubagentsToolSchema,
+    repeatable: { actions: ["list", "wait"] },
     description:
-      "List native subagents, wait for selected runIds, or cancel a runId and its descendants. A wait timeout never cancels execution or consumes completion delivery.",
+      "List native subagents, wait for selected runIds, or cancel a runId and its descendants. A wait timeout never cancels execution or consumes completion delivery. Never loop-poll list; check status only on demand, debug, or intervention. Follow each spawn's accepted completion mode.",
     execute: async (_toolCallId, args, signal) => {
       const params = args as Record<string, unknown>;
       const action = readToolStringParam(params, "action") ?? "list";
@@ -367,8 +391,12 @@ export function createSubagentsTool(opts: SubagentsToolOptions = {}): AnyAgentTo
             ...(await waitForSelectedRuns({
               runIds,
               readRuns: (snapshot) => {
-                const visible = new Set(readCurrentScope().readable.map((entry) => entry.runId));
-                return [...snapshot.values()].filter((entry) => visible.has(entry.runId));
+                const { readable } = readCurrentScope();
+                const visible = new Set(readable.map((entry) => entry.runId));
+                const selected = runIds.flatMap((id) => snapshot.get(id) ?? []);
+                return selected.filter(
+                  (run) => visible.has(run.runId) || isReadablePredecessor(run, readable),
+                );
               },
               timeoutMs:
                 Math.min(60, readNonNegativeIntegerParam(params, "timeoutSeconds") ?? 30) * 1000,
@@ -454,4 +482,10 @@ export function createSubagentsTool(opts: SubagentsToolOptions = {}): AnyAgentTo
       }
     },
   };
+  // A worker reaches this tool over the Gateway; its call must outlive the requested wait.
+  bindAgentToolExecutionLocation(tool, {
+    kind: "gateway",
+    timeout: { argument: "timeoutSeconds", defaultSeconds: 30, paddingMs: 60_000 },
+  });
+  return tool;
 }

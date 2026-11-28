@@ -1,4 +1,5 @@
 import { safeParseJsonRecord } from "@openclaw/normalization-core/json-coercion";
+import { note } from "../../../../packages/terminal-core/src/note.js";
 import { listAgentEntries } from "../../../agents/agent-scope-config.js";
 import {
   canDeferRehearsalCronMigration,
@@ -74,10 +75,13 @@ export async function repairLegacyCronOwnersBeforeConfigWrite(params: {
     legacyOwner,
   );
   assertCurrent();
+  if (result.warnings?.length) {
+    note(result.warnings.join("\n"), "Doctor warnings");
+  }
   return result.changed > 0
     ? [
         `Preserved ownership for ${result.changed} legacy cron job(s); unassigned jobs retain ${legacyOwner}.`,
-        `Saved pre-repair cron backup: ${result.backupPath}`,
+        ...(result.backupPath ? [`Saved pre-repair cron backup: ${result.backupPath}`] : []),
       ]
     : [];
 }

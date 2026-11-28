@@ -14,7 +14,7 @@ import { emitSessionLifecycleEvent } from "../../sessions/session-lifecycle-even
 import { sessionChanges, type SessionRowChange } from "../../sessions/session-row-changes.js";
 import { IncognitoSessionMissingError } from "../../state/incognito-session-error.js";
 import { resolveOpenClawAgentSqlitePath } from "../../state/openclaw-agent-db.paths.js";
-import { captureOpenClawAgentDatabaseExecution } from "../../state/openclaw-agent-execution.js";
+import { captureOpenClawAgentDatabaseExecutionAsync } from "../../state/openclaw-agent-execution.js";
 import { openOpenClawAgentSqliteWorkerStore } from "../../state/openclaw-agent-worker-store.js";
 import { runOpenClawAgentWriteAdmission } from "../../state/openclaw-agent-write-admission.js";
 import { readResidentUserProfileAliases } from "../../state/user-profile-list.js";
@@ -44,7 +44,11 @@ import { withSessionActorStorage } from "./session-actor-storage-acquisition.js"
 import { captureSessionActorStorageOwner } from "./session-actor-storage-binding.js";
 import type { SessionCollaborationScope } from "./session-collaboration-scope.js";
 import type { SessionEntryMetadataFact } from "./session-entry-metadata-receipt.js";
-import type { addSessionMember, removeSessionMember } from "./session-sharing-store.native.js";
+import type {
+  addSessionMember,
+  removeSessionMember,
+  setSessionMemberAccess,
+} from "./session-sharing-store.native.js";
 import { readSessionCollaborationCandidate } from "./session-sharing-store.receipt.js";
 import type {
   MembershipPublication,
@@ -151,7 +155,7 @@ export async function runSessionCollaborationWrite<
       storePath: options.path,
       sessionKey: resolved.sessionKey,
     };
-    const execution = captureOpenClawAgentDatabaseExecution(options);
+    const execution = await captureOpenClawAgentDatabaseExecutionAsync(options);
     const assertQueuedCurrent = () => {
       execution.assertCurrent();
       assertCurrent();
@@ -183,10 +187,16 @@ export async function runSessionCollaborationWrite<
             ...location,
             databaseIdentity: identity,
           });
+          // Invitation grants share the membership writer's unknown-outcome latch.
+          const authorityCommand: SqliteWorkerCommand<SessionSharingWorkerOperations> = command;
           const sharingAuthorityChanged =
-            capturedCommand.type === "add" ||
-            capturedCommand.type === "remove" ||
-            capturedCommand.type === "owner.assign";
+            authorityCommand.type === "add" ||
+            authorityCommand.type === "set-access" ||
+            authorityCommand.type === "remove" ||
+            authorityCommand.type === "owner.assign" ||
+            (authorityCommand.type === "involvement" &&
+              authorityCommand.input.params.change.kind === "mention" &&
+              Boolean(authorityCommand.input.params.change.invitation?.profileIds.length));
           let publicationKeys = [location.sessionKey];
           let mutationDispatched = false;
           let resultReceived = false;
@@ -240,8 +250,12 @@ export async function runSessionCollaborationWrite<
                       | undefined
                     >();
                     for (const [key, fact] of candidate?.publication.facts ?? []) {
-                      if (fact.kind === "postimage" && fact.value[0]?.kind === "member") {
-                        memberships.set(key, fact.value[0].sessionId);
+                      if (fact.kind === "postimage") {
+                        for (const change of fact.value) {
+                          if (change.kind === "member") {
+                            memberships.set(key, change.sessionId);
+                          }
+                        }
                       }
                       if (
                         capturedCommand.type === "participant" &&
@@ -497,6 +511,28 @@ export function addSessionMemberInWorker(
   );
 }
 
+export function setSessionMemberAccessInWorker(
+  scope: SessionCollaborationScope,
+  params: Parameters<typeof setSessionMemberAccess>[1],
+  assertCurrent?: () => void,
+): Promise<ReturnType<typeof setSessionMemberAccess>> {
+  if (!params.identityId.trim()) {
+    return Promise.resolve(undefined);
+  }
+  const capturedParams = structuredClone(params);
+  return runSessionCollaborationWrite(
+    scope,
+    { type: "set-access", input: { scope, params: capturedParams } },
+    (result, location, database, currentKeys) => {
+      if (result.value?.changed && (!currentKeys || currentKeys.has(location.sessionKey))) {
+        publishSessionMembership(result, location, database);
+      }
+      return result.value;
+    },
+    assertCurrent,
+  );
+}
+
 export function removeSessionMemberInWorker(
   scope: SessionCollaborationScope,
   identityId: string,
@@ -568,12 +604,14 @@ export function recordSessionParticipantInWorker(
         };
         // The committed count-only receipt keeps the actor's exact aggregate current.
         publishSessionCollaborationChanges([change], database);
-        emitSessionLifecycleEvent({
-          agentId: location.agentId,
-          sessionKey: location.sessionKey,
-          reason: "participants",
-          scope: "session-entry",
-        });
+        if (result.projectionChanged) {
+          emitSessionLifecycleEvent({
+            agentId: location.agentId,
+            sessionKey: location.sessionKey,
+            reason: "participants",
+            scope: "session-entry",
+          });
+        }
       }
       return result.value;
     },

@@ -142,15 +142,22 @@ it("moves observation to the rendered replacement and ignores the old pending la
   expect(observers.every((observer) => !observer.targets.has(first))).toBe(true);
 });
 
-it("defers bounded reveal and cancels replaced, cleared, and disposed requests", () => {
+it.each([1, 0.9])("defers bounded reveal at scale %s and cancels stale requests", (scale) => {
   const ancestor = div();
   const region = div(ancestor);
   const first = region.appendChild(document.createElement("button"));
   const second = region.appendChild(document.createElement("button"));
   const outside = ancestor.appendChild(document.createElement("button"));
-  vi.spyOn(region, "getBoundingClientRect").mockReturnValue(new DOMRect(0, 100, 200, 100));
-  vi.spyOn(first, "getBoundingClientRect").mockReturnValue(new DOMRect(0, 240, 200, 20));
-  vi.spyOn(second, "getBoundingClientRect").mockReturnValue(new DOMRect(0, 80, 200, 20));
+  Object.defineProperty(region, "offsetHeight", { value: 100 });
+  vi.spyOn(region, "getBoundingClientRect").mockReturnValue(
+    new DOMRect(0, 100 * scale, 200, 100 * scale),
+  );
+  vi.spyOn(first, "getBoundingClientRect").mockReturnValue(
+    new DOMRect(0, 240 * scale, 200, 20 * scale),
+  );
+  vi.spyOn(second, "getBoundingClientRect").mockReturnValue(
+    new DOMRect(0, 80 * scale, 200, 20 * scale),
+  );
   const nativeScroll = vi.spyOn(Element.prototype, "scrollIntoView");
   const [active, setActive] = createSignal<HTMLElement | null>(first);
   const select = (target: HTMLElement | null) => {
@@ -183,6 +190,67 @@ it("defers bounded reveal and cancels replaced, cleared, and disposed requests",
   }
   expect([region.scrollLeft, ancestor.scrollTop]).toEqual([25, 400]);
   expect(nativeScroll).not.toHaveBeenCalled();
+});
+
+it("waits for a section and reveals it once per destination", () => {
+  const section = div();
+  const revealSection = vi.spyOn(section, "scrollIntoView");
+  const [request, setRequest] = createSignal({ id: "accounts", ready: false });
+  createScrollPositionRoot(() => {
+    const { id, ready } = request();
+    return {
+      reveal: { identity: [id], block: "start", target: ready ? () => section : () => null },
+    };
+  });
+  flush();
+  expect(revealSection).not.toHaveBeenCalled();
+  for (const ready of [true, false, true]) {
+    setRequest({ id: "accounts", ready });
+    flush();
+    expect(revealSection).toHaveBeenCalledTimes(1);
+  }
+  expect(revealSection).toHaveBeenCalledWith({ block: "start" });
+  setRequest({ id: "identity", ready: true });
+  flush();
+  expect(revealSection).toHaveBeenCalledTimes(2);
+});
+
+it("reveals a late-mounted section without replaying it after reconnect", async () => {
+  const host = div();
+  const revealSection = vi.spyOn(Element.prototype, "scrollIntoView");
+  const [destination, setDestination] = createSignal("accounts");
+  createScrollPositionRoot(
+    () => {
+      const initialId = destination();
+      return {
+        reveal: {
+          identity: [initialId],
+          block: "start",
+          target: () => host.querySelector<HTMLElement>(`#${initialId}`),
+        },
+      };
+    },
+    { waitForRevealIn: () => host },
+  );
+  flush();
+  setDestination("identity");
+  flush();
+  const mount = (id: string) => {
+    const section = document.createElement("section");
+    section.id = id;
+    return host.appendChild(section);
+  };
+  mount("accounts");
+  await Promise.resolve();
+  expect(revealSection).not.toHaveBeenCalled();
+  const identity = mount("identity");
+  await Promise.resolve();
+  expect(revealSection.mock.contexts).toEqual([identity]);
+  expect(revealSection).toHaveBeenCalledWith({ block: "start" });
+  identity.remove();
+  mount("identity");
+  await Promise.resolve();
+  expect(revealSection).toHaveBeenCalledTimes(1);
 });
 
 it("resamples content on reveal and releases live external targets when disposed", () => {

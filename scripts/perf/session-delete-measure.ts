@@ -335,8 +335,7 @@ Object.assign(process.env, {
 });
 const { loadTranscriptEvents, loadSessionEntry } =
   await import("../../src/config/sessions/session-accessor.ts");
-const { readSessionArchiveContentSync } =
-  await import("../../src/config/sessions/archive-compression.ts");
+const { readSessionArchiveText } = await import("../../test/helpers/session-archive.ts");
 const { closeOpenClawAgentDatabasesAsync } = await import("../../src/state/openclaw-agent-db.ts");
 const { loadSqliteTrajectoryRuntimeEventRowsSync } =
   await import("../../src/trajectory/runtime-store.sqlite.ts");
@@ -496,7 +495,7 @@ try {
     const archived: string[] = response.archived;
     assert(
       archived.length === 1 &&
-        createHash("sha256").update(readSessionArchiveContentSync(archived[0]!)).digest("hex") ===
+        createHash("sha256").update(readSessionArchiveText(archived[0]!)).digest("hex") ===
           target.sha256,
       "archive must preserve exact transcript bytes",
     );

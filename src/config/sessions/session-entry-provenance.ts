@@ -150,7 +150,7 @@ export function sessionPersonalProfileId(
   return assigned?.type === "human" ? assigned.id : sessionCreatorProfileId(entry?.createdActor);
 }
 
-/** Visible spawns default to the verified requester unless a different human owns the parent. */
+/** A new child belongs to its verified requester; the parent's assignment stays untouched. */
 export function inheritSpawnSessionOwner(
   source: { owner?: SessionOwnerAssignment; createdActor?: SessionCreatedActor } | undefined,
   assignedBy: SessionActor | undefined,
@@ -171,20 +171,19 @@ export function inheritSpawnSessionOwner(
   const resolvedOwnerId = !directMatch && owner?.id ? resolveProfileId(owner.id) : owner?.id;
   const resolvedRequesterId =
     !directMatch && requesterProfileId ? resolveProfileId(requesterProfileId) : requesterProfileId;
-  const assignmentActor =
-    resolvedRequesterId && (!owner || resolvedOwnerId === resolvedRequesterId)
+  const assignmentActor = resolvedRequesterId
+    ? {
+        type: "human" as const,
+        id: resolvedRequesterId,
+        ...(resolvedOwnerId === resolvedRequesterId && owner?.label ? { label: owner.label } : {}),
+      }
+    : assignedBy?.type === "agent" && assignedBy.id
       ? {
-          type: "human" as const,
-          id: resolvedRequesterId,
-          ...(owner?.label ? { label: owner.label } : {}),
+          type: "agent" as const,
+          id: assignedBy.id,
+          ...(assignedBy.label ? { label: assignedBy.label } : {}),
         }
-      : assignedBy?.type === "agent" && assignedBy.id
-        ? {
-            type: "agent" as const,
-            id: assignedBy.id,
-            ...(assignedBy.label ? { label: assignedBy.label } : {}),
-          }
-        : undefined;
+      : undefined;
   if (!assignmentActor) {
     return undefined;
   }
@@ -209,7 +208,8 @@ export type SessionCreatedVia = NonNullable<SessionRow["createdVia"]>;
 // types.ts imports from here, never the reverse (madge cycle guard).
 export function buildSessionCreationStamp(params: {
   via: SessionCreatedVia;
-  surface?: "plugin-dock";
+  surface?: SessionRow["createdSurface"];
+  createdIndependently?: true;
   actor?: SessionCreatedActor;
   now?: number;
   sandbox?: "required";
@@ -218,7 +218,8 @@ export function buildSessionCreationStamp(params: {
   inheritedGitContributorProfileIds?: string[];
 }): {
   createdVia: SessionCreatedVia;
-  createdSurface?: "plugin-dock";
+  createdSurface?: SessionRow["createdSurface"];
+  createdIndependently?: true;
   createdActor?: SessionCreatedActor;
   createdAt: number;
   sandbox?: "required";
@@ -227,6 +228,7 @@ export function buildSessionCreationStamp(params: {
 } {
   return {
     createdVia: params.via,
+    ...(params.createdIndependently ? { createdIndependently: true as const } : {}),
     ...(params.surface ? { createdSurface: params.surface } : {}),
     ...(params.actor ? { createdActor: params.actor } : {}),
     createdAt: params.now ?? Date.now(),
@@ -279,6 +281,7 @@ export function preserveCreationStamp<
     ? {
         ...entry,
         createdVia: authoritative.createdVia,
+        createdIndependently: authoritative.createdIndependently,
         createdSurface: authoritative.createdSurface,
         createdActor: authoritative.createdActor,
         createdAt: authoritative.createdAt,

@@ -57,8 +57,9 @@ export function registerCommandReplyPolicyTests({
         privateCompletion,
         sourceTool = "subagent_settle",
         replyExpectation,
+        entry,
       ] of INTER_SESSION_REPLY_POLICY_CASES) {
-        const sessionEntry = makeSessionEntry(`session-${messageChannel}`);
+        const sessionEntry = makeSessionEntry(`session-${messageChannel}`, entry);
         const sessionStore = await seedSessionStore(sessionKey, sessionEntry);
         const resultRequired = expectation === "result-required";
         if (cli) {
@@ -75,7 +76,7 @@ export function registerCommandReplyPolicyTests({
           sessionKey,
           sessionStore,
           messageChannel,
-          cfg: { surfaces: { telegram: { silentReply: { group: "allow" } } } },
+          cfg: { agents: { defaults: { silentReply: { group: "allow" } } } },
           opts: {
             privateCompletion: privateCompletion || undefined,
             replyExpectation,

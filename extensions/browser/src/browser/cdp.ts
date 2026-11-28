@@ -9,6 +9,7 @@ import {
   type CdpActionTimeouts,
   type CdpDocumentIdentities,
 } from "./cdp-page-session.js";
+import { PLAYWRIGHT_TARGET_INFO_TIMEOUT_MS } from "./cdp-timeouts.js";
 import {
   appendCdpPath,
   assertCdpEndpointAllowed,
@@ -19,6 +20,7 @@ import {
   withCdpSocket,
 } from "./cdp.helpers.js";
 import { assertBrowserNavigationAllowed, withBrowserNavigationPolicy } from "./navigation-guard.js";
+import { redactSensitiveAXNodeValues } from "./sensitive-field-values.js";
 
 export { appendCdpPath, normalizeCdpWsUrl } from "./cdp.helpers.js";
 export type { AriaSnapshotNode, RawAXNode } from "./cdp-ax.js";
@@ -35,6 +37,35 @@ export async function getDocumentIdentitiesViaCdp(opts: {
     commandTimeoutMs: opts.timeoutMs ?? 5000,
     ...(opts.lookup ? { lookup: opts.lookup } : {}),
   });
+}
+
+/** Chrome emits Inspector.targetCrashed before acknowledging Inspector.enable on a dead page. */
+export async function readCdpTargetCrashState(opts: {
+  wsUrl: string;
+  lookup?: typeof dnsLookupCb;
+  signal?: AbortSignal;
+}): Promise<boolean | undefined> {
+  let crashed = false;
+  try {
+    await withCdpSocket(opts.wsUrl, (send) => send("Inspector.enable"), {
+      lookup: opts.lookup,
+      signal: opts.signal,
+      abortScope: "operation",
+      handshakeRetries: 0,
+      handshakeTimeoutMs: PLAYWRIGHT_TARGET_INFO_TIMEOUT_MS,
+      commandTimeoutMs: PLAYWRIGHT_TARGET_INFO_TIMEOUT_MS,
+      onEvent(method) {
+        if (method === "Inspector.targetCrashed") {
+          crashed = true;
+        }
+      },
+    });
+    return crashed;
+  } catch {
+    opts.signal?.throwIfAborted();
+    // A failed connection says nothing about the renderer. Let the requested action proceed.
+    return undefined;
+  }
 }
 
 export async function captureScreenshot(opts: {
@@ -89,11 +120,14 @@ export async function createTargetViaCdp(opts: {
   signal?: AbortSignal;
   /** Wait for the created document to finish navigation and return its authoritative URL. */
   waitForNavigationResult?: boolean;
+  allowOperatorPages?: true;
 }): Promise<{ targetId: string; finalUrl?: string }> {
   opts.signal?.throwIfAborted();
   await assertBrowserNavigationAllowed({
     url: opts.url,
-    ...withBrowserNavigationPolicy(opts.ssrfPolicy),
+    ...withBrowserNavigationPolicy(opts.ssrfPolicy, {
+      allowOperatorPages: opts.allowOperatorPages,
+    }),
   });
   const configuredCdpPin = await assertCdpEndpointAllowed(opts.cdpUrl, opts.ssrfPolicy);
   const cdpControlPolicy = scopeCdpPolicyToConfiguredEndpoint(opts.cdpUrl, opts.ssrfPolicy);
@@ -248,6 +282,7 @@ export async function snapshotAria(opts: {
         nodes?: RawAXNode[];
       };
       const nodes = Array.isArray(res?.nodes) ? res.nodes : [];
+      await redactSensitiveAXNodeValues(send, nodes);
       return { nodes: formatAriaSnapshot(nodes, limit) };
     },
     { commandTimeoutMs: opts.timeoutMs ?? 5000, lookup: opts.lookup },

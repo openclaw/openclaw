@@ -13,7 +13,7 @@ import { collectDoctorHealthResultWarnings } from "./doctor-health-contribution.
 import type { DoctorHealthFlowContext } from "./doctor-health-contributions.js";
 
 export async function publishDoctorUpdateResult(params: {
-  updateResult: { resultPath: string; capture: DoctorConfigCapture };
+  updateResult: { resultPath?: string; capture: DoctorConfigCapture };
   doctorResult: UpdatePostInstallDoctorResult;
   healthContext: DoctorHealthFlowContext | undefined;
   maintenance: Awaited<ReturnType<typeof beginDoctorMaintenance>>;
@@ -32,6 +32,10 @@ export async function publishDoctorUpdateResult(params: {
     }),
     { readUpdateRun: () => resolveDoctorUpdateRun(healthContext?.env ?? process.env) },
   );
+  updateResult.capture.warnings = warnings;
+  if (!updateResult.resultPath) {
+    return;
+  }
   const outcome = { ...doctorResult };
   delete outcome.warnings;
   delete outcome.deferredInspectionCheckIds;

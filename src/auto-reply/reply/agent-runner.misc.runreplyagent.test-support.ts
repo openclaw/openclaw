@@ -1,14 +1,21 @@
-import { afterEach, beforeEach, vi } from "vitest";
+import path from "node:path";
+import { afterEach, beforeEach, expect, it, vi } from "vitest";
 import { createTempDirTracker } from "../../../test/helpers/temp-dir.js";
 import { testing as cliBackendsTesting } from "../../agents/cli-backends.test-support.js";
 import { abortEmbeddedAgentRun } from "../../agents/embedded-agent-runner/runs.js";
 import { testing as embeddedRunTesting } from "../../agents/embedded-agent-runner/runs.test-support.js";
+import { SessionManager } from "../../agents/sessions/session-manager.js";
+import { makeAssistantMessageFixture } from "../../agents/test-helpers/assistant-message-fixtures.js";
 import {
   isTestCliProvider,
   runInitialModelFallbackAttempt,
+  runFallbackModelAttempt,
   type TestModelFallbackRunnerParams,
 } from "../../agents/test-helpers/model-fallback-runner.test-support.js";
+import { createUsageFixture } from "../../agents/test-helpers/usage-fixtures.js";
 import { clearRuntimeConfigSnapshot, setRuntimeConfigSnapshot } from "../../config/config.js";
+import type { SessionEntry } from "../../config/sessions.js";
+import { replaceSessionEntry } from "../../config/sessions/session-accessor.js";
 import { resetDiagnosticEventsForTest } from "../../infra/diagnostic-events.js";
 import { resetSystemEventsForTest } from "../../infra/system-events.js";
 import { clearMemoryPluginState } from "../../plugins/memory-state.test-fixtures.js";
@@ -20,6 +27,32 @@ import { enqueueFollowupRun, scheduleFollowupDrain } from "./queue.js";
 
 const tempDirs = createTempDirTracker();
 let rootDir: string;
+
+export function sessionFixture(overrides: Partial<SessionEntry> = {}): SessionEntry {
+  return { sessionId: "session", updatedAt: Date.now(), ...overrides };
+}
+
+export function sessionState(sessionKey: string, sessionEntry: SessionEntry) {
+  return { sessionKey, sessionEntry, sessionStore: { [sessionKey]: sessionEntry } };
+}
+
+export async function storedSession(
+  overrides: Partial<SessionEntry> = {},
+  sessionKey = "main",
+  tmp = tempDirs.make("openclaw-reply-"),
+) {
+  const storePath = path.join(tmp, "sessions.json");
+  const sessionEntry = sessionFixture(overrides);
+  await replaceSessionEntry({ storePath, sessionKey }, sessionEntry);
+  return {
+    tmp,
+    storePath,
+    sessionKey,
+    sessionEntry,
+    scope: { agentId: "main", sessionId: sessionEntry.sessionId, sessionKey, storePath },
+    reply: { ...sessionState(sessionKey, sessionEntry), storePath },
+  };
+}
 
 function registerCliBackendsForTest(): void {
   const backends = [
@@ -198,7 +231,7 @@ vi.mock("../../agents/subagents/registry/subagent-registry.js", async (importOri
     await importOriginal<typeof import("../../agents/subagents/registry/subagent-registry.js")>();
   return {
     ...actual,
-    getSwarmRunByLaunchReplayKey: async () => undefined,
+    resolveSwarmLaunchReplay: async () => ({ status: "missing" }),
     markSubagentRunTerminated: () => 0,
   };
 });
@@ -295,3 +328,109 @@ export {
   tempDirs,
   warnPrivateFinalSpy,
 };
+
+export function registerRawTracePayloadTest({
+  run,
+}: {
+  run: (
+    sessionKey: string,
+    reply: Awaited<ReturnType<typeof storedSession>>["reply"],
+  ) => Promise<unknown>;
+}): void {
+  it("appends raw trace payloads with escaped fences when trace raw is enabled", async () => {
+    const { tmp, sessionKey, scope, reply } = await storedSession({
+      traceLevel: "raw",
+    });
+    const transcript = await SessionManager.openAsync(scope, tmp);
+    await transcript.appendMessageAsync({ role: "user", content: "Earlier turn", timestamp: 0 });
+    await transcript.appendMessageAsync(
+      makeAssistantMessageFixture({
+        content: [{ type: "text", text: "Earlier reply" }],
+        stopReason: "stop",
+        errorMessage: undefined,
+        usage: {
+          ...createUsageFixture(200, 10, 235),
+          cacheRead: 20,
+          cacheWrite: 5,
+        },
+      }),
+    );
+
+    runWithModelFallbackMock.mockImplementationOnce(async (params: RunWithModelFallbackParams) => ({
+      result: await runFallbackModelAttempt(params, "anthropic", "claude", "timeout"),
+      provider: "anthropic",
+      model: "claude",
+      attempts: [
+        {
+          provider: "openai",
+          model: "gpt-5.5",
+          error: "LLM request timed out.",
+          reason: "timeout",
+          status: 408,
+        },
+      ],
+    }));
+    runEmbeddedAgentMock.mockImplementationOnce(async () => {
+      return {
+        payloads: [{ text: "Visible reply" }],
+        meta: {
+          finalPromptText:
+            "Context:\n<active_memory_plugin>\nPrefer from/to failover logs.\n</active_memory_plugin>\n\n/trace raw show me everything\n~~~\nnot a fence",
+          finalAssistantVisibleText: "Visible reply",
+          finalAssistantRawText: "<final>Visible reply\n~~~\nresponse</final>",
+          executionTrace: {
+            winnerProvider: "anthropic",
+            winnerModel: "claude",
+            runner: "embedded",
+            fallbackUsed: false,
+            attempts: [
+              {
+                provider: "anthropic",
+                model: "claude",
+                result: "success",
+                stage: "assistant",
+                elapsedMs: 4200,
+              },
+            ],
+          },
+          agentMeta: {
+            sessionId: "session",
+            provider: "anthropic",
+            model: "claude",
+            usage: { input: 1200, output: 45, cacheRead: 800, cacheWrite: 200, total: 2245 },
+            lastCallUsage: {
+              input: 1000,
+              output: 45,
+              cacheRead: 750,
+              cacheWrite: 150,
+              total: 1945,
+            },
+            promptTokens: 1250,
+            compactionCount: 1,
+          },
+        },
+      };
+    });
+
+    const result = await run(sessionKey, reply);
+
+    expect(Array.isArray(result)).toBe(true);
+    expect((result as { text?: string }[])[0]?.text).toBe("Visible reply");
+    const traceText = (result as { text?: string }[])[1]?.text ?? "";
+    expect(traceText).toContain("🔎 Usage (Session Total):");
+    expect(traceText).toContain("🔎 Usage (Last Turn Total):");
+    expect(traceText).toContain("used=1,250 tok (1.3k)");
+    expect(traceText).toContain("winner=anthropic/claude");
+    expect(traceText).toContain("fallbackUsed=yes");
+    expect(traceText).toContain("attempts=2");
+    expect(traceText).toContain("1. openai/gpt-5.5");
+    expect(traceText).toContain("result=timeout");
+    expect(traceText).toContain("status=408");
+    expect(traceText).toContain("2. anthropic/claude");
+    expect(traceText).toContain("result=success");
+    expect(traceText).toContain("🔎 Model Input (User Role):");
+    expect(traceText).toContain("🔎 Model Output (Assistant Role):");
+    expect(traceText).toContain("show me everything\n\\~~~\nnot a fence");
+    expect(traceText).toContain("<final>Visible reply\n\\~~~\nresponse</final>");
+  });
+}

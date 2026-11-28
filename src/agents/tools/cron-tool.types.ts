@@ -13,6 +13,8 @@ export type CronCreatorToolAllowlistEntry =
       /** Canonical policy name persisted into toolsAllow caps. */
       name: string;
       pluginId?: string;
+      /** Node-claimed owners cannot grant plugin-scoped access. */
+      ownerUnverified?: true;
       /** Runtime-specific alias the creator surface presented for this tool. */
       aliasName?: string;
       /** Runtime owner that supplied exec; required for process-bearing stream writes. */
@@ -48,6 +50,8 @@ export type CronCreatorToolAuthoritySnapshot = Omit<
 };
 
 export type CronToolOptions = {
+  /** A model-facing chat add must identify its slot before the scheduler can mutate. */
+  requireCreationPlan?: boolean;
   agentSessionKey?: string;
   agentId?: string;
   /** Authenticated source account; authority must not be inferred from delivery. */

@@ -14,6 +14,7 @@ describe("SettingsSelect", () => {
     const options = [firstOption, { value: "two", label: "Two", disabled: true }];
     const view = mountSolid(SettingsSelect, {
       "aria-label": "Target",
+      class: "local-hook",
       value: "one",
       options,
       onChange: first,
@@ -23,7 +24,8 @@ describe("SettingsSelect", () => {
       view.container.remove();
     };
     const select = view.container.querySelector("select")!;
-    expect(select.className).toBe("settings-select");
+    expect(select.classList.contains("settings-select")).toBe(true);
+    expect(select.classList.contains("local-hook")).toBe(true);
     expect(select.getAttribute("aria-label")).toBe("Target");
     expect(select.value).toBe("one");
     const retained = select.options.item(1)!;
@@ -31,6 +33,7 @@ describe("SettingsSelect", () => {
 
     view.update({
       "aria-label": "Target",
+      class: "local-hook",
       value: "two",
       options: [firstOption, { value: "two", label: "Renamed" }],
       onChange: second,

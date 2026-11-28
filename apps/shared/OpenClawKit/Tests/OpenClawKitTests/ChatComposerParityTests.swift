@@ -1,4 +1,7 @@
 import Foundation
+import Observation
+import SwiftUI
+import Synchronization
 import Testing
 import UniformTypeIdentifiers
 @testable import OpenClawChatUI
@@ -90,6 +93,100 @@ struct ChatComposerStateTests {
         case detached
     }
 
+    @Test(arguments: [false, true])
+    func `closed model pickers defer catalog projection`(clean: Bool) {
+        let vm = OpenClawChatViewModel(sessionKey: "main", transport: ComposerParityTransport())
+        defer { vm.detachTransport() }
+        vm.modelChoices = (0..<2000).map { index in
+            OpenClawChatModelChoice(
+                modelID: "model-\(index)",
+                name: "Model \(index)",
+                provider: "provider-\(index % 20)",
+                contextWindow: 200_000)
+        }
+        vm.input = "A draft being typed"
+        let composer = OpenClawChatComposer(
+            viewModel: vm,
+            style: .standard,
+            showsSessionSwitcher: false,
+            userAccent: nil,
+            composerChrome: clean ? .clean : .full,
+            isComposerEnabled: true,
+            isAttachmentInputEnabled: true,
+            messagePlaceholder: nil,
+            talkControl: nil,
+            dictationControl: nil,
+            voiceNoteControl: nil)
+        let changes = Mutex(0)
+        // Exercise the production builders, including both ViewThatFits candidates.
+        // Favorites/recents are projection-only inputs, unlike catalog reads needed
+        // by the visible selected-model label and send availability.
+        let duration = ContinuousClock().measure {
+            withObservationTracking {
+                for _ in 0..<40 {
+                    if clean {
+                        withExtendedLifetime(composer.cleanTrailingControls) {}
+                    } else {
+                        withExtendedLifetime(composer.modelPicker) {}
+                    }
+                }
+            } onChange: {
+                changes.withLock { $0 += 1 }
+            }
+        }
+        print("composer-menu-construction chrome=\(clean ? "clean" : "full") rows=2000 builds=40 elapsed=\(duration)")
+
+        vm.modelPickerFavorites = ["provider-0/model-0"]
+        vm.modelPickerRecents = ["provider-1/model-1"]
+
+        #expect(
+            changes.withLock { $0 } == 0,
+            "Constructing the closed picker must not group or observe the full catalog")
+    }
+
+    @Test func `slash panel owns draft observation rather than its construction caller`() throws {
+        let vm = OpenClawChatViewModel(sessionKey: "main", transport: ComposerParityTransport())
+        defer { vm.detachTransport() }
+        vm.input = "/"
+        let composer = OpenClawChatComposer(
+            viewModel: vm,
+            style: .standard,
+            showsSessionSwitcher: false,
+            userAccent: nil,
+            composerChrome: .clean,
+            isComposerEnabled: true,
+            isAttachmentInputEnabled: true,
+            messagePlaceholder: nil,
+            talkControl: nil,
+            dictationControl: nil,
+            voiceNoteControl: nil)
+        // Exercise the production boundary without pretending to measure mounted SwiftUI body work.
+        let constructionChanges = Mutex(0)
+        let panel = withObservationTracking {
+            composer.slashCommandPanel
+        } onChange: {
+            constructionChanges.withLock { $0 += 1 }
+        }
+
+        vm.input = "/skill"
+
+        try #require(
+            constructionChanges.withLock { $0 } == 0,
+            "Constructing the production slash panel must not subscribe its caller to the draft")
+
+        let bodyChanges = Mutex(0)
+        withObservationTracking {
+            withExtendedLifetime(panel.body) {}
+        } onChange: {
+            bodyChanges.withLock { $0 += 1 }
+        }
+
+        vm.input = "/skill calendar"
+
+        #expect(bodyChanges.withLock { $0 } == 1, "The panel body must still observe query edits")
+        #expect(constructionChanges.withLock { $0 } == 0)
+    }
+
     @Test(arguments: ComposerRouteTransition.allCases)
     func `captured composer input follows only its admitted route`(_ transition: ComposerRouteTransition) {
         let vm = OpenClawChatViewModel(
@@ -138,7 +235,8 @@ struct ChatComposerStateTests {
     @Test func `model selection target describes only gateway owned values`() {
         let viewModel = OpenClawChatViewModel(sessionKey: "main", transport: ComposerParityTransport())
         let expectations: [(String?, String?)] = [
-            ("session", "Changes this session only"),
+            // A session-scoped pick needs no note.
+            ("session", nil),
             ("agent", "Changes this agent's default"),
             ("global", "Changes the global default"),
             ("future-target", nil),
@@ -214,7 +312,7 @@ struct ChatComposerStateTests {
         vm.input = "main draft"
 
         vm.switchSession(to: "other")
-        #expect(vm.input == "")
+        #expect(vm.input.isEmpty)
         vm.input = "other draft"
 
         vm.switchSession(to: "main")
@@ -336,5 +434,43 @@ struct ChatComposerStateTests {
 
         #expect(transport.sentMessages == ["> **User:** quoted body\n\n"])
         #expect(vm.replyTarget == nil)
+    }
+}
+
+@MainActor
+struct ChatInputResponsivenessTests {
+    @Test
+    func `draft observation stays in the deferred composer sections`() throws {
+        let viewModel = OpenClawChatViewModel(sessionKey: "main", transport: ComposerParityTransport())
+        let composer = OpenClawChatComposer(
+            viewModel: viewModel,
+            style: .standard,
+            showsSessionSwitcher: false,
+            userAccent: nil,
+            composerChrome: .clean,
+            isComposerEnabled: true,
+            isAttachmentInputEnabled: true,
+            messagePlaceholder: nil,
+            talkControl: nil,
+            dictationControl: nil,
+            voiceNoteControl: nil)
+        let probe = Mutex(0)
+        withObservationTracking {
+            _ = composer.editorOverlay
+            _ = composer.cleanCaptureAndPrimaryControls
+        } onChange: {
+            probe.withLock { $0 += 1 }
+        }
+        viewModel.input = "typing while an answer arrives"
+        try #require(probe.withLock { $0 } == 0)
+
+        let childProbe = Mutex(0)
+        withObservationTracking {
+            _ = composer.cleanCaptureAndPrimaryControls.body
+        } onChange: {
+            childProbe.withLock { $0 += 1 }
+        }
+        viewModel.input = ""
+        #expect(childProbe.withLock { $0 } == 1)
     }
 }

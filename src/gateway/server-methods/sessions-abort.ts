@@ -13,6 +13,8 @@ import {
   resolveActiveEmbeddedRunOwnerByRunId,
   type ActiveEmbeddedRunOwner,
 } from "../../agents/embedded-agent-runner/runs.js";
+import { abortControlledSubagents } from "../../agents/subagents/cancel-descendants.js";
+import { captureDormantSubagentStop } from "../../agents/subagents/dormant-stop.js";
 import { isConfiguredSessionStoreAgentId } from "../../config/sessions.js";
 import { composeSessionSourceAssertion } from "../../config/sessions/session-source-authority.js";
 import { resolveExistingAgentSessionStoreTargetsAsync } from "../../config/sessions/targets-runtime.js";
@@ -48,7 +50,7 @@ import { resolveSessionStoreKey } from "../session-store-key.js";
 import { withGatewaySessionEntry } from "../session-utils-store.js";
 import { getWorkerInferenceSessionControl } from "../worker-environments/inference-control-internal.js";
 import { captureChatAbortAuthority } from "./chat-abort-authorization.js";
-import { abortControlledSubagents, descendantAbortError } from "./chat-abort-descendants.js";
+import { descendantAbortError } from "./chat-abort-descendants.js";
 import { handleChatAbortRequestWithLifecycle } from "./chat-abort-handler.js";
 import { abortDormantSubagentSession } from "./chat-abort-runtime.js";
 import { abortedPartialPersistenceError } from "./chat-aborted-partial.js";
@@ -471,25 +473,33 @@ export const sessionAbortHandlers: GatewayRequestHandlers = {
         throw abortedPartialPersistenceError(error, abortWarning);
       }
     };
-    const dormantAbort = abortDormantSubagentSession({
-      context,
+    const dormant = captureDormantSubagentStop({
       sessionKey: canonicalKey,
-      sessionKeyAliases: [key, ...(requestedKeyAliases ?? [])],
       agentId: targetAgentId,
-      sessionId: persistedSessionId,
-      requiredSessionId,
-      session: loadedSession ? { ok: true, value: loadedSession } : undefined,
-      defaultAgentId: stableTargetOwner,
       runId: requestedRunId,
-      abortOrigin: "rpc",
-      stopReason: "rpc",
-      requester,
-      stopSource: requestedRunId ? "client-run" : "client-session",
-      hookContext: stopHookContext,
-      assertCurrent: assertAbortCurrent,
     });
-    if (dormantAbort) {
-      const result = await dormantAbort;
+    if (dormant) {
+      const result = await abortDormantSubagentSession(
+        {
+          context,
+          sessionKey: canonicalKey,
+          sessionKeyAliases: [key, ...(requestedKeyAliases ?? [])],
+          agentId: targetAgentId,
+          sessionId: persistedSessionId,
+          requiredSessionId,
+          session: loadedSession ? { ok: true, value: loadedSession } : undefined,
+          defaultAgentId: stableTargetOwner,
+          runId: requestedRunId,
+          abortOrigin: "rpc",
+          stopReason: "rpc",
+          userInitiated: p.userInitiated,
+          requester,
+          stopSource: requestedRunId ? "client-run" : "client-session",
+          hookContext: stopHookContext,
+          assertCurrent: assertAbortCurrent,
+        },
+        dormant,
+      );
       if (result.ok) {
         abortWarning = result.value.warning;
       }
@@ -515,6 +525,7 @@ export const sessionAbortHandlers: GatewayRequestHandlers = {
             sessionKey: abortSessionKey,
             runId: requestedRunId,
             agentId: targetAgentId,
+            ...(p.userInitiated ? { userInitiated: true } : {}),
           },
           respond: (ok, payload, error, meta) => {
             if (!ok) {

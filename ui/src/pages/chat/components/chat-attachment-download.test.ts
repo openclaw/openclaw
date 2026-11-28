@@ -6,8 +6,11 @@ import type { AttachmentSidebarContent } from "./chat-sidebar-content-types.ts";
 import { createChatSidebarContainer } from "./chat-sidebar.test-support.ts";
 import "./chat-detail-panel.tsx";
 
-// mock-isolation: Observe browser delivery while the real panel owns each download.
-vi.mock("../../../lib/download.ts", () => ({ downloadBlobFile: vi.fn() }));
+// Observe browser delivery while the real panel owns each download.
+vi.mock("../../../lib/download.ts", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("../../../lib/download.ts")>()),
+  downloadBlobFile: vi.fn(),
+}));
 afterEach(() => {
   document.body.replaceChildren();
   vi.clearAllMocks();

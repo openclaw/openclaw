@@ -4,6 +4,7 @@ import type { SQLInputValue } from "node:sqlite";
 import { afterEach, expect, it } from "vitest";
 import type {
   BoardSnapshot,
+  BoardWidgetDataQuery,
   BoardWidgetMaterializedPutParams,
 } from "../../packages/gateway-protocol/src/index.js";
 import { createDeferred } from "../../test/helpers/promise.js";
@@ -197,7 +198,7 @@ it("isolates sessions, snapshots and metadata from callers and HTML document bod
 it("preserves native identity and layout through edits, reopen, and replacement", async () => {
   const { store, put, ops, current: readSnapshot, reopen, target } = fixture();
   const putCard = (name: string, props?: Record<string, unknown>) =>
-    put({ name, content: pluginContent(props) });
+    put({ name, content: pluginContent(props), placement: { tabId: "main" } });
   const props = {
     instanceId: "caller-selected",
     pluginInstanceId: "caller-selected",
@@ -219,34 +220,34 @@ it("preserves native identity and layout through edits, reopen, and replacement"
   expect(await readBoardHtml(store, target, "work-item")).toBeUndefined();
   expect(await store.readWidgetMcpApp(target, "work-item")).toBeUndefined();
 
-  const moved = await ops({ kind: "widget_move", name: "work-item", after: "right" });
-  expect(moved.widgets.map((widget) => widget.name)).toEqual(["left", "right", "work-item"]);
-  expect(moved.widgets[2]?.props).toEqual(props);
-  expect(moved.widgets[2]?.instanceId).toBe(instanceId);
-  const [left, right] = moved.widgets;
+  const moved = await ops({ kind: "widget_move", name: "work-item", after: "left" });
+  expect(moved.widgets.map((widget) => widget.name)).toEqual(["left", "work-item", "right"]);
+  expect(moved.widgets[1]?.props).toEqual(props);
+  expect(moved.widgets[1]?.instanceId).toBe(instanceId);
+  const [left, , right] = moved.widgets;
   const cleared = await putCard("work-item");
   expect(cleared.widgets).toEqual([
     left,
-    right,
     expect.objectContaining({ instanceId, revision: 2 }),
+    right,
   ]);
-  expect(cleared.widgets[2]).not.toHaveProperty("props");
+  expect(cleared.widgets[1]).not.toHaveProperty("props");
   const edited = await put({
     name: "work-item",
     title: "Updated status",
     content: pluginContent(props),
-    placement: { after: "left" },
+    placement: { after: "right" },
   });
   expect(edited.widgets).toEqual([
     left,
+    { ...right, position: 1 },
     expect.objectContaining({ title: "Updated status", instanceId, revision: 3, props }),
-    { ...right, position: 2 },
   ]);
   const resized = await ops({ kind: "widget_resize", name: "work-item", sizeW: 8, sizeH: 6 });
   await reopen();
   const persisted = await readSnapshot();
   expect(persisted).toEqual(resized);
-  expect(persisted.widgets[1]).toMatchObject({ sizeW: 8, sizeH: 6 });
+  expect(persisted.widgets[2]).toMatchObject({ sizeW: 8, sizeH: 6 });
   expect((await store.getSnapshotWithHtmlViewMetadata(target)).htmlViewMetadata.size).toBe(0);
   await ops({ kind: "widget_remove", name: "work-item" });
   const replacement = await put({ name: "work-item", content: pluginContent() });
@@ -350,6 +351,58 @@ it("preserves HTML grants only for unchanged bytes with equal or narrower declar
     put("two", { ...narrow, netOrigins: ["https://one.example", "https://three.example"] }),
     { revision: 5, grantState: "pending" },
   );
+});
+
+it("reloads named query grants without promoting repository-only or malformed manifests", async () => {
+  const board = fixture();
+  const query: BoardWidgetDataQuery = {
+    name: "main-ci",
+    bindingId: "github.actions.runs",
+    params: {
+      repository: "OWNER/Repo",
+      workflow: "ci.yml",
+      branch: "main",
+      status: null,
+      created: null,
+      perPage: 1,
+      excludePullRequests: true,
+    },
+    fields: ["id", "conclusion"],
+  };
+  for (const name of ["named", "legacy"]) {
+    const declared =
+      name === "named" ? { queries: [query] } : { tools: ["github.actions.runs:owner/repo"] };
+    const saved = await board.put({ name, content: { kind: "html", html: "CI" }, declared });
+    const widget = saved.widgets.find((item) => item.name === name)!;
+    await board.grant(name, widget.revision, widget.instanceId);
+  }
+  await board.reopen();
+  const widgets = (await board.current()).widgets;
+  expect(widgets.find((widget) => widget.name === "named")).toMatchObject({
+    grantState: "granted",
+    declared: {
+      queries: [
+        {
+          ...query,
+          params: { ...query.params, repository: "owner/repo" },
+          fields: ["conclusion", "id"],
+        },
+      ],
+    },
+  });
+  expect(widgets.find((widget) => widget.name === "legacy")?.declared).toEqual({
+    tools: ["github.actions.runs:owner/repo"],
+  });
+  // Persisted unknown selectors must lose the whole grant instead of being dropped.
+  openOpenClawAgentDatabase(board.options)
+    .db.prepare(
+      "UPDATE board_widgets SET manifest = json_set(manifest, '$.queries[0].params.page', 2) WHERE name = ? AND session_key = ?",
+    )
+    .run("named", board.sessionKey);
+  await board.reopen();
+  expect((await board.current()).widgets.find((widget) => widget.name === "named")).toMatchObject({
+    grantState: "none",
+  });
 });
 
 it.each(["html", "mcp-app"] as const)(

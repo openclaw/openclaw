@@ -1,7 +1,7 @@
 package ai.openclaw.app
 
+import ai.openclaw.app.gateway.ErrorShape
 import ai.openclaw.app.gateway.GatewayRequestRejected
-import ai.openclaw.app.gateway.GatewaySession
 import kotlinx.coroutines.runBlocking
 import kotlinx.serialization.json.Json
 import kotlinx.serialization.json.jsonArray
@@ -56,7 +56,7 @@ class ProviderModelCatalogRequestTest {
       try {
         requestProviderModelConfig(agentId = "beta", refresh = true) { paramsJson ->
           requests += paramsJson
-          throw GatewayRequestRejected(GatewaySession.ErrorShape("INVALID_REQUEST", "unsupported view"))
+          throw GatewayRequestRejected(ErrorShape("INVALID_REQUEST", "unsupported view"))
         }
       } catch (err: Throwable) {
         actual = err
@@ -72,7 +72,7 @@ class ProviderModelCatalogRequestTest {
   @Test
   fun preservesNonCompatibilityGatewayFailures() =
     runBlocking {
-      val expected = GatewayRequestRejected(GatewaySession.ErrorShape("UNAVAILABLE", "gateway busy"))
+      val expected = GatewayRequestRejected(ErrorShape("UNAVAILABLE", "gateway busy"))
       var actual: Throwable? = null
 
       try {

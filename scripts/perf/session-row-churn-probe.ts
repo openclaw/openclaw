@@ -7,6 +7,7 @@ type Task = {
   calls: number;
   inclusiveMs: number;
   cpuMs: number;
+  maxCpuMs: number;
   durations: number[];
   exclusiveMs: number;
   maxSegmentMs: number;
@@ -60,6 +61,7 @@ const bucket = (label: string) => {
       calls: 0,
       inclusiveMs: 0,
       cpuMs: 0,
+      maxCpuMs: 0,
       durations: [],
       exclusiveMs: 0,
       maxSegmentMs: 0,
@@ -103,7 +105,9 @@ export function r2Task<T>(name: string, run: () => T, phase?: string): T {
     const task = bucket(current.label);
     task.calls++;
     task.inclusiveMs += end - at;
-    task.cpuMs += (cpu.user + cpu.system) / 1000;
+    const cpuMs = (cpu.user + cpu.system) / 1000;
+    task.cpuMs += cpuMs;
+    task.maxCpuMs = Math.max(task.maxCpuMs, cpuMs);
     task.durations.push(end - at);
     frame = parent;
     if (parent) {
@@ -310,7 +314,10 @@ function snapshot() {
     },
   };
 }
-Reflect.set(globalThis, "sessionRowChurnProbe", {
+export const sessionRowChurnProbe = {
+  count(name: string) {
+    bucket(name).calls++;
+  },
   begin(label: string, detail = false) {
     materializationStart = getSessionRowSelectionMetrics().materialization;
     detailed = detail;
@@ -358,4 +365,5 @@ Reflect.set(globalThis, "sessionRowChurnProbe", {
     }
     return { aliveReturnedObjects: alive, weakReferences: returnedRefs.size };
   },
-});
+};
+Reflect.set(globalThis, "sessionRowChurnProbe", sessionRowChurnProbe);

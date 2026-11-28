@@ -68,6 +68,7 @@ function runRuntimeToolFixtureWithDeps(
   env: QaSuiteRuntimeEnv,
   config: RuntimeToolFixtureConfig,
   deps: RuntimeToolFixtureDeps,
+  onSessionKeys?: Parameters<typeof runRuntimeToolFixture>[2],
 ) {
   vi.spyOn(suiteRuntimeAgentSession, "createSession").mockImplementation(deps.createSession);
   vi.spyOn(suiteRuntimeAgentSession, "readEffectiveTools").mockImplementation(
@@ -83,7 +84,7 @@ function runRuntimeToolFixtureWithDeps(
       await deps.ensureImageGenerationConfigured(envArg);
     },
   );
-  return runRuntimeToolFixture(env, config);
+  return runRuntimeToolFixture(env, config, onSessionKeys);
 }
 
 function transcriptToolCall(
@@ -126,6 +127,7 @@ function runLiveRuntimeToolFixture(
     config?: RuntimeToolFixtureConfig;
     tools?: Iterable<string>;
     runAgentPrompt?: RuntimeToolFixtureDeps["runAgentPrompt"];
+    onSessionKeys?: Parameters<typeof runRuntimeToolFixture>[2];
   } = {},
 ) {
   const toolName = params.toolName ?? "read";
@@ -136,6 +138,7 @@ function runLiveRuntimeToolFixture(
       tools: params.tools ?? [toolName],
       runAgentPrompt: params.runAgentPrompt,
     }),
+    params.onSessionKeys,
   );
 }
 
@@ -234,6 +237,7 @@ async function runMockRuntimeToolFixture(params: {
   tools?: Iterable<string>;
   runAgentPrompt?: RuntimeToolFixtureDeps["runAgentPrompt"];
   forceCodex?: boolean;
+  onSessionKeys?: Parameters<typeof runRuntimeToolFixture>[2];
 }) {
   const toolName = params.toolName ?? "read";
   const env = params.env ?? (await makeEnv({ mock: { baseUrl: MOCK_BASE_URL } }));
@@ -252,6 +256,7 @@ async function runMockRuntimeToolFixture(params: {
       fetchJson: mockRequestLog(params.requests),
       runAgentPrompt: params.runAgentPrompt,
     }),
+    params.onSessionKeys,
   );
 }
 

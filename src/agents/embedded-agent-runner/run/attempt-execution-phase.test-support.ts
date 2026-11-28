@@ -55,7 +55,6 @@ export async function createFixture(
   const admission = prepareSystemAgentRunAdmission({}, "run-1", "main", "execution-phase-test");
   onTestFinished(admission.close);
   const admittedRunContext = await admission.admit("embedded");
-  const order: string[] = [];
   const attemptAbortController = new AbortController();
   if (options.aborted) {
     attemptAbortController.abort(new Error("already aborted"));
@@ -92,12 +91,12 @@ export async function createFixture(
   const abortActiveSession = vi.fn(async () => undefined);
   const trackPromptSettlePromise = vi.fn((promise: Promise<void>) => promise);
   const externalAbortController = {
-    setRunAbort: vi.fn(() => order.push("set-run-abort")),
-    setCompactionState: vi.fn(() => order.push("set-compaction-state")),
+    setRunAbort: vi.fn(),
+    setCompactionState: vi.fn(),
   };
-  const prepStages = { mark: vi.fn(() => order.push("stream-ready")) };
+  const prepStages = { mark: vi.fn() };
   const emitPrepStageSummary = vi.fn();
-  const setToolSearchCatalogExecutor = vi.fn(() => order.push("set-catalog"));
+  const setToolSearchCatalogExecutor = vi.fn();
   const replaySafeTool = { name: "read" };
   const result = { messages: [] };
   const state = {
@@ -157,6 +156,7 @@ export async function createFixture(
       sessionRuntime,
       systemPrompt: { runtimeChannel: "telegram" },
       toolBase: {
+        bindRunAbortDeadline: vi.fn(),
         skillInstructionDeliveryCache,
         nestedToolActivityState: createAttemptNestedToolActivityState(),
       },
@@ -198,7 +198,6 @@ export async function createFixture(
 
   mocks.abortable.mockImplementation((_signal, promise) => promise);
   mocks.installStreamGuards.mockImplementation(() => {
-    order.push("guards");
     return {
       onModelRequest: vi.fn(),
       onModelUsage: vi.fn(),
@@ -206,17 +205,14 @@ export async function createFixture(
     };
   });
   mocks.prepareHistory.mockImplementation(async () => {
-    order.push("history");
     return {
       contextEnginePromptAuthority: "assembled",
     };
   });
   mocks.createRunAbort.mockImplementation(() => {
-    order.push("abort");
     return runAbort;
   });
   mocks.prepareStream.mockImplementation((streamInput) => {
-    order.push("stream");
     if (options.exerciseTerminalMerges !== false) {
       const idleError = new Error("idle timeout");
       mocks.installStreamGuards.mock.calls[0]?.[1].onIdleTimeout(idleError);
@@ -225,7 +221,6 @@ export async function createFixture(
     return streamResult;
   });
   mocks.prepareTimeout.mockImplementation((timeoutInput) => {
-    order.push("timeout");
     if (options.exerciseTerminalMerges !== false) {
       timeoutInput.markTimedOutDuringCompaction();
       timeoutInput.markTimedOutByRunBudget();
@@ -233,7 +228,6 @@ export async function createFixture(
     return timeoutResult;
   });
   mocks.runSettledPhase.mockImplementation(async (settledInput) => {
-    order.push("settled-phase");
     expect(settledInput.getRepairedRejectedProviderReplay()).toBe(false);
     mocks.installStreamGuards.mock.calls[0]?.[1].onRejectedProviderReplayRepaired();
     expect(settledInput.getRepairedRejectedProviderReplay()).toBe(true);
@@ -242,25 +236,12 @@ export async function createFixture(
 
   return {
     admission,
-    abortActiveSession,
     activeSession,
-    emitPrepStageSummary,
-    externalAbortController,
     input,
-    order,
-    prepStages,
-    replaySafeTool,
     result,
     runAbort,
-    sessionManager,
     setContextReplacementHook,
     skillInstructionDeliveryCache,
-    setToolSearchCatalogExecutor,
     state,
-    streamResult,
-    subscription,
-    timeoutResult,
-    toolSearchCatalogExecutor,
-    trackPromptSettlePromise,
   };
 }

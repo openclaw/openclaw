@@ -36,6 +36,7 @@ import {
 import type { RunCliAgentParams } from "../../src/agents/cli-runner/types.js";
 import type { ReplyToolAuthorityInput } from "../../src/auto-reply/reply/reply-tool-authority.types.js";
 import { captureRuntimeConfig } from "../../src/config/runtime-source-projection.js";
+import { decideTurnGrant } from "../../src/gateway/operator-admission.js";
 
 const { values } = parseArgs({
   options: {
@@ -83,13 +84,11 @@ const baselineCli: typeof captureCliRunToolAuthority =
     ? (await import(pathToFileURL(values.baseline).href)).captureCliRunToolAuthority
     : captureCliRunToolAuthority;
 const route = { provider: "synthetic", model: "synthetic-model" };
-let authorityChecks = 0;
 const authority = createAdmittedRunOperatorAuthority({
+  canonicalIdentity: null,
   profileId: "synthetic-operator",
   scopes: ["operator.read", "operator.write", "operator.admin"],
-  assertCurrent() {
-    authorityChecks++;
-  },
+  grant: decideTurnGrant(["operator.read", "operator.write", "operator.admin"]),
 });
 const config = captureRuntimeConfig({
   plugins: {
@@ -213,7 +212,6 @@ async function measure(
     values.output && (values.baseline ? `${values.output}.${label}.json` : values.output);
   await workload(256, harness, cli);
   collectGarbage();
-  authorityChecks = 0;
   const inspector = new Session();
   inspector.connect();
   if (values.mode !== "timing") {
@@ -252,7 +250,6 @@ async function measure(
     attemptProperties: Object.keys(attempt).length,
     internalProperties: Object.keys(internal).length,
     fingerprint,
-    authorityChecks,
     hostLoad,
     elapsedMs,
     cpuMs: (cpuUsage.user + cpuUsage.system) / 1000,

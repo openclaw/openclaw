@@ -13,6 +13,7 @@ import { readMcpOAuthPendingAuthorization } from "../agents/mcp-oauth-store.js";
 import { readMcpOAuthCredentialsStatus } from "../agents/mcp-oauth.js";
 import { seedMcpOAuthStoreForTest } from "../agents/mcp-oauth.test-support.js";
 import { withTempHome } from "../config/home-env.test-harness.js";
+import * as gatewayCall from "../gateway/call.js";
 import * as gatewayLock from "../infra/gateway-lock.js";
 import { captureGatewayStateOwner } from "../infra/gateway-state-owner.js";
 import { defaultRuntime } from "../runtime.js";
@@ -49,7 +50,7 @@ const oauthServer = (url: string, oauth?: object) => ({
   ...(oauth ? { oauth } : {}),
 });
 
-async function startOAuthFixture() {
+async function startOAuthFixture({ rejectRegistration = false } = {}) {
   let issuer = "";
   let codeChallenge: string | undefined;
   let tokenRedirectUri: string | undefined;
@@ -75,6 +76,12 @@ async function startOAuthFixture() {
       });
     }
     if (url.pathname === "/register" && request.method === "POST") {
+      if (rejectRegistration) {
+        return reply(
+          { error: "invalid_client_metadata", error_description: "private detail" },
+          400,
+        );
+      }
       const metadata = JSON.parse(await readBody(request)) as { redirect_uris?: string[] };
       const redirectUris = metadata.redirect_uris?.map((value) => {
         const redirect = new URL(value);
@@ -247,6 +254,79 @@ it("clears requester credentials when the same URL changes to shared OAuth", asy
   });
 });
 
+it("routes login and logout through a live Gateway owner and prints its sign-in link", async () => {
+  await withTempHome(`openclaw-mcp-online-${randomUUID()}-`, async () => {
+    const owner = {
+      pid: process.pid,
+      ownerId: "fixture-gateway-owner",
+      createdAt: new Date(0).toISOString(),
+      port: 18789,
+      configPath: process.env.OPENCLAW_CONFIG_PATH ?? "",
+    };
+    vi.spyOn(gatewayLock, "readActiveGatewayLockIdentity").mockResolvedValue(owner);
+    vi.spyOn(gatewayLock, "readLockPayloadSync").mockReturnValue(owner);
+    const request = vi
+      .spyOn(gatewayCall, "callGateway")
+      .mockResolvedValueOnce({
+        status: "redirect",
+        serverName: "fixture",
+        authorizationUrl: "https://accounts.example.com/authorize?state=fixture-state",
+        redirectUrl: "http://127.0.0.1:18789/oauth/mcp/callback",
+        usesPublicOrigin: false,
+      })
+      .mockResolvedValueOnce({ status: "authorized", serverName: "fixture" })
+      .mockResolvedValueOnce({ serverName: "fixture" });
+    const log = vi.spyOn(defaultRuntime, "log").mockImplementation(() => {});
+    const { run } = createCli();
+    await run("login", "fixture");
+    expect(request).toHaveBeenLastCalledWith(
+      expect.objectContaining({
+        method: "mcp.authLogin",
+        params: { serverName: "fixture" },
+        localPortOverride: owner.port,
+      }),
+    );
+    expect(log).toHaveBeenCalledWith("https://accounts.example.com/authorize?state=fixture-state");
+    expect(log).toHaveBeenCalledWith(expect.stringContaining("--callback-url <url>"));
+    const callbackUrl =
+      "http://127.0.0.1:18789/oauth/mcp/callback?code=fixture&state=fixture-state";
+    await run("login", "fixture", "--callback-url", callbackUrl);
+    expect(request).toHaveBeenLastCalledWith(
+      expect.objectContaining({
+        method: "mcp.authLogin",
+        params: { serverName: "fixture", callbackUrl },
+      }),
+    );
+    await run("logout", "fixture");
+    expect(request).toHaveBeenLastCalledWith(
+      expect.objectContaining({
+        method: "mcp.authLogout",
+        params: { serverName: "fixture" },
+      }),
+    );
+    expect(log).toHaveBeenCalledWith('MCP OAuth credentials cleared for "fixture".');
+  });
+});
+
+it("reports a rejected client registration before offering a sign-in URL", async () => {
+  await withTempHome("openclaw-mcp-registration-", async () => {
+    const fixture = await startOAuthFixture({ rejectRegistration: true });
+    try {
+      const { run, set } = createCli();
+      await set(oauthServer(`${fixture.issuer}/mcp`));
+      const log = vi.spyOn(defaultRuntime, "log").mockImplementation(() => {});
+      const error = vi.spyOn(defaultRuntime, "error").mockImplementation(() => {});
+      await expect(run("login", "fixture")).rejects.toMatchObject({ code: 1 });
+      expect(error).toHaveBeenCalledExactlyOnceWith(
+        `OAuth server rejected dynamic client registration for "fixture" (HTTP 400): invalid_client_metadata. Check the provider's client registration settings before retrying.`,
+      );
+      expect(log).not.toHaveBeenCalled();
+    } finally {
+      await fixture.close();
+    }
+  });
+});
+
 it("logs in and probes through the CLI with a portless loopback registration", async () => {
   await withTempHome(`openclaw-mcp-login-${randomUUID()}-`, async () => {
     const fixture = await startOAuthFixture();
@@ -308,7 +388,7 @@ it("logs in and probes through the CLI with a portless loopback registration", a
       expect(requests.slice(1).map((request) => request.headers.authorization)).toEqual(
         Array(3).fill("Bearer fixture-refreshed-access-token"),
       );
-      // A live owner must keep this CLI from refreshing or clearing its credentials.
+      // Probes still require offline custody because they may refresh credentials.
       const discover = vi.spyOn(gatewayLock, "readActiveGatewayLockIdentity").mockResolvedValue({
         pid: process.pid,
         ownerId: "synthetic-other-process-owner",
@@ -318,14 +398,8 @@ it("logs in and probes through the CLI with a portless loopback registration", a
       const requestCount = fixture.mcpRequests().length;
       try {
         for (const args of [
-          ["login", "fixture", "--code", "fixture-code"],
-          ["logout", "fixture"],
           ["probe", "fixture"],
           ["doctor", "fixture", "--probe"],
-          ["set", "fixture", '{"url":"https://replacement.example.com"}'],
-          ["configure", "fixture", "--clear-auth"],
-          ["tools", "fixture", "--clear"],
-          ["unset", "fixture"],
         ]) {
           await expect(run(...args)).rejects.toMatchObject({
             code: "OWNER_UNAVAILABLE",

@@ -24,6 +24,7 @@ export abstract class MemorySyncTestHarness extends MemoryManagerSyncOps {
   protected resolveProviderIndexIdentities = () => [];
   protected withTimeout = async <T>(promise: Promise<T>): Promise<T> => await promise;
   protected async pruneEmbeddingCacheIfNeeded(): Promise<void> {}
+  protected async retirePublishedEmbeddingCacheRows(): Promise<void> {}
   protected resetProviderInitializationForRetry(): void {}
   protected assertRequiredProviderAvailable(): void {}
 
@@ -38,6 +39,10 @@ export abstract class MemorySyncTestHarness extends MemoryManagerSyncOps {
     } finally {
       this.syncIsBackground = false;
     }
+  }
+
+  protected async syncPublishedIndexInBackground(params: { reason: string }): Promise<void> {
+    await this.sync(params);
   }
 
   protected async retireCurrentProvider(): Promise<void> {

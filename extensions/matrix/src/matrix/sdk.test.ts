@@ -284,7 +284,10 @@ function createLoopbackClient(options: ConstructorParameters<typeof MatrixClient
 }
 
 function mockEncryptedRoom() {
-  matrixJsClient.getRoom.mockReturnValue({ hasEncryptionStateEvent: () => true });
+  matrixJsClient.getRoom.mockReturnValue({
+    hasEncryptionStateEvent: () => true,
+    getMyMembership: () => "join",
+  });
   matrixJsClient.getCrypto.mockReturnValue({ isEncryptionEnabledInRoom: vi.fn(async () => true) });
 }
 
@@ -570,20 +573,6 @@ describe("MatrixClient request hardening", () => {
     await expect(first.getTransactionScopeId()).resolves.toBe(await first.getTransactionScopeId());
   });
 
-  it("preserves persisted encryption settings when the homeserver no longer exposes room state", async () => {
-    matrixJsClient.getRoom.mockReturnValue({ hasEncryptionStateEvent: () => false });
-    matrixJsClient.getCrypto.mockReturnValue({
-      isEncryptionEnabledInRoom: vi.fn(async () => true),
-    });
-    matrixJsClient.getStateEvent.mockRejectedValue(
-      new MatrixError({ errcode: "M_NOT_FOUND", error: "State event not found" }, 404),
-    );
-    const client = createSdkClient({ encryption: true });
-    await expect(client.getMessageWireEventType(ROOM)).resolves.toBe("m.room.encrypted");
-    await expect(client.sendMessage(ROOM, secretText)).resolves.toBe("$sent");
-    expect(matrixJsClient.getStateEvent).not.toHaveBeenCalled();
-  });
-
   it.each([
     new MatrixError({ errcode: "M_UNRECOGNIZED", error: "Endpoint not found" }, 404),
     new MatrixError({ errcode: "M_NOT_FOUND", error: "Malformed proxy response" }, 503),
@@ -639,7 +628,8 @@ describe("MatrixClient request hardening", () => {
 
   it("allows fully encrypted attachments and preserves text URLs in encrypted rooms", async () => {
     mockEncryptedRoom();
-    const client = createSdkClient({ encryption: true });
+    const client = createSdkClient({ encryption: true, autoBootstrapCrypto: false });
+    await client.start();
     const encryptedFile = makeEncryptedFile("mxc://example/encrypted");
     await expect(
       client.sendMessage(ROOM, {
@@ -969,7 +959,7 @@ describe("MatrixClient request hardening", () => {
     });
   });
 
-  it("orders messages and events within a room without blocking other rooms", async () => {
+  it("keeps plaintext reactions ordered behind a pending message without blocking other rooms", async () => {
     const client = createSdkClient();
     const release = createDeferred<void>();
     const started: string[] = [];
@@ -1410,11 +1400,11 @@ describe("MatrixClient request hardening", () => {
     };
     const originalVersion = manifest.version;
     const syncStop = matrixJsClient.classicSyncStop;
-    manifest.version = "43.0.1";
+    manifest.version = "44.0.1";
     try {
       const client = createSdkClient();
       await expect(client.quiesceSync()).rejects.toThrow(
-        "Matrix sync quiesce requires matrix-js-sdk 43.0.0; found 43.0.1",
+        "Matrix sync quiesce requires matrix-js-sdk 44.0.0; found 44.0.1",
       );
       expect(syncStop).not.toHaveBeenCalled();
       expect(matrixJsClient.stopClient).not.toHaveBeenCalled();

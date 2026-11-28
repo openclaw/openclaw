@@ -67,3 +67,22 @@ export function requireExactTestResults(value, expectedIds) {
   }
   return expectedIds.map((testIdentifier) => ({ testIdentifier, testResult: "Passed" }));
 }
+
+// xcodebuild silently ignores -only-testing selectors that match nothing.
+// Node URLs end in Target/Suite[/test(...)], independent of Swift Testing display names.
+export function findUnmatchedSelectors(value, selectors) {
+  const ids = [];
+  const visit = (node) => {
+    if (typeof node.nodeIdentifierURL === "string") {
+      ids.push(decodeURIComponent(node.nodeIdentifierURL).replace(/^test:\/\/[^/]+\/[^/]+\//, ""));
+    }
+    node.children?.forEach(visit);
+  };
+  object(value).testNodes?.forEach(visit);
+  return selectors.filter(
+    (selector) =>
+      !ids.some(
+        (id) => id === selector || id.startsWith(`${selector}/`) || id.startsWith(`${selector}(`),
+      ),
+  );
+}

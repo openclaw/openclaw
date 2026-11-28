@@ -23,15 +23,15 @@ extension OnboardingView {
     }
 
     func updateDiscoveryMonitoring(for pageIndex: Int) {
-        let shouldMonitor = pageIndex == connectionPageIndex
+        if pageIndex == connectionPageIndex {
+            // Checking this Mac's Gateway port stays on this Mac; it needs no Local Network access.
+            Task { @MainActor in await self.refreshLocalGatewayProbe() }
+        }
+        // Browsing for gateways makes macOS ask for Local Network access, so only Nearby starts it.
+        let shouldMonitor = pageIndex == findPageIndex && showRemoteChoices
         if shouldMonitor, !monitoringDiscovery {
             monitoringDiscovery = true
-            Task { @MainActor in
-                try? await Task.sleep(nanoseconds: 150_000_000)
-                guard self.monitoringDiscovery else { return }
-                self.gatewayDiscovery.start()
-                await self.refreshLocalGatewayProbe()
-            }
+            gatewayDiscovery.start()
         } else if !shouldMonitor {
             self.stopDiscovery()
         }

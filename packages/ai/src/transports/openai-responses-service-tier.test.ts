@@ -23,7 +23,12 @@ const complete = completedResponse("resp_ok", []);
 const created = { type: "response.created", response: { id: "resp_rejected", output: [] } };
 async function fixture(
   respond: (attempt: number) => Response,
-  opts: { signal?: AbortSignal; native?: boolean; onRejected?: () => void } = {},
+  opts: {
+    signal?: AbortSignal;
+    native?: boolean;
+    onRejected?: () => void;
+    wrapStream?: Parameters<typeof createResponsesStreamWithRecovery>[0]["wrapStream"];
+  } = {},
 ) {
   const bodies: Record<string, unknown>[] = [];
   const rejected: string[] = [];
@@ -50,6 +55,7 @@ async function fixture(
     buildFullHistoryRequest: () => request,
     requestOptions: { signal: opts.signal },
     canRetryStream: () => true,
+    wrapStream: opts.wrapStream,
     onServiceTierRejected: (tier) => {
       rejected.push(tier);
       opts.onRejected?.();
@@ -109,6 +115,17 @@ it("recovers a native SDK error event and stops after Standard", async () => {
   const result = await fixture(() => sse([{ type: "error", error: rejection }]));
   expect(result.error).toBeDefined();
   expectTiers(result, ["ultrafast", "priority", "default"]);
+});
+
+it("does not classify a hook rejection as a provider tier rejection", async () => {
+  const error = new OpenAI.APIError(400, rejection, rejection.message, new Headers());
+  const result = await fixture(() => sse([complete]), {
+    wrapStream: () => ({
+      [Symbol.asyncIterator]: () => ({ next: () => Promise.reject(error) }),
+    }),
+  });
+  expect(result.error).toBe(error);
+  expectTiers(result, ["ultrafast"]);
 });
 
 it("does not send a retry after cancellation during rejection observation", async () => {

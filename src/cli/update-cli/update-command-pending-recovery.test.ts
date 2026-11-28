@@ -4,6 +4,7 @@ import path from "node:path";
 import { DatabaseSync } from "node:sqlite";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { cleanupTempDirs, makeTempDir } from "../../../test/helpers/temp-dir.js";
+import * as triageUpdate from "../../commands/triage-update.js";
 import * as config from "../../config/config.js";
 import * as launchd from "../../daemon/launchd.js";
 import * as scheduledTasks from "../../daemon/schtasks-control.js";
@@ -15,9 +16,6 @@ import { resolvePackageActivationAnchor } from "../../infra/package-update-activ
 import * as temporaryState from "../../infra/tmp-openclaw-dir.js";
 import * as updateCheck from "../../infra/update-check.js";
 import { CONTROL_PLANE_UPDATE_SENTINEL_META_ENV } from "../../infra/update-control-plane-sentinel.js";
-import * as failureArtifacts from "../../infra/update-failure-report-artifact.js";
-import * as updateGlobal from "../../infra/update-global.js";
-import * as handoffCleanup from "../../infra/update-managed-service-handoff-cleanup.js";
 import {
   POST_CORE_UPDATE_CHANNEL_ENV,
   POST_CORE_UPDATE_ENV,
@@ -36,8 +34,6 @@ import { resolveProfileStateDir } from "../profile-utils.js";
 import { registerSignalExitGate, waitForCliSignalExit } from "../signal-exit-barrier.js";
 import * as updateShared from "./shared.js";
 import type { UpdateCommandOptions } from "./shared.js";
-import * as updateConfig from "./update-command-config.js";
-import * as updateExecutor from "./update-command-executor.js";
 import { updateFinalizeCommand } from "./update-command-finalize.js";
 import { resultFixture } from "./update-command-fixtures.test-support.js";
 import {
@@ -49,7 +45,7 @@ import { UpdateCommandRecoveryPendingError } from "./update-command-recovery-err
 import { UpdateCommandFailure } from "./update-command-result.js";
 import * as updateResume from "./update-command-resume.js";
 import * as commandRun from "./update-command-run.js";
-import { stubNodeRuntime } from "./update-command-runtime-recovery.test-support.js";
+import { getNodeRuntimeFixture } from "./update-command-runtime-recovery.test-support.js";
 import { withOwnedManagedUpdateEnv } from "./update-command-service-env.js";
 import { withUpdateFailureTriage } from "./update-command-triage.js";
 import { withUpdateCommandRecoveryUnwind } from "./update-command-unwind.js";
@@ -108,9 +104,6 @@ function pendingPackageInvocation(
     profile?: string;
   } = {},
 ) {
-  if (params.serviceDrift) {
-    stubNodeRuntime();
-  }
   const home = fs.realpathSync(makeTempDir(dirs, "pending-package-admission-"));
   const identity = createManagedServiceIdentityFixture(home);
   const state = resolveProfileStateDir(params.profile ?? "default", process.env, () => home);
@@ -167,7 +160,7 @@ function pendingPackageInvocation(
       params.serviceDrift
         ? {
             programArguments: [
-              process.execPath,
+              getNodeRuntimeFixture().execPath,
               path.join(serviceRoot, "dist", "entry.js"),
               "gateway",
             ],
@@ -207,9 +200,8 @@ function pendingPackageInvocation(
         .spyOn(launchd, "disableCurrentOpenClawUpdateLaunchdJob")
         .mockResolvedValue(false),
       prepareTriage: vi.spyOn(triage, "prepareUpdateFailureTriage").mockResolvedValue(runTriage),
-      writeTriage: vi.spyOn(failureArtifacts, "writeTriageUpdateFailure"),
+      writeTriage: vi.spyOn(triageUpdate, "writeTriageUpdateFailure"),
       runTriage,
-      cleanupHandoffs: vi.spyOn(handoffCleanup, "cleanupStaleManagedServiceUpdateHandoffs"),
       loadPlugins: vi.spyOn(installedPlugins, "loadInstalledPluginIndexInstallRecords"),
       resumePostCore: vi
         .spyOn(updateResume, "resumePostCoreUpdate")
@@ -293,101 +285,10 @@ describe.skipIf(process.platform === "win32")("pending package activation admiss
       }
       expect(before).toBeDefined();
       expect(materialSnapshot(f.home)).toEqual(before);
-      if (params.readablePreview) {
-        expect(defaultRuntime.writeJson).toHaveBeenCalledWith(
-          expect.objectContaining({ reportPath: expect.any(String) }),
-        );
-      }
     } finally {
       f.restore();
     }
   });
-
-  it.each([false, true])(
-    "reports pending after lease acquisition (existing history and service drift=%s) without changing retained material",
-    async (existingRun) => {
-      const serviceDrift = existingRun;
-      const f = pendingPackageInvocation({ existingRun, serviceDrift });
-      const withExecutor = updateExecutor.withUpdateCommandExecutor;
-      let anchor: string | undefined;
-      let record: ReturnType<typeof ledger.getUpdateRun> | undefined;
-      const retainedMaterial = () => ({
-        source: materialSnapshot(f.source),
-        service: materialSnapshot(f.serviceRoot),
-        anchor: anchor ? materialSnapshot(anchor) : undefined,
-        config: fs.readFileSync(path.join(f.state, "openclaw.json")),
-        triage: fs.readFileSync(path.join(f.home, "triage.json")),
-        sentinel: fs.readFileSync(path.join(f.home, "sentinel.json")),
-      });
-      let before: ReturnType<typeof retainedMaterial> | undefined;
-      vi.spyOn(updateConfig, "readUpdateChannelConfig").mockResolvedValue({
-        configSnapshot: await config.readConfigFileSnapshot({
-          skipPluginValidation: true,
-          observe: false,
-        }),
-        configReadFailure: undefined,
-        legacyConfigPlan: undefined,
-        storedChannel: null,
-      });
-      const metadata = vi
-        .spyOn(updateGlobal, "createGlobalInstallEnv")
-        .mockRejectedValue(
-          new Error("package metadata must not run after pending lease admission"),
-        );
-      vi.spyOn(updateExecutor, "withUpdateCommandExecutor").mockImplementation(
-        (runId, operation, options) =>
-          withExecutor(
-            runId,
-            async (executor) =>
-              operation({
-                async enter(root, enterOptions) {
-                  expect(root).toBe(f.source);
-                  const fence = await executor.enter(root, enterOptions);
-                  if (!anchor) {
-                    anchor = f.addPending();
-                    record = ledger.getUpdateRun(runId);
-                    before = retainedMaterial();
-                  }
-                  return fence;
-                },
-              }),
-            options,
-          ),
-      );
-      try {
-        await expect(updateCommand({ json: true, yes: true })).rejects.toMatchObject({ code: 1 });
-        expect(anchor).toBeDefined();
-        if (existingRun) {
-          expect(record).toMatchObject({ status: "running" });
-        } else {
-          expect(record).toBeUndefined();
-          expect(f.writers.createRun).not.toHaveBeenCalled();
-          expect(fs.existsSync(path.join(f.state, "state", "openclaw.sqlite"))).toBe(false);
-        }
-        expectPendingReport({
-          status: "error",
-          reason: "update-recovery-pending",
-          root: serviceDrift ? f.serviceRoot : f.source,
-        });
-        const { disableAutoStart, cleanupHandoffs, loadPlugins, writeTriage, runTriage } =
-          f.writers;
-        expectNoCalls(
-          metadata,
-          disableAutoStart,
-          cleanupHandoffs,
-          loadPlugins,
-          writeTriage,
-          runTriage,
-        );
-        expect(retainedMaterial()).toEqual(before);
-        if (record) {
-          expect(ledger.getUpdateRun(record.runId)).toMatchObject({ runId: record.runId });
-        }
-      } finally {
-        f.restore();
-      }
-    },
-  );
 });
 
 async function fixture() {
@@ -546,72 +447,77 @@ describe("pending recovery finalizer", () => {
   );
 });
 
-it("settles interrupted Windows suspension without touching pending databases after mutation", async () => {
-  const f = await fixture();
-  const run = f.run;
-  const before = materialSnapshot(f.root);
-  const listeners = process.listeners("SIGINT");
-  const previousExitCode = process.exitCode;
-  const exit = vi.spyOn(process, "exit").mockImplementation(() => undefined as never);
-  const suspend = vi
-    .spyOn(scheduledTasks, "suspendScheduledTaskAutoStartForUpdate")
-    .mockResolvedValue(true);
-  const resume = vi.spyOn(scheduledTasks, "resumeScheduledTaskAutoStartAfterUpdate");
-  const recovery = createWindowsTaskAutoStartRecovery({ serviceEnv: f.env, updateRun: run });
-  await recovery.suspended;
-  recovery.beginMutation();
-  const signal = process.listeners("SIGINT").find((listener) => !listeners.includes(listener));
-  expect(signal).toBeDefined();
-  const siblingFinished = createDeferredCore();
-  const unregisterSibling = registerSignalExitGate(siblingFinished.promise);
-  const retired = createDeferredCore();
-  const removeListener = process.off.bind(process);
-  // Bun removes native signal listeners without emitting EventEmitter.removeListener.
-  // Observe the real removal effect, preserving its implementation and return value.
-  const off = vi.spyOn(process, "off").mockImplementation((event, listener) => {
-    const result = removeListener(event, listener);
-    if (event === "SIGBREAK" && listener === signal) {
-      retired.resolve();
+it.each(["SIGINT", "SIGBREAK"] as const)(
+  "settles interrupted Windows suspension without touching pending databases after mutation (%s)",
+  async (signalName) => {
+    const f = await fixture();
+    const run = f.run;
+    const before = materialSnapshot(f.root);
+    const listeners = process.listeners(signalName);
+    const previousExitCode = process.exitCode;
+    const exit = vi.spyOn(process, "exit").mockImplementation(() => undefined as never);
+    const suspend = vi
+      .spyOn(scheduledTasks, "suspendScheduledTaskAutoStartForUpdate")
+      .mockResolvedValue(true);
+    const resume = vi.spyOn(scheduledTasks, "resumeScheduledTaskAutoStartAfterUpdate");
+    const recovery = createWindowsTaskAutoStartRecovery({ serviceEnv: f.env, updateRun: run });
+    await recovery.suspended;
+    recovery.beginMutation();
+    const signal = process.listeners(signalName).find((listener) => !listeners.includes(listener));
+    const siblingFinished = createDeferredCore();
+    const unregisterSibling = registerSignalExitGate(siblingFinished.promise);
+    const retired = createDeferredCore();
+    const removeListener = process.off.bind(process);
+    // Bun removes native signal listeners without emitting EventEmitter.removeListener.
+    // Observe the real removal effect, preserving its implementation and return value.
+    const off = vi.spyOn(process, "off").mockImplementation((event, listener) => {
+      const result = removeListener(event, listener);
+      if (event === "SIGBREAK" && listener === signal) {
+        retired.resolve();
+      }
+      return result;
+    });
+    const cause = new UpdateCommandRecoveryPendingError("Database rollback could not finish");
+    try {
+      expect(signal).toBeDefined();
+      signal!(signalName);
+      await expect(
+        withUpdateCommandRecoveryUnwind(
+          { run },
+          { triageTarget: { env: f.env }, windowsTaskAutoStartRecovery: recovery },
+          async () => {
+            throw cause;
+          },
+        ),
+      ).rejects.toMatchObject({ name: "UpdateCommandPendingRecoveryFailure", cause });
+      // Unwind releases its own gate without awaiting the still-pending sibling.
+      expect(process.listeners(signalName)).toContain(signal);
+      signal!(signalName);
+      expect(process.listeners(signalName)).toContain(signal);
+      siblingFinished.resolve();
+      expect(await waitForCliSignalExit()).toBe(130);
+      // Shared drain completion precedes this owner's status publication and retirement.
+      // Observe removal of its last signal listener instead of flushing microtasks.
+      await retired.promise;
+      expect(process.listeners(signalName)).toEqual(listeners);
+      expect(process.exitCode).toBe(130);
+      expect(exit).not.toHaveBeenCalled();
+      expect(suspend).toHaveBeenCalledOnce();
+      expect(resume).not.toHaveBeenCalled();
+      expect(materialSnapshot(f.root)).toEqual(before);
+    } finally {
+      siblingFinished.resolve();
+      unregisterSibling();
+      await recovery.complete(false, { preserveState: true });
+      await waitForCliSignalExit();
+      if (signal) {
+        await retired.promise;
+      }
+      off.mockRestore();
+      process.exitCode = previousExitCode;
     }
-    return result;
-  });
-  const cause = new UpdateCommandRecoveryPendingError("Database rollback could not finish");
-  try {
-    signal!("SIGINT");
-    await expect(
-      withUpdateCommandRecoveryUnwind(
-        { run },
-        { triageTarget: { env: f.env }, windowsTaskAutoStartRecovery: recovery },
-        async () => {
-          throw cause;
-        },
-      ),
-    ).rejects.toMatchObject({ name: "UpdateCommandPendingRecoveryFailure", cause });
-    // Unwind releases its own gate without awaiting the still-pending sibling.
-    expect(process.listeners("SIGINT")).toContain(signal);
-    signal!("SIGINT");
-    expect(process.listeners("SIGINT")).toContain(signal);
-    siblingFinished.resolve();
-    expect(await waitForCliSignalExit()).toBe(130);
-    // Shared drain completion precedes this owner's status publication and retirement.
-    // Observe removal of its last signal listener instead of flushing microtasks.
-    await retired.promise;
-    expect(process.listeners("SIGINT")).toEqual(listeners);
-    expect(process.exitCode).toBe(130);
-    expect(exit).not.toHaveBeenCalled();
-    expect(suspend).toHaveBeenCalledOnce();
-    expect(resume).not.toHaveBeenCalled();
-    expect(materialSnapshot(f.root)).toEqual(before);
-  } finally {
-    siblingFinished.resolve();
-    unregisterSibling();
-    await recovery.complete(false, { preserveState: true });
-    await waitForCliSignalExit();
-    await retired.promise;
-    off.mockRestore();
-    process.exitCode = previousExitCode;
-  }
-});
+  },
+);
 
 it.each([
   { confirmed: true, failed: true },

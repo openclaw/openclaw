@@ -1,11 +1,13 @@
 import fs from "node:fs/promises";
+import os from "node:os";
 import path from "node:path";
-import { afterEach, describe, expect, it, vi } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { withEngineStoreAdmission } from "../infra/database-engine/admission-scope.js";
 import {
   mixedAgentConnection,
   useMixedAgentPair,
 } from "../infra/database-engine/mixed-agent.conformance.test-support.js";
+import * as hostMemory from "../infra/host-memory.js";
 import { githubPublicationReceipts } from "../state/github-publication-receipts.js";
 import { repositoryRow } from "../state/github-publication.worker.test-support.js";
 import {
@@ -64,6 +66,10 @@ function createRuntime() {
 function installPublicationRecoveryTests(engine: "sqlite" | "postgres") {
   useMixedAgentPair(engine, engine);
   installGitHubPublicationTestHarness();
+  beforeEach(() => {
+    vi.spyOn(os, "freemem").mockReturnValue(1024 ** 3);
+    vi.spyOn(os, "totalmem").mockReturnValue(1024 ** 3);
+  });
   afterEach(() => vi.restoreAllMocks());
 
   it.each([false, true])(
@@ -285,15 +291,38 @@ function installPublicationRecoveryTests(engine: "sqlite" | "postgres") {
     ).toMatchObject({ status: "published" });
   });
 
-  it("reads each pending queue once during empty startup and still reads unreported results", async () => {
+  it("reads pending queues serially once during empty startup and still reads unreported results", async () => {
     const placements = withEngineStoreAdmission(() =>
       createWorkerSessionPlacementStore({ database: openOpenClawStateDatabase() }),
     );
     const pendingResults = vi.spyOn(placements, "listPendingWorkspaceResultsAsync");
     const runtime = createRecoveryRuntime(vi.fn(), placements);
-    const repositoryReads = vi.spyOn(publicationStore, "listRepositoryGitHubPublicationsAsync");
-    const sharedReads = vi.spyOn(publicationStore, "listSharedGitHubPublicationsAsync");
+    let activePendingReads = 0;
+    let maxPendingReads = 0;
+    const trackPendingRead = async <T>(read: () => Promise<T>) => {
+      maxPendingReads = Math.max(maxPendingReads, ++activePendingReads);
+      try {
+        return await read();
+      } finally {
+        activePendingReads--;
+      }
+    };
+    const listRepository = publicationStore.listRepositoryGitHubPublicationsAsync;
+    const listShared = publicationStore.listSharedGitHubPublicationsAsync;
+    const repositoryReads = vi
+      .spyOn(publicationStore, "listRepositoryGitHubPublicationsAsync")
+      .mockImplementation((input) =>
+        input?.pending ? trackPendingRead(() => listRepository(input)) : listRepository(input),
+      );
+    const sharedReads = vi
+      .spyOn(publicationStore, "listSharedGitHubPublicationsAsync")
+      .mockImplementation((input) =>
+        input?.pending ? trackPendingRead(() => listShared(input)) : listShared(input),
+      );
+    const defer = vi.spyOn(publicationStore, "deferGitHubPublicationRequestsAsync");
     await runtime.reconcilePublications();
+    expect(maxPendingReads).toBe(1);
+    expect(defer).not.toHaveBeenCalled();
     expect(pendingResults).not.toHaveBeenCalled();
     expect(repositoryReads.mock.calls.map(([input]) => input)).toEqual([
       { ownerProfileId: null, pending: true },
@@ -365,8 +394,8 @@ function installPublicationRecoveryTests(engine: "sqlite" | "postgres") {
         }
         return rows;
       });
-    const defer = publicationStore.deferGitHubPublicationRequestsAsync;
-    vi.spyOn(publicationStore, "deferGitHubPublicationRequestsAsync").mockImplementation(
+    const defer = runtime.coordinator.deferOrphanedRequestsAsync.bind(runtime.coordinator);
+    vi.spyOn(runtime.coordinator, "deferOrphanedRequestsAsync").mockImplementation(
       async (...args) => {
         await defer(...args);
         if (boundary === "defer") {
@@ -386,7 +415,7 @@ function installPublicationRecoveryTests(engine: "sqlite" | "postgres") {
     await runtime.reconcilePublications();
     expect(changed).toBe(true);
     if (kind === "repository") {
-      expect(repositoryReads).toHaveBeenCalledTimes(boundary === "resume" ? 3 : 4);
+      expect(repositoryReads).toHaveBeenCalledTimes(boundary === "load" ? 4 : 3);
     } else {
       expect(sharedReads.mock.calls.map(([input]) => input)).toEqual([
         { pending: true },
@@ -419,18 +448,33 @@ function installPublicationRecoveryTests(engine: "sqlite" | "postgres") {
     }
   });
 
-  it("keeps fresh recovery reads for a nonempty startup snapshot", async () => {
+  it("defers publication scans under memory pressure and resumes pending work", async () => {
+    const requestId = "memory-pressure-publication";
     withEngineStoreAdmission(() =>
-      insertRepositoryGitHubPublicationFixture(repositoryRow("startup-existing"), () => {}),
+      insertRepositoryGitHubPublicationFixture(repositoryRow(requestId), () => {}),
     );
     const runtime = createRecoveryRuntime();
-    const reads = vi.spyOn(publicationStore, "listRepositoryGitHubPublicationsAsync");
+    await runtime.ready;
+    const lowMemory = vi.spyOn(hostMemory, "isMemoryPressureHigh").mockReturnValue(true);
+    const shared = vi.spyOn(publicationStore, "listSharedGitHubPublicationsAsync");
+    const repository = vi.spyOn(publicationStore, "listRepositoryGitHubPublicationsAsync");
+    const transport = githubPublicationTestMocks().runCommand;
+    const readStatus = () =>
+      withEngineStoreAdmission(() => readRepositoryGitHubPublicationFixture(requestId))?.status;
+    transport.mockClear();
+
     await runtime.reconcilePublications();
-    expect(reads).toHaveBeenCalledTimes(4);
-    expect(
-      withEngineStoreAdmission(() => readRepositoryGitHubPublicationFixture("startup-existing"))
-        ?.status,
-    ).toBe("failed");
+    await runtime.reconcilePublications();
+    expect(shared).not.toHaveBeenCalled();
+    expect(repository).not.toHaveBeenCalled();
+    expect(transport).not.toHaveBeenCalled();
+    expect(readStatus()).toBe("requested");
+
+    lowMemory.mockReturnValue(false);
+    await runtime.reconcilePublications();
+    expect(repository).toHaveBeenCalledTimes(4);
+    // The normal recovery path settles the receipt whose synthetic workspace is absent.
+    expect(readStatus()).toBe("failed");
   });
 
   it.each(["stop", "failure"] as const)(
@@ -439,8 +483,8 @@ function installPublicationRecoveryTests(engine: "sqlite" | "postgres") {
       const runtime = createRecoveryRuntime();
       const reads = vi.spyOn(publicationStore, "listRepositoryGitHubPublicationsAsync");
       let stopped = false;
-      const defer = publicationStore.deferGitHubPublicationRequestsAsync;
-      vi.spyOn(publicationStore, "deferGitHubPublicationRequestsAsync").mockImplementationOnce(
+      const defer = runtime.coordinator.deferOrphanedRequestsAsync.bind(runtime.coordinator);
+      vi.spyOn(runtime.coordinator, "deferOrphanedRequestsAsync").mockImplementationOnce(
         async (...args) => {
           await defer(...args);
           if (ending === "failure") {

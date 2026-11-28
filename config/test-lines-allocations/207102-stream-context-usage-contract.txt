@@ -1,0 +1,4 @@
+# Exact net test lines over the allowance for #207102: one contract over every bundled stream
+# transport (9 built-in APIs, 6 plugin transports), measured and unmeasured cases, each against
+# its real fake upstream; a newly registered built-in without a row fails.
+89

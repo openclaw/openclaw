@@ -10,21 +10,21 @@ import { rosterActivityStore } from "../lib/agents/roster-activity-store.ts";
 import { createTestSessionCapability } from "../lib/sessions/session-capability.test-support.ts";
 import {
   createContext,
-  createGateway,
   createGatewayHarness,
   createSessions,
   mountSidebarContext,
 } from "../test-helpers/app-sidebar.ts";
 import "../test-helpers/app-sidebar-suite.ts";
-import { domProbe, allMutationObserverOptions } from "../test-helpers/dom-probe.ts";
+import { domProbe } from "../test-helpers/dom-probe.ts";
 import { createTestGatewayClient } from "../test-helpers/gateway-client.ts";
+import { gatewayHelloForMethods } from "../test-helpers/gateway-methods.ts";
 import { mountSolid } from "../test-helpers/mount-solid.ts";
 import { sidebarBootSnapshot } from "../test-helpers/sidebar-boot-snapshot.test-support.ts";
 import { waitForSolid } from "../test-helpers/solid-settle.ts";
 import { AppSidebarOnline } from "./app-sidebar-online.tsx";
-import { renderSidebarAgentCard } from "./app-sidebar-render.tsx";
+import { renderSidebarAgentCard, SidebarNewSessionAction } from "./app-sidebar-render.tsx";
 import { projectSidebarSession } from "./app-sidebar-session-navigation.test-support.ts";
-import { renderRecentSession as RecentSession } from "./app-sidebar-session-row-render.tsx";
+import { renderSessionTree as SessionTree } from "./app-sidebar-session-row-render.tsx";
 import { AppSidebarOwner, type AppSidebarElement } from "./app-sidebar.tsx";
 import { resolveSidebarSessionRowSubtitle } from "./session-row-subtitle.ts";
 import {
@@ -33,7 +33,6 @@ import {
   snapshotSessions,
   type SidebarSnapshotModel,
 } from "./sidebar-snapshot-model.ts";
-import { sessionIconMask } from "./solid/icon.tsx";
 import { installTitleTooltips } from "./tooltip-title.ts";
 
 const emptySnapshot: SidebarSnapshotModel = {
@@ -43,14 +42,12 @@ const emptySnapshot: SidebarSnapshotModel = {
 };
 
 function createHost(mode: "chip" | "roster" = "roster", snapshot?: Partial<SidebarSnapshotModel>) {
-  const context = createContext(
-    createGateway(createTestGatewayClient(async () => ({}))),
-    createSessions("main", []),
-  );
+  const gateway = createGatewayHarness(createTestGatewayClient(async () => ({})));
+  const context = createContext(gateway.gateway, createSessions("main", []));
   const container = document.createElement("div");
   const props = document.createElement("openclaw-app-sidebar") as AppSidebarElement;
   props.sidebarAgentsMode = mode;
-  const host = new AppSidebarOwner({ dashboards: null, loadMoreDashboards() {} }, context, props);
+  const host = new AppSidebarOwner(context, props);
   // The full sidebar mounts this owner; row-only fixtures keep the supplied catalog summary.
   host.sessionPullRequests = {
     summary: (_sessionKey, _worktreeId, initial) => initial,
@@ -61,13 +58,13 @@ function createHost(mode: "chip" | "roster" = "roster", snapshot?: Partial<Sideb
   if (snapshot) {
     host.restoreSidebarSnapshot({ ...emptySnapshot, ...snapshot });
   }
-  return { host, container, context, dom: domProbe(container) };
+  return { host, container, context, gateway, dom: domProbe(container) };
 }
 
 function mountRow(
   fields: Partial<GatewaySessionRow>,
   presentation: Partial<ReturnType<typeof projectSidebarSession>> = {},
-  options: Pick<Parameters<typeof RecentSession>[0], "icon"> = {},
+  options: Pick<Parameters<typeof SessionTree>[0], "icon"> = {},
 ) {
   const fixture = createHost("chip");
   const session = {
@@ -75,7 +72,7 @@ function mountRow(
     ...presentation,
   };
   const [current, setCurrent] = createSignal(session);
-  mountSolid(() => <RecentSession host={fixture.host} session={current()} {...options} />, {
+  mountSolid(() => <SessionTree host={fixture.host} session={current()} {...options} />, {
     container: fixture.container,
   });
   return { ...fixture, session, current, setCurrent };
@@ -119,60 +116,9 @@ function mountObservedHost(
   return observed.update;
 }
 
-it("keeps named glyphs visible and updates their kind without replacing the leading slot", () => {
-  const { dom, session, setCurrent } = mountRow({ icon: "kanban" });
-  const glyph = dom.query(".session-glyph");
-  const art = dom.query<HTMLElement>(".session-glyph__icon .session-css-icon");
-  expect(art?.style.maskImage).toBe(sessionIconMask("kanban", 1.75));
-  setCurrent({ ...session, icon: "bot" });
-  flush();
-  expect(dom.query(".session-glyph__icon .session-css-icon")).toBe(art);
-  expect(art?.style.maskImage).toBe(sessionIconMask("bot", 1.75));
-  expect(dom.query(".session-glyph")).toBe(glyph);
-});
-
-it("restores only active dashboards in saved order after alphabetized built-in Pages", async () => {
-  const { host, context, dom } = await createCachedHost();
-  const dashboardKeys = ["agent:main:dashboard:zulu", "agent:main:dashboard:alpha"];
-  host.restoreSidebarSnapshot({
-    ...emptySnapshot,
-    mode: "roster",
-    navigationView: "pages",
-    pageScopeId: context.agentSelection.state.scopeId,
-    pages: snapshotSessions([
-      ...dashboardKeys.map((key) => projectSidebarSession({ key, label: key, hasBoard: true })),
-      projectSidebarSession({ key: "agent:main:archived", hasBoard: true, archived: true }),
-    ]),
-  });
-  host.invalidate();
-  await host.updateComplete;
-  await waitForSolid(() =>
-    expect(
-      dom.present(
-        `.sidebar-pages [data-session-key="${dashboardKeys[0]}"]`,
-        '.sidebar-pages [data-session-key="agent:main:archived"]',
-        ".sidebar-pages .sidebar-session-sort",
-      ),
-    ).toEqual([true, false, false]),
-  );
-  const entries = [...dom.all(".sidebar-pages [data-sidebar-entry]")];
-  const routes = entries
-    .map((entry) => entry.getAttribute("data-sidebar-entry"))
-    .filter((entry): entry is string => Boolean(entry?.startsWith("route:")));
-  const routeLabels = routes.map(
-    (route) => dom.query(`[data-sidebar-entry="${route}"] a`)?.textContent?.trim() ?? "",
-  );
-  expect(routeLabels.length).toBeGreaterThan(4);
-  expect(routeLabels).not.toContain("");
-  expect(routeLabels).toEqual(routeLabels.toSorted((left, right) => left.localeCompare(right)));
-  expect(entries.map((entry) => entry.getAttribute("data-sidebar-entry")).slice(-2)).toEqual(
-    dashboardKeys.map((key) => `session:${key}`),
-  );
-});
-
 it("paints the restored roster and workspace before live data arrives", async () => {
   const { host, dom } = await createCachedHost();
-  host.sidebarAgentsMode = "chip";
+  host.sidebarAgentsMode = "roster";
   host.sidebarLiveActivity = false;
 
   host.restoreSidebarSnapshot({
@@ -280,27 +226,13 @@ it("keeps cached agent rows while the live roster settles", async () => {
   expect(host.querySelector(`[data-session-key="${key}"]`)).toBeNull();
 });
 
-it("keeps the unread badge on an idle child with an icon", () => {
-  const { dom } = mountRow(
-    { key: "agent:main:child", icon: "🦞", unread: true, status: "done" },
-    { isChild: true },
-  );
-  expect(dom.text(".session-glyph__emoji")).toBe("🦞");
-  expect(dom.query('.session-glyph__badge[aria-label="Unread"]')).not.toBeNull();
-});
-
-it("shows quiet background work on the own glyph and gives an active run precedence", () => {
+it("keeps a session with only background processes idle", () => {
   const { dom, session, setCurrent } = mountRow({ backgroundProcessCount: 1, icon: "book" });
   const indicator = () => dom.query('.session-glyph__ring[role="img"]');
-  expect(indicator()?.getAttribute("aria-label")).toBe("Background work running");
-  expect(indicator()?.classList.contains("session-glyph__ring--background")).toBe(true);
+  expect(indicator()).toBeNull();
   setCurrent({ ...session, hasActiveRun: true, isRunVisuallyActive: true });
   flush();
   expect(indicator()?.getAttribute("aria-label")).toBe("Active run");
-  expect(indicator()?.classList.contains("session-glyph__ring--background")).toBe(false);
-  setCurrent({ ...session, backgroundProcessCount: undefined });
-  flush();
-  expect(indicator()).toBeNull();
 });
 
 it.each([undefined, 1])(
@@ -312,7 +244,6 @@ it.each([undefined, 1])(
     );
     const ring = () => dom.query('.sidebar-session-indicator [role="img"]');
     expect(ring()?.getAttribute("aria-label")).toBe("Subagents working");
-    expect(ring()?.classList.contains("session-glyph__ring--background")).toBe(false);
     expect(dom.query('.session-row-aside [aria-label="Subagents working"]')).toBeNull();
     expect(dom.all('[aria-label="Unread"]')).toHaveLength(0);
     expect(dom.query(".sidebar-recent-session__link")?.getAttribute("aria-describedby")).toContain(
@@ -322,7 +253,6 @@ it.each([undefined, 1])(
     setCurrent({ ...session, hasActiveRun: true, isRunVisuallyActive: true, status: "running" });
     flush();
     expect(ring()?.getAttribute("aria-label")).toBe("Active run");
-    expect(ring()?.classList.contains("session-glyph__ring--background")).toBe(false);
 
     // Preserve the existing queued-parent signal while its subagents are running.
     setCurrent({ ...session, hasActiveRun: true, isRunVisuallyActive: true, status: "queued" });
@@ -332,7 +262,7 @@ it.each([undefined, 1])(
   },
 );
 
-it("keeps hidden child background activity off the idle parent's own glyph", () => {
+it("keeps hidden child activity off the idle parent row", () => {
   const { dom } = mountRow(
     { icon: "book", unread: true },
     {
@@ -342,44 +272,10 @@ it("keeps hidden child background activity off the idle parent's own glyph", () 
     },
   );
   expect(dom.query(".sidebar-session-indicator .session-glyph__ring")).toBeNull();
-  expect(dom.query(".sidebar-child-session-toggle .session-run-spinner")).not.toBeNull();
+  expect(dom.query(".sidebar-child-session-toggle .session-run-spinner")).toBeNull();
   expect(dom.all('[aria-label="Unread"]')).toHaveLength(1);
   expect(dom.query(".sidebar-recent-session__link")?.getAttribute("aria-describedby")).toBeNull();
 });
-
-it("keeps an idle child owner's glyph hidden until the run starts", () => {
-  const { dom, session, setCurrent } = mountRow(
-    {
-      key: "agent:main:child",
-      status: "done",
-      owner: { actor: { type: "human", id: "ada", label: "Ada" } },
-    },
-    { isChild: true },
-  );
-  expect(
-    dom.present(".session-glyph", "openclaw-session-owner-chip", ".sidebar-child-session__status"),
-  ).toEqual([false, false, true]);
-
-  setCurrent({ ...session, hasActiveRun: true, isRunVisuallyActive: true });
-  flush();
-  expect(dom.query(".session-glyph--running.session-glyph--bare")).not.toBeNull();
-  expect(dom.query("openclaw-session-owner-chip")).toBeNull();
-});
-
-it.each([false, null, undefined])(
-  "preserves the run glyph's bare styling for icon override %s",
-  (icon) => {
-    const { dom } = mountRow(
-      { key: "agent:main:running", hasActiveRun: true, status: "running", icon: "book" },
-      {},
-      { icon },
-    );
-    const glyph = dom.query(".session-glyph--running");
-    expect(glyph).not.toBeNull();
-    expect(glyph?.classList.contains("session-glyph--bare")).toBe(icon === false);
-    expect(glyph?.querySelector(".session-glyph__icon") !== null).toBe(icon !== false);
-  },
-);
 
 it.each(["owner", "icon"] as const)(
   "retains %s artwork and actions when live rows republish unchanged presentation",
@@ -443,7 +339,7 @@ it("materializes the archive hint on hover without changing the action name", ()
   onTestFinished(installTitleTooltips(document));
   const { host, container, dom } = createHost();
   const session = projectSidebarSession({ key: "agent:main:thread", label: "Research" });
-  mountSolid(() => <RecentSession host={host} session={session} />, { container });
+  mountSolid(() => <SessionTree host={host} session={session} />, { container });
   const archive = dom.query<HTMLButtonElement>("[data-sidebar-session-archive]")!;
   const name = archive.getAttribute("aria-label");
   const hint = archive.title;
@@ -484,25 +380,6 @@ it("renders the saved chip identity before agent discovery without reviving anot
   expect(dom.query("openclaw-tooltip")).toBeNull();
 });
 
-it("retains the workspace name DOM across unrelated sidebar publications and renames", () => {
-  const { host, container, dom } = createHost("roster", {});
-  const update = mountObservedHost(host, container, renderSidebarAgentCard);
-  const name = () => dom.query(".sidebar-agent-card__name-text");
-  const original = name();
-  expect(original?.textContent).toBe("Harbor");
-
-  update();
-  expect(name()).toBe(original);
-
-  host.restoreSidebarSnapshot({
-    ...emptySnapshot,
-    brand: { ...emptySnapshot.brand, name: "Harbor renamed" },
-  });
-  update();
-  expect(name()).toBe(original);
-  expect(name()?.textContent).toBe("Harbor renamed");
-});
-
 it("keeps the rendered preview slot after caching without restoring live run authority", () => {
   const { host, container, dom } = createHost("chip");
   host.sessionsShowPreview = true;
@@ -512,7 +389,7 @@ it("keeps the rendered preview slot after caching without restoring live run aut
   });
   const [current, setCurrent] = createSignal(session);
   const update = mountObservedHost(host, container, (observedHost) => (
-    <RecentSession host={observedHost} session={current()} />
+    <SessionTree host={observedHost} session={current()} />
   ));
   expect(dom.text(".sidebar-recent-session__subtitle")).toBe("The report is ready for review.");
   const [cached] = snapshotSessions([session], (row) => ({
@@ -534,6 +411,80 @@ it("keeps the rendered preview slot after caching without restoring live run aut
   ).toHaveLength(0);
 });
 
+it.each([
+  {
+    name: "connected with creation access",
+    connected: true,
+    methods: ["sessions.create"],
+    scopes: ["operator.sessions.write"],
+    allowed: true,
+  },
+  {
+    name: "disconnected",
+    connected: false,
+    methods: ["sessions.create"],
+    scopes: ["operator.sessions.write"],
+    allowed: false,
+  },
+  {
+    name: "read-only",
+    connected: true,
+    methods: ["sessions.create"],
+    scopes: ["operator.read"],
+    allowed: false,
+  },
+  {
+    name: "creation unavailable",
+    connected: true,
+    methods: [],
+    scopes: ["operator.sessions.write"],
+    allowed: false,
+  },
+])(
+  "uses live New session access while cached row actions stay disabled: $name",
+  ({ connected, methods, scopes, allowed }) => {
+    const { host, container, gateway, dom } = createHost("chip", {});
+    host.connected = connected;
+    gateway.publish({
+      phase: connected ? "connected" : "reconnecting",
+      hello: gatewayHelloForMethods([...methods, "sessions.patch"], scopes),
+    });
+    const open = vi.fn();
+    host.onOpenNewSession = open;
+    const row = restoreSnapshotSession(
+      {
+        key: "agent:main:cached",
+        label: "Cached session",
+        pinned: false,
+        isChild: false,
+        children: [],
+      },
+      "",
+    );
+    mountObservedHost(host, container, (observedHost) => (
+      <>
+        <SidebarNewSessionAction host={observedHost} class="sidebar-new-session" />
+        <SessionTree host={observedHost} session={row} />
+      </>
+    ));
+    const create = dom.query<HTMLAnchorElement>(".sidebar-new-session")!;
+    expect(create.getAttribute("href")).toBe(allowed ? "/new?agent=main" : null);
+    expect(create.getAttribute("aria-disabled")).toBe(allowed ? null : "true");
+    create.click();
+    expect(open).toHaveBeenCalledTimes(allowed ? 1 : 0);
+    if (allowed) {
+      expect(open).toHaveBeenCalledWith("main");
+    }
+    const actions = dom.all<HTMLButtonElement>(
+      "[data-sidebar-session-pin], [data-sidebar-session-archive]",
+    );
+    expect(actions).toHaveLength(2);
+    for (const action of actions) {
+      expect(action.disabled).toBe(true);
+    }
+  },
+);
+
 it("keeps a restored pin's badges after roster handoff until its own descriptor replaces it", () => {
   const { host, container, dom } = createHost("chip");
   const saved = {
@@ -551,13 +502,13 @@ it("keeps a restored pin's badges after roster handoff until its own descriptor 
   host.restoreSidebarSnapshot({ ...emptySnapshot, pinnedSessions: [saved] });
   const [current, setCurrent] = createSignal(restoreSnapshotSession(saved, saved.key));
   const update = mountObservedHost(host, container, (observedHost) => (
-    <RecentSession host={observedHost} session={current()} />
+    <SessionTree host={observedHost} session={current()} />
   ));
   host.releaseSidebarSnapshot();
   update();
   expect(host.sidebarSnapshot).toBeNull();
   expect(dom.all(".session-row-badge--approval")).toHaveLength(1);
-  expect(dom.text(".session-row-badge--pull-request")).toBe("3");
+  expect(dom.all(".session-row-badge--pull-request")).toHaveLength(1);
   setCurrent(projectSidebarSession({ key: saved.key, label: "Current pin", pinned: true }));
   update();
   expect(dom.all(".session-row-badge")).toHaveLength(0);
@@ -596,64 +547,6 @@ it("shows unavailable counts after a failed live summary instead of retaining sa
   expect(dom.present(".sidebar-online__counts", ".sidebar-online__retry")).toEqual([false, true]);
 });
 
-it.each([false, true])(
-  "keeps row facepiles idle with unchanged inputs (owner: %s), while admitting new presence",
-  async (withOwner) => {
-    const { host, container, dom } = createHost();
-    let session = projectSidebarSession({
-      key: "agent:main:thread",
-      owner: withOwner
-        ? { actor: { type: "human", id: "ada", identity: { type: "profile", id: "ada" } } }
-        : undefined,
-    });
-    const presence = ["ada", "bea"].map((id) => ({
-      ts: 1,
-      user: { id, identity: { type: "profile" as const, id }, name: id },
-      watchedSessions: [session.key],
-    }));
-    host.sessionData.presencePayload = { presence };
-    const observed = observeHost(host);
-    const current = () => {
-      observed.track();
-      return session;
-    };
-    mountSolid(() => <RecentSession host={observed.host} session={current()} />, { container });
-    const update = observed.update;
-    update();
-    const row = dom.query(".sidebar-recent-session")!;
-    const facepile = dom.query("openclaw-viewer-facepile")!;
-    await facepile.updateComplete;
-    const updates: MutationRecord[] = [];
-    const observer = new MutationObserver((records) => updates.push(...records));
-    observer.observe(facepile, allMutationObserverOptions());
-    onTestFinished(() => observer.disconnect());
-
-    update();
-    await facepile.updateComplete;
-    expect(updates).toHaveLength(0);
-
-    host.sessionData.presencePayload = { presence: presence.slice(0, 1) };
-    update();
-    await facepile.updateComplete;
-    expect(updates.length).toBeGreaterThan(0);
-    updates.length = 0;
-    expect(facepile.querySelector(".viewer-facepile")?.getAttribute("aria-label")).toBe(
-      withOwner ? undefined : "ada",
-    );
-
-    session = {
-      ...session,
-      owner: { actor: { type: "human", id: "bea", identity: { type: "profile", id: "bea" } } },
-    };
-    update();
-    await facepile.updateComplete;
-    expect(updates.length > 0).toBe(withOwner);
-    expect(dom.query(".sidebar-recent-session")).toBe(row);
-    expect(dom.query("openclaw-viewer-facepile")).toBe(facepile);
-    expect(facepile.querySelector(".viewer-facepile")?.getAttribute("aria-label")).toBe("ada");
-  },
-);
-
 it("updates a pinned session's resolved avatar without replacing its row", () => {
   const { host, container, dom } = createHost();
   const session = projectSidebarSession({ key: "agent:main:pinned" });
@@ -662,7 +555,7 @@ it("updates a pinned session's resolved avatar without replacing its row", () =>
     const label = avatar();
     return <span data-pinned-avatar>{label}</span>;
   };
-  mountSolid(() => <RecentSession host={host} session={session} icon={icon()} />, { container });
+  mountSolid(() => <SessionTree host={host} session={session} icon={icon()} />, { container });
   const row = dom.query(".sidebar-recent-session");
   expect(dom.text("[data-pinned-avatar]")).toBe("Loading avatar");
 

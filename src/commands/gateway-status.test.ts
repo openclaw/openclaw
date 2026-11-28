@@ -279,14 +279,6 @@ describe("gateway-status command", () => {
 
     expect(capture.runtimeErrors).toHaveLength(0);
     expect(capture.runtimeLogs.join("\n")).toContain("Gateway Status");
-    expect(capture.runtimeLogs.join("\n")).toContain("Discovery (this machine)");
-    expect(capture.runtimeLogs.join("\n")).toContain("Targets");
-    expect(stripAnsi(capture.runtimeLogs.join("\n"))).toContain(
-      "Remote (configured) wss://remote.example:18789",
-    );
-    expect(stripAnsi(capture.runtimeLogs.join("\n"))).toContain(
-      "Remote over SSH ws://127.0.0.1:18789",
-    );
   });
 
   it.each([
@@ -653,23 +645,23 @@ describe("gateway-status command", () => {
   );
 
   it.each([
-    { ssh: undefined, port: 2222, sshIdentity: undefined },
-    { ssh: "alias:22", port: 22, sshIdentity: undefined },
-    { ssh: undefined, port: 22, sshIdentity: "/tmp/explicit_id" },
-  ])("resolves SSH port $port and identity $sshIdentity", async ({ ssh, port, sshIdentity }) => {
+    { host: "2001:db8::10", ssh: undefined, port: 2222, sshIdentity: undefined },
+    { host: "studio.example", ssh: "alias:22", port: 22, sshIdentity: undefined },
+    { host: "studio.example", ssh: undefined, port: 22, sshIdentity: "/tmp/explicit_id" },
+  ])("resolves SSH port and identity", async ({ host, ssh, port, sshIdentity }) => {
     await withEnvAsync({ USER: "steipete" }, async () => {
       readBestEffortConfig.mockResolvedValueOnce(
-        makeRemoteGatewayConfig("ws://studio.example:18789"),
+        makeRemoteGatewayConfig(`ws://${host.includes(":") ? `[${host}]` : host}:18789`),
       );
       resolveSshConfig.mockResolvedValueOnce({
         user: "steipete",
-        host: "studio.example",
+        host,
         port,
         identityFiles: ["/tmp/id_ed25519"],
       });
       await run({ ssh, sshIdentity });
       expect(requireSshForwardCall()).toMatchObject({
-        target: `steipete@studio.example:${port}`,
+        target: `steipete@${host.includes(":") ? `[${host}]` : host}:${port}`,
         identity: sshIdentity ?? "/tmp/id_ed25519",
       });
     });

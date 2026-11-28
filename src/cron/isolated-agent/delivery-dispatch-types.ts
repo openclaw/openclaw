@@ -6,7 +6,12 @@ import type { TtsAutoMode } from "../../config/types.tts.js";
 import type { SourceDeliveryOutcome } from "../../infra/outbound/source-delivery-plan.js";
 import type { CronCompletionDeliveryFence } from "../delivery-attempt-fence.js";
 import type { CronDeliveryPlan } from "../delivery-plan.js";
-import type { CronJob, CronResolvedDeliveryState, CronRunDiagnostics } from "../types.js";
+import type {
+  CronDeliveryTrace,
+  CronJob,
+  CronResolvedDeliveryState,
+  CronRunDiagnostics,
+} from "../types.js";
 import type { DeliveryTargetResolution } from "./delivery-target.js";
 
 export type SuccessfulCronDeliveryTarget = Extract<DeliveryTargetResolution, { ok: true }>;
@@ -33,6 +38,8 @@ export type DispatchCronDeliveryParams = {
   deliveryRequested: boolean;
   /** Finalizer-owned execution status if delivery cannot recover a presentation warning. */
   undeliveredRunStatus: "ok" | "error";
+  /** The execution already presents its own terminal reply in the settlement conversation. */
+  executionReplyAlreadyVisible?: boolean;
   skipDelivery?: NormalizeReplySkipReason;
   spawnOnlyHandoff: boolean;
   sourceDeliveryOutcome: SourceDeliveryOutcome;
@@ -57,6 +64,7 @@ export type DispatchCronDeliveryState = {
   deliveryState: CronResolvedDeliveryState;
   delivered?: boolean;
   deliveryAttempted: boolean;
+  deliveryReceipts?: CronDeliveryTrace["receipts"];
   deliveryError?: string;
   deliverySuppressionReason?: NormalizeReplySkipReason;
   summary?: string;

@@ -2,25 +2,44 @@
 // implements only the CLI/service boundary; no host service is installed.
 import assert from "node:assert/strict";
 import { spawnSync } from "node:child_process";
-import { appendFileSync, existsSync, readFileSync, writeFileSync } from "node:fs";
+import { appendFileSync, existsSync, lstatSync, readFileSync, unlinkSync, writeFileSync } from "node:fs";
 import { homedir } from "node:os";
 import path from "node:path";
 
 const args = process.argv.slice(2);
 const installed = "fixture-runtime-installed.json";
 const baseline = "fixture-runtime-baseline.json";
+const terminal = "fixture-runtime-terminal.json";
 const expectedPin = { revision: "fixture-absent", definition: null };
 const prefix = path.join(homedir(), ".openclaw");
 const port = 18789;
 const reply = (value) => console.log(JSON.stringify(value));
 
-if (args[0] === "setup") {
+if (args[0] === "setup" && args[1] === "--terminal-path") {
+  const launcher = path.join(prefix, "bin/openclaw");
+  assert.deepEqual(args, ["setup", "--terminal-path", launcher]);
+  const info = lstatSync(launcher);
+  assert.ok(
+    info.isFile() && info.uid === process.getuid() && (info.mode & 0o111) !== 0,
+    "terminal setup requires the app-managed executable launcher",
+  );
+  assert.equal(existsSync(installed), false, "terminal setup must precede service installation");
+  // Emulate only the CLI boundary: never edit shell startup files or the host PATH.
+  writeFileSync(terminal, JSON.stringify({ launcher }));
+  reply({ ok: true });
+} else if (args[0] === "setup") {
   assert.deepEqual(args, ["setup", "--baseline", "--json"]);
+  assert.deepEqual(
+    JSON.parse(readFileSync(terminal)),
+    { launcher: path.join(prefix, "bin/openclaw") },
+    "each fresh setup attempt must qualify terminal exposure before baseline setup",
+  );
   const configPath = path.join(prefix, "openclaw.json");
   if (!existsSync(configPath)) {
     writeFileSync(configPath, JSON.stringify({ gateway: { mode: "local" } }));
   }
   writeFileSync(baseline, JSON.stringify({ configPath }));
+  unlinkSync(terminal);
   reply({ ok: true, configPath });
 } else if (args[0] === "gateway" && args[1] === "install") {
   assert.ok(existsSync(baseline), "baseline setup must initialize the profile before service installation");

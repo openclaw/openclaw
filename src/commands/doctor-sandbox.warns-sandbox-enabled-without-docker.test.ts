@@ -33,8 +33,14 @@ vi.mock("../agents/sandbox/docker.js", () => ({
 // mock-isolation: Capture Doctor notices without writing to the real terminal.
 vi.mock("../../packages/terminal-core/src/note.js", () => ({ note }));
 
-const { maybeRepairSandboxImages, noteCodexBwrapNamespaceWarnings } =
-  await import("./doctor-sandbox.js");
+// mock-isolation: Image health fixtures exclude agent-directory registration and filesystem observers.
+vi.mock("../agents/agent-scope-config.js", () => ({ listAgentEntriesWithSource: () => [] }));
+
+const {
+  checkSandboxImageRepairPending,
+  maybeRepairSandboxImages,
+  noteCodexBwrapNamespaceWarnings,
+} = await import("./doctor-sandbox.js");
 
 describe("sandbox health", () => {
   const mockRuntime: RuntimeEnv = { log: vi.fn(), error: vi.fn(), exit: vi.fn() };
@@ -86,6 +92,66 @@ describe("sandbox health", () => {
     },
   );
 
+  it("checks and offers to build the image when only a gateway role requires a sandbox", async () => {
+    const cfg: OpenClawConfig = {
+      gateway: {
+        roles: {
+          definitions: {
+            guest: { sessions: { others: "view" }, agents: "*", scopes: [], sandbox: "required" },
+          },
+        },
+      },
+    };
+    runExec.mockImplementation(async (_command: string, args: string[]) => {
+      if (args[0] === "image") {
+        throw Object.assign(new Error("missing image"), { stderr: "No such image" });
+      }
+      return { stdout: "", stderr: "" };
+    });
+    const warnings = await maybeRepairSandboxImages(cfg, mockRuntime, mockPrompter);
+    expect(warnings).toEqual([
+      expect.stringContaining(`Sandbox base image missing: ${DEFAULT_SANDBOX_IMAGE}`),
+    ]);
+    expect(mockPrompter.confirmRuntimeRepair).toHaveBeenCalledWith(
+      expect.objectContaining({ message: "Build base sandbox image now?" }),
+    );
+
+    vi.clearAllMocks();
+    runExec.mockRejectedValue(new Error("Docker not installed"));
+    await maybeRepairSandboxImages(cfg, mockRuntime, mockPrompter);
+    expectNote("A gateway role requires a sandbox but Docker is not available");
+    expectNote("gateway.roles.definitions.<role>.sandbox to inherit");
+
+    // Codex's host namespace check still follows sandbox mode, not role requirements.
+    await probeOnLinux(cfg);
+    expectNoCodexProbe();
+  });
+
+  it("has image work only when a configured image with a bundled build script is missing", async () => {
+    const missing = (image?: string) =>
+      runExec.mockImplementation(async (_command: string, args: string[]) => {
+        if (args[0] === "image" && args[2] === image) {
+          throw Object.assign(new Error("missing image"), { stderr: "No such image" });
+        }
+        return { stdout: "", stderr: "" };
+      });
+    const cfg = createSandboxConfig("all");
+    missing(DEFAULT_SANDBOX_IMAGE);
+    await expect(checkSandboxImageRepairPending(cfg)).resolves.toBe("work");
+    missing();
+    await expect(checkSandboxImageRepairPending(cfg)).resolves.toBe("none");
+    // A custom image has no bundled script; the repair only warns about it.
+    const custom = createSandboxConfig("all");
+    custom.agents!.defaults!.sandbox!.docker = { image: "example/custom:1" };
+    missing("example/custom:1");
+    await expect(checkSandboxImageRepairPending(custom)).resolves.toBe("none");
+    runExec.mockRejectedValue(new Error("Docker not installed"));
+    await expect(checkSandboxImageRepairPending(cfg)).resolves.toBe("none");
+    await expect(checkSandboxImageRepairPending(createSandboxConfig("off"))).resolves.toBe("none");
+    expect(runCommandWithTimeout).not.toHaveBeenCalled();
+    expect(note).not.toHaveBeenCalled();
+  });
+
   it("validates the explicit Podman target before checking images", async () => {
     const cfg = createSandboxConfig("all");
     cfg.agents!.defaults!.sandbox!.backend = "podman";
@@ -114,6 +180,27 @@ describe("sandbox health", () => {
     });
     expect(runExec.mock.calls.some(([command]) => command === "unshare")).toBe(false);
     expectNoCodexProbe();
+  });
+
+  it("returns a nonblocking update warning when only the previous default image exists", async () => {
+    runExec.mockImplementation(async (_command: string, args: string[]) => {
+      if (args[0] === "image" && args[2] !== "openclaw-sandbox:bookworm-slim") {
+        throw Object.assign(new Error("missing image"), { stderr: "No such image" });
+      }
+      return { stdout: "", stderr: "" };
+    });
+    const warnings = await maybeRepairSandboxImages(
+      createSandboxConfig("non-main"),
+      mockRuntime,
+      mockPrompter,
+    );
+    expect(warnings).toEqual([
+      expect.stringContaining(`Sandbox base image missing: ${DEFAULT_SANDBOX_IMAGE}`),
+    ]);
+    expect(warnings?.[0]).toContain("openclaw doctor --fix");
+    expect(warnings?.[0]).toContain("Sandboxed turns will fail");
+    expect(runCommandWithTimeout).not.toHaveBeenCalled();
+    expect(mockRuntime.exit).not.toHaveBeenCalled();
   });
 
   it.each([
@@ -216,7 +303,7 @@ describe("sandbox health", () => {
 
   describe("sandbox setup script execution", () => {
     const dirs = useAutoCleanupTempDirTracker(afterEach);
-    const scriptRel = path.join("scripts", "sandbox-setup.sh");
+    const scriptRel = path.join("scripts", "sandbox-image-build.sh");
 
     beforeEach(() => {
       runExec.mockImplementation(async (command: string, args: string[]) => {
@@ -242,51 +329,59 @@ describe("sandbox health", () => {
       return root;
     }
 
-    it.each([false, true])(
-      "locates setup scripts (installed package=%s)",
-      async (installedPackage) => {
-        let argv1: string, cwd: string, expectedRoot: string | null;
-        if (installedPackage) {
-          argv1 = path.join(mkPackage(), "openclaw.mjs");
-          cwd = expectedRoot = mkPackage(true);
-        } else {
-          // Keep an enclosing checkout above TMPDIR outside package discovery.
-          cwd = path.join(fs.realpathSync(dirs.make("ocsbx-none-")), "node_modules", ".bin");
-          fs.mkdirSync(cwd, { recursive: true });
-          argv1 = path.join(cwd, "openclaw");
-          expectedRoot = null;
-        }
-        fs.writeFileSync(argv1, "");
-        const originalArgv = process.argv;
-        const argv = [...originalArgv];
-        argv[1] = argv1;
-        const cwdSpy = vi.spyOn(process, "cwd").mockReturnValue(cwd);
-        try {
-          process.argv = argv;
-          await maybeRepairSandboxImages(createSandboxConfig("all"), mockRuntime, mockPrompter);
-        } finally {
-          process.argv = originalArgv;
-          cwdSpy.mockRestore();
-        }
-        if (expectedRoot === null) {
-          expect(runCommandWithTimeout).not.toHaveBeenCalled();
-          expect(note).toHaveBeenCalledWith(
-            "Unable to locate scripts/sandbox-setup.sh. Run it from the repo root.",
-            "Sandbox",
-          );
-          expect(mockRuntime.log).not.toHaveBeenCalled();
-        } else {
-          expect(runCommandWithTimeout).toHaveBeenCalledExactlyOnceWith(
-            ["bash", path.join(expectedRoot, scriptRel)],
-            { timeoutMs: 20 * 60 * 1000, cwd: expectedRoot },
-          );
-          expect(vi.mocked(mockRuntime.log).mock.calls).toEqual([
-            ["Running scripts/sandbox-setup.sh..."],
-            ["Completed scripts/sandbox-setup.sh."],
-          ]);
-        }
-        expect(mockRuntime.error).not.toHaveBeenCalled();
-      },
-    );
+    it.each(["missing", "source", "installed"])("locates setup scripts (%s)", async (location) => {
+      let argv1: string, cwd: string, expectedRoot: string | null;
+      if (location === "installed") {
+        expectedRoot = mkPackage(true);
+        argv1 = path.join(expectedRoot, "openclaw.mjs");
+        cwd = dirs.make("ocsbx-cwd-");
+      } else if (location === "source") {
+        argv1 = path.join(mkPackage(), "openclaw.mjs");
+        cwd = expectedRoot = mkPackage(true);
+      } else {
+        // Keep an enclosing checkout above TMPDIR outside package discovery.
+        cwd = path.join(fs.realpathSync(dirs.make("ocsbx-none-")), "node_modules", ".bin");
+        fs.mkdirSync(cwd, { recursive: true });
+        argv1 = path.join(cwd, "openclaw");
+        expectedRoot = null;
+      }
+      fs.writeFileSync(argv1, "");
+      const originalArgv = process.argv;
+      const argv = [...originalArgv];
+      argv[1] = argv1;
+      const cwdSpy = vi.spyOn(process, "cwd").mockReturnValue(cwd);
+      let warnings: string[];
+      try {
+        process.argv = argv;
+        warnings = await maybeRepairSandboxImages(
+          createSandboxConfig("all"),
+          mockRuntime,
+          mockPrompter,
+        );
+      } finally {
+        process.argv = originalArgv;
+        cwdSpy.mockRestore();
+      }
+      if (expectedRoot === null) {
+        expect(warnings).toHaveLength(1);
+        expect(runCommandWithTimeout).not.toHaveBeenCalled();
+        expect(note).toHaveBeenCalledWith(
+          "Unable to locate scripts/sandbox-image-build.sh. Run it from the repo root.",
+          "Sandbox",
+        );
+        expect(mockRuntime.log).not.toHaveBeenCalled();
+      } else {
+        expect(warnings).toEqual([]);
+        expect(runCommandWithTimeout).toHaveBeenCalledExactlyOnceWith(
+          ["bash", path.join(expectedRoot, scriptRel)],
+          { timeoutMs: 20 * 60 * 1000, cwd: expectedRoot },
+        );
+        expect(vi.mocked(mockRuntime.log).mock.calls).toEqual([
+          ["Running scripts/sandbox-image-build.sh..."],
+          ["Completed scripts/sandbox-image-build.sh."],
+        ]);
+      }
+      expect(mockRuntime.error).not.toHaveBeenCalled();
+    });
   });
 });

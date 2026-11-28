@@ -1,3 +1,57 @@
+import { isTestFileTarget } from "./changed-path-facts.mjs";
+
+const DATABASE_ENGINE_TARGET = "src/infra/database-engine";
+// These directory and non-suffix suites also require the PostgreSQL runner.
+const additionalPostgresConformanceTargets = [
+  "extensions/clickclack/src/discussions/service-open.agent-storage.test.ts",
+  "extensions/workboard",
+  "extensions/logbook/src/postgres-store.test.ts",
+  "extensions/team-reports/src/postgres-store.test.ts",
+  "src/infra/postgres-sync",
+  DATABASE_ENGINE_TARGET,
+  "src/state/openclaw-state-lease-heartbeat.test.ts",
+  "src/infra/exec-approvals-native.test.ts",
+  "src/infra/client-credential-update.test.ts",
+  "src/infra/update-managed-service-handoff-engine.test.ts",
+  "src/channels/message/ingress-monitor.scheduling.test.ts",
+  "src/gateway/github-publication-runtime.test.ts",
+  "src/plugin-state/plugin-state-worker.test.ts",
+] as const;
+
+/** Filesystem discovery owns suffix suites; explicit targets cover the remaining contracts. */
+export function resolvePostgresConformanceTargets(testFiles: readonly string[]): string[] {
+  const targets = additionalPostgresConformanceTargets.flatMap((target) =>
+    target === DATABASE_ENGINE_TARGET
+      ? testFiles.filter(
+          (file) => file.startsWith(`${DATABASE_ENGINE_TARGET}/`) && file.endsWith(".test.ts"),
+        )
+      : [target],
+  );
+  return [
+    ...targets,
+    ...testFiles.filter(
+      (file) =>
+        file.endsWith(".postgres.test.ts") &&
+        !targets.some((target) => file === target || file.startsWith(`${target}/`)),
+    ),
+  ];
+}
+
+/** Changed paths include deleted tests, so ownership must not depend on existence. */
+export function isPostgresConformanceTestTarget(file: string): boolean {
+  return (
+    isTestFileTarget(file) &&
+    (((file.startsWith("src/") || file.startsWith("extensions/")) &&
+      file.endsWith(".postgres.test.ts")) ||
+      additionalPostgresConformanceTargets.some((target) =>
+        isTestFileTarget(target)
+          ? file === target
+          : file.startsWith(`${target}/`) &&
+            (target !== DATABASE_ENGINE_TARGET || file.endsWith(".test.ts")),
+      ))
+  );
+}
+
 type PostgresConformanceTimings = {
   workers: number;
   preparationSeconds: { base: number; runtime: number };
@@ -62,7 +116,10 @@ export function assignPostgresConformanceShards(
   count: number,
   estimate: (targets: readonly string[]) => number,
 ): string[][] {
-  const shards = Array.from({ length: count }, () => ({ targets: new Array<string>(), weight: 0 }));
+  const shards = Array.from({ length: count }, () => ({
+    targets: new Array<string>(),
+    weight: 0,
+  }));
   const ordered = targets
     .map((target) => ({ target, weight: estimate([target]) }))
     .toSorted((a, b) => b.weight - a.weight || a.target.localeCompare(b.target));

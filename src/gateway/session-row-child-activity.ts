@@ -2,6 +2,7 @@ import { isDeepStrictEqual } from "node:util";
 import { readSwarmReservationRevision } from "../agents/subagents/swarm/swarm-scheduler.js";
 import { readAgentRunIndexVersion } from "../infra/agent-run-registry.js";
 import type { SessionRowChange } from "../sessions/session-row-changes.js";
+import { MAX_SESSION_ROW_AUDIENCES } from "../shared/session-list-limits.js";
 import { createSessionRowChildVisibility } from "./session-row-child-visibility.js";
 import {
   identity,
@@ -12,8 +13,9 @@ import {
   type SnapshotOptions,
 } from "./session-row-projection-record.js";
 import type { SessionChildActivity, SessionListRowContext } from "./session-utils-contracts.js";
-import { sessionChildLinkExpiresAt } from "./session-utils-core.js";
+import { sessionChildLinkExpiresAt, type SessionChildLink } from "./session-utils-core.js";
 import { projectPreparedSessionChild } from "./session-utils-display.js";
+import { projectSessionRowChildLinks } from "./session-utils-projection.js";
 
 type Link = NonNullable<MaterializedRow["materialized"]["source"]["childLinks"]>[number];
 type Contribution = {
@@ -46,14 +48,46 @@ const EMPTY: SessionChildActivity = {
   childSessions: undefined,
   hasActiveSubagentRun: false,
 };
-const childId = (link: Link) => `${link.agentId ?? ""}\0${link.storePath ?? ""}\0${link.key}`;
+const childId = (link: Pick<Link, "key" | "agentId" | "storePath">) =>
+  `${link.agentId ?? ""}\0${link.storePath ?? ""}\0${link.key}`;
 
 /** The resident projection updates child contributions; consumers reuse their visible aggregate. */
-export function createSessionRowChildActivity() {
+export function createSessionRowChildActivity(readChildren: (link: Link) => readonly Link[]) {
   const parents = new Map<string, Parent>();
   const dependents = new Map<string, Set<Parent>>();
   let agentRevision = readAgentRunIndexVersion();
   let reservationRevision = readSwarmReservationRevision();
+  function projectChild(
+    link: Link,
+    parentKey: string,
+    context: SessionListRowContext,
+    now: number,
+    path: Set<string>,
+  ): Omit<Contribution, "link"> {
+    const id = childId(link);
+    if (path.has(id)) {
+      return { included: false, active: false, expires: Infinity, volatile: false };
+    }
+    path.add(id);
+    let activeDescendant = false;
+    let expires = Math.min(
+      context.subagentRuns.nextChangeAt(link.key),
+      sessionChildLinkExpiresAt(link.key, link.entry, context.subagentRuns, now),
+    );
+    let volatile = context.subagentRuns.hasUnendedRuns(link.key);
+    for (const child of readChildren(link)) {
+      const descendant = projectChild(child, link.key, context, now, path);
+      activeDescendant ||= descendant.included && descendant.active === true;
+      expires = Math.min(expires, descendant.expires);
+      volatile ||= descendant.volatile;
+    }
+    path.delete(id);
+    return {
+      ...projectPreparedSessionChild(link, parentKey, now, context, activeDescendant),
+      expires,
+      volatile,
+    };
+  }
   function invalidate(key?: string) {
     for (const parent of key === undefined ? parents.values() : (dependents.get(key) ?? [])) {
       if (key === undefined) {
@@ -217,17 +251,31 @@ export function createSessionRowChildActivity() {
           }
         }
       }
-      const subagentRuns = context.subagentRuns.atTime(now);
       if (parent.dirty.size) {
+        const subagentRuns = context.subagentRuns.atTime(now);
         let recomputeExpiry = now < parent.sampledAt || now > parent.nextExpiry;
         for (const key of parent.dirty) {
           for (const child of parent.byKey.get(key) ?? []) {
             const { link } = child;
-            const { included, active: propagated } = projectPreparedSessionChild(
+            // Stored child chains need the same effective activity as registry
+            // chains, even when their intermediate rows are not in the UI window.
+            const {
+              included,
+              active: propagated,
+              expires: expiry,
+              volatile,
+            } = projectChild(
               link,
               record.key,
-              now,
               { ...context, subagentRuns },
+              now,
+              new Set([
+                childId({
+                  key: record.key,
+                  agentId: record.agentId,
+                  storePath: record.storeTarget.storePath,
+                }),
+              ]),
             );
             if (included !== child.included || propagated !== child.active) {
               parent.revision = {};
@@ -244,16 +292,12 @@ export function createSessionRowChildActivity() {
             }
             child.included = included;
             child.active = propagated;
-            const expiry = Math.min(
-              subagentRuns.nextChangeAt(link.key),
-              sessionChildLinkExpiresAt(link.key, link.entry, subagentRuns, now),
-            );
             if (child.expires === parent.nextExpiry && expiry !== child.expires) {
               recomputeExpiry = true;
             }
             child.expires = expiry;
             parent.nextExpiry = Math.min(parent.nextExpiry, expiry);
-            child.volatile = subagentRuns.hasUnendedRuns(link.key);
+            child.volatile = volatile;
           }
         }
         if (recomputeExpiry) {
@@ -268,7 +312,7 @@ export function createSessionRowChildActivity() {
       let view = parent.views.get(viewKey);
       if (!view) {
         // Match the bounded audience history of child authorization; never retain clients.
-        if (parent.views.size === 64) {
+        if (parent.views.size === MAX_SESSION_ROW_AUDIENCES) {
           parent.views.delete(parent.views.keys().next().value);
         }
         view = { excluded, active: 0, keysDirty: true };
@@ -306,8 +350,13 @@ export function createSessionRowChildProjection(params: {
   context(): SessionListRowContext;
   matching(query: Query, kind?: string): Row[];
   referenced(reference: string): Row | undefined;
+  readChildLinks(row: Row): readonly SessionChildLink[];
 }) {
-  const activity = createSessionRowChildActivity();
+  const readChildren = (link: Link) =>
+    params
+      .matching({ key: link.key, agentId: link.agentId, storePath: link.storePath })
+      .flatMap((row) => projectSessionRowChildLinks(params.readChildLinks(row)) ?? []);
+  const activity = createSessionRowChildActivity(readChildren);
   const visibility = createSessionRowChildVisibility();
   function clear() {
     activity.clear();
@@ -343,7 +392,7 @@ export function createSessionRowChildProjection(params: {
     excluded?: ReadonlySet<string>,
     revision?: object,
   ) => {
-    const owner = record.privateSource ? createSessionRowChildActivity() : activity;
+    const owner = record.privateSource ? createSessionRowChildActivity(readChildren) : activity;
     return owner.read(record, params.context(), now, excluded, revision);
   };
   return {
@@ -365,6 +414,15 @@ export function createSessionRowChildProjection(params: {
     mark(change: SessionRowChange) {
       if (!("all" in change)) {
         invalidate(change.sessionKey);
+        if (change.scope === "runtime") {
+          if (change.runtimeSession) {
+            for (const row of params.matching({ key: change.runtimeSession.sessionId }, "id")) {
+              invalidate(row.key);
+            }
+          }
+          // Both runtime keys and session-ID aliases have invalidated their ancestors.
+          activity.invalidateRuntime([]);
+        }
         return;
       }
       if (change.factsInvalidated) {

@@ -1,5 +1,6 @@
 import { isCronActiveJobMarkerCurrent } from "../active-jobs.js";
 import { resolveCronJobEffectiveAgentId } from "../agent-id.js";
+import { cronOperatorSourceRefusal } from "../operator-source-error.js";
 import type { ScheduledOccurrence } from "../scheduled-occurrence.js";
 import { cronScriptFailureMetadata } from "../script-failure.js";
 import type { CronStoredJob } from "../types.js";
@@ -17,6 +18,7 @@ export async function executeScriptCronJob(
   job: CronStoredJob,
   occurrence: ScheduledOccurrence,
   abortSignal: AbortSignal | undefined,
+  assertCurrent: () => void,
   options?: ExecuteJobCoreOptions,
 ) {
   if (state.deps.cronConfig?.triggers?.enabled === false) {
@@ -36,14 +38,16 @@ export async function executeScriptCronJob(
   const expectedTarget = await state.deps.captureSessionEventTarget?.(job);
   abortSignal?.throwIfAborted();
   await options?.assertRunCurrent?.();
-  const result = await state.deps.runScriptJob({
-    occurrence,
-    deliveryAttemptFence: options?.deliveryAttemptFence ?? null,
-    job,
-    streamBatch: options?.streamBatch,
-    abortSignal,
-    executionIdentity: options?.executionIdentity,
-  });
+  const result = await state.deps
+    .runScriptJob({
+      occurrence,
+      deliveryAttemptFence: options?.deliveryAttemptFence ?? null,
+      job,
+      streamBatch: options?.streamBatch,
+      abortSignal,
+      executionIdentity: options?.executionIdentity,
+    })
+    .catch(cronOperatorSourceRefusal);
   // Script runners may settle after ignoring an abort. Recheck both operator
   // cancellation and scheduler ownership before any notify/wake side effect.
   if (!isCronActiveJobMarkerCurrent(options?.activeJobMarker)) {
@@ -129,13 +133,7 @@ export async function executeScriptCronJob(
         agentId,
         sessionKey: job.sessionKey,
         expectedTarget,
-        commitGuard: () => {
-          abortSignal?.throwIfAborted();
-          options?.deliveryAttemptFence?.assertCurrent();
-          if (!isCronActiveJobMarkerCurrent(options?.activeJobMarker)) {
-            throw new Error("Gateway restarting.");
-          }
-        },
+        commitGuard: assertCurrent,
       });
       if (!wakeResult.ok) {
         return { status: "error" as const, error: wakeResult.reason ?? "Wake was refused" };

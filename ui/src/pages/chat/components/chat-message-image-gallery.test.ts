@@ -180,9 +180,9 @@ describe("message image gallery loading", () => {
     const expectedSrc = `/openclaw/__openclaw__/assistant-media?source=${encodeURIComponent(source)}&mediaTicket=ticket-inbound&${new URLSearchParams({ filename })}`;
     expect(
       container.querySelector<HTMLImageElement>(".chat-message-image")?.getAttribute("src"),
-    ).toBe(`${expectedSrc}&variant=thumbnail&width=480&v=4`);
+    ).toBe(`${expectedSrc}&variant=thumbnail&width=480&v=5`);
     expect(container.querySelector(".chat-message-image")?.getAttribute("srcset")).toBe(
-      `${expectedSrc}&variant=thumbnail&width=480&v=4 1x, ${expectedSrc}&variant=thumbnail&width=960&v=4 2x`,
+      `${expectedSrc}&variant=thumbnail&width=480&v=5 1x, ${expectedSrc}&variant=thumbnail&width=960&v=5 2x`,
     );
     const tile = container.querySelector<HTMLButtonElement>(".chat-message-image-button");
     expect(tile).not.toBeNull();
@@ -192,7 +192,7 @@ describe("message image gallery loading", () => {
     await opened.promise;
     expect(onOpenImage).toHaveBeenCalledWith(
       expect.objectContaining({
-        src: new URL(`${expectedSrc}&variant=thumbnail&width=480&v=4`, window.location.href).href,
+        src: new URL(`${expectedSrc}&variant=thumbnail&width=480&v=5`, window.location.href).href,
         title: filename,
       }),
     );
@@ -252,7 +252,7 @@ describe("message image gallery loading", () => {
         await vi.advanceTimersByTimeAsync(0);
         expect(fetchDisplay).not.toHaveBeenCalled();
         expect(fetch.mock.calls.map(([url]) => url)).toEqual([
-          source.replace(/\/full$/u, "/thumbnail?v=4&width=480"),
+          source.replace(/\/full$/u, "/thumbnail?v=5&width=480"),
         ]);
         expect(await gallery.controller.move(1)).toBe(false);
         expect(fetchDisplay).toHaveBeenCalledOnce();
@@ -271,7 +271,7 @@ describe("message image gallery loading", () => {
         expect(gallery.controller.peek().current?.title).toBe("Managed neighbor");
         expect(gallery.controller.peek().current?.src).toBe(`${blobPrefix}-1`);
         expect(gallery.controller.peek().failed).toBe(false);
-        expect(fetch.mock.calls.every(([url]) => url.includes("/thumbnail?v=4&width="))).toBe(true);
+        expect(fetch.mock.calls.every(([url]) => url.includes("/thumbnail?v=5&width="))).toBe(true);
       } finally {
         dispose();
       }
@@ -356,6 +356,39 @@ function renderMessage(
 }
 
 describe("message attachment image gallery projection", () => {
+  it.each([0, 40_001])(
+    "opens recovered Markdown images with %i characters of padding",
+    async (length) => {
+      const src = "https://example.com/preview.png";
+      const markdown = "x".repeat(length) + "\n\n![Preview](" + src + ")";
+      const onOpenImage = vi.fn<(item: ImageLightboxItem) => void>();
+      renderMessage(
+        createAssistantMessage("Loading preview", {
+          __openclaw: { id: "recovered-image", seq: 1, truncated: true },
+        }),
+        "assistant",
+        {
+          onOpenImage,
+          sessionKey: "agent:main:main",
+          loadFullAssistantMessage: async () => null,
+          getAssistantMessageExpansion: () => ({
+            status: "loaded",
+            markdown,
+            message: length ? createAssistantMessage(markdown) : undefined,
+            revision: 1,
+          }),
+          onToggleAssistantMessageExpanded: vi.fn(),
+        },
+      );
+      await vi.dynamicImportSettled();
+      await waitForSolid(() =>
+        expect(container.querySelector(".chat-text img")?.getAttribute("src")).toBe(src),
+      );
+      container.querySelector<HTMLImageElement>(".chat-text img")?.click();
+      expect(onOpenImage).toHaveBeenCalledExactlyOnceWith(expect.objectContaining({ src }));
+    },
+  );
+
   it.each(
     [
       {
@@ -492,5 +525,64 @@ describe("message attachment image gallery projection", () => {
       index,
       items: [expect.any(Function), expect.any(Function)],
     });
+  });
+  it("follows transcript tile order across the opened turn", async () => {
+    const onOpenImage = vi.fn<(item: ImageLightboxItem) => void>();
+    const first = createAssistantMessage(
+      [
+        { type: "text", text: "Introduction" },
+        { type: "image", url: "https://example.com/inline.png" },
+      ],
+      {
+        __openclaw: {
+          id: "turn-first",
+          media: [{ path: "https://example.com/supplemental.png", contentType: "image/png" }],
+        },
+      },
+    );
+    const last = createAssistantMessage([{ type: "image", url: "https://example.com/last.png" }], {
+      __openclaw: { id: "turn-last" },
+    });
+    const turn = [
+      { key: "first", message: first },
+      { key: "last", message: last },
+    ];
+    mountSolid(
+      MessageGroup,
+      {
+        group: createMessageGroup(first, "assistant", {
+          messages: [{ key: "first", message: first }],
+        }),
+        options: {
+          showReasoning: false,
+          showToolCalls: false,
+          assistantName: "OpenClaw",
+          assistantAvatar: null,
+          getThreadMediaMessages: (key) => (key === "first" ? turn : undefined),
+          onOpenImage,
+        },
+      },
+      container,
+    );
+    const rendered = () =>
+      Array.from(
+        container.querySelectorAll<HTMLImageElement>(".chat-message-image"),
+        (image) => new URL(image.src).pathname,
+      );
+    // In-order replies place unpositioned media above their text.
+    await waitForSolid(() => expect(rendered()).toEqual(["/supplemental.png", "/inline.png"]));
+    const tiles = container.querySelectorAll<HTMLButtonElement>(".chat-message-image-button");
+    for (const [index, tile] of tiles.entries()) {
+      tile.click();
+      const gallery = expectDefined(onOpenImage.mock.calls.at(-1)?.[0].gallery, "turn gallery");
+      expect(gallery.index).toBe(index);
+      const items = await Promise.all(gallery.items.map((load) => load()));
+      expect(items.map((item) => item && new URL(item.src).pathname)).toEqual([
+        "/supplemental.png",
+        "/inline.png",
+        "/last.png",
+      ]);
+      items.forEach((item) => item?.release?.());
+    }
   });
 });

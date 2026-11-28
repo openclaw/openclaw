@@ -71,9 +71,14 @@ const shellOwners = {
     [`${prefix}AGENT_BUNDLE_MCP_MODE`, `${prefix}AGENT_BUNDLE_MCP_CLIENT_PATH`],
   ],
   plugins: ["plugin_harness_capabilities", [`${prefix}PLUGIN_UNINSTALL_MODE`]],
+  "update-channel-switch": [
+    "update_channel_switch_contract",
+    [`${prefix}UPDATE_MAIN_TAG`, `${prefix}PACKAGE_TO_GIT_MODE`, `${prefix}GIT_TO_PACKAGE_MODE`],
+  ],
   "upgrade-survivor": [
-    "upgrade_survivor_capabilities",
+    ["upgrade_survivor_capabilities", "upgrade_skill_library_contract"],
     [
+      "OPENCLAW_FROZEN_UPGRADE_SURVIVOR_SKILL_LIBRARY_MODE",
       "OPENCLAW_FROZEN_UPGRADE_SURVIVOR_TOOL_SEARCH_RECIPE",
       "OPENCLAW_FROZEN_UPGRADE_SURVIVOR_MEMBERSHIP_MODE",
     ],
@@ -472,6 +477,16 @@ async function planWorkflowAdmission(input) {
     }
   }
   const sourcePaths = new Set();
+  if (consumers.has("upgrade-survivor")) {
+    sourcePaths.add("src/config/skill-library-tool-split-migration.ts");
+    sourcePaths.add("src/commands/doctor/shared/legacy-config-migrations.runtime.tool-names.ts");
+  }
+  if (consumers.has("update-channel-switch")) {
+    sourcePaths.add("src/cli/update-cli/update-command-admission-report.ts");
+    sourcePaths.add("src/cli/update-cli/update-command-git.ts");
+    sourcePaths.add("src/cli/update-cli/update-command-target.ts");
+    sourcePaths.add("src/infra/update-global.ts");
+  }
   if (allow) {
     for (const consumer of consumers) {
       for (const path of selectedMetadata[
@@ -994,6 +1009,18 @@ async function preflightFrozenTargetContracts(input, workflow = false, verifiedT
   const contracts = [];
   for (const consumer of [...consumers].toSorted((a, b) => (a < b ? -1 : a > b ? 1 : 0))) {
     const contract = { consumer, status: "ADMITTED", modes: {}, files: [] };
+    if (consumer === "upgrade-survivor") {
+      sources.selected.readText("src/config/skill-library-tool-split-migration.ts");
+      sources.selected.readText(
+        "src/commands/doctor/shared/legacy-config-migrations.runtime.tool-names.ts",
+      );
+    }
+    if (consumer === "update-channel-switch") {
+      required(sources.selected, "src/cli/update-cli/update-command-admission-report.ts");
+      required(sources.selected, "src/cli/update-cli/update-command-git.ts");
+      required(sources.selected, "src/cli/update-cli/update-command-target.ts");
+      required(sources.selected, "src/infra/update-global.ts");
+    }
     const owner = shellOwners[consumer === "kitchen-sink-plugin" ? "plugins" : consumer];
     if (owner) {
       const [fn, names] = owner;

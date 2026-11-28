@@ -42,8 +42,13 @@ function mockSubmission(reply = Response.json({ id: "task-1" })) {
   return release;
 }
 
-function mockTaskResponse(payload: unknown) {
-  const release = mockSubmission();
+function mockTaskResponse(payload: unknown, pendingStatuses: string[] = []) {
+  const release = mockSubmission(
+    Response.json({ id: "task-1", status: "FAILED", failure: "ignored submit status" }),
+  );
+  for (const status of pendingStatuses) {
+    fetchWithTimeoutMock.mockResolvedValueOnce(Response.json({ status }));
+  }
   fetchWithTimeoutMock.mockResolvedValueOnce(Response.json(payload));
   return release;
 }
@@ -51,8 +56,14 @@ function mockTaskResponse(payload: unknown) {
 const response = (body: string, mimeType = "video/mp4") =>
   new Response(body, { headers: { "content-type": mimeType } });
 
-function mockSuccessfulTask(video = response("mp4-bytes", "video/webm")) {
-  const release = mockTaskResponse({ status: "SUCCEEDED", output: [outputUrl] });
+function mockSuccessfulTask(
+  pendingStatuses: string[] = [],
+  video = response("mp4-bytes", "video/webm"),
+) {
+  const release = mockTaskResponse(
+    { status: " SUCCEEDED ", output: [outputUrl], failure: "ignored success failure" },
+    pendingStatuses,
+  );
   fetchWithTimeoutMock.mockResolvedValueOnce(video);
   return release;
 }
@@ -124,18 +135,82 @@ it.each<[string, Request, Record<string, unknown>]>([
     { model: "gen4_aleph", videoUri: "https://example.com/input.mp4", ratio: "960:960" },
   ],
 ])("submits %s, polls, and downloads the output", async (endpoint, request, body) => {
+  vi.useFakeTimers();
+  try {
+    mockSuccessfulTask([" PENDING ", " RUNNING ", " THROTTLED "]);
+    const pending = generateVideo(request);
+    await vi.advanceTimersByTimeAsync(0);
+    expect(fetchWithTimeoutMock).toHaveBeenCalledTimes(1);
+    await vi.advanceTimersByTimeAsync(15_000);
+    expect(fetchWithTimeoutMock).toHaveBeenCalledTimes(5);
+    const result = await pending;
+    expect(postJsonRequestMock).toHaveBeenCalledExactlyOnceWith(
+      expect.objectContaining({
+        url: `https://api.dev.runwayml.com/v1/${endpoint}`,
+        body: endpoint === "text_to_video" ? body : expect.objectContaining(body),
+      }),
+    );
+    expect(result).toMatchObject({
+      videos: [{ fileName: "video-1.webm", buffer: Buffer.from("mp4-bytes") }],
+      metadata: { taskId: "task-1", status: "SUCCEEDED", endpoint: `/v1/${endpoint}` },
+    });
+  } finally {
+    vi.useRealTimers();
+  }
+});
+
+it.each([
+  ["veo3.1", 4],
+  ["veo3.1_fast", 4],
+  ["veo3", 8],
+  ["gen4.5", 5],
+  ["gen4_turbo", 5],
+  ["gen3a_turbo", 5],
+] as const)("defaults %s image requests to %i seconds", async (model, duration) => {
   mockSuccessfulTask();
-  const result = await generateVideo(request);
-  expect(postJsonRequestMock).toHaveBeenCalledExactlyOnceWith(
-    expect.objectContaining({
-      url: `https://api.dev.runwayml.com/v1/${endpoint}`,
-      body: endpoint === "text_to_video" ? body : expect.objectContaining(body),
-    }),
-  );
-  expect(result).toMatchObject({
-    videos: [{ fileName: "video-1.webm", buffer: Buffer.from("mp4-bytes") }],
-    metadata: { taskId: "task-1", status: "SUCCEEDED", endpoint: `/v1/${endpoint}` },
+  await generateVideo({
+    model,
+    inputImages: [{ buffer: Buffer.from("png-bytes"), mimeType: "image/png" }],
   });
+  const request = requireFirstPostJsonRecordRequest(postJsonRequestMock, "Runway");
+  expect(request.body).toMatchObject({ model, duration });
+});
+
+it.each([
+  ["veo3.1", undefined, 4],
+  ["veo3.1", 4, 4],
+  ["veo3.1", 6, 6],
+  ["veo3.1", 5.9, 6],
+  ["veo3.1_fast", 5.9, 6],
+  ["veo3.1", 8, 8],
+  ["veo3", undefined, 8],
+  ["veo3", 8, 8],
+  ["veo3", 7.9, 8],
+] as const)(
+  "submits %s text duration %s as %i seconds",
+  async (model, durationSeconds, duration) => {
+    mockSuccessfulTask();
+    await generateVideo({ model, durationSeconds });
+    expect(requireFirstPostJsonRecordRequest(postJsonRequestMock, "Runway").body).toMatchObject({
+      model,
+      duration,
+    });
+  },
+);
+
+it.each([3, 5, 7, 9, 4.5])(
+  "rejects unsupported Veo duration %s before egress",
+  async (durationSeconds) => {
+    await expect(generateVideo({ model: "veo3.1", durationSeconds })).rejects.toThrow("4, 6, or 8");
+    expect(postJsonRequestMock).not.toHaveBeenCalled();
+    expect(fetchWithTimeoutMock).not.toHaveBeenCalled();
+  },
+);
+
+it.each([4, 6])("rejects %i seconds for legacy veo3 before egress", async (durationSeconds) => {
+  await expect(generateVideo({ model: "veo3", durationSeconds })).rejects.toThrow("to be 8");
+  expect(postJsonRequestMock).not.toHaveBeenCalled();
+  expect(fetchWithTimeoutMock).not.toHaveBeenCalled();
 });
 
 it("authenticates video generation with a resolved file SecretRef provider overlay", async () => {
@@ -182,36 +257,49 @@ it("keeps the resolved proxy and private-network route while polling", async () 
   );
 });
 
-const failures: Record<string, [Request, (() => ReturnType<typeof mockSubmission>)?]> = {
+type FailureSetup = () => ReturnType<typeof mockSubmission>;
+const failures: Record<string, [Request, FailureSetup?] | FailureSetup> = {
   "durationSeconds must be a positive duration": [{ durationSeconds: 0.4 }],
   "Runway video-to-video currently requires model gen4_aleph.": [
     { inputVideos: [{ url: "https://example.com/input.mp4" }] },
   ],
-  "Runway video generation failed: malformed JSON response": [
-    {},
-    () => mockSubmission(response("{ not json", "application/json")),
-  ],
-  "Runway video status response missing task status": [{}, () => mockTaskResponse({})],
-  "Runway video generation completed with malformed output URLs": [
-    {},
-    () => mockTaskResponse({ status: "SUCCEEDED", output: outputUrl }),
-  ],
-  "Runway generated video download: malformed video response": [
-    {},
-    () => mockSuccessfulTask(response("")),
-  ],
+  "Runway video generation failed: malformed JSON response": () =>
+    mockSubmission(response("{ not json", "application/json")),
+  "Runway video status response missing task status": () => mockTaskResponse({}),
+  "Runway video status response returned unknown task status: UNKNOWN": () =>
+    mockTaskResponse({ status: " UNKNOWN " }),
+  "Runway video status response returned unknown task status: succeeded": () =>
+    mockTaskResponse({ status: "succeeded", output: [outputUrl] }),
+  "trimmed string failure": () =>
+    mockTaskResponse({ status: " FAILED ", failure: "  trimmed string failure  " }),
+  "trimmed object failure": () =>
+    mockTaskResponse({ status: " CANCELLED ", failure: { message: "  trimmed object failure  " } }),
+  "Runway video generation failed": () => mockTaskResponse({ status: "FAILED", failure: " " }),
+  "Runway video generation cancelled": () =>
+    mockTaskResponse({ status: "CANCELLED", failure: { message: 42 } }),
+  "Runway video generation response missing task id": () =>
+    mockSubmission(Response.json({ status: "FAILED", failure: "must validate id first" })),
+  "Runway video generation completed with malformed output URLs": () =>
+    mockTaskResponse({ status: "SUCCEEDED", output: outputUrl }),
+  "Runway generated video download: malformed video response": () =>
+    mockSuccessfulTask([], response("")),
   "Runway generated video download exceeds 1 bytes": [
     { cfg: { agents: { defaults: { mediaMaxMb: 0.000001 } } } },
-    () => mockSuccessfulTask(response("too-large")),
+    () => mockSuccessfulTask([], response("too-large")),
   ],
 };
-it.each(Object.entries(failures))("rejects: %s", async (error, [request, setup]) => {
+it.each(Object.entries(failures))("rejects: %s", async (error, testCase) => {
+  const [request, setup]: [Request, FailureSetup?] =
+    typeof testCase === "function" ? [{}, testCase] : testCase;
   const release = setup?.();
   await expect(generateVideo(request)).rejects.toThrow(error);
   if (release) {
     expect(release).toHaveBeenCalledOnce();
   } else {
     expect(postJsonRequestMock).not.toHaveBeenCalled();
+  }
+  if (error === "Runway video generation response missing task id") {
+    expect(fetchWithTimeoutMock).not.toHaveBeenCalled();
   }
 });
 

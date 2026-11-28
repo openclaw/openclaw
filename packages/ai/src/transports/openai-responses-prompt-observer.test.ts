@@ -1,5 +1,9 @@
 import type { AssistantMessage, Context, Model } from "@openclaw/llm-core";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import {
+  freezeJsonSnapshot,
+  isDeeplyFrozenPlainData,
+} from "../../../../src/shared/immutable-data.js";
 import { configureAiTransportHost, getAiTransportHost } from "../host.js";
 import { responsesPromptObserver, type ResponsesPromptObservation } from "../internal/openai.js";
 import {
@@ -13,10 +17,11 @@ import {
   emitWebSocket,
   installWebSocket,
 } from "../providers/openai-chatgpt-responses.test-helpers.js";
-import { streamOpenAIResponses } from "../providers/openai-responses.js";
 import { cleanupSessionResources } from "../session-resources.js";
-import { SYSTEM_PROMPT_CACHE_BOUNDARY } from "../utils/system-prompt-cache-boundary.js";
-import { resolveResponsesContextUsageBoundary } from "./openai-responses-context-usage.js";
+import {
+  prepareSystemPrompt,
+  SYSTEM_PROMPT_CACHE_BOUNDARY,
+} from "../utils/system-prompt-cache-boundary.js";
 import * as fixtures from "./openai-responses-prompt-observer.test-support.js";
 import type { SdkResponse } from "./openai-responses-sdk.test-support.js";
 
@@ -53,7 +58,7 @@ const nativeModel = () =>
   });
 const invalidEncryptedContent = () =>
   Object.assign(new Error("invalid encrypted content"), { code: "invalid_encrypted_content" });
-const identity = { sessionId: "observer-session", authProfileId: "observer-profile" };
+const identity = { sessionId: "observer-session" };
 const sdkOptions = { apiKey: "test-key", ...identity };
 function compactionCase() {
   const model = fixtures.createModel();
@@ -78,21 +83,6 @@ const managedResult = async (
   expect(result.stopReason).toBe("stop");
   return result;
 };
-function usageBoundary(
-  context: Context,
-  result: AssistantMessage,
-  model: Model,
-  persisted = false,
-) {
-  const messages = [...context.messages, result];
-  const saved = persisted ? JSON.stringify(messages) : undefined;
-  return resolveResponsesContextUsageBoundary(
-    saved === undefined ? messages : JSON.parse(saved),
-    model,
-    identity,
-    context.systemPrompt,
-  );
-}
 function observe(options: object, order?: string[], includeEgress = false) {
   const observations: ResponsesPromptObservation[] = [];
   responsesPromptObserver.set(options, (observation) => {
@@ -120,11 +110,6 @@ function expectObservations(
   expect(JSON.stringify(observations)).not.toContain(prompt);
 }
 
-const expectedBoundary = (context: Context, totalTokens = 8) => ({
-  index: context.messages.length,
-  totalTokens,
-  suffix: [],
-});
 function mockSse(order?: string[], onRequest?: (request: Record<string, unknown>) => void) {
   vi.stubGlobal(
     "fetch",
@@ -257,81 +242,36 @@ describe("OpenAI Responses provider prompt observer", () => {
         expect(sdkState.requests[0]?.input).toBe("hello");
       }
       expect(result.errorMessage).toBeUndefined();
-      expect(result).not.toHaveProperty("openclawResponsesInputReplay.contextUsage");
     },
   );
 
-  it.each(["shared", "chatgpt"] as const)(
-    "preserves measured checkpoint usage through %s egress and saved-history replay",
-    async (transport) => {
-      const model = transport === "chatgpt" ? nativeModel() : fixtures.createModel();
-      const context = fixtures.createOrphanedToolOutputCompactionContext(model, identity);
-      const toolOutput = context.messages.find((message) => message.role === "toolResult");
-      if (!toolOutput || toolOutput.role !== "toolResult") {
-        throw new Error("missing tool-output fixture");
-      }
-      toolOutput.content = [{ type: "text", text: "large historical tool output\n".repeat(8_000) }];
-      context.messages.push(
-        fixtures.userMessage("OpenClaw runtime context:\ncurrent runtime facts", 2, {
-          runtimeContext: {},
-        }),
-      );
-      const run = async (rewriteInput: boolean) => {
-        sdkState.outcomes = [fixtures.completedSdkResponse(`resp_usage_${transport}`)];
-        mockSse();
-        const options = {
-          ...identity,
-          apiKey: transport === "chatgpt" ? createJwt() : "test-key",
-          transport: "sse" as const,
-          onPayload: rewriteInput
-            ? (payload: unknown) => {
-                const request = payload as Record<string, unknown>;
-                return {
-                  ...request,
-                  input: [
-                    ...(request.input as unknown[]),
-                    {
-                      role: "user",
-                      content: "hook-only history that is absent from the transcript",
-                    },
-                  ],
-                };
-              }
-            : undefined,
-        };
-        const result = await (
-          transport === "chatgpt"
-            ? streamOpenAICodexResponses(
-                { ...model, api: "openai-chatgpt-responses", compat: undefined },
-                context,
-                options,
-              )
-            : streamOpenAIResponses({ ...model, api: "openai-responses" }, context, options)
-        ).result();
-        expect(result.stopReason).toBe("stop");
-        expect(result.usage.contextUsage).toEqual({
-          state: "available",
-          promptTokens: 5,
-          totalTokens: 8,
-        });
-        return {
-          result,
-          boundary: usageBoundary(context, result, model, true),
-        };
-      };
+  it("isolates edits to embedded instructions from later requests", async () => {
+    configureAiTransportHost({ immutableData: { freezeJsonSnapshot, isDeeplyFrozenPlainData } });
+    const model = fixtures.createModel({ reasoning: true, compat: { cachesInstructions: false } });
+    const context = fixtures.createContext("Original instructions");
+    context.preparedSystemPrompt = prepareSystemPrompt("Original instructions");
+    const options = { ...sdkOptions, transport: "sse" };
+    sdkState.outcomes = ["first", "hook", "last"].map((id) => fixtures.completedSdkResponse(id));
+    await managedResult(model, context, options);
+    await managedResult(model, context, {
+      ...options,
+      onPayload: (payload: { input: Array<{ content: Array<{ text: string }> }> }) => {
+        const instruction = payload.input[0]?.content[0];
+        if (!instruction) {
+          throw new Error("missing embedded instructions");
+        }
+        instruction.text = "Hook instructions";
+      },
+    });
+    await managedResult(model, context, options);
+    expect(sdkState.requests.map((_, index) => JSON.parse(requestInput(index))[0])).toEqual([
+      fixtures.inputMessage("Original instructions", "developer"),
+      fixtures.inputMessage("Hook instructions", "developer"),
+      fixtures.inputMessage("Original instructions", "developer"),
+    ]);
+  });
 
-      const measured = await run(false);
-      expect(measured.result).toMatchObject({
-        openclawResponsesInputReplay: { contextUsage: { totalTokens: 8 } },
-      });
-      expect(measured.boundary).toEqual(expectedBoundary(context));
-
-      const rewritten = await run(true);
-      expect(rewritten.boundary).toBeUndefined();
-    },
-  );
-
-  it("binds measured usage to terminal reasoning when its ciphertext changes", async () => {
+  it("keeps terminal reasoning when its ciphertext changes after streaming", async () => {
     const { model, context } = compactionCase();
     const reasoning = {
       type: "reasoning",
@@ -357,7 +297,6 @@ describe("OpenAI Responses provider prompt observer", () => {
       type: "thinking",
       thinkingSignature: expect.stringContaining("opaque-terminal-reasoning"),
     });
-    expect(usageBoundary(context, result, model, true)).toEqual(expectedBoundary(context, 525));
   });
 
   it("recovers Azure compaction rejection and suppresses it on the next turn", async () => {
@@ -375,7 +314,6 @@ describe("OpenAI Responses provider prompt observer", () => {
       fixtures.completedSdkResponse("resp_azure_next"),
     ];
     const recovered = await managedResult(azureModel, context, options, true);
-    expect(recovered).not.toHaveProperty("openclawResponsesInputReplay.contextUsage");
     await managedResult(
       azureModel,
       {
@@ -467,8 +405,6 @@ describe("OpenAI Responses provider prompt observer", () => {
     const result = await stream.result();
     expect(result).toMatchObject({ stopReason: "stop" });
     expect(result.responseModel).toBeUndefined();
-    expect(result).not.toHaveProperty("openclawResponsesInputReplay.contextUsage");
-    expect(usageBoundary(context, result, model)).toBeUndefined();
 
     expect(sdkState.requests.map(requestHasCompaction)).toEqual([true, true]);
     expect(requestInput(0)).toContain(reasoningCiphertext);
@@ -578,7 +514,6 @@ describe("OpenAI Responses provider prompt observer", () => {
     const result = await streamOpenAICodexResponses(model, context, options).result();
 
     expect(result.stopReason).toBe("stop");
-    expect(usageBoundary(context, result, model)).toEqual(expectedBoundary(context));
     expect(connections.sockets).toHaveLength(2);
     expect(order).toEqual(["observe", "send", "observe", "send"]);
     expect(sentRequests.map((request) => request.instructions)).toEqual([prompt, prompt]);

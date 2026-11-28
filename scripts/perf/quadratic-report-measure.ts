@@ -14,7 +14,7 @@ import type { HeapProfiler } from "node:inspector";
 import { Session } from "node:inspector/promises";
 import { loadavg } from "node:os";
 import path from "node:path";
-import { PerformanceObserver, type PerformanceEntry } from "node:perf_hooks";
+import { PerformanceObserver } from "node:perf_hooks";
 import { setImmediate as nextTurn } from "node:timers/promises";
 import { pathToFileURL } from "node:url";
 import { parseArgs } from "node:util";
@@ -22,6 +22,8 @@ import type { buildSystemPromptReport } from "../../src/agents/system-prompt-rep
 import type { ToolSearchCatalogEntry } from "../../src/agents/tool-search-types.js";
 import type { AnyAgentTool } from "../../src/agents/tools/common.js";
 import type { buildAllPluginInspectReports } from "../../src/plugins/status.js";
+import { startCollectedHeapSampling } from "../lib/heap-sampling.ts";
+import { recordGcCollections } from "../lib/perf-gc-collections.ts";
 
 const { values } = parseArgs({
   options: {
@@ -121,26 +123,14 @@ try {
   await nextTurn();
   const inspector = new Session();
   if (values.mode === "allocation") {
-    inspector.connect();
-    await inspector.post("HeapProfiler.startSampling", {
-      samplingInterval: 16384,
-      includeObjectsCollectedByMajorGC: true,
-      includeObjectsCollectedByMinorGC: true,
-    });
+    await startCollectedHeapSampling(inspector, 16384);
   }
   const collections: { kind: number; ms: number }[] = [];
   let start = Infinity;
   let end = Infinity;
-  const observer = new PerformanceObserver((list) => {
-    for (const entry of list.getEntries()) {
-      if (entry.startTime >= start && entry.startTime < end) {
-        collections.push({
-          kind: (entry as PerformanceEntry & { detail: { kind: number } }).detail.kind,
-          ms: entry.duration,
-        });
-      }
-    }
-  });
+  const observer = new PerformanceObserver((list) =>
+    recordGcCollections(list.getEntries(), collections, start, end),
+  );
   observer.observe({ entryTypes: ["gc"] });
   const hostLoadBefore = loadavg();
   const memoryBefore = process.memoryUsage();

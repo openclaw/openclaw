@@ -1,4 +1,4 @@
-import { expect, it } from "vitest";
+import { expect, it, vi } from "vitest";
 import { buildInitialChatSubmission } from "../pages/chat/user-message-content.ts";
 import { createChatSubmissions, type RetainedChatSubmission } from "./chat-submissions.ts";
 
@@ -93,4 +93,45 @@ it.each(["resumed", "newer"])("retired attempts cannot clear %s successors", (ne
   expect(submissions.readCreateMessage(nextKey)).not.toBeNull();
   releaseCurrent();
   expect(submissions.readCreateMessage(nextKey)).toBeNull();
+});
+
+it("keeps background start previews per session and only for their owner", () => {
+  const submissions = createChatSubmissions();
+  const listener = vi.fn();
+  submissions.subscribeCreate(listener);
+  let visible = true;
+  const first = { sessionKey: "agent:main:dashboard:first", admitted: false };
+  const second = { sessionKey: "agent:main:dashboard:second", admitted: false };
+  const firstPreview = submissions.beginBackgroundCreate({
+    creation: first,
+    message: null,
+    canDisplay: () => visible,
+  });
+  const secondPending = { creation: second, message: null, canDisplay: () => true };
+  const secondPreview = submissions.beginBackgroundCreate(secondPending);
+  expect(submissions.creating).toBe(true);
+  expect(submissions.creation).toBeUndefined();
+  expect(submissions.creationFor(first.sessionKey)).toBe(first);
+  expect(submissions.creationFor(second.sessionKey)).toBe(second);
+  expect(submissions.creationFor("agent:main:dashboard:other")).toBeUndefined();
+
+  // Another owner's presentation never sees the preview.
+  visible = false;
+  expect(submissions.creationFor(first.sessionKey)).toBeUndefined();
+  expect(submissions.readCreateFor(first.sessionKey)).toBeUndefined();
+  visible = true;
+
+  const retry = vi.fn();
+  secondPreview.update({ ...secondPending, failure: { error: "Refused", retry } });
+  expect(submissions.readCreateFor(second.sessionKey)?.failure?.error).toBe("Refused");
+  // A replaced preview cannot be cleared or updated by its previous handle.
+  const replacement = submissions.beginBackgroundCreate(secondPending);
+  secondPreview.clear();
+  secondPreview.update({ ...secondPending, failure: { error: "Stale", retry } });
+  expect(submissions.readCreateFor(second.sessionKey)).toBe(secondPending);
+  replacement.clear();
+  firstPreview.clear();
+  expect(submissions.creating).toBe(false);
+  expect(submissions.creationFor(second.sessionKey)).toBeUndefined();
+  expect(listener).toHaveBeenCalledTimes(6);
 });

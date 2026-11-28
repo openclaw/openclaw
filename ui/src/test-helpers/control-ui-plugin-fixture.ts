@@ -45,12 +45,17 @@ export async function prepareNativeControlUiPluginFixtures(
     for (const [name, asset] of generation.assets) {
       assets.set(`${prefix}${name}`, asset);
     }
+    // The Gateway advertises only activatable modules, not packaged Settings presentations.
+    if (declaration.activation === "settings-only") {
+      continue;
+    }
     plugins.push({
       pluginId: fixture.pluginId,
       name: fixture.pluginId,
       revision,
       entryUrl: `${prefix}${path.basename(declaration.entry)}`,
       styles: (declaration.styles ?? []).map((file) => `${prefix}${path.basename(file)}`),
+      ...(generation.panelIcon ? { panelIcon: generation.panelIcon.dataUrl } : {}),
     });
   }
   return {

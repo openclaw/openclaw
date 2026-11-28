@@ -2,6 +2,7 @@ import { isDeepStrictEqual } from "node:util";
 import { clearExecutablePathCache } from "../infra/executable-path.js";
 import { prepareRuntimePluginsConfig } from "../plugins/config-state.js";
 import { sessionChanges } from "../sessions/session-row-changes.js";
+import { isDeeplyFrozenPlainData } from "../shared/immutable-data.js";
 import { notifyListeners, registerListener } from "../shared/listeners.js";
 import {
   cloneEnvWithPlatformSemantics,
@@ -18,6 +19,7 @@ import {
   captureRuntimeConfigWithSource,
   type CapturedRuntimeConfigRead,
   getRuntimeConfigCapture,
+  recordPublishedRuntimeConfigSource,
 } from "./runtime-config-capture-state.js";
 import { runtimeConfigPublication } from "./runtime-config-publication.js";
 import { configSnapshotsMatch } from "./runtime-config-snapshot-match.js";
@@ -204,13 +206,15 @@ function publishRuntimeConfigSnapshot(
       : runtimeConfigSourceSnapshot !== null &&
         runtimeSourceConfigValueFact !== null &&
         matchesRuntimeSourceConfigValueFact(sourceConfig, runtimeSourceConfigValueFact);
-  // Compare with what the previous publication recorded, since its object may have been edited
-  // in place; withhold only a distinct object matching that record, or a proven no-op.
+  // Mutable same-object setters still invalidate. An immutable publication can reuse
+  // its capture, but provenance and source edits must pass the same recorded-fact checks.
   const matchesPublished =
-    runtimeConfigSnapshot !== config &&
+    (runtimeConfigSnapshot !== config || isDeeplyFrozenPlainData(config)) &&
     runtimeConfigSnapshotMetadata?.fingerprint === configFact.fingerprint &&
     isDeepStrictEqual(runtimeConfigValueFact?.facts, facts);
+  // An equal frozen revision must replace an earlier mutable publication.
   if (
+    (!isDeeplyFrozenPlainData(config) || isDeeplyFrozenPlainData(runtimeConfigSnapshot)) &&
     !previousEditedInPlace &&
     !previousSourceEditedInPlace &&
     sourceMatchesPublished &&
@@ -239,13 +243,14 @@ function publishRuntimeConfigSnapshot(
   // SDK setters also accept opaque values; only proven plain revisions capture eagerly.
   const captured =
     configFact.value && sourceFact.value
-      ? captureRuntimeConfigWithSource(config, sourceConfig ?? config)
+      ? captureRuntimeConfigWithSource(config, sourceConfig ?? config, config)
       : null;
   prepareRuntimePluginsConfig(config);
   clearExecutablePathCache();
   runtimeConfigSnapshot = config;
   runtimeConfigCapturedSnapshot = captured;
   runtimeConfigSourceSnapshot = sourceConfig ?? null;
+  recordPublishedRuntimeConfigSource(config, sourceConfig ?? config);
   runtimeConfigSnapshotMetadata = metadata;
   if (
     runtimeModelConfigCacheKey === null ||
@@ -460,11 +465,15 @@ export function selectLiveRuntimeConfig(inputConfig?: OpenClawConfig): OpenClawC
 
 /** Bind a retained consumer to its current runtime owner while preserving scoped configs. */
 export function createRuntimeConfigReader(inputConfig: OpenClawConfig): () => OpenClawConfig {
-  const origin = getRuntimeConfigCapture(inputConfig)?.origin ?? inputConfig;
+  const captured = getRuntimeConfigCapture(inputConfig);
+  const origin = captured?.origin ?? inputConfig;
   const followsRuntimeConfig =
+    captured?.runtimeOwned === true ||
     runtimeConfigSnapshot === origin ||
     (runtimeConfigSourceSnapshot !== null &&
-      configSnapshotsMatch(inputConfig, runtimeConfigSourceSnapshot));
+      configSnapshotsMatch(inputConfig, runtimeConfigSourceSnapshot)) ||
+    // Preparation can retain an equivalent runtime copy after its origin is republished.
+    (runtimeConfigSnapshot !== null && configSnapshotsMatch(inputConfig, runtimeConfigSnapshot));
   return () => (followsRuntimeConfig ? runtimeConfigSnapshot : null) ?? inputConfig;
 }
 

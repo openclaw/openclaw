@@ -17,6 +17,7 @@ import { isNonSecretApiKeyMarker } from "openclaw/plugin-sdk/provider-auth-marke
 import { readProviderResponseErrorText } from "openclaw/plugin-sdk/provider-http";
 import { omitNullRequestHeaders } from "openclaw/plugin-sdk/provider-request-headers";
 import {
+  applyProviderPayloadHook,
   buildAssistantMessage as buildStreamAssistantMessage,
   createEmptyTransportUsage,
   mergeTransportHeaders,
@@ -346,10 +347,10 @@ export function buildAssistantMessage(
   const cacheRead =
     reportedCacheRead === undefined ? undefined : Math.min(reportedCacheRead, promptTokens);
   // Estimated fallbacks are not provider measurements and cannot anchor context.
-  const contextUsage: Usage["contextUsage"] =
+  const contextUsage: NonNullable<Usage["contextUsage"]> =
     reportedPromptTokens !== undefined && reportedOutputTokens !== undefined
       ? { state: "available", promptTokens, totalTokens: promptTokens + outputTokens }
-      : undefined;
+      : { state: "unavailable" };
 
   const message = buildStreamAssistantMessage({
     model: modelInfo,
@@ -361,9 +362,9 @@ export function buildAssistantMessage(
       output: outputTokens,
       cacheRead: cacheRead ?? 0,
       cacheTelemetry: { state: cacheRead === undefined ? "unavailable" : "available" },
-      usageReport: { state: contextUsage ? "available" : "unavailable" },
+      usageReport: { state: contextUsage.state },
       totalTokens: promptTokens + outputTokens,
-      ...(contextUsage ? { contextUsage } : {}),
+      contextUsage,
     },
   });
   const promptNs = asNonNegativeFiniteNumber(response.prompt_eval_duration);
@@ -478,8 +479,7 @@ function createRawOllamaStreamFn(
           options: ollamaOptions,
           requestParams,
         });
-        const replacement = await options?.onPayload?.(body, model);
-        const requestBody = replacement === undefined ? body : replacement;
+        const requestBody = await applyProviderPayloadHook(options, body, model);
         const headers =
           omitNullRequestHeaders(
             mergeTransportHeaders(

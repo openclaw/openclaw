@@ -21,11 +21,15 @@ import {
 } from "../state/openclaw-state-db.js";
 import { ensureMeetingTranscriptsSchema } from "./sqlite-schema.js";
 import { queryTranscriptReadEntries, type TranscriptReadOptions } from "./store-read.js";
-import { readTranscriptSessionEntries } from "./store-sqlite-read.js";
+import {
+  readTranscriptSessionEntries,
+  readTranscriptSummarySnapshot,
+} from "./store-sqlite-read.js";
 import {
   writeMeetingTranscriptSessionInDatabase,
   writeMeetingTranscriptSummaryInDatabase,
 } from "./store-sqlite-write.js";
+import { appendMeetingTranscriptUtterance } from "./store-sqlite.js";
 
 export type ChronologyProof = {
   threadId: number;
@@ -34,6 +38,8 @@ export type ChronologyProof = {
   invalidFilter: string[];
   pages: { selectors: string[]; hasMore: boolean }[];
   retainedInstant: unknown;
+  speakers: string[];
+  liveSequence: number | undefined;
 };
 
 async function runChronologyHost(input: { path: string; connection: string }): Promise<void> {
@@ -141,6 +147,46 @@ if (parentPort) {
         ),
       options,
     );
+    const speakerSession = {
+      sessionId: "speaker-identities",
+      startedAt: "2024-01-03T00:00:00.000Z",
+    };
+    const nextLiveSequence = 3;
+    runOpenClawStateWriteTransaction(({ db }) => {
+      writeMeetingTranscriptSessionInDatabase(db, {
+        session: speakerSession,
+        sessionValues: {
+          started_at_ms: 1704240000000,
+          selector: "speaker-identities",
+          export_key: "speaker-identities",
+          session_slug: "speaker-identities",
+          provider_id: "chronology-conformance",
+          title: "Speaker identities",
+          source_json: '{"providerId":"chronology-conformance"}',
+          stopped_at: null,
+          metadata_json: null,
+        },
+        now: 1704240000000,
+      });
+      for (const speaker of [
+        { id: "speaker-one", label: "Sam" },
+        { id: "speaker-two", label: "Sam" },
+        { id: "speaker-one", label: "Samuel" },
+      ]) {
+        // An update covering the first two turns only needs a snapshot after the third append.
+        assert.equal(
+          readTranscriptSummarySnapshot(db, speakerSession, 2, nextLiveSequence),
+          undefined,
+        );
+        appendMeetingTranscriptUtterance({
+          database: db,
+          metadataJson: null,
+          now: 1704240000000,
+          session: speakerSession,
+          utterance: { text: "Synthetic speech", speaker },
+        });
+      }
+    }, options);
     assert.deepEqual(
       readTranscriptSessionEntries(postgresDb)
         .filter((entry) => entry.hasSummary)
@@ -151,6 +197,16 @@ if (parentPort) {
       const result = queryTranscriptReadEntries(postgresDb, params);
       return { selectors: result.entries.map((entry) => entry.selector), hasMore: result.hasMore };
     };
+    const speakers =
+      queryTranscriptReadEntries(postgresDb, { session: speakerSession, limit: 1 }).entries[0]
+        ?.participants ?? [];
+    assert.deepEqual(speakers, ["Sam", "Sam (2)"]);
+    const snapshot = readTranscriptSummarySnapshot(postgresDb, speakerSession, 2, nextLiveSequence);
+    assert.deepEqual(
+      snapshot?.turns.map((turn) => turn.speakerLabel),
+      ["Sam (2)", "Sam"],
+    );
+    assert.equal(snapshot?.hasSpeakerAliases, true);
     port.postMessage({
       threadId,
       list: page({ limit: 20 }).selectors,
@@ -165,6 +221,8 @@ if (parentPort) {
       retainedInstant: postgresDb
         .prepare("SELECT started_at_ms FROM meeting_transcript_sessions WHERE selector = ?")
         .get("tie-a-iso")?.started_at_ms,
+      speakers,
+      liveSequence: snapshot?.nextSequence,
     } satisfies ChronologyProof);
   } catch (error) {
     port.postMessage({ error: error instanceof Error ? error.stack : String(error) });

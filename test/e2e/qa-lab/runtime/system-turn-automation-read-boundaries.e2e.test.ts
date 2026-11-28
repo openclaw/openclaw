@@ -6,6 +6,7 @@ import path from "node:path";
 import { text as readBody } from "node:stream/consumers";
 import { afterEach, beforeEach, expect, it, vi } from "vitest";
 import { withFastReplyConfig } from "../../../../src/auto-reply/reply/get-reply-fast-path.test-support.js";
+import * as sessionEventHandoff from "../../../../src/auto-reply/reply/session-event-handoff.js";
 import { getRuntimeConfigSnapshot } from "../../../../src/config/config.js";
 import { captureCronSchedulerWakeForTest } from "../../../../src/cron/service/scheduler-actor.test-support.js";
 import type { CronJob } from "../../../../src/cron/types.js";
@@ -15,6 +16,10 @@ import {
   disconnectGatewayClient,
   startGatewayWithClient,
 } from "../../../../src/gateway/test-helpers.e2e.js";
+import {
+  registerAgentRunDelegatedAuthorityClosedHandler,
+  type AgentRunDelegatedAuthority,
+} from "../../../../src/infra/agent-run-registry.js";
 import type { GatewaySchedulerClock } from "../../../../src/infra/gateway-scheduler.js";
 import { withEnvAsync } from "../../../../src/test-utils/env.js";
 import { createGatewaySchedulerClock } from "../../../../src/test-utils/gateway-scheduler-clock.js";
@@ -54,6 +59,7 @@ const seams = vi.hoisted(() => ({
   clock: undefined as GatewaySchedulerClock | undefined,
   hold: undefined as { held: () => void; release: Promise<void> } | undefined,
   runsOutcomes: [] as RunsOutcome[],
+  readAuthority: undefined as AgentRunDelegatedAuthority | undefined,
   onRunsOutcome: undefined as ((outcome: RunsOutcome) => void) | undefined,
 }));
 vi.mock("../../../../src/infra/gateway-scheduler.js", async (importOriginal) => {
@@ -96,6 +102,8 @@ vi.mock("../../../../src/gateway/server-methods/cron-runs.js", async (importOrig
     cronRunsHandler: async (options: Parameters<typeof actual.cronRunsHandler>[0]) => {
       const params = options.params as { id?: string; jobId?: string };
       const outcome: RunsOutcome = { id: params.id ?? params.jobId };
+      const authority = options.client?.internal?.agentRuntimeIdentity?.delegatedAuthority;
+      seams.readAuthority = authority?.kind === "local" ? authority : undefined;
       try {
         return await actual.cronRunsHandler({
           ...options,
@@ -122,6 +130,7 @@ afterEach(() => {
   seams.clock = undefined;
   seams.hold = undefined;
   seams.runsOutcomes.length = 0;
+  seams.readAuthority = undefined;
   seams.onRunsOutcome = undefined;
   resetGatewayState();
 });
@@ -171,14 +180,17 @@ function isScheduledRun(body: ProviderRequest): boolean {
 }
 
 it(
-  "serves an automation notice turn only its own automation reads at the final effect",
+  "serves a non-admin automation notice only its own reads at the final effect",
   { timeout: 240_000 },
   async ({ signal, onTestFinished }) => {
     const home = tempDirs.make("openclaw-system-turn-read-boundaries-");
     const stateDir = path.join(home, ".openclaw");
     const workspaceDir = path.join(home, "workspace");
     const configPath = path.join(stateDir, "openclaw.json");
-    await Promise.all([stateDir, workspaceDir].map((dir) => fs.mkdir(dir, { recursive: true })));
+    await Promise.all([
+      fs.mkdir(stateDir, { recursive: true, mode: 0o700 }),
+      fs.mkdir(workspaceDir, { recursive: true }),
+    ]);
     const token = randomUUID();
     const controlUi = {
       origin: "http://127.0.0.1",
@@ -209,21 +221,27 @@ it(
       finished.set(id, entry);
       return entry.promise;
     };
-    const firstNoticeDone = createDeferred();
     const closingNoticeHeld = createDeferred();
     const forgedDone = createDeferred();
-    let releaseHold: () => void = () => {};
+    let pendingHoldRelease: (() => void) | undefined;
+    const releaseHold = () => {
+      const release = pendingHoldRelease;
+      pendingHoldRelease = undefined;
+      release?.();
+    };
     let lateNoticeRequest: string | undefined;
     const holdNextHistoryRead = () => {
       const held = createDeferred();
       const release = createDeferred();
-      releaseHold = () => release.resolve();
+      assert(!pendingHoldRelease, "The previous history hold is still owned");
+      pendingHoldRelease = () => release.resolve();
       seams.hold = { held: () => held.resolve(), release: release.promise };
       return held.promise;
     };
     const removalHeld = createDeferred();
     let step = 0;
     let gateway: Awaited<ReturnType<typeof startGatewayWithClient>> | undefined;
+    let requester: GatewayClient | undefined;
     let nonOwner: GatewayClient | undefined;
     let provider: Awaited<ReturnType<typeof startOpenAiResponsesModelServer>> | undefined;
     const proofJob = (name: string, marker: string, delayMs: number) => ({
@@ -254,6 +272,18 @@ it(
       NO_PROXY: "127.0.0.1,localhost",
       no_proxy: "127.0.0.1,localhost",
     };
+    const handoff = vi.spyOn(sessionEventHandoff, "enqueueSessionEventForHost");
+    const noticeReceipt = (job: CronJob) => {
+      const captured = handoff.mock.calls.flatMap(([message, options], index) =>
+        options.source === "cron_failure_repair" && message.includes(job.id)
+          ? [handoff.mock.results[index]]
+          : [],
+      );
+      expect(captured).toHaveLength(1);
+      const receipt = captured[0];
+      assert(receipt?.type === "return", "Missing original repair receipt");
+      return receipt.value;
+    };
     const scenario = withEnvAsync(env, async () => {
       try {
         provider = await startOpenAiResponsesModelServer({
@@ -273,7 +303,7 @@ it(
                 return;
               }
               // The scheduled run itself fails, as in production, so the scheduler
-              // auto-disables the one-shot and notifies its owning conversation.
+              // asks the owning conversation to handle the failed one-shot.
               if (isScheduledRun(body)) {
                 response.writeHead(400, { "content-type": "application/json" });
                 response.end(
@@ -290,24 +320,33 @@ it(
               const call = (name: string, callId: string, args: Record<string, unknown>) =>
                 writeToolCall(response, name, callId, args);
               const owned = () => jobs.owned!.id;
+              if ((step === 0 || step === 3) && lastOutput?.call_id !== "call_plan") {
+                call("automations", "plan", {
+                  action: "plan",
+                  names: step === 0 ? ["Owned proof", "Closing proof"] : ["Foreign proof"],
+                });
+                return;
+              }
               switch (step++) {
-                // Owner turn in the owned chat creates two one-shot automations.
+                // A scoped, non-admin requester creates two conversation-owned automations.
                 case 0:
-                  call("automations", "add_owned", proofJob("Owned proof", "RUN-MARKER-A", 60_000));
+                  call("automations", "add_owned", {
+                    ...proofJob("Owned proof", "RUN-MARKER-A", 60_000),
+                    position: 1,
+                  });
                   break;
                 case 1:
                   jobs.owned = JSON.parse(outputs.get("add_owned")!) as CronJob;
-                  call(
-                    "automations",
-                    "add_closing",
-                    proofJob("Closing proof", "RUN-MARKER-C", 120_000),
-                  );
+                  call("automations", "add_closing", {
+                    ...proofJob("Closing proof", "RUN-MARKER-C", 120_000),
+                    position: 2,
+                  });
                   break;
                 case 2:
                   jobs.closing = JSON.parse(outputs.get("add_closing")!) as CronJob;
                   reply("Scheduled.");
                   break;
-                // Owner turn in another chat creates the foreign automation.
+                // The same requester creates an automation in another conversation.
                 case 3:
                   call(
                     "automations",
@@ -319,16 +358,18 @@ it(
                   jobs.foreign = JSON.parse(outputs.get("add_foreign")!) as CronJob;
                   reply("Scheduled.");
                   break;
-                // The scheduler's real auto-disable notice turn for the failed owned automation.
+                // The scheduler's real repair turn for the failed owned automation.
                 case 5:
                   expect(JSON.stringify(body.input)).toContain(
-                    'Automation \\"Owned proof\\" was auto-disabled after 1 consecutive run failures.',
+                    `A one-time automation (id ${owned()})`,
                   );
                   call("automations", "get_owned", { action: "get", jobId: owned() });
                   break;
                 case 6:
                   // Fail fast on the owner gate instead of waiting on later reads.
-                  expect(outputs.get("get_owned")).not.toContain("needs the owner's authority");
+                  expect(outputs.get("get_owned")).not.toContain(
+                    "needs the Gateway owner's authority",
+                  );
                   call("automations", "runs_owned", { action: "runs", jobId: owned() });
                   break;
                 case 7:
@@ -344,10 +385,13 @@ it(
                   call("automations", "update", {
                     action: "update",
                     jobId: owned(),
-                    patch: { enabled: true },
+                    job: { enabled: true },
                   });
                   break;
                 case 11:
+                  expect(outputs.get("update")).toContain(
+                    "I did not run other automations actions.",
+                  );
                   call("automations", "remove", { action: "remove", jobId: owned() });
                   break;
                 case 12:
@@ -367,22 +411,27 @@ it(
                   call("automations", "runs_removed", { action: "runs", jobId: owned() });
                   break;
                 case 17:
-                  reply("Automation history inspected.");
-                  firstNoticeDone.resolve();
-                  break;
-                // The second notice turn's read is closed before disclosure.
+                  throw new Error(
+                    "Removed automation made another provider request from its retired notice",
+                  );
+                // The second notice stops after its history read has been admitted.
                 case 18: {
                   expect(JSON.stringify(body.input)).toContain(
-                    'Automation \\"Closing proof\\" was auto-disabled',
+                    `A one-time automation (id ${jobs.closing!.id})`,
                   );
                   void holdNextHistoryRead().then(() => closingNoticeHeld.resolve());
                   call("automations", "runs_closed", { action: "runs", jobId: jobs.closing!.id });
                   break;
                 }
                 // A non-owner client's agent turn that asserts scheduler provenance.
+                // The stopped repair turn may first come back as a late request or as
+                // the interrupted-run resume; neither may carry the held read's result.
                 case 19:
-                  if (lastOutput?.call_id === "call_runs_closed") {
-                    lateNoticeRequest = lastOutput.output;
+                  if (!JSON.stringify(body.input.slice(-2)).includes("Automation history check.")) {
+                    lateNoticeRequest = body.input.find(
+                      (item) =>
+                        item.type === "function_call_output" && item.call_id === "call_runs_closed",
+                    )?.output;
                     step--;
                     reply("Stopped.");
                     break;
@@ -419,8 +468,6 @@ it(
         cfg.agents!.entries = { main: {} };
         cfg.tools = { allow: ["automations", "gateway"], codeMode: false, toolSearch: false };
         cfg.gateway = { auth: { mode: "token", token } };
-        // No failure-alert route: a failed one-shot's owner gets the in-app auto-disable notice.
-        cfg.cron = { failureAlert: { enabled: false } };
         await fs.writeFile(configPath, JSON.stringify(cfg));
         const cronScheduler = await captureCronSchedulerWakeForTest(async (wakeRegistered) => {
           const started = await startGatewayWithClient({
@@ -451,20 +498,32 @@ it(
         const runtime = getRuntimeConfigSnapshot();
         assert(runtime);
         withFastReplyConfig(runtime);
-        const ownerTurn = async (sessionKey: string, message: string) => {
-          const { runId } = await live.client.request<{ runId: string }>("chat.send", {
+        // Administrator notices intentionally retain owner authority. Exercise the
+        // read-only contract with a real non-admin source, not an admin fixture.
+        const scopedClient = await connectGatewayClient({
+          url: "ws://127.0.0.1:" + live.port,
+          token,
+          ...controlUi,
+          scopes: ["operator.read", "operator.write"],
+        });
+        requester = scopedClient;
+        const requesterTurn = async (sessionKey: string, message: string) => {
+          const { runId } = await scopedClient.request<{ runId: string }>("chat.send", {
             sessionKey,
             message,
             deliver: false,
             idempotencyKey: randomUUID(),
           });
           await observe(
-            live.client.request("agent.wait", { runId, timeoutMs: 30_000 }, { timeoutMs: 35_000 }),
+            scopedClient.request("agent.wait", { runId, timeoutMs: 30_000 }, { timeoutMs: 35_000 }),
           );
         };
-        await ownerTurn(ownedSession, "Schedule the owned proofs.");
-        await ownerTurn(foreignSession, "Schedule the foreign proof.");
-        assert(jobs.owned && jobs.closing && jobs.foreign, "Owner turns did not create the jobs");
+        await requesterTurn(ownedSession, "Schedule the owned proofs.");
+        await requesterTurn(foreignSession, "Schedule the foreign proof.");
+        assert(
+          jobs.owned && jobs.closing && jobs.foreign,
+          "Requester turns did not create the jobs",
+        );
 
         const runDue = async (job: CronJob) => {
           assert(job.schedule.kind === "at");
@@ -475,16 +534,43 @@ it(
         expect(await runDue(jobs.owned)).toMatchObject({ status: "error" });
         // The operator removes the automation while the notice turn's awaited history read is in flight.
         await observe(removalHeld.promise);
+        const removed = createDeferred<RunsOutcome>();
+        seams.onRunsOutcome = (outcome) => removed.resolve(outcome);
         await live.client.request("cron.remove", { id: jobs.owned.id });
         releaseHold();
-        await observe(firstNoticeDone.promise);
+        const removedOutcome = await observe(removed.promise);
+        // Removal retires the notice's restored operator source. Wait for the original
+        // notice to settle and prove it cannot make another provider request.
+        await observe(noticeReceipt(jobs.owned).settled);
+        expect(step).toBe(17);
+        expect(outputs.has("runs_removed")).toBe(false);
+        // Only the next notice may consume the next scripted continuation.
+        step = 18;
 
         expect(await runDue(jobs.closing)).toMatchObject({ status: "error" });
         // The notice run closes while its awaited history read is in flight.
         await observe(closingNoticeHeld.promise);
         const closed = createDeferred<RunsOutcome>();
         seams.onRunsOutcome = (outcome) => closed.resolve(outcome);
-        await live.client.request("chat.abort", { sessionKey: ownedSession });
+        const authority = seams.readAuthority;
+        assert(authority, "The held read must belong to the notice runtime");
+        const retired = createDeferred();
+        onTestFinished(
+          registerAgentRunDelegatedAuthorityClosedHandler((closedAuthority) => {
+            if (closedAuthority.claimId === authority.claimId) {
+              retired.resolve();
+            }
+          }),
+        );
+        expect(await live.client.request("chat.abort", { sessionKey: ownedSession })).toMatchObject(
+          {
+            aborted: true,
+            runIds: expect.arrayContaining([authority.operationalRunInstance.runId]),
+          },
+        );
+        // Stop can acknowledge early; release the admitted read only after this notice retires.
+        await observe(retired.promise);
+        await observe(noticeReceipt(jobs.closing).settled);
         releaseHold();
         const closedOutcome = await observe(closed.promise);
 
@@ -537,19 +623,27 @@ it(
         );
         // Every write and every other owner-only tool keeps the owner gate.
         for (const id of ["update", "remove", "add", "run", "status"]) {
-          expect(outputs.get(id)).toContain("Other actions need the owner's authority");
+          expect(outputs.get(id)).toContain("I did not run other automations actions.");
         }
-        expect(outputs.get("gateway")).toContain("gateway needs the owner's authority");
-        // Removed during the awaited read: the disclosure-time recheck withholds history.
-        expect(outputs.get("runs_removed")).toContain(`not found: ${jobs.owned.id}`);
-        // Closed during the awaited read: the handler responds with nothing at all.
-        expect(closedOutcome).toEqual({
+        expect(outputs.get("gateway")).toContain("I did not run gateway.");
+        // The admitted read survives removal, but the deleted job's history stays undisclosed.
+        expect(removedOutcome).toMatchObject({
+          id: jobs.owned.id,
+          ok: false,
+          payload: {
+            code: "INVALID_REQUEST",
+            details: { code: "CRON_JOB_NOT_FOUND", jobId: jobs.owned.id },
+          },
+        });
+        // Ending the run doesn't revoke an admitted read or let the stopped notice consume it.
+        expect(closedOutcome).toMatchObject({
           id: jobs.closing.id,
-          threw: expect.stringContaining("agent runtime authority is no longer active"),
+          ok: true,
+          payload: { entries: [{ jobId: jobs.closing.id, status: "error" }] },
         });
         expect(lateNoticeRequest ?? "").not.toContain('"entries"');
         // Asserted scheduler provenance on a non-owner client turn unlocks nothing.
-        expect(outputs.get("forged_get")).toContain("automations needs the owner's authority");
+        expect(outputs.get("forged_get")).toContain("I did not run automations.");
         const stillListed = await live.client.request<{ jobs: CronJob[] }>("cron.list", {
           includeDisabled: true,
         });
@@ -558,7 +652,11 @@ it(
           "Foreign proof",
         ]);
       } finally {
+        releaseHold();
         try {
+          if (requester) {
+            await disconnectGatewayClient(requester);
+          }
           if (nonOwner) {
             await disconnectGatewayClient(nonOwner);
           }
@@ -570,7 +668,11 @@ it(
             }
           }
         } finally {
-          await provider?.close();
+          try {
+            await provider?.close();
+          } finally {
+            handoff.mockRestore();
+          }
         }
       }
     });

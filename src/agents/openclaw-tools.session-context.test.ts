@@ -1,13 +1,19 @@
 import { expectDefined } from "@openclaw/normalization-core";
-import { afterEach, beforeAll, describe, expect, it, vi } from "vitest";
+import { afterEach, beforeAll, describe, expect, it, onTestFinished, vi } from "vitest";
 import { registerAcpRuntimeBackend, unregisterAcpRuntimeBackend } from "../acp/runtime/registry.js";
 import type { ChannelPlugin } from "../channels/plugins/types.plugin.js";
 import { clearRuntimeConfigSnapshot, setRuntimeConfigSnapshot } from "../config/config.js";
+import {
+  bindScheduledExecutionContext,
+  readScheduledToolTargets,
+} from "../cron/execution-context-registry.js";
+import { buildScheduledExecutionContext } from "../cron/execution-context.js";
 import { setEmbeddedMode } from "../infra/embedded-mode.js";
 import { resetPluginRuntimeStateForTest, setActivePluginRegistry } from "../plugins/runtime.js";
 import { loadBundledPluginFacade } from "../test-utils/bundled-plugin-public-surface.js";
 import { createTestRegistry } from "../test-utils/channel-plugins.js";
 import { createOpenClawTools } from "./openclaw-tools.js";
+import { createOperationalRunInstanceRef } from "./operational-run-instance.js";
 import * as inProcessGateway from "./tools/in-process-gateway.js";
 
 type GatewayRequest = { method: string; params?: Record<string, unknown> };
@@ -120,6 +126,76 @@ function mockSessionDiscovery(response?: (request: GatewayRequest) => unknown) {
   });
   setEmbeddedMode(true);
 }
+
+it.each(["once", "scheduled"] as const)(
+  "keeps %s conversation learning in its owning agent under default visibility",
+  async (mode) => {
+    const runSessionKey = "agent:research:dock:scribe";
+    const declarationKey = "knowledge:scribe:conversations";
+    const runId = mode === "once" ? `${declarationKey}:${runSessionKey}:attempt` : "scheduled-run";
+    const operationalRunInstance = createOperationalRunInstanceRef(runId);
+    if (mode === "scheduled") {
+      const job = {
+        id: "scribe-job",
+        declarationKey,
+        sessionTarget: "isolated" as const,
+        payload: { kind: "agentTurn" as const, message: "Legacy saved wording" },
+      };
+      const context = buildScheduledExecutionContext(job, {
+        trigger: "cron",
+        occurrence: { runId, executionRevision: "rev-1" },
+        agentId: "research",
+        runSessionKey,
+        agentMainSessionKey: "agent:research:main",
+        agentSandboxMode: "off",
+      });
+      expect(context.status).toBe("ready");
+      if (context.status !== "ready") {
+        return;
+      }
+      const release = bindScheduledExecutionContext(operationalRunInstance, {
+        ...context.facts,
+        assertCurrent: () => {},
+      });
+      onTestFinished(release);
+    }
+    mockSessionDiscovery((request) => {
+      if (request.method === "sessions.resolve") {
+        return { key: request.params?.key };
+      }
+      if (request.method === "chat.history") {
+        return { messages: [{ role: "user", content: "Synthetic learning evidence" }] };
+      }
+      return undefined;
+    });
+    const options = { operationalRunInstance };
+    const call = createToolCaller(
+      {
+        agents: { entries: { main: {}, research: {} } },
+        tools: { agentToAgent: { enabled: true, allow: ["*"] } },
+      },
+      { ...options, runId, runSessionKey, scheduledToolTargets: readScheduledToolTargets(options) },
+    );
+
+    await expect(call("sessions_list", { archived: "all" })).resolves.toMatchObject({
+      details: { count: 1, sessions: [{ agentId: "research" }] },
+    });
+    expectGateway("sessions.list", { agentId: "research" });
+    await expectForbidden(call, "sessions_history", { sessionKey: "agent:main:main" });
+    expect(
+      embeddedGatewayCalls.mock.calls.some(([request]) => request.method === "chat.history"),
+    ).toBe(false);
+    await expect(
+      call("sessions_history", { sessionKey: "agent:research:main" }),
+    ).resolves.toMatchObject({
+      details: { messages: [{ content: "Synthetic learning evidence" }] },
+    });
+    await expectForbidden(call, "sessions_search", { query: "Synthetic learning evidence" });
+    expect(
+      embeddedGatewayCalls.mock.calls.some(([request]) => request.method === "sessions.search"),
+    ).toBe(false);
+  },
+);
 
 afterEach(() => {
   vi.restoreAllMocks();
@@ -245,7 +321,13 @@ describe("openclaw session lookup context", () => {
 
     expect(createEmbeddedCallGatewayMock).toHaveBeenCalledWith();
     expectGateway("sessions.list", { spawnedBy: "agent:research:main" });
-    expectGateway("sessions.search", { sessionKeys: ["agent:research:main"] });
+    expectGateway("sessions.search", {
+      recall: expect.objectContaining({
+        requesterAgentId: "research",
+        requesterSessionKey: "agent:research:main",
+        sandboxed: true,
+      }),
+    });
     expectGateway("chat.history", { sessionKey: "agent:research:main" });
   });
 
@@ -257,17 +339,15 @@ describe("openclaw session lookup context", () => {
         return { messages: [{ role: "user", content: "private history" }] };
       }
       if (request.method === "sessions.search") {
-        const { agentId, sessionKeys } = request.params ?? {};
-        const sessionKey = Array.isArray(sessionKeys) ? sessionKeys[0] : undefined;
-        return typeof agentId === "string" && typeof sessionKey === "string"
-          ? {
-              results: [
-                { sessionKey, timestamp: 1, role: "user", snippet: `${agentId} hit`, score: 1 },
-              ],
-              indexing: false,
-              truncated: false,
-            }
-          : { results: [] };
+        return {
+          results: ["main", "research"].map((agentId) => ({
+            sessionKey: `agent:${agentId}:main`,
+            timestamp: 1,
+            role: "user",
+            snippet: `${agentId} hit`,
+            score: 1,
+          })),
+        };
       }
       return undefined;
     });

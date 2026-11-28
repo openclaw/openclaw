@@ -13,7 +13,8 @@ import { getTranscriptLibrary, listTranscriptLibrary } from "./library.js";
 import type { TranscriptStartRequest } from "./provider-types.js";
 import { useTranscriptStatusFixture } from "./status.producer.test-harness.js";
 import { TranscriptsStore } from "./store.js";
-import { summarizeTranscripts, type TranscriptsSummary } from "./summary.js";
+import { summarizeTranscripts } from "./summary.js";
+import type { TranscriptsSummary } from "./types.js";
 
 const { complete, select, loadRuntime } = vi.hoisted(() => ({
   complete: vi.fn(),
@@ -179,6 +180,21 @@ describe("live meeting summaries", () => {
       }
     },
   );
+
+  it("retains the prepared notes when inference cannot enhance them", async () => {
+    const fixture = await capture("I will send the notes.");
+    const preparedAt = new Date().toISOString();
+    complete.mockImplementation(() => {
+      vi.setSystemTime(Date.now() + 1_000);
+      return Promise.resolve({ ...modelNotes(), text: "invalid" });
+    });
+    await fixture.execute("manual", "summarize");
+    await fixture.expectSummary({
+      generatedAt: preparedAt,
+      source: "heuristic",
+      transcript: ["I will send the notes."],
+    });
+  });
 
   it("does not regenerate final notes after a durable stop", async () => {
     const fixture = await capture("Saved speech");

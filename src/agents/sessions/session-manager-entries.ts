@@ -1,4 +1,5 @@
 import { buildSessionContext as buildCoreSessionContext } from "../../../packages/agent-core/src/harness/session/session.js";
+import { cloneTranscriptView } from "../../config/sessions/transcript-snapshot.js";
 import { sameSessionTranscriptTargetBinding } from "../../config/sessions/transcript-target-binding.js";
 import {
   getOwnedSessionTranscriptActor,
@@ -12,6 +13,7 @@ import {
   sessionManagerAppendPromptContext,
   type PrepareModelPromptProjection,
 } from "./model-prompt-projection-append.js";
+import { createSessionCompactionEntry } from "./session-compaction-persistence.js";
 import { withSessionManagerAppend } from "./session-manager-append-admission.js";
 import { SessionManagerAppend } from "./session-manager-append.js";
 import { generateSessionEntryId } from "./session-manager-id.js";
@@ -30,6 +32,10 @@ import type {
   SessionInfoEntry,
   SessionLeafControl,
 } from "./session-manager-types.js";
+import {
+  sessionManagerReadTranscriptBranch,
+  sessionManagerReadToolResultProjectionEntries,
+} from "./session-manager-view-types.js";
 import { withSessionManagerWrite } from "./session-manager-write-admission.js";
 
 type LeafControlSelection = {
@@ -57,16 +63,16 @@ export class SessionManagerEntries extends SessionManagerAppend {
     metadata?: CompactionEntry["__openclaw"],
     tokensAfter?: number,
   ): Promise<string> {
-    const entry: CompactionEntry = this.createEntry({
-      type: "compaction",
+    const entry = createSessionCompactionEntry(
+      this.appendParentId,
       summary,
       firstKeptEntryId,
       tokensBefore,
-      ...(tokensAfter !== undefined ? { tokensAfter } : {}),
       details,
       fromHook,
-      ...(metadata?.runId || metadata?.itemId ? { __openclaw: metadata } : {}),
-    });
+      metadata,
+      tokensAfter,
+    );
     await this.appendEntryAsync(entry, {
       invalidateSerializedPrefixCache: fromHook === true || details !== undefined,
     });
@@ -84,16 +90,16 @@ export class SessionManagerEntries extends SessionManagerAppend {
     tokensAfter?: number,
   ): string {
     prepareSessionManagerSync("appendCompaction", this.persistenceTarget, this);
-    const entry: CompactionEntry = this.createEntry({
-      type: "compaction",
+    const entry = createSessionCompactionEntry(
+      this.appendParentId,
       summary,
       firstKeptEntryId,
       tokensBefore,
-      ...(tokensAfter !== undefined ? { tokensAfter } : {}),
       details,
       fromHook,
-      ...(metadata?.runId || metadata?.itemId ? { __openclaw: metadata } : {}),
-    });
+      metadata,
+      tokensAfter,
+    );
     this.appendEntry(entry, {
       invalidateSerializedPrefixCache: fromHook === true || details !== undefined,
     });
@@ -238,6 +244,7 @@ export class SessionManagerEntries extends SessionManagerAppend {
         entry,
         undefined,
         admission,
+        "reload",
         undefined,
         undefined,
         this.transcriptMutationAt,
@@ -324,7 +331,7 @@ export class SessionManagerEntries extends SessionManagerAppend {
     this.appendMode = params.appendMode;
     this.pendingDeliberateAppend = false;
     this.cacheTtlProjectionPrefixes = this.cacheTtlProjectionPrefixes?.filter(
-      (prefix) => prefix.anchorIds.length > 0,
+      (prefix) => prefix.anchorIds.length,
     );
   }
 
@@ -360,7 +367,22 @@ export class SessionManagerEntries extends SessionManagerAppend {
 
   /** Omitted projection metadata follows its retained branch anchors, outside model history. */
   getToolResultProjectionEntries() {
-    let entries: (SessionEntry | Record<string, unknown>)[] = this.getBranch();
+    this.getBranch();
+    // Prefix arrays come from the frozen hydration owner; detach only on SDK exposure.
+    this.cacheTtlProjectionPrefixes = this.cacheTtlProjectionPrefixes?.map((prefix) =>
+      Object.isFrozen(prefix.entries)
+        ? {
+            ...prefix,
+            entries: cloneTranscriptView(prefix.entries, { shareImmutablePayloads: false }),
+          }
+        : prefix,
+    );
+    return this[sessionManagerReadToolResultProjectionEntries]();
+  }
+
+  [sessionManagerReadToolResultProjectionEntries]() {
+    let entries: (SessionEntry | Record<string, unknown>)[] =
+      this[sessionManagerReadTranscriptBranch]();
     for (const prefix of this.cacheTtlProjectionPrefixes ?? []) {
       const anchor = prefix.anchorIds.length
         ? entries.findIndex((entry) => prefix.anchorIds.some((id) => id === entry.id))

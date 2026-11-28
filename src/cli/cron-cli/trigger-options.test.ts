@@ -6,7 +6,8 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { useAutoCleanupTempDirTracker } from "../../../test/helpers/temp-dir.js";
 import { CRON_JOB_SCRATCH_MAX_BYTES } from "../../cron/scratch-contract.js";
 import { defaultRuntime } from "../../runtime.js";
-import { ExpectedCliError, formatCliJsonFailure } from "../failure-output.js";
+import { ExpectedCliError } from "../expected-cli-error.js";
+import { formatCliJsonFailure } from "../failure-output.js";
 
 const callGatewayFromCli = vi.hoisted(() => vi.fn());
 vi.mock("../gateway-rpc.js", async () => {
@@ -66,9 +67,12 @@ async function expectJsonFailure(args: readonly string[], message: string, root 
     process.argv = argv;
   }
 }
+// --command asks the Gateway for its platform to pick the stored shell wrapper.
+const gatewayReply = (method: string) =>
+  method === "system.info" ? { platform: "linux" } : { ok: true };
 function existing(job: Record<string, unknown>) {
   callGatewayFromCli.mockImplementation(async (method: string) =>
-    method === "cron.get" ? { id: "job-1", ...job } : { ok: true },
+    method === "cron.get" ? { id: "job-1", ...job } : gatewayReply(method),
   );
 }
 function expectPatch(patch: Record<string, unknown>, extra: Record<string, unknown> = {}) {
@@ -85,7 +89,7 @@ async function reject(args: readonly string[], message: string, reads: string[] 
 }
 
 beforeEach(() => {
-  callGatewayFromCli.mockReset().mockResolvedValue({ ok: true });
+  callGatewayFromCli.mockReset().mockImplementation(async (method: string) => gatewayReply(method));
   vi.spyOn(defaultRuntime, "error").mockImplementation(() => {});
 });
 afterEach(() => vi.restoreAllMocks());
@@ -133,7 +137,7 @@ it.each`
   ${{ webhook: "https://example.invalid/hook", "clear-channel": true }} | ${"--webhook cannot be combined with chat delivery options"}
   ${{ webhook: "not-a-url" }}                                           | ${"--webhook must be a valid http(s) URL"}
   ${{ session: "main", "system-event": "wakeup", channel: "telegram" }} | ${"require an agentTurn job or a non-main command or script job with delivery"}
-  ${{ "on-exit-cwd": "/repo" }}                                         | ${"--on-exit-cwd requires --on-exit"}
+  ${{ "stream-cwd": "/new-stream", "on-exit-cwd": "/repo" }}            | ${"--on-exit-cwd requires --on-exit"}
   ${{ "on-exit": "./watch.sh", every: "5m" }}                           | ${"Choose at most one schedule change"}
   ${{ "stream-batch-ms": "100", tz: "UTC" }}                            | ${"not valid with stream schedule edits"}
 `(
@@ -226,33 +230,36 @@ type RejectCase = {
   reads?: string[];
 };
 it.each`
-  args                                                                                                       | message                                                                                                                       | job                                                                                                         | reads
-  ${["edit", "job-1", "--failure-alert-cooldown", "not-a-duration"]}                                         | ${"Invalid --failure-alert-cooldown."}                                                                                        | ${undefined}                                                                                                | ${undefined}
-  ${[...addArgs, "--message", "hello", "--at", "2030-01-01T09:00:00", "--tz", "Invalid/Timezone"]}           | ${"Invalid --tz"}                                                                                                             | ${undefined}                                                                                                | ${undefined}
-  ${[...addArgs, "--message", "hello", "--at", "2030-02-30T09:00:00", "--tz", "UTC"]}                        | ${"Invalid --at"}                                                                                                             | ${undefined}                                                                                                | ${undefined}
-  ${["edit", "job-1", "--tz", "Invalid/Timezone"]}                                                           | ${"Invalid --tz"}                                                                                                             | ${undefined}                                                                                                | ${undefined}
-  ${["edit", "job-1", "--delivery-target", "owner"]}                                                         | ${"require an agentTurn job or a non-main job"}                                                                               | ${{ sessionTarget: "main", payload: { kind: "systemEvent", text: "tick" }, delivery: { mode: "none" } }}    | ${["cron.get"]}
-  ${["edit", "job-1", "--direct-policy", "block"]}                                                           | ${"require an agentTurn job or a non-main job"}                                                                               | ${{ sessionTarget: "main", payload: { kind: "script", script: "return {};" }, delivery: { mode: "none" } }} | ${["cron.get"]}
-  ${["edit", "job-1", "--idle-only", "--clear-idle-only"]}                                                   | ${"Use --idle-only/--no-idle-only"}                                                                                           | ${undefined}                                                                                                | ${undefined}
-  ${["edit", "job-1", "--active-hours-start", "09:00", "--clear-active-hours"]}                              | ${"Use --clear-active-hours"}                                                                                                 | ${undefined}                                                                                                | ${undefined}
-  ${["edit", "job-1", "--delivery-target", "last"]}                                                          | ${"--delivery-target must be owner"}                                                                                          | ${undefined}                                                                                                | ${undefined}
-  ${["edit", "job-1", "--delivery-target", "owner", "--to", "group-123"]}                                    | ${"cannot be combined with --to"}                                                                                             | ${undefined}                                                                                                | ${undefined}
-  ${["edit", "job-1", "--delivery-target", "owner", "--clear-delivery-target"]}                              | ${"Use --delivery-target"}                                                                                                    | ${undefined}                                                                                                | ${undefined}
-  ${["edit", "job-1", "--direct-policy", "ignore"]}                                                          | ${"--direct-policy must be allow or block"}                                                                                   | ${undefined}                                                                                                | ${undefined}
-  ${["edit", "job-1", "--direct-policy", "block", "--clear-direct-policy"]}                                  | ${"Use --direct-policy"}                                                                                                      | ${undefined}                                                                                                | ${undefined}
-  ${["edit", "job-1", "--direct-policy", "block", "--webhook", "https://example.invalid/hook"]}              | ${"requires chat delivery"}                                                                                                   | ${undefined}                                                                                                | ${undefined}
-  ${["edit", "job-1", "--skip-if-scratch-empty"]}                                                            | ${"require an agentTurn job or --message"}                                                                                    | ${{ payload: { kind: "command", argv: ["true"] } }}                                                         | ${["cron.get"]}
-  ${["edit", "job-1", "--include-reasoning"]}                                                                | ${"require an agentTurn job or --message"}                                                                                    | ${{ payload: { kind: "command", argv: ["true"] } }}                                                         | ${["cron.get"]}
-  ${[...addArgs, "--at", "+3m", "--session", "session:agent:main:conversation", "--system-event", "resume"]} | ${'sessionTarget "session:agent:main:conversation" cannot run systemEvent: systemEvent only runs in the main session'}        | ${undefined}                                                                                                | ${undefined}
-  ${[...addArgs, "--every", "1h", "--system-event", "tick", "--timeout-seconds", "bogus"]}                   | ${"--timeout-seconds is not supported for systemEvent jobs."}                                                                 | ${undefined}                                                                                                | ${undefined}
-  ${[...addArgs, "9am standup with the team today", "--message", "run"]}                                     | ${'Invalid cron expression "9am standup with the team today". Use 5 fields like "0 9 * * *" or 6 fields like "0 0 9 * * *".'} | ${undefined}                                                                                                | ${undefined}
-  ${[...addArgs, ...messageArgs, ...topicArgs, ""]}                                                          | ${"--thread-id must be a positive integer"}                                                                                   | ${undefined}                                                                                                | ${undefined}
-  ${[...addArgs, "--stream-command", "node events.mjs", "--message", "run"]}                                 | ${"JSON array"}                                                                                                               | ${undefined}                                                                                                | ${undefined}
-  ${[...addArgs, "--stream-command", '["node","events.mjs"]', "--stream-mode", "match", "--message", "run"]} | ${"--stream-match is required"}                                                                                               | ${undefined}                                                                                                | ${undefined}
-  ${[...addArgs, "--every", "1m", "--stream-batch-ms", "250", "--message", "run"]}                           | ${"require --stream-command"}                                                                                                 | ${undefined}                                                                                                | ${undefined}
-  ${["edit", "job-1", "--pacing-min", "30m", "--every", ""]}                                                 | ${"Schedule values must not be blank"}                                                                                        | ${{ configRevision: "revision", pacing: { min: "1m", max: "1h" } }}                                         | ${["cron.get"]}
-  ${[...addArgs, "--system-event", "test", "--every", "8640000000000001ms"]}                                 | ${"Invalid --every"}                                                                                                          | ${undefined}                                                                                                | ${undefined}
-  ${["edit", "job-1", "--cron", "0 * * * *", "--tz", "UTC", "--stagger", "8640000000000001ms"]}              | ${"Invalid --stagger"}                                                                                                        | ${undefined}                                                                                                | ${undefined}
+  args                                                                                                       | message                                                                                                                                                                         | job                                                                                                         | reads
+  ${["edit", "job-1", "--failure-alert-cooldown", "not-a-duration"]}                                         | ${"Invalid --failure-alert-cooldown."}                                                                                                                                          | ${undefined}                                                                                                | ${undefined}
+  ${[...addArgs, "--message", "hello", "--at", "2030-01-01T09:00:00", "--tz", "Invalid/Timezone"]}           | ${"Invalid --tz"}                                                                                                                                                               | ${undefined}                                                                                                | ${undefined}
+  ${[...addArgs, "--message", "hello", "--at", "2030-02-30T09:00:00", "--tz", "UTC"]}                        | ${"OpenClaw couldn’t use that run time."}                                                                                                                                       | ${undefined}                                                                                                | ${undefined}
+  ${["edit", "job-1", "--tz", "Invalid/Timezone"]}                                                           | ${"Invalid --tz"}                                                                                                                                                               | ${undefined}                                                                                                | ${undefined}
+  ${["edit", "job-1", "--delivery-target", "owner"]}                                                         | ${"require an agentTurn job or a non-main job"}                                                                                                                                 | ${{ sessionTarget: "main", payload: { kind: "systemEvent", text: "tick" }, delivery: { mode: "none" } }}    | ${["cron.get"]}
+  ${["edit", "job-1", "--direct-policy", "block"]}                                                           | ${"require an agentTurn job or a non-main job"}                                                                                                                                 | ${{ sessionTarget: "main", payload: { kind: "script", script: "return {};" }, delivery: { mode: "none" } }} | ${["cron.get"]}
+  ${["edit", "job-1", "--idle-only", "--clear-idle-only"]}                                                   | ${"Use --idle-only/--no-idle-only"}                                                                                                                                             | ${undefined}                                                                                                | ${undefined}
+  ${["edit", "job-1", "--active-hours-start", "09:00", "--clear-active-hours"]}                              | ${"Use --clear-active-hours"}                                                                                                                                                   | ${undefined}                                                                                                | ${undefined}
+  ${["edit", "job-1", "--delivery-target", "last"]}                                                          | ${"--delivery-target must be owner"}                                                                                                                                            | ${undefined}                                                                                                | ${undefined}
+  ${["edit", "job-1", "--delivery-target", "owner", "--to", "group-123"]}                                    | ${"cannot be combined with --to"}                                                                                                                                               | ${undefined}                                                                                                | ${undefined}
+  ${["edit", "job-1", "--delivery-target", "owner", "--clear-delivery-target"]}                              | ${"Use --delivery-target"}                                                                                                                                                      | ${undefined}                                                                                                | ${undefined}
+  ${["edit", "job-1", "--direct-policy", "ignore"]}                                                          | ${"--direct-policy must be allow or block"}                                                                                                                                     | ${undefined}                                                                                                | ${undefined}
+  ${["edit", "job-1", "--direct-policy", "block", "--clear-direct-policy"]}                                  | ${"Use --direct-policy"}                                                                                                                                                        | ${undefined}                                                                                                | ${undefined}
+  ${["edit", "job-1", "--direct-policy", "block", "--webhook", "https://example.invalid/hook"]}              | ${"requires chat delivery"}                                                                                                                                                     | ${undefined}                                                                                                | ${undefined}
+  ${["edit", "job-1", "--skip-if-scratch-empty"]}                                                            | ${"require an agentTurn job or --message"}                                                                                                                                      | ${{ payload: { kind: "command", argv: ["true"] } }}                                                         | ${["cron.get"]}
+  ${["edit", "job-1", "--include-reasoning"]}                                                                | ${"require an agentTurn job or --message"}                                                                                                                                      | ${{ payload: { kind: "command", argv: ["true"] } }}                                                         | ${["cron.get"]}
+  ${[...addArgs, "--at", "+3m", "--session", "session:agent:main:conversation", "--system-event", "resume"]} | ${'sessionTarget "session:agent:main:conversation" cannot run systemEvent: systemEvent only runs in the main session'}                                                          | ${undefined}                                                                                                | ${undefined}
+  ${[...addArgs, "--every", "1h", "--system-event", "tick", "--timeout-seconds", "bogus"]}                   | ${"--timeout-seconds is not supported for systemEvent jobs."}                                                                                                                   | ${undefined}                                                                                                | ${undefined}
+  ${[...addArgs, "9am standup with the team today", "--message", "run"]}                                     | ${'OpenClaw couldn’t use the cron expression “9am standup with the team today”. For example, "0 7 * * *" means every day at 7:00 AM. Six-field expressions put seconds first.'} | ${undefined}                                                                                                | ${undefined}
+  ${[...addArgs, "--cron", "0 25 * * *", "--message", "run"]}                                                | ${'For example, "0 7 * * *" means every day at 7:00 AM.'}                                                                                                                       | ${undefined}                                                                                                | ${undefined}
+  ${[...addArgs, ...messageArgs, ...topicArgs, ""]}                                                          | ${"--thread-id must be a positive integer"}                                                                                                                                     | ${undefined}                                                                                                | ${undefined}
+  ${[...addArgs, "--stream-command", "node events.mjs", "--message", "run"]}                                 | ${"JSON array"}                                                                                                                                                                 | ${undefined}                                                                                                | ${undefined}
+  ${[...addArgs, "--stream-command", '["node","events.mjs"]', "--stream-mode", "match", "--message", "run"]} | ${"--stream-match is required"}                                                                                                                                                 | ${undefined}                                                                                                | ${undefined}
+  ${[...addArgs, "--every", "1m", "--stream-batch-ms", "250", "--message", "run"]}                           | ${"require --stream-command"}                                                                                                                                                   | ${undefined}                                                                                                | ${undefined}
+  ${["edit", "job-1", "--pacing-min", "30m", "--every", ""]}                                                 | ${"Schedule values must not be blank"}                                                                                                                                          | ${{ configRevision: "revision", pacing: { min: "1m", max: "1h" } }}                                         | ${["cron.get"]}
+  ${[...addArgs, "--system-event", "test", "--every", "8640000000000001ms"]}                                 | ${"OpenClaw couldn’t use that repeat interval."}                                                                                                                                | ${undefined}                                                                                                | ${undefined}
+  ${["edit", "job-1", "--cron", "0 * * * *", "--tz", "UTC", "--stagger", "8640000000000001ms"]}              | ${"Invalid --stagger"}                                                                                                                                                          | ${undefined}                                                                                                | ${undefined}
+  ${["edit", "job-1", "--cron", "0 * * * *", "--stagger", " "]}                                              | ${"Invalid --stagger"}                                                                                                                                                          | ${undefined}                                                                                                | ${undefined}
+  ${[...addMessage, "--trigger-script", "   "]}                                                              | ${"--trigger-script must not be blank"}                                                                                                                                         | ${undefined}                                                                                                | ${undefined}
 `("rejects $args", async ({ args, message, job, reads }: RejectCase) => {
   if (job) {
     existing(job);
@@ -404,13 +411,6 @@ describe("cron trigger CLI options", () => {
     );
   });
 
-  it("rejects an explicitly blank trigger script before adding a job", async () => {
-    await rejectAdd(
-      { "trigger-script": "   ", "system-event": "changed", session: "main" },
-      "--trigger-script must not be blank",
-    );
-  });
-
   it.each(["add", "edit"] as const)(
     "reads the exact payload path and budgets on %s",
     async (operation) => {
@@ -532,4 +532,15 @@ describe("cron scratch", () => {
     await runScratch([...args, "--expected-revision", revision]);
     expectRpc(["set", { content, expectedRevision: Number(revision) }]);
   });
+});
+
+it.each(["standard", "daybreak_blue", "daybreak_red"])(
+  "forwards explicit scheduled Access %s through add and edit",
+  async (cyberAccessProgram) => {
+    await add(["--access", cyberAccessProgram], { cyberAccessProgram });
+    await edit(["--access", cyberAccessProgram], { cyberAccessProgram });
+  },
+);
+it("clears scheduled Access through edit", async () => {
+  await edit(["--clear-access"], { cyberAccessProgram: null });
 });

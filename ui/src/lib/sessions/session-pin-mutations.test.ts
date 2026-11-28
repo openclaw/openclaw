@@ -86,7 +86,11 @@ function pinFixture(patchResponse: (call: number) => Promise<unknown>, fakeTimer
     ...harness,
     key,
     server,
-    pinned: () => harness.rows()?.find((row) => row.key === key)?.pinned === true,
+    pinned: () => {
+      const row = harness.rows()?.find((candidate) => candidate.key === key);
+      expect(row).toBeDefined();
+      return row?.pinned === true;
+    },
     commit: (reply: ReturnType<typeof createDeferred<unknown>>) =>
       reply.resolve(ack(key, { sessionId: `${key}:session`, updatedAt: 4, pinnedAt: 4 }, "")),
   };

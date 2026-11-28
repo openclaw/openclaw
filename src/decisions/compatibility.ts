@@ -1,21 +1,24 @@
+import { DecisionContractError } from "./contract-error.js";
+import type { DecisionEntry } from "./input-types.js";
+import { validateDecisionBatchV2 } from "./input-validation.js";
+import { validateAdmittedDecisionResultV2 } from "./result-validation.js";
 import type { DecisionBatchResultV2, DecisionBatchV2 } from "./types-v2.js";
-import type { DecisionBatch, DecisionBatchResult, DecisionEntry } from "./types.js";
+import type { DecisionBatch, DecisionBatchResult } from "./types.js";
 import { finiteJson } from "./validation-common.js";
-import { validateDecisionBatchV2, validateDecisionResultV2 } from "./validation-v2.js";
 import {
-  DecisionContractError,
   MAX_DECISION_V1_QUESTIONS,
-  validateDecisionBatch,
+  validateDecisionBatchShape,
   validateDecisionResult,
 } from "./validation.js";
 
 /** Malformed input throws; unsupported size or unrepresentable data returns undefined. */
 export function decisionBatchV1ToV2(batch: unknown): DecisionBatchV2 | undefined {
-  // Reject executable/proxy input before the legacy validator or any property access.
-  if (finiteJson(batch, { rejectProxies: true }) === "invalid") {
+  // Reject executable/proxy input before V1 shape checks or any property access.
+  const shape = finiteJson(batch, { rejectProxies: true });
+  if (shape === "invalid") {
     throw new DecisionContractError();
   }
-  if (!validateDecisionBatch(batch)) {
+  if (shape === "oversized" || !validateDecisionBatchShape(batch)) {
     return undefined;
   }
   const converted: DecisionBatchV2 = {
@@ -82,7 +85,7 @@ export function decisionResultV1ToV2(
   ) {
     return undefined;
   }
-  return validateDecisionResultV2(v2Batch, result) ? result : undefined;
+  return validateAdmittedDecisionResultV2(v2Batch, result) ? result : undefined;
 }
 
 /** Narrow only losslessly: V1 cannot carry explicit decisions, errors, or extra usage/metadata. */
@@ -91,7 +94,11 @@ export function decisionResultV2ToV1(
   result: DecisionBatchResultV2,
 ): DecisionBatchResult | undefined {
   const v1Batch = decisionBatchV2ToV1(batch);
-  if (!v1Batch || !validateDecisionResultV2(batch, result) || result.metadata !== undefined) {
+  if (
+    !v1Batch ||
+    !validateAdmittedDecisionResultV2(batch, result) ||
+    result.metadata !== undefined
+  ) {
     return undefined;
   }
   if (

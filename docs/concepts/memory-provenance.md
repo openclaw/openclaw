@@ -260,7 +260,8 @@ or hook source. Keep an admission rule for future matching sessions, within
   not delete a file or identify contributing lines. Supported write/edit/patch
   transcript records supplement the latest file-level observer record, but
   can include unsuccessful attempts. Arbitrary shell writes and external edits
-  are not fully tracked.
+  are not fully tracked. See [Freeform edits and quarantine](#freeform-edits-and-quarantine)
+  for how they affect the file's trust record.
 - **Paraphrases and other copies.** Exact corpus quotations can be removed,
   but untracked paraphrases, exports, external backups, other plugins' stores,
   and independently copied files are outside this cleanup. A reported curated
@@ -271,6 +272,40 @@ or hook source. Keep an admission rule for future matching sessions, within
 
 An empty preview means no more artifacts were found by those selectors and
 matching rules. It is not a certificate that no related information remains.
+
+## Freeform edits and quarantine
+
+Root `MEMORY.md`, `USER.md`, and personal `users/<profile-id>/USER.md` keep
+one trust record per file with the file hash, origin class, time, and session
+of the latest tracked write. Tracked writes are the agent `write`, `edit`, and
+`apply_patch` tools, dreaming promotion, and `memory forget` rewrites. A tool
+write records `untrusted` when the turn is not an owner turn or when the turn
+is tainted by network-sourced tool results.
+
+A record applies only to the exact content it hashed. A Control UI save, a
+shell command, an editor, git, or a sync client changes the file without a
+tracked write, so the record no longer matches and counts as no record: the
+file is owner-controlled again. A tracked write on top of unchanged
+`untrusted` content keeps the file `untrusted`, including dreaming promotion
+and `memory forget` rewrites.
+
+Automatic context excludes one of these files while its content is exactly
+what an `untrusted` write produced. To restore it, review the file and save
+any edit in the Control UI or an editor. Saving identical content does not
+restore it; a one-character change does.
+
+Daily `memory/*.md` files stay quarantined: once a memory flush records a
+daily file as `untrusted`, its lines stay out of promotion even after an edit.
+
+To detect an excluded file:
+
+- The Gateway log contains `excluding MEMORY.md from automatic memory context:
+  memory provenance is untrusted` (or `USER.md`), once per file and process.
+- `openclaw doctor` reports the check `core/doctor/memory-provenance` with the
+  file (including personal `users/<profile-id>/USER.md` files), the origin
+  class, and the time and session of the last recorded tracked write. The
+  record names only the latest tracked write, not necessarily the write that
+  quarantined the file.
 
 ## Purging a person or a source end to end
 

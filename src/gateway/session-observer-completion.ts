@@ -1,4 +1,7 @@
+import { isFailoverError, readDirectErrorCode } from "../agents/failover/error.js";
 import { resolveSimpleCompletionSelectionForAgent } from "../agents/simple-completion-selection.js";
+import { readUtilityModelSetting } from "../agents/utility-model-setting.js";
+import type { SessionEntry } from "../config/sessions/types.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { racePromiseWithAbortSignal } from "../infra/abort-signal.js";
 import { emitAgentEvent, emitAgentEventForOwner } from "../infra/agent-events.js";
@@ -7,6 +10,7 @@ import { formatErrorMessage } from "../infra/errors.js";
 import { redactToolPayloadText } from "../logging/redact.js";
 import { createSubsystemLogger } from "../logging/subsystem.js";
 import { AsyncWorkScope } from "../shared/async-work-scope.js";
+import { createActivitySummaryAuthority } from "./session-activity-summary-authority.js";
 import {
   buildSessionObserverPrompt,
   type defaultCompleteModel,
@@ -35,6 +39,29 @@ export function reportSessionObserverDegradation(
     useUtilityModel: "required",
   });
   const modelLabel = selection ? ` "${selection.provider}/${selection.modelId}"` : "";
+  const failure = isFailoverError(error) ? error : undefined;
+  const attempts =
+    failure?.attempts ??
+    (selection && (failure?.reason ?? readDirectErrorCode(error)) === "model_not_found"
+      ? [{ provider: selection.provider, model: selection.modelId, reason: "model_not_found" }]
+      : []);
+  const missing = attempts
+    ?.filter((attempt) => attempt.reason === "model_not_found")
+    .map((attempt) => attempt.provider + "/" + attempt.model);
+  const details = [
+    ...(missing?.length
+      ? ["Unavailable model IDs: " + [...new Set(missing)].join(", ") + "."]
+      : []),
+    ...(attempts.length > 1
+      ? [
+          "Utility fallbacks exhausted (" +
+            attempts
+              .map((attempt) => attempt.provider + "/" + attempt.model + ": " + attempt.reason)
+              .join("; ") +
+            ").",
+        ]
+      : []),
+  ].join(" ");
   const notice = {
     runId: state.runId,
     sessionKey: state.sessionKey,
@@ -42,14 +69,17 @@ export function reportSessionObserverDegradation(
     stream: "notice",
     data: {
       phase: "warning",
-      message: `Session observer assessments stopped for this run after utility model${modelLabel} failed repeatedly. To restore assessments, choose a capable utility model or add capable utilityModel.fallbacks.`,
+      message: `Session observer assessments stopped for this run after utility model${modelLabel} failed repeatedly.${details ? ` ${details}` : ""} To restore assessments, choose a capable utility model or add capable utilityModel.fallbacks.`,
     },
   };
-  const owner = getAgentRunContextOwnership(state.runId)?.exclusiveClaimId;
-  if (owner) {
-    emitAgentEventForOwner(notice, owner);
-  } else {
-    emitAgentEvent(notice);
+  const utility = readUtilityModelSetting(cfg, state.agentId);
+  if (utility.kind === "explicit" || (utility.kind === "auto" && utility.fallbacks.length > 0)) {
+    const owner = getAgentRunContextOwnership(state.runId)?.exclusiveClaimId;
+    if (owner) {
+      emitAgentEventForOwner(notice, owner);
+    } else {
+      emitAgentEvent(notice);
+    }
   }
   observerLog.warn("session observer disabled after consecutive failures", {
     sessionKey: state.sessionKey,
@@ -59,12 +89,44 @@ export function reportSessionObserverDegradation(
   });
 }
 
+/** The session owner's role refuses observation now; the run stays off without a retry. */
+export class SessionObserverOwnerRefusal extends Error {
+  constructor(readonly reason: "agent-denied" | "role-policy") {
+    super(`session observer refused for the session owner (${reason})`);
+  }
+}
+
 export function createSessionObserverCompletion(params: {
   getConfig: SessionObserverDeps["getConfig"];
   prepareModel: typeof defaultPrepareModel;
   completeModel: typeof defaultCompleteModel;
   isCurrent: (state: SessionObserverState) => boolean;
+  /** The run's authoritative session read, the same one its digest commits through. */
+  readEntry: (state: SessionObserverState) => Promise<SessionEntry | undefined>;
 }) {
+  // The persisted digest is shown to every viewer, so the session owner's role
+  // decides, once when this run's observation starts.
+  const resolveOwnerAuthority = async (state: SessionObserverState) => {
+    const entry = (await params.readEntry(state)) ?? {};
+    const owner = createActivitySummaryAuthority({
+      agentId: state.agentId,
+      getEntry: () => entry,
+      getConfig: params.getConfig,
+      // A one-time decision on a read snapshot; the digest's own currency check guards its use.
+      assertCurrent: () => undefined,
+    });
+    try {
+      const prepared = await owner.prepare();
+      // A deleted owner profile observed before this change; only role decisions stop it.
+      const reason = prepared.refused?.reason;
+      if (reason === "agent-denied" || reason === "role-policy") {
+        throw new SessionObserverOwnerRefusal(reason);
+      }
+      return prepared.operatorAuthority;
+    } finally {
+      owner.release();
+    }
+  };
   const ensurePrepared = async (state: SessionObserverState) => {
     const modelRef = state.utilityModelRef;
     if (!modelRef) {
@@ -93,18 +155,31 @@ export function createSessionObserverCompletion(params: {
   return async (state: SessionObserverState, notes: readonly string[]) => {
     const controller = new AbortController();
     state.activeController = controller;
+    // Bounds preparation only; isolated completion owns each model call's deadline.
     const timeout = setTimeout(() => controller.abort(), SESSION_OBSERVER_MODEL_TIMEOUT_MS);
     const ownedWork = new AsyncWorkScope();
     try {
       const execute = async () => {
+        const operatorAuthority = await (state.ownerAuthority ??= resolveOwnerAuthority(
+          state,
+        ).catch((error: unknown) => {
+          // Only a refusal holds for the run; a lost race re-reads on the next digest.
+          if (!(error instanceof SessionObserverOwnerRefusal)) {
+            state.ownerAuthority = undefined;
+          }
+          throw error;
+        }));
         const prepared = await ensurePrepared(state);
+        clearTimeout(timeout);
         let lastRejectedText = "";
         for (let attempt = 0; attempt < 2; attempt += 1) {
           if (!params.isCurrent(state) || controller.signal.aborted) {
             throw new Error("session observer state is no longer active");
           }
+          let parsed: ReturnType<typeof normalizeSessionObserverModelOutput> = null;
           const result = await params.completeModel({
             ...prepared,
+            ...(operatorAuthority ? { operatorAuthority } : {}),
             purpose: "session-observer",
             config: params.getConfig(),
             systemPrompt: SESSION_OBSERVER_SYSTEM_PROMPT,
@@ -113,8 +188,18 @@ export function createSessionObserverCompletion(params: {
             abortSignal: controller.signal,
             answerTokenBudget: 300,
             streamParams: { temperature: 0.2 },
+            classifyResult: ({ result: candidateResult }) => {
+              parsed = normalizeSessionObserverModelOutput(candidateResult.text);
+              return parsed
+                ? undefined
+                : {
+                    message: "session observer returned invalid JSON",
+                    code: "invalid_response",
+                    preserveResultOnExhaustion: true,
+                  };
+            },
           });
-          const parsed = normalizeSessionObserverModelOutput(result.text);
+          parsed ??= normalizeSessionObserverModelOutput(result.text);
           if (parsed) {
             return parsed;
           }

@@ -68,6 +68,7 @@ import {
   runParallelsPrerequisiteEval,
 } from "../../scripts/e2e/parallels/provider-auth-prerequisite.mjs";
 import { assertDevChannelUpdate } from "../../scripts/e2e/parallels/smoke-common.ts";
+import { ensureGuestGit } from "../../scripts/e2e/parallels/windows-git.ts";
 import { parseArgs as parseWindowsSmokeArgs } from "../../scripts/e2e/parallels/windows-smoke.ts";
 import { scriptProcessEntrypoints } from "../../scripts/script-process-runtime.test-support.js";
 import {
@@ -303,7 +304,7 @@ function runWindowsPrepare(
   });
 }
 
-function runMacosSmoke(
+function runSmoke(
   tempDir: string,
   options: {
     version: string;
@@ -678,6 +679,7 @@ guest_user_cmd() {
     'where node.exe') [[ "$guest_version" != missing ]] ;;
     'node.exe --version') [[ "$guest_version" != missing ]] && printf '%s\\r\\n' "$guest_version" ;;
     'git --version && node --version && npm --version'|'wsl.exe --version'|'wsl.exe --status') : ;;
+    *vcruntime140.dll*) : ;;
     *) printf 'unexpected guest command: %s\\n' "$1" >&2; return 1 ;;
   esac
 }
@@ -711,6 +713,24 @@ printf 'verified-node=%s\\n' "$guest_version"`,
       }
     },
   );
+
+  it("rejects a Windows baseline missing the native addon C++ runtime", () => {
+    const result = runWindowsPrepare(
+      `set -euo pipefail
+OPENCLAW_PARALLELS_WINDOWS_LIBRARY_ONLY=1 source "$1"
+set_guest_paths() { :; }
+guest_node_supported() { :; }
+guest_user_cmd() { [[ "$1" != *vcruntime140.dll* ]]; }
+guest_system_ps() { :; }
+get_wsl_default_version() { printf '2'; }
+assert_clean_product_state() { :; }
+assert_no_pending_reboot() { :; }
+verify_baseline`,
+      [],
+    );
+    expect(result.status).toBe(1);
+    expect(result.stderr).toContain("Visual C++ runtime");
+  });
 
   it("waits for Windows snapshot restoration before starting the guest", () => {
     const tempDir = makeTempDir(tempDirs, "openclaw-windows-restore-");
@@ -913,7 +933,7 @@ ensure_vm_running`,
     );
     chmodSync(fakePnpm, 0o755);
 
-    const result = runMacosSmoke(tempDir, {
+    const result = runSmoke(tempDir, {
       version: "2026.8.25",
       artifactRoot: join(tempDir, "artifacts"),
       env: {
@@ -929,6 +949,71 @@ ensure_vm_running`,
     expect(result.stderr).toContain("FAKE_GUEST_COMMAND_BOUNDARY");
     expect(result.stderr).not.toContain("UNEXPECTED_HOST_PACKAGE_BUILD");
   });
+
+  it.runIf(process.platform !== "win32")(
+    "defers Windows Git preparation until the guest needs it",
+    async () => {
+      const tempDir = makeTempDir(tempDirs, "openclaw-windows-lazy-git-");
+      writeNodeFakePrlctl(tempDir, "process.exit(73);");
+      const fakePython = join(tempDir, "python3");
+      writeFileSync(
+        fakePython,
+        `#!/usr/bin/env node
+process.stderr.write(process.argv.some((arg) => arg.includes("git-for-windows")) ? "UNEXPECTED_GIT_DOWNLOAD" : "HOST_SERVER_BOUNDARY");
+process.exit(73);
+`,
+      );
+      chmodSync(fakePython, 0o755);
+      const claim = await acquireTestPortBlock({ offsets: [0] });
+      try {
+        const result = runSmoke(tempDir, {
+          version: "2026.8.25",
+          artifactRoot: join(tempDir, "artifacts"),
+          runtimeArgs: [
+            "--import",
+            "tsx",
+            TS_PATHS.windows,
+            "--host-ip",
+            "192.0.2.10",
+            "--host-port",
+            String(claim.port),
+          ],
+          env: { OPENCLAW_PARALLELS_SKIP_SNAPSHOT_RESTORE: "1", TMPDIR: tempDir },
+        });
+        expect(result.stderr).toContain("HOST_SERVER_BOUNDARY");
+        expect(result.stderr).not.toContain("UNEXPECTED_GIT_DOWNLOAD");
+      } finally {
+        await claim.release();
+      }
+    },
+  );
+
+  it.each([true, false])(
+    "prepares fallback Git only when absent (installed=%s)",
+    async (installed) => {
+      const guest = new WindowsGuest(
+        "Windows VM",
+        new PhaseRunner(makeTempDir(tempDirs, "openclaw-windows-git-")),
+      );
+      vi.spyOn(guest, "exec").mockReturnValue(installed ? "git version 2.56.0" : "");
+      const installGit = vi.spyOn(guest, "powershell").mockReturnValue("");
+      const getMinGitZipPath = vi.fn().mockResolvedValue("/tmp/mingit.zip");
+      await ensureGuestGit({
+        guest,
+        getMinGitZipPath,
+        server: installed
+          ? null
+          : {
+              hostIp: "192.0.2.10",
+              port: 8080,
+              urlFor: () => "http://192.0.2.10:8080/mingit.zip",
+              stop: async () => {},
+            },
+      });
+      expect(getMinGitZipPath).toHaveBeenCalledTimes(installed ? 0 : 1);
+      expect(installGit).toHaveBeenCalledTimes(installed ? 0 : 1);
+    },
+  );
 
   it("rejects short flags as Parallels smoke option values", () => {
     const cases = [
@@ -1265,7 +1350,7 @@ if (commandArgs[0] === "list") {
 }`,
       );
 
-      const result = runMacosSmoke(tempDir, {
+      const result = runSmoke(tempDir, {
         version: "2026.1.1",
         artifactRoot: tempDir,
         timeout: 20_000,
@@ -1718,9 +1803,6 @@ if (commandArgs[0] === "list") {
     expect(windowsGit.indexOf('"MinGit-2.56.0.2-64-bit.zip"')).toBeLessThan(
       windowsGit.indexOf('"MinGit-2.56.0.2-arm64.zip"'),
     );
-    expect(
-      combined.match(/curl\.exe -fsSL --connect-timeout 10 --max-time 120 --retry 2/g),
-    ).toHaveLength(2);
     expect(windowsGit).toContain('if "-64-bit." in name:');
     expect(windowsGit).toContain('elif "-arm64." in name:');
   });
@@ -1820,6 +1902,76 @@ if (commandArgs[0] === "list") {
     }
   });
 
+  it.each([
+    { readOnly: true, status: 255, transport: true, persistent: false, attempts: 2, ok: true },
+    { readOnly: true, status: 255, transport: true, persistent: true, attempts: 2, ok: false },
+    { readOnly: false, status: 255, transport: true, persistent: false, attempts: 1, ok: false },
+    { readOnly: true, status: 7, transport: false, persistent: false, attempts: 1, ok: false },
+    { readOnly: true, status: 255, transport: false, persistent: false, attempts: 1, ok: false },
+  ])("retries only Windows read transport failures: %j", (scenario) => {
+    const tempDir = makeTempDir(tempDirs, "openclaw-parallels-windows-read-");
+    const callsPath = join(tempDir, "calls");
+    writeNodeFakePrlctl(
+      tempDir,
+      `if (args.at(-1)?.startsWith("powershell.exe ")) {
+        const fs = process.getBuiltinModule("node:fs");
+        const callsPath = ${JSON.stringify(callsPath)};
+        const count = fs.existsSync(callsPath) ? Number(fs.readFileSync(callsPath, "utf8")) + 1 : 1;
+        fs.writeFileSync(callsPath, String(count));
+        if (count === 1 || ${scenario.persistent}) {
+          console.error(${JSON.stringify(scenario.transport ? "PrlJob_GetResult: Invalid argument. An invalid argument was passed." : "guest command failed")});
+          process.exit(${scenario.status});
+        }
+        console.log("ready");
+      }`,
+    );
+    withEnv(fakePrlctlEnv(tempDir), () => {
+      const guest = new WindowsGuest("Windows VM", new PhaseRunner(tempDir));
+      const invoke = () => guest.powershell("Write-Output ready", { readOnly: scenario.readOnly });
+      if (scenario.ok) {
+        expect(invoke()).toBe("ready");
+      } else {
+        expect(invoke).toThrow(`Windows guest command failed with exit code ${scenario.status}`);
+      }
+    });
+    expect(Number(readFileSync(callsPath, "utf8"))).toBe(scenario.attempts);
+  });
+
+  it.each([false, true])("bounds Windows script staging recovery (persistent=%s)", (persistent) => {
+    const tempDir = makeTempDir(tempDirs, "openclaw-parallels-windows-write-");
+    const callsPath = join(tempDir, "writes");
+    const effectsPath = join(tempDir, "effects");
+    writeNodeFakePrlctl(
+      tempDir,
+      `const fs = process.getBuiltinModule("node:fs");
+      if (args.includes("-EncodedCommand")) {
+        const p = ${JSON.stringify(callsPath)};
+        const count = fs.existsSync(p) ? Number(fs.readFileSync(p, "utf8")) + 1 : 1;
+        fs.writeFileSync(p, String(count));
+        if (count === 1 || ${persistent}) {
+          console.error("PrlJob_GetRetCode: Invalid argument. An invalid argument was passed.");
+          process.exit(255);
+        }
+      } else if (args.at(-1)?.startsWith("powershell.exe ")) {
+        fs.appendFileSync(${JSON.stringify(effectsPath)}, "effect\\n");
+        console.log("ready");
+      }`,
+    );
+    withEnv(fakePrlctlEnv(tempDir), () => {
+      const invoke = () =>
+        new WindowsGuest("Windows VM", new PhaseRunner(tempDir)).powershell("exit 0");
+      if (persistent) {
+        expect(invoke).toThrow("Windows guest script write failed with exit code 255");
+      } else {
+        expect(invoke()).toBe("ready");
+      }
+    });
+    expect(Number(readFileSync(callsPath, "utf8"))).toBe(2);
+    expect(existsSync(effectsPath) ? readFileSync(effectsPath, "utf8") : "").toBe(
+      persistent ? "" : "effect\n",
+    );
+  });
+
   it("carries refreshed Windows guest environment into every PowerShell script", () => {
     const tempDir = makeTempDir(tempDirs, "openclaw-parallels-windows-env-");
     const scriptsPath = join(tempDir, "scripts.jsonl");
@@ -1866,6 +2018,28 @@ if (commandArgs[0] === "list") {
       "Set-Item -LiteralPath 'Env:NPM_CONFIG_REGISTRY' -Value 'http://192.0.2.2:48123/candidate''s'\nWrite-Output $env:NPM_CONFIG_REGISTRY",
     );
   });
+
+  it.each([false, true])(
+    "reuses successful Windows staging readiness (write retry=%s)",
+    async (retry) => {
+      const beforeLaunchAttempt = vi.fn();
+      let writes = 0;
+      await expect(
+        runWindowsBackground({
+          label: "staging readiness",
+          beforeLaunchAttempt,
+          runCommand: (_command, _args, options) => {
+            if (options?.input) {
+              return fakeResult(++writes === 1 && retry ? 255 : 0);
+            }
+            return fakeResult(1);
+          },
+        }),
+      ).rejects.toThrow("background launch failed with exit code 1");
+      expect(beforeLaunchAttempt).toHaveBeenCalledTimes(retry ? 1 : 0);
+      expect(writes).toBe(retry ? 2 : 1);
+    },
+  );
 
   it("paces ambiguous Windows background launch materialization probes", async () => {
     let calls = 0;

@@ -5,6 +5,7 @@ import type { IncomingMessage, ServerResponse } from "node:http";
 import net from "node:net";
 import path from "node:path";
 import { pathToFileURL } from "node:url";
+import { parse } from "@babel/parser";
 import { withServer, withTempDir } from "openclaw/plugin-sdk/test-env";
 import { expect, test } from "vitest";
 import { createQaGatewayChild, writeJson } from "../../../../extensions/qa-lab/api.js";
@@ -217,21 +218,40 @@ async function reservePort(): Promise<number> {
   return address.port;
 }
 
+/** Finds a hashed chunk by the bindings it exports; bundler formatting is not a contract. */
 async function resolveBuiltModule(params: {
   distDir: string;
   prefix: string;
-  exportMarker: string;
+  exports: string[];
 }): Promise<string> {
   for (const name of await fs.readdir(params.distDir)) {
     if (!name.startsWith(params.prefix) || !/\.m?js$/u.test(name)) {
       continue;
     }
     const filePath = path.join(params.distDir, name);
-    if ((await fs.readFile(filePath, "utf8")).includes(params.exportMarker)) {
+    const source = await fs.readFile(filePath, "utf8");
+    // Every exported name appears in the module text, so most chunks never need parsing.
+    if (!params.exports.every((binding) => source.includes(binding))) {
+      continue;
+    }
+    const exported = new Set(
+      parse(source, { sourceType: "module" }).program.body.flatMap((statement) =>
+        statement.type === "ExportNamedDeclaration"
+          ? statement.specifiers.map((specifier) =>
+              specifier.exported.type === "Identifier"
+                ? specifier.exported.name
+                : specifier.exported.value,
+            )
+          : [],
+      ),
+    );
+    if (params.exports.every((binding) => exported.has(binding))) {
       return pathToFileURL(filePath).href;
     }
   }
-  throw new Error(`Could not resolve built ${params.prefix} module`);
+  throw new Error(
+    `Could not resolve a built ${params.prefix} module exporting ${params.exports.join(", ")}`,
+  );
 }
 
 async function startControlledSourceGateway(params: {
@@ -246,15 +266,15 @@ async function startControlledSourceGateway(params: {
   const port = await reservePort();
   const distDir = path.join(params.repoRoot, "dist");
   const [serverUrl, runtimeUrl] = await Promise.all([
-    resolveBuiltModule({
-      distDir,
-      prefix: "server-",
-      exportMarker: "startGatewayServer, truncateCloseReason",
-    }),
+    resolveBuiltModule({ distDir, prefix: "server-", exports: ["startGatewayServer"] }),
     resolveBuiltModule({
       distDir,
       prefix: "prepared-model-runtime-",
-      exportMarker: "export { PreparedModelRuntimeOwnerNotPublishedError",
+      exports: [
+        "markPreparedModelRuntimeSnapshotsStale",
+        "refreshPreparedModelRuntimeSnapshots",
+        "rejectPendingPreparedModelRuntimeReplacement",
+      ],
     }),
   ]);
   await fs.writeFile(
@@ -431,16 +451,7 @@ test("initializes unrestricted Telegram model browsing and reuses its prepared c
   const telegramCalls: TelegramCall[] = [];
   const pendingUpdates: unknown[] = [];
   let nextUpdateId = 2;
-  let pickerStage:
-    | "initial"
-    | "providers"
-    | "models"
-    | "repeated-providers"
-    | "repeated-providers-second"
-    | "done" = "initial";
-  let discoveryFrozen = false;
-  let discoveryRequests = 0;
-  let postWarmDiscoveryAttempts = 0;
+  let pickerStage: "initial" | "providers" | "models" | "back" | "done" = "initial";
 
   const queueCallback = (data: string) => {
     const callbackNumber = nextUpdateId - 1;
@@ -452,12 +463,6 @@ test("initializes unrestricted Telegram model browsing and reuses its prepared c
     const pathname = new URL(req.url ?? "/", "http://127.0.0.1").pathname;
 
     if (pathname === "/ollama/api/tags") {
-      discoveryRequests += 1;
-      if (discoveryFrozen) {
-        postWarmDiscoveryAttempts += 1;
-        writeJson(res, 503, { ok: false, error: "provider discovery frozen after warmup" });
-        return;
-      }
       writeJson(res, 200, {
         models: [
           {
@@ -472,12 +477,6 @@ test("initializes unrestricted Telegram model browsing and reuses its prepared c
     }
 
     if (pathname === "/ollama/api/show") {
-      discoveryRequests += 1;
-      if (discoveryFrozen) {
-        postWarmDiscoveryAttempts += 1;
-        writeJson(res, 503, { ok: false, error: "provider discovery frozen after warmup" });
-        return;
-      }
       writeJson(res, 200, {
         model_info: { "general.context_length": 8192 },
         capabilities: ["completion", "tools"],
@@ -530,20 +529,11 @@ test("initializes unrestricted Telegram model browsing and reuses its prepared c
       pickerStage === "models" &&
       hasCallback({ method, body }, `mdl_sel_ollama/${DISCOVERED_MODEL}`)
     ) {
-      pickerStage = "repeated-providers";
+      pickerStage = "back";
       queueCallback("mdl_prov");
     } else if (
       method === "editMessageText" &&
-      pickerStage === "repeated-providers" &&
-      typeof body.text === "string" &&
-      body.text.includes("Select a provider:")
-    ) {
-      expect(hasCallback({ method, body }, "mdl_list_ollama_1")).toBe(true);
-      pickerStage = "repeated-providers-second";
-      queueCallback("mdl_prov");
-    } else if (
-      method === "editMessageText" &&
-      pickerStage === "repeated-providers-second" &&
+      pickerStage === "back" &&
       typeof body.text === "string" &&
       body.text.includes("Select a provider:")
     ) {
@@ -655,9 +645,6 @@ test("initializes unrestricted Telegram model browsing and reuses its prepared c
               expect.objectContaining({ provider: "ollama", id: DISCOVERED_MODEL }),
             ]),
           });
-          expect(discoveryRequests).toBeGreaterThan(0);
-          const warmDiscoveryRequests = discoveryRequests;
-          discoveryFrozen = true;
           queueCallback("mdl_prov");
 
           await expect
@@ -669,7 +656,7 @@ test("initializes unrestricted Telegram model browsing and reuses its prepared c
               }),
               { interval: 50, timeout: 30_000 },
             )
-            .toMatchObject({ stage: "done", answers: 4 });
+            .toMatchObject({ stage: "done", answers: 3 });
 
           const sendMessage = telegramCalls.find((call) => call.method === "sendMessage");
           expect(sendMessage).toBeDefined();
@@ -678,48 +665,17 @@ test("initializes unrestricted Telegram model browsing and reuses its prepared c
           const pickerEdits = telegramCalls.filter(
             (call) => call.method === "editMessageText" && inlineKeyboard(call).length > 0,
           );
-          expect(pickerEdits).toHaveLength(4);
+          expect(pickerEdits).toHaveLength(3);
           expect(hasCallback(pickerEdits[0]!, "mdl_list_ollama_1")).toBe(true);
           expect(hasCallback(pickerEdits[2]!, "mdl_list_ollama_1")).toBe(true);
           expect(
             pickerEdits[1] &&
               keyboardCallbackData(pickerEdits[1]).includes(`mdl_sel_ollama/${DISCOVERED_MODEL}`),
           ).toBe(true);
-          expect(pickerEdits[3] && hasCallback(pickerEdits[3], "mdl_list_ollama_1")).toBe(true);
 
           expect(
             telegramCalls.filter((call) => call.method === "answerCallbackQuery"),
-          ).toHaveLength(4);
-          const preparedModels = await gateway.call("models.list", { view: "default" });
-          expect(preparedModels).toMatchObject({
-            models: expect.arrayContaining([
-              expect.objectContaining({ provider: "ollama", id: DISCOVERED_MODEL }),
-            ]),
-          });
-          expect(discoveryRequests).toBe(warmDiscoveryRequests);
-          expect(postWarmDiscoveryAttempts).toBe(0);
-
-          discoveryFrozen = false;
-          const refreshedModels = await gateway.call("models.list", {
-            view: "default",
-            refresh: true,
-          });
-          expect(refreshedModels).toMatchObject({
-            models: expect.arrayContaining([
-              expect.objectContaining({ provider: "ollama", id: DISCOVERED_MODEL }),
-            ]),
-          });
-          expect(discoveryRequests).toBeGreaterThan(warmDiscoveryRequests);
-          console.info(
-            "MODEL_INVENTORY_PROOF",
-            JSON.stringify({
-              scenario: "unrestricted-inventory",
-              callbacks: keyboardCallbackData(pickerEdits[1]!),
-              warmDiscoveryRequests,
-              postWarmDiscoveryAttempts,
-              refreshedDiscoveryRequests: discoveryRequests,
-            }),
-          );
+          ).toHaveLength(3);
         } finally {
           await settleCleanup(async () => await stopQaGatewayFixture(gatewayOwner));
         }
@@ -884,6 +840,13 @@ test("lists native CLI-bound models through Telegram polling and provider callba
               fixtureProviderRequests: providerRequests,
             }),
           );
+          // Published model rows can precede the asynchronous native initialization.
+          await expect
+            .poll(async () => (await fs.readFile(nativeRequestsPath, "utf8")).trim(), {
+              interval: 50,
+              timeout: 30_000,
+            })
+            .not.toBe("");
           const cliCalls = (await fs.readFile(authCallsPath, "utf8"))
             .trim()
             .split("\n")

@@ -1,11 +1,10 @@
-import { readAgentRunIndexVersion } from "../../../infra/agent-run-registry-state.js";
 import { parseAgentSessionKey } from "../../../routing/session-key.js";
-import { readSwarmReservationRevision } from "../swarm/swarm-scheduler.js";
+import { buildSubagentActiveDescendants } from "./subagent-active-descendants.js";
 import {
   matchesSubagentChildSessionOwner,
   resolveRecordedRequester,
 } from "./subagent-child-owner-match.js";
-import { isDeliverySuspended } from "./subagent-delivery-state.js";
+import { isDeliveryTerminalForRequesterSettle } from "./subagent-delivery-state.js";
 import {
   buildSubagentRunReadTopology,
   resolveControllerSessionKey,
@@ -21,43 +20,47 @@ import {
   getSubagentRunStaleAt,
   hasSubagentRunEnded,
   isRetainedUnendedSubagentRun,
+  isSubagentRunLive,
+  isSubagentRunQueued,
+  RECENT_ENDED_SUBAGENT_CHILD_SESSION_MS,
+  shouldKeepSubagentRunChildLink,
 } from "./subagent-run-liveness.js";
+import {
+  getSubagentSessionRuntimeMs,
+  getSubagentSessionStartedAt,
+  isSubagentRunPausedForContinuation,
+  resolveSubagentSessionStatus,
+} from "./subagent-session-metrics.js";
 
-function isDeliveryTerminalForRequesterSettle(
-  entry: Pick<SubagentRunRecord, "delivery" | "pauseReason">,
-): boolean {
-  return (
-    isDeliverySuspended(entry) ||
-    entry.delivery?.status === "delivered" ||
-    (entry.delivery?.status === "not_required" && entry.pauseReason !== "sessions_yield") ||
-    entry.delivery?.status === "discarded" ||
-    entry.delivery?.disposition === "delivered" ||
-    entry.delivery?.disposition === "intentional_non_delivery" ||
-    entry.delivery?.disposition === "permanent_failure"
-  );
+function readSessionDisplayFacts(entry: SubagentRunReadRecord | null, now: number) {
+  if (!entry) {
+    return null;
+  }
+  const identity: object = entry;
+  return {
+    identity,
+    model: entry.model,
+    ownerSessionKey: resolveControllerSessionKey(entry).trim() || undefined,
+    active: isSubagentRunLive(entry) || isSubagentRunQueued(entry),
+    paused: isSubagentRunPausedForContinuation(entry),
+    status: resolveSubagentSessionStatus(entry),
+    startedAt: getSubagentSessionStartedAt(entry),
+    endedAt: entry.execution.endedAt,
+    runtimeMs: getSubagentSessionRuntimeMs(entry, now),
+    clock: Number.isFinite(entry.execution.endedAt) ? undefined : now,
+    childLinkExpiresAt: hasSubagentRunEnded(entry)
+      ? entry.execution.endedAt + RECENT_ENDED_SUBAGENT_CHILD_SESSION_MS
+      : Infinity,
+    retainChildLink: shouldKeepSubagentRunChildLink(entry, { now }),
+  };
 }
 
-export function matchesSubagentRequesterSession(
-  entry: Pick<
-    SubagentRunRecord,
-    "completionRequesterSessionId" | "completionRequesterLifecycleRevision"
-  >,
-  requester: { sessionId: string; lifecycleRevision?: string },
-): boolean {
-  return (
-    entry.completionRequesterSessionId === requester.sessionId &&
-    entry.completionRequesterLifecycleRevision === requester.lifecycleRevision
-  );
-}
-
-/** Lists requester-owned runs, optionally scoped to a requester run or session incarnation. */
+/** Lists runs of a requester chat, optionally scoped to a requester run. */
 export function listRunsForRequesterFromRuns(
   runs: Map<string, SubagentRunRecord>,
   requesterSessionKey: string,
   options?: {
     requesterRunId?: string;
-    requesterSessionId?: string;
-    requesterLifecycleRevision?: string;
     requesterAgentId?: string;
     requesterStorePath?: string | null;
   },
@@ -76,22 +79,10 @@ export function listRunsForRequesterFromRuns(
   const lowerBound =
     requesterRunMatchesScope?.execution.startedAt ?? requesterRunMatchesScope?.createdAt;
   const upperBound = requesterRunMatchesScope?.execution.endedAt;
-  // A newer owner outside this incarnation must still supersede its older row.
-  const latestRuns =
-    options?.requesterSessionId === undefined
-      ? undefined
-      : buildLatestSubagentRunReadIndexFromRuns(runs);
 
   return [...candidates].filter(
     (entry) =>
       entry.requesterSessionKey === key &&
-      (options?.requesterSessionId === undefined ||
-        matchesSubagentRequesterSession(entry, {
-          sessionId: options.requesterSessionId,
-          lifecycleRevision: options.requesterLifecycleRevision,
-        })) &&
-      (!latestRuns ||
-        latestRuns.getLatestSubagentRun(entry.childSessionKey, entry.childAgentId) === entry) &&
       (!options?.requesterAgentId ||
         resolveRecordedRequester(entry) === options.requesterAgentId) &&
       (options?.requesterStorePath === undefined ||
@@ -152,7 +143,7 @@ export function selectConnectedSettledSubagentWave(
 }
 
 export function listRunsForControllerFromRuns<T extends SubagentRunReadRecord>(
-  runs: Map<string, T>,
+  runs: ReadonlyMap<string, T>,
   controllerSessionKey: string,
   controllerAgentId?: string,
 ): T[] {
@@ -180,17 +171,20 @@ export type SubagentRunReadIndex<T extends SubagentRunReadRecord = SubagentRunRe
     inMemoryChanges: ReadonlyMap<string, T | undefined>,
     now?: number,
   ): SubagentRunReadIndex<T>;
-  getDisplaySubagentRun(childSessionKey: string): T | null;
+  getSessionDisplayFacts(
+    childSessionKey: string,
+    now?: number,
+  ): ReturnType<typeof readSessionDisplayFacts>;
   latestRunsByChildSessionKey: ReadonlyMap<string, T>;
   runsByChildSessionKey: ReadonlyMap<string, readonly T[]>;
-  requesterSessionKeys(): Iterable<string>;
+  activeRequesterSessionKeys(): ReadonlySet<string>;
   countActiveDescendantRuns(rootSessionKey: string): number;
   /** Inclusive grace boundary; time-dependent facts are unchanged through this instant. */
   nextChangeAt(rootSessionKey: string): number;
   hasUnendedRuns(rootSessionKey: string): boolean;
   countPendingDescendantRuns(
     rootSessionKey: string,
-    options?: { excludeSuspendedDelivery?: boolean },
+    options?: { excludeSettledDelivery?: boolean },
   ): number;
   hasDescendantRunAwaitingSettle(
     rootSessionKey: string,
@@ -203,6 +197,8 @@ export type SubagentRunReadIndex<T extends SubagentRunReadRecord = SubagentRunRe
 };
 
 export type LatestSubagentRunReadIndex<T extends SubagentRunReadRecord = SubagentRunRecord> = {
+  runsByChildSessionKey: ReadonlyMap<string, readonly T[]>;
+  latestRunsByChildSessionKey: ReadonlyMap<string, T>;
   getLatestSubagentRun: (childSessionKey: string, childAgentId?: string) => T | null;
 };
 
@@ -210,6 +206,7 @@ export function buildLatestSubagentRunReadIndexFromRuns<T extends SubagentRunRea
   runs: Map<string, T>,
 ): LatestSubagentRunReadIndex<T> {
   const runsByChildSessionKey = new Map<string, T[]>();
+  const latestRunsByChildSessionKey = new Map<string, T>();
   for (const entry of runs.values()) {
     const childSessionKey = entry.childSessionKey.trim();
     if (!childSessionKey) {
@@ -218,8 +215,11 @@ export function buildLatestSubagentRunReadIndexFromRuns<T extends SubagentRunRea
     const bucket = runsByChildSessionKey.get(childSessionKey) ?? [];
     bucket.push(entry);
     runsByChildSessionKey.set(childSessionKey, bucket);
+    recordLatestSubagentRun(latestRunsByChildSessionKey, childSessionKey, entry);
   }
   return {
+    runsByChildSessionKey,
+    latestRunsByChildSessionKey,
     getLatestSubagentRun: (childSessionKey, childAgentId) => {
       const key = childSessionKey.trim();
       return (
@@ -269,106 +269,22 @@ export function buildSubagentRunReadIndexFromRuns<T extends SubagentRunReadRecor
     );
   };
 
-  type ActiveDescendants = {
-    multiplicity: Map<string, number>;
-    dynamic: Map<string, number>;
-    dirty: Set<string>;
-    count: number;
-    hasUnended: boolean;
-    clock: number;
-    nextChange: number;
-    liveRevision: number;
-    reservationRevision: number;
-  };
-  const noActiveDescendants = { count: 0, nextChange: Infinity, hasUnended: false };
-  const activeByRoot = new Map<string, ActiveDescendants>();
-  const rootsByChild = new Map<string, Set<ActiveDescendants>>();
+  const active = buildSubagentActiveDescendants(
+    latestRunsByChildSessionKey,
+    inMemoryDisplayByChildSessionKey,
+    isRetainedReadRun,
+    now,
+  );
   const staleBoundary = (entry: T, clock: number): number => {
     const staleAt = getSubagentRunStaleAt(entry);
     return staleAt >= clock ? staleAt : Infinity;
   };
-  const activeDescendants = (
-    root: string,
-    clock: number,
-  ): Pick<ActiveDescendants, "count" | "nextChange" | "hasUnended"> => {
-    const keys = getDescendantKeys(root);
-    if (!keys.length) {
-      return noActiveDescendants;
-    }
-    let state = activeByRoot.get(root);
-    const liveRevision = readAgentRunIndexVersion();
-    const reservationRevision = readSwarmReservationRevision();
-    if (!state) {
-      state = {
-        multiplicity: new Map(),
-        dynamic: new Map(),
-        dirty: new Set(),
-        count: 0,
-        hasUnended: false,
-        clock,
-        nextChange: Infinity,
-        liveRevision,
-        reservationRevision,
-      };
-      activeByRoot.set(root, state);
-      let position = 0;
-      while (position < keys.length) {
-        const child = keys[position++]!;
-        state.multiplicity.set(child, (state.multiplicity.get(child) ?? 0) + 1);
-        state.dirty.add(child);
-        let dependents = rootsByChild.get(child);
-        if (!dependents) {
-          dependents = new Set();
-          rootsByChild.set(child, dependents);
-        }
-        dependents.add(state);
-      }
-    }
-    if (
-      clock < state.clock ||
-      clock > state.nextChange ||
-      liveRevision !== state.liveRevision ||
-      reservationRevision !== state.reservationRevision
-    ) {
-      // Only unended contributions depend on time or execution ownership.
-      for (const child of state.dynamic.keys()) {
-        state.dirty.add(child);
-      }
-      state.nextChange = Infinity;
-    }
-    for (const child of state.dirty) {
-      const entry = latestRunsByChildSessionKey.get(child)!;
-      const previous = state.dynamic.get(child) ?? 0;
-      const next = isRetainedReadRun(entry, clock) ? state.multiplicity.get(child)! : 0;
-      state.count += next - previous;
-      if (hasSubagentRunEnded(entry)) {
-        state.dynamic.delete(child);
-      } else {
-        state.dynamic.set(child, next);
-        state.nextChange = Math.min(state.nextChange, staleBoundary(entry, clock));
-        const current = inMemoryDisplayByChildSessionKey.get(child);
-        if (current && isSameSubagentRun(current, entry)) {
-          state.nextChange = Math.min(state.nextChange, staleBoundary(current, clock));
-        }
-      }
-    }
-    state.dirty.clear();
-    state.hasUnended = state.dynamic.size > 0;
-    if (!state.hasUnended) {
-      state.nextChange = Infinity;
-    }
-    state.clock = clock;
-    state.liveRevision = liveRevision;
-    state.reservationRevision = reservationRevision;
-    return state;
-  };
 
   const atTime = (clock: number, captured?: ReadonlySet<T>): SubagentRunReadIndex<T> => {
-    const activeDescendantCountBySessionKey = new Map<string, number>();
     const pendingDescendantCountBySessionKey = new Map<string, number>();
     const admissionPendingDescendantCountBySessionKey = new Map<string, number>();
     const displayByChildSessionKey = new Map<string, T | null>();
-    const getDisplaySubagentRun = (childSessionKey: string): T | null => {
+    const selectSessionDisplayRun = (childSessionKey: string): T | null => {
       const key = childSessionKey.trim();
       if (!key || !runsByChildSessionKey.has(key)) {
         return null;
@@ -393,8 +309,7 @@ export function buildSubagentRunReadIndexFromRuns<T extends SubagentRunReadRecor
       options?: {
         excludeRunId?: string;
         settledBefore?: number;
-        excludeSuspendedDelivery?: boolean;
-        treatSuspendedDeliveryAsSettled?: boolean;
+        excludeSettledDelivery?: boolean;
         stopAtFirst?: boolean;
       },
     ): number => {
@@ -418,9 +333,8 @@ export function buildSubagentRunReadIndexFromRuns<T extends SubagentRunReadRecor
         }
         const runPending = hasSubagentRunEnded(entry)
           ? typeof entry.cleanupCompletedAt !== "number" &&
-            !(options?.excludeSuspendedDelivery === true && isDeliverySuspended(entry)) &&
             !(
-              options?.treatSuspendedDeliveryAsSettled === true &&
+              options?.excludeSettledDelivery === true &&
               isDeliveryTerminalForRequesterSettle(entry)
             )
           : isRetainedReadRun(entry, clock);
@@ -437,7 +351,7 @@ export function buildSubagentRunReadIndexFromRuns<T extends SubagentRunReadRecor
     const cachedDescendantCount = (
       rootSessionKey: string,
       counts: Map<string, number>,
-      options?: { excludeSuspendedDelivery?: boolean },
+      options?: { excludeSettledDelivery?: boolean },
     ): number => {
       const root = rootSessionKey.trim();
       const descendants = getDescendantKeys(root);
@@ -454,23 +368,21 @@ export function buildSubagentRunReadIndexFromRuns<T extends SubagentRunReadRecor
 
     const countActiveDescendantRuns = (rootSessionKey: string): number => {
       const root = rootSessionKey.trim();
-      let count = activeDescendantCountBySessionKey.get(root);
-      if (count === undefined) {
-        count = activeDescendants(root, clock).count;
-        activeDescendantCountBySessionKey.set(root, count);
-      }
-      return count;
+      active.prepare(clock);
+      return active.activeByRoot.get(root)?.count ?? 0;
     };
     const hasUnendedRuns = (rootSessionKey: string): boolean => {
       const root = rootSessionKey.trim();
+      active.prepare(clock);
       return (
-        activeDescendants(root, clock).hasUnended ||
+        (active.activeByRoot.get(root)?.dynamic.size ?? 0) > 0 ||
         (runsByChildSessionKey.get(root)?.some((entry) => !hasSubagentRunEnded(entry)) ?? false)
       );
     };
     const nextChangeAt = (rootSessionKey: string): number => {
       const root = rootSessionKey.trim();
-      let next = activeDescendants(root, clock).nextChange;
+      active.prepare(clock);
+      let next = active.activeByRoot.get(root)?.nextChange ?? Infinity;
       const candidates = runsByChildSessionKey.get(root) ?? [];
       let position = 0;
       while (position < candidates.length) {
@@ -480,12 +392,12 @@ export function buildSubagentRunReadIndexFromRuns<T extends SubagentRunReadRecor
     };
     const countPendingDescendantRuns = (
       rootSessionKey: string,
-      options?: { excludeSuspendedDelivery?: boolean },
+      options?: { excludeSettledDelivery?: boolean },
     ) =>
-      // Admission can settle suspended delivery while cleanup still retains the result.
+      // Admission follows delivery settlement while cleanup may still retain the result.
       cachedDescendantCount(
         rootSessionKey,
-        options?.excludeSuspendedDelivery
+        options?.excludeSettledDelivery
           ? admissionPendingDescendantCountBySessionKey
           : pendingDescendantCountBySessionKey,
         options,
@@ -499,7 +411,7 @@ export function buildSubagentRunReadIndexFromRuns<T extends SubagentRunReadRecor
       countDescendantRuns(getDescendantKeys(rootSessionKey), {
         excludeRunId,
         settledBefore,
-        treatSuspendedDeliveryAsSettled: true,
+        excludeSettledDelivery: true,
         stopAtFirst: true,
       }) > 0;
 
@@ -511,10 +423,15 @@ export function buildSubagentRunReadIndexFromRuns<T extends SubagentRunReadRecor
       revision: topology.revision,
       atTime,
       patch,
-      getDisplaySubagentRun,
+      // Selection is captured; custody and elapsed runtime are current query facts.
+      getSessionDisplayFacts: (key, queryTime = clock) =>
+        readSessionDisplayFacts(selectSessionDisplayRun(key), queryTime),
       latestRunsByChildSessionKey,
       runsByChildSessionKey,
-      requesterSessionKeys: topology.requesterSessionKeys,
+      activeRequesterSessionKeys: () => {
+        active.prepare(clock);
+        return active.activeRequesters;
+      },
       countActiveDescendantRuns,
       nextChangeAt,
       hasUnendedRuns,
@@ -531,16 +448,7 @@ export function buildSubagentRunReadIndexFromRuns<T extends SubagentRunReadRecor
     clock = Date.now(),
   ): SubagentRunReadIndex<T> {
     const { affected, membershipChanged } = topology.patch(changes, inMemoryChanges);
-    if (membershipChanged) {
-      // Retire reverse dependencies together with the topology that owns them.
-      activeByRoot.clear();
-      rootsByChild.clear();
-    }
-    for (const child of affected) {
-      for (const state of rootsByChild.get(child) ?? []) {
-        state.dirty.add(child);
-      }
-    }
+    active.patch(affected, membershipChanged, clock);
     return atTime(clock);
   }
   // Capture display classification; descendant queries inspect live owners at use time.
@@ -639,57 +547,6 @@ export function listSwarmRunsForGroupFromRuns<T extends SubagentRunReadRecord>(
         (entry.swarmRequesterSessionKey ?? entry.requesterSessionKey) === requesterKey) &&
       (!requesterAgentId || resolveRecordedRequester(entry) === requesterAgentId),
   );
-}
-
-/** Counts active direct child runs plus completed children that still have pending descendants. */
-export function countActiveRunsForSessionFromRuns<T extends SubagentRunReadRecord>(
-  runs: Map<string, T>,
-  controllerSessionKey: string,
-  options?: { collect?: boolean; requesterAgentId?: string },
-): number {
-  const key = controllerSessionKey.trim();
-  if (!key) {
-    return 0;
-  }
-
-  const now = Date.now();
-  let readIndex: SubagentRunReadIndex<T> | undefined;
-
-  const latestByChildSessionKey = new Map<string, T>();
-  // Records already carry collect, and spawn admission is not request-hot, so a
-  // filtered snapshot is simpler than maintaining a second registry index.
-  for (const entry of runs.values()) {
-    if (options?.collect !== undefined && (entry.collect === true) !== options.collect) {
-      continue;
-    }
-    const ownerSessionKey = entry.collect
-      ? entry.swarmRequesterSessionKey?.trim() || resolveControllerSessionKey(entry)
-      : resolveControllerSessionKey(entry);
-    if (ownerSessionKey !== key) {
-      continue;
-    }
-    if (options?.requesterAgentId && resolveRecordedRequester(entry) !== options.requesterAgentId) {
-      continue;
-    }
-    recordLatestSubagentRun(latestByChildSessionKey, entry.childSessionKey, entry);
-  }
-
-  let count = 0;
-  for (const entry of latestByChildSessionKey.values()) {
-    if (isRetainedUnendedSubagentRun(entry)) {
-      count += 1;
-      continue;
-    }
-    readIndex ??= buildSubagentRunReadIndexFromRuns({ runs, now });
-    if (
-      readIndex.countPendingDescendantRuns(entry.childSessionKey, {
-        excludeSuspendedDelivery: true,
-      }) > 0
-    ) {
-      count += 1;
-    }
-  }
-  return count;
 }
 
 export function buildScopedSubagentRunReadIndexFromRuns<T extends SubagentRunReadRecord>(

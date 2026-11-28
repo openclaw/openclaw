@@ -19,12 +19,7 @@ import { asOptionalRecord } from "openclaw/plugin-sdk/string-coerce-runtime";
 import { truncateUtf16Safe } from "openclaw/plugin-sdk/text-utility-runtime";
 import { textResult } from "openclaw/plugin-sdk/tool-results";
 import { Type } from "typebox";
-import {
-  MEMORY_CATEGORIES,
-  type MemoryConfig,
-  memoryConfigSchema,
-  vectorDimsForModel,
-} from "./config.js";
+import { type MemoryConfig, memoryConfigSchema, vectorDimsForModel } from "./config.js";
 import {
   buildMemoryRecallUnavailableResult,
   createEmbeddings,
@@ -34,6 +29,7 @@ import {
 import { MemoryDB, type MemoryEntry } from "./lancedb-store.js";
 import { dropMediaNoteLines, sanitizeForMemoryCapture } from "./memory-capture-sanitization.js";
 import { registerMemoryCli } from "./memory-cli.js";
+import { MEMORY_CATEGORIES } from "./memory-policy-data.js";
 import {
   type AutoCaptureMessageProgress,
   captureFingerprint,
@@ -69,6 +65,33 @@ const MAX_AUTO_CAPTURE_TEXTS_PER_TURN = 3;
 // Keep recent material outcomes across compaction, sized for twenty three-text turns.
 // Older retained occurrences are still protected by their visited progress.
 const MAX_RECENT_AUTO_CAPTURE_TEXTS = 20 * MAX_AUTO_CAPTURE_TEXTS_PER_TURN;
+
+const memoryRecallSchema = Type.Object({
+  query: Type.String({ description: "Search query" }),
+  limit: Type.Optional(
+    Type.Integer({
+      description: "Max results (default: 5)",
+      minimum: 1,
+    }),
+  ),
+});
+
+const memoryStoreSchema = Type.Object({
+  text: Type.String({ description: "Information to remember" }),
+  importance: Type.Optional(
+    Type.Number({
+      description: "Importance 0-1 (default: 0.7)",
+      minimum: 0,
+      maximum: 1,
+    }),
+  ),
+  category: Type.Optional(Type.Enum(MEMORY_CATEGORIES, { type: "string" })),
+});
+
+const memoryForgetSchema = Type.Object({
+  query: Type.Optional(Type.String({ description: "Search to find memory" })),
+  memoryId: Type.Optional(Type.String({ description: "Specific memory ID" })),
+});
 
 type AutoCaptureSession = {
   messages: AutoCaptureMessageProgress[];
@@ -251,15 +274,7 @@ export default definePluginEntry({
       label: "Memory Recall",
       description:
         "Search through long-term memories. Use when you need context about user preferences, past decisions, or previously discussed topics.",
-      parameters: Type.Object({
-        query: Type.String({ description: "Search query" }),
-        limit: Type.Optional(
-          Type.Integer({
-            description: "Max results (default: 5)",
-            minimum: 1,
-          }),
-        ),
-      }),
+      parameters: memoryRecallSchema,
       async execute(_toolCallId, params) {
         // Tool definitions outlive hot config reloads; revalidate before memory I/O.
         assertRetainedToolEnabled(agentId, ctx.getRuntimeConfig);
@@ -337,17 +352,7 @@ export default definePluginEntry({
       label: "Memory Store",
       description:
         "Save important information in long-term memory. Text over the configured capture limit is rejected. Success means the exact text already exists or the database commit completed; it does not guarantee semantic recall.",
-      parameters: Type.Object({
-        text: Type.String({ description: "Information to remember" }),
-        importance: Type.Optional(
-          Type.Number({
-            description: "Importance 0-1 (default: 0.7)",
-            minimum: 0,
-            maximum: 1,
-          }),
-        ),
-        category: Type.Optional(Type.Enum(MEMORY_CATEGORIES, { type: "string" })),
-      }),
+      parameters: memoryStoreSchema,
       async execute(_toolCallId, params) {
         assertRetainedToolEnabled(agentId, ctx.getRuntimeConfig);
         const currentCfg = resolveCurrentHookConfig();
@@ -412,10 +417,7 @@ export default definePluginEntry({
     registerMemoryTool("memory_forget", (ctx, agentId) => ({
       label: "Memory Forget",
       description: "Delete specific memories. GDPR-compliant.",
-      parameters: Type.Object({
-        query: Type.Optional(Type.String({ description: "Search to find memory" })),
-        memoryId: Type.Optional(Type.String({ description: "Specific memory ID" })),
-      }),
+      parameters: memoryForgetSchema,
       async execute(_toolCallId, params) {
         assertRetainedToolEnabled(agentId, ctx.getRuntimeConfig);
         const { query, memoryId } = params as { query?: string; memoryId?: string };

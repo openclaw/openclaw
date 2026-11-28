@@ -8,8 +8,8 @@ import {
 import { createSubsystemLogger } from "../../logging/subsystem.js";
 import { appendConfigPathSegment } from "../../shared/dot-path.js";
 import { isSkillSecretOwnerUnavailable, resolveSkillConfig } from "../loading/config.js";
-import { resolveSkillKey } from "../loading/frontmatter.js";
 import { resolveSkillRuntimeConfig } from "../loading/runtime-config.js";
+import { resolveSkillKey } from "../skill-key.js";
 import type { SkillEntry, SkillSnapshot } from "../types.js";
 
 const log = createSubsystemLogger("env-overrides");

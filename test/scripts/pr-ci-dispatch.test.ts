@@ -3,6 +3,7 @@ import { existsSync, mkdirSync, readdirSync, readFileSync, writeFileSync } from 
 import { join } from "node:path";
 import { afterEach, describe, expect, it } from "vitest";
 import { formatCrabboxGateCheckSummary } from "../../scripts/pr-lib/crabbox-gate-contract.mjs";
+import { withEnv } from "../../src/test-utils/env.js";
 import { useAutoCleanupTempDirTracker } from "../helpers/temp-dir.js";
 
 const tempDirs = useAutoCleanupTempDirTracker(afterEach);
@@ -164,6 +165,8 @@ function runDispatch(fakeGh: ReturnType<typeof createFiles>, options: RunOptions
     "GITHUB_TOKEN",
     "GH_ENTERPRISE_TOKEN",
     "GITHUB_ENTERPRISE_TOKEN",
+    // This isolated child does not inherit the parent's notification pipe.
+    "OPENCLAW_PR_LOCK_NOTIFY_FD",
   ]) {
     delete env[name];
   }
@@ -252,16 +255,16 @@ function createFakeGh(
 }
 
 describePosix("scripts/pr ci-dispatch", () => {
-  it("dispatches ordinary CI for the exact remote head", () => {
+  it("dispatches qualified PR-shaped CI despite an inherited operation notifier", () => {
     const fakeGh = createFakeGh();
-    const result = fakeGh.ok();
+    const result = withEnv({ OPENCLAW_PR_LOCK_NOTIFY_FD: "3" }, () => fakeGh.ok());
     expect(result.stdout).toContain(`observed_run_url=${runUrl}`);
     const calls = fakeGh.callsText();
     expect(calls).toContain("gh\tapi repos/openclaw/openclaw/pulls/12345 --jq .head.sha");
     expect(calls).not.toContain("pr view");
-    expect(calls).toContain(
-      `real-gh\tworkflow run ci.yml --ref contributor/fix-hosted-gates -f target_ref=${headSha} -f release_gate=true -f pull_request_number=12345`,
-    );
+    expect(calls.split("\n").filter((line) => line.includes("\tworkflow run "))).toEqual([
+      `real-gh\tworkflow run ci.yml --ref contributor/fix-hosted-gates -f target_ref=${headSha} -f release_gate=true -f pull_request_number=12345 -f runner_backend=hybrid -f ci_shape=default`,
+    ]);
   });
 
   it("finds the publisher-owned Crabbox proof on a later check-run page", () => {

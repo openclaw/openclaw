@@ -59,6 +59,10 @@ export type GatewayServer = {
 };
 
 export type GatewayServerOptions = {
+  /** Internal to this startup; supplies a code-warm, unused state-schema inspector. */
+  stateSchemaReader?: ReturnType<
+    typeof import("../state/openclaw-agent-schema-inspection-worker.js").prestartGatewayStateSchemaReader
+  >;
   /** Retained run-loop ownership; direct servers acquire and release their own owner. */
   gatewayStateOwner?: Pick<
     import("../infra/gateway-lock.js").GatewayLockHandle,
@@ -72,6 +76,8 @@ export type GatewayServerOptions = {
   exitAfterStartupFailure?: (error: unknown) => boolean;
   /** Exact lifecycle generation projected to connected clients. */
   bootId?: string;
+  /** Pending crash lifetimes by physical agent owner, retained until recovery runs. */
+  restartResumeWindows?: import("../infra/gateway-boot-lifecycle.js").GatewayRestartResumeWindows;
   /**
    * Bind address policy for the Gateway WebSocket/HTTP server.
    * - loopback: 127.0.0.1

@@ -488,5 +488,6 @@ try {
 } finally {
   process.off("SIGINT", onSigint);
   process.off("SIGTERM", onSigterm);
-  fs.rmSync(tempRoot, { recursive: true, force: true });
+  // Imported source-capture owners close their SQLite leases in earlier exit handlers.
+  process.once("exit", () => fs.rmSync(tempRoot, { recursive: true, force: true }));
 }

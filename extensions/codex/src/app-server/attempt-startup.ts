@@ -104,7 +104,10 @@ export async function startCodexAttemptThread(params: {
   persistentWebSearchAllowed?: boolean;
   webSearchAllowed: boolean;
   developerInstructions: string | undefined;
+  onDeveloperInstructions?: Parameters<typeof startOrResumeThread>[0]["onDeveloperInstructions"];
+  systemPromptReplaced?: boolean;
   refreshableInstructions?: string;
+  turnRefreshableInstructions?: string;
   agentWorkspaceDeveloperInstructions?: string;
   buildFinalConfigPatch?: Parameters<typeof startOrResumeThread>[0]["buildFinalConfigPatch"];
   nativeHookRelayRequired?: boolean;
@@ -459,7 +462,10 @@ export async function startCodexAttemptThread(params: {
                 webSearchAllowed: params.webSearchAllowed,
                 appServer: pluginAppServer,
                 developerInstructions: params.developerInstructions,
+                onDeveloperInstructions: params.onDeveloperInstructions,
+                systemPromptReplaced: params.systemPromptReplaced,
                 refreshableInstructions: params.refreshableInstructions,
+                turnRefreshableInstructions: params.turnRefreshableInstructions,
                 agentWorkspaceDeveloperInstructions: params.agentWorkspaceDeveloperInstructions,
                 config: threadConfig,
                 shellEnvironment: params.shellEnvironment,

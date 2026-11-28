@@ -1,4 +1,7 @@
-import { modelRequestBodyState } from "@openclaw/ai/internal/model-request-body";
+import {
+  markModelPayloadObserver,
+  modelRequestBodyState,
+} from "@openclaw/ai/internal/model-request-body";
 import { withProviderAcceptanceObserver } from "@openclaw/ai/transports";
 import { isPromiseLike } from "@openclaw/normalization-core/promise-like";
 import { isRecord } from "@openclaw/normalization-core/record-coerce";
@@ -316,7 +319,7 @@ export function createModelLifecycle(params: {
     ...options,
     requestId: callId,
     ...((options?.headers || traceparent) && { headers }),
-    onPayload,
+    onPayload: markModelPayloadObserver(onPayload, originalOnPayload),
     onResponse,
   };
   modelRequestBodyState(requestOptions).onBytes = (bytes) => {
@@ -344,6 +347,7 @@ export function createModelLifecycle(params: {
   });
   let waitReason: "response" | "slot" | null = null;
   let firstEventObserved = false;
+  let reportedToolPreparation = false;
   const trackStatusDelivery = captureAsyncWorkTracker();
   const signal = params.options?.signal;
   function reportStatus(data: Record<string, unknown>) {
@@ -515,6 +519,19 @@ export function createModelLifecycle(params: {
     observeChunk(chunk: unknown) {
       firstEventObserved = true;
       clearWait();
+      // Tool arguments may stream for seconds before execution. Report the phase once,
+      // without forwarding a proposed tool name, arguments or a fictitious tool start.
+      if (
+        !reportedToolPreparation &&
+        !signal?.aborted &&
+        !observer.state.terminalEventEmitted &&
+        isRecord(chunk) &&
+        (chunk.type === "toolcall_start" ||
+          (chunk.type === "toolcall_delta" && isModelOutputDelta(chunk)))
+      ) {
+        reportedToolPreparation = true;
+        reportStatus({ phase: "preparing_tool" });
+      }
       observer.observeResponseChunk(startedAt, chunk);
       reportStreamProgress(observer.state.terminalEventEmitted ? undefined : callId);
       if (params.ctx.onOutputDelta && isModelOutputDelta(chunk)) {

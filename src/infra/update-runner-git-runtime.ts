@@ -4,7 +4,7 @@ import path from "node:path";
 import { hasCommandProcessCleanupError } from "../process/exec-result.js";
 import { resolvePathViaExistingAncestorSync } from "./boundary-path.js";
 import { hasErrnoCode, isErrno } from "./errno.js";
-import { throwSettledAggregate } from "./error-graph-internal.js";
+import { settleWithCleanup, throwSettledAggregate } from "./error-graph-internal.js";
 import { formatErrorMessage } from "./errors.js";
 import type { PackageUpdateTransaction } from "./package-update-swap-contract.js";
 import { isPathInside } from "./path-guards.js";
@@ -320,8 +320,13 @@ export async function prepareGitRuntimePromotion(
       await relocateRuntimeTree(candidate, sourceRoot, destination, relocations);
     }
   } catch (error) {
-    await cleanup();
-    throw error;
+    return settleWithCleanup(
+      (async () => {
+        throw error;
+      })(),
+      cleanup,
+      "Git runtime preparation and cleanup failed.",
+    );
   }
   const assertParents = (entry: (typeof staged)[number]) => {
     const identities = entry.identities;

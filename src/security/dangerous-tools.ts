@@ -1,6 +1,7 @@
+import type { AdmittedRunOperatorAuthority } from "../agents/admitted-run-context.js";
+import { AUTOMATIONS_TOOL_NAME } from "../agents/tools/automations-tool-name.js";
 // Shared tool-risk constants.
 // Keep these centralized so gateway HTTP restrictions and security audits don't drift.
-import { AUTOMATIONS_TOOL_NAME } from "../agents/tools/automations-tool-name.js";
 
 /**
  * Tools denied via Gateway HTTP `POST /tools/invoke` by default.
@@ -55,7 +56,9 @@ export const DEFAULT_GATEWAY_HTTP_TOOL_DENY = [
 export const GATEWAY_CONTROL_PLANE_TOOLS = [AUTOMATIONS_TOOL_NAME, "gateway", "plugins"] as const;
 
 /**
- * Core tools that require sender owner identity on Gateway-scoped surfaces.
+ * Core tools that require owner-level authority on Gateway-scoped surfaces.
+ * A live admitted admin retains interactive owner-tool eligibility without
+ * changing sender attribution; standing intents still require explicit identity.
  * `gateway.tools.allow` can remove the default HTTP deny only for owner/trusted-operator
  * callers; non-owner identity-bearing callers must not receive server-credential wrappers.
  */
@@ -75,7 +78,107 @@ export const GATEWAY_OWNER_ONLY_CORE_TOOLS = [
   "intent",
 ] as const;
 
-export function resolveGatewayOwnerOnlyToolDenylist(senderIsOwner?: boolean): string[] {
+const participantAuthorityMethods = new Set([
+  "config.set",
+  "config.apply",
+  "config.patch",
+  "plugins.install",
+  "plugins.uninstall",
+  "plugins.setEnabled",
+  "plugins.reload",
+  "users.setRole",
+  "session.visibility.set",
+  "session.members.add",
+  "session.members.setAccess",
+  "session.members.remove",
+  "session.publicShare.set",
+  "gateway.restart.request",
+  "gateway.stop.request",
+  "gateway.suspend.prepare",
+  "gateway.suspend.handoff",
+  "gateway.suspend.resume",
+  "update.run",
+  "update.recovery.cleanup",
+]);
+
+/** A participating turn cannot select another admitted person's tool identity. */
+export function assertParticipationToolUser(
+  profileId: string | undefined,
+  authority?: AdmittedRunOperatorAuthority,
+): void {
+  if (
+    authority?.participationCeiling &&
+    profileId !== undefined &&
+    profileId !== authority.profileId
+  ) {
+    throw new Error("Participant tools must use the admitted participant's identity.");
+  }
+}
+
+/** Tool delegation never includes changing the participant's own authority or its host. */
+export function assertParticipationGatewayMethod(
+  method: string,
+  authority?: AdmittedRunOperatorAuthority,
+): void {
+  if (authority?.participationCeiling && participantAuthorityMethods.has(method)) {
+    throw new Error(`Participating tools cannot change Gateway authority (${method}).`);
+  }
+}
+
+const gatewayOwnerOnlyCoreToolNames = new Set<string>(GATEWAY_OWNER_ONLY_CORE_TOOLS);
+// Retained operator custody covers these control-plane paths, not every
+// owner-only executor. Other tools keep their sender or scoped admission.
+const retainedOperatorToolNames = new Set<string>(GATEWAY_CONTROL_PLANE_TOOLS);
+
+function isGatewayOwnerOnlyCoreTool(toolName: string): boolean {
+  return gatewayOwnerOnlyCoreToolNames.has(toolName);
+}
+
+/** An admitted turn's grant decides owner tools; the sender flag decides only unadmitted turns. */
+export function hasGatewayOwnerToolAuthority(
+  senderIsOwner: boolean | undefined,
+  operatorAuthority?: AdmittedRunOperatorAuthority,
+  turnTainted = false,
+): boolean {
+  // Network content limits inherited custody, not an explicit owner's live authority.
+  if (turnTainted && senderIsOwner !== true) {
+    return false;
+  }
+  return operatorAuthority ? operatorAuthority.grant.owner : senderIsOwner === true;
+}
+
+export function assertGatewayOwnerToolAuthority(
+  toolName: string,
+  senderIsOwner: boolean | undefined,
+  operatorAuthority: AdmittedRunOperatorAuthority,
+  turnTainted = false,
+): void {
+  if (!isGatewayOwnerOnlyCoreTool(toolName)) {
+    return;
+  }
+  if (
+    !hasGatewayOwnerToolAuthority(senderIsOwner, operatorAuthority, turnTainted) ||
+    (senderIsOwner !== true && !retainedOperatorToolNames.has(toolName))
+  ) {
+    throw new Error(
+      turnTainted && senderIsOwner !== true
+        ? "Owner-level tools cannot run on a tainted turn."
+        : `${toolName} requires current owner-level tool authority.`,
+    );
+  }
+}
+
+export function resolveGatewayOwnerOnlyToolDenylist(
+  senderIsOwner?: boolean,
+  operatorAuthority?: AdmittedRunOperatorAuthority,
+  turnTainted = false,
+): string[] {
+  if (operatorAuthority) {
+    const eligible = hasGatewayOwnerToolAuthority(senderIsOwner, operatorAuthority, turnTainted);
+    return GATEWAY_OWNER_ONLY_CORE_TOOLS.filter(
+      (name) => !eligible || (senderIsOwner !== true && !retainedOperatorToolNames.has(name)),
+    );
+  }
   // Standing intents always require explicit owner identity, including on internal turns.
   return GATEWAY_OWNER_ONLY_CORE_TOOLS.filter(
     (name) => senderIsOwner !== true && (senderIsOwner === false || name === "intent"),

@@ -46,7 +46,7 @@ import { asFiniteNumber } from "../packages/normalization-core/src/number-coerci
 import { isRecord } from "../packages/normalization-core/src/record-coerce.ts";
 import { sliceUtf16Safe } from "../packages/normalization-core/src/utf16-slice.ts";
 import type { OpenClawConfig } from "../src/config/types.openclaw.js";
-import type { createAgentTurnService } from "../src/gateway/agent-turn/agent-turn-service.js";
+import type { prepareExactAgentTurnWait } from "../src/gateway/agent-turn/agent-wait.js";
 import type { SessionsListResult } from "../src/gateway/session-utils.types.js";
 import { createDeferredCore } from "../src/shared/deferred.ts";
 import { applyMockOpenAiModelConfig } from "./e2e/lib/fixtures/mock-openai-config.mjs";
@@ -197,6 +197,7 @@ type BenchmarkRun = {
   };
   heapProfile?: GatewayHeapProfile & MainProfileArtifacts;
   loadCpuProfile?: GatewayCpuProfile & MainProfileArtifacts;
+  diagnosticsTimelinePath?: string;
   loadDiagnostics?: Awaited<ReturnType<Awaited<ReturnType<typeof startGatewayDiagnostics>>>>;
   controlPlane: Array<TimedProbe & { method: string }>;
   controlUi: ControlUiProbe[];
@@ -295,7 +296,11 @@ type FailedBenchmarkAttempt = Extract<BenchmarkAttempt, { status: "failure" }> &
 };
 
 type CliOptions = GatewayBenchRuntimeOptions & {
-  controlUiLoad?: ControlUiLoadOptions & { cgroupParent: string; transpilerCache: string };
+  controlUiLoad?: ControlUiLoadOptions & {
+    cgroupParent: string;
+    transpilerCache: string;
+    memoryLimitBytes?: number;
+  };
   durationMs?: number;
   provider: "mock" | "openai";
   startBarrier?: string;
@@ -394,6 +399,7 @@ const VALUE_FLAGS = new Set([
   "--duration-ms",
   "--start-barrier",
   "--resource-cgroup",
+  "--gateway-memory-gib",
   "--transpiler-cache",
   "--provider",
   "--agent-count",
@@ -506,6 +512,7 @@ function parseOptions(argv: string[] = process.argv.slice(2)): CliOptions {
       "--drivers",
       "--duration-ms",
       "--resource-cgroup",
+      "--gateway-memory-gib",
       "--transpiler-cache",
       "--gateway-runtime",
       "--gateway-cpus",
@@ -528,6 +535,10 @@ function parseOptions(argv: string[] = process.argv.slice(2)): CliOptions {
         "Control UI load requires --runs 1 --warmup 0; interleave independent invocations",
       );
     }
+    const memoryGiB = flags.get("--gateway-memory-gib")?.[0];
+    if (memoryGiB !== undefined && memoryGiB !== "2" && memoryGiB !== "4") {
+      throw new CliArgumentError("--gateway-memory-gib must be 2 or 4");
+    }
     options.concurrency = activeClients;
     options.controlUiLoad = {
       totalClients,
@@ -536,12 +547,17 @@ function parseOptions(argv: string[] = process.argv.slice(2)): CliOptions {
       durationMs: boundedInt("--duration-ms", 60_000, 600_000),
       timeoutMs: options.timeoutMs,
       cgroupParent: path.resolve(cgroupParent),
+      memoryLimitBytes: memoryGiB === undefined ? undefined : Number(memoryGiB) * 1024 ** 3,
       transpilerCache: path.resolve(transpilerCache),
     };
   } else if (
-    ["--active-clients", "--drivers", "--resource-cgroup", "--transpiler-cache"].some((flag) =>
-      flags.has(flag),
-    )
+    [
+      "--active-clients",
+      "--drivers",
+      "--resource-cgroup",
+      "--gateway-memory-gib",
+      "--transpiler-cache",
+    ].some((flag) => flags.has(flag))
   ) {
     throw new CliArgumentError("Control UI load options require --control-ui-clients");
   }
@@ -628,6 +644,7 @@ Options:
   --duration-ms <ms> Fixed admission window; normal mode repeats turns, then drains (mock only)
   --start-barrier <path> Wait for a fresh shared release file after writing <output>.ready (normal fixed-duration mode only)
   --resource-cgroup <path> Writable delegated cgroup-v2 parent; benchmark owns a unique child
+  --gateway-memory-gib <2|4> Cap just the Gateway and its descendants; requires delegated memory accounting
   --transpiler-cache <path> Explicit Gateway Bun transpiler-cache directory (prime separately)
   --provider <name> mock (default) or openai (live ${LIVE_GATEWAY_MODEL_ID}; requires OPENAI_API_KEY)
   --postgres        Use PostgreSQL from ${POSTGRES_CONNECTION_ENV} (default: SQLite; disposable fixture only)
@@ -1629,7 +1646,7 @@ async function runTurn(
   const rpcTimeoutMs = Math.max(1, Math.ceil(remaining));
   const runId = started.runId ?? requestedRunId;
   const completed = await rpc<
-    Awaited<ReturnType<ReturnType<typeof createAgentTurnService>["waitForTurn"]>>["result"]
+    Awaited<ReturnType<ReturnType<typeof prepareExactAgentTurnWait>["wait"]>>["result"]
   >(
     "agent.wait",
     {
@@ -2101,7 +2118,10 @@ async function runGatewaySample(
         config.gateway.auth = { mode: "token", token: controlUiToken };
         config.gateway.controlUi.allowedOrigins = [`http://127.0.0.1:${port}`];
         writeFileSync(configPath, JSON.stringify(config));
-        loadResources = createGatewayLoadResources(options.controlUiLoad.cgroupParent);
+        loadResources = createGatewayLoadResources(
+          options.controlUiLoad.cgroupParent,
+          options.controlUiLoad.memoryLimitBytes,
+        );
         loadResources.start();
         mkdirSync(options.controlUiLoad.transpilerCache, { recursive: true });
       }
@@ -2186,12 +2206,10 @@ async function runGatewaySample(
       if (options.controlUiLoad) {
         gatewayArgs[gatewayArgs.indexOf("--auth") + 1] = "token";
       }
-      if (options.controlUiLoad || options.durationMs) {
-        const stopPreload = new URL("./lib/gateway-bench-stop-preload.mjs", import.meta.url);
-        stopPreload.searchParams.set("parentPid", String(process.pid));
-        stopPreload.searchParams.set("entry", path.resolve(options.entry));
-        gatewayArgs.unshift("--import", stopPreload.href);
-      }
+      const stopPreload = new URL("./lib/gateway-bench-stop-preload.mjs", import.meta.url);
+      stopPreload.searchParams.set("parentPid", String(process.pid));
+      stopPreload.searchParams.set("entry", path.resolve(options.entry));
+      gatewayArgs.unshift("--import", stopPreload.href);
       if (heapProfilePath || loadCpuProfilePath) {
         for (const profilePath of [heapProfilePath, loadCpuProfilePath]) {
           if (profilePath) {
@@ -2257,6 +2275,12 @@ async function runGatewaySample(
       if (options.controlUiLoad && loadResources && controlUiToken) {
         if (!gateway.pid) {
           throw new Error("Gateway PID missing");
+        }
+        if (
+          options.controlUiLoad.memoryLimitBytes !== undefined &&
+          !loadResources.read().pids.includes(gateway.pid)
+        ) {
+          throw new Error("Ready Gateway is outside its benchmark memory cgroup");
         }
         controlUiRun = await runControlUiLoad({
           ...options.controlUiLoad,
@@ -3127,26 +3151,12 @@ async function runGatewaySample(
         await captureFailure("cleanup", () => auxiliaryClient.close());
       }
       await captureFailure("cleanup", async () => {
-        if (
-          gateway &&
-          options.cpuProfDir &&
-          !options.controlUiLoad &&
-          !options.durationMs &&
-          gateway.exitCode === null &&
-          gateway.signalCode === null
-        ) {
-          // V8 flushes the main-isolate CPU profile on its normal interrupt path.
-          const profileFlushed = new Promise<void>((resolve) => {
-            gateway!.once("exit", () => resolve());
-          });
-          gateway.kill("SIGINT");
-          await Promise.race([profileFlushed, delay(2_000)]);
-        }
-      });
-      await captureFailure("cleanup", async () => {
         if (gateway) {
+          const exitedBeforeShutdown = gateway.exitCode !== null || gateway.signalCode !== null;
           try {
-            if (options.controlUiLoad || options.durationMs) {
+            // Every mode joins Gateway-owned drain before bounded process-tree cleanup.
+            // This also flushes startup CPU profiles without a competing signal path.
+            if (!exitedBeforeShutdown) {
               shutdown = await stopGatewayGracefully(gateway, GATEWAY_SERVICE_STOP_TIMEOUT_MS);
             }
           } finally {
@@ -3155,7 +3165,7 @@ async function runGatewaySample(
                 forcedCleanup = true;
               },
             });
-            if (shutdown) {
+            if (!exitedBeforeShutdown) {
               gatewayExit.exitedBeforeTeardown = false;
             }
           }
@@ -3212,6 +3222,17 @@ async function runGatewaySample(
         if (result) {
           result.pluginMetadataScans = scans;
         }
+        // Keep owner spans with explicit profiles before fixture cleanup.
+        // Copy only after shutdown so artifact retention adds no measured load work.
+        const profilePath = loadCpuProfilePath ?? heapProfilePath;
+        if (profilePath) {
+          const diagnosticsTimelinePath = `${profilePath}.timeline.jsonl`;
+          copyFileSync(timelinePath, diagnosticsTimelinePath);
+          partialRun.diagnosticsTimelinePath = diagnosticsTimelinePath;
+          if (result) {
+            result.diagnosticsTimelinePath = diagnosticsTimelinePath;
+          }
+        }
       }
       if (!result) {
         return;
@@ -3264,9 +3285,12 @@ async function runGatewaySample(
     });
     await captureFailure("cleanup", async () => {
       if (loadResources) {
-        resourceReport ??= loadResources.finish();
-        const resourceCleanup = await loadResources.close();
-        forcedCleanup ||= resourceCleanup.forced;
+        try {
+          resourceReport ??= loadResources.finish();
+        } finally {
+          const resourceCleanup = await loadResources.close();
+          forcedCleanup ||= resourceCleanup.forced;
+        }
       }
       if (
         spawnedChildren.some(
@@ -3280,6 +3304,10 @@ async function runGatewaySample(
         cleanup.rootRemoved = true;
       }
     });
+  }
+  const memoryBudget = resourceReport?.memoryBudget;
+  if (memoryBudget && (memoryBudget.events.oom > 0 || memoryBudget.events.oom_kill > 0)) {
+    errors.push({ phase: "diagnostics", error: "Gateway cgroup recorded out-of-memory events" });
   }
   if (controlUiRun) {
     if (

@@ -1,4 +1,4 @@
-import { expect, it, vi } from "vitest";
+import { expect, it, onTestFinished, vi } from "vitest";
 import { createDeferred } from "../../../test/helpers/promise.ts";
 import { mountSolid } from "../test-helpers/mount-solid.ts";
 import {
@@ -44,7 +44,12 @@ function mountManager(kind: "refresh" | "reload") {
   };
 }
 
-it("shows refresh failures and recovers on retry", async () => {
+it.each([
+  [new Error("Catalog unavailable"), "Catalog unavailable"],
+  [new TypeError("Cannot read properties of undefined"), "Request failed"],
+])("shows refresh failures and recovers on retry: %s", async (error, message) => {
+  const report = vi.spyOn(console, "error").mockImplementation(() => {});
+  onTestFinished(() => report.mockRestore());
   const view = mountManager("refresh");
   const first = createDeferred();
   const second = createDeferred();
@@ -52,10 +57,8 @@ it("shows refresh failures and recovers on retry", async () => {
   view.button.click();
   await waitForSolid(() => view.expectBusy(true));
   expect(view.button.hasAttribute("disabled")).toBe(false);
-  first.reject(new Error("Catalog unavailable"));
-  await waitForSolid(() =>
-    expect(view.getByRole("alert").textContent).toContain("Catalog unavailable"),
-  );
+  first.reject(error);
+  await waitForSolid(() => expect(view.getByRole("alert").textContent).toContain(message));
   view.expectBusy(false);
   view.button.click();
   await waitForSolid(() => view.expectBusy(true));

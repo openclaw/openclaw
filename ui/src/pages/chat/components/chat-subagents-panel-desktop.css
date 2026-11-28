@@ -54,36 +54,78 @@
 }
 
 .subagents-desktop__row {
+  /* Rows step by 24px. The avatar centerline is 20px from the row edge:
+     8px inset plus 12px to the center of a 1px stroke on the 25px avatar. */
+  --tree-step: 24px;
+  --tree-offset: calc(var(--subagent-depth) * var(--tree-step));
   --subagent-divider: var(--border);
   position: relative;
   display: grid;
   grid-template-columns: 25px minmax(0, 1fr) auto auto 24px;
   align-items: center;
   min-width: 0;
-  margin: 0 -8px;
-  padding: 0 8px;
-  border-radius: 8px;
+  margin-inline: calc(var(--tree-offset) - 8px) -8px;
+  padding-inline: 8px;
+  border-radius: var(--radius-md);
 }
 
-.subagents-desktop__row:not(:last-child)::after {
+.subagents-desktop__row:not([data-depth="0"])::before,
+.subagents-desktop__row[data-has-children] > .subagents-desktop__open::before,
+.subagents-desktop__branch-rail {
   position: absolute;
-  right: 8px;
-  bottom: 0;
-  left: 45px;
+  border-inline-start: 1px solid var(--border);
+  pointer-events: none;
+}
+
+.subagents-desktop__row:not([data-depth="0"])::before {
+  inset-inline-start: calc(20px - var(--tree-step));
+  inset-block-start: 0;
+  box-sizing: border-box;
+  inline-size: calc(var(--tree-step) - 15px);
+  block-size: calc(50% + 0.5px);
+  border-block-end: 1px solid var(--border);
+  border-end-start-radius: 5px;
+  content: "";
+}
+
+.subagents-desktop__row[data-branch-continues]::before {
+  border-end-start-radius: 0;
+}
+
+.subagents-desktop__row[data-has-children] > .subagents-desktop__open::before {
+  inset-inline-start: 20px;
+  inset-block: calc(50% + 14.5px) 0;
+  content: "";
+}
+
+.subagents-desktop__branch-rail {
+  inset-inline-start: calc(
+    20px + (var(--subagent-rail-depth) - 1) * var(--tree-step) - var(--tree-offset)
+  );
+  inset-block: 0;
+}
+
+.subagents-desktop__branch-rail[data-current-depth] {
+  inset-block-start: 50%;
+}
+
+.subagents-desktop__row:has(+ [data-depth="0"])::after {
+  position: absolute;
+  /* Keep the divider aligned with the root title (8px + 25px + 12px). */
+  inset-inline: calc(45px - var(--tree-offset)) 8px;
+  inset-block-end: 0;
   height: 1px;
   background: var(--subagent-divider);
   content: "";
   pointer-events: none;
 }
 
-.subagents-desktop__row:hover,
-.subagents-desktop__row:focus-within {
+.subagents-desktop__row:is(:hover, :focus-within) {
   --subagent-divider: transparent;
   background: var(--bg-accent);
 }
 
-.subagents-desktop__row:has(+ .subagents-desktop__row:hover),
-.subagents-desktop__row:has(+ .subagents-desktop__row:focus-within) {
+.subagents-desktop__row:has(+ :is(:hover, :focus-within)) {
   --subagent-divider: transparent;
 }
 
@@ -111,9 +153,9 @@
   flex: 0 0 25px;
   width: 25px;
   height: 25px;
-  border-radius: 7px;
-  background: hsl(var(--subagent-hue) 22% 30% / 0.35);
-  color: hsl(var(--subagent-hue) 32% 65%);
+  border-radius: var(--radius-sm);
+  background: hsl(var(--subagent-hue) var(--subagent-avatar-tint, 22% 30% / 0.35));
+  color: hsl(var(--subagent-hue) var(--subagent-avatar-ink, 32% 65%));
 }
 
 .subagents-desktop__open > .subagents-desktop__avatar {
@@ -132,31 +174,36 @@
   bottom: -3px;
   width: 11px;
   height: 11px;
-  border: 1px solid color-mix(in srgb, var(--accent) 35%, transparent);
-  border-top-color: var(--accent);
+  color: var(--accent);
   border-radius: 50%;
   background: var(--bg);
   box-shadow: 0 0 0 2px var(--bg);
   animation: btn-spinner-spin 1.5s linear infinite;
 }
 
+/* The disc behind the ring stays opaque, so only this layer takes the mask. */
+.subagents-desktop__spinner::before {
+  content: "";
+  position: absolute;
+  inset: 0;
+  background: currentColor;
+  mask: var(--spinner-mask);
+}
+
 .subagents-desktop__identity {
   display: flex;
-  flex: 1;
   flex-direction: column;
   gap: 3px;
   min-width: 0;
   grid-column: 2;
   grid-row: 1;
-  margin-left: 12px;
+  margin-inline-start: 12px;
 }
 
 .subagents-desktop__name {
-  overflow: hidden;
+  overflow-wrap: anywhere;
   font-weight: 500;
-  line-height: 18px;
-  text-overflow: clip;
-  white-space: nowrap;
+  line-height: calc(18px * var(--control-ui-text-scale));
 }
 
 .subagents-desktop__status,
@@ -167,8 +214,14 @@
   line-height: 18px;
 }
 
+.subagents-desktop__status {
+  display: flex;
+  align-items: baseline;
+  gap: 5px;
+  white-space: nowrap;
+}
+
 .subagents-desktop__elapsed {
-  flex: none;
   grid-column: 3;
   grid-row: 1;
   margin-left: 12px;
@@ -176,7 +229,6 @@
 }
 
 .subagents-desktop__chevron {
-  flex: 0 0 12px;
   width: 12px;
   height: 12px;
   margin-right: 2px;
@@ -219,15 +271,12 @@
   stroke: none;
 }
 
-.subagents-desktop__row:hover .subagents-desktop__stop,
-.subagents-desktop__row:focus-within .subagents-desktop__stop,
-.subagents-desktop__row:hover .subagents-desktop__chevron,
-.subagents-desktop__row:focus-within .subagents-desktop__chevron {
+.subagents-desktop__row:is(:hover, :focus-within)
+  :is(.subagents-desktop__stop, .subagents-desktop__chevron) {
   opacity: 1;
 }
 
-.subagents-desktop__row:hover .subagents-desktop__stop:disabled,
-.subagents-desktop__row:focus-within .subagents-desktop__stop:disabled {
+.subagents-desktop__row:is(:hover, :focus-within) .subagents-desktop__stop:disabled {
   opacity: 0.45;
 }
 
@@ -248,16 +297,8 @@
 }
 
 .subagents-desktop__child-name {
-  flex: 1;
-  min-width: 0;
-  overflow: hidden;
   font-size: calc(13px * var(--control-ui-text-scale));
-  font-weight: 500;
-  white-space: nowrap;
-}
-
-.subagents-desktop__child-name[data-scrollable="true"] {
-  mask-image: linear-gradient(to right, black calc(100% - 16px), transparent);
+  line-height: calc(18px * var(--control-ui-text-scale));
 }
 
 .subagents-desktop__child-rail .subagents-desktop__stop {

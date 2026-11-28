@@ -3,6 +3,7 @@ import "../llm/ai-transport-host.js";
 import type { Context, Model } from "@openclaw/llm-core";
 // Verifies Responses image payloads are canonicalized or replaced before send.
 import { describe, expect, it, vi } from "vitest";
+import { RESPONSES_RETAINED_USER } from "../../packages/ai/src/transports/openai-responses-contracts.js";
 import { convertResponsesMessages } from "../../packages/ai/src/transports/openai-responses-replay-messages-internal.js";
 import { freezeJsonSnapshot } from "../shared/immutable-data.js";
 
@@ -14,6 +15,51 @@ const HEIC_HEADER = Buffer.from([
 ]).toString("base64");
 
 describe("Responses image payload sanitizer", () => {
+  it("preserves immutable text history through sanitation while detaching mutable and image inputs", () => {
+    const text = freezeJsonSnapshot({
+      type: "message" as const,
+      role: "user" as const,
+      content: [{ type: "input_text" as const, text: "retained question" }],
+      [RESPONSES_RETAINED_USER]: true,
+    });
+    const mutable = {
+      ...text,
+      content: [{ type: "input_text" as const, text: "current question" }],
+    };
+    const image = freezeJsonSnapshot({
+      ...text,
+      content: [
+        {
+          type: "input_image" as const,
+          detail: "auto" as const,
+          image_url: "data:image/png;base64,invalid!",
+        },
+      ],
+    });
+    const request = {
+      model: "fixture-model",
+      stream: true as const,
+      input: [text, mutable, image],
+    };
+    const first = sanitizeResponsesImagePayload(request);
+    const second = sanitizeResponsesImagePayload(request);
+    expect(first.input).not.toBe(request.input);
+    expect(first.input?.[0]).toBe(text);
+    expect(second.input?.[0]).toBe(text);
+    expect(first.input?.[1]).not.toBe(mutable);
+    expect(first.input?.[2]).not.toBe(image);
+    expect(second.input?.[2]).not.toBe(first.input?.[2]);
+    expect(first.input?.[2]).toMatchObject({ [RESPONSES_RETAINED_USER]: true });
+    expect(JSON.stringify(first.input?.[2])).toBe(
+      '{"type":"message","role":"user","content":[{"type":"input_text","text":"[omitted image payload: invalid inline image data]"}]}',
+    );
+    mutable.content[0]!.text = "edited question";
+    expect(JSON.stringify(first.input?.[1])).toContain("current question");
+    expect(JSON.stringify(sanitizeResponsesImagePayload(request).input?.[1])).toContain(
+      "edited question",
+    );
+  });
+
   it("replaces malformed input_image data URLs before sending Responses payloads", () => {
     const sanitized = sanitizeResponsesImagePayload({
       input: [
@@ -95,7 +141,7 @@ it.each([
   { name: "canonical", mimeType: "image/png", data: PNG_1X1 },
   { name: "MIME normalization", mimeType: "image/jpeg", data: PNG_1X1 },
   { name: "whitespace normalization", mimeType: "image/png", data: `\n${PNG_1X1}\n` },
-  { name: "padding normalization", mimeType: "image/png", data: PNG_1X1.replace(/=+$/, "") },
+  { name: "padding normalization", mimeType: "image/png", data: PNG_1X1.replace(/[=]+$/, "") },
 ])("reuses $name image work without sharing mutable request items", ({ mimeType, data }) => {
   const image = { type: "image" as const, mimeType, data };
   const model: Model = {

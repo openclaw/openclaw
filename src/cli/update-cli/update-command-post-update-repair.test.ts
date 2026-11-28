@@ -1,6 +1,5 @@
 import fs from "node:fs/promises";
 import path from "node:path";
-import { pathToFileURL } from "node:url";
 import { afterEach, assert, beforeEach, describe, expect, it, vi } from "vitest";
 import { useAutoCleanupTempDirTracker } from "../../../test/helpers/temp-dir.js";
 import { asResolvedSourceConfig, asRuntimeConfig } from "../../config/materialize.js";
@@ -11,6 +10,7 @@ import { createRetainedPackageSwap } from "../../infra/package-update-swap.test-
 import * as tempRoot from "../../infra/tmp-openclaw-dir.js";
 import * as stateSchemas from "../../infra/update-candidate-state.js";
 import { readUpdateStateSchemaVersions } from "../../infra/update-candidate-state.js";
+import { materializeUpdateCandidateStateWorker } from "../../infra/update-candidate-state.test-support.js";
 import { DoctorMaintenanceRefusalError } from "../../infra/update-doctor-result.js";
 import {
   createUpdateRun,
@@ -19,7 +19,6 @@ import {
   recordUpdateRunStep,
   recordUpdateRunVerification,
 } from "../../infra/update-run-ledger.js";
-import { renderUpdateRunReport } from "../../infra/update-run-report.js";
 import { defaultRuntime } from "../../runtime.js";
 import { classifyUpdateOutcome } from "../../shared/update-outcome-classification.js";
 import { writeOpenClawPackageFixture } from "./update-cli-package.test-support.js";
@@ -306,9 +305,6 @@ describe("post-activation failure settlement without inference", () => {
           expect.objectContaining({ step: "warning:gateway verification", detail: observation }),
         );
         expect(recorded?.origin.nextAction).not.toContain("Keep the gateway stopped");
-        if (outcome === "still-starting" && recorded) {
-          expect(renderUpdateRunReport(recorded).markdown).toContain("Gateway still starting");
-        }
       }
     },
   );
@@ -363,12 +359,7 @@ describe("post-activation failure settlement without inference", () => {
           await fs.mkdir(path.join(root, "dist"), { recursive: true });
           await fs.writeFile(path.join(root, "dist", "entry.js"), "// fixture entrypoint\n");
         }
-        const worker = "dist/infra/update-candidate-state.worker.js";
-        await fs.mkdir(path.dirname(path.join(candidateRoot, worker)), { recursive: true });
-        await fs.writeFile(
-          path.join(candidateRoot, worker),
-          `import ${JSON.stringify(pathToFileURL(path.resolve(worker)).href)};\n`,
-        );
+        await materializeUpdateCandidateStateWorker(candidateRoot);
         params.result.root = candidateRoot;
         params.root = previousRoot;
         const originalService: GatewayServiceState = {
@@ -964,7 +955,6 @@ describe("post-activation failure settlement without inference", () => {
       const report = getUpdateRun(run.runId, { env: run.env });
       expect(report?.verification.serviceRunning).toBe(untouched ? undefined : recovered);
       expect(report?.verification.readyz).toBe(untouched ? undefined : recovered);
-      const rendered = renderUpdateRunReport(report!).lines.join("\n");
       if (migration) {
         expect(report?.status).toBe("failed");
         if (receipt === "migration-verified") {
@@ -984,11 +974,11 @@ describe("post-activation failure settlement without inference", () => {
         expect(refusal).toMatchObject({ status: "failed", exitCode: 1 });
       }
       if (migration && !recovered) {
-        expect(rendered).toContain("openclaw --profile work doctor --fix");
-        expect(rendered).toContain("openclaw --profile work gateway start");
+        expect(report?.origin.nextAction).toContain("openclaw --profile work doctor --fix");
+        expect(report?.origin.nextAction).toContain("openclaw --profile work gateway start");
       }
       if (recovered) {
-        expect(rendered).toContain("openclaw --profile work update repair");
+        expect(report?.origin.nextAction).toContain("openclaw --profile work update repair");
         expect(report?.origin.nextAction).toContain("installed Gateway is healthy");
         expect(report?.origin.nextAction).toContain("running on the retained state");
         expect(report?.origin.nextAction).toContain("openclaw --profile work gateway stop");
@@ -997,7 +987,7 @@ describe("post-activation failure settlement without inference", () => {
       if (receipt === "unsettled") {
         expect(mocks.rollback).not.toHaveBeenCalled();
         expect(report?.origin.nextAction).toContain("41001, 41002");
-        expect(report?.origin.nextAction).toContain("Keep the Gateway stopped");
+        expect(report?.origin.nextAction).toContain("Once the recorded processes have stopped");
         expect(
           report?.steps.findLast((step) => step.step === "doctor process settlement"),
         ).toMatchObject({

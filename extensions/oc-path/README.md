@@ -17,6 +17,9 @@ openclaw path --help
 Use `set --dry-run` to review an edit before applying it. Commands run locally
 on the CLI host and do not require a running Gateway.
 
+Markdown frontmatter strings include complete multiline YAML values. Reported
+source lines still point to the keys; non-string values keep their original spelling.
+
 Markdown bullet fields can wrap onto continuation lines. Resolving a field
 returns its complete value; setting it replaces that value while preserving
 child bullets, sibling fields, and the file's line endings.

@@ -490,6 +490,29 @@ describe("IMessageRpcClient child stream error handling", () => {
   });
 });
 
+describe("IMessageRpcClient Messages Automation diagnostics", () => {
+  it.each([
+    { remoteHost: undefined, code: -1712, guidance: ["one possible cause", process.execPath] },
+    { remoteHost: "messages-mac", code: -1743, guidance: ["was denied", "SSH/wrapper process"] },
+    { remoteHost: undefined, code: -1708, guidance: [] },
+  ])("explains AppleScript $code in its launch context", async ({ remoteHost, code, guidance }) => {
+    const client = await startClient({ remoteHost });
+    const data = {
+      disposition: "not_started",
+      retry_safe: true,
+      transport: "applescript",
+      detail: `Messages automation failed with AppleScript error ${code}.`,
+    };
+    const sending = client.request("send", {}, { timeoutMs: 0 }).catch((error: unknown) => error);
+    emitRpcError(child, { code: -32603, message: "Delivery failed", data });
+    const message = ((await sending) as Error).message;
+    expect(message.includes("Privacy & Security > Automation")).toBe(guidance.length > 0);
+    for (const text of guidance) {
+      expect(message).toContain(text);
+    }
+  });
+});
+
 describe("IMessageRpcClient bridge-stall cache invalidation", () => {
   const seeded: IMessagePrivateApiStatus = {
     available: true,
@@ -554,6 +577,7 @@ describe("IMessageRpcClient bridge-stall cache invalidation", () => {
       });
       expect(error).toHaveProperty("message", expect.stringContaining("imsg launch"));
       expect(error).toHaveProperty("message", expect.stringContaining("channels status --probe"));
+      expect(error).toHaveProperty("message", expect.not.stringContaining("Automation"));
     }
   });
 

@@ -7,12 +7,12 @@ import {
   providerEntry,
 } from "../agents/model-auth.fixtures.test-support.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
+import type { EmbeddingProvider } from "../plugins/embedding-provider-runtime-types.js";
 import type {
   EmbeddingProviderAdapter,
-  EmbeddingProvider,
   EmbeddingProviderCreateResult,
 } from "../plugins/embedding-provider-types.js";
-import type { MemoryEmbeddingProviderAdapter } from "../plugins/memory-embedding-providers.js";
+import type { MemoryEmbeddingProviderAdapter } from "../plugins/registry-contribution-types.js";
 import { createDeferredCore } from "../shared/deferred.js";
 import { WizardCancelledError } from "../wizard/prompts.js";
 import { runMemorySetupFlow } from "./memory-setup.js";
@@ -106,35 +106,43 @@ beforeEach(() => {
 });
 afterEach(() => vi.useRealTimers());
 
-it("preserves per-agent multimodal config for an incompatible provider", async () => {
-  const chosen = adapter("openai");
-  chosen.supportsMultimodalEmbeddings = () => false;
-  mocks.get.mockReturnValue(chosen);
-  const config: OpenClawConfig = {
-    ...memoryConfig({
-      provider: "gemini",
-      model: "gemini-embedding-2-preview",
-      fallback: "none",
-      query: { maxResults: 7 },
-    }),
-    agents: {
-      entries: {
-        main: { memory: { search: { multimodal: { enabled: true, modalities: ["image"] } } } },
-      },
-    },
-  };
-  const original = structuredClone(config);
-  const prompt = prompter({ selects: ["openai", "existing"], texts: ["text-embedding-3-small"] });
-  const result = await runMemorySetupFlow(config, prompt);
-  expect(result).toBe(config);
-  expect(config).toEqual(original);
-  expect(chosen.create).not.toHaveBeenCalled();
-  expect(prompt.confirm).toHaveBeenCalledOnce();
-  expect(prompt.note).toHaveBeenCalledWith(
-    expect.stringContaining("compatible"),
-    "Memory setup unchanged",
-  );
-});
+it.each([undefined, true])(
+  "changes an incompatible provider only with partial indexing (%s)",
+  async (allowPartial) => {
+    const chosen = adapter("openai");
+    mocks.get.mockReturnValue(chosen);
+    const multimodal = { enabled: true, allowPartial, modalities: ["image" as const] };
+    const config: OpenClawConfig = {
+      ...memoryConfig({
+        provider: "gemini",
+        model: "gemini-embedding-2-preview",
+        fallback: "none",
+        query: { maxResults: 7 },
+      }),
+      agents: { entries: { main: { memory: { search: { multimodal } } } } },
+    };
+    const prompt = prompter({ selects: ["openai", "existing"], texts: ["text-embedding-3-small"] });
+    const result = await runMemorySetupFlow(config, prompt);
+    if (!allowPartial) {
+      expect(result).toBe(config);
+      expect(chosen.create).not.toHaveBeenCalled();
+      expect(prompt.note).toHaveBeenCalledWith(
+        expect.stringContaining("not compatible"),
+        "Memory setup unchanged",
+      );
+      return;
+    }
+    expect(result.memory?.search).toMatchObject({
+      provider: "openai",
+      model: "text-embedding-3-small",
+    });
+    expect(result.agents?.entries?.main?.memory?.search?.multimodal).toEqual(multimodal);
+    expect(prompt.note).toHaveBeenCalledWith(
+      expect.stringContaining("does not support image files"),
+      "Ready to save",
+    );
+  },
+);
 
 it("skips before catalog or provider runtime access and preserves identity", async () => {
   const config = memoryConfig({ enabled: false });

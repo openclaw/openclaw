@@ -25,6 +25,14 @@ export const agentSessionRunProviderCompaction: unique symbol = Symbol(
   "openclaw.agent-session.run-provider-compaction",
 );
 
+/**
+ * Runs threshold compaction at a request boundary. Its first history summary comes
+ * from that request plus the given instructions, so it reads the warm prompt cache.
+ */
+export const agentSessionRunWarmCompaction: unique symbol = Symbol(
+  "openclaw.agent-session.run-warm-compaction",
+);
+
 type AgentSessionCompactionOutcome =
   | {
       status: "completed";
@@ -32,6 +40,7 @@ type AgentSessionCompactionOutcome =
       tokensAfter: number;
       willRetry: boolean;
       qualityDegraded?: true;
+      summaryRefused?: true;
     }
   | { status: "skipped"; reason: string }
   | { status: "failed"; reason: string }
@@ -95,8 +104,6 @@ export interface AgentSessionConfig {
     model: Model & { compactionThinkingDefault?: ThinkLevel },
     inheritedLevel: ThinkingLevel,
   ) => ThinkingLevel;
-  /** Whether disposing this object ends the durable provider session. Defaults to true. */
-  cleanupProviderSessionResourcesOnDispose?: boolean;
 }
 
 export interface ExtensionBindings {

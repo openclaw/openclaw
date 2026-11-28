@@ -7,7 +7,7 @@ import {
   type DiagnosticEventPayload,
 } from "../infra/diagnostic-events.js";
 import { getDiagnosticSessionState } from "./diagnostic-session-state.js";
-import { logToolLoopAction } from "./diagnostic-tool-loop.js";
+import { toolRepeatDiagnostics } from "./diagnostic-tool-loop.js";
 import {
   diagnosticLogger,
   logMessageDispatchCompleted,
@@ -55,15 +55,11 @@ it.each(["key", "session-id"] as const)(
         logSessionStateChange({ ...ref, state: next, reason: marker });
         expect(state.state).toBe(next);
       }
-      logToolLoopAction({
-        ...ref,
-        agentId: "main",
-        toolName: "test",
-        level: "warning",
-        action: "warn",
-        detector: "generic_repeat",
+      toolRepeatDiagnostics({ ...ref, agentId: "main" })({
+        kind: "note",
+        toolCallId: "synthetic-tool-repeat",
+        toolName: marker,
         count: 3,
-        message: marker,
       });
       await waitForDiagnosticEventsDrained();
       const output = JSON.stringify(logs.flatMap((log) => log.mock.calls));
@@ -77,7 +73,14 @@ it.each(["key", "session-id"] as const)(
         { type: "message.processed", agentId: "main", ...failure },
         { type: "session.state", prevState: "idle", state: "processing", reason: marker },
         { type: "session.state", prevState: "processing", state: "idle", reason: marker },
-        { type: "tool.loop", agentId: "main", action: "warn", count: 3, message: marker },
+        {
+          type: "tool.loop",
+          agentId: "main",
+          toolName: marker,
+          action: "warn",
+          count: 3,
+          message: "redirect note added",
+        },
       ]) {
         expect(events).toContainEqual(expect.objectContaining({ sessionKey, ...expected }));
       }

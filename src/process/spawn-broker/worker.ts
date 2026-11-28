@@ -1,26 +1,30 @@
 import type { ChildProcess, SendHandle } from "node:child_process";
 import { Socket } from "node:net";
 import { setTimeout as delay } from "node:timers/promises";
-import { readRegularFile } from "@openclaw/fs-safe/advanced";
 import { toErrorObject } from "@openclaw/normalization-core/error-coercion";
 import type { ReadFilePage } from "../../agents/sessions/tools/read-file-page.js";
 import { throwSettledAggregate } from "../../infra/error-graph-internal.js";
 import { createDeferredCore } from "../../shared/deferred.js";
 import { getProcessInstanceStartTime } from "../../shared/pid-alive.js";
 import { spawnInAgentExecCgroup } from "../linux-exec-cgroup.js";
-import { spawnWithInheritedOomScore } from "../linux-oom-score.js";
-import { waitForBrokerChildCompletion } from "./child-completion.js";
+import { spawnWithInheritedOomScore } from "../linux-oom-score-spawn.js";
+import { disposeFailedChild, waitForBrokerChildCompletion } from "./child-completion.js";
 import {
   drainCurrentBrokerProcessGroup,
   isBrokerChildGroupAlive,
   terminateLostBrokerChild,
   type BrokerChildGroupIdentity,
 } from "./cleanup.js";
-import { serializeExecaError } from "./execa-protocol.js";
-import { startBrokerExeca, type BrokerExecaProcess } from "./execa-worker.js";
+import { captureBrokerCommandHandlers, reportBrokerCommandRefusal } from "./command-handlers.js";
+import type { BrokerExecaProcess } from "./execa-worker.js";
+import { prepareProcessOutputFile } from "./file-output.js";
 import { createBrokerReceiver } from "./ipc.js";
 import { holdPipeForTransfer, takePipePrefix } from "./pipe.js";
 import {
+  childCapacityError,
+  type BrokerAdmission,
+  MAX_NATIVE_RESOURCES,
+  MAX_PENDING_SPAWNS,
   serializeBrokerError,
   SpawnBrokerError,
   type BrokerRequest,
@@ -38,6 +42,7 @@ type Owned = {
   child: ChildProcess;
   detached: boolean;
   execa?: BrokerExecaProcess;
+  output?: Promise<number>;
   announced: boolean;
   events: BrokerResponse[];
   exited: boolean;
@@ -49,13 +54,18 @@ type Owned = {
   groupGone?: boolean;
   openPipes: Set<number>;
 };
-type Admission = { type: "started"; entry: Owned } | { type: "failed"; execa: BrokerExecaProcess };
+type Admission =
+  | { type: "started"; entry: Owned; pid: number }
+  | { type: "failed"; execa: BrokerExecaProcess };
 const owned = new Map<number, Owned>();
+// One reservation spans startup and retained custody, without counting either twice.
+const childAdmissions = new Map<number, BrokerAdmission>();
 const receiver = createBrokerReceiver();
 let stopping = false;
 const starting = new Map<number, { canceled?: boolean; signal?: NodeJS.Signals | number }>();
 const launchGrants = new Map<number, ReturnType<typeof createDeferredCore<boolean>>>();
 let resources: Awaited<ReturnType<typeof createBrokerNativeResourceServer>> | undefined;
+let commands: Awaited<ReturnType<typeof captureBrokerCommandHandlers>>;
 let startup: "waiting" | "initializing" | "ready" = "waiting";
 let initialization = Promise.resolve();
 const launches = new Set<Promise<void>>();
@@ -94,6 +104,7 @@ function forget(id: number, entry: Owned): void {
           if (!isBrokerChildGroupAlive(identity)) {
             entry.groupGone = true;
             owned.delete(id);
+            childAdmissions.delete(id);
             return;
           }
           await delay(50, undefined, { ref: false });
@@ -103,6 +114,7 @@ function forget(id: number, entry: Owned): void {
       return;
     }
     owned.delete(id);
+    childAdmissions.delete(id);
   }
 }
 
@@ -135,7 +147,7 @@ function stopChild(entry: Owned): Promise<void> {
     for (const stream of execa?.stdio ?? child.stdio ?? []) {
       stream?.destroy();
     }
-    await Promise.allSettled([entry.closed, execa?.result]);
+    await Promise.allSettled([entry.closed, execa?.result, entry.output]);
     await termination?.settled;
     entry.groupGone = true;
   })());
@@ -184,37 +196,23 @@ function shutdown(): void {
   })();
 }
 
-function disposeFailedChild(child: ChildProcess | undefined): void {
-  if (!child) {
-    return;
-  }
-  // Setup can fail before Node emits its queued spawn error.
-  child.once("error", () => {});
-  if (child.pid && child.exitCode === null && child.signalCode === null) {
-    child.kill("SIGKILL");
-  }
-  if (child.connected) {
-    child.disconnect();
-  }
-  for (const stream of child.stdio ?? []) {
-    stream?.destroy();
-  }
-}
-
 async function readFile(message: Extract<BrokerRequest, { type: "read-file" }>): Promise<void> {
   const pending = { canceled: false, controller: new AbortController() };
   try {
     // Resource brokers can hold SQLite locks; only the command broker is a safe reader.
-    if (resources || owned.size + starting.size + fileReads.size >= 256) {
+    if (!commands?.readers || starting.size + fileReads.size >= MAX_PENDING_SPAWNS) {
       throw new SpawnBrokerError("Spawn broker cannot admit a raw file read");
     }
     fileReads.set(message.id, pending);
     let page: ReadFilePage | undefined;
     if (message.page) {
-      const { captureReadFilePage } = await import("../../agents/sessions/tools/read-file-page.js");
-      page = await captureReadFilePage(message.filePath, message.page, pending.controller.signal);
+      page = await commands.readers.captureReadFilePage(
+        message.filePath,
+        message.page,
+        pending.controller.signal,
+      );
     } else {
-      const { buffer } = await readRegularFile({ filePath: message.filePath });
+      const { buffer } = await commands.readers.readRegularFile({ filePath: message.filePath });
       // Bound IPC messages while preserving the existing complete-byte read.
       for (let offset = 0; offset < buffer.length; offset += 512 * 1024) {
         if (stopping || pending.canceled) {
@@ -248,42 +246,24 @@ async function readFile(message: Extract<BrokerRequest, { type: "read-file" }>):
 async function launch(
   message: Extract<BrokerRequest, { type: "spawn" | "prepare-spawn" | "spawn-execa" }>,
 ): Promise<void> {
-  if (stopping || owned.size + starting.size + fileReads.size + (resources?.size ?? 0) >= 256) {
-    const error = new SpawnBrokerError("Spawn broker request capacity exceeded");
-    // The ordered failed-admission result proves no native work was started.
-    // No command metadata exists because this guard precedes spawn preparation.
-    await report({
-      type: "execa-result",
-      id: message.id,
-      result: {
-        failed: true,
-        code: error.code,
-        timedOut: false,
-        isCanceled: false,
-        isGracefullyCanceled: false,
-        isMaxBuffer: false,
-        isTerminated: false,
-        isForcefullyTerminated: false,
-        command: "",
-        escapedCommand: "",
-        cwd: process.cwd(),
-        durationMs: 0,
-        error: serializeExecaError(error),
-      },
-    });
-    await report({
-      type: "error",
-      id: message.id,
-      error: serializeBrokerError(error),
-      resultUnavailable: true,
-    });
+  const refusal = childCapacityError(childAdmissions.values(), message.admission ?? "command");
+  const handlers = commands;
+  if (!handlers || stopping || starting.size + fileReads.size >= MAX_PENDING_SPAWNS || refusal) {
+    const error = new SpawnBrokerError(
+      handlers
+        ? (refusal ?? "Spawn broker startup capacity exceeded")
+        : "Attachment-only broker cannot run commands",
+    );
+    await reportBrokerCommandRefusal(message.id, error, report);
     return;
   }
   const pending: { canceled?: boolean; signal?: NodeJS.Signals | number } = {};
+  childAdmissions.set(message.id, message.admission ?? "command");
   starting.set(message.id, pending);
   let spawnedChild: ChildProcess | undefined;
   let spawnedClose: Promise<void> | undefined;
   let spawnedGroupIdentity: BrokerChildGroupIdentity | undefined;
+  let destination: Awaited<ReturnType<typeof prepareProcessOutputFile>> | undefined;
   const detached =
     message.options.detached === true ||
     (message.type === "spawn-execa" && message.options.killDescendants === true);
@@ -298,6 +278,9 @@ async function launch(
     }
   };
   try {
+    if (message.type !== "spawn-execa" && message.outputFile) {
+      destination = await prepareProcessOutputFile(message.outputFile);
+    }
     // Reserve the outbound channel before forking: ownership cannot wait behind
     // another descriptor acknowledgement or a large buffered command result.
     const admission = await sender.reserve<Admission>(async (publish) => {
@@ -315,15 +298,33 @@ async function launch(
           launchGrants.delete(message.id);
         }
       }
-      const execa =
-        message.type === "spawn-execa"
-          ? await startBrokerExeca(message.argv, message.options, assertActive, message.execCgroup)
-          : undefined;
+      let execa: BrokerExecaProcess | undefined;
+      if (message.type === "spawn-execa") {
+        assertActive();
+        execa = await handlers.startBrokerExeca(
+          message.argv,
+          message.options,
+          assertActive,
+          message.execCgroup,
+        );
+      }
+      const outputStdio = destination?.stdio;
       const child =
         execa?.child ??
         (message.type !== "spawn-execa"
           ? spawnInAgentExecCgroup(message.execCgroup, () =>
-              spawnWithInheritedOomScore(message.argv[0]!, message.argv.slice(1), message.options),
+              spawnWithInheritedOomScore(
+                message.argv[0]!,
+                message.argv.slice(1),
+                outputStdio !== undefined
+                  ? {
+                      ...message.options,
+                      stdio: message.options.stdio.map((entry, fd) =>
+                        fd === 1 ? outputStdio : entry,
+                      ),
+                    }
+                  : message.options,
+              ),
             )
           : undefined);
       spawnedChild = child;
@@ -331,6 +332,7 @@ async function launch(
         throw new Error("Spawn broker command did not start");
       }
       spawnedClose = waitForBrokerChildCompletion(child);
+      const output = destination?.start(child, detached, spawnedClose);
       if (detached && child.pid && process.platform !== "win32") {
         spawnedGroupIdentity = {
           pid: child.pid,
@@ -351,7 +353,7 @@ async function launch(
           throw error;
         }
         for (const [fd, stream] of child.stdio.entries()) {
-          if (fd > 0 && stream instanceof Socket) {
+          if (fd > 0 && !(destination && fd === 1) && stream instanceof Socket) {
             holdPipeForTransfer(stream);
           }
         }
@@ -368,14 +370,15 @@ async function launch(
         detached,
         ...(spawnedGroupIdentity ? { groupIdentity: spawnedGroupIdentity } : {}),
         execa,
+        output,
         announced: false,
         events: [],
         exited: false,
-        resultSettled: !execa,
+        resultSettled: !execa && !output,
         closed: spawnedClose,
         openPipes: new Set(
           (execa?.stdio ?? child.stdio).flatMap((stream, fd) =>
-            stream instanceof Socket ? [fd] : [],
+            stream instanceof Socket && !(destination && fd === 1) ? [fd] : [],
           ),
         ),
       };
@@ -405,10 +408,29 @@ async function launch(
       child.once("disconnect", () => event({ type: "disconnect", id: message.id }));
       child.once("exit", (code, signal) => event({ type: "exit", id: message.id, code, signal }));
       void spawnedClose.then(() => {
-        event({ type: "closed", id: message.id });
+        // File output already publishes a receipt after native completion and file close.
+        if (!output) {
+          event({ type: "closed", id: message.id });
+        }
         current.exited = true;
         forget(message.id, current);
       });
+      if (output) {
+        void (async () => {
+          try {
+            event({ type: "file-output", id: message.id, bytes: await output });
+          } catch (error) {
+            event({
+              type: "file-output",
+              id: message.id,
+              error: serializeBrokerError(toErrorObject(error, "Process output failed")),
+            });
+          } finally {
+            current.resultSettled = true;
+            forget(message.id, current);
+          }
+        })();
+      }
       if (execa) {
         void execa.result
           .then(async (result) => {
@@ -437,7 +459,7 @@ async function launch(
         throw new Error("Spawn broker command has no process identifier");
       }
       await publish({ type: "owned", id: message.id, pid: child.pid });
-      return { type: "started", entry: current };
+      return { type: "started", entry: current, pid: child.pid };
     });
     if (admission.type === "failed") {
       const result = await admission.execa.result;
@@ -460,25 +482,23 @@ async function launch(
     }
     const streams = execa?.stdio ?? child.stdio;
     for (const [fd, stream] of streams.entries()) {
-      if (!(stream instanceof Socket)) {
+      if (!(stream instanceof Socket) || (destination && fd === 1)) {
         continue;
       }
       stream.pause();
       await report({ type: "pipe", id: message.id, fd }, stream);
-      if (fd > 0) {
-        await report({ type: "pipe-prefix", id: message.id, fd, bytes: takePipePrefix(stream) });
+      const bytes = fd > 0 ? takePipePrefix(stream) : undefined;
+      if (bytes?.length) {
+        await report({ type: "pipe-prefix", id: message.id, fd, bytes });
       }
       if (!execa) {
         stream.destroy();
       }
     }
-    if (!child.pid) {
-      throw new Error("Spawn broker command has no process identifier");
-    }
     await report({
       type: "spawned",
       id: message.id,
-      pid: child.pid,
+      pid: admission.pid,
       spawnfile: child.spawnfile,
       spawnargs: child.spawnargs,
       connected: child.connected,
@@ -507,6 +527,8 @@ async function launch(
       await spawnedClose;
       await termination?.settled;
     }
+    await destination?.close();
+    childAdmissions.delete(message.id);
     owned.delete(message.id);
     if (!stopping) {
       await report({
@@ -514,10 +536,14 @@ async function launch(
         id: message.id,
         error: serializeBrokerError(error instanceof Error ? error : new Error(String(error))),
         resultUnavailable: true,
+        ...(!spawnedChild?.pid ? { notStarted: true as const } : {}),
       });
     }
   } finally {
     starting.delete(message.id);
+    if (!owned.has(message.id) && !spawnedChild?.pid) {
+      childAdmissions.delete(message.id);
+    }
   }
 }
 
@@ -542,7 +568,13 @@ process.on("message", (raw: unknown, handle: SendHandle) => {
     startup = "initializing";
     // SAFETY: The version-matched spawning host owns this private bootstrap channel.
     initialization = initialize(raw as BrokerBootstrap);
-    void initialization.catch(shutdown);
+    void initialization.catch(async (error: unknown) => {
+      await report({
+        type: "startup-failed",
+        error: serializeBrokerError(toErrorObject(error, "Spawn broker startup failed")),
+      }).catch(() => {});
+      shutdown();
+    });
     return;
   }
   if (startup !== "ready") {
@@ -668,23 +700,20 @@ async function initialize(bootstrap: BrokerBootstrap): Promise<void> {
   if (stopping || !process.connected) {
     return;
   }
+  commands = await captureBrokerCommandHandlers(bootstrap);
+  if (stopping || !process.connected) {
+    return;
+  }
   if (bootstrap.nativeResource) {
     const authority = bootstrap.nativeResource;
-    try {
-      resources = await createBrokerNativeResourceServer({
-        endpoint: authority.endpoint,
-        secret: authority.secret,
-        generation: authority.generation,
-        reportParent: report,
-        canAdmit: () => !stopping && owned.size + starting.size + (resources?.size ?? 0) < 256,
-      });
-    } catch (error) {
-      await report({
-        type: "startup-failed",
-        error: serializeBrokerError(toErrorObject(error, "Native resource server startup failed")),
-      }).catch(() => {});
-      throw error;
-    }
+    resources = await createBrokerNativeResourceServer({
+      endpoint: authority.endpoint,
+      directory: authority.directory,
+      secret: authority.secret,
+      generation: authority.generation,
+      reportParent: report,
+      canAdmit: () => !stopping && (resources?.size ?? 0) < MAX_NATIVE_RESOURCES,
+    });
     if (stopping) {
       resources.disconnect();
       return;

@@ -4,11 +4,6 @@ import type controlUiLocaleEntries from "./control-ui-i18n-config.json";
 export type { TranslationMap };
 export type LocaleEntry = (typeof controlUiLocaleEntries)[number];
 
-export type GlossaryEntry = {
-  source: string;
-  target: string;
-};
-
 export type TranslationMemoryEntry = {
   cache_key: string;
   segment_id: string;
@@ -196,12 +191,7 @@ export function createControlUiLocaleSyncPlan(input: {
         });
       }
     },
-    render(options: {
-      defaultGlossary: readonly GlossaryEntry[];
-      generatedAt: string;
-      glossary: readonly GlossaryEntry[];
-      workflow: number;
-    }) {
+    render(options: { generatedAt: string; workflow: number }) {
       for (const item of pending) {
         if (nextFlat.has(item.key)) {
           continue;
@@ -242,9 +232,6 @@ export function createControlUiLocaleSyncPlan(input: {
       };
       return {
         fallbackCount: sortedFallbackKeys.length,
-        glossary: renderJson(
-          options.glossary.length === 0 ? options.defaultGlossary : options.glossary,
-        ),
         meta: renderJson(nextMeta),
         nextFlat,
         translationMemory: renderTranslationMemory(

@@ -3,9 +3,13 @@ import fs from "node:fs";
 import path from "node:path";
 import { setTimeout as delay } from "node:timers/promises";
 import { describe, expect, it, vi } from "vitest";
+import { resolveGatewayLockPaths } from "../../infra/gateway-lock.js";
 import { resolveRuntimeWorkerUrl } from "../../infra/runtime-worker-url.js";
 import { resolveTestNodeExecPath } from "../../test-utils/node-process.js";
-import { gatewayDirectStopEntrypoints } from "../cli-entrypoint.test-support.js";
+import {
+  cliMessageExitEntrypoints,
+  gatewayDirectStopEntrypoints,
+} from "../cli-entrypoint.test-support.js";
 import { createProcessFixtures } from "./run-loop-process.test-support.js";
 
 const fixtures = createProcessFixtures("restart liveness cleanup failed", 5_000);
@@ -13,12 +17,13 @@ const moduleUrl = (entry: Parameters<typeof resolveRuntimeWorkerUrl>[0]) =>
   JSON.stringify(resolveRuntimeWorkerUrl(entry).href);
 
 const childScript = `
-  import fs, { promises as fsPromises } from "node:fs";
+  import fs from "node:fs";
   import http from "node:http";
   import { runGatewayLoop } from ${moduleUrl(gatewayDirectStopEntrypoints.runLoop)};
+  import { runCliWithExitFinalization } from ${moduleUrl(cliMessageExitEntrypoints.oneShotExit)};
   import { setGatewayRestartPolicy } from ${moduleUrl(gatewayDirectStopEntrypoints.restartPolicy)};
   import { PluginRuntimeCloseRetainedError } from ${JSON.stringify(new URL("../../plugins/runtime-close-error.ts", import.meta.url).href)};
-  const [faultPath, closeFailure, logFile] = process.argv.slice(1);
+  const [faultPath, closeFailure] = process.argv.slice(1);
   setGatewayRestartPolicy({ allowExternal: true });
   let starts = 0;
   try {
@@ -42,14 +47,6 @@ const childScript = `
           startupSettled: Promise.resolve(),
           close: async () => {
             if (closeFailure === "pending") {
-              const openFile = fsPromises.open.bind(fsPromises);
-              fsPromises.open = (...args) => {
-                if (args[0] === logFile) {
-                  process.stdout.write("append:pending\\n");
-                  return new Promise(() => {});
-                }
-                return openFile(...args);
-              };
               return new Promise(() => {});
             }
             await new Promise((resolve, reject) => {
@@ -57,7 +54,7 @@ const childScript = `
             });
             if (closeFailure) {
               const error = new TypeError("fixture close owner failed");
-              if (closeFailure === "retained") setInterval(() => {}, 1000);
+              if (closeFailure === "retained" || closeFailure === "rejected-idle") setInterval(() => {}, 1000);
               throw closeFailure === "retained" ? new PluginRuntimeCloseRetainedError(error) : error;
             }
           },
@@ -65,6 +62,7 @@ const childScript = `
       },
     });
     process.stdout.write("loop-returned:" + process.exitCode + "\\n");
+    await runCliWithExitFinalization({ run: async () => {}, onError: error => { throw error; } });
   } catch (error) {
     console.error(error);
     process.exitCode = 1;
@@ -95,7 +93,7 @@ function startFixture(initialFailure = false, closeFailure = "", executable = pr
   const moduleArgs = ["--import", "tsx", "--input-type=module", "--eval"];
   const child = spawn(
     executable,
-    ["--inspect-port=127.0.0.1:0", ...moduleArgs, childScript, faultPath, closeFailure, logFile],
+    ["--inspect-port=127.0.0.1:0", ...moduleArgs, childScript, faultPath, closeFailure],
     {
       env: {
         PATH: pendingClose ? `${bin}${path.delimiter}${process.env.PATH ?? ""}` : process.env.PATH,
@@ -160,11 +158,11 @@ describe("runGatewayLoop failed-restart process lifetime", { timeout: 60_000 }, 
 
   posixIt.each(
     process.platform === "darwin"
-      ? ["pending", "rejected", "retained", "retained-stop"]
-      : ["rejected"],
+      ? ["pending", "rejected", "rejected-idle", "retained", "retained-stop"]
+      : ["rejected", "rejected-idle"],
   )("terminates failed native cleanup (%s)", async (mode) => {
     const pending = mode === "pending";
-    const stop = pending || mode === "retained-stop";
+    const stop = pending || mode === "retained-stop" || mode === "rejected-idle";
     const retained = mode.startsWith("retained");
     const fixture = startFixture(false, retained ? "retained" : mode);
     await fixture.waitForOutput("ready:1");
@@ -176,7 +174,9 @@ describe("runGatewayLoop failed-restart process lifetime", { timeout: 60_000 }, 
       expect(fixture.output()).toContain("resources remain");
       return;
     }
-    expect(exited, fixture.output()).toEqual(mode === "rejected" ? [1, null] : [null, "SIGKILL"]);
+    expect(exited, fixture.output()).toEqual(
+      pending ? [null, "SIGKILL"] : mode === "rejected-idle" ? [null, "SIGUSR2"] : [1, null],
+    );
     expect(fixture.output().includes("natural-exit")).toBe(mode === "rejected");
     const reason = pending
       ? "gateway.stop_shutdown_timeout"
@@ -187,7 +187,6 @@ describe("runGatewayLoop failed-restart process lifetime", { timeout: 60_000 }, 
     expect(bundle.reason).toBe(reason);
     if (pending) {
       expect(fixture.output()).not.toContain("loop-returned:");
-      expect(fixture.output()).toContain("append:pending");
     } else {
       expect(bundle.evidence.shutdown.step).toBe("gateway-server-close");
     }
@@ -216,4 +215,89 @@ describe("runGatewayLoop failed-restart process lifetime", { timeout: 60_000 }, 
     expect(await fixture.closed, fixture.output()).toEqual([1, null]);
     expect(fixture.output()).toContain("fixture startup refused");
   });
+});
+
+const startupStopScript = `
+  import { once } from "node:events";
+  import { acquireGatewayLock } from ${moduleUrl(gatewayDirectStopEntrypoints.gatewayLock)};
+  import { withCliCommandCleanup, withCliProcessScope } from ${moduleUrl(gatewayDirectStopEntrypoints.cleanupScope)};
+  import { runGatewayLoop } from ${moduleUrl(gatewayDirectStopEntrypoints.runLoop)};
+  import { runCliWithExitFinalization } from ${moduleUrl(cliMessageExitEntrypoints.oneShotExit)};
+  await withCliProcessScope(() => runCliWithExitFinalization({
+    onError: (error) => console.error(error),
+    run: () => withCliCommandCleanup(true, async () => {
+      // An earlier startup step holds state custody, as startup maintenance does.
+      const custody = await acquireGatewayLock({ databaseAccess: "none" });
+      process.stdout.write("custody-held\\n");
+      await once(process.stdin, "data");
+      await custody.release();
+      await runGatewayLoop({
+        ownsProcessLifecycle: true,
+        start: async () => {
+          throw new Error("gateway startup continued after a stop");
+        },
+      });
+    }),
+  }));
+`;
+
+describe("gateway run stop before the run loop owns signals", { timeout: 60_000 }, () => {
+  const posixIt = process.platform === "win32" ? it.skip : it;
+
+  posixIt.each(["SIGTERM", "SIGINT"] as const)(
+    "releases startup custody and exits with the %s status",
+    async (signal) => {
+      const directory = fixtures.make("openclaw-startup-stop-");
+      const configPath = path.join(directory, "openclaw.json");
+      fs.writeFileSync(configPath, "{}");
+      const env = {
+        PATH: process.env.PATH,
+        HOME: fs.mkdtempSync(path.join(directory, "home-")),
+        TMPDIR: directory,
+        OPENCLAW_STATE_DIR: path.join(directory, "state"),
+        OPENCLAW_CONFIG_PATH: configPath,
+        OPENCLAW_NO_RESPAWN: "1",
+        NODE_DISABLE_COMPILE_CACHE: "1",
+        TSX_DISABLE_CACHE: "1",
+        ESBUILD_WORKER_THREADS: "0",
+      };
+      const child = spawn(
+        process.execPath,
+        ["--import", "tsx", "--input-type=module", "--eval", startupStopScript],
+        { env, stdio: ["pipe", "pipe", "pipe"] },
+      );
+      const tracked = fixtures.ownChild(child);
+      const output = () => tracked.output.stdout + tracked.output.stderr;
+      // Output listeners run after the tracker's, so each check sees the new chunk.
+      const reached = (text: string) =>
+        Promise.race([
+          new Promise<void>((resolve) => {
+            const check = () => {
+              if (output().includes(text)) {
+                resolve();
+              }
+            };
+            child.stdout.on("data", check);
+            child.stderr.on("data", check);
+            check();
+          }),
+          tracked.closed,
+        ]);
+      await reached("custody-held");
+      const { ownerLockPath, stateLockPath } = resolveGatewayLockPaths(env);
+      const heldLocks = () => [ownerLockPath, stateLockPath].filter((file) => fs.existsSync(file));
+      expect(heldLocks(), output()).toEqual([ownerLockPath, stateLockPath]);
+      expect(child.kill(signal)).toBe(true);
+      await reached(`Command interrupted by ${signal}.`);
+      // Without a startup owner the signal already ended the child; ignore its closed stdin.
+      child.stdin.on("error", () => {});
+      child.stdin.end("continue\n");
+      const exit = await tracked.closed;
+      expect({ exit, heldLocks: heldLocks() }, output()).toEqual({
+        exit: [signal === "SIGINT" ? 130 : 143, null],
+        heldLocks: [],
+      });
+      expect(output()).not.toContain("gateway startup continued after a stop");
+    },
+  );
 });

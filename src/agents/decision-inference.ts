@@ -1,16 +1,17 @@
 import {
   findConfiguredProviderModel,
-  resolveMergedModelProviderEntry,
+  resolveMergedModelProviderConfig,
 } from "../config/model-provider-config.js";
 import { requiredWorkerHelperError } from "../config/required-worker-profile.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { supportsDecisionInput } from "../decisions/capabilities.js";
 import type { DecisionEvaluateOptionsV2 } from "../decisions/execution-types.js";
+import type { PreparedDecisionBillingFacts } from "../decisions/host-billing.js";
 import type { DecisionProviderContextV2 } from "../decisions/provider-context.js";
 import { evaluatePreparedDecisionProvider } from "../decisions/provider-execution.js";
-import type { PreparedDecisionBilling } from "../decisions/provider-host.js";
+import type { ProviderDecisionOutcomeV2 } from "../decisions/provider-outcomes.js";
 import type { DecisionProviderV2 } from "../decisions/provider-types.js";
-import type { DecisionBatchV2, ProviderDecisionOutcomeV2 } from "../decisions/types-v2.js";
+import type { DecisionBatchV2 } from "../decisions/types-v2.js";
 import {
   assertProviderAuthAuthority,
   attachProviderAuthAuthority,
@@ -61,7 +62,7 @@ export async function executePreparedDecision(params: {
   signal: AbortSignal;
   deadlineMonotonicMs: number;
   isAdmissible: () => boolean;
-  onPreparedBilling?: (facts: PreparedDecisionBilling) => void;
+  onPreparedBilling?: (facts: PreparedDecisionBillingFacts) => void;
 }): Promise<ProviderDecisionOutcomeV2> {
   const assertCurrent = () => {
     params.signal.throwIfAborted();
@@ -102,11 +103,24 @@ export async function executePreparedDecision(params: {
       ) {
         return { status: "unavailable", reason: "unsupported-input" };
       }
+      const provider = canonical.provider.id;
+      const providerConfig = resolveMergedModelProviderConfig(prepared.config, provider);
       let row = prepared.modelCatalog.entries.find(
-        (entry) => entry.provider === canonical.provider.id && entry.id === modelId,
+        (entry) => entry.provider === provider && entry.id === modelId,
       );
       if (!row) {
-        return { status: "unavailable", reason: "unsupported-input" };
+        if (!providerConfig?.baseUrl) {
+          return { status: "unavailable", reason: "unsupported-input" };
+        }
+        // An explicitly configured endpoint may serve IDs absent from the catalog.
+        // Seed only route identity; the provider must supply decision capabilities.
+        row = {
+          provider,
+          id: modelId,
+          name: modelId,
+          api: providerConfig.api,
+          baseUrl: providerConfig.baseUrl,
+        };
       }
       const route = resolveProviderModelRoutes({
         provider: row.provider,
@@ -175,10 +189,6 @@ export async function executePreparedDecision(params: {
         api: normalizeResolvedTransportApi(normalized?.api) ?? row.api,
         ...(normalized?.baseUrl ? { baseUrl: normalized.baseUrl } : {}),
       };
-      const providerConfig = resolveMergedModelProviderEntry(
-        prepared.config,
-        row.provider,
-      )?.providerConfig;
       if (providerConfig) {
         const configuredModel = findConfiguredProviderModel(
           providerConfig,

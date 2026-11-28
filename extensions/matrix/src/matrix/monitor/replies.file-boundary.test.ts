@@ -11,8 +11,6 @@ const runtimeStub = {
   config: { current: () => ({}) },
   channel: {
     text: {
-      resolveMarkdownTableMode: () => "code",
-      resolveTextChunkLimit: () => 4000,
       resolveChunkMode: () => "length",
       chunkMarkdownTextWithMode: (text: string) => [text],
     },

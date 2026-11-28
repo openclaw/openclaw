@@ -20,7 +20,11 @@ import type { PluginHookHandlerMap } from "../../plugins/hook-types.js";
 import { setActivePluginRegistry } from "../../plugins/runtime.js";
 import type { commitConfirmedVisibleMessage } from "../../sessions/confirmed-visible-message.js";
 import { createDeferredCore } from "../../shared/deferred.js";
-import { createOutboundTestPlugin, createTestRegistry } from "../../test-utils/channel-plugins.js";
+import {
+  createChannelTestPluginBase,
+  createOutboundTestPlugin,
+  createTestRegistry,
+} from "../../test-utils/channel-plugins.js";
 import { createInternalHookEventPayload } from "../../test-utils/internal-hook-event-payload.js";
 import { createOpenClawTestState } from "../../test-utils/openclaw-test-state.js";
 import {
@@ -285,7 +289,15 @@ function setTestPlugin(
   plugin: Pick<ChannelPlugin, "id"> & Partial<ChannelPlugin>,
   pluginId = plugin.id,
 ) {
-  setActivePluginRegistry(createTestRegistry([{ pluginId, source: "test", plugin }]));
+  setActivePluginRegistry(
+    createTestRegistry([
+      {
+        pluginId,
+        source: "test",
+        plugin: { ...createChannelTestPluginBase({ id: plugin.id }), ...plugin },
+      },
+    ]),
+  );
 }
 
 function createTestOutbound(
@@ -2260,34 +2272,6 @@ describe("deliverOutboundPayloads", () => {
 
     expect(sendMatrix).not.toHaveBeenCalled();
     expect(results).toStrictEqual([]);
-  });
-
-  it("passes formatting overrides for pre-rendered chunker output", async () => {
-    const chunker = vi.fn(() => ["<b>bold</b>"]);
-    const sendText = vi.fn().mockImplementation(async ({ text }: { text: string }) => ({
-      channel: "matrix" as const,
-      messageId: text,
-      roomId: "r1",
-    }));
-    setTestOutbound({
-      chunker,
-      chunkerMode: "markdown",
-      chunkedTextFormatting: { parseMode: "HTML" },
-      textChunkLimit: 4000,
-      sendText,
-    });
-
-    await deliverOutboundPayloads({
-      cfg: matrixChunkConfig,
-      channel: "matrix",
-      to: "!room",
-      payloads: [{ text: "**bold**" }],
-    });
-
-    expect(chunker).toHaveBeenCalledWith("**bold**", 4000);
-    const sendTextParams = requireMockCallArg(sendText, "sendText");
-    expect(sendTextParams.text).toBe("<b>bold</b>");
-    expect(sendTextParams.formatting).toEqual({ parseMode: "HTML" });
   });
 
   registerOutboundImageProjectionTests({

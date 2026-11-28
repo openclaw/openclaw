@@ -39,6 +39,7 @@ suite.define(() => {
           const palette = page.locator("openclaw-command-palette");
           const input = palette.locator(".cmd-palette__input");
           await input.waitFor({ state: "visible" });
+          await input.press("Tab");
           await input.fill("Inspect my workspace");
           submit = palette.locator(".cmd-palette__create");
         }

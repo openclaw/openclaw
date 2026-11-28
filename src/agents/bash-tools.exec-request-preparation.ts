@@ -1,7 +1,6 @@
 import { isRecord } from "@openclaw/normalization-core/record-coerce";
 import { normalizeOptionalString } from "@openclaw/normalization-core/string-coerce";
 import type { SystemRunExecutionContext } from "../../packages/gateway-protocol/src/system-run-execution-context.js";
-import { normalizeChatChannelId } from "../channels/ids.js";
 import { resolveSessionStorePathCore } from "../config/sessions/paths.js";
 import type { ExecHost } from "../infra/exec-approvals.js";
 import {
@@ -34,9 +33,14 @@ import type { ExecToolDefaults } from "./bash-tools.exec-types.js";
 import { type ExecWorkdirResolution, resolveExecWorkdir } from "./bash-tools.exec-workdir.js";
 import { buildSandboxEnv, coerceEnv } from "./bash-tools.shared.js";
 import type { BashSandboxConfig } from "./bash-tools.shared.js";
+import { EXEC_NODE_PATH_PREPEND_WARNING } from "./exec-node-path-prepend.js";
+import { prepareAgentExecScratch } from "./exec-scratch.js";
 import { prepareGitHubToolEnvironment } from "./github-tool-identity.js";
 import { sanitizeEnvVars } from "./sandbox/sanitize-env-vars.js";
-import { isSubagentEnvelopeSession } from "./subagents/spawn/subagent-capabilities.js";
+import {
+  isSubagentEnvelopeSession,
+  isVisibleSpawnedSession,
+} from "./subagents/spawn/subagent-capabilities.js";
 import { ToolInputError } from "./tools/common.js";
 
 export type ExecToolArgs = Record<string, unknown> & {
@@ -83,7 +87,7 @@ export function assertDurableExecAvailable(
   }
   if (host !== "gateway" || !allowBackground) {
     throw new Error(
-      "Durable exec requires Gateway-host background execution on Linux with systemd 250 or newer, a reachable user manager, and the process tool enabled. Sandbox, node, and worker execution are unsupported.",
+      "Durable exec requires Gateway-host background execution on Linux with systemd 250 or newer and a reachable user manager, or on macOS in a logged-in GUI session, and the process tool enabled. Sandbox, node, and worker execution are unsupported.",
     );
   }
 }
@@ -158,17 +162,11 @@ function filterPluginExecEnv(rawEnv: Record<string, string>): Record<string, str
   return Object.keys(env).length > 0 ? env : undefined;
 }
 
-function resolveNotifyOnExitEmptySuccess(defaults?: ExecToolDefaults): boolean {
-  if (typeof defaults?.notifyOnExitEmptySuccess === "boolean") {
-    return defaults.notifyOnExitEmptySuccess;
-  }
-  return normalizeChatChannelId(defaults?.messageProvider) !== null;
-}
-
 /** Capture notification routing and child identity before process lifetime detaches. */
 export function resolveExecNotificationDefaults(defaults?: ExecToolDefaults) {
   const notifyOnExit = defaults?.notifyOnExit !== false;
-  const notifyOnExitEmptySuccess = resolveNotifyOnExitEmptySuccess(defaults);
+  // Every exit of a wake-armed command wakes its conversation unless the operator opts out.
+  const notifyOnExitEmptySuccess = defaults?.notifyOnExitEmptySuccess !== false;
   const notifySessionKey = normalizeOptionalString(
     defaults?.notifySessionKey ?? defaults?.runSessionKey ?? defaults?.sessionKey,
   );
@@ -195,9 +193,12 @@ export function resolveExecNotificationDefaults(defaults?: ExecToolDefaults) {
           agentId: notifyAgentSession.agentId,
         }),
       });
-      return isSubagentEnvelopeSession(notifySessionKey, {
-        entry: read.entries.find(({ sessionKey }) => sessionKey === notifySessionKey)?.entry,
-      });
+      const entry = read.entries.find(({ sessionKey }) => sessionKey === notifySessionKey)?.entry;
+      // Visible spawns are interactive; only hidden workers report through the announce chain.
+      return (
+        isSubagentEnvelopeSession(notifySessionKey, { entry }) &&
+        !isVisibleSpawnedSession(notifySessionKey, { entry })
+      );
     })().catch(() => {
       // Identity enrichment must not prevent exec; retry the worker on the next call.
       subagentSession = undefined;
@@ -205,7 +206,7 @@ export function resolveExecNotificationDefaults(defaults?: ExecToolDefaults) {
     }));
   const notifyDeliveryContext = normalizeDeliveryContext({
     channel: defaults?.messageProvider,
-    to: defaults?.currentChannelId,
+    to: defaults?.currentMessagingTarget ?? defaults?.currentChannelId,
     accountId: defaults?.accountId,
     threadId: defaults?.currentThreadTs,
   });
@@ -227,6 +228,7 @@ export function resolveExecPreparedRunEnvironment(defaults?: ExecToolDefaults) {
         agentId: defaults?.executionAgentId ?? defaults?.agentId ?? "main",
       })),
     localProcessEnv: installationTargetEnv(getInstallationTarget()),
+    localToolEnv: defaults?.preparedLocalToolEnv,
   };
 }
 
@@ -259,6 +261,7 @@ export function createExecRequestPreparation(params: {
       host,
       workdir: execParams.workdir,
       defaultCwd: params.defaults?.cwd,
+      participationRoot: params.defaults?.participationRoot,
       nodeCwd: params.defaults?.nodeCwd,
       sandbox: params.defaults?.sandbox,
     });
@@ -407,6 +410,10 @@ export function createExecRequestPreparation(params: {
     finalizeBeforeToolCallParams,
     prepareParamsWithResolvedExecEnv,
     isResolveExecEnvPrepared: (args: ExecToolArgs) => resolvedExecEnvPreparedStates.has(args),
+    prepareScratchEnv: (host: ExecHost) =>
+      host === "gateway" && params.defaults?.cwd
+        ? prepareAgentExecScratch(params.defaults.scratchRoot ?? params.defaults.cwd)
+        : undefined,
     getExecHookContext: (args: ExecToolArgs) => execHookContexts.get(args),
     getResolvedExecWorkdirPreparedState: (args: ExecToolArgs) =>
       resolvedExecWorkdirPreparedStates.get(args),
@@ -419,7 +426,6 @@ export function resolvePreparedExecEnvironment(params: {
   execParams: ExecToolArgs;
   host: ExecHost;
   sandbox?: BashSandboxConfig;
-  containerWorkdir?: string | null;
   channelContext?: PluginHookChannelContext;
   subagentExecution?: boolean;
   defaultPathPrepend: string[];
@@ -431,10 +437,13 @@ export function resolvePreparedExecEnvironment(params: {
   localGitConfigParameters?: string;
   managedLocalIdentity?: boolean;
   localProcessEnv?: Readonly<Record<string, string>>;
+  localToolEnv?: Readonly<Record<string, string>>;
+  scratchEnv?: Record<string, string>;
   warnings: string[];
 }): {
   env: Record<string, string>;
   requestedEnv?: Record<string, string>;
+  legacyScratchRequestedEnv?: Record<string, string>;
   executionContext?: SystemRunExecutionContext;
 } {
   if (params.localProcessEnv && params.host !== "gateway") {
@@ -451,6 +460,10 @@ export function resolvePreparedExecEnvironment(params: {
     params.execParams.env !== undefined || params.pluginEnv !== undefined
       ? { ...params.execParams.env, ...params.pluginEnv }
       : undefined;
+  // Runtime scratch defaults must not change approval bindings; explicit overrides still do.
+  const executionOverrides = params.scratchEnv
+    ? { ...params.scratchEnv, ...explicitEnv }
+    : explicitEnv;
   const storeEnvResult = params.storeEnv
     ? sanitizeHostExecEnvWithDiagnostics({
         baseEnv: {},
@@ -485,23 +498,24 @@ export function resolvePreparedExecEnvironment(params: {
     );
   }
   const hasStoreEnv = storeEnv && Object.keys(storeEnv).length > 0;
-  const untrustedRequestedEnv: Record<string, string> | undefined = hasStoreEnv
-    ? { ...storeEnv, ...explicitEnv }
-    : explicitEnv;
-  const requestedEnv: Record<string, string> | undefined = params.storeSecretEnv
-    ? { ...storeEnv, ...params.storeSecretEnv, ...explicitEnv }
-    : untrustedRequestedEnv;
+  const untrustedExecutionEnv: Record<string, string> | undefined = hasStoreEnv
+    ? { ...storeEnv, ...executionOverrides }
+    : executionOverrides;
+  const requestedEnv: Record<string, string> | undefined =
+    hasStoreEnv || params.storeSecretEnv || explicitEnv
+      ? { ...storeEnv, ...params.storeSecretEnv, ...explicitEnv }
+      : undefined;
   const hostEnvResult =
     params.host === "sandbox"
       ? null
       : sanitizeHostExecEnvWithDiagnostics({
           baseEnv: inheritedBaseEnv,
-          overrides: untrustedRequestedEnv,
+          overrides: untrustedExecutionEnv,
           blockPathOverrides: true,
         });
   if (
     hostEnvResult &&
-    untrustedRequestedEnv &&
+    untrustedExecutionEnv &&
     (hostEnvResult.rejectedOverrideBlockedKeys.length > 0 ||
       hostEnvResult.rejectedOverrideInvalidKeys.length > 0)
   ) {
@@ -538,9 +552,9 @@ export function resolvePreparedExecEnvironment(params: {
     params.sandbox && params.host === "sandbox"
       ? buildSandboxEnv({
           defaultPath: DEFAULT_PATH,
-          paramsEnv: untrustedRequestedEnv,
+          paramsEnv: untrustedExecutionEnv,
           sandboxEnv: params.sandbox.env,
-          containerWorkdir: params.containerWorkdir ?? params.sandbox.containerWorkdir,
+          containerWorkdir: params.sandbox.containerWorkdir,
         })
       : (hostEnvResult?.env ?? inheritedBaseEnv);
 
@@ -557,9 +571,7 @@ export function resolvePreparedExecEnvironment(params: {
   // The Gateway CLI shim is merged in automatically and only exists on the Gateway host.
   if (params.host === "node") {
     if (omitGatewayAgentCliPath(params.defaultPathPrepend).length > 0) {
-      params.warnings.push(
-        "Warning: tools.exec.pathPrepend is ignored for host=node. Configure PATH on the node host/service instead.",
-      );
+      params.warnings.push(EXEC_NODE_PATH_PREPEND_WARNING);
     }
   } else {
     applyPathPrepend(env, params.defaultPathPrepend);
@@ -579,7 +591,7 @@ export function resolvePreparedExecEnvironment(params: {
     // Secret-kind entries are authenticated ciphertext, not active credentials.
     // Inject them after ordinary env filtering so names such as GH_TOKEN remain usable.
     for (const [key, value] of Object.entries(params.storeSecretEnv)) {
-      if (!explicitEnv || !Object.hasOwn(explicitEnv, key)) {
+      if (!executionOverrides || !Object.hasOwn(executionOverrides, key)) {
         env[key] = value;
       }
     }
@@ -602,13 +614,31 @@ export function resolvePreparedExecEnvironment(params: {
             .join(" "),
         }
       : undefined;
-  // Prepared values win locally; nodes sanitize their own base env and reject scrub override keys.
-  const executionEnv = mergeProcessEnv([env, preparedEnv, routingEnv, gitPolicyEnv]);
+  // Node-owned tool settings stay on this host. Approval and remote requests carry only
+  // the caller's requested environment and their existing routing/identity fields.
+  const executionEnv = mergeProcessEnv([
+    env,
+    params.host === "gateway" ? params.localToolEnv : undefined,
+    preparedEnv,
+    routingEnv,
+    gitPolicyEnv,
+  ]);
   const forwardedEnv =
     params.host === "node" || !routingEnv ? requestedEnv : { ...requestedEnv, ...routingEnv };
 
   return {
     env: executionEnv,
+    ...(params.host === "gateway" && params.scratchEnv
+      ? {
+          legacyScratchRequestedEnv: {
+            ...storeEnv,
+            ...params.storeSecretEnv,
+            ...executionOverrides,
+            ...routingEnv,
+            ...preparedEnv,
+          },
+        }
+      : {}),
     ...(params.host === "node" && routingEnv ? { executionContext } : {}),
     ...(params.host !== "node" && Object.keys(preparedEnv).length > 0
       ? { requestedEnv: { ...forwardedEnv, ...preparedEnv } }

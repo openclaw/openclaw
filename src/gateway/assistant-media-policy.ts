@@ -22,7 +22,13 @@ import { captureResidentUserProfileAccess } from "../state/user-profile-list.js"
 import { applyHttpOperatorRoleScopeCeiling, resolveHttpProfile } from "./http-auth-user-profile.js";
 import type { AuthorizedControlUiReadRequest } from "./http-auth-utils.js";
 import { authorizeOperatorScopesForMethod } from "./method-scopes.js";
+import {
+  isOpenClawIdTunnelPrincipalCurrent,
+  prepareOpenClawIdTunnelPrincipal,
+} from "./openclaw-id/tunnel-principal.js";
+import { isNamedOperatorRoleEnforcementEnabled } from "./operator-role-enforcement.js";
 import { resolveRequestedSessionAgentId } from "./session-request-agent.js";
+import { prepareSessionSharingRead } from "./session-sharing-target-read.js";
 import { createProfileSessionEntryFilter } from "./session-sharing.js";
 import type { GatewaySessionEntryRead } from "./session-utils.js";
 import { resolveSessionWorkerPlacementContext } from "./session-worker-placement-context.js";
@@ -39,7 +45,6 @@ export function assertAssistantMediaPolicyCurrent(
   selection: Parameters<typeof resolveAssistantMediaPolicy>[0],
   policy: NonNullable<Awaited<ReturnType<typeof resolveAssistantMediaPolicy>>>,
   hasAllowance: boolean,
-  requestAuth: AuthorizedControlUiReadRequest | undefined,
 ) {
   policy.assertCurrent?.();
   // Ordinary session activity changes the global access epoch without revoking media tickets.
@@ -58,7 +63,6 @@ export function assertAssistantMediaPolicyCurrent(
     current.remote ||= isCloudWorkerPlacementState(placement?.state);
   }
   if (
-    requestAuth?.hasCurrentClientAuthority?.() === false ||
     !current ||
     current.session?.sessionKey !== policy.session?.sessionKey ||
     current.session?.agentId !== policy.session?.agentId ||
@@ -82,7 +86,7 @@ export function assertAssistantMediaPolicyCurrent(
 
 type AssistantMediaReader = Pick<
   AuthorizedControlUiReadRequest,
-  "authMethod" | "operatorScopes"
+  "authMethod" | "operatorScopes" | "openclawIdPrincipal"
 > & {
   profileId?: string;
 };
@@ -93,10 +97,19 @@ function resolveAssistantMediaReaderAuth(
   messageRead: boolean,
 ): AuthorizedControlUiReadRequest | undefined {
   try {
+    if (
+      (reader.openclawIdPrincipal &&
+        !isOpenClawIdTunnelPrincipalCurrent(reader.openclawIdPrincipal)) ||
+      // Member session visibility and access policies require a durable person.
+      (reader.openclawIdPrincipal?.kind === "member" && !reader.profileId)
+    ) {
+      return undefined;
+    }
     const currentProfile = reader.profileId
       ? resolveHttpProfile(
           captureResidentUserProfileAccess(reader.profileId).assertCurrent().id,
           config,
+          reader.openclawIdPrincipal,
         )
       : undefined;
     const operatorScopes = applyHttpOperatorRoleScopeCeiling(reader.operatorScopes, currentProfile);
@@ -126,7 +139,9 @@ type AssistantMediaSessionRead = Pick<
   GatewaySessionEntryRead,
   "cfg" | "agentId" | "canonicalKey" | "entry"
 > &
-  Partial<Pick<GatewaySessionEntryRead, "storePath" | "readSource">>;
+  Partial<Pick<GatewaySessionEntryRead, "storePath" | "readSource">> & {
+    membership?: ReadonlySet<string>;
+  };
 
 async function resolveAssistantMediaSessionPolicy(params: AssistantMediaPolicyParams) {
   let loaded: AssistantMediaSessionRead | undefined;
@@ -147,11 +162,7 @@ async function resolveAssistantMediaSessionPolicy(params: AssistantMediaPolicyPa
       const canonicalKey = normalizeSessionKeyPreservingOpaquePeerIds(params.sessionKey);
       const source = captureSessionEntryMetadataRead(
         { sessionKey: canonicalKey, agentId: owner.agentId },
-        () => {
-          if (params.requestAuth?.hasCurrentClientAuthority?.() === false) {
-            throw new FsSafeError("path-mismatch", "Media access changed");
-          }
-        },
+        () => {},
       );
       if (source) {
         assertCurrent = source.assertCurrent;
@@ -193,6 +204,36 @@ async function resolveAssistantMediaSessionPolicy(params: AssistantMediaPolicyPa
       if (!loaded?.entry?.sessionId) {
         return undefined;
       }
+      const auth =
+        params.requestAuth ??
+        (params.reader &&
+          resolveAssistantMediaReaderAuth(
+            params.reader,
+            getRuntimeConfig(),
+            Boolean(params.messageId),
+          ));
+      if (auth?.operatorRolePolicy?.sessions.others === "invited") {
+        const sharing = await prepareSessionSharingRead({
+          cfg: getRuntimeConfig(),
+          sessionKey: params.sessionKey,
+          agentId: owner.agentId,
+        });
+        const releaseEntry = releaseSession;
+        releaseSession = () => {
+          sharing.release();
+          releaseEntry?.();
+        };
+        const readEntry = readSession;
+        readSession = () => {
+          const current = readEntry();
+          const facts = sharing.readCurrent(getRuntimeConfig());
+          if (!current?.entry || !facts.target) {
+            return undefined;
+          }
+          return { ...current, entry: facts.target.entry, membership: facts.membership };
+        };
+        loaded = readSession();
+      }
     }
     policy = resolvePreparedAssistantMediaPolicy(params, loaded, readSession, assertCurrent);
     return policy && { ...policy, releaseSession };
@@ -220,6 +261,8 @@ function resolvePreparedAssistantMediaPolicy(
       ? {
           authMethod: params.requestAuth.authMethod,
           operatorScopes: params.requestAuth.operatorScopes,
+          // Tickets retain the device's membership ceiling independently of its linked profile.
+          openclawIdPrincipal: params.requestAuth.openclawIdPrincipal,
           ...(params.requestAuth.authenticatedUserProfile
             ? { profileId: params.requestAuth.authenticatedUserProfile.profileId }
             : {}),
@@ -235,6 +278,13 @@ function resolvePreparedAssistantMediaPolicy(
         )
       : undefined);
   if (!auth || !reader) {
+    return undefined;
+  }
+  if (
+    auth.operatorRolePolicy?.sessions.others === "invited" &&
+    !loaded &&
+    !auth.operatorScopes.includes("operator.admin")
+  ) {
     return undefined;
   }
   const standaloneRead = authorizeOperatorScopesForMethod(
@@ -273,11 +323,12 @@ function resolvePreparedAssistantMediaPolicy(
           !createProfileSessionEntryFilter({
             profileId,
             sessionCap: auth.operatorRolePolicy?.sessions.others,
+            membership: loaded.membership,
           })(loaded.canonicalKey, entry)
         ) {
           return undefined;
         }
-      } else if (!profileId && config.gateway?.roles) {
+      } else if (!profileId && isNamedOperatorRoleEnforcementEnabled(config)) {
         return undefined;
       }
     }
@@ -332,11 +383,19 @@ function resolvePreparedAssistantMediaPolicy(
     localRoots,
     workspaceOnly,
     reader,
+    profileId: auth.authenticatedUserProfile?.profileId,
     canAllow: auth.operatorScopes.includes("operator.admin"),
   };
 }
 
 export async function resolveAssistantMediaPolicy(params: AssistantMediaPolicyParams) {
+  if (params.reader?.openclawIdPrincipal) {
+    try {
+      await prepareOpenClawIdTunnelPrincipal(params.reader.openclawIdPrincipal);
+    } catch {
+      return undefined;
+    }
+  }
   const policy = await resolveAssistantMediaSessionPolicy(params);
   if (!policy) {
     return undefined;

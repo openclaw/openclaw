@@ -30,7 +30,7 @@ const button = (root: Page | Locator, name: string) =>
   root.getByRole("button", { name, exact: true });
 const exactText = (root: Page | Locator, name: string) => root.getByText(name, { exact: true });
 const remoteView = (panel: Locator) => panel.locator("[data-test-remote-desktop='true']");
-const unavailable = "The requested desktop is unavailable. Retry when the machine is ready.";
+const unavailable = "This desktop is unavailable. Try again when the device is ready.";
 const observe = (token: string, control = false) => ({
   transport: "rfb",
   wsPath: `/desktop/observe?token=${token}`,
@@ -471,6 +471,80 @@ suite.define(() => {
       await back.click();
       await page.waitForURL(`${suite.server.baseUrl}dashboards`);
     });
+  });
+
+  it("identifies a focused Desktop source before connecting on a phone", async () => {
+    await suite.withPage({ serviceWorkers: "block" }, async ({ page }) => {
+      const prefix = "node:" + "a".repeat(63);
+      const devices = ["Mac Studio", "Mac Studio", "Review laptop", undefined].map((label, index) =>
+        Object.assign(makeEnvironment(prefix + index), { label }),
+      );
+      const { gateway, panel } = await openDesktopDocument(page, "focus/desktop", {
+        environments: [gatewayEnvironment, ...devices],
+      });
+      const rows = panel.locator(".desktop-environment");
+      await rows.nth(4).waitFor();
+      // oxlint-disable-next-line unicorn/prefer-dom-node-text-content -- innerText proves the rendered line break between name and ID.
+      expect(await rows.nth(0).locator(".desktop-environment__id").innerText()).toBe(
+        "This computer",
+      );
+      for (const [index, device] of devices.entries()) {
+        const row = rows.nth(index + 1);
+        const name = row.locator(".desktop-environment__id");
+        const expected =
+          index < 2 ? [device.label, device.id].join("\n") : (device.label ?? device.id);
+        // oxlint-disable-next-line unicorn/prefer-dom-node-text-content -- innerText proves the rendered line break between name and ID.
+        expect(await name.innerText()).toBe(expected);
+        expect(await row.getByRole("button").getAttribute("aria-describedby")).toBe(
+          await name.getAttribute("id"),
+        );
+        const identifier = row.locator(
+          index < 2 ? ".desktop-environment__qualifier" : ".desktop-environment__label",
+        );
+        expect(await identifier.getAttribute("title")).toBe(index < 2 ? device.id : expected);
+        const visibleEnd = await identifier.evaluate((element) => {
+          const text = element.querySelector("bdi")!.firstChild as Text;
+          const range = document.createRange();
+          range.selectNodeContents(text);
+          const lines = new Set(Array.from(range.getClientRects(), (rect) => rect.top));
+          range.setStart(text, text.length - 1);
+          const end = range.getBoundingClientRect();
+          const box = element.getBoundingClientRect();
+          return lines.size === 1 && end.left >= box.left - 1 && end.right <= box.right + 1;
+        });
+        expect(visibleEnd).toBe(true);
+      }
+      await rows.nth(2).getByRole("button").press("Enter");
+      await expectObserve(gateway, devices[1]!.id);
+    });
+  });
+
+  it("reserves the full label in the focused Desktop size control", async () => {
+    await suite.withPage(
+      { serviceWorkers: "block", isMobile: true, hasTouch: true },
+      async ({ page }) => {
+        const { panel } = await openDesktopDocument(page, "focus/desktop/source/gateway");
+        const sizing = panel.locator(".desktop-touch-toolbar select");
+        await sizing.waitFor();
+        await page.setViewportSize({ width: 820, height: 1180 });
+        await page.evaluate(() => document.fonts.ready);
+        const fit = await sizing.boundingBox();
+        await sizing.selectOption("actual");
+        const remaining = await sizing.evaluate((el: HTMLSelectElement) => {
+          const style = getComputedStyle(el);
+          const context = document.createElement("canvas").getContext("2d")!;
+          context.font = style.font;
+          return (
+            el.clientWidth -
+            Number.parseFloat(style.paddingLeft) -
+            Number.parseFloat(style.paddingRight) -
+            context.measureText(el.selectedOptions[0]!.label).width
+          );
+        });
+        expect(remaining).toBeGreaterThanOrEqual(-0.5);
+        expect(await sizing.boundingBox()).toEqual(fit);
+      },
+    );
   });
 
   it("renders a full-bleed shell-free picker", async () => {

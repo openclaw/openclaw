@@ -1,6 +1,7 @@
 import type { serializeConfigResolutionFacts } from "../config/resolution-facts.js";
 import type { Model } from "../llm/types.js";
 import type { ActiveRemoteModelCatalog } from "../model-catalog/remote-overlay.js";
+import type { RemoteModelCatalogWorkerTransfer } from "../model-catalog/remote-startup-snapshot.js";
 import type { PluginMetadataSnapshot } from "../plugins/plugin-metadata-snapshot.types.js";
 import type { PreparedSyntheticAuthFacts } from "../plugins/provider-synthetic-auth.js";
 import type { AuthProfileCredentialReceipts } from "../state/user-model-account-authority.js";
@@ -8,6 +9,7 @@ import type { captureTemplateInstallSchemaVersionFacts } from "../templates/prov
 import type { AuthProfileStore, SharedAuthStoreOwnership } from "./auth-profiles/types.js";
 import type { ModelCatalogAuthLabels } from "./model-catalog-auth-labels.js";
 import type { ModelCatalogSnapshot } from "./model-catalog.types.js";
+import type { PersistedPluginModelCatalog } from "./plugin-model-catalog.kernel.js";
 import type { PreparedModelRuntimeAuth } from "./prepared-model-runtime-auth.js";
 import type {
   PreparedModelRuntimeAgentFacts,
@@ -35,9 +37,15 @@ export type PreparedModelCatalogWorkerInput = Readonly<{
 }>;
 
 export type PreparedModelCatalogWorkerTask = {
-  context: { workspaceDir: string | undefined; fingerprint: string };
+  context: {
+    workspaceDir: string | undefined;
+    fingerprint: string;
+    registrationFingerprint: string;
+  };
   value:
-    | PreparedModelCatalogWorkerInput
+    | (Omit<PreparedModelCatalogWorkerInput, "remoteCatalog"> & {
+        remoteCatalog: RemoteModelCatalogWorkerTransfer | null;
+      })
     | Omit<PreparedModelCatalogWorkerInput, "remoteCatalog" | "pluginMetadataSnapshot">;
   request: PreparedModelWorkerRequest;
 };
@@ -54,8 +62,6 @@ export type PreparedModelWorkerRequest = PreparedModelWorkerCommand &
   Readonly<{
     syntheticAuth: PreparedSyntheticAuthFacts;
     templateInstallSchemaVersions: ReturnType<typeof captureTemplateInstallSchemaVersionFacts>;
-    /** Codex client version decided by the parent; absent means the bundled pin. */
-    codexClientVersion?: string;
   }>;
 
 export type PreparedModelWorkerResult = PreparedModelWorkerOutcome &
@@ -72,6 +78,8 @@ export type PreparedModelWorkerOutcome =
               snapshot: ModelCatalogSnapshot;
               runtimeModels: Map<string, Model[]>;
               providerExpiries: Map<string, number>;
+              /** Planned generated catalogs; only the main thread persists them. */
+              pluginCatalogs: readonly PersistedPluginModelCatalog[];
               configuredRuntimeModels: PreparedModelRuntimeCatalogFacts["configuredRuntimeModels"];
               providerAuthLabels: ModelCatalogAuthLabels;
             }

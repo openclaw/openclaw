@@ -130,14 +130,6 @@ function writeSourceProjectFixture(root: string) {
   }
 }
 
-type OxlintTsconfig = {
-  compilerOptions?: {
-    allowJs?: boolean;
-  };
-  include?: string[];
-  exclude?: string[];
-};
-
 function readJson(filePath: string): unknown {
   return JSON5.parse(fs.readFileSync(filePath, "utf8"));
 }
@@ -446,15 +438,68 @@ describe("oxlint config", () => {
     checked(typecheck, 0);
   });
 
-  it("has a discoverable scripts tsconfig for type-aware linting", () => {
-    const tsconfig = readJson("scripts/tsconfig.json") as OxlintTsconfig;
-
-    expect(tsconfig).toMatchObject({
-      compilerOptions: { allowJs: true },
-      include: expect.arrayContaining(["**/*.ts", "**/*.mts"]),
+  it("keeps release line limits advisory and suppression checks strict", () => {
+    const { root, write } = makeFixture("release-limits", {
+      categories: { correctness: "off" },
+      overrides: [
+        {
+          files: ["*.ts"],
+          rules: {
+            "max-lines": ["error", { max: 1 }],
+            "max-lines-per-function": ["error", { max: 1 }],
+            "max-params": ["error", 1],
+            "no-var": "error",
+          },
+        },
+      ],
     });
-    expect(tsconfig.exclude ?? []).not.toContain("**/*.ts");
-    expect(tsconfig.exclude ?? []).not.toContain("**/*.mts");
+    linkDependencies(root);
+    write(
+      "fixture.ts",
+      "export function f(a: number, b: number) {\n  var c = a;\n  return c + b;\n}\n",
+    );
+    const env = { GITHUB_ACTIONS: "false", OPENCLAW_RELEASE_CONTEXT_REF: "release/2026.11.4" };
+    const suppressed =
+      "/* oxlint-disable max-lines, max-lines-per-function -- retained size exception */\nexport function f(a: number) {\n  return a;\n}\n";
+    write("suppressed.ts", suppressed);
+    const strictSuppressions = () =>
+      runTool(
+        root,
+        [
+          oxlintRunner,
+          "--openclaw-focused-config",
+          "--report-unused-disable-directives-severity",
+          "error",
+          "--format=json",
+          "suppressed.ts",
+        ],
+        { env: { ...process.env, ...env } },
+      );
+    expect(parseReport(checked(strictSuppressions(), 0)).diagnostics).toEqual([]);
+    write(
+      "suppressed.ts",
+      suppressed + "/* oxlint-disable no-var -- unused correctness exception */\n",
+    );
+    expect(parseReport(checked(strictSuppressions(), 1)).diagnostics).toMatchObject([
+      { severity: "error" },
+    ]);
+    const report = parseReport(checked(runFocused(root, ["fixture.ts"], env), 1));
+    expect(
+      report.diagnostics
+        .map(({ code, severity }) => ({ code, severity }))
+        .toSorted((left, right) => left.code.localeCompare(right.code)),
+    ).toEqual([
+      { code: "eslint(max-lines-per-function)", severity: "warning" },
+      { code: "eslint(max-lines)", severity: "warning" },
+      { code: "eslint(max-params)", severity: "error" },
+      { code: "eslint(no-var)", severity: "error" },
+    ]);
+    write("fixture.ts", "export function f(a: number) {\n  const c = a;\n  return c;\n}\n");
+    expect(
+      parseReport(checked(runFocused(root, ["fixture.ts"], env), 0)).diagnostics.map(
+        ({ severity }) => severity,
+      ),
+    ).toEqual(["warning", "warning"]);
   });
 
   it("keeps native cap scopes and correctness while warning on untouched local line debt", () => {
@@ -623,38 +668,6 @@ describe("oxlint config", () => {
         });
       }
     }
-  });
-
-  it("keeps untouched limits advisory for release-version-only manifest changes", () => {
-    const config = { categories: { correctness: "off" }, rules: { "max-lines": ["error", 2] } };
-    const { root, write, json } = makeFixture("release-version-scope", config);
-    linkDependencies(root);
-    write("src/changed.ts", "export const changed = [\n  0,\n  1,\n];\n");
-    write("src/untouched.ts", "export const untouched = [\n  0,\n  1,\n];\n");
-    json("package.json", { name: "fixture", version: "2026.10.10-beta.3" });
-    git(root, ["init", "--quiet"]);
-    git(root, ["add", "."]);
-    git(root, [
-      "-c",
-      "user.name=Test",
-      "-c",
-      "user.email=test@example.com",
-      "commit",
-      "--quiet",
-      "-m",
-      "base",
-    ]);
-    const base = git(root, ["rev-parse", "HEAD"]);
-    json("package.json", { name: "fixture", version: "2026.10.10-beta.4" });
-
-    const result = runFocused(root, ["src/changed.ts", "src/untouched.ts"], {
-      GITHUB_ACTIONS: "false",
-      OPENCLAW_OXLINT_CHANGED_PATHS: JSON.stringify(["package.json", "src/changed.ts"]),
-      OPENCLAW_OXLINT_CHANGED_BASE: base,
-    });
-    const report = parseReport(checked(result, 1));
-    expect(byFile(report, "src/changed.ts")[0]?.severity).toBe("error");
-    expect(byFile(report, "src/untouched.ts")[0]?.severity).toBe("warning");
   });
 
   it("trusts changed lint policy files only when they match authoritative main", () => {

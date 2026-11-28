@@ -1,6 +1,6 @@
 import { beforeEach, describe, expect, it } from "vitest";
+import type { ImageGenerationProvider, ImageGenerationRequest } from "./provider-types.js";
 import { generateImage, type GenerateImageParams } from "./runtime.js";
-import type { ImageGenerationProvider, ImageGenerationRequest } from "./types.js";
 
 type ImageGenerationRuntimeDeps = NonNullable<Parameters<typeof generateImage>[1]>;
 type Geometry = NonNullable<ImageGenerationProvider["capabilities"]["geometry"]>;
@@ -290,6 +290,23 @@ describe("image-generation runtime", () => {
       aspectRatio: "20:9",
       resolution: "2K",
     });
+  });
+
+  it("ignores an explicit resolution for a model with no resolutions", async () => {
+    useProvider("minimax", {
+      capabilities: geometryCapabilities(
+        { resolutions: [], resolutionsByModel: { "image-hd": ["1K", "4K"] } },
+        { supportsResolution: true },
+      ),
+    });
+
+    const result = await runGenerateImage({
+      cfg: imageConfig("minimax/image-01"),
+      resolution: "4K",
+    });
+
+    expect(seenRequest?.resolution).toBeUndefined();
+    expect(result.ignoredOverrides).toEqual([{ key: "resolution", value: "4K" }]);
   });
 
   const legacyOutput: ImageGenerationProvider["capabilities"]["output"] = {

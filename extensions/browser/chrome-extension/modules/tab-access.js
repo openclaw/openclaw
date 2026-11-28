@@ -598,8 +598,15 @@ export function createTabAccessPolicy({ getGroupColor }) {
       }
       return state.tab;
     }
+    // Diagnose only after rejection; the original document epoch stays invalid.
     const message =
-      TAB_ACCESS_DENIAL_MESSAGES[state.reason] ?? "is restricted or unavailable to OpenClaw";
+      state.reason === "revoked" &&
+      epoch.documentRevision !== undefined &&
+      epoch.documentRevision !== (tabRevisions.get(tabId)?.document ?? 0) &&
+      groupRevocations.isCurrentInMode(mode, epoch, state.tab) &&
+      groupRevocations.isProvenCurrent(tabId, epoch, epochIsCurrent)
+        ? "document changed while the command was in flight; inspect the current page before retrying"
+        : (TAB_ACCESS_DENIAL_MESSAGES[state.reason] ?? "is restricted or unavailable to OpenClaw");
     throw new Error(`tab ${tabId} ${message}`);
   }
 

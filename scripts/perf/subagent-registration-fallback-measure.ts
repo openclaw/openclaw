@@ -6,6 +6,9 @@
  * --source-dir <sparse-base-root> overrides only subagent-registry-state.ts.
  * CPU/allocation measures preparation plus the three reads made during registration;
  * fixture creation, cache warming and forced GC are outside measured windows.
+ * CPU/allocation also populate the live registry; --runs varies the unrelated history.
+ * Compare ordered row digests as well as CPU/allocation at 100, 1,000 and 10,000 runs.
+ * Accept reduced work with identical rows; timing and allocation use separate passes.
  * Retention keeps the reader after retiring its cache, then drops it for a GC control.
  * Accept released unrelated rows; report any capture CPU/allocation cost explicitly.
  * This is owner evidence, not a Gateway stress test. State stays beside --output.
@@ -22,6 +25,7 @@ import { setImmediate as nextTurn } from "node:timers/promises";
 import { fileURLToPath, pathToFileURL } from "node:url";
 import { parseArgs } from "node:util";
 import type { SubagentRunRecord } from "../../src/agents/subagents/registry/subagent-registry.types.ts";
+import { startCollectedHeapSampling } from "../lib/heap-sampling.ts";
 import { parseStrictIntegerOption } from "../lib/strict-integer-option.ts";
 
 const { values } = parseArgs({
@@ -74,6 +78,8 @@ const {
 const { saveSubagentRegistryToSqlite } =
   await import("../../src/agents/subagents/registry/subagent-registry-state.fixture.test-support.js");
 const { closeOpenClawStateDatabaseAsync } = await import("../../src/state/openclaw-state-db.js");
+const { subagentRuns } =
+  await import("../../src/agents/subagents/registry/subagent-registry-memory.js");
 const { captureOpenClawStateWorkerContext } =
   await import("../../src/state/openclaw-state-worker-context.js");
 assert(!values["source-dir"] || overrideLoaded, "Baseline override was not loaded");
@@ -137,6 +143,12 @@ try {
       released,
     };
   } else {
+    await prepare();
+    for (const [runId, row] of getSubagentRunsSnapshotForRead(new Map())) {
+      subagentRuns.set(runId, row);
+    }
+    const digest = async () => hash("sha256", JSON.stringify([...(await prepare())()]), "hex");
+    const rowsDigest = await digest();
     const pass = async () => {
       const reader = await prepare();
       return reader().size + reader().size + reader().size;
@@ -148,12 +160,7 @@ try {
     const inspector = new Session();
     let allocatedBytes: number | undefined;
     if (values.mode === "allocation") {
-      inspector.connect();
-      await inspector.post("HeapProfiler.startSampling", {
-        samplingInterval: 32768,
-        includeObjectsCollectedByMajorGC: true,
-        includeObjectsCollectedByMinorGC: true,
-      });
+      await startCollectedHeapSampling(inspector, 32768);
     }
     const cpu = process.threadCpuUsage();
     const started = performance.now();
@@ -170,7 +177,10 @@ try {
       inspector.disconnect();
     }
     assert.equal(checksum, iterations * 3);
+    assert.equal(await digest(), rowsDigest);
     measurement = {
+      rowsDigest,
+      residentRuns: subagentRuns.size,
       iterations,
       elapsedMs,
       cpuUsPerCapture: (used.user + used.system) / iterations,
@@ -190,6 +200,7 @@ try {
   await writeFile(output, `${JSON.stringify(result, null, 2)}\n`);
   console.log(JSON.stringify(result));
 } finally {
+  subagentRuns.clear();
   clearSubagentRunsReadCacheForTest();
   await closeOpenClawStateDatabaseAsync();
   await rm(root, { recursive: true, force: true });
