@@ -19,7 +19,7 @@ import { prepareChannelRunAdmission } from "./channel-run-admission.js";
 
 const identityConfig = { logging: { audit: { executionIdentity: true } } } as const;
 
-function prepare(params: Partial<Parameters<typeof prepareChannelRunAdmission>[0]> = {}) {
+function prepare(params: Partial<Parameters<typeof prepareChannelRunAdmission>[0]>) {
   const prepared = prepareChannelRunAdmission({
     cfg: identityConfig,
     runId: "run-1",
