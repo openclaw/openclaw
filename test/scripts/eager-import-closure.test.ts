@@ -112,6 +112,15 @@ it("keeps packaged scripts closed over runtime imports", () => {
   ).toEqual([]);
 });
 
+it("keeps legacy lease inspection out of the file-lock heartbeat", () => {
+  const files = collectRuntimeImportClosure(process.cwd(), [
+    "src/infra/gateway-state-owner-heartbeat.runtime.ts",
+  ]);
+  expect(files).toContain("src/infra/gateway-lock-payload.ts");
+  expect(files).not.toContain("src/infra/kysely-sync.ts");
+  expect(files).not.toContain("src/infra/node-sqlite.ts");
+});
+
 it("keeps the PR wrapper inventory closed over runtime imports", () => {
   const components = readFileSync(wrapperInventory, "utf8").trim().split("\n");
   const stale = components.filter((file) => !existsSync(file)).toSorted();

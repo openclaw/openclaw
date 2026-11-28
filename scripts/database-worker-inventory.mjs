@@ -1402,7 +1402,7 @@ const reviewedOperations = new Map([
     ],
   ],
   [
-    "src/infra/gateway-lock-payload.ts",
+    "src/infra/gateway-lock-recovery-namespace.ts",
     [
       {
         tier: "T2",
