@@ -8,6 +8,7 @@ export const miscExtensionTestRoots = [
   "extensions/duckduckgo",
   "extensions/exa",
   "extensions/firecrawl",
+  "extensions/keenable",
   "extensions/fireworks",
   "extensions/kilocode",
   "extensions/litellm",

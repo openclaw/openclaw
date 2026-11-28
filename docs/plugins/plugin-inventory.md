@@ -124,6 +124,8 @@ Each entry lists the package, distribution route, and description.
 
 - **[imap](/plugins/reference/imap)** (`@openclaw/imap`) - included in OpenClaw. Watch IMAP mailboxes and dispatch authenticated incoming email to isolated agent sessions.
 
+- **[keenable](/plugins/reference/keenable)** (`@openclaw/keenable-plugin`) - included in OpenClaw, and also from npm or ClawHub: `@openclaw/keenable-plugin`. Adds web search provider support.
+
 - **[kie](/plugins/reference/kie)** (`@openclaw/kie-provider`) - included in OpenClaw. Adds Kie model provider support to OpenClaw.
 
 - **[knowledge](/plugins/reference/knowledge)** (`@openclaw/knowledge`) - included in OpenClaw. Evidence-backed knowledge, inspectable in OpenClaw.
