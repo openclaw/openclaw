@@ -527,7 +527,7 @@ describe("OpenAI realtime public projection", () => {
       model: "gpt-live-1",
       selectedVoice: "quartz",
       voices:
-        "alloy ash ballad beacon bossa cedar cinder coral delta echo gleam marin meridian quartz ripple sage shimmer stone tempo verse vesper willow".split(
+        "alloy ash ballad beacon bossa brise calandria cedar cinder compas coral delta destello echo flitz gleam halo harema hornero juni luciernaga marin meridian nira noeul nuri pearl quartz ripple sage shida shimmer sillage stone tempo verse vesper willow".split(
           " ",
         ),
     },
