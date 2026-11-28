@@ -203,6 +203,7 @@ export async function channelsAddCommand(
           prompter,
           workspaceDir,
           promptInstall: false,
+          promptLocalFallback: isTerminalInteractive(),
           failureOutput: "caller",
           ...effectContext(),
         });

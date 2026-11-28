@@ -42,6 +42,7 @@ export async function ensureChannelSetupPluginInstalled(
     runtime: params.runtime,
     workspaceDir: params.workspaceDir,
     ...(params.promptInstall !== undefined ? { promptInstall: params.promptInstall } : {}),
+    promptLocalFallback: params.promptLocalFallback,
     ...(params.failureOutput ? { failureOutput: params.failureOutput } : {}),
     ...(params.autoConfirmSingleSource !== undefined
       ? { autoConfirmSingleSource: params.autoConfirmSingleSource }
