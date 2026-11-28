@@ -19,6 +19,7 @@ export type WebPushSnapshot = WebPushAccess & {
   command?: Promise<void>;
   error?: string | null;
   preferences?: WebPushPreferencesResult | null;
+  agentSelections?: WebPushCapabilityPatch["agentSelections"];
 };
 
 export type WebPushCapability = ReturnType<typeof createWebPushCapability>;

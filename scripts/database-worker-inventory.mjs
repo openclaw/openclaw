@@ -639,6 +639,17 @@ const reviewedOperations = new Map([
     ],
   ],
   [
+    "src/state/openclaw-state-db-delivery-queue-backfill.ts",
+    [
+      {
+        tier: "T3",
+        operations: ["hasLegacyDeliveryQueueFailureCompactionWork"],
+        evidence:
+          "Read-only Doctor plan only: hasDeliveryQueueBackfillWork, called from planOpenClawStateDatabaseDoctorRepair (Doctor schema preparation and its config-flow pending check) on a read-only connection; no Gateway runtime caller.",
+      },
+    ],
+  ],
+  [
     "src/state/openclaw-state-db-legacy-backfills.ts",
     [
       {
@@ -1410,7 +1421,7 @@ const reviewedOperations = new Map([
     ],
   ],
   [
-    "src/infra/gateway-lock-payload.ts",
+    "src/infra/gateway-lock-recovery-namespace.ts",
     [
       {
         tier: "T2",

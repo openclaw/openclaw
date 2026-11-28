@@ -17,6 +17,7 @@ import {
   startCompletionServer,
 } from "../../agents/simple-completion.test-support.js";
 import { makeAgentAssistantMessage } from "../../agents/test-helpers/agent-message-fixtures.js";
+import * as configIO from "../../config/config.js";
 import {
   getRuntimeConfigSourceSnapshot,
   setRuntimeConfigSnapshot,
@@ -35,6 +36,7 @@ import {
   type OpenClawTestState,
 } from "../../test-utils/openclaw-test-state.js";
 import * as cliUtils from "../cli-utils.js";
+import * as commandConfig from "../command-config-resolution.js";
 import { registerModelCapabilityCommands } from "./model.js";
 import * as shared from "./shared.js";
 
@@ -103,6 +105,7 @@ function accountProfile(provider = "customacct", id = ACCOUNT_ENV) {
 
 it.each([
   "config",
+  "cold account",
   "implicit local",
   "account",
   "unavailable sibling",
@@ -156,7 +159,16 @@ it.each([
       ],
     });
   }
-  setRuntimeConfigSnapshot(structuredClone(cfg), structuredClone(cfg));
+  const runtimeConfig = structuredClone(cfg);
+  if (scenario === "cold account") {
+    await state.writeConfig(cfg);
+  } else {
+    setRuntimeConfigSnapshot(runtimeConfig, structuredClone(cfg));
+  }
+  const sourceBeforeRun = getRuntimeConfigSourceSnapshot();
+  const capture = vi.spyOn(configIO, "captureRuntimeConfigAsyncReader");
+  const resolution = vi.spyOn(commandConfig, "resolveCommandConfigWithSecrets");
+  const publish = vi.spyOn(configIO, "setRuntimeConfigSnapshot");
   vi.spyOn(cliUtils, "runCommandWithRuntime").mockImplementation(async (_runtime, run) => run());
   const complete = vi
     .spyOn(completion, "completeWithPreparedSimpleCompletionModel")
@@ -209,6 +221,16 @@ it.each([
     return;
   }
   await run;
+  if (scenario === "cold account") {
+    expect(capture).toHaveBeenCalledOnce();
+  }
+  if (scenario === "config") {
+    expect(capture).not.toHaveBeenCalled();
+    expect(resolution.mock.calls[0]?.[0].config).toBe(runtimeConfig);
+    const { effectiveConfig } = await resolution.mock.results[0]!.value;
+    expect(publish.mock.calls[0]?.[0]).toBe(effectiveConfig);
+    expect(publish.mock.calls[0]?.[1]).toBe(sourceBeforeRun);
+  }
   expect(gatewayResolve).toHaveBeenCalledTimes(delegated ? 1 : 0);
   expect(complete).toHaveBeenCalledOnce();
   const auth = complete.mock.calls[0]![0].auth;

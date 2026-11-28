@@ -34,7 +34,10 @@ vi.mock("../agents/sandbox/docker.js", () => ({
 vi.mock("../../packages/terminal-core/src/note.js", () => ({ note }));
 
 // mock-isolation: Image health fixtures exclude agent-directory registration and filesystem observers.
-vi.mock("../agents/agent-scope-config.js", () => ({ listAgentEntriesWithSource: () => [] }));
+vi.mock("../agents/agent-scope-config.js", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("../agents/agent-scope-config.js")>()),
+  listAgentEntriesWithSource: () => [],
+}));
 
 const {
   checkSandboxImageRepairPending,
@@ -91,6 +94,74 @@ describe("sandbox health", () => {
       }
     },
   );
+
+  it("follows an agent's own sandbox mode when the defaults leave it off (#201988)", async () => {
+    const cfg: OpenClawConfig = {
+      agents: { entries: { work: { sandbox: { mode: "all" } } } },
+    };
+    runExec.mockRejectedValue(new Error("Docker not installed"));
+    await maybeRepairSandboxImages(cfg, mockRuntime, mockPrompter);
+    expectNote('mode: "all" for agent "work") but Docker is not available');
+    expectNote('set sandbox.mode to off for agent "work"');
+
+    vi.clearAllMocks();
+    runExec.mockImplementation(async (_command: string, args: string[]) => {
+      if (args[0] === "image") {
+        throw Object.assign(new Error("missing image"), { stderr: "No such image" });
+      }
+      return { stdout: "", stderr: "" };
+    });
+    await expect(checkSandboxImageRepairPending(cfg)).resolves.toBe("work");
+  });
+
+  it("names an agent's enabled mode before a role requirement and checks each image once", async () => {
+    const roleRequired = {
+      roles: {
+        definitions: {
+          guest: { sessions: { others: "view" }, agents: "*", scopes: [], sandbox: "required" },
+        },
+      },
+    } as NonNullable<OpenClawConfig["gateway"]>;
+    const cfg: OpenClawConfig = {
+      gateway: roleRequired,
+      agents: {
+        defaults: { sandbox: { mode: "all" } },
+        entries: { web: { sandbox: { mode: "all", browser: { enabled: true } } } },
+      },
+    };
+    runExec.mockImplementation(async (_command: string, args: string[]) => {
+      if (args[0] === "image") {
+        throw Object.assign(new Error("missing image"), { stderr: "No such image" });
+      }
+      return { stdout: "", stderr: "" };
+    });
+    await maybeRepairSandboxImages(cfg, mockRuntime, mockPrompter);
+    const prompts = vi
+      .mocked(mockPrompter.confirmRuntimeRepair)
+      .mock.calls.map(([prompt]) => (prompt as { message: string }).message);
+    expect(prompts).toEqual(["Build base sandbox image now?", "Build browser sandbox image now?"]);
+
+    vi.clearAllMocks();
+    runExec.mockRejectedValue(new Error("Docker not installed"));
+    await maybeRepairSandboxImages(
+      {
+        gateway: roleRequired,
+        agents: { entries: { work: { sandbox: { mode: "all" } } } },
+      },
+      mockRuntime,
+      mockPrompter,
+    );
+    expectNote('mode: "all" for agent "work") but Docker is not available');
+  });
+
+  it("reports sandbox settings the runtime rejects instead of failing Doctor", async () => {
+    const cfg = {
+      agents: { defaults: { sandbox: { ssh: { workspaceRoot: "relative/root" } } } },
+    } as OpenClawConfig;
+    await expect(maybeRepairSandboxImages(cfg, mockRuntime, mockPrompter)).resolves.toEqual([
+      expect.stringContaining("Doctor could not resolve these sandbox settings"),
+    ]);
+  });
 
   it("checks and offers to build the image when only a gateway role requires a sandbox", async () => {
     const cfg: OpenClawConfig = {
@@ -223,6 +294,59 @@ describe("sandbox health", () => {
     expectNoCodexProbe();
     expect(note).not.toHaveBeenCalled();
   });
+
+  const guestRole = {
+    roles: {
+      definitions: {
+        guest: { sessions: { others: "view" }, agents: "*", scopes: [], sandbox: "required" },
+      },
+    },
+  } as NonNullable<OpenClawConfig["gateway"]>;
+  const agentOn = (network: string) => ({ sandbox: { mode: "all" as const, docker: { network } } });
+  it.each([
+    [
+      "an agent with egress over defaults without it",
+      {
+        defaults: { sandbox: { docker: { network: "none" } } },
+        entries: { work: agentOn("bridge") },
+      },
+      undefined,
+      false,
+    ],
+    [
+      "an agent without egress over defaults with it",
+      {
+        defaults: { sandbox: { docker: { network: "bridge" } } },
+        entries: { work: agentOn("none") },
+      },
+      undefined,
+      true,
+    ],
+    [
+      "any sandbox without egress among sandboxes with it",
+      {
+        defaults: { sandbox: { mode: "all", docker: { network: "bridge" } } },
+        entries: { main: {}, work: agentOn("none") },
+      },
+      undefined,
+      true,
+    ],
+    [
+      "a role-required sandbox without egress",
+      {
+        defaults: { sandbox: { docker: { network: "bridge" } } },
+        entries: { work: agentOn("bridge"), other: { sandbox: { docker: { network: "none" } } } },
+      },
+      guestRole,
+      true,
+    ],
+  ] as const)(
+    "probes the network namespace from each sandbox's resolved network: %s",
+    async (_name, agents, gateway, probed) => {
+      await probeOnLinux({ agents, gateway } as OpenClawConfig);
+      expect(probeCodexWorkspaceWriteSandbox.mock.calls.length > 0).toBe(probed);
+    },
+  );
 
   it.each([
     ["unshare", "user", "unshare: write failed /proc/self/uid_map: Operation not permitted"],

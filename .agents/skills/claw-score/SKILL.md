@@ -83,33 +83,9 @@ pnpm openclaw qa coverage --json
 
 ## Full Generation Runs
 
-For a direct full scorecard run that publishes the generated-doc pull request,
-use floating `main` resolution by default:
-
-```bash
-gh workflow run maturity-scorecard.yml \
-  --repo openclaw/openclaw \
-  --ref main \
-  -f ref=main \
-  -f expected_sha='' \
-  -f publish_pull_request=true \
-  -f allow_failures=true
-```
-
-Do not resolve `main` locally and pass that commit as both `ref` and
-`expected_sha` for an ordinary manual generation run. OpenClaw's `main` moves
-quickly, so the caller-selected commit can become stale before validation. The
-workflow then correctly rejects publication when the pull request base contains
-newer maturity inputs, and QA never starts.
-
-With `ref=main` and a blank `expected_sha`, the workflow's
-`floating_default_branch` path fetches and freezes the current remote default
-branch inside validation before handing an immutable revision to downstream
-jobs. Use an explicit SHA only when the requested evidence must remain bound to
-that exact revision, such as a release-candidate workflow call or an
-artifact-only historical reproduction. If that exact-revision run also requests
-publication and `main` has changed relevant inputs, expect validation to fail and
-dispatch again from floating `main` instead.
+For a full scorecard generation run, read [full generation runs](references/generation.md)
+in full before dispatching. It owns floating-main selection and exact-revision
+publication behavior.
 
 ## Scoring Workflow
 
@@ -134,79 +110,17 @@ keep score data in `qa/maturity-scores.yaml`.
 
 ## Default Completeness Process
 
-Completeness is scored against the intended operator-visible workflow for each
-category, not against test breadth or implementation quality. The completeness
-reference files under `references/completeness/` define the category scope and
-any surface-specific variation from this default process.
-
-By default, Completeness measures how fully OpenClaw exposes the intended
-surface capability set to the user, operator, author, or maintainer persona for
-that surface. Score whether each category delivers the full expected workflow,
-including setup, normal use, status or inspection, recovery, and important
-platform, provider, channel, security, or lifecycle variants where they apply.
-
-Treat `Surface-Specific Scoring Questions` and `Surface-Specific Guidance` as
-higher-priority instructions for that surface. The surface instructions may
-flesh out, narrow, or intentionally conflict with the default ideas here; when
-they do, follow the surface instructions and make the score rationale reflect
-that surface-specific instruction. If a reference file does not include
-surface-specific questions or guidance, apply this default process to the
-surface's `Category Scope`.
-
-For each category, ask:
-
-- Can the intended user or operator complete the category workflow end to end?
-- Are the taxonomy features present as supported capabilities rather than
-  isolated implementation fragments?
-- Are the important lifecycle stages represented: setup, normal operation,
-  status/inspection, recovery, and upgrade or removal where relevant?
-- Are the important environment, provider, platform, channel, or security
-  branches present for this surface?
-- Do the known gaps leave major user-visible capability branches missing?
-
-Default guidance:
-
-- Favor higher Completeness when the category supports the full
-  operator-visible workflow described by taxonomy and category evidence.
-- Lower Completeness when only the happy path exists, when important variants
-  are undocumented or unimplemented, or when recovery/status paths are missing.
-- Do not lower Completeness because tests are thin; that is Coverage.
-- Do not lower Completeness because implementation quality is fragile; that is
-  Quality.
-
-Default Completeness bands:
-
-- `Clawesome` (95-100): complete across expected workflows, variants, and
-  recovery branches, with only minor polish gaps.
-- `Stable` (80-95): the expected workflow set is broadly present, with only
-  bounded missing branches.
-- `Beta` (70-80): the main workflow exists, but meaningful branches or recovery
-  paths are still absent.
-- `Alpha` (50-70): only a partial capability set is present; users can complete
-  some core tasks but not the full expected workflow.
-- `Experimental` (0-50): the category exposes only fragments of the intended
-  capability.
+Before assigning or changing Completeness, read the
+[default completeness process](references/default-completeness.md) in full, then
+the surface rubric selected by the scoring workflow above. Surface-specific
+guidance takes precedence; keep Completeness distinct from Coverage and Quality.
 
 ## Decision Context
 
-Record an optional `decision` beside `score` and `label` for surface and category
-Quality/Completeness, or beside `supported` for category LTS. In `taxonomy.yaml`,
-use optional `level_decision` beside the canonical surface `level`.
-
-Each record contains `value`, `rationale`, `reviewer`, `evidence_refs`, and
-`revalidate_when`. Use an integer from 0–100 for Quality/Completeness, a boolean
-for LTS, and a declared taxonomy level ID for `level_decision`. Supply nonempty
-text fields and at least one evidence reference. Name the actual reviewer and
-the condition that should trigger another review.
-
-Leave unavailable history absent: it is unknown, not an invitation to invent
-reviewers, rationale, or evidence. A record does not overwrite the current score,
-support flag, or canonical level. If its value differs, retain both; generated
-docs show a non-gating mismatch, including under strict input validation.
-
-Do not attach decisions to Coverage, computed rollups, surface LTS summaries, or
-the copied level in score aggregates. Decision context does not change coverage
-identity, score calculations, support commitments, or release gates.
+When adding, reviewing, or interpreting optional decision records, read
+[decision context](references/decision-context.md) in full before editing. It
+defines the supported fields, evidence requirements, unknown-history handling,
+and non-gating mismatch behavior.
 
 ## Score Semantics
 

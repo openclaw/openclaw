@@ -108,6 +108,7 @@ public actor GatewayNodeSession {
     private var serverMethods: Set<String>?
     private var serverCapabilities: Set<GatewayServerCapability>?
     private var operatorScopes: Set<String>?
+    private var multipleSessionSharingIdentities: Bool?
     var reactionAccess: GatewayReactionAccessFacts?
     private var attachmentLimits: GatewayAttachmentLimits?
     private var mainSessionKey: String?
@@ -629,6 +630,10 @@ public actor GatewayNodeSession {
             .contains(method)
     }
 
+    public func hasMultipleSessionSharingIdentities(ifCurrentRoute route: GatewayNodeSessionRoute) -> Bool? {
+        self.currentRouteValue(self.multipleSessionSharingIdentities, ifCurrentRoute: route)
+    }
+
     public func currentOperatorScopes(ifCurrentRoute route: GatewayNodeSessionRoute) -> Set<String>? {
         self.currentRouteValue(self.operatorScopes, ifCurrentRoute: route)
     }
@@ -848,6 +853,8 @@ extension GatewayNodeSession {
         self.serverCapabilities = Set(
             GatewayServerCapability.allCases.filter { snapshot.supportsServerCapability($0) })
         self.operatorScopes = snapshot.advertisedOperatorScopes()
+        self.multipleSessionSharingIdentities =
+            snapshot.policy["hasMultipleSessionSharingIdentities"]?.value as? Bool
         self.reactionAccess = GatewayReactionAccessFacts(hello: snapshot)
         self.attachmentLimits = snapshot.advertisedAttachmentLimits()
         self.mainSessionKey = snapshot.snapshot.sessiondefaults?["mainSessionKey"]?.stringValue?.trimmedNonEmpty
@@ -889,6 +896,7 @@ extension GatewayNodeSession {
         self.serverMethods = nil
         self.serverCapabilities = nil
         self.operatorScopes = nil
+        self.multipleSessionSharingIdentities = nil
         self.reactionAccess = nil
         self.attachmentLimits = nil
         self.mainSessionKey = nil

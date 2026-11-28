@@ -3,6 +3,7 @@ import { expectDefined } from "@openclaw/normalization-core";
 import { createRoot } from "solid-js";
 import { afterEach, describe, expect, it, onTestFinished, vi } from "vitest";
 import { userEvent } from "vitest/browser";
+import { buildFallbackSlashCommands, replaceSlashCommands } from "../../lib/chat/commands.ts";
 import {
   focusComposerInput,
   readComposerEditor,
@@ -10,7 +11,7 @@ import {
 } from "../../lib/composer-input.ts";
 import { isApplePlatform } from "../../lib/keyboard-shortcut-contract.ts";
 import "../../test-helpers/load-styles.ts";
-import { createMentionComposerBinding } from "../../lib/reactive/composer-editor.ts";
+import { createReferenceComposerBinding } from "../../lib/reactive/composer-editor.ts";
 import {
   composerFixture,
   mention,
@@ -38,6 +39,63 @@ function countRecipientReads(text: string, action: () => void) {
 }
 
 afterEach(resetMentionComposerFixture);
+it.each(["positional edit", "controlled rewrite"] as const)(
+  "keeps edits past a shell variable native, then admits a skill after a %s",
+  async (kind) => {
+    const initial = "literal $HOME " + "ordinary prose ".repeat(4600);
+    const f = composerFixture("chat", initial);
+    vi.useRealTimers();
+    const input = f.query("textarea") as HTMLTextAreaElement;
+    focusComposerInput(input);
+    selectComposerInput(input, initial.length, initial.length);
+    await userEvent.keyboard("abc");
+    const middle = initial.indexOf("prose");
+    selectComposerInput(input, middle, middle);
+    await userEvent.keyboard("long ");
+    const edited = initial.slice(0, middle) + "long " + initial.slice(middle) + "abc";
+    f.expectValue(edited);
+    expect(readComposerEditor(input)).toBeUndefined();
+
+    await vi.dynamicImportSettled();
+    replaceSlashCommands([
+      {
+        key: "home",
+        name: "home",
+        description: "Home skill",
+        source: "skill",
+        skillReferenceable: true,
+        skillDisplayName: "Home skill",
+      },
+    ]);
+    onTestFinished(() => replaceSlashCommands(buildFallbackSlashCommands()));
+    if (kind === "controlled rewrite") {
+      selectComposerInput(input, edited.length, edited.length);
+      input.addEventListener(
+        "beforeinput",
+        () => {
+          input.value = edited.replace("$HOME", "$home");
+          input.setSelectionRange(edited.length, edited.length);
+        },
+        { once: true },
+      );
+      await userEvent.keyboard("z");
+      f.expectValue(edited.replace("$HOME", "$home") + "z");
+    } else {
+      const name = edited.indexOf("$HOME") + 1;
+      selectComposerInput(input, name, name + "HOME".length);
+      await userEvent.keyboard("home ");
+      f.expectValue(edited.replace("$HOME", "$home "));
+    }
+    const tokenStart = initial.indexOf("$HOME");
+    await expect
+      .poll(() => readComposerEditor(input)?.isAtomicRange(tokenStart, tokenStart + "$home".length))
+      .toBe(true);
+    // The rewrite leaves the caret at the end of a long draft. Reveal the already-admitted token before checking its rendered label.
+    selectComposerInput(input, tokenStart, tokenStart);
+    await expect.poll(() => f.query(".chat-composer-skill")?.textContent).toBe("Home skill");
+  },
+);
+
 describe.each(["chat", "new-session"] as const)(
   "%s rich composer controller integration",
   (kind) => {
@@ -195,10 +253,11 @@ describe.each(["chat", "new-session"] as const)(
       ["@Bob ", false],
       ["@Bo", true],
       ["@Bob ", true],
+      ["@Bo", false, true],
     ] as const)(
       "undoes and redoes a person selected from %s (existing mention: %s)",
-      async (query, existing) => {
-        const prefix = existing ? "Ask @Alex after " : "";
+      async (query, existing, dollar?: boolean) => {
+        const prefix = existing ? "Ask @Alex after " : dollar ? "Use $HOME and " : "";
         const f = composerFixture(
           kind,
           prefix.trimEnd(),
@@ -215,7 +274,7 @@ describe.each(["chat", "new-session"] as const)(
         const input = f.query("textarea") as HTMLTextAreaElement;
         focusComposerInput(input);
         selectComposerInput(input, input.value.length, input.value.length);
-        await userEvent.keyboard((existing ? " " : "") + query);
+        await userEvent.keyboard((prefix ? " " : "") + query);
         f.refresh();
         const beforePick = f.value();
         expect(beforePick.draft).toBe(prefix + query);
@@ -452,7 +511,7 @@ it("retires native activation frames after handoff and across ref replacement", 
   let recipients = [mention("alex-one", 0, 5)];
   const getMentions = vi.fn(() => recipients);
   const binding = createRoot((dispose) => ({
-    ref: createMentionComposerBinding(getMentions),
+    ref: createReferenceComposerBinding(getMentions),
     dispose,
   }));
   const container = document.createElement("div");

@@ -70,6 +70,7 @@ export function renderSidebarMentionItem(params: {
       {(id) => (
         <article
           class="sidebar-mention-row"
+          inert={params.dismissing}
           data-attention-kind="mention"
           data-mention-id={id}
           aria-label={label()}

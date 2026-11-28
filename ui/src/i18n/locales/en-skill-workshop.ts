@@ -144,6 +144,8 @@ const enSkillWorkshop = {
       archive: "Archive",
       archiveTitle: "Hide this skill from the agent. You can restore it any time.",
       restore: "Restore",
+      archiving: "Archiving…",
+      restoring: "Restoring…",
       restoreVersion: "Restore this version",
       loading: "Loading…",
     },

@@ -2,6 +2,10 @@ import SwiftUI
 
 extension OpenClawChatComposer {
     var thinkingPicker: some View {
+        self.thinkingSelectionPicker.pickerStyle(.menu)
+    }
+
+    var thinkingSelectionPicker: some View {
         Picker(selection: Binding(
             get: { self.viewModel.thinkingSelectionID },
             set: { next in self.viewModel.selectThinkingLevel(next) }))
@@ -20,7 +24,6 @@ extension OpenClawChatComposer {
             Text("Thinking")
                 .font(OpenClawChatTypography.captionSemiBold)
         }
-        .pickerStyle(.menu)
         .controlSize(.small)
         .frame(maxWidth: 140, alignment: .leading)
         .disabled(self.viewModel.isUpdatingSessionSettings)
@@ -69,7 +72,7 @@ extension OpenClawChatComposer {
                 .tag("off")
                 .disabled(!self.viewModel.selectedModelSupportsFastMode)
         } label: {
-            Label(String(localized: "Fast"), systemImage: "bolt.fill")
+            Label(String(localized: "Fast"), systemImage: "bolt")
                 .font(OpenClawChatTypography.captionSemiBold)
         }
         .pickerStyle(.menu)
@@ -144,6 +147,18 @@ extension OpenClawChatComposer {
 
     func modelMenuOption(_ title: String, selectionID: String) -> some View {
         let selected = self.viewModel.canonicalModelSelectionID == selectionID
+        #if os(iOS)
+        // An inline Picker flattens the catalog sections. Let the menu draw the
+        // state column on each row while keeping the original section hierarchy.
+        return Toggle(isOn: Binding(
+            get: { self.viewModel.canonicalModelSelectionID == selectionID },
+            set: { requested in
+                if requested { self.viewModel.selectModel(selectionID) }
+            })) {
+                Text(verbatim: title).font(OpenClawChatTypography.body)
+            }
+            .accessibilityAddTraits(selected ? .isSelected : [])
+        #else
         return Button {
             self.viewModel.selectModel(selectionID)
         } label: {
@@ -160,6 +175,7 @@ extension OpenClawChatComposer {
         .font(OpenClawChatTypography.captionSemiBold)
         .accessibilityLabel(title)
         .accessibilityAddTraits(selected ? .isSelected : [])
+        #endif
     }
 
     var modelPinButton: some View {
@@ -197,24 +213,21 @@ extension OpenClawChatComposer {
     var branchMenu: some View {
         Menu {
             ForEach(self.viewModel.sessionBranches) { branch in
-                Button {
-                    guard !branch.active else { return }
-                    Task { await self.viewModel.switchToBranch(branch.leafEntryId) }
-                } label: {
-                    HStack(spacing: 6) {
+                Toggle(isOn: Binding(
+                    get: { branch.active },
+                    set: { requested in
+                        guard requested, !branch.active else { return }
+                        Task { await self.viewModel.switchToBranch(branch.leafEntryId) }
+                    })) {
                         VStack(alignment: .leading, spacing: 2) {
-                            Text(self.branchTitle(branch))
+                            Text(Self.branchTitle(branch))
                                 .font(OpenClawChatTypography.captionSemiBold)
-                            Text(self.branchMetadata(branch))
+                            Text(Self.branchMetadata(branch))
                                 .font(OpenClawChatTypography.caption)
                                 .foregroundStyle(.secondary)
                         }
-                        if branch.active {
-                            Image(systemName: "checkmark")
-                        }
                     }
-                }
-                .disabled(branch.active)
+                    .disabled(branch.active)
             }
             .task {
                 await self.viewModel.refreshSessionBranches()
@@ -229,12 +242,12 @@ extension OpenClawChatComposer {
         .disabled(!self.viewModel.canSwitchSessionBranch)
     }
 
-    private func branchTitle(_ branch: OpenClawChatSessionBranch) -> String {
+    static func branchTitle(_ branch: OpenClawChatSessionBranch) -> String {
         let headline = branch.headline.trimmingCharacters(in: .whitespacesAndNewlines)
         return headline.isEmpty ? String(localized: "Untitled branch") : headline
     }
 
-    private func branchMetadata(_ branch: OpenClawChatSessionBranch) -> String {
+    static func branchMetadata(_ branch: OpenClawChatSessionBranch) -> String {
         var parts = [Self.branchMessageCount(branch.messageCount)]
         if let updatedAt = branch.updatedAt,
            let date = try? Date(updatedAt, strategy: .iso8601)

@@ -1,6 +1,7 @@
 package ai.openclaw.app.ui
 
 import ai.openclaw.app.GatewayConnectionDisplay
+import ai.openclaw.app.GatewayTalkSetupState
 import ai.openclaw.app.MainViewModel
 import ai.openclaw.app.NodeApp
 import ai.openclaw.app.NodeRuntime
@@ -183,6 +184,116 @@ class VoiceSettingsGatewayOwnerTest {
         writes.toList(),
       )
       assertEquals("Wake words saved", runtime.voiceWakeWordsNoticeText.value)
+    } finally {
+      composeRule.runOnIdle { mounted.value = false }
+      try {
+        models.clear()
+      } finally {
+        try {
+          closeNodeRuntimeTestFixture(runtime)
+        } finally {
+          ShadowSpeechRecognizer.setIsOnDeviceRecognitionAvailable(wasAvailable)
+        }
+      }
+    }
+  }
+
+  @Test
+  @Config(qualifiers = "en-rUS-w360dp-h1000dp-mdpi")
+  fun dictationIsAvailableWhenGatewayTranscriptionNeedsSetup() {
+    assertDictationReadiness(
+      deviceAvailable = true,
+      transcriptionReady = false,
+      expectedStatus = "Available",
+      expectedDescription = "On-device speech recognition is available.",
+    )
+  }
+
+  @Test
+  @Config(qualifiers = "en-rUS-w360dp-h1000dp-mdpi")
+  fun gatewayTranscriptionCannotMakeOnDeviceDictationAvailable() {
+    assertDictationReadiness(
+      deviceAvailable = false,
+      transcriptionReady = true,
+      expectedStatus = "Unavailable",
+      expectedDescription = "On-device speech recognition is unavailable.",
+    )
+  }
+
+  private fun assertDictationReadiness(
+    deviceAvailable: Boolean,
+    transcriptionReady: Boolean,
+    expectedStatus: String,
+    expectedDescription: String,
+  ) {
+    val app = RuntimeEnvironment.getApplication() as NodeApp
+    val prefs = SecurePrefs(app, app.getSharedPreferences("dictation-readiness-${UUID.randomUUID()}", Context.MODE_PRIVATE))
+    val gateway = GatewayEndpoint.manual("127.0.0.1", 18789)
+    prefs.gatewayRegistry.upsert(
+      GatewayRegistryEntry(gateway.stableId, GatewayRegistryEntryKind.MANUAL, "Dictation test Gateway"),
+    )
+    prefs.gatewayRegistry.setActive(gateway.stableId)
+    val wasAvailable = SpeechRecognizer.isOnDeviceRecognitionAvailable(app)
+    ShadowSpeechRecognizer.setIsOnDeviceRecognitionAvailable(deviceAvailable)
+    val runtime =
+      NodeRuntime(
+        app,
+        prefs,
+        NodeRuntimeMode.Live,
+        initialForeground = false,
+        initialReconnectSuppressed = true,
+      )
+    val models = ViewModelStore()
+    val mounted = mutableStateOf(true)
+    runtime.gatewayDataRequestOverrideForTests = { gatewayId, method, _ ->
+      assertEquals(gateway.stableId, gatewayId)
+      when (method) {
+        "talk.catalog" -> {
+          """
+          {
+            "realtime":{"ready":true,"activeProvider":"openai","providers":[{"id":"openai","label":"OpenAI Realtime","configured":true}]},
+            "transcription":{"ready":$transcriptionReady,"activeProvider":"deepgram","providers":[{"id":"deepgram","label":"Deepgram","configured":$transcriptionReady}]}
+          }
+          """.trimIndent()
+        }
+
+        "talk.config" -> {
+          "{}"
+        }
+
+        else -> {
+          error("Unexpected request: $method")
+        }
+      }
+    }
+    try {
+      ReflectionHelpers.setField(runtime, "connectedEndpoint", gateway)
+      ReflectionHelpers.setField(runtime, "operatorConnected", true)
+      val display = ReflectionHelpers.getField<MutableStateFlow<GatewayConnectionDisplay>>(runtime, "_gatewayConnectionDisplay")
+      display.value = display.value.copy(isConnected = true)
+      val model = MainViewModel(app, prefs, SavedStateHandle())
+      models.put("dictation-readiness", model)
+      ReflectionHelpers.getField<MutableStateFlow<NodeRuntime?>>(model, "runtimeRef").value = runtime
+      awaitRuntime { model.isConnected.first { it } }
+      composeRule.setContent {
+        if (mounted.value) {
+          ClawDesignTheme(dark = true) {
+            SettingsDetailScreen(model, SettingsRoute.Voice, onBack = {})
+          }
+        }
+      }
+      awaitRuntime {
+        model.talkSetupReadiness.first {
+          (it.realtimeTalk as? GatewayTalkSetupState.Ready)?.provider?.id == "openai"
+        }
+      }
+      composeRule.onNodeWithText("Dictation").performScrollTo()
+      composeRule
+        .onNode(hasText("Dictation") and hasText(expectedStatus) and hasText(expectedDescription))
+        .assertIsDisplayed()
+      composeRule
+        .onNode(hasText("Realtime Talk") and hasText("Ready") and hasText("OpenAI Realtime via Gateway relay"))
+        .assertIsDisplayed()
     } finally {
       composeRule.runOnIdle { mounted.value = false }
       try {

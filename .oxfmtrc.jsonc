@@ -25,8 +25,6 @@
   "trailingComma": "all",
   "useTabs": false,
   "ignorePatterns": [
-    // Preserve the imported controller closure and its exact-source fixtures.
-    ".agents/skills/update-team-server/controller/*.mjs",
     // Preserve official-client fixture bytes and their recorded upstream hashes.
     "test/fixtures/beam-live-handoff-client/beam.mjs",
     "test/fixtures/beam-live-handoff-client/beam-handoff.js",
