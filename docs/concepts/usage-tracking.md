@@ -457,7 +457,11 @@ provider-neutral for CLI, app, and Control UI consumers.
   `claude.ai` login is also used when no other Anthropic credential reports usage:
   `claude auth status --json` refreshes it under Claude's own lock, then OpenClaw reads
   only the access token from Claude's `.credentials.json` (never the refresh token, and
-  never the macOS Keychain). Model-scoped limits and enabled extra-usage monthly spend/budgets are included
+  never the macOS Keychain). A config that routes Claude through the `claude-cli`
+  backend counts as a credential source, so this works with no Anthropic env var or
+  auth profile. The native login is read only when a usage surface is requested (not
+  during agent turns), its token goes only to Anthropic's OAuth usage endpoint, and the
+  quota it returns stays local. Model-scoped limits and enabled extra-usage monthly spend/budgets are included
   when Anthropic reports them. An explicit Anthropic Admin API key, or an
   auto-detected `sk-ant-admin...` provider profile, instead shows 30-day
   organization cost and Messages API history.

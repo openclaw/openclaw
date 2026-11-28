@@ -375,7 +375,9 @@ The bundled Anthropic plugin communicates directly with the installed Claude Cod
 executable over its structured stdio protocol. Claude Code owns its existing local login and
 subscription. OpenClaw uses a non-secret route marker. Agent turns never read, persist,
 refresh, or forward native tokens, or send synthesized Anthropic API
-requests. Compatible agent turns share one warm Claude Code subprocess.
+requests. Quota usage for `/status` and `openclaw status --usage` reads only the
+native access token, only when usage is requested; see
+[Usage tracking](/concepts/usage-tracking). Compatible agent turns share one warm Claude Code subprocess.
 Agent turns send OpenClaw's system prompt as Claude Code's replacement system
 prompt, so they run under OpenClaw's prompt and workspace identity instead of
 Claude Code's default coding-CLI prompt. Claude Code still adds its short SDK
