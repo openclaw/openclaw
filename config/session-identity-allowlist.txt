@@ -449,7 +449,7 @@ src/agents/subagents/registry/subagent-controller-inputs.ts	2
 src/agents/subagents/registry/subagent-controller-read.ts	3
 src/agents/subagents/registry/subagent-progress-draft.ts	2
 src/agents/subagents/registry/subagent-registry-completion-runtime.ts	4
-src/agents/subagents/registry/subagent-registry-context-cleanup.ts	6
+src/agents/subagents/registry/subagent-registry-context-cleanup.ts	3
 src/agents/subagents/registry/subagent-registry-execution-cleanup.ts	10
 src/agents/subagents/registry/subagent-registry-helpers.ts	13
 src/agents/subagents/registry/subagent-registry-lifecycle-announce-cleanup.ts	5
@@ -460,7 +460,7 @@ src/agents/subagents/registry/subagent-registry-lifecycle-persistence.ts	3
 src/agents/subagents/registry/subagent-registry-lifecycle-wake.ts	2
 src/agents/subagents/registry/subagent-registry-lifecycle.ts	5
 src/agents/subagents/registry/subagent-registry-memory.ts	13
-src/agents/subagents/registry/subagent-registry-persistence.ts	2
+src/agents/subagents/registry/subagent-registry-persistence.ts	1
 src/agents/subagents/registry/subagent-registry-public-api.ts	3
 src/agents/subagents/registry/subagent-registry-queries.ts	4
 src/agents/subagents/registry/subagent-registry-read.ts	8
