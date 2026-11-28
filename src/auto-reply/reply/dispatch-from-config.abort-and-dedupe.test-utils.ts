@@ -416,7 +416,7 @@ describe("dispatchReplyFromConfig", () => {
 
   it("fast-resolves /approve before acquiring the active session operation", async () => {
     setNoAbort();
-    const reply = { text: "✅ Approval allow-once submitted." };
+    const reply = { text: "✅ Approval allow-once submitted for exec-1." };
     mocks.tryFastApproveFromMessage.mockResolvedValue({ handled: true, reply });
     const dispatcher = createDispatcher();
     const replyResolver = vi.fn(async () => ({ text: "should not run" }) as ReplyPayload);
@@ -457,7 +457,7 @@ describe("dispatchReplyFromConfig", () => {
     );
     await settleReplyDispatcher({ dispatcher });
     expect(transcriptMocks.appendAssistantMessageToSessionTranscript).toHaveBeenCalledWith(
-      expect.objectContaining({ contextFreeCommand: true }),
+      expect.objectContaining({ text: reply.text, sessionKey: "agent:main:imessage:direct:peer" }),
     );
     expect(replyResolver).not.toHaveBeenCalled();
     expect(dispatcher.sendFinalReply).toHaveBeenCalledWith(reply);
