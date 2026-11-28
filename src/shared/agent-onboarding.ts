@@ -35,6 +35,7 @@ const introductions = {
   ],
   sv: ["Hej, jag heter {name}. Jag hjälper gärna till.", "Hej! Jag hjälper gärna till."],
   ca: ["Hola, soc {name}. Soc aquí per ajudar-te.", "Hola! Soc aquí per ajudar-te."],
+  hu: ["Szia, {name} vagyok. Szívesen segítek.", "Szia! Szívesen segítek."],
 } satisfies Record<Locale, [string, string]>;
 
 export function buildAgentOnboardingGreeting(
