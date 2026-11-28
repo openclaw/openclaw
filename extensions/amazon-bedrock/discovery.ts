@@ -93,16 +93,30 @@ const KNOWN_CONTEXT_WINDOWS: Record<string, number> = {
   "zai.glm-5": 128_000,
   "zai.glm-4.7": 128_000,
   "zai.glm-4.7-flash": 128_000,
+  // https://docs.aws.amazon.com/bedrock/latest/userguide/model-card-zai-glm-5-3.html
+  "zai.glm-5.3": 1_000_000,
+  // https://docs.aws.amazon.com/bedrock/latest/userguide/model-card-moonshot-kimi-k3.html
+  "moonshotai.kimi-k3": 1_000_000,
+  // https://docs.aws.amazon.com/bedrock/latest/userguide/model-card-moonshot-kimi-k2-5.html
+  "moonshotai.kimi-k2.5": 256_000,
   "qwen.qwen3-coder-next": 256_000,
   "qwen.qwen3-coder-30b-a3b-v1:0": 256_000,
+  // https://docs.aws.amazon.com/bedrock/latest/userguide/model-card-qwen-qwen3-coder-480b-a35b-instruct.html
+  "qwen.qwen3-coder-480b-a35b-v1:0": 256_000,
+  // https://docs.aws.amazon.com/bedrock/latest/userguide/model-card-qwen-qwen3-next-80b-a3b.html
+  "qwen.qwen3-next-80b-a3b": 256_000,
+  // https://docs.aws.amazon.com/bedrock/latest/userguide/model-card-qwen-qwen3-235b-a22b-2507.html
+  "qwen.qwen3-235b-a22b-2507-v1:0": 256_000,
   "qwen.qwen3-32b-v1:0": 128_000,
   "qwen.qwen3-vl-235b-a22b": 128_000,
   // https://docs.aws.amazon.com/bedrock/latest/userguide/model-card-xai-grok-4-6.html
   "xai.grok-4.6": 500_000,
+  // https://docs.aws.amazon.com/bedrock/latest/userguide/model-card-xai-grok-4-7.html
+  "xai.grok-4.7": 524_288,
 };
 
 function resolveKnownContextWindow(modelId: string): number | undefined {
-  const stripped = modelId.replace(/^(?:us|eu|ap|apac|au|jp|global)\./, "");
+  const stripped = modelId.replace(/^(?:us|eu|ap|apac|au|jp|in|global)\./, "");
   const candidates = [modelId, stripped];
   for (const candidate of candidates) {
     if (isClaude5BedrockModel({ id: candidate })) {
@@ -126,7 +140,7 @@ function resolveKnownContextWindow(modelId: string): number | undefined {
 }
 
 function isKnownClaudeMythosPreviewModelId(modelId: string): boolean {
-  const stripped = modelId.replace(/^(?:us|eu|ap|apac|au|jp|global)\./, "");
+  const stripped = modelId.replace(/^(?:us|eu|ap|apac|au|jp|in|global)\./, "");
   return [modelId, stripped].some((candidate) =>
     /(?:^|[/.:])anthropic\.claude-mythos-preview(?:$|[-.:/])/i.test(candidate),
   );
@@ -324,7 +338,9 @@ export async function discoverBedrockModels(params: {
         const baseModelId =
           /foundation-model\/(.+)$/.exec(profile.models?.[0]?.modelArn ?? "")?.[1] ??
           (profile.type === "SYSTEM_DEFINED"
-            ? /^(?:us|eu|ap|apac|au|jp|global)\.(.+)$/i.exec(profile.inferenceProfileId ?? "")?.[1]
+            ? /^(?:us|eu|ap|apac|au|jp|in|global)\.(.+)$/i.exec(
+                profile.inferenceProfileId ?? "",
+              )?.[1]
             : undefined);
         if (isKnownClaudeMythosPreviewModelId(baseModelId ?? profile.inferenceProfileId)) {
           continue;
