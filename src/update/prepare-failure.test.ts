@@ -2,6 +2,11 @@ import fs from "node:fs/promises";
 import path from "node:path";
 import { expect, it, vi } from "vitest";
 import { resolveServiceManagerEnv } from "../daemon/service-process-env.js";
+import * as gatewayService from "../daemon/service.js";
+import { createMockGatewayService } from "../daemon/service.test-helpers.js";
+import * as gatewayLockPayload from "../infra/gateway-lock-payload.js";
+import * as nodeSqlite from "../infra/node-sqlite.js";
+import { pkgQueryResult } from "../infra/update-freebsd-pkg-ownership.test-support.js";
 import { resolveUpdateInstallRoot } from "../infra/update-install-root.js";
 import {
   prepareManagedHandoffLeaseStore,
@@ -11,6 +16,7 @@ import {
 import { getUpdateRunAsync, listUpdateRunsAsync } from "../infra/update-run-reader.js";
 import { createUpdateRunAsync } from "../infra/update-run-write.async.js";
 import * as updateWrites from "../infra/update-run-write.async.js";
+import * as exec from "../process/exec.js";
 import {
   withArtifactPreservingStateReads,
   withOpenClawStateDatabaseReadSnapshot,
@@ -20,11 +26,14 @@ import {
   closeOpenClawStateDatabaseForTest,
   openOpenClawStateDatabase,
 } from "../state/openclaw-state-db.js";
+import { createCommandResult } from "../test-utils/process-result.js";
+import { withMockedPlatform } from "../test-utils/vitest-spies.js";
 import { VERSION } from "../version.js";
 import { checkUpdateInstallationSlot } from "./installation-identity.js";
 import { node, repository, root } from "./prepare.test-support.js";
 import { prepareUpdate } from "./run.js";
 import { createTrialPending, readTrial, resolvePrefix, switchLink, writeTrial } from "./store.js";
+import * as updateStore from "./store.js";
 import * as targets from "./target.js";
 
 it("records one failed terminal run when preparation lock acquisition throws", async () => {
@@ -266,3 +275,91 @@ it.each([
     closeOpenClawStateDatabaseForTest();
   }
 });
+
+const sqliteHostPlatform = process.platform;
+const existingHostUri = nodeSqlite.resolveExistingSqliteFileUri;
+const immutableHostUri = nodeSqlite.resolveImmutableSqliteFileUri;
+
+it.each([
+  { platform: "linux", owned: true, unavailable: false, manager: "pacman" },
+  { platform: "freebsd", owned: true, unavailable: false, manager: "pkg" },
+  { platform: "darwin", owned: false, unavailable: false, manager: undefined },
+  { platform: "win32", owned: false, unavailable: false, manager: undefined },
+  { platform: "linux", owned: false, unavailable: true, manager: "pacman" },
+  { platform: "freebsd", owned: false, unavailable: true, manager: "pkg" },
+] as const)(
+  "preserves $platform package preparation admission (owned=$owned, unavailable=$unavailable)",
+  async ({ platform, owned, unavailable, manager }) => {
+    vi.stubEnv("HOME", root);
+    vi.stubEnv("OPENCLAW_STATE_DIR", path.join(root, "state"));
+    vi.stubEnv("OPENCLAW_CONFIG_PATH", path.join(root, "openclaw.json"));
+    const runningRoot = path.join(root, "package");
+    await fs.mkdir(runningRoot);
+    await fs.writeFile(
+      path.join(runningRoot, "package.json"),
+      JSON.stringify({ name: "openclaw", version: VERSION }),
+    );
+    // Simulated package policy keeps the real host namespace and SQLite VFS.
+    const namespace = gatewayLockPayload.readGatewayLockProcessNamespace();
+    vi.spyOn(gatewayLockPayload, "readGatewayLockProcessNamespace").mockReturnValue(namespace);
+    vi.spyOn(nodeSqlite, "resolveExistingSqliteFileUri").mockImplementation((file) =>
+      existingHostUri(file, sqliteHostPlatform),
+    );
+    vi.spyOn(nodeSqlite, "resolveImmutableSqliteFileUri").mockImplementation((file) =>
+      immutableHostUri(file, sqliteHostPlatform),
+    );
+    vi.spyOn(gatewayService, "resolveGatewayService").mockReturnValue(createMockGatewayService());
+    const reachedStaging = new Error("fixture: reached staging allocation");
+    const staging = vi.spyOn(updateStore, "allocateStaging").mockRejectedValue(reachedStaging);
+    try {
+      openOpenClawStateDatabase({ env: process.env });
+      const run = await createUpdateRunAsync({ trigger: "cli" });
+      vi.spyOn(exec, "runCommandWithTimeout").mockResolvedValue(createCommandResult({ code: 1 }));
+      const query = vi
+        .spyOn(exec, "runCommandBuffered")
+        .mockResolvedValue(
+          pkgQueryResult(
+            unavailable ? "" : `${runningRoot}/package.json\n`,
+            unavailable ? { code: 1 } : {},
+          ),
+        );
+      const outcome = await withMockedPlatform(platform, () =>
+        prepareUpdate({
+          runId: run.runId,
+          runningRoot,
+          runningVersion: VERSION,
+          channel: "stable",
+          node,
+          timeoutMs: 10_000,
+        }),
+      );
+      if (owned) {
+        expect(outcome).toMatchObject({
+          status: "failed",
+          reason: `${manager}-owned-install`,
+          message: expect.stringContaining(
+            manager === "pkg" ? "Update it through pkg" : "pacman -Syu",
+          ),
+        });
+        expect(staging).not.toHaveBeenCalled();
+        expect(await getUpdateRunAsync(run.runId)).toMatchObject({
+          status: "failed",
+          reason: `${manager}-owned-install`,
+        });
+      } else {
+        expect(staging).toHaveBeenCalledOnce();
+        expect(staging).toHaveBeenCalledWith({ kind: "package" }, resolvePrefix());
+        expect(outcome).toMatchObject({ status: "failed", reason: "update-failed" });
+        const record = await getUpdateRunAsync(run.runId);
+        expect(record?.steps.find((step) => step.step === "outcome")?.detail).toContain(
+          reachedStaging.message,
+        );
+      }
+      expect(query).toHaveBeenCalledTimes(owned || unavailable ? 1 : 0);
+      expect(await readTrial()).toBeNull();
+    } finally {
+      await closeOpenClawStateDatabaseAsync();
+      closeOpenClawStateDatabaseForTest();
+    }
+  },
+);
