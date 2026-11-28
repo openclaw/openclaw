@@ -12,7 +12,7 @@ import { workboardBoardName } from "../../lib/workboard/board-presentation.ts";
 import { agentDisplayName } from "./agent-filter.ts";
 import type { SessionsBoardController } from "./sessions-board-controller.ts";
 import { RelativeTime } from "./view-card-time.tsx";
-import { workboardSessionName } from "./view-helpers.tsx";
+import { workboardLinkedSessionTitle } from "./view-helpers.tsx";
 import { boardScrollEdgesRef } from "./view-scroll-fade.ts";
 import { SessionStatusBadge, type SessionStatusPresentation } from "./view-session-status.tsx";
 
@@ -96,7 +96,7 @@ export function SessionsBoard(props: SessionsBoardProps) {
         reason: session.reason,
         headline: session.observerDigest?.headline,
         lastActivityAt: session.lastActivityAt,
-        title: workboardSessionName(session) ?? t("workboard.fieldSession"),
+        title: workboardLinkedSessionTitle(session),
         agentName: agentDisplayName(
           agents.find((agent) => agent.id === session.agentId),
           session.agentId,

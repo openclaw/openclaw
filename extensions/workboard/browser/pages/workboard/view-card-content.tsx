@@ -15,7 +15,7 @@ import {
   formatUpdatedTime,
   LifecycleIcon,
   PriorityIcon,
-  workboardSessionName,
+  workboardLinkedSessionTitle,
   type WorkboardProps,
 } from "./view-helpers.tsx";
 import { SessionStatus, type SessionStatusPresentation } from "./view-session-status.tsx";
@@ -400,7 +400,7 @@ export function CardSession(input: {
   const hasSession = createMemo(() => input.lifecycle.state !== "unlinked");
   const sessionName = createMemo(() =>
     hasSession()
-      ? (workboardSessionName(input.lifecycle.session) ?? t("workboard.fieldSession"))
+      ? workboardLinkedSessionTitle(input.lifecycle.session)
       : cardAgentLabel(input.card, input.workboard.agentsList),
   );
   return (

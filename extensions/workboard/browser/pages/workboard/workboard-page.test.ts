@@ -241,7 +241,11 @@ it("clears filters without changing the global agent context", async () => {
 
 it("suspends the session summary when its page is hidden and resumes on return", async () => {
   const page = mountPage();
-  const session = createGatewaySession({ key: "agent:main:retained", agentId: "main" });
+  const session = createGatewaySession({
+    key: "agent:main:retained",
+    agentId: "main",
+    displayName: undefined,
+  });
   observeSessions(page, { sessions: [session], hasMore: false });
   Object.assign(page.fixture.host.sessions, { rows: [session] });
   const card = createWorkboardCard({ sessionKey: session.key });
@@ -257,6 +261,12 @@ it("suspends the session summary when its page is hidden and resumes on return",
   ];
   await afterWorkboardUpdate(() =>
     expect(summaries().some((summary) => summary.presented)).toBe(true),
+  );
+  expect(page.container.querySelector(".workboard-card__session-name")?.textContent).toBe(
+    "Untitled session",
+  );
+  expect(page.container.querySelector(".workboard-detail__session-name")?.textContent).toBe(
+    "Untitled session",
   );
   page.present(false);
   await afterWorkboardUpdate(() =>
@@ -327,6 +337,9 @@ it("keeps a bare unknown link unresolved despite an ambient roster owner", async
   await afterWorkboardUpdate(() =>
     expect(page.container.querySelector(".workboard-card")?.textContent).toContain("Unknown"),
   );
+  expect(page.container.querySelector(".workboard-card__session-name")?.textContent).toBe(
+    "Linked session",
+  );
   const menu = openCardMenu(page.container.querySelector(".workboard-card")!);
   expect(openSessionButton(page.container)).toBeUndefined();
   expect(page.container.querySelector('button[aria-label="Stop session"]')).toBeNull();
@@ -344,6 +357,9 @@ it("keeps a bare unknown link unresolved despite an ambient roster owner", async
   expect(
     page.container.querySelector(".workboard-detail__session-row")?.getAttribute("title"),
   ).toBe("Edit the card to select an exact session");
+  expect(page.container.querySelector(".workboard-detail__session-name")?.textContent).toBe(
+    "Linked session",
+  );
   expect(observe).not.toHaveBeenCalled();
   expect(page.fixture.host.components.mountSessionSummary).not.toHaveBeenCalled();
   expect(openSessionButton(page.container)).toBeUndefined();

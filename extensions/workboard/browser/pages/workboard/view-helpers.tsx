@@ -307,6 +307,13 @@ export function workboardSessionName(
   return undefined;
 }
 
+export function workboardLinkedSessionTitle(session: Parameters<typeof workboardSessionName>[0]) {
+  return (
+    workboardSessionName(session) ??
+    t(session ? "workboard.untitledSession" : "workboard.linkedSession")
+  );
+}
+
 export function isWorkboardSessionChoice(
   session: GatewaySessionRow,
   alreadyLinked: boolean,

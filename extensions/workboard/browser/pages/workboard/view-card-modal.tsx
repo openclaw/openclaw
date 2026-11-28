@@ -32,7 +32,7 @@ import {
   renderPriorityIcon,
   formatStatusLabel,
   isWorkboardSessionChoice,
-  workboardSessionName,
+  workboardLinkedSessionTitle,
   type WorkboardProps,
 } from "./view-helpers.tsx";
 import { liveInputValue } from "./view-input-value.ts";
@@ -207,7 +207,7 @@ function CardModalContent(props: WorkboardProps) {
         continue;
       }
       includesLinked ||= session.key === linkedKey;
-      const name = workboardSessionName(session) ?? t("workboard.untitledSessionOption");
+      const name = workboardLinkedSessionTitle(session);
       options.push({
         value: session.key,
         label: session.archived ? t("workboard.archivedSessionOption", { name }) : name,
@@ -217,7 +217,7 @@ function CardModalContent(props: WorkboardProps) {
     if (linkedKey && !includesLinked) {
       options.push({
         value: linkedKey,
-        label: t("workboard.linkedSessionOption"),
+        label: workboardLinkedSessionTitle(null),
         description: linkedKey,
       });
     }

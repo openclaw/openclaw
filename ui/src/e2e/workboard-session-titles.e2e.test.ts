@@ -78,10 +78,12 @@ suite.define(() => {
         const named = tiles.and(page.locator(`[data-session-key="${key}"]`));
         const untitled = tiles.and(page.locator(`[data-session-key="${unnamedKey}"]`));
         expect.soft(await named.getByRole("button").textContent()).toBe("Review the incident");
-        expect.soft(await untitled.getByRole("button").textContent()).toBe("Session");
+        expect.soft(await untitled.getByRole("button").textContent()).toBe("Untitled session");
         expect.soft(await tooltipTitleText(named)).toContain("Review the incident");
         expect.soft(await tooltipTitleText(named)).not.toContain(key);
-        expect.soft(await tooltipTitleText(untitled)).not.toContain(unnamedKey);
+        const untitledTooltip = await tooltipTitleText(untitled);
+        expect.soft(untitledTooltip).toContain("Untitled session");
+        expect.soft(untitledTooltip).not.toContain(unnamedKey);
         expect(await gateway.getRequests("workboard.sessionsBoard.read")).toHaveLength(1);
         expect(await gateway.getRequests("sessions.describe")).toHaveLength(0);
         expect(
