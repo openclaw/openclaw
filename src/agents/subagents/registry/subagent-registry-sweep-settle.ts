@@ -202,6 +202,7 @@ export async function settleRestartInterruptedSubagentRun(params: {
       expectedEntry: entry,
       recoveryCurrent: readScope?.completionCurrent,
       endedAt: saved?.completedAt,
+      unconfirmedRestart: !saved,
       outcome: saved
         ? { status: "ok" }
         : { status: "error", error: SUBAGENT_RESTART_INTERRUPTED_ERROR },

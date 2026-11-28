@@ -86,6 +86,7 @@ it("keeps an accepted cancellation when restart cannot establish a child end tim
   const { read, complete } = fixture({ entry });
   await complete({
     endedAt: undefined,
+    unconfirmedRestart: true,
     reason: SUBAGENT_ENDED_REASON_ERROR,
     outcome: { status: "error", error: "interrupted" },
     terminalReply: { disposition: "empty" },

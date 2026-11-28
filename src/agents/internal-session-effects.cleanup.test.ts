@@ -1,4 +1,5 @@
 import { beforeEach, expect, it, vi } from "vitest";
+import { resolveInternalSessionEffectsIdentity } from "../config/sessions/internal-session-key.js";
 import type { applySessionEntryLifecycleMutation } from "../config/sessions/session-accessor.js";
 import { shouldRemoveSessionEntry } from "../config/sessions/session-accessor.sqlite-lifecycle-state.js";
 import type { InternalSessionEntry } from "../config/sessions/types.js";
@@ -27,8 +28,7 @@ vi.mock("../config/sessions/session-entry-read-runtime.js", () => ({
 
 const target = {
   agentId: "main",
-  sessionId: "companion-session",
-  sessionKey: "agent:main:internal:companion-session",
+  ...resolveInternalSessionEffectsIdentity({ agentId: "main", runId: "companion-session" }),
   storePath: "/synthetic/companion/openclaw-agent.sqlite",
 };
 const owner = { lifecycleRevision: "life", activeWriterRunId: "writer" };

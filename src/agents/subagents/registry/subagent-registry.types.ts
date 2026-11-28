@@ -48,6 +48,8 @@ export type SubagentCompletionRequest = {
   sessionEffects?: SubagentSessionEffects;
   completionSnapshot?: { resultText: string | null; capturedAt: number };
   terminalReply?: AgentRunTerminalReplySnapshot;
+  /** No final was confirmed for a child from the previous Gateway process. */
+  unconfirmedRestart?: boolean;
   /** Explicitly settle a yielded run that no continuation can reach; kill is the only other exception. */
   settleYielded?: true;
 };

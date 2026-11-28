@@ -79,6 +79,7 @@ it("fails a running child restored from an earlier Gateway so its requester wake
         expectedEntry: entry,
         recoveryCurrent: undefined,
         endedAt: undefined,
+        unconfirmedRestart: true,
         outcome: { status: "error", error: SUBAGENT_RESTART_INTERRUPTED_ERROR },
         terminalReply: { disposition: "empty" },
         reason: SUBAGENT_ENDED_REASON_ERROR,
@@ -163,6 +164,7 @@ it("recovers only the stopped run's saved answer, even after a later turn", () =
         runId === "completed"
           ? {
               endedAt: finalAt,
+              unconfirmedRestart: false,
               outcome: { status: "ok" },
               terminalReply: { disposition: "visible", text: "saved child answer" },
             }

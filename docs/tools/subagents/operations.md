@@ -98,9 +98,11 @@ Visible spawned sessions keep their processes until reset, delete or archive.
 A graceful Gateway shutdown records the top-level requesters of running children,
 then cancels the children through the ordinary abort path. Children that owe a
 completion retain their error outcome for delivery after startup, including when
-their requester has already finished its turn. A shutdown interruption does not count as
-an intentional cancellation by the requester. Root requesters with interrupted work
-receive the standard resume input; children are not independently resumed.
+their requester has already finished its turn. Shutdown alone is not a requester
+cancellation. Shutdown clears a live child's pending Stop and records the child as
+killed, unless its run deadline expired before Stop. In that case it records a timeout.
+Root requesters with interrupted work receive the standard resume input; children
+are not independently resumed.
 Recorded spawn ancestry includes visible spawned coordinators and workers: their
 running descendants contribute to the original root even after its own turn ends.
 An ordinary conversation contacted through `sessions_send` keeps its own restart

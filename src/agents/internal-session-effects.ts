@@ -1,4 +1,7 @@
-import { resolveInternalSessionEffectsIdentity } from "../config/sessions/internal-session-key.js";
+import {
+  isInternalSessionEffectsKey,
+  resolveInternalSessionEffectsIdentity,
+} from "../config/sessions/internal-session-key.js";
 /** Manages hidden sessions used for suppressed agent side effects. */
 import {
   applySessionEntryLifecycleMutation,
@@ -212,7 +215,7 @@ export async function removeInternalSessionEffectsSession(
   target: AgentRunSessionTarget | undefined,
   expectedOwner?: Pick<InternalSessionEntry, "lifecycleRevision" | "activeWriterRunId">,
 ): Promise<void> {
-  if (!target?.sessionKey || !target.storePath) {
+  if (!target?.sessionKey || !target.storePath || !isInternalSessionEffectsKey(target.sessionKey)) {
     return;
   }
   const source = captureSessionActorStorageOwner(target, { assertCurrent() {}, authorize() {} });

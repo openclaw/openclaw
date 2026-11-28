@@ -6,7 +6,10 @@ import { isCronRunSessionKey } from "../../../sessions/session-key-utils.js";
 import { mergeAgentRunTerminalReplySnapshot } from "../../agent-run-terminal-reply.js";
 import { withSubagentOutcomeTiming } from "../announce/subagent-announce-output.js";
 import { resolveSubagentChildAuthority } from "../registry/subagent-child-owner-match.js";
-import { matchesSubagentKillIntent } from "../registry/subagent-control-kill-intent.js";
+import {
+  hasSubagentKill,
+  matchesSubagentKillIntent,
+} from "../registry/subagent-control-kill-intent.js";
 import type { SubagentKillSession } from "../registry/subagent-control-session.js";
 import {
   clearDeliveryState,
@@ -192,12 +195,8 @@ function planTerminalCompletion(
   if (isCompletionHeldByYield(currentEntry, completeParams)) {
     return undefined;
   }
-  // An error without an observed end time cannot prove the run ended before Stop.
-  if (
-    completeParams.endedAt === undefined &&
-    completeParams.reason === SUBAGENT_ENDED_REASON_ERROR &&
-    (currentEntry.killIntent || currentEntry.killReconciliation)
-  ) {
+  // Only the crash fallback lacks evidence to supersede Stop. A live shutdown settles it.
+  if (completeParams.unconfirmedRestart && hasSubagentKill(currentEntry)) {
     return undefined;
   }
   const entry = structuredClone(currentEntry);
