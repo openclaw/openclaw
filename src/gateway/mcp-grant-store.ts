@@ -5,7 +5,7 @@ import {
   type AdmittedRunContext,
 } from "../agents/admitted-run-context.js";
 import type { AuthProfileStore } from "../agents/auth-profiles/types.js";
-import type { ExecElevatedDefaults } from "../agents/bash-tools.exec-types.js";
+import type { ExecElevatedDefaults, ExecToolDefaults } from "../agents/bash-tools.exec-types.js";
 import type { DelegationCapability } from "../agents/delegation-capability.js";
 import type { ExecPolicyOverrides, ExecSessionDefaults } from "../agents/exec-defaults.js";
 import type { PreparedQuestionAnswerAuthority } from "../agents/harness/host-private-capabilities.js";
@@ -183,6 +183,8 @@ type StoredMcpLoopbackClientGrant = McpLoopbackClientGrant & {
   admittedRunContext?: AdmittedRunContext;
   /** Live reply participants remain host-owned across CLI fallback and HTTP callbacks. */
   personalToolParticipants?: ReplyTurnParticipants;
+  /** Exec auto-review evidence from the minting run's admitted user turn. */
+  reviewTranscript?: ExecToolDefaults["reviewTranscript"];
   /** The minting run's Gateway request scope; the process-owned listener has none of its own. */
   requestScope?: PluginRuntimeGatewayRequestScope;
   /** Trusted source-turn authority retained only by the host. */
@@ -331,6 +333,7 @@ export function mintMcpLoopbackClientGrant(
     sessionEventSourcePolicy: params.sessionEventSourcePolicy,
     admittedRunContext: params.admittedRunContext,
     personalToolParticipants: params.personalToolParticipants,
+    reviewTranscript: params.reviewTranscript,
     requestScope: getPluginRuntimeGatewayRequestScope(),
     messageActionTurnCapability: params.messageActionTurnCapability || undefined,
     memoryAudience: params.memoryAudience,
@@ -533,6 +536,7 @@ export function resolveMcpLoopbackClientGrant(params: {
       sessionEventSourcePolicy?: SessionEventSourcePolicy;
       admittedRunContext: AdmittedRunContext;
       personalToolParticipants?: ReplyTurnParticipants;
+      reviewTranscript?: ExecToolDefaults["reviewTranscript"];
       requestScope?: PluginRuntimeGatewayRequestScope;
       messageActionTurnCapability?: string;
       memoryAudience?: MemoryAudience;
@@ -582,6 +586,7 @@ export function resolveMcpLoopbackClientGrant(params: {
     sessionEventSourcePolicy: grant.sessionEventSourcePolicy,
     admittedRunContext,
     personalToolParticipants: grant.personalToolParticipants,
+    reviewTranscript: grant.reviewTranscript,
     requestScope: grant.requestScope,
     messageActionTurnCapability: grant.messageActionTurnCapability || undefined,
     memoryAudience: grant.memoryAudience,

@@ -1,14 +1,21 @@
+import path from "node:path";
 import { expectDefined } from "@openclaw/normalization-core/expect";
 import { afterAll, beforeAll, expect, it, vi } from "vitest";
 import type { PreparedAgentRunAdmission } from "../agents/admitted-run-context.js";
 import { waitForExecScope } from "../agents/bash-process-registry.js";
+import { finalizeCliMcpGrant } from "../agents/cli-runner/mcp-grant-context.js";
 import * as sessionEvents from "../auto-reply/reply/session-event-handoff.js";
 import * as configSnapshot from "../config/runtime-snapshot.js";
-import { replaceSessionEntry } from "../config/sessions/session-accessor.js";
+import {
+  replaceSessionEntry,
+  upsertSessionEntryCore,
+} from "../config/sessions/session-accessor.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
+import type { ExecAutoReviewer } from "../infra/exec-auto-review.js";
 import { drainSystemEvents, peekSystemEventEntries } from "../infra/system-events.js";
 import * as proxyServer from "../secrets/egress-proxy/proxy-server.js";
 import * as proxyRegistry from "../secrets/egress-proxy/registry.js";
+import { createUserTurnTranscriptRecorder } from "../sessions/user-turn-transcript.js";
 import * as testState from "../test-utils/openclaw-test-state.js";
 import { revokeMcpLoopbackClientGrant, type McpLoopbackRequestContext } from "./mcp-grant-store.js";
 import * as mcp from "./mcp-http-request.test-support.js";
@@ -20,6 +27,13 @@ vi.mock("../auto-reply/dispatch.js", async () => {
     await import("../agents/bash-tools.exec-runtime.test-support.js");
   return createDeferredExecDispatchMock("completion");
 });
+const reviewer = vi.hoisted(() =>
+  vi.fn<ExecAutoReviewer>(() => ({ decision: "deny", risk: "high", rationale: "Fixture denies." })),
+);
+vi.mock("../agents/exec-auto-reviewer.js", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("../agents/exec-auto-reviewer.js")>()),
+  createModelExecAutoReviewer: () => reviewer,
+}));
 
 let state: testState.OpenClawTestState;
 let proxy: proxyServer.SecretEgressProxyHandle;
@@ -186,3 +200,64 @@ it("routes a command started by a conversation's completion turn back to that co
     },
   ]);
 });
+
+it.skipIf(process.platform === "win32")(
+  "reviews an auto-mode command with the CLI run's admitted user turn",
+  async () => {
+    const runId = "mcp-exec-review";
+    const target = {
+      agentId: "probe",
+      sessionId: "review-session",
+      sessionKey: "agent:probe:review",
+      storePath: path.join(state.sessionsDir("probe"), "sessions.json"),
+      sessionEntry: undefined,
+    };
+    await upsertSessionEntryCore(target, { sessionId: target.sessionId, updatedAt: 1 });
+    const recorder = createUserTurnTranscriptRecorder({
+      input: { text: "Publish the reviewed synthetic evidence.", senderIsOwner: true },
+      target,
+    });
+    await recorder.persistApproved();
+    const runtime = mcp.runtime();
+    const admission = mcp.prepareAdmission(runId, "cli.agent", { cfg: config, agentId: "probe" });
+    admissions.push(admission);
+    const admittedRunContext = await admission.admit("gateway");
+    const finalized = finalizeCliMcpGrant(
+      {
+        sessionKey: target.sessionKey,
+        sessionId: target.sessionId,
+        agentId: "probe",
+        runId,
+        workspaceDir: state.workspaceDir,
+        cwd: state.workspaceDir,
+        senderIsOwner: true,
+        execOverrides: { mode: "auto" },
+      },
+      ["exec"],
+      false,
+      { config, admittedRunContext, userTurnTranscriptRecorder: recorder },
+    );
+    const grant = mcp.captureGrant(
+      { ...expectDefined(finalized, "CLI grant"), runtimeOwnerToken: runtime.ownerToken },
+      "capture-" + runId,
+      (token) => grants.push(token),
+    );
+
+    const response = await mcp.request(
+      runtime,
+      mcp.toolCall("exec", { command: "/usr/bin/printf mcp-review" }),
+      grant,
+    );
+
+    expect(await mcp.json(response)).toMatchObject({ result: { isError: true } });
+    expect(reviewer.mock.calls.map(([input]) => input.transcript)).toEqual([
+      {
+        entries: [
+          { kind: "user", origin: "operator", text: "Publish the reviewed synthetic evidence." },
+        ],
+        omittedEntries: 0,
+        truncated: false,
+      },
+    ]);
+  },
+);
