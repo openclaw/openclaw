@@ -254,6 +254,26 @@ describe("createTelegramDraftStream", () => {
     },
   );
 
+  it("retries the same preview after a transient delete failure", async () => {
+    await withFakeTimers(async () => {
+      const api = createMockDraftApi();
+      api.deleteMessage.mockRejectedValueOnce(new Error("temporary failure"));
+      const stream = createDraftStream(api);
+
+      await updateAndFlush(stream, "Test preview");
+      await vi.advanceTimersByTimeAsync(4_000);
+      await stream.clear();
+      await vi.advanceTimersByTimeAsync(0);
+      await stream.clear();
+      await vi.runAllTimersAsync();
+
+      expect(api.deleteMessage.mock.calls).toEqual([
+        [123, 17],
+        [123, 17],
+      ]);
+    });
+  });
+
   it("does not report a first preview cleared while its send is in flight", async () => {
     await withFakeTimers(async () => {
       const send = createDeferred<MockSentMessage>();
