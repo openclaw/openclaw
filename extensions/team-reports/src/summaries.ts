@@ -1,5 +1,6 @@
 import { createHash } from "node:crypto";
 import type { OpenClawPluginApi } from "openclaw/plugin-sdk/plugin-entry";
+import { truncateUtf16Safe } from "openclaw/plugin-sdk/text-utility-runtime";
 import { z } from "zod";
 import type { TeamReportsConfig } from "./config.js";
 import type {
@@ -61,11 +62,19 @@ function compareText(left: string, right: string): number {
   return left < right ? -1 : left > right ? 1 : 0;
 }
 
+function clip(value: string, maxLength: number): string {
+  return truncateUtf16Safe(value, maxLength);
+}
+
+function clipOptional(value: string | undefined, maxLength: number): string | undefined {
+  return value == null ? undefined : truncateUtf16Safe(value, maxLength);
+}
+
 function topEntries(counts: Record<string, number>, limit: number) {
   return Object.entries(counts)
     .toSorted(([left, a], [right, b]) => b - a || compareText(left, right))
     .slice(0, limit)
-    .map(([name, count]) => ({ name: name.slice(0, 256), count }));
+    .map(([name, count]) => ({ name: clip(name, 256), count }));
 }
 
 function countsDigest(counts: GithubCounts) {
@@ -97,9 +106,9 @@ function compareItems(left: GithubItem, right: GithubItem): number {
 function itemDigest(item: GithubItem) {
   return {
     kind: item.kind,
-    repo: item.repo.slice(0, 256),
-    title: item.title.slice(0, 512),
-    url: item.url.slice(0, 1024),
+    repo: clip(item.repo, 256),
+    title: clip(item.title, 512),
+    url: clip(item.url, 1024),
     atMs: item.atMs,
     actor: item.actor,
   };
@@ -108,18 +117,18 @@ function itemDigest(item: GithubItem) {
 function memberDigest(member: PersonReport) {
   return {
     login: member.login,
-    display: member.display.slice(0, 256),
-    affiliation: member.affiliation?.slice(0, 256),
-    roleGroup: member.roleGroup?.slice(0, 128),
-    roleLabel: member.roleLabel?.slice(0, 256),
+    display: clip(member.display, 256),
+    affiliation: clipOptional(member.affiliation, 256),
+    roleGroup: clipOptional(member.roleGroup, 128),
+    roleLabel: clipOptional(member.roleLabel, 256),
     access: member.access
       .toSorted(compareText)
       .slice(0, 16)
-      .map((value) => value.slice(0, 128)),
+      .map((value) => clip(value, 128)),
     areas: member.areas
       .toSorted(compareText)
       .slice(0, 16)
-      .map((value) => value.slice(0, 128)),
+      .map((value) => clip(value, 128)),
     github: {
       ...countsDigest(member.github),
       repos: topEntries(member.github.repos, 5),
@@ -137,9 +146,9 @@ function memberDigest(member: PersonReport) {
         )
         .slice(0, 3)
         .map(({ channel, atMs, excerpt }) => ({
-          channel: channel.slice(0, 256),
+          channel: clip(channel, 256),
           atMs,
-          excerpt: excerpt.slice(0, 512),
+          excerpt: clip(excerpt, 512),
         })),
     },
   };
@@ -251,7 +260,7 @@ function fallbackResult(
   reason?: string,
   logger?: SummaryLogger,
 ): SummaryResult {
-  const warning = reason?.slice(0, 300);
+  const warning = clipOptional(reason, 300);
   if (warning) {
     logger?.warn(warning);
   }
@@ -396,7 +405,7 @@ export async function generateSummaries(params: {
           : `Model summary unavailable: invalid JSON after repair: ${issue}`;
       if (attempt === 0) {
         messages.push(
-          { role: "assistant", content: result.text.slice(0, MAX_RESPONSE_CHARS) },
+          { role: "assistant", content: clip(result.text, MAX_RESPONSE_CHARS) },
           {
             role: "user",
             content: `Repair the response and return the complete JSON object, including every member. Validation errors: ${issue}`,
