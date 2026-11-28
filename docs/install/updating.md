@@ -140,9 +140,10 @@ sudo openclaw update --yes
 ```
 
 When the installed system unit can be identified as running this package under
-another account, root replaces only the package and restarts that unit. It does
-not read or write OpenClaw state, run Doctor, create a state snapshot, or record
-an update run in either root's home or the service account's state directory.
+another account, root replaces only the package and restarts that unit. This
+package-only branch does not open OpenClaw databases, run Doctor, create a state
+snapshot, or record an update run. CLI bootstrap can still load the selected
+state directory's `.env` before this branch runs.
 The service's own boot, running as `User=`, migrates its state and converges plugins.
 The unit's environment, profile, state selectors, and file ownership stay unchanged.
 
