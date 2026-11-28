@@ -180,7 +180,10 @@ const diagnostics: Diagnostic[] = [
   ...(
     [
       [
-        `fatal: unable to access 'https://private-user${":"}synthetic-private-token@private-host.example/repo.git/': Could not resolve host: private-host.example`,
+        [
+          "fatal: unable to access 'https://private-user",
+          "synthetic-private-token@private-host.example/repo.git/': Could not resolve host: private-host.example",
+        ].join(":"),
         "unable to access; Could not resolve host",
       ],
       [
