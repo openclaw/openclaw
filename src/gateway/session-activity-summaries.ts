@@ -27,6 +27,7 @@ import { formatErrorMessage } from "../infra/errors.js";
 import type { GatewayScheduledJob, GatewayScheduler } from "../infra/gateway-scheduler.js";
 import { pruneMapToMaxSize } from "../infra/map-size.js";
 import { createSubsystemLogger } from "../logging/subsystem.js";
+import { runOutsidePluginRuntimeGenerationScope } from "../plugins/runtime/generation-scope.js";
 import {
   isCronSessionKey,
   isIncognitoSessionKey,

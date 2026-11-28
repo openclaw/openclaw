@@ -2,6 +2,7 @@ import fs from "node:fs";
 import { expect, it, vi } from "vitest";
 import { createDeferred, withinTest } from "../../test/helpers/promise.js";
 import { configFor } from "../agents/model-auth.fixtures.test-support.js";
+import { scopePreparedModelRuntimeLease } from "../agents/prepared-model-runtime-generation-scope.js";
 import {
   acquireAgentRunPreparedModelRuntime,
   refreshPreparedModelRuntimeSnapshots,
