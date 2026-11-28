@@ -20,6 +20,14 @@ function mockResponse(
   return release;
 }
 
+function lastRequestBody() {
+  return JSON.parse(fetchWithSsrFGuardMock.mock.calls.at(-1)![0].init.body) as {
+    req_params?: { audio_params?: Record<string, unknown>; [key: string]: unknown };
+    audio?: Record<string, unknown>;
+    [key: string]: unknown;
+  };
+}
+
 const directivePolicy = createSpeechDirectivePolicy();
 const provider = buildVolcengineSpeechProvider();
 const isConfigured = (providerConfig: Record<string, unknown> = {}) =>
@@ -122,9 +130,12 @@ describe("Volcengine speech provider", () => {
           req_params: {
             text: "hello",
             speaker: "zh_male_aojiao_mars_bigtts",
-            audio_params: { format: "ogg_opus", sample_rate: 24000 },
-            speed_ratio: 0.9,
-            emotion: "happy",
+            audio_params: {
+              format: "ogg_opus",
+              sample_rate: 24000,
+              speech_rate: -10,
+              emotion: "happy",
+            },
           },
         }),
       },
@@ -133,6 +144,64 @@ describe("Volcengine speech provider", () => {
       auditContext: "volcengine.tts",
     });
     expect(release).toHaveBeenCalledTimes(1);
+  });
+
+  it.each([
+    [0.2, -50],
+    [1.5, 50],
+    [3, 100],
+  ])("maps a configured speedRatio of %s to v3 speech_rate %i", async (speedRatio, speechRate) => {
+    mockResponse();
+
+    await synthesize({ apiKey: "test-api-key", speedRatio });
+
+    const body = lastRequestBody();
+    expect(body.req_params?.audio_params).toMatchObject({
+      format: "mp3",
+      sample_rate: 24000,
+      speech_rate: speechRate,
+    });
+    expect(body.req_params).not.toHaveProperty("speed_ratio");
+  });
+
+  it("omits v3 speech_rate and emotion when neither is configured", async () => {
+    mockResponse();
+
+    await synthesize({ apiKey: "test-api-key" });
+
+    const body = lastRequestBody();
+    expect(body.req_params?.audio_params).toEqual({ format: "mp3", sample_rate: 24000 });
+    expect(body.req_params).not.toHaveProperty("speed_ratio");
+    expect(body.req_params).not.toHaveProperty("emotion");
+  });
+
+  it("keeps the legacy v1 audio.speed_ratio payload shape", async () => {
+    mockResponse(
+      Response.json({ code: 3000, data: Buffer.from("voice-audio").toString("base64") }),
+    );
+
+    await synthesize({ appId: "app-id", token: "test-token", speedRatio: 1.5, emotion: "happy" });
+
+    const request = fetchWithSsrFGuardMock.mock.calls.at(-1)![0];
+    expect(request.url).toBe("https://openspeech.bytedance.com/api/v1/tts");
+    expect(JSON.parse(request.init.body)).toEqual({
+      app: { appid: "app-id", token: "test-token", cluster: "volcano_tts" },
+      user: { uid: "openclaw" },
+      audio: {
+        voice_type: "en_female_anna_mars_bigtts",
+        encoding: "mp3",
+        speed_ratio: 1.5,
+        volume_ratio: 1,
+        pitch_ratio: 1,
+        emotion: "happy",
+      },
+      request: {
+        reqid: expect.any(String),
+        text: "hello",
+        text_type: "plain",
+        operation: "query",
+      },
+    });
   });
 
   it("drops malformed speed ratios before synthesis", async () => {
@@ -145,9 +214,8 @@ describe("Volcengine speech provider", () => {
       },
     );
 
-    const body: { req_params?: { speed_ratio?: number } } = JSON.parse(
-      fetchWithSsrFGuardMock.mock.calls[0]![0].init.body,
-    );
+    const body = lastRequestBody();
+    expect(body.req_params?.audio_params).toEqual({ format: "mp3", sample_rate: 24000 });
     expect(body.req_params).not.toHaveProperty("speed_ratio");
   });
 

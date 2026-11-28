@@ -218,13 +218,21 @@ export function buildVolcengineSpeechProvider(): SpeechProviderPlugin {
       const voice = trimToUndefined(overrides?.voice) ?? cfg.voice;
       const { cluster, resourceId, appKey } = cfg;
       const baseUrl = cfg.baseUrl ?? (apiKey ? BYTEPLUS_SEED_TTS_URL : VOLCENGINE_LEGACY_TTS_URL);
-      const speedRatio = normalizeSpeedRatio(overrides?.speedRatio) ?? cfg.speedRatio ?? 1;
+      const requestedSpeedRatio = normalizeSpeedRatio(overrides?.speedRatio) ?? cfg.speedRatio;
+      const speedRatio = requestedSpeedRatio ?? 1;
       const emotion = trimToUndefined(overrides?.emotion) ?? cfg.emotion;
       const { text, timeoutMs } = req;
       const { canonicalizeBase64 } = await import("openclaw/plugin-sdk/media-runtime");
       const { readResponseWithLimit } = await import("openclaw/plugin-sdk/response-limit-runtime");
       const { fetchWithSsrFGuard } = await import("openclaw/plugin-sdk/ssrf-runtime");
       const providerName = apiKey ? "BytePlus Seed Speech" : "Volcengine";
+      // Seed Speech v3 accepts 0.5x-2x while the shared speedRatio setting allows
+      // 0.2x-3x. Saturate at the v3 boundary instead of narrowing the shared
+      // setting, and leave an unset speed unset rather than sending the neutral 0.
+      const speechRate =
+        requestedSpeedRatio === undefined
+          ? undefined
+          : Math.round(Math.min(Math.max(requestedSpeedRatio, 0.5), 2) * 100 - 100);
       const payload = apiKey
         ? {
             user: { uid: "openclaw" },
@@ -234,9 +242,9 @@ export function buildVolcengineSpeechProvider(): SpeechProviderPlugin {
               audio_params: {
                 format: encoding,
                 sample_rate: 24_000,
+                ...(speechRate === undefined ? {} : { speech_rate: speechRate }),
+                ...(emotion ? { emotion } : {}),
               },
-              ...(speedRatio !== 1 ? { speed_ratio: speedRatio } : {}),
-              ...(emotion ? { emotion } : {}),
             },
           }
         : {
