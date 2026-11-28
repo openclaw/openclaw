@@ -66,7 +66,7 @@ public struct GatewayConnectAuthError: LocalizedError, Sendable {
     public let message: String
     public let detailCodeRaw: String?
     public let recommendedNextStepRaw: String?
-    public let canRetryWithDeviceToken: Bool
+    public internal(set) var canRetryWithDeviceToken: Bool
     public let requestId: String?
     public let detailsReason: String?
     public let ownerRaw: String?
