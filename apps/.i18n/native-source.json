@@ -2489,7 +2489,6 @@
     {"path":"apps/ios/Sources/Search/RootSearchScreen.swift","kind":"ui-localized-call","surface":"apple","id":"native.apple.f87bf62fe0fd87a1","source":"Search OpenClaw"},
     {"path":"apps/ios/Sources/Search/RootSearchScreen.swift","kind":"ui-localized-call","surface":"apple","id":"native.apple.f49e244fd1651baa","source":"Searching messages…"},
     {"path":"apps/ios/Sources/Search/RootSearchScreen.swift","kind":"ui-localized-call","surface":"apple","id":"native.apple.047196eb236b5c3c","source":"Searching sessions…"},
-    {"path":"apps/ios/Sources/Search/RootSearchScreen.swift","kind":"ui-localized-call","surface":"apple","id":"native.apple.222a42ea8b6f19e5","source":"Sessions"},
     {"path":"apps/ios/Sources/Search/RootSearchScreen.swift","kind":"ui-localized-call","surface":"apple","id":"native.apple.aa0a122ae54b2612","source":"Settings"},
     {"path":"apps/ios/Sources/Search/RootSearchScreen.swift","kind":"ui-localized-call","surface":"apple","id":"native.apple.472e88743ad96449","source":"Show more"},
     {"path":"apps/ios/Sources/Search/RootSearchScreen.swift","kind":"ui-localized-call","surface":"apple","id":"native.apple.983d7922f8565693","source":"Sidebar"},
