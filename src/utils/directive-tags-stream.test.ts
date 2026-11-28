@@ -106,6 +106,19 @@ describe("inline directive display stream", () => {
     expect(text).toBe(expected);
   });
 
+  test("preserves a later audio marker when the first marker is already literal", () => {
+    const chunks = ["[[audio_as_voice]] Intro `[[audio_as_voice]]", "`"];
+    const source = chunks.join("");
+    const expected = stripInlineDirectiveTagsForDisplay(source).text;
+    const projection = createLiveAssistantTextProjection({});
+    let text = "";
+
+    for (const chunk of chunks) {
+      text = projection.append(chunk).text;
+    }
+
+    expect(text).toBe(expected);
+  });
   test("retains parsing when audio removal changes the image description", () => {
     const chunks = ["![[audio_as_voice]][`[[reply_to_current]]` example", "](/image.png)"];
     const source = chunks.join("");
