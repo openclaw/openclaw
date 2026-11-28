@@ -254,6 +254,74 @@ describe("createTelegramDraftStream", () => {
     },
   );
 
+  it.each(["lost response", "unconfirmed result"])(
+    "retries a detached preview delete after a %s without touching the next reply",
+    async (failure) => {
+      await withFakeTimers(async () => {
+        const { api, stream } = createForceNewMessageHarness();
+        const firstDelete = createDeferred<boolean>();
+        api.deleteMessage.mockReturnValueOnce(firstDelete.promise);
+        await updateAndFlush(stream, "Temporary progress");
+        await vi.advanceTimersByTimeAsync(4_000);
+
+        await Promise.all([stream.clear(), stream.clear()]);
+        expect(stream.messageId()).toBeUndefined();
+        stream.forceNewMessage();
+        await updateAndFlush(stream, "Final answer");
+        await stream.stop();
+        expect(stream.messageId()).toBe(42);
+        expect(api.deleteMessage.mock.calls).toEqual([[123, 17]]);
+
+        if (failure === "lost response") {
+          firstDelete.reject(new Error("temporary failure"));
+        } else {
+          firstDelete.resolve(false);
+        }
+        await vi.advanceTimersByTimeAsync(0);
+        expect(api.deleteMessage).toHaveBeenCalledOnce();
+        await vi.runAllTimersAsync();
+        expect(api.deleteMessage.mock.calls).toEqual([
+          [123, 17],
+          [123, 17],
+        ]);
+        expect(stream.messageId()).toBe(42);
+      });
+    },
+  );
+
+  it.each([
+    { outcome: "still unconfirmed", error: undefined, attempts: 2, gone: false },
+    {
+      outcome: "already absent",
+      error: new Error("400: Bad Request: message to delete not found"),
+      attempts: 1,
+      gone: true,
+    },
+    { outcome: "forbidden", error: { error_code: 403 }, attempts: 1, gone: false },
+    {
+      outcome: "flood budget exhausted",
+      error: { error_code: 429, parameters: { retry_after: 360 } },
+      attempts: 1,
+      gone: false,
+    },
+  ])("settles detached preview cleanup when $outcome", async ({ error, attempts, gone }) => {
+    await withFakeTimers(async () => {
+      const api = createMockDraftApi();
+      if (error) {
+        api.deleteMessage.mockRejectedValue(error);
+      } else {
+        api.deleteMessage.mockResolvedValue(false);
+      }
+      const stream = createDraftStream(api, { replyToMessageId: 411, replyToMode: "first" });
+      await updateAndFlush(stream, "Temporary progress");
+      await stream.clear();
+      expect(api.deleteMessage).not.toHaveBeenCalled();
+      await vi.runAllTimersAsync();
+      expect(api.deleteMessage).toHaveBeenCalledTimes(attempts);
+      expect(stream.hasConsumedReplyTarget()).toBe(!gone);
+    });
+  });
+
   it("does not report a first preview cleared while its send is in flight", async () => {
     await withFakeTimers(async () => {
       const send = createDeferred<MockSentMessage>();

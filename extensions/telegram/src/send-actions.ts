@@ -3,14 +3,13 @@ import type { ReactionType, ReactionTypeEmoji } from "grammy/types";
 import { logVerbose } from "openclaw/plugin-sdk/runtime-env";
 import { formatErrorMessage } from "openclaw/plugin-sdk/ssrf-runtime";
 import { buildTypingThreadParams } from "./bot/helpers.js";
-import { isRecoverableTelegramNetworkError } from "./network-errors.js";
-import { resolveTelegramSendThreadSpec } from "./reply-parameters.js";
 import {
+  isRecoverableTelegramNetworkError,
   isTelegramMessageAlreadyDeletedError,
   isTelegramMessageDeleteNoopError,
-  withTelegramApiContext,
-  type TelegramApi,
-} from "./send-context.js";
+} from "./network-errors.js";
+import { resolveTelegramSendThreadSpec } from "./reply-parameters.js";
+import { withTelegramApiContext, type TelegramApi } from "./send-context.js";
 import type {
   TelegramApiCallOpts,
   TelegramMessageActionOpts,
