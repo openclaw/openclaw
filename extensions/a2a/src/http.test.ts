@@ -105,7 +105,7 @@ async function startHttpHarness(options?: {
   a2aConfig?: Partial<A2aChannelConfig>;
   onDispatch?: (message: Parameters<typeof dispatchA2aInbound>[0]) => Promise<void>;
 }) {
-  const { registry, controller, ctx } = createA2aGatewayFixture({
+  const { registry, runtime, controller, ctx } = createA2aGatewayFixture({
     cfg: options?.config ?? {},
     version: VERSION,
     terminalStore: options?.terminalStore,
@@ -114,6 +114,7 @@ async function startHttpHarness(options?: {
       ...options?.a2aConfig,
     },
   });
+  runtime.config.current = () => options?.config ?? {};
   const lifecycle = Promise.resolve(a2aChannelPlugin.gateway!.startAccount!(ctx));
   activeAccounts.push({ controller, lifecycle });
   await vi.waitFor(() =>
@@ -138,6 +139,8 @@ async function startHttpHarness(options?: {
     endpoint: string;
     body?: string;
     token?: string | null;
+    headers?: Record<string, string>;
+    socket?: { remoteAddress?: string; encrypted?: boolean };
   }) => {
     const request = createMockIncomingRequest(dispatch.body === undefined ? [] : [dispatch.body]);
     request.method = dispatch.method;
@@ -151,8 +154,14 @@ async function startHttpHarness(options?: {
             "content-length": String(Buffer.byteLength(dispatch.body)),
           }),
       ...(dispatch.token ? { authorization: `Bearer ${dispatch.token}` } : {}),
+      ...dispatch.headers,
     };
-    Object.defineProperty(request.socket, "remoteAddress", { value: "127.0.0.1" });
+    Object.defineProperty(request.socket, "remoteAddress", {
+      value: dispatch.socket?.remoteAddress ?? "127.0.0.1",
+    });
+    if (dispatch.socket?.encrypted) {
+      Object.defineProperty(request.socket, "encrypted", { value: true });
+    }
 
     const response = createMockServerResponse();
     const events = new EventEmitter();
@@ -180,8 +189,12 @@ async function startHttpHarness(options?: {
     },
     taskStore,
     handler,
+    runtime,
     onDispatch,
-    get: (endpoint: string) => dispatchRequest({ method: "GET", endpoint }),
+    get: (
+      endpoint: string,
+      dispatch?: Pick<Parameters<typeof dispatchRequest>[0], "headers" | "socket">,
+    ) => dispatchRequest({ method: "GET", endpoint, ...dispatch }),
     post: (body: unknown, token: string | null = "alpha-secret") =>
       dispatchRequest({
         method: "POST",
@@ -320,6 +333,45 @@ describe("A2A HTTP agent discovery", () => {
     const card = (await response.json()) as { supportedInterfaces: Array<{ url: string }> };
 
     expect(card.supportedInterfaces[0]?.url).toBe(`${harness.baseUrl}/a2a/v1`);
+  });
+
+  it.each<[string, string, string, "http" | "https", string?]>([
+    ["trusted proxy accepts forwarded HTTPS", "172.18.0.5", "https", "https"],
+    ["untrusted peer cannot upgrade to HTTPS", "203.0.113.10", "https", "http"],
+    ["no trusted proxies cannot upgrade to HTTPS", "172.18.0.5", "https", "http", "no-gateway"],
+    ["explicit advertised URL stays authoritative", "172.18.0.5", "https", "https", "explicit"],
+    ["direct TLS ignores forwarded HTTP downgrade", "172.18.0.5", "http", "https", "encrypted"],
+    ["list-valued forwarded proto does not upgrade", "172.18.0.5", "https, http", "http"],
+  ])("%s", async (_name, peer, xfp, scheme, mode) => {
+    const harness = await startHttpHarness({
+      config: {
+        agents: { entries: { main: {} } },
+        ...(mode === "no-gateway" ? {} : { gateway: { trustedProxies: ["172.18.0.0/16"] } }),
+      },
+      ...(mode === "explicit"
+        ? { a2aConfig: { advertisedUrl: "https://agents.example.test/" } }
+        : {}),
+    });
+    const response = await harness.get("/.well-known/agent-card.json", {
+      headers: { "x-forwarded-proto": xfp },
+      socket: { remoteAddress: peer, ...(mode === "encrypted" ? { encrypted: true } : {}) },
+    });
+    const card = (await response.json()) as { supportedInterfaces: Array<{ url: string }> };
+    const host = mode === "explicit" ? "agents" : "gateway";
+    expect(card.supportedInterfaces[0]?.url).toBe(`${scheme}://${host}.example.test/a2a/v1`);
+  });
+
+  it("applies trusted proxy removal to the next request", async () => {
+    const harness = await startHttpHarness({
+      config: { gateway: { trustedProxies: ["127.0.0.1"] } },
+    });
+    harness.runtime.config.current = () => ({});
+    const response = await harness.get("/.well-known/agent-card.json", {
+      headers: { "x-forwarded-proto": "https" },
+    });
+    const card = (await response.json()) as { supportedInterfaces: Array<{ url: string }> };
+
+    expect(card.supportedInterfaces[0]?.url).toBe("http://gateway.example.test/a2a/v1");
   });
 });
 
