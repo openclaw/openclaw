@@ -196,6 +196,18 @@ export async function isRegisteredScheduledTask(env: GatewayServiceEnv): Promise
   }
 }
 
+/**
+ * Read-only: a Startup-folder login item installed in place of the Scheduled Task.
+ * Only confirmed task absence counts; an unknown probe keeps inspection failures visible.
+ */
+export async function isConfirmedStartupEntryOnly(
+  env: GatewayServiceEnv,
+  timeoutMs?: number,
+): Promise<boolean> {
+  const probe = probeScheduledTaskState(resolveTaskName(env), timeoutMs);
+  return probe.status === "missing" && (await isStartupEntryInstalled(env));
+}
+
 export async function launchFallbackTaskScript(
   env: GatewayServiceEnv,
   installedCommand?: GatewayServiceCommandConfig | null,
@@ -656,7 +668,10 @@ export async function readScheduledTaskRuntime(
   const probe = probeScheduledTaskState(resolveTaskName(env), opts?.timeoutMs);
   if (probe.status === "missing") {
     return (await isStartupEntryInstalled(env, deadlineMs, opts?.requireEffective))
-      ? resolveFallbackRuntime(env, undefined, "observe", deadlineMs)
+      ? {
+          ...(await resolveFallbackRuntime(env, undefined, "observe", deadlineMs)),
+          windowsStartupEntry: true,
+        }
       : { status: "stopped", missingUnit: true };
   }
   if (probe.status === "unknown") {

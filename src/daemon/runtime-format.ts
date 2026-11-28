@@ -6,6 +6,9 @@ export function formatServiceLabel(label: string, runtime?: GatewayServiceRuntim
   if (runtime?.inspectionReason === "service-manager-unavailable") {
     return "no supported service manager detected";
   }
+  if (runtime?.windowsStartupEntry) {
+    return "Startup-folder login item";
+  }
   return runtime?.systemd?.scope ? `systemd ${runtime.systemd.scope}` : label;
 }
 

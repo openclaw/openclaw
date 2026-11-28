@@ -2,6 +2,7 @@ import fs from "node:fs/promises";
 import path from "node:path";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { useAutoCleanupTempDirTracker } from "../../test/helpers/temp-dir.js";
+import { formatServiceLabel } from "./runtime-format.js";
 import { resolveStartupEntryPath } from "./schtasks-layout.js";
 import {
   isScheduledTaskDefinitelyNotRunning,
@@ -204,6 +205,21 @@ describe("scheduled task runtime derivation", () => {
     } finally {
       clock.mockRestore();
     }
+  });
+
+  it("names a Startup-folder login item instead of the missing Scheduled Task", async () => {
+    const env = {
+      USERPROFILE: tempDirs.make("schtasks-startup-home-"),
+      APPDATA: tempDirs.make("schtasks-startup-appdata-"),
+      OPENCLAW_WINDOWS_TASK_NAME: "Startup Fixture",
+    };
+    const startupPath = resolveStartupEntryPath(env);
+    await fs.mkdir(path.dirname(startupPath), { recursive: true });
+    await fs.writeFile(startupPath, "@rem synthetic Startup entry; never executed\r\n");
+    spawnSync.mockReturnValue({ status: 1, stdout: "-2147024894" });
+    const runtime = await readScheduledTaskRuntime(env);
+    expect(runtime).toMatchObject({ windowsStartupEntry: true });
+    expect(formatServiceLabel("Scheduled Task", runtime)).toBe("Startup-folder login item");
   });
 });
 

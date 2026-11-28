@@ -52,6 +52,8 @@ export type GatewayServiceRuntime = {
   };
   cachedLabel?: boolean;
   missingUnit?: boolean;
+  /** Windows runs the Gateway from its Startup-folder login item; no Scheduled Task exists. */
+  windowsStartupEntry?: boolean;
   missingGuiSession?: boolean;
   /** Same-label system-domain owner or an ownership probe that failed closed. */
   systemLaunchDaemon?: {
