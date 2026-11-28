@@ -97,6 +97,22 @@ describe("chat composer steering queue", () => {
     expect(find(container, "global-state")).toBeNull();
   });
 
+  it("explains the active-turn wait once and clears the notice when the turn ends", () => {
+    const props = {
+      connected: true,
+      runActive: true,
+      queue: items("ab", "waiting-idle"),
+    };
+    const container = renderQueue(props);
+
+    expect(all(container, "global-state").map((state) => state.textContent?.trim())).toEqual([
+      "Waiting for the agent to finish",
+    ]);
+
+    renderQueue({ ...props, runActive: false }, container);
+    expect(find(container, "global-state")).toBeNull();
+  });
+
   it("keeps the queue identifier on failed and held rows", () => {
     const container = renderQueue({
       queue: [

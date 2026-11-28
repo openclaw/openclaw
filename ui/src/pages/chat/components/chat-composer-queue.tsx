@@ -25,6 +25,7 @@ import {
 import { ChatAuthorAvatar } from "./chat-author-avatar.ts";
 import { handleQueueEditKeydown } from "./chat-composer-keydown.ts";
 import { ChatQueueCopyAction } from "./chat-composer-queue-copy.tsx";
+import { describeComposerQueueStatus } from "./chat-composer-queue-status.ts";
 import type { ChatComposerProps } from "./chat-composer-types.ts";
 
 type ChatQueueProps = {
@@ -33,6 +34,7 @@ type ChatQueueProps = {
   connected?: boolean;
   offline?: boolean;
   canAbort?: boolean;
+  runActive?: boolean;
   canRemoveServerQueued?: boolean;
   onQueueRetry?: (id: string) => void;
   onQueueSteer?: (id: string) => void;
@@ -178,16 +180,7 @@ export function renderChatQueueSolid(props: ChatQueueProps) {
       offered: visibleQueue().filter(isMovableChatQueueItem).length > 1,
     };
   });
-  const globalState = createMemo(() => {
-    const head = props.queue.find((item) => item.sendState !== "failed" || item.localCommandName);
-    return head?.sendState === "held" && isQueuedSendInlineState(head)
-      ? { label: t("chat.queue.states.blockedByReview"), tone: "warn" }
-      : props.queuePaused
-        ? { label: t("chat.queue.states.pausedByStop"), tone: "paused" }
-        : visibleQueue().some((item) => item.sendState === "waiting-model") && !props.offline
-          ? { label: t("chat.queue.states.applyingSettings"), tone: "settings" }
-          : null;
-  });
+  const globalState = createMemo(() => describeComposerQueueStatus(props, visibleQueue));
   let scrollRegion: HTMLDivElement | undefined;
   onSettled(() => () => {
     if (queueDragScroll?.container === scrollRegion) {

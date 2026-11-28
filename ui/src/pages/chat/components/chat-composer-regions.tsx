@@ -1,7 +1,7 @@
 import { createMemo, lazy, Show, untrack } from "solid-js";
 import { focusComposerInput } from "../../../lib/composer-input.ts";
 import { projectPresentation } from "../../../lib/reactive/presentation.ts";
-import { isChatRunWorking } from "../chat-run-working.ts";
+import { hasTerminalRunStatus, isChatRunWorking } from "../chat-run-working.ts";
 import { projectProgressCardRuntime } from "../chat-subagent-wait.ts";
 import type { createChatComposerContext } from "./chat-composer-frame.ts";
 import type { ChatComposerProps } from "./chat-composer-types.ts";
@@ -35,6 +35,7 @@ export function ComposerQueue(view: { composer: ChatComposerProps; showAbortable
           connected={view.composer.connected}
           offline={view.composer.offline}
           canAbort={view.showAbortableUi}
+          runActive={view.composer.runActive && !hasTerminalRunStatus(view.composer.runStatus)}
           canRemoveServerQueued={canAct()}
           onQueueRetry={canAct() ? view.composer.onQueueRetry : undefined}
           onQueueSteer={canAct() ? view.composer.onQueueSteer : undefined}
