@@ -1,5 +1,6 @@
 import fs from "node:fs/promises";
 import { createServer } from "node:http";
+import path from "node:path";
 import { rawDataToString } from "@openclaw/gateway-client/websocket-data";
 import { isRecord } from "@openclaw/normalization-core/record-coerce";
 import { GatewayClient } from "openclaw/plugin-sdk/gateway-runtime";
@@ -438,7 +439,7 @@ describe("paired node worker lifecycle wire", () => {
             });
             const legacyDeviceId = legacyNode.identity.deviceId;
             expect(legacyDeviceId).not.toBe(modernNode.identity.deviceId);
-            const key = await createSession(caseOperator, published, "legacy-capability");
+            const key = await createSession(caseOperator, published, path.basename(root));
             await dispatchNodeSession(gateway, key, legacyDeviceId);
             const unsupportedRunId = await startTurn(caseOperator, key, BASELINE_REPLY);
             await expect(waitForTurn(caseOperator, unsupportedRunId)).resolves.toMatchObject({
