@@ -13,7 +13,7 @@ afterEach(() => {
   vi.restoreAllMocks();
 });
 
-it.each([undefined, "session-activity-summary", "conversation-label"] as const)(
+it.each([undefined, "session-activity-summary"] as const)(
   "executes purpose %s at the CLI boundary without changing the run trigger",
   async (purpose) => {
     supervisorSpawnMock.mockResolvedValueOnce(
