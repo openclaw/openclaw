@@ -257,7 +257,11 @@ while the response is pending.
 
 ### Inference account continuity
 
-New isolated agent-turn jobs privately retain their selected stored inference account
+For an automation that runs a model, open its details in the Control UI or run
+`openclaw automations show <jobId>` to see its billing account. If it has no saved
+account, OpenClaw selects one when it runs.
+
+New isolated agent-turn jobs retain their selected stored inference account
 and compatible authentication route. OAuth and API keys can remain enabled together:
 changing interactive defaults, profile order, or the job’s plain model selection does
 not switch the job’s account or billing route. Automatic ownership remains distinct

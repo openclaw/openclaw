@@ -10,6 +10,7 @@ import {
 } from "@openclaw/normalization-core/string-coerce";
 import { GatewayClientRequestError } from "../../../packages/gateway-client/src/request-error.js";
 import { readCronJobNotFoundError } from "../../../packages/gateway-protocol/src/gateway-error-details.js";
+import type { CronJob as GatewayCronJob } from "../../../packages/gateway-protocol/src/schema/cron.types.js";
 import { truncateToVisibleWidth, visibleWidth } from "../../../packages/terminal-core/src/ansi.js";
 import { sanitizeTerminalText } from "../../../packages/terminal-core/src/safe-text.js";
 import { colorize, isRich, theme } from "../../../packages/terminal-core/src/theme.js";
@@ -613,7 +614,7 @@ export function printCronList(
 }
 
 export function printCronShow(
-  job: CronJob,
+  job: CronJob & Pick<GatewayCronJob, "billingProfileId">,
   runtime: RuntimeEnv = defaultRuntime,
   opts?: { deliveryPreview?: CronDeliveryPreview },
 ) {
@@ -641,6 +642,9 @@ export function printCronShow(
   runtime.log(`session: ${showValue(job.sessionTarget)}`);
   runtime.log(`agent: ${showValue(job.agentId)}`);
   runtime.log(`model: ${showValue(model)}`);
+  if (job.billingProfileId !== undefined) {
+    runtime.log(`billing account: ${showValue(job.billingProfileId ?? "selected at run time")}`);
+  }
   runtime.log(`delivery: ${showValue(preview.label)} (${showValue(preview.detail)})`);
   runtime.log(`next: ${formatRelative(state.nextRunAtMs, Date.now())}`);
   runtime.log(`last: ${formatRelative(state.lastRunAtMs, Date.now())}`);

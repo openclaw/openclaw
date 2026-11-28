@@ -489,6 +489,10 @@ describe("cron handler inference binding persistence", () => {
     const adopted = await fixture.reload();
     expect(adopted.inferenceBinding).toMatchObject({ profileId: subscriptionId, source: "user" });
     await updateModel(fixture, created.id, "synthetic-alias");
+    expect(await fixture.invoke("cron.get", { id: created.id })).toMatchObject({
+      payload: { model: "synthetic-alias" },
+      billingProfileId: subscriptionId,
+    });
     expect((await fixture.reload()).inferenceBinding).toEqual(adopted.inferenceBinding);
   });
   it.for([

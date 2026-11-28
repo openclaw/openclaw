@@ -531,6 +531,8 @@ export const CronJobSchema = closedObject({
   updatedAtMs: CronDateTimestampMsSchema,
   /** Opaque Gateway-computed token for the job definition, excluding scheduler state. */
   configRevision: Type.Optional(CronConfigRevisionSchema),
+  /** Saved inference account for this provider, or null when the run selects its account. */
+  billingProfileId: Type.Optional(Type.Union([NonEmptyString, Type.Null()])),
   /** Gateway-computed: the account-scoped tool cap cannot resolve its creator channel. */
   reauthorizationRequired: Type.Optional(Type.Boolean()),
   schedule: CronScheduleSchema,

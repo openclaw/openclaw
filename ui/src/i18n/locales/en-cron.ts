@@ -87,6 +87,8 @@ const enCron = {
       settingsTab: "Settings",
       edit: "Edit",
       historyTitle: "Activity history",
+      savedBillingAccount: "Saved billing account · {account}",
+      liveBillingAccount: "Billing account selected at run time",
       generalSection: "General",
       scheduleSection: "Schedule",
       deliverySection: "Delivery",

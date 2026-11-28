@@ -136,6 +136,12 @@ function DetailHeader(
       ? (props.selectedJob?.displayName ?? props.selectedJob?.name ?? props.form.name)
       : t("cron.detail.newTitle");
   const reading = () => props.mode === "job" && !props.editing;
+  const billingAccount = () => {
+    const profile = props.selectedJob?.billingProfileId;
+    return profile === null
+      ? t("cron.detail.liveBillingAccount")
+      : profile && t("cron.detail.savedBillingAccount", { account: profile });
+  };
   const description = () => (reading() ? props.selectedJob?.description?.trim() : undefined);
   const editStatus = () =>
     props.editing ? describeEditedOneShotStatus(props.selectedJob, props.form) : undefined;
@@ -160,6 +166,9 @@ function DetailHeader(
             {props.selectedJob?.trigger ? <TriggerIndicator /> : undefined}
           </div>
         ) : undefined}
+        <Show when={billingAccount()}>
+          {(label) => <div class="cron-detail-description">{label()}</div>}
+        </Show>
         {editStatus() ? (
           <div class="cron-detail-runtime" data-test-id="cron-schedule-runtime" role="status">
             {editStatus()}
