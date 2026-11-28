@@ -436,7 +436,9 @@ it("reads Gmail through the Composio CLI with read-only tools only", async () =>
   });
   // Every tool the script ran reads Gmail; nothing else reached the CLI.
   const slugs = new Set(
-    [...listCalls, ...(await calls())].flatMap((call) => (call[0] === "execute" ? [call[1]] : [])),
+    [...listCalls, ...(await calls())].flatMap((call) =>
+      call[0] === "execute" && call[1] ? [call[1]] : [],
+    ),
   );
   expect([...slugs].toSorted((a, b) => a.localeCompare(b))).toStrictEqual([
     "GMAIL_FETCH_MESSAGE_BY_THREAD_ID",
