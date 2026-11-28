@@ -173,11 +173,12 @@ kill -0 <pid>                        # confirm that exact PID is alive
 
 An empty `lsof` result plus a failed `kill -0` means the Gateway is stopped.
 
-Graceful shutdown waits for active work to drain before closing. A stop with a
-run in flight can take about 45 seconds (logged as `drain=44982ms`) versus a
-few seconds when idle (`completed cleanly in 3824ms`). Do not conclude that
-`bootout` or `kickstart` failed within the first 20-30 seconds; allow up to
-120 seconds before retrying, and prefer stopping while the Gateway is idle.
+Graceful shutdown waits for active work to settle before closing, so a stop
+takes longer while a run is in flight than when the Gateway is idle. Do not
+conclude that `bootout` or `kickstart` failed within the first few seconds;
+allow a generous margin before retrying, and prefer stopping while the Gateway
+is idle. Check the port with `lsof` as described above rather than relying on
+elapsed time alone.
 
 ## Replacing a running binary
 
