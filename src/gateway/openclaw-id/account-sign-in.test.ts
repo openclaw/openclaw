@@ -517,7 +517,7 @@ describe("device sign-in", () => {
   });
 
   describe("per-owner limits", () => {
-    const PER_OWNER = 4;
+    const PER_OWNER = 8;
     const poll = (
       signIn: ReturnType<typeof createOpenClawIdSignIn>,
       state: string,

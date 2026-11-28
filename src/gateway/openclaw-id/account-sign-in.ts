@@ -74,9 +74,10 @@ const SIGN_IN_CALLBACK_PATH = "/openclaw-id/callback";
 
 const PENDING_TTL_MS = 10 * 60_000;
 const MAX_PENDING = 16;
-// Device sign-ins and held tokens belong to a person on a shared Gateway: each person gets a few,
-// and only their own oldest is dropped. The global limits are a memory backstop well above that.
-const MAX_PER_OWNER = 4;
+// Device sign-ins and held tokens belong to a person on a shared Gateway: each person gets 8 of
+// each (a browser holds one token, so this covers several browsers), and only their own oldest is
+// dropped. The global limits are a memory backstop well above that.
+const MAX_PER_OWNER = 8;
 const MAX_DEVICE_SIGN_INS = 256;
 const MAX_HELD = 256;
 const DEVICE_GRANT = "urn:ietf:params:oauth:grant-type:device_code";
