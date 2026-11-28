@@ -40,7 +40,7 @@ export function createFamilyVisibility(params: {
 }
 
 /**
- * dispatch_action's repeat-guard declaration: each deferred trusted tool's own `repeatable`
+ * dispatch_action's repeat-guard declaration: each trusted catalog tool's own `repeatable`
  * by catalog id, with its name as an alias when unique, so a poll through the dispatcher is
  * exempt exactly as a direct call would be. The repeat guard treats any other selector as a
  * different target, so a call the dispatcher refuses as ambiguous stays counted.
@@ -54,9 +54,9 @@ export function dispatchRepeatable(
   }
   const targets: Record<string, ToolRepeatableTarget> = {};
   const aliases: Record<string, string> = {};
-  for (const { id, name, source, tool, directVisible } of entries) {
+  for (const { id, name, source, tool } of entries) {
     const repeatable = source === "openclaw" && "repeatable" in tool ? tool.repeatable : undefined;
-    if (directVisible || repeatable === undefined) {
+    if (repeatable === undefined) {
       continue;
     }
     if (repeatable !== true && "dispatch" in repeatable) {

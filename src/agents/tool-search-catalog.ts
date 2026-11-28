@@ -704,10 +704,10 @@ export function applyToolCatalogCompaction(
       .map((tool) => tool.name),
   );
   catalogRef.baselineDirectOnlyToolNames = catalogRef.directOnlyToolNames;
-  // The registered catalog (possibly reused) is the one dispatch_action calls into.
+  // dispatch_action executes any catalog entry, so it carries every entry's own declaration.
   const dispatcher = visible.find((tool) => tool.name === TOOL_CALL_RAW_TOOL_NAME);
   if (dispatcher) {
-    dispatcher.repeatable = dispatchRepeatable(catalogRef.current?.entries ?? catalog);
+    dispatcher.repeatable = dispatchRepeatable(catalog);
   }
   return {
     tools: visible,

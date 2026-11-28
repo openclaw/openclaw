@@ -50,6 +50,7 @@ function surface(
   executed: string[] = [],
   members: readonly string[] = Object.keys(familyFactories),
   include?: Array<{ name: string }>,
+  directToolNames?: string[],
 ) {
   const catalogRef = createToolSearchCatalogRef();
   refs.push(catalogRef);
@@ -70,6 +71,7 @@ function surface(
   };
   const { tools } = (mode === "tools" ? applyToolSearchCatalog : applyToolSchemaDirectoryCatalog)({
     ...ctx,
+    directToolNames,
     tools: [
       ...createToolSearchTools(ctx),
       createReadTool("/tmp/repeatable"),
@@ -115,14 +117,17 @@ it.each(["tools", "directory"] as const)(
 );
 
 it.each([
-  ["agents_wait", "agents_wait", { ids: ["child-1"], timeoutSeconds: 30 }],
-  ["agents_wait", "openclaw:core:agents_wait", { ids: ["child-1"], timeoutSeconds: 30 }],
-  ["subagents", "subagents", { action: "list" }],
+  ["agents_wait", "agents_wait", { ids: ["child-1"], timeoutSeconds: 30 }, undefined],
+  ["agents_wait", "openclaw:core:agents_wait", { ids: ["child-1"], timeoutSeconds: 30 }, undefined],
+  ["subagents", "subagents", { action: "list" }, undefined],
+  // A direct-visible catalog tool is still dispatchable, with the same exemption.
+  ["subagents", "subagents", { action: "list" }, ["subagents"]],
 ] as const)(
-  "lets 25 identical %s polls through dispatch_action (id %s) run with no note and no stop",
-  async (name, id, args) => {
+  "lets 25 identical %s polls through dispatch_action (id %s, direct %s) run with no note and no stop",
+  async (name, id, args, direct) => {
     const executed: string[] = [];
-    const { agent } = captureAgent(surface("tools", executed).tools, {}, [
+    const { tools } = surface("tools", executed, undefined, undefined, direct && [...direct]);
+    const { agent } = captureAgent(tools, {}, [
       ...turns(25, "dispatch_action", { id, args }),
       answer,
     ]);
