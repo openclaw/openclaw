@@ -10,7 +10,7 @@ type TestActions = {
 describe("createAccountActionGate", () => {
   it("prefers account action values over base values", () => {
     const gate = createAccountActionGate<TestActions>({
-      baseActions: { send: false, reactions: true },
+      baseActions: { send: false },
       accountActions: { send: true },
     });
     expect(gate("send")).toBe(true);
