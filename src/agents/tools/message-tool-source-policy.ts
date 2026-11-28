@@ -136,7 +136,12 @@ export function enforceSourceReplyOnlyMessageAction(params: {
       .map((target) => normalizeOptionalString(target))
       .filter((target): target is string => Boolean(target)),
   );
-  if (!sourceChannel || sourceTargets.length === 0) {
+  if (!sourceChannel) {
+    throw sourceReplyPolicyError(
+      "Completion source replies require an authoritative current conversation.",
+    );
+  }
+  if (sourceTargets.length === 0 && sourceChannel !== INTERNAL_MESSAGE_CHANNEL) {
     throw sourceReplyPolicyError(
       "Completion source replies require an authoritative current conversation.",
     );

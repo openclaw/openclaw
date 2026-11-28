@@ -22,6 +22,7 @@ import { createTestRegistry } from "../../test-utils/channel-plugins.js";
 import { withOpenClawTestState } from "../../test-utils/openclaw-test-state.js";
 import { createMessageTool } from "./message-tool-execution.js";
 import type { MessageToolOptions } from "./message-tool-execution.types.js";
+import { enforceSourceReplyOnlyMessageAction } from "./message-tool-source-policy.js";
 
 const source = {
   sourceReplyOnly: true,
@@ -240,5 +241,25 @@ describe("completion source-reply authority", () => {
       tool.execute("missing-source", { action: "send", message: "completion" }),
     ).rejects.toThrow("authoritative current conversation");
     expect(commandSecretGateway.resolveCommandSecretRefsViaGateway).not.toHaveBeenCalled();
+  });
+
+  it("accepts the targetless internal Control UI source reply", () => {
+    expect(() =>
+      enforceSourceReplyOnlyMessageAction({
+        action: "send",
+        args: { message: "completion" },
+        currentChannelProvider: "webchat",
+      }),
+    ).not.toThrow();
+  });
+
+  it("still rejects a targetless external-channel source reply", () => {
+    expect(() =>
+      enforceSourceReplyOnlyMessageAction({
+        action: "send",
+        args: { message: "completion" },
+        currentChannelProvider: "workspace",
+      }),
+    ).toThrow("authoritative current conversation");
   });
 });
