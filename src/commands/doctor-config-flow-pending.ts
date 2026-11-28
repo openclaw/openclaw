@@ -1,6 +1,8 @@
 import type { ConfigFileSnapshot } from "../config/types.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import type { PreparedAgentDatabaseMigrationDiscovery } from "../infra/state-migrations.media-persistence-targets.js";
+import type { LegacyStateDetection } from "../infra/state-migrations.types.js";
+import type { PreparedLegacySessionSurfaces } from "../plugins/legacy-session-surfaces.types.js";
 import type {
   DoctorMaintenancePending,
   DoctorMaintenancePendingCheck,
@@ -14,6 +16,12 @@ export type DoctorConfigFlowPendingParams = {
 };
 
 type DoctorConfigFlowPendingInput = { id: string; check?: DoctorMaintenancePendingCheck };
+
+type DetectionRead = {
+  decision: DoctorMaintenancePending;
+  detected?: LegacyStateDetection;
+  legacySessionSurfaces?: PreparedLegacySessionSurfaces;
+};
 
 const decided = (work: boolean): DoctorMaintenancePending => (work ? "work" : "none");
 
@@ -84,6 +92,64 @@ function doctorConfigFlowPendingInputs(
     const input = await readMigrationInput();
     // Config the state migrations cannot use takes the preflight's other paths.
     return input ? decide(input) : "undecidable";
+  };
+  // The migration graph's detection, read once: its preview decides `legacy-state-detection`,
+  // and graph steps after it read the same detection, as the graph's writers do.
+  let detectionRead: Promise<DetectionRead> | undefined;
+  const readDetection = () =>
+    (detectionRead ??= (async (): Promise<DetectionRead> => {
+      const input = await readMigrationInput();
+      if (!input) {
+        return { decision: "undecidable" };
+      }
+      const [
+        { detectLegacyStateMigrations },
+        { prepareLegacySessionSurfaces },
+        { resolveClientCredentialStorePath },
+      ] = await Promise.all([
+        import("../infra/state-migrations.doctor.js"),
+        import("../plugins/legacy-session-surfaces.js"),
+        import("../infra/client-credential-paths.js"),
+      ]);
+      let read: DetectionRead = { decision: "undecidable" };
+      await decideWithAgentStores(input.cfg, [resolveClientCredentialStorePath(env)], async () => {
+        const legacySessionSurfaces = await prepareLegacySessionSurfaces({
+          config: input.cfg,
+          env,
+        });
+        if (legacySessionSurfaces.failures.length > 0) {
+          return "undecidable";
+        }
+        const detected = await detectLegacyStateMigrations({
+          cfg: input.cfg,
+          sourceConfigBeforeMigrations: input.sourceConfigBeforeMigrations,
+          ...(input.pluginDoctorConfig ? { pluginDoctorConfig: input.pluginDoctorConfig } : {}),
+          mode: "doctor",
+          env,
+          doctorOnlyStateMigrations: true,
+          legacySessionSurfaces,
+        });
+        const decision =
+          detected.warnings.length > 0 && detected.warningDisposition !== "recoverable"
+            ? "undecidable"
+            : decided(detected.preview.length > 0);
+        read = { decision, detected, legacySessionSurfaces };
+        return decision;
+      });
+      return read;
+    })());
+  // A graph step decided from a detection that completed.
+  const withDetection = async (
+    decide: (
+      detection: Required<DetectionRead>,
+      input: NonNullable<Awaited<ReturnType<typeof readMigrationInput>>>,
+    ) => Promise<DoctorMaintenancePending>,
+  ) => {
+    const [detection, input] = await Promise.all([readDetection(), readMigrationInput()]);
+    const { detected, legacySessionSurfaces } = detection;
+    return detected && legacySessionSurfaces && input
+      ? decide({ decision: detection.decision, detected, legacySessionSurfaces }, input)
+      : "undecidable";
   };
   return [
     {
@@ -226,46 +292,7 @@ function doctorConfigFlowPendingInputs(
       // The migration graph's own detection, including plugin `detectLegacyState` previews
       // and the legacy exec approvals.
       id: "legacy-state-detection",
-      check: () =>
-        withMigrationConfig(async (input) => {
-          const [
-            { detectLegacyStateMigrations },
-            { prepareLegacySessionSurfaces },
-            { resolveClientCredentialStorePath },
-          ] = await Promise.all([
-            import("../infra/state-migrations.doctor.js"),
-            import("../plugins/legacy-session-surfaces.js"),
-            import("../infra/client-credential-paths.js"),
-          ]);
-          return decideWithAgentStores(
-            input.cfg,
-            [resolveClientCredentialStorePath(env)],
-            async () => {
-              const legacySessionSurfaces = await prepareLegacySessionSurfaces({
-                config: input.cfg,
-                env,
-              });
-              if (legacySessionSurfaces.failures.length > 0) {
-                return "undecidable";
-              }
-              const detected = await detectLegacyStateMigrations({
-                cfg: input.cfg,
-                sourceConfigBeforeMigrations: input.sourceConfigBeforeMigrations,
-                ...(input.pluginDoctorConfig
-                  ? { pluginDoctorConfig: input.pluginDoctorConfig }
-                  : {}),
-                mode: "doctor",
-                env,
-                doctorOnlyStateMigrations: true,
-                legacySessionSurfaces,
-              });
-              if (detected.warnings.length > 0 && detected.warningDisposition !== "recoverable") {
-                return "undecidable";
-              }
-              return decided(detected.preview.length > 0);
-            },
-          );
-        }),
+      check: async () => (await readDetection()).decision,
     },
     {
       id: "agent-databases",
@@ -290,11 +317,124 @@ function doctorConfigFlowPendingInputs(
         );
       },
     },
-    // Graph steps that run on every Doctor pass and decide inside their writers: delivery
-    // queue entries, workspace aliases, Skill Workshop proposals, ACP session metadata,
-    // orphan session keys, transcript directives, config machine state and the shared auth
-    // store. They have no read-only predicate yet.
-    { id: "legacy-state-steps" },
+    // Graph steps that run on every Doctor pass whatever the detection previews, in graph
+    // order. Each calls the predicate its writer reads first.
+    {
+      // Runtime pins in the pin store, then retired machine-owned config fields.
+      id: "legacy-state-steps.config-machine-state",
+      check: () =>
+        withMigrationConfig(async (input) => {
+          const [
+            { resolveDaemonRuntimePinStorePath },
+            { hasDaemonRuntimePinMigrationWork },
+            { hasLegacyConfigMachineState },
+          ] = await Promise.all([
+            import("../daemon/runtime-pin-store.js"),
+            import("../infra/state-migrations.daemon-runtime-pins.js"),
+            import("../infra/state-migrations.config-machine-state.js"),
+          ]);
+          return decideLive([resolveDaemonRuntimePinStorePath(env)], () =>
+            decided(
+              hasDaemonRuntimePinMigrationWork(env) ||
+                hasLegacyConfigMachineState({ config: input.pluginDoctorConfig ?? input.cfg, env }),
+            ),
+          );
+        }),
+    },
+    {
+      // Every discovered agent database: the graph repairs the subset its media pass prepared.
+      id: "legacy-state-steps.transcript-directives",
+      check: async () => {
+        const discovery = params.agentDatabaseMigrationDiscovery;
+        if (!discovery) {
+          return "undecidable";
+        }
+        const { hasHistoricalTranscriptDirectiveWork } =
+          await import("../infra/state-migrations.transcript-directives.js");
+        return decideLive(agentDatabases(), async () =>
+          decided(
+            await hasHistoricalTranscriptDirectiveWork({
+              targets: discovery.discovery.targets,
+              env,
+            }),
+          ),
+        );
+      },
+    },
+    {
+      id: "legacy-state-steps.orphan-session-keys",
+      check: () =>
+        withDetection(async ({ detected, legacySessionSurfaces }, { cfg }) => {
+          const { checkOrphanedSessionKeysPending } =
+            await import("../infra/state-migrations.session-store.js");
+          return decideLive([], () =>
+            checkOrphanedSessionKeysPending({
+              cfg,
+              env,
+              additionalAgentIds: detected.pluginSessionStoreAgentIds,
+              legacySessionSurfaces,
+            }),
+          );
+        }),
+    },
+    {
+      // The writer acts only on the detection's own finding, which its preview reports.
+      id: "legacy-state-steps.shared-auth-store",
+      check: () =>
+        withDetection(async ({ detected }) => decided(detected.sharedAuthStore.hasLegacy)),
+    },
+    {
+      id: "legacy-state-steps.delivery-queues",
+      check: async () => {
+        const [{ resolveStateDir }, { hasDoctorDeliveryQueueWork }] = await Promise.all([
+          import("../config/paths.js"),
+          import("./doctor-outbound-delivery.js"),
+        ]);
+        return decideLive([], async () =>
+          decided(await hasDoctorDeliveryQueueWork({ stateDir: resolveStateDir(env), env })),
+        );
+      },
+    },
+    {
+      // A workspace path whose saved records belong to the folder it used to name. Like its
+      // writer, the inspection resolves workspaces from the process environment.
+      id: "legacy-state-steps.workspace-aliases",
+      check: () =>
+        withMigrationConfig(async ({ cfg }) => {
+          const { collectRepointedWorkspaceAliasFindings } =
+            await import("./doctor-workspace-alias.js");
+          return decideWithAgentStores(cfg, [], async () =>
+            decided((await collectRepointedWorkspaceAliasFindings(cfg)).length > 0),
+          );
+        }),
+    },
+    {
+      id: "legacy-state-steps.skill-workshop",
+      check: () =>
+        withMigrationConfig(async ({ cfg }) => {
+          const { hasSkillWorkshopProposalRetirementWork } =
+            await import("./doctor-skill-workshop-retire-proposals.js");
+          return decideLive([], () =>
+            decided(hasSkillWorkshopProposalRetirementWork({ config: cfg, env })),
+          );
+        }),
+    },
+    {
+      id: "legacy-state-steps.acp-session-metadata",
+      check: () =>
+        withDetection(async ({ detected, legacySessionSurfaces }, { cfg }) => {
+          const { checkLegacyAcpSessionMetadataPending } =
+            await import("../infra/state-migrations.acp-session-metadata.js");
+          return decideLive([], () =>
+            checkLegacyAcpSessionMetadataPending({
+              cfg,
+              env,
+              pluginSessionStoreAgentIds: detected.pluginSessionStoreAgentIds,
+              legacySessionSurfaces,
+            }),
+          );
+        }),
+    },
     {
       id: "a2ui-widgets",
       check: () =>
@@ -318,9 +458,34 @@ function doctorConfigFlowPendingInputs(
           );
         }),
     },
-    // Interrupted update reconciliation, the config repair sequence, channel Doctor
-    // sequences and the system agent's workspace files have no read-only predicate yet.
-    { id: "update-history" },
+    {
+      // Interrupted update reconciliation settles only the latest run its own gate admits.
+      id: "update-history",
+      check: async () => {
+        const [{ existsSync }, { isStatePostgres }, { openNodeSqliteDatabase }, kernel, store] =
+          await Promise.all([
+            import("node:fs"),
+            import("../state/openclaw-state-db-engine.js"),
+            import("../infra/node-sqlite.js"),
+            import("../infra/update-run-read.kernel.js"),
+            import("../infra/update-run-interruption-store.js"),
+          ]);
+        if (isStatePostgres()) {
+          return "undecidable";
+        }
+        const databasePath = await stateDatabase();
+        return decideLive([], () => {
+          if (!existsSync(databasePath)) {
+            return "none";
+          }
+          using db = openNodeSqliteDatabase(databasePath, { readOnly: true });
+          const run = kernel.readInterruptedUpdateCandidate(db);
+          return decided(run !== undefined && store.canSettleInterruptedUpdate(run));
+        });
+      },
+    },
+    // The config repair sequence, channel Doctor sequences and the system agent's workspace
+    // files have no read-only predicate yet.
     { id: "config-repairs" },
   ];
 }

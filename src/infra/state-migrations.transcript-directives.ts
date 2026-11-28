@@ -488,7 +488,8 @@ function readAgentDatabaseSchemaCurrent(params: { agentId: string; pathname: str
 async function agentDatabaseNeedsTranscriptDirectiveMigration(params: {
   agentId: string;
   env: NodeJS.ProcessEnv;
-  hasActiveWriter: boolean;
+  /** Read only for an unfinished cursor; the lease inspection reads the state database. */
+  hasActiveWriter: () => Promise<boolean>;
   pathname: string;
 }): Promise<boolean> {
   const postgres = agentEngineInput() !== undefined;
@@ -515,7 +516,7 @@ async function agentDatabaseNeedsTranscriptDirectiveMigration(params: {
       cursor.phase === "complete"
         ? transcriptDirectiveArchiveRecoveryPending(database)
         : // Cursor-only completion can wait while any agent holds the global maintenance boundary.
-          (!postgres && !params.hasActiveWriter) ||
+          (!postgres && !(await params.hasActiveWriter())) ||
           (cursor.phase === "transcripts" &&
             transcriptSessionsNeedMigration(
               database,
@@ -541,6 +542,35 @@ async function agentDatabaseNeedsTranscriptDirectiveMigration(params: {
       database.close();
     }
   }
+}
+
+/**
+ * Whether any target needs the historical transcript directive migration, by the same per-database
+ * decision the migration makes. It reads each SQLite agent database through a read-only connection
+ * and never inspects agent database leases: an unfinished cursor counts as work, as it does for the
+ * migration when no agent database is open. PostgreSQL agent databases are not read here.
+ */
+export async function hasHistoricalTranscriptDirectiveWork(params: {
+  targets: readonly AgentDatabaseMigrationTarget[];
+  env: NodeJS.ProcessEnv;
+}): Promise<boolean> {
+  if (agentEngineInput() !== undefined) {
+    throw new Error("PostgreSQL agent databases are read through their database owner.");
+  }
+  for (const target of params.targets) {
+    assertMigrationTargetPathCurrent(target);
+    if (
+      await agentDatabaseNeedsTranscriptDirectiveMigration({
+        agentId: target.agentId,
+        env: params.env,
+        hasActiveWriter: async () => false,
+        pathname: target.path,
+      })
+    ) {
+      return true;
+    }
+  }
+  return false;
 }
 
 /** Doctor normalization of historical inline assistant directives into typed delivery facts. */
@@ -569,10 +599,15 @@ export async function migrateHistoricalTranscriptDirectives(
           preparedDiscovery: params.preparedDiscovery,
         });
     recoverableWarningCount = discovery.recoverableWarningCount;
-    const hasActiveWriter =
-      discovery.targets.length > 0 &&
-      agentEngineInput() === undefined &&
-      (await hasActiveAgentDatabaseLease(env));
+    // Read first: the lease inspection reads the state database through a private snapshot, so
+    // it runs only once a database's cursor is unfinished.
+    let activeWriter: Promise<boolean> | undefined;
+    let leaseFailure: { error: unknown } | undefined;
+    const hasActiveWriter = () =>
+      (activeWriter ??= hasActiveAgentDatabaseLease(env).catch((error: unknown) => {
+        leaseFailure = { error };
+        throw error;
+      }));
     const targets: AgentDatabaseMigrationTarget[] = [];
     for (const target of discovery.targets) {
       try {
@@ -588,7 +623,8 @@ export async function migrateHistoricalTranscriptDirectives(
           targets.push(target);
         }
       } catch (error) {
-        if (signal?.aborted && error === signal.reason) {
+        // A failed lease inspection skips the whole migration, not one database.
+        if ((signal?.aborted && error === signal.reason) || error === leaseFailure?.error) {
           throw error;
         }
         warnings.push(
