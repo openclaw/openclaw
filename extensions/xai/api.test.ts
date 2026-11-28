@@ -47,7 +47,17 @@ describe("xai api helpers", () => {
     {
       provider: "xai",
       modelId: "grok-4.5",
-      cost: { input: 2, output: 6, cacheRead: 0.3, cacheWrite: 0 },
+      cost: {
+        input: 2,
+        output: 6,
+        cacheRead: 0.3,
+        cacheWrite: 0,
+        // xAI bills every token at the higher rate once the prompt reaches 200k.
+        tieredPricing: [
+          { range: [0, 200_000], input: 2, output: 6, cacheRead: 0.3, cacheWrite: 0 },
+          { range: [200_000], input: 4, output: 12, cacheRead: 0.6, cacheWrite: 0 },
+        ],
+      },
     },
     {
       provider: "xai",
