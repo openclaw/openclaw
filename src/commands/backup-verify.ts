@@ -458,10 +458,9 @@ async function verifyResolvedBackupArchive(
     archiveStat = await fs.stat(archivePath);
   } catch (error) {
     if (hasErrnoCode(error, "ENOENT")) {
-      throw new Error(
-        "Archive does not exist. Check the path and run `openclaw backup verify <archive>` again.",
-        { cause: error },
-      );
+      throw new Error("Archive does not exist. Check the archive path and try again.", {
+        cause: error,
+      });
     }
     throw new Error(
       `Archive could not be inspected. ${formatErrorMessage(error)} Check the path and file permissions, then try again.`,
