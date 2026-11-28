@@ -173,7 +173,7 @@ async function fixture(
       persistToolResultProjections,
       promptActiveSession: (prompt, options) => session.prompt(prompt, options),
     });
-  return { call, assemble, submit, session, policy, catalogRef, controller, owner, attempt, tools };
+  return { call, assemble, submit, session, policy, catalogRef, controller, owner, tools };
 }
 
 describe("prompt assembly with registered Decision runtime", () => {
