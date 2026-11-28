@@ -346,9 +346,9 @@ functions remain valid after the original cache buffer is garbage-collected.
 It also keeps allocator ownership during zero-time event-loop polls, while
 retaining the idle handoff for polls that can block.
 
-The pinned build pairs Bun `191755ec115ece3dd642eba3cb0143cecb5e5d7a` with WebKit
-`b82bc917e99110b61c3a21202d6def7457aa194c` in prerelease
-`openclaw-v1.4.4-20261026-191755ec11-webkit-b82bc917e9`.
+The pinned build pairs Bun `9debcc4b9db331d8ea8be404754baf1ffd0c7175` with WebKit
+`3357f9d63e6dd87a53f2aade723482130a55c0cd` in prerelease
+`openclaw-v1.4.4-20261115-9debcc4b9d-webkit-3357f9d63e`.
 
 It includes the eMudhra compromised-key blocklist and checks current trust before
 accepting saved TLS sessions. QUIC clients recheck saved-session authorization,
