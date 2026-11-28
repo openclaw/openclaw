@@ -43,7 +43,7 @@ import {
   withPrimaryWebhookInterruption,
   withPrimaryWebhookTrace,
 } from "./timer-job-runner.interruption.js";
-import { resolveDeliveryState } from "./timer-trigger.js";
+import { resolveDeliveryDiagnosticError, resolveDeliveryState } from "./timer-trigger.js";
 
 type CronRunTimeout = { timeoutMs: number; reason: string };
 type CronCoreRunOptions = {
@@ -506,7 +506,7 @@ export function authorCronRunCompletion<
       delivery: result.delivery,
       delivered: result.delivered,
       deliveryAttempted: result.deliveryAttempted,
-      error: result.deliveryError ?? result.error,
+      error: resolveDeliveryDiagnosticError(result),
       deliverySuppressionReason: result.deliverySuppressionReason,
     });
   return {

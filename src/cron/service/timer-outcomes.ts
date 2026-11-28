@@ -37,6 +37,7 @@ import {
   applyTriggerEvaluationState,
   applyTriggerRunResult,
   resolveCronNextRunWithLowerBound,
+  resolveDeliveryDiagnosticError,
   resolveDeliveryState,
   holdsFailureNotificationForRetry,
   resolveTransientCronRetryDecision,
@@ -153,7 +154,7 @@ export function applyJobResult(
       delivery: result.delivery,
       delivered: result.delivered,
       deliveryAttempted: result.deliveryAttempted,
-      error: result.deliveryError ?? result.error,
+      error: resolveDeliveryDiagnosticError(result),
       deliverySuppressionReason: result.deliverySuppressionReason,
     });
   job.state.lastDelivered = deliveryState.delivered;

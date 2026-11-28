@@ -1,0 +1,2 @@
+# Exact net regression-test lines for #201999: a run that never attempted outbound delivery keeps its execution error out of the delivery diagnostics.
+87
