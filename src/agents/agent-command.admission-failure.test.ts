@@ -88,7 +88,7 @@ async function fixture() {
     inputProvenance: { kind: "inter_session" as const, sourceTool: "subagent_settle" },
     allowModelOverride: false,
   };
-  return { target, opts, runId };
+  return { target, opts };
 }
 
 it.each(["sent", "failed"] as const)(
