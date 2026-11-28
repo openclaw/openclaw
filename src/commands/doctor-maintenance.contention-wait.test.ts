@@ -17,6 +17,7 @@ import {
   withOpenClawStateStartupMigrationCheckpointDatabase,
 } from "../state/openclaw-state-db.js";
 import { beginDoctorMaintenance } from "./doctor-maintenance.js";
+import { mockDoctorMaintenancePollClock } from "./doctor-maintenance.test-support.js";
 
 const dirs = useAutoCleanupTempDirTracker(afterEach);
 
@@ -63,9 +64,7 @@ function holdState(role: GatewayLockRole, update: boolean, pid = process.ppid) {
 
 /** `startMs` is how long this Doctor process ran before entering maintenance. */
 function startDoctor(startMs = 0, waitForMaintenance = false, serviceInspectionTimeoutMs?: number) {
-  vi.useFakeTimers({ toFake: ["setTimeout", "clearTimeout", "Date", "performance"] });
-  const clock = { ms: startMs };
-  vi.spyOn(performance, "now").mockImplementation(() => clock.ms);
+  const advancePoll = mockDoctorMaintenancePollClock(startMs);
   const firstLog = createDeferredCore();
   const log = vi.fn((..._args: unknown[]) => firstLog.resolve());
   let settled = false;
@@ -87,10 +86,7 @@ function startDoctor(startMs = 0, waitForMaintenance = false, serviceInspectionT
     .finally(() => {
       settled = true;
     });
-  const advanceTo = async (ms: number) => {
-    clock.ms = ms;
-    await vi.advanceTimersToNextTimerAsync();
-  };
+  const advanceTo = (ms: number) => advancePoll(result, ms);
   // Without the wait, admission settles before logging anything.
   const firstWait = Promise.race([firstLog.promise, result]);
   return { log, result, advanceTo, firstWait, isSettled: () => settled };
