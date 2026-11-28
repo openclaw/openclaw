@@ -142,7 +142,7 @@ function createSessionManagerWithPersistedAssistantMessages(
   ]);
 }
 
-function createTool(overrides: Partial<ToolDefinition> = {}): ToolDefinition {
+function createTool(overrides: Partial<ToolDefinition>): ToolDefinition {
   return {
     name: "custom_lookup",
     label: "Custom Lookup",
