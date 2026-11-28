@@ -515,6 +515,30 @@ it("re-reads the persisted microphone on every launch instead of caching it", as
   expect(inspectSession().localOptions.inputDeviceId).toBe("usb-mic");
 });
 
+it("shows a late save error on the ended conversation without reactivating Talk", async () => {
+  const { callbacks } = await start();
+  transcript(callbacks, "Final caption");
+  callbacks.onStatus?.("ended");
+  callbacks.onStatus?.("error", "Voice transcript could not be saved");
+  expect(read()).toMatchObject({
+    realtimeTalkStatus: "error",
+    realtimeTalkDetail: "Voice transcript could not be saved",
+    realtimeTalkActive: false,
+    realtimeTalkSession: null,
+  });
+  expect(entries().map((entry) => entry.text)).toEqual(["Final caption"]);
+});
+
+it("ignores a retired call's save error after a second call also ends", async () => {
+  const first = await start();
+  first.callbacks.onStatus?.("ended");
+  const second = await start();
+  second.callbacks.onStatus?.("ended");
+  first.callbacks.onStatus?.("error", "Stale save failure");
+  expect(read().realtimeTalkStatus).toBe("ended");
+  expect(read().realtimeTalkDetail).toBeNull();
+});
+
 it("publishes call transitions and transcript changes through the owner projection", async () => {
   const observed: Array<{ status: string; text: string; notice: string | null }> = [];
   const dispose = createRoot((stop) => {

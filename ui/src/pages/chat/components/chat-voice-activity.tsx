@@ -125,7 +125,7 @@ export function ChatVoiceStatus(props: {
 }) {
   return (
     <Show
-      when={props.status === "connecting"}
+      when={props.status === "connecting" || props.status === "ended"}
       fallback={
         <Show when={props.status === "error" && props.detail}>
           <InlineAlert
@@ -161,7 +161,9 @@ export function ChatVoiceStatus(props: {
         aria-live="polite"
         aria-atomic="true"
       >
-        {voiceStatusLabel(props.status, props.detail)}
+        {props.status === "ended"
+          ? t("chat.voice.remoteEnded")
+          : voiceStatusLabel(props.status, props.detail)}
       </div>
     </Show>
   );

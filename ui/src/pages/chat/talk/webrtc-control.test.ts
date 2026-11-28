@@ -308,7 +308,7 @@ describe("WebRtcSdpRealtimeTalkTransport control tool", () => {
   });
 
   it.each([
-    ["close_requested", "idle"],
+    ["close_requested", "ended"],
     ["content", "error"],
     ["connection_lost", "error"],
   ])(
@@ -343,7 +343,7 @@ describe("WebRtcSdpRealtimeTalkTransport control tool", () => {
       if (outcome === "error") {
         expect(onStatus).toHaveBeenLastCalledWith("error", "Realtime connection closed");
       } else {
-        expect(onStatus).toHaveBeenLastCalledWith("idle");
+        expect(onStatus).toHaveBeenLastCalledWith("ended");
       }
       expect(onTranscript).toHaveBeenCalledTimes(2);
       expect(onTranscript.mock.calls.some(([entry]) => entry.final)).toBe(false);

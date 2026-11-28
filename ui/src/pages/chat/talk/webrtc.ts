@@ -290,9 +290,9 @@ export class WebRtcSdpRealtimeTalkTransport implements RealtimeTalkTransport {
           return;
         }
         try {
-          this.ctx.callbacks.onStatus?.("idle");
-        } finally {
           this.stop();
+        } finally {
+          this.ctx.callbacks.onStatus?.("ended");
         }
         return;
       case "input_transcript.added":
