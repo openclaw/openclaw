@@ -59,6 +59,7 @@ import {
   tryReuseCodexLiveThread,
 } from "./thread-lifecycle-warm.js";
 import { splitCodexExtraSystemPrompt } from "./thread-prompt.js";
+import { matchCodexRemoteResumeRuntimeFingerprint } from "./thread-remote-runtime.js";
 import { isTransientCodexRestrictedTurn } from "./thread-restricted-resume.js";
 import { materializePendingSupervisionBranch } from "./thread-supervision.js";
 
@@ -316,6 +317,12 @@ export async function startOrResumeThread(
     }
 
     if (binding?.threadId) {
+      // Preserve pending worker ownership across resume and durable parent rotation.
+      if (!incognito && !preserveExistingBinding) {
+        params.appServerRuntimeFingerprint =
+          matchCodexRemoteResumeRuntimeFingerprint(params, binding) ??
+          params.appServerRuntimeFingerprint;
+      }
       if (binding.nativeSkillIsolationFingerprint !== nativeSkillIsolationFingerprint) {
         embeddedAgentLog.debug(
           "codex app-server native skill isolation changed; starting a new thread",
@@ -693,6 +700,10 @@ export async function startOrResumeThread(
       } else {
         await releaseRetainedThread(initialBoundThreadId);
       }
+    }
+    // A transient thread does not inherit custody from the saved binding.
+    if (preserveExistingBinding || restrictedToolSurface || ringZeroActive) {
+      params.appServerRuntimeFingerprint = input.appServerRuntimeFingerprint;
     }
     const started = await startFreshCodexThread(params, {
       ...requestContext,
