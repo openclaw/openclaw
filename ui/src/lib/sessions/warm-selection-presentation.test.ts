@@ -5,6 +5,7 @@ import { createRequireRecord } from "../../../../test/helpers/record.js";
 import type { SessionsListResult } from "../../api/types.ts";
 import { createTestGatewayClient } from "../../test-helpers/gateway-client.ts";
 import { createSessionCapability } from "./index.ts";
+import * as reconciliation from "./reconcile.ts";
 import { createGatewayHarness, sessionsResult } from "./session-capability.test-support.ts";
 
 const requireRecord = createRequireRecord("object", "expected-label");
@@ -201,6 +202,71 @@ it.each([
       ).toHaveLength(retirement === "local-delete" ? 3 : 2);
     }
     expect(h.sessions.state.agentId).not.toBe("main");
+  },
+);
+
+it.each([
+  [20, 1],
+  [200, 1],
+  [200, 8],
+] as const)(
+  "retains one updated window for return navigation (%i rows, %i events)",
+  async (size, events) => {
+    const h = await createWarmSelectionHarness();
+    const rows = [
+      { ...h.result("main").sessions[0]!, updatedAt: size + 2 },
+      ...Array.from({ length: size - 1 }, (_, i) => ({
+        key: `agent:main:work-${i}`,
+        sessionId: `work-${i}`,
+        kind: "direct" as const,
+        updatedAt: size - i + 1,
+        agentId: "main",
+      })),
+    ];
+    h.request.mockResolvedValueOnce(sessionsResult(rows));
+    await h.sessions.refresh({ ...mainQuery, limit: size });
+    h.request.mockClear();
+    const project = vi.spyOn(reconciliation, "projectSessionResultRows");
+    const before = h.sessions.state.result!;
+    const foreground = before.sessions[0];
+    expect(foreground?.key).toBe(h.gateway.snapshot.sessionKey);
+    for (const target of [{ ...rows[1]!, key: "agent:other:work-0", agentId: "other" }, rows[1]!]) {
+      project.mockClear();
+      for (let i = 0; i < events; i++) {
+        h.emitEvent({
+          type: "event",
+          event: "sessions.changed",
+          payload: {
+            reason: "patch",
+            agentId: target.agentId,
+            session: { ...target, label: `Live ${i}`, updatedAt: size + 10 + i },
+            ancestorSessions: [],
+          },
+        });
+      }
+      if (target.agentId === "other") {
+        expect(h.sessions.state.result).toBe(before);
+      }
+      // The retained window cannot cost a second full pass over the same rows.
+      const projectedRows = project.mock.calls.reduce(
+        (total, [, projected]) => total + projected.length,
+        0,
+      );
+      expect(projectedRows).toBeLessThanOrEqual(size * events);
+    }
+    project.mockRestore();
+    const window = h.sessions.state.result!;
+    expect(window.sessions[0]).toMatchObject({ key: rows[1]!.key, label: `Live ${events - 1}` });
+    expect(window.sessions.find((row) => row.key === h.gateway.snapshot.sessionKey)).toBe(
+      foreground,
+    );
+    await vi.advanceTimersByTimeAsync(16000);
+    expect(h.request).not.toHaveBeenCalled();
+    h.select("writer");
+    await vi.advanceTimersByTimeAsync(0);
+    h.holdMain();
+    h.select("main");
+    expect(h.sessions.presentation.result).toBe(window);
   },
 );
 

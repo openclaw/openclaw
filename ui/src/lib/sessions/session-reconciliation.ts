@@ -2,6 +2,7 @@ import { asNullableRecord } from "@openclaw/normalization-core/record-coerce";
 import { normalizeOptionalString } from "@openclaw/normalization-core/string-coerce";
 import type { GatewayEventFrame } from "../../api/gateway.ts";
 import type { GatewaySessionRow, SessionsListResult } from "../../api/types.ts";
+import type { SessionArchivedFilter } from "./navigation.ts";
 import {
   projectSessionResultRows,
   mapSessionResultRows,
@@ -398,7 +399,7 @@ export function createSessionReconciliation(host: Host) {
   const reconcileChangedEvent = (
     payload: unknown,
     eventObservation: ReturnType<ReturnType<typeof createSessionRosterRefresh>["captureEvent"]>,
-    options?: SessionReconcileOptions,
+    primaryArchivedFilter?: SessionArchivedFilter,
   ): {
     eventInfo: ReturnType<typeof readSessionChangedEvent>;
     reconciled: SessionChangedResult;
@@ -458,9 +459,8 @@ export function createSessionReconciliation(host: Host) {
       );
     // The capability owns the shared roster, so every event consumer must
     // preserve the routed archive regardless of subscriber delivery order.
-    const reconcileOptions = archivesSelectedSession
-      ? { ...options, archivedFilter: "all" as const }
-      : options;
+    const effectiveFilter = (filter: SessionArchivedFilter = "active") =>
+      archivesSelectedSession ? "all" : filter;
     let admittedDescriptorResult:
       | Pick<SessionChangedResult, "applied" | "key" | "row" | "deletedKey">
       | undefined;
@@ -493,14 +493,14 @@ export function createSessionReconciliation(host: Host) {
     };
     const reconcileResult = (
       held: SessionsListResult | null,
-      ownerOptions: SessionReconcileOptions | undefined,
       ownerAgentId: string | null,
+      archivedFilter: SessionArchivedFilter,
     ) => {
       const current = projectSessionResultRows(held, projection.projectRows(held?.sessions ?? []));
       const result = reconcileSessionChanged(
         current,
         payload,
-        ownerOptions,
+        { resultAgentId: ownerAgentId, archivedFilter },
         (row, previousRow, fields, rowInfo) =>
           projectEventFields(row, previousRow, fields, rowInfo.agentId ?? ownerAgentId, rowInfo),
         (info) =>
@@ -514,19 +514,18 @@ export function createSessionReconciliation(host: Host) {
       }
       return result;
     };
-    const reconciled = reconcileResult(previous, reconcileOptions, state.agentId);
+    const primaryFilter = effectiveFilter(primaryArchivedFilter);
+    const reconciled = reconcileResult(previous, state.agentId, primaryFilter);
     const staged = roster.observations.stageManagedResults(
       eventObservation.scope,
       (entry) => {
-        const result = reconcileResult(
-          entry.snapshot.result,
-          {
-            resultAgentId: entry.snapshot.agentId,
-            archivedFilter: archivesSelectedSession ? "all" : entry.scope.archivedFilter,
-          },
-          entry.snapshot.agentId,
-        );
-        return result.result;
+        const { result, agentId } = entry.snapshot;
+        const filter = effectiveFilter(entry.scope.archivedFilter);
+        // A warm return window can hold the exact primary result. Apply its frame once;
+        // independent membership, agent or archive views still reconcile on their own.
+        return result === previous && agentId === state.agentId && filter === primaryFilter
+          ? reconciled.result
+          : reconcileResult(result, agentId, filter).result;
       },
       (entry) => {
         if (!eventInfo && invalidationReason === "runner-availability") {
