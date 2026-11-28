@@ -215,9 +215,7 @@ extensions/voice-call/src/webhook.ts	1
 extensions/voice-call/src/webhook/realtime-handler.ts	3
 extensions/whatsapp/src/login-qr.ts	2
 extensions/workboard/browser/catalog.ts	4
-extensions/workboard/browser/host.ts	1
 extensions/workboard/browser/lib/workboard/card-alerts.ts	2
-extensions/workboard/browser/lib/workboard/mutations.ts	1
 extensions/workboard/browser/pages/workboard/sessions-board-controller.ts	1
 extensions/workboard/src/lifecycle-sync.ts	8
 extensions/workboard/src/session-link.ts	2

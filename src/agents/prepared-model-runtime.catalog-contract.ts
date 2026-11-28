@@ -65,6 +65,8 @@ export type PreparedModelRuntimeCatalogAccessParams = {
   retirementSignal: AbortSignal;
   inventoryOwner: Pick<PreparedModelRuntimeOwner, "catalogInventory" | "catalogAttempt"> &
     Partial<Pick<PreparedModelRuntimeOwner, "provenance">>;
+  /** The agent's account inventory; a cold owner for another workspace starts from it. */
+  seedInventory?: PreparedModelCatalogInventory;
 };
 
 export type PreparedModelCatalogCandidate = {

@@ -196,6 +196,7 @@ describe("registerPreActionHooks", () => {
   it("bootstraps when Commander consumed --help as a required option value", async () => {
     await parse(["agent", "--message", "--help", "--message", "hello"]);
 
+    expect(setVerboseMock).toHaveBeenCalledOnce();
     expect(configReadyMock).not.toHaveBeenCalled();
   });
 

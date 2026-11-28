@@ -847,6 +847,52 @@ suite.define(() => {
     expect(new URL(page.url()).pathname).toBe(`/operator/ask/${request.id}`);
   });
 
+  it("keeps the file field and question actions inside the phone panel before and after selection", async () => {
+    const page = await newPage({ width: 390, height: 844 }, true);
+    const request = questionRecord("file-question-layout", {
+      header: "Notes file",
+      question: "Which notes file should be included?",
+      options: [],
+      presentation: "form",
+      isOther: true,
+      resource: { viewId: "file-review", selection: "explicit", userOptions: { kind: "file" } },
+    });
+    const name =
+      "chapter07_revision0426_reviewannotations_editorialreadingorder_sourceappendix.txt";
+    await installMockGateway(page, {
+      featureMethods: ["question.get", "mcp.app.formResource"],
+      methodResponses: {
+        "question.get": { question: request },
+        "mcp.app.formResource": { resources: [{ uri: "review://notes", name }] },
+      },
+    });
+    await page.goto(new URL("ask/" + request.id, suite.server.baseUrl).toString());
+    const panel = page.locator(".chat-question-panel");
+    const input = panel.getByLabel("Notes file");
+    const remove = button(panel, "Remove");
+    await input.waitFor();
+    const checkFit = async () => {
+      const overflow = await panel.evaluate((el) => el.scrollWidth - el.clientWidth);
+      expect(overflow).toBeLessThanOrEqual(1);
+    };
+    await checkFit();
+    await input.setInputFiles({ name, mimeType: "text/plain", buffer: Buffer.from("Notes") });
+    await remove.waitFor();
+    await checkFit();
+    const filename = panel.getByText(name, { exact: true });
+    const label = await filename.boundingBox();
+    const action = await remove.boundingBox();
+    expect(await filename.getAttribute("title")).toBe(name);
+    expect(await filename.evaluate((el) => el.scrollWidth > el.clientWidth)).toBe(true);
+    expect(label!.x + label!.width).toBeLessThan(action!.x);
+    expect(label!.y).toBeGreaterThanOrEqual(action!.y - 1);
+    expect(label!.y + label!.height).toBeLessThanOrEqual(action!.y + action!.height + 1);
+    await remove.tap();
+    await remove.waitFor({ state: "detached" });
+    await checkFit();
+    expect(await button(panel, "Submit").isDisabled()).toBe(true);
+  });
+
   it("keeps a long /ask document on one scroller with reachable answers at phone width", async () => {
     const page = await newPage({ height: 844, width: 390 }, true);
     const request = questionRecord("question-long-document", {
