@@ -1,7 +1,7 @@
 import { performance } from "node:perf_hooks";
 import { setImmediate as yieldToEventLoop } from "node:timers/promises";
 import { normalizeProviderId } from "@openclaw/model-catalog-core/provider-id";
-import { stripSelfProviderModelPrefix } from "@openclaw/model-catalog-core/provider-model-id-normalization";
+import * as providerModelIds from "@openclaw/model-catalog-core/provider-model-id-normalization";
 import {
   createModelProviderRouteOverrideResolver,
   resolveMergedModelProviderConfig,
@@ -17,13 +17,12 @@ import {
   type CurrentReadAuthority,
 } from "../shared/current-read-authority.js";
 import type { GatewayAgentRuntime } from "../shared/session-types.js";
-import { isDefaultAgentRuntimeId, normalizeOptionalAgentRuntimeId } from "./agent-runtime-id.js";
+import { isDefaultAgentRuntimeId } from "./agent-runtime-id.js";
 import type { listCliRuntimeModelBackendBindings } from "./cli-backends.js";
 import { resolveAgentHarnessAutoSelectionHint } from "./harness/auto-selection.js";
 import { resolveAgentHarnessAvailabilityDecision } from "./harness/availability.js";
 import { resolveAgentHarnessPolicy } from "./harness/policy.js";
-import { getRegisteredAgentHarness, listRegisteredAgentHarnesses } from "./harness/registry.js";
-import { resolveAgentHarnessSupport } from "./harness/route-support.js";
+import { listRegisteredAgentHarnesses } from "./harness/registry.js";
 import {
   buildAgentHarnessSupportContext,
   resolveAutoAgentHarnessId,
@@ -175,8 +174,10 @@ export function createCatalogNativePolicyPreparer(params: {
     if (prepared.hostConfigured !== undefined) {
       return;
     }
-    const modelKey = (id: string) =>
-      stripSelfProviderModelPrefix(provider, splitTrailingAuthProfile(id).model.trim()).trim();
+    const modelKey = (id: string) => {
+      const modelId = splitTrailingAuthProfile(id).model.trim();
+      return providerModelIds.stripSelfProviderModelPrefix(provider, modelId).trim();
+    };
     let facts = providers.get(provider);
     if (!facts) {
       const configured = resolveMergedModelProviderConfig(params.cfg, provider);
@@ -279,14 +280,14 @@ export function createCatalogDecisionRuntimeResolver(params: {
   const ownerScope = { agentId: params.agentId };
   const scopeKey = (scope: AgentRuntimePolicyScope) =>
     JSON.stringify(scope.agentScope ?? scope.agentId);
-  const modelProvider = (entry: ModelCatalogEntry, evaluation: ModelAuthAvailabilityEvaluation) => {
-    const route = evaluation.selectedRoute;
+  const modelProvider = (entry: ModelCatalogEntry, decision: ModelAuthAvailabilityEvaluation) => {
+    const route = decision.selectedRoute;
     return {
       api: route?.api ?? entry.api,
       baseUrl: route?.baseUrl ?? entry.baseUrl,
       requestTransportOverrides: route?.requestTransportOverrides,
       runtimePolicy: route?.runtimePolicy,
-      preparedAuth: evaluation.selectedCredential,
+      preparedAuth: decision.selectedCredential,
     };
   };
   const harnessPolicy = (
@@ -338,7 +339,7 @@ export function createCatalogDecisionRuntimeResolver(params: {
     provider: ReturnType<typeof modelProvider>,
     options: Pick<
       Parameters<typeof buildAgentHarnessSupportContext>[0],
-      "contextManagement" | "preparedModelProvider" | "providerOwnership"
+      "contextManagement" | "preparedModelProvider"
     >,
     scope: AgentRuntimePolicyScope = ownerScope,
     providerName = entry.provider,
@@ -351,7 +352,6 @@ export function createCatalogDecisionRuntimeResolver(params: {
       options.contextManagement,
       providerName,
       options.preparedModelProvider ? "1" : "0",
-      JSON.stringify(options.providerOwnership),
       provider.api,
       provider.baseUrl,
       provider.requestTransportOverrides,
@@ -368,6 +368,9 @@ export function createCatalogDecisionRuntimeResolver(params: {
         modelId: entry.id,
         requestedRuntime,
         modelProvider: provider,
+        providerOwnership: options.preparedModelProvider
+          ? undefined
+          : providerOwnership(entry.provider),
       });
       supportContexts.set(key, context);
     }
@@ -387,66 +390,51 @@ export function createCatalogDecisionRuntimeResolver(params: {
         (configured.runtime === "auto" ? "openclaw" : configured.runtime);
       return finalizeSelectedDecisionRuntime(configured, evaluation, selectedRuntime);
     }
-    const override = normalizeOptionalAgentRuntimeId(evaluation.requestedRuntimeId);
-    const policy =
-      override && !isDefaultAgentRuntimeId(override)
-        ? { ...configured, runtime: override, runtimeSource: "model" as const }
-        : configured;
-    const select = (registry: PluginRegistry) =>
-      withPluginRuntimeRegistryScope(registry, () => {
-        if (policy.runtime === "auto") {
-          const providerId = entry.provider;
-          const harnesses = listRegisteredAgentHarnesses().map(({ harness }) => harness);
-          const getContext = () =>
-            supportContext(entry, "auto", provider, { preparedModelProvider: true }, scope);
-          if (prepareOnly) {
-            if (
-              harnesses.some(
-                (harness) =>
-                  !resolveAgentHarnessAutoSelectionHint({ harness, provider: providerId }),
-              )
-            ) {
-              getContext();
-            }
-            return "openclaw";
-          }
-          const auto = resolveAutoAgentHarnessSelection(harnesses, providerId, getContext, true);
-          return auto.selected?.id ?? "openclaw";
-        }
-        const registered = getRegisteredAgentHarness(policy.runtime);
-        if (registered) {
-          // Catalog rows have a finalized provider, and carry no pinned transcript harness.
-          const context = supportContext(
-            entry,
-            policy.runtime,
-            provider,
-            {
-              contextManagement: registered.harness.contextManagement,
-              preparedModelProvider: true,
-            },
-            scope,
-            entry.provider.trim(),
-          );
-          if (!prepareOnly) {
-            const support = resolveAgentHarnessSupport(registered.harness, context, true);
-            const implicit = policy.runtime === "codex" && policy.runtimeSource === "implicit";
-            if (
-              !support.supported &&
-              !policy.forcedByEnvironment &&
-              (implicit || support.fallbackRuntime === "openclaw")
-            ) {
-              return "openclaw";
-            }
-          }
-        }
-        return policy.runtime;
-      });
-    // An empty owner registry gives auto selection no candidates.
-    const selectedRuntime =
-      policy.runtime === "openclaw" ||
-      (policy.runtime === "auto" && pluginRegistry.agentHarnesses.length === 0)
-        ? "openclaw"
-        : select(pluginRegistry);
+    const { policy } = resolveAgentHarnessAvailabilityDecision({
+      config: params.cfg,
+      ...scope,
+      provider: entry.provider,
+      modelId: entry.id,
+      modelProvider: provider,
+      preparedModelProvider: true,
+      preparedPolicy: configured,
+      prepareOnly,
+      mode: "projection",
+      agentHarnessRuntimeOverride: evaluation.requestedRuntimeId,
+      withRegistryScope: (run) => withPluginRuntimeRegistryScope(pluginRegistry, run),
+      resolveSupportContext: ({ provider: trimmedId, requestedRuntime, contextManagement }) =>
+        supportContext(
+          entry,
+          requestedRuntime,
+          provider,
+          { contextManagement, preparedModelProvider: true },
+          scope,
+          trimmedId,
+        ),
+    });
+    if (policy.runtime !== "auto") {
+      return finalizeSelectedDecisionRuntime(policy, evaluation, policy.runtime);
+    }
+    if (pluginRegistry.agentHarnesses.length === 0) {
+      return finalizeSelectedDecisionRuntime(policy, evaluation, "openclaw");
+    }
+    const selectedRuntime = withPluginRuntimeRegistryScope(pluginRegistry, () => {
+      const providerId = entry.provider;
+      const harnesses = listRegisteredAgentHarnesses().map(({ harness }) => harness);
+      const getContext = () =>
+        supportContext(entry, "auto", provider, { preparedModelProvider: true }, scope);
+      if (!prepareOnly) {
+        const auto = resolveAutoAgentHarnessSelection(harnesses, providerId, getContext, true);
+        return auto.selected?.id ?? "openclaw";
+      }
+      const needsContext = harnesses.some(
+        (harness) => !resolveAgentHarnessAutoSelectionHint({ harness, provider: providerId }),
+      );
+      if (needsContext) {
+        getContext();
+      }
+      return "openclaw";
+    });
     return finalizeSelectedDecisionRuntime(policy, evaluation, selectedRuntime);
   };
   const prepareDecisionRuntime = (
@@ -514,7 +502,6 @@ export function createCatalogDecisionRuntimeResolver(params: {
       if (harness) {
         supportContext(entry, runtimeId, modelProvider(entry, host), {
           contextManagement: harness.contextManagement,
-          providerOwnership: providerOwnership(entry.provider),
         });
       }
     }
@@ -547,7 +534,6 @@ export function createCatalogDecisionRuntimeResolver(params: {
         const supported = harness.supports(
           supportContext(entry, runtimeId, modelProvider(entry, evaluation), {
             contextManagement: harness.contextManagement,
-            providerOwnership: providerOwnership(entry.provider),
           }),
         );
         if (!supported.supported) {

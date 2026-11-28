@@ -4,7 +4,7 @@ import { resolveAgentHarnessPolicy, type AgentHarnessPolicy } from "./policy.js"
 import { getRegisteredAgentHarness } from "./registry.js";
 import { resolveAgentHarnessSupport } from "./route-support.js";
 import { buildAgentHarnessSupportContext } from "./support.js";
-import type { AgentHarnessSupport, AgentHarnessSupportContext } from "./types.js";
+import type { AgentHarness, AgentHarnessSupport, AgentHarnessSupportContext } from "./types.js";
 
 type AgentHarnessAvailabilityParams = Parameters<typeof resolveAgentHarnessPolicy>[0] & {
   modelProvider?: AgentHarnessSupportContext["modelProvider"];
@@ -13,6 +13,15 @@ type AgentHarnessAvailabilityParams = Parameters<typeof resolveAgentHarnessPolic
   agentHarnessId?: string;
   agentHarnessRuntimeOverride?: string;
   preparedModelProvider?: boolean;
+  preparedPolicy?: AgentHarnessPolicy;
+  withRegistryScope?: <T>(run: () => T) => T;
+  /** Warm the registered harness's context before consulting live support. */
+  prepareOnly?: boolean;
+  resolveSupportContext?: (params: {
+    provider: string;
+    requestedRuntime: AgentHarnessSupportContext["requestedRuntime"];
+    contextManagement?: AgentHarness["contextManagement"];
+  }) => AgentHarnessSupportContext;
   /** Execution supplies ownership lazily; read-only projections never discover plugins. */
   resolveProviderOwnership?: () => Parameters<
     typeof buildAgentHarnessSupportContext
@@ -35,13 +44,15 @@ export function resolveAvailableAgentHarnessPolicy(
 export function resolveAgentHarnessAvailabilityDecision(
   params: AgentHarnessAvailabilityParams,
 ): AgentHarnessAvailabilityDecision {
-  const configured = resolveAgentHarnessPolicy({
-    ...params,
-    modelApi: params.modelProvider?.api ?? params.modelApi,
-    modelBaseUrl: params.modelProvider?.baseUrl ?? params.modelBaseUrl,
-    requestTransportOverrides:
-      params.modelProvider?.requestTransportOverrides ?? params.requestTransportOverrides,
-  });
+  const configured =
+    params.preparedPolicy ??
+    resolveAgentHarnessPolicy({
+      ...params,
+      modelApi: params.modelProvider?.api ?? params.modelApi,
+      modelBaseUrl: params.modelProvider?.baseUrl ?? params.modelBaseUrl,
+      requestTransportOverrides:
+        params.modelProvider?.requestTransportOverrides ?? params.requestTransportOverrides,
+    });
   const pinnedHarnessId = normalizeOptionalAgentRuntimeId(params.agentHarnessId);
   const runtimeOverride =
     pinnedHarnessId ?? normalizeOptionalAgentRuntimeId(params.agentHarnessRuntimeOverride);
@@ -53,40 +64,48 @@ export function resolveAgentHarnessAvailabilityDecision(
   if (policy.runtime === "auto" || policy.runtime === "openclaw") {
     return { kind: "available", policy };
   }
-  const registered = getRegisteredAgentHarness(policy.runtime);
-  if (!registered) {
-    return implicit && params.mode !== "projection"
-      ? { kind: "implicit-unavailable", policy: { ...policy, runtime: "openclaw" } }
-      : { kind: "available", policy };
-  }
-  // A pinned native transcript owns early selection. Final prepared routes must
-  // revalidate that owner; historical producer metadata is not a next-turn pin.
-  if (pinnedHarnessId === policy.runtime && !params.preparedModelProvider) {
-    return { kind: "available", policy };
-  }
-  const provider = params.provider?.trim() ?? "";
-  if (params.provider === undefined) {
-    return { kind: "available", policy };
-  }
-  const support = resolveAgentHarnessSupport(
-    registered.harness,
-    buildAgentHarnessSupportContext({
-      ...params,
-      provider,
-      requestedRuntime: policy.runtime,
-      contextManagement: registered.harness.contextManagement,
-      providerOwnership: params.resolveProviderOwnership?.(),
-    }),
-    params.mode === "projection",
-  );
-  if (!support.supported && !policy.forcedByEnvironment) {
-    if (implicit || support.fallbackRuntime === "openclaw") {
-      return {
-        kind: implicit ? "implicit-unsupported" : "declared-fallback",
-        policy: { ...policy, runtime: "openclaw" },
-        support,
-      };
+  const evaluateRegistered = (): AgentHarnessAvailabilityDecision => {
+    const registered = getRegisteredAgentHarness(policy.runtime);
+    if (!registered) {
+      return implicit && params.mode !== "projection"
+        ? { kind: "implicit-unavailable", policy: { ...policy, runtime: "openclaw" } }
+        : { kind: "available", policy };
     }
-  }
-  return { kind: "available", policy, support };
+    // A pinned native transcript owns early selection. Final prepared routes must
+    // revalidate that owner; historical producer metadata is not a next-turn pin.
+    const pinnedOwner = pinnedHarnessId === policy.runtime && !params.preparedModelProvider;
+    if (pinnedOwner || params.provider === undefined) {
+      return { kind: "available", policy };
+    }
+    const { harness } = registered;
+    const contextParams = {
+      provider: params.provider.trim(),
+      requestedRuntime: policy.runtime,
+      contextManagement: harness.contextManagement,
+    };
+    const context = params.resolveSupportContext
+      ? params.resolveSupportContext(contextParams)
+      : buildAgentHarnessSupportContext({
+          ...params,
+          ...contextParams,
+          providerOwnership: params.resolveProviderOwnership?.(),
+        });
+    if (params.prepareOnly) {
+      return { kind: "available", policy };
+    }
+    const support = resolveAgentHarnessSupport(harness, context, params.mode === "projection");
+    if (!support.supported && !policy.forcedByEnvironment) {
+      if (implicit || support.fallbackRuntime === "openclaw") {
+        return {
+          kind: implicit ? "implicit-unsupported" : "declared-fallback",
+          policy: { ...policy, runtime: "openclaw" },
+          support,
+        };
+      }
+    }
+    return { kind: "available", policy, support };
+  };
+  return params.withRegistryScope
+    ? params.withRegistryScope(evaluateRegistered)
+    : evaluateRegistered();
 }

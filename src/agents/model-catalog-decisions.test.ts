@@ -24,6 +24,7 @@ import {
   testing as cliBackendsTesting,
 } from "./cli-backends.test-support.js";
 import * as autoSelection from "./harness/auto-selection.js";
+import * as harnessAvailability from "./harness/availability.js";
 import {
   dualRoutes,
   platformRoute,
@@ -850,6 +851,29 @@ describe("cooperative catalog projection regressions", () => {
     expect(error === revoked).toBe(change === "authority");
     expect(routes).toHaveBeenCalledTimes(3);
   });
+  it("shares prepared catalog fallback and runtime override decisions", async () => {
+    using availabilitySpy = vi.spyOn(
+      harnessAvailability,
+      "resolveAgentHarnessAvailabilityDecision",
+    );
+    const base = model("projection-fixture", "model", { contextWindow: 10_000 });
+    const preferred = { ...base, nativeRuntime: "preferred", contextWindow: 30_000 };
+    const snapshot = catalogSnapshot([base], { routeVariants: [base, preferred] });
+    const pluginRegistry = harnessRegistry("preferred", { supports: () => fallback });
+    const cfg = runtimeConfig({ "projection-fixture/model": "preferred" });
+    const rows = await decisions({ snapshot, cfg, pluginRegistry }).projectCatalog();
+    expect(rows).toMatchObject([{ contextWindow: 10_000 }]);
+    const policy = expect.objectContaining({ runtime: "openclaw", runtimeSource: "model" });
+    const declaredFallback = expect.objectContaining({ kind: "declared-fallback", policy });
+    expect(availabilitySpy).toHaveReturnedWith(declaredFallback);
+    availabilitySpy.mockClear();
+    const openclawConfig = runtimeConfig({ "projection-fixture/model": "openclaw" });
+    const owner = decisions({ snapshot, cfg: openclawConfig, pluginRegistry });
+    const host = owner.evaluateEntry(base, [base, preferred], "preferred");
+    expect(owner.resolveDecisionRuntime(base, host)).toEqual({ id: "openclaw", source: "model" });
+    expect(availabilitySpy).toHaveReturnedWith(declaredFallback);
+    expect((await decisions({ snapshot, cfg }).projectCatalog())[0]?.contextWindow).toBe(30_000);
+  });
   it("returns a retired owner's rows without caching them", async () => {
     const cfg = runtimeConfig({ "openai/gpt-5.4": "openclaw" });
     const pluginRegistry = harnessRegistry("codex");
@@ -966,7 +990,7 @@ describe("cooperative catalog projection compatibility invariants", () => {
     expect([offline === requested, offline]).toEqual([false, requested]);
     expect(owner.evaluateEntry(entry).availability).toBe(false);
   });
-  it("honors auto selection hints, live priorities, and explicit fallback", async () => {
+  it("honors auto selection hints and live priorities", async () => {
     const base = model("projection-fixture", "model", { contextWindow: 10_000 });
     const hint = { ...base, nativeRuntime: "hinted", contextWindow: 20_000 };
     const preferred = { ...base, nativeRuntime: "preferred", contextWindow: 30_000 };
@@ -987,12 +1011,6 @@ describe("cooperative catalog projection compatibility invariants", () => {
     priority = 1;
     expect(await read()).toMatchObject([{ contextWindow: 30_000 }]);
     expect(supports).not.toHaveBeenCalled();
-    const cfg = runtimeConfig({ "projection-fixture/model": "preferred" });
-    const pluginRegistry = harnessRegistry("preferred", { supports: () => fallback });
-    const rows = await decisions({ snapshot, cfg, pluginRegistry }).projectCatalog();
-    expect(rows).toMatchObject([{ contextWindow: 10_000 }]);
-    const unregistered = await decisions({ snapshot, cfg }).projectCatalog();
-    expect(unregistered).toMatchObject([{ contextWindow: 30_000 }]);
   });
   it("keeps distinct route policies and provider ownership in harness support", async () => {
     const row = { ...entry, api: platformRoute.api, baseUrl: platformRoute.baseUrl };
