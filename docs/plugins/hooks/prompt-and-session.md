@@ -455,7 +455,12 @@ does not accept a late handler result.
 Support currently covers natural final answers in the embedded runner. It does
 not create an answer for an empty, silent, failed, canceled or incomplete turn,
 or decorate explicit tool/approval output. The native Codex relay, Copilot and
-settled-tool finalization do not advertise this capability. Missing support must
+settled-tool finalization do not advertise this capability. In addition, Codex
+policy-restricted turns disable the native hook relay, so `before_agent_finalize`
+is not invoked for those turns. This also applies to `sessions_spawn` children
+when their effective tool policy makes the turn restricted.
+A registered handler does not mean it ran: do not treat a restricted child result
+as having passed acceptance checks implemented by this hook. Missing support must
 not be treated as successful preparation. The flag describes the finalization
 path, not whether the destination renders cards or other structured content.
 
