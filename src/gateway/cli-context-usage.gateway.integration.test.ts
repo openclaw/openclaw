@@ -57,7 +57,9 @@ it(
           const observed: Array<number | undefined> = [];
           let turnOffset = 0;
           const execute: CliBackendExecute = async function* () {
-            if (turnOffset === 0) expect((await row())?.totalTokens).toBeUndefined();
+            if (turnOffset === 0) {
+              expect((await row())?.totalTokens).toBeUndefined();
+            }
             for (const [index, cacheRead] of [19_288, 28_503].entries()) {
               const id = "parent-" + index;
               const usage = {

@@ -16,14 +16,14 @@ export function createCliUsageObserver(params: CliJsonlStreamingParserOptions) {
   let measuredParentId: string | undefined;
   return (
     parsed: Record<string, unknown>,
-    usage: CliUsage | undefined,
-    diagnosticUsage: CliUsage | undefined,
+    previousUsage: CliUsage | undefined,
+    previousDiagnosticUsage: CliUsage | undefined,
   ) => {
+    let usage = previousUsage;
     const nextUsage = readCliUsage(parsed);
     const isClaudeTerminalResult = claudeStreamJson && parsed.type === "result";
-    if (isClaudeTerminalResult && nextUsage && usage) {
-      diagnosticUsage = nextUsage;
-    }
+    const diagnosticUsage =
+      isClaudeTerminalResult && nextUsage && usage ? nextUsage : previousDiagnosticUsage;
     if (nextUsage) {
       params.onUsage?.(nextUsage, isClaudeTerminalResult);
     }
@@ -68,12 +68,16 @@ export function createCliUsageObserver(params: CliJsonlStreamingParserOptions) {
       if (measured && tokens !== undefined) {
         usage = measured;
         measuredParentId = delta ? parentStreamId : id;
-        if (delta) refinedParentId = parentStreamId;
+        if (delta) {
+          refinedParentId = parentStreamId;
+        }
         params.onContextTokens?.(tokens);
       } else if (isClaudeTerminalResult && !usage && parsed.openclaw_interim_result !== true) {
         usage = nextUsage;
       }
-      if (evt?.type === "message_stop") parentStreamId = undefined;
+      if (evt?.type === "message_stop") {
+        parentStreamId = undefined;
+      }
     } else if (
       !claudeStreamJson &&
       (!supportsCliJsonlToolEvents(params) || parsed.type !== "result" || !usage)

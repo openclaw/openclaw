@@ -12,12 +12,16 @@ it("coalesces to the latest observation, even when it returns to the last writte
   await using publisher = createCliContextPublisher(write);
   publisher.observe(200);
   expect(write.mock.calls).toEqual([[200]]);
-  for (const n of [201, 202, 200]) publisher.observe(n);
+  for (const n of [201, 202, 200]) {
+    publisher.observe(n);
+  }
   first.resolve();
   await vi.advanceTimersByTimeAsync(1_000);
   expect(write.mock.calls).toEqual([[200]]);
   publisher.observe(180);
-  for (const n of [181, 182, 175]) publisher.observe(n);
+  for (const n of [181, 182, 175]) {
+    publisher.observe(n);
+  }
   await vi.advanceTimersByTimeAsync(1_000);
   expect(write.mock.calls).toEqual([[200], [180], [175]]);
 });

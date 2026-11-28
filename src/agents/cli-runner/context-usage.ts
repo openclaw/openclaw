@@ -7,7 +7,9 @@ export function createCliContextPublisher(publish: (tokens: number) => Promise<v
   let timer: ReturnType<typeof setTimeout> | undefined;
   let closed = false;
   function schedule() {
-    if (closed || inFlight || timer || latest === undefined || latest === written) return;
+    if (closed || inFlight || timer || latest === undefined || latest === written) {
+      return;
+    }
     const remaining = nextAt - Date.now();
     if (remaining > 0) {
       timer = setTimeout(() => {
@@ -25,7 +27,7 @@ export function createCliContextPublisher(publish: (tokens: number) => Promise<v
     });
   }
   return {
-    observe(tokens: number) {
+    observe: (tokens: number) => {
       latest = tokens;
       schedule();
     },
