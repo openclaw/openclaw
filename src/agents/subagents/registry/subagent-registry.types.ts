@@ -48,8 +48,8 @@ export type SubagentCompletionRequest = {
   sessionEffects?: SubagentSessionEffects;
   completionSnapshot?: { resultText: string | null; capturedAt: number };
   terminalReply?: AgentRunTerminalReplySnapshot;
-  /** No final was confirmed for a child from the previous Gateway process. */
-  unconfirmedRestart?: boolean;
+  /** Only restart settlement reports whether the previous process saved a final. */
+  restartResult?: "confirmed" | "unconfirmed";
   /** Explicitly settle a yielded run that no continuation can reach; kill is the only other exception. */
   settleYielded?: true;
 };
@@ -81,6 +81,8 @@ type SubagentExecutionState = SubagentRunReadRecord["execution"] & {
 
 export type SubagentCompletionState = {
   required: boolean;
+  /** Restart recovery leaves this visible transcript for the requester and later inspection. */
+  preserveTranscript?: true;
   resultText?: string | null;
   capturedAt?: number;
   fallbackResultText?: string | null;

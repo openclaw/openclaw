@@ -16,7 +16,6 @@ import { useSessionStoreTempDirs } from "../test-utils/session-state-cleanup.js"
 import {
   createInternalSessionEffectsCleanup,
   prepareInternalSessionEffectsSession,
-  removeInternalSessionEffectsSession,
 } from "./internal-session-effects.js";
 
 describe("internal session effects", () => {
@@ -95,23 +94,6 @@ describe("internal session effects", () => {
 
     const reopened = await prepareInternalSessionEffectsSession(request);
     expect(reopened).toEqual(target);
-  });
-
-  it("does not delete a child's own transcript when given its visible session target", async () => {
-    const child = { ...scope(), sessionKey: "agent:main:dashboard:child", sessionId: "kept-child" };
-    await upsertSessionEntryCore(child, { sessionId: child.sessionId, updatedAt: 1 });
-    await appendTranscriptMessage(child, {
-      message: { role: "assistant", content: "saved answer", timestamp: 2 },
-    });
-
-    await removeInternalSessionEffectsSession(child);
-
-    expect(loadExactSessionEntry(child)?.entry.sessionId).toBe(child.sessionId);
-    expect(await loadTranscriptEvents(child)).toContainEqual(
-      expect.objectContaining({
-        message: expect.objectContaining({ content: "saved answer" }),
-      }),
-    );
   });
 
   it("escapes the reserved prefix for a durable internal-effects run id", async () => {

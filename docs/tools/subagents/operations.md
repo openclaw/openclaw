@@ -152,7 +152,10 @@ saved answer as final for that run before the crash, its waiting parent receives
 the answer even if the registry still showed the child running. If reading the
 child's transcript fails, the Gateway retries the read once. Without a confirmed
 answer, the requester gets an interruption notice, not partial output. The retry
-does not rerun the child or send a second completion.
+does not rerun the child or send a second completion. Recovery does not delete
+the visible transcript it checked. An explicit `cleanup: "delete"` still applies
+to the child session. An ordinary steer still cleans up the previous run's
+recorded transcript target when the replacement no longer uses it.
 The terminal notice waits for fresh requester authority after startup; it cannot
 use the previous Gateway's retired custody.
 

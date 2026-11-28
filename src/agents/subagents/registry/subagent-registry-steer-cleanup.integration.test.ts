@@ -16,6 +16,8 @@ import {
   tryBeginGatewayRootWorkAdmission,
 } from "../../../process/gateway-work-admission.js";
 import { prepareInternalSessionEffectsSession } from "../../internal-session-effects.js";
+import { SessionManager } from "../../sessions/session-manager.js";
+import { makeAgentAssistantMessage } from "../../test-helpers/agent-message-fixtures.js";
 import { writeSubagentSessionEntry } from "./subagent-registry.persistence.test-support.js";
 import {
   addSubagentRunForTests,
@@ -24,6 +26,61 @@ import {
 
 describe("subagent steer cleanup", () => {
   const fixture = useSubagentRegistryFixture({ reuseDatabaseWorkers: true });
+
+  it("removes the retired visible transcript and keeps its successor on ordinary steer", async () => {
+    const runId = "visible-source";
+    const nextRunId = "steered-successor";
+    const sessionKey = "agent:main:dashboard:retired-child";
+    const sessionId = "old-visible-session";
+    const lifecycleRevision = "original-revision";
+    const agentId = "main";
+    const storePath = await writeSubagentSessionEntry({
+      stateDir: fixture.stateDir,
+      agentId,
+      sessionKey,
+      defaultSessionId: sessionId,
+      lifecycleRevision,
+    });
+    const source = { agentId, sessionKey, sessionId, storePath };
+    const answer = makeAgentAssistantMessage({
+      content: [{ type: "text", text: "saved steer answer" }],
+    });
+    const manager = await SessionManager.openAsync(source);
+    await manager.appendMessageAsync(answer);
+    const successor = await prepareInternalSessionEffectsSession({
+      agentId,
+      storePath,
+      runId: nextRunId,
+      source,
+    });
+    await addSubagentRunForTests(
+      makeRegistryRun({
+        runId,
+        childSessionKey: sessionKey,
+        childAgentId: agentId,
+        childSessionIdentity: { sessionId, lifecycleRevision },
+        expectsCompletionMessage: false,
+        execution: { status: "running", startedAt: Date.now(), transcriptTarget: source },
+      }),
+    );
+    await fixture.settle();
+
+    expect(
+      await replaceSubagentRunAfterSteerCore({
+        previousRunId: runId,
+        nextRunId,
+        transcriptTarget: successor,
+      }),
+    ).toBe(true);
+    await fixture.settle();
+
+    expect(loadExactSessionEntry(source)).toBeUndefined();
+    expect(await loadTranscriptEvents(source)).toEqual([]);
+    expect(loadExactSessionEntry(successor)?.entry.sessionId).toBe(successor.sessionId);
+    expect(await loadTranscriptEvents(successor)).toContainEqual(
+      expect.objectContaining({ message: expect.objectContaining({ content: answer.content }) }),
+    );
+  });
 
   it.each([false, true])(
     "keeps replaced hidden-session cleanup admitted until deletion completes (restart fenced: %s)",
