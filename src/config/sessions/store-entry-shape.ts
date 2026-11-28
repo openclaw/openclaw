@@ -149,15 +149,15 @@ export function projectCanonicalSessionEntryShape(
 /** Removes the runtime-only skill catalog without mutating the live session snapshot. */
 export function stripRuntimeOnlySessionSkillsFields(entry: SessionEntry): SessionEntry {
   const snapshot = entry.skillsSnapshot;
-  if (snapshot?.resolvedSkills === undefined && snapshot?.discoverySkills === undefined) {
+  if (snapshot === undefined) {
     return entry;
   }
-  const {
-    resolvedSkills: _dropResolved,
-    discoverySkills: _dropDiscovery,
-    ...skillsSnapshot
-  } = snapshot;
-  return { ...entry, skillsSnapshot };
+  // skillsSnapshot is rebuilt on the next skill discovery pass and carries large runtime
+  // payloads (resolved/discovery catalogs and the raw prompt). Persisting it pins the
+  // entire snapshot in resident memory per session entry (RSS/heap leak, #126663 class).
+  const nextEntry = { ...entry };
+  delete nextEntry.skillsSnapshot;
+  return nextEntry;
 }
 
 export function normalizePendingFinalDelivery(
