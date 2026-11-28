@@ -691,7 +691,9 @@ const enSettings = {
     catalogFallback: "Couldn’t load the tool catalog. Showing built-in tools instead.",
     previewTitle: "Tool preview",
     previewSubtitle:
-      "Based on saved session settings and discovered tools. Availability is checked before each reply, when more tools may become available. Saved changes may take time to appear; unsaved edits aren’t included. Session:",
+      "Based on saved session settings and discovered tools. Availability is checked before each reply, when more tools may become available. Saved changes may take time to appear; unsaved edits aren’t included.",
+    previewSession: "Session:",
+    previewSessionKey: "Session key:",
     noSession: "No session",
     switchAgent: "Switch to this agent’s session to view its tool preview.",
     previewLoading: "Loading preview…",

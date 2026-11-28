@@ -3,7 +3,7 @@
 import { flush, resolve } from "solid-js";
 import { afterEach, describe, expect, it, onTestFinished, vi } from "vitest";
 import { createDeferred as deferred } from "../../../../test/helpers/promise.js";
-import type { ToolsEffectiveResult } from "../../api/types.ts";
+import type { GatewaySessionRow, ToolsEffectiveResult } from "../../api/types.ts";
 import type { ApplicationContext } from "../../app/context.ts";
 import { githubIdentityViewFixture } from "../../features/github-connections/github-identity.test-support.ts";
 import type { AgentsPanel } from "../../lib/agents/panels.ts";
@@ -49,6 +49,7 @@ async function mountEffective(
   read: () => Promise<ToolsEffectiveResult>,
   panel: AgentsPanel = "tools",
   scopes: string[] = ["operator.admin"],
+  describeSession?: () => Promise<{ session: GatewaySessionRow | null }>,
 ) {
   const request = vi.fn(async (method: string) => {
     if (method === "agents.list") {
@@ -63,12 +64,18 @@ async function mountEffective(
     if (method === "tools.catalog") {
       return createReadToolCatalog();
     }
+    if (method === "sessions.describe" && describeSession) {
+      return describeSession();
+    }
     throw new Error(`Unexpected gateway method: ${method}`);
   });
   const client = createTestGatewayClient(request);
   const currentGateway = gateway(snapshot(client));
   currentGateway.snapshot.hello = gatewayHelloForMethods(
-    currentGateway.snapshot.hello?.features?.methods ?? [],
+    [
+      ...(currentGateway.snapshot.hello?.features?.methods ?? []),
+      ...(describeSession ? ["sessions.describe"] : []),
+    ],
     scopes,
   );
   const listeners = new Set<() => void>();
@@ -140,6 +147,77 @@ const preview = (container: HTMLElement) =>
   container.querySelector(".agent-tools-runtime-chip")?.textContent;
 
 describe("Agents effective-tools read", () => {
+  it("names the current session with one exact read and never reuses another session's name", async () => {
+    const old = deferred<{ session: GatewaySessionRow }>();
+    const key = "agent:main:dashboard:workshop";
+    const row: GatewaySessionRow = {
+      key,
+      kind: "direct",
+      sessionId: "workshop",
+      updatedAt: 1,
+      label: "Workshop planning",
+    };
+    const describeSession = vi
+      .fn<() => Promise<{ session: GatewaySessionRow | null }>>()
+      .mockReturnValueOnce(old.promise)
+      .mockResolvedValue({ session: row });
+    const view = await mountEffective(
+      async () => effective("Read"),
+      "files",
+      ["operator.admin"],
+      describeSession,
+    );
+    expect(describeSession).not.toHaveBeenCalled();
+    view.setPanel("tools");
+    await waitForSolid(() => expect(describeSession).toHaveBeenCalledTimes(1));
+    view.currentGateway.snapshot.sessionKey = key;
+    emitGatewaySnapshot(view.currentGateway, view.currentGateway.snapshot);
+    await waitForSolid(() =>
+      expect(view.container.textContent).toContain("Session: Workshop planning"),
+    );
+    old.resolve({ session: { ...row, key: "agent:main:main", label: "Old thread" } });
+    view.publishSessions();
+    view.emit("chat.metadata.changed", { authChanged: true });
+    await view.settleEffective();
+    expect(view.container.textContent).not.toContain("Old thread");
+    expect(describeSession).toHaveBeenCalledTimes(2);
+    expect(view.request).toHaveBeenCalledWith("sessions.describe", { key, agentId: "main" });
+    view.emit("sessions.changed", {
+      sessionKey: key,
+      agentId: "main",
+      reason: "patch",
+      catalogChanged: true,
+      label: "Workshop planning",
+      displayName: null,
+    });
+    view.emit("sessions.changed", {
+      sessionKey: "agent:main:dashboard:unrelated",
+      agentId: "main",
+      reason: "chat.title",
+    });
+    expect(describeSession).toHaveBeenCalledTimes(2);
+    describeSession.mockResolvedValueOnce({ session: { ...row, label: "Workshop agenda" } });
+    view.emit("sessions.changed", { sessionKey: key, agentId: "main", reason: "chat.title" });
+    await waitForSolid(() =>
+      expect(view.container.textContent).toContain("Session: Workshop agenda"),
+    );
+    expect(describeSession).toHaveBeenCalledTimes(3);
+    describeSession.mockResolvedValueOnce({ session: { ...row, label: "Manual title" } });
+    view.emit("sessions.changed", {
+      sessionKey: key,
+      agentId: "main",
+      reason: "patch",
+      label: "Manual title",
+      displayName: null,
+    });
+    await waitForSolid(() => expect(view.container.textContent).toContain("Session: Manual title"));
+    describeSession.mockResolvedValueOnce({ session: null });
+    view.emit("sessions.changed", { reason: "sharing" });
+    await waitForSolid(() => expect(view.container.textContent).toContain("Session key: " + key));
+    expect(view.container.textContent).not.toContain("Manual title");
+    expect(describeSession).toHaveBeenCalledTimes(5);
+  });
+
   it.each([{ scopes: [] }, { scopes: ["operator.sessions.read"] }])(
     "honors the active read grant $scopes",
     async ({ scopes }) => {
@@ -165,7 +243,7 @@ describe("Agents effective-tools read", () => {
     expect(
       descriptions.some((text) => /permissions\. \d+\/\d+ enabled(?:$|\s)/.test(text ?? "")),
     ).toBe(true);
-    expect(descriptions.some((text) => /Session: \S/.test(text ?? ""))).toBe(true);
+    expect(descriptions.some((text) => /Session key: \S/.test(text ?? ""))).toBe(true);
   });
 
   it("loads only on demand, joins pending receipts, and retains the accepted result across panel visits", async () => {

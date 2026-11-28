@@ -1,10 +1,20 @@
 import { asNullableRecord } from "@openclaw/normalization-core/record-coerce";
 import { createMemo, createSignal } from "solid-js";
 import type { GatewayBrowserClient, GatewayEventFrame } from "../../api/gateway.ts";
-import type { ToolsCatalogResult, ToolsEffectiveResult } from "../../api/types.ts";
+import type {
+  GatewaySessionRow,
+  ToolsCatalogResult,
+  ToolsEffectiveResult,
+} from "../../api/types.ts";
 import type { ApplicationContext } from "../../app/context.ts";
-import { readToolsEffective, type AgentsState } from "../../lib/agents/index.ts";
+import {
+  buildToolsEffectiveRequestKey,
+  readToolsEffective,
+  type AgentsState,
+} from "../../lib/agents/index.ts";
+import { canCallGatewayMethod, canPresentGatewayMethod } from "../../lib/gateway-methods.ts";
 import { modelCatalogEventInvalidation } from "../../lib/model-catalog-cache.ts";
+import { resolveSessionDisplayName } from "../../lib/session-display.ts";
 import {
   uiConversationMatches,
   type UiSessionDefaultsHost,
@@ -266,4 +276,164 @@ export function createAgentEffectiveTools(
       });
     },
   };
+}
+
+export function createAgentToolsReads(options: {
+  getGateway: () => ApplicationContext["gateway"];
+  scope: () => EffectiveReadScope &
+    Pick<AgentsState, "agentsPanel" | "chatModelCatalog" | "sessions" | "sessionsResult">;
+  isCurrent: ReadOptions["isCurrent"];
+  isSessionAgent: (agentId: string) => boolean;
+  changed: () => void;
+}) {
+  const { getGateway, scope, isCurrent, isSessionAgent, changed } = options;
+  const canRead = (method: string) =>
+    canCallGatewayMethod(getGateway().snapshot, method, "operator.read");
+  const toolsCatalog = createAgentToolsCatalog({
+    scope,
+    canRead: () => canPresentGatewayMethod(getGateway().snapshot, "tools.catalog", "operator.read"),
+    isCurrent,
+  });
+  const effectiveTools = createAgentEffectiveTools({
+    scope,
+    canRead: () =>
+      canPresentGatewayMethod(getGateway().snapshot, "tools.effective", "operator.read"),
+    isCurrent,
+    isSessionAgent,
+    isPresented: () => scope().agentsPanel === "tools",
+    key: (agentId, sessionKey) => buildToolsEffectiveRequestKey(scope(), { agentId, sessionKey }),
+    changed,
+  });
+  type ToolPreviewSession = {
+    client: GatewayBrowserClient;
+    generation: number;
+    agentId: string;
+    key: string;
+    title?: string;
+  };
+  let toolPreviewSession: ToolPreviewSession | null = null;
+  function toolPreviewSessionTarget() {
+    const state = options.scope();
+    const {
+      client,
+      agentsSelectedId: agentId,
+      sessionKey: key,
+      requestGeneration: generation,
+    } = state;
+    return client &&
+      agentId &&
+      options.isCurrent(client, generation, agentId) &&
+      state.agentsPanel === "tools" &&
+      options.isSessionAgent(agentId) &&
+      key &&
+      canRead("tools.effective") &&
+      canRead("sessions.describe")
+      ? { client, agentId, key, generation }
+      : null;
+  }
+
+  function toolPreviewSessionMatches(key: string, agentId?: string | null) {
+    const target = toolPreviewSessionTarget();
+    return Boolean(
+      target &&
+      uiConversationMatches(
+        { agentsList: scope().agentsList, hello: getGateway().snapshot.hello },
+        target.key,
+        key,
+        agentId,
+        target.agentId,
+      ),
+    );
+  }
+
+  function resolveToolPreviewTitle(
+    key: string,
+    row: Parameters<typeof resolveSessionDisplayName>[1],
+  ) {
+    return [row?.label, row?.displayName, row?.derivedTitle].some(
+      (name) => name?.trim() && name.trim() !== key,
+    )
+      ? resolveSessionDisplayName(key, row)
+      : undefined;
+  }
+
+  function syncToolPreviewSession(refresh = false) {
+    const target = toolPreviewSessionTarget();
+    if (
+      !refresh &&
+      target &&
+      toolPreviewSession?.client === target.client &&
+      toolPreviewSession.generation === target.generation &&
+      toolPreviewSession.agentId === target.agentId &&
+      toolPreviewSession.key === target.key
+    ) {
+      return;
+    }
+    toolPreviewSession = null;
+    if (!target || document.visibilityState === "hidden") {
+      return;
+    }
+    // Read only the preview target; a roster window may not contain it.
+    const read: ToolPreviewSession = target;
+    toolPreviewSession = read;
+    void read.client
+      .request<{ session: GatewaySessionRow | null }>("sessions.describe", {
+        key: read.key,
+        agentId: read.agentId,
+      })
+      .then(
+        ({ session }) => {
+          if (
+            toolPreviewSession !== read ||
+            !session ||
+            !toolPreviewSessionMatches(session.key, session.agentId ?? read.agentId)
+          ) {
+            return;
+          }
+          read.title = resolveToolPreviewTitle(session.key, session);
+          if (read.title) {
+            options.changed();
+          }
+        },
+        () => undefined,
+      );
+  }
+
+  const previewSession = {
+    get title() {
+      return toolPreviewSession?.title;
+    },
+    ensure: syncToolPreviewSession,
+    onEvent(event: GatewayEventFrame) {
+      if (event.event === "sessions.changed" && toolPreviewSessionTarget()) {
+        const change = readSessionChangedEvent(event.payload);
+        const payload = asNullableRecord(event.payload);
+        const reason = payload?.reason;
+        // Revoked sharing may suppress the keyed event for this connection.
+        const unkeyedRemoval = !change && (reason === "sharing" || reason === "delete");
+        const patchChangesTitle =
+          change?.reason === "patch" &&
+          payload &&
+          "label" in payload &&
+          "displayName" in payload &&
+          resolveToolPreviewTitle(change.key, {
+            label: typeof payload.label === "string" ? payload.label : undefined,
+            displayName: typeof payload.displayName === "string" ? payload.displayName : undefined,
+          }) !== toolPreviewSession?.title;
+        if (
+          unkeyedRemoval ||
+          (change &&
+            toolPreviewSessionMatches(change.key, change.agentId) &&
+            (patchChangesTitle ||
+              ["chat.title", "title", "reset", "delete", "sharing", "move"].includes(
+                change.reason ?? "",
+              )))
+        ) {
+          syncToolPreviewSession(true);
+          options.changed();
+        }
+      }
+    },
+  };
+  return { toolsCatalog, effectiveTools, previewSession };
 }

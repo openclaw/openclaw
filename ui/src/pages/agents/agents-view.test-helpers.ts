@@ -159,6 +159,7 @@ export function createAgentViewTestProps(
       onOpenGitHubConnections: () => undefined,
       githubIdentity: githubIdentityViewFixture(),
       runtimeSessionKey: "main",
+      runtimeSessionTitle: undefined,
       runtimeSessionMatchesSelectedAgent: false,
       onProfileChange: () => undefined,
       onOverridesChange: () => undefined,

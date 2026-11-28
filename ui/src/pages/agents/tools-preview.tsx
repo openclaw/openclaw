@@ -91,6 +91,7 @@ function previewStatus(preview: EffectivePreview) {
 export function ToolRuntime(props: {
   preview: EffectivePreview;
   sessionKey: string;
+  sessionTitle?: string;
   resolveJump: (anchorId: string) => ((event: Event) => void) | undefined;
 }) {
   const uniqueEffectiveTools = () => [...(props.preview.facts?.available.values() ?? [])];
@@ -109,8 +110,22 @@ export function ToolRuntime(props: {
       }
       description={
         <>
-          {t("agentTools.previewSubtitle")}{" "}
-          <span class="mono">{props.sessionKey || t("agentTools.noSession")}</span>
+          {t("agentTools.previewSubtitle")}
+          <Show when={props.preview.status !== "otherAgent"}>
+            <span
+              class="agent-tools-preview-session"
+              title={props.sessionTitle || props.sessionKey}
+            >
+              <Show when={props.sessionKey} fallback={t("agentTools.noSession")}>
+                {t(
+                  props.sessionTitle ? "agentTools.previewSession" : "agentTools.previewSessionKey",
+                )}{" "}
+                <bdi class={{ mono: !props.sessionTitle }} translate="no">
+                  {props.sessionTitle || props.sessionKey}
+                </bdi>
+              </Show>
+            </span>
+          </Show>
         </>
       }
     >
