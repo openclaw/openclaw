@@ -5,6 +5,21 @@ import Testing
 
 @MainActor
 struct ChatSessionSidebarModelTests {
+    @Test func `conversation clock prefers the latest valid activity`() {
+        var row = OpenClawChatSessionEntry(key: "draft", updatedAt: 900)
+        row.createdAt = 50
+        row.lastActivityAt = 300
+        row.lastInteractionAt = 500
+        #expect(ChatSessionSidebarModel.activityTimestamp(for: row) == 500)
+        row.lastActivityAt = 600
+        #expect(ChatSessionSidebarModel.activityTimestamp(for: row) == 600)
+        row.lastActivityAt = .infinity
+        row.lastInteractionAt = -1
+        #expect(ChatSessionSidebarModel.activityTimestamp(for: row) == 900)
+        row.updatedAt = nil
+        #expect(ChatSessionSidebarModel.activityTimestamp(for: row) == 50)
+    }
+
     @Test func `explicit group placement wins over ancestry while folding stays within each section`() throws {
         let sessions = try JSONDecoder().decode(OpenClawChatSessionsListResponse.self, from: Data(#"""
         {"sessions":[
