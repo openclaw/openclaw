@@ -470,7 +470,6 @@ for (let catalog = 0; catalog < catalogs; catalog++) {
   const publishedTools = await construct("schema-probe-golden", "repeat", goldenTools);
   const variants = {
     responsesLoose: JSON.stringify(convertResponsesToolPayload(publishedTools, { strict: false })),
-    responsesStrict: JSON.stringify(convertResponsesToolPayload(publishedTools, { strict: true })),
     anthropic: JSON.stringify(projectAnthropicTools(publishedTools, (name) => name).tools),
   };
   for (const [provider, json] of Object.entries(variants)) {

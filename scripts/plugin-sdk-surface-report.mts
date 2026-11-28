@@ -344,8 +344,8 @@ export function readPluginSdkSurfaceBudgets(env: NodeJS.ProcessEnv = process.env
       // +7: session-catalog adds three route types, the resolve result, and three service export types.
       // +1: sendToResolvedSession submits to the destination observed by an authenticated handler.
       // +1: createAudioInputBudgetReader admits live audio without delaying the first packet.
-      // +1: AgentHarnessSideQuestionRequest, the host request-policy shape Copilot side questions pass (#205963).
       // +1: hasReplyRestartResume, so channels report a restart-owned reply instead of a failure (#206839).
+      // +1: compactCatalogForSkillRead, the Codex harness's names-only skills catalog (#206995).
       3932,
       env,
     ),
@@ -414,7 +414,8 @@ export function readPluginSdkSurfaceBudgets(env: NodeJS.ProcessEnv = process.env
       // +1: sendToResolvedSession owns the strict target and correlates native admission.
       // +1: createAudioInputBudgetReader admits live audio without delaying the first packet.
       // +1: hasReplyRestartResume, so channels report a restart-owned reply instead of a failure (#206839).
-      2259,
+      // +1: compactCatalogForSkillRead, the Codex harness's names-only skills catalog (#206995).
+      2260,
       env,
     ),
     publicDeprecatedExports: readPluginSdkSurfaceBudgetEnv(

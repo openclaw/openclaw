@@ -5,15 +5,14 @@ import { sortPromptCacheToolsByName } from "../utils/prompt-cache-stability.js";
 import { prepareOpenAIFunctionTool } from "./openai-function-tool.js";
 import { prepareOpenAITools } from "./openai-tool-projection.js";
 import {
-  normalizeOpenAIStrictToolParameters,
+  normalizeOpenAIToolParameters,
   resolveOpenAIStrictToolSetting,
-  resolveOpenAIToolStrictFlag,
 } from "./openai-tool-schema.js";
 import { withPreparedToolSchemaNormalization } from "./tool-schema-normalization-cache.js";
 
 /** Options for converting internal tool schemas to OpenAI Responses function tools. */
 interface ConvertResponsesToolsOptions {
-  strict?: boolean | null;
+  strict?: false;
   model?: Model;
   mutableParameters?: boolean;
 }
@@ -35,20 +34,20 @@ export function convertResponsesToolPayload(
 /** The transport has already resolved policy before descriptor projection. */
 export function prepareResponsesTools(
   tools: Tool[],
-  strictSetting: boolean | null | undefined,
+  strict: false | undefined,
   model?: Model,
   mutableParameters?: boolean,
 ) {
   const prepared = prepareOpenAITools(tools);
   return {
     projection: prepared.projection,
-    tools: convertPreparedResponsesTools(prepared, strictSetting, model, mutableParameters),
+    tools: convertPreparedResponsesTools(prepared, strict, model, mutableParameters),
   };
 }
 
 function convertPreparedResponsesTools(
   prepared: ReturnType<typeof prepareOpenAITools>,
-  strictSetting: boolean | null | undefined,
+  strict: false | undefined,
   model?: Model,
   mutableParameters?: boolean,
 ): FunctionTool[] {
@@ -56,14 +55,12 @@ function convertPreparedResponsesTools(
   return withPreparedToolSchemaNormalization(schemas, () =>
     // Sort tools before request construction so prompt-cache bytes stay deterministic.
     sortPromptCacheToolsByName(projection.tools).map((tool) => {
-      const strict = resolveOpenAIToolStrictFlag(tool.parameters, strictSetting);
       const result = prepareOpenAIFunctionTool(
         tool.name,
         tool.description,
-        normalizeOpenAIStrictToolParameters(
+        normalizeOpenAIToolParameters(
           tool.parameters,
-          strict === true,
-          model?.compat as Parameters<typeof normalizeOpenAIStrictToolParameters>[2],
+          model?.compat as Parameters<typeof normalizeOpenAIToolParameters>[1],
         ),
         strict,
         mutableParameters,
@@ -76,7 +73,7 @@ function convertPreparedResponsesTools(
 
 function resolveResponsesStrictToolSetting(
   options: ConvertResponsesToolsOptions | undefined,
-): boolean | null | undefined {
+): false | undefined {
   if (options?.strict !== undefined) {
     return options.strict;
   }

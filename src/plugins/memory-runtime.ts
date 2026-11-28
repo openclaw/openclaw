@@ -13,8 +13,8 @@ import {
   type PluginManifestRegistry,
 } from "./manifest-registry.js";
 import { assertMemoryCallerCurrent, isHostMemoryAudience } from "./memory-audience.js";
+import { adaptLegacyMemoryProvider } from "./memory-backend-legacy.js";
 import { resolveMemoryBackendPolicyIds } from "./memory-backend.js";
-import { adaptLegacyMemoryProvider } from "./memory-provider-adapter.js";
 import {
   createMemoryBackendAccess,
   settleMemoryProviderOpen,

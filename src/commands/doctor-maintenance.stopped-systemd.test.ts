@@ -244,6 +244,8 @@ it("decides every step's pending check without creating or changing a file", asy
           "database-migrations",
           "state-schema",
           "runtime-checks",
+          "config-flow.state-schema",
+          "config-flow",
           "external-config",
           "maintenance-ready",
           "boot-lifecycle",
