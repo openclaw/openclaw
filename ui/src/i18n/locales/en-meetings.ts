@@ -6,8 +6,6 @@ const enMeetings = {
     emptyTitle: "No meetings yet.",
     docs: "Set up meeting transcripts",
     inProgress: "In progress",
-    activeNotes:
-      "Summaries are generated about every 5 minutes when new speech is captured. Follow the Transcript tab for speech as it is saved.",
     liveCapture: "Live capture",
     liveHint: "Updates automatically every 3 seconds.",
     liveSummaryHint:
