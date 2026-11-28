@@ -35,6 +35,7 @@ Legend:
 | Extensible text fallback | `org.matrix.msc1767.text`                                                                          | in/out       | poll text fallback/compat                                                | `src/matrix/poll-types.ts`                                                                                                 |
 | Voice messages           | `org.matrix.msc3245.voice`                                                                         | out          | voice-bubble marker on compatible audio sends                            | `src/matrix/send/media.ts`, `src/matrix/send/types.ts`                                                                     |
 | Voice audio metadata     | `org.matrix.msc1767.audio`                                                                         | out          | duration metadata for voice sends                                        | `src/matrix/send/media.ts`, `src/matrix/send/types.ts`                                                                     |
+| Galleries                | `m.gallery`, `dm.filament.gallery`                                                                 | in           | MSC4274 `itemtypes` attachments delivered in order, capped at 20 items   | `src/matrix/monitor/handler-helpers.ts`, `src/matrix/monitor/handler.gallery.test.ts`                                      |
 | Location                 | `m.location`, `geo:`                                                                               | in           | inbound parse to text/context; no outbound location send tracked here    | `src/matrix/monitor/types.ts`, `src/matrix/monitor/location.ts`, `src/matrix/monitor/handler.ts`                           |
 | E2EE room events         | `m.room.encrypted`                                                                                 | in/out/tools | encrypted event hydration, decrypt, encrypted media send                 | `src/matrix/monitor/types.ts`, `src/matrix/sdk.ts`, `docs/channels/matrix.md`                                              |
 | Encrypted media previews | `file`, `thumbnail_file`                                                                           | out          | encrypted thumbnails for encrypted image events                          | `src/matrix/send/media.ts`, `docs/channels/matrix.md`                                                                      |
@@ -48,6 +49,7 @@ These MSCs are explicitly referenced in the plugin today:
 - `MSC3381`: polls
 - `MSC1767`: extensible-events fallback fields used for polls and voice metadata
 - `MSC3245`: voice message marker
+- `MSC4274`: inline media galleries (inbound)
 - `MSC4357`: live streaming marker
 
 Evidence:
@@ -55,6 +57,7 @@ Evidence:
 - `src/matrix/poll-types.ts`
 - `src/matrix/send/media.ts`
 - `src/matrix/send/types.ts`
+- `src/matrix/monitor/handler-helpers.ts`
 - `src/matrix/draft-stream.ts`
 
 ## Non-goals
