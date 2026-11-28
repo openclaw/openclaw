@@ -110,8 +110,9 @@ export function createDiagnosticToolExecutionLiveness(
     run<T>(execute: () => T): T {
       return state.context.run(carrier.carrier, execute);
     },
-    close(completed = false) {
-      finishOwnedTool?.(completed && !signal?.aborted);
+    close() {
+      // A failed or thrown settlement is still progress the model acts on; an abort is not.
+      finishOwnedTool?.(!signal?.aborted);
       active = false;
       readAwaiting = undefined;
       carrier.close();
