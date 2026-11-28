@@ -180,21 +180,24 @@ it("compact inherits parent agent and JSON options (#91378)", async () => {
   await run(`sessions --agent work --json compact ${key}`);
   expectOptions(mocks.compact, { key, agent: "work", json: true });
 });
-it("forwards archive keys, inherited scope and RPC options", async () => {
-  await run(
-    `sessions --agent work --json archive ${key} agent:work:scratch --dry-run --url ws://gateway.test --token test-token --password test-password --timeout 45000`,
-  );
-  expectLifecycle("archive", {
-    keys: [key, "agent:work:scratch"],
-    agent: "work",
-    dryRun: true,
-    url: "ws://gateway.test",
-    token: "test-token",
-    password: "test-password",
-    timeout: "45000",
-    json: true,
-  });
-});
+it.each(["archive", "restore"])(
+  "forwards %s keys, inherited scope and RPC options",
+  async (operation) => {
+    await run(
+      `sessions --agent work --json ${operation} ${key} agent:work:scratch --dry-run --url ws://gateway.test --token test-token --password test-password --timeout 45000`,
+    );
+    expectLifecycle(operation, {
+      keys: [key, "agent:work:scratch"],
+      agent: "work",
+      dryRun: true,
+      url: "ws://gateway.test",
+      token: "test-token",
+      password: "test-password",
+      timeout: "45000",
+      json: true,
+    });
+  },
+);
 it("forwards delete keys with leaf scope and confirmation", async () => {
   await run(`sessions --agent main delete ${key} agent:work:scratch --agent work --yes --json`);
   expectLifecycle("delete", {
