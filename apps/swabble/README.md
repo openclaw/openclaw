@@ -48,6 +48,8 @@ targets: [
 ```
 
 ## CLI
+Run `swabble --help` to list commands, `swabble mic --help` to list subcommands in a group, or `swabble transcribe --help` to see a command’s arguments and options (`-h` works too). Asking for help does not run the command.
+
 - `serve` — foreground loop (mic → wake → hook)
 - `transcribe <file>` — offline transcription (txt|srt)
 - `test-hook "text"` — invoke configured hook

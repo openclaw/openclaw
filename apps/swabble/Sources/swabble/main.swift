@@ -5,9 +5,13 @@ import Foundation
 @MainActor
 private func runCLI() async -> Int32 {
     do {
-        let descriptors = CLIRegistry.descriptors
-        let program = Program(descriptors: descriptors)
-        let invocation = try program.resolve(arguments: ["swabble"] + CommandLine.arguments.dropFirst())
+        let arguments = CommandLine.arguments.dropFirst()
+        if let help = CLIRegistry.help(for: arguments) {
+            print(help)
+            return 0
+        }
+        let program = Program(descriptors: CLIRegistry.descriptors)
+        let invocation = try program.resolve(arguments: ["swabble"] + arguments)
         try await CLIRegistry.run(parsed: invocation.parsedValues, path: invocation.path)
         return 0
     } catch {
