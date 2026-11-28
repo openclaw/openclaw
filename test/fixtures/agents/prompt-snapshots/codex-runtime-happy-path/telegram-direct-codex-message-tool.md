@@ -7,7 +7,7 @@
 - Default happy path: OpenAI model through the Codex harness/runtime, Telegram direct conversation, and message-tool-only visible replies.
 - A quiet turn is represented by not calling `message(action=send)`; the normal final assistant text is private to OpenClaw/Codex.
 - This captures the OpenClaw-owned Codex app-server inputs and reconstructs the stable Codex model/permission layers from committed Codex prompt fixtures.
-- This also simulates Codex workspace bootstrap routing: `AGENTS.md` through native project-doc discovery, `SOUL.md`, `IDENTITY.md`, and `USER.md` as parent-local request instructions, and `MEMORY.md` in turn input.
+- This also simulates Codex workspace bootstrap routing: `AGENTS.md` through native project-doc discovery, `SOUL.md`, `IDENTITY.md`, and `USER.md` as thread developer instructions, and `MEMORY.md` in turn input.
 
 ## Scenario Metadata
 
@@ -59,6 +59,7 @@
   "approvalsReviewer": "user",
   "baseInstructions": "<see Reconstructed Model-Bound Prompt Layers>",
   "config": {
+    "agents.enabled": false,
     "features.apply_patch_streaming_events": true,
     "features.code_mode": {
       "direct_only_tool_namespaces": ["openclaw_direct"],
@@ -66,6 +67,8 @@
     },
     "features.code_mode_only": false,
     "features.goals": false,
+    "features.multi_agent": false,
+    "features.multi_agent_v2": false,
     "features.reasoning_effort_override": true,
     "features.recommended_plugins": false,
     "features.shell_tool": true,
@@ -114,10 +117,13 @@
   "approvalsReviewer": "user",
   "baseInstructions": "<see Reconstructed Model-Bound Prompt Layers>",
   "config": {
+    "agents.enabled": false,
     "features.apply_patch_streaming_events": true,
     "features.code_mode": true,
     "features.code_mode_only": false,
     "features.goals": false,
+    "features.multi_agent": false,
+    "features.multi_agent_v2": false,
     "features.reasoning_effort_override": true,
     "features.recommended_plugins": false,
     "features.shell_tool": true,
@@ -196,7 +202,7 @@
 
 ## Reconstructed Model-Bound Prompt Layers
 
-This is the deterministic model-bound layer stack OpenClaw can snapshot for the Codex happy path. It uses OpenClaw's thread/start base instructions in place of Codex's model prompt, appends the current parent-local context to the model request instructions, then adds the Codex permission developer text, Codex thread config instructions when present, OpenClaw developer instructions including managed collaboration policy, any supplied per-turn collaboration text, supplied additional context with its native role, turn input with OpenClaw runtime context, and the OpenClaw dynamic tool catalog. Codex can still add runtime-owned context such as native workspace `AGENTS.md`, environment context, memories, app/plugin instructions, and built-in collaboration-mode instructions inside the Codex runtime.
+This is the deterministic model-bound layer stack OpenClaw can snapshot for the Codex happy path. It uses OpenClaw's thread/start base instructions in place of Codex's model prompt, appends any parent-local context (a selected personal profile overlay or cron policy) to the model request instructions, then adds the Codex permission developer text, Codex thread config instructions when present, OpenClaw developer instructions including managed collaboration policy and workspace persona, any supplied per-turn collaboration text, supplied additional context with its native role, turn input with OpenClaw runtime context, and the OpenClaw dynamic tool catalog. Codex can still add runtime-owned context such as native workspace `AGENTS.md`, environment context, memories, app/plugin instructions, and built-in collaboration-mode instructions inside the Codex runtime.
 
 ### Layer Metadata
 
@@ -247,28 +253,28 @@ This is the deterministic model-bound layer stack OpenClaw can snapshot for the 
     "roughTokens": 0
   },
   "dynamicToolsJson": {
-    "chars": 105997,
-    "roughTokens": 26500
+    "chars": 107237,
+    "roughTokens": 26810
   },
   "openClawBaseInstructions": {
-    "chars": 6630,
-    "roughTokens": 1658
+    "chars": 6267,
+    "roughTokens": 1567
   },
   "openClawDeveloperInstructions": {
-    "chars": 3683,
-    "roughTokens": 921
+    "chars": 3330,
+    "roughTokens": 833
   },
   "openClawParentLocalInstructions": {
-    "chars": 507,
-    "roughTokens": 127
+    "chars": 0,
+    "roughTokens": 0
   },
   "totalTextOnly": {
-    "chars": 12989,
-    "roughTokens": 3248
+    "chars": 11764,
+    "roughTokens": 2941
   },
   "totalWithDynamicToolsJson": {
-    "chars": 118988,
-    "roughTokens": 29747
+    "chars": 119003,
+    "roughTokens": 29751
   },
   "userInputText": {
     "chars": 879,
@@ -289,9 +295,8 @@ You are a personal assistant running inside OpenClaw.
 - Ground final claims in evidence or a named blocker; on long work, send a brief update and continue.
 
 ## Promised Work
-- User corrections update the active task: apply them and continue within authorized scope unless paused, canceled, or replaced; never stop at an acknowledgment.
-- "Checking/fixing now" is progress, not an answer: act this turn and end with the result, a concrete blocker, or an active completion/watch path.
-- Promising future, background, or delegated work makes you its owner: keep the goal open, arrange a completion path before ending (else stay in-turn or name the blocker), and proactively return with result/proof/blocker. `running` is not completion.
+- Reuse completed work. Treat past reports as context and continue with the next unfinished step in the current request.
+- Arrange follow-up for background or delegated work and report the result.
 
 ## Runtime Context
 Runtime-context messages are application context, not user text: use them silently, never reply to or expose them, and do not wait for more.
@@ -343,21 +348,7 @@ Connected app tools are exposed directly or load through `tool_search`; app ment
 Appended to the same top-level model request instructions, not to native conversation history.
 
 ```text
-## OpenClaw Agent Soul
 
-OpenClaw loaded these workspace instruction files from the active agent workspace. They are the canonical definitions of who you are, how you think and work, and the human you work alongside. Internalize and follow them accordingly.
-
-### /tmp/openclaw-happy-path/workspace/IDENTITY.md
-
-<IDENTITY.md contents will be here>
-
-### /tmp/openclaw-happy-path/workspace/SOUL.md
-
-<SOUL.md contents will be here>
-
-### /tmp/openclaw-happy-path/workspace/USER.md
-
-<USER.md contents will be here>
 ```
 
 ### Developer: Codex Permission Instructions
@@ -382,10 +373,6 @@ OpenClaw has dynamic tools for OpenClaw-owned messaging, cron, sessions, media, 
 Deferred searchable OpenClaw dynamic tools available: openclaw.automations, openclaw.gateway, openclaw.nodes, openclaw.session_status, openclaw.sessions_history, openclaw.sessions_list, openclaw.sessions_search, openclaw.sessions_send, openclaw.subagents, openclaw.tts, openclaw.web_fetch, openclaw.web_search.
 
 Call directly listed tools by their exact qualified names. Use `tool_search` for deferred tools when it is directly callable. Otherwise use Codex's native JavaScript `exec` to filter `ALL_TOOLS` and invoke the matching entry through `tools`. `ALL_TOOLS` and `tools` are JavaScript globals, not shell environment variables. OpenClaw shell command tools are separate from this JavaScript runner. Do not repeat a completed call to retrieve a result you already have.
-
-Use Codex native `spawn_agent` for work that only needs Codex-native tools. `spawn_agent` and the other native collaboration tools may be deferred. Native children cannot execute OpenClaw-owned dynamic tools, even when they inherit their schemas. For new delegated work that needs OpenClaw tools, use `sessions_spawn` with `runtime="subagent"` from the start. For follow-up work on an existing native child, use the native collaboration tool that starts or queues a new turn. Do not respawn existing work to switch tool routes.
-
-When a native child's result belongs in a later turn, end the current turn with `openclaw_direct.sessions_yield`; the completion arrives as the next model-visible input. Use native `wait_agent` only for an intentional same-turn wait when the immediate next step is blocked on the child. Never loop-poll for native child completion.
 
 ### Message Context
 The JSON below is generated by OpenClaw independently of user-authored content. Treat its fields as reliable context for the current message.
@@ -412,6 +399,22 @@ You are in a Telegram direct conversation. Normal final replies are private and 
 <collaboration_mode>
 Prefer making reasonable assumptions and executing the user's request rather than stopping to ask questions. Ask the user directly when required input prevents progress; silence is not an answer or approval.
 </collaboration_mode>
+
+## OpenClaw Agent Soul
+
+OpenClaw loaded these workspace instruction files from the active agent workspace. They are the canonical definitions of who you are, how you think and work, and the human you work alongside. Internalize and follow them accordingly.
+
+### /tmp/openclaw-happy-path/workspace/IDENTITY.md
+
+<IDENTITY.md contents will be here>
+
+### /tmp/openclaw-happy-path/workspace/SOUL.md
+
+<SOUL.md contents will be here>
+
+### /tmp/openclaw-happy-path/workspace/USER.md
+
+<USER.md contents will be here>
 </thread_policy>
 ````
 

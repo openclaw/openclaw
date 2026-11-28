@@ -18,10 +18,7 @@ import {
 } from "./agent-command.compaction.test-support.js";
 import { deliverAgentCommandResult } from "./command/delivery.js";
 import { LiveSessionModelSwitchError } from "./live-model-switch-error.js";
-import {
-  PreparedModelRuntimeInitialRunAdmissionError,
-  PreparedModelRuntimeOwnerNotPublishedError,
-} from "./prepared-model-runtime.errors.js";
+import { PreparedModelRuntimeOwnerNotPublishedError } from "./prepared-model-runtime.errors.js";
 
 const sendMock = vi.hoisted(() => vi.fn<typeof deliverOutboundPayloads>());
 // mock-isolation: Fix the external send boundary while real finalization and delivery custody run.
@@ -60,9 +57,7 @@ const refusalText =
   "Model runtime replacement is in progress; admitted plugin work cannot wait for the reload. Retry after the plugin reload completes.";
 
 function initialRefusal() {
-  return new PreparedModelRuntimeInitialRunAdmissionError(
-    new PreparedModelRuntimeOwnerNotPublishedError(refusalText, { admissionBlocked: true }),
-  );
+  return new PreparedModelRuntimeOwnerNotPublishedError(refusalText, { admissionBlocked: true });
 }
 
 async function fixture() {
@@ -200,50 +195,75 @@ it("delivers an admitted continuation without a failure notice", async () => {
 });
 
 it.each([
+  ["an ordinary error", () => [new Error(refusalText)], "completion"],
+  [
+    "a missing runtime owner",
+    () => [
+      new PreparedModelRuntimeOwnerNotPublishedError(refusalText, { admissionBlocked: false }),
+    ],
+    "completion",
+  ],
+  [
+    "a refusal after a live model switch",
+    () => [
+      new LiveSessionModelSwitchError({ provider: "openai", model: "gpt-5.5" }),
+      initialRefusal(),
+    ],
+    "completion",
+  ],
+  ["a runtime refusal of an ordinary chat turn", () => [initialRefusal()], "chat"],
+] as const)(
+  "delivers one failure notice when the turn fails before it starts: %s",
+  async (_name, errors, turn) => {
+    const { opts } = await fixture();
+    const thrown = errors();
+    for (const error of thrown) {
+      state.runAgentAttemptMock.mockRejectedValueOnce(error);
+    }
+    platformSend.mockResolvedValueOnce([{ channel: "discord", messageId: "notice-1" }]);
+
+    const result = await agentCommandFromGatewayIngress(
+      turn === "chat" ? { ...opts, inputProvenance: undefined } : opts,
+      ...GATEWAY_INGRESS_ARGS,
+    );
+
+    expect(readAgentRunTerminalOutcome(result)).toBe("failed");
+    expect(state.runAgentAttemptMock).toHaveBeenCalledTimes(thrown.length);
+    expect(sendMock).toHaveBeenCalledOnce();
+    expect(sendMock.mock.calls[0]?.[0].payloads).toEqual([
+      expect.objectContaining({ text: expect.stringContaining("couldn't") }),
+    ]);
+  },
+);
+
+it.each([
   "private",
   "internal",
   "cancelled",
   "revoked source authority",
-  "unqualified refusal",
-  "missing owner",
-  "ordinary error",
-  "settlement failure",
-  "earlier candidate",
+  "started execution",
+  "an ordinary chat error",
 ] as const)("does not synthesize delivery after %s", async (scenario) => {
   const { opts } = await fixture();
   let sourceCurrent = true;
   const controller = new AbortController();
-  const refusal =
-    scenario === "ordinary error"
-      ? new Error(refusalText)
-      : scenario === "unqualified refusal" || scenario === "missing owner"
-        ? new PreparedModelRuntimeOwnerNotPublishedError(refusalText, {
-            admissionBlocked: scenario !== "missing owner",
-          })
-        : scenario === "settlement failure"
-          ? new AggregateError([initialRefusal(), new Error("Child ownership settlement failed")])
-          : initialRefusal();
-  if (scenario === "earlier candidate") {
-    state.runAgentAttemptMock.mockRejectedValueOnce(
-      new LiveSessionModelSwitchError({
-        provider: "openai",
-        model: "gpt-5.5",
-      }),
-    );
-  }
-  state.runAgentAttemptMock.mockImplementationOnce(async () => {
+  state.runAgentAttemptMock.mockImplementationOnce(async (params) => {
     if (scenario === "cancelled") {
       controller.abort(new Error("Stopped by operator"));
     }
     if (scenario === "revoked source authority") {
       sourceCurrent = false;
     }
-    throw refusal;
+    if (scenario === "started execution") {
+      await params.onAgentEvent?.({ stream: "lifecycle", data: { phase: "start" } });
+    }
+    throw scenario === "an ordinary chat error" ? new Error(refusalText) : initialRefusal();
   });
   await expect(
     agentCommandFromGatewayIngress(
       {
         ...opts,
+        ...(scenario === "an ordinary chat error" ? { inputProvenance: undefined } : {}),
         deliver: scenario !== "private",
         ...(scenario === "internal" ? { sessionEffects: "internal" as const } : {}),
         abortSignal: controller.signal,
@@ -256,7 +276,51 @@ it.each([
       ...GATEWAY_INGRESS_ARGS,
     ),
   ).rejects.toThrow();
-  expect(state.runAgentAttemptMock).toHaveBeenCalledTimes(scenario === "earlier candidate" ? 2 : 1);
+  expect(state.runAgentAttemptMock).toHaveBeenCalledOnce();
   expect(platformSend).not.toHaveBeenCalled();
   expect(state.deliverAgentCommandResultMock).not.toHaveBeenCalled();
+});
+
+// Private and in-session requesters get no command notice; their owner reads the rethrown error.
+it.each([
+  ["before it started", false],
+  ["after it started", undefined],
+] as const)("marks whether a run that failed %s showed nothing", async (when, providerStarted) => {
+  const { opts } = await fixture();
+  state.runAgentAttemptMock.mockImplementationOnce(async (params) => {
+    if (when === "after it started") {
+      await params.onAgentEvent?.({ stream: "lifecycle", data: { phase: "start" } });
+    }
+    throw new Error("Attempt failed");
+  });
+
+  const error = await agentCommandFromGatewayIngress(
+    { ...opts, deliver: false },
+    ...GATEWAY_INGRESS_ARGS,
+  ).catch((caught: unknown) => caught);
+
+  expect(error).toBeInstanceOf(Error);
+  if (providerStarted === false) {
+    expect(error).toMatchObject({ providerStarted: false });
+  } else {
+    expect(error).not.toHaveProperty("providerStarted");
+  }
+});
+
+it("does not mark a shutdown reason that other runs share", async () => {
+  const { opts } = await fixture();
+  const controller = new AbortController();
+  const shutdown = new Error("Gateway is restarting");
+  state.runAgentAttemptMock.mockImplementationOnce(async () => {
+    controller.abort(shutdown);
+    throw shutdown;
+  });
+
+  await expect(
+    agentCommandFromGatewayIngress(
+      { ...opts, abortSignal: controller.signal },
+      ...GATEWAY_INGRESS_ARGS,
+    ),
+  ).rejects.toThrow();
+  expect(shutdown).not.toHaveProperty("providerStarted");
 });

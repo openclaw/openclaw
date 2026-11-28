@@ -4,15 +4,17 @@ export {
   countPendingDescendantRuns,
   getLatestLiveSubagentRunByChildSessionKey,
   getLatestSubagentRunByChildSessionKey,
-  getSubagentSessionRuntimeMs,
-  getSubagentSessionStartedAt,
   isSubagentRunLive,
   isSubagentSessionRunActive,
   listSubagentRunsForRequester,
   resolveRequesterForChildSession,
-  resolveSubagentSessionStatus,
   shouldIgnorePostCompletionAnnounceForSession,
 } from "./subagent-registry-read.js";
+export {
+  getSubagentSessionRuntimeMs,
+  getSubagentSessionStartedAt,
+  resolveSubagentSessionStatus,
+} from "./subagent-session-metrics.js";
 
 import { resolvePhysicalSessionStorePath } from "../../../config/sessions/session-store-path.js";
 import { parseAgentSessionKey } from "../../../routing/session-key.js";

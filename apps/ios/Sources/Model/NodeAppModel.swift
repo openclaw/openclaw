@@ -385,13 +385,6 @@ final class NodeAppModel {
     private let execApprovalNotificationLogger = Logger(
         subsystem: "ai.openclawfoundation.app",
         category: "ExecApprovalNotification")
-    enum CameraHUDKind {
-        case photo
-        case recording
-        case success
-        case error
-    }
-
     private enum AuxiliaryAudioCapture: Equatable {
         case cameraClip
         case screenRecording
@@ -489,25 +482,34 @@ final class NodeAppModel {
         guard let problem = self.lastGatewayProblem else { return nil }
         // Keep transient network failures in Settings while the operator route is live,
         // including display history retained after reconnect clears the live problems.
-        if self.operatorConnected, problem.owner == .network,
-           problem.retryable, !problem.pauseReconnect, !problem.needsPairingApproval
-        {
+        if self.operatorConnected, problem.isUnreachable {
             return nil
         }
         return problem
     }
+
+    /// The last approval answer failed only because the operator connection was down. The chat's
+    /// status strip carries that ("Can’t reach …"), so the approval card does not repeat it.
+    var pendingExecApprovalFailedUnreachable: Bool {
+        self.pendingExecApprovalPromptErrorText == Self.execApprovalUnreachableMessage
+    }
+
+    static let execApprovalUnreachableMessage = "OpenClaw couldn't connect to the gateway operator session."
 
     private var mainSessionBaseKey: String = "main"
     private var gatewaySessionScope: String?
     var gatewayAccentColorHex: String?
     private var focusedChatSessionKey: String?
     var selectedAgentId: String?
+    /// The app's one toast. Views post through the environment; model code posts here.
+    let toasts = OpenClawToastPresenter(assistiveTechnologyRunning: {
+        UIAccessibility.isVoiceOverRunning || UIAccessibility.isSwitchControlRunning
+    })
     var gatewayDefaultAgentId: String?
     var gatewayAgents: [AgentSummary] = []
     var openChatRequestID: Int = 0
     @ObservationIgnored private var consumedOpenChatRequestID: Int = 0
     private(set) var pendingLiveVoiceStart = false
-    var liveVoiceStartError: String?
     var newChatRequestID: Int = 0
     // RootTabs has one chat destination; keep its acknowledgement here so recreating
     // that destination cannot replay a request that the prior view already handled.
@@ -517,6 +519,7 @@ final class NodeAppModel {
     var gatewaySetupRequestID: Int = 0
     private(set) var pendingAgentDeepLinkPrompt: AgentDeepLinkPrompt?
     private var pendingGatewaySetupLink: GatewayConnectDeepLink?
+    private(set) var approvalInboxNavigationRequestID = 0
     private(set) var pendingExecApprovalPrompt: ExecApprovalPrompt?
     private(set) var pendingExecApprovalPromptResolving: Bool = false
     private(set) var pendingExecApprovalPromptErrorText: String?
@@ -552,11 +555,12 @@ final class NodeAppModel {
     }
 
     var pendingApprovalAttentionRequests: [OpenClawChatAttentionRequest] {
-        self.pendingExecApprovalInboxItems.compactMap { item in
+        if self.isLocalChatFixtureEnabled, ScreenshotFixtureMode.sessionStatesEnabled {
+            return ScreenshotFixtureMode.sessionStateApprovals()
+        }
+        return self.pendingExecApprovalInboxItems.compactMap { item in
             let prompt = item.prompt
-            guard self.isExecApprovalPromptCurrent(prompt),
-                  let source = prompt.attentionSource,
-                  source.authorityGeneration == self.operatorAuthorityGeneration,
+            guard let source = self.currentApprovalSource(for: prompt),
                   let expiresAtMs = prompt.expiresAtMs
             else { return nil }
             return OpenClawChatAttentionRequest(
@@ -573,8 +577,43 @@ final class NodeAppModel {
         }
     }
 
-    /// An uncertain resolution keeps approval actions frozen, but must not trap the
-    /// reviewer in a modal or Settings detail while canonical readback is unavailable.
+    func approvalTargetsSession(
+        sourceSessionKey: String?,
+        sourceAgentID: String?,
+        sessionKey: String,
+        agentID: String?) -> Bool
+    {
+        guard let sourceSessionKey else { return false }
+        return ChatSessionSidebarModel.attentionSourceMatchesSession(
+            source: sourceSessionKey,
+            sourceAgentID: sourceAgentID,
+            sessionKey: sessionKey,
+            mainSessionKey: self.mainSessionKey,
+            agentID: agentID,
+            sessionRoutingContract: self.chatSessionRoutingContract)
+    }
+
+    func pendingApproval(forSession sessionKey: String, agentID: String?) -> ExecApprovalInboxItem? {
+        self.pendingExecApprovalInboxItems.first { item in
+            guard let source = self.currentApprovalSource(for: item.prompt) else { return false }
+            return self.approvalTargetsSession(
+                sourceSessionKey: source.sessionKey,
+                sourceAgentID: source.agentID ?? item.prompt.agentId,
+                sessionKey: sessionKey,
+                agentID: agentID)
+        }
+    }
+
+    func currentApprovalSource(for prompt: ExecApprovalPrompt) -> ApprovalAttentionSource? {
+        guard self.isExecApprovalPromptCurrent(prompt),
+              let source = prompt.attentionSource,
+              source.authorityGeneration == self.operatorAuthorityGeneration
+        else { return nil }
+        return source
+    }
+
+    /// An uncertain resolution keeps approval actions frozen, but the reviewer can
+    /// still leave the request while canonical readback is unavailable.
     var pendingExecApprovalPromptCanDismiss: Bool {
         !self.pendingExecApprovalPromptResolving || self.pendingExecApprovalPromptErrorText != nil
     }
@@ -608,8 +647,6 @@ final class NodeAppModel {
     private var talkPermissionUpgradeReconnectGeneration: UInt64 = 0
     private var lastTalkPermissionReconnectAttemptAt: Date?
     private var voiceWakeSyncTask: Task<Void, Never>?
-    @ObservationIgnored private var cameraHUDDismissTask: Task<Void, Never>?
-    @ObservationIgnored private var cameraHUDOwnerID: String?
     private let gatewayHealthMonitor = GatewayHealthMonitor()
     private var gatewayHealthMonitorDisabled = false
     private let notificationCenter: NotificationCentering
@@ -708,6 +745,7 @@ final class NodeAppModel {
     @ObservationIgnored private let pushRegistrationManager = PushRegistrationManager()
 
     let sessionGroups = SessionGroupModel()
+    var personalSidebarPins = IOSSidebarPins()
 
     var operatorSession: GatewayNodeSession {
         self.operatorGateway
@@ -768,11 +806,8 @@ final class NodeAppModel {
         return self.isOperatorGatewayConnected ? "operator" : "offline"
     }
 
-    func makeChatTransport(outboxGatewayID: String? = nil) -> any OpenClawChatTransport {
-        if let fixture = self.localChatFixture {
-            return LocalFixtureChatTransport(fixture: fixture)
-        }
-        let connectionProvider: IOSMediaArtifactLoader.ConnectionProvider = { [weak self] in
+    var chatMediaConnection: IOSMediaArtifactLoader.ConnectionProvider {
+        { [weak self] in
             guard let config = self?.activeGatewayConnectConfig else { return nil }
             return IOSMediaArtifactLoader.Connection(
                 config: config,
@@ -780,6 +815,13 @@ final class NodeAppModel {
                 customHeaders: GatewaySettingsStore.loadGatewayCustomHeaders(
                     gatewayStableID: config.effectiveStableID))
         }
+    }
+
+    func makeChatTransport(outboxGatewayID: String? = nil) -> any OpenClawChatTransport {
+        if let fixture = self.localChatFixture {
+            return LocalFixtureChatTransport(fixture: fixture)
+        }
+        let connectionProvider = self.chatMediaConnection
         return IOSGatewayChatTransport(
             gateway: self.operatorSession,
             widgetGateway: self.nodeGateway,
@@ -816,9 +858,12 @@ final class NodeAppModel {
     let chatPresentation = IOSChatViewModelOwner()
     var agentAvatarImages: [String: UIImage] = [:]
     var loadedAgentAvatarRequest: IOSAgentAvatarRequest?
+    var resolvedAgentAvatarIDs: Set<String> = []
     /// `agent.identity.get` results by agent id for `agentIdentitiesOwnerID`'s Gateway.
     var agentIdentities: [String: IOSResolvedAgentIdentity] = [:]
     var agentIdentitiesOwnerID: String?
+    /// Last known agents for `chatViewModelOwnerID`, read once per owner from the Gateway cache.
+    @ObservationIgnored var cachedAgentIdentitiesMemo: IOSCachedAgentIdentities?
     /// Request admission only; the connection controller owns the later handoff.
     var isGatewayPickerRequestInFlight = false
 
@@ -927,6 +972,22 @@ final class NodeAppModel {
               GatewayStableIdentifier.matches(cache.gatewayID, gatewayID)
         else { return }
         await cache.storeSessions(sessions, agentID: agentID)
+    }
+
+    func localChatCacheUsage() async throws -> OpenClawClientDatabases.GatewayCacheUsage {
+        try await self.requireChatCacheDatabases().gatewayCacheUsage()
+    }
+
+    func clearLocalChatCache() async throws -> OpenClawClientDatabases.GatewayCacheUsage {
+        try await self.requireChatCacheDatabases().clearGatewayCache()
+    }
+
+    private func requireChatCacheDatabases() throws -> OpenClawClientDatabases {
+        if self.clientDatabases == nil {
+            self.clientDatabases = Self.makeClientDatabases()
+        }
+        guard let clientDatabases else { throw CocoaError(.fileReadUnknown) }
+        return clientDatabases
     }
 
     /// Delete one forgotten gateway's cache and durable state, or both
@@ -1114,8 +1175,6 @@ final class NodeAppModel {
     private static let preferredCameraFacingKey = "camera.preferredFacing"
     private static let foregroundResumeHealthTimeoutSeconds = 1
 
-    var cameraHUDText: String?
-    var cameraHUDKind: CameraHUDKind?
     var cameraFlashNonce: Int = 0
     var screenRecordActive: Bool = false
     private(set) var watchMessagingStatus = WatchMessagingStatus(
@@ -1145,9 +1204,9 @@ final class NodeAppModel {
         mediaAuthorizationProvider: @escaping @MainActor () -> MediaAuthorizationSnapshot = { .current() })
     {
         if restoringSavedGatewayRoute, let stableID = GatewaySettingsStore.activeGatewayEntry()?.stableID {
+            // A cold launch opens this agent’s main chat. Only an in-app Gateway switch restores its focused chat.
             self.connectedGatewayID = stableID
             self.selectedAgentId = GatewaySettingsStore.loadGatewaySelectedAgentId(stableID: stableID)
-            self.focusedChatSessionKey = GatewaySettingsStore.loadGatewayFocusedChatSessionKey(stableID: stableID)
         }
         self.camera = camera
         self.preferredCameraFacing = Self.cameraFacingPreference(
@@ -1246,8 +1305,11 @@ final class NodeAppModel {
         let enabled = UserDefaults.standard.bool(forKey: "voiceWake.enabled")
         self.voiceWake.setEnabled(enabled)
         self.talkMode.attachGateway(self.operatorGateway)
-        let talkEnabled = UserDefaults.standard.bool(forKey: "talk.enabled")
-        self.setTalkEnabled(talkEnabled)
+        // Talk is a state of this run, never restored: a fresh launch starts with it off and does
+        // not ask for the microphone. Explicit requests still start it (Start Live Voice, the
+        // Watch, the Gateway's talk.mode). Earlier builds kept the last state under this key;
+        // drop it so nothing reads a stale value.
+        UserDefaults.standard.removeObject(forKey: "talk.enabled")
         self.locationService.setAuthorizationChangeHandler { [weak self] snapshot in
             guard let self else { return }
             self.locationAuthorizationSnapshot = snapshot
@@ -1496,18 +1558,15 @@ final class NodeAppModel {
 
     func setTalkEnabled(_ enabled: Bool) {
         if self.isAppleReviewDemoModeEnabled {
-            UserDefaults.standard.set(false, forKey: "talk.enabled")
             self.talkMode.setEnabled(false)
             self.talkMode.statusText = "Demo mode only"
             return
         }
         if enabled, self.auxiliaryAudioCapture != nil {
-            UserDefaults.standard.set(false, forKey: "talk.enabled")
             self.talkMode.setEnabled(false)
             self.talkMode.statusText = "Finish the active audio capture first"
             return
         }
-        UserDefaults.standard.set(enabled, forKey: "talk.enabled")
         if enabled {
             if self.voiceNoteRecorder.isRecording || self.voiceNoteRecorder.isRequestingPermission {
                 self.voiceNoteRecorder.cancel()
@@ -1907,6 +1966,14 @@ final class NodeAppModel {
         guard shouldContinue(), let payload = evt.payload else { return }
         switch evt.event {
         case "config.changed", "users.prefs.changed":
+            if evt.event == "users.prefs.changed" {
+                struct Changed: Decodable { let keys: [String] }
+                if (try? GatewayPayloadDecoding.decode(payload, as: Changed.self))?.keys
+                    .contains(IOSSidebarPins.preferenceKey) == true
+                {
+                    await self.refreshPersonalSidebarPins()
+                }
+            }
             // Persisted config writes (accent, session routing) must reach an
             // already-connected app; the protocol directs clients to re-read via
             // config.get, which the guarded branding refresh already does.
@@ -1990,9 +2057,11 @@ final class NodeAppModel {
                 approvalId: approvalId,
                 gatewayStableID: gatewayStableID)
         }
-        await self.presentNotificationPermissionGuidanceForExecApprovalIfNeeded(
-            approvalId: approvalId,
-            shouldApply: shouldContinue)
+        if attentionSource?.sessionKey == nil {
+            await self.presentNotificationPermissionGuidanceForExecApprovalIfNeeded(
+                approvalId: approvalId,
+                shouldApply: shouldContinue)
+        }
         guard shouldContinue() else { return }
         await self.presentExecApprovalPrompt(
             approvalId: approvalId,
@@ -2340,14 +2409,14 @@ final class NodeAppModel {
         do {
             return try await self.performServiceInvoke(req, gatewayStableID: gatewayStableID)
         } catch is CancellationError {
-            if command.hasPrefix("camera.") {
-                self.clearCameraHUD(ownerID: req.id)
-            }
             return Self.failedInvokeResponse(req, code: .unavailable, message: "node invoke cancelled")
         } catch {
             if command.hasPrefix("camera.") {
-                let text = (error as? LocalizedError)?.errorDescription ?? error.localizedDescription
-                self.updateCameraHUD(ownerID: req.id, text: text, kind: .error, autoHideSeconds: 2.2)
+                // The agent asked for the camera, so the person may not be looking at the chat.
+                self.toasts.post(OpenClawToast(
+                    String(localized: "Couldn’t use the camera."),
+                    systemImage: "camera",
+                    kind: .error))
             }
             return Self.failedInvokeResponse(req, code: .unavailable, message: error.localizedDescription)
         }
@@ -2512,7 +2581,6 @@ final class NodeAppModel {
             }
             return try Self.successfulInvokeResponse(req, payload: Payload(devices: devices))
         case OpenClawCameraCommand.snap.rawValue:
-            showCameraHUD(ownerID: req.id, text: "Taking photo…", kind: .photo)
             self.cameraFlashNonce &+= 1
             let params = (try? Self.decodeParams(OpenClawCameraSnapParams.self, from: req.paramsJSON)) ??
                 OpenClawCameraSnapParams()
@@ -2536,7 +2604,7 @@ final class NodeAppModel {
                 width: res.width,
                 height: res.height))
             try Task.checkCancellation()
-            updateCameraHUD(ownerID: req.id, text: "Photo captured", kind: .success, autoHideSeconds: 1.6)
+            self.toasts.post(OpenClawToast(String(localized: "Photo taken"), systemImage: "camera"))
             return BridgeInvokeResponse(id: req.id, ok: true, payloadJSON: payload)
         case OpenClawCameraCommand.clip.rawValue:
             let params = (try? Self.decodeParams(OpenClawCameraClipParams.self, from: req.paramsJSON)) ??
@@ -2544,7 +2612,6 @@ final class NodeAppModel {
 
             let includeAudio = params.includeAudio ?? true
             let defaultFacing = self.preferredCameraFacing
-            showCameraHUD(ownerID: req.id, text: "Recording…", kind: .recording)
             let res = try await self.withForegroundCapture(
                 audioOwner: includeAudio ? .cameraClip : nil)
             {
@@ -2566,7 +2633,7 @@ final class NodeAppModel {
                 durationMs: res.durationMs,
                 hasAudio: res.hasAudio))
             try Task.checkCancellation()
-            updateCameraHUD(ownerID: req.id, text: "Clip captured", kind: .success, autoHideSeconds: 1.8)
+            self.toasts.post(OpenClawToast(String(localized: "Video recorded"), systemImage: "video"))
             return BridgeInvokeResponse(id: req.id, ok: true, payloadJSON: payload)
         default:
             return Self.unknownInvokeResponse(req)
@@ -3253,52 +3320,6 @@ extension NodeAppModel {
         self.setPreferredCameraFacing(self.preferredCameraFacing == .front ? .back : .front)
         UIImpactFeedbackGenerator(style: .light).impactOccurred()
     }
-
-    private func showCameraHUD(
-        ownerID: String,
-        text: String,
-        kind: CameraHUDKind,
-        autoHideSeconds: Double? = nil)
-    {
-        self.cameraHUDDismissTask?.cancel()
-        self.cameraHUDOwnerID = ownerID
-
-        withAnimation(.spring(response: 0.25, dampingFraction: 0.85)) {
-            self.cameraHUDText = text
-            self.cameraHUDKind = kind
-        }
-
-        guard let autoHideSeconds else { return }
-        self.cameraHUDDismissTask = Task { @MainActor in
-            try? await Task.sleep(nanoseconds: UInt64(autoHideSeconds * 1_000_000_000))
-            guard self.cameraHUDOwnerID == ownerID else { return }
-            withAnimation(.easeOut(duration: 0.25)) {
-                self.cameraHUDText = nil
-                self.cameraHUDKind = nil
-            }
-            self.cameraHUDOwnerID = nil
-            self.cameraHUDDismissTask = nil
-        }
-    }
-
-    private func updateCameraHUD(
-        ownerID: String,
-        text: String,
-        kind: CameraHUDKind,
-        autoHideSeconds: Double? = nil)
-    {
-        guard self.cameraHUDOwnerID == ownerID else { return }
-        self.showCameraHUD(ownerID: ownerID, text: text, kind: kind, autoHideSeconds: autoHideSeconds)
-    }
-
-    private func clearCameraHUD(ownerID: String) {
-        guard self.cameraHUDOwnerID == ownerID else { return }
-        self.cameraHUDDismissTask?.cancel()
-        self.cameraHUDDismissTask = nil
-        self.cameraHUDOwnerID = nil
-        self.cameraHUDText = nil
-        self.cameraHUDKind = nil
-    }
 }
 
 extension NodeAppModel {
@@ -3340,16 +3361,23 @@ extension NodeAppModel {
         guard self.pendingLiveVoiceStart, isSceneActive else { return }
         // Consume before admission: finishing onboarding must not start a forgotten request.
         self.pendingLiveVoiceStart = false
-        self.liveVoiceStartError = nil
         guard !isOnboardingPresented, hasGatewayConfiguration else {
-            self.liveVoiceStartError = String(localized: "Connect to your Gateway, then run Start Live Voice again.")
+            self.toasts.post(OpenClawToast(
+                String(localized: "Connect to start Live Voice."),
+                systemImage: "mic.slash",
+                kind: .warning))
             return
         }
         self.openChat(sessionKey: self.chatSessionKey)
         guard !self.talkMode.isEnabled else { return }
         self.setTalkEnabled(true)
         if !self.talkMode.isEnabled {
-            self.liveVoiceStartError = self.talkMode.statusText
+            // Start Live Voice from Shortcuts or Siri stays the other way to try again.
+            self.toasts.post(OpenClawToast(
+                String(localized: "Couldn’t start Live Voice."),
+                systemImage: "mic.slash",
+                kind: .error,
+                action: .tryAgain { [weak self] in self?.requestLiveVoiceStart() }))
         }
     }
 
@@ -3433,7 +3461,13 @@ extension NodeAppModel {
     }
 
     func chatAgentDisplayName(for agentID: String) -> String {
-        self.agentIdentityName(for: agentID) ?? self.agentDisplayName(for: agentID)
+        // A cold start can draw the main chat before its routing identity has restored.
+        let agentID = agentID.trimmedNonEmpty ?? self.cachedAgentIdentities.defaultAgentID ?? agentID
+        if let identityName = self.agentIdentityName(for: agentID) { return identityName }
+        if let rosterName = self.displayAgents.first(where: { $0.id == agentID })?.name?.trimmedNonEmpty {
+            return rosterName
+        }
+        return self.agentDisplayName(for: agentID)
     }
 
     var chatAgentAvatarURL: String? {
@@ -3925,6 +3959,10 @@ extension NodeAppModel {
         self.clearGatewayConnectionProblem()
     }
 
+    func gatewayPreconnectProblemKind(for stableID: String) -> GatewayConnectionProblem.Kind? {
+        self.hasGatewayPreconnectProblem(for: stableID) ? self.gatewayPreconnectProblem?.problem.kind : nil
+    }
+
     func hasGatewayPreconnectProblem(for stableID: String) -> Bool {
         guard let preconnectProblem = self.gatewayPreconnectProblem else { return false }
         return GatewayStableIdentifier.matches(preconnectProblem.stableID, stableID) &&
@@ -4316,6 +4354,23 @@ extension NodeAppModel {
             guard let self else { return false }
             return self.operatorTalkConnectionGeneration == talkConnectionGeneration &&
                 self.isCurrentGatewayRoute(generation: routeGeneration, stableID: stableID)
+        }
+        // Resolve an untouched address once, without delaying chat or reconnect hydration.
+        if GatewaySettingsStore.loadGatewayRegistry().entries.contains(where: {
+            GatewayStableIdentifier.matches($0.stableID, stableID) && $0.hasAutomaticAddressName
+        }) {
+            Task {
+                struct HostInfo: Decodable { let machineName: String }
+                guard await self.operatorGateway.supportsServerMethod("system.info", ifCurrentRoute: route) == true,
+                      let data = try? await self.operatorGateway.request(
+                          method: "system.info",
+                          paramsJSON: "{}",
+                          timeoutSeconds: 5,
+                          ifCurrentRoute: route),
+                      let info = try? JSONDecoder().decode(HostInfo.self, from: data), shouldContinue()
+                else { return }
+                GatewaySettingsStore.setGatewayName(info.machineName, stableID: stableID, onlyIfAutomatic: true)
+            }
         }
         // Watch approval resolutions flush from the reconcile-gated watch path
         // (reconcileWatchExecApprovalCache), not eagerly on operator connect.
@@ -5058,6 +5113,7 @@ extension NodeAppModel {
         let current = self.connection.operator.connectedInfo
         guard previous != current else { return }
         self.operatorAuthorityGeneration &+= 1
+        self.personalSidebarPins = IOSSidebarPins()
         let connected = current != nil
         guard connected != (previous != nil) else { return }
         guard connected else {
@@ -5153,7 +5209,6 @@ extension NodeAppModel {
             remoteAddress: AppleReviewDemoMode.gatewayAddress)))
         self.connectedGatewayID = AppleReviewDemoMode.gatewayID
         self.activeGatewayConnectConfig = nil
-        UserDefaults.standard.set(false, forKey: "talk.enabled")
         UserDefaults.standard.set(false, forKey: "talk.background.enabled")
         self.talkMode.updateGatewayConnected(false)
         self.talkMode.setEnabled(false)
@@ -7648,6 +7703,30 @@ extension NodeAppModel {
             "Location wake post-check wakeId=\(wakeId, privacy: .public) connected=\(connected, privacy: .public)")
     }
 
+    var hasAPNsDeviceToken: Bool {
+        self.apnsDeviceTokenHex?.isEmpty == false
+    }
+
+    /// Submission is not proof of delivery or Gateway acceptance.
+    var hasSubmittedNotificationRegistration: Bool {
+        guard self.gatewayConnected,
+              let token = apnsDeviceTokenHex,
+              !token.isEmpty
+        else { return false }
+        let stableID = self.activeGatewayConnectConfig?.effectiveStableID ?? self.connectedGatewayID ?? ""
+        return !Self.shouldPublishDirectAPNsRegistration(
+            token: token,
+            gatewayStableID: stableID,
+            lastToken: self.apnsLastRegisteredTokenHex,
+            lastGatewayStableID: self.apnsLastRegisteredGatewayStableID)
+    }
+
+    func retryNotificationRegistration(
+        shouldContinue: @escaping @MainActor @Sendable () -> Bool) async
+    {
+        await self.registerAPNsTokenIfNeeded(shouldContinue: shouldContinue)
+    }
+
     func updateAPNsDeviceToken(_ tokenData: Data) {
         let tokenHex = tokenData.map { String(format: "%02x", $0) }.joined()
         guard !tokenHex.isEmpty else { return }
@@ -7827,6 +7906,7 @@ extension NodeAppModel {
     {
         guard shouldContinue(), let approvalId = ExecApprovalIdentifier.exact(prompt.approvalId) else { return }
         let operatorRoute: GatewayNodeSessionRoute
+        let gatewayID: String
         switch await self.validateExecApprovalPushRoute(
             prompt,
             sourceReason: "notification_action",
@@ -7834,6 +7914,7 @@ extension NodeAppModel {
         {
         case let .validated(context):
             operatorRoute = context.route
+            gatewayID = context.gatewayStableID
         case .unavailable:
             guard shouldContinue() else { return }
             self.appendPendingWatchExecApprovalRecoveryPush(prompt)
@@ -7848,6 +7929,20 @@ extension NodeAppModel {
             notificationPush: prompt,
             expectedOperatorRoute: operatorRoute,
             shouldContinue: shouldContinue)
+        guard shouldContinue(),
+              self.pendingExecApprovalPrompt?.matches(approvalID: approvalId, gatewayStableID: gatewayID) == true,
+              let key = Self.execApprovalInboxKey(self.pendingExecApprovalPrompt)
+        else { return }
+        if let item = self.execApprovalInboxPromptsByKey[key],
+           let source = self.currentApprovalSource(for: item),
+           let sessionKey = source.sessionKey,
+           ChatSessionSidebarModel.isSessionInActiveAgentScope(
+               key: sessionKey, agentID: source.agentID ?? item.agentId, activeAgentID: self.chatAgentId)
+        {
+            self.openChat(sessionKey: sessionKey)
+        } else {
+            self.approvalInboxNavigationRequestID &+= 1
+        }
     }
 
     func presentExecApprovalGatewayEventPrompt(
@@ -8536,6 +8631,18 @@ extension NodeAppModel {
         self.clearPendingExecApprovalPromptIfMatches(approvalId)
     }
 
+    func resolveSessionApproval(_ item: ExecApprovalInboxItem, decision: ApprovalDecision) async {
+        // The global review selection may change before the tap's task starts.
+        guard self.currentApprovalSource(for: item.prompt) != nil,
+              self.pendingExecApprovalInboxItems.contains(item)
+        else { return }
+        if Self.execApprovalInboxKey(self.pendingExecApprovalPrompt) != item.id {
+            self.presentPendingExecApprovalFromInbox(item.id)
+        }
+        guard Self.execApprovalInboxKey(self.pendingExecApprovalPrompt) == item.id else { return }
+        await self.resolvePendingExecApprovalPrompt(decision: decision.rawValue)
+    }
+
     func resolvePendingExecApprovalPrompt(decision: String) async {
         guard let prompt = pendingExecApprovalPrompt else { return }
         guard self.pendingExecApprovalPromptResolvedText == nil else { return }
@@ -8626,7 +8733,7 @@ extension NodeAppModel {
         else {
             self.execApprovalNotificationLogger.error(
                 "Exec approval action failed id=\(approvalID, privacy: .public): operator not connected")
-            return .failed(message: "OpenClaw couldn't connect to the gateway operator session.")
+            return .failed(message: Self.execApprovalUnreachableMessage)
         }
 
         let rpcFamily = await self.execApprovalRPCFamily(route: context.route)

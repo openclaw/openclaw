@@ -3,6 +3,7 @@ import type { AssistantMessage, UserMessage, Usage } from "openclaw/plugin-sdk/l
 import { beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
 import { buildOpenAICompletionsParams } from "../../packages/ai/src/transports/openai-completions-params.js";
 import { markInboundContextLabel } from "../auto-reply/reply/inbound-context-marker.js";
+import { buildAnthropicReplayPolicyForModel } from "../plugins/provider-replay-helpers.js";
 import { OPENCLAW_TRANSCRIPT_ARTIFACT_API } from "../shared/transcript-only-openclaw-assistant.js";
 import {
   loadSanitizeSessionHistoryWithCleanMocks,
@@ -133,7 +134,6 @@ const assistantContent = (messages: AgentMessage[], index = 1) => {
   return (messages[index] as AssistantMessage).content;
 };
 const roles = (messages: AgentMessage[]) => messages.map((message) => message.role);
-const omittedReasoning = [text("[assistant reasoning omitted]")];
 const makeAnthropicReplayPolicy = (
   overrides: Partial<TranscriptPolicy> = {},
 ): TranscriptPolicy => ({
@@ -638,21 +638,6 @@ describe("sanitizeSessionHistory", () => {
     expect(assistantContent(out, 3)).toEqual(current);
   });
 
-  it("keeps regular latest Anthropic thinking replay while preserving older stripped turns", async () => {
-    const latest = [thinking("latest private reasoning", "sig_latest"), text("latest answer")];
-    const out = await sanitizeAnthropic(
-      [
-        user("first"),
-        assistant([thinking("old private reasoning", "sig_old")]),
-        user("second"),
-        assistant(latest),
-      ],
-      { modelId: "claude-3-7-sonnet-20250219" },
-    );
-    expect(assistantContent(out)).toEqual(omittedReasoning);
-    expect(assistantContent(out, 3)).toEqual(latest);
-  });
-
   it("uses immutable thinking replay for anthropic-compatible providers when policy preserves signatures", async () => {
     const out = await sanitizeAnthropic(
       [user("retry"), assistant([thinking("internal", "sig_1"), toolCall("call_1", " read ")])],
@@ -721,5 +706,35 @@ describe("sanitizeSessionHistory", () => {
     expect(sanitizedExtended.slice(0, sanitizedBase.length)).toEqual(sanitizedBase);
     expect(assistantContent(sanitizedBase)).toEqual([priorCall]);
     expect(sanitizedBase[2]).toMatchObject({ toolCallId: priorId });
+  });
+
+  it("replays an earlier tool turn's signed thinking as stored on Claude models that strip prior thinking", async () => {
+    const haiku = "claude-haiku-4-5-20251001";
+    const policy = makeAnthropicReplayPolicy(buildAnthropicReplayPolicyForModel(haiku));
+    const claude = (
+      content: AssistantMessage["content"],
+      stopReason: "stop" | "toolUse" = "stop",
+    ) => ({
+      ...assistant(content, { stopReason }),
+      api: "anthropic-messages",
+      provider: "anthropic",
+      model: haiku,
+    });
+    const toolId = "toolu_01ABCDEF1234567890";
+    const toolTurn = [thinking("plan the read", "sig-tool"), toolCall(toolId)];
+    const sanitized = await sanitizeAnthropic(
+      [
+        user("read it"),
+        claude(toolTurn, "toolUse"),
+        toolResult(toolId),
+        claude([thinking("summarize", "sig-final"), text("Done.")]),
+        user("next"),
+        claude([text("ok")]),
+        user("again"),
+      ],
+      { modelId: haiku, policy },
+    );
+    // The API keeps prior-turn thinking before a tool call, so a replay drop breaks the cached prefix.
+    expect(assistantContent(sanitized)).toEqual(toolTurn);
   });
 });

@@ -503,6 +503,23 @@ describe("gateway client capability tool filtering", () => {
     expect(built(false, { alsoAllow: ["session_project"] })).toBe(false);
   });
 
+  it("selects the Home schema from the run's routing config", () => {
+    setRuntimeConfigSnapshot({ session: { mainKey: "resident" } });
+    const allowsMove = (sessionKey: string) => {
+      const tools = createTestOpenClawTools({
+        agentSessionKey: sessionKey,
+        config: { session: { mainKey: "run-home" } },
+        sessionProjectMoveEligible: true,
+      });
+      return Value.Check(expectToolNamed(tools, "session_project").parameters, {
+        action: "move",
+        projectId: "test-project",
+      });
+    };
+    expect(allowsMove("agent:main:run-home")).toBe(false);
+    expect(allowsMove("agent:main:resident")).toBe(true);
+  });
+
   describe.each(["embedded", "cli"] as const)("%s project-move tool eligibility", (runtime) => {
     const workspaceDir = path.resolve("project-move-default");
     const alternateDir = path.resolve("project-move-alternate");

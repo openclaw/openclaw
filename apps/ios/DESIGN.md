@@ -43,7 +43,7 @@ Feature-local layout enums may define row heights and grid dimensions, but shoul
 
 ## Accent roles
 
-`OpenClawBrand.accent` is the readable foreground accent for text, glyphs, and the app tint; it brightens in dark mode to keep 4.5:1 on dark surfaces. `OpenClawBrand.accentFill` is the darker accent for backgrounds that carry white content (prominent buttons, toggles). Never use `accent` as a fill under white text, and never use `accentFill` as text. Custom button surfaces use no gradients, sheens, or shadows; they read as a muddy halo on dark backgrounds.
+The iOS brand accent is `#CD3535` in both appearances. Use `OpenClawBrand.accent` for existing tint and glyphs, and `OpenClawBrand.accentFill` for backgrounds with white content. White on the red meets 4.5:1. Red text does not meet 4.5:1 on dark surfaces or on a 10% red tint over white; use semantic text colors for new labels. Custom button surfaces use no gradients, sheens, or shadows; they read as a muddy halo on dark backgrounds.
 
 ## Liquid Glass rules
 

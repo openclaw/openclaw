@@ -358,7 +358,7 @@ export async function runAnthropicStreamLifecycle(params: {
             const usage = asRecord(message?.usage);
             output.responseId = typeof message?.id === "string" ? message.id : undefined;
             output.responseModel = typeof message?.model === "string" ? message.model : undefined;
-            messageStartPromptUsage = applyAnthropicMessageStartUsage(output.usage, usage);
+            messageStartPromptUsage = applyAnthropicMessageStartUsage(output.usage, usage, model);
             calculateCost(costModel, output.usage);
             // Defer start until after message_start so that pre-stream SSE errors
             // (e.g. invalid thinking signatures) arrive before any non-error event
@@ -647,7 +647,7 @@ export async function runAnthropicStreamLifecycle(params: {
                     : mapAnthropicStopReason(delta.stop_reason);
               }
             }
-            applyAnthropicMessageDeltaUsage(output.usage, usage, messageStartPromptUsage);
+            applyAnthropicMessageDeltaUsage(output.usage, usage, messageStartPromptUsage, model);
             if (
               sawStopReason &&
               messageStartPromptUsage &&

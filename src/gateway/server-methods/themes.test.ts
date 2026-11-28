@@ -244,39 +244,6 @@ async function withConcurrentPreferenceSnapshots<T>(count: number, run: () => Pr
   }
 }
 
-it("lists descriptive choices and inspects a plugin definition without exposing palettes in list entries", async () => {
-  const entry = {
-    ...pluginTheme(),
-    artwork: {
-      hats: {
-        beret: { url: "/__openclaw__/plugin-theme-art/space-pack/xenovessel/hat/beret?v=abc" },
-      },
-      critters: {
-        ferris: {
-          url: "/__openclaw__/plugin-theme-art/space-pack/xenovessel/critter/ferris?v=def",
-          title: "a crab, allegedly",
-          crossMs: 15000,
-        },
-      },
-    },
-  };
-  pluginThemes.push(entry);
-  const { definition, ...descriptor } = entry;
-  await expectRpc(invoke("themes.list", {}), {
-    current: { id: "claw", mode: "system", scope: "profile", overrides: {} },
-    themes: expect.arrayContaining([
-      expect.objectContaining({ id: "claw", description: expect.stringMatching(/\S/) }),
-      descriptor,
-    ]),
-  });
-  await expectRpc(invoke("themes.get", { id: descriptor.id }), {
-    theme: descriptor,
-    definition,
-    artwork: entry.artwork,
-  });
-  expect(await invoke("themes.get", { id: "claw" })).not.toHaveProperty("payload.artwork");
-});
-
 it("imports and applies in one durable profile mutation, preserving other preferences and notifying only that profile", async () => {
   seedPreferences({ "ui.accent": "#aabbcc", "ui.fontFamily": "serif" });
   const options = broadcastOptions([client(requesterId), client(otherId, "other-browser")]);

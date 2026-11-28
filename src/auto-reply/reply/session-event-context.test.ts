@@ -2,29 +2,36 @@ import { expect, it } from "vitest";
 import { makeCronJob } from "../../cron/delivery.test-helpers.js";
 import { TEST_SCHEDULED_OCCURRENCE } from "../../cron/scheduled-occurrence.test-support.js";
 import { projectChatDisplayMessages } from "../../gateway/chat-display-projection.js";
+import { buildGatewayRestartResumeText } from "../../gateway/session-restart-resume-prompt.js";
 import { buildSessionEventContext } from "./session-event-context.js";
 
-it("keeps restart recovery intact for the agent and out of chat display", () => {
-  const text =
-    "The Gateway restarted while you were working. Resume your work: inspect saved child work before repeating effects. Workspace and publication ownership do not transfer.";
-  const ctx = buildSessionEventContext({
-    cfg: {},
-    agentId: "main",
-    sessionKey: "agent:main:repair",
-    text,
-    options: { source: "restart" },
-    occurrenceId: "restart-occurrence",
-    target: { sessionId: "existing", generation: "current" },
-    assertCurrent() {},
-  });
-  expect(ctx.Body).toBe(text);
-  expect(ctx.BodyForAgent).toBe(text);
-  const displayed = projectChatDisplayMessages([
-    { role: "user", content: ctx.BodyForAgent, provenance: ctx.InputProvenance },
-  ]);
-  expect(displayed).toEqual([]);
-  expect(JSON.stringify(displayed)).not.toContain("publication ownership");
-});
+it.each([false, true])(
+  "keeps restart input small and hidden from chat (unresolved shell: %s)",
+  (unresolvedShell) => {
+    const sourceRunId = "r".repeat(128);
+    const text = buildGatewayRestartResumeText(sourceRunId, unresolvedShell);
+    const ctx = buildSessionEventContext({
+      cfg: {},
+      agentId: "main",
+      sessionKey: "agent:main:repair",
+      text,
+      options: { source: "restart", sourceRunId },
+      occurrenceId: "restart-occurrence",
+      target: { sessionId: "existing", generation: "current" },
+      assertCurrent() {},
+    });
+    expect(ctx.Body).toBe(text);
+    expect(ctx.BodyForAgent).toBe(text);
+    expect(text).toContain(sourceRunId);
+    expect(text).not.toMatch(/read[- ]only/i);
+    // Even with the longest run ID, stay below the 719-byte pre-#206900 prompt without an ID.
+    expect(Buffer.byteLength(text)).toBeLessThan(719);
+    const displayed = projectChatDisplayMessages([
+      { role: "user", content: ctx.BodyForAgent, provenance: ctx.InputProvenance },
+    ]);
+    expect(displayed).toEqual([]);
+  },
+);
 
 it("retains scheduled execution provenance without projecting the prompt as a result", () => {
   const sessionKey = "agent:main:scheduled-review";

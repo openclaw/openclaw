@@ -29,6 +29,14 @@ const RECENT_PROMPT_MAX_ENTRIES = 8;
 const PENDING_RESULT_MAX_ENTRIES = 8;
 const PENDING_RESULT_MAX_CHARS = 2_000;
 
+/** Possible first lines of this snapshot; the runtime-facts change filter identifies it by them. */
+export const SUBAGENT_SNAPSHOT_HEADINGS = [
+  "## Active Subagents",
+  "## Recently Completed Subagents",
+  "## Child results awaiting delivery",
+] as const;
+const [ACTIVE_HEADING, RECENT_HEADING, PENDING_HEADING] = SUBAGENT_SNAPSHOT_HEADINGS;
+
 function hasOutstandingCompletion(entry: SubagentRunRecord): boolean {
   if (
     entry.execution.status !== "terminal" ||
@@ -181,7 +189,7 @@ export async function buildActiveSubagentRuntimeContext(params: {
       const sections: string[][] = [];
       if (list && list.active.length > 0) {
         sections.push([
-          "## Active Subagents",
+          ACTIVE_HEADING,
           ...list.active
             .toSorted((a, b) => (a.runId < b.runId ? -1 : a.runId > b.runId ? 1 : 0))
             .slice(0, 16)
@@ -191,14 +199,14 @@ export async function buildActiveSubagentRuntimeContext(params: {
       }
       if (recentForPrompt.length > 0) {
         sections.push([
-          "## Recently Completed Subagents",
+          RECENT_HEADING,
           `Children that ended in the last ${recentMinutes}m, newest first:`,
           ...recentForPrompt.map(formatEntry),
         ]);
       }
       if (pending.length > 0) {
         sections.push([
-          "## Child results awaiting delivery",
+          PENDING_HEADING,
           ...pending.slice(0, PENDING_RESULT_MAX_ENTRIES).map(formatPendingResult),
           ...(pending.length > PENDING_RESULT_MAX_ENTRIES
             ? [`- additional_results=${pending.length - PENDING_RESULT_MAX_ENTRIES}`]

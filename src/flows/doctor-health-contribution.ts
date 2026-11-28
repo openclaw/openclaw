@@ -67,6 +67,7 @@ type DoctorContributionOptions = {
   required?: true;
   updateWork?: DoctorHealthContribution["updateWork"];
   pending?: DoctorHealthContribution["pending"];
+  placement?: DoctorHealthContribution["placement"];
   run?: DoctorHealthContribution["run"];
 };
 
@@ -112,6 +113,10 @@ export function createDoctorHealthContribution(
     });
   }
   const healthCheckIds = params.healthCheckIds ?? healthChecks.map((check) => check.id);
+  // Outside the stop nothing excludes the Gateway's writers, so a writer must stay inside.
+  if (params.placement !== undefined && params.pending !== "diagnostic-only") {
+    throw new Error(`doctor contribution ${id} runs after the restart but is not diagnostic-only`);
+  }
   if (params.run === undefined && healthChecks.length === 0) {
     throw new Error(`doctor contribution ${id} must define run or healthChecks`);
   }
@@ -129,6 +134,7 @@ export function createDoctorHealthContribution(
     ...(params.required ? { required: true as const } : {}),
     ...(params.updateWork ? { updateWork: params.updateWork } : {}),
     ...(pending ? { pending } : {}),
+    ...(params.placement ? { placement: params.placement } : {}),
     run:
       params.run ??
       (async (ctx) => {

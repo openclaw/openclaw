@@ -82,7 +82,7 @@ export function admitAttachmentFiles(
   if (options.notify !== false && (oversized.length > 0 || empty.length > 0)) {
     showToast({
       message: t(
-        oversized.length ? "chat.attachments.tooLargeToast" : "chat.attachments.readFailed",
+        oversized.length ? "chat.attachments.tooLargeToast" : "chat.attachments.emptyFile",
       ),
       placement: "top-center",
       severity: "error",

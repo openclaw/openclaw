@@ -23,6 +23,47 @@ const transcript = (events: Array<[string, number, string]>) =>
     )
     .join("\n") + "\n";
 
+it("keeps untimed usage out of the recorded-turn totals in the same quarter", async () => {
+  await withOpenClawTestState({ scenario: "minimal" }, async (state) => {
+    const agentId = "usage-overview-timing";
+    const sessionsDir = state.sessionsDir(agentId);
+    await fs.mkdir(sessionsDir, { recursive: true });
+    const sessionFile = path.join(sessionsDir, "sparse-timing.jsonl");
+    const startMs = Date.parse("2026-09-18T00:00:00Z");
+    const turns = Array.from({ length: 10 }, (_, index) => ({
+      ...createUsageTranscriptEntry(1_000, {
+        timestamp: new Date(startMs + (index + 1) * 60_000).toISOString(),
+        cost: 0.1,
+      }),
+      ...(index === 0 ? { durationMs: 60_000 } : {}),
+    }));
+    await fs.writeFile(sessionFile, turns.map((turn) => JSON.stringify(turn)).join("\n") + "\n");
+    await refreshCostUsageCacheForAgent({ config: {}, agentId, sessionFiles: [sessionFile] });
+    const overview = overviewRows(
+      await loadSessionUsageOverviewFromCache({
+        config: {},
+        agentId,
+        families: [[{ sessionFile }]],
+        startMs,
+        endMs: startMs + 86_400_000 - 1,
+        dayBucket: { mode: "utc-offset", utcOffsetMinutes: 0 },
+      }),
+    );
+    const latency = {
+      count: 1,
+      avgMs: 60_000,
+      timedMs: 60_000,
+      timedTokens: 1_000,
+      timedCost: 0.1,
+    };
+    expect(overview.rows[0]).toMatchObject({
+      totalTokens: 10_000,
+      latency,
+      dailyLatency: [{ date: "2026-09-18", ...latency }],
+    });
+  });
+});
+
 it("folds committed quarter rows per report calendar without reading transcripts", async () => {
   await withOpenClawTestState({ scenario: "minimal" }, async (state) => {
     const agentId = "usage-overview-quarters";
@@ -56,6 +97,7 @@ it("folds committed quarter rows per report calendar without reading transcripts
     const probe = await observeUsageWorkerReads(state.stateDir, sessionFiles);
     const family = [[{ sessionFile: first }, { sessionFile: second }]];
     const kolkata = {
+      config: {},
       agentId,
       families: family,
       startMs: Date.parse("2026-09-18T00:00:00+05:30"),
@@ -102,6 +144,7 @@ it("folds committed quarter rows per report calendar without reading transcripts
         { date: "2026-09-19", tokens: 15 },
       ]);
       const summary = await loadCostUsageSummaryFromCache({
+        config: {},
         agentId,
         requestRefresh: false,
         startMs: Date.parse("2026-10-31T00:00:00-04:00"),

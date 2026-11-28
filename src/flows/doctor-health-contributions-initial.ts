@@ -93,6 +93,7 @@ export function resolveInitialDoctorHealthContributions(params: {
     }),
     createDoctorHealthContribution("doctor:node-runtime", "Node runtime", {
       pending: "diagnostic-only",
+      placement: "after-restart",
       healthCheckIds: ["core/doctor/node-runtime"],
       async run(ctx) {
         const { runCoreHealthFindingNote } = await import("./doctor-health-contribution-core.js");
@@ -101,6 +102,7 @@ export function resolveInitialDoctorHealthContributions(params: {
     }),
     createDoctorHealthContribution("doctor:runtime-capabilities", "Runtime capabilities", {
       pending: "diagnostic-only",
+      placement: "after-restart",
       healthCheckIds: ["core/doctor/runtime-capabilities"],
       async run() {
         const { collectRuntimeCapabilities, formatRuntimeCapabilities } =
@@ -113,11 +115,13 @@ export function resolveInitialDoctorHealthContributions(params: {
     }),
     createDoctorHealthContribution("doctor:gateway-config", "Gateway config", {
       pending: "diagnostic-only",
+      placement: "after-restart",
       healthCheckIds: ["core/doctor/gateway-config"],
       run: params.runGatewayConfigHealth,
     }),
     createDoctorHealthContribution("doctor:database-engine", "Database engines", {
       pending: "diagnostic-only",
+      placement: "after-restart",
       updateWork: { kind: "inspection", scope: "agent" },
       healthChecks: {
         description: "Selected database engines, physical store health, and recovery guidance.",
@@ -158,6 +162,7 @@ export function resolveInitialDoctorHealthContributions(params: {
     }),
     createDoctorHealthContribution("doctor:claude-cli", "Claude CLI", {
       pending: "diagnostic-only",
+      placement: "after-restart",
       updateWork: { kind: "inspection", scope: "agent" },
       healthCheckIds: ["core/doctor/claude-cli"],
       run: runClaudeCliHealth,
@@ -191,6 +196,7 @@ export function resolveInitialDoctorHealthContributions(params: {
     ),
     createDoctorHealthContribution("doctor:command-owner", "Command owner", {
       pending: "diagnostic-only",
+      placement: "after-restart",
       updateWork: { kind: "inspection", scope: "run" },
       healthCheckIds: ["core/doctor/command-owner"],
       run: runCommandOwnerHealth,
@@ -265,6 +271,7 @@ export function resolveInitialDoctorHealthContributions(params: {
       "Legacy plugin dependencies",
       {
         pending: "diagnostic-only",
+        placement: "after-restart",
         // Stable v2026.8.1 exposed this --only selector. Retain its public identity,
         // not the unsupported shared-root scan or its destructive repair advice.
 
@@ -290,6 +297,7 @@ export function resolveInitialDoctorHealthContributions(params: {
       "Stale plugin runtime symlinks",
       {
         pending: "diagnostic-only",
+        placement: "after-restart",
         healthChecks: {
           description: "Stale plugin-runtime symlinks are represented as findings.",
           defaultEnabled: false,
@@ -424,6 +432,7 @@ export function resolveInitialDoctorHealthContributions(params: {
     ),
     createDoctorHealthContribution("doctor:ui-protocol-freshness", "UI protocol freshness", {
       pending: "diagnostic-only",
+      placement: "after-restart",
       healthCheckIds: ["core/doctor/ui-protocol-freshness"],
       run: async () => {},
     }),
@@ -435,6 +444,7 @@ export function resolveInitialDoctorHealthContributions(params: {
     }),
     createDoctorHealthContribution("doctor:disk-space", "Disk space", {
       pending: "diagnostic-only",
+      placement: "after-restart",
       healthChecks: {
         description: "Low disk space around the OpenClaw state directory is a finding.",
         defaultEnabled: false,
@@ -472,6 +482,7 @@ export function resolveInitialDoctorHealthContributions(params: {
     }),
     createDoctorHealthContribution("doctor:db-bloat", "SQLite database size", {
       pending: "diagnostic-only",
+      placement: "after-restart",
       updateWork: { kind: "standalone" },
       async run() {
         const { noteSqliteDatabaseBloat } = await import("../commands/doctor-db-bloat.js");
@@ -483,6 +494,7 @@ export function resolveInitialDoctorHealthContributions(params: {
       "Channel ingress dead letters",
       {
         pending: "diagnostic-only",
+        placement: "after-restart",
         updateWork: { kind: "inspection", scope: "run" },
         async run() {
           const { noteChannelIngressDeadLetters } =
@@ -555,6 +567,7 @@ export function resolveInitialDoctorHealthContributions(params: {
     }),
     createDoctorHealthContribution("doctor:session-snapshots", "Session snapshots", {
       pending: "diagnostic-only",
+      placement: "after-restart",
       updateWork: { kind: "inspection", scope: "agent" },
       healthChecks: {
         description:
@@ -663,6 +676,7 @@ export function resolveInitialDoctorHealthContributions(params: {
     }),
     createDoctorHealthContribution("doctor:codex-bwrap", "Codex bwrap sandbox", {
       pending: "diagnostic-only",
+      placement: "after-restart",
       updateWork: { kind: "standalone" },
       async run(ctx) {
         const { noteCodexBwrapNamespaceWarnings } = await import("../commands/doctor-sandbox.js");

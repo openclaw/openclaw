@@ -377,6 +377,8 @@ export const PROVIDER_POST_DISPATCH_AMBIGUITY_ERROR_CODE = "PROVIDER_POST_DISPAT
 export const PROVIDER_FAILURE_WITH_OUTPUT_ERROR_CODE = "PROVIDER_FAILURE_WITH_OUTPUT";
 /** The stream owner removed repetitive content before persistence and replay. */
 export const REPETITIVE_OUTPUT_ERROR_CODE = "openclaw_repetitive_output";
+/** The stream owner stopped a tool-call argument stream that only grew trailing whitespace. */
+export const DEGENERATE_OUTPUT_ERROR_CODE = "degenerate_output";
 /** Pre-dispatch argument rejection; callers still enforce output and effect guards. */
 export const MALFORMED_TOOL_CALL_ARGUMENTS_ERROR_CODE = "malformed_tool_call_arguments";
 
@@ -729,6 +731,18 @@ export interface OpenAICompletionsCompat {
   supportsPromptCacheKey?: boolean;
   /** Whether the provider supports long prompt cache retention (`prompt_cache_retention: "24h"` or Anthropic-style `cache_control.ttl: "1h"`, depending on format). Default: true. */
   supportsLongCacheRetention?: boolean;
+  /** Name of the sampling seed field: `seed`, or Mistral's `random_seed`. Default: `seed`. */
+  seedField?: "seed" | "random_seed";
+  /** Whether streamed text may carry DeepSeek DSML tool-call markup that must be parsed out. Default: true for the `deepseek` thinking format. */
+  emitsDsmlToolCalls?: boolean;
+  /** Whether tool schemas must give every union branch an explicit `type`. Default: false. */
+  requiresTypedUnionBranches?: boolean;
+  /** Whether every request must carry a non-empty user or assistant message. Default: false. */
+  requiresNonEmptyUserOrAssistantMessage?: boolean;
+  /** With `cacheControlFormat: "anthropic"`, mark only the system prompt. Default: false. */
+  cacheControlSystemOnly?: boolean;
+  /** With `cacheControlFormat: "anthropic"`, place the system marker on one shared system block. Default: false. */
+  cacheControlSharedSystem?: boolean;
 }
 
 /** Compatibility settings for OpenAI Responses APIs. */
@@ -796,6 +810,12 @@ export interface AnthropicMessagesCompat {
   supportsCacheControlOnTools?: boolean;
   /** Whether empty thinking signatures can be replayed as native thinking blocks. Default: false. */
   allowEmptySignature?: boolean;
+  /**
+   * Whether reported `input_tokens` already include `cache_read_input_tokens`
+   * (for example LM Studio). When true, usage parsing subtracts cache reads so
+   * `input` stays the uncached bucket. Default: false (Anthropic's disjoint buckets).
+   */
+  inputTokensIncludeCacheRead?: boolean;
 }
 
 /**
@@ -915,3 +935,44 @@ export type CompleteSimpleFn = (
 ) => Promise<AssistantMessage>;
 
 export type ValidateToolArgumentsFn = (tool: Tool, toolCall: ToolCall) => unknown;
+
+export type RuntimeContextDataRange = { start: number; end: number };
+
+const dataRanges = Symbol("openclaw.runtimeContextDataRanges");
+type RuntimeContextDataCarrier = {
+  content: unknown;
+  [dataRanges]?: { text: string; ranges: readonly RuntimeContextDataRange[] };
+};
+
+/** The exact text of a string or a single text-block message. */
+export function getRuntimeContextDataText(message: RuntimeContextDataCarrier): string | undefined {
+  const { content } = message;
+  if (typeof content === "string") {
+    return content;
+  }
+  if (Array.isArray(content) && content.length === 1 && content[0]?.type === "text") {
+    const text: unknown = content[0].text;
+    return typeof text === "string" ? text : undefined;
+  }
+  return undefined;
+}
+
+/** In-memory only. A copy with different text must not inherit the old offsets. */
+export function setRuntimeContextDataRanges(
+  message: RuntimeContextDataCarrier,
+  ranges: readonly RuntimeContextDataRange[],
+) {
+  const text = getRuntimeContextDataText(message);
+  if (text !== undefined && ranges.length) {
+    message[dataRanges] = { text, ranges };
+  } else {
+    delete message[dataRanges];
+  }
+}
+
+export function getRuntimeContextDataRanges(message: RuntimeContextDataCarrier) {
+  const binding = message[dataRanges];
+  return binding && binding.text === getRuntimeContextDataText(message)
+    ? binding.ranges
+    : undefined;
+}

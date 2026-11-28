@@ -63,10 +63,17 @@ it.each([
     harness.requests.find((request) => request.method === "thread/start")?.params,
   );
 
+  if (read) {
+    // skills_read resolves by name: no paths, no note; descriptions stay without skills_search.
+    expect(developer).not.toContain(workspace.filePath);
+    expect(developer).not.toContain(shownLibraryPath);
+    expect(developer).toContain(`${library.name} instructions`);
+    expect(developer).not.toContain("Stored on the Gateway");
+    return;
+  }
   expect(developer).toContain(workspace.filePath);
   const rewritten = remote && !delivered;
   expect(developer.includes(shownLibraryPath)).toBe(!rewritten);
   expect(developer).toContain("<name>release-guide</name>");
-  expect(developer.includes("read it with skills_read by name")).toBe(rewritten && read);
-  expect(developer.includes("cannot be read on this machine")).toBe(rewritten && !read);
+  expect(developer.includes("cannot be read on this machine")).toBe(rewritten);
 });

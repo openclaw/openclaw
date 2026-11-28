@@ -70,14 +70,14 @@ extension IOSGatewayChatTransport {
         let configuredServers = config?.runtimeConfig.mcp?.servers ?? [:]
         let connectorNames = Set(configuredServers.keys).union(toolsByServer.keys).sorted()
         let failedSurfaces = [
-            configSurface.failed ? String(localized: "Web Search and Connectors") : nil,
+            configSurface.failed ? String(localized: "Web search and connectors") : nil,
             skillsSurface.failed ? String(localized: "Skills") : nil,
-            toolsSurface.failed ? String(localized: "Tool Access") : nil,
+            toolsSurface.failed ? String(localized: "Tools") : nil,
         ].compactMap(\.self)
         let failureMessage = failedSurfaces.isEmpty
             ? nil
             : String(
-                format: String(localized: "Could not load: %@. Retry."),
+                format: String(localized: "Couldn’t load %@. Try again."),
                 failedSurfaces.joined(separator: ", "))
 
         return OpenClawChatComposerCapabilityCatalog(
@@ -162,6 +162,7 @@ extension IOSGatewayChatTransport {
         return OpenClawChatComposerSkill(
             key: skill.skillKey,
             name: skill.name,
+            description: skill.description,
             baseEnabled: !skill.disabled,
             missingDependencies: missingDependencies,
             blocked: skill.blockedByAllowlist == true || skill.platformIncompatible == true,
@@ -184,6 +185,7 @@ extension IOSGatewayChatTransport {
                 label: entry.label.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
                     ? name
                     : entry.label,
+                description: entry.description,
                 baseEnabled: true,
                 sessionDenied: entry.deniedbysession == true))
         }
@@ -248,6 +250,7 @@ extension IOSGatewayChatTransport {
         idempotencyKey: String,
         attachments: [OpenClawChatAttachmentPayload]) async throws -> OpenClawChatSendResponse
     {
+        if ScreenshotFixtureMode.failsSends { throw ScreenshotFixtureMode.sendTimeoutError }
         guard let route = await self.currentSessionMutationRoute(),
               let supportsRoutingContract = await gateway.supportsServerCapability(
                   .chatSendRoutingContract,

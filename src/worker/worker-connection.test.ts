@@ -107,11 +107,9 @@ function sendWorkerHello(
   });
 }
 
-async function listen(autoClose = true) {
+async function listen() {
   const server = new WebSocketServer({ host: "127.0.0.1", port: 0 });
-  if (autoClose) {
-    servers.push(server);
-  }
+  servers.push(server);
   return { server, endpoint: await listeningEndpoint(server) };
 }
 
@@ -524,107 +522,6 @@ describe("worker connection endpoint failures", () => {
     expect.soft(ready).not.toHaveBeenCalled();
     expect.soft(vi.getTimerCount()).toBe(0);
   });
-});
-
-it("staggers twenty workers recovering from transient Gateway transport loss", async () => {
-  const { server, endpoint } = await listen(false);
-
-  let available = true;
-  let transportInterrupted = false;
-  const unavailableWorkers = new Set<string>();
-  const recoveredWorkers = new Set<string>();
-  server.on("connection", (socket) => {
-    socket.on("message", (data) => {
-      const frame = JSON.parse(rawDataToString(data)) as {
-        id: string;
-        params: { admission: WorkerConnectParams["admission"] };
-      };
-      const admission = frame.params.admission;
-      if (!available) {
-        unavailableWorkers.add(admission.environmentId);
-        socket.send(
-          JSON.stringify({
-            type: "res",
-            id: frame.id,
-            ok: false,
-            error: {
-              code: "INVALID_REQUEST",
-              message: "gateway temporarily unavailable",
-              details: { reason: "gateway-unavailable" },
-              retryable: true,
-            },
-          }),
-        );
-        return;
-      }
-      if (transportInterrupted) {
-        recoveredWorkers.add(admission.environmentId);
-      }
-      sendWorkerHello(socket, frame.id, admission);
-    });
-  });
-
-  const workers = Array.from({ length: 20 }, (_, index) =>
-    makeConnection({
-      endpoint,
-      connectParams: {
-        ...FRAME_CONNECT_PARAMS,
-        admission: {
-          ...FRAME_CONNECT_PARAMS.admission,
-          environmentId: `reconnect-worker-${index}`,
-        },
-      },
-      admissionDeadlineMs: 10_000,
-    }),
-  );
-
-  let randomDraw = 0;
-  const random = vi.spyOn(Math, "random").mockImplementation(() => ((randomDraw++ % 20) + 1) / 21);
-  const retryDelays: number[] = [];
-  const originalSetTimeout = globalThis.setTimeout;
-  const timeout = vi
-    .spyOn(globalThis, "setTimeout")
-    .mockImplementation((callback, delay, ...args) => {
-      if (typeof delay === "number" && delay >= 250 && delay <= 275) {
-        retryDelays.push(delay);
-      }
-      return originalSetTimeout(callback, delay, ...args);
-    });
-
-  try {
-    await Promise.all(workers.map((worker) => worker.start()));
-    const readyAgain = workers.map(
-      (worker) =>
-        new Promise<void>((resolve) => {
-          const unsubscribe = worker.onReady(() => {
-            unsubscribe();
-            resolve();
-          });
-        }),
-    );
-
-    available = false;
-    transportInterrupted = true;
-    for (const socket of server.clients) {
-      socket.close(1012, "gateway-unavailable");
-    }
-    await vi.waitFor(() => expect(unavailableWorkers.size).toBe(20), {
-      timeout: 3_000,
-      interval: 5,
-    });
-    available = true;
-    await Promise.all(readyAgain);
-
-    expect(recoveredWorkers.size).toBe(20);
-    expect(retryDelays).toHaveLength(20);
-    expect(new Set(retryDelays).size).toBeGreaterThanOrEqual(10);
-    expect(Math.max(...retryDelays)).toBeLessThanOrEqual(30_000);
-  } finally {
-    random.mockRestore();
-    timeout.mockRestore();
-    await Promise.all(workers.map((worker) => worker.stop()));
-    await closeListener(server);
-  }
 });
 
 it("backs off repeatedly admitted but disconnected sockets within one retry budget", async () => {

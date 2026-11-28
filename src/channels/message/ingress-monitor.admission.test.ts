@@ -170,7 +170,6 @@ describe("channel ingress monitor admission", () => {
         }
         return { eventId: raw.id, laneKey: "lane:a" };
       },
-      pollIntervalMs: 10,
       onDurableAdmission: (raw) => {
         admissions.push(raw.id);
       },

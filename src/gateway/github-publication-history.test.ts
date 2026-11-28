@@ -2,6 +2,7 @@ import fs from "node:fs/promises";
 import path from "node:path";
 import { pathToFileURL } from "node:url";
 import { beforeEach, describe, expect, it, vi } from "vitest";
+import { CommandProcessCleanupError } from "../process/exec-result.js";
 import { openOpenClawStateDatabase } from "../state/openclaw-state-db.js";
 import {
   publicationPullRequestResponse,
@@ -187,6 +188,62 @@ describe("GitHub publication branch history", () => {
   beforeEach(async () => {
     f = await historyFixture();
   });
+
+  it.each(["rev-list", "show"] as const)(
+    "stops before publishing when first-commit %s cleanup is uncertain",
+    async (stage) => {
+      const oid = await f.head();
+      let injected = false;
+      interceptCommand((args) => {
+        if (args.includes("rev-list") && args.includes("--first-parent")) {
+          if (stage === "show") {
+            return commandResult(oid);
+          }
+        } else if (
+          stage !== "show" ||
+          !args.some((arg) => arg.startsWith("--format=%s%x00%b%x00%(trailers)"))
+        ) {
+          return undefined;
+        }
+        injected = true;
+        return {
+          ...commandResult(stage === "rev-list" ? oid : "Subject\0Body\0"),
+          error: new CommandProcessCleanupError(),
+        };
+      });
+      const result = await f.publish(`cleanup-uncertain-${stage}`);
+      expect(injected).toBe(true);
+      expect(
+        f.calls.filter((args) =>
+          args.some((arg) => ["push", "POST", "PATCH", "graphql"].includes(arg)),
+        ),
+      ).toEqual([]);
+      expect(result).toMatchObject({ status: "failed" });
+    },
+  );
+
+  it.each([0, 128])(
+    "uses the branch fallback when the first-commit list is empty (exit %i)",
+    async (code) => {
+      let created: { title: string; body: string } | undefined;
+      interceptCommand((args, input) => {
+        if (args.includes("rev-list") && args.includes("--first-parent")) {
+          return commandResult("", code);
+        }
+        if (args.includes("POST") && args.some((arg) => arg.endsWith("/pulls"))) {
+          created = JSON.parse(input!);
+        }
+        return undefined;
+      });
+      await f.published(`missing-first-commit-${code}`);
+      expect(created).toMatchObject({
+        title: `Publish ${BRANCH}`,
+        body: expect.stringContaining(
+          "Published by the Gateway after authoritative workspace reconciliation.",
+        ),
+      });
+    },
+  );
 
   it("publishes initial work and fast-forward edits, then reuses an attributed published head across requests", async () => {
     // Signature display must not prepend diagnostics to machine-readable commit facts.

@@ -10,7 +10,7 @@ beforeAll(async () => {
 afterAll(() => resetPlugins?.());
 
 describe("Workshop system prompt availability", () => {
-  it("M1: contributes authoring and undo guidance only when Workshop is available", () => {
+  it("contributes learned-skill maintenance triggers only when Workshop is available", () => {
     const enabled = buildAgentSystemPrompt({
       workspaceDir: "/isolated/workspace",
       toolNames: ["read", "skill_workshop"],
@@ -20,13 +20,9 @@ describe("Workshop system prompt availability", () => {
       toolNames: ["read"],
     });
     expect(enabled).toContain("## Skill Workshop");
-    expect(enabled).toContain("Patch a learned skill you used that was wrong or incomplete");
-    expect(enabled).toContain("Changes are versioned");
-    expect(enabled).toContain("undo right after a 💾 Learned notice");
-    expect(enabled).toContain("restore that skill (archive it if the notice says it was created)");
-    expect(enabled).toContain(
-      "ordinary files: edit them directly when asked, never through skill_workshop.",
-    );
+    expect(enabled).toContain("wrong/incomplete learned skill");
+    expect(enabled).toContain("hard multi-step work this user will repeat");
+    expect(enabled).toContain("Patch/create with `skill_workshop`");
     expect(disabled).not.toContain("## Skill Workshop");
     expect(disabled).not.toContain("restore that skill");
   });
