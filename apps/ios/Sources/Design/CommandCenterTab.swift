@@ -165,6 +165,7 @@ struct CommandSessionsScreen: View {
     let sidebarModel: RootSidebarModel
     let headerSidebarAction: OpenClawSidebarHeaderAction?
     let openChat: () -> Void
+    let openSearch: () -> Void
 
     /// Archived rows are not in the live roster; this screen reads them when that filter is on.
     @State private var archived: [OpenClawChatSessionEntry] = []
@@ -329,6 +330,18 @@ struct CommandSessionsScreen: View {
     private var bottomBar: some View {
         GlassEffectContainer(spacing: 8) {
             HStack(spacing: 8) {
+                Button(action: self.openSearch) {
+                    Image(systemName: "magnifyingglass")
+                        .font(.system(size: 17, weight: .medium))
+                        .foregroundStyle(OpenClawBrand.textStrong)
+                        .frame(width: 48, height: 48)
+                        .contentShape(Circle())
+                }
+                .buttonStyle(.plain)
+                .glassEffect(.regular.interactive(), in: Circle())
+                .accessibilityLabel(String(localized: "Search"))
+                .accessibilityIdentifier("Sessions.Search")
+
                 Spacer(minLength: 8)
 
                 Button {
