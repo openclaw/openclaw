@@ -237,10 +237,10 @@ it.skipIf(process.platform === "win32")(
         const options = { preferredDir: ${JSON.stringify(path.join(tempRoot, "private"))},
           tmpdir: () => process.env.TMPDIR };
         const upload = { name: "upload.txt", contentBase64: Buffer.from("node upload").toString("base64") };
-        assert.throws(() => resolvePreferredOpenClawTmpDir(options), /No safe OpenClaw temp root/);
+        assert.throws(() => resolvePreferredOpenClawTmpDir(options), /is writable by group or others and has no sticky bit/);
         await ensureTerminalUploadCleanup();
         assert.equal(await fs.readFile(${JSON.stringify(path.join(stale, "old.txt"))}, "utf8"), "expired upload");
-        await assert.rejects(stageTerminalUpload(upload), /No safe OpenClaw temp root/);
+        await assert.rejects(stageTerminalUpload(upload), /is writable by group or others and has no sticky bit/);
       `;
       await runAdmissionProcess(undefined, strictCheck);
       // Merely importing shared consumers with the env setting present cannot activate it.

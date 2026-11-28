@@ -48,7 +48,10 @@ import { closePostgresPool, preparePostgresPoolForUpdate } from "./postgres-sync
 import { resolveEnvironmentValue } from "./process-env.js";
 import { throwSqliteLifecycleErrors } from "./sqlite-lifecycle-errors.js";
 import { withSqliteSnapshotReuse } from "./sqlite-snapshot-reuse.js";
-import { refuseEarlyGitReleaseSchemaChange } from "./update-candidate-check-early-release.js";
+import {
+  formatEarlyGitReleaseRefusal,
+  inspectEarlyGitReleaseSchemaChange,
+} from "./update-candidate-check-early-release.js";
 import { stopSupervisedPredecessorGateway } from "./update-candidate-predecessor-stop.js";
 import { UPDATE_RUN_ID_ENV } from "./update-control-plane-sentinel.js";
 import { createDoctorServiceInspectionBudget } from "./update-doctor-deadline.js";
@@ -90,6 +93,32 @@ let pluginCohortSettlementResult: UpdatePluginCohortSettlementResult | undefined
 async function finalizeMigratedUpdate(): Promise<void> {
   // This executable bypasses CLI bootstrap but owns the same one-shot database work.
   installDatabaseProcessRole("cli-oneshot");
+  if (process.argv[2] === "--early-release-recovery") {
+    const [
+      {
+        defaultRunnerDeps,
+        finishEarlyGitReleaseRecovery,
+        readEarlyGitReleaseRecoveryArgs,
+        runEarlyGitReleaseRecovery,
+      },
+      { retireRecoveryJob },
+    ] = await Promise.all([
+      import("./update-early-release-recovery.js"),
+      import("./update-early-release-recovery-service.js"),
+    ]);
+    const { plan, finish } = readEarlyGitReleaseRecoveryArgs(process.argv.slice(3));
+    const deps = defaultRunnerDeps(plan);
+    if (finish) {
+      await finishEarlyGitReleaseRecovery(plan, finish, deps);
+    } else {
+      // On success the finishing step removed the release this process runs from; nothing more
+      // loads from it. The job log and `openclaw update status` show a recovery that did not
+      // finish.
+      process.exitCode = (await runEarlyGitReleaseRecovery(plan, deps)) ? 0 : 1;
+      await retireRecoveryJob(plan, deps.run);
+    }
+    return;
+  }
   const settlePluginCohort = process.argv[2] === "--settle-plugin-cohort";
   const commitPluginCohort = process.argv[2] === "--commit-plugin-cohort";
   if (settlePluginCohort || commitPluginCohort) {
@@ -104,11 +133,16 @@ async function finalizeMigratedUpdate(): Promise<void> {
       throw new Error("Update recovery writer is unavailable.");
     }
     const root = resolveOpenClawPackageRootSync({ moduleUrl: import.meta.url });
-    const refusal = root ? refuseEarlyGitReleaseSchemaChange(root) : null;
-    if (refusal) {
+    const early = root ? inspectEarlyGitReleaseSchemaChange(root) : null;
+    if (early) {
+      const { startEarlyGitReleaseRecovery } =
+        await import("./update-early-release-recovery-start.js");
+      const recovery = await startEarlyGitReleaseRecovery(early);
       // The early release updater reports this stderr as its failed candidate check and stops
-      // before it switches the release link.
-      process.stderr.write(`${refusal}\n`);
+      // before it switches the release link. A started recovery moved this release out of the
+      // updater's cleanup path; nothing below loads from it, because the check opened no
+      // database through its owners.
+      process.stderr.write(`${formatEarlyGitReleaseRefusal(early, recovery)}\n`);
       process.exitCode = 1;
       return;
     }

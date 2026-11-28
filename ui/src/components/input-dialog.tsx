@@ -20,6 +20,8 @@ export type InputDialogOptions = {
   title: string;
   label?: string;
   defaultValue?: string;
+  /** Resume a rejected draft without changing the saved value used by requireChange. */
+  draftValue?: string;
   submitLabel?: string;
   cancelLabel?: string;
   signal?: AbortSignal;
@@ -81,7 +83,7 @@ function renderInputDialog(
       ) ?? false,
     { loadingValue: false },
   );
-  const [rawValue, setRawValue] = createSignal(options.defaultValue ?? "");
+  const [rawValue, setRawValue] = createSignal(options.draftValue ?? options.defaultValue ?? "");
   const entryValue = (raw: string) => (options.requireValue ? raw.trim() : raw);
   const submitBlocked = (raw: string) => {
     const value = entryValue(raw);

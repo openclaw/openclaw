@@ -605,6 +605,184 @@ describe("IMAP watcher protocol boundary", () => {
     },
   );
 
+  it("rejects a From header only the lenient parser reads as the allowlisted sender", async () => {
+    const { authenticate: realAuthenticate, dkimSign } =
+      await vi.importActual<typeof import("mailauth")>("mailauth");
+    const { privateKey, publicKey } = generateKeyPairSync("rsa", { modulusLength: 2048 });
+    const pem = privateKey.export({ type: "pkcs8", format: "pem" });
+    const sign = (raw: string, signingDomain: string) =>
+      dkimSign(raw, { signatureData: [{ signingDomain, selector: "test", privateKey: pem }] });
+    // mailauth reads the folded field name as its only From header (attacker@evil.example,
+    // which the attacker's own domain signs to a DMARC pass), while mailparser skips those
+    // lines and reads the vertical-tab-spelled field below them as From: trusted@example.com
+    const spoofed = [
+      "From\r\n",
+      ": attacker@evil.example\r\n",
+      "Subject: Spoofed\r\n",
+      "From\x0b: trusted@example.com\r\n",
+      "\r\n",
+      "Spoofed body",
+    ].join("");
+    const reply = mailText("Re: Payroll", "Mail", "In-Reply-To: <payroll@example.com>\r\n");
+    vi.spyOn(Resolver.prototype, "resolveTxt").mockImplementation(async (domain) => {
+      if (domain === "_dmarc.example.com" || domain === "_dmarc.evil.example") {
+        return [["v=DMARC1; p=none"]];
+      }
+      if (domain === "test._domainkey.example.com" || domain === "test._domainkey.evil.example") {
+        return [
+          [
+            `v=DKIM1; k=rsa; p=${publicKey.export({ type: "spki", format: "der" }).toString("base64")}`,
+          ],
+        ];
+      }
+      return [];
+    });
+    const { server, context, authenticator, dispatch, waitForCursor } = await startPollingWatcher();
+    authenticator.mockImplementation(realAuthenticate);
+    server.append(
+      (await sign(mailText("Payroll"), "example.com")).signatures + mailText("Payroll"),
+    );
+    server.append((await sign(spoofed, "evil.example")).signatures + spoofed);
+    server.append("From: unknown@stranger.example\r\nSubject: Unknown\r\n\r\nHello");
+    server.append((await sign(reply, "example.com")).signatures + reply);
+    await waitForCursor(5);
+    expect(dispatch.mock.calls.map(([params]) => params.sessionKey)).toEqual([
+      "hook:imap:inbox:17:2",
+      "hook:imap:inbox:17:5",
+    ]);
+    expect(context.logger.warn).toHaveBeenCalledWith(
+      "imap: account=inbox uid=3 domain=example.com gate=sender-mismatch",
+    );
+    expect(context.logger.warn).toHaveBeenCalledWith(
+      "imap: account=inbox uid=4 domain=stranger.example gate=sender-not-allowed",
+    );
+    expect(context.logger.info).toHaveBeenCalledWith(
+      "imap: account=inbox uid=2 domain=example.com strength=verified run=mail-run",
+    );
+    expect(await authenticator.mock.results[1]?.value).toMatchObject({
+      dkim: { headerFrom: ["attacker@evil.example"] },
+      dmarc: { status: { result: "pass" } },
+    });
+  });
+
+  it("matches an allowlisted IDN sender whose header spells the punycode domain", async () => {
+    const { authenticate: realAuthenticate, dkimSign } =
+      await vi.importActual<typeof import("mailauth")>("mailauth");
+    const { privateKey, publicKey } = generateKeyPairSync("rsa", { modulusLength: 2048 });
+    // mailparser decodes the A-label domain to Unicode for the allowlist match, while
+    // mailauth's headerFrom keeps the punycode spelling the signature aligned with
+    const key = publicKey.export({ type: "spki", format: "der" }).toString("base64");
+    const legit = "From: trusted@xn--exmple-cua.com\r\nSubject: Payroll\r\n\r\nMail";
+    vi.spyOn(Resolver.prototype, "resolveTxt").mockImplementation(async (domain) => {
+      if (domain === "_dmarc.xn--exmple-cua.com") {
+        return [["v=DMARC1; p=none"]];
+      }
+      if (domain === "test._domainkey.xn--exmple-cua.com") {
+        return [[`v=DKIM1; k=rsa; p=${key}`]];
+      }
+      return [];
+    });
+    const { server, context, authenticator, dispatch, waitForCursor } = await startWatcher({
+      account: {
+        watch: { mode: "auto", pollSeconds: 0.02 },
+        allowedSenders: ["trusted@ex\u00e4mple.com"],
+      },
+    });
+    authenticator.mockImplementation(realAuthenticate);
+    const signed = await dkimSign(legit, {
+      signatureData: [
+        {
+          signingDomain: "xn--exmple-cua.com",
+          selector: "test",
+          privateKey: privateKey.export({ type: "pkcs8", format: "pem" }),
+        },
+      ],
+    });
+    server.append(signed.signatures + legit);
+    await waitForCursor(2);
+    expect(dispatch.mock.calls.map(([params]) => params.sessionKey)).toEqual([
+      "hook:imap:inbox:17:2",
+    ]);
+    expect(context.logger.info).toHaveBeenCalledWith(
+      "imap: account=inbox uid=2 domain=ex\u00e4mple.com strength=verified run=mail-run",
+    );
+  });
+
+  it("matches a sender whose From local part is quoted", async () => {
+    const { authenticate: realAuthenticate, dkimSign } =
+      await vi.importActual<typeof import("mailauth")>("mailauth");
+    const { privateKey, publicKey } = generateKeyPairSync("rsa", { modulusLength: 2048 });
+    // mailparser drops the optional quotes around a plain local part, while
+    // mailauth's headerFrom keeps them, so both spellings name the same mailbox
+    const key = publicKey.export({ type: "spki", format: "der" }).toString("base64");
+    const legit = 'From: "trusted"@example.com\r\nSubject: Payroll\r\n\r\nMail';
+    vi.spyOn(Resolver.prototype, "resolveTxt").mockImplementation(async (domain) => {
+      if (domain === "_dmarc.example.com") {
+        return [["v=DMARC1; p=none"]];
+      }
+      if (domain === "test._domainkey.example.com") {
+        return [[`v=DKIM1; k=rsa; p=${key}`]];
+      }
+      return [];
+    });
+    const { server, authenticator, dispatch, waitForCursor } = await startPollingWatcher();
+    authenticator.mockImplementation(realAuthenticate);
+    const signed = await dkimSign(legit, {
+      signatureData: [
+        {
+          signingDomain: "example.com",
+          selector: "test",
+          privateKey: privateKey.export({ type: "pkcs8", format: "pem" }),
+        },
+      ],
+    });
+    server.append(signed.signatures + legit);
+    await waitForCursor(2);
+    expect(dispatch.mock.calls.map(([params]) => params.sessionKey)).toEqual([
+      "hook:imap:inbox:17:2",
+    ]);
+  });
+
+  it("matches an SMTPUTF8 sender whose From local part is quoted", async () => {
+    const { authenticate: realAuthenticate, dkimSign } =
+      await vi.importActual<typeof import("mailauth")>("mailauth");
+    const { privateKey, publicKey } = generateKeyPairSync("rsa", { modulusLength: 2048 });
+    // RFC 6532 allows UTF-8 in a quoted local part; mailparser drops these optional
+    // quotes too, while mailauth's headerFrom keeps them, so both spellings must match
+    const key = publicKey.export({ type: "spki", format: "der" }).toString("base64");
+    const legit = 'From: "tr\u00fcst\u00e9d"@example.com\r\nSubject: SMTPUTF8\r\n\r\nMail';
+    vi.spyOn(Resolver.prototype, "resolveTxt").mockImplementation(async (domain) => {
+      if (domain === "_dmarc.example.com") {
+        return [["v=DMARC1; p=none"]];
+      }
+      if (domain === "test._domainkey.example.com") {
+        return [[`v=DKIM1; k=rsa; p=${key}`]];
+      }
+      return [];
+    });
+    const { server, authenticator, dispatch, waitForCursor } = await startWatcher({
+      account: {
+        watch: { mode: "auto", pollSeconds: 0.02 },
+        allowedSenders: ["tr\u00fcst\u00e9d@example.com"],
+      },
+    });
+    authenticator.mockImplementation(realAuthenticate);
+    const signed = await dkimSign(legit, {
+      signatureData: [
+        {
+          signingDomain: "example.com",
+          selector: "test",
+          privateKey: privateKey.export({ type: "pkcs8", format: "pem" }),
+        },
+      ],
+    });
+    server.append(signed.signatures + legit);
+    await waitForCursor(2);
+    expect(dispatch.mock.calls.map(([params]) => params.sessionKey)).toEqual([
+      "hook:imap:inbox:17:2",
+    ]);
+  });
+
   it("records exhausted admission retries and continues to the next mail", async () => {
     const { server, state, context, dispatch, waitForCursor } = await startPollingWatcher();
     dispatch.mockRejectedValue(new Error("Gateway unavailable"));

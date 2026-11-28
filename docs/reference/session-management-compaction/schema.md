@@ -55,7 +55,7 @@ The runtime store keeps `SessionEntry` values in per-agent SQLite. The value typ
 - Toggles: `thinkingLevel`, `verboseLevel`, `reasoningLevel`, `elevatedLevel`, `sendPolicy` (per-session override)
 - Model selection: `providerOverride`, `modelOverride`, `authProfileOverride`
 - Token counters (best-effort/provider-dependent): `inputTokens`, `outputTokens`, `totalTokens`, `contextTokens`
-- `compactionCount`: total number of completed compactions for this session key
+- `compactionCount`: number of completed compactions in the current session window. Rewinding or switching branches restores the count from compaction entries on the selected path since its last reset. Startup repairs missing counts left by older rewinds and branch switches, whether the session ID changed or stayed the same. Existing counts are kept; ordinary session reads do not recount history.
 - `memoryFlushAt` / `memoryFlushCompactionCount`: timestamp and compaction count of the last pre-compaction memory flush
 
 Existing label-only records are preserved: the Gateway does not infer whether a

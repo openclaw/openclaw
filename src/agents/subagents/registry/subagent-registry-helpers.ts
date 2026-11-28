@@ -236,7 +236,6 @@ export async function persistSubagentSessionTiming(
       update: ([row]) => {
         if (
           !row ||
-          options?.isCurrentGeneration?.() === false ||
           (expected &&
             (row.entry.sessionId !== expected.sessionId ||
               row.entry.lifecycleRevision !== expected.lifecycleRevision))
@@ -273,15 +272,12 @@ export async function persistSubagentSessionTiming(
     }
   };
   try {
-    if (options?.session) {
-      options.session.assertCurrent();
-      if (options.session.entry) {
-        await persist(options.session.entry, options.session.assertCurrent);
+    const session = options?.session;
+    if (session || options?.sessionEntryCurrent) {
+      session?.assertCurrent();
+      if (!session || session.entry) {
+        await persist(session?.entry, session?.assertCurrent);
       }
-      return;
-    }
-    if (options?.sessionEntryCurrent) {
-      await persist(undefined);
       return;
     }
     await withSessionEntryReadOnlyInWorker(

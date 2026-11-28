@@ -74,7 +74,7 @@ function inferUnionBranchType(schema: Record<string, unknown>): string | undefin
   return types.size === 1 ? types.values().next().value : undefined;
 }
 
-type SchemaProfile = "strict" | "compat" | "openapi" | "moonshot";
+type SchemaProfile = "compat" | "openapi" | "moonshot";
 const publishedNormalizations = createToolSchemaNormalizationCache<unknown>();
 
 // Profiles retain their schema-slot scope, map-name handling and root promotion.
@@ -85,27 +85,20 @@ function normalizeToolSchemaRecursive(
   inferBranchType = false,
 ): unknown {
   const mapProfile =
-    profile === "strict-map"
-      ? "strict"
-      : profile === "compat-map"
-        ? "compat"
-        : profile === "openapi-map"
-          ? "openapi"
-          : profile === "moonshot-map"
-            ? "moonshot"
-            : undefined;
+    profile === "compat-map"
+      ? "compat"
+      : profile === "openapi-map"
+        ? "openapi"
+        : profile === "moonshot-map"
+          ? "moonshot"
+          : undefined;
   if (Array.isArray(schema)) {
     if (mapProfile) {
       return schema;
     }
     let changed = false;
     const normalized = schema.map((entry) => {
-      const next = normalizeToolSchemaRecursive(
-        entry,
-        profile,
-        profile === "strict" ? depth : 1,
-        inferBranchType,
-      );
+      const next = normalizeToolSchemaRecursive(entry, profile, 1, inferBranchType);
       changed ||= next !== entry;
       return next;
     });
@@ -158,18 +151,8 @@ function normalizeToolSchemaRecursive(
       continue;
     }
     let next = value;
-    if (profile === "strict") {
-      if (SCHEMA_MAP_KEYS.has(key)) {
-        next = normalizeToolSchemaRecursive(value, "strict-map", depth);
-      } else if (SCHEMA_NESTED_KEYS.has(key)) {
-        next = normalizeToolSchemaRecursive(value, profile, depth + 1);
-      }
-    } else if (mapProfile) {
-      next = normalizeToolSchemaRecursive(
-        value,
-        mapProfile,
-        profile === "strict-map" ? depth + 1 : 1,
-      );
+    if (mapProfile) {
+      next = normalizeToolSchemaRecursive(value, mapProfile, 1);
     } else if (SCHEMA_MAP_KEYS.has(key)) {
       next = normalizeToolSchemaRecursive(
         value,
@@ -268,7 +251,7 @@ function normalizeToolSchemaRecursive(
   }
   if (
     normalized.type === "object" &&
-    (profile === "strict" ? depth === 0 : hasEmptyProperties) &&
+    hasEmptyProperties &&
     !("additionalProperties" in normalized)
   ) {
     normalized.additionalProperties = false;
@@ -285,7 +268,7 @@ export function normalizeToolSchema(
 ): Record<string, unknown>;
 export function normalizeToolSchema(
   schema: unknown,
-  profile: "strict" | "compat" | "openapi",
+  profile: "compat" | "openapi",
   toolName?: string,
 ): unknown;
 export function normalizeToolSchema(

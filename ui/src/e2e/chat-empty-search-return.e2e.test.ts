@@ -7,6 +7,7 @@ import {
   installMockGateway,
   waitForTranscriptScrollIdle,
 } from "./chat-flow.test-support.ts";
+import { historyMessageCount } from "./chat-history-pagination-probe.test-support.ts";
 import { createControlUiE2eContextOptions } from "./control-ui-e2e-suite.test-support.ts";
 
 const suite = createChatFlowE2eSuite();
@@ -40,6 +41,49 @@ function firstVisibleMessage(thread: Locator) {
 }
 
 suite.define(() => {
+  it("finds a match beyond the next older page after a compact opening", async () => {
+    await suite.withPage(createControlUiE2eContextOptions(), async ({ page }) => {
+      const history = (start: number, end: number) => ({
+        sessionId: "find-session",
+        messages: historyMessages.slice(start, end),
+        totalMessages: historyMessages.length,
+        hasMore: start > 0,
+        ...(start > 0 ? { olderCursor: `before-${start}` } : {}),
+      });
+      const gateway = await installMockGateway(page, {
+        sessions: [{ key: "agent:main:main", sessionId: "find-session" }],
+        deferredRequests: [{ method: "chat.history", match: { cursor: "before-54" } }],
+        methodResponses: {
+          "chat.startup": history(54, 78),
+          "chat.history": {
+            cases: [
+              { match: { cursor: "before-54" }, response: history(40, 54) },
+              { match: { cursor: "before-40" }, response: history(24, 40) },
+              { match: { cursor: "before-24" }, response: history(0, 24) },
+            ],
+          },
+        },
+      });
+      await page.goto(suite.server.baseUrl + "chat");
+      const pane = page.locator(".chat-pane-cache__pane--active");
+      await pane.getByText("Folio 78 · orchard", { exact: true }).waitFor();
+      await pane.locator(".agent-chat__composer-combobox textarea").press("ControlOrMeta+f");
+      const search = pane.getByRole("textbox", { name: "Search loaded messages" });
+      await search.waitFor();
+      expect(await gateway.getRequests("chat.history")).toHaveLength(0);
+      await search.fill("Folio 1 · meadow");
+      await gateway.waitForRequest("chat.history", { match: { cursor: "before-54" } });
+      await search.press("Escape");
+      await gateway.resolveDeferred("chat.history");
+      await expect.poll(() => historyMessageCount(pane)).toBe(38);
+      await waitForTranscriptScrollIdle(pane.locator(".chat-thread"));
+      expect(await gateway.getRequests("chat.history")).toHaveLength(1);
+      await pane.locator(".agent-chat__composer-combobox textarea").press("ControlOrMeta+f");
+      await search.fill("Folio 1 · meadow");
+      await pane.locator('.chat-bubble[data-entry-id="folio-1"]').waitFor();
+    });
+  });
+
   it.each(["close", "clear after reading results", "close from latest"] as const)(
     "restores the last reading position after a search with no matches (%s)",
     async (action) => {

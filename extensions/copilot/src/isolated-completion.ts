@@ -1,9 +1,7 @@
 import { resolve } from "node:path";
 import type { CopilotSession, MessageOptions, SessionConfig } from "@github/copilot-sdk";
-import type {
-  AgentHarness,
-  AgentHarnessSideQuestionRequest,
-} from "openclaw/plugin-sdk/agent-harness-runtime";
+import type { AgentHarness } from "openclaw/plugin-sdk/agent-harness-runtime";
+import type { ImageContent } from "openclaw/plugin-sdk/llm";
 import { raceWithTimeout } from "openclaw/plugin-sdk/time-runtime";
 import { tokenFingerprint } from "./auth-bridge.js";
 import { createCopilotByokProxy } from "./byok-proxy.js";
@@ -18,6 +16,13 @@ import { normalizeCopilotUsage } from "./usage-bridge.js";
 type AgentHarnessIsolatedCompletion = NonNullable<AgentHarness["runIsolatedCompletionV2"]>;
 type AgentHarnessIsolatedCompletionParams = Parameters<AgentHarnessIsolatedCompletion>[0];
 type AgentHarnessIsolatedCompletionResult = Awaited<ReturnType<AgentHarnessIsolatedCompletion>>;
+/** The side-question turn Copilot sends; the host's request policy may rewrite it. */
+export type CopilotSideQuestionRequest = {
+  prompt: string;
+  prependContext?: string;
+  appendContext?: string;
+  images?: Array<ImageContent & { displayName?: string }>;
+};
 
 type IsolatedSession = Pick<CopilotSession, "abort" | "disconnect" | "sendAndWait">;
 
@@ -119,10 +124,8 @@ async function awaitWithinCompletionBoundary<T>(params: {
 export async function runCopilotIsolatedCompletion(
   params: AgentHarnessIsolatedCompletionParams,
   getPool: () => Promise<CopilotClientPool>,
-  message?: AgentHarnessSideQuestionRequest,
-  prepareRequest?: (
-    request: AgentHarnessSideQuestionRequest,
-  ) => Promise<AgentHarnessSideQuestionRequest>,
+  message?: CopilotSideQuestionRequest,
+  prepareRequest?: (request: CopilotSideQuestionRequest) => Promise<CopilotSideQuestionRequest>,
 ): Promise<AgentHarnessIsolatedCompletionResult> {
   const reasoningEffort = resolveReasoningEffort(params.thinkLevel);
   if (params.thinkLevel !== undefined && reasoningEffort === undefined) {

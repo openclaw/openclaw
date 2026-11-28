@@ -395,7 +395,6 @@ export class SessionOrganizer {
         targetSectionId,
         position,
         scope,
-        this.notify,
       ),
     );
   }
