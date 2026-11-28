@@ -813,7 +813,7 @@ describe("Control UI plugin and catalog icon routes", () => {
   });
 
   it("refreshes cached icon bytes after the cache lifetime", async () => {
-    const now = vi.spyOn(Date, "now").mockReturnValue(1_000);
+    const now = vi.spyOn(performance, "now").mockReturnValue(1_000);
     try {
       mocks.encodeImage.mockResolvedValueOnce({ data: PNG_BYTES });
       const first = await request("/__openclaw__/plugin-icon/firecrawl");
@@ -834,6 +834,28 @@ describe("Control UI plugin and catalog icon routes", () => {
       expect(mocks.encodeImage).toHaveBeenCalledTimes(2);
     } finally {
       now.mockRestore();
+    }
+  });
+
+  it("keeps the icon cache valid across a wall-clock step", async () => {
+    const wallClock = vi.spyOn(Date, "now").mockReturnValue(1_000);
+    const uptime = vi.spyOn(performance, "now").mockReturnValue(1_000);
+    try {
+      mocks.encodeImage.mockResolvedValueOnce({ data: PNG_BYTES });
+      const first = await request("/__openclaw__/plugin-icon/firecrawl");
+      const etag = first.headers.get("etag");
+      // Wall clock jumps forward far past the TTL (NTP correction, wake from sleep),
+      // but the process has only run for a moment: the cached icon must stay valid.
+      wallClock.mockReturnValue(1_000 + PLUGIN_ICON_CACHE_TTL_MS * 4);
+      const cached = await request("/__openclaw__/plugin-icon/firecrawl");
+
+      expect(cached.status).toBe(200);
+      expect(cached.headers.get("etag")).toBe(etag);
+      expect(mocks.encodeImage).toHaveBeenCalledTimes(1);
+      expect(uptime).toHaveBeenCalled();
+    } finally {
+      wallClock.mockRestore();
+      uptime.mockRestore();
     }
   });
 
