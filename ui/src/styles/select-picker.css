@@ -5,10 +5,10 @@
   width: 100%;
   min-height: var(--settings-control-height);
   padding-inline: var(--field-padding-inline);
-  border: 1px solid var(--field-border);
+  border: 1px solid var(--control-edge);
   border-radius: var(--field-radius);
-  background: var(--field-bg);
-  color: var(--text);
+  background: var(--control-surface);
+  color: var(--text-strong);
   font-size: var(--field-font-size);
   text-align: start;
   cursor: var(--cursor-action);
@@ -19,13 +19,19 @@
   color: var(--muted);
 }
 
+/* A select's list shares the field ink: its edge and its highlighted and chosen rows. */
 .picker-select__menu,
 .multi-select__menu {
+  --menu-hover: var(--control-surface-hover);
+  --menu-selected: var(--control-surface-hover);
+
   padding: var(--menu-padding);
   border: 0;
   border-radius: var(--menu-radius);
   background: var(--menu-surface);
-  box-shadow: var(--menu-shadow);
+  box-shadow:
+    0 0 0 1px var(--control-edge-hover),
+    0 8px 16px -4px rgb(0 0 0 / 12.16%);
   backdrop-filter: var(--menu-backdrop);
   color: var(--text);
   corner-shape: superellipse(1.5);
@@ -351,6 +357,7 @@ openclaw-select-picker {
   border-color: transparent;
   background: transparent;
   box-shadow: none;
+  color: var(--text);
 }
 
 .picker-select--submenu .picker-select__trigger:is(:hover, [aria-expanded="true"]) {

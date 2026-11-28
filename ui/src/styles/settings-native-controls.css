@@ -44,7 +44,7 @@
   height: var(--settings-toggle-height);
   border: 1px solid transparent;
   border-radius: var(--radius-full);
-  background: color-mix(in srgb, var(--muted) 20%, transparent);
+  background: var(--control-track);
   pointer-events: none;
   transition: background var(--duration-fast) var(--ease-out);
 }
@@ -55,7 +55,7 @@
   width: var(--settings-toggle-thumb);
   height: var(--settings-toggle-thumb);
   border-radius: var(--radius-full);
-  background: var(--muted);
+  background: var(--text-strong);
   transform: translateX(calc(var(--settings-toggle-travel) * -1));
   transition: transform var(--duration-fast) var(--ease-out);
 }
@@ -69,7 +69,6 @@
 .settings-toggle__input:checked + .settings-toggle__control::before,
 .settings-toggle[data-checked="true"] > .settings-toggle__control::before {
   transform: translateX(var(--settings-toggle-travel));
-  background: var(--accent-foreground);
 }
 
 .settings-toggle:dir(rtl) .settings-toggle__control::before {
