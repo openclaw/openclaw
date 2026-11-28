@@ -33,11 +33,13 @@ describe("channel ingress pruning", () => {
     await withTempState(async (stateDir) => {
       const queue = createTestIngressQueue(stateDir, { now: () => 10 });
 
-      for (const id of ["z", "a"]) {
+      for (const id of ["z", "m", "a"]) {
         await queue.enqueue(id, { text: id });
       }
 
-      expect(await queue.prune({ pendingMaxEntries: 1, protectIds: [" a ", "", "   "] })).toBe(0);
+      expect(await queue.prune({ pendingMaxEntries: 1, protectIds: ["z", " a ", "", "   "] })).toBe(
+        1,
+      );
       expect(
         (await queue.listPending({ limit: "all", orderBy: "id" })).map((row) => row.id),
       ).toEqual(["a", "z"]);
