@@ -15,6 +15,8 @@ import { revealInScrollRegion } from "../scroll-state.ts";
 import { focusMenuRow, MENU_FORM_CONTROL_SELECTOR } from "./menu-form-controls.ts";
 import { menuPropNormalizer } from "./menu-runtime-props.ts";
 
+export { replayMenuIntents } from "./menu-runtime-replay.ts";
+
 type MenuNavigationItem = { value: string; disabled?: boolean; label?: string };
 
 export type MenuRuntime = {

@@ -10,6 +10,7 @@ import { elementRef } from "../../lib/reactive/element-ref.ts";
 import type { Overlay } from "../overlay-lifecycle.ts";
 import { containsComposed } from "../overlay-registry.ts";
 import { MENU_FORM_CONTROL_SELECTOR } from "./menu-form-controls.ts";
+import type { PendingMenuHover, PendingMenuIntent } from "./menu-runtime-replay.ts";
 import type { MenuNavigationOptions, MenuRuntime } from "./menu-runtime.ts";
 
 export type { MenuNavigationOptions } from "./menu-runtime.ts";
@@ -81,17 +82,13 @@ export function useMenuMachine(
       : connected;
   };
   const parentRuntime = createMemo(() => parent?.runtime());
-  let hover: PointerEvent | undefined;
+  let hover: PendingMenuHover | undefined;
   let runtime: MenuRuntime | undefined;
   let virtualized = false;
   let stopRuntime: (() => void) | undefined;
   let mounted = false;
   let loading = false;
-  let pending: Array<{
-    run: (loaded: MenuRuntime) => void;
-    keyboard?: boolean;
-    highlightedValue?: string | null;
-  }> = [];
+  const pending: PendingMenuIntent[] = [];
   const [revision, setRevision] = createSignal(0);
   const [error, setError] = createSignal<unknown>();
   const notify = () => setRevision((value) => value + 1);
@@ -123,7 +120,9 @@ export function useMenuMachine(
     loading = true;
     setError(undefined);
     try {
-      const { createMenuRuntime } = await retryControlUiImport(() => import("./menu-runtime.ts"));
+      const { createMenuRuntime, replayMenuIntents } = await retryControlUiImport(
+        () => import("./menu-runtime.ts"),
+      );
       if (!mounted) {
         return;
       }
@@ -137,28 +136,20 @@ export function useMenuMachine(
         onSelect,
       );
       stopRuntime = runtime.start();
-      if (hover && overlay.trigger?.matches(":hover") && overlay.parent?.open) {
-        runtime.trigger(parentRuntime()).onPointerMove(hover);
-      }
-      hover = undefined;
-      // Native entry already chose focus while the module was loading. Adopt it
-      // before replaying subsequent keyboard input instead of focusing twice.
-      if (overlay.open && options.surface !== "listbox") {
-        const focused = items().find((item) => item.matches(":focus"));
-        if (focused?.dataset.value) {
-          runtime.read().setHighlightedValue(focused.dataset.value);
-        }
-      }
-      loading = false;
-      notify();
-      while (pending.length) {
-        pending.shift()?.run(runtime);
-        // Vanilla queues the transition; Home/End queue the highlight again,
-        // whose store notification publishes roving focus. Drain both before replay.
-        await new Promise<void>((resolve) => {
-          queueMicrotask(() => queueMicrotask(resolve));
-        });
-      }
+      await replayMenuIntents(
+        runtime,
+        parentRuntime,
+        pending,
+        hover,
+        overlay,
+        items,
+        options.surface,
+        () => {
+          hover = undefined;
+          loading = false;
+          notify();
+        },
+      );
     } catch (reason) {
       if (!mounted) {
         return;
@@ -167,7 +158,7 @@ export function useMenuMachine(
       stopRuntime = undefined;
       runtime = undefined;
       loading = false;
-      pending = [];
+      pending.length = 0;
       setError(reason);
       notify();
     }
@@ -179,7 +170,7 @@ export function useMenuMachine(
       if (open) {
         void load();
       } else {
-        pending = [];
+        pending.length = 0;
       }
     });
     if (overlay.open || parentRuntime()) {
@@ -187,7 +178,7 @@ export function useMenuMachine(
     }
     return () => {
       mounted = false;
-      pending = [];
+      pending.length = 0;
       stopOpen();
       stopRuntime?.();
     };
@@ -277,25 +268,7 @@ export function useMenuMachine(
       originalTarget.click();
       return;
     }
-    pending.push({
-      keyboard: true,
-      run: (loaded) => {
-        const replay = new KeyboardEvent(event.type, event);
-        Object.defineProperties(replay, {
-          target: {
-            value: target === "content" ? loaded.service.scope.getActiveElement() : originalTarget,
-          },
-          currentTarget: { value: currentTarget },
-        });
-        if (target === "content") {
-          loaded.content().onKeyDown(replay);
-        } else if (target === "trigger") {
-          loaded.trigger(parentRuntime()).onKeyDown(replay);
-        } else {
-          loaded.keydown(replay);
-        }
-      },
-    });
+    pending.push({ keyboard: event, target, originalTarget, currentTarget });
   };
   const keydown = (event: KeyboardEvent) =>
     runtime ? runtime.keydown(event) : deferKey(event, "input");
@@ -409,11 +382,7 @@ export function useMenuMachine(
           if (disabled || !parentBinding || event.pointerType !== "mouse") {
             return;
           }
-          hover = new PointerEvent(event.type, event);
-          Object.defineProperties(hover, {
-            target: { value: event.target },
-            currentTarget: { value: event.currentTarget },
-          });
+          hover = { event, target: event.target, currentTarget: event.currentTarget };
         },
         onPointerLeave: () => {
           hover = undefined;
