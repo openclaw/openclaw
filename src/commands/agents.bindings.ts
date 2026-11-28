@@ -56,6 +56,27 @@ export function applyAgentBindings(cfg: OpenClawConfig, bindings: AgentRouteBind
     const agentId = normalizeAgentId(binding.agentId);
     const key = bindingMatchKey(binding.match);
     const existingAgentId = existingMatchMap.get(key);
+    const accountId = normalizeOptionalString(binding.match.accountId);
+    const identityKey = bindingMatchIdentityKey(binding.match);
+    const canUpgrade = (candidate: AgentRouteBinding) =>
+      !normalizeOptionalString(candidate.match.accountId) &&
+      normalizeAgentId(candidate.agentId) === agentId &&
+      bindingMatchIdentityKey(candidate.match) === identityKey;
+    const addedUpgradeIndex = accountId ? added.findIndex(canUpgrade) : -1;
+    const addedUpgrade = added[addedUpgradeIndex];
+    // Accepted routes participate in later scope upgrades before the batch is written.
+    if (addedUpgrade && (!existingAgentId || existingAgentId === agentId)) {
+      const previousKey = bindingMatchKey(addedUpgrade.match);
+      existingMatchMap.delete(previousKey);
+      if (existingAgentId && previousKey !== key) {
+        added.splice(addedUpgradeIndex, 1);
+        skipped.push(binding);
+      } else {
+        addedUpgrade.match = { ...addedUpgrade.match, accountId };
+        existingMatchMap.set(key, agentId);
+      }
+      continue;
+    }
     if (existingAgentId) {
       if (existingAgentId === agentId) {
         skipped.push(binding);
@@ -65,14 +86,7 @@ export function applyAgentBindings(cfg: OpenClawConfig, bindings: AgentRouteBind
       continue;
     }
 
-    const upgradeIndex = normalizeOptionalString(binding.match.accountId)
-      ? existingRoutes.findIndex(
-          (candidate) =>
-            !normalizeOptionalString(candidate.match.accountId) &&
-            normalizeAgentId(candidate.agentId) === agentId &&
-            bindingMatchIdentityKey(candidate.match) === bindingMatchIdentityKey(binding.match),
-        )
-      : -1;
+    const upgradeIndex = accountId ? existingRoutes.findIndex(canUpgrade) : -1;
     if (upgradeIndex >= 0) {
       const current = existingRoutes[upgradeIndex];
       if (!current) {
@@ -84,7 +98,7 @@ export function applyAgentBindings(cfg: OpenClawConfig, bindings: AgentRouteBind
         agentId,
         match: {
           ...current.match,
-          accountId: binding.match.accountId?.trim(),
+          accountId,
         },
       };
       existingRoutes[upgradeIndex] = upgradedBinding;
