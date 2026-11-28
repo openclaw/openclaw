@@ -207,16 +207,17 @@ function CardModalContent(props: WorkboardProps) {
         continue;
       }
       includesLinked ||= session.key === linkedKey;
+      const name = workboardSessionName(session) ?? t("workboard.untitledSessionOption");
       options.push({
         value: session.key,
-        label: workboardSessionName(session) ?? t("workboard.fieldSession"),
+        label: session.archived ? t("workboard.archivedSessionOption", { name }) : name,
         description: session.key,
       });
     }
     if (linkedKey && !includesLinked) {
       options.push({
         value: linkedKey,
-        label: t("workboard.fieldSession"),
+        label: t("workboard.linkedSessionOption"),
         description: linkedKey,
       });
     }

@@ -925,6 +925,7 @@ describe("WorkboardView", () => {
                 createGatewaySession({ key: "global", kind: "global", agentId: "main" }),
                 createGatewaySession({ key: "unknown", kind: "unknown", agentId: "main" }),
                 createGatewaySession({ key: "agent:writer:unknown", agentId: "writer" }),
+                createGatewaySession({ key: "agent:main:unnamed", displayName: undefined }),
                 createGatewaySession({ key: missingKey, archived: true }),
               ]
             : availability === "archived"
@@ -943,16 +944,18 @@ describe("WorkboardView", () => {
       if (availability === "available") {
         expect(picker.options.map((option) => option.label)).toContain("No linked session");
         expect(picker.options.map((option) => option.label)).toContain("Existing session");
+        expect(picker.options.map((option) => option.label)).toContain("Untitled session");
         expect(picker.options.map((option) => option.value)).toEqual([
           "",
           "agent:main:dashboard:1",
           "agent:writer:unknown",
+          "agent:main:unnamed",
         ]);
       } else {
         expect(picker.value).toBe(missingKey);
         expect(picker.options).toContainEqual({
           value: missingKey,
-          label: availability === "archived" ? "Previous worker" : "Session",
+          label: availability === "archived" ? "Previous worker (archived)" : "Linked session",
           description: missingKey,
         });
       }
