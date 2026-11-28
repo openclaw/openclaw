@@ -15,8 +15,12 @@ const REALTIME_VOICE_AGENT_CONTROL_MODES = ["status", "steer", "cancel", "follow
 
 export type RealtimeVoiceAgentControlMode = (typeof REALTIME_VOICE_AGENT_CONTROL_MODES)[number];
 
+/**
+ * `cancelled_by_user`: the user stopped the work; the model must not retry unasked.
+ * `cancelled`: OpenClaw itself cancelled the consult (for example a superseded Discord turn).
+ */
 export type RealtimeVoiceAgentControlProviderResult = {
-  status: "cancelled_by_user";
+  status: "cancelled_by_user" | "cancelled";
   message: string;
 };
 
