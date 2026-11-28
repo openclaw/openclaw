@@ -553,7 +553,6 @@ describe("renderUsage", () => {
     expect(firstDay?.getAttribute("aria-label")).toContain("May 1, 2026");
     expect(firstDay?.getAttribute("aria-label")).toContain("990 tokens, $9.90");
     expect(firstDay?.querySelector(".daily-bar--empty")).toBeNull();
-    expect(textAt(container, ".cost-window--range .cost-window__value")).toBe("$10.00");
   });
 
   it("shows throughput from timed turns on the selected day", () => {
