@@ -309,6 +309,28 @@ describe("handleTtsCommands status fallback reporting", () => {
     },
   );
 
+  it("explains a latest reply over the speech limit instead of failing to synthesize it", async () => {
+    const { scope, ...fixture } = await transcriptFixture("main", "agent:main:tts-long");
+    const longReply = "Quarterly growth held steady in every region. ".repeat(5).trim();
+    appendTranscriptMessageSync(scope, {
+      message: { role: "assistant", content: [{ type: "text", text: longReply }] },
+    });
+    Object.assign(fixture.sessionEntry, loadSessionEntry(scope));
+    ttsMocks.resolveTtsConfig.mockReturnValue({ maxTextLength: 60 });
+
+    const result = await reply("/tts latest", {
+      ...fixture,
+      agentId: "main",
+      initialSessionEntry: structuredClone(fixture.sessionEntry),
+    });
+
+    expect(result.text).toBe(
+      `🎤 The latest reply is ${longReply.length} characters, over the 60-character limit for reading aloud. Ask for a short summary, then run /tts latest to hear it.`,
+    );
+    expect(ttsMocks.textToSpeech).not.toHaveBeenCalled();
+    expect(fixture.sessionEntry.lastTtsReadLatestHash).toBeUndefined();
+  });
+
   it("reads the latest assistant reply from the incognito transcript store", async () => {
     const { scope, ...fixture } = await transcriptFixture(
       "main",

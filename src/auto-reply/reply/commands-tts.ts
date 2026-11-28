@@ -202,6 +202,16 @@ async function handleTtsLatestAction(
   if (params.sessionEntry.lastTtsReadLatestHash === hash) {
     return stopWithText("🔊 Latest assistant reply was already sent as audio.");
   }
+  const { maxTextLength } = resolveTtsConfig(params.cfg, {
+    agentId: targetAgentId,
+    channelId: params.command.channel,
+    accountId,
+  });
+  if (latestText.length > maxTextLength) {
+    return stopWithText(
+      `🎤 The latest reply is ${latestText.length} characters, over the ${maxTextLength}-character limit for reading aloud. Ask for a short summary, then run /tts latest to hear it.`,
+    );
+  }
 
   const audio = await buildTtsAudioReply({
     text: latestText,
