@@ -1,7 +1,15 @@
+import {
+  consumeGoogleGenerateContentStream,
+  createWritableTransportEventStream,
+  failTransportStream,
+} from "@openclaw/ai/transports";
 import type { AssistantMessage } from "openclaw/plugin-sdk/llm";
 import { describe, expect, it } from "vitest";
+import { makeProviderModel } from "../../packages/ai/src/providers/provider-model.test-support.js";
+import { isTerminalAssistantError } from "../llm/utils/retry.js";
 import {
   formatRawAssistantErrorForUi,
+  isProviderRefusalNoticeText,
   MALFORMED_STREAMING_FRAGMENT_ERROR_MESSAGE,
 } from "../shared/assistant-error-format.js";
 import { classifyAssistantFailoverReason } from "./embedded-agent-helpers/assistant-message-failures.js";
@@ -327,6 +335,47 @@ describe("formatAssistantErrorText", () => {
     const friendly = formatAssistantErrorText(reportedPayload);
     expect(friendly).toBe(authInvalidTokenCopy);
     expect(friendly).not.toContain("Invalid token");
+  });
+
+  it("formats Google PROHIBITED_CONTENT refusals into canonical refusal copy", async () => {
+    const model = makeProviderModel("google-generative-ai", "clawrouter", "google/gemini-4-neon");
+    const output = makeAssistantMessageFixture({
+      api: model.api,
+      provider: model.provider,
+      model: model.id,
+      content: [],
+      stopReason: "stop",
+      errorMessage: undefined,
+    });
+    const { eventStream, stream } = createWritableTransportEventStream();
+    try {
+      await consumeGoogleGenerateContentStream({
+        chunks: (async function* () {
+          yield {
+            candidates: [
+              {
+                content: { parts: [{ text: "reasoning", thought: true }] },
+                finishReason: "PROHIBITED_CONTENT",
+              },
+            ],
+          };
+        })(),
+        model,
+        output,
+        stream,
+        nextToolCallId: () => "call_1",
+        profile: "managed",
+      });
+    } catch (error) {
+      failTransportStream({ stream, output, error });
+    }
+    const result = await eventStream.result();
+
+    expect(isTerminalAssistantError(result)).toBe(true);
+    const expected =
+      "The provider refused this request (category: prohibited_content). Revise the request and try again.";
+    expectBothCopies(result, expected);
+    expect(isProviderRefusalNoticeText(expected)).toBe(true);
   });
 
   it("uses structured error body detail for model-not-found copy", () => {

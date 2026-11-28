@@ -31,8 +31,13 @@ function response(events: readonly unknown[], cancel = vi.fn(), open = false) {
   });
   return new Response(body, { headers: { "content-type": "text/event-stream" } });
 }
-async function startStream(signal: AbortSignal, id = "gemini-2.5-pro", hook?: () => Promise<void>) {
-  const model = makeProviderModel("google-generative-ai", "google", id, {
+async function startStream(
+  signal: AbortSignal,
+  id = "gemini-2.5-pro",
+  hook?: () => Promise<void>,
+  provider = "google",
+) {
+  const model = makeProviderModel("google-generative-ai", provider, id, {
     baseUrl: "https://generativelanguage.googleapis.com/v1beta",
   });
   const streamFn = buildGoogleProvider().createStreamFn?.({
@@ -78,7 +83,16 @@ describe("Google stream lifecycle", () => {
     [
       "blocked prompt",
       [{ promptFeedback: { blockReason: "SAFETY" } }],
-      { stopReason: "error", errorCode: "SAFETY" },
+      {
+        stopReason: "error",
+        errorCode: "SAFETY",
+        diagnostics: [
+          expect.objectContaining({
+            type: "provider_refusal",
+            details: { provider: "google", category: "safety" },
+          }),
+        ],
+      },
     ],
   ])("releases the open body after %s", async (_name, events, expected) => {
     vi.useFakeTimers();
@@ -130,5 +144,102 @@ describe("Google stream lifecycle", () => {
     expect(
       JSON.parse(guardedFetch.mock.calls[1]?.[1].body).generationConfig.thinkingConfig,
     ).toEqual({ thinkingLevel: "LOW" });
+  });
+
+  it("emits provider_refusal diagnostics for managed SSE policy refusals and skips technical stops", async () => {
+    guardedFetch
+      .mockResolvedValueOnce(
+        response([
+          {
+            candidates: [
+              {
+                content: { parts: [{ text: "thinking", thought: true }] },
+                finishReason: "PROHIBITED_CONTENT",
+              },
+            ],
+          },
+        ]),
+      )
+      .mockResolvedValueOnce(
+        response([{ candidates: [{ finishReason: "MALFORMED_FUNCTION_CALL" }] }]),
+      );
+
+    const refused = await (
+      await startStream(
+        new AbortController().signal,
+        "google/gemini-4-neon",
+        undefined,
+        "clawrouter",
+      )
+    ).result();
+    expect(refused).toMatchObject({
+      stopReason: "error",
+      errorCode: "PROHIBITED_CONTENT",
+      errorType: "google_generation_failed",
+      diagnostics: [
+        expect.objectContaining({
+          type: "provider_refusal",
+          details: { provider: "clawrouter", category: "prohibited_content" },
+        }),
+      ],
+    });
+
+    const malformed = await (await startStream(new AbortController().signal)).result();
+    expect(malformed).toMatchObject({
+      stopReason: "error",
+      errorCode: "MALFORMED_FUNCTION_CALL",
+      errorType: "google_generation_failed",
+    });
+    expect(malformed.diagnostics?.some((entry) => entry.type === "provider_refusal")).not.toBe(
+      true,
+    );
+  });
+
+  it("keeps a candidate refusal when a later STOP frame arrives before stream end", async () => {
+    guardedFetch.mockResolvedValueOnce(
+      response([
+        {
+          candidates: [
+            {
+              content: { parts: [{ functionCall: { name: "lookup", args: {} } }] },
+              finishReason: "SAFETY",
+            },
+          ],
+        },
+        { candidates: [{ finishReason: "STOP" }] },
+        "[DONE]",
+      ]),
+    );
+
+    const result = await (await startStream(new AbortController().signal)).result();
+    expect(result).toMatchObject({
+      stopReason: "error",
+      errorCode: "SAFETY",
+      errorType: "google_generation_failed",
+      diagnostics: [
+        expect.objectContaining({
+          type: "provider_refusal",
+          details: { provider: "google", category: "safety" },
+        }),
+      ],
+    });
+  });
+
+  it("omits provider_refusal when cancellation settles during prompt-block cleanup", async () => {
+    const controller = new AbortController();
+    const cancel = vi.fn(() => {
+      controller.abort(Object.assign(new Error("cancelled during cleanup"), { code: "ABORTED" }));
+    });
+    guardedFetch.mockResolvedValueOnce(
+      response([{ promptFeedback: { blockReason: "SAFETY" } }], cancel, true),
+    );
+
+    const result = await (await startStream(controller.signal)).result();
+    expect(cancel).toHaveBeenCalledOnce();
+    expect(result).toMatchObject({
+      stopReason: "aborted",
+      errorMessage: "cancelled during cleanup",
+    });
+    expect(result.diagnostics?.some((entry) => entry.type === "provider_refusal")).not.toBe(true);
   });
 });
