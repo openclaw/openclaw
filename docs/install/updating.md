@@ -1168,6 +1168,8 @@ initiating process; only serializable options cross the migrated-update handoff.
 
 Native `openclaw update migrate` reports progress while inspecting configuration
 and schemas, capturing its database backup, and verifying the migrated schemas.
+Recovery copies use short filenames even when the state directory is deeply
+nested. The recovery receipt maps each copy to its original path.
 Before reporting migration complete, the candidate checks configured and discovered
 nonheld agent databases against its schema and ownership requirements using the
 post-Doctor configuration. This includes stores startup can reopen after their

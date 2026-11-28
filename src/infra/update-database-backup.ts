@@ -256,7 +256,6 @@ export async function createUpdateDatabaseBackupInProcess(
     inventory.present,
     input.stopped,
   );
-  const { buildBackupArchivePath } = await import("./backup-archive-path-policy.js");
   const { createStoppedSqliteSnapshot, createVerifiedSqliteSnapshot } =
     await import("./sqlite-snapshot.js");
   const { AGENT_FTS_SCHEMAS } = await import("../state/openclaw-agent-fts-schema.js");
@@ -358,18 +357,18 @@ export async function createUpdateDatabaseBackupInProcess(
             "PostgreSQL update capture requires exclusive ownership; stop through the service owner, then rerun.",
           );
         }
-        for (const sourcePath of inventory.present) {
+        // The receipt maps images to source paths. Repeating those paths here can
+        // exceed SQLite's pathname limit even when the original databases open.
+        const payloadDirectory = path.join(directory, "payload");
+        for (const [index, sourcePath] of inventory.present.entries()) {
           input.onProgress?.({ phase: "pre-migration database backup", path: sourcePath });
-          const archivePath = buildBackupArchivePath("", sourcePath);
-          let parent = directory;
-          for (const component of path.posix.dirname(archivePath).split("/")) {
-            parent = path.join(parent, component);
+          if (index === 0) {
             await ensureDurableDirectory({
-              directoryPath: parent,
+              directoryPath: payloadDirectory,
               create: createPrivateSqliteDirectory,
             });
           }
-          const snapshotPath = path.join(directory, archivePath);
+          const snapshotPath = path.join(payloadDirectory, `${index}.sqlite`);
           const retainGeneration =
             !input.stopped && !input.originalState && !originalCaptureSources.has(sourcePath);
           const before = retainGeneration
