@@ -37,7 +37,7 @@ const LEASE = "suspension";
 const pauseScheduling = vi.fn();
 const resumeScheduling = vi.fn();
 type SuspendOptions = Parameters<typeof prepareGatewaySuspend>[0];
-function prepare(options: Partial<SuspendOptions> = {}) {
+function prepare(options: Partial<SuspendOptions>) {
   return prepareGatewaySuspend({
     requestId: "request",
     pauseScheduling,
