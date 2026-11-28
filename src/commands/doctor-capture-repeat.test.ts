@@ -46,7 +46,6 @@ it("reuses one original across repeated healthy Doctor repairs and keeps only th
     PI_CODING_AGENT_DIR: undefined,
     OPENCLAW_UPDATE_IN_PROGRESS: undefined,
     OPENCLAW_UPDATE_RUN_ID: undefined,
-    OPENCLAW_IMAGE_ACTIVATION_CAPTURE_MARKER: undefined,
     OPENCLAW_DISABLE_BUNDLED_PLUGINS: "1",
     OPENCLAW_SERVICE_REPAIR_POLICY: "external",
   })) {

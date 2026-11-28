@@ -23,19 +23,54 @@ public struct OpenClawChatModelSignInContext: Sendable {
 
 struct ChatModelAuthStatus: Decodable {
     struct Capability: Decodable {
+        /// The provider these options sign in to; the phone groups options by it.
+        let provider: String?
         let loginOptions: [LoginOption]?
     }
 
-    struct LoginOption: Decodable, Identifiable {
+    struct LoginOption: Decodable, Identifiable, Equatable {
         let id: String
         let label: String
         let hint: String?
+        let groupLabel: String?
+    }
+
+    struct Expiry: Decodable, Equatable {
+        /// Milliseconds since 1970.
+        let at: Double
+    }
+
+    struct Profile: Decodable, Equatable {
+        let profileId: String
+        let type: String?
+        let status: String?
+        let displayName: String?
+        let email: String?
+        let expiry: Expiry?
+        /// Only saved sign-ins this server can remove carry it.
+        let logoutSupported: Bool?
+    }
+
+    struct NativeAuth: Decodable, Equatable {
+        let kind: String?
+        let plan: String?
+    }
+
+    struct APIKey: Decodable, Equatable {
+        /// "config" or "env".
+        let source: String?
     }
 
     struct Provider: Decodable, Identifiable {
         let provider: String
+        /// The credential owner when it differs from `provider`, such as a CLI-backed runtime.
+        let authProvider: String?
         let displayName: String
         let status: String
+        let expiry: Expiry?
+        let profiles: [Profile]?
+        let nativeAuth: NativeAuth?
+        let apiKey: APIKey?
         var id: String {
             self.provider
         }
@@ -62,6 +97,29 @@ struct ChatModelAuthStatus: Decodable {
     }
 }
 
+/// What the last load, sign-in or sign-out came to. Each platform words it for its own screen.
+enum ChatModelSignInOutcome: Equatable {
+    /// Account status could not be read.
+    case loadFailed
+    /// The server has not finished preparing account status.
+    case statusNotReady
+    /// The server refused to start the sign-in.
+    case startFailed
+    /// The connection the sheet opened on is gone; nothing more can be sent on it.
+    case connectionChanged
+    /// A step failed in transit.
+    case stopped
+    case cancelUnconfirmed
+    case finished
+    /// The sign-in ended without finishing: cancelled, or failed with the server's reason.
+    case ended(status: String?, error: String?)
+    /// It ended, and the status read after it failed.
+    case endedStatusUnknown
+    /// The server rejected an answer and asks the same step again.
+    case stepError(String)
+    case signOutFailed
+}
+
 @MainActor
 @Observable
 final class ChatModelSignInModel {
@@ -70,7 +128,11 @@ final class ChatModelSignInModel {
     private(set) var sessionID: String?
     private(set) var busy = false
     private(set) var cancelling = false
-    private(set) var message: String?
+    private(set) var outcome: ChatModelSignInOutcome?
+    /// The option of the sign-in running now, or of the last one, so its outcome shows under it.
+    private(set) var attempt: ChatModelAuthStatus.LoginOption?
+    /// The provider whose sign-out is in flight.
+    private(set) var signingOut: String?
     var text = ""
     var selection = 0
     var confirmation = false
@@ -91,11 +153,24 @@ final class ChatModelSignInModel {
         do {
             try await self.readStatus()
         } catch {
-            self
-                .message =
-                String(
-                    localized: "Could not load sign-in options. Check the connection or update your Gateway.")
+            let current = await self.context.isCurrent()
+            guard !self.closed else { return }
+            if current {
+                self.outcome = .loadFailed
+            } else {
+                self.authStatus = nil
+                self.outcome = .connectionChanged
+            }
         }
+    }
+
+    /// Pull to refresh on the phone: a load problem from before gives way to the fresh read.
+    func reload() async {
+        switch self.outcome {
+        case .loadFailed, .statusNotReady: self.outcome = nil
+        default: break
+        }
+        await self.refresh()
     }
 
     func start(_ option: ChatModelAuthStatus.LoginOption) async {
@@ -105,7 +180,8 @@ final class ChatModelSignInModel {
         let id = UUID().uuidString
         self.sessionID = id
         self.cancelRequested = false
-        self.message = nil
+        self.outcome = nil
+        self.attempt = option
         self.step = nil
         await self.run(id) {
             let data: Data
@@ -117,13 +193,11 @@ final class ChatModelSignInModel {
                 ])
             } catch let error as GatewayResponseError {
                 if self.sessionID == id { self.sessionID = nil }
-                self
-                    .message =
-                    String(localized: "Sign-in could not start. Refresh the options or use Models in the web app.")
+                self.outcome = .startFailed
                 throw error
             } catch let error as GatewayNodeSessionRequestError {
                 if self.sessionID == id { self.sessionID = nil }
-                self.message = String(localized: "The connection changed. Close sign-in and open it again.")
+                self.outcome = .connectionChanged
                 throw error
             }
             let result = try JSONDecoder().decode(WizardStartResult.self, from: data)
@@ -175,9 +249,36 @@ final class ChatModelSignInModel {
         } catch {
             if await self.retireIfContextLost(id) { return }
             if self.sessionID == id, !self.closed {
-                self
-                    .message =
-                    String(localized: "Cancellation is not confirmed. Check the connection and try Cancel again.")
+                self.outcome = .cancelUnconfirmed
+            }
+        }
+    }
+
+    /// Removes the provider's saved sign-ins the server marked removable, then reads status again.
+    func signOut(provider: String, profileIDs: [String]) async {
+        guard !self.busy, self.sessionID == nil, !self.closed, !profileIDs.isEmpty else { return }
+        self.busy = true
+        self.signingOut = provider
+        self.outcome = nil
+        self.attempt = nil
+        defer {
+            self.busy = false
+            self.signingOut = nil
+        }
+        do {
+            _ = try await self.request("models.authLogout", [
+                "agentId": AnyCodable(self.context.agentID), "provider": AnyCodable(provider),
+                "profileIds": AnyCodable(profileIDs.map(AnyCodable.init)),
+            ])
+            try await self.readStatus()
+            if await self.context.isCurrent(), !self.closed { await self.onAuthChanged() }
+        } catch {
+            guard !self.closed else { return }
+            if await !(self.context.isCurrent()) {
+                self.authStatus = nil
+                self.outcome = .connectionChanged
+            } else {
+                self.outcome = .signOutFailed
             }
         }
     }
@@ -197,10 +298,7 @@ final class ChatModelSignInModel {
             if await self.retireIfContextLost(id) {
                 if !cancellationAlreadyRequested { try? await self.closeSession(id) }
             } else if !self.closed, self.sessionID == id, !self.cancelRequested {
-                self
-                    .message =
-                    String(
-                        localized: "Sign-in stopped. Check the connection, then cancel this attempt and retry.")
+                self.outcome = .stopped
             }
         }
     }
@@ -213,7 +311,7 @@ final class ChatModelSignInModel {
         self.sessionID = nil
         self.step = nil
         self.authStatus = nil
-        self.message = String(localized: "The connection changed. Close sign-in and open it again.")
+        self.outcome = .connectionChanged
         return true
     }
 
@@ -226,7 +324,7 @@ final class ChatModelSignInModel {
             }
             let preservesInput = self.step?.id == result.step?.id && result.error != nil
             self.step = result.step
-            self.message = result.error
+            self.outcome = result.error.map { .stepError($0) }
             if !preservesInput {
                 self.text = anyCodableString(result.step?.initialvalue)
                 self.confirmation = anyCodableBool(result.step?.initialvalue)
@@ -253,16 +351,12 @@ final class ChatModelSignInModel {
         self.sessionID = nil
         self.step = nil
         guard await self.context.isCurrent(), !self.closed else { return }
-        self.message = error == nil && status == "done"
-            ? String(localized: "Sign-in finished.")
-            : String(localized: "Sign-in ended. Review the account status before trying again.")
+        self.outcome = error == nil && status == "done" ? .finished : .ended(status: status, error: error)
         // Native login publishes credentials before settling, including writes followed by errors.
         do {
             try await self.readStatus()
         } catch {
-            self
-                .message =
-                String(localized: "Sign-in ended, but account status could not be loaded. Refresh to check it.")
+            self.outcome = .endedStatusUnknown
         }
         if await self.context.isCurrent(), !self.closed { await self.onAuthChanged() }
     }
@@ -270,9 +364,15 @@ final class ChatModelSignInModel {
     private func readStatus() async throws {
         let data = try await self.request("models.authStatus", ["agentId": AnyCodable(self.context.agentID)])
         let status = try JSONDecoder().decode(ChatModelAuthStatus.self, from: data)
+        guard status.unavailable == nil else {
+            // Status is still being prepared; keep the last usable account data.
+            self.outcome = .statusNotReady
+            return
+        }
         self.authStatus = status
-        if status.unavailable != nil {
-            self.message = String(localized: "Account status is not ready. Refresh after setup finishes.")
+        switch self.outcome {
+        case .loadFailed, .statusNotReady, .endedStatusUnknown: self.outcome = nil
+        default: break
         }
     }
 
@@ -284,6 +384,7 @@ final class ChatModelSignInModel {
     }
 }
 
+#if os(macOS)
 @MainActor
 struct OpenClawChatModelSignInSheet: View {
     @Environment(\.dismiss) private var dismiss
@@ -304,7 +405,7 @@ struct OpenClawChatModelSignInSheet: View {
                         self.accounts
                     }
                     if self.model.busy || self.model.cancelling { ProgressView() }
-                    if let message = self.model.message {
+                    if let message = self.model.outcome.map(Self.message) {
                         Text(message).font(OpenClawChatTypography.callout).textSelection(.enabled)
                     }
                 }
@@ -329,6 +430,34 @@ struct OpenClawChatModelSignInSheet: View {
         .frame(idealWidth: 460, idealHeight: 480)
         .task { await self.model.refresh() }
         .onDisappear { Task { await self.model.close() } }
+    }
+
+    private static func message(_ outcome: ChatModelSignInOutcome) -> String {
+        switch outcome {
+        case .loadFailed:
+            String(localized: "Could not load sign-in options. Check the connection or update your Gateway.")
+        case .statusNotReady:
+            String(localized: "Account status is not ready. Refresh after setup finishes.")
+        case .startFailed:
+            String(localized: "Sign-in could not start. Refresh the options or use Models in the web app.")
+        case .connectionChanged:
+            String(localized: "The connection changed. Close sign-in and open it again.")
+        case .stopped:
+            String(localized: "Sign-in stopped. Check the connection, then cancel this attempt and retry.")
+        case .cancelUnconfirmed:
+            String(localized: "Cancellation is not confirmed. Check the connection and try Cancel again.")
+        case .finished:
+            String(localized: "Sign-in finished.")
+        case .ended:
+            String(localized: "Sign-in ended. Review the account status before trying again.")
+        case .endedStatusUnknown:
+            String(localized: "Sign-in ended, but account status could not be loaded. Refresh to check it.")
+        case let .stepError(message):
+            message
+        case .signOutFailed:
+            // macOS offers no sign-out; kept for completeness.
+            String(localized: "Sign-in ended. Review the account status before trying again.")
+        }
     }
 
     private var accounts: some View {
@@ -409,3 +538,4 @@ struct OpenClawChatModelSignInSheet: View {
         }
     }
 }
+#endif

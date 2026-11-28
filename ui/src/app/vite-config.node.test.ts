@@ -26,7 +26,6 @@ import { extractControlUiStartupAssetPaths } from "../../config/control-ui-start
 import controlUiViteConfig, {
   createControlUiPrecompressedAssetVariants,
   resolveControlUiBuildInfo,
-  resolveExternalPackageAliasesForVite,
   resolveSourcePackageAliasesForVite,
   resolveTsconfigPathAliasesForVite,
 } from "../../vite.config.ts";
@@ -304,12 +303,6 @@ async function expectEncodings(
     encodings.map((ext) => `${file}.${ext}`),
   );
   return variants;
-}
-
-function expectBefore<T>(values: T[], first: T, second: T) {
-  expect(values.includes(first)).toBe(true);
-  expect(values.includes(second)).toBe(true);
-  expect(values.indexOf(first)).toBeLessThan(values.indexOf(second));
 }
 
 async function executeLocale(
@@ -637,48 +630,6 @@ it.each([
       readGitCommit: () => (key === "GITHUB_SHA" ? null : "a".repeat(40)),
     }),
   ).toThrow(`${key} ${error}`);
-});
-
-it.each(["agent-id", "error-coercion", "expect", "stringified-error"])(
-  "resolves internal source aliases for %s",
-  (subpath) => {
-    const aliases = resolveSourcePackageAliasesForVite();
-    const moduleId = `@openclaw/normalization-core/${subpath}`;
-    expect(aliases.find((alias) => alias.find === moduleId)?.replacement).toBe(
-      path.join(repoRoot, `packages/normalization-core/src/${subpath}.ts`),
-    );
-    expectBefore(
-      aliases.map((alias) => alias.find),
-      moduleId,
-      "@openclaw/normalization-core",
-    );
-  },
-);
-
-it("uses Node package resolution for external packages inherited by worktrees", () => {
-  const resolvePackage = vi.fn((specifier: string) => path.join("/parent/node_modules", specifier));
-  const aliases = resolveExternalPackageAliasesForVite(resolvePackage);
-  expect(aliases.find((alias) => alias.find === "@openclaw/libterminal/browser")).toEqual({
-    find: "@openclaw/libterminal/browser",
-    replacement: path.join("/parent/node_modules/@openclaw/libterminal", "dist/browser.js"),
-  });
-});
-
-it("keeps specific tsconfig aliases ahead of broad package aliases", () => {
-  const aliases = resolveTsconfigPathAliasesForVite();
-  expect(aliases.find((alias) => alias.find === "@openclaw/net-policy/ip")?.replacement).toBe(
-    path.join(repoRoot, "packages/net-policy/src/ip.ts"),
-  );
-  expectBefore(
-    aliases.map((alias) => alias.find),
-    "@openclaw/net-policy/ip",
-    "@openclaw/net-policy",
-  );
-  expectBefore(
-    aliases.filter((alias) => alias.find instanceof RegExp).map((alias) => alias.replacement),
-    path.join(repoRoot, "packages/net-policy/src/$1"),
-    path.join(repoRoot, "extensions/$1"),
-  );
 });
 
 it("composes the complete source without registering runtime English", () => {

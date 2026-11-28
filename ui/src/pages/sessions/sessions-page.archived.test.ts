@@ -131,26 +131,50 @@ describe("sessions page archived deletion", () => {
     );
   });
 
-  it.each([false, true])("aborts delete-all on %s incomplete enumeration", async (incomplete) => {
-    const target = archived("agent:main:only-visible");
-    const list = vi.fn<SessionCapability["list"]>(async (options) => ({
-      ...sessionsResult([target], 1),
-      ...(options?.offset ? {} : { totalCount: 2 }),
-      hasMore: !options?.offset,
-      nextOffset: options?.offset ? null : 1,
-    }));
-    const failure = new Error("list failed");
-    const sessions = createSessions({
-      list: incomplete ? list : vi.fn<SessionCapability["list"]>().mockRejectedValue(failure),
-    });
-    const page = await mount(sessions, [target]);
-    await page.deleteAllArchived();
-    expect(showConfirmDialog).not.toHaveBeenCalled();
-    expect(sessions.deleteMany).not.toHaveBeenCalled();
-    if (incomplete) {
-      expect(page.error).toEqual(new Error("archived session enumeration was incomplete"));
-    } else {
-      expect(page.error).toBe(failure);
-    }
-  });
+  it.each([
+    [
+      "missing page",
+      "OpenClaw couldn’t load the list of archived sessions, so it didn’t delete any.",
+    ],
+    [
+      "stalled page",
+      "OpenClaw couldn’t load the next page of archived sessions, so it didn’t delete any.",
+    ],
+    ["incomplete list", "OpenClaw couldn’t list every archived session, so it didn’t delete any."],
+    ["request error", "List unavailable"],
+  ] as const)(
+    "explains %s before confirming or deleting archived sessions",
+    async (cause, message) => {
+      const target = archived("agent:main:only-visible");
+      const failure = new Error(message);
+      const list = vi.fn<SessionCapability["list"]>(async (options) => {
+        if (cause === "request error") {
+          throw failure;
+        }
+        if (cause === "missing page") {
+          return null;
+        }
+        return {
+          ...sessionsResult([target], 1),
+          ...(options?.offset ? {} : { totalCount: 2 }),
+          hasMore: !options?.offset,
+          nextOffset: cause === "stalled page" ? 0 : options?.offset ? null : 1,
+        };
+      });
+      const sessions = createSessions({ list });
+      const page = await mount(sessions, [target]);
+      await page.deleteAllArchived();
+      await page.updateComplete;
+      expect(page.querySelector('[role="alert"]')?.textContent?.trim()).toBe(
+        cause === "request error"
+          ? message
+          : `${message} To try again, choose Delete all archived in Filters.`,
+      );
+      if (cause === "request error") {
+        expect(page.error).toBe(failure);
+      }
+      expect(showConfirmDialog).not.toHaveBeenCalled();
+      expect(sessions.deleteMany).not.toHaveBeenCalled();
+    },
+  );
 });

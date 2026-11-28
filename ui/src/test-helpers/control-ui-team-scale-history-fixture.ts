@@ -182,12 +182,11 @@ export function createTeamScaleHistoryFixture(options: {
     options.richTranscript === true,
     options.longSessionScenario ?? null,
   ]);
-  const selectHistory = <T>(
-    messages: T[],
-    pages: Array<{ cursor: string; loadedMessages: number; messages: T[] }> = Array.from(
-      { length: Math.max(0, Math.ceil((messages.length - 80) / 1000)) },
+  const pagesFrom = <T>(messages: T[], opening: number) =>
+    Array.from(
+      { length: Math.max(0, Math.ceil((messages.length - opening) / 1000)) },
       (_, index) => {
-        const loaded = 80 + index * 1000;
+        const loaded = opening + index * 1000;
         const loadedMessages = Math.min(loaded + 1000, messages.length);
         return {
           cursor: olderCursor(loaded),
@@ -195,8 +194,8 @@ export function createTeamScaleHistoryFixture(options: {
           messages: messages.slice(messages.length - loadedMessages, messages.length - loaded),
         };
       },
-    ),
-  ) => {
+    );
+  const selectHistory = <T>(messages: T[], pages = pagesFrom(messages, 24)) => {
     const configuredHistory = {
       messages,
       sessionId: session.sessionId,
@@ -231,7 +230,7 @@ export function createTeamScaleHistoryFixture(options: {
     const fullInitialWindow =
       options.longSessionScenario !== "paging" &&
       (options.historyStateReceipt || options.longSessionScenario !== undefined);
-    const limitedHistory = windowedHistory(fullInitialWindow ? messages.length : 80);
+    const limitedHistory = windowedHistory(fullInitialWindow ? messages.length : 24);
     const selectedHistory = {
       cases: [
         {
@@ -247,21 +246,27 @@ export function createTeamScaleHistoryFixture(options: {
             ...(options.inFlightRun ? { inFlightRun: options.inFlightRun } : {}),
           },
         },
-        ...pages.map(({ cursor, loadedMessages, messages: pageMessages }) => ({
-          match: { sessionKey: session.key, cursor },
-          response: {
-            messages: pageMessages,
-            hasMore: loadedMessages < messages.length,
-            ...(loadedMessages < messages.length
-              ? { olderCursor: olderCursor(loadedMessages) }
-              : {}),
-            totalMessages: messages.length,
-            sessionId: session.sessionId,
-          },
-        })),
+        ...[...pages, ...pagesFrom(messages, 80)].map(
+          ({ cursor, loadedMessages, messages: pageMessages }) => ({
+            match: { sessionKey: session.key, cursor },
+            response: {
+              messages: pageMessages,
+              hasMore: loadedMessages < messages.length,
+              ...(loadedMessages < messages.length
+                ? { olderCursor: olderCursor(loadedMessages) }
+                : {}),
+              totalMessages: messages.length,
+              sessionId: session.sessionId,
+            },
+          }),
+        ),
+        {
+          match: { sessionKey: session.key, limit: 24, knownState: {} },
+          response: limitedHistory,
+        },
         {
           match: { sessionKey: session.key, limit: 80, knownState: {} },
-          response: limitedHistory,
+          response: windowedHistory(fullInitialWindow ? messages.length : 80),
         },
         {
           match: { sessionKey: session.key },
@@ -636,33 +641,18 @@ export function createTeamScaleHistoryFixture(options: {
       ...selectHistory(historyMessages),
     };
   }
-  const initialMessageCount = Math.min(80, historyMessages.length);
-  const pages = Array.from(
-    { length: Math.ceil((historyMessages.length - initialMessageCount) / 1000) },
-    (_, index) => {
-      const offset = initialMessageCount + index * 1000;
-      const loadedMessages = Math.min(offset + 1000, historyMessages.length);
-      return {
-        cursor: olderCursor(offset),
-        loadedMessages,
-        anchorEntryId: messageIds[historyMessages.length - offset]!,
-        messages: historyMessages.slice(
-          historyMessages.length - loadedMessages,
-          historyMessages.length - offset,
-        ),
-      };
-    },
-  );
+  const initialMessageCount = Math.min(24, historyMessages.length);
+  const pages = pagesFrom(historyMessages, initialMessageCount);
   const workload: LongSessionWorkload = {
     scenario: "paging",
     messageCount: historyMessages.length,
     initialMessageCount,
     firstEntryId: messageIds[0]!,
     deltaCursor,
-    pages: pages.map(({ cursor, loadedMessages, anchorEntryId }) => ({
+    pages: pages.map(({ cursor, loadedMessages, messages }) => ({
       cursor,
       loadedMessages,
-      anchorEntryId,
+      anchorEntryId: messageIds[historyMessages.length - loadedMessages + messages.length]!,
     })),
   };
   const pagination = {

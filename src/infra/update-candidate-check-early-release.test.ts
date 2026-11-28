@@ -8,10 +8,25 @@ import { cleanupTempDirs, makeTempDir } from "../../test/helpers/temp-dir.js";
 import { redactSupportString } from "../logging/diagnostic-support-redaction.js";
 import { OPENCLAW_AGENT_SCHEMA_VERSION } from "../state/openclaw-agent-db-contract.js";
 import { OPENCLAW_STATE_SCHEMA_VERSION } from "../state/openclaw-state-db-contract.js";
-import { refuseEarlyGitReleaseSchemaChange as refuse } from "./update-candidate-check-early-release.js";
+import {
+  formatEarlyGitReleaseRefusal,
+  inspectEarlyGitReleaseSchemaChange as inspect,
+  type EarlyGitReleaseRecoveryStart,
+} from "./update-candidate-check-early-release.js";
 
 const roots: string[] = [];
 afterEach(() => cleanupTempDirs(roots));
+
+/** What the check prints when automatic recovery cannot start. */
+const refuse = (
+  root: string,
+  env: NodeJS.ProcessEnv,
+  platform: NodeJS.Platform = "linux",
+  recovery: EarlyGitReleaseRecoveryStart = { started: false },
+) => {
+  const change = inspect(root, env);
+  return change ? formatEarlyGitReleaseRefusal(change, recovery, env, platform) : null;
+};
 
 const rebuild = (link: string) => {
   const quoted = `"${link}/git-install/lib/node_modules/openclaw"`;
@@ -192,14 +207,55 @@ it.runIf(process.platform !== "win32")(
 
 it("survives the early updater's redaction of its check output unchanged", () => {
   const { root, stateDir, env } = install({});
+  const job = { status: "launchctl print gui/501/ai.openclaw.update-recovery", log: "tail -f x" };
   // The early updater prints this stderr through the same redaction (unchanged since then), with
   // its state directory and home; a state directory outside home is spelled from the variable.
   for (const home of [path.dirname(stateDir), "/nonexistent-home"]) {
-    const refusal = refuse(root, { ...env, HOME: home }, "linux")!;
-    expect(
-      redactSupportString(refusal, { env: { HOME: home }, stateDir }, { maxLength: 8192 }),
-    ).toBe(refusal);
+    for (const recovery of [
+      { started: false, reason: "no desktop login session" },
+      { started: true, job, target: "a".repeat(40) },
+    ] as const) {
+      const refusal = refuse(root, { ...env, HOME: home }, "darwin", recovery)!;
+      expect(
+        redactSupportString(refusal, { env: { HOME: home }, stateDir }, { maxLength: 8192 }),
+      ).toBe(refusal);
+    }
   }
+});
+
+it("says the release finishes the update when the recovery started, and names no rebuild", () => {
+  const { root, env } = install({});
+  const job = { status: "systemctl --user status u", log: "journalctl --user -u u" };
+  const started = refuse(root, env, "linux", { started: true, job, target: "b".repeat(40) })!;
+  expect(started).toContain("the new release finishes the update in the background");
+  expect(started).toContain(`moves the checkout to ${"b".repeat(11)}`);
+  expect(started.split("\n").at(-1)).toBe(
+    "Follow progress: systemctl --user status u (log: journalctl --user -u u)",
+  );
+  expect(started).not.toContain("git pull");
+  // A recovery another update started is still running: nothing else changes.
+  const running = refuse(root, env, "linux", { started: false, running: job })!;
+  expect(running).toContain("That recovery is still running and finishes the update");
+  expect(running).not.toContain("git pull");
+  // When it cannot start, the reason comes before the rebuild the user runs instead.
+  const lines = refuse(root, env, "linux", {
+    started: false,
+    reason: "pnpm is not on PATH",
+  })!.split("\n");
+  expect(lines.at(-3)).toBe("Automatic recovery did not start: pnpm is not on PATH.");
+  expect(lines.at(-1)).toContain("git pull --ff-only");
+});
+
+it("keeps stopping an early updater while an earlier recovery's release exists", () => {
+  // That recovery migrated state, so this updater would pass the schema test and strand.
+  const { root, env, stateDir } = install({
+    state: OPENCLAW_STATE_SCHEMA_VERSION,
+    agents: [OPENCLAW_AGENT_SCHEMA_VERSION],
+  });
+  expect(inspect(root, env)).toBeNull();
+  fs.mkdirSync(path.join(stateDir, "git-install", "recovery", "openclaw"), { recursive: true });
+  expect(inspect(root, env)).toMatchObject({ root, pending: null });
+  expect(refuse(root, env)).toContain("An automatic recovery that an earlier update started");
 });
 
 it("refuses when one agent store is older, registered or not", () => {

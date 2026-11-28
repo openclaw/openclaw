@@ -1,3 +1,4 @@
+import OpenClawChatUI
 import OpenClawKit
 import SwiftUI
 import UIKit
@@ -97,6 +98,10 @@ struct SettingsSectionTitle: View {
 
     init(_ title: LocalizedStringKey) {
         self.text = Text(title)
+    }
+
+    init(verbatim title: String) {
+        self.text = Text(verbatim: title)
     }
 
     var body: some View {
@@ -339,6 +344,7 @@ struct SettingsStateRow: View {
 
 struct SettingsBuildMetadataStrip: View {
     let metadata: ArtifactBuildInfo
+    @Environment(\.openClawToastPresenter) private var toastPresenter
     @Environment(\.dynamicTypeSize) private var dynamicTypeSize
     @Environment(\.layoutDirection) private var layoutDirection
 
@@ -504,10 +510,12 @@ struct SettingsBuildMetadataStrip: View {
     private func copyCommit() {
         guard let gitCommit = self.metadata.gitCommit else { return }
         UIPasteboard.general.string = gitCommit
+        self.toastPresenter?.post(.copied())
     }
 
     private func copyBuildInfo() {
         UIPasteboard.general.string = self.metadata.copyText
+        self.toastPresenter?.post(.copied())
     }
 }
 
