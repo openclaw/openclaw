@@ -136,6 +136,10 @@ it("hides a tile immediately and restores it if the shared board rejects the cha
   ).click();
   await vi.advanceTimersByTimeAsync(0);
   expect(tile()).toBeNull();
+  expect(page.request).toHaveBeenCalledWith("workboard.sessionsBoard.update", {
+    boardId: "sessions",
+    patch: { scopeChanges: { hideSessionKey: "agent:main:working" } },
+  });
   expect(Array.from(toolbar.querySelectorAll("button"))).toEqual(initialToolbarButtons);
   pending.reject(new Error("Board update failed"));
   await vi.advanceTimersByTimeAsync(0);

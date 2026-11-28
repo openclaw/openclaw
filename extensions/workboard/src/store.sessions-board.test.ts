@@ -82,6 +82,23 @@ describe("Sessions board storage", () => {
     ).not.toHaveProperty("kind");
   });
 
+  it("preserves both members' hides and a filter edit on the shared board", async () => {
+    const { store } = await sessionBoard();
+    await store.updateSessionsBoard("sessions", { scope: { maxAgeHours: 24 } });
+    await store.updateSessionsBoard("sessions", {
+      scopeChanges: { hideSessionKey: "agent:main:first" },
+    });
+    await store.updateSessionsBoard("sessions", { scopeChanges: { includeSubagents: false } });
+    await store.updateSessionsBoard("sessions", {
+      scopeChanges: { hideSessionKey: "agent:main:second" },
+    });
+    expect((await store.getSessionsBoard("sessions")).sessions.scope).toEqual({
+      maxAgeHours: 24,
+      hiddenSessionKeys: ["agent:main:first", "agent:main:second"],
+      includeSubagents: false,
+    });
+  });
+
   it("rejects card create, capture, transfer, and dispatch without modifying cards", async () => {
     const { store, stores } = await sessionBoard();
     const card = await store.create({ title: "Existing", sessionKey: "agent:main:example" });

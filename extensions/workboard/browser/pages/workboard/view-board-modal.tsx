@@ -166,14 +166,15 @@ export function BoardModal(props: {
         if (!props.canWrite) {
           throw new Error(t("workboard.sessionsBoard.writeUnavailable"));
         }
-        // Upsert returns the saved board, including sessions hidden while the editor was open.
-        const scope = { ...board.sessions?.scope };
-        for (const [option] of changedOptions) {
-          scope[option] = sessions?.scope?.[option];
-        }
+        const scopeChanges = Object.fromEntries(
+          changedOptions.map(([option]) => [option, scopeIncludes(sessions, option)]),
+        );
         await client.request("workboard.sessionsBoard.update", {
           boardId: initialDraft.id,
-          patch: { ...(columns ? { columns } : {}), ...(changedOptions.length ? { scope } : {}) },
+          patch: {
+            ...(columns ? { columns } : {}),
+            ...(changedOptions.length ? { scopeChanges } : {}),
+          },
         });
       }
       if (isCurrent()) {

@@ -53,13 +53,12 @@ it("saves the subagent choice without undoing sessions hidden while the editor w
   await vi.advanceTimersByTimeAsync(0);
   expect(page.request).toHaveBeenCalledWith("workboard.sessionsBoard.update", {
     boardId: board.id,
-    patch: {
-      scope: {
-        maxAgeHours: 24,
-        hiddenSessionKeys: ["agent:main:planning"],
-        includeSubagents: false,
-      },
-    },
+    patch: { scopeChanges: { includeSubagents: false } },
+  });
+  expect(board.sessions.scope).toEqual({
+    maxAgeHours: 24,
+    hiddenSessionKeys: ["agent:main:planning"],
+    includeSubagents: false,
   });
 });
 

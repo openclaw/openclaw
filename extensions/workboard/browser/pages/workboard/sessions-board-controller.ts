@@ -347,7 +347,7 @@ export function createSessionsBoardController(host: BoardDockHost, notify: () =>
         try {
           const { board } = await host.request<{ board: WorkboardSessionsBoard }>(
             "workboard.sessionsBoard.update",
-            { boardId: id, patch: { scope: nextScope } },
+            { boardId: id, patch: { scopeChanges: { hideSessionKey: sessionKey } } },
           );
           if (current(id, receipt) && snapshot) {
             snapshot = { ...snapshot, board };

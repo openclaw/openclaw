@@ -319,11 +319,34 @@ export function normalizeWorkboardSessionsBoardSpec(value: unknown): WorkboardSe
   };
 }
 
-/** Columns and scope replace their previous values; omitted fields stay unchanged. */
+/** Full scope replacement remains available; board controls change only their own fields. */
 export function patchWorkboardSessionsBoardSpec(
   current: WorkboardSessionsBoardSpec,
   value: unknown,
 ): WorkboardSessionsBoardSpec {
-  const patch = record(value, "sessions board patch", SPEC_KEYS);
-  return normalizeWorkboardSessionsBoardSpec({ ...current, ...patch });
+  const { scopeChanges, ...patch } = record(value, "sessions board patch", [
+    ...SPEC_KEYS,
+    "scopeChanges",
+  ]);
+  if (scopeChanges === undefined) {
+    return normalizeWorkboardSessionsBoardSpec({ ...current, ...patch });
+  }
+  if (patch.scope !== undefined) {
+    throw new Error("A Sessions board patch cannot replace and edit scope together.");
+  }
+  const { hideSessionKey, ...options } = record(scopeChanges, "scope changes", [
+    "hideSessionKey",
+    "includeArchived",
+    "includeAutomation",
+    "includeHome",
+    "includeSubagents",
+  ]);
+  const scope = { ...current.scope, ...options };
+  if (hideSessionKey !== undefined) {
+    scope.hiddenSessionKeys = [
+      ...(current.scope?.hiddenSessionKeys ?? []),
+      text(hideSessionKey, "hidden session key", 1),
+    ];
+  }
+  return normalizeWorkboardSessionsBoardSpec({ ...current, ...patch, scope });
 }
