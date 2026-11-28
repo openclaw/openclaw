@@ -48,22 +48,25 @@ import { subscribe } from "node:diagnostics_channel";
 const stage = process.env.OPENCLAW_BOOT_PLUGIN_STAGE;
 const root = process.env.OPENCLAW_BOOT_PLUGIN_PACKAGE_ROOT;
 subscribe("child_process", ({ process: child }) => {
-  const argv = child.spawnargs;
-  if (!stage || !root || !argv.some((arg) => arg.startsWith(root + "/"))) return;
-  const prefix = ${JSON.stringify(artifact(""))} + stage;
-  if (argv.includes("doctor") || argv.includes("--update-canary")) {
-    fs.appendFileSync(prefix + "-forbidden.jsonl", JSON.stringify({ argv }) + "\\n");
-  }
-  if (!argv.includes("update") || !argv.includes("plugins") || !argv.includes("--json")) return;
-  const observedStartAtMs = Date.now();
-  const started = process.hrtime.bigint();
-  child.once("close", (exitCode, signal) => {
-    fs.writeFileSync(prefix + "-child.json.tmp", JSON.stringify({
-      pid: child.pid, argv, exitCode, signal, observedStartAtMs,
-      observedExitAtMs: Date.now(),
-      durationMs: Number(process.hrtime.bigint() - started) / 1e6,
-    }));
-    fs.renameSync(prefix + "-child.json.tmp", prefix + "-child.json");
+  // The channel publishes construction before Node assigns spawnargs.
+  child.once("spawn", () => {
+    const argv = child.spawnargs;
+    if (!stage || !root || !argv.some((arg) => arg.startsWith(root + "/"))) return;
+    const prefix = ${JSON.stringify(artifact(""))} + stage;
+    if (argv.includes("doctor") || argv.includes("--update-canary")) {
+      fs.appendFileSync(prefix + "-forbidden.jsonl", JSON.stringify({ argv }) + "\\n");
+    }
+    if (!argv.includes("update") || !argv.includes("plugins") || !argv.includes("--json")) return;
+    const observedStartAtMs = Date.now();
+    const started = process.hrtime.bigint();
+    child.once("close", (exitCode, signal) => {
+      fs.writeFileSync(prefix + "-child.json.tmp", JSON.stringify({
+        pid: child.pid, argv, exitCode, signal, observedStartAtMs,
+        observedExitAtMs: Date.now(),
+        durationMs: Number(process.hrtime.bigint() - started) / 1e6,
+      }));
+      fs.renameSync(prefix + "-child.json.tmp", prefix + "-child.json");
+    });
   });
 });
 `,
