@@ -4,17 +4,19 @@ import { afterEach, beforeEach, expect, it, vi } from "vitest";
 import { updateCommand } from "../cli/update-cli/update-command.js";
 import { SystemdServiceAccountRefusalError } from "../daemon/service-inspection-error.js";
 import { defaultRuntime } from "../runtime.js";
+import { createDeferredCore } from "../shared/deferred.js";
 import { createTempHomeEnv, type TempHomeEnv } from "../test-utils/temp-home.js";
 import { mockProcessPlatform } from "../test-utils/vitest-spies.js";
 
 const native = vi.hoisted(() => ({
   scope: vi.fn(),
   command: vi.fn(),
-  capture: vi.fn(),
+  probe: vi.fn(),
   restart: vi.fn(),
   active: vi.fn(),
   install: vi.fn(),
   root: "",
+  engine: ">=24.0.0",
 }));
 // Native service inspection and package replacement have independent owner tests.
 // Exercise the real CLI branch; the forbidden state boundary throws on the base.
@@ -36,17 +38,24 @@ vi.mock("../daemon/systemd-service-files.js", async (original) => ({
   ...(await original<typeof import("../daemon/systemd-service-files.js")>()),
   readSystemdServiceExecStart: native.command,
 }));
-vi.mock("../daemon/systemd-service-identity.js", async (original) => ({
-  ...(await original<typeof import("../daemon/systemd-service-identity.js")>()),
-  captureSystemdServiceIdentity: native.capture,
+vi.mock("../daemon/systemd-service-account-command.js", async (original) => ({
+  ...(await original<typeof import("../daemon/systemd-service-account-command.js")>()),
+  findRootOwnedRunuser: async () => "/usr/sbin/runuser",
 }));
-vi.mock("../daemon/systemd-lifecycle.js", async (original) => ({
-  ...(await original<typeof import("../daemon/systemd-lifecycle.js")>()),
-  restartSystemdService: native.restart,
-}));
+vi.mock("../process/exec.js", async (original) => {
+  const actual = await original<typeof import("../process/exec.js")>();
+  return {
+    ...actual,
+    runCommandWithTimeout: (...args: Parameters<typeof actual.runCommandWithTimeout>) =>
+      args[0][0] === "/usr/sbin/runuser"
+        ? native.probe(...args)
+        : actual.runCommandWithTimeout(...args),
+  };
+});
 vi.mock("../daemon/systemd-exec.js", async (original) => ({
   ...(await original<typeof import("../daemon/systemd-exec.js")>()),
-  execSystemctl: native.active,
+  execSystemctl: async (args: string[]) =>
+    args.includes("restart") ? native.restart() : native.active(),
 }));
 vi.mock("../infra/package-update-steps.js", async (original) => ({
   ...(await original<typeof import("../infra/package-update-steps.js")>()),
@@ -67,6 +76,7 @@ vi.mock("./target.js", async (original) => ({
     kind: "package",
     spec: "openclaw@2026.11.29",
     version: "2026.11.29",
+    engines: { node: native.engine },
   }),
 }));
 
@@ -117,7 +127,8 @@ beforeEach(async () => {
       selectorsIncomplete: false,
     }),
   );
-  native.capture.mockResolvedValue({ ...unit, serviceUser: "openclaw" });
+  native.engine = ">=24.0.0";
+  native.probe.mockResolvedValue({ code: 0, stdout: "v24.22.1\n", stderr: "" });
   native.install.mockImplementation(async () => {
     await fs.writeFile(
       path.join(native.root, "package.json"),
@@ -130,7 +141,7 @@ beforeEach(async () => {
       recovery: { serviceRestartSafe: true },
     };
   });
-  native.restart.mockResolvedValue({ outcome: "completed" });
+  native.restart.mockResolvedValue({ code: 0, stdout: "", stderr: "" });
   native.active.mockResolvedValue({ code: 0, stdout: "active", stderr: "" });
   process.exitCode = undefined;
 });
@@ -152,6 +163,14 @@ it.each([false, true])(
       JSON.parse(await fs.readFile(path.join(native.root, "package.json"), "utf8")).version,
     ).toBe("2026.11.29");
     expect(native.restart).toHaveBeenCalledOnce();
+    expect(native.probe).toHaveBeenCalledWith(
+      ["/usr/sbin/runuser", "-u", "openclaw", "--", process.execPath, "--version"],
+      expect.objectContaining({
+        baseEnv: {},
+        env: { PATH: "/usr/sbin:/usr/bin:/sbin:/bin" },
+        cwd: "/",
+      }),
+    );
     expect(defaultRuntime.writeJson).toHaveBeenCalledWith(
       expect.objectContaining({ message: expect.stringContaining("readiness not verified") }),
     );
@@ -186,3 +205,49 @@ it("honors --no-restart without claiming the package is serving", async () => {
     expect.stringContaining("Restart with: systemctl restart openclaw-gateway.service"),
   );
 });
+
+it("keeps the installed package when the service runtime cannot run the target", async () => {
+  native.engine = ">=26.0.0";
+  await expect(updateCommand({ yes: true })).rejects.toThrow("Select a compatible runtime");
+  expect(native.install).not.toHaveBeenCalled();
+  expect(native.restart).not.toHaveBeenCalled();
+  expect(
+    JSON.parse(await fs.readFile(path.join(native.root, "package.json"), "utf8")).version,
+  ).toBe("2026.11.28");
+});
+
+it("does not inspect activity until the blocking systemctl restart completes", async () => {
+  const started = createDeferredCore<void>();
+  const completed = createDeferredCore<void>();
+  native.restart.mockImplementation(async () => {
+    started.resolve();
+    await completed.promise;
+    return { code: 0, stdout: "", stderr: "" };
+  });
+  const updating = updateCommand({ yes: true });
+  await started.promise;
+  expect(native.active).not.toHaveBeenCalled();
+  completed.resolve();
+  await updating;
+  expect(native.active).toHaveBeenCalledOnce();
+});
+
+it.each(["exit", "spawn"])(
+  "refuses before replacement with the exact %s probe failure",
+  async (failure) => {
+    if (failure === "exit") {
+      native.probe.mockResolvedValue({
+        code: 126,
+        stdout: "",
+        stderr: "recorded runtime permission denied",
+      });
+    } else {
+      native.probe.mockRejectedValue(new Error("recorded runtime permission denied"));
+    }
+    const updating = updateCommand({ yes: true });
+    await expect(updating).rejects.toThrow("recorded runtime permission denied");
+    await expect(updating).rejects.toThrow("Select a compatible runtime");
+    expect(native.install).not.toHaveBeenCalled();
+    expect(native.restart).not.toHaveBeenCalled();
+  },
+);

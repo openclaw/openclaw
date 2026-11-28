@@ -146,6 +146,11 @@ an update run in either root's home or the service account's state directory.
 The service's own boot, running as `User=`, migrates its state and converges plugins.
 The unit's environment, profile, state selectors, and file ownership stay unchanged.
 
+Before replacing the package, the CLI runs only the unit's recorded runtime's
+`--version` through `runuser` as the service account, without its loader environment.
+An incompatible runtime or failed probe refuses before replacement, with the
+cause and the runtime change needed. `runuser` from util-linux must be installed.
+
 The CLI checks that systemd reports the unit active and prints the commands to
 inspect the service. It does not assume HTTP when TLS is configured only in the
 service's state: active does not prove that startup migration has completed.

@@ -1,3 +1,5 @@
+import path from "node:path";
+import { satisfies } from "semver";
 import {
   assertGlobalUpdateOwner,
   parseUpdateChannel,
@@ -6,12 +8,17 @@ import {
   runUpdateStep,
   type UpdateCommandOptions,
 } from "../cli/update-cli/shared.js";
+import { isBunRuntime, isNodeRuntime } from "../daemon/runtime-binary.js";
 import type { SystemdServiceAccountMismatch } from "../daemon/service-inspection-error.js";
 import { execSystemctl } from "../daemon/systemd-exec.js";
-import { restartSystemdService } from "../daemon/systemd-lifecycle.js";
-import { captureSystemdServiceIdentity } from "../daemon/systemd-service-identity.js";
+import {
+  findRootOwnedRunuser,
+  serviceAccountArgv,
+} from "../daemon/systemd-service-account-command.js";
+import { formatErrorMessage } from "../infra/errors.js";
 import { compareSemverStrings } from "../infra/npm-registry-spec.js";
 import { runGlobalPackageUpdateSteps } from "../infra/package-update-steps.js";
+import { isSupportedBunVersion } from "../infra/runtime-guard.js";
 import { resolveEffectiveUpdateChannel } from "../infra/update-channels.js";
 import {
   createGlobalInstallEnv,
@@ -20,7 +27,6 @@ import {
 } from "../infra/update-global.js";
 import { runCommandWithTimeout } from "../process/exec.js";
 import { defaultRuntime } from "../runtime.js";
-import { createNullWriter } from "../shared/null-writer.js";
 import { VERSION } from "../version.js";
 import { PREPARE_DEADLINE_MS } from "./run.js";
 import { resolveTarget } from "./target.js";
@@ -81,12 +87,51 @@ export async function updateSystemServicePackage(
       throw new Error("Downgrade not confirmed. Nothing changed.");
     }
   }
-  const selected = await captureSystemdServiceIdentity({
-    env: process.env,
-    target: { scope: "system", unitName: unit.unitName, unitPath: unit.unitPath },
-    rootServiceAccount: unit.serviceUser,
-    timeoutMs,
+  const executable = unit.programArguments[0] ?? "";
+  const bun = isBunRuntime(executable);
+  const nextStep = `Select a compatible runtime in ${unit.unitName}'s ExecStart and ensure it can run as ${unit.serviceUser}, then retry. The package was not changed.`;
+  const runuser = await findRootOwnedRunuser();
+  if (!runuser) {
+    throw new Error(
+      "No root-owned runuser was found. Install util-linux's runuser and retry. The package was not changed.",
+    );
+  }
+  if (!path.isAbsolute(executable) || (!bun && !isNodeRuntime(executable))) {
+    throw new Error(
+      `The recorded executable ${JSON.stringify(executable)} is not an absolute Node/Bun runtime. ${nextStep}`,
+    );
+  }
+  // Never execute a service-account-owned runtime or its loader environment as root.
+  const probe = await runCommandWithTimeout(
+    serviceAccountArgv({ runuser, account: unit.serviceUser, argv: [executable, "--version"] }),
+    {
+      baseEnv: {},
+      env: { PATH: "/usr/sbin:/usr/bin:/sbin:/bin" },
+      cwd: "/",
+      timeoutMs: Math.min(timeoutMs, 10_000),
+      killProcessTree: true,
+    },
+  ).catch((cause: unknown) => {
+    throw new Error(`Service runtime check failed: ${formatErrorMessage(cause)}. ${nextStep}`, {
+      cause,
+    });
   });
+  if (probe.code !== 0) {
+    throw new Error(
+      `Service runtime check failed: ${probe.stderr.trim() || probe.stdout.trim() || `exit ${probe.code}`}. ${nextStep}`,
+    );
+  }
+  const version = probe.stdout.trim();
+  if (
+    (bun && !isSupportedBunVersion(version)) ||
+    (!bun &&
+      target.engines?.node &&
+      !satisfies(version, target.engines.node, { includePrerelease: true }))
+  ) {
+    throw new Error(
+      `Service runtime ${version} cannot run this package (${bun ? "supported Bun required" : `Node ${target.engines?.node} required`}). ${nextStep}`,
+    );
+  }
   const env = await createGlobalInstallEnv(
     {
       ...process.env,
@@ -115,11 +160,15 @@ export async function updateSystemServicePackage(
   let message = `Package ${installed.afterVersion ?? target.version} installed. State convergence belongs to ${unit.serviceUser}'s service boot.`;
   if (opts.restart !== false) {
     try {
-      await restartSystemdService({
-        env: process.env,
-        systemdIdentity: selected,
-        stdout: createNullWriter(),
-      });
+      // systemctl waits for the stop/start job; RestartUnit alone only queues it.
+      const restarted = await execSystemctl(
+        ["--system", "restart", unit.unitName],
+        process.env,
+        timeoutMs,
+      );
+      if (restarted.code !== 0) {
+        throw new Error(restarted.stderr || restarted.stdout || "systemctl restart failed");
+      }
     } catch (cause) {
       throw new Error(
         `Package installed, but ${unit.unitName} could not restart. Check: ${checks}`,
@@ -129,7 +178,7 @@ export async function updateSystemServicePackage(
       );
     }
     const active = await execSystemctl(
-      ["is-active", "--quiet", unit.unitName],
+      ["--system", "is-active", "--quiet", unit.unitName],
       process.env,
       timeoutMs,
     );
