@@ -50,7 +50,7 @@ const CHAT_PROJECTION_SCOPE_KEYS = [
   "activeLeafEntryId",
 ] as const;
 
-type ChatSessionProjectionOwner = ChatComposerScope &
+export type ChatSessionProjectionOwner = ChatComposerScope &
   ChatReasoningHost & {
     sessionKey: string;
     chatMessages: unknown[];
