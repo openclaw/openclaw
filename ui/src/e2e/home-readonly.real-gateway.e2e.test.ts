@@ -3,6 +3,7 @@ import path from "node:path";
 import type { Page } from "playwright";
 import type { ViteDevServer } from "vite";
 import { expect, it } from "vitest";
+import { CONTROL_UI_OPERATOR_SCOPES } from "../../../src/gateway/control-ui-bootstrap-contract.ts";
 import type { GatewayServer } from "../../../src/gateway/server-public.ts";
 import {
   setDisplayName,
@@ -169,7 +170,10 @@ suite.define(() => {
             await evaluateControlUiContext(page, (app) =>
               app.gateway.snapshot.hello?.auth?.scopes?.toSorted(),
             ),
-          ).toEqual(person.scopes.toSorted());
+          ).toEqual(
+            // Admin covers the browser’s full requested scope set; the reader stays narrowly scoped.
+            (person.role === "owner" ? CONTROL_UI_OPERATOR_SCOPES : person.scopes).toSorted(),
+          );
           if (index === 0) {
             await rpc(page, "sessions.create", { key: homeKey, label: "Home release notes" });
             await rpc(page, "chat.inject", { sessionKey: homeKey, message });
