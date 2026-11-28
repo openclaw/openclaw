@@ -1,6 +1,8 @@
 import manifest from "./openclaw.plugin.json" with { type: "json" };
 
 export const CLAUDE_CLI_BACKEND_ID = "claude-cli";
+/** Executable the claude-cli backend launches. */
+export const CLAUDE_CLI_COMMAND = "claude";
 /** Retired OpenClaw auth profile replaced by Claude CLI's native login. */
 export const CLAUDE_CLI_PROFILE_ID = `anthropic:${CLAUDE_CLI_BACKEND_ID}`;
 /** Explicit thinking opt-out for Claude CLI routes unsupported by Claude Code. */

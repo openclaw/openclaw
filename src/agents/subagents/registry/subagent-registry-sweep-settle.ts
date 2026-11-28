@@ -138,7 +138,7 @@ export async function settleUnreachableYieldedSubagentRun(params: {
 }
 
 const SUBAGENT_RESTART_INTERRUPTED_ERROR =
-  "The Gateway stopped before this subagent finished. Its run did not survive the restart; inspect its saved work before retrying.";
+  "The Gateway restarted without confirming this subagent's result. Remote work may still be running or may have finished. Check the original worker and its saved work before retrying.";
 
 /**
  * Settles a running row hydrated from an earlier Gateway process. Restore retires its
@@ -183,7 +183,7 @@ export async function settleRestartInterruptedSubagentRun(params: {
       recoveryCurrent: readScope?.completionCurrent,
       endedAt: now,
       outcome: { status: "error", error: SUBAGENT_RESTART_INTERRUPTED_ERROR },
-      // The dead execution cannot publish another reply; the completion owner keeps any saved one.
+      // The old Gateway cannot publish another reply; the completion owner keeps any saved one.
       terminalReply: { disposition: "empty" },
       reason: SUBAGENT_ENDED_REASON_ERROR,
       sendFarewell: true,

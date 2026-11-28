@@ -8,9 +8,12 @@ import { shouldHandleNavigationClick } from "../../lib/navigation-click.ts";
 import { focusProgrammatically } from "../../lib/programmatic-focus.ts";
 import { elementRef } from "../../lib/reactive/element-ref.ts";
 import type { Overlay } from "../overlay-lifecycle.ts";
-import { containsComposed } from "../overlay-registry.ts";
-import { MENU_FORM_CONTROL_SELECTOR } from "./menu-form-controls.ts";
-import type { PendingMenuHover, PendingMenuIntent } from "./menu-runtime-replay.ts";
+import {
+  compareMenuElements,
+  MENU_FORM_CONTROL_SELECTOR,
+  ownsMenuTarget,
+} from "./menu-form-controls.ts";
+import type { MenuKeySource, PendingMenuHover, PendingMenuIntent } from "./menu-navigation.ts";
 import type { MenuNavigationOptions, MenuRuntime } from "./menu-runtime.ts";
 
 export type { MenuNavigationOptions } from "./menu-runtime.ts";
@@ -68,18 +71,11 @@ export function useMenuMachine(
   options: MenuNavigationOptions = {},
 ): MenuBinding {
   const { elements: itemNodes, ref: itemRef } = createMenuControls();
-  const ownsTarget = (target: HTMLElement) =>
-    ![...overlay.children].some((child) => child.open && containsComposed(child.surface, target)) &&
-    (options.surface === "listbox"
-      ? overlay.surface.contains(target)
-      : target.closest('[role="menu"]') === overlay.surface);
   const items = (ordered = true) => {
-    const connected = [...itemNodes].filter((item) => item.isConnected && ownsTarget(item));
-    return ordered
-      ? connected.toSorted((left, right) =>
-          left.compareDocumentPosition(right) & Node.DOCUMENT_POSITION_FOLLOWING ? -1 : 1,
-        )
-      : connected;
+    const connected = [...itemNodes].filter(
+      (item) => item.isConnected && ownsMenuTarget(overlay, item, options.surface),
+    );
+    return ordered ? connected.toSorted(compareMenuElements) : connected;
   };
   const parentRuntime = createMemo(() => parent?.runtime());
   let hover: PendingMenuHover | undefined;
@@ -106,50 +102,42 @@ export function useMenuMachine(
     },
     { lazy: true },
   );
+  const awaitingRuntime = () => loading || (parent && !parentRuntime() && !parent.error());
   const run = (intent: (loaded: MenuRuntime) => void, highlightedValue?: string | null) => {
     if (runtime) {
       intent(runtime);
-    } else if (overlay.open && loading) {
+    } else if (overlay.open && awaitingRuntime()) {
       pending.push({ run: intent, highlightedValue });
     }
   };
-  const load = async () => {
-    if (!mounted || runtime || loading) {
+  const load = async (loadedParent?: MenuRuntime) => {
+    // A submenu may already be visible, but its Zag machine must start with its parent.
+    if (!mounted || runtime || loading || (parent && !loadedParent)) {
       return;
     }
     loading = true;
     setError(undefined);
     try {
-      const { createMenuRuntime, replayMenuIntents } = await retryControlUiImport(
-        () => import("./menu-runtime.ts"),
-      );
+      const { createMenuRuntime, adoptNativeMenuInput, replayMenuIntents } =
+        await retryControlUiImport(() => import("./menu-navigation.ts"));
       if (!mounted) {
         return;
       }
       runtime = createMenuRuntime(
         overlay,
         direction,
-        parentRuntime()?.service,
+        loadedParent?.service,
         { ...options, virtualized: () => virtualized },
         items,
         notify,
         onSelect,
       );
       stopRuntime = runtime.start();
-      await replayMenuIntents(
-        runtime,
-        parentRuntime,
-        pending,
-        hover,
-        overlay,
-        items,
-        options.surface,
-        () => {
-          hover = undefined;
-          loading = false;
-          notify();
-        },
-      );
+      adoptNativeMenuInput(runtime, overlay, options.surface, items, hover, parentRuntime);
+      hover = undefined;
+      loading = false;
+      notify();
+      await replayMenuIntents(pending, runtime, parentRuntime);
     } catch (reason) {
       if (!mounted) {
         return;
@@ -167,14 +155,15 @@ export function useMenuMachine(
     mounted = true;
     const stopOpen = overlay.subscribe((open) => {
       notify();
-      if (open) {
-        void load();
-      } else {
+      if (!open) {
         pending.length = 0;
+      } else if (!parent) {
+        void load();
       }
     });
-    if (overlay.open || parentRuntime()) {
-      void load();
+    const loadedParent = parentRuntime();
+    if (overlay.open || loadedParent) {
+      void load(loadedParent);
     }
     return () => {
       mounted = false;
@@ -199,24 +188,25 @@ export function useMenuMachine(
       if (loaded) {
         loaded.updateInputs(dir, catalog, selected);
       } else if (loadedParent) {
-        void load();
+        void load(loadedParent);
       }
     },
   );
-  const deferKey = (event: KeyboardEvent, target: "content" | "input" | "trigger") => {
+  const deferKey = (event: KeyboardEvent, target: MenuKeySource) => {
     if (
       event.defaultPrevented ||
       event.isComposing ||
       !overlay.open ||
-      !loading ||
+      !awaitingRuntime() ||
       !(event.target instanceof HTMLElement) ||
-      (target === "content" && !ownsTarget(event.target))
+      (target === "content" && !ownsMenuTarget(overlay, event.target, options.surface))
     ) {
       return;
     }
+    const { key } = event;
     const editing =
       event.target instanceof HTMLInputElement || event.target instanceof HTMLTextAreaElement;
-    if (event.key === "Escape") {
+    if (key === "Escape") {
       // A child can retain focus on its parent trigger before navigation loads, too.
       if (![...overlay.children].some((child) => child.open)) {
         overlay.keydown(event);
@@ -227,14 +217,13 @@ export function useMenuMachine(
       target === "content" &&
       options.surface !== "listbox" &&
       event.target.matches(MENU_FORM_CONTROL_SELECTOR) &&
-      !(event.target.matches("input[data-search]") && ["ArrowDown", "Enter"].includes(event.key)) &&
-      !(event.target instanceof HTMLButtonElement && ["ArrowDown", "ArrowUp"].includes(event.key))
+      !(event.target.matches("input[data-search]") && ["ArrowDown", "Enter"].includes(key)) &&
+      !(event.target instanceof HTMLButtonElement && ["ArrowDown", "ArrowUp"].includes(key))
     ) {
       return;
     }
     if (
-      event.key === "Tab" ||
-      (event.key.length !== 1 &&
+      (key.length !== 1 &&
         ![
           "ArrowDown",
           "ArrowUp",
@@ -244,8 +233,8 @@ export function useMenuMachine(
           "End",
           "Enter",
           "Backspace",
-        ].includes(event.key)) ||
-      (editing && !["ArrowDown", "ArrowUp", "Enter"].includes(event.key)) ||
+        ].includes(key)) ||
+      (editing && !["ArrowDown", "ArrowUp", "Enter"].includes(key)) ||
       event.ctrlKey ||
       event.metaKey ||
       event.altKey
@@ -253,22 +242,28 @@ export function useMenuMachine(
       return;
     }
     const originalTarget = event.target;
-    const currentTarget = event.currentTarget;
     event.preventDefault();
     event.stopPropagation();
     if (
       target === "content" &&
       options.surface !== "listbox" &&
-      ["Enter", " "].includes(event.key) &&
-      itemNodes.has(originalTarget) &&
-      !originalTarget.hasAttribute("aria-haspopup") &&
-      !pending.some((intent) => intent.keyboard)
+      !pending.some((intent) => "event" in intent)
     ) {
-      // Leaf activation already has a native owner; only prior navigation needs replay.
-      originalTarget.click();
-      return;
+      // Close the visible branch before the next Escape chooses its deepest owner.
+      if (parent && key === (direction() === "rtl" ? "ArrowRight" : "ArrowLeft")) {
+        overlay.request(false, "return");
+        return;
+      }
+      if (
+        ["Enter", " "].includes(key) &&
+        itemNodes.has(originalTarget) &&
+        !originalTarget.hasAttribute("aria-haspopup")
+      ) {
+        originalTarget.click();
+        return;
+      }
     }
-    pending.push({ keyboard: event, target, originalTarget, currentTarget });
+    pending.push({ event, source: target, originalTarget, currentTarget: event.currentTarget });
   };
   const keydown = (event: KeyboardEvent) =>
     runtime ? runtime.keydown(event) : deferKey(event, "input");
@@ -293,7 +288,7 @@ export function useMenuMachine(
       if (isStaleChunkImportError(error())) {
         void retryStaleChunkReloadWhenReachable({ canReload: () => mounted && overlay.open });
       } else {
-        void load();
+        void load(parentRuntime());
       }
     },
     item(value, disabled, type, checked = false, label = value) {
@@ -382,7 +377,7 @@ export function useMenuMachine(
           if (disabled || !parentBinding || event.pointerType !== "mouse") {
             return;
           }
-          hover = { event, target: event.target, currentTarget: event.currentTarget };
+          hover = { event, originalTarget: event.target, currentTarget: event.currentTarget };
         },
         onPointerLeave: () => {
           hover = undefined;
@@ -400,9 +395,8 @@ export function useMenuMachine(
           }
           const forward = direction() === "rtl" ? "ArrowLeft" : "ArrowRight";
           if (
-            ["ArrowDown", "ArrowUp", "Enter", " ", ...(parentBinding ? [forward] : [])].includes(
-              event.key,
-            )
+            ["ArrowDown", "ArrowUp", "Enter", " "].includes(event.key) ||
+            (parentBinding && event.key === forward)
           ) {
             event.preventDefault();
             overlay.request(true, event.key === "ArrowUp" ? "last" : "first");

@@ -211,6 +211,40 @@ describe.skipIf(process.platform !== "linux")("Codex procfs registration", () =>
     },
   );
 
+  it("still terminates a detached sibling when a known child is exiting", async () => {
+    const survivor = neighbor + 1;
+    addProcess(child.pid, process.pid);
+    addProcess(neighbor, child.pid);
+    addProcess(survivor, child.pid);
+    kill.mockImplementation((pid, signal) => {
+      if (pid === child.pid && signal === "SIGSTOP") {
+        addProcess(child.pid, process.pid, "T");
+        // An exiting task can lose its group before its PID disappears from procfs.
+        procfs.files.set(
+          procFile(neighbor),
+          `${neighbor} (exiting) Z 0 -1${" 0".repeat(16)} 12345\n`,
+        );
+      } else if (pid === survivor && signal === "SIGSTOP") {
+        addProcess(survivor, child.pid, "T");
+      } else if (pid === survivor && signal === "SIGKILL") {
+        procfs.files.delete(procFile(survivor));
+      }
+      return true;
+    });
+    const contained = await terminateCodexAppServerDescendants({
+      pid: child.pid,
+      kill: (signal) => process.kill(child.pid, signal),
+    });
+    try {
+      expect(contained).toMatchObject({ root: child });
+      expect(kill).toHaveBeenCalledWith(survivor, "SIGKILL");
+    } finally {
+      if (contained && contained !== "exited") {
+        contained.resume();
+      }
+    }
+  });
+
   it.for(["already dead", "killed"])("retires an orphan that is %s", async (mode) => {
     store.register("orphan", registration);
     procfs.files.delete(procFile(parent.pid));

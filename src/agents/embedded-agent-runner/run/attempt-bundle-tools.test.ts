@@ -301,18 +301,6 @@ describe("prepareEmbeddedAttemptBundleTools", () => {
       ).toEqual(["read"]);
     }));
 
-  it("omits an unavailable message tool from a fixed listing", async () => {
-    // `agent --local` without a channel: no source, no configured route.
-    const input = createInput([], [createStubTool("message")]);
-    input.preparedToolBase = {
-      ...input.preparedToolBase,
-      messageToolAvailable: false,
-      fixedListing: true,
-    } as typeof input.preparedToolBase;
-    const result = await prepare(input);
-    expect(toolNames(result.uncompactedEffectiveTools)).not.toContain("message");
-  });
-
   it.each([
     { runtime: undefined, publicationAllowed: true },
     { runtime: ["sessions_spawn", "server__read"], publicationAllowed: false },

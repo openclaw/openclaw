@@ -4,6 +4,8 @@ import type { WorkboardSessionsBoardRead } from "@openclaw/workboard-contract";
 import { expect, it } from "vitest";
 import { createControlUiE2eArtifactDir } from "../test-helpers/control-ui-e2e-artifacts.ts";
 import { takeControlUiScreenshotFrame } from "../test-helpers/control-ui-e2e-screenshot.ts";
+import { installNativePluginMockGateway } from "../test-helpers/control-ui-plugin-e2e.ts";
+import { workboardUi } from "../test-helpers/control-ui-workboard-fixture.ts";
 import { createControlUiE2eSuite } from "./control-ui-e2e-suite.test-support.ts";
 import { installWorkboardPage } from "./workboard-page.test-support.ts";
 const suite = createControlUiE2eSuite({
@@ -11,6 +13,86 @@ const suite = createControlUiE2eSuite({
   startServerBeforeBrowser: true,
 });
 suite.define(() => {
+  it("wraps long people and board filters without hiding either selected name", async () => {
+    await suite.withPage(
+      {
+        viewport: { width: 390, height: 844 },
+        hasTouch: true,
+        isMobile: true,
+        locale: "en-US",
+        serviceWorkers: "block",
+      },
+      async ({ page }) => {
+        const columns: WorkboardSessionsBoardRead["columns"] = [
+          {
+            id: "working",
+            label: "Working",
+            description: "Active print reviews",
+            match: { run: ["active"] },
+          },
+          { id: "done", label: "Done", description: "Completed print reviews", fallback: true },
+        ];
+        const board = {
+          id: "sessions",
+          name: "Gallery print reviews",
+          kind: "sessions",
+          sessions: { columns },
+          createdAt: 1,
+          updatedAt: 1,
+        };
+        const boards = [{ ...board, total: 0, active: 0, archived: 0, byStatus: {} }];
+        const person = {
+          identity: { type: "profile", id: "print-reviewer" },
+          label: "Morgan · Exhibition accessibility and bilingual print review",
+          sessionCount: 1,
+        };
+        await installNativePluginMockGateway(page, {
+          ...workboardUi,
+          methodResponses: {
+            "workboard.boards.list": { boards },
+            "workboard.cards.list": { boards, cards: [] },
+            "workboard.cards.diagnostics.refresh": { diagnostics: [], count: 0 },
+            "workboard.sessionsBoard.read": {
+              board,
+              columns,
+              sessions: [],
+              total: 0,
+              people: [person],
+              revision: {
+                epoch: "gallery",
+                revision: 1,
+                boardId: "sessions",
+                scope: "print-reviews",
+              },
+            },
+          },
+        });
+        await page.goto(suite.server.baseUrl + "workboard/sessions");
+        const toolbar = page.locator(".workboard-sessions .workboard-toolbar");
+        const boardPicker = toolbar.getByRole("button", {
+          name: "Filter by board: Gallery print reviews",
+        });
+        const peoplePicker = toolbar.getByRole("button", { name: /^People filter:/ });
+        await expect.poll(() => peoplePicker.isEnabled()).toBe(true);
+        const top = (el: Element) => el.getBoundingClientRect().top;
+        expect(await peoplePicker.evaluate(top)).toBeCloseTo(await boardPicker.evaluate(top), 0);
+        await peoplePicker.tap();
+        await page.getByRole("option", { name: person.label, exact: true }).tap();
+        // oxlint-disable-next-line unicorn/prefer-dom-node-text-content -- innerText proves the rendered visible text.
+        await expect.poll(() => peoplePicker.innerText()).toBe(person.label);
+        expect(await peoplePicker.evaluate(top)).toBeGreaterThan(
+          await boardPicker.evaluate((el) => el.getBoundingClientRect().bottom),
+        );
+        for (const picker of [boardPicker, peoplePicker]) {
+          expect(
+            await picker
+              .locator(".picker-select__label")
+              .evaluate((el) => el.scrollWidth <= el.clientWidth + 1),
+          ).toBe(true);
+        }
+      },
+    );
+  });
   it("does not count unread sessions as empty before the first result or a changed people view", async () => {
     await suite.withPage(
       { viewport: { width: 1280, height: 900 }, locale: "en-US", serviceWorkers: "block" },

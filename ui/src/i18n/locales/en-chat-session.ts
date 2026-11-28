@@ -244,12 +244,11 @@ const enChatSession = {
       steerBlocked: "Steering — sends when the current step finishes.",
       steerUnavailable: "Steering — sends on the next model turn.",
       agentUpdate: {
-        cancelled: "This agent update was cancelled before delivery.",
+        cancelled: "This agent update was canceled before delivery.",
       },
       waitingForWorkspaceSync: "Received · waiting for workspace sync",
       waitingForWorkerSetup: "Received · setting up device",
-      cancelled:
-        "Cancelled before the agent started it. It will not run automatically; copy it and send again.",
+      cancelled: "Canceled before the agent started. Copy the message and send it again.",
       earlier: "Show earlier unsent messages",
       latest: "Show latest unsent messages",
       dismiss: "Dismiss",

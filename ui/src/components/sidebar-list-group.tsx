@@ -5,6 +5,7 @@ import { Icon } from "./solid/icon.tsx";
 /** A collapsible group of a section sidebar's rows, under the Sessions sidebar's group heading. */
 export function SidebarListGroup(props: {
   label: string;
+  indicator?: JSX.Element;
   open: boolean;
   onToggle: () => void;
   children: JSX.Element;
@@ -24,6 +25,7 @@ export function SidebarListGroup(props: {
             </span>
           </span>
           <span class="sidebar-recent-sessions__label-text">{props.label}</span>
+          {props.indicator}
         </button>
       </div>
       <Show when={props.open}>{props.children}</Show>

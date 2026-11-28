@@ -152,8 +152,6 @@ export function SidebarPanelLauncher(props: {
                   <button
                     type="button"
                     class="side-panel-launcher__card"
-                    onPointerEnter={() => type().prepare?.()}
-                    onFocus={() => type().prepare?.()}
                     aria-disabled={!type().available ? "true" : undefined}
                     onClick={() => {
                       if (type().available) {
@@ -216,10 +214,6 @@ function TypeMenu(props: SidebarRegionHeaderProps) {
           },
           get label() {
             return current().label;
-          },
-          attributes: {
-            onPointerEnter: () => current().prepare?.(),
-            onFocus: () => current().prepare?.(),
           },
           class: "side-panel-type-menu__item session-menu__item",
           icon: (

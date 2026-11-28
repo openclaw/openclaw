@@ -97,7 +97,7 @@ function setAttempt(
   });
 }
 
-function makeToolRejectionInput(model = "claude-opus-5") {
+function makeToolRejectionInput(model: string) {
   const fixture = makeExhaustedCredentialFailureInput();
   setAttempt(
     fixture.input,

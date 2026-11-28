@@ -94,7 +94,8 @@ export async function exerciseRemainingPlugin(
     await expect(refresh).toHaveAccessibleName("Refresh");
     await expect(input).toHaveAccessibleName("Add by X handle");
     await expect(guestMode).toHaveAccessibleName("Guest mode");
-    await expect(accountSelect).toHaveAccessibleName("Bot account");
+    // The benchmark also compares older plugin bundles.
+    await expect(accountSelect).toHaveAccessibleName(/^(X|Bot) account$/);
     await expect(add).toHaveAccessibleName("Add account");
     const retained = await rows.first().elementHandle();
     await step("type-handle", async () => {

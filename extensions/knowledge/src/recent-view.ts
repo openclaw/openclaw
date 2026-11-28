@@ -1,4 +1,5 @@
 import { claimCard, summaryLink } from "./claim-view.js";
+import { t } from "./i18n/index.js";
 import { confidenceView, identityTag } from "./knowledge-presentation.js";
 import type { Page } from "./page-context.js";
 import { button, disclosureLabel, el, label, tile, time, type Summary } from "./page-dom.js";
@@ -54,11 +55,16 @@ export async function recent(ui: Page, n: number, target: HTMLElement) {
       const zone =
         new Intl.DateTimeFormat(undefined, { timeZoneName: "short" })
           .formatToParts(new Date(entry.at))
-          .find((p) => p.type === "timeZoneName")?.value ?? "local time";
+          .find((p) => p.type === "timeZoneName")?.value ?? t("knowledge.recent.localTime");
       feed.append(
         el(
           "h2",
-          `${new Date(entry.at).toDateString() === new Date().toDateString() ? `Today · ${day}` : day} · saved times in ${zone}`,
+          t(
+            new Date(entry.at).toDateString() === new Date().toDateString()
+              ? "knowledge.recent.dayToday"
+              : "knowledge.recent.day",
+            { day, zone },
+          ),
           "knowledge-eyebrow",
         ),
       );
@@ -74,29 +80,25 @@ export async function recent(ui: Page, n: number, target: HTMLElement) {
     row.dataset.change = entry.change;
     row.dataset.readingKey = `activity:${entry.sequence}`;
     const copy = el("span", undefined, "knowledge-feed-copy");
-    const kindLabel = entry.kind === "relationship" ? "Connection" : label(entry.type);
+    const kindLabel =
+      entry.kind === "relationship" ? t("knowledge.recent.connection") : label(entry.type);
     const savedTime = time(entry.at);
-    const badgeLabel = {
-      created: "New",
-      updated: "Updated",
-      observed: "Observed in vault",
-      external: "Edited outside OpenClaw",
-      corrected: "Corrected",
-      withdrawn: "Withdrawn",
-    }[entry.change];
+    const badgeLabel = t(`knowledge.recent.changes.${entry.change}`);
     copy.append(
       el("span", entry.title || `${kindLabel} ${entry.change}`, "knowledge-feed-title"),
       identityTag(entry.identityStatus),
     );
     const description =
-      entry.change === "corrected"
-        ? `${kindLabel} · Corrected`
-        : entry.change === "withdrawn"
-          ? `${kindLabel} · Withdrawn`
-          : entry.change === "external"
-            ? `${kindLabel} · Edited outside OpenClaw`
-            : kindLabel;
-    copy.append(el("span", `${description} · Saved ${savedTime}`, "knowledge-feed-meta"));
+      entry.change === "corrected" || entry.change === "withdrawn" || entry.change === "external"
+        ? `${kindLabel} · ${badgeLabel}`
+        : kindLabel;
+    copy.append(
+      el(
+        "span",
+        t("knowledge.recent.savedAt", { description, time: savedTime }),
+        "knowledge-feed-meta",
+      ),
+    );
     if (entry.group) {
       row.classList.add("knowledge-source-activity");
       const source = entry.group.source,
@@ -123,42 +125,61 @@ export async function recent(ui: Page, n: number, target: HTMLElement) {
         const occurred = el("span");
         occurred.append(
           icon("calendarClock", 12),
-          el("span", `Occurred ${formatSourceDate(source.occurredAt)}`),
+          el("span", t("knowledge.common.occurred", { date: formatSourceDate(source.occurredAt) })),
         );
         metadata.append(occurred);
       }
       metadata.append(
         el(
           "span",
-          `Saved ${entry.group.firstSaved && entry.group.lastSaved && time(entry.group.firstSaved) !== time(entry.group.lastSaved) ? `${time(entry.group.firstSaved)}–${time(entry.group.lastSaved)}` : savedTime} · ${entry.group.total} ${entry.group.total === 1 ? "record" : "records"}`,
+          t(
+            entry.group.total === 1
+              ? "knowledge.recent.groupSavedOne"
+              : "knowledge.recent.groupSaved",
+            {
+              time:
+                entry.group.firstSaved &&
+                entry.group.lastSaved &&
+                time(entry.group.firstSaved) !== time(entry.group.lastSaved)
+                  ? `${time(entry.group.firstSaved)}–${time(entry.group.lastSaved)}`
+                  : savedTime,
+              count: String(entry.group.total),
+            },
+          ),
         ),
       );
       text.append(metadata);
-      const names: Record<string, string> = {
-        attendees: "attended",
-        decision: "decisions",
-        commitment: "commitments",
-        event: "events",
-        belief: "beliefs",
-        fact: "facts",
-        preference: "preferences",
-        page: "pages",
-      };
+      const names = [
+        "attendees",
+        "decision",
+        "commitment",
+        "event",
+        "belief",
+        "fact",
+        "preference",
+        "page",
+      ];
       text.append(
         el(
           "span",
-          Object.keys(names)
+          names
             .filter((kind) => entry.group!.counts[kind])
-            .map(
-              (kind) =>
-                `${entry.group!.counts[kind]} ${entry.group!.counts[kind] === 1 && kind !== "attendees" ? names[kind]!.replace(/s$/, "") : names[kind]}`,
+            .map((kind) =>
+              t(
+                `knowledge.recent.counts.${kind}.${entry.group!.counts[kind] === 1 ? "one" : "other"}`,
+                { count: String(entry.group!.counts[kind]) },
+              ),
             )
-            .concat(entry.group.counts.sourceEvent ? ["meeting event"] : [])
+            .concat(entry.group.counts.sourceEvent ? [t("knowledge.recent.meetingEvent")] : [])
             .join(" · "),
           "knowledge-feed-meta",
         ),
       );
-      summary.append(tile(source.type, 32), text, disclosureLabel("Expand", "Collapse"));
+      summary.append(
+        tile(source.type, 32),
+        text,
+        disclosureLabel(t("knowledge.common.expand"), t("knowledge.common.collapse")),
+      );
       const detail = el("div", undefined, "knowledge-source-body");
       const pages = el("div", undefined, "knowledge-source-pages"),
         claims = el("div", undefined, "knowledge-source-claims");
@@ -179,8 +200,8 @@ export async function recent(ui: Page, n: number, target: HTMLElement) {
           const change = el("span", undefined, "knowledge-save-status");
           change.dataset.change = status;
           change.append(
-            icon(status === "New" ? "plus" : status === "Updated" ? "pencil" : "eye", 12),
-            el("span", status),
+            icon(status === "created" ? "plus" : status === "updated" ? "pencil" : "eye", 12),
+            el("span", t(`knowledge.recent.changes.${status}`)),
           );
           meta.append(change);
         }
@@ -191,7 +212,9 @@ export async function recent(ui: Page, n: number, target: HTMLElement) {
             icon("calendarClock", 12),
             el(
               "span",
-              `${formatSourceDate(record.occurredAt)}${/^\d{4}-\d{2}-\d{2}$/.test(record.occurredAt) ? " · date only" : ""}`,
+              /^\d{4}-\d{2}-\d{2}$/.test(record.occurredAt)
+                ? t("knowledge.common.dateOnly", { date: formatSourceDate(record.occurredAt) })
+                : formatSourceDate(record.occurredAt),
             ),
           );
           meta.append(occurred);
@@ -219,7 +242,9 @@ export async function recent(ui: Page, n: number, target: HTMLElement) {
         attendanceCopy = el("span", undefined, "knowledge-feed-copy"),
         attendanceTitle = el(
           "span",
-          `${entry.group.counts.attendees ?? 0} attended`,
+          t("knowledge.recent.counts.attendees.other", {
+            count: String(entry.group.counts.attendees ?? 0),
+          }),
           "knowledge-feed-title",
         ),
         attendanceRows = el("div", undefined, "knowledge-attendance-rows knowledge-surface");
@@ -227,14 +252,16 @@ export async function recent(ui: Page, n: number, target: HTMLElement) {
         attendanceTitle,
         el(
           "span",
-          `${entry.group.counts.attendees ?? 0} attendance connections · each with its own attribution`,
+          t("knowledge.recent.attendanceMeta", {
+            count: String(entry.group.counts.attendees ?? 0),
+          }),
           "knowledge-feed-meta",
         ),
       );
       attendanceSummary.append(
         tile("attended", 28, "relationship"),
         attendanceCopy,
-        disclosureLabel("Show all", "Hide"),
+        disclosureLabel(t("knowledge.common.showAll"), t("knowledge.common.hide")),
       );
       attendance.append(attendanceSummary, attendanceRows);
       const namesSeen: string[] = [];
@@ -269,14 +296,23 @@ export async function recent(ui: Page, n: number, target: HTMLElement) {
               attendee.append(summaryLink(ui, person));
               namesSeen.push(person.title);
             } else {
-              attendee.append(el("span", "Person unavailable"));
+              attendee.append(el("span", t("knowledge.recent.personUnavailable")));
             }
             attendee.append(
-              el("p", record.attributionConfidence?.basis ?? "No attribution basis recorded"),
+              el(
+                "p",
+                record.attributionConfidence?.basis ?? t("knowledge.common.noAttributionBasis"),
+              ),
               confidenceView(record.attributionConfidence, true),
             );
             attendanceRows.append(attendee);
-            attendanceTitle.textContent = `${namesSeen.slice(0, 3).join(", ")}${(entry.group!.counts.attendees ?? 0) > namesSeen.slice(0, 3).length ? ` and ${entry.group!.counts.attendees! - namesSeen.slice(0, 3).length} more` : ""} attended`;
+            attendanceTitle.textContent =
+              (entry.group!.counts.attendees ?? 0) > namesSeen.slice(0, 3).length
+                ? t("knowledge.recent.attendedMore", {
+                    names: namesSeen.slice(0, 3).join(", "),
+                    count: String(entry.group!.counts.attendees! - namesSeen.slice(0, 3).length),
+                  })
+                : t("knowledge.recent.attended", { names: namesSeen.slice(0, 3).join(", ") });
           } else if (record.kind === "claim") {
             const card = claimCard(ui, record, n);
             claims.append(card ?? saveRow(record));
@@ -284,10 +320,10 @@ export async function recent(ui: Page, n: number, target: HTMLElement) {
             const saved = saveRow(
               record,
               record.change === "created"
-                ? "New"
+                ? "created"
                 : record.change === "updated"
-                  ? "Updated"
-                  : "Observed in vault",
+                  ? "updated"
+                  : "observed",
             );
             if (record.id === source.id) {
               sourceRow.replaceWith(saved);
@@ -303,7 +339,7 @@ export async function recent(ui: Page, n: number, target: HTMLElement) {
       let recordOffset = entry.group.nextRecordOffset;
       if (recordOffset != null) {
         const more = button(
-          `Load ${entry.group.total - recordOffset} more from this source`,
+          t("knowledge.recent.loadMore", { count: String(entry.group.total - recordOffset) }),
           () => {
             more.disabled = true;
             void (async () => {
@@ -319,14 +355,16 @@ export async function recent(ui: Page, n: number, target: HTMLElement) {
               }
               const next = page.items.find((item) => item.group?.source.id === source.id)?.group;
               if (!next) {
-                throw new Error("Source changed; reopen Recent to refresh.");
+                throw new Error(t("knowledge.recent.sourceChanged"));
               }
               appendRecords(next.records, next.endpoints);
               recordOffset = next.nextRecordOffset;
               if (recordOffset == null) {
                 more.remove();
               } else {
-                more.textContent = `Load ${next.total - recordOffset} more from this source`;
+                more.textContent = t("knowledge.recent.loadMore", {
+                  count: String(next.total - recordOffset),
+                });
                 detail.append(more);
               }
             })()
@@ -367,27 +405,34 @@ export async function recent(ui: Page, n: number, target: HTMLElement) {
       const detail = el("div", undefined, "knowledge-activity-body");
       const explanation =
         entry.change === "withdrawn"
-          ? "It no longer appears in connections, search or answers. The original and its evidence are kept in history."
+          ? t("knowledge.recent.withdrawnBody")
           : entry.replacementActive
-            ? "This replaced an earlier version. Search and answers now use the current version."
-            : "A corrected version was saved, but it is no longer current either. Both versions are kept in history.";
+            ? t("knowledge.recent.replacedBody")
+            : t("knowledge.recent.staleCorrectionBody");
       detail.append(el("p", explanation, "knowledge-activity-reason"));
       const links = el("div", undefined, "knowledge-activity-links");
       if (entry.replacementId) {
         links.append(
-          button(entry.replacementActive ? "Current version" : "View replacement history", () =>
-            open(entry.replacementId!),
+          button(
+            t(
+              entry.replacementActive
+                ? "knowledge.recent.currentVersion"
+                : "knowledge.recent.replacementHistory",
+            ),
+            () => open(entry.replacementId!),
           ),
         );
       }
-      links.append(button("View in history", () => open(entry.id), "knowledge-quiet"));
+      links.append(
+        button(t("knowledge.recent.viewInHistory"), () => open(entry.id), "knowledge-quiet"),
+      );
       detail.append(links);
       disclosure.append(summary, detail);
       row.append(disclosure);
       if (entry.reason) {
         const reason = el("details", undefined, "knowledge-activity-audit");
         reason.append(
-          el("summary", "Recorded reason"),
+          el("summary", t("knowledge.recent.reason")),
           el("p", entry.reason, "knowledge-activity-reason"),
         );
         detail.append(reason);
@@ -396,7 +441,7 @@ export async function recent(ui: Page, n: number, target: HTMLElement) {
       const item = button("", () => open(entry.id), "knowledge-feed-link");
       const meta = copy.querySelector(".knowledge-feed-meta")!,
         change = el("span", undefined, "knowledge-save-status");
-      change.dataset.change = badgeLabel;
+      change.dataset.change = entry.change;
       change.append(
         icon(
           entry.change === "created"
@@ -409,26 +454,36 @@ export async function recent(ui: Page, n: number, target: HTMLElement) {
         el("span", badgeLabel),
       );
       meta.classList.add("knowledge-source-meta");
-      meta.replaceChildren(change, el("span", `${kindLabel} · Saved ${savedTime}`));
+      meta.replaceChildren(
+        change,
+        el("span", t("knowledge.recent.savedAt", { description: kindLabel, time: savedTime })),
+      );
       item.append(tile(entry.type, 28, entry.kind), copy, icon("chevronRight", 14));
       row.append(item);
     }
     if (lifecycle) {
       if (!lifecycleGroup) {
         lifecycleGroup = el("section", undefined, "knowledge-lifecycle-group");
-        lifecycleGroup.append(el("h3", "Corrections & withdrawals", "knowledge-group-heading"));
+        lifecycleGroup.append(
+          el("h3", t("knowledge.recent.lifecycleGroup"), "knowledge-group-heading"),
+        );
         group!.prepend(lifecycleGroup);
       }
       lifecycleGroup.append(row);
-      lifecycleGroup.querySelector("h3")!.textContent =
-        `Corrections & withdrawals · ${lifecycleGroup.querySelectorAll("article").length}`;
+      lifecycleGroup.querySelector("h3")!.textContent = t("knowledge.recent.lifecycleGroupCount", {
+        count: String(lifecycleGroup.querySelectorAll("article").length),
+      });
     } else if (entry.group) {
       sourceGroups!.append(row);
     } else {
       looseGroup(
-        entry.change === "external" ? "Edited outside OpenClaw" : "Saved in conversation",
+        t(
+          entry.change === "external"
+            ? "knowledge.recent.changes.external"
+            : "knowledge.recent.savedInSession",
+        ),
       ).append(row);
-      looseSaves.push({ id: entry.id, row, status: badgeLabel });
+      looseSaves.push({ id: entry.id, row, status: entry.change });
     }
   }
   for (const save of looseSaves) {
@@ -444,17 +499,12 @@ export async function recent(ui: Page, n: number, target: HTMLElement) {
     }
   }
   if (!activity.items.length) {
-    feed.append(
-      empty(
-        "No recent activity",
-        "Knowledge saved by your agent will appear here. Earlier revisions remain in each record’s history.",
-      ),
-    );
+    feed.append(empty(t("knowledge.recent.emptyTitle"), t("knowledge.recent.emptyBody")));
   }
   const pages = el("div", undefined, "knowledge-pagination");
   if (s.recentCursor) {
     pages.append(
-      button(recentBack.length ? "Newer activity" : "Latest activity", () => {
+      button(t(recentBack.length ? "knowledge.recent.newer" : "knowledge.recent.latest"), () => {
         s.recentCursor = recentBack.pop();
         void load();
       }),
@@ -462,7 +512,7 @@ export async function recent(ui: Page, n: number, target: HTMLElement) {
   }
   if (activity.nextBefore !== null) {
     pages.append(
-      button("Load older activity", () => {
+      button(t("knowledge.recent.older"), () => {
         recentBack.push(s.recentCursor);
         s.recentCursor = {
           upperSequence: activity.upperSequence,

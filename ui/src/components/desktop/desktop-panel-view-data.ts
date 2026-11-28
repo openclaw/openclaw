@@ -79,6 +79,10 @@ export function projectDesktopPanelView(facts: DesktopViewFacts, actions: Deskto
     dockLayout,
   } = facts;
   const environment = environments.find((entry) => entry.id === currentId);
+  const automaticPicker = automaticSource && host.embedded && host.sessionKey !== null;
+  // Before a session's desktop is found, Retry checks the source; it is not a reconnect.
+  const unresolvedSource = automaticPicker && !currentId && !hostSetup;
+  const checkingSource = unresolvedSource && (phase === "picker" || phase === "inventory-error");
   return {
     documentMode: host.documentMode,
     embedded: host.embedded,
@@ -91,12 +95,12 @@ export function projectDesktopPanelView(facts: DesktopViewFacts, actions: Deskto
         }
       : null,
     content: {
-      state: phase,
+      state: checkingSource ? ("picker" as const) : phase,
       loading,
       automaticSource,
       hasTarget: host.sessionKey !== null || host.requestedSource !== null,
-      errorText,
-      noticeText,
+      errorText: checkingSource ? null : errorText,
+      noticeText: unresolvedSource ? null : noticeText,
       takeoverText:
         controlTakeoverRecoveryUsed && (phase === "connecting" || phase === "connected")
           ? noticeText
@@ -104,10 +108,16 @@ export function projectDesktopPanelView(facts: DesktopViewFacts, actions: Deskto
       transition: connectionTransition,
       availability: sessionSource.desktopAvailability,
       picker: {
-        automatic: automaticSource && host.embedded && host.sessionKey !== null,
+        automatic: automaticPicker,
+        // A presenter that names the desktop connects to it while it loads, until the
+        // source is reported unavailable; Retry then checks the source again.
+        knownTarget: host.requestedSource !== null && noticeText === null && errorText === null,
+        notice: checkingSource ? (errorText ?? noticeText) : null,
+        onDisconnect: actions.onDisconnect,
         environments,
         hostSetup,
-        onRefresh: actions.onRefresh,
+        onRefresh:
+          checkingSource && phase === "inventory-error" ? actions.onRetry : actions.onRefresh,
         onConnect: actions.onConnect,
       },
       credentials: {

@@ -85,7 +85,10 @@ function captureStream(content: string | unknown[] = []) {
   );
 }
 
-function forwardedMessages(baseFn: ReturnType<typeof captureStream>, index = 0): AgentMessage[] {
+function forwardedMessages(
+  baseFn: ReturnType<typeof captureStream>,
+  index: number,
+): AgentMessage[] {
   const call = baseFn.mock.calls[index];
   if (!call) {
     throw new Error("expected replay to reach the stream");

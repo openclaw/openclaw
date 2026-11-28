@@ -1,5 +1,5 @@
 import { afterEach, expect, it, vi } from "vitest";
-import { page } from "vitest/browser";
+import { page, userEvent } from "vitest/browser";
 import { i18n } from "../../i18n/index.ts";
 import { cleanupSolid, mountSolid } from "../../test-helpers/mount-solid.ts";
 import { flush, waitForSolid } from "../../test-helpers/solid-settle.ts";
@@ -31,7 +31,9 @@ it.each([
         endMs: Date.UTC(2026, 0, 1, 0, 10),
         title: "Reviewing the synthetic example project and its implementation notes ".repeat(4),
         summary: "Synthetic activity for timestamp layout validation.",
-        detail: "Expanded activity notes.",
+        appPrimary:
+          "international-exhibition-catalogue.review-and-publication.gallery-preservation.example.org",
+        detail: `Archive: ${"PreservationCatalogue".repeat(6)}.pdf`,
       },
     ]);
     const request = vi.fn(async (method: string) =>
@@ -66,16 +68,32 @@ it.each([
     expect(stripeRect.width).toBeGreaterThan(0);
     expect(titleRect.left).toBeGreaterThan(stripeRect.right);
     expect(titleRect.right).toBeLessThanOrEqual(header.getBoundingClientRect().right);
+    expect(titleRect.width).toBeGreaterThan(200);
     expect(title.scrollWidth).toBeGreaterThan(title.clientWidth);
     expect(getComputedStyle(title).textOverflow).toBe("ellipsis");
     expect(getComputedStyle(title).overflow).toBe("hidden");
 
-    header.click();
+    header.focus();
+    await userEvent.keyboard("{Enter}");
     await waitForSolid(() => {
       const detail = container.querySelector<HTMLElement>(".logbook-card__detail");
+      expect(detail).not.toBeNull();
+      const ink = document.createRange();
+      for (const element of [title, detail!]) {
+        ink.selectNodeContents(element);
+        expect(ink.getBoundingClientRect().right).toBeLessThanOrEqual(
+          element.getBoundingClientRect().right + 1,
+        );
+      }
       expect(detail?.getBoundingClientRect().left).toBe(
         width <= 768 ? stripeRect.left : titleRect.left,
       );
+    });
+
+    await userEvent.keyboard("{Space}");
+    await waitForSolid(() => {
+      expect(container.querySelector(".logbook-card__detail")).toBeNull();
+      expect(title.scrollWidth).toBeGreaterThan(title.clientWidth);
     });
   },
 );

@@ -4,6 +4,17 @@ import type * as UI from "openclaw/plugin-sdk/control-ui";
 import { expect, it, onTestFinished, vi } from "vitest";
 import plugin from "./control-ui.js";
 
+vi.mock(import("./i18n/locales/translated.json"), async (importOriginal) => {
+  const catalog = await importOriginal();
+  return {
+    ...catalog,
+    default: {
+      ...catalog.default,
+      es: { mcpRelay: { connectedApps: { title: "Apps conectadas" } } },
+    },
+  };
+});
+
 const caller = {
   principal: { kind: "person", profileId: "person-alex" },
   principalLabel: "Alex",
@@ -30,7 +41,9 @@ const click = (label: string) => button(label)!.click();
 
 function fixture(responses: unknown[], props: Record<string, string> = {}) {
   const subscribers = new Set<() => void>();
-  const request = vi.fn(async () => responses.shift());
+  const request = vi.fn(async (_method: string, _params?: Record<string, unknown>) =>
+    responses.shift(),
+  );
   const registerPage = vi.fn<(page: UI.ControlUiPage) => () => void>(() => () => {});
   const controller = new AbortController();
   const host = {
@@ -70,10 +83,23 @@ function fixture(responses: unknown[], props: Record<string, string> = {}) {
     request,
     connection: host.connection,
     dispose: () => view?.dispose?.(),
+    locale: (locale: string) => {
+      Object.assign(host, { locale });
+      subscribers.forEach((listener) => listener());
+    },
     publish: () => subscribers.forEach((listener) => listener()),
     navigate: (requestId: string) => view?.update?.({ ...context, props: { request: requestId } }),
   };
 }
+
+it("renders the host locale without reloading grants and keeps untranslated English copy", async () => {
+  const { locale, request } = fixture([ownedGrants]);
+  await shows("Personal app");
+  locale("es");
+  await shows("Apps conectadas");
+  expect(button("Revoke")).toBeDefined();
+  expect(request).toHaveBeenCalledExactlyOnceWith("mcp-relay.grants", {});
+});
 
 it("retains focused grant controls on unrelated host updates and applies permission changes", async () => {
   const { connection, publish, request } = fixture([ownedGrants]);
@@ -95,7 +121,7 @@ it("retains focused grant controls on unrelated host updates and applies permiss
   connection.connected = true;
   connection.canRead = false;
   publish();
-  expect(body()).toContain("Read access is required to view connected apps.");
+  expect(body()).toContain("You need read access to view connected apps.");
 });
 
 it.each([true, false])(
@@ -126,10 +152,10 @@ it("keeps pairing actions together while respecting the caller's ceiling", async
   expect(labels()).toEqual(["Cancel", "Create pairing code"]);
   expect(dialog.lastElementChild).toBe(actions());
   click("Create pairing code");
-  expect(labels()).toEqual(["Cancel", "Creating code…"]);
+  expect(labels()).toEqual(["Cancel", "Creating code"]);
   expect(dialog.querySelectorAll("button:enabled, input:enabled")).toHaveLength(0);
   pending.reject(new Error("Pairing failed. Try again."));
-  await shows("Pairing failed. Try again.");
+  await shows("Couldn’t create a pairing code.");
   expect(dialog.querySelector('[role="alert"]')?.nextElementSibling).toBe(actions());
   expect(dialog.lastElementChild).toBe(actions());
   expect(labels()).toEqual(["Cancel", "Create pairing code"]);
@@ -179,12 +205,13 @@ it("retains rows while refreshing and renders the authoritative reply on settlem
   const row = document.querySelector(".mcp-connected-apps__grant");
   click("Refresh");
   expect(document.querySelector(".mcp-connected-apps__grant")).toBe(row);
-  expect(document.querySelector('[role="status"]')?.textContent).toBe("Loading connected apps…");
+  expect(document.querySelector('[role="status"]')?.textContent).toBe("Loading connected apps");
   expect(document.querySelectorAll("button:enabled, input:enabled")).toHaveLength(0);
   click("Revoke");
   expect(request).toHaveBeenCalledTimes(2);
-  pending.reject(new Error("Try again"));
-  await shows("Try again");
+  pending.reject(new Error("socket closed"));
+  await shows("Couldn’t load connected apps. Select Refresh to update the list.");
+  expect(body()).not.toContain("socket closed");
   click("Refresh");
   expect(document.querySelector('[role="alert"]')).toBeNull();
   await shows("No connected apps yet");
@@ -206,8 +233,12 @@ it("escapes app labels and rejects foreign relay continuations", async () => {
   expect(document.querySelector("img")).toBeNull();
   expect(body()).toContain(clientName);
   expect(body()).toContain("app.test");
+  expect(body()).toContain(
+    "View sessions, read chat history, and send messages within your access.",
+  );
   click("Allow");
-  await shows("invalid return address");
+  await shows("OpenClaw couldn’t return you to");
+  expect(body()).not.toContain("https://foreign.example");
   expect(request).toHaveBeenLastCalledWith("mcp-relay.authorize.approve", {
     requestId: "one",
     ceiling: ["operator.read", "operator.write"],
@@ -247,4 +278,40 @@ it("revokes another person's grant as admin and shows the authoritative result",
   expect(request).toHaveBeenCalledWith("mcp-relay.revoke", { grantId: "grant-other" });
   expect(document.querySelector(".mcp-connected-apps__grant")).toBeNull();
   expect(document.querySelector('[role="status"]')?.textContent).toContain("Team app revoked.");
+});
+
+it("preserves a confirmed revocation when only the following refresh fails", async () => {
+  const pendingRefresh = Promise.withResolvers<unknown>();
+  const { request } = fixture([ownedGrants, { revoked: true }, pendingRefresh.promise, grants]);
+  await shows("Personal app");
+  click("Revoke");
+  await vi.waitFor(() => expect(request).toHaveBeenCalledTimes(3));
+  pendingRefresh.reject(new Error("Relay connection details"));
+  await shows("Couldn’t load connected apps. Select Refresh to update the list.");
+  expect(document.querySelector('[role="status"]')?.textContent).toContain("Personal app revoked.");
+  expect(button("Revoke")).toBeUndefined();
+  expect(body()).not.toContain("Relay connection details");
+  click("Refresh");
+  await shows("No connected apps yet");
+  expect(document.querySelector('[role="alert"]')).toBeNull();
+  expect(request.mock.calls.map(([method]) => method)).toEqual([
+    "mcp-relay.grants",
+    "mcp-relay.revoke",
+    "mcp-relay.grants",
+    "mcp-relay.grants",
+  ]);
+});
+
+it("asks for a new connection when the Gateway says the request is gone", async () => {
+  const response = Promise.withResolvers<unknown>();
+  const { request } = fixture([grants, response.promise], { request: "expired" });
+  await vi.waitFor(() => expect(request).toHaveBeenCalledTimes(2));
+  response.reject(
+    Object.assign(new Error("Internal relay response"), { details: { code: "not_found" } }),
+  );
+  await shows(
+    "This connection request is no longer available. Start a new connection from the app.",
+  );
+  expect(body()).not.toContain("Internal relay response");
+  expect(button("Allow")).toBeUndefined();
 });

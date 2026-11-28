@@ -15,8 +15,13 @@ extension OpenClawSnapshotUITests {
         return try XCTUnwrap(self.app)
     }
 
-    private func savedDiscovery(in app: XCUIApplication) throws {
-        try self.selectSidebarDestination("Launch plan")
+    private func savedDiscovery(in app: XCUIApplication) {
+        let reveal = app.buttons["RootTabs.Sidebar.Show"]
+        XCTAssertTrue(reveal.waitForExistence(timeout: 5))
+        reveal.coordinate(withNormalizedOffset: CGVector(dx: 0.5, dy: 0.5)).tap()
+        let row = app.buttons.matching(identifier: "Launch plan").element(boundBy: 0)
+        XCTAssertTrue(row.waitForExistence(timeout: 5))
+        row.tap()
         XCTAssertTrue(app.staticTexts["OPENCLAW_SWITCH_B_LATEST"].waitForExistence(timeout: 8))
         XCTAssertTrue(app.buttons.matching(NSPredicate(format: "label CONTAINS %@", "#148")).firstMatch
             .waitForExistence(timeout: 8))
@@ -61,7 +66,7 @@ extension OpenClawSnapshotUITests {
             self.checkDiscoveryOrder(app, isChat: false)
             self.attachScreenshot(named: "disc-full-" + style)
             app.navigationBars.buttons.firstMatch.tap()
-            try self.savedDiscovery(in: app)
+            self.savedDiscovery(in: app)
             XCTAssertTrue(app.buttons["Compact"].exists)
             XCTAssertTrue(app.staticTexts["Ask the agent to do something on a schedule"].exists)
             self.checkDiscoveryOrder(app, isChat: true)
@@ -81,7 +86,7 @@ extension OpenClawSnapshotUITests {
             XCTAssertTrue(populated.buttons["chat-info-automation-brief"].label.contains("Weekdays at 5:00 PM"))
             self.attachScreenshot(named: "disc-populated-profile-" + style)
             populated.navigationBars.buttons.firstMatch.tap()
-            try self.savedDiscovery(in: populated)
+            self.savedDiscovery(in: populated)
             self.checkDiscoveryOrder(populated, isChat: true)
             XCTAssertTrue(populated.buttons["chat-info-media-palette"].exists)
             let sweep = populated.buttons["chat-info-automation-sweep"]
@@ -101,7 +106,7 @@ extension OpenClawSnapshotUITests {
                     mode: "populated",
                     style: style,
                     arguments: ["--openclaw-info-thumbnail-" + state])
-                try self.savedDiscovery(in: app)
+                self.savedDiscovery(in: app)
                 let palette = app.buttons["chat-info-media-palette"]
                 let layout = app.buttons["chat-info-media-layout"]
                 let notes = app.buttons["chat-info-media-notes"]
@@ -155,7 +160,7 @@ extension OpenClawSnapshotUITests {
                     style: style,
                     arguments: state == "mixed" ? ["--openclaw-info-automations-only"] :
                         [])
-                try self.savedDiscovery(in: app)
+                self.savedDiscovery(in: app)
                 XCTAssertEqual(app.staticTexts["No files yet"].exists, state == "mixed")
                 XCTAssertEqual(
                     app.staticTexts["Ask for an image or a file and it shows up here"].exists,
@@ -183,7 +188,7 @@ extension OpenClawSnapshotUITests {
                 self.checkDiscoveryOrder(app, isChat: false)
                 self.attachScreenshot(named: "disc-type-" + size + "-" + style)
                 app.navigationBars.buttons.firstMatch.tap()
-                try self.savedDiscovery(in: app)
+                self.savedDiscovery(in: app)
                 XCTAssertTrue(app.staticTexts["No files yet"].exists)
                 XCTAssertTrue(app.staticTexts["No automations yet"].exists)
                 self.attachScreenshot(named: "disc-chat-type-" + size + "-" + style)

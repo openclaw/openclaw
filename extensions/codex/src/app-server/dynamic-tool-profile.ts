@@ -74,7 +74,7 @@ export function resolveCodexDynamicToolsLoading(
 }
 
 /** Returns true for models whose tool-search path is unsupported or inefficient. */
-export function shouldDisableCodexToolSearchForModel(modelId: string | undefined): boolean {
+function shouldDisableCodexToolSearchForModel(modelId: string | undefined): boolean {
   return modelId?.trim().toLowerCase().split("/").at(-1) === "gpt-5.4-nano";
 }
 
