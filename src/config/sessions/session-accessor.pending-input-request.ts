@@ -1,7 +1,11 @@
+import path from "node:path";
 import { sha256Hex } from "@openclaw/normalization-core/node-crypto";
 import { asOptionalRecord } from "@openclaw/normalization-core/record-coerce";
 import { stableStringify } from "@openclaw/normalization-core/stable-stringify";
 import { MAX_PAYLOAD_BYTES } from "../../gateway/payload-limits.js";
+import { parseInboundMediaUri } from "../../media/inbound-media-uri.js";
+import { stagedInputFileName, stagedInputPathDirectory } from "../../media/staged-inputs.js";
+import { parseSavedMediaId, readSavedInboundMediaName } from "../../media/store-path.js";
 import type { PersistedUserTurnMessage } from "../../sessions/user-turn-input.types.js";
 import {
   prepareUserTurnTranscriptAnnotation,
@@ -10,7 +14,7 @@ import {
 import type { OpenClawConfig } from "../types.openclaw.js";
 import type { SessionPendingInputRow } from "./session-accessor.sqlite-pending-inputs.js";
 import { sanitizeTranscriptMessageForStorage } from "./session-accessor.sqlite-transcript-store.js";
-import { readOwedKind } from "./session-pending-input-value.js";
+import { parseSessionPendingInputMessage, readOwedKind } from "./session-pending-input-value.js";
 import { readMessageIdempotencyKey } from "./transcript-message-identity.js";
 
 function resolvePendingInputRequestHash(
@@ -73,6 +77,78 @@ function matchAcceptedPendingInputMessage(
   return legacy.requestHash === acceptedHash
     ? { ...request, requestHash: acceptedHash }
     : undefined;
+}
+
+function readMediaStoreId(url: unknown): string | undefined {
+  try {
+    return typeof url === "string" ? parseInboundMediaUri(url)?.id : undefined;
+  } catch {
+    return undefined;
+  }
+}
+
+/**
+ * A saved inbound download's identity without the IDs each delivery mints. Its location is the
+ * media-store file, or the turn's staged workspace copy of it named by its media:// reference.
+ * A distinct remote URL is source content, not a location.
+ */
+function readGeneratedInboundMediaName(
+  fact: Record<string, unknown> | undefined,
+  env: NodeJS.ProcessEnv | undefined,
+) {
+  const location = fact?.path;
+  if (typeof location !== "string") {
+    return undefined;
+  }
+  if (fact?.url === undefined || fact.url === location) {
+    return readSavedInboundMediaName(location, env);
+  }
+  const id = readMediaStoreId(fact.url);
+  const saved = id && parseSavedMediaId(id);
+  if (!saved) {
+    return undefined;
+  }
+  const relative =
+    typeof fact.workspaceDir === "string"
+      ? path.relative(fact.workspaceDir, location).split(path.sep).join("/")
+      : undefined;
+  const directory = relative && stagedInputPathDirectory(relative);
+  const staged = Boolean(directory) && relative === `${directory}/${stagedInputFileName(id)}`;
+  const stored =
+    path.basename(location) === id && readSavedInboundMediaName(location, env) !== undefined;
+  return staged || stored ? `${saved.name ?? ""}${saved.ext}` : undefined;
+}
+
+/**
+ * A channel redelivery downloads its attachments again under fresh media-store IDs.
+ * Matches only when the retry, given the accepted download locations, is the accepted request.
+ */
+export function matchRedeliveredSourceTurnMedia(
+  message: PersistedUserTurnMessage,
+  accepted: Pick<SessionPendingInputRow, "request_hash" | "message_json">,
+  env?: NodeJS.ProcessEnv,
+): string | undefined {
+  const retryMedia = message["__openclaw"]?.media;
+  const acceptedMedia = parseSessionPendingInputMessage(accepted.message_json)["__openclaw"]?.media;
+  if (
+    !Array.isArray(retryMedia) ||
+    !Array.isArray(acceptedMedia) ||
+    retryMedia.length !== acceptedMedia.length
+  ) {
+    return undefined;
+  }
+  const media: Record<string, unknown>[] = [];
+  for (const [index, entry] of retryMedia.entries()) {
+    const retry = asOptionalRecord(entry);
+    const original = asOptionalRecord(acceptedMedia[index]);
+    const name = readGeneratedInboundMediaName(retry, env);
+    if (!retry || !original || !name || name !== readGeneratedInboundMediaName(original, env)) {
+      return undefined;
+    }
+    media.push({ ...retry, path: original.path, ...("url" in retry && { url: original.url }) });
+  }
+  const candidate = { ...message, __openclaw: { ...message["__openclaw"], media } };
+  return matchAcceptedPendingInputMessage(candidate, accepted.request_hash)?.requestHash;
 }
 
 export type PendingInputRequest = {
