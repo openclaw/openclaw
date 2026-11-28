@@ -53,7 +53,7 @@ function deniedCopy<T extends ReturnType<typeof reader>>(tool: T, message: strin
 function collect(tool: ReturnType<typeof spawnTool>, id: string) {
   return tool.execute(id, { task: "inspect", collect: true });
 }
-function catalogFixture(wait = reader(), toolExecutionAllow?: string[]) {
+function catalogFixture(wait: ReturnType<typeof reader>, toolExecutionAllow?: string[]) {
   const catalogConfig = {
     ...config,
     tools: { toolSearch: { enabled: true, mode: "tools" as const } },
