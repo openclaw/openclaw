@@ -263,8 +263,14 @@ export function applyModelDefaults(
         // erase field absence (for example turning an entry that pins only
         // contextWindow into a text-only model, dropping vision-gated tools).
         const catalogModel = resolveCatalogModel(providerId, id);
+        // Preserve an authored omission: when neither the operator nor the
+        // manifest catalog supplies `reasoning`, leave it unset instead of
+        // synthesizing `false`. Downstream reads a boolean `reasoning` as an
+        // authored value (see `configuredReasoning`): a synthesized `false`
+        // would act as an explicit opt-out and hide capabilities discovery
+        // reports for the model (#203150).
         const reasoning =
-          typeof raw.reasoning === "boolean" ? raw.reasoning : (catalogModel?.reasoning ?? false);
+          typeof raw.reasoning === "boolean" ? raw.reasoning : catalogModel?.reasoning;
 
         const input = raw.input ?? catalogModel?.input ?? [...DEFAULT_MODEL_INPUT];
 
@@ -332,7 +338,6 @@ export function applyModelDefaults(
           {},
           raw,
           {
-            reasoning,
             input,
             cost,
             contextWindow,
@@ -340,6 +345,7 @@ export function applyModelDefaults(
             maxTokens,
             api,
           },
+          reasoning !== undefined ? { reasoning } : {},
           thinkingLevelMap !== undefined ? { thinkingLevelMap } : {},
           compat !== undefined ? { compat } : {},
         ) as ModelDefinitionConfig;

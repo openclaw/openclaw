@@ -1,4 +1,9 @@
+import { expectDefined } from "@openclaw/normalization-core";
 import { beforeEach, describe, expect, it, vi } from "vitest";
+import { configuredModelCatalogEntry } from "../agents/model-catalog-entry.js";
+import { overlayCatalogMetadata } from "../agents/model-catalog-metadata.js";
+import type { ModelCatalogEntry } from "../agents/model-catalog.types.js";
+import { applyModelDefaults } from "../config/defaults.js";
 import type { ThinkingCatalogEntry, ThinkLevel } from "./thinking.shared.js";
 
 const mocks = vi.hoisted(() => ({ profile: vi.fn() }));
@@ -151,6 +156,78 @@ describe("provider profiles", () => {
     expect(listThinkingLevels(params.provider, params.model, params.catalog, "demo-cli")).toEqual([
       "off",
     ]);
+  });
+
+  it("composes discovered reasoning for a sparse configured row, end to end (#203150)", () => {
+    mocks.profile.mockReturnValue({
+      levels: [{ id: "off" }, { id: "low" }, { id: "medium" }, { id: "high" }],
+    });
+    // Discovery reports the native thinking tier for gpt-6.2-sol, a model the
+    // manifest catalog does not cover; the configured row only pins sizing.
+    const discovered: ModelCatalogEntry = {
+      provider: "openai",
+      id: "gpt-6.2-sol",
+      name: "GPT-6.2 Sol",
+      reasoning: true,
+    };
+    const compose = (row: { id: string; contextTokens?: number; reasoning?: boolean }) => {
+      const materialized = expectDefined(
+        applyModelDefaults(
+          {
+            models: {
+              providers: {
+                openai: { baseUrl: "https://api.openai.com/v1", models: [row as never] },
+              },
+            },
+          },
+          // No manifest row covers gpt-6.2-sol: the omission must survive
+          // materialization instead of being synthesized into `reasoning: false`.
+          { manifestRegistry: { plugins: [] } },
+        ).models?.providers?.openai?.models?.[0],
+        "materialized model entry",
+      );
+      const configured = configuredModelCatalogEntry({
+        provider: "openai",
+        id: "gpt-6.2-sol",
+        model: materialized,
+        providerConfig: { baseUrl: "https://api.openai.com/v1", models: [materialized] },
+        accepted: discovered,
+      });
+      // Prepared catalogs overlay configured fields over discovery facts, so
+      // only an authored `reasoning` can hide what discovery reports.
+      const composed = overlayCatalogMetadata(discovered, configured);
+      return {
+        materialized,
+        configured,
+        composed,
+        levels: listThinkingLevels("openai", "gpt-6.2-sol", [composed], "demo-cli"),
+      };
+    };
+
+    // Sparse row: omission survives materialization, discovery supplies the
+    // native efforts, sizing is retained.
+    const sparse = compose({ id: "gpt-6.2-sol", contextTokens: 500_000 });
+    expect(sparse.materialized.reasoning).toBeUndefined();
+    expect(sparse.materialized.contextTokens).toBe(500_000);
+    expect(sparse.configured.configuredReasoning).toBeUndefined();
+    expect(sparse.composed.reasoning).toBe(true);
+    expect(sparse.composed.configuredReasoning).toBeUndefined();
+    expect(sparse.composed.contextTokens).toBe(500_000);
+    expect(sparse.levels).toEqual(["off", "low", "medium", "high"]);
+
+    // Explicit opt-out stays authoritative over discovery.
+    const optedOut = compose({ id: "gpt-6.2-sol", contextTokens: 500_000, reasoning: false });
+    expect(optedOut.materialized.reasoning).toBe(false);
+    expect(optedOut.composed.reasoning).toBe(false);
+    expect(optedOut.composed.configuredReasoning).toBe(false);
+    expect(optedOut.levels).toEqual(["off"]);
+
+    // Explicit opt-in is retained.
+    const optedIn = compose({ id: "gpt-6.2-sol", reasoning: true });
+    expect(optedIn.materialized.reasoning).toBe(true);
+    expect(optedIn.composed.reasoning).toBe(true);
+    expect(optedIn.composed.configuredReasoning).toBe(true);
+    expect(optedIn.levels).toEqual(["off", "low", "medium", "high"]);
   });
 
   it("preserves known-empty efforts while offering only host Ultra", () => {

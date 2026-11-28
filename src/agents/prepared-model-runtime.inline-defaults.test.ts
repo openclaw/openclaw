@@ -26,7 +26,8 @@ const metadata = createPluginMetadataSnapshotFixture({
 const exact = { id: "selected", name: "Exact", contextWindow: 96_000 };
 const expectedDefaults = {
   ...exact,
-  reasoning: false,
+  // No `reasoning` key: an omitted value is preserved (not synthesized into
+  // false) so discovery can supply the model's capabilities (#203150).
   input: ["text"],
   cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
 };

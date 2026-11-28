@@ -107,10 +107,12 @@ it.each([undefined, 4096])("defaults output tokens without inventing context (%s
   const model = applyModelDefaults(providerConfig("myproxy", {}, { maxTokens })).models?.providers
     ?.myproxy?.models?.[0];
   expect(model).toMatchObject({
-    reasoning: false,
     input: ["text"],
     maxTokens: maxTokens ?? 32_768,
   });
+  // Omission is preserved, not synthesized into `reasoning: false`, so
+  // discovery can supply the model's capabilities (#203150).
+  expect(model?.reasoning).toBeUndefined();
   expect([model?.contextWindow, model?.contextTokens]).toEqual([undefined, undefined]);
   expect(model?.cost).toEqual({ input: 0, output: 0, cacheRead: 0, cacheWrite: 0 });
 });

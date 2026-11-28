@@ -489,7 +489,10 @@ describe("applyModelDefaults catalog seeding", () => {
       "custom",
     );
     expect(model.input).toEqual(["text"]);
-    expect(model.reasoning).toBe(false);
+    // Omission is preserved, not synthesized into `reasoning: false`: downstream
+    // treats an authored false as an opt-out, so a synthesized false would hide
+    // capabilities discovery reports for this model (#203150).
+    expect(model.reasoning).toBeUndefined();
   });
 });
 
