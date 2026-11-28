@@ -1,4 +1,3 @@
-import path from "node:path";
 import { sha256Hex } from "./crypto-digest.js";
 import type { ExecCommandSegment } from "./exec-approvals-analysis.js";
 import type {
@@ -12,6 +11,10 @@ import {
   resolveCommandResolutionFromArgv,
 } from "./exec-command-resolution.js";
 import { resolveExecWrapperTrustPlan } from "./exec-wrapper-trust-plan.js";
+import {
+  resolveExecutablePathCandidate,
+  resolveFilesystemPathCandidate,
+} from "./executable-path.js";
 import { normalizeHostOverrideEnvVarKey } from "./host-env-security.js";
 import { resolveEnvironmentValue } from "./process-env.js";
 import { extractShellCommandFromArgv } from "./system-run-command.js";
@@ -205,7 +208,7 @@ export async function resolveMutableFileOperandSnapshot(params: {
   }
   return await snapshotFileOperandAtPath({
     argvIndex: target.argvIndex,
-    filePath: path.resolve(params.cwd ?? process.cwd(), operand),
+    filePath: resolveFilesystemPathCandidate(operand, params.cwd),
   });
 }
 
@@ -405,10 +408,13 @@ export async function prepareSystemRunExecutableIdentityBinding(params: {
       }
       // Python virtualenvs and other launchers depend on the selected symlink path.
       // Keep that invocation separate from the canonical identity we validate.
-      const invocationPath = path.resolve(
-        params.cwd ?? process.cwd(),
+      const invocationPath = resolveExecutablePathCandidate(
         execution.resolvedPath ?? resolvedExecutable,
+        { cwd: params.cwd },
       );
+      if (!invocationPath) {
+        return { ok: false, message: APPROVAL_SCRIPT_OPERAND_DRIFT_DENIED_MESSAGE };
+      }
       let realPath: string;
       try {
         realPath = execution.resolvedRealPath ?? (await realpathForExec(resolvedExecutable));
@@ -596,10 +602,9 @@ export async function revalidateSystemRunMutableFileBinding(params: {
     if (
       !resolvedPath ||
       resolvedPath !== operand.snapshot.path ||
-      path.resolve(
-        params.cwd ?? process.cwd(),
-        resolution?.execution.resolvedPath ?? resolvedPath,
-      ) !== operand.invocationPath
+      resolveExecutablePathCandidate(resolution?.execution.resolvedPath ?? resolvedPath, {
+        cwd: params.cwd,
+      }) !== operand.invocationPath
     ) {
       return { ok: false, message: APPROVAL_SCRIPT_OPERAND_DRIFT_DENIED_MESSAGE };
     }

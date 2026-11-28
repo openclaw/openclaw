@@ -1,9 +1,9 @@
 import type fs from "node:fs";
 import fsp from "node:fs/promises";
-import path from "node:path";
 import { sha256Hex } from "@openclaw/normalization-core/node-crypto";
 import type { SystemRunApprovalFileOperand } from "./exec-approvals-core.js";
 import { realpathForExec } from "./exec-command-resolution.js";
+import { resolveFilesystemPathCandidate } from "./executable-path.js";
 
 export async function snapshotFileOperandAtPath(params: {
   argvIndex: number;
@@ -51,7 +51,7 @@ export async function revalidateApprovedMutableFileOperand(params: {
   }
   let realPath: string;
   try {
-    realPath = await realpathForExec(path.resolve(params.cwd ?? process.cwd(), operand));
+    realPath = await realpathForExec(resolveFilesystemPathCandidate(operand, params.cwd));
   } catch {
     return false;
   }
