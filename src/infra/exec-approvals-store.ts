@@ -12,7 +12,10 @@ import { createDeferredCore } from "../shared/deferred.js";
 import { resolveGlobalMap } from "../shared/global-singleton.js";
 import { freezeTrustedJsonSnapshot } from "../shared/immutable-data.js";
 import type { AgentDeletionWorkerAuthority } from "../state/agent-deletion-worker.types.js";
-import { getOpenClawDatabaseMaintenanceScope } from "../state/openclaw-state-db-async-lifecycle.js";
+import {
+  getOpenClawDatabaseMaintenanceScope,
+  isStateDatabaseReadAdmissionInvalidatedError,
+} from "../state/openclaw-state-db-async-lifecycle.js";
 import { registerOpenClawStateDatabaseLifecycleListener } from "../state/openclaw-state-db-cache.js";
 import type { OpenClawStateDatabaseOptions } from "../state/openclaw-state-db-contract.js";
 import {
@@ -207,8 +210,24 @@ export function loadExecApprovalsReadOnly(): ExecApprovalsFile {
 export async function prepareExecApprovalsCurrentRead(
   context: OpenClawStateWorkerContext,
 ): Promise<() => ExecApprovalsFile> {
-  const { file } = await readExecApprovalsSnapshotAsync(context);
-  return () => file;
+  try {
+    const { file } = await readExecApprovalsSnapshotAsync(context);
+    return () => file;
+  } catch (error) {
+    if (
+      !(error instanceof ExecApprovalsStoreUnavailableError) ||
+      !isStateDatabaseReadAdmissionInvalidatedError(error.cause)
+    ) {
+      throw error;
+    }
+    // Preparation has not started the request yet; retry once with current admission.
+    const currentContext = captureOpenClawStateWorkerContext({
+      path: context.admission.databasePath,
+      env: context.environment,
+    });
+    const { file } = await readExecApprovalsSnapshotAsync(currentContext);
+    return () => file;
+  }
 }
 
 /** Capture the policy owner before yielding; reads never initialize or migrate state. */

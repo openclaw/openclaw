@@ -273,6 +273,16 @@ it("reuses prepared policy until a native or worker policy write", async () => {
   expect((await loadExecApprovalsReadOnlyAsync({ env })).defaults?.security).toBe("deny");
 });
 
+it("recaptures a stale state admission before preparing exec approvals", async () => {
+  const { env } = fixture(true);
+  const context = captureOpenClawStateWorkerContext({ env });
+  await closeOpenClawStateDatabaseAsync();
+
+  const readCurrent = await prepareExecApprovalsCurrentRead(context);
+
+  expect(readCurrent().agents?.main?.mcpTools).toEqual([{ ...grant }]);
+});
+
 it("keeps a prepared policy read on its admitted policy after a later policy write", async () => {
   const { env } = fixture(true);
   await updateExecApprovals({
