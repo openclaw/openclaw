@@ -35,6 +35,9 @@ viewer returns to view-only, and the agent receives a fresh screenshot. No
 separate viewer-issued handoff token is required. You can reclaim control at any
 time or release it yourself; ordinary agent input never takes over automatically.
 
+The Desktop picker shows an attached session's name when that session is in the
+current session list. Otherwise, it shows the session ID.
+
 For a web app, the agent starts a server and opens a [portal](/gateway/portals)
 in the side panel. A browser on the attached desktop can test that server with
 CUA, but it has separate browser state and cookies from your portal view.

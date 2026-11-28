@@ -77,7 +77,11 @@ export const DesktopPanel = defineSolidBridge<DesktopPanelInputs, Methods>(
         <style>{`${dockStyles}\n${sessionPanelRailStyles}\n${desktopStyles}`}</style>
         {inputs.available &&
           (inputs.documentMode || inputs.embedded || state.read().dockLayout.open) && (
-            <DesktopPresentation view={state.read().view} presentation={inputs.presentation} />
+            <DesktopPresentation
+              view={state.read().view}
+              presentation={inputs.presentation}
+              client={inputs.client}
+            />
           )}
       </>
     );
@@ -213,6 +217,7 @@ function DesktopActionNotice(props: {
 function DesktopPresentation(props: {
   view: DesktopPanelOwner["view"];
   presentation?: DesktopPanelPresentationContext | null;
+  client: DesktopPanelInputs["client"];
 }) {
   const platform = createMemo(() =>
     props.view.documentMode ? undefined : props.presentation?.platform,
@@ -273,6 +278,7 @@ function DesktopPresentation(props: {
       return (
         <DesktopPicker
           {...props.view.content.picker}
+          client={props.client}
           loading={props.view.content.loading}
           presentation={platform()}
           openWindowHref={desktop() ? props.presentation?.openWindowHref : undefined}

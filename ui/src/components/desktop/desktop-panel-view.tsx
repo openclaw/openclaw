@@ -1,12 +1,17 @@
 import type { DesktopAvailability, EnvironmentSummary } from "@openclaw/gateway-protocol";
 import type { JSX } from "@solidjs/web";
 import { For, Show, createMemo, createUniqueId, onSettled } from "solid-js";
+import type { GatewayBrowserClient } from "../../api/gateway.ts";
 import { registerDesktopEnglish } from "../../i18n/locales/en-desktop.ts";
 import { t, registerEnglishCatalog } from "../../lib/reactive/i18n.ts";
 import { Icon } from "../solid/icon.tsx";
 import { PanelEmptyState } from "../solid/panel-empty-state.tsx";
 import { PanelIconButton } from "../solid/panel-icon-button.tsx";
 import { PanelLoadingSkeleton } from "../solid/panel-loading-skeleton.tsx";
+import {
+  createAttachedSessionName,
+  DesktopAttachedSessions,
+} from "./desktop-attached-sessions.tsx";
 import {
   DesktopConnectionRail,
   DesktopOpenWindow,
@@ -243,6 +248,7 @@ function DesktopHostSetupNotice(props: { setup: DesktopHostSetup; loading: boole
 
 export function DesktopPicker(props: {
   automatic: boolean;
+  client?: GatewayBrowserClient | null;
   environments: EnvironmentSummary[];
   hostSetup?: DesktopHostSetup | null;
   loading: boolean;
@@ -252,6 +258,7 @@ export function DesktopPicker(props: {
   onConnect: (environmentId: string) => void;
   onRefresh: () => void;
 }) {
+  const attachedSessionName = createAttachedSessionName(() => props.client);
   const nameFor = (environment: EnvironmentSummary) => {
     const label = environment.label?.trim();
     if (desktopSourceForEnvironment(environment).kind === "host") {
@@ -346,6 +353,7 @@ export function DesktopPicker(props: {
                     onConnect={props.onConnect}
                     name={nameFor(environment())}
                     showId={repeatedNames().has(nameFor(environment()))}
+                    attachedSessionName={attachedSessionName}
                   />
                 )}
               </For>
@@ -362,6 +370,7 @@ function DesktopEnvironment(props: {
   onConnect: (environmentId: string) => void;
   name: string;
   showId: boolean;
+  attachedSessionName: (sessionId: string) => string | undefined;
 }) {
   const nameId = createUniqueId();
   return (
@@ -385,14 +394,10 @@ function DesktopEnvironment(props: {
           <span>{props.environment.worker?.state ?? props.environment.status}</span>
         </div>
         {Boolean(props.environment.worker?.attachedSessionIds.length) && (
-          <div class="desktop-environment__sessions">
-            <For
-              each={props.environment.worker?.attachedSessionIds}
-              keyed={(sessionId) => sessionId}
-            >
-              {(sessionId) => <span class="desktop-session">{sessionId()}</span>}
-            </For>
-          </div>
+          <DesktopAttachedSessions
+            sessionIds={props.environment.worker?.attachedSessionIds}
+            nameFor={props.attachedSessionName}
+          />
         )}
       </div>
       <button
