@@ -1,0 +1,92 @@
+{
+  "componentId": "native-state-dir",
+  "declaration": {
+    "componentId": "native-state-dir",
+    "pathClass": "NATIVE_RUNTIME",
+    "logicalName": "Native State Directory",
+    "declarationRule": null,
+    "declaredValue": null,
+    "declarationSource": "src/config/paths.ts",
+    "lifecycle": "persistent",
+    "startupRequirementRule": true,
+    "capabilityDependencies": [],
+    "taskDependencyRules": [],
+    "fallbackPolicy": null,
+    "validationPolicy": { "requireExists": true },
+    "notes": "Native state directory."
+  },
+  "observation": {
+    "componentId": "native-state-dir",
+    "observedValue": "C:\\Users\\maicon\\.openclaw",
+    "observationStatus": "OK",
+    "collectedAt": "2026-07-18T18:00:00.000Z",
+    "evidence": [
+      {
+        "evidenceType": "FILESYSTEM",
+        "source": "FilesystemObserver",
+        "collectedAt": "2026-07-18T18:00:00.000Z",
+        "collector": "FilesystemObserver",
+        "confidence": "HIGH",
+        "valueHash": "abc123",
+        "notes": "Directory exists."
+      }
+    ]
+  },
+  "effectiveValueObservation": {
+    "componentId": "native-state-dir",
+    "effectiveValue": "C:\\Users\\maicon\\.openclaw",
+    "authoritySource": "runtime-resolver-output",
+    "confidence": "HIGH",
+    "evidence": [
+      {
+        "evidenceType": "PROCESS",
+        "source": "active-process-args",
+        "collectedAt": "2026-07-18T18:00:00.000Z",
+        "collector": "NativeRuntimeObserver",
+        "confidence": "HIGH",
+        "valueHash": "def456",
+        "notes": "Active process proves current use."
+      }
+    ]
+  },
+  "resolution": {
+    "componentId": "native-state-dir",
+    "declaredValue": null,
+    "observedValue": "C:\\Users\\maicon\\.openclaw",
+    "effectiveValue": "C:\\Users\\maicon\\.openclaw",
+    "resolutionStatus": "VERIFIED",
+    "conflictStatus": null,
+    "evidenceSufficient": true,
+    "notes": "All values consistent."
+  },
+  "conflict": null,
+  "requirementEvaluation": {
+    "componentId": "native-state-dir",
+    "startupRequired": true,
+    "startupRequirementSource": "registry-declaration",
+    "capabilityRequired": false,
+    "requiredCapabilities": [],
+    "taskRequired": false,
+    "requiredTasks": [],
+    "activeRuntimeProfile": "default",
+    "fallbackAllowed": false,
+    "fallbackApproved": false,
+    "policyBlocked": false,
+    "approvalBlocked": false,
+    "evidence": [
+      {
+        "evidenceType": "CONFIG",
+        "source": "openclaw.json",
+        "collectedAt": "2026-07-18T18:00:00.000Z",
+        "collector": "WorkspaceObserver",
+        "confidence": "HIGH",
+        "valueHash": "mno345",
+        "notes": "Configured."
+      }
+    ]
+  },
+  "capabilityStatus": {
+    "componentId": "native-state-dir",
+    "status": "HEALTHY"
+  }
+}

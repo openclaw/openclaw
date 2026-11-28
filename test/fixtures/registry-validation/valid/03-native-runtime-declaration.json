@@ -1,0 +1,15 @@
+{
+  "componentId": "native-state-dir",
+  "pathClass": "NATIVE_RUNTIME",
+  "logicalName": "Native State Directory",
+  "declarationRule": null,
+  "declaredValue": null,
+  "declarationSource": "src/config/paths.ts",
+  "lifecycle": "persistent",
+  "startupRequirementRule": true,
+  "capabilityDependencies": [],
+  "taskDependencyRules": [],
+  "fallbackPolicy": null,
+  "validationPolicy": { "requireExists": true },
+  "notes": "Valid native-runtime declaration."
+}

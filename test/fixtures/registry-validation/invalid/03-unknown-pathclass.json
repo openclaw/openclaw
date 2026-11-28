@@ -1,0 +1,15 @@
+{
+  "componentId": "bad-pathclass",
+  "pathClass": "INVALID_PATH_CLASS",
+  "logicalName": "Unknown PathClass",
+  "declarationRule": null,
+  "declaredValue": null,
+  "declarationSource": "test",
+  "lifecycle": "test",
+  "startupRequirementRule": false,
+  "capabilityDependencies": [],
+  "taskDependencyRules": [],
+  "fallbackPolicy": null,
+  "validationPolicy": {},
+  "notes": "Unknown PathClass value."
+}

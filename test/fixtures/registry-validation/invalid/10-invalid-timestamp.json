@@ -1,0 +1,17 @@
+{
+  "componentId": "bad-timestamp",
+  "observedValue": "C:\\Users\\maicon\\.openclaw",
+  "observationStatus": "OK",
+  "collectedAt": "not-a-valid-iso-8601-timestamp",
+  "evidence": [
+    {
+      "evidenceType": "FILESYSTEM",
+      "source": "test",
+      "collectedAt": "2026-07-18T18:00:00.000Z",
+      "collector": "test",
+      "confidence": "HIGH",
+      "valueHash": null,
+      "notes": "Valid evidence but parent timestamp is invalid."
+    }
+  ]
+}

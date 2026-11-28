@@ -1,0 +1,17 @@
+{
+  "componentId": "native-state-dir",
+  "effectiveValue": null,
+  "authoritySource": null,
+  "confidence": "LOW",
+  "evidence": [
+    {
+      "evidenceType": "CODE",
+      "source": "src/config/paths.ts",
+      "collectedAt": "2026-07-18T18:00:00.000Z",
+      "collector": "NativeRuntimeObserver",
+      "confidence": "LOW",
+      "valueHash": null,
+      "notes": "Static source inspection only; active runtime use not proven."
+    }
+  ]
+}

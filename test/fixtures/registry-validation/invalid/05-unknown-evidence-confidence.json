@@ -1,0 +1,9 @@
+{
+  "evidenceType": "FILESYSTEM",
+  "source": "test",
+  "collectedAt": "2026-07-18T18:00:00.000Z",
+  "collector": "test",
+  "confidence": "ULTRA",
+  "valueHash": null,
+  "notes": "Unknown EvidenceConfidence."
+}
