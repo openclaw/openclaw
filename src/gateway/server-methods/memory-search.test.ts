@@ -676,9 +676,9 @@ describe("memory.search gateway method", () => {
         searchMode: "fts-only",
         results: [],
         stale: true,
-        warning: "Memory index has pending updates. Results use the last published index.",
-        action:
-          "Retry after background indexing, or run: openclaw memory status --index --agent main. Rebuilding uses keyword indexing only and does not call an embedding provider.",
+        warning:
+          "Memory index checks or updates are pending. Results use the last published index.",
+        action: "Retry the search after background indexing completes.",
       },
       undefined,
     );
@@ -844,7 +844,7 @@ describe("memory.search gateway method", () => {
           // Resident watchers can still have pending work after the format repair.
           if (
             payload?.warning ===
-            "Memory index has pending updates. Results use the last published index."
+            "Memory index checks or updates are pending. Results use the last published index."
           ) {
             expect(payload).toHaveProperty("stale", true);
           } else {

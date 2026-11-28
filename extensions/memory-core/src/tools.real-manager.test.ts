@@ -288,8 +288,8 @@ describe("memory_search real manager", () => {
     expect(result.details).toMatchObject({
       results: [expect.objectContaining({ snippet: expect.stringContaining("Zebra") })],
       stale: true,
-      warning: expect.stringContaining("pending updates"),
-      action: expect.stringContaining("--agent main"),
+      warning: expect.stringContaining("Results use the last published index."),
+      action: "Retry the search after background indexing completes.",
     });
     expect(getSpy.mock.calls.some(([params]) => params.purpose === "maintenance")).toBe(false);
     expect(Reflect.get(manager, "sessionsDirty")).toBe(true);
