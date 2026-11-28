@@ -14,6 +14,7 @@ import type {
   ThinkingContent,
   ToolCall,
   Tool,
+  Usage,
 } from "../types.js";
 import { notifyLlmRequestActivity } from "../utils/llm-request-activity.js";
 import { mapGoogleToolArguments } from "./google-tool-parameters.js";
@@ -126,6 +127,7 @@ export async function consumeGoogleGenerateContentStream(params: {
     candidatesTokenCount: 0,
     thoughtsTokenCount: 0,
   };
+  let reportedThoughts = false;
   const toolCallIds = new Set<string>();
   for (const block of blocks) {
     if (block.type === "toolCall") {
@@ -179,7 +181,11 @@ export async function consumeGoogleGenerateContentStream(params: {
         ) === true;
       // The prompt count includes cached content; tool-use prompt tokens are prompt too.
       const contextPromptTokens = promptTokens + toolUsePromptTokens;
-      params.output.usage = {
+      if (typeof chunk.usageMetadata.thoughtsTokenCount === "number") {
+        reportedThoughts = true;
+      }
+      // Managed runs expose reasoning telemetry like Chat Completions; the shipped SDK shape does not.
+      const usage: Usage & { reasoningTokens?: number } = {
         ...createEmptyTransportUsage(),
         usageReport: { state: usageReported ? "available" : "unavailable" },
         input: Math.max(0, promptTokens - cacheRead) + toolUsePromptTokens,
@@ -196,7 +202,11 @@ export async function consumeGoogleGenerateContentStream(params: {
             : { state: "unavailable" },
         totalTokens:
           chunk.usageMetadata.totalTokenCount ?? promptTokens + outputTokens + toolUsePromptTokens,
+        ...(params.profile === "managed" && reportedThoughts
+          ? { reasoningTokens: knownUsage.thoughtsTokenCount }
+          : {}),
       };
+      params.output.usage = usage;
       calculateCost(params.model, params.output.usage);
     }
     const candidate = chunk.candidates?.[0];

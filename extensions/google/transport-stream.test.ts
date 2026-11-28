@@ -1255,6 +1255,7 @@ describe("google transport stream", () => {
       input: expectedInput,
       output: 4,
       cacheRead: 2,
+      reasoningTokens: 1,
       totalTokens: expectedTotal,
       cost: { input: expectedInput / 1_000_000 },
     });
