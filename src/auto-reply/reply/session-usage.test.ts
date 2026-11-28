@@ -433,9 +433,60 @@ describe("session actor usage accounting", () => {
       contextTokensUsed: 200_000,
     });
 
+    // Settled billing (input + output of the run) joins the budget alongside the
+    // context-window delta, so flat or compacted contexts cannot dodge the cap.
     expect(session.read().goal).toMatchObject({
       tokenStart: 105,
-      tokensUsed: 25,
+      tokensUsed: 130,
+      billedTokensUsed: 130,
+      status: "budget_limited",
+    });
+  });
+
+  it("charges settled billing to the goal budget while context stays flat (#203350)", async () => {
+    const session = await usageSession({
+      sessionId: "s1",
+      updatedAt: 1,
+      totalTokens: 20_000,
+      totalTokensFresh: true,
+      goal: {
+        schemaVersion: 1,
+        id: "goal-flat",
+        objective: "ship",
+        status: "active",
+        createdAt: 1,
+        updatedAt: 1,
+        tokenStart: 20_000,
+        tokenStartFresh: true,
+        tokensUsed: 0,
+        tokenBudget: 100_000,
+        continuationTurns: 0,
+      },
+    });
+
+    const settle = (input: number, output: number) =>
+      session.update({
+        usage: { input, output },
+        lastCallUsage: { input, output },
+        contextTokensUsed: 200_000,
+        currentContextSnapshot: { tokens: 20_000 },
+      });
+
+    await settle(40_000, 5_000);
+    expect(session.read().goal).toMatchObject({
+      tokensUsed: 45_000,
+      status: "active",
+    });
+
+    await settle(40_000, 5_000);
+    expect(session.read().goal).toMatchObject({
+      tokensUsed: 90_000,
+      status: "active",
+    });
+
+    await settle(10_000, 500);
+    expect(session.read().goal).toMatchObject({
+      tokensUsed: 100_500,
       status: "budget_limited",
     });
   });

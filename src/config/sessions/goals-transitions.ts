@@ -26,7 +26,7 @@ function normalizeTokenBudget(value: number | undefined): number | undefined {
 export function accountSessionGoalUsage(
   entry: Pick<SessionEntry, "goal" | "totalTokens" | "totalTokensFresh" | "totalTokensVersion">,
   now: number,
-  options?: { adoptFreshBaseline?: boolean },
+  options?: { adoptFreshBaseline?: boolean; settledUsageTokens?: number },
 ): SessionGoal | undefined {
   const goal = entry.goal;
   if (!goal) {
@@ -42,15 +42,23 @@ export function accountSessionGoalUsage(
   const tokenStart = shouldAdoptFreshStart
     ? totalTokens
     : (normalizeTokenCount(goal.tokenStart) ?? totalTokens ?? 0);
+  // Settled billing joins the budget only once the goal owns a token baseline: baseline
+  // adoption already spends the run that established it, and re-reads settle nothing new.
+  const settlesUsage = totalTokens !== undefined && !shouldAdoptFreshStart && !shouldHoldStaleStart;
+  const settledUsageTokens = normalizeTokenCount(options?.settledUsageTokens) ?? 0;
+  const billedTokensUsed = settlesUsage
+    ? Math.max(0, normalizeTokenCount(goal.billedTokensUsed) ?? 0) + settledUsageTokens
+    : (normalizeTokenCount(goal.billedTokensUsed) ?? 0);
   const tokensUsed =
     totalTokens === undefined || shouldAdoptFreshStart || shouldHoldStaleStart
       ? goal.tokensUsed
-      : Math.max(goal.tokensUsed, Math.max(0, totalTokens - tokenStart));
+      : Math.max(goal.tokensUsed, Math.max(0, totalTokens - tokenStart), billedTokensUsed);
   const next: SessionGoal = {
     ...goal,
     tokenStart,
     tokenStartFresh: hasFreshStart || shouldAdoptFreshStart,
     tokensUsed,
+    ...(billedTokensUsed > 0 ? { billedTokensUsed } : {}),
   };
   if (
     next.status === "active" &&
@@ -138,6 +146,8 @@ export function buildUpdatedSessionGoalStatus(
     next.tokenStart = freshTokenStart ?? 0;
     next.tokenStartFresh = freshTokenStart !== undefined;
     next.tokensUsed = 0;
+    // A new budget window also restarts settled-billing accumulation.
+    delete next.billedTokensUsed;
     delete next.budgetLimitedAt;
     delete next.usageLimitedAt;
   }

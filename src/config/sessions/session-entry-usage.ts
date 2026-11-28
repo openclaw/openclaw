@@ -114,7 +114,16 @@ export function projectSessionEntryUsageUpdate(
     patch.totalTokensFresh = true;
     patch.totalTokensVersion = SESSION_TOTAL_TOKENS_VERSION;
     if (!update.preserveUserFacingRunState) {
-      const accountedGoal = accountSessionGoalUsage({ ...entry, ...patch }, updatedAt);
+      // Goal budgets track settled billing, not just context growth: flat or compacted
+      // contexts would otherwise admit unbounded turns under an explicit token budget.
+      const settledUsageTokens = hasBillableUsage(update.usage)
+        ? Math.floor((update.usage.input ?? 0) + (update.usage.output ?? 0))
+        : undefined;
+      const accountedGoal = accountSessionGoalUsage(
+        { ...entry, ...patch },
+        updatedAt,
+        settledUsageTokens === undefined ? undefined : { settledUsageTokens },
+      );
       if (accountedGoal) {
         patch.goal = accountedGoal;
       }
