@@ -2,6 +2,7 @@ import { createServer } from "node:http";
 import { buffer } from "node:stream/consumers";
 import { expect, it } from "vitest";
 import { createModelGatewayFixture } from "./model-gateway.test-support.ts";
+import { openTencentTokenHubKeyForm } from "./model-providers.test-support.ts";
 import { respondAsReasoningModel } from "./reasoning-upstream.test-support.js";
 
 // Setup's one-shot check behind a dialog must report a scripted provider's failures promptly.
@@ -58,9 +59,7 @@ suite.define(() => {
       { locale: "en-US", serviceWorkers: "block", viewport: { width: 1280, height: 900 } },
       async ({ page }) => {
         await page.goto(await open("settings/model-providers"));
-        await page.locator("[data-models-catalog-search]").fill("Tencent");
-        await page.locator('[data-models-catalog-provider="tencent-tokenhub"] button').click();
-        const form = page.getByRole("dialog", { name: "Add provider" });
+        const form = await openTencentTokenHubKeyForm(page);
         await form.getByRole("textbox", { name: "API key" }).fill("sk-synthetic-setup-check");
         await form.getByRole("button", { name: "Save provider", exact: true }).click();
         await expect.poll(() => form.isVisible(), { timeout: 30_000 }).toBe(false);

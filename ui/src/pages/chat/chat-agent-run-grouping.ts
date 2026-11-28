@@ -160,6 +160,7 @@ export function coalesceAgentRunFrames(
   items: AgentRunFrameInput[],
   opts: {
     searchActive?: boolean;
+    showToolCalls?: boolean;
     /** Source history includes silent/empty terminals omitted from rendered groups. */
     messages?: readonly unknown[];
     activeRunId?: string | null;
@@ -198,12 +199,15 @@ export function coalesceAgentRunFrames(
   // row; `resuming` lets exactly the next run in.
   let opened: { runId: string; boundaryId: string | undefined } | undefined;
   let resuming = false;
-  // Without a Resumed rule marking the handoff, operations on either side of it are one log.
+  // A background command wake can continue the visible operation log.
   let afterHandoff = false;
   const addPart = (item: AgentRunFramePart) => {
     const last = parts.at(-1);
+    const wake = afterHandoff && last ? partContinuation(item) : undefined;
     const joined =
-      afterHandoff && last && !partContinuation(item) ? joinActivityRuns(last, item) : undefined;
+      afterHandoff && last && (!wake || (wake === "exec" && opts.showToolCalls !== false))
+        ? joinActivityRuns(last, item)
+        : undefined;
     afterHandoff = false;
     if (joined) {
       parts[parts.length - 1] = joined;

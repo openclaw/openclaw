@@ -142,25 +142,31 @@ describe("command-analysis risks", () => {
   });
 
   it("checks both effective and original argv for segment inline eval", () => {
-    const argv = ["sudo", "python3", "-c", "print(1)"];
+    const inlineArgv = ["sudo", "python3", "-c", "print(1)"];
+    const scriptArgv = ["sudo", "python3", "script.py"];
     const executable = {
       kind: "executable",
       rawExecutable: "sudo",
       executableName: "sudo",
     } as const;
-    const hit = detectInlineEvalInSegments([
-      {
-        raw: "sudo python3 -c 'print(1)'",
-        argv,
-        resolution: {
-          kind: "command",
-          execution: executable,
-          policy: executable,
-          effectiveArgv: argv,
+    for (const [argv, effectiveArgv] of [
+      [scriptArgv, inlineArgv],
+      [inlineArgv, scriptArgv],
+    ] as const) {
+      const hit = detectInlineEvalInSegments([
+        {
+          raw: argv.join(" "),
+          argv,
+          resolution: {
+            kind: "command",
+            execution: executable,
+            policy: executable,
+            effectiveArgv,
+          },
         },
-      },
-    ]);
-    expect(hit?.normalizedExecutable).toBe("python3");
+      ]);
+      expect(hit?.normalizedExecutable).toBe("python3");
+    }
   });
 });
 

@@ -37,6 +37,23 @@ struct ChatModelAccountsTests {
         #expect(groups.notSignedIn.first { $0.id == "openrouter" }?.name == "OpenRouter")
     }
 
+    @Test func `provider detail keeps plans and limits on their reported account`() throws {
+        let groups = try ChatModelAccountGroups(status: status(#"""
+        {"providers":[{"provider":"claude-cli","authProvider":"anthropic","displayName":"Claude","status":"ok",
+          "profiles":[{"profileId":"work","type":"oauth","planLabel":"Team"},{"profileId":"personal","type":"token"}],
+          "nativeAuth":{"kind":"subscription","plan":"Max"},
+          "usage":{"authProfileId":"work","plan":"Team",
+                   "windows":[{"label":"Weekly","usedPercent":100,"resetAt":1900000000000}]}}],
+          "providerCapabilities":[{"provider":"anthropic","apiKeySupported":true}]}
+        """#))
+        let account = try #require(groups.account("claude-cli"))
+        #expect(account.plan == "Max")
+        #expect(account.profiles.map(\.planLabel) == ["Team", nil])
+        #expect(account.usage?.authProfileId == "work")
+        #expect(account.usage?.windows.first?.resetAt == 1_900_000_000_000)
+        #expect(!account.supportsAPIKey, "A credential alias must not offer to overwrite the other provider’s key")
+    }
+
     @Test func `an expiry at or before now reads as expired`() throws {
         let now = Date(timeIntervalSince1970: 1_800_000_000)
         #expect(ChatModelAccount.Notice.expiring(at: now.addingTimeInterval(-5), now: now) == .expired)

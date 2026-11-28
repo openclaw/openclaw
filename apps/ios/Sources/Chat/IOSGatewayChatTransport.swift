@@ -352,8 +352,17 @@ ChatPRReaderTransport {
               let agentID = agentID ?? self.globalAgentId
         else { return nil }
         let gateway = self.gateway
+        let scopes = await gateway.currentOperatorScopes(ifCurrentRoute: route) ?? []
+        async let keyMethod = gateway.supportsServerMethod("models.authSetApiKey", ifCurrentRoute: route)
+        async let probeMethod = gateway.supportsServerMethod("models.probe", ifCurrentRoute: route)
+        async let logoutMethod = gateway.supportsServerMethod("models.authLogout", ifCurrentRoute: route)
+        let (key, probe, logout) = await (keyMethod, probeMethod, logoutMethod)
         return OpenClawChatModelSignInContext(
             agentID: agentID,
+            canRemoveSignIn: scopes.contains("operator.admin") && logout == true,
+            canStartSignIn: scopes.contains("operator.admin"),
+            canSetAPIKey: scopes.contains("operator.admin") && key == true,
+            canCheckConnection: scopes.contains("operator.admin") && probe == true,
             request: { method, params in
                 try await gateway.request(
                     OpenClawChatGatewayRequest(method: method, params: params, timeoutMs: 26 * 60 * 1000),

@@ -30,11 +30,18 @@ struct ChatModelAccount: Identifiable, Equatable {
     let options: [ChatModelAuthStatus.LoginOption]
     let profiles: [ChatModelAuthStatus.Profile]
     let plan: String?
+    let usage: ChatModelAuthStatus.Usage?
+    let supportsAPIKey: Bool
     /// How a sign-in without a saved profile reaches the provider: a key in settings or the environment, or
     /// the provider's own app on the OpenClaw host.
     let source: Source?
     /// Every provider id this account answers to: its own, its credential owner's and its options' provider.
     let keys: Set<String>
+
+    /// The Claude command-line runtime and the direct provider can both arrive labeled “Claude”.
+    var displayTitle: String {
+        self.id == "claude-cli" ? "Claude Code" : self.name
+    }
 
     /// Saved sign-ins the server says it can remove. Sign-ins owned elsewhere (a CLI, config) carry none.
     var removableProfileIDs: [String] {
@@ -81,6 +88,10 @@ struct ChatModelAccountGroups: Equatable {
                 options: Self.unique(options),
                 profiles: profiles,
                 plan: provider.nativeAuth?.plan?.trimmedNonEmpty,
+                usage: provider.usage,
+                supportsAPIKey: capabilities.contains {
+                    Self.key($0.provider) == Self.key(provider.provider) && $0.apiKeySupported == true
+                },
                 source: provider.nativeAuth != nil ? .providerApp
                     : provider.apiKey?.source == "env" ? .environmentKey
                     : provider.apiKey != nil ? .settingsKey : nil,
@@ -106,6 +117,8 @@ struct ChatModelAccountGroups: Equatable {
                 options: options,
                 profiles: [],
                 plan: nil,
+                usage: nil,
+                supportsAPIKey: false,
                 source: nil,
                 keys: [id]))
         }

@@ -758,7 +758,7 @@ it("shows only live author resolutions, closes dismissed chips, and retires acce
   const dismissed = { ...pendingSuggestion(state, "dismissed"), state: "dismissed" as const };
   const list = { suggestions: [pending, accepted, dismissed], role: "viewer" as const };
   request.mockResolvedValue(list);
-  const view = () => pane.suggestionChatProps(true, false, true);
+  const view = () => pane.sessionSuggestionChatProps(true, false, true);
   const [tray, publishTray] = createSignal(() => view());
   const { container } = mountSolid(() =>
     createComponent(ChatSessionSuggestions, {

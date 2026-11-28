@@ -1,6 +1,35 @@
 import XCTest
 
 extension OpenClawSnapshotUITests {
+    func testExpandingLongPromptKeepsVisibleListItemInPlace() throws {
+        self.launchApp(for: Self.chatScreenshotTarget, additionalArguments: ["--openclaw-numbered-prompt-fixture"])
+        let app = try XCTUnwrap(self.app)
+        let toggle = app.buttons["chat-user-message-disclosure-toggle"]
+        XCTAssertTrue(toggle.waitForExistence(timeout: 8))
+        XCTAssertEqual(toggle.value as? String, "Collapsed")
+        let item = app.staticTexts.matching(NSPredicate(format: "label BEGINSWITH %@", "Review item 3 ")).firstMatch
+        XCTAssertTrue(item.exists)
+        XCTAssertTrue(app.windows.firstMatch.frame.contains(item.frame), "Start with a visible paragraph")
+        let before = item.frame.minY
+        toggle.tap()
+        XCTAssertEqual(toggle.value as? String, "Expanded")
+        XCTAssertEqual(
+            item.frame.minY,
+            before,
+            accuracy: 1,
+            "Show more should reveal the tail, not skip past the reader")
+
+        let latest = app.buttons["Jump to latest reply"]
+        XCTAssertTrue(latest.waitForExistence(timeout: 5))
+        latest.tap()
+        XCTAssertTrue(toggle.isHittable)
+        toggle.tap()
+        XCTAssertEqual(toggle.value as? String, "Collapsed")
+        XCTAssertTrue(
+            app.windows.firstMatch.frame.contains(item.frame),
+            "Do not leave the reader past the shorter prompt")
+    }
+
     func testFinishedCommandsSeparatedByEmptyThinkingShareOneSheet() throws {
         self.launchApp(for: Self.chatScreenshotTarget, additionalArguments: ["--openclaw-image-review-tools-fixture"])
         let app = try XCTUnwrap(self.app)

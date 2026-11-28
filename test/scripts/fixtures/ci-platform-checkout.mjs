@@ -1043,6 +1043,16 @@ async function command() {
     if (scenario === "git-failure") {
       process.exit(23);
     }
+    if (scenario === "receive-reset") {
+      if (attempt === 1) {
+        fs.writeSync(
+          2,
+          "error: RPC failed; curl 56 Recv failure: Connection reset by peer\nfatal: protocol error: bad pack header\n",
+        );
+        process.exit(128);
+      }
+      process.exit(0);
+    }
     if (scenario === "git-exit-124") {
       process.exit(124);
     }

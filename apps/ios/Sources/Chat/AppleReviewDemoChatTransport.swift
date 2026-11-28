@@ -286,6 +286,16 @@ struct LocalFixtureChatTransport: OpenClawChatGoalTransport, OpenClawChildStopTr
     }
 
     func listModels(agentID _: String?) async throws -> [OpenClawChatModelChoice] {
+        if ScreenshotFixtureMode.modelSignInScenario == "provider-detail" {
+            return try OpenClawChatGatewayPayloadCodec.decodeModelChoices(Data(#"""
+            {"models":[
+              {"id":"claude-sonnet-4","name":"Claude Sonnet 4","provider":"claude-cli","available":true},
+              {"id":"claude-sonnet-4","name":"Claude Sonnet 4","provider":"anthropic","available":true},
+              {"id":"openai/gpt-4.1","name":"GPT-4.1","provider":"clawrouter","available":true},
+              {"id":"anthropic/claude-sonnet-4","name":"Claude Sonnet 4","provider":"clawrouter","available":true}
+            ]}
+            """#.utf8))
+        }
         if ScreenshotFixtureMode.modelSignInScenario == "empty" { return [] }
         if ProcessInfo.processInfo.arguments.contains("--openclaw-unavailable-model-fixture") {
             return try OpenClawChatGatewayPayloadCodec.decodeModelChoices(Data(#"""
@@ -1286,12 +1296,12 @@ actor LocalFixtureChatStore {
                     transcriptMessageID: "fixture-long-latest"),
             ]
         }
-        return fixture.seedMessages.enumerated().map { index, text in
+        return ScreenshotFixtureMode.numberedPrompt(at: now) ?? fixture.seedMessages.enumerated().map { i, text in
             self.message(
                 role: "assistant",
                 text: text,
-                timestamp: now + Double(index),
-                transcriptMessageID: "\(fixture.sessionIDPrefix)-seed-\(index)")
+                timestamp: now + Double(i),
+                transcriptMessageID: "\(fixture.sessionIDPrefix)-seed-\(i)")
         }
     }
 

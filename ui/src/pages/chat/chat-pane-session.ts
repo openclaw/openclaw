@@ -288,7 +288,6 @@ export abstract class ChatPaneSession extends ChatPaneCatalog {
         if (isCurrent() && this.presented && document.visibilityState !== "hidden") {
           this.deferredSessionHydration = null;
           this.syncSessionReactions();
-          void this.refreshTaskSuggestions({ automatic: true });
           if (historyCommitted) {
             this.markSessionRead(selectedChatSessionRow(state));
           }
