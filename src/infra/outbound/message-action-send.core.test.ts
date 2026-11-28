@@ -39,7 +39,7 @@ vi.mock("../../tts/tts.runtime.js", () => ({
 function registerPlugin(
   id: string,
   outbound: NonNullable<ChannelPlugin["outbound"]>,
-  overrides: Partial<ChannelPlugin> = {},
+  overrides: Partial<ChannelPlugin>,
 ) {
   const plugin = { ...createOutboundTestPlugin({ id, outbound }), ...overrides };
   setActivePluginRegistry(createTestRegistry([{ pluginId: id, source: "test", plugin }]));

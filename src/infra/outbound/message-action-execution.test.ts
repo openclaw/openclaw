@@ -32,7 +32,7 @@ function runAction(
   channel: string,
   action: ActionInput["action"],
   params: Record<string, unknown>,
-  input: Partial<ActionInput> = {},
+  input: Partial<ActionInput>,
 ) {
   return runMessageAction({
     cfg: createEnabledMessageActionConfig(channel),
@@ -299,7 +299,7 @@ function senderReadPolicy(key: string, access: "allow" | "deny" = "deny") {
 function runHostMediaAction(
   channel: string,
   policy: Record<string, unknown>,
-  input: Partial<ActionInput> = {},
+  input: Partial<ActionInput>,
   params: Record<string, unknown> = {},
 ) {
   return runAction(

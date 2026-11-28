@@ -297,7 +297,7 @@ describe("runMessageAction plugin dispatch", () => {
       vi.clearAllMocks();
     });
     const sendAccountAction = (
-      params: Record<string, unknown> = {},
+      params: Record<string, unknown>,
       input: Partial<PluginActionInput> = {},
     ) =>
       runPluginAction("accountchat", {
