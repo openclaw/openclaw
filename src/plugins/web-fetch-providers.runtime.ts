@@ -10,6 +10,7 @@ import {
 } from "./web-provider-resolution-shared.js";
 import {
   resolvePluginWebProviders,
+  resolvePluginWebProvidersAsync,
   type ResolvePluginWebProvidersParams,
   type ResolveRuntimeWebProvidersParams,
   type WebProviderRuntimeResolution,
@@ -26,27 +27,27 @@ const providerResolution = {
     }),
   mapRegistryProviders: ({ registry, onlyPluginIds }) =>
     mapRegistryProviders({ registry, entries: registry.webFetchProviders, onlyPluginIds }),
+  resolveBundledPublicArtifactProviders: resolveBundledWebFetchProvidersFromPublicArtifacts,
+  resolveBundledRuntimeArtifactProviders: resolveBundledRuntimeWebFetchProvidersFromPublicArtifacts,
 } satisfies WebProviderRuntimeResolution<PluginWebFetchProviderEntry>;
 
 /** Resolves web fetch providers from bundled artifacts or scoped plugin loads. */
 export function resolvePluginWebFetchProviders(
   params: ResolvePluginWebProvidersParams,
 ): PluginWebFetchProviderEntry[] {
-  return resolvePluginWebProviders(params, {
-    ...providerResolution,
-    resolveBundledPublicArtifactProviders: resolveBundledWebFetchProvidersFromPublicArtifacts,
-    resolveBundledRuntimeArtifactProviders:
-      resolveBundledRuntimeWebFetchProvidersFromPublicArtifacts,
-  });
+  return resolvePluginWebProviders(params, providerResolution);
 }
 
-/** Resolves already-eligible runtime web fetch providers without setup-mode activation. */
-export function resolveRuntimeWebFetchProviders(
+/** Resolves fetch providers with yielding preparation for cold plugin sources. */
+export function resolvePluginWebFetchProvidersAsync(
+  params: ResolvePluginWebProvidersParams,
+): Promise<PluginWebFetchProviderEntry[]> {
+  return resolvePluginWebProvidersAsync(params, providerResolution);
+}
+
+/** Resolves runtime fetch providers without synchronously capturing cold plugin sources. */
+export function resolveRuntimeWebFetchProvidersAsync(
   params: ResolveRuntimeWebProvidersParams,
-): PluginWebFetchProviderEntry[] {
-  return resolvePluginWebProviders(params, {
-    ...providerResolution,
-    resolveBundledRuntimeArtifactProviders:
-      resolveBundledRuntimeWebFetchProvidersFromPublicArtifacts,
-  });
+): Promise<PluginWebFetchProviderEntry[]> {
+  return resolvePluginWebProvidersAsync(params, providerResolution);
 }

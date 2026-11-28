@@ -9,7 +9,8 @@ import type {
 } from "../plugins/types.js";
 import {
   resolvePluginWebFetchProviders,
-  resolveRuntimeWebFetchProviders,
+  resolvePluginWebFetchProvidersAsync,
+  resolveRuntimeWebFetchProvidersAsync,
 } from "../plugins/web-fetch-providers.runtime.js";
 import { getActiveRuntimeWebToolsMetadataFromState } from "../secrets/runtime-web-tools-state.js";
 import type { RuntimeWebFetchMetadata } from "../secrets/runtime-web-tools.types.js";
@@ -75,9 +76,9 @@ export function listWebFetchProviders(params?: {
   });
 }
 
-export function resolveWebFetchDefinition(
+export async function resolveWebFetchDefinition(
   options?: ResolveWebFetchDefinitionParams,
-): WebFetchDefinitionResolution {
+): Promise<WebFetchDefinitionResolution> {
   /** Auto-detects a web_fetch provider after explicit selections have been resolved. */
   function resolveAutoWebFetchProviderId(): string {
     const config = options?.config;
@@ -97,7 +98,7 @@ export function resolveWebFetchDefinition(
     return "";
   }
 
-  function resolveWebFetchProvidersForOptions(): PluginWebFetchProviderEntry[] {
+  async function resolveWebFetchProvidersForOptions(): Promise<PluginWebFetchProviderEntry[]> {
     const config = options?.config;
     const cacheKey = config
       ? JSON.stringify([
@@ -113,15 +114,15 @@ export function resolveWebFetchDefinition(
     }
     const entries = sortPluginEntriesForAutoDetect(
       options?.sandboxed
-        ? resolvePluginWebFetchProviders({
+        ? await resolvePluginWebFetchProvidersAsync({
             config: options?.config,
             sandboxed: true,
           })
         : options?.preferRuntimeProviders
-          ? resolveRuntimeWebFetchProviders({
+          ? await resolveRuntimeWebFetchProvidersAsync({
               config: options?.config,
             })
-          : resolvePluginWebFetchProviders({
+          : await resolvePluginWebFetchProvidersAsync({
               config: options?.config,
             }),
     );
@@ -137,7 +138,7 @@ export function resolveWebFetchDefinition(
   }
   const runtimeWebFetch =
     options?.runtimeWebFetch ?? getActiveRuntimeWebToolsMetadataFromState()?.fetch;
-  const providers = resolveWebFetchProvidersForOptions();
+  const providers = await resolveWebFetchProvidersForOptions();
   if (providers.length === 0) {
     return null;
   }

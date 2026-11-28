@@ -12,7 +12,7 @@ import { writeArtifacts } from "./public-surface.test-support.js";
 import { resolvePluginWebContentExtractors } from "./web-content-extractors.runtime.js";
 import {
   resolvePluginWebFetchProviders,
-  resolveRuntimeWebFetchProviders,
+  resolveRuntimeWebFetchProvidersAsync,
 } from "./web-fetch-providers.runtime.js";
 import { resolveBundledWebSearchProvidersFromPublicArtifacts } from "./web-provider-public-artifacts.js";
 import {
@@ -111,7 +111,8 @@ const setupResolvers = [
   ["web-search-contract-api.js", resolvePluginWebSearchProviders],
   ["web-fetch-contract-api.js", resolvePluginWebFetchProviders],
 ] as const;
-type Resolver = (params: Resolution) => { label: string }[];
+type Providers = { label: string }[];
+type Resolver = (params: Resolution) => Providers | Promise<Providers>;
 const fromProcess =
   (resolve: Resolver): Resolver =>
   (params) => {
@@ -124,7 +125,7 @@ const resolvers: ReadonlyArray<readonly [string, Resolver]> = [
       [artifact, (params: Resolution) => resolve({ ...params, mode: "setup" })] as const,
   ),
   ["web-search-contract-api.js", resolveRuntimeWebSearchProviders],
-  ["web-fetch-provider.js", resolveRuntimeWebFetchProviders],
+  ["web-fetch-provider.js", resolveRuntimeWebFetchProvidersAsync],
   ["document-extractor.js", fromProcess(resolvePluginDocumentExtractors)],
   ["web-content-extractor.js", fromProcess(resolvePluginWebContentExtractors)],
 ];
@@ -159,13 +160,14 @@ describe("public artifact environment ownership", () => {
     const caller = environment("caller");
     useProcessEnvironment(ambient);
     await using cache = createPluginCache();
-    withPluginCache(cache, () => {
+    await withPluginCache(cache, async () => {
       for (const [fixture, expected] of [
         [caller, "caller"],
         [ambient, "ambient"],
         [caller, "caller"],
       ] as const) {
-        expect(resolve(resolution(fixture)).map((provider) => provider.label)).toEqual([expected]);
+        const providers = await resolve(resolution(fixture));
+        expect(providers.map((provider) => provider.label)).toEqual([expected]);
       }
     });
     expect(ambient.evaluations()).toEqual([artifact]);
