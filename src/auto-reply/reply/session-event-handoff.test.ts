@@ -568,6 +568,31 @@ describe("session event target custody", () => {
     }
   });
 
+  it.for([
+    ["a hidden subagent", "agent:main:subagent:helper", {}, false],
+    [
+      "a visible spawned session",
+      "agent:main:dashboard:helper",
+      { createdVia: "spawn", spawnDepth: 1, spawnedBy: sessionKey },
+      undefined,
+    ],
+  ] as const)(
+    "routes %s's event turns to the chat only when the user sees that session",
+    async ([, childKey, spawn, deliver], { state: { env } }) => {
+      // A hidden subagent reports through its completion handoff; its exec wake must not post too.
+      const database = openOpenClawAgentDatabase({ agentId: "main", env });
+      writeSessionEntry(database, childKey, {
+        sessionId: "child-session",
+        updatedAt: 1,
+        delivery: normalizeSessionDeliveryState({ context: route }),
+        ...spawn,
+      });
+      const target = await captureTarget("main", childKey, { env });
+      expect(target.deliveryContext).toEqual(route);
+      expect(target.deliver).toBe(deliver);
+    },
+  );
+
   it("retains store, route and producer limits across lookup", async ({
     state: { env, path: fixturePath, storePath },
   }) => {

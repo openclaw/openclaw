@@ -85,6 +85,8 @@ yield awaits every wake-armed command that is still running in the session,
 including commands that an earlier run started. A command exit becomes an
 ordinary exec wake turn in the child session. Like a tool handoff result, the
 wake continues the task that is paused in that session, whichever run paused it.
+A hidden child's wake reply is not sent to the requester's chat; it reaches the
+requester through the child's completion.
 Without a paused task, the wake stays a separate follow-up, and a hidden child
 that did not yield gets only a passive notice.
 
