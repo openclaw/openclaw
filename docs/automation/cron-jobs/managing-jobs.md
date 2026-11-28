@@ -80,6 +80,8 @@ Run links from automation messages and notifications open the exact recorded run
 
 ## Managing jobs
 
+In the Automations editor, **Prompt preview** shows how the draft looks with Markdown formatting. New automations start active. Under **Advanced**, you can turn off **Turn on after creating** to save a paused draft, or turn off **Delete after it runs** to keep a one-time automation after it succeeds.
+
 In the Control UI, an open automation refreshes its next-run time and condition activity when scheduler events arrive. These runtime updates preserve unsaved settings and the saved definition used for conflict detection, including when the selected automation is outside the current list page or filter.
 
 Model choices load when you open an automation's settings or create an automation. You can edit the draft while choices load. Model-catalog errors appear in that editor without interrupting the automation list or run history.

@@ -1,6 +1,4 @@
-import { writeFileSync } from "node:fs";
 import { expect, it } from "vitest";
-import { takeControlUiScreenshotFrame } from "../test-helpers/control-ui-e2e-screenshot.ts";
 import { installMockGateway } from "../test-helpers/control-ui-e2e.ts";
 import {
   createControlUiE2eContextOptions,
@@ -60,15 +58,11 @@ suite.define(() => {
         const input = page.locator("#cron-payload-text");
         await input.waitFor({ state: "visible" });
         expect(await input.inputValue()).toBe(prompt);
-        // The rendered preview sits with the other task settings under Advanced.
-        await page.locator("details.cron-advanced > summary").click();
+        const previewLabel = page.getByText("Prompt preview", { exact: true });
+        expect(await page.getByRole("region", { name: "Prompt preview" }).count()).toBe(0);
+        await previewLabel.click();
         const preview = page.locator(".cron-prompt-preview .chat-text");
         await preview.waitFor({ state: "visible" });
-        const frame = await takeControlUiScreenshotFrame(page, input, [input, preview], {
-          animations: "disabled",
-          scrollTo: input,
-        });
-        writeFileSync(suite.artifactDir + "/prompt-preview.png", frame.png);
         const height = await preview.evaluate(
           (element) =>
             (element.closest(".cron-prompt-preview") ?? element).getBoundingClientRect().height,

@@ -60,7 +60,10 @@ describe("cron view editor", () => {
       editingJob: job,
       form: { ...DEFAULT_CRON_FORM, payloadKind: "agentTurn", payloadText },
     });
-    const preview = getElement(container, ".cron-prompt-preview .chat-text", HTMLDivElement);
+    getElement(container, ".cron-prompt__preview summary", HTMLElement).click();
+    const preview = await waitForSolid(() =>
+      getElement(container, ".cron-prompt-preview .chat-text", HTMLDivElement),
+    );
     expect(preview.querySelector("h1")?.textContent).toBe("Weekly digest");
     expect(preview.querySelector("li strong")?.textContent).toBe("Garden");
     expect(preview.querySelector('script, [onerror], a[href^="javascript:"]')).toBeNull();
@@ -73,9 +76,7 @@ describe("cron view editor", () => {
       { payloadKind: "script" as const, payloadLocked: true, payloadText: "# Source" },
       { payloadKind: "command" as const, payloadLocked: true, payloadText: "# Source" },
     ]) {
-      expect(
-        (await renderEditor(form)).querySelector(".cron-prompt-preview .chat-text"),
-      ).toBeNull();
+      expect((await renderEditor(form)).querySelector(".cron-prompt__preview")).toBeNull();
     }
   });
 
@@ -152,6 +153,9 @@ describe("cron view editor", () => {
   });
 
   it("shows announce channel/to rows and webhook URL row per delivery mode", async () => {
+    const owner = await renderEditor({ deliveryMode: "announce", deliveryTarget: "owner" });
+    await updatePickers(owner);
+    expect(text(owner, "#cron-delivery-mode")).toContain("The owner’s direct messages");
     const announce = await renderEditor({ deliveryMode: "announce" }, { channels: ["telegram"] });
     await updatePickers(announce);
     expect(announce.querySelector("#cron-delivery-channel")).not.toBeNull();

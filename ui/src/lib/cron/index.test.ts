@@ -505,6 +505,9 @@ it.each([
 it("round-trips hidden delivery destinations through clone and edit", async () => {
   const sourceJob = createCronJob("job-routing", "Routed job", {
     sessionKey: "agent:ops:main",
+    enabled: false,
+    deleteAfterRun: false,
+    schedule: { kind: "at", at: "2030-01-02T03:04:00.000Z" },
     delivery: {
       mode: "announce",
       accountId: "ops-bot",
@@ -517,7 +520,11 @@ it("round-trips hidden delivery destinations through clone and edit", async () =
 
   const addPayload = await cloneJob(sourceJob).submit();
   expect(addPayload.delivery).toEqual(sourceJob.delivery);
-  expect(addPayload.sessionKey).toBe("agent:ops:main");
+  expect(addPayload).toMatchObject({
+    sessionKey: "agent:ops:main",
+    enabled: false,
+    deleteAfterRun: false,
+  });
 
   const { state, submit } = editJob(sourceJob);
   state.cronForm.deliveryThreadId = "thread-42";
