@@ -1,10 +1,13 @@
 import path from "node:path";
-import { describe, expect, it } from "vitest";
+import { describe, expect, it, vi } from "vitest";
 import { findSourceImportBackedges } from "../../test/helpers/source-import-closure.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { withOpenClawTestState } from "../test-utils/openclaw-test-state.js";
 import { prepareModelRuntimeOwner } from "./prepared-model-runtime.owner.js";
-import { listConfiguredRefreshInputs as refreshInputs } from "./prepared-model-runtime.refresh-scope.js";
+import {
+  listConfiguredRefreshInputs as refreshInputs,
+  refreshCommittedProviderCatalogs,
+} from "./prepared-model-runtime.refresh-scope.js";
 
 type Owners = Parameters<typeof refreshInputs>[2];
 function configuredOwner(input: Parameters<typeof prepareModelRuntimeOwner>[0]): Owners {
@@ -12,6 +15,25 @@ function configuredOwner(input: Parameters<typeof prepareModelRuntimeOwner>[0]):
 }
 
 describe("configured model runtime refresh inputs", () => {
+  it("refreshes only the published owners of a scoped publication (#194911)", () => {
+    const owner = (agentId: string) => ({
+      // Refresh also reads the headless-startup gate from the owner's config.
+      input: { agentId, config: {} },
+      provenance: "configured",
+      snapshot: { loadFullModelCatalog: vi.fn(async () => ({ entries: [] })) },
+    });
+    const [changed, unrelated] = [owner("changed"), owner("unrelated")];
+    // SAFETY: refresh reads only provenance, lifecycle flags, input and snapshot.
+    const owners = [changed, unrelated] as unknown as Parameters<
+      typeof refreshCommittedProviderCatalogs
+    >[0];
+    refreshCommittedProviderCatalogs(owners, new Set(["changed"]));
+    expect(changed.snapshot.loadFullModelCatalog).toHaveBeenCalledWith({ changedOnly: true });
+    expect(unrelated.snapshot.loadFullModelCatalog).not.toHaveBeenCalled();
+    refreshCommittedProviderCatalogs(owners);
+    expect(unrelated.snapshot.loadFullModelCatalog).toHaveBeenCalledOnce();
+  });
+
   it("prefers explicit workspaces over launch candidates on startup and replacement", async () => {
     await withOpenClawTestState({ label: "model-workspace-precedence" }, async (state) => {
       const agentDir = state.agentDir("main");

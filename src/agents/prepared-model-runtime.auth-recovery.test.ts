@@ -83,6 +83,37 @@ vi.mock("../logging/subsystem.js", async (importOriginal) => {
   };
 });
 
+/** Catalog discovery started by a committed publication, attributed to its agent. */
+const committedCatalogRefreshes = vi.hoisted(
+  () => [] as Array<{ agentId?: string; wait: boolean }>,
+);
+
+vi.mock("./prepared-model-runtime.catalog-access.js", async (importOriginal) => {
+  const actual =
+    await importOriginal<typeof import("./prepared-model-runtime.catalog-access.js")>();
+  return {
+    ...actual,
+    createPersistentModelCatalogAccess: (
+      ...args: Parameters<typeof actual.createPersistentModelCatalogAccess>
+    ) => {
+      const access = actual.createPersistentModelCatalogAccess(...args);
+      return {
+        ...access,
+        loadFullModelCatalog: (
+          options?: Parameters<typeof access.loadFullModelCatalog>[0],
+        ): ReturnType<typeof access.loadFullModelCatalog> => {
+          committedCatalogRefreshes.push({
+            agentId: args[0].agentFacts.input.agentId,
+            // A build waits on its own discovery; publication refreshes only start it.
+            wait: options?.wait === true,
+          });
+          return access.loadFullModelCatalog(options);
+        },
+      };
+    },
+  };
+});
+
 const fixture = usePreparedModelRuntimeHarness({ label: "auth-generation-recovery" });
 const { mocks } = fixture;
 const loadDispatch = () => loadPublishedDispatch({ agentId: "default" });
@@ -431,6 +462,57 @@ describe("auth publication generation recovery", () => {
       }
     },
   );
+
+  const threeAgents: OpenClawConfig = { agents: { entries: { a1: {}, a3: {}, a4: {} } } };
+
+  /** Agents whose catalog discovery a committed publication started. */
+  const refreshedAgentIds = () =>
+    committedCatalogRefreshes.flatMap(({ agentId, wait }) => (wait ? [] : (agentId ?? [])));
+
+  function emitAuthMutation(agentId: string) {
+    mocks.mutationListener?.({
+      agentDir: fixture.state.agentDir(agentId),
+      affectsInheritedStores: false,
+      profileSetChanged: true,
+    });
+  }
+
+  it("refreshes both agents rebuilt by one coalesced auth transaction (#194911)", async () => {
+    mocks.configuredAgentIds = ["a1", "a3", "a4"];
+    await refresh(threeAgents, { gatewayLifecycle: true, catalogMode: "static" });
+    committedCatalogRefreshes.length = 0;
+    // The second mutation joins the queued transaction rather than queueing its own publisher.
+    emitAuthMutation("a3");
+    emitAuthMutation("a4");
+
+    await vi.waitFor(() => expect(refreshedAgentIds().toSorted()).toEqual(["a3", "a4"]), {
+      timeout: 5_000,
+    });
+  });
+
+  it("refreshes the out-of-scope owner adopted by a scoped config publication (#194911)", async ({
+    signal,
+  }) => {
+    mocks.configuredAgentIds = ["a1", "a3", "a4"];
+    await refresh(threeAgents, { gatewayLifecycle: true, catalogMode: "static" });
+    committedCatalogRefreshes.length = 0;
+    const build = createEnteredGate();
+    mocks.resolveAmbientCredentials.mockImplementationOnce(async () => {
+      await build.wait();
+      return {};
+    });
+    const scoped = refresh(
+      { agents: { entries: { a1: {}, a3: { model: "synthetic/next" }, a4: {} } } },
+      { gatewayLifecycle: true, catalogMode: "static", agentIds: new Set(["a3"]) },
+    );
+    await withinTest(build.entered, signal);
+    // The auth mutation lands while the scoped replacement owns the next generation.
+    emitAuthMutation("a4");
+    build.release();
+    await scoped;
+
+    expect(refreshedAgentIds().toSorted()).toEqual(["a3", "a4"]);
+  });
 
   it("preserves the retirement reason when an auth gate settles after its owner retires", async () => {
     const { snapshot } = await publishOwner();
