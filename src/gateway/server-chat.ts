@@ -1,6 +1,7 @@
 // Gateway chat runtime projects agent events into chat/session subscriber
 // streams, lifecycle persistence, and live UI updates.
 import { performance } from "node:perf_hooks";
+import { asOptionalRecord } from "@openclaw/normalization-core/record-coerce";
 import { readStringValue } from "@openclaw/normalization-core/string-coerce";
 import { GATEWAY_CLIENT_CAPS } from "../../packages/gateway-protocol/src/client-info.js";
 import {
@@ -28,6 +29,7 @@ import { formatErrorMessage } from "../infra/errors.js";
 import { boundedJsonUtf8Bytes } from "../infra/json-utf8-bytes.js";
 import { logError, logWarn } from "../logger.js";
 import type { InternalSessionTranscriptUpdate } from "../sessions/transcript-events.js";
+import { formatProviderCyberPolicyText } from "../shared/assistant-error-format.js";
 import { setSafeTimeout } from "../utils/timer-delay.js";
 import { resolveAssistantTextInput } from "./agent-event-assistant-text.js";
 import {
@@ -518,8 +520,14 @@ export function createAgentEventHandler({
               sendLivePayload("chat", terminalSessionKey, payload, terminalDelivery);
               return;
             }
-            const errorDetail = projectChatErrorDetail(terminalErrorObservation);
-            const errorMessage = terminalError ? formatForLog(terminalError) : undefined;
+            const cyberPolicy = formatProviderCyberPolicyText(
+              asOptionalRecord(terminalErrorObservation)?.providerErrorCode,
+            );
+            const errorDetail = cyberPolicy
+              ? undefined
+              : projectChatErrorDetail(terminalErrorObservation);
+            const errorMessage =
+              cyberPolicy ?? (terminalError ? formatForLog(terminalError) : undefined);
             const payload = {
               ...terminalPayload,
               state: "error" as const,
