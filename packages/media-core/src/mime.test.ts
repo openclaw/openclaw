@@ -97,6 +97,25 @@ describe("mime detection", () => {
   );
 
   it.each([
+    { filePath: "unsigned.xpi", expected: "application/x-xpinstall" },
+    { filePath: "plugin.jar", expected: "application/java-archive" },
+    { filePath: "app.apk", expected: "application/vnd.android.package-archive" },
+    { filePath: "map.kmz", expected: "application/vnd.google-earth.kmz" },
+  ])(
+    "refines generic ZIP bytes with a container filename: $filePath",
+    async ({ filePath, expected }) => {
+      expect(await detectMime({ buffer: zipBuffer, filePath })).toBe(expected);
+    },
+  );
+
+  it("maps the missing ZIP-container extensions in both directions", () => {
+    expect(extensionForMime("application/x-xpinstall")).toBe(".xpi");
+    expect(extensionForMime("application/java-archive")).toBe(".jar");
+    expect(extensionForMime("application/vnd.android.package-archive")).toBe(".apk");
+    expect(extensionForMime("application/vnd.google-earth.kmz")).toBe(".kmz");
+  });
+
+  it.each([
     ["widget.bundle.js", "text/javascript"],
     ["config.yml", "application/yaml"],
     ["config.yaml", "application/yaml"],
