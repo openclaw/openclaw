@@ -194,9 +194,12 @@ The common plugin config shape is:
 
 Key policy rules:
 
-- `plugins.enabled: false` disables all plugins and skips discovery/load
-  work. Stale plugin references stay inert while this is active; re-enable
-  plugins before running doctor cleanup if you want stale ids removed.
+- `plugins.enabled: false` turns off general plugin discovery and loading.
+  Stale plugin references stay inert while this is active. Re-enable plugins
+  before running Doctor cleanup to remove stale IDs. An explicitly
+  [configured Gmail watcher](/automation/cron-jobs/gmail#gateway-auto-start) or
+  [selected QuickJS executor](/tools/code-mode/executors) can use its shipped
+  implementation. Explicit denies and disabled entries for its owner still apply.
 - `plugins.deny` wins over allow and per-plugin enablement.
 - A non-empty `plugins.allow` restricts which plugins can load, with activation
   exceptions for the selected memory plugin, context-engine plugins whose id

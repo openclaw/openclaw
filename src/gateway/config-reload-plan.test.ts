@@ -17,6 +17,47 @@ describe("Gateway core reload policy", () => {
   beforeEach(() => setActivePluginRegistry(createEmptyPluginRegistry()));
   afterEach(() => resetPluginRuntimeStateForTest());
 
+  it("preserves Gateway port restarts while hot-reloading Gmail hook settings", async () => {
+    const { default: gmail } = await loadBundledPluginFacade<{
+      default: OpenClawPluginDefinition;
+    }>({ pluginId: "gmail", artifactBasename: "index.ts" });
+    const registry = createEmptyPluginRegistry();
+    gmail.register?.(
+      createTestPluginApi({
+        id: "gmail",
+        registerService(service) {
+          registry.services.push({
+            pluginId: "gmail",
+            source: "test",
+            origin: "bundled",
+            id: service.id,
+            service,
+          });
+        },
+      }),
+    );
+    setActivePluginRegistry(registry);
+    expect(
+      buildGatewayReloadPlan(["hooks.gmail.account", "hooks.path", "hooks.token", "hooks.enabled"]),
+    ).toMatchObject({
+      restartGateway: false,
+      reloadHooks: true,
+      restartServices: new Set(["gmail-watch"]),
+    });
+    const previousConfig: OpenClawConfig = { gateway: { port: 18789 } };
+    const candidateConfig: OpenClawConfig = { gateway: { port: 18790 } };
+    const paths = diffGatewayReloadPaths(
+      previousConfig,
+      candidateConfig,
+      listConfigReloadRefinementPrefixes(),
+    );
+    expect(buildGatewayReloadPlan(paths, { previousConfig, candidateConfig })).toMatchObject({
+      restartGateway: true,
+      restartReasons: ["gateway.port"],
+      restartServices: new Set(),
+    });
+  });
+
   it("hot-applies DeepSeek search credentials without replacing plugin resources", async () => {
     const { default: deepseek } = await loadBundledPluginFacade<{
       default: OpenClawPluginDefinition;

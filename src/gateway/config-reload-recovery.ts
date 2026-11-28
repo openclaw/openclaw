@@ -116,7 +116,6 @@ export function isProviderAuthRelevantReloadPath(path: string): boolean {
 export function reloadPlanNeedsRecovery(plan: GatewayReloadPlan): boolean {
   return (
     plan.restartCron ||
-    plan.restartGmailWatcher ||
     plan.reloadPlugins ||
     plan.restartChannels.size > 0 ||
     (plan.restartChannelAccounts?.size ?? 0) > 0 ||

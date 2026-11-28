@@ -1,14 +1,17 @@
 import fs from "node:fs/promises";
 import path from "node:path";
+import type { SpawnResult } from "openclaw/plugin-sdk/process-runtime";
+import { useAutoCleanupTempDirTracker } from "openclaw/plugin-sdk/test-env";
 import { afterEach, beforeEach, expect, it, vi } from "vitest";
-import { useAutoCleanupTempDirTracker } from "../../test/helpers/temp-dir.js";
-import type { SpawnResult } from "../process/exec.js";
+import { gogServeSchema } from "../test-api.js";
 import { inspectGog, inspectGogUpgrade, upgradeGog } from "./gmail-gog.js";
-import { gogServeSchema } from "./gmail.test-support.js";
 
 const mocks = vi.hoisted(() => ({ run: vi.fn() }));
 // mock-isolation: supply external command responses without executing host tools.
-vi.mock("../process/exec.js", () => ({ runUtf8CommandWithTimeout: mocks.run }));
+vi.mock("openclaw/plugin-sdk/process-runtime", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("openclaw/plugin-sdk/process-runtime")>()),
+  runUtf8CommandWithTimeout: mocks.run,
+}));
 
 const tempDirs = useAutoCleanupTempDirTracker(afterEach);
 const success = (stdout = ""): SpawnResult => ({

@@ -1,15 +1,9 @@
-// Gmail Windows tests cover gog watcher command invocation on Windows.
 import path from "node:path";
+import { getWindowsInstallRoots } from "openclaw/plugin-sdk/test-env";
+import { withMockedWindowsPlatform } from "openclaw/plugin-sdk/test-node-mocks";
 import { describe, expect, it } from "vitest";
-import "../test-utils/prepare-compiled-subprocesses.js";
-import { getWindowsInstallRoots } from "../infra/windows-install-roots.js";
-import { withMockedWindowsPlatform } from "../test-utils/vitest-spies.js";
 
 const { resolveGogServeInvocation } = await import("./gmail.js");
-
-function expectedTrustedCmdExe(): string {
-  return path.win32.join(getWindowsInstallRoots().systemRoot, "System32", "cmd.exe");
-}
 
 describe("resolveGogServeInvocation on Windows", () => {
   it("wraps spaced gog .cmd paths in an outer cmd.exe command line", async () => {
@@ -20,7 +14,7 @@ describe("resolveGogServeInvocation on Windows", () => {
       );
 
       expect(invocation).toEqual({
-        command: expectedTrustedCmdExe(),
+        command: path.win32.join(getWindowsInstallRoots().systemRoot, "System32", "cmd.exe"),
         args: [
           "/d",
           "/s",

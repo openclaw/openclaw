@@ -4,7 +4,15 @@ import { applyPluginAutoEnable } from "../config/plugin-auto-enable.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import type { PluginDiscoveryResult } from "../plugins/discovery.js";
 import type { PluginManifestRegistry } from "../plugins/manifest-registry.js";
+import { loadPluginLookUpTable } from "../plugins/plugin-lookup-table.js";
 import { isRecord } from "../utils.js";
+
+/** Startup and replacement skip the general runtime inventory when plugins are off. */
+export function loadEnabledGatewayPluginLookUpTable(
+  params: Parameters<typeof loadPluginLookUpTable>[0],
+) {
+  return params.config.plugins?.enabled === false ? undefined : loadPluginLookUpTable(params);
+}
 
 // Activation config carries only operator-controlled enable/allow surfaces into
 // runtime config. Other runtime fields stay canonical to avoid stale activation

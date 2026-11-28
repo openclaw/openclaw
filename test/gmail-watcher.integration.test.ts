@@ -4,23 +4,28 @@ import { chmodSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "nod
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { describe, expect, it, onTestFinished, vi } from "vitest";
+import gmailPlugin from "../extensions/gmail/index.js";
+import { createGmailConfig } from "../extensions/gmail/test-api.js";
+import { createTestPluginApi } from "../src/plugin-sdk/plugin-test-api.js";
+import type { PluginServiceRegistration } from "../src/plugins/registry-types.js";
+import { createRegistry, startPluginServices } from "../src/plugins/services.test-support.js";
+import { createTestGatewayScheduler } from "../src/test-utils/gateway-scheduler-clock.js";
 import {
   fixtureReceiptClientSource,
   openFixtureReceiptChannel,
-} from "../../test/helpers/fixture-receipts.js";
-import { withinTest } from "../../test/helpers/promise.js";
+} from "./helpers/fixture-receipts.js";
+import { withinTest } from "./helpers/promise.js";
 import {
   isProcessAlive as alive,
   waitForProcessExit,
-} from "../../test/scripts/live-process-fixture.test-support.js";
-import { createTestGatewayScheduler } from "../test-utils/gateway-scheduler-clock.js";
-import { startGmailWatcher, stopGmailWatcher } from "./gmail-watcher.js";
-import { createGmailConfig } from "./gmail.test-support.js";
+} from "./scripts/live-process-fixture.test-support.js";
 
 const describePosix = process.platform === "win32" ? describe.skip : describe;
 
-describePosix("gmail-watcher process-tree shutdown (integration)", () => {
-  it("stopGmailWatcher removes gog and its credential-helper descendant", async ({ signal }) => {
+describePosix("Gmail plugin service (integration)", () => {
+  it("passes tokens to Gog without argv leakage and reaps its process tree on stop", async ({
+    signal,
+  }) => {
     const receipts = await openFixtureReceiptChannel();
     const wait = <T>(work: Promise<T>) => withinTest(work, signal);
     const tmpDir = mkdtempSync(join(tmpdir(), "openclaw-gog-integration-"));
@@ -28,12 +33,15 @@ describePosix("gmail-watcher process-tree shutdown (integration)", () => {
     const pushToken = randomBytes(24).toString("hex");
     const hookToken = randomBytes(24).toString("hex");
     const transportReceipt = join(tmpDir, "transport.json");
+    const scheduler = createTestGatewayScheduler("fake-timers");
+    const cleanup: { stop?: () => Promise<void> } = {};
     onTestFinished(async () => {
       try {
-        await stopGmailWatcher();
+        await cleanup.stop?.();
       } catch {
         // Still force cleanup when watcher shutdown fails.
       }
+      await scheduler.stop();
       for (const [index, pid] of pids.entries()) {
         try {
           process.kill(index === 0 ? -pid : pid, "SIGKILL");
@@ -83,14 +91,31 @@ describePosix("gmail-watcher process-tree shutdown (integration)", () => {
     const config = createGmailConfig("integration@example.com");
     config.hooks!.token = hookToken;
     config.hooks!.gmail!.pushToken = pushToken;
-    const result = await wait(
-      startGmailWatcher(config, {
-        scheduler: createTestGatewayScheduler(),
-        signal,
+    vi.stubEnv("OPENCLAW_SKIP_GMAIL_WATCHER", undefined);
+    const services: PluginServiceRegistration["service"][] = [];
+    gmailPlugin.register(
+      createTestPluginApi({
+        id: "gmail",
+        config,
+        registerService: (service) => {
+          services.push(service);
+        },
       }),
     );
-
-    expect(result.started).toBe(true);
+    const handle = await wait(
+      startPluginServices({
+        config,
+        scheduler,
+        registry: createRegistry(services, "gmail", "bundled"),
+      }),
+    );
+    if (!handle) {
+      throw new Error("Gmail did not register a plugin service");
+    }
+    const stop = async () => {
+      await handle.stop({ strict: true });
+    };
+    cleanup.stop = stop;
 
     await wait(receipts.waitFor(helperPidPath, "ready"));
 
@@ -102,7 +127,7 @@ describePosix("gmail-watcher process-tree shutdown (integration)", () => {
       argvClean: true,
     });
 
-    await wait(stopGmailWatcher());
+    await wait(stop());
 
     // The watcher joins its leader and escalation, but exposes no descendant reap receipt.
     await Promise.all(pids.map((pid) => waitForProcessExit(pid, signal)));

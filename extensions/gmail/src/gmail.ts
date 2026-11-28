@@ -1,26 +1,28 @@
-import { asPositiveFiniteNumber } from "@openclaw/normalization-core/number-coercion";
-import { normalizeOptionalString } from "@openclaw/normalization-core/string-coerce";
-import { normalizeUniqueStringEntries } from "@openclaw/normalization-core/string-normalization";
 import {
-  type OpenClawConfig,
-  DEFAULT_GATEWAY_PORT,
-  type HooksGmailTailscaleMode,
+  DEFAULT_GMAIL_LABEL,
+  DEFAULT_GMAIL_SUBSCRIPTION,
+  DEFAULT_GMAIL_SERVE_BIND,
+  DEFAULT_GMAIL_SERVE_PORT,
+  DEFAULT_GMAIL_SERVE_PATH,
+  DEFAULT_GMAIL_RENEW_MINUTES,
+  resolveGmailHookMaxBytes,
   resolveGatewayPort,
-} from "../config/config.js";
+  type GmailHookOverrides,
+  type GmailHookRuntimeConfig,
+  DEFAULT_GATEWAY_PORT,
+} from "openclaw/plugin-sdk/gateway-config-runtime";
+import { asPositiveFiniteNumber } from "openclaw/plugin-sdk/number-runtime";
+import type { OpenClawConfig } from "openclaw/plugin-sdk/plugin-entry";
 import {
   buildWindowsCmdExeCommandLine,
   isWindowsBatchCommand,
   resolveTrustedWindowsCmdExe,
-} from "../process/windows-command.js";
+} from "openclaw/plugin-sdk/process-runtime";
+import {
+  normalizeOptionalString,
+  normalizeUniqueStringEntries,
+} from "openclaw/plugin-sdk/string-coerce-runtime";
 
-export const DEFAULT_GMAIL_LABEL = "INBOX";
-export const DEFAULT_GMAIL_TOPIC = "gog-gmail-watch";
-export const DEFAULT_GMAIL_SUBSCRIPTION = "gog-gmail-watch-push";
-export const DEFAULT_GMAIL_SERVE_BIND = "127.0.0.1";
-export const DEFAULT_GMAIL_SERVE_PORT = 8788;
-export const DEFAULT_GMAIL_SERVE_PATH = "/gmail-pubsub";
-export const DEFAULT_GMAIL_MAX_BYTES = 20_000;
-export const DEFAULT_GMAIL_RENEW_MINUTES = 12 * 60;
 export const GMAIL_WATCH_PUSH_TOKEN_ENV = "OPENCLAW_GOG_WATCH_PUSH_TOKEN";
 export const GMAIL_WATCH_HOOK_TOKEN_ENV = "OPENCLAW_GOG_WATCH_HOOK_TOKEN";
 export const GMAIL_INSECURE_TOKEN_ARGS_WARNING =
@@ -33,43 +35,6 @@ const DEFAULT_HOOKS_PATH = "/hooks";
 // OpenClaw handles inbound mail; override gog's narrower SPAM,TRASH default.
 const GMAIL_WATCH_EXCLUDED_LABELS = "SPAM,TRASH,DRAFT,SENT";
 const GMAIL_WATCH_SENSITIVE_FLAGS = new Set(["--token", "--hook-url", "--hook-token"]);
-
-export type GmailHookOverrides = Partial<Omit<GmailHookRuntimeConfig, "serve" | "tailscale">> & {
-  serveBind?: string;
-  servePort?: number;
-  servePath?: string;
-  tailscaleMode?: HooksGmailTailscaleMode;
-  tailscalePath?: string;
-  tailscaleTarget?: string;
-};
-
-export type GmailHookRuntimeConfig = {
-  account: string;
-  label: string;
-  topic: string;
-  subscription: string;
-  pushToken: string;
-  hookToken: string;
-  hookUrl: string;
-  includeBody: boolean;
-  maxBytes: number;
-  renewEveryMinutes: number;
-  serve: {
-    bind: string;
-    port: number;
-    path: string;
-  };
-  tailscale: {
-    mode: HooksGmailTailscaleMode;
-    path: string;
-    target?: string;
-  };
-};
-
-/** Resolve the per-message body byte bound gog is provisioned with (`--max-bytes`). */
-export function resolveGmailHookMaxBytes(raw: number | undefined): number {
-  return Math.floor(asPositiveFiniteNumber(raw) ?? DEFAULT_GMAIL_MAX_BYTES);
-}
 
 export function mergeHookPresets(existing: string[] | undefined, preset: string): string[] {
   const next = new Set(normalizeUniqueStringEntries(existing));
@@ -291,3 +256,8 @@ export function parseTopicPath(topic: string): { projectId: string; topicName: s
   }
   return { projectId: match[1] ?? "", topicName: match[2] ?? "" };
 }
+
+export type {
+  GmailHookOverrides,
+  GmailHookRuntimeConfig,
+} from "openclaw/plugin-sdk/gateway-config-runtime";

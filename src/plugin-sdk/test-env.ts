@@ -3,6 +3,7 @@ export {
   getCliProcessTestTimeout,
   runCliProcessChild,
 } from "../cli/cli-process-child.test-helpers.js";
+export { getWindowsInstallRoots } from "../infra/windows-install-roots.js";
 export { jsonResponse, requestBodyText, requestUrl } from "../test-helpers/http.js";
 export { mockPinnedHostnameResolution } from "../test-helpers/ssrf.js";
 export {

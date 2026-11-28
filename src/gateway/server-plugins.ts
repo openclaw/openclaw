@@ -427,7 +427,9 @@ export async function loadGatewayPlugins(params: {
   const started = performance.now();
   const allowProcessHomeSessionCatalogs = allowsProcessHomeSessionScan();
   const resolvedConfig = params.cfg;
-  const pluginIds = params.pluginIds ?? [
+  const pluginsDisabled = resolvedConfig.plugins?.enabled === false;
+  const selectedPluginIds = pluginsDisabled ? [] : params.pluginIds;
+  const pluginIds = selectedPluginIds ?? [
     ...(
       params.pluginLookUpTable ??
       loadPluginLookUpTable({
@@ -509,6 +511,15 @@ export async function loadGatewayPlugins(params: {
           startupTrace: params.startupTrace,
         })
       : createEmptyPluginRegistry();
+    if (pluginsDisabled && resolvedConfig.hooks?.enabled && resolvedConfig.hooks.gmail?.account) {
+      const { registerShippedGmailWatcher } = await import("./server-gmail-watcher-service.js");
+      registerShippedGmailWatcher(
+        pluginRegistry,
+        resolvedConfig,
+        params.env ?? process.env,
+        params.loadModules !== false,
+      );
+    }
     setPluginRuntimeLoadContext(pluginRegistry, loadContext);
   } catch (error) {
     gatewayRuntimeBindings?.retire();

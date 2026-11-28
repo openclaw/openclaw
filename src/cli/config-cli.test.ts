@@ -145,7 +145,6 @@ vi.mock("../gateway/config-reload-plan.js", () => ({
       restartReasons,
       hotReasons,
       reloadHooks: false,
-      restartGmailWatcher: false,
       restartCron: false,
       reloadPlugins: false,
       restartChannels: new Set(),

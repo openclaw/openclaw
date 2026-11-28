@@ -228,6 +228,15 @@ function hasPluginAllowlistWithMaterialEntries(cfg: OpenClawConfig): boolean {
   return entries !== undefined && Object.values(entries).some(hasMaterialPluginEntryConfig);
 }
 
+// The public hooks.gmail settings selected the Gateway watcher before it became a plugin.
+function needsGmailWatcherAutoEnable(cfg: OpenClawConfig): boolean {
+  if (!cfg.hooks?.enabled || !cfg.hooks.gmail?.account) {
+    return false;
+  }
+  const { allow } = normalizePluginsConfig(cfg.plugins);
+  return allow.length > 0 && !allow.includes("gmail");
+}
+
 function hasConfiguredPluginProviders(cfg: OpenClawConfig): boolean {
   const webSearch = cfg.tools?.web?.search;
   return (
@@ -253,6 +262,7 @@ function configMayNeedPluginManifestRegistry(cfg: OpenClawConfig): boolean {
   if (
     hasPluginAllowlistWithMaterialEntries(cfg) ||
     hasSetupAutoEnableRelevantConfig(cfg) ||
+    needsGmailWatcherAutoEnable(cfg) ||
     hasConfiguredPluginProviders(cfg)
   ) {
     return true;
@@ -286,6 +296,7 @@ export function resolvePluginAutoEnableReadiness(
       hasPluginAllowlistWithMaterialEntries(cfg) ||
       hasSetupAutoEnableRelevantConfig(cfg) ||
       configuredChannelIds.length > 0 ||
+      needsGmailWatcherAutoEnable(cfg) ||
       hasConfiguredPluginProviders(cfg),
     configuredChannelIds,
   };
@@ -295,6 +306,17 @@ export function resolveConfiguredPluginAutoEnableCandidates(
   params: ConfiguredPluginAutoEnableParams,
 ): PluginAutoEnableCandidate[] {
   const changes = resolveConfiguredChannelAutoEnableCandidates(params);
+  if (
+    needsGmailWatcherAutoEnable(params.config) &&
+    params.registry.plugins.some((plugin) => plugin.id === "gmail" && plugin.origin === "bundled")
+  ) {
+    changes.push({
+      pluginId: "gmail",
+      kind: "setup-auto-enable",
+      reason: "Gmail watcher configured",
+    });
+  }
+
   const findMatchingPluginIds = (
     value: string,
     selectValues: (plugin: PluginManifestRecord) => readonly string[],

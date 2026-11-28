@@ -1,0 +1,9 @@
+{
+  "id": "gmail",
+  "categories": ["inbox-collaboration"],
+  "name": "Gmail Pub/Sub",
+  "description": "Run and renew a Gog Gmail Pub/Sub watcher.",
+  "enabledByDefault": true,
+  "activation": { "onConfigPaths": ["hooks.gmail.account"] },
+  "configSchema": { "type": "object", "additionalProperties": false, "properties": {} }
+}

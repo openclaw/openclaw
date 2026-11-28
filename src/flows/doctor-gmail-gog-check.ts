@@ -1,4 +1,4 @@
-import { inspectGog, inspectGogUpgrade, upgradeGog } from "../hooks/gmail-gog.js";
+import { loadGmailRuntime } from "../hooks/gmail-plugin.js";
 import { isTruthyEnvValue } from "../infra/env.js";
 import { resolveCommandProcessSignal } from "../process/exec-spawn.js";
 import { getAsyncWorkSignal } from "../shared/async-work-scope.js";
@@ -18,6 +18,7 @@ export const gmailGogCheck: HealthCheck = {
       return [];
     }
     const signal = resolveCommandProcessSignal(getAsyncWorkSignal());
+    const { inspectGog } = loadGmailRuntime();
     const inspection = await inspectGog({ env: ctx.env, signal });
     if (inspection.support === "supported") {
       return [];
@@ -58,6 +59,7 @@ export const gmailGogCheck: HealthCheck = {
     }
     const signal = resolveCommandProcessSignal(getAsyncWorkSignal());
     signal?.throwIfAborted();
+    const { inspectGog, inspectGogUpgrade, upgradeGog } = loadGmailRuntime();
     const inspection = await inspectGog({ env: ctx.env, signal });
     if (inspection.support === "supported") {
       return { changes: [] };

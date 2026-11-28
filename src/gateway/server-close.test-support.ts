@@ -10,10 +10,7 @@ import type { GatewayCloseOptions } from "./server-public.js";
 export type GatewayCloseParams = GatewayTeardownParams & GatewayClosePrepareParams;
 type GatewayCloseFixtureMocks = Pick<
   GatewayCloseParams,
-  | "disposeAllBundleLspRuntimes"
-  | "stopGmailWatcher"
-  | "disposeAllCodeModeRuns"
-  | "closeProviderTransportDispatcherPool"
+  "disposeAllBundleLspRuntimes" | "disposeAllCodeModeRuns" | "closeProviderTransportDispatcherPool"
 > & {
   drainRetainedEmbeddingProviders: GatewayCloseParams["drainRetainedOpenAiEmbeddingProviders"];
 };
@@ -73,7 +70,6 @@ export function createGatewayCloseTestDepsFactory(mocks: GatewayCloseFixtureMock
       stopScheduler: vi.fn(async () => {}),
       disposeAllBundleLspRuntimes: mocks.disposeAllBundleLspRuntimes,
       drainRetainedOpenAiEmbeddingProviders: mocks.drainRetainedEmbeddingProviders,
-      stopGmailWatcher: mocks.stopGmailWatcher,
       disposeAllCodeModeRuns: mocks.disposeAllCodeModeRuns,
       closeProviderTransportDispatcherPool: mocks.closeProviderTransportDispatcherPool,
       cron: { stop: vi.fn() },

@@ -150,7 +150,7 @@ function createPluginReloadHandler(
     pruneInactiveChannelAccountState: vi.fn(),
     reloadPlugins,
     ...(requestRecoveryRestart ? { requestRecoveryRestart } : {}),
-    logHooks: logger,
+
     logChannels: logger,
     logCron: logger,
     logReload: logger,

@@ -1,4 +1,5 @@
 import { expect, it } from "vitest";
+import { createGmailConfig } from "../test-api.js";
 import {
   buildGogWatchServeArgs,
   buildGogWatchServeLogArgs,
@@ -8,7 +9,6 @@ import {
   parseTopicPath,
   resolveGmailHookRuntimeConfig,
 } from "./gmail.js";
-import { createGmailConfig } from "./gmail.test-support.js";
 
 const baseConfig = createGmailConfig("openclaw@gmail.com");
 

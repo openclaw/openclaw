@@ -13,7 +13,7 @@ import {
 import { getGatewayPluginMetadataSnapshot } from "../plugins/current-plugin-metadata-state.js";
 import { getRegisteredEmbeddingProvider } from "../plugins/embedding-providers.js";
 import { extractPluginInstallRecordsFromInstalledPluginIndex } from "../plugins/installed-plugin-index-install-records.js";
-import { loadPluginLookUpTable } from "../plugins/plugin-lookup-table.js";
+import type { loadPluginLookUpTable } from "../plugins/plugin-lookup-table.js";
 import {
   completePluginMetadataSnapshot,
   type PluginMetadataSnapshot,
@@ -31,7 +31,10 @@ import {
   getPluginRuntimeLoadContext,
   setPluginRuntimeLoadContext,
 } from "../plugins/runtime/load-context.js";
-import { resolveGatewayStartupPluginActivationConfig } from "./plugin-activation-runtime-config.js";
+import {
+  loadEnabledGatewayPluginLookUpTable,
+  resolveGatewayStartupPluginActivationConfig,
+} from "./plugin-activation-runtime-config.js";
 import { listGatewayMethods } from "./server-methods-list.js";
 import type { GatewayContextResolver } from "./server-methods/types.js";
 import { measureStartup, type GatewayStartupTrace } from "./server-startup-trace.js";
@@ -202,18 +205,17 @@ export async function prepareGatewayPluginBootstrap(params: {
   const pluginsGloballyDisabled = gatewayPluginConfig.plugins?.enabled === false;
   const pluginWorkspaceDir = tryResolveConfiguredAgentWorkspaceDir(gatewayPluginConfig);
   const defaultWorkspaceDir = pluginWorkspaceDir ?? resolveDefaultAgentWorkspaceDir();
-  const pluginLookUpTable =
-    params.minimalTestGateway || pluginsGloballyDisabled
-      ? undefined
-      : loadPluginLookUpTable({
-          config: gatewayPluginConfig,
-          workspaceDir: pluginWorkspaceDir,
-          env: process.env,
-          activationSourceConfig,
-          metadataSnapshot: params.pluginMetadataSnapshot,
-          workerProviderIds: params.workerProviderIds ?? [],
-          ambientEnvTriggers: params.ambientEnvTriggers,
-        });
+  const pluginLookUpTable = params.minimalTestGateway
+    ? undefined
+    : loadEnabledGatewayPluginLookUpTable({
+        config: gatewayPluginConfig,
+        workspaceDir: pluginWorkspaceDir,
+        env: process.env,
+        activationSourceConfig,
+        metadataSnapshot: params.pluginMetadataSnapshot,
+        workerProviderIds: params.workerProviderIds ?? [],
+        ambientEnvTriggers: params.ambientEnvTriggers,
+      });
   // Startup logging and lifecycle publication consume the process-stable metadata snapshot.
   // Minimal gateways skip runtime lookup-table construction, not metadata ownership.
   const pluginManifestRecords =

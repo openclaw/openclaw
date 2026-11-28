@@ -1,11 +1,11 @@
-import { expectDefined } from "@openclaw/normalization-core";
-import { afterEach, beforeEach, expect, it, vi } from "vitest";
-import { createDeferred } from "../../test/helpers/promise.js";
+import { createDeferred } from "openclaw/plugin-sdk/concurrency-runtime";
+import { expectDefined } from "openclaw/plugin-sdk/expect-runtime";
 import {
   createGatewaySchedulerClock,
   createTestGatewayScheduler,
-} from "../test-utils/gateway-scheduler-clock.js";
-import { withMockedPlatform } from "../test-utils/vitest-spies.js";
+} from "openclaw/plugin-sdk/plugin-test-api";
+import { withMockedPlatform } from "openclaw/plugin-sdk/test-node-mocks";
+import { afterEach, beforeEach, expect, it, vi } from "vitest";
 import {
   commandSuccess,
   gogSchemaSuccess,
@@ -13,7 +13,7 @@ import {
   commandGate,
   createGmailConfig,
   WatcherChild,
-} from "./gmail.test-support.js";
+} from "../test-api.js";
 
 let allChildren: WatcherChild[];
 
@@ -35,26 +35,18 @@ vi.mock("node:child_process", async () => {
   );
 });
 
-// mock-isolation: binary availability belongs to the controlled watcher fixture.
-vi.mock("../skills/loading/config.js", () => ({ hasBinary: mocks.hasBinary }));
-
-// mock-isolation: resolve synthetic executables without inspecting host installations.
-vi.mock("../infra/executable-path.js", () => ({
+// Replace host commands and process termination while exercising the watcher supervisor.
+vi.mock("openclaw/plugin-sdk/process-runtime", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("openclaw/plugin-sdk/process-runtime")>()),
+  hasBinary: mocks.hasBinary,
   resolveExecutable: mocks.resolveExecutable,
   resolveExecutablePath: mocks.resolveExecutable,
-}));
-
-// mock-isolation: command completion is driven by the fixture, not real tools.
-vi.mock("../process/exec.js", () => ({
   runCommandWithTimeout: mocks.runCommandWithTimeout,
   runUtf8CommandWithTimeout: mocks.runUtf8CommandWithTimeout,
+  killProcessTree: mocks.killProcessTree,
 }));
-
-// mock-isolation: terminate only the fixture's fake child processes.
-vi.mock("../process/kill-tree.js", () => ({ killProcessTree: mocks.killProcessTree }));
-
-vi.mock("../logging/subsystem.js", async (importOriginal) => ({
-  ...(await importOriginal<typeof import("../logging/subsystem.js")>()),
+vi.mock("openclaw/plugin-sdk/runtime-env", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("openclaw/plugin-sdk/runtime-env")>()),
   createSubsystemLogger: () => mocks.log,
 }));
 

@@ -14,7 +14,6 @@ const mocks = vi.hoisted(() => ({
   triggerInternalHook: vi.fn<TriggerInternalHookMock>(async (_eventValue) => undefined),
   disposeAllBundleLspRuntimes: vi.fn<() => Promise<void>>(async () => undefined),
   drainRetainedEmbeddingProviders: vi.fn<() => Promise<void>>(async () => undefined),
-  stopGmailWatcher: vi.fn(async () => undefined),
   disposeAcpSessionManager: vi.fn(async (_reason: string) => undefined),
   fenceSessionSuspensionWritesForGatewayShutdown: vi.fn(),
 }));
@@ -26,11 +25,6 @@ vi.mock("../channels/plugins/index.js", async () => ({
     "../channels/plugins/index.js",
   )),
   listChannelPlugins: mocks.listChannelPlugins,
-}));
-
-// mock-isolation: The shared Gateway fixture owns this unrelated shutdown effect.
-vi.mock("../hooks/gmail-watcher.js", () => ({
-  stopGmailWatcher: mocks.stopGmailWatcher,
 }));
 
 vi.mock("../hooks/internal-hooks.js", async () => {

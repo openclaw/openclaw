@@ -1,19 +1,20 @@
 import fs from "node:fs/promises";
 import path from "node:path";
+import { withTempDir, withEnvAsync } from "openclaw/plugin-sdk/test-env";
+import { withMockedPlatform } from "openclaw/plugin-sdk/test-node-mocks";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
-import "../test-utils/prepare-compiled-subprocesses.js";
-import { withTestDir } from "../test-helpers/temp-dir.js";
-import { withEnvAsync } from "../test-utils/env.js";
-import { createCommandResult } from "../test-utils/npm-spec-install-test-helpers.js";
-import { withMockedPlatform } from "../test-utils/vitest-spies.js";
+import { commandSuccess } from "../test-api.js";
 
 const itUnix = process.platform === "win32" ? it.skip : it;
 const { runCommand } = vi.hoisted(() => ({ runCommand: vi.fn() }));
 
 // mock-isolation: setup command results are synthetic and must not invoke real cloud tools.
-vi.mock("../process/exec.js", () => ({ runCommandWithTimeout: runCommand }));
+vi.mock("openclaw/plugin-sdk/process-runtime", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("openclaw/plugin-sdk/process-runtime")>()),
+  runCommandWithTimeout: runCommand,
+}));
 
-const success = createCommandResult();
+const success = { ...commandSuccess, killed: false };
 const tailscaleStatus = { ...success, stdout: '{"Self":{"DNSName":"fixture.example."}}' };
 const progress = Array.from({ length: 1000 }, (_, i) => `progress ${i}`).join("\r");
 const noisy = {
@@ -24,11 +25,11 @@ const noisy = {
 };
 
 let utils: typeof import("./gmail-setup-utils.js");
-let configEval: typeof import("../shared/config-eval.js");
+let configEval: typeof import("openclaw/plugin-sdk/process-runtime");
 beforeEach(async () => {
   runCommand.mockReset();
   vi.resetModules();
-  configEval = await import("../shared/config-eval.js");
+  configEval = await import("openclaw/plugin-sdk/process-runtime");
   utils = await import("./gmail-setup-utils.js");
 });
 afterEach(() => {
@@ -49,7 +50,7 @@ const pythonProbe = (executable: string, version = "3.12") => ({
 });
 
 it.each([true, false])("checks the installed binary (created=%s)", async (createsBinary) => {
-  await withTestDir({ prefix: "openclaw-dependency-probe-" }, async (root) => {
+  await withTempDir("openclaw-dependency-probe-", async (root) => {
     const binDir = path.join(root, "bin");
     await writeExecutable(path.join(binDir, "brew"));
     await withEnvAsync({ PATH: binDir, XDG_CONFIG_HOME: path.join(root, "config") }, () =>
@@ -97,7 +98,7 @@ const inheritedPythonControls = {
 };
 
 async function checkPython(versions: readonly string[]) {
-  await withTestDir({ prefix: "openclaw-gcloud-python-" }, async (root) => {
+  await withTempDir("openclaw-gcloud-python-", async (root) => {
     const python = path.join(root, "Python Runtime", "python-real");
     if (versions.length) {
       await writeExecutable(python);
