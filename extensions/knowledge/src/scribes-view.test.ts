@@ -16,7 +16,7 @@ it("asks for the Granola plugin before the Granola scribe can start", async () =
   const { render } = fixture({});
   const view = await render();
   const row = buttonNamed(view, "Install Granola…").closest(".scribe-row")!;
-  expect(row.textContent).toContain("Needs the Granola plugin, which is not installed");
+  expect(row.textContent).toContain("Needs the Granola plugin, which isn’t installed");
   expect(buttonNamed(row, "Set up…").disabled).toBe(true);
 
   const signIn = await fixture({ granola: { installed: true, enabled: true } }).render();
@@ -104,7 +104,7 @@ it("starts a conversations scribe: creates its titled conversation and sends the
   const view = await render();
   buttonNamed(view, "Set up…").click();
   const dialog = page.querySelector("dialog")!;
-  expect(dialog.textContent).toContain("148 conversations in your sidebar.");
+  expect(dialog.textContent).toContain("148 sessions in your sidebar.");
   (dialog.querySelector("#scribe-often-once") as HTMLInputElement).click();
   (dialog.querySelector("#scribe-which-all") as HTMLInputElement).click();
   const select = dialog.querySelector("select")!;
@@ -150,7 +150,9 @@ it.each([
   expect(dialog.querySelector("legend")?.textContent).toBe("How often");
   expect((dialog.querySelector("#scribe-review-weekly") as HTMLInputElement).checked).toBe(true);
   expect(dialog.textContent).toContain("Sundays at 3:45 AM.");
-  expect(dialog.textContent).toContain("Each run is an agent turn over every unlinked claim");
+  expect(dialog.textContent).toContain(
+    "Each run uses one agent reply to review every unlinked claim",
+  );
   if (pick) {
     (dialog.querySelector(pick) as HTMLInputElement).click();
   }
@@ -227,7 +229,7 @@ it("restarts a turned-off scribe's automation in its existing conversation", asy
   buttonNamed(view, "Set up…").click();
   const dialog = page.querySelector("dialog")!;
   expect(dialog.textContent).toContain("(created if needed)");
-  expect(dialog.textContent).toContain("Runs use the conversation’s model settings.");
+  expect(dialog.textContent).toContain("Runs use the scribe session’s model settings.");
   buttonNamed(dialog, "Start").click();
   await vi.waitFor(() => expect(calls.some(([method]) => method === "cron.run")).toBe(true));
   expect(create).not.toHaveBeenCalled();
@@ -245,8 +247,11 @@ it("keeps the start dialog open with the error when the Gateway rejects the star
   expect(dialog.textContent).toContain("8 KB in Main’s workspace.");
   buttonNamed(dialog, "Start import").click();
   await vi.waitFor(() =>
-    expect(dialog.querySelector(".knowledge-error")?.textContent).toContain("missing scope"),
+    expect(dialog.querySelector(".knowledge-error")?.textContent).toContain(
+      "Couldn’t confirm the scribe started. Your choices and prompt are still here.",
+    ),
   );
+  expect(dialog.textContent).not.toContain("missing scope");
   expect(dialog.open).toBe(true);
 });
 
@@ -260,7 +265,9 @@ it("retries a failed start in the conversation it already created", async () => 
   });
   buttonNamed(dialog, "Turn on").click();
   await vi.waitFor(() =>
-    expect(dialog.querySelector(".knowledge-error")?.textContent).toContain("Gateway restarting"),
+    expect(dialog.querySelector(".knowledge-error")?.textContent).toContain(
+      "Couldn’t confirm the scribe started.",
+    ),
   );
   buttonNamed(dialog, "Turn on").click();
   await vi.waitFor(() => expect(dialog.open).toBe(false));
@@ -322,13 +329,13 @@ it("lets a writer without administrator access run a scribe once, but not schedu
   const view = await render();
   // Without an administrator the page never rewrites earlier automations.
   expect(calls.some(([method]) => method === "cron.remove" || method === "cron.add")).toBe(false);
-  expect(view.textContent).toContain("Scribe automations need a Gateway administrator");
+  expect(view.textContent).toContain("Managing a scribe’s automation requires admin access");
   const setUp = buttonNamed(view, "Set up…");
   expect(setUp.disabled).toBe(false);
   setUp.click();
   const dialog = page.querySelector("dialog")!;
   expect(buttonNamed(dialog, "Start").disabled).toBe(true);
-  expect(dialog.textContent).toContain("needs a Gateway administrator");
+  expect(dialog.textContent).toContain("requires admin access");
   (dialog.querySelector("#scribe-often-once") as HTMLInputElement).click();
   expect(buttonNamed(dialog, "Start").disabled).toBe(false);
   dialog.remove();
@@ -385,7 +392,7 @@ it.each([false, true])(
     expect(calls.filter(([method]) => method === "cron.run")).toHaveLength(1);
     job.enabled = true;
     view = await render();
-    buttonNamed(view, "Open conversation").click();
+    buttonNamed(view, "Open session").click();
     expect(open).toHaveBeenCalledWith({ sessionKey: "s-review", agentId: "main" });
     buttonNamed(view, "Remove automation…").click();
     const confirm = page.querySelector("dialog")!;
@@ -619,7 +626,7 @@ it("reports a skipped run that could not complete as failed", async () => {
   ui.s.scribe = "claim-consolidation";
   const view = await render();
   expect(view.textContent).toContain("1 of 1 recent run failed");
-  expect(view.querySelector(".scribe-run")?.textContent).toContain(
+  expect(view.querySelector(".scribe-run")?.textContent).not.toContain(
     "agent tool caller authority is no longer active",
   );
   expect(view.querySelector(".scribe-run .scribe-chip-warn")?.textContent).toBe("Failing");
@@ -695,7 +702,7 @@ it("repairs an archived scribe by restoring its conversation and turning it on",
   });
   ui.s.scribe = "claim-consolidation";
   const view = await render();
-  expect(view.querySelector(".scribe-chip-warn")?.textContent).toBe("Conversation not found");
+  expect(view.querySelector(".scribe-chip-warn")?.textContent).toBe("Session not found");
   expect(buttonNamed(view, "Run now")).toBeUndefined();
   buttonNamed(view, "Repair").click();
   await vi.waitFor(() => expect(calls.at(-1)?.[0]).toBe("cron.update"));
@@ -823,7 +830,7 @@ it("shows a Run now the scheduler refused instead of reporting it running", asyn
   buttonNamed(view, "Run now").click();
   await vi.waitFor(() =>
     expect(view.querySelector(".knowledge-error")?.textContent).toContain(
-      "the automation lost its owner",
+      "the automation no longer has an owner",
     ),
   );
   expect(ui.announce).not.toHaveBeenCalledWith("Run requested for Knowledge Consolidation.");
@@ -842,9 +849,11 @@ it("keeps failed run-history reads distinct from an empty history and recovers o
   });
   const failed = await render();
   expect(failed.querySelector(".scribe-history")?.textContent).toContain(
-    "Could not load recent runs.",
+    "Couldn’t load recent runs.",
   );
-  expect(failed.querySelector(".scribe-history")?.textContent).not.toContain("No runs yet.");
+  expect(failed.querySelector(".scribe-history")?.textContent).not.toContain(
+    "No recent runs to show.",
+  );
   request.mockImplementation(original);
   expect((await render()).querySelector(".scribe-history")?.textContent).toContain(
     "9 filed · 2 pages created",

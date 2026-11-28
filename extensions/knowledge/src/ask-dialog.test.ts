@@ -63,18 +63,26 @@ it("starts a new chat with the edited request and the record reference, then ope
   expect(root.querySelector("dialog")).toBeNull();
 });
 
-it("keeps the request when the first turn is not sent", async () => {
-  const { root, prompt, askButton, open } = mount(
+it("keeps an unsent request and opens the same session without creating another", async () => {
+  const { root, prompt, askButton, request, open } = mount(
     { ok: true, key: "agent:main:new", runError: { message: "model unavailable" } },
     { correct: true },
   );
   prompt.value += "The date moved.";
   askButton.click();
   await vi.waitFor(() =>
-    expect(root.querySelector("[role=status]")!.textContent).toMatch(/model unavailable/),
+    expect(root.querySelector("[role=status]")!.textContent).toContain(
+      "The session started, but OpenClaw couldn’t confirm it received your request.",
+    ),
   );
   expect(open).not.toHaveBeenCalled();
   expect(prompt.value).toMatch(/The date moved\.$/);
+  expect(root.textContent).not.toContain("model unavailable");
+  [...root.querySelectorAll("button")]
+    .find((button) => button.textContent === "Open session")!
+    .click();
+  expect(request).toHaveBeenCalledOnce();
+  expect(open).toHaveBeenCalledWith({ sessionKey: "agent:main:new", agentId: "main" });
 });
 
 it("cannot send a blank request", () => {
