@@ -54,10 +54,7 @@ function resolveTrustedProxyDeviceAutoApproveScopes(params: {
   }
   if (params.configuredScopes !== undefined) {
     const requestedScopes = normalizeSortedUniqueTrimmedStringList(params.requestedScopes);
-    // Publication transport pairs separately and cannot enter an ordinary device grant by implication.
-    return intersectOperatorScopes(requestedScopes, configuredScopes)
-      .filter((scope) => !isPublicationTransportScope(scope))
-      .toSorted();
+    return intersectOperatorScopes(requestedScopes, configuredScopes).toSorted();
   }
   // Older Control UI tabs omit questions. Keep the implicit policy's other grants literal.
   return normalizeSortedUniqueTrimmedStringList([
