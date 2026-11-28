@@ -8,13 +8,12 @@ import {
   type MessageReceipt,
 } from "openclaw/plugin-sdk/channel-outbound";
 import { captureEffectAuthority } from "openclaw/plugin-sdk/fetch-runtime";
-import { resolveMarkdownTableMode } from "openclaw/plugin-sdk/markdown-table-runtime";
 import { requireRuntimeConfig } from "openclaw/plugin-sdk/plugin-config-runtime";
-import { convertMarkdownTables, stripMarkdown } from "openclaw/plugin-sdk/text-chunking";
 import { resolveIrcAccount } from "./accounts.js";
 import { connectIrcClient } from "./client.js";
 import { buildIrcConnectOptions } from "./connect-options.js";
 import { normalizeIrcMessagingTarget } from "./normalize.js";
+import { renderIrcPlainText } from "./outbound-base.js";
 import { getOptionalIrcRuntime } from "./runtime.js";
 import type { CoreConfig } from "./types.js";
 
@@ -59,17 +58,10 @@ export async function sendIrcMessages(
   if (!target) {
     throw new Error(`Invalid IRC target: ${to}`);
   }
-  const tableMode = resolveMarkdownTableMode({
-    cfg,
-    channel: "irc",
-    accountId: account.accountId,
-  });
   if (!text) {
     return [];
   }
-  // Render the complete source before splitting: fragment parsing loses code,
-  // link, and table context and can turn a closing fence into an empty message.
-  const prepared = stripMarkdown(convertMarkdownTables(text.trim(), tableMode));
+  const prepared = renderIrcPlainText(text, { cfg, accountId: account.accountId });
   if (!prepared.trim()) {
     throw new Error("Message must be non-empty for IRC sends");
   }
