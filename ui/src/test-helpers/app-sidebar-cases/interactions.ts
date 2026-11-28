@@ -121,7 +121,7 @@ describe("AppSidebar multi-select", () => {
     expect(harness.reconcileMutation).not.toHaveBeenCalled();
   });
 
-  it("hides an archiving current thread immediately without navigating away", async () => {
+  it("hides an archiving current thread immediately and opens the next thread", async () => {
     const gatewayHarness = createGatewayHarness({} as GatewayBrowserClient);
     const setSessionKeySpy = vi.spyOn(gatewayHarness.gateway, "setSessionKey");
     const harness = createSessionsHarness("main", [
@@ -148,7 +148,8 @@ describe("AppSidebar multi-select", () => {
     await closeArchiveUndoToast();
     await waitForFast(() => expect(harness.patch).toHaveBeenCalledOnce());
     expect(sidebar.querySelector('[data-session-key="agent:main:a"]')).toBeNull();
-    expect(setSessionKeySpy).not.toHaveBeenCalled();
+    // Archiving the open thread opens the one below it, once.
+    expect(setSessionKeySpy.mock.calls.map(([key]) => key)).toEqual(["agent:main:b"]);
 
     const result = harness.sessions.state.result!;
     harness.publishList({
@@ -164,7 +165,7 @@ describe("AppSidebar multi-select", () => {
     await waitForFast(() =>
       expect(sidebar.querySelector('[data-session-key="agent:main:a"]')).toBeNull(),
     );
-    expect(setSessionKeySpy).not.toHaveBeenCalled();
+    expect(setSessionKeySpy).toHaveBeenCalledOnce();
   });
 });
 

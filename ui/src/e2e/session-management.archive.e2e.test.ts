@@ -583,6 +583,10 @@ suite.define(() => {
         await activateSelfRemovingControl(menuItem(page, "Archive session"));
         const archiveToast = page.locator("openclaw-toast-host .app-toast");
         await expectText(archiveToast, "Session archived");
+        // Archiving the open chat opens the next one; Back returns to the archived chat.
+        await expectRoute(page, sessionRows[4]!.key);
+        await page.goBack();
+        await assertSelectedRoute(false);
         await closeArchiveUndoToast(page);
         await waitArchive(gateway, selected.key, true);
         await gateway.resolveDeferred("sessions.patch", {});
@@ -605,7 +609,7 @@ suite.define(() => {
         expect(history).toBeDefined();
         expect([history?.title, history?.paneTitle]).toEqual([
           ["Archive refresh 2"],
-          ["Archive refresh 2"],
+          ["Archive refresh 2", "Archive refresh 4", "Archive refresh 2"],
         ]);
         expect(history?.selectedTitle.filter((title) => title !== "Archive refresh 2")).toEqual([]);
         expect(history?.documentTitle).not.toContain("New session — OpenClaw");
@@ -679,13 +683,11 @@ suite.define(() => {
         await archivedRow.hover();
         await archivedRow.click({ button: "right" });
         await activateSelfRemovingControl(menuItem(page, "Archive session"));
+        // Archiving the open chat opens its sidebar neighbor.
+        await expectRoute(page, target.key);
         await closeArchiveUndoToast(page);
         await waitArchive(gateway, archived.key, true);
         const archivedNotice = chatPane(page).locator(".agent-chat__disabled-banner");
-        await archivedNotice.waitFor({ state: "visible", timeout: 10_000 });
-
-        await rowFor(target.key).click();
-        await expectRoute(page, target.key);
         await archivedRow.waitFor({ state: "detached", timeout: 10_000 });
 
         const refresh = async (

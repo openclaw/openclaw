@@ -194,7 +194,7 @@ describe("AppSidebar session mutation feedback", () => {
     expect(menu.querySelector(actionSelector)).toBeNull();
   });
 
-  it("holds archive behind Undo without altering the active session's personal pin or navigation", async () => {
+  it("holds archive behind Undo without altering the active session's personal pin", async () => {
     const { gateway, harness, sidebar } = await mountMutationHarness();
     const setSessionKey = vi.fn();
     (gateway.gateway as { setSessionKey: (key: string) => void }).setSessionKey = setSessionKey;
@@ -257,8 +257,9 @@ describe("AppSidebar session mutation feedback", () => {
     await sidebar.updateComplete;
     expect(sidebar.sidebarEntries).toEqual([`session:${archivedKey}`]);
     expect(harness.patchMany).not.toHaveBeenCalled();
-    expect(setSessionKey).not.toHaveBeenCalled();
-    expect(navigate).not.toHaveBeenCalled();
+    // Each archive of the open chat opens the chat below it; Undo does not navigate back.
+    expect(navigate).toHaveBeenCalledTimes(2);
+    expect(setSessionKey.mock.calls.map(([key]) => key)).toEqual(["agent:main:b", "agent:main:b"]);
   });
 
   it("assigns owners from the row menu and updates the owner chip", async () => {
