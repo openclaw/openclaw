@@ -52,6 +52,25 @@ setGoogleChatWebhookEventProcessor(processGoogleChatEvent);
 
 type GoogleChatTypingMessage = ReturnType<typeof createGoogleChatTypingMessage>;
 
+const DRIVE_FILE_ID_PATTERN = /^[A-Za-z0-9_-]{1,256}$/;
+const MAX_DRIVE_FILE_NAME_CHARS = 120;
+
+// Name the shared Drive file so the agent can tell the user which file it could not read,
+// or fetch it with a Drive-capable tool. Both values come from the sender: keep them inert.
+function describeUndownloadableDriveFile(attachment: GoogleChatAttachment): string {
+  const driveFileId = attachment.driveDataRef?.driveFileId;
+  if (typeof driveFileId !== "string" || !DRIVE_FILE_ID_PATTERN.test(driveFileId)) {
+    return "Google Drive files are not downloadable";
+  }
+  const name = (attachment.contentName ?? "")
+    .replace(/[\u0000-\u001f\u007f"[\]]+/g, " ")
+    .replace(/\s+/g, " ")
+    .trim()
+    .slice(0, MAX_DRIVE_FILE_NAME_CHARS);
+  const label = name ? `Google Drive file "${name}"` : "Google Drive file";
+  return `${label} (driveFileId: ${driveFileId}) is not downloadable`;
+}
+
 function createGoogleChatTypingMessage(params: {
   messageName: string;
   requestedThreadName?: string;
@@ -203,7 +222,7 @@ async function processGoogleChatEvent(
         };
       } else {
         const reason = attachment.driveDataRef
-          ? "Google Drive files are not downloadable"
+          ? describeUndownloadableDriveFile(attachment)
           : "unsupported attachment source";
         const notice = `[Google Chat attachment unavailable: ${reason}; upload the file directly]`;
         reportAttachmentUnavailable(notice);
