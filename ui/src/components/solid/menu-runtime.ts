@@ -12,7 +12,7 @@ import { listen } from "../../lib/reactive/listener.ts";
 import type { Overlay } from "../overlay-lifecycle.ts";
 import { containsComposed } from "../overlay-registry.ts";
 import { revealInScrollRegion } from "../scroll-state.ts";
-import { focusMenuRow, MENU_FORM_CONTROL_SELECTOR } from "./menu-form-controls.ts";
+import { focusMenuRow, MENU_FORM_CONTROL_SELECTOR, ownsMenuTarget } from "./menu-form-controls.ts";
 
 // Focus events use bubbling DOM names; all other listener names stay canonical.
 const normalize = (props: object) => {
@@ -101,11 +101,6 @@ export function createMenuRuntime(
   // highlight is already under the cursor; revealing a clipped edge row would fight
   // an in-progress wheel or trackpad scroll.
   let pointerHighlight = false;
-  const ownsTarget = (target: HTMLElement) =>
-    ![...overlay.children].some((child) => child.open && containsComposed(child.surface, target)) &&
-    (options.surface === "listbox"
-      ? overlay.surface.contains(target)
-      : target.closest('[role="menu"]') === overlay.surface);
   const focusItem = (service: MenuService) => {
     if (
       !overlay.open ||
@@ -685,7 +680,7 @@ export function createMenuRuntime(
             e.defaultPrevented ||
             e.isComposing ||
             !(target instanceof HTMLElement) ||
-            !ownsTarget(target)
+            !ownsMenuTarget(overlay, target, options.surface)
           ) {
             return;
           }

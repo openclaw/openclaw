@@ -8,8 +8,11 @@ import { shouldHandleNavigationClick } from "../../lib/navigation-click.ts";
 import { focusProgrammatically } from "../../lib/programmatic-focus.ts";
 import { elementRef } from "../../lib/reactive/element-ref.ts";
 import type { Overlay } from "../overlay-lifecycle.ts";
-import { containsComposed } from "../overlay-registry.ts";
-import { MENU_FORM_CONTROL_SELECTOR } from "./menu-form-controls.ts";
+import {
+  compareMenuElements,
+  MENU_FORM_CONTROL_SELECTOR,
+  ownsMenuTarget,
+} from "./menu-form-controls.ts";
 import type { MenuKeySource, PendingMenuHover, PendingMenuIntent } from "./menu-navigation.ts";
 import type { MenuNavigationOptions, MenuRuntime } from "./menu-runtime.ts";
 
@@ -68,18 +71,11 @@ export function useMenuMachine(
   options: MenuNavigationOptions = {},
 ): MenuBinding {
   const { elements: itemNodes, ref: itemRef } = createMenuControls();
-  const ownsTarget = (target: HTMLElement) =>
-    ![...overlay.children].some((child) => child.open && containsComposed(child.surface, target)) &&
-    (options.surface === "listbox"
-      ? overlay.surface.contains(target)
-      : target.closest('[role="menu"]') === overlay.surface);
   const items = (ordered = true) => {
-    const connected = [...itemNodes].filter((item) => item.isConnected && ownsTarget(item));
-    return ordered
-      ? connected.toSorted((left, right) =>
-          left.compareDocumentPosition(right) & Node.DOCUMENT_POSITION_FOLLOWING ? -1 : 1,
-        )
-      : connected;
+    const connected = [...itemNodes].filter(
+      (item) => item.isConnected && ownsMenuTarget(overlay, item, options.surface),
+    );
+    return ordered ? connected.toSorted(compareMenuElements) : connected;
   };
   const parentRuntime = createMemo(() => parent?.runtime());
   let hover: PendingMenuHover | undefined;
@@ -203,7 +199,7 @@ export function useMenuMachine(
       !overlay.open ||
       !awaitingRuntime() ||
       !(event.target instanceof HTMLElement) ||
-      (target === "content" && !ownsTarget(event.target))
+      (target === "content" && !ownsMenuTarget(overlay, event.target, options.surface))
     ) {
       return;
     }
