@@ -7,6 +7,7 @@ import {
 } from "../process/exec-result.js";
 import type { SpawnResult } from "../process/exec.js";
 import type { GitCommandOptions } from "./git-exec.js";
+import { readCompatibleGitWorktreeList } from "./git-worktree-list.js";
 
 const log = createSubsystemLogger("git/repair");
 const REPAIR_TIMEOUT_MS = 300_000;
@@ -80,7 +81,7 @@ export async function withGitRepositoryRepair<T extends FetchResult>(params: {
       }
       return Math.ceil(remaining);
     };
-    const run = async (args: string[], input?: string, allowNegotiationFailure = false) => {
+    const runResult = async (args: string[], input?: string) => {
       const outcome = await params.run(
         [
           "-c",
@@ -105,6 +106,13 @@ export async function withGitRepositoryRepair<T extends FetchResult>(params: {
         throw new CommandProcessCleanupError();
       }
       assertCurrent();
+      return outcome;
+    };
+    const requireOutput = (
+      args: string[],
+      outcome: RepairResult,
+      allowNegotiationFailure = false,
+    ) => {
       if (
         outcome.termination !== "exit" ||
         (outcome.code !== 0 &&
@@ -117,6 +125,8 @@ export async function withGitRepositoryRepair<T extends FetchResult>(params: {
       }
       return outcome.stdout;
     };
+    const run = async (args: string[], input?: string, allowNegotiationFailure = false) =>
+      requireOutput(args, await runResult(args, input), allowNegotiationFailure);
     const rows = (await run(["for-each-ref", "--format=%(refname) %(objectname) %(symref)"]))
       .trim()
       .split("\n")
@@ -137,7 +147,12 @@ export async function withGitRepositoryRepair<T extends FetchResult>(params: {
         refs.set(ref, oid);
       }
     }
-    const worktrees = (await run(["worktree", "list", "--porcelain", "-z"])).split("\0");
+    const worktrees = (
+      await readCompatibleGitWorktreeList(
+        async (args) => await runResult(args),
+        (_command, outcome) => requireOutput(["worktree"], outcome),
+      )
+    ).split("\0");
     const protectedRefs = new Set<string>();
     const protect = (ref: string) => {
       let current = ref;

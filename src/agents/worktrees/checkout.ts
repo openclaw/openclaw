@@ -3,6 +3,7 @@ import fs from "node:fs/promises";
 import path from "node:path";
 import { composeSessionSourceAssertion } from "../../config/sessions/session-source-authority.js";
 import { requireGitCommandOutput, type GitCommandOptions } from "../../infra/git-exec.js";
+import { readCompatibleGitWorktreeList } from "../../infra/git-worktree-list.js";
 import { createSubsystemLogger } from "../../logging/subsystem.js";
 import { OpenClawStateLeaseError } from "../../state/openclaw-state-lease-error.js";
 import { withWorktreeGitConfig } from "./checkout-git-config.js";
@@ -335,10 +336,9 @@ export async function addManagedWorktree(input: CheckoutOptions): Promise<Checko
       ["rev-parse", "--verify", expectedRef],
       gitOptions(input),
     );
-    const worktrees = await requireGit(
-      input.repoRoot,
-      ["worktree", "list", "--porcelain", "-z"],
-      gitOptions(input),
+    const worktrees = await readCompatibleGitWorktreeList(
+      async (args) => await runGit(input.repoRoot, args, gitOptions(input)),
+      requireGitCommandOutput,
     );
     if (actual !== expectedCommit || worktrees.split("\0").includes(`branch ${expectedRef}`)) {
       throw new Error("Caller-owned worktree branch moved or is in use; preserve it for recovery.");

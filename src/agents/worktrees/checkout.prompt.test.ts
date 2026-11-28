@@ -82,6 +82,27 @@ beforeEach(async () => {
 
 afterEach(() => vi.unstubAllEnvs());
 
+it("rejects an existing branch that another worktree is using", async () => {
+  const existing = path.join(root, "existing");
+  await git("worktree", "add", "-b", "existing", existing, commit);
+
+  await expect(
+    addManagedWorktree({
+      env: process.env,
+      now: Date.now,
+      enabled: false,
+      repoRoot: repo,
+      commonDir: path.join(repo, ".git"),
+      worktreeRoot: root,
+      destination,
+      base: commit,
+      branch: { mode: "existing", name: "existing" },
+      requireSpace: async () => {},
+      commitGuard: () => {},
+    }),
+  ).rejects.toThrow("Caller-owned worktree branch moved or is in use");
+});
+
 it.each(["lf", "crlf"])("preserves %s prompt bytes and stat data after checkout", async (eol) => {
   await write(".gitattributes", `* text=auto eol=${eol}\n`);
   await git("config", "filter.unused.smudge", "unused-filter-must-not-run");
