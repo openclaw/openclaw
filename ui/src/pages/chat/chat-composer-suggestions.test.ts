@@ -291,6 +291,23 @@ it("leaves mobile Return for editing even with slash suggestions open", async ()
   }
 });
 
+it.each([
+  "Please explain /goal prompt",
+  "Please explain\n/goal prompt",
+  "Please explain\t/goal prompt",
+])("submits %j intact instead of dispatching an inline command", (draft) => {
+  const onSend = vi.fn();
+  const onSlashCommand = vi.fn();
+  const { container, readDraft } = createReactiveDraftHarness({ onSend, onSlashCommand });
+
+  inputDraftAtEnd(container, draft);
+  keydownComposer(container, "Enter");
+
+  expect(onSlashCommand).not.toHaveBeenCalled();
+  expect(onSend).toHaveBeenCalledOnce();
+  expect(readDraft()).toBe(draft);
+});
+
 // A slash token at the draft start is the draft's command, not an inline shortcut.
 it.each([{ dispatchable: true }, { dispatchable: false }])(
   "offers native commands for a leading slash token before prose (dispatchable: $dispatchable)",

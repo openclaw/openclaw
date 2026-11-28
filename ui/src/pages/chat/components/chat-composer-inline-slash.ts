@@ -1,8 +1,4 @@
-import {
-  getSlashCommandCompletions,
-  type InlineSlashCompletion,
-  type SlashCommandDef,
-} from "../../../lib/chat/commands.ts";
+import type { InlineSlashCompletion } from "../../../lib/chat/commands.ts";
 import { focusComposerInput, selectComposerInput } from "../../../lib/composer-input.ts";
 import { adjustTextareaHeight } from "./chat-composer-dom.ts";
 
@@ -10,11 +6,6 @@ type InlineSlashHost = {
   getDraft: () => string;
   commitDraft: (next: string) => void;
   getTextarea: () => HTMLTextAreaElement | null;
-};
-
-type InlineSlashArgumentInvocation = {
-  command: SlashCommandDef;
-  completion: InlineSlashCompletion;
 };
 
 function commitDraftWithCaret(host: InlineSlashHost, next: string, caret: number): void {
@@ -102,45 +93,4 @@ export function hasActiveInlineSlashArgumentPrefix(
     prefix.startsWith(commandToken) &&
     /^\s+$/u.test(prefix.slice(commandToken.length))
   );
-}
-
-export function findDirectInlineSlashArgumentInvocation(
-  text: string,
-  caret: number,
-): InlineSlashArgumentInvocation | null {
-  const boundedCaret = Math.max(0, Math.min(caret, text.length));
-  const prefix = text.slice(0, boundedCaret);
-  const commandPattern = /(?:^|\s)\/([^\s/:]+)\s+/gu;
-  let invocation: InlineSlashArgumentInvocation | null = null;
-
-  for (const match of prefix.matchAll(commandPattern)) {
-    const typedName = match[1]!.toLowerCase();
-    const command = getSlashCommandCompletions(typedName, {
-      inlineOnly: true,
-    }).find(
-      (entry) =>
-        entry.name.toLowerCase() === typedName ||
-        entry.aliases?.some((alias) => alias.replace(/^\//u, "").toLowerCase() === typedName),
-    );
-    if (!command?.args || command.source === "skill") {
-      continue;
-    }
-    const start = match.index + match[0].indexOf("/");
-    const args = prefix.slice(match.index + match[0].length).trim();
-    if (/\s/u.test(args) && !command.allowsInlineMultiWordArgs) {
-      continue;
-    }
-    invocation = {
-      command,
-      completion: {
-        query: typedName,
-        start,
-        end: boundedCaret,
-        inline: text.slice(0, start).trim().length > 0,
-        argumentStart: match.index + match[0].length,
-      },
-    };
-  }
-
-  return invocation?.completion.inline ? invocation : null;
 }
