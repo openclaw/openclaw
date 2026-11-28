@@ -60,6 +60,15 @@ export function isClaudeSyntheticNoResponse(parsed: Record<string, unknown>): bo
   );
 }
 
+/** Serving model named by a parent frame; undefined for the synthetic meta marker and unnamed frames. */
+export function normalizeClaudeObservedModel(model: unknown): string | undefined {
+  if (typeof model !== "string") {
+    return undefined;
+  }
+  const trimmed = model.trim();
+  return trimmed && trimmed !== "<synthetic>" ? trimmed : undefined;
+}
+
 export function decodeCliRecords(raw: string): Record<string, unknown>[] {
   const trimmed = raw.trim();
   if (!trimmed) {

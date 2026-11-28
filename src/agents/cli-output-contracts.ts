@@ -159,6 +159,8 @@ export type CliJsonlStreamingParserOptions = {
   /** Parent initialization fact; its authority owner validates the raw tool list. */
   onNativeTools?: (tools: unknown) => void;
   onAssistantMessage?: (message: unknown) => void;
+  /** Raw model field named by a parent init or assistant frame; validation and de-duplication happen downstream. */
+  onObservedModel?: (model: unknown) => void;
   onUsage?: (usage: CliUsage, terminal: boolean) => void;
   /** Semantic subagent work for an active parent Agent call. Not a parent-lane event. */
   onAttributedSubagentProgress?: (parentToolUseId: string) => void;

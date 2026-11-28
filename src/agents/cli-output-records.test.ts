@@ -1,5 +1,6 @@
 import { describe, expect, it } from "vitest";
 import type { CliOutput } from "./cli-output-contracts.js";
+import { normalizeClaudeObservedModel } from "./cli-output-records.js";
 import { parseCliOutput } from "./cli-output.js";
 import {
   createOpenAiCompatibleCliUsageCases,
@@ -396,5 +397,18 @@ describe("parseCliOutput", () => {
       usage: undefined,
       errorText: "CLI stream-json output ended without a result event.",
     });
+  });
+});
+
+describe("normalizeClaudeObservedModel", () => {
+  it.each([
+    ["a named model", "claude-opus-5-5-20261101", "claude-opus-5-5-20261101"],
+    ["a padded model", "  claude-haiku-4-5-20251001\n", "claude-haiku-4-5-20251001"],
+    ["the synthetic meta marker", "<synthetic>", undefined],
+    ["a blank value", "   ", undefined],
+    ["a non-string value", 42, undefined],
+    ["a missing value", undefined, undefined],
+  ] as const)("returns %s unchanged as a serving model fact", (_name, raw, expected) => {
+    expect(normalizeClaudeObservedModel(raw)).toBe(expected);
   });
 });

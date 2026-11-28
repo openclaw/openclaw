@@ -13,10 +13,8 @@ import {
   supportsCliJsonlToolEvents,
   parseCliJson,
 } from "./cli-output-records.js";
-import {
-  CLI_STREAM_JSON_MISSING_RESULT_ERROR,
-  createCliJsonlStreamingParser,
-} from "./cli-output-stream.js";
+import { CLI_STREAM_JSON_MISSING_RESULT_ERROR } from "./cli-output-stream-output.js";
+import { createCliJsonlStreamingParser } from "./cli-output-stream.js";
 
 function normalizeCliContextValue(value: string | undefined): string | undefined {
   const normalized = value?.trim().replace(/\s+/g, " ");
