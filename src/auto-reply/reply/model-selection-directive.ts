@@ -79,6 +79,8 @@ export function resolveModelDirectiveSelection(params: {
   const resolveFuzzy = (paramsLocal: {
     provider?: string;
     fragment: string;
+    /** Literal matches only: an explicit ref must not be widened by typo distance. */
+    requireLiteralMatch?: boolean;
   }): ModelDirectiveSelection | undefined => {
     const fragment = normalizeLowercaseStringOrEmpty(paramsLocal.fragment);
     if (!fragment) {
@@ -143,10 +145,14 @@ export function resolveModelDirectiveSelection(params: {
           scoreFragment(modelLower, 160, 110, 80);
 
         // Best-effort typo tolerance for common near-misses like "claud" vs "claude".
-        // Bounded to keep this cheap across large model sets.
-        const distModel = levenshteinDistance(fragment, modelLower, 3);
-        if (distModel != null) {
-          score += (3 - distModel) * 70;
+        // Bounded to keep this cheap across large model sets. An explicit
+        // `provider/model` ref that already resolved is a policy answer, not a
+        // typo, so there only literal prefix/includes matches may widen it.
+        if (!paramsLocal.requireLiteralMatch) {
+          const distModel = levenshteinDistance(fragment, modelLower, 3);
+          if (distModel != null) {
+            score += (3 - distModel) * 70;
+          }
         }
 
         const aliases = aliasIndex.byKey.get(key) ?? [];
@@ -251,7 +257,11 @@ export function resolveModelDirectiveSelection(params: {
     const slash = rawTrimmed.indexOf("/");
     const provider = normalizeProviderId(rawTrimmed.slice(0, slash).trim());
     const fragment = rawTrimmed.slice(slash + 1).trim();
-    const fuzzy = resolveFuzzy({ provider, fragment });
+    // An explicit `provider/model` that resolves but is not allowed is a policy
+    // answer, not a typo. Literal prefix/includes matches may still widen it
+    // (`xai/grok` -> `grok-4.3`), but edit distance must never cross a model id
+    // (`grok-4.7` must report "not allowed", not select `grok-4.3`).
+    const fuzzy = resolveFuzzy({ provider, fragment, requireLiteralMatch: true });
     if (fuzzy) {
       return { selection: fuzzy };
     }

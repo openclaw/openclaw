@@ -109,6 +109,31 @@ it.each([undefined, { allow: [] }, { allow: ["openai/*"] }])(
   },
 );
 
+it("rejects an explicit provider/model that is not allowed instead of picking a near miss", () => {
+  const { result } = resolveDirective({
+    cfg: config({
+      model: "openai/safe",
+      modelPolicy: { allow: ["openai/safe", "xai/grok-4.3"] },
+    }),
+    raw: "xai/grok-4.7",
+  });
+
+  expect(result.selection).toBeUndefined();
+  expect(result.error).toContain('Model "xai/grok-4.7" is not allowed.');
+});
+
+it("still widens an explicit provider fragment to an allowed prefix match", () => {
+  const { result } = resolveDirective({
+    cfg: config({
+      model: "openai/safe",
+      modelPolicy: { allow: ["openai/safe", "xai/grok-4.3"] },
+    }),
+    raw: "xai/grok",
+  });
+
+  expect(result.selection).toMatchObject({ provider: "xai", model: "grok-4.3" });
+});
+
 it("rejects a configured fallback that the explicit policy does not allow", () => {
   const { policy, result } = resolveDirective({
     cfg: config({
