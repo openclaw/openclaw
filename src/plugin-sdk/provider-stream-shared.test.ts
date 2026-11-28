@@ -142,6 +142,27 @@ const lmstudioBinaryModel = localModel("google/gemma-4-26b-a4b-qat", {
   reasoningEffortMap: { off: "none", none: "none", adaptive: "xhigh", max: "xhigh" },
 });
 
+function deepSeekModel(
+  id: string,
+  compat: Model<"openai-completions">["compat"],
+): ReturnType<typeof localModel> {
+  return { ...localModel(id, compat), provider: "custom-compatible" };
+}
+
+const deepSeekFlashModel = deepSeekModel("deepseek-flash", {
+  supportsReasoningEffort: true,
+  supportedReasoningEfforts: ["none", "low", "high", "max"],
+  reasoningEffortMap: { off: "none", low: "low", high: "high", max: "max" },
+});
+const deepSeekProModel = deepSeekModel("deepseek-v4-pro", {
+  supportsReasoningEffort: true,
+  supportedReasoningEfforts: ["high", "max"],
+  reasoningEffortMap: { low: "high", high: "high", max: "max" },
+});
+const deepSeekLegacyModel = deepSeekModel("deepseek-legacy", {
+  supportsReasoningEffort: true,
+});
+
 function createPayloadCapture(initialReasoningEffort?: string) {
   const payloads: Array<Record<string, unknown>> = [];
   const baseStreamFn: StreamFn = (model, _context, options) => {
@@ -352,6 +373,120 @@ it("backfills reasoning_content on every replayed assistant message when thinkin
   expect(payload.messages[2]).not.toHaveProperty("reasoning_content");
   expect(payload.messages[3]).toHaveProperty("reasoning_content", "");
   expect(payload.messages[4]).toHaveProperty("reasoning_content", "native reasoning");
+});
+
+it.each([
+  ["low", "low"],
+  ["high", "high"],
+  ["max", "max"],
+] as const)("uses declared DeepSeek Flash effort for %s", (thinkingLevel, expected) => {
+  const { baseStreamFn, payloads } = createPayloadCapture();
+  const wrapped = deepSeekWrapper({
+    baseStreamFn,
+    thinkingLevel,
+    shouldPatchModel: () => true,
+  });
+
+  void wrapped?.(deepSeekFlashModel, { messages: [] }, {});
+
+  expect(payloads[0]?.reasoning_effort).toBe(expected);
+});
+
+it.each([
+  ["low", "high"],
+  ["high", "high"],
+  ["max", "max"],
+] as const)(
+  "maps unsupported DeepSeek Pro effort %s to the declared fallback %s",
+  (thinkingLevel, expected) => {
+    const { baseStreamFn, payloads } = createPayloadCapture();
+    const wrapped = deepSeekWrapper({
+      baseStreamFn,
+      thinkingLevel,
+      shouldPatchModel: () => true,
+    });
+
+    void wrapped?.(deepSeekProModel, { messages: [] }, {});
+
+    expect(payloads[0]?.reasoning_effort).toBe(expected);
+  },
+);
+
+it("keeps DeepSeek thinking disabled despite declared efforts", () => {
+  const payload: Record<string, unknown> & { messages: Array<Record<string, unknown>> } = {
+    reasoning_effort: "low",
+    reasoning: { effort: "low" },
+    messages: [{ role: "assistant", reasoning_content: "stale" }],
+  };
+  const baseStreamFn = payloadStream(payload);
+  const wrapped = deepSeekWrapper({
+    baseStreamFn,
+    thinkingLevel: "low",
+    shouldPatchModel: () => true,
+  });
+
+  void wrapped?.(deepSeekFlashModel, { messages: [] }, { reasoning: "off" });
+
+  expect(payload.thinking).toEqual({ type: "disabled" });
+  expect(payload).not.toHaveProperty("reasoning_effort");
+  expect(payload).not.toHaveProperty("reasoning");
+  expect(payload.messages[0]).not.toHaveProperty("reasoning_content");
+});
+
+it("keeps an explicit DeepSeek resolver authoritative over declared efforts", () => {
+  const { baseStreamFn, payloads } = createPayloadCapture();
+  const resolveReasoningEffort = vi.fn(() => "medium" as const);
+  const wrapped = deepSeekWrapper({
+    baseStreamFn,
+    thinkingLevel: "low",
+    shouldPatchModel: () => true,
+    resolveReasoningEffort,
+  });
+
+  void wrapped?.(deepSeekFlashModel, { messages: [] }, {});
+
+  expect(resolveReasoningEffort).toHaveBeenCalledWith("low");
+  expect(payloads[0]?.reasoning_effort).toBe("medium");
+});
+
+it.each([
+  ["low", "high"],
+  ["high", "high"],
+  ["max", "max"],
+] as const)(
+  "keeps legacy DeepSeek fallback for undeclared %s effort",
+  (thinkingLevel, expected) => {
+    const { baseStreamFn, payloads } = createPayloadCapture();
+    const wrapped = deepSeekWrapper({
+      baseStreamFn,
+      thinkingLevel,
+      shouldPatchModel: () => true,
+    });
+
+    void wrapped?.(deepSeekLegacyModel, { messages: [] }, {});
+
+    expect(payloads[0]?.reasoning_effort).toBe(expected);
+  },
+);
+
+it("passes nonmatching models through without DeepSeek payload patches", () => {
+  const payload = {
+    reasoning_effort: "low",
+    messages: [{ role: "assistant", reasoning_content: "keep" }],
+  };
+  const baseStreamFn = payloadStream(payload);
+  const wrapped = deepSeekWrapper({
+    baseStreamFn,
+    thinkingLevel: "low",
+    shouldPatchModel: (model) => model.id === "deepseek-flash",
+  });
+
+  void wrapped?.({ ...deepSeekFlashModel, id: "other-model" }, { messages: [] }, {});
+
+  expect(payload).toEqual({
+    reasoning_effort: "low",
+    messages: [{ role: "assistant", reasoning_content: "keep" }],
+  });
 });
 
 it("calls the underlying stream directly when shouldPatch rejects the model", () => {
