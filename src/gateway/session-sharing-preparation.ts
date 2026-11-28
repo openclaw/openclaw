@@ -108,7 +108,7 @@ export async function prepareSessionMutationFacts(
   let followRegistration: ((change: AgentDatabaseRegistryChange) => void) | undefined;
   let creation: SessionEntryCreationOperation | undefined;
   let expectedPlaceholder: SessionEntryPlaceholder | undefined;
-  let adoptCreatedEntry: ((entry: SessionSharingEntry) => void) | undefined;
+  let adoptCreatedEntry: ((entry: SessionSharingEntry, change: object) => void) | undefined;
   let assertSource: () => void;
   const selectedPaths = new Set<string>();
   const release = () => {
@@ -249,7 +249,7 @@ export async function prepareSessionMutationFacts(
       }
       const created = readSessionEntryCreatedEntry(change, creation);
       if (created && adoptCreatedEntry) {
-        adoptCreatedEntry(created);
+        adoptCreatedEntry(created, change);
         creation = undefined;
         return;
       }
@@ -553,10 +553,12 @@ export async function prepareSessionMutationFacts(
     const sharing = selectedSharing?.facts;
     const readSource = selectedSharing?.source;
     selectedPaths.add(path.resolve(selected.storePath));
+    selectedPaths.add(
+      readSource?.path ??
+        resolveUnsuffixedSqliteTargetFromSessionStorePath(selected.storePath).path,
+    );
     if (sharing) {
-      selectedPaths.add(path.resolve(sharing.source.path));
-      // New and existing rows retain the captured aliases of the same physical store.
-      // Creation writers publish through the logical alias used during preparation.
+      // Retain captured logical aliases of the selected physical store for creation receipts.
       const sourceCandidates = discoveryCandidates.filter((candidate) =>
         matchesAgentDatabaseReadCandidatePath(
           { ...candidate, path: candidate.physicalPath },
@@ -566,9 +568,7 @@ export async function prepareSessionMutationFacts(
       if (sourceCandidates.length === 0) {
         throw new SessionMutationFactsUnavailableError();
       }
-      for (const candidate of sourceCandidates) {
-        selectedPaths.add(path.resolve(candidate.path));
-      }
+      sourceCandidates.forEach((candidate) => selectedPaths.add(path.resolve(candidate.path)));
     }
     if (!match) {
       if (!params.allowMissing) {
@@ -588,10 +588,11 @@ export async function prepareSessionMutationFacts(
         sourceAgentId: sharing?.source.agentId,
         readSource,
       };
-      const retained = sharing && acquisition.get(sharing.databaseIdentity, canonicalKey);
+      let retained = sharing && acquisition.get(sharing.databaseIdentity, canonicalKey);
       expectedPlaceholder = retained?.readCurrent(readScope)?.placeholder;
-      adoptCreatedEntry = (entry) => {
-        retained?.adoptCreatedEntry(entry);
+      adoptCreatedEntry = (entry, change) => {
+        retained ??= acquisition.adoptCreatedEntry(change, canonicalKey, entry);
+        retained.adoptCreatedEntry(entry);
         facts = {
           ...facts!,
           target: {
@@ -691,12 +692,7 @@ export async function prepareSessionMutationFacts(
         creation = operation;
       }
     };
-    const prepareRead = () => {
-      if (!active) {
-        return undefined;
-      }
-      return acquisition.prepareRead();
-    };
+    const prepareRead = () => (active ? acquisition.prepareRead() : undefined);
     const pending = prepareRead();
     if (pending) {
       phases.mark("sessionFacts.publication");
