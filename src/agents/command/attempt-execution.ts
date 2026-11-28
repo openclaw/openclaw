@@ -222,9 +222,10 @@ export async function runAgentAttempt(params: AgentAttemptParams) {
     sessionAgentId: params.sessionAgentId,
     sessionEntry: params.sessionEntry,
   });
-  const { completionRetainsRequesterTools, runtimeToolsAllow, disableTools } =
+  const { completionRetainsRequesterTools, runtimeToolsAllow, disableTools, relay } =
     resolveCompletionToolPolicy({
       run: params,
+      prompt: effectivePrompt,
       trustedSubagentAnnounceHandoff,
       isSubagentAnnounceHandoff,
       isRawModelRun,
@@ -387,7 +388,7 @@ export async function runAgentAttempt(params: AgentAttemptParams) {
           : resolvedPrompt;
         const cliEffectivePrompt = params.opts.execApprovalContinuationPromptRange
           ? annotateInterSessionPromptText(cliResolvedPrompt, params.opts.inputProvenance)
-          : effectivePrompt;
+          : relay.prompt;
         const cliTranscriptPrompt =
           continuationTranscriptBody === undefined || !continuationTranscriptPromptRange
             ? continuationTranscriptBody
@@ -462,7 +463,7 @@ export async function runAgentAttempt(params: AgentAttemptParams) {
             params.sessionAgentId,
           );
         await prepareCliSessionBinding();
-        const { internalEvents, runtimeContextFragments: supplementalContext } = params.opts;
+        const { runtimeContextFragments: supplementalContext } = params.opts;
         // Retain the cleared binding as the preparation candidate so missing-transcript
         // recovery can reseed history without resuming the stale CLI session.
         let result: EmbeddedAgentRunResult;
@@ -490,7 +491,7 @@ export async function runAgentAttempt(params: AgentAttemptParams) {
             persistAssistantTranscript:
               params.storePath !== undefined && params.sessionStore !== undefined,
             prompt: cliPrompt,
-            runtimeContextFragments: buildEventContext(internalEvents, supplementalContext),
+            runtimeContextFragments: buildEventContext(relay.internalEvents, supplementalContext),
             transcriptPrompt: cliTranscriptPrompt,
             modelProvider: params.providerOverride,
             requesterModel: { provider: params.providerOverride, model: params.modelOverride },
@@ -660,7 +661,7 @@ export async function runAgentAttempt(params: AgentAttemptParams) {
     agentHarnessRuntimeOverride: embeddedAgentHarnessOverride,
     agentHarnessRuntimePreparationHint:
       agentHarnessPolicy.runtimeSource !== "implicit" ? agentHarnessPolicy.runtime : undefined,
-    prompt: effectivePrompt,
+    prompt: relay.prompt,
     transcriptPrompt: continuationTranscriptBody,
     // CLI retries cannot replay a persisted turn after orphan-user repair removes it.
     images: shouldForwardImagesToEmbedded ? params.opts.images : undefined,
@@ -690,7 +691,7 @@ export async function runAgentAttempt(params: AgentAttemptParams) {
       ? params.opts.trustedInternalHandoff
       : undefined,
     cronCreatorAuthorityCapability: params.opts.cronCreatorAuthorityCapability,
-    internalEvents: params.opts.internalEvents,
+    internalEvents: relay.internalEvents,
     runtimeContextFragments: params.opts.runtimeContextFragments,
     requireExplicitMessageTarget: params.opts.requireExplicitMessageTarget,
     disableMessageTool: params.opts.disableMessageTool,

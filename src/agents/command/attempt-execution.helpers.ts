@@ -35,6 +35,10 @@ import {
   isClaudeToolUseBlockType,
 } from "../cli-output-records.js";
 import { cliBackendLog } from "../cli-runner/log.js";
+import {
+  toRelayOnlyCompletionInternalEvents,
+  toRelayOnlyCompletionText,
+} from "../subagents/completion/subagent-completion-instructions.js";
 import { resolveClaudeCliProjectDirForWorkspace } from "./claude-cli-project-dir.js";
 import type { AgentCommandOpts } from "./types.js";
 
@@ -455,6 +459,8 @@ export function rebaseExecApprovalContinuationPromptRange(params: {
 /** Restores completion tools only on runtimes that enforce the captured requester cap. */
 export function resolveCompletionToolPolicy(params: {
   run: { sessionEntry: SessionEntry | undefined; opts: AgentCommandOpts };
+  /** Prompt the attempt will send, rescoped here when the turn is a restricted relay. */
+  prompt: string;
   trustedSubagentAnnounceHandoff: boolean;
   isSubagentAnnounceHandoff: boolean;
   isRawModelRun: boolean;
@@ -486,5 +492,22 @@ export function resolveCompletionToolPolicy(params: {
     (isSubagentAnnounceHandoff &&
       !completionRetainsRequesterTools &&
       !completionNeedsMessageDelivery);
-  return { completionRetainsRequesterTools, runtimeToolsAllow, disableTools };
+  // A restricted completion relay runs without an execution surface (tools disabled
+  // or a message-only allowlist). The shared continuation guidance in the announce
+  // prompt would then invite blocked tool attempts and let the model launder this
+  // turn's authority loss into a reported child failure, so rescope the prompt and
+  // the task-completion events to relay-only wording that keeps the child outcome
+  // and records any follow-up for a subsequent normal turn.
+  const completionRelayOnly = isSubagentAnnounceHandoff && !completionRetainsRequesterTools;
+  return {
+    completionRetainsRequesterTools,
+    runtimeToolsAllow,
+    disableTools,
+    relay: {
+      prompt: completionRelayOnly ? toRelayOnlyCompletionText(params.prompt) : params.prompt,
+      internalEvents: completionRelayOnly
+        ? toRelayOnlyCompletionInternalEvents(run.opts.internalEvents)
+        : run.opts.internalEvents,
+    },
+  };
 }
