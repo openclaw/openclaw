@@ -267,6 +267,7 @@ export function createChatComposerContext(
     !(getMentions().length > 0 && (mentionsUnsupported || draft.trimStart().startsWith("/"))) &&
     !goalComposer.pending &&
     state.dictation?.locksComposer !== true &&
+    !state.developerSyntax?.blocksSend &&
     !(state.skillMenu.state.skillMenuOpen && state.skillMenu.state.skillCommandRefreshPending) &&
     (props.getPendingAttachmentReads?.() ?? props.pendingAttachmentReads ?? 0) === 0 &&
     (props.connected ||
@@ -390,6 +391,16 @@ export function createChatComposerContext(
       mentions.length || nextMentions.length ? nextMentions : undefined,
     );
     state.mentionInput = undefined;
+    if (composerInput.isExactComposerInsertion(target)) {
+      // The accepted write is already literal. Keep the normal draft/recipient
+      // publication, but do not interpret its bytes as a goal or menu command.
+      state.slashMenu.reset();
+      state.skillMenu.reset();
+      state.mentionMenu.close();
+      state.emojiMenu.close();
+      shareTypingSelection(target);
+      return;
+    }
     const activatedGoal = goalComposer.activateDraft(target.value);
     if (!activatedGoal && !goalComposer.active) {
       const slashOpen = state.slashMenu.update(target.value, slashMenuHost);
@@ -403,6 +414,7 @@ export function createChatComposerContext(
     shareTypingSelection(target);
   };
   const handleBeforeInput = (event: InputEvent) => {
+    state.developerSyntax?.cancel();
     prediction?.dismiss();
     const target = event.target;
     if (!(target instanceof HTMLTextAreaElement) || target !== state.composerTextarea) {
@@ -449,6 +461,7 @@ export function createChatComposerContext(
     syncComposerValue(target, typedAtSign);
   };
   const handleSelect = (event: Event) => {
+    state.developerSyntax?.sync();
     // SAFETY: Selection and keyup listeners are attached only to the composer textarea.
     const target = event.target as HTMLTextAreaElement;
     if (
@@ -701,6 +714,7 @@ export function createChatComposerContext(
     handleCompositionEnd,
     handleBlur,
     dictation,
+    developerSyntax: state.developerSyntax,
     dictationOptions,
     runControlsProps,
     menus,

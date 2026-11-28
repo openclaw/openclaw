@@ -63,6 +63,15 @@ export function createComposerKeyDownHandler({
     if (state.composerComposing || isComposingKeyboardEvent(event)) {
       return;
     }
+    if (state.developerSyntax?.blocksSend) {
+      if (event.key === "Escape") {
+        event.preventDefault();
+        state.developerSyntax.cancel();
+      } else if (event.key === "Enter" || event.key === "ArrowUp" || event.key === "ArrowDown") {
+        event.preventDefault();
+      }
+      return;
+    }
 
     if (state.emojiMenu.handleKeydown(event, props.paneId)) {
       return;

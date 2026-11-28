@@ -1,3 +1,5 @@
+import { requiresDeveloperDictationReview } from "../../../app/settings-developer-dictation.ts";
+import { loadSettings } from "../../../app/settings.ts";
 import { t } from "../../../i18n/index.ts";
 import { focusComposerInput, selectComposerInput } from "../../../lib/composer-input.ts";
 import type { ComposerMicrophoneOwner } from "../composer-microphone-picker.ts";
@@ -20,6 +22,21 @@ export function createComposerDictationOptions(
     enabled: props.composerHoldToRecord !== false,
     dictationAvailable: devicePicker.dictationStatus === "ready",
     realtimeTalkActive: props.realtimeTalkActive === true,
+    captureReview: () => {
+      if (state.developerSyntax) {
+        const review = state.developerSyntax.capture();
+        if (review) {
+          state.developerSyntaxHost?.request();
+        }
+        return review;
+      }
+      if (!requiresDeveloperDictationReview(loadSettings().developerDictation)) {
+        return undefined;
+      }
+      state.developerSyntaxHost?.request();
+      return false as const;
+    },
+    reviewPending: () => state.developerSyntax?.blocksSend ?? false,
     onCommit: (transcript: string, late?: true, preservePreview?: true) => {
       const target = state.composerTextarea;
       const captured = state.dictationSelection;

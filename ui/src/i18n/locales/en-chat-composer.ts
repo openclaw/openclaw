@@ -7,6 +7,9 @@ const catalog = {
     view: {
       workingDetails: "Agent is working. View details",
     },
+    dictation: {
+      busy: "Dictation is busy finishing earlier recordings. Try again in a moment.",
+    },
     composer: {
       textOnlySuggestions: "Suggestions are text only.",
       composerInput: "Chat composer",
@@ -142,6 +145,7 @@ const catalog = {
         "Microphone access is blocked. Allow it in browser site settings to list inputs.",
       realtimeTalkCapability: "Tap to talk",
       dictationCapability: "Dictation",
+      dictationSyntax: "Dictation syntax",
       realtimeTalkProviderUnavailable: "No realtime voice provider is configured.",
       dictationProviderUnavailableShort: "No transcription provider is configured.",
       talkCapabilityChecking: "Checking provider availability…",
