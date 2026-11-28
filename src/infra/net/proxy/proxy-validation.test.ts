@@ -13,7 +13,7 @@ describe("proxy validation", () => {
   const close = vi.fn<() => Promise<void>>();
   const proxyUrl = "http://127.0.0.1:3128";
   const apnsAuthority = "https://api.sandbox.push.apple.com";
-  function validate(options: Parameters<typeof runProxyValidation>[0] = {}) {
+  function validate(options: Parameters<typeof runProxyValidation>[0]) {
     return runProxyValidation({
       config: { proxyUrl },
       env: {},
