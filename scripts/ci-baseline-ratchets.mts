@@ -11,10 +11,13 @@ export async function main(argv = process.argv.slice(2)) {
   if (parseRatchetArgs(argv).prune) {
     throw new Error("CI baseline ratchets cannot prune baselines.");
   }
-  // One slot owns both large compiler snapshots before it helps drain the shared queue.
+  // One slot owns the large compiler snapshots in sequence before it helps drain the shared queue.
   const largeChecks = [
     { name: "database-worker", args: ["check:database-worker-ratchet", ...argv] },
     { name: "database-dialect", args: ["check:database-dialect-ratchet", ...argv] },
+    // The SDK import closure reaches far outside src/plugin-sdk, so no path rule can tell which
+    // changes move the export surface; every PR checks it (#206995 merged an unbudgeted export).
+    { name: "plugin-sdk-surface", args: ["plugin-sdk:surface:check"] },
   ];
   const checks = [
     { name: "max-lines", args: ["check:max-lines-ratchet", ...argv] },
@@ -30,10 +33,7 @@ export async function main(argv = process.argv.slice(2)) {
     { name: "test-lines", args: ["check:test-lines-ratchet", ...argv] },
     { name: "config-docs", args: ["config:docs:check"] },
     { name: "plugin-inventory", args: ["plugins:inventory:check"] },
-    // The SDK import closure reaches far outside src/plugin-sdk, so no path rule can tell which
-    // changes move the export surface; every PR checks it (#206995 merged an unbudgeted export).
     { name: "plugin-sdk-exports", args: ["plugin-sdk:check-exports"] },
-    { name: "plugin-sdk-surface", args: ["plugin-sdk:surface:check"] },
   ];
   const controller = new AbortController();
   const timings: Array<{ name: string; durationMs: number; status: number }> = [];
