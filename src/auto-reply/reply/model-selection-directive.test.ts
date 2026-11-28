@@ -122,3 +122,28 @@ it("rejects a configured fallback that the explicit policy does not allow", () =
   expect(result.selection).toBeUndefined();
   expect(result.error).toContain('Model "external/sensitive" is not allowed.');
 });
+
+it("rejects a denied qualified model instead of selecting an allowed near-match", () => {
+  const { result } = resolveDirective({
+    cfg: config({
+      model: "openai/safe",
+      modelPolicy: { allow: ["openai/safe", "xai/grok-4.3"] },
+    }),
+    raw: "xai/grok-4.7",
+  });
+
+  expect(result.selection).toBeUndefined();
+  expect(result.error).toContain('Model "xai/grok-4.7" is not allowed.');
+});
+
+it("keeps prefix matches for denied qualified refs", () => {
+  const { result } = resolveDirective({
+    cfg: config({
+      model: "openai/safe",
+      modelPolicy: { allow: ["openai/safe", "xai/grok-4.3"] },
+    }),
+    raw: "xai/grok-4",
+  });
+
+  expect(result.selection).toMatchObject({ provider: "xai", model: "grok-4.3" });
+});
