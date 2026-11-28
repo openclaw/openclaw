@@ -32,7 +32,7 @@ output directories unchanged.
 
 ### Comparison layout
 
-Keep both pairs visible in the PR: **clean before/after first, annotated
+Keep both pairs visible in the PR: **annotated before/after first, clean
 before/after second**. Never hide either pair in a disclosure or behind a gallery
 link. Use two columns when text remains readable. For wide captures, stack
 Before then After within each pair instead of shrinking them to fit. Keep enough
@@ -42,17 +42,17 @@ Example for a narrow/mobile comparison; replace the four URL placeholders with
 uploaded images and write alt text describing the actual observation:
 
 ```markdown
-### Clean comparison
-
-| Before                                           | After                                         |
-| ------------------------------------------------ | --------------------------------------------- |
-| ![Before: account shown twice](BEFORE_CLEAN_URL) | ![After: account shown once](AFTER_CLEAN_URL) |
-
 ### Annotated comparison
 
 | Before                                                | After                                                         |
 | ----------------------------------------------------- | ------------------------------------------------------------- |
 | ![Repeated account highlighted](BEFORE_ANNOTATED_URL) | ![Single account and source highlighted](AFTER_ANNOTATED_URL) |
+
+### Clean comparison
+
+| Before                                           | After                                         |
+| ------------------------------------------------ | --------------------------------------------- |
+| ![Before: account shown twice](BEFORE_CLEAN_URL) | ![After: account shown once](AFTER_CLEAN_URL) |
 ```
 
 Add one short caption naming the scenario, before/after revisions, and any
