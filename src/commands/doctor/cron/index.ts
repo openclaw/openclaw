@@ -1,5 +1,4 @@
 // Doctor cron repair orchestration for legacy stores, run logs, payloads, and warnings.
-import { safeParseJsonRecord } from "@openclaw/normalization-core/json-coercion";
 import { isRecord } from "@openclaw/normalization-core/record-coerce";
 import { note } from "../../../../packages/terminal-core/src/note.js";
 import { formatCliCommand } from "../../../cli/command-format.js";
@@ -7,6 +6,7 @@ import type { OpenClawConfig } from "../../../config/types.openclaw.js";
 import { resolveCronJobsStorePath } from "../../../cron/store.js";
 import type { HealthFinding } from "../../../flows/health-checks.js";
 import { formatErrorMessage as errorMessage } from "../../../infra/errors.js";
+import { executeExistingOpenClawStateRead } from "../../../state/openclaw-state-db-readonly.js";
 import { resolveOpenClawStateSqlitePath } from "../../../state/openclaw-state-db.paths.js";
 import { shortenHomePath } from "../../../utils.js";
 import type { DoctorPrompter, DoctorOptions } from "../../doctor-prompter.js";
@@ -90,32 +90,86 @@ function inspectCronJobHealth(jobs: Array<Record<string, unknown>>) {
 
 const LEGACY_CRON_STORE_CHECK_ID = "core/doctor/legacy-cron-store";
 
-function sandboxStreamCleanupAdvisories(state: LegacyCronRepairState) {
-  const ids = new Set<string>();
-  function inspect(id: unknown, job: unknown) {
-    if (typeof id !== "string" || !isRecord(job) || !isRecord(job.schedule)) {
+function dockerStreamInventory(state: LegacyCronRepairState): HealthFinding[] {
+  const inventory = new Map<string, string>();
+  function inspect(
+    job: Record<string, unknown> | undefined,
+    status: string,
+    id: unknown = job?.id ?? job?.jobId,
+  ) {
+    if (!job || typeof id !== "string" || !isRecord(job.schedule) || inventory.has(id)) {
       return;
     }
     const kind = job.schedule.kind;
-    // Inspect the persisted marker, even if the target is incomplete and the job cannot load.
-    if (kind === "sandbox-stream" || (kind === "stream" && Object.hasOwn(job, "streamSandbox"))) {
-      ids.add(id);
+    if (
+      kind === "sandbox-stream" ||
+      (kind === "stream" && isRecord(job.streamSandbox) && job.streamSandbox.backendId === "docker")
+    ) {
+      inventory.set(id, status);
     }
   }
-  for (const row of state.ownerRows) {
-    inspect(row.job_id, safeParseJsonRecord(row.job_json));
+  for (const job of state.rawJobs) {
+    inspect(job, job.enabled === false ? "is paused" : "is configured");
+  }
+  for (const { job, sourceIndex } of state.invalidConfigRows) {
+    inspect(job, "has an invalid definition", state.ownerRows[sourceIndex]?.job_id);
   }
   for (const { job } of [...state.persistedQuarantine, ...(state.legacyQuarantine?.jobs ?? [])]) {
-    if (isRecord(job)) {
-      inspect(job.id ?? job.jobId, job);
-    }
+    inspect(job, "is quarantined");
   }
-  return [...ids].map((id) => ({
-    message: `Automation ${JSON.stringify(id)} is recorded as a Docker-backed stream.`,
-    requirement: "cron-sandbox-stream-cleanup",
-    fixHint:
-      "Before retiring this automation, disable it on the Gateway that owns it and verify its stream container has stopped on the original Docker daemon. A disabled or quarantined definition does not prove the container has stopped. Restore access to that daemon if cleanup is pending; do not remove the parent sandbox or its workspace as a substitute.",
+
+  const source = { checkId: LEGACY_CRON_STORE_CHECK_ID, path: resolveOpenClawStateSqlitePath() };
+  return Array.from(inventory, ([id, status]) => ({
+    ...source,
+    severity: "info",
+    requirement: "cron-sandbox-stream-inventory",
+    target: id,
+    message: `Docker stream ${JSON.stringify(id)} ${status}.`,
   }));
+}
+
+async function dockerStreamCleanupFindings(selectedStoreKey?: string): Promise<HealthFinding[]> {
+  const source = {
+    checkId: LEGACY_CRON_STORE_CHECK_ID,
+    severity: "warning" as const,
+    path: resolveOpenClawStateSqlitePath(),
+  };
+  try {
+    const custody = await executeExistingOpenClawStateRead(
+      {},
+      { type: "sandboxPersistentExec.uncertainOwnerKeys", input: undefined },
+    );
+    const selectedPrefix = selectedStoreKey && `cron:${selectedStoreKey}:`;
+    const findings: HealthFinding[] = [];
+    for (const ownerKey of custody?.ownerKeys ?? []) {
+      if (!ownerKey.startsWith("cron:")) {
+        continue;
+      }
+      // Other partitions may no longer have a job or even an entry in the cron store inventory.
+      const target =
+        selectedPrefix && ownerKey.startsWith(selectedPrefix)
+          ? ownerKey.slice(selectedPrefix.length)
+          : ownerKey;
+      findings.push({
+        ...source,
+        requirement: "cron-sandbox-stream-cleanup",
+        target,
+        message: `The Gateway recorded unconfirmed container cleanup for Docker stream ${JSON.stringify(target)}.`,
+        fixHint:
+          "Check the Gateway logs for the cleanup error and inspect the stream container on the original Docker daemon. If cleanup is still blocked, keep the record and report the error.",
+      });
+    }
+    return findings;
+  } catch (err) {
+    rethrowSqliteSchemaVersionError(err);
+    return [
+      {
+        ...source,
+        requirement: "cron-sandbox-stream-cleanup-readable",
+        message: "Doctor could not read the Docker stream cleanup records.",
+      },
+    ];
+  }
 }
 
 function legacyCronStoreFinding(params: {
@@ -140,10 +194,15 @@ export async function collectLegacyCronStoreHealthFindings(params: {
   cfg: OpenClawConfig;
 }): Promise<readonly HealthFinding[]> {
   let state: LegacyCronRepairState | null;
+  let cleanup: HealthFinding[] = [];
   try {
     const selection = await readCronStoreSelectionForDoctor(params.cfg);
+    cleanup = await dockerStreamCleanupFindings(
+      selection.status === "ready" ? selection.storeKey : undefined,
+    );
     if (selection.status === "unresolved") {
       return [
+        ...cleanup,
         legacyCronStoreFinding({
           message: selection.message,
           path: selection.storePath,
@@ -154,10 +213,14 @@ export async function collectLegacyCronStoreHealthFindings(params: {
       ];
     }
     state = await loadLegacyCronRepairState({ cfg: params.cfg, readOnly: true });
+    if (!state) {
+      return cleanup;
+    }
   } catch (err) {
     rethrowSqliteSchemaVersionError(err);
     const storePath = resolveCronJobsStorePath(readLegacyCronStorePath(params.cfg));
     return [
+      ...cleanup,
       legacyCronStoreFinding({
         message: `Unable to read cron job store at ${shortenHomePath(storePath)}.`,
         path: storePath,
@@ -170,21 +233,13 @@ export async function collectLegacyCronStoreHealthFindings(params: {
       }),
     ];
   }
-  if (!state) {
-    return [];
-  }
-
-  const findings: HealthFinding[] = [];
+  const findings = [...dockerStreamInventory(state), ...cleanup];
   const { legacyQuarantine, rawJobs } = state;
   const sqliteStorePath = resolveOpenClawStateSqlitePath();
   const recordFinding = (
     finding: Omit<Parameters<typeof legacyCronStoreFinding>[0], "path">,
     path = sqliteStorePath,
   ) => findings.push(legacyCronStoreFinding({ ...finding, path }));
-
-  for (const advisory of sandboxStreamCleanupAdvisories(state)) {
-    recordFinding(advisory);
-  }
 
   if (state.persistedQuarantine.length > 0) {
     recordFinding({
@@ -285,10 +340,22 @@ export async function maybeRepairLegacyCronStore(params: {
 }) {
   let state: LegacyCronRepairState | null;
   try {
-    if (!(await maybeRepairCronStoreSelection(params))) {
+    const selection = await readCronStoreSelectionForDoctor(params.cfg);
+    for (const { message, fixHint } of await dockerStreamCleanupFindings(
+      selection.status === "ready" ? selection.storeKey : undefined,
+    )) {
+      note(fixHint ? `${message}\n- ${fixHint}` : message, "Cron warnings");
+    }
+    if (!(await maybeRepairCronStoreSelection({ ...params, selection }))) {
       return;
     }
     state = await loadLegacyCronRepairState({ cfg: params.cfg });
+    if (!state) {
+      return;
+    }
+    for (const { message } of dockerStreamInventory(state)) {
+      note(message, "Cron");
+    }
   } catch (err) {
     rethrowSqliteSchemaVersionError(err);
     const reason = err instanceof Error ? err.message : String(err);
@@ -303,13 +370,7 @@ export async function maybeRepairLegacyCronStore(params: {
     );
     return;
   }
-  if (!state) {
-    return;
-  }
   const { storePath, legacyQuarantine, invalidConfigRows, persistedQuarantine, rawJobs } = state;
-  for (const { message, fixHint } of sandboxStreamCleanupAdvisories(state)) {
-    note([message, `- ${fixHint}`].join("\n"), "Cron");
-  }
   const repair = async (normalized?: ReturnType<typeof normalizeStoredCronJobs>) => {
     if (
       await params.prompter.confirm({ message: "Repair legacy cron jobs now?", initialValue: true })

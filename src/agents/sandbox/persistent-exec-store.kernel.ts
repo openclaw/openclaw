@@ -160,14 +160,18 @@ function assertReceiptBinding(
 }
 
 /** Absence is an admitted schema fact; runtime reads never create or probe a table. */
+function hasPersistentExecTable(db: EngineConnection): boolean {
+  if (!getAdmittedSqlSchemaFacts(db)) {
+    throw new Error("Persistent sandbox custody requires admitted schema facts.");
+  }
+  return tableExists(db, "sandbox_persistent_execs");
+}
+
 export function readSandboxPersistentExecsInDatabase(
   db: EngineConnection,
   input: SandboxPersistentExecQuery,
 ): SandboxPersistentExecRecord[] {
-  if (!getAdmittedSqlSchemaFacts(db)) {
-    throw new Error("Persistent sandbox custody requires admitted schema facts.");
-  }
-  if (!tableExists(db, "sandbox_persistent_execs")) {
+  if (!hasPersistentExecTable(db)) {
     return [];
   }
   let query = getNodeSqliteKysely<CustodyDatabase>(db)
@@ -358,6 +362,20 @@ export function writeSandboxPersistentExecInDatabase(
 }
 
 export const sandboxPersistentExecReadOperations = {
+  "sandboxPersistentExec.uncertainOwnerKeys": (_input: undefined, db: EngineConnection) => ({
+    type: "sandboxPersistentExec.uncertainOwnerKeys" as const,
+    // Doctor can report a recorded cleanup failure even when its container receipt is damaged.
+    ownerKeys: hasPersistentExecTable(db)
+      ? executeSqliteQuerySync(
+          db,
+          getNodeSqliteKysely<CustodyDatabase>(db)
+            .selectFrom("sandbox_persistent_execs")
+            .select("owner_key")
+            .where("phase", "=", "uncertain")
+            .orderBy("owner_key"),
+        ).rows.map((row) => row.owner_key)
+      : [],
+  }),
   "sandboxPersistentExec.list": (input: SandboxPersistentExecQuery, db: EngineConnection) => ({
     type: "sandboxPersistentExec.list" as const,
     records: readSandboxPersistentExecsInDatabase(db, input),

@@ -25,11 +25,12 @@ export function readCronStoreSelectionForDoctor(
 export async function maybeRepairCronStoreSelection(params: {
   cfg: OpenClawConfig;
   options: DoctorOptions;
+  selection?: CronStoreSelection;
   prompter: Partial<Pick<DoctorPrompter, "selectRuntimeRepair">>;
   env?: NodeJS.ProcessEnv;
 }): Promise<boolean> {
   const env = params.env ?? process.env;
-  const selection = await readCronStoreSelectionForDoctor(params.cfg, env);
+  const selection = params.selection ?? (await readCronStoreSelectionForDoctor(params.cfg, env));
   if (selection.status === "ready") {
     return true;
   }

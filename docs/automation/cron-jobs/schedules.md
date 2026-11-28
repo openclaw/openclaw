@@ -181,11 +181,13 @@ OpenClaw checks current session, operator, exec, and sandbox authority before ea
 
 A stream can continue running after a controller crash or lost connection until OpenClaw recovers and cleans it up. There is no autonomous execution lease inside the container. Recovery removes the exact recorded stream container through its original Docker daemon and confirms its absence before settling the workspace, deleting cleanup records, or starting a replacement. An unreachable or changed Docker daemon blocks replacement; restore access to the original daemon so cleanup can finish.
 
-Doctor identifies stored Docker-backed stream automations by job ID, including
-paused definitions and definitions preserved in quarantine. The finding does not
-confirm whether the stream container is still running. To decommission a stream,
-disable it on its owning Gateway and confirm cleanup on the original Docker
-daemon. Doctor does not stop containers or change stream jobs for this finding.
+Doctor lists configured, paused, quarantined, and invalid Docker stream definitions by job ID. To see
+the inventory in structured output, run
+`openclaw doctor --lint --only core/doctor/legacy-cron-store --severity-min info --json`.
+Doctor also reports container cleanup that the Gateway recorded as uncertain,
+even after job deletion or a change of cron store. For a stream outside the
+selected store, the warning includes its full cleanup reference. Doctor reads
+these records without contacting Docker or changing any jobs.
 
 After a Linux or macOS host reboot, recovery requires the same recorded machine identity before reclaiming a previous controller's cleanup work. Missing, changed, or unreadable machine identity keeps cleanup blocked; a hostname alone cannot establish that the previous controller is gone. OpenClaw retains only an application-specific hash of the OS machine identifier.
 
