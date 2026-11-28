@@ -281,6 +281,12 @@ To change an account deliberately, update the job with a model/profile selection
 for example `--model "openai/gpt-4.1@work"`. This captures a fresh authorization.
 To list accounts while the Gateway runs, use `openclaw gateway call models.authStatus`.
 
+A run that reaches a removed or signed-out recorded account, and that no fallback
+on another provider finishes, pauses the job once. Its notice names the repair: sign
+in again, record the account with `model@profile`, then run
+`openclaw automations enable <jobId>`. The notice does not name the account; run
+history keeps the full refusal.
+
 If the recorded account was removed or signed out, an explicit plain-model edit
 such as `openclaw automations edit <jobId> --model openai/gpt-4.1` can release the
 dead binding when that model selects a key in the environment or provider config.

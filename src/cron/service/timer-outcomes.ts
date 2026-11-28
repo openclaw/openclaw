@@ -1,3 +1,4 @@
+import { truncateUtf16Safe } from "@openclaw/normalization-core/utf16-slice";
 import { resolveCronTriggerMinIntervalMs } from "../../config/cron-limits.js";
 import type { CronActiveJobMarker } from "../active-jobs.js";
 import { resolveAdmittedCronCompletionStatus } from "../completion-status.js";
@@ -42,6 +43,16 @@ import {
 
 type CronScheduleOwnership = "current" | "stale";
 type CronTriggerOwnership = "current" | "stale";
+
+// The refusal in automation history names the account; the notice names only the steps.
+function retiredAccountPauseText(job: CronJob): string {
+  const name = truncateUtf16Safe((job.name || job.id).replace(/\s+/g, " ").trim(), 120);
+  return [
+    `⚠️ Automation "${name}" was paused: the account it runs on was removed or signed out.`,
+    `Sign in again with \`openclaw models auth login\` and record the account with \`openclaw automations edit ${job.id} --model <provider/model>@<profileId>\`, or choose another account.`,
+    `Then run \`openclaw automations enable ${job.id}\`.`,
+  ].join("\n");
+}
 
 /** Checks both the admitted schedule and edits that may have returned to its original value. */
 function resolveCronRunScheduleOwnership(params: {
@@ -258,8 +269,12 @@ export function applyJobResult(
       // A failed check has not consumed the paced occurrence; its backoff retry still owns it.
       job.state.pacedNextRunAtMs = job.state.nextRunAtMs;
     }
-    // A parent pause is not a failure: its own notice below replaces the skipped-run alert.
-    if (!result.parentUnavailable) {
+    // A retired account can never run this job as written; like a gone parent, the job pauses
+    // once with its own notice, which replaces the failure alert.
+    const retiredAccount =
+      result.status === "error" &&
+      result.failureNotificationDetail?.kind === "inference-account-retired";
+    if (!result.parentUnavailable && !retiredAccount) {
       finalizeCronFailureNotifications(state, {
         job,
         alertConfig,
@@ -273,18 +288,22 @@ export function applyJobResult(
     }
     // The notice belongs to the pause, sent once while the job was still enabled.
     // A newer operator edit owns enablement, so a stale pause result changes nothing.
-    if (result.parentUnavailable && ownsSchedule && previousScheduleState.enabled) {
-      // The parent conversation is gone; pause until someone re-enables the job.
+    if (
+      (result.parentUnavailable || retiredAccount) &&
+      ownsSchedule &&
+      previousScheduleState.enabled
+    ) {
+      // Pause until someone re-enables the job.
       job.enabled = false;
       job.state.nextRunAtMs = undefined;
       if (!opts.replay) {
-        // The gone conversation cannot accept the notice; its owning agent gets it instead.
         const notice = cronNotificationJob(job);
         const { agentId, sessionKey } = resolveCronNotificationQueueOwner(notice, "auto-disabled");
         opts.deferredNotifications.push({
           kind: "auto-disabled",
+          // A gone parent conversation cannot accept the notice; its owning agent gets it.
           job:
-            sessionKey === result.parentUnavailable.parentSessionKey
+            result.parentUnavailable && sessionKey === result.parentUnavailable.parentSessionKey
               ? {
                   ...notice,
                   owner: undefined,
@@ -292,7 +311,9 @@ export function applyJobResult(
                   ...(agentId ? { agentId } : {}),
                 }
               : notice,
-          text: result.error ?? "Automation paused: its parent conversation is unavailable.",
+          text: retiredAccount
+            ? retiredAccountPauseText(job)
+            : (result.error ?? "Automation paused: its parent conversation is unavailable."),
         });
       }
     }

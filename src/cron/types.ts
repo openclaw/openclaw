@@ -211,6 +211,8 @@ export type CronFailureNotificationDetail =
     }
   /** A deterministic setup refusal: the operator must record the intended account. */
   | { kind: "inference-account-unrecorded" }
+  /** The recorded account was removed or signed out: the job pauses until the operator acts. */
+  | { kind: "inference-account-retired" }
   /** A stuck-session recovery aborted the run for a known semantic cause (e.g. `blocked_tool_call`). */
   | { kind: "agent-stall"; classification: string };
 

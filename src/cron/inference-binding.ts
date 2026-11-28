@@ -1,6 +1,9 @@
 import { isRecord } from "@openclaw/normalization-core/record-coerce";
 import type { ProviderModelRouteAuthRequirement } from "../plugin-sdk/provider-model-types.js";
 
+/** Code on the refusal for an automation whose recorded account was removed or signed out. */
+export const CRON_INFERENCE_ACCOUNT_RETIRED_CODE = "CRON_INFERENCE_ACCOUNT_RETIRED";
+
 /** Scheduler-owned identity, not a user model pin or a copy of credential material. */
 export type CronInferenceBinding = {
   version: 1;
