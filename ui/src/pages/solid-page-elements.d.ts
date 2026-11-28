@@ -22,6 +22,7 @@ declare module "@solidjs/web" {
       "openclaw-model-setup-page": HTMLAttributes<HTMLElement>;
       "openclaw-personal-instructions": HTMLAttributes<HTMLElement>;
       "openclaw-profile-page": HTMLAttributes<HTMLElement>;
+      "openclaw-profile-channel-identities": HTMLAttributes<HTMLElement>;
       "openclaw-secrets-page": HTMLAttributes<HTMLElement>;
       "openclaw-skill-workshop-page": HTMLAttributes<HTMLElement>;
       "openclaw-terminal-page": HTMLAttributes<HTMLElement>;

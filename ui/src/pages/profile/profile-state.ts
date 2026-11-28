@@ -27,6 +27,15 @@ import { assertUploadsEnabled } from "../../lib/uploads.ts";
 import { processProfileAvatar, ProfileAvatarError } from "./avatar-processing.ts";
 import type { ModelAccountsTargetSource } from "./model-accounts-state.ts";
 import { userProfileAvatarUrl } from "./profile-avatar-url.ts";
+import {
+  linkChannelIdentity,
+  loadChannelIdentityLinks,
+  sameChannelIdentity,
+  unlinkChannelIdentity,
+  type ChannelIdentityLink,
+  type ChannelIdentityMutation,
+} from "./profile-channel-identity-actions.ts";
+import { sameConnectionScopes } from "./profile-connection-scopes.ts";
 
 export type IdentityChange =
   | { kind: "display-name" }
@@ -35,6 +44,8 @@ export type IdentityChange =
 
 export class ProfileState {
   private publishTarget?: () => void;
+  channelIdentityListRequestId = 0;
+  channelIdentityMutationId = 0;
   private refreshAccounts?: () => void;
   readonly modelAccountsTarget: ModelAccountsTargetSource = {
     read: () => ({
@@ -80,6 +91,28 @@ export class ProfileState {
   presentationLifetime = Promise.withResolvers<void>();
   identityReceipt = { result: Promise.resolve() };
   hello: ApplicationGatewaySnapshot["hello"] | undefined;
+  channelIdentityProfileId: string | null = null;
+  channelIdentityProfileReady = false;
+  channelIdentityLinks: ChannelIdentityLink[] | null = null;
+  channelIdentityLoading = false;
+  channelIdentityError: string | null = null;
+  channelIdentityStatus: string | null = null;
+  channelIdentityMutation: ChannelIdentityMutation | null = null;
+  channelId = "";
+  accountId = "";
+  senderId = "";
+
+  get channelIdentityBusy() {
+    return this.channelIdentityLoading || this.channelIdentityMutation !== null;
+  }
+  get channelIdentityFormDisabled() {
+    return (
+      this.channelIdentityBusy ||
+      this.identityLoading ||
+      this.identityBusy !== null ||
+      this.channelIdentityLinks === null
+    );
+  }
 
   constructor(
     readonly context: ApplicationContext,
@@ -97,6 +130,8 @@ export class ProfileState {
     this.publishTarget = undefined;
     this.retirePresentation();
     this.identityRequestId += 1;
+    this.resetChannelIdentityState(true);
+    this.channelIdentityProfileId = null;
     this.client = null;
     this.connected = false;
     this.identityReady = false;
@@ -121,7 +156,16 @@ export class ProfileState {
     const selfProfileChanged =
       nextSelfUser?.id !== this.selfUser?.id ||
       nextSelfUser?.identity?.id !== this.selfUser?.identity?.id;
+    const identityTargetChanged =
+      clientChanged ||
+      nextConnected !== this.connected ||
+      identityReady !== this.identityReady ||
+      selfProfileChanged;
     const readAccessLost = nextConnected && this.canRead && !nextCanRead;
+    const nextConnectionScopes = snapshot.hello?.auth?.scopes ?? null;
+    const connectionScopesChanged =
+      (nextConnected || clientChanged) &&
+      !sameConnectionScopes(this.connectionScopes, nextConnected ? nextConnectionScopes : null);
     const identitySourceChanged = clientChanged || selfProfileChanged || readAccessLost;
     this.client = snapshot.client;
     this.connected = nextConnected;
@@ -136,7 +180,7 @@ export class ProfileState {
         ? (snapshot.hello?.auth?.scopes ?? null)
         : this.connectionScopes;
     this.selfUser = nextSelfUser;
-    if (identitySourceChanged || connectionChanged) {
+    if (identitySourceChanged || connectionChanged || connectionScopesChanged) {
       this.retirePresentation();
       this.identityRequestId += 1;
       this.identityScope = {};
@@ -145,6 +189,11 @@ export class ProfileState {
       this.identityBusy = null;
       this.avatarPreview = null;
       this.identityError = null;
+      this.channelIdentityProfileReady = false;
+      this.resetChannelIdentityState(identityTargetChanged, connectionScopesChanged);
+      if (identityTargetChanged) {
+        this.channelIdentityProfileId = null;
+      }
       this.attributionError = null;
     }
     if (identitySourceChanged) {
@@ -194,6 +243,8 @@ export class ProfileState {
       currentProfile !== null && displayNameDraft.trim() !== (currentProfile.displayName ?? "");
     this.identityLoading = true;
     this.identityError = null;
+    this.channelIdentityProfileReady = false;
+    this.resetChannelIdentityState(false);
     this.attributionError = null;
     const result = this.readIdentity(client, requestId, hasUnsavedDisplayName, displayNameDraft);
     this.identityReceipt = { result };
@@ -212,8 +263,14 @@ export class ProfileState {
       if (requestId !== this.identityRequestId) {
         return;
       }
+      if (profile?.id !== this.channelIdentityProfileId) {
+        this.resetChannelIdentityState(true);
+      }
       this.ownProfile = profile;
+      this.channelIdentityProfileId = profile?.id ?? null;
+      this.channelIdentityProfileReady = true;
       if (!profile) {
+        this.publish();
         return;
       }
       profileLoaded = true;
@@ -221,12 +278,13 @@ export class ProfileState {
       this.gitCoauthorEnabled = true;
       this.prAttributionEnabled = false;
       this.publish();
+      void this.loadChannelIdentityLinks();
       // Consent belongs to the person, not to a display-primary GitHub account.
       const { loadUserPreferences } = await import("../../app/user-prefs-request.ts");
       if (requestId !== this.identityRequestId) {
         return;
       }
-      const preferences = await loadUserPreferences(client, profile.id, {
+      const preferencesPromise = loadUserPreferences(client, profile.id, {
         keys:
           profile.id === GATEWAY_OWNER_PROFILE_ID
             ? [PR_ATTRIBUTION_PREFERENCE_KEY]
@@ -236,6 +294,7 @@ export class ProfileState {
                 GIT_COAUTHOR_ORGANIZATION_PREFERENCE_KEY,
               ],
       });
+      const preferences = await preferencesPromise;
       if (requestId !== this.identityRequestId) {
         return;
       }
@@ -441,12 +500,71 @@ export class ProfileState {
   }
 
   refreshManually() {
-    if (this.identityReady && !this.identityBusy && !this.identityLoading) {
+    if (
+      this.identityReady &&
+      !this.identityBusy &&
+      !this.identityLoading &&
+      !this.channelIdentityBusy
+    ) {
       if (this.client) {
         invalidateUserPreferences(this.client);
       }
       this.loadIdentity();
       this.refreshAccounts?.();
+    }
+  }
+
+  canManageChannelIdentities() {
+    return (
+      this.connected &&
+      this.identityReady &&
+      this.canRead &&
+      this.client !== null &&
+      this.connectionScopes?.includes("operator.admin") === true &&
+      this.ownProfile !== null &&
+      this.ownProfile.id === this.channelIdentityProfileId &&
+      this.ownProfile.id !== GATEWAY_OWNER_PROFILE_ID
+    );
+  }
+
+  isRemovingChannelIdentity(link: ChannelIdentityLink) {
+    return (
+      this.channelIdentityMutation?.kind === "unlink" &&
+      sameChannelIdentity(this.channelIdentityMutation.identity, link.identity)
+    );
+  }
+
+  setChannelIdentityDraft(field: "channelId" | "accountId" | "senderId", value: string) {
+    this[field] = value;
+    this.publish();
+  }
+
+  loadChannelIdentityLinks() {
+    return loadChannelIdentityLinks(this);
+  }
+
+  linkChannelIdentity() {
+    return linkChannelIdentity(this);
+  }
+
+  unlinkChannelIdentity(link: ChannelIdentityLink) {
+    return unlinkChannelIdentity(this, link);
+  }
+
+  private resetChannelIdentityState(targetChanged: boolean, retireMutation = false) {
+    this.channelIdentityListRequestId += 1;
+    this.channelIdentityLinks = null;
+    this.channelIdentityLoading = false;
+    this.channelIdentityError = null;
+    this.channelIdentityStatus = null;
+    if (targetChanged || retireMutation) {
+      this.channelIdentityMutationId += 1;
+      this.channelIdentityMutation = null;
+    }
+    if (targetChanged) {
+      this.channelId = "";
+      this.accountId = "";
+      this.senderId = "";
     }
   }
 }

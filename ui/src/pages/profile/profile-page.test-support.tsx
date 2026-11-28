@@ -3,7 +3,6 @@ import type {
   UserProfile,
   UsersSelfResult,
 } from "../../../../packages/gateway-protocol/src/index.ts";
-import type { GatewayBrowserClient } from "../../api/gateway.ts";
 import { createAgentSelectionCapability } from "../../app/agent-selection.ts";
 import type { ApplicationContext, ApplicationGatewaySnapshot } from "../../app/context.ts";
 import type { AuthenticatedUser } from "../../app/user-profile.ts";
@@ -11,7 +10,10 @@ import {
   createApplicationGatewaySnapshot,
   hiddenScopeUpgradeCapability,
 } from "../../test-helpers/application-context-fixtures.ts";
-import { createTestGatewayClient } from "../../test-helpers/gateway-client.ts";
+import {
+  createTestGatewayClient,
+  type GatewayRequestHandler,
+} from "../../test-helpers/gateway-client.ts";
 import { mountSolid } from "../../test-helpers/mount-solid.ts";
 import { createSolidApplicationContextProvider } from "../../test-helpers/solid-application-context.tsx";
 import { ProfilePage } from "./profile-page.tsx";
@@ -19,7 +21,7 @@ import { ProfilePage } from "./profile-page.tsx";
 type GatewayEvent = Parameters<Parameters<ApplicationContext["gateway"]["subscribeEvents"]>[0]>[0];
 
 export function createConnectedContext(
-  request: GatewayBrowserClient["request"],
+  request: GatewayRequestHandler,
   selfUser: AuthenticatedUser | null = null,
 ) {
   let snapshot: ApplicationGatewaySnapshot = createApplicationGatewaySnapshot({

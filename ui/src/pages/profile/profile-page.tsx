@@ -58,6 +58,7 @@ import { OpenClawIdIdentity } from "./openclaw-id-identity.tsx";
 import { PersonalInstructions } from "./personal-instructions.tsx";
 import { ProfileAttribution } from "./profile-attribution.tsx";
 import { userProfileAvatarUrl } from "./profile-avatar-url.ts";
+import { ProfileChannelIdentities } from "./profile-channel-identities.tsx";
 import { ProfileHero } from "./profile-hero.tsx";
 import { type IdentityChange, ProfileState } from "./profile-state.ts";
 
@@ -104,6 +105,7 @@ export function ProfilePage(route: { routeData?: string | null }) {
     return state;
   };
   const canWrite = createMemo(() => view().canWrite);
+  const canManageChannelIdentities = createMemo(() => view().canManageChannelIdentities());
   const identityScope = createMemo(() => view().identityScope);
   const presentation = createMemo(() => {
     const scope = identityScope();
@@ -519,7 +521,9 @@ export function ProfilePage(route: { routeData?: string | null }) {
               class="profile-refresh"
               label={view().identityLoading ? t("common.refreshing") : t("common.refresh")}
               busy={view().identityLoading}
-              disabled={!view().identityReady || identityBusy() !== null}
+              disabled={
+                !view().identityReady || identityBusy() !== null || view().channelIdentityBusy
+              }
               onClick={() => state.refreshManually()}
             />
           </Show>
@@ -574,6 +578,10 @@ export function ProfilePage(route: { routeData?: string | null }) {
                 </Loading>
               </Errored>
             </Show>
+            <ProfileChannelIdentities
+              getState={view}
+              canManage={() => latest(canManageChannelIdentities)}
+            />
           </Show>
           <PersonalInstructions
             hidden={

@@ -170,6 +170,7 @@ type EnglishCatalog = TranslationMap & {
         | "linkedEmails",
         string
       >;
+    channelIdentities: TranslationMap;
   };
   connection: TranslationMap & {
     browserSignIn: TranslationMap;
@@ -1282,6 +1283,7 @@ const startupEnglish = {
       linkedEmails: "Linked emails",
       attribution: "Attribution",
     },
+    channelIdentities: {},
     modelAccounts: {},
   },
   skillWorkshop: {},
