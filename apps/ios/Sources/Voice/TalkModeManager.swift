@@ -265,9 +265,17 @@ final class TalkModeManager {
     /// Set when the ElevenLabs API rejects PCM format (e.g. 403 subscription_required).
     /// Once set, all subsequent requests in this session use MP3 instead of re-trying PCM.
     private var pcmFormatUnavailable: Bool = false
-    var pcmPlayer: PCMStreamingAudioPlaying = PCMStreamingAudioPlayer.shared
+    @ObservationIgnored var pcmPlayer: PCMStreamingAudioPlaying?
     var mp3Player: StreamingAudioPlaying = StreamingAudioPlayer.shared
     var bufferedPlayer: TalkBufferedAudioPlaying = TalkBufferedAudioPlayer.shared
+
+    /// Resolves the player only for playback, never when stopping a pending or non-PCM turn.
+    private var pcmPlayerForPlayback: PCMStreamingAudioPlaying {
+        if let pcmPlayer { return pcmPlayer }
+        let player = PCMStreamingAudioPlayer.shared
+        self.pcmPlayer = player
+        return player
+    }
 
     /// Meters PCM speech bytes on their way into the streaming player so the
     /// speaking waveform tracks the audible envelope, not network arrival.
@@ -3111,7 +3119,7 @@ final class TalkModeManager {
         case let .pcm(sampleRate):
             self.lastPlaybackWasPCM = true
             let stream = Self.makeBufferedAudioStream(chunks: [audio.data])
-            result = await self.pcmPlayer.play(
+            result = await self.pcmPlayerForPlayback.play(
                 stream: self.pcmPlaybackEnvelope.metering(stream, sampleRate: sampleRate),
                 sampleRate: sampleRate)
             self.pcmPlaybackEnvelope.cancel()
@@ -3210,7 +3218,7 @@ final class TalkModeManager {
         guard self.isSpeechOutputActive else { return }
         if self.isSpeaking {
             let streamedInterruptedAt = self.lastPlaybackWasPCM
-                ? self.pcmPlayer.stop()
+                ? self.pcmPlayer?.stop()
                 : self.mp3Player.stop()
             if storeInterruption {
                 self.lastInterruptedAtSeconds = self.bufferedPlayer.stop() ?? streamedInterruptedAt
@@ -3219,7 +3227,7 @@ final class TalkModeManager {
             }
             _ = self.lastPlaybackWasPCM
                 ? self.mp3Player.stop()
-                : self.pcmPlayer.stop()
+                : self.pcmPlayer?.stop()
         }
         self.stopRecognition()
         TalkSystemSpeechSynthesizer.shared.stop()
@@ -3661,7 +3669,7 @@ final class TalkModeManager {
         let streamFailure = StreamFailureBox()
         let stream = Self.monitorStreamFailures(rawStream, failureBox: streamFailure)
         self.lastPlaybackWasPCM = true
-        var playback = await pcmPlayer.play(
+        var playback = await self.pcmPlayerForPlayback.play(
             stream: self.pcmPlaybackEnvelope.metering(stream, sampleRate: sampleRate),
             sampleRate: sampleRate)
         self.pcmPlaybackEnvelope.cancel()
