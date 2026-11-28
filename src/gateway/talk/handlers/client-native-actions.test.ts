@@ -1,6 +1,6 @@
 import { isRecord } from "@openclaw/normalization-core/record-coerce";
-import { beforeAll, describe, expect, it, vi } from "vitest";
-import { withinTest } from "../../../../test/helpers/promise.js";
+import { afterEach, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
+import { awaitGateBeforeSettlement, withinTest } from "../../../../test/helpers/promise.js";
 import { extractText } from "../../../../ui/src/lib/chat/message-extract.ts";
 import {
   getEmbeddedRunAttachment,
@@ -26,6 +26,7 @@ import {
 } from "../../../config/sessions/session-accessor.js";
 import { readTranscriptEventRows } from "../../../config/sessions/session-accessor.sqlite-read.js";
 import { waitForSessionTranscriptIndexReconcile } from "../../../config/sessions/session-transcript-reconcile.js";
+import { onGatewayWorkMetricsChanged } from "../../../infra/gateway-work-metrics-events.js";
 import { getCurrentSessionControllerClaim } from "../../../sessions/session-controller.lifecycle.js";
 import {
   getRpcSourceForGateway,
@@ -393,14 +394,30 @@ describe("native Talk action ownership through public plugin registration", () =
     });
   });
 
-  it(
-    "releases the provider when registration readiness never publishes",
-    { timeout: 10_000 },
-    async () => {
-      const fixture = await prepareMissingRegistrationFixture();
-      try {
-        const { session, providerStream, answer, finish, publish, assertions, start } = fixture;
-        await expect(start()).rejects.toThrow(
+  describe("missing native registration", () => {
+    let fixture: Awaited<ReturnType<typeof prepareMissingRegistrationFixture>>;
+    let readiness: Promise<void>;
+    beforeEach(async () => {
+      fixture = await prepareMissingRegistrationFixture();
+      readiness = fixture.start();
+      // The negative check starts after the real backend tries to publish registration.
+      await awaitGateBeforeSettlement(
+        fixture.registrationAttempted,
+        readiness,
+        "Native backend settled before attempting to publish registration",
+      );
+    });
+    afterEach(async () => {
+      // Drain the provider and SQLite owners even if Vitest aborts the assertion.
+      await fixture?.close();
+    });
+
+    it(
+      "releases the provider when registration readiness never publishes",
+      { timeout: 10_000 },
+      async ({ signal }) => {
+        const { session, providerStream, answer, finish, publish, assertions } = fixture;
+        await expect(withinTest(readiness, signal)).rejects.toThrow(
           /registration readiness not observed within 1000 ms; last phase: \S/,
         );
         expect(assertions).not.toHaveBeenCalled();
@@ -411,11 +428,9 @@ describe("native Talk action ownership through public plugin registration", () =
         expect(Boolean(getActiveNativeAttempt(SESSION_ID))).toBe(false);
         const runId = upstream.runEmbeddedAgent.mock.calls[0]![0].runId;
         expect(ACTIVE_EMBEDDED_RUNS_BY_RUN_ID.has(runId)).toBe(false);
-      } finally {
-        await fixture.close();
-      }
-    },
-  );
+      },
+    );
+  });
 
   it.for([
     ["closed", "closed"],
@@ -756,13 +771,18 @@ describe("native Talk action ownership through public plugin registration", () =
 
 describe("native Talk scope handoff investigation", () => {
   installNativePluginTestHooks();
-  it("public GPT Live handoff does not duplicate its source when callback and captured Gateway scopes differ", async () => {
+  it("public GPT Live handoff does not duplicate its source when callback and captured Gateway scopes differ", async ({
+    signal,
+  }) => {
     const callbackScope = () => undefined;
+    const consult = createDeferredCore<{ completion: Promise<unknown> }>();
+    const backendEntered = createDeferredCore();
     const release = createDeferredCore();
     let claimedInput: unknown;
     upstream.runEmbeddedAgent.mockImplementationOnce(async (params) =>
       withRegisteredNativeEmbeddedRun(params, async () => {
         claimedInput = getCurrentSessionControllerClaim()?.inputs[0];
+        backendEntered.resolve();
         await release.promise;
         return nativeResult("The selected conversation was checked.");
       }),
@@ -770,7 +790,11 @@ describe("native Talk scope handoff investigation", () => {
     await withNativePlugin(
       async (fixture) => {
         const { socket, result } = await connectNativeSession(fixture);
-        let source: RpcSourceRef | undefined;
+        const observed: { source?: RpcSourceRef } = {};
+        const stopObservingSource = onGatewayWorkMetricsChanged(() => {
+          // Capture the original published source before handoff can replace it.
+          observed.source ??= fixture.rpcSourceTesting.values().next().value;
+        });
         try {
           await flushNativeTranscript(result, () =>
             socket.serverEvent({
@@ -779,25 +803,19 @@ describe("native Talk scope handoff investigation", () => {
             }),
           );
           socket.serverEvent(nativeDelegation("scope-handoff", "Check the selected conversation."));
-          await vi.waitFor(
-            () => {
-              source = [...fixture.rpcSourceTesting.values()][0];
-              expect(source).toBeDefined();
-            },
-            { timeout: 5_000 },
+          const { completion } = await withinTest(consult.promise, signal);
+          await withinTest(
+            awaitGateBeforeSettlement(
+              backendEntered.promise,
+              completion,
+              "Native consult settled before the registered source reached the backend",
+            ),
+            signal,
           );
+          const source = observed.source;
           if (!source?.input.protocolRunId) {
             throw new Error("Expected registered handoff source");
           }
-          await vi.waitFor(
-            () =>
-              expect(
-                source!.input.mailbox.entries.length > 1 ||
-                  upstream.runEmbeddedAgent.mock.calls.length > 0 ||
-                  source!.input.retirementRequested,
-              ).toBe(true),
-            { timeout: 5_000 },
-          );
           const mailbox = source.input.mailbox;
           expect(
             mailbox.entries.length,
@@ -809,9 +827,10 @@ describe("native Talk scope handoff investigation", () => {
           expect(upstream.runEmbeddedAgent).toHaveBeenCalledOnce();
           expect(claimedInput).toBe(source.input);
         } finally {
+          stopObservingSource();
           release.resolve();
-          if (source) {
-            requestRpcSourceCancellation(source, new Error("synthetic test cleanup"));
+          if (observed.source) {
+            requestRpcSourceCancellation(observed.source, new Error("synthetic test cleanup"));
           }
           await closeTalkClientGatewayControlSession({
             voiceSessionId: requireString(result, "voiceSessionId"),
@@ -820,7 +839,7 @@ describe("native Talk scope handoff investigation", () => {
           });
         }
       },
-      { consultScope: callbackScope },
+      { consultScope: callbackScope, onConsult: (completion) => consult.resolve({ completion }) },
     );
   });
 });

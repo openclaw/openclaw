@@ -7,17 +7,23 @@ import {
   noopLogger,
   setupCronRegressionFixtures,
 } from "../../../test/helpers/cron/service-regression-fixtures.js";
+import { AuthProfileAuthorizationError } from "../../agents/auth-profiles/authorization-contract.js";
 import { createUnrecordedScheduledAccountRefusal } from "../../agents/scheduled-unrecorded-account.js";
 import type { RestartRecoveryOperatorSource } from "../../gateway/operator-run-recovery-source.codec.js";
 import { openOpenClawStateDatabase } from "../../state/openclaw-state-db.js";
 import { resolveCronConfigurationRefusal } from "../configuration-refusal.js";
+import { CRON_INFERENCE_ACCOUNT_RETIRED_CODE } from "../inference-binding.js";
 import { resolveCronRunErrorReason } from "../run-error-reason.js";
 import * as schedule from "../schedule.js";
 import { cronScriptFailureMetadata } from "../script-failure.js";
 import { loadCronStore, saveCronStore } from "../store.js";
 import { cronStoreKey } from "../store/key.js";
 import type { CronStoredJob } from "../types.js";
-import { needsCronTimerMaintenance, resolveJobErrorBackoffUntilMs } from "./jobs-scheduling.js";
+import {
+  computeJobNextRunAtMs,
+  needsCronTimerMaintenance,
+  resolveJobErrorBackoffUntilMs,
+} from "./jobs-scheduling.js";
 import type { CronServiceDeps, DeferredCronNotifications } from "./state.js";
 import { runPostPersistCronNotifications } from "./store.js";
 import { applyJobResult } from "./timer-outcomes.js";
@@ -268,6 +274,90 @@ it("preserves every cadence after a transient recurring retry succeeds", () => {
   expect(job.state.lastStatus).toBe("ok");
   expect(job.state.nextRunAtMs).toBe(scheduledAt + everyTwelveHoursMs);
 });
+
+// Production: hourly and weekday jobs retried a provider limit with a 6-day reset every slot.
+it.each([
+  ["every", { kind: "every", everyMs: 60 * 60_000, anchorMs: startedAt }],
+  ["cron", { kind: "cron", expr: "0 6,10,14,18 * * 1-5", tz: "UTC" }],
+] as const)("runs a %s job on its first slot after the provider's reset", (_, jobSchedule) => {
+  const resetAt = startedAt + 6 * 24 * 60 * 60 * 1000 + 30 * 60_000;
+  const { job, apply, deferredNotifications } = outcomeFixture(startedAt, {
+    schedule: jobSchedule,
+    failureAlert: { after: 1, cooldownMs: 0 },
+  });
+  apply({
+    status: "error",
+    error: "429 rate limited",
+    provider: "openai",
+    rateLimitResetAt: resetAt,
+  });
+  expect(job.enabled).toBe(true);
+  expect(job.state.nextRunAtMs).toBe(computeJobNextRunAtMs(job, resetAt - 1));
+  // An on-slot time that schedule maintenance keeps, not an off-slot floor it would rewrite.
+  for (const nowMs of [startedAt + 10 * 60_000, startedAt + 2 * 60 * 60_000]) {
+    expect(needsCronTimerMaintenance(job, nowMs)).toBe(false);
+  }
+  // A days-long wait does not hold the failure alert for a quick retry.
+  expect(deferredNotifications.map((notice) => notice.kind)).toContain("failure-alert");
+});
+
+it("moves a quick retry to a reset just past its backoff instead of the next daily slot", () => {
+  const resetAt = startedAt + 45_000;
+  const { job, apply } = outcomeFixture(startedAt, {
+    schedule: { kind: "cron", expr: "0 6 * * *", tz: "UTC" },
+  });
+  apply({
+    status: "error",
+    error: "429 rate limited",
+    provider: "openai",
+    rateLimitResetAt: resetAt,
+  });
+  expect(job.state.nextRunAtMs).toBe(resetAt);
+});
+
+// Each execution adapter rebuilds the outcome, and schedule maintenance runs after it; the
+// reset must survive both into the store.
+it.each([
+  { path: "isolated", expr: "0 6,10,14,18 * * 1-5", resetMs: 6 * 24 * 60 * 60_000 + 30 * 60_000 },
+  { path: "session-target", expr: "0 6,10,14,18 * * 1-5", resetMs: 6 * 24 * 60 * 60_000 },
+  { path: "isolated", expr: "*/5 * * * *", resetMs: 20 * 60_000 + 30_000 },
+] as const)(
+  "persists a $path job ($expr) at its first slot after the provider's reset",
+  async ({ path, expr, resetMs }) => {
+    const store = timerRegressionFixtures.makeStorePath();
+    const now = Date.parse("2026-08-03T06:00:00.000Z");
+    const resetAt = now + resetMs;
+    const job: CronStoredJob = {
+      ...createIsolatedRegressionJob({
+        id: `rate-limited-${path}`,
+        name: "rate limited",
+        scheduledAt: now,
+        schedule: { kind: "cron", expr, tz: "UTC", staggerMs: 0 },
+        payload: { kind: "agentTurn", message: "report" },
+        state: { nextRunAtMs: now },
+      }),
+      ...(path === "session-target" ? { sessionTarget: "session:agent:main:target" as const } : {}),
+    };
+    await saveCronStore(store.storePath, { version: 1, jobs: [job] });
+    const run = vi.fn(async () => ({
+      status: "error" as const,
+      error: "429 rate limited",
+      provider: "openai",
+      rateLimitResetAt: resetAt,
+    }));
+    const state = createCronServiceState({
+      storePath: store.storePath,
+      nowMs: () => now,
+      // Each job kind calls only its own execution adapter.
+      runIsolatedAgentJob: run,
+      runSessionEvent: run,
+    });
+    await onTimer(state);
+    expect(run).toHaveBeenCalledOnce();
+    const [persisted] = (await loadCronStore(store.storePath)).jobs;
+    expect(persisted?.state.nextRunAtMs).toBe(computeJobNextRunAtMs(persisted!, resetAt - 1));
+  },
+);
 
 it.each(["timer maintenance", "startup catch-up"] as const)(
   "persists schedule auto-disable before notifying during %s",
@@ -655,4 +745,30 @@ it("leaves a newer operator edit alone when a pause result is stale", () => {
   apply(parentPause(), { scheduleOwnership: "stale" });
   expect(job.enabled).toBe(true);
   expect(deferredNotifications.filter((notice) => notice.kind === "auto-disabled")).toEqual([]);
+});
+
+it("keeps a job running when only the authorization owner changed, not the account", () => {
+  const { job, apply, deferredNotifications } = outcomeFixture(startedAt);
+  // A state database lifecycle change retires the capture, but the account is still there,
+  // so the producer's refusal carries no retired-account code.
+  const refusal = new Error("Automation outcome runs on account openai:work, which was removed", {
+    cause: new AuthProfileAuthorizationError("retired"),
+  });
+  apply({ status: "error", error: refusal.message, ...resolveCronConfigurationRefusal(refusal) });
+  expect(job.enabled).toBe(true);
+  expect(job.state.nextRunAtMs).toBeGreaterThan(startedAt);
+  expect(deferredNotifications.filter((notice) => notice.kind === "auto-disabled")).toEqual([]);
+});
+
+it("records why a due one-shot ended when its recorded account is gone", () => {
+  const { job, apply, deferredNotifications } = outcomeFixture(startedAt, {
+    schedule: { kind: "at", at: new Date(startedAt).toISOString() },
+  });
+  const refusal = Object.assign(new Error("Automation outcome runs on account openai:work"), {
+    code: CRON_INFERENCE_ACCOUNT_RETIRED_CODE,
+  });
+  apply({ status: "error", error: refusal.message, ...resolveCronConfigurationRefusal(refusal) });
+  expect(job.enabled).toBe(false);
+  expect(job.state.autoDisabled?.reason).toBe("account-unavailable");
+  expect(deferredNotifications.filter((notice) => notice.kind === "auto-disabled")).toHaveLength(1);
 });

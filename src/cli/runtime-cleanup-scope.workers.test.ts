@@ -2,11 +2,14 @@ import path from "node:path";
 import type { Worker } from "node:worker_threads";
 import { afterEach, expect, it } from "vitest";
 import { useAutoCleanupTempDirTracker } from "../../test/helpers/temp-dir.js";
+import { loadPersistedPluginModelCatalogs } from "../agents/plugin-model-catalog-execution.js";
 import {
   capturePreparedModelRuntimeLifetime,
   PreparedModelRuntimeClosedError,
 } from "../agents/prepared-model-runtime.lifecycle.js";
+import { installDatabaseProcessRole } from "../infra/database-engine/admission-scope.js";
 import { closeDefaultRetainedNativeWorkerSource } from "../infra/worker-native-lifecycle.js";
+import { createCurrentOpenClawAgentDatabaseFixtures } from "../state/openclaw-agent-db.test-support.js";
 import { executeExistingOpenClawStateRead } from "../state/openclaw-state-db-readonly.js";
 import {
   closeOpenClawStateDatabaseAsync,
@@ -30,6 +33,11 @@ it("joins shared-state workers after executable cleanup while preserving borrowe
   };
   await closeOpenClawStateDatabaseAsync();
   await closeDefaultRetainedNativeWorkerSource();
+  installDatabaseProcessRole("cli-oneshot");
+  const agentDir = path.join(root, "agents", "main", "agent");
+  createCurrentOpenClawAgentDatabaseFixtures(path.join(root, "template.sqlite"), [
+    { path: path.join(agentDir, "openclaw-agent.sqlite"), agentId: "main" },
+  ]);
   const database = openOpenClawStateDatabase(options);
   const stateKey = "cli.worker-exit.fixture";
   database.db
@@ -59,6 +67,9 @@ it("joins shared-state workers after executable cleanup while preserving borrowe
             ok: true,
             row: { value_json: '"retained for disposal"' },
           });
+          await expect(
+            loadPersistedPluginModelCatalogs(agentDir, undefined, options.env),
+          ).resolves.toEqual([]);
           expect(workers.some((worker) => worker.threadId !== -1)).toBe(true);
           cleanup?.pluginResources?.adopt({
             async release() {

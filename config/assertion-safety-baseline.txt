@@ -904,7 +904,7 @@ packages/ai/src/providers/openai-responses-shared.ts	4
 packages/ai/src/providers/openai-responses-tools.ts	2
 packages/ai/src/providers/openai-responses.ts	1
 packages/ai/src/providers/openai-tool-schema-compat.ts	2
-packages/ai/src/providers/openai-tool-schema.ts	2
+packages/ai/src/providers/openai-tool-schema.ts	1
 packages/ai/src/providers/schema-keyword-strip.ts	1
 packages/ai/src/providers/simple-options.ts	1
 packages/ai/src/providers/tool-result-text.ts	2
@@ -1125,7 +1125,7 @@ src/agents/embedded-agent-runner/thinking.ts	3
 src/agents/embedded-agent-runner/tool-call-argument-decoding.ts	3
 src/agents/embedded-agent-runner/tool-result-char-estimator.ts	7
 src/agents/embedded-agent-runner/tool-result-context-guard.ts	4
-src/agents/embedded-agent-runner/tool-result-truncation.ts	6
+src/agents/embedded-agent-runner/tool-result-truncation.ts	3
 src/agents/embedded-agent-runner/tool-schema-runtime.ts	1
 src/agents/embedded-agent-runner/transcript-rewrite.ts	1
 src/agents/embedded-agent-subscribe.handlers.messages.lifecycle.ts	1
@@ -1365,7 +1365,7 @@ src/channels/plugins/bundled-setup-policy.ts	2
 src/channels/plugins/bundled.ts	4
 src/channels/plugins/chat-target-prefixes.ts	2
 src/channels/plugins/config-helpers.ts	7
-src/channels/plugins/config-schema.ts	10
+src/channels/plugins/config-schema.ts	8
 src/channels/plugins/config-write-policy-shared.ts	1
 src/channels/plugins/contracts/outbound-payload-testkit.ts	4
 src/channels/plugins/contracts/trace/delivery-trace.ts	1

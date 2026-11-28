@@ -116,6 +116,14 @@ export const ModelCompatSchema = z
     maxTokensField: z
       .union([z.literal("max_completion_tokens"), z.literal("max_tokens")])
       .optional(),
+    /** Name of the sampling seed field: `seed`, or Mistral's `random_seed`. Default: `seed`. */
+    seedField: z.union([z.literal("seed"), z.literal("random_seed")]).optional(),
+    /** Whether streamed text may carry DeepSeek DSML tool-call markup. Default: true for the `deepseek` thinking format. */
+    emitsDsmlToolCalls: z.boolean().optional(),
+    /** Whether tool schemas must give every union branch an explicit `type`. Default: false. */
+    requiresTypedUnionBranches: z.boolean().optional(),
+    /** Whether every request must carry a non-empty user or assistant message. Default: false. */
+    requiresNonEmptyUserOrAssistantMessage: z.boolean().optional(),
     /** Reasoning/thinking payload dialect for provider-compatible APIs. */
     thinkingFormat: z.enum(MODEL_THINKING_FORMATS).optional(),
     /** Whether tool results require the `name` field. Default: auto-detected from URL. */
@@ -155,6 +163,10 @@ export const ModelCompatSchema = z
      * text content.
      */
     cacheControlFormat: z.literal("anthropic").optional(),
+    /** With `cacheControlFormat: "anthropic"`, mark only the system prompt. Default: false. */
+    cacheControlSystemOnly: z.boolean().optional(),
+    /** With `cacheControlFormat: "anthropic"`, put the system marker on one shared system block. Default: false. */
+    cacheControlSharedSystem: z.boolean().optional(),
     /**
      * Whether to send known session-affinity headers (`session_id`, `x-client-request-id`,
      * `x-session-affinity`) from `options.sessionId` when caching is enabled. Default: false.

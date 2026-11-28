@@ -98,7 +98,7 @@ function findLegacyAuditBackupStateChange(
 // The sealed inventory also bounds header answers to one backup capture.
 const sqliteHeaderAnswers = new WeakMap<BackupResourceInventory, Map<string, boolean>>();
 
-function stripSqliteSidecarSuffix(sourcePath: string): string {
+export function stripSqliteSidecarSuffix(sourcePath: string): string {
   const sidecarSuffix = SQLITE_SIDECAR_SUFFIXES.find((suffix) => sourcePath.endsWith(suffix));
   return sidecarSuffix ? sourcePath.slice(0, -sidecarSuffix.length) : sourcePath;
 }

@@ -15,18 +15,28 @@ import type { DraftPlaceState } from "./draft-place-state.ts";
 import type { DraftStartupResumption } from "./draft-session-startup.ts";
 import type { PendingSessionPlacementRecoveryState } from "./session-placement-recovery-state.ts";
 
-/** Transcript excerpts travel as quoted message text, like chat; only real files upload. */
+/**
+ * Transcript excerpts travel as quoted message text, like chat; only real files upload.
+ * The source session keys follow the quotes, so the new transcript links back to them.
+ */
 function quoteSelectionAttachments(
   submitted: { text: string; mentions?: readonly HumanMention[] },
   attachments: readonly ChatAttachment[],
 ) {
-  const quotes = attachments.flatMap((item) =>
-    item.selectionAnnotation ? [formatChatSelectionQuote(item.selectionAnnotation)] : [],
+  const annotations = attachments.flatMap((item) =>
+    item.selectionAnnotation ? [item.selectionAnnotation] : [],
   );
-  if (!quotes.length) {
+  if (!annotations.length) {
     return submitted;
   }
-  const text = [...quotes, submitted.text].filter(Boolean).join("\n\n");
+  const sources = [...new Set(annotations.map((annotation) => annotation.sessionKey))];
+  const text = [
+    ...annotations.map(formatChatSelectionQuote),
+    `From ${sources.join(", ")}`,
+    submitted.text,
+  ]
+    .filter(Boolean)
+    .join("\n\n");
   const offset = text.length - submitted.text.length;
   return {
     text,

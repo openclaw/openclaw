@@ -1,11 +1,11 @@
 /**
  * Provider-request schema admission probe (synthetic tools; no network or model calls).
  * node --expose-gc --import ./scripts/tsx.mjs scripts/perf/tool-schema-request-admission-measure.ts
- * --tools 40|80 --iterations 2000 --samples 3 --mode repeated|across-runs|published|publication [--strict]
+ * --tools 40|80 --iterations 2000 --samples 3 --mode repeated|across-runs|published|publication
  * Across-runs creates a fresh catalog every 20 requests, outside measurement.
  * Publication measures fresh owner publications and provider variants each turn, including
- * consuming the source canonical fingerprints for prompt diagnostics. Use --strict for
- * strict provider prewarming. --tools 80 models two tools from each of 40 synthetic plugins.
+ * consuming the source canonical fingerprints for prompt diagnostics.
+ * --tools 80 models two tools from each of 40 synthetic plugins.
  * CPU is untraced; allocation is sampled separately, including collected objects.
  * Compare baseline/candidate in counterbalanced order with the same arguments.
  */
@@ -30,7 +30,6 @@ const { values } = parseArgs({
     iterations: { type: "string", default: "2000" },
     samples: { type: "string", default: "3" },
     mode: { type: "string", default: "repeated" },
-    strict: { type: "boolean", default: false },
   },
 });
 const integer = (raw: string, label: string) =>
@@ -58,9 +57,9 @@ function catalog(): Tool[] {
                 type: "object",
                 properties: {
                   field: { type: "string", enum: ["title", "body", "tag"] },
-                  match: values.strict
-                    ? { type: "string", enum: ["exact", "prefix"] }
-                    : { anyOf: [{ type: "string", enum: ["exact", "prefix"] }, { type: "null" }] },
+                  match: {
+                    anyOf: [{ type: "string", enum: ["exact", "prefix"] }, { type: "null" }],
+                  },
                 },
                 required: ["field", "match"],
                 additionalProperties: false,
@@ -94,7 +93,7 @@ function fixtures() {
       tool.parameters = projection.schema;
     }
   }
-  convertResponsesToolPayload(catalogs[0]!, { strict: values.strict });
+  convertResponsesToolPayload(catalogs[0]!, { strict: false });
   return catalogs;
 }
 
@@ -103,7 +102,7 @@ function run(catalogs: Tool[][]) {
   for (let index = 0; index < iterations; index++) {
     const sources = catalogs[values.mode === "across-runs" ? Math.floor(index / 20) : 0]!;
     const tools = values.mode === "publication" ? publishCatalog(sources) : sources;
-    emitted += convertResponsesToolPayload(tools, { strict: values.strict }).length;
+    emitted += convertResponsesToolPayload(tools, { strict: false }).length;
   }
   assert.equal(emitted, toolCount * iterations);
 }
@@ -143,8 +142,8 @@ function bytes(node: HeapProfiler.SamplingHeapProfileNode): number {
 }
 
 const goldenCatalog = catalog();
-const goldenPayload = convertResponsesToolPayload(goldenCatalog, { strict: values.strict });
-assert.ok(goldenPayload.every((tool) => tool.strict === values.strict));
+const goldenPayload = convertResponsesToolPayload(goldenCatalog, { strict: false });
+assert.ok(goldenPayload.every((tool) => tool.strict === false));
 const golden = JSON.stringify(goldenPayload);
 // Key sorting preserves the byte length of these JSON-only fixtures. Both publications
 // (source and provider variant) have the same length, so coverage supplies exact byte work.
@@ -161,7 +160,7 @@ for (const tools of parityInputs) {
   assert.equal(
     JSON.stringify(
       convertResponsesToolPayload(values.mode === "publication" ? publishCatalog(tools) : tools, {
-        strict: values.strict,
+        strict: false,
       }),
     ),
     golden,
@@ -169,10 +168,7 @@ for (const tools of parityInputs) {
 }
 run(parityInputs);
 for (const tools of parityInputs) {
-  assert.equal(
-    JSON.stringify(convertResponsesToolPayload(tools, { strict: values.strict })),
-    golden,
-  );
+  assert.equal(JSON.stringify(convertResponsesToolPayload(tools, { strict: false })), golden);
 }
 const rows = [];
 const inspector = new Session();
@@ -224,7 +220,6 @@ console.log(
     iterations,
     samples,
     mode: values.mode,
-    strict: values.strict,
     payloadBytes: Buffer.byteLength(golden),
     payloadSha256: createHash("sha256").update(golden).digest("hex"),
     schemaHash,

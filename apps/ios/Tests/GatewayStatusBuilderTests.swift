@@ -180,9 +180,4 @@ import Testing
             capturedOwnerID: "gateway-a",
             currentOwnerID: "gateway-b") == .connected)
     }
-
-    @Test func `chat starter prompts stay stable and actionable`() {
-        #expect(ChatProTab.emptyAssistantPrompts.map(\.id) == ["summarize-status", "show-controls", "start-voice"])
-        #expect(ChatProTab.emptyAssistantPrompts.allSatisfy { !$0.title.isEmpty && !$0.prompt.isEmpty })
-    }
 }

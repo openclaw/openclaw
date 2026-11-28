@@ -666,8 +666,44 @@ function DreamingReview(props: DreamingProps) {
           owner={props}
           panel="wiki"
           title={t("dreaming.wiki.wikiTab")}
-          description={t("dreaming.wiki.wikiExplainer")}
+          description={t(
+            props.onOpenKnowledge
+              ? "dreaming.wiki.knowledgeExplainer"
+              : "dreaming.wiki.wikiExplainer",
+          )}
         >
+          <Show when={props.onOpenKnowledge}>
+            {(open) => (
+              <form
+                class="row wrap items-center gap-2"
+                role="search"
+                aria-label={t("dreaming.wiki.searchKnowledge")}
+                onSubmit={(event) => {
+                  event.preventDefault();
+                  const query = new FormData(event.currentTarget).get("query");
+                  if (typeof query === "string" && query.trim()) {
+                    open()(query.trim());
+                  }
+                }}
+              >
+                <input
+                  class="settings-input"
+                  type="search"
+                  name="query"
+                  required
+                  maxlength={200}
+                  aria-label={t("dreaming.wiki.searchKnowledge")}
+                  placeholder={t("dreaming.wiki.searchKnowledge")}
+                />
+                <button class="btn btn--sm" type="submit">
+                  {t("common.search")}
+                </button>
+                <button class="btn btn--subtle btn--sm" type="button" onClick={() => open()()}>
+                  {t("dreaming.wiki.browseKnowledge")}
+                </button>
+              </form>
+            )}
+          </Show>
           <DreamingRead
             on={[props.selectedAgentId, props.wikiOverview === null && props.wikiOverviewLoading]}
             errorClass="dreams-diary__error"
