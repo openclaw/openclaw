@@ -14,6 +14,7 @@ scenario:
     - Gateway startup does not eagerly start browser control; the first authenticated browser CLI request starts it exactly once through browser.request.
     - The CLI creates, lists, and selects a managed profile, then reports its stopped status.
     - Starting the selected profile headless launches Chromium and exposes a working CDP /json/version endpoint.
+    - Two tabs with identical form controls submit only their intended values, even after targeting the background tab and closing it before using the other tab.
     - Stopping the profile closes CDP and reaps the Chromium child before the profile is deleted.
     - The profile is absent after deletion, and the Gateway and container stop cleanly.
   docsRefs:
@@ -26,6 +27,7 @@ scenario:
     - extensions/browser/src/control-service.ts
     - extensions/browser/src/browser/profiles-service.ts
     - scripts/e2e/browser-plugin-profiles-docker.sh
+    - scripts/e2e/lib/browser-plugin-profiles/assert-tab-isolation.mjs
     - test/e2e/qa-lab/runtime/browser-plugin-profiles-packaged.ts
   execution:
     kind: script
