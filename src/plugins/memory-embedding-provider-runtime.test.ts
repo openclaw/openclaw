@@ -124,7 +124,6 @@ it("returns generic provider, runtime, and identity objects unchanged", async ()
 it("preserves private memory metadata through generic registration", () => {
   const memoryAdapter = {
     id: "migrated-memory",
-    supportsMultimodalEmbeddings: ({ model }: { model: string }) => model === "multimodal",
     shouldContinueAutoSelection: () => true,
     create: async () => ({ provider: null }),
   } satisfies MemoryEmbeddingProviderAdapter;
@@ -132,6 +131,5 @@ it("preserves private memory metadata through generic registration", () => {
 
   const adapter = getProvider("migrated-memory");
   expect(adapter).toBe(memoryAdapter);
-  expect(adapter?.supportsMultimodalEmbeddings?.({ model: "multimodal" })).toBe(true);
   expect(adapter?.shouldContinueAutoSelection?.(new Error("setup"))).toBe(true);
 });

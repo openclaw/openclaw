@@ -20,10 +20,7 @@ import {
   buildAgentInternalEventContext,
   resolveInternalEventPromptBody,
 } from "../../internal-events.js";
-import {
-  projectRuntimeContextFragments,
-  type RuntimeContextFragment,
-} from "../../internal-runtime-context.js";
+import type { RuntimeContextFragment } from "../../internal-runtime-context.js";
 import { buildRuntimeFactsContext } from "../../runtime-facts-prompt.js";
 import type { AgentMessage } from "../../runtime/index.js";
 import type { AgentSession, SessionManager } from "../../sessions/index.js";
@@ -544,12 +541,11 @@ export async function prepareEmbeddedAttemptPromptContext(input: {
   const runtimeContextMessageForCurrentTurn =
     isDispatchedCanonicalFallback && runtimeContextForHook
       ? buildSystemUpdateMessage(
-          escapedProjection || input.inHistorySystemUpdates
-            ? projectRuntimeContextFragments(contextFragments)
-            : runtimeContextForHook,
+          runtimeContextForHook,
           "runtime-context",
           true,
           "append",
+          escapedProjection || input.inHistorySystemUpdates ? contextFragments : undefined,
         )
       : buildRuntimeContextCustomMessage(
           runtimeContextForHook,

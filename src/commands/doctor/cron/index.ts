@@ -44,7 +44,7 @@ function inspectCronJobHealth(jobs: Array<Record<string, unknown>>) {
   const autoDisabledJobs: Array<{
     id: string;
     name: string;
-    reason: "consecutive-failures" | "schedule-errors";
+    reason: "consecutive-failures" | "schedule-errors" | "account-unavailable";
     consecutiveErrors: number;
   }> = [];
   for (const job of jobs) {
@@ -72,7 +72,8 @@ function inspectCronJobHealth(jobs: Array<Record<string, unknown>>) {
     if (
       !isRecord(autoDisabled) ||
       (autoDisabled.reason !== "consecutive-failures" &&
-        autoDisabled.reason !== "schedule-errors") ||
+        autoDisabled.reason !== "schedule-errors" &&
+        autoDisabled.reason !== "account-unavailable") ||
       typeof autoDisabled.consecutiveErrors !== "number"
     ) {
       continue;

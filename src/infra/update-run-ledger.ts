@@ -13,16 +13,13 @@ import { isPostgresSqlConnection, type EngineConnection } from "./sql-connection
 import { isSqliteLockError } from "./sqlite-error-diagnostics.js";
 import { assertSqliteSchemaContains } from "./sqlite-schema-contract.js";
 import { extractSqliteTableSchema } from "./sqlite-schema-sql.js";
+import { inspectUpdateRepairDriverAdmission } from "./update-repair-driver-admission.js";
 import {
   admitUpdateResultInTransaction,
   claimUpdateResultInTransaction,
 } from "./update-result-claim.js";
 import type { UpdateResultPayload } from "./update-result-payload.js";
-import {
-  inspectUpdateRepairDriverAdmission,
-  isStaleIdentitylessUpdateRun,
-  recordedUpdateRunDrivers,
-} from "./update-run-activity.js";
+import { isStaleIdentitylessUpdateRun, recordedUpdateRunDrivers } from "./update-run-activity.js";
 import { runUpdateRunAdmission } from "./update-run-admission.js";
 import { encodeRun, type UpdateRunLedgerOptions as LedgerOptions } from "./update-run-codec.js";
 import {

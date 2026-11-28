@@ -345,10 +345,14 @@ all unsuppressed over-cap files.
 `pnpm check:baseline-ratchets --base <commit> --no-merge-base` runs the CI
 ratchets in two managed child slots, retaining all results after ordinary
 failures. `RATCHET_PR_HEAD_SHA` adds the existing PR-only line-cap comparison.
-The database-worker inventory starts first and shares the runner with at most
-one smaller check; it never runs two semantic inventories concurrently. When
-the complete current and historical source snapshots have identical paths and
-contents, its fresh current analysis also supplies the comparison counts.
+One slot runs the database-worker inventory, the database-dialect ratchet and
+the Plugin SDK surface budget in sequence, so their large TypeScript snapshots
+never overlap. The other slot runs smaller checks, including the Plugin SDK
+export check; both slots drain that queue once the large checks finish. Every PR
+runs both SDK checks: the SDK import closure reaches far outside
+`src/plugin-sdk`, so no changed-path rule can tell which changes move it.
+When current and historical source snapshots have identical paths and contents,
+the worker inventory reuses its fresh current analysis for comparison counts.
 Changed snapshots retain both full analyses and historical-cache validation.
 Frozen targets without the aggregate command retain their original commands.
 
@@ -358,6 +362,12 @@ do not compare identities and are excluded; adjacent comparisons between IDs
 and explicit pin names still count. Its per-file allowlist may only shrink.
 After removing counted sites, run the checker with `--prune` and verify again
 without pruning.
+
+`pnpm check:provider-branching-ratchet` rejects growth in request and history
+branches keyed on a provider id, model id, API name or URL in `src/agents`,
+`packages/ai`, `packages/llm-core` and the provider replay helpers. Declare the
+behavior as model compat in the owning plugin instead. Its per-file allowlist
+may only shrink; after removing branches, run the checker with `--prune`.
 
 <a id="test-line-budget" />
 

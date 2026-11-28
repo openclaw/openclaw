@@ -380,7 +380,7 @@ const CronDeliveryTraceSchema = closedObject({
 });
 
 const CronAutoDisabledSchema = closedObject({
-  reason: stringLiteralUnion(["consecutive-failures", "schedule-errors"]),
+  reason: stringLiteralUnion(["consecutive-failures", "schedule-errors", "account-unavailable"]),
   atMs: CronDateTimestampMsSchema,
   consecutiveErrors: Type.Integer({ minimum: 1 }),
 });

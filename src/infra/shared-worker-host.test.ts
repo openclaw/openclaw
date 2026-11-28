@@ -18,7 +18,10 @@ import {
   getWorkerMemoryBudgetSnapshot,
   initializeWorkerMemoryBudget,
 } from "./worker-memory-budget.js";
-import { closeDefaultRetainedNativeWorkerSource } from "./worker-native-lifecycle.js";
+import {
+  captureRetainedNativeWorkerSource,
+  closeDefaultRetainedNativeWorkerSource,
+} from "./worker-native-lifecycle.js";
 import { createWorkerTaskHost } from "./worker-task-host.js";
 import { createOwnedWorkerTaskPool } from "./worker-task-pool.js";
 
@@ -105,6 +108,33 @@ it("detaches an idle endpoint logically and releases the host after the last one
   // The last endpoint's retirement joins the physical host, so the native source can close.
   expect(claimsSharedHostSlot(sqliteStore, "sqlite-store:agent")).toBe(true);
   await closeDefaultRetainedNativeWorkerSource();
+  expect(
+    getTrackedWorkerPoolSnapshot().workerCensus.some(
+      (row) => row.kind === "shared-worker-host.worker.js",
+    ),
+  ).toBe(false);
+});
+
+it("joins the host at terminal native close when an endpoint's owner never stops it", async () => {
+  initializeGatewayResourceProfile({ profile: "lean" });
+  // Stands in for an endpoint of a plain task pool (the plugin catalog reader), whose owner
+  // has no native close and is still live when terminal cleanup closes the native source.
+  const reader = carrier("sqlite-store:agent");
+  await reader.started;
+
+  const source = captureRetainedNativeWorkerSource({ runtimeGeneration: undefined });
+  const owner = {};
+  source.retain(owner, async () => {
+    throw new Error("reader cleanup refused");
+  });
+  await expect(closeDefaultRetainedNativeWorkerSource()).rejects.toThrow(
+    "Native worker execution owner cleanup failed",
+  );
+  expect(reader.endpoint.executionStopped).toBe(false);
+
+  source.retain(owner, async () => {});
+  await closeDefaultRetainedNativeWorkerSource();
+  expect(await reader.exited).toEqual({ code: 0, error: undefined });
   expect(
     getTrackedWorkerPoolSnapshot().workerCensus.some(
       (row) => row.kind === "shared-worker-host.worker.js",

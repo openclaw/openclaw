@@ -62,3 +62,13 @@ it("accepts only valid no-display metadata from route payloads", () => {
     }),
   ).toEqual({ error: "display required" });
 });
+
+it("maps a Playwright crash headline even when its call log follows", () => {
+  const error = new Error(
+    "page.screenshot: Target crashed \nCall log:\n  - taking page screenshot",
+  );
+  expect(toBrowserErrorResponse(error)).toMatchObject({
+    status: 409,
+    message: expect.stringMatching(/tab crashed.*new tab/i),
+  });
+});

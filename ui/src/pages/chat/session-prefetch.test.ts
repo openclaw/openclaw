@@ -379,110 +379,41 @@ describe("session navigation intent prefetch", () => {
     expect(store.readSavedAt(cacheKey("agent:main:background-0"))).not.toBeNull();
   });
 
-  it("coalesces a newer list revision until the per-session cooldown expires", async () => {
-    const request = historyRequest();
-    const client = createTestGatewayClient(request);
-    const base = {
-      client,
-      openSessionKeys: ["agent:main:foreground"],
-    };
-    updatePrefetch({ ...base, listRevision: 1, rows: [row("agent:main:warm", NOW - 1)] });
-    fixture.intend("agent:main:warm");
-    await advancePrefetch(2_000);
-    expect(request).toHaveBeenCalledTimes(1);
-
-    const newerActivityAt = Date.now() + 1;
-    updatePrefetch({
-      ...base,
-      listRevision: 2,
-      rows: [row("agent:main:warm", newerActivityAt)],
-    });
-    updatePrefetch({
-      ...base,
-      listRevision: 3,
-      rows: [row("agent:main:warm", newerActivityAt + 1)],
-    });
-    await advancePrefetch(2_000);
-    expect(request).toHaveBeenCalledTimes(1);
-
-    await advancePrefetch(27_000);
-    expect(request).toHaveBeenCalledTimes(1);
-    await advancePrefetch(2_000);
-    expect(request).toHaveBeenCalledTimes(2);
-  });
-
-  it("brings new intent ahead of another session's cooldown without bypassing it", async () => {
-    const warm = "agent:main:warm";
-    const intended = "agent:main:intended";
-    let firstRequestAt = 0;
-    const request = vi.fn(async (_method: string, params: unknown) => {
-      firstRequestAt ||= Date.now();
-      return historyResult((params as { sessionKey: string }).sessionKey);
-    });
-    const state = prefetchState(request, [row(warm, NOW - 1), row(intended, NOW - 2)]);
-    updatePrefetch(state);
-    fixture.intend(warm);
-    await advancePrefetch(300);
-    expect(request.mock.calls.map(sessionKeyFromCall)).toEqual([warm]);
-    await advancePrefetch(4_700);
-
-    const changed = {
-      ...state,
-      listRevision: 2,
-      rows: [row(warm, Date.now()), row(intended, NOW - 2)],
-    };
-    updatePrefetch(changed);
-    await advancePrefetch(1_000);
-    expect(request).toHaveBeenCalledOnce();
-
-    fixture.intend(intended);
-    await advancePrefetch(74);
-    expect(request).toHaveBeenCalledOnce();
-    await advancePrefetch(1);
-    expect(request.mock.calls.map(sessionKeyFromCall)).toEqual([warm, intended]);
-
-    await advancePrefetch(20_000);
-    fixture.intend(warm);
-    await advancePrefetch(75);
-    expect(request).toHaveBeenCalledTimes(2);
-    await advancePrefetch(firstRequestAt + 30_000 - Date.now() - 1);
-    expect(request).toHaveBeenCalledTimes(2);
-    await advancePrefetch(1);
-    expect(request.mock.calls.map(sessionKeyFromCall)).toEqual([warm, intended, warm]);
-  });
-
-  it("keeps the first intent deadline across later list revisions", async () => {
-    const request = historyRequest();
-    const state = prefetchState(request, [row("agent:main:recent", NOW - 1)]);
-    updatePrefetch(state);
-    fixture.intend("agent:main:recent");
-    await advancePrefetch(30);
-    updatePrefetch({ ...state, listRevision: 2 });
-    await advancePrefetch(44);
-    expect(request).not.toHaveBeenCalled();
-    await advancePrefetch(1);
-    expect(request.mock.calls.map(sessionKeyFromCall)).toEqual(["agent:main:recent"]);
-  });
-
   it("coalesces pointer sweeps into the latest intent", async () => {
     const request = historyRequest();
-    updatePrefetch(
-      prefetchState(request, [row("agent:main:swept", NOW), row("agent:main:intended", NOW - 1)], {
-        hiddenConversationSessionKeys: ["agent:main:foreground"],
-      }),
+    const state = prefetchState(
+      request,
+      [row("agent:main:swept", NOW), row("agent:main:intended", NOW - 1)],
+      { hiddenConversationSessionKeys: ["agent:main:foreground"] },
     );
+    updatePrefetch(state);
     await advancePrefetch(300);
     const target = document.createElement("a");
     fixture.shell.append(target);
     target.dataset.sessionKey = "agent:main:swept";
     target.dispatchEvent(new Event("pointerover", { bubbles: true }));
     await advancePrefetch(30);
+    updatePrefetch({ ...state, listRevision: 2 });
     target.dataset.sessionKey = "agent:main:intended";
     target.dispatchEvent(new Event("pointerover", { bubbles: true }));
     await advancePrefetch(44);
     expect(request).not.toHaveBeenCalled();
     await advancePrefetch(1);
     expect(request.mock.calls.map(sessionKeyFromCall)).toEqual(["agent:main:intended"]);
+    const newer = {
+      ...state,
+      listRevision: 3,
+      rows: [row("agent:main:swept", NOW), row("agent:main:intended", Date.now() + 1)],
+    };
+    updatePrefetch(newer);
+    updatePrefetch({ ...newer, listRevision: 4 });
+    await advancePrefetch(29_999);
+    expect(request).toHaveBeenCalledOnce();
+    await advancePrefetch(1);
+    expect(request.mock.calls.map(sessionKeyFromCall)).toEqual([
+      "agent:main:intended",
+      "agent:main:intended",
+    ]);
   });
 
   it("rewarms complete stored history after an interleaved append miss", async () => {

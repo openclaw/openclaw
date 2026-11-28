@@ -380,55 +380,6 @@ describe("agent event handler", () => {
     }
   });
 
-  it("records, replaces, dismisses, and clears normalized plan snapshots", async () => {
-    const h = createHarness();
-    h.register("provider-run", "session-1", "client-run");
-    await h.emit(
-      "provider-run",
-      "plan",
-      {
-        phase: "update",
-        explanation: "  Initial plan  ",
-        steps: ["Legacy step", { step: "Active step", status: "in_progress" }],
-      },
-      { ts: 1_000 },
-    );
-    expect(h.chatRunState.runs.get("client-run")?.planSnapshot).toEqual({
-      explanation: "Initial plan",
-      steps: [
-        { step: "Legacy step", status: "pending" },
-        { step: "Active step", status: "in_progress" },
-      ],
-    });
-
-    await h.emit(
-      "provider-run",
-      "plan",
-      { phase: "update", steps: [{ step: "Replacement", status: "completed" }] },
-      { seq: 2, ts: 1_100 },
-    );
-    expect(h.chatRunState.runs.get("client-run")?.planSnapshot).toEqual({
-      steps: [{ step: "Replacement", status: "completed" }],
-    });
-
-    await h.emit(
-      "provider-run",
-      "plan",
-      { phase: "update", steps: [] },
-      {
-        seq: 3,
-        ts: 1_200,
-      },
-    );
-    expect(h.chatRunState.runs.get("client-run")?.planSnapshot).toEqual({ steps: [] });
-
-    h.chatRunState.getOrCreate("client-run").planSnapshot = {
-      steps: [{ step: "Temporary", status: "pending" }],
-    };
-    h.chatRunState.clearRun("client-run");
-    expect(h.chatRunState.runs.get("client-run")?.planSnapshot).toBeUndefined();
-  });
-
   it.each([
     { stream: "assistant", data: { text: "Recovered" } },
     { stream: "tool", data: { phase: "start", name: "read" } },

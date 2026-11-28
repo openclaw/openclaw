@@ -194,7 +194,8 @@ it.each(["/dashboard/main", "/dashboard/main/abcdef12"])(
   },
 );
 
-it("starts literal dashboard history on the early transport after hello", async () => {
+it.each([false, true])("opens early dashboard history (compact %s)", async (compact) => {
+  saveSettings({ ...loadSettings(), compactSessionOpening: compact });
   window.history.replaceState({}, "", "/dashboard/main/dashboard/proof");
   early = startEarlyApplicationGateway(prepareApplicationStartup());
   expect(early).toBeDefined();
@@ -218,7 +219,12 @@ it("starts literal dashboard history on the early transport after hello", async 
       method: "sessions.messages.subscribe",
       params: expect.objectContaining({
         key: "agent:main:dashboard:proof",
-        initialHistory: { limit: 80, knownState: {}, maxBytes: 262144, toolResultMaxChars: 2000 },
+        initialHistory: {
+          limit: compact ? 24 : 80,
+          knownState: {},
+          maxBytes: 262144,
+          toolResultMaxChars: 2000,
+        },
       }),
     }),
   );

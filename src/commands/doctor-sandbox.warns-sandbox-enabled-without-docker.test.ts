@@ -34,7 +34,10 @@ vi.mock("../agents/sandbox/docker.js", () => ({
 vi.mock("../../packages/terminal-core/src/note.js", () => ({ note }));
 
 // mock-isolation: Image health fixtures exclude agent-directory registration and filesystem observers.
-vi.mock("../agents/agent-scope-config.js", () => ({ listAgentEntriesWithSource: () => [] }));
+vi.mock("../agents/agent-scope-config.js", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("../agents/agent-scope-config.js")>()),
+  listAgentEntriesWithSource: () => [],
+}));
 
 const {
   checkSandboxImageRepairPending,
@@ -91,6 +94,74 @@ describe("sandbox health", () => {
       }
     },
   );
+
+  it("follows an agent's own sandbox mode when the defaults leave it off (#201988)", async () => {
+    const cfg: OpenClawConfig = {
+      agents: { entries: { work: { sandbox: { mode: "all" } } } },
+    };
+    runExec.mockRejectedValue(new Error("Docker not installed"));
+    await maybeRepairSandboxImages(cfg, mockRuntime, mockPrompter);
+    expectNote('mode: "all" for agent "work") but Docker is not available');
+    expectNote('set sandbox.mode to off for agent "work"');
+
+    vi.clearAllMocks();
+    runExec.mockImplementation(async (_command: string, args: string[]) => {
+      if (args[0] === "image") {
+        throw Object.assign(new Error("missing image"), { stderr: "No such image" });
+      }
+      return { stdout: "", stderr: "" };
+    });
+    await expect(checkSandboxImageRepairPending(cfg)).resolves.toBe("work");
+  });
+
+  it("names an agent's enabled mode before a role requirement and checks each image once", async () => {
+    const roleRequired = {
+      roles: {
+        definitions: {
+          guest: { sessions: { others: "view" }, agents: "*", scopes: [], sandbox: "required" },
+        },
+      },
+    } as NonNullable<OpenClawConfig["gateway"]>;
+    const cfg: OpenClawConfig = {
+      gateway: roleRequired,
+      agents: {
+        defaults: { sandbox: { mode: "all" } },
+        entries: { web: { sandbox: { mode: "all", browser: { enabled: true } } } },
+      },
+    };
+    runExec.mockImplementation(async (_command: string, args: string[]) => {
+      if (args[0] === "image") {
+        throw Object.assign(new Error("missing image"), { stderr: "No such image" });
+      }
+      return { stdout: "", stderr: "" };
+    });
+    await maybeRepairSandboxImages(cfg, mockRuntime, mockPrompter);
+    const prompts = vi
+      .mocked(mockPrompter.confirmRuntimeRepair)
+      .mock.calls.map(([prompt]) => (prompt as { message: string }).message);
+    expect(prompts).toEqual(["Build base sandbox image now?", "Build browser sandbox image now?"]);
+
+    vi.clearAllMocks();
+    runExec.mockRejectedValue(new Error("Docker not installed"));
+    await maybeRepairSandboxImages(
+      {
+        gateway: roleRequired,
+        agents: { entries: { work: { sandbox: { mode: "all" } } } },
+      },
+      mockRuntime,
+      mockPrompter,
+    );
+    expectNote('mode: "all" for agent "work") but Docker is not available');
+  });
+
+  it("reports sandbox settings the runtime rejects instead of failing Doctor", async () => {
+    const cfg = {
+      agents: { defaults: { sandbox: { ssh: { workspaceRoot: "relative/root" } } } },
+    } as OpenClawConfig;
+    await expect(maybeRepairSandboxImages(cfg, mockRuntime, mockPrompter)).resolves.toEqual([
+      expect.stringContaining("Doctor could not resolve these sandbox settings"),
+    ]);
+  });
 
   it("checks and offers to build the image when only a gateway role requires a sandbox", async () => {
     const cfg: OpenClawConfig = {

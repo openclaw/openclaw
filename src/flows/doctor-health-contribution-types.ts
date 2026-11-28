@@ -90,6 +90,8 @@ export type DoctorHealthFlowContext = {
   env?: NodeJS.ProcessEnv;
   /** State migration owns service activation until final readiness passes. */
   gatewayMaintenanceActive?: boolean;
+  /** Set under Doctor's own stop: after-restart contributions the pass reached, in order. */
+  afterRestartContributions?: DoctorHealthContribution[];
   agentDatabaseRefusals?: readonly AgentDatabaseAdmissionRefusal[];
   preparedAgentCount?: number;
   updateBudget?: DoctorUpdateBudget;
@@ -127,6 +129,12 @@ export type DoctorHealthContribution = {
   healthCheckIds: readonly string[];
   /** Read-only work check traced under Gateway maintenance; without one the contribution has work. */
   pending?: DoctorContributionPending;
+  /**
+   * "after-restart": when Doctor's own `--fix` stop restores the Gateway, this runs after the
+   * restart beside the serving Gateway, reporting the repaired state. Only a "diagnostic-only"
+   * contribution whose results no later repair reads may declare it.
+   */
+  placement?: "after-restart";
   run: (ctx: DoctorHealthFlowContext) => Promise<void>;
 };
 

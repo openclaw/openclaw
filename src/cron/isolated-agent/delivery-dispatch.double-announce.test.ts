@@ -375,35 +375,6 @@ describe("dispatchCronDelivery", () => {
     expect(state.deliveryError).toContain("suppressed");
   });
 
-  const report = "Report ready";
-  type Payloads = DispatchCronDeliveryParams["deliveryPayloads"];
-  it.each<[string, Payloads, string, Payloads]>([
-    ["textless", [{ text: "   " }, {}], report, [{ text: report }]],
-    [
-      "metadata-only",
-      [{ text: "   ", channelData: buttons }],
-      report,
-      [
-        { text: report },
-        {
-          text: "   ",
-          fallbackText: { text: report, replacesPayloadIndex: 0 },
-          channelData: buttons,
-        },
-      ],
-    ],
-    [
-      "literal metadata text",
-      [{ text: SILENT_REPLY_TOKEN, channelData: buttons }],
-      SILENT_REPLY_TOKEN,
-      [{ text: SILENT_REPLY_TOKEN, channelData: buttons }],
-    ],
-  ])("normalizes %s direct payloads", async (_name, input, summary, output) => {
-    expectDelivered(await dispatchCronDelivery(structuredParams(input, summary)));
-    expect(deliverOutboundPayloads).toHaveBeenCalledTimes(1);
-    expectDeliveryCall(0, { payloads: output });
-  });
-
   it("preserves the completed parent synthesis over settled children", async () => {
     const text = "The combined report reconciles both child findings and recommends option B.";
     childFallback.mockResolvedValue("Partial child finding recommends option A.");

@@ -25,6 +25,7 @@ import {
   readLocalWorkspaceSweepCandidates,
   readLocalWorkspaceTree,
 } from "./local-workspace-cas.kernel.js";
+import * as inventory from "./local-workspace-inventory.js";
 import {
   executeLocalWorkspaceManifestRead,
   readLocalWorkspaceManifestRows,
@@ -45,6 +46,79 @@ afterEach(() => {
   syncBuiltinESMExports();
 });
 const hash = (value: string) => createHash("sha256").update(value).digest("hex");
+
+it("scans selected paths to the same result in any order", async () => {
+  using db = new DatabaseSync(":memory:");
+  const root = await fs.realpath(dirs.make("workspace-scan-order-"));
+  const directories = ["a", "a/b", "a/b/c", "d", "e"];
+  const files = [...directories, ""].flatMap((directory) =>
+    ["x", "y", "z"].map((name) => (directory ? `${directory}/${name}.txt` : `${name}.txt`)),
+  );
+  const nodes = [
+    ...directories.map((entryPath) => ({ path: entryPath, type: "directory" as const })),
+    ...files.map((entryPath) => ({
+      path: entryPath,
+      type: "file" as const,
+      mode: 0o644,
+      size: 3,
+      sha256: hash("old"),
+    })),
+  ];
+  for (const directory of directories) {
+    await fs.mkdir(path.join(root, directory), { recursive: true });
+  }
+  await Promise.all(files.map((file) => fs.writeFile(path.join(root, file), "old")));
+  await requireGit(root, ["init", "--quiet"]);
+  await requireGit(root, ["add", "."]);
+  const baseline = createLocalWorkspaceManifestTree(nodes);
+  const row = {
+    ...localWorkspaceProjectionFixture("scan-order", root),
+    tree_root_digest: localWorkspaceDigestBytes(baseline.get("")!.treeRef),
+    baseline_ref: localWorkspaceManifestRootReference(baseline, "a".repeat(40)),
+  };
+  mutateLocalWorkspaceProjection(db, row.worktree_id, { kind: "create", row });
+  for (const batch of prepareLocalWorkspaceTreePacks(baseline)) {
+    prepareLocalWorkspaceContentInDatabase(
+      db,
+      deserialize(inflateRawSync(batch)) as LocalWorkspacePreparation,
+    );
+  }
+  for (const file of ["a/b/c/x.txt", "a/y.txt", "d/z.txt", "x.txt"]) {
+    await fs.writeFile(path.join(root, file), "new");
+  }
+  await fs.rm(path.join(root, "e/y.txt"));
+  const select = inventory.selectLocalWorkspaceCanonicalPaths;
+  let order: (paths: string[]) => string[] = (paths) => paths.toSorted();
+  // Siblings within a depth are scanned concurrently; no consumer may depend on their order.
+  vi.spyOn(inventory, "selectLocalWorkspaceCanonicalPaths").mockImplementation(
+    async (...args) => new Set(order([...(await select(...args))])),
+  );
+  const scan = async () => {
+    const input = {
+      id: row.worktree_id,
+      revision: 0,
+      action: { kind: "scan" as const, target: "projection" as const, canonicalRoot: root },
+    };
+    const result = await executeLocalWorkspaceManifestRead(
+      readLocalWorkspaceManifestRows(db, input),
+      input.action,
+    );
+    assert(result.kind === "scan");
+    const { treeRoot, resultingRoot, preparations, baseManifestRaw, currentManifestRaw } = result;
+    return { treeRoot, resultingRoot, preparations, baseManifestRaw, currentManifestRaw };
+  };
+  const expected = await scan();
+  expect(expected.resultingRoot).not.toBe(row.baseline_ref);
+  let seed = 7;
+  order = (paths) =>
+    paths
+      .map((entryPath) => ({ entryPath, key: (seed = (seed * 48_271) % 2_147_483_647) }))
+      .toSorted((left, right) => left.key - right.key)
+      .map(({ entryPath }) => entryPath);
+  for (let round = 0; round < 8; round++) {
+    expect(await scan()).toEqual(expected);
+  }
+});
 
 it.each(["edit", "delete one-child root", "delete two-sided root"])(
   "keeps a complete incremental pack graph through acceptance and GC after %s",

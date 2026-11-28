@@ -14,6 +14,7 @@ import {
   changedStoreFiles,
   snapshotStoreFiles,
 } from "../test-utils/store-snapshot.test-support.js";
+import { createDoctorHealthContribution } from "./doctor-health-contribution.js";
 import {
   createDoctorHealthFlowContext,
   createDoctorPrompterFixture,
@@ -24,7 +25,8 @@ import {
 // never has work. Each one runs here as `doctor --fix --non-interactive --yes` would run it
 // under maintenance, on an install with a state database, an agent database, a config and a
 // workspace, and must leave every one of them byte-identical. A declared contribution that
-// starts writing fails here instead of silently losing its repair. A diagnostic may read, and
+// starts writing fails here instead of silently losing its repair. The same declaration is
+// what lets a contribution run after the restart, beside the Gateway's writers. A diagnostic may read, and
 // a read-only open of an unheld WAL store leaves an empty -wal and a -shm that are not a write,
 // so those are ignored here; pending checks are held to creating none
 // (doctor-health-contributions.pending-read-only.test.ts).
@@ -62,6 +64,33 @@ describe("diagnostic-only Doctor contributions", () => {
 
   it("covers the declared contributions", () => {
     expect(diagnosticOnly.length).toBeGreaterThan(0);
+  });
+
+  it("places only diagnostic-only contributions after the restart", () => {
+    const placed = resolveDoctorHealthContributions().filter(
+      (contribution) => contribution.placement === "after-restart",
+    );
+    expect(placed.length).toBeGreaterThan(0);
+    expect(
+      placed
+        .filter((contribution) => contribution.pending !== "diagnostic-only")
+        .map(({ id }) => id),
+    ).toEqual([]);
+  });
+
+  it.each([
+    ["a repair check", { pending: () => "work" as const }],
+    ["no pending declaration", {}],
+  ])("refuses an after-restart placement with %s", (_case, declaration) => {
+    expect(() =>
+      createDoctorHealthContribution("doctor:writer", "Writer", {
+        ...declaration,
+        placement: "after-restart",
+        run: async () => {},
+      }),
+    ).toThrow(
+      "doctor contribution doctor:writer runs after the restart but is not diagnostic-only",
+    );
   });
 
   it.each(diagnosticOnly.map((contribution) => [contribution.id, contribution] as const))(

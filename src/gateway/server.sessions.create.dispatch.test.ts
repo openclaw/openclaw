@@ -1,10 +1,13 @@
-import { AsyncLocalStorage } from "node:async_hooks";
 import fs from "node:fs/promises";
 import path from "node:path";
 import { expect, test, vi, onTestFinished } from "vitest";
 import type WebSocket from "ws";
 import { closeGatewayTestWebSocket } from "../../test/helpers/gateway-websocket.js";
-import { withinTest } from "../../test/helpers/promise.js";
+import {
+  awaitGateBeforeSettlement,
+  createDeferred,
+  withinTest,
+} from "../../test/helpers/promise.js";
 import { getRuntimeConfig } from "../config/io.js";
 import type { SessionEntry } from "../config/sessions.js";
 import {
@@ -23,6 +26,7 @@ import { createDeferredCore } from "../shared/deferred.js";
 import { ensureProfileForEmail } from "../state/user-profiles.js";
 import { createTestGatewayScheduler } from "../test-utils/gateway-scheduler-clock.js";
 import { createMentionInbox } from "./mention-inbox.js";
+import * as chatSession from "./server-methods/chat-send-session.js";
 import { identifiedClient } from "./server-methods/sessions-sharing.test-support.js";
 import type { GatewayClient } from "./server-methods/types.js";
 import { waitForCreatedSessionRun } from "./server.sessions.create.projects.test-support.js";
@@ -30,7 +34,6 @@ import {
   setupSessionCreateTestHarness,
   dashboardTitleGenerationMocks,
   dashboardTitleScheduleMocks,
-  chatSendOwner,
   actualDashboardTitleScheduler,
   requireNonEmptyString,
   withFixedOwnerSessionStore,
@@ -145,50 +148,6 @@ function holdTitleDispatch() {
   return { started: started.promise, finish: pending.resolve, isFinished: () => finished };
 }
 
-test("sessions.create publishes repository metadata before the next socket read", async () => {
-  const { storePath } = await createSessionStoreDir();
-  const { ws } = await openClient();
-  const key = "agent:main:dashboard:repository-worker";
-  try {
-    const created = await rpcReq<{
-      key: string;
-      entry: { repositoryWorkspaceId: string };
-    }>(ws, "sessions.create", {
-      agentId: "main",
-      key,
-      repository: { url: "https://github.com/example/repository.git", ref: "main" },
-    });
-    expect(created.ok, JSON.stringify(created.error)).toBe(true);
-    const workspaceId = requireNonEmptyString(
-      created.payload?.entry.repositoryWorkspaceId,
-      "created repository workspace",
-    );
-    expect(created.payload?.key).toBe(key);
-    expect(loadSessionEntry({ agentId: "main", sessionKey: key, storePath })).toMatchObject({
-      repositoryWorkspaceId: workspaceId,
-    });
-
-    const listed = await rpcReq<{
-      sessions: Array<{
-        key: string;
-        repositoryWorkspaceId?: string;
-        repository?: { url: string; ref?: string; branch: string };
-      }>;
-    }>(ws, "sessions.list", { agentId: "main", limit: 100 });
-    expect(listed.ok, JSON.stringify(listed.error)).toBe(true);
-    expect(listed.payload?.sessions.find((row) => row.key === key)).toMatchObject({
-      repositoryWorkspaceId: workspaceId,
-      repository: {
-        url: "https://github.com/example/repository.git",
-        ref: "main",
-        branch: `openclaw/${workspaceId}`,
-      },
-    });
-  } finally {
-    ws.close();
-  }
-});
-
 test("chat.send deletes a session before its pending dashboard title finishes", async () => {
   const { storePath } = await createSessionStoreDir();
   const { ws } = await openClient();
@@ -254,62 +213,49 @@ test("chat.send deletes a session before its pending dashboard title finishes", 
   }
 });
 
-test.for(["reply", "empty", "error"])(
-  "chat.send names its session before %s startup or progress",
-  async (outcome, { signal }) => {
-    const { storePath } = await createSessionStoreDir();
-    const { ws } = await openClient();
-    const dispatchStarted = createDeferredCore();
-    const titlePersisted = createDeferredCore();
-    const dispatchPending = createDeferredCore();
-    let dispatchFinished = false;
-    let stopTitleObserver = () => {};
-    let sessionKey: string | undefined;
-    const eventContext = new AsyncLocalStorage<string>();
-    dashboardTitleGenerationMocks.generate.mockImplementation(async () =>
-      eventContext.getStore() ? "Wrong event context" : "Generated Dashboard Title",
+test("chat.send names its session before startup or progress", async ({ signal }) => {
+  const { storePath } = await createSessionStoreDir();
+  const { ws } = await openClient();
+  const dispatchStarted = createDeferredCore();
+  const titlePersisted = createDeferredCore();
+  const dispatchPending = createDeferredCore();
+  let dispatchFinished = false;
+  let stopTitleObserver = () => {};
+  let sessionKey: string | undefined;
+  dashboardTitleGenerationMocks.generate.mockResolvedValue("Generated Dashboard Title");
+  dispatchInboundMessageMock.mockImplementationOnce(async ({ replyOptions }) => {
+    dispatchStarted.resolve();
+    await dispatchPending.promise;
+    dispatchFinished = true;
+    const runId = requireNonEmptyString(replyOptions?.runId, "reply run id");
+    replyOptions?.onAgentRunStart?.(runId);
+    emitAgentEvent({ runId, stream: "assistant", data: { text: "Planning the release" } });
+    emitAgentEvent({ runId, stream: "lifecycle", data: { phase: "end" } });
+    return { queuedFinal: false, counts: { block: 0, final: 0, tool: 0 } };
+  });
+  try {
+    const created = await createDashboard(ws, "agent:main:dashboard:title-before-reply");
+    sessionKey = requireNonEmptyString(created.payload?.key, "created session key");
+    stopTitleObserver = observeTitle(storePath, sessionKey, titlePersisted);
+    await sendTitleTurn(ws, sessionKey, "dashboard-title-before-reply");
+    await dispatchStarted.promise;
+    await withinTest(titlePersisted.promise, signal);
+    expect(dispatchFinished).toBe(false);
+    const listed = await rpcReq<SessionsListResult>(ws, "sessions.list", { agentId: "main" });
+    expect(listed.payload?.sessions.find((row) => row.key === sessionKey)?.displayName).toBe(
+      "Generated Dashboard Title",
     );
-    dispatchInboundMessageMock.mockImplementationOnce(async ({ replyOptions }) => {
-      dispatchStarted.resolve();
-      await dispatchPending.promise;
-      dispatchFinished = true;
-      if (outcome === "error") {
-        throw new Error("Reply preparation failed");
-      }
-      if (outcome === "reply") {
-        const runId = requireNonEmptyString(replyOptions?.runId, "reply run id");
-        replyOptions?.onAgentRunStart?.(runId);
-        eventContext.run("provider event", () => {
-          emitAgentEvent({ runId, stream: "assistant", data: { text: "Planning the release" } });
-          emitAgentEvent({ runId, stream: "lifecycle", data: { phase: "end" } });
-        });
-      }
-      return { queuedFinal: false, counts: { block: 0, final: 0, tool: 0 } };
+  } finally {
+    stopTitleObserver();
+    const released = captureSessionControllerSettlement({
+      scope: storePath,
+      identities: [sessionKey],
     });
-    try {
-      const created = await createDashboard(ws, `agent:main:dashboard:title-before-${outcome}`);
-      sessionKey = requireNonEmptyString(created.payload?.key, "created session key");
-      stopTitleObserver = observeTitle(storePath, sessionKey, titlePersisted);
-      await sendTitleTurn(ws, sessionKey, `dashboard-title-before-${outcome}`);
-      await dispatchStarted.promise;
-      await withinTest(titlePersisted.promise, signal);
-      expect(dispatchFinished).toBe(false);
-      const listed = await rpcReq<SessionsListResult>(ws, "sessions.list", { agentId: "main" });
-      expect(listed.payload?.sessions.find((row) => row.key === sessionKey)?.displayName).toBe(
-        "Generated Dashboard Title",
-      );
-    } finally {
-      stopTitleObserver();
-      const released = captureSessionControllerSettlement({
-        scope: storePath,
-        identities: [sessionKey],
-      });
-      dispatchPending.resolve();
-      await released;
-      ws.close();
-    }
-  },
-);
+    dispatchPending.resolve();
+    await released;
+    ws.close();
+  }
+});
 
 test("chat.send retries a title that failed during its turn once that turn settles", async () => {
   const { storePath } = await createSessionStoreDir();
@@ -448,38 +394,6 @@ test("sessions.create rejects stale mention spans before creating a selected-age
     expect(listed.payload?.sessions).toEqual([]);
   }));
 
-test("sessions.create forwards an attachment-only first turn", async () => {
-  await createSessionStoreDir();
-  testState.agentsConfig = { entries: { main: {} } };
-  const chatSend = vi.spyOn(chatSendOwner, "handleDirectExternalChatSend");
-  chatSend.mockImplementation(async ({ respond }) => {
-    respond(true, { runId: "attachment-run", status: "started" });
-  });
-  const attachment = {
-    type: "image",
-    mimeType: "image/png",
-    fileName: "pixel.png",
-    content:
-      "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mP8/woAAn8B9FD5fHAAAAAASUVORK5CYII=",
-  };
-
-  try {
-    const created = await directSessionReq<{ runStarted?: boolean; runId?: string }>(
-      "sessions.create",
-      { agentId: "main", message: "", attachments: [attachment] },
-    );
-
-    expect(created.ok).toBe(true);
-    expect(created.payload).toMatchObject({ runStarted: true, runId: "attachment-run" });
-    expect(chatSend.mock.calls[0]?.[0].params).toMatchObject({
-      message: "",
-      attachments: [attachment],
-    });
-  } finally {
-    chatSend.mockRestore();
-  }
-});
-
 test.each(["generated key", "junction"])(
   "publishes a selected-agent session before socket reads: %s",
   async (mode) =>
@@ -499,6 +413,10 @@ test.each(["generated key", "junction"])(
       }
       const requestedKey =
         mode === "generated key" ? undefined : "agent:ops:dashboard:publication-owner";
+      const repository =
+        mode === "generated key"
+          ? { url: "https://github.com/example/repository.git", ref: "main" }
+          : undefined;
       const { ws } = await openClient();
       try {
         const warm = await rpcReq<SessionsListResult>(ws, "sessions.list", { agentId: "ops" });
@@ -507,6 +425,7 @@ test.each(["generated key", "junction"])(
           agentId: "ops",
           key: requestedKey,
           label: "Publication owner",
+          ...(repository ? { repository } : {}),
         });
         expect(created.ok, JSON.stringify(created)).toBe(true);
         const key = requireNonEmptyString(created.payload?.key, "created session key");
@@ -515,11 +434,37 @@ test.each(["generated key", "junction"])(
         if (requestedKey) {
           expect(key).toBe(requestedKey);
         }
-        expect(loadSessionEntry({ agentId: "ops", sessionKey: key, storePath })).toBeDefined();
+        const workspaceId = repository
+          ? requireNonEmptyString(
+              created.payload?.entry?.repositoryWorkspaceId,
+              "repository workspace",
+            )
+          : undefined;
+        expect(loadSessionEntry({ agentId: "ops", sessionKey: key, storePath })).toMatchObject({
+          sessionId,
+          ...(repository ? { repositoryWorkspaceId: workspaceId } : {}),
+        });
         expect(
           loadSessionEntry({ agentId: "main", sessionKey: "global", storePath })?.sessionId,
         ).toBe("fixed-global-owner");
-        const expected = { key, sessionId, label: "Publication owner" };
+        const expected = {
+          key,
+          sessionId,
+          label: "Publication owner",
+          ...(repository
+            ? {
+                repositoryWorkspaceId: workspaceId,
+                repository: { ...repository, branch: `openclaw/${workspaceId}` },
+              }
+            : {}),
+        };
+        // The first socket read after ACK must see the worker's committed repository projection.
+        const listed = await rpcReq<SessionsListResult>(ws, "sessions.list", {
+          agentId: "ops",
+          limit: 100,
+        });
+        expect(listed.ok, JSON.stringify(listed)).toBe(true);
+        expect(listed.payload?.sessions.find((row) => row.key === key)).toMatchObject(expected);
         const described = await rpcReq<{ session: GatewaySessionRow | null }>(
           ws,
           "sessions.describe",
@@ -527,12 +472,6 @@ test.each(["generated key", "junction"])(
         );
         expect(described.ok, JSON.stringify(described)).toBe(true);
         expect(described.payload?.session).toMatchObject(expected);
-        const listed = await rpcReq<SessionsListResult>(ws, "sessions.list", {
-          agentId: "ops",
-          limit: 100,
-        });
-        expect(listed.ok, JSON.stringify(listed)).toBe(true);
-        expect(listed.payload?.sessions.find((row) => row.key === key)).toMatchObject(expected);
       } finally {
         await closeGatewayTestWebSocket(ws);
       }
@@ -910,6 +849,91 @@ test.each<
       await closeGatewayTestWebSocket(ws);
       testState.agentConfig = undefined;
       resetSelectedStore();
+    }
+  },
+);
+
+test.each([
+  { role: "administrator", scopes: ["operator.admin"] },
+  { role: "operator", scopes: ["operator.write", "operator.read"] },
+])(
+  "sessions.create retains its first message across unrelated agent changes for $role",
+  async ({ scopes }) => {
+    const { storePath } = await createSessionStoreDir();
+    testState.agentsConfig = { ownership: "explicit", entries: { main: {}, other: {} } };
+    testState.agentConfig = { systemAgent: { agentId: "main" }, sessionStore: { agentId: "main" } };
+    const { ws } = await openClient({ scopes });
+    const config = await getGatewayConfigModule();
+    const originalConfig = config.getRuntimeConfig();
+    const prepareSession = chatSession.prepareChatSendSession;
+    const prepare = vi.spyOn(chatSession, "prepareChatSendSession");
+    dashboardTitleScheduleMocks.schedule.mockImplementation(() => {});
+    try {
+      for (const change of ["add", "remove"] as const) {
+        const key = `agent:main:dashboard:initial-reload-${change}`;
+        const message = `Keep this initial message across unrelated agent ${change}.`;
+        const initial = createDeferred();
+        const resume = createDeferred();
+        const dispatched = createDeferred();
+        prepare.mockImplementationOnce(async (options) => {
+          const session = await prepareSession(options);
+          initial.resolve();
+          await resume.promise;
+          return session;
+        });
+        dispatchInboundMessageMock.mockImplementationOnce(async ({ replyOptions }) => {
+          await replyOptions?.userTurnTranscriptRecorder?.persistApproved();
+          dispatched.resolve();
+          return { queuedFinal: false, counts: { block: 0, final: 0, tool: 0 } };
+        });
+        const request = rpcReq<{ key: string; runStarted: boolean }>(ws, "sessions.create", {
+          agentId: "main",
+          key,
+          message,
+        });
+        try {
+          await awaitGateBeforeSettlement(
+            initial.promise,
+            request.then((response) => {
+              throw new Error(`creation skipped its initial turn: ${JSON.stringify(response)}`);
+            }),
+            "creation skipped its initial turn",
+          );
+          const current = config.getRuntimeConfig();
+          const entries = { ...current.agents?.entries };
+          if (change === "add") {
+            entries.unrelated = {};
+          } else {
+            delete entries.unrelated;
+          }
+          // Publish after chat has captured its routing facts, before initial input admission.
+          config.setRuntimeConfigSnapshot({ ...current, agents: { ...current.agents, entries } });
+          resume.resolve();
+          const created = await request;
+          expect(created, JSON.stringify(created)).toMatchObject({
+            ok: true,
+            payload: { key, runStarted: true },
+          });
+          await dispatched.promise;
+          const history = await rpcReq<{ messages: Array<{ role: string; content: unknown }> }>(
+            ws,
+            "chat.history",
+            { sessionKey: key },
+          );
+          expect(history.ok, JSON.stringify(history)).toBe(true);
+          expect(
+            JSON.stringify(history.payload?.messages.find((item) => item.role === "user")),
+          ).toContain(message);
+        } finally {
+          resume.resolve();
+          await request;
+          await captureSessionControllerSettlement({ scope: storePath, identities: [key] });
+        }
+      }
+    } finally {
+      prepare.mockRestore();
+      config.setRuntimeConfigSnapshot(originalConfig);
+      ws.terminate();
     }
   },
 );

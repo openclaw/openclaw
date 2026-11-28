@@ -1,4 +1,6 @@
-import { describe, expect, it } from "vitest";
+import path from "node:path";
+import { assert, describe, expect, it } from "vitest";
+import { loadPluginManifest } from "../plugins/manifest.js";
 import {
   bindAgentToolReplaySafety,
   collectReplaySafeToolNames,
@@ -22,6 +24,13 @@ describe("agent tool replay safety", () => {
   ] as const)("classifies %s with owner declaration %s", (name, declaration, replay) => {
     const options = declaration === undefined ? undefined : declared(declaration);
     expect(replaySafe({ name }, options)).toBe(replay);
+  });
+
+  it.each(["github_read", "github_search"])("can retry after the bundled %s tool", (name) => {
+    const github = loadPluginManifest(path.resolve(import.meta.dirname, "../../extensions/github"));
+    assert(github.ok);
+    const metadata = github.manifest.toolMetadata?.[name];
+    expect(replaySafe({ name }, declared(metadata?.replaySafe === true))).toBe(true);
   });
 
   it("binds read-only recovery safety to the concrete variant rather than its historical name", () => {

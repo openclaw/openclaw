@@ -11,20 +11,29 @@ import type { MigrationMessages } from "../infra/state-migrations.types.js";
 import { resolveLegacyInstalledPluginIndexStorePath } from "../plugins/installed-plugin-index-store-path.js";
 import { getOpenClawDatabaseMaintenanceScope } from "../state/openclaw-state-db-async-lifecycle.js";
 
+function listRetiredDoctorStateFiles(env: NodeJS.ProcessEnv) {
+  const stateDir = resolveStateDir(env);
+  const queueFiles = listRetiredDeliveryQueueFiles(stateDir);
+  const indexPath = resolveLegacyInstalledPluginIndexStorePath({ stateDir });
+  const existing = listExistingRetiredStateFiles([
+    ...listRetiredRuntimeStateFiles(stateDir, env),
+    ...queueFiles,
+    indexPath,
+  ]);
+  return { stateDir, queueFiles, indexPath, existing };
+}
+
+/** Read-only: whether {@link repairRetiredDoctorState} has retired files to import or archive. */
+export function hasRetiredDoctorStateWork(env: NodeJS.ProcessEnv = process.env): boolean {
+  return listRetiredDoctorStateFiles(env).existing.length > 0;
+}
+
 /** Run before plugin discovery and config recovery can hide the original locators. */
 export async function repairRetiredDoctorState(
   env: NodeJS.ProcessEnv = process.env,
 ): Promise<MigrationMessages> {
-  const stateDir = resolveStateDir(env);
-  const queueFiles = listRetiredDeliveryQueueFiles(stateDir);
-  const indexPath = resolveLegacyInstalledPluginIndexStorePath({ stateDir });
-  if (
-    listExistingRetiredStateFiles([
-      ...listRetiredRuntimeStateFiles(stateDir, env),
-      ...queueFiles,
-      indexPath,
-    ]).length === 0
-  ) {
+  const { stateDir, queueFiles, indexPath, existing } = listRetiredDoctorStateFiles(env);
+  if (existing.length === 0) {
     return { changes: [], warnings: [] };
   }
   return withLegacyMigrationStateLock({

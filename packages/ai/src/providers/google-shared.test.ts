@@ -197,12 +197,24 @@ it.each([
       }),
       usageChunk({ candidatesTokenCount: 12, thoughtsTokenCount: 3 }, true),
     ],
-    { input: 66, output: 15, cacheRead: 40, totalTokens: 121 },
+    {
+      input: 66,
+      output: 15,
+      cacheRead: 40,
+      totalTokens: 121,
+      // The prompt count includes cached content; tool-use prompt tokens are also prompt.
+      contextUsage: { state: "available", promptTokens: 106, totalTokens: 121 },
+    },
   ],
   [
     "clamps negative input from sparse cache usage",
     [usageChunk({ cachedContentTokenCount: 40, toolUsePromptTokenCount: 6 }, true)],
-    { input: 6, cacheRead: 40 },
+    { input: 6, cacheRead: 40, contextUsage: { state: "unavailable" } },
+  ],
+  [
+    "measures no context before the terminal chunk",
+    [usageChunk({ promptTokenCount: 100, candidatesTokenCount: 1, totalTokenCount: 101 })],
+    { contextUsage: { state: "unavailable" } },
   ],
 ] satisfies UsageCase[])("%s", async (_name, responses, usage) => {
   expect((await runFixture(responses)).output.usage).toMatchObject(usage);
