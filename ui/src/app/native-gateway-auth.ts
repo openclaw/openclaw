@@ -35,7 +35,15 @@ type ChallengeMessage = { id: string; nonce: string; signedAt: number };
 
 // A current native grant can become available again after the app reconnects.
 // Retry through that same owner; malformed proofs and route violations stay terminal.
-export class NativeGatewayAuthUnavailableError extends Error {}
+export class NativeGatewayAuthUnavailableError extends Error {
+  retryAfterMs?: number;
+}
+
+// Transient refusals recover within the normal backoff. A document the app keeps
+// refusing still retries, but no longer every 15 seconds for hours. The count belongs
+// to the document, so a replaced client (page activation, Retry) does not reset it.
+const NATIVE_AUTH_FAST_REFUSALS = 10;
+const NATIVE_AUTH_REFUSED_RETRY_MS = 5 * 60_000;
 
 type NativeAuthHost = Window & {
   OpenClawNativeGatewayAuth?: {
@@ -137,6 +145,7 @@ export function createNativeGatewayConnectAuth(
   let port: MessagePort | undefined;
   let stopPortMessage: (() => void) | undefined;
   let retired = false;
+  let refusals = 0;
   const accept = (raw: unknown) => {
     let reply: unknown = raw;
     if (typeof raw === "string") {
@@ -247,9 +256,16 @@ export function createNativeGatewayConnectAuth(
         waitingForPort.delete(request.id);
         clearTimeout(timer);
         stopAbort();
+        if (
+          error instanceof NativeGatewayAuthUnavailableError &&
+          ++refusals >= NATIVE_AUTH_FAST_REFUSALS
+        ) {
+          error.retryAfterMs = NATIVE_AUTH_REFUSED_RETRY_MS;
+        }
         if (error !== undefined) {
           reject(error);
         } else if (authorization) {
+          refusals = 0;
           resolve(authorization);
         }
       };

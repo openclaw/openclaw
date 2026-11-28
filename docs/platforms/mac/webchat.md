@@ -28,8 +28,11 @@ background reconnects after that window loses native authorization. Reopening a
 retained main window uses the same WebView storage and restores its trusted
 Dashboard route; saved drafts remain scoped to the same Gateway address and account.
 Minimizing a window or hiding it when switching experiences does not unload its
-page. A native-auth document replaced during a Gateway switch is also unloaded;
-the new Gateway still receives a separate document and its own authorization.
+page. If the app keeps refusing native authorization to an open page, the page
+retries quickly about ten times, then about every five minutes; returning to the
+window retries at once. A native-auth document replaced during a Gateway switch
+is also unloaded; the new Gateway still receives a separate document and its own
+authorization.
 
 If the Dashboard cannot load, it shows a recovery page with **Reload** and
 **Connection Settings…**. Choose **Navigate → Reload** or press **Shift-Cmd-R** while a

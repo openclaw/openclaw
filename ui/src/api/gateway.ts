@@ -145,6 +145,10 @@ export class GatewayBrowserClient {
                   code: "UNAVAILABLE",
                   message: formatConnectionErrorSummary(error),
                   retryable: error instanceof NativeGatewayAuthUnavailableError,
+                  retryAfterMs:
+                    error instanceof NativeGatewayAuthUnavailableError
+                      ? error.retryAfterMs
+                      : undefined,
                 });
           return {
             closeCode: CONNECT_FAILED_CLOSE_CODE,
