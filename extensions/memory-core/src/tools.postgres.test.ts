@@ -369,7 +369,10 @@ describe.skipIf(!database.connection)("PostgreSQL memory_search product flows", 
     await write("main", "bounded.md", `boundedmarker ${"café unicode ".repeat(150)}`);
     await sync();
     const bounded = await search("boundedmarker", { maxResults: 1 });
-    expect(bounded.results[0]!.snippet.length).toBeLessThanOrEqual(700);
+    const snippet = bounded.results[0]!.snippet;
+    expect(snippet.startsWith("boundedmarker")).toBe(true);
+    expect(snippet.length).toBeGreaterThan(700);
+    expect(snippet.length).toBeLessThanOrEqual(1600);
     for (const query of ["() & | ! : * <-> \\", "日本語"]) {
       const result = await search(query);
       expect(result.results).toEqual([]);

@@ -505,7 +505,8 @@ Memory transcript recall retains the cross-engine 200-candidate window followed
 by session visibility checks; this is separate from transcript search's SQL filters.
 
 PostgreSQL memory queries accept at most 4,096 UTF-16 code units and 128 terms, return
-at most 200 hits, and bound snippets to 700 characters. Larger queries fail before
+at most 200 hits, and bound snippets to the memory chunk ceiling (1,600 characters at
+the default chunking). Larger queries fail before
 retrieval with a message naming the limit.
 
 Transcript queries must contain text and cannot exceed 4,096 UTF-16 code units.

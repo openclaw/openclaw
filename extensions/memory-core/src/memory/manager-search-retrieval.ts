@@ -3,6 +3,7 @@ import {
   createSubsystemLogger,
   resolveUserPath,
 } from "openclaw/plugin-sdk/memory-core-host-engine-foundation";
+import { resolveMarkdownChunkMaxChars } from "openclaw/plugin-sdk/memory-core-host-engine-indexing";
 import {
   MEMORY_INDEX_FTS_TABLE as FTS_TABLE,
   MEMORY_INDEX_PATHS_FTS_TABLE as PATH_FTS_TABLE,
@@ -34,7 +35,6 @@ import {
 } from "./project-ranking.js";
 import { applyTemporalDecayToHybridResults } from "./temporal-decay.js";
 
-const SNIPPET_MAX_CHARS = 700;
 const EXACT_PATH_CANDIDATE_LIMIT = 200;
 const log = createSubsystemLogger("memory");
 
@@ -277,6 +277,11 @@ export abstract class MemorySearchRetrieval extends MemoryProviderLifecycle {
       });
   }
 
+  // A hit's snippet must never be shorter than the chunk the index stored.
+  private snippetMaxChars(): number {
+    return resolveMarkdownChunkMaxChars(this.settings.chunking);
+  }
+
   private buildKeywordSearchQuery(
     query: string,
     limit: number,
@@ -290,7 +295,7 @@ export abstract class MemorySearchRetrieval extends MemoryProviderLifecycle {
         query,
         ftsTokenizer: this.settings.store.fts.tokenizer,
         limit,
-        snippetMaxChars: SNIPPET_MAX_CHARS,
+        snippetMaxChars: this.snippetMaxChars(),
         sourceFilter: this.buildSourceFilter(
           undefined,
           sourceFilterList,
@@ -304,7 +309,7 @@ export abstract class MemorySearchRetrieval extends MemoryProviderLifecycle {
         exactPathLimit: EXACT_PATH_CANDIDATE_LIMIT,
         ftsTokenizer: this.settings.store.fts.tokenizer,
         limit,
-        snippetMaxChars: SNIPPET_MAX_CHARS,
+        snippetMaxChars: this.snippetMaxChars(),
         sourceFilter: this.buildSourceFilter(
           PATH_FTS_TABLE,
           sourceFilterList,
@@ -505,7 +510,7 @@ export abstract class MemorySearchRetrieval extends MemoryProviderLifecycle {
       providerModelAliases: providerIdentity.aliases,
       queryVec,
       limit,
-      snippetMaxChars: SNIPPET_MAX_CHARS,
+      snippetMaxChars: this.snippetMaxChars(),
     };
     const readVectorRows = (candidateIds?: string[]) =>
       runMemoryVectorFallback(

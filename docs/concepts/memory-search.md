@@ -32,7 +32,8 @@ scores. A phrase with nearby terms can rank above scattered terms without
 promising identical ordering across engines.
 
 PostgreSQL memory queries accept at most 4,096 UTF-16 code units and 128 terms, return
-at most 200 hits, and bound each snippet to 700 characters. Larger queries return
+at most 200 hits, and bound each snippet to the memory chunk ceiling (1,600 characters
+at the default chunking), so a hit carries its whole chunk. Larger queries return
 an actionable error before search. Memory transcript recall retains its existing
 200-candidate window followed by session visibility checks; it does not promise
 complete recall beyond that window or SQL-level session permission filtering.
