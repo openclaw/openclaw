@@ -1,5 +1,9 @@
 import { describe, expect, it } from "vitest";
-import { createDocsMarkdown, parseDocsDocument } from "../../scripts/lib/docs-markdown.mjs";
+import {
+  createDocsMarkdown,
+  parseDocsDocument,
+  parseFrontmatter,
+} from "../../scripts/lib/docs-markdown.mjs";
 
 const mapLink = (href: string, line: number | undefined) => ({ href, line });
 function render(source: string, mapLines = false) {
@@ -26,6 +30,45 @@ function expectVisible(document: ReturnType<typeof parseDocsDocument>, line?: nu
 }
 
 describe("docs Markdown rendering", () => {
+  it.each([
+    {
+      name: "annotated LF delimiter",
+      source: '---\ntitle: Example\ndescription: "{"\n--- # end\n# Body\n',
+      data: { title: "Example", description: "{" },
+      content: "# Body\n",
+    },
+    {
+      name: "annotated CRLF document-end delimiter",
+      source: '---\r\ntitle: Example\r\ndescription: "{"\r\n... # end\r\n# Body\r\n',
+      data: { title: "Example", description: "{" },
+      content: "# Body\r\n",
+    },
+  ])("parses $name through the public frontmatter parser", ({ source, data, content }) => {
+    expect(parseFrontmatter(source)).toEqual({ data, content });
+  });
+
+  it.each([
+    {
+      name: "unterminated frontmatter",
+      source: "---\ntitle: Example\n# Body\n",
+      content: "---\ntitle: Example\n# Body\n",
+    },
+    {
+      name: "delimiter followed by non-comment text",
+      source: "---\ntitle: Example\n--- not a comment\n# Body\n",
+      content: "---\ntitle: Example\n--- not a comment\n# Body\n",
+    },
+  ])("rejects $name through the public frontmatter parser", ({ source, content }) => {
+    expect(parseFrontmatter(source)).toEqual({ data: {}, content });
+  });
+
+  it("keeps a body line that looks like a delimiter in the content", () => {
+    expect(parseFrontmatter("---\ntitle: Example\n--- # end\n# Body\n\n---\nliteral\n")).toEqual({
+      data: { title: "Example" },
+      content: "# Body\n\n---\nliteral\n",
+    });
+  });
+
   it("preserves nested fence indentation with CRLF", () => {
     const body = '{\n  "features": {\n    "example": "<Tab title=\\"literal\\">"\n  }\n}';
     const yaml = "app:\n  scopes:\n    - chat:write\n  description: |\n    Nested content";
