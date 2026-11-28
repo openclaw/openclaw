@@ -113,6 +113,8 @@ const coverage = (data: Snapshot) => ({
     ? "Some authorized source material has validation issues. Invalid, ambiguous, withdrawn and dependent records are excluded; inspect Activity & issues. Results do not establish a complete vault inventory."
     : "Current eligible scoped records only. Ranked search is not exhaustive vault listing.",
 });
+const fieldText = (r: LoadedRecord, field: Hit["snippet"]["field"]) =>
+  field === "body" ? r.body : field === "title" ? r.title : (r.metadata.aliases ?? []).join("\n");
 function hit(
   r: LoadedRecord,
   field: Hit["snippet"]["field"],
@@ -120,8 +122,7 @@ function hit(
   matches: string[],
   score: number | null,
 ): Hit {
-  const value =
-    field === "body" ? r.body : field === "title" ? r.title : (r.metadata.aliases ?? []).join("\n");
+  const value = fieldText(r, field);
   let start = Math.max(0, at - 100),
     end = Math.min(value.length, start + 480);
   // Do not split UTF-16 surrogate pairs at the snippet boundaries.
@@ -237,6 +238,76 @@ export function exactLookup(
   return result;
 }
 
+/** Han, Hiragana or Katakana letters and numbers, including the prolonged-sound
+ * and iteration marks those scripts share, each with its combining marks.
+ * Hangul is space-delimited and stays as is. */
+const CJK_RUN = String.raw`(?:(?=[\p{L}\p{N}])[\p{scx=Han}\p{scx=Hira}\p{scx=Kana}]\p{M}*)+`;
+const cjkRuns = new RegExp(CJK_RUN, "gu"),
+  cjkSplit = new RegExp(`(${CJK_RUN})`, "u"),
+  hasCjk = new RegExp(CJK_RUN, "u");
+/** A run's characters, each with its combining marks. unicode61 separates tokens
+ * at a kana voicing mark, so a decomposed (NFD) が would index as か: each
+ * character is composed first and any mark left over (e.g. an ideographic
+ * variation selector) is dropped, as diacritics are elsewhere. A run without
+ * marks that is already NFC, the usual case, has nothing to fold; CJK
+ * compatibility ideographs (e.g. U+F900) carry no mark yet still compose. */
+function cjkChars(run: string) {
+  if (!/\p{M}/u.test(run) && run.normalize("NFC") === run) {
+    const chars = Array.from(run);
+    return { chars, folded: chars };
+  }
+  const chars = run.match(/\P{M}\p{M}*/gu) ?? [];
+  return { chars, folded: chars.map((char) => char.normalize("NFC").replace(/\p{M}/gu, "")) };
+}
+
+/** unicode61 indexes an unbroken CJK run as one token, so a word inside a
+ * sentence never matched. Indexed text instead spells each CJK character joined
+ * with the next one in its run, the run's last character alone (新加坡NAS →
+ * 新加 加坡 坡 NAS), so any CJK substring is a phrase of adjacent tokens.
+ * Other text is copied verbatim; text without CJK is returned as is. When
+ * `pieces` is given, each entry [indexed offset, original offset] added starts
+ * one token or copy, so a match start maps back exactly.
+ * A query term (`open`) may continue in the document after its last character:
+ * its final run drops that closing token, and a lone final character becomes a
+ * prefix of the token it starts. */
+function cjkText(value: string, open = false, pieces?: [number, number][]) {
+  if (!hasCjk.test(value)) {
+    return { text: value, prefix: false };
+  }
+  let text = "",
+    from = 0,
+    prefix = false;
+  for (const run of value.matchAll(cjkRuns)) {
+    pieces?.push([text.length, from]);
+    text += value.slice(from, run.index);
+    const { chars, folded } = cjkChars(run[0]),
+      final = open && run.index + run[0].length === value.length;
+    prefix = final && chars.length === 1;
+    let at = run.index;
+    for (let index = 0; index < chars.length; index++) {
+      const next = folded[index + 1] ?? "";
+      if (final && !next && !prefix) {
+        break;
+      }
+      text += " ";
+      pieces?.push([text.length, at]);
+      text += folded[index] + next;
+      at += chars[index]!.length;
+    }
+    text += " ";
+    from = run.index + run[0].length;
+  }
+  pieces?.push([text.length, from]);
+  return { text: text + value.slice(from), prefix };
+}
+/** The original offset of a highlight position in `value`'s indexed text. */
+function originalOffset(value: string, at: number) {
+  const pieces: [number, number][] = [[0, 0]];
+  cjkText(value, false, pieces);
+  const [indexed, original] = pieces.findLast(([start]) => start <= at)!;
+  return original + at - indexed;
+}
+
 /** Deliberately literal modes, never raw FTS syntax/SQL/regex. Punctuation is token separation. */
 export function keywordExpression(input: SearchInput): string {
   if (!Check(SearchInput, input)) {
@@ -246,15 +317,27 @@ export function keywordExpression(input: SearchInput): string {
   if (!tokens.length || tokens.length > 64) {
     throw new Error("Keyword search requires 1–64 word tokens. Use exact lookup for a name or ID.");
   }
-  const build = (words: readonly string[]) =>
-    input.mode === "phrase"
-      ? `"${words.join(" ")}"`
-      : words.map((t) => `"${t}"`).join(input.mode === "any" ? " OR " : " AND ");
+  // Adjacent tokens: a CJK word matches as an exact substring (see cjkText).
+  const phrase = (words: string) => {
+    const { text, prefix } = cjkText(words, true);
+    return `"${text}"${prefix ? "*" : ""}`;
+  };
+  // In any mode each bigram of a CJK run, or its lone character, may match alone.
+  const anyTerms = (word: string) =>
+    word.split(cjkSplit).flatMap((part, index) => {
+      if (index % 2 === 0) {
+        return part ? [`"${part}"`] : [];
+      }
+      const chars = cjkChars(part).folded;
+      return chars.length === 1
+        ? [`"${chars[0]}"*`]
+        : chars.slice(1).map((char, position) => `"${chars[position]}${char}"`);
+    });
   // FTS5's unicode61 tokenizer does no canonical normalization, so composed (NFC)
-  // and decomposed (NFD) spellings of a word index as distinct terms. The index and
-  // snippet offsets keep stored text verbatim, so in all/any modes each word matches
-  // its original spelling plus both canonical spellings — a partially normalized
-  // token (e.g. Hangul 가나,
+  // and decomposed (NFD) spellings of a word index as distinct terms. Non-CJK text is
+  // indexed verbatim (only CJK runs are folded, see cjkChars), so in all/any modes each
+  // word matches its original spelling plus both canonical spellings — a partially
+  // normalized token (e.g. Hangul 가나,
   // U+AC00 U+1102 U+1161) is neither fully NFC nor fully NFD, and only its literal
   // form is indexed. Spellings that coincide (ASCII, CJK, unaccented) collapse to
   // one literal: an unaccented query still cannot reach a composed accented note,
@@ -267,7 +350,7 @@ export function keywordExpression(input: SearchInput): string {
     const alternatives = [
       ...new Set(
         [tokens, tokens.map((t) => t.normalize("NFC")), tokens.map((t) => t.normalize("NFD"))].map(
-          build,
+          (words) => phrase(words.join(" ")),
         ),
       ),
     ];
@@ -275,13 +358,25 @@ export function keywordExpression(input: SearchInput): string {
   }
   return tokens
     .map((t) => {
-      const forms = spellingsOf(t);
-      return forms.length === 1 ? `"${forms[0]!}"` : `(${forms.map((f) => `"${f}"`).join(" OR ")})`;
+      const terms = [
+        ...new Set(spellingsOf(t).flatMap((f) => (input.mode === "any" ? anyTerms(f) : phrase(f)))),
+      ];
+      return terms.length === 1 ? terms[0]! : `(${terms.join(" OR ")})`;
     })
     .join(input.mode === "any" ? " OR " : " AND ");
 }
 
-const FTS_COLUMNS = "id UNINDEXED, title, aliases, body, tokenize='unicode61 remove_diacritics 2'";
+// body_bytes is the stored body's UTF-8 size: the highlight bound (see keywordSearch)
+// counts authored text, not the longer CJK index text.
+const FTS_COLUMNS =
+  "id UNINDEXED, title, aliases, body, body_bytes UNINDEXED, tokenize='unicode61 remove_diacritics 2'";
+const FTS_INSERT = "(id,title,aliases,body,body_bytes) VALUES (?,?,?,?,?)";
+const indexedRow = (r: LoadedRecord) =>
+  [
+    r.id,
+    ...(["title", "aliases", "body"] as const).map((f) => cjkText(fieldText(r, f)).text),
+    Buffer.byteLength(r.body),
+  ] as const;
 
 /** The scope's keyword corpora: eligible current records, and the eligible
  * superseded records whose `superseded_by` chain reaches one of them, each mapped to
@@ -327,14 +422,10 @@ function syncFts(db: DatabaseSync, table: string, rows: string, records: LoadedR
     remove.run(row.fts_rowid!);
     untrack.run(row.id!);
   }
-  const insert = db.prepare(`INSERT INTO ${table}(id,title,aliases,body) VALUES (?,?,?,?)`),
+  const insert = db.prepare(`INSERT INTO ${table}${FTS_INSERT}`),
     track = db.prepare(`INSERT INTO ${rows} VALUES (?,?,?)`);
   for (const r of wanted.values()) {
-    track.run(
-      r.id,
-      r.hash,
-      insert.run(r.id, r.title, (r.metadata.aliases ?? []).join("\n"), r.body).lastInsertRowid,
-    );
+    track.run(r.id, r.hash, insert.run(...indexedRow(r)).lastInsertRowid);
   }
 }
 
@@ -351,11 +442,12 @@ function reconcileKeywordIndex(
   generation: string,
 ) {
   const suffix = digest(binding);
+  // v2 indexes CJK bigrams (see cjkText); a v1 table never matches v2 queries.
   const tables = [
-    { table: `keyword_fts_v1_${suffix}`, rows: `keyword_rows_v1_${suffix}`, records },
+    { table: `keyword_fts_v2_${suffix}`, rows: `keyword_rows_v2_${suffix}`, records },
     {
-      table: `keyword_history_fts_v1_${suffix}`,
-      rows: `keyword_history_rows_v1_${suffix}`,
+      table: `keyword_history_fts_v2_${suffix}`,
+      rows: `keyword_history_rows_v2_${suffix}`,
       records: history,
     },
   ] as const;
@@ -367,8 +459,17 @@ function reconcileKeywordIndex(
       history.map((r) => [r.id, r.path, r.hash, r.revision]),
     ]),
   );
+  const retired = [
+    "keyword_fts",
+    "keyword_rows",
+    "keyword_history_fts",
+    "keyword_history_rows",
+  ].map((name) => `${name}_v1_${suffix}`);
+  // A v1 table here means a pre-v2 build ran after this one. It may have changed
+  // records and rewritten the shared state row, so the v2 tables cannot be trusted.
+  const downgraded = retired.some((name) => tableExists(db, name));
   const untracked = tables.filter(
-    ({ table, rows }) => !tableExists(db, rows) || !tableExists(db, table),
+    ({ table, rows }) => downgraded || !tableExists(db, rows) || !tableExists(db, table),
   );
   const state = db.prepare("SELECT * FROM keyword_state_v1 WHERE binding=?").get(binding);
   let indexedAt = String(state?.indexed_at ?? "");
@@ -378,6 +479,12 @@ function reconcileKeywordIndex(
     indexedAt = runSqliteImmediateTransactionSync(
       db,
       () => {
+        // v2 never reads the v1 projection again.
+        if (untracked.length) {
+          for (const name of retired) {
+            db.exec(`DROP TABLE IF EXISTS ${name}`);
+          }
+        }
         for (const entry of tables) {
           const { table, rows, records: wanted } = entry;
           db.exec(`CREATE VIRTUAL TABLE IF NOT EXISTS ${table} USING fts5(${FTS_COLUMNS})`);
@@ -464,9 +571,9 @@ export function verifyKeywordIndex(
 function temporaryCorpus(db: DatabaseSync, name: string, records: LoadedRecord[]) {
   db.exec(`DROP TABLE IF EXISTS temp.${name}`);
   db.exec(`CREATE VIRTUAL TABLE temp.${name} USING fts5(${FTS_COLUMNS})`);
-  const insert = db.prepare(`INSERT INTO temp.${name}(id,title,aliases,body) VALUES (?,?,?,?)`);
+  const insert = db.prepare(`INSERT INTO temp.${name}${FTS_INSERT}`);
   for (const r of records) {
-    insert.run(r.id, r.title, (r.metadata.aliases ?? []).join("\n"), r.body);
+    insert.run(...indexedRow(r));
   }
 }
 
@@ -539,15 +646,17 @@ export function keywordSearch(
         );
         const rows = db
           .prepare(`SELECT id,bm25(${corpus},0,8,6,1) AS score,
-      CASE WHEN length(CAST(body AS BLOB))<=${SEARCH_HIGHLIGHT_MAX_BYTES} THEN highlight(${corpus},1,?,'') END AS title,
-      CASE WHEN length(CAST(body AS BLOB))<=${SEARCH_HIGHLIGHT_MAX_BYTES} THEN highlight(${corpus},2,?,'') END AS aliases,
-      CASE WHEN length(CAST(body AS BLOB))<=${SEARCH_HIGHLIGHT_MAX_BYTES} THEN highlight(${corpus},3,?,'') END AS body
+      CASE WHEN body_bytes<=${SEARCH_HIGHLIGHT_MAX_BYTES} THEN highlight(${corpus},1,?,'') END AS title,
+      CASE WHEN body_bytes<=${SEARCH_HIGHLIGHT_MAX_BYTES} THEN highlight(${corpus},2,?,'') END AS aliases,
+      CASE WHEN body_bytes<=${SEARCH_HIGHLIGHT_MAX_BYTES} THEN highlight(${corpus},3,?,'') END AS body
       FROM ${corpus} WHERE ${corpus} MATCH ? ORDER BY score,id LIMIT ? OFFSET ?`)
           .all(marker, marker, marker, expression, limit, offset);
         const byId = new Map(selected.map((r) => [r.id, r]));
         // FTS5 highlight/snippet enumeration becomes quadratic with many repeated
         // instances. Full-record matching and BM25 stay authoritative; large bodies
         // use an explicitly labelled opening excerpt, not an approximate token match.
+        // The bound counts stored body bytes: CJK index text is about twice as long
+        // but holds no more tokens per stored byte than Latin text.
         const fieldExpression = keywordExpression({
           ...input,
           mode: input.mode === "phrase" ? "phrase" : "any",
@@ -568,11 +677,13 @@ export function keywordSearch(
           const fields = (["title", "aliases", "body"] as const).filter((field) =>
             String(row[field]).includes(marker),
           );
-          const field = fields.includes("body") ? "body" : (fields[0] ?? "title");
+          const field = fields.includes("body") ? "body" : (fields[0] ?? "title"),
+            record = byId.get(String(row.id))!,
+            at = Math.max(0, String(row[field]).indexOf(marker));
           return hit(
-            byId.get(String(row.id))!,
+            record,
             field,
-            Math.max(0, String(row[field]).indexOf(marker)),
+            originalOffset(fieldText(record, field), at),
             fields,
             -Number(row.score),
           );

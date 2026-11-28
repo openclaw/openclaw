@@ -508,6 +508,158 @@ it("keyword search matches canonically equivalent Unicode spellings without rewr
   expect(await f.total({ query: uniformGreekQuery, mode: "phrase" })).toBe(0);
 });
 
+it("CJK words match inside sentences as exact substrings with exact snippets", async () => {
+  const f = await fixture();
+  const chinese =
+    "客户希望地理位置在新加坡，出网流量按100G计价。共享存储先按NAS方式配置。B300配额审批中，按 Spot 计费。";
+  await f.put("chinese_note", "狮城客户档案", `${"前言部分。".repeat(30)}${chinese}`, {
+    aliases: ["星洲"],
+    tags: ["cjk"],
+  });
+  // Superseded wording reaches its replacement through the history index.
+  await f.put("plan_old", "旧方案", "旧址设在曼谷机房。", superseded("plan_new"));
+  await f.put("plan_new", "新方案", "改用本地机房。");
+  // About 46 KB of stored text: indexed CJK text is longer, but the highlight bound
+  // counts stored bytes, so the match is still located.
+  await f.put("long_note", "长篇", `${"长篇会议纪要。".repeat(2200)}结论是迁往大阪`);
+  await f.put("japanese_note", "会議メモ", "東京で会議を開きました。カタカナのテストです。");
+  // Decomposed kana, an ideographic variation selector and a compatibility
+  // ideograph (U+F900) fold for matching only.
+  await f.put(
+    "decomposed_note",
+    "Kana",
+    `${"序。".repeat(60)}ここにか\u3099きと葛\u{E0100}城，\u{F900}山`,
+  );
+  await f.put("english_note", "English", "plain english words");
+  const found = async (query: string, mode?: "all" | "any" | "phrase") =>
+    ids(await f.service.grep({ query, ...(mode ? { mode } : {}) }, f.owner)).toSorted();
+  expect((await f.service.grep({ query: "english" }, f.owner)).coverage.complete).toBe(true);
+  for (const [query, expected] of [
+    ["新加坡", ["chinese_note"]],
+    ["出网流量", ["chinese_note"]],
+    ["配额", ["chinese_note"]],
+    ["NAS", ["chinese_note"]],
+    ["B300", ["chinese_note"]],
+    ["B300配额", ["chinese_note"]],
+    ["NAS方式", ["chinese_note"]],
+    ["先按NAS", ["chinese_note"]],
+    ["曼谷", ["plan_new"]],
+    ["星洲", ["chinese_note"]],
+    ["坡", ["chinese_note"]],
+    ["会議", ["japanese_note"]],
+    ["カタカナ", ["japanese_note"]],
+    ["京", ["japanese_note"]],
+    ["がき", ["decomposed_note"]],
+    ["葛城", ["decomposed_note"]],
+    ["\u8C48山", ["decomposed_note"]],
+    ["english", ["english_note"]],
+    // Characters present only in another order, or another script's spelling, never match.
+    ["坡新", []],
+    ["配额B300", []],
+    ["东京", []],
+    ["かき", []],
+    ["か", []],
+  ] as const) {
+    expect([query, await found(query)]).toStrictEqual([query, expected]);
+  }
+  expect(await found("新加坡 补贴")).toStrictEqual([]);
+  expect(await found("新加坡 补贴", "any")).toStrictEqual(["chinese_note"]);
+  expect(await found("坡新 东京", "any")).toStrictEqual([]);
+  expect(await found("坡", "any")).toStrictEqual(["chinese_note"]);
+  expect(await found("Spot 计费", "phrase")).toStrictEqual(["chinese_note"]);
+  expect(await found("按 Spot 计费", "phrase")).toStrictEqual(["chinese_note"]);
+  expect(await found("计费 Spot", "phrase")).toStrictEqual([]);
+  // Snippets and lines are cut from the stored text at the original match offset.
+  const [note] = (await f.service.grep({ query: "位置在" }, f.owner)).hits;
+  const body = `${"前言部分。".repeat(30)}${chinese}`;
+  expect(note!.snippet.text).toBe(body.slice(note!.snippet.start, note!.snippet.end));
+  expect(body.slice(note!.snippet.start + 100)).toMatch(/^位置在新加坡/);
+  expect(note!.snippet.startLine).toBe(note!.snippet.endLine);
+  // A filtered search indexes its query-local corpus the same way.
+  const filtered = await f.service.grep({ query: "位置在", tag: "cjk" }, f.owner);
+  expect(filtered.hits.map((h: any) => h.snippet)).toStrictEqual([note!.snippet]);
+  expect(await f.total({ query: "曼谷", tag: "cjk" })).toBe(0);
+  expect((await f.service.grep({ query: "曼谷" }, f.owner)).hits[0]!.via?.id).toBe("plan_old");
+  // Every match here sits over 100 characters into its body, so the snippet opens
+  // exactly 100 characters before it.
+  for (const [query, text] of [
+    ["NAS方式", "NAS方式"],
+    ["计费", "计费"],
+    ["がき", "か\u3099き"],
+    ["葛城", "葛\u{E0100}城"],
+    ["大阪", "大阪"],
+  ] as const) {
+    const { snippet } = (await f.service.grep({ query }, f.owner)).hits[0]!;
+    expect([query, snippet.field, snippet.text.slice(100, 100 + text.length)]).toStrictEqual([
+      query,
+      "body",
+      text,
+    ]);
+  }
+  const fieldOf = async (query: string) =>
+    (await f.service.grep({ query }, f.owner)).hits[0]!.snippet;
+  expect(await fieldOf("档案")).toMatchObject({ field: "title", text: "狮城客户档案" });
+  expect(await fieldOf("星洲")).toMatchObject({ field: "aliases", text: "星洲" });
+});
+
+it("a v1 keyword projection is dropped and rebuilt as v2 on the next search", async () => {
+  const f = await fixture();
+  await f.put("upgrade_cjk", "Upgrade", "出网流量按NAS计价");
+  expect(await f.total({ query: "流量" })).toBe(1);
+  const keywordTables = () =>
+    f.store.withDatabase((db) =>
+      db
+        .prepare("SELECT name FROM sqlite_master WHERE name GLOB 'keyword_*_v[12]_*' ORDER BY name")
+        .all()
+        .map((row) => String(row.name).replace(/_[0-9a-f]+(?=$|_)/, "")),
+    );
+  const upgraded = keywordTables();
+  // Simulate the previous version: its v1 tables (with their FTS shadows), no v2 tables.
+  f.store.withDatabase((db) => {
+    for (const { name } of db
+      .prepare(
+        "SELECT name FROM sqlite_master WHERE name GLOB 'keyword_*_v2_*' AND (name GLOB '*rows*' OR sql LIKE 'CREATE VIRTUAL%')",
+      )
+      .all()) {
+      db.exec(`ALTER TABLE ${String(name)} RENAME TO ${String(name).replace("_v2_", "_v1_")}`);
+    }
+  });
+  expect(keywordTables().every((name) => name.includes("_v1"))).toBe(true);
+  expect(await f.total({ query: "流量" })).toBe(1);
+  expect(await f.total({ query: "NAS" })).toBe(1);
+  expect(keywordTables()).toStrictEqual(upgraded);
+  expect(upgraded.some((name) => name.includes("_v1"))).toBe(false);
+});
+
+it("a v1 projection rebuilt by an older build after v2 forces a full v2 rebuild", async () => {
+  const f = await fixture();
+  await f.put("kept_cjk", "Kept", "复盘会议定在名古屋举行");
+  expect(await f.total({ query: "名古屋" })).toBe(1);
+  // Simulate a downgrade that ran after v2: the older build recreates v1 tables and
+  // rewrites the shared state row to the digest of the corpus it saw, while this
+  // build's v2 rows go stale (a deleted row and a record it never indexed).
+  await f.put("added_cjk", "Added", "年会安排在仙台");
+  // Index it so the shared state row matches the current corpus, as the older build leaves it.
+  expect(await f.total({ query: "仙台" })).toBe(1);
+  f.store.withDatabase((db) => {
+    const suffix = String(
+      db.prepare("SELECT name FROM sqlite_master WHERE name GLOB 'keyword_rows_v2_*'").get()!.name,
+    ).slice("keyword_rows_v2_".length);
+    db.exec(`CREATE TABLE keyword_rows_v1_${suffix} (id TEXT PRIMARY KEY) STRICT`);
+    db.exec(`DELETE FROM keyword_fts_v2_${suffix}`);
+    db.exec(`DELETE FROM keyword_rows_v2_${suffix}`);
+  });
+  const current = await f.service.grep({ query: "仙台" }, f.owner);
+  expect(ids(current)).toStrictEqual(["added_cjk"]);
+  expect(await f.total({ query: "名古屋" })).toBe(1);
+  expect(
+    f.store.withDatabase(
+      (db) =>
+        db.prepare("SELECT name FROM sqlite_master WHERE name GLOB 'keyword_*_v1_*'").all().length,
+    ),
+  ).toBe(0);
+});
+
 it("ranking preserves pagination and scope without rereading the filtered corpus", async () => {
   const f = await fixture();
   await f.put("title_record", "Needle", "text", { tags: ["chosen"] });
@@ -535,7 +687,7 @@ it("ranking preserves pagination and scope without rereading the filtered corpus
     expect(keywordSearch(db, data, { query: "needle" }, "test", "1").total).toBe(3);
     let corpusReads = 0;
     db.setAuthorizer((action, table) => {
-      if (action === constants.SQLITE_READ && table?.startsWith("keyword_fts_v1_")) {
+      if (action === constants.SQLITE_READ && table?.startsWith("keyword_fts_v2_")) {
         corpusReads++;
       }
       return constants.SQLITE_OK;
@@ -645,7 +797,7 @@ it("an index built before row tracking is repopulated, never left empty and read
   // Simulate the previous version: FTS rows and a matching state row, no tracking table.
   f.store.withDatabase((db) => {
     for (const { name } of db
-      .prepare("SELECT name FROM sqlite_master WHERE name LIKE 'keyword_rows_v1_%'")
+      .prepare("SELECT name FROM sqlite_master WHERE name LIKE 'keyword_rows_v2_%'")
       .all()) {
       db.exec(`DROP TABLE ${String(name)}`);
     }
@@ -738,7 +890,7 @@ it("superseded-record edits update the persistent history index and the search s
   f.store.withDatabase((db) => {
     const fts = db
       .prepare(
-        "SELECT name FROM sqlite_master WHERE name LIKE 'keyword_history_fts_v1_%' AND sql LIKE 'CREATE VIRTUAL%'",
+        "SELECT name FROM sqlite_master WHERE name LIKE 'keyword_history_fts_v2_%' AND sql LIKE 'CREATE VIRTUAL%'",
       )
       .get()!;
     db.exec(`DROP TABLE ${String(fts.name)}`);
