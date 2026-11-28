@@ -7,9 +7,9 @@ import type { ImageContent, TextContent } from "openclaw/plugin-sdk/llm";
 import { asOptionalRecord, readStringField } from "openclaw/plugin-sdk/string-coerce-runtime";
 import {
   DEFAULT_MAX_LIVE_TOOL_RESULT_CHARS,
-  estimateToolResultTextChars,
-  resolveLiveToolResultMaxChars,
-  sliceToolResultTextToBudget,
+  resolveToolResultBudget,
+  toolResultFitsBudget,
+  type ToolResultBudget,
 } from "openclaw/plugin-sdk/text-utility-runtime";
 import { failedToolResult } from "./dynamic-tool-response-state.js";
 import { invalidInlineImageText } from "./image-payload-sanitizer.js";
@@ -36,22 +36,29 @@ export function resolveGatewayOnlySkillDirs(
 /** One bridge's weighted output budget and its skill-result presentation. */
 export function createCodexToolResultPresentation(
   context:
-    | { contextWindowTokens?: number; gatewayOnlySkillDirs?: ReadonlyMap<string, string> }
+    | {
+        contextWindowTokens?: number;
+        gatewayOnlySkillDirs?: ReadonlyMap<string, string>;
+      }
     | undefined,
 ) {
   const contextWindowTokens = context?.contextWindowTokens;
-  const maxChars =
-    contextWindowTokens !== undefined && contextWindowTokens > 0
-      ? Math.max(1, resolveLiveToolResultMaxChars({ contextWindowTokens }))
-      : DEFAULT_MAX_LIVE_TOOL_RESULT_CHARS;
+  // The same budget the result bound applies, so a skill that passes here is never cut later.
+  const budget = resolveToolResultBudget(contextWindowTokens) ?? {
+    maxChars: DEFAULT_MAX_LIVE_TOOL_RESULT_CHARS,
+    maxContextChars: Infinity,
+  };
   const presentSkillResult = async (toolName: string, result: AgentToolResult<unknown>) =>
     enforceWholeSkillResult(
       toolName,
       await withoutGatewayOnlySkillLocation(toolName, result, context?.gatewayOnlySkillDirs),
-      maxChars,
+      budget,
       result,
     );
-  return { maxChars, presentSkillResult };
+  // Codex reads files with its own native tools under its own sandbox policy, which cannot
+  // open a Gateway temp file: same head and tail, size-only notice.
+  const resultBound = { contextWindowTokens, spill: false as const };
+  return { presentSkillResult, resultBound };
 }
 
 /** Results for Gateway-only skills name no path that the remote reader would try to open. */
@@ -99,16 +106,13 @@ async function withoutGatewayOnlySkillLocation(
 function enforceWholeSkillResult(
   toolName: string,
   result: AgentToolResult<unknown>,
-  maxChars: number,
+  budget: ToolResultBudget,
   originalResult: AgentToolResult<unknown>,
 ): AgentToolResult<unknown> {
   if (toolName !== "skills_read" || isToolResultError(result)) {
     return result;
   }
-  const budget = result.content.reduce(
-    (total, item) => total + (item.type === "text" ? estimateToolResultTextChars(item.text) : 0),
-    0,
-  );
+  const text = result.content.map((item) => (item.type === "text" ? item.text : "")).join("");
   const details = asOptionalRecord(originalResult.details);
   const instructions = readStringField(details, "content");
   const [item] = originalResult.content;
@@ -119,66 +123,20 @@ function enforceWholeSkillResult(
     readStringField(details, "location") !== undefined &&
     instructions !== undefined &&
     (item?.type !== "text" || !item.text.endsWith(instructions));
-  return !incomplete && budget <= maxChars
+  return !incomplete && toolResultFitsBudget(text, budget)
     ? result
     : failedToolResult(
-        `This Codex turn cannot deliver the whole skill within its ${maxChars}-character weighted output budget. No instructions were returned; use a harness with a larger instruction budget.`,
+        `This Codex turn cannot deliver the whole skill within its ${budget.maxChars}-character weighted output budget. No instructions were returned; use a harness with a larger instruction budget.`,
       );
 }
 
+/** The shared tool-result bound already ran in the invocation owner; this only converts. */
 export function convertToolContents(
-  rawContent: Array<TextContent | ImageContent>,
-  maxChars: number,
+  content: Array<TextContent | ImageContent>,
 ): CodexDynamicToolCallOutputContentItem[] {
-  const content = rawContent;
-  const totalTextChars = content.reduce(
-    (total, item) => total + (item.type === "text" ? item.text.length : 0),
-    0,
-  );
-  const totalTextBudget = content.reduce(
-    (total, item) => total + (item.type === "text" ? estimateToolResultTextChars(item.text) : 0),
-    0,
-  );
-  if (totalTextBudget <= maxChars) {
-    return content.map(convertToolContent);
-  }
-  const noticeText = `...(OpenClaw truncated dynamic tool result: original ${totalTextChars} chars, weighted budget ${maxChars}; rerun with narrower args.)`;
-  const notice = `\n${noticeText}`;
-  const noticeChars = estimateToolResultTextChars(notice);
-  const textBudget = Math.max(0, maxChars - noticeChars);
-  let remainingTextBudget = textBudget;
-  let appendedNotice = false;
-  const output: CodexDynamicToolCallOutputContentItem[] = [];
-  for (const item of content) {
-    if (item.type !== "text") {
-      output.push(convertToolContent(item));
-      continue;
-    }
-    if (appendedNotice) {
-      continue;
-    }
-    if (noticeChars >= maxChars) {
-      output.push({ type: "inputText", text: sliceToolResultTextToBudget(noticeText, maxChars) });
-      appendedNotice = true;
-      continue;
-    }
-    const text = sliceToolResultTextToBudget(item.text, remainingTextBudget);
-    remainingTextBudget -= estimateToolResultTextChars(text);
-    const shouldAppendNotice = remainingTextBudget <= 0 || text.length < item.text.length;
-    if (shouldAppendNotice) {
-      // The notice budget is reserved before slicing text, so the combined
-      // result is already bounded without another boundary-sensitive cut.
-      output.push({ type: "inputText", text: `${text.trimEnd()}${notice}` });
-      appendedNotice = true;
-    } else if (text.length > 0) {
-      output.push({ type: "inputText", text });
-    }
-  }
-  if (!appendedNotice) {
-    output.push({ type: "inputText", text: sliceToolResultTextToBudget(noticeText, maxChars) });
-  }
-  return output;
+  return content.map(convertToolContent);
 }
+
 function convertToolContent(
   content: TextContent | ImageContent,
 ): CodexDynamicToolCallOutputContentItem {

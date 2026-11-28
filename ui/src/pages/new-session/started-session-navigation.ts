@@ -4,7 +4,6 @@ import type { ApplicationContext } from "../../app/context.ts";
 import { gatewayPresentationScope } from "../../app/gateway-presentation-scope.ts";
 import { navigateWithRouteTransition } from "../../app/route-transition.ts";
 import { formatUiError } from "../../lib/format-error.ts";
-import { resolveSessionDisplayName } from "../../lib/session-display.ts";
 import type { SessionCreateOutcome } from "../../lib/sessions/create.ts";
 import { prepareSessionNavigationHandoff } from "../../lib/sessions/navigation-handoff.ts";
 import { sessionNavigationTarget } from "../../lib/sessions/route-navigation.ts";
@@ -178,10 +177,10 @@ export class StartedSessionNavigation {
         }
         context.chatSubmissions.acceptCreate({
           creation: { sessionKey: started.key, admitted: true },
-          displayName: resolveSessionDisplayName(started.key, {
-            displayName: normalizeOptionalString(started.entry?.displayName),
-            label: normalizeOptionalString(started.entry?.label),
-          }),
+          // An accepted key is not a title. Keep the placeholder until the named row arrives.
+          displayName:
+            normalizeOptionalString(started.entry?.label) ??
+            normalizeOptionalString(started.entry?.displayName),
           category: normalizeOptionalString(started.entry?.category),
           canDisplay: captureSessionDisplayOwner(context.gateway),
         });

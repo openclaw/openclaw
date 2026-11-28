@@ -274,7 +274,7 @@ it("bounds aggregate fan-in and participant material", async () => {
   expectUnknown(oversizedParticipant);
 
   const sources = await Promise.all(
-    Array.from({ length: 17 }, (_, index) => evidenceFor(audit, `person-${index}`)),
+    Array.from({ length: 17 }, () => evidenceFor(audit, "person-1")),
   );
   expectUnknown(combineEvidence(sources));
 });

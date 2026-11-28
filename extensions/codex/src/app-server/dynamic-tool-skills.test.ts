@@ -24,11 +24,15 @@ beforeEach(async () => {
 
 afterEach(() => cleanupDynamicToolBuildFixture(tempDir, hostCapabilityClosers));
 
-it.each(["allowed", "denied", "oversized", "oversized-multiline"])(
+// "attempt-budget": the attempt budget (16k tokens) is smaller than the model window. A ~12k
+// skill passed the per-result cap but not the context share, so it was later cut while
+// reported as a success.
+it.each(["allowed", "denied", "oversized", "oversized-multiline", "attempt-budget"])(
   "delivers whole skills or refuses %s reads through the dynamic tool bridge",
   async (mode) => {
     const denied = mode === "denied";
-    const oversized = mode.startsWith("oversized");
+    const attemptBudget = mode === "attempt-budget";
+    const oversized = mode.startsWith("oversized") || attemptBudget;
     const workspaceDir = tempDir;
     const params = createParams(path.join(tempDir, "skills-session.jsonl"), workspaceDir, {
       runtimePlan: createCodexRuntimePlanFixture(),
@@ -45,9 +49,11 @@ it.each(["allowed", "denied", "oversized", "oversized-multiline"])(
       source: "test",
       sourceInfo: { source: "test", scope: "temporary", origin: "top-level", path: "/s" } as const,
       disableModelInvocation: false,
-      readContent: oversized
-        ? `# Release\n\n${(mode === "oversized-multiline" ? "Complete instructions.\n" : "Complete instructions. ").repeat(5_000)}\nEND OF SKILL`
-        : "# Release\n\nComplete instructions.\nEND OF SKILL\n",
+      readContent: attemptBudget
+        ? `# Release\n\n${"Complete instructions. ".repeat(520)}\nEND OF SKILL`
+        : oversized
+          ? `# Release\n\n${(mode === "oversized-multiline" ? "Complete instructions.\n" : "Complete instructions. ").repeat(5_000)}\nEND OF SKILL`
+          : "# Release\n\nComplete instructions.\nEND OF SKILL\n",
     };
     params.skillsSnapshot = {
       prompt: "",
@@ -65,7 +71,7 @@ it.each(["allowed", "denied", "oversized", "oversized-multiline"])(
         sessionKey: params.sessionKey,
         runId: params.runId,
         workspaceDir,
-        contextWindowTokens: params.model.contextWindow,
+        contextWindowTokens: attemptBudget ? 16_000 : params.model.contextWindow,
       },
     });
     const guidance = renderCodexSkillsInstructions({
