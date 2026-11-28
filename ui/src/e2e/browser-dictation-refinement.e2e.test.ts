@@ -115,6 +115,7 @@ async function openDictation(page: Page) {
   const shell = page.locator(".agent-chat__composer-shell");
   const draft = shell.locator(".agent-chat__composer-combobox textarea");
   const microphone = shell.locator(".chat-mobile-dictation-action");
+  const options = shell.getByRole("button", { name: "Dictation text options", exact: true });
   await draft.waitFor();
   await gateway.waitForRequest("sessions.messages.subscribe");
   await page.waitForFunction(() => window.openclawControlUi?.snapshot().routeReady === true);
@@ -175,7 +176,7 @@ async function openDictation(page: Page) {
     await emit("close");
     await gateway.resolveDeferred("talk.session.close", { ok: true });
   };
-  return { gateway, shell, draft, microphone, start, stop, emit, complete };
+  return { gateway, shell, draft, microphone, options, start, stop, emit, complete };
 }
 
 suite.define(() => {
@@ -217,10 +218,7 @@ suite.define(() => {
           .poll(() => review.evaluate((element) => element.getBoundingClientRect().width))
           .toBeGreaterThanOrEqual(available * 0.8);
       };
-      await tabTo(
-        page,
-        h.microphone.getByRole("button", { name: "Dictation text options", exact: true }),
-      );
+      await tabTo(page, h.options);
       await page.keyboard.press("Enter");
       await tabTo(
         page,
@@ -257,10 +255,7 @@ suite.define(() => {
       await expect.poll(() => h.draft.inputValue()).toBe(`${initialDraft} ${finalText}`);
       await preview.waitFor({ state: "detached" });
       expect(await h.gateway.getRequests("chat.send")).toHaveLength(0);
-      const options = h.microphone.getByRole("button", {
-        name: "Dictation text options",
-        exact: true,
-      });
+      const options = h.options;
       const checkbox = review.getByRole("checkbox", {
         name: "Review dictated text before inserting",
       });
@@ -286,10 +281,7 @@ suite.define(() => {
     suite.withPage(contextOptions, async ({ page }) => {
       const h = await openDictation(page);
       const review = h.shell.locator(".agent-chat__dictation-refinement");
-      const options = h.microphone.getByRole("button", {
-        name: "Dictation text options",
-        exact: true,
-      });
+      const options = h.options;
       await tabTo(page, options);
       await page.keyboard.press("Enter");
       const checkbox = review.getByRole("checkbox", {

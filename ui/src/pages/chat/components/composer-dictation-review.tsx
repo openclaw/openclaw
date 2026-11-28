@@ -17,7 +17,10 @@ export function ComposerDictationReview(props: {
   return (
     <Show when={review()}>
       {(current) => (
-        <section class="dictation-review" aria-label={t("chat.dictation.punctuation.reviewTitle")}>
+        <section
+          class="dictation-review stack callout"
+          aria-label={t("chat.dictation.punctuation.reviewTitle")}
+        >
           <h3>{t("chat.dictation.punctuation.reviewTitle")}</h3>
           <p role="status" aria-live="polite" aria-atomic="true">
             {t(`chat.dictation.punctuation.status.${current().result.status}`)}{" "}
@@ -33,7 +36,13 @@ export function ComposerDictationReview(props: {
           </p>
           <label>
             <span>{t("chat.dictation.punctuation.original")}</span>
-            <textarea rows={3} readonly dir="auto" value={current().rawText} />
+            <textarea
+              class="settings-input"
+              rows={3}
+              readonly
+              dir="auto"
+              value={current().rawText}
+            />
           </label>
           <label>
             <span>
@@ -44,6 +53,7 @@ export function ComposerDictationReview(props: {
               )}
             </span>
             <textarea
+              class="settings-input"
               rows={3}
               readonly
               dir="auto"
@@ -67,7 +77,7 @@ export function ComposerDictationReview(props: {
               {t("chat.dictation.punctuation.reprocess")}
             </button>
           </details>
-          <div class="dictation-review__actions">
+          <div class="dictation-review__actions filters">
             <button
               type="button"
               class="btn"

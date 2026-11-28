@@ -425,7 +425,7 @@ export class NewSessionPageOwner {
 
   composerOptions(): Omit<
     NewSessionComposerOptions,
-    "dictationStatus" | "voiceControl" | "permissionControl"
+    "dictationReview" | "dictationStatus" | "voiceControl" | "permissionControl"
   > {
     const { context, gateway, place, submission, dictation } = this;
     const draftOwnerKey = this.routeOwnerKey();

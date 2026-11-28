@@ -374,6 +374,13 @@ describe("new session pending dictation review", () => {
         if (resolution !== "off") {
           expect(owner.dictation.dictation?.review?.canInsert).toBe(true);
           await expectSubmissionBlocked();
+          await waitForSolid(() =>
+            expect(
+              page.querySelector<HTMLTextAreaElement>(
+                ".agent-chat__composer-lede .dictation-review textarea",
+              )?.value,
+            ).toBe("dictated words"),
+          );
           const label = t(
             resolution === "insert"
               ? "chat.dictation.punctuation.insert"

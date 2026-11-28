@@ -252,22 +252,6 @@ export function renderComposerVoiceButtonSolid(props: ComposerVoiceButtonProps) 
         </button>
       </openclaw-tooltip>
       <ComposerContent>{props.microphonePicker}</ComposerContent>
-      <Show
-        when={
-          props.readDictation?.()?.refinementAvailable &&
-          !props.readDictation?.()?.punctuationEnabled
-        }
-      >
-        <button
-          type="button"
-          class="chat-controls__provider-settings"
-          aria-label={t("chat.composer.dictationTextOptions")}
-          aria-expanded={props.readDictation?.().refinementOptionsOpen ? "true" : "false"}
-          onClick={() => props.readDictation?.().toggleRefinementOptions()}
-        >
-          <Icon name="settings" />
-        </button>
-      </Show>
     </span>
   );
 }

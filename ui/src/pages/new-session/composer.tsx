@@ -625,6 +625,7 @@ export function NewSessionComposer(props: {
           pendingReads={options().attachmentDraft.reads.pendingReads}
           videoStatus={options().attachmentDraft.reads.videoPreparationStatus?.message}
         />
+        <div class="agent-chat__composer-lede">{options().dictationReview}</div>
         <div class="agent-chat__composer-input-row">
           <div class="agent-chat__composer-combobox">
             <Show when={frame().skillMenuVisible}>

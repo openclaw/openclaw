@@ -1,4 +1,4 @@
-// @vitest-environment jsdom
+// @vitest-environment node
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { createGatewayRequestContext } from "../../../../src/gateway/server-request-context.js";
 import { makeContextParams } from "../../../../src/gateway/server-request-context.test-support.js";
@@ -16,22 +16,9 @@ import {
   type ComposerRefinementScope,
 } from "./composer-dictation-refinement.ts";
 import { ComposerDictationSession } from "./composer-dictation-session.ts";
-import {
-  audioFixture,
-  MockDictationAudioContext,
-  type MockAudioProcessor,
-} from "./talk/input.test-support.ts";
+import { audioFixture, MockDictationAudioContext, stubMedia } from "./talk/input.test-support.ts";
 
 const cleanups: Array<() => Promise<void>> = [];
-const processors: MockAudioProcessor[] = [];
-
-class RecordingAudioContext extends MockDictationAudioContext {
-  override createScriptProcessor(): MockAudioProcessor {
-    const processor = super.createScriptProcessor();
-    processors.push(processor);
-    return processor;
-  }
-}
 
 // The bridge replaces only Gateway transport and external audio/provider I/O.
 // Capture, relay drain, Talk events, finality, refinement, and acceptance are real.
@@ -39,6 +26,8 @@ function fixture() {
   const connId = "dictation-refinement-relay-proof";
   const listeners = new Set<(frame: GatewayEventFrame) => void>();
   const media = audioFixture();
+  const processor = new MockDictationAudioContext().createScriptProcessor();
+  vi.spyOn(MockDictationAudioContext.prototype, "createScriptProcessor").mockReturnValue(processor);
   const onError = vi.fn();
   let providerRequest: RealtimeTranscriptionSessionCreateRequest | undefined;
   const providerSession = {
@@ -120,14 +109,12 @@ function fixture() {
     changed: () => undefined,
     commit,
   });
-  const session = new ComposerDictationSession(client, {
-    onError,
-    onReady: () => undefined,
-    onTranscriptChange: () => undefined,
-  });
-  vi.stubGlobal("navigator", {
-    mediaDevices: { getUserMedia: vi.fn(async () => media.stream) },
-  });
+  const session = new ComposerDictationSession(
+    client,
+    { onError, onReady: () => undefined, onTranscriptChange: () => undefined },
+    { inputDeviceId: "" },
+  );
+  stubMedia(media.stream);
   cleanups.push(async () => {
     review.cancel();
     await session.cancel().catch(() => undefined);
@@ -140,15 +127,13 @@ function fixture() {
     commit,
     media,
     onError,
-    providerSession,
     releaseAuthority,
     transcript: (text: string) => providerRequest?.onTranscript?.(text),
     async start() {
       review.begin();
       await session.start();
-      const processor = processors.at(-1);
-      expect(processor?.onaudioprocess).toBeTypeOf("function");
-      processor?.onaudioprocess?.({
+      expect(processor.onaudioprocess).toBeTypeOf("function");
+      processor.onaudioprocess?.({
         inputBuffer: { getChannelData: () => new Float32Array(160).fill(0.25) },
       });
       await vi.advanceTimersByTimeAsync(0);
@@ -160,14 +145,14 @@ function fixture() {
 
 beforeEach(() => {
   vi.useFakeTimers();
-  vi.stubGlobal("AudioContext", RecordingAudioContext);
+  vi.stubGlobal("AudioContext", MockDictationAudioContext);
+  vi.stubGlobal("document", Object.assign(new EventTarget(), { hidden: false }));
 });
 
 afterEach(async () => {
   for (const cleanup of cleanups.splice(0)) {
     await cleanup();
   }
-  processors.length = 0;
   await vi.advanceTimersByTimeAsync(0);
   vi.useRealTimers();
   vi.unstubAllGlobals();

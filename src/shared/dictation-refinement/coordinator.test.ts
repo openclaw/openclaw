@@ -260,6 +260,15 @@ describe("one bounded plan and eligible recovery", () => {
     expect(refine).not.toHaveBeenCalled();
   });
 
+  it("protects joined words, not plain prose or unmatched underscores", () => {
+    const text = "今日は晴れ _𠮷_駅__tag_２_cafe\u0301_ plain";
+    const spans = detectRefinementLiteralSpans(text);
+    expect(spans.map(({ start, end }) => text.slice(start, end))).toEqual([
+      "𠮷_駅",
+      "tag_２_cafe\u0301",
+    ]);
+  });
+
   it("only trims outer whitespace and preserves quoted/code/literal bytes", async () => {
     const quoted = '"https://example.test/customer_id"';
     const rawTranscript = '  keep " a  b " and `x  =  1` and ' + (quoted + " ").repeat(70);

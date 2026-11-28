@@ -238,7 +238,7 @@ constant for review's total bound and starts the separate text deadline after
 finalization. It does not change the
 relay, add a production owner, or enable model/context/vocabulary orchestration.
 
-The new [production-relay regression](../../../ui/src/pages/chat/composer-dictation-refinement.relay.test.ts)
+The new [production-relay regression](../../../ui/src/pages/chat/composer-dictation-refinement.relay.node.test.ts)
 reproduced the defect on `7dab77e`: after nonempty audio and finalized text,
 advancing the fake clock to 2,501 ms made the preview `unavailable` instead of
 remaining `finishing` until the relay closed at 5,000 ms. Its cancellation case

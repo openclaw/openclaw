@@ -1,5 +1,6 @@
 import { createStore } from "solid-js";
-import { focusComposerInput, readComposerEditor, replaceComposerDraft } from "../composer-input.ts";
+import { replaceComposerDraft } from "../composer-draft-transaction.ts";
+import { focusComposerInput, readComposerEditor } from "../composer-input.ts";
 import { t } from "../reactive/i18n.ts";
 import { listen } from "../reactive/listener.ts";
 

@@ -395,6 +395,22 @@
   min-width: 0;
 }
 
+/* Transcript previews are prose, not the taller, unwrapped code editor in .field. */
+.dictation-review textarea {
+  min-height: 64px;
+  resize: vertical;
+  white-space: pre-wrap;
+}
+
+.dictation-review h3,
+.dictation-review p {
+  margin: 0;
+}
+
+.dictation-review__actions {
+  justify-content: end;
+}
+
 .agent-chat__composer-combobox {
   position: relative;
   isolation: isolate;

@@ -2,7 +2,6 @@ import { createUniqueId, Show } from "solid-js";
 import { registerChatDictationEnglish } from "../../../i18n/locales/en-chat-dictation.ts";
 import type { DictationPunctuationPolicy } from "../../../lib/dictation-refinement.ts";
 import { registerEnglishCatalog, t } from "../../../lib/reactive/i18n.ts";
-import "./dictation-refinement.css";
 
 registerEnglishCatalog(registerChatDictationEnglish);
 
@@ -19,9 +18,9 @@ export function DictationPunctuationFields(props: {
   const modeLabel = `dictation-punctuation-mode-${createUniqueId()}`;
   const localeLabel = `dictation-punctuation-locale-${createUniqueId()}`;
   return (
-    <fieldset class="dictation-punctuation-fields" disabled={props.disabled}>
+    <fieldset class="dictation-punctuation-fields stack settings-group" disabled={props.disabled}>
       <legend>{t("chat.dictation.punctuation.policy")}</legend>
-      <label>
+      <label class="filters">
         <span id={modeLabel}>{t("chat.dictation.punctuation.mode")}</span>
         <select
           aria-labelledby={modeLabel}
@@ -45,7 +44,7 @@ export function DictationPunctuationFields(props: {
         </select>
       </label>
       <Show when={props.value}>
-        <label>
+        <label class="filters">
           <span id={localeLabel}>{t("chat.dictation.punctuation.locale")}</span>
           <select
             aria-labelledby={localeLabel}
@@ -62,7 +61,7 @@ export function DictationPunctuationFields(props: {
             </Show>
           </select>
         </label>
-        <label class="dictation-punctuation-fields__check">
+        <label class="dictation-punctuation-fields__check row">
           <input
             type="checkbox"
             checked={policy().explicitEnabled}
@@ -72,7 +71,7 @@ export function DictationPunctuationFields(props: {
           />
           <span>{t("chat.dictation.punctuation.enableExplicit")}</span>
         </label>
-        <label class="dictation-punctuation-fields__check">
+        <label class="dictation-punctuation-fields__check row">
           <input
             type="checkbox"
             checked={policy().fragment === true}

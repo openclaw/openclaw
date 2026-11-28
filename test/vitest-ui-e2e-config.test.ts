@@ -51,7 +51,7 @@ const sharedSerialGatewayFiles = [
   "ui/src/e2e/slack-inline-identity.e2e.test.ts",
 ];
 const realGatewayFiles = `activity-run-inspector.real-gateway agent-file-lifecycle.real-gateway
-  background-work.real-gateway chat-collaborator-scroll.real-gateway chat-html-publication.real-gateway
+  background-work.real-gateway browser-dictation-refinement.real-gateway chat-collaborator-scroll.real-gateway chat-html-publication.real-gateway
   chat-completed-assistant.real-gateway chat-daybreak.real-gateway chat-html-csp.real-gateway
   chat-session-companion-private.real-gateway config-form.real-gateway quiet-automations.real-gateway
   chat-agent-avatar.real-gateway chat-composer-websearch-kill-switch.real-gateway

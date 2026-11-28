@@ -2,13 +2,10 @@ import { roleScopesAllow } from "../../../../src/shared/operator-scope-compat.js
 import type { GatewayBrowserClient } from "../../api/gateway.ts";
 import { resolveDictationRefinementPreference } from "../../app/settings-contract.ts";
 import { loadLiveUiPreferences, patchSettings } from "../../app/settings.ts";
-import {
-  focusComposerInput,
-  selectComposerInput,
-  type ComposerDraftTransaction,
-} from "../../lib/composer-input.ts";
+import type { ComposerDraftTransaction } from "../../lib/composer-draft-transaction.ts";
+import { focusComposerInput, selectComposerInput } from "../../lib/composer-input.ts";
 import { listen } from "../../lib/reactive/listener.ts";
-import { adjustTextareaHeight, replaceReviewedDictation } from "./components/chat-composer-dom.ts";
+import { adjustTextareaHeight } from "./components/chat-composer-dom.ts";
 import type { ComposerReviewedCommit } from "./composer-dictation-refinement.ts";
 import { ComposerDictationOwner } from "./composer-dictation.ts";
 import { ComposerMicrophoneOwner } from "./composer-microphone-picker.ts";
@@ -27,12 +24,8 @@ export function createDirectDictationTextarea(read: () => HTMLTextAreaElement | 
     capturedSelection && target === capturedTarget && target.value === previewValue
       ? capturedSelection.value
       : target.value;
-  const insertReviewed = (
-    place: PlaceTranscript,
-    transcript: string,
-    reviewed: ComposerReviewedCommit,
-  ) => {
-    const receipt = replaceReviewedDictation(read, place, transcript, reviewed);
+  const insertReviewed = (reviewed: ComposerReviewedCommit, canWrite?: () => boolean) => {
+    const receipt = reviewed(read, canWrite);
     if (receipt?.committed) {
       capturedSelection = null;
       previewValue = undefined;
@@ -105,7 +98,7 @@ export function createDirectDictationTextarea(read: () => HTMLTextAreaElement | 
       reviewed?: ComposerReviewedCommit,
     ): string | ComposerDraftTransaction | null {
       if (reviewed) {
-        return insertReviewed(place, transcript, reviewed);
+        return insertReviewed(reviewed);
       }
       const target = read();
       // Delayed finals must not replace edits made after Stop unlocked this draft.
@@ -256,10 +249,8 @@ export class DirectDictationControl extends EventTarget {
           return false;
         }
         const next = reviewed
-          ? (textarea.insertReviewed?.(this.place, transcript, {
-              ...reviewed,
-              isCurrent: () => ownsDraft() && this.options.canCommit() && reviewed.isCurrent(),
-            }) ?? null)
+          ? (textarea.insertReviewed?.(reviewed, () => ownsDraft() && this.options.canCommit()) ??
+              null)
           : textarea.insertTranscript(this.place, transcript, late, preservePreview);
         if (next !== null) {
           if (typeof next === "string") {

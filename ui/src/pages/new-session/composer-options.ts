@@ -32,6 +32,7 @@ export type NewSessionComposerOptions = {
   onBlockedSubmit?: () => void;
   dictationActive?: boolean;
   dictationPreview?: string;
+  dictationReview?: JSX.Element;
   dictationStatus?: JSX.Element;
   dictationError?: string | null;
   nativeTerminal?: boolean;

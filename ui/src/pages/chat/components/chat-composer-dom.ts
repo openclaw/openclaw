@@ -2,8 +2,6 @@ import {
   composerInputElement,
   composerInputHasFocus,
   readComposerEditor,
-  replaceComposerDraft,
-  type ComposerDraftTransaction,
   focusComposerInput,
   selectComposerInput,
   syncComposerInput,
@@ -11,50 +9,8 @@ import {
 import { cancelLayout, scheduleLayout } from "../../../lib/layout-frame.ts";
 import { listen } from "../../../lib/reactive/listener.ts";
 import { observeResize } from "../../../lib/reactive/observers.ts";
-import type { ComposerReviewedCommit } from "../composer-dictation-refinement.ts";
-import type { ComposerDictationOwner } from "../composer-dictation.ts";
 import { captureChatSessionScrollPosition } from "../scroll.ts";
 import { publishTranscriptScroll } from "./chat-transcript-scroll-events.ts";
-
-/** Main, New Session and Side chat all accept the same admitted range in one history step. */
-export function replaceReviewedDictation(
-  read: () => HTMLTextAreaElement | null,
-  place: ComposerDictationOwner["placeTranscript"],
-  transcript: string,
-  reviewed: ComposerReviewedCommit,
-): ComposerDraftTransaction | null {
-  const target = read();
-  const source = reviewed.target;
-  if (!target || source.target !== target) {
-    return null;
-  }
-  // Plan without truncation. A field limit rejects the entire insertion, including separators.
-  const insertion = place(transcript, source, source);
-  if (!insertion) {
-    return null;
-  }
-  const isCurrent = () =>
-    reviewed.isCurrent() &&
-    read() === target &&
-    target.isConnected &&
-    !target.readOnly &&
-    !target.disabled &&
-    target.value === source.value &&
-    (target.maxLength < 0 || insertion.value.length <= target.maxLength);
-  if (!isCurrent()) {
-    return null;
-  }
-  // The transaction rechecks this predicate after focusing the destination, before editing it.
-  const receipt = replaceComposerDraft(target, insertion.value, isCurrent, {
-    start: source.start,
-    end: source.end,
-    caret: insertion.caret,
-  });
-  if (receipt.committed) {
-    adjustTextareaHeight(target);
-  }
-  return receipt;
-}
 
 const COMPOSER_CHROME_INTERACTIVE_SELECTOR =
   "a[href],button,input,select,textarea,summary,[popover],[contenteditable='true'],[role='button'],[role='menu'],[role='listbox'],[role='option']";

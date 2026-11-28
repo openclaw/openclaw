@@ -176,17 +176,11 @@ export function ComposerDictationStatus(props: {
   readDictation: () => ComposerDictationOwner | undefined;
 }) {
   return (
-    <>
-      <Show when={props.readDictation()?.active || props.readDictation()?.transcribing}>
-        <ChatLazyBoundary>
-          <ActiveDictationStatus readDictation={props.readDictation} />
-        </ChatLazyBoundary>
-      </Show>
-      {/* Main mounts the review above its input. Direct composers have only this status slot. */}
-      <Show when={!props.readDictation()?.refinementAvailable}>
-        <ComposerDictationReview readDictation={props.readDictation} />
-      </Show>
-    </>
+    <Show when={props.readDictation()?.active || props.readDictation()?.transcribing}>
+      <ChatLazyBoundary>
+        <ActiveDictationStatus readDictation={props.readDictation} />
+      </ChatLazyBoundary>
+    </Show>
   );
 }
 

@@ -195,8 +195,9 @@ describe("dictation submission", () => {
         if (mode !== "off" && !cancel && resolution !== "empty") {
           await waitForSolid(() =>
             expect(
-              view.container.querySelector<HTMLTextAreaElement>(".dictation-review textarea")
-                ?.value,
+              view.container.querySelector<HTMLTextAreaElement>(
+                ".agent-chat__composer-lede .dictation-review textarea",
+              )?.value,
             ).toBe("dictated follow-up"),
           );
           await expectSubmissionBlocked();

@@ -10,15 +10,21 @@ import {
   type RefinementResult,
 } from "../../../../src/shared/dictation-refinement/types.js";
 import { refinementByteLength } from "../../../../src/shared/dictation-refinement/validation.js";
-import { focusComposerInput, type ComposerDraftTransaction } from "../../lib/composer-input.ts";
+import {
+  replaceComposerDraft,
+  type ComposerDraftTransaction,
+} from "../../lib/composer-draft-transaction.ts";
+import { focusComposerInput } from "../../lib/composer-input.ts";
 import {
   createPunctuationProcessor,
   type DictationPunctuationPolicy,
   type PunctuationDetail,
 } from "../../lib/dictation-refinement.ts";
-import type {
-  ComposerDictationFinalSnapshot,
-  ComposerDictationSession,
+import { adjustTextareaHeight } from "./components/chat-composer-dom.ts";
+import {
+  placeComposerDictation,
+  type ComposerDictationFinalSnapshot,
+  type ComposerDictationSession,
 } from "./composer-dictation-session.ts";
 
 export type ComposerRefinementTarget = {
@@ -31,7 +37,48 @@ export type ComposerRefinementTarget = {
   selectionCurrent?: boolean;
 };
 
-export type ComposerReviewedCommit = { isCurrent: () => boolean; target: ComposerRefinementTarget };
+/** Only a capture that reached review can offer a synchronous editor transaction. */
+export type ComposerReviewedCommit = (
+  read: () => HTMLTextAreaElement | null,
+  canWrite?: () => boolean,
+) => ComposerDraftTransaction | null;
+
+function reviewedInsertion(
+  source: ComposerRefinementTarget,
+  transcript: string,
+  current: () => boolean,
+): ComposerReviewedCommit {
+  return (read, canWrite) => {
+    const target = read();
+    if (!target || source.target !== target) {
+      return null;
+    }
+    // Plan without truncation. Reject the whole insertion if the field cannot fit it.
+    const insertion = placeComposerDictation(transcript, source, source);
+    const isCurrent = () =>
+      current() &&
+      canWrite?.() !== false &&
+      read() === target &&
+      target.isConnected &&
+      !target.readOnly &&
+      !target.disabled &&
+      target.value === source.value &&
+      (target.maxLength < 0 || insertion.value.length <= target.maxLength);
+    if (!isCurrent()) {
+      return null;
+    }
+    // The shared transaction checks again after focus, before editing this field.
+    const receipt = replaceComposerDraft(target, insertion.value, isCurrent, {
+      start: source.start,
+      end: source.end,
+      caret: insertion.caret,
+    });
+    if (receipt.committed) {
+      adjustTextareaHeight(target);
+    }
+    return receipt;
+  };
+}
 
 export type ComposerRefinementScope = {
   connection: object | null;
@@ -478,7 +525,7 @@ export class ComposerDictationRefinement {
     const isCurrent = () => this.delivery === delivery && this.current(capture);
     try {
       const receipt = isCurrent()
-        ? this.options.commit(text, { target: punctuation.target, isCurrent })
+        ? this.options.commit(text, reviewedInsertion(punctuation.target, text, isCurrent))
         : false;
       const committed = typeof receipt === "object" ? receipt.committed : receipt;
       delivery.status =

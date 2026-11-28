@@ -4,7 +4,7 @@ import { t } from "../../../i18n/index.ts";
 import { focusComposerInput, selectComposerInput } from "../../../lib/composer-input.ts";
 import type { ComposerReviewedCommit } from "../composer-dictation-refinement.ts";
 import type { ComposerMicrophoneOwner } from "../composer-microphone-picker.ts";
-import { adjustTextareaHeight, replaceReviewedDictation } from "./chat-composer-dom.ts";
+import { adjustTextareaHeight } from "./chat-composer-dom.ts";
 import { commitComposerDraft, composerDraftKey } from "./chat-composer-state.ts";
 import type { ChatComposerProps, ChatComposerState } from "./chat-composer-types.ts";
 
@@ -59,12 +59,7 @@ export function createComposerDictationOptions(
       reviewed?: ComposerReviewedCommit,
     ) => {
       if (reviewed) {
-        const receipt = replaceReviewedDictation(
-          () => state.composerTextarea,
-          (...args) => state.dictation?.placeTranscript(...args),
-          transcript,
-          reviewed,
-        );
+        const receipt = reviewed(() => state.composerTextarea);
         if (receipt?.committed) {
           // The transaction already dispatched native input with the exact mention metadata.
           state.dictationSelection = null;

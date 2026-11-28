@@ -12,7 +12,7 @@ import {
   getChatComposerState,
   resetChatComposerState,
 } from "./components/chat-composer-state.ts";
-import { ComposerDictationStatus } from "./components/chat-voice-activity.tsx";
+import { ComposerDictationReview } from "./components/chat-voice-activity.tsx";
 import {
   controllerFixture,
   dictationIo,
@@ -514,7 +514,7 @@ describe("opt-in dictation review through the textarea insertion owner", () => {
     const h = refinementHarness();
     const mounted = mountSolid(() => {
       const owner = projectOwner(h.controller, (value) => value);
-      return createComponent(ComposerDictationStatus, { readDictation: owner.read });
+      return createComponent(ComposerDictationReview, { readDictation: owner.read });
     });
     const button = (label: string) => {
       const found = [...mounted.container.querySelectorAll<HTMLButtonElement>("button")].find(

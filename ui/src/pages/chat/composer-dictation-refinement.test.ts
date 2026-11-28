@@ -230,7 +230,7 @@ describe("dictation refinement at the composer boundary", () => {
       assert.isNotNull(dictation);
       const mobileControls = container.querySelector<HTMLElement>(".chat-mobile-dictation-action");
       assert.isNotNull(mobileControls);
-      within(mobileControls).getByRole("button", { name: "Dictation text options" }).click();
+      within(container).getByRole("button", { name: "Dictation text options" }).click();
       await vi.dynamicImportSettled();
       await vi.advanceTimersByTimeAsync(0);
       flush();

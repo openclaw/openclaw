@@ -1,6 +1,6 @@
 import type { GatewayBrowserClient } from "../../api/gateway.ts";
 import { t } from "../../i18n/index.ts";
-import type { ComposerDraftTransaction } from "../../lib/composer-input.ts";
+import type { ComposerDraftTransaction } from "../../lib/composer-draft-transaction.ts";
 import type { DictationPunctuationPolicy } from "../../lib/dictation-refinement.ts";
 import { formatUiError } from "../../lib/format-error.ts";
 import { listen } from "../../lib/reactive/listener.ts";

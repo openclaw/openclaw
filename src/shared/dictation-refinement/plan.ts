@@ -30,15 +30,20 @@ export function detectRefinementLiteralSpans(value: string): readonly ProtectedS
     throw new RefinementError("payload-limit");
   }
   const matches: ProtectedSpan[] = [];
+  // Consume plain words too, so unspaced prose is not retried at every letter.
+  const joinedWords = /[\p{L}\p{N}]+(?:_[\p{L}\p{N}]+)*/gu;
   const patterns = [
     /```[\s\S]*?```|`[^`\n]*`|"[^"\n]*"|“[^”\n]*”|‘[^’\n]*’|'[^'\n]*'/gu,
     /https?:\/\/[^\s<>"'`]+/gu,
-    /[\p{L}\p{N}]+(?:_[\p{L}\p{N}]+)+/gu,
+    joinedWords,
     /\b[0-9a-fA-F]{16,}\b/gu,
     /(?:[A-Za-z]:\\|\.{0,2}\/)[^\s<>"'`]+/gu,
   ];
   for (const pattern of patterns) {
     for (const match of value.matchAll(pattern)) {
+      if (pattern === joinedWords && !match[0].includes("_")) {
+        continue;
+      }
       matches.push({ start: match.index, end: match.index + match[0].length, kind: "literal" });
     }
   }
