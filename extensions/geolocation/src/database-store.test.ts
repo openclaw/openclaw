@@ -183,6 +183,20 @@ it.each([true, false])("evicts idle readers only when published: %s", async (pub
   expect(cityOf(active)).toBe("Vienna");
 });
 
+it("refreshes a reopened disk cache when its original age expires", async () => {
+  const store = createStore(paris);
+  await seedCache(store, vienna);
+  const cachedAt = new Date(now.getTime() - store.settings.refreshMs + 60_000);
+  await fs.utimes(store.databaseFile, cachedAt, cachedAt);
+
+  expect(cityOf(await store.load())).toBe("Vienna");
+  expect(store.fetchImpl).not.toHaveBeenCalled();
+  vi.setSystemTime(now.getTime() + 60_001);
+  expect(cityOf(await store.load())).toBe("Paris");
+  expect(store.fetchImpl).toHaveBeenCalledOnce();
+  await expectPublished(store, paris);
+});
+
 it("preserves failed-refresh backoff across idle reopens without extending it", async () => {
   vi.useFakeTimers({ toFake: ["Date", "setTimeout", "clearTimeout"] });
   const store = createStore();
