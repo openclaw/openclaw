@@ -1273,7 +1273,7 @@ describe("codex command", () => {
       { args: "stop now", text: "Usage: /codex stop", sandbox: true },
       {
         args: "sessions --host mb-m5 --limit 5x",
-        text: "Usage: /codex sessions --host <node> [filter] [--limit <n>]",
+        text: "Usage: /codex sessions --host <node> [filter] [--limit <n>] [--search-all]",
       },
       { args: "status now", text: "Usage: /codex status" },
       { args: "binding current", text: "Usage: /codex binding" },
