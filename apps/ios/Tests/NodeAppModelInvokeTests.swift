@@ -1275,6 +1275,44 @@ private final class TimingOutDeviceStatusService: DeviceStatusServicing {
 }
 
 @Suite(.serialized, .testWaitLimit) struct NodeAppModelInvokeTests {
+    @Test @MainActor func chatOwnerTracksSavedGatewayWhileOffline() async throws {
+        let registry = await GatewayRegistryTestIsolation()
+        defer { registry.restore() }
+        let model = NodeAppModel(restoringSavedGatewayRoute: true)
+        defer { model.voiceWake.stop() }
+        let unpairedOwner = model.chatViewModelOwnerID
+        #expect(model.chatTranscriptCacheGatewayID == nil)
+
+        let changed = Mutex(false)
+        withObservationTracking {
+            _ = model.chatViewModelOwnerID
+        } onChange: {
+            changed.withLock { $0 = true }
+        }
+
+        let first = "audit-\u{E9}"
+        let second = "audit-e\u{301}"
+        for stableID in [first, second] {
+            try #require(GatewaySettingsStore.upsertGatewayRegistryEntry(.init(
+                stableID: stableID, kind: .manual, name: "Offline Gateway", host: "localhost", port: 443,
+                useTLS: true, contextPath: nil, lastConnectedAtMs: nil), activate: false))
+        }
+        #expect(!changed.withLock { $0 })
+        try #require(GatewaySettingsStore.setActiveGateway(stableID: first))
+        #expect(changed.withLock { $0 })
+        #expect(GatewayStableIdentifier.matches(model.chatTranscriptCacheGatewayID, first))
+        let firstOwner = model.chatViewModelOwnerID
+        #expect(firstOwner != unpairedOwner)
+
+        try #require(GatewaySettingsStore.setActiveGateway(stableID: second))
+        #expect(GatewayStableIdentifier.matches(model.chatTranscriptCacheGatewayID, second))
+        #expect(model.chatViewModelOwnerID != firstOwner)
+        try #require(GatewaySettingsStore.removeGatewayRegistryEntry(stableID: second))
+        #expect(model.chatTranscriptCacheGatewayID == nil)
+        #expect(model.chatViewModelOwnerID == unpairedOwner)
+        #expect(!model.isOperatorGatewayConnected)
+    }
+
     @Test @MainActor func `cold launch opens the last agent main chat before and after offline restore`() async throws {
         let registry = await GatewayRegistryTestIsolation()
         defer { registry.restore() }
