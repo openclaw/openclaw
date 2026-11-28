@@ -301,6 +301,30 @@ async function prepareHistoryRead(
           }),
         }));
     }
+    case "session-search-titles": {
+      const [{ readSessionTitleFieldsFromTranscript }, { deriveGoalSessionTitle }] =
+        await Promise.all([
+          import("../../gateway/session-transcript-title-reader.worker.js"),
+          import("../../gateway/derive-goal-session-title.js"),
+        ]);
+      const { agentId, path: storePath } = request.database;
+      const env = cloneEnvWithPlatformSemantics(request.env);
+      return () => ({
+        kind: request.kind,
+        titles: request.sessions.map(({ sessionKey, sessionId }) =>
+          deriveGoalSessionTitle(
+            readSessionTitleFieldsFromTranscript({
+              agentId,
+              storePath,
+              env,
+              sessionKey,
+              sessionId,
+              sessionEntry: { sessionId },
+            }).firstUserMessage,
+          ),
+        ),
+      });
+    }
     case "session-preview": {
       const { readSessionPreviewItemsReadOnly } =
         await import("../../gateway/session-transcript-preview-reader.js");

@@ -12,6 +12,7 @@ const historyReadKinds = [
   "transcript-match",
   "branch-summaries",
   "session-title-fields",
+  "session-search-titles",
   "session-preview",
   "model-context",
   "context-messages",

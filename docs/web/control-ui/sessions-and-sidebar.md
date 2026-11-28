@@ -61,6 +61,10 @@ beside **Filter & sort**, and opens New session for the selected agent; in team 
 choose an agent from its menu first. Command-palette search sits below the three view buttons.
 Search failures show **Couldn’t search sessions. Try again.**, rather than an empty result.
 If message search is unavailable, the palette still shows matching session titles and details.
+Message matches in the command palette and in **Sessions** show the chat's name
+when available. Without a name, the command palette uses its usual chat label.
+**Sessions** shows the session key when no name is available or when more than
+one matching chat has the same name.
 Middle-click a search result, or use Cmd+click on Mac or Ctrl+click on Windows and Linux, to open its destination in a new browser tab without closing the palette.
 Use the list's collapse button to hide it, or press ⌘B on
 Mac or Ctrl+B on Windows/Linux. Clicks use the normal sidebar animation; the

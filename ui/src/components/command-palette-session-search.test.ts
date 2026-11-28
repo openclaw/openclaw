@@ -2,6 +2,45 @@ import { expect, it } from "vitest";
 import type { GatewaySessionRow } from "../api/types.ts";
 import { buildCommandPaletteSessionItems } from "./command-palette-session-search.ts";
 
+it("fills a missing title without replacing the listed session or borrowing an older title", () => {
+  const row: GatewaySessionRow = {
+    key: "agent:main:dashboard:distant",
+    kind: "direct",
+    sessionId: "current",
+    updatedAt: 2,
+  };
+  const items = (sessionId: string) =>
+    buildCommandPaletteSessionItems({
+      visibleRows: [row],
+      visibleKeys: new Set([row.key]),
+      transcriptResult: {
+        results: [
+          {
+            sessionId,
+            sessionKey: row.key,
+            messageId: "match",
+            role: "user",
+            score: 1,
+            snippet: "The observatory opens Friday.",
+            timestamp: 1,
+          },
+        ],
+        sessions: [{ ...row, sessionId, derivedTitle: "Plan the observatory", updatedAt: 1 }],
+      },
+      search: "observatory",
+    });
+  expect(items("current")).toMatchObject([
+    {
+      label: "Plan the observatory",
+      action: `session:${row.key}`,
+      category: "messages",
+      description: "The observatory opens Friday.",
+      session: { updatedAt: 2 },
+    },
+  ]);
+  expect(items("replaced")[0]?.label).not.toBe("Plan the observatory");
+});
+
 it.each([
   ["München", "München travel", "Mu\u0308nchen"],
   ["οσ", "ΟΣ travel", "ος"],
