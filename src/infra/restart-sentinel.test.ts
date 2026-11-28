@@ -101,10 +101,6 @@ import {
 } from "./restart-sentinel-store.js";
 import {
   clearRestartSentinelIfRevision,
-  markUpdateFailureReportReceiptPending,
-  markUpdateFailureReportReceiptPrepared,
-  readUpdateFailureReportReceipt,
-  reserveUpdateFailureReportReceipt,
   finalizeUpdateRestartSentinelRunningVersion,
   hasRestartSentinel,
   readRestartSentinel,
@@ -258,31 +254,6 @@ describe("restart sentinel", () => {
     expect(written.payload).toStrictEqual(restartPayload());
     await expect(readRestartSentinel()).resolves.toEqual(written);
   });
-
-  it.each(["transaction", "commit"])(
-    "keeps the report prepared when publication authority retires at %s admission",
-    async (stage) => {
-      const receipt = [`receipt-refusal-${stage}`, "report-owner", "a".repeat(64)] as const;
-      await reserveUpdateFailureReportReceipt(...receipt);
-      await markUpdateFailureReportReceiptPrepared(...receipt);
-      const isCurrent = retireAtAdmission(stage);
-      const refusal = new Error("Report publisher retired");
-      const assertCurrent = () => {
-        if (!isCurrent()) {
-          throw refusal;
-        }
-      };
-      await expect(
-        markUpdateFailureReportReceiptPending(...receipt, process.env, undefined, assertCurrent),
-      ).rejects.toBe(refusal);
-      admission.beforeGrant = undefined;
-      await expect(readUpdateFailureReportReceipt(receipt[0])).resolves.toMatchObject({
-        status: "prepared",
-        reservationId: receipt[1],
-        previewDigest: receipt[2],
-      });
-    },
-  );
 
   it.each(["transaction", "commit"] as const)(
     "preserves the notification when its producer loses authority at %s admission",

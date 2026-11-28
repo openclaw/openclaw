@@ -241,6 +241,14 @@ if [ "$SCENARIO" = "mobile-pairing-reconnect" ] && [ "${OPENCLAW_UPGRADE_SURVIVO
   echo "mobile-pairing-reconnect requires OPENCLAW_UPGRADE_SURVIVOR_PUBLISHED_BASELINE=1" >&2
   exit 1
 fi
+if [ "$SCENARIO" = "boot-plugin-convergence" ] && {
+  [ "${OPENCLAW_UPGRADE_SURVIVOR_PUBLISHED_BASELINE:-0}" != "1" ] ||
+    [ "$UPDATE_RESTART_MODE" != "manual" ] ||
+    [ "$ROOT_MANAGED_VPS" != "0" ] || [ "$LIVE_ENABLED" != "0" ];
+}; then
+  echo "boot-plugin-convergence requires a published baseline, isolated manual restart, and no live provider" >&2
+  exit 2
+fi
 if [ "$SCENARIO" = "recovery-cleanup" ] && { [ "$UPDATE_RESTART_MODE" != "manual" ] || [ "$ROOT_MANAGED_VPS" != "0" ] || [ "$LIVE_ENABLED" != "0" ]; }; then
   echo "recovery-cleanup requires the isolated manual-restart fixture without live provider credentials" >&2
   exit 1

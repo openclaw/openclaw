@@ -1,10 +1,12 @@
 import { Type } from "typebox";
+import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import { captureExecRequestOwners } from "../../infra/exec-request-context.js";
 import { resolveReplyRunForCurrentSessionId } from "../../sessions/session-controller.identity.js";
 import { findSessionControllerOperationByRunId } from "../../sessions/session-controller.queries.js";
 import { resolveAgentWorkspaceDir } from "../agent-scope.js";
 import type { SandboxContext } from "../sandbox/types.js";
 import { stringEnum } from "../schema/string-enum.js";
+import { isHomeProjectSession } from "../session-project-guidance.js";
 import { PROJECT_MOVE_HANDOFF_NAME } from "../sessions-yield-context.js";
 import { ToolInputError } from "../tool-input-error.js";
 import type { AnyAgentTool } from "./common.js";
@@ -27,13 +29,18 @@ function currentRequester() {
   return authority ? { profileId: authority.profileId, scopes: authority.scopes } : undefined;
 }
 
-export function createSessionProjectTool(options: {
-  sandbox?: SandboxContext | null;
-  sessionId?: string;
-  runId?: string;
-  onYield?: SessionsYieldCallback;
-  senderIsOwner?: boolean;
-}): AnyAgentTool {
+export function createSessionProjectTool(
+  options: {
+    sandbox?: SandboxContext | null;
+    sessionId?: string;
+    runId?: string;
+    onYield?: SessionsYieldCallback;
+    senderIsOwner?: boolean;
+  },
+  offeredTo?: { config: OpenClawConfig; agentId: string; sessionKey: string },
+): AnyAgentTool {
+  const listOnly =
+    offeredTo && isHomeProjectSession(offeredTo.config, offeredTo.agentId, offeredTo.sessionKey);
   let operation = options.runId ? findSessionControllerOperationByRunId(options.runId) : undefined;
   if (options.runId === undefined && options.sessionId) {
     const current = resolveReplyRunForCurrentSessionId(options.sessionId);
@@ -46,15 +53,19 @@ export function createSessionProjectTool(options: {
     // The move yields this turn, which a Code Mode exec cannot carry.
     async: false,
     catalogMode: "direct-only",
-    description: DESCRIPTION,
-    parameters: Type.Object(
-      {
-        action: stringEnum(["list", "move"]),
-        projectId: Type.Optional(Type.String({ minLength: 1 })),
-        checkout: Type.Optional(Type.String({ minLength: 1 })),
-      },
-      { additionalProperties: false },
-    ),
+    description: listOnly
+      ? "List the registered projects available for a separate project session. Home cannot move through this tool."
+      : DESCRIPTION,
+    parameters: listOnly
+      ? Type.Object({ action: stringEnum(["list"]) }, { additionalProperties: false })
+      : Type.Object(
+          {
+            action: stringEnum(["list", "move"]),
+            projectId: Type.Optional(Type.String({ minLength: 1 })),
+            checkout: Type.Optional(Type.String({ minLength: 1 })),
+          },
+          { additionalProperties: false },
+        ),
     execute: async (toolCallId, rawArgs, signal) => {
       // SAFETY: the tool runtime validates rawArgs against the closed schema above.
       const input = rawArgs as { action: "list" | "move"; projectId?: string; checkout?: string };
@@ -73,6 +84,12 @@ export function createSessionProjectTool(options: {
         return jsonResult({
           projects: await listSessionProjects(context.getRuntimeConfig(), currentRequester()),
         });
+      }
+      // A retained tool definition can outlive the prompt that advertised it.
+      if (isHomeProjectSession(context.getRuntimeConfig(), caller.agentId, caller.sessionKey)) {
+        throw new ToolInputError(
+          "Home stays in the agent workspace. Start a separate session for project work.",
+        );
       }
       const { projectId } = input;
       const { sessionId } = options;
@@ -113,7 +130,6 @@ export function createSessionProjectTool(options: {
         requestOwners,
         onYield: options.onYield,
         signal,
-        senderIsOwner: options.senderIsOwner,
         // The move runs after this turn ends, still for the person who asked for it.
         retainRequester: true,
         fenceSuccessors: true,

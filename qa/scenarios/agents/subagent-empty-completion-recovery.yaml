@@ -166,9 +166,9 @@ flow:
             message:
               expr: "`child did not record exactly one successful write with the expected file bytes: transcript=${JSON.stringify(childTranscript)} file=${JSON.stringify(sideEffectContents)}`"
         - assert:
-            expr: "finalizationRequests.length === 2 && finalizationRequests.every((request) => !Array.isArray(request.body?.tools) || request.body.tools.length === 0)"
+            expr: "finalizationRequests.length === 2 && finalizationRequests.every((request) => request.body?.tool_choice === 'none' || !Array.isArray(request.body?.tools) || request.body.tools.length === 0)"
             message:
-              expr: "`expected two exhausted tool-free finalizations: ${JSON.stringify(finalizationRequests)}`"
+              expr: "`expected two exhausted finalizations with tool calls disabled: ${JSON.stringify(finalizationRequests)}`"
         - assert:
             expr: "childTranscript.finalText === ''"
             message:

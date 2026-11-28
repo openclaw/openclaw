@@ -31,6 +31,7 @@ import {
 } from "./manager-embedding-cache.js";
 import {
   upgradeMemoryIndexProviderKey,
+  writeMemoryEmbeddingRefusal,
   writeMemoryIndexMetadata,
 } from "./manager-index-metadata.js";
 import { readMemoryIndex } from "./manager-index-read.js";
@@ -532,6 +533,18 @@ export function bindPostgresMemoryPublication(
         { publishFacts: true },
       );
     }
+    if (command.type === "index.writeEmbeddingRefusal") {
+      // The refusal describes the endpoint, not index content, so a staged rebuild keeps it live.
+      return write(
+        () => {
+          writeMemoryEmbeddingRefusal(db, command.input);
+          if (rebuilding) {
+            rebuilding.embeddingRefusal = command.input;
+          }
+        },
+        { publishFacts: true },
+      );
+    }
     if (command.type === "source.refresh" || command.type === "source.delete") {
       return rebuilding
         ? { ok: true, value: false }
@@ -629,6 +642,9 @@ export function bindPostgresMemoryPublication(
           for (const source of sources) {
             if (!source.header) {
               throw new Error("Memory source staging was not started");
+            }
+            if (command.type === "source.replace") {
+              source.header.verifiedFile = command.input.verifiedFile;
             }
             if (rebuilding) {
               stageSource(source.header, source.fragments);

@@ -90,6 +90,8 @@ export type DoctorHealthFlowContext = {
   env?: NodeJS.ProcessEnv;
   /** State migration owns service activation until final readiness passes. */
   gatewayMaintenanceActive?: boolean;
+  /** Set under Doctor's own stop: after-restart contributions the pass reached, in order. */
+  afterRestartContributions?: DoctorHealthContribution[];
   agentDatabaseRefusals?: readonly AgentDatabaseAdmissionRefusal[];
   preparedAgentCount?: number;
   updateBudget?: DoctorUpdateBudget;
@@ -126,11 +128,27 @@ export type DoctorHealthContribution = {
   healthChecks: readonly DoctorHealthCheck[];
   healthCheckIds: readonly string[];
   /** Read-only work check traced under Gateway maintenance; without one the contribution has work. */
-  pending?: (
-    ctx: DoctorHealthFlowContext,
-  ) => DoctorMaintenancePending | Promise<DoctorMaintenancePending>;
+  pending?: DoctorContributionPending;
+  /**
+   * "after-restart": when Doctor's own `--fix` stop restores the Gateway, this runs after the
+   * restart beside the serving Gateway, reporting the repaired state. Only a "diagnostic-only"
+   * contribution whose results no later repair reads may declare it.
+   */
+  placement?: "after-restart";
   run: (ctx: DoctorHealthFlowContext) => Promise<void>;
 };
+
+/**
+ * "diagnostic-only" declares that `run` never writes under `--fix`, so it never has work;
+ * doctor-health-contributions.diagnostic-only.test.ts runs each declared contribution in
+ * repair mode and fails when one changes a store. A function is the owner's read-only check
+ * and must decide with the same predicate as `run`.
+ */
+type DoctorContributionPending =
+  | "diagnostic-only"
+  | ((
+      ctx: DoctorHealthFlowContext,
+    ) => DoctorMaintenancePending | Promise<DoctorMaintenancePending>);
 
 export type DoctorContributionHealthCheck = Omit<DoctorHealthCheck, "id" | "kind" | "source"> & {
   readonly id?: string;

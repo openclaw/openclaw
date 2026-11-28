@@ -251,7 +251,11 @@ function Stats(props: { state: () => LogbookUiState }) {
         <Show when={stats()!.apps.length > 0}>
           <div class="logbook-stats__apps">
             <For each={stats()!.apps.slice(0, 5)} keyed={false}>
-              {(app) => <span class="logbook-stats__app">{app().domain}</span>}
+              {(app) => (
+                <span class="logbook-stats__app" dir="rtl" title={app().domain}>
+                  <bdi>{app().domain}</bdi>
+                </span>
+              )}
             </For>
           </div>
         </Show>

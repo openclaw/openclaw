@@ -9,17 +9,18 @@ scenario:
       - telegram.built-in-commands
   objective: Verify Telegram returns the prompt budget through native command routing.
   successCriteria:
-    - The context command returns the prompt budget card.
-    - The context command returns the context list shortcut.
+    - The context command returns the expected budget report and supporting detail.
   codeRefs:
     - src/auto-reply/reply/commands-context-report.ts
     - extensions/qa-lab/src/live-transports/telegram/adapter.runtime.ts
   execution:
     kind: flow
     channel: telegram
-    summary: Run Telegram context and verify the prompt budget and list shortcut.
+    summary: Run the native Telegram context command and verify its budget report.
     config:
-      expectedAll: [Prompt budget, /context list]
+      commandText: /context
+      replyMarker: Prompt budget
+      expectedDetails: /context list
 
 flow:
   steps:
@@ -33,16 +34,16 @@ flow:
             conversation: { id: telegram-command-room, kind: channel }
             senderId: qa-command-operator
             senderName: QA Command Operator
-            text: /context
+            text: { ref: config.commandText }
             nativeCommand: { name: context }
         - waitForOutbound:
             conversation: { id: telegram-command-room, kind: channel }
             sinceIndex: { ref: startIndex }
-            textIncludes: /context list
+            textIncludes: { ref: config.replyMarker }
             timeoutMs: 60000
           saveAs: reply
         - assert:
-            expr: "config.expectedAll.every((needle) => reply.text.includes(needle))"
+            expr: "reply.text.includes(config.replyMarker) && reply.text.includes(config.expectedDetails)"
             message:
               expr: "`context reply missing expected text: ${reply.text}`"
       detailsExpr: reply.text

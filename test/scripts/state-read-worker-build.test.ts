@@ -14,6 +14,7 @@ const configs = Array.isArray(buildConfigs) ? buildConfigs : [buildConfigs];
 const { createTempDir } = createScriptTestHarness();
 const handlersModule = "/src/state/openclaw-state-read-handlers.ts";
 const registryModule = "/src/state/openclaw-agent-db-registry.read.ts";
+const migrationReadModule = "/src/infra/deferred-plugin-migrations.read.kernel.ts";
 const mixedStoreModule = "/src/agents/subagents/registry/subagent-registry.store.worker.ts";
 const streamModules = [
   "/src/agents/subagents/registry/subagent-registry.store.restore.worker.ts",
@@ -125,6 +126,7 @@ it.each([
       const owners = [
         ...(entryName === "state/openclaw-state-read.worker" ? [registryModule] : []),
         ...streamModules,
+        migrationReadModule,
       ];
       for (const owner of owners) {
         const targets = [...startup.dynamicImports].filter((name) => {
@@ -137,13 +139,20 @@ it.each([
         expect(targets, owner).toHaveLength(1);
         const loaded = staticClosure(targets[0]!).modules;
         const excluded =
-          owner === registryModule
-            ? [handlersModule, "/src/state/backup-run-records.kernel.ts"]
-            : [
-                handlersModule,
-                mixedStoreModule,
-                ...streamModules.filter((module) => module !== owner),
-              ];
+          owner === migrationReadModule
+            ? [
+                "/src/infra/deferred-plugin-migrations.ts",
+                "/src/infra/deferred-plugin-migrations.cohort.ts",
+                "/src/infra/update-run-recovery-store.ts",
+                "/src/state/openclaw-state-db.ts",
+              ]
+            : owner === registryModule
+              ? [handlersModule, "/src/state/backup-run-records.kernel.ts"]
+              : [
+                  handlersModule,
+                  mixedStoreModule,
+                  ...streamModules.filter((module) => module !== owner),
+                ];
         expect(hasModule(loaded, owner), owner).toBe(true);
         expect(hasModule(loaded, ...excluded), owner).toBe(false);
       }

@@ -1,5 +1,7 @@
 import { execFile } from "node:child_process";
+import { access as accessCallback, constants } from "node:fs";
 import fs from "node:fs/promises";
+import os from "node:os";
 import path from "node:path";
 import { promisify } from "node:util";
 import { describe, expect, it, vi } from "vitest";
@@ -7,11 +9,9 @@ import * as nodeService from "../daemon/node-service.js";
 import * as runtimePaths from "../daemon/runtime-paths.js";
 import * as gatewayService from "../daemon/service.js";
 import { createMockGatewayService } from "../daemon/service.test-helpers.js";
-import { createDoctorRuntimeProjection } from "../flows/doctor-health-contributions.test-support.js";
 import { readGatewayLockProcessNamespace } from "../infra/gateway-lock-payload.js";
 import { readGatewayLockProcessStartTime } from "../infra/gateway-lock-process.js";
 import { acquireGatewayStateOwner } from "../infra/gateway-state-owner.js";
-import * as processCensus from "../infra/openclaw-process-census.js";
 import { resolveRuntimeWorkerArgv, resolveRuntimeWorkerUrl } from "../infra/runtime-worker-url.js";
 import {
   getUpdateRunAsync,
@@ -34,7 +34,7 @@ import {
 import { VERSION } from "../version.js";
 import { runReleaseUpdateCli } from "./cli.js";
 import * as serviceConversion from "./convert-service.js";
-import { settleRunFromTrial } from "./gateway-trial.js";
+import { announceReady } from "./gateway-trial.js";
 import { preflight } from "./preflight.js";
 import { registerAlreadyCurrentUpdateTests } from "./prepare-current.test-support.js";
 import { prepareGit } from "./prepare-git.js";
@@ -47,7 +47,7 @@ import {
 import { preparePackage } from "./prepare-package.js";
 import { bin, executable, node, repository, root } from "./prepare.test-support.js";
 import { prepareUpdate } from "./run.js";
-import { readTrial, resolvePrefix, switchLink } from "./store.js";
+import { readTrial, resolvePrefix, switchLink, writeTrial } from "./store.js";
 import * as targets from "./target.js";
 import { resolveTarget } from "./target.js";
 
@@ -145,7 +145,7 @@ process.exit(result.status ?? 1);
     );
   });
 
-  it("removes failed staging and Git registration while preserving the stderr tail", async () => {
+  it("preserves the bounded build failure diagnostics", async () => {
     const target = await repository(true);
     const staging = path.join(root, "staging");
     const result = await prepareGit({ ...target, staging, node, timeoutMs: 30_000 });
@@ -156,20 +156,15 @@ process.exit(result.status ?? 1);
     expect(result.reason).toBe("build-failed");
     expect(result.stderrTail).toContain("fixture build failed");
     expect(result.stderrTail.length).toBeLessThanOrEqual(8192);
-    await expect(fs.access(staging)).rejects.toMatchObject({ code: "ENOENT" });
-    expect((await exec("git", ["-C", target.checkout, "worktree", "list"])).stdout).not.toContain(
-      staging,
-    );
   });
 
   it("stores and reports the actual build error after ANSI-colored warnings", async () => {
     const { checkout } = await repository(true, ">=1", true);
+    const beforeWorktrees = (await exec("git", ["-C", checkout, "worktree", "list", "--porcelain"]))
+      .stdout;
     vi.stubEnv("OPENCLAW_STATE_DIR", path.join(root, "state"));
     vi.stubEnv("GIT_COMMIT", "");
-    // An earlier updater's leftover is reclaimed before the update; the outcome stays the build's.
-    const abandoned = createDoctorRuntimeProjection(path.join(root, "tmp"), checkout, "Gone01");
-    vi.spyOn(processCensus, "inspectOtherOpenClawProcesses").mockReturnValue({ pids: [] });
-    const log = vi.spyOn(defaultRuntime, "log").mockImplementation(() => {});
+    vi.spyOn(defaultRuntime, "log").mockImplementation(() => {});
     const error = vi.spyOn(defaultRuntime, "error").mockImplementation(() => {});
     try {
       openOpenClawStateDatabase({ env: process.env });
@@ -192,8 +187,10 @@ process.exit(result.status ?? 1);
       expect(detail?.length).toBeLessThanOrEqual(1024);
       expect(error).toHaveBeenCalledWith(expect.stringContaining("fixture build failed"));
       expect(process.exitCode).toBe(1);
-      await expect(fs.access(abandoned)).rejects.toMatchObject({ code: "ENOENT" });
-      expect(log).toHaveBeenCalledWith(`Removed abandoned updater runtime: ${abandoned}`);
+      expect(await fs.readdir(path.join(resolvePrefix(), "releases"))).toEqual([]);
+      expect((await exec("git", ["-C", checkout, "worktree", "list", "--porcelain"])).stdout).toBe(
+        beforeWorktrees,
+      );
     } finally {
       process.exitCode = undefined;
       await closeOpenClawStateDatabaseAsync();
@@ -416,7 +413,6 @@ if (args[0] === 'pack') {
         await expect(fs.stat(path.join(root, "dependencies-installed"))).rejects.toMatchObject({
           code: "ENOENT",
         });
-        await expect(fs.stat(staging)).rejects.toMatchObject({ code: "ENOENT" });
         return;
       }
       expect(result.ok).toBe(true);
@@ -466,6 +462,16 @@ describe("package release conversion", () => {
       expect(outcome.status).toBe(releaseAware ? "pending" : "failed");
       if (releaseAware) {
         expect(await readTrial()).toMatchObject({ phase: "pending", runId: run.runId });
+        if (outcome.status !== "pending") {
+          throw new Error("Expected a published release");
+        }
+        const worktrees = (
+          await exec("git", ["-C", target.checkout, "worktree", "list", "--porcelain", "-z"])
+        ).stdout
+          .split("\0")
+          .filter((field) => field.startsWith("worktree "))
+          .map((field) => path.resolve(field.slice("worktree ".length)));
+        expect(worktrees).toContain(await fs.realpath(outcome.releaseRoot));
       } else {
         expect(outcome).toMatchObject({
           reason: "release-updates-unsupported",
@@ -658,6 +664,12 @@ console.log(JSON.stringify(process.argv[3] === 'check-release'
   ? {ok:true,surfaces:[],warnings:[{code:'configured-plugin-path-unavailable',message:'Fixture plugin path is unavailable'}]}
   : {status:'ok',changed:false,warnings:[],sync:{warnings:[],errors:[]},npm:{outcomes:[]}}));`,
       );
+      if (build === "installed") {
+        await fs.copyFile(
+          path.join(packedRoot, "openclaw.mjs"),
+          path.join(runningRoot, "openclaw.mjs"),
+        );
+      }
       const archive = path.join(root, "candidate.tgz");
       await exec("tar", ["-czf", archive, "-C", path.dirname(packedRoot), "package"]);
       await executable(
@@ -831,11 +843,13 @@ if (process.argv[2] !== 'install') {
           expect(result.stdout.trim()).toBe("running");
         }
         expect((await readTrial(prefix))?.phase).toBe("pending");
-        await settleRunFromTrial({
+        vi.stubEnv("OPENCLAW_LAUNCHER_IPC", "");
+        await writeTrial({
           ...(await readTrial(prefix))!,
           phase: "rolled-back",
           outcome: { status: "rolled-back", reason: "new build failed to start", at: Date.now() },
         });
+        await announceReady(null);
         const rolledBack = await getUpdateRunAsync(run.runId);
         expect(rolledBack?.status).toBe("failed");
         expect(rolledBack?.origin.releaseAdmission).toEqual(preparedRun?.origin.releaseAdmission);
@@ -855,57 +869,6 @@ if (process.argv[2] !== 'install') {
 });
 
 registerAlreadyCurrentUpdateTests();
-
-describe("retained updater runtimes", () => {
-  // Updaters before owner records projected the package they replaced into the temp dir.
-  const project = (checkout: string, name: string) =>
-    createDoctorRuntimeProjection(path.join(root, "tmp"), checkout, name);
-
-  it("reclaims an earlier updater's runtime and keeps uncertain ones without failing", async () => {
-    const { checkout, sha } = await repository();
-    vi.stubEnv("OPENCLAW_STATE_DIR", path.join(root, "state"));
-    vi.stubEnv("GIT_COMMIT", sha);
-    const abandoned = project(checkout, "Gone01");
-    const held = project(checkout, "Held01");
-    const unseen = project(checkout, "Blind1");
-    // One runtime is still used by another process; for another, processes cannot be listed.
-    vi.spyOn(processCensus, "inspectOtherOpenClawProcesses").mockImplementation(((
-      directory: string,
-    ) =>
-      directory === held
-        ? { pids: [4242] }
-        : directory === unseen
-          ? { error: "Could not inspect OpenClaw processes: census unavailable" }
-          : { pids: [] }) as typeof processCensus.inspectOtherOpenClawProcesses);
-    const log = vi.spyOn(defaultRuntime, "log").mockImplementation(() => {});
-    try {
-      openOpenClawStateDatabase({ env: process.env });
-      await runReleaseUpdateCli({
-        json: false,
-        restart: false,
-        runningRoot: checkout,
-        storedChannel: "dev",
-      });
-      expect(process.exitCode).toBe(0);
-      expect((await getUpdateRunStatusAsync()).lastRun).toMatchObject({
-        status: "skipped",
-        reason: "already-current",
-      });
-      await expect(fs.access(abandoned)).rejects.toMatchObject({ code: "ENOENT" });
-      await expect(fs.access(held)).resolves.toBeUndefined();
-      await expect(fs.access(unseen)).resolves.toBeUndefined();
-      // Kept runtimes are reported by the cleanup owner's log; the command prints removals.
-      expect(log.mock.calls.map(([line]) => String(line))).toEqual([
-        `Removed abandoned updater runtime: ${abandoned}`,
-        "Already up to date.",
-      ]);
-    } finally {
-      process.exitCode = undefined;
-      await closeOpenClawStateDatabaseAsync();
-      closeOpenClawStateDatabaseForTest();
-    }
-  });
-});
 
 describe("update preflight", () => {
   it("refuses an incompatible engine before preparation", async () => {
@@ -970,7 +933,7 @@ describe("update preflight", () => {
     ).toMatchObject({ ok: false, reason: "dirty" });
   });
 
-  it("refuses insufficient installation and state disk space", async () => {
+  it("requires installation space but not a full copy of state databases", async () => {
     const target = await repository();
     const params = {
       kind: "git" as const,
@@ -983,38 +946,60 @@ describe("update preflight", () => {
       await preflight({ ...params, statfs: async () => ({ bavail: 1, bsize: 1 }) }),
     ).toMatchObject({ ok: false, reason: "insufficient-install-space" });
     await fs.mkdir(path.join(params.stateDir, "state"), { recursive: true });
-    await fs.writeFile(path.join(params.stateDir, "state", "openclaw.sqlite"), "database bytes");
+    const database = path.join(params.stateDir, "state", "openclaw.sqlite");
+    await fs.writeFile(database, "");
+    await fs.truncate(database, 3_000_000_000);
     expect(
       await preflight({
         ...params,
-        statfs: async (file) => ({ bavail: file === root ? 2_000_000_000 : 1, bsize: 1 }),
+        statfs: async () => ({ bavail: 2_000_000_000, bsize: 1 }),
       }),
-    ).toMatchObject({ ok: false, reason: "insufficient-state-space" });
+    ).toEqual({ ok: true });
   });
 
-  it("counts state databases past a dangling link a tool left in an agent home", async () => {
+  it.each([
+    ["EACCES", false, false],
+    ["EPERM", false, false],
+    ["EACCES", true, false],
+    ["EACCES", true, true],
+  ] as const)("reports %s ownership repair (%s, %s)", async (code, system, writeCheck) => {
     const target = await repository();
-    const stateDir = path.join(root, "data");
-    const shims = path.join(stateDir, "agents", "main", "agent", "codex-home", "tmp", "arg0");
-    await fs.mkdir(shims, { recursive: true });
-    await fs.symlink(path.join(root, "gone", "apply_patch"), path.join(shims, "apply_patch"));
-    await fs.writeFile(
-      path.join(stateDir, "agents", "main", "agent", "openclaw-agent.sqlite"),
-      "database bytes",
-    );
-    const params = {
-      kind: "git" as const,
-      target: { kind: "git" as const, ...target, version: "2026.11.21" },
-      prefix: root,
-      stateDir,
-      node,
-    };
+    const prefix = path.join(root, "user's install");
+    await fs.mkdir(prefix);
+    vi.spyOn(os, "userInfo").mockReturnValue({
+      ...os.userInfo(),
+      username: "update-user",
+      homedir: system ? path.join(root, "home") : root,
+    });
+    const stat = await fs.stat(prefix);
+    vi.spyOn(fs, "stat").mockResolvedValue(Object.assign(stat, { uid: 0 }));
+    if (writeCheck) {
+      const access = promisify(accessCallback);
+      vi.spyOn(fs, "access").mockImplementation(async (file, mode) => {
+        if (file === prefix && mode === constants.W_OK) {
+          throw Object.assign(new Error("permission denied"), { code });
+        }
+        return access(file, mode);
+      });
+    }
     expect(
       await preflight({
-        ...params,
-        statfs: async (file) => ({ bavail: file === root ? 2_000_000_000 : 1, bsize: 1 }),
+        kind: "git",
+        target: { kind: "git", ...target, version: "2026.11.21" },
+        prefix,
+        stateDir: root,
+        node,
+        statfs: async () => {
+          throw Object.assign(new Error("permission denied"), { code });
+        },
       }),
-    ).toMatchObject({ ok: false, reason: "insufficient-state-space" });
+    ).toEqual({
+      ok: false,
+      reason: "prefix-not-writable",
+      message: system
+        ? `The installation at '${prefix}' is owned by root. Run: sudo openclaw update`
+        : `Files in '${prefix}' are not writable by update-user. Fix ownership with: sudo chown -R update-user '${prefix.replaceAll("'", `'"'"'`)}'. Then retry the update.`,
+    });
   });
 
   it("prepares an install that runs inside a container", async () => {

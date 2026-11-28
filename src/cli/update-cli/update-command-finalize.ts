@@ -82,7 +82,6 @@ import { completeSourceUpdateRuntime } from "./update-command-runtime.js";
 import { resolveServiceRefreshEnv, withUpdateInProgressEnv } from "./update-command-service-env.js";
 import { withUpdateFailureTriage, type UpdateTriageTarget } from "./update-command-triage.js";
 import { UpdateFinalizationLifecycle } from "./update-finalization-lifecycle.js";
-import { settleManagedHandoffPluginCohort } from "./update-plugin-cohort-settlement.js";
 import {
   hasUnverifiedDataAtRisk,
   refuseUnverifiedDataAtRiskBeforeMaintenance,
@@ -150,7 +149,6 @@ async function finalizeUpdate(
   retained?: RetainedUpdateCustodyReport,
   stage?: InterruptedUpdateFinalization,
 ): Promise<void> {
-  await settleManagedHandoffPluginCohort();
   // Refuse retained recovery before discovery; preflight rechecks before state writes.
   await assertUpdateRecoveryAdmission({ env: process.env });
   // A stage's calling update has already refused host-owned and immutable installations.

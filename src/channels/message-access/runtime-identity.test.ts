@@ -31,7 +31,6 @@ describe("identityEntryAuthenticationClassifier", () => {
     ["legacy:123", "asserted"],
     ["rejected", undefined],
     ["id:   ", undefined],
-    ["*", undefined],
   ] as const)("classifies %s as %s", (raw, expected) => {
     expect(identityEntryAuthenticationClassifier(identity)(raw)).toBe(expected);
   });
@@ -86,5 +85,6 @@ describe("identityEntryAuthenticationClassifier", () => {
       aliases: [{ key: "name", authentication: "mutable" }],
     });
     expect(classify("id")).toBe("asserted");
+    expect(classify("*")).toBeUndefined();
   });
 });

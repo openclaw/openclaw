@@ -49,7 +49,6 @@ export type ScribePlugin = {
 export type ScribeDefinition = {
   id: ScribeId;
   title: string;
-  blurb: string;
   skill:
     | "knowledge-claim-consolidation"
     | "knowledge-ingest"
@@ -60,12 +59,6 @@ export type ScribeDefinition = {
   /** Plugin whose tools the scribe reads its source through; the page checks it is connected. */
   plugin?: ScribePlugin;
   modes: readonly ScribeMode[];
-  /** Chip text for how often it runs. */
-  cadence: string;
-  /** Row button that opens the start dialog. */
-  startLabel: string;
-  dialogTitle: string;
-  submitLabel: string;
 };
 
 /** Schedule an ongoing conversations scribe uses: daily at 4:00 AM in the operator's timezone. */
@@ -83,65 +76,39 @@ export const SCRIBES: readonly ScribeDefinition[] = [
   {
     id: "claim-consolidation",
     title: "Knowledge Consolidation",
-    blurb:
-      "Weekly or nightly, reviews the claims that name no page: files each on its subject page, creates pages for subjects that deserve one, supersedes status snapshots by their outcome, and folds outcomes into page State.",
     skill: "knowledge-claim-consolidation",
     icon: "link",
     tone: "blue",
     modes: ["ongoing"],
-    cadence: "Ongoing",
-    startLabel: "Turn on…",
-    dialogTitle: "Knowledge Consolidation",
-    submitLabel: "Turn on",
   },
   {
     id: "conversations",
     title: "Learn from conversations",
-    blurb:
-      "Reads your conversations and saves the decisions, preferences, commitments and lessons in them. Run it once, or keep it learning as new conversations finish.",
     skill: "knowledge-ingest",
     icon: "messageSquare",
     tone: "teal",
     modes: ["ongoing", "once"],
-    cadence: "Once or ongoing",
-    startLabel: "Set up…",
-    dialogTitle: "Learn from conversations",
-    submitLabel: "Start",
   },
   {
     id: "granola",
     title: "Learn from Granola",
-    blurb:
-      "Turns your Granola meetings into meeting pages, keeps the people and projects in them up to date, and saves their decisions and commitments. Run it once, or keep it learning as new meetings finish.",
     skill: "knowledge-meeting-ingest",
     icon: "calendarClock",
     tone: "green",
     plugin: { id: "granola", name: "Granola", catalogPath: "openclaw/granola" },
     modes: ["ongoing", "once"],
-    cadence: "Once or ongoing",
-    startLabel: "Set up…",
-    dialogTitle: "Learn from Granola",
-    submitLabel: "Start",
   },
   {
     id: "memory",
     title: "Learn from Memory",
-    blurb:
-      "Brings what Memory already knows (MEMORY.md, daily notes and Dreaming promotions) into Knowledge, once. Memory itself is left as it is.",
     skill: "knowledge-ingest",
     icon: "brain",
     tone: "amber",
     modes: ["once"],
-    cadence: "One time",
-    startLabel: "Import…",
-    dialogTitle: "Import from Memory",
-    submitLabel: "Start import",
   },
   {
     id: "slack",
     title: "Learn from Slack",
-    blurb:
-      "Reads the Slack channels your Slack bot is in and saves the decisions, commitments and project news discussed there, keeping the people and projects in them up to date. Run it once, or keep it learning as conversations continue.",
     skill: "knowledge-source-ingest",
     icon: "hash",
     tone: "blue",
@@ -152,10 +119,6 @@ export const SCRIBES: readonly ScribeDefinition[] = [
       channel: { id: "slack", accountPath: "settings/channels" },
     },
     modes: ["ongoing", "once"],
-    cadence: "Once or ongoing",
-    startLabel: "Set up…",
-    dialogTitle: "Learn from Slack",
-    submitLabel: "Start",
   },
 ];
 
@@ -341,7 +304,7 @@ const WORK: Record<ScribeId, string> = {
   granola:
     'Follow "Learn from Granola" in the "Scribe runs" section of the knowledge-meeting-ingest skill, for the Granola meetings in the settings.',
   memory:
-    'Follow "Learn from Memory" in the "Scribe runs" section of the knowledge-ingest skill, for the Memory files in the settings. Never change Memory files.',
+    'Follow "Learn from Memory" in the "Scribe runs" section of the knowledge-ingest skill, for the Memory files in the settings. Use knowledge_memory_import_progress to check their current hashes before reading them and save progress after each file. Never change Memory files.',
   slack:
     'Follow "Learn from Slack" in the "Scribe runs" section of the knowledge-source-ingest skill, for the Slack channels in the settings. Never post, react or change anything in Slack.',
 };
@@ -470,9 +433,12 @@ export function setupPrompt(setup: ScribeSetup) {
     `${PURPOSE[scribe.id]} The ${scribe.skill} skill does the work.`,
     "",
     "Settings:",
-    ...["Runs once, now, in this turn. Nothing is scheduled.", ...workSettings(setup)].map(
-      (line) => `- ${line}`,
-    ),
+    ...[
+      scribe.id === "memory"
+        ? "Runs once. Gateway restart recovery continues eligible turns. Nothing is scheduled."
+        : "Runs once, now, in this turn. Nothing is scheduled.",
+      ...workSettings(setup),
+    ].map((line) => `- ${line}`),
     "",
     "Steps:",
     ...numbered([

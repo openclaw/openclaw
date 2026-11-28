@@ -401,8 +401,8 @@ export function WikiOverviewContent(props: { owner: DreamingProps; data: WikiOve
       when={clusters().length > 0}
       fallback={
         <DiaryEmpty
-          message={t("dreaming.wiki.emptyWiki")}
-          hint={t("dreaming.wiki.emptyWikiHint")}
+          message={t(props.data?.totalPages ? "dreaming.wiki.noCards" : "dreaming.wiki.emptyWiki")}
+          hint={props.data?.totalPages ? vault() : undefined}
         />
       }
     >

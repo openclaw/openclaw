@@ -31,6 +31,11 @@ it.each([
   ["src/cli/mcp-cli-probe.ts", ["mcp-docker-custody"]],
   ["scripts/e2e/lib/mcp-docker-custody/scenario.mjs", ["mcp-docker-custody"]],
   ["src/update/run.ts", ["release-update-survivor"]],
+  ["src/update/prepare.test.ts", []],
+  ["src/update/prepare-iroh.test-support.ts", []],
+  ["src\\update\\prepare-iroh.test-support.ts", []],
+  ["src/update/new-owner.json", ["release-update-survivor"]],
+  ["src/state/schema-migration.test-support.ts", ["release-update-survivor"]],
   ["src/state/openclaw-state-schema.ts", ["release-update-survivor"]],
   ["src/cli/update-cli/update-command.ts", ["release-update-survivor"]],
   ["src/daemon/service.ts", ["release-update-survivor"]],
@@ -48,4 +53,14 @@ it("deduplicates owner lanes in the canonical execution order", () => {
   expect(
     resolveChangedDockerSeedLanes(["scripts/e2e/mcp-channels-seed.ts", ".github/workflows/ci.yml"]),
   ).toEqual(["mcp-channels", "cron-mcp-cleanup", "mcp-code-mode-gateway"]);
+});
+
+it("retains production update and explicit Docker owners alongside test helpers", () => {
+  expect(
+    resolveChangedDockerSeedLanes([
+      "src/update/prepare-iroh.test-support.ts",
+      "src/update/prepare-git.ts",
+      "scripts/e2e/mcp-channels-seed.ts",
+    ]),
+  ).toEqual(["mcp-channels", "release-update-survivor"]);
 });

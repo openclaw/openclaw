@@ -3,6 +3,7 @@ import { createChangeListeners } from "../../../../../src/shared/listeners.js";
 export class TranscriptSearchState {
   private value = { open: false, query: "" };
   private readonly listeners = createChangeListeners();
+  resumeEarlierHistory?: () => Promise<void>;
   private focusPending = false;
   private returnFocusTarget: HTMLElement | null = null;
   private restoreFocus: (() => void) | undefined;

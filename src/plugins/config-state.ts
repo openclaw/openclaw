@@ -12,6 +12,7 @@ import {
   normalizePluginsConfigWithResolverCore,
   type NormalizedPluginsConfig as SharedNormalizedPluginsConfig,
 } from "./config-normalization-shared.js";
+import type { InstalledPluginIndexRecord } from "./installed-plugin-index-types.js";
 import { resolvePluginRegistrationConfigKey } from "./loader-registration-config.js";
 import type { PluginOrigin } from "./plugin-origin.types.js";
 import { normalizePluginPolicyId } from "./plugin-policy-id.js";
@@ -107,6 +108,14 @@ export type ContextEngineOwnerMetadata = {
   contextEngineIds?: readonly string[];
 };
 
+type ContextEngineOwnerRecord =
+  | ContextEngineOwnerMetadata
+  | Pick<InstalledPluginIndexRecord, "pluginId" | "contextEngineIds">;
+
+function contextEngineOwnerPluginId(record: ContextEngineOwnerRecord): string {
+  return "id" in record ? record.id : record.pluginId;
+}
+
 let preparedRuntimePluginsConfig:
   | (PluginsConfigSnapshot & { source: OpenClawConfig["plugins"] })
   | undefined;
@@ -183,7 +192,7 @@ function isContextEngineOwnerEligible(
 export function resolveEligibleContextEngineDeclaredOwners(
   plugins: NormalizedPluginsConfig,
   engineId: string | null | undefined,
-  records: readonly ContextEngineOwnerMetadata[],
+  records: readonly ContextEngineOwnerRecord[],
   normalizeId: (id: string) => string = normalizePluginId,
 ): { hasDeclarations: boolean; pluginIds: string[] } {
   const declared = records.filter(
@@ -193,7 +202,7 @@ export function resolveEligibleContextEngineDeclaredOwners(
   return {
     hasDeclarations: declared.length > 0,
     pluginIds: normalizedEngineId
-      ? [...new Set(declared.map((record) => record.id))].filter((pluginId) =>
+      ? [...new Set(declared.map(contextEngineOwnerPluginId))].filter((pluginId) =>
           isContextEngineOwnerEligible(
             plugins,
             normalizePluginPolicyId(normalizeId(pluginId)),
@@ -208,7 +217,7 @@ export function resolveEligibleContextEngineDeclaredOwners(
 export function resolveEligibleContextEngineOwnerIds(
   plugins: NormalizedPluginsConfig,
   engineId: string | null | undefined,
-  records: readonly ContextEngineOwnerMetadata[],
+  records: readonly ContextEngineOwnerRecord[],
   normalizeId: (id: string) => string = normalizePluginId,
 ): string[] {
   if (!plugins.enabled || !engineId || engineId === defaultSlotIdForKey("contextEngine")) {
@@ -224,10 +233,10 @@ export function resolveEligibleContextEngineOwnerIds(
   const legacy = records
     .filter(
       (record) =>
-        normalizePluginPolicyId(normalizeId(record.id)) === legacyId &&
+        normalizePluginPolicyId(normalizeId(contextEngineOwnerPluginId(record))) === legacyId &&
         record.contextEngineIds === undefined,
     )
-    .map((record) => record.id);
+    .map(contextEngineOwnerPluginId);
   const legacyIndependentlyApproved =
     !declared.hasDeclarations ||
     plugins.entries[legacyId]?.enabled === true ||
@@ -247,7 +256,7 @@ export function resolveEligibleContextEngineOwnerIds(
 export function resolveSelectedContextEnginePluginIdFromConfig(
   plugins: NormalizedPluginsConfig,
   engineId: string | null | undefined,
-  records: readonly ContextEngineOwnerMetadata[],
+  records: readonly ContextEngineOwnerRecord[],
   normalizeId: (id: string) => string = normalizePluginId,
 ): string | undefined {
   if (!plugins.enabled || !engineId || engineId === defaultSlotIdForKey("contextEngine")) {
@@ -260,7 +269,7 @@ export function resolveSelectedContextEnginePluginIdFromConfig(
 /** Carries prepared ownership without changing the registered engine selector. */
 export function withContextEngineOwner(
   plugins: NormalizedPluginsConfig,
-  records: readonly ContextEngineOwnerMetadata[],
+  records: readonly ContextEngineOwnerRecord[],
   normalizeId: (id: string) => string = normalizePluginId,
 ): NormalizedPluginsConfig {
   const selectedOwner = resolveSelectedContextEnginePluginIdFromConfig(

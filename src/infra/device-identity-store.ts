@@ -32,7 +32,11 @@ export function readStoredDeviceIdentity(
   );
 }
 
-/** Inspection cannot settle import claims or initialize local credential state. */
+/**
+ * Inspection cannot settle import claims or initialize local credential state, and reads
+ * under a shared lock, so an open credential write transaction neither blocks it nor is
+ * blocked by it.
+ */
 export function readStoredDeviceIdentityReadOnly(
   options: DeviceIdentityStoreOptions = {},
 ): StoredDeviceIdentity | null {
@@ -44,7 +48,7 @@ export function readStoredDeviceIdentityReadOnly(
         kind: "identity.read",
         identity_key: identityKey,
       },
-      { readOnly: true },
+      { inspect: true },
     ),
   );
 }

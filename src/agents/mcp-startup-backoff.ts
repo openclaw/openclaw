@@ -12,12 +12,14 @@ import {
   remainingMonotonicMs,
 } from "../shared/monotonic-time.js";
 import type { SessionMcpRequesterScope } from "./agent-bundle-mcp-types.js";
+import { McpOAuthDiagnosticError } from "./mcp-oauth-identity.js";
 
 type StartupState = {
   owner: AbortSignal;
   delayMs: number;
   retryAfterMs: number;
   message: string;
+  promptMessage?: string;
   pending?: Promise<void>;
   authorization?: AuthorizationObservation & { error: Error };
 };
@@ -47,6 +49,7 @@ let errorModule: Promise<typeof import("./mcp-error.js")> | undefined;
 export class McpStartupBackoffError extends Error {
   readonly retryAfterMs: number;
   readonly authorizationRequired: boolean;
+  readonly promptMessage?: string;
 
   constructor(
     state: StartupState,
@@ -67,6 +70,7 @@ export class McpStartupBackoffError extends Error {
     );
     this.retryAfterMs = retryAfterMs;
     this.authorizationRequired = state.authorization !== undefined;
+    this.promptMessage = state.promptMessage;
   }
 }
 
@@ -158,6 +162,11 @@ async function connectWithMcpStartupBackoff(
     state.delayMs = Math.min(state.delayMs * 2, 600_000);
     state.retryAfterMs = monotonicDeadlineAfter(state.delayMs);
     state.message = redactMcpDiagnosticError(error);
+    const oauthError = collectErrorGraphCandidates(error, readErrorCauses).find(
+      (candidate) => candidate instanceof McpOAuthDiagnosticError,
+    );
+    state.promptMessage =
+      oauthError instanceof McpOAuthDiagnosticError ? oauthError.promptMessage : undefined;
     const reportFailure =
       !state.authorization ||
       !startups.has(authorizationKey) ||

@@ -4,7 +4,11 @@ import { tmpdir } from "node:os";
 import { join, posix, resolve } from "node:path";
 import { beforeAll, expect, it } from "vitest";
 import noForcedProcessExit from "../../scripts/lib/no-forced-process-exit.mjs";
-import { ADMISSION_FILES } from "../../scripts/lib/no-operator-permission-read.mjs";
+import {
+  ACCESS_RECHECK_FILES,
+  ADMISSION_FILES,
+  MINT_FILES,
+} from "../../scripts/lib/no-operator-permission-read.mjs";
 import { REFUSAL_FILES } from "../../scripts/lib/no-operator-refusal-construction.mjs";
 import noRecursiveReaddir from "../../scripts/lib/no-recursive-readdir.mjs";
 import {
@@ -35,6 +39,10 @@ const cases = [
   ["no-register-http-handler-call", "boundary-calls.test-harness.tsx", 0],
   ["no-widen-then-assert", "widen-then-assert-violation.test.ts", 3, [3, 7, 13]],
   ["no-operator-permission-read", "operator-permission-recheck-violation.ts", 4, [1, 4, 6, 8]],
+  // A started run re-checks access (line 8) and mints its own authority (lines 1, 4 and 9).
+  ["no-operator-permission-read", "run-authority-mint-violation.ts", 4, [1, 4, 8, 9]],
+  // The stop-on-access-loss module reads admission (lines 1, 6) and a role (lines 2, 6).
+  ["no-operator-permission-read", "stop-work-authority-read-violation.ts", 4, [1, 2, 6, 6]],
   // A refusal built at tool time (line 4) and a subclass (line 7); instanceof reads are fine.
   ["no-operator-refusal-construction", "operator-refusal-construction-violation.ts", 2, [4, 7]],
   // Planted divergence: a resumed turn reads its start kind; owner status comes from
@@ -51,8 +59,11 @@ const cases = [
 ] satisfies [string, string, number, number[]?][];
 
 // Shrink only. When a file leaves a list, lower its ceiling in the same change; never raise one.
+// A list that maps files to counts must match the references found in each file exactly.
 const allowlists = [
-  ["no-operator-permission-read", "", ADMISSION_FILES, 58],
+  ["no-operator-permission-read", "Permission read:", ADMISSION_FILES, 58],
+  ["no-operator-permission-read", "Run authority minted:", MINT_FILES, 6],
+  ["no-operator-permission-read", "Access re-check:", ACCESS_RECHECK_FILES, 2],
   ["no-operator-refusal-construction", "", REFUSAL_FILES, 9],
   ["no-turn-authority-derivation", "Turn-kind flag:", TURN_FLAG_FILES, 18],
   ["no-turn-authority-derivation", "Owner status:", OWNER_PRODUCER_FILES, 12],
@@ -82,7 +93,7 @@ it("drops every allowlist entry that no longer trips its check", () => {
       ),
     }),
   );
-  const files = [...new Set(allowlists.flatMap((allowlist) => [...allowlist[2]]))];
+  const files = [...new Set(allowlists.flatMap((allowlist) => [...allowlist[2].keys()]))];
   const run = spawnSync(
     process.execPath,
     [
@@ -99,19 +110,20 @@ it("drops every allowlist entry that no longer trips its check", () => {
   expect(run.error).toBeUndefined();
   const found = (JSON.parse(run.stdout) as { diagnostics: typeof diagnostics }).diagnostics;
   const stale = allowlists.flatMap(([rule, kind, list]) =>
-    [...list]
-      .filter(
-        (file) =>
-          !found.some(
-            (diagnostic) =>
-              diagnostic.filename.replaceAll("\\", "/") === file &&
-              diagnostic.code === `openclaw-boundaries(${rule})` &&
-              diagnostic.message.startsWith(kind),
-          ),
-      )
-      .map((file) => `${rule} ${kind} ${file}`),
+    [...list.keys()].flatMap((file) => {
+      const count = found.filter(
+        (diagnostic) =>
+          diagnostic.filename.replaceAll("\\", "/") === file &&
+          diagnostic.code === `openclaw-boundaries(${rule})` &&
+          diagnostic.message.startsWith(kind),
+      ).length;
+      const expected = list instanceof Map ? list.get(file) : count || 1;
+      return count === expected
+        ? []
+        : [`${rule} ${kind} ${file}: listed ${expected}, found ${count}`];
+    }),
   );
-  expect(stale, "Remove these entries and lower the ceiling").toEqual([]);
+  expect(stale, "Lower the listed count, or remove the entry and lower the ceiling").toEqual([]);
 });
 
 const recursiveKinds = {

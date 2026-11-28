@@ -202,7 +202,6 @@ async function seedSession(storePath: string, fields: Partial<SessionEntry> = {}
 }
 
 type HostHookStateFixture = {
-  stateDir: string;
   storePath: string;
   tempConfig: { session: { store: string } } & Record<string, unknown>;
 };
@@ -222,7 +221,7 @@ async function withHostHookState(
   await withEnvAsync({ OPENCLAW_STATE_DIR: stateDir }, async () => {
     await withTempConfig({
       cfg: tempConfig,
-      run: async () => await run({ stateDir, storePath, tempConfig }),
+      run: async () => await run({ storePath, tempConfig }),
     });
   });
 }
@@ -1132,25 +1131,25 @@ describe("host-hook fixture plugin contract", () => {
     );
   });
 
-  it("rejects malformed next-turn injection input before persisting records", async () => {
-    for (const invalid of [
-      { placement: "middle_context" as never },
-      { ttlMs: Infinity },
-      { ttlMs: -1 },
-    ]) {
-      await expect(
-        enqueuePluginNextTurnInjection({
-          cfg: {},
-          pluginId: "approval-fixture",
-          injection: { sessionKey: "agent:main:main", text: "invalid", ...invalid },
-        }),
-      ).resolves.toEqual({ enqueued: false, id: "", sessionKey: "agent:main:main" });
-    }
-  });
-
-  it("reports duplicate next-turn injections as not newly enqueued", async () => {
+  it("rejects malformed next-turn injections and deduplicates valid ones", async () => {
     await withHostHookState(async ({ storePath, tempConfig }) => {
       await seedSession(storePath);
+      const before = loadSession(storePath);
+      for (const invalid of [
+        { placement: "middle_context" as never },
+        { ttlMs: Infinity },
+        { ttlMs: -1 },
+      ]) {
+        await expect(
+          enqueuePluginNextTurnInjection({
+            cfg: tempConfig,
+            pluginId: "approval-fixture",
+            injection: { sessionKey: "agent:main:main", text: "invalid", ...invalid },
+          }),
+        ).resolves.toEqual({ enqueued: false, id: "", sessionKey: "agent:main:main" });
+      }
+      expect(loadSession(storePath)).toEqual(before);
+
       const now = Date.now();
 
       const enqueue = (text: string, timestamp: number) =>

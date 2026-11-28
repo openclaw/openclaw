@@ -48,7 +48,7 @@ import {
 import { EXISTING_SESSION_LIMITS, admitExistingSessionAction } from "./existing-session-limits.js";
 import { readRoutePositiveInteger, readRouteTimerTimeoutMs } from "./route-numeric.js";
 import type { BrowserResponse, BrowserRouteRegistrar } from "./types.js";
-import { jsonError, toStringOrEmpty } from "./utils.js";
+import { jsonError, toBoolean, toStringOrEmpty } from "./utils.js";
 
 function jsonActError(
   res: BrowserResponse,
@@ -131,6 +131,9 @@ export function registerBrowserAgentActRoutes(
         ctx,
         profileCtx,
         targetId,
+        preserveWarmup:
+          (action.kind === "resize" || action.kind === "evaluate") &&
+          toBoolean(req.query.operatorInput) === false,
         // Batch stays guarded because nested actions can read or return page data.
         enforceCurrentUrlAllowed: action.kind !== "resize" && action.kind !== "close",
         run: async ({ cdpUrl, tab, signal, resolveTabUrl, assertCurrent }) => {

@@ -298,20 +298,19 @@ async function deliverSubagentAnnouncementBound(
       params.onDeliveryError?.(error);
     },
   });
-  const failedDirect =
+  if (
+    delivery.error &&
+    !delivery.delivered &&
+    delivery.path === "direct" &&
     (params.expectsCompletionMessage ||
       params.sourceTool === "subagent_announce" ||
-      params.sourceTool === "subagent_settle") &&
-    !delivery.delivered &&
-    delivery.path === "direct"
-      ? delivery
-      : undefined;
-  if (failedDirect?.error) {
+      params.sourceTool === "subagent_settle")
+  ) {
     const source = params.sourceRunId
       ? `run ${params.sourceRunId}`
       : `session ${params.sourceSessionKey ?? params.requesterSessionKey}`;
     log.warn(`Subagent completion direct announce failed for ${source}`, {
-      err: directError ?? failedDirect.error,
+      err: directError ?? delivery.error,
       runId: params.sourceRunId,
       requesterSessionKey: params.targetRequesterSessionKey,
       sourceTool: params.sourceTool,

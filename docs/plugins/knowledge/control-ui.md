@@ -3,7 +3,7 @@ summary: "The Knowledge page and chat panel in the Control UI: views, settings, 
 read_when:
   - You are browsing a Knowledge vault in the Control UI
   - You want to link to a Knowledge record from chat or another page
-  - You want to see which Knowledge records an agent used in a conversation
+  - You want to see which Knowledge records an agent used in a session
 title: "Knowledge Control UI"
 sidebarTitle: "Control UI"
 ---
@@ -13,8 +13,8 @@ The Knowledge page and chat panel. Part of the
 
 The Knowledge UI is a read-only inspector of vault records, even when agent
 writes are enabled. The Scribes tab is the exception: it starts and controls
-scribe conversations and their automations, never vault records directly.
-**Ask** starts a new chat with the selected agent and sends your request as its
+scribe sessions and their automations, never vault records directly.
+**Ask** starts a new session with the selected agent and sends your request as its
 first message, with the exact observed record ID, revision, and hash attached.
 The dialog shows only the editable request. Native UI from an enabled bundled plugin
 does not need the **Custom plugin UI** Labs setting.
@@ -39,18 +39,18 @@ OpenClaw hands the file to browser downloads; check there to confirm it was save
 
 **Settings** has four sections:
 
-| Section          | Shows                                                                                                                                                   |
-| ---------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| Stores & sharing | Agents, their stores, membership changes, and conversation access; see [Stores](/plugins/knowledge/stores-and-access#manage-stores-from-the-control-ui) |
-| Vocabulary       | The effective ontology: page and relationship types, fields, counts, and examples                                                                       |
-| Vault status     | Store identity and status for the selected agent                                                                                                        |
-| Maintenance      | Schedule, next and last run, and per-store results                                                                                                      |
+| Section          | Shows                                                                                                                                              |
+| ---------------- | -------------------------------------------------------------------------------------------------------------------------------------------------- |
+| Stores & sharing | Agents, their stores, membership changes, and session access; see [Stores](/plugins/knowledge/stores-and-access#manage-stores-from-the-control-ui) |
+| Vocabulary       | The effective ontology: page and relationship types, fields, counts, and examples                                                                  |
+| Vault status     | Store identity and status for the selected agent                                                                                                   |
+| Maintenance      | Schedule, next and last run, and per-store results                                                                                                 |
 
 Operator access needs `operator.read` (or higher) and `operatorRead: true`. A
 named operator role limits browsing to its agents, and a Gateway shared by
 several people requires `operator.admin`.
 Store membership changes need `operator.admin`. The page shows only private
-partitions; conversation partitions are not browsable.
+partitions; Knowledge kept for individual sessions isn’t browsable.
 
 Views refresh on change events, on reconnect, and every 30 seconds while
 visible. When a refresh crosses to a different store, the page clears the old
@@ -92,7 +92,7 @@ bodies keep using portable wikilinks.
 ## Session activity panel
 
 The **Knowledge** chat side panel lists records the agent found, read, or changed
-in the current conversation. Open it from the host's side-panel controls. Each
+in the current session. Open it from the host's side-panel controls. Each
 card shows the title, action, and time. Filter All, Reads, or Writes, switch the
 order, load earlier entries, and select a card for a read-only preview. **Back
 to activity** returns to the event you selected, even while the preview is

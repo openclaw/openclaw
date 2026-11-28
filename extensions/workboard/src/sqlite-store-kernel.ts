@@ -36,6 +36,7 @@ import type {
 } from "./persistence-types.js";
 import {
   blobToBase64,
+  findCardIdsByPrefix,
   jsonValue,
   loadCardChildRows,
   numberValue,
@@ -347,6 +348,10 @@ class WorkboardSqliteCardStore implements SyncStore<WorkboardCardStore> {
       key: requiredString(row, "id"),
       value: { version: 1, card: readCard(this.db, row, preloaded) },
     }));
+  }
+
+  findCardIdsByPrefix(prefix: string): string[] {
+    return findCardIdsByPrefix(this.db, prefix);
   }
 
   listCardStatuses(ids: readonly string[]): Array<{ id: string; status: string }> {

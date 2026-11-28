@@ -185,6 +185,10 @@ const catalog = {
     },
     queue: {
       storageFailed: "Couldn’t save this message. Free browser storage or reconnect to send it.",
+      removeFailed:
+        "Couldn’t confirm that your browser removed this message. If Remove is still available, try it again.",
+      discardFailed:
+        "Couldn’t confirm that your browser discarded this message. If Discard is still available, try it again.",
       draftStorageFailed:
         "Couldn’t save the previous draft. Keep this tab open or copy it before reloading.",
       reviewEdit: "Review edit",
@@ -328,6 +332,7 @@ const catalog = {
         "Could not preview this file. Text previews require UTF-8 files up to 256 KiB. Download it to read the full file.",
       htmlPreviewUnavailable:
         "Could not preview this HTML file. HTML previews require UTF-8 files up to 2 MiB. Download it to read the full file.",
+      emptyFile: "OpenClaw can’t attach empty files.",
       readFailed: "Could not attach file. Try again.",
       imagesOnly: "Side chat accepts image attachments only.",
       tooLarge: "Too large to send: {names}{more}",

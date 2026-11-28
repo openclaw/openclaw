@@ -58,7 +58,7 @@ const { settleOpenClawAgentDatabaseWorkerClose, readOpenClawAgentDatabaseWorkerL
 const { openOpenClawStateDatabase, closeOpenClawStateDatabaseAsync } =
   await import("../../src/state/openclaw-state-db.js");
 const { releaseExitedOpenClawAgentDatabaseLeaseInDatabase } =
-  await import("../../src/state/openclaw-agent-db-lease.js");
+  await import("../../src/state/openclaw-agent-db-lease-rows.js");
 const { getOpenClawAgentDatabaseValidation } =
   await import("../../src/state/openclaw-agent-db-validation-cache.js");
 const { observeSqliteWalPeriodicWork } =

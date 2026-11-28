@@ -24,7 +24,7 @@ import type { ScribeDetection, ScribeJob, ScribeSnapshot } from "./scribes-state
 import { messageDiff } from "./scribes-updates.js";
 
 /** What Change settings needs from the page. */
-export type SettingsDialogInput = {
+type SettingsDialogInput = {
   scribe: ScribeDefinition;
   detection: ScribeDetection;
   /** The settings the scribe's run message was generated from. */
@@ -49,7 +49,7 @@ function settingsFields(input: SettingsDialogInput, changed: () => void) {
 }
 
 /** Open Change settings for a scribe whose settings Knowledge can read and change. */
-export function openSettingsDialog(input: SettingsDialogInput) {
+function openSettingsDialog(input: SettingsDialogInput) {
   const fields = settingsFields(input, () => refresh());
   if (!fields) {
     return undefined;

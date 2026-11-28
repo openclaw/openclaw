@@ -4150,14 +4150,8 @@ async function main() {
     });
     print(result, options.json || options.preparePolicyAdmission);
     if (!options.json && !options.preparePolicyAdmission) {
-      console.log(
-        "recovery run: " +
-          (result.runId ?? "unconfirmed") +
-          "; status: " +
-          (result.status ?? "unknown") +
-          "; conclusion: " +
-          (result.conclusion ?? "unknown"),
-      );
+      const runSummary = `recovery run: ${result.runId ?? "unconfirmed"}; status: ${result.status ?? "unknown"}; conclusion: ${result.conclusion ?? "unknown"}`;
+      console.log(result.guidance ?? runSummary);
       if (!result.complete) {
         console.log("next: " + result.nextCommand);
       }

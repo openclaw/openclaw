@@ -9,12 +9,12 @@ import {
 import type { SessionGoal } from "../../../api/types.ts";
 import { Icon } from "../../../components/solid/icon.tsx";
 import { useScrollState } from "../../../components/solid/scroll-state.ts";
-import { registerChatGoalsEnglish } from "../../../i18n/locales/en-chat-goals.ts";
+import { registerChatGoalsOptionalEnglish } from "../../../i18n/locales/en-chat-goals-optional.ts";
 import type { ChatGoalAction, ChatGoalRecovery } from "../../../lib/chat/chat-types.ts";
 import { registerEnglishCatalog, t } from "../../../lib/reactive/i18n.ts";
 import { readVisibleTime } from "../../../lib/reactive/visible-clock.ts";
 
-registerEnglishCatalog(registerChatGoalsEnglish);
+registerEnglishCatalog(registerChatGoalsOptionalEnglish);
 
 const goalStatusIcons = {
   paused: "pauseFilled",
@@ -66,7 +66,7 @@ export function ChatGoalActions(props: GoalPresentationProps) {
       : action === "pause"
         ? props.goal.status === "active"
         : action === "resume"
-          ? props.goal.status !== "active"
+          ? props.goal.status !== "active" || props.resumeBusy === false
           : true);
   return (
     <span class="agent-chat__goal-command-actions">

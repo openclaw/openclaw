@@ -1,11 +1,8 @@
-import { randomUUID } from "node:crypto";
 import { isDeepStrictEqual } from "node:util";
 import { note } from "../../packages/terminal-core/src/note.js";
 // Doctor health contributions preserve the ordered interactive doctor flow while
 // exposing the same checks to structured lint and repair commands.
-import { shouldManageGatewayService } from "../commands/doctor-service-repair-policy.js";
 import { ConfigWritePostCommitError } from "../config/io.write-errors.js";
-import { copyConfigResolutionFactsThroughRewrite } from "../config/resolution-facts.js";
 import {
   DoctorStateMigrationRefusalError,
   throwIfDoctorStateMigrationRefused,
@@ -32,7 +29,6 @@ import type {
 import {
   isUpdateDoctorRun,
   noteDoctorRepairResult,
-  resolveDoctorMode,
   resolveDoctorWorkspaceDir,
   shouldDeferPostActivationInspections,
   measureDoctorContribution,
@@ -48,7 +44,6 @@ import { withDoctorProgress } from "./doctor-health-startup.js";
 import { admitDoctorUpdateInspection, resolveDoctorUpdateBudget } from "./doctor-update-budget.js";
 import { normalizeHealthCheck } from "./health-check-adapter.js";
 import type { DoctorHealthCheck } from "./health-check-runner-types.js";
-import type { HealthCheckContext, HealthFinding } from "./health-checks.js";
 
 export type { DoctorHealthFlowContext } from "./doctor-health-contribution-types.js";
 
@@ -99,122 +94,6 @@ async function reportDeferredLegacyState(ctx: DoctorHealthFlowContext): Promise<
 
 async function runGatewayConfigHealth(ctx: DoctorHealthFlowContext): Promise<void> {
   await runCoreHealthFindingNote(ctx, "core/doctor/gateway-config");
-}
-
-async function runGatewayAuthHealth(ctx: DoctorHealthFlowContext): Promise<void> {
-  if (!ctx.sourceConfigValid) {
-    return;
-  }
-  const { detectGatewayAuthHealth } = await import("./doctor-gateway-auth.js");
-  const [finding] = await detectGatewayAuthHealth({
-    cfg: ctx.cfg,
-    env: ctx.env,
-    allowExecSecretRefs: ctx.options.allowExec,
-  });
-  const { resolveSecretInputRef } = await import("../config/types.secrets.js");
-  const gatewayTokenRef = resolveSecretInputRef({
-    value: ctx.cfg.gateway?.auth?.token,
-    defaults: ctx.cfg.secrets?.defaults,
-  }).ref;
-  if (!finding) {
-    if (gatewayTokenRef && ctx.options.generateGatewayToken === true) {
-      note(
-        `Gateway token generation skipped because gateway.auth.token is managed by SecretRef ${gatewayTokenRef.source}:${gatewayTokenRef.provider}:${gatewayTokenRef.id}. The referenced credential was left unchanged.`,
-        "Gateway auth",
-      );
-    }
-    return;
-  }
-  note([finding.message, finding.fixHint].filter(Boolean).join("\n"), "Gateway auth");
-  if (finding.path !== "gateway.auth.token") {
-    recordDoctorHealthWarnings(ctx, [finding]);
-    return;
-  }
-  if (gatewayTokenRef) {
-    if (
-      gatewayTokenRef.source === "store" &&
-      finding.requirement === "SECRET_REF_REDACTED_VALUE" &&
-      (ctx.options.generateGatewayToken === true ||
-        ctx.options.repair === true ||
-        ctx.options.yes === true)
-    ) {
-      const { isRedactedSecretValue } = await import("../config/redact-sentinel.js");
-      const { readSecretStoreValue, writeSecretStoreEntry } =
-        await import("../secrets/store/secret-store.js");
-      const { createVerifiedSqliteSnapshot } = await import("../infra/sqlite-snapshot.js");
-      const { resolveOpenClawStateSqlitePath } =
-        await import("../state/openclaw-state-db.paths.js");
-      const { randomToken } = await import("../commands/onboard-helpers.js");
-      const database = { env: ctx.env ?? process.env };
-      const entry = { scope: { kind: "team" as const }, name: gatewayTokenRef.id, database };
-      try {
-        const current = await readSecretStoreValue(entry);
-        if (!current.ok || !isRedactedSecretValue(current.value)) {
-          note(
-            `Secret store entry "${entry.name}" changed; rerun Doctor to inspect it.`,
-            "Gateway auth",
-          );
-          return;
-        }
-        const databasePath = resolveOpenClawStateSqlitePath(database.env);
-        const backup = await createVerifiedSqliteSnapshot({
-          sourcePath: databasePath,
-          targetPath: `${databasePath}.doctor-gateway-token.${randomUUID()}.bak`,
-          preserveRowIds: true,
-        });
-        const nextToken = randomToken();
-        await writeSecretStoreEntry({
-          ...entry,
-          value: nextToken,
-          expectedValue: current.value,
-          kind: "secret",
-          updatedBy: "doctor",
-        });
-        note(
-          `Regenerated Gateway token in secret store entry "${entry.name}"; gateway.auth.token remains a SecretRef. Backup: ${backup.path}\nRestart the Gateway, then reconnect or re-pair devices with the new token.`,
-          "Gateway auth",
-        );
-      } catch (error) {
-        const warning = `Could not repair Gateway token in secret store entry "${entry.name}": ${scrubDoctorErrorMessage(error)}. Rerun \`openclaw doctor --fix\` after resolving the reported problem.`;
-        note(warning, "Gateway auth");
-        recordDoctorHealthWarnings(ctx, [], [warning]);
-      }
-      return;
-    }
-    note(
-      `${ctx.options.generateGatewayToken === true ? "Gateway token generation skipped because a SecretRef is configured. " : ""}Doctor will not overwrite gateway.auth.token with a plaintext value.`,
-      "Gateway auth",
-    );
-    return;
-  }
-  const shouldSetToken =
-    ctx.options.generateGatewayToken === true
-      ? true
-      : ctx.options.nonInteractive === true
-        ? false
-        : await ctx.prompter.confirmAutoFix({
-            message: "Generate and configure a gateway token now?",
-            initialValue: true,
-          });
-  if (!shouldSetToken) {
-    return;
-  }
-  const { randomToken } = await import("../commands/onboard-helpers.js");
-  const nextToken = randomToken();
-  const config: typeof ctx.cfg = {
-    ...ctx.cfg,
-    gateway: {
-      ...ctx.cfg.gateway,
-      auth: {
-        ...ctx.cfg.gateway?.auth,
-        mode: "token",
-        token: nextToken,
-      },
-    },
-  };
-  copyConfigResolutionFactsThroughRewrite(ctx.cfg, config);
-  ctx.cfg = config;
-  note("Gateway token configured.", "Gateway auth");
 }
 
 async function runLegacyStateHealth(ctx: DoctorHealthFlowContext): Promise<void> {
@@ -297,86 +176,6 @@ async function runLegacyStateHealth(ctx: DoctorHealthFlowContext): Promise<void>
   }
 }
 
-async function shouldInspectSystemdLinger(
-  ctx: Pick<HealthCheckContext, "cfg" | "env">,
-): Promise<boolean> {
-  if (
-    process.platform !== "linux" ||
-    resolveDoctorMode(ctx.cfg) !== "local" ||
-    !(await shouldManageGatewayService(ctx.env ?? process.env))
-  ) {
-    return false;
-  }
-  const env = ctx.env ?? process.env;
-  const { findInstalledSystemdGatewayScope } = await import("../daemon/systemd.js");
-  return (await findInstalledSystemdGatewayScope(env))?.scope === "user";
-}
-
-async function runSystemdLingerHealth(ctx: DoctorHealthFlowContext): Promise<void> {
-  if (ctx.options.nonInteractive === true || !(await shouldInspectSystemdLinger(ctx))) {
-    return;
-  }
-  const { readGatewayServiceState, resolveGatewayService } = await import("../daemon/service.js");
-  const { ensureSystemdUserLingerInteractive } = await import("../commands/systemd-linger.js");
-  const service = resolveGatewayService();
-  const state = await readGatewayServiceState(service, { env: process.env });
-  if (state.loadState.status !== "loaded") {
-    return;
-  }
-  await ensureSystemdUserLingerInteractive({
-    runtime: ctx.runtime,
-    prompter: {
-      confirm: async (p) => ctx.prompter.confirm(p),
-      note,
-    },
-    reason:
-      "Gateway runs as a systemd user service. Without lingering, systemd stops the user session on logout/idle and kills the Gateway.",
-    requireConfirm: true,
-  });
-}
-
-async function detectSystemdLingerFindings(
-  ctx: HealthCheckContext,
-): Promise<readonly HealthFinding[]> {
-  if (!(await shouldInspectSystemdLinger(ctx))) {
-    return [];
-  }
-  const { readGatewayServiceState, resolveGatewayService } = await import("../daemon/service.js");
-  const service = resolveGatewayService();
-  const state = await readGatewayServiceState(service, { env: process.env });
-  if (state.loadState.status !== "loaded") {
-    return [];
-  }
-  const {
-    isSystemdUserServiceAvailable,
-    readSystemdUserLingerStatus,
-    resolveSystemdUserServiceAccount,
-  } = await import("../daemon/systemd.js");
-  if (!(await isSystemdUserServiceAvailable(process.env))) {
-    return [];
-  }
-  // Doctor must inspect the same user manager as the Gateway service operation.
-  const user = resolveSystemdUserServiceAccount(process.env);
-  if (!user) {
-    return [];
-  }
-  const status = await readSystemdUserLingerStatus({ env: process.env, user });
-  if (!status || status.linger === "yes") {
-    return [];
-  }
-  return [
-    {
-      checkId: "core/doctor/systemd-linger",
-      severity: "warning",
-      source: "doctor",
-      message: `Systemd lingering is disabled for ${status.user}.`,
-      target: `systemd.user.${status.user}`,
-      requirement: "systemd user lingering enabled",
-      fixHint: `Run: sudo loginctl enable-linger ${status.user}`,
-    },
-  ];
-}
-
 async function runShellCompletionHealth(ctx: DoctorHealthFlowContext): Promise<void> {
   const { doctorShellCompletion } = await import("../commands/doctor-completion.js");
   await doctorShellCompletion(ctx.prompter, {
@@ -421,12 +220,9 @@ function resolveDoctorHealthContributions(): DoctorHealthContribution[] {
       runGatewayConfigHealth,
       runAuthProfileMigration,
       runAuthProfileHealth,
-      runGatewayAuthHealth,
       runLegacyStateHealth,
     }),
     ...resolveFinalDoctorHealthContributions({
-      runSystemdLingerHealth,
-      detectSystemdLingerFindings,
       runShellCompletionHealth,
       runGatewayHealthChecks,
     }),
@@ -510,6 +306,7 @@ export async function resolvePostActivationInspectionCheckIds(): Promise<string[
 async function runDoctorHealthContributionList(
   ctx: DoctorHealthFlowContext,
   contributions: readonly DoctorHealthContribution[],
+  afterRestart = false,
 ): Promise<void> {
   const signal = resolveCommandProcessSignal(getAsyncWorkSignal());
   const retirementOnly = ctx.retirementOnly === true;
@@ -567,6 +364,10 @@ async function runDoctorHealthContributionList(
   try {
     for (const contribution of ordered) {
       signal?.throwIfAborted();
+      if (!afterRestart && contribution.placement && ctx.afterRestartContributions) {
+        ctx.afterRestartContributions.push(contribution);
+        continue;
+      }
       const inspectionIds = postActivationInspections.get(contribution);
       if (inspectionIds) {
         deferredCheckIds = recordUpdateDoctorDeferredInspectionChecks(inspectionIds);
@@ -603,7 +404,7 @@ async function runDoctorHealthContributionList(
             // turn their recorded refusal into permission for later repairs.
             throwIfDoctorStateMigrationRefused(ctx.configResult.stateMigrationStepReceipts);
           }
-          if (ctx.configWriteRefusal) {
+          if (ctx.configWriteRefusal && !afterRestart) {
             await reportDeferredLegacyState(ctx);
           }
         };
@@ -624,7 +425,7 @@ async function runDoctorHealthContributionList(
         if (retirementOnly && (ctx.healthFindings?.length || ctx.updateWarnings?.length)) {
           ctx.retirementOnly = false;
         }
-        if (ctx.configWriteRefusal) {
+        if (ctx.configWriteRefusal && !afterRestart) {
           // Later repairs consume the candidate. Stop before they persist state
           // derived from config that the writer deliberately left non-durable.
           return;
@@ -685,6 +486,20 @@ async function runDoctorHealthContributionList(
         "Run `openclaw doctor --fix` after activation to complete deferred checks and repairs.",
       );
     }
+  }
+}
+
+/**
+ * Runs the after-restart contributions the stopped pass reached. A refused pass would have
+ * reached them before its refusal, so they run as they did there, without refusal handling.
+ */
+export async function runDoctorAfterRestartContributions(
+  ctx: DoctorHealthFlowContext,
+): Promise<void> {
+  const deferred = ctx.afterRestartContributions ?? [];
+  ctx.afterRestartContributions = undefined;
+  if (deferred.length > 0) {
+    await runDoctorHealthContributionList(ctx, deferred, true);
   }
 }
 

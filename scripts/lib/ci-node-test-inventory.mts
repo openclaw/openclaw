@@ -466,7 +466,10 @@ export function scheduledTrackedTestFiles(): string[] {
   // Coverage itself runs in a complete checkout; retain the existing Git owner.
   const { listGitTrackedFiles }: typeof import("../../src/test-utils/repo-files.ts") =
     createRequire(import.meta.url)("../../src/test-utils/repo-files.ts");
-  const files = listGitTrackedFiles({ pathspecs: "." });
+  // Literal pathspec mode disables Git's glob magic; filter the full inventory instead.
+  const files = listGitTrackedFiles({
+    pathspecs: process.env.GIT_LITERAL_PATHSPECS ? "." : ":(glob)**/*.test.*",
+  });
   if (!files) {
     throw new Error("Scheduled test coverage requires git ls-files");
   }
@@ -488,12 +491,6 @@ export const SCHEDULED_COVERAGE_EXCEPTIONS: Array<{
     owner: "Developer tooling fixture owners",
     reason:
       "Source inputs for tooling regression suites; shared Vitest configuration deliberately excludes fixtures.",
-  },
-  {
-    pattern: ".agents/skills/update-team-server/controller/*.test.*",
-    owner: "Team server deployment controller",
-    reason:
-      "Standalone Node/Python controller self-tests use the operator skill's runner, not Vitest; no scheduled controller runner exists.",
   },
   {
     pattern: ".agents/skills/plugin-sdk-impact/scripts/*.test.mjs",

@@ -395,6 +395,8 @@ type SessionEntryCore = SessionEntryProvenance &
     parentSessionLifecycleRevision?: string;
     /** How this session node came to exist; written once and retained across sessionId rotations. */
     createdVia?: SessionCreatedVia;
+    /** Write-once sessions_create intent; spawn lineage still bounds admission depth. */
+    createdIndependently?: true;
     /** Creation-only presentation surface; stored in entry_json without a column projection. */
     createdSurface?: SessionRow["createdSurface"];
     /** Actor that caused node creation, with an optional profile, session, or sender id; written once. */
@@ -699,6 +701,8 @@ export type SessionScheduledMemoryParent = {
 };
 
 export type InternalSessionEntryCore = SessionEntryCore & {
+  /** A failed naming attempt released the transcript fallback; retries must not hide it. */
+  titleFallbackReady?: true;
   /**
    * Written only by cron run preparation on a child-placement `:run:` row, so a
    * session the run spawns can resolve its memory audience through that parent.
@@ -903,6 +907,7 @@ function mergeSessionEntryWithPolicy(
     next.createdVia = existing.createdVia;
   }
   next.createdSurface = existing.createdSurface;
+  next.createdIndependently = existing.createdIndependently;
   if (existing.createdActor !== undefined) {
     next.createdActor = existing.createdActor;
   }

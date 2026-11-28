@@ -1,5 +1,6 @@
 import type { ApplicationContext } from "../../app/context.ts";
 import { gatewayPresentationScope } from "../../app/gateway-presentation-scope.ts";
+import type { CommandPaletteMode } from "../../components/command-palette-contract.ts";
 import { closeMenusWithin } from "../../components/solid/menu.tsx";
 import { t } from "../../i18n/index.ts";
 import { registerCommandPaletteEnglish } from "../../i18n/locales/en-command-palette.ts";
@@ -274,12 +275,13 @@ export class PaletteSessionDraft {
     }
   }
 
-  open() {
+  open(previousMode: CommandPaletteMode = "search") {
     this.synchronizePresentationScope();
-    // Reopening cannot abandon a request or turn an uncertain create into a second one.
+    // Resume unfinished Compose drafts and starts; ordinary search queries start fresh.
     if (
       this.draft &&
-      (this.attachmentMode ||
+      ((previousMode === "compose" && this.message.length > 0) ||
+        this.attachmentMode ||
         this.submitting ||
         this.draft.submission.pendingPlacement.sessionKey ||
         this.draft.submission.submissionOutcomeUnknown ||

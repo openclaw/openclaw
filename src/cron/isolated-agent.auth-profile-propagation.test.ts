@@ -1085,6 +1085,9 @@ describe("runCronIsolatedAgentTurn auth profile propagation (#20624, #90991)", (
       expect(result.error).toContain(
         "To use a key in the environment or provider config instead: openclaw automations edit test-job --model <provider/model>.",
       );
+      // The pause decision reads the producer's code, not this text.
+      expect(result.errorClassification).toEqual({ kind: "permanent" });
+      expect(result.failureNotificationDetail).toEqual({ kind: "inference-account-retired" });
       expect(h.runEmbeddedAgentMock).not.toHaveBeenCalled();
       expect(h.runCliAgentMock).not.toHaveBeenCalled();
     },

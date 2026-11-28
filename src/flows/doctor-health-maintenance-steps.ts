@@ -7,8 +7,12 @@ import { DOCTOR_SQLITE_NOCOW_REPAIR_ENV } from "../commands/doctor/shared/update
 import type { DoctorProgressMeasure } from "../infra/doctor-progress.js";
 import { isTruthyEnvValue } from "../infra/env.js";
 import { formatErrorMessage } from "../infra/errors.js";
+import { withSqliteSnapshotFailureScope } from "../infra/sqlite-error-diagnostics.js";
+import { withSqliteReadOnlyWorkerScope } from "../infra/sqlite-readonly-worker.js";
 import type { AgentDatabaseMigrationTarget } from "../infra/state-migrations.media-persistence-targets.js";
+import { resolveCommandProcessSignal, withCommandProcessScope } from "../process/exec-spawn.js";
 import type { RuntimeEnv } from "../runtime.js";
+import { getAsyncWorkSignal } from "../shared/async-work-scope.js";
 import type { DoctorHealthFlowContext } from "./doctor-health-contribution-types.js";
 
 type DoctorMaintenance = NonNullable<Awaited<ReturnType<typeof beginDoctorMaintenance>>>;
@@ -27,8 +31,9 @@ export async function runDoctorStartupReadinessSteps(params: {
   resumeCapture?: () => void;
 }): Promise<{ sqliteReclamationAgents?: readonly AgentDatabaseMigrationTarget[] } | undefined> {
   const { ctx, runtime, measure, databaseTargets } = params;
-  const { validateDoctorExternalConfigForStartup } = await import("./doctor-external-config.js");
-  await traceDoctorMaintenancePending("external-config");
+  const { checkDoctorExternalConfigPending, validateDoctorExternalConfigForStartup } =
+    await import("./doctor-external-config.js");
+  await traceDoctorMaintenancePending("external-config", checkDoctorExternalConfigPending);
   if (
     !(await measure("doctor.external-config", () =>
       validateDoctorExternalConfigForStartup(runtime),
@@ -38,7 +43,15 @@ export async function runDoctorStartupReadinessSteps(params: {
   }
   const { assertDoctorMaintenanceReady } =
     await import("../commands/doctor-maintenance-inspection.js");
-  await traceDoctorMaintenancePending("maintenance-ready");
+  // The readiness assertions only read; the step writes when it completes migration backups.
+  await traceDoctorMaintenancePending("maintenance-ready", async () => {
+    const { checkDoctorMigrationBackupsPending } =
+      await import("../commands/doctor-migration-backup-artifacts.js");
+    return checkDoctorMigrationBackupsPending(
+      process.env,
+      databaseTargets.map((target) => target.path),
+    );
+  });
   const readiness = await measure("doctor.maintenance-ready", () =>
     assertDoctorMaintenanceReady(ctx.cfg, process.env, runtime.log, databaseTargets),
   );
@@ -51,9 +64,21 @@ export async function runDoctorStartupReadinessSteps(params: {
       await initializeDebugProxyCaptureAsync("cli");
     }
   }
-  const { repairGatewayMaintenanceStartupFailures } =
-    await import("../infra/gateway-boot-lifecycle.js");
-  await traceDoctorMaintenancePending("boot-lifecycle");
+  const {
+    countRepairableGatewayMaintenanceStartupFailures,
+    repairGatewayMaintenanceStartupFailures,
+  } = await import("../infra/gateway-boot-lifecycle.js");
+  const [{ decideDoctorPendingFromLiveStores }, { resolveOpenClawStateSqlitePath }] =
+    await Promise.all([
+      import("../commands/doctor-live-store-pending.js"),
+      import("../state/openclaw-state-db.paths.js"),
+    ]);
+  // Boot lifecycle records live in the state database.
+  await traceDoctorMaintenancePending("boot-lifecycle", () =>
+    decideDoctorPendingFromLiveStores([resolveOpenClawStateSqlitePath()], async () =>
+      (await countRepairableGatewayMaintenanceStartupFailures()) > 0 ? "work" : "none",
+    ),
+  );
   repairGatewayMaintenanceStartupFailures();
   return { sqliteReclamationAgents };
 }
@@ -102,14 +127,74 @@ export async function runDoctorPreStopMaintenance(params: {
   runtime: RuntimeEnv;
   measure: DoctorProgressMeasure;
 }): Promise<void> {
-  const { cleanupRetainedUpdateRuntimesBeforeMaintenance } =
+  const { checkRetainedUpdateRuntimesPending, cleanupRetainedUpdateRuntimesBeforeMaintenance } =
     await import("../commands/doctor-retained-runtime.js");
-  await traceDoctorMaintenancePending("retained-runtimes");
+  await traceDoctorMaintenancePending("retained-runtimes", () =>
+    checkRetainedUpdateRuntimesPending(process.env),
+  );
   try {
     await params.measure("doctor.retained-runtimes", () =>
       cleanupRetainedUpdateRuntimesBeforeMaintenance(process.env),
     );
   } catch (error) {
     params.runtime.error(formatErrorMessage(error));
+  }
+}
+
+/**
+ * Diagnostics placed after the restart run once Doctor has restored the Gateway it stopped,
+ * in the read-only scopes plain `openclaw doctor` uses beside a serving Gateway. After a
+ * failed restore they still run; if they cannot, the earlier failure stays the outcome and
+ * their absence is reported.
+ */
+async function runDoctorAfterRestartSteps(params: {
+  ctx: DoctorHealthFlowContext | undefined;
+  measure: DoctorProgressMeasure;
+  failed: boolean;
+}): Promise<void> {
+  const { ctx } = params;
+  if (!ctx?.afterRestartContributions?.length) {
+    return;
+  }
+  const signal = resolveCommandProcessSignal(getAsyncWorkSignal());
+  const { runDoctorAfterRestartContributions } = await import("./doctor-health-contributions.js");
+  try {
+    await params.measure("doctor.after-restart-diagnostics", () =>
+      withSqliteSnapshotFailureScope(() =>
+        withCommandProcessScope(
+          () =>
+            withSqliteReadOnlyWorkerScope(
+              () => runDoctorAfterRestartContributions(ctx),
+              signal ? { signal, deadlineOwnedByCaller: false } : undefined,
+            ),
+          signal,
+        ),
+      ),
+    );
+  } catch (error) {
+    if (!params.failed) {
+      throw error;
+    }
+    ctx.runtime.error(
+      `Doctor could not run its diagnostics after the failed Gateway restore: ${formatErrorMessage(error)}`,
+    );
+  }
+}
+
+/** Restores the Gateway, then runs the after-restart diagnostics whatever the restore did. */
+export async function finishDoctorMaintenanceThenDiagnose(params: {
+  ctx: DoctorHealthFlowContext | undefined;
+  measure: DoctorProgressMeasure;
+  failed: boolean;
+  finish: () => Promise<void>;
+}): Promise<void> {
+  let failed = params.failed;
+  try {
+    await params.measure("doctor.maintenance.finish", params.finish);
+  } catch (error) {
+    failed = true;
+    throw error;
+  } finally {
+    await runDoctorAfterRestartSteps({ ctx: params.ctx, measure: params.measure, failed });
   }
 }

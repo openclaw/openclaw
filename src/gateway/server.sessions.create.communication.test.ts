@@ -17,13 +17,13 @@ import {
 import type { GatewayClient, GatewayRequestContext, RespondFn } from "./server-methods/types.js";
 import {
   dashboardTitleScheduleMocks,
-  setupSessionCreateTestHarness,
+  setupSessionCreateHandlerTestHarness,
 } from "./server.sessions.create.test-support.js";
 import { testState, writeSessionStore } from "./test-helpers.js";
 import { releaseGatewaySessionStoreFixture } from "./test/server-sessions-resources.test-helpers.js";
 import { getGatewayConfigModule, sessionStoreEntry } from "./test/server-sessions.test-helpers.js";
 
-const { createSessionStoreDir } = setupSessionCreateTestHarness();
+const { createSessionStoreDir } = setupSessionCreateHandlerTestHarness();
 
 async function createFixture(
   suffix: string,

@@ -15,7 +15,6 @@ import { projectCallbackOwner } from "../../lib/reactive/callback-owner.ts";
 import "./custom-elements.ts";
 import { registerEnglishCatalog, t } from "../../lib/reactive/i18n.ts";
 import { renderPluginCapabilitySection as PluginCapabilitySection } from "./overview.tsx";
-import "./skill-preview.css";
 import { showPluginToolPreview, type PluginToolPreview } from "./tool-preview.tsx";
 
 registerEnglishCatalog(registerPluginManagementEnglish);

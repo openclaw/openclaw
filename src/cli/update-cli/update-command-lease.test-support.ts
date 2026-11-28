@@ -241,7 +241,7 @@ async function runUpdateLeaseScenario(progress?: (phase: string) => void): Promi
       const { resolveOpenClawStateSqlitePath } =
         await import("../../state/openclaw-state-db.paths.js");
       const { inspectUpdateRepairDriverAdmission } =
-        await import("../../infra/update-run-activity.js");
+        await import("../../infra/update-repair-driver-admission.js");
       const database = new DatabaseSync(resolveOpenClawStateSqlitePath(), { readOnly: true });
       const run = (() => {
         try {

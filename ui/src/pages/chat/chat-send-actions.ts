@@ -296,10 +296,8 @@ export async function retryQueuedChatMessage(
       }
     : undefined;
   const connectionIsCurrent = captureChatConnectionOwner(host);
-  const [{ scheduleStoredChatOutboxDrain }, { chatOutboxDrainDependencies }] = await Promise.all([
-    import("./chat-outbox-drain.ts"),
-    import("./chat-send-delivery.runtime.ts"),
-  ]);
+  const { scheduleStoredChatOutboxDrain, chatOutboxDrainDependencies } =
+    await import("./chat-send-delivery.runtime.ts");
   if (!connectionIsCurrent() || (canDispatch && !canDispatch())) {
     return;
   }
