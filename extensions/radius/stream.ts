@@ -103,13 +103,23 @@ export function createRadiusStreamFn(): StreamFunction<string, RadiusStreamOptio
       if (type === "done" || type === "error") {
         const rawUsage = record(event.usage);
         const cost = record(rawUsage.cost);
+        const input = number(rawUsage.input);
+        const output = number(rawUsage.output);
+        const cacheRead = number(rawUsage.cacheRead);
+        const cacheWrite = number(rawUsage.cacheWrite);
+        // Pi's usage splits the measured prompt into uncached input and cache reads and writes.
+        const promptTokens = input + cacheRead + cacheWrite;
         partial.usage = {
           ...rawUsage,
-          input: number(rawUsage.input),
-          output: number(rawUsage.output),
-          cacheRead: number(rawUsage.cacheRead),
-          cacheWrite: number(rawUsage.cacheWrite),
+          input,
+          output,
+          cacheRead,
+          cacheWrite,
           totalTokens: number(rawUsage.totalTokens),
+          contextUsage:
+            type === "done" && promptTokens > 0
+              ? { state: "available", promptTokens, totalTokens: promptTokens + output }
+              : { state: "unavailable" },
           cost: {
             ...cost,
             input: number(cost.input),
