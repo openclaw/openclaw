@@ -23,6 +23,7 @@ it.each([false, true])(
     expect(ctx.Body).toBe(text);
     expect(ctx.BodyForAgent).toBe(text);
     expect(text).toContain(sourceRunId);
+    expect(text).not.toMatch(/read[- ]only/i);
     // Even with the longest run ID, stay below the 719-byte pre-#206900 prompt without an ID.
     expect(Buffer.byteLength(text)).toBeLessThan(719);
     const displayed = projectChatDisplayMessages([

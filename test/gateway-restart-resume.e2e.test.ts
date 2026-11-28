@@ -266,18 +266,11 @@ async function providerFixture(signal: AbortSignal, childTimer = false) {
               expect(input).toContain(
                 effect === "unknown" ? `/tool/${cycle}/tool` : shellEffectFile(cycle),
               );
-              tool(
-                effect === "unknown" ? "process" : "read",
-                effect === "unknown" ? { action: "list" } : { path: file },
-              );
+              tool("read", {
+                path: effect === "unknown" ? path.join(shellWorkspace, INDEPENDENT_FILE) : file,
+              });
             } else if (restarting && typeof toolOutput.output === "string") {
               const result = toolOutput.output;
-              if (effect === "unknown" && !issued.has(`independent:${cycle}`)) {
-                expect(result).toMatch(/No running|No active|No sessions/i);
-                issued.add(`independent:${cycle}`);
-                tool("read", { path: path.join(shellWorkspace, INDEPENDENT_FILE) });
-                return;
-              }
               expect(result).toContain(
                 effect === "unknown"
                   ? INDEPENDENT_CONTENT

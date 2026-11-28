@@ -637,10 +637,9 @@ An installation stopped for longer than six hours before upgrading loses this
 one-time resume; send a new message to continue. Old execution and authority
 snapshots are not restored.
 
-Startup consumes the shutdown marker and orphaned run identity together. It sends
-one new input to check saved results and current state, not to replay the original
-request or tool call. Later model requests can include this input as history; effects
-are not guaranteed exactly once.
+Startup consumes the shutdown marker and orphaned run identity together and sends
+one resume input. It does not replay the request or tool call. The input stays
+in history; external effects are not guaranteed exactly once.
 
 Background commands that were waiting to wake the conversation are reported
 separately, with a notice for each command, after any restart, including a crash.
