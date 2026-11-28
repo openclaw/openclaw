@@ -52,9 +52,7 @@ suite.define(() => {
             await draft.locator(".agent-chat__welcome-avatar").waitFor();
             await draft.locator(".agent-chat__recents").waitFor();
           } else {
-            await draft
-              .getByRole("button", { name: "Connect an AI provider", exact: true })
-              .waitFor();
+            await draft.getByRole("button", { name: "Set up a model", exact: true }).waitFor();
           }
 
           await page.goto(controlUiSessionUrl(suite.server.baseUrl, "main"));
@@ -88,7 +86,7 @@ suite.define(() => {
           ).toBe(0);
           expect(await composer.isVisible()).toBe(true);
           if (!agentModel) {
-            await pane.getByRole("button", { name: "Connect an AI provider", exact: true }).click();
+            await pane.getByRole("button", { name: "Set up a model", exact: true }).click();
             await expect.poll(() => new URL(page.url()).pathname).toBe("/settings/model-providers");
           }
           expect(await gateway.getRequests("chat.send")).toHaveLength(0);
@@ -168,6 +166,8 @@ suite.define(() => {
         });
         await page.goto(`${suite.server.baseUrl}chat`);
         const pane = page.locator('openclaw-chat-pane[aria-hidden="false"]');
+        // A cold opening with visible messages loads earlier history only on reader intent.
+        await pane.getByRole("button", { name: "Show earlier", exact: true }).click();
         await gateway.waitForRequest("chat.history");
         await gateway.rejectDeferred(
           "chat.history",

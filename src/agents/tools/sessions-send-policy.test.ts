@@ -382,9 +382,7 @@ describe("sessions_send directed policy at the tool boundary", () => {
       );
       const text = projected.content.find((block) => block.type === "text")?.text;
       if (full.length > 16_000) {
-        expect(text).toMatch(/\d+ more characters truncated/);
-        expect(text).toContain("ask the target session for the missing section or a file");
-        expect(text).toContain("do not repeat the original task");
+        expect(text).toMatch(/\d+ chars omitted/);
       } else {
         expect(projected.content).toEqual(result.content);
       }

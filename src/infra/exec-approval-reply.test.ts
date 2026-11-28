@@ -75,7 +75,7 @@ describe("exec approval reply helpers", () => {
     }).text;
 
     expect(text).toContain(
-      "Print the Control UI URL with `openclaw dashboard --no-open`, open it in a browser, then use the approval inbox.",
+      "Print the web app URL with `openclaw dashboard --no-open`, open it in a browser, then use the approval inbox.",
     );
     expect(text).toContain(
       "Inspect the node's effective exec policy with `openclaw approvals get --node mac-1`.",

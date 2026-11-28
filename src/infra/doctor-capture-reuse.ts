@@ -9,7 +9,7 @@ import {
 import { createConfigIO } from "../config/io.factory.js";
 import { resolveConfigPath } from "../config/paths.js";
 import type { PluginDoctorMigrationBackupWarning } from "../plugins/doctor-contract-module.js";
-import { preparePluginDoctorMigrationBackupResources } from "../plugins/doctor-contract-registry.js";
+import { preparePluginDoctorMigrationBackupResources } from "../plugins/doctor-contract-preparation.js";
 import { hasCommandProcessCleanupError } from "../process/exec-result.js";
 import {
   withArtifactPreservingStateReads,
@@ -88,7 +88,20 @@ export async function findReusableDoctorCapture(
       const source = await safeRoot(directory, { symlinks: "reject", hardlinks: "reject" });
       const raw = await source.readText("manifest.json", { maxBytes: 8 * 1024 * 1024 });
       const preview = parseUpdateRecoveryBackupManifest(raw);
-      if (preview.entries.length > MAX_REUSE_ENTRIES) {
+      // This is only an early rejection. A chosen capture still goes through
+      // the verified reader and current-source comparison below.
+      if (
+        preview.runId !== path.basename(directory) ||
+        preview.generation?.kind !== "baseline" ||
+        preview.installRoot !== path.resolve(params.installRoot) ||
+        preview.stateDir !== params.stateDir ||
+        preview.configPath !== canonicalEntryPath(resolveConfigPath(params.env)) ||
+        preview.excludedRoots.length > 0 ||
+        (preview.warnings?.length ?? 0) > 0
+      ) {
+        return undefined;
+      }
+      if (preview.entries.length > MAX_REUSE_ENTRIES || (await hasVisibleSourceChange(preview))) {
         return undefined;
       }
       // Large originals are the reason to reuse, not a reason to allocate another
@@ -110,6 +123,9 @@ export async function findReusableDoctorCapture(
             return undefined;
           }
         }
+      }
+      if (await hasChangedSqlitePages(directory, preview, check)) {
+        return undefined;
       }
       const ref = {
         directory,
@@ -149,6 +165,114 @@ export async function findReusableDoctorCapture(
     params.signal?.throwIfAborted();
     return undefined;
   }
+}
+
+/**
+ * Metadata the full comparison requires of every recorded entry. A Gateway that ran
+ * since the capture usually grows a database, so this rejects such a capture before
+ * hashing its payloads or imaging the current databases. Passing proves nothing.
+ */
+async function hasVisibleSourceChange(manifest: UpdateRecoveryBackupManifest): Promise<boolean> {
+  for (const entry of manifest.entries) {
+    const stat = await fs.lstat(entry.sourcePath).catch(ignoreMissingPath);
+    if (!stat || entry.kind === "missing") {
+      if (stat || entry.kind !== "missing") {
+        return true;
+      }
+      continue;
+    }
+    if (entry.kind === "symlink") {
+      if (!stat.isSymbolicLink()) {
+        return true;
+      }
+      continue;
+    }
+    if (
+      (entry.kind === "directory" ? !stat.isDirectory() : !stat.isFile()) ||
+      entry.mode !== (stat.mode & 0o777) ||
+      (entry.kind === "file" && entry.size !== stat.size)
+    ) {
+      return true;
+    }
+    if (entry.kind === "file" && entry.sqlite) {
+      for (const suffix of ["-wal", "-journal"]) {
+        const sidecar = await fs.lstat(entry.sourcePath + suffix).catch(ignoreMissingPath);
+        if (sidecar && (!sidecar.isFile() || sidecar.size !== 0)) {
+          return true;
+        }
+      }
+    }
+  }
+  return false;
+}
+
+const SQLITE_MAGIC = Buffer.from("SQLite format 3\0", "latin1");
+const PAGE_COMPARISON_CHUNK = 1024 * 1024;
+
+function sqlitePageSize(header: Buffer): number | undefined {
+  if (header.length < 100 || !header.subarray(0, 16).equals(SQLITE_MAGIC)) {
+    return undefined;
+  }
+  const size = header.readUInt16BE(16);
+  return size === 1 ? 65536 : size;
+}
+
+function hasFullAutoVacuum(header: Buffer): boolean {
+  return header.readUInt32BE(52) !== 0 && header.readUInt32BE(64) === 0;
+}
+
+/**
+ * Capture images copy every page after the first verbatim and change only the
+ * journal mode on page 1; FULL auto-vacuum is excluded because that change may
+ * rewrite pages. A differing later page therefore proves the fresh image would
+ * differ too. Smallest databases first, so a changed state database is cheap.
+ */
+async function hasChangedSqlitePages(
+  directory: string,
+  manifest: UpdateRecoveryBackupManifest,
+  check: () => void,
+): Promise<boolean> {
+  const databases = manifest.entries
+    .flatMap((entry) => (entry.kind === "file" && entry.sqlite ? [entry] : []))
+    .toSorted((left, right) => left.size - right.size);
+  const flags = fs.constants.O_RDONLY | fs.constants.O_NOFOLLOW;
+  for (const entry of databases) {
+    check();
+    await using source = await fs.open(entry.sourcePath, flags);
+    await using payload = await fs.open(path.join(directory, entry.archivePath), flags);
+    const sourceHeader = Buffer.alloc(100);
+    const payloadHeader = Buffer.alloc(100);
+    const [{ bytesRead: sourceHeaderBytes }, { bytesRead: payloadHeaderBytes }] = await Promise.all(
+      [source.read(sourceHeader, 0, 100, 0), payload.read(payloadHeader, 0, 100, 0)],
+    );
+    const pageSize = sqlitePageSize(sourceHeader.subarray(0, sourceHeaderBytes));
+    if (
+      pageSize === undefined ||
+      pageSize !== sqlitePageSize(payloadHeader.subarray(0, payloadHeaderBytes)) ||
+      hasFullAutoVacuum(sourceHeader) ||
+      hasFullAutoVacuum(payloadHeader)
+    ) {
+      continue;
+    }
+    const left = Buffer.alloc(PAGE_COMPARISON_CHUNK);
+    const right = Buffer.alloc(PAGE_COMPARISON_CHUNK);
+    for (let offset = pageSize; offset < entry.size; offset += PAGE_COMPARISON_CHUNK) {
+      check();
+      const length = Math.min(PAGE_COMPARISON_CHUNK, entry.size - offset);
+      const [a, b] = await Promise.all([
+        source.read(left, 0, length, offset),
+        payload.read(right, 0, length, offset),
+      ]);
+      if (
+        a.bytesRead !== length ||
+        b.bytesRead !== length ||
+        !left.subarray(0, length).equals(right.subarray(0, length))
+      ) {
+        return true;
+      }
+    }
+  }
+  return false;
 }
 
 async function compareCurrentSources(
@@ -200,6 +324,8 @@ async function compareCurrentSources(
         env: params.env,
         warnings,
         requireLocalResources: true,
+        assertCurrent: check,
+        signal: params.signal,
       }),
     { env: params.env, signal: params.signal },
   );
@@ -375,6 +501,11 @@ async function compareCurrentSources(
     }
   };
   for (const [pathname, kind] of resources) {
+    // Capture records declared sidecar roots through their database image.
+    if (sidecars.has(pathname)) {
+      roots.delete(pathname);
+      continue;
+    }
     await inspect(pathname, kind);
   }
   for (const pathname of databasePaths) {

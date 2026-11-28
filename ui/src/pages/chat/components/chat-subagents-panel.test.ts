@@ -177,12 +177,126 @@ function mountRows(
     return method === "sessions.abort" ? (handlers.abort?.() ?? {}) : {};
   }, mobile);
 }
+
+it.each([false, true])(
+  "files a child paused on sessions_yield as waiting on what it waits for (mobile=%s)",
+  async (mobile) => {
+    const idle = { status: undefined, hasActiveRun: false, activeRunIds: [], endedAt: 2 };
+    const rows = [
+      { ...child("background"), ...idle, subagentRunState: "paused", backgroundProcessCount: 1 },
+      { ...child("paused"), ...idle, subagentRunState: "paused" },
+      { ...child("delegating"), ...idle, subagentRunState: "paused", hasActiveSubagentRun: true },
+    ] satisfies GatewaySessionRow[];
+    const f = mountRows(() => rows, mobile);
+    await f.waitForCount(openSelector(mobile), rows.length);
+    const status = (id: string) => {
+      const row = f.panel.querySelector(`[data-session-key="${child(id).key}"]`)!;
+      return mobile
+        ? [
+            row.querySelector("[data-status]")!.getAttribute("data-status"),
+            row.querySelector("[data-status]")!.getAttribute("aria-label"),
+          ]
+        : [
+            row.getAttribute("data-group"),
+            row.querySelector(".subagents-desktop__status")!.textContent,
+          ];
+    };
+    expect([status("background"), status("paused"), status("delegating")]).toEqual(
+      mobile
+        ? [
+            ["waiting", "Running in background"],
+            ["waiting", "Paused"],
+            ["waiting", "Waiting on subagents"],
+          ]
+        : [
+            ["waiting", "Running in background"],
+            ["waiting", "Paused"],
+            ["waiting", "Waiting for subagents"],
+          ],
+    );
+  },
+);
+it("resynchronizes descendants when a retained panel switches presentation", async () => {
+  const coordinator = child("coordinator");
+  const reviewer = { ...child("reviewer"), spawnedBy: coordinator.key };
+  coordinator.childSessions = [reviewer.key];
+  const f = mountRows(
+    (params) => (params?.spawnedBy === parentKey ? [coordinator] : [reviewer]),
+    true,
+  );
+  await f.waitForCount(".chat-subagents-mobile__open", 1);
+  Object.assign(f.panel, { mobile: false });
+  await f.waitForCount(".subagents-desktop__open", 2);
+  Object.assign(f.panel, { mobile: true });
+  await f.waitForCount(".chat-subagents-mobile__open", 1);
+});
+
 const openSelector = (mobile?: boolean) =>
   mobile === true
     ? ".chat-subagents-mobile__open"
     : mobile === false
       ? ".subagents-desktop__open"
       : ".chat-subagents__open";
+
+it.each([false, true])(
+  "shows each child's model in the %s roster without guessing",
+  async (mobile) => {
+    const rows = [
+      {
+        ...child("named"),
+        model: "model-a",
+        modelProvider: "fixture",
+        activeModel: "model-a",
+        activeModelProvider: "fixture",
+        modelDisplayName: "Model A",
+        runtimeMs: 18_000,
+      },
+      {
+        ...child("fallback"),
+        model: "model-b",
+        modelDisplayName: "Model B",
+        activeModel: "model-c",
+      },
+      {
+        ...child("done"),
+        model: "model-d",
+        status: "done" as const,
+        hasActiveRun: false,
+        activeRunIds: [],
+      },
+      {
+        ...child("unknown"),
+        activeModel: " ",
+        modelDisplayName: " ",
+        model: " ",
+        runtimeMs: 12_000,
+      },
+      {
+        ...child("rerouted"),
+        model: "shared-id",
+        modelProvider: "first",
+        modelDisplayName: "First provider's model",
+        activeModel: "shared-id",
+        activeModelProvider: "second",
+      },
+    ] satisfies [GatewaySessionRow, ...GatewaySessionRow[]];
+    const [named, fallback, done, unknown, rerouted] = rows;
+    const f = mountRows(() => rows, mobile);
+    await f.waitForCount(openSelector(mobile), rows.length);
+    const text = (row: GatewaySessionRow) =>
+      f.panel.querySelector('[data-session-key="' + row.key + '"] ' + openSelector(mobile))
+        ?.textContent;
+    expect(text(named)).toMatch(/18s.*·.*Model A/);
+    expect(text(named)?.includes("Working for")).toBe(!mobile);
+    expect(text(unknown)).toMatch(/Working for.*12s/);
+    expect(text(fallback)).toContain("model-c");
+    expect(text(fallback)).not.toContain("Model B");
+    expect(text(done)).toContain("model-d");
+    expect(text(unknown)).not.toContain("·");
+    expect(text(rerouted)).toContain("shared-id");
+    expect(text(rerouted)).not.toContain("First provider's model");
+  },
+);
 
 it.each([undefined, false, true])(
   "retains the %s list through an observed refresh and recovers a failed read",
@@ -221,11 +335,13 @@ it.each([undefined, false, true])(
     expect(f.panel.querySelector(openSelector(mobile))).toBeNull();
     initial.resolve(page([first, last]));
     await f.waitForCount(openSelector(mobile), 2);
-    const retained = f.panel.querySelector(openSelector(mobile));
+    const retained = f.find(openSelector(mobile))!;
+    retained.focus();
     phase = "refresh";
     const refresh = f.sessions.refreshList({ ...childSessionListQuery(parentKey), force: true });
     await waitForSolid(() => expect(f.panel.querySelector('[aria-busy="true"]')).not.toBeNull());
     expect(f.panel.querySelector(openSelector(mobile))).toBe(retained);
+    expect(document.activeElement).toBe(retained);
     revalidation.reject(new Error("Child list read denied"));
     await refresh;
     await waitForSolid(() =>
@@ -237,6 +353,50 @@ it.each([undefined, false, true])(
     phase = "ready";
     f.panel.querySelector<HTMLButtonElement>('[role="alert"] button')!.click();
     await f.waitForCount(openSelector(mobile), 2);
+  },
+);
+
+it.each([undefined, false, true])(
+  "retains an accepted empty %s list during event refresh",
+  async (mobile) => {
+    vi.useFakeTimers();
+    onTestFinished(() => {
+      vi.useRealTimers();
+    });
+    const initial = createDeferred<SessionsListResult>();
+    const refreshed = createDeferred<SessionsListResult>();
+    const replacement = createDeferred<SessionsListResult>();
+    let reads = 0;
+    const f = mountRows(() => [], mobile, {
+      list: () =>
+        ++reads === 1 ? initial.promise : reads === 2 ? refreshed.promise : replacement.promise,
+    });
+    onTestFinished(() => {
+      initial.resolve(page([]));
+      refreshed.resolve(page([]));
+      replacement.resolve(page([]));
+    });
+    await vi.advanceTimersByTimeAsync(0);
+    expect(f.panel.querySelector("[role=status]")).not.toBeNull();
+    expect(f.panel.querySelector(".empty-state")).toBeNull();
+    initial.resolve(page([]));
+    await vi.advanceTimersByTimeAsync(0);
+    const empty = f.panel.querySelector(".empty-state");
+    expect(empty).not.toBeNull();
+    f.connection.publishEvent("sessions.changed", { sessionKey: parentKey, reason: "sharing" });
+    await vi.advanceTimersByTimeAsync(5_000);
+    expect(reads).toBe(2);
+    expect(f.panel.querySelector('[aria-busy="true"]')).not.toBeNull();
+    expect(f.panel.querySelector(".empty-state")).toBe(empty);
+    expect(f.panel.querySelector('[aria-label="Loading…"]')).toBeNull();
+    refreshed.resolve(page([]));
+    await vi.advanceTimersByTimeAsync(0);
+    expect(f.panel.querySelector(".empty-state")).toBe(empty);
+    f.panel.sessionKey = "agent:main:replacement";
+    await f.panel.updateComplete;
+    await vi.advanceTimersByTimeAsync(0);
+    await waitForSolid(() => expect(f.panel.querySelector(".empty-state")).toBeNull());
+    expect(f.panel.querySelector('[aria-label="Loading…"]')).not.toBeNull();
   },
 );
 

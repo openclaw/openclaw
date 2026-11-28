@@ -562,6 +562,7 @@ describe("Barnacle unified lifecycle", () => {
   for (const label of ["invalid", "r: spam", "r: support"]) {
     for (const mutation of [
       "valid",
+      ...(label === "r: support" ? ["legacy-support-valid", "legacy-support-forged-app"] : []),
       "missing",
       "forged-app",
       "edited",
@@ -594,10 +595,15 @@ describe("Barnacle unified lifecycle", () => {
         assert.equal(h.state.comments.length, 1);
         assert.equal(h.state.pr.locked ?? false, label === "r: spam");
         const receipt = h.state.comments[0];
+        if (mutation.startsWith("legacy-support-")) {
+          receipt.body =
+            "Please use [our support server](https://discord.gg/clawd) and ask in #help or #users-helping-users to resolve this, or follow the stuck FAQ at https://docs.openclaw.ai/help/faq-first-run#i-am-stuck-fastest-way-to-get-unstuck.\n\n" +
+            "<!-- barnacle-response:v1 item=10 kind=issue head=none episode=initial rule=c889f01529d282b2a0193e96488bb308b182f0279d12720bdc45d2306010bdc7 -->\n";
+        }
         if (mutation === "missing") {
           h.state.comments = [];
         }
-        if (mutation === "forged-app") {
+        if (mutation === "forged-app" || mutation === "legacy-support-forged-app") {
           receipt.performed_via_github_app.id = 1;
         }
         if (mutation === "edited") {
@@ -661,7 +667,7 @@ describe("Barnacle unified lifecycle", () => {
         h.options.github.rest.issues.listForRepo = async () => ({ data: [h.state.pr] });
         const before = h.writes.slice();
         const run = () => auditRecentBugClosures(h.options);
-        if (mutation === "valid") {
+        if (mutation === "valid" || mutation === "legacy-support-valid") {
           assert.deepEqual((await run()).violations, []);
         } else {
           await assert.rejects(run(), /Unauthenticated or premature/);

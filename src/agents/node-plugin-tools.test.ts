@@ -6,26 +6,45 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { runWithAgentToolExecutionContext } from "../../packages/agent-core/src/tool-execution-context.js";
 import type { NodePluginToolDescriptor } from "../../packages/gateway-protocol/src/index.js";
 import { useAutoCleanupTempDirTracker } from "../../test/helpers/temp-dir.js";
+import { NodeMcpElicitationRegistry } from "../gateway/node-mcp-elicitation.js";
 import {
   listConnectedNodePluginTools,
   removeConnectedNodePluginTools,
-  replaceConnectedNodePluginTools,
+  publishNodeSessionPluginTools,
 } from "../gateway/node-plugin-tool-snapshot.js";
+import { makeNodeSession } from "../gateway/node-registry.test-helpers.js";
+import type { NodeSession } from "../gateway/node-session.types.js";
+import type { GatewayRequestContext } from "../gateway/server-methods/types.js";
 import { appendRuntimePluginToolGrant } from "../plugins/tool-grant-allowlist.js";
 import { getPluginToolMeta, setPluginToolMeta } from "../plugins/tool-metadata.js";
+import { getAgentToolExecutionLocation } from "./agent-tool-metadata.js";
+import { createCodingToolsGatewayCaller } from "./agent-tools.caller.js";
 import {
   applyCodeModeCatalog,
   buildCodeModeCatalogPrompt,
   createCodeModeTools,
 } from "./code-mode.js";
 import { testing } from "./code-mode.test-support.js";
+import { resolveConversationCapabilityProfile } from "./conversation-capability-profile.js";
 import { consumeMcpCodeModeGuestResult } from "./mcp-content.js";
 import { resolveOpenClawPluginToolsForOptions } from "./openclaw-plugin-tools.js";
 import { makeAssistantMessageFixture } from "./test-helpers/assistant-message-fixtures.js";
+import { applyToolPolicyPipeline } from "./tool-policy-pipeline.js";
+import { attachToolAllowlistIntersection, collectExplicitAllowlist } from "./tool-policy.js";
 import { isToolResultError } from "./tool-result-error.js";
 import { snapshotToolSearchTargetTranscriptResult } from "./tool-search-transcript.js";
 import { createToolSearchCatalogRef } from "./tool-search.js";
 import { jsonResult, type AnyAgentTool } from "./tools/common.js";
+import {
+  capCronJobToolsAllowOnCreate,
+  replaceWithEffectiveCronCreatorToolAllowlist,
+} from "./tools/cron-tool-creator-cap.js";
+import type { CronCreatorToolAllowlistEntry } from "./tools/cron-tool.types.js";
+import {
+  getGatewayToolCallerIdentity,
+  withGatewayToolCallerIdentity,
+  withoutGatewayToolCallerIdentity,
+} from "./tools/gateway-caller-context.js";
 import { callGatewayTool } from "./tools/gateway.js";
 
 vi.mock("./tools/gateway.js", () => ({
@@ -51,9 +70,10 @@ function materializeNodeTools(
     toolAllowlist?: string[];
     toolDenylist?: string[];
     agentSessionKey?: string;
+    mcpAppsEnabled?: boolean;
   } = {},
 ) {
-  const config = { plugins: { enabled: false } };
+  const config = { plugins: { enabled: false }, mcp: { apps: { enabled: params.mcpAppsEnabled } } };
   return resolveOpenClawPluginToolsForOptions({
     resolvedConfig: config,
     existingToolNames: params.existingToolNames,
@@ -72,16 +92,29 @@ function connectTool(
   descriptor: NodePluginToolDescriptor = remoteEcho,
   {
     registered = false,
-    ...node
-  }: Partial<Omit<Parameters<typeof replaceConnectedNodePluginTools>[0], "tools">> & {
+    nodeId = "node-1",
+    displayName,
+  }: Partial<Pick<NodeSession, "nodeId" | "displayName">> & {
     registered?: boolean;
   } = {},
 ) {
-  replaceConnectedNodePluginTools({
-    nodeId: "node-1",
-    ...node,
-    tools: [{ descriptor, registered }],
+  const node = makeNodeSession(nodeId, {
+    displayName,
+    commands: ["remote.echo", "mcp.tools.call.v1"],
+    declaredNodePluginTools: [descriptor],
   });
+  publishNodeSessionPluginTools(
+    node,
+    undefined,
+    registered
+      ? [
+          {
+            pluginId: descriptor.pluginId,
+            command: { command: descriptor.command, agentTool: descriptor },
+          },
+        ]
+      : [],
+  );
 }
 
 function docsTool(
@@ -323,6 +356,86 @@ describe("materializeNodeTools", () => {
     );
   });
 
+  it("binds node MCP questions only to the live originating session for the duration of the call", async () => {
+    connectTool(docsTool("read", "Read node-local reports"));
+    const sessionKey = "agent:main:source";
+    const tool = firstTool({ agentSessionKey: sessionKey, mcpAppsEnabled: true });
+    expect(getAgentToolExecutionLocation(tool)).toEqual({
+      kind: "gateway",
+      timeout: { minimumMs: 725_000 },
+    });
+    const node = { nodeId: "node-1", connId: "conn-1", client: {} } as NodeSession;
+    const registry = new NodeMcpElicitationRegistry();
+    const context = {
+      nodeRegistry: { get: () => node, mcpElicitation: registry },
+    } as unknown as GatewayRequestContext;
+    const caller = {
+      agentId: "main",
+      sessionKey,
+      operationalRunInstance: { runId: "run", instanceId: "instance" },
+      receiptAuthority: () => true,
+      gatewayContextResolver: () => context,
+    };
+    using ask = vi.spyOn(
+      await import("./harness/structured-input-execution.js"),
+      "runStructuredInput",
+    );
+    ask.mockImplementationOnce(async (question) => {
+      expect(question.sessionKey).toBe(sessionKey);
+      expect(getGatewayToolCallerIdentity()?.operationalRunInstance).toEqual(
+        caller.operationalRunInstance,
+      );
+      return { status: "answered", answers: { project: ["one"] }, content: { project: "one" } };
+    });
+    const args = { elicitationId: "model-supplied" };
+    const event = {
+      id: "",
+      requestId: "794d5a27-9b20-4baf-a4c4-bb13fc9ebf94",
+      params: {
+        message: "Choose a project",
+        requestedSchema: { type: "object", properties: { project: { type: "string" } } },
+      },
+    };
+    const receive = () => registry.receive(node, event, async () => true);
+    vi.mocked(callGatewayTool).mockImplementationOnce(async (_method, options, request) => {
+      const { params, timeoutMs } = request as {
+        params: { elicitationId: string; arguments: unknown };
+        timeoutMs: number;
+      };
+      expect(params.arguments).toEqual(args);
+      expect(params.elicitationId).not.toBe(args.elicitationId);
+      expect(timeoutMs).toBe(720_000);
+      expect(options.timeoutMs).toBe(725_000);
+      event.id = params.elicitationId;
+      expect(await withoutGatewayToolCallerIdentity(receive)).toEqual({
+        action: "accept",
+        content: { project: "one" },
+      });
+      throw new Error("node disconnected");
+    });
+    await expect(
+      withGatewayToolCallerIdentity(caller, () => tool.execute("read", args)),
+    ).rejects.toThrow("node disconnected");
+    await expect(receive()).rejects.toThrow("unavailable");
+
+    for (const [invokeTool, source] of [
+      [tool, { ...caller, sessionKey: "agent:main:other" }],
+      [firstTool({ agentSessionKey: sessionKey }), caller],
+    ] as const) {
+      vi.mocked(callGatewayTool).mockClear();
+      respond({ content: [] });
+      await withGatewayToolCallerIdentity(source, () => invokeTool.execute("read", args));
+      expectInvocation(
+        {
+          params: { server: "docs", tool: "read", arguments: args },
+          idempotencyKey: "read",
+          sessionKey,
+        },
+        { mcp: true },
+      );
+    }
+  });
+
   it("snapshots successful node MCP text once", async () => {
     const text = "ordinary report line\n".repeat(25_000);
     const payload = CallToolResultSchema.parse({
@@ -543,8 +656,15 @@ describe("materializeNodeTools", () => {
     connectTool(githubDescriptor, { nodeId: "node-1", registered: true });
     expect(toolNames({ toolAllowlist: ["github"] })).toEqual(["remote_repo_search"]);
 
-    connectTool({ ...githubDescriptor, pluginId: "node-mcp" });
-    expect(toolNames({ toolAllowlist: ["node-mcp"] })).toEqual(["remote_repo_search"]);
+    for (const pluginId of ["node-mcp", "NODE-MCP", " Node-Mcp "]) {
+      connectTool({
+        ...githubDescriptor,
+        pluginId,
+        command: "mcp.tools.call.v1",
+        mcp: { server: "github", tool: "search" },
+      });
+      expect(toolNames({ toolAllowlist: ["node-mcp"] })).toEqual(["remote_repo_search"]);
+    }
 
     connectTool(githubDescriptor);
     expect(toolNames({ toolAllowlist: ["remote_repo_search"] })).toEqual(["remote_repo_search"]);
@@ -555,4 +675,132 @@ describe("materializeNodeTools", () => {
       }),
     ).toEqual([]);
   });
+
+  it.each([
+    { registered: false, allow: ["read", "remote-demo"], expected: [] },
+    { registered: true, allow: ["read", "remote-demo"], expected: ["remote_echo"] },
+    { registered: false, allow: ["read", "remote_echo"], expected: ["remote_echo"] },
+    {
+      registered: false,
+      allow: attachToolAllowlistIntersection(["*"], [["read", "remote-demo"]]),
+      expected: [],
+    },
+  ])("preserves node owner trust across policy layers: %j", ({ registered, allow, expected }) => {
+    connectTool(remoteEcho, { registered });
+    const steps = [
+      { label: "tools.allow", policy: { allow: ["group:plugins"] } },
+      { label: "agent tools.allow", policy: { allow } },
+    ];
+    const tools = materializeNodeTools({
+      toolAllowlist: collectExplicitAllowlist(steps.map((step) => step.policy)),
+    });
+    expect(tools.map((tool) => tool.name)).toEqual(["remote_echo"]);
+    expect(
+      applyToolPolicyPipeline({ tools, toolMeta: getPluginToolMeta, warn: () => {}, steps }).map(
+        (tool) => tool.name,
+      ),
+    ).toEqual(expected);
+    expect(
+      applyToolPolicyPipeline({
+        tools,
+        toolMeta: getPluginToolMeta,
+        warn: () => {},
+        steps: [{ label: "plugin deny", policy: { deny: ["remote-demo"] } }],
+      }),
+    ).toEqual([]);
+  });
+
+  it.each([
+    { pluginId: "NODE-MCP", command: "remote.echo" },
+    { pluginId: "Node-Mcp", command: "mcp.tools.call.v1" },
+    { pluginId: " node-MCP ", command: "remote.echo", mcp: { server: "docs", tool: "read" } },
+  ])("requires MCP shape for reserved owner variants: %j", (descriptor) => {
+    connectTool({ ...remoteEcho, ...descriptor });
+    for (const broad of ["group:plugins", "*"]) {
+      const tools = materializeNodeTools({ toolAllowlist: [broad, "node-mcp"] });
+      expect(tools.map((tool) => tool.name)).toEqual(["remote_echo"]);
+      expect(
+        applyToolPolicyPipeline({
+          tools,
+          toolMeta: getPluginToolMeta,
+          warn: () => {},
+          steps: [
+            { label: "broad admission", policy: { allow: [broad] } },
+            { label: "owner restriction", policy: { allow: ["read", "node-mcp"] } },
+          ],
+        }),
+      ).toEqual([]);
+      const creator: CronCreatorToolAllowlistEntry[] = [];
+      replaceWithEffectiveCronCreatorToolAllowlist(creator, tools, getPluginToolMeta);
+      expect(() =>
+        capCronJobToolsAllowOnCreate({ payload: { toolsAllow: ["node-mcp"] } }, creator),
+      ).toThrow('Requested automation tool "node-mcp" cannot be carried');
+    }
+    expect(materializeNodeTools({ toolAllowlist: ["node-mcp"] })).toEqual([]);
+    expect(toolNames({ toolAllowlist: ["remote_echo"] })).toEqual(["remote_echo"]);
+    expect(materializeNodeTools({ toolDenylist: ["node-mcp"] })).toEqual([]);
+    expect(callGatewayTool).not.toHaveBeenCalled();
+  });
+
+  it.each([
+    { registered: false, selection: "remote-demo", rejected: true },
+    { registered: true, selection: "remote-demo", rejected: false },
+    { registered: false, selection: "remote_echo", rejected: false },
+  ])(
+    "preserves node owner trust in cron creator selection: %j",
+    ({ registered, selection, rejected }) => {
+      connectTool(remoteEcho, { registered });
+      const tools = materializeNodeTools({ toolAllowlist: ["group:plugins"] });
+      expect(tools.map((tool) => tool.name)).toEqual(["remote_echo"]);
+      const creator: CronCreatorToolAllowlistEntry[] = [];
+      replaceWithEffectiveCronCreatorToolAllowlist(creator, tools, getPluginToolMeta);
+      const job = { payload: { kind: "agentTurn", message: "work", toolsAllow: [selection] } };
+      const cap = () => capCronJobToolsAllowOnCreate(job, creator);
+      if (rejected) {
+        expect(cap).toThrow('Requested automation tool "remote-demo" cannot be carried');
+        expect(job.payload.toolsAllow).toEqual([selection]);
+      } else {
+        cap();
+        expect(job.payload.toolsAllow).toEqual(["remote_echo"]);
+      }
+      expect(callGatewayTool).not.toHaveBeenCalled();
+    },
+  );
+
+  it.each([false, true])(
+    "retains node owner trust in the caller snapshot (registered=%s)",
+    async (registered) => {
+      connectTool(remoteEcho, { registered });
+      const tools = materializeNodeTools({ toolAllowlist: ["group:plugins", "remote-demo"] });
+      const config = {
+        tools: { allow: ["group:plugins"] },
+        agents: { entries: { fixture: { tools: { allow: ["read", "remote-demo"] } } } },
+      };
+      const identity = { agentId: "fixture", sessionKey: "agent:fixture:main" };
+      const bind = createCodingToolsGatewayCaller({
+        options: { config },
+        ...identity,
+        capabilityProfile: resolveConversationCapabilityProfile({ config, ...identity }),
+        tools,
+      });
+      const probe = bind({
+        ...expectDefined(tools[0], "materialized node tool"),
+        execute: async () => {
+          expectDefined(getGatewayToolCallerIdentity(), "caller identity").assertToolAllowed?.(
+            "remote_echo",
+          );
+          return { content: [], details: {} };
+        },
+      });
+      if (registered) {
+        await expect(probe.execute("owner-check", {})).resolves.toEqual({
+          content: [],
+          details: {},
+        });
+      } else {
+        await expect(probe.execute("owner-check", {})).rejects.toThrow("not allowed");
+      }
+      expect(callGatewayTool).not.toHaveBeenCalled();
+    },
+  );
 });

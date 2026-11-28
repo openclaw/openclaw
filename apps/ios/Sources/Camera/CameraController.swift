@@ -3,14 +3,7 @@ import Foundation
 import OpenClawKit
 import os
 
-actor CameraController {
-    struct CameraDeviceInfo: Codable {
-        var id: String
-        var name: String
-        var position: String
-        var deviceType: String
-    }
-
+actor CameraController: CameraServicing {
     enum CameraError: LocalizedError {
         case cameraUnavailable
         case microphoneUnavailable
@@ -151,9 +144,9 @@ actor CameraController {
             hasAudio: includeAudio)
     }
 
-    func listDevices() -> [CameraDeviceInfo] {
+    func listDevices() -> [OpenClawCameraDeviceInfo] {
         Self.discoverVideoDevices().map { device in
-            CameraDeviceInfo(
+            OpenClawCameraDeviceInfo(
                 id: device.uniqueID,
                 name: device.localizedName,
                 position: CameraCapturePipelineSupport.positionLabel(device.position),

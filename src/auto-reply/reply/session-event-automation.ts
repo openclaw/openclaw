@@ -1,12 +1,16 @@
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import { hasPendingAutomationContinuation } from "../../cron/automation-result.js";
+import { resolveCronConfigurationRefusal } from "../../cron/configuration-refusal.js";
+import { resolveCronRateLimitResetAt } from "../../cron/rate-limit-reset.js";
 import {
   createCronRunDiagnosticsFromAgentResult,
+  createCronRunDiagnosticsFromError,
   mergeCronRunDiagnostics,
 } from "../../cron/run-diagnostics.js";
 import { projectCronRunUsage } from "../../cron/run-telemetry.js";
 import { consumeCronNextCheckProposal } from "../../infra/agent-run-registry.automation.js";
 import { getAgentRunContext } from "../../infra/agent-run-registry.js";
+import { formatErrorMessage } from "../../infra/errors.js";
 import { createSubsystemLogger } from "../../logging/subsystem.js";
 import { runWithGatewayDetachedWorkContinuation } from "../../process/gateway-work-admission.js";
 import type { ReplyOperationObservation } from "../../sessions/reply-operation-state.js";
@@ -23,6 +27,7 @@ import {
 import type {
   ScheduledSessionAutomation,
   SessionEventExecution,
+  SessionEventOptions,
   SessionEventOutcome,
   SessionEventTarget,
 } from "./session-event-contract.js";
@@ -55,8 +60,8 @@ export function prepareCronRunContinuationCleanup(
   };
 }
 
-export function resolveScheduledSessionReplyOptions(
-  automation?: ScheduledSessionAutomation,
+export function resolveSessionEventReplyOptions(
+  options: Pick<SessionEventOptions, "scheduledAutomation" | "replyExpectation">,
 ): Pick<
   GetReplyOptions,
   | "sourceReplyDeliveryMode"
@@ -64,9 +69,12 @@ export function resolveScheduledSessionReplyOptions(
   | "timeoutOverrideSeconds"
   | "bootstrapContextMode"
 > &
-  Pick<ScheduledSessionAutomation, "operatorAuthority"> & { modelOverride?: string } {
+  Pick<ScheduledSessionAutomation, "operatorAuthority"> &
+  Pick<SessionEventOptions, "replyExpectation"> & { modelOverride?: string } {
+  const automation = options.scheduledAutomation;
   if (!automation) {
-    return {};
+    // A host producer's silence permission travels only through these host-owned options.
+    return options.replyExpectation ? { replyExpectation: options.replyExpectation } : {};
   }
   const payload = automation.job.payload;
   return {
@@ -87,6 +95,27 @@ export type ScheduledAutomationAdmission = Pick<
   SessionEventOutcome,
   "admissionDeferred" | "admissionDeferredReason"
 >;
+
+/** Keep provider admission tied to the selected model of this scheduled occurrence. */
+export function withScheduledSessionProviderAdmission(
+  automation: ScheduledSessionAutomation | undefined,
+  onWait: (provider: string) => void,
+): ScheduledSessionAutomation | undefined {
+  const slot = automation?.providerRunSlot;
+  if (!automation || !slot) {
+    return automation;
+  }
+  return {
+    ...automation,
+    beforeModelRun(provider) {
+      if (slot.tryStart(provider)) {
+        return true;
+      }
+      onWait(provider);
+      return false;
+    },
+  };
+}
 
 /** Wait behind foreground work, then recheck the same automation's current start policy. */
 export async function prepareScheduledAutomationStart(params: {
@@ -131,7 +160,8 @@ export async function settleSessionEventTurn(params: {
   runStartedAt: number;
   signal: AbortSignal;
   assertCurrent: () => void;
-  onFailure: (error: string) => void;
+  /** `generic` marks the placeholder for a failed turn that carried no detail. */
+  onFailure: (error: string, generic: boolean) => void;
   runId: string;
   deliveryEvidence: Parameters<SessionEventExecution["onTerminal"]>[2];
   prepareCurrent: () => Promise<void>;
@@ -147,12 +177,19 @@ export async function settleSessionEventTurn(params: {
   >
 > {
   const { automation, runId, deliveryEvidence } = params;
-  if (params.outcome !== "completed") {
+  const failed = params.outcome !== "completed";
+  const failureCause = deliveryEvidence?.failureCause;
+  const configurationRefusal = failed ? resolveCronConfigurationRefusal(failureCause) : undefined;
+  const presentedError =
+    deliveryEvidence?.meta?.error?.message ||
+    deliveryEvidence?.payloads?.find((payload) => payload.isError && payload.text?.trim())?.text;
+  // Preserve this owned refusal when optional replies suppress it, without expanding unrelated errors.
+  const ownedCause =
+    configurationRefusal && !presentedError ? formatErrorMessage(failureCause) : undefined;
+  if (failed) {
     params.onFailure(
-      deliveryEvidence?.meta?.error?.message ||
-        deliveryEvidence?.payloads?.find((payload) => payload.isError && payload.text?.trim())
-          ?.text ||
-        `Session event execution ${params.outcome}`,
+      presentedError || ownedCause || `Session event execution ${params.outcome}`,
+      !presentedError && !ownedCause && params.outcome === "failed",
     );
   }
   await params.prepareCurrent();
@@ -192,9 +229,17 @@ export async function settleSessionEventTurn(params: {
       model: deliveryEvidence?.meta?.agentMeta?.model ?? deliveryEvidence?.resolved?.model,
       usage: projectCronRunUsage(deliveryEvidence?.meta?.agentMeta?.usage),
       replyDisposition: deliveryEvidence?.meta?.terminalReply?.disposition,
-      diagnostics: createCronRunDiagnosticsFromAgentResult(deliveryEvidence, {
-        finalStatus: params.outcome === "completed" ? "ok" : "error",
-      }),
+      diagnostics: ownedCause
+        ? mergeCronRunDiagnostics(
+            createCronRunDiagnosticsFromAgentResult(deliveryEvidence, { finalStatus: "error" }),
+            createCronRunDiagnosticsFromError("agent-run", ownedCause),
+          )
+        : createCronRunDiagnosticsFromAgentResult(deliveryEvidence, {
+            finalStatus: failed ? "error" : "ok",
+          }),
+      ...configurationRefusal,
+      // The settled cause is in-process only; cron keeps the reset as a transient schedule fact.
+      ...(failed ? { rateLimitResetAt: resolveCronRateLimitResetAt(failureCause) } : {}),
     },
   };
 
@@ -227,11 +272,9 @@ export async function settleSessionEventTurn(params: {
       agentId: params.agentId,
       jobId: automation.job.id,
       runStartedAt: automation.job.state.runningAtMs ?? params.runStartedAt,
-      conversation: {
-        sessionKey: params.sessionKey,
-        sessionId: binding.sessionId,
-        lifecycleRevision: binding.lifecycleRevision,
-      },
+      conversation: { sessionKey: params.sessionKey },
+      // This turn's own reply already carries the result in model context.
+      displayOnly: true,
       payloads,
       signal: params.signal,
       deliveryAttemptFence: {

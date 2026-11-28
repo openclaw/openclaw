@@ -63,10 +63,17 @@ export function createMcpAppUnmountGate<Value = unknown>(invalidate?: () => void
         queueMicrotask(restart);
       }
     }
-    if (renderedKey === key && options.retainRenderedValue) {
+    const sameKey =
+      renderedKey === key ||
+      (renderedKey !== null &&
+        typeof renderedKey !== "string" &&
+        typeof key !== "string" &&
+        renderedKey.length === key.length &&
+        renderedKey.every((part, index) => part === key[index]));
+    if (sameKey && options.retainRenderedValue) {
       return renderedValue;
     }
-    if (restarting || renderedKey === null || renderedKey === key) {
+    if (restarting || renderedKey === null || sameKey) {
       return apply(key, renderValue);
     }
 

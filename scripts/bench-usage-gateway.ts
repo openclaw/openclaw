@@ -21,6 +21,7 @@ import { acquireGatewayE2ePortBlock } from "../src/gateway/test-helpers.listener
 import { isAbortError } from "../src/infra/abort-signal.ts";
 import { createRedactingStreamWriter } from "../src/logging/redacting-stream.ts";
 import { CONTROL_UI_TOKEN_SESSION_KEY_PREFIX } from "../src/shared/control-ui-storage.js";
+import { controlUiBenchOrder } from "./lib/control-ui-bench-order.ts";
 import {
   mapColdLoadCpuProfile,
   prepareColdLoadTraceEvent,
@@ -71,6 +72,7 @@ const { values } = parseArgs({
     smoke: { type: "boolean", default: false },
     cold: { type: "boolean", default: false },
     "cold-backend": { type: "boolean", default: false },
+    "cold-backend-utc-switch": { type: "boolean", default: false },
     "cold-pairs": { type: "string" },
     diagnostic: { type: "boolean", default: false },
     structure: { type: "boolean", default: false },
@@ -81,7 +83,7 @@ const { values } = parseArgs({
 });
 if (values.help) {
   console.log(
-    "Usage: node --import ./scripts/tsx.mjs scripts/bench-usage-gateway.ts --base <checkout> --head <checkout> --ui <frozen-build> --out <new-directory> [--head-ui <frozen-candidate-build>] [--sessions 12000] [--pairs 20] [--engine chromium|webkit] [--warm-cpu 1|4] [--warm-sequence] [--screenshots] [--profile-last-pair] [--smoke | --cold | --cold-backend [--cold-pairs 20] | --diagnostic | --structure [--structure-rtt 0|100] [--trace-adverse]]",
+    "Usage: node --import ./scripts/tsx.mjs scripts/bench-usage-gateway.ts --base <checkout> --head <checkout> --ui <frozen-build> --out <new-directory> [--head-ui <frozen-candidate-build>] [--sessions 12000] [--pairs 20] [--engine chromium|webkit] [--warm-cpu 1|4] [--warm-sequence] [--screenshots] [--profile-last-pair] [--smoke | --cold | --cold-backend [--cold-pairs 20] [--cold-backend-utc-switch] | --diagnostic | --structure [--structure-rtt 0|100] [--trace-adverse]]",
   );
   process.exit(0);
 }
@@ -109,6 +111,7 @@ const helperFiles = [
   "lib/usage-bench-observer.mjs",
   "lib/usage-bench-rtt.ts",
   "lib/control-ui-renderer-metrics.ts",
+  "lib/control-ui-bench-order.ts",
   "lib/control-ui-cold-load-trace.ts",
   "lib/control-ui-interaction-trace.ts",
   "lib/control-ui-engine-metrics.ts",
@@ -173,6 +176,10 @@ if (coldPairs !== undefined) {
   assert(values["cold-backend"], "--cold-pairs requires --cold-backend");
   assert(Number.isInteger(coldPairs) && coldPairs > 0, "--cold-pairs must be positive");
 }
+assert(
+  !values["cold-backend-utc-switch"] || values["cold-backend"],
+  "--cold-backend-utc-switch requires --cold-backend",
+);
 assert(Number.isInteger(pairs) && pairs > 0);
 assert(Number.isInteger(population) && population > 0);
 assert(
@@ -533,6 +540,7 @@ async function prepareFixture(
                 OPENCLAW_SKIP_CRON: "1",
                 OPENCLAW_SKIP_GMAIL_WATCHER: "1",
                 OPENCLAW_SKIP_PROVIDERS: "1",
+                ...(values["cold-backend-utc-switch"] && { OPENCLAW_USAGE_BENCH_COUNT_READS: "1" }),
               },
             }),
             stdio: ["ignore", "pipe", "pipe", "ipc"],
@@ -870,6 +878,7 @@ async function waitForResponse(
   after: number,
   query: string,
   expectedSessions?: number,
+  requestedRange?: { startDate: string; endDate: string },
 ) {
   const deadline = performance.now() + 60_000;
   while (performance.now() < deadline) {
@@ -879,7 +888,9 @@ async function waitForResponse(
         (row) =>
           row.query === query &&
           !row.partial &&
-          (expectedSessions === undefined || row.sessions === expectedSessions),
+          (expectedSessions === undefined || row.sessions === expectedSessions) &&
+          (requestedRange === undefined ||
+            (row.startDate === requestedRange.startDate && row.endDate === requestedRange.endDate)),
       );
     if (response) {
       assert.equal(response.ok, true, "actual sessions.usage response");
@@ -892,16 +903,35 @@ async function waitForResponse(
   }
   throw new Error(`No actual Usage response for ${query}`);
 }
+/** The compared baseline may still expose the query directly in its toolbar. */
+async function applyUsageQuery(page: Page, query: string) {
+  const trigger = page.locator(".usage-filter-menu__trigger");
+  const hasMenu = await trigger.isVisible();
+  if (hasMenu) {
+    await trigger.click();
+  }
+  const input = page.locator(hasMenu ? ".usage-filter-menu__query input" : ".usage-query-input");
+  await input.fill(query);
+  await input.press("Enter");
+  if (hasMenu) {
+    await trigger.click();
+  }
+}
+
 async function settled(page: Page, count: number, diagnostic = false) {
   await page.waitForFunction((expected) => {
     const button = document.querySelector<HTMLButtonElement>(
       '.usage-page button[aria-label="Refresh"]',
     );
-    const text = document
-      .querySelector(".usage-query-count")
-      ?.textContent?.replaceAll(",", "")
-      .replaceAll(".", "");
-    return button?.disabled === false && text?.startsWith(`${expected} `);
+    const summary =
+      document.querySelector(".sessions-card-header .sessions-card-count")?.textContent ?? "";
+    // The header shows the full matching total after the bounded-page count.
+    // It omits "total" only when every matching session is already in that page.
+    const match =
+      summary.match(/(?:^|·)\s*([\d,.\s]+)\s+total\b/) ??
+      summary.match(/^\s*([\d,.\s]+)\s+shown\b/);
+    const total = match ? Number(match[1]!.replace(/[^0-9]/g, "")) : undefined;
+    return button?.disabled === false && total === expected;
   }, count);
   if (diagnostic) {
     await page.evaluate(() => performance.mark("usage:visible"));
@@ -1208,7 +1238,11 @@ async function prepareUsageBackend(owner: Owner, mode: "cold" | "warm", coldPair
     peer.start();
     await connected.promise;
     clearTimeout(connectionTimer);
-    assert.deepEqual(await owner.snapshot(), [], "No report aggregation before the first RPC");
+    assert.deepEqual(
+      (await owner.snapshot()).filter(({ kind }) => !kind.startsWith("usage-cost:")),
+      [],
+      "No report aggregation before the first RPC",
+    );
     const query = {
       startDate: owner.ready.startDate,
       endDate: owner.ready.endDate,
@@ -1292,8 +1326,51 @@ async function prepareUsageBackend(owner: Owner, mode: "cold" | "warm", coldPair
         assert.equal(response.overview?.total, population);
         assert.equal(response.totals.totalTokens, owner.ready.allTokens);
         assert.equal(response.sessions.length, Math.min(population, 50));
-        assert(dispatches.length > 0, "Usage request aggregated the snapshot");
+        assert(
+          dispatches.some(({ kind }) => !kind.startsWith("usage-cost:")),
+          "Usage request aggregated the snapshot",
+        );
         if (mode === "cold") {
+          if (values["cold-backend-utc-switch"]) {
+            // A complete response can race a startup usage publication and leave a
+            // stale snapshot. Prove reuse of Local before timing the first UTC request.
+            let warmDispatches = dispatches.length;
+            let warm = response;
+            let warmHits = false;
+            const warmSignal = AbortSignal.timeout(15_000);
+            for (let probe = 0; probe < 4; probe += 1) {
+              warm = await requestSessionUsage(peer, query, {
+                projection: "overview",
+                signal: warmSignal,
+              });
+              const observed = await owner.snapshot();
+              warmHits =
+                !warm.partial &&
+                !observed.slice(warmDispatches).some(({ kind }) => kind === "usage-cost:overview");
+              warmDispatches = observed.length;
+              if (warmHits) {
+                break;
+              }
+            }
+            assert(warmHits, "Local Usage snapshot must be warm before switching to UTC");
+            const switchBefore = await readGatewayCpuUsage(owner.child, { includeWorkers: true });
+            const switchStart = performance.now();
+            const switched = await requestSessionUsage(
+              peer,
+              { ...query, timeZone: "utc" },
+              { projection: "overview", signal: AbortSignal.timeout(15_000) },
+            );
+            const wallMs = performance.now() - switchStart;
+            const switchAfter = await readGatewayCpuUsage(owner.child, { includeWorkers: true });
+            sample.utcSwitch = {
+              wallMs,
+              gatewayCpu: measureGatewayCpuUsage(switchBefore, switchAfter),
+              dispatches: (await owner.snapshot()).slice(warmDispatches),
+            };
+            const { updatedAt: _a, ...local } = warm;
+            const { updatedAt: _b, ...utc } = switched;
+            assert.deepEqual(utc, local, "Equivalent UTC modes return the same complete report");
+          }
           const resourcesFile = `${suffix}-cold-backend-resources.json`;
           sample.resourcesFile = resourcesFile;
           await writeFile(
@@ -1545,7 +1622,7 @@ try {
           const defaultDispatchBefore = (await owner.snapshot()).length;
           const defaultStarted = performance.now();
           await page.goto(url.href);
-          await page.locator(".usage-query-input").waitFor();
+          await page.locator(".usage-date-input").first().waitFor();
           const defaultResponse = await waitForResponse(responses, 0, "");
           await settled(page, defaultResponse.sessions);
           const defaultWallMs = performance.now() - defaultStarted;
@@ -1607,7 +1684,16 @@ try {
           await dates.last().press("Tab");
           await dates.first().fill(owner.ready.startDate);
           await dates.first().press("Tab");
-          const coldResponse = await waitForResponse(responses, coldRequestsBefore, "", population);
+          const coldResponse = await waitForResponse(
+            responses,
+            coldRequestsBefore,
+            "",
+            population,
+            {
+              startDate: owner.ready.startDate,
+              endDate: owner.ready.endDate,
+            },
+          );
           assert.equal(coldResponse.tokens, owner.ready.allTokens);
           await settled(page, population);
           const coldWallMs = performance.now() - coldStarted;
@@ -1724,8 +1810,8 @@ try {
                 : pairs * 2 + (values["profile-last-pair"] ? 2 : 0);
         for (let iteration = 0; iteration < iterations; iteration++) {
           const pair = Math.floor(iteration / 2);
-          const order = pair % 2 ? pages.toReversed() : pages;
-          for (const entry of order) {
+          const order = controlUiBenchOrder(pages, pair);
+          for (const [position, entry] of order.entries()) {
             const { owner, page, cdp, processSession, usage } = entry;
             const { responses } = usage;
             const model = `fixture-model-${iteration % 2 ? "01" : "00"}-end`;
@@ -1766,8 +1852,7 @@ try {
             if (diagnostic) {
               await page.evaluate(() => performance.mark("usage:action-start"));
             }
-            await page.locator(".usage-query-input").fill(query);
-            await page.locator(".usage-query-input").press("Enter");
+            await applyUsageQuery(page, query);
             const response = await waitForResponse(responses, requestsBefore, query);
             assert.equal(response.tokens, truth.tokens);
             assert.equal(response.sessions, truth.sessions);
@@ -1807,6 +1892,7 @@ try {
               ...(structure === undefined ? {} : { structure }),
               ...(entry.wire ? { wireStart, wireEnd } : {}),
               pair,
+              position,
               cpu,
               rtt,
               model,
@@ -1874,7 +1960,6 @@ try {
             const prefix = `${owner.role}-${engine}-${cpu}x`;
             for (const [name, selector] of [
               ["overview", ".usage-overview-card"],
-              ["cost-windows", ".usage-summary-strip--windows"],
               ["sessions", ".sessions-card"],
             ] as const) {
               await page
@@ -2042,6 +2127,8 @@ try {
         lastStep: activeStep,
         preparationSamples: preparations.length,
         samples: samples.length,
+        order:
+          "Build positions rotate and reverse across pairs; each model uses the same order within a pair.",
         browserResourceSamples: samples.filter((sample) => sample.browserResources?.complete)
           .length,
         mode: values["cold-backend"]

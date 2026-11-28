@@ -1,6 +1,7 @@
 import { isAbortError } from "../../infra/abort-signal.js";
 import { formatErrorMessage } from "../../infra/errors.js";
 import type { ResolvedCliBackend } from "../cli-backends.js";
+import type { CliOutput } from "../cli-output-contracts.js";
 import { extractCliErrorMessage } from "../cli-output.js";
 import {
   coerceToFailoverError,
@@ -8,6 +9,8 @@ import {
   isFailoverError,
   resolveFailoverStatus,
 } from "../failover-error.js";
+import { isClaudeCliBackendId } from "./helpers.js";
+import type { PreparedCliRunContext } from "./types.js";
 
 type CliResumeAttempt = {
   // Option name the backend was invoked with, e.g. --resume-session-at.
@@ -37,6 +40,63 @@ export function createCliFailoverError(
     status: resolveFailoverStatus(reason),
     ...options,
   });
+}
+
+export function resolveCliRunError(error: unknown, context: PreparedCliRunContext): unknown {
+  const { params } = context;
+  const failover = coerceToFailoverError(error, {
+    provider: params.provider,
+    model: context.modelId,
+    sessionId: params.sessionId,
+    lane: params.lane,
+  });
+  if (
+    failover?.reason === "auth" &&
+    params.trigger === "cron" &&
+    params.nativeAuthOnly &&
+    isClaudeCliBackendId(params.provider) &&
+    context.executionTarget.kind !== "node"
+  ) {
+    const explained = new FailoverError(
+      `${failover.message}. Log in to Claude on the Gateway host with \`claude /login\` as the OS user running the Gateway, then retry this job.`,
+      failover,
+    );
+    explained.cause = failover;
+    return explained;
+  }
+  return failover ?? error;
+}
+
+// A refused stream may already have started a native session; the runner decides whether to keep it.
+const refusedStreamOutputs = new WeakMap<FailoverError, CliOutput>();
+
+/** Refuses unparseable CLI output while retaining the stream's partial facts for the runner. */
+export function createCliStreamRefusalError(
+  message: string,
+  context: Pick<FailoverError, "provider" | "model" | "sessionId" | "lane">,
+  output: CliOutput | null | undefined,
+  options?: Pick<FailoverError, "code">,
+): FailoverError {
+  const error = createCliFailoverError(message, "format", context, options);
+  if (output) {
+    refusedStreamOutputs.set(error, output);
+  }
+  return error;
+}
+
+export function readCliStreamRefusalOutput(error: unknown): CliOutput | undefined {
+  return error instanceof FailoverError ? refusedStreamOutputs.get(error) : undefined;
+}
+
+/** Adds the run's tool facts to a refused stream's partial output, as a returned turn carries them. */
+export function recordCliStreamRefusalToolEffects(
+  error: unknown,
+  effects: Pick<CliOutput, "toolSummary" | "acceptedSessionSpawns">,
+): void {
+  const output = readCliStreamRefusalOutput(error);
+  if (output && error instanceof FailoverError) {
+    refusedStreamOutputs.set(error, { ...output, ...effects });
+  }
 }
 
 export function resolveCliResumeAtError(

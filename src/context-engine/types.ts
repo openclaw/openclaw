@@ -306,6 +306,16 @@ export type ContextEngineSessionTarget = {
   threadId?: string | number;
 };
 
+/**
+ * Why the host requested a compaction:
+ * - `manual`: an operator asked for it (`/compact`).
+ * - `preflight`: the next prompt cannot be submitted until context shrinks.
+ * - `overflow`: the provider rejected a request for exceeding its context window.
+ * - `budget`: context crossed the host's compaction budget.
+ * - `timeout`: recovery after a model call timed out under large context.
+ */
+type ContextEngineCompactionReason = "manual" | "preflight" | "overflow" | "budget" | "timeout";
+
 export type ContextEngineRuntimeContext = Record<string, unknown> & {
   /** Runtime task working directory; workspaceDir remains the agent bootstrap workspace. */
   cwd?: string;
@@ -338,8 +348,8 @@ export type ContextEngineRuntimeContext = Record<string, unknown> & {
   /** LLM completion capability for engines that need model inference. */
   llm?: {
     complete: (
-      params: import("../plugins/runtime/types-core.js").LlmCompleteParams,
-    ) => Promise<import("../plugins/runtime/types-core.js").LlmCompleteResult>;
+      params: import("../plugins/runtime/runtime-llm.types.js").LlmCompleteParams,
+    ) => Promise<import("../plugins/runtime/runtime-llm.types.js").LlmCompleteResult>;
   };
 };
 
@@ -487,6 +497,8 @@ export interface ContextEngine {
     tokenBudget?: number;
     /** Force compaction even below the default trigger threshold. */
     force?: boolean;
+    /** Why the host requested this compaction, when the caller knows it. */
+    reason?: ContextEngineCompactionReason;
     /** Optional live token estimate from the caller's active context. */
     currentTokenCount?: number;
     /** Controls convergence target; defaults to budget. */

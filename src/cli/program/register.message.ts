@@ -31,6 +31,7 @@ import { monotonicDeadlineAfter, monotonicNow } from "../../shared/monotonic-tim
 import { ABSOLUTE_DEADLINE_EXPIRED, awaitWithinDeadline } from "../../utils/absolute-deadline.js";
 import { runCommandWithRuntime } from "../cli-utils.js";
 import { measureCliCommandStartup } from "../command-startup-timing.js";
+import { throwExpectedCliError } from "../expected-cli-error.js";
 import { formatHelpExamples } from "../help-format.js";
 import { resolveMessageSecretScope } from "../message-secret-scope.js";
 import { requestExitAfterOneShotOutput } from "../one-shot-exit.js";
@@ -68,7 +69,7 @@ function validateMessageNumericOptions(opts: Record<string, unknown>): void {
   ] as const) {
     for (const [key, flag] of options) {
       if (opts[key] !== undefined && parse(opts[key]) === undefined) {
-        throw new Error(`${flag} must be a ${kind} integer.`);
+        throwExpectedCliError(`${flag} must be a ${kind} integer.`);
       }
     }
   }
@@ -177,7 +178,7 @@ ${theme.muted("Docs:")} ${formatDocsLink("/cli/message", "docs.openclaw.ai/cli/m
           async () => {
             validateMessageNumericOptions(opts);
             if (action === "poll" && opts.pollAnonymous === true && opts.pollPublic === true) {
-              throw new Error("--poll-anonymous and --poll-public are mutually exclusive.");
+              throwExpectedCliError("--poll-anonymous and --poll-public are mutually exclusive.");
             }
             const { channel: scopedChannel } = resolveMessageSecretScope({
               channel: opts.channel,

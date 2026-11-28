@@ -3,7 +3,7 @@
   "tools": [
     {
       "name": "tool_search",
-      "description": "Search the effective Tool Search catalog. Pass query for one search or queries for several independent searches in one call; a non-empty query joins a non-empty batch first, with its own limit. Batch results stay grouped in request order. Queries must be in English: matching is lexical against tool names and descriptions, which are written in English, so another language will usually match nothing. Pass an exact result id or name to dispatch_action. Use tool_describe when you need its input schema or when a result includes instructionsHint; call it before dispatch_action to load the complete server instructions.",
+      "description": "Search the effective Tool Search catalog. Pass query for one search or queries for several independent searches in one call; a non-empty query joins a non-empty batch first, with its own limit. Batch results stay grouped in request order. Queries must be in English: matching is lexical against tool names and descriptions, which are written in English, so another language will usually match nothing. Pass an exact result id or name to dispatch_action. When a result includes instructionsHint, call tool_describe before dispatch_action to load the complete server instructions.",
       "parameters": {
         "type": "object",
         "properties": {
@@ -36,7 +36,9 @@
                 "type": "array",
                 "items": {
                   "type": "object",
-                  "required": ["query"],
+                  "required": [
+                    "query"
+                  ],
                   "properties": {
                     "query": {
                       "type": "string",
@@ -64,24 +66,32 @@
     },
     {
       "name": "tool_describe",
-      "description": "Load the full schema and metadata, including complete server instructions, for one tool id or name. Use this when the input is not already clear or when discovery returned instructionsHint.",
+      "description": "Load the full input schema and metadata, including complete server instructions, for one tool id or name. Use this when the input is not already clear or when discovery returned instructionsHint.",
       "parameters": {
         "type": "object",
-        "required": ["id"],
+        "required": [
+          "id"
+        ],
         "properties": {
           "id": {
             "type": "string",
             "description": "Tool search result id or tool name."
+          },
+          "includeRarelyNeededOutputSchema": {
+            "type": "boolean",
+            "description": "Rarely needed; leave unset. Adds the tool's full output schema, which can cost tens of thousands of characters of context. A call's result already shows its shape. Set true only when you must know the result shape before calling, for example to plan code over the result."
           }
         }
       }
     },
     {
       "name": "dispatch_action",
-      "description": "Call an exact Tool Search result id or name through OpenClaw. If arguments are not already clear, call tool_describe with the same id for the full description and schema; do not guess omitted fields from compact input hints.",
+      "description": "Call an exact Tool Search result id or name through OpenClaw. Invalid arguments to OpenClaw and MCP tools return the input schema; retry from that error. Use tool_describe for a full description; do not invent values the task does not supply.",
       "parameters": {
         "type": "object",
-        "required": ["id"],
+        "required": [
+          "id"
+        ],
         "properties": {
           "id": {
             "type": "string",
@@ -130,5 +140,5 @@
       }
     }
   ],
-  "toolSchemaDirectoryPrompt": "Available deferred-schema tools:\n- sessions_list (core): No description.\n\nPolicy-approved MCP and client tools may also be discoverable through search.\nUse tool_search for a compact input signature or tool_describe for a full schema. Deferred names are not directly callable. Call dispatch_action with the result id or name in id and all tool parameters in args. Use this wrapper even when other guidance names a deferred tool directly."
+  "toolSchemaDirectoryPrompt": "Deferred tools: sessions_list\nNames are not directly callable: call dispatch_action with the name in id and all parameters in args, even when other guidance names the tool directly. tool_search gives input signatures and finds MCP/client tools; tool_describe gives full schemas."
 }

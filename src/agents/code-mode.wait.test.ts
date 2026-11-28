@@ -1,6 +1,7 @@
 import { expectDefined } from "@openclaw/normalization-core";
 import { Type } from "typebox";
 import { afterEach, expect, it, vi } from "vitest";
+import { makeAssistantMessage } from "../../packages/agent-core/src/agent-loop.test-support.js";
 import { runWithAgentToolExecutionContext } from "../../packages/agent-core/src/tool-execution-context.js";
 import { createDeferred } from "../../test/helpers/promise.js";
 import { emitAgentEvent } from "../infra/agent-events.js";
@@ -8,6 +9,7 @@ import {
   getAdmittedRunDelegatedAuthority,
   prepareSystemAgentRunAdmission,
 } from "./admitted-run-context.js";
+import { createToolTurnHandoff } from "./agent-tools.abort.js";
 import { createExecTool } from "./bash-tools.exec-run.js";
 import { createProcessTool } from "./bash-tools.process.js";
 import * as worker from "./code-mode-executor.js";
@@ -29,6 +31,7 @@ import {
   createCatalogCodeModeHarness,
   jsonTool,
 } from "./code-mode.test-support.js";
+import { fakeTool } from "./test-helpers/fake-tool.js";
 import { addClientToolsToToolCatalog } from "./tool-search-catalog.js";
 import { clearToolSearchCatalog } from "./tool-search.js";
 import { jsonResult, type AnyAgentTool } from "./tools/common.js";
@@ -171,15 +174,22 @@ it("keeps one execution allowance across event-driven required waits", async () 
   let waits = 0;
   observeSettlement(() => parked[waits++]?.resolve());
   let settled = false;
-  const execution = fixture.exec
-    .execute("required-budget", {
-      awaitResults: true,
-      code: "const a = await required_step({}); const b = await required_step({}); return [a,b];",
-    })
-    .then((result) => {
-      settled = true;
-      return result;
-    });
+  const args = {
+    awaitResults: true,
+    code: "const a = await required_step({}); const b = await required_step({}); return [a,b];",
+  };
+  const hasPending = vi.fn(() => true);
+  const execution = runWithAgentToolExecutionContext(
+    {
+      assistantMessage: makeAssistantMessage([]),
+      toolCall: { type: "toolCall", name: "exec", id: "required-budget", arguments: args },
+      pendingInput: { hasPending, subscribe: () => () => {} },
+    },
+    () => fixture.exec.execute("required-budget", args),
+  ).then((result) => {
+    settled = true;
+    return result;
+  });
   try {
     for (let index = 0; index < 2; index++) {
       await parked[index]!.promise;
@@ -190,6 +200,8 @@ it("keeps one execution allowance across event-driven required waits", async () 
       releases[index]!.resolve();
     }
     expectCompleted(resultDetails(await execution), [{ index: 0 }, { index: 1 }]);
+    // A pending correction never turns this non-shell action into a detachable wait.
+    expect(hasPending).toHaveBeenCalled();
     expect(grants).toEqual([1_000, 900, 800]);
     expect(waits).toBe(2);
     expect(target.execute).toHaveBeenCalledTimes(2);
@@ -198,6 +210,67 @@ it("keeps one execution allowance across event-driven required waits", async () 
     await execution;
   }
 });
+
+it("preserves an accepted host handoff while wait is parked without resuming the guest", async () => {
+  const release = createDeferred();
+  const parked = createDeferred();
+  const abort = new AbortController();
+  const receipt = {
+    status: "started",
+    async: true,
+    yielded: true,
+    message: "Reload accepted",
+  } as const;
+  const target = pluginToolWithExecute("accept_handoff", "Accept a host handoff", async () => {
+    await release.promise;
+    abort.abort(createToolTurnHandoff("cell", receipt));
+    return jsonResult(receipt);
+  });
+  const after = pluginTool("after_handoff", "Must not run after acceptance");
+  const fixture = harness([target, after]);
+  const initial = await fixture.exec.execute(
+    "cell",
+    { code: "try { await accept_handoff({}); } catch {} return await after_handoff({});" },
+    abort.signal,
+  );
+  const details = resultDetails(initial);
+  expect(details.status).toBe("waiting");
+  observeSettlement(parked.resolve);
+  const waiting = fixture.wait.execute("wait-cell", { runId: details.runId }, abort.signal);
+  try {
+    await parked.promise;
+    release.resolve();
+    expectCompleted(resultDetails(await waiting), receipt);
+    expect(after.execute).not.toHaveBeenCalled();
+    expect(testing.activeRuns.size).toBe(0);
+  } finally {
+    release.resolve();
+    await waiting;
+  }
+});
+
+it.each([
+  ["ask_user", { value: "Proceed?" }],
+  ["secrets", { action: "request", value: "STRIPE_API_KEY" }],
+] as const)(
+  "keeps an ordinary cell's native %s request owned past its budget until answered",
+  async (name, input) => {
+    mockClock();
+    const parked = createDeferred();
+    const question = controlledTool(fakeTool(name, "Ask the owner"));
+    cleanups.push(question.release.resolve);
+    observeSettlement(parked.resolve);
+    const result = harness([question.tool], { codeMode: { timeoutMs: 1_000 } }).run(
+      `return await ${name}(${JSON.stringify(input)});`,
+    );
+    await parked.promise;
+    // An unowned `waiting` result would let turn teardown cancel the pending question.
+    await vi.advanceTimersByTimeAsync(60_000);
+    question.release.resolve();
+    expectCompleted(await result, { name, input });
+    expect((await question.started.promise)?.aborted).toBe(false);
+  },
+);
 
 it.each(["failure", "cancel", "replace"] as const)(
   "settles required work on %s without late guest effects",

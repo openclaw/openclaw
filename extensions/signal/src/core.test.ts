@@ -176,14 +176,24 @@ describe("probeSignal", () => {
   ] as const)(
     "probes $transport versions without an initialized runtime",
     async ({ transport, version, expected }) => {
-      checkResult();
-      vi.spyOn(clientModule, "signalRpcRequest").mockResolvedValueOnce(version);
+      const signalCheck = checkResult();
+      const signalRpcRequest = vi
+        .spyOn(clientModule, "signalRpcRequest")
+        .mockResolvedValueOnce(version);
       const result =
         transport === "container"
           ? await probeSignal(baseUrl, 1000, { transportKind: "container" })
           : await probeConfigured("managed-native");
 
       expect(result).toMatchObject({ ok: true, status: 200, error: null, version: expected });
+      expect(signalCheck).toHaveBeenCalledExactlyOnceWith(baseUrl, 1000, {
+        transportKind: transport,
+      });
+      expect(signalRpcRequest).toHaveBeenCalledExactlyOnceWith("version", undefined, {
+        baseUrl,
+        timeoutMs: 1000,
+        transportKind: transport,
+      });
     },
   );
 
@@ -415,6 +425,83 @@ describe("signal outbound", () => {
       expect(send.mock.calls.map((call) => call[1])).toEqual(expected);
     },
   );
+
+  it("delivers the next table row and quotes the first physical packet across blank code slices", async () => {
+    const replyToId = "1700000000008";
+    await registerSignalReplyContext({ to: groupTo, replyToId, author: phone, body: "original" });
+    let timestamp = 100;
+    const rpc = vi.spyOn(clientModule, "signalRpcRequest").mockImplementation(async () => ({
+      timestamp: ++timestamp,
+    }));
+    const onDeliveryResult = vi.fn();
+    const blankCode = "`" + " ".repeat(60) + "`";
+    const results = await sendText({
+      cfg: signalConfig({
+        markdown: { tables: "bullets" },
+        textChunkLimit: 20,
+        transport: { kind: "external-native", url: "http://signal.test" },
+      }),
+      to: groupTo,
+      text: [
+        blankCode,
+        "",
+        "| ID | Value |",
+        "| --- | --- |",
+        `| item | ${blankCode} |`,
+        "| after | `  go  ` Done |",
+      ].join("\n"),
+      replyToId,
+      replyToIdSource: "implicit",
+      replyToMode: "first",
+      onDeliveryResult,
+    });
+
+    const packets = rpc.mock.calls.map(([, params]) => params);
+    const texts = ["\n\nitem", "• Value:", " \n\nafter", "• Value:  go  Done"];
+    expect(packets.map((packet) => packet?.message)).toEqual(texts);
+    expect(packets.map((packet) => packet?.quoteTimestamp)).toEqual([
+      Number(replyToId),
+      undefined,
+      undefined,
+      undefined,
+    ]);
+    expect(packets.at(-1)?.["text-style"]).toContain("9:4:MONOSPACE");
+    const delivered = onDeliveryResult.mock.calls.map(([result]) => result);
+    expect(results).toEqual(delivered);
+    expect(delivered).toMatchObject(
+      texts.map((visibleText, index) => ({
+        messageId: String(101 + index),
+        receipt: { platformMessageIds: [String(101 + index)] },
+        meta: { signalVisibleText: visibleText },
+      })),
+    );
+  });
+
+  it("keeps whole-message Signal fallback behavior when every formatted packet is blank", async () => {
+    const rpc = vi.spyOn(clientModule, "signalRpcRequest").mockResolvedValue({ timestamp: 101 });
+    const onDeliveryResult = vi.fn();
+    const ctx = {
+      cfg: signalConfig({
+        textChunkLimit: 20,
+        transport: { kind: "external-native", url: "http://signal.test" },
+      }),
+      to: groupTo,
+      onDeliveryResult,
+    };
+    await expect(sendText({ ...ctx, text: "" })).resolves.toEqual([]);
+    await expect(sendText({ ...ctx, text: "   " })).rejects.toThrow(
+      "Signal send requires text or media",
+    );
+    expect(rpc).not.toHaveBeenCalled();
+    expect(onDeliveryResult).not.toHaveBeenCalled();
+
+    const text = "`   `";
+    const result = await sendText({ ...ctx, text });
+    expect(rpc).toHaveBeenCalledTimes(1);
+    expect(rpc.mock.calls[0]?.[1]?.message).toBe(text);
+    expect(onDeliveryResult).toHaveBeenCalledTimes(1);
+    expect(result).toEqual([onDeliveryResult.mock.calls[0]?.[0]]);
+  });
 
   it("reports a formatted Signal chunk before a later chunk fails", async () => {
     const onDeliveryResult = vi.fn();

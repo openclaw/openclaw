@@ -21,7 +21,6 @@ import { autoDisableCronJob } from "./auto-disable.js";
 import {
   computeOneShotNextRunAtMs,
   clearInvalidForcePreservedNextRun,
-  isCronOneShotContinuationJob,
   resolveForcePreservedOneShotAtMs,
 } from "./one-shot-schedule.js";
 import type { CronJobPolicyContext, CronServiceState, DeferredCronNotifications } from "./state.js";
@@ -120,7 +119,6 @@ export function resolveNextRunAtMsOrDisable(params: {
   }
   autoDisableCronJob({
     job: params.job,
-    reason: "schedule-errors",
     atMs: params.state.deps.nowMs(),
     consecutiveErrors: 1,
     deferredNotifications: params.deferredNotifications,
@@ -454,7 +452,6 @@ export function recordScheduleComputeError(params: {
   if (errorCount >= MAX_SCHEDULE_ERRORS) {
     autoDisableCronJob({
       job,
-      reason: "schedule-errors",
       atMs: state.deps.nowMs(),
       consecutiveErrors: errorCount,
       deferredNotifications: params.deferredNotifications,
@@ -683,10 +680,7 @@ export function recomputeSingleJobForMaintenance(
   const hasPendingPacedNextRun =
     isFiniteTimestamp(pacedNextRunAtMs) &&
     hasScheduledNextRunAtMs(nextRunAtMs) &&
-    pacedNextRunAtMs === nextRunAtMs &&
-    (now < pacedNextRunAtMs ||
-      isCronOneShotContinuationJob(job) ||
-      opts.preserveExpiredPacedNextRunJobId === job.id);
+    pacedNextRunAtMs === nextRunAtMs;
   if (pacedNextRunAtMs !== undefined && !hasPendingPacedNextRun) {
     job.state.pacedNextRunAtMs = undefined;
     changed = true;
@@ -721,7 +715,10 @@ export function nextWakeAtMs(state: CronServiceState): number | undefined {
       isTimeScheduledJob(job) &&
       hasScheduledNextRunAtMs(job.state.nextRunAtMs)
     ) {
-      nextWake = Math.min(nextWake ?? Infinity, job.state.nextRunAtMs);
+      nextWake = Math.min(
+        nextWake ?? Infinity,
+        Math.max(job.state.nextRunAtMs, job.state.admissionDeferred?.retryAtMs ?? 0),
+      );
     }
   }
   return nextWake;

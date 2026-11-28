@@ -8,6 +8,10 @@ import {
   readOperatorToolGatewayAuthority,
   runWithOperatorToolGatewayAuthority,
 } from "../gateway/operator-tool-gateway-authority.js";
+import {
+  readPluginSessionWorkAuthority,
+  runWithPluginSessionWorkAuthority,
+} from "../gateway/plugin-session-work-authority.js";
 import { createSyntheticPluginRuntimeClient } from "../gateway/server-plugin-runtime-client.js";
 import { createGatewayRequestContext } from "../gateway/server-request-context.js";
 import { makeContextParams } from "../gateway/server-request-context.test-support.js";
@@ -36,8 +40,10 @@ import {
   withPluginCache,
 } from "./plugin-cache.js";
 import { pluginInstanceInvocation } from "./plugin-instance-invocation.js";
+import { pluginInvocationContext } from "./plugin-instance-scope.js";
 import { PluginInstance } from "./plugin-instance.js";
 import { createOwnedInstance } from "./plugin-instance.test-support.js";
+import { PluginInvocationScope } from "./plugin-invocation-scope.js";
 import { createEmptyPluginMetadataSnapshot } from "./plugin-metadata-empty.test-support.js";
 import { createEmptyPluginRegistry } from "./registry-empty.js";
 import {
@@ -211,6 +217,7 @@ it("owns service callbacks after startup and reload callers finish", async () =>
     expect(getInProcessGatewayRequestContext()).toBe(context);
     expect(getPluginRuntimeGatewayRequestScope()?.client).toBeUndefined();
     expect(readOperatorToolGatewayAuthority()).toBeUndefined();
+    expect(readPluginSessionWorkAuthority()).toBeUndefined();
     registerRoute(`/scheduled-context/${++observations}`);
   };
   registry.services.push({
@@ -222,6 +229,7 @@ it("owns service callbacks after startup and reload callers finish", async () =>
       apiVersion: 2,
       id: "scheduled-context",
       start({ scheduler: serviceScheduler, config }) {
+        expect(pluginInvocationContext.getStore()).toBeUndefined();
         scopes.push(serviceScheduler);
         configs.push(config);
         resources.push(new AsyncResource("service-start", { requireManualDestroy: true }));
@@ -261,7 +269,15 @@ it("owns service callbacks after startup and reload callers finish", async () =>
                     signal: caller.signal,
                     isWebchatConnect: () => false,
                   },
-                  () => readers.run(run),
+                  () =>
+                    readers.run(() => {
+                      const invocationScope = new PluginInvocationScope(callerRegistry, []);
+                      const inClosedInvocation = invocationScope.run(() =>
+                        AsyncLocalStorage.snapshot(),
+                      );
+                      invocationScope.release();
+                      return inClosedInvocation(run);
+                    }),
                 ),
             ),
           ),
@@ -281,9 +297,21 @@ it("owns service callbacks after startup and reload callers finish", async () =>
   );
   try {
     await clock.advanceBy(1);
+    const borrow = new AbortController();
     await runFromRequest(() =>
-      scopes[0]!.schedule({ id: "later-request", delayMs: 1, run: observe }),
+      runWithPluginSessionWorkAuthority(
+        {
+          pluginId: record.id,
+          context,
+          target: { agentId: "main", sessionKey: "agent:main:research", sessionId: "session" },
+          signal: borrow.signal,
+          assertCurrent: () => borrow.signal.throwIfAborted(),
+          assertToolAllowed() {},
+        },
+        () => scopes[0]!.schedule({ id: "later-request", delayMs: 1, run: observe }),
+      ),
     );
+    borrow.abort(new Error("Session work borrow closed"));
     await clock.advanceBy(1);
     expect(registry.httpRoutes.map((route) => route.path)).toEqual([
       "/scheduled-start/1",

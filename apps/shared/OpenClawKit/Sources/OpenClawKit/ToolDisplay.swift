@@ -16,7 +16,7 @@ public struct ToolDisplaySummary: Sendable, Equatable {
 
 public enum ToolDisplayRegistry {
     private static let resourceBundleName = "OpenClawKit_OpenClawKit"
-    private static let resourceBundle = locateResourceBundle()
+    static let resourceBundle = locateResourceBundle()
 
     private struct ToolDisplayActionSpec: Decodable {
         let label: String?
@@ -41,6 +41,36 @@ public enum ToolDisplayRegistry {
 
     /// Presentation only; invocation identity and stored tool names stay raw.
     public static func displayCall(name: String?, args: AnyCodable?) -> (name: String?, args: AnyCodable?) {
+        // Existing native identity is also the icon lookup. Text-only parity must not change that mapping.
+        if let name, name.hasPrefix("mcp__"),
+           let separator = name.range(of: "__", range: name.index(name.startIndex, offsetBy: 5)..<name.endIndex),
+           separator.upperBound < name.endIndex
+        {
+            return (String(name[separator.upperBound...]), args)
+        }
+        return self.unwrapDispatcher(name: name, args: args)
+    }
+
+    /// src/agents/tool-display-call.ts: only OpenClaw's loopback bridges share its operation wording.
+    public static func operationCall(name: String?, args: AnyCodable?) -> (name: String?, args: AnyCodable?) {
+        let name = name.map { raw in
+            for prefix in ["mcp__openclaw__", "mcp_openclaw_"] where raw.hasPrefix(prefix) {
+                return String(raw.dropFirst(prefix.count))
+            }
+            return raw
+        }
+        // Some runtimes retain a JSON string rather than an argument object (web tool-cards.ts:coerceArgs).
+        var args = args
+        if let raw = args?.stringValue?.trimmingCharacters(in: .whitespacesAndNewlines),
+           raw.first == "{" || raw.first == "[",
+           let value = try? JSONDecoder().decode(AnyCodable.self, from: Data(raw.utf8))
+        {
+            args = value
+        }
+        return self.unwrapDispatcher(name: name, args: args)
+    }
+
+    private static func unwrapDispatcher(name: String?, args: AnyCodable?) -> (name: String?, args: AnyCodable?) {
         guard let key = name?.trimmingCharacters(in: .whitespacesAndNewlines).lowercased(),
               ["dispatch_action", "tool_call"].contains(key),
               let arguments = args?.dictionaryValue,
@@ -56,7 +86,14 @@ public enum ToolDisplayRegistry {
     }
 
     public static func resolve(name: String?, args: AnyCodable?, meta: String? = nil) -> ToolDisplaySummary {
-        let call = self.displayCall(name: name, args: args)
+        self.summary(of: self.displayCall(name: name, args: args), meta: meta)
+    }
+
+    public static func operationSummary(name: String?, args: AnyCodable?) -> ToolDisplaySummary {
+        self.summary(of: self.operationCall(name: name, args: args), meta: nil)
+    }
+
+    private static func summary(of call: (name: String?, args: AnyCodable?), meta: String?) -> ToolDisplaySummary {
         let args = call.args
         let trimmedName = call.name?.trimmingCharacters(in: .whitespacesAndNewlines) ?? "tool"
         let key = trimmedName.lowercased()
@@ -64,7 +101,7 @@ public enum ToolDisplayRegistry {
         let fallback = self.config.fallback
 
         let icon = spec?.icon ?? fallback?.icon ?? "puzzle"
-        let title = spec?.title ?? self.titleFromName(trimmedName)
+        let title = self.commandPurpose(key: key, args: args) ?? spec?.title ?? self.titleFromName(trimmedName)
         let label = spec?.label ?? trimmedName
 
         let actionRaw = self.valueForKeyPath(args, path: "action") as? String
@@ -173,15 +210,23 @@ public enum ToolDisplayRegistry {
             tools: nil)
     }
 
+    private static func commandPurpose(key: String, args: AnyCodable?) -> String? {
+        guard ["bash", "exec", "shell", "run_command", "run_terminal_cmd"].contains(key),
+              let title = self.valueForKeyPath(args, path: "title") as? String
+        else { return nil }
+        let line = title.split(whereSeparator: \.isWhitespace).joined(separator: " ")
+        let filtered = String(line.unicodeScalars.filter { !CharacterSet.controlCharacters.contains($0) })
+        let text = filtered.split(whereSeparator: \.isWhitespace).joined(separator: " ")
+        return text.isEmpty ? nil : String(text.prefix(120))
+    }
+
     private static func titleFromName(_ name: String) -> String {
         let cleaned = name.replacingOccurrences(of: "_", with: " ").trimmingCharacters(in: .whitespaces)
         guard !cleaned.isEmpty else { return "Tool" }
         return cleaned
             .split(separator: " ")
             .map { part in
-                let upper = part.uppercased()
-                if part.count <= 2, part == upper { return String(part) }
-                return String(upper.prefix(1)) + String(part.lowercased().dropFirst())
+                part.prefix(1).uppercased() + part.dropFirst()
             }
             .joined(separator: " ")
     }

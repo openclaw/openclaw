@@ -28,7 +28,7 @@ vi.mock("./worker-environments/session-repository-checkpoints.js", async (import
   ...(await importOriginal<
     typeof import("./worker-environments/session-repository-checkpoints.js")
   >()),
-  withSessionRepositoryCheckpoint: (...args: unknown[]) => checkpoint(...args),
+  withSessionRepositoryPublicationCheckpoint: (...args: unknown[]) => checkpoint(...args),
 }));
 const creations = () =>
   mocks.runCommand.mock.calls.filter(

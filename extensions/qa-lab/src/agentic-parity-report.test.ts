@@ -12,7 +12,7 @@ import {
   measureRuntimeParityCellTiming,
   summarizeRuntimeParityTiming,
 } from "./runtime-parity-timing.js";
-import type { RuntimeParityResult } from "./runtime-parity.js";
+import type { RuntimeParityResult } from "./runtime-parity.types.js";
 
 type QaParityReportScenario = QaParitySuiteSummary["scenarios"][number];
 

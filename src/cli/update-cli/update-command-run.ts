@@ -1,6 +1,7 @@
 import path from "node:path";
 import { detectCurrentSqliteCapabilities, nodeRuntimeFailure } from "../../../node-sqlite.mjs";
 import {
+  emitNodeSecurityWarning,
   formatNodeSecurityWarning,
   formatUnsupportedNodeVersionMessage,
   SUPPORTED_NODE_VERSION_RANGE,
@@ -26,7 +27,10 @@ import {
 import { readDevUpdateTarget } from "../../infra/update-dev-target.js";
 import { createUpdatePreflightDiagnostics } from "../../infra/update-failure-facts.js";
 import { normalizeUpdateFailureResult } from "../../infra/update-failure-result.js";
-import { resolveUpdateInstallRoot } from "../../infra/update-install-root.js";
+import {
+  resolveUpdateInstallRoot,
+  updateInstallRootsMatch,
+} from "../../infra/update-install-root.js";
 import {
   POST_CORE_UPDATE_CHANNEL_ENV,
   POST_CORE_UPDATE_ENV,
@@ -51,14 +55,15 @@ import {
   recordUpdateRunPhase,
   recordUpdateRunDiagnostics,
   recordUpdateRunStep,
-  recordUpdateRunVerification,
 } from "../../infra/update-run-ledger.js";
+import { withUpdateRunRead } from "../../infra/update-run-read-admission.js";
 import type { UpdateRunRecord, UpdateRunStep } from "../../infra/update-run-record.js";
 import { assertUpdateRecoveryAdmission } from "../../infra/update-run-recovery-admission.js";
-import { isUpdateRecoveryPending } from "../../infra/update-run-recovery-schema.js";
+import { UPDATE_RECOVERY_KEY_PREFIX } from "../../infra/update-run-recovery-keys.js";
+import { inspectUpdateRecovery } from "../../infra/update-run-recovery-schema.js";
+import { loadPluginCohortRecovery } from "../../infra/update-run-recovery-store.js";
 import {
-  inspectUpdateRecoveries,
-  assertNoPendingUpdateRecovery,
+  assertPluginCohortRecoveryContinuation,
   loadUpdateRecovery,
   type UpdateRecoveryFence,
 } from "../../infra/update-run-recovery.js";
@@ -69,12 +74,14 @@ import {
   UPDATE_RUNNER_TIMEOUT_MS,
 } from "../../infra/update-run-timeouts.js";
 import type { UpdateRunResult, UpdateStepProgress } from "../../infra/update-runner-types.js";
+import type { UpdateStepResult } from "../../infra/update-step-result.js";
 import {
   createSystemPackageOwnershipInspection,
   type SystemPackageOwnershipInspection,
 } from "../../infra/update-system-package-ownership.js";
 import { loadInstalledPluginIndexInstallRecords } from "../../plugins/installed-plugin-index-records.js";
 import { defaultRuntime } from "../../runtime.js";
+import { readConfigMachineStateRowInDatabase } from "../../state/config-machine-state-row.js";
 import { resolveOpenClawStateSqlitePath } from "../../state/openclaw-state-db.paths.js";
 import { assertOpenClawStateWriteAllowedAtPath } from "../../state/openclaw-state-ownership-preflight.js";
 import { VERSION } from "../../version.js";
@@ -109,25 +116,13 @@ import {
   resolveManagedServicePackageUpdatePlan,
 } from "./update-command-service-plan.js";
 import { preflightWindowsUpdateTask } from "./update-command-windows-preflight.js";
+import { verifyRecordedDataAtRiskBeforeUpdate } from "./update-data-at-risk-guidance.js";
 
 export {
   recordUpdateCommandTarget,
   withUpdatePreviewSignals,
 } from "./update-command-preview-signals.js";
-
-/** Admission follows the managed service root before a redirect or discovered install. */
-export function resolveUpdateCommandAdmissionRoot(
-  prepared: Pick<
-    Awaited<ReturnType<typeof prepareUpdateCommand>>,
-    "servicePlan" | "discoveredRoot"
-  >,
-): string {
-  return (
-    prepared.servicePlan?.serviceRoot ??
-    prepared.servicePlan?.rootRedirect?.root ??
-    prepared.discoveredRoot
-  );
-}
+export { resolveUpdateCommandAdmissionRoot } from "./update-command-admission-root.js";
 
 export async function resolveUpdateCommandAdmissionEnv(params: {
   opts: UpdateCommandOptions;
@@ -220,6 +215,12 @@ export async function admitUpdateCommandRun(params: {
       params.opts.run?.completionOwner === "gateway-restart" ||
       undefined,
   });
+  // A recorded data-at-risk mark is checked, never ignored, even when already current.
+  const settleMark =
+    params.opts.dryRun === true || env[POST_CORE_UPDATE_ENV] === "1"
+      ? undefined
+      : await verifyRecordedDataAtRiskBeforeUpdate(env, parseUpdateTimeoutMs(params.opts.timeout));
+  params.assertCurrent?.();
   // Read reporting policy first: nothing may yield between activation admission and creation.
   const reportResult = params.opts.dryRun !== true && (await readUpdateResultPolicy(env));
   assertUpdatePackageActivationAdmission(params.root, {
@@ -280,6 +281,7 @@ export async function admitUpdateCommandRun(params: {
   // Adoption grants this invocation the run; register its terminal owner before
   // any fallible enrichment can strand the committed row without a result.
   await params.onAdmitted?.(run);
+  settleMark?.(record.runId);
   params.assertCurrent?.();
   if (!params.opts.dryRun && !env[UPDATE_RUN_ID_ENV]?.trim()) {
     // Create the ledger before opening its reader; later update work may relocate it.
@@ -338,11 +340,6 @@ export function createUpdateRunProgress(
   };
   return {
     pendingSteps,
-    onRollbackOutcome: (rollbackOutcome) => {
-      if (!deferred) {
-        recordUpdateRunVerification(run.runId, { rollbackOutcome }, run);
-      }
-    },
     onHeartbeat() {
       if (!deferred) {
         heartbeatUpdateRun(run.runId, driver, run);
@@ -416,12 +413,13 @@ export function completeUpdateCommandRun(
     if (run.requesterAuthority?.isCurrent() === false) {
       throw new Error("Foreground update requester is no longer authorized.");
     }
-    const pair = assertNoPendingUpdateRecovery({
-      env: run.env,
-      allowNativeRead: true,
-      pluginCohort: { runId: run.runId, fence: run.executorFence },
-    });
+    const pair = loadPluginCohortRecovery(run.runId, { env: run.env, allowNativeRead: true });
     if (pair) {
+      assertPluginCohortRecoveryContinuation(
+        pair,
+        { runId: run.runId, fence: run.executorFence },
+        { env: run.env },
+      );
       if (
         result.after?.version !== pair.reservation.to.version ||
         (result.after?.buildId ?? null) !== pair.reservation.to.buildId
@@ -433,8 +431,13 @@ export function completeUpdateCommandRun(
   }
   // A process-local result cannot complete an operationally pending update or
   // authorize package retirement. Only the durable finalizer may close it.
-  const recoveries = inspectUpdateRecoveries({ env: run.env });
-  const inspected = recoveries.find((entry) => entry.record.runId === run.runId);
+  const inspected = withUpdateRunRead(
+    ({ db }) => {
+      const row = readConfigMachineStateRowInDatabase(db, UPDATE_RECOVERY_KEY_PREFIX + run.runId);
+      return row ? inspectUpdateRecovery(row.value_json, run.runId) : undefined;
+    },
+    { env: run.env },
+  );
   // A matching historical record only projects its saved outcome. Execution
   // remains strict, while unrelated completed history grants no authority.
   const recovery =
@@ -459,9 +462,6 @@ export function completeUpdateCommandRun(
           : (result.reason ?? "update-recovery-pending"),
       runId: run.runId,
     });
-  }
-  if (!ownPluginCohortPending && recoveries.some(({ record }) => isUpdateRecoveryPending(record))) {
-    return { ...result, status: "error", reason: "update-recovery-pending", runId: run.runId };
   }
   const recordOptions = { ...run, redactPaths: result.root ? [result.root] : [] };
   // Both finalization and outer CLI unwind come here. A verified restored generation
@@ -546,7 +546,7 @@ export async function prepareUpdateCommand(opts: UpdateCommandOptions) {
     ? null
     : formatNodeSecurityWarning(process.versions.node);
   if (nodeSecurityWarning) {
-    defaultRuntime.error(`SECURITY WARNING: ${nodeSecurityWarning}`);
+    emitNodeSecurityWarning(process.versions.node, defaultRuntime.error);
   }
   const startedAt = Date.now();
   suppressDeprecations();
@@ -570,8 +570,8 @@ export async function prepareUpdateCommand(opts: UpdateCommandOptions) {
       "Immutable installations require the native immutable openclaw update entry point.",
     );
   }
-  if (opts.sha !== undefined) {
-    throw new Error("--sha requires an adopted immutable installation.");
+  if (opts.sha !== undefined && installKind !== "git") {
+    throw new Error("--sha requires a Git checkout or an adopted immutable installation.");
   }
   if (!postCoreUpdateResume && opts.dryRun !== true && isGatewayExternallySupervised()) {
     throw new Error(formatExternalSupervisorUpdateRequired());
@@ -598,6 +598,7 @@ export async function prepareUpdateCommand(opts: UpdateCommandOptions) {
   // A post-core marker cannot bypass pending recovery without the live original
   // owner. Check both roots before config/autostart preparation or history.
   const packageActivationNotes: string[] = [];
+  const packageActivationSteps: UpdateStepResult[] = [];
   const admitPackageActivation = async (root: string) => {
     if (!postCoreUpdateResume) {
       const settled = await settlePendingPackageActivation(
@@ -613,11 +614,20 @@ export async function prepareUpdateCommand(opts: UpdateCommandOptions) {
         );
       });
       if (settled) {
-        const note = `${opts.dryRun ? "Would settle" : "Settled"} previous package update ${settled.operationId} (${settled.reason}); update can proceed past package recovery admission. Evidence ${opts.dryRun ? "would be retained" : "retained"} at ${settled.retained}.${settled.warning ? ` ${settled.warning}` : ""}`;
+        const note = `${opts.dryRun ? "Would settle" : "Settled"} previous package update ${settled.operationId} (${settled.reason}); update can proceed past package recovery admission.${settled.resumed ? ` ${settled.resumed}` : ""}${settled.retained ? ` Evidence ${opts.dryRun ? "would be retained" : "retained"} at ${settled.retained}.` : ""}${settled.warning ? ` ${settled.warning}` : ""}`;
         if (opts.dryRun) {
           packageActivationNotes.push(note);
         } else {
           defaultRuntime.error(note);
+          // The run does not exist yet; its target preparation records this step.
+          packageActivationSteps.push({
+            name: "package-publication-recovery",
+            command: "settle previous package publication",
+            cwd: root,
+            durationMs: 0,
+            exitCode: 0,
+            warnings: [note],
+          });
         }
       }
     }
@@ -655,10 +665,13 @@ export async function prepareUpdateCommand(opts: UpdateCommandOptions) {
   if (handoffRoot) {
     const { assertManagedServiceUpdateHandoffRoot } =
       await import("../../infra/update-managed-service-handoff.js");
+    // A release link and the release it selects are one installation; pass one spelling.
+    const sameInstallation = (candidate: string | null) =>
+      candidate && updateInstallRootsMatch(handoffRoot, candidate) ? handoffRoot : candidate;
     await assertManagedServiceUpdateHandoffRoot({
       expectedRoot: handoffRoot,
-      root: discoveredRoot,
-      executingRoot,
+      root: sameInstallation(discoveredRoot)!,
+      executingRoot: sameInstallation(executingRoot),
       postCore: postCoreUpdateResume,
     });
     opts.run?.executorFence?.assertCurrent();
@@ -687,6 +700,7 @@ export async function prepareUpdateCommand(opts: UpdateCommandOptions) {
     servicePlan,
     pkgOwnership,
     ...(packageActivationNotes.length ? { packageActivationNotes } : {}),
+    ...(packageActivationSteps.length ? { packageActivationSteps } : {}),
   };
 }
 

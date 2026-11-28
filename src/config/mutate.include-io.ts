@@ -9,7 +9,7 @@ import {
 } from "../infra/deferred-plugin-migrations.js";
 import { isMissingPathError } from "../infra/errors.js";
 import { root as createFsRoot, type Root as FsSafeRoot } from "../infra/fs-safe.js";
-import { recordUpdateDoctorConfigFileWrite } from "../infra/update-doctor-result.js";
+import { recordUpdateDoctorConfigFileWrite } from "../infra/update-doctor-config-capture.js";
 import { isPathInside } from "../security/scan-paths.js";
 import { prepareConfigFileWrite } from "./backup-rotation.js";
 import {
@@ -262,6 +262,7 @@ export async function writeRootBoundJsonFile(params: {
     {
       snapshot: { path: targetAtCommit.absolutePath, exists: currentRaw !== null, raw: currentRaw },
       includeGraph: params.includeGraph,
+      validateUtf8: true,
       targetPathProof: pathProof,
       preserveDirectoryMode: true,
       onRootRemoved: () => {

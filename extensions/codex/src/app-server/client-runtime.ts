@@ -18,6 +18,7 @@ import {
   hasSiblingThreadWork,
   hasThreadOwnership,
   invalidateThreadOwnership,
+  isEphemeralThreadPolicy,
   revertRetainedThreadInstructions,
   type RetainedLiveThread,
   type CodexEphemeralThreadPolicy,
@@ -28,11 +29,10 @@ import {
 } from "./client-thread-owner.js";
 import {
   prepareCodexWorkspaceReferenceState,
-  readCodexWorkspaceSessionMeta,
   type CodexClientWorkspaceState,
 } from "./client-workspace-state.js";
 import type { CodexAppServerClient } from "./client.js";
-import { isJsonObject, type CodexServiceTier, type JsonObject } from "./protocol.js";
+import { isJsonObject, type CodexServiceTier } from "./protocol.js";
 import { mergeCodexRateLimitsUpdate } from "./rate-limit-cache.js";
 import { withTimeout } from "./timeout.js";
 
@@ -101,21 +101,12 @@ export function prepareCodexWorkspaceReferences(
   return prepareCodexWorkspaceReferenceState(configuredClients.get(client), threadId, reference);
 }
 
-/** Immutable declarations are data owned by this physical client, never retained executors. */
-export async function readCodexClientSessionMeta(
+/** Native rollout records are data owned by this physical client, never retained executors. */
+export function withCodexClientWorkspace<T>(
   client: CodexAppServerClient,
-  sessionsRoot: string,
-  boundRolloutPath: string | undefined,
-  threadId: string,
-): Promise<JsonObject> {
-  return readCodexWorkspaceSessionMeta(
-    client,
-    configuredClients.get(client),
-    sessionsRoot,
-    boundRolloutPath,
-    threadId,
-    CODEX_APP_SERVER_LIVE_THREAD_MAX_IDLE,
-  );
+  read: (state: CodexClientWorkspaceState | undefined, maxCachedSessions: number) => Promise<T>,
+): Promise<T> {
+  return read(configuredClients.get(client), CODEX_APP_SERVER_LIVE_THREAD_MAX_IDLE);
 }
 
 /** Installs one auth-refresh handler and one rate-limit observer per physical client. */
@@ -143,6 +134,7 @@ export function ensureCodexAppServerClientRuntime(
     releasingThreads: new Map(),
     protectedThreads: new Map(),
     sessionMetadata: new Map(),
+    modelContextScans: new Map(),
     workspaceReferences: new Map(),
   };
   configuredClients.set(client, runtime);
@@ -163,6 +155,7 @@ export function ensureCodexAppServerClientRuntime(
     }
     runtime.protectedThreads.clear();
     runtime.sessionMetadata.clear();
+    runtime.modelContextScans.clear();
     runtime.workspaceReferences.clear();
     forgetCodexClientForkSettings(client);
     updateThreadOwnership(client, runtime);
@@ -330,7 +323,7 @@ async function releaseRetainedThread(
     ) {
       // A failed unsubscribe leaves the native subscription alive. Retain it as
       // most recently used; renewing TTL prevents a zero-delay retry spin.
-      if (retained.ephemeralPolicy === undefined) {
+      if (!isEphemeralThreadPolicy(retained.ephemeralPolicy)) {
         retained.expiresAt = performance.now() + CODEX_APP_SERVER_LIVE_THREAD_IDLE_TIMEOUT_MS;
       }
       runtime.retainedThreads.set(threadId, retained);
@@ -364,7 +357,7 @@ async function evictExcessIdleThreads(
   const idleThreads = () =>
     [...runtime.retainedThreads].filter(
       ([threadId, thread]) =>
-        thread.ephemeralPolicy === undefined && !runtime.protectedThreads.has(threadId),
+        !isEphemeralThreadPolicy(thread.ephemeralPolicy) && !runtime.protectedThreads.has(threadId),
     );
   let idleThreadIds = idleThreads();
   while (idleThreadIds.length > CODEX_APP_SERVER_LIVE_THREAD_MAX_IDLE) {
@@ -410,10 +403,9 @@ export async function retainCodexAppServerLiveThread(
     serviceTier,
     // Ephemeral history has no disk resume source. Preserve its existing client lifetime,
     // rather than subjecting it to the persistent registry's idle eviction.
-    expiresAt:
-      ephemeralPolicy === undefined
-        ? performance.now() + CODEX_APP_SERVER_LIVE_THREAD_IDLE_TIMEOUT_MS
-        : Number.POSITIVE_INFINITY,
+    expiresAt: isEphemeralThreadPolicy(ephemeralPolicy)
+      ? Number.POSITIVE_INFINITY
+      : performance.now() + CODEX_APP_SERVER_LIVE_THREAD_IDLE_TIMEOUT_MS,
     release:
       (releaseThread ? (physicalThreadReleases.get(releaseThread) ?? releaseThread) : undefined) ??
       defaultThreadRelease(client),
@@ -778,7 +770,7 @@ export function protectCodexAppServerLiveThread(
       if (retained) {
         // A detached child is live activity, not parent idleness. Its terminal
         // delivery starts the parent's normal warm-session retention window.
-        if (retained.ephemeralPolicy === undefined) {
+        if (!isEphemeralThreadPolicy(retained.ephemeralPolicy)) {
           retained.expiresAt = performance.now() + CODEX_APP_SERVER_LIVE_THREAD_IDLE_TIMEOUT_MS;
         }
         runtime.retainedThreads.delete(threadId);

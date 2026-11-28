@@ -209,7 +209,8 @@ profile handling for harnesses that enforce native availability independently.
 Harnesses with an independently managed native surface can also declare
 `conversationToolPolicySafeDenyTools` using standard OpenClaw tool names. Core
 preserves the native surface only when every expanded deny is a known core tool
-in that audited safe list and passes the matching names in
+or a plugin tool declared in current manifest metadata, and is also in that
+audited safe list. Core passes the matching names in
 `params.pluginHarnessToolPolicySafeDeniedTools`. The harness must disable any
 native equivalents for those names. Finite allowlists, undeclared or unknown
 tool names, wildcards, and groups containing any undeclared name remain
@@ -255,7 +256,7 @@ native session's model and connection.
 
 ### Native setup verification
 
-For profileless Model Setup activation, a harness with `authBootstrap: "harness"`
+For profileless Models activation, a harness with `authBootstrap: "harness"`
 can implement `verifySetup(ctx): Promise<void>`. The context provides `config`,
 `provider`, `modelId`, `workspaceDir`, `signal`, and `assertCurrent()`.
 Import its type from `openclaw/plugin-sdk/agent-harness`.
@@ -293,6 +294,14 @@ Include `modelRef: { provider, model }` only when both values are known from tha
 same binding. Do not infer a missing value from outer configuration, credentials,
 or usage. Host-auth ownership requires this tuple before credential preparation;
 native-auth pending branches may omit it until their native owner selects a model.
+
+Declare `promptProjection: "captures"` only when the harness calls
+`userTurnTranscriptRecorder.captureModelPromptProjection(text, assertCurrent)` before
+every provider dispatch of the user turn, then `markSentToProvider()`. After such a
+dispatch, a later capture on the same turn is an error, so a fallback candidate can
+never store different model-facing text. Omit the field (default `"external"`) when the
+native runtime builds its own prompt: a later fallback then keeps the stored transcript
+text for a turn this harness sent without a projection.
 
 Declare `nativeModelPolicySupport: "exact"` only when the harness binds the actual
 native selection before every inference dispatch, including after resume. Use
@@ -468,6 +477,15 @@ Two secret-free provider-owned facts describe the selected route:
   override must be reproduced. `"present"` means authored headers, auth
   transport, proxy, TLS, local-service, private-network behavior, or request
   parameters exist. The fact does not expose those values.
+
+Harnesses with declarative transport rules can publish `routeSupport` during
+registration. Include executable or connection availability for the current
+activation. Read-only projections can then match routes without entering the
+plugin. Recompute these facts when the plugin owner activates a replacement.
+`resolveAgentHarnessRouteRejection` from
+`openclaw/plugin-sdk/agent-harness-registration` applies the same route rules
+inside `supports(ctx)`. Execution still calls that scoped callback to check
+prepared authentication and other execution requirements.
 
 Return `{ supported: false, reason }` when the harness cannot reproduce the
 prepared transport. Do not infer support by reading raw config after selection.

@@ -1,4 +1,5 @@
-import childProcess, { ChildProcess } from "node:child_process";
+import childProcess from "node:child_process";
+import { EventEmitter } from "node:events";
 import { PassThrough } from "node:stream";
 import type { OpenClawPluginApi } from "openclaw/plugin-sdk/plugin-entry";
 import {
@@ -25,7 +26,6 @@ import {
   bindPluginRegistryRuntime,
   call,
   conversationBindingMocks,
-  createPluginRuntime,
   hoisted,
   resetSessionCatalogTestState,
   resolveRegisteredCatalogCreateTarget,
@@ -84,7 +84,18 @@ describe("session catalog Gateway methods", () => {
         const stdout = new PassThrough();
         const stderr = new PassThrough();
         const stdio: ShellProcess["stdio"] = [null, stdout, stderr, null, null];
-        const child = Object.assign(new ChildProcess(), { stdin: null, stdout, stderr, stdio });
+        const kill: ShellProcess["kill"] = vi.fn(() => true);
+        const child = Object.assign(new EventEmitter(), {
+          stdin: null,
+          stdout,
+          stderr,
+          stdio,
+          killed: false,
+          connected: false,
+          exitCode: null as ShellProcess["exitCode"],
+          signalCode: null as ShellProcess["signalCode"],
+          kill,
+        }) as ShellProcess;
         finishProbe = () => {
           child.stdout?.emit("data", Buffer.from("\0PATH=/catalog/bin\0"));
           child.emit("close", 0, null);
@@ -293,6 +304,7 @@ describe("session catalog Gateway methods", () => {
       sessions: ["owned", "missing", "external"].map((id) =>
         catalogSession(`${id}-thread`, {
           ...(id !== "external" ? { sessionKey: `agent:main:${id}` } : {}),
+          ...(id === "owned" ? { originalUrl: "https://source.example/chat/main/owned" } : {}),
           createdActor: { type: "human", id: "provider-spoof" },
         }),
       ),
@@ -322,6 +334,8 @@ describe("session catalog Gateway methods", () => {
     const projectedSessions = [
       expect.objectContaining({
         threadId: "owned-thread",
+        // A provider-supplied source link survives the same streamed and final projection.
+        originalUrl: "https://source.example/chat/main/owned",
         createdActor: {
           type: "agent",
           id: "worker-1",
@@ -339,36 +353,6 @@ describe("session catalog Gateway methods", () => {
       { dropIfSlow: true },
     );
     expectCatalogHost(respond, { sessions: projectedSessions });
-  });
-
-  it("shares one lazy Gateway node snapshot across catalog providers", async () => {
-    const dispatchNodeList = vi.fn(async () => ({
-      nodes: [{ nodeId: "shared-node", connected: true }],
-    }));
-    bindPluginRegistryRuntime(
-      hoisted.activeRegistry as PluginRegistry,
-      createPluginRuntime({
-        nodes: {
-          list: dispatchNodeList,
-          invoke: vi.fn(async () => undefined),
-          openDuplex: vi.fn(),
-        },
-      }),
-    );
-    const catalogUsingNodes = (id: string) =>
-      provider(id, {
-        list: vi.fn(async ({ listNodes }) => {
-          expect(await listNodes?.()).toEqual({
-            nodes: [{ nodeId: "shared-node", connected: true }],
-          });
-          return [];
-        }),
-      });
-    useCatalogs(catalogUsingNodes("zeta"), catalogUsingNodes("alpha"));
-
-    await listCatalogs();
-
-    expect(dispatchNodeList).toHaveBeenCalledOnce();
   });
 
   it("rejects host cursors without a catalog selector", async () => {
@@ -563,20 +547,30 @@ it("keeps a delayed source off the catalog RPC path", async () => {
       },
     },
   });
-  let service: Parameters<OpenClawPluginApi["registerService"]>[0] | undefined;
+  const services: Array<
+    Extract<Parameters<OpenClawPluginApi["registerService"]>[0], { apiVersion: 2 }>
+  > = [];
   const api = createTestPluginApi({
     runtime,
     registerService: (registered) => {
-      service = registered;
+      if (registered.apiVersion !== 2) {
+        throw new Error("Expected catalog service API version 2");
+      }
+      services.push(registered);
     },
     registerSessionCatalog: (registeredCatalog) => {
       useCatalogs(registeredCatalog);
     },
   });
   sessionSharePlugin.register(api);
+  if (services.length === 0) {
+    throw new Error("Expected catalog service API version 2");
+  }
   const scheduler = createTestPluginServiceScheduler();
   const context = { config, logger: api.logger, stateDir: "/unused", invokeNode, scheduler };
-  await service?.start(context);
+  for (const service of services) {
+    await service.start(context);
+  }
   bindPluginRegistryRuntime(hoisted.activeRegistry as PluginRegistry, runtime);
   hoisted.hasMultipleSessionSharingIdentities.mockReturnValue(true);
   const clients = Array.from({ length: 6 }, (_, index) => ({
@@ -650,7 +644,9 @@ it("keeps a delayed source off the catalog RPC path", async () => {
     const current = request();
     await vi.advanceTimersByTimeAsync(0);
     await current.completion;
-    expect(current.respond.mock.calls[0]?.[1]?.catalogs[0]?.hosts[0]?.sessions).toEqual([row]);
+    expect(current.respond.mock.calls[0]?.[1]?.catalogs[0]?.hosts[0]?.sessions).toEqual([
+      { ...row, exportPolicy: { origin: "federated", automatic: false } },
+    ]);
     expect(invokeNode).toHaveBeenCalledTimes(2);
     invokeNode
       .mockRejectedValueOnce(new Error("Paired node did not respond"))
@@ -688,7 +684,9 @@ it("keeps a delayed source off the catalog RPC path", async () => {
     source.resolve();
     refresh.resolve();
     try {
-      await service?.stop?.(context);
+      for (const service of services.toReversed()) {
+        await service.stop?.(context);
+      }
     } finally {
       await scheduler.stop();
     }

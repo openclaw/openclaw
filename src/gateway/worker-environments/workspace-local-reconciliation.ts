@@ -56,7 +56,6 @@ export async function prepareLocalWorkspaceReconciliation(params: {
     const additionalPaths = snapshot.current.baseCommit
       ? await selectLocalWorkspaceCanonicalPaths({
           root: request.localPath,
-          admittedPaths: "[]",
           assertCurrent: () => request.assertCurrent?.(),
         })
       : undefined;
@@ -72,10 +71,12 @@ export async function prepareLocalWorkspaceReconciliation(params: {
             }),
           )
         : undefined;
-    const hasWorkerCommits =
-      snapshot.gitHistory && snapshot.gitHistory.headCommit !== snapshot.gitHistory.baseCommit;
+    const needsHistorySettlement =
+      snapshot.gitHistory &&
+      (snapshot.gitHistory.unavailableReason ||
+        snapshot.gitHistory.headCommit !== snapshot.gitHistory.baseCommit);
     const unchanged =
-      !hasWorkerCommits && inspected?.conflictPaths.length === 0 ? inspected : undefined;
+      !needsHistorySettlement && inspected?.conflictPaths.length === 0 ? inspected : undefined;
     if (!unchanged) {
       await snapshot.verifyStable();
     }

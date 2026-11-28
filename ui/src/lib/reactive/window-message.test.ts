@@ -78,3 +78,77 @@ it("keeps the receiving window scoped and skips subscriptions retired during del
   receiver.dispatchEvent(new MessageEvent("message", { source }));
   expect(otherReceiver).toHaveBeenCalledOnce();
 });
+
+it("defers frame source lookup until delivery and promotes only the matching frame", () => {
+  const frame = document.body.appendChild(document.createElement("iframe"));
+  onTestFinished(() => frame.remove());
+  const sibling = document.body.appendChild(document.createElement("iframe"));
+  onTestFinished(() => sibling.remove());
+  const source = frame.contentWindow!;
+  const sourceRead = vi.spyOn(frame, "contentWindow", "get");
+  const siblingRead = vi.spyOn(sibling, "contentWindow", "get");
+  onTestFinished(observeWindowMessage(window, sibling, vi.fn()));
+  const callback = vi.fn();
+  onTestFinished(observeWindowMessage(window, frame, callback));
+  expect(sourceRead).not.toHaveBeenCalled();
+  window.dispatchEvent(new MessageEvent("message", { source: window }));
+  expect(callback).not.toHaveBeenCalled();
+  const event = new MessageEvent("message", { source });
+  window.dispatchEvent(event);
+  expect(callback).toHaveBeenCalledExactlyOnceWith(event);
+  siblingRead.mockClear();
+  window.dispatchEvent(event);
+  expect(siblingRead).not.toHaveBeenCalled();
+  expect(callback).toHaveBeenCalledTimes(2);
+});
+
+it("follows a retained iframe to its replacement window and ignores the old one", () => {
+  const frame = document.body.appendChild(document.createElement("iframe"));
+  onTestFinished(() => frame.remove());
+  const original = frame.contentWindow!;
+  const replacement = sourceWindow();
+  const callback = vi.fn();
+  const release = observeWindowMessage(window, frame, callback);
+  onTestFinished(release);
+  const first = new MessageEvent("message", { source: original });
+  window.dispatchEvent(first);
+  expect(callback).toHaveBeenCalledExactlyOnceWith(first);
+
+  vi.spyOn(frame, "contentWindow", "get").mockReturnValue(replacement);
+  window.dispatchEvent(first);
+  expect(callback).toHaveBeenCalledOnce();
+  const reboot = new MessageEvent("message", { source: replacement });
+  window.dispatchEvent(reboot);
+  expect(callback).toHaveBeenLastCalledWith(reboot);
+  release();
+  window.dispatchEvent(reboot);
+  expect(callback).toHaveBeenCalledTimes(2);
+});
+
+it("retires unresolved frames and preserves registration order after promotion", () => {
+  const frame = document.body.appendChild(document.createElement("iframe"));
+  onTestFinished(() => frame.remove());
+  const source = frame.contentWindow!;
+  const sourceRead = vi.spyOn(frame, "contentWindow", "get");
+  const retired = vi.fn();
+  const release = observeWindowMessage(window, frame, retired);
+  release();
+  release();
+  window.dispatchEvent(new MessageEvent("message", { source }));
+  expect(sourceRead).not.toHaveBeenCalled();
+  expect(retired).not.toHaveBeenCalled();
+
+  const delivered: string[] = [];
+  let releaseLast = () => {};
+  onTestFinished(
+    observeWindowMessage(window, frame, () => {
+      delivered.push("frame");
+      releaseLast();
+    }),
+  );
+  onTestFinished(observeWindowMessage(window, source, () => delivered.push("source")));
+  releaseLast = observeWindowMessage(window, frame, () => delivered.push("retired"));
+  onTestFinished(releaseLast);
+  window.dispatchEvent(new MessageEvent("message", { source }));
+  expect(delivered).toEqual(["frame", "source"]);
+});

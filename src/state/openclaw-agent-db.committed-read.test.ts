@@ -85,7 +85,8 @@ describe("committed agent database reads", () => {
     {
       version: OPENCLAW_AGENT_SCHEMA_VERSION - 1,
       expectedError: {
-        name: "SqliteSchemaMismatchError",
+        name: "StartupMaintenanceRequiredError",
+        kind: "state-migrations",
         message: expect.stringContaining(
           `uses schema version ${OPENCLAW_AGENT_SCHEMA_VERSION - 1}; stop active agents and run openclaw doctor --fix to upgrade it to schema version ${OPENCLAW_AGENT_SCHEMA_VERSION} before using it.`,
         ),
@@ -111,7 +112,10 @@ describe("committed agent database reads", () => {
         fs.renameSync(`${databasePath}.replacement`, databasePath);
         const writer = new DatabaseSync(databasePath);
         try {
-          writer.exec(`BEGIN IMMEDIATE; PRAGMA user_version = ${version}; COMMIT;`);
+          writer.exec(`BEGIN IMMEDIATE;
+            UPDATE schema_meta SET schema_version = ${version} WHERE meta_key = 'primary';
+            PRAGMA user_version = ${version};
+            COMMIT;`);
         } finally {
           writer.close();
         }

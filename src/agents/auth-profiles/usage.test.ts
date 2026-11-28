@@ -70,6 +70,8 @@ const whamResponse = (
   primary_window?: ReturnType<typeof whamWindow>,
   secondary_window?: ReturnType<typeof whamWindow>,
 ) => ({
+  account_id: "acct_test_123",
+  user_id: "user-a",
   rate_limit: { limit_reached, primary_window, secondary_window },
 });
 function expiredQuota(now: number, stats = blockedStats(now)) {
@@ -569,6 +571,53 @@ describe("markAuthProfileFailure — WHAM-aware Codex cooldowns", () => {
     },
   );
 
+  it.each([
+    ["acct_test_123", "user-a", true],
+    ["other-account", "user-a", false],
+    ["acct_test_123", "other-user", false],
+    [undefined, "user-a", false],
+    ["acct_test_123", undefined, false],
+    [undefined, undefined, false],
+  ] as const)(
+    "reconciles credits for account %s and user %s",
+    async (account_id, user_id, clears) => {
+      const now = Date.now();
+      const store = codexStore(blockedStats(now));
+      mockLockedUpdatesForStore(store);
+      mockWhamResponse(200, {
+        ...whamResponse(true, whamWindow(100, 3_600)),
+        credits: { has_credits: true },
+        account_id,
+        user_id,
+      });
+
+      await reprobe(store);
+      expect(store.usageStats?.[codexId]?.blockedUntil).toBe(clears ? undefined : now + 86_400_000);
+    },
+  );
+
+  it.each(["model-a", "model-b"])(
+    "applies a model-a restriction to the saved block for %s",
+    async (model) => {
+      const now = Date.now();
+      const store = codexStore({
+        ...blockedStats(now),
+        blockedModel: model,
+        blockedScope: "model",
+      });
+      mockLockedUpdatesForStore(store);
+      mockWhamResponse(200, {
+        ...whamResponse(true, whamWindow(100, 3_600)),
+        credits: { has_credits: true },
+        rate_limit_upsell: { blocked_model_slug: "model-a" },
+      });
+
+      await reprobe(store, { forModel: model });
+      expect(isProfileInCooldown(store, codexId, now, "model-a")).toBe(model === "model-a");
+      expect(isProfileInCooldown(store, codexId, now, "model-b")).toBe(false);
+    },
+  );
+
   it("re-arms a stale WHAM block from the latest blocked snapshot", async () => {
     const now = testNow;
     prepareSharedAuthStoreOwnershipForNative();
@@ -814,6 +863,51 @@ describe("markAuthProfileFailure — per-model cooldown metadata", () => {
           [sonnet, "gpt-4.1"].map((id) => isProfileInCooldown(store, copilotId, now, id)),
         ).toEqual([true, false]);
       }
+    },
+  );
+
+  it("keeps a healthy fallback available after two different missing models", async () => {
+    vi.useFakeTimers();
+    vi.setSystemTime(now);
+    const store = makeStore(undefined);
+    mockLockedUpdateForStore(store);
+
+    for (const modelId of ["missing-primary", "missing-fallback"]) {
+      await markAuthProfileFailure({
+        store,
+        profileId: anthropicId,
+        reason: "model_not_found",
+        modelId,
+      });
+      expect(isProfileInCooldown(store, anthropicId, now, modelId)).toBe(true);
+      expect(isProfileInCooldown(store, anthropicId, now, "healthy-fallback")).toBe(false);
+    }
+    expect(store.usageStats?.[anthropicId]).toMatchObject({
+      cooldownReason: "model_not_found",
+      cooldownModel: "missing-fallback",
+      cooldownUntil: now + 30_000,
+      errorCount: 2,
+      failureCounts: { model_not_found: 2 },
+    });
+  });
+
+  it.each(["auth", "rate_limit", "model_not_found"] as const)(
+    "does not narrow an active profile-wide %s window after a model miss",
+    async (cooldownReason) => {
+      vi.useFakeTimers();
+      vi.setSystemTime(now);
+      const store = makeStore({
+        [anthropicId]: { cooldownReason, cooldownUntil: now + 30_000 },
+      });
+      mockLockedUpdateForStore(store);
+      await markAuthProfileFailure({
+        store,
+        profileId: anthropicId,
+        reason: "model_not_found",
+        modelId: "missing-model",
+      });
+      expect(store.usageStats?.[anthropicId]?.cooldownModel).toBeUndefined();
+      expect(isProfileInCooldown(store, anthropicId, now, "healthy-model")).toBe(true);
     },
   );
 });

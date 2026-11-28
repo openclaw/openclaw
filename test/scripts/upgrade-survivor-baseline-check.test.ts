@@ -15,7 +15,7 @@ const baseline = (version: number, status: string) => ({
 });
 
 function runFixture(
-  failure: "version" | "runtime" | "install" | "launch",
+  failure: "version" | "runtime" | "install" | "launch" | "overlap",
   overrides: NodeJS.ProcessEnv = {},
 ) {
   const root = tempDirs.make("survivor-precheck-");
@@ -27,6 +27,30 @@ function runFixture(
 const fs = require("node:fs");
 const path = require("node:path");
 const args = process.argv.slice(2);
+(async () => {
+if (${JSON.stringify(failure)} === "overlap") {
+  const gate = ${JSON.stringify(path.join(root, "overlap"))};
+  fs.mkdirSync(gate, { recursive: true });
+  const spec = args.find(arg => arg.startsWith("openclaw@"));
+  fs.writeFileSync(path.join(gate, spec), "started");
+  if (!spec.endsWith("8.33")) {
+    await new Promise(resolve => {
+      const timeout = setTimeout(() => process.exit(1), 2000);
+      const ready = () => {
+        if (fs.readdirSync(gate).length < 2) return;
+        watcher.close();
+        clearTimeout(timeout);
+        resolve();
+      };
+      const watcher = fs.watch(gate, ready);
+      ready();
+    });
+    if (fs.readdirSync(gate).length !== 2) process.exit(1);
+    fs.writeFileSync(path.join(gate, spec), "finished");
+  } else if (fs.readdirSync(gate).filter(name => fs.readFileSync(path.join(gate, name), "utf8") === "finished").length !== 2) {
+    process.exit(1);
+  }
+}
 const prefix = args[args.indexOf("--prefix") + 1];
 const spec = args.find(arg => arg.startsWith("openclaw@"));
 fs.appendFileSync(${JSON.stringify(installs)}, JSON.stringify({ args, prefix }) + "\\n");
@@ -41,6 +65,7 @@ fs.writeFileSync(path.join(prefix, "bin", "openclaw"), '#!/usr/bin/env node\\n' 
   ')) { console.error("Cannot find package fixture-runtime"); process.exit(1); }\\n' +
   'console.log(process.argv.includes("--version") ? ' + JSON.stringify(spec) + ' : "local");\\n',
   { mode: 0o755 });
+})();
 `,
   );
   const result = io.runProcess(
@@ -65,6 +90,20 @@ fs.writeFileSync(path.join(prefix, "bin", "openclaw"), '#!/usr/bin/env node\\n' 
     report: io.readJson(path.join(evidence, "summary.json")),
   };
 }
+
+it("overlaps two isolated baseline probes before admitting the third", () => {
+  const fixture = runFixture("overlap", {
+    OPENCLAW_UPGRADE_SURVIVOR_BASELINE_SPECS: "2026.8.33 2026.8.34 2026.8.35",
+  });
+  expect(fixture.result.status, fixture.result.stderr).toBe(0);
+  expect(fixture.report.baselines.map((entry: { baseline: string }) => entry.baseline)).toEqual([
+    "openclaw@2026.8.35",
+    "openclaw@2026.8.34",
+    "openclaw@2026.8.33",
+  ]);
+  const installs = io.readJsonLines<Install>(fixture.installs);
+  expect(new Set(installs.map((install) => install.prefix)).size).toBe(3);
+});
 
 it("checks each pinned recovery driver once before scheduling exact rows", () => {
   const fixture = runFixture("runtime", {

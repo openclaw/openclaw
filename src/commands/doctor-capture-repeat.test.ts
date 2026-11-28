@@ -18,7 +18,13 @@ const dirs = useAutoCleanupTempDirTracker((cleanup) =>
   }),
 );
 
-it("reuses one original across repeated healthy Doctor repairs and captures a real change", async () => {
+// Five unmocked Doctor repairs is the floor: a fresh install converges on the
+// second repair (the ACP replay repair marker), then reuse needs two healthy
+// runs and one real change. Each repair spawns ~20 SQLite/update child processes
+// and ~10 worker threads: ~12 s locally, ~30 s on a loaded CI Node shard, so
+// the default 120 s test timeout cannot hold them.
+
+it("reuses one original across repeated healthy Doctor repairs and keeps only the capture of a real change", async () => {
   const root = await fs.realpath(dirs.make("doctor-capture-repeat-"));
   const state = path.join(root, "state");
   const temporary = path.join(root, "tmp");
@@ -40,7 +46,6 @@ it("reuses one original across repeated healthy Doctor repairs and captures a re
     PI_CODING_AGENT_DIR: undefined,
     OPENCLAW_UPDATE_IN_PROGRESS: undefined,
     OPENCLAW_UPDATE_RUN_ID: undefined,
-    OPENCLAW_IMAGE_ACTIVATION_CAPTURE_MARKER: undefined,
     OPENCLAW_DISABLE_BUNDLED_PLUGINS: "1",
     OPENCLAW_SERVICE_REPAIR_POLICY: "external",
   })) {
@@ -94,6 +99,8 @@ it("reuses one original across repeated healthy Doctor repairs and captures a re
   cfg.gateway.port = 2;
   await writeFixtureJson(config, cfg);
   await repair();
-  expect(await captures()).toHaveLength(2);
-  expect(await captures()).toEqual(expect.arrayContaining(before));
-});
+  // The changed state gets a fresh original, which replaces the reused one.
+  const after = await captures();
+  expect(after).toHaveLength(1);
+  expect(after).not.toEqual(before);
+}, 300_000);

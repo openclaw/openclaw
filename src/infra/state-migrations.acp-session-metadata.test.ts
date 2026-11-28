@@ -14,7 +14,7 @@ import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { EMPTY_LEGACY_SESSION_SURFACES } from "../plugins/legacy-session-surfaces.types.js";
 import { openOpenClawStateDatabase } from "../state/openclaw-state-db.js";
 import { withOpenClawTestState } from "../test-utils/openclaw-test-state.js";
-import { migrateLegacyAcpSessionMetadata } from "./state-migrations.session-store.js";
+import { migrateLegacyAcpSessionMetadata } from "./state-migrations.acp-session-metadata.js";
 
 it.each(["plugin", "none", "matching", "different", "unbound"] as const)(
   "migrates ACP ownership with %s canonical metadata",

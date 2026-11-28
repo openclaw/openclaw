@@ -44,14 +44,15 @@ suite.define(() => {
       errorMessage,
     });
     const failure = page.locator(".chat-error").filter({ hasText: errorMessage });
-    await failure
-      .locator("summary strong")
-      .getByText("Couldn't finish this reply. Check the conversation before trying again.")
-      .waitFor();
-    await failure.locator("summary").click();
-    const details = failure.getByLabel("Error details", { exact: true });
-    await details.waitFor();
-    expect(await details.textContent()).toContain(errorMessage);
+    await failure.locator(".app-toast__message").waitFor();
+    expect(await failure.locator(".app-toast__message").textContent()).toBe(errorMessage);
+    expect(
+      await failure
+        .locator(
+          ".app-toast__description, details, [aria-expanded], .lazy-view-error__detail, .report-issue-link",
+        )
+        .count(),
+    ).toBe(0);
 
     const providerReview = {
       id: "synthetic-review-one",

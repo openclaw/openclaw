@@ -1,5 +1,9 @@
 import fs from "node:fs/promises";
 import path from "node:path";
+import {
+  createMessageReceiptFromOutboundResults,
+  type MessageReceiptPart,
+} from "openclaw/plugin-sdk/channel-outbound";
 import { PlatformMessageNotDispatchedError } from "openclaw/plugin-sdk/error-runtime";
 import * as mediaRuntime from "openclaw/plugin-sdk/media-runtime";
 import {
@@ -12,6 +16,7 @@ import * as webMedia from "openclaw/plugin-sdk/web-media";
 import { afterEach, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
 import { deliverReplies } from "./bot/delivery.js";
 import { createTelegramPromptContextProjectionSequence } from "./prompt-context-projection.js";
+import type { TelegramSendResult } from "./send-message-types.js";
 import { editMessageTelegram, sendLocationTelegram, sendMessageTelegram } from "./send.js";
 import {
   resolveTelegramTestUpload,
@@ -21,6 +26,7 @@ import {
 describe("Telegram send recovery conformance over HTTP", () => {
   const emptyMessage = "Bad Request: text must be non-empty";
   const writeForbidden = "Bad Request: CHAT_WRITE_FORBIDDEN";
+  const effectId = "5104841245755180586";
   const fixture = useTelegramHttpFixture();
   const { cfg, requests, rejections, runtime, buttons } = fixture;
   const sendThrough = (
@@ -114,17 +120,110 @@ describe("Telegram send recovery conformance over HTTP", () => {
     ({ bot, photoPath } = fixture);
   });
 
+  it.each([
+    { length: 4000, mode: "batched", topic: undefined, replies: [431] },
+    { length: 4000, mode: "batched", topic: 47, replies: [431] },
+    { length: 4001, mode: "batched", topic: undefined, replies: [undefined, undefined] },
+    { length: 4001, mode: "batched", topic: 47, replies: [undefined, undefined] },
+    { length: 4001, mode: "all", topic: 47, replies: [431, 431] },
+  ] as const)(
+    "reports native replies for $length characters in $mode mode with topic $topic",
+    async ({ length, mode, topic, replies }) => {
+      const reported: TelegramSendResult[] = [];
+      const result = await sendMessageTelegram("-100123", "x".repeat(length), {
+        api: bot.api,
+        cfg: configWith({ richMessages: false }),
+        messageThreadId: topic,
+        replyToMessageId: 431,
+        replyToIdSource: "implicit",
+        replyToMode: mode,
+        textLimit: 4000,
+        onDeliveryResult: (delivery) => {
+          reported.push(structuredClone(delivery));
+        },
+      });
+      expectMethods(...replies.map(() => "sendMessage"));
+      expectFields({
+        message_thread_id: replies.map(() => topic),
+        text: length === 4000 ? ["x".repeat(4000)] : ["x".repeat(4000), "x"],
+        reply_to_message_id: [...replies],
+        reply_parameters: replies.map(() => undefined),
+      });
+      const receipt = createMessageReceiptFromOutboundResults({
+        results: [result],
+        replyToId: "431",
+      });
+      expect(receipt.replyToId).toBe("431");
+      const placement = (parts: MessageReceiptPart[]) =>
+        parts.map((part) => [
+          part.platformMessageId,
+          part.threadId,
+          part.replyToId,
+          part.nativeReplyAbsent,
+        ]);
+      const expected = replies.map((reply, index) => [
+        String(index + 1),
+        topic?.toString(),
+        reply?.toString(),
+        reply === undefined ? true : undefined,
+      ]);
+      expect(placement(reported.flatMap((delivery) => delivery.receipt?.parts ?? []))).toEqual(
+        expected,
+      );
+      expect(placement(receipt.parts)).toEqual(expected);
+      expect(receipt.parts.map((part) => part.index)).toEqual(replies.map((_, index) => index));
+    },
+  );
+
+  it("keeps the accepted prefix when a later text page lands in the wrong topic", async () => {
+    fixture.responseFor = () =>
+      requests.length === 2
+        ? {
+            message_id: 2,
+            message_thread_id: 48,
+            chat: { id: -100123, type: "supergroup" },
+          }
+        : undefined;
+    const reported: TelegramSendResult[] = [];
+    const sending = sendMessageTelegram("-100123", "x".repeat(8001), {
+      api: bot.api,
+      cfg: configWith({ richMessages: false }),
+      messageThreadId: 47,
+      replyToMessageId: 431,
+      replyToIdSource: "implicit",
+      replyToMode: "batched",
+      textLimit: 4000,
+      onDeliveryResult: (delivery) => {
+        reported.push(structuredClone(delivery));
+      },
+    });
+    const parts = [
+      { platformMessageId: "1", threadId: "47", nativeReplyAbsent: true },
+      { platformMessageId: "2", threadId: "48", nativeReplyAbsent: true },
+    ];
+    await expectPartial(sending, ["1", "2"], { parts });
+    expect(reported.flatMap(({ receipt }) => receipt?.parts ?? [])).toMatchObject(parts);
+    expectMethods("sendMessage", "sendMessage");
+    expectFields({
+      reply_to_message_id: [undefined, undefined],
+      reply_parameters: [undefined, undefined],
+    });
+  });
+
   it.each(["direct", "public"] as const)(
     "keeps %s first-reply ownership and final controls on multipart rich fallback",
     async (entry) => {
       rejections.push("Bad Request: RICH_MESSAGE_CONTENT_REQUIRED");
+      const pendingEffect = entry === "public" ? effectId : undefined;
       const result = await sendThrough(entry, "A".repeat(4500), undefined, true, {
         firstReply: true,
         textLimit: 32_768,
         linkPreview: false,
+        messageEffectId: pendingEffect,
       });
       expectMethods("sendRichMessage", "sendMessage", "sendMessage");
       expect(requests[0]!.fields.rich_message).toMatchObject({ skip_entity_detection: true });
+      expect(fieldValues("message_effect_id")).toEqual([pendingEffect, pendingEffect, undefined]);
       expectFields(
         {
           parse_mode: [undefined, undefined],
@@ -610,8 +709,10 @@ describe("Telegram send recovery conformance over HTTP", () => {
       replyToMessageId: 7,
       replyToIdSource: "implicit",
       replyToMode: "first",
+      messageEffectId: effectId,
     });
     expect(fieldValues("reply_to_message_id")).toEqual(["7", undefined]);
+    expect(fieldValues("message_effect_id")).toEqual([effectId, undefined]);
   });
 
   it("preserves a mismatched native venue receipt", async () => {

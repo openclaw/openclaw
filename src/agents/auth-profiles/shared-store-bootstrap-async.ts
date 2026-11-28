@@ -1,9 +1,10 @@
-import fs from "node:fs";
 import path from "node:path";
 import { isRecord } from "@openclaw/normalization-core/record-coerce";
+import { canAccess } from "../../infra/path-existence.js";
 import {
-  assertDatabasePathIdentity,
-  inspectDatabasePathIdentitySync,
+  assertDatabasePathIdentityAsync,
+  inspectDatabasePathIdentity,
+  type DatabasePathIdentity,
 } from "../../infra/sqlite-worker-identity.js";
 import {
   createSqliteWorkerOperationAdmission,
@@ -55,17 +56,22 @@ export async function prepareFreshSharedAuthStoreWriteAsync(params: {
     return false;
   }
   const sourcePath = path.join(resolveSharedMainAuthAgentDir(params.env), "openclaw-agent.sqlite");
-  let sourceIdentity: ReturnType<typeof inspectDatabasePathIdentitySync>;
+  let sourceIdentity: DatabasePathIdentity | undefined;
   try {
-    sourceIdentity = inspectDatabasePathIdentitySync(sourcePath);
+    sourceIdentity = await inspectDatabasePathIdentity(sourcePath);
   } catch {
     // Preserve Doctor ownership when the source cannot even be inspected.
   }
   const legacySourcePaths = resolveLegacyAuthProfileSourceCandidates({ env: params.env }).map(
     ({ path: source }) => source,
   );
-  const legacySourcesPresent = legacySourcePaths.map((source) => fs.existsSync(source));
-  const commits = watchAuthProfileNativeCommits(sourcePath);
+  const legacySourcesPresent = await Promise.all(
+    legacySourcePaths.map((source) => canAccess(source)),
+  );
+  const commits = watchAuthProfileNativeCommits(
+    sourceIdentity?.canonicalPath ?? sourcePath,
+    sourceIdentity,
+  );
   const unchanged = commits.capture();
   const assertBinding = () => {
     const currentOwnership = getPreparedSharedAuthStoreOwnership(params.env);
@@ -75,19 +81,18 @@ export async function prepareFreshSharedAuthStoreWriteAsync(params: {
       throw new Error("Shared auth source changed during bootstrap");
     }
   };
+  const prepareSource = async () => {
+    if (sourceIdentity) {
+      await assertDatabasePathIdentityAsync(sourcePath, sourceIdentity);
+    }
+    const present = await Promise.all(legacySourcePaths.map((source) => canAccess(source)));
+    if (present.some((exists, index) => exists !== legacySourcesPresent[index])) {
+      throw new Error("Legacy auth source changed during bootstrap");
+    }
+  };
   const assertSource = () => {
     if (!unchanged()) {
       throw new Error("Shared auth source changed during bootstrap");
-    }
-    if (sourceIdentity) {
-      assertDatabasePathIdentity(sourcePath, sourceIdentity);
-    }
-    if (
-      legacySourcePaths.some(
-        (source, index) => fs.existsSync(source) !== legacySourcesPresent[index],
-      )
-    ) {
-      throw new Error("Legacy auth source changed during bootstrap");
     }
   };
   const assertCurrent = () => {
@@ -108,15 +113,23 @@ export async function prepareFreshSharedAuthStoreWriteAsync(params: {
       {
         assertCurrent,
         createAdmission: () => {
-          const admission = createSqliteWorkerOperationAdmission((request, grant) => {
-            assertCurrent();
-            if (request.stage === "transaction" || request.stage === "commit") {
-              assertSource();
-            }
-            if (!grant()) {
-              throw new Error("Shared auth bootstrap authority expired");
-            }
-          });
+          const admission = createSqliteWorkerOperationAdmission(
+            (request, grant) => {
+              assertCurrent();
+              if (request.stage === "transaction" || request.stage === "commit") {
+                assertSource();
+              }
+              if (!grant()) {
+                throw new Error("Shared auth bootstrap authority expired");
+              }
+            },
+            undefined,
+            async (request) => {
+              if (request.stage === "transaction" || request.stage === "commit") {
+                await prepareSource();
+              }
+            },
+          );
           observeSqliteWorkerCommittedFacts(admission, ({ facts }) => {
             if (!isRecord(facts) || typeof facts.relocated !== "boolean") {
               throw new Error("Shared auth bootstrap returned an invalid commit receipt");
@@ -140,14 +153,15 @@ export async function prepareFreshSharedAuthStoreWriteAsync(params: {
       return acknowledged;
     });
     if (result.relocated) {
-      (context.assertPublicationCurrent ?? context.admission.assertCurrent)();
-      assertBinding();
       let sourceFailure: { error: unknown } | undefined;
       try {
+        await prepareSource();
         assertSource();
       } catch (error) {
         sourceFailure = { error };
       }
+      (context.assertPublicationCurrent ?? context.admission.assertCurrent)();
+      assertBinding();
       // The marker is durable even if the original caller or source has since retired.
       publishFreshSharedAuthStoreHandoff(sourcePath, params.env, !sourceFailure);
       if (sourceFailure) {
@@ -155,10 +169,11 @@ export async function prepareFreshSharedAuthStoreWriteAsync(params: {
       }
       params.assertCurrent?.();
     } else {
-      assertCurrent();
       if (result.ownership.location === "legacy-main") {
+        await prepareSource();
         assertSource();
       }
+      assertCurrent();
       const ownership =
         retainedOwnership?.location === result.ownership.location
           ? retainedOwnership

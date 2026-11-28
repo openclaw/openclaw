@@ -13,8 +13,9 @@ What survives a dropped connection, and how the Control UI recovers when it retu
 An initial connection has a two-second grace period before connection feedback
 appears. A failed or closed connection shows feedback immediately, and retries
 keep it visible until the Gateway connects. Cached conversations retain their
-header controls; the connection indicator fills the header's existing gap without
-moving controls or covering conversation rows. Resolving a session link or loading
+header controls; on desktop the connection indicator floats centered below the
+pane header, for example **Reconnecting… · Saved conversation**, without moving
+header controls or the transcript. Resolving a session link or loading
 history does not imply a lost connection.
 
 Returning to a suspended tab or regaining network connectivity can recover a
@@ -159,6 +160,11 @@ cached transcript opens at its latest messages without an initial scroll animati
 It retains participant and completed-work timing information and the last task
 progress card for display while connecting; live Gateway results replace those
 cached facts in place. Cached progress does not authorize offline actions. The
+Details panel also retains its last child-activity preview while reconnecting.
+The default desktop preview shows up to three ordinary child sessions in both
+the saved and live presentation. **Show more** reveals the remaining live rows.
+Child navigation becomes available only after the complete live child query returns;
+an empty or unavailable result removes the saved preview. The
 header also retains its last three viewer avatars and overflow count for that
 conversation while connecting. The reconnect indicator describes connection
 state; the full live presence roster replaces these last-known viewers when it
@@ -198,9 +204,11 @@ Unique display-name links use the same cached route resolution, including the
 
 Exact conversation links can restore their scoped transcript without waiting for
 the sidebar roster or the socket to open. A prepared snapshot supplies the header,
-transcript, and composer in the first pane frame. Cached content stays visible
-while live history and route confirmation finish; those checks do not show the
-header connection indicator. Dashboard layouts restore before the pane renders, and embedded
+transcript, and composer in the first pane frame, including the selected context-window
+badge and last run action. Stop stays disabled until the live connection confirms
+permission to stop the run. Cached content stays visible while live history and route
+confirmation finish; those checks do not show the header connection indicator.
+Dashboard layouts restore before the pane renders, and embedded
 HTML widgets restore their last board metadata from the same scoped conversation
 cache and start loading the isolated sandbox while connecting. Document requests
 still require the current Gateway connection and overlap the live board refresh.
@@ -283,8 +291,10 @@ recheck the background download policy. English interface code is included; othe
 catalogs, the isolated Mermaid diagram renderer, and plugin-hosted assets are
 excluded from the background inventory and keep their existing loading behavior.
 
-Reloads reuse cached build-versioned fonts, themes, and the web manifest without
-contacting the Gateway. The service worker keeps the current complete build and
+Reloads reuse cached fonts, themes, and the web manifest without contacting the
+Gateway. Their URLs follow the combined public asset content rather than the release ID,
+so updates that leave the public asset set unchanged keep the same cache entries. An
+update from an older release switches to these URLs once. The service worker keeps the current complete build and
 one complete previous generation, so older open documents can still load their
 cached chunks. An incomplete replacement does not discard the last complete shell.
 Unchanged files referenced by the new inventory are retained before older caches
@@ -306,6 +316,105 @@ most reliable way to keep working through intermittent service.
 Until the background download finishes, unvisited views may still need a
 connection. Excluded optional assets and uncached external resources may also
 need a connection.
+
+## Fresh visits during Gateway downtime
+
+A stopped Gateway cannot serve a page or answer health requests. A prepared
+browser can still use the [cached shell](#offline-page-reload), including after
+an HTTP `503`. A first visit, cleared cache, or unavailable browser storage needs
+a response from a server that remains running.
+
+If your deployment already uses a reverse proxy, it can serve a small holding
+page while the Gateway is unavailable. A proxy on the same host covers Gateway
+process restarts, but not a host reboot. Covering a host reboot requires ingress
+on another host. Direct Gateway connections still fail while its listener is down.
+
+### Example: an existing Caddy proxy
+
+Merge this example into your existing Caddy site. Keep authentication before
+`vars` in the same `route`, and retain your upstream address, identity headers,
+and other `reverse_proxy` options. Do not replace your authentication configuration.
+See [trusted proxy auth](/gateway/trusted-proxy-auth) for that boundary.
+
+```caddy
+route {
+    # Keep your existing authentication directives here.
+    vars openclaw_gateway_proxy true
+    reverse_proxy 127.0.0.1:18789 {
+        # Keep your existing proxy options and identity headers here.
+    }
+}
+
+handle_errors 502 503 504 {
+    @gatewayProxy vars openclaw_gateway_proxy true
+    handle @gatewayProxy {
+        header {
+            Cache-Control "no-store"
+            Retry-After "5"
+        }
+        @uiNavigation {
+            method GET HEAD
+            path / /dashboard /dashboard/* /chat /chat/*
+            header Sec-Fetch-Mode navigate
+            header Sec-Fetch-Dest document
+        }
+        handle @uiNavigation {
+            header Content-Type "text/html; charset=utf-8"
+            respond `<!doctype html>
+<html lang="en">
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>OpenClaw temporarily unavailable</title>
+<h1>OpenClaw is temporarily unavailable</h1>
+<p>The Gateway is not responding. It may be restarting or offline.</p>
+<p><a href="">Try again</a> in a few seconds.</p>
+</html>` 503
+        }
+        handle {
+            header Content-Type "application/json"
+            respond `{"error":{"type":"service_unavailable","message":"Gateway temporarily unavailable"}}` 503
+        }
+    }
+    respond "{err.status_text}" {err.status_code}
+}
+```
+
+The request marker limits this response to failures after authentication.
+Authentication failures keep their status. Caddy's
+[`handle_errors`](https://caddyserver.com/docs/caddyfile/directives/handle_errors)
+handles proxy transport failures, not responses received from the Gateway.
+Gateway `401`, `403`, and `503` responses therefore retain their bodies and headers.
+The proxy reports unavailability, not an inferred upgrade or successful operation.
+
+The HTML matcher covers only the listed Control UI routes and browser document
+requests. Other requests receive JSON with HTTP `503`, `Retry-After: 5`, and
+`Cache-Control: no-store`. If you use `gateway.controlUi.basePath`, prefix each
+listed UI path with that value. For `/openclaw`, include both `/openclaw` and
+`/openclaw/` for the root page. Add other UI paths explicitly, without matching
+API, health, download, or plugin endpoints. Keep existing proxy path rewrites.
+
+Validate the merged configuration before reloading your existing proxy:
+
+```bash
+caddy validate --config /etc/caddy/Caddyfile --adapter caddyfile
+```
+
+Test with a disposable Gateway and your existing proxy authentication. With its
+Gateway stopped, an authenticated request can exercise the document matcher:
+
+```bash
+curl -i https://openclaw.example.com/ \
+  -H 'Sec-Fetch-Mode: navigate' -H 'Sec-Fetch-Dest: document'
+curl -i https://openclaw.example.com/healthz
+curl -I https://openclaw.example.com/ \
+  -H 'Sec-Fetch-Mode: navigate' -H 'Sec-Fetch-Dest: document'
+```
+
+Expect HTML `503`, JSON `503`, and a bodyless `503`, respectively. Check the retry
+and cache headers on each response. Unauthenticated requests must still follow
+your proxy's sign-in policy. After starting the test Gateway, check that its
+normal responses pass through. A retry hint does not authorize replaying writes
+whose outcome is unknown.
 
 ## Gateway updates and suspended tabs
 
@@ -432,7 +541,8 @@ or suspension, and red when disconnected or a refresh is required. The sidebar f
 explains the interruption without moving the page and briefly shows **Connected** after recovery.
 With the sidebar collapsed, a flag beside the avatar appears for four seconds on status changes.
 Hover or focus the avatar to reopen it. If the flag would cover a composer or other writing
-controls, the avatar tooltip carries the status instead. The tooltip is hidden while the flag is visible.
+controls, the avatar tooltip shows only the connection status. Hovering or focusing the avatar
+shows no tooltip during normal operation or while the flag is visible.
 On mobile, status replaces the header breadcrumb and badges the menu button; opening the drawer
 shows the full footer row. Initial connection attempts use the two-second grace;
 an observed connection close shows status immediately.
@@ -487,10 +597,12 @@ The account and connection indicators describe identity and connectivity, not me
 The composer count covers only its conversation and does not promise automatic sending.
 Draft text and saved messages awaiting destination recovery are separate.
 
-While a connected chat finishes account recovery, Send stays unavailable and
-explains that recovery is pending. Your draft stays in the composer. Once recovery
-finishes, ordinary messages can enter the queue even if chat history is still loading.
-Stop and approval controls keep their existing availability.
+Send stays unavailable while the browser is making its first Gateway connection
+or the connected chat is finishing account recovery. Your draft stays in the
+composer. Once recovery finishes, ordinary messages can enter the queue even if
+chat history is still loading. If the browser already knows the account for this
+Gateway, you can still queue messages during a disconnect. Stop and approval
+controls keep their existing availability.
 
 These Inbox entries are a read-only view of the current account’s browser-tab/Gateway outbox,
 not a new server-side or cross-device inbox. They show available conversation labels, not message text,

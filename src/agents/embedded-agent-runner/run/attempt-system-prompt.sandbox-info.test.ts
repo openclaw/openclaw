@@ -47,8 +47,9 @@ it.each(cases)("prepares sandbox prompt reporting with elevation $name", async (
     expect(completedPhases).toEqual(
       expect.arrayContaining([
         "attempt.system-prompt.sandbox",
-        "attempt.system-prompt.runtime",
-        "attempt.system-prompt.memory",
+        "attempt.system-prompt.runtime-and-references",
+        "attempt.system-prompt.tool-context",
+        "attempt.system-prompt.context",
         "attempt.system-prompt.render",
         "attempt.system-prompt.report",
       ]),
@@ -101,7 +102,9 @@ it.each(["abort", "close"] as const)(
       if (action === "abort") {
         await expect(refresh).rejects.toBe(reason);
       } else {
-        await expect(refresh).rejects.toThrow("admitted run authority is no longer active");
+        await expect(refresh).rejects.toThrow(
+          "This agent run is no longer active. Start a new turn to retry.",
+        );
       }
     });
   },

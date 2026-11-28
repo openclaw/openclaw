@@ -13,7 +13,7 @@ struct AgentWorkspaceFilesScreen: View {
         ZStack {
             OpenClawProBackground()
             VStack(alignment: .leading, spacing: 0) {
-                if let headerSidebarAction {
+                OpenClawSidebarRevealContent(action: self.headerSidebarAction) { headerSidebarAction in
                     OpenClawAdaptiveHeaderRow(
                         title: "Files",
                         subtitle: .verbatim(self.agentId),
@@ -38,6 +38,47 @@ struct AgentWorkspaceFilesScreen: View {
     }
 }
 
+/// Server-side pagination cursor for the workspace directory list.
+///
+/// The next request offset must track rows the server already served, not the
+/// deduplicated local row count: a file inserted before the cursor between
+/// pages turns the following page into an overlap whose rows dedupe away, so
+/// a row-count offset stalls forever on the final page. When the server
+/// reports the end of the directory while the local list is still short, the
+/// only explanation is that overlap, and only a full reload recovers the
+/// inserted rows. A file deleted before the cursor shifts an unseen row into
+/// offsets already served, so a shrinking total also needs a full reload.
+struct WorkspaceListPagination {
+    private(set) var nextOffset = 0
+    private var servedTotal: Int?
+
+    enum Outcome: Equatable {
+        case advanced
+        case driftDetected
+    }
+
+    mutating func reset() {
+        self.nextOffset = 0
+        self.servedTotal = nil
+    }
+
+    @discardableResult
+    mutating func consume(
+        requestOffset: Int,
+        fetchedCount: Int,
+        totalEntries: Int,
+        localRowCount: Int) -> Outcome
+    {
+        let shrank = self.servedTotal.map { totalEntries < $0 } ?? false
+        self.nextOffset = requestOffset + fetchedCount
+        self.servedTotal = totalEntries
+        if shrank || (self.nextOffset >= totalEntries && localRowCount < totalEntries) {
+            return .driftDetected
+        }
+        return .advanced
+    }
+}
+
 struct AgentWorkspaceDirectoryList: View {
     @Environment(NodeAppModel.self) var appModel
     let agentId: String
@@ -45,6 +86,7 @@ struct AgentWorkspaceDirectoryList: View {
 
     @State private var entries: [AgentsWorkspaceEntry] = []
     @State private var totalEntries = 0
+    @State private var pagination = WorkspaceListPagination()
     @State private var loading = false
     @State private var loadingMore = false
     @State private var errorText: String?
@@ -169,6 +211,12 @@ struct AgentWorkspaceDirectoryList: View {
         if let result = await self.fetchPage(offset: 0) {
             self.entries = result.entries
             self.totalEntries = result.totalentries
+            self.pagination.reset()
+            self.pagination.consume(
+                requestOffset: 0,
+                fetchedCount: result.entries.count,
+                totalEntries: result.totalentries,
+                localRowCount: result.entries.count)
         }
     }
 
@@ -177,10 +225,26 @@ struct AgentWorkspaceDirectoryList: View {
         guard !self.loadingMore else { return }
         self.loadingMore = true
         defer { self.loadingMore = false }
-        if let result = await self.fetchPage(offset: self.entries.count) {
+        let requestOffset = self.pagination.nextOffset
+        if let result = await self.fetchPage(offset: requestOffset) {
             let known = Set(self.entries.map(\.path))
             self.entries.append(contentsOf: result.entries.filter { !known.contains($0.path) })
             self.totalEntries = result.totalentries
+            // Clear the stale error before consume/reload: a failed reload
+            // must be able to leave its own new error visible, and clearing
+            // after the await would erase it.
+            self.errorText = nil
+            if self.pagination.consume(
+                requestOffset: requestOffset,
+                fetchedCount: result.entries.count,
+                totalEntries: result.totalentries,
+                localRowCount: self.entries.count) == .driftDetected
+            {
+                // The directory changed before the cursor between pages, so
+                // offset paging would skip or re-request rows; restart the
+                // listing so the current contents show up.
+                await self.reload()
+            }
         }
     }
 
@@ -218,7 +282,6 @@ struct AgentWorkspaceFilePreview: View {
     @State private var loading = false
     @State private var errorText: String?
     @State private var shareItem: ShareItem?
-    @State private var showsShareError = false
 
     var body: some View {
         ZStack {
@@ -240,14 +303,6 @@ struct AgentWorkspaceFilePreview: View {
         }
         .sheet(item: self.$shareItem) { item in
             OpenClawChatFileShareSheet(fileURL: item.fileURL)
-        }
-        .alert("Could not share this file.", isPresented: self.$showsShareError) {
-            Button {
-                self.showsShareError = false
-            } label: {
-                Text("OK")
-                    .font(OpenClawType.subheadMedium)
-            }
         }
         .task(id: "\(self.agentId)|\(self.path)") {
             await self.load()
@@ -330,15 +385,26 @@ struct AgentWorkspaceFilePreview: View {
                 timeoutSeconds: 20)
             self.file = try JSONDecoder().decode(AgentsWorkspaceGetResult.self, from: data).file
         } catch {
-            self.errorText = "This file cannot be previewed. It may be binary or too large."
+            switch (error as? GatewayResponseError)?.details["type"]?.value as? String {
+            case "workspace_file_too_large", "workspace_file_unsupported":
+                self.errorText = "This file cannot be previewed. It may be binary or too large."
+            default:
+                self.errorText = "Could not read this file. Return to Files and reopen it when available."
+            }
         }
     }
 
     private func share() {
         guard let file else { return }
+        // Share in the toolbar stays the other way to try again.
+        let shareFailed = {
+            self.appModel.toasts.post(.failure(
+                String(localized: "Couldn’t share this file."),
+                retry: { self.share() }))
+        }
         let safeName = (file.name as NSString).lastPathComponent
         guard !safeName.isEmpty, safeName != ".", safeName != ".." else {
-            self.showsShareError = true
+            shareFailed()
             return
         }
         // Each share gets stable bytes at a unique URL; a later same-basename
@@ -351,7 +417,7 @@ struct AgentWorkspaceFilePreview: View {
             try FileManager.default.createDirectory(at: directory, withIntermediateDirectories: true)
             if self.isImage(file) {
                 guard let data = Data(base64Encoded: file.content) else {
-                    self.showsShareError = true
+                    shareFailed()
                     return
                 }
                 try data.write(to: fileURL, options: .atomic)
@@ -360,7 +426,7 @@ struct AgentWorkspaceFilePreview: View {
             }
             self.shareItem = ShareItem(fileURL: fileURL)
         } catch {
-            self.showsShareError = true
+            shareFailed()
         }
     }
 }

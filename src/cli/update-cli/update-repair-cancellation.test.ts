@@ -129,11 +129,12 @@ import { spawn } from "node:child_process";
 import fs from "node:fs";
 import { createRequire } from "node:module";
 createRequire(import.meta.url)(${JSON.stringify(path.join(privateTmp, "private-handoff-guard.cjs"))});
-const now = Date.now;
-Date.now = () => now() - 50 * 60_000;
 const executor = await import(${url("executor")});
 const { createUpdateRun } = await import(${url("runLedger")});
 const { readUpdateRunDriver } = await import(${url("runDriver")});
+// Capture real lifecycle clocks before aging the update records.
+const now = Date.now;
+Date.now = () => now() - 50 * 60_000;
 const run = createUpdateRun({ trigger: "cli", origin: { driver: readUpdateRunDriver(), admission: { owner: "installed" } } });
 await executor.withUpdateCommandExecutor(run.runId, async (owner) => {
   const fence = await owner.enter(${JSON.stringify(slot)});
@@ -266,9 +267,13 @@ unix(
   { timeout: 60_000 },
   async () => {
     const { family, original, runId } = f.crash();
-    await expect(admit("blocked-update")).rejects.toThrow(
-      `Another update executor owns this installation. It retains cancelled update custody (owner ${original.owner}, lease version 4, last activity ${new Date(original.updated_at).toISOString()})`,
-    );
+    await expect(admit("blocked-update")).rejects.toMatchObject({
+      message: expect.stringContaining(
+        `Another update executor owns this installation. It retains cancelled update custody (owner ${original.owner}, lease version 4, last activity ${new Date(original.updated_at).toISOString()})`,
+      ),
+      // Public reports publish this code's fixed sentence instead of the owner.
+      code: "update-executor-owned",
+    });
 
     // A live candidate and then a referencing process each keep the exact family;
     // repair still finishes its own maintenance and reports the blocker.

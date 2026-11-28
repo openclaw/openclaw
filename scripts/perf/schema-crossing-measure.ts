@@ -4,9 +4,14 @@
  * Append `team` to seed arguments for seven-agent scale (35 GiB largest agent,
  * 11.5 GiB shared state, 256 MiB other agents, 62,000 workspace files):
  * ... seed .local/crossing-team 7 1 1429 team
- * Team mode recreates the additive 39→40 crossing on synthetic current schemas.
+ * SCHEMA_CROSSING_TEAM_SCALE scales only database padding when disk is limited;
+ * workspace files and session counts retain the same production shape.
+ * Team mode recreates the additive 41→42 crossing on synthetic current schemas.
+ * SCHEMA_CROSSING_SHARED_MIB overrides shared-state padding independently.
+ * SCHEMA_CROSSING_WAL_MIB leaves that many committed padding pages in the largest
+ * agent's WAL, including a committed session-row change. Preparation is unmeasured.
  * Set SCHEMA_CROSSING_TEMP_ROOT to a task-owned secure staging volume when the
- * fixture volume has shared ancestors; recovery backups stay beside the fixture.
+ * fixture volume has shared ancestors; recovery backups use that volume too.
  * Build each pinned checkout before measurement so bundled Doctor owners exist.
  * Copy that fixture before each run, then:
  * node --import ./scripts/tsx.mjs scripts/perf/schema-crossing-measure.ts run .local/crossing-base [allocation|timing|memory]
@@ -29,6 +34,7 @@ import path from "node:path";
 import { PerformanceObserver } from "node:perf_hooks";
 import { DatabaseSync } from "node:sqlite";
 import { getHeapSpaceStatistics } from "node:v8";
+import { startCollectedHeapSampling } from "../lib/heap-sampling.ts";
 
 const [mode, directory, agentArg = "16", archiveArg = "128", sessionsArg = "625", shape] =
   process.argv.slice(2);
@@ -163,6 +169,8 @@ if (mode === "seed") {
   }
   await closeOpenClawStateDatabaseAsync();
   if (shape === "team") {
+    const databaseScale = Number(process.env.SCHEMA_CROSSING_TEAM_SCALE ?? 1);
+    assert.ok(databaseScale > 0 && databaseScale <= 1);
     const shared = openOpenClawStateDatabase({ env: process.env });
     const sharedPath = shared.path;
     await closeOpenClawStateDatabaseAsync();
@@ -176,17 +184,47 @@ if (mode === "seed") {
         "PRAGMA auto_vacuum=INCREMENTAL; VACUUM; CREATE TABLE synthetic_payload (payload BLOB NOT NULL)",
       );
       const insert = db.prepare("INSERT INTO synthetic_payload VALUES(zeroblob(1048576))");
-      const targetMiB = index === 0 ? 11776 : index === 1 ? 35840 : 256;
+      const targetMiB = Math.ceil(
+        index === 0 && process.env.SCHEMA_CROSSING_SHARED_MIB
+          ? Number(process.env.SCHEMA_CROSSING_SHARED_MIB)
+          : (index === 0 ? 11776 : index === 1 ? 35840 : 256) * databaseScale,
+      );
+      assert.ok(Number.isSafeInteger(targetMiB) && targetMiB > 0);
       db.exec("BEGIN IMMEDIATE");
       for (let row = 0; row < targetMiB; row++) {
         insert.run();
       }
       if (index > 0) {
         db.exec(
-          "DROP TABLE session_creation_operations; PRAGMA user_version=39; UPDATE schema_meta SET schema_version=39 WHERE meta_key='primary'",
+          "DROP TABLE agent_tool_usage; PRAGMA user_version=41; UPDATE schema_meta SET schema_version=41 WHERE meta_key='primary'",
         );
       }
       db.exec("COMMIT; PRAGMA wal_checkpoint(TRUNCATE)");
+    }
+    const walMiB = Number(process.env.SCHEMA_CROSSING_WAL_MIB ?? 0);
+    assert.ok(Number.isSafeInteger(walMiB) && walMiB >= 0);
+    if (walMiB) {
+      const agentPath = paths[1]!;
+      {
+        using db = new DatabaseSync(agentPath);
+        db.exec("PRAGMA journal_mode=WAL; PRAGMA wal_autocheckpoint=0; BEGIN IMMEDIATE");
+        db.prepare("UPDATE synthetic_payload SET payload=randomblob(1048576) WHERE rowid <= ?").run(
+          walMiB,
+        );
+        db.exec(
+          "UPDATE session_nodes SET updated_at=updated_at+1 WHERE rowid=(SELECT min(rowid) FROM session_nodes); COMMIT",
+        );
+        for (const suffix of ["", "-wal", "-shm"]) {
+          fs.copyFileSync(
+            agentPath + suffix,
+            agentPath + suffix + ".frozen",
+            fs.constants.COPYFILE_FICLONE,
+          );
+        }
+      }
+      for (const suffix of ["", "-wal", "-shm"]) {
+        fs.renameSync(agentPath + suffix + ".frozen", agentPath + suffix);
+      }
     }
     const workspace = path.join(stateDir, "workspace");
     fs.mkdirSync(workspace);
@@ -199,7 +237,9 @@ if (mode === "seed") {
       sessions: agents * sessions,
       archiveMiBPerAgent: archiveMiB,
       databaseBytes: paths.map((pathname) => fs.statSync(pathname).size),
-      sourceAgentSchema: 39,
+      databaseScale,
+      sourceAgentSchema: 41,
+      walBytes: fs.statSync(paths[1] + "-wal", { throwIfNoEntry: false })?.size ?? 0,
       canonicalSessionDelivery: true,
       workspaceFiles: 62000,
       workspaceBytes: 62000 * content.length,
@@ -268,12 +308,7 @@ if (mode === "seed") {
   const sampling = agentArg !== "timing" && !forceGc;
   const inspector = new Session();
   if (sampling) {
-    inspector.connect();
-    await inspector.post("HeapProfiler.startSampling", {
-      samplingInterval: 32768,
-      includeObjectsCollectedByMajorGC: true,
-      includeObjectsCollectedByMinorGC: true,
-    });
+    await startCollectedHeapSampling(inspector, 32768);
   }
   let gcMs = 0;
   let gcCount = 0;
@@ -291,6 +326,7 @@ if (mode === "seed") {
   let cleanupMs = 0;
   const { consumeGatewayBootstrapSteps } = await import("../../src/cli/startup-trace.js");
   const started = performance.now();
+  const startedAtMs = Date.now();
   await withCliProcessScope(() =>
     withCliCommandCleanup(false, async (cleanup) => {
       const pluginResources = cleanup?.pluginResources;
@@ -298,7 +334,9 @@ if (mode === "seed") {
       const migrationStarted = performance.now();
       try {
         await pluginResources.run(() =>
-          updateMigrateCommand(path.join(root, "recovery", "native")),
+          updateMigrateCommand(
+            path.join(process.env.SCHEMA_CROSSING_TEMP_ROOT ?? root, "recovery", "native"),
+          ),
         );
       } finally {
         migrationMs = performance.now() - migrationStarted;
@@ -346,8 +384,10 @@ if (mode === "seed") {
   const summary = {
     hostIo: attribution.events,
     integrityRequests: attribution.integrityRequests,
+    snapshotRequests: attribution.snapshotRequests,
     mode: forceGc ? "memory" : sampling ? "allocation" : "timing",
     elapsedMs,
+    startedAtMs,
     migrationMs,
     cleanupMs,
     phases: consumeGatewayBootstrapSteps(),

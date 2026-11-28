@@ -1,3 +1,4 @@
+import { formatCompactTokenCount } from "@openclaw/normalization-core";
 import { estimateTokensFromChars } from "@openclaw/normalization-core/cjk-chars";
 import { asPositiveFiniteNumber } from "@openclaw/normalization-core/number-coercion";
 import { normalizeLowercaseStringOrEmpty } from "@openclaw/normalization-core/string-coerce";
@@ -16,10 +17,14 @@ import { estimateMessageChars } from "../../agents/embedded-agent-runner/tool-re
 import { findModelInCatalog } from "../../agents/model-catalog-lookup.js";
 import { selectModelCatalogRuntimeEntry } from "../../agents/model-catalog-view.js";
 import { resolveModelContextWindowProfile } from "../../agents/model-context-window.js";
+import { NO_MODEL_CONFIGURED_MESSAGE } from "../../agents/model-selection-config.js";
 import type { AgentMessage } from "../../agents/runtime/index.js";
 import { buildSystemPromptReport } from "../../agents/system-prompt-report.js";
 import { resolveEffectiveAgentRuntime } from "../../agents/thinking-runtime.js";
-import { resolveProjectedSessionContextTokens } from "../../config/sessions/context-token-provenance.js";
+import {
+  resolveProjectedSessionContextBudgetStatus,
+  resolveProjectedSessionContextTokens,
+} from "../../config/sessions/context-token-provenance.js";
 import { resolveSessionStorePathForScope } from "../../config/sessions/session-store-path.js";
 import { formatInjectedWorkspaceFileLabel } from "../../config/sessions/session-system-prompt-report.js";
 import {
@@ -27,8 +32,23 @@ import {
   type SessionEntry,
   type SessionSystemPromptReport,
 } from "../../config/sessions/types.js";
-import { readSessionMessagesWithSourceAsync } from "../../gateway/session-transcript-readers.js";
+import type { SessionTranscriptReadScope } from "../../gateway/session-transcript-read.types.js";
+import {
+  readSessionMessagesAsync,
+  readSessionMessagesWithSourceAsync,
+} from "../../gateway/session-transcript-readers.js";
 import { iterateSessionTranscriptSourcePages } from "../../gateway/session-transcript-source-pages.js";
+import type { SessionCostSummary } from "../../infra/session-cost-usage.types.js";
+import {
+  buildContextBudgetCategories,
+  type ContextCategory,
+} from "../../shared/context-budget-categories.js";
+import {
+  formatPromptCacheHitRate,
+  latestRunCacheHitRate,
+  promptCacheHitRate,
+} from "../../shared/prompt-cache-hit-rate.js";
+import { formatUsd } from "../../utils/usage-format.js";
 import type { ReplyPayload } from "../types.js";
 import type { HandleCommandsParams } from "./commands-types.js";
 import { renderContextTreemapPng } from "./context-treemap.js";
@@ -49,6 +69,118 @@ function formatListTop(entries: Array<{ name: string; value: number }>, noun = "
   ];
 }
 
+const CONTEXT_BUDGET_LABELS: Record<ContextCategory["id"], { swatch: string; label: string }> = {
+  messages: { swatch: "🟦", label: "Messages & other" },
+  files: { swatch: "🟧", label: "Workspace files" },
+  tools: { swatch: "🟩", label: "Tool schemas" },
+  skills: { swatch: "🟨", label: "Skills catalog" },
+  system: { swatch: "🟪", label: "System instructions" },
+};
+const CONTEXT_BUDGET_BAR_CELLS = 20;
+// Bounds the tail read; a run longer than this reports the rate of its latest calls.
+const LATEST_RUN_MAX_MESSAGES = 200;
+const LATEST_RUN_MAX_BYTES = 1024 * 1024;
+const formatBudgetTokens = (tokens: number) =>
+  formatCompactTokenCount(tokens, { trimTrailingZero: true });
+
+/** Text form of the Control UI prompt-budget popover, shared by every chat channel. */
+function formatContextBudget(params: {
+  report: SessionSystemPromptReport;
+  used: number | null;
+  limit: number | null;
+  entry?: SessionEntry;
+  /** Recent transcript messages; the latest run's cache rate comes from its model calls. */
+  recentMessages?: readonly unknown[];
+  /** Lifetime usage of this session instance; null when it has no recorded usage. */
+  sessionUsage?: SessionCostSummary | null;
+}): string {
+  const { report, limit } = params;
+  // A fresh session reports zero before its first run; that is no measurement.
+  const used = params.used || null;
+  // Without a fresh usage total, "messages" is unknown rather than a negative remainder.
+  const categories = buildContextBudgetCategories(report, used ?? -1);
+  const known = categories.reduce((sum, category) => sum + (category.tokens ?? 0), 0);
+  const header = [
+    "🧠 Prompt budget",
+    `${used == null ? "?" : formatBudgetTokens(used)} / ${limit ? formatBudgetTokens(limit) : "?"}`,
+    ...(used != null && limit ? [`${Math.min(100, Math.round((used / limit) * 100))}%`] : []),
+  ].join(" · ");
+
+  const lines = [header];
+  if (limit && known > 0) {
+    // Each visible category keeps at least one cell, like the UI's sliver, so a small
+    // share stays legible; the header and legend carry the exact numbers. The cells left
+    // after that minimum go by largest remainder, so the bar never overflows.
+    const shown = categories.filter((category) => (category.tokens ?? 0) > 0);
+    const filled = Math.min(
+      CONTEXT_BUDGET_BAR_CELLS,
+      Math.max(shown.length, Math.round((known / limit) * CONTEXT_BUDGET_BAR_CELLS)),
+    );
+    const exact = shown.map(
+      (category) => ((category.tokens ?? 0) / known) * (filled - shown.length),
+    );
+    const cells = exact.map((value) => 1 + Math.floor(value));
+    for (let spare = filled - cells.reduce((sum, value) => sum + value, 0); spare > 0; spare -= 1) {
+      const next = exact.reduce(
+        (best, value, index) =>
+          value + 1 - cells[index]! > exact[best]! + 1 - cells[best]! ? index : best,
+        0,
+      );
+      cells[next]! += 1;
+    }
+    lines.push(
+      shown
+        .map((category, index) => CONTEXT_BUDGET_LABELS[category.id].swatch.repeat(cells[index]!))
+        .join("") + "⬜".repeat(CONTEXT_BUDGET_BAR_CELLS - filled),
+    );
+  }
+  lines.push("");
+  for (const category of categories) {
+    const { swatch, label } = CONTEXT_BUDGET_LABELS[category.id];
+    const value =
+      category.tokens === null
+        ? category.id === "messages"
+          ? "unknown"
+          : "unverified"
+        : `~${formatBudgetTokens(category.tokens)}`;
+    lines.push(`${swatch} ${label} · ${value}`);
+  }
+
+  const entry = params.entry;
+  const latestRate = latestRunCacheHitRate(params.recentMessages);
+  const latestRun = [
+    latestRate === null ? null : `${formatPromptCacheHitRate(latestRate)} cache`,
+    formatUsd(entry?.estimatedCostUsd),
+  ].filter(Boolean);
+  const total = params.sessionUsage;
+  // Same rules as the Control UI: an unfinished or partly unpriced total is a lower bound,
+  // and usage without any price is never shown as $0.
+  const partial = total ? total.staleSince !== undefined || total.missingCostEntries > 0 : false;
+  const totalRate = total && total.staleSince === undefined ? promptCacheHitRate(total) : null;
+  const sessionTotal = total
+    ? [
+        totalRate === null ? null : `${formatPromptCacheHitRate(totalRate)} cache`,
+        total.totalCost === 0 && total.missingCostEntries > 0
+          ? "unpriced"
+          : `${partial ? "≥ " : ""}${formatUsd(total.totalCost)}`,
+      ].filter(Boolean)
+    : [];
+  if (latestRun.length || sessionTotal.length) {
+    lines.push("");
+    if (latestRun.length) {
+      lines.push(`Latest run: ${latestRun.join(" · ")}`);
+    }
+    if (sessionTotal.length) {
+      lines.push(`Session total: ${sessionTotal.join(" · ")}`);
+    }
+  }
+  if (report.source === "estimate") {
+    lines.push("", "Estimated: no run has been recorded for this session yet.");
+  }
+  lines.push("", "More: /context list · /context detail · /context map · /context json");
+  return lines.join("\n");
+}
+
 function resolveRunContextReport(params: HandleCommandsParams): SessionSystemPromptReport | null {
   const targetSessionEntry = params.sessionStore?.[params.sessionKey] ?? params.sessionEntry;
   const existing = targetSessionEntry?.systemPromptReport;
@@ -63,16 +195,16 @@ function resolveContextReportAgentId(params: HandleCommandsParams): string {
   }).sessionAgentId;
 }
 
-async function* readContextTranscriptPages(
+function resolveContextTranscriptScope(
   params: HandleCommandsParams,
   targetSessionEntry: SessionEntry | undefined,
-): AsyncGenerator<AgentMessage[]> {
+): SessionTranscriptReadScope | null {
   const sessionId = targetSessionEntry?.sessionId?.trim();
   if (!sessionId) {
-    return;
+    return null;
   }
   const agentId = resolveContextReportAgentId(params);
-  for await (const page of iterateSessionTranscriptSourcePages(readSessionMessagesWithSourceAsync, {
+  return {
     agentId,
     sessionId,
     sessionKey: params.sessionKey,
@@ -81,9 +213,38 @@ async function* readContextTranscriptPages(
       sessionKey: params.sessionKey,
       storePath: params.storePath,
     }),
-  })) {
+  };
+}
+
+async function* readContextTranscriptPages(
+  params: HandleCommandsParams,
+  targetSessionEntry: SessionEntry | undefined,
+): AsyncGenerator<AgentMessage[]> {
+  const scope = resolveContextTranscriptScope(params, targetSessionEntry);
+  if (!scope) {
+    return;
+  }
+  for await (const page of iterateSessionTranscriptSourcePages(
+    readSessionMessagesWithSourceAsync,
+    scope,
+  )) {
     yield page.messages as AgentMessage[];
   }
+}
+
+/** Bounded tail read: the latest run's model calls sit after the last user message. */
+async function readLatestRunMessages(
+  params: HandleCommandsParams,
+  targetSessionEntry: SessionEntry | undefined,
+): Promise<unknown[]> {
+  const scope = resolveContextTranscriptScope(params, targetSessionEntry);
+  return scope
+    ? await readSessionMessagesAsync(scope, {
+        mode: "recent",
+        maxMessages: LATEST_RUN_MAX_MESSAGES,
+        maxBytes: LATEST_RUN_MAX_BYTES,
+      })
+    : [];
 }
 
 async function buildTranscriptCompactabilityLines(
@@ -91,7 +252,7 @@ async function buildTranscriptCompactabilityLines(
   targetSessionEntry: SessionEntry | undefined,
 ): Promise<string[]> {
   if (!targetSessionEntry?.sessionId?.trim()) {
-    return ["Compactable transcript: unavailable (no active transcript session)"];
+    return ["Compactable chat history: unavailable (no active session)"];
   }
 
   const isRealConversation = createRealConversationClassifier();
@@ -104,11 +265,11 @@ async function buildTranscriptCompactabilityLines(
     }
   }
   if (!totalMessages) {
-    return ["Compactable transcript: unavailable (no transcript messages found)"];
+    return ["Compactable chat history: unavailable (no messages found)"];
   }
 
   return [
-    `Compactable transcript: ${formatInt(realConversationMessages)} real conversation message(s) / ${formatInt(totalMessages)} transcript message(s)`,
+    `Compactable chat history: ${formatInt(realConversationMessages)} real conversation message(s) / ${formatInt(totalMessages)} history entries`,
     ...(realConversationMessages === 0
       ? [
           "Compaction note: prompt/cache usage may be high even when there are no compactable conversation messages.",
@@ -158,7 +319,7 @@ export async function buildContextReply(params: HandleCommandsParams): Promise<R
   const args = commandBody.startsWith("/context ") ? commandBody.slice(8).trim() : "";
   const sub = normalizeLowercaseStringOrEmpty(args.split(/\s+/).find(Boolean));
 
-  if (!sub || sub === "help") {
+  if (sub === "help") {
     return {
       text: [
         "🧠 /context",
@@ -166,8 +327,9 @@ export async function buildContextReply(params: HandleCommandsParams): Promise<R
         "What counts as context (high-level), plus a breakdown mode.",
         "",
         "Try:",
+        "- /context        (prompt budget: where the context window is going)",
         "- /context list   (short breakdown)",
-        "- /context detail (per-file + per-tool + per-skill + system prompt size + compactable transcript counts)",
+        "- /context detail (per-file + per-tool + per-skill + system prompt size + compactable chat history counts)",
         "- /context map    (WinDirStat-style treemap image)",
         "- /context json   (same, machine-readable)",
         "",
@@ -176,6 +338,10 @@ export async function buildContextReply(params: HandleCommandsParams): Promise<R
     };
   }
 
+  const model = params.model;
+  if (!model) {
+    return { text: NO_MODEL_CONFIGURED_MESSAGE };
+  }
   const cachedContextUsageTokens = resolveFreshSessionTotalTokens(targetSessionEntry);
   const agentId = resolveContextReportAgentId(params);
   const runtime = resolveEffectiveAgentRuntime({
@@ -184,7 +350,7 @@ export async function buildContextReply(params: HandleCommandsParams): Promise<R
     sessionKey: params.sessionKey,
     sessionEntry: targetSessionEntry,
     provider: params.provider,
-    modelId: params.model,
+    modelId: model,
   });
   const { getPreparedModelCatalogSnapshot } =
     await import("../../agents/prepared-model-catalog.js");
@@ -194,7 +360,7 @@ export async function buildContextReply(params: HandleCommandsParams): Promise<R
     agentDir: params.agentDir,
     workspaceDir: params.workspaceDir,
   });
-  const entry = findModelInCatalog(catalog?.entries ?? [], params.provider, params.model);
+  const entry = findModelInCatalog(catalog?.entries ?? [], params.provider, model);
   const modelEntry = entry
     ? selectModelCatalogRuntimeEntry({
         entry,
@@ -211,12 +377,12 @@ export async function buildContextReply(params: HandleCommandsParams): Promise<R
               : ["openclaw", "auto", candidate.provider].includes(runtime),
           ),
           params.provider,
-          params.model,
+          model,
         );
   const modelContext = resolveModelContextTokenProjection({
     cfg: params.cfg,
     provider: params.provider,
-    model: params.model,
+    model,
     modelContextTokens: modelEntry?.contextTokens,
     modelContextWindow: resolveModelContextWindowProfile({
       catalogEntry: modelEntry,
@@ -233,7 +399,7 @@ export async function buildContextReply(params: HandleCommandsParams): Promise<R
       resolveProjectedSessionContextTokens({
         entry: targetSessionEntry,
         provider: params.provider,
-        model: params.model,
+        model,
         agentHarnessId: runtime,
         resolvedContextTokens: modelContext.contextTokens,
         authoredContextTokens: modelContext.authoredContextTokens,
@@ -301,6 +467,35 @@ export async function buildContextReply(params: HandleCommandsParams): Promise<R
 
   const report = await resolveContextReport(params);
 
+  if (!sub) {
+    const { loadCurrentSessionCostSummary } = await import("./commands-session-cost.runtime.js");
+    return {
+      text: formatContextBudget({
+        report,
+        used: cachedContextUsageTokens ?? null,
+        // Same limit as the Control UI: the last run's validated prompt budget, else the window.
+        limit:
+          asPositiveFiniteNumber(
+            resolveProjectedSessionContextBudgetStatus({
+              entry: targetSessionEntry,
+              provider: params.provider,
+              model,
+              contextTokens: session.contextTokens ?? undefined,
+            })?.promptBudgetBeforeReserve,
+          ) ?? session.contextTokens,
+        entry: targetSessionEntry,
+        recentMessages: await readLatestRunMessages(params, targetSessionEntry),
+        sessionUsage: await loadCurrentSessionCostSummary({
+          cfg: params.cfg,
+          sessionKey: params.sessionKey,
+          agentId: params.agentId,
+          sessionEntry: targetSessionEntry,
+          storePath: params.storePath,
+        }),
+      }),
+    };
+  }
+
   if (sub === "json") {
     return { text: JSON.stringify({ report, session }, null, 2) };
   }
@@ -347,7 +542,8 @@ export async function buildContextReply(params: HandleCommandsParams): Promise<R
   const skillsLine = `Skills list (system prompt text): ${formatCharsAndTokens(report.skills.promptChars)} (${skillNames.length} skills)`;
   const skillsNamesLine = `Skills: ${formatNameList(skillNames, 20)}`;
   const toolsNamesLine = `Tools: ${formatNameList(toolNames, 30)}`;
-  const systemPromptLine = `System prompt (${report.source}): ${formatCharsAndTokens(report.systemPrompt.chars)} (Project Context ${formatCharsAndTokens(report.systemPrompt.projectContextChars)})`;
+  const estimatedChars = report.systemPrompt.estimatedChars;
+  const systemPromptLine = `System prompt (${report.source}): ${formatCharsAndTokens(report.systemPrompt.chars)} (Project Context ${formatCharsAndTokens(report.systemPrompt.projectContextChars)}${estimatedChars ? `; estimated ${formatCharsAndTokens(estimatedChars)}` : ""})`;
   const workspaceLabel = report.workspaceDir ?? params.workspaceDir;
   const sessionAgentId = resolveContextReportAgentId(params);
   const bootstrapMaxChars =

@@ -130,6 +130,42 @@ function notifyGatewayRootWorkRelease(
       admissionLog.warn(`root work release observer failed: ${String(error)}`);
     });
   }
+  notifyListeners(
+    [...GATEWAY_WORK_ADMISSION_STATE.rootWorkReleaseListeners],
+    undefined,
+    (error) => {
+      admissionLog.warn(`root work release listener failed: ${String(error)}`);
+    },
+  );
+}
+
+/**
+ * Resolves when no root work outside the caller remains active. Subscriptions never count
+ * (`isActiveRootWork`), so a process that hosts no Gateway cannot wait on listeners or loops.
+ * `onWaiting` reports the count before the first wait; an aborted signal stops waiting.
+ */
+export async function waitForGatewayRootWorkIdle(params: {
+  signal?: AbortSignal;
+  onWaiting?: (count: number) => void;
+}): Promise<void> {
+  let count = getActiveGatewayRootWorkCount({ excludeCurrent: true });
+  if (count === 0 || params.signal?.aborted) {
+    return;
+  }
+  params.onWaiting?.(count);
+  while (count > 0 && !params.signal?.aborted) {
+    const released = createDeferredCore();
+    const unregister = registerListener(
+      GATEWAY_WORK_ADMISSION_STATE.rootWorkReleaseListeners,
+      released.resolve,
+    );
+    try {
+      await racePromiseWithAbortSignal(released.promise, params.signal).catch(() => undefined);
+    } finally {
+      unregister();
+    }
+    count = getActiveGatewayRootWorkCount({ excludeCurrent: true });
+  }
 }
 
 /** Observes the exact root's final release without extending its lifetime. */
@@ -518,19 +554,21 @@ export function runWithGatewayIndependentRootWorkContinuation<T>(
 export function runWithGatewayDetachedWorkContinuation<T>(
   run: () => Promise<T>,
   origin = "independent",
+  signal?: AbortSignal,
 ): Promise<T> {
-  return runWithGatewayRootWorkContinuation(run, origin, true);
+  return runWithGatewayRootWorkContinuation(run, origin, true, signal);
 }
 
 function runWithGatewayRootWorkContinuation<T>(
   run: () => Promise<T>,
   origin: string,
   detachedWork: boolean,
+  signal?: AbortSignal,
 ): Promise<T> {
   const parent = currentRootWork.getStore();
   if (!parent || parent.released) {
     return detachedWork
-      ? runWithGatewayDetachedWorkAdmission(run, origin)
+      ? runWithGatewayDetachedWorkAdmission(run, origin, signal)
       : runWithGatewayIndependentRootWorkAdmission(run, origin, getAsyncWorkSignal());
   }
   const admission = createGatewayRootWorkAdmission(origin, detachedWork);

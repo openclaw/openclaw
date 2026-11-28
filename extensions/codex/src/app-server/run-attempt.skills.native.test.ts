@@ -1,24 +1,92 @@
+import assert from "node:assert/strict";
 import { spawn } from "node:child_process";
 import { once } from "node:events";
 import fs from "node:fs/promises";
 import http from "node:http";
 import path from "node:path";
-import { registerInternalHook } from "openclaw/plugin-sdk/hook-runtime";
+import { initializeGlobalHookRunner, registerInternalHook } from "openclaw/plugin-sdk/hook-runtime";
+import { createMockPluginRegistry } from "openclaw/plugin-sdk/plugin-test-runtime";
+import {
+  clearRuntimeConfigSnapshot,
+  setRuntimeConfigSnapshot,
+} from "openclaw/plugin-sdk/runtime-config-snapshot";
 import { withinTest } from "openclaw/plugin-sdk/test-fixtures";
 import { describe, expect, it, vi } from "vitest";
+import { setCodexTestToolFactory } from "./host-capability.test-support.js";
 import { createCodexNativeTestState } from "./native-app-server.test-support.js";
 import { isJsonObject, type JsonObject } from "./protocol.js";
 import { seedRunSessionOwnerForTest } from "./run-attempt-session-owners.test-support.js";
 import {
+  bindProductionHarnessHostCapabilitiesForTest,
   createNativeRunParams,
+  createParams as createManagedRunParams,
+  createRuntimeDynamicTool,
   runCodexAppServerAttempt,
+  setCodexTestModelSupportsTools,
   setupRunAttemptTestHooks,
   tempDir,
 } from "./run-attempt-test-harness.js";
-import { createIsolatedCodexAppServerClient } from "./shared-client.js";
+import { setAgentWorkspaceForTest } from "./run-attempt-workspace.test-support.js";
+import {
+  createIsolatedCodexAppServerClient,
+  type CodexAppServerClientFactory,
+} from "./shared-client.js";
 
 setupRunAttemptTestHooks();
 vi.unmock("node:child_process");
+
+const relayUpstream = vi.hoisted(() => ({ bodies: [] as JsonObject[] }));
+const RELAY_TOOL_CALLS = 5;
+// The managed relay's upstream is the only synthetic hop: OpenAI-shaped SSE with five tool calls.
+vi.mock("openclaw/plugin-sdk/ssrf-runtime", async (importOriginal) => {
+  const actual = await importOriginal<typeof import("openclaw/plugin-sdk/ssrf-runtime")>();
+  return {
+    ...actual,
+    async fetchWithSsrFGuard(args: Parameters<typeof actual.fetchWithSsrFGuard>[0]) {
+      if (args.url !== "https://api.openai.com/v1/responses") {
+        return actual.fetchWithSsrFGuard(args);
+      }
+      const body: unknown = await new Response(args.init?.body).json();
+      assert(isJsonObject(body));
+      relayUpstream.bodies.push(body);
+      args.beforeRequest?.();
+      const index = relayUpstream.bodies.length;
+      const id = `relay-${index}`;
+      const item =
+        index <= RELAY_TOOL_CALLS
+          ? {
+              type: "function_call",
+              id: `fc-${index}`,
+              call_id: `call-${index}`,
+              name: "update_plan",
+              arguments: JSON.stringify({ plan: [{ step: `step ${index}`, status: "completed" }] }),
+            }
+          : {
+              type: "message",
+              role: "assistant",
+              id: "relay-answer",
+              content: [{ type: "output_text", text: "DONE" }],
+            };
+      const events = [
+        { type: "response.created", response: { id } },
+        { type: "response.output_item.done", item },
+        {
+          type: "response.completed",
+          response: { id, usage: { input_tokens: 10, output_tokens: 2, total_tokens: 12 } },
+        },
+      ];
+      return {
+        response: new Response(
+          events
+            .map((event) => `event: ${event.type}\ndata: ${JSON.stringify(event)}\n\n`)
+            .join(""),
+          { headers: { "content-type": "text/event-stream" } },
+        ),
+        release: async () => {},
+      };
+    },
+  };
+});
 
 const NATIVE_FIRST_CATALOG =
   "<available_skills><skill><name>alpha-native</name><description>Creation-time catalog.</description></skill></available_skills>";
@@ -170,13 +238,18 @@ async function createNativeFixture(modelId: string, contextWindow = 200_000) {
     }
   }
   const fixture = await startResponsesFixture();
-  await writeCodexFixtureConfig({
-    root,
-    codexHome: native.codexHome,
-    modelId,
-    port: fixture.port,
-    contextWindow,
-  });
+  try {
+    await writeCodexFixtureConfig({
+      root,
+      codexHome: native.codexHome,
+      modelId,
+      port: fixture.port,
+      contextWindow,
+    });
+  } catch (error) {
+    await fixture.close();
+    throw error;
+  }
   const attemptOptions: Parameters<typeof runCodexAppServerAttempt>[1] = {
     pluginConfig: {
       appServer: {
@@ -201,46 +274,96 @@ async function createNativeFixture(modelId: string, contextWindow = 200_000) {
 }
 
 describe("native Codex skill delivery", () => {
-  it("delivers the ordinary root catalog when model metadata owns collaboration instructions", async () => {
-    const { fixture, attemptOptions, createParams } =
-      await createNativeFixture("skill-carrier-model");
-    let client: Awaited<ReturnType<typeof createIsolatedCodexAppServerClient>> | undefined;
-    try {
-      const params = createParams("session.jsonl");
-      params.prompt = "What is the weather in Wilmington today?";
-      const otherSkills = Array.from(
-        { length: 40 },
-        (_, index) =>
-          `<skill><name>synthetic-${index}</name><description>${"Unrelated task capability. ".repeat(8)}</description><location>/synthetic/${index}/SKILL.md</location></skill>`,
-      ).join("");
-      params.skillsSnapshot = {
-        prompt: `<available_skills>${otherSkills}<skill><name>weather</name><description>Current weather and forecasts.</description><location>/synthetic/weather/SKILL.md</location></skill></available_skills>`,
-        skills: [],
-      };
-      const result = await runCodexAppServerAttempt(params, {
-        ...attemptOptions,
-        clientFactory: async (options) => {
-          client = await createIsolatedCodexAppServerClient(options);
-          return client;
-        },
-      });
-      expect(result.terminal).toEqual({ kind: "ok" });
-      expect(fixture.requests).toHaveLength(1);
-      const input = fixture.requests[0]?.input;
-      expect(Array.isArray(input)).toBe(true);
-      const developerMessages = Array.isArray(input)
-        ? input.filter((item) => isJsonObject(item) && item.role === "developer")
-        : [];
-      const developerText = JSON.stringify(developerMessages);
-      expect(developerText).toContain("Synthetic model-owned Default policy.");
-      expect(developerText).toContain(params.skillsSnapshot.prompt);
-    } finally {
-      if (client) {
-        expect(await client.closeAndWait()).toMatchObject({ exited: true });
+  it.each([
+    {
+      label: "neither question tool",
+      restricted: true,
+      askUser: false,
+      defaultQuestions: false,
+      nativeTool: false,
+    },
+    {
+      label: "callable Ask User",
+      restricted: false,
+      askUser: true,
+      defaultQuestions: false,
+      nativeTool: false,
+    },
+    {
+      label: "registered but Default-ineligible native questions",
+      restricted: false,
+      askUser: false,
+      defaultQuestions: false,
+      nativeTool: true,
+    },
+    {
+      label: "Default-eligible native questions",
+      restricted: false,
+      askUser: true,
+      defaultQuestions: true,
+      nativeTool: true,
+    },
+  ])(
+    "delivers skills and capability-aware collaboration for $label",
+    async ({ restricted, askUser, defaultQuestions, nativeTool }) => {
+      const { native, fixture, attemptOptions, createParams } =
+        await createNativeFixture("skill-carrier-model");
+      let client: Awaited<ReturnType<typeof createIsolatedCodexAppServerClient>> | undefined;
+      try {
+        const params = createParams("session.jsonl");
+        params.disableTools = restricted;
+        if (!restricted) {
+          setCodexTestModelSupportsTools(params, true);
+        }
+        setCodexTestToolFactory(params, () =>
+          askUser ? [createRuntimeDynamicTool("ask_user")] : [],
+        );
+        await fs.appendFile(
+          path.join(native.codexHome, "config.toml"),
+          `\n[features]\ndefault_mode_request_user_input=${defaultQuestions}\n` +
+            (restricted ? "[tools.experimental_request_user_input]\nenabled=false\n" : ""),
+        );
+        params.prompt = "What is the weather in Wilmington today?";
+        const otherSkills = Array.from(
+          { length: 40 },
+          (_, index) =>
+            `<skill><name>synthetic-${index}</name><description>${"Unrelated task capability. ".repeat(8)}</description><location>/synthetic/${index}/SKILL.md</location></skill>`,
+        ).join("");
+        params.skillsSnapshot = {
+          prompt: `<available_skills>${otherSkills}<skill><name>weather</name><description>Current weather and forecasts.</description><location>/synthetic/weather/SKILL.md</location></skill></available_skills>`,
+          skills: [],
+        };
+        const result = await runCodexAppServerAttempt(params, {
+          ...attemptOptions,
+          clientFactory: async (options) => {
+            client = await createIsolatedCodexAppServerClient(options);
+            return client;
+          },
+        });
+        expect(result.terminal).toEqual({ kind: "ok" });
+        expect(fixture.requests).toHaveLength(1);
+        const input = fixture.requests[0]?.input;
+        expect(Array.isArray(input)).toBe(true);
+        const developerMessages = Array.isArray(input)
+          ? input.filter((item) => isJsonObject(item) && item.role === "developer")
+          : [];
+        const developerText = JSON.stringify(developerMessages);
+        expect(developerText).not.toContain("Synthetic model-owned Default policy.");
+        expect(developerText).not.toContain("# Collaboration Mode: Default");
+        expect(developerText.includes("request_user_input")).toBe(defaultQuestions);
+        const tools = JSON.stringify(fixture.requests[0]?.tools);
+        expect(tools.includes('"name":"request_user_input"')).toBe(nativeTool);
+        expect(JSON.stringify(fixture.requests[0]).includes("ask_user")).toBe(askUser);
+        expect(developerText).toContain(params.skillsSnapshot.prompt);
+      } finally {
+        if (client) {
+          expect(await client.closeAndWait()).toMatchObject({ exited: true });
+        }
+        await fixture.close();
       }
-      await fixture.close();
-    }
-  }, 45_000);
+    },
+    45_000,
+  );
 
   it("delivers and refreshes persona through an external WebSocket Harness", async ({ signal }) => {
     const { native, fixture, createParams } = await createNativeFixture("persona-carrier-model");
@@ -301,6 +424,7 @@ describe("native Codex skill delivery", () => {
         } else {
           await fs.unlink(soulPath);
         }
+        const before = fixture.requests.length;
         const params = createParams("remote-persona.jsonl");
         params.disableTools = false;
         params.runId = `remote-persona-${index}`;
@@ -337,30 +461,37 @@ describe("native Codex skill delivery", () => {
         expect(result.systemPromptReport?.injectedWorkspaceFiles).toContainEqual(
           expect.objectContaining({ path: personalPath, injectedChars: 0, truncated: false }),
         );
-        const text = developerMessageText(fixture.requests.at(-1));
+        expect(fixture.requests).toHaveLength(before + 1);
+        const request = fixture.requests.at(-1);
+        expect(developerMessageText(request)).not.toContain(
+          "Synthetic model-owned Default policy.",
+        );
+        // Inspect the latest framed policy: historical messages may retain old persona.
+        const input = request?.input;
+        const policy = Array.isArray(input)
+          ? input.findLast(
+              (item) =>
+                isJsonObject(item) &&
+                item.role === "developer" &&
+                JSON.stringify(item).includes("<thread_policy>"),
+            )
+          : undefined;
+        expect(policy).toBeDefined();
+        const text = JSON.stringify(policy);
         expect(text).toContain(sharedUser);
-        expect(text).toContain("Synthetic model-owned Default policy.");
+        expect(text).not.toContain("Synthetic model-owned Default policy.");
+        expect(text).not.toContain("# Collaboration Mode: Default");
+        expect(text).not.toContain("request_user_input");
+        if (index > 0) {
+          expect(text).toContain("All earlier collaboration-mode instructions are withdrawn");
+        }
         if (soul) {
           expect(text).toContain(soul);
-          if (index === 1) {
-            expect(text.lastIndexOf(editedSoul)).toBeGreaterThan(text.lastIndexOf(firstSoul));
-          }
         } else {
-          // Resume replaces the current section; historical turns may still
-          // contain old text, so inspect the latest policy handoff.
-          const latestDeveloper = fixture.requests.at(-1)?.input;
-          expect(Array.isArray(latestDeveloper)).toBe(true);
-          const handoffs = Array.isArray(latestDeveloper)
-            ? latestDeveloper.filter(
-                (item) =>
-                  isJsonObject(item) &&
-                  item.role === "developer" &&
-                  JSON.stringify(item).includes("complete current OpenClaw"),
-              )
-            : [];
-          expect(handoffs.length).toBeGreaterThan(0);
-          expect(JSON.stringify(handoffs.at(-1))).not.toContain(editedSoul);
-          expect(JSON.stringify(handoffs.at(-1))).not.toContain(firstSoul);
+          expect(text).not.toContain(editedSoul);
+        }
+        if (index > 0) {
+          expect(text).not.toContain(firstSoul);
         }
       }
       expect(threadIds.size).toBe(1);
@@ -378,14 +509,13 @@ describe("native Codex skill delivery", () => {
   }, 90_000);
 
   it.each([
-    {
-      label: "a withdrawn catalog",
-      refreshed: undefined,
-      current: "refreshable thread instructions are empty",
-    },
+    { thread: "incognito", sessionKey: "agent:main:dashboard:incognito-native-compaction" },
+    { thread: "persistent", sessionKey: "agent:main:native-compaction" },
   ])(
-    "keeps $label visible to the model after native compaction rebuilds the incognito thread",
-    async ({ refreshed, current }) => {
+    "keeps a withdrawn catalog withdrawn after native compaction rebuilds the $thread thread",
+    async ({ thread, sessionKey }) => {
+      const incognito = thread === "incognito";
+      const current = "refreshable thread instructions are empty";
       // auto_compact_token_limit resolves to 900, so a turn reporting 5_000
       // tokens forces the next turn to compact before it samples.
       const { fixture, attemptOptions, createParams } = await createNativeFixture(
@@ -393,13 +523,12 @@ describe("native Codex skill delivery", () => {
         1_000,
       );
       const overAutoCompactLimitTokens = 5_000;
-      const sessionKey = `agent:main:dashboard:incognito-native-compaction-${refreshed ? "edit" : "removal"}`;
       await seedRunSessionOwnerForTest("session-1", sessionKey);
       let client: Awaited<ReturnType<typeof createIsolatedCodexAppServerClient>> | undefined;
       try {
         const runTurn = async (runId: string, catalog: string | undefined, prompt: string) => {
           const before = fixture.requests.length;
-          const params = createParams("incognito-compaction-session.jsonl", sessionKey);
+          const params = createParams(`${thread}-compaction-session.jsonl`, sessionKey);
           // A native-tool-restricted turn always starts a transient thread, which
           // would replace the live incognito thread this regression depends on.
           params.disableTools = false;
@@ -424,11 +553,15 @@ describe("native Codex skill delivery", () => {
         expect(developerMessageText(creationRequest)).toContain(NATIVE_FIRST_CATALOG);
 
         fixture.usage.tokens = overAutoCompactLimitTokens;
-        const [refreshRequest] = await runTurn("run-2", refreshed, "second");
-        expect(developerMessageText(refreshRequest)).toContain(current);
+        const [refreshRequest] = await runTurn("run-2", undefined, "second");
+        // An ephemeral thread has no resume source and takes a handoff; an idle persistent
+        // thread cold-resumes, so its native configuration drops the catalog.
+        if (incognito) {
+          expect(developerMessageText(refreshRequest)).toContain(current);
+        }
 
         fixture.usage.tokens = 10;
-        const compactionTurn = await runTurn("run-3", refreshed, "third");
+        const compactionTurn = await runTurn("run-3", undefined, "third");
         // Codex summarizes, then resumes the same turn against the rebuilt context.
         const summarizationIndex = compactionTurn.findIndex((request) =>
           JSON.stringify(request).includes("You are performing a CONTEXT CHECKPOINT COMPACTION."),
@@ -436,19 +569,31 @@ describe("native Codex skill delivery", () => {
         expect(summarizationIndex).toBeGreaterThanOrEqual(0);
         const continuationRequest = compactionTurn[summarizationIndex + 1];
         expect(continuationRequest).toBeDefined();
-        // The rebuilt context restores the creation-time carrier and drops the
-        // client-authored refresh, which is exactly the reversion under test.
-        expect(developerMessageText(continuationRequest)).toContain(NATIVE_FIRST_CATALOG);
-        expect(developerMessageText(continuationRequest)).not.toContain(current);
+        const continuation = developerMessageText(continuationRequest);
+        // The rebuilt context restores the native carrier and drops client-authored
+        // handoffs: an ephemeral thread's creation catalog reverts for this request.
+        if (incognito) {
+          expect(continuation).toContain(NATIVE_FIRST_CATALOG);
+          expect(continuation).not.toContain(current);
+        } else {
+          expect(continuation).not.toContain(NATIVE_FIRST_CATALOG);
+        }
+        expect(continuation).toContain("silence is not an answer or approval");
+        expect(continuation).not.toContain("Synthetic model-owned Default policy.");
+        expect(continuation).not.toContain("request_user_input");
 
-        const [restoredRequest] = await runTurn("run-4", refreshed, "fourth");
+        const [restoredRequest] = await runTurn("run-4", undefined, "fourth");
         const restored = developerMessageText(restoredRequest);
-        expect(restored).toContain(current);
-        // The creation-time catalog is immutable on an ephemeral thread, so the
-        // proof is that the current catalog is the model's latest instruction.
-        expect(restored.lastIndexOf(current)).toBeGreaterThan(
-          restored.lastIndexOf(NATIVE_FIRST_CATALOG),
-        );
+        if (incognito) {
+          expect(restored).toContain(current);
+          // The creation-time catalog is immutable on an ephemeral thread, so the
+          // proof is that the current catalog is the model's latest instruction.
+          expect(restored.lastIndexOf(current)).toBeGreaterThan(
+            restored.lastIndexOf(NATIVE_FIRST_CATALOG),
+          );
+        } else {
+          expect(restored).not.toContain(NATIVE_FIRST_CATALOG);
+        }
       } finally {
         if (client) {
           await client.closeAndWait();
@@ -458,4 +603,118 @@ describe("native Codex skill delivery", () => {
     },
     180_000,
   );
+
+  it("keeps managed skills in the cached native prefix across a multi-request turn", async () => {
+    const native = await createCodexNativeTestState(path.join(tempDir, "relay-native"));
+    const childEnv = Object.fromEntries(
+      Object.entries(native.env).filter(
+        (entry): entry is [string, string] => entry[1] !== undefined,
+      ),
+    );
+    for (const [name, value] of Object.entries(native.env)) {
+      if (name !== "PATH") {
+        vi.stubEnv(name, value);
+      }
+    }
+    vi.stubEnv("OPENCLAW_STATE_DIR", path.join(tempDir, "relay-state"));
+    await seedRunSessionOwnerForTest("session-1", "agent:main:session-1");
+    relayUpstream.bodies = [];
+    const skillMarker = "SYNTHETIC_STABLE_SKILL_MARKER";
+    const turnMarker = "SYNTHETIC_TURN_PLUGIN_CONTEXT";
+    let client: Awaited<ReturnType<typeof createIsolatedCodexAppServerClient>> | undefined;
+    let closeHost: (() => void) | undefined;
+    try {
+      // An OpenAI-named provider on the standard endpoint selects the managed relay.
+      await fs.writeFile(
+        path.join(native.codexHome, "config.toml"),
+        [
+          'model="gpt-5.6-luna"',
+          'model_provider="relay-fixture"',
+          'cli_auth_credentials_store="ephemeral"',
+          'web_search="disabled"',
+          'approval_policy="never"',
+          'sandbox_mode="read-only"',
+          "allow_login_shell=false",
+          "[features]",
+          "shell_snapshot=false",
+          "code_mode=false",
+          "[model_providers.relay-fixture]",
+          'name="OpenAI"',
+          'base_url="https://api.openai.com/v1"',
+          'wire_api="responses"',
+          "requires_openai_auth=false",
+          "supports_websockets=false",
+          "request_max_retries=0",
+          "stream_max_retries=0",
+        ].join("\n"),
+      );
+      initializeGlobalHookRunner(
+        createMockPluginRegistry([
+          { hookName: "before_prompt_build", handler: () => ({ appendSystemContext: turnMarker }) },
+        ]),
+      );
+      const factory: CodexAppServerClientFactory = async (options) => {
+        const startOptions = options?.startOptions;
+        assert(startOptions?.commandSource === "managed");
+        client ??= await createIsolatedCodexAppServerClient({
+          ...options,
+          startOptions: {
+            ...startOptions,
+            managedCommandOrder: "package-only",
+            transport: "stdio",
+            args: startOptions.args ?? ["app-server"],
+            cwd: native.cwd,
+            headers: {},
+            env: childEnv,
+            clearEnv: Object.keys(process.env).filter((name) => !(name in childEnv)),
+          },
+        });
+        return client;
+      };
+      const params = createManagedRunParams(path.join(tempDir, "relay-session.jsonl"), native.cwd, {
+        prompt: `Make ${RELAY_TOOL_CALLS} update_plan calls, then reply DONE.`,
+      });
+      params.modelId = "gpt-5.6-luna";
+      params.model = { ...params.model, id: params.modelId, name: params.modelId };
+      params.timeoutMs = 60_000;
+      params.permissionMode = "full";
+      params.skillsSnapshot = {
+        prompt: `<available_skills><skill><name>weather</name><description>${skillMarker}</description><location>/synthetic/weather/SKILL.md</location></skill></available_skills>`,
+        skills: [],
+      };
+      setCodexTestModelSupportsTools(params, true);
+      setAgentWorkspaceForTest(params, native.cwd);
+      assert(params.config);
+      setRuntimeConfigSnapshot(params.config);
+      closeHost = await bindProductionHarnessHostCapabilitiesForTest(params);
+      const result = await runCodexAppServerAttempt(params, {
+        clientFactory: factory,
+        pluginConfig: { appServer: { homeScope: "user", args: ["app-server"] } },
+      });
+      expect(result.assistantTexts.join("\n").trim()).toBe("DONE");
+      const bodies = relayUpstream.bodies;
+      expect(bodies).toHaveLength(RELAY_TOOL_CALLS + 1);
+      for (const [index, body] of bodies.entries()) {
+        // Stable context sits once in cached developer input; per-turn context stays request-local.
+        const instructions = typeof body.instructions === "string" ? body.instructions : "";
+        expect(instructions).toContain(turnMarker);
+        expect(instructions).not.toContain(skillMarker);
+        expect(developerMessageText(body).split(skillMarker)).toHaveLength(2);
+        expect(JSON.stringify(body.input)).not.toContain(turnMarker);
+        const previous = bodies[index - 1]?.input;
+        if (Array.isArray(previous) && Array.isArray(body.input)) {
+          expect(body.input.slice(0, previous.length)).toEqual(previous);
+        }
+      }
+    } finally {
+      try {
+        if (client) {
+          expect(await client.closeAndWait()).toMatchObject({ exited: true });
+        }
+      } finally {
+        closeHost?.();
+        clearRuntimeConfigSnapshot();
+      }
+    }
+  }, 120_000);
 });

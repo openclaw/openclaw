@@ -333,6 +333,7 @@ export class NewSessionDraftPersistence {
       mutation: this.mutation,
       revision: this.revision,
       incognito: this.read().incognito,
+      permissionMode: this.read().permissionMode,
       pendingEdit:
         this.mutationGeneration > this.pristineMutationBaseline &&
         this.mutation.committedRevision === 0,

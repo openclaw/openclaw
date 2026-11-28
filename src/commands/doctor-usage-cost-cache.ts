@@ -4,12 +4,21 @@ import path from "node:path";
 import { note } from "../../packages/terminal-core/src/note.js";
 import { resolveStateDir } from "../config/paths.js";
 import { formatErrorMessage, hasErrnoCode } from "../infra/errors.js";
+import { hasRetiredSessionCostUsageCacheEntriesInDatabase } from "../infra/session-cost-usage-cache.kernel.js";
 import { retireLegacySessionCostUsageCache } from "../infra/session-cost-usage-cache.sqlite.js";
 import { openUsageCostRefreshFailures } from "../infra/session-cost-usage-refresh-health.js";
+import { readOnlyOpenWouldCreateSqliteSidecars } from "../infra/sqlite-files.js";
+import { withOpenClawAgentDatabaseReadOnly } from "../state/openclaw-agent-db-readonly.js";
 import { listOpenClawRegisteredAgentDatabases } from "../state/openclaw-agent-db.js";
+import { resolveOpenClawStateSqlitePath } from "../state/openclaw-state-db.paths.js";
 import { shortenHomePath } from "../utils.js";
 import { runDoctorAgentDatabaseOperationAsync } from "./doctor-agent-database-operation.js";
-import { maybeScrubConfigAuditLog } from "./doctor-config-audit-scrub.js";
+import {
+  detectConfigAuditScrubIssue,
+  maybeScrubConfigAuditLog,
+} from "./doctor-config-audit-scrub.js";
+import { decideDoctorPendingFromLiveStores } from "./doctor-live-store-pending.js";
+import type { DoctorMaintenancePending } from "./doctor-maintenance-pending.js";
 
 const LEGACY_USAGE_COST_TEMP_GRACE_MS = 10_000;
 const LEGACY_USAGE_COST_TEMP_PATTERNS = [
@@ -121,12 +130,18 @@ async function maybeRemoveLegacyUsageCostCacheFiles(params: {
   );
 }
 
+const resolveLegacySkillUploadRoot = (env: NodeJS.ProcessEnv = process.env) =>
+  path.join(resolveStateDir(env, os.homedir), "tmp", "skill-uploads");
+
+// Installs from 2026.8 kept prior Control UI builds here; reload recovery replaced them.
+const resolveObsoleteControlUiAssetCache = (env: NodeJS.ProcessEnv = process.env) =>
+  path.join(resolveStateDir(env, os.homedir), "cache", "control-ui-assets");
+
 async function maybeRemoveLegacySkillUploadTree(params: {
   shouldRepair: boolean;
   env?: NodeJS.ProcessEnv;
 }): Promise<void> {
-  const stateDir = resolveStateDir(params.env ?? process.env, os.homedir);
-  const uploadRoot = path.join(stateDir, "tmp", "skill-uploads");
+  const uploadRoot = resolveLegacySkillUploadRoot(params.env);
   try {
     await fs.lstat(uploadRoot);
     if (!params.shouldRepair) {
@@ -152,16 +167,11 @@ async function maybeRemoveLegacySkillUploadTree(params: {
   );
 }
 
-// Installs from 2026.8 kept prior Control UI builds here; reload recovery replaced them.
 async function maybeRemoveObsoleteControlUiAssetCache(params: {
   shouldRepair: boolean;
   env?: NodeJS.ProcessEnv;
 }): Promise<string[]> {
-  const cacheRoot = path.join(
-    resolveStateDir(params.env ?? process.env, os.homedir),
-    "cache",
-    "control-ui-assets",
-  );
+  const cacheRoot = resolveObsoleteControlUiAssetCache(params.env);
   try {
     await fs.lstat(cacheRoot);
     if (!params.shouldRepair) {
@@ -184,6 +194,84 @@ async function maybeRemoveObsoleteControlUiAssetCache(params: {
     }
   }
   return [];
+}
+
+/**
+ * Read-only: whether `retireLegacySessionCostUsageCache` would delete a row in this existing
+ * database file. One without the agent schema is work, so the retire path keeps owning it. A
+ * file the reader will not open (an incognito path, or one fenced while its agent is deleted)
+ * is undecidable here, so the retire path still runs for it.
+ */
+function inspectRetiredSessionCostUsageCacheEntries(
+  entry: { agentId: string; path: string },
+  env?: NodeJS.ProcessEnv,
+): DoctorMaintenancePending {
+  const inspected = withOpenClawAgentDatabaseReadOnly(
+    ({ db }) => hasRetiredSessionCostUsageCacheEntriesInDatabase(db),
+    { agentId: entry.agentId, env, path: entry.path },
+  );
+  if (inspected.found) {
+    return inspected.value ? "work" : "none";
+  }
+  return inspected.reason === "schema-missing" ? "work" : "undecidable";
+}
+
+function retiredUsageCacheEntriesMayExist(
+  entry: { agentId: string; path: string },
+  env?: NodeJS.ProcessEnv,
+): boolean {
+  try {
+    // A database no connection holds open goes straight to the retire path: its write
+    // connection removes the sidecars on close, which a read-only open would leave behind.
+    return (
+      readOnlyOpenWouldCreateSqliteSidecars(entry.path) ||
+      inspectRetiredSessionCostUsageCacheEntries(entry, env) !== "none"
+    );
+  } catch {
+    // The retire path reports an unreadable database.
+    return true;
+  }
+}
+
+/**
+ * Read-only: whether `maybeRepairLegacyRuntimeFiles(true)` would change anything. It reuses each
+ * cleanup's own detection; refresh-failure history is only reported.
+ */
+export async function checkLegacyRuntimeFilesPending(
+  env?: NodeJS.ProcessEnv,
+): Promise<DoctorMaintenancePending> {
+  if ((await detectConfigAuditScrubIssue({ env })).rewritten > 0) {
+    return "work";
+  }
+  if ((await detectLegacyUsageCostCacheFiles(env)).length > 0) {
+    return "work";
+  }
+  const retired = await decideDoctorPendingFromLiveStores(
+    [resolveOpenClawStateSqlitePath(env)],
+    async () => {
+      for (const entry of listOpenClawRegisteredAgentDatabases({ env })) {
+        const stats = await readFilesystemEntryOrMissing(entry.path, () => fs.stat(entry.path));
+        const pending = stats?.isFile()
+          ? await decideDoctorPendingFromLiveStores([entry.path], () =>
+              inspectRetiredSessionCostUsageCacheEntries(entry, env),
+            )
+          : "none";
+        if (pending !== "none") {
+          return pending;
+        }
+      }
+      return "none";
+    },
+  );
+  if (retired !== "none") {
+    return retired;
+  }
+  for (const root of [resolveLegacySkillUploadRoot(env), resolveObsoleteControlUiAssetCache(env)]) {
+    if (await readFilesystemEntryOrMissing(root, () => fs.lstat(root))) {
+      return "work";
+    }
+  }
+  return "none";
 }
 
 export async function maybeRepairLegacyRuntimeFiles(
@@ -216,7 +304,8 @@ export async function maybeRepairLegacyRuntimeFiles(
         path: entry.path,
         run: async () => {
           const stats = await readFilesystemEntryOrMissing(entry.path, () => fs.stat(entry.path));
-          if (stats?.isFile()) {
+          // Read first: a clean database needs no write transaction.
+          if (stats?.isFile() && retiredUsageCacheEntriesMayExist(entry, env)) {
             await retireLegacySessionCostUsageCache({
               agentId: entry.agentId,
               env,

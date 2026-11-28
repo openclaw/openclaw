@@ -45,7 +45,10 @@ export function validateDecisionResultV2(
   return validateAdmittedDecisionResultV2(batch, value, capabilities);
 }
 
-/** Internal result boundary for a host-owned, admitted snapshot kept outside provider reach. */
+/**
+ * Internal result boundary for an admitted batch protected from intervening mutation:
+ * a host-owned snapshot outside provider reach, or synchronous conversion with no executable input.
+ */
 export function validateAdmittedDecisionResultV2(
   batch: DecisionBatchV2,
   value: unknown,

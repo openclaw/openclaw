@@ -1,0 +1,4 @@
+# Local and browser Template installation: integrity, authority, unsafe archive, CLI ownership, review consent and diagnostics regressions.
+# Includes explicit consent acceptance, cancellation/staleness, blocked-plan and item-disclosure coverage.
+# Duplicate setup was consolidated while retaining original behavioral assertions: 1120 net lines minus the unchanged global allowance of 400.
+720

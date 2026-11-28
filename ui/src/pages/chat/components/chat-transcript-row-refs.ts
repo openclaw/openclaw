@@ -22,6 +22,11 @@ export class TranscriptRowRefs {
   }
 
   observeConnected(): void {
+    // A missing window means scroll attachment is pending, not no observers.
+    // The host replays retained refs after _willUpdate attaches the window.
+    if (!this.virtualizer.targetWindow) {
+      return;
+    }
     let prepared = false;
     for (const [row, key] of this.mountedRows) {
       if (
@@ -30,7 +35,9 @@ export class TranscriptRowRefs {
         this.callbacks.isCurrentRow(row, key) &&
         this.virtualizer.elementsCache.get(key) !== row
       ) {
-        if (!prepared) {
+        // Observer registration uses cached sizes. Synchronize with its actual
+        // measurement batch instead of forcing layout after the DOM commit.
+        if (!prepared && !this.virtualizer.targetWindow?.ResizeObserver) {
           this.callbacks.beforeMeasure();
           prepared = true;
         }

@@ -9,8 +9,10 @@ import {
 } from "../../config/runtime-snapshot.js";
 import { resolveSessionStorePathCore } from "../../config/sessions/paths.js";
 import * as sessionReads from "../../config/sessions/session-accessor.entry-read-runtime.js";
+import { stageSessionPendingInput } from "../../config/sessions/session-accessor.pending-inputs.js";
 import { replaceSessionEntry } from "../../config/sessions/session-accessor.sqlite-entry.js";
 import type { ResolvedSessionEntryStoreTarget } from "../../config/sessions/session-accessor.types.js";
+import { createUserPendingInput } from "../../config/sessions/session-pending-input.test-support.js";
 import type { SessionEntry } from "../../config/sessions/types.js";
 import { createWorkerSessionPlacementStore } from "../../gateway/worker-environments/placement-store.js";
 import { sessionChanges } from "../../sessions/session-row-changes.js";
@@ -21,7 +23,12 @@ import {
 import { withEnvAsync } from "../../test-utils/env.js";
 import { cleanupSessionStateForTest } from "../../test-utils/session-state-cleanup.js";
 import { createManagedWorktreeOwnerPolicy } from "./owner-protection.js";
-import { IDLE_GC_MS } from "./service.js";
+import { IDLE_GC_MS } from "./retention.js";
+import { ManagedWorktreeService } from "./service.js";
+import {
+  materializeManagedWorktreeFixture,
+  useManagedWorktreeTestRepository,
+} from "./service.test-support.js";
 import type { ManagedWorktreeRecord } from "./types.js";
 
 const mocks = vi.hoisted(() => ({
@@ -158,6 +165,31 @@ const expectCleanupState = (state: ReturnType<typeof policy.readOwnerState>) =>
 const emitRemoval = (sessionKey: string) =>
   sessionChanges.emit({ sessionKey, scope: "session-entry", facts: { kind: "removed" } });
 
+it("skips owner reads when the census has no live session owners", async () => {
+  const listPlacements = vi.fn(emptyPlacementService.listAsync);
+  mocks.placementService.mockReturnValue({ ...emptyPlacementService, listAsync: listPlacements });
+  for (const records of [
+    [],
+    [
+      { ...cleanupRecord, removedAt: 2 },
+      { ...cleanupRecord, ownerKind: "manual" as const },
+    ],
+  ]) {
+    const census = await policy.prepareOwners(records);
+    expect(census.readOwnerState?.("session", key)).toBe("active");
+    expect(census.readOwnerState?.("manual", key)).toBe("other");
+  }
+  expect(readOwners).not.toHaveBeenCalled();
+  expect(listPlacements).not.toHaveBeenCalled();
+
+  const populated = await policy.prepareOwners([cleanupRecord]);
+  expect(populated.readOwnerState?.("session", key)).toBe("retired");
+  expect(listPlacements).toHaveBeenCalledOnce();
+  ownerEntry();
+  const absent = await policy.prepareOwners([cleanupRecord]);
+  expect(absent.readOwnerState?.("session", key)).toBe("retired");
+});
+
 it("uses the worker for cleanup facts and invalidates them after an in-process write", async () => {
   const stateDir = tempDirs.make("worktree-owner-worker-");
   readOwners.mockImplementation(readOwnersInWorker);
@@ -210,6 +242,59 @@ it("classifies a large census off thread and allows archived cleanup until a pla
     sql.restore();
   }
 });
+
+const initializeRepository = useManagedWorktreeTestRepository();
+it.each([
+  ["recent interaction", 2 * 3_600_000, false, false, false],
+  ["expired interaction", IDLE_GC_MS + 3_600_001, false, false, true],
+  ["recent registry", IDLE_GC_MS + 3_600_001, false, false, false],
+  ["archived", 2 * 3_600_000, true, false, true],
+  ["live or queued", IDLE_GC_MS + 3_600_001, false, true, false],
+] as const)(
+  "retains resumable finished owners through the idle window (%s)",
+  async (_case, age, archived, active, removed) => {
+    const stateDir = tempDirs.make("worktree-owner-terminal-history-");
+    readOwners.mockImplementation(readOwnersInWorker);
+    await withEnvAsync({ OPENCLAW_STATE_DIR: stateDir }, async () => {
+      const repoRoot = await initializeRepository(stateDir);
+      const env = { ...process.env, OPENCLAW_STATE_DIR: stateDir };
+      const now = Date.now();
+      const record = await materializeManagedWorktreeFixture({
+        env,
+        stateDir,
+        repoRoot,
+        name: "dashboard",
+        ownerKind: "session",
+        ownerId: key,
+        now: archived || _case === "recent registry" ? now : now - IDLE_GC_MS - 3_600_001,
+      });
+      const service = new ManagedWorktreeService({ env, getConfig: () => ({}) });
+      const scope = { agentId: "main", sessionKey: key, sessionId: "finished-owner" };
+      await replaceSessionEntry(scope, { sessionId: scope.sessionId, updatedAt: 1 });
+      for (let index = 0; index < 7; index++) {
+        const receipt = await stageSessionPendingInput(
+          scope,
+          createUserPendingInput(`input-${index}`, "synthetic input", `user-${index}`),
+        );
+        receipt!.finish(index === 6 ? "cancelled" : "interrupted", "failed");
+        await receipt!.settled?.();
+      }
+      try {
+        await replaceSessionEntry(scope, {
+          sessionId: scope.sessionId,
+          updatedAt: Date.now() - IDLE_GC_MS - 3_600_001,
+          lastInteractionAt: Date.now() - age,
+          status: "done",
+          ...(archived ? { archivedAt: Date.now() } : {}),
+        });
+        mocks.isSessionControllerWorkActive.mockReturnValue(active);
+        expect((await service.gc(policy)).removed).toEqual(removed ? [record.id] : []);
+      } finally {
+        await cleanupSessionStateForTest({ stateDir });
+      }
+    });
+  },
+);
 
 it("protects an archived owner when an in-process local turn starts after cleanup preparation", async () => {
   const store = placementStore("worktree-owner-local-");
@@ -315,24 +400,6 @@ it("defers an owner that became active after the census", async () => {
   expect(census.readOwnerState?.("session", key)).toBe("retired");
   ownerEntry({ sessionId: key, updatedAt: Date.now() });
   await expectCleanupState("active");
-});
-
-it("classifies recent, idle, archived and missing owners through the async census", async () => {
-  const now = Date.now();
-  const entries = new Map<string, ResolvedSessionEntryStoreTarget>([
-    ["live", target("live", { sessionId: "live", updatedAt: now - 1_000 })],
-    ["idle", target("idle", { sessionId: "idle", updatedAt: now - IDLE_GC_MS - 1 })],
-    ["archived", target("archived", { sessionId: "archived", updatedAt: now, archivedAt: now })],
-    ["missing", { ...target("missing"), entry: undefined }],
-  ]);
-  readOwners.mockResolvedValue(entries);
-  const census = await policy.prepareOwners(
-    Array.from(entries.keys(), (ownerId) => ({ ...cleanupRecord, ownerId })),
-  );
-  expect(
-    ["live", "idle", "archived", "missing"].map((id) => census.readOwnerState?.("session", id)),
-  ).toEqual(["active", "idle", "retired", "retired"]);
-  expect(census.readOwnerState?.("manual", "missing")).toBe("other");
 });
 
 it.each([

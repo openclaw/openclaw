@@ -6,6 +6,7 @@ import { t } from "../../i18n/index.ts";
 import { createComposerDraftSource } from "../../lib/chat/composer-draft-changes.ts";
 import { readChatOutboxRecovery } from "../../lib/chat/outbox-recovery.ts";
 import {
+  notifyStoredChatOutboxChanges,
   readStoredOutboxStore,
   storageTargetForComposer,
   storageTargetForGateway,
@@ -163,6 +164,53 @@ it("retires durable delivery receipts from the run owner without bridge prop ref
   ];
   await waitForSolid(() => expect(element.querySelector(".chat-outbox-recovery-row")).toBeNull());
   expect(readChatOutboxRecovery(host).entries).toEqual([]);
+});
+
+it("keeps a storage error visible until a background refresh succeeds", async () => {
+  recoveryIo.prepare.mockResolvedValue({ status: "storage-failed" });
+  const { element } = await mountRecovery();
+  await waitForSolid(() => expect(element.querySelector('[role="alert"]')).not.toBeNull());
+  const alert = element.querySelector('[role="alert"]');
+
+  for (const status of ["storage-failed", "ready"] as const) {
+    const refresh = createDeferred<Awaited<ReturnType<typeof recoveryIo.prepare>>>();
+    recoveryIo.prepare.mockReturnValue(refresh.promise);
+    const reads = recoveryIo.prepare.mock.calls.length;
+    notifyStoredChatOutboxChanges();
+    await waitForSolid(() => expect(recoveryIo.prepare).toHaveBeenCalledTimes(reads + 1));
+    expect(element.querySelector('[role="alert"]')).toBe(alert);
+    refresh.resolve(status === "ready" ? { status, entries: [] } : { status });
+    await waitForSolid(() =>
+      expect(element.querySelector('[role="alert"]')).toBe(status === "ready" ? null : alert),
+    );
+  }
+});
+
+it("keeps recovered draft rows mounted while refreshing their storage", async () => {
+  const entry = {
+    owner: { gatewayOwner: "ws://recovery-owner.test", recoveryScope: "owner" },
+    scopeKey: "global\u0000agent:main",
+    revision: 1,
+    writeId: "saved-draft",
+    updatedAt: 1,
+    text: "Retained durable draft",
+    attachmentNames: [],
+  };
+  recoveryIo.prepare.mockResolvedValue({ status: "ready", entries: [entry] });
+  const { element } = await mountRecovery();
+  await waitForSolid(() => expect(element.textContent).toContain(entry.text));
+  const row = element.querySelectorAll(".chat-outbox-recovery-row")[1];
+  const refresh = createDeferred<Awaited<ReturnType<typeof recoveryIo.prepare>>>();
+  recoveryIo.prepare.mockReturnValue(refresh.promise);
+  const reads = recoveryIo.prepare.mock.calls.length;
+  notifyStoredChatOutboxChanges();
+  await waitForSolid(() => expect(recoveryIo.prepare).toHaveBeenCalledTimes(reads + 1));
+  expect(element.querySelectorAll(".chat-outbox-recovery-row")[1]).toBe(row);
+  refresh.resolve({ status: "ready", entries: [{ ...entry }] });
+  await refresh.promise;
+  await Promise.resolve();
+  flush();
+  expect(element.querySelectorAll(".chat-outbox-recovery-row")[1]).toBe(row);
 });
 
 it("clears a failed restore on retry and admits one review before Solid flushes", async () => {

@@ -3,7 +3,7 @@ import fs from "node:fs";
 import path from "node:path";
 import { setTimeout as delay } from "node:timers/promises";
 
-/** A process-backed engine contract; only physical removal is deliberately slow. */
+/** A process-backed engine contract with a SIGTERM-ignoring builder and slow removal. */
 export function installSandboxBuilderEngineFixture(
   root: string,
   removalMs: number,
@@ -28,7 +28,7 @@ if args[:1] == ['--remote=false']: args = args[1:]
 if args[:1] == ['--url']: args = args[2:]
 op = args[0]
 def event(phase):
-    with calls.open('a') as out: out.write(json.dumps(dict(op=op, phase=phase, pid=os.getpid(), at=time.time())) + '\n')
+    with calls.open('a') as out: out.write(json.dumps(dict(op=op, args=args, phase=phase, pid=os.getpid(), at=time.time())) + '\n')
 def read(target):
     for file in root.glob('*.json'):
         value = json.loads(file.read_text())
@@ -69,6 +69,11 @@ elif op in ['start', 'kill', 'stop', 'wait', 'rm']:
         if value['running']: raise RuntimeError('Writer has not stopped')
         print(0)
     else:
+        # Model PID 1 ignoring SIGTERM: stop must exhaust its grace before SIGKILL.
+        # kill defaults to SIGKILL and has no stop grace, even without --init.
+        if op == 'stop' and value['running']:
+            grace = int(args[args.index('--time') + 1]) if '--time' in args else 10
+            time.sleep(grace)
         value['running'] = op == 'start'
         value['paused'] = False
         write(value)

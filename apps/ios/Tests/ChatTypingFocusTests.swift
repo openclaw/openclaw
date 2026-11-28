@@ -1,10 +1,10 @@
 import Observation
-import OpenClawChatUI
 import OpenClawKit
 import SwiftUI
 import UIKit
 import XCTest
 @testable import OpenClaw
+@testable import OpenClawChatUI
 
 @MainActor
 private enum ChatTypingMainRunLoop {
@@ -82,7 +82,7 @@ private struct ChatTypingRenderBoundary: UIViewRepresentable {
 private struct ChatTypingRenderedOwner: View {
     var body: some View {
         NavigationStack {
-            ChatProTab(headerSidebarAction: nil, openSettings: {})
+            ChatProTab(headerSidebarAction: nil, startFirstGatewaySetup: nil)
         }
     }
 }
@@ -124,6 +124,63 @@ private struct ChatTypingRenderedComposer: View {
 /// XCTest keeps key-window checks outside Swift Testing's concurrent suites.
 @MainActor
 final class ChatTypingFocusTests: XCTestCase {
+    func testComposerShowsOnePrimaryButtonDuringResponse() throws {
+        let appModel = NodeAppModel()
+        appModel.enterScreenshotFixtureMode()
+        appModel.chatPresentation.sync(appModel: appModel)
+        let model = try XCTUnwrap(appModel.chatPresentation.viewModel)
+        defer { model.detachTransport() }
+        let composer = OpenClawChatComposer(
+            viewModel: model,
+            style: .standard,
+            showsSessionSwitcher: false,
+            userAccent: nil,
+            composerChrome: .clean,
+            isComposerEnabled: true,
+            isAttachmentInputEnabled: true,
+            messagePlaceholder: nil,
+            talkControl: nil,
+            dictationControl: nil,
+            voiceNoteControl: nil)
+        model.pendingRuns.insert("active-response")
+        model.input = "Keep this follow-up draft"
+
+        let image = try XCTUnwrap(ImageRenderer(content: HStack(spacing: 4) {
+            composer.cleanTrailingControl
+        }
+        .padding(8)
+        .background(Color.black)).uiImage)
+        let attachment = XCTAttachment(image: image)
+        attachment.name = "active-response-draft-controls"
+        attachment.lifetime = .keepAlways
+        self.add(attachment)
+
+        func primaryControlCount() throws -> Int {
+            var count = 0
+            func capture(_ subviews: SubviewsCollection) -> some View {
+                count = subviews.count
+                return Color.clear.frame(width: 1, height: 1)
+            }
+            let renderer = ImageRenderer(content: Group(subviews: composer.cleanTrailingControl) { capture($0) })
+            _ = try XCTUnwrap(renderer.uiImage)
+            return count
+        }
+
+        // Stop and Send never show together. The fixture has no outbox, so this draft cannot be
+        // queued behind the reply and the one button stays Stop.
+        XCTAssertEqual(try primaryControlCount(), 1)
+        XCTAssertFalse(model.canSend)
+        XCTAssertEqual(composer.phonePrimaryRole, .stop)
+        model.input = ""
+        XCTAssertEqual(try primaryControlCount(), 1)
+        XCTAssertEqual(composer.phonePrimaryRole, .stop)
+        model.input = "Keep this follow-up draft"
+        model.pendingRuns.removeAll()
+        XCTAssertEqual(try primaryControlCount(), 1)
+        XCTAssertEqual(composer.phonePrimaryRole, .send)
+        XCTAssertEqual(model.input, "Keep this follow-up draft")
+    }
+
     func testInitialAgentHydrationPreservesFocusedTypingWithinAccount() throws {
         for changesAccount in [true, false] {
             try Self.checkTyping(changesAccount: changesAccount)

@@ -25,11 +25,19 @@ it.each([
   { name: "honors inherited NVM_DIR without forwarding workspace roots", source: "inherited" },
   { name: "rejects workspace PATH before runtime discovery", source: "path" },
   { name: "checks launcher admission before loading workspace dotenv", source: "launcher" },
-  {
-    name: "keeps compiled-entry compile caching through workspace-free startup respawns",
-    source: "compile-cache",
-  },
-  { name: "keeps workspace roots out of startup-environment respawns", source: "startup-env" },
+  // Only Windows always respawns at startup (stack size); POSIX respawns only to load CA certificates.
+  ...(process.platform === "win32"
+    ? [
+        {
+          name: "keeps compiled-entry compile caching through workspace-free startup respawns",
+          source: "compile-cache",
+        },
+        {
+          name: "keeps workspace roots out of startup-environment respawns",
+          source: "startup-env",
+        },
+      ]
+    : []),
 ])(
   "$name",
   async ({ source }) => {
@@ -77,8 +85,7 @@ it.each([
      childProcess.spawn = (command, args, options) => {
        result.child = { command, args, stdio: options.stdio, nvm: options.env.NVM_DIR, fnm: options.env.FNM_DIR,
          marker: options.env.OPENCLAW_NODE_UPDATE_RESPAWNED,
-         cacheMarker: options.env.OPENCLAW_COMPILE_CACHE_DISABLED_RESPAWNED,
-         startupMarker: options.env.OPENCLAW_NODE_OPTIONS_READY };
+         cacheMarker: options.env.OPENCLAW_COMPILE_CACHE_DISABLED_RESPAWNED };
        const child = new EventEmitter();
        child.kill = () => true;
        setImmediate(() => { child.emit("exit", 23, null); child.emit("close", 23, null); });
@@ -90,6 +97,8 @@ it.each([
      syncBuiltinESMExports();`,
     );
     instance.env.NODE_OPTIONS = `--import=${pathToFileURL(preload).href}`;
+    // The instrumented legacy child must reach runtime admission before any cache respawn.
+    instance.env.NODE_DISABLE_COMPILE_CACHE = "1";
     delete instance.env.OPENCLAW_NODE_UPDATE_RESPAWNED;
     const result = legacy
       ? await instance
@@ -120,7 +129,6 @@ it.each([
                   : undefined,
               OPENCLAW_COMPILE_CACHE_DISABLED_RESPAWNED: undefined,
               OPENCLAW_NODE_UPDATE_RESPAWNED: undefined,
-              OPENCLAW_NODE_OPTIONS_READY: undefined,
               OPENCLAW_NO_RESPAWN: startupRespawn ? undefined : "1",
             },
             encoding: "utf8",
@@ -162,11 +170,7 @@ it.each([
         expect(observed.child.fnm).toBeUndefined();
         // Compiled entries keep the build-scoped cache; only source entries disable it.
         expect(observed.child.cacheMarker).toBeUndefined();
-        if (process.platform === "win32") {
-          expect(observed.child.args).toContain("--stack-size=8192");
-        } else {
-          expect(observed.child.startupMarker).toBe("1");
-        }
+        expect(observed.child.args).toContain("--stack-size=8192");
       } else {
         expect(result.status, result.stdout + result.stderr).toBe(1);
         expect(observed.child).toBeUndefined();

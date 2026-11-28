@@ -7,7 +7,6 @@ import type {
 import { SessionRunStatusSchema } from "../../packages/gateway-protocol/src/schema/sessions-row.js";
 import type { ModelCatalogEntry } from "../agents/model-catalog.types.js";
 import { resolveSessionModelIdentityRef } from "../agents/session-model-ref.js";
-import { buildGroupDisplayName } from "../config/sessions/group-display.js";
 import {
   MAX_SESSION_PARTICIPANTS,
   resolveSessionCreatorActor,
@@ -26,7 +25,6 @@ import {
   normalizeSessionSearchText,
 } from "../shared/session-search-text.js";
 import type { SessionActivityPulse, SessionOwnerFacetIdentity } from "../shared/session-types.js";
-import { sessionDeliveryChannel, sessionDeliveryOrigin } from "../utils/delivery-context.read.js";
 import { readPreparedGatewayModelCatalogMetadata } from "./server-model-catalog-view.js";
 import {
   projectSessionOwner,
@@ -37,8 +35,11 @@ import {
   projectSessionPeopleFacet,
   resolveSessionListProfileReference,
 } from "./session-identity-projection.js";
-import type { SessionEntryPair } from "./session-list-order.js";
-import { addSessionListSearchModelFields } from "./session-list-search-fields.js";
+import type { SessionEntryPair, SessionPinRank } from "./session-list-order.js";
+import {
+  addSessionListSearchModelFields,
+  resolveSessionListSearchDisplayName,
+} from "./session-list-search-fields.js";
 import type {
   SessionListModelFactsLookup,
   SessionListTargetLookup,
@@ -61,7 +62,6 @@ import {
   projectGatewaySessionActiveRun,
   resolveGatewaySessionGoal,
 } from "./session-utils-display.js";
-import { isGroupOrChannelDisplaySession, parseGroupKey } from "./session-utils-store.js";
 import type { SessionListModelCatalog, SessionsListResult } from "./session-utils.types.js";
 
 export type SessionListFilteredEntries = {
@@ -91,6 +91,8 @@ export type SessionListFilterParams = {
   cfg: OpenClawConfig;
   entries: (archived: SessionsListParams["archived"]) => Iterable<SessionEntryPair>;
   entriesSorted?: boolean;
+  personalPinRank?: SessionPinRank;
+  personalPins?: ReadonlyMap<string, number>;
   getTarget: SessionListTargetLookup;
   getModelFacts?: SessionListModelFactsLookup;
   modelSearchMayMatch?: (search: string) => boolean;
@@ -107,33 +109,13 @@ export type SessionListFilterParams = {
     target: NonNullable<ReturnType<SessionListTargetLookup>>,
   ) => boolean;
   restrictProfileReferences?: boolean;
+  /** Includes the caller in person-link resolution even without visible session associations. */
+  viewerProfileId?: string;
   involvingActorId?: string;
   ownerFirstActorId?: string;
   projectActiveRun?: SessionListActiveRunProjector;
   involvementKeys: (profileId: string, personal: boolean) => ReadonlySet<string>;
 };
-
-function resolveSessionListSearchDisplayName(
-  key: string,
-  entry?: SessionEntry,
-): string | undefined {
-  if (entry?.displayName) {
-    return entry.displayName;
-  }
-  const parsed = parseGroupKey(key);
-  const channel = sessionDeliveryChannel(entry) ?? parsed?.channel;
-  if (isGroupOrChannelDisplaySession(entry, parsed) && channel) {
-    return buildGroupDisplayName({
-      provider: channel,
-      subject: entry?.subject,
-      groupChannel: entry?.groupChannel,
-      space: entry?.space,
-      id: parsed?.id,
-      key,
-    });
-  }
-  return entry?.label ?? sessionDeliveryOrigin(entry)?.label;
-}
 
 function matchesSessionListSearch(fields: Array<string | undefined>, search: string): boolean {
   return fields.some(
@@ -224,6 +206,9 @@ export function filterSessionEntries(
   const allowedProfileIds =
     opts.involvingProfileId && params.restrictProfileReferences ? new Set<string>() : undefined;
   if (allowedProfileIds) {
+    if (params.viewerProfileId) {
+      allowedProfileIds.add(resolveSessionProfileId(params.viewerProfileId, identities));
+    }
     for (const [, entry] of visibleEntries) {
       const owner = projectOwner(entry, identities, cfg, configuredAgentIds)?.actor;
       for (const person of projectPeople(entry, identities, owner)) {
@@ -288,6 +273,18 @@ export function filterSessionEntries(
         target: NonNullable<ReturnType<SessionListTargetLookup>>,
       ): boolean => {
         const storeKey = target.storeKey ?? key;
+        if (opts.searchTitlesOnly) {
+          return [
+            entry.label,
+            entry.subject,
+            resolveSessionListSearchDisplayName(storeKey, entry),
+            resolveGatewaySessionDisplayName(storeKey, entry),
+          ].some(
+            (title) =>
+              normalizeSessionSearchLiteral(title).includes(search) ||
+              Boolean(titleSearch && normalizeSessionSearchText(title).includes(titleSearch)),
+          );
+        }
         let fields = staticSearchFields.get(entry);
         if (!fields || fields.key !== storeKey) {
           const titles = [
@@ -370,7 +367,7 @@ export function filterSessionEntries(
         }
         // Derived model aliases are not agent-key matches.
         if (!search.startsWith("agent:")) {
-          const subagentRun = getRowContext().subagentRuns.getDisplaySubagentRun(storeKey);
+          const subagentRun = getRowContext().subagentRuns.getSessionDisplayFacts(storeKey);
           // These are exactly the persisted inputs consumed by the identity resolver.
           const modelKey = JSON.stringify([
             "resolved",
@@ -403,12 +400,14 @@ export function filterSessionEntries(
           const modelKey = JSON.stringify([
             "prepared",
             agentId,
-            source.selectedModel.provider,
-            source.selectedModel.model,
+            source.selectedModel?.provider,
+            source.selectedModel?.model,
             source.rowModelIdentity.provider,
             source.rowModelIdentity.model,
           ]);
-          if (matchesModelRefs(modelKey, () => [source.selectedModel, source.rowModelIdentity])) {
+          if (
+            matchesModelRefs(modelKey, () => [source.selectedModel ?? {}, source.rowModelIdentity])
+          ) {
             return true;
           }
         }
@@ -453,9 +452,6 @@ export function filterSessionEntries(
       continue;
     }
     const target = expectDefined(params.getTarget(key), "selection row owner");
-    if (!opts.involvingProfileId && params.entryFilter?.(key, entry, target) === false) {
-      continue;
-    }
     const { selection } = target;
     const storeKey = target.storeKey ?? key;
     if (
@@ -469,13 +465,13 @@ export function filterSessionEntries(
     ) {
       continue;
     }
-    if (agentFilter && storeKey !== "global") {
-      const ownerAgentId = normalizeAgentId(target.agentId);
-      if (ownerAgentId !== agentFilter) {
-        continue;
-      }
+    if (agentFilter && storeKey !== "global" && target.agentId !== agentFilter) {
+      continue;
     }
     if (selection.isPhantom) {
+      continue;
+    }
+    if (!opts.involvingProfileId && params.entryFilter?.(key, entry, target) === false) {
       continue;
     }
     if (spawnedBy) {
@@ -493,8 +489,17 @@ export function filterSessionEntries(
       }
     }
     if (
+      entry.snoozedUntil !== undefined &&
+      entry.snoozedUntil > now &&
+      params.personalPins?.has(key)
+    ) {
+      activityExpiresAt = Math.min(activityExpiresAt, entry.snoozedUntil - 1);
+    }
+    if (
       opts.pinned !== undefined &&
-      (entry.pinnedAt !== undefined && isPinnableSessionEntry(storeKey, entry)) !== opts.pinned
+      (params.personalPinRank
+        ? params.personalPinRank(pair) > 0
+        : entry.pinnedAt !== undefined && isPinnableSessionEntry(storeKey, entry)) !== opts.pinned
     ) {
       continue;
     }
@@ -531,6 +536,7 @@ export function filterSessionEntries(
     if (profileRelation?.relationship === "involving" && !relationKeys?.has(key)) {
       continue;
     }
+    // Facets and selectors describe readable sessions, not private profile activity.
     if (effectiveOwner) {
       addSessionOwnerFacetIdentity(ownerFacet, effectiveOwner);
     }

@@ -1,7 +1,11 @@
 import { afterEach, beforeEach, expect, it, vi } from "vitest";
+import { UTILITY_MODEL_NOT_OFFERED_NOTE } from "../commands/models/list.status-utility.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import * as gateway from "../gateway/call.js";
 import * as gatewayLock from "../infra/gateway-lock.js";
+import { setCurrentPluginMetadataSnapshot } from "../plugins/current-plugin-metadata.test-support.js";
+import { resolveInstalledPluginIndexPolicyHash } from "../plugins/installed-plugin-index-policy.js";
+import { createPluginMetadataSnapshotFixture } from "../plugins/plugin-metadata.test-support.js";
 import { modelReferenceCheck } from "./doctor-model-reference-check.js";
 
 afterEach(() => vi.restoreAllMocks());
@@ -55,22 +59,76 @@ it("uses only prepared Gateway warnings in Doctor", async () => {
     models: [],
     providerOutcomes: [
       { provider: "ollama", status: "ready", unlistedConfiguredModelIds: ["qwen3:8bb"] },
+      { provider: "xai", profileId: "xai:work", status: "auth-rejected" },
+      { provider: "offline", status: "unavailable" },
     ],
   });
   const findings = await detect({});
-  expect(findings.filter((finding) => finding.target === "ollama/qwen3:8bb")).toEqual([
-    expect.objectContaining({
-      severity: "warning",
-      fixHint: expect.stringContaining("Pull or download it on that server"),
-    }),
-  ]);
+  expect(findings).toHaveLength(3);
+  expect(findings[0]).toMatchObject({
+    target: "ollama/qwen3:8bb",
+    severity: "warning",
+    fixHint: expect.stringContaining("Pull or download it on that server"),
+  });
+  expect(findings[1]).toMatchObject({
+    checkId: "core/doctor/model-references",
+    severity: "warning",
+    target: "xai",
+    message: "Model discovery authentication was rejected for xai (profile xai:work).",
+    fixHint:
+      "Open Models in the Control UI to check sign-in and catalog access, then run openclaw models list --refresh.",
+  });
+  expect(findings[2]).toMatchObject({
+    checkId: "core/doctor/model-references",
+    severity: "info",
+    target: "offline",
+    message: "Model discovery is unavailable for offline.",
+    fixHint:
+      "Run openclaw models list --refresh; if it still fails, check the provider in Models in the Control UI.",
+  });
   expect(call).toHaveBeenCalledExactlyOnceWith(
     expect.objectContaining({
       method: "models.list",
       sharedStateMode: "read-only",
-      params: { view: "all", includeDetails: true, preparedOnly: true },
+      params: {
+        view: "all",
+        includeDetails: true,
+        includeDefaultModels: true,
+        preparedOnly: true,
+      },
     }),
   );
+});
+
+it("notes when the Gateway substituted the main model for an unoffered utility model", async () => {
+  const cfg: OpenClawConfig = { agents: { defaults: { model: "fixture/primary" } } };
+  setCurrentPluginMetadataSnapshot(
+    createPluginMetadataSnapshotFixture(
+      {
+        plugins: [
+          {
+            id: "fixture",
+            modelCatalog: {
+              providers: { fixture: { defaultUtilityModel: "small", models: [{ id: "small" }] } },
+            },
+          },
+        ],
+      },
+      resolveInstalledPluginIndexPolicyHash(cfg),
+    ),
+    { config: cfg },
+  );
+  try {
+    vi.spyOn(gateway, "callGateway").mockResolvedValue({
+      models: [],
+      utilityModel: { modelRef: "fixture/primary", source: "provider-default" },
+    });
+    expect(await detect(cfg)).toContainEqual(
+      expect.objectContaining({ severity: "info", message: UTILITY_MODEL_NOT_OFFERED_NOTE }),
+    );
+  } finally {
+    setCurrentPluginMetadataSnapshot(undefined);
+  }
 });
 
 it("does not execute Gateway secret providers without Doctor's allow-exec opt-in", async () => {

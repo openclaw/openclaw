@@ -328,7 +328,7 @@ describe("createCopilotToolBridge", () => {
     });
   });
 
-  it("submits the exact conversation-policy-filtered catalog to the SDK", async () => {
+  it("keeps session tool definitions while refusing conversation-policy-denied calls", async () => {
     await withTempDir("openclaw-copilot-policy-", async (workspaceDir) => {
       const result = await createBridge({
         attemptParams: {
@@ -343,11 +343,28 @@ describe("createCopilotToolBridge", () => {
         sessionKey: "agent:agent-1:policy-session",
         workspaceDir,
       });
-      const names = result.promptToolPolicy.apply().tools.map((tool) => tool.name);
-
-      expect(names).toEqual(expect.arrayContaining(["read", "apply_patch"]));
-      for (const denied of ["exec", "process", "write", "edit", "ask_user"]) {
-        expect(names).not.toContain(denied);
+      try {
+        const { tools } = result.promptToolPolicy.apply();
+        expect(tools.map((tool) => tool.name)).toEqual(
+          expect.arrayContaining(["read", "apply_patch", "write"]),
+        );
+        expect(tools.map((tool) => tool.name)).not.toContain("ask_user");
+        const outputPath = path.join(workspaceDir, "denied.txt");
+        for (const denied of ["exec", "process", "write", "edit"]) {
+          await expect(
+            invoke(sdkToolNamed(result, denied), {
+              path: outputPath,
+              content: "must not be written",
+            }),
+          ).resolves.toMatchObject({
+            textResultForLlm: expect.stringContaining(
+              `${denied} is outside the tools this run allows.`,
+            ),
+          });
+        }
+        await expect(fs.stat(outputPath)).rejects.toMatchObject({ code: "ENOENT" });
+      } finally {
+        result.cleanup?.();
       }
     });
   });
@@ -412,6 +429,23 @@ describe("createCopilotToolBridge", () => {
 });
 
 describe("createCopilotToolBridge tool conversion", () => {
+  // The SDK forwards content unbounded; the shared bound keeps head, tail and a saved file.
+  it("bounds an oversized tool result before the SDK sees it", async () => {
+    const full = [...Array.from({ length: 6_000 }, (_, i) => `row ${i}`), "LAST-ROW"].join("\n");
+    const sourceTool = makeTool({}, { content: [{ type: "text", text: full }], details: {} });
+    const result = await invoke(await toSdk(sourceTool, {}), {});
+    const field = (result as { textResultForLlm?: unknown }).textResultForLlm;
+    const text = typeof field === "string" ? field : "";
+    const spillPath = /chars omitted\. Full output: (\S+)\]/u.exec(text)?.[1];
+
+    expect(text.length).toBeLessThan(full.length);
+    expect(text).toContain("row 0");
+    expect(text).toContain("LAST-ROW");
+    expect(spillPath).toBeDefined();
+    expect(await fs.readFile(spillPath!, "utf8")).toBe(full);
+    await fs.rm(spillPath!, { force: true });
+  });
+
   it("returns a failure result when prepareArguments throws", async () => {
     const error = new Error("bad args");
     const sourceTool = makeTool({
@@ -505,6 +539,7 @@ describe("createCopilotToolBridge tool conversion", () => {
     const pending = executeCatalog({
       tool: target,
       toolName: "memory_forget",
+      toolId: "openclaw:memory-lancedb:memory_forget",
       source: "openclaw",
       sourceName: "memory-lancedb",
       toolCallId: "catalog-forget-1",

@@ -16,7 +16,7 @@ import { createTestGatewayScheduler } from "../test-utils/gateway-scheduler-cloc
 import { withOpenClawTestState } from "../test-utils/openclaw-test-state.js";
 import { buildGatewayReloadPlan } from "./config-reload-plan.js";
 import { publishOperatorRoleConfigChange } from "./operator-role-policy.js";
-import { captureGatewayOperatorRunAuthority } from "./operator-run-authority.js";
+import { prepareGatewayOperatorRunAuthority } from "./operator-run-authority.js";
 import type { GatewayRequestContext } from "./server-methods/types.js";
 import { createSyntheticPluginRuntimeClient } from "./server-plugin-runtime-client.js";
 import { createManagedReloadTestParams } from "./server-reload-handlers.config.test-support.js";
@@ -102,7 +102,12 @@ it("forwards live status and invalidates config.get on watcher commit", async ()
   expect(hoisted.invalidateConfigGetResponseCache).toHaveBeenCalledOnce();
   expect(broadcast).toHaveBeenCalledWith(
     "config.changed",
-    { path: "/tmp/openclaw.json", hash: "opaque:persisted-1", ts: expect.any(Number) },
+    {
+      path: "/tmp/openclaw.json",
+      hash: "opaque:persisted-1",
+      changedPaths: ["gateway.port"],
+      ts: expect.any(Number),
+    },
     { dropIfSlow: true },
   );
   expect(invalidateMentions).not.toHaveBeenCalled();
@@ -120,7 +125,7 @@ it("forwards live status and invalidates config.get on watcher commit", async ()
     gatewayContext.resolveGatewayContext = () => gatewayContext;
     const capture = async () =>
       expectDefined(
-        await captureGatewayOperatorRunAuthority({
+        await prepareGatewayOperatorRunAuthority({
           client: createSyntheticPluginRuntimeClient({
             scopes: ["operator.write"],
             operatorRoleActor: { kind: "operator", profileId: profile.id },
@@ -144,21 +149,20 @@ it("forwards live status and invalidates config.get on watcher commit", async ()
     };
     try {
       setRuntimeConfigSnapshot(candidate);
-      expect(original.authority.signal?.aborted).toBe(false);
-      expect(() => original.authority.assertCurrent()).not.toThrow();
+      expect(original.authority.signal?.aborted).not.toBe(true);
       duringActivation = await capture();
       // An unrelated Gateway publication cannot turn this tentative policy into source loss.
       publishOperatorRoleConfigChange({});
-      expect(duringActivation.authority.signal?.aborted).toBe(false);
+      expect(duringActivation.authority.signal?.aborted).not.toBe(true);
       setRuntimeConfigSnapshot(initialConfig);
-      expect(duringActivation.authority.assertCurrent).not.toThrow();
-      expect(original.authority.signal?.aborted).toBe(false);
+      expect(original.authority.signal?.aborted).not.toBe(true);
 
       setRuntimeConfigSnapshot(candidate);
       commit("gateway.roles", candidate);
       expect(gatewayContext.getCommittedRuntimeConfig()).toBe(candidate);
-      expect(original.authority.signal?.aborted).toBe(true);
-      expect(duringActivation.authority.signal?.aborted).toBe(true);
+      expect(original.authority.signal?.aborted).not.toBe(true);
+      expect(duringActivation.authority.signal?.aborted).not.toBe(true);
+      await expect(capture()).rejects.toThrow();
     } finally {
       original.release();
       duringActivation?.release();

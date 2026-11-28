@@ -233,7 +233,7 @@ describe.runIf(browserMode)("Review layout", () => {
     await userEvent.click(panel.querySelector<HTMLButtonElement>(".session-diff__file-menu")!);
     await waitForSolid(() => expect(getFile).toHaveBeenCalledOnce());
     const surface = panel.querySelector<HTMLElement>(".session-diff-menu__surface")!;
-    const copy = surface.querySelector<HTMLButtonElement>('button[aria-label="Copy Path"]')!;
+    const copy = surface.querySelector<HTMLButtonElement>('button[aria-label="Copy path"]')!;
     const toggle = surface.querySelector<HTMLButtonElement>('button[value="toggle-file"]')!;
     await waitForSolid(() => expect(document.activeElement).toBe(copy));
     await userEvent.keyboard("{ArrowDown}{ArrowDown}");
@@ -441,7 +441,7 @@ describe.runIf(browserMode)("Review layout", () => {
     const fileSurface = panel.querySelector<HTMLElement>(".session-diff-menu__surface")!;
     await waitForSolid(() => expect(fileSurface.matches(":popover-open")).toBe(true));
     const copyPath = fileSurface.querySelector<HTMLButtonElement>(
-      'button[aria-label="Copy Path"]',
+      'button[aria-label="Copy path"]',
     )!;
     await waitForSolid(() => expect(document.activeElement).toBe(copyPath));
     for (const key of ["{Enter}", " "]) {
@@ -505,7 +505,7 @@ describe.runIf(browserMode)("Review layout", () => {
     expect(write).toHaveBeenCalledExactlyOnceWith("added.ts");
     expect(copy.disabled).toBe(true);
     rejectWrite?.(new DOMException("Clipboard denied", "NotAllowedError"));
-    await waitForSolid(() => expect(copy.getAttribute("aria-label")).toBe("Copied!"));
+    await waitForSolid(() => expect(copy.getAttribute("aria-label")).toBe("Copied"));
     expect(fallback).toHaveBeenCalledExactlyOnceWith("copy");
     expect(copy.isConnected).toBe(true);
     expect(surface.matches(":popover-open")).toBe(true);
@@ -539,9 +539,10 @@ describe.runIf(browserMode)("Review layout", () => {
     await waitForSolid(() =>
       expect(panel.querySelector(".session-diff-mobile__rail")).not.toBeNull(),
     );
-    const view = panel.querySelector<HTMLButtonElement>(
-      ".session-diff-mobile__rail .session-diff__toolbar-icon",
-    )!;
+    const view = panel.querySelector<HTMLButtonElement>('[aria-label="Change view options"]')!;
+    await userEvent.hover(view);
+    await expect.poll(() => view.style.getPropertyValue("anchor-name")).not.toBe("");
+    const tooltipAnchor = view.style.getPropertyValue("anchor-name");
     await userEvent.click(view);
     await waitForSolid(() =>
       expect(panel.querySelector(".session-diff-menu__surface")?.matches(":popover-open")).toBe(
@@ -549,27 +550,46 @@ describe.runIf(browserMode)("Review layout", () => {
       ),
     );
     const surface = panel.querySelector<HTMLElement>(".session-diff-menu__surface")!;
-    const bounds = surface.getBoundingClientRect();
-    expect(bounds.top).toBeGreaterThanOrEqual(0);
-    expect(bounds.left).toBeGreaterThanOrEqual(0);
-    expect(bounds.bottom).toBeLessThanOrEqual(window.innerHeight);
-    expect(bounds.right).toBeLessThanOrEqual(window.innerWidth);
+    const menuBounds = surface.getBoundingClientRect();
+    expect(menuBounds.top).toBeGreaterThanOrEqual(0);
+    expect(menuBounds.left).toBeGreaterThanOrEqual(0);
+    expect(menuBounds.bottom).toBeLessThanOrEqual(window.innerHeight);
+    expect(menuBounds.right).toBeLessThanOrEqual(window.innerWidth);
+    const baseRef =
+      "release/regional-calibration-and-extended-verification-for-portable-monitoring-stations";
+    const headRef =
+      "feature/field-survey/regional-calibration/portable-monitoring-stations/verify-observation-receipts-before-autumn-deployment";
     pending.resolve({
       sessionKey: "main",
       root,
-      branch,
-      baseRef: "main",
+      branch: headRef,
+      baseRef,
       additions: 1,
       deletions: 0,
       files: [{ path: "added.ts", status: "added", additions: 1, deletions: 0 }],
     });
     await waitForSolid(() => expect(panel.querySelector(".session-diff__file")).not.toBeNull());
-    expect(panel.querySelector(".session-diff-mobile__rail .session-diff__toolbar-icon")).toBe(
-      view,
-    );
+    expect(panel.querySelector('[aria-label="Change view options"]')).toBe(view);
     await userEvent.keyboard("{Escape}");
     await waitForSolid(() => expect(panel.querySelector("openclaw-session-diff-menu")).toBeNull());
     expect(document.activeElement).toBe(view);
+    expect(view.style.getPropertyValue("anchor-name")).toBe(tooltipAnchor);
+    const refs = Array.from(
+      panel.querySelectorAll<HTMLElement>(".session-diff-mobile__branch > span > *"),
+    );
+    expect(refs.map((ref) => ref.textContent)).toEqual([baseRef, headRef]);
+    for (const ref of refs) {
+      expect(ref.title).toBe(ref.textContent);
+      const text = ref.querySelector("bdi")!.firstChild!;
+      const range = document.createRange();
+      range.selectNodeContents(text);
+      expect(new Set(Array.from(range.getClientRects(), (rect) => rect.top)).size).toBe(1);
+      range.setStart(text, text.textContent!.lastIndexOf("-") + 1);
+      const rect = range.getBoundingClientRect();
+      const bounds = ref.getBoundingClientRect();
+      expect(rect.left).toBeGreaterThanOrEqual(bounds.left - 1);
+      expect(rect.right).toBeLessThanOrEqual(bounds.right + 1);
+    }
     await userEvent.click(view);
     await waitForSolid(() =>
       expect(panel.querySelector(".session-diff-menu__surface")?.matches(":popover-open")).toBe(
@@ -579,6 +599,6 @@ describe.runIf(browserMode)("Review layout", () => {
     await userEvent.click(panel.querySelector<HTMLButtonElement>('[data-value="sync"]')!);
     await waitForSolid(() => expect(openPage).toHaveBeenCalledTimes(1));
     expect(panel.querySelector("openclaw-session-diff-menu")).toBeNull();
-    expect(view.style.getPropertyValue("anchor-name")).toBe("");
+    expect(view.style.getPropertyValue("anchor-name")).toBe(tooltipAnchor);
   });
 });

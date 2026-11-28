@@ -127,7 +127,7 @@ index ff6e63043ff8fa0b821d4b0b382d1fd998d85dbb..8b527adb355c8e7397939baece62749f
  		});
  	}
 diff --git a/dist/chunks/index.1TqnEahn.js b/dist/chunks/index.1TqnEahn.js
-index 50dd001b7b24be2eac6f37eeb1929ad4645aa1a9..a4942f2ece3dc13bb54142c9809ae19d6401510c 100644
+index 50dd001b7b24be2eac6f37eeb1929ad4645aa1a9..a77d9ea820510297993e6694c70623205ea7d7a2 100644
 --- a/dist/chunks/index.1TqnEahn.js
 +++ b/dist/chunks/index.1TqnEahn.js
 @@ -1031,7 +1031,9 @@ class ModuleTransformService {
@@ -141,6 +141,15 @@ index 50dd001b7b24be2eac6f37eeb1929ad4645aa1a9..a4942f2ece3dc13bb54142c9809ae19d
  		const moduleId = moduleGraphModule.id;
  		const memoryCacheKey = this.fsCache.getMemoryCachePath(environment, moduleId);
  		// undefined means there is no key in memory
+@@ -3579,7 +3581,7 @@ class ServerModuleRunner extends ModuleRunner {
+ 				try {
+ 					const result = await transformService.fetch(data[0], data[1], environment, false, data[2]);
+ 					if ("tmp" in result) {
+-						const code = await readFile(result.tmp);
++						const code = await readFile(result.tmp, "utf-8");
+ 						return { result: {
+ 							...result,
+ 							code
 @@ -5136,6 +5138,7 @@ var RunnerState = /* @__PURE__ */ function(RunnerState) {
  	RunnerState["STARTING"] = "starting";
  	RunnerState["STARTED"] = "started";
@@ -358,7 +367,28 @@ index 50dd001b7b24be2eac6f37eeb1929ad4645aa1a9..a4942f2ece3dc13bb54142c9809ae19d
  		this.hash = generateHash(this.config.root + this.config.name);
  		this._provideObject(projectConfig.provide);
  	}
-@@ -6766,8 +6795,8 @@ class TestProject {
+@@ -6642,12 +6671,17 @@ class TestProject {
+ 	matchesTestGlob(moduleId, source) {
+ 		if (this._isCachedTestFile(moduleId)) return true;
+ 		const relativeId = relative(this.config.dir || this.config.root, moduleId);
+-		if (pm.isMatch(relativeId, this.config.exclude, { dot: true })) return false;
+-		if (pm.isMatch(relativeId, this.config.include, { dot: true })) {
++		const absoluteId = slash(moduleId);
++		// New-file admission must use the same pattern origins as initial discovery.
++		// Preserve drive-letter case; normalize() uppercases Windows drives.
++		// Picomatch arrays are a disjunction; each pattern keeps its native semantics.
++		const matches = (patterns) => patterns.some((pattern) => pm.isMatch(isAbsolute(pattern) ? absoluteId : relativeId, pattern, { dot: true }));
++		if (matches(this.config.exclude)) return false;
++		if (matches(this.config.include)) {
+ 			this.markTestFile(moduleId);
+ 			return true;
+ 		}
+-		if (this.config.includeSource?.length && pm.isMatch(relativeId, this.config.includeSource, { dot: true })) {
++		if (this.config.includeSource?.length && matches(this.config.includeSource)) {
+ 			const code = source?.() || readFileSync(moduleId, "utf-8");
+ 			if (isInSourceTestCode(code)) {
+ 				this.markTestFile(moduleId);
+@@ -6766,8 +6800,8 @@ class TestProject {
  		}
  	}
  	/** @internal */
@@ -369,7 +399,7 @@ index 50dd001b7b24be2eac6f37eeb1929ad4645aa1a9..a4942f2ece3dc13bb54142c9809ae19d
  		project.runner = vitest.runner;
  		project._resolver = vitest._resolver;
  		project._transformService = vitest._transformService;
-@@ -6784,8 +6813,8 @@ class TestProject {
+@@ -6784,8 +6818,8 @@ class TestProject {
  	*
  	* @internal
  	*/
@@ -380,7 +410,7 @@ index 50dd001b7b24be2eac6f37eeb1929ad4645aa1a9..a4942f2ece3dc13bb54142c9809ae19d
  		sibling.runner = parent.runner;
  		sibling._resolver = parent._resolver;
  		sibling._transformService = parent._transformService;
-@@ -6901,7 +6930,8 @@ async function resolveProjectEntries(harness, globalViteConfig, globalConfig, de
+@@ -6901,7 +6935,8 @@ async function resolveProjectEntries(harness, globalViteConfig, globalConfig, de
  		debug?.(`no projects declared, the root config is the only project`);
  		baseEntries = [{
  			viteConfig: globalViteConfig,
@@ -390,7 +420,7 @@ index 50dd001b7b24be2eac6f37eeb1929ad4645aa1a9..a4942f2ece3dc13bb54142c9809ae19d
  		}];
  	}
  	// Ensure project names are unique across declared projects (and any
-@@ -7004,6 +7034,28 @@ async function resolveDeclaredProjectEntries(context, definitions) {
+@@ -7004,6 +7039,28 @@ async function resolveDeclaredProjectEntries(context, definitions) {
  	const fileProjects = [...configFiles, ...nonConfigDirectories];
  	const promises = [];
  	projectConfigs.forEach((options, index) => {
@@ -419,7 +449,7 @@ index 50dd001b7b24be2eac6f37eeb1929ad4645aa1a9..a4942f2ece3dc13bb54142c9809ae19d
  		const ownServerReason = getOwnServerReason(context, options);
  		if (ownServerReason === void 0) {
  			debug?.(`inline project ${inlineProjectLabel(options, index)} shares the Vite server of ${parentViteConfig.configFile ?? parentConfig.root}`);
-@@ -7033,10 +7085,12 @@ async function resolveDeclaredProjectEntries(context, definitions) {
+@@ -7033,10 +7090,12 @@ async function resolveDeclaredProjectEntries(context, definitions) {
  		// resolved pair: the root (or the container) also runs as a regular project
  		if (parentViteConfig.configFile === path) {
  			debug?.(`project at ${path} is the declaring config itself, reusing its resolved config`);
@@ -433,7 +463,7 @@ index 50dd001b7b24be2eac6f37eeb1929ad4645aa1a9..a4942f2ece3dc13bb54142c9809ae19d
  			}));
  			continue;
  		}
-@@ -7074,7 +7128,7 @@ async function flattenContainerEntries(context, entries) {
+@@ -7074,7 +7133,7 @@ async function flattenContainerEntries(context, entries) {
  		// inline projects cannot declare `projects`; the declaring config's own
  		// entry (emitted when it references its own config file) is kept as-is —
  		// its `projects` are the definitions currently being resolved
@@ -442,7 +472,7 @@ index 50dd001b7b24be2eac6f37eeb1929ad4645aa1a9..a4942f2ece3dc13bb54142c9809ae19d
  			result.push(entry);
  			continue;
  		}
-@@ -7286,18 +7340,21 @@ function resolveSharedServerEntry(context, options, index) {
+@@ -7286,18 +7345,21 @@ function resolveSharedServerEntry(context, options, index) {
  			moduleRunnerOptions: parentConfig._moduleRunnerOptions
  		}
  	});
@@ -466,7 +496,7 @@ index 50dd001b7b24be2eac6f37eeb1929ad4645aa1a9..a4942f2ece3dc13bb54142c9809ae19d
  	const captures = {};
  	// only inline entries (keyed by their index) extend another config;
  	// file-based projects own all of their values
-@@ -7331,7 +7388,7 @@ async function resolveSingleProjectEntry(context, options, workspacePath) {
+@@ -7331,7 +7393,7 @@ async function resolveSingleProjectEntry(context, options, workspacePath) {
  	for (const key in parentViteConfig.env) projectViteConfig.env[key] ??= parentViteConfig.env[key];
  	const mergedOptions = projectViteConfig.test ?? {};
  	// resolved after `viteResolveConfig` so a plugin can still set `test.name`
@@ -475,7 +505,7 @@ index 50dd001b7b24be2eac6f37eeb1929ad4645aa1a9..a4942f2ece3dc13bb54142c9809ae19d
  	const projectConfig = resolveTestConfig(harness.logger, mergedOptions, projectViteConfig, parentConfig);
  	projectViteConfig.test = projectConfig;
  	if (inheritsParentConfig && options.extends === void 0 && configFile) warnDuplicateInheritedPlugins(harness.logger, projectConfig, projectViteConfig, parentViteConfig, configFile, rootConfig.root);
-@@ -7349,6 +7406,8 @@ async function resolveSingleProjectEntry(context, options, workspacePath) {
+@@ -7349,6 +7411,8 @@ async function resolveSingleProjectEntry(context, options, workspacePath) {
  		viteConfig: projectViteConfig,
  		projectConfig,
  		inline: isInlineEntry,
@@ -484,7 +514,7 @@ index 50dd001b7b24be2eac6f37eeb1929ad4645aa1a9..a4942f2ece3dc13bb54142c9809ae19d
  		ancestors: context.ancestors.length ? [...context.ancestors] : void 0
  	};
  }
-@@ -7441,6 +7500,7 @@ function expandBrowserInstancesInEntries(globalConfig, entries, names) {
+@@ -7441,6 +7505,7 @@ function expandBrowserInstancesInEntries(globalConfig, entries, names) {
  			result.push({
  				viteConfig,
  				projectConfig: clonedConfig,
@@ -492,7 +522,7 @@ index 50dd001b7b24be2eac6f37eeb1929ad4645aa1a9..a4942f2ece3dc13bb54142c9809ae19d
  				ancestors: entry.ancestors
  			});
  		});
-@@ -7502,6 +7562,7 @@ function expandBenchmarksInEntries(entries, names, benchmarkOnly) {
+@@ -7502,6 +7567,7 @@ function expandBenchmarksInEntries(entries, names, benchmarkOnly) {
  		result.push({
  			viteConfig: entry.viteConfig,
  			projectConfig: benchmarkConfig,
@@ -500,7 +530,7 @@ index 50dd001b7b24be2eac6f37eeb1929ad4645aa1a9..a4942f2ece3dc13bb54142c9809ae19d
  			ancestors: entry.ancestors,
  			sharedServer: entry.sharedServer
  		});
-@@ -7648,7 +7709,7 @@ function resolveDirectoryConfig(directory) {
+@@ -7648,7 +7714,7 @@ function resolveDirectoryConfig(directory) {
  	if (configFile) return resolve(directory, configFile);
  	return null;
  }
@@ -509,7 +539,7 @@ index 50dd001b7b24be2eac6f37eeb1929ad4645aa1a9..a4942f2ece3dc13bb54142c9809ae19d
  	let { label, color } = typeof name === "string" ? { label: name } : {
  		label: "",
  		...name
-@@ -7664,7 +7725,7 @@ function resolveProjectName(name, workspacePath, containerLabel) {
+@@ -7664,7 +7730,7 @@ function resolveProjectName(name, workspacePath, containerLabel) {
  	}
  	// Projects declared by a container config are namespaced by the container's
  	// name: the "unit" project of an "app" container is named "app (unit)".
@@ -518,7 +548,7 @@ index 50dd001b7b24be2eac6f37eeb1929ad4645aa1a9..a4942f2ece3dc13bb54142c9809ae19d
  	return {
  		label,
  		color
-@@ -7694,7 +7755,7 @@ async function attachProjectsFromEntries(vitest, entries) {
+@@ -7694,7 +7760,7 @@ async function attachProjectsFromEntries(vitest, entries) {
  	}
  	const projects = [];
  	for (const entry of entries) {
@@ -527,7 +557,7 @@ index 50dd001b7b24be2eac6f37eeb1929ad4645aa1a9..a4942f2ece3dc13bb54142c9809ae19d
  		const primary = primaryByViteConfig.get(viteConfig);
  		if (primary) {
  			if (hidden) continue;
-@@ -7707,14 +7768,14 @@ async function attachProjectsFromEntries(vitest, entries) {
+@@ -7707,14 +7773,14 @@ async function attachProjectsFromEntries(vitest, entries) {
  			// a shared-server project reuses only the Vite server
  			if (entry.sharedServer) {
  				debug?.(`project ${projectLabel(projectConfig.name)} reuses the Vite server of ${projectLabel(primary.name)} with its own module runner`);
@@ -544,7 +574,7 @@ index 50dd001b7b24be2eac6f37eeb1929ad4645aa1a9..a4942f2ece3dc13bb54142c9809ae19d
  			// Browser-instance siblings share the primary's single (browser) Vite
  			// server; each gets its own `ProjectBrowser` view onto it.
  			if (primary._parentBrowser) sibling.browser = primary._parentBrowser.spawn(sibling);
-@@ -7727,7 +7788,7 @@ async function attachProjectsFromEntries(vitest, entries) {
+@@ -7727,7 +7793,7 @@ async function attachProjectsFromEntries(vitest, entries) {
  		debug?.(`creating a Vite server for project ${projectLabel(projectConfig.name)}`);
  		const children = childrenByViteConfig.get(viteConfig) ?? [];
  		const { server, parent } = await createClusterServer(vitest, viteConfig, projectConfig, children);
@@ -666,6 +696,25 @@ index d405dea2b5c03f70ef94a82d5e4e10c104164154..01e6099aabf7fb6e53249327d53d0622
  		on: (cb) => processOn("message", cb),
  		off: (cb) => processOff("message", cb),
  		teardown: () => {
+diff --git a/dist/chunks/init.PvxYpuCm.js b/dist/chunks/init.PvxYpuCm.js
+index 3b34604d09a334495d55cc25ad5bb137137a36bf..e47ed0751af94439b7939032911e830acd362ae6 100644
+--- a/dist/chunks/init.PvxYpuCm.js
++++ b/dist/chunks/init.PvxYpuCm.js
+@@ -214,6 +214,14 @@ function createImportMetaEnvProxy() {
+ 			if (booleanKeys.includes(key)) return !!process.env[key];
+ 			return process.env[key];
+ 		},
++		deleteProperty(_, key) {
++			if (typeof key !== "string") return true;
++			return delete process.env[key];
++		},
++		has(_, key) {
++			if (typeof key !== "string") return false;
++			return key in process.env;
++		},
+ 		set(_, key, value) {
+ 			if (typeof key !== "string") return true;
+ 			if (booleanKeys.includes(key)) process.env[key] = value ? "1" : "";
 diff --git a/dist/chunks/plugin.d.C8mmycim.d.ts b/dist/chunks/plugin.d.C8mmycim.d.ts
 index b8af1e7401b5b418cd49ab017d9bc3fdbe590ae3..09cdb33f80bd1596bf4081b8855f0448b08ff938 100644
 --- a/dist/chunks/plugin.d.C8mmycim.d.ts
@@ -753,6 +802,25 @@ index 5c235b31744aebca14b9a79dd0836fa0faa9740f..703abcdac3d6196667a6c69509ca5bfd
  	};
  }
  // throttle based on summary reporter's DURATION_UPDATE_INTERVAL_MS
+diff --git a/dist/module-evaluator.js b/dist/module-evaluator.js
+index 9553a810dea6bd70ccf2af95ea485fced78abe32..4997a3c7be07e14474e3f3b7c8f1a61afaef86d7 100644
+--- a/dist/module-evaluator.js
++++ b/dist/module-evaluator.js
+@@ -298,6 +298,14 @@ function createImportMetaEnvProxy() {
+ 			if (booleanKeys.includes(key)) return !!process.env[key];
+ 			return process.env[key];
+ 		},
++		deleteProperty(_, key) {
++			if (typeof key !== "string") return true;
++			return delete process.env[key];
++		},
++		has(_, key) {
++			if (typeof key !== "string") return false;
++			return key in process.env;
++		},
+ 		set(_, key, value) {
+ 			if (typeof key !== "string") return true;
+ 			if (booleanKeys.includes(key)) process.env[key] = value ? "1" : "";
 diff --git a/dist/node.d.ts b/dist/node.d.ts
 index fce7738ae75bb25bdf007f95074c964e62186def..07e0682338342763adedcc34c713dd38bd61c7a5 100644
 --- a/dist/node.d.ts

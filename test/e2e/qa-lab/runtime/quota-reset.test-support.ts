@@ -167,7 +167,7 @@ export async function startQuotaProvider(
     requests.push(recorded);
     return recorded;
   };
-  const usage = () => {
+  const usage = (accountId: RequestRecord["accountId"]) => {
     const usageExhausted =
       primaryExhausted() || phase === "ordinary-rate-limit-with-exhausted-usage";
     const window = (seconds: number, usedPercent = usageExhausted ? 100 : 2) => ({
@@ -177,6 +177,8 @@ export async function startQuotaProvider(
       reset_after_seconds: resetAt - Math.floor(Date.now() / 1000),
     });
     return {
+      account_id: accountId === "quota-alternate-account" ? accountId : ACCOUNT_ID,
+      user_id: "quota-test-user",
       plan_type: "pro",
       rate_limit: {
         allowed: !usageExhausted,
@@ -367,7 +369,7 @@ export async function startQuotaProvider(
         } else if (phase === "revoked") {
           json(403, { error: { message: "Account deactivated" } });
         } else {
-          const value = usage();
+          const value = usage(recorded.accountId);
           const hold = requestPath === "/core-wham/usage" ? nextUsageHold : undefined;
           if (hold) {
             nextUsageHold = undefined;
@@ -674,6 +676,9 @@ export async function createQuotaResetFixture(
     path.dirname(requireCodex.resolve("@openai/codex/package.json")),
     "bin/codex.js",
   );
+  const noProxy = [process.env.no_proxy ?? process.env.NO_PROXY, "127.0.0.1", "localhost", "::1"]
+    .filter(Boolean)
+    .join(",");
   const gateway = await createOpenClawTestInstance({
     name: `quota-reset-${source}`,
     gatewayCommandPrefix: limitGatewayFileSize
@@ -689,6 +694,9 @@ export async function createQuotaResetFixture(
       : [process.execPath, "--import", preload.href],
     startTimeoutMs: 120_000,
     env: {
+      // Route owned loopback providers directly while retaining external proxy routing.
+      NO_PROXY: noProxy,
+      no_proxy: noProxy,
       ...(tls ? { NODE_EXTRA_CA_CERTS: caPath, CODEX_CA_CERTIFICATE: caPath } : {}),
       // Dashboard bootstrap codes and auth readbacks must use the Gateway's
       // advanced clock. NODE_OPTIONS also carries it through CLI respawns.

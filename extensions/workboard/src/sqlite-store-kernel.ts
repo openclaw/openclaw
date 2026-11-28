@@ -9,11 +9,14 @@ import {
   type DatabaseEngineInput,
 } from "openclaw/plugin-sdk/database-engine-worker-runtime";
 import {
+  assertTransactionUsable,
   executeSqliteQueryTakeFirstSync,
   executeSqliteQuerySync,
   getNodeSqliteKysely,
   iterateSqliteQuerySync,
   runSqliteImmediateTransactionSync,
+  type SqliteWorkerTransactionOptions,
+  type SynchronousSqliteCallback,
   sqliteStringSet,
 } from "openclaw/plugin-sdk/sqlite-worker-runtime";
 import { definedFields } from "../record-fields.js";
@@ -27,11 +30,13 @@ import type {
   WorkboardCardStatsAggregate,
   WorkboardKeyedStore,
   WorkboardOwnerClaimResult,
+  WorkboardOwnerSlot,
   WorkboardPersistence,
   WorkboardSubscriptionStore,
 } from "./persistence-types.js";
 import {
   blobToBase64,
+  findCardIdsByPrefix,
   jsonValue,
   loadCardChildRows,
   numberValue,
@@ -61,10 +66,11 @@ type SyncStore<T> = {
 export type WorkboardSqliteKernel = {
   [K in keyof WorkboardPersistence]: SyncStore<WorkboardPersistence[K]>;
 } & {
+  assertSettled(this: void): void;
   close(this: void): void;
-  withWriteTransaction<T>(
-    operation: () => T,
-    options?: Parameters<typeof runSqliteImmediateTransactionSync>[2],
+  withWriteTransaction<T, CommitResult = void>(
+    operation: SynchronousSqliteCallback<T>,
+    options?: SqliteWorkerTransactionOptions<CommitResult>,
   ): T;
 };
 
@@ -113,8 +119,7 @@ class WorkboardSqliteCardStore implements SyncStore<WorkboardCardStore> {
     key: string,
     value: PersistedWorkboardCard,
     expectedUpdatedAt: number,
-    ownerId: string,
-    now: number,
+    { ownerId, now, limit }: WorkboardOwnerSlot,
   ): WorkboardOwnerClaimResult {
     return runSqliteImmediateTransactionSync(this.db, () => {
       const query = getNodeSqliteKysely<WorkboardCardDatabase>(this.db);
@@ -143,6 +148,7 @@ class WorkboardSqliteCardStore implements SyncStore<WorkboardCardStore> {
             eb.and([eb("claim_json", "is not", null), eb("status", "!=", "done")]),
           ]),
         );
+      let ownerActive = 0;
       for (const row of iterateSqliteQuerySync(this.db, candidates)) {
         const card = {
           // SAFETY: insertCard persists WorkboardCard.status; this keeps readCard's required-string boundary.
@@ -157,7 +163,11 @@ class WorkboardSqliteCardStore implements SyncStore<WorkboardCardStore> {
               }
             : undefined,
         };
-        if (workboardCardConsumesOwnerSlot(card, now) && workboardCardSlotOwner(card) === ownerId) {
+        if (
+          workboardCardConsumesOwnerSlot(card, now) &&
+          workboardCardSlotOwner(card) === ownerId &&
+          ++ownerActive >= limit
+        ) {
           return "owner_busy";
         }
       }
@@ -338,6 +348,10 @@ class WorkboardSqliteCardStore implements SyncStore<WorkboardCardStore> {
       key: requiredString(row, "id"),
       value: { version: 1, card: readCard(this.db, row, preloaded) },
     }));
+  }
+
+  findCardIdsByPrefix(prefix: string): string[] {
+    return findCardIdsByPrefix(this.db, prefix);
   }
 
   listCardStatuses(ids: readonly string[]): Array<{ id: string; status: string }> {
@@ -719,6 +733,16 @@ export function createWorkboardSqliteKernel(
     sessionsBoard: new WorkboardSqliteSessionsBoardStore(db, boards),
     subscriptions: new WorkboardSqliteSubscriptionStore(db),
     attachments: new WorkboardSqliteAttachmentStore(db),
+    assertSettled() {
+      // Handled operation errors must not leave a dead connection available for reuse.
+      assertTransactionUsable(db);
+      if (!db.isOpen) {
+        throw new Error("Workboard database is closed");
+      }
+      if (db.isTransaction) {
+        throw new Error("Workboard database left an unsettled transaction");
+      }
+    },
     close,
     withWriteTransaction: (operation, options) =>
       runSqliteImmediateTransactionSync(db, operation, options),

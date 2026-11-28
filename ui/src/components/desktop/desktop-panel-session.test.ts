@@ -223,7 +223,7 @@ describe("session desktop connection", () => {
       expect(reads).toBe(1);
       await vi.advanceTimersByTimeAsync(2_000);
       expect(panel.querySelector("openclaw-panel-loading-skeleton")).not.toBeNull();
-      expect(panel.textContent).toContain("Starting your machine");
+      expect(panel.textContent).toContain("Starting your device");
       const takeControl = [
         ...panel.querySelectorAll<HTMLButtonElement>('button[aria-label="Take control"]'),
       ];
@@ -315,7 +315,10 @@ describe("session desktop connection", () => {
       expect(panel.querySelector(".desktop-picker")).toBeNull();
       expect(rpcCalls(request, "environments.list")).toHaveLength(0);
       response = Promise.resolve(failure === "session" ? described : desktopEnvironment);
-      clickPanelButton(panel, ".desktop-status button");
+      clickPanelButton(
+        panel,
+        presentation === "embedded" ? ".desktop-source-retry" : ".desktop-status button",
+      );
       await waitForSolid(() => expect(connect).toHaveBeenCalledOnce());
       expectObserve(request, desktopEnvironment.id);
       expect(rpcCalls(request, "environments.list")).toHaveLength(0);

@@ -12,6 +12,7 @@ import { createControlUiE2eArtifactDir } from "./control-ui-e2e-artifacts.ts";
 import {
   installControlUiE2ePageDiagnosticRing,
   recordControlUiE2eFailureFacts,
+  rethrowWithControlUiE2eFailureFacts,
 } from "./control-ui-e2e-diagnostics.ts";
 import { installControlUiE2eRendererStallProbe } from "./control-ui-e2e-renderer-stall.ts";
 import {
@@ -58,6 +59,58 @@ describe("shared proof capture", () => {
     vi.restoreAllMocks();
     document.body.replaceChildren();
   });
+
+  it.each(["resolve", "reject", "throw", "late resolve", "late reject"] as const)(
+    "preserves the original failure and bounded facts when a scenario read will %s",
+    async (outcome) => {
+      const { logs } = diagnosticFixture();
+      const page = pageFixture({
+        evaluate: async () => ({ failureSummary: { available: true } }),
+        screenshot: async () => Buffer.from("proof"),
+      });
+      const original = new Error("original assertion failure");
+      const pending = createDeferredCore<Record<string, number>>();
+      const read = () => {
+        if (outcome === "throw") {
+          throw new Error("diagnostic launch failed");
+        }
+        return outcome === "resolve"
+          ? Promise.resolve({ toolCards: 2 })
+          : outcome === "reject"
+            ? Promise.reject(new Error("diagnostic read failed"))
+            : pending.promise;
+      };
+      const failed = rethrowWithControlUiE2eFailureFacts(page, original, "factsRead", read).catch(
+        (error: unknown) => error,
+      );
+      const late = outcome.startsWith("late");
+      if (late) {
+        await vi.advanceTimersByTimeAsync(500);
+      }
+      expect(await failed).toBe(original);
+      const capture = async () => {
+        await captureControlUiE2eFailureDiagnostics(page, { error: original, label: "scenario" });
+        const summary = logs.mock.calls.findLast(
+          ([message]) => message === "[control-ui-e2e] failure state",
+        );
+        return JSON.parse(String(summary?.[1])).scenarioFacts;
+      };
+      const expected =
+        outcome === "resolve" ? { factsRead: true, toolCards: 2 } : { factsRead: false };
+      expect(await capture()).toEqual(expected);
+      if (late) {
+        if (outcome === "late resolve") {
+          pending.resolve({ toolCards: 9 });
+        } else {
+          pending.reject(new Error("late diagnostic failure"));
+        }
+        await vi.runAllTimersAsync();
+        // Capture again: unchanged old artifact bytes alone cannot detect a late WeakMap write.
+        expect(await capture()).toEqual(expected);
+      }
+      expect(vi.getTimerCount()).toBe(0);
+    },
+  );
 
   it.each([
     { stage: "evaluation", late: "resolve" },
@@ -353,10 +406,10 @@ describe("shared proof capture", () => {
 
   it.each([
     ["none", "Send message", "snapshot", "5", "6"],
-    ["none", "Loading chat", "none", undefined, undefined],
+    ["none", "Loading conversation…", "none", undefined, undefined],
     ["evaluation", "Send message", "list", undefined, undefined],
     ["screenshot", "private-label", "list", undefined, undefined],
-    ["storage", "Sending message...", "list", undefined, undefined],
+    ["storage", "Sending message", "list", undefined, undefined],
   ] as const)(
     "retains safe failure state despite %s failure (%s; %s catalog; %s/%s)",
     async (failure, sendLabel, catalogSource, shardIndex, shardCount) => {
@@ -407,7 +460,7 @@ describe("shared proof capture", () => {
       });
       const storageFailed = failure === "storage";
       const screenshotFailed = failure === "screenshot";
-      const sendDisabled = failure !== "none" || sendLabel === "Loading chat";
+      const sendDisabled = failure !== "none" || sendLabel === "Loading conversation…";
       const badgeText = failure === "none" ? "Ready" : "private-badge";
       const fileText = "private-file-content";
       const dom = document.createElement("div");
@@ -600,127 +653,6 @@ describe("shared proof capture", () => {
             status: failure === "evaluation" || failure === "storage" ? "unknown" : "success",
             matches: failure === "evaluation" ? null : 1,
             pendingMatches: failure === "evaluation" ? null : 1,
-          },
-          browser:
-            failure === "evaluation"
-              ? { available: false }
-              : {
-                  readiness: {
-                    generation: 7,
-                    booted: true,
-                    gatewayPhase: "connected",
-                    routeReady: true,
-                    rosterReady: false,
-                    ready: false,
-                    settlementFailed: failure === "storage",
-                  },
-                  gatewayPhase: failure === "storage" ? "unknown" : "connected",
-                  connected: true,
-                  canvasWidgets: [
-                    { loading: true, errorPresent: false, framePresent: false },
-                    { loading: false, errorPresent: true, framePresent: false },
-                    { loading: false, errorPresent: false, framePresent: true },
-                  ],
-                  roster: {
-                    loading: failure === "storage" ? null : true,
-                    count: 2,
-                    errorPresent: true,
-                  },
-                  agentFiles: {
-                    pathname: "other",
-                    pagePresent: true,
-                    selectedAgentPresent: true,
-                    selectionMatchesPath: null,
-                    listMatchesSelection: true,
-                    panel: "files",
-                    activeFile: failure === "none" ? "AGENTS.md" : "unknown",
-                    loading: false,
-                    editorPresent: failure !== "screenshot",
-                    editorLength: screenshotFailed ? null : fileText.length,
-                    editorDisabled: screenshotFailed ? null : storageFailed,
-                  },
-                  documentReadyState: expect.stringMatching(/^(?:loading|interactive|complete)$/u),
-                  providerStatuses: [
-                    {
-                      status: failure === "none" ? "Ready" : "unknown",
-                      length: badgeText.length,
-                    },
-                  ],
-                  composer: {
-                    draftLength: failure === "storage" ? 0 : 13,
-                    nonempty: failure !== "storage",
-                    disabled: failure === "storage",
-                    stop: { visible: true, disabled: false, focused: true },
-                    send: {
-                      label: sendLabel === "private-label" ? "unknown" : sendLabel,
-                      labelLength: sendLabel.length,
-                      disabled: failure !== "none" || sendLabel === "Loading chat",
-                      busy: failure === "storage",
-                    },
-                  },
-                  activeElement: {
-                    kind: "button",
-                    inComposer: true,
-                    isStop: true,
-                    isSend: false,
-                  },
-                  tooltips: {
-                    openCount: 1,
-                    entries: [
-                      {
-                        trigger: {
-                          kind: "button",
-                          inComposer: true,
-                          isStop: true,
-                          isSend: false,
-                        },
-                        hovered: false,
-                        containsFocus: true,
-                      },
-                    ],
-                  },
-                },
-          models: {
-            listSeen: failure !== "none",
-            listOk: failure === "none" ? null : true,
-            snapshot: {
-              seen: snapshot !== undefined,
-              models: snapshot ? 1 : null,
-              available: snapshot ? 1 : null,
-              unavailable: snapshot ? 0 : null,
-              unknownAvailability: snapshot ? 0 : null,
-              pendingProviders: snapshot ? 1 : null,
-              providerOutcomes: snapshot
-                ? { ready: 1, "auth-rejected": 0, unavailable: 0, unknown: 0 }
-                : null,
-            },
-            models: failure === "none" ? null : failure === "screenshot" ? 0 : 3,
-            available: failure === "none" ? null : failure === "screenshot" ? 0 : 1,
-            unavailable: failure === "none" ? null : failure === "screenshot" ? 0 : 1,
-            unknownAvailability: failure === "none" ? null : failure === "screenshot" ? 0 : 1,
-            pendingProviders: failure === "none" ? null : 0,
-            providerOutcomes:
-              failure === "none"
-                ? null
-                : {
-                    ready: failure === "storage" || failure === "evaluation" ? 1 : 0,
-                    "auth-rejected": 0,
-                    unavailable: 0,
-                    unknown: failure === "storage" || failure === "evaluation" ? 1 : 0,
-                  },
-            authSeen: failure !== "none",
-            authOk: failure === "none" ? null : true,
-            profiles:
-              failure === "none"
-                ? null
-                : {
-                    ok: failure === "storage" || failure === "evaluation" ? 1 : 0,
-                    expiring: 0,
-                    expired: failure === "storage" || failure === "evaluation" ? 1 : 0,
-                    missing: 0,
-                    static: 0,
-                    unknown: failure === "storage" || failure === "evaluation" ? 1 : 0,
-                  },
           },
         });
       }

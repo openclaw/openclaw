@@ -1,15 +1,19 @@
 import { For, Show, createMemo, onSettled } from "solid-js";
-import { Icon } from "../../components/solid/icon.tsx";
+import { InlineAlert } from "../../components/solid/inline-alert.tsx";
 import { Menu } from "../../components/solid/menu.tsx";
 import { SettingsPage } from "../../components/solid/settings-ui.tsx";
-import { registerUsageEnglish } from "../../i18n/locales/en-usage.ts";
 import "../../components/tooltip.ts";
-import { t, registerEnglishCatalog } from "../../lib/reactive/i18n.ts";
+import { registerUsageEnglish } from "../../i18n/locales/en-usage.ts";
 import "../../styles/usage.css";
+import { t, registerEnglishCatalog } from "../../lib/reactive/i18n.ts";
 import { isUsageCacheIncomplete } from "./cache-status.ts";
-import { UsageMosaic } from "./metrics-view.tsx";
-import { buildPeakErrorHours, formatUsageCost, formatUsageTokens } from "./metrics.ts";
-import { renderUsageEmptyState } from "./page-shell.tsx";
+import {
+  buildPeakErrorHours,
+  formatHeadlineCost,
+  formatUsageTokens,
+  usageThroughputStats,
+} from "./metrics.ts";
+import { UsageEmptyState } from "./page-shell.tsx";
 import { createUsagePhoneLayout } from "./phone-layout.ts";
 import { buildProviderSeries } from "./provider-series.ts";
 import { createUsageRead, UsagePending, UsageReadStatus, type UsageRead } from "./read-status.tsx";
@@ -20,7 +24,6 @@ import { createUsageControls, type UsageControlsProps } from "./view-controls.ts
 import { UsageCreators } from "./view-creators.tsx";
 import { UsageHeatmap } from "./view-heatmap.tsx";
 import {
-  CostWindowComparison,
   renderFilterChips,
   renderProviderUsage,
   UsageInsights,
@@ -60,11 +63,6 @@ function UsageView(props: UsageControlsProps & { loading: boolean; read: UsageRe
   // Retain presentation only within the owner's strict scope while its text query changes.
   const analyticsData = createMemo(() => retainedChartSnapshot() ?? props.data);
   const analyticsTotals = () => analyticsData().totals;
-  const analyticsSessionCount = () =>
-    analyticsData().overview?.selectedSessionCount ??
-    analyticsData().overview?.total ??
-    analyticsData().aggregates?.sessionCount ??
-    analyticsData().sessions.length;
   const analyticsTotalSessions = () =>
     analyticsData().overview?.unfilteredSessionCount ??
     analyticsData().aggregates?.sessionCount ??
@@ -127,27 +125,29 @@ function UsageView(props: UsageControlsProps & { loading: boolean; read: UsageRe
     const sessions = displaySessionCount();
     return [
       [totals ? formatUsageTokens(totals.totalTokens) : empty, t("usage.metrics.tokens")],
-      [totals ? formatUsageCost(totals.totalCost) : empty, t("usage.metrics.cost")],
+      // Usage without a known price is excluded from the total, so say so beside it.
+      [
+        totals ? formatHeadlineCost(totals) : empty,
+        t("usage.metrics.cost"),
+        (totals?.missingCostEntries ?? 0) > 0,
+      ],
       [totals ? sessions.toLocaleString() : empty, t("usage.overview.sessions")],
-    ];
+    ] as const;
   });
   const insightStats = createMemo(() => {
     const durationMs = analyticsData().overview?.durationMs ?? 0;
     const durationCount = analyticsData().overview?.durationCount ?? 0;
-    const totals = analyticsTotals();
-    const messages = activeAggregates().messages;
+    const aggregates = activeAggregates();
+    const messages = aggregates.messages;
     return {
       durationCount,
       avgDurationMs: durationCount ? durationMs / durationCount : 0,
-      throughputTokensPerMin:
-        totals && durationMs > 0 ? totals.totalTokens / (durationMs / 60000) : undefined,
-      throughputCostPerMin:
-        totals && durationMs > 0 ? totals.totalCost / (durationMs / 60000) : undefined,
+      ...usageThroughputStats(analyticsData().aggregates ?? {}, props.filters.selectedDays),
       errorRate: messages.total ? messages.errors / messages.total : 0,
     };
   });
   // Zero totals are normal while idle; an error must keep its own explanation.
-  const isEmpty = () => overview().isEmpty && !loading() && !props.data.error;
+  const isEmpty = () => overview().isEmpty && !props.data.error;
   const showAnalytics = () => overview().hasOverviewData && !isEmpty();
   const keepAnalytics = () =>
     showAnalytics() || (retainedCharts() && Boolean(retainedChartSnapshot()));
@@ -165,13 +165,31 @@ function UsageView(props: UsageControlsProps & { loading: boolean; read: UsageRe
         <section class="usage-header-section">
           <div class={["usage-header", { pinned: props.display.headerPinned && !phone() }]}>
             {controls.toolbar()}
+            {controls.appliedFilters()}
 
             {/* Carapace summary strip: fixed cells, so placeholders and loaded totals share one layout. */}
             <div class="usage-summary-strip">
-              <For each={metricBadges()}>
-                {([value, label]) => (
+              <For each={metricBadges()} keyed={false}>
+                {(badge) => (
                   <div class="usage-metric-badge">
-                    <strong>{value}</strong> <small>{label}</small>
+                    <strong>{badge()[0]}</strong>{" "}
+                    <small>
+                      {badge()[1]}
+                      <Show when={badge()[2]}>
+                        <openclaw-tooltip open-on-click>
+                          <button
+                            id="usage-summary-hint-cost"
+                            type="button"
+                            class="usage-summary-hint"
+                            aria-label={badge()[1]}
+                            onClick={(event) => event.currentTarget.focus()}
+                          >
+                            ?
+                          </button>
+                          <span slot="content">{t("usage.overview.missingCostHint")}</span>
+                        </openclaw-tooltip>
+                      </Show>
+                    </small>
                   </div>
                 )}
               </For>
@@ -182,26 +200,6 @@ function UsageView(props: UsageControlsProps & { loading: boolean; read: UsageRe
               ) : (
                 <div class="usage-summary-strip__actions">
                   {controls.partialStatus()}
-                  <button
-                    class={[
-                      "btn btn--sm btn--icon usage-pin-btn",
-                      { active: props.display.headerPinned },
-                    ]}
-                    aria-label={
-                      props.display.headerPinned
-                        ? t("usage.filters.pinned")
-                        : t("usage.filters.pin")
-                    }
-                    aria-pressed={props.display.headerPinned ? "true" : "false"}
-                    title={
-                      props.display.headerPinned
-                        ? t("usage.filters.pinned")
-                        : t("usage.filters.pin")
-                    }
-                    onClick={() => props.callbacks.filters.onToggleHeaderPinned()}
-                  >
-                    <Icon name={props.display.headerPinned ? "pinOff" : "pin"} />
-                  </button>
                   <Menu
                     id="usage-export"
                     label={t("usage.export.label")}
@@ -227,18 +225,21 @@ function UsageView(props: UsageControlsProps & { loading: boolean; read: UsageRe
             <UsageReadStatus read={props.read}>
               {() =>
                 props.data.error ? (
-                  <div class="callout danger usage-callout">{props.data.error}</div>
+                  <InlineAlert tone="danger" class="usage-callout">
+                    {props.data.error}
+                  </InlineAlert>
                 ) : undefined
               }
             </UsageReadStatus>
             {props.data.cacheRefresh === "failed" ? (
-              <div
-                class="callout warning usage-callout usage-cache-warning"
+              <InlineAlert
+                tone="warning"
+                class="usage-callout usage-cache-warning"
                 role="status"
                 aria-live="polite"
               >
                 {t("usage.cacheStatus.paused")}
-              </div>
+              </InlineAlert>
             ) : undefined}
           </div>
         </section>
@@ -254,7 +255,10 @@ function UsageView(props: UsageControlsProps & { loading: boolean; read: UsageRe
             </div>
           ) : undefined
         ) : isEmpty() ? (
-          renderUsageEmptyState(() => void props.callbacks.filters.onRefresh())
+          <UsageEmptyState
+            loading={loading()}
+            onRefresh={() => void props.callbacks.filters.onRefresh()}
+          />
         ) : undefined}
         <Show when={showAnalytics() || retainedCharts()}>
           {(_shown) => (
@@ -269,9 +273,6 @@ function UsageView(props: UsageControlsProps & { loading: boolean; read: UsageRe
                 selectedDays={props.filters.selectedDays}
                 chartMode={props.display.chartMode}
                 dailyChartMode={props.display.dailyChartMode}
-                onDailyChartModeChange={(dailyChartMode) =>
-                  props.callbacks.display.onChange({ dailyChartMode })
-                }
                 onSelectDay={props.callbacks.filters.onSelectDay}
                 providerSeries={providerSeries()}
                 range={{
@@ -304,19 +305,10 @@ function UsageView(props: UsageControlsProps & { loading: boolean; read: UsageRe
               totals={analyticsTotals()}
               aggregates={activeAggregates()}
               stats={insightStats()}
-              showCostHint={(analyticsTotals()?.missingCostEntries ?? 0) > 0}
               errorHours={buildPeakErrorHours(
                 analyticsData().overview?.hourlyMessages ?? [],
                 analyticsData().overview?.hourlyErrors ?? [],
               )}
-              sessionCount={analyticsSessionCount()}
-              totalSessions={analyticsTotalSessions()}
-            />
-            <CostWindowComparison
-              daily={analyticsData().aggregates?.costDaily ?? props.data.costDaily}
-              rangeStartDate={props.filters.startDate}
-              rangeEndDate={props.filters.endDate}
-              timeZone={props.filters.timeZone}
             />
           </div>
         </Show>
@@ -341,13 +333,6 @@ function UsageView(props: UsageControlsProps & { loading: boolean; read: UsageRe
             inert={!showAnalytics()}
             style={{ display: showAnalytics() ? "contents" : "none" }}
           >
-            <UsageMosaic
-              overview={analyticsData().overview}
-              timeZone={props.filters.timeZone}
-              selectedHours={props.filters.selectedHours}
-              onSelectHour={props.callbacks.filters.onSelectHour}
-            />
-
             <UsageSessionsGrid
               usage={props}
               reveal={reveal}

@@ -1,11 +1,19 @@
 import path from "node:path";
 import { normalizeStringifiedOptionalString } from "@openclaw/normalization-core/string-coerce";
 import { z } from "zod";
+import { UI_PREFERENCE_DEFAULTS } from "../../packages/gateway-protocol/src/schema/ui-appearance-preferences.js";
 import { parseDurationMs } from "../cli/parse-duration.js";
+import { isValidCronExpression } from "../cron/expression.js";
 import { REPOSITORY_BRANCH_PREFIX_PATTERN } from "./repository-branch-prefix.js";
 import { SilentReplyPolicyConfigSchema } from "./zod-schema.agent-defaults.js";
 import { ToolsSchema } from "./zod-schema.agent-runtime.js";
-import { AgentsSchema, BindingsSchema, BroadcastSchema } from "./zod-schema.agents.js";
+import {
+  addDuplicateAgentIdKeyIssues,
+  AgentIdKeySchema,
+  AgentsSchema,
+  BindingsSchema,
+  BroadcastSchema,
+} from "./zod-schema.agents.js";
 import { ApprovalsSchema } from "./zod-schema.approvals.js";
 import { ChannelsSchema } from "./zod-schema.channels-config.js";
 import { CloudWorkersConfigSchema } from "./zod-schema.cloud-workers.js";
@@ -39,6 +47,128 @@ import { CommandsSchema, MessagesSchema, SessionSchema } from "./zod-schema.sess
 import { StorageConfigSchema } from "./zod-schema.storage.js";
 import { TelemetryConfigSchema } from "./zod-schema.telemetry.js";
 
+const browserProfilesSchema = z.util.cached(() =>
+  z
+    .record(
+      z.string().regex(/^[a-z0-9-]+$/, "Profile names must be alphanumeric with hyphens only"),
+      z
+        .strictObject({
+          /** Browser engine capability preset. Lightpanda and Kitesurf are external CDP services. */
+          engine: z.enum(["chromium", "lightpanda", "kitesurf"]).optional(),
+          /** CDP port for this profile. Allocated once at creation, persisted permanently. */
+          cdpPort: z.number().int().min(1).max(65535).optional(),
+          /** CDP/DevTools endpoint URL for this profile (remote CDP or existing-session endpoint attach). */
+          cdpUrl: z.string().optional(),
+          /** Explicit user data directory for existing-session Chrome MCP attachment. */
+          userDataDir: z.string().optional(),
+          /** Override the Chrome MCP command for existing-session profiles. */
+          mcpCommand: z.string().optional(),
+          /** Extra Chrome MCP arguments for existing-session profiles. */
+          mcpArgs: z.array(z.string()).optional(),
+          /**
+           * Profile driver (default: openclaw). "extension" attaches to the user's
+           * signed-in browser through the OpenClaw Chrome extension relay.
+           */
+          driver: z
+            .union([
+              z.literal("openclaw"),
+              z.literal("clawd"),
+              z.literal("existing-session"),
+              z.literal("extension"),
+            ])
+            .optional(),
+          /** If true, launch this profile in headless mode. Falls back to browser.headless. */
+          headless: z.boolean().optional(),
+          /** Browser executable path for this profile. Falls back to browser.executablePath. */
+          executablePath: z.string().optional(),
+          /** If true, never launch a browser for this profile; only attach. Falls back to browser.attachOnly. */
+          attachOnly: z.boolean().optional(),
+        })
+        .refine(
+          (value) =>
+            value.driver === "existing-session" ||
+            value.driver === "extension" ||
+            value.cdpPort ||
+            value.cdpUrl,
+          {
+            message: "Profile must set cdpPort or cdpUrl",
+          },
+        )
+        .refine((value) => value.driver === "existing-session" || !value.userDataDir, {
+          message: 'Profile userDataDir is only supported with driver="existing-session"',
+        })
+        .refine((value) => value.driver !== "extension" || !value.cdpUrl, {
+          message:
+            'Profile cdpUrl is not supported with driver="extension" (the relay owns the endpoint)',
+        })
+        .superRefine((value, ctx) => {
+          if (value.engine !== "lightpanda" && value.engine !== "kitesurf") {
+            return;
+          }
+          const label = value.engine === "kitesurf" ? "Kitesurf" : "Lightpanda";
+          const endpoint = value.cdpUrl ? URL.parse(value.cdpUrl) : null;
+          if (!endpoint || !["ws:", "wss:"].includes(endpoint.protocol)) {
+            ctx.addIssue({
+              code: "custom",
+              path: ["cdpUrl"],
+              message: `${label} requires an explicit ws:// or wss:// CDP endpoint`,
+            });
+          }
+          if (value.attachOnly !== true) {
+            ctx.addIssue({
+              code: "custom",
+              path: ["attachOnly"],
+              message: `${label} requires attachOnly: true; OpenClaw does not launch it`,
+            });
+          }
+          if (value.driver !== undefined && value.driver !== "openclaw") {
+            ctx.addIssue({
+              code: "custom",
+              path: ["driver"],
+              message: `${label} requires the default "openclaw" CDP driver`,
+            });
+          }
+          for (const key of [
+            "cdpPort",
+            "userDataDir",
+            "mcpCommand",
+            "mcpArgs",
+            "headless",
+            "executablePath",
+          ] as const) {
+            if (value[key] !== undefined) {
+              ctx.addIssue({
+                code: "custom",
+                path: [key],
+                message: `${label} does not support the profile ${key} setting`,
+              });
+            }
+          }
+        }),
+    )
+    .optional(),
+);
+
+const CronDefaultDeliveryDestinationSchema = z.strictObject({
+  channel: z.string().optional(),
+  to: z.string().trim().min(1),
+  threadId: z.union([z.string().trim().min(1), z.number().int()]).optional(),
+  accountId: z.string().optional(),
+});
+
+const CronFailureAlertRouteSchema = z.strictObject({
+  threadId: z.union([z.string().trim().min(1), z.number().int()]).optional(),
+  mode: z.enum(["announce", "webhook"]).optional(),
+  accountId: z.string().optional(),
+  channel: z.string().optional(),
+  to: z.string().optional(),
+});
+
+const CronScopedDefaultsSchema = z.strictObject({
+  delivery: CronDefaultDeliveryDestinationSchema.optional(),
+  failureAlert: CronFailureAlertRouteSchema.optional(),
+});
+
 export const OpenClawSchemaShape = {
   $schema: z.string().optional(),
   meta: z
@@ -49,6 +179,7 @@ export const OpenClawSchemaShape = {
           modelPolicyAllowlist: z.literal(true).optional(),
           utilityModelSeparation: z.literal(true).optional(),
           skillWorkshopPlugin: z.literal(true).optional(),
+          skillLibraryToolSplit: z.literal(true).optional(),
           webhookListeners: z
             .union([z.literal(true), z.record(z.string(), z.array(z.array(z.string())))])
             .optional(),
@@ -95,6 +226,11 @@ export const OpenClawSchemaShape = {
       auto: z
         .strictObject({
           enabled: z.boolean().optional(),
+          schedule: z
+            .string()
+            .trim()
+            .refine((value) => isValidCronExpression(value), "Invalid cron expression")
+            .optional(),
         })
         .optional(),
     })
@@ -123,104 +259,10 @@ export const OpenClawSchemaShape = {
       snapshotDefaults: BrowserSnapshotDefaultsSchema,
       /** SSRF policy for browser navigation/open-tab operations. */
       ssrfPolicy: SsrFPolicyConfigSchema.optional(),
-      profiles: z
-        .record(
-          z.string().regex(/^[a-z0-9-]+$/, "Profile names must be alphanumeric with hyphens only"),
-          z
-            .strictObject({
-              /** Browser engine capability preset. Lightpanda is an external, semantic-only CDP service. */
-              engine: z.enum(["chromium", "lightpanda"]).optional(),
-              /** CDP port for this profile. Allocated once at creation, persisted permanently. */
-              cdpPort: z.number().int().min(1).max(65535).optional(),
-              /** CDP/DevTools endpoint URL for this profile (remote CDP or existing-session endpoint attach). */
-              cdpUrl: z.string().optional(),
-              /** Explicit user data directory for existing-session Chrome MCP attachment. */
-              userDataDir: z.string().optional(),
-              /** Override the Chrome MCP command for existing-session profiles. */
-              mcpCommand: z.string().optional(),
-              /** Extra Chrome MCP arguments for existing-session profiles. */
-              mcpArgs: z.array(z.string()).optional(),
-              /**
-               * Profile driver (default: openclaw). "extension" attaches to the user's
-               * signed-in browser through the OpenClaw Chrome extension relay.
-               */
-              driver: z
-                .union([
-                  z.literal("openclaw"),
-                  z.literal("clawd"),
-                  z.literal("existing-session"),
-                  z.literal("extension"),
-                ])
-                .optional(),
-              /** If true, launch this profile in headless mode. Falls back to browser.headless. */
-              headless: z.boolean().optional(),
-              /** Browser executable path for this profile. Falls back to browser.executablePath. */
-              executablePath: z.string().optional(),
-              /** If true, never launch a browser for this profile; only attach. Falls back to browser.attachOnly. */
-              attachOnly: z.boolean().optional(),
-            })
-            .refine(
-              (value) =>
-                value.driver === "existing-session" ||
-                value.driver === "extension" ||
-                value.cdpPort ||
-                value.cdpUrl,
-              {
-                message: "Profile must set cdpPort or cdpUrl",
-              },
-            )
-            .refine((value) => value.driver === "existing-session" || !value.userDataDir, {
-              message: 'Profile userDataDir is only supported with driver="existing-session"',
-            })
-            .refine((value) => value.driver !== "extension" || !value.cdpUrl, {
-              message:
-                'Profile cdpUrl is not supported with driver="extension" (the relay owns the endpoint)',
-            })
-            .superRefine((value, ctx) => {
-              if (value.engine !== "lightpanda") {
-                return;
-              }
-              const endpoint = value.cdpUrl ? URL.parse(value.cdpUrl) : null;
-              if (!endpoint || !["ws:", "wss:"].includes(endpoint.protocol)) {
-                ctx.addIssue({
-                  code: "custom",
-                  path: ["cdpUrl"],
-                  message: "Lightpanda requires an explicit ws:// or wss:// CDP endpoint",
-                });
-              }
-              if (value.attachOnly !== true) {
-                ctx.addIssue({
-                  code: "custom",
-                  path: ["attachOnly"],
-                  message: "Lightpanda requires attachOnly: true; OpenClaw does not launch it",
-                });
-              }
-              if (value.driver !== undefined && value.driver !== "openclaw") {
-                ctx.addIssue({
-                  code: "custom",
-                  path: ["driver"],
-                  message: 'Lightpanda requires the default "openclaw" CDP driver',
-                });
-              }
-              for (const key of [
-                "cdpPort",
-                "userDataDir",
-                "mcpCommand",
-                "mcpArgs",
-                "headless",
-                "executablePath",
-              ] as const) {
-                if (value[key] !== undefined) {
-                  ctx.addIssue({
-                    code: "custom",
-                    path: [key],
-                    message: `Lightpanda does not support the profile ${key} setting`,
-                  });
-                }
-              }
-            }),
-        )
-        .optional(),
+      // An absent browser skips profile validation setup. Shape inspection shares the same schema.
+      get profiles() {
+        return browserProfilesSchema.value;
+      },
       /**
        * Additional Chrome launch arguments.
        * Useful for stealth flags, window size overrides, or custom user-agent strings.
@@ -251,11 +293,17 @@ export const OpenClawSchemaShape = {
         }
         const key = endpoint.toString().replace(/\/$/, "");
         const previous = endpoints.get(key);
-        if (previous && (previous.engine === "lightpanda" || profile.engine === "lightpanda")) {
+        if (
+          previous &&
+          (previous.engine === "lightpanda" ||
+            profile.engine === "lightpanda" ||
+            previous.engine === "kitesurf" ||
+            profile.engine === "kitesurf")
+        ) {
           ctx.addIssue({
             code: "custom",
             path: ["profiles", name, "cdpUrl"],
-            message: `Lightpanda requires a dedicated CDP endpoint; also used by profile "${previous.name}"`,
+            message: `External browser engines require a dedicated CDP endpoint; also used by profile "${previous.name}"`,
           });
         }
         endpoints.set(key, { name, engine: profile.engine });
@@ -285,16 +333,30 @@ export const OpenClawSchemaShape = {
               z.literal("miami"),
               z.literal("custom"),
             ])
-            .optional(),
+            .optional()
+            .meta({ default: UI_PREFERENCE_DEFAULTS.theme }),
           themeMode: z
             .union([z.literal("light"), z.literal("dark"), z.literal("system")])
-            .optional(),
+            .optional()
+            .meta({ default: UI_PREFERENCE_DEFAULTS.themeMode }),
           accent: z.union([z.literal("theme"), HexColorSchema.startsWith("#")]).optional(),
           locale: z.string().max(20).optional(),
-          chatShowThinking: z.boolean().optional(),
-          chatShowToolCalls: z.boolean().optional(),
-          chatPersistCommentary: z.boolean().optional(),
-          chatSendShortcut: z.union([z.literal("enter"), z.literal("modifier-enter")]).optional(),
+          chatShowThinking: z
+            .boolean()
+            .optional()
+            .meta({ default: UI_PREFERENCE_DEFAULTS.chatShowThinking }),
+          chatShowToolCalls: z
+            .boolean()
+            .optional()
+            .meta({ default: UI_PREFERENCE_DEFAULTS.chatShowToolCalls }),
+          chatPersistCommentary: z
+            .boolean()
+            .optional()
+            .meta({ default: UI_PREFERENCE_DEFAULTS.chatPersistCommentary }),
+          chatSendShortcut: z
+            .union([z.literal("enter"), z.literal("modifier-enter")])
+            .optional()
+            .meta({ default: UI_PREFERENCE_DEFAULTS.chatSendShortcut }),
           chatFollowUpMode: z.union([z.literal("steer"), z.literal("queue")]).optional(),
           sidebarEntries: z.array(z.string()).optional(),
         })
@@ -411,20 +473,27 @@ export const OpenClawSchemaShape = {
        * Default: "24h".
        */
       sessionRetention: z.union([z.string(), z.literal(false)]).optional(),
-      failureAlert: z
-        .strictObject({
-          enabled: z.boolean().optional(),
-          after: z.number().int().min(1).optional(),
-          cooldownMs: z.number().int().min(0).optional(),
-          includeSkipped: z.boolean().optional(),
-          mode: z.enum(["announce", "webhook"]).optional(),
-          accountId: z.string().optional(),
-          channel: z.string().optional(),
-          to: z.string().optional(),
-        })
-        .optional(),
+      /** Default announce destination for jobs that do not name their own route. */
+      delivery: CronDefaultDeliveryDestinationSchema.optional(),
+      failureAlert: CronFailureAlertRouteSchema.extend({
+        enabled: z.boolean().optional(),
+        after: z.number().int().min(1).optional(),
+        cooldownMs: z.number().int().min(0).optional(),
+        includeSkipped: z.boolean().optional(),
+      }).optional(),
+      /** Per-agent destinations that replace the Gateway-wide ones for that agent's jobs. */
+      agents: z.record(AgentIdKeySchema, CronScopedDefaultsSchema).optional(),
+      /**
+       * Per-creator destinations keyed by the Gateway profile id of the human who
+       * created the job; they replace agent and Gateway-wide defaults for those jobs.
+       */
+      creators: z.record(z.string().trim().min(1), CronScopedDefaultsSchema).optional(),
     })
     .superRefine((val, ctx) => {
+      addDuplicateAgentIdKeyIssues(Object.keys(val.agents ?? {}), ctx, {
+        label: "cron.agents",
+        path: ["agents"],
+      });
       if (val.sessionRetention !== undefined && val.sessionRetention !== false) {
         try {
           parseDurationMs(normalizeStringifiedOptionalString(val.sessionRetention) ?? "", {

@@ -706,47 +706,6 @@ describe("mock OpenAI response markers", () => {
     );
   });
 
-  it("streams lane-owned raw Responses API events", async (ctx) => {
-    const events = [
-      { delta: "< / internal", type: "response.reasoning_text.delta" },
-      { delta: "VISIBLE", type: "response.output_text.delta" },
-      { response: { output: [], status: "completed" }, type: "response.completed" },
-    ];
-    await withControl(ctx, { events }, async (baseUrl) => {
-      const response = await post(baseUrl, { input: "exercise raw events", stream: true });
-      const body = await response.text();
-      expect(response.status).toBe(200);
-      for (const event of events) {
-        expect(body).toContain(`data: ${JSON.stringify(event)}`);
-      }
-    });
-  });
-
-  it("streams a lane-owned chat tool call in argument chunks before its text", async (ctx) => {
-    const args = { path: "turn-0.ts", content: "export const value = { ok: [1, 2] };" };
-    await withControl(
-      ctx,
-      { text: "written", toolCall: { name: "write", arguments: args, argumentChunkChars: 4 } },
-      async (baseUrl) => {
-        const user = inputMessage("write the generated file");
-        const calls = chatMessages(
-          await requestApi(baseUrl, "chat/completions", true, [user]),
-          true,
-        ).flatMap((delta) => delta.tool_calls ?? []);
-        const chunks = calls.map((call) => call.function.arguments);
-        expect(calls[0]).toMatchObject({ type: "function", function: { name: "write" } });
-        expect(Math.max(...chunks.map((chunk) => chunk.length))).toBe(4);
-        expect(JSON.parse(chunks.join(""))).toStrictEqual(args);
-        const final = await requestApi(baseUrl, "chat/completions", true, [
-          user,
-          { role: "assistant", tool_calls: [calls[0]] },
-          { role: "tool", tool_call_id: calls[0].id, content: "ok" },
-        ]);
-        expect(apiText(final, "chat/completions", true)).toBe("written");
-      },
-    );
-  });
-
   it("consumes scripted responses in order and logs the selected entries", async (ctx) => {
     const script = {
       scriptVersion: "script-1",

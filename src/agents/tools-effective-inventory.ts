@@ -17,6 +17,7 @@ import {
   hasBundledPluginPublicSurface,
   loadBundledPluginPublicSurfaceModuleSync,
 } from "../plugin-sdk/facade-runtime.js";
+import { resolveEffectivePluginActivationState } from "../plugins/config-state.js";
 import { withPluginMetadataSnapshotScope } from "../plugins/current-plugin-metadata-snapshot.js";
 import { getGatewayPluginMetadataSnapshot } from "../plugins/current-plugin-metadata-state.js";
 import { resolvePluginControlPlaneFingerprint } from "../plugins/plugin-control-plane-context.js";
@@ -31,12 +32,11 @@ import {
 import { withPluginRuntimeGenerationScope } from "../plugins/runtime/generation-scope.js";
 import { getPluginRuntimeLoadContext } from "../plugins/runtime/load-context.js";
 import { resolveAgentDir, resolveAgentWorkspaceDir, resolveSessionAgentId } from "./agent-scope.js";
-import { createOpenClawCodingToolsInternalAsync } from "./agent-tools.js";
-import { hasAnyAuthProfileStoreSourceAsync } from "./auth-profiles/source-check.js";
+import { createOpenClawCodingToolsInternalAsync } from "./agent-tools.async.js";
 import { prepareConversationCapabilityProfile } from "./conversation-capability-profile.js";
 import { resolveModelAsync } from "./embedded-agent-runner/model.js";
 import { resolveBundledStaticCatalogModel } from "./embedded-agent-runner/model.static-catalog.js";
-import { normalizeStaticProviderModelId } from "./model-ref-shared.js";
+import { normalizeStaticProviderModelId } from "./model-selection-normalize.js";
 import { acquireReadOnlyPreparedModelRuntime } from "./prepared-model-runtime.js";
 import { retainRuntimePluginWork } from "./runtime-plugin-work.js";
 import { createToolAccessDiagnostics } from "./tool-access-diagnostics.js";
@@ -116,9 +116,14 @@ function buildToolInventoryNotices(params: {
     ];
   }
 
+  // Name plugins.allow only when the loader's activation policy excludes browser for that reason.
   if (
-    Array.isArray(params.cfg.plugins?.allow) &&
-    !listIncludesTool(params.cfg.plugins.allow, "browser")
+    resolveEffectivePluginActivationState({
+      id: "browser",
+      origin: "bundled",
+      rootConfig: params.cfg,
+      enabledByDefault: true,
+    }).reason === "not in allowlist"
   ) {
     return [
       {
@@ -359,7 +364,6 @@ export async function resolveEffectiveToolInventory(
     resolveSessionAgentId({ sessionKey: params.sessionKey, config: params.cfg });
   const workspaceDir = params.workspaceDir ?? resolveAgentWorkspaceDir(params.cfg, agentId);
   const agentDir = params.agentDir ?? resolveAgentDir(params.cfg, agentId);
-  const authProfileStoreSource = await hasAnyAuthProfileStoreSourceAsync(agentDir);
   const runtimeModelContext =
     Object.hasOwn(params, "modelApi") || Object.hasOwn(params, "runtimeModel")
       ? {
@@ -392,7 +396,8 @@ export async function resolveEffectiveToolInventory(
         ...params,
         conversationCapabilityProfile: capabilityProfile,
         githubPublicationPreview: true,
-        authProfileStoreSource,
+        githubPublicationConfigurationAware:
+          !params.agentRuntime || params.agentRuntime === "openclaw" ? true : undefined,
         agentId,
         workspaceDir,
         agentDir,

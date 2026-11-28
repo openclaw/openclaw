@@ -1,6 +1,7 @@
 import { Command } from "commander";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import type { SessionCatalogHost } from "../../packages/gateway-protocol/src/index.js";
+import { AsyncWorkScope } from "../shared/async-work-scope.js";
 import { ExpectedCliError } from "./expected-cli-error.js";
 import { registerStatusHealthSessionsCommands } from "./program/register.status-health-sessions.js";
 
@@ -48,6 +49,8 @@ const imported = {
   complete: true,
   created: true,
 };
+const methods = () =>
+  mocks.callGateway.mock.calls.map(([params]) => params.method.replace("sessions.catalog.", ""));
 
 describe("sessions import CLI", () => {
   beforeEach(() => {
@@ -84,15 +87,7 @@ describe("sessions import CLI", () => {
     await run(
       "sessions --agent work --json import --all --url ws://gateway.test --token test-token",
     );
-
-    expect(mocks.callGateway.mock.calls.map(([params]) => params.method)).toEqual([
-      "sessions.catalog.list",
-      "sessions.catalog.import",
-      "sessions.catalog.import",
-      "sessions.catalog.list",
-      "sessions.catalog.import",
-      "sessions.catalog.import",
-    ]);
+    expect(methods()).toEqual(["list", "import", "import", "list", "import", "import"]);
     expect(mocks.callGateway).toHaveBeenNthCalledWith(
       4,
       expect.objectContaining({
@@ -152,11 +147,7 @@ describe("sessions import CLI", () => {
       .mockResolvedValueOnce(imported);
 
     await run("sessions import --all --json");
-
-    expect(mocks.callGateway.mock.calls.map(([params]) => params.method)).toEqual([
-      "sessions.catalog.list",
-      "sessions.catalog.import",
-    ]);
+    expect(methods()).toEqual(["list", "import"]);
     expect(JSON.parse(String(mocks.runtime.log.mock.calls[0]?.[0]))).toMatchObject({
       ok: false,
       results: [
@@ -169,6 +160,18 @@ describe("sessions import CLI", () => {
     expect(mocks.runtime.exit).toHaveBeenCalledExactlyOnceWith(1);
   });
 
+  it("finishes the accepted import and starts no more after Ctrl+C", async () => {
+    const scope = new AsyncWorkScope();
+    mocks.callGateway
+      .mockResolvedValueOnce({ catalogs: [catalog("claude", [host(["first", "second"])])] })
+      .mockImplementationOnce(() => Promise.resolve(imported).finally(() => scope.beginClose()));
+    await scope.run(() => run("sessions import --all --json"));
+    expect(methods()).toEqual(["list", "import"]);
+    const output = JSON.parse(String(mocks.runtime.log.mock.calls[0]?.[0]));
+    expect(output).toMatchObject({ ok: false, results: [{ status: "imported" }] });
+    expect(mocks.runtime.exit).not.toHaveBeenCalled();
+  });
+
   it("honors the total dry-run limit without issuing writes or fetching another page", async () => {
     mocks.callGateway.mockResolvedValueOnce({
       catalogs: [catalog("claude", [host(["first", "second"], { nextCursor: "older" })])],
@@ -176,12 +179,8 @@ describe("sessions import CLI", () => {
     await run(
       "sessions import --all --catalog claude --host gateway:local --limit 1 --dry-run --json",
     );
-    expect(mocks.callGateway).toHaveBeenCalledExactlyOnceWith(
-      expect.objectContaining({
-        method: "sessions.catalog.list",
-        request: { catalogId: "claude", hostIds: ["gateway:local"], limitPerHost: 1 },
-      }),
-    );
+    const request = { catalogId: "claude", hostIds: ["gateway:local"], limitPerHost: 1 };
+    expect(mocks.callGateway).toHaveBeenCalledExactlyOnceWith(expect.objectContaining({ request }));
     expect(JSON.parse(String(mocks.runtime.log.mock.calls[0]?.[0]))).toMatchObject({
       ok: true,
       dryRun: true,

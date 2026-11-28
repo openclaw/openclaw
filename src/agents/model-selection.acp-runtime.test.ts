@@ -6,7 +6,6 @@ import {
   resolveAgentEffectiveModelPrimary,
   resolveAgentExplicitModelPrimary,
 } from "./agent-scope.js";
-import { DEFAULT_MODEL, DEFAULT_PROVIDER } from "./defaults.js";
 import { FailoverError } from "./failover-error.js";
 import { resolveModelCandidateChain } from "./model-fallback-candidates.js";
 import { runWithModelFallback } from "./model-fallback-runner.js";
@@ -20,9 +19,13 @@ const HARNESS_MODEL = "harness-only[context=272k,reasoning=medium]";
 const nativePrimary = "native/primary";
 const nativeFallback = "native/backup";
 const nativeRef = { provider: "native", model: "primary" };
-const defaultRef = { provider: DEFAULT_PROVIDER, model: DEFAULT_MODEL };
 const nativeDefaults = { model: { primary: nativePrimary, fallbacks: [nativeFallback] } };
-type PolicyCase = [string, typeof nativeRef, string[] | undefined, ("implicit" | "pinned")?];
+type PolicyCase = [
+  string,
+  typeof nativeRef | undefined,
+  string[] | undefined,
+  ("implicit" | "pinned")?,
+];
 
 function selection(agent: AgentEntryConfig, defaults = true) {
   const cfg: OpenClawConfig = {
@@ -34,14 +37,18 @@ function selection(agent: AgentEntryConfig, defaults = true) {
 
 it.each<PolicyCase>([
   ["other/primary", { provider: "other", model: "primary" }, []],
-  ["openai/gpt-5.4", defaultRef, undefined, "implicit"],
+  // An ACP agent model is not a primary; with no defaults the agent has no model.
+  ["openai/gpt-5.4", undefined, undefined, "implicit"],
   [HARNESS_MODEL, nativeRef, [], "pinned"],
 ])("resolves %s without changing the authored model", (authored, primary, fallbacks, mode) => {
   const params = selection(
     { model: authored, ...(mode ? { runtime: { type: "acp" } } : {}) },
     mode !== "implicit",
   );
-  const selected = mode === "pinned" ? { provider: "pinned", model: "selection" } : primary;
+  const selected =
+    mode === "pinned"
+      ? { provider: "pinned", model: "selection" }
+      : (primary ?? { provider: "openai", model: "gpt-5.4" });
   const fallbacksOverride = resolveEffectiveModelFallbacks({
     ...params,
     hasSessionModelOverride: mode === "pinned",
@@ -71,9 +78,13 @@ it.each([
       runtime: { type: "acp" },
     });
     const attempts: string[] = [];
+    const primary = resolveDefaultModelForAgent(params);
+    if (!primary) {
+      throw new Error("expected a configured primary");
+    }
     const result = runWithModelFallback({
       ...params,
-      ...resolveDefaultModelForAgent(params),
+      ...primary,
       skipAuthProfileRuntime: true,
       fallbacksOverride: resolveEffectiveModelFallbacks({
         ...params,

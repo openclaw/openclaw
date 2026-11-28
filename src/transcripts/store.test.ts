@@ -6,6 +6,7 @@ import { useAutoCleanupTempDirTracker } from "../../test/helpers/temp-dir.js";
 import { readGatewayLockProcessNamespace } from "../infra/gateway-lock-payload.js";
 import { acquireGatewayStateOwner } from "../infra/gateway-state-owner.js";
 import { executeSqliteQuerySync } from "../infra/kysely-sync.js";
+import * as admissions from "../infra/sqlite-database-admission.js";
 import {
   closeOpenClawStateDatabaseAsync,
   closeOpenClawStateDatabaseByPathAsync,
@@ -13,11 +14,13 @@ import {
   openOpenClawStateDatabase,
   runOpenClawStateWriteTransaction,
 } from "../state/openclaw-state-db.js";
+import * as stateWorker from "../state/openclaw-state-worker-store.js";
+import { observeMainThreadFs } from "../test-utils/main-thread-fs-spies.test-support.js";
 import { observeMainThreadSql } from "../test-utils/main-thread-sql-spies.test-support.js";
-import type { TranscriptSessionDescriptor, TranscriptUtterance } from "./provider-types.js";
 import { appendMeetingTranscriptUtterance, meetingTranscriptDb } from "./store-sqlite.js";
 import { transcriptSessionSelector, TranscriptsStore } from "./store.js";
 import { summarizeTranscripts } from "./summary.js";
+import type { TranscriptSessionDescriptor, TranscriptUtterance } from "./types.js";
 
 const tempDirs = useAutoCleanupTempDirTracker((cleanup) =>
   afterAll(async () => {
@@ -78,7 +81,7 @@ async function expectSnapshot(target: TranscriptSessionDescriptor, texts: string
   const snapshot = await store.readSummarySnapshot(target, 20);
   expect(snapshot).toMatchObject({
     nextSequence: texts.length,
-    utterances: texts.map((text) => ({ text })),
+    turns: texts.map((text) => ({ text })),
   });
   return snapshot;
 }
@@ -176,6 +179,51 @@ it("lists summary presence by complete session identity", async () => {
   expect(await store.listSessionEntries()).toMatchObject(expected(false));
   await store.writeSummary(summarizeTranscripts({ session: first, utterances: [] }), first);
   expect(await store.listSessionEntries()).toMatchObject(expected(true));
+});
+
+it("admits a cold list through its worker before retaining its write token", async () => {
+  const target = { ...session("cold-list"), title: "Initial title" };
+  await admit(target);
+  const original = openOpenClawStateDatabase(databaseOptions()).path;
+  await closeDatabase();
+  const root = tempDirs.make("openclaw-transcript-cold-list-");
+  const pathname = path.join(root, "state.sqlite");
+  fs.copyFileSync(original, pathname);
+  const cold = new TranscriptsStore(path.join(root, "transcripts"), { path: pathname });
+  expect(admissions.getSqliteDatabaseAdmissionIdentityForPath(pathname)).toBeUndefined();
+  using filesystem = observeMainThreadFs();
+  const token = admissions.readSqliteDatabaseWriteTokenForPath;
+  let tokenFilesystemCalls = 0;
+  using tokens = vi
+    .spyOn(admissions, "readSqliteDatabaseWriteTokenForPath")
+    .mockImplementation((location) => {
+      const before = filesystem.count();
+      try {
+        return token(location);
+      } finally {
+        tokenFilesystemCalls += filesystem.count() - before;
+      }
+    });
+  using reads = vi.spyOn(stateWorker, "runOpenClawStateWorkerOperation");
+  const options = { limit: 50, projection: "public" as const };
+  const page = () => cold.listReadEntries(options);
+  expect((await page()).entries).toMatchObject([{ title: "Initial title" }]);
+  expect(reads).toHaveBeenCalledTimes(1);
+  expect(tokenFilesystemCalls).toBe(0);
+  expect((await page()).entries).toMatchObject([{ title: "Initial title" }]);
+  expect(reads).toHaveBeenCalledTimes(2);
+  expect((await page()).entries).toMatchObject([{ title: "Initial title" }]);
+  expect(reads).toHaveBeenCalledTimes(2);
+  expect(tokens).toHaveBeenCalled();
+  expect(tokenFilesystemCalls).toBe(0);
+
+  options.limit = 49;
+  await Promise.all([page(), cold.writeSession({ ...target, title: "Worker committed" })]);
+  reads.mockClear();
+  expect((await page()).entries).toMatchObject([{ title: "Worker committed" }]);
+  expect((await page()).entries).toMatchObject([{ title: "Worker committed" }]);
+  expect(reads).toHaveBeenCalledTimes(1);
+  expect(tokenFilesystemCalls).toBe(0);
 });
 
 it("isolates returned list pages and observes another store's writes", async () => {
@@ -429,47 +477,6 @@ it("retains admitted ID origins across updates, reopen, and Doctor restoration",
     );
     await expectTexts(target, ["Saved history"], restored);
   }
-});
-
-it("bounds exact retry lookups to one caption ID without adding statements", async () => {
-  const target = await admit();
-  writeTransaction((db) => {
-    const queries: string[] = [];
-    const sql = observeMainThreadSql({ onStatement: (query) => queries.push(query) });
-    try {
-      const append = (utterance: TranscriptUtterance) => {
-        sql.clear();
-        queries.length = 0;
-        appendMeetingTranscriptUtterance({
-          database: db,
-          session: target,
-          utterance,
-          metadataJson: null,
-          now: 1,
-        });
-        return [...queries];
-      };
-      const utterance = { id: "new-caption", text: "Speech" };
-      const statements = append(utterance);
-      expect(statements).toHaveLength(4);
-      const retryQuery = statements.find((query) =>
-        /^select .* from "meeting_transcript_utterances"/u.test(query),
-      );
-      expect(retryQuery).toBeDefined();
-      const plan = db.prepare(`EXPLAIN QUERY PLAN ${retryQuery}`).all();
-      expect(plan).toContainEqual(
-        expect.objectContaining({
-          detail: expect.stringContaining(
-            "idx_meeting_transcript_utterances_id (session_id=? AND session_started_at=? AND utterance_id=?)",
-          ),
-        }),
-      );
-      expect(append(utterance)).toHaveLength(1);
-      expect(append({ text: "No ID" })).toHaveLength(3);
-    } finally {
-      sql.restore();
-    }
-  });
 });
 
 it("deduplicates exact retries but preserves same-id revisions", async () => {

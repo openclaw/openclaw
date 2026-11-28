@@ -6,11 +6,13 @@ import path from "node:path";
 import { afterAll, assert, beforeAll, expect, it, onTestFinished, vi } from "vitest";
 import type { MockInstance } from "vitest";
 import { GatewayClientRequestError } from "../../packages/gateway-client/src/request-error.js";
+import { UI_RAIL_SHORTCUTS_PREFERENCE_KEY } from "../../packages/gateway-protocol/src/schema/ui-navigation-preferences.js";
 import {
   awaitGateBeforeSettlement,
   createDeferred,
   withinTest,
 } from "../../test/helpers/promise.js";
+import { readRegisteredAgentDatabasePaths } from "../agents/agent-delete-databases.js";
 import { localStateOwnerFixtureEntrypoint } from "../cli/cli-entrypoint.test-support.js";
 import { runCliProcessChild } from "../cli/cli-process-child.test-helpers.js";
 import {
@@ -19,11 +21,15 @@ import {
   registerConfigWriteListener,
 } from "../config/config.js";
 import { resolveAgentModelPrimaryValue } from "../config/model-input.js";
+import { registerSessionMaintenancePreserveKeysProvider } from "../config/sessions/store-maintenance-preserve.js";
 import { acquireGatewayLock } from "../infra/gateway-lock.js";
 import type { GatewayScheduler } from "../infra/gateway-scheduler.js";
 import { resolveRuntimeWorkerArgv, resolveRuntimeWorkerUrl } from "../infra/runtime-worker-url.js";
 import * as pluginLifecycleLease from "../plugins/plugin-lifecycle-lease.js";
+import { readAgentDeletionJournalAsync } from "../state/agent-deletion-journal.js";
 import { OpenClawStateLeaseAcquisitionError } from "../state/openclaw-state-lease-error.js";
+import { setCanonicalUserPreferences } from "../state/user-preferences.js";
+import { ensureCanonicalUserProfileForEmail } from "../state/user-profile-writes.js";
 import {
   createGatewaySchedulerClock,
   createTestGatewayScheduler,
@@ -280,6 +286,60 @@ it("publishes agent mutations before acknowledging immediate session and roster 
   expect(recoveryRestart).not.toHaveBeenCalled();
 });
 
+it("finishes agent deletion when personal pins change during cleanup preparation", async ({
+  signal,
+}) => {
+  const id = "pin-race-agent";
+  await matches(rpc("agents.create", { name: id, workspace: path.join(state.home, id) }), {
+    agentId: id,
+  });
+  await matches(rpc("sessions.create", { agentId: id, key: "agent:" + id + ":chat" }), {
+    key: "agent:" + id + ":chat",
+  });
+  const profile = await ensureCanonicalUserProfileForEmail("purge-pins@example.test", {
+    env: state.env,
+  });
+  const entered = createDeferred();
+  const release = createDeferred();
+  let preparations = 0;
+  const unregister = registerSessionMaintenancePreserveKeysProvider(async ({ native }) => {
+    if (++preparations === 1) {
+      expect(native).toBe(false);
+      entered.resolve();
+      await release.promise;
+    }
+    return { capture: () => undefined, dispose: () => {} };
+  });
+  const deletion = rpc("agents.delete", { agentId: id, deleteFiles: false }).then(
+    (value) => ({ value }),
+    (error: unknown) => ({ error }),
+  );
+  try {
+    await withinTest(
+      awaitGateBeforeSettlement(
+        entered.promise,
+        deletion,
+        "Deletion did not reach cleanup preparation",
+      ),
+      signal,
+    );
+    const written = await setCanonicalUserPreferences(
+      profile.id,
+      { [UI_RAIL_SHORTCUTS_PREFERENCE_KEY]: ["session:agent:main:pinned"] },
+      { env: state.env },
+    );
+    expect(written).toMatchObject({ ok: true });
+    release.resolve();
+    expect(await withinTest(deletion, signal)).toMatchObject({ value: { ok: true, agentId: id } });
+    expect(getRuntimeConfig().agents?.entries?.[id]).toBeUndefined();
+    expect(preparations).toBe(2);
+  } finally {
+    release.resolve();
+    await deletion;
+    unregister();
+  }
+});
+
 it("publishes overlapping mutations from two operators", async ({ signal }) => {
   const peer = await connect();
   try {
@@ -309,27 +369,52 @@ it("publishes overlapping mutations from two operators", async ({ signal }) => {
                 operator.request("agents.delete", deletion),
                 otherOperator.request("agents.delete", deletion),
               ]);
-              expect(results.filter((result) => result.status === "fulfilled")).toEqual([
-                {
-                  status: "fulfilled",
-                  value: expect.objectContaining({ ok: true, agentId: overlapAgentId }),
-                },
-              ]);
-              const failure: unknown = results.find(
-                (result) => result.status === "rejected",
-              )?.reason;
-              if (failure instanceof GatewayClientRequestError && failure.code === "UNAVAILABLE") {
-                // Cleanup can outlast the concurrent loser's five-second lease wait.
-                expect(failure.message).toContain(
+              // Keep-files deletion keeps the database registration, so the loser may delete the
+              // retired agent again (#207257) or outlast its five-second lease wait. Either way it
+              // must not change what the winner did.
+              expect(results).toContainEqual({
+                status: "fulfilled",
+                value: expect.objectContaining({ ok: true, agentId: overlapAgentId }),
+              });
+              for (const result of results) {
+                if (result.status === "fulfilled") {
+                  expect(result.value).toMatchObject({
+                    ok: true,
+                    agentId: overlapAgentId,
+                    removed: [],
+                    failed: [],
+                  });
+                  continue;
+                }
+                expect(result.reason).toBeInstanceOf(GatewayClientRequestError);
+                expect(result.reason).toMatchObject({ code: "UNAVAILABLE" });
+                expect(result.reason.message).toContain(
                   `agent deletion core:agent-deletion/${overlapAgentId} is held by `,
                 );
-                expect(failure.message).toContain("code=OPENCLAW_STATE_LEASE_HELD");
-              } else {
-                expect(failure).toMatchObject({
-                  code: "INVALID_REQUEST",
-                  message: `agent "${overlapAgentId}" not found`,
-                });
+                expect(result.reason.message).toContain("code=OPENCLAW_STATE_LEASE_HELD");
               }
+              // The lease serializes the two requests, so the loser runs as a repeat delete of a
+              // completed keep-files deletion. Repeat it explicitly to compare the stores.
+              const workspace = path.join(state.home, overlapAgentId);
+              const journal = await readAgentDeletionJournalAsync(overlapAgentId);
+              // The winner's journal, not a fresh one begun by the loser.
+              expect(journal).toMatchObject({
+                deleteFiles: false,
+                cleanupCompleted: true,
+                workspaceDir: workspace,
+              });
+              assert.isDefined(journal);
+              const registered = await readRegisteredAgentDatabasePaths(overlapAgentId);
+              expect(registered).not.toHaveLength(0);
+              await matches(otherOperator.request("agents.delete", deletion), {
+                ok: true,
+                agentId: overlapAgentId,
+                removed: [],
+                failed: [],
+              });
+              await Promise.all([workspace, journal.agentDir].map((kept) => fs.access(kept)));
+              expect(await readAgentDeletionJournalAsync(overlapAgentId)).toEqual(journal);
+              expect(await readRegisteredAgentDatabasePaths(overlapAgentId)).toEqual(registered);
             } else {
               await matches(operator.request("agents.delete", deletion), {
                 ok: true,
@@ -345,6 +430,63 @@ it("publishes overlapping mutations from two operators", async ({ signal }) => {
   } finally {
     await disconnectGatewayClient(peer);
   }
+  expect(recoveryRestart).not.toHaveBeenCalled();
+});
+
+it("repeats a completed keep-files deletion as a no-op and later deletes its recorded files", async () => {
+  const id = "repeat-keep-files";
+  const peer = `${id}-peer`;
+  const workspace = path.join(state.home, id);
+  for (const name of [id, peer]) {
+    await matches(rpc("agents.create", { name, workspace: path.join(state.home, name) }), {
+      agentId: name,
+    });
+  }
+  const peerKey = `agent:${peer}:chat`;
+  await matches(rpc("sessions.create", { agentId: peer, key: peerKey }), { key: peerKey });
+  const keepFiles = { agentId: id, deleteFiles: false };
+  await matches(rpc("agents.delete", keepFiles), { ok: true, agentId: id });
+  const journal = await readAgentDeletionJournalAsync(id);
+  expect(journal).toMatchObject({
+    deleteFiles: false,
+    cleanupCompleted: true,
+    workspaceDir: workspace,
+  });
+  assert.isDefined(journal);
+  const registered = await readRegisteredAgentDatabasePaths(id);
+  expect(registered).not.toHaveLength(0);
+  // The path a fresh journal would resolve for the id once config no longer names it.
+  const defaultWorkspaceFile = path.join(state.stateDir, `workspace-${id}`, "keep.txt");
+  await fs.mkdir(path.dirname(defaultWorkspaceFile), { recursive: true });
+  await fs.writeFile(defaultWorkspaceFile, "keep");
+
+  for (let repeat = 0; repeat < 2; repeat += 1) {
+    await matches(rpc("agents.delete", keepFiles), {
+      ok: true,
+      agentId: id,
+      removed: [],
+      failed: [],
+    });
+  }
+  await Promise.all([workspace, journal.agentDir].map((kept) => fs.access(kept)));
+  expect(await readAgentDeletionJournalAsync(id)).toEqual(journal);
+  expect(await readRegisteredAgentDatabasePaths(id)).toEqual(registered);
+  expect(getRuntimeConfig().agents?.entries?.[peer]).toBeDefined();
+  await matches(rpc("sessions.list", { agentId: peer }), {
+    sessions: expect.arrayContaining([expect.objectContaining({ key: peerKey })]),
+  });
+
+  // Deleting with files later removes the recorded workspace, not the default path.
+  await matches(rpc("agents.delete", { agentId: id, deleteFiles: true }), {
+    ok: true,
+    agentId: id,
+    failed: [],
+    removed: expect.arrayContaining([{ path: workspace, method: "trash" }]),
+  });
+  await expect(fs.access(workspace)).rejects.toThrow();
+  expect(await readRegisteredAgentDatabasePaths(id)).toEqual([]);
+  expect(await fs.readFile(defaultWorkspaceFile, "utf8")).toBe("keep");
+  await fs.access(path.join(state.home, peer));
   expect(recoveryRestart).not.toHaveBeenCalled();
 });
 

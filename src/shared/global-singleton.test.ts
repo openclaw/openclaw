@@ -1,10 +1,11 @@
 import { afterEach, describe, expect, it, vi } from "vitest";
-import { createDeferred } from "../../test/helpers/promise.js";
+import { createDeferred, nextEventLoopTurn } from "../../test/helpers/promise.js";
 import {
   drainGlobalSingletonLifecycleState as drain,
   readGlobalSingleton,
   resolveGlobalMap as mapFor,
   resolveGlobalSingleton,
+  resetGlobalSingletonLifecycleState,
 } from "./global-singleton.js";
 
 const TEST_KEY = Symbol("global-singleton:test");
@@ -15,6 +16,28 @@ const register = (reset: () => void | Promise<void>, key = TEST_KEY) =>
 afterEach(() => [TEST_KEY, TEST_MAP_KEY].forEach((key) => Reflect.deleteProperty(globalThis, key)));
 
 describe("resolveGlobalSingleton", () => {
+  it("resets only the current registered owner without creating an absent one", async () => {
+    const absent = Symbol("absent-owner");
+    await resetGlobalSingletonLifecycleState(absent);
+    expect(readGlobalSingleton(absent)).toBeUndefined();
+    const [oldReset, currentReset, otherReset] = [vi.fn(), vi.fn(), vi.fn()];
+    register(oldReset);
+    register(currentReset);
+    register(otherReset, TEST_MAP_KEY);
+
+    await resetGlobalSingletonLifecycleState(TEST_KEY);
+    expect(oldReset).not.toHaveBeenCalled();
+    expect(currentReset).toHaveBeenCalledOnce();
+    expect(otherReset).not.toHaveBeenCalled();
+  });
+
+  it("propagates the registered owner's cleanup failure", async () => {
+    const error = new Error("owner cleanup failed");
+    register(() => Promise.reject(error));
+    await expect(resetGlobalSingletonLifecycleState(TEST_KEY)).rejects.toBe(error);
+    register(() => {});
+  });
+
   it("reuses an initialized singleton", () => {
     const create = vi.fn(() => ({ value: 1 }));
 
@@ -42,13 +65,19 @@ describe("resolveGlobalSingleton", () => {
     register(() => held);
     register(siblingReset, TEST_MAP_KEY);
 
-    const pending = drain();
+    let settled = false;
+    const pending = drain().then(() => {
+      settled = true;
+    });
     try {
       expect(siblingReset).toHaveBeenCalledOnce();
+      await nextEventLoopTurn();
+      expect(settled).toBe(false);
     } finally {
       release();
       await pending;
     }
+    expect(settled).toBe(true);
   });
 
   it("runs every registered reset before reporting failures", async () => {
@@ -65,6 +94,40 @@ describe("resolveGlobalSingleton", () => {
       register(() => {});
     }
   });
+
+  it.each(["close", "restart"] as const)(
+    "joins execution owners before native cleanup during %s, including failures",
+    async (event) => {
+      const { promise: held, resolve: release } = createDeferred();
+      const failure = new Error("execution owner cleanup failed");
+      const nativeFailure = new Error("native cleanup retained");
+      const nativeReset = vi.fn(() => {
+        throw nativeFailure;
+      });
+      resolveGlobalSingleton(TEST_KEY, () => ({}), nativeReset, "native-workers");
+      register(async () => {
+        await held;
+        throw failure;
+      }, TEST_MAP_KEY);
+      const pending = drain(event);
+      const outcome = expect(pending).rejects.toMatchObject({
+        errors: expect.arrayContaining([failure, nativeFailure]),
+      });
+      try {
+        await nextEventLoopTurn();
+        expect(nativeReset).not.toHaveBeenCalled();
+      } finally {
+        release();
+        try {
+          await outcome;
+        } finally {
+          register(() => {});
+          register(() => {}, TEST_MAP_KEY);
+        }
+      }
+      expect(nativeReset).toHaveBeenCalledOnce();
+    },
+  );
 
   it("retains shared state for terminal persistence after other owners close", async () => {
     const shared = mapFor<string, string>(TEST_KEY, "shared-state");

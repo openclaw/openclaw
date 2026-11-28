@@ -45,6 +45,57 @@ function hasMultipleSidebarSessionIdentities(
   );
 }
 
+function withOwnerFilteredChildren(
+  row: SidebarRecentSession,
+  children: readonly SidebarRecentSession[],
+): SidebarRecentSession {
+  // Retain unloaded links for discovery, but count only visible loaded children.
+  const childSessionKeys = new Set(row.childSessionKeys);
+  for (const child of row.children) {
+    childSessionKeys.delete(child.key);
+  }
+  for (const child of children) {
+    childSessionKeys.add(child.key);
+  }
+  return { ...row, children, childSessionKeys: [...childSessionKeys] };
+}
+
+function filterTreeByOwner(
+  treeRows: readonly SidebarRecentSession[],
+  activeOwnerId: string,
+  profileId?: string,
+): SidebarRecentSession[] {
+  const filtered: SidebarRecentSession[] = [];
+  for (const row of treeRows) {
+    const children = filterTreeByOwner(row.children, activeOwnerId, profileId);
+    const ownerId = row.owner?.actor.id;
+    const profileMatches =
+      !profileId || (row.owner?.actor.type === "human" && ownerId === profileId);
+    if (ownerId === activeOwnerId && profileMatches) {
+      filtered.push(withOwnerFilteredChildren(row, children));
+    } else {
+      for (const child of children) {
+        filtered.push({ ...child, isChild: false });
+      }
+    }
+  }
+  return filtered;
+}
+
+export function filterPinnedSessionChildrenByOwner(
+  pin: SidebarRecentSession,
+  ownerId: string | null,
+): SidebarRecentSession {
+  if (!ownerId) {
+    return pin;
+  }
+  const rows = filterTreeByOwner(pin.children, ownerId);
+  return withOwnerFilteredChildren(
+    pin,
+    rows.map((row) => (row.isChild ? row : Object.assign({}, row, { isChild: true }))),
+  );
+}
+
 export function applySidebarSessionOwnerFilter(input: {
   projected: SidebarRecentSession[];
   ownerFacet: SessionsListResult["owners"];
@@ -72,31 +123,14 @@ export function applySidebarSessionOwnerFilter(input: {
   };
   // An absent facet is unresolved during hydration. A present facet is the
   // Gateway's complete owner inventory, even when rows are owner-filtered.
-  const selectedOwnerId = input.selectedOwnerId?.trim() || null;
   // A complete facet may omit an owner with no rows. That means an empty
   // filtered list, never permission to broaden the selected owner to everyone.
-  const activeOwnerId = selectedOwnerId;
-  const filterTree = (treeRows: readonly SidebarRecentSession[]): SidebarRecentSession[] => {
-    const filtered: SidebarRecentSession[] = [];
-    for (const row of treeRows) {
-      const children = filterTree(row.children);
-      const ownerId = row.owner?.actor.id;
-      const profileMatches =
-        !input.selectedProfileId ||
-        (row.owner?.actor.type === "human" && ownerId === input.selectedProfileId);
-      if (ownerId === activeOwnerId && profileMatches) {
-        filtered.push({ ...row, children });
-      } else {
-        for (const child of children) {
-          filtered.push({ ...child, isChild: false });
-        }
-      }
-    }
-    return filtered;
-  };
+  const activeOwnerId = input.selectedOwnerId?.trim() || null;
   return {
     // Involving-me membership is Gateway-owned; only an explicit owner filters this tree.
-    rows: activeOwnerId ? filterTree(input.projected) : input.projected,
+    rows: activeOwnerId
+      ? filterTreeByOwner(input.projected, activeOwnerId, input.selectedProfileId)
+      : input.projected,
     ownerOptions,
     ownershipVisibility,
     activeOwnerId,

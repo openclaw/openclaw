@@ -29,9 +29,10 @@ function approvalInboxPanel(page: Page) {
 }
 const inlineApproval = (page: Page, id: string) =>
   page.locator(`.chat-inline-approval [data-approval-id="${id}"]`);
-async function openChat(options: Parameters<typeof installMockGateway>[1] = {}) {
+async function openChat(options: Parameters<typeof installMockGateway>[1] = {}, mobile = false) {
   const context = await suite.newBrowserContext({
-    viewport: { height: 800, width: 1200 },
+    viewport: { height: 800, width: mobile ? 390 : 1200 },
+    hasTouch: mobile,
   });
   const page = await context.newPage();
   const gateway = await installMockGateway(page, options);
@@ -43,6 +44,70 @@ async function openChat(options: Parameters<typeof installMockGateway>[1] = {}) 
 }
 
 suite.define(() => {
+  it.each([false, true])(
+    "opens the source chat without deciding the request (touch: %s)",
+    async (mobile) => {
+      const sourceSession = {
+        key: "agent:main:review-navigation",
+        label: "Review release notes",
+        kind: "direct",
+        updatedAt: 2_000,
+      };
+      const { page, gateway } = await openChat(
+        {
+          sessionKey: activeSessionKey,
+          sessions: [
+            { key: activeSessionKey, label: "Main", kind: "direct", updatedAt: 1_000 },
+            sourceSession,
+          ],
+        },
+        mobile,
+      );
+      const id = "plugin:release-notes";
+      await gateway.emitGatewayEvent("plugin.approval.requested", {
+        id,
+        createdAtMs: Date.now(),
+        expiresAtMs: Date.now() + 5 * 60_000,
+        request: {
+          title: "Post GitHub comment?",
+          pluginId: "github",
+          agentId: "main",
+          sessionKey: sourceSession.key,
+          allowedDecisions: ["allow-once", "deny"],
+        },
+      });
+      if (mobile) {
+        await page.getByRole("button", { name: "Expand sidebar" }).tap();
+        await page.locator(".nav-drawer").waitFor();
+        await approvalInboxButton(page).tap();
+      } else {
+        await approvalInboxButton(page).click();
+      }
+      const inbox = approvalInboxPanel(page);
+      const sourceLink = inbox
+        .locator('[data-approval-id="plugin:release-notes"]')
+        .getByRole("link", { name: sourceSession.label, exact: true });
+      await sourceLink.waitFor();
+      expect(await sourceLink.evaluate((link) => getComputedStyle(link).textDecorationLine)).toBe(
+        "none",
+      );
+      if (mobile) {
+        await sourceLink.tap();
+      } else {
+        await sourceLink.press("Enter");
+      }
+      await inbox.waitFor({ state: "hidden" });
+      if (mobile) {
+        await page.locator('.nav-drawer[aria-hidden="true"]').waitFor({ state: "attached" });
+      }
+      const chatApproval = mobile
+        ? page.locator('.agent-chat__mobile-approval [data-approval-id="plugin:release-notes"]')
+        : inlineApproval(page, id);
+      await chatApproval.getByText("Post GitHub comment?", { exact: true }).waitFor();
+      expect(await gateway.getRequests("plugin.approval.resolve")).toHaveLength(0);
+    },
+  );
+
   it("keeps approvals passive through detail review and queued decisions", async () => {
     const currentSession = {
       key: activeSessionKey,
@@ -148,7 +213,12 @@ suite.define(() => {
     await expect
       .poll(() => inboxRow.locator(".sidebar-approval-row__command").textContent())
       .toContain("echo review only");
-    await inboxRow.getByText("You don’t have permission to approve.", { exact: true }).waitFor();
+    await inboxRow
+      .getByText(
+        "You can review this request, but you don’t have permission to approve or deny it.",
+        { exact: true },
+      )
+      .waitFor();
     expect(
       await inboxRow
         .locator(".sidebar-approval-row__actions button")

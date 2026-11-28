@@ -1,9 +1,11 @@
 // Runtime LLM tests cover plugin provider hooks inside the model runtime adapter.
 import { createRequireRecord } from "openclaw/plugin-sdk/test-fixtures";
 import { beforeEach, describe, expect, it, vi } from "vitest";
+import { createTestAdmittedRunContext } from "../../agents/admitted-run-context.test-support.js";
 import { resolveContextEngineCapabilities } from "../../agents/embedded-agent-runner/context-engine-capabilities.js";
 import { runContextEngineMaintenance } from "../../agents/embedded-agent-runner/context-engine-maintenance.js";
 import { buildAfterTurnRuntimeContext } from "../../agents/embedded-agent-runner/run/attempt-prompt-helpers.js";
+import * as modelsConfigState from "../../agents/models-config-state.js";
 import {
   PreparedModelRuntimeOwnerNotPublishedError,
   PreparedModelRuntimePluginGenerationRetiredError,
@@ -253,6 +255,7 @@ describe("runtime.llm.complete", () => {
   it("does not trust a fallback-derived agent in the after-turn caller", async () => {
     const attempt = {
       sessionKey: "legacy-session",
+      admittedRunContext: createTestAdmittedRunContext("after-turn"),
       config: cfg,
       skillsSnapshot: undefined,
       provider: "openai",
@@ -477,6 +480,9 @@ describe("runtime.llm.complete", () => {
   it.each([0.0042, 0])(
     "preserves billed cost %s through host dispatch and logging",
     async (costUsd) => {
+      using pricing = vi
+        .spyOn(modelsConfigState, "captureModelsJsonCostSource")
+        .mockRejectedValue(new Error("Recorded billing must not prepare fallback pricing"));
       const usage = {
         ...createRuntimeLlmUsageFixture(),
         cost: { total: costUsd, totalOrigin: "provider-billed" },
@@ -532,13 +538,6 @@ describe("runtime.llm.complete", () => {
           json_schema: { name: "test_result", strict: true, schema: { type: "object" } },
         },
       });
-      expectFields(requireRecord(result, "completion result"), {
-        text: "done",
-        provider: "openai",
-        model: "gpt-5.5",
-        responseModel: "gpt-5.5-2026-08-01",
-        stopReason: "stop",
-      });
       expectFields(requireRecord(result.usage, "completion usage"), {
         inputTokens: 11,
         outputTokens: 7,
@@ -556,6 +555,7 @@ describe("runtime.llm.complete", () => {
         },
       );
       expectFields(requireRecord(logPayload.usage, "log usage"), { costUsd });
+      expect(pricing).not.toHaveBeenCalled();
     },
   );
 

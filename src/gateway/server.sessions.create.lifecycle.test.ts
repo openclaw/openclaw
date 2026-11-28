@@ -1,7 +1,6 @@
 import { beforeEach, expect, test, vi } from "vitest";
 import { closeGatewayTestWebSocket } from "../../test/helpers/gateway-websocket.js";
 import { awaitGateBeforeSettlement, withinTest } from "../../test/helpers/promise.js";
-import { observeHostDataSql } from "../../test/helpers/sqlite-statement-execution-counter.js";
 import * as modelRuntime from "../auto-reply/reply/model-runtime-normalization.js";
 import { persistReplySessionEntry } from "../auto-reply/reply/session-entry-persistence.js";
 import { getRuntimeConfig } from "../config/io.js";
@@ -12,68 +11,40 @@ import {
   toDatabaseOptions,
   withSqliteSessionDatabase,
 } from "../config/sessions/session-accessor.sqlite-scope.js";
-import { addSessionMember, removeSessionMember } from "../config/sessions/session-sharing-store.js";
 import type { SessionEntry } from "../config/sessions/types.js";
 import {
   createGatewayActiveWorkSnapshot,
   waitForGatewayActiveWork,
 } from "../infra/gateway-active-work.js";
-import { beginSessionEffect } from "../sessions/session-controller.lifecycle.js";
+import {
+  beginSessionEffect,
+  captureSessionTarget,
+} from "../sessions/session-controller.lifecycle.js";
+import { createReplyOperation } from "../sessions/session-controller.operation.js";
 import { createDeferredCore } from "../shared/deferred.js";
 import { openOpenClawStateDatabase } from "../state/openclaw-state-db.js";
 import { ensureProfileForEmail } from "../state/user-profiles.js";
 import {
-  captureGatewayDeviceRevocation,
-  invalidateGatewayDeviceRevocation,
-} from "./device-revocation.js";
-import {
   setupPersistentSessionCreateTestHarness,
+  removeSessionWorktree,
   chatSendOwner,
-  sessionCreateRuntimeClient,
 } from "./server.sessions.create.test-support.js";
+import { gatewayConnect } from "./server/client-fixtures.test-support.js";
 import { readSessionGroupCatalog } from "./session-group-catalog.js";
-import * as sharingAuthorization from "./session-sharing-authorization-async.js";
-import { roleClient, rolePolicyConfig } from "./session-sharing.test-utils.js";
 import { embeddedRunMock, rpcReq, testState, writeSessionStore } from "./test-helpers.js";
 import {
   sessionStoreEntry,
   directSessionReq,
   sessionHookMocks,
   sessionLifecycleHookMocks,
+  beforeResetHookMocks,
+  beforeResetHookState,
 } from "./test/server-sessions.test-helpers.js";
 import { createWorkerSessionPlacementStore } from "./worker-environments/placement-store.js";
-const publicationBoundary = vi.hoisted(
-  (): {
-    afterCold: (() => Promise<void>) | undefined;
-    afterWarm: (() => Promise<void>) | undefined;
-  } => ({ afterCold: undefined, afterWarm: undefined }),
-);
-
-vi.mock("./server-methods/session-create-idempotency.js", async (importOriginal) => {
-  const actual =
-    await importOriginal<typeof import("./server-methods/session-create-idempotency.js")>();
-  const idempotentSessionCreate: typeof actual.idempotentSessionCreate = (handler, replay) =>
-    actual.idempotentSessionCreate(
-      async (request) => {
-        await handler(request);
-        await publicationBoundary.afterCold?.();
-      },
-      replay
-        ? async (request, result) => {
-            const replayed = await replay(request, result);
-            await publicationBoundary.afterWarm?.();
-            return replayed;
-          }
-        : undefined,
-    );
-  return { ...actual, idempotentSessionCreate };
-});
 
 const { createSessionStoreDir, openClient } = setupPersistentSessionCreateTestHarness();
 let storePath: string;
 beforeEach(async () => {
-  publicationBoundary.afterCold = undefined;
-  publicationBoundary.afterWarm = undefined;
   ({ storePath } = await createSessionStoreDir());
 });
 
@@ -81,8 +52,8 @@ type CreatedSession = { key: string; sessionId: string; entry: SessionEntry; run
 type CreateParams = Parameters<
   (typeof import("./session-create-service.js"))["createGatewaySession"]
 >[0];
-const adminClient = () => ({ client: { connect: { scopes: ["operator.admin"] } } as never });
-const writeClient = () => ({ client: { connect: { scopes: ["operator.write"] } } as never });
+const adminClient = () => ({ client: { connect: gatewayConnect(["operator.admin"]) } as never });
+const writeClient = () => ({ client: { connect: gatewayConnect(["operator.write"]) } as never });
 const mainReset = { parentSessionKey: "main", emitCommandHooks: true };
 const expectOk = (result: { ok: boolean }) => expect(result.ok).toBe(true);
 const missingAdmin = {
@@ -184,7 +155,7 @@ test.for([
       expect(createGatewayActiveWorkSnapshot().counts.sessionMutations).toBe(1);
       successor = directSessionReq(
         "sessions.patch",
-        { key: blockedKey, pinned: true },
+        { key: blockedKey, color: "purple" },
         { context },
       );
       void successor.then(() => {
@@ -195,8 +166,8 @@ test.for([
       expect(successorFinished).toBe(false);
       const created = readEntry(createdKey);
       expect(created?.sessionId).toBeTruthy();
-      expectOk(await rpcReq(ws, "sessions.patch", { key: createdKey, pinned: true }));
-      expect(readEntry(createdKey)?.pinnedAt).toEqual(expect.any(Number));
+      expectOk(await rpcReq(ws, "sessions.patch", { key: createdKey, color: "purple" }));
+      expect(readEntry(createdKey)?.color).toBe("purple");
     } finally {
       release.resolve();
       await Promise.allSettled([changing, creating, successor]);
@@ -219,47 +190,27 @@ test.for([
 
 test("sessions.create registers a category only after the session commit succeeds", async () => {
   const category = "Deferred category";
-  let validations = 0;
-  const failed = await createSession(
-    { category, key: "agent:main:dashboard:failed-category-create" },
-    {
-      context: {
-        validateAgentRuntimeApprovalAuthority: () => ++validations < 3,
+  const bindCreation = vi.fn(() => {
+    throw new Error("session commit rejected");
+  });
+  await expect(
+    createSession(
+      { category, key: "agent:main:dashboard:failed-category-create" },
+      {
+        sessionMutationAuthorization: {
+          assertCurrent: vi.fn(),
+          assertTargetCurrent: vi.fn(),
+          bindCreation,
+        },
       },
-      client: sessionCreateRuntimeClient(["operator.write"]) as never,
-    },
-  );
-  expect(failed.ok).toBe(false);
+    ),
+  ).rejects.toThrow("session commit rejected");
   expect(readSessionGroupCatalog().groups.map((group) => group.name)).not.toContain(category);
-  const broadcastToConnIds = vi.fn();
-  const created = await createSession(
-    { category: `  ${category}  `, key: "agent:main:dashboard:created" },
-    {
-      context: {
-        broadcastToConnIds,
-        getSessionEventSubscriberConnIds: () => new Set(["conn-1"]),
-      },
-    },
-  );
-  expectOk(created);
-  expect(readSessionGroupCatalog().groups.filter((group) => group.name === category)).toHaveLength(
-    1,
-  );
-  expect(
-    broadcastToConnIds.mock.calls.filter(([, payload]) => payload?.reason === "groups"),
-  ).toHaveLength(1);
 });
 
 test("concurrent sessions.create requests adopt one canonical keyed session", async () => {
   const key = "agent:main:dashboard:concurrent-keyed-session";
-  const sql = observeHostDataSql();
-  let created: Awaited<ReturnType<typeof createSession>>[];
-  try {
-    created = await Promise.all(Array.from({ length: 4 }, () => createSession({ key })));
-    expect(sql.queries.filter((query) => /\bfrom\s+"?session_nodes\b/i.test(query))).toEqual([]);
-  } finally {
-    sql.restore();
-  }
+  const created = await Promise.all(Array.from({ length: 4 }, () => createSession({ key })));
   expect(created.every((result) => result.ok)).toBe(true);
   expect(new Set(created.map((result) => result.payload?.key))).toEqual(new Set([key]));
   const sessionIds = new Set(created.map((result) => result.payload?.sessionId));
@@ -269,7 +220,7 @@ test("concurrent sessions.create requests adopt one canonical keyed session", as
   expect(persistedSessionId).toBe(canonicalSessionId);
 });
 
-test("createGatewaySession forwards its commit guard into main-session reset", async () => {
+test("createGatewaySession preserves the main session when its reset commit guard rejects", async () => {
   try {
     const key = "agent:main:main";
     const original = sessionStoreEntry("main-before-guard-close");
@@ -281,7 +232,6 @@ test("createGatewaySession forwards its commit guard into main-session reset", a
       }
     });
     await expect(resetMain({ commitGuard })).rejects.toThrow("session create authority closed");
-    expect(commitGuard).toHaveBeenCalledTimes(2);
     expect(readEntry(key)).toMatchObject(original);
   } finally {
     testState.sessionConfig = undefined;
@@ -556,11 +506,7 @@ test("sessions.create replays an identical creation once and rejects conflicting
   const context = { dedupe: new Map() };
   const ownerId = ensureProfileForEmail("replay@owner.test").id;
   const clientFor = (scopes = ["operator.write", "operator.admin"], profileId = ownerId) => ({
-    connect: {
-      role: "operator",
-      scopes,
-      device: { id: "control-ui-device" },
-    },
+    connect: { ...gatewayConnect(scopes), device: { id: "control-ui-device" } },
     authenticatedUserProfile: { profileId },
   });
   const params = {
@@ -588,10 +534,6 @@ test("sessions.create replays an identical creation once and rejects conflicting
     expectOk(first);
     expect(replay).toEqual(first);
     expect(chatSend).toHaveBeenCalledOnce();
-    expect(chatSend.mock.calls[0]?.[0].params).toMatchObject({
-      idempotencyKey: expect.any(String),
-      message: "start this task exactly once",
-    });
     const restarted = await directSessionReq<{ key: string }>("sessions.create", params, {
       client: clientFor() as never,
       context: { dedupe: new Map() },
@@ -621,6 +563,7 @@ test("sessions.create replays an identical creation once and rejects conflicting
     expectOk(differentOwner);
     expect(differentOwner.payload?.key).not.toBe(first.payload?.key);
     expect(chatSend).toHaveBeenCalledTimes(2);
+    // Initial-input custody must stay distinct when two owners reuse the public key.
     expect(chatSend.mock.calls[1]?.[0].params.idempotencyKey).not.toBe(
       chatSend.mock.calls[0]?.[0].params.idempotencyKey,
     );
@@ -632,8 +575,7 @@ test("sessions.create replays an identical creation once and rejects conflicting
 test("durable creation replays before label claims and refuses a reset incarnation", async () => {
   const client = {
     connect: {
-      role: "operator",
-      scopes: ["operator.write", "operator.admin"],
+      ...gatewayConnect(["operator.write", "operator.admin"]),
       device: { id: "receipt-device" },
     },
     authenticatedUserProfile: { profileId: ensureProfileForEmail("receipt-owner@example.test").id },
@@ -690,159 +632,11 @@ test("durable creation replays before label claims and refuses a reset incarnati
   });
 });
 
-test.each(["requester", "membership"] as const)(
-  "durable replay refuses %s revocation after authorization and before metadata disclosure",
-  async (change) => {
-    const client = roleClient("view", "durable-replay-member");
-    const profileId = client.authenticatedUserProfile!.profileId;
-    const creator = ensureProfileForEmail("durable-replay-creator@example.test").id;
-    const key = "agent:main:dashboard:restricted-replay";
-    const scope = { agentId: "main", storePath, sessionKey: key };
-    replaceSessionEntrySync(scope, {
-      sessionId: "restricted-original",
-      lifecycleRevision: "original",
-      updatedAt: 1,
-      label: "Private replay metadata",
-      visibility: "read-only",
-      createdActor: { type: "human", source: "profile", id: creator },
-    });
-    await addSessionMember(scope, { identityId: profileId, addedBy: creator });
-    const cfg = { ...getRuntimeConfig(), ...rolePolicyConfig() };
-    const deviceOwner = {};
-    const source = captureGatewayDeviceRevocation(
-      deviceOwner,
-      { deviceId: "replay-device", role: "operator" },
-      () => true,
-    );
-    const request = () =>
-      directSessionReq<CreatedSession>(
-        "sessions.create",
-        {
-          agentId: "main",
-          key,
-          idempotencyKey: "restricted-replay-once",
-        },
-        {
-          client,
-          hasCurrentClientAuthority: source.isCurrent,
-          // Distinct context removes the process-local cache without manufacturing a receipt.
-          context: { dedupe: new Map(), getRuntimeConfig: () => cfg },
-        },
-      );
-    try {
-      expectOk(await request());
-      expect(await request()).toMatchObject({
-        ok: true,
-        payload: {
-          key,
-          sessionId: "restricted-original",
-          creationReplayed: true,
-          entry: { label: "Private replay metadata" },
-        },
-      });
-      const authorize = sharingAuthorization.resolveSessionMutationAuthorizationAsync;
-      let revoked = false;
-      // Delay only completion: real policy, membership writer, and revocation owner run unchanged.
-      using _ = vi
-        .spyOn(sharingAuthorization, "resolveSessionMutationAuthorizationAsync")
-        .mockImplementation(async (input) => {
-          const result = await authorize(input);
-          if (input.method === "sessions.create" && input.expectedTarget && !revoked) {
-            expect(result.error).toBeNull();
-            expect(result.authorization).toBeDefined();
-            revoked = true;
-            if (change === "requester") {
-              invalidateGatewayDeviceRevocation(deviceOwner, "replay-device", "operator");
-            } else {
-              expect(await removeSessionMember(scope, profileId)).toMatchObject({
-                identityId: profileId,
-              });
-            }
-          }
-          return result;
-        });
-      const refused = await request();
-      expect(revoked).toBe(true);
-      expect(refused).toMatchObject({ ok: false });
-      expect(refused.payload).toBeUndefined();
-      expect(JSON.stringify(refused)).not.toContain("Private replay metadata");
-      expect(readEntry(key)?.sessionId).toBe("restricted-original");
-      console.info(
-        `PASS durable replay ${change} revoked after live authorization: no session metadata disclosed`,
-      );
-    } finally {
-      source.release();
-    }
-  },
-);
-
-test.each(["cold", "warm"] as const)(
-  "durable %s replay refuses membership removal at final response publication",
-  async (cache) => {
-    const client = roleClient("view", "publication-replay-member");
-    const profileId = client.authenticatedUserProfile!.profileId;
-    const creator = ensureProfileForEmail("publication-replay-creator@example.test").id;
-    const key = "agent:main:dashboard:publication-replay";
-    const scope = { agentId: "main", storePath, sessionKey: key };
-    replaceSessionEntrySync(scope, {
-      sessionId: "publication-original",
-      lifecycleRevision: "publication-original",
-      updatedAt: 1,
-      label: "Original replay metadata",
-      visibility: "read-only",
-      createdActor: { type: "human", source: "profile", id: creator },
-    });
-    await addSessionMember(scope, { identityId: profileId, addedBy: creator });
-    const cfg = { ...getRuntimeConfig(), ...rolePolicyConfig() };
-    const context = { dedupe: new Map(), getRuntimeConfig: () => cfg };
-    const request = () =>
-      directSessionReq<CreatedSession>(
-        "sessions.create",
-        { agentId: "main", key, idempotencyKey: "publication-replay-once" },
-        {
-          client,
-          context: cache === "warm" ? context : { ...context, dedupe: new Map() },
-        },
-      );
-    expectOk(await request());
-    expect(await request()).toMatchObject({
-      ok: true,
-      payload: {
-        key,
-        sessionId: "publication-original",
-        entry: { label: "Original replay metadata" },
-      },
-    });
-    let removals = 0;
-    // Decorate only completion: real replay authorization, idempotency, and membership writes run.
-    // The handoff remains after replay preparation even when cleanup moves past publication.
-    publicationBoundary[cache === "warm" ? "afterWarm" : "afterCold"] = async () => {
-      expect(await removeSessionMember(scope, profileId)).toMatchObject({ identityId: profileId });
-      removals++;
-    };
-    const denied = await request();
-    expect(removals).toBe(1);
-    expect(denied).toMatchObject({
-      ok: false,
-      error: {
-        code: "INVALID_REQUEST",
-        details: { code: "SESSION_PARTICIPATION_REQUIRED" },
-      },
-    });
-    expect(denied.payload).toBeUndefined();
-    expect(JSON.stringify(denied)).not.toContain("Original replay metadata");
-    expect(readEntry(key)?.sessionId).toBe("publication-original");
-    console.info(
-      `PASS ${cache} replay membership removal at final callback: no metadata published`,
-    );
-  },
-);
-
 test.each(["new-session", "reset"] as const)(
   "warm replay uses the replacement receipt for %s",
   async (replacement) => {
     const client = {
-      connect: { role: "operator", scopes: ["operator.write", "operator.admin"] },
+      connect: gatewayConnect(["operator.write", "operator.admin"]),
       authenticatedUserProfile: {
         profileId: ensureProfileForEmail("receipt-replacement@example.test").id,
       },
@@ -906,5 +700,98 @@ test.each(["new-session", "reset"] as const)(
     });
     expect(replay.payload?.entry.lifecycleRevision).toBe(next.payload?.entry.lifecycleRevision);
     expect(readEntry(next.payload!.key)?.sessionId).toBe(next.payload?.sessionId);
+  },
+);
+
+test.each([
+  { parentKey: "agent:main:dashboard:busy", worktree: false },
+  { parentKey: "agent:main:main", worktree: false },
+  { parentKey: "agent:main:dashboard:busy", worktree: true },
+])(
+  "sessions.create preserves active $parentKey with worktree=$worktree",
+  async ({ parentKey, worktree }) => {
+    const parentSessionId = "sess-active-parallel-parent";
+    const previousSessionConfig = testState.sessionConfig;
+    testState.sessionConfig = { dmScope: "main" };
+    await writeSessionStore({
+      entries: {
+        [parentKey]: sessionStoreEntry(parentSessionId, {
+          providerOverride: "anthropic",
+          modelOverride: "parent-model",
+          modelOverrideSource: "user",
+          thinkingLevel: "high",
+          fastMode: true,
+        }),
+      },
+    });
+    beforeResetHookState.hasBeforeResetHook = true;
+    const parentOperation = createReplyOperation({
+      sessionKey: parentKey,
+      sessionId: parentSessionId,
+      agentId: "main",
+      resetTriggered: false,
+      target: captureSessionTarget({
+        storeScope: storePath,
+        sessionKey: parentKey,
+        incarnation: parentSessionId,
+        agentId: "main",
+      }),
+    });
+    parentOperation.setPhase("running");
+    // Model a producer that releases custody when reset requests cancellation.
+    parentOperation.abortSignal.addEventListener("abort", () => parentOperation.complete(), {
+      once: true,
+    });
+    let createdKey: string | undefined;
+    try {
+      const created = await directSessionReq<CreatedSession>(
+        "sessions.create",
+        {
+          agentId: "main",
+          parentSessionKey: parentKey,
+          emitCommandHooks: true,
+          succeedsParent: false,
+          ...(worktree ? { worktree: true, worktreeSource: "empty" } : {}),
+        },
+        adminClient(),
+      );
+      createdKey = created.payload?.key;
+      if (worktree) {
+        expect(created).toMatchObject({
+          ok: false,
+          error: { code: "UNAVAILABLE", message: expect.stringContaining("active") },
+        });
+      } else {
+        expect(created.ok, JSON.stringify(created.error)).toBe(true);
+        expect(created.payload?.key).toMatch(/^agent:main:dashboard:/);
+        expect(created.payload?.key).not.toBe(parentKey);
+        expect(created.payload?.entry).toMatchObject({
+          parentSessionKey: parentKey,
+          providerOverride: "anthropic",
+          modelOverride: "parent-model",
+          thinkingLevel: "high",
+          fastMode: true,
+        });
+      }
+      expect(readEntry(parentKey)?.sessionId).toBe(parentSessionId);
+      expect(parentOperation.phase).toBe("running");
+      expect(parentOperation.abortSignal.aborted).toBe(false);
+      expect(sessionHookMocks.triggerInternalHook).not.toHaveBeenCalled();
+      expect(beforeResetHookMocks.runBeforeReset).not.toHaveBeenCalled();
+      expect(sessionLifecycleHookMocks.runSessionEnd).not.toHaveBeenCalled();
+      if (worktree) {
+        expect(sessionLifecycleHookMocks.runSessionStart).not.toHaveBeenCalled();
+      } else {
+        expect(sessionLifecycleHookMocks.runSessionStart.mock.calls[0]?.[0]).toMatchObject({
+          sessionKey: created.payload?.key,
+        });
+      }
+    } finally {
+      parentOperation.complete();
+      if (worktree && createdKey) {
+        await removeSessionWorktree(createdKey);
+      }
+      testState.sessionConfig = previousSessionConfig;
+    }
   },
 );

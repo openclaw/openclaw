@@ -4,7 +4,7 @@ import {
   prepareSystemAgentRunAdmission,
   type AdmittedRunOperatorAuthority,
 } from "../admitted-run-context.js";
-import { createAgentHarnessHostCapabilities } from "./host-capability.js";
+import type { createAgentHarnessHostCapabilities } from "./host-capability.js";
 import type {
   AgentHarnessSessionPreparationV1,
   AgentHarnessSessionRuntimeParamsV1,
@@ -41,6 +41,7 @@ export async function prepareAgentHarnessSessionRuntime(params: {
     admission.close();
   };
   try {
+    const { createAgentHarnessHostCapabilities } = await import("./host-capability.js");
     const admittedRunContext = await admission.admit("plugin-harness");
     params.assertCurrent();
     const authProfileStore =

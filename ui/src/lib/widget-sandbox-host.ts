@@ -12,11 +12,13 @@ type WidgetSandboxHostOptions = {
   frame: HTMLIFrameElement;
   sandboxOrigin: string;
   sandboxUrl: string;
+  sandboxShellHtml?: string;
   documentKey: string;
   /** Restricts the untrusted inner document, not the trusted transport shell. */
   allowScripts?: boolean;
   loadDocument: (signal: AbortSignal) => Promise<string>;
   onLoaded: () => void;
+  onProxyReload?: () => void;
   onRendered?: () => void;
   onError: (error: unknown) => void;
   onReadyTimeout: () => void;
@@ -107,6 +109,21 @@ export class WidgetSandboxHost {
     if (event.source !== this.frame.contentWindow || event.origin !== this.options.sandboxOrigin) {
       return;
     }
+    if (
+      event.data?.method === "ui/notifications/sandbox-bootstrap-ready" &&
+      event.data?.params?.version === 1 &&
+      this.options.sandboxShellHtml !== undefined
+    ) {
+      this.frame.contentWindow?.postMessage(
+        {
+          jsonrpc: "2.0",
+          method: "ui/notifications/sandbox-bootstrap-shell",
+          params: { html: this.options.sandboxShellHtml },
+        },
+        this.options.sandboxOrigin,
+      );
+      return;
+    }
     if (event.data?.method === "ui/notifications/sandbox-resource-loaded") {
       if (this.renderId && event.data?.params?.renderId === this.renderId) {
         this.clearReadyTimeout();
@@ -121,7 +138,12 @@ export class WidgetSandboxHost {
     ) {
       return;
     }
-    // Readiness is one-shot, so retain it even while a mounted widget is hidden.
+    // Some browsers recreate the browsing context when chat moves an iframe.
+    // A new proxy has no inner document and cannot use the old bridge.
+    if (this.loaded && this.options.onProxyReload) {
+      this.reset();
+      this.options.onProxyReload();
+    }
     this.proxyReady = true;
     this.clearRetry();
     this.clearReadyTimeout();
@@ -225,12 +247,7 @@ export class WidgetSandboxHost {
 
   private async loadDocument(): Promise<void> {
     const { loadDocument } = this.options;
-    if (
-      this.loaded ||
-      this.pendingDocument !== null ||
-      this.activeLoad !== null ||
-      !this.frame.contentWindow
-    ) {
+    if (this.loaded || this.pendingDocument !== null || this.activeLoad !== null) {
       return;
     }
     const controller = new AbortController();

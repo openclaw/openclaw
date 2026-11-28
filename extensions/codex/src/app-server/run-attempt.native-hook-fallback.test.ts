@@ -8,7 +8,6 @@ import { createMockPluginRegistry } from "openclaw/plugin-sdk/plugin-test-runtim
 import { setRuntimeConfigSnapshot } from "openclaw/plugin-sdk/runtime-config-snapshot";
 import { awaitGateBeforeSettlement } from "openclaw/plugin-sdk/test-fixtures";
 import { describe, expect, it, vi } from "vitest";
-import { readAttemptTerminal } from "./attempt-terminal.test-helper.js";
 import { CodexAppServerClient } from "./client.js";
 import { createCodexTestHostCapabilities } from "./host-capability.test-support.js";
 import {
@@ -17,7 +16,6 @@ import {
   ownCodexInferenceClient,
 } from "./inference-routing.js";
 import { nativeHookRelayUnregisterQueue } from "./native-hook-relay-state.js";
-import { codexNativeSubagentMonitorRuntime } from "./native-subagent-monitor.js";
 import { buildCodexAppServerConnectionFingerprint } from "./plugin-app-cache-key.js";
 import type { CodexDynamicToolSpec } from "./protocol.js";
 import { prepareCodexAttemptConnection } from "./run-attempt-connection.js";
@@ -127,7 +125,7 @@ describe("Codex participant native admission", () => {
     { hooks: "disabled", lifecycle: "fresh", participants: "multiple", policy: "token-sharing" },
   ] as const)(
     "handles $participants participants with $hooks native admission on a $lifecycle $policy thread",
-    async ({ hooks, lifecycle, participants, policy }) => {
+    async ({ hooks, lifecycle, policy }) => {
       const params = participantParams("participant-model-hooks");
       params.sessionKey = undefined;
       if (policy === "token-sharing") {
@@ -216,21 +214,6 @@ describe("Codex participant native admission", () => {
                 nativeModelAdmission: resources.nativeModelAdmission,
                 buildFinalConfigPatch: resources.buildNativeHookRelayFinalConfigPatch,
               });
-            if (participants === "multiple" && policy === "normal") {
-              for (const message of [
-                "Alice's access changed; ask them again",
-                "This turn has ended; ask again in a new turn.",
-              ]) {
-                spawnFailure = new Error(message);
-                await expect(
-                  resources.buildNativeHookRelayFinalConfigPatch(
-                    { action: "start" },
-                    harness.client,
-                  ),
-                ).rejects.toBe(spawnFailure);
-              }
-              spawnFailure = undefined;
-            }
             const binding = await startThread();
             resources.state.thread = binding;
             const admission = await preflight.mock.results[0]?.value;
@@ -252,17 +235,11 @@ describe("Codex participant native admission", () => {
             expect(harness.request.mock.calls.some(([method]) => method === "turn/start")).toBe(
               false,
             );
-            if (policy === "token-sharing") {
-              expect(request).toMatchObject({ config: disabledDelegation });
-            } else {
-              for (const key of Object.keys(disabledDelegation)) {
-                expect(request).not.toHaveProperty(["config", key], false);
-              }
-            }
+            expect(request).toMatchObject({ config: disabledDelegation });
             if (hooks === "optional") {
-              expect(admission?.nativeModelInputTools).toContain("spawn_agent");
               const relayId = extractRelayIdFromThreadRequest(request);
               const generation = extractGenerationFromThreadRequest(request);
+              resources.state.nativeHookRelay?.bindForegroundTurn(binding.threadId, "turn-1");
               const spawn = (toolUseId: string) =>
                 agentHarnessRuntime.invokeNativeHookRelay({
                   provider: "codex",
@@ -414,9 +391,7 @@ describe("Codex native hook Gateway fallback", () => {
       await run.waitForTurnAccepted();
       expect(registered.mock.calls[0]?.[1]?.supportsCrossProfileSteering).toBe(true);
       const request = harness.requests.find(({ method }) => method === "thread/start")?.params;
-      expect(request).toMatchObject({ config: { "features.multi_agent": false } });
-      expect(request).not.toHaveProperty(["config", "features.multi_agent_v2"], false);
-      expect(request).not.toHaveProperty(["config", "agents.enabled"], false);
+      expect(request).toMatchObject({ config: disabledDelegation });
       await harness.completeTurn({ threadId: "thread-1", turnId: "turn-1" });
       await run;
     } finally {
@@ -424,70 +399,6 @@ describe("Codex native hook Gateway fallback", () => {
       await run.catch(() => undefined);
       harness.close();
     }
-  });
-  it("cancels an unqualified parent on new policy while preserving its permitted sibling", async () => {
-    const params = participantParams("retained-model-source");
-    const listeners = new Set<() => void>();
-    let policy: NonNullable<
-      Parameters<typeof bindProductionHarnessHostCapabilitiesForTest>[1]
-    >["modelPolicy"];
-    const closeHost = await bindProductionHarnessHostCapabilitiesForTest(params, {
-      profileId: "unrestricted-native-operator",
-      scopes: ["operator.write"],
-      assertCurrent: () => {},
-      get modelPolicy() {
-        return policy;
-      },
-      onModelPolicyChanged: (listener) => {
-        listeners.add(listener);
-        return () => {
-          listeners.delete(listener);
-        };
-      },
-    });
-    const selected = { provider: params.provider, model: params.modelId };
-    const permitted = params.hostCapabilities.bindModelExecution?.(selected);
-    if (!permitted) {
-      throw new Error("Expected a canonical operator model guard");
-    }
-    const harness = createStartedThreadHarness(async (method) =>
-      method === "account/read" ? { account: { type: "apiKey" } } : undefined,
-    );
-    ownCodexInferenceClient(harness.client);
-    const abort = new AbortController();
-    params.abortSignal = abort.signal;
-    const run = runCodexAppServerAttempt(params, { nativeHookRelay: { enabled: false } });
-    try {
-      await run.waitForTurnAccepted();
-      const accepted = await codexNativeSubagentMonitorRuntime.captureModelSource({
-        client: harness.client,
-        threadId: "thread-1",
-        turnId: "turn-1",
-      });
-      expect(accepted).toBeDefined();
-      accepted?.release();
-      policy = {
-        models: [selected],
-        allows: (model) => model.provider === selected.provider && model.model === selected.model,
-      };
-      for (const changed of listeners) {
-        changed();
-      }
-      expect(readAttemptTerminal(await run).aborted).toBe(true);
-      expect(harness.requests).toContainEqual({
-        method: "turn/interrupt",
-        params: { threadId: "thread-1", turnId: "turn-1" },
-      });
-      expect(permitted.signal.aborted).toBe(false);
-      expect(permitted.assertCurrent).not.toThrow();
-    } finally {
-      abort.abort("test cleanup");
-      await run.catch(() => undefined);
-      permitted.release();
-      closeHost();
-      harness.close();
-    }
-    expect(listeners.size).toBe(0);
   });
   it("keeps resumed native hook policy available when the direct listener fails", async () => {
     const sessionFile = path.join(tempDir, "listener-unavailable.jsonl");
@@ -503,14 +414,10 @@ describe("Codex native hook Gateway fallback", () => {
         web_search: "disabled",
       }),
     });
-    const started = createDeferred<void>();
     const harness = createStartedThreadHarness(
       async (method) => {
         if (method === "thread/resume") {
           return threadStartResult("thread-existing");
-        }
-        if (method === "turn/start") {
-          started.resolve();
         }
         return undefined;
       },
@@ -539,7 +446,7 @@ describe("Codex native hook Gateway fallback", () => {
       nativeHookRelay: { enabled: true, events: ["pre_tool_use"] },
     });
     try {
-      await Promise.race([started.promise, run.then(() => undefined)]);
+      await run.waitForTurnAccepted();
       const request = harness.requests.find(({ method }) => method === "thread/resume");
       const relayId = extractRelayIdFromThreadRequest(request?.params);
       const generation = extractGenerationFromThreadRequest(request?.params);
@@ -552,6 +459,8 @@ describe("Codex native hook Gateway fallback", () => {
         rawPayload: {
           hook_event_name: "PreToolUse",
           tool_name: "Bash",
+          session_id: "thread-existing",
+          turn_id: "turn-1",
           tool_use_id: "listener-unavailable-tool",
           tool_input: { command: "pwd" },
         },

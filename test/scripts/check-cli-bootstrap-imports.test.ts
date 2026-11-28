@@ -250,6 +250,7 @@ describe("check-cli-bootstrap-imports", () => {
         'await import("./lazy.mjs");',
         '__require2("numbered");',
         'function nested() { require("nested"); }',
+        'const template = `nested: ${require("nested-template")}`;',
         'export * from "export-all";',
         'export { value } from "export-named";',
         'createRequire(import.meta.url)("../../package.json");',
@@ -267,7 +268,7 @@ describe("check-cli-bootstrap-imports", () => {
       importError("github-exec-launcher", "yaml"),
       importError("service-child-group-anchor", "signal-exit"),
       ...`../../package.json ./lazy.mjs @openclaw/fs-safe/temp bun:ffi-extra export-all
-export-named final-external koffi left-pad nested numbered`
+export-named final-external koffi left-pad nested-template nested numbered`
         .split(/\s+/u)
         .map((specifier) => importError("worker", specifier)),
       "Worker deploy artifact emits unstaged runtime asset dist/worker/lazy.mjs.",

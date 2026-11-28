@@ -1,5 +1,6 @@
-import type { Page } from "playwright";
+import type { Page, Route } from "playwright";
 import { expect, it } from "vitest";
+import { createDeferred } from "../../../test/helpers/promise.js";
 import {
   installMockGateway,
   type ControlUiMockGatewayScenario,
@@ -59,15 +60,38 @@ function withDraft(
 const openDraft = (page: Page, route = "new?agent=main") => page.goto(suite.server.baseUrl + route);
 const openChat = (page: Page) => page.locator("openclaw-chat-page").waitFor({ state: "visible" });
 const returnToDraft = async (page: Page) => {
-  await page.getByRole("link", { name: "New conversation" }).first().click();
+  await page.getByRole("link", { name: "New session" }).first().click();
   await page.locator(".new-session-page__message").waitFor({ state: "visible" });
 };
 
 async function recoverComposer({ page, gateway, composer }: DraftFixture, persistent: boolean) {
+  const probe = createDeferred<Route>();
+  let heldProbe = false;
+  if (persistent) {
+    await page.route("**/index.html", async (route) => {
+      if (!heldProbe && route.request().headers()["x-openclaw-reachability-probe"] === "1") {
+        heldProbe = true;
+        probe.resolve(route);
+      } else {
+        await route.continue();
+      }
+    });
+  }
   await failDraftRender(page, persistent);
   await openDraft(page);
   if (persistent) {
+    const route = await probe.promise;
+    await gateway.waitForRequest("connect");
+    await gateway.resolveDeferred("connect");
+    await gateway.waitForRequest("agents.list");
+    const probeResponse = page.waitForResponse(
+      (response) => response.request().headers()["x-openclaw-reachability-probe"] === "1",
+    );
+    await route.continue();
+    expect((await probeResponse).status()).toBe(200);
     await page.waitForFunction(() => sessionStorage.getItem("test.newSessionBoots") === "2");
+    await gateway.waitForRequest("connect");
+    await gateway.resolveDeferred("connect");
     const error = page.locator("openclaw-new-session-page .lazy-view-error");
     await error.waitFor({ state: "visible", timeout: 5000 });
     // Retrying a persistent failure must not trigger a third document load.
@@ -148,7 +172,7 @@ async function visitChats({ page, gateway, composer }: DraftFixture) {
     await composer.press("Enter");
     await gateway.waitForRequest("sessions.create", { after: visit });
     await openChat(page);
-    await page.getByRole("link", { name: "New conversation" }).first().click();
+    await page.getByRole("link", { name: "New session" }).first().click();
     await expect.poll(() => new URL(page.url()).pathname).toBe("/new");
     await composer.waitFor({ state: "visible", timeout: 5000 });
     expect(await composer.isEnabled()).toBe(true);
@@ -159,7 +183,10 @@ suite.define(() => {
   it.each([false, true])(
     "restores the composer after a render failure (persistent: %s)",
     (persistent) =>
-      withDraft((fixture) => recoverComposer(fixture, persistent), { awaitInitialRoster: false }),
+      withDraft((fixture) => recoverComposer(fixture, persistent), {
+        awaitInitialRoster: false,
+        deferredMethods: persistent ? ["connect"] : [],
+      }),
   );
   it("keeps a draft and avoids automatic reload after the composer was usable", () =>
     withDraft(preserveDraft));

@@ -7,6 +7,7 @@ import { normalizeOptionalString } from "@openclaw/normalization-core/string-coe
 import { GatewayRequestError } from "../../api/gateway-connect-errors.ts";
 import type { GatewayBrowserClient } from "../../api/gateway.ts";
 import type { GatewaySessionRow } from "../../api/types.ts";
+import { t } from "../../i18n/index.ts";
 
 export function resolveChatPaneDesktopTarget(
   session: GatewaySessionRow | undefined,
@@ -95,7 +96,7 @@ export async function loadDesktopEnvironments(
     selectedEnvironment?.status === "error" ||
     (!options.recoverToPicker && selectedEnvironment && selectedEnvironment.status !== "available")
   ) {
-    throw new Error(selectedEnvironment.worker?.error ?? "Desktop environment is unavailable");
+    throw new Error(selectedEnvironment.worker?.error ?? t("desktop.sourceUnavailable"));
   }
   if (
     options.recoverToPicker &&

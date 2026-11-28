@@ -21,7 +21,7 @@ import {
   type SqliteDatabaseAdmissionRegistry,
 } from "./sqlite-database-admission-record.js";
 import { getSqliteNativeAdmissionFacts } from "./sqlite-native-admission.js";
-import type { DatabaseFileIdentity } from "./sqlite-worker-identity.js";
+import type { DatabaseFileIdentity, DatabasePathIdentity } from "./sqlite-worker-identity.js";
 
 /** Admission lookups consume the owning registry and transaction-local state. */
 export function createSqliteDatabaseAdmissionReader(owner: {
@@ -35,9 +35,12 @@ export function createSqliteDatabaseAdmissionReader(owner: {
     misses: WeakMap<Admission, Map<string, number>>;
     openedIdentities: WeakMap<DatabaseSync, string>;
     localSchemaRevisions: Map<string, number>;
+    localWriteRevisions: WeakMap<DatabaseSync, number>;
   };
   admission: (database: DatabaseSync, create?: boolean) => Admission | undefined;
   pathAdmission: (location: string) => Admission | undefined;
+  prepareFileIdentity: (location: string) => string | undefined;
+  integrityVerificationKey: SqliteDatabaseFactKey<number>;
   exchange: (record: Admission) => void;
   retain: (record: Admission) => void;
   release: (record: Admission) => void;
@@ -49,6 +52,63 @@ export function createSqliteDatabaseAdmissionReader(owner: {
   ) => void;
 }) {
   const { state, admission, pathAdmission, exchange, retain, release, publishFact } = owner;
+
+  /** Ordinary reads consume the last committed writer revision without a writer census. */
+  function readSqliteDatabaseWriteRevision(connection: EngineConnection): number | undefined {
+    const database = sqlPublicationAnchor(connection);
+    if (!database.isOpen || state.suspended.has(database)) {
+      return undefined;
+    }
+    const record = admission(database);
+    if (!record) {
+      const location = database.location();
+      return !location || location === ":memory:"
+        ? (state.localWriteRevisions.get(database) ?? 0)
+        : undefined;
+    }
+    return readSqliteDatabaseGeneration(record, "writeRevision");
+  }
+
+  /** TEMP-trigger owners already see their own writes and only need sibling settlement. */
+  function readSqliteDatabaseSiblingWriteRevision(
+    connection: EngineConnection,
+  ): number | undefined {
+    const database = sqlPublicationAnchor(connection);
+    const revision = readSqliteDatabaseWriteRevision(database);
+    return revision === undefined
+      ? undefined
+      : (revision - (state.localWriteRevisions.get(database) ?? 0)) | 0;
+  }
+
+  function readSqliteDatabaseCleanClose(location: string): boolean {
+    const currentIdentity = owner.prepareFileIdentity(location);
+    const record = pathAdmission(location);
+    return (
+      record !== undefined &&
+      record.identity === currentIdentity &&
+      Atomics.load(new Int32Array(record.generation), SqliteDatabaseGenerationSlot.sealPresent) ===
+        1
+    );
+  }
+
+  function readSqliteDatabaseIntegrityVerification(
+    source: string | DatabaseSync,
+  ): { verifiedAt: number } | undefined {
+    const verifiedAt =
+      typeof source === "string"
+        ? getOrLoadSqliteDatabaseAdmissionForPath(
+            source,
+            owner.integrityVerificationKey,
+            () => undefined,
+          )
+        : getSqliteDatabaseAdmission(source, owner.integrityVerificationKey);
+    return verifiedAt === undefined ? undefined : { verifiedAt };
+  }
+
+  /** Consume the admission owner's first-load diagnostic, including in worker isolates. */
+  function readSqliteDatabaseCleanCloseRefusal(database: EngineConnection) {
+    return admission(sqlPublicationAnchor(database))?.cleanCloseRefusal;
+  }
 
   /** A retained native consumer keeps its dependency's exact admission generation alive. */
   function retainSqliteDatabaseAdmissionForPath(location: string) {
@@ -254,14 +314,43 @@ export function createSqliteDatabaseAdmissionReader(owner: {
     return state.registry.forLocation(location)?.physicalIdentity;
   }
 
+  /** Transfer this existing admission's location together with its immutable file fact. */
+  function getSqliteDatabaseAdmissionSourceForPath(location: string) {
+    const record = state.registry.forLocation(location);
+    return record && { identity: record.physicalIdentity, canonicalPath: record.location };
+  }
+
+  /** Publish an admitted lexical spelling without acquiring or refreshing descriptor custody. */
+  function observeSqliteDatabaseAdmissionLocation(
+    location: string,
+    preparedIdentity: DatabasePathIdentity,
+  ): void {
+    const record = state.registry.forLocation(preparedIdentity.canonicalPath);
+    if (
+      record?.physicalIdentity.key === preparedIdentity.key &&
+      record.physicalIdentity.birthtime === preparedIdentity.birthtime
+    ) {
+      state.registry.observeLocation(location, record.identity);
+    }
+  }
+
   /** Consume the already captured physical identity without another filesystem lookup. */
   function hasSqliteDatabaseSchemaAdmissionForIdentity(
     physicalIdentity: DatabaseFileIdentity,
   ): boolean {
-    return state.registry.hasSchemaAdmissionForIdentity(physicalIdentity);
+    if (!physicalIdentity.key.startsWith("file:") || physicalIdentity.birthtime === undefined) {
+      return false;
+    }
+    const key = `${physicalIdentity.key.slice("file:".length)}:${physicalIdentity.birthtime}`;
+    return hasSqliteDatabaseSchemaAdmission(state.registry.records.get(key));
   }
 
   return {
+    readSqliteDatabaseWriteRevision,
+    readSqliteDatabaseSiblingWriteRevision,
+    readSqliteDatabaseCleanClose,
+    readSqliteDatabaseIntegrityVerification,
+    readSqliteDatabaseCleanCloseRefusal,
     getSqliteDatabaseAdmission,
     getSqliteDatabaseSchemaRevision,
     getOrLoadSqliteDatabaseAdmissionForPath,
@@ -269,6 +358,8 @@ export function createSqliteDatabaseAdmissionReader(owner: {
     prepareSqliteDatabaseAdmissionForPath,
     hasSqliteDatabaseSchemaAdmissionForPath,
     getSqliteDatabaseAdmissionIdentityForPath,
+    getSqliteDatabaseAdmissionSourceForPath,
+    observeSqliteDatabaseAdmissionLocation,
     hasSqliteDatabaseSchemaAdmissionForIdentity,
     retainSqliteDatabaseAdmissionForPath,
   };

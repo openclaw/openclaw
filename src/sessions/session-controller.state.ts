@@ -14,6 +14,7 @@ import { normalizeAgentId, parseAgentSessionKey } from "../routing/session-key.j
 import { assertTurnAdmission } from "./session-controller.admission-rule.js";
 import {
   REPLY_RUN_IDLE_SETTLE_TIMEOUT_MS,
+  AmbiguousSessionControllerError,
   ReplyRunAlreadyActiveError,
   type ReplyBackendHandle,
   type ReplyOperation,
@@ -199,7 +200,7 @@ export function getSessionControllerEntry(
     if (matches.some((entry) => entry.active)) {
       throw new ReplyRunAlreadyActiveError(canonicalKey);
     }
-    throw new Error("Session controller identity requires a physical store scope");
+    throw new AmbiguousSessionControllerError(matches);
   }
   let entry = matches[0];
   if (!entry) {
@@ -414,8 +415,10 @@ export function recordOperationBackendRunId(operation: ReplyOperation, runId: st
   controllerStorage.backendRunIdsByOperation.set(operation, runIds);
 }
 
-export function hasOperationBackendRunId(operation: ReplyOperation, runId: string): boolean {
-  return controllerStorage.backendRunIdsByOperation.get(operation)?.has(runId) === true;
+export function getOperationBackendRunIds(
+  operation: ReplyOperation,
+): ReadonlySet<string> | undefined {
+  return controllerStorage.backendRunIdsByOperation.get(operation);
 }
 
 export function getAttachedBackendAttachment(operation: ReplyOperation) {
@@ -651,6 +654,11 @@ export {
   acknowledgeReplySessionTransition,
 } from "./session-controller.session-reader.js";
 
+/** Release backend waiters after the final attempt, without releasing finalization ownership. */
+export function finishReplyOperationBackend(operation: ReplyOperation): void {
+  controllerStorage.backendReadyByOperation.get(operation)?.resolve();
+}
+
 /** Await this exact owner's current backend generation, including recovery startup. */
 export async function waitForReplyOperationBackend(
   operation: ReplyOperation,
@@ -669,7 +677,7 @@ export async function waitForReplyOperationBackend(
   }
   const ready = controllerStorage.backendReadyByOperation.get(operation);
   if (ready) {
-    await racePromiseWithAbortSignal(ready, signal);
+    await racePromiseWithAbortSignal(ready.promise, signal);
   }
   return (
     controllerStorage.backendReadyByOperation.get(operation) === ready &&

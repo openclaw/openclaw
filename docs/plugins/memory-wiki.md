@@ -12,6 +12,9 @@ title: "Memory wiki"
 navigable wiki: pages built from saved data, structured claims with evidence,
 provenance, dashboards, and machine-readable digests.
 
+In native mode, generated link labels display page titles literally, including
+Markdown markers, HTML-like text, and entity names such as `&amp;`.
+
 It does not replace the active memory plugin. Recall, promotion, indexing, and
 dreaming stay owned by the configured memory plugin (`memory-core`, Honcho,
 and others). `memory-wiki` sits beside it and compiles
@@ -345,6 +348,12 @@ plugin supports corpus selection.
 
 ## Browsing the wiki in the Control UI
 
+With Knowledge selected as the memory engine, open **Memory → Dreams → Memory wiki**.
+Select **Browse Knowledge** or enter a keyword in **Search Knowledge records**.
+Both actions open the [Knowledge reader](/plugins/knowledge/control-ui) for
+the selected agent under your existing access. You do not need to import the
+records, compile the wiki, or change `search.corpus`.
+
 The [Control UI](/web/control-ui) can browse the compiled wiki directly: open
 the Memory page, then **Dreams → Diary → Memory Wiki**. The tab clusters
 synthesis, entity, and concept pages — plus source and report pages that
@@ -641,6 +650,14 @@ Prefer these over `memory_search` when you want wiki-specific ranking or page-le
 </Step>
 <Step title="Use wiki_apply for narrow syntheses or metadata updates">
 Avoid hand-editing managed generated blocks.
+
+For `update_metadata`, supplied `claims`, `questions`, `contradictions`, and
+`sourceIds` replace the complete stored list; they do not append or merge. Read
+with `wiki_get` first and include every entry you want to retain. Omit a list to
+preserve it, or pass `[]` to clear it. Empty `sourceIds` remains `[]`; clearing the
+other three lists removes their frontmatter keys. Successful results include
+`metadataListChanges` with `before`/`after` counts for each supplied list and a
+visible replacement summary, including reductions.
 </Step>
 <Step title="Run wiki_lint after meaningful changes">
 Catches contradictions, open questions, and provenance gaps.

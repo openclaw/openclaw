@@ -157,7 +157,7 @@ it.skipIf(process.platform === "win32").each(blockedPaths)(
     writePlugin(pluginPath, { id: pluginId, configSchema: { type: "object" } });
     const entry = {
       enabled: true,
-      hooks: { allowPromptInjection: false },
+      hooks: { allowPromptModification: false },
       config: { nested: { retained: "authored" } },
     };
     const config = f.config({

@@ -1,9 +1,10 @@
 /**
  * node --expose-gc --import ./scripts/tsx.mjs scripts/perf/read-path-suggestions-measure.ts \
- *   --baseline 7f2aaee19ffc --pairs 5 --mode timing
+ *   --baseline <parent-sha> --sizes 50000 --pairs 5 --mode timing
  * Repeat with --mode allocation (timing under heap sampling is not acceptance evidence).
- * Exact read/distance owner sources, unchanged current dependencies, real files and
- * createReadTool.execute. This isolates a missing-file tool call, not model/Gateway latency.
+ * Exact read/edit/distance owner sources, unchanged current dependencies, real files,
+ * createReadTool.execute and prepareFileEdit. Not model/Gateway latency.
+ * Edit retries are ten calls; a ten-edit batch stops at its first failing entry.
  */
 import assert from "node:assert/strict";
 import { execFileSync } from "node:child_process";
@@ -23,6 +24,7 @@ const { values } = parseArgs({
   options: {
     baseline: { type: "string" },
     pairs: { type: "string", default: "5" },
+    workloads: { type: "string", default: "read,edit" },
     sizes: { type: "string", default: "1000,10000,50000" },
     mode: { type: "string", default: "timing" },
     "fixture-root": { type: "string", default: ".local" },
@@ -37,6 +39,7 @@ assert(Number.isSafeInteger(pairs) && pairs > 0);
 assert(sizes.every((size) => Number.isSafeInteger(size) && size >= 10));
 const root = fileURLToPath(new URL("../../", import.meta.url));
 const readPath = "src/agents/sessions/tools/read.ts";
+const editPath = "src/agents/sessions/tools/edit-diff.ts";
 const distancePath = "src/shared/levenshtein-distance.ts";
 const baseline = execFileSync("git", ["rev-parse", values.baseline], {
   cwd: root,
@@ -44,7 +47,7 @@ const baseline = execFileSync("git", ["rev-parse", values.baseline], {
 }).trim();
 const owners = new Map<string, string>();
 for (const arm of ["base", "candidate"]) {
-  for (const filename of [readPath, distancePath]) {
+  for (const filename of [readPath, distancePath, editPath]) {
     const source =
       arm === "base"
         ? execFileSync("git", ["show", `${baseline}:${filename}`], { cwd: root, encoding: "utf8" })
@@ -80,11 +83,13 @@ const hooks = registerHooks({
   },
 });
 type ReadModule = typeof import("../../src/agents/sessions/tools/read.js");
+type EditModule = typeof import("../../src/agents/sessions/tools/edit-diff.js");
 type DistanceModule = typeof import("../../src/shared/levenshtein-distance.js");
-const modules = new Map<string, { read: ReadModule; distance: DistanceModule }>();
+const modules = new Map<string, { read: ReadModule; distance: DistanceModule; edit: EditModule }>();
 try {
   for (const arm of ["base", "candidate"]) {
     modules.set(arm, {
+      edit: await import(`${pathToFileURL(path.join(root, editPath)).href}?read-bench=${arm}`),
       read: await import(`${pathToFileURL(path.join(root, readPath)).href}?read-bench=${arm}`),
       distance: await import(
         `${pathToFileURL(path.join(root, distancePath)).href}?read-bench=${arm}`
@@ -179,9 +184,11 @@ async function measure(operation: () => unknown) {
   };
 }
 async function compare(workload: string, operation: (arm: string) => unknown) {
-  // Warm both imports and JIT before A/A controls and AB/BA measurements.
-  for (const arm of ["base", "candidate", "base", "candidate"]) {
-    await operation(arm);
+  // Warm both arms through the same profiler/GC path before A/A can warm only the base.
+  for (let warmup = 0; warmup < 10; warmup++) {
+    for (const arm of ["base", "candidate"]) {
+      await measure(() => operation(arm));
+    }
   }
   for (const control of [true, false]) {
     for (let pair = 0; pair < pairs; pair++) {
@@ -211,7 +218,7 @@ async function compare(workload: string, operation: (arm: string) => unknown) {
 await mkdir(values["fixture-root"], { recursive: true });
 const fixture = await mkdtemp(path.join(path.resolve(values["fixture-root"]), "read-suggestion-"));
 try {
-  for (const size of sizes) {
+  for (const size of values.workloads.includes("read") ? sizes : []) {
     const dir = path.join(fixture, String(size));
     await mkdir(dir);
     const names = [
@@ -242,6 +249,70 @@ try {
           return error.message;
         }
       });
+    }
+  }
+  function editOutcome(arm: string, content: string, oldTexts: string[]) {
+    try {
+      return modules.get(arm)!.edit.prepareFileEdit(
+        content,
+        oldTexts.map((oldText) => ({ oldText, newText: "replacement" })),
+        "synthetic.ts",
+      );
+    } catch (error) {
+      assert(error instanceof Error);
+      return error.message;
+    }
+  }
+  if (values.workloads.includes("edit")) {
+    // Whole owner outputs include candidate order, scores, hints and Unicode handling.
+    const alphabet = "abCD 01._\t🙂é";
+    const text = (length: number) =>
+      Array.from({ length }, () => alphabet[random() % alphabet.length]).join("");
+    for (let i = 0; i < 400; i++) {
+      const expected = text(1 + (random() % 140));
+      const content = Array.from({ length: 4 + (random() % 30) }, (_, line) =>
+        line % 3 ? text(random() % 145) : expected.slice(0, random() % expected.length) + "x",
+      ).join("\n");
+      assert.deepEqual(
+        editOutcome("candidate", content, [expected]),
+        editOutcome("base", content, [expected]),
+      );
+      equivalenceCases++;
+    }
+    for (let length = 1; length <= 120; length++) {
+      const expected = "a".repeat(length);
+      const distance = Math.floor(length * 0.55);
+      const content = [-1, 0, 1]
+        .map((offset) => {
+          const changed = Math.max(0, Math.min(length, distance + offset));
+          return "a".repeat(length - changed) + "b".repeat(changed);
+        })
+        .join("\n");
+      assert.deepEqual(
+        editOutcome("candidate", content, [expected]),
+        editOutcome("base", content, [expected]),
+      );
+      equivalenceCases++;
+    }
+    for (const shape of ["unrelated", "near"]) {
+      const expected = "a".repeat(120);
+      const content = Array.from({ length: 1000 }, (_, i) =>
+        shape === "unrelated"
+          ? "z".repeat(120)
+          : expected.slice(0, 119 - (i % 60)) + "b".repeat(1 + (i % 60)),
+      ).join("\n");
+      await compare(`edit-${shape}-10x1000x120`, (arm) => {
+        const results = Array.from({ length: 10 }, () => editOutcome(arm, content, [expected]));
+        assert(
+          results.every(
+            (result) => typeof result === "string" && result.startsWith("Could not find"),
+          ),
+        );
+        return results;
+      });
+      await compare(`edit-${shape}-batch10x1000x120`, (arm) =>
+        editOutcome(arm, content, Array(10).fill(expected)),
+      );
     }
   }
   const corpus = [

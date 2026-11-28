@@ -15,10 +15,84 @@ import {
   preloadUsage,
   refreshButton,
 } from "./usage-page.test-support.ts";
+import { openUsageDisplay, openUsageFilter } from "./view-render.test-support.ts";
 
 afterEach(cleanupUsagePageTest);
 
 describe("Usage query failure ownership", () => {
+  it.each(["sort", "page"] as const)(
+    "retains the selected analytics without rebuilding while a %s request settles",
+    async (change) => {
+      vi.useFakeTimers();
+      vi.setSystemTime(new Date("2026-08-07T12:00:00Z"));
+      focusDocument();
+      const snapshot = cacheSnapshot("fresh");
+      const date = "2026-08-07";
+      const original = {
+        ...snapshot.result,
+        sessions: Array.from({ length: 60 }, (_, index) => ({
+          key: `agent:main:retained-${index}`,
+          label: `Retained session ${index}`,
+          updatedAt: Date.now() - index * 1000,
+          usage: {
+            ...snapshot.result.totals,
+            activityDates: [date],
+            dailyBreakdown: [{ ...snapshot.result.totals, date, tokens: 100, cost: 1 }],
+          },
+        })),
+      };
+      const reply = deferred<typeof original>();
+      let pending = false;
+      const request = vi.fn(async (method: string) =>
+        method === "sessions.usage"
+          ? pending
+            ? reply.promise
+            : structuredClone(original)
+          : { updatedAt: Date.now(), providers: [] },
+      );
+      // SAFETY: The fixture exercises only the mocked request method.
+      const page = await createPage({ request } as unknown as GatewayBrowserClient, true);
+      await preloadUsage(page);
+      page.read().callbacks.filters.onSelectDay(date, false, [date]);
+      await vi.advanceTimersByTimeAsync(0);
+      await page.updateComplete;
+      const analytics = page.querySelector(".usage-overview-card")!;
+      expect(analytics).not.toBeNull();
+      const before = analytics.textContent;
+      let retiredAnalytics = 0;
+      const observer = new MutationObserver((records) => {
+        for (const record of records) {
+          for (const removed of record.removedNodes) {
+            if (removed === analytics || removed.contains(analytics)) {
+              retiredAnalytics++;
+            }
+          }
+        }
+      });
+      observer.observe(page.element, { childList: true, subtree: true });
+      pending = true;
+      if (change === "sort") {
+        page.read().callbacks.display.onChange({ sessionSort: "recent" });
+      } else {
+        page.read().callbacks.display.onPageChange(50);
+      }
+      await page.updateComplete;
+      expect(page.usageLoading).toBe(true);
+      expect(page.read().data.totals).toBeNull();
+      expect(page.read().filters.selectedDays).toEqual([date]);
+      expect(page.querySelector(".usage-overview-card")).toBe(analytics);
+      expect(analytics.textContent).toBe(before);
+      reply.resolve(structuredClone(original));
+      await vi.advanceTimersByTimeAsync(0);
+      await page.updateComplete;
+      observer.disconnect();
+      expect(retiredAnalytics).toBe(0);
+      expect(page.querySelector(".usage-overview-card")).toBe(analytics);
+      expect(analytics.textContent).toBe(before);
+      expect(page.read().data.sessions).toHaveLength(change === "page" ? 10 : 50);
+    },
+  );
+
   it("retains hidden analytics and model options while a text query settles", async () => {
     vi.useFakeTimers();
     vi.setSystemTime(new Date("2026-08-07T12:00:00Z"));
@@ -84,22 +158,10 @@ describe("Usage query failure ownership", () => {
         expect(host.style.display).toBe(hidden ? "none" : "contents");
       }
     };
-    const trigger = page.querySelector<HTMLButtonElement>('[id="usage-filter-model:trigger"]')!;
-    const menu = trigger.closest<HTMLElement>(".usage-filter-select")!;
-    menu.addEventListener(
-      "overlay-show",
-      () => {
-        // JSDOM has no scrolling layout; exercise the real Menu selection path.
-        for (const item of menu.querySelectorAll<HTMLElement>('[role^="menuitem"]')) {
-          item.scrollIntoView = vi.fn();
-        }
-      },
-      { once: true },
-    );
-    trigger.click();
+    const { surface: menu } = openUsageFilter(page, "Model");
     await page.updateComplete;
-    const options = [...menu.querySelectorAll<HTMLButtonElement>(".usage-filter-option")];
-    expect(options.map((option) => option.textContent?.trim())).toEqual([
+    const options = [...menu.querySelectorAll<HTMLButtonElement>('[role="menuitemcheckbox"]')];
+    expect(options.map((option) => option.getAttribute("aria-label"))).toEqual([
       "synthetic-alpha",
       "synthetic-beta",
     ]);
@@ -124,8 +186,8 @@ describe("Usage query failure ownership", () => {
     expect(heatmapHost.style.display).toBe("none");
     expectAnalyticsHidden(true);
     expect(alphaRow.isConnected).toBe(true);
-    expect(menu.querySelectorAll(".usage-filter-option")[0]).toBe(options[0]);
-    expect(menu.querySelectorAll(".usage-filter-option")[1]).toBe(options[1]);
+    expect(menu.querySelectorAll('[role="menuitemcheckbox"]')[0]).toBe(options[0]);
+    expect(menu.querySelectorAll('[role="menuitemcheckbox"]')[1]).toBe(options[1]);
     expect(options[0]!.getAttribute("aria-checked")).toBe("true");
 
     reply.resolve(original);
@@ -161,8 +223,8 @@ describe("Usage query failure ownership", () => {
     expect(trend.hidden).toBe(true);
     expect(heatmapHost.hidden).toBe(true);
     expectAnalyticsHidden(true);
-    expect(menu.querySelectorAll(".usage-filter-option")[0]).toBe(options[0]);
-    expect(menu.querySelectorAll(".usage-filter-option")[1]).toBe(options[1]);
+    expect(menu.querySelectorAll('[role="menuitemcheckbox"]')[0]).toBe(options[0]);
+    expect(menu.querySelectorAll('[role="menuitemcheckbox"]')[1]).toBe(options[1]);
   });
 
   it("does not mount hidden charts for an incomplete zero cache", async () => {
@@ -291,20 +353,21 @@ describe("Usage query failure ownership", () => {
             ]!;
           input.value = change === "start date" ? "2026-07-01" : "2026-08-08";
           input.dispatchEvent(new Event("change", { bubbles: true }));
-        } else if (change === "scope") {
-          [...page.querySelectorAll<HTMLButtonElement>("button")]
-            .find((button) => button.textContent?.trim() === "Current instance")!
+        } else if (change === "scope" || change === "time zone") {
+          const { surface } = openUsageDisplay(page, change === "scope" ? "Sessions" : "Time zone");
+          surface
+            .querySelector<HTMLButtonElement>(
+              `[role="menuitemradio"][aria-label="${change === "scope" ? "Current instance" : "UTC"}"]`,
+            )!
             .click();
-        } else if (change === "time zone") {
-          const select = page.querySelector<HTMLSelectElement>("select.usage-select")!;
-          select.value = "utc";
-          select.dispatchEvent(new Event("change", { bubbles: true }));
         } else if (change === "agent") {
           selection.setScope("writer");
         } else {
-          const select = page.querySelector<HTMLSelectElement>(".usage-creator-filter")!;
-          select.value = "profile:opaque-alex";
-          select.dispatchEvent(new Event("change", { bubbles: true }));
+          openUsageFilter(page, "Started by");
+          await page.updateComplete;
+          page
+            .querySelector<HTMLButtonElement>('[role="menuitemradio"][aria-label="Alex Morgan"]')!
+            .click();
         }
         await page.updateComplete;
         expect(page.usageSelectedSessions).toEqual([]);
@@ -366,12 +429,17 @@ describe("Usage query failure ownership", () => {
         expect(page.textContent).not.toContain("Old query row");
         expect(refreshButton(page).disabled).toBe(false);
         if (change === "creator") {
-          const select = page.querySelector<HTMLSelectElement>(".usage-creator-filter")!;
-          expect(select.value).toBe("profile:opaque-alex");
-          expect(select.textContent).toContain("Alex Morgan");
+          const { surface } = openUsageFilter(page, "Started by");
+          expect(page.querySelector(".usage-filter-chip__open")?.textContent).toContain(
+            "Alex Morgan",
+          );
+          await page.updateComplete;
+          const selected = surface.querySelector<HTMLButtonElement>(
+            '[role="menuitemradio"][aria-label="Alex Morgan"]',
+          )!;
+          expect(selected.getAttribute("aria-checked")).toBe("true");
           phase = "initial";
-          select.value = "";
-          select.dispatchEvent(new Event("change", { bubbles: true }));
+          selected.click();
           await vi.advanceTimersByTimeAsync(0);
           await page.updateComplete;
           expect(
@@ -433,10 +501,9 @@ describe("Usage query failure ownership", () => {
       expect(page.textContent).toContain("Original query row");
       // Provider plans load on the page after the route data applies.
       await vi.waitFor(() => expect(page.textContent).toContain("QA Provider Plan"));
-      expect(page.querySelector(".cost-window--range")?.textContent).toContain("$1");
-      const originalRange = page.querySelector(".cost-window-range")?.textContent?.trim();
+      const originalRange = page.querySelector(".daily-chart-range")?.textContent?.trim();
       const originalValue = page
-        .querySelector(".cost-window--range .cost-window__value")
+        .querySelectorAll(".usage-metric-badge strong")[1]
         ?.textContent?.trim();
       expect(originalRange).toBeTruthy();
       expect(originalValue).toMatch(/^\$1(?:\.0+)?$/);
@@ -464,9 +531,9 @@ describe("Usage query failure ownership", () => {
           ? { startDate: "2026-07-01", endDate: "2026-07-01" }
           : { startDate: "2026-07-09", endDate: "2026-08-07" },
       );
-      const failedRange = page.querySelector(".cost-window-range")?.textContent?.trim();
+      const failedRange = page.querySelector(".daily-chart-range")?.textContent?.trim();
       const failedValue = page
-        .querySelector(".cost-window--range .cost-window__value")
+        .querySelectorAll(".usage-metric-badge strong")[1]
         ?.textContent?.trim();
       if (change === "same query") {
         expect(page.textContent).toContain("Original query row");
@@ -484,10 +551,12 @@ describe("Usage query failure ownership", () => {
       await page.updateComplete;
       expect(page.querySelector(".usage-callout.danger")).toBeNull();
       expect(page.textContent).toContain("Recovered query row");
-      expect(page.querySelector(".cost-window--range")?.textContent).toContain("$1");
+      expect(page.querySelectorAll(".usage-metric-badge strong")[1]?.textContent?.trim()).toMatch(
+        /^\$1(?:\.0+)?$/,
+      );
       expect(page.textContent).toContain("QA Provider Plan");
       if (change === "dates") {
-        const recoveredRange = page.querySelector(".cost-window-range")?.textContent?.trim();
+        const recoveredRange = page.querySelector(".daily-chart-range")?.textContent?.trim();
         expect(recoveredRange).toBeTruthy();
         expect(recoveredRange).not.toBe(originalRange);
       }

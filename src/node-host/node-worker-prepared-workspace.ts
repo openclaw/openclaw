@@ -8,6 +8,7 @@ import type {
   NodeWorkerPreparedWorkspaceResult,
 } from "../worker/node-workspace-prepared-protocol.js";
 import type { NodeWorkerWorkspaceExecInput } from "../worker/node-workspace-protocol.js";
+import type { NodeWorkerCommandIsolation } from "./node-worker-command-filesystem.js";
 import {
   type NodeWorkerPreparedWorkspaceRow,
   NodeWorkerPreparedWorkspaceStore,
@@ -43,6 +44,7 @@ export class NodeWorkerPreparedWorkspaceRuntime {
     options: Pick<OpenClawStateDatabaseOptions, "env" | "path">,
     private readonly hashMemos: Map<string, WorkspaceHashMemo>,
     enabled: boolean,
+    private readonly isolation?: NodeWorkerCommandIsolation,
   ) {
     this.root = path.resolve(
       enabled ? fs.realpathSync.native(home) : home,
@@ -120,6 +122,7 @@ export class NodeWorkerPreparedWorkspaceRuntime {
           !source.baseCommit ||
           source.baseCommit !== prepared.baseCommit ||
           (await captureManifest({
+            mode: "eligible",
             workspaceDir: workspace.workspaceDir,
             manifestHome: workspace.homeDir,
             baseCommit: source.baseCommit,
@@ -127,6 +130,7 @@ export class NodeWorkerPreparedWorkspaceRuntime {
             baseManifestRef: workspace.sourceManifestRef,
             hashMemo,
             signal,
+            isolation: this.isolation,
           })) !== workspace.preparedManifestRef
         ) {
           throw new Error("INVALID_REQUEST: prepared workspace source does not match its manifest");

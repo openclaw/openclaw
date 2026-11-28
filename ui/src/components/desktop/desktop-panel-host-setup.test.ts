@@ -12,7 +12,7 @@ import {
   updatePanel,
 } from "./desktop-panel.test-support.ts";
 
-const UNAVAILABLE = "The requested desktop is unavailable. Retry when the machine is ready.";
+const UNAVAILABLE = "This desktop is unavailable. Try again when the device is ready.";
 const ENABLE = "Enable desktop access in OpenClaw";
 const gatewayHost: EnvironmentSummary = {
   id: "gateway",
@@ -98,12 +98,12 @@ describe("Desktop host setup guidance", () => {
       true,
     );
     await waitForSolid(() => expect(panel.textContent).toContain("Screen Sharing is available"));
-    expect(panel.textContent).toContain("Desktop access is not enabled on the Gateway host.");
-    expect(panel.textContent).toContain("shares the Gateway host's screen");
+    expect(panel.textContent).toContain("Desktop access isn’t enabled on this computer.");
+    expect(panel.textContent).toContain("shares this computer’s screen");
     expect(panel.textContent).toContain(
-      "Enable desktop access to view and control the Gateway host in OpenClaw.",
+      "Enable desktop access to view and control this computer in OpenClaw.",
     );
-    expect(panel.textContent).toContain("macOS user account on the Gateway host");
+    expect(panel.textContent).toContain("macOS account on this computer");
     expect(panel.textContent).toContain("Applies without restarting the Gateway.");
     expect(panel.textContent).toContain("reachable from other devices on your network");
     expect(panel.textContent).not.toContain(UNAVAILABLE);
@@ -126,9 +126,9 @@ describe("Desktop host setup guidance", () => {
       false,
     );
     await waitForSolid(() => expect(panel.textContent).toContain("Turn on Screen Sharing"));
-    expect(panel.textContent).toContain("On the Gateway host Mac, open System Settings");
-    expect(panel.textContent).toContain("allow the Gateway host account to Observe and Control");
-    expect(panel.textContent).not.toContain("On this Mac");
+    expect(panel.textContent).toContain("On this Mac, open System Settings");
+    expect(panel.textContent).toContain("allow this computer’s account to Observe and Control");
+
     expect(panel.textContent).toContain("reachable from other devices on your network");
     expect(panel.textContent).not.toContain(UNAVAILABLE);
     expect(button(ENABLE)).toBeUndefined();
@@ -144,11 +144,13 @@ describe("Desktop host setup guidance", () => {
     const linuxHost = { ...gatewayHost, platform: "linux" };
     const { panel, button } = await mount(linuxHost, { state: "ready" }, false);
     await waitForSolid(() => expect(panel.textContent).toContain("A desktop is available"));
-    expect(panel.textContent).toContain("desktop server on the Gateway host uses its own password");
+    expect(panel.textContent).toContain("desktop server on this computer uses its own password");
     expect(panel.textContent).toContain(
       "The desktop server may be reachable from other devices on your network.",
     );
-    expect(panel.textContent).toContain("A Gateway administrator can enable desktop access.");
+    expect(panel.textContent).toContain(
+      "Only admins can enable desktop access. Ask an admin for access.",
+    );
     expect(panel.textContent).not.toContain(UNAVAILABLE);
     expect(button(ENABLE)?.disabled).toBe(true);
     expect(button("Check again")).toBeDefined();
@@ -184,6 +186,48 @@ describe("Desktop host setup guidance", () => {
     );
     expect(button(ENABLE)?.disabled).toBe(false);
     expect(connect).not.toHaveBeenCalled();
+  });
+
+  it("keeps the unavailable message and Retry in the same status", async () => {
+    const { panel, button } = await mount(gatewayHost, new Error("setup check failed"), true);
+    await waitForSolid(() => expect(panel.textContent).toContain(UNAVAILABLE));
+    expect(button("Retry")?.closest('[role="status"]')?.textContent).toContain(UNAVAILABLE);
+    expect(panel.querySelectorAll(".desktop-note")).toHaveLength(0);
+  });
+
+  it("checks the session source before showing connection controls", async () => {
+    const { panel, request, connect, button, enable } = await mount(
+      gatewayHost,
+      new Error("setup check failed"),
+      true,
+    );
+    await waitForSolid(() => expect(panel.textContent).toContain(UNAVAILABLE));
+    const pending = Promise.withResolvers<typeof gatewayHost>();
+    request.mockImplementationOnce(async () => pending.promise);
+    const retry = button("Retry")!;
+    retry.focus();
+    retry.click();
+    await waitForSolid(() => expect(panel.textContent).toContain("Loading desktop sources"));
+    expect(panel.textContent).not.toContain(UNAVAILABLE);
+    expect(panel.textContent).not.toContain("Connecting to desktop");
+    expect(button("Retry")).toBeUndefined();
+    expect(button("Disconnect")).toBe(retry);
+    expect(document.activeElement).toBe(retry);
+    pending.reject(new Error("Synthetic inventory interruption"));
+    await waitForSolid(() =>
+      expect(button("Retry")?.closest('[role="status"]')?.textContent).toContain(
+        "Synthetic inventory interruption",
+      ),
+    );
+    expect(button("Retry")).toBe(retry);
+    expect(document.activeElement).toBe(retry);
+    expect(panel.textContent).not.toContain("Desktop disconnected");
+    expect(connect).not.toHaveBeenCalled();
+    enable();
+    button("Retry")?.click();
+    await waitForSolid(() => expect(connect).toHaveBeenCalledOnce());
+    expect(observeHost(request)[0]?.[1]).toMatchObject({ control: false });
+    expect(panel.querySelector('[role="alert"]')).toBeNull();
   });
 
   it("keeps the generic notice when the setup check fails", async () => {

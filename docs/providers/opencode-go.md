@@ -62,6 +62,13 @@ interactive onboarding or pass the shared OpenCode API key directly.
   </Tab>
 </Tabs>
 
+## Browser sign-in
+
+To sign in with your browser instead of an API key, run
+`openclaw models auth login --provider opencode-go --method oauth` and pick a
+workspace with a Go subscription. Go keeps a sign-in separate from the Zen
+catalog's. See [OpenCode browser sign-in](/providers/opencode#browser-sign-in).
+
 ## Config example
 
 ```json5
@@ -99,6 +106,13 @@ completions. Explicit `off` disables native thinking and removes reasoning from
 replayed history; enabled thinking preserves the reasoning needed for follow-up turns.
 Both paths also omit unsupported controls for MiniMax models with fixed reasoning
 and remove Kimi K2 reasoning replay fields.
+
+## Endpoint outages
+
+A 403 response containing `Upstream request failed: Endpoint is unavailable.` is
+treated as a service failure, so configured fallbacks can run and the shared API
+key stays available to other models. Genuine authentication refusals still follow
+the normal sign-in and credential-cooldown behavior.
 
 ## Privacy
 

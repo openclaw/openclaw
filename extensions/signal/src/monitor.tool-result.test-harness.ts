@@ -252,13 +252,6 @@ vi.mock("openclaw/plugin-sdk/security-runtime", async () => ({
   readStoreAllowFromForDmPolicy: readAllowFromStoreMock,
 }));
 
-vi.mock("./client.js", async () => ({
-  ...(await vi.importActual<typeof import("./client.js")>("./client.js")),
-  streamSignalEvents: streamMock,
-  signalCheck: signalCheckMock,
-  signalRpcRequest: signalRpcRequestMock,
-}));
-
 // mock-isolation: Exercise ingress settlement without opening a daemon transport.
 vi.mock("./client-adapter.js", () => ({
   streamSignalEvents: streamMock,

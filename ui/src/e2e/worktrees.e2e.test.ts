@@ -1,6 +1,10 @@
+import { writeFile } from "node:fs/promises";
+import path from "node:path";
 import { expect, it } from "vitest";
 import { evaluateControlUiContext } from "../test-helpers/control-ui-e2e-context.ts";
+import { takeControlUiScreenshotFrame } from "../test-helpers/control-ui-e2e-screenshot.ts";
 import { installMockGateway } from "../test-helpers/control-ui-e2e.ts";
+import { rasterizeProofAnnotations } from "../test-helpers/proof-annotations.ts";
 import { createControlUiE2eSuite } from "./control-ui-e2e-suite.test-support.ts";
 
 const suite = createControlUiE2eSuite({
@@ -36,7 +40,24 @@ suite.define(() => {
       expect(title).not.toBeNull();
       expect(tabs).not.toBeNull();
       expect(tabs!.y).toBeGreaterThan(title!.y + title!.height);
-      expect(Math.abs(tabs!.x - title!.x)).toBeLessThan(12);
+      const firstTab = await page
+        .getByRole("tab", { name: "Sessions", exact: true })
+        .evaluate((tab) => {
+          const label = document.createRange();
+          label.selectNodeContents(tab);
+          const box = tab.getBoundingClientRect();
+          return {
+            labelLeft: label.getBoundingClientRect().left,
+            leadingEdgeClickable: tab.contains(
+              document.elementFromPoint(box.left + 1, box.top + box.height / 2),
+            ),
+          };
+        });
+      const readingEdge = await page
+        .locator(".page-subtitle")
+        .evaluate((text) => text.getBoundingClientRect().left);
+      expect(Math.abs(firstTab.labelLeft - readingEdge)).toBeLessThanOrEqual(1);
+      expect(firstTab.leadingEdgeClickable).toBe(true);
       for (const [name, subtitle] of [
         ["Sessions", "Active sessions and defaults."],
         ["Worktrees", "Isolated agent task checkouts and recovery snapshots."],
@@ -46,6 +67,87 @@ suite.define(() => {
         expect(await page.locator(".page-subtitle").textContent()).toContain(subtitle);
       }
     }),
+  );
+
+  it.each([
+    [390, 844],
+    [820, 1180],
+    [1180, 820],
+    [1440, 900],
+  ])(
+    "distinguishes matching checkout names and returns focus when deletion is canceled at %i × %i",
+    (width, height) =>
+      suite.withPage(
+        { viewport: { width, height }, hasTouch: true, reducedMotion: "reduce" },
+        async ({ page }) => {
+          const name = "regionalaccessibilityandinterpretationserviceintegrationreview01";
+          // oxlint-disable-next-line oxc/no-map-spread -- each record must be an independent copy of the shared fixture.
+          const records = ["/synthetic/team/project", "/synthetic/archive/project"].map(
+            (repoRoot, index) => ({
+              ...restorableWorktree,
+              id: "worktree-" + index,
+              repoFingerprint: "0123456789abcde" + index,
+              removedAt: undefined,
+              repoRoot,
+              path: repoRoot + "/.worktrees/" + name,
+              name,
+              branch: "openclaw/" + name,
+            }),
+          );
+          const gateway = await installMockGateway(page, {
+            methodResponses: { "worktrees.list": { worktrees: records } },
+          });
+          await page.goto(suite.server.baseUrl + "worktrees");
+          const buttons = page.getByRole("button", { name: "Delete: " + name, exact: true });
+          await buttons.last().waitFor();
+          expect(await buttons.count()).toBe(2);
+          for (const [index, record] of records.entries()) {
+            const row = page.locator("openclaw-worktrees-page .settings-row").filter({
+              has: page.locator(`[aria-describedby="worktree-repository-${record.id}"]`),
+            });
+            const button = row.getByRole("button", { name: "Delete: " + name, exact: true });
+            const details = row.locator(".worktree-row__details");
+            const summary = details.locator("summary");
+            expect(await summary.textContent()).toBe(
+              index === 0 ? "team/project" : "archive/project",
+            );
+            expect(await row.locator(".worktree-row__name").getAttribute("title")).toBe(name);
+            await summary.press("Enter");
+            // oxlint-disable-next-line unicorn/prefer-dom-node-text-content -- innerText proves the opened text is rendered, not just present.
+            expect(await details.innerText()).toContain(record.repoRoot);
+            // oxlint-disable-next-line unicorn/prefer-dom-node-text-content -- innerText proves the opened text is rendered, not just present.
+            expect(await details.innerText()).toContain(record.branch);
+            await summary.press("Enter");
+            expect
+              .soft(
+                await button.evaluate((node) => {
+                  const id = node.getAttribute("aria-describedby");
+                  return id ? document.getElementById(id)?.textContent : null;
+                }),
+              )
+              .toBe(record.repoRoot);
+            await button.focus();
+            await button.press("Enter");
+            const dialog = page.getByRole("dialog", { name: /Snapshot and delete/ });
+            await dialog.waitFor();
+            // oxlint-disable-next-line unicorn/prefer-dom-node-text-content -- innerText proves the opened text is rendered, not just present.
+            expect.soft(await dialog.innerText()).toContain(record.path);
+            for (const item of await dialog.locator("h2,.exec-approval-command").all()) {
+              expect
+                .soft(await item.evaluate((node) => node.scrollWidth <= node.clientWidth + 1))
+                .toBe(true);
+            }
+            if (index === 0) {
+              await dialog.getByRole("button", { name: "Cancel", exact: true }).tap();
+            } else {
+              await page.keyboard.press("Escape");
+            }
+            await dialog.waitFor({ state: "hidden" });
+            expect.soft(await button.evaluate((node) => node.matches(":focus"))).toBe(true);
+          }
+          expect(await gateway.getRequests("worktrees.remove")).toHaveLength(0);
+        },
+      ),
   );
 
   it("uses the remote default until a base branch is explicitly selected", () =>
@@ -65,15 +167,16 @@ suite.define(() => {
         },
       });
       await page.goto(`${suite.server.baseUrl}settings/worktrees`);
-      const base = page.getByLabel("Base branch", { exact: true });
-      const branches = page.locator("#worktrees-create-branches");
-      for (const value of [undefined, "main", ""]) {
+      const base = page.getByRole("button", { name: /^Base branch:/ });
+      for (const value of [undefined, "main", "Automatic base"]) {
         await page.getByRole("button", { name: "New worktree", exact: true }).click();
+        await base.click();
         if (value === undefined) {
-          await branches.locator('option[value="main"]').waitFor({ state: "attached" });
-          expect(await base.inputValue()).toBe("");
+          await page.getByRole("option", { name: "main", exact: true }).waitFor();
+          await page.keyboard.press("Escape");
+          expect(await base.textContent()).toContain("Automatic base");
         } else {
-          await base.fill(value);
+          await page.getByRole("option", { name: value, exact: true }).click();
         }
         await page.getByRole("button", { name: "Create", exact: true }).click();
         await base.waitFor({ state: "hidden" });
@@ -84,6 +187,66 @@ suite.define(() => {
         { repoRoot, baseRef: "main" },
         { repoRoot },
       ]);
+    }));
+
+  it("requires an explicit safe retry for preserved removal", () =>
+    suite.withPage({ viewport: { width: 1280, height: 900 } }, async ({ page }) => {
+      const cleanup = {
+        state: "preserved",
+        reason: "Nested repository preserved. Repair the checkout before retrying.",
+        attempts: 1,
+        nextAttemptAt: null,
+      };
+      const gateway = await installMockGateway(page, {
+        methodResponses: {
+          "worktrees.list": {
+            worktrees: [{ ...restorableWorktree, removedAt: undefined, cleanup }],
+          },
+          "worktrees.remove": { removed: false, preserved: cleanup },
+        },
+      });
+      await page.goto(`${suite.server.baseUrl}settings/worktrees`);
+      await page.getByRole("button", { name: "Delete: restorable-test", exact: true }).click();
+      const dialog = page.getByRole("dialog");
+      await dialog.getByRole("button", { name: "Delete", exact: true }).click();
+      await gateway.waitForRequest("worktrees.remove");
+      await dialog.getByRole("heading", { name: "Retry", exact: true }).waitFor();
+      const action = dialog.getByRole("button", { name: /^(Delete|Retry)$/ });
+      const frame = await takeControlUiScreenshotFrame(page, dialog, [action], {
+        elements: [action],
+        animations: "disabled",
+      });
+      await writeFile(path.join(suite.artifactDir, "preserved-remove.png"), frame.png);
+      await writeFile(
+        path.join(suite.artifactDir, "preserved-remove-annotated.png"),
+        await rasterizeProofAnnotations(suite.browser, {
+          viewport: page.viewportSize()!,
+          scale: await page.evaluate(() => window.devicePixelRatio),
+          image: frame.png,
+          annotations: [
+            {
+              kind: "outline",
+              rect: frame.elements[0]!.bounds,
+              text:
+                (await action.textContent()) === "Retry"
+                  ? "Explicit retry keeps snapshot safety"
+                  : "Incorrect force-delete prompt",
+              labelAt: { x: 680, y: 610 },
+              color: "#E57373",
+            },
+          ],
+        }),
+      );
+      expect(await dialog.textContent()).toContain(cleanup.reason);
+      await dialog.getByRole("button", { name: "Retry", exact: true }).click();
+      await expect.poll(async () => (await gateway.getRequests("worktrees.remove")).length).toBe(2);
+      expect((await gateway.getRequests("worktrees.remove")).map(({ params }) => params)).toEqual([
+        { id: "worktree-1" },
+        { id: "worktree-1", retryPreserved: true },
+      ]);
+      await expect
+        .poll(() => page.locator(".callout.danger").textContent())
+        .toContain(cleanup.reason);
     }));
 
   it("keeps a restore failure visible after the automatic list refresh succeeds", () =>

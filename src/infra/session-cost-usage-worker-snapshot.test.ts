@@ -16,6 +16,7 @@ import {
   partitionUsageCostRollup,
   USAGE_COST_PARTITION_SCOPE,
   usageCostPartitionKey,
+  type UsageCostPartition,
 } from "./session-cost-usage-partitions.js";
 import { USAGE_COST_QUARTER_SCOPE } from "./session-cost-usage-quarters.js";
 import {
@@ -46,15 +47,24 @@ const fixture = vi.hoisted(() => ({
 vi.mock("../state/openclaw-agent-db-readonly.js", () => ({
   withOpenClawAgentDatabaseReadOnly: fixture.withRead,
 }));
-// mock-isolation: Pause transcript discovery without loading the worker's retained refresh state.
+// mock-isolation: Avoid loading the worker's retained refresh state.
 vi.mock("./session-cost-usage-refresh-inputs.worker.js", () => ({
-  createUsageCostCollectionAccess: () => ({ inventory: fixture.inventory }),
+  createUsageCostCollectionAccess: () => ({
+    readFreshness: async () =>
+      (await fixture.inventory()).map((file) => ({
+        mtimeMs: file.mtimeMs,
+        generation: file.generation ?? null,
+      })),
+  }),
   usageRefreshInputs: vi.fn(),
 }));
-// mock-isolation: Supply captured aliases without opening a second native store in this worker test.
+// mock-isolation: Supply captured metadata and aliases without opening a second native store.
 vi.mock("./session-cost-usage-collection.js", async (importOriginal) => ({
   ...(await importOriginal<typeof import("./session-cost-usage-collection.js")>()),
+  listUsageCountedTranscriptSources: fixture.inventory,
+  readUsageCostTranscriptSourceStats: async (sources: UsageCostTranscriptFile[]) => sources,
   resolveUsageCostTranscriptFiles: fixture.selectedFiles,
+  resolveUsageCostTranscriptPaths: async (paths: string[]) => paths,
 }));
 
 afterEach(() => vi.resetAllMocks());
@@ -108,26 +118,31 @@ function reportEntry(file: UsageCostTranscriptFile, tokens: number): UsageCostRo
   });
 }
 
-/** Write a rollup with its month partitions and quarter rows, as the refresh owner does. */
-function writeReport(db: DatabaseSync, file: UsageCostTranscriptFile, entry: UsageCostRollupEntry) {
+/** Commit one rollup with its month partitions and quarter rows, as the cache host does. */
+function writeRollup(
+  db: DatabaseSync,
+  key: string,
+  encoded: { valueJson: string; blob: Uint8Array; partitions?: UsageCostPartition[] },
+) {
   const upsert = db.prepare(`INSERT INTO cache_entries (scope, key, value_json, blob, updated_at)
     VALUES (?, ?, ?, ?, ?)
     ON CONFLICT (scope, key) DO UPDATE SET
       value_json = excluded.value_json, blob = excluded.blob, updated_at = excluded.updated_at`);
-  const { valueJson, blob, partitions } = partitionUsageCostRollup(entry);
-  upsert.run(USAGE_COST_ROLLUP_SCOPE, file.filePath, valueJson, blob, timestamp);
-  for (const partition of partitions) {
-    const key = usageCostPartitionKey(file.filePath, partition.date);
-    upsert.run(USAGE_COST_PARTITION_SCOPE, key, partition.valueJson, partition.blob, timestamp);
-    upsert.run(
-      USAGE_COST_QUARTER_SCOPE,
-      key,
-      partition.quarters!.valueJson,
-      partition.quarters!.blob,
-      timestamp,
-    );
+  upsert.run(USAGE_COST_ROLLUP_SCOPE, key, encoded.valueJson, encoded.blob, timestamp);
+  for (const partition of encoded.partitions ?? []) {
+    const dated = usageCostPartitionKey(key, partition.date);
+    upsert.run(USAGE_COST_PARTITION_SCOPE, dated, partition.valueJson, partition.blob, timestamp);
+    const quarters = partition.quarters;
+    if (quarters) {
+      upsert.run(USAGE_COST_QUARTER_SCOPE, dated, quarters.valueJson, quarters.blob, timestamp);
+    }
   }
 }
+const writeReport = (
+  db: DatabaseSync,
+  file: UsageCostTranscriptFile,
+  entry: UsageCostRollupEntry,
+) => writeRollup(db, file.filePath, partitionUsageCostRollup(entry));
 
 function borrowDatabase(db: DatabaseSync) {
   fixture.withRead.mockImplementation((read: (opened: { db: DatabaseSync }) => unknown) => ({
@@ -319,6 +334,7 @@ it("reads the report snapshot after discovery and keeps it closed across awaits"
     return [file];
   });
   fixture.inventory.mockResolvedValue([file]);
+  fixture.selectedFiles.mockResolvedValue([file]);
   const report = () =>
     execute({
       kind: "summary",
@@ -390,6 +406,84 @@ it("refreshes a usage.cost cache written before a shorter SQLite transcript rewr
       kind: "summary",
       summary: { totals: { totalTokens: 0 }, cacheStatus: { staleFiles: 1 } },
       staleSessionFiles: [filePath],
+    });
+  } finally {
+    db.close();
+  }
+});
+
+// Accounting semantics changed with the canonical-navigation repair, so a rollup an
+// older build published must not survive on an unchanged transcript: this side-cursor
+// history billed 0 tokens before, and the displaced reply's 10 tokens return only if
+// the semantic version retires the cached row.
+it("rebuilds a usage rollup published by an older accounting version", async () => {
+  const at = (second: number) => new Date(timestamp + second * 1_000).toISOString();
+  const filePath = path.join(tempDirs.make("usage-cache-version-"), "side-cursor.jsonl");
+  fs.writeFileSync(
+    filePath,
+    [
+      { type: "message", id: "u1", parentId: null, timestamp: at(0), message: { role: "user" } },
+      {
+        ...createUsageTranscriptEntry(10, { cost: 1, timestamp: at(1) }),
+        id: "a1",
+        parentId: "u1",
+      },
+      { type: "custom", id: "s", parentId: "u1", appendMode: "side", timestamp: at(2) },
+      { type: "leaf", id: "cut", parentId: "s", targetId: null },
+    ]
+      .map((event) => `${JSON.stringify(event)}\n`)
+      .join(""),
+  );
+  const stats = fs.statSync(filePath);
+  const file: UsageCostTranscriptFile = {
+    kind: "jsonl",
+    filePath,
+    sourcePath: filePath,
+    size: stats.size,
+    mtimeMs: stats.mtimeMs,
+    device: stats.dev,
+    inode: stats.ino,
+  };
+  const db = cacheDatabase();
+  // The cached checkpoint still matches the file exactly, so only the version retires it.
+  writeReport(db, file, {
+    ...reportEntry(file, 0),
+    // Version 11 shipped before the canonical-navigation accounting repair.
+    version: 11,
+    checkpoint: {
+      ...createUsageCheckpoint(stats.size, stats.mtimeMs, stats.ino),
+      device: stats.dev,
+    },
+  });
+  borrowDatabase(db);
+  fixture.inventory.mockResolvedValue([file]);
+  fixture.selectedFiles.mockResolvedValue([file]);
+  const summary = {
+    kind: "summary",
+    pricingFingerprint,
+    startMs: timestamp,
+    endMs: timestamp + 15 * 60 * 1000 - 1,
+    dayBucket: { mode: "utc-offset", utcOffsetMinutes: 0 },
+  } as const;
+  try {
+    // The retired row is reported stale, then republished with the spend it really made.
+    expect(await execute(summary)).toMatchObject({
+      summary: { totals: { totalTokens: 0 }, cacheStatus: { staleFiles: 1 } },
+    });
+    await execute({ kind: "refresh", pricingFingerprint, maxFiles: 50 }, async (value) => {
+      let output: unknown;
+      if (isRecord(value) && value.kind === "write" && Array.isArray(value.input)) {
+        for (const row of value.input as Array<{ value: Uint8Array; blob: Uint8Array }>) {
+          writeRollup(db, filePath, { ...row, valueJson: new TextDecoder().decode(row.value) });
+        }
+        output = true;
+      } else if (isRecord(value) && value.kind === "pricing" && Array.isArray(value.input)) {
+        output = value.input.map(() => undefined);
+      }
+      return { input: output, consumed() {} };
+    });
+    expect(await execute(summary)).toMatchObject({
+      summary: { totals: { totalTokens: 10 }, cacheStatus: { staleFiles: 0 } },
     });
   } finally {
     db.close();

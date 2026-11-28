@@ -6,17 +6,20 @@ description: Ingest meeting transcripts from any recorder into Knowledge with at
 # Meeting ingestion
 
 Turn one transcript into a sourced meeting page, updated entity profiles, and
-structured claims, then verify them. Read a reference only when its step needs it:
+structured claims, then verify them. Read a reference only when its step needs it,
+and don't reread one after compaction unless you are about to use it again:
 
 - [setup](references/setup.md): always, first (status, ontology, search)
-- [source acquisition](references/source-acquisition.md): fetching from an API, including Granola
-  through its plugin
+- [source acquisition](references/source-acquisition.md): acquiring originals, including
+  structured transcripts and Granola through its plugin
 - [sources](references/sources.md): retaining originals; citation format
 - [speakers](references/speakers.md): possible split, duplicate or unclear speaker
 - [identity](references/identity.md): resolving a person, company or project
 - [writing](references/writing.md): before writing any page prose
 - [meeting page](references/meeting-page.md): writing the meeting page
-- [profiles](references/profiles.md): creating or updating a profile
+- [subject pages](references/profiles.md), plus only the layout for the
+  entity's type: creating or updating a profile or entity page
+- [source notes](references/source-notes.md): the `attended` and `discusses` edges
 - [assertions](references/assertions.md): claims, attendance edges, reruns
 - [publish](references/publish.md): batch or page writes
 - [recovery](references/recovery.md): any uncertain, rejected or conflicting write
@@ -35,6 +38,10 @@ structured claims, then verify them. Read a reference only when its step needs i
   about gets a page (found or created), a link from the meeting, and a
   `discusses` edge (meeting → entity) whose body is its source note. Passing
   mentions don't. Entity pages get no Timeline line; their Timeline is derived.
+- Entity pages stay current explanations: each fact goes to the most specific
+  existing page, State is rewritten in place, and a page gets no section or
+  topic per meeting. A page that is already current gets only the new facts and
+  its source note. Every existing citation stays.
 - Pages read like good human notes: names first, few caveats, no process
   commentary.
 - Decisions, commitments and events become claims. Unverified claims don't
@@ -51,8 +58,10 @@ say the meeting ingestion is not complete.
 
 Normalize in working context to: source, source_id, title, date, time, duration,
 attendees (source claims), ordered segments with `speaker`, `speaker_raw` and
-`text`, source summary, URL. Unknown values are null. Recorder-specific handling
-ends here; every recorder runs the same steps after this.
+`text`, source summary, URL. Preserve optional original speaker IDs and their
+provider/source scope alongside the labels. Unknown values are null; never invent
+IDs for label-only sources. Recorder-specific handling ends here; every recorder
+runs the same steps after this.
 
 Retain the original export and the transcript ([sources](references/sources.md)).
 Normalized text is a labeled derivative. Report acquisition, retention and
@@ -65,8 +74,20 @@ candidates, and new proper nouns. Later steps draft from the digest. Return to t
 transcript only for specific line ranges (to check wording or a quote), never for
 a full reread.
 
-**Done when:** complete transcript retained; evidence receipts in hand; digest
-covers every line.
+The evidence gate below addresses
+[unsupported meeting records](https://github.com/openclaw/openclaw/pull/205816).
+
+Before publishing from the digest, identify a passage that establishes a
+meeting topic, decision or other substantive exchange. A single clear decision
+in any language qualifies. If the complete transcript contains only greetings,
+unintelligible speech or disconnected fragments, retain the source and report
+`insufficient evidence` with its observed version and the reason. Stop before
+creating meeting pages, profiles, attendance edges or claims. During a historical
+review, flag existing records that rely on such a source for human review.
+
+**Done when:** the complete transcript is retained, the digest covers every
+line, and it identifies the passages that support proceeding or explains why
+ingestion stopped.
 
 ### 2. Split, dedup, resolve speakers
 
@@ -141,7 +162,10 @@ Run [verify](references/verify.md) first. Then check:
   claim `entities`/`dependencies`, commitment `owner`, and edge
   `from`/`to`/`label`/`source_page`. Every linked entity has an `attended` or
   `discusses` edge with a body for this meeting.
-- **State:** no updated profile has a State topic named for a date or meeting.
+- **State:** no updated page gained a topic or section named for a date or
+  meeting, and each follows its type's layout. Older dated sections beyond the
+  retirement allowance ([retire dated sections](references/retire-dated.md))
+  are listed in the report, not a failure.
 - **Style:** check the drafts in your work files against
   [writing](references/writing.md) before publishing: names first, no stacked
   caveats, no notes to yourself, no filler lines. Don't read published pages back
@@ -177,48 +201,9 @@ completion.
 ## Scribe runs
 
 The **Learn from Granola** scribe runs this skill unattended. Its prompt checks
-access, sets up any automation and lists its settings; this section is only the
-work. Do not ask questions. Acquire with the Granola plugin's tools
-([source acquisition](references/source-acquisition.md)).
+access, sets up any automation and lists its settings. Do not ask questions.
 
 ### Learn from Granola
 
-The prompt names which meetings (the owner's, or every meeting the account can
-read) and how far back to start (today, or the last 7 or 30 days, in the owner's
-time zone).
-
-1. **Plugin.** Tool search for `granola list_meetings`. If the Granola tools
-   are missing or say the account is not connected, stop with
-   `Scribe status: failed — the Granola plugin is not installed or connected`.
-2. **Checkpoint.** `knowledge_lookup` the note page
-   `Knowledge scribe checkpoint · Learn from Granola`. Its first line is
-   `Start: YYYY-MM-DD`, the start date the prompt set when the page was
-   created. Then one line per Granola meeting: meeting date, UUID,
-   `updated_at` and a state: `done` (with the meeting page title), `no
-   transcript`, or `pending` (with why: still recording, transcript pending,
-   or verification failed). Create the page with `knowledge_save_page` (type
-   `note`) on the first run, writing the prompt's start date.
-3. **List.** `list_meetings` from the later of `Start` and 7 days before the
-   newest `done` meeting date, through today; never earlier than `Start`. For
-   the owner's meetings pass
-   `involvement: {captured_by_me: true, listed_as_participant: true}`. Follow
-   `next_cursor`. Add every `pending` meeting by UUID (read with
-   `get_meetings`), whatever its date, so it is retried until it is `done` or
-   `no transcript`. Skip `done` and `no transcript` meetings unless a later
-   `updated_at` shows the note changed.
-4. **Dedup.** Before acquiring, `knowledge_grep` the UUID, then the meeting
-   title, and read candidate meeting pages with the same date (±1 day). A
-   page is not proof of a complete ingestion: an earlier run may have stopped
-   after publishing it. Run the verification in step 5 against the existing
-   page. If it passes, record the meeting `done` and skip it. Otherwise
-   reconcile into that page ([speakers](references/speakers.md)) and finish
-   steps 3–5 for it; never create a second page.
-5. **Ingest.** Oldest first, one meeting at a time, run steps 1–5 of this skill
-   in full. Record a meeting still being recorded, with a pending transcript,
-   or failing verification as `pending`; record `no transcript` for one that
-   has none. Record `done` only after verification passes. Write each line
-   with `knowledge_edit_body` as soon as the meeting's outcome is known, so an
-   interrupted run resumes instead of redoing or losing it. If context runs
-   short, stop after the current meeting and leave the rest.
-6. Count meetings ingested, already in Knowledge, left pending and without a
-   transcript, and pages and claims written.
+Task: ingest the Granola meetings in the settings. Follow
+[Learn from Granola](references/scribe-runs.md#learn-from-granola).

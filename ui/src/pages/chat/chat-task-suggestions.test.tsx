@@ -234,3 +234,19 @@ describe("chat task suggestions", () => {
     );
   });
 });
+
+it.each([
+  "You need admin access to start suggested tasks.",
+  "Reconnect to start suggested tasks.",
+  "Starting suggested tasks isn’t available here.",
+])("shows the supplied task denial reason: %s", (reason) => {
+  const { container, onAccept } = renderSuggestion({
+    canAcceptTaskSuggestions: false,
+    taskSuggestionBlockedReason: reason,
+  });
+  const start = container.querySelector<HTMLButtonElement>(".task-suggestion__start--primary");
+  expect(start?.disabled).toBe(true);
+  expect(start?.title).toBe(reason);
+  start?.click();
+  expect(onAccept).not.toHaveBeenCalled();
+});

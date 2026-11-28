@@ -1,2 +1,0 @@
-# Cold profile status, saved-link disconnect, and configured adapter regression coverage.
-48

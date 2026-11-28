@@ -1,7 +1,7 @@
 import { createServer, type ServerResponse } from "node:http";
 import path from "node:path";
 import { text as readBody } from "node:stream/consumers";
-import { expect, it } from "vitest";
+import { expect, it, vi } from "vitest";
 import {
   closeHttpServer,
   listenLoopback,
@@ -39,6 +39,7 @@ import {
 } from "../../infra/diagnostic-events.js";
 import { clearMemoryPluginState } from "../../plugins/memory-state.js";
 import { beginSessionEffect } from "../../sessions/session-controller.lifecycle.js";
+import { createReplyOperation } from "../../sessions/session-controller.operation.js";
 import { extractTextFromChatContent } from "../../shared/chat-content.js";
 import { createTestGatewayScheduler } from "../../test-utils/gateway-scheduler-clock.js";
 import { withOpenClawTestState } from "../../test-utils/openclaw-test-state.js";
@@ -101,6 +102,7 @@ it.each(["completed", "interrupted"] as const)(
       const privateSessionIds = new Set<string>();
       let missingPrivateSessionId = false;
       let completeFirstPrivateResponse: (() => void) | undefined;
+      let firstPrivateResponse: ServerResponse | undefined;
       const stopDiagnostics = onInternalDiagnosticEvent((event) => {
         if (
           event.type === "model.call.started" &&
@@ -158,7 +160,8 @@ it.each(["completed", "interrupted"] as const)(
               finishModelResponse(response, isHuman ? "FOREGROUND_READY" : "NO_REPLY");
             if (!isHuman) {
               if (requests.length === 1 && outcome === "completed") {
-                completeFirstPrivateResponse = completeResponse;
+                firstPrivateResponse = response;
+                completeFirstPrivateResponse = () => finishModelResponse(response, "");
               }
               entered.resolve();
               if (requests.length === 1) {
@@ -215,6 +218,9 @@ it.each(["completed", "interrupted"] as const)(
       };
       let flush: ReturnType<typeof runMemoryFlushIfNeeded> | undefined;
       let admission: Awaited<ReturnType<typeof beginSessionEffect>> | undefined;
+      let replyOperation: ReturnType<typeof createReplyOperation> | undefined;
+      const wallNow = Date.now;
+      let clockOffset = 0;
       const scheduler = createTestGatewayScheduler();
       try {
         await setSessionMcpRuntimeScheduler(scheduler);
@@ -286,6 +292,10 @@ it.each(["completed", "interrupted"] as const)(
             expect(loadSessionEntry(scope)?.sessionId).toBe(scope.sessionId);
           },
         });
+        if (outcome === "completed") {
+          vi.spyOn(Date, "now").mockImplementation(() => wallNow() + clockOffset);
+          replyOperation = createReplyOperation({ ...scope, resetTriggered: false });
+        }
         flush = admission.run(() =>
           runMemoryFlushIfNeeded({
             cfg,
@@ -297,7 +307,7 @@ it.each(["completed", "interrupted"] as const)(
             sessionStore: { [scope.sessionKey]: entry },
             sessionKey: scope.sessionKey,
             storePath: scope.storePath,
-
+            replyOperation,
             abortSignal: interrupted.signal,
           }),
         );
@@ -334,10 +344,43 @@ it.each(["completed", "interrupted"] as const)(
           if (!completeFirstPrivateResponse) {
             throw new Error("Private response was not held before completion");
           }
+          const watchdog = replyOperation!.watchdog;
+          const { current, semanticDeadlineAtMs: originalDeadline } = watchdog.snapshot();
+          expect(current).toBe(true);
+          // Prove renewal without expiring the detached inference's execution deadline.
+          clockOffset = 1;
+          firstPrivateResponse!.write(
+            `data: ${JSON.stringify({
+              id: "private-memory-fixture",
+              object: "chat.completion.chunk",
+              created: 1,
+              model: "owner-model",
+              choices: [
+                {
+                  index: 0,
+                  delta: { role: "assistant", content: "NO_REPLY" },
+                  finish_reason: null,
+                },
+              ],
+            })}\n\n`,
+          );
+          await vi.waitFor(() => {
+            const { lastProgressReason, semanticDeadlineAtMs } = watchdog.snapshot();
+            expect(lastProgressReason).toBe("memory_flush:model_output");
+            expect(semanticDeadlineAtMs).toBeGreaterThan(originalDeadline);
+          });
+          expect(watchdog.decide(originalDeadline + 1).action).toBe("observe");
+          expect(watchdog.decide(watchdog.snapshot().semanticDeadlineAtMs).action).toBe("stop");
           completeFirstPrivateResponse();
           completeFirstPrivateResponse = undefined;
         }
         expect((await flush).outcome).toBe(outcome === "interrupted" ? "failed" : "completed");
+        if (replyOperation) {
+          replyOperation.complete();
+          await replyOperation.ownerSettlement;
+          replyOperation = undefined;
+          vi.mocked(Date.now).mockRestore();
+        }
         admission.release();
         admission = undefined;
         expect(requests).toHaveLength(1);
@@ -375,11 +418,15 @@ it.each(["completed", "interrupted"] as const)(
         const humanMessages = humanRequests[0]!.messages;
         const userIndex = humanMessages.findLastIndex(isHumanMessage);
         const nextUser = text(humanMessages[userIndex]?.content);
-        expect(humanMessages.filter(isModelRuntimeContextCarrier)).toHaveLength(1);
-        expect(text(humanMessages.find(isModelRuntimeContextCarrier)?.content)).toContain(
-          runtimeContext,
-        );
-        expect(humanMessages.findIndex(isModelRuntimeContextCarrier)).toBeGreaterThan(userIndex);
+        // #198100 retains earlier runtime carriers; inspect only the current human turn.
+        const currentRuntimeMessages = humanMessages
+          .slice(userIndex + 1)
+          .filter(isModelRuntimeContextCarrier);
+        expect(currentRuntimeMessages).toHaveLength(1);
+        expect(text(currentRuntimeMessages[0]?.content)).toContain(runtimeContext);
+        const humanRequestText = JSON.stringify(humanMessages);
+        expect(humanRequestText).not.toContain("Checkpoint durable notes. Reply NO_REPLY.");
+        expect(humanRequestText).not.toContain("Write durable notes only.");
         const canonicalHuman = SessionManager.open(scope)
           .buildSessionContext()
           .messages.findLast(
@@ -404,6 +451,11 @@ it.each(["completed", "interrupted"] as const)(
         completeFirstPrivateResponse?.();
         interrupted.abort(createAbortError("fixture cleanup"));
         await flush?.catch(() => undefined);
+        if (replyOperation) {
+          replyOperation.complete();
+          await replyOperation.ownerSettlement;
+          vi.mocked(Date.now).mockRestore();
+        }
         admission?.release();
         await waitForSessionMaintenance(scope.sessionKey);
         // Retire fixture-owned leftovers after work settles, including failed setup or assertions.

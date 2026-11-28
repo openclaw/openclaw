@@ -106,7 +106,7 @@ export function createMattermostThreadBackfill(params: {
         post.id === turn.currentPostId ||
         post.channel_id !== turn.channelId ||
         (post.id !== turn.threadRootId && post.root_id !== turn.threadRootId) ||
-        post.type ||
+        post.type?.startsWith("system_") ||
         !post.user_id ||
         typeof post.create_at !== "number" ||
         post.create_at > turn.currentPostTimestamp ||
@@ -191,6 +191,8 @@ export function createMattermostThreadBackfill(params: {
     ) {
       return {};
     }
+    const pendingRecovery = recoveries.get(turn.historyKey);
+    const pendingHistory = pendingRecovery?.completion;
     let identity: string | null;
     try {
       identity = await readIdentity(turn);
@@ -199,6 +201,10 @@ export function createMattermostThreadBackfill(params: {
       return {};
     }
     const previous = recoveries.get(turn.historyKey);
+    if (previous === pendingRecovery && previous?.identity === identity && pendingHistory) {
+      // Preserve this caller's in-flight result while its session identity is checked.
+      return { history: await pendingHistory };
+    }
     let recovery = previous;
     if (!recovery || recovery.identity !== identity) {
       recovery = {

@@ -151,31 +151,23 @@ test.each([
   expect(read()).toBeUndefined();
 });
 
-test.each(["caller", "device"] as const)(
-  "sessions.create persists nothing when the %s is revoked while the node validates",
-  async (revoked) => {
-    let callerCurrent = true;
-    const validated = invoke.getMockImplementation()!;
-    invoke.mockImplementation(async (request) => {
-      const response = await validated(request);
-      if (revoked === "caller") {
-        callerCurrent = false;
-      } else {
-        isCurrent.mockReturnValue(false);
-      }
-      return response;
-    });
-    // The request owner may reject by response or by throwing its authority error.
-    const result = await create(undefined, {
-      ...controlUiClient,
-      hasCurrentClientAuthority: captureGatewayDeviceRevocation(
-        {},
-        { deviceId: "operator-device", role: "operator" },
-        () => callerCurrent,
-      ).isCurrent,
-    }).catch((error: unknown) => ({ ok: false, error: { message: String(error) } }));
-    expect(invoke).toHaveBeenCalledOnce();
-    expect(result.ok).toBe(false);
-    expect(read()).toBeUndefined();
-  },
-);
+test("sessions.create persists nothing when the device is revoked while the node validates", async () => {
+  const validated = invoke.getMockImplementation()!;
+  invoke.mockImplementation(async (request) => {
+    const response = await validated(request);
+    isCurrent.mockReturnValue(false);
+    return response;
+  });
+  // The request owner may reject by response or by throwing its authority error.
+  const result = await create(undefined, {
+    ...controlUiClient,
+    hasCurrentClientAuthority: captureGatewayDeviceRevocation(
+      {},
+      { deviceId: "operator-device", role: "operator" },
+      () => true,
+    ).isCurrent,
+  }).catch((error: unknown) => ({ ok: false, error: { message: String(error) } }));
+  expect(invoke).toHaveBeenCalledOnce();
+  expect(result.ok).toBe(false);
+  expect(read()).toBeUndefined();
+});

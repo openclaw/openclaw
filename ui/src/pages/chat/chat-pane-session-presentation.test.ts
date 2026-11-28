@@ -122,6 +122,7 @@ describe("chat pane session presentation", () => {
   it("uses create metadata only until the title owner has a session row", () => {
     const f = fixture();
     Object.assign(f.state.sessions.presentation, { result: null });
+    expect(chatSessionPresentationTitle(f.state, undefined, "", false, "")).toBe("");
     expect(chatSessionPresentationTitle(f.state, undefined, "", true, "Created title")).toBe(
       "Created title",
     );
@@ -148,7 +149,7 @@ describe("chat pane session presentation", () => {
         false,
         "Created title",
       ),
-    ).toBe("Main Session");
+    ).toBe("Main session");
   });
   it.each(Object.entries(presentationChanges))(
     "redraws when the visible %s presentation changes",

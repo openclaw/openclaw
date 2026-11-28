@@ -40,15 +40,15 @@ suite.define(() => {
         const themeIndex = headings.indexOf("Theme");
         expect(headings.slice(themeIndex, themeIndex + 3)).toEqual([
           "Theme",
-          "Accent color",
-          "Typography",
+          "Language and text",
+          "Chat",
         ]);
 
         const accent = page.locator("#settings-appearance-accent");
         const customPicker = accent.locator("[data-accent-custom]");
         const customSwatch = accent.locator(".settings-accent-swatch--custom");
         await polledAttribute(customPicker, "aria-describedby").toBe("settings-accent-status");
-        await polledText(accent.locator("#settings-accent-status")).toContain("Using Custom color");
+        await polledText(accent.locator("#settings-accent-status")).toContain("Custom color");
         await accent.locator('[data-accent-preset="slate"]').focus();
         await page.keyboard.press("Tab");
         await expect
@@ -71,23 +71,24 @@ suite.define(() => {
             };
           });
         for (const [width, expectedColumns] of [
-          [560, 3],
-          [320, 1],
+          [1440, 6],
+          [390, 3],
+          [320, 2],
         ] as const) {
           await page.setViewportSize({ height: 1000, width });
           // Resize schedules shell rendering and a grid-track transition; observe the rendered result.
           await expect.poll(async () => (await readLayout()).columns).toBe(expectedColumns);
           const layout = await readLayout();
           expect(layout.columns).toBe(expectedColumns);
-          expect(layout.minWidth).toBeGreaterThanOrEqual(150);
+          expect(layout.minWidth).toBeGreaterThanOrEqual(96);
         }
 
         const colorMode = page.locator(".settings-row").filter({
           has: page.locator(".settings-row__title", { hasText: "Color mode" }),
         });
         for (const [width, direction] of [
-          [768, "column"],
-          [769, "row"],
+          [640, "column"],
+          [641, "row"],
         ] as const) {
           await page.setViewportSize({ height: 1000, width });
           await polledStyle(colorMode, "flexDirection").toBe(direction);

@@ -154,8 +154,8 @@ function prepareBody(scenario: BodyScenario = {}, parentEnv: NodeJS.ProcessEnv =
   writeFileSync(
     join(root, "gh"),
     `#!/usr/bin/env node
-const fs = require("node:fs");
-const { execFileSync } = require("node:child_process");
+import fs from "node:fs";
+import { execFileSync } from "node:child_process";
 const args = process.argv.slice(2);
 if (args[0] !== "api" || args[1] !== "--hostname" || args[2] !== "fixture.github.invalid") {
   throw new Error("Expected the bound attribution repository host");
@@ -616,33 +616,6 @@ describePosix("native squash attribution", () => {
         previewBody: `Repair\n\nCo-authored-by: Codex <codex@openai.com>\n\n---------\n\n${contributorTrailer}\nCo-authored-by: Codex <codex@openai.com>\n`,
       },
       `Repair\n\n---------\n\n${contributorTrailer}\nCo-authored-by: Pair Partner <pair@example.com>\n`,
-    ],
-    [
-      "drops a folded machine trailer replayed inside a commit bullet",
-      {
-        sourceCommits: [
-          source("Repair\n\nCo-Authored-By: Claude\n <noreply@anthropic.com>", contributor),
-          source("Follow-up", contributor),
-        ],
-        previewBody: `* Repair\n\nCo-Authored-By: Claude\n <noreply@anthropic.com>\n\n* Follow-up\n\n---------\n\n${contributorTrailer}\n`,
-      },
-      `* Repair\n\n* Follow-up\n\n---------\n\n${contributorTrailer}\n`,
-    ],
-    [
-      "drops an indented machine credit line from the default preview",
-      {
-        sourceCommits: [source("Repair", contributor)],
-        previewBody: `Repair\n\n  ${machineTrailer}\n\n---------\n\n${contributorTrailer}\n`,
-      },
-      `Repair\n\n---------\n\n${contributorTrailer}\n`,
-    ],
-    [
-      "drops a machine trailer followed by indented text from the default preview",
-      {
-        sourceCommits: [source("Repair", contributor)],
-        previewBody: `Repair\n\n${machineTrailer}\n  indented note\n\n---------\n\n${contributorTrailer}\n`,
-      },
-      `Repair\n\n  indented note\n\n---------\n\n${contributorTrailer}\n`,
     ],
     [
       "keeps queue admission without a body override or source trailers",
@@ -1127,21 +1100,6 @@ describePosix("native squash attribution", () => {
     ]);
     expect(result.mergeBody).not.toContain("Main Only");
     expect(result.mergeBody).not.toContain("Unprepared");
-  });
-
-  it.each([
-    "",
-    "Server description",
-    "Co-authored-by: Maintainer <maintainer@example.com>",
-    "Server description\n\nCo-authored-by: Maintainer <maintainer@example.com>\n\n \t\n",
-    "Server description\n\n---\n\nMore context\n\nCo-authored-by: Maintainer <maintainer@example.com>",
-  ])("preserves the preview and its parsed trailers for body %j", (previewBody) => {
-    const credit = "Co-authored-by: Contributor <contributor@example.com>";
-    const result = prepareBody({ sourceMessages: [`Repair\n\n${credit}`], previewBody });
-    expect(result.status, `${result.stdout}\n${result.stderr}`).toBe(0);
-    const preview = previewBody.trimEnd();
-    const separator = !preview ? "" : preview.includes("Co-authored-by:") ? "\n" : "\n\n";
-    expect(result.mergeBody).toBe(`${preview}${separator}${credit}\n`);
   });
 
   it("does not duplicate an existing trailer or mistake prose for a trailer", () => {

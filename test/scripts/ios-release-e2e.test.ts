@@ -1,6 +1,13 @@
 import { spawnSync, type ChildProcess } from "node:child_process";
 import { EventEmitter } from "node:events";
-import { chmodSync, mkdirSync, readFileSync, readdirSync, writeFileSync } from "node:fs";
+import {
+  chmodSync,
+  existsSync,
+  mkdirSync,
+  readFileSync,
+  readdirSync,
+  writeFileSync,
+} from "node:fs";
 import os from "node:os";
 import path from "node:path";
 import { PassThrough } from "node:stream";
@@ -213,34 +220,106 @@ function preparationFailure(
   };
 }
 
-it("writes a failure proof when the real CLI rejects an impossible target", () => {
-  const output = path.join(tempDirs.make("ios-release-e2e-cli-"), "proof.json");
-  const targetSha = "0".repeat(40);
+it.each([false, true])(
+  "writes a failure proof for an impossible target with client source=%s",
+  (compatibility) => {
+    const output = path.join(tempDirs.make("ios-release-e2e-cli-"), "proof.json");
+    const targetSha = "0".repeat(40);
+    const child = spawnSync(
+      process.execPath,
+      [
+        "--import",
+        "./scripts/tsx.mjs",
+        "scripts/ios-release-e2e.ts",
+        "--mode",
+        "stock",
+        "--target-sha",
+        targetSha,
+        "--output",
+        output,
+        ...(compatibility
+          ? [
+              "--candidate-root",
+              ".openclaw/tmp/missing-candidate",
+              "--harness-sha",
+              "1".repeat(40),
+              "--client-root",
+              ".",
+              "--client-sha",
+              "2".repeat(40),
+              "--client-release-tag",
+              "v2026.11.1",
+            ]
+          : []),
+      ],
+      { encoding: "utf8", timeout: 15_000 },
+    );
+    expect([child.error, child.signal, child.status], child.stderr).toEqual([undefined, null, 1]);
+    const proof = JSON.parse(readFileSync(output, "utf8"));
+    expect(proof).toMatchObject({
+      targetSha,
+      mode: "stock",
+      status: "failed",
+      trials: [],
+      errors: ["gate-setup-failed"],
+    });
+    expect([proof.gatewayInstallMs, proof.nativeBuildMs]).toEqual([undefined, undefined]);
+    expect(proof.client).toEqual(
+      compatibility
+        ? {
+            kind: "stable-release-source-rebuild",
+            clientSha: "2".repeat(40),
+            releaseTag: "v2026.11.1",
+          }
+        : undefined,
+    );
+  },
+);
+
+it.each([
+  ["candidate root without compatibility", ["--candidate-root", "."]],
+  ["harness SHA without compatibility", ["--harness-sha", "1".repeat(40)]],
+  ["root only", ["--client-root", "."]],
+  ["SHA only", ["--client-sha", "2".repeat(40)]],
+  ["tag only", ["--client-release-tag", "v2026.11.1"]],
+  ["missing tag", ["--client-root", ".", "--client-sha", "2".repeat(40)]],
+  [
+    "short SHA",
+    ["--client-root", ".", "--client-sha", "123", "--client-release-tag", "v2026.11.1"],
+  ],
+  [
+    "branch tag",
+    ["--client-root", ".", "--client-sha", "2".repeat(40), "--client-release-tag", "main"],
+  ],
+  [
+    "prerelease tag",
+    [
+      "--client-root",
+      ".",
+      "--client-sha",
+      "2".repeat(40),
+      "--client-release-tag",
+      "v2026.11.1-beta.1",
+    ],
+  ],
+])("rejects invalid client CLI identity: %s", (_name, args) => {
+  const output = path.join(tempDirs.make("ios-release-e2e-client-cli-"), "proof.json");
   const child = spawnSync(
     process.execPath,
     [
       "--import",
       "./scripts/tsx.mjs",
       "scripts/ios-release-e2e.ts",
-      "--mode",
-      "stock",
       "--target-sha",
-      targetSha,
+      "0".repeat(40),
       "--output",
       output,
+      ...args,
     ],
     { encoding: "utf8", timeout: 15_000 },
   );
   expect([child.error, child.signal, child.status], child.stderr).toEqual([undefined, null, 1]);
-  const proof = JSON.parse(readFileSync(output, "utf8"));
-  expect(proof).toMatchObject({
-    targetSha,
-    mode: "stock",
-    status: "failed",
-    trials: [],
-    errors: ["gate-setup-failed"],
-  });
-  expect([proof.gatewayInstallMs, proof.nativeBuildMs]).toEqual([undefined, undefined]);
+  expect(existsSync(output)).toBe(false);
 });
 
 describe("sampled simulator-tree footprint", () => {
@@ -296,6 +375,7 @@ function fixture(
     measure?: boolean;
     invalidMeasurement?: boolean;
     cancel?: boolean;
+    firstMeasurement?: { ms: number; error?: "ETIMEDOUT" | "ABORT_ERR" };
   } = {},
 ) {
   let time = 0;
@@ -339,7 +419,15 @@ function fixture(
           return result(test);
         },
         measure: async () => {
-          trace.push(`measure:${index}`);
+          if (options.firstMeasurement && !trace.includes(`measure:${index}`)) {
+            time += options.firstMeasurement.ms;
+            trace.push(`measure:${index}`);
+            if (options.firstMeasurement.error) {
+              throw commandFailure(options.firstMeasurement.error);
+            }
+          } else {
+            trace.push(`measure:${index}`);
+          }
           return options.invalidMeasurement ? {} : { processes: 80, bytes: 1024, cpu: 1 };
         },
         cleanup: async () => {
@@ -427,6 +515,101 @@ describe("fresh trial ownership", () => {
     expect(trace.indexOf("prepare:1")).toBeLessThan(trace.indexOf("measure:1"));
     expect(trace.indexOf("measure:1")).toBeLessThan(trace.indexOf("cleanup:1"));
   });
+  it.each([
+    { ms: 4250, error: undefined },
+    { ms: 5000, error: "ETIMEDOUT" as const },
+    { ms: 5000, error: "ABORT_ERR" as const },
+  ])(
+    "records delayed and failed measurement calls without changing the gap gate: %j",
+    async (firstMeasurement) => {
+      const { deps } = fixture({ measure: true, firstMeasurement });
+      const { trials } = await runTrials("stock", deps);
+      const trial = trials[0];
+      if (!trial) {
+        throw new Error("Expected the measured stock trial");
+      }
+      expect(trial.timing?.measurements[0]).toEqual({
+        scheduledAtMs: 0,
+        startedAtMs: 0,
+        endedAtMs: firstMeasurement.ms,
+        outcome: firstMeasurement.error ? "failed" : "passed",
+        ...(firstMeasurement.error
+          ? { code: firstMeasurement.error === "ETIMEDOUT" ? "timeout" : "cancelled" }
+          : {}),
+      });
+      expect(trial.timing?.measurements[1]).toMatchObject({
+        scheduledAtMs: 1000,
+        startedAtMs: firstMeasurement.ms + 1000,
+      });
+      expect(trial.timing?.tests).toEqual([
+        {
+          test: IOS_RELEASE_TESTS[0],
+          startedAtMs: firstMeasurement.ms,
+          endedAtMs: firstMeasurement.ms + 1010,
+        },
+        {
+          test: IOS_RELEASE_TESTS[1],
+          startedAtMs: firstMeasurement.ms + 1010,
+          endedAtMs: firstMeasurement.ms + 2020,
+        },
+      ]);
+      expect(trial.measurement).toMatchObject({
+        errors: firstMeasurement.error ? 1 : 0,
+        gapCount: 1,
+        complete: false,
+      });
+      expect(trial.errors).toEqual(["incomplete-measurement"]);
+      expect(JSON.stringify(trial.timing)).not.toContain("private");
+    },
+  );
+  it("bounds call diagnostics while keeping serial sampling and joining cancellation", async () => {
+    let now = 0;
+    let calls = 0;
+    let active = 0;
+    let maxActive = 0;
+    let cleaned = false;
+    const abort = new AbortController();
+    const report = await runTrials("stock", {
+      measure: true,
+      signal: abort.signal,
+      now: () => now,
+      wait: async (ms) => {
+        now += ms;
+      },
+      create: async () => ({
+        prepare: async () => {},
+        test: async (test) => {
+          await new Promise<void>((resolve) => {
+            abort.signal.addEventListener("abort", () => resolve(), { once: true });
+          });
+          return result(test);
+        },
+        measure: async () => {
+          active++;
+          maxActive = Math.max(maxActive, active);
+          await Promise.resolve();
+          if (++calls === 4100) {
+            abort.abort();
+          }
+          active--;
+          return { processes: 1, bytes: 1024, cpu: 0 };
+        },
+        cleanup: async () => {
+          cleaned = active === 0;
+        },
+      }),
+    });
+    const trial = report.trials[0];
+    if (!trial) {
+      throw new Error("Expected the cancelled stock trial");
+    }
+    expect(trial.timing?.measurements).toHaveLength(4096);
+    expect(trial.timing?.droppedMeasurements).toBe(4);
+    expect(trial.measurement?.samples).toHaveLength(4100);
+    expect(maxActive).toBe(1);
+    expect(cleaned).toBe(true);
+    expect(report.complete).toBe(false);
+  });
   it("stops after unconfirmed cleanup or cancellation, retaining the failed run", async () => {
     for (const options of [{ fail: "cleanup" as const }, { cancel: true }]) {
       const { deps, trace } = fixture(options);
@@ -447,7 +630,6 @@ describe("fresh trial ownership", () => {
 describe("release qualification workflow authority", () => {
   const workflow = parse(readFileSync(".github/workflows/ios-release-e2e.yml", "utf8"));
   const release = parse(readFileSync(".github/workflows/ios-store-release.yml", "utf8"));
-  const ci = parse(readFileSync(".github/workflows/ci.yml", "utf8"));
   const gatewayPreparation = parse(
     readFileSync(".github/actions/prepare-mobile-release-gateway/action.yml", "utf8"),
   );
@@ -637,6 +819,8 @@ describe("release qualification workflow authority", () => {
         GITHUB_WORKFLOW_REF: `${repository}/.github/workflows/ios-release-e2e.yml@${ref}`,
         GITHUB_EVENT_NAME: "workflow_dispatch",
         TARGET_SHA: target,
+        CLIENT_SHA: "",
+        CLIENT_RELEASE_TAG: "",
         E2E_MODE: "mode" in options ? options.mode : "stock",
       },
     });
@@ -685,10 +869,12 @@ describe("release qualification workflow authority", () => {
     }
     expect(recovery.with["if-no-files-found"]).toBe("error");
     expect(workflow.permissions).toEqual({ actions: "read", contents: "read" });
-    expect(ci.jobs["ios-release-e2e"].permissions).toEqual({ actions: "read", contents: "read" });
     expect(workflow.jobs.qualify["runs-on"]).toBe("xcode-27-xlarge");
     expect(workflow.jobs.qualify.environment).toBeUndefined();
-    expect(workflow.on.workflow_dispatch.inputs.target_sha).toBeUndefined();
+    expect(workflow.on.workflow_dispatch.inputs.target_sha).toMatchObject({
+      type: "string",
+      default: "",
+    });
     expect(workflow.jobs.qualify.env.TARGET_SHA).toBe("${{ inputs.target_sha || github.sha }}");
   });
   it("fails missing target harnesses and uses a step-scoped compare binary", () => {
@@ -699,7 +885,7 @@ describe("release qualification workflow authority", () => {
     expect(checkout.with.ref).toBe("${{ github.sha }}");
     expect(checkout.with["persist-credentials"]).toBe(false);
     const verify = steps.find((step: { name: string }) => step.name.startsWith("Verify target"));
-    expect(verify.run).toContain('[[ "$(git rev-parse HEAD)" == "$TARGET_SHA" ]]');
+    expect(verify.run).toContain('[[ "$(git rev-parse HEAD)" == "$GITHUB_SHA" ]]');
     expect(verify.run).toContain("test -f scripts/ios-release-e2e.ts");
     expect(verify.if).toBeUndefined();
     expect(workflow.jobs.qualify.env.OPENCLAW_CI_SIMSLIM_BINARY).toBeUndefined();
@@ -839,38 +1025,15 @@ process.exitCode = 23;
       }
     },
   );
-  it.each([
-    ["full", "a".repeat(40), true],
-    ["full", "b".repeat(40), false],
-    ["main", "a".repeat(40), false],
-  ])(
-    "selects %s-tier target %s for required native qualification: %s",
-    (tier, target, selected) => {
-      const job = ci.jobs["ios-release-e2e"];
-      expect(
-        evaluateWorkflow(job.if, {
-          eventName: "workflow_dispatch",
-          sha: "a".repeat(40),
-          preflightOutputs: {
-            validation_tier: tier,
-            checkout_revision: target,
-            release_scope: "full",
-            compatibility_target: "false",
-            run_ios_build: "true",
-          },
-        }),
-      ).toBe(selected);
-      expect(job.with.target_sha).toBe("${{ needs.preflight.outputs.checkout_revision }}");
-      expect(ci.jobs["ci-gate"].needs).toContain("ios-release-e2e");
-      const gate = requiredWorkflowStep(ci.jobs["ci-gate"].steps, "Verify selected CI lanes");
-      expect(gate.env.JOB_RESULTS).toContain(
-        `ios-release-e2e=\${{ needs.ios-release-e2e.result }}|${job.if}`,
-      );
-    },
-  );
 });
 
 it.each([
+  "client-source",
+  "client-source-separate-candidate",
+  "client-source-wrong-head",
+  "client-source-dirty",
+  "client-source-late-head",
+  "client-source-late-dirty",
   "dirty-tracked",
   "dirty-untracked",
   "source-late-dirty",
@@ -890,6 +1053,8 @@ it.each([
   "build-unjoined",
   "build-exit",
   "boot-timeout",
+  "simulator-timing",
+  "simulator-timing-failure",
   "headroom-timeout",
   "cancel-during-headroom",
   "gateway-start-failure",
@@ -933,6 +1098,10 @@ it.each([
 ])("native adapter owns admission, build, test and cleanup for %s", async (scenario) => {
   const temp = tempDirs.make("ios-release-e2e-adapter-");
   const developerDir = tempDirs.make("ios-release-e2e-developer-");
+  const compatibility = scenario.startsWith("client-source");
+  const separateCandidate = scenario.endsWith("separate-candidate");
+  const candidateRoot = separateCandidate ? path.join(temp, "candidate") : process.cwd();
+  const clientRoot = compatibility ? tempDirs.make("ios-release-e2e-client-") : "";
   vi.spyOn(os, "tmpdir").mockReturnValue(temp);
   vi.stubGlobal(
     "process",
@@ -941,7 +1110,8 @@ it.each([
       arch: { value: "arm64" },
     }),
   );
-  vi.stubEnv("OPENCLAW_CI_SIMSLIM_BINARY", "");
+  const simulatorTiming = scenario.startsWith("simulator-timing");
+  vi.stubEnv("OPENCLAW_CI_SIMSLIM_BINARY", simulatorTiming ? "/fixture/simslim" : "");
   const instances: { cleanup: ReturnType<typeof vi.fn> }[] = [];
   const lifecycle: string[] = [];
   const setupPlan = setupPlans[scenario];
@@ -959,6 +1129,13 @@ it.each([
     nodeVersion: process.version,
     npmVersion: "11.6.2",
   };
+  // Candidate preparation belongs to the isolated owner, covered by ios-release-gateway.test.ts.
+  const isolatedGateway = {
+    cwd: process.cwd(),
+    entrypoint: [path.join(process.cwd(), "scripts/lib/native-candidate-entrypoint.mjs")],
+    identity: { kind: "candidate-source", targetSha: "3".repeat(40), sourceSha: "3".repeat(40) },
+    dispose: vi.fn(async () => {}),
+  };
   let installedGatewayPath = "";
   nativeMocks.install.mockImplementation(async (options) => {
     lifecycle.push("gateway-install");
@@ -969,6 +1146,10 @@ it.each([
           ? { code: "ETIMEDOUT", processTreeState: "live" }
           : {},
       );
+    }
+    if (separateCandidate) {
+      installedGatewayPath = isolatedGateway.cwd;
+      return isolatedGateway;
     }
     installedGatewayPath = path.join(options.installDir, "node_modules/openclaw");
     return { cwd: installedGatewayPath, entrypoint: ["openclaw.mjs"], identity: gatewayIdentity };
@@ -1149,7 +1330,10 @@ it.each([
     return { setupCode: `synthetic-code-${instances.length}` };
   });
   nativeMocks.gateway.mockImplementation(async (options) => {
-    expect(options).toMatchObject({ cwd: installedGatewayPath, entrypoint: ["openclaw.mjs"] });
+    expect(options).toMatchObject({
+      cwd: installedGatewayPath,
+      entrypoint: separateCandidate ? isolatedGateway.entrypoint : ["openclaw.mjs"],
+    });
     if (options.name === "ios-release-e2e-preflight") {
       lifecycle.push("gateway-preflight-create");
       return {
@@ -1162,6 +1346,8 @@ it.each([
         cleanup: preflightCleanup,
       };
     }
+    expect(options.config.agents.defaults.utilityModel).toBe("openai/ios-e2e-utility");
+    expect(options.config.agents.defaults.model.primary).toBe("openai/ios-e2e");
     expect(simulatorReady).toBe(false);
     lifecycle.push("gateway-create");
     const index = instances.length + 1;
@@ -1219,6 +1405,27 @@ it.each([
         };
         options.signal.addEventListener("abort", onAbort, { once: true });
       });
+    } else if (options.bin === "git" && options.cwd === clientRoot) {
+      if (args[1] === "--show-toplevel") {
+        stdout.write(clientRoot);
+      } else if (args[1] === "v2026.11.1^{commit}") {
+        stdout.write("2".repeat(40));
+      } else if (args[0] === "status") {
+        if (
+          scenario === "client-source-dirty" ||
+          (scenario === "client-source-late-dirty" && sourceChanged)
+        ) {
+          stdout.write(" M apps/ios/Sources/App.swift\n");
+        }
+      } else {
+        stdout.write(
+          (scenario === "client-source-wrong-head" ||
+          (scenario === "client-source-late-head" && sourceChanged)
+            ? "3"
+            : "2"
+          ).repeat(40),
+        );
+      }
     } else if (args[0] === "status") {
       expect(args).toEqual(["status", "--porcelain=v1", "--untracked-files=all"]);
       if (scenario === "dirty-tracked" || (scenario === "source-late-dirty" && sourceChanged)) {
@@ -1230,6 +1437,21 @@ it.each([
       stdout.write(
         (scenario === "source-late-head-change" && sourceChanged ? "2" : "1").repeat(40),
       );
+    } else if (args.includes("--version")) {
+      stdout.write("simslim 0.11.0");
+    } else if (args.includes("scripts/ios-simulator-prepare.sh")) {
+      stderr.write("private simulator output\nOPENCLAW_SIMULATOR_TIM");
+      stderr.write("ING phase=cold-boot seconds=1.250 exit=0\n");
+      stderr.write(
+        `OPENCLAW_SIMULATOR_TIMING phase=configure seconds=2.500 exit=${scenario === "simulator-timing-failure" ? 23 : 0}\n`,
+      );
+      if (scenario === "simulator-timing-failure") {
+        return 23;
+      }
+      stderr.write("OPENCLAW_SIMULATOR_TIMING phase=ready seconds=3.000 exit=0\n");
+      stderr.write("OPENCLAW_SIMULATOR_TIMING phase=verify seconds=0.125 exit=0\n");
+      stderr.write("private simulator output".repeat(1000));
+      simulatorReady = true;
     } else if (args.includes("-version")) {
       stdout.write(
         scenario === "different-xcode"
@@ -1322,7 +1544,7 @@ it.each([
       selectedTest = testArgument.slice("-only-testing:".length);
       const reader = selectedTest === IOS_RELEASE_TESTS[1];
       lifecycle.push(reader ? "reader-test" : "live-test");
-      if (!reader) {
+      if (!reader && scenario !== "test-exit") {
         stdout.write("IOS_RELEASE_CHECKPOINT paired\nIOS_RELEASE_CHECKPOINT private-credential\n");
       }
       if (reader) {
@@ -1382,6 +1604,11 @@ it.each([
                 metadata: { title: marker },
               };
             });
+        requests.push({
+          model: "ios-e2e-utility",
+          input: [{ role: "user", content: "Synthetic utility request" }],
+          metadata: { title: "Synthetic utility request" },
+        });
         writeFileSync(
           requestLog,
           requests
@@ -1409,7 +1636,7 @@ it.each([
             : "IOS_RELEASE_CHAT_FAILURE relaunch reply draft=false keyboard=true reply=false writing=false jump=true foreground=true input=true transcript=true send=false";
         stdout.write(
           "Test Case '-[OpenClawUITests.OpenClawSnapshotUITests testLiveGatewayPairChatAndRelaunch]' started.\n" +
-            `/private/checkout/OpenClawSnapshotUITests.swift:1913: error: private ${failureMessage}\n` +
+            `/private/checkout/OpenClawSnapshotUITests+Chat.swift:1913: error: private ${failureMessage}\n` +
             "Test Case '-[OpenClawUITests.OpenClawSnapshotUITests testLiveGatewayPairChatAndRelaunch]' failed (99 seconds).\n",
         );
         await Promise.resolve();
@@ -1430,11 +1657,20 @@ it.each([
         throw commandFailure("ETIMEDOUT", "unknown");
       }
       if (scenario === "test-exit") {
+        stdout.write("IOS_RELEASE_CHECKPOINT paired\n");
+        stdout.write("IOS_RELEASE_CHECKPOINT first\n");
+        stdout.write("IOS_RELEASE_CHECKPOINT second\n");
+        stdout.write("IOS_RELEASE_CHECKPOINT private-credential\n");
+        nativeCommandActive = true;
         stdout.write(
-          "/private/checkout/OpenClawSnapshotUITests.swift:1904: error: private assertion details\n" +
+          "/private/checkout/OpenClawSnapshotUITests+Helpers.swift:401: error: private assertion details\n" +
+            "/private/checkout/OpenClawSnapshotUITests+Helpers.swift:401: error: repeated private details\n" +
+            "/private/checkout/OpenClawSnapshotUITests+Private.swift:42: error: private details\n" +
             "private teardown details\n".repeat(256),
         );
         stderr.write("TEST FAILED: private setup code and private path\n");
+        await Promise.resolve();
+        nativeCommandActive = false;
         return 65;
       }
       if (!reader) {
@@ -1491,11 +1727,14 @@ it.each([
   });
   const admission = createNativeDependencies({
     mode: "stock",
-    targetSha: "1".repeat(40),
+    targetSha: (separateCandidate ? "3" : "1").repeat(40),
+    ...(separateCandidate ? { candidateRoot, harnessSha: "1".repeat(40) } : {}),
     signal: abort.signal,
     gatewayOnly: scenario === "gateway-only",
     buildOnly: scenario === "native-build-only",
-    gatewaySelectionDir: path.join(temp, "selection"),
+    ...(compatibility
+      ? { clientRoot, clientSha: "2".repeat(40), clientReleaseTag: "v2026.11.1" }
+      : { gatewaySelectionDir: path.join(temp, "selection") }),
     proof,
     onProgress: async () => {
       progressSnapshots.push(JSON.stringify(proof));
@@ -1511,6 +1750,17 @@ it.each([
       }
     },
   });
+  if (scenario === "client-source-wrong-head" || scenario === "client-source-dirty") {
+    await expect(admission).rejects.toMatchObject({
+      diagnostic:
+        scenario === "client-source-dirty"
+          ? { operation: "source-status", code: "dirty-source" }
+          : { operation: "source-head", code: "identity-mismatch" },
+    });
+    expect(nativeMocks.build).not.toHaveBeenCalled();
+    expect(nativeMocks.install).not.toHaveBeenCalled();
+    return;
+  }
   const dirtySource = scenario.startsWith("dirty-");
   const invalidRuntime = [
     "unavailable-runtime",
@@ -1584,6 +1834,44 @@ it.each([
         : "com.apple.CoreSimulator.SimRuntime.iOS-26-5",
   });
   try {
+    if (simulatorTiming) {
+      const resources = await native.dependencies.create("simslim", 1);
+      try {
+        if (scenario === "simulator-timing-failure") {
+          await expect(resources.prepare()).rejects.toMatchObject({
+            diagnostic: { operation: "simulator-slim", code: "exit", exitCode: 23 },
+          });
+        } else {
+          await resources.prepare();
+        }
+        expect(proof.phases).toEqual(
+          containing([
+            matching({
+              operation: "simulator-slim",
+              status: scenario === "simulator-timing-failure" ? "failed" : "passed",
+              preparationTimings: [
+                { phase: "cold-boot", seconds: 1.25, exitCode: 0 },
+                {
+                  phase: "configure",
+                  seconds: 2.5,
+                  exitCode: scenario === "simulator-timing-failure" ? 23 : 0,
+                },
+                ...(scenario === "simulator-timing-failure"
+                  ? []
+                  : [
+                      { phase: "ready", seconds: 3, exitCode: 0 },
+                      { phase: "verify", seconds: 0.125, exitCode: 0 },
+                    ]),
+              ],
+            }),
+          ]),
+        );
+        expect(JSON.stringify(proof.phases)).not.toContain("private simulator output");
+      } finally {
+        await resources.cleanup();
+      }
+      return;
+    }
     if (scenario === "native-build-only") {
       expect(nativeMocks.build).toHaveBeenCalledOnce();
       expect(nativeMocks.install).not.toHaveBeenCalled();
@@ -1595,12 +1883,18 @@ it.each([
       return;
     }
     expect(nativeMocks.install).toHaveBeenCalledExactlyOnceWith({
-      selectionDir: path.join(temp, "selection"),
+      ...(compatibility
+        ? { candidateDir: candidateRoot }
+        : { selectionDir: path.join(temp, "selection") }),
       installDir: expect.stringMatching(/\/openclaw-ios-release-e2e-[^/]+\/gateway$/u),
-      targetSha: "1".repeat(40),
+      targetSha: (separateCandidate ? "3" : "1").repeat(40),
       signal: abort.signal,
     });
-    expect(proof.gateway).toEqual(gatewayIdentity);
+    expect(proof.gateway).toEqual(
+      separateCandidate
+        ? { kind: "candidate-source", targetSha: "3".repeat(40), sourceSha: "3".repeat(40) }
+        : gatewayIdentity,
+    );
     expect(proof.gatewayInstallMs).toEqual(expect.any(Number));
     if (scenario === "gateway-only") {
       const gatewayProbe = await native.dependencies.create("stock", 1);
@@ -1833,7 +2127,11 @@ it.each([
         [
           diagnostic("native-test", "timeout", {
             errorCode: "ETIMEDOUT",
-            context: containing(["xctest-started", "xctest-failed", "xctest-line:1904"]),
+            context: containing([
+              "xctest-started",
+              "xctest-failed",
+              "xctest-location:OpenClawSnapshotUITests.swift:1904",
+            ]),
           }),
         ],
         ["failed"],
@@ -1983,20 +2281,42 @@ it.each([
           operation: "native-test",
           code: "exit",
           exitCode: 65,
-          context: containing(["test-failed", "xctest-line:1904"]),
+          context: containing([
+            "test-failed",
+            "xctest-location:OpenClawSnapshotUITests+Helpers.swift:401",
+            expect.stringMatching(/^failure-evidence-at-ms:\d+$/),
+          ]),
         },
       ]);
+      const context = report.trials[0]?.diagnostics[0]?.context ?? [];
+      expect(context.filter((fact) => fact.startsWith("xctest-location:"))).toEqual([
+        "xctest-location:OpenClawSnapshotUITests+Helpers.swift:401",
+      ]);
+      expect(proof.phases).toEqual(
+        containing([matching({ operation: "native-test", checkpoint: "second" })]),
+      );
+      expect(progressSnapshots.some((snapshot) => snapshot.includes('"checkpoint":"first"'))).toBe(
+        true,
+      );
+      expect(historyReadBeforeCommandExit).toBe(true);
+      expect(JSON.stringify(report)).not.toMatch(/private|OPENCLAW_E2E_|metadata/);
       return;
     }
-    if (scenario === "source-late-dirty" || scenario === "source-late-head-change") {
+    if (
+      [
+        "source-late-dirty",
+        "source-late-head-change",
+        "client-source-late-head",
+        "client-source-late-dirty",
+      ].includes(scenario)
+    ) {
       expect(report.trials.map((trial) => trial.status)).toEqual(["passed"]);
       expect(report.trials[0]?.tests).toHaveLength(2);
       sourceChanged = true;
       await expect(native.assertCurrentSource()).rejects.toMatchObject({
-        diagnostic:
-          scenario === "source-late-dirty"
-            ? { operation: "source-status", code: "dirty-source" }
-            : { operation: "source-head", code: "identity-mismatch" },
+        diagnostic: scenario.endsWith("dirty")
+          ? { operation: "source-status", code: "dirty-source" }
+          : { operation: "source-head", code: "identity-mismatch" },
       });
       expect(lifecycle.filter((entry) => entry.endsWith("-test"))).toEqual([
         "live-test",
@@ -2094,11 +2414,30 @@ it.each([
     expect(nativeBuild.args).not.toContain("-allowProvisioningUpdates");
     expect(nativeMocks.build).toHaveBeenCalledOnce();
     expect(nativeMocks.build.mock.calls[0]?.[0].identity).toMatchObject({
-      sourceSha: "1".repeat(40),
+      sourceSha: (compatibility ? "2" : "1").repeat(40),
+      checkoutPath: compatibility ? clientRoot : process.cwd(),
       sdkVersion: "27.0",
       platform: "darwin",
       arch: "arm64",
     });
+    if (compatibility) {
+      expect(proof).toMatchObject({
+        harnessSha: "1".repeat(40),
+        client: {
+          kind: "stable-release-source-rebuild",
+          clientSha: "2".repeat(40),
+          releaseTag: "v2026.11.1",
+        },
+      });
+      for (const command of [
+        ...commandsWith("ios:gen"),
+        ...builds,
+        ...commandsWith("test-without-building"),
+      ]) {
+        expect(command.cwd).toBe(clientRoot);
+      }
+      expect(commandsWith("scripts/e2e/mock-openai-server.mjs")[0]?.cwd).toBe(process.cwd());
+    }
     const tests = commandsWith("test-without-building");
     expect(tests.map(({ env }) => env.TEST_RUNNER_OPENCLAW_IOS_LIVE_SETUP_CODE)).toEqual([
       "synthetic-code-1",
@@ -2153,6 +2492,7 @@ it.each([
     } else {
       await native.cleanup();
       expect(readdirSync(temp)).toEqual([]);
+      expect(isolatedGateway.dispose).toHaveBeenCalledTimes(separateCandidate ? 1 : 0);
     }
   }
 });

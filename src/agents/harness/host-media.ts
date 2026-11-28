@@ -111,9 +111,15 @@ export function bindHarnessMedia(params: {
     };
   }
   const prepareReplyMedia = bindHarnessReplyMedia(params);
+  const fitCurrentInput: AgentHarnessHostCapabilities["fitCurrentInput"] = async (request) => {
+    assertActive();
+    const { fitOversizedCurrentInput } = await import("./current-input-budget.js");
+    return await fitOversizedCurrentInput(request);
+  };
   return {
     capabilities: {
       resolveInputAttachmentMedia,
+      fitCurrentInput,
       ...(prepareContextMedia ? { prepareContextMedia } : {}),
       ...(prepareInputAttachments ? { prepareInputAttachments } : {}),
       ...(prepareReplyMedia ? { prepareReplyMedia } : {}),

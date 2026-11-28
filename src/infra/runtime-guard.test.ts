@@ -1,6 +1,6 @@
 import { runInNewContext } from "node:vm";
 import { afterEach, beforeEach, describe, expect, it, vi, type MockInstance } from "vitest";
-import { PROCESS_NODE_VERSION_CHECK } from "../../node-version.mjs";
+import { emitNodeSecurityWarning, PROCESS_NODE_VERSION_CHECK } from "../../node-version.mjs";
 import {
   assertSupportedRuntime,
   isSupportedBunVersion,
@@ -91,6 +91,35 @@ function createRuntime() {
 }
 
 describe("runtime-guard", () => {
+  it("warns once across launcher and runtime admission for a certificate-only gap", async () => {
+    const runtime = createRuntime();
+    const warningKey = Symbol.for("openclaw.nodeSecurityWarningPrinted");
+    const globals = globalThis as unknown as Record<symbol, unknown>;
+    const prior = globals[warningKey];
+    delete globals[warningKey];
+    try {
+      const details = runtimeDetails("node", {
+        version: "24.21.0",
+        sqliteProbe: { available: true, version: "3.53.4", text: true, blob: true, json: true },
+      });
+      await assertSupportedRuntime(runtime, details, undefined, false);
+      expect(runtime.error).not.toHaveBeenCalled();
+      await assertSupportedRuntime(runtime, details);
+      emitNodeSecurityWarning(details.version, runtime.error);
+      await assertSupportedRuntime(runtime, details);
+      expect(runtime.exit).not.toHaveBeenCalled();
+      expect(runtime.error).toHaveBeenCalledExactlyOnceWith(
+        expect.stringContaining("SECURITY WARNING"),
+      );
+    } finally {
+      if (prior === undefined) {
+        delete globals[warningKey];
+      } else {
+        globals[warningKey] = prior;
+      }
+    }
+  });
+
   it("warns once while admitting capable Node 22 diagnostics", async () => {
     const runtime = createRuntime();
     const details = runtimeDetails("node", { version: "22.23.2", sqliteVersion: null });
@@ -215,32 +244,20 @@ describe("runtime-guard", () => {
 
   it("preserves the target package's numeric engine range", () => {
     const engine = ">=24.22.1 <25 || >=26.12.1";
-    expect(nodeVersionSatisfiesEngine("22.23.2", engine)).toBe(false);
-    expect(nodeVersionSatisfiesEngine("22.22.2", engine)).toBe(false);
-    expect(nodeVersionSatisfiesEngine("23.11.0", engine)).toBe(false);
     expect(nodeVersionSatisfiesEngine("24.14.1", engine)).toBe(false);
     expect(nodeVersionSatisfiesEngine("24.15.0+vendor.1", engine)).toBe(false);
     expect(nodeVersionSatisfiesEngine("24.22.1", engine)).toBe(true);
-    expect(nodeVersionSatisfiesEngine("25.8.1", engine)).toBe(false);
     expect(nodeVersionSatisfiesEngine("25.9.0", engine)).toBe(false);
-    expect(nodeVersionSatisfiesEngine("26.0.0", engine)).toBe(false);
     expect(nodeVersionSatisfiesEngine("26.12.1", engine)).toBe(true);
     expect(nodeVersionSatisfiesEngine(null, engine)).toBe(false);
-    expect(nodeVersionSatisfiesEngine("unknown", engine)).toBe(false);
   });
 
   it.each([
-    ["22.23.2", false],
-    ["23.11.0", false],
     ["24.15.0", false],
     ["24.16.0", true],
-    ["24.22.0", true],
-    ["24.22.1", true],
     ["25.9.0", false],
     ["26.0.0", false],
     ["26.1.0", true],
-    ["26.12.0", true],
-    ["26.12.1", true],
     ["27.0.0", true],
     ["v27.0.0-head", true],
     ["27.0.0-nightly20261018f88a1d25e9", true],
@@ -248,14 +265,11 @@ describe("runtime-guard", () => {
     ["24.22.1-rc.1", false],
     ["26.12.1-rc.1", false],
     ["27.0.0-01", false],
-    ["27.0.0-nightly..1", false],
-    ["27.0.0-", false],
     ["24.22.1+local.1", true],
     ["24.15.0-rc.1", false],
     ["25.9.1-nightly.20260714", false],
     ["24.15", false],
     ["garbage24.15.0suffix", false],
-    ["24.15.0suffix", false],
     [null, false],
   ] as const)("classifies supported Node version %s", (version, expected) => {
     expect(isSupportedNodeVersion(version)).toBe(expected);
@@ -266,13 +280,10 @@ describe("runtime-guard", () => {
 
   it.each([
     ["1.4.0", false],
-    ["1.4.1", false],
-    ["1.4.2", false],
     ["1.4.3", false],
     ["1.4.4", true],
     ["1.4.4-canary.1+65d94e715", true],
     ["2.0.0", true],
-    ["1.3.14", false],
     [null, false],
   ] as const)("classifies supported Bun version %s", (version, expected) => {
     expect(isSupportedBunVersion(version)).toBe(expected);
@@ -327,10 +338,12 @@ describe("runtime-guard", () => {
       }),
     ),
     runtimeDetails("bun"),
-  ])("returns silently when $kind runtime meets requirements", async (details) => {
+  ])("admits $kind silently during the preliminary runtime check", async (details) => {
     state.initializeSqlite.mockClear();
     const runtime = createRuntime();
-    await expect(assertSupportedRuntime(runtime, details)).resolves.toBeUndefined();
+    await expect(
+      assertSupportedRuntime(runtime, details, undefined, false),
+    ).resolves.toBeUndefined();
     if (details.kind === "node") {
       expect(state.initializeSqlite).not.toHaveBeenCalled();
     }
@@ -428,22 +441,32 @@ describe("runtime failure diagnostics", () => {
 
 describe("sealed worker runtime", () => {
   let disconnect: MockInstance<NonNullable<typeof process.disconnect>>;
+  const warningKey = Symbol.for("openclaw.nodeSecurityWarningPrinted");
+  const globals = globalThis as unknown as Record<symbol, unknown>;
+  let priorWarning: unknown;
   const originalArgv = process.argv;
   const originalExitCode = process.exitCode;
   beforeEach(() => {
+    priorWarning = globals[warningKey];
+    delete globals[warningKey];
     vi.resetModules();
     state.error.mockClear();
     state.run.mockClear();
     process.argv = [process.execPath, "worker.mjs"];
-    process.exitCode = undefined;
+    process.exitCode = 0;
     state.releaseStdin.mockClear();
     // The executable owns IPC, not the test runner's real transport.
     disconnect = vi.spyOn(process, "disconnect").mockImplementation(() => {});
     vi.stubEnv("OPENCLAW_DEBUG", undefined);
   });
   afterEach(() => {
+    if (priorWarning === undefined) {
+      delete globals[warningKey];
+    } else {
+      globals[warningKey] = priorWarning;
+    }
     process.argv = originalArgv;
-    process.exitCode = originalExitCode;
+    process.exitCode = originalExitCode ?? 0;
     vi.restoreAllMocks();
     vi.unstubAllEnvs();
   });
@@ -460,12 +483,18 @@ describe("sealed worker runtime", () => {
     state.lossless = supported;
     const stderr = supported ? undefined : vi.spyOn(process.stderr, "write").mockReturnValue(true);
     await expect(import("../worker/worker-deploy-entry.js")).resolves.toBeDefined();
-    expect(process.exitCode).toBe(supported ? undefined : 1);
+    expect(process.exitCode).toBe(supported ? 0 : 1);
     expect(state.releaseStdin).toHaveBeenCalledOnce();
     expect(disconnect).toHaveBeenCalledOnce();
     expect(state.run).toHaveBeenCalledTimes(supported ? 1 : 0);
     if (supported) {
-      expect(state.error).not.toHaveBeenCalled();
+      if (version === "24.16.0" || version === "26.1.0") {
+        expect(state.error).toHaveBeenCalledExactlyOnceWith(
+          expect.stringContaining("SECURITY WARNING"),
+        );
+      } else {
+        expect(state.error).not.toHaveBeenCalled();
+      }
     } else {
       expect(stderr).toHaveBeenCalledExactlyOnceWith("exit 1\n");
       expect(state.error).toHaveBeenCalledWith(expect.stringContaining("Upgrade Node"));

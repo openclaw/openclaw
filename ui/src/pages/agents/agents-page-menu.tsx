@@ -1,21 +1,24 @@
-import { createUniqueId } from "solid-js";
+import { Show, createSignal, createUniqueId } from "solid-js";
 import { Icon } from "../../components/solid/icon.tsx";
 import { Menu, type MenuEntry } from "../../components/solid/menu.tsx";
 import { copyToClipboard } from "../../lib/clipboard.ts";
 import { t } from "../../lib/reactive/i18n.ts";
-import { showToast } from "../../lib/toast.ts";
 
-async function copyAgentId(id: string) {
-  const copied = await copyToClipboard(id);
-  showToast({ message: t(copied ? "common.copied" : "common.copyFailed") });
-}
-
-// Phone widths swap the toolbar's secondary actions for this menu; both run the same actions.
+// Holds the selected agent's actions. New agent and Refresh join them on the phone.
 export function AgentsPageMenu(props: {
   agentId: string | null;
+  canCreateAgent: boolean;
+  canSetDefault: boolean;
+  canDeleteAgent: boolean;
   defaultLabel: string;
   defaultDisabled: boolean;
   pinLabel: string;
+  deleteDisabled: boolean;
+  onDelete: (agentId: string) => void;
+  showPhoneActions: boolean;
+  createLabel: string;
+  createDisabled: boolean;
+  onCreate: () => void;
   refreshLabel: string;
   refreshDisabled: boolean;
   onSetDefault: (agentId: string) => void;
@@ -23,15 +26,55 @@ export function AgentsPageMenu(props: {
   onRefresh: () => void;
 }) {
   const id = createUniqueId();
+  const [copyResult, setCopyResult] = createSignal<boolean | null>(null);
   const items = (): MenuEntry[] => [
-    ...(props.agentId
+    ...(props.showPhoneActions && props.canCreateAgent
       ? [
-          { id: "copy", label: t("agents.copyId") },
-          { id: "default", label: props.defaultLabel, disabled: props.defaultDisabled },
-          { id: "pin", label: props.pinLabel },
+          {
+            id: "create",
+            label: props.createLabel,
+            disabled: props.createDisabled,
+          },
         ]
       : []),
-    { id: "refresh", label: props.refreshLabel, disabled: props.refreshDisabled },
+    ...(props.agentId
+      ? [
+          {
+            id: "copy",
+            label: t("agents.copyId"),
+            content: (
+              <span role="status">
+                <Show
+                  when={copyResult() === false}
+                  fallback={t(copyResult() ? "common.copied" : "agents.copyId")}
+                >
+                  <span class="sr-only">{t("common.copyFailed")}</span>
+                  <span aria-hidden="true">{t("common.retry")}</span>
+                </Show>
+              </span>
+            ),
+            closeOnSelect: false,
+          },
+          ...(props.canSetDefault
+            ? [{ id: "default", label: props.defaultLabel, disabled: props.defaultDisabled }]
+            : []),
+          { id: "pin", label: props.pinLabel },
+          ...(props.canDeleteAgent
+            ? [
+                {
+                  id: "delete",
+                  label: t("common.delete"),
+                  icon: <Icon name="trash" />,
+                  variant: "danger" as const,
+                  disabled: props.deleteDisabled,
+                },
+              ]
+            : []),
+        ]
+      : []),
+    ...(props.showPhoneActions
+      ? [{ id: "refresh", label: props.refreshLabel, disabled: props.refreshDisabled }]
+      : []),
   ];
   return (
     <Menu
@@ -44,16 +87,21 @@ export function AgentsPageMenu(props: {
       triggerClass="btn btn--sm agents-page-menu__trigger"
       trigger={<Icon name="moreHorizontal" />}
       items={items()}
+      onBeforeShow={() => setCopyResult(null)}
       onSelect={(item) => {
         const agentId = props.agentId;
-        if (item.id === "refresh") {
+        if (item.id === "create") {
+          props.onCreate();
+        } else if (item.id === "refresh") {
           props.onRefresh();
         } else if (agentId && item.id === "copy") {
-          void copyAgentId(agentId);
+          void copyToClipboard(agentId).then(setCopyResult);
         } else if (agentId && item.id === "default") {
           props.onSetDefault(agentId);
         } else if (agentId && item.id === "pin") {
           props.onTogglePinned(agentId);
+        } else if (agentId && item.id === "delete") {
+          props.onDelete(agentId);
         }
       }}
     />

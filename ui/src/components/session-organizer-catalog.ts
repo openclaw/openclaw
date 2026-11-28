@@ -76,7 +76,7 @@ export async function deleteSessionGroup(
   // too, so without this order the operator's lost intent would look like an
   // ordinary cancel instead of the reconnect that actually dropped it.
   if (!deps.sessionData.isSessionMutationScopeCurrent(scope)) {
-    showToast({ message: t("sessionsView.deleteGroupStale", { group }) });
+    showToast({ severity: "error", message: t("sessionsView.deleteGroupStale", { group }) });
     return false;
   }
   if (!confirmed) {
@@ -135,7 +135,6 @@ export async function reorderSidebarSection(
   targetSectionId: string,
   position: "before" | "after",
   scope: SidebarSessionMutationScope,
-  notify: () => void,
 ): Promise<void> {
   if (!deps.sessionData.isSessionMutationScopeCurrent(scope)) {
     return;
@@ -165,10 +164,6 @@ export async function reorderSidebarSection(
     // No capability gate: the gateway serves this UI from its own dist, so a
     // newer UI never talks to an older gateway's closed put schema outside dev.
     await scope.sessions.groupsPut(nextGroups, next);
-    if (deps.sessionData.isSessionMutationScopeCurrent(scope)) {
-      // Publish the row move before completion restores its keyboard focus.
-      notify();
-    }
   } catch (error) {
     deps.sessionData.publishSessionMutationError(scope, error);
   }

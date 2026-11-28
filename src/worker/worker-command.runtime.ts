@@ -21,6 +21,12 @@ import {
   type NativeInferenceStartup,
 } from "./native-inference-startup.js";
 import {
+  NODE_WORKER_EXECUTION_ENV,
+  parseNodeExecutionContext,
+  type NodeExecutionContext,
+} from "./node-execution-context.js";
+import { createWorkerLocalMcpClient } from "./worker-local-mcp.js";
+import {
   parseWorkerProcessRequest,
   type WorkerProcessMessage,
   type WorkerProcessResult,
@@ -34,6 +40,7 @@ type RunWorkerCommandOptions = {
   browserRuntime?: WorkerBrowserRuntime;
   managed?: boolean;
   nativeInference?: NativeInferenceStartup;
+  nodeExecution?: NodeExecutionContext;
 };
 
 export type WorkerCommandLifetime = {
@@ -61,7 +68,13 @@ async function runManagedWorkerCommand(
     | { environmentId: string; sessionId: string; ownerEpoch: number; agentId: string }
     | undefined;
   let lastTurnId: string | undefined;
-  let active: { turnId: string; controller: AbortController } | undefined;
+  let active:
+    | {
+        turnId: string;
+        controller: AbortController;
+        mcp: ReturnType<typeof createWorkerLocalMcpClient>;
+      }
+    | undefined;
   let running: Promise<void> | undefined;
   let idleCleanup: Promise<void> | undefined;
   let draining: Promise<void> | undefined;
@@ -131,6 +144,12 @@ async function runManagedWorkerCommand(
           throw new Error("managed worker request is not valid JSON");
         }
         const request = parseWorkerProcessRequest(value);
+        if (request.type === "mcp-result") {
+          if (request.turnId === active?.turnId) {
+            active.mcp.receive(request);
+          }
+          return;
+        }
         if (request.type === "process") {
           const owner = processBinding;
           const matches =
@@ -170,7 +189,11 @@ async function runManagedWorkerCommand(
         // The node turn journal owns replay history; retain only the immediate
         // transport duplicate here, then require fresh Gateway admission.
         lastTurnId = request.turnId;
-        const current = { turnId: request.turnId, controller: new AbortController() };
+        const current = {
+          turnId: request.turnId,
+          controller: new AbortController(),
+          mcp: createWorkerLocalMcpClient(request.turnId, write),
+        };
         active = current;
         running = (async (descriptor: WorkerLaunchDescriptor, idleRetention?: true) => {
           // Device-folder admission binds a canonical path. Do not independently
@@ -235,8 +258,10 @@ async function runManagedWorkerCommand(
             },
             {
               environmentStateDir: environment.stateDir,
+              localMcp: current.mcp.call,
               ...(assertWorkspaceCurrent ? { assertWorkspaceCurrent } : {}),
               nativeInference: options.nativeInference,
+              nodeExecution: options.nodeExecution,
               signal: current.controller.signal,
               ...(options.lifetime
                 ? { onConnectionFailure: options.lifetime.reportConnectionFailure }
@@ -301,7 +326,9 @@ async function runManagedWorkerCommand(
             active = undefined;
             finish();
           }
-        })(request.descriptor, request.idleRetention).catch(finish);
+        })(request.descriptor, request.idleRetention)
+          .catch(finish)
+          .finally(current.mcp.close);
       };
       const onData = (raw: unknown) => {
         if (closed) {
@@ -377,7 +404,9 @@ async function readLaunchDescriptor(input: Readable): Promise<WorkerLaunchDescri
 /** Process shell for `openclaw worker`: stdin descriptor in, JSON result out, signals abort the run. */
 export async function runWorkerCommand(input: RunWorkerCommandOptions): Promise<void> {
   const startup = takeNativeInferenceStartup();
-  const options = { ...input, nativeInference: input.nativeInference ?? startup };
+  const nodeExecution = parseNodeExecutionContext(process.env[NODE_WORKER_EXECUTION_ENV]);
+  delete process.env[NODE_WORKER_EXECUTION_ENV];
+  const options = { ...input, nodeExecution, nativeInference: input.nativeInference ?? startup };
   const abortController = new AbortController();
   const stop = () => abortController.abort(new Error("worker interrupted"));
   let lifetimeEnded = false;
@@ -411,6 +440,7 @@ export async function runWorkerCommand(input: RunWorkerCommandOptions): Promise<
     }
     const result = await runWorkerDescriptor(descriptor, {
       nativeInference: options.nativeInference,
+      nodeExecution: options.nodeExecution,
       signal: abortController.signal,
       ...(options.lifetime
         ? { onConnectionFailure: options.lifetime.reportConnectionFailure }

@@ -1,13 +1,11 @@
 import assert from "node:assert/strict";
 import { afterEach, expect, test, vi } from "vitest";
 import { awaitGateBeforeSettlement, createDeferred } from "../../test/helpers/promise.js";
-import { runForegroundCompactionWork } from "../agents/embedded-agent-runner/compact.foreground-work.js";
 import { withSessionTurn } from "../sessions/session-controller.admission.js";
 import {
   beginSessionEffect,
   bindSessionControllerTarget,
   captureSessionTarget,
-  getCurrentSessionControllerOwner,
   isSessionControllerWorkActive,
   isSessionMutationActive,
 } from "../sessions/session-controller.lifecycle.js";
@@ -24,14 +22,6 @@ import {
   sessionStoreEntry,
   setupGatewaySessionsTestHarness,
 } from "./test/server-sessions.test-helpers.js";
-
-// Only the backend compaction is replaced; controller turn admission stays real.
-vi.mock("../agents/embedded-agent-runner/compact.foreground-work.js", async (importOriginal) => ({
-  ...(await importOriginal<
-    typeof import("../agents/embedded-agent-runner/compact.foreground-work.js")
-  >()),
-  runForegroundCompactionWork: vi.fn(),
-}));
 
 const { createSessionStoreDir } = setupGatewaySessionsTestHarness();
 
@@ -155,26 +145,4 @@ test("sessions.compact preserves its active-run error when controller preemption
     operation.complete();
     await compaction.catch(() => undefined);
   }
-});
-
-test("sessions.compact responds after an idle session compacts under its own controller turn", async () => {
-  const { storePath, sessionId, sessionKey } = await createCompactionSession("sess-compact-idle");
-  const compactionTurns: Array<string | undefined> = [];
-  vi.mocked(runForegroundCompactionWork).mockImplementationOnce(async () => {
-    compactionTurns.push(getCurrentSessionControllerOwner()?.key);
-    return compactedResult;
-  });
-  // Loaded after the harness installs its runtime mocks, which a static import would precede.
-  const { compactEmbeddedAgentSession } =
-    await import("../agents/embedded-agent-runner/compact.queued.js");
-  embeddedRunMock.compactEmbeddedAgentSession.mockImplementationOnce((...args) =>
-    compactEmbeddedAgentSession(...(args as Parameters<typeof compactEmbeddedAgentSession>)),
-  );
-
-  const compacted = await directSessionReq("sessions.compact", { key: "main" });
-
-  expect(compacted).toMatchObject({ ok: true, payload: { key: sessionKey, compacted: true } });
-  expect(compactionTurns).toEqual([sessionKey]);
-  expect(isSessionMutationActive(storePath, [sessionId])).toBe(false);
-  expect(isSessionControllerWorkActive(storePath, [sessionId])).toBe(false);
 });

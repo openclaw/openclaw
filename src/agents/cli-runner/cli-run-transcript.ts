@@ -1,10 +1,6 @@
 import { cloneEnvWithPlatformSemantics } from "../../config/config-env-vars.js";
-import { getCliHistoryWriter } from "../../config/sessions/cli-history-boundary.js";
 import { resolveSessionStorePathCore } from "../../config/sessions/paths.js";
-import {
-  patchSessionEntryCore,
-  resolveSessionTranscriptDatabasePath,
-} from "../../config/sessions/session-accessor.js";
+import { patchSessionEntryCore } from "../../config/sessions/session-accessor.js";
 import { retainPreparedSessionEntryPredicate } from "../../config/sessions/session-accessor.sqlite-entry-cache-publication-state.js";
 import { resolveSqliteSessionKey } from "../../config/sessions/session-accessor.sqlite-scope-helpers.js";
 import type {
@@ -32,8 +28,10 @@ import type { InternalSessionEntry } from "../../config/sessions/types.js";
 import { resolveStateDir } from "../../config/state-dir.js";
 import { buildGenericCliContextEngineHostSupport } from "../../context-engine/host-compat.js";
 import { formatErrorMessage } from "../../infra/errors.js";
+import { estimateTranscriptUsageCost } from "../../infra/session-cost-usage-pricing.js";
 import type { StopReason, Usage } from "../../llm/types.js";
 import { createSubsystemLogger } from "../../logging/subsystem.js";
+import { resolveModelCostConfig } from "../../model-catalog/usage-pricing.js";
 import { parseAgentSessionKey } from "../../routing/session-key.js";
 import { resolveSessionAgentId } from "../agent-scope.js";
 import type { CliOutput, CliUsage } from "../cli-output-contracts.js";
@@ -53,7 +51,7 @@ import type { AgentMessage } from "../runtime/index.js";
 import { withSessionManagerWrite } from "../sessions/session-manager-write-admission.js";
 import { SessionManager } from "../sessions/session-manager.js";
 import { buildAssistantMessage, buildUsageWithNoCost } from "../stream-message-shared.js";
-import { cliAssistantItemId } from "./assistant-identity.js";
+import { cliAssistantItemId, cliInterimAssistantItemId } from "./assistant-identity.js";
 import type { PreparedCliRunContext, RunCliAgentParams } from "./types.js";
 
 const log = createSubsystemLogger("agents/cli-runner");
@@ -129,8 +127,40 @@ export async function persistApprovedCliUserTurnTranscript(
 /**
  * Only a backend that reports its turn total separately from the latest call gets a context
  * marker. Other backends keep unmarked counters, which context readers do not treat as fresh.
+ * The counters carry the backend model's API-rate cost (via its `priceAs` provider), so a
+ * subscription turn records what the API would charge instead of a $0 placeholder.
  */
-function buildCliAssistantTranscriptUsage(
+export async function buildCliAssistantTranscriptUsage(params: {
+  runParams: Pick<RunCliAgentParams, "provider" | "config">;
+  modelId: string;
+  agentDir?: string;
+  /** Latest model-call usage. */
+  usage?: CliUsage;
+  /** Terminal whole-turn usage, when the backend reports it separately from the latest call. */
+  turnUsage?: CliUsage;
+}): Promise<{ usage: Usage; costUsd?: number }> {
+  const counters = buildCliTranscriptCounters(params.usage, params.turnUsage);
+  // Text-output backends report no counters; their zero placeholders measure nothing.
+  const reported = params.turnUsage ?? params.usage;
+  if (
+    !reported ||
+    [reported.input, reported.output, reported.cacheRead, reported.cacheWrite].every(
+      (count) => count === undefined,
+    )
+  ) {
+    return { usage: counters };
+  }
+  const rates = await resolveModelCostConfig({
+    provider: params.runParams.provider,
+    model: params.modelId,
+    config: params.runParams.config,
+    agentDir: params.agentDir,
+  });
+  const cost = rates ? estimateTranscriptUsageCost(counters, rates) : undefined;
+  return cost ? { usage: { ...counters, cost }, costUsd: cost.total } : { usage: counters };
+}
+
+function buildCliTranscriptCounters(
   lastCallUsage: CliUsage | undefined,
   turnUsage: CliUsage | undefined,
 ): Usage {
@@ -154,14 +184,15 @@ export async function persistCliAssistantTranscript(params: {
   runParams: RunCliAgentParams;
   text: string;
   modelId: string;
-  /** Latest model-call usage. */
-  usage?: CliUsage;
-  /** Terminal whole-turn usage, when the backend reports it separately from the latest call. */
-  turnUsage?: CliUsage;
+  /** Priced turn counters from `buildCliAssistantTranscriptUsage`. */
+  usage?: Usage;
   stopReason: StopReason;
   yielded?: true;
   /** The native Claude row this message mirrors; the history merge joins them by it. */
   nativeIdentity?: { cliSessionId: string; externalId: string };
+  /** Held answers commit before the final run-owned row and retain their own retry identity. */
+  interim?: true;
+  interimReplies?: CliOutput["interimNativeReplies"];
 }): Promise<{
   owned: boolean;
   idempotencyKey?: string;
@@ -178,7 +209,28 @@ export async function persistCliAssistantTranscript(params: {
   if (!runParams.persistAssistantTranscript || !runParams.sessionKey) {
     return { owned: false };
   }
-  const idempotencyKey = cliAssistantItemId(runParams.runId);
+  // Deduplicate the final answer by its transcript item key, not a session admission pin.
+  const finalNativeItem = params.nativeIdentity
+    ? cliInterimAssistantItemId(runParams.runId, params.nativeIdentity)
+    : undefined;
+  // Completed held answers are separate native rows; narration remains native-only.
+  for (const reply of params.interimReplies ?? []) {
+    if (cliInterimAssistantItemId(runParams.runId, reply) === finalNativeItem) {
+      continue;
+    }
+    await persistCliAssistantTranscript({
+      runParams,
+      text: reply.text,
+      modelId: params.modelId,
+      nativeIdentity: { cliSessionId: reply.cliSessionId, externalId: reply.externalId },
+      interim: true,
+      stopReason: "stop",
+    });
+  }
+  const idempotencyKey =
+    params.interim && params.nativeIdentity
+      ? cliInterimAssistantItemId(runParams.runId, params.nativeIdentity)
+      : cliAssistantItemId(runParams.runId);
   let committed = false;
   try {
     const result = await appendExactAssistantMessageToSessionTranscript({
@@ -230,7 +282,7 @@ export async function persistCliAssistantTranscript(params: {
           },
           content: [{ type: "text", text: params.text }],
           stopReason: params.stopReason,
-          usage: buildCliAssistantTranscriptUsage(params.usage, params.turnUsage),
+          usage: params.usage ?? buildUsageWithNoCost({}),
         }),
         // A paused turn owns visible progress, not a final answer. Keep the
         // existing keyed-segment contract without hiding narration or media.
@@ -288,10 +340,8 @@ async function prepareCliBlockFallbackWrite(
     sessionTarget: identity,
   });
   if (memory) {
-    const cliWriter = getCliHistoryWriter({ ...identity, storePath: memory.path });
     const assertCurrent = () => {
       assertOwnedWrite();
-      cliWriter?.assertCurrent();
       const current = memory.actor.snapshot(memory.authority)?.entry;
       if (
         !current ||
@@ -331,12 +381,10 @@ async function prepareCliBlockFallbackWrite(
       entry: captured,
       matches: (_before, current) => matches(current),
     });
-    const cliWriter = getCliHistoryWriter({ ...identity, storePath: source.path });
     return {
       readScope,
       assertCurrent() {
         assertOwnedWrite();
-        cliWriter?.assertCurrent();
         if (!retained.isCurrent()) {
           throw new SessionTranscriptWriterClaimReboundError();
         }
@@ -511,13 +559,7 @@ export async function persistCliRunBlock(
     }
     const target = sessionManager.getSessionTarget();
     const assertOwnedWrite = target ? captureOwnedTranscriptWriteAssertion(target) : undefined;
-    const cliWriter = target
-      ? getCliHistoryWriter({ ...target, storePath: resolveSessionTranscriptDatabasePath(target) })
-      : undefined;
-    const assertCurrent = () => {
-      assertOwnedWrite?.();
-      cliWriter?.assertCurrent();
-    };
+    const assertCurrent = () => assertOwnedWrite?.();
     const append = () =>
       withSessionManagerWrite(sessionManager, async () => {
         assertCurrent();

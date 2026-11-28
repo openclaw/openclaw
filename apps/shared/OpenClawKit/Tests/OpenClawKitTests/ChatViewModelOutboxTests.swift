@@ -115,6 +115,9 @@ actor OutboxTransportState {
     var sendRoutingChanged = false
     var sendSettingsChanged = false
     var historyFails = false
+    /// A slow health answer that still honors the request timeout, like the gateway request does.
+    var healthDelayMs: Int?
+    var healthTimeoutsMs: [Int] = []
     var activeRun: OpenClawChatInFlightRun?
     var sessionListFails = false
     var historyRequestCount = 0
@@ -127,6 +130,9 @@ actor OutboxTransportState {
     var sessionListGate: DeleteGate?
     let sessionListStarted = DeleteGate()
     var staleHistoryRows: [AnyCodable]?
+    /// With `staleHistoryRows`, full pages carry this cursor and cursor reads
+    /// answer with an empty delta at the same tip.
+    var historyDeltaCursor: String?
     private var stateWaiters: [(
         condition: @Sendable (isolated OutboxTransportState) -> Bool,
         continuation: CheckedContinuation<Void, Never>)] = []
@@ -173,6 +179,7 @@ actor OutboxTransportState {
     var historyRequestAgentIDs: [String?] = []
     var sentThinkingLevels: [String] = []
     var sentQueueModes: [OpenClawChatQueueMode?] = []
+    var sentAttachmentFileNames: [[String]] = []
     var sentSessionSettings: [OpenClawChatSessionSettingsExpectation?] = []
 
     init(healthy: Bool, sendFails: Bool) {
@@ -265,6 +272,20 @@ final class OutboxTestTransport: @unchecked Sendable, OpenClawChatTransport {
         try await self.requestHistory(sessionKey: sessionKey, agentID: nil, expectedRoute: nil)
     }
 
+    func requestHistory(sessionKey: String, cursor: String) async throws -> OpenClawChatHistoryPayload {
+        guard await self.state.historyDeltaCursor == cursor else {
+            return try await self.requestHistory(sessionKey: sessionKey)
+        }
+        guard await self.state.healthy, await !self.state.historyFails else { throw OutboxSendError() }
+        return OpenClawChatHistoryPayload(
+            sessionKey: sessionKey,
+            sessionId: "sess-live",
+            messages: [],
+            thinkingLevel: "off",
+            kind: "delta",
+            deltaCursor: cursor)
+    }
+
     func gatewayAdvertisesMethod(_ method: String) async -> Bool? {
         let advertisedMethods = await state.advertisedMethods
         return advertisedMethods.map { $0.contains(method) }
@@ -350,11 +371,12 @@ final class OutboxTestTransport: @unchecked Sendable, OpenClawChatTransport {
         guard await self.state.healthy, await !self.state.historyFails else { throw OutboxSendError() }
         if let stale = await state.staleHistoryRows {
             // Gateway lag: the snapshot predates the just-acked send.
-            return OpenClawChatHistoryPayload(
+            return await OpenClawChatHistoryPayload(
                 sessionKey: sessionKey,
                 sessionId: "sess-live",
                 messages: stale,
-                thinkingLevel: "off")
+                thinkingLevel: "off",
+                deltaCursor: self.state.historyDeltaCursor)
         }
         let keys = await state.sentIdempotencyKeys
         let texts = await state.sentMessages
@@ -506,8 +528,9 @@ final class OutboxTestTransport: @unchecked Sendable, OpenClawChatTransport {
         let transport = self
         return .available(OpenClawChatTransportRouteLease(
             sendTargetedMessage: {
-                sessionKey, target, message, thinking, idempotencyKey, _ in
-                try await transport.sendMessage(
+                sessionKey, target, message, thinking, idempotencyKey, attachments in
+                await transport.state.update { $0.sentAttachmentFileNames.append(attachments.map(\.fileName)) }
+                return try await transport.sendMessage(
                     sessionKey: sessionKey,
                     agentID: target.agentID,
                     message: message,
@@ -565,8 +588,13 @@ final class OutboxTestTransport: @unchecked Sendable, OpenClawChatTransport {
             sessions: self.sessions)
     }
 
-    func requestHealth(timeoutMs _: Int) async throws -> Bool {
-        await self.state.healthy
+    func requestHealth(timeoutMs: Int) async throws -> Bool {
+        await self.state.update { $0.healthTimeoutsMs.append(timeoutMs) }
+        if let delayMs = await self.state.healthDelayMs {
+            try await Task.sleep(nanoseconds: UInt64(min(delayMs, timeoutMs)) * 1_000_000)
+            if delayMs > timeoutMs { throw URLError(.timedOut) }
+        }
+        return await self.state.healthy
     }
 
     func events() -> AsyncStream<OpenClawChatTransportEvent> {
@@ -772,6 +800,10 @@ actor ScriptedOutbox: OpenClawChatCommandOutbox {
         guard let commands = await base.loadCommandsIfAvailable() else { return nil }
         await self.finishHeldLoad()
         return commands
+    }
+
+    func loadCommandStatusesIfAvailable() async -> [(id: String, status: OpenClawChatOutboxCommand.Status)]? {
+        await self.base.loadCommandStatusesIfAvailable()
     }
 
     private func delayLoad() async {
@@ -991,6 +1023,10 @@ struct ChatViewModelBusySendTests {
             vm.sessions[0].effectiveQueueMode = mode
             #expect(vm.sendModeChoices == [.steer, .followup])
         }
+        vm.defaultFollowUpMode = .followup
+        #expect(vm.sendModeChoices == [.steer])
+        vm.defaultFollowUpMode = .steer
+        #expect(vm.sendModeChoices == [.followup])
         vm.input = "/steer use the shorter approach"
         #expect(vm.sendModeChoices.isEmpty)
         vm.input = "use the shorter approach"
@@ -1070,10 +1106,13 @@ struct ChatViewModelBusySendTests {
         #expect(vm.pendingToolCalls.map(\.toolCallId) == ["tool-1"])
     }
 
-    @Test(arguments: [OpenClawChatQueueMode.steer, .followup])
+    @Test(
+        arguments: [OpenClawChatQueueMode.steer, .followup],
+        ["explicit", "preference", "override"])
     @MainActor
-    func `per message send mode survives reopening and reaches the route lease`(
-        mode: OpenClawChatQueueMode) async throws
+    func `send mode survives reopening and explicit choices override the host preference`(
+        mode: OpenClawChatQueueMode,
+        source: String) async throws
     {
         let (store, _, databaseDirectory) = try makeOutboxStore()
         defer { try? FileManager.default.removeItem(at: databaseDirectory) }
@@ -1083,8 +1122,13 @@ struct ChatViewModelBusySendTests {
         await vm.bootstrapTask?.value
         await waitForObservedState { vm.hasRestoredOutboxMessages }
         vm.input = "use the shorter approach"
-        let send = try #require(vm.send(queueMode: mode))
-        #expect(vm.send(queueMode: mode) == nil)
+        if source != "explicit" {
+            vm.hasActiveSessionRunWithoutChatSnapshot = true
+            vm.defaultFollowUpMode = source == "preference" ? mode : (mode == .steer ? .followup : .steer)
+        }
+        let explicitMode: OpenClawChatQueueMode? = source == "preference" ? nil : mode
+        let send = try #require(vm.send(queueMode: explicitMode))
+        #expect(vm.send(queueMode: explicitMode) == nil)
         await send.value
         #expect(vm.input.isEmpty)
         #expect(await offline.state.sentMessages.isEmpty)
@@ -1165,7 +1209,7 @@ struct ChatViewModelBusySendTests {
     }
 
     @Test @MainActor
-    func `busy admission still rejects branch switches and attachments`() async throws {
+    func `busy admission still rejects branch switches`() async throws {
         let (store, _, databaseDirectory) = try makeOutboxStore()
         defer { try? FileManager.default.removeItem(at: databaseDirectory) }
         let transport = OutboxTestTransport(healthy: true)
@@ -1178,18 +1222,54 @@ struct ChatViewModelBusySendTests {
         #expect(!vm.canSend)
         #expect(vm.send() == nil)
         vm.endSessionBranchSwitchActivity(branchSwitch)
-        vm.attachments = [OpenClawPendingAttachment(
-            url: nil,
-            data: Data([1]),
-            fileName: "note.txt",
-            mimeType: "text/plain",
-            preview: nil)]
-        #expect(!vm.canSend)
-        #expect(vm.send() == nil)
-        #expect(vm.send(queueMode: .steer) == nil)
+        #expect(vm.canSend)
         #expect(vm.input == "next task")
         #expect(await store.loadCommands().isEmpty)
         #expect(await transport.state.sentMessages.isEmpty)
+    }
+
+    /// A photo sent while a reply runs goes out behind it, or steers it, like text: the outbox keeps
+    /// its bytes and its mode, and the Gateway gets both.
+    @Test(arguments: [
+        (OpenClawChatQueueMode?.none, "look at this"),
+        (.followup, ""),
+        (.steer, "use this one instead"),
+    ])
+    @MainActor
+    func `busy attachment drafts go out with their queue mode`(
+        mode: OpenClawChatQueueMode?,
+        text: String) async throws
+    {
+        let (store, _, databaseDirectory) = try makeOutboxStore()
+        defer { try? FileManager.default.removeItem(at: databaseDirectory) }
+        let transport = OutboxTestTransport(healthy: true)
+        let vm = await makeOutboxViewModel(transport: transport, outbox: store)
+        vm.load()
+        await vm.bootstrapTask?.value
+        await waitForObservedState { vm.hasRestoredOutboxMessages }
+        vm.hasActiveSessionRunWithoutChatSnapshot = true
+        vm.defaultFollowUpMode = .followup
+        vm.input = text
+        vm.attachments = [OpenClawPendingAttachment(
+            url: nil,
+            data: Data([1, 2, 3]),
+            fileName: "photo.jpg",
+            mimeType: "image/jpeg",
+            preview: nil)]
+        #expect(vm.canSend)
+        #expect(vm.canChooseSendMode)
+        let send = try #require(vm.send(queueMode: mode))
+        await send.value
+        #expect(vm.input.isEmpty)
+        #expect(vm.attachments.isEmpty)
+        if let flush = vm.outboxFlushTask { await flush.value }
+        var waits = 0
+        while await transport.state.sentAttachmentFileNames.isEmpty, waits < 500 {
+            waits += 1
+            try await Task.sleep(for: .milliseconds(10))
+        }
+        #expect(await transport.state.sentAttachmentFileNames == [["photo.jpg"]])
+        #expect(await transport.state.sentQueueModes == [mode ?? .followup])
     }
 
     @Test @MainActor
@@ -1233,7 +1313,9 @@ struct ChatViewModelOutboxTests {
         #expect(await MainActor.run { vm.supportsOfflineTextOutbox })
 
         await MainActor.run { vm.load() }
+        #expect(await vm.localSendRevision == 0)
         try await sendWhileOffline(vm, text: "hello offline")
+        #expect(await vm.localSendRevision == 1)
 
         // Nothing hit the transport; the command is durable instead.
         #expect(await transport.state.sentIdempotencyKeys.isEmpty)
@@ -1261,6 +1343,7 @@ struct ChatViewModelOutboxTests {
         try await waitForOutboxState { vm2.hasRestoredOutboxMessages }
         #expect(await MainActor.run { vm2.messages.contains { vm2.outboxState(for: $0.id) == .queued } })
         #expect(await userTexts(vm2) == ["hello offline"])
+        #expect(await vm2.localSendRevision == 0)
 
         // A cold launch can restore before the gateway provides its default
         // agent. The captured owner still keeps the bubble visible; replay
@@ -1780,7 +1863,7 @@ struct ChatViewModelOutboxTests {
         let previousError = await MainActor.run { vm.errorText }
         await MainActor.run { vm.retryOutboxMessage(messageID) }
         try await waitForOutboxState { vm.errorText != nil && vm.errorText != previousError }
-        #expect(await MainActor.run { vm.errorText == "Select an agent before retrying this message." })
+        #expect(await MainActor.run { vm.errorText == "Choose an agent first." })
         let command = await store.loadCommands().first
         #expect(command?.status == .failed)
         #expect(command?.agentID == nil)
@@ -2031,7 +2114,7 @@ struct ChatViewModelOutboxTests {
             vm.send()
         }
         try await waitForOutboxState { !vm.isSubmittingDraft }
-        #expect(await MainActor.run { vm.errorText == "Connect to the gateway to run this command." })
+        #expect(await MainActor.run { vm.errorText == "Connect to run this command." })
         #expect(await MainActor.run { vm.input } == "/new")
         #expect(await store.loadCommands().isEmpty)
         #expect(await transport.state.sentMessages.isEmpty)

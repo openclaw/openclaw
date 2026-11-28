@@ -1,4 +1,12 @@
 import type { SessionPendingInputRow } from "./session-pending-input.types.js";
+import type { InternalSessionEntry, PersistedSessionRunStatus } from "./types.js";
+
+export type PendingInputHistoryRunState = Pick<InternalSessionEntry, "lastRunId" | "status">;
+
+export type PendingInputHistoryTerminalCheck = (
+  runId: string,
+  status: PersistedSessionRunStatus,
+) => boolean;
 
 export type PendingInputHistoryQuery = {
   sessionKey: string;
@@ -7,13 +15,17 @@ export type PendingInputHistoryQuery = {
   before?: number;
   id?: string;
   includeTotal?: false;
-  /** Exact custody captured in a committed graceful-shutdown marker. */
-  queuedInputIds?: readonly string[];
+  includeQueueObservation?: true;
+  /** Replay only durable queued inputs that have no current process scheduler. */
+  queuedOnly?: true;
   liveInputIds?: readonly string[];
+  audience?: import("./session-pending-input-audience.js").PendingInputAudience;
 };
 export type PendingInputHistorySnapshot = {
   rows: SessionPendingInputRow[];
   total: number | undefined;
+  hasQueuedInput?: boolean;
+  runState?: PendingInputHistoryRunState;
   nextBefore?: number;
   currentSessionId?: string;
 };
@@ -31,6 +43,5 @@ export type PendingInputOrphansWorkerInput = Omit<
 > & {
   kind: "session-pending-input-orphans";
   lifecycleGeneration: string;
-  queuedInputIds: readonly string[];
 };
 export type PendingInputOrphanTarget = { sessionKey: string; sessionId: string };

@@ -209,13 +209,42 @@ describe("MemoryOverview", () => {
       "memory-core · hybrid search",
       "Sleep schedule",
       "Europe/Vienna",
-      "Promoted today",
+      "Promoted",
       "21",
       "b10357 (689e227db)",
       "metrics=ready",
     ]);
     expect(container.querySelector('[data-reading="true"]')).not.toBeNull();
   });
+
+  it.each([
+    ["ready", "Memory is awake", undefined],
+    ["degraded", "Memory needs attention", "Memory index is still warming up."],
+    ["unavailable", "Memory is unavailable", "The memory service is temporarily unavailable."],
+  ] as const)(
+    "uses native provider health instead of skipped embedding checks: %s",
+    (status, headline, message) => {
+      const container = renderOverview(
+        {
+          kind: "ready",
+          payload: {
+            agentId: "main",
+            provider: "records",
+            health: { status, message },
+            embedding: { ok: false, checked: false },
+          },
+        },
+        { kind: "pinned", id: "records", availability: "enabled" },
+      );
+      expectText(
+        container,
+        [headline, message ?? "records"],
+        ["hybrid search", "Embeddings", "No recent check"],
+      );
+      expect(findButton(container, /^Test$/)).toBeUndefined();
+      expect(findButton(container, /^Refresh status$/)).toBeDefined();
+    },
+  );
 
   it("renders a grumpy error hero with retry and no book", () => {
     const container = renderOverview({ kind: "error", message: "gateway request failed" });
@@ -230,8 +259,8 @@ describe("MemoryOverview", () => {
       { kind: "off", id: null, availability: "enabled" },
     );
 
-    expectText(container, ["Memory is hibernating", "Open Settings"]);
-    expect(container.querySelector(".memory-overview__hero--sleeping")).not.toBeNull();
+    expectText(container, ["Memory is hibernating", "Open settings"]);
+    expect(container.querySelector(".memory-overview__status--sleeping")).not.toBeNull();
     expect(container.querySelector("[data-test-lobster]")).not.toBeNull();
     expect(container.querySelector('[data-reading="true"]')).toBeNull();
   });
@@ -245,7 +274,7 @@ describe("MemoryOverview", () => {
 
     expectText(
       container,
-      ["Memory is hibernating", "selected memory engine is disabled", "Open Settings"],
+      ["Memory is hibernating", "selected memory engine is disabled", "Open settings"],
       ["Engine health", "Sleep schedule"],
     );
     expect(container.querySelector('[data-reading="true"]')).toBeNull();
@@ -305,19 +334,35 @@ describe("MemoryOverview", () => {
       },
     });
 
-    expect(container.querySelector(".memory-overview__hero h2")?.textContent).toBe(
-      neutral ? "Host memory search is unavailable" : "Memory needs attention",
+    expect(container.querySelector(".memory-overview__status h2")?.textContent).toBe(
+      neutral ? "Memory search is unavailable" : "Memory needs attention",
     );
-    expect(container.textContent?.includes("Engine health")).toBe(!neutral);
+    expect(container.textContent?.includes("Embeddings")).toBe(!neutral);
     expect(container.textContent?.includes(diagnostic.error)).toBe(!neutral);
   });
 
-  it("opens the Memories tab from the overview shortcut", () => {
-    const onNavigate = vi.fn();
-    const container = renderOverview({ kind: "idle" }, undefined, { onNavigate });
+  it("states one sweep once when every phase shares its cadence", () => {
+    const payload = fixturePayload();
+    const dreaming = payload.dreaming!;
+    const shared = { cron: "0 3 * * *", nextRunAtMs: 1000, managedCronPresent: true };
+    Object.assign(dreaming.phases.light, shared);
+    Object.assign(dreaming.phases.rem, shared);
+    Object.assign(dreaming.phases.deep, shared);
+    const container = renderOverview({ kind: "ready", payload });
+    expect(container.textContent?.match(/0 3 \* \* \*/g)).toHaveLength(1);
+    expect(container.textContent).not.toContain("Explore memory");
+  });
 
-    findButton(container, /Search memories/)?.click();
-    expect(onNavigate).toHaveBeenCalledWith("memories");
+  it("opens Settings from the hibernating status", () => {
+    const onNavigate = vi.fn();
+    const container = renderOverview(
+      { kind: "idle" },
+      { kind: "off", id: null, availability: "enabled" },
+      { onNavigate },
+    );
+
+    findButton(container, /Open settings/)?.click();
+    expect(onNavigate).toHaveBeenCalledWith("settings");
   });
 });
 
@@ -459,7 +504,7 @@ describe("Memory overview request presentation", () => {
         kind === "off"
           ? "Memory is hibernating"
           : kind === "offline"
-            ? "gateway is offline"
+            ? "Gateway is offline"
             : "Waking memory",
       ],
       ["retired-engine", "Testing"],

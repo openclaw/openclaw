@@ -1,8 +1,11 @@
+import { X509Certificate } from "node:crypto";
 import { EventEmitter } from "node:events";
+import { Agent as HttpsAgent } from "node:https";
 import net from "node:net";
 import path from "node:path";
 import { PassThrough, Writable } from "node:stream";
 import { StringDecoder } from "node:string_decoder";
+import { checkServerIdentity } from "node:tls";
 import { type ClientOptions, WebSocket } from "openclaw/plugin-sdk/websocket-runtime";
 import { resolveCodexAppServerUserHomeDir, type CodexAppServerStartOptions } from "./config.js";
 import type { CodexAppServerTransport } from "./transport.js";
@@ -51,6 +54,32 @@ export function createWebSocketTransport(
       ? { handshakeTimeout: WEBSOCKET_HANDSHAKE_TIMEOUT_MS }
       : {}),
   };
+  if (options.tlsPeerCertificate !== undefined) {
+    const pem = options.tlsPeerCertificate.trim();
+    if (
+      options.transport !== "websocket" ||
+      new URL(options.url).protocol !== "wss:" ||
+      pem.length > 16384 ||
+      !/^-----BEGIN CERTIFICATE-----[\r\n]+[A-Za-z0-9+/=\r\n]+-----END CERTIFICATE-----$/u.test(pem)
+    ) {
+      throw new Error("tlsPeerCertificate requires a WSS endpoint and one PEM certificate");
+    }
+    const admitted = new X509Certificate(pem);
+    // Use a fresh TLS connection for every upgrade. Neither ambient roots nor
+    // a resumed session may authorize another listener at the same address.
+    websocketOptions.agent = new HttpsAgent({
+      ca: pem,
+      keepAlive: false,
+      maxCachedSessions: 0,
+      allowPartialTrustChain: true,
+      rejectUnauthorized: true,
+      checkServerIdentity: (host, peer) =>
+        checkServerIdentity(host, peer) ??
+        (admitted.raw.equals(peer.raw)
+          ? undefined
+          : new Error("Codex app-server TLS peer changed")),
+    });
+  }
   const unixSocketPath = resolveCodexAppServerUnixSocketPath(options);
   const socket = unixSocketPath
     ? new WebSocket("ws://localhost/", {

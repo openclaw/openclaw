@@ -32,7 +32,7 @@ import { SystemsBackups } from "./systems-backups.tsx";
 import type { SystemsInventoryRow } from "./systems-data.ts";
 import { SystemMeasurements } from "./systems-measurements.tsx";
 import { createSystemsRead } from "./systems-read.ts";
-import { systemKind, systemName, systemPlatform, systemStatus } from "./systems-sidebar.tsx";
+import { systemKindLabel, systemName, systemPlatform, systemStatus } from "./systems-sidebar.tsx";
 import type { Systems } from "./systems-state.ts";
 import "../../styles/systems.css";
 
@@ -238,7 +238,7 @@ function SystemsDetails(props: { controller: Systems; row?: SystemsInventoryRow 
           );
         }}
       </Show>
-      {!props.row || props.row.environment.id === "gateway" ? (
+      {controller().connected() && (!props.row || props.row.environment.id === "gateway") ? (
         <SystemsBackups controller={controller()} />
       ) : null}
     </aside>
@@ -327,6 +327,7 @@ function SystemsWorkspace(props: {
 }) {
   const controller = () => props.controller;
   const row = () => controller().selected();
+  const inventoryKnown = () => controller().state.inventory !== null;
   const readStatus = () => {
     latest(props.inventoryRead.read);
     return null;
@@ -369,7 +370,11 @@ function SystemsWorkspace(props: {
                   ? "systems.noHostDesktopHint"
                   : "systems.noDesktopHint",
               )
-            : t("systems.accessHint");
+            : t(
+                controller().desktopAccessDenied()
+                  ? "systems.desktopAccessRequired"
+                  : "systems.accessHint",
+              );
   const Desktop = () => {
     let panel!: HTMLElementTagNameMap["openclaw-desktop-panel"];
     onSettled(() => {
@@ -400,9 +405,12 @@ function SystemsWorkspace(props: {
         class="systems-page-header"
       />
       <header class="systems-toolbar">
-        <div class="systems-heading">
+        <div
+          class="systems-heading"
+          style={{ visibility: inventoryKnown() ? undefined : "hidden" }}
+        >
           <h2>{title()}</h2>
-          <span>{row() ? t("systems." + systemKind(row()!)) : t("systems.selectHint")}</span>
+          <span>{row() ? systemKindLabel(row()!) : t("systems.selectHint")}</span>
         </div>
         <select
           class="settings-select systems-mobile-picker"
@@ -478,11 +486,6 @@ function SystemsWorkspace(props: {
             </Errored>
           )}
         </Show>
-        {!controller().connected() ? (
-          <div class="systems-callout" role="status">
-            {t("systems.offlineGateway")}
-          </div>
-        ) : null}
         {auxiliaryErrors().length ? (
           <details class="systems-callout">
             <summary>{t("systems.errors")}</summary>
@@ -514,7 +517,7 @@ function SystemsWorkspace(props: {
             </Show>
           </div>
         ) : null}
-        {!row() || row()!.environment.id === "gateway" ? (
+        {controller().connected() && (!row() || row()!.environment.id === "gateway") ? (
           <SystemsBackups
             controller={controller()}
             onDetails={() => controller().updatePresentation({ showDetails: true })}
@@ -542,17 +545,14 @@ function SystemsWorkspace(props: {
               class="systems-state"
               role="status"
               style={{
-                visibility:
-                  props.inventoryRead.pending() && !controller().state.inventory
-                    ? "hidden"
-                    : undefined,
+                visibility: controller().connected() && !inventoryKnown() ? "hidden" : undefined,
               }}
             >
               <span class="systems-state__icon" aria-hidden="true">
                 <Icon name="monitor" />
               </span>
               <h2>{emptyTitle()}</h2>
-              <p>{emptyHint()}</p>
+              {controller().connected() ? <p>{emptyHint()}</p> : null}
               {row() ? (
                 <button
                   class="systems-text-button"

@@ -67,6 +67,62 @@ async function expectDownload(page: Page, format: "Markdown" | "JSONL", contents
 }
 
 suite.define(() => {
+  it("aligns the library with its header without widening the selected reader", async () => {
+    await withPage(async ({ page }) => {
+      const gateway = await installMockGateway(page, {
+        featureMethods: methods,
+        methodResponses: {
+          "transcripts.list": { sessions: [meetingEntry], nextCursor: null },
+          "transcripts.get": transcriptPage(meetingPage.utterances),
+        },
+      });
+      await page.goto(`${suite.server.baseUrl}meetings`);
+      const library = page.locator(".transcripts-library");
+      await library.getByRole("link", { name: /Design review/ }).waitFor();
+      const expectColumns = () =>
+        expect
+          .poll(() =>
+            page.locator(".transcripts-workspace").evaluate((workspace) => {
+              const header = workspace.querySelector(".content-header")!;
+              const bounds = header.getBoundingClientRect();
+              const style = getComputedStyle(header);
+              const left = bounds.left + Number.parseFloat(style.paddingLeft);
+              const right = bounds.right - Number.parseFloat(style.paddingRight);
+              return [".transcripts-filters", ".meetings-timeline"].flatMap((selector) => {
+                const box = workspace.querySelector(selector)!.getBoundingClientRect();
+                return [Math.round(box.left - left), Math.round(box.right - right)];
+              });
+            }),
+          )
+          .toEqual([0, 0, 0, 0]);
+      for (const width of [1400, 820, 390]) {
+        await page.setViewportSize({ width, height: 1000 });
+        await expectColumns();
+        expect(await page.evaluate(() => document.documentElement.scrollWidth)).toBeLessThanOrEqual(
+          width,
+        );
+      }
+      await page.setViewportSize({ width: 1400, height: 1000 });
+      await click(library, "Filters");
+      await control(page, "searchbox", "Provider").waitFor();
+      await page.keyboard.press("Escape");
+      await expectColumns();
+      await library.getByRole("link", { name: /Design review/ }).click();
+      const reader = control(page, "article", "Transcript reader");
+      await text(reader, "Reader layout discussed.").waitFor();
+      expect((await reader.boundingBox())!.width).toBeLessThanOrEqual(820);
+      expect((await library.boundingBox())!.width).toBeLessThanOrEqual(360);
+      await control(reader, "link", "Back to library").click();
+      await gateway.setMethodResponse("transcripts.list", { sessions: [], nextCursor: null });
+      await control(library, "searchbox", "Search meetings").fill("no-match");
+      await control(library, "searchbox", "Search meetings").press("Enter");
+      await expectParams(gateway, "transcripts.list", { query: "no-match" });
+      await library.getByRole("heading", { name: "No meetings match your search." }).waitFor();
+      await click(library, "Filters");
+      await click(page, "Clear filters");
+      await library.getByRole("heading", { name: "No meetings yet." }).waitFor();
+    });
+  });
   it("renders provider locators after native selection and saves a new capture source", async () => {
     await withPage(async ({ page }) => {
       const config = { transcripts: { enabled: false, autoStart: [] } };
@@ -143,7 +199,7 @@ suite.define(() => {
       await library.getByRole("link", { name: /Design review/ }).waitFor();
       expect(await library.getAttribute("aria-busy")).toBe("false");
       await control(library, "searchbox", "Search meetings").fill("design");
-      await click(library, "Filter");
+      await control(library, "searchbox", "Search meetings").press("Enter");
       await expectParams(gateway, "transcripts.list", { query: "design", limit: 50 });
       await click(library, "Next page");
       await expectParams(gateway, "transcripts.list", { cursor: "list-next", query: "design" });
@@ -181,7 +237,7 @@ suite.define(() => {
         __mockError: { code: "INVALID_REQUEST", message: "Transcript export exceeds 4 MiB" },
       });
       await click(reader, "Download JSONL");
-      await reader.getByRole("alert").filter({ hasText: "Download failed" }).waitFor();
+      await reader.getByRole("alert").filter({ hasText: "Couldn’t download" }).waitFor();
       await control(page, "link", "Meeting capture").click();
       const capture = page.locator("openclaw-meeting-capture-settings");
       await text(capture, "Not active").waitFor();

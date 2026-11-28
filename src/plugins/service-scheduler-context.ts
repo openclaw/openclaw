@@ -1,10 +1,11 @@
 import { runOutsideOperatorToolGatewayAuthority } from "../gateway/operator-tool-gateway-authority.js";
+import { runOutsidePluginSessionWorkAuthority } from "../gateway/plugin-session-work-authority.js";
 import { createScheduledGatewayRunner } from "../gateway/scheduled-run-gateway-context.js";
 import type { PluginRuntimeCapabilityLease } from "./capability-lease.js";
 import { withPluginHttpRouteRegistry } from "./http-registry.js";
 import { getBoundLegacyPluginSdkResourceHost } from "./legacy-sdk-resource-host.js";
 import { pluginInstanceInvocation } from "./plugin-instance-invocation.js";
-import type { PluginInstanceHandle } from "./plugin-instance-scope.js";
+import { pluginInvocationContext, type PluginInstanceHandle } from "./plugin-instance-scope.js";
 import { getPluginRecordRegistry } from "./registry-lifecycle.js";
 import { getPluginRegistryRuntime } from "./registry-runtime-binding.js";
 import type { PluginRecord, PluginRegistry } from "./registry-types.js";
@@ -16,7 +17,9 @@ import { runOutsidePluginRuntimeGenerationScope } from "./runtime/generation-sco
 
 export function runPluginServiceStartup<T>(run: () => T): T {
   return runOutsideOperatorToolGatewayAuthority(() =>
-    runOutsidePluginRuntimeGenerationScope(() => pluginInstanceInvocation.exit(run)),
+    runOutsidePluginRuntimeGenerationScope(() =>
+      pluginInvocationContext.exit(() => pluginInstanceInvocation.exit(run)),
+    ),
   );
 }
 
@@ -43,28 +46,30 @@ export function createPluginServiceSchedulerRunner(owner: {
   }
   return (work: () => void | Promise<unknown>) =>
     runOutsideOperatorToolGatewayAuthority(() =>
-      runScheduled(async () =>
-        pluginInstanceInvocation.exit(() => {
-          const registry = owner.record
-            ? getPluginRecordRegistry(owner.registry, owner.record)
-            : owner.registry;
-          const run = () => withPluginHttpRouteRegistry(registry, work, owner.lease);
-          // The lifecycle owner joins scheduled work before disposal can finish.
-          const invoke = () =>
-            authority
-              ? authority.run(run)
-              : owner.instance
-                ? owner.instance.runInRegistry(registry, run, { joinDisposal: false })
-                : run();
-          return withPluginRuntimeGatewayContextResolver(
-            resolveGatewayContext,
-            () => {
-              resourceHost?.assertOpen();
-              return resourceHost ? resourceHost.run(invoke) : invoke();
-            },
-            { inheritRequestScope: false },
-          );
-        }),
+      runOutsidePluginSessionWorkAuthority(() =>
+        runScheduled(async () =>
+          pluginInstanceInvocation.exit(() => {
+            const registry = owner.record
+              ? getPluginRecordRegistry(owner.registry, owner.record)
+              : owner.registry;
+            const run = () => withPluginHttpRouteRegistry(registry, work, owner.lease);
+            // The lifecycle owner joins scheduled work before disposal can finish.
+            const invoke = () =>
+              authority
+                ? authority.run(run)
+                : owner.instance
+                  ? owner.instance.runInRegistry(registry, run, { joinDisposal: false })
+                  : run();
+            return withPluginRuntimeGatewayContextResolver(
+              resolveGatewayContext,
+              () => {
+                resourceHost?.assertOpen();
+                return resourceHost ? resourceHost.run(invoke) : invoke();
+              },
+              { inheritRequestScope: false },
+            );
+          }),
+        ),
       ),
     );
 }

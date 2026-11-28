@@ -32,6 +32,7 @@ import {
 } from "./state-migrations.exec-approvals-canonical.js";
 import type { LegacyExecApprovalsDetection } from "./state-migrations.exec-approvals.types.js";
 import { withLegacyMigrationStateLock } from "./state-migrations.lock.js";
+import { recordStartupMigrationWarnings } from "./state-migrations.messages.js";
 import { inspectLegacyMigrationLinkedMove } from "./state-migrations.no-replace-move.js";
 import {
   markLegacyMigrationSourceRemoved,
@@ -47,7 +48,7 @@ import {
   type LegacyMigrationSourceSnapshot,
 } from "./state-migrations.source-snapshot.js";
 import type { MigrationMessages } from "./state-migrations.types.js";
-import { runUpdateSqliteMigrationAsync } from "./update-doctor-migration-attribution.js";
+import { runUpdateSqliteMigrationAsync } from "./update-doctor-migration-context.js";
 
 export const DOCTOR_CLAIM_SUFFIX = ".doctor-importing";
 export const MAX_LEGACY_EXEC_APPROVALS_BYTES = 4 * 1024 * 1024;
@@ -234,16 +235,36 @@ function decideLegacyExecApprovals(
   return { legacy, legacyFile, decision, removeSource };
 }
 
-/** Validate both interrupted names without claiming, archiving, or recording a decision. */
+type LegacyExecApprovalsDiagnostic = {
+  code:
+    | "legacy-exec-approvals-conflict"
+    | "legacy-exec-approvals-invalid"
+    | "legacy-exec-approvals-unreadable";
+  message: string;
+};
+
+function retainLegacyExecApprovals(
+  sourcePath: string,
+  code: LegacyExecApprovalsDiagnostic["code"],
+): LegacyExecApprovalsDiagnostic {
+  const diagnostic = {
+    code,
+    message: `${code}: Retained legacy exec approvals at ${sourcePath}; no legacy policy or socket credentials were imported. Canonical SQLite approvals remain authoritative; without canonical policy, exec remains unavailable. An older node host or external writer may still be writing this file. Stop the Gateway and node hosts, then reconcile this file with a verified copy of the intended exec policy; preserve existing SQLite policy. Run \`openclaw doctor --fix\` against the same state directory.`,
+  };
+  recordStartupMigrationWarnings([diagnostic.message]);
+  return diagnostic;
+}
+
+/** Inspect both interrupted names; retained legacy input cannot veto canonical startup. */
 export async function prepareLegacyExecApprovals(params: {
   stateDir: string;
   env: NodeJS.ProcessEnv;
   facts?: LegacyExecApprovalsFacts;
-}): Promise<void> {
+}): Promise<LegacyExecApprovalsDiagnostic | undefined> {
   const sourcePath = resolveExecApprovalsPath(params.env);
   const claimPath = `${sourcePath}${DOCTOR_CLAIM_SUFFIX}`;
   if (!pathMayExistSync(sourcePath) && !pathMayExistSync(claimPath)) {
-    return;
+    return undefined;
   }
   try {
     const stateRoot = await root(params.stateDir, {
@@ -296,7 +317,7 @@ export async function prepareLegacyExecApprovals(params: {
     }
     const snapshot = snapshots[0];
     if (!snapshot) {
-      return;
+      return undefined;
     }
     if (snapshots.some((other) => other.sha256 !== snapshot.sha256)) {
       throw new Error("Legacy exec approvals source and interrupted claim disagree.");
@@ -307,14 +328,14 @@ export async function prepareLegacyExecApprovals(params: {
       emptyStub: emptyLegacyFile(snapshot),
     });
     if (!decision.removeSource) {
-      throw new Error(
-        decision.legacy.ok
-          ? "Conflicting legacy exec approvals remain"
-          : `Invalid legacy exec approvals (${decision.legacy.error})`,
+      return retainLegacyExecApprovals(
+        sourcePath,
+        decision.legacy.ok ? "legacy-exec-approvals-conflict" : "legacy-exec-approvals-invalid",
       );
     }
-  } catch (error) {
-    throw new ExecApprovalsMigrationRequiredError(sourcePath, "doctor", String(error), params.env);
+    return undefined;
+  } catch {
+    return retainLegacyExecApprovals(sourcePath, "legacy-exec-approvals-unreadable");
   }
 }
 
@@ -323,7 +344,12 @@ async function decideAndRecordMigration(params: {
   sourcePath: string;
   snapshot: LegacySourceSnapshot;
   emptyStub?: ArchivedEmptyLegacy;
-}): Promise<{ message: string; removeSource: boolean; sourceKey: string }> {
+}): Promise<{
+  message: string;
+  removeSource: boolean;
+  sourceKey: string;
+  decision: MigrationDecision;
+}> {
   const source = await openOpenClawStateDatabaseForDoctor({ env: params.env });
   const capturedLegacyFile =
     params.emptyStub?.file ?? (params.snapshot.legacy.ok ? params.snapshot.legacy.value : null);
@@ -407,7 +433,7 @@ async function decideAndRecordMigration(params: {
           : legacy.ok
             ? "Conflicting legacy exec approvals remain"
             : `Invalid legacy exec approvals (${legacy.error})`;
-        return { message, removeSource, sourceKey };
+        return { message, removeSource, sourceKey, decision };
       },
       { env: params.env },
       { operationLabel: "state-migration.exec-approvals" },
@@ -439,6 +465,7 @@ async function migrateWithExclusiveStateOwnership(params: {
   stateRoot: Root;
   stateDir: string;
   env: NodeJS.ProcessEnv;
+  allowRetainedConflict?: boolean;
 }): Promise<MigrationMessages> {
   const sourcePath = params.detected.sourcePath;
   const source = new LegacyMigrationSourceClaim<LegacySourceSnapshot>({
@@ -536,6 +563,10 @@ async function migrateWithExclusiveStateOwnership(params: {
       warnings: [
         `${result.message}${restoreError ? ` Claim restore failed: ${restoreError}` : ""}`,
       ],
+      // Startup can serve canonical policy once the conflicting source is safely retained.
+      ...(params.allowRetainedConflict && !restoreError && result.decision === "canonical-preserved"
+        ? { warningDisposition: "recoverable" as const }
+        : {}),
     };
   }
 
@@ -576,6 +607,7 @@ async function migrateWithExclusiveStateOwnership(params: {
 /** Import or retire the old file under exclusive state ownership. */
 export async function migrateLegacyExecApprovals(params: {
   detected?: LegacyExecApprovalsDetection;
+  allowRetainedConflict?: boolean;
   stateDir: string;
   env?: NodeJS.ProcessEnv;
 }): Promise<MigrationMessages> {
@@ -593,6 +625,7 @@ export async function migrateLegacyExecApprovals(params: {
     retryGuidance: `Stop the Gateway and node hosts holding ${params.stateDir}.`,
     run: async (env) => {
       const stateRoot = await root(params.stateDir, {
+        allowDrvfsRenameRecovery: true,
         hardlinks: "reject",
         maxBytes: MAX_LEGACY_EXEC_APPROVALS_BYTES,
         symlinks: "reject",

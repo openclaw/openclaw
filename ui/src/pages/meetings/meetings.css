@@ -27,13 +27,15 @@
 
 .transcripts-layout:not(.transcripts-layout--selected) .transcripts-library {
   width: 100%;
-  max-width: 960px;
+  max-width: 1120px;
   margin-inline: auto;
 }
 
+/* Search and one filter button; the button opens the other filters. */
 .transcripts-filters {
   display: grid;
-  gap: var(--space-3);
+  grid-template-columns: minmax(0, 1fr) auto;
+  gap: var(--space-2);
 }
 
 .transcripts-filters__advanced {
@@ -41,12 +43,6 @@
   grid-template-columns: repeat(2, minmax(0, 1fr));
   gap: var(--space-3);
   margin-block-start: var(--space-3);
-}
-
-.transcripts-filters summary,
-.transcripts-source-details {
-  color: var(--muted);
-  font-size: var(--control-ui-text-sm);
 }
 
 .transcripts-filters input,
@@ -61,6 +57,13 @@
   align-items: center;
   flex-wrap: wrap;
   gap: var(--space-2);
+}
+
+/* Action buttons share the control height of the refresh icon and the filter fields beside them. */
+.transcripts-actions .btn,
+.transcripts-search .btn {
+  height: var(--settings-control-height);
+  padding-block: 0;
 }
 
 .transcripts-actions svg,
@@ -136,11 +139,13 @@
   position: relative;
 }
 
-.meetings-day .transcripts-list > li::before {
+.meetings-row__title::before {
   content: "";
   position: absolute;
   inset-inline-start: calc(-1 * var(--space-4) - 4px);
-  inset-block-start: 32px;
+  /* The list item anchors the rail; the title’s first line anchors the dot. */
+  margin-block-start: 0.5lh;
+  transform: translateY(-50%);
   width: 7px;
   height: 7px;
   border-radius: var(--radius-full);
@@ -258,9 +263,12 @@
 
 .transcripts-source-details {
   margin-block: var(--space-3);
+  color: var(--muted);
+  font-size: var(--control-ui-text-sm);
 }
 
 .transcripts-reader__header h1 {
+  width: fit-content;
   font-family: var(--font-display);
   font-size: calc(var(--control-ui-text-lg) * 1.75);
   line-height: 1.25;
@@ -293,13 +301,22 @@
 .transcripts-utterance__byline {
   display: flex;
   align-items: baseline;
-  flex-wrap: wrap;
   gap: var(--space-3);
   font-size: var(--control-ui-text-sm);
   color: var(--muted);
 }
 
+.transcripts-utterance__byline time {
+  flex: none;
+}
+
 .transcripts-utterance__byline strong {
+  min-width: 0;
+  overflow: hidden;
+  direction: rtl;
+  text-align: match-parent;
+  text-overflow: ellipsis;
+  white-space: nowrap;
   color: var(--text-strong);
   font-weight: 600;
 }
@@ -314,6 +331,12 @@
 
 .transcripts-utterances p {
   white-space: pre-wrap;
+}
+
+.meetings-notes {
+  /* Reading text keeps macOS stem darkening; app chrome stays antialiased via body. */
+  -webkit-font-smoothing: auto;
+  -moz-osx-font-smoothing: auto;
 }
 
 .meetings-notes pre {
@@ -344,20 +367,7 @@
   }
 }
 
-@media (max-width: 400px) {
-  .transcripts-filters__advanced {
-    grid-template-columns: minmax(0, 1fr);
-  }
-}
-
-/* Search and a filter button replace the filter block; Filters renders these at the same query. */
-.transcripts-filters--phone {
-  grid-template-columns: minmax(0, 1fr) auto;
-  gap: var(--space-2);
-}
-
 .transcripts-filters__search {
-  --settings-control-height: 44px;
   position: relative;
 }
 
@@ -383,9 +393,12 @@
   padding-inline-start: 32px;
 }
 
-.transcripts-filters__trigger,
 .transcripts-page-menu__trigger {
   --settings-control-height: 44px;
+}
+
+.transcripts-filters__trigger,
+.transcripts-page-menu__trigger {
   justify-content: center;
   width: var(--settings-control-height);
   min-width: 0;
@@ -403,6 +416,13 @@
 .transcripts-filter-popover__panel {
   display: grid;
   gap: var(--space-3);
+}
+
+/* The popover is a compact panel under its button; the phone sheet keeps the full width. */
+.oc-popover.transcripts-filter-popover {
+  --oc-overlay-max-width: min(26rem, calc(100vw - 24px));
+
+  width: min(26rem, calc(100vw - 24px));
 }
 
 /* The sheet owns the inset. */
@@ -450,6 +470,11 @@
 }
 
 @media (max-width: 768px), (max-width: 932px) and (max-height: 500px) and (orientation: landscape) {
+  .transcripts-filters__search,
+  .transcripts-filters__trigger {
+    --settings-control-height: 44px;
+  }
+
   /* The menu sits beside the title instead of on a row of its own. */
   .transcripts-workspace > .content-header.hub-page-header--untabbed {
     grid-template-columns: minmax(0, 1fr) auto;
@@ -471,7 +496,7 @@
     padding-inline-start: 0;
   }
 
-  .meetings-day .transcripts-list > li::before {
+  .meetings-row__title::before {
     inset-inline-start: -4px;
   }
 

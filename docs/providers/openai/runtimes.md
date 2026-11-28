@@ -106,7 +106,7 @@ remains available when you want an OpenClaw-owned profile.
 
 If you previously relied on automatic use of a native Codex login, sign in with
 `openclaw models auth login --provider openai` and select the resulting OpenClaw
-profile. Selecting detected Codex in Model Setup reuses eligible OpenClaw credentials
+profile. Selecting detected Codex in Models reuses eligible OpenClaw credentials
 or opens the supported OpenAI sign-in flow before testing the connection. A cancelled
 or failed sign-in does not promote the route. If verification fails after sign-in,
 choose the saved sign-in to retry without logging in again. Setup no longer enables
@@ -137,7 +137,8 @@ When that subscription profile is blocked by a Codex usage limit, OpenClaw
 marks the profile blocked until Codex's advertised reset time and lets auth
 ordering rotate to the next `openai:*` profile, without changing the selected
 model or dropping out of the Codex harness. Once the reset time passes, the
-subscription profile is eligible again.
+subscription profile is eligible again. Purchased credits on the same ChatGPT account and user cover
+exhausted included usage. Separate quota limits and spending caps still apply.
 
 Chat `/status` reports the authentication mode from the selected runtime's current
 prepared account. A native login stays distinct from an OpenClaw profile; it does

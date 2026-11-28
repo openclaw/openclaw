@@ -2,9 +2,14 @@ import type { NormalizeReplySkipReason } from "../auto-reply/reply/normalize-rep
 import type { CliDeps } from "../cli/deps.types.js";
 import { resolveControlUiAutomationRunUrl } from "../config/control-ui-link-base.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
+import { tryResolveCronJobEffectiveAgentId } from "../cron/agent-id.js";
 import { commitCronConversationResult } from "../cron/conversation-result.js";
 import type { CronCompletionDeliveryFence } from "../cron/delivery-attempt-fence.js";
-import { hasExplicitCronDeliveryTarget } from "../cron/delivery-target-validation.js";
+import {
+  cronDeliveryUsesDefaultDestination,
+  resolveCronDeliveryDefaultsScope,
+  resolveCronDeliveryMode,
+} from "../cron/delivery-defaults.js";
 import { resolveCronDeliveryPlan, sendCronAnnouncePayloadStrict } from "../cron/delivery.js";
 import { normalizeDirectCronDeliveryPayloads } from "../cron/isolated-agent/delivery-payload-normalization.js";
 import {
@@ -25,7 +30,6 @@ import type {
 } from "../cron/types.js";
 import { formatErrorMessage } from "../infra/errors.js";
 import type { getChildLogger } from "../logging.js";
-import { toAgentStoreSessionKey } from "../routing/session-key.js";
 
 export function pickDefined<T extends Record<string, unknown>>(
   obj: T,
@@ -54,7 +58,18 @@ export async function finalizeCronCompletionAnnouncement(params: {
   label: string;
   traceResolvedFailure?: boolean;
 }) {
-  const plan = resolveCronDeliveryPlan(params.job);
+  let agent: { agentId: string; cfg: OpenClawConfig } | undefined;
+  const resolveAgent = () =>
+    (agent ??= params.resolveCronAgent(tryResolveCronJobEffectiveAgentId(params.job)));
+  // Only a route-less announce job needs the owner before planning; others keep
+  // resolving their agent at send time.
+  const owner = cronDeliveryUsesDefaultDestination(params.job, resolveCronDeliveryMode(params.job))
+    ? resolveAgent()
+    : undefined;
+  const plan = resolveCronDeliveryPlan(
+    params.job,
+    owner && resolveCronDeliveryDefaultsScope(owner.cfg.cron, params.job, owner.agentId),
+  );
   const delivery: CronDeliveryTrace = {
     intended: pickDefined(
       {
@@ -93,7 +108,7 @@ export async function finalizeCronCompletionAnnouncement(params: {
     return finish(false);
   }
 
-  const { agentId, cfg } = params.resolveCronAgent(params.job.agentId);
+  const { agentId, cfg } = resolveAgent();
   const inspectUrl = resolveControlUiAutomationRunUrl(cfg, {
     jobId: params.job.id,
     runId:
@@ -113,7 +128,9 @@ export async function finalizeCronCompletionAnnouncement(params: {
     if (!resolved.ok && requiresExternalCronDelivery(plan, resolved)) {
       throw resolved.error;
     }
-    const conversation = resolved.ok ? undefined : params.job.sourceConversation;
+    // Automations reach their creating conversation by key, through edits and resets.
+    const source = params.job.sourceConversation;
+    const conversation = resolved.ok || !source ? undefined : { sessionKey: source.sessionKey };
     if ((conversation || resolved.ok) && params.runStartedAtMs === undefined) {
       throw new Error("cron result is missing its occurrence start time");
     }
@@ -128,17 +145,6 @@ export async function finalizeCronCompletionAnnouncement(params: {
         jobId: params.job.id,
         target: resolved,
         transcriptRoute: resolved.sessionRoute,
-        transcriptExpectedGeneration:
-          params.job.sourceConversation &&
-          !hasExplicitCronDeliveryTarget(plan) &&
-          resolved.sessionRoute?.sessionKey ===
-            toAgentStoreSessionKey({
-              agentId,
-              requestKey: params.job.sourceConversation.sessionKey,
-              mainKey: cfg.session?.mainKey,
-            })
-            ? params.job.sourceConversation
-            : undefined,
         onTranscriptDiagnostic: (message) => {
           diagnostics = mergeCronRunDiagnostics(
             diagnostics,

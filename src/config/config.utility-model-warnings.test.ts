@@ -219,3 +219,49 @@ it("resolves each utility backend once per validation and refreshes misses on th
     expect(lookup.mock.calls.map(([id]) => id)).toEqual(["fixture-cli", "local"]);
   }
 });
+
+it.each([
+  { shape: "explicit", defaults: { model: "local/primary", utilityModel: "local/small" } },
+  // The incident's shape: no utilityModel, the provider-declared small model.
+  { shape: "automatic", defaults: { model: "local/primary" } },
+  // Roles compare canonical ids: allowing the alias target allows the declared model.
+  { shape: "aliased automatic", defaults: { model: "local/primary" }, aliased: true },
+])(
+  "warns when a role allows no $shape utility model for an agent it can use",
+  ({ defaults, aliased }) => {
+    const role = (allow: string[]) => ({
+      agents: "*" as const,
+      scopes: ["operator.read" as const, "operator.write" as const],
+      sessions: { others: "none" as const },
+      modelPolicy: { allow },
+    });
+    const small = aliased ? "local/canonical" : "local/small";
+    const result = validate(
+      {
+        agents: { defaults },
+        gateway: {
+          roles: {
+            default: "guest",
+            definitions: { guest: role(["local/primary"]), member: role([small]) },
+          },
+        },
+      },
+      [],
+      metadata({
+        id: "local",
+        modelCatalog: {
+          providers: { local: { defaultUtilityModel: "small", models: [{ id: "small" }] } },
+        },
+        ...(aliased
+          ? { modelIdNormalization: { providers: { local: { aliases: { small: "canonical" } } } } }
+          : {}),
+      }),
+    );
+    expect(result.warnings).toEqual([
+      {
+        path: "gateway.roles.definitions.guest.modelPolicy",
+        message: expect.stringContaining('Role "guest" allows no utility model for agent "main"'),
+      },
+    ]);
+  },
+);

@@ -1,6 +1,8 @@
 import fs from "node:fs";
 import path from "node:path";
+import { StatementSync } from "node:sqlite";
 import { afterAll, afterEach, beforeAll, beforeEach, expect, it, vi } from "vitest";
+import { observeSqliteReadSql } from "../../../test/helpers/sqlite-statement-execution-counter.js";
 import {
   clearRuntimeConfigSnapshot,
   setRuntimeConfigSnapshot,
@@ -8,10 +10,19 @@ import {
 import * as deliveryInfo from "../../config/sessions/delivery-info.js";
 import { resolveSessionStorePathCore } from "../../config/sessions/paths.js";
 import { upsertSessionEntryCore } from "../../config/sessions/session-accessor.js";
+import * as deliveryGeneration from "../../config/sessions/session-delivery-generation.js";
 import * as transcriptRuntime from "../../config/sessions/transcript.runtime.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
+import { deliverOutboundPayloadsInternal } from "../../infra/outbound/deliver.js";
+import { drainPendingDeliveriesCore } from "../../infra/outbound/delivery-queue-recovery.js";
 import { peekSystemEvents, resetSystemEventsForTest } from "../../infra/system-events.js";
+import { getLogger } from "../../logging/logger.js";
 import { readVisibleSessionTranscriptMessageEntries } from "../../plugin-sdk/session-transcript-runtime.js";
+import { commitBackgroundResultToSession } from "../../sessions/background-session-result.js";
+import {
+  captureSessionTarget,
+  runSessionMutation,
+} from "../../sessions/session-controller.lifecycle.js";
 import { readPluginNoticeData } from "../../shared/plugin-notice.js";
 import { closeOpenClawAgentDatabasesForTest } from "../../state/openclaw-agent-db.js";
 import {
@@ -45,7 +56,7 @@ const channel = {
     presentationCapabilities: { supported: true, buttons: true },
     renderPresentation: ({ payload, presentation }) => ({ ...payload, channelData: { buttons: presentation } }),
     sendPayload: async (ctx) => {
-      sent.push({ to: ctx.to, payload: ctx.payload });
+      sent.push({ to: ctx.to, threadId: ctx.threadId, payload: ctx.payload });
       globalThis.noticeProofFixture.afterSend?.();
       return { channel: "${PLUGIN_ID}", messageId: "m" + sent.length };
     },
@@ -62,7 +73,7 @@ module.exports = { id: "${PLUGIN_ID}", register(api) {
 
 type Proof = {
   runtime: PluginRuntime;
-  sent: Array<{ to: string; payload: Record<string, unknown> }>;
+  sent: Array<{ to: string; threadId?: string | number; payload: Record<string, unknown> }>;
   afterSend?: () => void;
 };
 
@@ -140,6 +151,7 @@ async function seedSession(
   sessionKey: string,
   channel: string | undefined,
   lifecycleRevision = "r1",
+  threadId?: string,
 ) {
   await upsertSessionEntryCore(
     { agentId: "main", storePath, sessionKey },
@@ -152,7 +164,12 @@ async function seedSession(
             delivery: {
               kind: "external" as const,
               route: { channel, accountId: "default", target: { to: "user-1" } },
-              context: { channel, accountId: "default", to: "user-1" },
+              context: {
+                channel,
+                accountId: "default",
+                to: "user-1",
+                ...(threadId ? { threadId } : {}),
+              },
               origin: { provider: channel, accountId: "default", to: "user-1" },
             },
           }
@@ -171,13 +188,17 @@ async function notices(sessionKey: string) {
   return entries.flatMap((entry) => readPluginNoticeData(entry.message, PLUGIN_ID, "done") ?? []);
 }
 
-function post(generation: NonNullable<Awaited<ReturnType<typeof capture>>>, id: string) {
+function post(
+  generation: NonNullable<Awaited<ReturnType<typeof capture>>>,
+  id: string,
+  deliver: { skipChannels?: string[] } | undefined = {},
+) {
   return proof.runtime.system.postSessionNotice({
     generation,
     notice: { type: "done", text: `Job ${id} finished.`, data: { id }, presentation },
     idempotencyKey: `${PLUGIN_ID}:${id}`,
     systemEvent: `Job ${id} context.`,
-    deliver: {},
+    ...(deliver ? { deliver } : {}),
   });
 }
 
@@ -216,6 +237,116 @@ it("finishes the transcript on retry without sending the channel message again",
   await expect(post(generation!, "f")).resolves.toMatchObject({ status: "posted" });
   expect(proof.sent).toHaveLength(1);
   expect(await notices(sessionKey)).toEqual([{ id: "f" }]);
+});
+
+// Delivery recovery, as the Gateway runs it a few seconds after a refused send.
+async function drainDeliveryRecovery(sessionKey: string) {
+  await drainPendingDeliveriesCore(
+    {
+      drainKey: `test:session-notice:${sessionKey}`,
+      logLabel: "test notice recovery",
+      cfg: { agents: { entries: { main: { workspace: state.workspaceDir } } } },
+      log: { info() {}, warn() {}, error() {} },
+      deliver: deliverOutboundPayloadsInternal,
+      selectEntry: (entry) => ({
+        match: entry.sessionGeneration?.sessionKey === sessionKey,
+        bypassBackoff: true,
+      }),
+    },
+    deliverOutboundPayloadsInternal,
+  );
+}
+
+it.each([
+  ["commits after the send", "after-send"],
+  ["commits between the delivery lease and the send", "in-lease"],
+] as const)(
+  "sends a notice while a background result appended to the same conversation %s",
+  async (_case, release) => {
+    const sessionKey = `agent:main:${PLUGIN_ID}:direct:user-10-${release}`;
+    await seedSession(sessionKey, PLUGIN_ID);
+    const generation = await capture(sessionKey);
+    // Cron writes its run-outcome row to the owner conversation while it posts the notice.
+    const held = Promise.withResolvers<void>();
+    const holding = Promise.withResolvers<void>();
+    const appended = commitBackgroundResultToSession({
+      agentId: "main",
+      sessionKey,
+      text: 'Automation "Proof" did not start.',
+      idempotencyKey: `proof-run-outcome-${release}`,
+      config: { agents: { entries: { main: { workspace: state.workspaceDir } } } },
+      prepareDisplayContent: async () => {
+        holding.resolve();
+        await held.promise;
+        return undefined;
+      },
+    });
+    await holding.promise;
+    // Which of the two writes reached its effect first: the row commit or the channel send.
+    const order: string[] = [];
+    void appended.then(() => order.push("append"));
+    proof.afterSend = () => {
+      order.push("send");
+      held.resolve();
+    };
+    if (release === "in-lease") {
+      const prepare = deliveryGeneration.prepareChatDeliveryLease;
+      vi.spyOn(deliveryGeneration, "prepareChatDeliveryLease").mockImplementationOnce(
+        async (chat) => {
+          const lease = await prepare(chat);
+          held.resolve();
+          await appended;
+          return lease;
+        },
+      );
+    }
+
+    // Each case posts its own notice; a reused key would replay the first case's retained receipt.
+    const id = `k-${release}`;
+    const result = await post(generation!, id).finally(held.resolve);
+    const sentWhenPosted = proof.sent.length;
+    await expect(appended).resolves.toEqual({ ok: true });
+    await drainDeliveryRecovery(sessionKey);
+
+    // Sent before the post resolves, so the caller's next reply follows it; recovery sends nothing.
+    expect({ result, sentWhenPosted, sent: proof.sent.length, order }).toEqual({
+      result: { status: "posted", delivered: true },
+      sentWhenPosted: 1,
+      sent: 1,
+      order: release === "in-lease" ? ["append", "send"] : ["send", "append"],
+    });
+    expect(await notices(sessionKey)).toEqual([{ id }]);
+  },
+);
+
+it("still refuses a notice while a reset owns the conversation and names the reset", async () => {
+  const sessionKey = `agent:main:${PLUGIN_ID}:direct:user-11`;
+  await seedSession(sessionKey, PLUGIN_ID);
+  const generation = await capture(sessionKey);
+  const warn = vi.spyOn(getLogger(), "warn");
+  const held = Promise.withResolvers<void>();
+  const holding = Promise.withResolvers<void>();
+  const reset = runSessionMutation({
+    kind: "reset",
+    policy: "allow-live",
+    target: captureSessionTarget({ storeScope: storePath, sessionKey, agentId: "main" }),
+    run: async () => {
+      holding.resolve();
+      await held.promise;
+    },
+  });
+  await holding.promise;
+
+  const result = await post(generation!, "l").finally(held.resolve);
+  await reset;
+
+  // A reset can change the generation, so nothing is sent or recorded while it runs.
+  expect(result).toMatchObject({ status: "failed", stage: "delivery" });
+  expect(proof.sent).toEqual([]);
+  expect(await notices(sessionKey)).toEqual([]);
+  expect(warn.mock.calls.map(([record]) => record)).toContainEqual(
+    expect.objectContaining({ branch: "delivery-mutation", mutationKinds: ["reset"] }),
+  );
 });
 
 it("posts nothing when the plugin is revoked during the awaited route lookup", async () => {
@@ -272,4 +403,88 @@ it("skips a session reset after the plugin captured its generation", async () =>
   });
   expect(proof.sent).toEqual([]);
   expect(await notices(sessionKey)).toEqual([]);
+});
+
+it("records a transcript-only notice for a channel the caller skips", async () => {
+  const sessionKey = `agent:main:${PLUGIN_ID}:direct:user-6`;
+  await seedSession(sessionKey, PLUGIN_ID);
+  const generation = await capture(sessionKey);
+
+  await expect(post(generation!, "g", { skipChannels: [PLUGIN_ID] })).resolves.toEqual({
+    status: "posted",
+    delivered: false,
+  });
+  expect(proof.sent).toEqual([]);
+  expect(await notices(sessionKey)).toEqual([{ id: "g" }]);
+  expect(peekSystemEvents(sessionKey)).toEqual(["Job g context."]);
+});
+
+it("keeps a notice in the transcript when the conversation denies automatic sends", async () => {
+  const sessionKey = `agent:main:${PLUGIN_ID}:direct:user-9`;
+  await seedSession(sessionKey, PLUGIN_ID);
+  await upsertSessionEntryCore({ agentId: "main", storePath, sessionKey }, { sendPolicy: "deny" });
+  const generation = await capture(sessionKey);
+
+  await expect(post(generation!, "i")).resolves.toEqual({ status: "posted", delivered: false });
+  expect(proof.sent).toEqual([]);
+  expect(await notices(sessionKey)).toEqual([{ id: "i" }]);
+});
+
+it("delivers a thread-bound session's notice to the session key's thread", async () => {
+  const sessionKey = `agent:main:${PLUGIN_ID}:direct:user-7:thread:456`;
+  await seedSession(sessionKey, PLUGIN_ID, "r1", "stale-thread");
+  const generation = await capture(sessionKey);
+
+  await expect(post(generation!, "h")).resolves.toEqual({ status: "posted", delivered: true });
+  expect(proof.sent).toMatchObject([{ to: "user-1", threadId: "456" }]);
+  expect(await notices(sessionKey)).toEqual([{ id: "h" }]);
+});
+
+it("skips a session reset during the delivery route lookup", async () => {
+  const sessionKey = `agent:main:${PLUGIN_ID}:direct:user-8`;
+  await seedSession(sessionKey, PLUGIN_ID);
+  const generation = await capture(sessionKey);
+  const lookup = deliveryInfo.extractDeliveryInfo;
+  vi.spyOn(deliveryInfo, "extractDeliveryInfo").mockImplementation(async (...args) => {
+    const route = await lookup(...args);
+    await seedSession(sessionKey, PLUGIN_ID, "r2");
+    return route;
+  });
+
+  await expect(post(generation!, "i")).resolves.toEqual({
+    status: "skipped",
+    reason: "session-changed",
+  });
+  expect(peekSystemEvents(sessionKey)).toEqual([]);
+  expect(proof.sent).toEqual([]);
+  expect(await notices(sessionKey)).toEqual([]);
+});
+
+it("reads the session generation off the main thread and observes a committed reset", async () => {
+  const sessionKey = `agent:main:${PLUGIN_ID}:direct:user-9`;
+  await seedSession(sessionKey, undefined);
+  // The transcript writer is not under test; only the generation reads are pinned. Statement-level
+  // observation also sees reads through statements cached before the observer attached.
+  const append = vi
+    .spyOn(transcriptRuntime, "appendAssistantMessageToSessionTranscript")
+    .mockResolvedValue({ ok: false, reason: "not under test" });
+  const sql = observeSqliteReadSql(StatementSync.prototype);
+  const reads = () =>
+    sql.queries.filter((query) => /\b(?:session_nodes|session_windows)\b/iu.test(query));
+  try {
+    const generation = await capture(sessionKey);
+    await post(generation!, "j", undefined);
+    expect(append).toHaveBeenCalledOnce();
+    expect(reads()).toEqual([]);
+    await seedSession(sessionKey, undefined, "r2");
+    sql.queries.length = 0;
+    await expect(post(generation!, "j", undefined)).resolves.toEqual({
+      status: "skipped",
+      reason: "session-changed",
+    });
+    expect(append).toHaveBeenCalledOnce();
+    expect(reads()).toEqual([]);
+  } finally {
+    sql.restore();
+  }
 });

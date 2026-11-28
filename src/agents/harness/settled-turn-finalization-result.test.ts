@@ -15,9 +15,7 @@ function safeResult(
   return { assistant: { ...createFinalAssistant(), ...assistant } };
 }
 
-function successfulAttempt(
-  overrides: Partial<EmbeddedRunAttemptResult> = {},
-): EmbeddedRunAttemptResult {
+function successfulAttempt(overrides: Partial<EmbeddedRunAttemptResult>): EmbeddedRunAttemptResult {
   const assistant = createFinalAssistant();
   return {
     ...createAttemptResult(),

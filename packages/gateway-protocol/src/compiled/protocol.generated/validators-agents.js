@@ -18,6 +18,7 @@ export {
   isModelsAuthSetApiKeyResult,
   isModelsAuthLogoutParams,
   isModelsAuthOrderSetParams,
+  isModelsAuthProfileRenameParams,
   isModelsAuthRefreshParams,
   isModelsAuthStatusParams,
   isModelsListParams,
@@ -40,6 +41,7 @@ export {
   isSkillsUploadChunkParams,
   isSkillsUploadCommitParams,
   isSkillsUpdateParams,
+  isSkillsCategoriesParams,
   isSkillsSearchParams,
   isSkillsDetailParams,
   isSkillsWorkshopListParams,
@@ -52,4 +54,7 @@ export {
   isSkillsSkillCardParams,
   isSkillsFileGetParams,
   isModelsProbeParams,
+  isToolUsageStatusParams,
+  isToolUsageImportParams,
+  isToolUsageResetParams,
 } from "./predicates.js";

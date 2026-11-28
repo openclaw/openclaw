@@ -1,6 +1,6 @@
 import path from "node:path";
 import { beforeEach, describe, expect, it, vi } from "vitest";
-import { createOpenClawCodingToolsAsync } from "../../agents/agent-tools.js";
+import { createOpenClawCodingToolsAsync } from "../../agents/agent-tools.async.js";
 import { makeBootstrapWarn, resolveBootstrapContextForRun } from "../../agents/bootstrap-files.js";
 import type { resolveRuntimeChannelPromptContext } from "../../agents/runtime-capabilities.js";
 import { ensureSandboxWorkspaceForSession } from "../../agents/sandbox/context.js";
@@ -22,7 +22,8 @@ const { createOpenClawCodingToolsAsyncMock, logWarnMock, makeBootstrapWarnMock }
 );
 
 // mock-isolation: Fix channel prompt facts without loading live channel plugin state.
-vi.mock("../../agents/runtime-capabilities.js", () => ({
+vi.mock("../../agents/runtime-capabilities.js", async (importOriginal) => ({
+  ...(await importOriginal<Record<string, unknown>>()),
   resolveRuntimeChannelPromptContext: vi.fn<typeof resolveRuntimeChannelPromptContext>(() => ({
     runtimeChannel: "telegram",
     runtimeCapabilities: ["voice"],
@@ -101,7 +102,7 @@ vi.mock("../../agents/system-prompt.js", () => ({
 }));
 
 // mock-isolation: Inspect prompt composition with fixture tools without initializing tool integrations.
-vi.mock("../../agents/agent-tools.js", () => ({
+vi.mock("../../agents/agent-tools.async.js", () => ({
   createOpenClawCodingToolsAsync: createOpenClawCodingToolsAsyncMock,
 }));
 

@@ -1,3 +1,4 @@
+import type { DatabaseSync } from "node:sqlite";
 import {
   requireNativeDatabaseFile,
   getPostgresPhysicalFacts,
@@ -18,6 +19,7 @@ import {
   isSqliteSchemaAdmissionCold,
 } from "../infra/sqlite-schema-facts.js";
 import { readSqliteUserVersion } from "../infra/sqlite-user-version.js";
+import { OPENCLAW_STATE_SCHEMA_VERSION } from "./openclaw-schema-versions.js";
 
 function getStateSchemaFacts(database: EngineConnection) {
   return isPostgresSqlConnection(database)
@@ -33,7 +35,11 @@ export function isStateSchemaVersionAtLeast(database: EngineConnection, version:
   );
 }
 
-export type StateSchemaVersionFacts = { userVersion: number; contentVersion: number };
+export type StateSchemaVersionFacts = {
+  userVersion: number;
+  contentVersion: number;
+  minReader?: number;
+};
 
 const versionKey: SqliteDatabaseAdmissionKey<StateSchemaVersionFacts> = {
   name: "state.schema-version",
@@ -46,9 +52,16 @@ const versionKey: SqliteDatabaseAdmissionKey<StateSchemaVersionFacts> = {
       "userVersion" in value &&
       typeof value.userVersion === "number" &&
       "contentVersion" in value &&
-      typeof value.contentVersion === "number"
+      typeof value.contentVersion === "number" &&
+      (!("minReader" in value) || typeof value.minReader === "number")
     ) {
-      return { userVersion: value.userVersion, contentVersion: value.contentVersion };
+      return {
+        userVersion: value.userVersion,
+        contentVersion: value.contentVersion,
+        ...("minReader" in value && typeof value.minReader === "number"
+          ? { minReader: value.minReader }
+          : {}),
+      };
     }
     return undefined;
   },
@@ -217,6 +230,28 @@ export function publishStateSchemaVersionAdmission(
   } else {
     rememberConnectionVersion(database);
   }
+}
+
+/**
+ * A peer process (the Gateway's update-run watcher) may publish the deferred
+ * 2026.9.2 schema version after this connection admitted its floor. Adopt it
+ * only when the header and metadata both read current inside this connection.
+ */
+export function adoptPeerPublishedStateSchemaVersion(
+  database: DatabaseSync,
+  metadata: { schema_version?: unknown } | undefined,
+): boolean {
+  if (
+    metadata?.schema_version !== OPENCLAW_STATE_SCHEMA_VERSION ||
+    readSqliteUserVersion(database) !== OPENCLAW_STATE_SCHEMA_VERSION
+  ) {
+    return false;
+  }
+  publishStateSchemaVersionAdmission(database, {
+    userVersion: OPENCLAW_STATE_SCHEMA_VERSION,
+    contentVersion: OPENCLAW_STATE_SCHEMA_VERSION,
+  });
+  return true;
 }
 
 /** Runtime shape and integrity are physical-file facts, independent of live write authority. */

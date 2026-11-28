@@ -42,7 +42,9 @@ export async function prepareManagedServiceRuntimeFixture({
     | "cancelAtActivation"
     | "interruptedUpdate"
     | "updaterStopped"
-    | "pluginCohort"
+    | "operatorRestart"
+    | "olderMark"
+    | "finalizeFailure"
   >;
 }) {
   const appendRuntime = (source: string) => fs.appendFile(recoveryModulePath, source);
@@ -71,7 +73,9 @@ export async function prepareManagedServiceRuntimeFixture({
           runId,
           cut: options.interruptedUpdate,
           updaterStopped: options.updaterStopped,
-          pluginCohort: options.pluginCohort,
+          operatorRestart: options.operatorRestart,
+          olderMark: options.olderMark,
+          finalizeFailure: options.finalizeFailure,
         })
       : undefined;
   if (options?.requester) {
@@ -79,7 +83,7 @@ export async function prepareManagedServiceRuntimeFixture({
     if (options.requester.authorizationSource?.startsWith("profile:")) {
       await appendRuntime(`
         const requesterRuntime = await import(${JSON.stringify(resolveRuntimeWorkerUrl(triageTestRuntimeEntrypoints.requester).href)});
-        export const { prepareManagedUpdateRequesterIdentity } = requesterRuntime;
+        export const { prepareUpdateRequesterIdentity: prepareManagedUpdateRequesterIdentity } = requesterRuntime;
       `);
       return { sourceRuntimeImport, ledgerRuntimeImport, interrupted };
     }

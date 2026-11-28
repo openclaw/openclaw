@@ -31,29 +31,15 @@ struct DevicePermissionsTests {
     }
 
     @Test func `first-run onboarding moves directly from intro to pairing`() {
-        #expect(OnboardingStep.intro.previous == nil)
-        #expect(OnboardingStep.welcome.previous == .intro)
-        #expect(!OnboardingStep.welcome.canGoBack)
+        #expect(OnboardingStep.intro.pushedSteps.isEmpty)
+        #expect(OnboardingStep.welcome.pushedSteps.isEmpty)
         #expect(OnboardingStep.welcome.manualProgressTitle.isEmpty)
     }
 
-    @Test func `onboarding has no aggregate system permission prompt`() throws {
-        let onboardingDirectory = Self.sourceRoot()
-            .appending(path: "Onboarding", directoryHint: .isDirectory)
-        let wizard = try String(
-            contentsOf: onboardingDirectory.appending(path: "OnboardingWizardView.swift"),
-            encoding: .utf8)
-
-        #expect(!FileManager.default.fileExists(
-            atPath: onboardingDirectory.appending(path: "OnboardingPermissionsStep.swift").path))
-        #expect(!wizard.contains("OnboardingPermissionsStep"))
-        #expect(!wizard.contains("navigate(to: .permissions)"))
-    }
-
-    private static func sourceRoot() -> URL {
-        URL(fileURLWithPath: #filePath)
-            .deletingLastPathComponent()
-            .deletingLastPathComponent()
-            .appending(path: "Sources", directoryHint: .isDirectory)
+    @Test func `manual onboarding steps pop back one at a time to Connect Gateway`() {
+        #expect(OnboardingStep.mode.pushedSteps == [.mode])
+        #expect(OnboardingStep.connect.pushedSteps == [.mode, .connect])
+        #expect(OnboardingStep.auth.pushedSteps == [.mode, .connect, .auth])
+        #expect(OnboardingStep.success.pushedSteps.isEmpty)
     }
 }

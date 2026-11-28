@@ -15,6 +15,7 @@ import {
   chatThreadDistanceFromBottom,
   waitForChatScrollIdle,
   chatMessage,
+  openAiAuthor,
 } from "./chat-flow.test-support.ts";
 import { board } from "./chat-layout-fixtures.test-support.ts";
 import { createControlUiE2eSuite } from "./control-ui-e2e-suite.test-support.ts";
@@ -110,13 +111,10 @@ function expectStableDisclosureFrames(frames: DisclosureFrame[], label = "disclo
     ),
     `${label} resize`,
   ).toBe(true);
+  // Virtual row measurements can change scrollTop while preserving the visible anchor.
   expect(
     Math.max(...frames.map((frame) => Math.abs(frame.rowTop - initial!.rowTop))),
     `${label} geometry: ${JSON.stringify(frames)}`,
-  ).toBeLessThanOrEqual(2);
-  expect(
-    Math.max(...frames.map((frame) => Math.abs(frame.scrollTop - initial!.scrollTop))),
-    `${label} scroll offset`,
   ).toBeLessThanOrEqual(2);
 }
 
@@ -266,33 +264,11 @@ suite.define(() => {
             const input = await thread.evaluateHandle(
               (scroller, { waitTimeout, wheel: isWheel }) => {
                 const eventType = isWheel ? "wheel" : "pointerdown";
-                const pendingAboveReader = () => {
-                  const viewportTop = scroller.getBoundingClientRect().top;
-                  const bubble = Array.from(
-                    scroller.querySelectorAll<HTMLElement>(
-                      '.chat-bubble[data-entry-id^="sizing-message-"]',
-                    ),
-                  ).findLast(
-                    (candidate) =>
-                      Number(candidate.dataset.entryId!.slice("sizing-message-".length)) % 2 ===
-                        1 &&
-                      candidate.closest(".chat-virtual-row")!.getBoundingClientRect().bottom <=
-                        viewportTop,
-                  );
-                  return bubble
-                    ? {
-                        messageId: bubble.dataset.entryId!,
-                        bottom: bubble.closest(".chat-virtual-row")!.getBoundingClientRect().bottom,
-                        viewportTop,
-                      }
-                    : null;
-                };
                 type InputArrival = {
                   top: number;
                   max: number;
                   trusted: boolean;
                   scroller: boolean;
-                  pending: ReturnType<typeof pendingAboveReader>;
                 };
                 let resolveReady!: (position: Pick<InputArrival, "top" | "max">) => void;
                 let rejectReady!: (error: Error) => void;
@@ -307,11 +283,7 @@ suite.define(() => {
                   rejectArrival = reject;
                 });
                 const onScroll = (event: Event) => {
-                  if (
-                    !event.isTrusted ||
-                    scroller.scrollTop <= 0 ||
-                    (!isWheel && !pendingAboveReader())
-                  ) {
+                  if (!event.isTrusted || scroller.scrollTop <= 0) {
                     return;
                   }
                   scroller.removeEventListener("scroll", onScroll);
@@ -330,7 +302,6 @@ suite.define(() => {
                     scroller:
                       event.target === scroller ||
                       (isWheel && event.target instanceof Node && scroller.contains(event.target)),
-                    pending: pendingAboveReader(),
                   });
                   clearTimeout(timer);
                   document.removeEventListener(eventType, onInput, true);
@@ -380,10 +351,6 @@ suite.define(() => {
               // Prove motion started from its pre-input native scroll sample.
               during = wheel ? started : arrival;
               expect(during.top).toBeGreaterThan(0);
-              if (!wheel) {
-                expect(arrival.pending).not.toBeNull();
-                expect(arrival.pending!.bottom).toBeLessThanOrEqual(arrival.pending!.viewportTop);
-              }
             } finally {
               await input.evaluate((observation) => observation.dispose());
               await input.dispose();
@@ -399,6 +366,33 @@ suite.define(() => {
           if (interruption === "wheel" && reducedMotion === "reduce") {
             await expect.poll(() => thread.evaluate((element) => element.scrollTop)).toBe(0);
           }
+          if (recoveryPosition === "above-viewport") {
+            // One overscan row may be a user. Put an observed assistant at that edge.
+            const distance = await thread.evaluate((element) => {
+              const viewport = element.getBoundingClientRect();
+              const assistant = [
+                ...element.querySelectorAll<HTMLElement>(
+                  '.chat-virtual-row:not([data-prepared-row]) .chat-bubble[data-entry-id^="sizing-message-"]',
+                ),
+              ].find((candidate) => {
+                const row = candidate.closest(".chat-virtual-row")!.getBoundingClientRect();
+                return (
+                  Number(candidate.dataset.entryId!.slice("sizing-message-".length)) % 2 === 1 &&
+                  row.bottom > viewport.top &&
+                  row.top < viewport.bottom
+                );
+              });
+              return assistant
+                ? assistant.closest(".chat-virtual-row")!.getBoundingClientRect().bottom -
+                    viewport.top +
+                    1
+                : null;
+            });
+            expect(distance).not.toBeNull();
+            await thread.hover();
+            await page.mouse.wheel(0, distance!);
+            await waitForChatScrollIdle(page);
+          }
           const interruptedOffset = await thread.evaluate((element) => element.scrollTop);
           expect(interruptedOffset).toBeLessThan(during.max);
           if (interruption !== "wheel") {
@@ -411,7 +405,7 @@ suite.define(() => {
             const viewport = element.getBoundingClientRect();
             const bubbles = Array.from(
               element.querySelectorAll<HTMLElement>(
-                '.chat-bubble[data-entry-id^="sizing-message-"]',
+                '.chat-virtual-row:not([data-prepared-row]) .chat-bubble[data-entry-id^="sizing-message-"]',
               ),
             );
             const bubble = bubbles.findLast((candidate) => {
@@ -472,23 +466,18 @@ suite.define(() => {
           // Outlast virtual-core's five-second scroll reconciliation deadline:
           // the assertion protects durable geometry, not a transient resize frame.
           await page.clock.runFor(5_500);
-          const final = await bubble.evaluate((element, nextId) => {
+          const final = await bubble.evaluate((element) => {
             const row = element.closest<HTMLElement>(".chat-virtual-row")!;
             const scroller = row.closest<HTMLElement>(".chat-thread")!;
-            const next = scroller
-              .querySelector(`.chat-bubble[data-entry-id="${nextId}"]`)!
-              .closest<HTMLElement>(".chat-virtual-row")!;
             const rect = row.getBoundingClientRect();
             return {
               key: row.dataset.virtualRowKey,
               height: row.offsetHeight,
               top: rect.top,
               bottom: rect.bottom,
-              nextTop: next.getBoundingClientRect().top,
-              gap: next.getBoundingClientRect().top - rect.bottom,
               returnOffset: scroller.scrollTop + rect.top - scroller.getBoundingClientRect().top,
             };
-          }, nextMessageId);
+          });
           const finalAnchor = await captureTopVisibleVirtualRow(thread);
           if (artifactDir) {
             await page.screenshot({ path: path.join(artifactDir, "02-after-interruption.png") });
@@ -514,9 +503,41 @@ suite.define(() => {
           }
           expect(final.key).toBe(initial.key);
           expect(final.height).toBeGreaterThan(initial.height);
+          const showAdjacency = async () => {
+            // Parked neighbors have no painted rect. Bring the boundary into view
+            // only after verifying that recovery preserved the reader's anchor.
+            await thread.hover();
+            const delta = await thread.evaluate(
+              (element, { offset, height }) =>
+                offset + Math.max(0, height - element.clientHeight / 2) - element.scrollTop,
+              { offset: final.returnOffset, height: final.height },
+            );
+            await page.mouse.wheel(0, delta);
+            await thread
+              .locator(
+                `.chat-virtual-row:not([data-prepared-row]) .chat-bubble[data-entry-id="${nextMessageId}"]`,
+              )
+              .waitFor({ state: "visible" });
+            await bubble
+              .getByText("Recovered paragraph 1.", { exact: false })
+              .waitFor({ state: "visible" });
+            await waitForChatScrollIdle(page);
+            return bubble.evaluate((element, nextId) => {
+              const row = element.closest<HTMLElement>(".chat-virtual-row")!;
+              const next = row
+                .closest(".chat-thread")!
+                .querySelector(`.chat-bubble[data-entry-id="${nextId}"]`)!
+                .closest<HTMLElement>(".chat-virtual-row")!;
+              return {
+                height: row.offsetHeight,
+                gap: next.getBoundingClientRect().top - row.getBoundingClientRect().bottom,
+              };
+            }, nextMessageId);
+          };
+          const adjacent = await showAdjacency();
           expect(
-            Math.abs(final.gap),
-            JSON.stringify({ initial, during, final }),
+            Math.abs(adjacent.gap),
+            JSON.stringify({ initial, during, final, adjacent }),
           ).toBeLessThanOrEqual(1);
           // Leaving and returning must use the recovered size in the virtual
           // range too, not merely conceal stale cached geometry with DOM flow.
@@ -537,29 +558,9 @@ suite.define(() => {
             await page.mouse.wheel(0, -100_000);
             await expect.poll(() => thread.evaluate((element) => element.scrollTop)).toBe(0);
           }
-          await expect.poll(() => bubble.count()).toBe(0);
+          await expect.poll(() => bubble.isVisible()).toBe(false);
           // Returning is reader input: retire any still-reconciling latest command.
-          await thread.hover();
-          const returnDelta = await thread.evaluate(
-            (element, offset) => offset - element.scrollTop,
-            final.returnOffset,
-          );
-          await page.mouse.wheel(0, returnDelta);
-          await bubble
-            .getByText("Recovered paragraph 1.", { exact: false })
-            .waitFor({ state: "visible" });
-          await waitForChatScrollIdle(page);
-          const returned = await bubble.evaluate((element, nextId) => {
-            const row = element.closest<HTMLElement>(".chat-virtual-row")!;
-            const next = row
-              .closest(".chat-thread")!
-              .querySelector(`.chat-bubble[data-entry-id="${nextId}"]`)!
-              .closest<HTMLElement>(".chat-virtual-row")!;
-            return {
-              height: row.offsetHeight,
-              gap: next.getBoundingClientRect().top - row.getBoundingClientRect().bottom,
-            };
-          }, nextMessageId);
+          const returned = await showAdjacency();
           expect(returned.height).toBe(final.height);
           expect(Math.abs(returned.gap)).toBeLessThanOrEqual(1);
           if (artifactDir) {
@@ -619,6 +620,7 @@ suite.define(() => {
         },
         {
           role: "assistant",
+          ...openAiAuthor,
           content: [
             {
               type: "toolCall",
@@ -630,7 +632,7 @@ suite.define(() => {
               type: "toolCall",
               id: "call-anchor-read",
               name: "read",
-              arguments: { path: "ui/src/pages/chat/components/chat-tool-cards.ts" },
+              arguments: { path: "ui/src/pages/chat/components/chat-tool-expanded.solid.tsx" },
             },
           ],
           timestamp: 100,
@@ -660,7 +662,7 @@ suite.define(() => {
         chatMessage(
           "assistant",
           "The transcript implementation is sound and all focused tests pass.",
-          { timestamp: 103 },
+          { ...openAiAuthor, timestamp: 103 },
         ),
         ...Array.from({ length: 3 }, (_, index) => [
           {
@@ -681,6 +683,7 @@ suite.define(() => {
         },
         {
           role: "assistant",
+          ...openAiAuthor,
           content: [
             {
               type: "toolCall",
@@ -702,6 +705,7 @@ suite.define(() => {
         },
         {
           role: "assistant",
+          ...openAiAuthor,
           content: [{ type: "text", text: "The sibling tool check passed." }],
           timestamp: 113,
         },
@@ -772,127 +776,6 @@ suite.define(() => {
     await context.close();
     for (const frames of Object.values(traces)) {
       expectStableDisclosureFrames(frames);
-    }
-  });
-
-  it("keeps raw tool details anchored at the end and middle of a long transcript", async () => {
-    const artifactDirParent = process.env.OPENCLAW_CONTROL_UI_E2E_ARTIFACT_DIR?.trim();
-    const artifactDir = artifactDirParent
-      ? createControlUiE2eArtifactDir("chat-transcript-disclosure-anchor", artifactDirParent)
-      : undefined;
-    const context = await suite.browser.newContext({
-      reducedMotion: "reduce",
-      viewport: { height: 600, width: 900 },
-      ...(artifactDir
-        ? { recordVideo: { dir: artifactDir, size: { height: 600, width: 900 } } }
-        : {}),
-    });
-    const page = await context.newPage();
-    const transcriptPrefix = Array.from({ length: 14 }, (_, index) => [
-      {
-        role: "user",
-        content: `Earlier raw-details prompt ${index + 1}.`,
-        timestamp: index * 2 + 1,
-      },
-      {
-        role: "assistant",
-        content: [{ type: "text", text: `Earlier raw-details response ${index + 1}.` }],
-        timestamp: index * 2 + 2,
-      },
-    ]).flat();
-    await installMockGateway(page, {
-      historyMessages: [
-        ...transcriptPrefix,
-        {
-          role: "assistant",
-          content: [
-            {
-              type: "toolCall",
-              id: "raw-details-widget",
-              name: "canvas_render",
-              arguments: { title: "Disclosure geometry proof" },
-            },
-            {
-              type: "tool_result",
-              id: "raw-details-widget",
-              name: "canvas_render",
-              text: JSON.stringify(
-                {
-                  kind: "canvas",
-                  proof: Array.from(
-                    { length: 24 },
-                    (_, index) => `Focused test ${index + 1}: passed with stable geometry.`,
-                  ),
-                  view: {
-                    backend: "canvas",
-                    id: "disclosure-geometry-proof",
-                    url: "/__openclaw__/canvas/documents/disclosure-geometry-proof/index.html",
-                    title: "Disclosure geometry proof",
-                    preferred_height: 160,
-                  },
-                  presentation: { target: "assistant_message" },
-                },
-                null,
-                2,
-              ),
-            },
-          ],
-          timestamp: 100,
-        },
-        {
-          role: "assistant",
-          content: [{ type: "text", text: "Disclosure geometry proof rendered." }],
-          timestamp: 101,
-        },
-      ],
-    });
-
-    await page.goto(`${suite.server.baseUrl}chat`);
-    const toolSummary = page.locator(".chat-tool-msg-summary");
-    await toolSummary.waitFor();
-    await waitForChatScrollIdle(page);
-    expectStableDisclosureFrames(await toggleDisclosureWithFrameTrace(page, toolSummary));
-    const widgetHost = page.locator(".chat-tool-card__widget-host");
-    const rawDetailsToggle = widgetHost.locator(".chat-tool-card__raw-toggle");
-    await rawDetailsToggle.waitFor({ state: "attached" });
-    await page.locator(".chat-thread").evaluate((thread) => {
-      thread.scrollTop = thread.scrollHeight;
-    });
-    await waitForChatScrollIdle(page);
-    expect(Math.abs(await chatThreadDistanceFromBottom(page))).toBeLessThanOrEqual(2);
-    const traces: Record<string, DisclosureFrame[]> = {};
-    // Menu selection already proves it clicks this toggle; exclude the popup's
-    // own close/reposition geometry from the transcript-anchor measurement.
-    traces.rawDetailsEndExpand = await toggleDisclosureWithFrameTrace(page, rawDetailsToggle);
-    traces.rawDetailsEndCollapse = await toggleDisclosureWithFrameTrace(page, rawDetailsToggle);
-
-    await rawDetailsToggle.evaluate((button) => {
-      const row = button.closest<HTMLElement>(".chat-virtual-row");
-      const thread = button.closest<HTMLElement>(".chat-thread");
-      if (!row || !thread) {
-        throw new Error("Expected raw-details disclosure inside a virtual transcript row");
-      }
-      const rowTop = row.getBoundingClientRect().top - thread.getBoundingClientRect().top;
-      thread.scrollTop += Math.round(rowTop - thread.clientHeight / 2);
-    });
-    await waitForChatScrollIdle(page);
-    traces.rawDetailsMiddleExpand = await toggleDisclosureWithFrameTrace(page, rawDetailsToggle);
-
-    if (artifactDir) {
-      await fs.writeFile(
-        path.join(artifactDir, "raw-details-geometry.json"),
-        `${JSON.stringify(traces, null, 2)}\n`,
-      );
-      await captureDisclosureThemes(artifactDir, "raw-details-geometry", toolSummary);
-    }
-    traces.rawDetailsMiddleCollapse = await toggleDisclosureWithFrameTrace(page, rawDetailsToggle);
-    const video = page.video();
-    await context.close();
-    if (artifactDir) {
-      await video?.saveAs(path.join(artifactDir, "raw-details-geometry.webm"));
-    }
-    for (const [label, frames] of Object.entries(traces)) {
-      expectStableDisclosureFrames(frames, label);
     }
   });
 

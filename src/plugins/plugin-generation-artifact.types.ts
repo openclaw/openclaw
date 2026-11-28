@@ -1,4 +1,7 @@
-import type { PluginSourceCustodyFork } from "./plugin-generation-source-lookup.js";
+import type {
+  PluginSourceCustodyFork,
+  PluginSourceCustodyTransfer,
+} from "./plugin-generation-source-lookup.js";
 import type { PluginSourceSnapshotFacts } from "./plugin-generation-source.types.js";
 import type { PluginModuleCapture } from "./plugin-package-metadata-capture.js";
 
@@ -9,14 +12,22 @@ export type PluginGenerationArtifact = {
   boundaryRoot: string;
   sourceAliases: Record<string, string>;
   sourceDigest: string;
+  executionAliases: ReadonlyMap<string, string>;
+  executionSources: ReadonlyMap<string, string>;
+  executionAlias: (filename: string) => string | undefined;
+  sourceText: (filename: string) => string | undefined;
   sourceSnapshotFacts?: PluginSourceSnapshotFacts;
   frozenSource?: true;
   assertFrozenModule?: (filename: string) => void;
+  sharedModule?: (importer: string, specifier: string) => string | undefined;
   linkHost: (hostRoot: string) => void;
   hasSource: (source: string) => boolean;
   resolve: (source: string, rejectHardlinks?: boolean) => string;
   captureRecoverySource: () => PluginSourceCustodyFork["source"];
+  /** Nonblocking copy through the same capture owner; custody and forks stay synchronous. */
+  captureRecoverySourceAsync?: () => Promise<PluginSourceCustodyFork["source"]>;
   retainSourceCustody: () => PluginSourceCustodyFork;
+  describeSourceCustody?: () => PluginSourceCustodyTransfer;
   sourceForCaptured: (file: string) => string | undefined;
   moduleFacts: (importer: string) => Readonly<PluginModuleCapture> | undefined;
   moduleRoot: (filename: string) => string | undefined;

@@ -10,6 +10,8 @@ import {
 import { PlatformMessageNotDispatchedError } from "openclaw/plugin-sdk/error-runtime";
 import { createDeferred } from "openclaw/plugin-sdk/extension-shared";
 import { renderPresentationForDelivery } from "openclaw/plugin-sdk/interactive-runtime";
+import { getAgentScopedMediaLocalRoots } from "openclaw/plugin-sdk/media-runtime";
+import { resolveOutboundMediaAccessForConfig } from "openclaw/plugin-sdk/outbound-media";
 import { getGlobalHookRunner } from "openclaw/plugin-sdk/plugin-runtime";
 import type { GetReplyOptions } from "openclaw/plugin-sdk/reply-runtime";
 import { normalizeOptionalLowercaseString } from "openclaw/plugin-sdk/string-coerce-runtime";
@@ -64,6 +66,8 @@ export function createMSTeamsReplyDispatcher(params: {
     cfg: params.cfg,
     resolveChannelLimitMb: () => msteamsCfg.mediaMaxMb,
   });
+  const mediaLocalRoots = getAgentScopedMediaLocalRoots(params.cfg, params.agentId);
+  const mediaAccess = resolveOutboundMediaAccessForConfig(params.cfg);
   const feedbackLoopEnabled = msteamsCfg.feedbackEnabled !== false;
   const conversationType = normalizeOptionalLowercaseString(
     params.conversationRef.conversation?.conversationType,
@@ -275,6 +279,8 @@ export function createMSTeamsReplyDispatcher(params: {
             tokenProvider: params.tokenProvider,
             sharePointSiteId: params.sharePointSiteId,
             mediaMaxBytes,
+            mediaAccess,
+            mediaLocalRoots,
             feedbackLoopEnabled,
             serviceUrlBoundary: resolveMSTeamsSdkCloudOptions(msteamsCfg),
           });
