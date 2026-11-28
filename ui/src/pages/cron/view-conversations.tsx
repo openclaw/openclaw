@@ -11,8 +11,6 @@ import { CronSelect, FieldRow, errorIdForField, inputIdForField } from "./view-f
 import type { CronPanelMode, CronProps } from "./view-types.ts";
 
 export function ConversationFields(props: CronProps & { mode: CronPanelMode }) {
-  const [search, setSearch] = createSignal("");
-  const [searchFocused, setSearchFocused] = createSignal(false);
   const form = () => props.form;
   const canContinue = createMemo(() => form().payloadKind === "agentTurn");
   // The Gateway captures the implicit delivery destination when the job is created.
@@ -29,6 +27,9 @@ export function ConversationFields(props: CronProps & { mode: CronPanelMode }) {
   );
   const sessions = createMemo(() => (props.connected ? props.sessions : undefined));
   const effectiveAgentId = createMemo(() => props.conversationAgentId);
+  const [filter, setFilter] = createSignal<{ agentId: string | undefined; query: string }>();
+  // A cleared search stays available for this agent while its full directory reloads.
+  const search = () => (filter()?.agentId === effectiveAgentId() ? filter()?.query : undefined);
   const includeGlobal = createMemo(() => props.agentsList?.scope === "global");
   const directoryRead = createDeferred(
     () => {
@@ -44,7 +45,7 @@ export function ConversationFields(props: CronProps & { mode: CronPanelMode }) {
           includeGlobal: includeGlobal(),
           includeDerivedTitles: true,
           rowMode: "compact",
-          search: search().trim(),
+          search: search()?.trim() ?? "",
           limit: SESSIONS_PAGE_DEFAULT_LIMIT,
         })
         .then(
@@ -129,20 +130,17 @@ export function ConversationFields(props: CronProps & { mode: CronPanelMode }) {
     t(choosesSource() ? "cron.form.recentChatSource" : "cron.form.reportTo");
   return (
     <>
-      <Show
-        when={directory()?.result?.hasMore || directory()?.failed || search() || searchFocused()}
-      >
-        <input
-          type="search"
-          class="settings-input"
-          aria-label={t("cron.form.searchConversations")}
-          placeholder={t("cron.form.searchConversations")}
-          value={search()}
-          onFocus={() => setSearchFocused(true)}
-          onBlur={() => setSearchFocused(false)}
-          onInput={(event) => setSearch(event.currentTarget.value)}
-        />
-      </Show>
+      <input
+        hidden={!directory()?.result?.hasMore && !directory()?.failed && search() === undefined}
+        type="search"
+        class="settings-input"
+        aria-label={t("cron.form.searchConversations")}
+        placeholder={t("cron.form.searchConversations")}
+        value={search() ?? ""}
+        onInput={(event) =>
+          setFilter({ agentId: effectiveAgentId(), query: event.currentTarget.value })
+        }
+      />
       <Show when={directory()?.failed}>
         <span role="status">{t("cron.form.conversationSearchFailed")}</span>
       </Show>
