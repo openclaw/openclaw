@@ -25,7 +25,7 @@ extension OpenClawChatComposer {
                     self.sendDraftIfEnabled(queueMode: mode)
                 }),
             stop: .init(
-                canStop: self.viewModel.pendingRunCount > 0,
+                canStop: self.viewModel.hasAbortableRun,
                 isAborting: self.viewModel.isAborting,
                 ink: Color(uiColor: OpenClawIOSBrand.danger),
                 action: { self.viewModel.abort() }),

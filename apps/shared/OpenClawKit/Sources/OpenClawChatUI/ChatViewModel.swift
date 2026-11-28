@@ -1065,12 +1065,12 @@ extension OpenClawChatViewModel {
     }
 
     private func performAbort() async {
-        guard !self.pendingRuns.isEmpty else { return }
+        let runIds = self.abortableRunIDs
+        guard !runIds.isEmpty else { return }
         guard !self.isAborting else { return }
         self.isAborting = true
         defer { self.isAborting = false }
 
-        let runIds = Array(pendingRuns)
         let sessionKey = self.sessionKey
         let transport = self.transport
         for runId in runIds {

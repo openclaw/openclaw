@@ -44,6 +44,12 @@ final class ChatComposerPrimaryRoleTests: XCTestCase {
         XCTAssertEqual(self.role(talk: false), .send)
     }
 
+    func testRunStartedByTalkShowsStopWithOrWithoutLiveTalk() {
+        // A consult run is advertised by the Gateway, not sent from this composer: Stop either way.
+        XCTAssertEqual(self.role(elsewhere: true), .stop)
+        XCTAssertEqual(self.role(elsewhere: true, talk: true), .stop)
+    }
+
     func testRunningReplyShowsStopUntilASendableDraftExists() {
         XCTAssertEqual(self.role(reply: true), .stop)
         XCTAssertEqual(self.role(draft: true, canSend: true, reply: true), .send)

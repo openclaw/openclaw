@@ -65,6 +65,18 @@ extension OpenClawChatViewModel {
             hasActiveSessionRunWithoutChatSnapshot || isSwitchingSessionBranch
     }
 
+    /// Runs Stop can cancel by ID: this client's own sends, plus runs the Gateway advertises for
+    /// this chat (a Talk consult starts its run outside the composer, so only the advertisement
+    /// names it). Own runs come first; order is stable within each group.
+    var abortableRunIDs: [String] {
+        var seen = Set<String>()
+        return (pendingRuns.sorted() + self.liveAdvertisedRunIDs).filter { seen.insert($0).inserted }
+    }
+
+    var hasAbortableRun: Bool {
+        !self.abortableRunIDs.isEmpty
+    }
+
     var workingIndicatorIdentity: String {
         let selectedRunIDs = self.liveUsageRunID.map { Set([$0]) } ?? []
         var inputs = pendingLocalUserEchoMessageIDsByRunID

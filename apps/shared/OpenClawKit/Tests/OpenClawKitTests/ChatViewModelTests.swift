@@ -14427,6 +14427,30 @@ struct ChatViewModelTests {
         #expect(divider.metric == "saved 12k tokens")
     }
 
+    @Test func `stop cancels a run started outside the composer`() async throws {
+        let sessionId = "sess-main"
+        let history = historyPayload(sessionId: sessionId)
+        let (transport, vm) = await makeViewModel(historyResponses: [history, history])
+        try await loadAndWaitBootstrap(vm: vm, sessionId: sessionId)
+
+        // A Talk consult starts its run outside this composer: only the Gateway advertises it.
+        await MainActor.run { vm.updateActiveSessionRunIDs(["talk-consult-run"]) }
+        #expect(await MainActor.run { vm.pendingRunCount == 0 })
+        // The consult is mid tool call, the state the phone greyed Stop in.
+        await MainActor.run {
+            vm.turnToolCallsById["consult-tool"] = OpenClawChatPendingToolCall(
+                toolCallId: "consult-tool", name: "exec", args: nil, startedAt: 1, isError: nil)
+        }
+        #expect(await MainActor.run { vm.hasAbortableRun })
+
+        await MainActor.run { vm.abort() }
+        await transport.waitForState { $0.abortedRunIds.count >= 1 }
+        #expect(await transport.abortedRunIds() == ["talk-consult-run"])
+
+        await MainActor.run { vm.updateActiveSessionRunIDs([]) }
+        #expect(await MainActor.run { !vm.hasAbortableRun })
+    }
+
     @Test func `abort requests do not clear pending until aborted event`() async throws {
         let sessionId = "sess-main"
         let history = historyPayload(sessionId: sessionId)

@@ -177,19 +177,25 @@ extension OpenClawChatComposer {
         !hasDraftToSend && !hasBlockingRunActivity && !isLocalVoiceCaptureActive
     }
 
-    /// Keep the active Talk control reachable beside Stop or Send so users can end
-    /// Talk without canceling an accepted run or clearing a draft.
+    /// Keep the Talk control reachable beside Stop or Send. While Talk is live it ends the call
+    /// without canceling an accepted run or clearing a draft. While a run continues after End
+    /// Talk it starts Talk again in the same chat; Stop alone owns the run. Local capture
+    /// still wins the microphone, and a typed draft keeps Send as the only neighbour.
     nonisolated static func showsSeparateActiveTalkControl(
         isTalkEnabled: Bool,
         hasDraftToSend: Bool,
         hasBlockingRunActivity: Bool,
         isLocalVoiceCaptureActive: Bool) -> Bool
     {
-        isTalkEnabled &&
-            !self.showsCompactTalkControl(
-                hasDraftToSend: hasDraftToSend,
-                hasBlockingRunActivity: hasBlockingRunActivity,
-                isLocalVoiceCaptureActive: isLocalVoiceCaptureActive)
+        if self.showsCompactTalkControl(
+            hasDraftToSend: hasDraftToSend,
+            hasBlockingRunActivity: hasBlockingRunActivity,
+            isLocalVoiceCaptureActive: isLocalVoiceCaptureActive)
+        {
+            return false
+        }
+        if isTalkEnabled { return true }
+        return hasBlockingRunActivity && !hasDraftToSend && !isLocalVoiceCaptureActive
     }
 }
 

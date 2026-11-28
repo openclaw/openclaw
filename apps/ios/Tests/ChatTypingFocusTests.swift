@@ -138,7 +138,7 @@ final class ChatTypingFocusTests: XCTestCase {
         defer { model.detachTransport() }
         let cases: [(runActive: Bool, draft: TalkDraft, activeCount: Int, inactiveCount: Int)] = [
             (false, .empty, 1, 1),
-            (true, .empty, 2, 1),
+            (true, .empty, 2, 2),
             (false, .text, 2, 1),
             (true, .text, 2, 1),
             (false, .attachment, 2, 1),
@@ -173,9 +173,12 @@ final class ChatTypingFocusTests: XCTestCase {
                 let context = "Talk=\(talkActive), run=\(scenario.runActive), draft=\(scenario.draft)"
                 // Exercise the production SwiftUI builders, not their new presentation properties.
                 // With no optional local-capture controls, the extra button must be End Talk. With nothing
-                // to stop or send, End Talk is the one primary button itself; otherwise the phone's
+                // to stop or send, Talk is the one primary button itself; otherwise the phone's
                 // one primary button (Talk, Send or Stop) stays beside it.
-                let separateEndTalk = talkActive && (scenario.runActive || scenario.draft != .empty)
+                let separateEndTalk = talkActive
+                    ? (scenario.runActive || scenario.draft != .empty)
+                    // A run that outlives End Talk keeps Talk startable beside Stop.
+                    : (scenario.runActive && scenario.draft == .empty)
                 XCTAssertEqual(
                     try Self.renderedControlCount(composer.cleanCaptureAndPrimaryControls.body),
                     expected,
