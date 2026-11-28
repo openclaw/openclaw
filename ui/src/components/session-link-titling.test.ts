@@ -2,7 +2,8 @@
 
 import { createSignal } from "solid-js";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
-import type { GatewayBrowserClient } from "../api/gateway.ts";
+import type { SessionsResolveParams } from "../../../packages/gateway-protocol/src/index.js";
+import { GatewayRequestError, type GatewayBrowserClient } from "../api/gateway.ts";
 import type { GatewaySessionRow } from "../api/types.ts";
 import type { ApplicationContext } from "../app/context.ts";
 import { MarkdownDomReconciler } from "../lib/markdown-dom-reconciler.ts";
@@ -21,33 +22,22 @@ const DASHBOARD_KEY = "agent:main:dashboard:d0effac9-3211-4641-b993-10f619f124e6
 function row(displayName?: string, key = SESSION_KEY): GatewaySessionRow {
   return { key, kind: "direct", displayName, updatedAt: Date.now() };
 }
-function registerTargets(titler: SessionLinkTitler, host: HTMLElement) {
-  for (const target of host.querySelectorAll<HTMLElement>(SESSION_TITLE_TARGET_SELECTOR)) {
-    titler.register(
-      target,
-      target.querySelector<HTMLElement>(".session-label") ?? document.createElement("span"),
-    );
-  }
-}
-
-function decorate(titler: SessionLinkTitler, element: HTMLElement) {
-  titler.register(
+function registerTarget(titler: SessionLinkTitler, element: HTMLElement) {
+  return titler.register(
     element,
     element.querySelector<HTMLElement>(".session-label") ?? document.createElement("span"),
   );
+}
+function registerTargets(titler: SessionLinkTitler, host: HTMLElement) {
+  return [...host.querySelectorAll<HTMLElement>(SESSION_TITLE_TARGET_SELECTOR)].map((target) =>
+    registerTarget(titler, target),
+  );
+}
+function decorate(titler: SessionLinkTitler, element: HTMLElement) {
+  registerTarget(titler, element);
   return titler.decorate(element);
 }
 
-function renderMarkdown(
-  titler: SessionLinkTitler,
-  host: HTMLElement,
-  value: string,
-  fileLinks = false,
-) {
-  host.innerHTML = toSanitizedMarkdownHtml(value, { sessionLinks: true, fileLinks });
-  registerTargets(titler, host);
-  return () => host.querySelector<HTMLAnchorElement>("a.markdown-session-link")!;
-}
 function observe(host: HTMLElement) {
   const observer = new MutationObserver(() => undefined);
   observer.observe(host, { attributes: true, childList: true, subtree: true });
@@ -59,9 +49,9 @@ function expectTitle(element: Element, title: string) {
   expect(element.querySelector(".session-label")?.textContent).toBe(title);
 }
 function expectAttributes(element: Element, attributes: Record<string, string | null>) {
-  expect(
-    Object.fromEntries(Object.keys(attributes).map((key) => [key, element.getAttribute(key)])),
-  ).toEqual(attributes);
+  for (const [name, value] of Object.entries(attributes)) {
+    expect(element.getAttribute(name), name).toBe(value);
+  }
 }
 async function refresh(titler: SessionLinkTitler) {
   titler.refresh();
@@ -71,13 +61,9 @@ async function refresh(titler: SessionLinkTitler) {
 function sessionContext(rows: GatewaySessionRow[] = [], origin?: string): ApplicationContext {
   return {
     basePath: "",
-    ...(origin
-      ? {
-          runtimeConfig: {
-            state: { configSnapshot: { runtimeConfig: { gateway: { publicOrigin: origin } } } },
-          },
-        }
-      : {}),
+    runtimeConfig: origin
+      ? { state: { configSnapshot: { runtimeConfig: { gateway: { publicOrigin: origin } } } } }
+      : undefined,
     sessions: {
       state: { result: { count: rows.length, sessions: rows } },
       subscribe: () => () => undefined,
@@ -103,22 +89,19 @@ function sessionAnchor(sessionKey = SESSION_KEY): HTMLAnchorElement {
   return anchor;
 }
 
-function previewResponse(overrides: Record<string, unknown> = {}) {
-  return {
-    status: "ok",
-    sessionKey: SESSION_KEY,
-    title: "Research plan",
-    agentId: "main",
-    ...overrides,
-  };
-}
+const previewResponse = (overrides: Record<string, unknown> = {}) => ({
+  status: "ok",
+  sessionKey: SESSION_KEY,
+  title: "Research plan",
+  agentId: "main",
+  ...overrides,
+});
 
 function createTitler(rows: GatewaySessionRow[] = [], request = vi.fn()) {
-  const host = document.createElement("div");
   const titler = new SessionLinkTitler();
   titler.client = { request } as unknown as GatewayBrowserClient;
   titler.context = sessionContext(rows);
-  return { host, request, titler };
+  return { host: document.createElement("div"), request, titler };
 }
 
 describe("SessionLinkTitler", () => {
@@ -144,36 +127,6 @@ describe("SessionLinkTitler", () => {
     document.body.replaceChildren();
     vi.useRealTimers();
     vi.restoreAllMocks();
-  });
-
-  it("caches titles and retains producer labels", async () => {
-    const request = vi.fn().mockResolvedValue(previewResponse());
-    const { titler } = createTitler([], request);
-    const first = sessionAnchor();
-    const second = sessionAnchor();
-    const label = document.createElement("span");
-    label.className = "session-label";
-    label.textContent = SESSION_KEY;
-    first.replaceChildren(label);
-
-    await decorate(titler, first);
-    await decorate(titler, second);
-
-    expectTitle(first, "Research plan");
-    expectTitle(second, "Research plan");
-    await decorate(titler, first);
-    expectTitle(first, "Research plan");
-    expect(first.getAttribute("href")).toBe("/chat/main/research");
-    expect(request).toHaveBeenCalledExactlyOnceWith("controlUi.sessionPreview", {
-      sessionKey: SESSION_KEY,
-    });
-    expect(first.firstElementChild).toBe(label);
-    label.textContent = "Updated by the producer";
-    expect(first.textContent).toBe("Updated by the producer");
-    titler.context = sessionContext([row("Replacement Gateway")]);
-    await decorate(titler, first);
-    expect(first.firstElementChild).toBe(label);
-    expect(first.textContent).toBe("Updated by the producer");
   });
 
   it.each(["a", "span"])("reconciles %s roster titles without replaying equal labels", (tag) => {
@@ -235,9 +188,8 @@ describe("SessionLinkTitler", () => {
     }
     request.mockResolvedValue(previewResponse({ title: "Current Gateway" }));
     if (change === "replacement") {
-      const replacement = createTitler([], request);
-      titler.client = replacement.titler.client;
-      titler.context = replacement.titler.context;
+      titler.client = { request } as unknown as GatewayBrowserClient;
+      titler.context = sessionContext();
     } else if (change === "reconnect") {
       Object.assign(titler.context!.gateway, { connectionRevision: 1 });
     } else if (change === "profile") {
@@ -257,25 +209,6 @@ describe("SessionLinkTitler", () => {
     expect(request).toHaveBeenCalledTimes(2);
   });
 
-  it("expires successful and failed cache entries at their separate TTLs", async () => {
-    const request = vi
-      .fn()
-      .mockResolvedValueOnce(previewResponse({ title: undefined }))
-      .mockResolvedValueOnce({ status: "unavailable" })
-      .mockResolvedValueOnce(previewResponse());
-    const { titler } = createTitler([], request);
-
-    await decorate(titler, sessionAnchor());
-    await vi.advanceTimersByTimeAsync(5 * 60_000);
-    await decorate(titler, sessionAnchor());
-    await decorate(titler, sessionAnchor());
-    expect(request).toHaveBeenCalledTimes(2);
-
-    await vi.advanceTimersByTimeAsync(30_000);
-    await decorate(titler, sessionAnchor());
-    expect(request).toHaveBeenCalledTimes(3);
-  });
-
   it.each([false, true])("keeps unresolved URLs navigable (retired title: %s)", async (retired) => {
     const key = DASHBOARD_KEY;
     const request = vi.fn().mockResolvedValue({
@@ -287,7 +220,9 @@ describe("SessionLinkTitler", () => {
     });
     const { host, titler } = createTitler(retired ? [row("Previous Gateway", key)] : [], request);
     const href = "/chat/main/d0effac9?view=details#latest";
-    const link = renderMarkdown(titler, host, `[Plan](${href})`)();
+    host.innerHTML = toSanitizedMarkdownHtml(`[Plan](${href})`, { sessionLinks: true });
+    registerTargets(titler, host);
+    const link = host.querySelector<HTMLAnchorElement>("a.markdown-session-link")!;
     if (retired) {
       await decorate(titler, link);
       expect(link.textContent).toBe("Previous Gateway");
@@ -307,51 +242,121 @@ describe("SessionLinkTitler", () => {
     });
   });
 
-  it.each([true, false])(
-    "titles unloaded URLs without advertised resolution (full key: %s)",
-    async (fullKey) => {
-      const displayName = fullKey ? "Peter's plan" : undefined;
-      const source = fullKey
-        ? "`https://chat.example/chat/main/dashboard/d0effac9-3211-4641-b993-10f619f124e6`"
-        : "[Plan](/chat/main/d0effac9?view=details)";
-      const params = fullKey
-        ? {
-            reference: { key: DASHBOARD_KEY },
-            agentId: "main",
-            includeGlobal: true,
-            includeUnknown: true,
-            allowMissing: true,
-          }
-        : { shortId: "d0effac9", agentId: "main", allowMissing: true };
-      const key = DASHBOARD_KEY;
-      const request = vi.fn(async (method: string) =>
-        method === "sessions.resolve"
-          ? { ok: true, key, agentId: "main", ...(displayName ? { displayName } : {}) }
-          : previewResponse({ sessionKey: key, title: undefined, derivedTitle: "Derived plan" }),
-      );
+  it.each([
+    { kind: "preview", count: 1, title: SESSION_KEY },
+    { kind: "short", count: 1, title: "Derived plan" },
+    { kind: "full", count: 100, title: "Peter's plan" },
+    { kind: "full", count: 101, title: "Peter's plan" },
+  ] as const)(
+    "shares $count active $kind references through busy expiry",
+    async ({ kind, count, title }) => {
+      const pending = Promise.withResolvers<unknown>();
+      const request = vi.fn((_method: string, _params: unknown) => pending.promise);
       const { host, titler } = createTitler([], request);
       titler.context = sessionContext([], "https://chat.example");
+      const keys = Array.from({ length: count }, (_, index) =>
+        DASHBOARD_KEY.replace("3211", index.toString(16).padStart(4, "0")),
+      );
+      const urls = keys.map(
+        (key) => `https://chat.example/chat/main/dashboard/${key.split(":").at(-1)}`,
+      );
+      const source = {
+        preview: SESSION_KEY,
+        short: "[Plan](/chat/main/d0effac9?view=details)",
+        full:
+          urls.map((url) => `\`${url}\``).join(" ") + ` [Alias](${urls[0]}?view=details#latest)`,
+      }[kind];
+      host.innerHTML = toSanitizedMarkdownHtml(source, { sessionLinks: true });
+      const releases = registerTargets(titler, host);
       titler.context.gateway.snapshot.phase = "connecting";
-      const getLink = renderMarkdown(titler, host, source);
       await refresh(titler);
       expect(request).not.toHaveBeenCalled();
       titler.context.gateway.snapshot.phase = "connected";
       await refresh(titler);
-      const link = getLink();
-
-      expect(link).toMatchObject({
-        textContent: displayName ?? "Derived plan",
-        dataset: { sessionKey: key },
+      await refresh(titler);
+      expect.soft(request, "pending requests coalesce").toHaveBeenCalledTimes(count);
+      pending.reject(
+        new GatewayRequestError({ code: "UNAVAILABLE", message: "busy", retryable: true }),
+      );
+      await refresh(titler);
+      expect.soft(request, "busy failure stays cached").toHaveBeenCalledTimes(count);
+      request.mockImplementation(async (method, params) => {
+        const { reference, sessionKey } = params as SessionsResolveParams & { sessionKey?: string };
+        const key = reference?.key ?? sessionKey ?? DASHBOARD_KEY;
+        return method === "sessions.resolve"
+          ? {
+              ok: true,
+              key,
+              agentId: "main",
+              displayName: kind === "full" ? "Peter's plan" : undefined,
+            }
+          : previewResponse({
+              sessionKey: key,
+              title: undefined,
+              derivedTitle: kind === "short" ? "Derived plan" : undefined,
+            });
       });
-      expect(link.hasAttribute("title")).toBe(false);
-      expect(request).toHaveBeenNthCalledWith(1, "sessions.resolve", params);
-      expect(request).toHaveBeenCalledTimes(displayName ? 1 : 2);
-
+      await vi.advanceTimersByTimeAsync(29_999);
+      await refresh(titler);
+      expect.soft(request, "redraw before retry TTL").toHaveBeenCalledTimes(count);
+      await vi.advanceTimersByTimeAsync(1);
+      await refresh(titler);
+      const calls = count * 2 + (kind === "short" ? 1 : 0);
+      expect.soft(request, "recovery after retry TTL").toHaveBeenCalledTimes(calls);
+      const links = [...host.querySelectorAll<HTMLAnchorElement>("a.markdown-session-link")];
+      const first = links[0]!;
+      expect(links.map((link) => link.textContent)).toEqual(
+        Array(count + (kind === "full" ? 1 : 0)).fill(title),
+      );
+      if (kind === "full") {
+        expect(request).toHaveBeenCalledWith("sessions.resolve", {
+          reference: { key: keys[0] },
+          agentId: "main",
+          includeGlobal: true,
+          includeUnknown: true,
+          allowMissing: true,
+        });
+      }
+      expect(first.dataset.sessionKey).toBe(
+        kind === "preview" ? SESSION_KEY : kind === "short" ? DASHBOARD_KEY : keys[0],
+      );
+      expect(first.hasAttribute("title")).toBe(false);
       const observer = observe(host);
       await refresh(titler);
       expect(observer.takeRecords()).toEqual([]);
       observer.disconnect();
-      expect(request).toHaveBeenCalledTimes(displayName ? 1 : 2);
+      expect.soft(request).toHaveBeenCalledTimes(calls);
+      if (kind === "preview") {
+        const label = first.appendChild(document.createElement("span"));
+        titler.register(first, label);
+        request.mockResolvedValue({ status: "unavailable" });
+        await vi.advanceTimersByTimeAsync(5 * 60_000);
+        await refresh(titler);
+        await refresh(titler);
+        expect(request).toHaveBeenCalledTimes(calls + 1);
+        request.mockResolvedValue(previewResponse());
+        await vi.advanceTimersByTimeAsync(30_000);
+        await refresh(titler);
+        const second = sessionAnchor();
+        await decorate(titler, second);
+        expectTitle(first, "Research plan");
+        expectTitle(second, "Research plan");
+        expect(request).toHaveBeenCalledTimes(calls + 2);
+        expect(first.getAttribute("href")).toBe("/chat/main/research");
+        expect(first.firstElementChild).toBe(label);
+        label.textContent = "Updated by the producer";
+        titler.context = sessionContext([row("Replacement Gateway")]);
+        await decorate(titler, first);
+        expect(first.firstElementChild).toBe(label);
+        expect(first.textContent).toBe("Updated by the producer");
+      }
+      if (count > 100) {
+        releases.forEach((release) => release());
+        await decorate(titler, links.at(-2)!);
+        expect(request).toHaveBeenCalledTimes(calls);
+        await decorate(titler, first);
+        expect(request).toHaveBeenCalledTimes(calls + 1);
+      }
     },
   );
 
@@ -365,8 +370,7 @@ describe("SessionLinkTitler", () => {
     ["public inline code", "`https://chat.example/chat/main/d0effac9?view=details#latest`"],
   ])("preserves hover identity and route intent for %s", async (_kind, markdown) => {
     const key = DASHBOARD_KEY;
-    const session = row("Shared contract", key);
-    const rows: GatewaySessionRow[] = [session];
+    const rows: GatewaySessionRow[] = [row("Shared contract", key)];
     const { host, titler, request } = createTitler(rows);
     titler.context = sessionContext(rows, "https://CHAT.example:443/");
     host.innerHTML = toSanitizedMarkdownHtml(markdown, { sessionLinks: true, fileLinks: true });
@@ -441,14 +445,9 @@ describe("producer-owned session titles", () => {
     onTestFinished,
   }) => {
     const preview = Promise.withResolvers<ReturnType<typeof previewResponse>>();
-    const request = vi.fn((method: string) => {
+    const request = vi.fn(async (method: string) => {
       if (method === "sessions.resolve") {
-        return Promise.resolve({
-          ok: true,
-          key: DASHBOARD_KEY,
-          agentId: "main",
-          displayName: "Shared contract",
-        });
+        return { ok: true, key: DASHBOARD_KEY, agentId: "main", displayName: "Shared contract" };
       }
       if (method === "controlUi.sessionPreview") {
         return preview.promise;
