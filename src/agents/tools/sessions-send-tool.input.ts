@@ -1,18 +1,55 @@
+import { createSessionVisibilityRowChecker } from "../../plugin-sdk/session-visibility.js";
 import { normalizeAgentIdStrict } from "../../routing/session-key.js";
+import { describeAgentIdForName } from "../identity.js";
 import { ToolInputError } from "../tool-input-error.js";
 import { readNonNegativeIntegerParam, readToolStringParam } from "./common.js";
+import type { resolveSessionToolContext } from "./sessions-helpers.js";
+import { resolveConfiguredAgentMainSessionKey } from "./sessions-send-tool.delivery.js";
 
-export function readSessionsSendTarget(params: Record<string, unknown>) {
+/** Who is sending; an unknown-agent hint only names agents this requester may send to. */
+type SendTargetScope = Pick<
+  ReturnType<typeof resolveSessionToolContext>,
+  | "cfg"
+  | "mainKey"
+  | "effectiveRequesterKey"
+  | "mainSessionKey"
+  | "restrictToSpawned"
+  | "sessionVisibility"
+  | "a2aPolicy"
+> & { requesterAgentId: string };
+
+export function formatUnknownAgentError(agentId: string | undefined, scope?: SendTargetScope) {
+  const error = `Agent "${agentId}" not found.`;
+  const nextStep = "Run openclaw agents list to see configured agents.";
+  if (!agentId || !scope || scope.restrictToSpawned) {
+    return `${error} ${nextStep}`;
+  }
+  const { cfg, mainKey, requesterAgentId } = scope;
+  // The send-access owner decides, so the hint never names a target the retry would be denied.
+  const sendAccess = createSessionVisibilityRowChecker({
+    action: "send",
+    requesterAgentId,
+    requesterSessionKey: scope.effectiveRequesterKey,
+    mainSessionKey: scope.mainSessionKey,
+    visibility: scope.sessionVisibility,
+    a2aPolicy: scope.a2aPolicy,
+  });
+  const isTarget = (id: string) => {
+    const key = resolveConfiguredAgentMainSessionKey({ cfg, agentId: id, mainKey });
+    return key !== undefined && sendAccess.check({ key, agentId: id }).allowed;
+  };
+  const hint = describeAgentIdForName(cfg, agentId, isTarget);
+  return `${error}${hint ? ` ${hint}` : ""} ${nextStep}`;
+}
+
+export function readSessionsSendTarget(params: Record<string, unknown>, scope?: SendTargetScope) {
   const sessionKeyParam = readToolStringParam(params, "sessionKey");
   const labelParam = readToolStringParam(params, "label");
   const labelAgentIdInput = readToolStringParam(params, "agentId");
   const normalizedLabelAgentId =
     labelAgentIdInput === undefined ? null : normalizeAgentIdStrict(labelAgentIdInput);
   if (normalizedLabelAgentId && !normalizedLabelAgentId.ok) {
-    return {
-      ok: false as const,
-      error: `Agent "${labelAgentIdInput}" not found. Run openclaw agents list to see configured agents.`,
-    };
+    return { ok: false as const, error: formatUnknownAgentError(labelAgentIdInput, scope) };
   }
   return {
     ok: true as const,
