@@ -66,7 +66,7 @@ type FallbackRun = {
 };
 
 async function runSessionFallback(
-  params: { primary: "live" | "removed" | "replaced"; backupFails?: boolean },
+  params: { primary: "live" | "removed" | "replaced"; backup?: "answers" | "fails" | "none" },
   check: (run: FallbackRun) => void | Promise<void>,
 ) {
   await withOpenClawTestState(
@@ -96,7 +96,7 @@ async function runSessionFallback(
       const backup = await listenLoopbackProvider((req, res) => {
         req.resume();
         hits.backup.push(String(req.headers.authorization));
-        if (params.backupFails) {
+        if (params.backup === "fails") {
           res.writeHead(429, { "content-type": "application/json" });
           res.end(QUOTA_EXHAUSTED_BODY);
           return;
@@ -119,7 +119,10 @@ async function runSessionFallback(
           agents: {
             entries: { main: { agentDir: state.agentDir(), workspace: state.workspaceDir } },
             defaults: {
-              model: { primary: "openai/gpt-4.1", fallbacks: ["backup/gpt-4.1"] },
+              model: {
+                primary: "openai/gpt-4.1",
+                fallbacks: params.backup === "none" ? [] : ["backup/gpt-4.1"],
+              },
               models: {
                 "openai/gpt-4.1": loopbackModelRuntime,
                 "backup/gpt-4.1": loopbackModelRuntime,
@@ -221,39 +224,44 @@ it.each(["live", "removed"] as const)(
   },
 );
 
-it.each(["removed", "replaced"] as const)(
-  "pauses a recurring job once when its recorded account was %s and no fallback answers",
-  async (primary) => {
-    await runSessionFallback({ primary, backupFails: true }, ({ hits, job, result }) => {
-      expect(hits.primary).toEqual([]);
-      expect(result.status).toBe("error");
-      const startedAt = Date.now();
-      const state = createCronRegressionState({
-        storePath: "/tmp/cron-session-fallback.json",
-        nowMs: () => startedAt,
-        runIsolatedAgentJob: createDefaultIsolatedRunner(),
-      });
-      const deferredNotifications: DeferredCronNotifications = [];
-      const apply = () =>
-        applyJobResult(
-          state,
-          job,
-          {
-            ...result,
-            startedAt,
-            endedAt: startedAt + 10,
-            errorReason: resolveCronRunErrorReason(
-              result.error,
-              result.provider,
-              result.errorClassification,
-            ),
-          },
-          { deferredNotifications },
-        );
-      apply();
+function applyRun({ job, result }: FallbackRun) {
+  const startedAt = Date.now();
+  const state = createCronRegressionState({
+    storePath: "/tmp/cron-session-fallback.json",
+    nowMs: () => startedAt,
+    runIsolatedAgentJob: createDefaultIsolatedRunner(),
+  });
+  const deferredNotifications: DeferredCronNotifications = [];
+  const apply = () =>
+    applyJobResult(
+      state,
+      job,
+      {
+        ...result,
+        startedAt,
+        endedAt: startedAt + 10,
+        errorReason: resolveCronRunErrorReason(
+          result.error,
+          result.provider,
+          result.errorClassification,
+        ),
+      },
+      { deferredNotifications },
+    );
+  apply();
+  return { apply, deferredNotifications, startedAt };
+}
 
-      expect(job.enabled).toBe(false);
-      expect(job.state.nextRunAtMs).toBeUndefined();
+it.each(["removed", "replaced"] as const)(
+  "pauses a recurring job once when its recorded account was %s and nothing else can run it",
+  async (primary) => {
+    await runSessionFallback({ primary, backup: "none" }, (run) => {
+      expect(run.hits.primary).toEqual([]);
+      expect(run.result.status).toBe("error");
+      const { apply, deferredNotifications } = applyRun(run);
+
+      expect(run.job.enabled).toBe(false);
+      expect(run.job.state.nextRunAtMs).toBeUndefined();
       expect(deferredNotifications).toEqual([
         expect.objectContaining({ kind: "auto-disabled", text: expect.any(String) }),
       ]);
@@ -270,3 +278,14 @@ it.each(["removed", "replaced"] as const)(
     });
   },
 );
+
+it("keeps retrying when a fallback on another provider failed for a reason that can pass", async () => {
+  await runSessionFallback({ primary: "removed", backup: "fails" }, (run) => {
+    expect(run.hits.backup.length).toBeGreaterThan(0);
+    expect(run.result.status).toBe("error");
+    const { deferredNotifications, startedAt } = applyRun(run);
+    expect(run.job.enabled).toBe(true);
+    expect(run.job.state.nextRunAtMs).toBeGreaterThan(startedAt);
+    expect(deferredNotifications.filter((item) => item.kind === "auto-disabled")).toEqual([]);
+  });
+});

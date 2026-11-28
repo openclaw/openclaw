@@ -260,11 +260,13 @@ export function applyJobResult(
       // A failed check has not consumed the paced occurrence; its backoff retry still owns it.
       job.state.pacedNextRunAtMs = job.state.nextRunAtMs;
     }
-    // A removed, signed-out or replaced account can never run this job as written; like a gone parent,
-    // the job pauses once with its own notice, which replaces the failure alert. A fallback
-    // that finishes the run keeps it ok, so the job keeps running.
+    // A removed, signed-out or replaced account can never run this job as written; like a gone
+    // parent, the job pauses once with its own notice, which replaces the failure alert. A forced
+    // run that preserves a one-shot occurrence leaves that occurrence and its enablement alone.
     const retiredAccount =
-      runFailed && result.failureNotificationDetail?.kind === "inference-account-retired";
+      runFailed &&
+      !preserveOneShotSchedule &&
+      result.failureNotificationDetail?.kind === "inference-account-retired";
     if (!result.parentUnavailable && !retiredAccount) {
       finalizeCronFailureNotifications(state, {
         job,
@@ -326,8 +328,10 @@ export function applyJobResult(
       result.status === "error" &&
       result.errorClassification?.kind === "permanent" &&
       (isPluginCommandCronJob(job) || job.operatorSource) &&
-      // Missing account configuration does not revoke the job creator's authority.
-      result.failureNotificationDetail?.kind !== "inference-account-unrecorded"
+      // Missing account configuration does not revoke the job creator's authority, and a gone
+      // account pauses through its own notice below.
+      result.failureNotificationDetail?.kind !== "inference-account-unrecorded" &&
+      result.failureNotificationDetail?.kind !== "inference-account-retired"
     ) {
       // A permanent error here means a retired plugin or a refused operator source:
       // the job can never run again as written.
