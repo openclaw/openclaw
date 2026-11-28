@@ -1,7 +1,11 @@
 import { isTerminalSessionStatus } from "../../../config/sessions/types.js";
 import { persistGatewaySessionLifecycleEvent } from "../../../gateway/session-lifecycle-state.js";
 import { isAgentEventLifecycleGenerationCurrent } from "../../../infra/agent-events.js";
+import { retryAsync } from "../../../infra/retry.js";
+import { isStateDatabaseAdmissionClosedError } from "../../../infra/sqlite-error-diagnostics.js";
+import { sanitizeAgentRunTerminalReply } from "../../agent-run-terminal-reply.js";
 import { loadSessionEntryByKey } from "../announce/subagent-announce-delivery.runtime.js";
+import { readSubagentRunFinalAnswerEvidence } from "../announce/subagent-announce-output.js";
 import { resolveSubagentChildAuthority } from "./subagent-child-owner-match.js";
 import {
   SUBAGENT_ENDED_REASON_COMPLETE,
@@ -151,10 +155,9 @@ export async function settleRestartInterruptedSubagentRun(params: {
   entry: SubagentRunRecord;
   readScope?: Pick<SweepReadScope, "completionCurrent">;
   complete: CompleteRun;
-  now: number;
   processStartedAt?: number;
 }): Promise<boolean> {
-  const { runId, entry, readScope, complete, now } = params;
+  const { runId, entry, readScope, complete } = params;
   const processStartedAt = params.processStartedAt ?? performance.timeOrigin;
   if (
     hasSubagentRunEnded(entry) ||
@@ -171,21 +174,40 @@ export async function settleRestartInterruptedSubagentRun(params: {
   ) {
     return false;
   }
-  subagentRegistryLog.warn("Settling subagent interrupted by Gateway restart", {
-    runId,
-    requesterSessionKey: entry.requesterSessionKey,
-    createdAt: entry.createdAt,
-  });
+  let answer;
+  if (entry.expectsCompletionMessage === true && !entry.completion?.terminalReply) {
+    try {
+      answer = await retryAsync(() => readSubagentRunFinalAnswerEvidence(entry), { attempts: 2 });
+    } catch (error) {
+      if (isStateDatabaseAdmissionClosedError(error)) {
+        return false;
+      }
+      subagentRegistryLog.warn(
+        "Could not read the saved subagent reply during restart settlement",
+        { runId, error },
+      );
+    }
+  }
+  const saved = answer?.completedAt !== undefined ? answer : undefined;
+  if (!saved) {
+    subagentRegistryLog.warn("Settling subagent interrupted by Gateway restart", {
+      runId,
+      requesterSessionKey: entry.requesterSessionKey,
+      createdAt: entry.createdAt,
+    });
+  }
   await complete(
     {
       runId,
       expectedEntry: entry,
       recoveryCurrent: readScope?.completionCurrent,
-      endedAt: now,
-      outcome: { status: "error", error: SUBAGENT_RESTART_INTERRUPTED_ERROR },
-      // The old Gateway cannot publish another reply; the completion owner keeps any saved one.
-      terminalReply: { disposition: "empty" },
-      reason: SUBAGENT_ENDED_REASON_ERROR,
+      endedAt: saved?.completedAt,
+      restartResult: saved ? "confirmed" : "unconfirmed",
+      outcome: saved
+        ? { status: "ok" }
+        : { status: "error", error: SUBAGENT_RESTART_INTERRUPTED_ERROR },
+      terminalReply: saved ? sanitizeAgentRunTerminalReply(saved.text) : { disposition: "empty" },
+      reason: saved ? SUBAGENT_ENDED_REASON_COMPLETE : SUBAGENT_ENDED_REASON_ERROR,
       sendFarewell: true,
       accountId: entry.requesterOrigin?.accountId,
       triggerCleanup: true,

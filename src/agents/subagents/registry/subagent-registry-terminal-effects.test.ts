@@ -1,20 +1,29 @@
-import { afterEach, beforeEach, expect, it, vi } from "vitest";
+import { afterEach, assert, beforeEach, expect, it, vi } from "vitest";
 import { withinTest } from "../../../../test/helpers/promise.js";
 import { captureRuntimeConfigAsyncReader } from "../../../config/config.js";
 import {
   clearRuntimeConfigSnapshot,
   setRuntimeConfigSnapshot,
 } from "../../../config/runtime-snapshot.js";
+import {
+  loadExactSessionEntry,
+  loadTranscriptEvents,
+  upsertSessionEntryCore,
+} from "../../../config/sessions/session-accessor.js";
 import { SqliteWorkerError } from "../../../infra/sqlite-worker-contract.js";
 import {
   getActiveGatewayRootWorkCount,
   resetGatewayWorkAdmission,
 } from "../../../process/gateway-work-admission.js";
 import { createDeferredCore } from "../../../shared/deferred.js";
+import { withOpenClawTestState } from "../../../test-utils/openclaw-test-state.js";
 import { retireSessionMcpRuntime } from "../../agent-bundle-mcp-tools.js";
 import { createEnteredGate } from "../../entered-gate.test-support.js";
+import { SessionManager } from "../../sessions/session-manager.js";
+import { makeAgentAssistantMessage } from "../../test-helpers/agent-message-fixtures.js";
 import {
   SUBAGENT_ENDED_REASON_COMPLETE,
+  SUBAGENT_ENDED_REASON_ERROR,
   SUBAGENT_ENDED_REASON_KILLED,
 } from "./subagent-lifecycle-events.js";
 import { persistSubagentSessionTiming } from "./subagent-registry-helpers.js";
@@ -30,6 +39,7 @@ import {
   restoreSubagentRunsFromDisk,
   SubagentRegistryMutationRejectedError,
 } from "./subagent-registry-persistence.js";
+import { loadSubagentRegistryFromSqlite } from "./subagent-registry-state.fixture.test-support.js";
 import { observeRootWork } from "./subagent-registry.browser-cleanup.test-support.js";
 import type { SubagentRunRecord } from "./subagent-registry.types.js";
 
@@ -73,6 +83,91 @@ function fixture(
       }),
   };
 }
+
+it("keeps an accepted cancellation when restart cannot establish a child end time", async () => {
+  const entry = createRunEntry({
+    endedAt: 4_000,
+    endedReason: SUBAGENT_ENDED_REASON_KILLED,
+    outcome: { status: "error", error: "agent run aborted" },
+    killReconciliation: { killedAt: 4_000, taskCancellationAccepted: true },
+    runTimeoutSeconds: 1,
+  });
+  const { read, complete } = fixture({ entry });
+  await complete({
+    endedAt: undefined,
+    restartResult: "unconfirmed",
+    reason: SUBAGENT_ENDED_REASON_ERROR,
+    outcome: { status: "error", error: "interrupted" },
+    terminalReply: { disposition: "empty" },
+    triggerCleanup: false,
+  });
+  expect(read().endedReason).toBe(SUBAGENT_ENDED_REASON_KILLED);
+  expect(read().killReconciliation?.taskCancellationAccepted).toBe(true);
+});
+
+it.each(["confirmed", "unconfirmed", "ordinary"] as const)(
+  "preserves a visible transcript only for restart cleanup (%s)",
+  (result) =>
+    withOpenClawTestState({ label: "restart-kept-transcript" }, async (state) => {
+      setRuntimeConfigSnapshot({});
+      const child = {
+        agentId: "main",
+        sessionKey: "agent:main:dashboard:child",
+        sessionId: "kept-child",
+        storePath: state.statePath("transcript.sqlite"),
+      };
+      const childSessionIdentity = {
+        sessionId: child.sessionId,
+        lifecycleRevision: "kept-revision",
+      };
+      await upsertSessionEntryCore(child, { ...childSessionIdentity, updatedAt: 1 });
+      const manager = await SessionManager.openAsync(child);
+      const answer = makeAgentAssistantMessage({
+        content: [{ type: "text", text: "saved answer" }],
+      });
+      await manager.appendMessageAsync(answer);
+      const entry = createRunEntry({
+        childSessionKey: child.sessionKey,
+        childAgentId: child.agentId,
+        childSessionIdentity,
+        execution: { status: "running", transcriptTarget: child },
+        cleanup: "keep",
+      });
+      const { complete } = fixture({ entry });
+      await complete({
+        triggerCleanup: false,
+        restartResult: result === "ordinary" ? undefined : result,
+        ...(result !== "unconfirmed"
+          ? { terminalReply: { disposition: "visible", text: "saved answer" } }
+          : {
+              reason: SUBAGENT_ENDED_REASON_ERROR,
+              outcome: { status: "error", error: "interrupted" },
+              terminalReply: { disposition: "empty" },
+            }),
+      });
+      const saved = loadSubagentRegistryFromSqlite().get(entry.runId);
+      assert.isDefined(saved);
+      expect(saved.execution.transcriptTarget).toEqual(child);
+      expect(saved.completion?.preserveTranscript).toBe(result === "ordinary" ? undefined : true);
+      const replay = fixture({ entry: saved });
+      const drain = observeRootWork();
+      try {
+        expect(replay.controller.startSubagentAnnounceCleanupFlow(saved)).toBe(true);
+      } finally {
+        await drain();
+      }
+      expect(replay.read().cleanupCompletedAt).toBeTypeOf("number");
+      if (result === "ordinary") {
+        expect(loadExactSessionEntry(child)).toBeUndefined();
+        expect(await loadTranscriptEvents(child)).toEqual([]);
+        return;
+      }
+      expect(loadExactSessionEntry(child)?.entry.sessionId).toBe(child.sessionId);
+      expect(await loadTranscriptEvents(child)).toContainEqual(
+        expect.objectContaining({ message: expect.objectContaining({ content: answer.content }) }),
+      );
+    }),
+);
 
 it("retires a terminal callback when another completion replaces its session-effects binding", async ({
   signal,

@@ -1,12 +1,16 @@
 import { isDeepStrictEqual } from "node:util";
 import { SILENT_REPLY_TOKEN } from "../../../auto-reply/tokens.js";
+import { isInternalSessionEffectsKey } from "../../../config/sessions/internal-session-key.js";
 import type { OpenClawConfig } from "../../../config/types.openclaw.js";
 import { isAgentEventLifecycleGenerationCurrent } from "../../../infra/agent-events.js";
 import { isCronRunSessionKey } from "../../../sessions/session-key-utils.js";
 import { mergeAgentRunTerminalReplySnapshot } from "../../agent-run-terminal-reply.js";
 import { withSubagentOutcomeTiming } from "../announce/subagent-announce-output.js";
 import { resolveSubagentChildAuthority } from "../registry/subagent-child-owner-match.js";
-import { matchesSubagentKillIntent } from "../registry/subagent-control-kill-intent.js";
+import {
+  hasSubagentKill,
+  matchesSubagentKillIntent,
+} from "../registry/subagent-control-kill-intent.js";
 import type { SubagentKillSession } from "../registry/subagent-control-session.js";
 import {
   clearDeliveryState,
@@ -192,6 +196,10 @@ function planTerminalCompletion(
   if (isCompletionHeldByYield(currentEntry, completeParams)) {
     return undefined;
   }
+  // Only the crash fallback lacks evidence to supersede Stop. A live shutdown settles it.
+  if (completeParams.restartResult === "unconfirmed" && hasSubagentKill(currentEntry)) {
+    return undefined;
+  }
   const entry = structuredClone(currentEntry);
   let suppressSessionEffects =
     prepared.suppressSessionEffects || entry.execution.suppressSessionEffects === true;
@@ -360,6 +368,14 @@ function planTerminalCompletion(
   }
 
   const completion = ensureCompletionState(entry);
+  const transcriptKey = entry.execution.transcriptTarget?.sessionKey;
+  if (
+    completeParams.restartResult &&
+    transcriptKey &&
+    !isInternalSessionEffectsKey(transcriptKey)
+  ) {
+    completion.preserveTranscript = true;
+  }
   if (completeParams.completionSnapshot) {
     completion.resultText = completeParams.completionSnapshot.resultText;
     completion.capturedAt = completeParams.completionSnapshot.capturedAt;
@@ -631,7 +647,7 @@ function planCleanupBookkeeping(
       !params.provisionalKill &&
       (retireImmediately || Boolean(entry.collect) || Boolean(params.skipRequesterSettleWake)),
     clearPendingError: isDeleteCleanup || retireAfterSettle,
-    removeTranscript: !params.preserveTranscript,
+    removeTranscript: !params.preserveTranscript && !entry.completion?.preserveTranscript,
     retireMcp: entry.spawnMode !== "session",
     contextEndedReason:
       !params.provisionalKill && (isDeleteCleanup || !entry.collect)

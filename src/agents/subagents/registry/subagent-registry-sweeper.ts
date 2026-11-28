@@ -254,7 +254,6 @@ export function createSubagentRegistrySweeper(params: {
             entry,
             readScope,
             complete: params.completeSubagentRunWithRecovery,
-            now,
           });
           continue;
         }

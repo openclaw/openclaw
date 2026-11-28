@@ -98,9 +98,11 @@ Visible spawned sessions keep their processes until reset, delete or archive.
 A graceful Gateway shutdown records the top-level requesters of running children,
 then cancels the children through the ordinary abort path. Children that owe a
 completion retain their error outcome for delivery after startup, including when
-their requester has already finished its turn. A shutdown interruption does not count as
-an intentional cancellation by the requester. Root requesters with interrupted work
-receive the standard resume input; children are not independently resumed.
+their requester has already finished its turn. Shutdown alone is not a requester
+cancellation. Shutdown clears a live child's pending Stop and records the child as
+killed, unless its run deadline expired before Stop. In that case it records a timeout.
+Root requesters with interrupted work receive the standard resume input; children
+are not independently resumed.
 Recorded spawn ancestry includes visible spawned coordinators and workers: their
 running descendants contribute to the original root even after its own turn ends.
 An ordinary conversation contacted through `sessions_send` keeps its own restart
@@ -145,10 +147,15 @@ requester transcript are not replayed.
 
 A crash or `SIGKILL` cannot write a shutdown marker. Startup can still resume an
 eligible root requester from its persisted run identity in the immediately preceding
-Gateway lifetime. Children do not resume independently. After any restart, a child
-that was still running in the previous Gateway is recorded as failed with an
-interruption error, and its requester receives that failure through the normal
-completion path, so a waiting parent wakes instead of waiting indefinitely.
+Gateway lifetime. Children do not resume independently. If the worker marked a
+saved answer as final for that run before the crash, its waiting parent receives
+the answer even if the registry still showed the child running. If reading the
+child's transcript fails, the Gateway retries the read once. Without a confirmed
+answer, the requester gets an interruption notice, not partial output. The retry
+does not rerun the child or send a second completion. Recovery does not delete
+the visible transcript it checked. An explicit `cleanup: "delete"` still applies
+to the child session. An ordinary steer still cleans up the previous run's
+recorded transcript target when the replacement no longer uses it.
 The terminal notice waits for fresh requester authority after startup; it cannot
 use the previous Gateway's retired custody.
 

@@ -1,6 +1,13 @@
+import { writeFile } from "node:fs/promises";
 import { afterEach, beforeEach, expect, it, vi } from "vitest";
+import { setRuntimeConfigSnapshot } from "../../../config/runtime-snapshot.js";
+import { upsertSessionEntryCore } from "../../../config/sessions/session-accessor.js";
 import { getAgentEventLifecycleGeneration } from "../../../infra/agent-events.js";
+import { withOpenClawTestState } from "../../../test-utils/openclaw-test-state.js";
+import { SessionManager } from "../../sessions/session-manager.js";
 import { createSubagentRunRecord } from "../../subagent-test-fixtures.test-helpers.js";
+import { makeAgentAssistantMessage } from "../../test-helpers/agent-message-fixtures.js";
+import * as announceOutput from "../announce/subagent-announce-output.js";
 import { SUBAGENT_ENDED_REASON_ERROR } from "./subagent-lifecycle-events.js";
 import { subagentRegistryLog } from "./subagent-registry-lifecycle-log.js";
 import { subagentRuns } from "./subagent-registry-memory.js";
@@ -37,7 +44,6 @@ function settle(entry: SubagentRunRecord) {
       runId: entry.runId,
       entry,
       complete,
-      now: NOW,
       processStartedAt: PROCESS_STARTED_AT,
     }),
   };
@@ -52,35 +58,123 @@ afterEach(async () => {
   vi.restoreAllMocks();
 });
 
-it("fails a running child restored from an earlier Gateway so its requester wakes", async () => {
-  using warning = vi.spyOn(subagentRegistryLog, "warn").mockImplementation(() => {});
-  const entry = restoredRunningRow();
-  // Startup has admitted fresh completion custody; the child's outcome is unknown.
+it("fails a running child restored from an earlier Gateway so its requester wakes", () =>
+  withOpenClawTestState({ label: "child-restart-no-final" }, async () => {
+    setRuntimeConfigSnapshot({});
+    using warning = vi.spyOn(subagentRegistryLog, "warn").mockImplementation(() => {});
+    const entry = restoredRunningRow();
+    // Startup has admitted fresh completion custody; the child's outcome is unknown.
 
-  const { complete, settled } = settle(entry);
+    const { complete, settled } = settle(entry);
 
-  expect(await settled).toBe(true);
-  expect(warning).toHaveBeenCalledWith("Settling subagent interrupted by Gateway restart", {
-    runId: entry.runId,
-    requesterSessionKey: entry.requesterSessionKey,
-    createdAt: entry.createdAt,
-  });
-  expect(complete).toHaveBeenCalledWith(
-    {
+    expect(await settled).toBe(true);
+    expect(warning).toHaveBeenCalledWith("Settling subagent interrupted by Gateway restart", {
       runId: entry.runId,
-      expectedEntry: entry,
-      recoveryCurrent: undefined,
-      endedAt: NOW,
+      requesterSessionKey: entry.requesterSessionKey,
+      createdAt: entry.createdAt,
+    });
+    expect(complete).toHaveBeenCalledWith(
+      {
+        runId: entry.runId,
+        expectedEntry: entry,
+        recoveryCurrent: undefined,
+        endedAt: undefined,
+        restartResult: "unconfirmed",
+        outcome: { status: "error", error: SUBAGENT_RESTART_INTERRUPTED_ERROR },
+        terminalReply: { disposition: "empty" },
+        reason: SUBAGENT_ENDED_REASON_ERROR,
+        sendFarewell: true,
+        accountId: "primary",
+        triggerCleanup: true,
+      },
+      "sweeper-restart-interrupted",
+    );
+  }));
+
+it("settles with one interruption after a second unreadable transcript read", () =>
+  withOpenClawTestState({ label: "child-restart-unreadable" }, async (state) => {
+    const storePath = state.statePath("broken-child.sqlite");
+    await writeFile(storePath, "not a SQLite database");
+    const entry = restoredRunningRow({
+      execution: {
+        status: "running",
+        transcriptTarget: { agentId: "main", sessionId: "lost-child", storePath },
+      },
+    });
+    using read = vi.spyOn(announceOutput, "readSubagentRunFinalAnswerEvidence");
+    const { complete, settled } = settle(entry);
+    expect(await settled).toBe(true);
+    expect(read).toHaveBeenCalledTimes(2);
+    await expect(read.mock.results[1]?.value).rejects.toThrow(/file is not a database/i);
+    expect(complete).toHaveBeenCalledTimes(1);
+    expect(complete.mock.calls[0]?.[0]).toMatchObject({
+      runId: entry.runId,
       outcome: { status: "error", error: SUBAGENT_RESTART_INTERRUPTED_ERROR },
       terminalReply: { disposition: "empty" },
-      reason: SUBAGENT_ENDED_REASON_ERROR,
-      sendFarewell: true,
-      accountId: "primary",
-      triggerCleanup: true,
-    },
-    "sweeper-restart-interrupted",
+    });
+  }));
+
+it("leaves the saved answer owed when the read admission closes", async () => {
+  using read = vi.spyOn(announceOutput, "readSubagentRunFinalAnswerEvidence").mockRejectedValueOnce(
+    Object.assign(new Error("read admission retired"), {
+      code: "STATE_DATABASE_READ_ADMISSION_INVALIDATED",
+    }),
   );
+  const { complete, settled } = settle(restoredRunningRow());
+  expect(await settled).toBe(false);
+  expect(read).toHaveBeenCalledTimes(1);
+  expect(complete).not.toHaveBeenCalled();
 });
+
+it("recovers only the stopped run's saved answer, even after a later turn", () =>
+  withOpenClawTestState({ label: "child-restart-saved-final" }, async (state) => {
+    const scope = {
+      agentId: "main",
+      sessionId: "reused-child",
+      sessionKey: "agent:main:subagent:child",
+      storePath: state.statePath("transcript.sqlite"),
+    };
+    await upsertSessionEntryCore(scope, { sessionId: scope.sessionId, updatedAt: NOW });
+    const manager = await SessionManager.openAsync(scope);
+    const finalAt = PROCESS_STARTED_AT - 1;
+    for (const [runId, text, stopReason, runTerminal] of [
+      ["interrupted", "partial answer", "aborted", true],
+      ["checkpoint", "Stopped: one repair remains.", "stop", undefined],
+      ["completed", "saved child answer", "stop", true],
+      ["later", "another run's answer", "stop", true],
+    ] as const) {
+      const message = {
+        ...makeAgentAssistantMessage({
+          content: [{ type: "text", text }],
+          stopReason,
+          timestamp: finalAt,
+        }),
+        __openclaw: { runId, runTerminal },
+      };
+      await manager.appendMessageAsync(message);
+    }
+    for (const runId of ["completed", "interrupted", "checkpoint"]) {
+      const entry = restoredRunningRow({
+        runId,
+        execution: { status: "running", transcriptTarget: scope },
+      });
+      const { complete, settled } = settle(entry);
+      expect(await settled).toBe(true);
+      expect(complete.mock.calls[0]?.[0]).toMatchObject(
+        runId === "completed"
+          ? {
+              endedAt: finalAt,
+              restartResult: "confirmed",
+              outcome: { status: "ok" },
+              terminalReply: { disposition: "visible", text: "saved child answer" },
+            }
+          : {
+              outcome: { status: "error", error: SUBAGENT_RESTART_INTERRUPTED_ERROR },
+              terminalReply: { disposition: "empty" },
+            },
+      );
+    }
+  }));
 
 it.each([
   [

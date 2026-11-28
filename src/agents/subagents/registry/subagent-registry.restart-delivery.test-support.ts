@@ -236,6 +236,48 @@ export function registerRequesterRestartDeliveryTests<Response>({
     expect(reports).toEqual([]);
   });
 
+  it.each([false, true])(
+    "settles a live child at shutdown (pending Stop=%s)",
+    async (pendingStop) => {
+      const context = createGatewayContext();
+      const resolver = expectDefined(context.resolveGatewayContext, "draining Gateway context");
+      await registry.initSubagentRegistry();
+      await registry.activateSubagentRegistry(resolver);
+      const child = visibleChild("shutdown-stop");
+      const sessionEntry = await prepareChildSession(child.childSessionKey, "sess-shutdown-stop");
+      await registry.addSubagentRunForTests({
+        ...child,
+        childSessionIdentity: sessionEntry,
+        requesterSessionKey,
+        killIntent: pendingStop
+          ? { requestedAt: Date.now(), reason: "operator requested Stop" }
+          : undefined,
+      });
+      bindGatewayContextResolver(subagentRuns.get(child.runId)!, resolver);
+      const claim = claimAgentRunContext(
+        child.runId,
+        { sessionKey: child.childSessionKey, sessionId: sessionEntry.sessionId },
+        { trackOwner: true },
+      );
+      onTestFinished(() => releaseAgentRunContext(child.runId, claim));
+
+      await registry.terminateLiveSubagentsForShutdown(resolver);
+
+      const settled = loadSubagentRegistryFromSqlite().get(child.runId);
+      expect(settled).toMatchObject({
+        endedReason: pendingStop ? "subagent-killed" : "subagent-error",
+        execution: {
+          status: "terminal",
+          outcome: {
+            status: "error",
+            error: pendingStop ? "operator requested Stop" : "Gateway stopped",
+          },
+        },
+      });
+      expect(settled?.killIntent).toBeUndefined();
+    },
+  );
+
   it.each(["yielded settle", "aborted announce", "aborted consumed announce"] as const)(
     "preserves a child outcome in model-visible history through spawn, drain, restart and %s",
     async (shape) => {
