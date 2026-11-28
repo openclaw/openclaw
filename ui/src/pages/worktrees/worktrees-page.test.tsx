@@ -585,6 +585,39 @@ describe("WorktreesPage lifecycle", () => {
     expect(request.mock.calls.map(([method]) => method)).not.toContain("worktrees.remove");
   });
 
+  it("reads repository paths again only when the displayed inventory changes", async () => {
+    const readRoot = vi.fn(() => "/repos/first");
+    const request = listRequest([
+      {
+        ...worktree(),
+        get repoRoot() {
+          return readRoot();
+        },
+      },
+    ]);
+    const { source, page } = mutablePage(request, { createOpen: true });
+    await page.ready();
+    await waitForSolid(() => expect(page.query('span[title="/repos/first"]')).not.toBeNull());
+    readRoot.mockClear();
+    source.emit(true);
+    await settle();
+    expect(readRoot).not.toHaveBeenCalled();
+
+    request.mockResolvedValueOnce({
+      worktrees: [worktree("replacement", { repoRoot: "/repos/next" })],
+    });
+    await page.model.load();
+    await waitForSolid(() => expect(page.query('span[title="/repos/next"]')).not.toBeNull());
+    page.query<HTMLButtonElement>("#worktrees-create-repo")!.click();
+    await waitForSolid(() => {
+      const choices = [...document.querySelectorAll('[role="option"]')].map(
+        (node) => node.textContent,
+      );
+      expect(choices.some((choice) => choice?.includes("/repos/next"))).toBe(true);
+      expect(choices.some((choice) => choice?.includes("/repos/first"))).toBe(false);
+    });
+  });
+
   it("keeps an in-progress repository draft when the list refresh completes", async () => {
     const pendingList = deferred<unknown>();
     const request = vi.fn((method: string) =>
