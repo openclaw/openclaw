@@ -18,6 +18,7 @@ import {
   transitionRequesterSettleWakeState,
   ensureDeliveryState,
   clearSubagentPendingDelivery,
+  recordPrivateConsumption,
   recordRequesterDelivery,
 } from "../registry/subagent-delivery-state.js";
 import { SUBAGENT_ENDED_REASON_KILLED } from "../registry/subagent-lifecycle-events.js";
@@ -145,6 +146,8 @@ function prepareHistorySettledCompletion(
     return undefined;
   }
   markDelivered(subagent, now);
+  // A history entry is a parent fact, not a user-visible final.
+  recordPrivateConsumption(subagent, false);
   Object.assign(ensureDeliveryState(subagent), { queueId: undefined });
   subagent.wakeOnDescendantSettle = undefined;
   return { subagent };
@@ -260,6 +263,10 @@ function mutateRequesterBatch(
       markDelivered(
         subagent,
         (params.outcome.delivered ? params.outcome.deliveredAt : undefined) ?? now,
+      );
+      recordPrivateConsumption(
+        subagent,
+        params.outcome.delivered && params.outcome.requesterVisibleFinalDelivered === true,
       );
     }
     return { subagent, retire: completeRequesterSettleWakeState(subagent) };

@@ -7,6 +7,7 @@ import {
   closeOpenClawStateDatabaseForTest,
 } from "../../../state/openclaw-state-db.js";
 import { mutateSubagentCompletionInDatabase } from "../completion/subagent-completion-mutation.kernel.js";
+import { resolveSubagentDeliveryStatus } from "./subagent-list.js";
 import {
   createSubagentStoreRunFixture,
   saveSubagentRegistryToSqlite,
@@ -106,6 +107,8 @@ it.for([
         status: "delivered",
         requesterDelivery: { state: "consumed", runId },
       });
+      // The cancelled continuation sent nothing, whatever its reply policy allowed.
+      expect(resolveSubagentDeliveryStatus(subagent)).toBe("consumed_privately");
       if (kind === "requesterBatch") {
         expect(subagent.requesterSettleWake).toBeUndefined();
       }

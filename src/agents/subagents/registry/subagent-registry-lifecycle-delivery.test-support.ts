@@ -8,6 +8,7 @@ import { withSessionTurn } from "../../../sessions/session-controller.admission.
 import { retireSessionControllerInput } from "../../../sessions/session-controller.mailbox.js";
 import { createDeferredCore } from "../../../shared/deferred.js";
 import { reserveSubagentControllerSource } from "../announce/subagent-announce-controller-source.js";
+import { resolveSubagentDeliveryStatus } from "./subagent-list.js";
 import {
   mutateLifecycleRun,
   readLifecycleRun,
@@ -284,6 +285,35 @@ export function registerLifecycleDeliveryReceiptCases({
     triggerCleanup: true,
     terminalReply: { disposition: "visible", text: "final completion reply" },
   } satisfies Parameters<CompleteLifecycleRun>[2];
+
+  it.each([
+    ["parent", undefined, "consumed_privately"],
+    ["parent", true, "delivered"],
+    [undefined, undefined, "delivered"],
+  ] as const)(
+    "settles completionTarget=%s visibleFinal=%s as %s",
+    async (completionTarget, requesterVisibleFinalDelivered, label) => {
+      const entry = createRunEntry({
+        runId: `private-label-${String(completionTarget)}-${String(requesterVisibleFinalDelivered)}`,
+        endedAt: Date.now(),
+        outcome: { status: "ok" },
+        completionTarget,
+        expectsCompletionMessage: true,
+      });
+      const runSubagentAnnounceFlow = vi.fn<AnnounceFlow>(async (params) => {
+        await params.onDeliveryResult?.({
+          delivered: true,
+          path: "direct",
+          deliveredAt: 12_300,
+          ...(requesterVisibleFinalDelivered ? { requesterVisibleFinalDelivered } : {}),
+        });
+        return "delivered";
+      });
+      const controller = createLifecycleController({ entry, runSubagentAnnounceFlow });
+      await completeAndJoinCleanup(controller, entry, visibleCompletion);
+      expect(resolveSubagentDeliveryStatus(readLifecycleRun(entry))).toBe(label);
+    },
+  );
 
   it("delivers a restored legacy completion without mutating its unbound child session", async () => {
     const entry = createRunEntry({
