@@ -189,11 +189,15 @@ read_when:
 
     **Option C - proxy macOS binaries over SSH (advanced)**. Keep the Gateway on Linux, but make the required CLI binaries resolve to SSH wrappers that run on a Mac, then override the skill to allow Linux so it stays eligible.
 
-    1. Create an SSH wrapper for the binary (example: `memo` for Apple Notes):
+    1. Create an SSH wrapper for the binary (example: `memo` for Apple Notes). SSH sends a command string for the remote shell to parse, so quote each argument to preserve spaces and shell characters:
        ```bash
        #!/usr/bin/env bash
        set -euo pipefail
-       exec ssh -T user@mac-host /opt/homebrew/bin/memo "$@"
+       remote_command=/opt/homebrew/bin/memo
+       for arg in "$@"; do
+         remote_command+=" '${arg//\'/\'\\\'\'}'"
+       done
+       exec ssh -T user@mac-host "$remote_command"
        ```
     2. Put the wrapper on `PATH` on the Linux host (for example `~/bin/memo`).
     3. Override the skill metadata (workspace or `~/.openclaw/skills`) to allow Linux:
