@@ -230,3 +230,27 @@ it.each([undefined, "agent:roboclaw:guest-chat"])(
     expect(picker.canConfigure).toBe(false);
   },
 );
+
+// An external catalog entry is not an OpenClaw chat session: Talk cannot resolve
+// its key, so discovery must stay off until adoption returns a real session key.
+const catalogKey = "agent:main:catalog:claude-code:node%3ADevBox:Thread%3AA%2FB";
+
+it("skips Talk discovery for an external catalog route and resumes after adoption", async () => {
+  const request = vi.fn(async (method: string) => (method === "talk.config" ? {} : catalog(true)));
+  const client = connect(request, vi.fn(), catalogKey);
+  expect(request).not.toHaveBeenCalled();
+  expectStatus("unavailable");
+  expect(picker.canConfigure).toBe(true);
+
+  // Focus cannot revive discovery while the route still names a catalog entry.
+  window.dispatchEvent(new Event("focus"));
+  expect(request).not.toHaveBeenCalled();
+
+  // Adoption navigates to the returned chat key; discovery scopes to it.
+  picker.syncCatalog(client, true, "agent:main:session-42");
+  await vi.waitFor(() => expect(picker.realtimeStatus).toBe("ready"));
+  expect(request.mock.calls).toEqual([
+    ["talk.catalog", { sessionKey: "agent:main:session-42" }],
+    ["talk.config", {}],
+  ]);
+});

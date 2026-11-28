@@ -503,6 +503,16 @@ suite.define(() => {
         );
         await exactText(activePane, "other native transcript").waitFor();
         await assertOwner("other");
+        // A catalog route names an external identity, not a Gateway chat session.
+        // Talk discovery must never send that key (the Gateway logs INVALID_REQUEST /
+        // No session found); ordinary chats the sidebar passed through may still ask.
+        expect(
+          (await gateway.getRequests("talk.catalog")).filter((request) =>
+            String((request.params as { sessionKey?: string }).sessionKey ?? "").includes(
+              ":catalog:",
+            ),
+          ),
+        ).toHaveLength(0);
         await expect
           .poll(() =>
             sidebar
@@ -594,6 +604,13 @@ suite.define(() => {
         await adoptedRow.locator("a").click();
         await waitForChat(page, "other/adopted-native");
         await assertOwner("other");
+        // Adoption hands the composer the adopted chat's own key, so discovery
+        // resumes scoped to it instead of staying silent forever.
+        expect(await gateway.getRequests("talk.catalog")).toContainEqual(
+          expect.objectContaining({
+            params: { sessionKey: "agent:other:adopted-native" },
+          }),
+        );
         for (const request of await gateway.getRequests("sessions.catalog.read")) {
           expect(request.params).toMatchObject(source);
           const params = request.params as { agentId: string; sourceHomeId: string };
