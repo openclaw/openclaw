@@ -9,6 +9,21 @@ openclaw-model-setup-page,
   display: contents;
 }
 
+.model-setup__results {
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-8);
+}
+
+.model-setup__results:empty {
+  display: none;
+}
+
+/* Detected after the Models catalog painted: render last so visible rows stay in place. */
+.model-setup__results--below {
+  order: 1;
+}
+
 .model-setup__intro {
   display: flex;
   align-items: flex-start;

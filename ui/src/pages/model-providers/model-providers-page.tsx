@@ -51,8 +51,16 @@ export function ModelProvidersContent(props: {
   const installedAgents = <InstalledAgents />;
   // First-run setup owns local discovery, so its activations keep their recovery receipt.
   const [firstRunDiscovery, setFirstRunDiscovery] = createSignal(false);
-  // An unresolved first-run activation may still commit; no catalog attempt may replace it.
-  const [firstRunUnresolved, setFirstRunUnresolved] = createSignal(false);
+  // First-run state: an unresolved activation may still commit, so no catalog attempt may
+  // replace it; detection finishing after the catalog paints sends its results below.
+  const [firstRunState, setFirstRunState] = createSignal({ unresolved: false, detected: false });
+  const resultsBelow = createMemo<boolean | undefined>((placed) => {
+    if (placed !== undefined) {
+      return placed;
+    }
+    const view = current().props;
+    return showProviderDetails() && !view.loading ? !firstRunState().detected : undefined;
+  });
   const firstRunSetup = (
     <Show when={props.firstRun}>
       <Loading>
@@ -60,7 +68,8 @@ export function ModelProvidersContent(props: {
           discoveryOpen={firstRunDiscovery()}
           agentLabel={discoveryData().agentLabel}
           credentialChoices={discoveryData().credentialChoices}
-          onActivationUnresolved={setFirstRunUnresolved}
+          onFirstRunState={setFirstRunState}
+          resultsBelow={resultsBelow() === true}
           onClose={() => {
             setFirstRunDiscovery(false);
             current().props.onRefresh();
@@ -107,7 +116,7 @@ export function ModelProvidersContent(props: {
           providerDetailsReady={showProviderDetails()}
           accountRecovery={<Recovery />}
           firstRunSetup={firstRunSetup}
-          firstRunUnresolved={firstRunUnresolved()}
+          firstRunUnresolved={firstRunState().unresolved}
           installedAgents={current().installedAgentsAvailable ? installedAgents : undefined}
           agentModel={agentModel()}
           catalogReceipt={agentFailuresOnly() ? undefined : current().props.catalogReceipt}
@@ -121,7 +130,7 @@ export function ModelProvidersContent(props: {
               group &&
               current().props.canMutate &&
               !login.busy &&
-              !firstRunUnresolved() &&
+              !firstRunState().unresolved &&
               !login.enter(group)
             ) {
               void login.open(group.authProviders, { select: group.id });

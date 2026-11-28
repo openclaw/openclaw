@@ -41,8 +41,13 @@ export type ModelSetupPageProps = {
   agentLabel?: string;
   credentialChoices?: readonly string[];
   onClose?: () => void;
-  /** The first-run activation became unresolved or settled; other entry points wait for it. */
-  onActivationUnresolved?: (unresolved: boolean) => void;
+  /**
+   * First-run state the Models page consumes: an unresolved activation fences catalog sign-in,
+   * and the first finished discovery decides where detected models render.
+   */
+  onFirstRunState?: (state: { unresolved: boolean; detected: boolean }) => void;
+  /** The catalog painted before discovery finished; late results render below it. */
+  resultsBelow?: boolean;
 };
 
 export function createModelSetup(
@@ -191,7 +196,7 @@ export function createModelSetup(
   const [detectionIdentity, setDetectionRequest] = createSignal<ModelSetupDetection>();
 
   let feedbackState: ModelSetupActivationState | undefined;
-  let reportedUnresolved = false;
+  let reported = { unresolved: false, detected: false };
 
   function afterRender() {
     if (!connected) {
@@ -206,9 +211,16 @@ export function createModelSetup(
     }
     iconLoader.reconcile();
     firstRun.start();
-    if (firstRun.unresolved !== reportedUnresolved) {
-      reportedUnresolved = firstRun.unresolved;
-      props.onActivationUnresolved?.(reportedUnresolved);
+    // The Models page fences catalog sign-in on unresolved recovery and places late results.
+    const next = {
+      unresolved: firstRun.unresolved,
+      detected:
+        reported.detected ||
+        (state.detectionRequest === null && state.pageState.phase !== "loading"),
+    };
+    if (next.unresolved !== reported.unresolved || next.detected !== reported.detected) {
+      reported = next;
+      props.onFirstRunState?.(next);
     }
   }
 
@@ -530,6 +542,7 @@ export function createModelSetup(
       // Outside first run, setup is the Models page's local discovery dialog.
       embedded: routeData()?.firstRun !== true,
       discoveryOpen: routeData()?.firstRun !== true || props.discoveryOpen === true,
+      resultsBelow: props.resultsBelow === true,
       agentLabel: props.agentLabel ?? "",
       credentialChoices: props.credentialChoices ?? [],
       onClose: props.onClose,

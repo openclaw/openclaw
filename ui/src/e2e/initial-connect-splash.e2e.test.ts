@@ -400,6 +400,7 @@ suite.define(() => {
     await expectNoHorizontalOverflow(page);
     await page.setViewportSize(viewport);
 
+    const catalogTop = await catalog.evaluate((section) => section.getBoundingClientRect().top);
     await gateway.resolveDeferred("openclaw.setup.detect", {
       candidates: [
         {
@@ -432,9 +433,15 @@ suite.define(() => {
     const candidates = page.locator('[data-candidate-kind="claude-cli"]');
     await candidates.waitFor();
     expect(await candidates.textContent()).toContain("Claude Code");
-    const candidateBottom = await candidates.evaluate((row) => row.getBoundingClientRect().bottom);
-    const catalogTop = await catalog.evaluate((section) => section.getBoundingClientRect().top);
-    expect(candidateBottom).toBeLessThanOrEqual(catalogTop);
+    // Discovery finished after the catalog painted: its results render below, nothing moves.
+    expect(await catalog.evaluate((section) => section.getBoundingClientRect().top)).toBe(
+      catalogTop,
+    );
+    const catalogBottom = await catalog.evaluate(
+      (section) => section.getBoundingClientRect().bottom,
+    );
+    const candidateTop = await candidates.evaluate((row) => row.getBoundingClientRect().top);
+    expect(candidateTop).toBeGreaterThanOrEqual(catalogBottom);
     expect([...requestedWorkspaceModules]).toEqual([]);
     await page.setViewportSize({ height: 844, width: 390 });
     await expectNoHorizontalOverflow(page);

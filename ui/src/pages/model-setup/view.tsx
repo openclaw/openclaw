@@ -449,48 +449,52 @@ function FirstRunSummary(props: ModelSetupViewProps) {
       <Show when={!props.discoveryOpen}>
         <ActivationNotices {...props} />
       </Show>
-      <Show when={configuredModel()}>
-        {(model) => (
-          <SettingsSection title={t("modelSetup.success.configuredModel")}>
-            <SettingsRow
-              title={model()}
-              control={
-                result()?.setupComplete ? (
-                  <button
-                    type="button"
-                    class="btn btn--sm primary"
-                    onClick={() => props.onOpenChat()}
-                  >
-                    {t("modelSetup.success.continueSetup")}
-                  </button>
-                ) : props.canVerify ? (
-                  <button
-                    type="button"
-                    class="btn btn--sm"
-                    disabled={props.actionsDisabled || props.detecting === true}
-                    onClick={() => props.onVerify()}
-                  >
-                    {t(
-                      props.verify.phase === "failed"
-                        ? "modelSetup.verify.retry"
-                        : "modelSetup.verify.button",
-                    )}
-                  </button>
-                ) : undefined
-              }
+      {/* Results that arrive after the catalog painted move to the page's end (CSS order),
+          so nothing the person can already see moves. */}
+      <div class={["model-setup__results", { "model-setup__results--below": props.resultsBelow }]}>
+        <Show when={configuredModel()}>
+          {(model) => (
+            <SettingsSection title={t("modelSetup.success.configuredModel")}>
+              <SettingsRow
+                title={model()}
+                control={
+                  result()?.setupComplete ? (
+                    <button
+                      type="button"
+                      class="btn btn--sm primary"
+                      onClick={() => props.onOpenChat()}
+                    >
+                      {t("modelSetup.success.continueSetup")}
+                    </button>
+                  ) : props.canVerify ? (
+                    <button
+                      type="button"
+                      class="btn btn--sm"
+                      disabled={props.actionsDisabled || props.detecting === true}
+                      onClick={() => props.onVerify()}
+                    >
+                      {t(
+                        props.verify.phase === "failed"
+                          ? "modelSetup.verify.retry"
+                          : "modelSetup.verify.button",
+                      )}
+                    </button>
+                  ) : undefined
+                }
+              />
+            </SettingsSection>
+          )}
+        </Show>
+        <Show when={props.canAdmin && !props.gatewayTooOld ? result() : undefined}>
+          {(ready) => (
+            <CandidateRows
+              {...props}
+              result={ready()}
+              actionsDisabled={props.actionsDisabled || props.activationUnresolved === true}
             />
-          </SettingsSection>
-        )}
-      </Show>
-      <Show when={props.canAdmin && !props.gatewayTooOld ? result() : undefined}>
-        {(ready) => (
-          <CandidateRows
-            {...props}
-            result={ready()}
-            actionsDisabled={props.actionsDisabled || props.activationUnresolved === true}
-          />
-        )}
-      </Show>
+          )}
+        </Show>
+      </div>
     </>
   );
 }
