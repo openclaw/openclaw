@@ -600,7 +600,7 @@ export async function migrateHistoricalTranscriptDirectives(
         });
     recoverableWarningCount = discovery.recoverableWarningCount;
     // Read first: the lease inspection reads the state database through a private snapshot, so
-    // it runs only once a database's cursor is unfinished.
+    // it runs only once a database needs the migration.
     let activeWriter: Promise<boolean> | undefined;
     let leaseFailure: { error: unknown } | undefined;
     const hasActiveWriter = () =>
@@ -634,6 +634,8 @@ export async function migrateHistoricalTranscriptDirectives(
       }
     }
     if (targets.length > 0) {
+      // Any admitted work passes the lease inspection first, as before this read became lazy.
+      await hasActiveWriter();
       await withAgentDatabaseMaintenanceLease({ env }, async (maintenance) => {
         for (const target of targets.toSorted(
           (a, b) => a.agentId.localeCompare(b.agentId) || a.path.localeCompare(b.path),

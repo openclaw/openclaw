@@ -1,7 +1,7 @@
 import fs from "node:fs";
 import path from "node:path";
 import { DatabaseSync } from "node:sqlite";
-import { afterEach, describe, expect, it } from "vitest";
+import { afterEach, describe, expect, it, vi } from "vitest";
 import { useAutoCleanupTempDirTracker } from "../../test/helpers/temp-dir.js";
 import { recordDeferredPluginMigrations } from "../infra/deferred-plugin-migrations.js";
 import { migrateLegacyAcpSessionMetadata } from "../infra/state-migrations.acp-session-metadata.js";
@@ -386,6 +386,20 @@ describe("doctor config-flow pending", () => {
       fs.mkdirSync(path.join(stateDir, "delivery-queue"), { recursive: true });
       fs.writeFileSync(path.join(stateDir, "delivery-queue", "entry.json"), "{}");
       expect(await decideStep("delivery-queues", env)).toBe("work");
+    });
+
+    it("decides workspace aliases only for the process's own state root", async () => {
+      const { home, stateDir, env } = makeInstall();
+      await createStateDatabase(env);
+      // The alias inspection resolves workspaces from the process environment.
+      expect(await decideStep("workspace-aliases", env)).toBe("undecidable");
+      vi.stubEnv("HOME", home);
+      vi.stubEnv("OPENCLAW_STATE_DIR", stateDir);
+      try {
+        expect(await decideStep("workspace-aliases", env)).toBe("none");
+      } finally {
+        vi.unstubAllEnvs();
+      }
     });
 
     it("retires nothing beside a held healthy store without opening it for writing", async () => {

@@ -401,8 +401,15 @@ function doctorConfigFlowPendingInputs(
       id: "legacy-state-steps.workspace-aliases",
       check: () =>
         withMigrationConfig(async ({ cfg }) => {
-          const { collectRepointedWorkspaceAliasFindings } =
-            await import("./doctor-workspace-alias.js");
+          const [{ resolveStateDir }, { collectRepointedWorkspaceAliasFindings }] =
+            await Promise.all([
+              import("../config/paths.js"),
+              import("./doctor-workspace-alias.js"),
+            ]);
+          // The guarded stores are this environment's; another state root is not read here.
+          if (resolveStateDir(env) !== resolveStateDir(process.env)) {
+            return "undecidable";
+          }
           return decideWithAgentStores(cfg, [], async () =>
             decided((await collectRepointedWorkspaceAliasFindings(cfg)).length > 0),
           );
