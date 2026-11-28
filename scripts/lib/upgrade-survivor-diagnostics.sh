@@ -6,6 +6,7 @@ prepare_diagnostics_capture() {
     ! rm -f "$ARTIFACT_DIR/diagnostics/raw.json" "$ARTIFACT_DIR/diagnostics/post-core.json" "$ARTIFACT_DIR/summary.json" \
       "$ARTIFACT_DIR/update.json" "$ARTIFACT_DIR/repair.json" "$ARTIFACT_DIR/recovery-update.json" \
       "$ARTIFACT_DIR"/update-noop.{json,err} \
+      "$ARTIFACT_DIR"/doctor-lint.{json,err} \
       "$ARTIFACT_DIR/candidate-cohort.json" \
       "$ARTIFACT_DIR"/deferred-schema-private.json{,.after} \
       "$ARTIFACT_DIR"/deferred-schema-doctor-private.{json,err} "$ARTIFACT_DIR/deferred-schema-doctor.json" \

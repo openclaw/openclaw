@@ -1017,6 +1017,8 @@ it("does not reuse sibling or startup observations when an attempt fails before 
     "update-noop.err",
     ...turnLogs,
     ...cronCliLogs,
+    "doctor-lint.json",
+    "doctor-lint.err",
     ...nativeRecoveryLogs,
     "native-assignment-inventory-after-first-hop.json",
     "native-assignment-inventory-before-recovery.json",
