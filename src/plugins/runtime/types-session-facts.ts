@@ -48,10 +48,12 @@ export type RuntimeSessionFactsSelection = Pick<
   | "sortBy"
   | "activeMinutes"
   | "agentId"
+  | "group"
+  | "projectId"
   | "involvingMe"
   | "involvingProfileId"
   | "includePeople"
->;
+> & { sessionKeys?: readonly string[]; titleContains?: string };
 
 export type RuntimeSessionFactsSelectionResult = {
   /** Stable viewer and query identity; only reusable inside the current callback. */

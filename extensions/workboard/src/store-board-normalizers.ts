@@ -25,6 +25,14 @@ export function normalizeBoardMetadata(
     throw new Error("board kind cannot be changed after creation.");
   }
   const kind = input.kind === "sessions" ? "sessions" : fallback?.kind;
+  if (input.scope !== undefined && kind !== "sessions") {
+    throw new Error("Only Sessions boards accept scope.");
+  }
+  if (input.scope !== undefined && fallback) {
+    throw new Error(
+      "scope can only be set when creating a Sessions board. To edit an existing scope, use workboard.sessionsBoard.update.",
+    );
+  }
   if (kind === "sessions" && id === "default") {
     throw new Error("board kind cannot be changed after creation: default is a cards board.");
   }
@@ -74,7 +82,7 @@ export function normalizeBoardMetadata(
     id,
     ...(kind ? { kind } : {}),
     ...(kind === "sessions"
-      ? { sessions: fallback?.sessions ?? createDefaultWorkboardSessionsBoardSpec() }
+      ? { sessions: fallback?.sessions ?? createDefaultWorkboardSessionsBoardSpec(input.scope) }
       : {}),
     ...(name ? { name } : {}),
     ...(description ? { description } : {}),

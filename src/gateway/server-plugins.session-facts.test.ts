@@ -166,6 +166,58 @@ function fact(snapshot: RuntimeSessionFactsSelectionResult, key = sessionKey) {
 }
 
 describe("trusted plugin selected session facts", () => {
+  it("intersects exact membership, group, project, title and caller visibility before enrichment", () =>
+    withFixture(async (fixture, { selected }) => {
+      const fields = { category: "Mobile", projectId: "app", label: "iOS navigation" };
+      const key = "agent:main:mobile";
+      const privateKey = "agent:main:private-mobile";
+      const otherKey = "agent:main:other-mobile";
+      await fixture.seed(key, fixture.profile.id, fields);
+      await fixture.seed(otherKey, fixture.profile.id, fields);
+      await fixture.seed(privateKey, fixture.other.id, { ...fields, visibility: "draft" });
+      const theme = {
+        group: "Mobile",
+        projectId: "app",
+        titleContains: "ios",
+        includePeople: true,
+      };
+      const shortlist = { ...theme, sessionKeys: [key, privateKey, sessionKey] };
+      const keys = (snapshot: RuntimeSessionFactsSelectionResult) =>
+        snapshot.sessions.map((row) => row.key);
+      expect(keys(await selected(shortlist))).toEqual([key]);
+      expect(keys(await selected({ ...theme, sessionKeys: [otherKey] }))).toEqual([otherKey]);
+      expect(keys(await selected({ ...shortlist, group: "Web" }))).toEqual([]);
+      expect(keys(await selected({ ...shortlist, projectId: "site" }))).toEqual([]);
+      expect(keys(await selected({ ...shortlist, titleContains: "android" }))).toEqual([]);
+      const empty = await selected({ ...theme, sessionKeys: [] });
+      expect(empty.sessions).toEqual([]);
+      expect(empty.people).toEqual([]);
+      expect(keys(await selected(theme)).toSorted()).toEqual([key, otherKey].toSorted());
+      expect(keys(await selected(shortlist))).toEqual([key]);
+    }));
+
+  it("intersects explicit keys with configured agents even for a trusted reader", () =>
+    withFixture(async (fixture, { inScope }) => {
+      const retired = "agent:retired:mobile";
+      await fixture.seed(retired);
+      setRuntimeConfigSnapshot({
+        ...fixture.cfg,
+        agents: { ownership: "explicit", entries: { main: {} } },
+      });
+      sessionChanges.emit({ all: true, scope: "stores" });
+      const keys = (configuredAgentsOnly: boolean) =>
+        inScope(
+          () =>
+            runtime.gateway.withSessionFacts(
+              { sessionKeys: [retired, sessionKey], configuredAgentsOnly },
+              async (snapshot) => snapshot.sessions.map((row) => row.key).toSorted(),
+            ),
+          undefined,
+        );
+      expect(await keys(false)).toEqual([retired, sessionKey].toSorted());
+      expect(await keys(true)).toEqual([sessionKey]);
+    }));
+
   it.each(["config-presentation", "secret registry"] as const)(
     "preserves exact and selected text and PR state after %s changes",
     (change) =>

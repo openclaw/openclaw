@@ -48,12 +48,14 @@ import {
 } from "./view-board-modal.tsx";
 import { getVisibleDetailCard } from "./view-card-details.tsx";
 import {
+  isWorkboardSessionChoice,
   workboardErrorMessage,
   type BoardAutomationState,
   type WorkboardProps,
 } from "./view-helpers.tsx";
 import { reconcileSelectionScope } from "./view-selection.tsx";
 import { SessionsBoard } from "./view-sessions-board.tsx";
+import { SessionsScopeHeading } from "./view-sessions-scope.tsx";
 import { WorkboardView } from "./view.tsx";
 
 function reconcileCardOverlays(state: WorkboardUiState, visible: (card: WorkboardCard) => boolean) {
@@ -343,8 +345,41 @@ export function createWorkboardPage(
         revision: ++revision,
       });
     };
+    const editBoard = (selected: Parameters<typeof createBoardDraft>[0]) => {
+      boardDraft = createBoardDraft({
+        ...selected,
+        ...(sessionsBoard.snapshot?.board.id === selected.id ? sessionsBoard.snapshot.board : {}),
+      });
+      publishPresentation();
+    };
+    // The roster names sessions the operator can see; the open board names sessions it already shows.
+    const scopeSessionChoices = () => {
+      void presentation()?.revision;
+      const choices = new Map<string, string>();
+      for (const session of sessionsBoard.snapshot?.sessions ?? []) {
+        choices.set(session.key, session.label || session.derivedTitle || session.key);
+      }
+      for (const session of host.sessions.rows) {
+        if (isWorkboardSessionChoice(session)) {
+          choices.set(session.key, session.displayName || session.label || session.key);
+        }
+      }
+      return [...choices].map(([key, label]) => ({ key, label }));
+    };
+    const liveClient = () => {
+      void presentation()?.revision;
+      return host.connection.connected ? host : null;
+    };
     function PageHeading() {
       const board = () => presentation()?.selectedBoard;
+      // The open board's read carries the newest saved scope; the board list may lag it.
+      const boardScope = () => {
+        void presentation()?.revision;
+        const selected = board();
+        return sessionsBoard.snapshot?.board.id === selected?.id
+          ? sessionsBoard.snapshot?.board.sessions?.scope
+          : selected?.sessions?.scope;
+      };
       return (
         <div
           class="workboard-heading__identity"
@@ -374,22 +409,28 @@ export function createWorkboardPage(
                 title={t("workboard.editBoard")}
                 onClick={() => {
                   const selected = board();
-                  if (!selected) {
-                    return;
+                  if (selected) {
+                    editBoard(selected);
                   }
-                  boardDraft = createBoardDraft({
-                    ...selected,
-                    ...(sessionsBoard.snapshot?.board.id === selected.id
-                      ? sessionsBoard.snapshot.board
-                      : {}),
-                  });
-                  publishPresentation();
                 }}
               >
                 {icons.penLine}
               </button>
             </Show>
           </div>
+          <Show when={board()?.kind === "sessions"}>
+            <SessionsScopeHeading
+              scope={boardScope()}
+              client={liveClient()}
+              canEdit={Boolean(presentation()?.workboardProps.canWrite)}
+              onEdit={() => {
+                const selected = board();
+                if (selected) {
+                  editBoard(selected);
+                }
+              }}
+            />
+          </Show>
           <Show when={board()?.automationJobId}>
             {(jobId) => (
               <BoardAutomationHeading
@@ -430,10 +471,6 @@ export function createWorkboardPage(
       );
     }
     function Page() {
-      const liveClient = () => {
-        void presentation()?.revision;
-        return host.connection.connected ? host : null;
-      };
       const canWrite = () => {
         void presentation()?.revision;
         return (
@@ -475,6 +512,7 @@ export function createWorkboardPage(
                     boardDraft = createNewBoardDraft();
                     publishPresentation();
                   }}
+                  onEditBoard={() => editBoard(current().selectedBoard!)}
                   onBoardChange={(boardFilter) =>
                     host.navigation.openPage(workboardPageTarget(boardFilter), {
                       replace: true,
@@ -483,14 +521,16 @@ export function createWorkboardPage(
                   }
                 />
               </Show>
-              <Show when={current().boardDraft}>
+              {/* Keyed: one draft object lives for one dialog, so closing never reads a cleared draft. */}
+              <Show when={current().boardDraft} keyed>
                 {(draft) => (
                   <BoardModal
-                    draft={draft()}
+                    draft={draft}
                     revision={current().revision}
                     toastOwner={state}
                     pageError={workboardErrorMessage(state, current().workboardProps.pageError)}
                     client={liveClient()}
+                    sessions={scopeSessionChoices()}
                     canWrite={canWrite()}
                     onChange={publishPresentation}
                     onCancel={() => {

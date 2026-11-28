@@ -14,6 +14,7 @@ import type { SessionsBoardController } from "./sessions-board-controller.ts";
 import { RelativeTime } from "./view-card-time.tsx";
 import { boardScrollEdgesRef } from "./view-scroll-fade.ts";
 import { SessionStatusBadge, type SessionStatusPresentation } from "./view-session-status.tsx";
+import { hasSessionsScopeFilters } from "./view-sessions-scope.tsx";
 
 const PULL_REQUEST_STATE_PRIORITY = { open: 0, draft: 1, merged: 2, closed: 3 };
 
@@ -56,6 +57,7 @@ export type SessionsBoardProps = {
   pageError?: string;
   overlayOpen: boolean;
   onNewBoard: () => void;
+  onEditBoard: () => void;
   onBoardChange: (boardId: string) => void;
 };
 
@@ -113,8 +115,20 @@ export function SessionsBoard(props: SessionsBoardProps) {
             PULL_REQUEST_STATE_PRIORITY[left.state] - PULL_REQUEST_STATE_PRIORITY[right.state],
         ),
       }));
+    const scope = snapshot?.board.sessions?.scope ?? props.board.sessions?.scope;
+    const filtered = hasSessionsScopeFilters(scope);
+    const scopedEmpty =
+      filtered &&
+      controller.sessionsLoaded &&
+      controller.peopleFilter === "everyone" &&
+      (snapshot?.total ?? snapshot?.sessions.length ?? 0) === 0;
     return {
       canWrite: host.connection.canWrite,
+      scopedEmpty: scopedEmpty
+        ? scope?.includeSessionKeys?.length === 0
+          ? ("picked" as const)
+          : ("filtered" as const)
+        : undefined,
       boardOptions: [
         { value: "__all__", label: t("workboard.allBoards") },
         ...props.boards.map((board) => ({ value: board.id, label: workboardBoardName(board) })),
@@ -338,7 +352,34 @@ export function SessionsBoard(props: SessionsBoardProps) {
                         </div>
                       )}
                     </For>
-                    {!state().sessionsLoaded || column().sessions.length ? null : (
+                    {state().scopedEmpty && column().id === state().columns[0]?.id ? (
+                      <div class="workboard-sessions__scope-empty" role="status">
+                        <span>
+                          {t(
+                            state().scopedEmpty === "picked"
+                              ? "workboard.sessionsBoard.scope.emptyPicked"
+                              : "workboard.sessionsBoard.scope.emptyFiltered",
+                          )}
+                        </span>
+                        {state().canWrite ? (
+                          <button
+                            class="btn"
+                            type="button"
+                            disabled={!state().writable}
+                            onClick={() => props.onEditBoard()}
+                          >
+                            {t(
+                              state().scopedEmpty === "picked"
+                                ? "workboard.sessionsBoard.scope.pickSessions"
+                                : "workboard.sessionsBoard.scope.edit",
+                            )}
+                          </button>
+                        ) : null}
+                      </div>
+                    ) : null}
+                    {!state().sessionsLoaded ||
+                    state().scopedEmpty ||
+                    column().sessions.length ? null : (
                       <span class="workboard-sessions__empty">
                         {t("workboard.sessionsBoard.empty")}
                       </span>

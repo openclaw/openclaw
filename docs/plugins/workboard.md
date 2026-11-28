@@ -158,6 +158,22 @@ and appears below the board when more matching sessions are available.
 
 Dock conversations stay excluded even when automation is included.
 
+To focus a Sessions board on specific work, select sessions when creating or editing it,
+or filter by sidebar group, linked project, or text in the session title. Filters
+apply together: a **Mobile** group filter and an **iOS** title filter show only
+sessions in that group with a matching title. New matching sessions appear
+automatically unless you choose **Only selected sessions**. Removing a session
+from the board does not archive or delete it. Saving in **Edit board** updates only
+the filters you edited. If the Board agent or another operator changed other filters
+while the dialog was open, those changes stay on the board.
+
+The Board agent can set the same filters. Pass `scope` when creating a board with
+`kind: "sessions"`, or read the board first and send the complete replacement `scope` to
+`workboard_sessions_board_update`. Omit `includeSessionKeys` to include all eligible sessions,
+or pass an empty array to select none. `group` (empty string for ungrouped sessions) and
+`projectId` match exactly, and `titleContains` is case-insensitive. These filters do not
+override visibility, age, or archive settings.
+
 **People filter:** Choose **Everyone** (the default), **Involving me**, or a person
 beside the agent filter. Involving me shows sessions you own or previously prompted;
 a person selects their profile associations. The choice is remembered per viewer,
@@ -200,8 +216,8 @@ column is removed, the board applies its rules again. Tile tooltips distinguish
 **by rule** and **pinned**.
 
 Facts update live from session changes, with automatic board rereads at most once
-every five seconds. Category-only session updates and card-only changes do not
-reload Sessions boards. The Gateway selects the authorized roster once and reuses
+every five seconds. Card-only changes do not reload Sessions boards, and category-only
+session updates reload them only when a board filters by group. The Gateway selects the authorized roster once and reuses
 immutable facts for unchanged sessions. The board keeps one frozen snapshot per
 board and people view, replacing only rows whose facts changed. Live run state,
 background previews, and time-dependent subagent state remain current; profile,
@@ -273,9 +289,9 @@ id from that context or from `workboard_boards`.
 
 Specs allow 2–12 columns with unique lowercase slug ids (1–48 characters), labels
 (1–60), and descriptions (1–400). Exactly one column must have `fallback: true`.
-Optional colors use the board palette. `scope` accepts `agentIds`,
-`includeArchived`, `includeAutomation`, `includeHome`, and a positive `maxAgeHours`.
-The include options default to false. Rules can match `health`, `run`
+Optional colors use the board palette. In addition to the session filters above,
+`scope` accepts `agentIds`, `includeArchived`, `includeAutomation`, `includeHome`,
+and a positive `maxAgeHours`. The three boolean options default to false. Rules can match `health`, `run`
 (`active`, `idle`, `failed`), `pullRequest` (`none`, `open`, `draft`, `merged`,
 `closed`), and `archived`. Unknown pull-request state does not count as `none`.
 

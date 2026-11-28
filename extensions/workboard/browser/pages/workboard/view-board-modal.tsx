@@ -22,6 +22,14 @@ import { t } from "../../i18n/index.ts";
 import { formatUiError } from "../../lib/format-error.ts";
 import type { WorkboardBoardMetadata, WorkboardBoardSummary } from "../../lib/workboard/types.ts";
 import { liveInputValue } from "./view-input-value.ts";
+import {
+  SessionsScopeEditor,
+  hasSessionsScopeFilters,
+  editedScopeFields,
+  sessionsScopeForSave,
+  type SessionsBoardScope,
+  type SessionsScopeChoice,
+} from "./view-sessions-scope.tsx";
 
 export type BoardDraft = {
   id: string;
@@ -31,6 +39,8 @@ export type BoardDraft = {
   kind: "cards" | "sessions";
   create?: boolean;
   sessions?: WorkboardSessionsBoardSpec;
+  /** Editable copy of the whole saved scope; fields the editor does not show pass through. */
+  scope?: SessionsBoardScope;
 };
 const originals = new WeakMap<
   BoardDraft,
@@ -50,9 +60,17 @@ export function createBoardDraft(board: WorkboardBoardSummary): BoardDraft {
     id: board.id,
     ...fields,
     kind: board.kind ?? "cards",
-    ...(board.sessions ? { sessions: structuredClone(board.sessions) } : {}),
+    ...(board.sessions
+      ? {
+          sessions: structuredClone(board.sessions),
+          scope: structuredClone(board.sessions.scope ?? {}),
+        }
+      : {}),
   };
-  originals.set(draft, { ...fields, sessions: structuredClone(draft.sessions) });
+  originals.set(draft, {
+    ...fields,
+    sessions: structuredClone(draft.sessions),
+  });
   return draft;
 }
 
@@ -64,6 +82,7 @@ export function createNewBoardDraft(): BoardDraft {
     color: "",
     kind: "cards",
     create: true,
+    scope: {},
   };
   originals.set(draft, { name: "", icon: "", color: "" });
   return draft;
@@ -75,6 +94,8 @@ export function BoardModal(props: {
   pageError?: string | null;
   toastOwner: object;
   client: GatewayBrowserClient | null;
+  /** Session choices for a Sessions board's picked-session filter. */
+  sessions: readonly SessionsScopeChoice[];
   readonly canWrite: boolean;
   onSaved: (board: WorkboardBoardMetadata) => void;
   onCancel: () => void;
@@ -109,9 +130,16 @@ export function BoardModal(props: {
       const sessions = initialDraft.sessions
         ? normalizeWorkboardSessionsBoardSpec(initialDraft.sessions)
         : undefined;
-      const input: Record<string, string | string[]> = { id: initialDraft.id };
+      const input: Record<string, unknown> = { id: initialDraft.id };
+      const scope =
+        initialDraft.kind === "sessions" && initialDraft.scope
+          ? sessionsScopeForSave(initialDraft.scope)
+          : undefined;
       if (initialDraft.create && initialDraft.kind === "sessions") {
         input.kind = "sessions";
+        if (hasSessionsScopeFilters(scope)) {
+          input.scope = scope;
+        }
       }
       const clearAppearance: string[] = [];
       const original = originals.get(initialDraft);
@@ -121,6 +149,10 @@ export function BoardModal(props: {
       const columnsToSave =
         sessions && sessionColumnsKey(sessions) !== openingColumnsKey
           ? sessions.columns
+          : undefined;
+      const scopeChanges =
+        !initialDraft.create && scope
+          ? editedScopeFields(original?.sessions?.scope, scope)
           : undefined;
       for (const field of ["name", "icon", "color"] as const) {
         const value = initialDraft[field].trim();
@@ -142,13 +174,16 @@ export function BoardModal(props: {
       if (!isCurrent()) {
         return;
       }
-      if (columnsToSave) {
+      if (columnsToSave || scopeChanges) {
         if (!props.canWrite) {
           throw new Error(t("workboard.sessionsBoard.writeUnavailable"));
         }
         await client.request("workboard.sessionsBoard.update", {
           boardId: initialDraft.id,
-          patch: { columns: columnsToSave },
+          patch: {
+            ...(columnsToSave ? { columns: columnsToSave } : {}),
+            ...(scopeChanges ? { scopeChanges } : {}),
+          },
         });
       }
       if (isCurrent()) {
@@ -181,7 +216,7 @@ export function BoardModal(props: {
       {...{
         label: t(draft().create ? "workboard.newBoard" : "workboard.editBoard"),
         returnFocusTarget: initialReturnFocusTarget,
-        style: `--openclaw-modal-width: ${draft().sessions ? "640px" : "420px"}; --openclaw-modal-backdrop-filter: blur(1px);`,
+        style: `--openclaw-modal-width: ${draft().kind === "sessions" ? "640px" : "420px"}; --openclaw-modal-backdrop-filter: blur(1px);`,
         onCancel: () => {
           if (busy) {
             return false;
@@ -272,6 +307,16 @@ export function BoardModal(props: {
               disabled={saving() || !props.canWrite}
             />
           </section>
+          {draft().kind === "sessions" && draft().scope ? (
+            <SessionsScopeEditor
+              scope={draft().scope!}
+              revision={props.revision}
+              disabled={saving() || !props.canWrite}
+              client={props.client}
+              sessions={props.sessions}
+              onChange={props.onChange}
+            />
+          ) : undefined}
           {draft().sessions ? (
             <SessionsEditor
               draft={draft()}

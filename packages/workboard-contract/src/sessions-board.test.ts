@@ -1,6 +1,7 @@
 import { describe, expect, expectTypeOf, it } from "vitest";
 import {
   normalizeWorkboardSessionsBoardSpec,
+  patchWorkboardSessionsBoardSpec,
   type WorkboardSessionFacts,
 } from "./sessions-board.js";
 
@@ -26,6 +27,40 @@ function specWithMatch(match: unknown) {
 }
 
 describe("Sessions board match normalization", () => {
+  it("keeps an explicit empty selection distinct from an unrestricted board", () => {
+    const scope = (input: unknown) =>
+      normalizeWorkboardSessionsBoardSpec({ ...specWithMatch({}), scope: input }).scope;
+    expect(scope({})).toEqual({});
+    expect(scope({ includeSessionKeys: [] })).toEqual({ includeSessionKeys: [] });
+    expect(
+      scope({ includeSessionKeys: [" key ", "key"], group: "", titleContains: " iOS " }),
+    ).toEqual({ includeSessionKeys: ["key"], group: "", titleContains: "iOS" });
+    for (const invalid of [
+      { includeSessionKeys: "key" },
+      { includeSessionKeys: [""] },
+      { projectId: " " },
+      { group: false },
+      { titleContains: [] },
+    ]) {
+      expect(() => scope(invalid)).toThrow();
+    }
+  });
+
+  it("applies field edits to the current scope without changing the full replacement contract", () => {
+    const current = normalizeWorkboardSessionsBoardSpec({
+      ...specWithMatch({}),
+      scope: { agentIds: ["main"], group: "Mobile", includeSessionKeys: ["one"] },
+    });
+    const patch = (value: unknown) => patchWorkboardSessionsBoardSpec(current, value).scope;
+    expect(patch({ scopeChanges: { group: null, includeSessionKeys: [] } })).toEqual({
+      agentIds: ["main"],
+      includeSessionKeys: [],
+    });
+    expect(patch({ scope: {} })).toEqual({});
+    expect(() => patch({ scope: {}, scopeChanges: { group: null } })).toThrow();
+    expect(() => patch({ scopeChanges: { unknown: null } })).toThrow();
+  });
+
   it.each([
     {},
     { includeAutomation: true, includeHome: true },

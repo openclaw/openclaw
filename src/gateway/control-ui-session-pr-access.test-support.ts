@@ -35,6 +35,7 @@ import { makeContextParams } from "./server-request-context.test-support.js";
 import { createGatewayWsTestSocket } from "./server/ws-connection.test-helpers.js";
 import { createOperatorWsClient } from "./server/ws-connection/authenticated-request-dispatch.test-support.js";
 import { getSessionRowProjection } from "./session-row-projection-access.js";
+import { resolveSessionStoreAgentId } from "./session-store-key.js";
 import { loadGatewaySessionEntryReadOnlyAsync } from "./session-utils-store.js";
 
 const METHOD = "controlUi.sessionPullRequests.subscribe";
@@ -88,12 +89,13 @@ export async function createFixture(
   setUserProfileRole(profile.id, "reader");
   setRuntimeConfigSnapshot(cfg);
   const seed = async (key: string, creator = profile.id, patch: Partial<SessionEntry> = {}) => {
+    const agentId = resolveSessionStoreAgentId(cfg, key);
     if (!seeded.has(key)) {
-      expect(loadSessionEntryReadOnly({ agentId: "main", sessionKey: key })).toBeUndefined();
+      expect(loadSessionEntryReadOnly({ agentId, sessionKey: key })).toBeUndefined();
       seeded.add(key);
     }
     await upsertSessionEntryCore(
-      { agentId: "main", sessionKey: key },
+      { agentId, sessionKey: key },
       {
         sessionId: `${key}-${fixtureId}`,
         updatedAt: 1,
@@ -241,12 +243,12 @@ export async function createFixture(
     },
     async removeSessions() {
       for (const key of seeded) {
-        const original = loadSessionEntryReadOnly({ agentId: "main", sessionKey: key });
+        const agentId = resolveSessionStoreAgentId(cfg, key);
+        const original = loadSessionEntryReadOnly({ agentId, sessionKey: key });
         if (original) {
           await deleteSessionEntryLifecycle({
-            agentId: "main",
-            storePath: (await loadGatewaySessionEntryReadOnlyAsync(key, { agentId: "main" }))
-              .storePath,
+            agentId,
+            storePath: (await loadGatewaySessionEntryReadOnlyAsync(key, { agentId })).storePath,
             target: { canonicalKey: key, storeKeys: [key] },
             expectedSessionId: original.sessionId,
             archiveTranscript: false,

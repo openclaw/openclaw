@@ -173,3 +173,169 @@ a.workboard-session-pr:hover {
   flex-wrap: wrap;
   gap: 6px;
 }
+
+button.workboard-heading__scope-name {
+  max-width: 100%;
+  padding: 0;
+  border: 0;
+  background: none;
+  font-family: inherit;
+  text-align: start;
+}
+
+.workboard-sessions__scope-empty {
+  display: grid;
+  justify-items: start;
+  gap: var(--space-2);
+  padding: 16px 0;
+  color: var(--muted);
+  font-size: 0.8rem;
+  line-height: 1.45;
+}
+
+.workboard-sessions-scope {
+  min-width: 0;
+  padding-top: 16px;
+  border-top: 1px solid var(--border);
+}
+
+.workboard-sessions-scope__body {
+  display: grid;
+  gap: 14px;
+  min-width: 0;
+  margin: 0;
+  padding: 0;
+  border: 0;
+}
+
+.workboard-sessions-scope__body > legend {
+  padding: 0 0 8px;
+  font-weight: 600;
+}
+
+.workboard-sessions-scope__filters {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(150px, 1fr));
+  gap: 12px;
+}
+
+.workboard-sessions-scope .settings-input {
+  width: 100%;
+  min-width: 0;
+  height: var(--workboard-control-height);
+  box-sizing: border-box;
+}
+
+.workboard-sessions-scope__which {
+  display: grid;
+  gap: 8px;
+  min-width: 0;
+  margin: 0;
+  padding: 0;
+  border: 0;
+}
+
+.workboard-sessions-scope__which > legend {
+  padding: 0 0 6px;
+  color: var(--muted);
+  font-size: 0.78rem;
+  font-weight: 500;
+}
+
+.workboard-sessions-scope__modes {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 4px 20px;
+}
+
+.workboard-sessions-scope__modes label {
+  display: flex;
+  align-items: center;
+  gap: var(--space-2);
+  min-height: 32px;
+  font-size: 0.86rem;
+
+  > input {
+    margin: 0;
+  }
+}
+
+.workboard-sessions-scope__picked {
+  display: grid;
+  gap: 8px;
+  min-width: 0;
+}
+
+.workboard-sessions-scope__chips {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px;
+  margin: 0;
+  padding: 0;
+  list-style: none;
+}
+
+.workboard-sessions-scope__chip {
+  display: inline-flex;
+  align-items: center;
+  gap: 2px;
+  max-width: 100%;
+  min-height: 28px;
+  padding-inline: 10px 2px;
+  border-radius: var(--radius-md);
+  background: var(--bg-muted);
+  color: var(--text);
+  font-size: 0.82rem;
+
+  > span {
+    min-width: 0;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+  }
+
+  > button.btn--icon {
+    flex: none;
+    width: 24px;
+    min-width: 24px;
+    height: 24px;
+    min-height: 24px;
+    padding: 0;
+    border: 0;
+    border-radius: var(--radius-sm);
+    box-shadow: none;
+  }
+
+  > button.btn--icon svg {
+    width: 14px;
+    height: 14px;
+  }
+}
+
+.workboard-sessions-scope__add {
+  justify-self: start;
+  min-width: min(100%, 240px);
+}
+
+.workboard-sessions-scope__note {
+  margin: 0;
+  color: var(--muted);
+  font-size: 0.8rem;
+}
+
+.workboard-sessions-scope .workboard-sessions-editor__help {
+  margin: 0;
+}
+
+@media (hover: none) {
+  .workboard-sessions-scope__chip > button.btn--icon {
+    width: 44px;
+    min-width: 44px;
+    height: 44px;
+    min-height: 44px;
+  }
+
+  .workboard-sessions-scope__modes label {
+    min-height: 44px;
+  }
+}

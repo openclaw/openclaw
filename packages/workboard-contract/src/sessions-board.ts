@@ -89,8 +89,11 @@ export type WorkboardSessionsBoardRead = {
   warning?: string;
 };
 
-export function createDefaultWorkboardSessionsBoardSpec(): WorkboardSessionsBoardSpec {
+export function createDefaultWorkboardSessionsBoardSpec(
+  scope?: unknown,
+): WorkboardSessionsBoardSpec {
   return {
+    ...(scope === undefined ? {} : { scope: normalizeScope(scope) }),
     columns: [
       {
         id: "needs-input",
@@ -235,14 +238,20 @@ function normalizeColumn(value: unknown) {
   };
 }
 
+const SCOPE_KEYS = [
+  "agentIds",
+  "includeSessionKeys",
+  "group",
+  "projectId",
+  "titleContains",
+  "includeArchived",
+  "includeAutomation",
+  "includeHome",
+  "maxAgeHours",
+];
+
 function normalizeScope(value: unknown) {
-  const input = record(value, "scope", [
-    "agentIds",
-    "includeArchived",
-    "includeAutomation",
-    "includeHome",
-    "maxAgeHours",
-  ]);
+  const input = record(value, "scope", SCOPE_KEYS);
   let agentIds: string[] | undefined;
   if (input.agentIds !== undefined) {
     if (!Array.isArray(input.agentIds)) {
@@ -251,6 +260,15 @@ function normalizeScope(value: unknown) {
     agentIds = [...new Set(input.agentIds.map((id: unknown) => text(id, "agent id", 1)))];
   }
   const maxAgeHours = input.maxAgeHours;
+  let includeSessionKeys: string[] | undefined;
+  if (input.includeSessionKeys !== undefined) {
+    if (!Array.isArray(input.includeSessionKeys)) {
+      throw new Error("scope.includeSessionKeys must be an array.");
+    }
+    includeSessionKeys = [
+      ...new Set(input.includeSessionKeys.map((key: unknown) => text(key, "session key", 1, 512))),
+    ];
+  }
   if (
     maxAgeHours !== undefined &&
     (typeof maxAgeHours !== "number" || !Number.isFinite(maxAgeHours) || maxAgeHours <= 0)
@@ -259,6 +277,14 @@ function normalizeScope(value: unknown) {
   }
   return {
     ...(agentIds !== undefined ? { agentIds } : {}),
+    ...(includeSessionKeys !== undefined ? { includeSessionKeys } : {}),
+    ...(input.group !== undefined ? { group: text(input.group, "scope.group", 0) } : {}),
+    ...(input.projectId !== undefined
+      ? { projectId: text(input.projectId, "scope.projectId", 1) }
+      : {}),
+    ...(input.titleContains !== undefined
+      ? { titleContains: text(input.titleContains, "scope.titleContains", 1) }
+      : {}),
     ...(input.includeArchived !== undefined
       ? { includeArchived: boolean(input.includeArchived, "scope.includeArchived") }
       : {}),
@@ -301,6 +327,19 @@ export function patchWorkboardSessionsBoardSpec(
   current: WorkboardSessionsBoardSpec,
   value: unknown,
 ): WorkboardSessionsBoardSpec {
-  const patch = record(value, "sessions board patch", SPEC_KEYS);
+  const { scopeChanges, ...patch } = record(value, "sessions board patch", [
+    ...SPEC_KEYS,
+    "scopeChanges",
+  ]);
+  if (scopeChanges !== undefined) {
+    if (patch.scope !== undefined) {
+      throw new Error("Use either scope or scopeChanges, not both.");
+    }
+    // Merge in the existing write transaction, not against the snapshot from when the editor opened.
+    const changes = record(scopeChanges, "scopeChanges", SCOPE_KEYS);
+    patch.scope = Object.fromEntries(
+      Object.entries({ ...current.scope, ...changes }).filter(([, entry]) => entry !== null),
+    );
+  }
   return normalizeWorkboardSessionsBoardSpec({ ...current, ...patch });
 }
