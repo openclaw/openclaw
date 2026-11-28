@@ -148,7 +148,6 @@ describe("proxy fetch", () => {
 
     const fetchFn = resolveProxyFetchFromEnv({
       HTTP_PROXY: "",
-      https_proxy: "",
       http_proxy: "",
       HTTPS_PROXY: "not-a-valid-url",
     });
