@@ -46,7 +46,6 @@ import { readCronStoreSelectionForDoctor } from "./default-store-selection.js";
 import {
   applyEndedOneTimeCronRepair,
   archiveEndedOneTimeCronRuns,
-  describeEndedOneTimeCronRepair,
   planEndedOneTimeCronRepair,
 } from "./ended-one-time.js";
 import { parseLegacyCronJobs } from "./legacy-json-shapes.js";
@@ -84,6 +83,11 @@ export type LegacyCronRepairResult = {
 export function readLegacyCronStorePath(cfg: OpenClawConfig): string | undefined {
   return (cfg.cron as (NonNullable<OpenClawConfig["cron"]> & { store?: string }) | undefined)
     ?.store;
+}
+
+function hasOneTimeCronRepairWork(jobs: LegacyCronRepairState["rawJobs"]): boolean {
+  const { ended, incompatible, obsolete } = planEndedOneTimeCronRepair(jobs);
+  return ended.length > 0 || incompatible.length > 0 || obsolete.length > 0;
 }
 
 export async function loadLegacyCronRepairState(params: {
@@ -137,11 +141,8 @@ export async function loadLegacyCronRepairState(params: {
           }),
         )
       : (loaded.store.jobs as unknown as Array<Record<string, unknown>>);
-  if (params.onlyIfLegacyDetected && !legacyQuarantine) {
-    const oneTimeRepair = planEndedOneTimeCronRepair(currentJobs);
-    if (describeEndedOneTimeCronRepair(oneTimeRepair).length === 0) {
-      return null;
-    }
+  if (params.onlyIfLegacyDetected && !legacyQuarantine && !hasOneTimeCronRepairWork(currentJobs)) {
+    return null;
   }
   for (const job of currentJobs) {
     const jobId = normalizeOptionalString(job.id) ?? normalizeOptionalString(job.jobId);
@@ -481,11 +482,24 @@ export async function checkDoctorPreflightCronPending(params: {
   ) {
     return "work";
   }
-  const codex = await collectCronCodexRuntimePolicyTargetsReadOnly({ cfg: params.migrationConfig });
-  if (codex.warnings.length > 0) {
+  const readJobs = async (cfg: OpenClawConfig) =>
+    (await loadLegacyCronRepairState({ cfg, env: params.env, readOnly: true }))?.rawJobs ?? [];
+  try {
+    const repairJobs = await readJobs(params.repairConfig);
+    if (hasOneTimeCronRepairWork(repairJobs)) {
+      return "work";
+    }
+    // Preflight restores a retired store selector only for the repair pass.
+    const policyJobs =
+      readLegacyCronStorePath(params.repairConfig) ===
+      readLegacyCronStorePath(params.migrationConfig)
+        ? repairJobs
+        : await readJobs(params.migrationConfig);
+    return collectStoredCronCodexRuntimePolicyTargets(policyJobs).length > 0 ? "work" : "none";
+  } catch (err) {
+    rethrowSqliteSchemaVersionError(err);
     return "undecidable";
   }
-  return codex.targets.length > 0 ? "work" : "none";
 }
 
 /** Commit Codex cron refs only after their model-scoped config policy is durable. */

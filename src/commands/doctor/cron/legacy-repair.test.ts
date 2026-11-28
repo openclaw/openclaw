@@ -31,6 +31,7 @@ import { externalDoctorEnv } from "../../doctor-update.test-support.js";
 import { collectLegacyCronStoreHealthFindings, maybeRepairLegacyCronStore } from "./index.js";
 import {
   applyLegacyCronStoreRepair,
+  checkDoctorPreflightCronPending,
   loadLegacyCronRepairState,
   repairLegacyCronStoreWithoutPrompt,
 } from "./legacy-repair.js";
@@ -105,6 +106,13 @@ it(
     const keep = { ...job("keep", { schedule }), deleteAfterRun: false };
     const paused = job("not-run", { schedule, enabled: false });
     await saveJobs(storePath, ended, keep, paused);
+    const preflight = {
+      selectionConfig: {},
+      repairConfig: {},
+      migrationConfig: {},
+      env: process.env,
+    };
+    expect(await checkDoctorPreflightCronPending(preflight)).toBe("work");
     const first = await repair(storePath);
     expect(first.changes).toEqual(
       expect.arrayContaining([
@@ -123,6 +131,7 @@ it(
       { jobName: "ended", error: "staging refused the build", retryAvailable: true },
     ]);
     expect((await repair(storePath)).changes).toEqual([]);
+    expect(await checkDoctorPreflightCronPending(preflight)).toBe("none");
   }),
 );
 
