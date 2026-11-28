@@ -1,6 +1,6 @@
 package ai.openclaw.app.node
 
-import ai.openclaw.app.gateway.GatewaySession
+import ai.openclaw.app.gateway.InvokeResult
 import ai.openclaw.app.hasPermission
 import android.Manifest
 import android.content.Context
@@ -117,7 +117,7 @@ class CallLogHandler internal constructor(
   appContext: Context,
   private val dataSource: CallLogDataSource = SystemCallLogDataSource(appContext),
 ) {
-  fun handleCallLogSearch(paramsJson: String?): GatewaySession.InvokeResult {
+  fun handleCallLogSearch(paramsJson: String?): InvokeResult {
     if (!dataSource.hasReadPermission()) {
       return nodeInvokeError("CALL_LOG_PERMISSION_REQUIRED", "grant Call Log permission")
     }

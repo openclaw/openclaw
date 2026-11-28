@@ -57,7 +57,6 @@ import {
   startOrResumeThreadWithEmptySkillCatalog as startOrResumeThreadImpl,
   writeNativeCatalogFixture,
 } from "./thread-lifecycle.test-fixtures.js";
-import { buildDeveloperInstructions } from "./thread-prompt.js";
 import {
   attestCodexRestrictedToolSurfaceMcpServersDisabled,
   buildThreadResumeParams,
@@ -107,8 +106,6 @@ it("uses direct OpenClaw functions and hosted web search for subscription sharin
   expect(start.config).toMatchObject({
     "features.code_mode": false,
     "features.apps": false,
-    "features.multi_agent": false,
-    "features.multi_agent_v2": false,
     "features.plugins": false,
     "orchestrator.skills.enabled": false,
     "skills.bundled.enabled": false,
@@ -116,7 +113,6 @@ it("uses direct OpenClaw functions and hosted web search for subscription sharin
     "features.standalone_web_search": false,
   });
   expect(start.developerInstructions).not.toContain("tool_search");
-  expect(start.developerInstructions).not.toContain("spawn_agent");
   params.pluginHarnessToolPolicyRestricted = true;
   params.scheduledRuntimeAuthority = {} as NonNullable<
     EmbeddedRunAttemptParams["scheduledRuntimeAuthority"]
@@ -244,7 +240,6 @@ describe("Codex ring-zero thread config", () => {
     expect(start.config?.project_doc_max_bytes).toBe(131_072);
     expect(resume.config?.project_doc_max_bytes).toBe(200_000);
     for (const threadConfig of [start.config, resume.config]) {
-      expect(threadConfig?.["features.multi_agent"]).toBe(false);
       expect(threadConfig?.["orchestrator.mcp.enabled"]).toBe(false);
     }
 
@@ -503,30 +498,6 @@ function sourceThread(params: {
 }
 
 describe("Codex app-server native code mode config", () => {
-  it("never advertises unavailable delegation or session tools", () => {
-    const restrictedParams = [
-      Object.assign(createAttemptParams({ provider: "openai" }), {
-        delegationCapability: "report_only" as const,
-      }),
-      Object.assign(createAttemptParams({ provider: "openai" }), { toolsAllow: ["openclaw"] }),
-      Object.assign(createAttemptParams({ provider: "openai" }), { modelId: "gpt-5.4-nano" }),
-      Object.assign(createAttemptParams({ provider: "openai" }), { disableTools: true }),
-    ];
-
-    for (const params of restrictedParams) {
-      const instructions = buildDeveloperInstructions(params);
-      expect(instructions).not.toContain("`spawn_agent`");
-      expect(instructions).not.toContain("`sessions_spawn`");
-      expect(instructions).not.toContain("`wait_agent`");
-    }
-
-    const instructions = buildDeveloperInstructions(createAttemptParams({ provider: "openai" }), {
-      dynamicTools: [],
-    });
-    expect(instructions).toContain("`spawn_agent`");
-    expect(instructions).not.toContain("`sessions_spawn`");
-  });
-
   it("keeps hashed dynamic tool fingerprints compatible with legacy JSON bindings", () => {
     const tools = [
       {
@@ -662,9 +633,6 @@ describe("Codex app-server native code mode config", () => {
         });
         expect(request.config?.["code_mode.direct_only_tool_namespaces"]).toBeUndefined();
         expect(request.config?.["features.code_mode_only"]).toBe(nativeCodeModeOnlyEnabled);
-        expect(request.developerInstructions?.includes("`tool_search`")).toBe(
-          !nativeCodeModeOnlyEnabled,
-        );
       }
     },
   );
@@ -693,7 +661,7 @@ describe("Codex app-server native code mode config", () => {
         ...DEFAULT_CODEX_RUNTIME_THREAD_CONFIG,
         include_collaboration_mode_instructions: false,
         project_doc_max_bytes: lightweight ? 0 : 131_072,
-        ...(lightweight ? { "features.hooks": true } : { "features.multi_agent": false }),
+        ...(lightweight ? { "features.hooks": true } : {}),
       });
     },
   );

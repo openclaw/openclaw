@@ -8,12 +8,15 @@ import {
   summarizeGatewayServiceLayout,
 } from "../daemon/service-layout.js";
 import type { GatewayServiceCommandConfig } from "../daemon/service-types.js";
-import { resolveIdentityPathViaExistingAncestorSync } from "../infra/boundary-path.js";
 import { hasErrnoCode } from "../infra/errno.js";
 import type { GatewayServiceInstallation } from "../infra/gateway-service-installation-context.js";
 import { compareOpenClawReleaseVersions } from "../infra/npm-registry-spec.js";
 import { resolveOpenClawPackageRoot } from "../infra/openclaw-root.js";
-import { lstatIfExists, statIfExists } from "../infra/path-existence.js";
+import {
+  lstatIfExists,
+  resolveIdentityPathViaExistingAncestorSync,
+  statIfExists,
+} from "../infra/path-existence.js";
 import { resolveOpenClawStateSqlitePath } from "../state/openclaw-state-db.paths.js";
 import { VERSION } from "../version.js";
 import { isGatewayRunInvocationArgv } from "./gateway-run-argv.js";
@@ -115,8 +118,10 @@ export async function inspectCliGatewayServiceInstallation(
     const ownCommand = await readOwnGatewayServiceCommand(env);
     const command =
       ownCommand ?? (await readGatewayServiceCommand(env, { inspectStateIdentity: true }));
-    const root = await resolveOpenClawPackageRoot({ moduleUrl: import.meta.url });
     const layout = await summarizeGatewayServiceLayout(command);
+    const root = layout?.packageRootReal
+      ? await resolveOpenClawPackageRoot({ moduleUrl: import.meta.url })
+      : null;
     const drift = root ? await inspectGatewayServiceInstallationDrift(layout, root) : undefined;
     if (
       !drift?.serviceVersion ||

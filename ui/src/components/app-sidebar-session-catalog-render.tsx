@@ -5,6 +5,7 @@ import type {
   SessionCatalogHost,
   SessionCatalogSession,
 } from "../../../packages/gateway-protocol/src/index.ts";
+import { normalizeCatalogTimestamp } from "../../../packages/gateway-protocol/src/public-session-catalog.ts";
 import { normalizeSessionColorValue } from "../../../packages/gateway-protocol/src/session-agent-status.js";
 import { formatUiError } from "../lib/format-error.ts";
 import { handleContextMenuEvent } from "../lib/keyboard-shortcuts.ts";
@@ -22,7 +23,6 @@ import {
 import {
   catalogErrorMessages,
   formatSidebarTimestamp,
-  normalizeCatalogTimestamp,
   type CatalogSessionMenuRequest,
   type CatalogRowControls,
   catalogSessionActivity,
@@ -114,9 +114,11 @@ function renderCatalogHostGroup(
     );
     const catalogMenu = createMemo<CatalogSessionMenuRequest>(() => ({
       key: catalogKey(),
+      originalUrl: readSession().originalUrl,
       agentId: params.snapshot.newSessionAgentId,
       routeId,
       navigation: target().options,
+      profileRelation: readHost().profileRelation,
       canOpenTerminal: readSession().canOpenTerminal === true,
       canDelete: readSession().canArchive && readCatalog().capabilities.archive,
       name: readSession().name ?? readSession().threadId,
@@ -135,14 +137,12 @@ function renderCatalogHostGroup(
     }));
     const color = createMemo(() => normalizeSessionColorValue(readSession().color ?? ""));
     const active = createMemo(() => key() === params.snapshot.routeSessionKey);
-    const ownRunActive = () => {
+    const running = () => {
       const row = adoptedRow();
       return row
         ? row.isRunVisuallyActive === true
         : readSession().status === "active" || readSession().status === "running";
     };
-    const background = () => !ownRunActive() && (adoptedRow()?.backgroundProcessCount ?? 0) > 0;
-    const running = () => ownRunActive() || background();
     const canOpenTerminal = () =>
       readSession().canOpenTerminal === true && params.snapshot.terminalAvailable;
     const openMenu = (x: number, y: number, trigger?: HTMLElement) =>
@@ -206,6 +206,11 @@ function renderCatalogHostGroup(
                     params.snapshot.newSessionAgentId,
                   );
                 } else {
+                  params.host.prepareSessionNavigation(
+                    key(),
+                    target().options.pathname,
+                    readHost().profileRelation,
+                  );
                   params.host.onNavigate?.(routeId, target().options);
                 }
               })
@@ -216,7 +221,6 @@ function renderCatalogHostGroup(
                 <SessionGlyph
                   content={undefined}
                   running={running()}
-                  background={background()}
                   runVisibility={sessionRunVisibility}
                 />
               ) : undefined}
@@ -450,10 +454,6 @@ function renderCatalogGroup(
       requiredScope: "operator.write",
     }),
   );
-  const sectionDragDisabledReason = () => {
-    const access = groupWriteAccess();
-    return access.allowed ? undefined : access.reason;
-  };
   const sectionId = createMemo(() => `catalog:${readCatalog().id}`);
   const collapsed = createMemo(() => params.host.collapsedSessionSections.has(sectionId()));
   const rows = createMemo(() => readCatalog().visibleHosts.flatMap((host) => host.sessions));
@@ -495,17 +495,17 @@ function renderCatalogGroup(
       ]}
       data-session-section={sectionId()}
       onDragOver={(event: DragEvent) => {
-        if (!sectionDragDisabledReason()) {
+        if (groupWriteAccess().allowed) {
           params.host.sessionOrganizer.sectionDragOver(event, sectionId());
         }
       }}
       onDragLeave={(event: DragEvent) => {
-        if (!sectionDragDisabledReason()) {
+        if (groupWriteAccess().allowed) {
           params.host.sessionOrganizer.sectionDragLeave(event, sectionId());
         }
       }}
       onDrop={(event: DragEvent) => {
-        if (!sectionDragDisabledReason()) {
+        if (groupWriteAccess().allowed) {
           params.host.sessionOrganizer.sectionDrop(event, sectionId());
         }
       }}
@@ -532,7 +532,7 @@ function renderCatalogGroup(
               }
             : undefined
         }
-        disabledReason={sectionDragDisabledReason()}
+        draggable={groupWriteAccess().allowed}
         onStartDrag={(id) => params.host.sessionOrganizer.startSidebarSectionDrag(id)}
         onFinishDrag={() => params.host.sessionOrganizer.finishSidebarSectionDrag()}
         onContextMenu={(event) => {

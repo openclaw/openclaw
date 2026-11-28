@@ -1,4 +1,5 @@
 import { beforeEach, describe, expect, it, vi } from "vitest";
+import { getModelsCommandSecretTargetIds } from "../../cli/model-secret-targets.js";
 import { createTestRuntime } from "../test-runtime-config-helpers.js";
 
 const mocks = vi.hoisted(() => ({
@@ -6,7 +7,6 @@ const mocks = vi.hoisted(() => ({
   getRuntimeConfigSourceSnapshot: vi.fn(),
   setRuntimeConfigSnapshot: vi.fn(),
   resolveCommandSecretRefsViaGateway: vi.fn(),
-  getModelsCommandSecretTargetIds: vi.fn(),
 }));
 
 // mock-isolation: Model-command fixtures control source and runtime snapshots without loading operator state.
@@ -23,17 +23,13 @@ vi.mock("../../cli/command-secret-gateway.js", () => ({
   resolveCommandSecretRefsViaGateway: mocks.resolveCommandSecretRefsViaGateway,
 }));
 
-vi.mock("../../cli/command-secret-targets.js", () => ({
-  getModelsCommandSecretTargetIds: mocks.getModelsCommandSecretTargetIds,
-}));
-
 import { loadModelsConfig } from "./load-config.js";
 
 describe("models load-config", () => {
   const configWithKey = (apiKey: unknown) => ({ models: { providers: { openai: { apiKey } } } });
   const runtimeConfig = configWithKey("sk-runtime"); // pragma: allowlist secret
   const resolvedConfig = configWithKey("sk-resolved"); // pragma: allowlist secret
-  const targetIds = new Set(["models.providers.*.apiKey"]);
+  const targetIds = getModelsCommandSecretTargetIds();
 
   const sourceConfig = configWithKey({ source: "env", provider: "default", id: "OPENAI_API_KEY" });
   const diagnostics = ["diag-one", "diag-two"];
@@ -41,7 +37,6 @@ describe("models load-config", () => {
     vi.clearAllMocks();
     mocks.getRuntimeConfig.mockReturnValue(runtimeConfig);
     mocks.getRuntimeConfigSourceSnapshot.mockReturnValue(sourceConfig);
-    mocks.getModelsCommandSecretTargetIds.mockReturnValue(targetIds);
     mocks.resolveCommandSecretRefsViaGateway.mockResolvedValue({ resolvedConfig, diagnostics });
   });
 

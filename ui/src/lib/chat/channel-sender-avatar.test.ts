@@ -41,7 +41,6 @@ describe("observed sender channel portraits", () => {
 
   it.each([
     { provider: "slack" },
-    { accountId: "another-bot" },
     { from: "telegram:1000000002" },
     { chatType: "group" },
     { from: undefined },

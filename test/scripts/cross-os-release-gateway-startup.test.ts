@@ -155,13 +155,9 @@ it.each([
       }
       if (recovery === "port") {
         expect(expectedPort).not.toBe(oldPort);
-        const replacement = await reserveTestPortListener({
-          offsets: [0],
-          port: expectedPort,
-          createListener: createServer,
-        });
-        await replacement.releaseListener();
-        await replacement.claim.release();
+        // The mocked CLI does not retain the replacement listener. Rebinding here
+        // races unrelated ephemeral sockets and does not prove startup recovery;
+        // the launch, status and persisted-config assertions above own that proof.
       }
       expect(occupied.listener.listening).toBe(true);
     } finally {

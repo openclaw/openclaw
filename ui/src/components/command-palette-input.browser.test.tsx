@@ -29,6 +29,7 @@ describe.skipIf(!hasBrowserLayout)("command palette input layout", () => {
     css = "width: 740px; max-width: 100%;",
   ) {
     const props: InputProps = {
+      mode: "search",
       value,
       placeholder: "Search or start a task…",
       onInputRef: () => undefined,
@@ -53,6 +54,33 @@ describe.skipIf(!hasBrowserLayout)("command palette input layout", () => {
     };
   }
   afterEach(() => vi.restoreAllMocks());
+
+  it("truncates a narrow Compose hint without truncating typed drafts", async () => {
+    const placeholder = "Ask me anything, or hand me something to do";
+    const { host, input } = mountInput(
+      "",
+      { mode: "compose", placeholder },
+      "width: 250px; font-family: monospace;",
+    );
+    await document.fonts.ready;
+    await threeFrames();
+    input.focus();
+    const lineHeight = Number.parseFloat(getComputedStyle(input).lineHeight);
+    expect(input.clientHeight).toBeCloseTo(lineHeight, 0);
+    expect(input.getAttribute("aria-label")).toBe(placeholder);
+    const hint = host.querySelector(".cmd-palette__placeholder")!;
+    expect(hint.textContent).toBe(placeholder);
+    expect(hint.scrollWidth).toBeGreaterThan(hint.clientWidth);
+    expect(getComputedStyle(hint).textOverflow).toBe("ellipsis");
+
+    edit(input, placeholder);
+    expect(input.clientHeight).toBeGreaterThan(lineHeight);
+    expect(getComputedStyle(hint).display).toBe("none");
+
+    edit(input, "");
+    expect(input.clientHeight).toBeCloseTo(lineHeight, 0);
+    expect(getComputedStyle(hint).display).not.toBe("none");
+  });
 
   it("preserves the prompt without remeasuring result navigation and measures again on reconnect", async () => {
     // A fixed width/font makes reconnection cross a wrapping boundary.
@@ -136,7 +164,7 @@ describe.skipIf(!hasBrowserLayout)("command palette input layout", () => {
   });
 
   it("grows Compose through eight lines, then scrolls without moving its top edge", async () => {
-    const { input } = mountInput("One line", { maxLines: 8 });
+    const { input } = mountInput("One line", { mode: "compose" });
     await nextFrame();
     edit(input, input.value);
     const top = input.getBoundingClientRect().top;

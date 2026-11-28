@@ -10,6 +10,7 @@ struct DashboardPageScreen: View {
     @State private var embedCompatibility = DashboardEmbedCompatibility()
     let path: String
     let title: String
+    var queryItems: [URLQueryItem] = []
     var headerSidebarAction: OpenClawSidebarHeaderAction?
     var onClose: (() -> Void)?
     var onRouteChange: ((SettingsRoute?) -> Void)?
@@ -48,7 +49,7 @@ struct DashboardPageScreen: View {
             hasOperatorAdminScope: self.appModel.hasOperatorAdminScope,
             isDemoMode: self.appModel.isAppleReviewDemoModeEnabled,
             isScreenshotMode: ProcessInfo.processInfo.arguments.contains("--openclaw-screenshot-mode")),
-            let url = AuthenticatedControlUI.pageURL(config: config, path: self.path, queryItems: [])
+            let url = AuthenticatedControlUI.pageURL(config: config, path: self.path, queryItems: self.queryItems)
         {
             EmbeddedDashboardContent(
                 appModel: self.appModel,

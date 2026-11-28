@@ -6,7 +6,7 @@ import { awaitGateBeforeSettlement, createDeferred } from "../../test/helpers/pr
 import { getMediaDir } from "../media/store.js";
 import { authorizationClient } from "./server-methods.authorization.test-support.js";
 import { handleGatewayRequest } from "./server-methods.js";
-import { agentHandlers } from "./server-methods/agent.js";
+import { agentRunHandler } from "./server-methods/agent-run-handler.js";
 import { handleChatAbortRequest } from "./server-methods/chat-abort-handler.js";
 import * as chatDispatch from "./server-methods/chat-send-agent-dispatch.js";
 import { handleDirectExternalChatSend } from "./server-methods/chat-send-external-entry.js";
@@ -25,7 +25,7 @@ import {
 
 const handlers: Record<string, GatewayRequestHandler> = {
   "chat.send": handleDirectExternalChatSend,
-  agent: agentHandlers.agent!,
+  agent: agentRunHandler,
   "sessions.send": sessionMessagingHandlers["sessions.send"]!,
   "sessions.create": sessionCreateHandlers["sessions.create"]!,
 };

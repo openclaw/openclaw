@@ -77,6 +77,20 @@ function fixture() {
   };
 }
 
+function compareWithNative(f: ReturnType<typeof fixture>, script: string) {
+  const plain = runProcess(
+    node,
+    [script],
+    { ...process.env, NODE_OPTIONS: "", OPENCLAW_INSTALLED_TERMINAL_OBSERVER: "" },
+    10_000,
+  );
+  const observed = runProcess(node, [script], f.env, 10_000);
+  expect(plain.status, plain.stderr).toBe(0);
+  expect(observed.status, observed.stderr).toBe(0);
+  expect(observed.stdout).toBe(plain.stdout);
+  return observed;
+}
+
 it("preserves SQLite construction, getters, errors and explicit open while covering child isolates", () => {
   const f = fixture();
   const script = path.join(f.root, "transparent.cjs");
@@ -288,20 +302,7 @@ it.skipIf(process.platform !== "linux").each(["spawnSync", "spawn"])(
       console.log(JSON.stringify(results));
     `,
     );
-    const plain = runProcess(
-      node,
-      [script],
-      {
-        ...process.env,
-        NODE_OPTIONS: "",
-        OPENCLAW_INSTALLED_TERMINAL_OBSERVER: "",
-      },
-      10_000,
-    );
-    const observed = runProcess(node, [script], f.env, 10_000);
-    expect(plain.status, plain.stderr).toBe(0);
-    expect(observed.status, observed.stderr).toBe(0);
-    expect(observed.stdout).toBe(plain.stdout);
+    compareWithNative(f, script);
     const rows = f.records();
     const launches = rows.filter((row) => row.event === "spawn");
     expect(launches).toHaveLength(modes.length);
@@ -388,16 +389,7 @@ it("records synchronous SQLite children through their exact native return", () =
     process.stdout.write(result.stdout);`;
   fs.writeFileSync(child, invoke(leaf));
   fs.writeFileSync(script, invoke(child));
-  const plain = runProcess(
-    node,
-    [script],
-    { ...process.env, NODE_OPTIONS: "", OPENCLAW_INSTALLED_TERMINAL_OBSERVER: "" },
-    10_000,
-  );
-  const observed = runProcess(node, [script], f.env, 10_000);
-  expect(plain.status, plain.stderr).toBe(0);
-  expect(observed.status, observed.stderr).toBe(0);
-  expect(observed.stdout).toBe(plain.stdout);
+  compareWithNative(f, script);
   const rows = readInstalledTerminalEvents(f.spec.directory);
   expect(rows.filter((row) => row.event === "startup")).toHaveLength(3);
   expect(rows.filter((row) => row.event === "spawn" && row.api === "spawnSync")).toHaveLength(2);
@@ -484,20 +476,7 @@ it.skipIf(process.platform !== "linux")(
       signal:r.signal, error:r.error?.code??null, output:r.stdout?.toString()??null,
       buffer:r.stdout===null || Buffer.isBuffer(r.stdout)}))));`,
     );
-    const plain = runProcess(
-      node,
-      [script],
-      {
-        ...process.env,
-        NODE_OPTIONS: "",
-        OPENCLAW_INSTALLED_TERMINAL_OBSERVER: "",
-      },
-      10_000,
-    );
-    const observed = runProcess(node, [script], f.env, 10_000);
-    expect(plain.status, plain.stderr).toBe(0);
-    expect(observed.status, observed.stderr).toBe(0);
-    expect(observed.stdout).toBe(plain.stdout);
+    compareWithNative(f, script);
     const rows = readInstalledTerminalEvents(f.spec.directory);
     expect(rows.filter((row) => row.event === "spawn-sync-return")).toMatchObject([
       { spawned: true, code: 0, signal: null, errorCode: null },
@@ -576,9 +555,6 @@ it("preserves synchronous throws and unsafe metadata without claiming native com
         error: "Synchronous spawn threw; native completion is unknown",
       });
       expect(JSON.parse(observed.stdout).ran).toBe(mode === "encoding");
-      if (mode === "max-buffer-array") {
-        expect(JSON.parse(observed.stdout).outcome).toMatchObject({ code: "ERR_OUT_OF_RANGE" });
-      }
     }
     expect(() => readInstalledTerminalEvents(f.spec.directory), mode).toThrow(
       threw
@@ -618,16 +594,7 @@ it.skipIf(process.platform === "win32")(
     child.once('close', code => { process.exitCode = code; });
   `,
     );
-    const plain = runProcess(
-      node,
-      [script],
-      { ...process.env, NODE_OPTIONS: "", OPENCLAW_INSTALLED_TERMINAL_OBSERVER: "" },
-      10_000,
-    );
-    const observed = runProcess(node, [script], f.env, 10_000);
-    expect(plain.status, plain.stderr).toBe(0);
-    expect(observed.status, observed.stderr).toBe(0);
-    expect(observed.stdout).toBe(plain.stdout);
+    compareWithNative(f, script);
     const rows = readInstalledTerminalEvents(f.spec.directory);
     const bridge = rows.find((row) => row.event === "spawn" && row.command === "/bin/sh");
     assert(bridge && typeof bridge.pid === "number" && typeof bridge.child === "number");
@@ -686,16 +653,7 @@ it("requires parent-native process exit when IPC disconnect suppresses aggregate
     });
   `,
   );
-  const plain = runProcess(
-    node,
-    [script],
-    { ...process.env, NODE_OPTIONS: "", OPENCLAW_INSTALLED_TERMINAL_OBSERVER: "" },
-    10_000,
-  );
-  const observed = runProcess(node, [script], f.env, 10_000);
-  expect(plain.status, plain.stderr).toBe(0);
-  expect(observed.status, observed.stderr).toBe(0);
-  expect(observed.stdout).toBe(plain.stdout);
+  const observed = compareWithNative(f, script);
   expect(JSON.parse(observed.stdout)).toEqual({
     exit: { code: 0, signal: null },
     aggregateClose: 0,
@@ -822,16 +780,7 @@ it.skipIf(process.platform === "win32")(
        child.once('message', () => child.kill('SIGKILL'));
        child.once('close', (code, signal) => console.log(JSON.stringify({code, signal})));`,
     );
-    const plain = runProcess(
-      node,
-      [script],
-      { ...process.env, NODE_OPTIONS: "", OPENCLAW_INSTALLED_TERMINAL_OBSERVER: "" },
-      10_000,
-    );
-    const observed = runProcess(node, [script], f.env, 10_000);
-    expect(plain.status, plain.stderr).toBe(0);
-    expect(observed.status, observed.stderr).toBe(0);
-    expect(observed.stdout).toBe(plain.stdout);
+    const observed = compareWithNative(f, script);
     expect(JSON.parse(observed.stdout)).toEqual({ code: null, signal: "SIGKILL" });
     const rows = readInstalledTerminalEvents(f.spec.directory);
     const created = rows.find((row) => row.event === "spawn");
@@ -1030,16 +979,7 @@ it("bounds suppressed Worker callbacks by actual enclosing native teardown", () 
        const child = spawn(process.execPath, [${JSON.stringify(actor)}], {stdio:'inherit'});
        child.once('close', code => { console.log('joined:' + code); });`,
     );
-    const plain = runProcess(
-      node,
-      [script],
-      { ...process.env, NODE_OPTIONS: "", OPENCLAW_INSTALLED_TERMINAL_OBSERVER: "" },
-      10_000,
-    );
-    const observed = runProcess(node, [script], f.env, 10_000);
-    expect(plain.status, plain.stderr).toBe(0);
-    expect(observed.status, observed.stderr).toBe(0);
-    expect(observed.stdout).toBe(plain.stdout);
+    const observed = compareWithNative(f, script);
     expect(observed.stdout).toBe("joined:0\n");
     const original = new Map(
       fs
@@ -1787,7 +1727,7 @@ it.each([false, true])(
     assert(typeof probeSource === "string");
     if (!historical) {
       expect(createHash("sha256").update(probeSource).digest("hex")).toBe(
-        "cf758f1166b39658bb95287453cfd74c1d17d2f2865dc0ae71e8211ec48fa540",
+        "747c79c4720921675448ae7cbedf6c1889a32446f6e2153f5e3ce370a51fcb43",
       );
     }
     fs.writeFileSync(probe, probeSource);

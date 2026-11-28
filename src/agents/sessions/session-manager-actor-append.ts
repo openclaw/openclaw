@@ -56,7 +56,6 @@ export async function appendSessionManagerActor(input: {
   const authority = {
     assertCurrent,
     authorize: (stage: "transaction" | "commit", _facts: unknown, nativeFacts?: unknown) => {
-      assertCurrent();
       admission.assertAdmission(unwrapSessionManagerPublication({ stage, facts: nativeFacts }));
       assertCurrent();
     },

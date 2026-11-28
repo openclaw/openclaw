@@ -83,15 +83,21 @@ export function reportLimitViolations(
     }
   }
   if (advisory && violations.length > 0 && env.GITHUB_STEP_SUMMARY) {
-    fs.appendFileSync(
-      env.GITHUB_STEP_SUMMARY,
-      violations
-        .map(
-          ({ file, title, message }) =>
-            `<p><strong>Warning: ${summaryText(title)}</strong> <code>${summaryText(file)}</code>: ${summaryText(message)}</p>\n`,
-        )
-        .join(""),
-    );
+    // The console already contains every warning; an unwritable summary is not a build failure.
+    try {
+      fs.appendFileSync(
+        env.GITHUB_STEP_SUMMARY,
+        violations
+          .map(
+            ({ file, title, message }) =>
+              `<p><strong>Warning: ${summaryText(title)}</strong> <code>${summaryText(file)}</code>: ${summaryText(message)}</p>\n`,
+          )
+          .join(""),
+      );
+    } catch (error) {
+      const message = error instanceof Error ? error.message : String(error);
+      console.error(`Warning: Could not write limit warning summary: ${message}`);
+    }
   }
   return !advisory && violations.length > 0;
 }

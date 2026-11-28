@@ -152,9 +152,12 @@ export function SidebarPanelLauncher(props: {
                   <button
                     type="button"
                     class="side-panel-launcher__card"
+                    onPointerEnter={() => type().prepare?.()}
+                    onFocus={() => type().prepare?.()}
                     aria-disabled={!type().available ? "true" : undefined}
                     onClick={() => {
                       if (type().available) {
+                        type().prepare?.();
                         props.onOpen(type().slot);
                       }
                     }}
@@ -214,6 +217,10 @@ function TypeMenu(props: SidebarRegionHeaderProps) {
           get label() {
             return current().label;
           },
+          attributes: {
+            onPointerEnter: () => current().prepare?.(),
+            onFocus: () => current().prepare?.(),
+          },
           class: "side-panel-type-menu__item session-menu__item",
           icon: (
             <PanelIcon
@@ -257,12 +264,14 @@ function TypeMenu(props: SidebarRegionHeaderProps) {
       trigger={<Icon name="plus" />}
       items={entries()()}
       onSelect={(item) => {
-        const slot = props.panelDefinitions.find(
+        const definition = props.panelDefinitions.find(
           (type) => type.available && type.slot === item.id,
-        )?.slot;
-        if (!slot) {
+        );
+        if (!definition) {
           return;
         }
+        definition.prepare?.();
+        const slot = definition.slot;
         const alreadyOpen = openSlots().has(slot);
         props.callbacks?.openSlot(slot);
         const request = HOSTED_TAB_REQUESTS.find(([panel]) => panel === slot);

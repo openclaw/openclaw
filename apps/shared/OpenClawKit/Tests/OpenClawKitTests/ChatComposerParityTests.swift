@@ -235,7 +235,8 @@ struct ChatComposerStateTests {
     @Test func `model selection target describes only gateway owned values`() {
         let viewModel = OpenClawChatViewModel(sessionKey: "main", transport: ComposerParityTransport())
         let expectations: [(String?, String?)] = [
-            ("session", "Changes this session only"),
+            // A session-scoped pick needs no note.
+            ("session", nil),
             ("agent", "Changes this agent's default"),
             ("global", "Changes the global default"),
             ("future-target", nil),
@@ -433,5 +434,43 @@ struct ChatComposerStateTests {
 
         #expect(transport.sentMessages == ["> **User:** quoted body\n\n"])
         #expect(vm.replyTarget == nil)
+    }
+}
+
+@MainActor
+struct ChatInputResponsivenessTests {
+    @Test
+    func `draft observation stays in the deferred composer sections`() throws {
+        let viewModel = OpenClawChatViewModel(sessionKey: "main", transport: ComposerParityTransport())
+        let composer = OpenClawChatComposer(
+            viewModel: viewModel,
+            style: .standard,
+            showsSessionSwitcher: false,
+            userAccent: nil,
+            composerChrome: .clean,
+            isComposerEnabled: true,
+            isAttachmentInputEnabled: true,
+            messagePlaceholder: nil,
+            talkControl: nil,
+            dictationControl: nil,
+            voiceNoteControl: nil)
+        let probe = Mutex(0)
+        withObservationTracking {
+            _ = composer.editorOverlay
+            _ = composer.cleanCaptureAndPrimaryControls
+        } onChange: {
+            probe.withLock { $0 += 1 }
+        }
+        viewModel.input = "typing while an answer arrives"
+        try #require(probe.withLock { $0 } == 0)
+
+        let childProbe = Mutex(0)
+        withObservationTracking {
+            _ = composer.cleanCaptureAndPrimaryControls.body
+        } onChange: {
+            childProbe.withLock { $0 += 1 }
+        }
+        viewModel.input = ""
+        #expect(childProbe.withLock { $0 } == 1)
     }
 }

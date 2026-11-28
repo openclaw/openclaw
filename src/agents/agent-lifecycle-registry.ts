@@ -361,7 +361,7 @@ function runAgentDeletionWithLease<T>(
               await authority.runWithWorker((scope, guard) =>
                 scope.execute({ type: "agentDeletion.assertCurrent", input: { guard } }),
               );
-              assertCurrentHost();
+              assertCurrentFinal();
             };
             const assertCurrentFinal = () => {
               assertCurrentHost();

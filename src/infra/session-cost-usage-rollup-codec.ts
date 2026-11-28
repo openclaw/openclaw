@@ -6,7 +6,7 @@ import { resolveZstdCodec } from "./zstd-codec.js";
 
 // Cache data is rebuildable. Semantic changes get a new version; old rows are
 // ignored and rebuilt instead of normalized through a runtime compatibility path.
-export const USAGE_COST_ROLLUP_VERSION = 11;
+export const USAGE_COST_ROLLUP_VERSION = 13;
 const USAGE_COST_ROLLUP_FORMAT_VERSION = 1;
 export const USAGE_COST_ROLLUP_SCOPE = "session-cost-usage-rollup-v3";
 /**
@@ -47,6 +47,7 @@ export type UsageCostRollupEntry = {
   scannedAt: number;
   parsedRecords: number;
   countedRecords: number;
+  includesTimedUsage?: true;
   rollup: SessionUsageRollupData;
 };
 
@@ -82,6 +83,7 @@ export function encodeUsageCostRollup(entry: UsageCostRollupEntry): {
     scannedAt: entry.scannedAt,
     parsedRecords: entry.parsedRecords,
     countedRecords: entry.countedRecords,
+    includesTimedUsage: entry.includesTimedUsage,
     format: USAGE_COST_ROLLUP_FORMAT_VERSION,
     body: {
       encoding: useCompressed ? "zstd" : "identity",
@@ -167,6 +169,7 @@ export function decodeUsageCostRollupEnvelope(
       typeof record.scannedAt !== "number" ||
       typeof record.parsedRecords !== "number" ||
       typeof record.countedRecords !== "number" ||
+      (record.includesTimedUsage !== undefined && record.includesTimedUsage !== true) ||
       !isRecord(record.body) ||
       (record.body.encoding !== "identity" && record.body.encoding !== "zstd") ||
       typeof record.body.bytes !== "number" ||

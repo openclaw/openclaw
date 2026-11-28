@@ -43,8 +43,14 @@ public enum OpenClawIDDeviceRoute {
         }
         if response == nil {
             guard let session, session.expiresAt > now() + 60 else { throw OpenClawIDDeviceRouteError.signInRequired }
-            response = try await OpenClawIDDiscoveryAccount(origin: discoveryOrigin, http: http, now: now)
-                .descriptorAndSnapshot(session, clawID: previous.clawID)
+            do {
+                response = try await OpenClawIDDiscoveryAccount(origin: discoveryOrigin, http: http, now: now)
+                    .descriptorAndSnapshot(session, clawID: previous.clawID)
+            } catch OpenClawIDNodeEnrollmentError.discoveryRejected(404) where admission == .member {
+                // Discovery hides a claw from an account that no longer belongs to it: removing a
+                // member's last device removes the member.
+                throw OpenClawIDNodeEnrollmentError.notAdmitted
+            }
         }
         try Task.checkCancellation()
         let assessment = try OpenClawIDNodeTrust.assessDevice(

@@ -61,7 +61,6 @@ vi.mock("../../state/user-profile-list.js", async (importOriginal) => ({
 }));
 const { markPluginRegistryActive } = await import("../../plugins/registry-lifecycle.js");
 const { bindPluginRegistryRuntime } = await import("../../plugins/registry-runtime-binding.js");
-const { createPluginRuntime } = await import("../../plugins/runtime/index.js");
 const { resolveRegisteredCatalogCreateTarget, sessionCatalogHandlers } =
   await import("./session-catalog.js");
 
@@ -135,7 +134,6 @@ export function resetSessionCatalogTestState() {
 export {
   bindPluginRegistryRuntime,
   conversationBindingMocks,
-  createPluginRuntime,
   hoisted,
   resolveRegisteredCatalogCreateTarget,
   sessionCatalogHandlers,

@@ -21,15 +21,6 @@ const input = (kind: string, container: Element = host) =>
   container.querySelector<HTMLInputElement>(`.agent-chat__${kind}-input`)!;
 const clickSpy = (element: HTMLElement) =>
   vi.spyOn(element, "click").mockImplementation(() => undefined);
-const anchorRect = (element: HTMLElement, x: number, y: number, width: number, height: number) =>
-  vi.spyOn(element, "getBoundingClientRect").mockReturnValue(new DOMRect(x, y, width, height));
-function expectRect(element: HTMLElement, ...values: number[]) {
-  const properties = ["left", "top", "width", "height"].slice(0, values.length);
-  expect(properties.map((key) => element.style.getPropertyValue(key))).toEqual(
-    values.map((value) => `${value}px`),
-  );
-}
-
 // The menu body is lazy; a cold transform on a loaded CI shard can outlast waitForSolid.
 beforeAll(() => import("./chat-composer-plus-menu-content.tsx"));
 
@@ -193,7 +184,6 @@ it.each(
     initialProps.disabled = true;
     await draw({ ...initialProps, disabled: false });
     const clickNative = clickSpy(nativeInput);
-    const rectangle = anchorRect(trigger, 12, 24, 36, 48);
     trigger.click();
     await camera.updateComplete;
     if (android) {
@@ -204,12 +194,10 @@ it.each(
       const nativeButton = [...camera.querySelectorAll("button")].find(
         (button) => button.textContent?.trim() === "Use device camera",
       )!;
-      rectangle.mockReturnValue(new DOMRect(90, 100, 110, 120));
       nativeButton.click();
       expect(clickNative).toHaveBeenCalledOnce();
       await camera.updateComplete;
     }
-    expectRect(nativeInput, android ? 12 : 90, android ? 24 : 100);
     for (const unavailable of [
       { disabled: true },
       { cameraActive: false },
@@ -223,11 +211,9 @@ it.each(
   },
 );
 
-it("keeps mounted picker refs scoped and refreshes their anchor rectangle on every activation", () => {
+it("keeps mounted picker refs scoped through activation and cleanup", () => {
   const first = mountInputs({}, "agent-chat__composer-shell");
   const second = mountInputs({}, "new-session-page__composer");
-  const rectangle = anchorRect(first.trigger, 12, 24, 36, 48);
-  anchorRect(second.trigger, 50, 60, 70, 80);
   const clickFirst = clickSpy(first.file);
   const clickPhoto = clickSpy(first.photo);
   const clickSecond = clickSpy(second.file);
@@ -235,16 +221,11 @@ it("keeps mounted picker refs scoped and refreshes their anchor rectangle on eve
   first.handle.open("file");
   expect(clickFirst).toHaveBeenCalledOnce();
   expect(clickSecond).not.toHaveBeenCalled();
-  expectRect(first.file, 12, 24, 36, 48);
-
-  rectangle.mockReturnValue(new DOMRect(90, 100, 110, 120));
   first.handle.openNative("photo");
   expect(clickPhoto).toHaveBeenCalledOnce();
-  expectRect(first.photo, 90, 100, 110, 120);
 
   second.handle.open("file");
   expect(clickSecond).toHaveBeenCalledOnce();
-  expectRect(second.file, 50, 60);
 
   cleanupSolid();
   first.handle.open("file");

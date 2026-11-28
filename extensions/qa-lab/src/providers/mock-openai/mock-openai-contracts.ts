@@ -1,7 +1,9 @@
 import { randomUUID } from "node:crypto";
 import type { IncomingMessage, ServerResponse } from "node:http";
 import { setTimeout as sleep } from "node:timers/promises";
+import { GATEWAY_RESTART_RESUME_TEXT } from "openclaw/plugin-sdk/qa-runtime";
 import { asNullableRecord } from "openclaw/plugin-sdk/string-coerce-runtime";
+import { escapeRegExp } from "openclaw/plugin-sdk/text-utility-runtime";
 import { readRequestBodyWithLimit } from "openclaw/plugin-sdk/webhook-ingress";
 import type { MockProviderVariant } from "../shared/mock-provider-variant.js";
 import type { QaMockRequestSnapshot } from "../shared/types.js";
@@ -232,7 +234,6 @@ export const QA_STREAMING_PROMPT_RE = /(?:partial|quiet) streaming qa check/i;
 export const QA_FINAL_ONLY_MARKER_STREAMING_PROMPT_RE = /final-only marker streaming qa check/i;
 export const QA_BLOCK_STREAMING_PROMPT_RE = /block streaming qa check/i;
 export const QA_TOOL_PROGRESS_PROMPT_RE = /tool progress( error)? qa check/i;
-export const QA_TOOL_LOOP_GLOBAL_BREAKER_PROMPT_RE = /global tool loop breaker qa check/i;
 export const QA_GROUP_VISIBLE_REPLY_TOOL_PROMPT_RE = /qa group visible reply tool check/i;
 export const QA_GROUP_PROGRESS_THEN_EMPTY_PROMPT_RE = /qa group progress then empty check/i;
 export const QA_MSTEAMS_THREAD_DEDUPE_PROMPT_RE = /qa msteams thread message-tool final dedupe/i;
@@ -360,8 +361,10 @@ export const QA_TOOL_SEARCH_PROMPT_RE = /tool search qa check/i;
 export const QA_TOOL_SEARCH_FAILURE_PROMPT_RE = /tool search qa failure/i;
 export const QA_MCP_CODE_MODE_PROMPT_RE = /mcp code mode qa check/i;
 export const QA_RESTART_CODE_MODE_WAIT_PROMPT_RE = /code mode restart wait qa check/i;
-export const QA_RESTART_RESUME_PROMPT_RE =
-  /The Gateway restarted while you were working\. Resume your work:/u;
+export const QA_RESTART_RESUME_PROMPT_RE = new RegExp(
+  escapeRegExp(GATEWAY_RESTART_RESUME_TEXT),
+  "u",
+);
 const QA_AUDIO_TRANSCRIPTION_TEXT =
   "Reply with only this exact marker: WHATSAPP_QA_AUDIO_TRANSCRIPT_OK";
 const QA_GROUP_AUDIO_TRANSCRIPTION_TEXT =

@@ -188,7 +188,7 @@ describe("Tool Search selectors", () => {
     const surface = apply(true);
     expect(surface.tools).toContain(direct);
     expect(surface.tools).not.toContain(native);
-    expect(buildToolSchemaDirectoryPrompt(ctx)).not.toContain("- acme_lookup (acme)");
+    expect(buildToolSchemaDirectoryPrompt(ctx)).not.toContain("acme_lookup");
     expect(resolveToolSearchCatalogTool(ctx, "acme_lookup")).toBeUndefined();
     await expect(runtime.describe("acme_lookup")).rejects.toThrow(ambiguous);
     await expect(runtime.call("acme_lookup", {})).rejects.toThrow(ambiguous);
@@ -204,17 +204,17 @@ describe("Tool Search selectors", () => {
 
     const policy = promptPolicy(ctx, surface.tools);
     policy.apply({ toolsAllow: ["acme"] });
-    expect(buildToolSchemaDirectoryPrompt(ctx)).toContain("- acme_lookup (acme)");
+    expect(buildToolSchemaDirectoryPrompt(ctx).split("\n")[0]).toBe("Deferred tools: acme_lookup");
     await expect(runtime.describe("acme_lookup")).resolves.toMatchObject({ source: "openclaw" });
     policy.apply();
-    expect(buildToolSchemaDirectoryPrompt(ctx)).not.toContain("- acme_lookup (acme)");
+    expect(buildToolSchemaDirectoryPrompt(ctx)).not.toContain("acme_lookup");
     await expect(runtime.call("acme_lookup", {})).rejects.toThrow(ambiguous);
 
     apply(false);
-    expect(buildToolSchemaDirectoryPrompt(ctx)).toContain("- acme_lookup (acme)");
+    expect(buildToolSchemaDirectoryPrompt(ctx).split("\n")[0]).toBe("Deferred tools: acme_lookup");
     expect(resolveToolSearchCatalogTool(ctx, "acme_lookup")).toBe(native);
     apply(true);
-    expect(buildToolSchemaDirectoryPrompt(ctx)).not.toContain("- acme_lookup (acme)");
+    expect(buildToolSchemaDirectoryPrompt(ctx)).not.toContain("acme_lookup");
     expect(resolveToolSearchCatalogTool(ctx, "acme_lookup")).toBeUndefined();
   });
 
@@ -242,9 +242,7 @@ describe("Tool Search selectors", () => {
     const empty = apply({ include: [] });
     expect(empty.surface.tools.map((entry) => entry.name)).toContain("allowed_lookup");
     expect(catalogRef.current?.entries).toEqual([]);
-    expect(buildToolSchemaDirectoryPrompt(empty.ctx)).toBe(
-      "Available deferred-schema tools: none.",
-    );
+    expect(buildToolSchemaDirectoryPrompt(empty.ctx)).toBe("Deferred tools: none.");
   });
 
   it("preserves availability across the direct/catalog split and applies prompt restrictions", () => {

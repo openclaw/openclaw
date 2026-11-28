@@ -5,6 +5,7 @@ export {
   detectConfiguredPluginInstallHealthIssues,
 } from "./missing-configured-plugin-install.health.js";
 export {
+  isMissingPluginInstallRepairNoOpForIds,
   repairMissingConfiguredPluginInstalls,
   repairMissingPluginInstallsForIds,
 } from "./missing-configured-plugin-install.repair.js";

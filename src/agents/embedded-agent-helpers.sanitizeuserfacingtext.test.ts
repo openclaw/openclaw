@@ -1,6 +1,5 @@
 import { describe, expect, it } from "vitest";
 import { markInboundContextLabel } from "../auto-reply/reply/inbound-context-marker.js";
-import { stripThoughtSignatures } from "./embedded-agent-helpers/bootstrap.js";
 import { isMessagingToolDuplicate } from "./embedded-agent-helpers/messaging-dedupe.js";
 import { dropStaleOpenAIReasoning } from "./embedded-agent-helpers/openai.js";
 import { sanitizeUserFacingText } from "./embedded-agent-helpers/sanitize-user-facing-text.js";
@@ -11,6 +10,7 @@ import {
   INTERNAL_RUNTIME_CONTEXT_END,
 } from "./internal-runtime-context.js";
 import { makeAgentAssistantMessage } from "./test-helpers/agent-message-fixtures.js";
+import { stripThoughtSignatures } from "./thinking-signatures.js";
 
 const renderError = (text: string) => renderUserFacingText(text, { errorContext: true });
 const completionEvent = (overrides: Partial<AgentInternalEvent>) =>
@@ -47,7 +47,7 @@ describe("sanitizeUserFacingText", () => {
     ],
     [
       "Error: fetch failed",
-      "Couldn't connect to the AI service. Check your connection, then try again. For details, open Settings → Logs in the Control UI or run `openclaw logs --follow`.",
+      "Couldn't connect to the AI service. Check your connection, then try again. For details, open Settings → Logs in the OpenClaw app or run `openclaw logs --follow`.",
     ],
     ["Error: request timed out", "LLM request timed out."],
     [

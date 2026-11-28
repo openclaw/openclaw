@@ -660,7 +660,7 @@ export async function hydratePromptMediaMessages(
 
 /** Materializes one transient provider context from exact-message media facts. */
 export async function materializeProviderContext(
-  params: Omit<PromptMediaOptions, "provider" | "model" | "maxBytes" | "maxDimensionPx"> & {
+  params: Omit<PromptMediaOptions, "provider" | "model" | "maxBytes"> & {
     context: Context;
   },
 ): Promise<ProviderContext> {

@@ -4,16 +4,16 @@ import { Icon } from "../../../components/solid/icon.tsx";
 import { PanelEmptyState } from "../../../components/solid/panel-empty-state.tsx";
 import { registerChatSessionOptionalEnglish } from "../../../i18n/locales/en-chat-session-optional.ts";
 import { registerCronEnglish } from "../../../i18n/locales/en-cron.ts";
+import { createSessionAutomationSchedule } from "../../../lib/cron/session-automation-schedule-loader.ts";
 import { handleNavigationClick } from "../../../lib/navigation-click.ts";
 import { registerEnglishCatalog, t } from "../../../lib/reactive/i18n.ts";
 import { ChatLazyBoundary } from "./chat-lazy-boundary.tsx";
+import "../../../styles/chat/automation-mobile.css";
+import "../../../styles/chat/summary-automations.css";
 import {
   SessionAutomationRead,
   type SessionAutomationInventory,
 } from "./chat-summary-automations.tsx";
-import "../../../styles/chat/automation-mobile.css";
-import "../../../styles/chat/summary-automations.css";
-import { createSessionAutomationSchedule } from "./session-automation-schedule-loader.ts";
 
 registerEnglishCatalog(registerChatSessionOptionalEnglish);
 

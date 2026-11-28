@@ -16,6 +16,7 @@ import { fileURLToPath, pathToFileURL } from "node:url";
 import { parseArgs } from "node:util";
 import type { WorkerSessionPlacementRecord } from "../../src/gateway/worker-environments/placement-record.js";
 import type { PlacementAuthorityOwner } from "../../src/gateway/worker-environments/placement-turn-authority.types.js";
+import { startCollectedHeapSampling } from "../lib/heap-sampling.ts";
 import { parseStrictIntegerOption } from "../lib/strict-integer-option.ts";
 
 const { values } = parseArgs({
@@ -29,10 +30,11 @@ const { values } = parseArgs({
     "start-at": { type: "string", default: "0" },
     "owner-source": { type: "string" },
     "authority-state-dir": { type: "string" },
+    "local-publication": { type: "boolean", default: false },
     output: { type: "string" },
   },
 });
-const integer = (key: keyof typeof values, min: number) =>
+const integer = (key: Exclude<keyof typeof values, "local-publication">, min: number) =>
   parseStrictIntegerOption({ raw: values[key], label: `--${key}`, min, fallback: min });
 assert(["timing", "allocation", "counts"].includes(values.mode!));
 assert(
@@ -190,6 +192,10 @@ async function run(count: number, latencies?: number[]) {
         async () => baseline,
       ));
     try {
+      if (values["local-publication"]) {
+        // An unrelated local turn advances the owner without changing preservation membership.
+        owner.sequence++;
+      }
       for (let capture = 0; capture < captures; capture++) {
         let capturedRecords = 0;
         for (const placement of read.placements) {
@@ -240,12 +246,7 @@ const observer = new PerformanceObserver((list) => {
   }
 });
 if (values.mode === "allocation") {
-  inspector.connect();
-  await inspector.post("HeapProfiler.startSampling", {
-    samplingInterval: 32768,
-    includeObjectsCollectedByMajorGC: true,
-    includeObjectsCollectedByMinorGC: true,
-  });
+  await startCollectedHeapSampling(inspector, 32768);
 } else if (values.mode === "timing") {
   observer.observe({ entryTypes: ["gc"] });
   loop.enable();
@@ -300,6 +301,7 @@ const result = {
   protectedCount,
   operations,
   captures,
+  localPublication: values["local-publication"],
   returnedRecords,
   environmentEnumerations: values.mode === "counts" ? environmentEnumerations : undefined,
   environmentEnumerationsPerMinute:

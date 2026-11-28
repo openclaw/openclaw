@@ -476,7 +476,7 @@ export async function readSessionHistoryPageInWorker(
                       "Session history worker returned history instead of cold metadata",
                     );
                   }
-                  return metadata.archive;
+                  return metadata;
                 },
               },
             },

@@ -34,11 +34,16 @@ public struct OpenClawIDOwnerEnrolled: Sendable, Equatable {
     public let hostname: String
     public let clawID: String
     public let rootFingerprint: String
+    /// The account's role in the verified snapshot when this device joined a member's account; nil
+    /// for an owner device.
+    public var memberRole: String?
 }
 
-/// Sign-in-first owner enrollment of an app (enrollment.md, "Owner device node"): approval from an
-/// existing owner device over SAS, or with the recovery kit. Both end with D and W listed as an
-/// owner device and W_node listed as its node, verified in the claw's K_gw-signed snapshot.
+/// Sign-in-first enrollment of an app (enrollment.md, "Owner device node" and "Member devices"):
+/// on an owned claw, approval from an existing owner device over SAS or with the recovery kit,
+/// ending with D and W listed as an owner device and W_node as its node; on a claw the account is a
+/// member of, approval over SAS from another of the member's devices, ending with W listed as a
+/// device of that member, with no node. Admission is verified in the claw's K_gw-signed snapshot.
 public struct OpenClawIDOwnerEnrollmentClient: Sendable {
     /// The owner capabilities a kit-enrolled device requests, as a kit-enrolled browser does.
     static let ownerCapabilities = ["approve_device", "bind", "invite", "manage_members"]
@@ -65,10 +70,12 @@ public struct OpenClawIDOwnerEnrollmentClient: Sendable {
         self.sleep = sleep
     }
 
-    /// SAS approval from an existing owner device. `onCode` shows the six digits. The person must
-    /// also confirm on this Mac that they match (`confirmed`: nil while undecided, false for a
-    /// mismatch) before any sealed handoff is opened: otherwise a relay playing the approver could
-    /// seal its own root to a Mac nobody compared (enrollment.md step 6, "both screens").
+    /// SAS approval from an existing owner device, or from another of the member's devices when the
+    /// account is a member of `claw` (`keys.node` and `node` are then nil). `onCode` shows the six
+    /// digits. The person must also confirm on this Mac that they match (`confirmed`: nil while
+    /// undecided, false for a mismatch) before any sealed handoff is opened: otherwise a relay playing
+    /// the approver could seal its own root to a Mac nobody compared (enrollment.md step 6, "both
+    /// screens").
     public func approveFromDevice(
         session: OpenClawIDDiscoverySession,
         claw: OpenClawIDDiscoveryClaw,
@@ -83,8 +90,9 @@ public struct OpenClawIDOwnerEnrollmentClient: Sendable {
         let attempt = OpenClawIDSASNewDevice(
             start: Self.sasStart(requestID: requestID, clawID: claw.id, keys: keys, label: label, node: node),
             requestID: requestID)
+        let recipient = Self.member(claw) ? "self" : "owners"
         try await self.discovery.send(
-            session, device: keys.device, clawID: claw.id, to: "owners", payload: .object([
+            session, device: keys.device, clawID: claw.id, to: recipient, payload: .object([
                 "kind": .string("enrollment"),
                 "request_id": .string(attempt.requestID),
                 "step": .string("start"),
@@ -324,8 +332,14 @@ public struct OpenClawIDOwnerEnrollmentClient: Sendable {
         return .object(fields)
     }
 
-    /// The handoff's binding verifies under the root it names, for this claw and hostname, and its
-    /// certificate is for this device's D and W. Returns fp(R), the pin.
+    /// A member's devices approve each other with `add_member_device`; owners certify owner devices.
+    static func member(_ claw: OpenClawIDDiscoveryClaw) -> Bool {
+        claw.relationship == "member"
+    }
+
+    /// The handoff's binding verifies under the root it names, for this claw and hostname. An owner
+    /// handoff's certificate is for this device's D and W; a member handoff carries none. Returns
+    /// fp(R), the pin.
     static func verifyHandoff(
         _ handoff: OpenClawIDCanonicalJSON,
         claw: OpenClawIDDiscoveryClaw,
@@ -336,10 +350,15 @@ public struct OpenClawIDOwnerEnrollmentClient: Sendable {
             let root = try fields["root_pub"]!.text()
             let binding = try OpenClawIDNodeTrust.envelope(fields["binding"]!, type: "ServerBinding", signer: root)
                 .fields(["claw_id", "hostname", "k_srv", "k_gw", "binding_seq", "root_epoch", "issued_at"])
+            guard try binding["claw_id"]!.text() == claw.id, try binding["hostname"]!.text() == claw.hostname
+            else { throw OpenClawIDOwnerEnrollmentError.handoffInvalid }
+            if Self.member(claw) {
+                guard fields["cert"] == .null else { throw OpenClawIDOwnerEnrollmentError.handoffInvalid }
+                return try OpenClawIDStatement.fingerprint(root)
+            }
             let cert = try fields["cert"]!.fields(["v", "type", "body", "signer", "alg", "sig"])["body"]!
                 .fields(["device_pub", "peer_keys", "label", "scope", "caps", "issued_at", "expires_at", "root_epoch"])
-            guard try binding["claw_id"]!.text() == claw.id, try binding["hostname"]!.text() == claw.hostname,
-                  try cert["device_pub"]!.text() == keys.device.signingKey,
+            guard try cert["device_pub"]!.text() == keys.device.signingKey,
                   try cert["peer_keys"]!.list() == [.string(keys.peer.peerKey)]
             else { throw OpenClawIDOwnerEnrollmentError.handoffInvalid }
             return try OpenClawIDStatement.fingerprint(root)
@@ -364,7 +383,7 @@ public struct OpenClawIDOwnerEnrollmentClient: Sendable {
             now: self.now())
     }
 
-    /// Waits until the claw's snapshot lists W as an owner peer key (Discovery may lag the Gateway).
+    /// Waits until the claw's snapshot lists W as an owner or member peer key (Discovery may lag the Gateway).
     private func awaitAdmission(
         session: OpenClawIDDiscoverySession,
         claw: OpenClawIDDiscoveryClaw,
@@ -399,7 +418,7 @@ public struct OpenClawIDOwnerEnrollmentClient: Sendable {
             hostname: claw.hostname,
             pin: (claw.id, rootFingerprint),
             discoveryOrigin: self.discovery.origin,
-            listed: (keys.peer.peerKey, .owner),
+            listed: (keys.peer.peerKey, Self.member(claw) ? .member : .owner),
             previous: self.deviceStore.load(hostname: claw.hostname),
             now: self.now())
         if let observation = device.observation {
@@ -421,8 +440,11 @@ public struct OpenClawIDOwnerEnrollmentClient: Sendable {
                 guard case let .success(listed) = nodeTarget.verdict else { return nil }
                 try await nodeStore.commit(listed)
             }
+            let role = try Self.member(claw)
+                ? OpenClawIDMemberJoinClient.role(of: keys.peer.peerKey, in: response) : nil
             try await self.deviceStore.commit(target)
-            return .init(hostname: claw.hostname, clawID: claw.id, rootFingerprint: rootFingerprint)
+            return .init(
+                hostname: claw.hostname, clawID: claw.id, rootFingerprint: rootFingerprint, memberRole: role)
         }
     }
 

@@ -1,5 +1,5 @@
 // Shared helpers for running Vitest JSON reports and reading duration data.
-import { spawnSync } from "node:child_process";
+import childProcess from "node:child_process";
 import { randomUUID } from "node:crypto";
 import fs from "node:fs";
 import os from "node:os";
@@ -79,7 +79,7 @@ export function runVitestJsonReport({
   const resolvedReportPath = reportPath || defaultVitestJsonReportPath(prefix);
 
   if (!(reportPath && fs.existsSync(resolvedReportPath))) {
-    const run = spawnSync(
+    const run = childProcess.spawnSync(
       process.execPath,
       [
         path.join(import.meta.dirname, "run-vitest.mjs"),

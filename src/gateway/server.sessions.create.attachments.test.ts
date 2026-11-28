@@ -48,7 +48,7 @@ test.each(["initial", "follow-up"] as const)(
     const options = { ...controlUiClient, context };
     const bytes = Buffer.from("order,total\nMarch-1,19.95\nMarch-2,25.00\n");
     const input = {
-      message: "Summarize the attached orders.",
+      message: turn === "initial" ? "" : "Summarize the attached orders.",
       attachments: [
         { fileName: "orders.csv", mimeType: "text/csv", content: bytes.toString("base64") },
       ],

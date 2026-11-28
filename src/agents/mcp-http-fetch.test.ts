@@ -20,9 +20,15 @@ const { lookupMock, oauthResolveMock } = vi.hoisted(() => ({
   oauthResolveMock: vi.fn(),
 }));
 
-vi.mock("node:dns/promises", () => ({
-  lookup: lookupMock,
-}));
+vi.mock("node:dns/promises", async (importOriginal) => {
+  const actual = await importOriginal<
+    typeof import("node:dns/promises") & { default: typeof import("node:dns/promises") }
+  >();
+  const overrides = {
+    lookup: lookupMock,
+  };
+  return { ...actual, ...overrides, default: { ...actual.default, ...overrides } };
+});
 
 vi.mock("./mcp-oauth.js", () => ({
   recordMcpOAuthAuthorizationRequired: vi.fn(),
@@ -33,13 +39,9 @@ class TestAgent {
   constructor(readonly options: { connect?: Record<string, unknown> }) {}
 }
 
-class TestEnvHttpProxyAgent {
-  constructor(readonly options: unknown) {}
-}
+const TestEnvHttpProxyAgent = vi.fn();
 
-class TestProxyAgent {
-  constructor(readonly options: unknown) {}
-}
+const TestProxyAgent = vi.fn();
 
 function useFetch(fetch: (url: string | URL | Request, init?: RequestInit) => Promise<Response>) {
   testGlobal[TEST_UNDICI_RUNTIME_DEPS_KEY] = {

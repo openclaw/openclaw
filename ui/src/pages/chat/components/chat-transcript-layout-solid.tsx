@@ -122,7 +122,6 @@ function TranscriptRows(props: {
         {props.snapshot.header}
       </div>
       <div class="chat-virtual-sizer" ref={(element) => props.columnRef(element)}>
-        {props.snapshot.overlay}
         <div
           class="chat-virtual-block"
           style={{
@@ -145,9 +144,9 @@ function TranscriptRows(props: {
                 () => row()?.key === props.snapshot.preparingRowKey || forecast(),
               );
               const paintPreparing = createMemo(
-                () =>
-                  forecast() || (preparing() && virtualRow().index + 1 === activeRows()[0]?.index),
+                () => forecast() && !props.snapshot.unsettledRowKeys?.has(row()?.key ?? ""),
               );
+              const before = () => forecast() && virtualRow().index < (activeRows()[0]?.index ?? 0);
               const streaming = createMemo(() => row()?.streaming === true);
               const gap = () => gaps().get(virtualRow().key) ?? 0;
               return (
@@ -159,7 +158,10 @@ function TranscriptRows(props: {
                     ref={[rowRef(String(virtualRow().key))]}
                     class={[
                       "chat-virtual-row",
-                      { "chat-virtual-row--first": virtualRow().index === 0 },
+                      {
+                        "chat-virtual-row--first": virtualRow().index === 0,
+                        "chat-virtual-row--compact-activity": row()?.compactActivity,
+                      },
                     ]}
                     style={{
                       "min-height":
@@ -170,16 +172,24 @@ function TranscriptRows(props: {
                       // releases it in CSS to avoid restyling hidden subtrees.
                       height: active() || preparing() ? undefined : "0",
                       position: active() ? undefined : "absolute",
+                      // A forecast row before the flow hangs above the rows between, painted
+                      // or not; one after it sits at its slot once painted.
                       top: active()
                         ? undefined
-                        : paintPreparing()
-                          ? `${virtualRow().start - blockStart()}px`
-                          : "0",
+                        : before()
+                          ? "auto"
+                          : paintPreparing()
+                            ? `${virtualRow().start - blockStart()}px`
+                            : "0",
+                      bottom:
+                        !active() && before()
+                          ? `calc(100% + ${blockStart() - virtualRow().end}px)`
+                          : undefined,
                       opacity: active() || paintPreparing() ? undefined : "0",
-                      // Incoming forecast rows paint at estimated slots while native
-                      // measurement runs; only admitted rows affect normal flow.
+                      // Incoming forecast rows paint at their slots while native measurement
+                      // runs; only admitted rows affect normal flow.
                       clip:
-                        !active() && paintPreparing()
+                        !active() && paintPreparing() && !before()
                           ? `rect(0, auto, ${virtualRow().size}px, auto)`
                           : undefined,
                       "content-visibility":

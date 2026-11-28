@@ -21,7 +21,7 @@ export function createGatewayRestartDeadline(params: {
   timeoutError?: Error;
 }) {
   const startedAtMs = performance.now();
-  const deadlineMs = startedAtMs + params.timeoutMs;
+  let deadlineMs = startedAtMs + params.timeoutMs;
   const controller = new AbortController();
   let activePhase: string | undefined;
   let lastPhase = "setup";
@@ -36,15 +36,36 @@ export function createGatewayRestartDeadline(params: {
       controller.abort(params.timeoutError ?? new GatewayRestartDeadlineError(expiredPhase));
     }
   };
-  const cancelTimer = scheduleAbsoluteDeadline(deadlineMs, expire, () => performance.now());
+  let cancelTimer = scheduleAbsoluteDeadline(deadlineMs, expire, () => performance.now());
   const cancelFromCaller = () => controller.abort(params.signal?.reason);
   params.signal?.addEventListener("abort", cancelFromCaller, { once: true });
   if (params.signal?.aborted) {
     cancelFromCaller();
   }
   return {
-    deadlineMs,
+    get deadlineMs() {
+      return deadlineMs;
+    },
     signal: controller.signal,
+    /**
+     * Runs work that the operator's budget does not cover (it has its own bound): the
+     * deadline stops while it runs and then moves by its duration. An expired budget stays
+     * expired.
+     */
+    async exclude<T>(operation: () => Promise<T>): Promise<T> {
+      if (performance.now() >= deadlineMs) {
+        expire();
+      }
+      controller.signal.throwIfAborted();
+      cancelTimer();
+      const pausedAtMs = performance.now();
+      try {
+        return await operation();
+      } finally {
+        deadlineMs += performance.now() - pausedAtMs;
+        cancelTimer = scheduleAbsoluteDeadline(deadlineMs, expire, () => performance.now());
+      }
+    },
     get phase() {
       return activePhase ?? lastPhase;
     },

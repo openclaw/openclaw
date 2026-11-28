@@ -207,6 +207,7 @@ describe("SSRF policy and pinning", () => {
 
   it.each<[string, DnsAnswers, SsrFPolicy | undefined, number]>([
     ["example.com", [ipv4, { address: "fd00::1", family: 6 }], undefined, 1],
+    ["example.com", [{ address: "2620:4f:8000::1", family: 6 }], undefined, 1],
     ["8.8.2056", [ipv4], undefined, 0],
     ["localhost", [{ address: "0.0.0.0", family: 4 }], { allowedHostnames: ["localhost"] }, 1],
   ])("rejects unsafe DNS or literals for %s", async (hostname, answers, policy, calls) => {

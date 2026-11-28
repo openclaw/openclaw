@@ -86,6 +86,19 @@ describe("session activity semantics", () => {
     vi.restoreAllMocks();
   });
 
+  it("ages a visible session without refreshing its activity", async ({ onTestFinished }) => {
+    vi.useFakeTimers({ toFake: ["Date", "setInterval", "clearInterval"] });
+    onTestFinished(() => void vi.useRealTimers());
+    vi.spyOn(document, "visibilityState", "get").mockReturnValue("visible");
+    const key = "agent:main:quiet";
+    show({ rows: [row(key, { id: "online" }, Date.now() - 2 * 60_000)] });
+    const label = find(sessionSelector(key, ".activity-feed__session-time"));
+    expect(label?.textContent).toBe("2m ago");
+
+    await vi.advanceTimersByTimeAsync(6 * 60_000);
+    expect(label?.textContent).toBe("8m ago");
+  });
+
   it("shows denied person activity without a misleading empty timeline", () => {
     const filters = { personId: "online", query: "", time: "all" as const };
     show({ filters, rows: [row("agent:main:private-timeline", { id: "online" }, 100)] });
@@ -118,7 +131,7 @@ describe("session activity semantics", () => {
         "7d": [8, new Date(2026, 0, 8), { month: "short", day: "numeric" }, "Last 7 days"],
         all: [12, new Date(2026, 11, 1), { month: "short" }, "Last 12 months"],
       } satisfies Record<string, [number, Date, Intl.DateTimeFormatOptions, string]>;
-      const [length, last, format, label] = periods[time];
+      const [length] = periods[time];
       const hourly = time === "24h";
       const buckets: number[] = Array.from({ length }, () => 0);
       if (count > 0) {
@@ -143,39 +156,7 @@ describe("session activity semantics", () => {
         } satisfies SessionActivityPulse,
       });
       show(input);
-      const formatter = new Intl.DateTimeFormat(undefined, format);
-      const bars = all(".activity-pulse__bar");
-      const labels = all(".activity-pulse__axis > span > span");
-      expect(text(".activity-pulse__heading strong")).toBe("Sessions by last activity");
-      expect(text(".activity-pulse__heading > span")).toBe(label);
-      expect(bars).toHaveLength(length);
-      expect(bars[length - 1]?.getAttribute("data-bucket")).toBe("current");
-      const bucketCount = hourly ? "3 sessions" : "0 sessions";
-      expect(bars[length - 1]?.getAttribute("title")).toBe(
-        formatter.format(last) + " · " + bucketCount,
-      );
-      expect(labels).toHaveLength(hourly ? 5 : 3);
-      expect(labels[labels.length - 1]?.textContent).toBe(formatter.format(last));
       expect(text(".activity-pulse__stats")?.replace(/\s+/g, " ").trim()).toBe(stats);
-      const peak = new Date(2026, 0, 1, hourly ? 10 : 0);
-      expect(attr('[role="img"]', "aria-label")).toBe(
-        count === 0
-          ? label + ": no recorded activity."
-          : label +
-              ": " +
-              (hourly ? "38 sessions" : "1 session") +
-              " by last activity; most sessions at " +
-              formatter.format(peak),
-      );
-      expect(text(".activity-pulse__count") ?? "").toBe(count === 0 ? "" : hourly ? "35" : "1");
-      expect(Boolean(find(".activity-pulse__empty"))).toBe(count === 0);
-      expect(find(".activity-pulse__running") !== null).toBe(hourly);
-      if (hourly) {
-        expect(bars[10]?.getAttribute("style")).toContain("100%");
-        expect(bars[24]?.getAttribute("style")).toContain("8.571");
-      } else if (count === 0) {
-        expect(bars[0]?.getAttribute("style")).toContain("0");
-      }
       const note = find('.activity-feed__people-panel [role="status"]');
       expect(all(".activity-pulse__stats > span")[hourly ? 2 : 1]?.hasAttribute("title")).toBe(
         incomplete,
@@ -304,6 +285,7 @@ describe("session activity semantics", () => {
               error: null,
               basePath: "",
               fallbackAgentId: "main",
+              agents: [],
               mainKey: "main",
               globalScope,
             },

@@ -1,6 +1,6 @@
 import type { EngineConnection } from "../infra/sql-connection.js";
 import { runOpenClawStateWriteTransaction } from "../state/openclaw-state-db.js";
-import { assertOpenClawStateLeaseWorkerOwnedInTransaction } from "../state/openclaw-state-lease-worker.js";
+import { assertOpenClawStateLeasesWorkerOwnedInTransaction } from "../state/openclaw-state-lease-worker.js";
 import type { OpenClawStateLeaseIdentity } from "../state/openclaw-state-lease.types.js";
 import type {
   WorkerOperationContext,
@@ -11,8 +11,9 @@ import {
   insertProjectRegistryInDatabase,
   removeProjectCheckoutReferenceInDatabase,
   removeProjectRegistryInDatabase,
+  renameProjectRegistryInDatabase,
   resolveProjectCloneRefreshOwnerInDatabase,
-  resolveRecordedProjectRootInDatabase,
+  resolveRecordedProjectByRootInDatabase,
   resolveProjectRegistryInDatabase,
 } from "./project-registry.kernel.js";
 import type { ProjectRegistryInsert } from "./project-registry.types.js";
@@ -23,7 +24,7 @@ function checkoutTransaction<Project extends { repoRoot: string }, Output>(
   operation: (db: EngineConnection, project: Project) => Output,
 ) {
   return (
-    { project, lease }: { project: Project; lease: OpenClawStateLeaseIdentity },
+    { project, leases }: { project: Project; leases: readonly OpenClawStateLeaseIdentity[] },
     { open, stateOptions }: WorkerOperationContext,
   ): Output => {
     const database = open();
@@ -31,11 +32,14 @@ function checkoutTransaction<Project extends { repoRoot: string }, Output>(
     ensureProjectRegistrySchema(options);
     return runOpenClawStateWriteTransaction(
       ({ db }) => {
-        if (lease.scope !== "projects.checkout" || lease.key !== project.repoRoot) {
+        const lease = leases[0];
+        if (lease?.scope !== "projects.checkout" || lease.key !== project.repoRoot) {
           throw new Error("Project registry write requires its checkout lifecycle lease");
         }
-        assertOpenClawStateLeaseWorkerOwnedInTransaction(db, lease);
-        return operation(db, project);
+        assertOpenClawStateLeasesWorkerOwnedInTransaction(db, leases);
+        const result = operation(db, project);
+        assertOpenClawStateLeasesWorkerOwnedInTransaction(db, leases, "commit");
+        return result;
       },
       options,
       { operationLabel },
@@ -50,11 +54,11 @@ function registryDatabase({ open, stateOptions }: WorkerOperationContext): Engin
 }
 
 export const projectRegistryOperations = {
-  "projects.findRoot": (
+  "projects.findByRoot": (
     input: { repoRoot: string; source?: ProjectRegistryInsert["source"] },
     context,
   ) =>
-    resolveRecordedProjectRootInDatabase(registryDatabase(context), input.repoRoot, input.source),
+    resolveRecordedProjectByRootInDatabase(registryDatabase(context), input.repoRoot, input.source),
   "projects.resolve": (input: { id: string }, context) =>
     resolveProjectRegistryInDatabase(registryDatabase(context), input.id),
   "projects.insert": checkoutTransaction(
@@ -64,6 +68,10 @@ export const projectRegistryOperations = {
   "projects.remove": checkoutTransaction(
     "projects.registry.remove",
     removeProjectRegistryInDatabase,
+  ),
+  "projects.rename": checkoutTransaction(
+    "projects.registry.rename",
+    renameProjectRegistryInDatabase,
   ),
   "projects.resolveRefreshOwner": checkoutTransaction(
     "projects.registry.refresh-owner.resolve",

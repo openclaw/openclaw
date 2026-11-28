@@ -1,12 +1,16 @@
 import { describe, expect, it } from "vitest";
 import type { AgentMessage } from "../../types.js";
 import type { SessionTreeEntry } from "../types.js";
+import {
+  collectCompactionPreparationEntryFact,
+  prepareCompactionEntryFacts,
+} from "./compaction-preparation.js";
 import { compactWithoutSummary, prepareCompaction } from "./compaction.js";
 import {
   createContextUsage,
   createMessageEntry as messageEntry,
 } from "./compaction.test-support.js";
-import { assistant as assistantMessage, user } from "./shard-fixtures.test-support.js";
+import { assistant as assistantMessage, toolResult, user } from "./shard-fixtures.test-support.js";
 import { compactionEntry } from "./summary-capture.test-support.js";
 
 const settings = { enabled: true, reserveTokens: 1_000, keepRecentTokens: 1 };
@@ -139,4 +143,72 @@ describe("run-owned compaction requests", () => {
       expect(fallback.value.summary).toContain("Prior work completed.");
     }
   });
+});
+
+it("prepares detached source indexes with reset retention, exact usage and unchanged file outcomes", () => {
+  const payload = "DISCARDED_BODY".repeat(10_000);
+  const entries: SessionTreeEntry[] = [
+    {
+      type: "custom",
+      id: "invalid",
+      parentId: null,
+      timestamp: new Date(0).toISOString(),
+      customType: "openclaw.background-result-placement",
+      data: {},
+    },
+    messageEntry(user("old request"), 0),
+    messageEntry(
+      assistantMessage([
+        {
+          type: "toolCall",
+          id: "write",
+          name: "write",
+          arguments: { path: "/output", body: payload },
+        },
+      ]),
+      1,
+    ),
+    messageEntry(
+      toolResult(payload, { toolCallId: "write", toolName: "write", details: { changed: false } }),
+      2,
+    ),
+    {
+      type: "reset",
+      id: "reset",
+      parentId: "entry-2",
+      timestamp: new Date(0).toISOString(),
+      reason: "new",
+      firstKeptEntryId: "entry-0",
+    },
+    messageEntry(user("new request " + "中𠀀".repeat(2000)), 3),
+    messageEntry(assistant("working", 4), 4),
+  ];
+  const facts = structuredClone(
+    entries.map((entry, index) => collectCompactionPreparationEntryFact(entry, index + 100)),
+  );
+  entries.length = 0;
+  expect(JSON.stringify(facts)).not.toContain("DISCARDED_BODY");
+  const result = prepareCompactionEntryFacts(facts, settings, "unresolved");
+  expect(result.ok).toBe(true);
+  if (!result.ok || !result.value) {
+    throw new Error("expected fact preparation");
+  }
+  expect(result.value).toMatchObject({
+    firstKeptEntryId: "entry-3",
+    firstKeptEntryIndex: 5,
+    historyEntryIndexes: [101, 102, 103],
+    turnPrefixEntryIndexes: [],
+    tokensBefore: 1,
+    isSplitTurn: false,
+    fileOps: { read: new Set(), written: new Set(), edited: new Set() },
+  });
+  expect(result.value.latestUnresolvedUserRequest?.length).toBeLessThanOrEqual(800);
+  expect(result.value.latestUnresolvedUserRequest).toContain("new request");
+  expect(result.value.requestSelection).toEqual({
+    state: "unresolved",
+    request: result.value.latestUnresolvedUserRequest,
+  });
+  expect(() =>
+    prepareCompactionEntryFacts([...facts.slice(0, 1), ...facts.slice(-1)], settings),
+  ).toThrow("Invalid background result placement marker");
 });

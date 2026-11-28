@@ -6,11 +6,7 @@ import {
   createTestGatewayClient,
   type GatewayRequestHandler,
 } from "../../test-helpers/gateway-client.ts";
-import {
-  channelSnapshotEntryIsActive,
-  channelSnapshotHasActiveChannel,
-  createChannelCapability,
-} from "./index.ts";
+import { createChannelCapability } from "./index.ts";
 
 type GatewaySnapshot = Parameters<typeof createChannelCapability>[0]["snapshot"];
 type LoginResult = { message: string; connected: boolean; qrDataUrl: string };
@@ -83,39 +79,6 @@ function createChannelsSnapshot(label: string): ChannelsStatusSnapshot {
 function createStaticChannelCapability(request: GatewayRequestHandler) {
   return createHarness(request).channels;
 }
-
-describe("channel readiness", () => {
-  it("treats aggregate or account configuration as active", () => {
-    const snapshot = createChannelsSnapshot("Test");
-    snapshot.channelOrder = ["configured", "connected", "empty"];
-    snapshot.channels = {
-      configured: { configured: true },
-      connected: { configured: false, connected: false },
-      empty: { configured: false, running: false, connected: false },
-    };
-    snapshot.channelAccounts = {
-      connected: [{ accountId: "work", connected: true }],
-      empty: [],
-    };
-
-    expect(channelSnapshotEntryIsActive(snapshot, "configured")).toBe(true);
-    expect(channelSnapshotEntryIsActive(snapshot, "connected")).toBe(true);
-    expect(channelSnapshotEntryIsActive(snapshot, "empty")).toBe(false);
-    expect(channelSnapshotHasActiveChannel(snapshot)).toBe(true);
-  });
-
-  it("recognizes active channels omitted from channelOrder", () => {
-    const snapshot = createChannelsSnapshot("Test");
-    snapshot.channelOrder = [];
-    snapshot.channels = {};
-    snapshot.channelAccounts = {
-      telegram: [{ accountId: "default", running: true }],
-    };
-
-    expect(channelSnapshotHasActiveChannel(snapshot)).toBe(true);
-    expect(channelSnapshotHasActiveChannel(null)).toBe(false);
-  });
-});
 
 describe("channels controller WhatsApp wait", () => {
   it("rejects a stale login result after reconnecting with the same client", async () => {

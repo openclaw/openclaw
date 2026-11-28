@@ -45,7 +45,7 @@ describe("execution owner binding settlement", () => {
         } else {
           owner.close();
           durable.resolve();
-          await expect(first).rejects.toThrow("authority is no longer active");
+          await expect(first).rejects.toThrow("This agent run is no longer active");
           await settled;
         }
         expect(bind).toHaveBeenCalledOnce();

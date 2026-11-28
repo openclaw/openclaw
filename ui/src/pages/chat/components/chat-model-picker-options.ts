@@ -1,9 +1,5 @@
 import type { ModelCatalogEntry } from "../../../api/types.ts";
 import type { ProviderPresentation } from "../../../components/provider-icon-data.ts";
-import {
-  formatRawProviderLabel,
-  providerDisplayLabel,
-} from "../../../components/provider-icon-data.ts";
 import { t } from "../../../i18n/index.ts";
 import { registerModelControlsEnglish } from "../../../i18n/locales/en-model-controls.ts";
 import { formatContextTokenCapacity } from "../../../lib/format.ts";
@@ -89,30 +85,40 @@ export type ChatModelPickerTargetGroup = {
   completion: { promise: Promise<ChatModelPickerTargetGroup["options"]> };
 };
 
-export function formatModelLabel(
-  option: Pick<ChatModelPickerOption, "label" | "provider" | "presentation">,
-): string {
-  const prefixes = [
-    formatRawProviderLabel(option.provider),
-    providerDisplayLabel(option.provider, option.presentation),
-  ].toSorted((left, right) => right.length - left.length);
-  for (const prefix of prefixes) {
-    if (option.label.toLowerCase().startsWith(`${prefix.toLowerCase()} `)) {
-      return option.label.slice(prefix.length + 1);
-    }
-    // Grouped rows already carry the provider as the section heading, so a
-    // catalog name that repeats it as a trailing "(Provider)" reads twice.
-    const suffix = ` (${prefix.toLowerCase()})`;
-    if (option.label.toLowerCase().endsWith(suffix)) {
-      return option.label.slice(0, option.label.length - suffix.length);
-    }
+/**
+ * A row drops the provider name only when its group heading already shows that exact
+ * name; otherwise the model keeps its full display name.
+ */
+export function formatModelLabel(label: string, groupLabel: string | undefined): string {
+  if (!groupLabel) {
+    return label;
   }
-  return option.label;
+  const lowerLabel = label.toLowerCase();
+  const heading = groupLabel.toLowerCase();
+  if (lowerLabel.startsWith(`${heading} `)) {
+    return label.slice(heading.length + 1);
+  }
+  // A catalog name that repeats the heading as a trailing "(Provider)" reads twice.
+  const suffix = ` (${heading})`;
+  return lowerLabel.endsWith(suffix) ? label.slice(0, label.length - suffix.length) : label;
 }
 
 export type ChatModelPickerOptionProps = {
   rowKey?: string;
+  /** Heading of the provider group that shows this row; Favorites shows none. */
+  groupLabel?: string;
   favorite?: { selected: boolean; disabled: boolean; onToggle: (event: MouseEvent) => void };
+  reorder?: {
+    disabled: boolean;
+    dragging: boolean;
+    indicator?: "before" | "after";
+    onDragStart: (event: DragEvent) => void;
+    onDragEnd: () => void;
+    onDragOver: (event: DragEvent & { currentTarget: HTMLElement }) => void;
+    onDragLeave: (event: DragEvent) => void;
+    onDrop: (event: DragEvent & { currentTarget: HTMLElement }) => void;
+    onMove: (offset: number) => void;
+  };
   contextWindow?: ChatContextWindowControlParams;
   hideCooldown?: boolean;
   sessionKey?: string;
@@ -146,7 +152,6 @@ export function prepareChatModelPickerPanel(
   },
   favorites?: {
     keys: readonly string[];
-    /** A remembered Favorites tab opens only while it holds the selected model. */
     opening: { keys: readonly string[]; selected: string; favoritesTab?: boolean };
   },
 ) {
@@ -214,12 +219,7 @@ export function prepareChatModelPickerPanel(
 
   if (favoriteOptions.length && orderedProviderGroups.length > 1) {
     orderedProviderGroups.unshift([FAVORITES_GROUP, { lead: favoriteOptions, more: [] }]);
-    // Opening keys keep the tab steady while stars change; an emptied group falls back.
-    if (
-      favorites?.opening.favoritesTab &&
-      activeModelOption &&
-      openingFavorites.includes(activeModelOption)
-    ) {
+    if (favorites?.opening.favoritesTab) {
       openingProvider = FAVORITES_GROUP;
     }
   }

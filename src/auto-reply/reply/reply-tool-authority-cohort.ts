@@ -111,7 +111,11 @@ export async function withReplyToolAuthorityCohort<T>(params: {
     env: params.env,
   });
   const preparedEntry = await reader.withRead(
-    { sessionKeys: [key], snapshotFields: [] },
+    {
+      sessionKeys: [key],
+      snapshotFields: [],
+      readCustody: readPlan.reads.flatMap((read) => read.readCustody ?? []),
+    },
     assertCurrent,
     (read, assertPrepared) => {
       assertPrepared();

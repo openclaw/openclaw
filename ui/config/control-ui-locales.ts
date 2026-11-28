@@ -29,6 +29,20 @@ export const controlUiLocaleErrorNamespaces: readonly string[] = [
   "notificationErrors",
   "nativeDeviceEditError",
 ];
+const preloadedLocaleNamespaces = [
+  "runtimeErrors",
+  "filePreview",
+  "mcpApp",
+  "worktrees",
+  "newSession",
+  "sessionsView",
+  "mcpServers",
+  "mcpPage",
+  "profilePage",
+  "connection",
+  "attention",
+  "chat",
+];
 // Vitest rewrites new URL(relative, import.meta.url) to browser self.location.
 const i18nAssetsDir = path.resolve(
   path.dirname(fileURLToPath(import.meta.url)),
@@ -124,9 +138,14 @@ function parseResolvedLocaleModuleId(id: string): { locale: string; namespace?: 
     : null;
 }
 
-function namespaceSource(partition: ControlUiLocaleCatalogPartition, namespace: string) {
+function namespaceSource(
+  partition: ControlUiLocaleCatalogPartition,
+  namespace: string,
+  named = false,
+) {
   const siblings = namespace === "runtimeErrors" ? controlUiLocaleErrorNamespaces.slice(1) : [];
-  return `export default ${JSON.stringify(partition.namespaces[namespace] ?? {})};\n${siblings
+  const declaration = named ? `const ${namespace} =` : "default";
+  return `export ${declaration} ${JSON.stringify(partition.namespaces[namespace] ?? {})};\n${siblings
     .map((name) => `export const ${name} = ${JSON.stringify(partition.namespaces[name] ?? {})};`)
     .join("\n")}`;
 }
@@ -151,28 +170,16 @@ export function controlUiLocaleModulesPlugin(buildInputs?: Set<string>): Plugin 
       order: "post",
       handler(_html, context) {
         // Direction cannot wait for the translated catalog: the critical frame paints first.
-        const policy = JSON.stringify({
-          supported: SUPPORTED_LOCALES,
-          rules: LOCALE_MATCH_RULES,
-          rtl: RTL_LOCALES,
-          fallback: DEFAULT_LOCALE,
-        }).replaceAll("<", "\\u003c");
+        // A private tuple keeps the inline policy within the document's size budget.
+        const policy = JSON.stringify([
+          SUPPORTED_LOCALES,
+          LOCALE_MATCH_RULES,
+          RTL_LOCALES,
+          DEFAULT_LOCALE,
+        ]).replaceAll("<", "\\u003c");
         // Namespace data shares a content generation, so parallel hints need only
         // the base chunk hash and one namespace hash per locale.
-        const namespaces = [
-          "runtimeErrors",
-          "filePreview",
-          "mcpApp",
-          "worktrees",
-          "newSession",
-          "sessionsView",
-          "mcpServers",
-          "mcpPage",
-          "profilePage",
-          "connection",
-          "attention",
-          "chat",
-        ];
+        const namespaces = preloadedLocaleNamespaces;
         const files = Object.values(context.bundle ?? {}).map((output) => output.fileName);
         const hashes: Record<string, string> = {};
         for (const locale of locales) {
@@ -196,14 +203,15 @@ export function controlUiLocaleModulesPlugin(buildInputs?: Set<string>): Plugin 
         const helper = files.find((file) => /^assets\/lazy-catalog-[\w-]+\.js$/.test(file));
         const hints =
           helper && Object.keys(hashes).length
-            ? `const base=document.documentElement.getAttribute("data-openclaw-control-ui-base-path")||"";if(locale!==p.fallback&&(location.pathname===base+"/chat"||location.pathname.startsWith(base+"/chat/"))){const hashes=(${JSON.stringify(hashes)})[locale];if(hashes){const names=${JSON.stringify(namespaces)};const files=["assets/"+locale+"-"+hashes.slice(0,8)+".js",${JSON.stringify(helper)},...names.map(name=>"assets/"+(name==="runtimeErrors"?"locale-errors-"+locale:"locale-namespace-"+locale+"-"+name)+"-"+hashes.slice(8)+".js")];for(const file of files){const link=document.createElement("link");link.rel="modulepreload";link.crossOrigin="";link.href=base+"/"+file;document.head.append(link)}}}`
+            ? `const base=document.documentElement.getAttribute("data-openclaw-control-ui-base-path")||"";if(locale!==fallback&&(location.pathname===base+"/chat"||location.pathname.startsWith(base+"/chat/"))){const hashes=(${JSON.stringify(hashes)})[locale];if(hashes){for(const file of ["assets/"+locale+"-"+hashes.slice(0,8)+".js",${JSON.stringify(helper)},...${JSON.stringify(namespaces)}.map(name=>"assets/"+(name==="runtimeErrors"?"locale-errors-"+locale:"locale-namespace-"+locale+"-"+name)+"-"+hashes.slice(8)+".js")]){const link=document.createElement("link");link.rel="modulepreload";link.crossOrigin="";link.href=base+"/"+file;document.head.append(link)}}}`
             : "";
         return [
           {
             tag: "script",
             attrs: { "data-cfasync": "false" },
             injectTo: "head-prepend",
-            children: `(()=>{const p=${policy};let saved;try{saved=localStorage.getItem("openclaw.i18n.locale")}catch{}const language=(navigator.language||"").toLowerCase();const locale=p.supported.includes(saved)?saved:(p.rules.find(([pattern])=>new RegExp(pattern).test(language))?.[1]||p.fallback);document.documentElement.dir=p.rtl.includes(locale)?"rtl":"ltr";${hints}})();`,
+            // Finish parsing the critical graph's hints before admitting locale data.
+            children: `(()=>{const [supported,rules,rtl,fallback]=${policy};let saved;try{saved=localStorage.getItem("openclaw.i18n.locale")}catch{}const language=(navigator.language||"").toLowerCase();const locale=supported.includes(saved)?saved:(rules.find(([pattern])=>new RegExp(pattern).test(language))?.[1]||fallback);document.documentElement.dir=rtl.includes(locale)?"rtl":"ltr";${hints ? `document.addEventListener("readystatechange",()=>{${hints}},{once:true});` : ""}})();`,
           },
         ];
       },
@@ -318,18 +326,58 @@ export function controlUiLocaleModulesPlugin(buildInputs?: Set<string>): Plugin 
               .update(JSON.stringify(sources))
               .digest("base64url")
               .slice(0, 8);
+            const groups: Array<Array<readonly [string, string]>> = [];
+            let small: Array<readonly [string, string]> = [];
+            let smallBytes = 0;
+            // Bound optional first-use transfer while avoiding one installed file
+            // per tiny dictionary. Boot/preload and error groups keep their URLs.
             for (const [namespace, source] of sources) {
-              const name =
-                namespace === "runtimeErrors"
+              if (
+                preloadedLocaleNamespaces.includes(namespace) ||
+                controlUiLocaleErrorNamespaces.includes(namespace) ||
+                Buffer.byteLength(source) > 3 * 1024
+              ) {
+                groups.push([[namespace, source]]);
+                continue;
+              }
+              const namedSource = namespaceSource(partition, namespace, true);
+              const bytes = Buffer.byteLength(namedSource);
+              if (smallBytes + bytes > 8 * 1024) {
+                groups.push(small);
+                small = [];
+                smallBytes = 0;
+              }
+              small.push([namespace, namedSource]);
+              smallBytes += bytes;
+            }
+            if (small.length > 0) {
+              groups.push(small);
+            }
+            for (const group of groups) {
+              const namespace = group[0]![0];
+              const grouped = group.length > 1;
+              const source = grouped
+                ? group.map((entry) => entry[1]).join("")
+                : namespaceSource(partition, namespace);
+              const groupHash = grouped
+                ? createHash("sha256").update(source).digest("base64url").slice(0, 8)
+                : hash;
+              const name = grouped
+                ? `locale-namespace-${request.locale}-group`
+                : namespace === "runtimeErrors"
                   ? `locale-errors-${request.locale}`
                   : `locale-namespace-${request.locale}-${namespace}`;
               const ref = this.emitFile({
                 type: "asset",
-                fileName: `assets/${name}-${hash}.js`,
+                fileName: `assets/${name}-${groupHash}.js`,
                 source,
               });
-              namespaceImports[namespace] =
-                `import(/* @vite-ignore */ import.meta.ROLLUP_FILE_URL_${ref})`;
+              for (const [member] of group) {
+                const load = `import(/* @vite-ignore */ import.meta.ROLLUP_FILE_URL_${ref})`;
+                namespaceImports[member] = grouped
+                  ? `${load}.then((catalog) => ({ default: catalog.${member} }))`
+                  : load;
+              }
             }
           }
           const sharedErrorImport = shareErrorImport

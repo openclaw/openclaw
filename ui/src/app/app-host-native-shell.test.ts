@@ -41,7 +41,9 @@ function nativeSessionContext(
 
 function navigationShell(context: Partial<ApplicationContext> = {}) {
   const shell = createShellOwner();
-  shell.runtime = { context: { navigate, ...context } } as ApplicationRuntime;
+  shell.runtime = {
+    context: { ...nativeSessionContext("main"), ...context },
+  } as ApplicationRuntime;
   shell.routeState = { routeId: "chat" };
   return shell;
 }

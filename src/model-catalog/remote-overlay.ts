@@ -1,5 +1,4 @@
 import { createHash } from "node:crypto";
-import { getEnvironmentData, setEnvironmentData } from "node:worker_threads";
 import type { ModelCatalogProvider } from "@openclaw/model-catalog-core/model-catalog-types";
 import { normalizeProviderId } from "@openclaw/model-catalog-core/provider-id";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
@@ -12,32 +11,22 @@ import { bundledCatalogGeneratedAt } from "./bundled-catalog-stamp.js";
 import {
   parseRemoteModelCatalogWireBundle,
   projectRemoteModelCatalog,
-  type RemoteModelCatalogPrice,
-  type RemoteModelCatalogUpstreamPrice,
   type RemoteModelCatalogWireBundle,
 } from "./remote-bundle.js";
 import {
   isRemoteCatalogSourceActive,
   isRemoteModelCatalogRefreshEnabled,
 } from "./remote-config.js";
+import type { ActiveRemoteModelCatalog } from "./remote-overlay.types.js";
+import {
+  publishRemoteModelCatalogStartupPublication,
+  readRemoteModelCatalogStartupPublication,
+} from "./remote-startup-snapshot.js";
 import { readRemoteModelCatalogAsync } from "./remote-store.js";
 
 export type RemoteCatalogPublicationResult = "published" | "unchanged" | "superseded";
+export type { ActiveRemoteModelCatalog } from "./remote-overlay.types.js";
 
-type RemoteModelCatalogOverlay = Readonly<Record<string, ModelCatalogProvider>>;
-type RemoteModelCatalogMetadata = {
-  sourceUrl: string;
-  generatedAt: number;
-};
-export type ActiveRemoteModelCatalog = RemoteModelCatalogMetadata & {
-  revision: string;
-  providers: RemoteModelCatalogOverlay;
-  recommendations: Readonly<Record<string, readonly string[]>>;
-  pricing: Readonly<Record<string, RemoteModelCatalogPrice>>;
-  upstreamPricing: Readonly<Record<string, RemoteModelCatalogUpstreamPrice>>;
-};
-
-const STARTUP_SNAPSHOT_KEY = "openclaw.remoteModelCatalogStartupSnapshot";
 const remoteCatalogScope = new AsyncContext<{ catalog: ActiveRemoteModelCatalog | null }>(
   Symbol.for("openclaw.remoteModelCatalogScope"),
 );
@@ -82,37 +71,30 @@ function selectCompatibleRemoteModelCatalog(
   });
 }
 
-function inheritedRemoteModelCatalogStartupSnapshot() {
-  // SAFETY: This module alone sets the key to a record containing a validated snapshot or null.
-  return getEnvironmentData(STARTUP_SNAPSHOT_KEY) as
-    | { catalog: ActiveRemoteModelCatalog | null }
-    | undefined;
-}
-
 function publishRemoteModelCatalogStartupSnapshot(
   snapshot: ActiveRemoteModelCatalog | null,
 ): ActiveRemoteModelCatalog | null {
-  const inherited = inheritedRemoteModelCatalogStartupSnapshot();
+  const inherited = readRemoteModelCatalogStartupPublication();
   if (inherited !== undefined) {
-    return inherited.catalog;
+    return inherited;
   }
   // Downloads are inert; workers inherit only the host's accepted rows/pricing pair.
-  setEnvironmentData(STARTUP_SNAPSHOT_KEY, { catalog: snapshot });
+  publishRemoteModelCatalogStartupPublication(snapshot);
   return snapshot;
 }
 
 /** Read the already-published startup pair without loading persistent state. */
 export function captureRemoteModelCatalogStartupSnapshot(): ActiveRemoteModelCatalog | null {
-  return inheritedRemoteModelCatalogStartupSnapshot()?.catalog ?? null;
+  return readRemoteModelCatalogStartupPublication() ?? null;
 }
 
 /** Prepare the same first-winner startup pair without host-thread SQLite reads. */
 export async function prepareRemoteModelCatalogStartupSnapshot(
   options: { env?: NodeJS.ProcessEnv } = {},
 ): Promise<ActiveRemoteModelCatalog | null> {
-  const inherited = inheritedRemoteModelCatalogStartupSnapshot();
+  const inherited = readRemoteModelCatalogStartupPublication();
   if (inherited !== undefined) {
-    return inherited.catalog;
+    return inherited;
   }
   const bundledGeneratedAt = bundledCatalogGeneratedAt();
   if (bundledGeneratedAt === undefined) {
@@ -200,7 +182,7 @@ export function publishRemoteModelCatalogSnapshot(
   if (captureRemoteModelCatalogStartupSnapshot() !== previous) {
     return false;
   }
-  setEnvironmentData(STARTUP_SNAPSHOT_KEY, { catalog });
+  publishRemoteModelCatalogStartupPublication(catalog);
   return true;
 }
 

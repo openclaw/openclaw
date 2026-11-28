@@ -16,19 +16,14 @@ if (containerPath) {
   const [container] = JSON.parse(fs.readFileSync(containerPath, "utf8"));
   assert.equal(container.Image, image.Id);
   assert.equal(container.State.OOMKilled, false);
-  if (mode === "old-shape") {
-    assert.deepEqual(container.Config.Entrypoint, ["tini"]);
-    assert.deepEqual(container.Config.Cmd, ["-s", "--", "node", "openclaw.mjs", "gateway"]);
-  } else {
-    assert.deepEqual(container.Config.Entrypoint, image.Config.Entrypoint);
-    assert.deepEqual(
-      container.Config.Cmd,
-      mode === "compose"
-        ? ["node", "dist/index.js", "gateway", "--bind", "lan", "--port", "18789"]
-        : image.Config.Cmd,
-    );
-  }
-  if (mode === "unsafe" || mode === "old-shape") {
+  assert.deepEqual(container.Config.Entrypoint, image.Config.Entrypoint);
+  assert.deepEqual(
+    container.Config.Cmd,
+    mode === "compose"
+      ? ["node", "dist/index.js", "gateway", "--bind", "lan", "--port", "18789"]
+      : image.Config.Cmd,
+  );
+  if (mode === "unsafe") {
     assert.equal(container.State.Running, false);
     assert.equal(container.State.Status, "exited");
     assert.notEqual(container.State.ExitCode, 0);
@@ -42,9 +37,7 @@ if (containerPath) {
       "Refused activation started a Gateway listener",
     );
     assert(
-      mode === "unsafe"
-        ? log.includes("metadata schema version 18 does not match 19")
-        : /doctor.*--fix/i.test(log),
+      log.includes("Agent schema markers disagree for"),
       "Missing concrete retained-state refusal diagnostic",
     );
   } else if (phase === "stopped") {

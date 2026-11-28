@@ -132,6 +132,8 @@ async function traceLoginGateMounts(page: Page) {
 suite.define(() => {
   it("keeps the themed connection shell instead of the login gate while a configured token connects", async () => {
     const page = await createPage();
+    await page.clock.install();
+    await pauseVirtualClock(page);
     await page.addInitScript(() => {
       localStorage.setItem(
         `openclaw.control.settings.v1:ws://${location.hostname}:18789`,
@@ -145,8 +147,20 @@ suite.define(() => {
         loginModuleRequests.push(request.url());
       }
     });
-    const gateway = await connect(page, "#token=e2e-shared-token");
+    const gateway = await installMockGateway(page, { deferredMethods: ["connect"] });
+    await page.goto(suite.server.baseUrl + "#token=e2e-shared-token", {
+      waitUntil: "domcontentloaded",
+    });
     const connection = page.locator('.gateway-connection-view[data-connection-state="connecting"]');
+    await expect
+      .poll(async () => {
+        await page.clock.runFor(1);
+        return {
+          attempts: (await gateway.getRequests("connect")).length,
+          visible: await connection.isVisible(),
+        };
+      })
+      .toEqual({ attempts: 1, visible: true });
     await connection.waitFor();
     await connection
       .getByRole("heading", { name: "Connecting to OpenClaw", exact: true })
@@ -202,6 +216,7 @@ suite.define(() => {
     await page.setViewportSize(viewport);
     await page.emulateMedia({ reducedMotion: "no-preference" });
 
+    await page.clock.resume();
     await resolveConnect(page, gateway);
     expect(await shell!.evaluate((element) => element.isConnected)).toBe(true);
     expect(await page.locator(".connect-splash").count()).toBe(0);
@@ -239,12 +254,13 @@ suite.define(() => {
       await writeFile(path.join(artifactDir, `${phase}.png`), png);
       // The live composer remains part of the frame without placeholder decoration.
       const geometry = await skeleton.evaluate((element) =>
-        [element, ...element.querySelectorAll(".skeleton, .loading-skeleton__composer")].map(
-          (node) => {
+        [element, ...element.querySelectorAll(".skeleton, .loading-skeleton__composer")]
+          // The document retains hidden message markup; compare only painted geometry.
+          .filter((node) => node.getClientRects().length > 0)
+          .map((node) => {
             const { x, y, width, height } = node.getBoundingClientRect();
             return { x, y, width, height };
-          },
-        ),
+          }),
       );
       return { png: decodeProofPng(png), geometry };
     };

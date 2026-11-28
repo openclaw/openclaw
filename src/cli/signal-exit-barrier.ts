@@ -1,3 +1,4 @@
+import { createDeferredCore } from "../shared/deferred.js";
 import { resolveGlobalSet, resolveGlobalSingleton } from "../shared/global-singleton.js";
 
 type SignalExitBarrier = () => Promise<void>;
@@ -236,6 +237,50 @@ export function installCliSignalExitHandlers(): () => void {
     }
   });
   return () => lifetime.dispose();
+}
+
+// Gateway run keeps its run loop's signal handling, which needs state custody. Until that
+// loop holds custody and installs its handlers, startup shares the CLI owner: a stop then
+// unwinds startup instead of taking the default action with state locks still held.
+const gatewayStartupSignals = resolveGlobalSingleton<{
+  stop?: CliExitSignal;
+  handOff?: () => void;
+}>(Symbol.for("openclaw.gatewayStartupSignals"), () => ({}));
+
+export async function withGatewayStartupSignalOwner<T>(run: () => T | Promise<T>): Promise<T> {
+  const finished = createDeferredCore();
+  const releaseSignals = installCliSignalExitHandlers();
+  const releaseGate = registerSignalExitGate(finished.promise, (signal) => {
+    gatewayStartupSignals.stop ??= signal;
+  });
+  const handOff = () => {
+    if (gatewayStartupSignals.handOff !== handOff) {
+      return;
+    }
+    gatewayStartupSignals.handOff = undefined;
+    gatewayStartupSignals.stop = undefined;
+    releaseGate();
+    releaseSignals();
+    finished.resolve();
+  };
+  gatewayStartupSignals.handOff = handOff;
+  gatewayStartupSignals.stop = undefined;
+  try {
+    return await run();
+  } finally {
+    handOff();
+  }
+}
+
+/** Exit status of a stop accepted before the Gateway run loop owned signals. */
+export function getGatewayStartupStopExitCode(): number | undefined {
+  const stop = gatewayStartupSignals.handOff ? gatewayStartupSignals.stop : undefined;
+  return stop ? cliSignalExitCodes[stop] : undefined;
+}
+
+/** Call in the same turn the run loop installs its handlers, so no stop goes unowned. */
+export function handOffGatewayStartupSignals(): void {
+  gatewayStartupSignals.handOff?.();
 }
 
 /** Command error/output finalization cannot race an accepted signal's cleanup. */

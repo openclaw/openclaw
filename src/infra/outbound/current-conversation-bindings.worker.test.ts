@@ -19,6 +19,7 @@ import { INTERNAL_MESSAGE_CHANNEL } from "../../utils/message-channel-constants.
 import { requireNodeSqlite } from "../node-sqlite.js";
 import { SQLITE_WORKER_MAX_MESSAGE_BYTES } from "../sqlite-worker-contract.js";
 import * as admission from "../sqlite-worker-operation-admission.js";
+import { observeSqliteWorkerAdmissionFinish } from "../sqlite-worker-operation-settlement.js";
 import { sqliteWorkerOwnerProbe as probe } from "../sqlite-worker-owner-probe.test-support.js";
 import {
   createAccountScopedConversationBindingManager as createManager,
@@ -562,7 +563,7 @@ it.each(["replaced", "removed", "expired", "malformed"] as const)(
       );
     } finally {
       dispatch.mockRestore();
-      grant.finish();
+      await grant.finish();
       foreign.close();
     }
   },
@@ -664,16 +665,14 @@ it("retires binding coverage after unknown native settlement", async () => {
   const createAdmission = admission.createSqliteWorkerOperationAdmission;
   vi.spyOn(admission, "createSqliteWorkerOperationAdmission").mockImplementation((...args) => {
     const owner = createAdmission(...args);
-    const finish = owner.finish.bind(owner);
-    owner.finish = () => {
-      finish();
+    observeSqliteWorkerAdmissionFinish(owner, () => {
       const settled = owner.settlement;
       if (settled?.committed && settled.kind === "completed") {
         nativeOutcomes.push(settled.kind);
         // Preserve the real commit receipt while simulating an uncertain terminal observation.
         vi.spyOn(owner, "settlement", "get").mockReturnValue({ ...settled, kind: "unknown" });
       }
-    };
+    });
     return owner;
   });
   await bindRecord({ record: original });

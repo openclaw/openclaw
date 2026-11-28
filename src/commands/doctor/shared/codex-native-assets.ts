@@ -7,6 +7,7 @@ import { normalizeOptionalLowercaseString as normalizeString } from "@openclaw/n
 import { collectConfiguredAgentHarnessRuntimes } from "../../../agents/harness-runtimes.js";
 import type { OpenClawConfig } from "../../../config/types.openclaw.js";
 import { canAccess, safeStat } from "../../../infra/path-existence.js";
+import { resolveEffectiveEnableState } from "../../../plugins/config-state.js";
 
 type CodexNativeAssetHit = {
   /** Native Codex asset category discovered under Codex or personal agent homes. */
@@ -76,14 +77,20 @@ async function discoverDirectoryAssets(
 
 function isCodexPluginConfigured(cfg: OpenClawConfig): boolean {
   const plugins = cfg.plugins;
-  if (plugins?.enabled === false) {
-    return false;
-  }
-  const allow = plugins?.allow;
-  if (Array.isArray(allow)) {
-    return allow.some((entry) => normalizeString(entry) === "codex");
-  }
-  return hasRecord(plugins?.entries?.codex) && plugins.entries.codex.enabled !== false;
+  const named =
+    hasRecord(plugins?.entries?.codex) ||
+    (plugins?.allow ?? []).some((entry) => normalizeString(entry) === "codex");
+  // The loader's activation policy decides whether the named plugin can load: an empty
+  // allowlist restricts nothing, while a denylist or a disabled entry does.
+  return (
+    named &&
+    resolveEffectiveEnableState({
+      id: "codex",
+      origin: "bundled",
+      rootConfig: cfg,
+      enabledByDefault: true,
+    }).enabled
+  );
 }
 
 /** Discover personal Codex skills, plugins, config, and hooks relevant to Codex-mode agents. */

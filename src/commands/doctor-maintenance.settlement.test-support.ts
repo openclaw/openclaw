@@ -98,8 +98,8 @@ vi.mock("../infra/update-run-ledger.js", () => ({
   recordUpdateRunPhase: vi.fn(),
   recordUpdateRunStep: boundary.step,
 }));
-vi.mock("../infra/update-run-activity.js", async (importOriginal) => ({
-  ...(await importOriginal<typeof import("../infra/update-run-activity.js")>()),
+vi.mock("../infra/update-repair-driver-admission.js", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("../infra/update-repair-driver-admission.js")>()),
   inspectUpdateRepairDriverAdmission: boundary.admission,
 }));
 vi.mock("../infra/update-managed-service-handoff-boot.js", async (importOriginal) => ({
@@ -151,7 +151,8 @@ vi.mock("../state/openclaw-agent-db-lease-inspection.js", async (importOriginal)
   assertNoOpenClawAgentDatabaseLeasesReadOnly: boundary.lease,
   readActiveOpenClawAgentDatabaseLeasesReadOnly: boundary.readLeases,
 }));
-vi.mock("../state/openclaw-database-preflight.js", () => ({
+vi.mock("../state/openclaw-database-preflight.js", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("../state/openclaw-database-preflight.js")>()),
   preflightOpenClawDatabaseSchemas: boundary.schemas,
   assertOpenClawDatabasesReady: async () => {},
 }));

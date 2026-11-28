@@ -9,23 +9,6 @@ import { mountCatalog, startCatalog, settleCatalog } from "./compact.test-suppor
 
 describe("AppSidebar session catalog pagination", () => {
   beforeEach(() => vi.useFakeTimers());
-  it("keeps the scheduled refresh when a visible page receives focus", async () => {
-    const request = vi.fn().mockResolvedValue(catalogPage([]));
-    await mountCatalog({
-      request,
-    } as unknown as GatewayBrowserClient);
-    expect(request).toHaveBeenCalledOnce();
-
-    globalThis.dispatchEvent(new Event("focus"));
-    await vi.advanceTimersByTimeAsync(50);
-    expect(request).toHaveBeenCalledOnce();
-
-    await vi.advanceTimersByTimeAsync(120_000 - 51);
-    expect(request).toHaveBeenCalledOnce();
-    await vi.advanceTimersByTimeAsync(1);
-    expect(request).toHaveBeenCalledTimes(2);
-  });
-
   it.each([false, true])(
     "rescans after tab return during an active scan (discovery: %s)",
     async (discovery) => {

@@ -1,3 +1,4 @@
+import { buildProviderReauthCommand } from "../../agents/failover-error.js";
 import { resolveCronTriggerMinIntervalMs } from "../../config/cron-limits.js";
 import type { CronActiveJobMarker } from "../active-jobs.js";
 import { resolveAdmittedCronCompletionStatus } from "../completion-status.js";
@@ -8,11 +9,7 @@ import { normalizeCronRunDiagnostics, summarizeCronRunDiagnostics } from "../run
 import { cronSchedulingInputsEqual } from "../schedule-identity.js";
 import type { CronRunFinalizationOutcome } from "../store/runtime-worker.types.js";
 import type { CronJob, CronRunStatus, CronStoredJob, CronTriggerEvalOutcome } from "../types.js";
-import {
-  autoDisableCronJob,
-  maybeAutoDisableCronJobAfterRunFailure,
-  queueCronAutoDisableNotification,
-} from "./auto-disable.js";
+import { autoDisableCronJob } from "./auto-disable.js";
 import {
   finalizeCronFailureNotifications,
   resolveFailureIncident,
@@ -115,6 +112,8 @@ export function applyJobResult(
     pacedNextRunAtMs: job.state.pacedNextRunAtMs,
     forcePreservedNextRunAtMs: job.state.forcePreservedNextRunAtMs,
   };
+  // A provider's stated rate-limit reset bounds every retry: running earlier only hits it again.
+  const retryFloorMs = result.status === "error" ? (result.rateLimitResetAt ?? 0) : 0;
   const previousRunInterruptedByRestart = job.state.lastError === STARTUP_INTERRUPTED_ERROR;
   delete job.state.admissionDeferred;
   job.state.queuedAtMs = undefined;
@@ -181,9 +180,15 @@ export function applyJobResult(
     !result.interruptedByRestart &&
     result.errorClassification?.kind !== "aborted";
   const previousConsecutiveErrors = normalizeConsecutiveErrors(job.state.consecutiveErrors);
-  const computeNaturalNext = (restartInterval: boolean) => {
+  const computeNaturalNext = (
+    restartInterval: boolean,
+    // The first scheduled slot at or after a provider's reset keeps cron expressions on-slot.
+    fromMs = Math.max(result.endedAt, retryFloorMs - 1),
+  ) => {
     try {
-      return computeJobNextRunAtMs(job, result.endedAt, { preserveEveryAnchor: restartInterval });
+      return computeJobNextRunAtMs(job, fromMs, {
+        preserveEveryAnchor: restartInterval,
+      });
     } catch (err) {
       recordScheduleComputeError({
         state,
@@ -240,7 +245,6 @@ export function applyJobResult(
     !oneShotNextCheck &&
     job.deleteAfterRun === true &&
     completionStatus === "succeeded";
-  let terminalRecurring = false;
   let terminalOneShot = false;
   // Set when a quick transient re-run is scheduled for a provider outage; finalize holds
   // the failure alert/repair until that retry ladder resolves.
@@ -264,44 +268,41 @@ export function applyJobResult(
       // A failed check has not consumed the paced occurrence; its backoff retry still owns it.
       job.state.pacedNextRunAtMs = job.state.nextRunAtMs;
     }
+    // A removed, signed-out or replaced account can never run this job as written, so it is
+    // disabled once, with the auto-disable notice in place of the failure alert. A forced run
+    // that preserves a one-shot occurrence leaves that occurrence and its enablement alone.
+    const accountUnavailable =
+      runFailed &&
+      !preserveOneShotSchedule &&
+      result.failureNotificationDetail?.kind === "inference-account-retired";
     // A parent pause is not a failure: its own notice below replaces the skipped-run alert.
-    const failureNotification = result.parentUnavailable
-      ? undefined
-      : finalizeCronFailureNotifications(state, {
-          job,
-          alertConfig,
-          result,
-          completionStatus,
-          terminalRecurring,
-          terminalOneShot,
-          pendingTransientRetry,
-          replay: opts.replay,
-          deferredNotifications: opts.deferredNotifications,
-        });
-    if (terminalRecurring && failureNotification !== "queued") {
-      // Same contract as a terminal one-shot: the route-backed alert carries the
-      // safety notice; every other outcome keeps the in-app notice as before.
-      queueCronAutoDisableNotification({
+    if (!result.parentUnavailable && !accountUnavailable) {
+      finalizeCronFailureNotifications(state, {
         job,
-        reason: "consecutive-failures",
-        consecutiveErrors: job.state.consecutiveErrors ?? 0,
+        alertConfig,
+        result,
+        completionStatus,
+        terminalOneShot,
+        pendingTransientRetry,
+        replay: opts.replay,
         deferredNotifications: opts.deferredNotifications,
       });
     }
-    if (terminalOneShot) {
+    // A newer operator edit owns enablement, so a stale result changes nothing.
+    if (accountUnavailable && ownsSchedule && previousScheduleState.enabled) {
       autoDisableCronJob({
         job,
-        reason: "consecutive-failures",
         atMs: result.endedAt,
-        consecutiveErrors: job.state.consecutiveErrors ?? 0,
-        terminalOneShot: true,
-        // Cooldown and incident suppression remain the alert owner's decision.
-        notify: failureNotification === "unavailable" && !opts.replay,
-        deferredNotifications: opts.deferredNotifications,
+        consecutiveErrors: normalizeConsecutiveErrors(job.state.consecutiveErrors),
+        // A replayed outcome records the fact without sending its notice again.
+        deferredNotifications: opts.replay ? [] : opts.deferredNotifications,
+        reason: "account-unavailable",
+        enabledAtAdmission: previousScheduleState.enabled,
+        signInCommand:
+          job.inferenceBinding && buildProviderReauthCommand(job.inferenceBinding.provider),
       });
     }
-    // One-shot handling may already have disabled the job above; the notice
-    // belongs to the pause either way, sent once while the job was still enabled.
+    // The notice belongs to the pause, sent once while the job was still enabled.
     // A newer operator edit owns enablement, so a stale pause result changes nothing.
     if (result.parentUnavailable && ownsSchedule && previousScheduleState.enabled) {
       // The parent conversation is gone; pause until someone re-enables the job.
@@ -340,12 +341,18 @@ export function applyJobResult(
     if (
       result.status === "error" &&
       result.errorClassification?.kind === "permanent" &&
-      (isPluginCommandCronJob(job) || job.operatorSource)
+      (isPluginCommandCronJob(job) || job.operatorSource) &&
+      // Missing account configuration does not revoke the job creator's authority, and a gone
+      // account pauses through its own notice below.
+      result.failureNotificationDetail?.kind !== "inference-account-unrecorded" &&
+      result.failureNotificationDetail?.kind !== "inference-account-retired"
     ) {
-      // A retired plugin or unusable continuation source cannot recover through retries.
+      // A permanent error here means a retired plugin or a refused operator source:
+      // the job can never run again as written.
       job.enabled = false;
       job.state.nextRunAtMs = undefined;
       job.state.startupCatchupAtMs = undefined;
+      terminalOneShot = isOneShotSchedule && runFailed;
     } else if (job.schedule.kind === "event") {
       // The transferred ingress receipt owns this occurrence. A timer retry
       // would lose its immutable event and could repeat an external side effect.
@@ -435,30 +442,6 @@ export function applyJobResult(
       job.state.nextRunAtMs = previousScheduleState.nextRunAtMs;
       job.state.pacedNextRunAtMs = previousScheduleState.pacedNextRunAtMs;
       job.state.forcePreservedNextRunAtMs = previousScheduleState.nextRunAtMs;
-    } else if (
-      runFailed &&
-      isJobEnabled(job) &&
-      maybeAutoDisableCronJobAfterRunFailure({
-        job,
-        atMs: result.endedAt,
-        deferredNotifications: opts.deferredNotifications,
-        // The failure route owns the terminal notice when one resolves; the
-        // in-app notice is queued at finish only when no route can carry it.
-        notify: false,
-      })
-    ) {
-      terminalRecurring = true;
-      // Keep this after the ownership and immediate-preserve gates: those paths
-      // restore schedule state and would otherwise silently undo the disable.
-      state.deps.log.error(
-        {
-          jobId: job.id,
-          name: job.name,
-          consecutiveErrors: job.state.consecutiveErrors,
-          error: result.error,
-        },
-        "cron: auto-disabled job after consecutive run failures",
-      );
     } else if (result.status === "error" && isJobEnabled(job)) {
       const retryDecision = resolveTransientCronRetryDecision({
         error: result.error,
@@ -469,28 +452,42 @@ export function applyJobResult(
       });
       // Within the quick-retry budget the next run is at most minutes away, whether it is the
       // retry itself or an earlier natural slot, so a provider outage holds notifications.
+      // A provider reset moves the quick retry to it, holding no alert once past this backoff.
+      // A reset past the schedule's own next slot skips quick retries for the first slot after
+      // it: an off-slot time there is one schedule maintenance would move earlier again.
       const holdsForRetry =
         retryDecision.retryable &&
         retryDecision.backoffMs !== undefined &&
+        retryFloorMs <= result.endedAt + retryDecision.backoffMs &&
         holdsFailureNotificationForRetry(job, result, retryDecision.retryCategory);
       let normalNext: number | undefined;
       let normalNextComputed = false;
       const computeNormalNext = () => {
         if (!normalNextComputed) {
+          const paced = previousScheduleState.pacedNextRunAtMs;
+          // A paced slot before the provider's reset would only hit the limit again.
           normalNext =
-            previousScheduleState.pacedNextRunAtMs ??
-            computeNaturalNext(retryDecision.retryable || previousConsecutiveErrors > 0);
+            paced !== undefined && paced >= retryFloorMs
+              ? paced
+              : computeNaturalNext(retryDecision.retryable || previousConsecutiveErrors > 0);
           normalNextComputed = true;
         }
         return normalNext;
       };
-      if (retryDecision.retryable && retryDecision.backoffMs !== undefined) {
+      if (
+        retryDecision.retryable &&
+        retryDecision.backoffMs !== undefined &&
+        (retryFloorMs <= result.endedAt + retryDecision.backoffMs ||
+          retryFloorMs < (computeNaturalNext(true, result.endedAt) ?? 0))
+      ) {
         normalNext = computeNormalNext();
         if (normalNext === undefined) {
           // Preserve the unresolved-cron guard (#66019): do not synthesize a
           // retry when the schedule cannot produce a next scheduled slot.
         } else {
-          const retryNextRunAtMs = scheduleNextRun(result.endedAt + retryDecision.backoffMs);
+          const retryNextRunAtMs = scheduleNextRun(
+            Math.max(result.endedAt + retryDecision.backoffMs, retryFloorMs),
+          );
           if (retryNextRunAtMs === undefined) {
             return finish();
           }

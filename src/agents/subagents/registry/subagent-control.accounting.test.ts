@@ -184,19 +184,23 @@ it.each(
       const stoppedRoot = subagentRuns.get(root.runId);
       expect(isSameSubagentRunOwner(stoppedRoot, root)).toBe(true);
       expect(stoppedRoot?.endedReason).toBe("subagent-killed");
-      const childKills = phase === "descendant drain" ? 2 : 0;
+      const childDrained = phase === "descendant drain";
+      // Already admitted siblings finish independently of a later root read failure.
+      // The held child's accepted cancellation remains pending until its drain releases.
+      const childKills = childDrained ? 2 : 1;
       expect(resolveSubagentSessionStatus(subagentRuns.get("child"))).toBe(
-        childKills ? "killed" : "running",
+        childDrained ? "killed" : "running",
       );
-      expect(resolveSubagentSessionStatus(subagentRuns.get("healthy"))).toBe(
-        childKills ? "killed" : "running",
-      );
+      expect(resolveSubagentSessionStatus(subagentRuns.get("healthy"))).toBe("killed");
+      if (!childDrained) {
+        expect(result).toHaveProperty("error", expect.stringContaining("cleanup is pending"));
+      }
       expect(result).toMatchObject(
         boundary === "bulk"
           ? {
               status: "error",
               killed: 1 + childKills,
-              failed: 1,
+              failed: childDrained ? 1 : 2,
               labels: Array(1 + childKills).fill("shared label"),
             }
           : {

@@ -8,6 +8,7 @@ import {
 import type { AdmittedRunOperatorAuthority } from "../../agents/admitted-run-context.js";
 import type { SessionEntry } from "../../config/sessions.js";
 import { prepareSessionEntryMutationDatabases } from "../../config/sessions/session-accessor.entry-mutation.js";
+import { isArchivedOccurrenceRestore } from "../../config/sessions/session-archive-undo.js";
 import { sessionToolOverridesEqual } from "../../config/sessions/session-tool-overrides.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import { createSqliteLifecycleAggregateError } from "../../infra/sqlite-lifecycle-errors.js";
@@ -25,10 +26,14 @@ import type {
   MutationTarget,
   PreparedPatchTarget,
 } from "./sessions-patch-types.js";
+import type { SessionMutationAuthorization } from "./types.js";
 
 export function resolveSessionPatchExpectationError(
   patch: SessionsPatchParams,
 ): string | undefined {
+  if (patch.expectedArchivedAt !== undefined && !isArchivedOccurrenceRestore(patch)) {
+    return "expectedArchivedAt requires Restore of an exact session identity.";
+  }
   if (patch.expectedSandboxMode !== undefined && patch.sandboxMode === undefined) {
     return "expectedSandboxMode requires a sandboxMode replacement.";
   }
@@ -69,6 +74,7 @@ export function resolveSessionPatchTargetError(
       (entry?.sidebarRoot === true) !== patch.expectedSidebarRoot) ||
     (patch.expectedCategory !== undefined &&
       (entry?.category ?? null) !== patch.expectedCategory) ||
+    (patch.expectedArchivedAt !== undefined && entry?.archivedAt !== patch.expectedArchivedAt) ||
     (patch.expectedArchived !== undefined &&
       (entry?.archivedAt !== undefined) !== patch.expectedArchived) ||
     (patch.expectedLifecycleRevision !== undefined &&
@@ -100,6 +106,7 @@ export async function prepareSessionPatchTargets(params: {
   placementChecks: ReadonlyMap<number, { validate: () => string | undefined }>;
   outcomes: Array<MutationOutcome | undefined>;
   operatorAuthority?: Promise<{ authority: AdmittedRunOperatorAuthority } | undefined>;
+  followSharingRegistration?: SessionMutationAuthorization["followRegistration"];
   personalModelSelection: UserModelAccountSelection | undefined;
 }) {
   const mutationTargets = params.targets.map((target, index) => ({
@@ -118,7 +125,6 @@ export async function prepareSessionPatchTargets(params: {
   const ready = params.operatorAuthority
     ? params.operatorAuthority.then((captured) => {
         operatorAuthority = captured?.authority;
-        operatorAuthority?.assertCurrent();
       })
     : Promise.resolve();
   const selected = params.operatorAuthority ? params.prepared : [];
@@ -136,24 +142,26 @@ export async function prepareSessionPatchTargets(params: {
           guards: [originalCommitGuards[target.index]!],
           archiveTransitions: [],
         });
-        operatorAuthority?.assertCurrent();
       },
+      followRegistration: (change) =>
+        params.followSharingRegistration?.(
+          { agentId: target.targetAgentId, sessionKey: target.canonicalKey },
+          change,
+        ),
     })),
     ready,
   );
   type PreparedStorage = Awaited<(typeof databaseCustody.preparations)[number]>;
   const storage = new Map<number, PreparedStorage>();
   const storagePreparations = new Map(
-    durableTargets.map(
-      (target, index) =>
-        [
-          target.index,
-          databaseCustody.preparations[index]!.then((prepared) => {
-            storage.set(target.index, prepared);
-            return prepared;
-          }),
-        ] as const,
-    ),
+    durableTargets.map((target, index) => {
+      const storageReady = databaseCustody.preparations[index]!.then((prepared) => {
+        storage.set(target.index, prepared);
+        return prepared;
+      });
+      const source = databaseCustody.sources[index];
+      return [target.index, source ? { ...source, ready: storageReady } : storageReady] as const;
+    }),
   );
   let targetCustody: ReturnType<typeof prepareGatewaySessionLifecycleTargets> | undefined;
   const ancestorReads: Array<Awaited<ReturnType<typeof prepareSessionPatchSidebarAncestors>>> = [];
@@ -212,7 +220,6 @@ export async function prepareSessionPatchTargets(params: {
             guards: [originalGuard],
             archiveTransitions: [],
           });
-          operatorAuthority?.assertCurrent();
           if ("error" in result) {
             throw result.error instanceof Error
               ? result.error

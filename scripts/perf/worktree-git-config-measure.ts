@@ -19,6 +19,7 @@ import { Session } from "node:inspector/promises";
 import { registerHooks } from "node:module";
 import { loadavg } from "node:os";
 import path from "node:path";
+import { startCollectedHeapSampling } from "../lib/heap-sampling.ts";
 
 const fixture = path.resolve(process.argv[2]!);
 const iterations = Number(process.argv[3] ?? 200);
@@ -95,12 +96,7 @@ for (const key of Object.keys(counts)) {
 global.gc?.();
 const inspector = allocations ? new Session() : undefined;
 if (inspector) {
-  inspector.connect();
-  await inspector.post("HeapProfiler.startSampling", {
-    samplingInterval: 32768,
-    includeObjectsCollectedByMajorGC: true,
-    includeObjectsCollectedByMinorGC: true,
-  });
+  await startCollectedHeapSampling(inspector, 32768);
 }
 const samples: number[] = [];
 const cpu = process.threadCpuUsage();

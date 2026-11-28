@@ -145,9 +145,11 @@ function renderEnvLines(env: Record<string, string | undefined> | undefined): st
   if (!env) {
     return [];
   }
-  // An explicit empty NODE_OPTIONS blocks inherited supervisor preload/heap flags.
+  // Explicit empty startup settings block inherited supervisor values.
   const entries = Object.entries(env).filter(
-    ([key, value]) => typeof value === "string" && (value.trim() || key === "NODE_OPTIONS"),
+    ([key, value]) =>
+      typeof value === "string" &&
+      (value.trim() || key === "NODE_OPTIONS" || key === "MALLOC_ARENA_MAX"),
   );
   return entries.map(([key, value]) => {
     const rawValue = value ?? "";

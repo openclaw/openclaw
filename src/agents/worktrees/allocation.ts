@@ -1,3 +1,7 @@
+import {
+  composeSessionSourceAssertion,
+  prepareSessionSourceEffect,
+} from "../../config/sessions/session-source-authority.js";
 import { withOpenClawStateLeasesWorkerAdmission } from "../../state/openclaw-state-lease-worker-owner.js";
 import {
   OpenClawStateLeaseError,
@@ -37,6 +41,7 @@ export type WorktreeAllocationGuard = WorktreeFilesystemOptions & {
 };
 
 type WorktreeLeaseParams = {
+  idleIoPriority?: boolean;
   env: NodeJS.ProcessEnv;
   id?: string;
   waitBudget?: WorktreeWaitBudget;
@@ -51,12 +56,15 @@ export async function withWorktreeAllocationLease<T>(
   params: WorktreeLeaseParams,
   run: (guard: WorktreeAllocationGuard) => Promise<T>,
 ): Promise<T> {
+  if (params.id && !params.workerAuthority?.leaseSet?.mutationWorktreeIds?.includes(params.id)) {
+    return withWorktreeMutationLease({ ...params, id: params.id }, (checkout) =>
+      withWorktreeAllocationLease({ ...params, ...checkout, id: undefined }, run),
+    );
+  }
   return await withWorktreeLease(params, WORKTREE_CREATE_LEASE_SCOPE, "capacity", (guard) =>
     timeWorktreePreparationPhase("reservation", async () => {
       await recoverPendingWorktrees(params.env, guard.workerAuthority);
-      return params.id
-        ? withWorktreeMutationLease({ ...params, ...guard, id: params.id }, run)
-        : run(guard);
+      return run(guard);
     }),
   );
 }
@@ -177,6 +185,10 @@ async function withWorktreeLease<T>(
   let finishRelease: (() => void) | undefined;
   try {
     params.commitGuard?.();
+    const source = params.commitGuard
+      ? await prepareSessionSourceEffect(params.commitGuard)
+      : undefined;
+    await using _ = { [Symbol.asyncDispose]: async () => await source?.release?.() };
     const captured = captureWorktreeRunEndContext(params.env);
     const inherited = params.workerAuthority?.leaseSet;
     const context = inherited?.context ?? captured;
@@ -219,15 +231,26 @@ async function withWorktreeLease<T>(
               // The lease owner checks its live phase, token custody, and shared heartbeat expiry.
               authority.assertCurrent();
             };
-            const commitGuard = () => {
-              assertOwned();
-              signal.throwIfAborted();
-              params.commitGuard?.();
-            };
+            const commitGuard = composeSessionSourceAssertion(
+              params.commitGuard ? [params.commitGuard] : [],
+              (assertSource) => {
+                assertOwned();
+                signal.throwIfAborted();
+                assertSource();
+              },
+            );
             const workerAuthority = {
+              ...params.workerAuthority,
               leaseSet,
               predicates: params.workerAuthority?.predicates,
+              workspaceEvidence: [
+                ...new Set([
+                  ...(params.workerAuthority?.workspaceEvidence ?? []),
+                  ...(source?.workspaceEvidence ?? []),
+                ]),
+              ],
               assertCurrent: () => {
+                assertOwned();
                 captured.admission.assertCurrent();
                 signal.throwIfAborted();
                 (params.workerAuthority
@@ -243,6 +266,7 @@ async function withWorktreeLease<T>(
             let releaseCapacity = true;
             try {
               const result = await run({
+                idleIoPriority: params.idleIoPriority,
                 signal,
                 waitBudget: params.waitBudget,
                 commitGuard,

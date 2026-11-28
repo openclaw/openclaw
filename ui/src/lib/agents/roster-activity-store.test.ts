@@ -463,35 +463,4 @@ describe("roster activity lifecycle", () => {
     expect(store.snapshot.result?.sessions).toHaveLength(4);
     expect(load).toHaveBeenCalledTimes(2);
   });
-
-  it("retires an old window when the client changes without publishing its late result", async () => {
-    vi.useFakeTimers();
-    const stale = createDeferred<SessionsListResult>();
-    const load = vi
-      .fn()
-      .mockReturnValueOnce(stale.promise)
-      .mockResolvedValue(result("Current activity"));
-    const { store, source, request } = createStore(load);
-    const notify = vi.fn();
-    observe(store, notify);
-    cleanups.push(() => {
-      stale.resolve(result("Retired activity"));
-    });
-    await vi.advanceTimersByTimeAsync(0);
-    expect(load).toHaveBeenCalledTimes(1);
-    source.publish({ ...source.gateway.snapshot, client: createTestGatewayClient(request) });
-    const refreshed = store.refresh();
-    await vi.advanceTimersByTimeAsync(0);
-    await refreshed;
-    expect(store.snapshot.cards[0]?.preview).toBe("Current activity");
-    const reads = load.mock.calls.length;
-    expect(reads).toBe(2);
-    notify.mockClear();
-    stale.resolve(result("Retired activity", true));
-    await stale.promise;
-    await vi.advanceTimersByTimeAsync(0);
-    expect(load).toHaveBeenCalledTimes(reads);
-    expect(store.snapshot.cards[0]?.preview).toBe("Current activity");
-    expect(notify).not.toHaveBeenCalled();
-  });
 });

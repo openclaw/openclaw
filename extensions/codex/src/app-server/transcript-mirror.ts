@@ -213,6 +213,7 @@ export function createCodexAppServerUserMessagePersistenceNotifier(
       receipt.anchor,
       receipt,
     );
+    runParams.userTurnTranscriptRecorder?.markSentToProvider?.();
     try {
       runParams.onUserMessagePersisted?.(receipt.message);
     } catch (error) {

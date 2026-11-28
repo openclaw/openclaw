@@ -68,7 +68,6 @@ function installAdmissionContribution() {
     runGatewayConfigHealth: noOp,
     runAuthProfileMigration: noOp,
     runAuthProfileHealth: noOp,
-    runGatewayAuthHealth: noOp,
     runLegacyStateHealth: noOp,
   }).find((contribution) => contribution.id === "doctor:agent-database-admission")!;
   mocks.runContributions.mockImplementation((ctx) => admission.run(ctx));

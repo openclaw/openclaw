@@ -2,7 +2,7 @@ import { afterEach, assert, expect, it, vi } from "vitest";
 import { createDeferred } from "../../test/helpers/promise.js";
 import { getProcessSupervisor } from "../process/supervisor/index.js";
 import { createOpenClawTestState } from "../test-utils/openclaw-test-state.js";
-import { getSession, waitForExecSession } from "./bash-process-registry.js";
+import { getFinishedSession, getSession, waitForExecSession } from "./bash-process-registry.js";
 import { resetProcessRegistryForTests } from "./bash-process-registry.test-support.js";
 import { createExecTool } from "./bash-tools.exec-run.js";
 import { nodeCommand } from "./bash-tools.lifecycle.test-support.js";
@@ -72,7 +72,8 @@ it("keeps the suspension limit while required observers collect existing process
     assert(value && typeof value === "object" && "sessionId" in value);
     assert(typeof value.sessionId === "string");
     const sessionId = value.sessionId;
-    const session = getSession(sessionId);
+    // Background completion may precede delivery of the catalog result.
+    const session = getSession(sessionId) ?? getFinishedSession(sessionId);
     assert(session);
     await waitForExecSession(session);
     // Bound concurrent VM starts without fabricating capacity slots.

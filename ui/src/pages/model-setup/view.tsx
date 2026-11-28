@@ -3,7 +3,6 @@ import { createMemo, Errored, For, isPending, Loading, Match, Show, Switch } fro
 import type { SystemAgentSetupDetectResult } from "../../api/types.ts";
 import { subtitleForRoute, titleForRoute } from "../../app-navigation.ts";
 import { ShellLayoutBoundary } from "../../app/shell-layout-traits-solid.tsx";
-import { Checkbox } from "../../components/solid/checkbox.tsx";
 import { IconButton } from "../../components/solid/icon-button.tsx";
 import { Icon } from "../../components/solid/icon.tsx";
 import { InlineAlert } from "../../components/solid/inline-alert.tsx";
@@ -86,8 +85,24 @@ function SetupActionRow(props: {
   option: AuthOption | ModelSetupPrepareOption;
 }) {
   const groupLabel = () => ("kind" in props.option ? props.option.groupLabel : undefined);
+  const useChoiceLabel = () => {
+    const option = props.option;
+    // Native overrides leave the existing web auth treatment intact.
+    return (
+      "kind" in option &&
+      (option.kind === "oauth" || option.kind === "device-code") &&
+      option.actionLabel === undefined
+    );
+  };
+  // Sign-in methods come from manifests; local setup waits for discovery,
+  // which may find the model it would prepare.
+  const disabled = () =>
+    props.view.actionsDisabled || (!("kind" in props.option) && props.view.detecting);
   const actionLabel = () => {
     const option = props.option;
+    if (useChoiceLabel()) {
+      return option.label;
+    }
     return "kind" in option
       ? t(
           option.kind === "install"
@@ -107,10 +122,18 @@ function SetupActionRow(props: {
       <div class="model-setup__provider-copy">
         {renderProviderIcon(props.view, props.option)}
         <div>
-          <strong>{props.option.label}</strong>
-          <Show when={groupLabel()}>
-            <div class="muted">{groupLabel()}</div>
-          </Show>
+          {useChoiceLabel() ? (
+            <Show when={groupLabel() && groupLabel() !== props.option.label}>
+              <strong>{groupLabel()}</strong>
+            </Show>
+          ) : (
+            <>
+              <strong>{props.option.label}</strong>
+              <Show when={groupLabel()}>
+                <div class="muted">{groupLabel()}</div>
+              </Show>
+            </>
+          )}
           <Show when={props.option.hint}>
             <div class="muted">{props.option.hint}</div>
           </Show>
@@ -119,7 +142,7 @@ function SetupActionRow(props: {
       <button
         type="button"
         class="btn"
-        disabled={props.view.actionsDisabled || props.view.detecting}
+        disabled={disabled()}
         onClick={() => {
           const option = props.option;
           if ("kind" in option) {
@@ -264,7 +287,7 @@ function Manual(props: ModelSetupViewProps & { detected: SystemAgentSetupDetectR
           <button
             type="button"
             class="btn primary"
-            disabled={props.actionsDisabled || props.detecting || !props.manualProviderId}
+            disabled={props.actionsDisabled || !props.manualProviderId}
             onClick={() => props.onManualConnect()}
           >
             {t(
@@ -276,36 +299,6 @@ function Manual(props: ModelSetupViewProps & { detected: SystemAgentSetupDetectR
             )}
           </button>
         </div>
-      </section>
-    </Show>
-  );
-}
-
-function NativeSessionDiscovery(
-  props: ModelSetupViewProps & { result: SystemAgentSetupDetectResult },
-) {
-  return (
-    <Show
-      when={
-        props.result.nativeSessionCatalogPreferenceRequired === true &&
-        props.result.nativeSessionCatalogs?.length
-      }
-    >
-      <section class="settings-section model-setup__native-discovery">
-        <SettingsSectionHeader
-          title={t("modelSetup.nativeDiscovery.title")}
-          description={t("modelSetup.nativeDiscovery.body")}
-        />
-        <p>{props.result.nativeSessionCatalogs?.map((option) => option.label).join(", ")}</p>
-        <label>
-          <Checkbox
-            checked={props.nativeSessionCatalogsEnabled === true}
-            disabled={props.actionsDisabled}
-            onChange={(event) => props.onNativeSessionCatalogsChange?.(event.currentTarget.checked)}
-          />
-          {t("modelSetup.nativeDiscovery.enable")}
-        </label>
-        <p class="muted">{t("modelSetup.nativeDiscovery.decline")}</p>
       </section>
     </Show>
   );
@@ -334,7 +327,6 @@ function Ready(props: ModelSetupViewProps & { result: SystemAgentSetupDetectResu
         when={props.canAdmin && !props.gatewayTooOld}
         fallback={renderSetupAccessWarning(props.canAdmin)}
       >
-        <NativeSessionDiscovery {...props} />
         <EmptyState {...props} />
         <Show when={props.nativeModels}>{(owner) => <NativeModelSetupView owner={owner()} />}</Show>
         <CandidateRows {...props} />
@@ -408,11 +400,14 @@ function SetupLoading(props: ModelSetupViewProps) {
   );
 }
 
-function DetectionProgress() {
+function DetectionProgress(props: { page: ModelSetupViewProps["page"] }) {
+  // Without detected rows, the candidate slot shows discovery progress instead.
   return (
-    <div class="muted" role="status">
-      {t("modelSetup.loading")}
-    </div>
+    <Show when={props.page.phase === "ready" && props.page.result.candidates.length > 0}>
+      <div class="muted" role="status">
+        {t("modelSetup.loading")}
+      </div>
+    </Show>
   );
 }
 
@@ -524,9 +519,12 @@ export function ModelSetupView(props: ModelSetupViewProps): JSX.Element {
               </InlineAlert>
             )}
           >
-            <Loading on={props.detectionIdentity()} fallback={<DetectionProgress />}>
+            <Loading
+              on={props.detectionIdentity()}
+              fallback={<DetectionProgress page={props.page} />}
+            >
               <Show when={isPending(detection)} fallback={detection()}>
-                <DetectionProgress />
+                <DetectionProgress page={props.page} />
               </Show>
             </Loading>
           </Errored>

@@ -126,8 +126,6 @@ describe("plugin session attachments", () => {
     workflowMocks.sendMessage.mockReset();
     resetPluginRuntimeStateForTest();
     clearPluginLoaderCache();
-    delete (globalThis as { proofAttachmentApi?: OpenClawPluginApi }).proofAttachmentApi;
-    delete (globalThis as { proofAttachmentLog?: unknown[] }).proofAttachmentLog;
   });
 
   it("sends validated files through the session delivery route with portable hints", async () => {
