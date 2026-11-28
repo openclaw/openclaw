@@ -9,6 +9,12 @@ import {
 import type { SubagentRunRecord } from "./subagent-registry.types.js";
 import { copySubagentRunRuntimeOwner, isSameSubagentRunOwner } from "./subagent-run-generation.js";
 
+export class SubagentLifecycleOwnerChangedError extends SubagentRegistryMutationRejectedError {
+  constructor() {
+    super("Subagent cleanup execution changed.");
+  }
+}
+
 export async function commitSubagentLifecycleMutation(
   context: SubagentLifecycleCommonContext,
   args: {
@@ -29,7 +35,7 @@ export async function commitSubagentLifecycleMutation(
     assertSubagentRegistryWriteSourceCurrent(args.stateContext);
     const current = getCurrentSubagentRunOwner(context.options.runs, args.entry);
     if (!current) {
-      throw new SubagentRegistryMutationRejectedError("Subagent cleanup execution changed.");
+      throw new SubagentLifecycleOwnerChangedError();
     }
     if (current.runId !== runId) {
       throw new SubagentRegistryMutationRejectedError(
@@ -44,7 +50,7 @@ export async function commitSubagentLifecycleMutation(
     (rows) => {
       const current = rows.get(runId);
       if (!current || !isSameSubagentRunOwner(current, args.entry)) {
-        throw new SubagentRegistryMutationRejectedError("Subagent cleanup execution changed.");
+        throw new SubagentLifecycleOwnerChangedError();
       }
       args.assertCurrent(current);
       const draft = copySubagentRunRuntimeOwner(current, structuredClone(current));

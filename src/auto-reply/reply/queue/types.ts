@@ -52,15 +52,6 @@ export type InternalFollowupRun = FollowupRun & {
   mediaImageLayout?: MediaImageLayout;
 };
 
-export function isFollowupOperatorAuthorityCurrent(run: Pick<FollowupRun, "operatorAuthority">) {
-  try {
-    run.operatorAuthority?.assertCurrent();
-    return true;
-  } catch {
-    return false;
-  }
-}
-
 export function isFollowupRunAborted(
   run: Pick<
     FollowupRun,

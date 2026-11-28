@@ -22,7 +22,7 @@ import {
   type AnthropicInlineImageBudget,
 } from "../internal/anthropic-inline-images.js";
 import { isImageWithMediaPayload } from "../media-payload.js";
-import { preparedRequestSuffix, uncachedSuffixMessage } from "../provider-options.js";
+import { preparedRequestSuffix } from "../provider-options.js";
 import type { AnthropicOptions, AnthropicThinkingDisplay } from "../provider-options.js";
 import { transformProviderMessages } from "../provider-transcript-transform.js";
 import {
@@ -486,17 +486,16 @@ export async function buildAnthropicRequest(
     }
     if (output) {
       appendMessage(output);
-      if (transformed.slice(i, end).some((source) => uncachedSuffixMessage.has(source))) {
-        cacheBreakpointOptOutMessageIndexes.add(messages.length - 1);
-      }
       if (msg.role === "user") {
         const runtimeContextRetained =
           msg.runtimeContext !== undefined
             ? msg.runtimeContext.retained
             : msg.runtimeContextCarrierRetained;
         if (
-          hasRuntimeContextMarker(msg) &&
-          !(runtimeContextRetained ?? modelRetainsRuntimeContext)
+          msg.cacheCheckpoint === false ||
+          // A prewarm's trailing item is sent once; the cache entry belongs to the prefix before it.
+          (options?.cachePrewarm === true && end >= transformed.length) ||
+          (hasRuntimeContextMarker(msg) && !(runtimeContextRetained ?? modelRetainsRuntimeContext))
         ) {
           cacheBreakpointOptOutMessageIndexes.add(messages.length - 1);
         }

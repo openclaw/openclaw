@@ -80,22 +80,3 @@ export function formatSourceDate(value: string): string {
         timeZoneName: "short",
       }).format(new Date(value));
 }
-
-/** Explain storage-day differences without changing source precision. */
-export function sourceDateNote(value: string): string {
-  if (!validSourceDate(value)) {
-    return "";
-  }
-  if (/^\d{4}-\d{2}-\d{2}$/.test(value)) {
-    return "Date only · no time recorded";
-  }
-  const instant = new Date(value);
-  const local = [
-    instant.getFullYear(),
-    String(instant.getMonth() + 1).padStart(2, "0"),
-    String(instant.getDate()).padStart(2, "0"),
-  ].join("-");
-  return local !== instant.toISOString().slice(0, 10)
-    ? `Stored as ${instant.toISOString().slice(0, 16).replace("T", " ")} UTC`
-    : "";
-}

@@ -123,6 +123,11 @@ const enSettings = {
     },
     overview: {
       modelSelection: "Model selection",
+      modelSelectionHelp: "Choose overrides for this agent, or inherit the defaults from Models.",
+      inheritBehaviorHelp:
+        "Inherit default: use the shared setting, or the model’s own policy when no shared preference is set.",
+      editFallbackChain: "Edit fallback chain",
+      automaticFallbacks: "Default ({models})",
       primaryModel: "Primary model",
       primaryModelDefault: "Primary model (default)",
       notSet: "Not set",
@@ -134,6 +139,12 @@ const enSettings = {
       utilityModelInheritAutomatic: "Automatic",
       utilityModelDisabled: "Disabled for this agent",
       utilityModelFallbacks: "This agent's utility fallbacks: {models}",
+      subagentModel: "Subagent model",
+      subagentWithoutDefault:
+        "If neither this agent nor Models sets a subagent model, a child of the same agent keeps its starting session’s model. A child started under another agent uses that agent’s own model.",
+      subagentModelHelp:
+        "Runs subagents and agent-started sessions that run as this agent. Inherit the Models page default or choose one for this agent only.",
+      inheritDefaultThinking: "Inherit default ({level})",
       fallbacks: "Fallbacks",
       addFallback: "Add fallback…",
     },
@@ -444,23 +455,33 @@ const enSettings = {
     },
     transcription: {
       title: "Speech to text",
-      description:
-        "Speech to text for Talk dictation and inbound voice notes (tools.media). Status shows the provider Talk uses.",
+      description: "How Talk hears you, and which model transcribes voice notes.",
       unavailableHint: "Connect to the Gateway to check speech-to-text readiness.",
       failedHint: "Couldn’t check speech-to-text readiness.",
-      noProvider: "No speech-to-text model is configured yet.",
-      readyWithoutProvider: "A configured local transcription model is ready.",
+      readyWithoutProvider: "A local transcription model is ready.",
+      talkTitle: "Talk",
+      talkVoiceCall: "{provider} live transcription, set in Voice Call settings.",
+      talkVoiceModel: "{provider}, set by the voice model in AI Agents settings.",
+      talkAutomatic: "{provider} live transcription, picked automatically from your keys.",
+      talkNotSetUp: "Not set up yet. Add a live transcription key in Voice Call settings.",
+      talkUsesVoiceNotes: "Uses the voice notes model below.",
+      talkUsesFallback: "Uses {provider}, because the voice notes model below isn’t ready.",
+      talkUses: "Uses {provider}.",
+      change: "Change",
+      setUp: "Set up",
+      voiceNotesTitle: "Voice notes",
+      voiceNotesDescription:
+        "Transcribes voice notes you send. Automatic tries your audio models in order.",
       modelTitle: "Speech-to-text model",
-      modelDescription:
-        "Used for voice notes, and for Talk dictation when no streaming transcription provider or speech-to-text voice-model default is configured; those take precedence for Talk. Automatic tries configured audio models in order.",
       invalidModel:
         "“{value}” isn’t a provider/model reference, so it wasn’t saved. Use provider/model, for example openrouter/openai/whisper-large-v3-turbo.",
       automatic: "Automatic",
       custom: "Other model (provider/model)",
-      preferredNotReadyTitle: "Preferred model",
       providerNotReady: "Not ready",
       providerNotReadyDescription:
         "{provider} can’t transcribe yet. It may need a key, which is added on Settings → Models, or it may not support speech to text.",
+      providerKeyOutsideModels:
+        "{provider} can’t transcribe yet. Models can’t add its key: set it in the Gateway’s environment, or pick another model.",
       openModels: "Open Models",
     },
   },
@@ -755,6 +776,7 @@ const enSettings = {
     testProvider: "Test {provider}",
     testing: "Searching…",
     query: "Search query",
+    queryTooLong: "Shorten the search query to {limit} characters or fewer.",
     queryPlaceholder: "What would you like to find?",
     queryDefault: "OpenClaw documentation",
     success: "Search succeeded",
@@ -1001,7 +1023,8 @@ const enSettings = {
       providerDefault: "Provider default",
       machineClass: "Device class",
       machineClassHelp:
-        "Enter a class accepted by the selected Crabbox backend and binary. The provider determines its effective sizing.",
+        "Choose an advertised class when available, or enter a custom class. The provider determines its effective sizing.",
+      customMachineClass: "Custom device class…",
       ttl: "Max lifetime",
       ttlHelp: "Use a positive Go duration such as 8h or 90m.",
       ttlPlaceholder: "8h",
@@ -1085,7 +1108,7 @@ const enSettings = {
         "Sign in and enable this provider for this agent without changing the active model.",
       nativeDone: "Provider enabled. The active model has not changed.",
       setupDescription:
-        "Choose how to connect. Verifying an API key or token can also set this agent's active model.",
+        "Choose how to connect. Setup can also verify and select a model for this agent.",
       done: "Provider credentials saved.",
       statusRefreshFailed: "Sign-in saved, but refreshing status failed. Retry",
       startChat: "Start a new chat with {model}",
@@ -1103,15 +1126,28 @@ const enSettings = {
       sessionExpired:
         "This sign-in session ended. Close this dialog and refresh Models to check the result.",
     },
-    accessTitle: "Provider access",
-    accessDescription: "Accounts for {agent}. Defaults above apply to all agents.",
+    accessTitle: "Providers",
+    accessDescription: "Accounts for {agent}. Model defaults apply to all agents.",
     search: "Search providers…",
+    searchConnected: "Filter providers…",
+    catalog: {
+      firstTitle: "Connect a provider",
+      firstDescription:
+        "Sign in with your account or add an API key. Your agents use its models right away.",
+      title: "Add a provider",
+      description: "Sign in or add an API key for {agent}.",
+      browserSignIn: "Sign in with browser",
+      token: "Access token",
+      connect: "Connect",
+      connected: "Connected",
+      showAll: "Show all {count} providers",
+      showPopular: "Show popular providers",
+      discover: "Find local models",
+    },
     noMatches: "No providers match your search.",
     updated: "Updated {time}",
     refreshing: "Refreshing…",
     disconnected: "Connect to the gateway to see configured model providers.",
-    emptyTitle: "No model providers configured",
-    emptySubtitle: "Sign in to a provider or add an API key, then refresh.",
     status: {
       ok: "Signed in",
       ready: "Ready",
@@ -1146,6 +1182,13 @@ const enSettings = {
     },
     limits: {
       title: "Plan limits",
+      oneAccount: "Limits for one account",
+      subscriptionLimits: "Subscription allowance left",
+      credits: "Credits",
+      detailsFor: "Account details: {account}",
+      notReported: "Not reported",
+      readFailed: "{error} · Refresh to try again.",
+      accountDetails: "Account details",
     },
     saving: "Saving…",
     requestFailed: "Couldn’t complete the request. Try again.",
@@ -1189,6 +1232,11 @@ const enSettings = {
       sourceExternal: "External CLI",
       sourceInherited: "Shared account",
       sourceSaved: "Saved in OpenClaw",
+      nameManagedByConfig: "Name managed in configuration",
+      renameAccount: "Rename",
+      renameAccountFor: "Rename {account}",
+      accountName: "Account name",
+      accountNamePlaceholder: "Leave blank to use the default",
     },
     apiKey: {
       label: "API key",
@@ -1210,6 +1258,14 @@ const enSettings = {
         "API key saved, but OpenClaw couldn’t check it. Use Test access to try again.",
       authModeBlocked: "API key changes aren’t available with the current sign-in method.",
     },
+    voice: {
+      title: "Talk, speech, and transcription",
+      detail:
+        "Sign in with ChatGPT doesn’t include {provider} voice. API usage is billed separately from your ChatGPT plan.",
+      providerDetail:
+        "Signing in with {provider} doesn’t include voice. Voice API usage is billed separately.",
+      status: "API key needed",
+    },
     probe: {
       test: "Test access",
       testing: "Testing…",
@@ -1228,14 +1284,8 @@ const enSettings = {
       },
     },
     readiness: {
-      title: "AI setup",
-      heading: "Set up a model",
       signedInNoModels:
         "You’re signed in, but this account has no usable models. Choose another provider or account.",
-      notConfigured: "Add a provider and test the model OpenClaw will use.",
-      noModels: "No models available",
-      modelRequired: "Model required",
-      chooseProvider: "Choose another provider",
     },
     logout: {
       action: "Sign out",
@@ -1245,10 +1295,28 @@ const enSettings = {
         "The saved sign-in for {provider} is removed from OpenClaw. You can add this account again later.",
       loggingOut: "Signing out…",
       done: "Signed out",
+      deviceAction: "Sign out on this device",
+      deviceActionFor: "Sign out {account} on this device",
+    },
+    disconnect: {
+      action: "Disconnect account",
+      actionFor: "{action}: {account}",
+      title: "{action}?",
+      confirm:
+        "OpenClaw asks the provider to revoke its access for {account}, then removes the saved sign-in from this Gateway. Other devices and agents that use this sign-in stop working. To remove it from this Gateway only, use Sign out on this device.",
+      failed: "Couldn’t disconnect {account}",
+      retry: "Try again",
+      manage: "Manage connected apps",
     },
     remove: {
       action: "Remove provider",
       title: "Remove {provider}?",
+      config:
+        "This deletes the Gateway settings for {key}, including its configured model list. Saved accounts and credentials managed outside OpenClaw may still make the provider available. Models downloaded on the provider’s server are not deleted.",
+      configNote: "Removed provider configuration for {key}.",
+      configChanged: "The configuration changed. Review the provider and confirm removal again.",
+      accessAction: "Remove saved access",
+      accessTitle: "Remove saved access to {provider}?",
       accounts:
         "This removes the saved accounts for {provider} available to this agent. Shared accounts are also removed for other agents that use them. Active replies for this provider on the selected agent may stop.",
       keys: "Saved API keys for {key} and its configured aliases will also be deleted. Provider settings and external secrets stay in place.",
@@ -1290,6 +1358,13 @@ const enSettings = {
       automaticUnavailable: "No recommended small model",
       disabled: "Disabled",
       fallback: "Fallback model",
+      subagent: "Subagent model",
+      subagentHelpLabel: "About the subagent model",
+      subagentHelpPurpose:
+        "Runs subagents and the sessions agents start. An agent’s own subagent model, or a model named in the request, takes priority.",
+      subagentHelpInherit:
+        "Not set: a child of the same agent keeps the model of the session that started it. A child started under another agent uses that agent’s own model.",
+      subagentInherit: "Not set",
       utilityFallback: "Utility fallback model",
       utilityOverridesTitle: "Agents with their own utility settings:",
       utilityOverridesOthers: "Other agents use this default.",
@@ -1299,7 +1374,9 @@ const enSettings = {
       clearFallbacks: "No fallback model (remove all {count})",
       moreFallbackOne: "1 more fallback after this one",
       moreFallbacks: "{count} more fallbacks after this one",
-      selectModel: "Select a model",
+      selectModel: "Not set",
+      agentModel: "{agent} uses {model}, set on the agent.",
+      moreSettings: "More settings",
       discoveringMore: "Looking for more models in the background…",
       savedDiscoveringMore: "Saved. Looking for more models in the background…",
       discoverFailed: "Couldn’t load more models. Try again.",
@@ -1329,7 +1406,7 @@ const enSettings = {
       unverifiedHint:
         "Check this app’s custom launch command on the computer running OpenClaw, then check again.",
       notDetected:
-        "Not found on the computer running OpenClaw: {names}. Install one, then check again.",
+        "None found on the computer running OpenClaw. Supported apps: {names}. Install one, then check again.",
       disabledHint: "Enable this app to include its models in the picker.",
       signInHint:
         "Open {name} on the computer running OpenClaw and check its sign-in, then check again.",
@@ -1725,6 +1802,19 @@ const enSettings = {
     themeRemoved: "Custom theme removed.",
   },
   configView: {
+    toolWorkflows: {
+      codeMode: "Code Mode",
+      codeModeDescription:
+        "Use compact JavaScript tool workflows. On selects Auto for evaluated models; Off disables the global default. Agent and per-model activation settings take precedence. Applies to future replies.",
+      executor: "Code Mode executor",
+      executorDescription:
+        "Node.js is for trusted code; its VM is not a security sandbox. QuickJS runs code in an isolated WebAssembly runtime. Calls through OpenClaw tools use the same permissions. Applies to future replies; agent overrides take precedence.",
+      executorNode: "Node.js (default)",
+      executorQuickjs: "QuickJS (isolated)",
+      toolSearch: "Tool Search",
+      toolSearchDescription:
+        "Defer tool schemas and discover tools on demand. Enabled by default with structured tool calls. Code Mode takes precedence when engaged; native harness tool surfaces remain independent. Applies to future replies.",
+    },
     adminRequired: en.configView.adminRequired,
     channelSettings: "Channel settings",
     categories: {
@@ -1859,6 +1949,8 @@ const enSettings = {
       testAllBrowsersHint: "Tests include browsers registered by other people on this Gateway.",
       sendingTest: "Sending test…",
       updateFailed: "Couldn’t complete the notification request. Try again.",
+      retryAgentSelection: "Couldn’t confirm the selection. Reopen to review and retry.",
+      reviewAgentSelection: "Couldn’t confirm your last save. Review your selection and try again.",
       testError: "Not sent",
       testOutcome: "Test notification",
       testQueued: "Test notification queued",
@@ -1888,12 +1980,24 @@ const enSettings = {
       quietHoursStart: "Quiet hours start",
       quietHoursEnd: "Quiet hours end",
       timeZone: "Time zone",
-      onlyAgents: "Only these agents",
-      onlyAgentsHint: "Enter agent IDs separated by commas. Leave blank for all agents.",
+      agents: "Agents",
+      chooseAgents: "Choose notification agents",
+      agentScope: "Notify for",
+      allAgents: "All agents",
+      allAgentsHint: "Includes agents added in the future.",
+      specificAgents: "Specific agents",
+      inheritAgents: "Account default: {agents}",
+      inheritAgentsHint: "Follows your account defaults, including later changes.",
+      searchAgents: "Search agents",
+      savedAgentUnavailable: "Saved selection · not in the current list",
+      agentsLoadFailed: "Couldn’t load available agents. Saved selections are kept.",
+      noMatchingAgents: "No matching agents",
+      noAgents: "No agents available",
+      agentsSelected: "{count} selected",
+      selectAgentRequired: "Choose at least one agent, or switch to All agents.",
       inherit: "Use account default",
       inheritDetail: "Use account detail level",
       inheritQuietHours: "Use account quiet hours",
-      overrideAgents: "Override for this device",
     },
     appearance: {
       customTheme: "Custom",
@@ -2025,7 +2129,7 @@ const enSettings = {
         lobster: "Lobster",
         empty: "No lobsters unlocked in this browser yet.",
         localCollection: "Unlocked in this browser. Your collection is not synced.",
-        unavailable: "This lobster is not unlocked in this browser. Using Default until it is.",
+        unavailable: "This lobster isn’t unlocked in this browser. Using Default until it is.",
       },
       textSize: "Text size",
     },
@@ -2220,9 +2324,13 @@ const enSettings = {
       description: "These plugins add features to your memory engine. You can use more than one.",
       activeMemory: {
         title: activeMemoryPresentation.memoryAddon.label,
+        knowledgeDescription:
+          "Recalls relevant Knowledge records before a reply. Knowledge does not support private conversation transcript recall.",
       },
       memoryWiki: {
         title: memoryWikiPresentation.memoryAddon.label,
+        knowledgeDescription:
+          "Browse and search the selected agent’s Knowledge records alongside compiled wiki insights.",
       },
       toggleAriaLabel: "Enable or disable {plugin}",
       changeFailed: "Couldn’t update {plugin}. Try again.",

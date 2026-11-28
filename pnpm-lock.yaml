@@ -169,7 +169,7 @@ overrides:
   chevrotain>lodash-es: 4.18.1
   '@chevrotain/cst-dts-gen>lodash-es': 4.18.1
   '@chevrotain/gast>lodash-es': 4.18.1
-  '@agentclientprotocol/codex-acp@2.3.0>@openai/codex': 0.164.0
+  '@agentclientprotocol/codex-acp@2.3.0>@openai/codex': 0.172.0
   '@codemirror/commands@6.11.1>@codemirror/view': 6.43.15
   '@codemirror/view@6.43.15>@codemirror/state': 6.7.6
   '@anthropic-ai/sdk': 0.137.0
@@ -219,7 +219,6 @@ patchedDependencies:
   '@solidjs/signals@2.0.0-rc.18': 421b418083c0218bb54ceb3e12bd0eb74a84e86474ca26cc1f1114abbe58de48
   '@solidjs/web@2.0.0-rc.18': 6d6b2e52e607edf3c9cfcc1a26f331d013537d051f43bbb4f3e7877ed08fa5cf
   acorn@8.19.0: 2abf815a7e66bb39548d0a14081a6fde06f22eb1f6b5bd5f242d4c11a66db77a
-  apache-arrow@21.2.0: c8385fd9a8af8122fc1787481b5bba21fef95f61dc1a664e5d2c5e0cb9d5fd68
   baileys@7.0.0-rc14: c3c4601486630c689ffd1a0e7a34f4b8cf8e7231e41c312ad33afdf4487d8ded
   chrome-devtools-mcp@1.12.0: 1512760e206b35bf417387b18d4c1a5d0f68e2ffeef994cb733c9e02ba4eba92
   ghostty-web@0.4.0: d4c6598b6840564dac4a469f3aa9b8df24fe6eab48a6744302707017e095a524
@@ -227,8 +226,8 @@ patchedDependencies:
   minizlib@3.1.0: 9669b7a5b10b7831ff19c6066787f9dbed0dca18685d6ea8a17bad8282c3f39c
   playwright-core@1.64.1: eedf680682a6840d82c6ad530a60875857aa8c0372785acf8e8e5df9c2e3ac16
   proper-lockfile@4.1.2: ef83b3d51ecb27f8b06d2a3660d509c3da303d7e1d2074712b0ecc2f6256b7cf
-  tar@7.5.22: fd38a2350a01d3eec80c7c393b88647baea164251683cffc481cb3aa5df2a75c
-  vitest@5.0.5: a2a78abe9470cc2ceb0d4eeb81acfc62d6180e9990bc866a7771ba60b1320ea6
+  tinyglobby@0.2.17: 80f03d093d02b02b01bb368d96c6f8fc70b768c4c2a226f8bb1c1cd1a1cd63d7
+  vitest@5.0.5: 1aca6d2c713739c6cbd32d4af2aed8655bb01cd558d5a1cc86cf8187eaa59609
 
 importers:
 
@@ -292,14 +291,14 @@ importers:
         specifier: workspace:*
         version: link:packages/ai
       '@openclaw/fs-safe':
-        specifier: 0.27.1
-        version: 0.27.1
+        specifier: 0.28.2
+        version: 0.28.2
       '@openclaw/proc-safe':
-        specifier: 0.4.2
-        version: 0.4.2
+        specifier: 0.6.0
+        version: 0.6.0
       '@openclaw/proxyline':
         specifier: 0.4.1
-        version: 0.4.1(undici@8.12.3)
+        version: 0.4.1(undici@8.12.4)
       '@opentelemetry/semantic-conventions':
         specifier: 1.44.0
         version: 1.44.0
@@ -401,7 +400,7 @@ importers:
         version: 12.2.1
       openai:
         specifier: 7.47.0
-        version: 7.47.0(@aws-sdk/credential-provider-node@3.972.92)(@smithy/hash-node@4.5.2)(@smithy/signature-v4@5.7.4)(google-auth-library@10.9.1(supports-color@10.2.2))(undici@8.12.3)(ws@8.22.0)(zod@4.6.7)
+        version: 7.47.0(@aws-sdk/credential-provider-node@3.972.92)(@smithy/hash-node@4.5.2)(@smithy/signature-v4@5.7.4)(google-auth-library@10.9.1(supports-color@10.2.2))(undici@8.12.4)(ws@8.22.0)(zod@4.6.7)
       p-limit:
         specifier: 7.3.3
         version: 7.3.3
@@ -434,7 +433,7 @@ importers:
         version: 7.8.5
       tar:
         specifier: 7.5.22
-        version: 7.5.22(patch_hash=fd38a2350a01d3eec80c7c393b88647baea164251683cffc481cb3aa5df2a75c)
+        version: 7.5.22
       tslog:
         specifier: 5.4.0
         version: 5.4.0
@@ -442,8 +441,8 @@ importers:
         specifier: 1.4.3
         version: 1.4.3
       undici:
-        specifier: 8.12.3
-        version: 8.12.3
+        specifier: 8.12.4
+        version: 8.12.4
       web-push:
         specifier: 3.6.7
         version: 3.6.7(supports-color@10.2.2)
@@ -478,6 +477,9 @@ importers:
       '@openclaw/crabline':
         specifier: 0.2.0
         version: 0.2.0(patch_hash=87093d75728e71110a39bd4729df86642a7974ebbbd2155fec2e074ce9a90f3d)
+      '@openclaw/fs-safe-captured-0.27.1':
+        specifier: npm:@openclaw/fs-safe@0.27.1
+        version: '@openclaw/fs-safe@0.27.1'
       '@openclaw/session-url-contract':
         specifier: workspace:*
         version: link:packages/session-url-contract
@@ -540,7 +542,7 @@ importers:
         version: 8.20.0
       apache-arrow:
         specifier: 21.2.0
-        version: 21.2.0(patch_hash=c8385fd9a8af8122fc1787481b5bba21fef95f61dc1a664e5d2c5e0cb9d5fd68)
+        version: 21.2.0
       baileys:
         specifier: 7.0.0-rc14
         version: 7.0.0-rc14(patch_hash=c3c4601486630c689ffd1a0e7a34f4b8cf8e7231e41c312ad33afdf4487d8ded)(audio-decode@3.12.0)(supports-color@10.2.2)
@@ -612,7 +614,7 @@ importers:
         version: 18.0.0(stylelint@17.16.0(supports-color@10.2.2)(typescript@7.1.0-dev.20261028.1))
       tinyglobby:
         specifier: 0.2.17
-        version: 0.2.17
+        version: 0.2.17(patch_hash=80f03d093d02b02b01bb368d96c6f8fc70b768c4c2a226f8bb1c1cd1a1cd63d7)
       tree-sitter-bash:
         specifier: 0.25.1
         version: 0.25.1
@@ -636,7 +638,7 @@ importers:
         version: 8.3.5(@types/node@26.6.6)(esbuild@0.28.2)(jiti@2.7.0)(tsx@4.23.15)(yaml@2.9.1)
       vitest:
         specifier: 5.0.5
-        version: 5.0.5(patch_hash=a2a78abe9470cc2ceb0d4eeb81acfc62d6180e9990bc866a7771ba60b1320ea6)(@opentelemetry/api@1.9.1)(@types/node@26.6.6)(@vitest/browser-playwright@5.0.5)(@vitest/coverage-v8@5.0.5)(@vitest/ui@5.0.5)(jsdom@30.1.3(@noble/hashes@2.4.0))(vite@8.3.5(@types/node@26.6.6)(esbuild@0.28.2)(jiti@2.7.0)(tsx@4.23.15)(yaml@2.9.1))
+        version: 5.0.5(patch_hash=1aca6d2c713739c6cbd32d4af2aed8655bb01cd558d5a1cc86cf8187eaa59609)(@opentelemetry/api@1.9.1)(@types/node@26.6.6)(@vitest/browser-playwright@5.0.5)(@vitest/coverage-v8@5.0.5)(@vitest/ui@5.0.5)(jsdom@30.1.3(@noble/hashes@2.4.0))(vite@8.3.5(@types/node@26.6.6)(esbuild@0.28.2)(jiti@2.7.0)(tsx@4.23.15)(yaml@2.9.1))
     optionalDependencies:
       sqlite-vec:
         specifier: 0.1.9
@@ -685,8 +687,8 @@ importers:
         specifier: 2.3.0
         version: 2.3.0
       '@openclaw/fs-safe':
-        specifier: 0.27.1
-        version: 0.27.1
+        specifier: 0.28.2
+        version: 0.28.2
       acpx:
         specifier: 0.21.1
         version: 0.21.1
@@ -723,7 +725,7 @@ importers:
     dependencies:
       openai:
         specifier: 7.47.0
-        version: 7.47.0(@aws-sdk/credential-provider-node@3.972.92)(@smithy/hash-node@4.5.2)(@smithy/signature-v4@5.7.4)(google-auth-library@10.9.1(supports-color@10.2.2))(undici@8.12.3)(ws@8.22.0)(zod@4.6.7)
+        version: 7.47.0(@aws-sdk/credential-provider-node@3.972.92)(@smithy/hash-node@4.5.2)(@smithy/signature-v4@5.7.4)(google-auth-library@10.9.1(supports-color@10.2.2))(undici@8.12.4)(ws@8.22.0)(zod@4.6.7)
       zod:
         specifier: 4.6.7
         version: 4.6.7
@@ -788,8 +790,8 @@ importers:
         specifier: 11.3.2
         version: 11.3.2(supports-color@10.2.2)
       undici:
-        specifier: 8.12.3
-        version: 8.12.3
+        specifier: 8.12.4
+        version: 8.12.4
     devDependencies:
       '@openclaw/plugin-sdk':
         specifier: workspace:*
@@ -898,8 +900,8 @@ importers:
         specifier: 21.0.3
         version: 21.0.3
       undici:
-        specifier: 8.12.3
-        version: 8.12.3
+        specifier: 8.12.4
+        version: 8.12.4
 
   extensions/buzz:
     dependencies:
@@ -1015,11 +1017,11 @@ importers:
   extensions/codex:
     dependencies:
       '@openai/codex':
-        specifier: 0.164.0
-        version: 0.164.0
+        specifier: 0.172.0
+        version: 0.172.0
       '@openclaw/fs-safe':
-        specifier: 0.27.1
-        version: 0.27.1
+        specifier: 0.28.2
+        version: 0.28.2
       acorn:
         specifier: 8.19.0
         version: 8.19.0(patch_hash=2abf815a7e66bb39548d0a14081a6fde06f22eb1f6b5bd5f242d4c11a66db77a)
@@ -1058,8 +1060,8 @@ importers:
   extensions/copilot:
     dependencies:
       '@github/copilot-sdk':
-        specifier: 1.0.25
-        version: 1.0.25
+        specifier: 1.0.34
+        version: 1.0.34
     devDependencies:
       '@openclaw/plugin-sdk':
         specifier: workspace:*
@@ -1080,8 +1082,8 @@ importers:
   extensions/cua-computer:
     dependencies:
       '@openclaw/fs-safe':
-        specifier: 0.27.1
-        version: 0.27.1
+        specifier: 0.28.2
+        version: 0.28.2
       '@trycua/cua-driver':
         specifier: 0.37.0
         version: 0.37.0
@@ -1240,8 +1242,8 @@ importers:
         specifier: 1.4.3
         version: 1.4.3
       undici:
-        specifier: 8.12.3
-        version: 8.12.3
+        specifier: 8.12.4
+        version: 8.12.4
       ws:
         specifier: 8.22.0
         version: 8.22.0
@@ -1346,8 +1348,8 @@ importers:
   extensions/file-transfer:
     dependencies:
       '@openclaw/fs-safe':
-        specifier: 0.27.1
-        version: 0.27.1
+        specifier: 0.28.2
+        version: 0.28.2
       minimatch:
         specifier: 10.2.6
         version: 10.2.6
@@ -1376,6 +1378,12 @@ importers:
         version: link:../../packages/plugin-sdk
 
   extensions/fish-audio-speech:
+    devDependencies:
+      '@openclaw/plugin-sdk':
+        specifier: workspace:*
+        version: link:../../packages/plugin-sdk
+
+  extensions/gbrain:
     devDependencies:
       '@openclaw/plugin-sdk':
         specifier: workspace:*
@@ -1553,8 +1561,8 @@ importers:
   extensions/knowledge:
     dependencies:
       '@openclaw/fs-safe':
-        specifier: 0.27.1
-        version: 0.27.1
+        specifier: 0.28.2
+        version: 0.28.2
       dompurify:
         specifier: 3.4.17
         version: 3.4.17
@@ -1628,8 +1636,8 @@ importers:
   extensions/llama-cpp:
     dependencies:
       '@openclaw/fs-safe':
-        specifier: 0.27.1
-        version: 0.27.1
+        specifier: 0.28.2
+        version: 0.28.2
     devDependencies:
       '@openclaw/plugin-sdk':
         specifier: workspace:*
@@ -1684,8 +1692,8 @@ importers:
         specifier: 18.9.0
         version: 18.9.0
       '@openclaw/fs-safe':
-        specifier: 0.27.1
-        version: 0.27.1
+        specifier: 0.28.2
+        version: 0.28.2
       fake-indexeddb:
         specifier: 6.2.7
         version: 6.2.7
@@ -1740,8 +1748,8 @@ importers:
   extensions/memory-core:
     dependencies:
       '@openclaw/fs-safe':
-        specifier: 0.27.1
-        version: 0.27.1
+        specifier: 0.28.2
+        version: 0.28.2
       '@solidjs/web':
         specifier: 2.0.0-rc.18
         version: 2.0.0-rc.18(patch_hash=6d6b2e52e607edf3c9cfcc1a26f331d013537d051f43bbb4f3e7877ed08fa5cf)(solid-js@2.0.0-rc.18)
@@ -1778,17 +1786,17 @@ importers:
     dependencies:
       apache-arrow:
         specifier: 21.2.0
-        version: 21.2.0(patch_hash=c8385fd9a8af8122fc1787481b5bba21fef95f61dc1a664e5d2c5e0cb9d5fd68)
+        version: 21.2.0
       openai:
         specifier: 7.47.0
-        version: 7.47.0(@aws-sdk/credential-provider-node@3.972.92)(@smithy/hash-node@4.5.2)(@smithy/signature-v4@5.7.4)(google-auth-library@10.9.1(supports-color@10.2.2))(undici@8.12.3)(ws@8.22.0)(zod@4.6.7)
+        version: 7.47.0(@aws-sdk/credential-provider-node@3.972.92)(@smithy/hash-node@4.5.2)(@smithy/signature-v4@5.7.4)(google-auth-library@10.9.1(supports-color@10.2.2))(undici@8.12.4)(ws@8.22.0)(zod@4.6.7)
       typebox:
         specifier: 1.4.3
         version: 1.4.3
     devDependencies:
       '@lancedb/lancedb':
         specifier: 0.41.0
-        version: 0.41.0(@types/node@26.6.6)(apache-arrow@21.2.0(patch_hash=c8385fd9a8af8122fc1787481b5bba21fef95f61dc1a664e5d2c5e0cb9d5fd68))
+        version: 0.41.0(@types/node@26.6.6)(apache-arrow@21.2.0)
       '@openclaw/plugin-sdk':
         specifier: workspace:*
         version: link:../../packages/plugin-sdk
@@ -1865,8 +1873,8 @@ importers:
   extensions/migrate-claude:
     dependencies:
       '@openclaw/fs-safe':
-        specifier: 0.27.1
-        version: 0.27.1
+        specifier: 0.28.2
+        version: 0.28.2
     devDependencies:
       '@openclaw/plugin-sdk':
         specifier: workspace:*
@@ -2160,8 +2168,8 @@ importers:
   extensions/openshell:
     dependencies:
       '@openclaw/fs-safe':
-        specifier: 0.27.1
-        version: 0.27.1
+        specifier: 0.28.2
+        version: 0.28.2
       p-limit:
         specifier: 7.3.3
         version: 7.3.3
@@ -2241,8 +2249,8 @@ importers:
         specifier: 0.2.0
         version: 0.2.0(patch_hash=87093d75728e71110a39bd4729df86642a7974ebbbd2155fec2e074ce9a90f3d)
       '@openclaw/fs-safe':
-        specifier: 0.27.1
-        version: 0.27.1
+        specifier: 0.28.2
+        version: 0.28.2
       json5:
         specifier: 2.2.3
         version: 2.2.3
@@ -2388,8 +2396,8 @@ importers:
   extensions/signal:
     dependencies:
       '@openclaw/fs-safe':
-        specifier: 0.27.1
-        version: 0.27.1
+        specifier: 0.28.2
+        version: 0.28.2
       zod:
         specifier: 4.6.7
         version: 4.6.7
@@ -2415,7 +2423,7 @@ importers:
     dependencies:
       '@slack/bolt':
         specifier: 5.1.0
-        version: 5.1.0(@types/express@5.0.6)(supports-color@10.2.2)(undici@8.12.3)
+        version: 5.1.0(@types/express@5.0.6)(supports-color@10.2.2)(undici@8.12.4)
       '@slack/types':
         specifier: 3.3.0
         version: 3.3.0
@@ -2429,8 +2437,8 @@ importers:
         specifier: 1.4.3
         version: 1.4.3
       undici:
-        specifier: 8.12.3
-        version: 8.12.3
+        specifier: 8.12.4
+        version: 8.12.4
       zod:
         specifier: 4.6.7
         version: 4.6.7
@@ -2539,8 +2547,8 @@ importers:
         specifier: 1.4.3
         version: 1.4.3
       undici:
-        specifier: 8.12.3
-        version: 8.12.3
+        specifier: 8.12.4
+        version: 8.12.4
       zod:
         specifier: 4.6.7
         version: 4.6.7
@@ -2592,8 +2600,8 @@ importers:
   extensions/tokenjuice:
     dependencies:
       tokenjuice:
-        specifier: 0.11.0
-        version: 0.11.0
+        specifier: 0.11.2
+        version: 0.11.2
     devDependencies:
       '@openclaw/plugin-sdk':
         specifier: workspace:*
@@ -2941,7 +2949,7 @@ importers:
         version: 1.44.0
       openai:
         specifier: 7.47.0
-        version: 7.47.0(@aws-sdk/credential-provider-node@3.972.92)(@smithy/hash-node@4.5.2)(@smithy/signature-v4@5.7.4)(google-auth-library@10.9.1(supports-color@10.2.2))(undici@8.12.3)(ws@8.22.0)(zod@4.6.7)
+        version: 7.47.0(@aws-sdk/credential-provider-node@3.972.92)(@smithy/hash-node@4.5.2)(@smithy/signature-v4@5.7.4)(google-auth-library@10.9.1(supports-color@10.2.2))(undici@8.12.4)(ws@8.22.0)(zod@4.6.7)
       partial-json:
         specifier: 0.1.7
         version: 0.1.7
@@ -3261,8 +3269,8 @@ importers:
         specifier: workspace:*
         version: link:../packages/session-url-contract
       '@openclaw/uirouter':
-        specifier: 0.1.2
-        version: 0.1.2
+        specifier: 0.1.3
+        version: 0.1.3
       '@openclaw/workboard-contract':
         specifier: workspace:*
         version: link:../packages/workboard-contract
@@ -3374,7 +3382,7 @@ importers:
         version: 8.3.5(@types/node@26.6.6)(esbuild@0.28.2)(jiti@2.7.0)(tsx@4.23.15)(yaml@2.9.1)
       vitest:
         specifier: 5.0.5
-        version: 5.0.5(patch_hash=a2a78abe9470cc2ceb0d4eeb81acfc62d6180e9990bc866a7771ba60b1320ea6)(@opentelemetry/api@1.9.1)(@types/node@26.6.6)(@vitest/browser-playwright@5.0.5)(@vitest/coverage-v8@5.0.5)(@vitest/ui@5.0.5)(jsdom@30.1.3(@noble/hashes@2.4.0))(vite@8.3.5(@types/node@26.6.6)(esbuild@0.28.2)(jiti@2.7.0)(tsx@4.23.15)(yaml@2.9.1))
+        version: 5.0.5(patch_hash=1aca6d2c713739c6cbd32d4af2aed8655bb01cd558d5a1cc86cf8187eaa59609)(@opentelemetry/api@1.9.1)(@types/node@26.6.6)(@vitest/browser-playwright@5.0.5)(@vitest/coverage-v8@5.0.5)(@vitest/ui@5.0.5)(jsdom@30.1.3(@noble/hashes@2.4.0))(vite@8.3.5(@types/node@26.6.6)(esbuild@0.28.2)(jiti@2.7.0)(tsx@4.23.15)(yaml@2.9.1))
 
 packages:
 
@@ -4394,53 +4402,62 @@ packages:
     resolution: {integrity: sha512-GmzA9ckNokPypTg10pgpeHNQe7ph+iIKKmhKu3Ob9ANkswreCx7R3cKmY781K8QK3AqVL3xVh9A42JvIAbkkSA==}
     engines: {node: ^20.17.0 || >=22.9.0}
 
-  '@github/copilot-sdk-darwin-arm64@1.0.25':
-    resolution: {integrity: sha512-pNjCd0q8femu8zRtt96+i8peDHARkJhkf494CsmZhtDJCOg8+RA9VoqJch4GlgOx4qGNH6mF5x5o3k/Ub/O6XA==}
+  '@github/copilot-sdk-darwin-arm64@1.0.34':
+    resolution: {integrity: sha512-zJDSa0Psmtvv2Sn394wqel1AMuzaM/Bm+8rFOw9mLO/bXzPmUIKUutNcn4RkRz3FTxnbeB/914VwL7KB4IFRZQ==}
     cpu: [arm64]
     os: [darwin]
+    deprecated: 'Legacy platform dependency. Migrate the parent SDK to @microsoft/copilot-sdk. Migration docs: https://github.com/microsoft/copilot-sdk/blob/main/docs/v2-breaking-changes.md'
 
-  '@github/copilot-sdk-darwin-x64@1.0.25':
-    resolution: {integrity: sha512-xg3m86m4D72tNOVlfnCZ60/QHhlJ+iXlZ+Ms33vCVhGyT1DOLbdoTOgdyuPuWVAmE5IUvDv2DDNvZgg/ZgKDmQ==}
+  '@github/copilot-sdk-darwin-x64@1.0.34':
+    resolution: {integrity: sha512-bRnCZBbSnkLpKfHEO3harCa1UXwUIDG/tCuwCLhAIUrC9A6vK4Dr7uMPGqPXN+47A3Zpzk/5JmadczY1S0UQdQ==}
     cpu: [x64]
     os: [darwin]
+    deprecated: 'Legacy platform dependency. Migrate the parent SDK to @microsoft/copilot-sdk. Migration docs: https://github.com/microsoft/copilot-sdk/blob/main/docs/v2-breaking-changes.md'
 
-  '@github/copilot-sdk-linux-arm64@1.0.25':
-    resolution: {integrity: sha512-vh5o1qD+w4LwyCb9O6gId+f9xR4LThyNnzzLrfBA5c8cMidhV2qljHJR+pXGu2fT+IWQJlC9wZadQhcbRcO8wg==}
+  '@github/copilot-sdk-linux-arm64@1.0.34':
+    resolution: {integrity: sha512-T1UWVZLQ/6yQIoXvLEepNqLi+15+BxBkkyQW4BbN1n+WJ6SMcUJFVBOVIXXbDFhG7e+xLL2ITzRBS/oRZH06Xw==}
     cpu: [arm64]
     os: [linux]
     libc: [glibc]
+    deprecated: 'Legacy platform dependency. Migrate the parent SDK to @microsoft/copilot-sdk. Migration docs: https://github.com/microsoft/copilot-sdk/blob/main/docs/v2-breaking-changes.md'
 
-  '@github/copilot-sdk-linux-x64@1.0.25':
-    resolution: {integrity: sha512-36Tv2Xs18zMnKDXB5YkfL0s0vZPkdu/lKHa1wYLwicHj/u4TIvr7/ogGsiya8PoqSlKEG8ar+ALokRkX8zYMEg==}
+  '@github/copilot-sdk-linux-x64@1.0.34':
+    resolution: {integrity: sha512-/3BS48gnx1mEfXXkCO/reFZudVdEb3+BOG+h7SdC/zg25wHg5FvDR0zesNYFfv47W9zOGo6SInVnKf9O1MhJ7g==}
     cpu: [x64]
     os: [linux]
     libc: [glibc]
+    deprecated: 'Legacy platform dependency. Migrate the parent SDK to @microsoft/copilot-sdk. Migration docs: https://github.com/microsoft/copilot-sdk/blob/main/docs/v2-breaking-changes.md'
 
-  '@github/copilot-sdk-linuxmusl-arm64@1.0.25':
-    resolution: {integrity: sha512-f7lFJM4j6mDlxtdmDw0pP+TXHHnpJr5pwuwRkcpAJDLwtKiWaMVKeCUpfKGabEakfbOt4wCZwl0B4s69tsrYtA==}
+  '@github/copilot-sdk-linuxmusl-arm64@1.0.34':
+    resolution: {integrity: sha512-l5U3Z2/vzPXaKLbmiP0b2iX5Y29lfL+ZhCfHQyaZu/jW2otlF8TjhHedFiSDC2u1fQVfiIRM+L5vpcboLP0/yA==}
     cpu: [arm64]
     os: [linux]
     libc: [musl]
+    deprecated: 'Legacy platform dependency. Migrate the parent SDK to @microsoft/copilot-sdk. Migration docs: https://github.com/microsoft/copilot-sdk/blob/main/docs/v2-breaking-changes.md'
 
-  '@github/copilot-sdk-linuxmusl-x64@1.0.25':
-    resolution: {integrity: sha512-EuuYYmJ/2Y6Du+QwIMqMHHr9WllMWwwa6pHNuacveVOGR6JsxB4CoYUnCU5q8c6ZK1uyqvbv+T0BctLHMjXbBw==}
+  '@github/copilot-sdk-linuxmusl-x64@1.0.34':
+    resolution: {integrity: sha512-Ahe0w7JkW40cWtVd1BD2O4AsWzVB2yQw9dcgTuE5hHv1esLNHzun2BKr+kU+ueSFr/tRbJR8EF6UbtGcaYSbmA==}
     cpu: [x64]
     os: [linux]
     libc: [musl]
+    deprecated: 'Legacy platform dependency. Migrate the parent SDK to @microsoft/copilot-sdk. Migration docs: https://github.com/microsoft/copilot-sdk/blob/main/docs/v2-breaking-changes.md'
 
-  '@github/copilot-sdk-win32-arm64@1.0.25':
-    resolution: {integrity: sha512-nYdOLwLkAjFRhqQgkj/GLF0AWWVxBVL1BfN6ZyuOsjBngVKIxPRXTPIW7Gpo+GpVYju27Mmwy1Zrvo8HEsT31A==}
+  '@github/copilot-sdk-win32-arm64@1.0.34':
+    resolution: {integrity: sha512-UEpFWlJyaBhTr12JOrFKF6Pp2ydQoLzWSs+t26OJhNDKOcoJ0O/85iIFHJx+/PN/b6FsF/gcsTPdhVeM5aq6Fg==}
     cpu: [arm64]
     os: [win32]
+    deprecated: 'Legacy platform dependency. Migrate the parent SDK to @microsoft/copilot-sdk. Migration docs: https://github.com/microsoft/copilot-sdk/blob/main/docs/v2-breaking-changes.md'
 
-  '@github/copilot-sdk-win32-x64@1.0.25':
-    resolution: {integrity: sha512-7QsDyxBysOIuMnih9hYsCA5sRPpH4DC80yIjutsSN80iCmZxqz0YH61fI1oAq4dv+suRO7SBQcI3WKWAuw51Ow==}
+  '@github/copilot-sdk-win32-x64@1.0.34':
+    resolution: {integrity: sha512-d8H8C/UBgx06JILbn+AaxpjNlygi2M48T4rHBufiDYHZIeqdGkNk4Idh9dDAYM/Vze1QXS75I7kgzoBa+p49qw==}
     cpu: [x64]
     os: [win32]
+    deprecated: 'Legacy platform dependency. Migrate the parent SDK to @microsoft/copilot-sdk. Migration docs: https://github.com/microsoft/copilot-sdk/blob/main/docs/v2-breaking-changes.md'
 
-  '@github/copilot-sdk@1.0.25':
-    resolution: {integrity: sha512-TtN0wKSTPu/EQklRa525UmsjzFO3tg4lHN2x+DCNTMElVUwkUEV1XFlH8atqel/1oaFud3XWPVDtqNw90molDg==}
+  '@github/copilot-sdk@1.0.34':
+    resolution: {integrity: sha512-dwqeNhR71lPDdzRE4QKTFXmax+dAzWfkXK4/4DKJBZp+kFrK660z+4evYdvS8Dw8yaQs1EVGAa63plrbn8MSPw==}
     engines: {node: ^20.19.0 || >=22.12.0}
+    deprecated: 'Deprecated: migrate to @microsoft/copilot-sdk. Migration docs: https://github.com/microsoft/copilot-sdk/blob/main/docs/v2-breaking-changes.md'
 
   '@google/genai@2.32.0':
     resolution: {integrity: sha512-60c79uXpR0a47bmGqDxbXEBuQUalNmwo5mx5kqb91jIW4FoqpsLSt86DeVhRhtH5+s/16Wqxt3sXzFQn2U1OHQ==}
@@ -4563,19 +4580,14 @@ packages:
   '@keyv/serialize@1.1.1':
     resolution: {integrity: sha512-dXn3FZhPv0US+7dtJsIi2R+c7qWYiReoEh5zUntWCf4oSpMNib8FDhSoed6m3QyZdx5hK7iLFkYk3rNxwt8vTA==}
 
-  '@koromix/koffi-android-arm64@3.2.1':
-    resolution: {integrity: sha512-1pJQ4jnZlUJduK9u9DC5CGy3aOgDUPvIXpNb6syV3+Dh5Q/ugezAIGCqvY+w+1mgXsve0pd0NVvJRjdZNHQ6MA==}
-    cpu: [arm64]
-    os: [android]
-
   '@koromix/koffi-android-arm64@3.3.3':
     resolution: {integrity: sha512-c8iDq/mPXkgQmrmZ6SpqWIVF3ZnJEpjVQswzKzbrCSdr68pmSY/cNj1t4qvv32T8nNjW71/hB+E8Rq1+vVpmQg==}
     cpu: [arm64]
     os: [android]
 
-  '@koromix/koffi-android-x64@3.2.1':
-    resolution: {integrity: sha512-HH40xGh3gVQifjOBnhwT2tECC0lL1lYe+nxHvWNSzxDIyQNcVPXg38ta7vuONRFpD+uIrw7fqGYLzbZIagkVcg==}
-    cpu: [x64]
+  '@koromix/koffi-android-arm64@3.3.6':
+    resolution: {integrity: sha512-wxsPuEMDrqOR5RUdABYFNDTabhh/xwDetCUDI+/CN93QF1T7Yeq218kvDWmYT/g1wV2kU1aYdRO4D7cH9PDskw==}
+    cpu: [arm64]
     os: [android]
 
   '@koromix/koffi-android-x64@3.3.3':
@@ -4583,19 +4595,19 @@ packages:
     cpu: [x64]
     os: [android]
 
-  '@koromix/koffi-darwin-arm64@3.2.1':
-    resolution: {integrity: sha512-Vj4h+xcjc5+Cn0DhPHjgRX4omKAv96Kehtcd+1YgYuY2W7FvQn9vS+3SmzVwhC5Qmg9bIwUZObYQ8T/4hBqQqA==}
-    cpu: [arm64]
-    os: [darwin]
+  '@koromix/koffi-android-x64@3.3.6':
+    resolution: {integrity: sha512-fHZE6ejYLmAEe2eou2uoG61HUtolY45RhQEsTKAKNI5eKSW7Z2Jh8eP5EE+3CVQSbzbaMeHXRTcgEQGk5uEF5Q==}
+    cpu: [x64]
+    os: [android]
 
   '@koromix/koffi-darwin-arm64@3.3.3':
     resolution: {integrity: sha512-aFYI3YMdQWOAmHlVA+GfBlJZTpvfbUv/NoeBBkqblWN7BxuY02bkWMyoksUEl+mnx7ScoMonnjzXKJkNQXmR3w==}
     cpu: [arm64]
     os: [darwin]
 
-  '@koromix/koffi-darwin-x64@3.2.1':
-    resolution: {integrity: sha512-gFCWxNBTZIvxo1p+PURWfsy2Ctj5FGnVVs1f03lTLhBvmxEto70pdIiFztdFLDFkAJ1pmtQmruRKapeK+E8YPA==}
-    cpu: [x64]
+  '@koromix/koffi-darwin-arm64@3.3.6':
+    resolution: {integrity: sha512-++V4qscXff/Ya5cE6vOPOomcxk3T5JQu81Uc0fvoso3VVELcoHt2/dz9E0FY0EPyQNIRcWOVg7CgvsPCKId9lg==}
+    cpu: [arm64]
     os: [darwin]
 
   '@koromix/koffi-darwin-x64@3.3.3':
@@ -4603,19 +4615,19 @@ packages:
     cpu: [x64]
     os: [darwin]
 
-  '@koromix/koffi-freebsd-arm64@3.2.1':
-    resolution: {integrity: sha512-qj+f1s2e6vULaUG1cdlTcCXmunCq2t+rjxku1+esaMIqVnHpOwj0QzPuInG0AFdXjwBNQhyVR/HpDj8daEwwsQ==}
-    cpu: [arm64]
-    os: [freebsd]
+  '@koromix/koffi-darwin-x64@3.3.6':
+    resolution: {integrity: sha512-eOyit0eyfkmdXCNlOkG8cNtpQUx+dikr1QsozJdwm7/zH1u7KP5dRtmsaGUMLSUY7cVYSRTUStkwHBrHjBtuzw==}
+    cpu: [x64]
+    os: [darwin]
 
   '@koromix/koffi-freebsd-arm64@3.3.3':
     resolution: {integrity: sha512-IynEDMMU9pp7EVVqQwXVU9x0JH7Opj8KB0wbcKgYNEhRM9eGzJ4ai7iwG8y8tdD/Y8niSVrVTj5WLNCCvUWXIw==}
     cpu: [arm64]
     os: [freebsd]
 
-  '@koromix/koffi-freebsd-ia32@3.2.1':
-    resolution: {integrity: sha512-6olHb1Qfgai0jjs6ddlDDD0ZfsCxy7SPi8rMRpuYQWH0qhgtyQu82hw5b1p7z+TJ0zZP3ZeQQ6l+U/MlM1ICHQ==}
-    cpu: [ia32]
+  '@koromix/koffi-freebsd-arm64@3.3.6':
+    resolution: {integrity: sha512-7teGsq2BukkLZ60xxq4KyPxeJct51nV1G/MfNj8IoMTqlpd35w4aiIIoFWVwLL3j3DdT95Ye/FpVY4C7ZEuMHg==}
+    cpu: [arm64]
     os: [freebsd]
 
   '@koromix/koffi-freebsd-ia32@3.3.3':
@@ -4623,9 +4635,9 @@ packages:
     cpu: [ia32]
     os: [freebsd]
 
-  '@koromix/koffi-freebsd-x64@3.2.1':
-    resolution: {integrity: sha512-Dikhw1ySYNVMkmeFvFVjnU5Wdk6mffNoOjJxm9bTG96vg7OlemylxqdEven47R1YJ3yzNVJn/MlQ207ORWfi2w==}
-    cpu: [x64]
+  '@koromix/koffi-freebsd-ia32@3.3.6':
+    resolution: {integrity: sha512-WA7qEAMxTWS2WSFDceETVJTFrZgRwNvfG+FJpCC2XkJXftHwOhv8/X6d5HUEXh361sd7HwCHoT1wypL0nvI7Mw==}
+    cpu: [ia32]
     os: [freebsd]
 
   '@koromix/koffi-freebsd-x64@3.3.3':
@@ -4633,19 +4645,19 @@ packages:
     cpu: [x64]
     os: [freebsd]
 
-  '@koromix/koffi-linux-arm64@3.2.1':
-    resolution: {integrity: sha512-K+cGUL5iBcDqxmsocrjmlASqDf24gc7artbVW3PewG2c9AqwC63lezgwvB85Nx4lZAQjB6zIFHh9A7t1yGbwhw==}
-    cpu: [arm64]
-    os: [linux]
+  '@koromix/koffi-freebsd-x64@3.3.6':
+    resolution: {integrity: sha512-OQ/eBhGefbtxcPs5VDkK9mwxoIeSwrIriOT1/JHHA/tbNAXdC0GiAYsBw82T4L4r2u0TuJ0CbgN3HrulzdPPig==}
+    cpu: [x64]
+    os: [freebsd]
 
   '@koromix/koffi-linux-arm64@3.3.3':
     resolution: {integrity: sha512-y7UHjwOKbj2IjIpWtHmI8LEKXchidt47k605DCv5+YQMIDTbzhz/i3zTI1kRp6EYBLTBwRkR1X1PGt3uUi+rKQ==}
     cpu: [arm64]
     os: [linux]
 
-  '@koromix/koffi-linux-arm@3.2.1':
-    resolution: {integrity: sha512-OfwUwZylidq95wQKp6ClInULrfB2giu7dqM6Rhe0zAe6lES5I2SXNw15T9+GnRHk3/9hKT2XZ37OZLaKSyWNLA==}
-    cpu: [arm]
+  '@koromix/koffi-linux-arm64@3.3.6':
+    resolution: {integrity: sha512-8LuJcdH74wTg7JcZjnRnb3z+qWPKcEDSv8HRPkWTVD56TFm0CXZXgl/WJ4maDbWem6ZoXxc87a8nQEA+wABzNA==}
+    cpu: [arm64]
     os: [linux]
 
   '@koromix/koffi-linux-arm@3.3.3':
@@ -4653,9 +4665,9 @@ packages:
     cpu: [arm]
     os: [linux]
 
-  '@koromix/koffi-linux-ia32@3.2.1':
-    resolution: {integrity: sha512-rxj6UYjU1qd98gxNQOSCdLpc5cPRi5Giq9rNd3jnGuSNIyMkwa6Dxw4cUjmhIBCYESMJtmNt5NWnJp5u9wTfYQ==}
-    cpu: [ia32]
+  '@koromix/koffi-linux-arm@3.3.6':
+    resolution: {integrity: sha512-0uo15z9L7GsAEGvPCVKcXzCtRJCyghCYDrWO2L3vXk4G5lgk+OBvWS7RmlDZ99X/A0oDiL3vLCplGaBCEZZ8Eg==}
+    cpu: [arm]
     os: [linux]
 
   '@koromix/koffi-linux-ia32@3.3.3':
@@ -4663,13 +4675,18 @@ packages:
     cpu: [ia32]
     os: [linux]
 
-  '@koromix/koffi-linux-loong64@3.2.1':
-    resolution: {integrity: sha512-aHhnHzkPRmT/IHDlGvESJ/Bs32m8N6UE6Ab6kMeJzgk74IN8af2m/81/wZJtybR1M2UxCV4NmlVNUYQQvSAO3Q==}
-    cpu: [loong64]
+  '@koromix/koffi-linux-ia32@3.3.6':
+    resolution: {integrity: sha512-aTOjTMdy2Q6JqNA9KkT2OaCs77d0TzEG5KipfinzDyiV9DkYyUCvFykIY5GDHCUKXyJi+xy1IfuUxeL64wzzBQ==}
+    cpu: [ia32]
     os: [linux]
 
   '@koromix/koffi-linux-loong64@3.3.3':
     resolution: {integrity: sha512-kbJFmWSoDHGZgxgDhInuvDi8MzrHafBfQ7iWN5P+nHv297beQXrHecFfCNBApnG9d2wrhEoY+EH/TdITuvaSwQ==}
+    cpu: [loong64]
+    os: [linux]
+
+  '@koromix/koffi-linux-loong64@3.3.6':
+    resolution: {integrity: sha512-m33Zjrhj2Atpkcr0We61V2Zjm8wFb79QOtaOfzttmNFQMtryYpWZ4CBxx4gLKvcrR7NcK3GV/D9Qi2M0ppWK7A==}
     cpu: [loong64]
     os: [linux]
 
@@ -4678,9 +4695,9 @@ packages:
     cpu: [ppc64]
     os: [linux]
 
-  '@koromix/koffi-linux-riscv64@3.2.1':
-    resolution: {integrity: sha512-qtQBsjbm3LiirLJvajWmKkNb7ARk7fvJVXdftJ7NtAnF3Xw8EbDvrtvmvtNI1yLPlYcBmlzCCD71hwhWYk0SIA==}
-    cpu: [riscv64]
+  '@koromix/koffi-linux-ppc64@3.3.6':
+    resolution: {integrity: sha512-L1+1cjH5GtNtv7TYWy469jsDberOOwCfE96h0AWFKrVHycDn8hTKH5fEA/er42R04lZiNWbiC0+sMb50enYRGw==}
+    cpu: [ppc64]
     os: [linux]
 
   '@koromix/koffi-linux-riscv64@3.3.3':
@@ -4688,13 +4705,18 @@ packages:
     cpu: [riscv64]
     os: [linux]
 
-  '@koromix/koffi-linux-x64@3.2.1':
-    resolution: {integrity: sha512-c7hw7Qs/r5gnFRTQLcbifBwRU7wiocj+2pVuDQ5Ahb3r36SZmupmgYbTWcLvTW+hul1jd7SKRV0d14ZJq/tvSw==}
-    cpu: [x64]
+  '@koromix/koffi-linux-riscv64@3.3.6':
+    resolution: {integrity: sha512-VnzoNRg3MfTdGXLDtUrBj4wJnZD3buX6LajGrvYm5Mf1U132bzQwxP1ryZhs8Q0Cl1pTsN2fIovjNwpwE7Hs3A==}
+    cpu: [riscv64]
     os: [linux]
 
   '@koromix/koffi-linux-x64@3.3.3':
     resolution: {integrity: sha512-AI4kcNNWeGmzQzsNb0S+ZL/ht4HMtDcQl5nYFkkuVUO2g1/2KdvNekkwNWhpp805mDbLSDoRZtlioHyH/v8poQ==}
+    cpu: [x64]
+    os: [linux]
+
+  '@koromix/koffi-linux-x64@3.3.6':
+    resolution: {integrity: sha512-RTRbVTZ1rf1GFowSsbuU2acYoRq66ZwJGh+rTgau1Cat3muv2884p0FRH6UKfwlgWkpjIHJ7N8N0liM7Oe2eAQ==}
     cpu: [x64]
     os: [linux]
 
@@ -4703,9 +4725,9 @@ packages:
     cpu: [arm64]
     os: [openbsd]
 
-  '@koromix/koffi-openbsd-ia32@3.2.1':
-    resolution: {integrity: sha512-mmY8fY8LQ/CB52+h3yrMYmVyoxzW3x08S0yI6VNfHWdfU6yJtZkKCbhjmQCYMrWbYKC4gMvwZwCywIGPAkLyeA==}
-    cpu: [ia32]
+  '@koromix/koffi-openbsd-arm64@3.3.6':
+    resolution: {integrity: sha512-eXHyRZw/BACrBIuntkqlNTa8p8i9KobtREJjhxldsVoEPRQTREnhBq5IbqbvXesY89MwFGn4lHmzG1x5ueV63A==}
+    cpu: [arm64]
     os: [openbsd]
 
   '@koromix/koffi-openbsd-ia32@3.3.3':
@@ -4713,9 +4735,9 @@ packages:
     cpu: [ia32]
     os: [openbsd]
 
-  '@koromix/koffi-openbsd-x64@3.2.1':
-    resolution: {integrity: sha512-k4ig6aAPbFSRATOIIOfdf/KtlOGH4SVls6L9fy0QnTxRJYvY2oSltTsQtBDANgEQldlq8Kl5WnpRa1VSibP4Lw==}
-    cpu: [x64]
+  '@koromix/koffi-openbsd-ia32@3.3.6':
+    resolution: {integrity: sha512-xbJYOFY0IAIx3nyNdYad5g2f8cNAOY8OBcjPDYRlc7gkqQiPNER9ZA9g+M2LuVf48i65ZCn11XaWDSQymDJJBg==}
+    cpu: [ia32]
     os: [openbsd]
 
   '@koromix/koffi-openbsd-x64@3.3.3':
@@ -4723,19 +4745,19 @@ packages:
     cpu: [x64]
     os: [openbsd]
 
-  '@koromix/koffi-win32-arm64@3.2.1':
-    resolution: {integrity: sha512-cTWBJGK//pDMeKQJE/79Aq9MiOAF4H8QyLZHSQ9IWm8czOfwjG4J1AhsQ9DjI9KFOykH77hhnpmQTGVMIubGig==}
-    cpu: [arm64]
-    os: [win32]
+  '@koromix/koffi-openbsd-x64@3.3.6':
+    resolution: {integrity: sha512-bNL4uIxUBhA93naaL3dWwXdLgQGAss6krDbwljO1uS3iJ+8K7KSo8EGbJfRYUf1L+ctaHTJuDwgZ1XTSEC9FQQ==}
+    cpu: [x64]
+    os: [openbsd]
 
   '@koromix/koffi-win32-arm64@3.3.3':
     resolution: {integrity: sha512-eL7gW4D22OBb3fi04s5ElzzNk+gkGEahaTNMB29UDLDeORe+0qIkhccBPovXW3/IRpdt8W7o8X2myUDXlTSYDQ==}
     cpu: [arm64]
     os: [win32]
 
-  '@koromix/koffi-win32-ia32@3.2.1':
-    resolution: {integrity: sha512-Z50EM6TAZ7CFyMmyX6thv8eNpJchqe9eenhibSIy2Eq/FQYF76gU2VK/LEoaF46L8hfC7TpTp9b10MvReHEyFA==}
-    cpu: [ia32]
+  '@koromix/koffi-win32-arm64@3.3.6':
+    resolution: {integrity: sha512-WDVsrvWAaHbA7xiCMXX3PBmfDf4+VnfY67ryRAW86QNW8109W9WPS3YVGGD2YoPswDmSZsMBVzzZCEFUrLdJuA==}
+    cpu: [arm64]
     os: [win32]
 
   '@koromix/koffi-win32-ia32@3.3.3':
@@ -4743,13 +4765,18 @@ packages:
     cpu: [ia32]
     os: [win32]
 
-  '@koromix/koffi-win32-x64@3.2.1':
-    resolution: {integrity: sha512-ZmZNiBO6bkOSh3QNzgfvb1cMY0yMobn6ZQrSMqbAce21qyYL8niIbyipz9N/PIRDciGhsV0wUxnZsxIO+yWsHQ==}
-    cpu: [x64]
+  '@koromix/koffi-win32-ia32@3.3.6':
+    resolution: {integrity: sha512-6hwsUGC7FCICiLdmEQwTK0+MOLmuraqWuVsUCBkdSCL6k62LQLScuTn2dzONFvN/H5EXq0zzX4ddgtq2abL/xQ==}
+    cpu: [ia32]
     os: [win32]
 
   '@koromix/koffi-win32-x64@3.3.3':
     resolution: {integrity: sha512-tLTF17wl4CCwOlo1Tt0NbduwUduDvM6c8JSyearcLu6hpNHQo44RF3rKN2i7UkxwCqXyiudZK0lS421CC/TPZA==}
+    cpu: [x64]
+    os: [win32]
+
+  '@koromix/koffi-win32-x64@3.3.6':
+    resolution: {integrity: sha512-g9KC6VKQLe88Tjgeubk3yhu0CjtqSeRq4XjWFWxUq4rsP0/wfLUBoeISvG60HoPmhYQp+U7hVd8Ms+amOMHDvA==}
     cpu: [x64]
     os: [win32]
 
@@ -5168,43 +5195,43 @@ packages:
     resolution: {integrity: sha512-3zcN5Q3yEmeyxXBzqB6fXPQFzYa2ROsGFSr69W0ArXIAGJqxl/aFECOVPD2kbkYPm0U/EHxFKgclK3UA9WQg5A==}
     engines: {node: ^22.22.2 || ^24.15.0 || >=26.0.0}
 
-  '@openai/codex@0.164.0':
-    resolution: {integrity: sha512-TWj7UGyPRe3Pj/A3ddNAxs1te3a/W/xAd+J0LHrrFTmsSfahGMOLF/vn88D3QCIgAT3B1rm1y/Z3NYE0rx6cZQ==}
+  '@openai/codex@0.172.0':
+    resolution: {integrity: sha512-yHf/6wbw4Zvha2M2ylDhDrU9FgfKLYgV6xSzSjlz3gxQNsiVLkXo+fPGwBqvP0A5geLtZs9wAbq+1v7+ZVWJ0g==}
     engines: {node: '>=16'}
     hasBin: true
 
-  '@openai/codex@0.164.0-darwin-arm64':
-    resolution: {integrity: sha512-pDizgOUAtq3/k3AbUFHbaU19WpYKCja+oFpNSTLKrDQj4lTUNSDuTPJip4uQVn2/1EipQdpQrGMOQBVuI1znAA==}
+  '@openai/codex@0.172.0-darwin-arm64':
+    resolution: {integrity: sha512-B239wE7pGeOmjylfqLymDIwuL4QgQR7pQZc5phHpZ3t8UVkno9AS3dNPEprm7AzZHw3kf2I6Uf+uOFfjGegELQ==}
     engines: {node: '>=16'}
     cpu: [arm64]
     os: [darwin]
 
-  '@openai/codex@0.164.0-darwin-x64':
-    resolution: {integrity: sha512-lIe+udnguPGzBezkgbkj2Eaz0YqOhNXT7jja136Fj0sXfI+UKNS2icmaK14GcoRAgeVEpDTtC1ftamWBPmD1zg==}
+  '@openai/codex@0.172.0-darwin-x64':
+    resolution: {integrity: sha512-hrL9NQwH9E0WqK8Yofqe6fipE1XDSXx/C2fwSOagXdTRcjYXOrfQ9fSCKaKZXr/xm43ATdsRSjGGAn8IJhGmhA==}
     engines: {node: '>=16'}
     cpu: [x64]
     os: [darwin]
 
-  '@openai/codex@0.164.0-linux-arm64':
-    resolution: {integrity: sha512-LL5iTQjyDL4YRX44EWqhIfEQ5uGnmgxkQBJSxjZSeJ8L1Og83pdlzUJW/PRJ76oaVwOVgh6HXwuPEiBNEHU4lg==}
+  '@openai/codex@0.172.0-linux-arm64':
+    resolution: {integrity: sha512-qLH5VdeTkPlknWgKkU11IlGMyyxKXp9vcj65libT3Zp4P3Kt7gEbK4YDXlDBqWtA09+fGnIUpWERs6BaNo86DA==}
     engines: {node: '>=16'}
     cpu: [arm64]
     os: [linux]
 
-  '@openai/codex@0.164.0-linux-x64':
-    resolution: {integrity: sha512-XLAoaWsGOT2khzl+P4FYDPTkzAr9W0VFXFaVkqlFdkM0soa1gH/4S0wSD57Ek3HHwkirAEGz2/Mwehseh+l5Mg==}
+  '@openai/codex@0.172.0-linux-x64':
+    resolution: {integrity: sha512-YJq6Wz3PFXV5LZ0OQc3/o+gpM3pLmQ/8n8uM2zF/m0O/8zED+uSPT8Ln1KGRrqR8Q6eon9YdWlhueAunVTZ+eg==}
     engines: {node: '>=16'}
     cpu: [x64]
     os: [linux]
 
-  '@openai/codex@0.164.0-win32-arm64':
-    resolution: {integrity: sha512-Zkzt8HNmB/vOnlDo5D7IOlrt5rHaxYQB7iGbNP7bHcXZtrk6gaD7UriwaieGYJpcf8DqAT/0tqzY4xbs8ZwbmQ==}
+  '@openai/codex@0.172.0-win32-arm64':
+    resolution: {integrity: sha512-lO+hS8rLV3xS5ZZZCBVfPTAqpI1VENId12qhzZ1jNPUBSzKQBOGKs+GHNplak1RHXXXpgK9UHkPQ3A2IvQ8lJg==}
     engines: {node: '>=16'}
     cpu: [arm64]
     os: [win32]
 
-  '@openai/codex@0.164.0-win32-x64':
-    resolution: {integrity: sha512-urWPhwh9YavuoAPIkmVYKBTtd5OtGVL4Ki0Fb28dhK/Mz6Pt4LSy+gbRrZFz5+RXrw9ubvXuXDCcd8beYcWhDg==}
+  '@openai/codex@0.172.0-win32-x64':
+    resolution: {integrity: sha512-48pULjlTwpBZ/TfbOnpnmloHaTQAYELbaiKHEX7qmrtLFIcnPigaNN3omyetPdAuvrRXrmNFRlKfvQme19ZmRA==}
     engines: {node: '>=16'}
     cpu: [x64]
     os: [win32]
@@ -5226,6 +5253,12 @@ packages:
     cpu: [arm64]
     os: [darwin]
 
+  '@openclaw/fs-safe-darwin-arm64@0.28.2':
+    resolution: {integrity: sha512-cixGTQu9nZkX1AdnII4MZzoywINyH7/BG9Pix0AJoE22U7lak3VVEeGKrJ7G9/8Os3SYSvtzk6eipVqNcX087Q==}
+    engines: {node: '>=22'}
+    cpu: [arm64]
+    os: [darwin]
+
   '@openclaw/fs-safe-darwin-x64@0.26.15':
     resolution: {integrity: sha512-O6ZsGg/c7t1zZNSPoSbqRBKVXOGTLSQuM3vhn2ERSBR3qCXKC8VMfPKvtKbFf72TamIiAHa0mCx6gpEmEijaQg==}
     engines: {node: '>=22'}
@@ -5234,6 +5267,12 @@ packages:
 
   '@openclaw/fs-safe-darwin-x64@0.27.1':
     resolution: {integrity: sha512-2CfUUGJc4dwaTuvo4xiKq5zbF9p6p6Cp+zS+M0hTg2E8RLPH/i2+CtF1MOeeMY6q/7FlpS4AOBcf4NNQmLCZFA==}
+    engines: {node: '>=22'}
+    cpu: [x64]
+    os: [darwin]
+
+  '@openclaw/fs-safe-darwin-x64@0.28.2':
+    resolution: {integrity: sha512-+eGmrPB0xysts7HrPDi62Fu6gi69uNLNhJLYOXl/iJQxE2U9ubZWixSaY5bjlXjVSTGQii3qUU7+iDaKPIARVw==}
     engines: {node: '>=22'}
     cpu: [x64]
     os: [darwin]
@@ -5250,6 +5289,12 @@ packages:
     cpu: [arm64]
     os: [freebsd]
 
+  '@openclaw/fs-safe-freebsd-arm64@0.28.2':
+    resolution: {integrity: sha512-Vts3VaLyIUhq4YQ7VjeezDCzGeUfRbMU7l5o6uyztTsRbO4upRTF7QJQWguEJBr9eNK+azvaKtPEz3vYO20lJw==}
+    engines: {node: '>=22'}
+    cpu: [arm64]
+    os: [freebsd]
+
   '@openclaw/fs-safe-freebsd-x64@0.26.15':
     resolution: {integrity: sha512-x95y1sQ+o12gTSkixCAb73ODu92nYfYV5mHempMl2P4PUIcltidd6mNN4tkjUozfj3hNejRAzO8rcNGF/z7jhQ==}
     engines: {node: '>=22'}
@@ -5258,6 +5303,12 @@ packages:
 
   '@openclaw/fs-safe-freebsd-x64@0.27.1':
     resolution: {integrity: sha512-at+wt2nbJV3qd358Gy5OuBl9gfdjKmDdQ03RDnzYfa6F591inc5gFgOUoUokjBiVB0YVeYND/LhCPprsQGWoeQ==}
+    engines: {node: '>=22'}
+    cpu: [x64]
+    os: [freebsd]
+
+  '@openclaw/fs-safe-freebsd-x64@0.28.2':
+    resolution: {integrity: sha512-Yqe+wPsb/SmWkV+ALg2hC8gcInkHOZKWuSnI4wjXmP6dzT0qoBIspbZMiw9lCw9NO1JKCk94P2ULd3VoErSltA==}
     engines: {node: '>=22'}
     cpu: [x64]
     os: [freebsd]
@@ -5271,6 +5322,13 @@ packages:
 
   '@openclaw/fs-safe-linux-arm64-gnu@0.27.1':
     resolution: {integrity: sha512-+7/oYqqTlqNGaVgjzqqjI5ZoB2vL8becIFiCKjFywJwD+WPnsU625jzsV8vH+O+ISomjZKYeN1uMzGY9jxoCiA==}
+    engines: {node: '>=22'}
+    cpu: [arm64]
+    os: [linux]
+    libc: [glibc]
+
+  '@openclaw/fs-safe-linux-arm64-gnu@0.28.2':
+    resolution: {integrity: sha512-KFWJSV3uaDGzQEBAr0vIxlEn+V86CqgUkh0TQZV56m8WvIFJqWDqx8gY1RBnkr2aJCU+oIxRPn21ueq5Yr2NdA==}
     engines: {node: '>=22'}
     cpu: [arm64]
     os: [linux]
@@ -5290,6 +5348,13 @@ packages:
     os: [linux]
     libc: [musl]
 
+  '@openclaw/fs-safe-linux-arm64-musl@0.28.2':
+    resolution: {integrity: sha512-hF7PNHgmAfrcLAeeVp9OJrQ/llkc4FJl/JtmcepETEye8Hf31uVtAjI/NiYs1HnqEdPhrrI7DZYyremC9rFs7w==}
+    engines: {node: '>=22'}
+    cpu: [arm64]
+    os: [linux]
+    libc: [musl]
+
   '@openclaw/fs-safe-linux-x64-gnu@0.26.15':
     resolution: {integrity: sha512-OTB6W/PBHudoCdbrfV26F5vCRCjf5Yq/QrxRAb85Fk14RI/T/wJOrpAYkRcHb51DIZdSqjQQHxkAFNImwWKAFg==}
     engines: {node: '>=22'}
@@ -5299,6 +5364,13 @@ packages:
 
   '@openclaw/fs-safe-linux-x64-gnu@0.27.1':
     resolution: {integrity: sha512-HujRFeuQ8UWJzqp0utc2P4OKTasHicTNLjcjr8YKC2MqbHozSlktbDdICJbAhnPSFaQXdeVCN1spYVRS79J3Zg==}
+    engines: {node: '>=22'}
+    cpu: [x64]
+    os: [linux]
+    libc: [glibc]
+
+  '@openclaw/fs-safe-linux-x64-gnu@0.28.2':
+    resolution: {integrity: sha512-Pm2++pjV82WeRtE32gbkwW2kJeyB3a60nkv4XziP5aOy0Hqfwvx+w+2AwsRjLAeSNb9ryRr+q5rc776AerJiEA==}
     engines: {node: '>=22'}
     cpu: [x64]
     os: [linux]
@@ -5318,6 +5390,13 @@ packages:
     os: [linux]
     libc: [musl]
 
+  '@openclaw/fs-safe-linux-x64-musl@0.28.2':
+    resolution: {integrity: sha512-1n/i5QVvSG3jTH25BFWDO3hpKIbky9tlK4LFbKa3V41ylMYN9CsJm1ZYOejMDjnxzBxHNjeuLls0JsqEcD+IAA==}
+    engines: {node: '>=22'}
+    cpu: [x64]
+    os: [linux]
+    libc: [musl]
+
   '@openclaw/fs-safe-win32-arm64-msvc@0.26.15':
     resolution: {integrity: sha512-Ry7aGopft+cD+TdkGGhjaO/1sfePN5mQ+IFdt8e0XRNGmhyjnKmboXQFD6gyB+lSN+7hnSbl2QAxvLApSRkwpw==}
     engines: {node: '>=22'}
@@ -5326,6 +5405,12 @@ packages:
 
   '@openclaw/fs-safe-win32-arm64-msvc@0.27.1':
     resolution: {integrity: sha512-bFfIB+FhscVaMtBoWJwb0Y/w4+rKHPJ7JuZD0KYBns0ldVqesRbYkYStxFw5bmUs+15X5JbELtDVPKzrVBK74A==}
+    engines: {node: '>=22'}
+    cpu: [arm64]
+    os: [win32]
+
+  '@openclaw/fs-safe-win32-arm64-msvc@0.28.2':
+    resolution: {integrity: sha512-4CVsOI3/IuC+KTLD5hCvcvXxO/41CELyJAH4UE6NtPXpJnrED1yPLLd2UTBt93aU7oBi379y3KsbBtH5dSRKJA==}
     engines: {node: '>=22'}
     cpu: [arm64]
     os: [win32]
@@ -5342,12 +5427,22 @@ packages:
     cpu: [x64]
     os: [win32]
 
+  '@openclaw/fs-safe-win32-x64-msvc@0.28.2':
+    resolution: {integrity: sha512-h8H9VVfgPptVBXS/xyyINtab8aDbT0eSQND5s8zJImve37IQsjVKhEnsK1Z69/UetsbtLjzUKLZghhQBW4ZP2Q==}
+    engines: {node: '>=22'}
+    cpu: [x64]
+    os: [win32]
+
   '@openclaw/fs-safe@0.26.15':
     resolution: {integrity: sha512-6O0NiLjrEeY8H5wBUmBy5qbIW0qu5ICw5jYvcIswduYkxnqxf+SDzpJMIJVC5L5IXvRlMh8ZZHQYkmjWxVy9DQ==}
     engines: {node: '>=22'}
 
   '@openclaw/fs-safe@0.27.1':
     resolution: {integrity: sha512-hoAe39XXycBbSMQO0nWRWwf/CDG1XspMo1p7mPcPme3xvqdgAUsTD+0FwchrVSZ7z6KkQDhaMkiJA/Wid/jEEw==}
+    engines: {node: '>=22'}
+
+  '@openclaw/fs-safe@0.28.2':
+    resolution: {integrity: sha512-E427wECKcxzy57PdDCaK4jAextCkmgq5RL8SF4osJZuSRSad/re2ES+t4toyWDpt652FsrGL/cGLmMOOmkPreg==}
     engines: {node: '>=22'}
 
   '@openclaw/libterminal@0.3.11':
@@ -5359,72 +5454,72 @@ packages:
       node-pty:
         optional: true
 
-  '@openclaw/proc-safe-darwin-arm64@0.4.2':
-    resolution: {integrity: sha512-AYIYBUAvJv/p9dFNpluiannT49t7BkGb1MBioL7IG4sZlTHofk4/TsZQRxi0YpDOTdf9R6OGd/3oaF746erJJA==}
+  '@openclaw/proc-safe-darwin-arm64@0.6.0':
+    resolution: {integrity: sha512-hVJq53CQJnUoCcgGMT7AwfaHGUFt+yvTalqM4KPQn3Y2G4WdZp2gsSCtGavYCgxQoY8qzdtiqY5NvIVZvOl5Pg==}
     engines: {node: '>=22'}
     cpu: [arm64]
     os: [darwin]
 
-  '@openclaw/proc-safe-darwin-x64@0.4.2':
-    resolution: {integrity: sha512-nWvGO6Rf15JBI2MzyevSBT1NN4oUeUAqP7P5OqBzwm3xQBjpmkezYHuofKAEaB7LniWCRVufA4NpWhsoCRBTeg==}
+  '@openclaw/proc-safe-darwin-x64@0.6.0':
+    resolution: {integrity: sha512-hgQbSewquHCEPUPw68YDmHEBSJPcLUZ0FiCnuIRM4L9mQCfMsEH9CmMLJJ4zX/EsFOLCVqYiYoYLqInMpABH6Q==}
     engines: {node: '>=22'}
     cpu: [x64]
     os: [darwin]
 
-  '@openclaw/proc-safe-freebsd-arm64@0.4.2':
-    resolution: {integrity: sha512-+MYuLmQcobvboR0OCXbdc5OA9Zm6w3trazWxXCj+8wvFk31Dn+QxxkLfaPlT7Ukobf7jhr4hFkujPOjyy/RKQw==}
+  '@openclaw/proc-safe-freebsd-arm64@0.6.0':
+    resolution: {integrity: sha512-eSZjEtt48ns4m3EVbzDcs1mnqzpXiRT2Fo4TMAxsV3schErUROFVCkkYBV0DTjnlo4Syk+egGHMXTUaI9fDsoA==}
     engines: {node: '>=22'}
     cpu: [arm64]
     os: [freebsd]
 
-  '@openclaw/proc-safe-freebsd-x64@0.4.2':
-    resolution: {integrity: sha512-yDyYmAb/HlLgJR0O1DWxQgc3mVbVW2KN5B4mzWeZXXNgRQCzsbO9n8OTHjC/TX65iiVvxYWzAECN4awKNz4/7w==}
+  '@openclaw/proc-safe-freebsd-x64@0.6.0':
+    resolution: {integrity: sha512-TPxbVZVUDE9wsEj9eYAKYH9QwTv2pWEDbn6EYqXAX/8XaQ6Dsax0kfad4ZnvXuvAZ/HDxU74pUdo3UUJN0Sb/Q==}
     engines: {node: '>=22'}
     cpu: [x64]
     os: [freebsd]
 
-  '@openclaw/proc-safe-linux-arm64-gnu@0.4.2':
-    resolution: {integrity: sha512-SxBAYwvDhaBNfqcULabq4B7ejT+4HMHvAyg5EXaZ3AlTryT2563u/FKIHVxz+DsQ6HvkY79JcYdvt9e7076HlQ==}
+  '@openclaw/proc-safe-linux-arm64-gnu@0.6.0':
+    resolution: {integrity: sha512-9DKqemKWI2bTxNwwVmQXCI35QbNpObYFTxZIOQSb3QebplksRGmqQ2WVD1+1IUpCFfEdYUaXt9/iiqeLKxtIhQ==}
     engines: {node: '>=22'}
     cpu: [arm64]
     os: [linux]
     libc: [glibc]
 
-  '@openclaw/proc-safe-linux-arm64-musl@0.4.2':
-    resolution: {integrity: sha512-ubUMbCGV+KhIuRpxPypQygea44w3F/Xr56p8y2Xe/s5Scxngeum3vAS5iVMy4lF3K4vm+5lv7k1prz92skXakA==}
+  '@openclaw/proc-safe-linux-arm64-musl@0.6.0':
+    resolution: {integrity: sha512-WVMlhEmT8h2PdtIPzIZec7Y6KhY3Kmd0dECCTf+oXeG1PaPCc4DrLQuBSgdDfk0qc/lEtXAC5gQMcY5TIaEPyg==}
     engines: {node: '>=22'}
     cpu: [arm64]
     os: [linux]
     libc: [musl]
 
-  '@openclaw/proc-safe-linux-x64-gnu@0.4.2':
-    resolution: {integrity: sha512-bQc6mqlccikVH1DIZ/iDJUW9hCkONmy5k6KvOKz2bxwUj928Rq1AtkNIqDLMitas7Nc7cJuFxYjHur2OL4uLjA==}
+  '@openclaw/proc-safe-linux-x64-gnu@0.6.0':
+    resolution: {integrity: sha512-exhQwqyeUTrFQijsUkDVN+kAcyfhX6h3l9IicBc/vUpNGQ+Yn0VlXHBbjwrQWCSDjzldQBvL53XHI16ijDXixA==}
     engines: {node: '>=22'}
     cpu: [x64]
     os: [linux]
     libc: [glibc]
 
-  '@openclaw/proc-safe-linux-x64-musl@0.4.2':
-    resolution: {integrity: sha512-wkeClXbFDjI7DAfZKcU04s2m3UKssD0p5xf93r6KdPO05rZ80R9F5O1gIGxIrgCFUcj8tykiiBofxdmh50T4Ww==}
+  '@openclaw/proc-safe-linux-x64-musl@0.6.0':
+    resolution: {integrity: sha512-bZcnPVZP7rG6yfoO6vcbtTpjhUn5LtXUXkLAkXCBcJr0qSQ6vG7sAsQRpiYB3JEhON+L+0OOUEUuxYH8+lJRcQ==}
     engines: {node: '>=22'}
     cpu: [x64]
     os: [linux]
     libc: [musl]
 
-  '@openclaw/proc-safe-win32-arm64-msvc@0.4.2':
-    resolution: {integrity: sha512-i2BDBcX5nbRAjCeLlj7Z+Z9XBo0ZFwe5oyoC5M6aJIWJnO8eyvFixSh6GQJIm47+THYdqSuKoGruEprJt3MaMw==}
+  '@openclaw/proc-safe-win32-arm64-msvc@0.6.0':
+    resolution: {integrity: sha512-2GMBTeTQusN/KKi2uDPrVFQDu9NAj40ZB16HmNbwB5R8MaxurjbjPlpUnXkwDhUq9GQuKBJ4wPnyouhOMdAsNw==}
     engines: {node: '>=22'}
     cpu: [arm64]
     os: [win32]
 
-  '@openclaw/proc-safe-win32-x64-msvc@0.4.2':
-    resolution: {integrity: sha512-K9b/tXmWFl7LDyAnC9j2kldyFs1dH3ZTbMaotQXn3BmNlY7vnzUUl5RE+AvwwzXNQo4TfCznxfU8uYWvlgdZtw==}
+  '@openclaw/proc-safe-win32-x64-msvc@0.6.0':
+    resolution: {integrity: sha512-FAapRHqiC2h5GpFXIjRpmT08Qai3sCsm6GipOUeYaOLgb0wZ7yblxbiK4V1UMtWmbzODzGe6D6//1X6H7HVw9g==}
     engines: {node: '>=22'}
     cpu: [x64]
     os: [win32]
 
-  '@openclaw/proc-safe@0.4.2':
-    resolution: {integrity: sha512-Q2yXwYp7i5SlYhXOB62//EJCIGNwH4r8Sbs8QjAMugl7DXTW2/F6qHp9YpIorNLSi88bEKG5lLX48ktaYwwxFA==}
+  '@openclaw/proc-safe@0.6.0':
+    resolution: {integrity: sha512-kzchOmtyJ9Tj0wyW5lk5OXZPQiZiJOCFHMwOfpRGJtQGdhAu4rg9U7jnY7uzcpFa3608Q2Js0FDT9F8aMmDjSw==}
     engines: {node: '>=22'}
 
   '@openclaw/proxyline@0.4.1':
@@ -5433,8 +5528,8 @@ packages:
     peerDependencies:
       undici: '>=8.5.0 <9'
 
-  '@openclaw/uirouter@0.1.2':
-    resolution: {integrity: sha512-m2FOEvUfXXIrHa5VFJBV/1CtQt1NkvE9duGvURvExUCizryRGqSLlZdYvV+cXQqV4No4UPWhz2F5H+iNFNSljg==}
+  '@openclaw/uirouter@0.1.3':
+    resolution: {integrity: sha512-mtn3bIR/SK4xWJQ4KkFw0tq0ZEb5AWOJ0bTNpfDJxM2edEowUbdfLFDOptGoUsrw1mgcSPvcYMtBRESfEDYZPQ==}
     engines: {node: ^22.18.0 || >=24.11.0}
 
   '@opentelemetry/api-logs@0.220.0':
@@ -7452,6 +7547,7 @@ packages:
   audio-decode@3.12.0:
     resolution: {integrity: sha512-IUI5OJ82TGAwdE+WcE2guYUlvZV8vVuU4f9UMW6L6X3zc9JOt8f4/VJzSgEnzs39cxZnwl06iPZNIs3y898XKQ==}
     engines: {node: '>=18'}
+    deprecated: 'Deprecated: use @audio/decode (npm i @audio/decode). What changed: https://github.com/audiojs/decode/releases'
 
   audio-type@2.8.0:
     resolution: {integrity: sha512-11GuSvJedvhjc7/6JaCHVndKcapelof4jicOTcM6Sn6j+YyZBnd4+7YnQBEJgwAzJ5Ts4yIv8Vfdt8P7/XaNeQ==}
@@ -8930,11 +9026,11 @@ packages:
   known-css-properties@0.30.0:
     resolution: {integrity: sha512-VSWXYUnsPu9+WYKkfmJyLKtIvaRJi1kXUqVmBACORXZQxT5oZDsoZ2vQP+bQFDnWtpI/4eq3MLoRMjI2fnLzTQ==}
 
-  koffi@3.2.1:
-    resolution: {integrity: sha512-0qE3lZ8jllRqPN4Ob6Ajl7c2bJSJDhQWuKLGP5hIEpHLllJWv1ydHFMhHmHc5p/W9GticKVDbYzZd7TBoQ4CZg==}
-
   koffi@3.3.3:
     resolution: {integrity: sha512-XWNI4eyxJJzR2MakPZzR3QeZ06JOklLbxglin0dHhx/qIQCby8lqHs9Acq4Q7CpCKnOrBSj+6b9J5y69wfr2ZA==}
+
+  koffi@3.3.6:
+    resolution: {integrity: sha512-pPqCZg8o4laLvzxySGEju/T1Fd+eCJTVnJmcH6h1u98HFRoBQ9EokNuBSj3NxIQdzkEPRxPnHKjhBVkLeB+X0g==}
 
   kysely@0.29.7:
     resolution: {integrity: sha512-fmIq+7kv4WbFm2tcfznRzikqB4cuNpgZ40PSU2fAJ2/OO5XhojqnTPrmgrCjYSRJVwBln03XcRXJGnw9H099IQ==}
@@ -9143,6 +9239,9 @@ packages:
 
   longest-streak@3.1.0:
     resolution: {integrity: sha512-9Ri+o0JYgehTaVBBDoMqIl8GXtbWg711O3srftcHhZ0dqnETqLaoIK0x17fUw9rFSlK/0NlsKe0Ahhyl5pXE2g==}
+
+  lossless-json@4.3.3:
+    resolution: {integrity: sha512-FGFrGArHsv7BRiYOf37ZRieT9HlKw+Kpu9HvtpYjcoOEo8lqNkjny8A2YAfWNWWQC+9pcLIrLZ+IviKJhaHwGQ==}
 
   lru-cache@11.5.3:
     resolution: {integrity: sha512-U4N8FgzmWxc8k1VH8Kr6lQg18U7Fjvby6wXHVRX/ZZ7IwWbRMgrRbP0Wrb5q5NVinryp4SQampHKdvtecItxUg==}
@@ -10672,8 +10771,8 @@ packages:
     resolution: {integrity: sha512-dRXchy+C0IgK8WPC6xvCHFRIWYUbqqdEIKPaKo/AcTUNzwLTK6AH7RjdLWsEZcAN/TBdtfUw3PYEgPr5VPr6ww==}
     engines: {node: '>=14.16'}
 
-  tokenjuice@0.11.0:
-    resolution: {integrity: sha512-B6CoA36FwvPDunC9b2hI8Eqc7eZdhEMGDMiKEQGOj9LHPV0R1pQSTClT5qRV5xn8tu3Iwa66ezPCPkn70M7OYQ==}
+  tokenjuice@0.11.2:
+    resolution: {integrity: sha512-G4q24PkE1bbSJ3wldqx+k1XygXm0P7kiTcESgby5Fd9rrcMoz3Tn++tocnGXww3pQjUAklUYeyCcH3gnIMo8VA==}
     engines: {node: '>=22'}
     hasBin: true
 
@@ -10845,8 +10944,8 @@ packages:
     resolution: {integrity: sha512-u4UB2/IrKdU6lFxumHmmo1a3fCQO5tzQllRorfoRS63txhrB7xTpSn1PftwC4qEHkOaqP95fCWW4lJzwErwzhQ==}
     engines: {node: '>=22.19.0'}
 
-  undici@8.12.3:
-    resolution: {integrity: sha512-+fdndUTwBP86cVjihTp21hZHo7d6oj1c/47XPA3lL8mM0XHs+C4EkcjmgRsFnFk2f/UONGDy9ItBItmXsLOQHw==}
+  undici@8.12.4:
+    resolution: {integrity: sha512-8Mx+uNKKER2bA4AdtedkqRbwUCIJFr2nJckXRe5yrDqzePqwLP7VNcctN8/XdmDSbF7mS+jJKIszlL+vbam1VA==}
     engines: {node: '>=22.19.0'}
 
   unhomoglyph@1.0.6:
@@ -11021,9 +11120,9 @@ packages:
       jsdom:
         optional: true
 
-  vscode-jsonrpc@8.2.1:
-    resolution: {integrity: sha512-kdjOSJ2lLIn7r1rtrMbbNCHjyMPfRnowdKjBQ+mGq6NAW5QY2bEZC/khaC5OR8svbbjvLEaIXkOq45e2X9BIbQ==}
-    engines: {node: '>=14.0.0'}
+  vscode-jsonrpc@10.0.0:
+    resolution: {integrity: sha512-USSfxg0vDIpTQqlQBGxF3mBARyoS8cU7LHLpbYNh6dOJt32dlskxPWB0Irrh5TllTmyf7oNLAvqDqzklbwwnpA==}
+    engines: {node: '>=14.17.0'}
 
   vscode-jsonrpc@9.0.3:
     resolution: {integrity: sha512-qETYf9PCl1lVfwR+oBmMfc4vP2nqLNA35ABxorw3j06+xlKRgDVxbLgKm4Y/xPL0YWdeDjLoI4ImICIT3nB0zQ==}
@@ -11234,9 +11333,6 @@ packages:
   zod@3.25.76:
     resolution: {integrity: sha512-gzUt/qt81nXsFGKIFcC3YnfEAx5NkunCfnDlvuBSSFS02bcXu4Lmea0AFIUwbLWxWPx3d9p8S5QoaujKcNQxcQ==}
 
-  zod@4.3.6:
-    resolution: {integrity: sha512-rftlrkhHZOcjDwkGlnUtZZkvaPHCsDATp4pGpuOOMDaTdDDXF91wuVDJoWoPsKX/3YPQ5fHuF3STjcYyKr+Qhg==}
-
   zod@4.6.7:
     resolution: {integrity: sha512-g8W2D2kU6a8untc053fX1uVBKzM7yqAxW/3zwk83+6RyF2+SKOuV+c0wBDhUwzV1PaGapmZH+rmcUzPf+3CGwg==}
 
@@ -11263,7 +11359,7 @@ snapshots:
   '@agentclientprotocol/codex-acp@2.3.0':
     dependencies:
       '@agentclientprotocol/sdk': 2.0.2(zod@4.6.7)
-      '@openai/codex': 0.164.0
+      '@openai/codex': 0.172.0
       cross-spawn: 7.0.6
       diff: 9.0.0
       open: 11.0.4
@@ -12388,7 +12484,7 @@ snapshots:
 
   '@copilotkit/aimock@1.47.0(vitest@5.0.5)':
     optionalDependencies:
-      vitest: 5.0.5(patch_hash=a2a78abe9470cc2ceb0d4eeb81acfc62d6180e9990bc866a7771ba60b1320ea6)(@opentelemetry/api@1.9.1)(@types/node@26.6.6)(@vitest/browser-playwright@5.0.5)(@vitest/coverage-v8@5.0.5)(@vitest/ui@5.0.5)(jsdom@30.1.3(@noble/hashes@2.4.0))(vite@8.3.5(@types/node@26.6.6)(esbuild@0.28.2)(jiti@2.7.0)(tsx@4.23.15)(yaml@2.9.1))
+      vitest: 5.0.5(patch_hash=1aca6d2c713739c6cbd32d4af2aed8655bb01cd558d5a1cc86cf8187eaa59609)(@opentelemetry/api@1.9.1)(@types/node@26.6.6)(@vitest/browser-playwright@5.0.5)(@vitest/coverage-v8@5.0.5)(@vitest/ui@5.0.5)(jsdom@30.1.3(@noble/hashes@2.4.0))(vite@8.3.5(@types/node@26.6.6)(esbuild@0.28.2)(jiti@2.7.0)(tsx@4.23.15)(yaml@2.9.1))
 
   '@csstools/color-helpers@6.1.2': {}
 
@@ -12663,44 +12759,45 @@ snapshots:
 
   '@gar/promise-retry@1.0.3': {}
 
-  '@github/copilot-sdk-darwin-arm64@1.0.25':
+  '@github/copilot-sdk-darwin-arm64@1.0.34':
     optional: true
 
-  '@github/copilot-sdk-darwin-x64@1.0.25':
+  '@github/copilot-sdk-darwin-x64@1.0.34':
     optional: true
 
-  '@github/copilot-sdk-linux-arm64@1.0.25':
+  '@github/copilot-sdk-linux-arm64@1.0.34':
     optional: true
 
-  '@github/copilot-sdk-linux-x64@1.0.25':
+  '@github/copilot-sdk-linux-x64@1.0.34':
     optional: true
 
-  '@github/copilot-sdk-linuxmusl-arm64@1.0.25':
+  '@github/copilot-sdk-linuxmusl-arm64@1.0.34':
     optional: true
 
-  '@github/copilot-sdk-linuxmusl-x64@1.0.25':
+  '@github/copilot-sdk-linuxmusl-x64@1.0.34':
     optional: true
 
-  '@github/copilot-sdk-win32-arm64@1.0.25':
+  '@github/copilot-sdk-win32-arm64@1.0.34':
     optional: true
 
-  '@github/copilot-sdk-win32-x64@1.0.25':
+  '@github/copilot-sdk-win32-x64@1.0.34':
     optional: true
 
-  '@github/copilot-sdk@1.0.25':
+  '@github/copilot-sdk@1.0.34':
     dependencies:
-      koffi: 3.2.1
-      vscode-jsonrpc: 8.2.1
-      zod: 4.3.6
+      koffi: 3.3.6
+      lossless-json: 4.3.3
+      vscode-jsonrpc: 10.0.0
+      zod: 4.6.7
     optionalDependencies:
-      '@github/copilot-sdk-darwin-arm64': 1.0.25
-      '@github/copilot-sdk-darwin-x64': 1.0.25
-      '@github/copilot-sdk-linux-arm64': 1.0.25
-      '@github/copilot-sdk-linux-x64': 1.0.25
-      '@github/copilot-sdk-linuxmusl-arm64': 1.0.25
-      '@github/copilot-sdk-linuxmusl-x64': 1.0.25
-      '@github/copilot-sdk-win32-arm64': 1.0.25
-      '@github/copilot-sdk-win32-x64': 1.0.25
+      '@github/copilot-sdk-darwin-arm64': 1.0.34
+      '@github/copilot-sdk-darwin-x64': 1.0.34
+      '@github/copilot-sdk-linux-arm64': 1.0.34
+      '@github/copilot-sdk-linux-x64': 1.0.34
+      '@github/copilot-sdk-linuxmusl-arm64': 1.0.34
+      '@github/copilot-sdk-linuxmusl-x64': 1.0.34
+      '@github/copilot-sdk-win32-arm64': 1.0.34
+      '@github/copilot-sdk-win32-x64': 1.0.34
 
   '@google/genai@2.32.0(@modelcontextprotocol/sdk@1.32.2(supports-color@10.2.2)(zod@4.6.7))(supports-color@10.2.2)':
     dependencies:
@@ -12825,118 +12922,124 @@ snapshots:
 
   '@keyv/serialize@1.1.1': {}
 
-  '@koromix/koffi-android-arm64@3.2.1':
-    optional: true
-
   '@koromix/koffi-android-arm64@3.3.3':
     optional: true
 
-  '@koromix/koffi-android-x64@3.2.1':
+  '@koromix/koffi-android-arm64@3.3.6':
     optional: true
 
   '@koromix/koffi-android-x64@3.3.3':
     optional: true
 
-  '@koromix/koffi-darwin-arm64@3.2.1':
+  '@koromix/koffi-android-x64@3.3.6':
     optional: true
 
   '@koromix/koffi-darwin-arm64@3.3.3':
     optional: true
 
-  '@koromix/koffi-darwin-x64@3.2.1':
+  '@koromix/koffi-darwin-arm64@3.3.6':
     optional: true
 
   '@koromix/koffi-darwin-x64@3.3.3':
     optional: true
 
-  '@koromix/koffi-freebsd-arm64@3.2.1':
+  '@koromix/koffi-darwin-x64@3.3.6':
     optional: true
 
   '@koromix/koffi-freebsd-arm64@3.3.3':
     optional: true
 
-  '@koromix/koffi-freebsd-ia32@3.2.1':
+  '@koromix/koffi-freebsd-arm64@3.3.6':
     optional: true
 
   '@koromix/koffi-freebsd-ia32@3.3.3':
     optional: true
 
-  '@koromix/koffi-freebsd-x64@3.2.1':
+  '@koromix/koffi-freebsd-ia32@3.3.6':
     optional: true
 
   '@koromix/koffi-freebsd-x64@3.3.3':
     optional: true
 
-  '@koromix/koffi-linux-arm64@3.2.1':
+  '@koromix/koffi-freebsd-x64@3.3.6':
     optional: true
 
   '@koromix/koffi-linux-arm64@3.3.3':
     optional: true
 
-  '@koromix/koffi-linux-arm@3.2.1':
+  '@koromix/koffi-linux-arm64@3.3.6':
     optional: true
 
   '@koromix/koffi-linux-arm@3.3.3':
     optional: true
 
-  '@koromix/koffi-linux-ia32@3.2.1':
+  '@koromix/koffi-linux-arm@3.3.6':
     optional: true
 
   '@koromix/koffi-linux-ia32@3.3.3':
     optional: true
 
-  '@koromix/koffi-linux-loong64@3.2.1':
+  '@koromix/koffi-linux-ia32@3.3.6':
     optional: true
 
   '@koromix/koffi-linux-loong64@3.3.3':
     optional: true
 
+  '@koromix/koffi-linux-loong64@3.3.6':
+    optional: true
+
   '@koromix/koffi-linux-ppc64@3.3.3':
     optional: true
 
-  '@koromix/koffi-linux-riscv64@3.2.1':
+  '@koromix/koffi-linux-ppc64@3.3.6':
     optional: true
 
   '@koromix/koffi-linux-riscv64@3.3.3':
     optional: true
 
-  '@koromix/koffi-linux-x64@3.2.1':
+  '@koromix/koffi-linux-riscv64@3.3.6':
     optional: true
 
   '@koromix/koffi-linux-x64@3.3.3':
     optional: true
 
+  '@koromix/koffi-linux-x64@3.3.6':
+    optional: true
+
   '@koromix/koffi-openbsd-arm64@3.3.3':
     optional: true
 
-  '@koromix/koffi-openbsd-ia32@3.2.1':
+  '@koromix/koffi-openbsd-arm64@3.3.6':
     optional: true
 
   '@koromix/koffi-openbsd-ia32@3.3.3':
     optional: true
 
-  '@koromix/koffi-openbsd-x64@3.2.1':
+  '@koromix/koffi-openbsd-ia32@3.3.6':
     optional: true
 
   '@koromix/koffi-openbsd-x64@3.3.3':
     optional: true
 
-  '@koromix/koffi-win32-arm64@3.2.1':
+  '@koromix/koffi-openbsd-x64@3.3.6':
     optional: true
 
   '@koromix/koffi-win32-arm64@3.3.3':
     optional: true
 
-  '@koromix/koffi-win32-ia32@3.2.1':
+  '@koromix/koffi-win32-arm64@3.3.6':
     optional: true
 
   '@koromix/koffi-win32-ia32@3.3.3':
     optional: true
 
-  '@koromix/koffi-win32-x64@3.2.1':
+  '@koromix/koffi-win32-ia32@3.3.6':
     optional: true
 
   '@koromix/koffi-win32-x64@3.3.3':
+    optional: true
+
+  '@koromix/koffi-win32-x64@3.3.6':
     optional: true
 
   '@lancedb/lancedb-darwin-arm64@0.41.0':
@@ -12960,10 +13063,10 @@ snapshots:
   '@lancedb/lancedb-win32-x64-msvc@0.41.0':
     optional: true
 
-  '@lancedb/lancedb@0.41.0(@types/node@26.6.6)(apache-arrow@21.2.0(patch_hash=c8385fd9a8af8122fc1787481b5bba21fef95f61dc1a664e5d2c5e0cb9d5fd68))':
+  '@lancedb/lancedb@0.41.0(@types/node@26.6.6)(apache-arrow@21.2.0)':
     dependencies:
       '@opentelemetry/api': 1.9.1
-      apache-arrow: 21.2.0(patch_hash=c8385fd9a8af8122fc1787481b5bba21fef95f61dc1a664e5d2c5e0cb9d5fd68)
+      apache-arrow: 21.2.0
       reflect-metadata: 0.2.2
     optionalDependencies:
       '@lancedb/lancedb-darwin-arm64': 0.41.0
@@ -13421,31 +13524,31 @@ snapshots:
 
   '@npmcli/redact@5.0.0': {}
 
-  '@openai/codex@0.164.0':
+  '@openai/codex@0.172.0':
     optionalDependencies:
-      '@openai/codex-darwin-arm64': '@openai/codex@0.164.0-darwin-arm64'
-      '@openai/codex-darwin-x64': '@openai/codex@0.164.0-darwin-x64'
-      '@openai/codex-linux-arm64': '@openai/codex@0.164.0-linux-arm64'
-      '@openai/codex-linux-x64': '@openai/codex@0.164.0-linux-x64'
-      '@openai/codex-win32-arm64': '@openai/codex@0.164.0-win32-arm64'
-      '@openai/codex-win32-x64': '@openai/codex@0.164.0-win32-x64'
+      '@openai/codex-darwin-arm64': '@openai/codex@0.172.0-darwin-arm64'
+      '@openai/codex-darwin-x64': '@openai/codex@0.172.0-darwin-x64'
+      '@openai/codex-linux-arm64': '@openai/codex@0.172.0-linux-arm64'
+      '@openai/codex-linux-x64': '@openai/codex@0.172.0-linux-x64'
+      '@openai/codex-win32-arm64': '@openai/codex@0.172.0-win32-arm64'
+      '@openai/codex-win32-x64': '@openai/codex@0.172.0-win32-x64'
 
-  '@openai/codex@0.164.0-darwin-arm64':
+  '@openai/codex@0.172.0-darwin-arm64':
     optional: true
 
-  '@openai/codex@0.164.0-darwin-x64':
+  '@openai/codex@0.172.0-darwin-x64':
     optional: true
 
-  '@openai/codex@0.164.0-linux-arm64':
+  '@openai/codex@0.172.0-linux-arm64':
     optional: true
 
-  '@openai/codex@0.164.0-linux-x64':
+  '@openai/codex@0.172.0-linux-x64':
     optional: true
 
-  '@openai/codex@0.164.0-win32-arm64':
+  '@openai/codex@0.172.0-win32-arm64':
     optional: true
 
-  '@openai/codex@0.164.0-win32-x64':
+  '@openai/codex@0.172.0-win32-x64':
     optional: true
 
   '@openclaw/crabline@0.2.0(patch_hash=87093d75728e71110a39bd4729df86642a7974ebbbd2155fec2e074ce9a90f3d)':
@@ -13471,10 +13574,16 @@ snapshots:
   '@openclaw/fs-safe-darwin-arm64@0.27.1':
     optional: true
 
+  '@openclaw/fs-safe-darwin-arm64@0.28.2':
+    optional: true
+
   '@openclaw/fs-safe-darwin-x64@0.26.15':
     optional: true
 
   '@openclaw/fs-safe-darwin-x64@0.27.1':
+    optional: true
+
+  '@openclaw/fs-safe-darwin-x64@0.28.2':
     optional: true
 
   '@openclaw/fs-safe-freebsd-arm64@0.26.15':
@@ -13483,10 +13592,16 @@ snapshots:
   '@openclaw/fs-safe-freebsd-arm64@0.27.1':
     optional: true
 
+  '@openclaw/fs-safe-freebsd-arm64@0.28.2':
+    optional: true
+
   '@openclaw/fs-safe-freebsd-x64@0.26.15':
     optional: true
 
   '@openclaw/fs-safe-freebsd-x64@0.27.1':
+    optional: true
+
+  '@openclaw/fs-safe-freebsd-x64@0.28.2':
     optional: true
 
   '@openclaw/fs-safe-linux-arm64-gnu@0.26.15':
@@ -13495,10 +13610,16 @@ snapshots:
   '@openclaw/fs-safe-linux-arm64-gnu@0.27.1':
     optional: true
 
+  '@openclaw/fs-safe-linux-arm64-gnu@0.28.2':
+    optional: true
+
   '@openclaw/fs-safe-linux-arm64-musl@0.26.15':
     optional: true
 
   '@openclaw/fs-safe-linux-arm64-musl@0.27.1':
+    optional: true
+
+  '@openclaw/fs-safe-linux-arm64-musl@0.28.2':
     optional: true
 
   '@openclaw/fs-safe-linux-x64-gnu@0.26.15':
@@ -13507,10 +13628,16 @@ snapshots:
   '@openclaw/fs-safe-linux-x64-gnu@0.27.1':
     optional: true
 
+  '@openclaw/fs-safe-linux-x64-gnu@0.28.2':
+    optional: true
+
   '@openclaw/fs-safe-linux-x64-musl@0.26.15':
     optional: true
 
   '@openclaw/fs-safe-linux-x64-musl@0.27.1':
+    optional: true
+
+  '@openclaw/fs-safe-linux-x64-musl@0.28.2':
     optional: true
 
   '@openclaw/fs-safe-win32-arm64-msvc@0.26.15':
@@ -13519,10 +13646,16 @@ snapshots:
   '@openclaw/fs-safe-win32-arm64-msvc@0.27.1':
     optional: true
 
+  '@openclaw/fs-safe-win32-arm64-msvc@0.28.2':
+    optional: true
+
   '@openclaw/fs-safe-win32-x64-msvc@0.26.15':
     optional: true
 
   '@openclaw/fs-safe-win32-x64-msvc@0.27.1':
+    optional: true
+
+  '@openclaw/fs-safe-win32-x64-msvc@0.28.2':
     optional: true
 
   '@openclaw/fs-safe@0.26.15':
@@ -13553,58 +13686,72 @@ snapshots:
       '@openclaw/fs-safe-win32-x64-msvc': 0.27.1
       jszip: 3.10.2
 
+  '@openclaw/fs-safe@0.28.2':
+    optionalDependencies:
+      '@openclaw/fs-safe-darwin-arm64': 0.28.2
+      '@openclaw/fs-safe-darwin-x64': 0.28.2
+      '@openclaw/fs-safe-freebsd-arm64': 0.28.2
+      '@openclaw/fs-safe-freebsd-x64': 0.28.2
+      '@openclaw/fs-safe-linux-arm64-gnu': 0.28.2
+      '@openclaw/fs-safe-linux-arm64-musl': 0.28.2
+      '@openclaw/fs-safe-linux-x64-gnu': 0.28.2
+      '@openclaw/fs-safe-linux-x64-musl': 0.28.2
+      '@openclaw/fs-safe-win32-arm64-msvc': 0.28.2
+      '@openclaw/fs-safe-win32-x64-msvc': 0.28.2
+      jszip: 3.10.2
+
   '@openclaw/libterminal@0.3.11':
     dependencies:
       ghostty-web: 0.4.0(patch_hash=d4c6598b6840564dac4a469f3aa9b8df24fe6eab48a6744302707017e095a524)
 
-  '@openclaw/proc-safe-darwin-arm64@0.4.2':
+  '@openclaw/proc-safe-darwin-arm64@0.6.0':
     optional: true
 
-  '@openclaw/proc-safe-darwin-x64@0.4.2':
+  '@openclaw/proc-safe-darwin-x64@0.6.0':
     optional: true
 
-  '@openclaw/proc-safe-freebsd-arm64@0.4.2':
+  '@openclaw/proc-safe-freebsd-arm64@0.6.0':
     optional: true
 
-  '@openclaw/proc-safe-freebsd-x64@0.4.2':
+  '@openclaw/proc-safe-freebsd-x64@0.6.0':
     optional: true
 
-  '@openclaw/proc-safe-linux-arm64-gnu@0.4.2':
+  '@openclaw/proc-safe-linux-arm64-gnu@0.6.0':
     optional: true
 
-  '@openclaw/proc-safe-linux-arm64-musl@0.4.2':
+  '@openclaw/proc-safe-linux-arm64-musl@0.6.0':
     optional: true
 
-  '@openclaw/proc-safe-linux-x64-gnu@0.4.2':
+  '@openclaw/proc-safe-linux-x64-gnu@0.6.0':
     optional: true
 
-  '@openclaw/proc-safe-linux-x64-musl@0.4.2':
+  '@openclaw/proc-safe-linux-x64-musl@0.6.0':
     optional: true
 
-  '@openclaw/proc-safe-win32-arm64-msvc@0.4.2':
+  '@openclaw/proc-safe-win32-arm64-msvc@0.6.0':
     optional: true
 
-  '@openclaw/proc-safe-win32-x64-msvc@0.4.2':
+  '@openclaw/proc-safe-win32-x64-msvc@0.6.0':
     optional: true
 
-  '@openclaw/proc-safe@0.4.2':
+  '@openclaw/proc-safe@0.6.0':
     optionalDependencies:
-      '@openclaw/proc-safe-darwin-arm64': 0.4.2
-      '@openclaw/proc-safe-darwin-x64': 0.4.2
-      '@openclaw/proc-safe-freebsd-arm64': 0.4.2
-      '@openclaw/proc-safe-freebsd-x64': 0.4.2
-      '@openclaw/proc-safe-linux-arm64-gnu': 0.4.2
-      '@openclaw/proc-safe-linux-arm64-musl': 0.4.2
-      '@openclaw/proc-safe-linux-x64-gnu': 0.4.2
-      '@openclaw/proc-safe-linux-x64-musl': 0.4.2
-      '@openclaw/proc-safe-win32-arm64-msvc': 0.4.2
-      '@openclaw/proc-safe-win32-x64-msvc': 0.4.2
+      '@openclaw/proc-safe-darwin-arm64': 0.6.0
+      '@openclaw/proc-safe-darwin-x64': 0.6.0
+      '@openclaw/proc-safe-freebsd-arm64': 0.6.0
+      '@openclaw/proc-safe-freebsd-x64': 0.6.0
+      '@openclaw/proc-safe-linux-arm64-gnu': 0.6.0
+      '@openclaw/proc-safe-linux-arm64-musl': 0.6.0
+      '@openclaw/proc-safe-linux-x64-gnu': 0.6.0
+      '@openclaw/proc-safe-linux-x64-musl': 0.6.0
+      '@openclaw/proc-safe-win32-arm64-msvc': 0.6.0
+      '@openclaw/proc-safe-win32-x64-msvc': 0.6.0
 
-  '@openclaw/proxyline@0.4.1(undici@8.12.3)':
+  '@openclaw/proxyline@0.4.1(undici@8.12.4)':
     dependencies:
-      undici: 8.12.3
+      undici: 8.12.4
 
-  '@openclaw/uirouter@0.1.2': {}
+  '@openclaw/uirouter@0.1.3': {}
 
   '@opentelemetry/api-logs@0.220.0':
     dependencies:
@@ -14461,11 +14608,11 @@ snapshots:
 
   '@sindresorhus/transliterate@2.3.1': {}
 
-  '@slack/bolt@5.1.0(@types/express@5.0.6)(supports-color@10.2.2)(undici@8.12.3)':
+  '@slack/bolt@5.1.0(@types/express@5.0.6)(supports-color@10.2.2)(undici@8.12.4)':
     dependencies:
       '@slack/logger': 5.0.0
       '@slack/oauth': 4.0.0
-      '@slack/socket-mode': 3.1.0(undici@8.12.3)
+      '@slack/socket-mode': 3.1.0(undici@8.12.4)
       '@slack/types': 3.3.0
       '@slack/web-api': 8.3.0
       '@types/express': 5.0.6
@@ -14489,13 +14636,13 @@ snapshots:
       '@types/node': 26.6.6
       jsonwebtoken: 9.0.3
 
-  '@slack/socket-mode@3.1.0(undici@8.12.3)':
+  '@slack/socket-mode@3.1.0(undici@8.12.4)':
     dependencies:
       '@slack/logger': 5.0.0
       '@slack/web-api': 8.3.0
       '@types/node': 26.6.6
       eventemitter3: 5.0.4
-      undici: 8.12.3
+      undici: 8.12.4
 
   '@slack/types@3.3.0': {}
 
@@ -15092,7 +15239,7 @@ snapshots:
       debug: 4.4.3(supports-color@10.2.2)
       minimatch: 10.2.6
       semver: 7.8.5
-      tinyglobby: 0.2.17
+      tinyglobby: 0.2.17(patch_hash=80f03d093d02b02b01bb368d96c6f8fc70b768c4c2a226f8bb1c1cd1a1cd63d7)
       ts-api-utils: 2.5.0(typescript@6.0.3)
       typescript: 6.0.3
     transitivePeerDependencies:
@@ -15190,7 +15337,7 @@ snapshots:
       '@vitest/mocker': 5.0.5(vite@8.3.5(@types/node@26.6.6)(esbuild@0.28.2)(jiti@2.7.0)(tsx@4.23.15)(yaml@2.9.1))
       playwright: 1.64.1
       tinyrainbow: 3.2.0
-      vitest: 5.0.5(patch_hash=a2a78abe9470cc2ceb0d4eeb81acfc62d6180e9990bc866a7771ba60b1320ea6)(@opentelemetry/api@1.9.1)(@types/node@26.6.6)(@vitest/browser-playwright@5.0.5)(@vitest/coverage-v8@5.0.5)(@vitest/ui@5.0.5)(jsdom@30.1.3(@noble/hashes@2.4.0))(vite@8.3.5(@types/node@26.6.6)(esbuild@0.28.2)(jiti@2.7.0)(tsx@4.23.15)(yaml@2.9.1))
+      vitest: 5.0.5(patch_hash=1aca6d2c713739c6cbd32d4af2aed8655bb01cd558d5a1cc86cf8187eaa59609)(@opentelemetry/api@1.9.1)(@types/node@26.6.6)(@vitest/browser-playwright@5.0.5)(@vitest/coverage-v8@5.0.5)(@vitest/ui@5.0.5)(jsdom@30.1.3(@noble/hashes@2.4.0))(vite@8.3.5(@types/node@26.6.6)(esbuild@0.28.2)(jiti@2.7.0)(tsx@4.23.15)(yaml@2.9.1))
     transitivePeerDependencies:
       - bufferutil
       - msw
@@ -15207,7 +15354,7 @@ snapshots:
       pngjs: 7.0.0
       sirv: 3.0.2
       tinyrainbow: 3.2.0
-      vitest: 5.0.5(patch_hash=a2a78abe9470cc2ceb0d4eeb81acfc62d6180e9990bc866a7771ba60b1320ea6)(@opentelemetry/api@1.9.1)(@types/node@26.6.6)(@vitest/browser-playwright@5.0.5)(@vitest/coverage-v8@5.0.5)(@vitest/ui@5.0.5)(jsdom@30.1.3(@noble/hashes@2.4.0))(vite@8.3.5(@types/node@26.6.6)(esbuild@0.28.2)(jiti@2.7.0)(tsx@4.23.15)(yaml@2.9.1))
+      vitest: 5.0.5(patch_hash=1aca6d2c713739c6cbd32d4af2aed8655bb01cd558d5a1cc86cf8187eaa59609)(@opentelemetry/api@1.9.1)(@types/node@26.6.6)(@vitest/browser-playwright@5.0.5)(@vitest/coverage-v8@5.0.5)(@vitest/ui@5.0.5)(jsdom@30.1.3(@noble/hashes@2.4.0))(vite@8.3.5(@types/node@26.6.6)(esbuild@0.28.2)(jiti@2.7.0)(tsx@4.23.15)(yaml@2.9.1))
       ws: 8.22.0
     transitivePeerDependencies:
       - bufferutil
@@ -15225,7 +15372,7 @@ snapshots:
       obug: 3.0.0
       std-env: 4.3.0
       tinyrainbow: 3.2.0
-      vitest: 5.0.5(patch_hash=a2a78abe9470cc2ceb0d4eeb81acfc62d6180e9990bc866a7771ba60b1320ea6)(@opentelemetry/api@1.9.1)(@types/node@26.6.6)(@vitest/browser-playwright@5.0.5)(@vitest/coverage-v8@5.0.5)(@vitest/ui@5.0.5)(jsdom@30.1.3(@noble/hashes@2.4.0))(vite@8.3.5(@types/node@26.6.6)(esbuild@0.28.2)(jiti@2.7.0)(tsx@4.23.15)(yaml@2.9.1))
+      vitest: 5.0.5(patch_hash=1aca6d2c713739c6cbd32d4af2aed8655bb01cd558d5a1cc86cf8187eaa59609)(@opentelemetry/api@1.9.1)(@types/node@26.6.6)(@vitest/browser-playwright@5.0.5)(@vitest/coverage-v8@5.0.5)(@vitest/ui@5.0.5)(jsdom@30.1.3(@noble/hashes@2.4.0))(vite@8.3.5(@types/node@26.6.6)(esbuild@0.28.2)(jiti@2.7.0)(tsx@4.23.15)(yaml@2.9.1))
     optionalDependencies:
       '@vitest/browser': 5.0.5(vite@8.3.5(@types/node@26.6.6)(esbuild@0.28.2)(jiti@2.7.0)(tsx@4.23.15)(yaml@2.9.1))(vitest@5.0.5)
 
@@ -15258,7 +15405,7 @@ snapshots:
       pathe: 2.0.3
       sirv: 3.0.2
       tinyrainbow: 3.2.0
-      vitest: 5.0.5(patch_hash=a2a78abe9470cc2ceb0d4eeb81acfc62d6180e9990bc866a7771ba60b1320ea6)(@opentelemetry/api@1.9.1)(@types/node@26.6.6)(@vitest/browser-playwright@5.0.5)(@vitest/coverage-v8@5.0.5)(@vitest/ui@5.0.5)(jsdom@30.1.3(@noble/hashes@2.4.0))(vite@8.3.5(@types/node@26.6.6)(esbuild@0.28.2)(jiti@2.7.0)(tsx@4.23.15)(yaml@2.9.1))
+      vitest: 5.0.5(patch_hash=1aca6d2c713739c6cbd32d4af2aed8655bb01cd558d5a1cc86cf8187eaa59609)(@opentelemetry/api@1.9.1)(@types/node@26.6.6)(@vitest/browser-playwright@5.0.5)(@vitest/coverage-v8@5.0.5)(@vitest/ui@5.0.5)(jsdom@30.1.3(@noble/hashes@2.4.0))(vite@8.3.5(@types/node@26.6.6)(esbuild@0.28.2)(jiti@2.7.0)(tsx@4.23.15)(yaml@2.9.1))
 
   '@vitest/utils@5.0.5':
     dependencies:
@@ -15466,7 +15613,7 @@ snapshots:
 
   anynum@1.0.1: {}
 
-  apache-arrow@21.2.0(patch_hash=c8385fd9a8af8122fc1787481b5bba21fef95f61dc1a664e5d2c5e0cb9d5fd68):
+  apache-arrow@21.2.0:
     dependencies:
       '@types/node': 25.9.9
       flatbuffers: 25.9.23
@@ -16074,7 +16221,8 @@ snapshots:
 
   escape-html@1.0.3: {}
 
-  escape-string-regexp@4.0.0: {}
+  escape-string-regexp@4.0.0:
+    optional: true
 
   escape-string-regexp@5.0.0: {}
 
@@ -17004,7 +17152,7 @@ snapshots:
       parse5: 8.0.1
       saxes: 6.0.0
       tough-cookie: 6.0.2
-      undici: 8.12.3
+      undici: 8.12.4
       w3c-xmlserializer: 6.0.0
       webidl-conversions: 8.0.1
       whatwg-mimetype: 5.0.0
@@ -17096,27 +17244,6 @@ snapshots:
 
   known-css-properties@0.30.0: {}
 
-  koffi@3.2.1:
-    optionalDependencies:
-      '@koromix/koffi-android-arm64': 3.2.1
-      '@koromix/koffi-android-x64': 3.2.1
-      '@koromix/koffi-darwin-arm64': 3.2.1
-      '@koromix/koffi-darwin-x64': 3.2.1
-      '@koromix/koffi-freebsd-arm64': 3.2.1
-      '@koromix/koffi-freebsd-ia32': 3.2.1
-      '@koromix/koffi-freebsd-x64': 3.2.1
-      '@koromix/koffi-linux-arm': 3.2.1
-      '@koromix/koffi-linux-arm64': 3.2.1
-      '@koromix/koffi-linux-ia32': 3.2.1
-      '@koromix/koffi-linux-loong64': 3.2.1
-      '@koromix/koffi-linux-riscv64': 3.2.1
-      '@koromix/koffi-linux-x64': 3.2.1
-      '@koromix/koffi-openbsd-ia32': 3.2.1
-      '@koromix/koffi-openbsd-x64': 3.2.1
-      '@koromix/koffi-win32-arm64': 3.2.1
-      '@koromix/koffi-win32-ia32': 3.2.1
-      '@koromix/koffi-win32-x64': 3.2.1
-
   koffi@3.3.3:
     optionalDependencies:
       '@koromix/koffi-android-arm64': 3.3.3
@@ -17139,6 +17266,29 @@ snapshots:
       '@koromix/koffi-win32-arm64': 3.3.3
       '@koromix/koffi-win32-ia32': 3.3.3
       '@koromix/koffi-win32-x64': 3.3.3
+
+  koffi@3.3.6:
+    optionalDependencies:
+      '@koromix/koffi-android-arm64': 3.3.6
+      '@koromix/koffi-android-x64': 3.3.6
+      '@koromix/koffi-darwin-arm64': 3.3.6
+      '@koromix/koffi-darwin-x64': 3.3.6
+      '@koromix/koffi-freebsd-arm64': 3.3.6
+      '@koromix/koffi-freebsd-ia32': 3.3.6
+      '@koromix/koffi-freebsd-x64': 3.3.6
+      '@koromix/koffi-linux-arm': 3.3.6
+      '@koromix/koffi-linux-arm64': 3.3.6
+      '@koromix/koffi-linux-ia32': 3.3.6
+      '@koromix/koffi-linux-loong64': 3.3.6
+      '@koromix/koffi-linux-ppc64': 3.3.6
+      '@koromix/koffi-linux-riscv64': 3.3.6
+      '@koromix/koffi-linux-x64': 3.3.6
+      '@koromix/koffi-openbsd-arm64': 3.3.6
+      '@koromix/koffi-openbsd-ia32': 3.3.6
+      '@koromix/koffi-openbsd-x64': 3.3.6
+      '@koromix/koffi-win32-arm64': 3.3.6
+      '@koromix/koffi-win32-ia32': 3.3.6
+      '@koromix/koffi-win32-x64': 3.3.6
 
   kysely@0.29.7: {}
 
@@ -17302,6 +17452,8 @@ snapshots:
   long@5.3.2: {}
 
   longest-streak@3.1.0: {}
+
+  lossless-json@4.3.3: {}
 
   lru-cache@11.5.3: {}
 
@@ -18042,13 +18194,13 @@ snapshots:
       - encoding
     optional: true
 
-  openai@7.47.0(@aws-sdk/credential-provider-node@3.972.92)(@smithy/hash-node@4.5.2)(@smithy/signature-v4@5.7.4)(google-auth-library@10.9.1(supports-color@10.2.2))(undici@8.12.3)(ws@8.22.0)(zod@4.6.7):
+  openai@7.47.0(@aws-sdk/credential-provider-node@3.972.92)(@smithy/hash-node@4.5.2)(@smithy/signature-v4@5.7.4)(google-auth-library@10.9.1(supports-color@10.2.2))(undici@8.12.4)(ws@8.22.0)(zod@4.6.7):
     optionalDependencies:
       '@aws-sdk/credential-provider-node': 3.972.92
       '@smithy/hash-node': 4.5.2
       '@smithy/signature-v4': 5.7.4
       google-auth-library: 10.9.1(supports-color@10.2.2)
-      undici: 8.12.3
+      undici: 8.12.4
       ws: 8.22.0
       zod: 4.6.7
 
@@ -19045,7 +19197,7 @@ snapshots:
       - bare-buffer
       - react-native-b4a
 
-  tar@7.5.22(patch_hash=fd38a2350a01d3eec80c7c393b88647baea164251683cffc481cb3aa5df2a75c):
+  tar@7.5.22:
     dependencies:
       '@isaacs/fs-minipass': 4.0.1
       chownr: 3.0.0
@@ -19082,7 +19234,7 @@ snapshots:
 
   tinyexec@1.3.1: {}
 
-  tinyglobby@0.2.17:
+  tinyglobby@0.2.17(patch_hash=80f03d093d02b02b01bb368d96c6f8fc70b768c4c2a226f8bb1c1cd1a1cd63d7):
     dependencies:
       fdir: 6.5.0(picomatch@4.0.7)
       picomatch: 4.0.7
@@ -19113,7 +19265,7 @@ snapshots:
       '@tokenizer/token': 0.3.0
       ieee754: 1.2.1
 
-  tokenjuice@0.11.0: {}
+  tokenjuice@0.11.2: {}
 
   totalist@3.0.1: {}
 
@@ -19154,7 +19306,7 @@ snapshots:
       rolldown: 1.2.15
       rolldown-plugin-dts: 0.28.8(rolldown@1.2.15)(typescript@7.1.0-dev.20261028.1)
       tinyexec: 1.3.1
-      tinyglobby: 0.2.17
+      tinyglobby: 0.2.17(patch_hash=80f03d093d02b02b01bb368d96c6f8fc70b768c4c2a226f8bb1c1cd1a1cd63d7)
       tinyps: 0.5.1
       unconfig-core: 7.5.0
       verkit: 0.5.0
@@ -19258,7 +19410,7 @@ snapshots:
 
   undici@8.11.2: {}
 
-  undici@8.12.3: {}
+  undici@8.12.4: {}
 
   unhomoglyph@1.0.6: {}
 
@@ -19347,7 +19499,7 @@ snapshots:
       picomatch: 4.0.7
       postcss: 8.5.32
       rolldown: 1.2.14
-      tinyglobby: 0.2.17
+      tinyglobby: 0.2.17(patch_hash=80f03d093d02b02b01bb368d96c6f8fc70b768c4c2a226f8bb1c1cd1a1cd63d7)
     optionalDependencies:
       '@types/node': 26.6.6
       esbuild: 0.28.2
@@ -19360,7 +19512,7 @@ snapshots:
     optionalDependencies:
       vite: 8.3.5(@types/node@26.6.6)(esbuild@0.28.2)(jiti@2.7.0)(tsx@4.23.15)(yaml@2.9.1)
 
-  vitest@5.0.5(patch_hash=a2a78abe9470cc2ceb0d4eeb81acfc62d6180e9990bc866a7771ba60b1320ea6)(@opentelemetry/api@1.9.1)(@types/node@26.6.6)(@vitest/browser-playwright@5.0.5)(@vitest/coverage-v8@5.0.5)(@vitest/ui@5.0.5)(jsdom@30.1.3(@noble/hashes@2.4.0))(vite@8.3.5(@types/node@26.6.6)(esbuild@0.28.2)(jiti@2.7.0)(tsx@4.23.15)(yaml@2.9.1)):
+  vitest@5.0.5(patch_hash=1aca6d2c713739c6cbd32d4af2aed8655bb01cd558d5a1cc86cf8187eaa59609)(@opentelemetry/api@1.9.1)(@types/node@26.6.6)(@vitest/browser-playwright@5.0.5)(@vitest/coverage-v8@5.0.5)(@vitest/ui@5.0.5)(jsdom@30.1.3(@noble/hashes@2.4.0))(vite@8.3.5(@types/node@26.6.6)(esbuild@0.28.2)(jiti@2.7.0)(tsx@4.23.15)(yaml@2.9.1)):
     dependencies:
       '@types/chai': 5.2.3
       '@vitest/mocker': 5.0.5(vite@8.3.5(@types/node@26.6.6)(esbuild@0.28.2)(jiti@2.7.0)(tsx@4.23.15)(yaml@2.9.1))
@@ -19373,7 +19525,7 @@ snapshots:
       std-env: 4.3.0
       tinybench: 6.2.2
       tinyexec: 1.3.1
-      tinyglobby: 0.2.17
+      tinyglobby: 0.2.17(patch_hash=80f03d093d02b02b01bb368d96c6f8fc70b768c4c2a226f8bb1c1cd1a1cd63d7)
       vite: 8.3.5(@types/node@26.6.6)(esbuild@0.28.2)(jiti@2.7.0)(tsx@4.23.15)(yaml@2.9.1)
       why-is-node-running: 3.2.1
     optionalDependencies:
@@ -19386,7 +19538,7 @@ snapshots:
     transitivePeerDependencies:
       - msw
 
-  vscode-jsonrpc@8.2.1: {}
+  vscode-jsonrpc@10.0.0: {}
 
   vscode-jsonrpc@9.0.3: {}
 
@@ -19598,8 +19750,6 @@ snapshots:
       zod: 4.6.7
 
   zod@3.25.76: {}
-
-  zod@4.3.6: {}
 
   zod@4.6.7: {}
 

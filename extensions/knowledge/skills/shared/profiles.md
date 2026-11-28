@@ -69,8 +69,9 @@ fine. Read only the layout for the page you are writing:
 introduction, State and the sections their ontology definition describes.
 
 Individual pull requests, CI runs, commits, branches and benchmark numbers are
-claims, not page content, unless one is itself a decision, a milestone or a
-constraint.
+not page content unless one is itself a decision, a milestone or a constraint.
+Save one as a claim only for its outcome (merged, released, abandoned) or a
+decision about it; its intermediate states stay in the conversation.
 
 ## Route facts to the right page
 

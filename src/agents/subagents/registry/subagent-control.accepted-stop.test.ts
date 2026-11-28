@@ -433,11 +433,12 @@ it.each([
         expect(getRpcSource(runId)?.input.abortSignal.aborted).toBe(false);
       }
       releaseTail.resolve();
-      await expect(pending).rejects.toThrow("Caller control revoked");
+      // A revocation after the Stop was admitted applies to the caller's next request.
+      await expect(pending).resolves.toMatchObject({ found: true });
       expect(settlement.status).toBe("fulfilled");
       expect(subagentRuns.get(runId)?.execution.status).toBe("terminal");
       expect(subagentRuns.get(runId)?.endedReason).toBe(SUBAGENT_ENDED_REASON_KILLED);
-      expect(onResult).not.toHaveBeenCalled();
+      expect(onResult).toHaveBeenCalledTimes(1);
       if (mode === "replacement") {
         expect(replacement?.controller.signal.aborted).toBe(false);
       } else if (mode === "already terminal") {
@@ -542,12 +543,13 @@ it.for(["canonical", "raw"] as const)(
       expect(untouchedSettlement.status).toBe("pending");
       expect(untouched.controller.signal.aborted).toBe(false);
       releaseCancelled.resolve();
-      await expect(withinTest(pending, signal)).rejects.toThrow("Caller control revoked");
+      // The admitted Stop finishes and reports, although its own abort revoked the caller.
+      await expect(withinTest(pending, signal)).resolves.toMatchObject({ found: true });
       expect(cancelledSettlement.status).toBe("fulfilled");
       expect(untouchedSettlement.status).toBe("pending");
       expect(untouched.controller.signal.aborted).toBe(false);
       expect(untouched.entry!.input.retirementRequested).not.toBe(true);
-      expect(onResult).not.toHaveBeenCalled();
+      expect(onResult).toHaveBeenCalledTimes(1);
     } finally {
       releaseCancelled.resolve();
       releaseUntouched.resolve();

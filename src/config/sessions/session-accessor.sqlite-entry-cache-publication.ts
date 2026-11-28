@@ -302,9 +302,7 @@ function publishSessionSharingFieldChange(
 ): void {
   publishTrackedCacheUpdate(
     database,
-    () => {
-      commitSessionSharingFieldChange(database, sessionKey, change);
-    },
+    () => commitSessionSharingFieldChange(database, sessionKey, change),
     () =>
       stageSessionSharingPublication(
         database,

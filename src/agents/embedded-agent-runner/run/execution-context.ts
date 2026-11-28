@@ -1,4 +1,4 @@
-import type { prepareCronRootSessionGeneration } from "../../../config/sessions/session-delivery-generation.js";
+import type { TranscriptLease } from "../../../config/sessions/transcript-lease.js";
 import type { ContextEngine } from "../../../context-engine/types.js";
 import type { getGlobalHookRunner } from "../../../plugins/hook-runner-global.js";
 import type { createStageTimingTracker } from "../../../shared/stage-timing.js";
@@ -21,7 +21,7 @@ export type PreparedEmbeddedRunInput = {
   modelCallSequence?: { value: number };
   /** Retain lazy-writer cleanup with this prepared runtime after its logical result. */
   onInitialWriterPrepared: (resource: AsyncDisposable) => void;
-  preReplyGeneration?: Awaited<ReturnType<typeof prepareCronRootSessionGeneration>>;
+  preReplyGeneration?: TranscriptLease;
   runParams: RunEmbeddedAgentParamsWithSessionFile;
   sessionAdmission?: Awaited<ReturnType<typeof assertAgentHarnessRunAdmission>>;
   contextEngineAgentId?: string;

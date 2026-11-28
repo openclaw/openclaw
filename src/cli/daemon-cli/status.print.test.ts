@@ -112,11 +112,6 @@ vi.mock("./shared.js", async (importOriginal) => ({
   safeDaemonEnv: () => [],
 }));
 
-vi.mock("./status.gather.js", () => ({
-  renderPortDiagnosticsForCli: () => [],
-  resolvePortListeningAddresses: () => ["127.0.0.1:18789"],
-}));
-
 const service: DaemonStatus["service"] = {
   label: "LaunchAgent",
   loaded: true,
@@ -159,6 +154,35 @@ describe("printDaemonStatus", () => {
     renderSystemdUnavailableHintsMock.mockReset().mockReturnValue([]);
     isWSLEnvMock.mockClear();
   });
+
+  it.each([false, true])(
+    "renders real port diagnostics and listening addresses (RPC ok=%s)",
+    (rpcOk) => {
+      printDaemonStatus({
+        service: runningService,
+        gateway,
+        port: {
+          port: 18789,
+          status: "busy",
+          listeners: [
+            { pid: 42, command: "synthetic", address: "TCP 127.0.0.1:18789 (LISTEN)" },
+            { pid: 42, command: "synthetic", address: "127.0.0.1:18789" },
+            { pid: 42, command: "synthetic", address: "TCP [::1]:18789 (LISTEN)" },
+          ],
+          hints: ["synthetic port hint"],
+        },
+        rpc: { ok: rpcOk },
+      });
+
+      expect(output(runtime.error).includes("Port 18789 is already in use.")).toBe(!rpcOk);
+      expect(output(runtime.error).includes("synthetic port hint")).toBe(!rpcOk);
+      expect(
+        output()
+          .split("\n")
+          .filter((line) => line.startsWith("Listening:")),
+      ).toEqual(["Listening: 127.0.0.1:18789, [::1]:18789"]);
+    },
+  );
 
   it("preserves Gateway metadata and input while redacting private definitions in JSON", () => {
     const server = { version: "2026.5.6", buildId: "build-2026.5.6", connId: "conn-1" };

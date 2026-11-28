@@ -26,6 +26,7 @@ import { performance } from "node:perf_hooks";
 import { pathToFileURL } from "node:url";
 import { parseArgs } from "node:util";
 import type { OpenClawConfig } from "../../src/config/types.openclaw.js";
+import { startCollectedHeapSampling } from "../lib/heap-sampling.ts";
 
 const { values } = parseArgs({
   options: {
@@ -118,12 +119,7 @@ try {
   global.gc?.();
   const beforeLoad = loadavg();
   if (values.mode === "allocation") {
-    inspector.connect();
-    await inspector.post("HeapProfiler.startSampling", {
-      samplingInterval: 4096,
-      includeObjectsCollectedByMajorGC: true,
-      includeObjectsCollectedByMinorGC: true,
-    });
+    await startCollectedHeapSampling(inspector, 4096);
   } else if (values.mode === "cpu-profile") {
     inspector.connect();
     await inspector.post("Profiler.enable");

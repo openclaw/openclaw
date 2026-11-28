@@ -351,7 +351,12 @@ describeStandaloneMockServer("standalone Control UI mock server", () => {
         ]),
       ).toMatchObject([
         {
-          sessionInfo: { hasActiveRun: true, status: "running", activeRunIds: ["mock-plan-run"] },
+          sessionInfo: {
+            key: "agent:main:main",
+            hasActiveRun: true,
+            status: "running",
+            activeRunIds: ["mock-plan-run"],
+          },
           inFlightRun: { runId: "mock-plan-run" },
         },
       ]);
@@ -475,7 +480,7 @@ describeStandaloneMockServer("standalone Control UI mock server", () => {
           await page.screenshot({ path: path.join(artifacts, "chat.png") });
         }
         expect(await page.locator(".community-invite-card").count()).toBe(0);
-        expect(await page.getByText("Server updated", { exact: true }).count()).toBe(0);
+        expect(await page.getByText("OpenClaw was updated", { exact: true }).count()).toBe(0);
         const paneState = await page
           .locator("openclaw-chat-pane.chat-pane-cache__pane--active")
           .evaluate(async (pane) => {

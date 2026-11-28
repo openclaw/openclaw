@@ -133,7 +133,9 @@ never needs the agent.
 ## The board
 
 - **Fluid grid.** Drag widgets by their handle; everything reflows and
-  compacts automatically. Resize by handle or pick a size preset (small,
+  compacts automatically. When you drop or resize a widget within a tab, it
+  stays where you left it while the change saves. If the save fails, the board
+  shows the saved layout and an error. Resize by handle or pick a size preset (small,
   medium, large, extra large) from the widget menu. Nobody places pixels —
   not you, not the agent. On narrow boards, widgets stack at full width in
   their saved order; widening the board restores their saved column widths.
@@ -143,7 +145,12 @@ never needs the agent.
   every widget keeps the size you gave it and its content scrolls inside.
 - **Automatic height.** HTML widgets adjust their height to fit their content.
   Resizing by handle or choosing a size preset fixes the height. Choose
-  **Auto height** from the widget menu to fit the content again.
+  **Auto height** from the widget menu to fit the content again. On touch layouts,
+  auto-height HTML widgets can grow taller so the board handles more of the
+  scrolling. Fixed-height widgets keep their saved sizes. Switching a very tall
+  auto-height widget to fixed height can shrink it to the standard grid limit;
+  switching to a mouse layout can also restore the more compact sizing. Very long
+  documents can still scroll inside a widget when they reach its size limit.
 - **Tabs.** A board can have several pages — say, an overview tab and a
   focused tab with one big widget. Each tab remembers its widget layout.
   Visited tabs stay loaded while the dashboard is retained, preserving local

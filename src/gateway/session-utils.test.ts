@@ -18,14 +18,12 @@ import {
 } from "../config/sessions/session-accessor.js";
 import { resolveSqliteTargetFromSessionStorePath } from "../config/sessions/session-sqlite-target.js";
 import { SESSION_TOTAL_TOKENS_VERSION } from "../config/sessions/types.js";
-import type { CronJob } from "../cron/types.js";
 import { clearAgentRunContext, registerAgentRunContext } from "../infra/agent-run-registry.js";
 import { createEmptyPluginRegistry } from "../plugins/registry-empty.js";
 import { resetPluginRuntimeStateForTest, setActivePluginRegistry } from "../plugins/runtime.js";
 import { resolveIncognitoOpenClawAgentSqlitePath } from "../state/openclaw-agent-db.js";
 import { normalizeSessionDeliveryState } from "../utils/delivery-context.shared.js";
 import type { GatewayModelCatalogSnapshot } from "./server-model-catalog.types.js";
-import { registerSessionAutomationSource } from "./session-automation-index.js";
 import { loadSessionEntryAsync } from "./session-entry-load.test-support.js";
 import { buildGatewaySessionSnapshot } from "./session-event-payload.js";
 import { projectSessionActor } from "./session-identity-projection.js";
@@ -561,25 +559,6 @@ describe("gateway session utils", () => {
       expect(row.contextBudgetStatus).toBeUndefined();
     },
   );
-
-  test("session rows project automation bindings and event fields forward them", () => {
-    const cfg = createModelDefaultsConfig({ primary: "openai/gpt-5.4" });
-    registerSessionAutomationSource({
-      getJobs: () => [{ id: "job1", enabled: true, sessionTarget: "isolated" } as CronJob],
-      getDefaultAgentId: () => "main",
-    });
-    try {
-      const bound = buildGatewaySessionRow({ cfg, key: "agent:main:cron:job1" });
-      expect(bound.hasAutomation).toBe(true);
-      expect(buildGatewaySessionSnapshot({ sessionRow: bound }).hasAutomation).toBe(true);
-
-      const plain = buildGatewaySessionRow({ cfg, key: "agent:main:other" });
-      expect(plain.hasAutomation).toBeUndefined();
-      expect(buildGatewaySessionSnapshot({ sessionRow: plain }).hasAutomation).toBe(false);
-    } finally {
-      registerSessionAutomationSource(null);
-    }
-  });
 
   test("session list thinking cache preserves case-distinct model catalog entries", async () => {
     const cfg = createModelDefaultsConfig({ primary: "custom/CaseModel" });

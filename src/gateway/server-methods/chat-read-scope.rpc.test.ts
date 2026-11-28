@@ -1,5 +1,6 @@
 import { expectDefined } from "@openclaw/normalization-core";
 import { describe, expect, it, vi } from "vitest";
+import { GATEWAY_CLIENT_CAPS } from "../../../packages/gateway-protocol/src/client-info.js";
 import { captureRuntimeConfigAsyncReader } from "../../config/config.js";
 import { setRuntimeConfigSnapshot } from "../../config/runtime-snapshot.js";
 import {
@@ -124,7 +125,7 @@ describe("registered chat read scope", () => {
           "pending receipt",
         );
         try {
-          receipt.finish("cancelled");
+          receipt.finish("cancelled", "failed");
           const context = await createHistoryReadContext({ getRuntimeConfig: () => cfg });
           const history = await request(context, client, "chat.history", {
             sessionKey: scope.sessionKey,
@@ -148,7 +149,7 @@ describe("registered chat read scope", () => {
             }
           }
         } finally {
-          receipt.finish("interrupted");
+          receipt.finish("interrupted", "failed");
         }
       });
     },
@@ -160,6 +161,7 @@ describe("registered chat read scope", () => {
       ensureUserProfilesSchema({});
       using _ = { [Symbol.dispose]: (await prepareUserProfileCatalog()).release };
       const client = roleClient("write", "pagination-owner");
+      client.connect.caps = [GATEWAY_CLIENT_CAPS.CHAT_HISTORY_QUEUE_OBSERVATION];
       const scope = {
         agentId: "main",
         sessionKey: "agent:main:paged-inputs",
@@ -189,8 +191,8 @@ describe("registered chat read scope", () => {
         const queued = expectDefined(receipts[0], "queued receipt");
         const cancelled = expectDefined(receipts[1], "cancelled receipt");
         const interrupted = expectDefined(receipts[2], "interrupted receipt");
-        cancelled.finish("cancelled");
-        interrupted.finish("interrupted");
+        cancelled.finish("cancelled", "failed");
+        interrupted.finish("interrupted", "failed");
         await interrupted.settled?.();
         const retained = await readPendingInputSnapshotForTest(scope, "synthetic-page-2:user");
         expect(retained.pending).toMatchObject({
@@ -217,6 +219,7 @@ describe("registered chat read scope", () => {
         const first = (await history()).pendingInputs;
         expect(first).toEqual({
           total: 22,
+          hasQueuedInput: true,
           items: [],
           queuedCount: 0,
           nextBefore: expect.any(Number),
@@ -237,7 +240,7 @@ describe("registered chat read scope", () => {
           ).toThrow("Pending input ownership ended");
         }
         await queued.run(() => appendTranscriptMessage(scope, { message: queued.message }));
-        queued.finish("interrupted");
+        queued.finish("interrupted", "failed");
         expect((await history(first.nextBefore)).pendingInputs).toMatchObject({
           total: 21,
           items: [{ id: cancelled.inputId, state: "cancelled" }],
@@ -249,10 +252,15 @@ describe("registered chat read scope", () => {
           sessionId: "replacement-physical-session",
           updatedAt: 2,
         });
-        expect((await history()).pendingInputs).toEqual({ items: [], total: 0, queuedCount: 0 });
+        expect((await history()).pendingInputs).toEqual({
+          items: [],
+          total: 0,
+          hasQueuedInput: false,
+          queuedCount: 0,
+        });
       } finally {
         for (const receipt of receipts) {
-          receipt.finish("interrupted");
+          receipt.finish("interrupted", "failed");
         }
       }
     });

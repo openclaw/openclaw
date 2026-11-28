@@ -16,6 +16,7 @@ import {
   sharedAgentIdentityProjection,
   sharedAgentsProjection,
 } from "../../lib/reactive/shared-application-projections.ts";
+import { readVisibleTime } from "../../lib/reactive/visible-clock.ts";
 import { resolveSessionDisplayName } from "../../lib/session-display.ts";
 import {
   isSessionKeyAddressable,
@@ -37,6 +38,7 @@ import { ACTIVITY_PHONE_QUERY, sessionActivityOwner } from "./session-activity.t
 registerEnglishCatalog(registerActivityEnglish);
 
 export function SessionLinkView(props: {
+  elementRef?: (key: string) => (element: HTMLDivElement) => void;
   row: GatewaySessionRow;
   onSummaryRetry?: (row: GatewaySessionRow) => void;
   presentationRevision?: number;
@@ -85,11 +87,12 @@ export function SessionLinkView(props: {
     return presenceViewerLabel(owner());
   };
   const activityAt = () => sessionActivityTimestamp(props.row);
-  const relativeTime = createMemo(() => {
+  const relativeTime = () => {
     void props.presentationRevision;
     getLocale();
+    readVisibleTime(60_000);
     return formatRelativeTimestamp(activityAt(), { fallback: "" });
-  });
+  };
   const activeObserverRunId = createMemo(() => {
     const runId = props.row.observerDigest?.runId;
     return props.row.hasActiveRun === true && runId && props.row.activeRunIds?.includes(runId)
@@ -153,6 +156,7 @@ export function SessionLinkView(props: {
   );
   return (
     <div
+      ref={[props.elementRef?.(props.row.key)]}
       class={[
         "activity-feed__session-row",
         { "activity-feed__session-row--link": Boolean(target()) },

@@ -686,14 +686,21 @@ describe("openclaw-board-view", () => {
     await vi.waitFor(() => expect(cells[1]?.getAttribute("tabindex")).toBe("0"));
   });
 
-  it("uses Alt+Arrow as the keyboard reorder fallback and announces the move", async () => {
-    const applyOps = vi.fn(async () => undefined);
+  it("navigates the nudged order while saving and announces only after acceptance", async () => {
+    const save = deferred();
+    const applyOps = vi.fn(() => save.promise);
     const view = await mount({ callbacks: callbacks({ applyOps }) });
-    const secondCell = view.querySelectorAll<HTMLElement>('[data-test-id="board-widget"]')[1];
-    keyDown(secondCell, "ArrowLeft", true);
-    await vi.waitFor(() =>
-      expect(applyOps).toHaveBeenCalledWith([{ kind: "widget_move", name: "beta", position: 0 }]),
-    );
+    const [first, second] = view.querySelectorAll<HTMLElement>('[data-test-id="board-widget"]');
+    second!.focus();
+    keyDown(second, "ArrowLeft", true);
+    await settleCells(view);
+    expect(applyOps).toHaveBeenCalledWith([{ kind: "widget_move", name: "beta", position: 0 }]);
+    expect(second!.getAttribute("aria-posinset")).toBe("1");
+    expect(document.activeElement).toBe(second);
+    expect(view.querySelector(".board-announcer")?.textContent).toBe("");
+    keyDown(second, "ArrowRight");
+    await vi.waitFor(() => expect(document.activeElement).toBe(first));
+    save.resolve();
     await vi.waitFor(() => expectText(view.querySelector(".board-announcer"), "Moved Beta chart"));
   });
 

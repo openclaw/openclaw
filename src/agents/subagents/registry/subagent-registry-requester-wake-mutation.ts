@@ -1,9 +1,6 @@
 import { persistGatewaySessionLifecycleEvent } from "../../../gateway/session-lifecycle-state.js";
 import { getGatewayContextResolver } from "../../../plugins/runtime/gateway-request-scope.js";
-import { recordGatewaySessionRunFailure } from "../../../sessions/session-run-error.js";
 import type { OpenClawStateWorkerContext } from "../../../state/openclaw-state-worker-context.types.js";
-import { buildAnnounceIdempotencyKey } from "../../announce-idempotency.js";
-import { renderRuntimeCoordinationFailureCopy } from "../../failover/assistant-request-failure-copy.js";
 import type { SubagentAnnounceDeliveryResult } from "../announce/subagent-announce-dispatch.js";
 import { mutateRequesterCompletionBatch } from "../completion/subagent-completion-admission.store.js";
 import type {
@@ -15,10 +12,7 @@ import { resolveRequesterDeliveryOutcome } from "./subagent-delivery-state.js";
 import type { SubagentLifecycleWakeContext } from "./subagent-registry-lifecycle-context.js";
 import { assertSubagentRegistryWriteSourceCurrent } from "./subagent-registry-persistence.js";
 import type { RequesterSettleWakeState, SubagentRunRecord } from "./subagent-registry.types.js";
-import {
-  buildRequesterSettleWakeIdentity,
-  sameRequesterSettleRunIdentity,
-} from "./subagent-requester-settle-identity.js";
+import { sameRequesterSettleRunIdentity } from "./subagent-requester-settle-identity.js";
 import { getSubagentRunRuntimeKey, isSameSubagentRunOwner } from "./subagent-run-generation.js";
 
 export type RequesterWakeMutationReceipt = { committed?: RequesterWakeCommittedWrite };
@@ -166,10 +160,7 @@ export function createRequesterWakeSettlement(params: {
     admittedWake,
     release,
   } = params;
-  const outcome = resolveRequesterDeliveryOutcome(
-    batch.map((member) => context.options.runs.get(member.runId) ?? member),
-    observedOutcome,
-  );
+  let outcome = observedOutcome;
   // Retry bookkeeping with the observed outcome, never by replaying delivery or inventing failure.
   const receipt: RequesterWakeMutationReceipt = {};
   const retireInputs = batch.map(captureSubagentControllerInputRetirement);
@@ -190,6 +181,12 @@ export function createRequesterWakeSettlement(params: {
         (outcome !== undefined ||
           receipt.committed !== undefined ||
           members.length === batch.length);
+      if (settlesMembers && outcome && !receipt.committed) {
+        outcome = resolveRequesterDeliveryOutcome(
+          members.map((member) => context.options.runs.get(member.runId) ?? member),
+          outcome,
+        );
+      }
       if (
         settlesMembers &&
         !(await mutateRequesterSettleWakeBatch(
@@ -205,57 +202,33 @@ export function createRequesterWakeSettlement(params: {
       }
       if (settlesMembers) {
         const requester = batch[0];
+        // A yielded request whose wake never ran ends as an ordinary run; the children's
+        // status is already in its history.
+        const runId = admittedWake?.requesterRunId;
         if (
           !admittedWake?.pauseNotice &&
           admittedWake?.requesterYieldBatch &&
           requester?.completionRequesterSessionId &&
+          runId &&
           outcome?.delivered !== true
         ) {
-          const error =
-            outcome?.error ?? "Child completion could not continue the yielded request.";
-          const notice = renderRuntimeCoordinationFailureCopy("child_completion_delivery_failed");
-          const runId = admittedWake.requesterRunId;
-          if (runId) {
-            // A newer turn, reset, or Stop cannot inherit the failed batch's terminal.
-            await persistGatewaySessionLifecycleEvent({
-              sessionKey: requester.requesterSessionKey,
-              agentId: requester.requesterAgentId,
-              expectedWriter: {
-                runId,
-                sessionId: requester.completionRequesterSessionId,
-                lifecycleRevision: requester.completionRequesterLifecycleRevision,
-                requireYielded: true,
-              },
-              event: {
-                runId,
-                sessionId: requester.completionRequesterSessionId,
-                ts: Date.now(),
-                data: { phase: "error", error, errorNotice: notice },
-              },
-            });
-          } else {
-            // Stable batches lost their original run id. Report the batch failure,
-            // never assign whichever writer now occupies this session to that batch.
-            const { batchKey } = buildRequesterSettleWakeIdentity({
-              requesterSessionKey: requester.requesterSessionKey,
-              requesterAgentId: requester.requesterAgentId,
-              batchRunIds: admittedWake.batchRunIds ?? batch.map((entry) => entry.runId),
-              rearmGeneration,
-            });
-            await recordGatewaySessionRunFailure({
-              target: {
-                sessionKey: requester.requesterSessionKey,
-                agentId: requester.requesterAgentId,
-                storePath: requester.requesterStorePath,
-                sessionId: requester.completionRequesterSessionId,
-                expectedLifecycleRevision: requester.completionRequesterLifecycleRevision,
-              },
-              runId: buildAnnounceIdempotencyKey(`${batchKey}:delivery-failure`),
-              error,
-              notice,
-              assertCommitAllowed: () => assertSubagentRegistryWriteSourceCurrent(stateContext),
-            });
-          }
+          // A newer turn, reset, or Stop cannot inherit this batch's terminal.
+          await persistGatewaySessionLifecycleEvent({
+            sessionKey: requester.requesterSessionKey,
+            agentId: requester.requesterAgentId,
+            expectedWriter: {
+              runId,
+              sessionId: requester.completionRequesterSessionId,
+              lifecycleRevision: requester.completionRequesterLifecycleRevision,
+              requireYielded: true,
+            },
+            event: {
+              runId,
+              sessionId: requester.completionRequesterSessionId,
+              ts: Date.now(),
+              data: { phase: "end" },
+            },
+          });
         }
         for (const retire of retireInputs) {
           retire();

@@ -48,6 +48,10 @@ describe("screen tool", () => {
     });
     expect(Value.Check(tool.outputSchema!, result.details)).toBe(true);
     expect(tool.description).toContain("does not publish");
+    expect(tool.description).toContain("Never create/expand a dashboard to open a panel");
+    expect(tool.description).toContain("browser_show is for agent Browser only");
+    expect(tool.description).toContain("app previews use portal_show(portalId)");
+    expect(tool.description).toContain('Optional dock="right"|"bottom"');
   });
 
   it.each([

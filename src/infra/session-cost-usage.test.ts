@@ -188,6 +188,36 @@ it("counts only measured turns; a turn with unknown usage still counts as a mess
   expect(summary).not.toHaveProperty("usageReport");
 });
 
+it("tracks input whose cache use the provider did not report", async () => {
+  const call = (timestamp: string, cacheTelemetry?: { state: string }) =>
+    assistant(
+      timestamp,
+      {
+        input: 1_000,
+        output: 10,
+        cacheRead: 0,
+        cacheWrite: 0,
+        totalTokens: 1_010,
+        cost: { total: 0.01 },
+        ...(cacheTelemetry ? { cacheTelemetry } : {}),
+      },
+      { provider: "ollama", model: "llama" },
+    );
+  const sessionFile = path.join(sessionsDir, "cache-telemetry.jsonl");
+  await writeEntries(sessionFile, [
+    { type: "session", version: 1, id: "cache-telemetry" },
+    call("2026-02-05T12:00:00.000Z", { state: "unavailable" }),
+    call("2026-02-05T12:01:00.000Z", { state: "available" }),
+    // Usage recorded before cache telemetry existed counts as measured.
+    call("2026-02-05T12:02:00.000Z"),
+  ]);
+  const expected = { input: 3_000, cacheUnmeasuredInput: 1_000 };
+  expect(await readSummary({ sessionFile })).toMatchObject(expected);
+  // The cached daily totals carry it through the stored quarter summaries.
+  const range = { startMs: Date.UTC(2026, 1, 5), endMs: Date.UTC(2026, 1, 6) - 1 };
+  expect((await readCachedAggregate(range)).totals).toMatchObject(expected);
+});
+
 it("prices and aggregates usage with each row's agent-local registry", async () => {
   const provider = "demo-agent-scope";
   const model = "demo-model";
@@ -355,6 +385,16 @@ it("fills every calendar day across a spring-forward DST transition", async () =
   );
   expect(summary.daily.every((d) => d.totalTokens === 0 && d.totalCost === 0)).toBe(true);
   expect(summary.totals.totalTokens).toBe(0);
+});
+
+it("keeps four-digit UTC dates when filling an early calendar window", async () => {
+  const summary = await readAggregate({
+    startMs: Date.parse("0999-12-30T00:00:00Z"),
+    endMs: Date.parse("1000-01-01T23:59:59.999Z"),
+    dayBucket: { mode: "utc-offset", utcOffsetMinutes: 0 },
+  });
+  expect(summary.days).toBe(3);
+  expect(summary.daily.map(({ date }) => date)).toEqual(["0999-12-30", "0999-12-31", "1000-01-01"]);
 });
 
 it("limits transcript stat fanout when listing durable cost inputs", async () => {

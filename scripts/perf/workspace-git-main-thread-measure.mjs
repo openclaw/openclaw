@@ -6,13 +6,12 @@
 // This counts JavaScript sync fs API calls, not kernel syscalls. Git workers retain the
 // metadata work; thread CPU/allocations cover the main thread, process CPU includes workers.
 import assert from "node:assert/strict";
-import fs from "node:fs";
 import { Session } from "node:inspector/promises";
-import { syncBuiltinESMExports } from "node:module";
 import os from "node:os";
 import path from "node:path";
 import { pathToFileURL } from "node:url";
 import { parseArgs } from "node:util";
+import { countSyncFsCalls } from "../lib/sync-fs-counters.mjs";
 
 const { values } = parseArgs({
   options: {
@@ -42,40 +41,30 @@ const selectBootstrap = () =>
     requireWorkspaceOnly: true,
   });
 let counts = {};
-const originals = new Map();
+let restoreFs;
 const inspector = values.mode === "allocation" ? new Session() : undefined;
 const originalNow = Date.now;
 let logicalNow = originalNow();
 try {
   if (values.mode === "counts") {
-    for (const name of [
-      "existsSync",
-      "accessSync",
-      "statSync",
-      "lstatSync",
-      "realpathSync",
-      "readdirSync",
-      "openSync",
-      "fstatSync",
-      "readSync",
-      "readFileSync",
-      "closeSync",
-    ]) {
-      const original = fs[name];
-      originals.set(name, original);
-      const wrapped = (...args) => {
+    restoreFs = countSyncFsCalls(
+      [
+        "existsSync",
+        "accessSync",
+        "statSync",
+        "lstatSync",
+        "realpathSync",
+        "readdirSync",
+        "openSync",
+        "fstatSync",
+        "readSync",
+        "readFileSync",
+        "closeSync",
+      ],
+      (name) => {
         counts[name] = (counts[name] ?? 0) + 1;
-        return original(...args);
-      };
-      if (original.native) {
-        wrapped.native = (...args) => {
-          counts[`${name}.native`] = (counts[`${name}.native`] ?? 0) + 1;
-          return original.native(...args);
-        };
-      }
-      fs[name] = wrapped;
-    }
-    syncBuiltinESMExports();
+      },
+    );
   }
   inspector?.connect();
   Date.now = () => logicalNow;
@@ -139,11 +128,6 @@ try {
 } finally {
   Date.now = originalNow;
   inspector?.disconnect();
-  for (const [name, original] of originals) {
-    fs[name] = original;
-  }
-  if (originals.size) {
-    syncBuiltinESMExports();
-  }
+  restoreFs?.();
   await drainGlobalSingletonLifecycleState();
 }

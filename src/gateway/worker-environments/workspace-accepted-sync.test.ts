@@ -14,11 +14,12 @@ import {
 import { useAutoCleanupTempDirTracker } from "../../../test/helpers/temp-dir.js";
 import { observeSettlement } from "../../agents/promise-settlement.test-support.js";
 import { runCommandWithTimeout, type SpawnResult } from "../../process/exec.js";
+import { createCommandResult as result } from "../../test-utils/process-result.js";
 import {
   WorkerTunnelOwnerDisconnectedError,
   type WorkerWorkspaceCommand,
 } from "./tunnel-contract.js";
-import { BUNDLE_HASH, prepareLocalWorkspaceRsyncBoundary, success } from "./tunnel.test-support.js";
+import { BUNDLE_HASH, prepareLocalWorkspaceRsyncBoundary } from "./tunnel.test-support.js";
 import { AcceptedWorkspacePublicationIndeterminateError } from "./workspace-accepted-publication.js";
 import {
   createAcceptedWorkspacePublisher,
@@ -99,10 +100,6 @@ function observeChild(
       onAbort();
     }
   });
-}
-
-function result(overrides: Partial<SpawnResult> = {}): SpawnResult {
-  return { ...success(), ...overrides };
 }
 
 function commandFailure(operation: string, code = 255) {

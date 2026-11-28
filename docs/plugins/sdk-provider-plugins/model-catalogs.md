@@ -125,10 +125,11 @@ the manifest order.
 Provider-scoped refreshes preserve explicit outcomes reported under a registered
 alias of the selected provider; unrelated sibling outcomes remain excluded.
 With a positive cache lifetime, validated empty results use the same
-successful-observation lifetime as nonempty results. After expiry, ordinary
-catalog reads return retained rows while the existing inventory owner refreshes
-the provider in the background. `ttlMs: 0` still disables response caching and
-does not record an expiry for this renewal path.
+successful-observation lifetime as nonempty results. A retained listing expires
+at the later of its cache deadline and 15 minutes after it was acquired. After
+expiry, ordinary catalog reads return retained rows while the existing inventory
+owner relists the provider in the background. `ttlMs: 0` still disables
+response caching and does not record an expiry for this renewal path.
 
 A successful authenticated outcome may include private `modelServiceTiers`
 observations: `{ modelId, runtimeId, api, baseUrl, serviceTiers }` rows bound to
@@ -351,6 +352,12 @@ receive an optional `signal`. Shutdown and plugin/config replacement abort it.
 Stop awaited acquisition when it aborts and finish resource cleanup before the
 hook settles. OpenClaw discards cancelled results and joins cleanup before a
 replacement can acquire the same agent resources.
+
+Simple completions copy the selected model from that prepared generation and
+create fresh request-local credential storage. They materialize the full captured
+catalog only for another-model lookup, inventory access, or model registration.
+Agent-session stores and custom SDK model resolvers retain full mutable registries;
+neither credentials nor mutable model records are shared between requests.
 
 A native-login synthetic auth result can include optional `nativeAuth.display`
 metadata: `kind: "subscription" | "api" | "native"` and a validated `plan` label.

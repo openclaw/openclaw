@@ -66,12 +66,21 @@ describe("web monitor inbox metadata cache", () => {
     await listener.close();
   });
 
-  it("group metadata cache serves reconnect metadata after live fetch failures", async () => {
+  it("bounds hydrated group metadata and serves reconnects after live fetch failures", async () => {
     const groupMetadataCache: NonNullable<InboxMonitorOptions["groupMetadataCache"]> = new Map();
     const onMessage = vi.fn(async (_msg: Parameters<InboxOnMessage>[0]) => {});
 
     const firstSock = getSock();
     firstSock.groupFetchAllParticipating.mockResolvedValueOnce({
+      ...Object.fromEntries(
+        Array.from(
+          { length: EXPECTED_WHATSAPP_GROUP_METADATA_CACHE_MAX_ENTRIES + 1 },
+          (_, index) => {
+            const id = `${1000 + index}@g.us`;
+            return [id, { id, subject: "Hydrated group", owner: undefined, participants: [] }];
+          },
+        ),
+      ),
       "123@g.us": groupMetadata({
         subject: "Recovered Group",
         participants: ["444@s.whatsapp.net"],
@@ -81,6 +90,8 @@ describe("web monitor inbox metadata cache", () => {
     await vi.waitFor(() =>
       expect(groupMetadataCache.get("123@g.us")?.subject).toBe("Recovered Group"),
     );
+    expect(groupMetadataCache.size).toBe(EXPECTED_WHATSAPP_GROUP_METADATA_CACHE_MAX_ENTRIES);
+    expect(groupMetadataCache.has("1000@g.us")).toBe(false);
     expect(
       (groupMetadataCache.get("123@g.us") as Record<string, unknown>)?.participants,
     ).toBeUndefined();
@@ -347,37 +358,6 @@ describe("web monitor inbox metadata cache", () => {
     await listener.close();
 
     expect(events.map((event) => sock.ev.listenerCount(event))).toEqual([0, 0, 0]);
-  });
-
-  it("group metadata cache bounds reconnect entries", async () => {
-    const groupMetadataCache: NonNullable<InboxMonitorOptions["groupMetadataCache"]> = new Map();
-    const groups = Object.fromEntries(
-      Array.from({ length: EXPECTED_WHATSAPP_GROUP_METADATA_CACHE_MAX_ENTRIES + 2 }, (_, index) => [
-        `${index}@g.us`,
-        {
-          id: `${index}@g.us`,
-          subject: `Group ${index}`,
-          owner: undefined,
-          participants: [],
-        },
-      ]),
-    );
-    const sock = getSock();
-    sock.groupFetchAllParticipating.mockResolvedValueOnce(groups);
-
-    const { listener } = await startInboxMonitor(vi.fn(async () => {}) as InboxOnMessage, {
-      groupMetadataCache,
-    });
-
-    await vi.waitFor(() => {
-      expect(groupMetadataCache.size).toBe(EXPECTED_WHATSAPP_GROUP_METADATA_CACHE_MAX_ENTRIES);
-    });
-    expect(groupMetadataCache.has("0@g.us")).toBe(false);
-    expect(
-      groupMetadataCache.has(`${EXPECTED_WHATSAPP_GROUP_METADATA_CACHE_MAX_ENTRIES + 1}@g.us`),
-    ).toBe(true);
-
-    await listener.close();
   });
 
   it("group metadata cache does not block inbound listeners during hydration", async () => {

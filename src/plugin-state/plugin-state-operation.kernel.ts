@@ -194,6 +194,10 @@ export function executePluginStateOperation(
     },
     set(index, rawKey, value, options) {
       const { options: scope, view } = requireScope(index, true);
+      const companion = options?.evictSameKeysFrom;
+      if (companion !== undefined) {
+        requireScope(companion, true);
+      }
       const prepared = prepareRegisterParams(
         rawKey,
         value,
@@ -248,6 +252,10 @@ export function executePluginStateOperation(
         (evicted) => {
           for (const evictedKey of evicted) {
             view.entries.set(evictedKey, undefined);
+            // The retention owner selected these keys. Companion rows can have different ages.
+            if (companion !== undefined) {
+              transaction.delete(companion, evictedKey);
+            }
           }
         },
         now,

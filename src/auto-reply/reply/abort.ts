@@ -6,7 +6,7 @@ import {
 import { resolveSessionAgentId } from "../../agents/agent-scope.js";
 import { isAbortRequestText } from "./abort-primitives.js";
 import type { FastAbortRequestParams, FastAbortResult } from "./abort.types.js";
-import { stripMentions, stripStructuralPrefixes } from "./mentions.js";
+import { stripMentions } from "./mentions.js";
 
 export function formatAbortReplyText(
   stoppedSubagents?: number,
@@ -45,7 +45,7 @@ function resolveFastAbortRequest(params: FastAbortRequestParams) {
       config: cfg,
       fallbackAgentId: ctx.AgentId,
     });
-  const raw = stripStructuralPrefixes(ctx.commandText);
+  const raw = ctx.commandText;
   const isGroup = normalizeOptionalLowercaseString(ctx.ChatType) === "group";
   const stripped = isGroup ? stripMentions(raw, ctx, cfg, resolveTargetAgentId()) : raw;
   if (!isAbortRequestText(stripped)) {
@@ -64,6 +64,7 @@ export async function tryFastAbortFromMessage(
   if (!request) {
     return { handled: false, aborted: false };
   }
+  params.onAbortRequest?.();
   // Normalized ingress is not authority. The operation resolves authorization
   // and retains current-target validation after loading cancellation machinery.
   const { executeFastAbortRequest } = await import("./abort-operation.js");

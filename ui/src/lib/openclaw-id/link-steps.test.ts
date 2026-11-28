@@ -82,7 +82,7 @@ describe("Make reachable relay step", () => {
         states.push(state);
       },
     );
-    return { states, sleeps, reads };
+    return { states, sleeps };
   }
 
   it("finishes at once when the relay is already up", async () => {

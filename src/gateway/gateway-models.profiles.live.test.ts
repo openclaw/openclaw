@@ -7,7 +7,6 @@ import os from "node:os";
 import path from "node:path";
 import { configureAiTransportHost, getAiTransportHost } from "@openclaw/ai";
 import { STREAM_ERROR_FALLBACK_TEXT } from "@openclaw/ai/internal/shared";
-import { calculateUsageCost, normalizeResolvedPricing } from "@openclaw/llm-core";
 import { expectDefined } from "@openclaw/normalization-core";
 import { isRecord } from "@openclaw/normalization-core/record-coerce";
 import type { Api, Model } from "openclaw/plugin-sdk/llm";
@@ -1765,101 +1764,6 @@ describe("resolveGatewayLiveModelThinkingLevel", () => {
 });
 
 describe("buildLiveGatewayConfig", () => {
-  it("serializes normalized open-ended pricing without changing runtime accounting", () => {
-    const rawCost = {
-      input: 1,
-      output: 2,
-      cacheRead: 0.25,
-      cacheWrite: 1.5,
-      tieredPricing: [
-        {
-          range: [0, 1001] as [number, number],
-          input: 1,
-          output: 2,
-          cacheRead: 0.25,
-          cacheWrite: 1.5,
-        },
-        { range: [1001] as [number], input: 3, output: 4, cacheRead: 0.5, cacheWrite: 2.5 },
-      ],
-    };
-    const model = {
-      ...createGatewayLiveTestModel("openai", "fixture-tiered-model"),
-      baseUrl: "https://api.example.com/v1",
-      cost: normalizeResolvedPricing(rawCost),
-    };
-    const originalCost = structuredClone(model.cost);
-    expect(model.cost.tieredPricing?.[1]?.range).toEqual([1001, Infinity]);
-    const cfg = buildLiveGatewayConfig({
-      cfg: {},
-      candidates: [model],
-      liveAgentDir: GATEWAY_LIVE_CONFIG_TEST_AGENT_DIR,
-      liveAgentWorkspaceDir: GATEWAY_LIVE_CONFIG_TEST_WORKSPACE,
-    });
-    const projected = expectDefined(
-      cfg.models?.providers?.openai?.models?.[0]?.cost,
-      "projected model pricing",
-    );
-    const serialized = JSON.stringify(cfg);
-    const parsed = OpenClawSchema.parse(JSON.parse(serialized));
-    const serializedCost = expectDefined(
-      parsed.models?.providers?.openai?.models?.[0]?.cost,
-      "serialized model pricing",
-    );
-
-    expect(serializedCost).toEqual(rawCost);
-    expect(projected).not.toBe(model.cost);
-    expect(projected.tieredPricing).not.toBe(model.cost.tieredPricing);
-    expect(projected.tieredPricing?.[0]?.range).not.toBe(model.cost.tieredPricing?.[0]?.range);
-    expect(projected.tieredPricing?.[1]?.range).not.toBe(model.cost.tieredPricing?.[1]?.range);
-    expect(model.cost).toEqual(originalCost);
-    const restoredCost = normalizeResolvedPricing(serializedCost);
-    for (const input of [900, 901, 1900]) {
-      const usage = { input, output: 10, cacheRead: 40, cacheWrite: 60 };
-      expect(calculateUsageCost(usage, restoredCost)).toEqual(
-        calculateUsageCost(usage, model.cost),
-      );
-    }
-  });
-
-  it.each(["finite", "flat"] as const)("preserves %s pricing in serialized config", (kind) => {
-    const cost = {
-      input: 1,
-      output: 2,
-      cacheRead: 0.25,
-      cacheWrite: 1.5,
-      ...(kind === "finite"
-        ? {
-            tieredPricing: [
-              {
-                range: [0, 1001] as [number, number],
-                input: 1,
-                output: 2,
-                cacheRead: 0.25,
-                cacheWrite: 1.5,
-              },
-            ],
-          }
-        : {}),
-    };
-    const model = {
-      ...createGatewayLiveTestModel("openai", "fixture-pricing-model"),
-      baseUrl: "https://api.example.com/v1",
-      cost: normalizeResolvedPricing(cost),
-    };
-    const originalCost = structuredClone(model.cost);
-    const cfg = buildLiveGatewayConfig({
-      cfg: {},
-      candidates: [model],
-      liveAgentDir: GATEWAY_LIVE_CONFIG_TEST_AGENT_DIR,
-      liveAgentWorkspaceDir: GATEWAY_LIVE_CONFIG_TEST_WORKSPACE,
-    });
-    const serialized = JSON.stringify(cfg);
-    const parsed = OpenClawSchema.parse(JSON.parse(serialized));
-
-    expect(parsed.models?.providers?.openai?.models?.[0]?.cost).toEqual(cost);
-    expect(model.cost).toEqual(originalCost);
-  });
-
   it.each([
     ["NaN upper endpoint", Number.NaN],
     ["negative infinity upper endpoint", Number.NEGATIVE_INFINITY],

@@ -239,7 +239,10 @@ it.each(["retained-by-deletion", "unconfigured", "configured"] as const)(
         const pathname = resolveOpenClawAgentSqlitePath({ agentId: "retired", env });
         await closeOpenClawAgentDatabaseByPathAsync(pathname);
         const database = openNodeSqliteDatabase(pathname);
-        database.exec(`PRAGMA user_version = ${OPENCLAW_AGENT_SCHEMA_VERSION - 1}`);
+        database.exec(`BEGIN IMMEDIATE;
+          PRAGMA user_version = ${OPENCLAW_AGENT_SCHEMA_VERSION - 1};
+          UPDATE schema_meta SET schema_version = ${OPENCLAW_AGENT_SCHEMA_VERSION - 1} WHERE meta_key = 'primary';
+          COMMIT;`);
         database.close();
         if (disposition !== "configured") {
           delete cfg.agents.entries.retired;

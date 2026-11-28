@@ -106,6 +106,23 @@ it("omits only disposable core migration backups for the shipped flag", async ()
   expectBackup(foreign);
 });
 
+it("keeps the shared image a legacy credential cutover can fall back to", async () => {
+  f.env.OPENCLAW_UPDATE_IN_PROGRESS = "1";
+  await owned(() =>
+    backupDoctorMigrationDatabases({
+      env: f.env,
+      pendingDatabasePaths: [f.shared, f.agent],
+      pendingMigrations: [
+        { kind: "state", path: f.shared, foundVersion: 22, supportedVersion: 40 },
+        { kind: "agent", path: f.agent, foundVersion: 27, supportedVersion: 39 },
+      ],
+      databasePaths: [f.shared, f.agent],
+    }),
+  );
+  expectBackup(f.shared);
+  expect(f.backups(f.agent)).toEqual([]);
+});
+
 it.each(["flag-only", "foreign-temp"])("retains ordinary backups for %s Doctor", async (kind) => {
   const env =
     kind === "flag-only"

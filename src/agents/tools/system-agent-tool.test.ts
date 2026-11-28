@@ -1,6 +1,7 @@
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { createDeferred } from "../../../test/helpers/promise.js";
 import { createSnapshot } from "../../config/mutate.test-support.js";
+import { redactSensitiveCommandText } from "../../system-agent/operations.js";
 import { hashSystemAgentOperation } from "../../system-agent/operator-approval.js";
 import { withSystemAgentOverviewSources } from "../../system-agent/overview.test-support.js";
 import {
@@ -65,6 +66,25 @@ const proposalTransition = (args: Record<string, unknown>, resultText: string) =
   resolveSystemAgentProposalTransition({ args, resultText });
 
 describe("openclaw tool", () => {
+  it.each(["template_review", "template_install"])(
+    "keeps %s registry-only when the Gateway supports local import",
+    async (action) => {
+      for (const source of [
+        { kind: "local", path: "/tmp/project" },
+        { kind: "upload", archiveBase64: "YQ==" },
+      ]) {
+        await expect(
+          makeTool({ operatorApprovalOnly: true }).execute("local", {
+            action,
+            source,
+            agentId: "research",
+            planIntegrity: "exact-plan",
+          }),
+        ).rejects.toThrow();
+      }
+      expect(mocks.executeSystemAgentOperation).not.toHaveBeenCalled();
+    },
+  );
   it.each(["template_review", "template_install"])(
     "mirrors %s through native MCP without transferring host authority",
     async (action) => {
@@ -227,19 +247,35 @@ describe("openclaw tool", () => {
     expect(proposalRef).toEqual({});
   });
 
-  it("rejects arbitrary plugin installs before creating an approval proposal", async () => {
-    const proposalRef: { current?: string } = {};
-    const tool = createSystemAgentTool({ surface: "cli", proposalRef });
-
-    await expect(
-      tool.execute("plugin-install", {
+  it.each(["npm:@example/plugin", "git:github.com/example/plugin@main"])(
+    "proposes source review in chat before installing %s",
+    async (spec) => {
+      const { proposalRef, tool } = gatewayFixture();
+      const result = await tool.execute("plugin-install", {
         action: "plugin_install",
-        spec: "npm:@example/plugin",
+        spec,
         approved: true,
-      }),
-    ).rejects.toThrow(/trusted shell/);
-    expect(proposalRef.current).toBeUndefined();
-    expect(mocks.executeSystemAgentOperation).not.toHaveBeenCalled();
+      });
+      expect(toolText(result)).toContain("outside ClawHub review");
+      expect(toolText(result)).not.toContain("trusted shell");
+      expect(proposalRef.operation).toEqual({ kind: "plugin-install", spec });
+      expect(mocks.executeSystemAgentOperation).not.toHaveBeenCalled();
+    },
+  );
+
+  it("redacts authenticated Git sources in proposals and command history without changing approval identity", async () => {
+    const spec =
+      "git:https://x-access-token:SYNTHETIC_CREDENTIAL@github.com/example/plugin.git@main";
+    const { proposalRef, tool } = gatewayFixture();
+    const result = toolText(
+      await tool.execute("credentialed-source", { action: "plugin_install", spec }),
+    );
+    const history = redactSensitiveCommandText(`plugin install ${spec}`);
+    for (const display of [result, history]) {
+      expect(display).not.toContain("SYNTHETIC_CREDENTIAL");
+      expect(display).toContain("github.com/example/plugin.git@main");
+    }
+    expect(proposalRef.operation).toEqual({ kind: "plugin-install", spec });
   });
 
   it("finishes the exact artifact review before proposing and hands approved bytes to the host", async () => {

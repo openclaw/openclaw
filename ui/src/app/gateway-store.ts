@@ -432,8 +432,13 @@ export function createApplicationGateway(
           asOptionalRecord(hello.snapshot)?.authMode === "token" ? nextConnection.token : "",
         );
         setUnavailableDeadline("suspensionPhase");
-        // A successful hello retires bootstrap; the client has processed any issued device grant.
-        connection = { ...connection, bootstrapToken: "", bootstrapProfile: undefined };
+        const exactBuildIdentityAvailable = Boolean(hello.server?.buildId?.trim());
+        const controlUiBuildFresh = !(
+          isSameOriginGateway(nextConnection.gatewayUrl) &&
+          (exactBuildIdentityAvailable || everConnected) &&
+          controlUiBuildDiffersFrom(hello.server ?? {})
+        );
+        connection = credentials.connectionAfterHello(connection, controlUiBuildFresh);
         const retiredAuthLog = eventLog.bindRecoveryScope(hello.auth?.recoveryScope);
         if (retiredAuthLog) {
           publishEventLogRetirement(retiredAuthLog);
@@ -441,12 +446,6 @@ export function createApplicationGateway(
             return;
           }
         }
-        const exactBuildIdentityAvailable = Boolean(hello.server?.buildId?.trim());
-        const controlUiBuildFresh = !(
-          isSameOriginGateway(nextConnection.gatewayUrl) &&
-          (exactBuildIdentityAvailable || everConnected) &&
-          controlUiBuildDiffersFrom(hello.server ?? {})
-        );
         if (!controlUiBuildFresh) {
           // Keep every connected-only drain fenced. The stale document may
           // render the shell and refresh action, but it must not mutate state.

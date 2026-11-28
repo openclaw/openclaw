@@ -27,7 +27,6 @@ import {
 } from "./pending-final-delivery.js";
 import { claimNextQueuedFollowupRequestFrom, enqueueFollowupRun } from "./queue.js";
 import { admitFollowupRunLifecycle } from "./queue/lifecycle.js";
-import { isFollowupOperatorAuthorityCurrent } from "./queue/types.js";
 import type { PendingReplyDelivery } from "./reply-input-admission.js";
 import {
   isReplyOperationSuperseded,
@@ -75,7 +74,8 @@ export function continueStalledReplyTurn({
   ) {
     return false;
   }
-  if (!isFollowupOperatorAuthorityCurrent(followupRun)) {
+  // Refusing this continuation does not revoke or settle any queued source.
+  if (followupRun.operatorAuthority?.signal?.aborted) {
     return false;
   }
   const queuedRequest = !guidance && claimNextQueuedFollowupRequestFrom(queueKey, followupRun);
@@ -123,7 +123,7 @@ type ExecutePreparedReplyAgentRunInput = Omit<
 > &
   Pick<
     RunReplyAgentParams,
-    "blockReplyChunking" | "toolProgressDetail" | "transcriptCommandBody" | "typing" | "typingMode"
+    "blockReplyChunking" | "toolProgressDetail" | "transcriptCommandBody" | "typingMode"
   > & {
     admitUserTurn: (recorder?: UserTurnTranscriptRecorder) => Promise<void>;
     applyReplyToMode: (payload: ReplyPayload) => ReplyPayload;
@@ -205,7 +205,6 @@ async function executePreparedReplyAgentRunWithCompletion(
     storePath,
     toolProgressDetail,
     traceAgentPhase,
-    typing,
     typingMode,
   } = context;
   let activeSessionEntry = getActiveSessionEntry();
@@ -214,7 +213,6 @@ async function executePreparedReplyAgentRunWithCompletion(
   const runFollowupTurn = createFollowupRunner({
     resolveGatewayContext: getGatewayContextResolver(replyOperation),
     opts,
-    typing,
     typingMode,
     sessionEntry: activeSessionEntry,
     sessionStore: activeSessionStore,

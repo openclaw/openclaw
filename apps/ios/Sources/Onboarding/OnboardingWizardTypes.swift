@@ -10,8 +10,19 @@ enum OnboardingStep: Int, CaseIterable {
     case auth
     case success
 
-    var previous: Self? {
-        Self(rawValue: rawValue - 1)
+    /// The manual steps pushed over the Connect Gateway screen to reach this one. The system back
+    /// button and the back swipe pop them one at a time.
+    var pushedSteps: [Self] {
+        switch self {
+        case .intro, .welcome, .success:
+            []
+        case .mode:
+            [.mode]
+        case .connect:
+            [.mode, .connect]
+        case .auth:
+            [.mode, .connect, .auth]
+        }
     }
 
     /// Progress label for the manual setup flow (mode → connect → auth → success).
@@ -29,15 +40,6 @@ enum OnboardingStep: Int, CaseIterable {
         case .connect: "Gateway Details"
         case .auth: "Gateway Status"
         case .success: "Connected"
-        }
-    }
-
-    var canGoBack: Bool {
-        switch self {
-        case .intro, .welcome, .success:
-            false
-        case .mode, .connect, .auth:
-            true
         }
     }
 }

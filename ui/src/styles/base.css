@@ -48,6 +48,7 @@
   --chat-send-hover-bg: color-mix(in srgb, var(--primary) 86%, var(--text-strong));
   --chat-send-active-bg: var(--primary-active);
   --chat-composer-surface: var(--popover);
+  --chat-composer-placeholder: var(--muted);
   /* Composer controls take their ink from the composer's own surface rather
      than the canvas. Built-in dark themes lift that surface well above the
      canvas, which pulled canvas-calibrated inks down to (or below) the
@@ -183,7 +184,6 @@
 
   /* Theme-invariant presentation colors. */
   --task-suggestion-action-fg: #fafafa;
-  --button-icon-bg: #ffffff;
   --brand-logo-chip-bg: #ffffff;
   --qr-bg: #ffffff;
   --qr-text: #444444;
@@ -369,14 +369,14 @@
   --radius-full: 9999px;
   --radius: 10px;
 
-  /* Every spinner: a closed ring at 20% with a short round-capped arc on top.
+  /* Every spinner: a closed ring at 20% with a round-capped arc on top.
      A mask paints currentColor, and each stroke stays the same px at any size. */
   --spinner-mask: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='100%25' height='100%25' fill='none' stroke='%23000' stroke-width='2'%3E%3Cstyle%3Ecircle{cx:50%25;cy:50%25;r:calc(50%25 - 1.0px)}%3C/style%3E%3Ccircle opacity='.2'/%3E%3Ccircle pathLength='100' stroke-dasharray='26 74' stroke-linecap='round'/%3E%3C/svg%3E");
   --spinner-mask-small: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='100%25' height='100%25' fill='none' stroke='%23000' stroke-width='1.5'%3E%3Cstyle%3Ecircle{cx:50%25;cy:50%25;r:calc(50%25 - 0.75px)}%3C/style%3E%3Ccircle opacity='.2'/%3E%3Ccircle pathLength='100' stroke-dasharray='26 74' stroke-linecap='round'/%3E%3C/svg%3E");
-  --spinner-mask-avatar: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='100%25' height='100%25' fill='none' stroke='%23000' stroke-width='1.75'%3E%3Cstyle%3Ecircle{cx:50%25;cy:50%25;r:calc(50%25 - 0.875px)}%3C/style%3E%3Ccircle opacity='.2'/%3E%3Ccircle pathLength='100' stroke-dasharray='26 74' stroke-linecap='round'/%3E%3C/svg%3E");
+  --spinner-mask-avatar: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='100%25' height='100%25' fill='none' stroke='%23000' stroke-width='1.75'%3E%3Cstyle%3Ecircle{cx:50%25;cy:50%25;r:calc(50%25 - 0.875px)}%3C/style%3E%3Ccircle opacity='.2'/%3E%3Ccircle pathLength='100' stroke-dasharray='42 58' stroke-linecap='round'/%3E%3C/svg%3E");
   --spinner-mask-large: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='100%25' height='100%25' fill='none' stroke='%23000' stroke-width='2.5'%3E%3Cstyle%3Ecircle{cx:50%25;cy:50%25;r:calc(50%25 - 1.25px)}%3C/style%3E%3Ccircle opacity='.2'/%3E%3Ccircle pathLength='100' stroke-dasharray='26 74' stroke-linecap='round'/%3E%3C/svg%3E");
   --spinner-trace-stroke: 1.75px;
-  --spinner-trace-dash: 26 74;
+  --spinner-trace-dash: 42 58;
 
   /* One profile for every scroll surface, thumb only: faint at rest, a step
      stronger while the pointer is over the scroller, clearly visible on the
@@ -558,6 +558,7 @@
   .exec-approval-card.exec-approval-card,
   .exec-approval-list.exec-approval-list,
   .login-gate__card.login-gate__card,
+  .code-block-wrapper.code-block-wrapper,
   .card.card,
   .option-card__choice.option-card__choice {
     border-radius: calc(14px * var(--openclaw-corner-radius-scale));
@@ -578,8 +579,7 @@
     corner-shape: superellipse(1.5);
   }
 
-  /* CRT owns its near-square geometry; rounded transcript bubbles share the fence shape. */
-  .code-block-wrapper.code-block-wrapper,
+  /* CRT owns its near-square geometry. */
   :where(:root:not([data-theme="crt"], [data-theme="crt-light"]))
     :is(.chat-thread, .chat-session-rail__thread)
     .chat-group.user
@@ -594,7 +594,7 @@
     .chat-group.user
     :is(.chat-bubble--with-images, .chat-bubble--with-images > .chat-message-avatar-anchor)
     > .chat-message-disclosure {
-    border-radius: calc(14px * var(--openclaw-corner-radius-scale));
+    border-radius: calc(18px * var(--openclaw-corner-radius-scale));
     corner-shape: superellipse(1.5);
   }
 
@@ -661,6 +661,12 @@
 /* Light theme tokens apply to every light-mode family. */
 /* Defaults must lose to named palettes even when their link precedes the app CSS. */
 :root:where([data-theme-mode="light"]) {
+  /* Empty hints are quieter than reading text, but still AA on the composer surface. */
+  --chat-composer-placeholder: color-mix(
+    in srgb,
+    var(--text-strong) 64%,
+    var(--chat-composer-surface)
+  );
   --media-control-bg: rgba(12, 16, 24, 0.64);
   --media-control-bg-hover: rgba(12, 16, 24, 0.78);
   /* Imported light palettes retain the warm defaults; built-ins own their canvas below. */
@@ -819,7 +825,6 @@
 :root[data-theme="miami-light"] {
   --bg: color-mix(in srgb, var(--text) 2%, var(--bg-content));
   --sidebar-rail-surface: color-mix(in srgb, var(--text) 4%, var(--bg-content));
-  --sidebar-rail-divider-color: var(--border-strong);
   --bg-muted: color-mix(in srgb, var(--text) 4%, var(--bg-content));
   --card: var(--bg-elevated);
   --popover: var(--bg-elevated);

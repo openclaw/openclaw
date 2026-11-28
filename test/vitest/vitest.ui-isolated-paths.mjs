@@ -8,6 +8,8 @@ export const uiIsolatedTestFiles = [
   "ui/src/app/bootstrap.gateway-credentials.test.ts",
   "ui/src/app/bootstrap.test.ts",
   "ui/src/app/early-gateway.test.ts",
+  // The rejected update card import must not poison the shared module registry.
+  "ui/src/app/navigation-surface-view.stale-build.test.tsx",
   "ui/src/app/router-outlet.test.tsx",
   "ui/src/components/app-sidebar-native-gateways.test.ts",
   // The cold-view proof holds imports that other sidebar suites already load.

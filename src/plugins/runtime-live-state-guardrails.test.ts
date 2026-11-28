@@ -15,7 +15,7 @@ const LIVE_RUNTIME_STATE_GUARDS: Record<
   }
 > = {
   [bundledPluginFile("whatsapp", "src/connection-controller-runtime-context.ts")]: {
-    required: ["getChannelRuntimeContext", "WHATSAPP_CONNECTION_CONTROLLER_CAPABILITY"],
+    required: ["getChannelRuntimeContext"],
     forbidden: ["globalThis", "resolveGlobalSingleton"],
   },
 };

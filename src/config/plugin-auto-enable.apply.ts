@@ -2,7 +2,7 @@ import type { PluginManifestRegistry } from "../plugins/manifest-registry.js";
 import { registerPluginMetadataProcessMemoLifecycleClear } from "../plugins/plugin-metadata-lifecycle.js";
 import { withPluginSetupPreparation } from "../plugins/plugin-setup-module.js";
 import { freezeJsonSnapshot } from "../shared/immutable-data.js";
-import { detectPluginAutoEnableCandidates } from "./plugin-auto-enable.detect.js";
+import { detectPluginAutoEnableCandidatesWithRegistry } from "./plugin-auto-enable.detect.js";
 import { materializePluginAutoEnableCandidatesInternal } from "./plugin-auto-enable.materialize.js";
 import {
   preparePluginAutoEnableSetup,
@@ -82,7 +82,7 @@ export function materializePluginAutoEnableCandidates(params: {
 }
 
 export function applyPluginAutoEnable(
-  params: Parameters<typeof detectPluginAutoEnableCandidates>[0] & {
+  params: Parameters<typeof detectPluginAutoEnableCandidatesWithRegistry>[0] & {
     runtimePreparation?: PluginAutoEnableRuntimePreparation;
   },
 ): PluginAutoEnableResult {
@@ -113,12 +113,15 @@ export function applyPluginAutoEnable(
   }
 
   const preparationConfig = capturedConfig ?? config;
-  const candidates = detectPluginAutoEnableCandidates({ ...params, config: preparationConfig });
+  const { candidates, manifestRegistry } = detectPluginAutoEnableCandidatesWithRegistry({
+    ...params,
+    config: preparationConfig,
+  });
   const result = materializePluginAutoEnableCandidates({
     config: preparationConfig,
     candidates,
     env: params.env,
-    manifestRegistry: params.manifestRegistry,
+    manifestRegistry,
   });
   if (runtime) {
     // Preserve the no-rewrite identity without freezing the mutable publication.

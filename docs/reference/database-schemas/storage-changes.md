@@ -959,6 +959,18 @@ outcomes fence affected rows until restoration from the store; they never author
 The digest requires no new column, schema migration, or updater behavior, and also
 detects writes from older processes that cannot maintain a new revision column.
 
+New subagent runs record the spawning requester's restart source in
+`requesterOperatorSource` inside `subagent_runs.payload_json`. It uses the same
+bounded recovery-source codec as queued inputs; unavailable sources are not
+stored. After a Gateway restart, completion recovery re-admits that source under
+current policy, so the woken parent turn has the requester's original scopes, and
+the turn's own admission still checks session access. A refused source leaves the
+result unbound, the same as any other failed recovery. Rows without the field
+(older runs) use the recorded session principal, otherwise the System write
+baseline, never admin. This adds no table, column, index, schema version, or
+backfill. Older builds ignore the field and apply the fallback they use for rows
+they write themselves; the retired `operatorRecoverySource` field stays ignored.
+
 Private requester-settle wakes retain `privateInput` (the dispatch run ID and raw
 prompt) inside their existing `subagent_runs.payload_json` wake state before
 Gateway dispatch. The same row transition owns retries; this adds no table,
@@ -3284,6 +3296,66 @@ restoring both version markers before the matching older build opens the store.
 This version phase does not rewrite transcripts; the scoped restore leaves
 those canonical rows and other undeclared tables intact. It is not a general
 rollback for other migrations or external effects.
+
+## Session member access levels
+
+Agent schema 44 adds a nullable `session_members.access` column. A value of
+`read`, `suggest`, or `send` records the most an invited person may do in a
+shared session. Null means no level was ever set; existing memberships keep
+null, and readers treat it exactly as they treated membership before this
+version. The membership writer is the only writer. It sets the level inside the
+same sharing-worker transaction as other membership changes and publishes the
+change through the existing session collaboration facts. The session actor's
+member snapshot carries the same value.
+
+The version migration adds the column with a `CHECK` constraint and touches no
+other table. Validating the constraint can scan the existing rows once; they
+are all null, and `session_members` holds one row per invited person per
+session. There is no rewrite, backfill, or new index.
+The declared scoped migration backup covers `session_members` and the version
+markers. Older binaries refuse an agent44 store. To go back, stop writers and
+restore the verified scoped backup with
+`openclaw database restore-migration-backup` before the matching older build
+opens the store.
+
+## Participate child constraints within agent schema 44
+
+Participant limits extend the existing private session-entry and subagent-run
+JSON payloads within agent schema 44. They add no table, database, index,
+dependency, backfill, or schema-version bump. Existing rows are not rewritten.
+Upgrade cost is normal lazy decoding plus a bounded source lookup for each new
+participant child turn or completion admission.
+
+A participant's child session entry owns a sticky `delegatedOperatorSource`: the
+original recovery source, whose snapshot holds the participation ceiling. The
+ceiling records the original invitation key and participant, the source agent,
+incarnation, creator and root, and the captured tool and permission limits. The optional `execPolicy` keeps
+exact security and ask floors for child execution, including allowlist-miss
+denial and mandatory approval that a permission label cannot represent. Its
+optional `denyMisses` constraint keeps denied misses closed when current policy
+also requires approval for every allowed command. Reset and entry replacement
+preserve it. The original invited parent stays turn-local. Native spawn also
+marks the existing host-owned subagent run record with `requiresCompletionAuthority`. That
+record and the private completion capability survive loss of the child row; they
+require a matching child envelope instead of reading absence as unrestricted
+owner work. Registry retirement follows the existing completion and cleanup
+retention. Public session and subagent projections do not expose these fields.
+
+Every new child turn, restart input, or completion re-admits the original
+principal against the current invitation and role, then intersects the stored
+limits. Removed or read-only membership refuses new work and cancels matching
+queued descendant inputs through the membership writer. No invitation epoch is
+stored: a reinvitation may admit retained children under their original limits
+and the current grant. Collectors keep recorded outcomes after a restart but do
+not regain execution or owner completion authority from them.
+
+Nothing writes these fields until a role admits invited participants, so a
+store written only by builds without participant admission never contains them.
+Schema 44 readers that predate these fields ignore the child envelope. Before
+enabling participant children, upgrade every reader of a store to a build that
+understands them, and do not roll back to an older schema-44 build while such
+obligations remain: finish or discard them first, or restore a pre-feature
+backup. Older released schema readers keep their existing newer-schema refusal.
 
 ## Review checkpoint for material changes
 

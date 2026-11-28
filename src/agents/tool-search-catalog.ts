@@ -3,7 +3,7 @@ import { stableStringify } from "@openclaw/normalization-core";
 import { truncateUtf16Safe } from "@openclaw/normalization-core/utf16-slice";
 import { getRuntimeConfigSnapshot } from "../config/runtime-snapshot.js";
 import { generateSecureHex } from "../infra/secure-random.js";
-import { classifyAgentToolSource } from "../plugins/tool-metadata.js";
+import { classifyAgentToolSource, getPluginToolMeta } from "../plugins/tool-metadata.js";
 import { finalizeAgentToolAvailability } from "./agent-tool-availability.js";
 import type { HookContext } from "./agent-tools.before-tool-call.js";
 import {
@@ -17,15 +17,18 @@ import {
 } from "./before-tool-call-metadata.js";
 import { disposeCodeModeResults } from "./code-mode-results.js";
 import { applyGatewayToolPolicy } from "./gateway-tool-policy.js";
+import { filterParticipationTools } from "./participation-ceiling.js";
 import type { ToolDefinition } from "./sessions/index.js";
 import { isCoreCodingSurfaceToolName } from "./tool-catalog.js";
 import { compactToolInputHint, compactToolOutputHint } from "./tool-schema-hints.js";
+import { createFamilyVisibility, dispatchRepeatable } from "./tool-search-catalog-visibility.js";
 import {
   getToolSearchCatalogDescriptors,
   prepareToolSearchCatalogDescriptors,
   type ToolSearchCatalogDescriptor,
 } from "./tool-search-prepared-catalog.js";
 import {
+  TOOL_CALL_RAW_TOOL_NAME,
   TOOL_SEARCH_CONTROL_TOOL_NAMES,
   type CatalogSource,
   type CatalogVisibilityOptions,
@@ -134,6 +137,7 @@ function sameCatalogDescriptor(a: ToolSearchCatalogEntry, b: ToolSearchCatalogEn
       a.description === b.description &&
       (a.directVisible === true) === (b.directVisible === true) &&
       (a.requiresExactId === true) === (b.requiresExactId === true) &&
+      (a.onDemand === true) === (b.onDemand === true) &&
       (a.mcp === b.mcp || stableStringify(a.mcp) === stableStringify(b.mcp)) &&
       sameCatalogSchema(a.source, a.parameters, b.parameters) &&
       sameCatalogSchema(a.source, a.outputSchema, b.outputSchema))
@@ -192,8 +196,11 @@ function toCatalogEntry(
   // SAFETY: source classification excludes client callbacks from the native hook wrapper.
   const nativeTool = tool as AnyAgentTool;
   const catalogTool =
-    source !== "client" && hookContext && !isToolWrappedWithBeforeToolCallHook(nativeTool)
-      ? wrapToolWithBeforeToolCallHook(nativeTool, hookContext)
+    source !== "client" && hookContext
+      ? rewrapToolWithBeforeToolCallHook(nativeTool, {
+          ...getBeforeToolCallHookContext(nativeTool),
+          ...hookContext,
+        })
       : tool;
   return {
     id: `${source}:${sourceName?.trim() || "core"}:${tool.name}`,
@@ -207,6 +214,7 @@ function toCatalogEntry(
     ...(source === "openclaw" && (tool as AnyAgentTool).outputSchema
       ? { outputSchema: (tool as AnyAgentTool).outputSchema }
       : {}),
+    ...(source === "openclaw" && isOnDemandCatalogTool(tool) ? { onDemand: true as const } : {}),
     tool: catalogTool,
   };
 }
@@ -215,11 +223,21 @@ function shouldCatalogTool(tool: AnyAgentTool): boolean {
   return !TOOL_SEARCH_CONTROL_TOOL_NAMES.has(tool.name) && tool.catalogMode !== "direct-only";
 }
 
+/** Deferred until called by name; only a direct call preserves its result and handoff contract. */
+export function isOnDemandCatalogTool(tool: CatalogTool): boolean {
+  return (
+    "catalogMode" in tool &&
+    tool.catalogMode === "on-demand" &&
+    classifyAgentToolSource(tool).source === "openclaw"
+  );
+}
+
 /**
  * Core file/shell primitives and caller-required names (e.g. message when it is
  * the only reply path) stay visible while remaining searchable. Both must
  * resolve to trusted OpenClaw tools: an MCP lookalike must never become a
- * direct delivery or core-coding tool.
+ * direct delivery or core-coding tool. Tools that poll by design stay deferred:
+ * dispatch_action carries their `repeatable` declarations to the repeat guard.
  */
 export function isDirectVisibleCatalogTool(
   tool: AnyAgentTool,
@@ -231,6 +249,52 @@ export function isDirectVisibleCatalogTool(
     (directToolNames.has(tool.name) ||
       (isCoreCodingSurfaceToolName(tool.name) && classified.sourceName === "core"))
   );
+}
+
+/**
+ * A run whose MCP tools need at most this many schema bytes declares them directly. Each
+ * avoided discovery step saves one re-sent request (about 51.5 KB measured on a fresh
+ * install) plus its tool_describe result (about 1 KB) and the directory rows, so over an
+ * eight-request session direct schemas break even near 8 KB. Measured catalogs: a 5-tool
+ * tracker 2.1 KB and server-everything 7.8 KB fit; filesystem 14 KB, github 16 KB and
+ * playwright 19 KB keep search.
+ */
+const MAX_DIRECT_MCP_SCHEMA_BYTES = 8_192;
+
+/**
+ * MCP tools a pinning runner declares directly. Without pinned names this chooses by the
+ * catalog's schema bytes, for a series' first request; with them it keeps exactly the MCP tools
+ * the session pin already sends, so the provider tool list stays fixed while server inventory
+ * changes reach the directory. A name another tool also uses stays deferred: a lookalike never
+ * shadows a trusted direct tool. A server with instructions stays deferred too: tool_describe is
+ * where the model reads them.
+ */
+export function selectDirectMcpToolNames(
+  tools: readonly AnyAgentTool[],
+  pinnedToolNames: ReadonlySet<string> | undefined,
+): ReadonlySet<string> {
+  const nameCounts = new Map<string, number>();
+  for (const tool of tools) {
+    nameCounts.set(tool.name, (nameCounts.get(tool.name) ?? 0) + 1);
+  }
+  const mcpTools = tools.filter((tool) => {
+    const { source, mcp } = classifyAgentToolSource(tool);
+    return source === "mcp" && !mcp?.instructions && nameCounts.get(tool.name) === 1;
+  });
+  if (pinnedToolNames) {
+    return new Set(
+      mcpTools.filter((tool) => pinnedToolNames.has(tool.name)).map((tool) => tool.name),
+    );
+  }
+  let bytes = 0;
+  for (const tool of mcpTools) {
+    const { name, description, parameters } = tool;
+    bytes += Buffer.byteLength(JSON.stringify({ name, description, parameters }), "utf8");
+    if (bytes > MAX_DIRECT_MCP_SCHEMA_BYTES) {
+      return new Set();
+    }
+  }
+  return new Set(mcpTools.map((tool) => tool.name));
 }
 
 export function registerHeadlessToolSearchCatalog(params: {
@@ -245,8 +309,9 @@ export function registerHeadlessToolSearchCatalog(params: {
     : config?.tools?.gatewayPolicy
       ? { config }
       : undefined;
+  // A headless catalog has no top-level call, so on-demand tools stay out like direct-only ones.
   const entries = applyGatewayToolPolicy([...tools], config)
-    .filter(shouldCatalogTool)
+    .filter((tool) => shouldCatalogTool(tool) && !isOnDemandCatalogTool(tool))
     .map((tool) => {
       const scopedTool = hookContext
         ? rewrapToolWithBeforeToolCallHook(tool, {
@@ -452,6 +517,13 @@ export function resolveCatalog(ctx: ToolSearchToolContext): ToolSearchCatalogSes
   if (!catalog) {
     throw new ToolInputError("Tool Search catalog is unavailable for this run.");
   }
+  const participationCeiling = ctx.pluginExecutionAuthority?.participationCeiling;
+  if (participationCeiling) {
+    // Catalog refs are run-owned. Narrow exact-id dispatch as well as discovery.
+    catalog.entries = filterParticipationTools(catalog.entries, participationCeiling, (entry) =>
+      getPluginToolMeta(entry.tool),
+    );
+  }
   return catalog;
 }
 
@@ -531,6 +603,11 @@ export function compactToolSearchCatalogEntry(
     input: entry.source === "client" ? "unknown" : compactToolInputHint(entry.parameters),
     ...(instructionsHint ? { instructionsHint } : {}),
     ...(output ? { output } : {}),
+    ...(entry.onDemand
+      ? {
+          call: "loads as a top-level tool once looked up; call it by name, not through dispatch_action or exec",
+        }
+      : {}),
   };
 }
 
@@ -576,6 +653,21 @@ export function applyToolCatalogCompaction(
   const directTools: AnyAgentTool[] = [];
   const catalog: ToolSearchCatalogEntry[] = [];
   const selected = createToolSearchSelectionMatcher(params.selection);
+  // An on-demand tool stays direct unless this runner can load it on its first direct call.
+  const keepOnDemandDirect = (tool: AnyAgentTool) =>
+    isOnDemandCatalogTool(tool) &&
+    (catalogRef.loadsOnDemandTools !== true ||
+      catalogRef.promotedToolNames?.has(tool.name) === true);
+  const catalogsTool = (tool: AnyAgentTool) =>
+    shouldCatalogTool(tool) &&
+    !keepOnDemandDirect(tool) &&
+    (params.shouldCatalogTool?.(tool) ?? true) &&
+    selected({ ...classifyAgentToolSource(tool), name: tool.name });
+  const isDirectVisible = createFamilyVisibility({
+    tools,
+    catalogsTool,
+    isVisibleCatalogTool: params.isVisibleCatalogTool,
+  });
   for (const tool of tools) {
     if (params.isVisibleControlTool(tool)) {
       visible.push(
@@ -588,12 +680,8 @@ export function applyToolCatalogCompaction(
     if (TOOL_SEARCH_CONTROL_TOOL_NAMES.has(tool.name)) {
       continue;
     }
-    if (
-      shouldCatalogTool(tool) &&
-      (params.shouldCatalogTool?.(tool) ?? true) &&
-      selected({ ...classifyAgentToolSource(tool), name: tool.name })
-    ) {
-      const directVisible = params.isVisibleCatalogTool?.(tool) === true;
+    if (catalogsTool(tool)) {
+      const directVisible = isDirectVisible(tool);
       catalog.push({ ...toCatalogEntry(tool, undefined, toolHookContext), directVisible });
       if (!directVisible) {
         continue;
@@ -611,9 +699,16 @@ export function applyToolCatalogCompaction(
     directTools,
   });
   catalogRef.directOnlyToolNames = new Set(
-    visible.filter((tool) => tool.catalogMode === "direct-only").map((tool) => tool.name),
+    visible
+      .filter((tool) => tool.catalogMode === "direct-only" || keepOnDemandDirect(tool))
+      .map((tool) => tool.name),
   );
   catalogRef.baselineDirectOnlyToolNames = catalogRef.directOnlyToolNames;
+  // dispatch_action executes any catalog entry, so it carries every entry's own declaration.
+  const dispatcher = visible.find((tool) => tool.name === TOOL_CALL_RAW_TOOL_NAME);
+  if (dispatcher) {
+    dispatcher.repeatable = dispatchRepeatable(catalog);
+  }
   return {
     tools: visible,
     compacted: catalog.length > 0,

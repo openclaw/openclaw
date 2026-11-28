@@ -1,8 +1,6 @@
 import { DEFAULT_GATEWAY_REQUEST_TIMEOUT_MS } from "@openclaw/gateway-client/browser";
-import { asOptionalRecord } from "@openclaw/normalization-core/record-coerce";
 import { GatewayRequestError } from "../../api/gateway-connect-errors.ts";
 import type { GatewayBrowserClient } from "../../api/gateway.ts";
-import type { GatewaySessionRow } from "../../api/types.ts";
 import {
   nativeHistoryMessageSourceId,
   oldestNativeHistoryMessage,
@@ -22,12 +20,9 @@ import {
   type ChatHistoryResult,
   type ChatHistoryObservation,
   type ObservedChatHistoryResponse,
-  type ChatHistoryDeltaResult,
-  type ChatHistoryResetResult,
   type ChatHistoryResponse,
   isHistoryCursor,
-  resolveChatHistoryPagination,
-  historySessionId,
+  attachHistoryActivity,
 } from "./chat-history-snapshot.ts";
 import {
   chatHistoryRequests,
@@ -38,14 +33,7 @@ import {
 import type { ChatHistorySessions, ChatState } from "./chat-state-contract.ts";
 import type { ChatHistoryState } from "./chat-transcript-metadata.ts";
 import type { ChatHistoryRunObservation } from "./run-lifecycle.ts";
-import {
-  projectChatTranscriptMetadata,
-  type ChatSessionSnapshot,
-} from "./session-message-cache.ts";
-export {
-  CHAT_HISTORY_REQUEST_LIMIT,
-  chatHistoryRequestParams,
-} from "./chat-history-request-params.ts";
+export { chatHistoryRequestParams } from "./chat-history-request-params.ts";
 
 export function captureChatHistoryRun(
   state: ChatState,
@@ -71,32 +59,6 @@ export function captureChatHistoryRun(
 // larger pages. The Gateway owns the response byte and single-message limits.
 export const CHAT_HISTORY_OLDER_PAGE_LIMIT = 1000;
 const CHAT_HISTORY_OLDER_PAGE_MAX_BYTES = 3 * 1024 * 1024;
-
-export function attachHistoryActivity<Result extends ChatHistoryResponse>(result: Result): Result {
-  if (isHistoryCursor(result) && result.kind === "reset") {
-    return result;
-  }
-  if (!result.activity || !result.messages) {
-    return result;
-  }
-  const byId = new Map(result.activity.map((entry) => [entry.messageId, entry.items]));
-  const withActivity = (message: unknown) => {
-    const record = asOptionalRecord(message);
-    const id = record?.messageId ?? asOptionalRecord(record?.["__openclaw"])?.id;
-    const activity = typeof id === "string" ? byId.get(id) : undefined;
-    return record && activity ? { ...record, activity } : message;
-  };
-  return {
-    ...result,
-    messages: result.messages.map((entry) => {
-      if (!isHistoryCursor(result)) {
-        return withActivity(entry);
-      }
-      const envelope = asOptionalRecord(entry);
-      return envelope ? { ...envelope, message: withActivity(envelope.message) } : entry;
-    }),
-  };
-}
 
 type SharedChatHistoryResponse = ChatHistoryResponse & {
   observation?: Omit<ChatHistoryObservation, "run">;
@@ -138,6 +100,7 @@ type SharedChatHistoryArgs = [
   inputRunIds?: string[],
   historyState?: ChatHistoryState,
   initialHistory?: InitialChatHistoryReceipt,
+  compactOpening?: boolean,
 ];
 
 export function requestSharedHistory(
@@ -162,6 +125,7 @@ export function requestSharedHistory(
     inputRunIds = [],
     historyState,
     initialHistory,
+    compactOpening,
   ]: SharedChatHistoryArgs
 ): Promise<ChatHistoryResponse & { observation?: ChatHistoryObservation }> {
   consumerObservation.signal?.throwIfAborted();
@@ -172,8 +136,9 @@ export function requestSharedHistory(
     cursor,
     inputRunIds,
     historyState,
+    compactOpening,
   );
-  const requestKey = baseRequestKey + JSON.stringify(params.knownState);
+  const requestKey = baseRequestKey + JSON.stringify([params.limit, params.knownState]);
   let owners = sharedChatHistoryRequests.get(client);
   if (!owners) {
     owners = new WeakMap();
@@ -304,65 +269,6 @@ export function requestSharedHistory(
         }
       : response,
   );
-}
-
-type ChatSessionSnapshotRequestResult =
-  | { kind: "snapshot"; snapshot: ChatSessionSnapshot }
-  | (ChatHistoryDeltaResult & { sessionInfo: GatewaySessionRow })
-  | ChatHistoryResetResult;
-
-export async function requestChatSessionSnapshot(
-  client: GatewayBrowserClient,
-  sessionKey: string,
-  consumerOwner: object,
-  isCurrentConsumer: () => boolean,
-  cursor?: string,
-  signal?: AbortSignal,
-): Promise<ChatSessionSnapshotRequestResult> {
-  const method = "chat.history";
-  const requestModeKey = cursor === undefined ? "page" : `cursor:${cursor}`;
-  const requestKey = `prefetch\u0000${method}\u0000${sessionKey}\u0000${requestModeKey}`;
-  const result = await requestSharedHistory(
-    null,
-    client,
-    requestKey,
-    method,
-    sessionKey,
-    undefined,
-    consumerOwner,
-    { isCurrent: isCurrentConsumer, signal },
-    cursor,
-  );
-  if (isHistoryCursor(result)) {
-    if (result.kind === "reset") {
-      return result;
-    }
-    if (!result.sessionInfo) {
-      throw new Error("chat history delta omitted uncached session metadata");
-    }
-    return { ...result, sessionInfo: result.sessionInfo };
-  }
-  const sessionInfo = result.sessionInfo;
-  return {
-    kind: "snapshot",
-    snapshot: {
-      ...(result.deltaCursor !== undefined ? { deltaCursor: result.deltaCursor } : {}),
-      ...(Object.hasOwn(sessionInfo ?? {}, "activeLeafEntryId")
-        ? { displayedLeafEntryId: sessionInfo?.activeLeafEntryId?.trim() || null }
-        : {}),
-      transcriptMetadata: sessionInfo ? projectChatTranscriptMetadata(sessionInfo) : undefined,
-      messages: visibleChatHistoryMessages(result.messages),
-      pagination: resolveChatHistoryPagination(result),
-      sessionId: historySessionId(result),
-      historyState: result.stateRevision
-        ? {
-            stateRevision: result.stateRevision,
-            pendingInputs: result.pendingInputs,
-            sessionInfo,
-          }
-        : undefined,
-    },
-  };
 }
 
 type OlderHistorySelector = { cursor: string } | { messageId: string; sessionId: string };

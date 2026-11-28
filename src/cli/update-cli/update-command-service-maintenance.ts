@@ -30,6 +30,7 @@ import { defaultRuntime } from "../../runtime.js";
 import { createNullWriter } from "../../shared/null-writer.js";
 import { isPidAlive } from "../../shared/pid-alive.js";
 import { UpdatePreMutationError, type UpdateCommandOptions } from "./shared.js";
+import { formatForeignServiceSkip } from "./update-command-foreign-service.js";
 import {
   gatewayServiceMembershipBlock,
   gatewayMaintenanceBlock,
@@ -345,6 +346,7 @@ async function stopManagedServiceBeforeMutableUpdate(
     revalidateManagedGatewayServiceAfterUpdate({
       root: params.root,
       state: serviceState,
+      updateInstallKind: params.updateInstallKind,
       preManagedServiceStop: params.expectedService,
       allowInstallRootChange:
         params.allowInstallRootChange ?? params.updateInstallKind === "package",
@@ -385,7 +387,7 @@ async function stopManagedServiceBeforeMutableUpdate(
       serviceMutationAllowed: false,
       serviceMutationSkipMessage:
         serviceUpdateVerdict.kind === "foreign"
-          ? "Gateway service management skipped: the service belongs to a different OpenClaw installation and was left untouched."
+          ? formatForeignServiceSkip(serviceState.command, serviceState.env)
           : "Gateway restart skipped: no Gateway service or listener is running.",
     };
   }
@@ -489,6 +491,7 @@ async function stopManagedServiceBeforeMutableUpdate(
       const verdict = await revalidateManagedGatewayServiceAfterUpdate({
         state,
         root: params.root,
+        updateInstallKind: params.updateInstallKind,
         preManagedServiceStop: inspected,
         allowInstallRootChange: params.allowInstallRootChange,
       });

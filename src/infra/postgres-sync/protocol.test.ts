@@ -1,4 +1,5 @@
 import { describe, expect, it } from "vitest";
+import { isSqliteLockError } from "../sqlite-error-diagnostics.js";
 import {
   decodePostgresError,
   decodePostgresRows,
@@ -87,6 +88,16 @@ describe("PostgreSQL SQL boundary", () => {
     const error = decodePostgresError({ name: "error", message: "canceled", code: "57014" });
     expect(error).toMatchObject({ name: "PostgresQueryCanceledError", code: "57014" });
     expect(isPostgresConnectionError("57014")).toBe(false);
+    expect(isSqliteLockError(error)).toBe(false);
+  });
+
+  it.each(["55P03", "40P01", "40001"])("classifies SQLSTATE %s as retryable contention", (code) => {
+    const error = decodePostgresError({ name: "error", message: "contended transaction", code });
+    expect(isSqliteLockError(error)).toBe(true);
+    expect(error).toMatchObject({
+      message: "contended transaction",
+      cause: { code },
+    });
   });
 
   it("retains unrelated PostgreSQL errors and their SQLSTATE", () => {

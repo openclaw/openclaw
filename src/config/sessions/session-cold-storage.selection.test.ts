@@ -30,6 +30,7 @@ import {
   maintenanceConfig,
   setTranscriptActivity,
 } from "./session-cold-storage.test-support.js";
+import { readPreparedSessionCompactionInWorker } from "./session-compaction-prepared.js";
 
 let state: OpenClawTestState;
 let fixture: Awaited<ReturnType<typeof createSessionColdStorageFixture>>;
@@ -210,7 +211,7 @@ it.each(["registry", "resume-marker"] as const)(
       replaceSessionEntrySync(fixture.scope, {
         sessionId: currentId,
         updatedAt: 1,
-        resumeAfterRestart: { queuedInputIds: [] },
+        resumeAfterRestart: {},
       });
     }
     const before = fixture.snapshot();
@@ -243,7 +244,32 @@ it("propagates selection failure without a mutation or synchronous fallback", as
   expectHistoryUnchanged();
 });
 
-it("scans hot-window protection only when embedded archives leave a batch slot", async () => {
+it("fills an archive slot past an older window protected by another session", () => {
+  setTranscriptActivity(fixture.options, historicalId, 1);
+  setTranscriptActivity(fixture.options, currentId, 2);
+  const referenceScope = {
+    ...fixture.scope,
+    sessionKey: "agent:main:older-window-reference",
+    sessionId: "reference-current",
+  };
+  replaceSessionEntrySync(referenceScope, {
+    sessionId: referenceScope.sessionId,
+    updatedAt: 1,
+    previousSessionId: historicalId,
+  });
+  const selected = selectSessionColdBatch({
+    databaseOptions: fixture.options,
+    admissionIdentities: [],
+    liveSessionKeys: [],
+    cooledSessionIds: [],
+    beforeMs: 100,
+    maxTranscripts: 1,
+    maxBytes: 64 * 1024 * 1024,
+  });
+  expect(selected.found && selected.value.plans.map((plan) => plan.sessionId)).toEqual([currentId]);
+});
+
+it("scans protection only when a batch slot and an old window remain", async () => {
   await expect(maintain()).resolves.toEqual({
     archivedTranscripts: 1,
     externalizedTranscripts: 0,
@@ -283,10 +309,14 @@ it("scans hot-window protection only when embedded archives leave a batch slot",
     maxTranscripts: 1,
     maxBytes: 64 * 1024 * 1024,
   };
-  for (const maxTranscripts of [1, 2]) {
+  for (const { maxTranscripts, beforeMs, needsProtection } of [
+    { maxTranscripts: 1, beforeMs: 100, needsProtection: false },
+    { maxTranscripts: 2, beforeMs: 1, needsProtection: false },
+    { maxTranscripts: 2, beforeMs: 100, needsProtection: true },
+  ]) {
     const observer = observeHostDataSql();
     try {
-      const selected = selectSessionColdBatch({ ...input, maxTranscripts });
+      const selected = selectSessionColdBatch({ ...input, maxTranscripts, beforeMs });
       expect(selected.found).toBe(true);
       if (!selected.found) {
         throw new Error("Cold selection database was not found");
@@ -302,7 +332,7 @@ it("scans hot-window protection only when embedded archives leave a batch slot",
             sql.includes('"last_activity_at"') &&
             sql.includes('"last_interaction_at"'),
         ),
-      ).toBe(maxTranscripts > 1);
+      ).toBe(needsProtection);
     } finally {
       observer.restore();
     }
@@ -379,4 +409,22 @@ it("retains an embedded archive when its window gains an admitted owner after pr
     admission?.release();
     await admission?.released;
   }
+});
+
+it("restores the captured cold source for native compaction preflight", async () => {
+  await expect(maintain()).resolves.toMatchObject({ archivedTranscripts: 1 });
+  expect(readSessionColdTranscript(fixture.database(), historicalId)).toBeDefined();
+  const prepared = await readPreparedSessionCompactionInWorker(fixture.scope, {
+    kind: "preflight",
+  });
+  expect(prepared.status).toBe("preflight");
+  if (prepared.status !== "preflight") {
+    throw new Error("Expected restored preflight");
+  }
+  expect(prepared.source.entries.map((entry) => entry.id)).toEqual([
+    "history-user",
+    "history-assistant",
+  ]);
+  expect(prepared.reads.extractedRows).toBe(3);
+  expectHistoryUnchanged();
 });

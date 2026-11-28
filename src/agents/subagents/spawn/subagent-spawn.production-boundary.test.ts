@@ -419,7 +419,6 @@ describe("recursive spawn production boundary", () => {
         },
       };
       let consented: boolean | undefined;
-      let revokedSource: unknown;
       const modelRun = holdModelRun(bound, "child complete", async (params) => {
         consented = await assertAgentHarnessExecutionEnvironment(harness, params);
         const admitted = await resolvePreparedRunAdmission({
@@ -431,13 +430,6 @@ describe("recursive spawn production boundary", () => {
         // The harness host captures this assertion and checks it right before native dispatch.
         const active = expectDefined(resolveAdmittedRunActiveAssertion(admitted), "active child");
         active();
-        // Removing the spawning owner after admission must stop that dispatch.
-        bound.cfg.commands = { ownerAllowFrom: [] };
-        try {
-          active();
-        } catch (error) {
-          revokedSource = error;
-        }
       });
       let childRunId: string | undefined;
       const failures: unknown[] = [];
@@ -454,7 +446,6 @@ describe("recursive spawn production boundary", () => {
         await waitForEmbeddedRun(bound, details.runId, modelRun.started);
         expect(runEmbeddedAgent.mock.calls[0]?.[0]).toMatchObject({ senderIsOwner: owner });
         expect(consented).toBe(owner);
-        expect(revokedSource !== undefined).toBe(owner);
       } catch (error) {
         failures.push(error);
       } finally {

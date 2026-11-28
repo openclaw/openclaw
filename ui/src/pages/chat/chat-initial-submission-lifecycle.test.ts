@@ -2,7 +2,7 @@
 import { expectDefined } from "@openclaw/normalization-core";
 import { expect, it, vi } from "vitest";
 import { createDeferred } from "../../../../test/helpers/promise.js";
-import { clearChatHistory } from "./chat-history-actions.ts";
+import { clearChatHistory } from "./chat-history-clear.runtime.ts";
 import { resetChatHistoryProjection } from "./chat-history-state.ts";
 import { loadChatHistory } from "./chat-history.ts";
 import { makeChatPageHost } from "./chat-pending-inputs.test-support.ts";

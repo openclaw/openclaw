@@ -21,6 +21,7 @@ import {
   openOpenClawStateDatabase,
   runOpenClawStateWriteTransaction,
 } from "../state/openclaw-state-db.js";
+import { prepareUserProfileCatalog } from "../state/user-profile-list.js";
 import { listProfiles } from "../state/user-profile-reads.js";
 import {
   ensureCanonicalUserProfileForEmail,
@@ -32,6 +33,8 @@ import { prepareGitHubPublicationRequesterV2 } from "./github-publication-reques
 import { readRepositoryGitHubPublicationFixture as readRepositoryGitHubPublication } from "./github-publication-store.test-support.js";
 import { readGitHubPublicationRequest } from "./github-publication-store.worker.js";
 import {
+  BRANCH,
+  NEW_HEAD,
   createRealPublicationWorkspace,
   createTestGitHubPublicationCoordinator,
   overrideCommands,
@@ -60,6 +63,26 @@ export const publicationGuestEmail = "publication-guest@example.test";
 export const publicationBackends = ["local", "repository"] as const;
 export const forPublicationBackends = <T extends string>(changes: readonly T[]) =>
   publicationBackends.flatMap((backend) => changes.map((change) => ({ backend, change })));
+
+export const publicationPullRequest = (
+  overrides: Partial<{
+    url: string;
+    state: string;
+    body: string;
+    headSha: string;
+    baseRef: string;
+  }> = {},
+  backend: Backend = "local",
+) => ({
+  url: `https://github.com/${backend === "local" ? "openclaw/openclaw/pull/125200" : "owner/repository/pull/1"}`,
+  userId: 42,
+  state: "open",
+  body: "",
+  headSha: NEW_HEAD,
+  headRef: BRANCH,
+  baseRef: "main",
+  ...overrides,
+});
 
 export function createPublicationRepositories(fork = false) {
   const baseRepo = {
@@ -163,7 +186,12 @@ export async function createGitHubPublicationRequesterFixture(params: {
   };
   if (params.openclawIdPrincipal) {
     client.internal = { ...client.internal, openclawIdPrincipal: params.openclawIdPrincipal };
+    if (params.openclawIdPrincipal.kind === "owner") {
+      client.internal.authenticatedOperator = true;
+      client.internal.operatorRoleActor = { kind: "system" };
+    }
   }
+  onTestFinished((await prepareUserProfileCatalog()).release);
   prepareGatewayConnectOperatorAccess(client);
   const context = {
     getRuntimeConfig: currentGitHubPublicationConfig,
@@ -216,13 +244,16 @@ async function createRequesterPolicySources(
   const maintainerSource = await capture(maintainerProfile, ["operator.admin"]);
   const database = openOpenClawStateDatabase();
   const publishedTitles: string[] = [];
+  const publishedBodies: string[] = [];
   const externalWrites: string[] = [];
   overrideCommands((argv, input) => {
     if (argv.includes("push") || argv.includes("POST") || argv.includes("graphql")) {
       externalWrites.push(argv.join(" "));
     }
     if (argv.includes("POST") && argv.some((arg) => arg.endsWith("/pulls"))) {
-      publishedTitles.push(JSON.parse(input!).title);
+      const { title, body } = JSON.parse(input!);
+      publishedTitles.push(title);
+      publishedBodies.push(body);
     }
   });
   return {
@@ -236,6 +267,7 @@ async function createRequesterPolicySources(
     maintainerSource,
     maintainerProfile,
     publishedTitles,
+    publishedBodies,
     externalWrites,
     async revoke() {
       await setCanonicalUserProfileRole(guestProfile, "revoked");
@@ -345,20 +377,24 @@ export async function createRequesterPublicationFixture(
       );
     },
     removeRequesterSnapshot(requestId: string) {
+      this.replaceRequesterSnapshot(requestId, null);
+    },
+    replaceRequesterSnapshot(requestId: string, json: string | null) {
       runOpenClawStateWriteTransaction(({ db }) => {
         if (backend === "repository") {
           const row = readRepositoryGitHubPublication(requestId)!;
           db.prepare(
-            "UPDATE github_repository_publication_requests SET requester_authority_json = NULL, request_digest = ? WHERE request_id = ?",
+            "UPDATE github_repository_publication_requests SET requester_authority_json = ?, request_digest = ? WHERE request_id = ?",
           ).run(
-            repositoryGitHubPublicationDigest({ ...row, requester_authority_json: null }),
+            json,
+            repositoryGitHubPublicationDigest({ ...row, requester_authority_json: json }),
             requestId,
           );
           return;
         }
         db.prepare(
-          "UPDATE github_publication_session_lifecycles SET requester_authority_json = NULL WHERE publication_kind = 'shared' AND request_id = ?",
-        ).run(requestId);
+          "UPDATE github_publication_session_lifecycles SET requester_authority_json = ? WHERE publication_kind = 'shared' AND request_id = ?",
+        ).run(json, requestId);
       });
     },
   };
@@ -414,7 +450,7 @@ export function withPublicationGuestRole(
   };
 }
 
-export async function prepareVisitorPublicationFixture(f: {
+async function prepareVisitorPublicationFixture(f: {
   config: OpenClawConfig;
   session: { sessionKey: string };
   maintainer: Requester;

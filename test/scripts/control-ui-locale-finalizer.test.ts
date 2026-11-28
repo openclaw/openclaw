@@ -69,6 +69,9 @@ it.each([
   async (change, expected, retranslatesKeep) => {
     const r = await harness.run({ fullRefresh: true, change });
     validated(r);
+    const workerIds = r.workerRequests.flatMap((request) => request.ids);
+    expect(workerIds).toHaveLength(26);
+    expect(new Set(workerIds).size).toBe(26);
     expect(r.workerRequests.flatMap((request) => request.ids)).toContain(id("keep"));
     expect(r.providerRequests.flatMap((request) => request.ids).includes(id("keep"))).toBe(
       retranslatesKeep,
@@ -109,7 +112,7 @@ it.each([
   expect(r.workerRequests.length).toBeGreaterThan(0);
   expect(r).toMatchObject({
     providerRequests: [],
-    publicationCalls: [],
+    publicationCalls: [expect.stringContaining("api --method GET repos/openclaw/openclaw/pulls")],
     publication: { branchExists: false },
   });
   expect(r.failure).toContain(error);

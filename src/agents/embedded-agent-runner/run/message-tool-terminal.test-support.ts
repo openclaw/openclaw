@@ -1,8 +1,6 @@
 import type { AssistantMessage, Model } from "openclaw/plugin-sdk/llm";
-import { Agent, type AgentTool } from "../../runtime/index.js";
 import { createQueuedAssistantStream } from "../../test-helpers/assistant-event-stream.test-support.js";
 import { createZeroUsageFixture } from "../../test-helpers/usage-fixtures.js";
-import { installMessageToolTerminalHook } from "./message-tool-terminal.js";
 
 export function createTerminalTestModel(): Model {
   return {
@@ -48,25 +46,4 @@ export function terminalResponse(
 
 export function terminalToolCall(name: string, id: string, args: Record<string, unknown> = {}) {
   return { type: "toolCall" as const, name, id, arguments: args };
-}
-
-export function terminalMessageAgent(
-  tools: AgentTool[],
-  step: (request: number) => ReturnType<typeof terminalResponse>,
-  afterToolCall: Agent["afterToolCall"],
-) {
-  const counts = { requests: 0, deliveries: 0 };
-  const agent = new Agent({
-    initialState: { model: terminalModel, tools },
-    streamFn: () => step(++counts.requests),
-  });
-  agent.afterToolCall = afterToolCall;
-  installMessageToolTerminalHook({
-    agent,
-    sourceReplyDeliveryMode: "automatic",
-    onDeliveredSourceReply: () => {
-      counts.deliveries += 1;
-    },
-  });
-  return { agent, counts };
 }

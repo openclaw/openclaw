@@ -221,9 +221,7 @@ export function createVideoGenerateTool(
   }
   const { cfg, preparedProviders, sandboxConfig, taskOptions } = context;
   const includeAudioReferences = (() => {
-    const agentDir = options?.agentDir;
     const authStore = options?.authProfileStore;
-    const authProfileStoreSource = options?.authProfileStoreSource;
     const workspaceDir = options?.workspaceDir;
     const snapshot = loadCapabilityMetadataSnapshot({
       config: cfg,
@@ -301,9 +299,7 @@ export function createVideoGenerateTool(
           provider: providerId,
           cfg,
           workspaceDir,
-          agentDir,
           authStore,
-          authProfileStoreSource,
         })
       ) {
         return true;

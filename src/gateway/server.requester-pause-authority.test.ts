@@ -26,7 +26,7 @@ import * as pendingInputs from "../config/sessions/session-accessor.pending-inpu
 import { registerAgentRunContext } from "../infra/agent-run-registry.js";
 import { withSessionTurn } from "../sessions/session-controller.admission.js";
 import { captureOpenClawStateWorkerContext } from "../state/openclaw-state-worker-context.js";
-import { captureGatewayOperatorRunAuthority } from "./operator-run-authority.js";
+import { prepareGatewayOperatorRunAuthority } from "./operator-run-authority.js";
 import { dispatchGatewayRequestInProcessRaw } from "./server-in-process-dispatch.js";
 import {
   captureOperatorToolGatewayContinuationContext,
@@ -41,7 +41,6 @@ afterEach(() => vi.restoreAllMocks());
 
 it.for([
   "allowed",
-  "operator only",
   "foreign requester",
   "requester reset",
   "same-human follow-up",
@@ -71,15 +70,13 @@ it.for([
     const followsUp = outcome === "same-human follow-up" || revokedSource;
     const retiresAfterAcceptance = outcome === "outbox retired after acceptance";
     const sourceRevocation = new AbortController();
-    let originalSource: Awaited<ReturnType<typeof captureGatewayOperatorRunAuthority>>;
+    let originalSource: Awaited<ReturnType<typeof prepareGatewayOperatorRunAuthority>>;
     const marker = `PAUSE-MARKER-${id}`;
     const client = createOperatorClient({
       profileName: `pause-${id}`,
       scopes: ["operator.admin"],
     });
-    if (outcome !== "operator only") {
-      client.internal = { controlUiAdmin: true };
-    }
+    client.internal = { controlUiAdmin: true };
     const other = createOperatorClient({
       profileName: `foreign-${id}`,
       scopes: ["operator.write"],
@@ -191,7 +188,7 @@ it.for([
           expect(caller.operatorAuthority?.source).toBe(originalSource?.authority.source);
         }
         expect(opts.cronCreatorAuthorityCapability?.managementEntitlement?.source).toBe(
-          outcome === "operator only" || continued ? undefined : "control-ui-admin",
+          continued ? undefined : "operator",
         );
         await withGatewayToolCallerIdentity(caller, async () => {
           const recorder = expectDefined(opts.userTurnTranscriptRecorder, "Gateway input recorder");
@@ -214,7 +211,7 @@ it.for([
             received.push(opts.message);
             if (retiresAfterAcceptance) {
               expect(opts.cronCreatorAuthorityCapability?.managementEntitlement?.source).toBe(
-                "control-ui-admin",
+                "operator",
               );
               expect(opts.cronCreatorAuthorityCapability?.isCurrent?.()).toBe(true);
             }
@@ -226,9 +223,7 @@ it.for([
                 [currentChild()],
                 currentChild().requesterSettleWake?.rearmGeneration,
               );
-              expect(opts.cronCreatorAuthorityCapability?.isCurrent?.()).toBe(
-                outcome === "operator only" ? undefined : true,
-              );
+              expect(opts.cronCreatorAuthorityCapability?.isCurrent?.()).toBe(true);
             }
           }
         });
@@ -293,7 +288,7 @@ it.for([
     try {
       if (followsUp) {
         originalSource = expectDefined(
-          await captureGatewayOperatorRunAuthority({
+          await prepareGatewayOperatorRunAuthority({
             client,
             context,
             sourceAuthority: {
@@ -383,7 +378,6 @@ it.for([
         });
         freshClient.internal = { controlUiAdmin: true };
         await sendHuman(freshClient, followupRunId, "Same human follow-up");
-        expect(originalSource?.authority.assertCurrent).not.toThrow();
       }
       const target = foreignRequester ? foreign : parent;
       const sessionId = foreignRequester ? foreignId : parentId;
@@ -437,7 +431,7 @@ it.for([
           }
           resume.resolve();
         }
-        if (!foreignRequester && !resetRequester && !revokedSource) {
+        if (!foreignRequester && !resetRequester) {
           await continuation;
           await Promise.all(trackedRequests());
           expect(received).toEqual([
@@ -460,17 +454,12 @@ it.for([
             (error: unknown) => error,
           );
           const expectedDenial = foreignRequester
-            ? "does not own this continuation"
-            : revokedSource
-              ? "Original completion source revoked during dispatch"
-              : "no longer current";
+            ? /does not own this continuation/
+            : /no longer current|Requester continuation ended/;
           const settled = await Promise.allSettled(trackedRequests());
           for (const work of settled) {
             if (work.status === "rejected") {
-              expect(work.reason).toHaveProperty(
-                "message",
-                expect.stringContaining(expectedDenial),
-              );
+              expect(work.reason).toHaveProperty("message", expect.stringMatching(expectedDenial));
             }
           }
           expect(received).toEqual(receivedBefore);
@@ -478,7 +467,7 @@ it.for([
           expect(sessionAccessor.loadTranscriptEventsSync(scope)).toEqual(before);
           expect(context.dedupe.has(`agent:${continuationRunId}`)).toBe(false);
           expect(failure).toBeInstanceOf(Error);
-          expect(failure).toHaveProperty("message", expect.stringContaining(expectedDenial));
+          expect(failure).toHaveProperty("message", expect.stringMatching(expectedDenial));
         }
         expect((await pendingInputs.listSessionPendingInputs(scope)).total).toBe(0);
       } finally {

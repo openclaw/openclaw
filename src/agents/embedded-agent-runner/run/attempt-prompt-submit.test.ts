@@ -177,6 +177,7 @@ describe("submitEmbeddedAttemptPrompt", () => {
     for (let retry = 0; retry < 3; retry++) {
       const input = makeNormalizationInput(
         makeAttempt({
+          pressure: "overflow",
           route: "truncate_tool_results_only",
           source: "mid-turn",
           handled: true,
@@ -203,6 +204,7 @@ describe("submitEmbeddedAttemptPrompt", () => {
         onModelRequest: (_model, context) => {
           requests.push(structuredClone(context.messages));
           throw new MidTurnPrecheckSignal({
+            pressure: "overflow",
             route: "compact_only",
             estimatedPromptTokens: 932_476,
             promptBudgetBeforeReserve: 922_000,
@@ -311,7 +313,9 @@ describe("submitEmbeddedAttemptPrompt", () => {
           revision += 1;
           await request();
           active = false;
-          await expect(request()).rejects.toThrow("admitted run authority is no longer active");
+          await expect(request()).rejects.toThrow(
+            "This agent run is no longer active. Start a new turn to retry.",
+          );
         },
       });
       expect(requests).toHaveLength(2);
@@ -854,7 +858,7 @@ describe("submitEmbeddedAttemptPrompt", () => {
     );
     expect(second?.content[0]).toMatchObject({
       type: "text",
-      text: expect.stringMatching(/more characters truncated/),
+      text: expect.stringMatching(/chars omitted/),
     });
     expect(second?.content[0]?.type === "text" ? second.content[0].text.length : 0).toBe(
       input.toolResultMaxChars,

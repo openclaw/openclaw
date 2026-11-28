@@ -12,8 +12,8 @@ export type McpOAuthIdentity = {
   serverName: string;
   serverUrl: string;
   /**
-   * Whether operator config `mcp.servers` defines this server (only those resolve in
-   * `openclaw mcp login`); false means a plugin declares it, absent means unknown.
+   * Whether operator config `mcp.servers` defines this server; false means a
+   * plugin declares it, absent means unknown. Plugin CLI sign-in requires a running Gateway.
    */
   configured?: boolean;
 };
@@ -35,30 +35,45 @@ export function operatorMcpOAuthIdentity(
   };
 }
 
-/**
- * Terminal sign-in steps, or undefined when the CLI cannot sign in: `openclaw mcp login`
- * runs offline only and resolves only operator `mcp.servers`, never plugin-declared servers.
- */
+/** Terminal sign-in guidance for shared OAuth, including plugin servers while online. */
 export function mcpOAuthCliLoginSteps(identity: McpOAuthIdentity): string | undefined {
-  if (identity.principal !== "operator" || !identity.configured) {
+  if (identity.principal !== "operator") {
     return undefined;
   }
   const login = formatCliCommand(`openclaw mcp login ${quoteCliArg(identity.serverName)}`);
-  return `stop the Gateway with ${formatCliCommand("openclaw gateway stop")}, run ${login}, then start the Gateway again`;
+  return `run ${login} (works while the Gateway runs), or ask the agent to connect in a direct chat`;
+}
+
+function mcpOAuthSettingsHint(identity: McpOAuthIdentity): string {
+  return identity.configured === false
+    ? "Select Connect on the plugin's page in Settings"
+    : "Sign in from Settings → MCP";
+}
+
+/** Name-free recovery for the bounded model notice; the full error retains the CLI command. */
+function mcpOAuthPromptSignInHint(identity: McpOAuthIdentity): string {
+  return identity.principal === "requester"
+    ? "Reconnect from the channel through the MCP connect flow."
+    : `${mcpOAuthSettingsHint(identity)}, or ask the agent to connect in a direct chat.`;
 }
 
 /** Recovery sentence for MCP OAuth credential errors. */
-export function mcpOAuthSignInHint(identity: McpOAuthIdentity): string {
+function mcpOAuthSignInHint(identity: McpOAuthIdentity): string {
   if (identity.principal === "requester") {
-    return "Reconnect from the channel through the MCP connect flow.";
+    return mcpOAuthPromptSignInHint(identity);
   }
   const steps = mcpOAuthCliLoginSteps(identity);
-  if (steps) {
-    return `Sign in from Settings → MCP, or from the Gateway's terminal: ${steps}.`;
+  return `${mcpOAuthSettingsHint(identity)}, or from the Gateway's terminal: ${steps}.`;
+}
+
+/** Preserve the operator error while carrying a compact model-facing recovery fact. */
+export class McpOAuthDiagnosticError extends Error {
+  readonly promptMessage: string;
+
+  constructor(identity: McpOAuthIdentity, reason: string) {
+    super(`MCP server "${identity.serverName}" ${reason} ${mcpOAuthSignInHint(identity)}`);
+    this.promptMessage = `${reason} ${mcpOAuthPromptSignInHint(identity)}`;
   }
-  return identity.configured === false
-    ? "Select Connect on the plugin's page in Settings to sign in again."
-    : "Sign in again from Settings: select Connect on the plugin's page, or Sign in on the MCP page.";
 }
 
 export function requesterMcpOAuthIdentity(

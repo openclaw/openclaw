@@ -1,4 +1,4 @@
-import { isSessionMutationActive } from "../../sessions/session-controller.lifecycle.js";
+import { collectDeliveryFencingMutationKinds } from "../../sessions/session-controller.lifecycle.js";
 import { assertSessionEntryCreationPublication } from "./session-accessor.sqlite-entry-cache-publication.js";
 import type { SessionEntryCreationOperation } from "./session-accessor.sqlite-entry-cache.types.js";
 import type { CapturedSessionActorStorageOwner } from "./session-actor-storage-binding.js";
@@ -6,37 +6,31 @@ import {
   SessionDeliveryGenerationRevokedError,
   SessionDeliveryGenerationUnavailableError,
 } from "./session-delivery-generation-errors.js";
-import type {
-  SessionGenerationEntry,
-  SessionGenerationFacts,
-} from "./session-delivery-generation.types.js";
+import type { LeaseFacts, SessionGenerationEntry } from "./session-delivery-generation.types.js";
 
 /**
- * A stored reference names its conversation by key alone, so it follows edits, resets and
- * compaction to the current transcript. Live-writer fences pin the transcript
- * (`exactTranscript`) or the incarnation (`exactLifecycle`). A null session id leases the
- * row's absence.
+ * A chat lease follows the key to the current transcript. A transcript lease holds the
+ * writer's transcript, or a scheduled occurrence's incarnation. A null session id leases
+ * the row's absence.
  */
 export function matchesSessionGeneration(
-  input: SessionGenerationFacts,
+  input: LeaseFacts,
   entry: Pick<SessionGenerationEntry, "sessionId" | "lifecycleRevision"> | null | undefined,
 ): boolean {
   if (!entry || input.sessionId === null) {
     return Boolean(entry) !== (input.sessionId === null);
   }
-  if (input.exactTranscript && entry.sessionId !== input.sessionId) {
-    return false;
-  }
   return (
-    !(input.exactTranscript || input.exactLifecycle) ||
-    (entry.lifecycleRevision ?? null) === input.lifecycleRevision
+    !input.exact ||
+    ((input.exact === "lifecycle" || entry.sessionId === input.sessionId) &&
+      (entry.lifecycleRevision ?? null) === (input.lifecycleRevision ?? null))
   );
 }
 
 /** Actor close owns revocation; every transport effect still reads current owner-held policy. */
 export async function prepareMemorySessionGeneration(
   source: CapturedSessionActorStorageOwner,
-  input: SessionGenerationFacts,
+  input: LeaseFacts,
   onRevoked?: (reason: unknown) => void,
 ) {
   const selected = source.binding;
@@ -101,7 +95,10 @@ export async function prepareMemorySessionGeneration(
     assertCurrent,
     assertNativeTransactionCurrent: Object.assign(() => assertCurrent(), { nativeSource: true }),
     assertDeliveryCurrent() {
-      if (isSessionMutationActive(source.path, [input.sessionKey, initial?.sessionId])) {
+      if (
+        collectDeliveryFencingMutationKinds(source.path, [input.sessionKey, initial?.sessionId])
+          .length
+      ) {
         throw new SessionDeliveryGenerationUnavailableError();
       }
       assertCurrent();

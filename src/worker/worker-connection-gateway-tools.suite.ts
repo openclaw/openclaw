@@ -305,7 +305,7 @@ export function registerWorkerGatewayToolTransportTests(connectParams: WorkerCon
               generation: args.generation,
               toolCallId: args.toolCallId,
             });
-            await vi.advanceTimersByTimeAsync(0);
+            await vi.advanceTimersToNextTimerAsync();
             expect(sent.map((frame) => frame.method)).toEqual([
               "worker.gatewayTool.invoke",
               "worker.gatewayTool.cancel",
@@ -328,7 +328,7 @@ export function registerWorkerGatewayToolTransportTests(connectParams: WorkerCon
             ).toHaveLength(1);
             return;
           }
-          await vi.advanceTimersByTimeAsync(0);
+          await vi.advanceTimersToNextTimerAsync();
           expect(sent.map((frame) => frame.params)).toEqual([args, args]);
           update(sockets[1]!, 1);
           update(sockets[1]!, 2, "old-surface");

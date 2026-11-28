@@ -200,7 +200,7 @@ export function resolveSessionCatalogProfiles(
     (runtime
       ? resolveSessionModelRef(config, sessionEntry, agentId, {
           allowPluginNormalization: false,
-        }).provider
+        })?.provider
       : undefined);
   const context = {
     ...(provider ? { profileProvider: provider } : {}),
@@ -311,7 +311,7 @@ export function projectSessionModelCatalog(
       (!model.agentRuntime || model.agentRuntime.id === "openclaw") &&
       configuredWorkerModels.has(identityKey(model));
     const renderedSelection =
-      model.provider === renderedModel.provider && model.id === renderedModel.model;
+      model.provider === renderedModel?.provider && model.id === renderedModel.model;
     if (!configuredWorkerModel && ((!nativeAuth && !ambientWorkerModel) || !renderedSelection)) {
       return model;
     }

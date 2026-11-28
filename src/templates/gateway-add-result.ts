@@ -1,4 +1,4 @@
-import type { StatelessTemplateAddResult } from "./add-stateless.js";
+import type { StatelessTemplateAddResult } from "./add-stateless-contract.js";
 
 export type TemplateAddOutcomes = {
   packages: Array<{

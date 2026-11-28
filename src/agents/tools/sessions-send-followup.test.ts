@@ -3,15 +3,21 @@ import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import type { GatewayClient } from "../../gateway/server-methods/types.js";
 import type { PreparedSessionMutationFacts } from "../../gateway/session-sharing-policy.js";
 import { rolePolicyConfig, sharingPolicyClient } from "../../gateway/session-sharing.test-utils.js";
+import { chatRef } from "../../sessions/chat-ref.js";
 import { sessionChanges } from "../../sessions/session-row-changes.js";
+import { expectCollected } from "../../test-utils/retention.js";
 import {
   readFollowupRequest,
   SessionFollowupCompletion,
 } from "../subagents/completion/session-followup-completion.js";
 import type { FollowupRequest } from "../subagents/completion/session-followup-completion.types.js";
 import { prepareSessionsSendFollowup } from "./sessions-send-followup-custody.js";
-import { startSessionsSendFollowup } from "./sessions-send-followup.js";
+import {
+  dispatchSessionsSendFollowup,
+  startSessionsSendFollowup,
+} from "./sessions-send-followup.js";
 import { startSessionsSendReplyFlow } from "./sessions-send-reply-flow.js";
+import * as sendDelivery from "./sessions-send-tool.delivery.js";
 vi.mock("./sessions-send-reply-flow.js", () => ({ startSessionsSendReplyFlow: vi.fn() }));
 const mocks = vi.hoisted(() => ({
   config: vi.fn<() => OpenClawConfig>(),
@@ -34,9 +40,9 @@ vi.mock("../../plugins/runtime/gateway-request-scope.js", () => ({
 vi.mock("../../state/user-channel-identity-operations.js", () => ({
   prepareUserProfileRoleAuthority: mocks.profile,
 }));
+// mock-isolation: a fixed requester caller with no admitted run, so no tool-caller session source applies.
 vi.mock("./gateway-caller-context.js", () => ({
   getGatewayToolCallerIdentity: () => ({ agentId: "main", sessionKey: "agent:main:requester" }),
-  captureGatewayToolCallerAssertion: () => () => {},
   resolveGatewayToolOperatorSelection: () => ({
     operatorAuthority: undefined,
     assertCurrent: () => {},
@@ -137,11 +143,10 @@ describe("followup retained session authorization", () => {
       replyTimeoutMs: 30000,
       replyMode: "one-way" as const,
       requesterSession,
-      requesterDeliveryGeneration: {
+      requesterDeliveryGeneration: chatRef({
         ...storageOwner,
         sessionKey: input.requesterSessionKey,
-        ...requesterSession,
-      },
+      }),
       requesterOrigin: {
         channel: "telegram",
         to: "chat-123",
@@ -188,35 +193,83 @@ describe("followup retained session authorization", () => {
     completion.assertExecutionCurrent(input.runId);
   });
 
-  it.each(["access", "archive"] as const)(
-    "latches %s revocation after the row recovers",
-    async (change) => {
-      const changedKey = change === "access" ? "legacy-worker-alias" : input.targetSessionKey;
-      const preparedTarget = target().target!;
-      preparedTarget.storeKeys.push(changedKey);
-      const request = await prepare();
-      const assertRevoked = () =>
-        expect(() => request.custody.assertCurrent()).toThrow(
-          change === "access" ? "revoked" : "archived",
+  it("drops dispatch inputs when the retained child admission closes", async () => {
+    let heldByTarget: (() => void) | undefined;
+    const activeDelivery = vi
+      .spyOn(sendDelivery, "trySessionsSendActiveRunDelivery")
+      .mockResolvedValue({});
+    const start = vi
+      .spyOn(sendDelivery, "startSessionsSendAgentRun")
+      .mockImplementation(async (params) => {
+        heldByTarget = params.assertDispatchCurrent;
+        heldByTarget?.();
+        return { ok: false, result: { content: [], details: { status: "error" } } };
+      });
+    try {
+      const inputs = await (async () => {
+        const params: Parameters<typeof dispatchSessionsSendFollowup>[0] = {
+          cfg: mocks.config(),
+          admissionConfig: mocks.config(),
+          callGateway: async () => {
+            throw new Error("Unexpected transport call");
+          },
+          runId: input.runId,
+          sessionKey: input.targetSessionKey,
+          sessionStoreTarget: storageTarget(input.targetSessionKey),
+          sendParams: {
+            agentId: "main",
+            message: "followup",
+            inputProvenance: { kind: "inter_session", sourceSessionKey: input.requesterSessionKey },
+            sourceReplyDeliveryMode: "message_tool_only",
+          },
+        };
+        await dispatchSessionsSendFollowup(
+          params,
+          {
+            ...input,
+            callGateway: params.callGateway,
+            displayKey: input.targetSessionKey,
+            replyTimeoutMs: 0,
+            replyMode: "one-way",
+            requesterSession: { sessionId: "requester-id", lifecycleRevision: "one" },
+          },
+          {
+            message: "followup",
+            ownChild: true,
+            nativeChild: true,
+            watch: false,
+            requesterSessionKey: input.requesterSessionKey,
+            requesterAgentId: "main",
+            requesterTurnRunId: "requester-turn",
+          },
         );
-      expect(() => request.custody.assertCurrent()).not.toThrow();
-      if (change === "access") {
-        target().membership = new Set();
-      } else {
-        preparedTarget.entry.archivedAt = 2;
-      }
-      sessionChanges.emit({ sessionKey: changedKey });
-      expect(request.custody.signal.aborted).toBe(true);
-      assertRevoked();
-      if (change === "access") {
-        target().membership = new Set(["requester"]);
-      } else {
-        delete preparedTarget.entry.archivedAt;
-      }
-      sessionChanges.emit({ sessionKey: changedKey });
-      assertRevoked();
-    },
-  );
+        return new WeakRef(params);
+      })();
+      activeDelivery.mockClear();
+      start.mockClear();
+      expect(heldByTarget).toThrow("Child followup admission was closed.");
+      await expectCollected(inputs);
+      expect(heldByTarget).toThrow("Child followup admission was closed.");
+    } finally {
+      activeDelivery.mockRestore();
+      start.mockRestore();
+    }
+  });
+
+  it("retains admitted access after membership changes", async () => {
+    const request = await prepare();
+    target().membership = new Set();
+    sessionChanges.emit({ sessionKey: input.targetSessionKey });
+    expect(request.custody.signal.aborted).toBe(false);
+    expect(() => request.custody.assertCurrent()).not.toThrow();
+  });
+
+  it("refuses delivery to an archived conversation", async () => {
+    const request = await prepare();
+    target().target!.entry.archivedAt = 2;
+    sessionChanges.emit({ sessionKey: input.targetSessionKey });
+    expect(() => request.custody.assertCurrent()).toThrow("Followup conversation changed.");
+  });
   it("refuses missing captured authority rather than selecting a System caller", async () => {
     mocks.capture.mockReturnValue(undefined);
     await expect(prepareSessionsSendFollowup(input)).rejects.toThrow("in-process caller custody");

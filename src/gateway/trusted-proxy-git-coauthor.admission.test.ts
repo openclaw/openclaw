@@ -84,6 +84,7 @@ describe("organization credit through authenticated profile admission", () => {
             },
             state: { authResult, authMethod: "trusted-proxy", role: "operator" },
             ownerProfileExpected: false,
+            connectionScopes: ["operator.read"],
             authenticatedUserId: authResult.user,
             requestHeaders: req.headers,
             resolveAuthenticatedGitHubIdentity: undefined,
@@ -153,6 +154,7 @@ describe("organization credit through authenticated profile admission", () => {
         },
         state: { authResult, authMethod: "trusted-proxy", role: "operator" },
         ownerProfileExpected: false,
+        connectionScopes: ["operator.read"],
         authenticatedUserId: authResult.user,
         requestHeaders: {
           "x-credit-name": "Alice Example",

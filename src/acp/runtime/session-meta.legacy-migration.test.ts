@@ -12,7 +12,7 @@ import type { SessionAcpMeta } from "../../config/sessions/types.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import { recordDeferredPluginMigrations } from "../../infra/deferred-plugin-migrations.js";
 import * as workerAdmission from "../../infra/sqlite-worker-operation-admission.js";
-import { migrateLegacyAcpSessionMetadata } from "../../infra/state-migrations.session-store.js";
+import { migrateLegacyAcpSessionMetadata } from "../../infra/state-migrations.acp-session-metadata.js";
 import { EMPTY_LEGACY_SESSION_SURFACES } from "../../plugins/legacy-session-surfaces.types.js";
 import {
   closeOpenClawAgentDatabasesAsync,

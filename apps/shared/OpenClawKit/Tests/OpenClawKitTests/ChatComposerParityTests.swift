@@ -235,7 +235,8 @@ struct ChatComposerStateTests {
     @Test func `model selection target describes only gateway owned values`() {
         let viewModel = OpenClawChatViewModel(sessionKey: "main", transport: ComposerParityTransport())
         let expectations: [(String?, String?)] = [
-            ("session", "Changes this session only"),
+            // A session-scoped pick needs no note.
+            ("session", nil),
             ("agent", "Changes this agent's default"),
             ("global", "Changes the global default"),
             ("future-target", nil),
@@ -252,22 +253,15 @@ struct ChatComposerStateTests {
     }
 
     @Test func `model selection matches qualified choices after gateway readback`() {
-        let choices = [
-            OpenClawChatModelChoice(
-                modelID: "claude-opus-4-1",
-                name: "Claude Opus 4.1",
-                provider: "anthropic",
-                contextWindow: 200_000),
+        let model = OpenClawChatViewModel(sessionKey: "main", transport: ComposerParityTransport())
+        var session = OpenClawChatSessionEntry(key: "main")
+        session.model = "claude-opus-4-1"
+        model.sessions = [session]
+        model.syncSelectedModel()
+        model.modelChoices = [
+            .init(modelID: "claude-opus-4-1", name: "Claude Opus 4.1", provider: "anthropic", contextWindow: nil),
         ]
-
-        #expect(OpenClawChatViewModel.modelSelectionMatches(
-            selectionID: "anthropic/claude-opus-4-1",
-            currentSelectionID: "claude-opus-4-1",
-            choices: choices))
-        #expect(!OpenClawChatViewModel.modelSelectionMatches(
-            selectionID: OpenClawChatViewModel.defaultModelSelectionID,
-            currentSelectionID: "claude-opus-4-1",
-            choices: choices))
+        #expect(model.canonicalModelSelectionID == "anthropic/claude-opus-4-1")
     }
 
     @Test func `tagless movie metadata stages as video`() async throws {
@@ -433,5 +427,43 @@ struct ChatComposerStateTests {
 
         #expect(transport.sentMessages == ["> **User:** quoted body\n\n"])
         #expect(vm.replyTarget == nil)
+    }
+}
+
+@MainActor
+struct ChatInputResponsivenessTests {
+    @Test
+    func `draft observation stays in the deferred composer sections`() throws {
+        let viewModel = OpenClawChatViewModel(sessionKey: "main", transport: ComposerParityTransport())
+        let composer = OpenClawChatComposer(
+            viewModel: viewModel,
+            style: .standard,
+            showsSessionSwitcher: false,
+            userAccent: nil,
+            composerChrome: .clean,
+            isComposerEnabled: true,
+            isAttachmentInputEnabled: true,
+            messagePlaceholder: nil,
+            talkControl: nil,
+            dictationControl: nil,
+            voiceNoteControl: nil)
+        let probe = Mutex(0)
+        withObservationTracking {
+            _ = composer.editorOverlay
+            _ = composer.cleanCaptureAndPrimaryControls
+        } onChange: {
+            probe.withLock { $0 += 1 }
+        }
+        viewModel.input = "typing while an answer arrives"
+        try #require(probe.withLock { $0 } == 0)
+
+        let childProbe = Mutex(0)
+        withObservationTracking {
+            _ = composer.cleanCaptureAndPrimaryControls.body
+        } onChange: {
+            childProbe.withLock { $0 += 1 }
+        }
+        viewModel.input = ""
+        #expect(childProbe.withLock { $0 } == 1)
     }
 }

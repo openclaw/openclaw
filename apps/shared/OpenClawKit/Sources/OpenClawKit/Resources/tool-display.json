@@ -43,6 +43,7 @@
     "session_status": {"icon":"barChart","title":"Session Status","detailKeys":["sessionKey","model"]},
     "github_publish": {"icon":"github","title":"GitHub Publish","detailKeys":["title"]},
     "github_identity_status": {"icon":"settings","title":"GitHub Identity Status","detailKeys":[]},
+    "session_project": {"icon":"layers","title":"Session Project","detailKeys":["action","projectId"]},
     "sessions": {"icon":"layers","title":"Session Settings","actions":{"patch":{"label":"update","detailKeys":["sessionKey","label","pinned","archived","model","thinkingLevel"]},"group_list":{"label":"groups"},"group_set":{"label":"set groups","detailKeys":["names"]},"group_rename":{"label":"rename group","detailKeys":["name","to"]},"group_delete":{"label":"delete group","detailKeys":["name"]}}},
     "sessions_create": {"icon":"layers","title":"New session","detailKeys":["label","agentId","cwd","group"]},
     "sessions_list": {"icon":"layers","title":"Sessions","detailKeys":["kinds","label","agentId","search","limit","activeMinutes","includeDerivedTitles","includeLastMessage","messageLimit"]},

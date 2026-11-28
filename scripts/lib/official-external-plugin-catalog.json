@@ -577,6 +577,9 @@
       "source": "official",
       "kind": "plugin",
       "openclaw": {
+        "build": {
+          "bundledDist": true
+        },
         "plugin": {
           "id": "llama-cpp",
           "label": "llama.cpp Provider"

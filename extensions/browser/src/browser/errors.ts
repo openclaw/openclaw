@@ -120,6 +120,8 @@ export class BrowserConflictError extends BrowserError {
   }
 }
 
+export const BROWSER_TAB_CRASHED_MESSAGE = "This tab crashed. Open the page again in a new tab.";
+
 export class BrowserResetUnsupportedError extends BrowserError {
   constructor(message: string) {
     super(message, 400);
@@ -157,6 +159,13 @@ export function toBrowserErrorResponse(err: unknown): BrowserErrorResponse | nul
   }
   if (err instanceof BrowserError) {
     return { status: err.status, message: err.message };
+  }
+  // Playwright can observe a crash during an action and append a multiline call log.
+  if (
+    err instanceof Error &&
+    /^(?:[a-z][\w.]*: )?Target crashed[ \t]*(?:\r?\n|$)/.test(err.message)
+  ) {
+    return { status: 409, message: BROWSER_TAB_CRASHED_MESSAGE };
   }
   if (err instanceof Error && err.name === "BlockedBrowserTargetError") {
     return { status: 409, message: err.message, reason: BROWSER_ERROR_REASONS.navigationBlocked };

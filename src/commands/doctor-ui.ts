@@ -17,7 +17,9 @@ import { resolveOpenClawPackageRoot } from "../infra/openclaw-root.js";
 import { runCommandWithTimeout } from "../process/exec.js";
 import type { RuntimeEnv } from "../runtime.js";
 import { resolveRuntimeServiceBuildId } from "../version.js";
+import type { DoctorMaintenancePending } from "./doctor-maintenance-pending.js";
 import type { DoctorPrompter } from "./doctor-prompter.js";
+import { shouldAutoApproveDoctorFix, type DoctorRepairMode } from "./doctor-repair-mode.js";
 
 type UiProtocolFreshnessIssue = {
   readonly root: string;
@@ -142,6 +144,30 @@ function formatUiProtocolFreshnessIssue(issue: UiProtocolFreshnessIssue): string
         ? `- Run: ${formatControlUiSourceCommand(issue.root, "build")}`
         : "- Reinstall OpenClaw to restore bundled Control UI assets.",
   ].join("\n");
+}
+
+/**
+ * Read-only: whether {@link maybeRepairUiProtocolFreshness} would build Control UI assets.
+ * Missing assets build under `--fix`; stale ones also need `--force`. An answer that waits
+ * on an interactive prompt is undecidable.
+ */
+export async function checkUiProtocolFreshnessPending(
+  repairMode: DoctorRepairMode,
+): Promise<DoctorMaintenancePending> {
+  let pending: DoctorMaintenancePending = "none";
+  for (const issue of await detectUiProtocolFreshnessIssues()) {
+    if (issue.installOwner || !issue.canBuild) {
+      continue;
+    }
+    const requiresForce = issue.kind === "stale-assets";
+    if (shouldAutoApproveDoctorFix(repairMode, { requiresForce })) {
+      return "work";
+    }
+    if (repairMode.canPrompt && !(repairMode.shouldRepair && requiresForce)) {
+      pending = "undecidable";
+    }
+  }
+  return pending;
 }
 
 export async function maybeRepairUiProtocolFreshness(

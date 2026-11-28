@@ -2,6 +2,7 @@
 // oxfmt-ignore
 import {
   SESSION_KEY,
+  createRealPublicationWorkspace,
   installGitHubPublicationTestHarness,
   persistPublicationTestSession,
 } from "./github-publication.test-support.js";
@@ -92,6 +93,7 @@ describe("personal publication session lifecycle", () => {
   installGitHubPublicationTestHarness();
   let fixture: Awaited<ReturnType<typeof createPersonalPublicationFixture>>;
   beforeEach(async () => {
+    await createRealPublicationWorkspace();
     fixture = await createPersonalPublicationFixture();
   });
   afterEach(() => {

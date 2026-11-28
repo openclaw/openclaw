@@ -1,6 +1,4 @@
 import { expect, it, vi } from "vitest";
-import { createOperationalRunInstanceRef } from "../../agents/admitted-run-context.js";
-import type { patchSessionEntryTarget } from "../../config/sessions/session-accessor.js";
 import { createAgentDedupeLifecycle } from "../agent-turn/agent-dedupe-lifecycle.js";
 import type { performGatewaySessionReset } from "../session-reset-service.js";
 import {
@@ -14,133 +12,41 @@ import {
   invokeAgent,
 } from "./agent.test-harness.js";
 
-type PatchOptions = NonNullable<Parameters<typeof patchSessionEntryTarget>[2]>;
-
 export function registerAgentResetAuthorityTests(mocks: ReturnType<typeof getAgentTestMocks>) {
-  const resetRunId = "test-idem-reset-closed-authority";
+  const resetRunId = "test-idem-reset-result";
   const sessionKey = "agent:main:main";
   const sessionId = "reset-session-id";
   const reset = (message: string, options: Parameters<typeof invokeAgent>[1]) =>
     invokeAgent({ message, sessionKey, idempotencyKey: resetRunId }, options);
 
-  it.each([
-    "before ingress",
-    "before reset commit",
-    "after reset commit",
-    "after reset commit with follow-up",
-    "during follow-up persistence",
-    "reset fails",
-    "never",
-  ] as const)("contains /reset effects when runtime authority closes %s", async (closeAt) => {
-    let authorityActive = closeAt !== "before ingress";
-    let resetCommitted = false;
-    const closesAfterCommit = closeAt.startsWith("after reset commit");
-    const closesDuringFollowUp = closeAt === "during follow-up persistence";
-    const hasFollowUp = closeAt.endsWith("with follow-up") || closesDuringFollowUp;
-    const message = hasFollowUp ? "/reset continue working" : "/reset";
-    let followUpCommitted = false;
-    mockMainSessionEntry({
-      sessionId: closesDuringFollowUp ? sessionId : "existing-session-id",
-      ...(closesDuringFollowUp ? { lifecycleRevision: "before-reset" } : {}),
-    });
+  it.each(["failure", "success"] as const)("preserves ordinary reset %s", async (outcome) => {
+    mockMainSessionEntry({ sessionId: "existing-session-id" });
     mocks.performGatewaySessionReset.mockClear();
-    if (closesDuringFollowUp) {
-      mocks.patchSessionEntryTarget.mockImplementationOnce(
-        async (scope, _update, options: PatchOptions) => {
-          expect(scope).toMatchObject({ agentId: "main", target: { canonicalKey: sessionKey } });
-          expect(options.fallbackEntry).toMatchObject({
-            sessionId,
-            lifecycleRevision: "after-reset",
-          });
-          expect([resetCommitted, authorityActive]).toEqual([true, true]);
-          await Promise.resolve();
-          authorityActive = false;
-          requireValue(options.workerGuard?.source, "missing follow-up authority guard")();
-          followUpCommitted = true;
-          return null;
-        },
-      );
-    }
     mocks.performGatewaySessionReset.mockImplementation(
       async (options: Parameters<typeof performGatewaySessionReset>[0]) => {
-        await Promise.resolve();
-        if (closeAt === "before reset commit") {
-          authorityActive = false;
-        }
         options.assertCurrent?.();
-        if (closeAt === "reset fails") {
-          authorityActive = false;
+        if (outcome === "failure") {
           return {
             ok: false,
             error: { code: "UNAVAILABLE", message: "reset storage unavailable" },
           };
         }
-        resetCommitted = true;
         options.onCommitted?.({ key: sessionKey, sessionId });
-        mockMainSessionEntry({
-          sessionId,
-          ...(closesDuringFollowUp ? { lifecycleRevision: "after-reset" } : {}),
-        });
-        if (closesAfterCommit) {
-          authorityActive = false;
-        }
+        mockMainSessionEntry({ sessionId });
         return { ok: true, key: sessionKey, entry: { sessionId } };
       },
     );
     const client = operatorWriteCliClient(["operator.admin"]);
-    const operationalRunInstance = createOperationalRunInstanceRef("reset-caller");
-    client.internal = {
-      agentRuntimeIdentity: {
-        kind: "agentRuntime",
-        agentId: "main",
-        sessionKey,
-        operationalRunInstance,
-        delegatedAuthority: {
-          kind: "local",
-          operationalRunInstance,
-          lifecycleGeneration: "test-generation",
-          claimId: "reset-caller-claim",
-        },
-      },
-    };
     const context = makeContext();
-    context.validateAgentRuntimeApprovalAuthority = () => authorityActive;
+    const respond = await reset("/reset", { client, context });
 
-    const respond = await reset(message, { client, context });
-
-    expect(mocks.performGatewaySessionReset).toHaveBeenCalledTimes(
-      closeAt === "before ingress" ? 0 : 1,
-    );
-    expect(resetCommitted).toBe(closesAfterCommit || closesDuringFollowUp || closeAt === "never");
-    expect(followUpCommitted).toBe(false);
-    if (closesDuringFollowUp) {
-      expect(mocks.patchSessionEntryTarget).toHaveBeenCalledOnce();
-    }
+    expect(mocks.performGatewaySessionReset).toHaveBeenCalledOnce();
     expect(mocks.agentCommand).not.toHaveBeenCalled();
-    if (closeAt === "never") {
+    if (outcome === "success") {
       expect(mockCallArg(respond)).toBe(true);
-    } else if (closeAt === "reset fails") {
+    } else {
       expectRespondError(respond, { message: "reset storage unavailable" });
       expect(context.dedupe.get(`agent:${resetRunId}`)).toBeUndefined();
-    } else {
-      expectRespondError(respond, { message: "agent runtime authority is no longer active" });
-      expect(respond.mock.calls.some(([ok]) => ok === true)).toBe(false);
-    }
-    if (closesAfterCommit || closesDuringFollowUp) {
-      authorityActive = true;
-      const retry = await reset(message, { client, context });
-      expect(mocks.performGatewaySessionReset).toHaveBeenCalledOnce();
-      expect(mocks.agentCommand).not.toHaveBeenCalled();
-      expect([mockCallArg(retry), mockCallArg(retry, 0, 3)]).toEqual([true, { cached: true }]);
-      expect(mockCallArg(retry, 0, 1)).toMatchObject({
-        status: "ok",
-        result: {
-          meta: { agentMeta: { sessionId } },
-          ...(hasFollowUp
-            ? { payloads: [{ text: expect.stringContaining("before the follow-up ran") }] }
-            : {}),
-        },
-      });
     }
   });
 

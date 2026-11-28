@@ -124,7 +124,6 @@
 .usage-toolbar,
 .daily-chart-header,
 .sessions-card-header,
-.sessions-card-meta,
 .timeseries-header-row,
 .context-breakdown-header,
 .session-detail-header {
@@ -210,9 +209,7 @@
 
 .usage-date-input,
 .usage-select,
-.usage-query-input,
-.usage-filters-inline select,
-.usage-filters-inline input[type="text"] {
+.usage-query-input {
   min-height: var(--settings-control-height);
   border: 1px solid var(--field-border);
   border-radius: var(--field-radius);
@@ -224,10 +221,6 @@
 .usage-select {
   height: var(--settings-control-height);
   padding: 0 var(--field-padding-inline);
-}
-
-select.usage-select {
-  width: auto;
 }
 
 .usage-separator,
@@ -707,34 +700,9 @@ select.usage-select {
   background: var(--bg-hover);
 }
 
-.usage-filter-option {
-  display: grid;
-  grid-template-columns: auto minmax(0, 1fr);
-  gap: 8px;
-  align-items: center;
-  padding: 6px 8px;
-  min-height: var(--menu-item-height);
-  border-radius: var(--menu-item-radius);
-  background: transparent;
-  font-size: 12px;
-}
-
-.usage-filter-option .oc-menu-item__check,
 .usage-value-picker__option .oc-menu-item__check {
   order: 0;
   margin-inline-start: 0;
-}
-
-.usage-filter-select [data-value="command:clear"] + .usage-filter-option {
-  margin-block-start: 9px;
-}
-
-.usage-filter-select [data-value="command:clear"] + .usage-filter-option::before {
-  position: absolute;
-  inset-inline: 8px;
-  top: -5px;
-  border-top: 1px solid color-mix(in srgb, var(--border) 80%, transparent);
-  content: "";
 }
 
 .usage-query-chips,
@@ -1023,12 +991,6 @@ select.usage-select {
     box-shadow 0.18s var(--ease-out);
 }
 
-/* Fixed width: identity names arrive with the data and must not move the controls beside it. */
-select.usage-creator-filter {
-  width: 260px;
-  max-width: 100%;
-}
-
 .usage-creator-row--unrecorded :is(th, td) {
   color: var(--muted);
 }
@@ -1315,84 +1277,6 @@ select.usage-creator-filter {
   border-top: 1px solid var(--border);
 }
 
-.usage-summary-strip--windows {
-  grid-template-columns: repeat(auto-fit, minmax(min(13rem, 100%), 1fr));
-}
-
-.cost-window {
-  display: grid;
-  align-content: start;
-  gap: 4px;
-  min-width: 0;
-  padding: 14px 16px;
-}
-
-.cost-window__label {
-  color: var(--muted);
-  font-size: var(--control-ui-text-xs);
-}
-
-.cost-window__value {
-  color: var(--text-strong);
-  font-size: 1.375rem;
-  font-variant-numeric: tabular-nums;
-  font-weight: 600;
-  letter-spacing: -0.02em;
-  line-height: 1.15;
-}
-
-.cost-window__meta {
-  color: var(--muted);
-  font-size: var(--control-ui-text-xs);
-  font-variant-numeric: tabular-nums;
-}
-
-/* Mini daily columns: tinted by value; the newest day stands out; hover reads a day out. */
-.usage-bars {
-  position: relative;
-  display: flex;
-  align-items: flex-end;
-  gap: 2px;
-  height: 36px;
-  margin-top: 14px;
-  border-bottom: 1px solid color-mix(in srgb, var(--border) 60%, transparent);
-}
-
-.usage-bars__bar {
-  flex: 1 1 0;
-  min-width: 2px;
-  border-radius: 2px 2px 0 0;
-  background: color-mix(in srgb, var(--accent) var(--usage-bar-tint, 45%), transparent);
-}
-
-.usage-bars__bar--current {
-  background: var(--accent);
-  box-shadow: 0 0 0 2px color-mix(in srgb, var(--accent) 30%, transparent);
-}
-
-.usage-bars__bar--hover {
-  background: var(--text-strong);
-}
-
-.usage-bars__tip {
-  position: absolute;
-  right: 0;
-  bottom: calc(100% + 4px);
-  padding: 2px 8px;
-  border: 1px solid var(--border);
-  border-radius: var(--radius-md);
-  background: var(--bg-elevated);
-  color: var(--muted);
-  font-size: var(--control-ui-text-xs);
-  white-space: nowrap;
-  pointer-events: none;
-}
-
-.usage-bars__tip b {
-  color: var(--text-strong);
-  font-variant-numeric: tabular-nums;
-}
-
 /* One shrinkable column: a wide child must not widen its card past the grid track. */
 .daily-chart-compact,
 .cost-breakdown,
@@ -1658,13 +1542,9 @@ select.usage-creator-filter {
   gap: 14px;
 }
 
-.sessions-card-stats {
-  display: inline-flex;
-  flex-wrap: wrap;
-  gap: 8px 12px;
-}
-
+/* Sort controls share the count row and stay together at its end. */
 .sessions-sort {
+  margin-inline-start: auto;
   display: inline-flex;
   align-items: center;
   gap: 8px;
@@ -1889,24 +1769,6 @@ select.usage-creator-filter {
   background: var(--bg);
 }
 
-.usage-filters-inline {
-  display: flex;
-  flex-wrap: wrap;
-  align-items: center;
-  gap: 10px;
-}
-
-.usage-filters-inline select[multiple] {
-  min-width: 150px;
-  min-height: 112px;
-  padding: 8px;
-}
-
-.usage-filters-inline input[type="text"] {
-  flex: 1 1 220px;
-  padding: 0 var(--field-padding-inline);
-}
-
 :root[data-theme-mode="light"] .session-bar-row,
 :root[data-theme-mode="light"] .usage-insight-card,
 :root[data-theme-mode="light"] .session-timeseries-compact,
@@ -2000,14 +1862,12 @@ select.usage-creator-filter {
     border-top: 0;
   }
 
-  .usage-controls,
-  .usage-filters-inline {
+  .usage-controls {
     align-items: stretch;
   }
 
   .usage-date-range,
   .usage-query-actions,
-  .sessions-card-meta,
   .timeseries-controls {
     justify-content: flex-start;
   }

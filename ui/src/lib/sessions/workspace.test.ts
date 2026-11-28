@@ -3,11 +3,11 @@ import { describe, expect, it } from "vitest";
 import { resolveSessionWorkspace } from "./workspace.ts";
 
 describe("repository session workspace", () => {
-  it.each(["/state", "C:\\state"])(
+  it.each(["/state/workspace-", "C:\\state\\workspace-"])(
     "keeps a generated agent ID out of the workspace label under %s",
-    (directory) => {
+    (prefix) => {
       const agentId = "bot-11111111-2222-4333-8444-555555555555";
-      const workspace = `${directory}/workspace-${agentId}`;
+      const workspace = `${prefix}${agentId}`;
       expect(
         resolveSessionWorkspace({
           session: { key: `agent:${agentId}:main`, kind: "direct" },

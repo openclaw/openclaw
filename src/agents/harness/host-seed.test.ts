@@ -15,15 +15,15 @@ import {
   upsertSessionEntryCore,
 } from "../../config/sessions/session-accessor.js";
 import { onAgentRuntimeEvent, type AgentEventPayload } from "../../infra/agent-events.js";
+import type { PersistedUserTurnMessage } from "../../sessions/user-turn-input.types.js";
 import { createUserTurnTranscriptRecorder } from "../../sessions/user-turn-transcript.js";
-import type { PersistedUserTurnMessage } from "../../sessions/user-turn-transcript.types.js";
 import {
   withOpenClawTestState,
   type OpenClawTestState,
 } from "../../test-utils/openclaw-test-state.js";
 import { compactEmbeddedAgentSessionDirect as compactSession } from "../embedded-agent-runner/compact.js";
 import { readCompactionAccountingRecorder } from "../embedded-agent-runner/run/compaction-accounting-bridge.js";
-import { resolveCompactionRetentionBudget } from "../sessions/compaction/request-budget.js";
+import { resolveCompactionRetentionBudgetFromTokens } from "../sessions/compaction/request-budget.js";
 import { estimateCompactionHistoryTokens } from "../sessions/context-token-pressure.js";
 import { withSessionCompactionPersistenceAsync as persistCompaction } from "../sessions/session-compaction-persistence.js";
 import { SessionManager } from "../sessions/session-manager.js";
@@ -225,7 +225,7 @@ it.each<SeedCase>([
               : undefined,
             budget: budget
               ? {
-                  ...resolveCompactionRetentionBudget(budget, []),
+                  ...resolveCompactionRetentionBudgetFromTokens(budget, 0),
                   estimateTokens: (message: AgentMessage) =>
                     estimateCompactionHistoryTokens([message], budget),
                 }
@@ -381,6 +381,49 @@ it("charges restored assistant images before selecting the bounded seed", () =>
     expect(seed.some((message) => message.role === "assistant")).toBe(false);
     expect(JSON.stringify(seed)).toContain("Older history outside that window is omitted");
     expect(JSON.stringify(seed)).toContain("Recent text");
+  }));
+
+it("bounds restored image bytes even when their image-token estimates fit", () =>
+  withOpenClawTestState({ label: "native-media-byte-seed" }, async (state) => {
+    const fixture = await seedFixture(state, "media-bytes");
+    const manager = await fixture.open();
+    await appendUser(manager, "Earlier image question", 1);
+    await appendUser(manager, "Recent text", 2);
+    const before = loadTranscriptEventsSync(fixture.target);
+    const bound = fixture.bind(
+      { config: seedConfig("20mb", false), contextTokenBudget: 100_000 },
+      undefined,
+      {
+        capabilities: {
+          prepareContextMedia: async ({ message }) => ({
+            images:
+              message.role === "user" && message.content === "Earlier image question"
+                ? Array.from({ length: 12 }, () => ({
+                    type: "image" as const,
+                    mimeType: "image/png",
+                    data: Buffer.concat([
+                      Buffer.from(
+                        "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mP8/x8AAwMCAO+ip1sAAAAASUVORK5CYII=",
+                        "base64",
+                      ),
+                      Buffer.alloc(75_000),
+                    ]).toString("base64"),
+                  }))
+                : [],
+          }),
+        },
+      },
+    );
+    const prepare = expectDefined(bound?.prepareBoundedSeed, "media byte seed");
+    const seed = await prepare({ assertCurrent: () => {} });
+    expect(
+      seed.some(
+        (message) => message.role === "user" && message.content === "Earlier image question",
+      ),
+    ).toBe(false);
+    expect(JSON.stringify(seed)).toContain("Older history outside that window is omitted");
+    expect(JSON.stringify(seed)).toContain("Recent text");
+    expect(loadTranscriptEventsSync(fixture.target)).toEqual(before);
   }));
 
 it.each([1, 2])("bounds restored images and reuses their prepared snapshot (%s)", (imageCount) =>

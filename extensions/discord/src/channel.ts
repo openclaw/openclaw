@@ -59,7 +59,6 @@ import {
 } from "./channel.loaders.js";
 import { openDiscordCommandDeployHashStore } from "./command-deploy-store.js";
 import { prepareDiscordConversationRouteOwnersAsync } from "./conversation-route-owner.js";
-import { normalizeDiscordSnowflake } from "./directory-cache.js";
 import { shouldSuppressLocalDiscordExecApprovalPrompt } from "./exec-approvals.js";
 import {
   resolveDiscordGroupRequireMention,
@@ -81,7 +80,7 @@ import { normalizeExplicitDiscordSessionKey } from "./session-key-normalization.
 import { discordSetupContract } from "./setup-adapter.js";
 import { createDiscordPluginBase, discordConfigAdapter } from "./shared.js";
 import { collectDiscordStatusIssues } from "./status-issues.js";
-import { parseDiscordTarget } from "./target-parsing.js";
+import { normalizeDiscordSnowflake, parseDiscordTarget } from "./target-parsing.js";
 import { discordConversationBindings } from "./thread-bindings-channel.js";
 
 const DISCORD_ACCOUNT_STARTUP_STAGGER_MS = 10_000;
@@ -112,24 +111,25 @@ async function sendDiscordHeartbeatTyping(params: {
   signal?: AbortSignal;
   assertPlatformSendAuthorized?: () => void;
 }) {
-  const resolvedTo = resolveDiscordAttachedOutboundTarget(params);
-  const target = parseDiscordTarget(resolvedTo, { defaultKind: "channel" });
-  if (!target || target.kind !== "channel") {
-    return;
-  }
-  const { sendTypingDiscord } = await loadDiscordSendModule();
+  const { resolveDiscordTargetChannelId, sendTypingDiscord } = await loadDiscordSendModule();
   const assertCurrent = () => {
     params.signal?.throwIfAborted();
     params.assertPlatformSendAuthorized?.();
   };
+  const opts = {
+    cfg: params.cfg,
+    accountId: params.accountId ?? undefined,
+    signal: params.signal,
+  };
   assertCurrent();
-  await withDiscordRequestAuthority(assertCurrent, () =>
-    sendTypingDiscord(target.id, {
-      cfg: params.cfg,
-      accountId: params.accountId ?? undefined,
-      signal: params.signal,
-    }),
-  );
+  await withDiscordRequestAuthority(assertCurrent, async () => {
+    // DM sessions target `user:<id>`; typing goes to the DM channel, as for every DM send.
+    const { channelId } = await resolveDiscordTargetChannelId(
+      resolveDiscordAttachedOutboundTarget(params),
+      opts,
+    );
+    await sendTypingDiscord(channelId, opts);
+  });
 }
 
 const resolveDiscordAllowlistGroupOverrides = createNestedAllowlistOverrideResolver({
@@ -630,6 +630,9 @@ export const discordPlugin: ChannelPlugin<ResolvedDiscordAccount, DiscordProbe, 
     security: discordSecurityAdapter,
     threading: {
       matchesToolContextTarget: matchesDiscordToolContextTarget,
+      isThreadAddressedByTarget: ({ to, threadId }) =>
+        /^\d+$/.test(String(threadId)) &&
+        to === resolveDiscordAttachedOutboundTarget({ to, threadId }),
       // A Discord thread is addressed by its own channel id, so only a send to
       // that thread's channel carries the current thread. Parent and sibling
       // channels stay unthreaded; this never redirects a send into the thread.

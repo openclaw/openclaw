@@ -364,8 +364,9 @@ describe("hooks CLI process lifecycle", () => {
           resolveOpenClawStateSqlitePath(),
           "--generation",
           relay.generation,
+          // The relay deadline includes this cold TypeScript process start.
           "--timeout",
-          "5000",
+          "30000",
         ),
         completion: "exit",
         label: "hooks relay explicit state database",

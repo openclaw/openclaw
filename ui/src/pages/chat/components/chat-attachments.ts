@@ -13,8 +13,20 @@ import type { ChatAttachmentControlsProps } from "./chat-attachment-controls.typ
 import { currentAttachments } from "./chat-attachment-draft.ts";
 import { dataImageClipboardFile } from "./chat-attachment-image.ts";
 import { ChatAttachmentReadLifecycle, readChatAttachmentFile } from "./chat-attachment-reads.ts";
+import { encodeTextAsDataUrl } from "./chat-attachment-text.ts";
 
 registerChatComposerEnglish();
+
+const LARGE_PASTE_TEXT_THRESHOLD = 1000;
+
+function showAttachmentRefusal(props: ChatAttachmentControlsProps) {
+  showToast({
+    severity: "error",
+    message: props.suggestionComposer
+      ? t("chat.composer.textOnlySuggestions")
+      : uploadsDisabledMessage(),
+  });
+}
 
 function isFileDrag(dataTransfer: DataTransfer | null): boolean {
   return Array.from(dataTransfer?.types ?? []).includes("Files");
@@ -60,10 +72,14 @@ export function stagedAttachmentBytes(
   );
 }
 
-function chatAttachmentFromFile(file: File, dataUrl: string): ChatAttachment {
-  const attachment: ChatAttachment = {
+function chatAttachmentFromFile(
+  file: File,
+  dataUrl: string,
+  origin: ChatAttachment["origin"] = "file",
+): ChatAttachment {
+  const attachment = {
     id: generateAttachmentId(),
-    origin: "file",
+    origin,
     mimeType: file.type || "application/octet-stream",
     fileName: file.name || undefined,
     sizeBytes: file.size,
@@ -92,8 +108,8 @@ export function appendChatAttachmentFiles(
   if (!props.onAttachmentsChange || candidates.length === 0 || props.readSignal?.aborted) {
     return 0;
   }
-  if (!uploadsEnabled(props.uploadConfig)) {
-    showToast({ severity: "error", message: uploadsDisabledMessage() });
+  if (props.suggestionComposer || !uploadsEnabled(props.uploadConfig)) {
+    showAttachmentRefusal(props);
     return 0;
   }
   const unsupported = props.imagesOnly
@@ -169,18 +185,22 @@ function recoverDroppedTextPaste(e: ClipboardEvent, text: string) {
   }, 0);
 }
 
-export function handleChatAttachmentPaste(e: ClipboardEvent, props: ChatAttachmentControlsProps) {
+export function handleChatAttachmentPaste(
+  e: ClipboardEvent,
+  props: ChatAttachmentControlsProps,
+  options: { imagesOnly?: boolean } = {},
+) {
   if (!e.clipboardData || !props.onAttachmentsChange) {
     return;
   }
-  if (!uploadsEnabled(props.uploadConfig)) {
+  if (props.suggestionComposer || !uploadsEnabled(props.uploadConfig)) {
     const hasFiles = Array.from(e.clipboardData.items ?? []).some(
       (item) => item.kind === "file" || item.type.startsWith("image/"),
     );
     const text = e.clipboardData.getData("text/plain");
     if (hasFiles || /^data:image\//i.test(text.trim())) {
       e.preventDefault();
-      showToast({ severity: "error", message: uploadsDisabledMessage() });
+      showAttachmentRefusal(props);
       return;
     }
     // Large text remains ordinary native paste instead of becoming a file.
@@ -197,9 +217,20 @@ export function handleChatAttachmentPaste(e: ClipboardEvent, props: ChatAttachme
     imageFiles.push(pasted.file);
   }
   if (imageFiles.length === 0) {
-    // Clipboard text is user input regardless of length; file conversion would
-    // route it through document extraction's untrusted external-content boundary.
-    recoverDroppedTextPaste(e, text ?? "");
+    if (
+      options.imagesOnly ||
+      !text ||
+      text.length <= LARGE_PASTE_TEXT_THRESHOLD ||
+      !(props.getDraft?.() ?? props.draft ?? "")
+    ) {
+      recoverDroppedTextPaste(e, text ?? "");
+      return;
+    }
+    // The card is composer presentation sent as message text, so upload limits do not apply.
+    e.preventDefault();
+    const file = new File([text], `pasted-text-${Date.now()}.txt`, { type: "text/plain" });
+    const attachment = chatAttachmentFromFile(file, encodeTextAsDataUrl(text), "paste");
+    props.onAttachmentsChange([...currentAttachments(props), attachment]);
     return;
   }
   e.preventDefault();
@@ -239,6 +270,7 @@ export function createChatAttachmentDropHandlers(props: ChatAttachmentDropProps)
     if (active) {
       if (
         !props.canCompose ||
+        props.suggestionComposer ||
         !uploadsEnabled(props.uploadConfig) ||
         !isFileDrag(event.dataTransfer)
       ) {
@@ -274,7 +306,9 @@ export function createChatAttachmentDropHandlers(props: ChatAttachmentDropProps)
       event.stopPropagation();
       if (event.dataTransfer) {
         event.dataTransfer.dropEffect =
-          props.canCompose && uploadsEnabled(props.uploadConfig) ? "copy" : "none";
+          props.canCompose && !props.suggestionComposer && uploadsEnabled(props.uploadConfig)
+            ? "copy"
+            : "none";
       }
     },
     onDrop: (event: DragEvent) => {

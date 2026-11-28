@@ -122,6 +122,8 @@ repair; current delivery fields and unrelated stored values keep their values.
 ## Legacy state migration
 
 Runtime uses `~/.openclaw/openclaw.json` unless you select explicit paths.
+Doctor resolves the default layout from the current `HOME` or `USERPROFILE`,
+falling back to the operating system home when neither is set.
 For a default-layout install with only `~/.clawdbot`, Doctor stops the managed
 Gateway and drains database work, then renames that directory to `~/.openclaw`.
 Config preflight renames `clawdbot.json` inside it to `openclaw.json` when the
@@ -140,14 +142,11 @@ its original rollback paths, so a later failed update can refuse automatic
 rollback after relocation. It preserves the moved state and retained snapshots;
 follow its candidate-Doctor recovery guidance before restarting or downgrading.
 
-`openclaw doctor --fix` owns general persistent file-to-SQLite migrations. It validates and claims each recognized source, writes and verifies current-format rows, records a migration receipt, then removes the retired source. Gateway, node-host, and local CLI startup leave general legacy repair to Doctor. Normal versioned database opening, native initialization, and recovery of valid current config remain available.
+`openclaw doctor --fix` owns general persistent file-to-SQLite migrations. It validates and claims each recognized source, writes and verifies current-format rows, records a migration receipt, then removes the retired source. Gateway boot invokes the existing migration owners in place; node-host and local CLI startup leave general legacy repair to Doctor.
 
-The container image entrypoint automatically runs `openclaw doctor --fix --non-interactive`
-against the mounted state and config before starting the Gateway. If you override
-that entrypoint, run Doctor explicitly against the same mounts. Doctor performs
-the required legacy repairs under exclusive maintenance ownership and preserves
-verified SQLite copies before schema upgrades, along with its normal config
-backups and legacy-file archives. Gateway startup then checks runtime readiness.
+The container image entrypoint starts the Gateway directly against the mounted
+state and config. Boot converges supported schemas and legacy state before
+readiness; installed plugin packages converge in the background after readiness.
 An unsafe required store exits with code 78 and its specific reason. Refused default
 or system agents never produce a healthy readiness response. Unused legacy stores,
 including loose `agent/settings.json` files without an agent owner, remain untouched
@@ -319,8 +318,8 @@ Quarantined deletion records and unconfigured or mismatched stores still require
 explicit restoration. Runtime admission remains separate from Doctor's repair
 holds. Review the paths and use the
 noninteractive `openclaw agents add` command printed by Doctor to restore the
-intended agent, or `openclaw agents delete` to confirm deletion. An unconfigured
-agent must be restored before deletion. For a custom database filename, restore
+intended agent, or `openclaw agents delete` to confirm deletion. Restore an
+unconfigured held agent first so its store is verified before deletion. For a custom database filename, restore
 the original `session.store` configuration first; `agents add` refuses to create
 an empty replacement when it cannot select a held store. Doctor prints the exact
 restore and delete commands using the regular agent's ID, such as `main`.

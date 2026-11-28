@@ -27,7 +27,7 @@ type InventoryEnvironment = {
   config: OpenClawConfig;
   env: NodeJS.ProcessEnv;
   stateDir: string;
-  serialized: NodeJS.ProcessEnv;
+  serialized: Readonly<NodeJS.ProcessEnv & { OPENCLAW_STATE_DIR: string }>;
   configuredPaths?: CapturedSessionStorePaths;
 };
 let publishedInventoryEnvironment:
@@ -140,8 +140,9 @@ export type SessionStoreTargetInventoryRequest = {
 
 export type CapturedSessionStoreTargetInventory = Omit<
   SessionStoreTargetInventoryRequest,
-  "registeredDatabases" | "candidates" | "registryDiscovery"
+  "registeredDatabases" | "candidates" | "registryDiscovery" | "env"
 > & {
+  env: InventoryEnvironment["serialized"];
   logicalPaths: string[];
   roots: string[];
   retiredAgentIds: string[];

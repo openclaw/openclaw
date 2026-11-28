@@ -115,6 +115,17 @@ export function transcriptEventContextEligibility(event: unknown): 0 | 1 {
   return isRecord(message) && message.excludeFromContext === true ? 0 : 1;
 }
 
+/**
+ * Context byte accounting charges what can reach the model. A `custom` entry holds host or
+ * plugin state (for example the saved system-prompt checkpoint) and never projects into a
+ * model message, so it stays in bounded acquisition but is not charged.
+ */
+export function transcriptEventChargesContextBytes(event: unknown): boolean {
+  return (
+    transcriptEventContextEligibility(event) === 1 && !(isRecord(event) && event.type === "custom")
+  );
+}
+
 export function shouldProjectActiveEvent(event: unknown): boolean {
   return (
     isRecord(event) &&
