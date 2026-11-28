@@ -27,6 +27,7 @@ import {
   MemoryRecallEmbeddingError,
 } from "./embeddings.js";
 import { MemoryDB, type MemoryEntry } from "./lancedb-store.js";
+import { resolveStoredMemoryDenial, storedMemoriesRefusal } from "./memory-access.js";
 import { dropMediaNoteLines, sanitizeForMemoryCapture } from "./memory-capture-sanitization.js";
 import { registerMemoryCli } from "./memory-cli.js";
 import { MEMORY_CATEGORIES } from "./memory-policy-data.js";
@@ -138,6 +139,9 @@ export default definePluginEntry({
     const resolvedDbPath = dbPath.includes("://") ? dbPath : api.resolvePath(dbPath);
     const { model, dimensions } = cfg.embedding;
     const disabledHookCfg = { ...cfg, autoCapture: false, autoRecall: false };
+    // Bound at registration, never read live: changing it reloads this plugin, so a turn
+    // keeps the rule its tools were prepared with and the next turn gets the new one.
+    const ownerOnly = cfg.ownerOnly !== false;
 
     const vectorDim = dimensions ?? vectorDimsForModel(model);
     const db = new MemoryDB(resolvedDbPath, vectorDim, cfg.storageOptions);
@@ -256,7 +260,11 @@ export default definePluginEntry({
 
     const registerMemoryTool = (
       name: string,
-      create: (ctx: OpenClawPluginToolContext, agentId: string) => Omit<AnyAgentTool, "name">,
+      create: (
+        ctx: OpenClawPluginToolContext,
+        agentId: string,
+        denial: string | undefined,
+      ) => Omit<AnyAgentTool, "name">,
     ) => {
       api.registerTool(
         (ctx) => {
@@ -264,13 +272,19 @@ export default definePluginEntry({
             ctx.agentId,
             ctx.getRuntimeConfig?.() ?? ctx.runtimeConfig ?? ctx.config ?? resolveRuntimeConfig(),
           );
-          return agentId ? { name, ...create(ctx, agentId) } : null;
+          if (!agentId) {
+            return null;
+          }
+          // The host calls this once per turn with the memory audience it minted when it
+          // admitted the turn. Stored-memory access is decided here; tools only consume it.
+          const denial = resolveStoredMemoryDenial(ctx.memoryAudience, agentId, ownerOnly);
+          return { name, ...create(ctx, agentId, denial) };
         },
         { name },
       );
     };
 
-    registerMemoryTool("memory_recall", (ctx, agentId) => ({
+    registerMemoryTool("memory_recall", (ctx, agentId, denial) => ({
       label: "Memory Recall",
       description:
         "Search through long-term memories. Use when you need context about user preferences, past decisions, or previously discussed topics.",
@@ -278,6 +292,9 @@ export default definePluginEntry({
       async execute(_toolCallId, params) {
         // Tool definitions outlive hot config reloads; revalidate before memory I/O.
         assertRetainedToolEnabled(agentId, ctx.getRuntimeConfig);
+        if (denial) {
+          return storedMemoriesRefusal("search stored memories");
+        }
         const rawParams = params as Record<string, unknown>;
         const query = rawParams.query as string;
         const limit = readPositiveIntegerParam(rawParams, "limit") ?? 5;
@@ -414,12 +431,15 @@ export default definePluginEntry({
       },
     }));
 
-    registerMemoryTool("memory_forget", (ctx, agentId) => ({
+    registerMemoryTool("memory_forget", (ctx, agentId, denial) => ({
       label: "Memory Forget",
       description: "Delete specific memories. GDPR-compliant.",
       parameters: memoryForgetSchema,
       async execute(_toolCallId, params) {
         assertRetainedToolEnabled(agentId, ctx.getRuntimeConfig);
+        if (denial) {
+          return storedMemoriesRefusal("delete stored memories");
+        }
         const { query, memoryId } = params as { query?: string; memoryId?: string };
 
         if (memoryId) {
@@ -513,6 +533,12 @@ export default definePluginEntry({
         if (!agentId || !event.prompt || event.prompt.length < 5) {
           return undefined;
         }
+        // The same two turn-fixed inputs the turn's memory tools decided from.
+        const denial = resolveStoredMemoryDenial(ctx.memoryAudience, agentId, ownerOnly);
+        if (denial) {
+          api.logger.debug?.(`memory-lancedb: auto-recall skipped: ${denial}`);
+          return undefined;
+        }
         // One hung embedding request must not stall both automatic and explicit recall.
         // Keep the breaker per agent so unrelated memory namespaces still probe.
         const cooldown = readMemoryRecallCooldown(agentId);
@@ -533,6 +559,7 @@ export default definePluginEntry({
             return undefined;
           }
           toolAuthority.assertActive();
+          ctx.assertMemoryAudienceCurrent?.();
           const recallOperation = startMemoryRecall({
             timeoutMs: AUTO_RECALL_TIMEOUT_MS,
             embed: (timeoutMs) =>

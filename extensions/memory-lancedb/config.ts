@@ -8,7 +8,7 @@ import { isRecord } from "openclaw/plugin-sdk/string-coerce-runtime";
 import { DEFAULT_CAPTURE_MAX_CHARS, DEFAULT_RECALL_MAX_CHARS } from "./memory-policy-data.js";
 
 type ProducedMemoryConfig = ReturnType<typeof memoryConfigSchema.parse>;
-type OptionalMemoryFields = "dreaming" | "dbPath" | "autoCapture" | "autoRecall";
+type OptionalMemoryFields = "dreaming" | "dbPath" | "autoCapture" | "autoRecall" | "ownerOnly";
 type OptionalEmbeddingFields = "apiKey" | "baseUrl" | "dimensions";
 export type MemoryConfig = Omit<ProducedMemoryConfig, "embedding" | OptionalMemoryFields> &
   Partial<Pick<ProducedMemoryConfig, OptionalMemoryFields>> & {
@@ -101,6 +101,7 @@ export const memoryConfigSchema = {
         "autoRecall",
         "captureMaxChars",
         "customTriggers",
+        "ownerOnly",
         "recallMaxChars",
         "storageOptions",
       ],
@@ -190,6 +191,7 @@ export const memoryConfigSchema = {
       autoCapture: cfg.autoCapture === true,
       autoRecall: cfg.autoRecall !== false,
       captureMaxChars,
+      ownerOnly: cfg.ownerOnly !== false,
       ...(customTriggers ? { customTriggers } : {}),
       recallMaxChars,
       ...(storageOptions ? { storageOptions } : {}),

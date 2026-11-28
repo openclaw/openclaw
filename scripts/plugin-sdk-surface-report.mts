@@ -346,7 +346,9 @@ export function readPluginSdkSurfaceBudgets(env: NodeJS.ProcessEnv = process.env
       // +1: createAudioInputBudgetReader admits live audio without delaying the first packet.
       // +1: hasReplyRestartResume, so channels report a restart-owned reply instead of a failure (#206839).
       // +1: compactCatalogForSkillRead, the Codex harness's names-only skills catalog (#206995).
-      3932,
+      // +2: operatorRefusalText and OperatorRefusalCause, so memory-lancedb refuses owner-private
+      // recall in the shared operator wording (#200282, pending owner approval).
+      3934,
       env,
     ),
     publicFunctionExports: readPluginSdkSurfaceBudgetEnv(
@@ -415,7 +417,9 @@ export function readPluginSdkSurfaceBudgets(env: NodeJS.ProcessEnv = process.env
       // +1: createAudioInputBudgetReader admits live audio without delaying the first packet.
       // +1: hasReplyRestartResume, so channels report a restart-owned reply instead of a failure (#206839).
       // +1: compactCatalogForSkillRead, the Codex harness's names-only skills catalog (#206995).
-      2260,
+      // +1: operatorRefusalText, the shared operator refusal wording for owner-private memory
+      // (#200282, pending owner approval).
+      2261,
       env,
     ),
     publicDeprecatedExports: readPluginSdkSurfaceBudgetEnv(

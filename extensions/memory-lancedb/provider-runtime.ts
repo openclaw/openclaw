@@ -1,10 +1,10 @@
 import { formatErrorMessage } from "openclaw/plugin-sdk/error-runtime";
 import type { MemoryPluginCapability } from "openclaw/plugin-sdk/memory-host-core";
-import { normalizeAgentId } from "openclaw/plugin-sdk/routing";
 import { truncateUtf16Safe } from "openclaw/plugin-sdk/text-utility-runtime";
 import type { MemoryConfig } from "./config.js";
 import { type Embeddings, MemoryRecallEmbeddingError } from "./embeddings.js";
 import type { MemoryDB } from "./lancedb-store.js";
+import { resolveSessionMemoryDenial } from "./memory-access.js";
 import { cleanMemorySearchResults, normalizeRecallQuery } from "./memory-policy.js";
 import { startMemoryRecall } from "./recall-service.js";
 
@@ -68,7 +68,7 @@ export type LanceDbMemoryProviderDeps = {
 
 /**
  * Stored memories belong to the agent owner. Operators act for the opened agent; a session
- * reads them only under a host-minted owner-private audience for that same agent.
+ * reads them only under the owner-private rule the plugin's tools share.
  */
 function resolveReadDenial(authority: MemoryCallerAuthority, agentId: string): string | undefined {
   if (authority.kind === "operator") {
@@ -77,14 +77,7 @@ function resolveReadDenial(authority: MemoryCallerAuthority, agentId: string): s
   if (authority.kind === "host") {
     return "host operations cannot read stored memories";
   }
-  const audience = authority.audience;
-  if (audience?.kind !== "owner-private") {
-    return "this session has no owner-private memory audience";
-  }
-  if (normalizeAgentId(audience.agentId) !== agentId) {
-    return "the memory audience belongs to another agent";
-  }
-  return undefined;
+  return resolveSessionMemoryDenial(authority.audience, agentId);
 }
 
 function sliceLines(text: string, from: number | undefined, lines: number | undefined) {
