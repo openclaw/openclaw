@@ -43,7 +43,7 @@ export class AssistantRepetitionGuard {
           fresh = text.slice(state.seen.length);
         }
       }
-      if (fresh === undefined) {
+      if (!state || fresh === undefined) {
         // New block, or the snapshot rewrote what the watch saw: watch the snapshot from the start.
         state = {
           watch: new RepetitionWatch(),
