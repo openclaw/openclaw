@@ -19,7 +19,7 @@ const baseOptions: StructuredInputCompilerOptions = {
 };
 const rich = { ...baseOptions, allowRichForms: true };
 const string = (extra: Record<string, unknown> = {}) => ({ type: "string", ...extra });
-const strings = (extra: Record<string, unknown> = {}, item = string()) => ({
+const strings = (extra: Record<string, unknown>, item: ReturnType<typeof string>) => ({
   type: "array",
   items: item,
   ...extra,

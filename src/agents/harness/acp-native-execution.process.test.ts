@@ -59,7 +59,7 @@ async function withNativeAttempt(
     native: Awaited<ReturnType<typeof registerNative>>;
     attempt: Awaited<ReturnType<typeof attemptFor>>;
   }) => Promise<void>,
-  overrides: OpenClawConfig = {},
+  overrides: OpenClawConfig,
   peer: Parameters<typeof registerNative>[3] = {},
   agent = "opencode",
 ) {
