@@ -158,7 +158,15 @@ const settle = () => {
   if (asAccount("restored", "update", "restore", "--backup-root", p.backupRoot) || untouched()) systemctl("start", p.unit);
   else log("restore did not confirm; " + p.unit + " left stopped, backup kept at " + p.backupRoot);
 };
+// Root's marker that an account run's processes could not be confirmed gone; one of them may
+// still write the state, so this step changes nothing and leaves the backup to the operator.
+const uncertain = () => fs.existsSync(p.handoffDir + "/uncertain");
 const tick = () => {
+  if (uncertain()) {
+    log("the update steps run as " + p.account + " could not be confirmed stopped; nothing settled, " + p.unit + " left as it is, backup kept at " + p.backupRoot);
+    fs.rmSync(p.handoffDir, { recursive: true, force: true });
+    return;
+  }
   if (alive(p.driverPid) || accountWorkRunning()) {
     if (Date.now() < deadline) { setTimeout(tick, 1000); return; }
     // The package is not final while the updater runs; keep the backup for the operator.
@@ -377,7 +385,14 @@ async function activateSystemServiceAsAccount(
     const budget = (fallback: number) => Math.max(1_000, options.remainingMs?.() ?? fallback);
     // Set once an account run's processes could not be confirmed gone; that work may still
     // write the state, so nothing restores or starts until the settle step sees it end.
+    // The settle step reads root's marker and settles nothing while it is there.
     let accountWorkUncertain = false;
+    const markUncertain = async (uncertain: boolean) => {
+      if (uncertain && !accountWorkUncertain) {
+        accountWorkUncertain = true;
+        await fs.writeFile(path.join(handoff.directory, "uncertain"), "", { mode: 0o600 });
+      }
+    };
     const asAccount = async (args: string[], timeoutMs: number) => {
       try {
         const result = await runReleaseAsServiceAccount(execution, handoff, {
@@ -386,10 +401,10 @@ async function activateSystemServiceAsAccount(
           timeoutMs,
           maxStdoutBytes: ACCOUNT_RESULT_MAX_BYTES,
         });
-        accountWorkUncertain ||= hasCommandProcessCleanupError(result.error);
+        await markUncertain(hasCommandProcessCleanupError(result.error));
         return result;
       } catch (error) {
-        accountWorkUncertain ||= hasCommandProcessCleanupError(error);
+        await markUncertain(hasCommandProcessCleanupError(error));
         return null;
       }
     };
@@ -465,7 +480,7 @@ async function activateSystemServiceAsAccount(
     const awaitingAccountWork = (problem: string) =>
       failed(
         false,
-        `${problem} ${account}'s update steps could not be confirmed stopped, so nothing more was changed; ${unitName} stays stopped and ${backupKept}. ${settleUnit} settles the update once that work has ended.`,
+        `${problem} ${account}'s update steps could not be confirmed stopped, so nothing more was changed and nothing will be settled automatically; ${unitName} stays stopped and ${backupKept}. Once no process of ${account}'s update remains and the previous package is back, run openclaw update restore --backup-root ${backupRoot} as ${account} with ${unitName}'s environment, then start ${unitName} (https://docs.openclaw.ai/install/updating#linux-system-service-run-by-another-account).`,
       );
     const restore = async (problem: string): Promise<ServiceAccountActivation> => {
       const resumes = `${unitName} starts again once the previous package is restored (${settleUnit}).`;

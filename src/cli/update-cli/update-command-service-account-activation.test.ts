@@ -373,8 +373,9 @@ describe("system service update as the unit's account", () => {
       );
       expect(native.events).toEqual(["stop"]);
       expect(calls()).toEqual(["migrate"]);
-      // The armed settle step waits for that work before it acts.
-      expect(scheduledPayloads()).toMatchObject([{ mode: "settle" }]);
+      // Root's marker tells the armed settle step to settle nothing.
+      const [payload] = scheduledPayloads();
+      expect(fs.existsSync(path.join(String(payload?.handoffDir), "uncertain"))).toBe(true);
     },
   );
 
@@ -482,6 +483,8 @@ describe("settle step after the installed updater exits", () => {
     noCgroupHierarchy?: boolean;
     /** Checks for which the Doctor child's account migration still runs after the updater died. */
     accountWorkChecks?: number;
+    /** Root's marker that an account run's processes could not be confirmed gone. */
+    uncertain?: boolean;
     account: Record<string, [number, string]>;
   };
 
@@ -556,7 +559,8 @@ describe("settle step after the installed updater exits", () => {
         type: dir === "/sys/fs/cgroup" && !world.noCgroupHierarchy ? 0x63677270 : 0,
       }),
       existsSync: (file: string) =>
-        file === `${payload.handoffDir}/verified` && world.verified === true,
+        (file === `${payload.handoffDir}/verified` && world.verified === true) ||
+        (file === `${payload.handoffDir}/uncertain` && world.uncertain === true),
       rmSync: (dir: string) => events.push(`rm ${dir}`),
       lstatSync: (file: string) => {
         if (file === `${payload.backupRoot}.receipt.json` && world.receipt !== false) {
@@ -717,6 +721,17 @@ describe("settle step after the installed updater exits", () => {
       "systemctl start openclaw-gateway.service",
       "rm /tmp/handoff",
     ]);
+  });
+
+  it("settles nothing while an account run may still write the state", async () => {
+    const events = runSettle(await settleScript(), "settle", {
+      version: "2026.11.10",
+      active: "inactive",
+      uncertain: true,
+      account: { restore: ok("restored") },
+    });
+
+    expect(events.filter((event) => !event.startsWith("log "))).toEqual(["rm /tmp/handoff"]);
   });
 
   it("starts the previous package when the migration never backed anything up", async () => {

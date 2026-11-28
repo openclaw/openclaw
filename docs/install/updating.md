@@ -166,7 +166,12 @@ update fails, so the installed updater restores the previous package. The unit
 starts again on its own once the previous package is back; it is never started on
 the new package with the restored state. If the unit cannot be confirmed stopped
 or the restore fails, the unit is left stopped and the backup is kept; the
-failure names where.
+failure names where. If a step run as the service account could not be confirmed
+stopped, nothing more is changed and the settle unit settles nothing: once no
+process of that account's update remains, and the previous package is back,
+restore the state as the service account with the unit's environment
+(`openclaw update restore --backup-root <path from the failure>`), then start the
+unit.
 
 Root runs only `runuser` (a root-owned copy), `systemctl`, `systemd-run`, and the
 package manager, with its own trusted environment; the unit's environment is
