@@ -120,5 +120,9 @@ describe("hooks workspace", () => {
     }
     writePlainHook(hookDir, "unlisted");
     expect(loadNames()).toEqual([]);
+    expect(warnMock).toHaveBeenCalledWith(
+      expect.stringContaining(`hardlinked hook file ${linkedFile}`),
+    );
+    expect(warnMock).toHaveBeenCalledWith(expect.stringContaining("independent copy"));
   });
 });

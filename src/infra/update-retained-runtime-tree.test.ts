@@ -3,6 +3,7 @@ import fs from "node:fs/promises";
 import path from "node:path";
 import { afterEach, expect, it, vi } from "vitest";
 import { useAutoCleanupTempDirTracker } from "../../test/helpers/temp-dir.js";
+import { loadHookEntriesFromDir } from "../hooks/discovery.js";
 import { readPluginControlUiAssets } from "../plugins/control-ui-assets.js";
 import { loadPluginManifest } from "../plugins/manifest.js";
 import { readPluginCacheFile } from "../plugins/plugin-cache-files.js";
@@ -157,6 +158,37 @@ it("keeps same-inode source edits on the fast path without hashing again", async
   await expect(f.link()).resolves.not.toHaveProperty("unusableReason");
   expect(hash).not.toHaveBeenCalled();
   expect(inode(f.retained("dist/state/worker.js"))).toEqual(inode(f.worker));
+});
+
+it("keeps bundled hooks discoverable in the source and retained runtime", async () => {
+  const hooks = [
+    ["boot-md", "handler.js"],
+    ["session-memory", "handler.ts"],
+    ["command-logger", "index.js"],
+    ["bootstrap-extra-files", "index.ts"],
+  ] as const;
+  const f = await fixture(async (source) => {
+    for (const [name, handler] of hooks) {
+      await writeFile(source, `dist/bundled/${name}/HOOK.md`, `---\nname: ${name}\n---\n`);
+      await writeFile(source, `dist/bundled/${name}/${handler}`, "export default () => {};\n");
+    }
+  });
+  const discover = (base: string) =>
+    loadHookEntriesFromDir({ dir: path.join(base, "dist/bundled"), source: "openclaw-bundled" })
+      .filter((entry) => entry.hook.handlerPath)
+      .map((entry) => entry.hook.name)
+      .toSorted();
+  const expected = ["boot-md", "bootstrap-extra-files", "command-logger", "session-memory"];
+  expect(discover(f.source)).toEqual(expected);
+  await expect(f.link()).resolves.not.toHaveProperty("unusableReason");
+  for (const base of [f.source, f.destination]) {
+    expect(discover(base)).toEqual(expected);
+    for (const [name, handler] of hooks) {
+      for (const file of ["HOOK.md", handler]) {
+        expect(stat(path.join(base, "dist/bundled", name, file)).nlink).toBe(1);
+      }
+    }
+  }
 });
 
 it.each([false, true])(
