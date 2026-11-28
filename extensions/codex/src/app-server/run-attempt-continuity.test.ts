@@ -1,3 +1,4 @@
+import { mkdir, realpath, symlink } from "node:fs/promises";
 import path from "node:path";
 import { expect, it } from "vitest";
 import { resolveCodexAppServerHomeDir } from "./auth-start-options.js";
@@ -22,9 +23,12 @@ import { writeNativeCatalogFixture } from "./thread-lifecycle.test-fixtures.js";
 
 setupRunAttemptTestHooks();
 
-it("retains a protected parent through private completion and owner reentry", async () => {
+it("retains a protected parent with a symlinked home through private completion and owner reentry", async () => {
   const agentDir = path.join(tempDir, "wire-agent");
-  const codexHome = resolveCodexAppServerHomeDir(agentDir);
+  const codexHome = path.join(await realpath(tempDir), "resolved-codex-home");
+  await mkdir(agentDir, { recursive: true });
+  await mkdir(codexHome);
+  await symlink(codexHome, resolveCodexAppServerHomeDir(agentDir), "junction");
   const rolloutPath = path.join(codexHome, "sessions", "continuity-parent.jsonl");
   let creationPolicy = "";
   let creationBase = "";

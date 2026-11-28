@@ -173,7 +173,7 @@ export async function loadCodexNativeToolCatalog(params: {
   const { binding, client, appServer, agentDir, assertCurrent } = params;
   assertCurrent();
   const runtimeIdentity = client.getRuntimeIdentity();
-  const home = resolveCodexAppServerVerifiedLocalHomeDir(
+  const home = await resolveCodexAppServerVerifiedLocalHomeDir(
     appServer,
     agentDir,
     runtimeIdentity?.codexHome,

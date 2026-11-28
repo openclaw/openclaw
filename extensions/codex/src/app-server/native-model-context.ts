@@ -24,12 +24,12 @@ export async function readCodexNativeModelContext(
   const { client, thread } = resources.state;
   try {
     const { appServer, agentDir } = resources.prompt.context.runtime.connection;
-    const home = resolveCodexAppServerVerifiedLocalHomeDir(
+    const home = await resolveCodexAppServerVerifiedLocalHomeDir(
       appServer,
       agentDir,
       client.getRuntimeIdentity()?.codexHome,
     );
-    if (!home) {
+    if (!home || signal.aborted) {
       return undefined;
     }
     const recorded = await withCodexClientWorkspace(client, (state, maxCachedSessions) =>
