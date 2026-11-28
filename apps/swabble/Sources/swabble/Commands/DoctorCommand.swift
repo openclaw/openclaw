@@ -24,7 +24,7 @@ struct DoctorCommand: CLICommand {
             _ = try ConfigLoader.load(at: self.configURL)
             print("Config: OK")
         } catch {
-            print("Config missing or invalid; run setup")
+            print("Config: \(configReadDiagnostic(error))")
         }
         let session = AVCaptureDevice.DiscoverySession(
             deviceTypes: [.microphone, .external],
