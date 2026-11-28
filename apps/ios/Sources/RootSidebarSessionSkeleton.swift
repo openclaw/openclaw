@@ -44,8 +44,8 @@ struct RootSidebarSessionSkeleton: View {
     private func section(
         _ title: String,
         collapsed: Bool,
-        @ViewBuilder rows: () -> some View
-    ) -> some View {
+        @ViewBuilder rows: () -> some View) -> some View
+    {
         VStack(alignment: .leading, spacing: 4) {
             SessionSectionHeader(title: title, isCollapsed: .constant(collapsed), id: "")
                 .allowsHitTesting(false)
