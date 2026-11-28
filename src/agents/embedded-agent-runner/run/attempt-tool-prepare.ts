@@ -292,7 +292,6 @@ export async function prepareEmbeddedAttemptToolBase(params: {
     projectConversationToolNames({
       capabilityProfile: { ...runtimeCapabilityProfile, policy },
       toolNames: [name],
-      warn: () => undefined,
     }).length === 1;
   const resolveWebSearchRoute = () =>
     resolveNativeWebSearchRoute({
