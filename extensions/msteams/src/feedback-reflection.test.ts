@@ -17,7 +17,8 @@ vi.mock("./sdk-proactive.js", () => ({ sendMSTeamsActivityWithReference: mocks.s
 vi.mock("./messenger.js", () => ({ buildConversationReference: (value: unknown) => value }));
 
 beforeEach(() => {
-  vi.resetAllMocks();
+  mocks.reflect.mockReset();
+  mocks.send.mockReset();
   installMSTeamsTestRuntime();
 });
 

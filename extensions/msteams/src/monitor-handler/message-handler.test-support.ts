@@ -39,7 +39,7 @@ export function createMessageHandlerDeps(
   cfg: OpenClawConfig,
   options: Omit<
     NonNullable<Parameters<typeof installMSTeamsTestRuntime>[0]>,
-    "enqueueSystemEvent" | "upsertPairingRequest" | "recordInboundSession" | "resolveTextChunkLimit"
+    "enqueueSystemEvent" | "upsertPairingRequest" | "resolveTextChunkLimit"
   > & { accountId?: string } = {},
 ) {
   const accountId = options.accountId ?? "default";
@@ -47,7 +47,6 @@ export function createMessageHandlerDeps(
     enqueueSystemEvent: vi.fn(),
     readAllowFromStore: options.readAllowFromStore ?? vi.fn(async () => []),
     upsertPairingRequest: vi.fn(async () => null),
-    recordInboundSession: vi.fn(async (_params: { sessionKey: string }) => undefined),
     resolveAgentRoute:
       options.resolveAgentRoute ??
       vi.fn(({ peer }: { peer: { kind: string; id: string } }) => ({
@@ -56,10 +55,9 @@ export function createMessageHandlerDeps(
         accountId,
       })),
   };
-  installMSTeamsTestRuntime({
+  const { storePath } = installMSTeamsTestRuntime({
     ...options,
     ...effects,
-    resolveStorePath: options.resolveStorePath ?? (() => "/tmp/test-store"),
   });
 
   const deps = createMSTeamsMessageHandlerDeps({ cfg });
@@ -71,7 +69,7 @@ export function createMessageHandlerDeps(
   deps.tokenProvider.getAccessToken = vi.fn(async () => "token");
   deps.mediaMaxBytes = 1024 * 1024;
 
-  return { conversationStore, deps, ...effects };
+  return { conversationStore, deps, storePath, ...effects };
 }
 
 export function buildChannelActivity(overrides: Record<string, unknown> = {}) {

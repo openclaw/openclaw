@@ -83,9 +83,9 @@ async function welcome(
 }
 
 function lastDispatchedCtxPayload(): Record<string, unknown> {
-  const dispatched = runtimeApiMockState.dispatchReplyWithBufferedBlockDispatcher.mock.calls.at(
-    -1,
-  )?.[0] as { ctx?: Record<string, unknown> } | undefined;
+  const dispatched = runtimeApiMockState.dispatchReplyFromConfig.mock.calls.at(-1)?.[0] as
+    | { ctx?: Record<string, unknown> }
+    | undefined;
   if (!dispatched?.ctx) {
     throw new Error("expected dispatched context payload");
   }
@@ -159,7 +159,7 @@ describe("msteams members added handler", () => {
 
 describe("msteams adaptive card action invoke", () => {
   beforeEach(() => {
-    runtimeApiMockState.dispatchReplyWithBufferedBlockDispatcher.mockClear();
+    runtimeApiMockState.dispatchReplyFromConfig.mockClear();
   });
 
   it("routes Teams imBack actions as the submitted message text", async () => {
@@ -171,7 +171,7 @@ describe("msteams adaptive card action invoke", () => {
     });
 
     const ctxPayload = lastDispatchedCtxPayload();
-    expect(runtimeApiMockState.dispatchReplyWithBufferedBlockDispatcher).toHaveBeenCalledTimes(1);
+    expect(runtimeApiMockState.dispatchReplyFromConfig).toHaveBeenCalledTimes(1);
     expect(ctxPayload).toMatchObject({
       RawBody: "Summarize my last meeting",
       SessionKey: "msteams:direct:user-aad",
@@ -222,7 +222,7 @@ describe("msteams adaptive card action invoke", () => {
         ),
       );
 
-      expect(runtimeApiMockState.dispatchReplyWithBufferedBlockDispatcher).not.toHaveBeenCalled();
+      expect(runtimeApiMockState.dispatchReplyFromConfig).not.toHaveBeenCalled();
       expect(deps.log.info).toHaveBeenCalledWith("msteams approval ignored", {
         reason: token ? "unknown or expired card token" : "missing card token",
       });

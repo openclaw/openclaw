@@ -129,7 +129,20 @@ describe("msteams graph attachments", () => {
       hosted: ["hosted-1", "png"],
       onShareRequest: () => createPdfResponse(),
     });
-    expect(media.media).toHaveLength(2);
+    expect(media.media).toEqual([
+      {
+        path: expect.stringMatching(/\.pdf$/),
+        contentType: CONTENT_TYPE_APPLICATION_PDF,
+        kind: "document",
+        sourceId: "ref-1",
+      },
+      {
+        path: "/tmp/saved.png",
+        contentType: CONTENT_TYPE_IMAGE_PNG,
+        kind: "image",
+        sourceId: "hosted-1",
+      },
+    ]);
   });
 
   it("does not forward Authorization for SharePoint redirects outside auth allowlist", async () => {
