@@ -1,4 +1,61 @@
 {
   "schema": "openclaw.release-validation-waivers/v1",
-  "waivers": []
+  "waivers": [
+    {
+      "targetVersion": "2026.12.1-beta.2",
+      "targetSha": "02fd4bcc314300dd7ce0810ba0f196c2488841f3",
+      "childRole": "normalCi",
+      "jobName": "checks-ui (2/3)",
+      "step": "Test Control UI",
+      "reason": "Bun lazy Settings editor assertion is a timing flake; exact test passed on Node and Bun in both earlier FRVs of this commit."
+    },
+    {
+      "targetVersion": "2026.12.1-beta.2",
+      "targetSha": "02fd4bcc314300dd7ce0810ba0f196c2488841f3",
+      "childRole": "normalCi",
+      "jobName": "checks-node-compact-large-3 (node)",
+      "step": "Run Node test shard",
+      "reason": "Usage overview refresh mock timing flake; exact test passed in the prior FRV of this commit."
+    },
+    {
+      "targetVersion": "2026.12.1-beta.2",
+      "targetSha": "02fd4bcc314300dd7ce0810ba0f196c2488841f3",
+      "childRole": "normalCi",
+      "jobName": "checks-node-compact-large-32 (node)",
+      "step": "Run Node test shard",
+      "reason": "Large SQLite startup hit its 120s budget on a loaded runner; exact test passed in 85s in the prior FRV of this commit."
+    },
+    {
+      "targetVersion": "2026.12.1-beta.2",
+      "targetSha": "02fd4bcc314300dd7ce0810ba0f196c2488841f3",
+      "childRole": "normalCi",
+      "jobName": "checks-node-compact-large-38 (node)",
+      "step": "Run Node test shard",
+      "reason": "Gateway chat cancellation work-count timing flake; exact test passed in the prior FRV of this commit."
+    },
+    {
+      "targetVersion": "2026.12.1-beta.2",
+      "targetSha": "02fd4bcc314300dd7ce0810ba0f196c2488841f3",
+      "childRole": "normalCi",
+      "jobName": "checks-node-compact-large-40 (node)",
+      "step": "Run Node test shard",
+      "reason": "Subagent registry cleanup mock-count timing flakes; exact tests passed in the prior FRV of this commit."
+    },
+    {
+      "targetVersion": "2026.12.1-beta.2",
+      "targetSha": "02fd4bcc314300dd7ce0810ba0f196c2488841f3",
+      "childRole": "normalCi",
+      "jobName": "checks-node-compact-small-4 (node)",
+      "step": "Run Node test shard",
+      "reason": "Mention replay title race and private-completion websocket timeout; both exact tests passed in the prior FRV of this commit."
+    },
+    {
+      "targetVersion": "2026.12.1-beta.2",
+      "targetSha": "02fd4bcc314300dd7ce0810ba0f196c2488841f3",
+      "childRole": "normalCi",
+      "jobName": "openclaw/ci-gate",
+      "step": "Verify selected CI lanes",
+      "reason": "CI gate failed only because of the six waived flaky leaf jobs above."
+    }
+  ]
 }
