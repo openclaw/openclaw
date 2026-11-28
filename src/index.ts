@@ -22,6 +22,7 @@ import {
   createGatewayDispatchStartupTrace,
 } from "./cli/startup-trace.js";
 import { normalizeWindowsArgv } from "./cli/windows-argv.js";
+import { holdCliReleaseUntilExit } from "./entry.release-lease.js";
 import { installDatabaseProcessRole } from "./infra/database-engine/admission-scope.js";
 import { isMainModule } from "./infra/is-main.js";
 import "./shared/detached-async-context.js";
@@ -38,6 +39,9 @@ const handledAdmission =
   isMain &&
   ((await forwardToReleaseLauncher(packageRootUrl)) ||
     (await tryRunUpdateAdmissionBeforeStartup(resolveCliArgvInvocation(process.argv))));
+if (isMain && !handledAdmission) {
+  await holdCliReleaseUntilExit(fileURLToPath(packageRootUrl));
+}
 if (
   !handledAdmission &&
   !existsSync(new URL("entry.ts", import.meta.url)) &&

@@ -3,11 +3,12 @@ import { formatErrorStackWithMessage } from "@openclaw/normalization-core/error-
 import { isRootVersionInvocation } from "./cli/argv.js";
 import { resolveCliContainerTarget } from "./cli/container-target.js";
 
+export function isLocalRootVersionInvocation(argv: string[]): boolean {
+  return isRootVersionInvocation(argv) && !resolveCliContainerTarget(argv);
+}
+
 export function tryHandleRootVersionFastPath(argv: string[]): boolean {
-  if (resolveCliContainerTarget(argv)) {
-    return false;
-  }
-  if (!isRootVersionInvocation(argv)) {
+  if (!isLocalRootVersionInvocation(argv)) {
     return false;
   }
   const onError = async (error: unknown) => {

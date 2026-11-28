@@ -631,6 +631,17 @@ if (isBrowserNativeHostInvocation) {
         emitNodeSecurityWarning(process.versions.node);
       }
       await installProcessWarningFilter();
+      const root = fileURLToPath(new URL("./", import.meta.url));
+      if (root.includes(`${path.sep}releases${path.sep}`)) {
+        // The native transport bypasses both CLI entries and can await its browser for input.
+        const { holdCliReleaseUntilExit } = await import("./dist/entry.release-lease.js");
+        try {
+          await holdCliReleaseUntilExit(root);
+        } catch (error) {
+          console.error(error.message);
+          throw error;
+        }
+      }
       // Fixed package artifact, not a path selected by argv, config or plugin discovery.
       // Its async entry owns stdin and drains the single response before process exit.
       await import("./dist/extensions/browser/native-host-entry.js");

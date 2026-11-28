@@ -500,6 +500,15 @@ protected. It does not keep a day's worth of unreferenced builds. Without a
 resident trial record the older 24-hour grace still applies. Legacy npm release
 collection also retains that grace.
 
+A CLI command that waits for input or continues loading code holds its release
+until its process exits. For example, `openclaw config patch --stdin` can finish
+reading input and loading its schema even after two newer releases have been
+selected. If the command cannot write its lease, run it as the installation owner
+or from a separately installed copy. Reading the local version needs no lease.
+The next collection can remove the build once its last holder exits and nothing
+else needs it for serving or rollback. This applies to commands launched from a
+release containing the fix, not to processes already running older code.
+
 Preparation owns its build until it publishes the pending trial. A failed attempt
 removes its tree, including a renamed release, without waiting for another update.
 After a killed preparer or a completed rollback, the next update checks for surviving

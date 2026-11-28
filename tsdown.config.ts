@@ -576,6 +576,7 @@ function buildCoreDistEntries(pluginIds: readonly string[]): Record<string, stri
   return {
     index: "src/index.ts",
     entry: "src/entry.ts",
+    "entry.release-lease": "src/entry.release-lease.ts",
     "runtime-artifacts": "src/runtime-artifacts.ts",
     "gateway-prewarm": "src/gateway/server-start.ts",
     "infra/package-lifecycle": "src/infra/package-lifecycle.ts",

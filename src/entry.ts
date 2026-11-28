@@ -27,6 +27,7 @@ import {
   resolveEntryInstallRoot,
   respawnWithoutOpenClawCompileCacheIfNeeded,
 } from "./entry.compile-cache.js";
+import { holdCliReleaseUntilExit } from "./entry.release-lease.js";
 import { buildCliRespawnPlan, runCliRespawnPlan } from "./entry.respawn.js";
 import { tryHandleRootVersionFastPath } from "./entry.version-fast-path.js";
 import { installDatabaseProcessRole } from "./infra/database-engine/admission-scope.js";
@@ -140,6 +141,7 @@ async function runEntryMain(): Promise<void> {
   }
   const entryFile = fileURLToPath(import.meta.url);
   const installRoot = resolveEntryInstallRoot(entryFile);
+  await holdCliReleaseUntilExit(installRoot);
   ensureOpenClawExecMarkerOnProcess();
   installProcessWarningFilter();
   normalizeEnv();
