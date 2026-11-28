@@ -39,7 +39,7 @@ export function bindGatewayLifecycleRequest(
   const resolver = explicitResolver ?? scope?.resolveGatewayContext;
   const context = resolver ? resolver() : scope?.context;
   const runtime = context?.lifecycleRuntime;
-  const hosted = context?.localEmbedded !== true && Boolean(resolver || context);
+  const hosted = Boolean(resolver || context);
   return async <T>(request: Parameters<typeof callGateway>[0]): Promise<T> => {
     const assertCurrent = () => {
       if (hosted && (!runtime || (resolver && resolver() !== context))) {

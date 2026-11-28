@@ -124,7 +124,6 @@ type AgentDispatchOpts = Omit<AgentCliOpts, "messageFile"> & {
   localGatewayCompatibilityAgentId?: string;
 };
 
-type AgentCliSignal = ProcessSignal;
 type GatewayAbortRequest = (...args: Parameters<GatewayRequestFunction>) => Promise<unknown>;
 
 function usesImplicitRemoteCompatibilityDefault(roster: RemoteGatewayRoster): boolean {
@@ -152,7 +151,7 @@ function resolveImplicitCliAgentId(cfg: OpenClawConfig, remote?: RemoteGatewayRo
 
 const GATEWAY_ABORT_RETRY_DELAYS_MS = [50, 150, 300, 600] as const;
 const GATEWAY_ABORT_REQUEST_TIMEOUT_MS = 2_000;
-const AGENT_CLI_SIGNAL_EXIT_CODES: Record<AgentCliSignal, number> = {
+const AGENT_CLI_SIGNAL_EXIT_CODES: Record<ProcessSignal, number> = {
   SIGINT: 130,
   SIGTERM: 143,
 };
@@ -472,7 +471,7 @@ function isConfirmedChatAbortResponseForRun(value: unknown, runId: string): bool
   return Array.isArray(response.runIds) && response.runIds.includes(runId);
 }
 
-function exitForReceivedSignal(signal: AgentCliSignal | undefined, runtime: RuntimeEnv): boolean {
+function exitForReceivedSignal(signal: ProcessSignal | undefined, runtime: RuntimeEnv): boolean {
   if (!signal) {
     return false;
   }
@@ -482,7 +481,7 @@ function exitForReceivedSignal(signal: AgentCliSignal | undefined, runtime: Runt
 
 function returnAfterSignalExit<T>(
   value: T,
-  signal: AgentCliSignal | undefined,
+  signal: ProcessSignal | undefined,
   runtime: RuntimeEnv,
 ): T | undefined {
   return exitForReceivedSignal(signal, runtime) ? undefined : value;
@@ -901,6 +900,7 @@ export async function agentCliCommand(opts: AgentCliOpts, runtime: RuntimeEnv) {
         target: "agent state",
         onForeignOwner: "refuse",
         onlineAlternative: "Omit --local to run it through the Gateway.",
+        signal: signalBridge.signal,
         runLocal: () =>
           runEmbeddedAgentCommand(
             {

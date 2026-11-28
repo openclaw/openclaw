@@ -1,5 +1,6 @@
 // Lets local agent paths reuse Gateway server methods without starting a server.
 import { listAgentIds } from "../agents/agent-scope-config.js";
+import { loadRunReplyDispatchRuntime } from "../agents/prepared-run-reply-dispatch-runtime.js";
 import type { CliDeps } from "../cli/deps.types.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { withLocalAgentCronJobsRemoved } from "../cron/local-service.js";
@@ -12,7 +13,7 @@ import {
   getPluginRuntimeGatewayRequestScope,
   withPluginRuntimeGatewayRequestScope,
 } from "../plugins/runtime/gateway-request-scope.js";
-import { trackAsyncWork } from "../shared/async-work-scope.js";
+import { runWithGatewayDetachedWorkAdmission } from "../process/gateway-work-admission.js";
 import { getOpenClawDatabaseMaintenanceScope } from "../state/openclaw-state-maintenance-context.js";
 import { createAgentRuntimeApprovalAuthorityValidator } from "./agent-runtime-approval-authority.js";
 import { loadGatewayConfigRevisionProjector } from "./config-revision-token.js";
@@ -20,6 +21,8 @@ import { NodeRegistry } from "./node-registry.js";
 import type { ChannelRuntimeSnapshot } from "./server-channel-runtime.types.js";
 import { createChatRunState } from "./server-chat-state.js";
 import type { GatewayCronServiceContract } from "./server-cron-contract.js";
+import { createGatewayInstanceRuntime } from "./server-instance-runtime.js";
+import { createRequestGatewayMethodRegistry } from "./server-methods.js";
 import { readPreparedServerMethodModelCatalogs } from "./server-methods/optional-model-catalog.js";
 import type { GatewayRequestContext } from "./server-methods/types.js";
 import { registerGatewayModelCatalogPrivateAccess } from "./server-model-catalog-auth.js";
@@ -106,7 +109,13 @@ async function createLocalGatewayRequestContext(
   });
   const context: GatewayRequestContext = {
     localEmbedded: true,
-    trackExecution: trackAsyncWork,
+    // No Gateway publishes dispatch facts here; admission prepares the target agent's run.
+    loadReplyDispatchRuntime: (loadParams) =>
+      loadRunReplyDispatchRuntime({ ...loadParams, config: params.getRuntimeConfig() }),
+    // Admitted turns (spawned children, completion continuations) outlive the caller's turn.
+    // As root work they hold the one-shot process's databases open until they settle.
+    trackExecution: (run) =>
+      runWithGatewayDetachedWorkAdmission(async () => await run(), "local:agent-turn"),
     deps: params.deps,
     configRevisionProjector: await loadGatewayConfigRevisionProjector({ env: process.env }),
     cron,
@@ -232,11 +241,17 @@ async function createLocalGatewayRequestContext(
     }
     return initializing;
   };
-  context.createAgentTurnFacade = async (principal) => {
-    const { createInternalAgentTurnFacade } =
-      await import("./agent-turn/internal-facade.runtime.js");
-    return createInternalAgentTurnFacade({ ...principal, getContext: () => context });
-  };
+  // The Gateway's own instance runtime serves agent turns and lifecycle reads (agent.wait,
+  // chat.history) through the shared method registry. It claims no process-global state and
+  // starts timers only on use, so late root work may still dispatch through it after the caller
+  // returns; it is collected with this context.
+  const instance = createGatewayInstanceRuntime({
+    getContext: () => context,
+    getMethodRegistry: () => createRequestGatewayMethodRegistry(),
+    isDispatchAvailable: () => true,
+  });
+  context.createAgentTurnFacade = instance.createAgentTurnFacade;
+  context.lifecycleRuntime = instance.lifecycle;
   return context;
 }
 
