@@ -1,5 +1,6 @@
 import type { MemoryEntryProvenance } from "openclaw/plugin-sdk/memory-core-host-runtime-files";
 import {
+  DEFAULT_MEMORY_DEEP_DREAMING_MAX_AGE_DAYS,
   DEFAULT_MEMORY_DEEP_DREAMING_MIN_RECALL_COUNT,
   DEFAULT_MEMORY_DEEP_DREAMING_MIN_SCORE,
   DEFAULT_MEMORY_DEEP_DREAMING_MIN_UNIQUE_QUERIES,
@@ -16,6 +17,7 @@ import type { ConceptTagScriptCoverage } from "./concept-vocabulary.js";
 export const DEFAULT_PROMOTION_MIN_SCORE = DEFAULT_MEMORY_DEEP_DREAMING_MIN_SCORE;
 export const DEFAULT_PROMOTION_MIN_RECALL_COUNT = DEFAULT_MEMORY_DEEP_DREAMING_MIN_RECALL_COUNT;
 export const DEFAULT_PROMOTION_MIN_UNIQUE_QUERIES = DEFAULT_MEMORY_DEEP_DREAMING_MIN_UNIQUE_QUERIES;
+export const DEFAULT_PROMOTION_MAX_AGE_DAYS = DEFAULT_MEMORY_DEEP_DREAMING_MAX_AGE_DAYS;
 export type PromotionWeights = {
   frequency: number;
   relevance: number;

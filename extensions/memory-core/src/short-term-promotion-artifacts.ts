@@ -26,6 +26,7 @@ import {
   readStore,
   pruneShortTermStore,
   resolveStorePath,
+  resolveStoreReferenceMs,
   writePhaseSignalStore,
   writeStore,
 } from "./short-term-promotion-store.js";
@@ -139,7 +140,7 @@ export async function auditShortTermPromotionArtifacts(params: {
       issues.push({
         severity: "warn",
         code: "recall-store-over-limit",
-        message: `Short-term recall store contains ${entryCount} entries; only the newest ${SHORT_TERM_RECALL_MAX_ENTRIES} are kept at runtime.`,
+        message: `Short-term recall store contains ${entryCount} entries; at runtime ${SHORT_TERM_RECALL_MAX_ENTRIES} are kept, keeping entries that carry recall evidence ahead of newer staging-only entries and dropping the oldest remaining rows.`,
         fixable: true,
       });
     }
@@ -207,7 +208,9 @@ export async function repairShortTermPromotionArtifacts(params: {
       for (const key of danglingEntryKeys) {
         delete store.entries[key];
       }
-      removedOverflowEntries = enforceShortTermRecallStoreRetention(store);
+      removedOverflowEntries = enforceShortTermRecallStoreRetention(store, {
+        nowMs: resolveStoreReferenceMs(nowIso),
+      });
       if (removedInvalidEntries > 0 || before !== JSON.stringify(store.entries)) {
         if (removedDanglingEntries > 0) {
           await pruneShortTermStore(workspaceDir, danglingEntryKeys);

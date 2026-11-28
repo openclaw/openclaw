@@ -38,6 +38,7 @@ export const DEFAULT_MEMORY_DEEP_DREAMING_MIN_SCORE = 0.75;
 export const DEFAULT_MEMORY_DEEP_DREAMING_MIN_RECALL_COUNT = 3;
 export const DEFAULT_MEMORY_DEEP_DREAMING_MIN_UNIQUE_QUERIES = 3;
 export const DEFAULT_MEMORY_DEEP_DREAMING_RECENCY_HALF_LIFE_DAYS = 14;
+export const DEFAULT_MEMORY_DEEP_DREAMING_MAX_AGE_DAYS = 30;
 export const DEFAULT_MEMORY_DEEP_DREAMING_MAX_PROMOTED_SNIPPET_TOKENS = 160;
 const DEFAULT_MEMORY_DEEP_DREAMING_MAX_PRIOR_ENTRY_LOSS_FRACTION = 0.25;
 
@@ -313,7 +314,7 @@ export function resolveMemoryDreamingConfig(params: {
         recencyHalfLifeDays:
           parseStrictNonNegativeInteger(deep?.recencyHalfLifeDays) ??
           DEFAULT_MEMORY_DEEP_DREAMING_RECENCY_HALF_LIFE_DAYS,
-        maxAgeDays: maxAgeDays ?? 30,
+        maxAgeDays: maxAgeDays ?? DEFAULT_MEMORY_DEEP_DREAMING_MAX_AGE_DAYS,
         maxPromotedSnippetTokens:
           maxPromotedSnippetTokens ?? DEFAULT_MEMORY_DEEP_DREAMING_MAX_PROMOTED_SNIPPET_TOKENS,
         maxPriorEntryLossFraction: normalizeScore(
