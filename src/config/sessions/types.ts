@@ -703,6 +703,11 @@ export type SessionScheduledMemoryParent = {
 export type InternalSessionEntryCore = SessionEntryCore & {
   /** A failed naming attempt released the transcript fallback; retries must not hide it. */
   titleFallbackReady?: true;
+  /** Last human tool definition, bound to this incarnation and carrying no authoring grant. */
+  skillLibraryAuthoringPresentation?: import("../../skills/library/authoring.js").SkillLibraryAuthoringPresentation & {
+    sessionId: string;
+    lifecycleRevision: string | null;
+  };
   /**
    * Written only by cron run preparation on a child-placement `:run:` row, so a
    * session the run spawns can resolve its memory audience through that parent.

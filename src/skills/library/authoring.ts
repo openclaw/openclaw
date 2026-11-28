@@ -62,11 +62,15 @@ type SkillLibraryAuthoringInput = {
   files?: SkillLibraryFile[];
   deleteFiles?: string[];
 };
-/** Host-held namespace capability; never persisted or reconstructed from session attribution. */
-export type SkillLibraryAuthoringCapability = {
-  target: "personal";
+/** Tool-definition facts without any authoring authority. */
+export type SkillLibraryAuthoringPresentation = {
   defaultTarget: "workspace" | "personal";
   multipleProfiles: boolean;
+};
+
+/** Host-held namespace capability; never persisted or reconstructed from session attribution. */
+export type SkillLibraryAuthoringCapability = SkillLibraryAuthoringPresentation & {
+  target: "personal";
   /** Set on a grant that only keeps the declaration of an earlier human turn. */
   expired?: true;
   /** Gate for Workshop calls through the workspace-default wrapper, given the run's sandbox state. */

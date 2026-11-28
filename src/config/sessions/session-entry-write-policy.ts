@@ -36,7 +36,18 @@ export function applySessionEntryWritePolicy(
     delete normalizedEntry.pendingShellCalls;
     delete normalizedEntry.lifecycleRestartScope;
     delete normalizedEntry.mainRestartRecovery;
+    if (normalizedEntry.archivedAt !== undefined || normalizedEntry.incognito) {
+      delete normalizedEntry.skillLibraryAuthoringPresentation;
+    }
   } else {
+    // A public whole-row write omits the private catalog. Only keep it for this generation.
+    const previousPresentation = canonicalPreviousEntry.skillLibraryAuthoringPresentation;
+    if (!normalizedEntry.skillLibraryAuthoringPresentation && previousPresentation) {
+      normalizedEntry = {
+        ...normalizedEntry,
+        skillLibraryAuthoringPresentation: previousPresentation,
+      };
+    }
     // Public projections omit the shutdown marker and the run's restart resume scope;
     // same-incarnation bookkeeping retains them.
     if (!Object.hasOwn(normalizedEntry, "resumeAfterRestart")) {

@@ -122,6 +122,7 @@ import type {
 } from "./session-init.types.js";
 import {
   acknowledgeCommittedReplyInitialization,
+  applyReplySessionPresentation,
   assertReplySessionInitializationAllowed,
   loadReplySessionInitializationForAttempt,
   prepareReplySessionInitialization,
@@ -645,14 +646,11 @@ async function initSessionStateAttemptLocked(
   if (metaPatch) {
     sessionEntry = { ...sessionEntry, ...metaPatch };
   }
-  if (!sessionEntry.chatType) {
-    sessionEntry.chatType = "direct";
-  }
-  const threadLabel = normalizeOptionalString(ctx.ThreadLabel);
-  // Derived labels initialize titles; channel renames and generated titles own later changes.
-  if (threadLabel && !sessionEntry.displayName) {
-    sessionEntry.displayName = threadLabel;
-  }
+  applyReplySessionPresentation(
+    sessionEntry,
+    ctx.ThreadLabel,
+    !isSystemEvent && !isInterSession ? params.skillLibraryAuthoringPresentation : undefined,
+  );
   const alreadyForked = sessionEntryForkedFromParent(sessionEntry);
   if (params.signal?.aborted === true) {
     throw new Error("reply session initialization aborted");

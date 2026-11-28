@@ -427,8 +427,12 @@ function* createOpenClawToolsSteps(
   const widgetBoardSessionKey = scheduledTargets?.boardSessionKey ?? sessionKey;
   // A recorded widget surface can keep authoring its durable board on internal
   // wakes. Tool policy and board authority still apply; this grants no renderer.
+  // A restart can recover a board without a recorded client. Adding show_widget
+  // to a known text-only catalog would replace the native thread and strand its workers.
+  const recoverBoardWithoutClient =
+    options?.pinnedWidgetAuthoring === true && !widgetClientCaps?.length;
   const pinnedWidgetAuthoringAdmitted =
-    (options?.pinnedWidgetAuthoring === true ||
+    (recoverBoardWithoutClient ||
       (scheduledCaller ? scheduledWidgetExplicitlyAllowed : inlineWidgetClientAvailable)) &&
     !currentChannelWidgetPresenter &&
     Boolean(widgetBoardSessionKey) &&
