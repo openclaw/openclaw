@@ -19,20 +19,35 @@ const answers: Record<string, unknown> = {
 
 // Mounts the page on a fake host. Each `held` answer ("scribes" is the Scribes count's job
 // list) waits until the test releases it; each `failing` action is refused.
-function mount(held: string[] = [], failing: string[] = [], props: Record<string, string> = {}) {
+function mount(
+  held: string[] = [],
+  failing: string[] = [],
+  props: Record<string, string> = {},
+  fixture?: {
+    actions: Record<string, unknown>;
+    page: { sessions: unknown[]; hasMore: boolean };
+    roster: unknown[];
+  },
+) {
   const calls: string[] = [];
+  const actionAnswers = { ...answers, ...fixture?.actions };
+  const roster = vi.fn(() => fixture?.roster ?? []);
   const gates = new Map(held.map((name) => [name, Promise.withResolvers<void>()]));
   const request = vi.fn(
-    async (method: string, params?: { actionId?: string; payload?: unknown }) => {
+    async (method: string, params?: { actionId?: string; payload?: unknown; search?: string }) => {
       const name = method === "cron.list" ? "scribes" : (params?.actionId ?? method);
       calls.push(name);
       await gates.get(name)?.promise;
       gates.delete(name);
       if (method !== "plugins.sessionAction") {
-        return method === "cron.list" ? { jobs: [] } : { sessions: [] };
+        return method === "cron.list"
+          ? { jobs: [] }
+          : method === "sessions.list" && !params?.search && fixture
+            ? fixture.page
+            : { sessions: [] };
       }
-      return name in answers && !failing.includes(name)
-        ? { ok: true, result: answers[name] }
+      return name in actionAnswers && !failing.includes(name)
+        ? { ok: true, result: actionAnswers[name] }
         : { ok: false, error: `${name} failed` };
     },
   );
@@ -46,6 +61,11 @@ function mount(held: string[] = [], failing: string[] = [], props: Record<string
     request,
     onEvent: () => () => {},
     subscribe: () => () => {},
+    sessions: {
+      get rows() {
+        return roster();
+      },
+    },
     agents: { rows: [{ id: "main", name: "Main" }], selectedId: "main" },
     navigation: { openPage: vi.fn() },
     ui: { registerPage, registerNavigation: () => () => {}, registerPanel: () => () => {} },
@@ -64,7 +84,7 @@ function mount(held: string[] = [], failing: string[] = [], props: Record<string
     document.body.replaceChildren();
   });
   const release = (name: string) => gates.get(name)?.resolve();
-  return { calls, release, gates, request };
+  return { calls, release, gates, request, roster };
 }
 
 const $ = (selector: string) => document.querySelector<HTMLElement>(selector);
@@ -74,6 +94,102 @@ const tab = (name: string) =>
   )!;
 const shows = (text: string) =>
   vi.waitFor(() => expect($(".knowledge-content")!.textContent).toContain(text));
+
+it.each([true, false])(
+  "uses exact roster names only with a partial grant list (%s)",
+  async (hasMore) => {
+    const key = (name: string) => `agent:main:discord:channel:${name}`;
+    const cold = key("100"),
+      prefix = key("200"),
+      missing = key("300"),
+      current = key("400"),
+      candidate = key("500");
+    const grantKeys = [
+      cold,
+      prefix,
+      missing,
+      current,
+      ...Array.from({ length: 496 }, (_, i) => key(`grant-${i}`)),
+    ];
+    const listed = {
+      sessions: [
+        { key: current, chatType: "channel", displayName: "Current channel name" },
+        { key: prefix + ":thread:1", chatType: "channel", label: "Different thread" },
+        { key: candidate, chatType: "channel", label: "New grant candidate" },
+        { key: "agent:main:dashboard:unrelated", chatType: "direct" },
+        ...Array.from({ length: 496 }, (_, i) => ({ key: key(`grant-${i}`), chatType: "channel" })),
+      ],
+      hasMore,
+    };
+    const { request, roster, calls } = mount(
+      [],
+      [],
+      { view: "settings" },
+      {
+        actions: {
+          stores_snapshot: {
+            defaultAgent: "main",
+            agents: [],
+            stores: [],
+            canChange: true,
+            issues: [],
+            grants: {
+              revision: "a".repeat(64),
+              entries: grantKeys.map((sessionKey) => ({
+                sessionKey,
+                agent: "main",
+                access: "read",
+              })),
+            },
+          },
+          stores_grant: { outcome: "conflict", message: "Access changed" },
+        },
+        page: listed,
+        roster: [
+          { key: cold, chatType: "channel", displayName: "Operations room" },
+          { key: current, chatType: "channel", label: "Old channel name" },
+          {
+            key: missing.replace("agent:main:", "agent:other:"),
+            chatType: "channel",
+            label: "Other agent",
+          },
+          { key: missing, chatType: "channel", derivedTitle: "Not a channel name" },
+          { key: key("600"), chatType: "channel", label: "Not a picker candidate" },
+        ],
+      },
+    );
+    await shows("Conversation access");
+    const panel = $(".knowledge-grants")!;
+    const rows = [...panel.querySelectorAll("[role=listitem]")];
+    expect(rows).toHaveLength(500);
+    expect(rows.slice(0, 4).map((row) => row.querySelector("strong")?.textContent)).toEqual([
+      hasMore ? "Operations room" : cold,
+      prefix,
+      missing,
+      "Current channel name",
+    ]);
+    expect(rows[1]?.textContent).not.toContain("No known conversation");
+    expect(rows[2]?.textContent?.includes("No known conversation")).toBe(!hasMore);
+    expect(panel.textContent).not.toContain("Other agent");
+    expect(rows[0]?.querySelector("small")?.textContent).toBe(hasMore ? cold : undefined);
+    const picker = panel.querySelector<HTMLSelectElement>('select[aria-label="Conversation"]')!;
+    expect([...picker.options].map(({ value }) => value)).toEqual(["", candidate]);
+    expect(roster).toHaveBeenCalledTimes(hasMore ? 1 : 0);
+    // Scribes uses separate search queries for its tab count, not for grant names.
+    expect(
+      request.mock.calls.filter(
+        ([method, params]) =>
+          method.startsWith("sessions.") &&
+          !(method === "sessions.list" && params?.search?.startsWith("Scribe · ")),
+      ),
+    ).toEqual([["sessions.list", { agentId: "main", archived: "all", limit: 500 }]]);
+    rows[0]?.querySelector("button")?.click();
+    await vi.waitFor(() => expect(calls).toContain("stores_grant"));
+    expect(
+      request.mock.calls.find(([, params]) => params?.actionId === "stores_grant")?.[1]?.payload,
+    ).toMatchObject({ sessionKey: cold, access: "none" });
+  },
+);
 
 it("checks status beside store facts and shows both tab counts at once", async () => {
   const { calls, release, request } = mount(["stores_snapshot", "status", "scribes"]);

@@ -546,6 +546,8 @@ type SessionListRow = {
   displayName?: string;
   archived?: boolean;
 };
+const grantSessionRow = (s: SessionListRow) =>
+  (s.chatType === "group" || s.chatType === "channel") && grantKey.test(s.key);
 /** The viewed agent's group and channel conversations, for grant labels and the
  * picker. Listing uses the operator's own session access; Knowledge's grant
  * enforcement never reads session rows. Undefined when the list can't load. */
@@ -559,14 +561,9 @@ async function grantSessions(
       { agentId, archived: "all", limit: 500 },
     );
     return {
-      rows: result.sessions
-        .filter((s) => (s.chatType === "group" || s.chatType === "channel") && grantKey.test(s.key))
-        .map((s) => ({
-          key: s.key,
-          title: s.label || s.displayName || s.key,
-          archived: s.archived === true,
-        })),
+      rows: result.sessions.filter(grantSessionRow),
       complete: result.hasMore !== true,
+      roster: () => host.sessions.rows.filter(grantSessionRow),
     };
   } catch {
     return undefined;

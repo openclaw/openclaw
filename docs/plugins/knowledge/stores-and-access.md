@@ -106,7 +106,10 @@ Grants are keyed by conversation session key:
   fails in-flight work at its next authority check and returns the
   conversation to its own partition.
 - The page lists the viewed agent's group and channel conversations to choose
-  from. Grants that match no known session are marked **No known
+  from. An existing grant shows the conversation name when available and always
+  includes its session key. If the session list is incomplete or unavailable,
+  a grant may show only its key. This does not mean the conversation is gone.
+  When the complete list has no match, the grant is marked **No known
   conversation**. Knowledge decides access from the host-minted audience's
   session key, never from session rows.
 
