@@ -319,8 +319,10 @@ Stopping a turn waits for Muse's terminal event, not just its interrupt
 acknowledgement. If Muse does not settle within five seconds, the harness
 closes the host before releasing the attempt.
 
-`muse serve` processes are pooled per workspace, credential, and read-only
-posture, and shut down after five idle minutes.
+`muse serve` processes are pooled per OpenClaw session, workspace, credential,
+and read-only posture, and shut down after five idle minutes. Turns within one
+session reuse its host; closing a stuck host does not interrupt sibling sessions.
+Catalog reads continue to share a separate read-only host.
 
 ## Transcript
 
