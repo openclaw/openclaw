@@ -73,6 +73,29 @@ describe("agents render-blobster command", () => {
     });
   });
 
+  it.skipIf(process.platform === "win32")("writes through a symlink before ..", async () => {
+    const dir = tempDirs.make("blobster-symlink-output-");
+    const physical = path.join(dir, "physical");
+    await fs.mkdir(path.join(physical, "nested"), { recursive: true });
+    await fs.symlink("physical/nested", path.join(dir, "selected"), "dir");
+    await fs.writeFile(path.join(physical, "design.json"), await readDesignGuideExampleJson());
+    const lexicalNeighbor = path.join(dir, "preview.svg");
+    await fs.writeFile(lexicalNeighbor, "existing preview");
+
+    await agentsRenderBlobsterCommand({
+      design: `${dir}/selected/../design.json`,
+      out: `${dir}/selected/../preview.svg`,
+      json: true,
+    });
+
+    expect(await fs.readFile(lexicalNeighbor, "utf8")).toBe("existing preview");
+    const actualOutput = path.join(physical, "preview.svg");
+    expect(await fs.readFile(actualOutput, "utf8")).toContain("<title>Radar Watch</title>");
+    expect(JSON.parse(String(runtime.log.mock.calls.at(-1)?.[0]))).toMatchObject({
+      out: actualOutput,
+    });
+  });
+
   it("rasterizes stdin design JSON to a 256x256 RGBA PNG", async () => {
     const dir = tempDirs.make("blobster-render-png-");
     const guideJson = await readDesignGuideExampleJson();

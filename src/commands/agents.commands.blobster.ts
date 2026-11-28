@@ -8,7 +8,7 @@ import {
 } from "../agents/blobster-generation.js";
 import { throwExpectedCliError } from "../cli/expected-cli-error.js";
 import { formatErrorMessage } from "../infra/errors.js";
-import { expandHomePrefix } from "../infra/home-dir.js";
+import { expandHomePrefix, resolveFilesystemPath } from "../infra/home-dir.js";
 import { defaultRuntime as runtime, writeRuntimeJson } from "../runtime.js";
 import { shortenHomePath } from "../utils.js";
 import { readBoundedCliTextInput } from "./agent-message-input.js";
@@ -29,7 +29,7 @@ export async function agentsRenderBlobsterCommand(opts: {
     throwExpectedCliError("--out must not be blank");
   }
 
-  const outPath = path.resolve(expandHomePrefix(outInput));
+  const outPath = resolveFilesystemPath(expandHomePrefix(outInput));
   const ext = path.extname(outPath).toLowerCase();
   if (ext !== ".svg" && ext !== ".png") {
     throwExpectedCliError("--out must end with .svg or .png");
