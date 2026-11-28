@@ -181,9 +181,9 @@ A parent update that receives `already_pending` from `sessions_yield` has not
 created another handoff. After that update settles, it does not leave a stale
 waiting status or start a new idle clock, even while an earlier child continues.
 The intervening user message starts a request of its own, so it does not mark
-the original handoff as resumed. A later automatic child completion gets a rule
-such as **Resumed · 2s later · Agent finished**, rather than inventing a new confirmed
-handoff or child list. Its settled duration and the completed reply remain
+the original handoff as resumed. A later automatic child completion gets an activity row
+with the agent completion and when it happened, rather than inventing a new
+confirmed handoff or child list. Its settled duration and the completed reply remain
 after reload.
 
 The parent’s own working indicator remains visible while the parent is actively
@@ -205,10 +205,11 @@ handoff, unless a **Resumed** rule marks the resume.
 
 Work the agent picks up again on its own continues the block it belongs to, with
 or without a handoff: when a background command finishes, when the Gateway
-restarts during a run, or when a subagent of this session finishes. A thin rule
-such as **Resumed · 3m later · Background command finished** marks each place it
-picked up again; the other labels are **Gateway restarted** and **Agent
-finished**. An answer the agent already gave stays in place above the rule. A
+restarts during a run, or when a subagent of this session finishes. An activity row
+such as **A background command finished · 3m later** marks where work picked up
+again. A subagent completion shows its outcome once in the existing agent
+activity row, with the elapsed time alongside it. An earlier answer stays in
+place above the activity. A
 heartbeat, a scheduled automation, or a message from another person or session
 still starts a block of its own. In dashboard sessions, tool activity recorded after the resumed
 answer, such as the step that sent it, joins the activity before that answer,
