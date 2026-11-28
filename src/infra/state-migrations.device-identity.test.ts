@@ -7,6 +7,7 @@ import type { DatabaseSync } from "node:sqlite";
 import type { Compilable, Kysely } from "kysely";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
 import { useAutoCleanupTempDirTracker } from "../../test/helpers/temp-dir.js";
+import { resolveClientCredentialStorePath } from "./client-credential-paths.js";
 import {
   readClientCredentialReceipt,
   writeClientCredentialReceipt,
@@ -21,7 +22,7 @@ import {
 import { readStoredDeviceIdentity } from "./device-identity-store.js";
 import { deriveDeviceIdFromPublicKey } from "./device-identity.js";
 import { executeSqliteQuerySync, getNodeSqliteKysely } from "./kysely-sync.js";
-import { openNodeSqliteDatabase } from "./node-sqlite.js";
+import { openNodeSqliteDatabase, resolveExistingSqliteFileUri } from "./node-sqlite.js";
 import { runSqliteImmediateTransactionSync } from "./sqlite-transaction.js";
 import {
   detectLegacyDeviceIdentity,
@@ -313,6 +314,29 @@ describe("legacy device identity Doctor migration", () => {
     expect(identityRow()?.device_id).toBe("0".repeat(64));
     const result = await migrate({ detected });
     expectReplacement(result);
+  });
+
+  it("detects an invalid canonical row without taking the credential store's write lock", async () => {
+    seedInvalidCanonical();
+    const storePath = resolveClientCredentialStorePath(env);
+    const before = fs.statSync(storePath);
+    // Another client holds the write lock; inspection must still read the committed row.
+    using writer = openNodeSqliteDatabase(resolveExistingSqliteFileUri(storePath), { timeout: 0 });
+    writer.exec("BEGIN IMMEDIATE");
+    try {
+      const startedAt = Date.now();
+      expect(detect()).toMatchObject({ hasLegacy: false, hasInvalidCanonical: true });
+      expect(Date.now() - startedAt).toBeLessThan(2_000);
+    } finally {
+      writer.exec("ROLLBACK");
+    }
+    const after = fs.statSync(storePath);
+    expect({ size: after.size, mtimeMs: after.mtimeMs, ino: after.ino }).toEqual({
+      size: before.size,
+      mtimeMs: before.mtimeMs,
+      ino: before.ino,
+    });
+    expect(fs.existsSync(`${storePath}-journal`)).toBe(false);
   });
 
   it("repairs a corrupted local identity without reimporting consumed legacy JSON", async () => {

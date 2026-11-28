@@ -238,7 +238,7 @@ export function createShowWidgetTool(options: ShowWidgetToolOptions = {}): AnyAg
   return {
     label: "Show Widget",
     name: "show_widget",
-    description,
+    description: `${description} Follow result.presentation. Inspect widgets in their chat/dashboard frame, not hosting URLs as browser pages; verify interaction or say unverified.`,
     parameters: Type.Object({
       title: Type.String({ description: "Short host title; do not repeat it inside the widget" }),
       widget_code:

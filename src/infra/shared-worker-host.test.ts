@@ -112,6 +112,22 @@ it("detaches an idle endpoint logically and releases the host after the last one
   ).toBe(false);
 });
 
+it("joins the host at terminal native close when an endpoint's owner never stops it", async () => {
+  initializeGatewayResourceProfile({ profile: "lean" });
+  // Stands in for an endpoint of a plain task pool (the plugin catalog reader), whose owner
+  // has no native close and is still live when terminal cleanup closes the native source.
+  const reader = carrier("sqlite-store:agent");
+  await reader.started;
+
+  await closeDefaultRetainedNativeWorkerSource();
+  expect(await reader.exited).toEqual({ code: 0, error: undefined });
+  expect(
+    getTrackedWorkerPoolSnapshot().workerCensus.some(
+      (row) => row.kind === "shared-worker-host.worker.js",
+    ),
+  ).toBe(false);
+});
+
 it("lets a synchronous caller observe physical host termination", async () => {
   initializeGatewayResourceProfile({ profile: "lean" });
   const agent = carrier("sqlite-store:agent");

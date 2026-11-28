@@ -43,7 +43,8 @@ export const ADMISSION_FILES = new Map([
   ["src/gateway/operator-access-policy.ts", 4],
   ["src/gateway/operator-admission.ts", 5],
   ["src/gateway/operator-model-presentation.ts", 2],
-  ["src/gateway/operator-role-policy.ts", 25],
+  // Includes the existing role-loss comparison moved from the role RPC module.
+  ["src/gateway/operator-role-policy.ts", 26],
   ["src/gateway/operator-run-authority.ts", 3],
   ["src/gateway/project-access.ts", 2],
   ["src/gateway/question-session-access.ts", 4],
@@ -66,6 +67,7 @@ export const ADMISSION_FILES = new Map([
   ["src/gateway/server-methods/users-model-account-access.ts", 2],
   ["src/gateway/server-methods/users-personal-file.ts", 2],
   ["src/gateway/server-methods/users-profile-access.ts", 2],
+  // Profile enumeration presents effective roles; the policy owner compares role changes.
   ["src/gateway/server-methods/users-role.ts", 2],
   ["src/gateway/server/ws-connection/authenticated-request-dispatch.ts", 2],
   ["src/gateway/server/ws-connection/connect-hello.ts", 4],
@@ -93,7 +95,6 @@ export const MINT_FILES = new Map([
   ["src/gateway/operator-run-authority.ts", 4],
   ["src/gateway/operator-run-invocation.ts", 3],
   ["src/gateway/operator-run-recovery.ts", 2],
-  ["src/gateway/session-sharing-authorization-async.ts", 2],
   ["src/plugin-sdk/plugin-test-runtime.ts", 2],
 ]);
 
@@ -101,6 +102,23 @@ export const MINT_FILES = new Map([
 export const ACCESS_RECHECK_FILES = new Map([
   ["src/gateway/question-session-access.ts", 3],
   ["src/gateway/session-communication-approval.ts", 1],
+]);
+
+// Stop on access loss is a command from a permission writer, never a decision. Its module selects
+// work by the recorded requester only; reading admission, roles or membership there would turn it
+// into a mid-run re-check.
+const STOP_MODULES = new Set([
+  "src/gateway/chat-abort-stop-work.ts",
+  `${BOUNDARY_GUARD_FIXTURE_ROOT}/stop-work-authority-read-violation.ts`,
+]);
+const STOP_FORBIDDEN = new Set([
+  ...READERS,
+  "decideOperatorAdmission",
+  "decideTurnGrant",
+  "prepareOperatorAdmission",
+  "readSessionMembersInWorker",
+  "readSessionMembershipFactsInDatabase",
+  "resolveSessionSharingMembership",
 ]);
 
 const ROOTS = ["src", "extensions", "packages", BOUNDARY_GUARD_FIXTURE_ROOT];
@@ -120,6 +138,11 @@ const CHECKS = {
     files: ACCESS_RECHECK_FILES,
     message: () =>
       "Access re-check: operatorAccessAuthority.assertCurrent() after the request started. Access is checked once when the request is admitted; a started request finishes.",
+  },
+  stop: {
+    files: new Map(),
+    message: (name) =>
+      `Stop authority read: ${name} in the stop-on-access-loss module. It selects work by the recorded requester; the permission writer decides the loss.`,
   },
 };
 
@@ -150,7 +173,8 @@ export default {
     }
     const ignoreAllowlists = context.options[0]?.ignoreAllowlists === true;
     const seen = new Set();
-    const counts = { read: 0, mint: 0, recheck: 0 };
+    const counts = { read: 0, mint: 0, recheck: 0, stop: 0 };
+    const stopModule = STOP_MODULES.has(repoPath);
     const report = (kind, node) => {
       // Shorthand import, export and destructuring specifiers share one span.
       if (seen.has(node.start)) {
@@ -164,7 +188,9 @@ export default {
     };
     return {
       Identifier(node) {
-        if (READERS.has(node.name)) {
+        if (stopModule && STOP_FORBIDDEN.has(node.name)) {
+          report("stop", node);
+        } else if (READERS.has(node.name)) {
           report("read", node);
         } else if (node.name === MINTER && repoPath !== MINTER_OWNER) {
           report("mint", node);

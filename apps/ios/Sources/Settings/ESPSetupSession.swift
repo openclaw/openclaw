@@ -96,7 +96,7 @@ final class ESPSetupSession {
         await self.apply(.gateway, fields: [Data(code.utf8)], authorize: authorize)
     }
 
-    func close(message: String = "Setup closed. Earlier saved changes are not rolled back.") {
+    func close(message: String = "Setup closed. Earlier saved changes aren’t undone.") {
         guard self.phase != .closed else { return }
         self.phase = .closed
         self.expiry?.cancel()
@@ -138,10 +138,10 @@ final class ESPSetupSession {
         case 1: "Change accepted; its final result is pending."
         case 2: "The device reports success."
         case 3: "The device reports failure (category \(receipt.detail))."
-        default: "The device could not establish the final result. Check it before retrying."
+        default: "The device couldn’t confirm the final result. Check it before trying again."
         }
         let save = receipt.saveKnown
-            ? (receipt.saved ? "This attempt confirmed a save." : "This attempt has not confirmed a save.")
+            ? (receipt.saved ? "This attempt confirmed a save." : "This attempt hasn’t confirmed a save.")
             : "Save status for this attempt is unknown."
         return outcome + " " + save +
             (receipt.progress == 4 ? " Device recovery is required; use its local controls." : "")
@@ -164,7 +164,7 @@ final class ESPSetupSession {
             self.message = error.localizedDescription
         } else if self.phase != .closed {
             self.close(message: error is CancellationError
-                ? "Setup cancelled. Earlier changes are not rolled back."
+                ? "Setup canceled. Earlier changes aren’t undone."
                 : error.localizedDescription)
         }
     }

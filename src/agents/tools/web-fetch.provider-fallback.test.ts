@@ -1,4 +1,5 @@
-import { readFile, rm } from "node:fs/promises";
+import { randomUUID } from "node:crypto";
+import { readFile, realpath, rm } from "node:fs/promises";
 import { createServer } from "node:http";
 import { setImmediate as nextTurn } from "node:timers/promises";
 import { Value } from "typebox/value";
@@ -13,6 +14,7 @@ import { setActiveDegradedSecretOwners } from "../../secrets/runtime-degraded-st
 import { wrapExternalContent, wrapWebContent } from "../../security/external-content.js";
 import { withFetchPreconnect } from "../../test-utils/fetch-mock.js";
 import { forceFullGc } from "../../test-utils/retention.js";
+import { resolveOwnSpillFile, type SpillOwner } from "../sessions/tools/private-temp-file.js";
 import { createWebFetchTool } from "./web-fetch.js";
 import * as webGuardedFetch from "./web-guarded-fetch.js";
 
@@ -51,8 +53,12 @@ type FetchDetails = {
   cached?: boolean;
 };
 type FetchConfig = NonNullable<NonNullable<OpenClawConfig["tools"]>["web"]>["fetch"];
-function fallbackTool(fetch: FetchConfig = {}) {
-  return createWebFetchTool({ config: { tools: { web: { fetch } } }, sandboxed: false });
+function fallbackTool(fetch: FetchConfig = {}, spillOwner?: SpillOwner) {
+  return createWebFetchTool({
+    config: { tools: { web: { fetch } } },
+    sandboxed: false,
+    spillOwner,
+  });
 }
 
 function execute(
@@ -254,6 +260,32 @@ describe("web_fetch", () => {
     expect(spilledText.match(/<<<END_EXTERNAL_UNTRUSTED_CONTENT /g)).toHaveLength(1);
     expect(spilledText).toContain("[[MARKER_SANITIZED]]");
     expect(spilledText).toContain("[[END_MARKER_SANITIZED]]");
+  });
+
+  it("keeps cached host spill files scoped to the writer's exact session", async () => {
+    failDirectFetch();
+    setProvider(async () => ({ text: "host spill content ".repeat(500) }));
+    const owner = { agentId: "main", sessionKey: randomUUID() };
+    const other = { ...owner, sessionKey: randomUUID() };
+    const firstTool = fallbackTool({ maxChars: 800 }, owner);
+    const first = await fetchDetails(firstTool, "https://example.com/host-owner-cache");
+    const cached = await fetchDetails(firstTool, "https://example.com/host-owner-cache");
+    const second = await fetchDetails(
+      fallbackTool({ maxChars: 800 }, other),
+      "https://example.com/host-owner-cache",
+    );
+    expect(first.spill).toBeDefined();
+    expect(cached.cached).toBe(true);
+    expect(cached.spill).toEqual(first.spill);
+    expect(second.spill).toBeDefined();
+    expect(second.spill!.path).not.toBe(first.spill!.path);
+    expect(await resolveOwnSpillFile(owner, first.spill!.path)).toBe(
+      await realpath(first.spill!.path),
+    );
+    expect(await resolveOwnSpillFile(other, first.spill!.path)).toBeUndefined();
+    expect(await resolveOwnSpillFile(other, second.spill!.path)).toBe(
+      await realpath(second.spill!.path),
+    );
   });
 
   it("preserves short source-truncated provider results through cache", async () => {

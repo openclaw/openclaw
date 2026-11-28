@@ -149,7 +149,7 @@ describe("runSystemAgentWithInference", () => {
     verifySetupInference.mockResolvedValue(
       json ? expiredAuth : { ok: false, status: "unavailable", error: "no configured model" },
     );
-    await runSystemAgentWithInference({ json, message: "status" }, currentRuntime);
+    await runSystemAgentWithInference({ json, message: "explain error:" }, currentRuntime);
     expect(json ? currentRuntime.log : currentRuntime.error).toHaveBeenCalledWith(
       expect.stringContaining("Run `openclaw onboard`"),
     );

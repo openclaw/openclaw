@@ -1,6 +1,5 @@
 import type { Context, Model } from "@openclaw/llm-core";
 import { resolveOpenAIThinkingApi } from "@openclaw/model-catalog-core/model-catalog-types";
-import { getAiTransportHost } from "../host.js";
 import { resolveCacheRetention } from "../providers/cache-retention.js";
 import { resolveOpenAIPromptCacheParams } from "../providers/openai-prompt-cache.js";
 import {
@@ -14,13 +13,13 @@ import {
 import { resolveOpenAIResponsesTextFormat } from "../providers/openai-response-format.js";
 import { prepareResponsesTools } from "../providers/openai-responses-tools.js";
 import { reconcileOpenAIResponsesToolChoice } from "../providers/openai-tool-projection.js";
+import { resolveOpenAIStrictToolSetting } from "../providers/openai-tool-schema.js";
 import { hasResponsesWebSearchTool } from "../providers/openai-web-search-tools.js";
 import { clampMaxTokensToModel } from "../providers/simple-options.js";
 import { prepareSystemPrompt } from "../utils/system-prompt-cache-boundary.js";
 import { hasMutableModelPayloadHook } from "./model-request-body.js";
 import { usesNativeOpenAICodexResponsesBackend } from "./openai-completions-compat.js";
 import type { OpenAIResponsesReplayMode } from "./openai-responses-compaction-replay.js";
-import { takeResponsesContextUsageInput } from "./openai-responses-context-usage.js";
 import {
   OPENAI_CODEX_RESPONSES_DEFAULT_INSTRUCTIONS,
   OPENAI_CODEX_RESPONSES_EMPTY_INPUT_TEXT,
@@ -37,7 +36,7 @@ import {
   convertResponsesMessages,
 } from "./openai-responses-replay-internal.js";
 import { getCompat } from "./openai-transport-params.js";
-import { resolvePromptCacheKey, type OpenAIModeModel } from "./openai-transport-shared.js";
+import { resolvePromptCacheKey } from "./openai-transport-shared.js";
 
 const OPENAI_CODEX_RESPONSES_UNSUPPORTED_PARAMS = [
   "max_output_tokens",
@@ -122,9 +121,12 @@ export function buildOpenAIResponsesParams(
     retainUserProvenance,
     onItemRecovery,
   };
-  const messages =
-    takeResponsesContextUsageInput(model, context, conversion) ??
-    convertResponsesMessages(model, context, OPENAI_RESPONSES_TOOL_CALL_PROVIDERS, conversion);
+  const messages = convertResponsesMessages(
+    model,
+    context,
+    OPENAI_RESPONSES_TOOL_CALL_PROVIDERS,
+    conversion,
+  );
   // The Responses API rejects an empty `input` array; when the only content
   // for this turn was the system prompt (now carried by `instructions`
   // instead), inject a placeholder input item so the request stays valid.
@@ -197,10 +199,7 @@ export function buildOpenAIResponsesParams(
   }
   if (context.tools) {
     const tools = context.tools;
-    const strict = getAiTransportHost().resolveOpenAIStrictToolSetting(model as OpenAIModeModel, {
-      transport: "stream",
-      supportsStrictMode: compat.supportsStrictMode,
-    });
+    const strict = resolveOpenAIStrictToolSetting(compat);
     const { projection, tools: converted } = prepareResponsesTools(
       tools,
       strict,

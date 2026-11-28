@@ -253,6 +253,7 @@ async function executeRecoveryCompaction(
       ? { currentTokenCount: recovery.currentTokenCount }
       : {}),
     force: true,
+    reason: recoveryKind,
     compactionTarget: "budget",
     runtimeContext,
     runtimeSettings,

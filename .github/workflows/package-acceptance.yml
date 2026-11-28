@@ -335,6 +335,14 @@ on:
         required: false
       CEREBRAS_API_KEY:
         required: false
+      CELERIS_API_KEY:
+        required: false
+      FASTINO_API_KEY:
+        required: false
+      NACE_API_KEY:
+        required: false
+      PERPLEXITY_API_KEY:
+        required: false
       DEEPINFRA_API_KEY:
         required: false
       DEEPSEEK_API_KEY:
@@ -1452,6 +1460,10 @@ jobs:
       FACTORY_API_KEY: ${{ secrets.FACTORY_API_KEY }}
       BYTEPLUS_API_KEY: ${{ secrets.BYTEPLUS_API_KEY }}
       CEREBRAS_API_KEY: ${{ secrets.CEREBRAS_API_KEY }}
+      CELERIS_API_KEY: ${{ secrets.CELERIS_API_KEY }}
+      FASTINO_API_KEY: ${{ secrets.FASTINO_API_KEY }}
+      NACE_API_KEY: ${{ secrets.NACE_API_KEY }}
+      PERPLEXITY_API_KEY: ${{ secrets.PERPLEXITY_API_KEY }}
       DEEPINFRA_API_KEY: ${{ secrets.DEEPINFRA_API_KEY }}
       DEEPSEEK_API_KEY: ${{ secrets.DEEPSEEK_API_KEY }}
       DASHSCOPE_API_KEY: ${{ secrets.DASHSCOPE_API_KEY }}

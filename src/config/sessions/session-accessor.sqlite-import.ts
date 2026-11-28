@@ -1,3 +1,4 @@
+import { uniqueStrings } from "@openclaw/normalization-core/string-normalization";
 import {
   executeSqliteQueryTakeFirstSync,
   iterateSqliteQuerySync,
@@ -31,6 +32,7 @@ import {
 import { appendTranscriptEventsInTransaction } from "./session-accessor.sqlite-transcript-store.js";
 import { assertSessionTranscriptHot } from "./session-cold-storage-state.js";
 import { reconcileSessionTranscriptIndexInTransaction } from "./session-transcript-index.js";
+import { SessionTranscriptWriterClaimReboundError } from "./session-transcript-writer-claim-error.js";
 import { transcriptEventJsonSql } from "./transcript-payload.js";
 import type { SessionEntry } from "./types.js";
 
@@ -183,6 +185,55 @@ function importSqliteSessionRowsInTransaction(
         }
       : {}),
   };
+}
+
+/**
+ * Doctor holds offline custody over the history it reimports. Restore cold archives before
+ * reserving the import writer because the archive owner needs that writer too; the import
+ * transaction itself still refuses archived history (assertSessionTranscriptHot).
+ */
+export async function restoreColdSessionTranscriptsForImport(params: {
+  agentId: string;
+  assertCurrent?: () => void;
+  env?: NodeJS.ProcessEnv;
+  sessionIds: readonly string[];
+  storePath: string;
+}): Promise<void> {
+  const sessionIds = uniqueStrings(params.sessionIds);
+  if (sessionIds.length === 0) {
+    return;
+  }
+  const {
+    restoreSessionColdTranscript,
+    SessionColdSourceReboundError,
+    SessionColdTurnReboundError,
+  } = await import("./session-cold-storage.js");
+  // The restore owner reads cold metadata through the history worker and returns
+  // early for hot sessions and stores that do not exist yet.
+  for (const sessionId of sessionIds) {
+    try {
+      await restoreSessionColdTranscript(
+        {
+          agentId: params.agentId,
+          env: params.env,
+          sessionId,
+          storePath: params.storePath,
+        },
+        params.assertCurrent,
+      );
+    } catch (error) {
+      // A missing or unreadable archive leaves this one session cold for the
+      // per-record import reads; custody rebounds still abort the whole batch.
+      if (
+        error instanceof SessionColdTurnReboundError ||
+        error instanceof SessionColdSourceReboundError ||
+        error instanceof SessionTranscriptWriterClaimReboundError
+      ) {
+        throw error;
+      }
+      params.assertCurrent?.();
+    }
+  }
 }
 
 /** Imports legacy session rows that share one SQLite store in one durable transaction. */

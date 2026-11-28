@@ -108,6 +108,9 @@ const enDreaming = {
         "Imported conversations by topic, to review before any of it becomes durable memory.",
       wikiExplainer:
         "Compiled pages, claims, open questions, and contradictions the system can search.",
+      knowledgeExplainer: "Browse this agent’s Knowledge records and review compiled wiki pages.",
+      searchKnowledge: "Search Knowledge records",
+      browseKnowledge: "Browse Knowledge",
       copyArchivePath: "Copy archive path",
       loadingInsights: "Loading imported insights…",
       noInsights: "No imported insights yet",
@@ -123,9 +126,8 @@ const enDreaming = {
       labels: "Labels:",
       openSourcePage: "Open source page",
       loadingWiki: "Loading memory wiki…",
-      emptyWiki: "Memory wiki is not populated yet",
-      emptyWikiHint:
-        "Right now the wiki mostly has raw source imports and operational reports. This tab becomes useful once syntheses, entities, or concepts start getting written.",
+      emptyWiki: "No compiled wiki pages yet",
+      noCards: "No overview cards yet",
       claims: "Claims",
       openQuestions: "Open questions",
       contradictions: "Contradictions",

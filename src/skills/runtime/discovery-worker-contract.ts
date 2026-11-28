@@ -131,6 +131,8 @@ export type SkillsDiscoveryResult = {
   key: string;
   sources: WorkspaceSkillSources;
   fingerprint: string;
+  /** Bytes, modes and links of every sandbox-synced skill tree; absent when unreadable. */
+  syncedContentDigest?: string;
   watchDirectories: string[];
   plan?: WorkspaceSkillSourcePlan;
 };

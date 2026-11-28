@@ -3,6 +3,7 @@
 ### Changes
 
 - Setup: `openclaw setup --baseline` no longer writes the starter workspace files (`AGENTS.md`, `SOUL.md`, `IDENTITY.md`, `USER.md`, `BOOTSTRAP.md`) or runs `git init`; the agent's first conversation creates them. Scripts that edit the generated templates right after baseline setup should ship their own files instead; the first conversation keeps existing files.
+- Models: OpenAI-protocol routes that accept the `strict` tool field (native OpenAI, Azure OpenAI, OpenRouter, or `compat.supportsStrictMode: true`) now send every tool with `strict: false`. Strict tools measured slower on gpt-6.2-sol (about +0.4 s per request) with no fewer invalid tool arguments. Custom endpoints that do not declare the field send tools exactly as before.
 
 ### Fixes
 
