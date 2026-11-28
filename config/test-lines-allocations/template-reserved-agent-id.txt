@@ -1,0 +1,2 @@
+# Regression proof that Template Add rejects reserved system agent IDs.
+19

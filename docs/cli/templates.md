@@ -516,7 +516,9 @@ Template release requires `--acknowledge-clawhub-risk` when adding it. Template
 approval never approves its skill or plugin dependencies: their existing trust
 acknowledgments and `--accept-capabilities` checks still apply independently.
 
-Each Add chooses an unused agent ID. The CLI reports that ID so you can open
+Each Add chooses an unused agent ID. Like `openclaw agents add`, Add rejects
+reserved system agent IDs such as `openclaw`; choose another ID with
+`--agent-id` or in the Template manifest. The CLI reports the chosen ID so you can open
 or configure the agent afterward. The first assistant response is a normal
 personality/SOUL greeting, not a saved canned greeting or a message sent on your
 behalf. Later setup failure retains the exposed agent and conversation;
@@ -616,9 +618,9 @@ A Template release that ClawHub flagged for review still needs your confirmation
 The catalog shows the ClawHub warning with **Add anyway** before any agent is kept.
 
 `--dry-run --json` remains available for automation or local-source inspection.
-`--agent-id` selects an unused ID, or names an agent that a failed Gateway Add
-kept so Add continues its setup. `--workspace` selects a new path for local
-preview or offline Add. Ordinary Add binds its review internally and does not
+`--agent-id` selects an unused, non-reserved ID, or names an agent that a failed
+Gateway Add kept so Add continues its setup. `--workspace` selects a new path for
+local preview or offline Add. Ordinary Add binds its review internally and does not
 require a separate plan token. Trust warnings and plugin capabilities still
 require their separate explicit acknowledgements.
 
