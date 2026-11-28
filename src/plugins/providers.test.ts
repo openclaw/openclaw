@@ -336,19 +336,7 @@ describe("resolvePluginProviders", () => {
       changes: [],
       autoEnabledReasons: {},
     }));
-    setManifestPlugins([
-      manifest("google", { enabledByDefault: true }),
-      manifest("browser", { providers: [] }),
-      manifest("kilocode", { enabledByDefault: true }),
-      manifest("moonshot", { enabledByDefault: true }),
-      manifest("google-gemini-cli-auth", { providers: [] }),
-      manifest("workspace-provider", {
-        origin: "workspace",
-        modelSupport: {
-          modelPrefixes: ["workspace-model-"],
-        },
-      }),
-    ]);
+    setManifest("google", { enabledByDefault: true });
   });
 
   it("loads catalog augment hooks only for declarative runtime catalog manifests", () => {
