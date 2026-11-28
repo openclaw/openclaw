@@ -42,7 +42,6 @@ const enActivity = {
     status: {
       running: "Running",
       done: "Done",
-      error: "Error",
     },
     runInspector: {
       activityView: "Activity view",
@@ -272,7 +271,6 @@ const enActivity = {
     timeAll: "All time",
     everyone: "Everyone",
     peopleButtonLabel: "Filter sessions by person",
-    lastActive: "· {time}",
     unresolvedIdentities: "Unresolved identities",
     clearPersonFilter: "Clear person filter",
     showing: en.activityFeed.showing,
@@ -294,8 +292,6 @@ const enActivity = {
     backToSessions: "Back to sessions",
     channelLabel: "Channel: {value}",
     agentLabel: "Agent: {value}",
-    online: "Online",
-    idle: "Idle",
     offline: "Disconnected",
     unknownConnection: "Unknown client",
     connectionDetails: "Connection details · {count}",
