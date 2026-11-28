@@ -5,6 +5,7 @@ import { AsyncLocalStorage } from "node:async_hooks";
 import fs from "node:fs";
 import path from "node:path";
 import { expect, it, vi } from "vitest";
+import { getSqliteRuntimeCapabilities } from "../infra/bun-sqlite-library.js";
 import * as processRole from "../infra/database-engine/admission-scope.js";
 import {
   readGatewayLockProcessNamespace,
@@ -21,6 +22,7 @@ import { captureRetainedNativeWorkerSource } from "../infra/worker-native-lifecy
 import { createDeferredCore } from "../shared/deferred.js";
 import { runOpenClawAgentWriteAdmission } from "./openclaw-agent-write-admission.js";
 import { executeExistingOpenClawStateRead } from "./openclaw-state-db-readonly.js";
+import { closeOpenClawStateDatabaseAsync } from "./openclaw-state-db.js";
 import {
   captureOpenClawStateReadSource,
   retireIdleOpenClawStateReadWorkers,
@@ -179,9 +181,7 @@ it.each(["gateway", "cli-oneshot", undefined] as const)(
         });
         await transport.startClose();
         expect(task.close).toHaveBeenCalledExactlyOnceWith(
-          role === "cli-oneshot" || (awaitedOnly && role !== "gateway")
-            ? { retire: true }
-            : undefined,
+          role === undefined && awaitedOnly ? { retire: true } : undefined,
         );
       }
       expect(mock.create).toHaveBeenCalledTimes(role === undefined ? 2 : 1);
@@ -191,7 +191,7 @@ it.each(["gateway", "cli-oneshot", undefined] as const)(
   },
 );
 
-it("joins successful CLI reader exit for ordinary and later awaited reads", async () => {
+it("releases successful CLI reader handles before returning and retains the reader", async () => {
   const roleSpy = vi.spyOn(processRole, "getDatabaseProcessRole").mockReturnValue("cli-oneshot");
   const { location, authority } = readFixture();
   try {
@@ -209,7 +209,10 @@ it("joins successful CLI reader exit for ordinary and later awaited reads", asyn
       const task = queueTask();
       const stopping = createDeferredCore<"stopping">();
       const stopped = createDeferredCore();
-      task.close.mockImplementationOnce(() => {
+      const release = getSqliteRuntimeCapabilities().explicitSqliteCloseReleasesNativeResources
+        ? mock.closeResources
+        : mock.rotate;
+      release.mockImplementationOnce(() => {
         stopping.resolve("stopping");
         return stopped.promise;
       });
@@ -223,7 +226,7 @@ it("joins successful CLI reader exit for ordinary and later awaited reads", asyn
         task.result.resolve(emptyReply);
         const first = await Promise.race([stopping.promise, result.then(() => "returned")]);
         expect(first).toBe("stopping");
-        expect(task.close).toHaveBeenCalledExactlyOnceWith({ retire: true });
+        expect(task.close).toHaveBeenCalledExactlyOnceWith(undefined);
         expect(settled).toBe(false);
       } finally {
         stopped.resolve();
@@ -232,6 +235,9 @@ it("joins successful CLI reader exit for ordinary and later awaited reads", asyn
       }
     }
     expect(mock.create).toHaveBeenCalledOnce();
+    expect(mock.closePool).not.toHaveBeenCalled();
+    await closeOpenClawStateDatabaseAsync();
+    expect(mock.closePool).toHaveBeenCalledOnce();
   } finally {
     roleSpy.mockRestore();
   }
