@@ -483,14 +483,40 @@ suite.define(() => {
     });
   });
 
-  it("shows only the rail beside Automations without an automation", async () => {
+  it("opens the last automation's failed run from the rail-only empty state", async () => {
     await suite.withPage(contextOptions, async ({ page }) => {
-      await installCronGateway(page, {});
+      const otherJob = {
+        ...cronJob("ops-digest", "Ops digest", { kind: "every", everyMs: 60_000 }),
+        agentId: "ops",
+      };
+      await installCronGateway(page, {
+        "cron.list": cronListResponseFixture(cronListResponse([otherJob])),
+        "cron.status": { enabled: true, jobs: 1, nextWakeAtMs: null },
+        "cron.runs": cronRunsResponse([
+          {
+            ts: 1,
+            action: "finished",
+            jobId: "retired-job",
+            jobName: "Check the staging build",
+            runId: "failed-run",
+            status: "error",
+            retryAvailable: true,
+          },
+        ]),
+      });
 
       await page.goto(`${suite.server.baseUrl}cron`);
       await page.locator(".cron-overview-empty").getByText("No automations yet").waitFor();
       await page.locator(".shell--nav-page-hidden").waitFor({ state: "attached" });
       expect(await page.locator(".sidebar-automations").isVisible()).toBe(false);
+
+      const history = page.getByRole("link", { name: "Run history", exact: true });
+      expect(await history.count()).toBe(1);
+      await history.click();
+      const failedRun = page
+        .locator(".cron-run-entry")
+        .filter({ hasText: "Check the staging build" });
+      await failedRun.getByRole("button", { name: "Retry", exact: true }).waitFor();
     });
   });
 });
