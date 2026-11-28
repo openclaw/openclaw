@@ -172,11 +172,7 @@ async function takeUpdateLock(
     return Boolean(
       incumbent &&
       typeof incumbent.pid === "number" &&
-      (!expected ||
-        (incumbent.runId === expected.runId &&
-          incumbent.pid === expected.pid &&
-          incumbent.startedAt === expected.startedAt &&
-          incumbent.deadlineMs === expected.deadlineMs)) &&
+      (!expected || Object.entries(expected).every(([key, value]) => incumbent[key] === value)) &&
       ownerDead({ pid: incumbent.pid }),
     );
   };
@@ -207,8 +203,13 @@ async function takeUpdateLock(
 }
 
 /** A stale readiness observation may retire only that dead owner, never its successor. */
-export async function retireDeadUpdateLock(expected: UpdateLock, prefix = resolvePrefix()) {
-  const held = await takeUpdateLock({ runId: expected.runId, deadlineMs: 0 }, prefix, expected);
+export async function retireDeadUpdateLock(
+  { runId, pid, startedAt, deadlineMs }: UpdateLock,
+  prefix = resolvePrefix(),
+) {
+  // Observations also carry a derived dead flag; compare only canonical custody metadata.
+  const expected = { runId, pid, startedAt, deadlineMs };
+  const held = await takeUpdateLock({ runId, deadlineMs: 0 }, prefix, expected);
   if (held.acquired) {
     await held.release();
   }

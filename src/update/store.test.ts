@@ -137,6 +137,31 @@ it("preserves a replacement during late release and stale readiness cleanup", as
   }
 });
 
+it.each(["runId", "pid", "startedAt", "deadlineMs"] as const)(
+  "preserves a dead successor with different %s custody metadata",
+  async (field) => {
+    const dir = await prefix();
+    const stale = await seedDeadLock(dir);
+    const successor = { ...stale };
+    if (field === "runId") {
+      successor.runId = "successor";
+    } else if (field === "pid") {
+      successor.pid = (await seedDeadLock(dir)).pid;
+      expect(successor.pid).not.toBe(stale.pid);
+    } else {
+      successor[field] += 1;
+    }
+    const file = path.join(dir, "releases", ".update.lock");
+    const bytes = JSON.stringify(successor);
+    await fs.writeFile(file, bytes);
+    expect(await readUpdateLock(dir)).toMatchObject({ dead: true });
+
+    await retireDeadUpdateLock(stale, dir);
+
+    expect(await fs.readFile(file, "utf8")).toBe(bytes);
+  },
+);
+
 it("publishes the prepared tree by rename and admits no overlapping trial", async () => {
   const dir = await prefix();
   const stage = await allocateStaging({ kind: "package", id: "candidate" }, dir);
