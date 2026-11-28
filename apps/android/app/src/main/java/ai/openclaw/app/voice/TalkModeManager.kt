@@ -289,12 +289,13 @@ class TalkModeManager internal constructor(
   private var pttCompletion: CompletableDeferred<TalkPttStopPayload>? = null
   private var pttRecognitionRung: PushToTalkRecognitionRung? = null
   private var pttReleaseCompletion: CompletableDeferred<Unit>? = null
+
+  // Native Talk and PTT exclusively own these segments until the turn ends or is retired.
   private val pttFinalSegments = mutableListOf<String>()
   private var pttLivePartial = ""
 
   private var silenceJob: Job? = null
   private val silenceWindowMs get() = configCache.get().value.silenceTimeoutMs
-  private var lastTranscript: String = ""
   private var lastHeardAtMs: Long? = null
   private var lastSpokenText: String? = null
 
@@ -498,7 +499,7 @@ class TalkModeManager internal constructor(
             synchronized(realtimeCapturePauseLock) {
               if (nativeMuteCompletion !== completion || recognizer !== owner) return@withContext
               nativeMuteCompletion = null
-              val text = lastTranscript.trim()
+              val text = PushToTalkTranscriptMerger.merge(pttFinalSegments, pttLivePartial)
               retireRecognizer()
               clearRecognizedTranscript()
               text
@@ -2319,41 +2320,36 @@ class TalkModeManager internal constructor(
   ) {
     val trimmed = text.trim()
     nativeMuteCompletion?.let { completion ->
-      if (!completion.isCompleted && trimmed.isNotEmpty()) lastTranscript = trimmed
-      return
-    }
-    if (activePttCaptureId != null) {
-      if (trimmed.isNotEmpty()) {
+      if (!completion.isCompleted && trimmed.isNotEmpty()) {
         if (isFinal) {
           pttFinalSegments += trimmed
           pttLivePartial = ""
         } else {
           pttLivePartial = trimmed
         }
-        lastHeardAtMs = SystemClock.elapsedRealtime()
       }
       return
     }
-    if (_isSpeaking.value && interruptOnSpeech) {
-      if (shouldInterrupt(trimmed)) {
-        cancelActivePlayback()
+    if (activePttCaptureId == null) {
+      if (_isSpeaking.value && interruptOnSpeech) {
+        if (shouldInterrupt(trimmed)) {
+          cancelActivePlayback()
+        }
+        return
       }
-      return
+      if (!_isListening.value) return
     }
+    if (trimmed.isEmpty()) return
 
-    if (!_isListening.value) return
-
-    if (trimmed.isNotEmpty()) {
-      lastTranscript = trimmed
-      lastHeardAtMs = SystemClock.elapsedRealtime()
-    }
-
+    // A recognizer final ends one session, not the Talk turn. Keep its words when
+    // recognition restarts before the silence monitor submits the whole turn.
     if (isFinal) {
-      lastTranscript = trimmed
-      // Don't finalize immediately — let the silence monitor trigger after
-      // silenceWindowMs. This allows the recognizer to fire onResults and
-      // still give the user a natural pause before we send.
+      pttFinalSegments += trimmed
+      pttLivePartial = ""
+    } else {
+      pttLivePartial = trimmed
     }
+    lastHeardAtMs = SystemClock.elapsedRealtime()
   }
 
   private fun startSilenceMonitor(captureId: String? = null) {
@@ -2370,12 +2366,7 @@ class TalkModeManager internal constructor(
   private suspend fun checkSilence(captureId: String?) {
     if (activePttCaptureId != captureId) return
     if (!_isListening.value) return
-    val transcript =
-      if (activePttCaptureId != null) {
-        PushToTalkTranscriptMerger.merge(pttFinalSegments, pttLivePartial)
-      } else {
-        lastTranscript.trim()
-      }
+    val transcript = PushToTalkTranscriptMerger.merge(pttFinalSegments, pttLivePartial)
     if (transcript.isEmpty()) return
     val lastHeard = lastHeardAtMs ?: return
     val elapsed = SystemClock.elapsedRealtime() - lastHeard
@@ -2407,8 +2398,7 @@ class TalkModeManager internal constructor(
     listeningMode = false
     _isListening.value = false
     setStatus(nativeText("Thinking…"), awaitingAgent = true)
-    lastTranscript = ""
-    lastHeardAtMs = null
+    clearRecognizedTranscript()
     // Do not start synthesis while native recognition is still queued for teardown on Main.
     retireRecognizer()
     audioRetirement.await()
@@ -2548,7 +2538,6 @@ class TalkModeManager internal constructor(
   private fun clearRecognizedTranscript() {
     pttFinalSegments.clear()
     pttLivePartial = ""
-    lastTranscript = ""
     lastHeardAtMs = null
   }
 
