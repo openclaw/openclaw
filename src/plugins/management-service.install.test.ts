@@ -75,7 +75,7 @@ vi.mock("./plugin-metadata-snapshot.js", () => ({
   resolvePluginMetadataSnapshot: mocks.metadata,
 }));
 
-// Beta-channel tag selection reads ClawHub; offline keeps today's @beta attempt.
+// mock-isolation: beta-channel tag selection reads ClawHub; offline keeps the @beta attempt.
 vi.mock("../infra/clawhub-packages.js", async (importOriginal) => ({
   ...(await importOriginal<typeof import("../infra/clawhub-packages.js")>()),
   fetchClawHubPackageDetail: async () => {

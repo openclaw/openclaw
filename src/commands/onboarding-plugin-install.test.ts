@@ -60,6 +60,13 @@ vi.mock("../plugins/install.js", () => ({
   installPluginFromNpmPackArchive: installers.archive,
 }));
 
+// mock-isolation: beta-channel tag selection reads ClawHub; offline keeps the @beta attempt.
+vi.mock("../infra/clawhub-packages.js", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("../infra/clawhub-packages.js")>()),
+  fetchClawHubPackageDetail: async () => {
+    throw new Error("offline");
+  },
+}));
 // mock-isolation: package lookup and installation use fixtures instead of the live registry.
 vi.mock("../plugins/clawhub.js", () => ({
   CLAWHUB_INSTALL_ERROR_CODE: {
