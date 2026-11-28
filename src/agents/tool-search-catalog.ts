@@ -16,6 +16,7 @@ import {
   getBeforeToolCallHookContext,
 } from "./before-tool-call-metadata.js";
 import { disposeCodeModeResults } from "./code-mode-results.js";
+import { resolveCoreToolFacts } from "./core-tool-facts.js";
 import { applyGatewayToolPolicy } from "./gateway-tool-policy.js";
 import { filterParticipationTools } from "./participation-ceiling.js";
 import type { ToolDefinition } from "./sessions/index.js";
@@ -234,21 +235,38 @@ export function isOnDemandCatalogTool(tool: CatalogTool): boolean {
  * Core file/shell primitives, caller-required names (e.g. message when it is
  * the only reply path) and tools that poll by design stay visible while
  * remaining searchable. A polling tool behind dispatch_action would hide its
- * `repeatable` declaration from the repeat guard. All must resolve to trusted
- * OpenClaw tools: an MCP lookalike must never become a direct delivery or
- * core-coding tool.
+ * `repeatable` declaration from the repeat guard. A core catalog family is
+ * shown or deferred as one unit: when one member is visible, the model reads
+ * the visible members as the whole capability and misses a deferred sibling.
+ * All must resolve to trusted OpenClaw tools: an MCP lookalike must never
+ * become a direct delivery or core-coding tool.
  */
-export function isDirectVisibleCatalogTool(
-  tool: AnyAgentTool,
+export function createDirectVisibleCatalogTool(
+  tools: readonly AnyAgentTool[],
   directToolNames: ReadonlySet<string>,
-): boolean {
-  const classified = classifyAgentToolSource(tool);
-  return (
-    classified.source === "openclaw" &&
-    (directToolNames.has(tool.name) ||
-      (tool.repeatable !== undefined && !isOnDemandCatalogTool(tool)) ||
-      (isCoreCodingSurfaceToolName(tool.name) && classified.sourceName === "core"))
+): (tool: AnyAgentTool) => boolean {
+  const coreFamily = (tool: AnyAgentTool) => {
+    const classified = classifyAgentToolSource(tool);
+    return classified.source === "openclaw" && classified.sourceName === "core"
+      ? resolveCoreToolFacts(tool.name)?.catalogFamily
+      : undefined;
+  };
+  const visibleAlone = (tool: AnyAgentTool) => {
+    const classified = classifyAgentToolSource(tool);
+    return (
+      classified.source === "openclaw" &&
+      (directToolNames.has(tool.name) ||
+        (tool.repeatable !== undefined && !isOnDemandCatalogTool(tool)) ||
+        (isCoreCodingSurfaceToolName(tool.name) && classified.sourceName === "core"))
+    );
+  };
+  const visibleFamilies = new Set(
+    tools.filter(visibleAlone).flatMap((tool) => coreFamily(tool) ?? []),
   );
+  return (tool) => {
+    const family = coreFamily(tool);
+    return family === undefined ? visibleAlone(tool) : visibleFamilies.has(family);
+  };
 }
 
 /**

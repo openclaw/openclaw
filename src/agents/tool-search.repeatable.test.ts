@@ -1,5 +1,6 @@
 // Tools that poll by design stay direct under Tool Search, so the repeat guard reads their
-// own `repeatable` declaration instead of dispatch_action's.
+// own `repeatable` declaration instead of dispatch_action's. Their catalog family follows
+// them: a split family reads as the whole capability and hides the deferred member.
 import { Type } from "typebox";
 import { afterEach, expect, it } from "vitest";
 import { captureAgent, makeCall } from "../../packages/agent-core/src/agent-loop.test-support.js";
@@ -7,7 +8,9 @@ import {
   TOOL_REPEAT_LIMIT_CODE,
   TOOL_REPEAT_STOP_AT,
 } from "../../packages/agent-core/src/tool-repeat-guard.js";
+import { CORE_TOOL_DEFINITIONS } from "./core-tool-facts.js";
 import { createReadTool } from "./sessions/tools/read.js";
+import { createDirectVisibleCatalogTool } from "./tool-search-catalog.js";
 import type { ToolSearchCatalogRef } from "./tool-search-types.js";
 import {
   applyToolSchemaDirectoryCatalog,
@@ -18,6 +21,7 @@ import {
 } from "./tool-search.js";
 import { createAgentsWaitTool } from "./tools/agents-wait-tool.js";
 import type { AnyAgentTool } from "./tools/common.js";
+import { createSessionsSpawnTool } from "./tools/sessions-spawn-tool.js";
 import { createSubagentsTool } from "./tools/subagents-tool.js";
 
 const refs: ToolSearchCatalogRef[] = [];
@@ -55,6 +59,7 @@ function surface(mode: "tools" | "directory", executed: string[] = []) {
       createReadTool("/tmp/repeatable"),
       agentsWait,
       createSubagentsTool(),
+      createSessionsSpawnTool({ config: {} }),
       lookup,
     ],
   });
@@ -62,13 +67,43 @@ function surface(mode: "tools" | "directory", executed: string[] = []) {
 }
 
 it.each(["tools", "directory"] as const)(
-  "%s: keeps polling tools in the provider tool list and defers the rest",
+  "%s: keeps polling tools and their delegation family in the provider tool list and defers the rest",
   (mode) => {
     const { sent } = surface(mode);
-    expect(sent).toEqual(expect.arrayContaining(["agents_wait", "subagents"]));
+    expect(sent).toEqual(expect.arrayContaining(["agents_wait", "subagents", "sessions_spawn"]));
     expect(sent).not.toContain("lookup");
   },
 );
+
+const familyMembers = Map.groupBy(
+  CORE_TOOL_DEFINITIONS.filter((tool) => tool.catalogFamily),
+  (tool) => tool.catalogFamily,
+);
+
+it.each([...familyMembers])("the %s family always has one visibility", (_family, members) => {
+  const stub = (name: string, repeatable?: true): AnyAgentTool => ({
+    name,
+    label: name,
+    description: name,
+    parameters: Type.Object({}),
+    ...(repeatable ? { repeatable } : {}),
+    execute: async () => ({ content: [], details: {} }),
+  });
+  const names = members.map((member) => member.id);
+  // No member visible, each member polling, and each member required by the caller.
+  const cases = [
+    { polling: undefined, required: [] },
+    ...names.map((name) => ({ polling: name, required: [] })),
+    ...names.map((name) => ({ polling: undefined, required: [name] })),
+  ];
+  for (const { polling, required } of cases) {
+    const tools = names.map((name) => stub(name, name === polling ? true : undefined));
+    const visible = createDirectVisibleCatalogTool(tools, new Set(required));
+    expect(tools.map(visible)).toEqual(
+      names.map(() => polling !== undefined || required.length > 0),
+    );
+  }
+});
 
 it("lets 25 identical agents_wait polls run with no note and no stop", async () => {
   const executed: string[] = [];

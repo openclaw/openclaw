@@ -6,7 +6,7 @@ import { compactCompleteToolInputHint } from "./tool-schema-hints.js";
 import {
   applyToolCatalogCompaction,
   collectUniqueCatalogToolNames,
-  isDirectVisibleCatalogTool,
+  createDirectVisibleCatalogTool,
   resolveCatalog,
   visibleCatalogEntries,
 } from "./tool-search-catalog.js";
@@ -68,6 +68,7 @@ export function applyToolSchemaDirectoryCatalog(params: {
   }
   const directToolNames = new Set(normalizeStringEntries(Array.from(params.directToolNames ?? [])));
   const uniqueCatalogToolNames = collectUniqueCatalogToolNames(params.tools);
+  const isDirectVisible = createDirectVisibleCatalogTool(params.tools, directToolNames);
   return applyToolCatalogCompaction({
     ...params,
     enabled: config.enabled,
@@ -75,8 +76,7 @@ export function applyToolSchemaDirectoryCatalog(params: {
     isVisibleControlTool: (tool) => TOOL_SCHEMA_DIRECTORY_CONTROL_TOOL_NAMES.has(tool.name),
     // The unique-name gate defers any cross-source name collision before the
     // shared trust check runs.
-    isVisibleCatalogTool: (tool) =>
-      uniqueCatalogToolNames.has(tool.name) && isDirectVisibleCatalogTool(tool, directToolNames),
+    isVisibleCatalogTool: (tool) => uniqueCatalogToolNames.has(tool.name) && isDirectVisible(tool),
   });
 }
 

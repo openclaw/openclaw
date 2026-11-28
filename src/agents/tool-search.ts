@@ -18,7 +18,7 @@ import {
   TOOL_DESCRIBE_OUTPUT_SCHEMA_OPTION,
   TOOL_DESCRIBE_OUTPUT_SCHEMA_OPTION_DESCRIPTION,
   applyToolCatalogCompaction,
-  isDirectVisibleCatalogTool,
+  createDirectVisibleCatalogTool,
   omitDescribedOutputSchema,
   resolveCatalog,
   selectDirectMcpToolNames,
@@ -245,6 +245,7 @@ export function applyToolSearchCatalog(params: {
     config.include || config.exclude || !pinnedToolNames
       ? new Set<string>()
       : selectDirectMcpToolNames(params.tools, pinnedToolNames);
+  const isDirectVisible = createDirectVisibleCatalogTool(params.tools, directToolNames);
   // The MCP directory goes in the system prompt's deferred-tool section, so a server
   // that connects later changes an appended prompt update, never this definition.
   return applyToolCatalogCompaction({
@@ -253,7 +254,7 @@ export function applyToolSearchCatalog(params: {
     selection: config,
     isVisibleControlTool: (tool) => shouldExposeControlTool(tool.name, config.mode),
     isVisibleCatalogTool: (tool) =>
-      isDirectVisibleCatalogTool(tool, directToolNames) ||
+      isDirectVisible(tool) ||
       (directMcpToolNames.has(tool.name) && classifyAgentToolSource(tool).source === "mcp"),
   });
 }

@@ -23,6 +23,8 @@ type CoreToolFacts = {
   runGranted?: true;
   // A plugin builds this tool; only these ids may be claimed in a manifest's contracts.tools.
   pluginBuilt?: true;
+  // Tool Search shows or defers a family as one unit (tool-search-catalog.ts).
+  catalogFamily?: "delegation";
 };
 
 export type CoreToolDefinition = CoreToolFacts & {
@@ -109,13 +111,13 @@ export const CORE_TOOL_DEFINITIONS = [
     ["conversations_send"],
     ["conversations_turn"],
     ["sessions_send", { executionLocation: "gateway" }],
-    ["sessions_spawn", { executionLocation: "gateway" }],
+    ["sessions_spawn", { executionLocation: "gateway", catalogFamily: "delegation" }],
     ["github_identity_status", { profiles: ["coding"] }],
     ["github_publish", { profiles: ["coding"] }],
     ["session_project"],
-    ["agents_wait", { profiles: ["coding"] }],
-    ["sessions_yield"],
-    ["subagents"],
+    ["agents_wait", { profiles: ["coding"], catalogFamily: "delegation" }],
+    ["sessions_yield", { catalogFamily: "delegation" }],
+    ["subagents", { catalogFamily: "delegation" }],
     ["session_status", { profiles: ["minimal", "coding", "messaging"] }],
     // Offered only when the requesting operator UI can act on suggestion cards.
     ["suggest_task", { profiles: ["coding"], runGranted: true }],
