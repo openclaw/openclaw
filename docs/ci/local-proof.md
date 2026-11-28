@@ -800,7 +800,7 @@ Crabbox path before treating a direct Blacksmith run as maintainer proof.
 
 For admission/queue handling, follow the canonical proof policy above.
 For explicitly selected AWS capacity, use the
-[direct-provider commands](https://github.com/openclaw/openclaw/blob/main/.agents/skills/crabbox/references/operations.md#direct-aws).
+[direct-provider commands](https://github.com/openclaw/agent-skills/blob/main/skills/crabbox/references/providers-and-desktop.md#direct-aws).
 
 Under AWS pressure, avoid `class=beast` unless the task really needs 48xlarge-class CPU. A `beast` request starts at 192 vCPUs and is the easiest way to trip regional EC2 Spot or On-Demand Standard quota. The repo-owned `.crabbox.yaml` keeps `class: standard` for explicit AWS proof; on-demand market and `capacity.hints: true` retain AWS capacity diagnostics. Use `fast` for heavier broad checks, `large` only after standard/fast are not enough, and `beast` only for exceptional CPU-bound lanes such as full-suite or all-plugin Docker matrices, explicit release/blocker validation, or high-core performance profiling. Do not use `beast` for `pnpm check:changed`, focused tests, docs-only work, ordinary lint/typecheck, small E2E repros, or Blacksmith outage triage. Use `--market on-demand` for capacity diagnosis so Spot market churn is not mixed into the signal.
 

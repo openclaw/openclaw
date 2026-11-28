@@ -54,28 +54,76 @@ struct TalkSpeechLocaleTests {
         #expect(defaults.object(forKey: "talk.speechLocale") == nil)
     }
 
-    @Test func `gateway speech locale overrides device locale`() {
-        let locale = TalkSpeechLocale.resolvedLocaleID(
-            gatewaySelection: "ru_RU",
-            deviceLocaleID: "en-US",
-            supportedLocaleIDs: ["ru-RU", "en-US"])
+    private static let supported: Set<String> = ["en-US", "en-GB", "pt-BR", "pt-PT", "fr-FR", "ru-RU"]
 
+    @Test func `a choice on the phone wins over the Gateway and Automatic`() {
+        let locale = TalkSpeechLocale.resolvedLocaleID(
+            phoneSelection: "pt-BR",
+            gatewaySelection: "ru_RU",
+            automaticCandidates: ["en-BR"],
+            supportedLocaleIDs: Self.supported)
+        #expect(locale == "pt-BR")
+    }
+
+    @Test(arguments: [nil, ""] as [String?])
+    func `without a phone choice the Gateway's locale wins over Automatic`(phoneSelection: String?) {
+        let locale = TalkSpeechLocale.resolvedLocaleID(
+            phoneSelection: phoneSelection,
+            gatewaySelection: "ru_RU",
+            automaticCandidates: ["pt-BR"],
+            supportedLocaleIDs: Self.supported)
         #expect(locale == "ru-RU")
     }
 
     @Test(arguments: [nil, "auto", "zz-ZZ"] as [String?])
-    func `missing or unsupported gateway locale falls back to device then english`(gatewaySelection: String?) {
-        let deviceLocale = TalkSpeechLocale.resolvedLocaleID(
-            gatewaySelection: gatewaySelection,
-            deviceLocaleID: "fr-FR",
-            supportedLocaleIDs: ["fr-FR", "en-US"])
+    func `Automatic takes the first supported phone language, then keyboards, then English`(gateway: String?) {
+        // English UI with region Brazil and a Portuguese keyboard: English comes first, as the phone says.
         let english = TalkSpeechLocale.resolvedLocaleID(
-            gatewaySelection: gatewaySelection,
-            deviceLocaleID: "yy-YY",
-            supportedLocaleIDs: ["en-US"])
-
-        #expect(deviceLocale == "fr-FR")
+            phoneSelection: nil,
+            gatewaySelection: gateway,
+            automaticCandidates: TalkSpeechLocale.automaticCandidates(
+                preferredLanguages: ["en-BR"],
+                keyboardLanguages: ["pt-BR", "en-US"]),
+            supportedLocaleIDs: Self.supported)
         #expect(english == "en-US")
+        // An unsupported preferred language gives way to the keyboard.
+        let keyboard = TalkSpeechLocale.resolvedLocaleID(
+            phoneSelection: nil,
+            gatewaySelection: gateway,
+            automaticCandidates: TalkSpeechLocale.automaticCandidates(
+                preferredLanguages: ["yy-YY"],
+                keyboardLanguages: ["pt_BR"]),
+            supportedLocaleIDs: Self.supported)
+        #expect(keyboard == "pt-BR")
+        let fallback = TalkSpeechLocale.resolvedLocaleID(
+            phoneSelection: nil,
+            gatewaySelection: gateway,
+            automaticCandidates: ["yy-YY"],
+            supportedLocaleIDs: Self.supported)
+        #expect(fallback == "en-US")
+    }
+
+    @Test func `Automatic lists preferred languages before keyboards, once each`() {
+        #expect(TalkSpeechLocale.automaticCandidates(
+            preferredLanguages: ["en-BR", "pt-BR"],
+            keyboardLanguages: ["pt_BR", "fr-FR"]) == ["en-BR", "pt-BR", "fr-FR"])
+    }
+
+    @Test func `a language without its exact region finds its usual one`() {
+        #expect(TalkSpeechLocale.supportedMatch(for: "en-BR", in: Self.supported) == "en-US")
+        #expect(TalkSpeechLocale.supportedMatch(for: "pt", in: Self.supported) == "pt-BR")
+        #expect(TalkSpeechLocale.supportedMatch(for: "pt-PT", in: Self.supported) == "pt-PT")
+        #expect(TalkSpeechLocale.supportedMatch(for: "yy-YY", in: Self.supported) == nil)
+    }
+
+    @Test @MainActor func `the picker puts the phone's languages first, named in their own language`() {
+        let choices = TalkSpeechLocale.choices(
+            automaticCandidates: ["en-BR", "pt-BR"],
+            supportedLocaleIDs: Self.supported)
+        #expect(choices.phone.map(\.id) == ["en-US", "pt-BR"])
+        #expect(choices.phone.last?.name.hasPrefix("Português") == true)
+        #expect(!choices.others.map(\.id).contains("pt-BR"))
+        #expect(choices.others.map(\.id).contains("fr-FR"))
     }
 
     @Test func `speech synthesis prefers directive locale`() {

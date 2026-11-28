@@ -70,29 +70,34 @@ export type SessionMessageCutReader = {
   readEditorMessage(entryId: string): Record<string, unknown> | undefined;
   /** True when the canonical navigation owner lists this entry as a selectable tip. */
   isBranchTip(entryId: string): boolean;
-  /**
-   * True when the canonical owner resolves the planned control to this target.
-   * Reset normalization can rewrite a control onto the current leaf, which would
-   * silently ignore the request, so both modes refuse instead.
-   */
-  canonicalSelectionHolds(targetId: string | null): boolean;
+  /** Compaction facts on the canonical target path, or undefined if a reset invalidates the target. */
+  selectedCompactions(targetId: string | null): { count: number; degraded: boolean } | undefined;
   /** Canonical path to this leaf, as physical sequences; indexed readers only. */
   canonicalBranchPathSeqs?(leafEventId: string): readonly number[] | undefined;
-  /**
-   * True when the canonical path the planned control would select contains a
-   * compaction whose details mark the history quality-degraded. The planner
-   * installs this on the cut entry so /status reflects the new active path
-   * instead of carrying the displaced branch's flag. A compaction payload the
-   * reader cannot verify (missing, or over the read budget) counts as not
-   * degraded: compaction payloads are summaries, far under the budget in
-   * practice, and the cut must not fail for a flag it cannot see.
-   */
-  selectedPathHasDegradedCompaction(targetId: string | null): boolean;
   activeLeafEventId(): string | null;
   /** Physical append cursor: the newest identity row, which the leaf control chains onto. */
   tailEventId(): string | null;
   allocateEventId(): string;
 };
+
+export function summarizeSelectedCompactions<T>(
+  events: Iterable<T>,
+  eventType: (event: T) => unknown,
+  isDegraded?: (event: T) => boolean,
+) {
+  let count = 0;
+  let degraded = false;
+  for (const event of events) {
+    const type = eventType(event);
+    if (type === "reset") {
+      count = 0;
+    } else if (type === "compaction") {
+      count++;
+      degraded ||= isDegraded?.(event) === true;
+    }
+  }
+  return { count, degraded };
+}
 
 /**
  * True when this event is a compaction whose committed details mark the history
@@ -161,13 +166,15 @@ export function createMemorySessionMessageCutReader(
         selectSessionTranscriptTreeTipNodes(tree).some((tip) => tip.id === entryId)
       );
     },
-    canonicalSelectionHolds: (targetId) => resolve(targetId).leafId === targetId,
-    selectedPathHasDegradedCompaction(targetId) {
-      // The whole transcript is in memory here, so the selected path is always readable.
-      const pathTree = resolve(targetId);
-      return selectSessionTranscriptTreePathNodes(pathTree, pathTree.leafId).some((node) =>
-        isDegradedCompactionEvent(node.entry),
-      );
+    selectedCompactions(targetId) {
+      const selected = resolve(targetId);
+      return selected.leafId === targetId
+        ? summarizeSelectedCompactions(
+            selectSessionTranscriptTreePathNodes(selected, targetId),
+            ({ entry }) => asRecord(entry)?.type,
+            ({ entry }) => isDegradedCompactionEvent(entry),
+          )
+        : undefined;
     },
     activeLeafEventId: () => tree.leafId,
     tailEventId: () => tree.nodes.at(-1)?.id ?? null,
@@ -281,7 +288,8 @@ export function planInPlaceSessionMessageCut(
   }
   // A later reset re-roots navigation, so the canonical owner would rewrite this
   // control onto the current leaf and ignore the request. Refuse it instead.
-  if (!reader.canonicalSelectionHolds(repointTargetId)) {
+  const compactions = reader.selectedCompactions(repointTargetId);
+  if (!compactions) {
     return { status: params.mode === "switch" ? "not-branch-tip" : "off-active-path" };
   }
   if (settledWorkspaceConflicts(currentEntry, params)) {
@@ -312,7 +320,8 @@ export function planInPlaceSessionMessageCut(
         currentEntry.sessionId,
         // The repoint selects a new active path; its degradation is what /status
         // must show, not the displaced branch's flag.
-        reader.selectedPathHasDegradedCompaction(repointTargetId),
+        compactions.degraded,
+        compactions.count,
       ),
       ...readMessageCutEditorFields(message),
     },
@@ -381,6 +390,7 @@ function buildMessageCutSessionEntry(
   params: SessionMessageCutIntent,
   sessionId: string,
   compactionQualityDegraded: boolean,
+  compactionCount?: number,
 ): SessionEntry {
   const forked = params.mode === "fork";
   const workspace = params.settledLocalWorkspace;
@@ -425,7 +435,7 @@ function buildMessageCutSessionEntry(
     contextTokens: undefined,
     contextTokensSource: undefined,
     contextBudgetStatus: undefined,
-    compactionCount: undefined,
+    compactionCount,
     compactionQualityDegraded: compactionQualityDegraded ? true : undefined,
     transcriptByteCompactionLatch: undefined,
     memoryFlush: undefined,

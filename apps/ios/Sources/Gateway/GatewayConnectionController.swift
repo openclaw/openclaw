@@ -340,7 +340,7 @@ final class GatewayConnectionController {
         defer { self.finishConnectAttempt(connectAttempt.suppressionLease) }
         self.requestLocalNetworkAccess(reason: "connect_manual", allowAutoReconnect: false)
         guard let resolvedPort, let stableID
-        else { return .failed(String(localized: "This paired gateway has an invalid saved endpoint.")) }
+        else { return .failed(GatewayFailureText.checkAddress) }
         self.preconnectRetryContext = PreconnectRetryContext(
             target: .manual(
                 host: host,
@@ -594,12 +594,12 @@ extension GatewayConnectionController {
     @discardableResult
     func switchToGateway(stableID: String) async -> ConnectionAttemptResult {
         guard let stableID = GatewayStableIdentifier.exact(stableID) else {
-            return .failed(String(localized: "This paired gateway is no longer available."))
+            return .failed(GatewayFailureText.hostUnavailable)
         }
         guard let entry = GatewaySettingsStore.loadGatewayRegistry().entries.first(where: {
             GatewayStableIdentifier.matches($0.stableID, stableID)
         }) else {
-            return .failed(String(localized: "This paired gateway is no longer available."))
+            return .failed(GatewayFailureText.hostUnavailable)
         }
         return await self.connectRegisteredGateway(entry, allowManualFallback: false, activate: true)
     }
@@ -621,10 +621,10 @@ extension GatewayConnectionController {
         switch entry.kind {
         case .manual:
             guard let host = entry.host, let port = entry.port else {
-                return .failed(String(localized: "This paired gateway has an invalid saved endpoint."))
+                return .failed(GatewayFailureText.checkAddress)
             }
             if activate, !GatewaySettingsStore.setActiveGateway(stableID: entry.stableID) {
-                return .failed(String(localized: "Could not save the active gateway selection."))
+                return .failed(GatewayFailureText.couldntSwitch)
             }
             return await self.connectManual(
                 host: host,
@@ -644,12 +644,10 @@ extension GatewayConnectionController {
                         activate: true,
                         admissionCheckpoint: admissionCheckpoint)
                 }
-                return .failed(String(
-                    format: String(localized: "%@ is not currently discoverable on this network."),
-                    entry.name))
+                return .failed(GatewayFailureText.notFound(entry.name))
             }
             if activate, !GatewaySettingsStore.setActiveGateway(stableID: entry.stableID) {
-                return .failed(String(localized: "Could not save the active gateway selection."))
+                return .failed(GatewayFailureText.couldntSwitch)
             }
             return await self.connectDiscoveredGateway(
                 gateway,
