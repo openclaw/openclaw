@@ -58,6 +58,7 @@ describe("call delivery runtime", () => {
       requesterPeer?: string;
       route?: boolean;
       summaryFails?: boolean;
+      suppressSend?: boolean;
       webchat?: boolean;
     } = {},
   ) {
@@ -103,7 +104,7 @@ describe("call delivery runtime", () => {
     } satisfies OpenClawConfig;
     const config = normalizeVoiceCallConfig({
       reports: { enabled: true, summaryModel: "provider/summary" },
-      ...(options.webchat ? { live: { transcript: true } } : {}),
+      ...(options.webchat || options.suppressSend ? { live: { transcript: true } } : {}),
     });
     const route = createDeferred<void>();
     const enteredRoute = createDeferred<void>();
@@ -223,7 +224,11 @@ describe("call delivery runtime", () => {
       expect(method).toBe("send");
       sends.push(params!);
       sendOptions.push(requestOptions);
-      return { ok: true } as T;
+      return (
+        options.suppressSend
+          ? { deliveryStatus: "suppressed", suppressionReason: "cancelled_by_message_sending_hook" }
+          : { ok: true }
+      ) as T;
     };
     const complete = vi.fn(
       async (_params: Parameters<PluginRuntime["subagent"]["complete"]>[0]) => {
@@ -529,6 +534,20 @@ describe("call delivery runtime", () => {
         },
       })),
     );
+    await delivery.stop();
+  });
+
+  it("records cancelled live batches and reports as undelivered without sending later chunks", async () => {
+    const { manager, call, delivery, sends } = await setup({ suppressSend: true });
+    await manager.onCallUpdated?.(call);
+    expect((await manager.getCallFromMemoryOrStore(call.callId))?.metadata).toMatchObject({
+      liveTranscriptDelivery: { status: "failed", error: "cancelled_by_message_sending_hook" },
+      callReport: { status: "failed", error: "cancelled_by_message_sending_hook" },
+    });
+    expect(sends.map((send) => send.idempotencyKey)).toEqual([
+      expect.stringMatching(/:live:.*:0$/),
+      expect.stringMatching(/:report:0$/),
+    ]);
     await delivery.stop();
   });
 

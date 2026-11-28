@@ -215,7 +215,9 @@ export async function serveOpenClawChannelMcp(opts: OpenClawMcpServeOptions = {}
     async ({ session_key, text }) => {
       const result = await bridge.sendMessage({ sessionKey: session_key, text });
       return {
-        content: [{ type: "text", text: "sent" }],
+        content: [
+          { type: "text", text: result.deliveryStatus === "suppressed" ? "suppressed" : "sent" },
+        ],
         structuredContent: { result },
       };
     },

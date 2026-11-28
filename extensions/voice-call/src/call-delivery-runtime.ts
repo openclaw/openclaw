@@ -210,7 +210,10 @@ export function createCallDeliveryRuntime(params: {
       }
       const currentAccountId = currentRoute?.accountId ?? current.lastAccountId;
       const currentThreadId = currentRoute?.threadId ?? current.lastThreadId;
-      await params.runtime.gateway.request(
+      const result = await params.runtime.gateway.request<{
+        deliveryStatus?: string;
+        suppressionReason?: string;
+      }>(
         "send",
         {
           channel: currentChannel,
@@ -223,6 +226,9 @@ export function createCallDeliveryRuntime(params: {
         },
         { sessionDeliveryGeneration: expectedSession },
       );
+      if (result?.deliveryStatus === "suppressed") {
+        throw new Error(result.suppressionReason ?? "Gateway send suppressed");
+      }
     }
   };
   const summarize = async (call: CallRecord, model?: string) => {

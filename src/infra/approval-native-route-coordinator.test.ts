@@ -23,6 +23,7 @@ type Delivery = Parameters<Reporter["reportDelivery"]>[0];
 let requestGateway: ReturnType<typeof createGatewayRequestMock>;
 let coordinator: ReturnType<typeof createCoordinator>;
 beforeEach(() => {
+  log.warn.mockClear();
   requestGateway = createGatewayRequestMock();
   coordinator = createApprovalNativeRouteCoordinator();
 });
@@ -440,23 +441,34 @@ describe("createApprovalNativeRouteReporter", () => {
     );
   });
 
-  it("records a manual fallback notice that could not be delivered", async () => {
-    const request = originRequest("deadbeef-2234-4567-89ab-cdef01234567", "discord", {
-      turnSourceAccountId: "default",
-    });
-    requestGateway.mockRejectedValueOnce(new Error("channel offline"));
-    const reporter = createApprovalNativeRouteReporter({
-      channel: "discord",
-      channelLabel: "Discord",
-    });
-    await reporter.selectRequest(selection(request));
+  it.each(["channel offline", "cancelled_by_message_sending_hook"])(
+    "records a manual fallback notice that was not delivered: %s",
+    async (reason) => {
+      const request = originRequest("deadbeef-2234-4567-89ab-cdef01234567", "discord", {
+        turnSourceAccountId: "default",
+      });
+      if (reason === "channel offline") {
+        requestGateway.mockRejectedValueOnce(new Error(reason));
+      } else {
+        requestGateway.mockResolvedValueOnce({
+          deliveryStatus: "suppressed",
+          suppressionReason: reason,
+        });
+      }
+      const reporter = createApprovalNativeRouteReporter(
+        { channel: "discord", channelLabel: "Discord" },
+        coordinator,
+      );
+      await reporter.selectRequest(selection(request));
 
-    await reporter.reportDelivery(delivery(request, [], [approverDm("user:owner")]));
+      await reporter.reportDelivery(delivery(request, [], [approverDm("user:owner")]));
 
-    await vi.waitFor(() =>
-      expect(log.warn).toHaveBeenCalledWith(
-        expect.stringContaining(`approval ${request.id}, channel discord): channel offline`),
-      ),
-    );
-  });
+      await vi.waitFor(() =>
+        expect(log.warn).toHaveBeenCalledWith(
+          expect.stringContaining(`approval ${request.id}, channel discord): ${reason}`),
+        ),
+      );
+      expect(requestGateway).toHaveBeenCalledTimes(1);
+    },
+  );
 });
