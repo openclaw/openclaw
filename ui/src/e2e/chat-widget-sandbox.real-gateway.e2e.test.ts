@@ -264,18 +264,37 @@ suite.define(() => {
       const outer = frames.first();
       const inner = outer.contentFrame().frameLocator("iframe");
       await inner.getByRole("heading", { name: "Live widget proof" }).waitFor();
-      await inner.getByRole("textbox", { name: "Local note" }).fill("Persisted bytes, isolated UI");
+      const note = inner.getByRole("textbox", { name: "Local note" });
+      await note.fill("Persisted bytes, isolated UI");
+      expect(await note.inputValue()).toBe("Persisted bytes, isolated UI");
       expect(canvasReads).toEqual([{ docId }]);
       expect(await outer.getAttribute("src")).toContain("/mcp-app-sandbox");
-      const opaque = await inner.locator("body").evaluate(() => {
-        try {
-          void window.top?.document;
-          return false;
-        } catch {
-          return true;
-        }
-      });
-      expect(opaque).toBe(true);
+      const isOpaque = () =>
+        inner.locator("body").evaluate(() => {
+          try {
+            void window.top?.document;
+            return false;
+          } catch {
+            return true;
+          }
+        });
+      expect(await isOpaque()).toBe(true);
+
+      // Reload the outer document, not the chat or the iframe element.
+      const retained = await outer.evaluateHandle((frame) => frame);
+      await outer.evaluate(
+        (frame: HTMLIFrameElement) =>
+          new Promise<void>((resolve) => {
+            frame.addEventListener("load", () => resolve(), { once: true });
+            frame.setAttribute("src", frame.src);
+          }),
+      );
+      expect(await note.inputValue({ timeout: 10_000 })).toBe("");
+      expect(await outer.evaluate((frame, original) => frame === original, retained)).toBe(true);
+      await note.fill("The reloaded widget responds");
+      expect(await note.inputValue()).toBe("The reloaded widget responds");
+      expect(await isOpaque()).toBe(true);
+      expect(canvasReads).toEqual([{ docId }]);
     });
   });
 

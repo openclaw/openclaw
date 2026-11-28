@@ -39,8 +39,7 @@ const CODEX_DYNAMIC_TOOL_NAME_MAX_CHARS = 128;
 const CODEX_DYNAMIC_TOOL_NAME_PATTERN = /^[a-zA-Z0-9_-]+$/u;
 
 // Keep OpenClaw control-path tools directly callable even when Codex tool_search
-// is unavailable or resolves a connector-only universe. Developer instructions
-// still steer normal Codex subagents to native spawn_agent.
+// is unavailable or resolves a connector-only universe.
 // sessions_yield is normally routed by its catalogMode "direct-only" before
 // this set is consulted; the name entry stays as the metadata-independent
 // contract that control-path tools remain directly callable.

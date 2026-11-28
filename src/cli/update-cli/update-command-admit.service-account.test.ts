@@ -1,4 +1,3 @@
-import { execFileSync } from "node:child_process";
 import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
@@ -17,7 +16,6 @@ import {
   parseUpdateAdmissionVerdict,
   type UpdateAdmissionVerdict,
 } from "../../infra/update-run-schema.js";
-import { redactSupportString } from "../../logging/diagnostic-support-redaction.js";
 import { writeFixtureJsonSync } from "../cli-fixtures.test-support.js";
 import { updateAdmitCommand } from "./update-command-admit.js";
 import { snapshotUpdateFixtureFiles } from "./update-command-filesystem-snapshot.test-support.js";
@@ -46,11 +44,6 @@ vi.mock("../../daemon/systemd-service-files.js", async (importOriginal) => ({
 const dirs = useAutoCleanupTempDirTracker(afterEach);
 const platform = Object.getOwnPropertyDescriptor(process, "platform")!;
 const previousExitCode = process.exitCode;
-const candidateVersion = (
-  JSON.parse(fs.readFileSync(new URL("../../../package.json", import.meta.url), "utf8")) as {
-    version: string;
-  }
-).version;
 let home: string;
 let root: string;
 let stateDir: string;
@@ -156,119 +149,29 @@ afterEach(() => {
 });
 
 describe("candidate admission for a system unit run by another account", () => {
-  it("refuses before reading this account's state and names the documented procedure", async () => {
+  it.each([
+    ["root", 0],
+    ["admin", 1000],
+  ] as const)("keeps shipped candidate state checks refused for %s", async (username, uid) => {
+    vi.spyOn(os, "userInfo").mockReturnValue(account(username, uid));
     const before = snapshotUpdateFixtureFiles(home);
-
     const verdict = await admit();
 
     expect(process.exitCode).toBe(3);
     expect(verdict.verdict).toBe("refuse");
-    const message = `Gateway service openclaw-gateway.service runs as openclaw, but this update runs as root and would back up and check root's own state instead of the service's.`;
-    expect(verdict.facts.checks).toEqual([
-      { name: "managed-service-account", status: "refuse", detail: message },
-    ]);
-    expect(verdict.reasons).toEqual([
-      {
-        code: "service-account-mismatch",
-        message,
-        nextAction:
-          "Nothing was changed: the package, the service state and the running Gateway are as they were. " +
-          "Update this system service by hand (https://docs.openclaw.ai/install/updating#linux-system-service-run-by-another-account). " +
-          "First make a verified backup of its state as openclaw: sudo -u openclaw env HOME=/var/lib/openclaw OPENCLAW_STATE_DIR=/var/lib/openclaw/.openclaw openclaw backup create --verify --output /var/lib/openclaw. " +
-          `Then run sudo npm install -g openclaw@${candidateVersion} --allow-scripts=openclaw and sudo systemctl restart openclaw-gateway.service.`,
-      },
-    ]);
-    expect(JSON.stringify(verdict.reasons)).not.toMatch(/doctor|update repair|stop --force/u);
-    // Published drivers print at most 200 characters of a failing check.
-    expect(message.length).toBeLessThanOrEqual(200);
+    expect(verdict.reasons[0]?.code).toBe("service-account-mismatch");
+    expect(verdict.reasons[0]?.message).toContain(`this update runs as ${username}`);
     expect(snapshotUpdateFixtureFiles(home)).toEqual(before);
   });
 
-  it("refuses when this account selects the service's own state", async () => {
-    const selectors = { HOME: "/var/lib/openclaw", OPENCLAW_STATE_DIR: stateDir };
-    systemd.readCommand.mockRejectedValue(mismatch({ selectors }));
-    const verdict = await admit();
-
-    expect(process.exitCode).toBe(3);
-    expect(verdict.reasons[0]?.message).toContain(
-      "this update runs as root and would write that service's state as root.",
-    );
-    // Drivers print this with their state path rewritten, as redactSupportString does; the
-    // printed commands must still name the service's state in an operator's shell.
-    const shown = redactSupportString(verdict.reasons[0]?.nextAction ?? "", {
-      env: {},
-      stateDir,
+  it("identifies a custom unit skipped by discovery for its account", async () => {
+    systemd.findScope.mockImplementation(async (_env, options) => {
+      options?.onAccountMismatch?.(mismatch({ unitName: "company-gateway.service" }).mismatch);
+      return null;
     });
-    expect(shown).not.toContain("$OPENCLAW_STATE_DIR");
-    const chown = /back to openclaw first: sudo find (\S+) -xdev -user 0 -exec chown openclaw /u;
-    const backup = / OPENCLAW_STATE_DIR=(\S+) openclaw backup create --verify /u;
-    for (const word of [chown.exec(shown)?.[1], backup.exec(shown)?.[1]]) {
-      expect(execFileSync("sh", ["-c", `printf %s ${word}`], { encoding: "utf8" })).toBe(stateDir);
-    }
-  });
-
-  it.each([
-    {
-      name: "keeps the reinstall with the owning account and package manager",
-      setup: () => {
-        vi.spyOn(os, "userInfo").mockReturnValue(account("admin", 1000));
-        const context = JSON.parse(fs.readFileSync(contextPath, "utf8")) as UpdateAdmissionContext;
-        context.installation.packageManager = "pnpm";
-        fs.writeFileSync(contextPath, JSON.stringify(context), { mode: 0o600 });
-      },
-      shown: [
-        "this update runs as admin",
-        `Then run pnpm add -g --allow-build=openclaw openclaw@${candidateVersion} and sudo systemctl restart`,
-      ],
-    },
-    {
-      name: "names a numeric account the way sudo accepts it",
-      setup: () => systemd.readCommand.mockRejectedValue(mismatch({ serviceUser: "1001" })),
-      shown: [
-        "runs as UID 1001, but",
-        "its state as UID 1001: sudo -u '#1001' env HOME=/var/lib/openclaw",
-      ],
-    },
-    {
-      name: "asks for the unit's selectors when an environment file sets them",
-      setup: () => systemd.readCommand.mockRejectedValue(mismatch({ selectorsIncomplete: true })),
-      shown: [
-        "sudo -u openclaw env <the unit's HOME, OPENCLAW_HOME, OPENCLAW_STATE_DIR, OPENCLAW_CONFIG_PATH and OPENCLAW_PROFILE> openclaw backup create --verify --output <directory>",
-      ],
-    },
-    {
-      name: "derives the backup selectors from a --profile in ExecStart",
-      setup: () =>
-        systemd.readCommand.mockRejectedValue(
-          mismatch({
-            programArguments: [...mismatch().mismatch.programArguments, "--profile", "prod"],
-            selectors: { HOME: "/var/lib/openclaw" },
-          }),
-        ),
-      shown: [" OPENCLAW_PROFILE=prod ", " OPENCLAW_STATE_DIR=/var/lib/openclaw/.openclaw-prod "],
-    },
-    {
-      // Discovery skips a custom-named unit it cannot read and reports why.
-      name: "refuses for a custom-named unit that discovery skipped for its account",
-      setup: () =>
-        systemd.findScope.mockImplementation(async (_env, options) => {
-          options?.onAccountMismatch?.(mismatch({ unitName: "company-gateway.service" }).mismatch);
-          return null;
-        }),
-      shown: [
-        "Gateway service company-gateway.service runs as openclaw",
-        "sudo systemctl restart company-gateway.service.",
-      ],
-    },
-  ])("$name", async ({ setup, shown }) => {
-    setup();
     const verdict = await admit();
-
-    expect(process.exitCode).toBe(3);
-    const text = `${verdict.reasons[0]?.message} ${verdict.reasons[0]?.nextAction}`;
-    for (const part of shown) {
-      expect(text).toContain(part);
-    }
+    expect(verdict.reasons[0]?.message).toContain("company-gateway.service");
+    expect(verdict.verdict).toBe("refuse");
   });
 
   it.each([

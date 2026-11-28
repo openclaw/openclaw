@@ -34,4 +34,11 @@ export const CORE_GATEWAY_METHOD_SPECS_APPENDED = [
   ["sessions.catalog.route", "session-catalog", "operator.sessions.read", "2026.11"],
   ["session.members.setAccess", "sessions-sharing", "operator.write", "2026.11"],
   ["chat.pendingInputs.own", "chat", "operator.sessions.read", "2026.11", PROFILE_DEPENDENT],
+  [
+    "models.authProfileRename",
+    "models-auth-order",
+    "operator.admin",
+    "2026.11",
+    CONTROL_PLANE_WRITE,
+  ],
 ] as const satisfies readonly CoreGatewayMethodSpecRow[];

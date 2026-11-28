@@ -143,22 +143,18 @@ function PortalPreview(props: {
   const embedded = () => props.model.presentation().embedded;
   const desktop = () => embedded() && !props.mobile;
   const menuId = createUniqueId();
-  const identityLabels: HTMLElement[] = [];
+  let originLabel: HTMLSpanElement | undefined;
   onSettled(() => {
-    if (identityLabels.length === 0) {
+    const label = originLabel;
+    if (!label) {
       return undefined;
     }
-    const update = () => {
-      for (const label of identityLabels) {
-        label.toggleAttribute("data-overflow", label.scrollWidth > label.clientWidth);
-      }
-    };
+    const update = () =>
+      label.toggleAttribute("data-overflow", label.scrollWidth > label.clientWidth);
     const observer = new ResizeObserver(update);
-    for (const label of identityLabels) {
-      observer.observe(label);
-      if (label.firstElementChild) {
-        observer.observe(label.firstElementChild);
-      }
+    observer.observe(label);
+    if (label.firstElementChild) {
+      observer.observe(label.firstElementChild);
     }
     update();
     return () => observer.disconnect();
@@ -212,17 +208,13 @@ function PortalPreview(props: {
             <Icon name="panelsTopLeft" />
           </span>
           <div class="session-panel-rail__identity portals-embedded__identity">
-            <span
-              class="portals-embedded__name"
-              title={props.portal.title}
-              ref={(node) => identityLabels.push(node)}
-            >
-              <span>{props.portal.title}</span>
+            <span class="portals-embedded__name" title={props.portal.title}>
+              <bdi>{props.portal.title}</bdi>
             </span>
             <span
               class="portals-embedded__origin"
               title={origin()}
-              ref={(node) => identityLabels.push(node)}
+              ref={(node) => (originLabel = node)}
             >
               <span>{origin()}</span>
             </span>
@@ -563,7 +555,9 @@ export function PortalContent(props: { model: PortalsModel; mobile?: boolean }) 
                             aria-current={portal().id === selectedPortal()!.id ? "true" : undefined}
                             onClick={() => props.model.selectPortal(portal())}
                           >
-                            <span class="portals-rail__title">{portal().title}</span>
+                            <span class="portals-rail__title" title={portal().title}>
+                              <bdi>{portal().title}</bdi>
+                            </span>
                             <span class="portals-rail__port">
                               {t("portalsPage.portLabel", { port: String(portal().port) })}
                             </span>

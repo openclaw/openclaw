@@ -242,7 +242,7 @@ it("keeps session UI tools callable without native JavaScript discovery", async 
   const callable = bridge.specs.filter((spec) => spec.type === "function");
   expect(callable.map((spec) => spec.name)).toEqual(tools.map((tool) => tool.name));
   expect(callable.every((spec) => spec.deferLoading !== true)).toBe(true);
-  for (const forbidden of ["ALL_TOOLS", "`tool_search`", "spawn_agent"]) {
+  for (const forbidden of ["ALL_TOOLS", "`tool_search`"]) {
     expect(thread.developerInstructions).not.toContain(forbidden);
   }
   for (const spec of callable) {
