@@ -44,7 +44,13 @@ function installGateway(page: Page, agents = roster, jobs: CronJob[] = [retired]
       "config.get": {
         config: { cron: { agents: { writer: { delivery: { channel: "telegram", to: "team" } } } } },
       },
-      "agents.list": { agents, defaultId: "main", mainKey: "main", scope: "per-sender" },
+      "agents.list": {
+        agents,
+        defaultId: "main",
+        selectionRequired: false,
+        mainKey: "main",
+        scope: "per-sender",
+      },
       "cron.list": cronListResponseFixture(cronList(jobs, "agent-picker-list")),
       "cron.get": { cases: jobs.map((job) => ({ match: { id: job.id }, response: job })) },
       "cron.runs": cronRuns([]),
@@ -68,9 +74,11 @@ suite.define(() => {
       const gateway = await installGateway(page);
       await page.goto(`${suite.server.baseUrl}cron?new`);
       await page.locator("#cron-payload-text").fill("Summarize the fictional garden inventory.");
-      await chooseAgent(page, "Clawd");
+      await chooseAgent(page, "Default");
       await page.getByRole("button", { name: /^Report to:/ }).click();
       await page.getByRole("option").filter({ hasText: gardenKey }).click();
+      await chooseAgent(page, "Clawd");
+      await page.getByRole("button", { name: "Report to: Garden planning", exact: true }).waitFor();
       await chooseAgent(page, "Writer");
       await expect.poll(() => page.getByRole("button", { name: /^Report to:/ }).count()).toBe(0);
       await page.locator("#cron-session-target").click();
@@ -78,6 +86,11 @@ suite.define(() => {
         .getByRole("option", { name: "Its own session with recent chat", exact: true })
         .click();
       expect(await page.locator('[data-test-id="cron-submit"]').isDisabled()).toBe(true);
+      await page.locator("#cron-recent-chat-source").click();
+      await page.getByRole("option", { name: "Editorial calendar", exact: true }).click();
+      await chooseAgent(page, "Default");
+      expect(await page.locator('[data-test-id="cron-submit"]').isDisabled()).toBe(true);
+      await chooseAgent(page, "Writer");
       await page.locator("#cron-recent-chat-source").click();
       await page.getByRole("option", { name: "Editorial calendar", exact: true }).click();
       await page.locator('[data-test-id="cron-submit"]').click();
@@ -131,6 +144,15 @@ suite.define(() => {
       await page.waitForFunction(() => window.openclawControlUi?.snapshot().rosterReady === true);
       await page.locator("#cron-payload-text").fill("Check the planting calendar.");
       expect(await agentPicker(page).count()).toBe(0);
+      await page.locator("#cron-session-target").click();
+      await page
+        .getByRole("option", { name: "Its own session with recent chat", exact: true })
+        .click();
+      await page.locator("#cron-recent-chat-source").click();
+      await page.getByRole("option").filter({ hasText: gardenKey }).click();
+      await page.locator("#cron-session-target").click();
+      await page.getByRole("option", { name: "Its own session", exact: true }).click();
+      expect(await page.locator("#cron-session-key").inputValue()).toBe("");
       await page.getByRole("button", { name: /^Report to:/ }).click();
       await page
         .getByRole("option")

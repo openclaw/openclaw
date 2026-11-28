@@ -8,11 +8,7 @@ import { registerCronEnglish } from "../../i18n/locales/en-cron.ts";
 import { watchAgentScope } from "../../lib/agents/index.ts";
 import { createChannelCapability } from "../../lib/channels/index.ts";
 import { currentDisplayConfig } from "../../lib/config/config-state-model.ts";
-import {
-  hasCronFormErrors,
-  normalizeCronFormState,
-  validateCronForm,
-} from "../../lib/cron/form.ts";
+import { hasCronFormErrors, validateCronForm } from "../../lib/cron/form.ts";
 import { canManageCronJob } from "../../lib/cron/human-owner.ts";
 import {
   addCronJob,
@@ -45,11 +41,7 @@ import { registerEnglishCatalog, t } from "../../lib/reactive/i18n.ts";
 import { projectOwner, projectMutableSource } from "../../lib/reactive/projection.ts";
 import { useVisiblePoll } from "../../lib/reactive/visible-poll.ts";
 import { createCronPresentation, resolveCronModelAgentId } from "./cron-page-presentation.ts";
-import {
-  createDeliveryConversations,
-  invalidateStaleDeliveryRoute,
-  requiresDirectoryReload,
-} from "./delivery-conversations.ts";
+import { createDeliveryConversations, requiresDirectoryReload } from "./delivery-conversations.ts";
 import { createCronEventEditor } from "./event-editor.ts";
 import { resolveCronEventPatch, validateCronEventSelection } from "./event-source.ts";
 import * as cronRoute from "./route-model.ts";
@@ -95,6 +87,8 @@ export function createCronPage(context: () => ApplicationContext, host: () => HT
   const canManageCron = (): boolean =>
     cron.cronEditingJob ? canManageJob(cron.cronEditingJob) : canCreateCron();
   const deliveryDirectory = createDeliveryConversations({
+    context,
+    resolveAgentId: (form) => resolveModelAgentId(cron, form),
     currentCronState: () => cron,
     canManage: canManageCron,
     captureConnection: () => gateway.capture(),
@@ -313,9 +307,9 @@ export function createCronPage(context: () => ApplicationContext, host: () => HT
     onSettled(() => ensureEditorSources(forceRefresh));
   }
 
-  function resolveModelAgentId(state: CronState) {
+  function resolveModelAgentId(state: CronState, form = state.cronForm) {
     return resolveCronModelAgentId(
-      state.cronForm,
+      form,
       currentDisplayConfig(runtimeConfig.read()),
       agents.read().agentsList,
     );
@@ -478,12 +472,10 @@ export function createCronPage(context: () => ApplicationContext, host: () => HT
       return;
     }
     const current = cron.cronForm;
-    const resolvedPatch = invalidateStaleDeliveryRoute(
+    const next = deliveryDirectory.resolveEditorForm(
       current,
       resolveCronEventPatch(current, patch),
-      cron.cronCreateOpen,
     );
-    const next = normalizeCronFormState({ ...cron.cronForm, ...resolvedPatch }, resolvedPatch);
     cron.cronForm = next;
     cron.cronFieldErrors = validateCronForm(cron.cronForm, cron.cronEditingJob);
     if (requiresDirectoryReload(current, next)) {

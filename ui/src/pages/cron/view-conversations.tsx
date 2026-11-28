@@ -1,4 +1,4 @@
-import { createMemo, createSignal, Show } from "solid-js";
+import { createDeferred, createMemo, createSignal, isPending, Show } from "solid-js";
 import { Picker } from "../../components/solid/select-picker.tsx";
 import { t } from "../../lib/reactive/i18n.ts";
 import { resolveSessionDisplayName } from "../../lib/session-display.ts";
@@ -12,6 +12,7 @@ import type { CronPanelMode, CronProps } from "./view-types.ts";
 
 export function ConversationFields(props: CronProps & { mode: CronPanelMode }) {
   const [search, setSearch] = createSignal("");
+  const [searchFocused, setSearchFocused] = createSignal(false);
   const form = () => props.form;
   const canContinue = createMemo(() => form().payloadKind === "agentTurn");
   // The Gateway captures the implicit delivery destination when the job is created.
@@ -29,7 +30,7 @@ export function ConversationFields(props: CronProps & { mode: CronPanelMode }) {
   const sessions = createMemo(() => (props.connected ? props.sessions : undefined));
   const effectiveAgentId = createMemo(() => props.conversationAgentId);
   const includeGlobal = createMemo(() => props.agentsList?.scope === "global");
-  const directory = createMemo(
+  const directoryRead = createDeferred(
     () => {
       const roster = sessions();
       const agentId = effectiveAgentId();
@@ -53,6 +54,8 @@ export function ConversationFields(props: CronProps & { mode: CronPanelMode }) {
     },
     { loadingValue: null },
   );
+  // Editing placement stays synchronous while a different agent or search is loading.
+  const directory = () => (isPending(directoryRead) ? null : directoryRead());
   const conversations = createMemo(() =>
     (directory()?.result?.sessions ?? []).map((row) => ({
       value: row.key,
@@ -62,7 +65,7 @@ export function ConversationFields(props: CronProps & { mode: CronPanelMode }) {
   const target = createMemo(() => form().sessionTarget);
   const executionKey = createMemo(() => (target().startsWith("session:") ? target().slice(8) : ""));
   const linkedKey = createMemo(() => form().sessionKey);
-  const knownNames = createMemo(
+  const knownNames = createDeferred(
     () => {
       const roster = sessions();
       const rows = conversations();
@@ -96,7 +99,7 @@ export function ConversationFields(props: CronProps & { mode: CronPanelMode }) {
         ? [
             {
               value: selected,
-              label: knownNames()?.get(selected) ?? selected,
+              label: isPending(knownNames) ? selected : (knownNames()?.get(selected) ?? selected),
             },
             ...rows,
           ]
@@ -126,13 +129,17 @@ export function ConversationFields(props: CronProps & { mode: CronPanelMode }) {
     t(choosesSource() ? "cron.form.recentChatSource" : "cron.form.reportTo");
   return (
     <>
-      <Show when={directory()?.result?.hasMore || directory()?.failed || search()}>
+      <Show
+        when={directory()?.result?.hasMore || directory()?.failed || search() || searchFocused()}
+      >
         <input
           type="search"
           class="settings-input"
           aria-label={t("cron.form.searchConversations")}
           placeholder={t("cron.form.searchConversations")}
           value={search()}
+          onFocus={() => setSearchFocused(true)}
+          onBlur={() => setSearchFocused(false)}
           onInput={(event) => setSearch(event.currentTarget.value)}
         />
       </Show>

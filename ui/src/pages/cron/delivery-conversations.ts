@@ -1,7 +1,11 @@
 import type { ConversationListItem, ConversationListResult } from "@openclaw/gateway-protocol";
+import { asNullableRecord } from "@openclaw/normalization-core/record-coerce";
 import { createStore } from "solid-js";
+import { resolveCronDefaultDeliveryDestination } from "../../../../src/cron/delivery-config-defaults.js";
 import { hasExplicitCronDeliveryTarget } from "../../../../src/cron/delivery-target-validation.js";
+import type { ApplicationContext } from "../../app/context.ts";
 import { t } from "../../i18n/index.ts";
+import { normalizeCronFormState } from "../../lib/cron/form.ts";
 import type { CronFormState, CronState } from "../../lib/cron/types.ts";
 import { formatUiError } from "../../lib/format-error.ts";
 import type { GatewayConnectionScope } from "../../lib/gateway-connection-lifecycle.ts";
@@ -21,7 +25,6 @@ export function hasExplicitFormDelivery(form: CronFormState): boolean {
 export function invalidateStaleDeliveryRoute(
   current: CronFormState,
   patch: Partial<CronFormState>,
-  creating = false,
 ): Partial<CronFormState> {
   const agentId =
     (patch.clearAgent ?? current.clearAgent) ? "" : (patch.agentId ?? current.agentId).trim();
@@ -45,29 +48,11 @@ export function invalidateStaleDeliveryRoute(
       patch.failureAlertAccountId?.trim() !== current.failureAlertAccountId.trim()) ||
     ("failureAlertTo" in patch && patch.failureAlertTo?.trim() !== current.failureAlertTo.trim()) ||
     agentChanged;
-  let next = patch;
-  // A new agent must not turn the previous chat choice into an announcement to its default channel.
-  if (creating && agentChanged) {
-    next = { ...patch };
-    if (current.sessionKey && patch.sessionKey === undefined) {
-      next.sessionKey = "";
-      if (
-        current.deliveryMode === "announce" &&
-        !hasExplicitFormDelivery(current) &&
-        patch.deliveryMode === undefined
-      ) {
-        next.deliveryMode = "none";
-      }
-    }
-    if (current.sessionTarget.startsWith("session:") && patch.sessionTarget === undefined) {
-      next.sessionTarget = "isolated";
-    }
-  }
   const resolved =
-    deliveryIdentityChanged && next.deliveryThreadId === undefined
-      ? { ...next, deliveryThreadId: undefined }
-      : next;
-  return failureAlertIdentityChanged && next.failureAlertThreadId === undefined
+    deliveryIdentityChanged && patch.deliveryThreadId === undefined
+      ? { ...patch, deliveryThreadId: undefined }
+      : patch;
+  return failureAlertIdentityChanged && patch.failureAlertThreadId === undefined
     ? { ...resolved, failureAlertThreadId: undefined }
     : resolved;
 }
@@ -105,6 +90,8 @@ function sameDirectoryRoute(read: DirectoryRoute | null, next: DirectoryRoute): 
 }
 
 type DeliveryConversationsDependencies = {
+  context: () => ApplicationContext;
+  resolveAgentId: (form: CronFormState) => string | undefined;
   /** The page state that currently owns the editor. */
   currentCronState: () => CronState;
   /** Admin access is revalidated per request because it can drop mid-flight. */
@@ -124,6 +111,61 @@ export function createDeliveryConversations(deps: DeliveryConversationsDependenc
   // Page, connection, and admin scope can survive an editor swap.
   let editorGeneration = 0;
   let readRoute: DirectoryRoute | null = null;
+
+  function canLinkReport(agentId: string | undefined) {
+    const snapshot = deps.context().runtimeConfig.state.configSnapshot;
+    const config = snapshot?.runtimeConfig ?? snapshot?.config;
+    return Boolean(
+      config &&
+      !resolveCronDefaultDeliveryDestination({
+        cronConfig: asNullableRecord(config.cron) ?? undefined,
+        agentId,
+        creatorProfileId: deps.context().gateway.snapshot.selfUser?.id,
+      }),
+    );
+  }
+
+  function resolveEditorForm(current: CronFormState, patch: Partial<CronFormState>) {
+    const resolved = invalidateStaleDeliveryRoute(current, patch);
+    const next = normalizeCronFormState({ ...current, ...resolved }, resolved);
+    const leavingRecentChat =
+      current.sessionTarget === "current" && next.sessionTarget !== "current";
+    const pickingAgent = patch.agentId !== undefined || patch.clearAgent !== undefined;
+    if (deps.currentCronState().cronCreateOpen && (pickingAgent || leavingRecentChat)) {
+      const oldAgent = deps.resolveAgentId(current);
+      // When Default has a configured owner, the previous chat must not override that choice.
+      const requestedAgent = pickingAgent
+        ? (deps.resolveAgentId({ ...next, sessionKey: patch.sessionKey ?? "" }) ??
+          deps.resolveAgentId(next))
+        : oldAgent;
+      const agentChanged = oldAgent !== requestedAgent;
+      if (
+        agentChanged &&
+        patch.sessionTarget === undefined &&
+        next.sessionTarget.startsWith("session:")
+      ) {
+        next.sessionTarget = "isolated";
+      }
+      if (current.sessionKey && patch.sessionKey === undefined) {
+        const linkedReport =
+          current.deliveryMode === "announce" &&
+          !hasExplicitFormDelivery(current) &&
+          canLinkReport(oldAgent);
+        // A source-only key would keep the independent job bound to the old chat.
+        if (
+          agentChanged ||
+          (leavingRecentChat && (!linkedReport || next.sessionTarget === "main"))
+        ) {
+          next.sessionKey = "";
+        }
+        // A previous chat selection must not become an announcement to the new agent's default.
+        if (agentChanged && linkedReport && patch.deliveryMode === undefined) {
+          next.deliveryMode = "none";
+        }
+      }
+    }
+    return next;
+  }
 
   function clear() {
     requestId += 1;
@@ -264,6 +306,8 @@ export function createDeliveryConversations(deps: DeliveryConversationsDependenc
       return editorGeneration;
     },
     clear,
+    canLinkReport,
+    resolveEditorForm,
     retireEditor,
     openEditor,
     retireExitedEditor,

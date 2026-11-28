@@ -1,9 +1,7 @@
-import { asNullableRecord } from "@openclaw/normalization-core/record-coerce";
 import {
   normalizeSortedUniqueTrimmedStringList,
   normalizeUniqueTrimmedStringList,
 } from "@openclaw/normalization-core/string-normalization";
-import { resolveCronDefaultDeliveryDestination } from "../../../../src/cron/delivery-config-defaults.js";
 import { userProfileDisplayName } from "../../../../src/shared/user-profile-display-name.js";
 import type { GatewayAgentRow } from "../../api/types.ts";
 import { hasCronFormErrors } from "../../lib/cron/form.ts";
@@ -23,8 +21,7 @@ type CronModelSource = {
 export function buildCronViewProps(page: ReturnType<typeof createCronPage>) {
   const channels = page.inventories.channels.read();
   // Event sources list MCP servers from the runtime config; track its arrival.
-  const configSnapshot = page.inventories.runtimeConfig.read().configSnapshot;
-  const config = configSnapshot?.runtimeConfig ?? configSnapshot?.config;
+  page.inventories.runtimeConfig.read();
   const cron = page.cron();
   const agentsList = page.inventories.agents.read().agentsList;
   let modelAgentId: string | undefined;
@@ -49,13 +46,7 @@ export function buildCronViewProps(page: ReturnType<typeof createCronPage>) {
       : [];
     const channel = cron.cronForm.deliveryChannel.trim() || "last";
     modelAgentId = page.resolveModelAgentId(cron);
-    if (cron.cronCreateOpen && config) {
-      canLinkReport = !resolveCronDefaultDeliveryDestination({
-        cronConfig: asNullableRecord(config.cron) ?? undefined,
-        agentId: modelAgentId,
-        creatorProfileId: page.context().gateway.snapshot.selfUser?.id,
-      });
-    }
+    canLinkReport = cron.cronCreateOpen && page.deliveryDirectory.canLinkReport(modelAgentId);
     models = {
       catalog: page.cronModelCatalog(),
       agent: agentsList?.agents.find((entry) => entry.id === modelAgentId),
