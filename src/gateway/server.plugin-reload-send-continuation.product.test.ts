@@ -11,7 +11,6 @@ await definePluginReloadProductTest(
     loadScenarios: async () => {
       process.stderr.write("RELOAD_PRODUCT_STAGE importing-scenarios\n");
       await import("./server.plugin-reload-send-continuation.product.test-support.js");
-      process.stderr.write("RELOAD_PRODUCT_STAGE scenarios-imported\n");
     },
     relayOutput: true,
   },
