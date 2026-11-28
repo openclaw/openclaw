@@ -12,6 +12,7 @@ import {
 } from "./subagent-delivery-state.js";
 import { SUBAGENT_ENDED_REASON_KILLED } from "./subagent-lifecycle-events.js";
 import { mutateSubagentRuns, SubagentRegistryWriteError } from "./subagent-registry-persistence.js";
+import { listUnsettledRequesterChildrenInRuns } from "./subagent-registry-requester-yield.js";
 import type { SubagentCompletionRequest, SubagentRunRecord } from "./subagent-registry.types.js";
 import { isSubagentPausedByYield } from "./subagent-requester-turn-custody.js";
 import { isSameSubagentRunOwner, latestSubagentRun } from "./subagent-run-generation.js";
@@ -57,7 +58,11 @@ export function isCompletionHeldByYield(
     : isSubagentPausedByYield(entry) && request.reason !== SUBAGENT_ENDED_REASON_KILLED;
 }
 
-type SubagentYieldClaim = "nothing-pending" | "pending-work" | { messageWaitRegistered: boolean };
+type SubagentYieldClaim =
+  | "nothing-pending"
+  | "task-children-pending"
+  | "pending-work"
+  | { messageWaitRegistered: boolean };
 
 /** Claim a live native task, recording message waits before the yielded terminal. */
 export async function claimSubagentYieldInRuns(params: {
@@ -99,6 +104,21 @@ export async function claimSubagentYieldInRuns(params: {
     return "pending-work";
   }
   if (!params.waitForMessage) {
+    // A task-owned turn adopted after a partial partition settle still owes its
+    // requester the final completion. While an earlier yield's wake-armed children
+    // can resume this session, re-pause instead of finalizing an interim turn, so
+    // the last partition's turn adopts the same task lineage (#207095).
+    if (
+      expected.expectsCompletionMessage === true &&
+      listUnsettledRequesterChildrenInRuns({
+        requesterSessionKey: params.sessionKey,
+        requesterAgentId: params.agentId,
+        excludeRequesterTurnRunId: params.runId,
+        runs: params.runs,
+      }).some((child) => child.wakeArmed && child.state !== "paused")
+    ) {
+      return "task-children-pending";
+    }
     return "nothing-pending";
   }
   const assertCurrent = () => {
