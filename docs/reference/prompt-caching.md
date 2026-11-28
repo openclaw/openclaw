@@ -124,6 +124,13 @@ channel, scheduled, heartbeat, and senderless wake turns retain the same
 Gateway checks current identity, target access, and full operator write authority
 for privileged PR actions when called. Listing an action does not grant it.
 
+Personal skill library listing follows the session's recorded prompt listing, not
+whether the current turn has a human requester. Announce, settle, and steer keep
+the same `skill_library` definition and turn-local deferred listing while that
+listing is unchanged; grant-specific descriptions stay outside the cached system
+directory. Calls without an admitted authoring grant are refused at execution.
+A later admitted authoring turn refreshes the listing when presentation changes.
+
 With Tool Search or Code Mode active, `computer` and the yielding
 `github_publish` listing are [on-demand](/tools/tool-search#on-demand-tools):
 they stay out of the provider tool list until the model first looks one up or

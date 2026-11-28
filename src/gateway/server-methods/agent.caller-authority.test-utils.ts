@@ -9,6 +9,7 @@ import {
   withGatewayToolCallerIdentity,
 } from "../../agents/tools/gateway-caller-context.js";
 import { callInProcessGatewayTool } from "../../agents/tools/in-process-gateway.js";
+import { replaceSessionEntry } from "../../config/sessions/session-accessor.sqlite-entry.js";
 import {
   withPluginRuntimeGatewayContextResolver,
   withPluginRuntimeGatewayRequestScope,
@@ -44,6 +45,12 @@ import {
 } from "./agent.test-harness.js";
 import type { GatewayRequestHandlerOptions, RespondFn } from "./types.js";
 
+async function primeStoredSession() {
+  prime();
+  const { agentId, storePath, canonicalKey, entry } = getAgentTestMocks().loadSessionEntry()!;
+  await replaceSessionEntry({ agentId, storePath, sessionKey: canonicalKey }, entry!);
+}
+
 describe("gateway agent caller authority custody", () => {
   beforeEach(describe1BeforeEach0);
   afterEach(describe1AfterEach1);
@@ -51,7 +58,7 @@ describe("gateway agent caller authority custody", () => {
   it.each(["operator", "maintainer", "system"] as const)(
     "preserves accepted %s authority through command admission and later tool calls",
     async (kind) => {
-      prime();
+      await primeStoredSession();
       const sourceProfileId = ensureProfileForEmail(`source-${kind}@example.test`).id;
       const context = makeContext();
       context.resolveGatewayContext = () => context;
@@ -232,7 +239,7 @@ describe("gateway agent caller authority custody", () => {
   );
 
   it("finishes admitted guest and staff runs after both callers disconnect and guest access ends", async () => {
-    prime();
+    await primeStoredSession();
     const context = makeContext();
     context.resolveGatewayContext = () => context;
     const registry = createGatewayMethodRegistry([

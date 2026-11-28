@@ -54,7 +54,11 @@ export function createStableSkillAuthoring() {
       if (shapes.size > MAX_REMEMBERED_SESSIONS) {
         shapes.delete(shapes.keys().next().value!);
       }
-      return authoring;
+      // Persisted listings restore definitions after restart, never authority.
+      // Workshop then follows the ordinary no-grant sandbox rule below.
+      if (!authoring.turnRefusal) {
+        return authoring;
+      }
     }
     const shape = shapes.get(key);
     if (!shape) {
@@ -70,6 +74,7 @@ export function createStableSkillAuthoring() {
       defaultTarget: shape.defaultTarget,
       multipleProfiles: shape.multipleProfiles,
       expired: true,
+      ...(authoring?.turnRefusal ? { turnRefusal: authoring.turnRefusal } : {}),
       bind: () => {},
       assertWorkspaceCurrent: (run) => {
         if (run?.sandboxed !== false) {

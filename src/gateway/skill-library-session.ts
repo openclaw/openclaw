@@ -24,8 +24,19 @@ export async function prepareSkillLibrarySessionCreation(
   prepared?.assertCurrent();
   // A linked owner device seeds with the owner's library permissions (OCF-510).
   const ownerDevice = currentOwnerDevicePrincipal(client) !== undefined;
+  const presentation = prepared?.presentation;
   return {
     ...creation,
+    // First chat sends have no row for an authoring patch yet. Commit their
+    // prompt facts with creation so a restart does not drop the listed tool.
+    ...(presentation?.profileId && presentation.defaultTarget !== "unavailable"
+      ? {
+          skillLibraryPromptListing: {
+            multipleProfiles: presentation.multipleProfiles,
+            defaultTarget: presentation.defaultTarget,
+          },
+        }
+      : {}),
     skillLibrarySelections:
       prepared?.selections ??
       (await seedSkillLibrarySelection({

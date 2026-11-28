@@ -63,4 +63,50 @@ describe("createStableSkillAuthoring", () => {
     resolveStableSkillAuthoring("agent:main:a", human("workspace"));
     expect(other("agent:main:a", undefined)).toBeUndefined();
   });
+
+  it("restores a refused listing without granting personal or sandboxed Workshop access", async () => {
+    const refused: SkillLibraryAuthoringCapability = {
+      ...human("workspace", false),
+      turnRefusal: "This turn has no human requester, so the call was not run.",
+      assertWorkspaceCurrent: () => {
+        throw new Error("refused grant must not govern Workshop");
+      },
+    };
+    const internal = resolveStableSkillAuthoring("agent:main:restored", refused)!;
+    expect(internal).not.toBe(refused);
+    expect(internal).toMatchObject({
+      defaultTarget: "workspace",
+      multipleProfiles: false,
+      expired: true,
+      turnRefusal: refused.turnRefusal,
+    });
+    await expect(internal.invoke({ action: "list" })).rejects.toThrow("fresh message");
+    expect(() => internal.assertWorkspaceCurrent?.({ sandboxed: false })).not.toThrow();
+    expect(() => internal.assertWorkspaceCurrent?.({ sandboxed: true })).toThrow(/sandboxed/);
+    expect(() => internal.assertWorkspaceCurrent?.()).toThrow(/sandboxed/);
+    const remembered = resolveStableSkillAuthoring("agent:main:restored", undefined)!;
+    expect(() => remembered.assertWorkspaceCurrent?.({ sandboxed: false })).not.toThrow();
+    expect(() => remembered.assertWorkspaceCurrent?.({ sandboxed: true })).toThrow(/sandboxed/);
+  });
+
+  it("keeps explicit follow-up expiry stronger than a restored turn refusal", async () => {
+    const { expireSkillLibraryAuthoring } =
+      await import("../auto-reply/reply/transcript-followup-run.js");
+    resolveStableSkillAuthoring("agent:main:expired", human("workspace"));
+    const followup = resolveStableSkillAuthoring("agent:main:expired", {
+      ...expireSkillLibraryAuthoring(human("personal", false), "expired")!,
+      turnRefusal: "This turn has no human requester.",
+    })!;
+    expect(followup).toMatchObject({
+      defaultTarget: "workspace",
+      multipleProfiles: true,
+      expired: true,
+    });
+    await expect(followup.invoke({ action: "list" })).rejects.toThrow("expired");
+    expect(() => followup.assertWorkspaceCurrent?.({ sandboxed: false })).toThrow("expired");
+    expect(resolveStableSkillAuthoring("agent:main:expired", undefined)).toMatchObject({
+      defaultTarget: "workspace",
+      multipleProfiles: true,
+    });
+  });
 });
