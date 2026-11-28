@@ -22,6 +22,7 @@ import { registerChatComposerMenuEnglish } from "../../ui/src/i18n/locales/en-ch
 import { registerChatComposerEnglish } from "../../ui/src/i18n/locales/en-chat-composer.ts";
 import { registerChatDetailsEnglish } from "../../ui/src/i18n/locales/en-chat-details.ts";
 import { registerChatDictationEnglish } from "../../ui/src/i18n/locales/en-chat-dictation.ts";
+import { registerChatGoalsOptionalEnglish } from "../../ui/src/i18n/locales/en-chat-goals-optional.ts";
 import { registerChatGoalsEnglish } from "../../ui/src/i18n/locales/en-chat-goals.ts";
 import { registerChatMediaEnglish } from "../../ui/src/i18n/locales/en-chat-media.ts";
 import { registerChatMessageMetadataEnglish } from "../../ui/src/i18n/locales/en-chat-message-metadata.ts";
@@ -91,6 +92,7 @@ import { registerSessionMachineEnglish } from "../../ui/src/i18n/locales/en-sess
 import { registerSessionMenuPermissionsEnglish } from "../../ui/src/i18n/locales/en-session-menu-permissions.ts";
 import { registerSessionMenuEnglish } from "../../ui/src/i18n/locales/en-session-menu.ts";
 import { registerSessionNavigationEnglish } from "../../ui/src/i18n/locales/en-session-navigation.ts";
+import { registerSessionNotFoundEnglish } from "../../ui/src/i18n/locales/en-session-not-found.ts";
 import { registerSessionOrganizationEnglish } from "../../ui/src/i18n/locales/en-session-organization.ts";
 import { registerSessionPeopleEnglish } from "../../ui/src/i18n/locales/en-session-people.ts";
 import { registerSessionPlacementEnglish } from "../../ui/src/i18n/locales/en-session-placement.ts";
@@ -164,6 +166,7 @@ const sourceFiles = [
   "en-chat-worktree.ts",
   "en-chat-details.ts",
   "en-chat-goals.ts",
+  "en-chat-goals-optional.ts",
   "en-chat-message-metadata.ts",
   "en-chat-move-to-project.ts",
   "en-chat-media.ts",
@@ -213,6 +216,7 @@ const sourceFiles = [
   "en-session-menu.ts",
   "en-session-menu-permissions.ts",
   "en-session-navigation.ts",
+  "en-session-not-found.ts",
   "en-session-organization-shared.ts",
   "en-session-organization.ts",
   "en-session-deletion.ts",
@@ -635,6 +639,10 @@ export function loadControlUiSourceCatalog(): TranslationMap {
         ...registerChatSessionEnglish.catalog.chat,
         ...registerChatSessionOptionalEnglish.catalog.chat,
         ...registerSessionNavigationEnglish.catalog.chat,
+        sessionRoute: {
+          ...registerSessionNavigationEnglish.catalog.chat.sessionRoute,
+          ...registerSessionNotFoundEnglish.catalog.chat.sessionRoute,
+        },
         workspaceConflict,
         sessionDetails,
         sessionSharing,
@@ -719,6 +727,7 @@ export function loadControlUiSourceCatalog(): TranslationMap {
       },
     },
     registerChatGoalsEnglish.catalog,
+    registerChatGoalsOptionalEnglish.catalog,
     registerChatProviderReviewEnglish.catalog,
     registerChatPublicQrEnglish.catalog,
     registerCodeBlocksEnglish.catalog,

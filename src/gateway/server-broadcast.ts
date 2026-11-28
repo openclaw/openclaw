@@ -36,6 +36,7 @@ import {
 } from "./server-broadcast-scopes.js";
 import type {
   SessionEventProjection,
+  PrepareSessionEventProjection,
   GatewayBroadcastFn,
   GatewayBroadcastOpts,
   GatewayBroadcastToConnIdsFn,
@@ -170,9 +171,7 @@ export function createGatewayBroadcaster(params: {
   prepareSessionEventProjection?: (
     event: string,
     payload: unknown,
-    scope: {
-      sessionKeys: readonly string[];
-      agentId?: string;
+    scope: Parameters<PrepareSessionEventProjection>[2] & {
       prepareSessionProjection?: GatewayBroadcastOpts["prepareSessionProjection"];
     },
   ) => ((client: GatewayWsClient) => SessionEventProjection | undefined) | undefined;
@@ -577,6 +576,8 @@ export function createGatewayBroadcaster(params: {
           projectSession = params.prepareSessionEventProjection?.(event, payload, {
             sessionKeys,
             agentId,
+            singleRecipient:
+              (Array.isArray(recipients) ? recipients.length : recipients.size) === 1,
             ...(opts?.prepareSessionProjection
               ? { prepareSessionProjection: opts.prepareSessionProjection }
               : {}),
@@ -608,8 +609,9 @@ export function createGatewayBroadcaster(params: {
             continue;
           }
           const fragments = projected.serializeSession && (sessionFragments ??= new Map());
+          const fragmentKey = projected.serializePayload ?? projected.payload;
           payloadFragment =
-            fragments?.get(projected.payload) ||
+            fragments?.get(fragmentKey) ||
             projected.serializePayload?.() ||
             serializeFrameField(
               "payload",
@@ -617,7 +619,7 @@ export function createGatewayBroadcaster(params: {
               projected.serializeSession,
               projected.serializeMessage,
             );
-          fragments?.set(projected.payload, payloadFragment);
+          fragments?.set(fragmentKey, payloadFragment);
           delivered = projected.delivered;
         }
         // A drained write can refresh the recipient; cache only the profile at this send.

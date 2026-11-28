@@ -18,6 +18,7 @@ export {
   isModelsAuthSetApiKeyResult,
   isModelsAuthLogoutParams,
   isModelsAuthOrderSetParams,
+  isModelsAuthProfileRenameParams,
   isModelsAuthRefreshParams,
   isModelsAuthStatusParams,
   isModelsListParams,

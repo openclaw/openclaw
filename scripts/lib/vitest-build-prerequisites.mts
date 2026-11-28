@@ -140,12 +140,6 @@ const runtimeConsumers = [
     dir: "",
   })),
   {
-    file: "src/channels/plugins/contracts/plugin-shape.contract.test.ts",
-    configs: ["test/vitest/vitest.contracts-channel-registry.config.ts"],
-    mode: "private-qa",
-    dir: "",
-  },
-  {
     file: "src/plugin-sdk/channel-entry-contract.lifecycle.test.ts",
     configs: ["test/vitest/vitest.plugin-sdk.config.ts"],
     mode: "runtime",

@@ -85,6 +85,7 @@ export function describeSessionsListTool(
     "Metadata-only by default. limit defaults to 100; larger requests stay valid but limitApplied never exceeds 200. count is this page, not an inventory total. Continue with nextOffset and identical filters while hasMore; truncationReason names a scan/byte budget. Pages are live: deduplicate by agentId/key/sessionId or restart for a fresh inventory. archived=all includes active and archived rows.",
     "Preview recent messages inline via includeLastMessage/messageLimit; includeDerivedTitles adds derived titles. enrichmentOmitted means previews exceeded the byte budget; read history separately.",
     "hasBoard reports saved dashboard presence without content; omitted means unknown, not empty. Use before history/send target selection.",
+    "Never loop-poll sessions_list for children; check status only on demand, debug, or intervention.",
     ...(options?.sessionLinkBase ? [describeSessionLinkRule(options.sessionLinkBase)] : []),
   ].join(" ");
 }
@@ -94,6 +95,7 @@ export function describeSessionsHistoryTool(options?: SessionLinkDescriptionOpti
   return [
     "Read sanitized visible-session history.",
     "Before reply/debug/resume. Use messageId for anchored history; sessionId selects its transcript and requires messageId. Omit both for the latest tail. offset pages unanchored history and is ignored with messageId. limit bounds either mode. Include tool messages with includeTools.",
+    "For memory session hits, use the sessionKey, messageId and sessionId returned by sessions_search. Without search, use a known session key or transcript ID, a small limit, and paginate. Search line numbers are not history offsets; never read raw transcript files.",
     "pendingInputs are accepted inputs outside model history; page with pendingBefore=nextBefore. Cancelled inputs never replay; interrupted means saved without an active retry. Eligible durable peer sends can regain queued custody on startup. Lower limit for richer pending previews.",
     ...(options?.sessionLinkBase ? [describeSessionLinkRule(options.sessionLinkBase)] : []),
   ].join(" ");
@@ -103,6 +105,7 @@ export function describeSessionsHistoryTool(options?: SessionLinkDescriptionOpti
 export function describeSessionsSearchTool(options?: SessionLinkDescriptionOptions): string {
   return [
     "Search visible past sessions for matching user and assistant text.",
+    "For memory session hits, search distinctive snippet text (sessionKey = transcript ID when known), then use sessions_history if available with the returned sessionKey, messageId and sessionId. Without history, hits are snippets only. Search line numbers are not history offsets; never read raw transcript files.",
     ...(options?.sessionLinkBase ? [describeSessionLinkRule(options.sessionLinkBase)] : []),
   ].join(" ");
 }
@@ -173,6 +176,7 @@ export function describeSessionsSpawnTool(options?: {
       : ['`runtime="acp"` ids: codex, claude, gemini, opencode, or configured ACP.']),
     describeSubagentSpawnContext(options?.subagentThreadAvailable === true),
     "A PR/report, long runtime, or isolated worktree alone does not justify a sidebar session. A request for a subagent does not request a separate session. No spawn for quick lookup/single read.",
+    "Brief each child with objective, output, write scope, and verification. taskName is a stable handle; label is for UI. Synthesize child outputs. Follow the receipt's accepted completion mode: collectors require explicit collection, not completion events; announcing children use sessions_yield when available, otherwise runtime completion events. Never loop-poll subagents list or sessions_list; check status only on demand, debug, or intervention.",
     "After spawn, do non-overlap work; follow the receipt's completion mode.",
   ].join(" ");
 }

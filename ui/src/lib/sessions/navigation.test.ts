@@ -139,6 +139,15 @@ describe("resolveSessionNavigation", () => {
     expect(navigation.selectedSession).toBeUndefined();
   });
 
+  it("waits for a dashboard row before revealing its title", () => {
+    const key = "agent:main:dashboard:creating";
+    expect(navigate([], { sessionKey: key }).visibleSessions[0]?.titlePending).toBe(true);
+    expect(
+      navigate([session("dashboard:creating", { titlePending: false })], { sessionKey: key })
+        .visibleSessions[0]?.titlePending,
+    ).toBe(false);
+  });
+
   it("keeps a deep-linked session ahead of every returned active row", () => {
     const navigation = navigate(roster("recent", 11, 100), { sessionKey: "agent:main:oldest" });
 

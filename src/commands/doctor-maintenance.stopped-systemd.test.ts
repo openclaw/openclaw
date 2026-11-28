@@ -10,10 +10,44 @@ import { requireNodeSqlite } from "../infra/node-sqlite.js";
 import { createLegacyAuditLedger } from "../infra/state-migrations.legacy-audit.test-support.js";
 import { readUpdateRunDriver } from "../infra/update-run-driver.js";
 import { createUpdateRun } from "../infra/update-run-ledger.js";
+import { closeOpenClawAgentDatabasesAsync } from "../state/openclaw-agent-db.js";
+import { closeOpenClawStateDatabaseAsync } from "../state/openclaw-state-db.js";
 import { withOpenClawTestState } from "../test-utils/openclaw-test-state.js";
+import * as storeFiles from "../test-utils/store-snapshot.test-support.js";
+import type { DoctorMaintenancePendingCheck } from "./doctor-maintenance-pending.js";
 
 const { mocks } = await import("../flows/doctor-health.test-support.js");
+const pending = vi.hoisted(() => ({
+  root: undefined as string | undefined,
+  decisions: [] as { step: string; sidecarsBefore: string[]; changed: string[] }[],
+}));
+// Each step's pending check must only read. When a test sets `pending.root`, every check
+// meets its stores as a stopped Gateway leaves them: all connections closed, and the empty
+// sidecars Doctor's own earlier read-only opens left removed, as a writable close would.
+vi.mock("./doctor-maintenance-pending.js", async (importOriginal) => {
+  const actual = await importOriginal<typeof import("./doctor-maintenance-pending.js")>();
+  return {
+    ...actual,
+    traceDoctorMaintenancePending: async (step: string, check?: DoctorMaintenancePendingCheck) => {
+      const root = pending.root;
+      if (!check || !root) {
+        return actual.traceDoctorMaintenancePending(step, check);
+      }
+      await closeOpenClawAgentDatabasesAsync();
+      await closeOpenClawStateDatabaseAsync();
+      storeFiles.removeEmptySqliteSidecars(root);
+      const sidecarsBefore = storeFiles.listSqliteSidecars(root);
+      const before = storeFiles.snapshotStoreFiles(root);
+      const work = await actual.traceDoctorMaintenancePending(step, check);
+      const changed = storeFiles.changedStoreFiles(before, storeFiles.snapshotStoreFiles(root));
+      pending.decisions.push({ step, sidecarsBefore, changed });
+      return work;
+    },
+  };
+});
 afterEach(() => {
+  pending.root = undefined;
+  pending.decisions = [];
   vi.restoreAllMocks();
   vi.unstubAllEnvs();
 });
@@ -189,6 +223,38 @@ it("repairs state beside the stopped Gateway when the recorded update driver is 
       expect(mocks.outro).toHaveBeenCalledWith("Doctor complete.");
       using migrated = new DatabaseSync(databasePath, { readOnly: true });
       expect(migrated.prepare("PRAGMA user_version").get()).not.toEqual({ user_version: 1 });
+    } finally {
+      mocks.servicePlatform = undefined;
+    }
+  });
+});
+
+it("decides every step's pending check without creating or changing a file", async () => {
+  await withOpenClawTestState({ scenario: "minimal" }, async (state) => {
+    // A legacy state database no connection holds, so its schema and backup steps have work.
+    await prepareInactiveSystemdGateway(state, "current-policy");
+    pending.root = state.stateDir;
+    const runtime = { log: vi.fn(), error: vi.fn(), exit: vi.fn() };
+    try {
+      await runDoctorHealthFlow(runtime, { repair: true, nonInteractive: true });
+      expect(mocks.outro).toHaveBeenCalledWith("Doctor complete.");
+      expect(pending.decisions.map(({ step }) => step)).toEqual(
+        expect.arrayContaining([
+          "state-database-repair",
+          "database-migrations",
+          "state-schema",
+          "runtime-checks",
+          "config-flow.state-schema",
+          "config-flow",
+          "external-config",
+          "maintenance-ready",
+          "boot-lifecycle",
+        ]),
+      );
+      expect(pending.decisions.filter((decision) => decision.sidecarsBefore.length > 0)).toEqual(
+        [],
+      );
+      expect(pending.decisions.filter((decision) => decision.changed.length > 0)).toEqual([]);
     } finally {
       mocks.servicePlatform = undefined;
     }

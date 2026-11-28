@@ -301,6 +301,8 @@ export async function prepareAndDispatchEmbeddedRunAttempt(
   const admittedEntry = runInput.sessionAdmission?.entry;
   const entry = admittedEntry?.sessionId === sessionId ? admittedEntry : undefined;
   const promptAdditions = await prepareAttemptSystemPromptAdditions({
+    workspaceDir,
+    cwd: params.cwd,
     entry,
     senderIsOwner: params.senderIsOwner,
     admittedRunContext: params.admittedRunContext,

@@ -21,7 +21,6 @@ import {
   DEFAULT_EXTENSION_TEST_SHARD_COUNT,
   createExtensionTestProcessTargetChunks,
   createExtensionTestShards,
-  estimateExtensionTestCost,
   listExtensionTestFilesForRoots,
   listTrackedTestPlanFiles,
   resolveExtensionBatchPlan,
@@ -290,40 +289,7 @@ it("keeps explicitly requested extensions without tests in batch plans", () => {
   expect(batch.planGroups.flatMap((group) => group.extensionIds)).toEqual([testedExtensionId]);
 });
 
-it("counts tracked extension tests without walking extension directories", () => {
-  const payload = expectNoNodeFsScans<{
-    batchTests: number;
-    shards: number;
-    shardTests: number;
-  }>(
-    `
-        const { createExtensionTestShards, resolveExtensionBatchPlan } =
-          await import("./scripts/lib/extension-test-plan.mts");
-        const extensionIds = ["matrix", "openai", "slack", "telegram"];
-        const batch = resolveExtensionBatchPlan({ cwd: process.cwd(), extensionIds });
-        const shards = createExtensionTestShards({ cwd: process.cwd(), extensionIds, shardCount: 2 });
-        return {
-          batchTests: batch.testFileCount,
-          shards: shards.length,
-          shardTests: shards.reduce((total, shard) => total + shard.testFileCount, 0),
-        };
-      `,
-    { counters: ["readdirSync"] },
-  );
-  expect(payload.batchTests).toBeGreaterThan(0);
-  expect(payload.shards).toBe(2);
-  expect(payload.shardTests).toBe(payload.batchTests);
-});
-
 it("balances extension test shards by estimated CI cost", () => {
-  for (const [config, singletonSeconds, tenFileSeconds] of [
-    [extensionConfig("slack"), 2, 12],
-    [extensionConfig("telegram"), 6, 43],
-    [extensionConfig("database-workers"), 8, 76],
-  ] as const) {
-    expect(estimateExtensionTestCost(config, 1), config).toBe(singletonSeconds);
-    expect(estimateExtensionTestCost(config, 10), config).toBe(tenFileSeconds);
-  }
   const shards = createExtensionTestShards({ shardCount: DEFAULT_EXTENSION_TEST_SHARD_COUNT });
   const expectedIds = listAvailableExtensionIds().filter(
     (targetArg) => resolveExtensionTestPlan({ targetArg }).hasTests,

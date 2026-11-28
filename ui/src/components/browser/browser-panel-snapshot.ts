@@ -19,6 +19,7 @@ import type { BrowserPanelPendingInput } from "./browser-panel-pending-input.ts"
 import type { BrowserPanelStateWriter } from "./browser-panel-state.ts";
 import type { BrowserPanelStream } from "./browser-panel-stream.ts";
 import { loadBrowserPanelImage, type BrowserPanelView } from "./browser-panel-surface.ts";
+import { sessionBrowserTabList } from "./browser-session-tab-list.ts";
 
 const ACTION_REFRESH_DELAY_MS = 350;
 
@@ -31,7 +32,16 @@ interface BrowserPanelSnapshotHost extends BrowserPanelStateWriter<
   | "evaluateUnavailable"
   | "screenshotUnavailable"
 > {
-  readonly host: Pick<BrowserPanelHost, "resourceBasePath" | "authToken" | "fixedTab">;
+  readonly host: Pick<
+    BrowserPanelHost,
+    | "resourceBasePath"
+    | "authToken"
+    | "fixedTab"
+    | "dashboardTarget"
+    | "sessionKey"
+    | "sessionTabs"
+    | "client"
+  >;
   readonly native: Pick<BrowserPanelNative, "activeTab" | "mergeRemoteTabs">;
   readonly stream: Pick<
     BrowserPanelStream,
@@ -73,9 +83,22 @@ export function createBrowserPanelSnapshot(controller: BrowserPanelSnapshotHost)
     );
   }
 
+  let initialList = true;
   async function listTabs(client: BrowserRequestClient) {
-    const snapshot = await listBrowserTabs(client);
-    const fixed = controller.host.fixedTab;
+    const host = controller.host;
+    const prepared =
+      initialList && host.client && !host.fixedTab && !host.dashboardTarget
+        ? sessionBrowserTabList(
+            "take",
+            host.client,
+            host.sessionKey,
+            controller.operations.route,
+            host.sessionTabs ?? [],
+          )
+        : undefined;
+    initialList = false;
+    const snapshot = await listBrowserTabs(client, prepared);
+    const fixed = host.fixedTab;
     if (!fixed) {
       return snapshot;
     }

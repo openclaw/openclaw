@@ -30,6 +30,7 @@ import { CronService } from "./service.js";
 import {
   createFinishedBarrier,
   createCronServiceWithStateForTest,
+  mockCronAvailableMemory,
   setupCronServiceSuite,
 } from "./service.test-harness.js";
 import {
@@ -49,7 +50,7 @@ import type { CronJob } from "./types.js";
 
 // Capacity cases fill the default run slots; no spare memory admits an extra run.
 beforeEach(() => {
-  vi.spyOn(process, "availableMemory").mockReturnValue(0);
+  mockCronAvailableMemory(0);
 });
 
 const NOW = Date.parse("2026-10-01T12:00:00.000Z");

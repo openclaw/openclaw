@@ -46,7 +46,7 @@ import { formatSlackTarget } from "./target-parsing.js";
 import { resolveSlackBotToken } from "./token.js";
 import { countSlackTextUtf8Bytes, truncateSlackTextByUtf8Bytes } from "./truncate.js";
 import type { SlackAttachment } from "./types.js";
-import { addSlackAuthorProfiles, type SlackMessageUserProfile } from "./user-profiles.js";
+import { addSlackUserProfiles, type SlackMessageUserProfile } from "./user-profiles.js";
 
 export type { SlackActionClientOpts } from "./action-context.js";
 
@@ -530,10 +530,17 @@ export async function readSlackMessages(
     after?: string;
     threadId?: string;
     messageId?: string;
-    /** Adds each author's Slack profile names as `user_profile`, one `users.info` per distinct author. */
-    includeAuthorProfiles?: boolean;
+    /**
+     * Adds each author's Slack profile names as `user_profile` and answers mentioned users' names as
+     * `userProfiles`, one `users.info` per distinct uncached user.
+     */
+    includeUserProfiles?: boolean;
   } = {},
-): Promise<{ messages: SlackMessageSummary[]; hasMore: boolean }> {
+): Promise<{
+  messages: SlackMessageSummary[];
+  hasMore: boolean;
+  userProfiles?: Record<string, SlackMessageUserProfile>;
+}> {
   const exactMessageId = opts.messageId?.trim();
   const readLimit = exactMessageId ? 1 : opts.limit;
   const exactBounds = exactMessageId
@@ -572,18 +579,19 @@ export async function readSlackMessages(
         : !opts.threadId || message.ts !== opts.threadId,
     )
     .map(renderSlackReadMessageText);
-  return {
-    messages: opts.includeAuthorProfiles
-      ? await addSlackAuthorProfiles({
-          accountId: resolveActionAccountId(opts),
-          teamId: opts.teamId,
-          token: opts.client ? opts.token : resolveToken(opts.token, opts.accountId, opts.cfg),
-          client,
-          messages,
-        })
-      : messages,
-    hasMore: exactMessageId ? false : Boolean(result.has_more),
-  };
+  const hasMore = exactMessageId ? false : Boolean(result.has_more);
+  if (!opts.includeUserProfiles) {
+    return { messages, hasMore };
+  }
+  const named = await addSlackUserProfiles({
+    accountId: resolveActionAccountId(opts),
+    teamId: opts.teamId,
+    token: opts.client ? opts.token : resolveToken(opts.token, opts.accountId, opts.cfg),
+    client,
+    messages,
+  });
+  const mentioned = Object.keys(named.mentioned).length ? { userProfiles: named.mentioned } : {};
+  return { messages: named.messages, hasMore, ...mentioned };
 }
 
 export async function listSlackConversations(

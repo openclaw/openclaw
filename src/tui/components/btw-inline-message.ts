@@ -33,6 +33,6 @@ export class BtwInlineMessage extends Container {
     } else {
       this.addChild(new MarkdownMessageComponent("assistant", text));
     }
-    this.addChild(new Text(theme.dim("Press Enter or Esc to dismiss"), 1, 0));
+    this.addChild(new Text(theme.dim("Press Esc in the editor to dismiss"), 1, 0));
   }
 }

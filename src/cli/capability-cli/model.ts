@@ -167,7 +167,7 @@ export function registerModelCapabilityCommands(capability: Command): void {
             resolveCapabilityProviderAgentId,
             resolveLocalCapabilityRuntimeConfig,
           } = await import("./shared.js");
-          const { getModelsCommandSecretTargetIds } = await import("../command-secret-targets.js");
+          const { getModelsCommandSecretTargetIds } = await import("../model-secret-targets.js");
           const { captureRuntimeConfigAsyncReader } = await import("../../config/config.js");
           const { canonicalizeCaseOnlyCatalogModelRef } =
             await import("../../agents/model-selection.js");

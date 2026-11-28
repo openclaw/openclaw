@@ -177,8 +177,8 @@ test.each(["needle", "会"])(
       expect(result.payload?.results.map((hit) => hit.sessionKey)).toEqual([visible]);
       expect(result.payload).not.toHaveProperty("truncated");
       expect(batches).toBeGreaterThan(0);
-      // One shared preparation per worker batch, plus this store's final disclosure snapshot.
-      expect(prepare).toHaveBeenCalledTimes(batches + 1);
+      // Transcript recall already has the matching keys and needs no list presentation.
+      expect(prepare).not.toHaveBeenCalled();
     });
   },
 );
@@ -249,26 +249,10 @@ test("recall batch verdicts match singleton checks over mixed physical owners", 
     const client = identifiedClient(viewer);
     client.connect.scopes = ["operator.read"];
     let singleton = false;
-    let targetAgentId = "main";
-    const prepare = sessionLists.prepareProjectedSessionList;
-    vi.spyOn(sessionLists, "prepareProjectedSessionList").mockImplementation((params) => {
-      if (!singleton || !params.candidateKeys) {
-        return prepare(params);
-      }
-      // Preserve the old exact-key preparation, including its scoped global selection.
-      const [key] = params.candidateKeys;
-      return prepare({
-        ...params,
-        candidateKeys: undefined,
-        key,
-        opts: { ...params.opts, ...(key === "global" ? { agentId: targetAgentId } : {}) },
-      });
-    });
     const verdicts: Record<string, boolean[]> = {};
     vi.spyOn(transcriptSearch, "searchSessionTranscripts").mockImplementation(
       async (params, _database, filter) => {
         expect(filter).toBeDefined();
-        targetAgentId = params.agentId;
         const allowed: boolean[] = [];
         for (const batch of singleton ? keys.map((key) => [key]) : [keys]) {
           allowed.push(...(await filter!(batch)));
@@ -354,6 +338,44 @@ test("CJK recall finishes the text pass and retains timestamp-ordered top-N", as
       timestamps[2],
     ]);
     expect(result.payload?.truncated).toBe(true);
+  });
+});
+
+test("recall keeps transcript order after a committed visibility change", async () => {
+  await withSearchState(async () => {
+    const viewer = ensureProfileForEmail("recall-commit@example.test").id;
+    const cfg: OpenClawConfig = { agents: { entries: { main: {} } } };
+    setRuntimeConfigSnapshot(cfg);
+    const keys = [];
+    for (const [index, timestamp] of [100, 300, 200].entries()) {
+      const sessionKey = await seed("main", `recall-commit-${index}`, "other-profile");
+      await persistSessionTranscriptTurn(
+        { agentId: "main", sessionKey, sessionId: `main-recall-commit-${index}` },
+        {
+          cwd: "/fixture",
+          updateMode: "none",
+          messages: [{ now: timestamp, message: { role: "user", content: "planning notes" } }],
+        },
+      );
+      keys.push(sessionKey);
+    }
+    const context = requestContext(cfg);
+    const client = identifiedClient(viewer);
+    const read = async () => {
+      const response = await search(context, client, {
+        query: "planning notes",
+        limit: 2,
+        recall: { requesterAgentId: "main", requesterSessionKey: "agent:main:requester" },
+      });
+      expect(response.ok, response.error?.message).toBe(true);
+      return response.payload?.results.map((hit) => hit.sessionKey);
+    };
+    expect(await read()).toEqual([keys[1], keys[2]]);
+    await upsertSessionEntryCore(
+      { agentId: "main", sessionKey: keys[1]! },
+      { visibility: "draft" },
+    );
+    expect(await read()).toEqual([keys[2], keys[0]]);
   });
 });
 

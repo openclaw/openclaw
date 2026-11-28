@@ -193,8 +193,8 @@ export async function parseSnapshotRecord(
   return { ...parsed, snapshot: { ...parsed.snapshot, historyState } };
 }
 
-// Older caches could trim a relocated activity beyond the held pagination boundary.
-export const CHAT_SNAPSHOT_PROJECTION_VERSION = 17;
+// Older caches retained reduced-width image previews as row display thumbnails.
+export const CHAT_SNAPSHOT_PROJECTION_VERSION = 18;
 const CHAT_SNAPSHOT_MESSAGE_LIMIT = 80;
 
 export async function createSnapshotRecord(

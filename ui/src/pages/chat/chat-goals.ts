@@ -8,11 +8,12 @@ import {
   splitCommandAction,
 } from "../../../../src/auto-reply/reply/commands-slash-parse.js";
 import { createChangeListeners } from "../../../../src/shared/listeners.js";
-import type { SessionGoal } from "../../api/types.ts";
+import type { GatewaySessionRow, SessionGoal } from "../../api/types.ts";
 import { t } from "../../i18n/index.ts";
 import { registerChatGoalsEnglish } from "../../i18n/locales/en-chat-goals.ts";
 import { registerChatSessionEnglish } from "../../i18n/locales/en-chat-session.ts";
 import type {
+  ChatGoalAction,
   ChatGoalDraft,
   ChatGoalMutationAction,
   ChatGoalRecovery,
@@ -35,6 +36,7 @@ import {
 import { generateUUID } from "../../lib/uuid.ts";
 import { captureChatConnectionOwner } from "./chat-connection-owner.ts";
 import { isInitialChatHistoryUnavailable, setChatError } from "./chat-history-state.ts";
+import { getChatPendingInputs } from "./chat-pending-inputs.ts";
 import type { ChatHost, ChatSendSubmitOptions } from "./chat-send-contract.ts";
 import { chatSendHoldReason } from "./chat-send-support.ts";
 import { hasDirectSessionRun, isChatBusy } from "./run-lifecycle.ts";
@@ -292,23 +294,71 @@ export function chatGoalCreationObjective(message: string): string | undefined {
   return args;
 }
 
+export function bindChatGoalActions(
+  host: ChatHost,
+  goal: SessionGoal | null | undefined,
+  isCurrentAgent: () => boolean,
+) {
+  const { sessionKey, currentSessionId } = host;
+  const expectedResumeStatus = goal?.status;
+  const presentedId = goal?.id;
+  return (goalId: string, action: ChatGoalAction) => {
+    if (
+      isCurrentAgent() &&
+      host.sessionKey === sessionKey &&
+      host.currentSessionId === currentSessionId &&
+      presentedId === goalId
+    ) {
+      void mutateChatGoal(host, { action, goalId, expectedResumeStatus });
+    }
+  };
+}
+
+export function currentChatGoalSession(host: ChatHost) {
+  return host.sessionsResult?.sessions.find(
+    (row) =>
+      row.sessionId === host.currentSessionId &&
+      visibleSessionMatches(host, row.key, row.agentId ?? host.sessionsResultAgentId ?? undefined),
+  );
+}
+
+export function chatGoalResumeBusy(host: ChatHost, row: GatewaySessionRow | undefined): boolean {
+  if (isChatBusy(host)) {
+    return true;
+  }
+  if (row?.goal?.status !== "active") {
+    return hasDirectSessionRun(host);
+  }
+
+  const pending = getChatPendingInputs(host);
+  // A stored "running" status can outlive the run; require an explicit live idle observation.
+  return Boolean(
+    !host.connected ||
+    !host.client?.recoveryScopeReady ||
+    !host.client.recoveryScope ||
+    !host.currentSessionId ||
+    row.sessionId !== host.currentSessionId ||
+    row.hasActiveRun !== false ||
+    row.activeRunIds?.length !== 0 ||
+    row.status === "queued" ||
+    row.hasActiveSubagentRun ||
+    row.backgroundProcessCount ||
+    row.swarm?.otherActiveGroups ||
+    row.swarm?.groups.some((group) => group.queued || group.running) ||
+    host.chatQueue.length ||
+    pending?.queuedCount ||
+    pending?.queuedInputs.length ||
+    host.gatewayWorkPaused,
+  );
+}
+
 /** New goals, including successors to completed goals, use ordinary send/admission. */
 export async function replaceExistingChatGoal(
   host: ChatHost,
   objective: string,
 ): Promise<boolean | undefined> {
-  const currentRow = () =>
-    host.sessionsResult?.sessions.find(
-      (row) =>
-        row.sessionId === host.currentSessionId &&
-        visibleSessionMatches(
-          host,
-          row.key,
-          row.agentId ?? host.sessionsResultAgentId ?? undefined,
-        ),
-    );
-  const currentGoal = () => currentRow()?.goal;
-  const goal = currentGoal();
+  const row = currentChatGoalSession(host);
+  const goal = row?.goal;
   if (!goal || goal.status === "complete") {
     return undefined;
   }
@@ -320,50 +370,17 @@ export async function replaceExistingChatGoal(
     connectionIsCurrent() &&
     host.currentSessionId === sessionId &&
     visibleSessionMatches(host, sessionKey, agentId);
-  const runId = () => host.chatRunId ?? currentRow()?.activeRunIds?.[0];
-  const expectedRunId = goal.status === "active" ? runId() : undefined;
-  // Capture values, not a renderer-owned row that may be replaced while the modal is open.
-  const { id: goalId, objective: previousObjective, status, updatedAt } = goal;
-  const unavailable = () => {
-    if (!host.connected || !host.client) {
-      return t("chat.goals.offline");
-    }
-    if (!sessionId || isInitialChatHistoryUnavailable(host)) {
-      return t("chat.thread.loading");
-    }
-    const hold = chatSendHoldReason(host, sessionKey, false, agentId);
-    if (hold) {
-      return hold;
-    }
-    const recovery = chatGoalRecovery(host);
-    if (recovery) {
-      return t(recovery.pending ? "chat.goals.actionPending" : "chat.goals.outcomeUnknown");
-    }
-    if (currentGoal()?.status === "complete") {
-      return t("chat.goals.editUnavailable");
-    }
-    if ((isChatBusy(host) || hasDirectSessionRun(host)) && !expectedRunId) {
-      return t("chat.goals.busy");
-    }
-    return null;
+  // Capture the revision and active run before loading the confirmation dialog.
+  const capture = {
+    goal: { ...goal },
+    expectedRunId: goal.status === "active" ? (host.chatRunId ?? row.activeRunIds?.[0]) : undefined,
+    scopeIsCurrent,
+    sessionKey,
+    agentId,
   };
-  const initialError = unavailable();
-  if (initialError) {
-    return rejectGoalOperation(host, initialError);
-  }
   try {
     const { confirmChatGoalReplacement } = await import("./chat-goal-operations.runtime.ts");
-    return await confirmChatGoalReplacement(host, objective, {
-      goalId,
-      previousObjective,
-      status,
-      updatedAt,
-      expectedRunId,
-      scopeIsCurrent,
-      currentGoal,
-      unavailable,
-      runId,
-    });
+    return await confirmChatGoalReplacement(host, objective, capture);
   } catch (error) {
     if (scopeIsCurrent()) {
       setChatError(host, formatUiError(error));
@@ -407,7 +424,7 @@ export async function submitChatGoalDraft(
 
 export async function mutateChatGoal(
   host: ChatHost,
-  action?: ChatGoalMutationAction,
+  action?: ChatGoalMutationAction & { expectedResumeStatus?: SessionGoal["status"] },
   expectedOperation?: GoalOperation,
 ): Promise<boolean> {
   const client = host.client;
@@ -476,8 +493,26 @@ export async function mutateChatGoal(
     if (!sessionId || isInitialChatHistoryUnavailable(host)) {
       return rejectGoalOperation(host, t("chat.thread.loading"));
     }
-    if (action.action === "resume" && (isChatBusy(host) || hasDirectSessionRun(host))) {
-      return rejectGoalOperation(host, t("chat.goals.busy"));
+    if (action.action === "resume") {
+      const row = currentChatGoalSession(host);
+      const goal = row?.goal;
+      const { expectedResumeStatus } = action;
+      const goalChanged = row
+        ? goal?.id !== action.goalId ||
+          (expectedResumeStatus !== undefined && goal.status !== expectedResumeStatus)
+        : expectedResumeStatus === "active";
+      if (goalChanged) {
+        return rejectGoalOperation(host, t("chat.goals.sessionChanged"));
+      }
+      if (goal?.status === "active") {
+        const hold = chatSendHoldReason(host, sessionKey, false, agentId);
+        if (hold) {
+          return rejectGoalOperation(host, hold);
+        }
+      }
+      if (chatGoalResumeBusy(host, row)) {
+        return rejectGoalOperation(host, t("chat.goals.busy"));
+      }
     }
     const identity = {
       sessionKey,

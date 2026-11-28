@@ -94,7 +94,7 @@ it("keeps the initial transcript and buffered streaming final exactly once in th
     sessionKey: _key,
     agentId: _agent,
     ...initialHistory
-  } = chatHistoryRequestParams("chat.startup", key, undefined);
+  } = chatHistoryRequestParams("chat.startup", key, undefined, undefined, [], undefined, true);
   const options = { url: "ws://127.0.0.1:18789", token: "synthetic-token" };
   const early = new EarlyGateway(options, key, initialHistory, window.location.href);
   const socket = getLatestWebSocket();

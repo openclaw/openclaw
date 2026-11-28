@@ -111,6 +111,7 @@ function CardDetailsContent(props: WorkboardProps & { card: WorkboardCard }) {
     return props.card;
   };
   const editors = new Set<WorkboardInlineText>();
+  const inlineCard = () => state().inlinePreviews.get(card()) ?? card();
   let body: HTMLElement | undefined;
   const tabButtons = createElementRefs<HTMLButtonElement>();
   const registerEditor = (editor: WorkboardInlineText) => {
@@ -377,7 +378,11 @@ function CardDetailsContent(props: WorkboardProps & { card: WorkboardCard }) {
                     <div class="workboard-detail__row">
                       <span>{t("workboard.fieldPriority")}</span>
                       {action().writable && !action().archived ? (
-                        <InlinePriority workboard={props} card={card()} disabled={action().busy} />
+                        <InlinePriority
+                          workboard={props}
+                          card={inlineCard()}
+                          disabled={action().busy}
+                        />
                       ) : (
                         <strong
                           class={[
@@ -393,7 +398,11 @@ function CardDetailsContent(props: WorkboardProps & { card: WorkboardCard }) {
                     <div class="workboard-detail__row">
                       <span>{t("workboard.fieldAgent")}</span>
                       {action().writable && !action().archived ? (
-                        <InlineAgent workboard={props} card={card()} disabled={action().busy} />
+                        <InlineAgent
+                          workboard={props}
+                          card={inlineCard()}
+                          disabled={action().busy}
+                        />
                       ) : (
                         <strong class="workboard-detail__agent">
                           <AgentAvatar
@@ -424,7 +433,7 @@ function CardDetailsContent(props: WorkboardProps & { card: WorkboardCard }) {
                       <span>{t("workboard.fieldLabels")}</span>
                       <InlineText
                         owner={props}
-                        card={card()}
+                        card={inlineCard()}
                         field={"labels"}
                         register={registerEditor}
                         disabled={action().busy}

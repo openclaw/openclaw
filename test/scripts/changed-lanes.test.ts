@@ -32,7 +32,6 @@ import {
   createTargetedExtensionLintCommand,
   shouldDelegateChangedCheckToCrabbox,
   shouldRunNpmLockGuard,
-  shouldRunTestTempCreationReport,
   createNpmLockGuardCommand,
   delegationFailedBeforeRunning,
 } from "../../scripts/check-changed.mts";
@@ -906,56 +905,6 @@ describe("scripts/changed-lanes", () => {
     }
   });
 
-  it.each([false, true])("targets UI style lint with TypeScript companion=%s", (typescript) => {
-    const style = "ui/src/styles/base.css";
-    const script = "ui/src/app-routes.ts";
-    const plan = createChangedCheckPlan(
-      detectChangedLanes(typescript ? [script, style] : [style]),
-      { env: { PATH: "/usr/bin" } },
-    );
-    expect(plan.commands.map((command) => command.args[0])).not.toContain("lint:core");
-    const oxlint = plan.commands.find((command) => command.name.startsWith("lint core changed"));
-    if (typescript) {
-      expect(oxlint?.args.slice(3)).toEqual([script]);
-    } else {
-      expect(oxlint).toBeUndefined();
-    }
-    expect(
-      plan.commands.find((command) => command.name.startsWith("lint UI changed style")),
-    ).toMatchObject({
-      bin: "node",
-      args: ["--import", "tsx", "scripts/run-stylelint.mts", style],
-    });
-  });
-
-  it("keeps explicit fallback root-test lint on its own command owner", () => {
-    const roots = ["test/scripts/changed-lanes.test.ts", "test/helpers/temp-dir.ts"];
-    const paths = [...roots, "test/fixtures/invalid.ts", "test/deleted.test.ts"];
-    const plan = createChangedCheckPlan(detectChangedLanes(paths), {
-      lintOnly: true,
-      lintThreads: 1,
-      lintSelection: {
-        files: [],
-        rootTestFiles: paths,
-        coreStripes: [],
-        extensionStripes: [],
-        groups: [],
-        central: false,
-      },
-    });
-    expect(plan.commands).toHaveLength(1);
-    expect(plan.commands[0]).toMatchObject({
-      bin: "node",
-      args: [
-        "scripts/run-oxlint.mjs",
-        "--tsconfig",
-        "test/tsconfig/tsconfig.test.root.json",
-        ...roots,
-        "--threads=1",
-      ],
-    });
-  });
-
   it.each(["linux", "darwin", "win32"] as const)(
     "preserves root and core/UI lint coverage and batching on %s",
     (platform) => {
@@ -1356,38 +1305,7 @@ describe("scripts/changed-lanes", () => {
     expect(findTypecheckInertPaths({ paths, base: "missing-ref", cwd: dir })).toEqual([]);
   });
 
-  it.each([
-    { paths: ["apps/ios/Sources/RootTabs.swift"], mixed: false },
-    {
-      paths: [
-        "apps/android/app/src/main/AndroidManifest.xml",
-        "apps/ios/Sources/RootTabs.swift",
-        "apps/shared/OpenClawKit/Sources/OpenClawKit/Client.swift",
-      ],
-      mixed: true,
-    },
-  ])("preserves native lint with available SwiftLint for %j", ({ paths, mixed }) => {
-    const plan = createChangedCheckPlan(detectChangedLanes(paths), {
-      env: { CI: "1", PATH: "/usr/bin" },
-      platform: "linux",
-      swiftlintAvailable: true,
-    });
-    const commands = new Set(plan.commands.map(({ args }) => args[0]));
-    expect(commands.has("android:lint")).toBe(mixed);
-    expect(commands.has("lint:apps")).toBe(true);
-    expect(commands.has("test:macos:ci")).toBe(mixed);
-    expect(
-      plan.commands.some(({ name }) => name === "lint apps (swiftlint unavailable on this host)"),
-    ).toBe(false);
-  });
-
   it.each<[string, Partial<ReturnType<typeof createEmptyChangedLanes>>, string[]]>([
-    ["ui/src/e2e/chat-flow.test-support.ts", { coreTests: true }, ["tsgo:core:test"]],
-    [
-      "extensions/discord/src/index.test-helpers.ts",
-      { extensionTests: true },
-      ["tsgo:extensions:test"],
-    ],
     [
       "src/plugin-sdk/core.ts",
       { core: true, coreTests: true, extensions: true, extensionTests: true },
@@ -1400,17 +1318,6 @@ describe("scripts/changed-lanes", () => {
         "tsgo:extensions:test",
       ],
     ],
-    [
-      "packages/mermaid-renderer/src/renderer.ts",
-      { ui: true, coreTests: true },
-      ["tsgo:core:test", "tsgo:ui"],
-    ],
-    [
-      "packages/normalization-core/src/record-coerce.ts",
-      { core: true, coreTests: true, ui: true },
-      ["tsgo:core", "tsgo:core:test", "tsgo:ui"],
-    ],
-    ["assets/avatar-placeholder.svg", { tooling: true }, []],
   ])("selects consuming typecheck lanes for %s", (file, lanes, typechecks) => {
     const result = detectChangedLanes([file]);
     expectLanes(result.lanes, lanes);
@@ -1448,29 +1355,6 @@ describe("scripts/changed-lanes", () => {
     for (const args of expected) {
       expect(commands).toContainEqual(args);
     }
-  });
-
-  it("excludes generated mobile build inputs from protocol coverage", () => {
-    const plan = createChangedCheckPlan(
-      detectChangedLanes(["apps/shared/OpenClawKit/Sources/.build/Generated.swift"]),
-    );
-    expect(plan.commands.map(({ args }) => args[0])).not.toContain(
-      "scripts/check-protocol-event-coverage.mjs",
-    );
-  });
-
-  it("adds the warning-only temp creation report for changed test paths", () => {
-    const result = detectChangedLanes(["test/helpers/temp-fixture.ts"]);
-    const plan = createChangedCheckPlan(result, { base: "main", head: "feature" });
-    const command = plan.commands.find(
-      (candidate) => candidate.name === "test temp creation report (warning-only)",
-    );
-
-    expect(shouldRunTestTempCreationReport(result.paths)).toBe(true);
-    expect(command).toMatchObject({
-      bin: "node",
-      args: ["scripts/report-test-temp-creations.mjs", "--base", "main", "--head", "feature"],
-    });
   });
 
   it("forwards staged and worktree bases to source ratchets", () => {

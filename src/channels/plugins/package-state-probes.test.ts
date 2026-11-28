@@ -53,7 +53,7 @@ function registerModule(
 function registerProbe(
   rootDir: string,
   id: string,
-  checker: Partial<NonNullable<PluginChannelCatalogEntry["channel"]["persistedAuthState"]>> = {},
+  checker: Partial<NonNullable<PluginChannelCatalogEntry["channel"]["persistedAuthState"]>>,
 ) {
   registerModule(rootDir, {
     id,

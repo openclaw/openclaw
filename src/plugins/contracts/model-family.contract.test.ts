@@ -77,9 +77,11 @@ it("gives the same model one family across native and routing catalogs, and none
   expect([
     familyOf("anthropic", "claude-opus-5-5"),
     familyOf("github-copilot", "claude-opus-5.5"),
-  ]).toEqual(["anthropic", "anthropic"]);
-  expect(familyOf("github-copilot", "gpt-5.5")).toBe(familyOf("openai", "gpt-5.5"));
-  expect(familyOf("github-copilot", "gemini-2.5-pro")).toBe(familyOf("google", "gemini-2.5-pro"));
+    familyOf("openai", "gpt-5.5"),
+    familyOf("github-copilot", "gpt-5.5"),
+    familyOf("google", "gemini-2.5-pro"),
+    familyOf("github-copilot", "gemini-2.5-pro"),
+  ]).toEqual(["anthropic", "anthropic", "openai", "openai", "google", "google"]);
   // Qwen's host also serves GLM and Kimi rows; without a row declaration, no family is guessed.
   expect(familyOf("qwen", "glm-5")).toBeUndefined();
   expect(familyOf("qwen", "qwen3.5-plus")).toBeUndefined();

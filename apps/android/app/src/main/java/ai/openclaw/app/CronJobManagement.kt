@@ -1,6 +1,6 @@
 package ai.openclaw.app
 
-import ai.openclaw.app.gateway.GatewaySession
+import ai.openclaw.app.gateway.ErrorShape
 import ai.openclaw.app.i18n.NativeText
 import ai.openclaw.app.i18n.nativeText
 import kotlinx.serialization.json.Json
@@ -318,7 +318,7 @@ internal fun cronRunCompletionNotice(
   return GatewayCronActionState.Notice(id = jobId, message = message, kind = kind)
 }
 
-internal fun isCronJobRevisionConflict(error: GatewaySession.ErrorShape): Boolean = error.details?.code == "CRON_JOB_CHANGED"
+internal fun isCronJobRevisionConflict(error: ErrorShape): Boolean = error.details?.code == "CRON_JOB_CHANGED"
 
 internal fun GatewayCronJobDetail.toCronJobEdit(): GatewayCronJobEdit =
   GatewayCronJobEdit(

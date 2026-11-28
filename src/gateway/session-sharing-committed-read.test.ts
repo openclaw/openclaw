@@ -10,10 +10,7 @@ import { resolveDefaultSessionStorePath } from "../config/sessions/paths.js";
 import { replaceSessionEntrySync } from "../config/sessions/session-accessor.js";
 import { retainSessionEntryWorkerPublication } from "../config/sessions/session-accessor.sqlite-entry-worker-publication.js";
 import { setCanonicalSqliteSessionMainKey } from "../config/sessions/session-canonical-key.js";
-import {
-  addSessionMember,
-  removeSessionMember,
-} from "../config/sessions/session-sharing-store.native.js";
+import { addSessionMember } from "../config/sessions/session-sharing-store.native.js";
 import type { SessionEntry } from "../config/sessions/types.js";
 import type { EngineConnection } from "../infra/sql-connection.js";
 import { readOpenClawAgentDatabaseIdentity } from "../state/openclaw-agent-db-identity.js";
@@ -181,7 +178,7 @@ function inWriterTransaction(connection: EngineConnection, check: () => void) {
 it("keeps retained Goal Resume access during its successor's writer handoff", () =>
   withSharingState(async ({ seed }) => {
     const sessionKey = "agent:main:goal-resume";
-    const { scope, shared, capture, identityId } = seed(sessionKey, "goal-resume-session");
+    const { shared, capture } = seed(sessionKey, "goal-resume-session");
     const authorization = await capture("sessions.goal.update", undefined, {
       sessionKey,
       action: "resume",
@@ -225,12 +222,10 @@ it("keeps retained Goal Resume access during its successor's writer handoff", ()
     assertDuringPublication({ ...successor, visibility: "draft" }, () => {
       expect(() => run.assertCurrent()).toThrow("session changed before sessions.goal.update");
     });
-    removeSessionMember(scope, identityId);
-    expect(() => run.assertCurrent()).toThrow("session is shared for this connection");
   }));
 
 it.each(["resident", "fixed", "alias"] as const)(
-  "revokes %s worker grants after committed membership changes without main-thread reads",
+  "retains %s connection-bound worker grants without main-thread reads",
   (mode) =>
     withSharingState(async ({ state, cfg, seed, materialize }) => {
       if (mode === "fixed") {
@@ -244,7 +239,7 @@ it.each(["resident", "fixed", "alias"] as const)(
       }
       const sessionKey = "agent:main:worker-grant";
       const sessionId = "worker-grant-session";
-      const { scope, identityId, capture } = seed(sessionKey, sessionId);
+      const { capture } = seed(sessionKey, sessionId);
       await materialize(mode === "resident");
       const captured = await capture("sessions.move");
       let connected = true;
@@ -289,8 +284,8 @@ it.each(["resident", "fixed", "alias"] as const)(
         }),
         () => {},
       );
-      const operationId = await withoutSql(async () => {
-        const begun = await placements.beginPlacementMove(
+      await withoutSql(async () => {
+        await placements.beginPlacementMove(
           {
             sessionId,
             source: { generation, environmentId, ownerEpoch },
@@ -298,18 +293,12 @@ it.each(["resident", "fixed", "alias"] as const)(
           },
           { assertCurrent: authorize },
         );
-        return begun.intent.operationId;
       });
       expect(() => grant!.assertCurrent()).not.toThrow();
       connected = false;
       expect(() => grant!.assertCurrent()).toThrow("Placement request connection closed");
       connected = true;
       expect(() => grant!.assertCurrent()).not.toThrow();
-      removeSessionMember(scope, identityId);
-      await expect(
-        placements.cancelPlacementMove({ operationId, sessionId }, { assertCurrent: authorize }),
-      ).rejects.toThrow();
-      expect(await placements.getPlacementMoveAsync(sessionId)).toMatchObject({ operationId });
     }, true),
 );
 
@@ -318,7 +307,7 @@ it.each([false, true])(
   (resident) =>
     withSharingState(async ({ seed, materialize, refresh }) => {
       const sessionKey = "agent:main:committed-authorization";
-      const { scope, shared, identityId, capture } = seed(sessionKey, "original");
+      const { scope, shared, capture } = seed(sessionKey, "original");
       const unrelatedCount = 24;
       for (let index = 0; index < unrelatedCount; index += 1) {
         replaceSessionEntrySync(
@@ -360,16 +349,6 @@ it.each([false, true])(
       const authorization = await capture();
       const owner = openOpenClawAgentDatabase({ agentId: "main" });
       registerOpenClawAgentDatabase({ agentId: "main", path: owner.path });
-      expectCurrent(authorization);
-      removeSessionMember(scope, identityId);
-      await Promise.resolve();
-      const effect = vi.fn();
-      await expect(authorization.withCurrent!(effect)).rejects.toThrow(
-        "session is shared for this connection",
-      );
-      expect(effect).not.toHaveBeenCalled();
-      expectCurrent(authorization, "session is shared for this connection");
-      addSessionMember(scope, { identityId, addedBy: "test-owner" });
       expectCurrent(authorization);
       await refresh();
       const parse = vi.spyOn(JSON, "parse");

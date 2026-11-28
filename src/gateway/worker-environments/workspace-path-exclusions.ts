@@ -116,8 +116,10 @@ function derivedWorkspaceSegmentPattern(includeLegacyAgp: boolean, includeLegacy
 
 // Git ignores make only known build roots disposable, never arbitrary authored
 // reports. The Bun staging owner downloads its runtime under .cache/openclaw-bun.
+export const IGNORED_WORKSPACE_BUILD_OUTPUT_ROOTS = ["dist", ".cache/openclaw-bun"] as const;
+
 export function isIgnoredWorkspaceBuildOutput(relative: string, ignored: ReadonlySet<string>) {
-  const buildOutput = ["dist", ".cache/openclaw-bun"].some(
+  const buildOutput = IGNORED_WORKSPACE_BUILD_OUTPUT_ROOTS.some(
     (root) => relative === root || relative.startsWith(root + "/"),
   );
   if (!buildOutput) {

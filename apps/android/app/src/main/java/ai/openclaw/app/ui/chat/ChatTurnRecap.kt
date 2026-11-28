@@ -1,6 +1,7 @@
 package ai.openclaw.app.ui.chat
 
 import ai.openclaw.app.chat.ChatSessionEntry
+import ai.openclaw.app.chat.ChatTranscriptAnchorState
 import ai.openclaw.app.i18n.nativeString
 import ai.openclaw.app.i18n.nativeStringResource
 import ai.openclaw.app.ui.design.ClawTheme
@@ -22,13 +23,6 @@ import java.util.Locale
 internal data class TurnRecap(
   val runtimeMs: Long,
   val outputTokens: Long?,
-)
-
-internal data class TurnRecapTranscriptState(
-  val sessionKey: String?,
-  val newestItemId: String?,
-  val completedEndedAt: Long?,
-  val completedNewestItemId: String?,
 )
 
 /**
@@ -78,7 +72,7 @@ internal class TurnRecapResolver(
     sessionKey: String,
     indicatorVisible: Boolean,
     row: ChatSessionEntry?,
-    transcript: TurnRecapTranscriptState,
+    transcript: ChatTranscriptAnchorState?,
   ): TurnRecap? {
     val watch = watches[sessionKey]
     val rowEndedAt = row?.endedAt
@@ -109,7 +103,7 @@ internal class TurnRecapResolver(
     if (watch == null) return null
     watch.watching = false
     watch.settled?.let { settled ->
-      if (transcript.sessionKey != sessionKey || watch.settledTranscriptItemId == transcript.newestItemId) {
+      if (transcript == null || transcript.sessionKey != sessionKey || watch.settledTranscriptItemId == transcript.newestItemId) {
         return settled
       }
       // A newer transcript turn has replaced the content this recap summarized. Session rows do
@@ -149,7 +143,7 @@ internal class TurnRecapResolver(
       watches.remove(sessionKey)
       return null
     }
-    if (transcript.sessionKey != sessionKey || transcript.completedEndedAt != rowEndedAt) {
+    if (transcript == null || transcript.sessionKey != sessionKey || transcript.completedEndedAt != rowEndedAt) {
       // The terminal session row can arrive before the terminal-triggered chat.history snapshot.
       // Keep waiting so its final item becomes the recap anchor, not an intermediate tool row.
       watch.pendingTerminalEndedAt = rowEndedAt

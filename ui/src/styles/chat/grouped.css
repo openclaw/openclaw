@@ -28,35 +28,29 @@
 }
 
 .chat-group.chat-group--with-footer {
-  --chat-group-avatar-column: 1;
-  --chat-group-content-column: 2;
   display: grid;
-  grid-template-columns: var(--chat-avatar-column) minmax(0, var(--chat-message-column-max));
+  grid-template-columns: [avatar] var(--chat-avatar-column) [message] minmax(
+      0,
+      var(--chat-message-column-max)
+    );
   grid-template-rows: auto auto;
   /* The footer offset owns bubble-to-footer space for grid and block groups alike. */
   gap: 0 var(--chat-avatar-gap);
   justify-content: start;
 }
 
-.chat-group.user.chat-group--with-footer {
-  --chat-group-avatar-column: 2;
-  --chat-group-content-column: 1;
-  grid-template-columns: minmax(0, var(--chat-message-column-max)) var(--chat-avatar-column);
+.chat-group.user.chat-group--with-footer:not(:where(.chat-group--peer)) {
+  grid-template-columns: [message] minmax(0, var(--chat-message-column-max)) [avatar] var(
+      --chat-avatar-column
+    );
   justify-content: end;
-}
-
-.chat-group.user.chat-group--with-footer:where(.chat-group--peer) {
-  --chat-group-avatar-column: 1;
-  --chat-group-content-column: 2;
-  grid-template-columns: var(--chat-avatar-column) minmax(0, var(--chat-message-column-max));
-  justify-content: start;
 }
 
 /* Top-aligned avatars span the message and footer rows, so a short message never
    grows its row and the space above it stays the turn gap. */
 .chat-group.chat-group--with-footer > .chat-avatar,
 .chat-group.chat-group--with-footer > .chat-avatar-slot {
-  grid-column: var(--chat-group-avatar-column);
+  grid-column: avatar;
   grid-row: 1 / span 2;
 }
 
@@ -73,13 +67,21 @@
 }
 
 .chat-group.chat-group--with-footer > .chat-group-messages {
-  grid-column: var(--chat-group-content-column);
+  grid-column: message;
   grid-row: 1;
   max-width: none;
 }
 
+/* A completion that leads the run shares the avatar's center line. */
+:is(.chat-avatar, .chat-avatar-slot)
+  + .chat-group-messages
+  > .chat-agent-run-body:first-child
+  > .chat-tool-msg-collapse--completion:first-child {
+  min-block-size: var(--chat-avatar-column);
+}
+
 .chat-group.chat-group--with-footer > .chat-group-footer {
-  grid-column: var(--chat-group-content-column);
+  grid-column: message;
   grid-row: 2;
   max-width: none;
 }
@@ -87,26 +89,22 @@
 /* Expanded work-group contents keep the smaller text/tool boundary. */
 .chat-group-messages
   > :is(
-    .chat-bubble--tool-shell + .chat-bubble:not(.chat-bubble--tool-shell),
-    .chat-bubble:not(.chat-bubble--tool-shell) + .chat-bubble--tool-shell,
-    .chat-tool-msg-collapse + .chat-bubble:not(.chat-bubble--tool-shell),
-    .chat-bubble:not(.chat-bubble--tool-shell) + .chat-tool-msg-collapse
+    :is(.chat-bubble--tool-shell, .chat-tool-msg-collapse)
+      + .chat-bubble:not(.chat-bubble--tool-shell),
+    .chat-bubble:not(.chat-bubble--tool-shell)
+      + :is(.chat-bubble--tool-shell, .chat-tool-msg-collapse)
   ) {
   margin-block-start: var(--space-1);
 }
 
 :is(.chat-group > .chat-group-messages, .chat-agent-run-body)
   > :is(
-    .chat-bubble--tool-shell + .chat-bubble:not(.chat-bubble--tool-shell),
-    .chat-bubble:not(.chat-bubble--tool-shell) + .chat-bubble--tool-shell,
-    .chat-tool-msg-collapse + .chat-bubble:not(.chat-bubble--tool-shell),
-    .chat-bubble:not(.chat-bubble--tool-shell) + .chat-tool-msg-collapse,
-    .chat-bubble:not(.chat-bubble--tool-shell) + .chat-activity-group,
-    .chat-activity-group + .chat-bubble:not(.chat-bubble--tool-shell),
-    .chat-work-group + .chat-bubble,
-    .chat-work-group + .chat-activity-group,
-    .chat-bubble + .chat-work-group,
-    .chat-activity-group + .chat-work-group
+    :is(.chat-bubble--tool-shell, .chat-tool-msg-collapse, .chat-activity-group)
+      + .chat-bubble:not(.chat-bubble--tool-shell),
+    .chat-bubble:not(.chat-bubble--tool-shell)
+      + :is(.chat-bubble--tool-shell, .chat-tool-msg-collapse, .chat-activity-group),
+    .chat-work-group + :is(.chat-bubble, .chat-activity-group),
+    :is(.chat-bubble, .chat-activity-group) + .chat-work-group
   ) {
   margin-block-start: calc(var(--chat-run-block-gap) - 2px);
 }

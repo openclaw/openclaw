@@ -14,8 +14,8 @@ import {
   prepareBinaryAvailability,
 } from "../../shared/config-eval.js";
 import { isSessionSkillEnabled } from "../discovery/agent-filter.js";
+import { resolveSkillKey } from "../skill-key.js";
 import type { SkillEligibilityContext, SkillEntry, SkillsInstallPreferences } from "../types.js";
-import { resolveSkillKey } from "./frontmatter.js";
 import { resolveSkillSource } from "./source.js";
 import type { WorkspaceSkillSources } from "./workspace-skill-sources.js";
 

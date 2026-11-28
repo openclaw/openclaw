@@ -50,7 +50,7 @@ export type SessionWorkspaceState = {
   browserSearch: string;
   browserSearchTimer: ReturnType<typeof globalThis.setTimeout> | null;
   connectionEpoch: number;
-  diffContent?: SidebarContent;
+  diffContent?: Extract<SidebarContent, { kind: "session-diff" }>;
   error: string | null;
   errorOwner?: object;
   list: SessionWorkspaceListResult | null;

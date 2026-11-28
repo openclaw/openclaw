@@ -21,6 +21,9 @@ import { MeetingSessionCleanupTracker } from "./session-cleanup-tracker.js";
 import { MeetingSessionDurableTranscripts } from "./session-durable-transcripts.js";
 import {
   inheritMeetingBrowserTabOwnership,
+  leaveTrackedMeetingBrowserTab,
+  type MeetingBrowserTabRelease,
+  releasedMeetingBrowserHealth,
   settleMeetingRetainedBrowserTabs,
   settleMeetingRetainedBrowserTabsAfterFailure,
 } from "./session-runtime-browser-tabs.js";
@@ -274,6 +277,32 @@ export class MeetingSessionRuntime<
     );
   }
 
+  /** Release the tracked participant for explicit leave or failed-join cleanup. */
+  protected async releaseTrackedBrowserTab(
+    session: TSession,
+    release: MeetingBrowserTabRelease<TTab>,
+  ): Promise<boolean | undefined> {
+    if (!this.options.isBrowserTransport(session.transport)) {
+      return undefined;
+    }
+    const { left, note } = await leaveTrackedMeetingBrowserTab(
+      this.#sessions.values(),
+      this.options,
+      session,
+      release,
+    );
+    this.#noteSession(session, note);
+    session.browserLeft = left;
+    if (left) {
+      this.options.setBrowserTab(session, undefined);
+      const health = this.options.getBrowser(session)?.health;
+      if (health) {
+        this.options.setBrowserHealth(session, { ...health, ...releasedMeetingBrowserHealth });
+      }
+    }
+    return left;
+  }
+
   async speak(
     sessionId: string,
     instructions?: string,
@@ -377,24 +406,28 @@ export class MeetingSessionRuntime<
     }
   }
 
+  protected canObserveBrowser(session: TSession): boolean {
+    return session.state !== "ended" || session.browserLeft !== true;
+  }
+
   async refreshBrowserHealth(
     session: TSession,
     options: { force?: boolean; readOnly?: boolean } = {},
   ): Promise<void> {
-    if (!this.#isManagedBrowserSession(session)) {
-      this.refreshSpeechReadiness(session);
+    if (!this.canObserveBrowser(session)) {
       return;
     }
     if (
-      !options.force &&
-      this.options.isTalkBackMode(session.mode) &&
-      this.#evaluateSpeechReadiness(session).ready
+      this.#isManagedBrowserSession(session) &&
+      (options.force ||
+        !this.options.isTalkBackMode(session.mode) ||
+        !this.#evaluateSpeechReadiness(session).ready)
     ) {
-      this.refreshSpeechReadiness(session);
-      return;
+      await this.options.refreshBrowserHealth(session, options);
     }
-    await this.options.refreshBrowserHealth(session, options);
-    this.refreshSpeechReadiness(session);
+    if (this.canObserveBrowser(session)) {
+      this.refreshSpeechReadiness(session);
+    }
   }
 
   async refreshCaptionHealth(session: TSession): Promise<void> {
@@ -640,6 +673,7 @@ export class MeetingSessionRuntime<
       if (cleanup.browserLeft === true && browser?.health) {
         this.options.setBrowserHealth(session, {
           ...browser.health,
+          ...releasedMeetingBrowserHealth,
           inCall: false,
           micMuted: undefined,
           manualAction: undefined,

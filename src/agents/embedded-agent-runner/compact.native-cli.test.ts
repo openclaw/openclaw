@@ -1,7 +1,15 @@
 import { join } from "node:path";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { useAutoCleanupTempDirTracker } from "../../../test/helpers/temp-dir.js";
+import { decideTurnGrant } from "../../gateway/operator-admission.js";
+import { createOperatorAuthorityInactiveError } from "../../infra/operator-authority-error.js";
+import {
+  createAdmittedRunOperatorAuthority,
+  type AdmittedRunOperatorAuthority,
+} from "../admitted-run-context.js";
 import { testing as cliBackendsTesting } from "../cli-backends.test-support.js";
+import { createParticipationTestAuthority } from "../participation-ceiling.test-support.js";
+import { attachCompactionAccountingRecorder } from "./run/compaction-accounting-bridge.js";
 
 const tempDirs = useAutoCleanupTempDirTracker(afterEach);
 type CliRunParams = Parameters<typeof import("../cli-runner.js").runCliAgent>[0];
@@ -32,7 +40,7 @@ vi.mock("../auth-profiles/store-runtime.js", async (importOriginal) => ({
   loadAuthProfileStoreForRuntimeAsync: async () => ({ version: 1, profiles: storedProfiles }),
 }));
 
-const { compactNativeCliSession } = await import("./compact.js");
+const { compactEmbeddedAgentSessionDirect, compactNativeCliSession } = await import("./compact.js");
 
 function compactParams(overrides: Record<string, unknown> = {}) {
   cliBackendsTesting.setDepsForTest({
@@ -178,5 +186,68 @@ describe("session pin conversion for the CLI child", () => {
     expect(result?.reason).toContain('No credentials found for profile "anthropic:missing"');
     expect(result?.reason).toContain("then run /compact again");
     expect(runCliAgentMock).not.toHaveBeenCalled();
+  });
+});
+
+describe("session maintenance identity", () => {
+  function endedRunAuthority(ceiling?: Parameters<typeof createParticipationTestAuthority>[0]) {
+    // The triggering turn held the only reference and released it when it ended.
+    const retain = () => {
+      throw createOperatorAuthorityInactiveError("closure-released", "before-sources", 0);
+    };
+    return ceiling
+      ? createParticipationTestAuthority(ceiling, [], retain)
+      : createAdmittedRunOperatorAuthority({
+          canonicalIdentity: null,
+          profileId: "owner",
+          scopes: ["operator.admin"],
+          grant: decideTurnGrant(["operator.admin"]),
+          retain,
+        });
+  }
+
+  async function compactAfterTurn(operatorAuthority: AdmittedRunOperatorAuthority) {
+    const params = compactParams() as Record<string, unknown>;
+    const contextEngineRuntimeContext = {};
+    attachCompactionAccountingRecorder(contextEngineRuntimeContext, {
+      operatorAuthority,
+      preparedSession: {
+        sessionTarget: {
+          agentId: "main",
+          sessionId: "openclaw-session",
+          sessionKey: "agent:main:main",
+          storePath: join(String(params.agentDir), "sessions.sqlite"),
+        },
+        entry: {
+          sessionId: "openclaw-session",
+          updatedAt: 1,
+          agentHarnessId: "claude-cli",
+          modelSelectionLocked: true,
+        } as never,
+      },
+    });
+    return await compactEmbeddedAgentSessionDirect({
+      ...params,
+      contextEngineRuntimeContext,
+    } as never);
+  }
+
+  it("compacts after the triggering turn's authority was released", async () => {
+    const result = await compactAfterTurn(endedRunAuthority());
+
+    expect(result).toMatchObject({ ok: true, compacted: true });
+    const admission = runCliAgentMock.mock.calls[0]?.[0]?.preparedRunAdmission;
+    expect(admission?.readOperatorAuthority?.()).toBeUndefined();
+  });
+
+  it("compacts when an invited participant's turn triggered it", async () => {
+    const result = await compactAfterTurn(
+      endedRunAuthority({ kind: "send", profileId: "guest", sessionKey: "agent:main:main" }),
+    );
+
+    expect(result).toMatchObject({ ok: true, compacted: true });
+    // The participant lends nothing: the control operation runs as session maintenance.
+    const admission = runCliAgentMock.mock.calls[0]?.[0]?.preparedRunAdmission;
+    expect(admission?.readOperatorAuthority?.()).toBeUndefined();
   });
 });

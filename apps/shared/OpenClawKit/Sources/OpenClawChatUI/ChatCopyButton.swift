@@ -18,6 +18,25 @@ enum ChatPasteboard {
     }
 }
 
+/// "Copy Message" in a message's menu. The menu closes and leaves no trace, so the iPhone
+/// confirms the copy with its toast; macOS has no toast presenter and stays as it was.
+@MainActor
+struct ChatCopyMessageMenuButton: View {
+    let text: String
+    @Environment(\.openClawToastPresenter) private var toastPresenter
+
+    var body: some View {
+        if !self.text.isEmpty {
+            Button {
+                ChatPasteboard.copy(self.text)
+                self.toastPresenter?.post(.copied())
+            } label: {
+                chatActionLabel(Text("Copy Message"), systemImage: "doc.on.doc")
+            }
+        }
+    }
+}
+
 /// Compact icon button that copies `text` and briefly confirms with a checkmark.
 @MainActor
 struct ChatCopyButton: View {

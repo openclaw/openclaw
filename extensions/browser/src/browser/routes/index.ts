@@ -69,6 +69,7 @@ export function registerBrowserRoutes(registrar: BrowserRouteRegistrar, ctx: Bro
       res,
       ctx,
       targetId: normalizeOptionalString(body.targetId),
+      preserveWarmup: true,
       enforceCurrentUrlAllowed: true,
       run: async ({ profileCtx, tab, cdpUrl, signal, resolveTabUrl }) => {
         if (getBrowserProfileCapabilities(profileCtx.profile).usesChromeMcp) {

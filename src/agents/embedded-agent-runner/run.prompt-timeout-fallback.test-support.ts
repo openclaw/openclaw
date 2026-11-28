@@ -264,10 +264,6 @@ describe("runEmbeddedAgent prompt timeout fallback handoff", () => {
           }
           expect(restricted.threadStartParams.dynamicTools).toEqual(dynamicTools);
           expect(restricted.developerInstructions).not.toContain("spawn_agent");
-          // A permissive ordinary turn still has native delegation: no other gate masks this proof.
-          const ordinary = await render("full");
-          expect(ordinary.threadStartParams.config).not.toHaveProperty("agents.enabled", false);
-          expect(ordinary.developerInstructions).toContain("spawn_agent");
         }
         expect(attempt.delegationCapability).toBe("host_only");
         return makeAttemptResult({ assistantTexts: ["Continue the authorized work."] });

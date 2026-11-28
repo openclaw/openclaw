@@ -370,6 +370,7 @@ it.for([true, false])(
   },
 );
 it.for([
+  ["missing file", /does not exist/i],
   ["directory", /not a regular file/i],
   ["symlink", /outside allowed roots/i],
 ] as const)("blocks %s attachments inside configured roots", async ([kind, error], { base }) => {
@@ -379,7 +380,7 @@ it.for([
   const file = path.join(base, "entry");
   if (kind === "directory") {
     await fs.mkdir(file);
-  } else {
+  } else if (kind === "symlink") {
     await fs.symlink("/etc/passwd", file);
   }
   await expect(localCache(file, base).getBuffer(request)).rejects.toThrow(error);

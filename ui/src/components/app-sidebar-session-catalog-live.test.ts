@@ -77,7 +77,7 @@ it("retains failed host rows and sibling hosts while updating capabilities", () 
 });
 it("compares a host event only with the catalog and host it can replace", () => {
   const changed = catalog("changed", 1);
-  const unrelated = catalog("unrelated", 100);
+  const unrelated = catalog("unrelated", 1);
   Object.defineProperty(unrelated, "toJSON", {
     value: () => {
       throw new Error("unrelated catalog serialized");
