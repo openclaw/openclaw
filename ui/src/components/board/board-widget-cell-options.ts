@@ -26,7 +26,7 @@ export type BoardWidgetCellCallbacks = {
   movePointerDown: (widget: BoardWidget, event: PointerEvent) => void;
   resizePointerDown: (widget: BoardWidget, event: PointerEvent) => void;
   moveToTab: (widget: BoardWidget, tabId: string) => Promise<void>;
-  resizeTo: (widget: BoardWidget, w: number, h: number) => Promise<void>;
+  resizeTo: (widget: BoardWidget, w: number, h: number, source?: "preset") => Promise<void>;
   setHeightMode: (widget: BoardWidget, mode: "auto" | "fixed") => Promise<void>;
   reportContentHeight: (name: string, height: number) => void;
   remove: (widget: BoardWidget) => Promise<void>;
@@ -40,6 +40,7 @@ export type BoardWidgetCellCallbacks = {
 
 export type BoardWidgetCellProps = {
   widget?: BoardWidget;
+  layoutPreview?: BoardWidget;
   boardRevision?: number;
   rect?: BoardGridRect;
   contentHeightPx?: number;

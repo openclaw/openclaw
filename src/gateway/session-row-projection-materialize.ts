@@ -368,11 +368,14 @@ export function readResidentSessionRow(
       },
       rowContext: context,
       preparedTitle: {
-        derivedTitle: deriveSessionTitle(
-          row.entry,
-          prepared?.titleFields?.firstUserMessage,
-          resolveGatewaySessionDisplayName(row.key, row.entry),
-        ),
+        derivedTitle:
+          deriveSessionTitle(
+            row.entry,
+            prepared?.titleFields?.firstUserMessage,
+            resolveGatewaySessionDisplayName(row.key, row.entry),
+          ) ??
+          row.fallbackTitle ??
+          undefined,
         lastMessagePreview: prepared?.titleFields?.lastMessagePreview ?? row.lastMessagePreview,
         lastAssistantMessage: row.lastAssistantMessage,
       },

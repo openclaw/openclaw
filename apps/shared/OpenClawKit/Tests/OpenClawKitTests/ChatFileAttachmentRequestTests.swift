@@ -14,7 +14,7 @@ struct ChatFileAttachmentRequestTests {
             expectedSessionRoutingContract: nil,
             expectedSessionSettings: nil,
             supportsSessionSettingsCAS: false,
-            message: "See attached.",
+            message: "",
             thinking: nil,
             idempotencyKey: "send-file",
             attachments: [.init(type: "file", mimeType: mimeType, fileName: fileName, content: "ZmlsZQ==")])
@@ -23,6 +23,7 @@ struct ChatFileAttachmentRequestTests {
         let attachments = try #require(envelope["attachments"] as? [[String: String]])
 
         #expect(request.method == "chat.send")
+        #expect(envelope["message"] as? String == "")
         #expect(attachments == [[
             "type": "file",
             "mimeType": mimeType,
