@@ -1,3 +1,4 @@
+import { readSessionMessageIdentity } from "@openclaw/gateway-client/browser";
 import { describe, expect, it } from "vitest";
 import { chatItemGroups } from "./chat-agent-run-grouping.ts";
 import { buildChatItems } from "./chat-thread-build.ts";
@@ -299,6 +300,46 @@ describe("self-woken continuation projection", () => {
           readProjectedContinuation(chatItemGroups(part)[0]?.messages[0]?.message),
         ),
       ).toContain("subagent");
+    }
+  });
+
+  it("opens an agent turn for a completion that arrives after the answer", () => {
+    const completion = { runId: "child", sessionKey: "agent:main:subagent:w", label: "W" };
+    const messages = [
+      row("ask", 1, "ask", { role: "user", content: "Review the change" }),
+      row("answer", 2, "ask", { content: "Long final answer", stopReason: "stop" }),
+      row("receipt", 3, "announce", {
+        phase: "commentary",
+        content: [{ type: "subagent_completion" }],
+        subagentCompletions: [completion],
+      }),
+      row("reported", 4, "announce", { content: "W found the cause.", stopReason: "stop" }),
+    ];
+    // Before and after the parent writes anything, the receipt heads its own turn.
+    for (const visible of [messages.slice(0, 3), messages]) {
+      const sessionKey = `agent:main:dashboard:late-receipt-${visible.length}`;
+      const items = buildChatItems(
+        createProps({ sessionKey, messages: visible, showToolCalls: true }),
+      );
+      const chain = projectTranscriptChain(items, {
+        sessionKey,
+        messages: visible,
+        runWorking: false,
+        searchActive: false,
+      });
+      expect(
+        frames(chain).map((frame) => [
+          frame.runId,
+          frame.parts
+            .flatMap(chatItemGroups)
+            .flatMap((group) =>
+              group.messages.map(({ message }) => readSessionMessageIdentity(message)?.id),
+            ),
+        ]),
+      ).toEqual([
+        ["ask", ["answer"]],
+        ["announce", visible.slice(2).map((message) => readSessionMessageIdentity(message)?.id)],
+      ]);
     }
   });
 });

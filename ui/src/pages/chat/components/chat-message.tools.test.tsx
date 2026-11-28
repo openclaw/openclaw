@@ -54,7 +54,12 @@ describe("grouped chat rendering", () => {
       label: "Worker01",
       status: "done",
     };
-    const second = { ...worker, runId: "child-two", label: "Worker02" };
+    const second = {
+      ...worker,
+      runId: "child-two",
+      sessionKey: "agent:main:subagent:worker-two",
+      label: "Worker02",
+    };
     const output = JSON.stringify({
       completed: [worker, second, { ...worker, runId: "failed", status: "failed" }],
     });
@@ -139,6 +144,33 @@ describe("grouped chat rendering", () => {
     ]);
     expect(harness.view.textContent).toContain("Worker03 finished");
     expect(harness.view.textContent).toContain("Worker01 and Worker02 finished");
+  });
+
+  it("shows an agent that settles twice in a row once", async () => {
+    const sessionKey = "agent:main:subagent:composer";
+    const receipt = (runId: string, timestamp: number, extra?: TestMessage): TestMessage => ({
+      role: "assistant",
+      phase: "commentary",
+      timestamp,
+      content: [{ type: "subagent_completion" }],
+      subagentCompletions: [{ runId, sessionKey, label: "Composer fix" }],
+      ...extra,
+    });
+    await renderToolGroups(
+      groupsOf(
+        buildItems({
+          messages: [
+            { role: "user", content: "Fix the composer", timestamp: 1 },
+            createAssistantMessage("Handed off.", { timestamp: 2, runId: "ask" }),
+            // The first settle wakes the parent's run; the next one steers into it.
+            receipt("child-one", 10, { runId: "announce:child-one" }),
+            receipt("child-two", 11, { runId: "announce:child-one" }),
+          ],
+        }),
+      ),
+      {},
+    );
+    expect(harness.view.textContent!.match(/Composer fix finished/g)).toHaveLength(1);
   });
 
   function toolResultEntry(key: string, ...args: Parameters<typeof createToolResultMessage>) {

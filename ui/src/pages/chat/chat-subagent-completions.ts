@@ -199,7 +199,15 @@ export function projectSubagentCompletions(
         cached.completionsKey === completionsKey &&
         cached.sources.every((candidate, index) => candidate === sources[index])
           ? cached.message
-          : subagentCompletionMessage(previous.message, [...earlier, ...fresh]);
+          : subagentCompletionMessage(previous.message, [
+              // An agent that settles again is named once, with its latest outcome.
+              ...earlier.map(
+                (entry) => fresh.find((next) => next.sessionKey === entry.sessionKey) ?? entry,
+              ),
+              ...fresh.filter(
+                (next) => !earlier.some((entry) => entry.sessionKey === next.sessionKey),
+              ),
+            ]);
       derivations.completedSubagentGroup = { sources, completionsKey, message };
       projected[projected.length - 1] = { ...previous, message };
     } else {

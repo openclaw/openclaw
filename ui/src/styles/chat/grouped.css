@@ -1118,6 +1118,18 @@ img.chat-avatar {
   );
 }
 
+/* A turn that opens with a tool or agent row centers that row on the avatar, as
+   bubble padding does for an opening line of text. */
+.chat-group.assistant:not(.chat-group--reply):has(> :is(.chat-avatar, .chat-avatar-slot))
+  > .chat-group-messages {
+  > :first-child,
+  > .chat-agent-run-body:first-child > :first-child {
+    &:is(.chat-activity-group, .chat-tool-msg-collapse) {
+      padding-block-start: calc((var(--chat-avatar-column) - var(--chat-text-size) * 1.5) / 2);
+    }
+  }
+}
+
 /* A peer quote and its avatar belong to this message, including in multi-message groups. */
 .chat-message--reply {
   position: relative;
