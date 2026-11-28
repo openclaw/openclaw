@@ -11,7 +11,7 @@ import { createOpenClawTestInstance } from "./helpers/openclaw-test-instance.js"
 import { readBody } from "./telegram-http.test-support.js";
 
 it(
-  "notifies the original Telegram chat after crashing during an affirmed flood wait",
+  "replays the final Telegram reply once after crashing during an affirmed flood wait",
   { timeout: 180_000 },
   async ({ signal }) => {
     const answer = "RESTART_FINAL_141959";
@@ -162,20 +162,17 @@ it(
       flooded = false;
       await instance.startGateway();
       expect(instance.child?.pid).not.toBe(firstPid);
-      await vi.waitFor(() => expect(instance.logs()).toContain("refusing blind replay"), {
-        timeout: 75_000,
-      });
       await vi.waitFor(
-        () =>
-          expect(
-            delivered.some((text) => text.includes("I couldn’t confirm whether my previous reply")),
-          ).toBe(true),
-        { timeout: 10_000 },
+        () => {
+          expect(instance.logs()).toContain("retrying an unconfirmed final text reply");
+          expect(delivered).toEqual([answer]);
+          // Let the recovery owner commit its receipt before teardown stops it.
+          expect(instance.logs()).toMatch(/(?:Recovered|drained) delivery \S+ on telegram/);
+        },
+        { timeout: 75_000 },
       );
-      expect(attempts.filter((text) => text === answer)).toHaveLength(1);
-      expect(
-        delivered.filter((text) => text.includes("I couldn’t confirm whether my previous reply")),
-      ).toHaveLength(1);
+      expect(attempts.filter((text) => text === answer)).toHaveLength(2);
+      expect(modelRequests).toBe(1);
       console.log(
         JSON.stringify({
           firstPid,

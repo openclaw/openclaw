@@ -7,6 +7,7 @@ import { normalizeAgentId } from "../../lib/sessions/session-key.ts";
 import { showToast } from "../../lib/toast.ts";
 import { buildChatApiAttachments } from "../chat/attachment-api.ts";
 import { attachmentBatchRejection } from "../chat/components/chat-attachment-admission.ts";
+import { foldPastedTextAttachments } from "../chat/pasted-text-card.ts";
 import { prepareBackgroundSessionCompletion } from "./background-session-notice.ts";
 import type { NewSessionVisibility } from "./create-params.ts";
 import { buildSelectedSessionCreateParams } from "./draft-create-params.ts";
@@ -14,18 +15,28 @@ import type { DraftPlaceState } from "./draft-place-state.ts";
 import type { DraftStartupResumption } from "./draft-session-startup.ts";
 import type { PendingSessionPlacementRecoveryState } from "./session-placement-recovery-state.ts";
 
-/** Transcript excerpts travel as quoted message text, like chat; only real files upload. */
+/**
+ * Transcript excerpts travel as quoted message text, like chat; only real files upload.
+ * The source session keys follow the quotes, so the new transcript links back to them.
+ */
 function quoteSelectionAttachments(
   submitted: { text: string; mentions?: readonly HumanMention[] },
   attachments: readonly ChatAttachment[],
 ) {
-  const quotes = attachments.flatMap((item) =>
-    item.selectionAnnotation ? [formatChatSelectionQuote(item.selectionAnnotation)] : [],
+  const annotations = attachments.flatMap((item) =>
+    item.selectionAnnotation ? [item.selectionAnnotation] : [],
   );
-  if (!quotes.length) {
+  if (!annotations.length) {
     return submitted;
   }
-  const text = [...quotes, submitted.text].filter(Boolean).join("\n\n");
+  const sources = [...new Set(annotations.map((annotation) => annotation.sessionKey))];
+  const text = [
+    ...annotations.map(formatChatSelectionQuote),
+    `From ${sources.join(", ")}`,
+    submitted.text,
+  ]
+    .filter(Boolean)
+    .join("\n\n");
   const offset = text.length - submitted.text.length;
   return {
     text,
@@ -53,15 +64,23 @@ export function prepareDraftSubmission(
 ) {
   const pending = draft.pendingPlacement;
   const pendingPlacement = !startup && Boolean(pending.sessionKey);
-  const submitted = quoteSelectionAttachments(
+  const quoted = quoteSelectionAttachments(
     trimHumanMentions(draft.message, draft.mentions),
     draft.attachmentDraft.attachments,
   );
+  // Pasted text follows the draft, so mention offsets stay valid.
+  const body = foldPastedTextAttachments(quoted.text, draft.attachmentDraft.attachments);
+  const submitted = { text: body.text, mentions: quoted.mentions };
   const message = startup?.params.message ?? (pendingPlacement ? pending.message : submitted.text);
   const mentions = (
     startup ? startup.params.mentions : pendingPlacement ? pending.mentions : submitted.mentions
-  )?.map(({ profileId, start, end }) => ({ profileId, start, end }));
-  const attachments = draft.attachmentDraft.attachments.filter((item) => !item.selectionAnnotation);
+  )?.map(({ profileId, start, end, access }) => ({
+    profileId,
+    start,
+    end,
+    access,
+  }));
+  const attachments = body.attachments.filter((item) => !item.selectionAnnotation);
   if (!startup && !pendingPlacement) {
     const error = attachmentBatchRejection(attachments, context.gateway.snapshot.hello?.policy);
     if (error !== undefined) {

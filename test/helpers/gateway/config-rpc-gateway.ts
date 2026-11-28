@@ -344,9 +344,11 @@ export function installConfigWriteGatewayHooks(options: ConfigRpcGatewayOptions 
 
 export function installSharedConfigWriteGatewayHooks({
   fixturePaths = [],
+  restoreApplyTimeoutMs,
   ...options
 }: ConfigRpcGatewayOptions & {
   fixturePaths?: string[];
+  restoreApplyTimeoutMs?: number;
 } = {}) {
   let original: Awaited<ReturnType<typeof getCurrentConfigObject>>;
   beforeAll(async () => {
@@ -368,6 +370,7 @@ export function installSharedConfigWriteGatewayHooks({
         invalidateConfigGetResponseCache();
         const restored = await sendConfigApply(
           configRawPayload(original.config, await getConfigHash()),
+          restoreApplyTimeoutMs,
         );
         expect(restored.ok, restored.error?.message).toBe(true);
       },

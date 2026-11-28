@@ -188,6 +188,8 @@ const read: SessionRowReadView = {
   describe: (query) => rows.get(query.key),
   readSource: () => undefined,
   readMembership: () => undefined,
+  hasMembership: () => false,
+  memberAccess: () => undefined,
   readChildVisibility: (...args) => visibility.read(...args),
   readChildActivity: (record, clock, excluded, revision) =>
     activity.read(record, metadata.current, clock, excluded, revision),
@@ -208,6 +210,7 @@ const publication: NonNullable<
 };
 const recipient = {
   ...read.state,
+  omitSharedPins: false,
   presentFastMode: prepareSessionFastModePresentation(undefined),
   publicationState: publication,
   sharing: prepareProjectedSessionSharing({ cfg, client: null, isMember: () => false }),

@@ -39,12 +39,22 @@ async function fixture(kind = "public") {
   };
   const message = ingressMessage("test", parentKey, "author", {
     conversation: { kind: "group", id: "thread" },
+    message: {
+      rawBody: "hello",
+      inboundEventKind: kind === "room-event" ? "room_event" : "user_request",
+    },
   });
   const ingress = await host.ingress.resolveStable(
     ingressInput(message, {
       dmPolicy: "disabled",
       groupPolicy: "open",
       allowFrom: undefined,
+      contextBinding: {
+        agentId: "main",
+        sessionKey: parentKey,
+        messageId: message.messageId,
+        inboundEventKind: message.message.inboundEventKind ?? "user_request",
+      },
       childSessionPublication:
         kind === "absent" ? undefined : { audience: "public", assertCurrent },
     }),
@@ -104,8 +114,8 @@ it.each(["source revocation", "run closure"])("publication expires on %s", async
   }
 });
 
-it.each(["public", "absent", "retargeted", "forged"])(
-  "accepts only an exact host handoff: %s",
+it.each(["public", "room-event", "absent", "retargeted", "forged"])(
+  "publishes only public user requests from an exact host handoff: %s",
   async (kind) => {
     const f = await fixture(kind);
     expect(Boolean(f.publication)).toBe(kind === "public");

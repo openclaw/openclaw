@@ -116,7 +116,7 @@ it("admits a restarted current schema before repeated version and migration prob
   const restarted = openState({ env });
   for (const pattern of [
     /^PRAGMA user_version\b/iu,
-    /select "value_json" from "config_machine_state"/iu,
+    /select \* from "config_machine_state"/iu,
     /^PRAGMA integrity_check\b/iu,
   ]) {
     expect(observation.queries.filter((sql) => pattern.test(sql))).toHaveLength(1);

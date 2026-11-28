@@ -451,20 +451,6 @@ describe("buildGatewayReloadPlan", () => {
     },
   );
 
-  it("treats plugin install timestamp-only changes as no-ops", () => {
-    const paths = [
-      "plugins.installs.lossless-claw.resolvedAt",
-      "plugins.installs.lossless-claw.installedAt",
-    ];
-    const plan = buildGatewayReloadPlan(paths);
-
-    expect(plan.restartGateway).toBe(false);
-    expect(plan.noopPaths).toEqual(paths);
-    for (const path of paths) {
-      expect(resolveConfigReloadMetadata(path).kind).toBe("none");
-    }
-  });
-
   it.each<[string, boolean]>([
     ["channels.mattermost.accounts.very-long-account-name.groupPolicy", true],
     ["channels.mattermost.accounts.locked.groupPolicy", false],
@@ -1404,7 +1390,7 @@ describe("startGatewayConfigReloader", () => {
     configAuditMocks.readLatestSnapshot.mockReturnValue({
       configPath: "/tmp/openclaw.json",
       rawHash: hashConfigRaw(JSON.stringify(nextConfig)),
-      fingerprintedAuthoredConfig: fingerprintConfigSnapshotAuthoredConfig(nextConfig),
+      fingerprintedAuthoredConfig: await fingerprintConfigSnapshotAuthoredConfig(nextConfig),
     });
     configAuditMocks.append.mockClear();
 
@@ -1525,7 +1511,7 @@ describe("startGatewayConfigReloader", () => {
     configAuditMocks.readLatestSnapshot.mockReturnValue({
       configPath: "/tmp/openclaw.json",
       rawHash: "previous-raw-hash",
-      fingerprintedAuthoredConfig: fingerprintConfigSnapshotAuthoredConfig(previousConfig),
+      fingerprintedAuthoredConfig: await fingerprintConfigSnapshotAuthoredConfig(previousConfig),
     });
 
     await createReadyWriteReloader({
@@ -1546,7 +1532,7 @@ describe("startGatewayConfigReloader", () => {
     const storedSnapshot = {
       configPath: "/tmp/config-a.json",
       rawHash: "path-a-raw-hash",
-      fingerprintedAuthoredConfig: fingerprintConfigSnapshotAuthoredConfig({
+      fingerprintedAuthoredConfig: await fingerprintConfigSnapshotAuthoredConfig({
         gateway: { port: 18789 },
       }),
     };

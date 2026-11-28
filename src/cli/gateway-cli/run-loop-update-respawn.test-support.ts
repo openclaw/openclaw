@@ -91,7 +91,7 @@ export function registerUpdateRespawnTests(f: UpdateRespawnFixtures): void {
     );
   });
 
-  it.each(["failed-spawn", "disabled", "unhealthy", "exit-during-flush"] as const)(
+  it.each(["failed-spawn", "disabled", "launcher-exit", "exit-during-flush"] as const)(
     "never resumes migrated runtime after %s",
     async (outcome) => {
       const updater = createDeferred<{ respawn: boolean }>();
@@ -99,23 +99,20 @@ export function registerUpdateRespawnTests(f: UpdateRespawnFixtures): void {
       const lockRelease = vi.fn(async () => {});
       f.acquireGatewayLock.mockResolvedValueOnce({ release: lockRelease });
       const child = createUpdateRespawnChild();
-      const readinessRejected = outcome === "unhealthy";
+      const launcherExited = outcome === "launcher-exit";
       const lateExit = outcome === "exit-during-flush";
+      if (launcherExited) {
+        child.exitCode = 1;
+      }
       const flushEntered = createDeferred();
       const releaseFlush = createDeferred();
       if (lateExit) {
-        f.flushLogger.mockImplementationOnce(async () => {
-          flushEntered.resolve();
-          await releaseFlush.promise;
+        f.flushLogger.mockImplementation(async () => {
+          if (respawn.mock.calls.length > 0) {
+            flushEntered.resolve();
+            await releaseFlush.promise;
+          }
         });
-      } else {
-        f.waitForGatewayHealthyRestart.mockResolvedValueOnce(
-          f.respawnHealth({
-            healthy: false,
-            waitOutcome: "stopped-free",
-            ...(readinessRejected ? { runtime: { status: "stopped" as const } } : {}),
-          }),
-        );
       }
       respawn.mockReturnValueOnce(
         outcome === "failed-spawn"
@@ -136,12 +133,8 @@ export function registerUpdateRespawnTests(f: UpdateRespawnFixtures): void {
           await setImmediate();
           expect(f.consumeGatewayRestartIntentPayload).toHaveBeenCalledTimes(consumedIntents);
           updater.resolve({ respawn: true });
-          if (readinessRejected || lateExit) {
-            if (readinessRejected) {
-              await waitForCalls(child.kill);
-            } else {
-              await withTimeout(flushEntered.promise, 5_000);
-            }
+          if (lateExit) {
+            await withTimeout(flushEntered.promise, 5_000);
             expectUncalled(runtime.exit);
             child.exitCode = 1;
             child.emit("exit", 1, null);
@@ -153,11 +146,7 @@ export function registerUpdateRespawnTests(f: UpdateRespawnFixtures): void {
           await expect(withTimeout(exited, lateExit ? 5_000 : 4_000)).resolves.toBe(1);
           expect(start).toHaveBeenCalledOnce();
           expectUncalled(cancelUpdate, commitUpdate, markFailure, f.writeGatewayRestartHandoff);
-          if (readinessRejected) {
-            expect(child.kill).toHaveBeenCalledOnce();
-          } else if (lateExit) {
-            expectUncalled(child.kill, f.killProcessTree);
-          }
+          expectUncalled(child.kill, f.killProcessTree);
         },
         async ({ exited }) => {
           releaseFlush.resolve();
@@ -205,13 +194,7 @@ process.send("parked");`;
       await message("parked");
       prepareForegroundHandoff();
       respawn.mockReturnValueOnce({ mode: "spawned", pid: child.pid, child });
-      f.waitForGatewayHealthyRestart.mockResolvedValueOnce(
-        f.respawnHealth({
-          healthy: false,
-          waitOutcome: "still-starting",
-          runtime: { status: "running", pid: child.pid },
-        }),
-      );
+      f.waitForGatewayHttpReadiness.mockResolvedValueOnce({ healthz: 200, readyz: 503 });
       await f.withRunningGateway(
         async ({ captureSignal, start, exited }) => {
           captureSignal("SIGUSR2")();

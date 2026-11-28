@@ -1,4 +1,4 @@
-import { createUniqueId, For, Show } from "solid-js";
+import { For, Show } from "solid-js";
 import type {
   WebPushDevicePreferences,
   WebPushNotificationPreferences,
@@ -6,6 +6,7 @@ import type {
 import { SettingsRow, SettingsToggleRow } from "../../components/solid/settings-ui.tsx";
 import { t } from "../../lib/reactive/i18n.ts";
 import { resolveTimezoneSuggestions } from "../../lib/timezone-suggestions.ts";
+import { NotificationAgentsRow, type NotificationAgentOptions } from "./notification-agents.tsx";
 import { SettingsSectionHeader } from "./settings-section-header.tsx";
 import { SettingsSelectRow } from "./settings-select-row.tsx";
 
@@ -111,43 +112,17 @@ function QuietHoursWindowRows(props: {
   );
 }
 
-function AgentIdsRow(props: {
-  agentIds: string[];
-  disabled?: boolean;
-  onChange: (value: string[]) => void;
-}) {
-  const descriptionId = createUniqueId();
-  return (
-    <SettingsRow
-      title={t("configView.notifications.onlyAgents")}
-      description={<span id={descriptionId}>{t("configView.notifications.onlyAgentsHint")}</span>}
-      control={
-        <input
-          disabled={props.disabled}
-          type="text"
-          class="settings-input"
-          aria-label={t("configView.notifications.onlyAgents")}
-          aria-describedby={descriptionId}
-          value={props.agentIds.join(", ")}
-          onChange={(event) =>
-            props.onChange(
-              event.currentTarget.value
-                .split(",")
-                .map((entry) => entry.trim())
-                .filter(Boolean),
-            )
-          }
-        />
-      }
-    />
-  );
-}
+type PreferenceAgentOptions = NotificationAgentOptions & {
+  onSaveAgents: (ids: string[] | undefined) => Promise<void> | void;
+};
 
-export function UserNotificationPreferences(props: {
-  preferences: WebPushNotificationPreferences;
-  disabled?: boolean;
-  onChange: (value: WebPushNotificationPreferences) => void;
-}) {
+export function UserNotificationPreferences(
+  props: PreferenceAgentOptions & {
+    preferences: WebPushNotificationPreferences;
+    disabled?: boolean;
+    onChange: (value: WebPushNotificationPreferences) => Promise<void> | void;
+  },
+) {
   const patch = (next: Partial<WebPushNotificationPreferences>) =>
     props.onChange({ ...props.preferences, ...next });
   return (
@@ -157,53 +132,61 @@ export function UserNotificationPreferences(props: {
         <For each={WEB_PUSH_CATEGORIES}>
           {(entry) => (
             <SettingsToggleRow
-              disabled={props.disabled}
+              disabled={props.disabled || props.writePending}
               title={t(`configView.notifications.${entry}`)}
               checked={props.preferences.categories[entry] === true}
               onChange={(checked) =>
-                patch({ categories: { ...props.preferences.categories, [entry]: checked } })
+                void patch({ categories: { ...props.preferences.categories, [entry]: checked } })
               }
             />
           )}
         </For>
         <SettingsSelectRow
-          disabled={props.disabled}
+          disabled={props.disabled || props.writePending}
           title={t("configView.notifications.lockScreenDetail")}
           description={t("configView.notifications.lockScreenDetailHint")}
           value={props.preferences.detailLevel}
           options={detailLevelOptions()}
-          onChange={(value) => patch({ detailLevel: detailLevel(value) })}
+          onChange={(value) => void patch({ detailLevel: detailLevel(value) })}
         />
         <SettingsToggleRow
-          disabled={props.disabled}
+          disabled={props.disabled || props.writePending}
           title={t("configView.notifications.quietHours")}
           checked={props.preferences.quietHours.enabled}
           onChange={(enabled) =>
-            patch({ quietHours: { ...props.preferences.quietHours, enabled } })
+            void patch({ quietHours: { ...props.preferences.quietHours, enabled } })
           }
         />
         <Show when={props.preferences.quietHours.enabled}>
           <QuietHoursWindowRows
-            disabled={props.disabled}
+            disabled={props.disabled || props.writePending}
             quietHours={props.preferences.quietHours}
-            onChange={(quietHours) => patch({ quietHours })}
+            onChange={(quietHours) => void patch({ quietHours })}
           />
         </Show>
-        <AgentIdsRow
+        <NotificationAgentsRow
+          agentCatalog={props.agentCatalog}
+          onLoadAgents={props.onLoadAgents}
+          presentationScope={props.presentationScope}
+          writePending={props.writePending}
+          submission={props.submission}
           disabled={props.disabled}
           agentIds={props.preferences.agentIds}
-          onChange={(agentIds) => patch({ agentIds })}
+          onChange={(ids) => props.onSaveAgents(ids)}
         />
       </div>
     </section>
   );
 }
 
-export function DeviceNotificationPreferences(props: {
-  preferences: WebPushDevicePreferences;
-  disabled?: boolean;
-  onChange: (value: WebPushDevicePreferences) => void;
-}) {
+export function DeviceNotificationPreferences(
+  props: PreferenceAgentOptions & {
+    inheritedAgentIds?: string[];
+    preferences: WebPushDevicePreferences;
+    disabled?: boolean;
+    onChange: (value: WebPushDevicePreferences) => Promise<void> | void;
+  },
+) {
   const patch = (next: Partial<WebPushDevicePreferences>) =>
     props.onChange({ ...props.preferences, ...next });
   return (
@@ -211,27 +194,27 @@ export function DeviceNotificationPreferences(props: {
       <SettingsSectionHeader title={t("configView.notifications.installedApp")} />
       <div class="settings-group">
         <SettingsToggleRow
-          disabled={props.disabled}
+          disabled={props.disabled || props.writePending}
           title={t("configView.notifications.deliverDevice")}
           checked={props.preferences.enabled}
-          onChange={(enabled) => patch({ enabled })}
+          onChange={(enabled) => void patch({ enabled })}
         />
         <SettingsRow
           title={t("configView.notifications.notificationLabel")}
           control={
             <input
-              disabled={props.disabled}
+              disabled={props.disabled || props.writePending}
               type="text"
               class="settings-input"
               aria-label={t("configView.notifications.notificationLabel")}
               maxlength={80}
               value={props.preferences.label}
-              onChange={(event) => patch({ label: event.currentTarget.value })}
+              onChange={(event) => void patch({ label: event.currentTarget.value })}
             />
           }
         />
         <SettingsSelectRow
-          disabled={props.disabled}
+          disabled={props.disabled || props.writePending}
           title={t("configView.notifications.lockScreenDetail")}
           value={props.preferences.detailLevel ?? "inherit"}
           options={[
@@ -239,11 +222,11 @@ export function DeviceNotificationPreferences(props: {
             ...detailLevelOptions(),
           ]}
           onChange={(value) =>
-            patch({ detailLevel: value === "inherit" ? undefined : detailLevel(value) })
+            void patch({ detailLevel: value === "inherit" ? undefined : detailLevel(value) })
           }
         />
         <SettingsSelectRow
-          disabled={props.disabled}
+          disabled={props.disabled || props.writePending}
           title={t("configView.notifications.quietHours")}
           value={
             props.preferences.quietHours === undefined
@@ -254,7 +237,7 @@ export function DeviceNotificationPreferences(props: {
           }
           options={inheritChoiceOptions(t("configView.notifications.inheritQuietHours"))}
           onChange={(value) =>
-            patch({
+            void patch({
               quietHours:
                 value === "inherit"
                   ? undefined
@@ -272,35 +255,28 @@ export function DeviceNotificationPreferences(props: {
         >
           {(quietHours) => (
             <QuietHoursWindowRows
-              disabled={props.disabled}
+              disabled={props.disabled || props.writePending}
               quietHours={quietHours()}
-              onChange={(value) => patch({ quietHours: value })}
+              onChange={(value) => void patch({ quietHours: value })}
             />
           )}
         </Show>
-        <SettingsSelectRow
+        <NotificationAgentsRow
+          agentCatalog={props.agentCatalog}
+          onLoadAgents={props.onLoadAgents}
+          presentationScope={props.presentationScope}
+          writePending={props.writePending}
+          submission={props.submission}
           disabled={props.disabled}
-          title={t("configView.notifications.onlyAgents")}
-          value={props.preferences.agentIds === undefined ? "inherit" : "override"}
-          options={[
-            { value: "inherit", label: t("configView.notifications.inherit") },
-            { value: "override", label: t("configView.notifications.overrideAgents") },
-          ]}
-          onChange={(value) => patch({ agentIds: value === "inherit" ? undefined : [] })}
+          inherit
+          inheritedAgentIds={props.inheritedAgentIds}
+          agentIds={props.preferences.agentIds}
+          onChange={(ids) => props.onSaveAgents(ids)}
         />
-        <Show when={props.preferences.agentIds}>
-          {(agentIds) => (
-            <AgentIdsRow
-              disabled={props.disabled}
-              agentIds={agentIds()}
-              onChange={(value) => patch({ agentIds: value })}
-            />
-          )}
-        </Show>
         <For each={WEB_PUSH_CATEGORIES}>
           {(entry) => (
             <SettingsSelectRow
-              disabled={props.disabled}
+              disabled={props.disabled || props.writePending}
               title={t(`configView.notifications.${entry}`)}
               value={
                 props.preferences.categories?.[entry] === undefined
@@ -317,7 +293,7 @@ export function DeviceNotificationPreferences(props: {
                 } else {
                   categories[entry] = value === "on";
                 }
-                patch({ categories });
+                void patch({ categories });
               }}
             />
           )}

@@ -1,9 +1,30 @@
+import { mergeCatalog } from "../lib/merge-catalog.ts";
 import type { TranslationMap } from "../lib/types.ts";
 import { en } from "./en.ts";
 
 // Analysis copy loads with Usage; shared labels and Settings search stay eager.
 const enUsage = {
   usage: {
+    common: {
+      unknown: "unknown",
+    },
+    loading: {
+      badge: "Loading usage…",
+    },
+    metrics: {
+      tokens: "Tokens",
+      cost: "Cost",
+    },
+    heatmap: {
+      cellTokens: "{tokens} tokens",
+      less: "Less",
+      more: "More",
+    },
+    breakdown: {
+      total: "Total",
+      tokensByType: "Tokens by type",
+      costByType: "Cost by type",
+    },
     moreActions: "More actions",
     partialShort: "Partial results",
     presets: {
@@ -18,7 +39,7 @@ const enUsage = {
       instance: "Current instance",
       instanceHint: "Show only the active session id for each logical session.",
       family: "Historical lineage",
-      familyHint: "Roll up known rotated transcript-backed session ids.",
+      familyHint: "Include earlier chats saved for each session.",
       familyIncluded: "Historical lineage includes {count} session instances.",
     },
     filters: {
@@ -156,7 +177,7 @@ const enUsage = {
       sessions: "Sessions",
       sessionsInRange: "of {count} in range",
       throughput: "Throughput",
-      throughputHint: "Tokens per minute of active time.",
+      throughputHint: "Tokens per minute of recorded turn time.",
       tokensPerMinute: "tok/min",
       perMinute: "/ min",
       errorRate: "Error rate",
@@ -235,28 +256,13 @@ const enUsage = {
       files: "Files",
       ofInput: "of input",
       of: "of",
-      timelineFiltered: "timeline filtered",
-      loadedIntervalMessages: "Loaded conversation · selected interval",
-      conversation: "Conversation",
-      noMessages: "No messages yet.",
-      tool: "Tool",
-      toolResult: "Tool result",
-      hasTools: "Has tools",
-      searchConversation: "Search conversation",
-      filterByRole: "Filter by role",
-      filterByTool: "Filter by tool",
-      you: "You",
-      noMessagesMatch: "No messages match these filters.",
+      loadedIntervalMessages: "Loaded messages · selected interval",
+      intervalCounts: "interval message and tool counts",
+      openConversation: "Open conversation",
     },
   },
 } satisfies TranslationMap;
 
-export const registerUsageEnglish = Object.assign(
-  () => {
-    const { details, overview, ...sections } = enUsage.usage;
-    Object.assign(en.usage, sections);
-    Object.assign(en.usage.details, details);
-    Object.assign(en.usage.overview, overview);
-  },
-  { catalog: enUsage },
-);
+export const registerUsageEnglish = Object.assign(() => mergeCatalog(en.usage, enUsage.usage), {
+  catalog: enUsage,
+});

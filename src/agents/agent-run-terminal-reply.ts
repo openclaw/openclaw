@@ -1,5 +1,9 @@
 import { isRecord } from "@openclaw/normalization-core/record-coerce";
 import { truncateWithMarker } from "@openclaw/normalization-core/utf16-slice";
+import {
+  scanReasoningTags,
+  stripReasoningTagsFromMarkdown,
+} from "../../packages/markdown-core/src/reasoning-tags-batch.js";
 import { stripHeartbeatToken } from "../auto-reply/heartbeat.js";
 import type { ReplyPayload } from "../auto-reply/reply-payload.js";
 import { stripInternalMetadataForDisplay } from "../auto-reply/reply/display-text-sanitize.js";
@@ -65,10 +69,24 @@ export function prepareAgentRunReplyText(rawText: string): string | undefined {
   return stripMixedSilentReplyTokens(rawText) ?? rawText.replace(/[\r\n]\s*NO_REPLY\s*$/iu, "");
 }
 
+// An exact token after reasoning the model closed is silent (#203424); the reducer decides
+// what was reasoning. Stored-history readers keep their raw exact contract.
+function isSilentAfterClosedReasoning(rawText: string): boolean {
+  const lastClose = scanReasoningTags(rawText).tags.findLast((tag) => tag.isClose);
+  return (
+    lastClose !== undefined &&
+    isSilentReplyText(rawText.slice(lastClose.index + lastClose.text.length)) &&
+    isSilentReplyText(stripReasoningTagsFromMarkdown(rawText, { mode: "strict", scope: "all" }))
+  );
+}
+
 export function prepareAgentRunTerminalReply(params: {
   rawText?: string;
 }): PreparedAgentRunTerminalReply {
-  const text = prepareAgentRunReplyText(params.rawText ?? "");
+  const rawText = params.rawText ?? "";
+  const text = isSilentAfterClosedReasoning(rawText)
+    ? undefined
+    : prepareAgentRunReplyText(rawText);
   return {
     text: text ?? "",
     terminalReply:

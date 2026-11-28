@@ -22,9 +22,9 @@ vi.mock("./agent-bundle-mcp-manager-cleanup.js", () => ({
 vi.mock("./agent-bundle-mcp-requester-connect.js", () => ({
   mergeMcpConnectCatalog: (catalog: unknown) => catalog,
 }));
-vi.mock("./mcp-client-elicitation.js", () => ({
+vi.mock("./mcp-client-elicitation.js", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("./mcp-client-elicitation.js")>()),
   createMcpClientElicitationHandler: mocks.elicitation,
-  runWithMcpElicitationHandler: async (_handler: unknown, run: () => Promise<unknown>) => run(),
 }));
 vi.mock("../gateway/mcp-app-form-resources.js", () => ({
   createMcpAppFormResourceContext: mocks.form,

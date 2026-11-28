@@ -3,10 +3,12 @@ import fs from "node:fs";
 import path from "node:path";
 import { afterEach, expect, it, vi } from "vitest";
 import { useAutoCleanupTempDirTracker } from "../../test/helpers/temp-dir.js";
+import { freezeTrustedJsonSnapshot } from "../shared/immutable-data.js";
 import {
   capturePluginNativeNamespace,
   finishPluginNativeNamespace,
   pluginNativeNamespaceIsCurrent,
+  writablePluginNativeMember,
 } from "./plugin-native-namespace.js";
 import type { PluginNativeNamespaceFact } from "./plugin-source-admission.types.js";
 
@@ -99,6 +101,7 @@ function namespaceFixture(phase: "fresh-copy" | "dormant-finish" | "recapture") 
   const name = phase === "recapture" ? "second" : "first";
   return {
     ...fixture,
+    previous,
     previousFile: fixture.capturedFile("first"),
     capturedFile: fixture.capturedFile(name),
     observedFile: phase === "fresh-copy" ? sourceFile : fixture.capturedFile(name),
@@ -109,6 +112,25 @@ function namespaceFixture(phase: "fresh-copy" | "dormant-finish" | "recapture") 
     },
   };
 }
+
+it.each(["dormant-finish", "recapture"] as const)(
+  "preserves published member facts during %s",
+  (phase) => {
+    const fixture = namespaceFixture(phase);
+    const prior = fixture.previous!;
+    const members = freezeTrustedJsonSnapshot(structuredClone(prior.members));
+    const before = structuredClone(members);
+    prior.members = members;
+    expect(writablePluginNativeMember(prior, "missing.bin")).toBeUndefined();
+    expect(prior.members).toBe(members);
+    const updated = fixture.finish();
+    expect(updated.members["LICENSE.md"]?.contentHash).toBe(
+      createHash("sha256").update(originalBytes).digest("hex"),
+    );
+    expect(prior.members).not.toBe(members);
+    expect(members).toEqual(before);
+  },
+);
 
 // Model an Endpoint-DLP stamp only after a real descriptor read, not before admission.
 // Identify the inode rather than the pathname so the stimulus also follows retained links.

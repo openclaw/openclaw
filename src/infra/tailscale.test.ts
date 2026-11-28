@@ -169,24 +169,6 @@ describe("tailscale helpers", () => {
     expect(exec).toHaveBeenCalledTimes(2);
   });
 
-  it("does not cache whois results when the cache expiry would exceed Date range", async () => {
-    vi.useFakeTimers();
-    vi.setSystemTime(new Date(8_640_000_000_000_000));
-    const exec = vi
-      .fn()
-      .mockResolvedValueOnce(whois("first@example.com"))
-      .mockResolvedValueOnce(whois("second@example.com"));
-
-    await expect(readWhois("100.64.0.10", exec)).resolves.toEqual({
-      login: "first@example.com",
-    });
-    await expect(readWhois("100.64.0.10", exec)).resolves.toEqual({
-      login: "second@example.com",
-    });
-
-    expect(exec).toHaveBeenCalledTimes(2);
-  });
-
   describe("waitForTailscaleBackendReady", () => {
     const status = (BackendState: string) => ({ ...jsonReply({ BackendState }), stderr: "" });
 

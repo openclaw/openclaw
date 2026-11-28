@@ -1,3 +1,4 @@
+import { asRecord } from "@openclaw/normalization-core/record-coerce";
 import { expect, it } from "vitest";
 import { controlUiSessionUrl, installMockGateway } from "../test-helpers/control-ui-e2e.ts";
 import { openChatSidePanelType } from "./chat-side-panel.test-support.ts";
@@ -5,7 +6,11 @@ import { createControlUiE2eSuite } from "./control-ui-e2e-suite.test-support.ts"
 
 const suite = createControlUiE2eSuite({ name: "session companion retry" });
 const unavailable = { code: "UNAVAILABLE", retryable: true };
-const timeoutError = { ...unavailable, message: "Side chat timed out." };
+const timeoutError = {
+  ...unavailable,
+  message: "Side chat timed out.",
+  details: { reason: "timeout" },
+};
 
 suite.define(() => {
   it.each(["composer", "/btw", "/side"] as const)("retries %s failures in place", async (entry) => {
@@ -25,8 +30,9 @@ suite.define(() => {
           "sessions.companion.ask": {
             __mockError: {
               ...unavailable,
-              message: "Session history is unavailable.",
-              details: { reason: "context-unavailable" },
+              retryable: false,
+              message: "Side chat could not answer right now.",
+              details: { reason: "unavailable" },
             },
           },
         },
@@ -61,6 +67,7 @@ suite.define(() => {
       expect(await side.locator(".chat-session-rail__retry").isDisabled()).toBe(true);
       await gateway.rejectDeferred("sessions.companion.ask", timeoutError);
       await expect.poll(async () => failed.count()).toBe(2);
+      await side.getByText("Side chat timed out.", { exact: true }).waitFor({ timeout: 1500 });
       await gateway.deferNext("sessions.companion.ask");
       await side.locator(".chat-session-rail__retry").first().click();
       await pending.waitFor();
@@ -76,10 +83,42 @@ suite.define(() => {
       expect(await page.getByText(mainAnswer, { exact: true }).isVisible()).toBe(true);
       expect(await side.getByText(sideAnswer, { exact: true }).isVisible()).toBe(true);
       const requests = await gateway.getRequests("sessions.companion.ask");
-      const ask = (text: string) => ({ sessionKey, agentId: "main", question: text });
+      const ask = (text: string) => ({
+        sessionKey,
+        agentId: "main",
+        question: text,
+        askId: expect.any(String),
+      });
       expect(requests.map(({ params }) => params)).toEqual([question, followup, question].map(ask));
       for (const method of ["chat.send", "sessions.reset", "sessions.companion.reset"]) {
         expect(await gateway.getRequests(method)).toHaveLength(0);
+      }
+      if (entry === "composer") {
+        await gateway.deferNext("sessions.companion.ask");
+        await send("Find the remaining links");
+        await pending.waitFor();
+        const stop = side.getByRole("button", { name: "Stop side chat answer" });
+        await stop.waitFor();
+        await page.clock.setFixedTime(Date.now() + 65_000);
+        await side.getByText("Still waiting for an answer").waitFor();
+        await composer.fill("My next question");
+        await stop.click();
+        const asks = await gateway.getRequests("sessions.companion.ask");
+        const { params } = await gateway.waitForRequest("sessions.companion.reset");
+        expect(params).toEqual({
+          sessionKey,
+          agentId: "main",
+          cancelAskId: asRecord(asks.at(-1)?.params).askId,
+        });
+        await gateway.rejectDeferred("sessions.companion.ask", {
+          ...unavailable,
+          message: "Side chat answer stopped.",
+          details: { reason: "stopped" },
+        });
+        await side.getByText("Answer stopped.").waitFor();
+        expect(await composer.inputValue()).toBe("My next question");
+        expect(await side.getByText(sideAnswer).isVisible()).toBe(true);
+        expect(await gateway.getRequests("chat.abort")).toHaveLength(0);
       }
       expect(errors).toEqual([]);
     });

@@ -10,6 +10,7 @@ import {
 } from "../../agents/auth-profiles.js";
 import {
   captureRuntimeConfigAsyncReader,
+  getRuntimeConfigSnapshot,
   getRuntimeConfigSourceSnapshot,
   setRuntimeConfigSnapshot,
 } from "../../config/config.js";
@@ -21,7 +22,7 @@ import { resolveCommandConfigWithSecrets } from "../command-config-resolution.js
 import { inheritOptionFromParent } from "../command-options.js";
 import { throwExpectedCliError } from "../expected-cli-error.js";
 import { parseTimeoutMsWithFallback } from "../parse-timeout.js";
-import type { CapabilityTransport } from "./metadata.js";
+import type { CapabilityTransport } from "./result-types.js";
 
 export function resolveTransport(opts: {
   local?: boolean;
@@ -122,16 +123,19 @@ export function parseOptionalTimeoutMs(raw: string | number | undefined): number
 export async function resolveLocalCapabilityRuntimeConfig(params: {
   commandName: string;
   targetIds: Set<string>;
+  localGatewayAbsent?: true;
   allowedPaths?: Set<string>;
   forcedActivePaths?: Set<string>;
   optionalActivePaths?: Set<string>;
   config?: OpenClawConfig;
 }): Promise<OpenClawConfig> {
-  const cfg = params.config ?? (await captureRuntimeConfigAsyncReader()());
+  const cfg =
+    params.config ?? (await (getRuntimeConfigSnapshot() ?? captureRuntimeConfigAsyncReader()()));
   const { effectiveConfig } = await resolveCommandConfigWithSecrets({
     config: cfg,
     commandName: params.commandName,
     targetIds: params.targetIds,
+    ...(params.localGatewayAbsent ? { localGatewayAbsent: params.localGatewayAbsent } : {}),
     ...(params.allowedPaths ? { allowedPaths: params.allowedPaths } : {}),
     ...(params.forcedActivePaths ? { forcedActivePaths: params.forcedActivePaths } : {}),
     ...(params.optionalActivePaths ? { optionalActivePaths: params.optionalActivePaths } : {}),

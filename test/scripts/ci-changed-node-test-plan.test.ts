@@ -15,16 +15,13 @@ import { encodeNodeTestGroups } from "../../scripts/lib/ci-node-test-groups-code
 import {
   createNodeTestShardBundles,
   createSelectedNodeTestShardBundles,
-  isRuntimeTestFileIncluded,
   type CompactNodeTestShard,
   type NodeTestShard,
 } from "../../scripts/lib/ci-node-test-plan.mts";
 import { resolvePolicyTestTargets } from "../../scripts/lib/ci-policy-test-watch.mts";
-import {
-  CI_PROOF_TEST_FILES,
-  PR_PROTECTED_RUNTIME_TEST_FILES,
-  isCiProofTestFile,
-} from "../../scripts/lib/ci-proof-test-inventory.mts";
+import { PR_PROTECTED_RUNTIME_TEST_FILES } from "../../scripts/lib/ci-proof-test-inventory.mts";
+import { isRuntimeTestFileIncluded } from "../../scripts/lib/ci-runtime-test-eligibility.mts";
+import { CI_PROOF_TEST_FILES, isCiProofTestFile } from "../../scripts/lib/ci-test-tier-policy.mts";
 import { refitTestTimings } from "../../scripts/lib/ci-test-timings-refit.mts";
 import * as testTimings from "../../scripts/lib/ci-test-timings.mts";
 import { listExtensionTestFilesForRoots } from "../../scripts/lib/extension-test-plan.mts";
@@ -175,7 +172,6 @@ describe("selected boundary setup sharing", () => {
 
   it.each([
     { measurement: "complete", prices: [1, 1], allocations: 1 },
-    { measurement: "missing", prices: [1, undefined], allocations: 2 },
     { measurement: "expensive", prices: [75, 1], allocations: 2 },
   ])(
     "shares boundary setup only for a short $measurement tooling selection",
@@ -232,6 +228,7 @@ describe("selected boundary setup sharing", () => {
   it("retains the standalone gate when setup, concurrency, or timing cannot be shared", () => {
     const base = tooling();
     const variants = [
+      { predictedSeconds: undefined, predictedTestSeconds: undefined },
       { predictedSeconds: 61, predictedTestSeconds: 61 },
       { runner: "blacksmith-32vcpu-ubuntu-2404" },
       { planConcurrency: 2 },
@@ -286,55 +283,6 @@ const gitToolingTargets = [
 ].map((name) => `test/scripts/${name}.test.ts`);
 const lintSuppressionInventoryTest = "test/scripts/lint-suppressions.test.ts";
 
-it("keeps activity unit changes narrow alongside root package metadata", () => {
-  expect(hasUiE2eAffectingChange(["ui/src/pages/activity/activity-page.test.ts"])).toBe(false);
-  expect(
-    hasUiE2eAffectingChange(["ui/src/pages/activity/activity-page.test.ts", "package.json"]),
-  ).toBe(false);
-});
-
-it.each([
-  ["extensions/browser/chrome-extension/background.js", false],
-  ["src/gateway/control-ui.ts", true],
-  ["packages/gateway-protocol/src/schema/protocol-schemas.ts", true],
-  ["src/gateway/cron-stream-matcher.worker.ts", false],
-] as const)(
-  "selects browser proof only for its owner or imported wire contract: %s",
-  (file, expected) => {
-    expect(hasUiE2eAffectingChange([file])).toBe(expected);
-  },
-);
-
-it.each([
-  ["src/gateway/control-ui.ts", true],
-  ["packages/gateway-protocol/src/schema/protocol-schemas.ts", true],
-  ["ui/src/e2e/control-ui-e2e-suite.test-support.ts", true],
-  ["ui/src/e2e/settings-layout.e2e.test.ts", false],
-] as const)(
-  "selects real-Gateway tests through their source, fixture, and protocol owners: %s",
-  (file, expected) => {
-    const timings = vi.spyOn(testTimings, "readUiE2eFileTimings");
-    try {
-      expect(hasUiE2eAffectingChange([file], { family: "real-gateway" })).toBe(expected);
-      expect(timings).not.toHaveBeenCalled();
-    } finally {
-      timings.mockRestore();
-    }
-  },
-);
-
-it.each([
-  ["ui/src/styles/chat.css", false],
-  ["extensions/browser/chrome-extension/background.js", true],
-  ["extensions/browser/src/browser/extension-install.ts", true],
-  ["test/vitest/vitest.shared.config.ts", false],
-] as const)(
-  "selects the extension bootstrap through its source and shared owners: %s",
-  (file, expected) => {
-    expect(hasUiE2eAffectingChange([file], { family: "browser-extension" })).toBe(expected);
-  },
-);
-
 it.each(
   [
     [],
@@ -374,7 +322,15 @@ it.each([
   expect(
     hasImportGraphImpactOnTargets([target], (file) => file !== target, cwd, { tooling: true }),
   ).toBe(!/\/(?:\.cache|\.artifacts|dist|node_modules)\//u.test(consumer));
-  expect(hasUiE2eAffectingChange([target], { cwd })).toBe(expected);
+  // Boolean owner selection must not load the advisory timing inventory.
+  const timings = vi.spyOn(testTimings, "readUiE2eFileTimings");
+  try {
+    expect(hasUiE2eAffectingChange([target], { cwd })).toBe(expected);
+    hasUiE2eAffectingChange([target], { cwd, family: "real-gateway" });
+    expect(timings).not.toHaveBeenCalled();
+  } finally {
+    timings.mockRestore();
+  }
 });
 
 it.each(["archive", "untracked", "symlink"])(
@@ -688,14 +644,39 @@ describe("CI changed Node test plan", () => {
     },
   );
 
-  it.each(["blacksmith", "github", "hybrid"])(
-    "selects prior-CI shell fixtures from their owner without enabling unrelated tooling (%s)",
-    (runnerBackend) => {
-      const targets = [
-        "test/scripts/pr-merge-prior-ci-artifact-build.test.ts",
-        "test/scripts/pr-merge-prior-ci.test.ts",
-      ];
-      const changedPaths = ["scripts/pr-lib/merge-prior-ci.mjs"];
+  it.each(
+    [
+      {
+        name: "prior-CI",
+        unrelatedEligible: false,
+        changedPaths: ["scripts/pr-lib/merge-prior-ci.mjs"],
+        targets: [
+          "test/scripts/pr-merge-prior-ci-artifact-build.test.ts",
+          "test/scripts/pr-merge-prior-ci.test.ts",
+        ],
+      },
+      {
+        name: "workflow qualification",
+        unrelatedEligible: true,
+        changedPaths: ["scripts/pr"],
+        targets: [
+          "test/scripts/pr-baseline-proof.test.ts",
+          "test/scripts/pr-current-workflow-recovery.test.ts",
+          "test/scripts/pr-workflow-successor.test.ts",
+        ],
+      },
+    ].flatMap((fixture) =>
+      ["blacksmith", "github", "hybrid"].map((runnerBackend) => ({
+        name: fixture.name,
+        unrelatedEligible: fixture.unrelatedEligible,
+        changedPaths: fixture.changedPaths,
+        targets: fixture.targets,
+        runnerBackend,
+      })),
+    ),
+  )(
+    "selects $name shell fixtures from their owner without enabling unrelated tooling ($runnerBackend)",
+    ({ runnerBackend, targets, changedPaths, unrelatedEligible }) => {
       const options = {
         runnerBackend,
         includeReleaseOnlyRuntimeTests: false,
@@ -707,9 +688,9 @@ describe("CI changed Node test plan", () => {
       // Use the real resolver-to-packer handoff; shell fixtures do not import their owner.
       const selected = expectDefined(
         createChangedNodeTestShards(changedPaths, options),
-        "prior-CI owner shard plan",
+        "shell owner shard plan",
       );
-      const envScratch = argvTempDirs.make("prior-ci-owner-env-");
+      const envScratch = argvTempDirs.make("shell-owner-env-");
       const files = selectedFiles(selected);
       expect(files).not.toContain("test/scripts/ci-workflow-planning.test.ts");
       for (const target of targets) {
@@ -743,7 +724,7 @@ describe("CI changed Node test plan", () => {
         for (const target of targets) {
           expect(unrelatedWatch).not.toContain(target);
           expect(isRuntimeTestFileIncluded(target, { ...options, changedPaths: unrelated })).toBe(
-            false,
+            unrelatedEligible,
           );
           expect(unrelatedFiles).not.toContain(target);
         }
@@ -847,7 +828,7 @@ describe("CI changed Node test plan", () => {
 
   it("retains selected compact coverage when time splitting exceeds the non-dist matrix cap", async () => {
     const targets = [
-      "test/scripts/ci-node-test-plan.test.ts",
+      "test/scripts/ci-node-test-plan-hosted-tail.test.ts",
       "test/scripts/ci-changed-node-test-plan.test.ts",
     ];
     const artifactTarget = "test/scripts/build-all.test.ts";
@@ -924,7 +905,7 @@ describe("CI changed Node test plan", () => {
 
   it("pays for heavy-row splits by merging compatible small rows before the matrix cap", async () => {
     const targets = [
-      "test/scripts/ci-node-test-plan.test.ts",
+      "test/scripts/ci-node-test-plan-hosted-tail.test.ts",
       "test/scripts/ci-changed-node-test-plan.test.ts",
       "test/scripts/ci-run-timings.test.ts",
       "test/scripts/ci-test-timings.test.ts",
@@ -1851,7 +1832,6 @@ describe("CI changed Node test plan", () => {
     expect(resolveChangedTestTargetPlan([target]).targets).toEqual([
       target,
       "test/scripts/ci-changed-node-test-plan.test.ts",
-      "test/scripts/ci-node-test-plan.test.ts",
       "test/scripts/test-projects-build-admission.test.ts",
     ]);
     const shards = createChangedNodeTestShards([target]);
@@ -1860,7 +1840,6 @@ describe("CI changed Node test plan", () => {
     expect(groups.flatMap((group) => group.includePatterns ?? []).toSorted()).toEqual([
       target,
       "test/scripts/ci-changed-node-test-plan.test.ts",
-      "test/scripts/ci-node-test-plan.test.ts",
       "test/scripts/test-projects-build-admission.test.ts",
     ]);
     const qaOwners = shards?.filter((shard) =>

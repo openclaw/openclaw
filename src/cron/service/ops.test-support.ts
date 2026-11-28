@@ -105,6 +105,8 @@ export async function createBlockedCronRun(
     nowMs: overrides.nowMs ?? (() => job.createdAtMs),
     runIsolatedAgentJob,
   });
+  // No spare memory, so exactly the default run slots fill.
+  state.readAvailableMemoryBytes = () => 0;
   const activeRun = Promise.all(blockers.map((blocker) => run(state, blocker.id, "force")));
   await held.started;
   const queued = createDeferred();

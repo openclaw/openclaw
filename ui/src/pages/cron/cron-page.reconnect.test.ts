@@ -7,6 +7,7 @@ import {
   createGateway,
   createRequest,
   cronListResponse,
+  openJob,
   operatorHello,
   waitForCronPage,
 } from "./cron-page.test-support.tsx";
@@ -41,7 +42,7 @@ it("retains the editor draft, filters and loaded jobs through reconnect while fe
   page.selectJob(job);
   page.patchForm({ name: "Unsaved name", payloadText: "Unsaved prompt" });
   page.cron.cronJobsQuery = "saved";
-  gateway.emitRetiredEvent({ type: "event", event: "cron", payload: {} });
+  gateway.emitRetiredEvent({ type: "event", event: "cron.inventory.changed", payload: {} });
   await waitForCronPage(() => expect(lists).toBe(2));
   gateway.emitSnapshot({ phase: "reconnecting", hello: null });
   await page.settle();
@@ -123,13 +124,12 @@ it.each([
     );
     expect(runRequests.at(-1)).toMatchObject({ id: linked.id, runId: undefined });
   } else if (intent === "close" || intent === "another job") {
-    page.querySelector<HTMLButtonElement>('[data-test-id="cron-back"]')!.click();
+    page.closePanel();
     await page.settle();
     expected = null;
     if (intent === "another job") {
-      page.querySelector<HTMLElement>('[data-test-id="cron-row-other"]')!.click();
-      await page.settle();
-      page.querySelector<HTMLButtonElement>('[data-test-id="cron-detail-tab-history"]')!.click();
+      // The automation opens on its history.
+      await openJob(page, other.id);
       await page.settle();
       expected = other;
     }

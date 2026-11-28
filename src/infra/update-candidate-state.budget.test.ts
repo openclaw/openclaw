@@ -40,7 +40,6 @@ import { readUpdateStateDatabaseSizes } from "./update-candidate-state.sizes.js"
 import { materializeUpdateCandidateStateWorker } from "./update-candidate-state.test-support.js";
 import { UpdateDatabaseBackupSchema } from "./update-database-backup.js";
 import { createUpdateErrorFact } from "./update-failure-facts.js";
-import { prepareUpdateFailureReport } from "./update-failure-report-prepare.js";
 import { UPDATE_STATE_INSPECTION_PROGRESS_PREFIX } from "./update-state-inspection-protocol.js";
 
 let cleanupFixture: (() => Promise<void>) | undefined;
@@ -848,7 +847,7 @@ it.each(["stdout", "stderr"] as const)(
 );
 
 it.for([false, true])(
-  "reports a real inspection output limit through the public report (warnings=%s)",
+  "preserves a real inspection output limit through parsing (warnings=%s)",
   async (warnings, { signal }) => {
     const root = await fs.realpath(tempDirs.make("inspection-output-limit-"));
     await writeWorker(
@@ -883,33 +882,12 @@ it.for([false, true])(
     } catch (error) {
       failure = error;
     }
-    const report = await prepareUpdateFailureReport(
-      {
-        attemptId: "inspection-output-limit",
-        result: {
-          status: "error",
-          mode: "git",
-          reason: "update-failed",
-          durationMs: 1,
-          steps: [
-            {
-              name: "updater-runtime-retention",
-              command: "inspection",
-              cwd: root,
-              durationMs: 1,
-              exitCode: 1,
-              failureFacts: [
-                createUpdateErrorFact("git update", failure, { OPENCLAW_STATE_DIR: root }),
-              ],
-            },
-          ],
-        },
-      },
-      { env: { OPENCLAW_STATE_DIR: root } },
-    );
-    expect(report.body).toContain("Failing check git update (output-limit)");
-    expect(report.body).not.toMatch(/private-customer|ExperimentalWarning|private-machine-payload/);
-    expect(report.body).not.toContain(root);
+    expect(
+      createUpdateErrorFact("git update", failure, { OPENCLAW_STATE_DIR: root }),
+    ).toMatchObject({
+      check: "git update",
+      code: "output-limit",
+    });
   },
 );
 

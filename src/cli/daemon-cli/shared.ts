@@ -121,15 +121,25 @@ export function resolveDaemonServiceInstallGuidance(
 export function formatGatewayServiceInstallationDrift(
   drift: GatewayServiceInstallationDrift,
   env: NodeJS.ProcessEnv = process.env,
-  service?: { stopped?: boolean; port?: number; command?: GatewayServiceCommandConfig | null },
+  service?: {
+    stopped?: boolean;
+    port?: number;
+    command?: GatewayServiceCommandConfig | null;
+    /** A verified next step for this state; replaces the generic reinstall guidance. */
+    nextStep?: string;
+  },
 ): string {
   const { serviceRoot, serviceVersion, activeRoot, activeVersion } = drift;
-  const recovery = hasGatewayServiceLauncherOverride(service?.command)
+  const override = hasGatewayServiceLauncherOverride(service?.command);
+  const facts = `CLI ${activeVersion ?? "version unknown"} at ${activeRoot} differs from the Gateway service's ${serviceVersion ?? "version unknown"} at ${serviceRoot}.`;
+  if (service?.nextStep && !override) {
+    return `${facts} ${service.nextStep}`;
+  }
+  const recovery = override
     ? `Use the CLI from ${serviceRoot} to check or repair this Gateway.`
     : `Run \`${formatCliCommand("openclaw update", env)}\` or use the CLI from ${serviceRoot}.`;
-  const facts = `CLI ${activeVersion ?? "version unknown"} at ${activeRoot} differs from the Gateway service's ${serviceVersion ?? "version unknown"} at ${serviceRoot}. ${recovery}`;
   const guidance = resolveDaemonServiceInstallGuidance(undefined, env, service);
-  return guidance ? `${facts} ${guidance}` : facts;
+  return guidance ? `${facts} ${recovery} ${guidance}` : `${facts} ${recovery}`;
 }
 
 /** Shared by update progress and JSON/text dry-run notes. */
@@ -245,14 +255,6 @@ export function resolveLaunchdInspectionWarnings(service: {
   return warnings;
 }
 
-export function normalizeListenerAddress(raw: string): string {
-  return raw
-    .trim()
-    .replace(/^TCP\s+/i, "")
-    .replace(/\s+\(LISTEN\)\s*$/i, "")
-    .trim();
-}
-
 export function renderGatewayServiceStartHints(env: NodeJS.ProcessEnv = process.env): string[] {
   const container = resolveDaemonContainerContext(env);
   if (container) {
@@ -269,6 +271,19 @@ export function renderGatewayServiceStartHints(env: NodeJS.ProcessEnv = process.
     systemdServiceName: resolveGatewaySystemdServiceName(profile),
     windowsTaskName: resolveGatewayWindowsTaskName(profile),
   });
+}
+
+export function renderGatewayServiceStopHints(): string[] {
+  return [
+    `Run ${formatCliCommand("openclaw gateway status --deep")} to inspect the service, then retry.`,
+  ];
+}
+
+export function renderGatewayServiceUninstallHints(): string[] {
+  return [
+    ...renderGatewayServiceStopHints(),
+    "To remove the service manually, see https://docs.openclaw.ai/install/uninstall#manual-service-removal-cli-not-installed",
+  ];
 }
 
 export function filterContainerGenericHints(

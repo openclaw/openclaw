@@ -2,7 +2,9 @@ import { normalizeFastMode } from "@openclaw/normalization-core/string-coerce";
 import type {
   SessionsListParams,
   SessionsResolveParams,
+  SessionsSearchResult,
 } from "../../../packages/gateway-protocol/src/index.js";
+import { validateSessionsSearchParams } from "../../../packages/gateway-protocol/src/index.js";
 import type { CallGatewayOptions } from "../../gateway/call.js";
 import type { SessionRowProjection } from "../../gateway/session-row-projection.js";
 import { parseAgentSessionKey, scopeLegacySessionKeyToAgent } from "../../routing/session-key.js";
@@ -42,10 +44,16 @@ async function borrowSessionRowProjection() {
 }
 
 async function handleSessionsList(params: Record<string, unknown>) {
+  if (params.pinned !== undefined) {
+    throw new Error(
+      "To filter personal pins, run sessions_list from your signed-in Gateway chat. Embedded runs have no personal sidebar.",
+    );
+  }
   const rt = await getRuntime();
   return rt.listProjectedSessions({
     projection: await borrowSessionRowProjection(),
     opts: params as SessionsListParams,
+    personalPins: null,
   });
 }
 
@@ -98,7 +106,9 @@ async function handleSessionsDescribe(params: Record<string, unknown>) {
           "Session projection changed while describing the session; retry the request",
         );
       }
-      const { row } = rt.prepareProjectedSessionPresentation(read).snapshot(query(read.state.cfg));
+      const { row } = rt
+        .prepareProjectedSessionPresentation(read)
+        .snapshot(query(read.state.cfg), { personalPins: null });
       return { session: row };
     },
   );
@@ -113,6 +123,23 @@ async function handleSessionsSearch(params: Record<string, unknown>) {
   }
   if (query.length > SESSIONS_SEARCH_MAX_QUERY_CHARS) {
     throw new Error(`query must not exceed ${SESSIONS_SEARCH_MAX_QUERY_CHARS} characters`);
+  }
+  if (params.recall) {
+    if (!validateSessionsSearchParams(params)) {
+      throw new Error("Invalid sessions.search parameters");
+    }
+    const { searchRecallSessionTranscripts } =
+      await import("../../gateway/server-methods/sessions-search-recall.js");
+    const projection = await borrowSessionRowProjection();
+    return new Promise<SessionsSearchResult>((resolve, reject) => {
+      void searchRecallSessionTranscripts({
+        query,
+        limit: readPositiveIntegerParam(params, "limit"),
+        recall: params.recall!,
+        projection,
+        onResult: resolve,
+      }).catch(reject);
+    });
   }
   if (params.agentId !== undefined && params.sessionKeys === undefined) {
     throw new Error("agentId requires sessionKeys");
@@ -249,7 +276,7 @@ async function handleChatHistory(params: Record<string, unknown>) {
   const effectiveMaxChars = rt.resolveEffectiveChatHistoryMaxChars();
   const pageParams = {
     entry: historyEntry,
-    provider: resolvedSessionModel.provider,
+    provider: resolvedSessionModel?.provider,
     sessionId,
     storePath,
     sessionAgentId,

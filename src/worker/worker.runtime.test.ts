@@ -633,12 +633,13 @@ class FakeWorkerGateway extends WorkerExecApprovalFixture {
     chunkCount = 1_100,
     terminal: "done" | "error" = "done",
   ): void {
-    const chunk = "x".repeat(40);
+    // Keep each chunk 40 bytes without triggering repetitive-output protection.
+    const chunks = Array.from({ length: chunkCount }, (_, i) => sha256(String(i)).slice(0, 40));
     this.sendTurn(
       output,
       [
         { type: "text_start", contentIndex: 0 },
-        ...Array.from({ length: chunkCount }, () => ({
+        ...chunks.map((chunk) => ({
           type: "text_delta" as const,
           contentIndex: 0,
           delta: chunk,
@@ -653,7 +654,7 @@ class FakeWorkerGateway extends WorkerExecApprovalFixture {
             }
           : {
               type: "done",
-              message: assistantMessage([{ type: "text", text: chunk.repeat(chunkCount) }], "stop"),
+              message: assistantMessage([{ type: "text", text: chunks.join("") }], "stop"),
             },
     );
   }

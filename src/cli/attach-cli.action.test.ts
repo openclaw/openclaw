@@ -7,8 +7,11 @@ import type { SessionsResolveResult } from "../../packages/gateway-protocol/src/
 import { awaitGateBeforeSettlement, createDeferred } from "../../test/helpers/promise.js";
 
 vi.mock("node:fs", async (importOriginal) => {
-  const actual = await importOriginal<typeof import("node:fs")>();
-  return { ...actual, mkdtempSync: vi.fn(actual.mkdtempSync) };
+  const actual = await importOriginal<
+    typeof import("node:fs") & { default: typeof import("node:fs") }
+  >();
+  const overrides = { mkdtempSync: vi.fn(actual.mkdtempSync) };
+  return { ...actual, ...overrides, default: { ...actual.default, ...overrides } };
 });
 
 const spawnedChild = Object.assign(new EventEmitter(), { kill: vi.fn() });

@@ -37,10 +37,7 @@ const MAX_BURST_MUTATION_BATCHES = 180;
 // ordinary characters must not invalidate the pane themselves.
 const MAX_STEADY_COMPOSER_INVALIDATIONS = 1;
 
-// Shipped live-tool ceiling: ui/src/pages/chat/tool-stream.ts TOOL_STREAM_LIMIT.
-const TOOL_STREAM_LIMIT_CONTRACT = 50;
-// Realistic agent cadence: narration deltas separate complete tool lifecycles.
-// Calls stay above the shipped limit to prove eviction under sustained load.
+// Cross the former 50-call boundary without losing operations from the active turn.
 const TOOL_FLOOD_PAIR_COUNT = 60;
 // The lifecycle spans the 80ms projection throttle so start/update/input_delta
 // exercise its deferred flush before result forces the final projection.
@@ -278,7 +275,7 @@ function toolFloodActivity(index: number, phase: "start" | "result") {
 
 async function probeDeferredToolProjection(page: ChatFlowPage, runId: string): Promise<void> {
   await page.evaluate(
-    ({ runId: targetRunId, seqSeed, activity }) => {
+    ({ runId: targetRunId, seqSeed, activity, warmup }) => {
       const scope = window as ScopedWindow;
       const gateway = scope.openclawControlUiE2eGateway;
       if (!gateway) {
@@ -292,17 +289,27 @@ async function probeDeferredToolProjection(page: ChatFlowPage, runId: string): P
       };
       scope.ocToolProjectionProbe = probe;
       let seq = seqSeed;
-      const emitToolPhase = (phase: string, data: Record<string, unknown>) => {
+      const emitAgent = (stream: string, data: unknown, sequence = ++seq) =>
         gateway.emit("agent", {
-          data: { name: "edit", phase, toolCallId: "call-1", ...data },
+          data,
           runId: targetRunId,
-          seq: ++seq,
+          seq: sequence,
           sessionKey: "main",
-          stream: "tool",
+          stream,
           ts: Date.now(),
         });
-      };
-      const cardSelector = '[data-message-id^="tool:assistant:call-1:"]';
+      const emitToolPhase = (phase: string, data: Record<string, unknown>) =>
+        emitAgent("tool", { name: "edit", phase, toolCallId: "call-1", ...data });
+      // A terminal event publishes immediately and resets the owner's 80 ms clock.
+      const warmupResult = { name: "edit", phase: "result", toolCallId: "call-0", isError: false };
+      emitAgent("tool", { ...warmupResult, result: "warmup" }, seqSeed - 2);
+      emitAgent("item", warmup, seqSeed - 1);
+      const firstCards = () =>
+        [...document.querySelectorAll(".chat-tool-row")].filter((row) =>
+          [...row.querySelectorAll(".chat-tool-row__file-link, .chat-tool-row__target")].some(
+            (target) => target.textContent === "file-1.ts",
+          ),
+        );
       gateway.emit("chat", {
         deltaText: " working on step 1",
         message: {
@@ -314,28 +321,21 @@ async function probeDeferredToolProjection(page: ChatFlowPage, runId: string): P
         sessionKey: "main",
         state: "delta",
       });
-      gateway.emit("agent", {
-        data: activity,
-        runId: targetRunId,
-        seq: ++seq,
-        sessionKey: "main",
-        stream: "item",
-        ts: Date.now(),
-      });
+      emitAgent("item", activity);
       emitToolPhase("start", { args: { path: "src/file-1.ts" } });
       setTimeout(() => emitToolPhase("update", { partialResult: "partial output 1" }), 10);
       setTimeout(() => emitToolPhase("input_delta", { diff: { added: 1, removed: 1 } }), 20);
       // Sample before the 80ms owner timer. An eager non-terminal projection
       // makes the card visible here and fails the absence contract.
       setTimeout(() => {
-        probe.beforeThrottleCardCount = document.querySelectorAll(cardSelector).length;
+        probe.beforeThrottleCardCount = firstCards().length;
       }, 50);
       // Leave result un-emitted. After the owner timer and two render frames,
       // the running card must expose the latest update/input_delta projection.
       setTimeout(() => {
         requestAnimationFrame(() => {
           requestAnimationFrame(() => {
-            const cards = document.querySelectorAll(cardSelector);
+            const cards = firstCards();
             probe.afterThrottleCardCount = cards.length;
             probe.afterThrottleText = cards[0]?.textContent ?? null;
             probe.ready = true;
@@ -343,7 +343,12 @@ async function probeDeferredToolProjection(page: ChatFlowPage, runId: string): P
         });
       }, 120);
     },
-    { runId, seqSeed: TOOL_FLOOD_SEQ_SEED, activity: toolFloodActivity(1, "start") },
+    {
+      runId,
+      seqSeed: TOOL_FLOOD_SEQ_SEED,
+      activity: toolFloodActivity(1, "start"),
+      warmup: toolFloodActivity(0, "result"),
+    },
   );
   await page.waitForFunction(
     () => (window as ScopedWindow).ocToolProjectionProbe?.ready === true,
@@ -615,13 +620,32 @@ suite.define(() => {
     });
   });
 
-  it("keeps the live tool stream bounded under complete tool lifecycles", async () => {
+  it("defers live tool projection and retains every completed operation", async () => {
     await suite.withPage(createControlUiE2eContextOptions(), async ({ page }) => {
       const gateway = await installMockGateway(page);
       await page.goto(`${suite.server.baseUrl}chat`);
       await gateway.waitForRequest("sessions.messages.subscribe");
       const runId = await openStreamingTurn(page, gateway, "tool flood probe");
 
+      // An earlier running call creates the activity group; expand it so the probe sees rows.
+      const call0 = { name: "edit", phase: "start", toolCallId: "call-0" };
+      for (const [stream, data, seq] of [
+        ["item", toolFloodActivity(0, "start"), TOOL_FLOOD_SEQ_SEED - 4],
+        ["tool", { ...call0, args: { path: "src/file-0.ts" } }, TOOL_FLOOD_SEQ_SEED - 3],
+      ] as const) {
+        const ts = Date.now();
+        await gateway.emitGatewayEvent("agent", {
+          runId,
+          sessionKey: "main",
+          stream,
+          data,
+          seq,
+          ts,
+        });
+      }
+      const activity = page.locator(".chat-activity-group > .chat-activity-group__summary");
+      await activity.click();
+      await expect.poll(() => activity.getAttribute("aria-expanded")).toBe("true");
       await probeDeferredToolProjection(page, runId);
       const projection = await page.evaluate(() => (window as ScopedWindow).ocToolProjectionProbe!);
       expect(projection.beforeThrottleCardCount).toBe(0);
@@ -631,34 +655,26 @@ suite.define(() => {
       expect(projection.afterThrottleText).toContain("-1");
 
       await completeFirstToolLifecycle(page, runId);
-      const firstCard = page.locator('[data-message-id^="tool:assistant:call-1:"]');
+      const firstCard = page
+        .locator(".chat-tool-row")
+        .filter({ has: page.getByText("file-1.ts", { exact: true }) });
       expect(await firstCard.count()).toBe(1);
       expect(await firstCard.textContent()).toContain("Edited");
 
       await emitRemainingToolLifecycleFlood(page, runId, TOOL_FLOOD_PAIR_COUNT);
-      // Uninterrupted narration no longer separates tool cards. Expand the
-      // real grouped activity before counting its retained invocation rows.
-      const firstRetainedCall = TOOL_FLOOD_PAIR_COUNT - TOOL_STREAM_LIMIT_CONTRACT + 1;
-      // The live disclosure shows a purpose headline; count its retained rows below.
-      const activity = page.locator(".chat-activity-group > .chat-activity-group__summary");
-      await activity.waitFor();
-      await activity.click();
-      const floodCards = page.locator('[data-message-id^="tool:assistant:call-"]');
-      // Eviction drops the oldest entries and keeps the freshest ones.
       await expect
-        .poll(() => floodCards.count(), { timeout: 15_000 })
-        .toBe(TOOL_STREAM_LIMIT_CONTRACT);
-      expect(await page.locator('[data-message-id^="tool:assistant:call-1:"]').count()).toBe(0);
-      expect(
-        await page
-          .locator(`[data-message-id^="tool:assistant:call-${firstRetainedCall}:"]`)
-          .count(),
-      ).toBe(1);
-      expect(
-        await page
-          .locator(`[data-message-id^="tool:assistant:call-${TOOL_FLOOD_PAIR_COUNT}:"]`)
-          .count(),
-      ).toBe(1);
+        .poll(
+          async () =>
+            (
+              await page
+                .locator(".chat-tool-row__file-link, .chat-tool-row__target")
+                .allTextContents()
+            ).filter((text) => /^file-[1-9]\d*\.ts$/.test(text)),
+          { timeout: 15_000 },
+        )
+        .toEqual(
+          Array.from({ length: TOOL_FLOOD_PAIR_COUNT }, (_, index) => `file-${index + 1}.ts`),
+        );
     });
   });
 

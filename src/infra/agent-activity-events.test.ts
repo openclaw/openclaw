@@ -1,4 +1,5 @@
 import { expect, expectTypeOf, onTestFinished, test } from "vitest";
+import { makeMissingToolResult } from "../../packages/agent-core/src/harness/session/tool-result-pairing.js";
 import { createNestedToolActivity } from "../sessions/nested-tool-activity.js";
 import {
   emitAgentActivityEvent,
@@ -125,6 +126,7 @@ test("projects Tool Search names for live and history activity without changing 
     call("call", tool.toolCallId, {}, tool.name, args),
     { messageId: "result", message: skipped },
   ]);
+  expect(history.map(({ messageId }) => messageId)).toEqual(["call", "result"]);
   for (const entry of history) {
     expect(entry.items).toMatchObject([
       {
@@ -302,6 +304,18 @@ test("marks only unpaired history calls as provisional, including terminal unkno
   expect(missing).toMatchObject({ phase: "end", unpairedCall: true });
   expect(missing).not.toHaveProperty("summary");
   expect(missing?.status).toBeUndefined();
+  const repaired = projectAgentHistoryActivity([
+    unpaired,
+    {
+      messageId: "repair",
+      message: makeMissingToolResult({ toolCallId: "command", toolName: "exec", text: "aborted" }),
+    },
+  ]);
+  expect(repaired.map(({ messageId }) => messageId)).toEqual(["call", "repair"]);
+  for (const entry of repaired) {
+    expect(entry.items[0]).toMatchObject({ unpairedCall: true });
+    expect(entry.items[0]?.status).toBeUndefined();
+  }
   const result = resultEntry("result", "command", {
     details: {
       status: "completed",
@@ -310,7 +324,9 @@ test("marks only unpaired history calls as provisional, including terminal unkno
       originalDetailKeys: ["exitReason"],
     },
   });
-  for (const entry of projectAgentHistoryActivity([unpaired, result])) {
+  const terminal = projectAgentHistoryActivity([unpaired, result]);
+  expect(terminal.map(({ messageId }) => messageId)).toEqual(["call", "result"]);
+  for (const entry of terminal) {
     expect(entry.items[0]).toMatchObject({ phase: "end", summary: "Outcome unknown" });
     expect(entry.items[0]?.status).toBeUndefined();
     expect(entry.items[0]).not.toHaveProperty("unpairedCall");

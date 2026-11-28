@@ -98,6 +98,21 @@ it("retains focused grant controls on unrelated host updates and applies permiss
   expect(body()).toContain("Read access is required to view connected apps.");
 });
 
+it.each([true, false])(
+  "matches empty-state guidance to pairing permission: %s",
+  async (canPair) => {
+    const { request } = fixture([{ ...grants, caller: { ...caller, canPair } }]);
+    await shows("No connected apps yet");
+    expect(Boolean(button("Pair with code"))).toBe(canPair);
+    expect(body()).toContain(
+      canPair
+        ? "Sign in with your Gateway from an app, or pair with a single-use code."
+        : "Your Gateway role cannot connect apps. Ask your administrator for access.",
+    );
+    expect(request).toHaveBeenCalledExactlyOnceWith("mcp-relay.grants", {});
+  },
+);
+
 it("keeps pairing actions together while respecting the caller's ceiling", async () => {
   const pending = Promise.withResolvers<unknown>();
   const { request } = fixture([grants, pending.promise, pairing]);

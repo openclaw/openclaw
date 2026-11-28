@@ -1,6 +1,7 @@
 import crypto from "node:crypto";
 import { normalizeOptionalString } from "@openclaw/normalization-core/string-coerce";
 import { resolveSessionStorePathCore } from "../../../config/sessions/paths.js";
+import { deriveGatewayOperatorAuthorityForDelegation } from "../../../gateway/operator-run-invocation.js";
 import type { SubagentLifecycleHookRunner } from "../../../plugins/hooks.js";
 import { isValidAgentId, normalizeAgentId } from "../../../routing/session-key.js";
 import { waitForSessionParticipantRecording } from "../../../sessions/session-participant-recording.js";
@@ -8,7 +9,7 @@ import { listAgentIds } from "../../agent-scope-config.js";
 import { resolveSessionAgentId } from "../../agent-scope.js";
 import { reserveChildAdmissionSlot } from "../../child-admission.js";
 import { summarizeSpawnError } from "../../spawn-pipeline.js";
-import { resolveSpawnAdmission, resolveSpawnMode } from "../../spawn-plan.js";
+import { createSpawnAdmission, resolveSpawnMode } from "../../spawn-plan.js";
 import { validateName } from "../../worktrees/name.js";
 import { prepareSubagentSessionListReadCache } from "../registry/subagent-registry-state.js";
 import { listSwarmRunsForGroup } from "../registry/subagent-registry.js";
@@ -17,17 +18,21 @@ import { validateStructuredOutputSchema } from "../swarm/swarm-output-schema.js"
 import { holdQueuedSwarmRun, reserveSwarmRun } from "../swarm/swarm-scheduler.js";
 import { getSubagentDepthFromSessionStoreInWorker } from "./subagent-depth.js";
 import { createSubagentSessionStore } from "./subagent-session-store.js";
+import { resolveSubagentChildPlan } from "./subagent-spawn-child-plan.js";
 import { resolveSubagentContextMode } from "./subagent-spawn-context.js";
 import {
   rejectSubagentSpawnRequest,
   type SpawnSubagentContext,
   type SpawnSubagentParams,
 } from "./subagent-spawn-contract.js";
+import { captureSubagentSpawnGatewayContext } from "./subagent-spawn-gateway.js";
 import { resolveSubagentSpawnOwnership } from "./subagent-spawn-ownership.js";
+import { resolveParticipationSpawnError } from "./subagent-spawn-participation.js";
 import { resolveConfiguredSubagentRunTimeoutSeconds } from "./subagent-spawn-plan.js";
 import {
   getGlobalHookRunner,
   getRuntimeConfig,
+  hasInProcessGatewayContext,
   resolveGatewaySessionStoreTargetInWorker,
 } from "./subagent-spawn.runtime.js";
 import { normalizeSubagentTaskName } from "./subagent-task-name.js";
@@ -37,8 +42,29 @@ const BLIND_FORK_ERROR =
 
 export async function resolveSubagentSpawnRequest(
   params: SpawnSubagentParams,
-  ctx: SpawnSubagentContext,
+  inputContext: SpawnSubagentContext,
 ) {
+  const gateway = captureSubagentSpawnGatewayContext();
+  if (gateway.operatorAuthority?.participationCeiling) {
+    gateway.operatorAuthority = deriveGatewayOperatorAuthorityForDelegation(
+      gateway.operatorAuthority,
+      {
+        permission: inputContext.sessionPermissionPolicy?.mode,
+        execPolicy: inputContext.sessionPermissionPolicy?.execPolicy,
+      },
+    );
+  }
+  const ctx = inputContext;
+  if (
+    gateway.operatorAuthority?.participationCeiling &&
+    (!ctx.assertActive || (!gateway.gatewayContextResolver && !hasInProcessGatewayContext()))
+  ) {
+    return rejectSubagentSpawnRequest(
+      "forbidden",
+      "Participating helpers require a current Gateway-local spawn invocation.",
+    );
+  }
+  ctx.assertActive?.();
   if (params.worktreeName !== undefined) {
     try {
       validateName(params.worktreeName);
@@ -182,7 +208,10 @@ export async function resolveSubagentSpawnRequest(
       );
     }
   };
-  const earlyRequester = !params.collect ? await captureRequester() : undefined;
+  const earlyRequester =
+    !params.collect || gateway.operatorAuthority?.participationCeiling
+      ? await captureRequester()
+      : undefined;
   if (earlyRequester && !earlyRequester.ok) {
     return earlyRequester;
   }
@@ -234,6 +263,38 @@ export async function resolveSubagentSpawnRequest(
   const targetAgentId = effectiveRequestedAgentId
     ? normalizeAgentId(effectiveRequestedAgentId)
     : requesterAgentId;
+  const participationError = resolveParticipationSpawnError(
+    { ...params, agentId: targetAgentId },
+    ctx,
+    requesterAgentId,
+  );
+  if (participationError) {
+    return rejectSubagentSpawnRequest("forbidden", participationError);
+  }
+  // Participant runtime selection must finish before either admission owner reserves work.
+  const participationChildPlan =
+    gateway.operatorAuthority?.participationCeiling && earlyRequester
+      ? await resolveSubagentChildPlan({
+          request: { ...params, context: contextMode },
+          ctx,
+          operatorAuthority: gateway.operatorAuthority,
+          cfg,
+          requesterInternalKey,
+          requesterAgentId,
+          targetAgentId,
+          requesterEntry: earlyRequester.requesterEntry,
+          sandboxMode: params.sandbox === "require" ? "require" : "inherit",
+          swarmEnabled: swarmConfig.enabled,
+          requesterSandboxed: ctx.sandboxed,
+          spawnedBy: {
+            profileId: gateway.creatorProfileId,
+            operatorAuthority: gateway.operatorAuthority,
+          },
+        })
+      : undefined;
+  if (participationChildPlan && !participationChildPlan.ok) {
+    return participationChildPlan;
+  }
   const configuredAgentIds = listAgentIds(cfg);
   const explicitSwarmGroupId = normalizeOptionalString(params.groupId);
   const requesterRunId = normalizeOptionalString(ctx.requesterRunId);
@@ -244,44 +305,6 @@ export async function resolveSubagentSpawnRequest(
   const swarmSchedulerGroupKey = swarmGroupId
     ? JSON.stringify([requesterAgentId, requesterInternalKey, swarmGroupId])
     : undefined;
-  const callerDepth = await getSubagentDepthFromSessionStoreInWorker(requesterInternalKey, {
-    cfg,
-    agentId: requesterAgentId,
-    store: earlyRequester?.requesterEntry
-      ? createSubagentSessionStore(
-          earlyRequester.requesterTarget.readSource?.path ??
-            earlyRequester.requesterTarget.storePath,
-          requesterAgentId,
-          { sessionKey: requesterInternalKey, entry: earlyRequester.requesterEntry },
-        )
-      : undefined,
-  });
-  const resolveAdmission = (pendingChildren = 0) => {
-    const collectorRuns = params.collect
-      ? swarmGroupId
-        ? listSwarmRunsForGroup(swarmGroupId, requesterInternalKey, requesterAgentId)
-        : []
-      : undefined;
-    return resolveSpawnAdmission({
-      cfg,
-      callerDepth,
-      inheritedToolPolicySource: ctx.inheritedToolPolicySource,
-      collector: collectorRuns
-        ? {
-            liveChildren: collectorRuns.filter((entry) => !entry.collectorCompletion).length,
-            totalChildren: collectorRuns.length,
-            maxChildrenPerGroup: swarmConfig.maxChildrenPerGroup,
-            maxTotalPerGroup: swarmConfig.maxTotalPerGroup,
-          }
-        : undefined,
-      requesterSessionKey: requesterInternalKey,
-      requesterAgentId,
-      targetAgentId,
-      requestedAgentId: effectiveRequestedAgentId,
-      configuredAgentIds,
-      additionalActiveChildren: pendingChildren,
-    });
-  };
   try {
     ctx.assertActive?.();
     await prepareSubagentSessionListReadCache();
@@ -292,32 +315,12 @@ export async function resolveSubagentSpawnRequest(
       `sessions_spawn could not read the requester session: ${summarizeSpawnError(error)}`,
     );
   }
-  const admissionReservation = params.collect
-    ? undefined
-    : reserveChildAdmissionSlot({
-        controllerSessionKey: ownership.controllerSessionKey,
-        resolveAdmission,
-      });
-  const admission = admissionReservation ?? resolveAdmission();
-  if (admissionReservation?.ok) {
-    ctx.onSpawnEffectsStart?.();
-  }
-  if (!admission.ok) {
-    return rejectSubagentSpawnRequest(
-      "forbidden",
-      usingDefaultAgentId && !admission.governingCap?.startsWith("tools.swarm.")
-        ? `tools.swarm.defaultAgentId is unavailable: ${admission.error}`
-        : admission.error,
-    );
-  }
   if (params.collect && !swarmGroupId) {
     return rejectSubagentSpawnRequest(
       "error",
       "sessions_spawn collect=true requires a requesting run id when groupId is omitted.",
     );
   }
-  const childDepth = admission.childSessionPatch?.spawnDepth ?? 1;
-  const maxSpawnDepth = admission.maxSpawnDepth ?? childDepth;
   const swarmLaunchReplayKey = normalizeOptionalString(params.swarmLaunchReplayKey);
   // Registry and Gateway identities are global, while host replay keys are requester-scoped.
   const childIdem = swarmLaunchReplayKey
@@ -359,68 +362,122 @@ export async function resolveSubagentSpawnRequest(
       }
     }
   }
-  // Keep submission order while requester reads finish on independent workers.
+  // Reserve before independent depth and requester reads can finish out of order.
   // Hand this exact hold to the spawn owner; failed reads must unblock the lane.
   const reservation = reservationPending ? holdQueuedSwarmRun(childIdem) : undefined;
-  const requester =
-    earlyRequester ??
-    (await (async () => {
-      let captured = false;
-      try {
-        // Notify after capturing the requester, but include failed reservation work
-        // in the tool's effect receipt before the attempt settles.
-        const capturedRequester = await captureRequester().finally(() =>
-          ctx.onSpawnEffectsStart?.(),
-        );
-        if (!capturedRequester.ok) {
-          return capturedRequester;
-        }
-        captured = true;
-        return capturedRequester;
-      } finally {
-        if (!captured) {
-          reservation?.withdraw();
-          await reservation?.release();
-        }
+  let prepared = false;
+  try {
+    const result = await (async () => {
+      const callerDepth = await getSubagentDepthFromSessionStoreInWorker(requesterInternalKey, {
+        cfg,
+        agentId: requesterAgentId,
+        store: earlyRequester?.requesterEntry
+          ? createSubagentSessionStore(
+              earlyRequester.requesterTarget.readSource?.path ??
+                earlyRequester.requesterTarget.storePath,
+              requesterAgentId,
+              { sessionKey: requesterInternalKey, entry: earlyRequester.requesterEntry },
+            )
+          : undefined,
+      });
+      const resolveAdmission = createSpawnAdmission({
+        cfg,
+        callerDepth,
+        inheritedToolPolicySource: ctx.inheritedToolPolicySource,
+        requesterSessionKey: requesterInternalKey,
+        requesterAgentId,
+        targetAgentId,
+        requestedAgentId: effectiveRequestedAgentId,
+        configuredAgentIds,
+        readCollector: params.collect
+          ? () => {
+              const runs = swarmGroupId
+                ? listSwarmRunsForGroup(swarmGroupId, requesterInternalKey, requesterAgentId)
+                : [];
+              return {
+                liveChildren: runs.filter((entry) => !entry.collectorCompletion).length,
+                totalChildren: runs.length,
+                maxChildrenPerGroup: swarmConfig.maxChildrenPerGroup,
+                maxTotalPerGroup: swarmConfig.maxTotalPerGroup,
+              };
+            }
+          : undefined,
+      });
+      const admissionReservation = params.collect
+        ? undefined
+        : reserveChildAdmissionSlot({
+            controllerSessionKey: ownership.controllerSessionKey,
+            resolveAdmission,
+          });
+      const admission = admissionReservation ?? resolveAdmission();
+      if (admissionReservation?.ok) {
+        ctx.onSpawnEffectsStart?.();
       }
-    })());
-  if (!requester.ok) {
-    return requester;
+      if (!admission.ok) {
+        return rejectSubagentSpawnRequest(
+          "forbidden",
+          usingDefaultAgentId && !admission.governingCap?.startsWith("tools.swarm.")
+            ? `tools.swarm.defaultAgentId is unavailable: ${admission.error}`
+            : admission.error,
+        );
+      }
+      const childDepth = admission.childSessionPatch?.spawnDepth ?? 1;
+      const maxSpawnDepth = admission.maxSpawnDepth ?? childDepth;
+      const requester = earlyRequester ?? (await captureRequester());
+      if (!requester.ok) {
+        return requester;
+      }
+      return {
+        ok: true as const,
+        resolved: {
+          gateway,
+          taskName,
+          spawnMode,
+          cleanup,
+          expectsCompletionMessage,
+          completionRequesterSessionId: requester.completionRequesterSessionId,
+          completionRequesterLifecycleRevision: requester.completionRequesterLifecycleRevision,
+          hookRunner,
+          cfg,
+          runTimeoutSeconds,
+          contextMode,
+          requesterInternalKey,
+          ownership,
+          requesterEntry: requester.requesterEntry,
+          requesterTarget: requester.requesterTarget,
+          participationChildPlan,
+          // Descendants of a blind requester stay blind; their prompts would otherwise name the route.
+          blind: params.blind === true || requester.requesterEntry?.blindPrompt === true,
+          requesterAgentId,
+          targetAgentId,
+          swarmConfig,
+          swarmGroupId,
+          swarmSchedulerGroupKey,
+          swarmLaunchReplayKey,
+          soleImplicitMember,
+          reservationPending,
+          swarmReservation: reservation,
+          resolveAdmission,
+          admission,
+          admissionReservation: admissionReservation?.ok ? admissionReservation : undefined,
+          childDepth,
+          maxSpawnDepth,
+          childIdem,
+        },
+      };
+    })().finally(() => {
+      // Preparation may reject after reserving. Report those effects, but successful
+      // requester capture must precede callbacks that can rotate its incarnation.
+      if (reservationPending) {
+        ctx.onSpawnEffectsStart?.();
+      }
+    });
+    prepared = result.ok;
+    return result;
+  } finally {
+    if (!prepared) {
+      reservation?.withdraw();
+      await reservation?.release();
+    }
   }
-  return {
-    ok: true as const,
-    resolved: {
-      taskName,
-      spawnMode,
-      cleanup,
-      expectsCompletionMessage,
-      completionRequesterSessionId: requester.completionRequesterSessionId,
-      completionRequesterLifecycleRevision: requester.completionRequesterLifecycleRevision,
-      hookRunner,
-      cfg,
-      runTimeoutSeconds,
-      contextMode,
-      requesterInternalKey,
-      ownership,
-      requesterEntry: requester.requesterEntry,
-      requesterTarget: requester.requesterTarget,
-      // Descendants of a blind requester stay blind; their prompts would otherwise name the route.
-      blind: params.blind === true || requester.requesterEntry?.blindPrompt === true,
-      requesterAgentId,
-      targetAgentId,
-      swarmConfig,
-      swarmGroupId,
-      swarmSchedulerGroupKey,
-      swarmLaunchReplayKey,
-      soleImplicitMember,
-      reservationPending,
-      swarmReservation: reservation,
-      resolveAdmission,
-      admission,
-      admissionReservation: admissionReservation?.ok ? admissionReservation : undefined,
-      childDepth,
-      maxSpawnDepth,
-      childIdem,
-    },
-  };
 }

@@ -1,6 +1,10 @@
 import { isDeepStrictEqual } from "node:util";
 import { isRecord } from "@openclaw/normalization-core/record-coerce";
 import type { Result } from "@openclaw/normalization-core/result";
+import {
+  personalSessionPinKeys,
+  UI_RAIL_SHORTCUTS_PREFERENCE_KEY,
+} from "../../packages/gateway-protocol/src/schema/ui-navigation-preferences.js";
 import { createSqliteWorkerOperationAdmission } from "../infra/sqlite-worker-operation-admission.js";
 import type { RetainedWorkerTransactionAdmission } from "../infra/sqlite-worker-operation-settlement.js";
 import { executeExistingOpenClawStateRead } from "./openclaw-state-db-readonly.js";
@@ -14,6 +18,7 @@ import {
   afterUserPreferenceOperationSettled,
   beginUserPreferenceMutation,
   captureUserPreferenceRead,
+  readPublishedSidebarOrder,
   waitForUserPreferenceReadPermits,
 } from "./user-preferences-publication.js";
 import {
@@ -22,6 +27,7 @@ import {
 } from "./user-preferences.store.js";
 import type {
   CanonicalUserPreferences,
+  PreparedUserPreferenceUpdate,
   UserPreferenceCoauthorMutation,
   UserPreferenceError,
 } from "./user-preferences.types.js";
@@ -48,6 +54,24 @@ export async function getUserPreferenceValues(
   return { values: reply?.values ?? new Map(), isCurrent };
 }
 
+/** An already-authorized profile lookup; cold reads select one profile and one preference key. */
+export function readProfileSidebarOrder(
+  profileId: string,
+  aliases: ReadonlySet<string>,
+  options: OpenClawStateDatabaseOptions = {},
+) {
+  const { admission } = captureOpenClawStateReadWorkerContext(options);
+  return readPublishedSidebarOrder(admission, profileId, aliases, async () => {
+    const { values } = await getUserPreferenceValues(
+      [profileId],
+      UI_RAIL_SHORTCUTS_PREFERENCE_KEY,
+      options,
+    );
+    const raw = values.get(profileId);
+    return [...personalSessionPinKeys(Array.isArray(raw) ? raw : [])];
+  });
+}
+
 export async function getCanonicalUserPreferences(
   profileId: string,
   keys?: readonly string[],
@@ -56,7 +80,7 @@ export async function getCanonicalUserPreferences(
   const context = captureOpenClawStateReadWorkerContext(options);
   const reply = await executeExistingOpenClawStateRead(
     { path: context.admission.databasePath, env: context.environment },
-    { type: "userPreferences.read", profileId, keys },
+    { type: "userPreferences.read", profileId, keys: keys?.slice() },
     { context, current: true },
   );
   return reply?.preferences;
@@ -68,18 +92,24 @@ export async function setCanonicalUserPreferences(
   options: Pick<OpenClawStateDatabaseOptions, "path" | "env"> & {
     assertCurrent?: () => void;
     expectedEntries?: Record<string, unknown>;
+    cronFailure?: PreparedUserPreferenceUpdate["cronFailure"];
     /** Internal authenticated-proxy import only; never accepted from preference RPC parameters. */
     trustedProxyGitCoauthor?: true;
     /** Internal current-policy projection; never accepted from preference RPC parameters. */
     organizationPolicy?: string | null;
   } = {},
-): Promise<Result<{ profileId: string }, UserPreferenceError> | undefined> {
+): Promise<
+  Result<{ profileId: string; acknowledgedAtMs?: number }, UserPreferenceError> | undefined
+> {
   const prepared = prepareUserPreferenceUpdate(entries, options.expectedEntries, options);
   if (!prepared.ok) {
     return prepared;
   }
   const context = captureOpenClawStateWorkerContext(options);
-  const finishMutation = beginUserPreferenceMutation(context.admission);
+  const finishMutation = beginUserPreferenceMutation(context.admission, {
+    profileId,
+    keys: Object.keys(entries),
+  });
   let retained: RetainedWorkerTransactionAdmission | undefined;
   let publicationSettled: Promise<void> | undefined;
   try {
@@ -91,7 +121,7 @@ export async function setCanonicalUserPreferences(
       (scope) =>
         scope.execute({
           type: "userPreferences.write",
-          input: { profileId, update: prepared.value },
+          input: { profileId, update: { ...prepared.value, cronFailure: options.cronFailure } },
         }),
       {
         assertCurrent: options.assertCurrent,

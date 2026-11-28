@@ -34,6 +34,7 @@ type Props = {
 
 /** The pane owns the durable card, lifetime and all actions. */
 export function ChatDetailsProgress(props: Props) {
+  let host!: HTMLElement;
   const live = createMemo<ChatDetailsSnapshot["progress"]>(() => {
     const details = props.props;
     if (!details?.progressCard) {
@@ -69,7 +70,7 @@ export function ChatDetailsProgress(props: Props) {
     return progress && write ? { write, progress } : undefined;
   });
   return (
-    <openclaw-chat-details-progress>
+    <openclaw-chat-details-progress ref={(element) => (host = element)}>
       <Show when={receipt()} keyed>
         {(value) => {
           onSettled(() => value.write({ progress: value.progress }));
@@ -93,7 +94,22 @@ export function ChatDetailsProgress(props: Props) {
           placement="details"
           desktopDetails={props.desktop}
           onDismiss={props.props?.onDismissProgressCard}
-          onClearSaved={props.props?.onClearSavedProgressCard}
+          onClearSaved={
+            props.props?.onClearSavedProgressCard &&
+            ((card) => {
+              const panel = host.closest<HTMLElement>(".chat-details");
+              props.props?.onClearSavedProgressCard?.(card);
+              // Menu returns focus to its trigger before the card unmounts.
+              queueMicrotask(() => {
+                if (
+                  document.activeElement === document.body ||
+                  host.contains(document.activeElement)
+                ) {
+                  panel?.focus({ preventScroll: true });
+                }
+              });
+            })
+          }
           sessionStatus={presentation()?.sessionStatus}
           startedAt={presentation()?.startedAt}
           endedAt={presentation()?.endedAt}

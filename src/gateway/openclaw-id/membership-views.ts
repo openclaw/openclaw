@@ -3,14 +3,57 @@ import {
   activeOwnerDevices,
   fingerprint,
   isAdmitted,
+  isIrohEndpointKey,
+  type AuthorityState,
   type IrohEndpointKey,
   type MemberRecord,
 } from "../../../packages/openclaw-id-protocol/src/index.js";
 import type { StoredClaw } from "./claw-store.js";
 import { listInviteViews } from "./invites-view.js";
+import type { OpenClawIdMemberProfiles } from "./member-profiles.js";
 import { listNodeInviteViews } from "./node-invites.js";
 import type { OwnerDeviceView } from "./owner-devices-view.js";
 import type { OpenClawIdTunnelPrincipal } from "./tunnel-principal.js";
+
+// Every listed node, member or owner device key, admitted now or not.
+function memberKeys(state: AuthorityState): Set<IrohEndpointKey> {
+  return new Set<IrohEndpointKey>([
+    ...Object.values(state.members).flatMap((member) => member.peer_keys),
+    ...Object.values(state.owner_devices).flatMap((record) => record.cert.body.peer_keys),
+    ...Object.keys(state.nodes).filter(isIrohEndpointKey),
+  ]);
+}
+
+// Every candidate key that passes the protocol's admission rule at `now`.
+export function listAdmitted(state: AuthorityState, now: number): IrohEndpointKey[] {
+  return [...memberKeys(state)].filter((key) => isAdmitted(state, key, now)).toSorted();
+}
+
+/** The tunnel-issued tokens bound to the selected device keys. */
+export function listBoundMemberTokens(
+  current: StoredClaw | undefined,
+  peerKeys: readonly string[],
+) {
+  return (current?.token_bindings ?? [])
+    .filter((binding) => peerKeys.includes(binding.peer_key))
+    .map((binding) => ({
+      deviceId: binding.device_id,
+      role: binding.role,
+      peerKey: binding.peer_key,
+    }));
+}
+
+/** Bindings retained after their peer was removed, pending confirmed token revocation. */
+export function listOrphanedMemberTokens(current: StoredClaw | undefined) {
+  const members = new Set<string>(current?.authority ? memberKeys(current.authority) : []);
+  return (current?.token_bindings ?? [])
+    .filter((binding) => !members.has(binding.peer_key))
+    .map((binding) => ({
+      deviceId: binding.device_id,
+      role: binding.role,
+      peerKey: binding.peer_key,
+    }));
+}
 
 /** Display metadata from listed peers; missing metadata never grants signing rights. */
 export async function describeMemberDevices(member: MemberRecord) {
@@ -43,6 +86,7 @@ export async function describeMemberDevices(member: MemberRecord) {
 export async function readMemberView(
   current: StoredClaw | undefined,
   principal: OpenClawIdTunnelPrincipal | undefined,
+  readProfiles: OpenClawIdMemberProfiles["read"],
 ) {
   if (!current?.authority || principal?.kind !== "member") {
     return undefined;
@@ -54,7 +98,12 @@ export async function readMemberView(
     seq: current.authority.seq,
     binding_seq: current.binding!.body.binding_seq,
     account_id: principal.accountId,
-    role: member.role,
+    role:
+      (await readProfiles([principal.accountId]))[principal.accountId]?.effectiveRole ??
+      "unassigned",
+    root_fp: await fingerprint(current.authority.anchor.root_pub),
+    hostname: current.hostname,
+    recovery_kit: member.recovery_kit ?? null,
     devices: devices.map((device) =>
       Object.assign(device, { this_device: device.peer_key === principal.peerKey }),
     ),
@@ -62,22 +111,15 @@ export async function readMemberView(
 }
 
 /** The full membership projection, disclosed only to an active owner device. */
-export async function readOwnerView(current: StoredClaw | undefined, peerKey: string) {
+export async function readOwnerView(
+  current: StoredClaw | undefined,
+  peerKey: string,
+  readProfiles: OpenClawIdMemberProfiles["read"],
+) {
   const state = current?.authority;
   if (!state) {
     return undefined;
   }
-  const [nodeInvites, members] = await Promise.all([
-    listNodeInviteViews(current, Math.floor(Date.now() / 1000)),
-    Promise.all(
-      Object.entries(state.members).map(async ([account_id, member]) => ({
-        account_id,
-        role: member.role,
-        peer_keys: member.peer_keys,
-        devices: await describeMemberDevices(member),
-      })),
-    ),
-  ]);
   const now = Math.floor(Date.now() / 1000);
   const owners = activeOwnerDevices(state, now);
   if (
@@ -86,6 +128,21 @@ export async function readOwnerView(current: StoredClaw | undefined, peerKey: st
   ) {
     return undefined;
   }
+  const profiles = await readProfiles(Object.keys(state.members));
+  const [nodeInvites, members] = await Promise.all([
+    listNodeInviteViews(current, Math.floor(Date.now() / 1000)),
+    Promise.all(
+      Object.entries(state.members).map(async ([account_id, member]) => ({
+        account_id,
+        display_name: profiles[account_id]?.displayName ?? null,
+        email: profiles[account_id]?.email ?? null,
+        role: profiles[account_id]?.effectiveRole ?? "unassigned",
+        recovery_kit: member.recovery_kit ?? null,
+        peer_keys: member.peer_keys,
+        devices: await describeMemberDevices(member),
+      })),
+    ),
+  ]);
   return {
     claw_id: state.claw_id,
     seq: state.seq,

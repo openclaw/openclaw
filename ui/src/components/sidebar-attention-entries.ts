@@ -12,7 +12,7 @@ import {
 import type { IssueTab } from "./sidebar-issues-tabs.ts";
 
 type SidebarInboxEntryBase<
-  Category extends Exclude<IssueTab, "all"> | "automations",
+  Category extends Exclude<IssueTab, "all">,
   Severity extends "error" | "warning" | "neutral" = "error" | "warning",
 > = {
   category: Category;
@@ -21,18 +21,19 @@ type SidebarInboxEntryBase<
   severity: Severity;
 };
 
-export type SidebarAttentionItem = SidebarInboxEntryBase<"automations" | "system"> & {
+export type SidebarAttentionItem = SidebarInboxEntryBase<"system"> & {
   type: "attention";
-  kind: Exclude<SidebarAttentionKind, "scopeUpgrade" | "updateAvailable" | "outbox">;
+  kind: Exclude<SidebarAttentionKind, "scopeUpgrade" | "outbox">;
   icon: IconName;
   label: string;
   detail: string;
   meta?: { context?: string; status: string };
   arrivedAtMs?: number;
   action:
-    | { kind: "navigate"; routeId: NavigationRouteId }
+    | { kind: "navigate"; routeId: NavigationRouteId; search?: string }
     | { kind: "askCustodian"; alert: CustodianAlert }
-    | { kind: "openClawIdRecovery"; label: string };
+    | { kind: "openClawIdRecovery"; label: string }
+    | { kind: "openClawIdBrowserApproval"; remote: boolean; label: string };
   inlineAction?: { label: string; routeId: NavigationRouteId };
   signature: string;
 };
@@ -56,7 +57,11 @@ export type SidebarInboxEntry =
       held: boolean;
       command: boolean;
     })
-  | (SidebarInboxEntryBase<"system"> & { type: "update" });
+  | (SidebarInboxEntryBase<"system"> & {
+      type: "update";
+      /** A stored dismissal kept while the row is shown without offering it. */
+      retainedDismissal?: SidebarAttentionDismissal | null;
+    });
 
 export function buildScopeUpgradeInboxEntry(params: {
   scopes: readonly string[] | undefined;
@@ -136,11 +141,7 @@ export function buildSidebarInboxEntries(params: {
 }
 
 export function sidebarInboxEntryMatchesTab(entry: SidebarInboxEntry, tab: IssueTab): boolean {
-  return (
-    tab === "all" ||
-    entry.category === tab ||
-    (tab === "system" && entry.category === "automations")
-  );
+  return tab === "all" || entry.category === tab;
 }
 
 export function sidebarInboxTabCounts(

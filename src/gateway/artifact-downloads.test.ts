@@ -1,3 +1,4 @@
+import { readFile } from "node:fs/promises";
 import { createServer, ServerResponse } from "node:http";
 import { setImmediate } from "node:timers/promises";
 import { crc32 } from "node:zlib";
@@ -256,6 +257,37 @@ it.each([
   },
 );
 
+it.skipIf(process.platform !== "darwin")(
+  "serves a JPEG preview and retains the original HEIC",
+  async () => {
+    const source = await readFile(new URL("./fixtures/thumbnail-still.heic", import.meta.url));
+    const client = createClient();
+    const grant = grantFor(client, artifactFrom(source, { type: "image", mimeType: "image/heic" }));
+    vi.stubEnv("PATH", "/usr/bin:/bin");
+    try {
+      const preview = requestDownload(client, `${grant.url}?variant=thumbnail`);
+      expect(await preview.pending).toBe(true);
+      expect(preview.res.statusCode).toBe(200);
+      expect(preview.res.getHeaders()).toMatchObject({
+        "content-type": "image/jpeg",
+        "content-disposition": expect.stringMatching(/-preview\.jpg/),
+      });
+      const bytes = preview.end.mock.calls[0]?.[0];
+      assert.instanceOf(bytes, Uint8Array);
+      expect(await createImageProcessor().probe(bytes)).toMatchObject({
+        format: "jpeg",
+        width: 160,
+        height: 96,
+      });
+      const original = requestDownload(client, grant.url);
+      expect(await original.pending).toBe(true);
+      expect(original.end).toHaveBeenCalledExactlyOnceWith(new Uint8Array(source));
+    } finally {
+      vi.unstubAllEnvs();
+    }
+  },
+);
+
 it.each(["missing", "stream", "body-and-stream"] as const)(
   "refuses unavailable thumbnail bytes without opening an original stream (%s)",
   async (kind) => {
@@ -284,7 +316,7 @@ it.each(["missing", "stream", "body-and-stream"] as const)(
   },
 );
 
-it("serves distinct fixed WebP renditions over HTTP with alpha, orientation, and exact originals", async () => {
+it("serves bounded image renditions over HTTP with alpha, orientation, and exact originals", async () => {
   const processor = createImageProcessor();
   const client = createClient();
   const server = await listen(client);
@@ -336,12 +368,18 @@ it("serves distinct fixed WebP renditions over HTTP with alpha, orientation, and
     expect(original.response.headers.get("content-type")).toBe("image/png");
     expect(original.bytes).toEqual(source);
 
-    // Dense images may step down, but may not evade the selected rendition's byte ceiling.
+    // Dense opaque images can trade JPEG quality for detail at the requested width.
     const denseUrl = grantImage(createNoisyPngBuffer(1600, 800));
     const dense = await fetchImage(denseUrl + "?variant=thumbnail&width=480");
     expect(dense.response.status).toBe(200);
     expect(dense.bytes.byteLength).toBeLessThanOrEqual(96 * 1024);
-    await expectWebp(dense.bytes, 240, 120);
+    expect(dense.response.headers.get("content-type")).toBe("image/jpeg");
+    expect(dense.response.headers.get("content-disposition")).toContain("-preview.jpg");
+    expect(await processor.probe(dense.bytes)).toMatchObject({
+      format: "jpeg",
+      width: 480,
+      height: 240,
+    });
 
     const sourceJpeg = await jpeg(solidPng(32, 16));
     const orientation = Buffer.from(

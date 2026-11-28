@@ -10,7 +10,6 @@ import {
 import {
   expectCount,
   expectText,
-  scrollRemainder,
   setVisibility,
   showText,
 } from "./activity-assertions.test-support.ts";
@@ -18,6 +17,7 @@ import {
   captureUiProof,
   chatSessionListResponse,
   installMockGateway,
+  requireRecord,
 } from "./chat-flow.test-support.ts";
 import { createControlUiE2eSuite } from "./control-ui-e2e-suite.test-support.ts";
 
@@ -40,6 +40,52 @@ async function openHistory(page: Page, key: string, label: string) {
   const row = page.locator(`[data-activity-session="${key}"]`);
   await expectText(row).toContain(label);
   return { gateway, row };
+}
+
+function titleSearchControls(page: Page) {
+  const field = page.getByRole("searchbox", { name: "Search session titles…" });
+  const expectBookmark = async (search: string, value: string, pathname = "/openclaw/activity") => {
+    await waitForControlUiRoute(page, {
+      routeId: "activity",
+      pathname,
+      search,
+    });
+    await expect.poll(() => field.inputValue()).toBe(value);
+  };
+  const expectIds = async (keys: string[]) => {
+    const visible = page.locator("[data-activity-session]");
+    await expect
+      .poll(() =>
+        visible.evaluateAll((nodes) =>
+          nodes.map((node) => node.getAttribute("data-activity-session")),
+        ),
+      )
+      .toEqual(keys);
+  };
+  return { expectBookmark, expectIds, field };
+}
+
+async function openTitleSearch(page: Page) {
+  const rows = [
+    historyRow("agent:main:spaced-title", "A B"),
+    historyRow("agent:main:interior-title", "string"),
+  ];
+  const gateway = await installMockGateway(
+    page,
+    { basePath: "/openclaw" },
+    {
+      requestHandlers: {
+        "sessions.list": (params) => {
+          const { search = "" } = requireRecord(params);
+          return chatSessionListResponse(
+            rows.filter((row) => typeof search === "string" && row.label.includes(search)),
+          );
+        },
+      },
+    },
+  );
+  await page.goto(`${suite.server.baseUrl}openclaw/activity`);
+  return { ...titleSearchControls(page), gateway };
 }
 
 suite.define(() => {
@@ -114,6 +160,246 @@ suite.define(() => {
         params: { search: "alpha", involvingProfileId: "profile-ada" },
       });
       await captureUiProof(suite, page, "initial-route", "person.png");
+    });
+  });
+
+  it("preserves a typed session title separator across Activity history", async () => {
+    await suite.withPage({ locale: "en-US", serviceWorkers: "block" }, async ({ page }) => {
+      const key = "agent:main:spaced-title";
+      const title = "A B";
+      const { expectBookmark, expectIds, field, gateway } = await openTitleSearch(page);
+      await field.pressSequentially("A");
+      await expectBookmark("?q=A", "A");
+      const feed = { includePeople: true };
+      const firstRead = await gateway.waitForRequest("sessions.list", {
+        match: { ...feed, search: "A", activeMinutes: 10080 },
+      });
+      const throughFirstRead = (await gateway.getRequests("sessions.list", feed)).length;
+      await expectIds([key]);
+
+      await field.press("Space");
+      await expectBookmark("?q=A+", "A ");
+      expect(await field.evaluate((input: HTMLInputElement) => input.selectionStart)).toBe(2);
+      const atSeparator = await gateway.getRequests("sessions.list", feed);
+      // A pending route can clear the feed owner and reissue the same committed filter.
+      for (const read of atSeparator.slice(throughFirstRead)) {
+        expect(read.params).toEqual(firstRead.params);
+      }
+      await expectIds([key]);
+      await page.goBack();
+      await expectBookmark("?q=A", "A");
+      await page.goForward();
+      await expectBookmark("?q=A+", "A ");
+      expect(await gateway.getRequests("sessions.list", feed)).toEqual(atSeparator);
+      await expectIds([key]);
+
+      const month = page.getByRole("button", { name: "Last 30 days", exact: true });
+      await month.click();
+      await expectBookmark("?time=30d&q=A+", "A ");
+      await gateway.waitForRequest("sessions.list", {
+        match: { ...feed, search: "A", activeMinutes: 43200 },
+      });
+      await month.click();
+      await page.goBack();
+      await expectBookmark("?q=A+", "A ");
+      await page.goForward();
+      await expectBookmark("?time=30d&q=A+", "A ");
+      // Resume editing at the end of the field after using the window selector.
+      await field.focus();
+      const caret = await field.evaluate((input: HTMLInputElement) => {
+        input.setSelectionRange(input.value.length, input.value.length);
+        return [document.activeElement === input, input.selectionStart, input.selectionEnd];
+      });
+      expect(caret).toEqual([true, 2, 2]);
+      await page.keyboard.type("B");
+      await expectBookmark("?time=30d&q=A+B", title);
+      await expectIds([key]);
+
+      await page.reload();
+      await expectBookmark("?time=30d&q=A+B", title);
+      await gateway.waitForRequest("sessions.list", {
+        match: { ...feed, search: title, activeMinutes: 43200 },
+      });
+      await expectIds([key]);
+
+      await field.fill("AB");
+      await expectBookmark("?time=30d&q=AB", "AB");
+      await expectIds([]);
+      await field.press("ArrowLeft");
+      await field.press("Space");
+      await expectBookmark("?time=30d&q=A+B", title);
+      expect(await field.evaluate((input: HTMLInputElement) => input.selectionStart)).toBe(2);
+      await field.fill("");
+      await expectBookmark("?time=30d", "");
+      await page.keyboard.insertText(title);
+      await expectBookmark("?time=30d&q=A+B", title);
+      await expectIds([key]);
+    });
+  });
+
+  it.each(["select", "everyone", "clear"] as const)(
+    "keeps the editable title when People changes via %s",
+    async (action) => {
+      await suite.withPage(
+        { viewport: { width: 1280, height: 900 }, serviceWorkers: "block", locale: "en-US" },
+        async ({ page }) => {
+          const activityPath = "/openclaw/activity";
+          const person = "profile-ada";
+          const selected = action === "select";
+          const initialPath = selected ? activityPath : `${activityPath}/${person}`;
+          const nextPath = selected ? `${activityPath}/${person}` : activityPath;
+          const mine = historyRow("agent:main:ada-title", "A B");
+          const other = {
+            ...historyRow("agent:main:other-title", "A B elsewhere"),
+            updatedAt: mine.updatedAt - 1_000,
+          };
+          const gateway = await installMockGateway(
+            page,
+            { basePath: "/openclaw" },
+            {
+              requestHandlers: {
+                "sessions.list": (params) => {
+                  const { search = "", involvingProfileId } = requireRecord(params);
+                  const scoped = involvingProfileId === person ? [mine] : [mine, other];
+                  return {
+                    ...chatSessionListResponse(
+                      scoped.filter(
+                        (row) => typeof search === "string" && row.label.includes(search),
+                      ),
+                    ),
+                    ...(involvingProfileId === person ? { involvingProfileId: person } : {}),
+                    people: [
+                      { identity: { type: "profile", id: person }, label: "Ada", sessionCount: 1 },
+                    ],
+                  };
+                },
+              },
+            },
+          );
+          const { expectBookmark, expectIds, field } = titleSearchControls(page);
+          await page.goto(new URL(initialPath + "?time=30d", suite.server.baseUrl).href);
+          await expectBookmark("?time=30d", "", initialPath);
+          await field.pressSequentially("A");
+          await expectBookmark("?time=30d&q=A", "A", initialPath);
+          await field.press("Space");
+          await expectBookmark("?time=30d&q=A+", "A ", initialPath);
+
+          const feed = { includePeople: true, activeMinutes: 43200 };
+          await expectIds(selected ? [mine.key, other.key] : [mine.key]);
+          const before = (await gateway.getRequests("sessions.list", feed)).length;
+          if (action === "clear") {
+            await page.getByRole("button", { name: "Clear person filter", exact: true }).click();
+          } else {
+            await page
+              .getByRole("button", { name: "Filter sessions by person", exact: true })
+              .click();
+            await page.locator(`[data-activity-person="${selected ? person : ""}"]`).click();
+          }
+          await waitForControlUiRoute(page, { routeId: "activity", pathname: nextPath });
+          const ids = selected ? [mine.key] : [mine.key, other.key];
+          await expectIds(ids);
+          const switched = await gateway.waitForRequest("sessions.list", {
+            after: before,
+            match: feed,
+          });
+          const scoped = requireRecord(switched.params);
+          expect(scoped.involvingProfileId).toBe(selected ? person : undefined);
+          expect(scoped.search).toBe("A");
+          const bookmark = new URL(page.url()).search;
+          const draft = await field.inputValue();
+
+          // The picker returns focus to its trigger. Resume at the end of the actual draft.
+          await field.focus();
+          const caret = await field.evaluate((input: HTMLInputElement) => {
+            input.setSelectionRange(input.value.length, input.value.length);
+            return [document.activeElement === input, input.selectionStart, input.selectionEnd];
+          });
+          await page.keyboard.type("B");
+          const typed = draft + "B";
+          const search = "?" + new URLSearchParams({ time: "30d", q: typed }).toString();
+          await expectBookmark(search, typed, nextPath);
+          const match = { ...feed, search: typed };
+          const warm = await gateway.waitForRequest("sessions.list", { match });
+          const deliveredIds = typed === "A B" ? ids : [];
+          await expectIds(deliveredIds);
+          await page.reload();
+          await expectBookmark(search, typed, nextPath);
+          const cold = await gateway.waitForRequest("sessions.list", { match });
+          await expectIds(deliveredIds);
+          const expectedRequest = ["A B", selected ? person : undefined];
+          expect({
+            bookmark,
+            draft,
+            caret,
+            typed,
+            requests: [warm, cold].map((read) => {
+              const params = requireRecord(read.params);
+              return [params.search, params.involvingProfileId];
+            }),
+          }).toEqual({
+            bookmark: "?time=30d&q=A+",
+            draft: "A ",
+            caret: [true, 2, 2],
+            typed: "A B",
+            requests: [expectedRequest, expectedRequest],
+          });
+          await expectIds(ids);
+        },
+      );
+    },
+  );
+
+  it("keeps the insertion point between consecutive interior title edits", async () => {
+    await suite.withPage({ locale: "en-US", serviceWorkers: "block" }, async ({ page }) => {
+      const { expectBookmark, expectIds, field, gateway } = await openTitleSearch(page);
+      const expectedIds = ["agent:main:interior-title"];
+      await field.fill("sing");
+      await expectBookmark("?q=sing", "sing");
+      const feed = { includePeople: true };
+      await gateway.waitForRequest("sessions.list", { match: { ...feed, search: "sing" } });
+      await expectIds([]);
+      const beforeEdits = (await gateway.getRequests("sessions.list", feed)).length;
+      await field.focus();
+      const original = await field.elementHandle();
+      const expectCaret = async (position: number) => {
+        expect(
+          await field.evaluate(
+            (input: HTMLInputElement, initial) => [
+              input === initial,
+              input === document.activeElement,
+              input.selectionStart,
+              input.selectionEnd,
+            ],
+            original,
+          ),
+        ).toEqual([true, true, position, position]);
+      };
+      try {
+        await field.evaluate((input: HTMLInputElement) => input.setSelectionRange(1, 1));
+        await expectCaret(1);
+        await page.keyboard.type("t");
+        await expectBookmark("?q=sting", "sting");
+        await expectCaret(2);
+        await page.keyboard.type("r");
+        await expectBookmark("?q=string", "string");
+        await expectCaret(3);
+      } finally {
+        await original?.dispose();
+      }
+      await gateway.waitForRequest("sessions.list", { match: { ...feed, search: "string" } });
+      const editReads = (await gateway.getRequests("sessions.list", feed)).slice(beforeEdits);
+      expect(new Set(editReads.map((read) => requireRecord(read.params).search))).toEqual(
+        new Set(["sting", "string"]),
+      );
+      await expectIds(expectedIds);
+      await page.reload();
+      await expectBookmark("?q=string", "string");
+      await expectIds(expectedIds);
+      await field.fill("");
+      await expectBookmark("", "");
+      await page.keyboard.insertText("string");
+      await expectBookmark("?q=string", "string");
+      await expectIds(expectedIds);
     });
   });
 
@@ -246,47 +532,7 @@ suite.define(() => {
           hasMore: true,
           totalCount: 101,
         });
-        const after = await gateway.deferNext("sessions.messages.subscribe", { key });
-        await page.getByRole("tab", { name: "Live activity", exact: true }).click();
-        await gateway.waitForRequest("sessions.messages.subscribe", { after, match: { key } });
-        // Scoped events can be delivered only after the Gateway accepts the subscription.
-        await gateway.resolveDeferred("sessions.messages.subscribe", undefined, { match: { key } });
-        const emitTool = (data: object) =>
-          gateway.emitGatewayEvent("agent", {
-            runId: "run-activity",
-            stream: "tool",
-            sessionKey: key,
-            data,
-          });
-        await emitTool({
-          phase: "result",
-          name: "exec",
-          toolCallId: "tool-activity",
-          result: { content: [{ type: "text", text: "Received while viewing Live activity." }] },
-        });
-        const entry = page.locator(".activity-entry");
-        await expectCount(entry).toBe(1);
-        await entry.locator("summary").click();
-        await showText(entry, "Received while viewing Live activity.");
-        await page.screenshot({ path: path.join(suite.artifactDir, "04-live-activity.png") });
-        for (let index = 0; index < 20; index += 1) {
-          await emitTool({ phase: "start", name: "exec", toolCallId: `tool-${index}` });
-        }
-        const stream = page.locator(".activity-stream");
-        await expect
-          .poll(() =>
-            stream.evaluate((element) => element.scrollHeight > element.clientHeight + 120),
-          )
-          .toBe(true);
-        const autoFollow = page.locator(".activity-live-autofollow").getByRole("switch");
-        await autoFollow.click();
-        await stream.evaluate((element) => {
-          element.scrollTop = 0;
-          element.dispatchEvent(new Event("scroll"));
-        });
-        await autoFollow.click();
-        await page.clock.runFor(100);
-        await expect.poll(() => scrollRemainder(stream)).toBeLessThanOrEqual(1);
+        await page.getByRole("tab", { name: "Current work", exact: true }).click();
         const current = page.getByRole("region", { name: "Active sessions", exact: true });
         await showText(current.locator(`[data-session-key="${key}"]`), "Latest activity");
         await showText(current, "Showing 1 of 101 active sessions.");

@@ -9,6 +9,31 @@ import {
   selectedFiles,
 } from "./ci-changed-node-test-plan.test-support.js";
 
+it("retains the database rollback consumer of factory-created native entrypoints", () => {
+  const shards = createChangedNodeTestShards(
+    ["src/infra/update-physical-database-generations.ts"],
+    {
+      selectionMode: "aggressive",
+      includePrExemptRuntimeTests: false,
+      includeReleaseOnlyRuntimeTests: false,
+    },
+  );
+  expect(shards).not.toBeNull();
+  expect(selectedFiles(shards)).toContain(
+    "src/cli/update-cli/update-command-database-rollback.test.ts",
+  );
+});
+
+it("builds the reconciliation worker when its source changes", () => {
+  const target = "src/config/sessions/session-transcript-reconcile.lifecycle-phases.test.ts";
+  const shards = createChangedNodeTestShards(
+    ["src/config/sessions/session-transcript-reconcile.worker.ts"],
+    { selectionMode: "aggressive", runnerBackend: "github", dedicatedBuildArtifacts: true },
+  );
+  const rows = shards?.filter((row) => selectedFiles([row]).includes(target));
+  expect(rows?.map((row) => row.pretestBuildMode)).toEqual(["runtime"]);
+});
+
 it("keeps the TUI support unit owner without a fallback", () => {
   const target = "src/tui/tui-pty-local-test-support.test.ts";
   const reasons: string[] = [];

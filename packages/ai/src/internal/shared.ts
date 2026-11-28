@@ -10,6 +10,7 @@ export {
   projectPreparedDiagnosticValue,
   isCredentialFieldName,
 } from "../utils/credential-redaction.js";
+export { resolveCompactionThreshold } from "../utils/compaction-threshold.js";
 export { projectProviderError } from "../utils/provider-error.js";
 export { matchesContextOverflowMessage } from "../utils/overflow.js";
 export * from "../utils/prompt-cache-stability.js";
@@ -17,4 +18,4 @@ export * from "../utils/sanitize-unicode.js";
 export * from "../utils/system-prompt-cache-boundary.js";
 export { projectCopilotRequestFacts } from "../providers/github-copilot-request-facts.js";
 
-export { preparedRequestSuffix, uncachedSuffixMessage } from "../provider-options.js";
+export { preparedRequestSuffix } from "../provider-options.js";

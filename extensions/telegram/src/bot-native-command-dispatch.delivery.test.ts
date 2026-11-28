@@ -2,8 +2,8 @@ import assert from "node:assert/strict";
 import { randomUUID } from "node:crypto";
 import fs from "node:fs/promises";
 import { join } from "node:path";
-import type * as AgentRuntime from "openclaw/plugin-sdk/agent-runtime";
 import type { OpenClawConfig, TelegramAccountConfig } from "openclaw/plugin-sdk/config-contracts";
+import type * as NativeCommandRegistry from "openclaw/plugin-sdk/native-command-registry";
 import { PLUGIN_COMMAND_DISPATCH } from "openclaw/plugin-sdk/plugin-command-runtime";
 import type {
   OpenClawPluginCommandDefinition,
@@ -48,12 +48,13 @@ import {
   useTelegramHttpFixture,
 } from "./send.telegram-http.test-support.js";
 
-const { loadPreparedModelCatalog } = vi.hoisted(() => ({
-  loadPreparedModelCatalog: vi.fn<typeof AgentRuntime.loadPreparedModelCatalog>(),
+const { loadCommandArgMenuModelCatalog } = vi.hoisted(() => ({
+  loadCommandArgMenuModelCatalog:
+    vi.fn<typeof NativeCommandRegistry.loadCommandArgMenuModelCatalog>(),
 }));
-vi.mock("openclaw/plugin-sdk/agent-runtime", async (importOriginal) => ({
-  ...(await importOriginal<typeof AgentRuntime>()),
-  loadPreparedModelCatalog,
+vi.mock("openclaw/plugin-sdk/native-command-registry", async (importOriginal) => ({
+  ...(await importOriginal<typeof NativeCommandRegistry>()),
+  loadCommandArgMenuModelCatalog,
 }));
 
 function commandConfig(overrides: Partial<OpenClawConfig> = {}): OpenClawConfig {
@@ -113,10 +114,7 @@ async function dispatchCommand(
 }
 
 beforeEach(() => {
-  loadPreparedModelCatalog.mockReset().mockImplementation(async (params) => {
-    if (!params?.readOnly) {
-      throw new Error("native menus must not start full model discovery");
-    }
+  loadCommandArgMenuModelCatalog.mockReset().mockImplementation(async () => {
     return [
       {
         provider: "native-test",

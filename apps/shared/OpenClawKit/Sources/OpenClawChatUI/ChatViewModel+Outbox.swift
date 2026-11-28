@@ -94,7 +94,7 @@ extension OpenClawChatViewModel {
     }
 
     public func outboxQueueMode(for messageID: UUID) -> OpenClawChatQueueMode? {
-        self.outboxQueueModesByMessageID[messageID]
+        self.outboxSendContextByMessageID[messageID]?.mode
     }
 
     static func activeBranchLeafEntryID(in branches: [OpenClawChatSessionBranch]) -> String? {
@@ -314,14 +314,14 @@ extension OpenClawChatViewModel {
             guard let self else { return }
             let agentID = self.outboxAgentID(for: session)
             if self.outboxRequiresAgentID(for: session), agentID == nil {
-                self.errorText = "Select an agent before retrying this message."
+                self.errorText = String(localized: "Choose an agent first.")
                 return
             }
             guard
                 let deliverySessionKey = self.outboxDeliverySessionKey(for: session, agentID: agentID),
                 let routingContract = self.outboxRoutingContract(for: session)
             else {
-                self.errorText = "Reconnect to verify this message's delivery target before retrying."
+                self.errorText = String(localized: "Reconnect, then try again.")
                 return
             }
             let expectedSessionSettings = self.durableSessionSettingsExpectation()
@@ -346,7 +346,7 @@ extension OpenClawChatViewModel {
             case .missing, .confirmed, .superseded:
                 self.clearOutboxState(forCommandID: commandID)
             case .unavailable:
-                self.errorText = "Could not retry the queued message. Try again."
+                self.errorText = String(localized: "Couldn’t send the message. Try again.")
             }
         }
     }
@@ -356,7 +356,7 @@ extension OpenClawChatViewModel {
         self.removeOutboxMessage(messageID, commandID: commandID) { [weak self] in
             let result = await outbox.cancelCommand(id: commandID)
             if result == .unavailable {
-                self?.errorText = "Could not delete the queued message. Try again."
+                self?.errorText = String(localized: "Couldn’t delete the message. Try again.")
             }
             return result
         }
@@ -471,7 +471,7 @@ extension OpenClawChatViewModel {
             guard let commands else {
                 // An Edit abandoned by a session switch says nothing in the new chat.
                 if failure == nil, self.composerDraftKey == key {
-                    self.errorText = String(localized: "Could not edit the queued message. Try again.")
+                    self.errorText = String(localized: "Couldn’t edit the message. Try again.")
                 }
                 return .unavailable
             }
@@ -503,7 +503,7 @@ extension OpenClawChatViewModel {
                 return .unavailable
             case .unavailable:
                 if failure == nil, self.composerDraftKey == key {
-                    self.errorText = String(localized: "Could not edit the queued message. Try again.")
+                    self.errorText = String(localized: "Couldn’t edit the message. Try again.")
                 }
                 return .unavailable
             }
@@ -559,7 +559,7 @@ extension OpenClawChatViewModel {
             // canceled (or canonical history completed) this mapping. Never
             // leave its stale bubble looking like an ordinary sent message;
             // canonical history can re-add a genuinely delivered row.
-            self.replaceMessages(self.messages.filter { $0.id != messageID })
+            self.removeCanceledOutboxMessage(messageID)
         }
     }
 
@@ -570,6 +570,7 @@ extension OpenClawChatViewModel {
     /// and keeps the exact draft intact.
     @discardableResult
     func enqueueOutboxCommand(
+        id: String = UUID().uuidString,
         text: String,
         draftInput: String,
         draftRevision: UInt64,
@@ -581,14 +582,14 @@ extension OpenClawChatViewModel {
         guard let outbox else { return false }
         let agentID = self.outboxAgentID(for: session)
         if self.outboxRequiresAgentID(for: session), agentID == nil {
-            self.errorText = "Select an agent before queueing this message."
+            self.errorText = String(localized: "Choose an agent first.")
             return false
         }
         guard
             let deliverySessionKey = self.outboxDeliverySessionKey(for: session, agentID: agentID),
             let routingContract = self.outboxRoutingContract(for: session)
         else {
-            self.errorText = "Reconnect to verify this message's delivery target before queueing."
+            self.errorText = String(localized: "Reconnect, then try again.")
             return false
         }
         // Capture the effective value only after model selection settles. Raw
@@ -599,7 +600,8 @@ extension OpenClawChatViewModel {
             agentID: agentID,
             sessionRoutingContract: routingContract)
         {
-            self.errorText = settingsError
+            outboxLogger.error("queue held by settings: \(settingsError, privacy: .public)")
+            self.errorText = String(localized: "Couldn’t update this chat’s settings.")
             return false
         }
         guard self.isCurrentSession(session) else { return false }
@@ -611,7 +613,7 @@ extension OpenClawChatViewModel {
             agentID: agentID,
             sessionRoutingContract: routingContract)
         let command = OpenClawChatOutboxCommand(
-            id: UUID().uuidString,
+            id: id,
             sessionKey: session.key,
             deliverySessionKey: deliverySessionKey,
             routingContract: routingContract,
@@ -647,7 +649,7 @@ extension OpenClawChatViewModel {
         }
         guard accepted else {
             if self.isCurrentSession(session) {
-                self.errorText = "Offline queue is full. Delete a queued message or reconnect to send."
+                self.errorText = String(localized: "Too many messages are waiting. Delete one or reconnect.")
             }
             return false
         }
@@ -666,7 +668,12 @@ extension OpenClawChatViewModel {
         let capturedAttachmentIDs = Set(draftAttachments.map(\.id))
         self.attachments.removeAll { capturedAttachmentIDs.contains($0.id) }
         self.errorText = nil
+        #if os(iOS)
+        self.inlineVideos.remember(draftAttachments, messageKey: Self.outboxUserIdempotencyKey(command.id))
+        #endif
         self.presentOutboxCommands([command])
+        // A send shown at its tap already moved the transcript to its row.
+        if self.optimisticSendMessageID == nil { self.localSendRevision &+= 1 }
         // Health can recover between the send-gate check and the enqueue;
         // flushing here closes that gap instead of waiting for the next event.
         if self.healthOK {
@@ -732,7 +739,7 @@ extension OpenClawChatViewModel {
         self.outboxCommandIDsByMessageID.removeAll()
         self.outboxMessageIDsByCommandID.removeAll()
         self.outboxStatesByMessageID.removeAll()
-        self.outboxQueueModesByMessageID.removeAll()
+        self.outboxSendContextByMessageID.removeAll()
         self.outboxFailuresByMessageID.removeAll()
     }
 
@@ -888,7 +895,16 @@ extension OpenClawChatViewModel {
         self.outboxCommandIDsByMessageID[messageID] = command.id
         self.outboxMessageIDsByCommandID[command.id] = messageID
         self.outboxStatesByMessageID[messageID] = Self.outboxDisplayState(for: command)
-        self.outboxQueueModesByMessageID[messageID] = command.queueMode
+        // An ACK and the previous reply ending can both precede canonical history. Keep the
+        // reason for dimming on this row instead of consulting the current run at render time.
+        let context = self.outboxSendContextByMessageID[messageID]
+        if context == nil || (command.status == .queued && context?.waitsForReply == false) {
+            let mode = command.queueMode?.rawValue ?? self.currentSessionEntry()?.effectiveQueueMode
+            let otherReply = self.liveUsageRunID.map { $0 != command.id } ?? self.hasActiveSessionRunWithoutChatSnapshot
+            self.outboxSendContextByMessageID[messageID] = (
+                command.queueMode,
+                otherReply && mode != "steer" && mode != "interrupt")
+        }
         if command.status == .failed {
             let version = OpenClawChatOutboxRetryExpectation(
                 attemptVersion: command.attemptVersion,
@@ -917,7 +933,7 @@ extension OpenClawChatViewModel {
                 self.outboxMessageIDsByCommandID.removeValue(forKey: commandID)
             }
             self.outboxStatesByMessageID.removeValue(forKey: messageID)
-            self.outboxQueueModesByMessageID.removeValue(forKey: messageID)
+            self.outboxSendContextByMessageID.removeValue(forKey: messageID)
             self.outboxFailuresByMessageID.removeValue(forKey: messageID)
         }
     }
@@ -948,7 +964,8 @@ extension OpenClawChatViewModel {
     /// exactly on the unhealthy -> healthy transition.
     func applyTransportHealth(_ ok: Bool, refreshSessionsOnReconnect: Bool = true) {
         let wasHealthy = self.healthOK
-        self.healthOK = ok
+        // Every poll lands here; an equal write would still notify the views that read health.
+        if ok != wasHealthy { self.healthOK = ok }
         if !ok {
             // A later page comes from another connection.
             if wasHealthy { self.outboxRestoreEvidence.connectionHistoryFloor = self.lastIssuedHistoryRequestID }
@@ -1155,7 +1172,8 @@ extension OpenClawChatViewModel {
                 outbox: outbox,
                 retryCount: command.retryCount,
                 reason: settingsError)
-            self.errorText = settingsError
+            // The message's own line says it wasn't sent.
+            outboxLogger.error("outbox send held by settings: \(settingsError, privacy: .public)")
             return .stop
         }
         let settingsFailure: String? = if self.transport.outboxRequiresSessionRoutingContract,
@@ -1168,13 +1186,12 @@ extension OpenClawChatViewModel {
             nil
         }
         if let reason = settingsFailure {
-            let message = OpenClawChatSQLiteTranscriptCache.outboxDisplayError(reason)
             let update = await self.failOutboxCommand(
                 command,
                 outbox: outbox,
                 retryCount: command.retryCount,
                 reason: reason)
-            self.errorText = message
+            outboxLogger.error("outbox send needs settings review: \(reason, privacy: .public)")
             return update == .unavailable ? .stop : .continueFlush
         }
         self.setOutboxState(.sending, forCommandID: command.id)
@@ -1215,7 +1232,7 @@ extension OpenClawChatViewModel {
         } catch let error as OpenClawChatQueueModeUnsupportedError {
             let update = await self.failOutboxCommand(
                 command, outbox: outbox, retryCount: command.retryCount, reason: error.localizedDescription)
-            self.errorText = error.localizedDescription
+            outboxLogger.error("outbox send mode unsupported: \(error.localizedDescription, privacy: .public)")
             return update == .unavailable ? .stop : .continueFlush
         } catch let error where error is OpenClawChatTransportSendError || Self.isRetryableAdmissionRejection(error) {
             // A local non-send or admission refusal proves no run started. Keep the same command for reconnect without
@@ -1475,8 +1492,14 @@ extension OpenClawChatViewModel {
         guard let messageID = self.outboxMessageIDsByCommandID.removeValue(forKey: commandID) else { return }
         self.outboxCommandIDsByMessageID.removeValue(forKey: messageID)
         self.outboxStatesByMessageID.removeValue(forKey: messageID)
-        self.outboxQueueModesByMessageID.removeValue(forKey: messageID)
+        self.outboxSendContextByMessageID.removeValue(forKey: messageID)
         self.outboxFailuresByMessageID.removeValue(forKey: messageID)
+    }
+
+    func removeCanceledOutboxMessage(_ messageID: UUID) {
+        // A retained reader prefix must not restore an authoritatively canceled row.
+        self.readerHistoryDeletionRevision &+= 1
+        self.replaceMessages(self.messages.filter { $0.id != messageID })
     }
 
     func handleOutboxChange(_ change: OpenClawChatOutboxChange) {
@@ -1491,7 +1514,7 @@ extension OpenClawChatViewModel {
             guard !self.cancelingOutboxCommandIDs.contains(commandID) else { return }
             guard let messageID = self.outboxMessageIDsByCommandID[commandID] else { return }
             self.clearOutboxState(forCommandID: commandID)
-            self.replaceMessages(self.messages.filter { $0.id != messageID })
+            self.removeCanceledOutboxMessage(messageID)
         case let .confirmed(_, commandID):
             // Canonical history owns the message row; only its outbox badge
             // and command mapping disappear.

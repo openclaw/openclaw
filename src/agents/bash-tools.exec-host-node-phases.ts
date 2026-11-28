@@ -4,7 +4,6 @@ import {
   SYSTEM_RUN_EXECUTION_CONTEXT_CAPABILITY,
   type SystemRunExecutionContext,
 } from "../../packages/gateway-protocol/src/system-run-execution-context.js";
-import type { SessionSourceAssertion } from "../config/sessions/session-source-authority.js";
 import {
   describeInterpreterInlineEval,
   type InterpreterInlineEvalHit,
@@ -42,7 +41,6 @@ import {
   resolveSystemRunCommandRequest,
 } from "../infra/system-run-command.js";
 import { resolveEligibleNodeFromList } from "../shared/node-resolve.js";
-import { runWithAgentToolSourceExecutionScope } from "./agent-tool-source-execution-guard.js";
 import { resolveNodeAutoApprovalEligibility } from "./bash-tools.exec-host-node-approval-eligibility.js";
 import {
   formatNodeInvokeFailureToolResult,
@@ -241,7 +239,6 @@ export function buildNodeSystemRunInvoke(params: {
 }
 
 export async function dispatchNodeSystemRun(params: {
-  source?: SessionSourceAssertion;
   request: ExecuteNodeHostCommandParams;
   target: NodeExecutionTarget;
   invoke: Record<string, unknown>;
@@ -249,15 +246,12 @@ export async function dispatchNodeSystemRun(params: {
 }): Promise<AgentToolResult<ExecToolDetails>> {
   const startedAt = Date.now();
   params.request.signal?.throwIfAborted();
-  const result = await runWithAgentToolSourceExecutionScope(params.source, () =>
-    invokeNodeSystemRun({
-      source: params.source,
-      invokeWaitMs: params.target.invokeWaitMs,
-      invoke: params.invoke,
-      scopes: params.scopes,
-      signal: params.request.signal,
-    }),
-  );
+  const result = await invokeNodeSystemRun({
+    invokeWaitMs: params.target.invokeWaitMs,
+    invoke: params.invoke,
+    scopes: params.scopes,
+    signal: params.request.signal,
+  });
   const warnings = [...params.request.warnings, ...(params.request.foregroundWarnings ?? [])];
   if (!result.ok) {
     return formatNodeInvokeFailureToolResult({

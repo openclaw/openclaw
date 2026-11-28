@@ -222,6 +222,23 @@ it("lets one command borrow unused capacity and cancels one large contributor af
   expect(small.onLimit).not.toHaveBeenCalled();
 });
 
+it("charges proportional shares of shared pages and still cancels proportional growth", async () => {
+  const rollup = (pss: number, swapPss: number) =>
+    `00400000-ffffffffff601000 ---p 00000000 00:00 0 [rollup]\nRss:\t256 kB\nPss:\t${pss} kB\nSwapPss:\t${swapPss} kB\n`;
+  const files = {
+    "/proc/100/smaps_rollup": rollup(48, 0),
+    "/proc/100/status": "VmRSS:\t256 kB\n",
+  };
+  mockFiles(files);
+  const { onLimit, onDiagnostic } = watch();
+  await vi.advanceTimersByTimeAsync(1000);
+  expect(onLimit).not.toHaveBeenCalled();
+  files["/proc/100/smaps_rollup"] = rollup(192, 96);
+  await vi.advanceTimersByTimeAsync(5000);
+  expect(onLimit).toHaveBeenCalledOnce();
+  expect(onDiagnostic).toHaveBeenCalledWith(expect.stringContaining("swap 1/1 MiB"));
+});
+
 it.each(["throw", "reject"])(
   "retries a failed cancellation on the next sample: %s",
   async (mode) => {
@@ -360,17 +377,19 @@ it.each(["half the budget", "new descendants"])(
 
 it("retries failed samples and cancels pending reads without retaining callbacks", async () => {
   const blocked = createDeferred<string>();
+  const denied = Object.assign(new Error("denied"), { code: "EACCES" });
   procfs.readFile
-    .mockRejectedValueOnce(Object.assign(new Error("denied"), { code: "EACCES" }))
+    .mockRejectedValueOnce(denied)
+    .mockRejectedValueOnce(denied)
     .mockImplementation(() => blocked.promise);
   const { onLimit, onDiagnostic, stop } = watch();
   await vi.advanceTimersByTimeAsync(2000);
   expect(onDiagnostic).toHaveBeenCalledExactlyOnceWith(
     expect.stringContaining("protection is degraded"),
   );
-  expect(procfs.readFile).toHaveBeenCalledTimes(2);
+  expect(procfs.readFile).toHaveBeenCalledTimes(3);
   await vi.advanceTimersByTimeAsync(5000);
-  expect(procfs.readFile).toHaveBeenCalledTimes(2);
+  expect(procfs.readFile).toHaveBeenCalledTimes(3);
   stop();
   blocked.resolve("VmRSS:\t256 kB\n");
   await vi.advanceTimersByTimeAsync(1000);

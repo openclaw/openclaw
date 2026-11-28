@@ -1,13 +1,13 @@
 // Host-owned authorization for exact delegated OpenClaw changes.
 import { stableStringify } from "@openclaw/normalization-core";
 import { sha256Hex } from "@openclaw/normalization-core/node-crypto";
-import type { SystemAgentOperation } from "./operation-types.js";
+import type { SystemAgentOperation, SystemAgentOperatorProposal } from "./operation-types.js";
 import { isPersistentSystemAgentOperation } from "./operations-parse.js";
 
 export type SystemAgentProposalRef = { current?: string; operation?: SystemAgentOperation };
 
 const APPROVAL_RETRY_GUIDANCE =
-  "If the change is still needed, submit a fresh request and approve it in the Control UI or OpenClaw apps, or through the approval prompt in the requesting chat. Retrying alone does not approve the change.";
+  "If the change is still needed, submit a fresh request and approve it in the OpenClaw app, or through the approval prompt in the requesting chat. Retrying alone does not approve the change.";
 
 export const SYSTEM_AGENT_APPROVAL_APPLICATION_UNCONFIRMED_TEXT =
   "The approved change's application status is unconfirmed. Check the current settings and OpenClaw status before retrying.";
@@ -50,7 +50,7 @@ export function classifySystemAgentApprovalText(message: string): SystemAgentApp
 export function resolvePendingOperatorProposal(
   pending: SystemAgentOperation | null,
   proposalRef: SystemAgentProposalRef,
-): { operation: SystemAgentOperation; hash: string } | null {
+): SystemAgentOperatorProposal | null {
   const operation = pending ?? proposalRef.operation;
   if (!operation || !isPersistentSystemAgentOperation(operation)) {
     return null;

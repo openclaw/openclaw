@@ -24,6 +24,7 @@ import {
   createNativeModelSourceFixture,
 } from "./native-subagent-monitor.test-support.js";
 import { isJsonObject } from "./protocol.js";
+import { CODEX_APP_SERVER_VERSION } from "./version.js";
 
 const transport = vi.hoisted(() => ({ origin: "" }));
 vi.mock("openclaw/plugin-sdk/ssrf-runtime", async (original) => {
@@ -154,6 +155,100 @@ async function waitForUpstreamClose() {
 }
 
 describe("inference HTTP transport ownership", () => {
+  it.each(["", `?client_version=${CODEX_APP_SERVER_VERSION}`])(
+    "relays catalog GETs%s without mixing native accounts or requiring a turn",
+    async (query) => {
+      const bindModelExecution = vi.fn(() => {
+        throw new Error("Catalog discovery must not bind a model execution");
+      });
+      proxy.close();
+      proxy = await createCodexInferenceProxy({
+        upstream: new URL("https://api.openai.com/v1"),
+        assertCurrent: () => {},
+        bindModelExecution,
+      });
+      const seen: string[] = [];
+      handle = (req, res) => {
+        expect(req.url).toBe("/v1/models" + query);
+        expect(req.method).toBe("GET");
+        const account = String(req.headers["chatgpt-account-id"]);
+        seen.push(account);
+        expect(req.headers.authorization).toBe(`Bearer synthetic-${account}`);
+        expect(req.headers).not.toHaveProperty("x-openai-chatpass-test");
+        res.writeHead(account === "expired" ? 401 : 200, { "content-type": "application/json" });
+        res.end(JSON.stringify({ account }));
+      };
+      for (const account of ["first", "second", "expired"]) {
+        const response = await fetch(proxy.baseUrl + "/models" + query, {
+          headers: { authorization: `Bearer synthetic-${account}`, "chatgpt-account-id": account },
+        });
+        expect(response.status).toBe(account === "expired" ? 401 : 200);
+        expect(await response.json()).toEqual({ account });
+      }
+      expect(seen).toEqual(["first", "second", "expired"]);
+      expect(bindModelExecution).not.toHaveBeenCalled();
+    },
+  );
+
+  it.each(["disconnect", "relay shutdown"])(
+    "releases a streaming catalog response after %s",
+    async (cause) => {
+      handle = (_req, res) => {
+        res.writeHead(200, { "content-type": "application/json" });
+        res.write('{"models":[');
+      };
+      const controller = new AbortController();
+      const response = await fetch(proxy.baseUrl + "/models", { signal: controller.signal });
+      expect(response.status).toBe(200);
+      const body = response.text();
+      const rejected = expect(body).rejects.toThrow();
+      if (cause === "disconnect") {
+        controller.abort();
+      } else {
+        proxy.close();
+      }
+      await rejected;
+      await waitForUpstreamClose();
+    },
+  );
+
+  it.each([
+    ["GET", "/responses"],
+    ["DELETE", "/models"],
+    ["GET", "/models?redirect=https://elsewhere.invalid"],
+    ["GET", "/models?client_version=one&client_version=two"],
+  ])("rejects unsupported discovery %s %s without a retryable failure", async (method, path) => {
+    let forwarded = false;
+    handle = (_req, res) => {
+      forwarded = true;
+      res.end();
+    };
+    const response = await fetch(proxy.baseUrl + path, { method });
+    expect(response.status).toBe(400);
+    expect(await response.json()).toMatchObject({ error: { code: "unsupported_relay_operation" } });
+    expect(forwarded).toBe(false);
+  });
+
+  it("rejects catalog requests with bodies before forwarding", async () => {
+    let forwarded = false;
+    handle = (_req, res) => {
+      forwarded = true;
+      res.end();
+    };
+    const response = await new Promise<IncomingMessage>((resolve, reject) => {
+      const req = request(
+        proxy.baseUrl + "/models",
+        { method: "GET", headers: { "content-length": "4" } },
+        resolve,
+      );
+      req.once("error", reject);
+      req.end("body");
+    });
+    expect(response.statusCode).toBe(400);
+    await readBody(response);
+    expect(forwarded).toBe(false);
+  });
+
   it.each([false, true])(
     "authorizes a fork after early parent cleanup=%s",
     async (earlyCleanup) => {

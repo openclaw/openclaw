@@ -7,6 +7,10 @@ import { resolveExecutablePath } from "./executable-path.js";
 import type { ImmutableRecoveryRuntimeReference } from "./package-update-activation-immutable-recovery-schema.js";
 import type { PackageActivationRuntime } from "./package-update-activation-runtime.types.js";
 import type { PackageActivationRecord } from "./package-update-activation-schema.js";
+import {
+  packageStatMetadataOnlyDrift,
+  packageStatUnchanged,
+} from "./package-update-integrity-drift.js";
 import { packageUpdateRefusal } from "./package-update-refusal.js";
 import type { ImmutableInstallDescriptor } from "./update-immutable-install-schema.js";
 
@@ -145,11 +149,9 @@ export function repairPackagePermissions(file: string, stat: fs.BigIntStats, mod
   );
   try {
     const opened = fs.fstatSync(fd, { bigint: true });
-    if (
-      (["dev", "ino", "mode", "uid", "gid", "nlink", "size", "mtimeNs", "ctimeNs"] as const).some(
-        (field) => opened[field] !== stat[field],
-      )
-    ) {
+    // fchmod changes only this inode's mode, so an attribute or hard-link change
+    // since the observation does not change what is repaired.
+    if (!packageStatUnchanged(stat, opened) && !packageStatMetadataOnlyDrift(stat, opened)) {
       throw new Error("object changed before permission repair");
     }
     fs.fchmodSync(fd, mode);

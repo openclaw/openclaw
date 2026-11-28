@@ -1,11 +1,11 @@
 import { afterEach, expect, it } from "vitest";
 import { createDeferred } from "../../test/helpers/promise.js";
-import { DEFAULT_CRON_MAX_CONCURRENT_RUNS as BUDGET } from "../config/cron-limits.js";
 import { enqueueCommandInLane, getCommandLaneSnapshot } from "../process/command-queue.js";
 import { resetCommandQueueStateForTest } from "../process/command-queue.test-support.js";
 import { CommandLane } from "../process/lanes.js";
 import { applyGatewayLaneConcurrency, resolveGatewayLaneConcurrency } from "./server-lanes.js";
 
+const BUDGET = resolveGatewayLaneConcurrency({}).cron;
 const cronSnapshot = () => getCommandLaneSnapshot(CommandLane.CronNested);
 const hookSnapshot = () => getCommandLaneSnapshot(CommandLane.HookDispatch);
 const publish = (enabled: boolean) =>

@@ -98,9 +98,8 @@ export function createTypingCallbacks(params: CreateTypingCallbacksParams): Typi
   };
 
   const onReplyStart = async () => {
-    if (closed) {
-      return;
-    }
+    // An explicit start opens a new cycle: a queued turn reuses these callbacks after stop.
+    closed = false;
     consecutiveFailures = 0;
     tripped = false;
     clearTtlTimer();

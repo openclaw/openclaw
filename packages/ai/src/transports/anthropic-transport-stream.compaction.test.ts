@@ -53,7 +53,7 @@ function queueReply(id: string, blocks: Record<string, unknown>[] = [], compacti
   );
 }
 const blockStop = (index: number) => ({ type: "content_block_stop", index });
-const replayIdentity = { authProfileId: "anthropic:work", sessionId: "session-1" };
+const replayIdentity = { sessionId: "session-1" };
 const replayOptions = {
   apiKey: "sk-ant-api",
   anthropicServerCompaction: true,
@@ -95,7 +95,7 @@ afterAll(() => {
   configureAiTransportHost(coreTransportHost);
 });
 
-it("replays captured compaction after restart without trusting usage from disabled replay", async () => {
+it("replays captured compaction after restart and keeps later measured usage", async () => {
   queueCompaction("msg_compaction", "opaque-initial-compaction", [
     { content: "summary ", encrypted_content: "opaque-partial-compaction" },
     { content: "checkpoint", encrypted_content: "opaque-final-compaction" },
@@ -157,7 +157,6 @@ it("replays captured compaction after restart without trusting usage from disabl
     },
   );
   expect(pressure?.prefixTokens).toBe("summary checkpoint".length);
-  expect(pressure?.messages[2]).not.toHaveProperty("usage.contextUsage");
   expect(pressure?.messages[2]).toMatchObject({
     usage: { totalTokens: offResult.usage.totalTokens, cost: offResult.usage.cost },
   });

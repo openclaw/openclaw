@@ -76,7 +76,7 @@ function installHook(
 function expectPersistedToolResultTextCapped(sm: SessionManager) {
   const text = toolResultText(requirePersistedToolResult(sm));
   expect(text?.length).toBeLessThanOrEqual(120);
-  expect(text).toContain("truncated");
+  expect(text).toContain("chars omitted");
 }
 function expectPersistedToolResultDetailsCapped(sm: SessionManager) {
   const { details } = requirePersistedToolResult(sm);
@@ -134,13 +134,10 @@ describe("session persistence hooks", () => {
       sessionId: "exec-1",
       cwd: "/tmp/".concat("workspace/".repeat(400)),
       name: "oversized fallback command ".repeat(200),
-      fullOutputPath: "/tmp/".concat("output/".repeat(400)),
       success: true,
       disabled: false,
       unavailable: false,
       error: "upstream unavailable",
-      spilledChars: 2_000_000,
-      spillTruncated: true,
       spill,
       aggregated: "x".repeat(120_000),
       tail: "tail ".repeat(800),
@@ -159,8 +156,6 @@ describe("session persistence hooks", () => {
     expect(details).toMatchObject({ success: true, disabled: false, unavailable: false });
     expect(details.error).toBe("upstream unavailable");
     expect(details.status).toMatchObject({ token: tokenValue });
-    expect(details.spilledChars).toBe(2_000_000);
-    expect(details.spillTruncated).toBe(true);
     expect(details.spill).toEqual(spill);
     expect(serialized).toContain(tokenValue);
   });

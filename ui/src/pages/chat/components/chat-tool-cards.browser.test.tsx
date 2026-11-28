@@ -62,17 +62,15 @@ describe.runIf("__vitest_browser__" in globalThis)("tool activity layout", () =>
     display.mockClear();
     setCard({ ...direct, args: { command: "printf titled", title: "Inspect the result" } });
     flush();
-    expect(container.querySelector(".chat-tool-row__title")?.textContent).toBe(
-      "Inspect the result",
-    );
+    expect(command()).toBe("printf titled");
+    expect(container.querySelector(".chat-tool-row")).toBe(row);
     expect.soft(display.mock.calls.length, "unused titled command detail derivation").toBe(0);
 
-    for (const message of ["First widget", "Updated widget"]) {
+    for (const path of ["src/first-widget.ts", "src/updated-widget.ts"]) {
       display.mockClear();
-      setCard({ ...direct, name: "inspect_widget", args: { message } });
+      setCard({ ...direct, name: "inspect_widget", args: { path } });
       flush();
-      expect(container.querySelector(".chat-tool-msg-summary__label")).toBeNull();
-      expect(container.querySelector(".chat-tool-msg-summary__names")?.textContent).toBe(message);
+      expect(row.textContent).toContain(path);
       expect(display.mock.calls.length).toBeGreaterThan(0);
       expect(icon()).toBe("inspect_widget");
       expect(container.querySelector(".chat-tool-row")).toBe(row);

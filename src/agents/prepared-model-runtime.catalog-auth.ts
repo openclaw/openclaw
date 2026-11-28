@@ -18,7 +18,7 @@ import { mergeAuthProfileStores } from "./auth-profiles/persisted.js";
 import { removeRuntimeExternalProfileReferences } from "./auth-profiles/runtime-external-profile-references.js";
 import type { AuthProfileCredential, RuntimeAuthProfileStore } from "./auth-profiles/types.js";
 import { resolveProviderConfigSecretInput } from "./model-auth-provider-config.js";
-import { prepareModelCatalogAuthLabels } from "./model-catalog-auth-labels.js";
+import { captureModelCatalogAuthLabels } from "./model-catalog-auth-labels.js";
 import { normalizeCatalogRouteBaseUrl } from "./model-compat-catalog.js";
 import type {
   ModelServiceTierObservation,
@@ -29,7 +29,7 @@ import type {
 } from "./prepared-model-runtime-auth.js";
 import type { PreparedModelRuntimeCatalogAccessParams } from "./prepared-model-runtime.catalog-contract.js";
 import { PreparedModelRuntimePublicationSupersededError } from "./prepared-model-runtime.errors.js";
-import { retainPreparedPluginGeneration } from "./prepared-model-runtime.plugin-lifetime.js";
+import { runWithPreparedPluginGeneration } from "./prepared-model-runtime.plugin-lifetime.js";
 import { preparedSyntheticAuthProviderScope } from "./prepared-model-runtime.synthetic-auth.js";
 
 // Startup captures each CLI login once; ordinary reads recheck it after this window.
@@ -435,24 +435,26 @@ export async function prepareInitialModelCatalogAuth(
   const providerAuthLabels =
     providers.length === 0
       ? new Map()
-      : await withPreparedAuthStorePathForDisplay(
-          agentFacts.input.agentDir,
-          agentFacts.env,
-          assertCurrent,
-          (authStorePath) =>
-            withPluginRuntimeGenerationScope(
+      : await withPluginRuntimeGenerationScope(
+          {
+            metadataSnapshot: pluginGeneration.pluginMetadataSnapshot,
+            pluginRegistry: pluginGeneration.pluginRegistry,
+          },
+          () =>
+            captureModelCatalogAuthLabels(
               {
-                metadataSnapshot: pluginGeneration.pluginMetadataSnapshot,
-                pluginRegistry: pluginGeneration.pluginRegistry,
+                ...agentFacts.input,
+                env: agentFacts.env,
+                store: agentFacts.authStore,
+                providers,
               },
-              () =>
-                prepareModelCatalogAuthLabels({
-                  ...agentFacts.input,
-                  env: agentFacts.env,
-                  authStorePath,
-                  store: agentFacts.authStore,
-                  providers,
-                }),
+              (capture) =>
+                withPreparedAuthStorePathForDisplay(
+                  agentFacts.input.agentDir,
+                  agentFacts.env,
+                  assertCurrent,
+                  capture,
+                ),
             ),
         );
   assertCurrent();
@@ -464,8 +466,11 @@ export async function prepareInitialModelCatalogAuth(
   };
 }
 
-type PreparedModelCatalogAuthOwner = {
-  pluginGeneration: PreparedModelRuntimeCatalogAccessParams["pluginGeneration"];
+type PreparedModelCatalogAuthOwner = Pick<
+  PreparedModelRuntimeCatalogAccessParams,
+  "pluginGeneration" | "retirementSignal"
+> & {
+  agentFacts: Pick<PreparedModelRuntimeCatalogAccessParams["agentFacts"], "input" | "env">;
   accountCatalog: PreparedAccountCatalogAccess;
   normalizeProvider: (provider: string) => string;
   assertCurrent: () => void;
@@ -480,9 +485,6 @@ async function refreshScopedModelCatalogAuth(
   { providerIds, profileIds }: PreparedModelRuntimeAuthScope,
 ): Promise<PreparedModelCatalogAuth> {
   owner.assertCurrent();
-  await using _ = {
-    [Symbol.asyncDispose]: retainPreparedPluginGeneration(owner.pluginGeneration),
-  };
   const refreshed = await owner.refreshAuth({
     providerIds,
     ...(profileIds?.length ? { profileIds } : {}),
@@ -499,17 +501,17 @@ export async function loadScopedModelCatalogAuth(
   owner: PreparedModelCatalogAuthOwner,
   scope: PreparedModelRuntimeAuthScope,
 ): Promise<PreparedModelRuntimeAuth> {
-  const { authStore, authModes } = await refreshScopedModelCatalogAuth(owner, scope);
+  // The refresh holds only the plugins it calls, so a hung auth hook defers no other reload.
+  owner.assertCurrent();
+  const { authStore, authModes } = await runWithPreparedPluginGeneration(owner, () =>
+    refreshScopedModelCatalogAuth(owner, scope),
+  );
   return { authStore, authModes: Object.freeze(authModes) };
 }
 
 /** Rechecks CLI backend logins on demand and publishes only a changed result. */
 export function createNativeLoginRecheck(
   owner: PreparedModelCatalogAuthOwner,
-  params: {
-    agentFacts: Pick<PreparedModelRuntimeCatalogAccessParams["agentFacts"], "input" | "env">;
-    retirementSignal: AbortSignal;
-  },
   eligibleProviders: readonly string[],
   publish: (auth: PreparedModelCatalogAuth) => void,
 ): (options?: { force?: boolean }) => void | Promise<void> {
@@ -522,11 +524,8 @@ export function createNativeLoginRecheck(
   let pending: Promise<void> | undefined;
   const recheck = async () => {
     owner.assertCurrent();
-    await using _ = {
-      [Symbol.asyncDispose]: retainPreparedPluginGeneration(owner.pluginGeneration),
-    };
-    const { input, env } = params.agentFacts;
-    const signal = AbortSignal.any([params.retirementSignal, AbortSignal.timeout(180_000)]);
+    const { input, env } = owner.agentFacts;
+    const signal = AbortSignal.any([owner.retirementSignal, AbortSignal.timeout(180_000)]);
     await withPluginRuntimeGenerationScope(
       {
         metadataSnapshot: owner.pluginGeneration.pluginMetadataSnapshot,
@@ -577,10 +576,14 @@ export function createNativeLoginRecheck(
     checkedAt = now;
     // The owner publishes after the triggering read returns; that caller's closed
     // plugin invocation scope must not own the probe or the publication.
-    pending = runInDetachedAsyncContext(recheck)
+    // The probe holds only the plugins it calls, so a hung login probe defers no other reload.
+    pending = runInDetachedAsyncContext(async () => {
+      owner.assertCurrent();
+      await runWithPreparedPluginGeneration(owner, recheck);
+    })
       .catch((error: unknown) => {
         if (
-          !params.retirementSignal.aborted &&
+          !owner.retirementSignal.aborted &&
           !(error instanceof PreparedModelRuntimePublicationSupersededError)
         ) {
           log.warn(`native login recheck failed: ${formatErrorMessage(error)}`);

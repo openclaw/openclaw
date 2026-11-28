@@ -116,6 +116,7 @@ async function fixture() {
 }
 
 it("retains pressure retirement across path close and releases its subscription after drainage", async () => {
+  const clock = vi.spyOn(performance, "now").mockReturnValue(0);
   const pressure = channel("openclaw.memory.critical");
   const context = contextFor();
   await expect(openCleanup(context)).resolves.toBeUndefined();
@@ -133,14 +134,20 @@ it("retains pressure retirement across path close and releases its subscription 
   await closePath(first.context.admission.databasePath);
   expect(pressure.hasSubscribers).toBe(true);
   expect(second.worker.threadId).not.toBe(-1);
-  const secondExited = once(second.worker, "exit");
   pressure.publish({});
+  await nextTurn();
+  expect(second.worker.threadId).not.toBe(-1);
+  expect(await second.read()).toBeUndefined();
+  clock.mockReturnValue(500);
+  const secondExited = once(second.worker, "exit");
+  pressure.publish(true);
   await secondExited;
   await closeAll();
   expect(pressure.hasSubscribers).toBe(false);
 
   const reopened = await first.open(captureContext({ env: context.environment }));
   expect(pressure.hasSubscribers).toBe(true);
+  clock.mockReturnValue(2_000);
   const reopenedExited = once(reopened.worker, "exit");
   pressure.publish({});
   await reopenedExited;

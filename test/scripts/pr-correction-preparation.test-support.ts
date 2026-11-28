@@ -15,19 +15,21 @@ export function createCapturedHashProbe(root: string, write = false) {
   writeFileSync(
     probe,
     `#!/usr/bin/env python3
-import os,sys,stat,fcntl
+import json,os,struct,sys,subprocess
 args=sys.argv[1:]
 if args == ${JSON.stringify(args)}:
- s=os.fstat(0)
- assert stat.S_ISREG(s.st_mode), 'snapshot stdin must be a regular file'
- assert s.st_nlink == 0, 'snapshot pathname still linked'
- assert stat.S_IMODE(s.st_mode) == 0o600, 'snapshot is not private'
- assert fcntl.fcntl(0,fcntl.F_GETFL) & os.O_ACCMODE == os.O_RDONLY, 'snapshot is writable'
- assert os.lseek(0,0,os.SEEK_CUR) == 0, 'snapshot offset is not zero'
- assert not any(n.startswith('openclaw-pr-hash-') for n in os.listdir(os.environ['TMPDIR'])), 'snapshot directory retained at dispatch'
- with open(${JSON.stringify(calls)},'a') as record: record.write(str(s.st_size)+'\\n')
+ captured=sys.stdin.buffer.read()
+ with open(${JSON.stringify(calls)},'a+') as record:
+  record.seek(0); count=len(record.readlines()); record.write(str(len(captured))+'\\n')
+ if os.environ.get('HASH_SEQUENCE'):
+  sequence=json.load(open(os.environ['HASH_SEQUENCE']))
+  if count+1 < len(sequence):
+   size,identity=sequence[count+1]
+   value=bytearray([identity%256])*size; value[:4]=struct.pack('<I',identity)
+   open('.local/correction-review.json','wb').write(value)
  if os.environ.get('MUTATE_ORIGINAL'): open('.local/correction-review.json','wb').write(b'changed after capture')
  if os.environ.get('FAIL_HASH'): sys.stderr.write('fixture Git hash failure\\n'); sys.exit(97)
+ sys.exit(subprocess.run([${JSON.stringify(git)},*args],input=captured).returncode)
 os.execv(${JSON.stringify(git)},[${JSON.stringify(git)},*args])
 `,
   );

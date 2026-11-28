@@ -3,6 +3,7 @@
 import type { TtsSpeakResult } from "@openclaw/gateway-protocol";
 import { afterEach, beforeEach, expect, it, vi } from "vitest";
 import { createDeferred } from "../../../../../test/helpers/promise.ts";
+import { GatewayRequestError } from "../../../api/gateway-connect-errors.ts";
 import { prepareChatMessageRender } from "../../../lib/chat/message-display.ts";
 import { restoreMocksAndGlobals } from "../../../test-helpers/mock-cleanup.ts";
 import { cleanupSolid, mountSolid } from "../../../test-helpers/mount-solid.ts";
@@ -68,15 +69,56 @@ afterEach(() => restoreMocksAndGlobals());
 function readButton(view: ReturnType<typeof mount>, name = "Read aloud") {
   return view.getByRole<HTMLButtonElement>("button", { name });
 }
-function mount() {
+function mount(options: Parameters<typeof MessageActions>[0]["options"] = {}) {
   const details = resolveMessageActionDetails(
     prepareChatMessageRender({ role: "assistant", content: speechText }),
     { messageId: "reply-1", senderLabel: "OpenClaw" },
   );
-  return mountSolid(() => <MessageActions details={details} options={{}} />, {
+  return mountSolid(() => <MessageActions details={details} options={options} />, {
     wrapper: createSolidApplicationContextProvider(context).wrapper,
   });
 }
+
+it("uses the failed speech provider in its pane and opens speech settings", async () => {
+  const navigate = vi.fn();
+  const openAiCatalog = { speech: { providers: [{ id: "openai", apiKeyRequired: true }] } };
+  const betaCatalog = createDeferred<typeof openAiCatalog>();
+  const scopedRequest = vi.fn(async (method: string, params?: { sessionKey?: string }) => {
+    if (method === "talk.catalog") {
+      return params?.sessionKey === "agent:beta:main"
+        ? betaCatalog.promise
+        : { speech: { providers: [{ id: "xai", apiKeyRequired: true }] } };
+    }
+    throw new GatewayRequestError({
+      code: "UNAVAILABLE",
+      message: "OpenAI is not configured",
+      details: { unconfiguredSpeechProvider: "openai" },
+    });
+  });
+  context = createContext(scopedRequest, { methods: ["tts.speak"], runtimeConfig });
+  Object.assign(context, { navigate, settingsAgentSelection: { set: vi.fn() } });
+  const alpha = mount({ agentId: "alpha", sessionKey: "agent:alpha:main" });
+  const beta = mount({ agentId: "beta", sessionKey: "agent:beta:main" });
+  readButton(alpha).click();
+  await waitForSolid(() =>
+    expect(alpha.getByRole("status").textContent).toBe("OpenAI is not configured"),
+  );
+  readButton(beta).click();
+  await waitForSolid(() =>
+    expect(scopedRequest).toHaveBeenCalledWith("talk.catalog", { sessionKey: "agent:beta:main" }),
+  );
+  expect(beta.queryByRole("status")).toBeNull();
+  betaCatalog.resolve(openAiCatalog);
+  await waitForSolid(() =>
+    expect(beta.getByRole("status").textContent).toContain("Read aloud needs an OpenAI API key."),
+  );
+  expect(alpha.queryByRole("button", { name: "Configure" })).toBeNull();
+  beta.getByRole<HTMLButtonElement>("button", { name: "Configure" }).click();
+  expect(navigate).toHaveBeenCalledWith("communications", {
+    search: "?section=tts&advanced=1",
+    hash: "#config-section-tts",
+  });
+});
 
 it.each([false, true])(
   "unlocks and reuses audio with Gateway notifications: %s",

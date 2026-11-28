@@ -2,6 +2,7 @@
   "id": "matrix",
   "categories": ["channels"],
   "doctorContract": {
+    "recoveryCli": [["matrix", "doctor"]],
     "configRepair": true,
     "stateMigrations": [
       { "id": "matrix-crypto-unsafe-state" },
