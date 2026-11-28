@@ -107,6 +107,7 @@ export type VoiceSessionEntry = {
     typeof import("openclaw/plugin-sdk/media-understanding-runtime").createAudioInputBudgetReader
   >;
   ttsStreamFallbackWarned: boolean;
+  sttUnavailableWarned?: boolean;
   capture: VoiceCaptureState;
   realtimeLifecycle:
     | { status: "inactive" }
