@@ -20,7 +20,7 @@ import { makeZeroUsageSnapshot } from "./usage.js";
 
 const sessionDirs = useSessionStoreTempDirs(afterAll, "openclaw-compaction-handler-");
 
-function createCompactionContext(messages: AgentMessage[] = []): EmbeddedAgentSubscribeContext {
+function createCompactionContext(messages: AgentMessage[]): EmbeddedAgentSubscribeContext {
   const ctx = createContext(undefined);
   let compactionCount = 0;
   Object.assign(ctx.params, {

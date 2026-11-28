@@ -720,21 +720,18 @@ describe("applyExtraParamsToAgent", () => {
   });
 
   it("preserves Gemma 4 thinking off instead of rewriting thinkingBudget=0 to MINIMAL", () => {
-    const payloads = [
-      runResponsesPayloadMutationCase({
-        thinkingLevel: "off",
-        model: {
-          api: "google-generative-ai",
-          provider: "google",
-          id: "gemma-4-26b-a4b-it",
-          reasoning: true,
-        } as Model<"google-generative-ai">,
-        payload: { config: { thinkingConfig: { thinkingBudget: 0 } } },
-      }),
-    ];
+    const payload = runResponsesPayloadMutationCase({
+      thinkingLevel: "off",
+      model: {
+        api: "google-generative-ai",
+        provider: "google",
+        id: "gemma-4-26b-a4b-it",
+        reasoning: true,
+      } as Model<"google-generative-ai">,
+      payload: { config: { thinkingConfig: { thinkingBudget: 0 } } },
+    });
 
-    expect(payloads).toHaveLength(1);
-    expect(payloads[0]?.config).toStrictEqual({});
+    expect(payload.config).toStrictEqual({});
   });
   it.each([
     {
