@@ -883,12 +883,21 @@
    Empty generated content adds no accessible or copied text; em sizing and
    currentColor follow the surrounding link. */
 :is(.chat-text, .sidebar-markdown, .chat-reply-attribution, .chat-question-panel__source)
-  a.markdown-session-link::before {
+  a.markdown-session-link::before,
+.chat-session-link-mark {
   --session-link-mark: url("data:image/svg+xml,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 24 24'><path d='M8.2 10A5.2 5.2 0 1 0 8.2 20.4 5.2 5.2 0 0 0 8.2 10ZM10.2 20c4.3.8 8.8-1.4 12.1-6.8-1.3-.3-2.6-.5-3.9-.4l-.9 1.8-1.5-1.7-1.7 1.6-.8-1.5-2 1.2ZM5.6 12.2C5.2 5.6 10.4 1.4 15.6 2c3.8.6 6.2 3.2 7 6.2-1.7-.5-3.4-.6-5-.3l-.7-1.6-1.7 2.2c-1.6.9-3 2.4-3.6 3.9l-4.8.6Z'/></svg>");
 
   content: "";
   background: currentColor;
   mask: var(--session-link-mark) center / contain no-repeat;
+}
+
+.chat-session-link-mark {
+  display: inline-block;
+  width: 1em;
+  height: 1em;
+  margin-inline-end: 4px;
+  vertical-align: text-bottom;
 }
 
 :is(.chat-text, .sidebar-markdown, .chat-reply-attribution, .chat-question-panel__source)

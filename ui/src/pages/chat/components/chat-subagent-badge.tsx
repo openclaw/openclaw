@@ -2,6 +2,7 @@ import type { JSX } from "@solidjs/web";
 import { Show } from "solid-js";
 import { fnv1aUtf16 } from "../../../../../src/shared/fnv1a.js";
 import { Icon } from "../../../components/solid/icon.tsx";
+import { isDashboardSessionKey } from "../../../lib/sessions/session-key.ts";
 import "./chat-subagent-badge.css";
 
 export function SubagentAvatarBadge(props: {
@@ -21,11 +22,20 @@ export function SubagentAvatarBadge(props: {
   );
 }
 
-export function SubagentName(props: { name: string; sessionKey?: string }) {
+export function ChildSessionName(props: { name: string; sessionKey?: string }) {
   return (
     <>
       <Show when={props.sessionKey}>
-        {(key) => <SubagentAvatarBadge class="chat-subagent-avatar--inline" sessionKey={key()} />}
+        {(key) => (
+          <Show
+            when={isDashboardSessionKey(key())}
+            fallback={
+              <SubagentAvatarBadge class="chat-subagent-avatar--inline" sessionKey={key()} />
+            }
+          >
+            <span class="chat-session-link-mark" aria-hidden="true" />
+          </Show>
+        )}
       </Show>
       {props.name}
     </>

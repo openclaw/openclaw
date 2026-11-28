@@ -28,7 +28,7 @@ import { DiffStatChips } from "./chat-diff-stat.solid.tsx";
 import type { GroupedMessageOptions } from "./chat-message-bubble-options.ts";
 import type { GroupedMessagePresentation } from "./chat-message-bubble-presentation.ts";
 import { ExpandedToolCardContent } from "./chat-message-deferred.tsx";
-import { SubagentName } from "./chat-subagent-badge.tsx";
+import { ChildSessionName } from "./chat-subagent-badge.tsx";
 import { ChatToolIcon, ToolIcon, syncToolDisclosureOverflow } from "./chat-tool-card-chrome.tsx";
 import type { ToolCardProps } from "./chat-tool-card-types.ts";
 import { catalogToolIcon, catalogToolOperation } from "./chat-tool-operation-copy.ts";
@@ -171,7 +171,7 @@ function SessionLaunchRowContent(props: {
   onOpen?: () => void;
 }) {
   const name = () => (
-    <SubagentName
+    <ChildSessionName
       name={props.launch.label ?? ""}
       sessionKey={props.launch.kind === "subagent" ? props.launch.childKey : undefined}
     />

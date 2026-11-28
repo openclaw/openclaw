@@ -3,9 +3,10 @@ import type { SubagentCompletion } from "../../../../../src/shared/subagent-comp
 import { Icon } from "../../../components/solid/icon.tsx";
 import { registerChatToolLabelsEnglish } from "../../../i18n/locales/en-chat-tool-labels.ts";
 import { getLocale, registerEnglishCatalog, t } from "../../../lib/reactive/i18n.ts";
+import { isDashboardSessionKey } from "../../../lib/sessions/session-key.ts";
 import { groupSubagentCompletions, subagentCompletionNames } from "../chat-spawned-subagent.ts";
-import { SubagentName } from "./chat-subagent-badge.tsx";
 import { ChatContinuationDelay } from "./chat-handoff-sessions.tsx";
+import { ChildSessionName } from "./chat-subagent-badge.tsx";
 
 registerEnglishCatalog(registerChatToolLabelsEnglish);
 
@@ -59,7 +60,12 @@ function CompletionSentence(props: {
       >
         <Show when={props.completions.some((entry) => !entry.label)}>
           <span class="chat-tool-msg-summary__icon" aria-hidden="true">
-            <Icon name="bot" />
+            <Show
+              when={props.completions.some((entry) => isDashboardSessionKey(entry.sessionKey))}
+              fallback={<Icon name="bot" />}
+            >
+              <span class="chat-session-link-mark" />
+            </Show>
           </span>
         </Show>
         <span class="chat-tool-disclosure__content" style={{ gap: "0" }}>
@@ -79,7 +85,7 @@ function CompletionSentence(props: {
                     <Show
                       when={props.onOpenSession}
                       fallback={
-                        <SubagentName
+                        <ChildSessionName
                           name={props.completions[Number(part().value)]?.label ?? ""}
                           sessionKey={props.completions[Number(part().value)]?.sessionKey}
                         />
@@ -95,7 +101,7 @@ function CompletionSentence(props: {
                           }
                         }}
                       >
-                        <SubagentName
+                        <ChildSessionName
                           name={props.completions[Number(part().value)]?.label ?? ""}
                           sessionKey={props.completions[Number(part().value)]?.sessionKey}
                         />
