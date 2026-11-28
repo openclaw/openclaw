@@ -129,17 +129,41 @@ enum WideAreaGatewayDiscovery {
         return (host, port)
     }
 
+    /// Reads dig's quoted TXT strings in one pass: `\DDD` is an octet, `\X` is a literal X,
+    /// so escaped quotes stay inside their string and `\\n` stays a backslash and `n`.
     private static func parseTxtTokens(_ stdout: String) -> [String] {
-        stdout.split(whereSeparator: \.isNewline).flatMap { line in
-            line.matches(of: /"([^"]*)"/).map { self.unescapeTxt(String($0.1)) }
+        var tokens: [String] = []
+        for line in stdout.split(whereSeparator: \.isNewline) {
+            let chars = Array(line)
+            var current: [UInt8]?
+            var i = 0
+            while i < chars.count {
+                let ch = chars[i]
+                if current == nil {
+                    if ch == "\"" { current = [] }
+                    i += 1
+                } else if ch == "\"" {
+                    tokens.append(String(decoding: current ?? [], as: UTF8.self))
+                    current = nil
+                    i += 1
+                } else if ch == "\\", i + 1 < chars.count {
+                    let digits = i + 3 < chars.count ? chars[(i + 1)...(i + 3)] : []
+                    if digits.count == 3, digits.allSatisfy({ $0.isASCII && $0.isNumber }),
+                       let byte = UInt8(String(digits))
+                    {
+                        current?.append(byte)
+                        i += 4
+                    } else {
+                        current?.append(contentsOf: String(chars[i + 1]).utf8)
+                        i += 2
+                    }
+                } else {
+                    current?.append(contentsOf: String(ch).utf8)
+                    i += 1
+                }
+            }
         }
-    }
-
-    private static func unescapeTxt(_ value: String) -> String {
-        value
-            .replacingOccurrences(of: "\\\\", with: "\\")
-            .replacingOccurrences(of: "\\\"", with: "\"")
-            .replacingOccurrences(of: "\\n", with: "\n")
+        return tokens
     }
 
     private static func mapTxt(tokens: [String]) -> [String: String] {
@@ -149,8 +173,7 @@ enum WideAreaGatewayDiscovery {
             let key = String(token[..<idx]).trimmingCharacters(in: .whitespacesAndNewlines)
             let rawValue = String(token[token.index(after: idx)...])
                 .trimmingCharacters(in: .whitespacesAndNewlines)
-            let value = self.decodeDnsSdEscapes(rawValue)
-            if !key.isEmpty { out[key] = value }
+            if !key.isEmpty { out[key] = rawValue }
         }
         return out
     }

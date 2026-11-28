@@ -71,6 +71,26 @@ struct WideAreaGatewayDiscoveryTests {
         #expect(beacon.cliPath == "/Users/steipete/openclaw/src/entry.ts")
     }
 
+    @Test func `keeps escaped quotes and backslashes inside txt values`() async {
+        let context = WideAreaGatewayDiscovery.DiscoveryContext(
+            tailscaleStatus: { #"{"Self":{"TailscaleIPs":["100.69.232.64"]},"Peer":{}}"# },
+            dig: { args, _ in
+                switch args.last ?? "" {
+                case "PTR":
+                    args.contains("@100.100.100.100") ? "lab._openclaw-gw._tcp.openclaw.internal.\n" : ""
+                case "SRV": "0 0 18789 lab.openclaw.internal."
+                // dig presentation format: \" is a quote, \\ a backslash.
+                case "TXT": #""displayName=Lab \"A\" \\nightly" "gatewayPort=18789""#
+                default: ""
+                }
+            })
+        let beacons = await TestIsolation.withEnvValues(["OPENCLAW_WIDE_AREA_DOMAIN": "openclaw.internal"]) {
+            await WideAreaGatewayDiscovery.discover(timeoutSeconds: 2.0, context: context)
+        }
+        #expect(beacons.first?.displayName == #"Lab "A" \nightly"#)
+        #expect(beacons.first?.gatewayPort == 18789)
+    }
+
     @Test func `attacker peer cannot become nameserver`() async {
         let statusJson = """
         {
