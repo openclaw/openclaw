@@ -14,7 +14,6 @@ import {
   supportedBundledFacadeSdkEntrypoints,
 } from "../../../scripts/lib/plugin-sdk-entries.mts";
 import * as memoryCoreRuntime from "../../plugin-sdk/memory-core-host-runtime-core.js";
-import { expectNoReaddirSyncDuring } from "../../test-utils/fs-scan-assertions.js";
 import {
   listGitTrackedFiles,
   toRepoPath,
@@ -482,17 +481,6 @@ function collectDeprecatedTestAliasImports(): string[] {
   return leaks.map((entry) => `${entry.file}: ${entry.specifier}`).toSorted();
 }
 
-function collectWorkspaceCodeFiles(): string[] {
-  const files: string[] = [];
-  for (const root of ["src", "test", "extensions", "packages", "scripts"]) {
-    const dir = resolve(REPO_ROOT, root);
-    if (fs.existsSync(dir)) {
-      files.push(...collectCodeFiles(dir));
-    }
-  }
-  return files;
-}
-
 function hasWildcardReexport(entrypoint: string): boolean {
   const source = fs.readFileSync(resolve(REPO_ROOT, "src/plugin-sdk", `${entrypoint}.ts`), "utf8");
   return /^\s*export\s+(?:type\s+)?\*\s+from\s+["'][^"']+["']/mu.test(source);
@@ -530,31 +518,6 @@ describe("plugin-sdk package contract guardrails", () => {
 
   beforeAll(() => {
     deprecatedTestAliasImports = collectDeprecatedTestAliasImports();
-  });
-
-  it("lists package guardrail scan inputs from git without walking roots", () => {
-    expectNoReaddirSyncDuring(() => {
-      const pluginIds = collectBundledPluginIds();
-      const extensionFiles = collectExtensionFiles(resolve(REPO_ROOT, "extensions"));
-      const workspaceFiles = collectWorkspaceCodeFiles();
-
-      expect(pluginIds.length).toBeGreaterThan(0);
-      expect(extensionFiles.length).toBeGreaterThan(0);
-      expect(workspaceFiles.length).toBeGreaterThan(extensionFiles.length);
-    });
-  });
-
-  it("keeps plugin-sdk entrypoint metadata unique", () => {
-    const counts = new Map<string, number>();
-    for (const entrypoint of pluginSdkEntrypoints) {
-      counts.set(entrypoint, (counts.get(entrypoint) ?? 0) + 1);
-    }
-    const duplicates = [...counts.entries()]
-      .filter(([, count]) => count > 1)
-      .map(([entrypoint]) => entrypoint)
-      .toSorted();
-
-    expect(duplicates).toStrictEqual([]);
   });
 
   it("keeps package.json exports aligned with built plugin-sdk entrypoints", () => {

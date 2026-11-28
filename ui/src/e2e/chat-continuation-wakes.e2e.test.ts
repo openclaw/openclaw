@@ -110,7 +110,16 @@ function history() {
               sourceTool: "subagent_settle",
               sourceSessionKey: "agent:main:subagent:link-check",
             },
-      __openclaw: meta(runId),
+      __openclaw: meta(
+        runId,
+        source === "subagent"
+          ? {
+              subagentCompletions: [
+                { runId: "child-link-check", sessionKey: "agent:main:subagent:link-check" },
+              ],
+            }
+          : {},
+      ),
     });
   rows.push({
     role: "user",
@@ -202,19 +211,26 @@ suite.define(() => {
         console.log(`Screenshot: ${file}`);
       }
       // One assistant block per prompt; the earlier answer stays in place above
-      // a Resumed rule for each wake that continued the work.
+      // one activity row for each wake that continued the work.
       expect(await thread.locator(".chat-group.assistant").count()).toBe(2);
+      const agent = thread.locator(".chat-tool-row--subagent", { hasText: "An agent finished" });
+      expect(await agent.count()).toBe(1);
+      expect(await agent.locator(".chat-tool-row__detail").textContent()).toContain("4m 39s later");
       expect(
-        (await thread.locator(".chat-handoff-resume__rule").allTextContents()).map((text) =>
+        (await thread.locator(".chat-continuation-activity").allTextContents()).map((text) =>
           text.replace(/\s+/gu, " ").trim(),
         ),
       ).toEqual([
-        "Resumed · 3m 40s later · Background command finished",
-        "Resumed · 4m 30s later · Background command finished",
-        "Resumed · 4m 40s later · Agent finished",
-        "Resumed · 1m 40s later · Background command finished",
+        "A background command finished · 3m 40s later",
+        "A background command finished · 4m 30s later",
+        "A background command finished · 1m 40s later",
       ]);
       await thread.getByText(ANSWER, { exact: true }).waitFor();
+      await page.reload();
+      await agent.waitFor();
+      expect(await agent.count()).toBe(1);
+      expect(await agent.locator(".chat-tool-row__detail").textContent()).toContain("4m 39s later");
+      expect(await thread.locator(".chat-group.assistant").count()).toBe(2);
     });
   });
 });

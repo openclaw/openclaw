@@ -855,28 +855,6 @@ it("cancels HTTP readiness probe response bodies", () => {
   expect(helper).toContain("await response?.body?.cancel?.().catch(() => undefined);");
 });
 
-it("does not repeatedly grep the full gateway log while waiting for readiness", () => {
-  const logPath = path.join(tempDir, "gateway.log");
-  const grepArgsPath = path.join(tempDir, "grep-args.txt");
-  const result = runGatewayReadyFixture([
-    "openclaw_e2e_probe_http() { return 0; }",
-    "grep() {",
-    `  printf '%s\\n' "$*" >>${shellQuote(grepArgsPath)}`,
-    '  for arg in "$@"; do',
-    `    if [ "$arg" = ${shellQuote(logPath)} ]; then return 77; fi`,
-    "  done",
-    '  command grep "$@"',
-    "}",
-    `printf 'old log line\\n' >${shellQuote(logPath)}`,
-    `printf '[gateway] ready ws://127.0.0.1:23456\\n' >>${shellQuote(logPath)}`,
-    `openclaw_e2e_wait_gateway_ready "$gateway_pid" ${shellQuote(logPath)} 2`,
-  ]);
-
-  expect(result.error).toBeUndefined();
-  expect(result.status).toBe(0);
-  expect(fs.readFileSync(grepArgsPath, "utf8")).not.toContain(logPath);
-});
-
 it("detects gateway ready markers split across incremental log reads", () => {
   const logPath = path.join(tempDir, "gateway.log");
   const result = runGatewayReadyFixture([

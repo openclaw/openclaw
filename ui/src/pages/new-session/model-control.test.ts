@@ -42,7 +42,12 @@ function setup(
   return { ...state, control, changed, targetSelected, draw, find };
 }
 // Keep cold picker compilation outside the interaction readiness checks.
-beforeAll(() => import("../chat/components/chat-model-picker-panel.tsx"));
+beforeAll(() =>
+  Promise.all([
+    import("../chat/components/chat-model-picker-panel.tsx"),
+    import("../chat/components/chat-effort-picker-panel.tsx"),
+  ]),
+);
 afterEach(() => {
   managed.reset();
   vi.restoreAllMocks();

@@ -182,6 +182,19 @@ describe("models cli", () => {
     expect(command).not.toHaveBeenCalled();
   });
 
+  it.each([
+    ["models --agent other-person fallbacks list", "does not support --agent"],
+    ["models --agent other-person image-fallbacks list", "does not support --agent"],
+  ] as const)("rejects unsupported agent scope: %s", async (args, message) => {
+    const error = vi.spyOn(defaultRuntime, "error").mockImplementation(() => {});
+    const exit = vi.spyOn(defaultRuntime, "exit").mockImplementation((code) => {
+      throw new ExitError(code);
+    });
+    await expect(runModelsCommand(args)).rejects.toMatchObject({ code: 1 });
+    expect(error).toHaveBeenCalledWith(expect.stringContaining(message));
+    expect(exit).toHaveBeenCalledExactlyOnceWith(1);
+  });
+
   it("selects the image model field for set-image", async () => {
     await runModelsCommand("models set-image openai/gpt-image-1");
     expect(mocks.modelsSetCommand).toHaveBeenCalledWith(

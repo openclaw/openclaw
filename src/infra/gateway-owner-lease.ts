@@ -3,7 +3,7 @@ import { hostname } from "node:os";
 import path from "node:path";
 import { createSubsystemLogger } from "../logging/subsystem.js";
 import { getAsyncWorkSignal } from "../shared/async-work-scope.js";
-import { getFileLockProcessStartTime } from "../shared/pid-alive.js";
+import { getFileLockProcessStartTime, getProcessStartTime } from "../shared/pid-alive.js";
 import { isLiveStateRead } from "../state/artifact-preserving-state-reads.js";
 import {
   prepareAgentDatabaseLeaseProvenance,
@@ -37,6 +37,7 @@ import {
 } from "../state/openclaw-state-worker-context.js";
 import { runOpenClawStateWorkerOperation } from "../state/openclaw-state-worker-store.js";
 import { readProcessMachineIdentity } from "./current-machine-identity.js";
+import { isTruthyEnvValue } from "./env.js";
 import {
   classifyGatewayOwnerProcessNamespace,
   describeGatewayLockHolder,
@@ -83,12 +84,21 @@ function resolveStoppedGatewayOwnerLease(previous: GatewayOwnerLeaseIdentity | u
   if (!previous) {
     return undefined;
   }
-  if (previous.state === "dead") {
+  if (
+    previous.state === "dead" ||
+    (process.platform === "linux" &&
+      !isTruthyEnvValue(process.env.OPENCLAW_GATEWAY_REQUIRE_NAMESPACE_PROOF) &&
+      !isStatePostgres() &&
+      previous.processNamespace === undefined &&
+      typeof previous.expiresAt === "number" &&
+      previous.expiresAt <= Date.now())
+  ) {
     return previous;
   }
   const namespace = classifyGatewayOwnerProcessNamespace(previous.processNamespace, {
     ownerHost: previous.host,
     machineIdentity: previous.machineIdentity,
+    readGatewayHeartbeat: () => previous.heartbeatAt,
   });
   if (namespace === "dead") {
     return previous;
@@ -324,6 +334,7 @@ export function acquireGatewayOwnerLease(params: {
   };
   const payload = {
     owner: processOwner,
+    pidNsInitStartTicks: getProcessStartTime(1) ?? undefined,
     port: params.port,
     mode: params.mode,
     supervisor: params.supervisor,

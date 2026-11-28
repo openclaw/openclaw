@@ -1,7 +1,11 @@
 import { restoreCronOperatorSource } from "../../gateway/cron-operator-source.js";
+import { withPluginRuntimeGenerationScope } from "../../plugins/runtime/generation-scope.js";
 import { withSessionTurn } from "../../sessions/session-controller.admission.js";
+import { captureSessionControllerSettlement } from "../../sessions/session-controller.lifecycle.js";
+import { removeCronRunContinuationSessionIfIdle } from "../run-continuation-cleanup.js";
 import { resolveCronRunPreparation, type PreparedCronRunContext } from "./run-prepare.js";
 import { withCronSessionPreparation } from "./run-session-state.js";
+import { logWarn } from "./run.runtime.js";
 import type { RunCronAgentTurnResult } from "./run.types.js";
 
 export async function prepareCronRunContext(
@@ -14,6 +18,7 @@ export async function prepareCronRunContext(
     return resolved;
   }
   await using resources = resolved.resources;
+  await using runtimeResources = new AsyncDisposableStack();
   const prepareSession = () =>
     withCronSessionPreparation(resolved.admission, async (signal) => {
       let operator: Awaited<ReturnType<typeof restoreCronOperatorSource>>;
@@ -39,7 +44,26 @@ export async function prepareCronRunContext(
       if (!runPrepared) {
         return { ...prepared, completed: undefined };
       }
-      // Execution retains its selected runtime; close preparation's borrowed dispatch scope.
+      const preparedRuntimeLease = runtimeResources.use(prepared.context.preparedModelRuntimeLease);
+      if (prepared.context.runContinuationSession) {
+        // Native deletion drains the turn owner; release admission before cleanup and its runtime.
+        runtimeResources.defer(async () => {
+          try {
+            prepared.context.sessionPreparationEffect.release();
+            await captureSessionControllerSettlement({
+              target: prepared.context.sessionPreparationEffect.target,
+            });
+            await withPluginRuntimeGenerationScope(preparedRuntimeLease.snapshot, () =>
+              removeCronRunContinuationSessionIfIdle(prepared.context.runSessionKey),
+            );
+          } catch (error) {
+            logWarn(
+              `[cron:${params.input.job.id}] Failed to remove unused run continuation: ${String(error)}`,
+            );
+          }
+        });
+      }
+      // Close preparation's borrowed dispatch scope before executing the selected runtime.
       await resources.disposeAsync();
       // Materialize the prepared incarnation for inference and its own finalization effects.
       return await withSessionTurn(

@@ -46,7 +46,7 @@ export function migrateOfficialPluginInstallProvenance(
   return migrated;
 }
 
-export class InvalidPluginInstallRecordStateError extends Error {}
+class InvalidPluginInstallRecordStateError extends Error {}
 
 export function preflightPluginRegistryDoctorMigration(
   params: InstalledPluginIndexStoreOptions = {},
@@ -77,4 +77,20 @@ export function preflightPluginRegistryDoctorMigration(
     }
   }
   return { action: "initialize" as const, filePath };
+}
+
+/** The preflight, with invalid persisted records reported instead of thrown. */
+export function readPluginRegistryDoctorMigration(
+  params: InstalledPluginIndexStoreOptions = {},
+  onInvalid?: (message: string) => void,
+) {
+  try {
+    return preflightPluginRegistryDoctorMigration(params);
+  } catch (error) {
+    if (!(error instanceof InvalidPluginInstallRecordStateError)) {
+      throw error;
+    }
+    onInvalid?.(error.message);
+    return undefined;
+  }
 }

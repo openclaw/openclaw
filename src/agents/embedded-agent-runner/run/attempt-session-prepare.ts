@@ -595,7 +595,9 @@ export async function prepareEmbeddedAttemptSessionManager(
     runId: attempt.runId,
     sessionKey: attempt.sessionKey,
     config: attempt.config,
-    contextWindowTokens: attempt.contextTokenBudget,
+    // Same window as the context guard, so a bounded result is its fixed point.
+    contextWindowTokens:
+      attempt.contextTokenBudget ?? attempt.model.contextWindow ?? attempt.model.maxTokens,
     inputProvenance: attempt.inputProvenance,
     privateCompletion: attempt.privateCompletion,
     preparedUserTurnMessage,
@@ -605,8 +607,11 @@ export async function prepareEmbeddedAttemptSessionManager(
     allowSyntheticToolResults: transcriptPolicy.allowSyntheticToolResults,
     missingToolResultText: responsesApi ? "aborted" : undefined,
     trigger: attempt.trigger,
+    // An in-place replay resends its persisted turn without a write to suppress; arming
+    // the one-shot mode would drop the next real user instead, such as steering.
     suppressNextUserMessagePersistence:
-      prepareInitialUserTurnReplay !== undefined || attempt.suppressNextUserMessagePersistence,
+      !attempt.replayCurrentTranscript &&
+      (prepareInitialUserTurnReplay !== undefined || attempt.suppressNextUserMessagePersistence),
     suppressTranscriptOnlyAssistantPersistence: attempt.suppressTranscriptOnlyAssistantPersistence,
     assistantErrorTranscript: attempt.assistantErrorTranscript,
     skipBeforeMessageWriteHooks: attempt.operation === "settled-tool-finalization",

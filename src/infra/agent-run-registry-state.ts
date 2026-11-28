@@ -2,6 +2,7 @@
 import { randomUUID } from "node:crypto";
 import { sessionChanges } from "../sessions/session-row-changes.js";
 import { resolveGlobalSingleton } from "../shared/global-singleton.js";
+import { recordAgentEventRouting } from "./agent-event-execution-context.js";
 import type {
   AgentRunContext,
   AgentRunContextOwnership,
@@ -22,6 +23,23 @@ const registryState = resolveGlobalSingleton<AgentRunRegistryState>(
 
 export function getAgentRunRegistryState(): AgentRunRegistryState {
   return registryState;
+}
+
+export function storeRunContext(
+  runId: string,
+  context: AgentRunContext,
+  predecessor?: AgentRunContext,
+) {
+  // Scheduler leases and observed activity never transfer to a fresh registration.
+  context.capacityWaits = undefined;
+  context.executionActivity = undefined;
+  context.localModelWait = undefined;
+  context.eventState = { seq: 0 };
+  context.modelCallSequence = { value: 0 };
+  context.acceptedUserReply = undefined;
+  context.registeredAt ??= Date.now();
+  registryState.contexts.set(runId, context);
+  recordAgentEventRouting(runId, context, predecessor);
 }
 
 /** Reads the process-local version of the active-run projection inputs. */

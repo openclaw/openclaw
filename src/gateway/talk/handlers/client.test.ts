@@ -76,8 +76,10 @@ vi.mock("../../../talk/provider-registry.js", async (importOriginal) => ({
   ...(await importOriginal<typeof import("../../../talk/provider-registry.js")>()),
   listRealtimeVoiceProviders: () => [],
 }));
-vi.mock("../../../talk/agent-consult-runtime.js", () => ({
-  consultRealtimeVoiceAgent: voiceMocks.consultRealtimeVoiceAgent,
+// Gateway client consults enter the session-runtime consult; observe it while keeping the module real.
+vi.mock("../../../talk/agent-consult-runtime.js", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("../../../talk/agent-consult-runtime.js")>()),
+  consultRealtimeVoiceAgentInSessionRuntime: voiceMocks.consultRealtimeVoiceAgent,
 }));
 vi.mock("../../../plugins/runtime/index.js", async () => {
   const { createRuntimeAgent } = await import("../../../plugins/runtime/runtime-agent.js");
@@ -95,11 +97,12 @@ vi.mock("../../../shared/lazy-runtime.js", async (importOriginal) => {
       return Object.assign(
         async () => {
           const runtime = await load();
+          // Gate only the Talk consult execution loader, which enters the typed-turn owner.
           if (
             runtime &&
             typeof runtime === "object" &&
-            "runEmbeddedAgent" in runtime &&
-            runtime.runEmbeddedAgent === voiceMocks.runEmbeddedAgent
+            "agentCommandFromGatewayIngress" in runtime &&
+            "createOperationalRunInstanceRef" in runtime
           ) {
             await voiceMocks.executionReady();
           }
@@ -188,7 +191,9 @@ async function createBrowserConsult(publicOnly = false) {
   const actual = await vi.importActual<typeof import("../../../talk/agent-consult-runtime.js")>(
     "../../../talk/agent-consult-runtime.js",
   );
-  voiceMocks.consultRealtimeVoiceAgent.mockImplementation(actual.consultRealtimeVoiceAgent);
+  voiceMocks.consultRealtimeVoiceAgent.mockImplementation(
+    actual.consultRealtimeVoiceAgentInSessionRuntime,
+  );
   voiceMocks.runEmbeddedAgent.mockImplementation(async (params) => {
     params.abortSignal?.throwIfAborted();
     return await enqueueCommandInLane(
@@ -316,7 +321,7 @@ beforeEach(async () => {
     await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-talk-transcript-")),
   );
   setTestEnvValue("OPENCLAW_STATE_DIR", tempDir);
-  setRuntimeConfigSnapshot({});
+  setRuntimeConfigSnapshot({ agents: { defaults: { model: "anthropic/claude-opus-4-6" } } });
   await replaceSessionEntry({ agentId: "main", sessionKey }, { sessionId, updatedAt: Date.now() });
 });
 

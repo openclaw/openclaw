@@ -22,6 +22,59 @@ const config = {
   },
 };
 suite.define(() => {
+  it("shows how to retry loading events and restores the choices without saving", async () => {
+    await suite.withPage(createControlUiE2eContextOptions(), async ({ page }) => {
+      const gateway = await installMockGateway(page, {
+        featureMethods: [...defaultControlUiFeatureMethods, "mcp.events.list", "mcp-events.status"],
+        methodResponses: {
+          "config.get": configSnapshot(config, "mcp-config"),
+          "cron.list": cronList([], "event-readiness"),
+          "cron.runs": cronRuns([]),
+          "cron.status": { enabled: true, jobs: 0, nextWakeAtMs: null },
+          "mcp.events.list": {
+            __mockError: {
+              code: "UNAVAILABLE",
+              message: "Event catalog is temporarily unavailable",
+            },
+          },
+        },
+      });
+      await page.goto(new URL("/cron?new", suite.server.baseUrl).toString());
+      await chooseScheduleKind(page, "event");
+      await page.locator("#cron-event-server").click();
+      await page.getByRole("option", { name: "deployments", exact: true }).click();
+      const method = "mcp.events.list";
+      const match = { serverName: "deployments" };
+      await gateway.waitForRequest(method, { match });
+      const alert = page
+        .getByRole("alert")
+        .filter({ hasText: "Event catalog is temporarily unavailable" });
+      const before = (await alert.textContent())?.trim();
+      const after = (await gateway.getRequests(method)).length;
+      await gateway.setMethodResponse(method, {
+        serverName: "deployments",
+        events: [
+          {
+            name: "deployment.changed",
+            delivery: ["webhook"],
+            inputSchema: {},
+            payloadSchema: true,
+          },
+        ],
+      });
+      await page.getByRole("button", { name: "Refresh events and status", exact: true }).click();
+      await gateway.waitForRequest(method, { after, match });
+      await alert.waitFor({ state: "hidden" });
+      await page.locator("#cron-event-name").click();
+      await page.getByRole("option", { name: "deployment.changed", exact: true }).click();
+      expect(await gateway.getRequests("cron.add")).toHaveLength(0);
+      expect(await gateway.getRequests("cron.update")).toHaveLength(0);
+      expect(before).toBe(
+        "Couldn’t load events. Try Refresh events and status. Details: Event catalog is temporarily unavailable",
+      );
+    });
+  });
+
   it("keeps setup advice for a confirmed empty server inventory", async () => {
     await suite.withPage(createControlUiE2eContextOptions(), async ({ page }) => {
       const gateway = await installMockGateway(page, {

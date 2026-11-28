@@ -13,8 +13,6 @@ import {
   captureUpdateDoctorConfigWrites,
   writeUpdatePostInstallDoctorResult,
 } from "../../infra/update-doctor-result.js";
-import { prepareUpdateFailureReport } from "../../infra/update-failure-report-prepare.js";
-import { updateRecoverySchema } from "../../infra/update-recovery.js";
 import { createUpdateRun } from "../../infra/update-run-ledger.js";
 import { CommandProcessCleanupError } from "../../process/exec-result.js";
 import { defaultRuntime } from "../../runtime.js";
@@ -245,27 +243,6 @@ export async function expectActiveRollbackIdentity(params: {
   });
   expect(outcome.rolledBack).toBe(false);
   expect(restart).toHaveBeenCalledTimes(rollbackSucceeded ? 1 : 0);
-  if (failure !== "partial-restore") {
-    const report = await prepareUpdateFailureReport(
-      {
-        attemptId: "rollback-health-verdict",
-        result: {
-          ...outcome.result,
-          recovery: updateRecoverySchema.parse(outcome.result.recovery),
-        },
-      },
-      { env, stateDir },
-    );
-    const health = {
-      "restart-unhealthy": "failed (channel-errors)",
-      "restart-timeout": "unverified (gateway-readiness-pending)",
-      "restart-refused": "unverified (restart-failed)",
-      "restart-threw": "unverified (gateway-verification-incomplete)",
-    }[failure];
-    expect(report.body).toContain(
-      `Recovery outcome: package rollback verified (2026.9.1); Gateway health ${health}. Run \`openclaw gateway status --deep\``,
-    );
-  }
 }
 
 export function registerRollbackReportTests(

@@ -67,6 +67,7 @@ const factParams = (sessionKey = PARENT) => ({
   agentId: "main",
   sessionKey,
   capabilityToolNames: new Set<string>(),
+  sentHistory: [],
 });
 const factsText = (facts: Awaited<ReturnType<typeof buildRuntimeFactsContext>>) =>
   facts.map((fragment) => fragment.text).join("\n");

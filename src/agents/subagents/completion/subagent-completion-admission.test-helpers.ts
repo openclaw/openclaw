@@ -144,22 +144,12 @@ export function requesterWakeDriver(inputs: ReturnType<typeof records>[]) {
     async sweep() {
       const sweeper = createSubagentRegistrySweeper({
         runs: subagentRuns,
-        resumedRuns: new Set(),
         clearPendingLifecycleError: vi.fn(),
-        clearPendingLifecycleTimeout: vi.fn(),
         sweepPendingLifecycle: vi.fn(),
         completeSubagentRunWithRecovery: vi.fn(),
         startSubagentAnnounceCleanupFlow: controller.startSubagentAnnounceCleanupFlow,
-        completeCleanupBookkeeping: controller.completeCleanupBookkeeping,
         resumeRequesterSettleWake: controller.resumeRequesterSettleWake,
         resumePendingRequesterSettlements: controller.resumePendingRequesterSettlements,
-        isCleanupOwnerCurrent: controller.isCleanupOwnerCurrent,
-        isTerminalTailActive: controller.isTerminalTailActive,
-        sessionEffectsHostCurrent: (entry) => controller.sessionEffectsHostCurrent(entry),
-        shouldSuppressSessionEffects: (entry, effects) =>
-          controller.shouldSuppressSessionEffects(entry, effects),
-        shouldEmitEndedHookForRun: () => false,
-        emitSubagentEndedHookForRun: vi.fn(async () => {}),
         callGateway: vi.fn(),
         cleanupCollectorLaunchResources: vi.fn(async () => true),
         runContextEngineSubagentEnded: vi.fn(async () => {}),

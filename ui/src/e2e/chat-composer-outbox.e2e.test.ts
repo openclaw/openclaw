@@ -519,7 +519,7 @@ suite.define(() => {
       });
       await page.getByText(stopText, { exact: true }).waitFor();
       const notice = page.getByText(
-        "Cancelled before the agent started it. It will not run automatically; copy it and send again.",
+        "Canceled before the agent started. Copy the message and send it again.",
         { exact: true },
       );
       if (captureUiProofEnabled) {

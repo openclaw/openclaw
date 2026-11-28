@@ -123,7 +123,6 @@ it("keeps a cron context prefix readable while an inbound turn waits for actor a
       ...inputAdmission,
       followupRun,
       replyOperation,
-      typing,
       activeIsNewSession: false,
       activeSessionStore: undefined,
       cfg: {},

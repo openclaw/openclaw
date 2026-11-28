@@ -67,6 +67,7 @@ describe("broker execution deadline", () => {
         fixture.child.exitCode = 0;
         if (state === "exit-event") {
           fixture.child.emit("exit", 0, null);
+          expect(vi.getTimerCount()).toBe(0);
         }
       }
       // The result remains pending while either termination or output drain is stalled.

@@ -45,6 +45,7 @@ import type {
   SubagentSessionEffects,
 } from "./subagent-registry.types.js";
 import { hasRequesterCompletionCohort } from "./subagent-requester-settle-identity.js";
+import { isSubagentPausedByYield } from "./subagent-requester-turn-custody.js";
 import {
   compareSubagentRunGeneration,
   getSubagentRunRuntimeKey,
@@ -217,7 +218,7 @@ export class SubagentRecoveryManager extends SubagentWaitManager {
     const paused = getLatestSubagentRunByChildSessionKeyFromRuns(
       this.options.getRunsForChildSession(childSessionKey, childAgentId),
       childSessionKey,
-      (entry) => entry.pauseReason === "sessions_yield",
+      (entry) => isSubagentPausedByYield(entry),
       childAgentId,
     );
     if (!paused || (params.expected && !isSameSubagentRunOwner(paused, params.expected))) {
@@ -270,7 +271,7 @@ export class SubagentRecoveryManager extends SubagentWaitManager {
     const paused = getLatestSubagentRunByChildSessionKeyFromRuns(
       runs,
       childSessionKey,
-      (entry) => entry.pauseReason === "sessions_yield",
+      (entry) => isSubagentPausedByYield(entry),
       childAgentId,
     );
     if (!paused) {
@@ -393,7 +394,7 @@ export class SubagentRecoveryManager extends SubagentWaitManager {
             !isSameSubagentRunOwner(source, selected) ||
             (preserveCompletedRun &&
               (source.execution.status !== "terminal" ||
-                source.pauseReason === "sessions_yield" ||
+                isSubagentPausedByYield(source) ||
                 previousRunId === nextRunId)) ||
             (replaceParams.expected && !isSameSubagentRunOwner(source, replaceParams.expected)) ||
             (replaceParams.expected &&
@@ -407,7 +408,7 @@ export class SubagentRecoveryManager extends SubagentWaitManager {
           const absorbed = replaceParams.successor ? rows.get(nextRunId) : undefined;
           if (replaceParams.successor) {
             if (
-              source.pauseReason !== "sessions_yield" ||
+              !isSubagentPausedByYield(source) ||
               !absorbed ||
               !isSameSubagentRunOwner(absorbed, replaceParams.successor) ||
               compareSubagentRunGeneration(absorbed, source) <= 0 ||

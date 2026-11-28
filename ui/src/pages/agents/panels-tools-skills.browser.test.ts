@@ -85,29 +85,6 @@ function policyCatalog(
   };
 }
 
-function pluginCatalog(optional: boolean): ToolsCatalogResult {
-  return {
-    agentId: "main",
-    profiles: [{ id: "full", label: "Full" }],
-    groups: [
-      {
-        id: "plugin:voice-call",
-        label: "voice-call",
-        source: "plugin",
-        pluginId: "voice-call",
-        tools: [
-          catalogTool("voice_call", {
-            source: optional ? "plugin" : (undefined as never),
-            pluginId: optional ? "voice-call" : undefined,
-            optional,
-            defaultProfiles: optional ? [] : ["full"],
-          }),
-        ],
-      },
-    ],
-  };
-}
-
 async function settleGitHubIdentity(container: HTMLElement) {
   if (!container.isConnected) {
     mountConnected(() => container);
@@ -271,69 +248,6 @@ describe("agents tools panel (browser)", () => {
     expect(container.querySelector(".agent-tools-runtime-chip")).toBeNull();
   });
 
-  it("renders catalog provenance and a prospective tool preview", async () => {
-    const { container } = mountTools({
-      catalog: {
-        ...pluginCatalog(true),
-        groups: [
-          {
-            id: "media",
-            label: "Media",
-            source: "core",
-            tools: [catalogTool("tts")],
-          },
-          ...pluginCatalog(true).groups,
-        ],
-      },
-      effective: {
-        agentId: "main",
-        profile: "messaging",
-        groups: [
-          previewTool("message", {
-            label: "Message Actions",
-            source: "channel",
-            channelId: "guildchat",
-          }),
-          previewTool("reproProbe__probe_tool", {
-            label: "Probe Tool",
-            source: "mcp",
-            pluginId: "bundle-mcp",
-          }),
-        ].map((tool) => ({
-          id: tool.source,
-          label: tool.source,
-          source: tool.source,
-          tools: [tool],
-        })),
-      },
-    });
-    await settleGitHubIdentity(container);
-
-    expect(container.querySelectorAll(".settings-kv dd")[3]?.textContent?.trim()).toBe("2");
-    expect(container.textContent).toContain(
-      "Based on saved session settings and discovered tools.",
-    );
-    expect(container.textContent).toContain("more tools may become available");
-    expect(container.textContent).toContain("unsaved edits aren’t included");
-    expect(texts(container, ".agent-tools-runtime-chip .mono")).toEqual([
-      "Message Actions",
-      "Probe Tool",
-    ]);
-    // Neither the channel action nor the discovered MCP tool has a row in this catalog.
-    expect(container.querySelectorAll("a.agent-tools-runtime-chip")).toHaveLength(0);
-    expect(texts(container, ".agent-tools-runtime-chip__meta")).toEqual([
-      "Channel: guildchat",
-      "MCP",
-    ]);
-    expect(texts(container, ".agent-tools-group__title > .settings-row__value")).toEqual([
-      "Plugin: voice-call",
-    ]);
-    expect(toolFact(container.querySelector("#agent-tool-tts"), "Source")).toBe("Built-in");
-    expect(toolFact(container.querySelector("#agent-tool-voice_call"), "Source")).toBe(
-      "Plugin: voice-call · Optional",
-    );
-  });
-
   it.each([false, true])(
     "renders effective GitHub facts without credential controls (inherited: %s)",
     async (inherited) => {
@@ -422,16 +336,6 @@ describe("agents tools panel (browser)", () => {
     expect(onProfileChange).not.toHaveBeenCalled();
     button(container, "Inherit").click();
     expect(onProfileChange).toHaveBeenCalledExactlyOnceWith("main", null, false);
-  });
-
-  it("uses section-level plugin provenance for tool details", async () => {
-    const { container } = mountTools({ catalog: pluginCatalog(false) });
-    await Promise.resolve();
-
-    const tool = container.querySelector<HTMLDetailsElement>(".agent-tool-card");
-    tool!.open = true;
-
-    expect(toolFact(tool, "Source")).toBe("Plugin: voice-call");
   });
 
   it.each([

@@ -259,7 +259,7 @@ describe("MemoryOverview", () => {
       { kind: "off", id: null, availability: "enabled" },
     );
 
-    expectText(container, ["Memory is hibernating", "Open Settings"]);
+    expectText(container, ["Memory is hibernating", "Open settings"]);
     expect(container.querySelector(".memory-overview__status--sleeping")).not.toBeNull();
     expect(container.querySelector("[data-test-lobster]")).not.toBeNull();
     expect(container.querySelector('[data-reading="true"]')).toBeNull();
@@ -274,7 +274,7 @@ describe("MemoryOverview", () => {
 
     expectText(
       container,
-      ["Memory is hibernating", "selected memory engine is disabled", "Open Settings"],
+      ["Memory is hibernating", "selected memory engine is disabled", "Open settings"],
       ["Engine health", "Sleep schedule"],
     );
     expect(container.querySelector('[data-reading="true"]')).toBeNull();
@@ -335,7 +335,7 @@ describe("MemoryOverview", () => {
     });
 
     expect(container.querySelector(".memory-overview__status h2")?.textContent).toBe(
-      neutral ? "Host memory search is unavailable" : "Memory needs attention",
+      neutral ? "Memory search is unavailable" : "Memory needs attention",
     );
     expect(container.textContent?.includes("Embeddings")).toBe(!neutral);
     expect(container.textContent?.includes(diagnostic.error)).toBe(!neutral);
@@ -361,7 +361,7 @@ describe("MemoryOverview", () => {
       { onNavigate },
     );
 
-    findButton(container, /Open Settings/)?.click();
+    findButton(container, /Open settings/)?.click();
     expect(onNavigate).toHaveBeenCalledWith("settings");
   });
 });
@@ -504,7 +504,7 @@ describe("Memory overview request presentation", () => {
         kind === "off"
           ? "Memory is hibernating"
           : kind === "offline"
-            ? "gateway is offline"
+            ? "Gateway is offline"
             : "Waking memory",
       ],
       ["retired-engine", "Testing"],

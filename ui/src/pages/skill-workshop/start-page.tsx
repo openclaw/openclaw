@@ -16,6 +16,7 @@ import { diffCounts } from "./diff.tsx";
 import { DraftContent } from "./draft-detail.tsx";
 import {
   archivedWorkshopSkills,
+  membershipLabel,
   MutationButton,
   renderUses,
   sortWorkshopSkills,
@@ -43,7 +44,35 @@ type HistoryGroup = { key: "today" | "thisWeek" | "earlier"; changes: SkillWorks
  */
 export function StartPage(props: StartProps & { query: string; onQuery: (query: string) => void }) {
   const list = () => props.view().snapshot!.list;
-  const archived = createMemo(() => archivedWorkshopSkills(list()));
+  // Move the known row, not the Gateway snapshot. A pending row has no invented
+  // version ID, archive date, usage count, or live file metadata.
+  const library = createMemo(() => {
+    const active: SkillRowEntry[] = sortWorkshopSkills(
+      list().skills,
+      props.view().snapshot!.changes,
+      props.view().sort,
+    );
+    const archived: SkillRowEntry[] = archivedWorkshopSkills(list());
+    const move = props.view().membership;
+    if (move) {
+      const source = move.destination === "archived" ? active : archived;
+      const target = move.destination === "archived" ? archived : active;
+      const index = source.findIndex((entry) => entry.name === move.name);
+      if (index !== -1) {
+        const [entry] = source.splice(index, 1);
+        if (move.destination === "active" && props.view().sort === "uses") {
+          // The archive has no usage count; keep ranked rows ahead until the reread.
+          target.push(entry!);
+        } else {
+          target.unshift(entry!);
+        }
+        if (move.destination === "active" && props.view().sort === "name") {
+          target.sort((a, b) => a.name.localeCompare(b.name));
+        }
+      }
+    }
+    return { active, archived };
+  });
   // Newest first, like an inbox.
   const drafts = createMemo(() => (list().drafts ?? []).toReversed());
   const history = createMemo(() => workshopHistory(props.view().snapshot!));
@@ -57,10 +86,10 @@ export function StartPage(props: StartProps & { query: string; onQuery: (query: 
         ? t("skillWorkshop.tabs.history")
         : t("skillWorkshop.skills.title");
   const count = (view: WorkshopStartView) =>
-    view === "drafts" ? drafts().length : view === "skills" ? list().skills.length : null;
+    view === "drafts" ? drafts().length : view === "skills" ? library().active.length : null;
   const empty = () =>
-    list().skills.length === 0 &&
-    archived().length === 0 &&
+    library().active.length === 0 &&
+    library().archived.length === 0 &&
     drafts().length === 0 &&
     history().length === 0 &&
     props.view().startView !== "drafts";
@@ -122,7 +151,7 @@ export function StartPage(props: StartProps & { query: string; onQuery: (query: 
             view={props.view}
             reads={props.reads}
             page={props.page}
-            archived={archived()}
+            library={library()}
             query={props.query}
             onQuery={props.onQuery}
           />
@@ -257,24 +286,20 @@ function HistoryRow(props: Pick<StartProps, "view" | "page"> & { change: SkillWo
 
 function LearnedSkills(
   props: StartProps & {
-    archived: SkillsWorkshopListResult["archived"];
+    library: Record<WorkshopFilter, SkillRowEntry[]>;
     query: string;
     onQuery: (query: string) => void;
   },
 ) {
-  const list = () => props.view().snapshot!.list;
   // The list method returns every skill of the agent, so the search filters the whole library.
   const needle = () => props.query.trim().toLowerCase();
   const matches = (text: string) => !needle() || text.toLowerCase().includes(needle());
-  const rows = createMemo<SkillRowEntry[]>(() =>
-    props.view().filter === "active"
-      ? sortWorkshopSkills(list().skills, props.view().snapshot!.changes, props.view().sort).filter(
-          (skill) => matches(`${skill.name} ${skill.description ?? ""}`),
-        )
-      : props.archived.filter((skill) => matches(skill.name)),
+  const rows = createMemo(() =>
+    props.library[props.view().filter].filter((skill) =>
+      matches("description" in skill ? skill.name + " " + skill.description : skill.name),
+    ),
   );
-  const count = (filter: WorkshopFilter) =>
-    filter === "active" ? list().skills.length : props.archived.length;
+  const count = (filter: WorkshopFilter) => props.library[filter].length;
   return (
     <div class="sw-skills">
       <CatalogDiscoverySearch>
@@ -353,8 +378,26 @@ function LearnedSkills(
 
 /** A learned skill: what it is and how much it is used. */
 function SkillRow(props: { skill: SkillRowEntry; view: WorkshopView; page: WorkshopPage }) {
+  const move = () => {
+    const pending = props.view().membership;
+    return pending?.name === props.skill.name ? pending : null;
+  };
   const live = () => ("versions" in props.skill ? null : props.skill);
-  const archived = () => ("versions" in props.skill ? props.skill : null);
+  const description = () => {
+    const moving = move();
+    if (moving) {
+      return membershipLabel(moving.destination);
+    }
+    const entry = props.skill;
+    if ("versions" in entry) {
+      const latest = entry.versions[0];
+      return (
+        latest &&
+        t("skillWorkshop.skills.archivedAgo", { time: formatRelativeTimestamp(latest.createdAtMs) })
+      );
+    }
+    return entry.description;
+  };
   const unused = () => {
     const skill = live();
     if (!skill) {
@@ -376,25 +419,10 @@ function SkillRow(props: { skill: SkillRowEntry; view: WorkshopView; page: Works
         <SkillTile />
         <span class="sw-row__text">
           <span class="sw-row__name">{props.skill.name}</span>
-          <Show
-            when={archived()}
-            fallback={
-              live()?.description && <span class="sw-row__desc">{live()?.description}</span>
-            }
-          >
-            {(skill) =>
-              skill().versions[0] && (
-                <span class="sw-row__desc">
-                  {t("skillWorkshop.skills.archivedAgo", {
-                    time: formatRelativeTimestamp(skill().versions[0]!.createdAtMs),
-                  })}
-                </span>
-              )
-            }
-          </Show>
+          <Show when={description()}>{(value) => <span class="sw-row__desc">{value()}</span>}</Show>
         </span>
       </button>
-      <Show when={live()}>
+      <Show when={!move() && live()}>
         <div class="sw-row__aside">
           {unused() !== null ? (
             <span

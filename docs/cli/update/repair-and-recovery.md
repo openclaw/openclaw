@@ -218,9 +218,6 @@ change persisted state. When a fresh copy is needed, standalone `doctor --fix`
 snapshots databases under its own maintenance custody with a single isolated backup worker.
 Shared database families larger than 64 MiB keep discovery copies in an isolated process
 so a slow copy does not block Doctor's main thread from processing cancellation.
-Official image activation keeps one such copy per container: after a capture
-succeeds, later starts of the same container skip the repeated full copy, keep
-that copy, and still retire other superseded Doctor captures.
 Standalone Doctor keeps only its newest sealed capture, whatever its age. Each
 successful standalone `doctor --fix` capture retires older eligible copies and names
 each removal in the debug log (`openclaw --log-level debug doctor --fix`). Manual
@@ -396,13 +393,14 @@ cleanup, because the process census cannot be interrupted. The Gateway's `update
 not run it: the process census would block the serving Gateway, and for a runtime without
 `owner.json` it cannot tell the requesting `openclaw update` from an older updater still
 using it. Inside a container, cleanup keeps runtimes and says so, because host processes
-are not visible. A runtime without `owner.json` that the first release update did not remove
-(for example, because that update ran from the Gateway) is reported afterwards as
-`no recognized runtime marker`. Remove it by hand only after checking that its `tree/`
-holds the replaced installation, that the update that created it and its workers have
-exited (an older updater can still load files from it later, so an empty `lsof +D
-<directory>` alone is not enough), and that no `openclaw update` is running. If you cannot
-verify that, keep it and [get support](/help/support). Run
+are not visible. Updaters through 2026.11.10 write no `owner.json`. Their runtime holds
+exactly `retained-files.json`, `tree/` and `update-native-gate.mjs`, and the file list
+starts with the retained `package.json`. Cleanup recognizes it by that projected
+OpenClaw package, also after the installation moved to a new path (a pnpm global install
+directory or a Git release folder), and removes it under the same process checks. Without a
+recorded creator, any running OpenClaw command that could be an updater keeps it. A
+directory with this name that matches neither shape is kept and reported as not matching a
+runtime an OpenClaw updater created; OpenClaw never deletes it. Run
 `openclaw doctor --fix` before uninstalling; manual removal on Windows needs the
 extended-length path prefix ([Uninstall](/install/uninstall#remove-the-cli)). Incomplete preparation
 keeps immediate best-effort cleanup. Unsettled workers retain their runtime with

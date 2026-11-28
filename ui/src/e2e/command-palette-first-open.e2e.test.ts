@@ -91,41 +91,49 @@ function paletteInputPresentation(input: HTMLTextAreaElement) {
 }
 
 suite.define(() => {
-  it("retains files accepted before the cold palette is dismissed and cancels queued submission", async () => {
-    await withColdPalette(async (page, paletteModule, _chat, gateway) => {
-      const composer = page.locator(".agent-chat__composer-combobox textarea:visible");
-      await composer.fill("Keep foreground text");
-      await page.keyboard.press("ControlOrMeta+K");
-      const input = page.locator(".cmd-palette__input");
-      await input.waitFor({ state: "visible" });
-      await paletteModule.request;
-      await input.fill("Keep the cold attachment draft");
-      await input.evaluate((element) => {
-        const dataTransfer = new DataTransfer();
-        dataTransfer.items.add(new File(["brief"], "cold-brief.pdf", { type: "application/pdf" }));
-        element.dispatchEvent(
-          new DragEvent("drop", { bubbles: true, cancelable: true, dataTransfer }),
-        );
+  it.each([false, true])(
+    "keeps a dismissed cold Compose draft without sending (attached: %s)",
+    async (attached) => {
+      await withColdPalette(async (page, paletteModule, _chat, gateway) => {
+        const composer = page.locator(".agent-chat__composer-combobox textarea:visible");
+        await composer.fill("Keep foreground text");
+        await page.keyboard.press("ControlOrMeta+K");
+        const input = page.locator(".cmd-palette__input");
+        await input.waitFor({ state: "visible" });
+        await paletteModule.request;
+        await input.press("Tab");
+        await input.fill("Keep the cold Compose draft");
+        if (attached) {
+          await input.evaluate((element) => {
+            const dataTransfer = new DataTransfer();
+            dataTransfer.items.add(
+              new File(["brief"], "cold-brief.pdf", { type: "application/pdf" }),
+            );
+            element.dispatchEvent(
+              new DragEvent("drop", { bubbles: true, cancelable: true, dataTransfer }),
+            );
+          });
+        }
+        await input.press("ControlOrMeta+Enter");
+        await page.keyboard.press("ControlOrMeta+K");
+        await input.waitFor({ state: "hidden" });
+        await expectFocused(composer);
+        paletteModule.release();
+        await page.waitForFunction(() => customElements.get("openclaw-command-palette"));
+        await page.keyboard.press("ControlOrMeta+K");
+        const loaded = page.locator("openclaw-command-palette .cmd-palette__input");
+        await loaded.waitFor({ state: "visible" });
+        expect(await loaded.inputValue()).toBe("Keep the cold Compose draft");
+        await expect
+          .poll(() => page.locator(".chat-attachment-file__name").allTextContents())
+          .toEqual(attached ? ["cold-brief.pdf"] : []);
+        expect(await loaded.isEditable()).toBe(true);
+        expect(await gateway.getRequests("sessions.create")).toEqual([]);
+        expect(await composer.inputValue()).toBe("Keep foreground text");
+        expect(page.url()).toBe(controlUiSessionUrl(suite.server.baseUrl, sessionKey));
       });
-      await input.press("ControlOrMeta+Enter");
-      await page.keyboard.press("ControlOrMeta+K");
-      await input.waitFor({ state: "hidden" });
-      await expectFocused(composer);
-      paletteModule.release();
-      await page.waitForFunction(() => customElements.get("openclaw-command-palette"));
-      await page.keyboard.press("ControlOrMeta+K");
-      const loaded = page.locator("openclaw-command-palette .cmd-palette__input");
-      await loaded.waitFor({ state: "visible" });
-      expect(await loaded.inputValue()).toBe("Keep the cold attachment draft");
-      await expect
-        .poll(() => page.locator(".chat-attachment-file__name").allTextContents())
-        .toEqual(["cold-brief.pdf"]);
-      expect(await loaded.isEditable()).toBe(true);
-      expect(await gateway.getRequests("sessions.create")).toEqual([]);
-      expect(await composer.inputValue()).toBe("Keep foreground text");
-      expect(page.url()).toBe(controlUiSessionUrl(suite.server.baseUrl, sessionKey));
-    });
-  });
+    },
+  );
 
   it("preserves native text drops across the cold module handoff", async () => {
     await withColdPalette(async (page, paletteModule) => {

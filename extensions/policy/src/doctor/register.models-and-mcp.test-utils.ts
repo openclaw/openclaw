@@ -253,11 +253,11 @@ describe("registerPolicyDoctorChecks", () => {
     ]);
   });
 
-  it("reports governed tools missing risk and sensitivity metadata", async () => {
-    const result = await runToolMetadataFixture(
-      ["risk", "sensitivity", "owner"],
-      "## Tools\n\n### deploy\n",
-    );
+  it.each([
+    ["heading", "## Tools\n\n### deploy\n"],
+    ["bullet", "## Tools\n\n- deploy: deploys\n"],
+  ])("reports governed %s tools missing required metadata", async (_kind, toolsRaw) => {
+    const result = await runToolMetadataFixture(["risk", "sensitivity", "owner"], toolsRaw);
 
     expect(result.findings).toHaveLength(3);
     expect(result.findings).toEqual(
@@ -342,37 +342,6 @@ describe("registerPolicyDoctorChecks", () => {
     );
 
     expect(result.findings).toEqual([]);
-  });
-
-  it("reports governed bullet tools missing required metadata", async () => {
-    const result = await runToolMetadataFixture(
-      ["risk", "sensitivity", "owner"],
-      "## Tools\n\n- deploy: deploys\n",
-    );
-
-    expect(result.findings).toHaveLength(3);
-    expect(result.findings).toEqual(
-      expect.arrayContaining([
-        expect.objectContaining({
-          checkId: "policy/tools-missing-risk-level",
-          severity: "error",
-          path: "AGENTS.md",
-          ocPath: "oc://AGENTS.md/tools/deploy",
-        }),
-        expect.objectContaining({
-          checkId: "policy/tools-missing-sensitivity-token",
-          severity: "error",
-          path: "AGENTS.md",
-          ocPath: "oc://AGENTS.md/tools/deploy",
-        }),
-        expect.objectContaining({
-          checkId: "policy/tools-missing-owner",
-          severity: "error",
-          path: "AGENTS.md",
-          ocPath: "oc://AGENTS.md/tools/deploy",
-        }),
-      ]),
-    );
   });
 
   it("accepts governed tool metadata declared on following lines", async () => {

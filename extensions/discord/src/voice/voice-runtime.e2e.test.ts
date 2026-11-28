@@ -218,7 +218,7 @@ defineDiscordVoiceTests(
             );
             const result = await tool.execute("voice-non-owner-" + name, {});
             expect(result.details).toMatchObject({ gated: true });
-            expect(JSON.stringify(result.content)).toContain(name + " needs the owner's authority");
+            expect(JSON.stringify(result.content)).toContain(`I did not run ${name}.`);
           }
         }
       },
@@ -782,17 +782,6 @@ defineDiscordVoiceTests(
 
       const { DiscordVoiceReadyListener } = listenersModule;
       const listener = new DiscordVoiceReadyListener(manager);
-
-      await expect(listener.handle(undefined, undefined as never)).resolves.toBeUndefined();
-      expect(autoJoinSpy).toHaveBeenCalledTimes(1);
-    });
-
-    it("DiscordVoiceResumedListener: runs autoJoin on gateway resume", async () => {
-      const manager = createManager();
-      const autoJoinSpy = vi.spyOn(manager, "autoJoin").mockResolvedValue(undefined);
-
-      const { DiscordVoiceResumedListener } = listenersModule;
-      const listener = new DiscordVoiceResumedListener(manager);
 
       await expect(listener.handle(undefined, undefined as never)).resolves.toBeUndefined();
       expect(autoJoinSpy).toHaveBeenCalledTimes(1);

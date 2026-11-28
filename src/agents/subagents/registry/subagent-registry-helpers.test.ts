@@ -15,7 +15,7 @@ import {
   safeRemoveAttachmentsDir,
   updateSubagentArchiveAtMs,
 } from "./subagent-registry-helpers.js";
-function createRunEntry(overrides: Omit<SubagentRunRecordOverrides, "runId"> = {}) {
+function createRunEntry(overrides: Omit<SubagentRunRecordOverrides, "runId">) {
   return createSubagentRunRecord({
     runId: "run-1",
     task: "finish the task",

@@ -20,6 +20,10 @@ import {
 import { resolveOpenClawStateSqlitePath } from "../state/openclaw-state-db.paths.js";
 import { detectGatewayAuthHealth } from "./doctor-gateway-auth.js";
 import {
+  createDoctorPrompterFixture,
+  decideDoctorContributionPending,
+} from "./doctor-health-context.test-support.js";
+import {
   createDoctorHealthFlowContext as createContext,
   resolveDoctorHealthContributions as getContributions,
 } from "./doctor-health-contributions.test-support.js";
@@ -27,6 +31,11 @@ import {
 vi.mock("../../packages/terminal-core/src/note.js", () => ({ note: vi.fn() }));
 
 const tempDirs = useAutoCleanupTempDirTracker(afterEach);
+const gatewayAuth = () =>
+  expectDefined(
+    getContributions().find((item) => item.id === "doctor:gateway-auth"),
+    "Gateway auth Doctor contribution",
+  );
 const tokenRef = { source: "store", provider: "default", id: "OPENCLAW_GATEWAY_TOKEN" } as const;
 
 async function createFixture(
@@ -56,11 +65,8 @@ async function createFixture(
   return {
     ctx,
     entry,
-    run: () =>
-      expectDefined(
-        getContributions().find((item) => item.id === "doctor:gateway-auth"),
-        "Gateway auth Doctor contribution",
-      ).run(ctx),
+    run: () => gatewayAuth().run(ctx),
+    pending: () => decideDoctorContributionPending(gatewayAuth(), ctx),
     backups: () =>
       fs
         .readdirSync(stateDir)
@@ -87,7 +93,7 @@ it.each([
 ] as const)("preserves %s credentials (healthy=%s)", async (source, healthy) => {
   const proxy = source !== "token";
   const value = healthy ? "synthetic-healthy-token" : REDACTED_SENTINEL;
-  const { ctx, entry, run, backups } = await createFixture(value, {
+  const { ctx, entry, run, pending, backups } = await createFixture(value, {
     repair: proxy,
     generateGatewayToken: healthy,
   });
@@ -119,6 +125,8 @@ it.each([
   expect(await detectGatewayAuthHealth(ctx)).toEqual(
     proxy || !healthy ? [expect.objectContaining(finding)] : [],
   );
+  // Each of these only reports: the run below changes no credential.
+  await expect(pending()).resolves.toBe("none");
   await run();
   expectNote(
     proxy
@@ -142,11 +150,12 @@ it.each(["repair", "generate", "backup failure", "replacement", "kind change"] a
   "settles managed token repair after %s",
   async (change) => {
     const kind = change === "generate" ? "env" : "secret";
-    const { ctx, entry, run, backups } = await createFixture(
+    const { ctx, entry, run, pending, backups } = await createFixture(
       REDACTED_SENTINEL,
       change === "generate" ? { generateGatewayToken: true } : { repair: true },
       kind,
     );
+    await expect(pending()).resolves.toBe("work");
     if (change !== "repair" && change !== "generate") {
       const snapshot = sqliteSnapshot.createVerifiedSqliteSnapshot;
       const backup = vi.spyOn(sqliteSnapshot, "createVerifiedSqliteSnapshot");
@@ -188,6 +197,7 @@ it.each(["repair", "generate", "backup failure", "replacement", "kind change"] a
       return;
     }
     const repaired = await readToken(entry);
+    await expect(pending()).resolves.toBe("none");
     const finalKind = change === "kind change" ? "env" : kind;
     expect(repaired).toEqual({ ok: true, value: expect.stringMatching(/^[a-f0-9]{48}$/u) });
     expect(ctx.cfg.gateway?.auth?.token).toEqual(tokenRef);
@@ -212,3 +222,22 @@ it.each(["repair", "generate", "backup failure", "replacement", "kind change"] a
     expectNote(backup);
   },
 );
+
+it.each([
+  { name: "non-interactive Doctor", options: { nonInteractive: true }, pending: "none" },
+  { name: "an interactive prompt", options: {}, pending: "work" },
+  { name: "--generate-gateway-token", options: { generateGatewayToken: true }, pending: "work" },
+] as const)("has token work for a missing token under $name", async ({ options, pending }) => {
+  const env = { OPENCLAW_STATE_DIR: tempDirs.make("doctor-gateway-token-missing-") };
+  const ctx = createContext({
+    cfg: { gateway: { mode: "local", auth: { mode: "token" } } },
+    env,
+    options,
+    prompter: createDoctorPrompterFixture(true, true),
+  });
+
+  await expect(decideDoctorContributionPending(gatewayAuth(), ctx)).resolves.toBe(pending);
+  await gatewayAuth().run(ctx);
+  expect(typeof ctx.cfg.gateway?.auth?.token).toBe(pending === "work" ? "string" : "undefined");
+  await expect(decideDoctorContributionPending(gatewayAuth(), ctx)).resolves.toBe("none");
+});

@@ -12,6 +12,7 @@ import { withSystemPackageOwnershipRun } from "../../infra/update-system-package
 import { resolveDebugProxySettings } from "../../proxy-capture/env.js";
 import { withDeferredDebugProxyCapture } from "../../proxy-capture/runtime-deferral.js";
 import { defaultRuntime } from "../../runtime.js";
+import { tryRunSystemServicePackageUpdate } from "../../update/cli.js";
 import { VERSION } from "../../version.js";
 import type { createUpdateProgress } from "./progress.js";
 import { confirmUpdateDowngrade, type UpdateCommandOptions } from "./shared.js";
@@ -53,6 +54,9 @@ export async function updateCommand(
   inputOpts: UpdateCommandOptions,
   executorOptions?: UpdateCommandExecutorOptions,
 ): Promise<void> {
+  if (!executorOptions && (await tryRunSystemServicePackageUpdate(inputOpts))) {
+    return;
+  }
   return await withSystemPackageOwnershipRun(() =>
     withDeferredDebugProxyCapture(async () => {
       const { tryRunImmutableUpdateCommand } = await import("./update-command-immutable.js");
@@ -97,7 +101,6 @@ async function updateCommandWithRuntime(
       ),
     );
   }
-  const reportHints: NonNullable<Parameters<typeof withUpdateAdmissionReporting>[3]> = {};
   return await withUpdateAdmissionReporting(
     inputOpts,
     async () => {
@@ -115,8 +118,6 @@ async function updateCommandWithRuntime(
       return await withUpdateDatabaseEngine(
         env,
         async (configReadable, malformedConfig) => {
-          // Late admission refusals retain the captured malformed-source report decision.
-          reportHints.writeArtifacts = !malformedConfig;
           if (await tryRunReleaseUpdateCommand(inputOpts, prepared, env)) {
             return;
           }
@@ -181,7 +182,6 @@ async function updateCommandWithRuntime(
       );
     },
     "unknown",
-    reportHints,
   );
 }
 

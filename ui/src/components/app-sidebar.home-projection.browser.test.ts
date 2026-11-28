@@ -278,6 +278,59 @@ it.each([false, true])(
   },
 );
 
+it("loads and opens a child named by a saved parent outside the sidebar list", async () => {
+  const parent = "agent:main:described-parent";
+  const child = "agent:main:described-child";
+  const { sidebar, sessions } = await mountRoster(
+    undefined,
+    [],
+    undefined,
+    [
+      {
+        key: parent,
+        sessionId: "described-parent",
+        agentId: "main",
+        kind: "direct",
+        label: "Saved parent",
+        childSessions: [child],
+      },
+    ],
+    [],
+    [
+      {
+        key: child,
+        sessionId: "described-child",
+        agentId: "main",
+        kind: "direct",
+        label: "Saved project notes",
+        spawnedBy: parent,
+      },
+    ],
+  );
+  patchSettings({ sidebarAgentsMode: "chip" });
+  sidebar.sidebarEntries = [`session:${parent}`];
+  await settleRoster(sidebar);
+
+  const pins = ".sidebar-recent-sessions--pinned";
+  const toggle = () =>
+    sidebar.querySelector<HTMLButtonElement>(`${pins} [data-child-session-toggle="${parent}"]`);
+  await vi.waitFor(() => expect(toggle()?.getAttribute("aria-expanded")).toBe("false"));
+  expectDefined(toggle(), "saved parent disclosure").click();
+
+  const childLink = () =>
+    sidebar.querySelector<HTMLAnchorElement>(`${pins} [data-session-key="${child}"] a`);
+  await vi.waitFor(() => expect(childLink()?.textContent).toContain("Saved project notes"));
+  expect(sessions.list).toHaveBeenCalledWith(expect.objectContaining({ spawnedBy: parent }));
+  sidebar.onNavigate = vi.fn();
+  const link = expectDefined(childLink(), "loaded child link");
+  expect(link.getAttribute("href")).toBe("/chat/main/described-child");
+  link.click();
+  expect(sidebar.onNavigate).toHaveBeenCalledWith(
+    "chat",
+    expect.objectContaining({ pathname: "/chat/main/described-child" }),
+  );
+});
+
 it("keeps a descriptor-only pin navigable without inventing a child row", async () => {
   const parent = "agent:main:described-parent";
   const child = "agent:main:unavailable-child";

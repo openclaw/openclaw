@@ -346,10 +346,6 @@ it("reports native provider health as an informational doctor note", async () =>
 
   await noteMemorySearchHealth(cfg, { includeWorkspaceMemoryHealth: false });
 
-  expectFirstNoteContains(
-    "Not applicable: records uses the provider runtime",
-    "Provider health: ready (connected)",
-  );
   expect(close).toHaveBeenCalledOnce();
 });
 

@@ -28,7 +28,7 @@ import type { ProviderRuntimeModel } from "../../plugins/provider-runtime-model.
 import { createEmptyPluginRegistry } from "../../plugins/registry-empty.js";
 import type { PluginRegistry } from "../../plugins/registry-types.js";
 import { getActivePluginRegistry } from "../../plugins/runtime.js";
-import { getPluginRuntimeGenerationRegistry } from "../../plugins/runtime/generation-scope.js";
+import { getPluginRuntimeGenerationRegistry } from "../../plugins/runtime/generation-state.js";
 import type { WorkerConnectionIdentity } from "./connection-identity.js";
 import { createWorkerConnectionIdentity } from "./connection-identity.test-support.js";
 import type { WorkerInferenceExecutionParams } from "./inference-runtime.js";

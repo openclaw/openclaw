@@ -24,6 +24,7 @@ import ai.openclaw.app.chat.SessionRewindResult
 import ai.openclaw.app.gateway.DeviceAuthEntry
 import ai.openclaw.app.gateway.DeviceAuthStore
 import ai.openclaw.app.gateway.DeviceIdentityStore
+import ai.openclaw.app.gateway.ErrorShape
 import ai.openclaw.app.gateway.GATEWAY_CONNECT_TIMEOUT_MS
 import ai.openclaw.app.gateway.GatewayConnectOptions
 import ai.openclaw.app.gateway.GatewayDiscovery
@@ -45,6 +46,7 @@ import ai.openclaw.app.gateway.GatewayTlsProbeResult
 import ai.openclaw.app.gateway.GatewayTlsProbeRunner
 import ai.openclaw.app.gateway.GatewayTlsTrustDecision
 import ai.openclaw.app.gateway.GatewayUpdateAvailableSummary
+import ai.openclaw.app.gateway.InvokeResult
 import ai.openclaw.app.gateway.NativeControlUiCredential
 import ai.openclaw.app.gateway.NetworkMonitor
 import ai.openclaw.app.gateway.NodeEventSendOutcome
@@ -141,6 +143,7 @@ import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.Job
 import kotlinx.coroutines.NonCancellable
 import kotlinx.coroutines.SupervisorJob
+import kotlinx.coroutines.awaitCancellation
 import kotlinx.coroutines.channels.Channel
 import kotlinx.coroutines.coroutineScope
 import kotlinx.coroutines.currentCoroutineContext
@@ -814,6 +817,9 @@ class NodeRuntime internal constructor(
   private val gatewayLifecycleIntentLock = Any()
   private val gatewayLifecycleIntentSeq = AtomicLong()
 
+  // Guarded by gatewayLifecycleIntentLock; cleared by the next Gateway intent or backgrounding.
+  private var foregroundDiscoveryReconnectId: String? = null
+
   // Retain one pending request while reconciliation awaits cleanup; equal desired values can
   // still require new work after a synchronous retirement or lifecycle invalidation.
   // Initialize before NetworkMonitor can request work during construction.
@@ -972,7 +978,8 @@ class NodeRuntime internal constructor(
   private val _activeAudioInputDevicePreference = MutableStateFlow<String?>(null)
   val activeAudioInputDevicePreference: StateFlow<String?> = _activeAudioInputDevicePreference.asStateFlow()
 
-  private val discovery = GatewayDiscovery(appContext, scope = scope)
+  private val discovery =
+    GatewayDiscovery(appContext, scope = scope, startActive = false)
   val gateways: StateFlow<List<GatewayEndpoint>> = discovery.gateways
 
   private val identityStore = DeviceIdentityStore.withPrefs(appContext, prefs)
@@ -1053,13 +1060,13 @@ class NodeRuntime internal constructor(
       mobileUiHandler = mobileUiHandler,
       talkHandler =
         object : TalkHandler {
-          override suspend fun handlePttStart(paramsJson: String?): GatewaySession.InvokeResult = handleTalkPttStart()
+          override suspend fun handlePttStart(paramsJson: String?): InvokeResult = handleTalkPttStart()
 
-          override suspend fun handlePttStop(paramsJson: String?): GatewaySession.InvokeResult = handleTalkPttStop { talkMode.endPushToTalk() }
+          override suspend fun handlePttStop(paramsJson: String?): InvokeResult = handleTalkPttStop { talkMode.endPushToTalk() }
 
-          override suspend fun handlePttCancel(paramsJson: String?): GatewaySession.InvokeResult = handleTalkPttStop { talkMode.cancelPushToTalk() }
+          override suspend fun handlePttCancel(paramsJson: String?): InvokeResult = handleTalkPttStop { talkMode.cancelPushToTalk() }
 
-          override suspend fun handlePttOnce(paramsJson: String?): GatewaySession.InvokeResult = handleTalkPttOnce()
+          override suspend fun handlePttOnce(paramsJson: String?): InvokeResult = handleTalkPttOnce()
         },
       isForeground = { _isForeground.value },
       cameraEnabled = { cameraEnabled.value },
@@ -2408,6 +2415,7 @@ class NodeRuntime internal constructor(
           nodeProblem = nodeConnectionProblem,
         )
       _gatewayConnectionDisplay.value = display
+      refreshGatewayDiscovery()
     }
   }
 
@@ -2426,7 +2434,7 @@ class NodeRuntime internal constructor(
   }
 
   private fun gatewayConnectionProblem(
-    error: GatewaySession.ErrorShape,
+    error: ErrorShape,
     pauseReconnect: Boolean,
     endpoint: GatewayEndpoint? = connectedEndpoint,
   ): GatewayConnectionProblem {
@@ -2889,7 +2897,8 @@ class NodeRuntime internal constructor(
   val connectedGatewayStableIds: StateFlow<List<String>> = prefs.gatewayRegistry.connectedStableIds
   val installedAppsSharingEnabled: StateFlow<Boolean> = prefs.installedAppsSharingEnabled
 
-  private var didAutoConnect = false
+  @Volatile private var didAutoConnect = false
+  private var gatewayDiscoveryConsumers = 0
 
   @Volatile private var preferredGatewayReconnectSuppressed = initialReconnectSuppressed
 
@@ -2930,7 +2939,6 @@ class NodeRuntime internal constructor(
     _talkSetupReadiness.value =
       GatewayTalkSetupReadiness(
         realtimeTalk = GatewayTalkSetupState.Ready(GatewayTalkProvider("openai", "OpenAI")),
-        dictation = GatewayTalkSetupState.Ready(GatewayTalkProvider("openai", "OpenAI")),
       )
     _cronStatus.value =
       GatewayCronStatus(
@@ -3014,10 +3022,12 @@ class NodeRuntime internal constructor(
         prefs.setVoiceMicEnabled(false)
       }
 
+      synchronized(gatewayStatusLock) { refreshGatewayDiscovery() }
       scope.launch(Dispatchers.Default) {
         gateways.collect { list ->
           seedLastDiscoveredGateway(list)
           autoConnectIfNeeded()
+          reconnectAfterForegroundDiscovery()
         }
       }
       scope.launch(Dispatchers.Default) {
@@ -3030,6 +3040,7 @@ class NodeRuntime internal constructor(
         ) { _, _, _, _, _ -> Unit }
           .collect {
             ensureActive()
+            synchronized(gatewayStatusLock) { refreshGatewayDiscovery() }
             reconcileBackgroundGatewayFleet()
           }
       }
@@ -3071,16 +3082,60 @@ class NodeRuntime internal constructor(
     }
   }
 
+  /** Keeps discovery available for a visible browser, including while another Gateway is connected. */
+  suspend fun discoverGateways(): Nothing {
+    synchronized(gatewayStatusLock) {
+      gatewayDiscoveryConsumers++
+      refreshGatewayDiscovery()
+    }
+    try {
+      awaitCancellation()
+    } finally {
+      synchronized(gatewayStatusLock) {
+        gatewayDiscoveryConsumers--
+        refreshGatewayDiscovery()
+      }
+    }
+  }
+
+  private fun refreshGatewayDiscovery() {
+    // Sticky-service recovery must resolve its saved route without reviving foreground capabilities.
+    val recoveringDiscoveredGateway =
+      !preferredGatewayReconnectSuppressed && !didAutoConnect && gatewayLifecycleIntentSeq.get() == 0L &&
+        prefs.gatewayRegistry.activeEntry()?.kind == GatewayRegistryEntryKind.DISCOVERED
+    // Enabled secondary Gateways can appear after the focused connection is already established.
+    val discoveringSecondaryGateway =
+      currentBackgroundGatewayStableIds().any { stableId ->
+        prefs.gatewayRegistry.entries.value
+          .any { it.stableId == stableId && it.kind == GatewayRegistryEntryKind.DISCOVERED }
+      }
+    val disconnected = !gatewayConnectionDisplay.value.isConnected && !_nodeConnected.value
+    discovery.setActive(
+      mode == NodeRuntimeMode.Live &&
+        (
+          recoveringDiscoveredGateway ||
+            (
+              _isForeground.value &&
+                (gatewayDiscoveryConsumers > 0 || discoveringSecondaryGateway || disconnected)
+            )
+        ),
+    )
+  }
+
   /** Updates foreground state and triggers reconnect/presence behavior on app visibility changes. */
   fun setForeground(value: Boolean) {
     val visibilityChanged =
       synchronized(gatewayLifecycleIntentLock) {
         (_isForeground.value != value).also {
           _isForeground.value = value
-          if (!value) disconnectSecondaryGatewayConnections()
+          if (!value) {
+            foregroundDiscoveryReconnectId = null
+            disconnectSecondaryGatewayConnections()
+          }
           requestBackgroundGatewayReconciliation()
         }
       }
+    synchronized(gatewayStatusLock) { refreshGatewayDiscovery() }
     voiceWakeManager.setForeground(value)
     if (mode == NodeRuntimeMode.ScreenshotFixture) return
     if (visibilityChanged) {
@@ -3094,7 +3149,7 @@ class NodeRuntime internal constructor(
     if (value) {
       refreshNodePermissionSurface()
       refreshVoiceWakeCapabilitySurfaceIfChanged()
-      reconnectPreferredGatewayOnForeground()
+      reconnectPreferredGatewayOnForeground(waitForDiscovery = visibilityChanged)
       scope.launch {
         refreshExecApprovalsFromGateway()
       }
@@ -3459,7 +3514,7 @@ class NodeRuntime internal constructor(
     launchConnect(endpoint, explicitAuth = null, intent = operation)
   }
 
-  private fun reconnectPreferredGatewayOnForeground() =
+  private fun reconnectPreferredGatewayOnForeground(waitForDiscovery: Boolean) =
     synchronized(gatewayLifecycleIntentLock) {
       if (preferredGatewayReconnectSuppressed || gatewayConnectionDisplay.value.isConnected || connectingEndpoint != null) return@synchronized
       if (connectedEndpoint != null) {
@@ -3472,9 +3527,37 @@ class NodeRuntime internal constructor(
           refreshGatewayConnection()
         }
       } else {
-        resolvePreferredGatewayEndpoint()?.let { connect(it) }
+        val preferred = prefs.gatewayRegistry.activeEntry() ?: return@synchronized
+        val endpoint = resolveRegistryEndpoint(preferred)
+        if (endpoint != null) {
+          connect(endpoint)
+        } else if (waitForDiscovery && _isForeground.value &&
+          gatewayConnectionOperation == null && gatewayLifecycleIntentSeq.get() != 0L &&
+          preferred.kind == GatewayRegistryEntryKind.DISCOVERED
+        ) {
+          // A resumed scan clears cached addresses before the first fresh advertisement arrives.
+          // Cold startup (intent 0) already has its own discovery-driven connection attempt.
+          foregroundDiscoveryReconnectId = preferred.stableId
+        }
       }
     }
+
+  private fun reconnectAfterForegroundDiscovery() {
+    synchronized(gatewayLifecycleIntentLock) {
+      val pendingId = foregroundDiscoveryReconnectId ?: return
+      val preferred = prefs.gatewayRegistry.activeEntry()
+      if (!_isForeground.value || preferredGatewayReconnectSuppressed || preferred == null || preferred.stableId != pendingId ||
+        gatewayConnectionDisplay.value.isConnected || connectingEndpoint != null || connectedEndpoint != null ||
+        gatewayConnectionOperation != null
+      ) {
+        foregroundDiscoveryReconnectId = null
+        return
+      }
+      val endpoint = resolveRegistryEndpoint(preferred) ?: return
+      foregroundDiscoveryReconnectId = null
+      connect(endpoint)
+    }
+  }
 
   /**
    * Reconnect a live node only when Android authority changed since its last connect.
@@ -3594,10 +3677,10 @@ class NodeRuntime internal constructor(
 
   fun setTalkMicrophoneMuted(value: Boolean): Unit = talkMode.setMicrophoneMuted(value)
 
-  private suspend fun handleTalkPttStart(): GatewaySession.InvokeResult =
+  private suspend fun handleTalkPttStart(): InvokeResult =
     runTalkPttCommand {
       talkMode.finishingPushToTalkCaptureId?.let {
-        return@runTalkPttCommand GatewaySession.InvokeResult.error(
+        return@runTalkPttCommand InvokeResult.error(
           code = "PTT_BUSY",
           message = "PTT_BUSY: previous push-to-talk turn is still finishing",
         )
@@ -3606,7 +3689,7 @@ class NodeRuntime internal constructor(
       val commandEpoch = talkPttCommandEpoch.get()
       if (!_isForeground.value) {
         val payload = talkMode.beginPushToTalk(allowNewCapture = false)
-        return@runTalkPttCommand GatewaySession.InvokeResult.ok(payload.toJson())
+        return@runTalkPttCommand InvokeResult.ok(payload.toJson())
       }
       val payload =
         withPreparedTalkPttCommand(lifecycleEpoch, commandEpoch) { ownershipEpoch ->
@@ -3620,13 +3703,13 @@ class NodeRuntime internal constructor(
           recordTalkPttOwnership(captureId = started.captureId, ownershipEpoch = ownershipEpoch)
           started
         }
-      GatewaySession.InvokeResult.ok(payload.toJson())
+      InvokeResult.ok(payload.toJson())
     }
 
-  private suspend fun handleTalkPttOnce(): GatewaySession.InvokeResult =
+  private suspend fun handleTalkPttOnce(): InvokeResult =
     runTalkPttCommand {
       currentTalkPttOnceBusy()?.let { busy ->
-        return@runTalkPttCommand GatewaySession.InvokeResult.ok(busy.payload.toJson())
+        return@runTalkPttCommand InvokeResult.ok(busy.payload.toJson())
       }
       val lifecycleEpoch = voiceLifecycleEpoch.get()
       val commandEpoch = talkPttCommandEpoch.get()
@@ -3661,7 +3744,7 @@ class NodeRuntime internal constructor(
             finishTalkCaptureIfIdleAfterPreparation(start.captureId)
           }
         }
-      GatewaySession.InvokeResult.ok(payload.toJson())
+      InvokeResult.ok(payload.toJson())
     }
 
   private fun currentTalkPttOnceBusy(): TalkPttOnceStart.Busy? {
@@ -3706,14 +3789,14 @@ class NodeRuntime internal constructor(
       }
     }
 
-  private suspend fun runTalkPttCommand(block: suspend () -> GatewaySession.InvokeResult): GatewaySession.InvokeResult =
+  private suspend fun runTalkPttCommand(block: suspend () -> InvokeResult): InvokeResult =
     try {
       block()
     } catch (err: CancellationException) {
       throw err
     } catch (err: Throwable) {
       val (code, message) = invokeErrorFromThrowable(err)
-      GatewaySession.InvokeResult.error(code = code, message = message)
+      InvokeResult.error(code = code, message = message)
     }
 
   private suspend fun prepareTalkCapture(
@@ -3791,7 +3874,7 @@ class NodeRuntime internal constructor(
     }
   }
 
-  private suspend fun handleTalkPttStop(stopCapture: suspend () -> TalkPttStopPayload): GatewaySession.InvokeResult =
+  private suspend fun handleTalkPttStop(stopCapture: suspend () -> TalkPttStopPayload): InvokeResult =
     runTalkPttCommand {
       // Preparation can suspend on gateway config. Invalidate it before waiting,
       // while later starts queue behind this stop with the new command epoch.
@@ -3802,7 +3885,7 @@ class NodeRuntime internal constructor(
             stopCapture().also { finishTalkCaptureIfIdleLocked(it.captureId) }
           }
         }
-      GatewaySession.InvokeResult.ok(payload.toJson())
+      InvokeResult.ok(payload.toJson())
     }
 
   private fun finishTalkCaptureIfIdleLocked(captureId: String) {
@@ -4450,6 +4533,7 @@ class NodeRuntime internal constructor(
   }
 
   private fun advanceGatewayRequestIntent(): Long {
+    foregroundDiscoveryReconnectId = null
     gatewayConnectionOperation
       ?.takeUnless { acceptedConnectAttempt.value?.operation === it }
       ?.let { finishGatewayConnectionOperation(it) }
@@ -8035,7 +8119,7 @@ class NodeRuntime internal constructor(
     )
   }
 
-  private fun isGatewayExecApprovalAlreadyResolved(error: GatewaySession.ErrorShape): Boolean = error.code == "INVALID_REQUEST" && error.details?.reason == "APPROVAL_ALREADY_RESOLVED"
+  private fun isGatewayExecApprovalAlreadyResolved(error: ErrorShape): Boolean = error.code == "INVALID_REQUEST" && error.details?.reason == "APPROVAL_ALREADY_RESOLVED"
 
   private fun handleLegacyExecApprovalAlreadyResolved(
     gatewayScope: GatewayDataScope,
@@ -8900,7 +8984,7 @@ private fun GatewayNodeCapabilityApproval.withSafeRequestId(): GatewayNodeCapabi
     else -> this
   }
 
-internal fun nodeConnectFailureNeedsApprovalRefresh(error: GatewaySession.ErrorShape): Boolean = error.details?.code == "PAIRING_REQUIRED"
+internal fun nodeConnectFailureNeedsApprovalRefresh(error: ErrorShape): Boolean = error.details?.code == "PAIRING_REQUIRED"
 
 internal fun currentNodeCapabilityApproval(
   nodes: List<GatewayNodeSummary>,

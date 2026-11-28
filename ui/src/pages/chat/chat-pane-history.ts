@@ -51,6 +51,7 @@ import { TranscriptHistoryInput } from "./chat-scroll-input.ts";
 import type { ChatState } from "./chat-state-contract.ts";
 import { refreshPageChat } from "./chat-state-refresh.ts";
 import { resolveChatAgentId } from "./chat-state-route.ts";
+import { getTranscriptState } from "./components/chat-thread-interactions.ts";
 import { readTranscriptViewport } from "./components/chat-transcript-scroll-events.ts";
 import { persistChatComposerState } from "./composer-draft-storage.ts";
 import { captureChatSessionScrollPosition, saveChatSessionScrollPosition } from "./scroll.ts";
@@ -175,6 +176,14 @@ export abstract class ChatPaneHistory extends ChatPaneSnapshotHydration {
     this.olderCursorsSeen.clear();
   }
 
+  protected reconcileHistoryAfterRender(): void {
+    this.evaluateHistoryEdge();
+    if (this.conversationPresented) {
+      // A query can precede the first history page, a reconnect, or a pane reveal.
+      void getTranscriptState(this.presentationId).search.resumeEarlierHistory?.();
+    }
+  }
+
   /**
    * The one older-history trigger. Every transcript offset publication and pane commit runs it,
    * whichever writer moved the offset (native input, reader-anchor correction, virtual-core), so
@@ -217,7 +226,10 @@ export abstract class ChatPaneHistory extends ChatPaneSnapshotHydration {
       if (
         this.historyViewportFillAttempted ||
         root.clientHeight <= 0 ||
-        root.scrollHeight > root.clientHeight
+        root.scrollHeight > root.clientHeight ||
+        (!catalogSession &&
+          chatHistoryRequests(this.state).compactOpeningSessionKey === this.state.sessionKey &&
+          this.transcript.hasMessageRows)
       ) {
         return;
       }
@@ -312,6 +324,8 @@ export abstract class ChatPaneHistory extends ChatPaneSnapshotHydration {
     this.recordReaderDirection(true);
     this.evaluateHistoryEdge();
   }
+
+  protected readonly searchEarlier = () => this.loadOlderMessages(false);
 
   protected async loadOlderMessages(readerIntent = true): Promise<boolean> {
     if (this.activeOlderLoad) {

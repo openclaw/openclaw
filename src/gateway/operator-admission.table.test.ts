@@ -96,8 +96,9 @@ const modeFor = (row: Row): Mode =>
 // harness admits both with operator.read + operator.write over a socket. A linked channel sender
 // gets its profile's Control UI grant. An HTTP shared-secret request names the same owner with
 // the documented HTTP scope set (operator.admin included), so it gets the owner's full grant.
-// Durable exec wakes (requester x session principal, configured channel owner) have their cells
-// in owed-exec-requester.test.ts. Cron runs and subagent completion join with the PRs that move
+// Continuation turns (durable exec wake, restart resume, tool handoff) x requester (owner, admin,
+// member, configured channel owner) have their cells in owed-exec-requester.test.ts, read from the
+// woken turn's own owner decision. Cron runs and subagent completion join with the PRs that move
 // them.
 const WRITER_GRANT: TurnGrant = {
   owner: false,

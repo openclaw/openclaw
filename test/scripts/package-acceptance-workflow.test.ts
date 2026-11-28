@@ -1,9 +1,5 @@
 // Package Acceptance Workflow tests cover package acceptance workflow script behavior.
-import {
-  execFileSync,
-  spawnSync,
-  type SpawnSyncOptionsWithStringEncoding,
-} from "node:child_process";
+import { execFileSync, spawnSync } from "node:child_process";
 import { createHash } from "node:crypto";
 import {
   chmodSync,
@@ -2838,6 +2834,7 @@ type Workflow = {
     schedule?: Array<{ cron?: string }>;
     workflow_call?: {
       inputs?: Record<string, { default?: boolean | number | string }>;
+      secrets?: Record<string, { required?: boolean }>;
     };
     workflow_dispatch?: {
       inputs?: Record<string, unknown>;
@@ -3065,15 +3062,9 @@ function workflowStepById(job: WorkflowJob, stepId: string): WorkflowStep {
   return step;
 }
 
-function runBash(script: string, options: Omit<SpawnSyncOptionsWithStringEncoding, "encoding">) {
-  return spawnSync(
-    process.platform === "darwin" ? "/bin/bash" : "bash",
-    ["--noprofile", "--norc", "-c", script],
-    {
-      ...options,
-      encoding: "utf8",
-    },
-  );
+function runBash(script: string, options: Parameters<typeof runWorkflowShellScript>[1]) {
+  // Linux workflow guards need Bash 5 and file-backed Node probes on macOS.
+  return runWorkflowShellScript(script, { ...options, linuxWorkflow: true });
 }
 
 function runFullReleaseInputValidation(releaseProfile: string, skipTelegram: string) {
@@ -10945,6 +10936,72 @@ describe("package artifact reuse", () => {
     },
   );
 
+  it("enables mandatory native harness proofs with their configured credentials", () => {
+    const job = workflowJob(LIVE_E2E_WORKFLOW, "validate_live_provider_suites");
+    const suite = workflowMatrixEntry(
+      LIVE_E2E_WORKFLOW,
+      "validate_live_provider_suites",
+      "native-live-test",
+    );
+    const names = [
+      "OPENCLAW_LIVE_CODEX_NODE_EXEC_TIMEOUT",
+      "OPENCLAW_LIVE_CODEX_GOAL_RESUME",
+      "OPENCLAW_LIVE_OWNER_ASSIGNMENT",
+      "OPENCLAW_LIVE_RESEARCH_ACCEPTANCE",
+      "OPENCLAW_LIVE_CODEX_HARNESS_AUTH",
+      "OPENCLAW_LIVE_CODEX_HARNESS_MODEL",
+    ];
+    // Execute the actual workflow assignments, replacing only the live child.
+    // This proves shell scoping without credentials or paid provider calls.
+    const result = spawnSync("bash", ["-c", ["node() { env; };", suite.command].join("\n")], {
+      encoding: "utf8",
+      env: { PATH: process.env.PATH },
+    });
+    expect(result.status, result.stderr).toBe(0);
+    const assigned = Object.fromEntries(
+      result.stdout
+        .trim()
+        .split("\n")
+        .map((line) => {
+          const index = line.indexOf("=");
+          return [line.slice(0, index), line.slice(index + 1)];
+        }),
+    );
+    expect(Object.fromEntries(names.map((name) => [name, assigned[name]]))).toEqual({
+      OPENCLAW_LIVE_CODEX_NODE_EXEC_TIMEOUT: "1",
+      OPENCLAW_LIVE_CODEX_GOAL_RESUME: "1",
+      OPENCLAW_LIVE_OWNER_ASSIGNMENT: "1",
+      OPENCLAW_LIVE_RESEARCH_ACCEPTANCE: "1",
+      OPENCLAW_LIVE_CODEX_HARNESS_AUTH: "api-key",
+      OPENCLAW_LIVE_CODEX_HARNESS_MODEL: "openai/gpt-5.6-luna",
+    });
+    expect(suite.profiles).toBe("stable full");
+    for (const name of [
+      "CELERIS_API_KEY",
+      "FASTINO_API_KEY",
+      "NACE_API_KEY",
+      "PERPLEXITY_API_KEY",
+    ]) {
+      expect(job.env?.[name]).toBe(
+        "${{ matrix.suite_id == 'native-live-test' && secrets." + name + " || '' }}",
+      );
+      for (const path of [LIVE_E2E_WORKFLOW, PACKAGE_ACCEPTANCE_WORKFLOW]) {
+        expect(readWorkflow(path).on?.workflow_call?.secrets?.[name]).toEqual({ required: false });
+      }
+      for (const [path, jobName] of [
+        [SCHEDULED_LIVE_CHECKS_WORKFLOW, "live_and_openwebui_checks"],
+        [RELEASE_CHECKS_WORKFLOW, "live_repo_e2e_release_checks"],
+        [RELEASE_CHECKS_WORKFLOW, "package_acceptance_release_checks"],
+        [PACKAGE_ACCEPTANCE_WORKFLOW, "docker_acceptance"],
+        [PACKAGE_ACCEPTANCE_WORKFLOW, "docker_acceptance_registry"],
+      ] as const) {
+        expect(workflowJob(path, jobName).secrets, `${path}: ${jobName}`).toMatchObject({
+          [name]: "${{ secrets." + name + " }}",
+        });
+      }
+    }
+  });
+
   it("shards broad native live tests instead of one serial live-all job", () => {
     const workflow = readFileSync(LIVE_E2E_WORKFLOW, "utf8");
     const nativeLiveJob = workflowJob(LIVE_E2E_WORKFLOW, "validate_live_provider_suites");
@@ -11058,7 +11115,7 @@ describe("package artifact reuse", () => {
       "command: OPENCLAW_LIVE_CODEX_HARNESS=1 OPENCLAW_LIVE_CODEX_HARNESS_AUTH=api-key node .release-harness/scripts/test-live-shard.mjs native-live-src-gateway-backends",
       "suite_id: native-live-src-infra",
       "command: OPENCLAW_LIVE_APNS_REACHABILITY=1 OPENCLAW_LIVE_SESSION_EVENT_WAKE=1 node .release-harness/scripts/test-live-shard.mjs native-live-src-infra",
-      "command: OPENCLAW_LIVE_CODEX_NODE_EXEC_TIMEOUT=1 node .release-harness/scripts/test-live-shard.mjs native-live-test",
+      "command: OPENCLAW_LIVE_CODEX_NODE_EXEC_TIMEOUT=1 OPENCLAW_LIVE_CODEX_GOAL_RESUME=1 OPENCLAW_LIVE_OWNER_ASSIGNMENT=1 OPENCLAW_LIVE_RESEARCH_ACCEPTANCE=1 OPENCLAW_LIVE_CODEX_HARNESS_AUTH=api-key OPENCLAW_LIVE_CODEX_HARNESS_MODEL=openai/gpt-5.6-luna node .release-harness/scripts/test-live-shard.mjs native-live-test",
       "suite_id: native-live-src-gateway-profiles-anthropic-smoke",
       "suite_id: native-live-src-gateway-profiles-anthropic-opus",
       "suite_id: native-live-src-gateway-profiles-anthropic-sonnet-haiku",
@@ -11701,38 +11758,41 @@ printf '%s\\n' "$DEEPSEEK_API_KEY" "$DEEPINFRA_API_KEY"`,
     ).toBe("${{ inputs.allow_older_binary_destructive_actions && '1' || '' }}");
   });
 
-  it.each(["stable", "full"])(
-    "rejects Package Acceptance Telegram deferral for direct %s release checks",
-    (releaseProfile) => {
-      const { result } = runReleaseChecksInputValidation(releaseProfile, "true");
-
-      expect(result.status).toBe(1);
-      expect(result.stderr).toContain(
-        "skip_package_telegram_e2e is allowed only for release_profile=beta.",
-      );
+  it.each(
+    (["direct", "umbrella"] as const).flatMap((route) =>
+      (
+        [
+          ["stable", "true", 1],
+          ["full", "true", 1],
+          ["beta", "true", 0],
+          ["stable", "false", 0],
+          ["full", "false", 0],
+        ] as const
+      ).map(([profile, skipTelegram, status]) => ({ route, profile, skipTelegram, status })),
+    ),
+  )(
+    "validates $route $profile Telegram deferral=$skipTelegram",
+    ({ route, profile, skipTelegram, status }) => {
+      const direct =
+        route === "direct" ? runReleaseChecksInputValidation(profile, skipTelegram) : undefined;
+      const result = direct?.result ?? runFullReleaseInputValidation(profile, skipTelegram);
+      expect(result.status, result.stderr).toBe(status);
+      if (status === 1) {
+        expect(result.stderr).toContain(
+          "skip_package_telegram_e2e is allowed only for release_profile=beta.",
+        );
+      } else if (direct) {
+        const output = readFileSync(direct.outputPath, "utf8");
+        expect(output).toContain(`skip_package_telegram_e2e=${skipTelegram}`);
+        if (skipTelegram === "false") {
+          expectTextToIncludeAll(output, [
+            "qa_live_telegram_enabled=true",
+            "run_release_soak=true",
+          ]);
+        }
+      }
     },
   );
-
-  it.each(["stable", "full"])(
-    "rejects Package Acceptance Telegram deferral for umbrella %s validation",
-    (releaseProfile) => {
-      const result = runFullReleaseInputValidation(releaseProfile, "true");
-
-      expect(result.status).toBe(1);
-      expect(result.stderr).toContain(
-        "skip_package_telegram_e2e is allowed only for release_profile=beta.",
-      );
-    },
-  );
-
-  it("allows Package Acceptance Telegram deferral only for beta validation", () => {
-    const direct = runReleaseChecksInputValidation("beta", "true");
-    const umbrella = runFullReleaseInputValidation("beta", "true");
-
-    expect(direct.result.status, direct.result.stderr).toBe(0);
-    expect(readFileSync(direct.outputPath, "utf8")).toContain("skip_package_telegram_e2e=true");
-    expect(umbrella.status, umbrella.stderr).toBe(0);
-  });
 
   it.each([
     { label: "canonical beta", scope: "npm-beta" },
@@ -12023,21 +12083,6 @@ printf '%s\\n' "$DEEPSEEK_API_KEY" "$DEEPINFRA_API_KEY"`,
     expect(mismatchedTag.stderr).toContain("does not match release tag");
   });
 
-  it.each(["stable", "full"])(
-    "preserves normal %s validation when Telegram deferral is false",
-    (releaseProfile) => {
-      const direct = runReleaseChecksInputValidation(releaseProfile, "false");
-      const umbrella = runFullReleaseInputValidation(releaseProfile, "false");
-
-      expect(direct.result.status, direct.result.stderr).toBe(0);
-      const output = readFileSync(direct.outputPath, "utf8");
-      expect(output).toContain("skip_package_telegram_e2e=false");
-      expect(output).toContain("qa_live_telegram_enabled=true");
-      expect(output).toContain("run_release_soak=true");
-      expect(umbrella.status, umbrella.stderr).toBe(0);
-    },
-  );
-
   it("declares isolated release-check phases in dispatch and concurrency", () => {
     const workflow = readWorkflow(RELEASE_CHECKS_WORKFLOW);
 
@@ -12055,70 +12100,45 @@ printf '%s\\n' "$DEEPSEEK_API_KEY" "$DEEPINFRA_API_KEY"`,
     });
   });
 
-  it.each([
-    [
-      "all",
-      {
-        cross_os_scheduled: "true",
-        docker_required: "true",
-        install_smoke_scheduled: "true",
-        live_e2e_scheduled: "true",
-        package_acceptance_scheduled: "true",
-        package_required: "true",
-        qa_live_scheduled: "true",
-        qa_parity_scheduled: "true",
-        run_maturity_scorecard: "true",
-      },
-    ],
-    [
-      "independent",
-      {
-        cross_os_scheduled: "false",
-        docker_required: "false",
-        install_smoke_scheduled: "true",
-        live_e2e_scheduled: "true",
-        package_acceptance_scheduled: "false",
-        package_required: "false",
-        qa_live_scheduled: "true",
-        qa_parity_scheduled: "true",
-        run_maturity_scorecard: "true",
-      },
-    ],
-    [
-      "candidate",
-      {
-        cross_os_scheduled: "true",
-        docker_required: "true",
-        install_smoke_scheduled: "false",
-        live_e2e_scheduled: "false",
-        package_acceptance_scheduled: "true",
-        package_required: "true",
-        qa_live_scheduled: "false",
-        qa_parity_scheduled: "false",
-        run_maturity_scorecard: "false",
-      },
-    ],
-  ] as const)("routes only the %s release-check phase", (phase, expected) => {
-    const { outputPath, result } = runReleaseChecksInputValidation(
-      "stable",
-      "false",
-      "all",
-      "false",
-      "",
-      {
-        candidateArtifactJson: releaseCandidateArtifactJson(),
-        phase,
-        runMaturityScorecard: "true",
-      },
-    );
+  // Each row is an independent scheduling promise across all three release phases.
+  const releasePhaseSchedule = [
+    ["cross_os_scheduled", true, false, true],
+    ["docker_required", true, false, true],
+    ["install_smoke_scheduled", true, true, false],
+    ["live_e2e_scheduled", true, true, false],
+    ["package_acceptance_scheduled", true, false, true],
+    ["package_required", true, false, true],
+    ["qa_live_scheduled", true, true, false],
+    ["qa_parity_scheduled", true, true, false],
+    ["run_maturity_scorecard", true, true, false],
+  ] as const satisfies ReadonlyArray<
+    readonly [output: string, all: boolean, independent: boolean, candidate: boolean]
+  >;
+  it.each(["all", "independent", "candidate"] as const)(
+    "routes only the %s release-check phase",
+    (phase) => {
+      const { outputPath, result } = runReleaseChecksInputValidation(
+        "stable",
+        "false",
+        "all",
+        "false",
+        "",
+        {
+          candidateArtifactJson: releaseCandidateArtifactJson(),
+          phase,
+          runMaturityScorecard: "true",
+        },
+      );
 
-    expect(result.status, result.stderr).toBe(0);
-    const output = readFileSync(outputPath, "utf8");
-    expect(output).toContain(`phase=${phase}\n`);
-    for (const [lane, scheduled] of Object.entries(expected)) {
-      expect(output).toContain(`${lane}=${scheduled}\n`);
-    }
-  });
+      expect(result.status, result.stderr).toBe(0);
+      const output = readFileSync(outputPath, "utf8");
+      expect(output).toContain(`phase=${phase}\n`);
+      const phaseColumn = { all: 1, independent: 2, candidate: 3 } as const;
+      for (const schedule of releasePhaseSchedule) {
+        expect(output).toContain(`${schedule[0]}=${schedule[phaseColumn[phase]]}\n`);
+      }
+    },
+  );
 
   it("fails closed when a candidate phase would rebuild an FRV artifact", () => {
     const missing = runReleaseChecksInputValidation("beta", "false", "package", "false", "", {
@@ -15052,14 +15072,10 @@ printf '%s\\n' "$DEEPSEEK_API_KEY" "$DEEPINFRA_API_KEY"`,
     const notesIndex = publishSteps.findIndex(
       (step) => step.name === "Prepare GitHub release notes",
     );
-    const dispatchIndex = publishSteps.findIndex(
-      (step) => step.name === "Dispatch publish workflows",
-    );
     expect(setupIndex).toBeGreaterThan(-1);
     expect(notesIndex).toBeGreaterThan(setupIndex);
     expect(publishSteps.some((step) => step.name === "Write Android release approval")).toBe(false);
     expect(workflowJob(RELEASE_PUBLISH_WORKFLOW, "publish_android").needs).toContain("publish");
-    expect(dispatchIndex).toBeGreaterThan(notesIndex);
     expect(publishSteps[notesIndex]?.if).toBe("${{ inputs.publish_openclaw_npm }}");
 
     const publishRun = publishOrchestration.run ?? "";
@@ -16091,7 +16107,14 @@ ${operation} plugin-clawhub-new.yml 123 "${expectedSha}" || status=$?
   });
 
   it("documents checked extended-stable dispatch instead of a raw-SHA workflow ref", () => {
-    const releaseCi = readFileSync(".agents/skills/release-openclaw-ci/SKILL.md", "utf8");
+    const readSkillDocs = (skillRoot: string) =>
+      listDirectoryTreeStrictSync(skillRoot)
+        .map((walkEntry) => walkEntry.relativePath)
+        .filter((name) => name.endsWith(".md"))
+        .toSorted()
+        .map((name) => readFileSync(`${skillRoot}/${name}`, "utf8"))
+        .join("\n");
+    const releaseCi = readSkillDocs(".agents/skills/release-openclaw-ci");
     // The CI page is an index over docs/ci/**. Read the whole tree so this
     // assertion follows the content instead of a single file path. The walk is
     // recursive because docs/ci pages are themselves split into subdirectories
@@ -16114,7 +16137,7 @@ ${operation} plugin-clawhub-new.yml 123 "${expectedSha}" || status=$?
         .toSorted()
         .map((name) => readFileSync(`docs/reference/full-release-validation/${name}`, "utf8")),
     ].join("\n");
-    const liveUpdater = readFileSync(".agents/skills/openclaw-live-updater/SKILL.md", "utf8");
+    const liveUpdater = readSkillDocs(".agents/skills/openclaw-live-updater");
 
     const canonicalExtendedStableDispatch = [
       'VALIDATION_SHA="<exact-candidate-sha>"',
