@@ -9,7 +9,7 @@ import { buildStatusScanResult } from "./status.scan-result.ts";
 export async function executeStatusScanFromOverview(params: {
   overview: StatusScanOverviewResult;
   includeMemory?: boolean;
-  pluginCompatibility: PluginCompatibilityNotice[];
+  pluginCompatibility: PluginCompatibilityNotice[] | null;
 }) {
   const {
     skipColdStartNetworkChecks: _skipColdStartNetworkChecks,

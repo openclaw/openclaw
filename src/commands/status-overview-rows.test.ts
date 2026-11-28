@@ -81,6 +81,11 @@ it("reports events, skipped probes and distinct incompatible plugins", () => {
   expect(findRowValue(emptyRows, "Plugin compatibility")).toBe("ok(none)");
 });
 
+it("marks uncollected plugin compatibility as not checked", () => {
+  params.pluginCompatibility = null;
+  expect(value("Plugin compatibility")).toBe("muted(not checked (use --all))");
+});
+
 it("reports stored sessions, default context and multiple or absent stores", () => {
   params.summary.sessions = { ...params.summary.sessions, paths: ["store.json", "other.json"] };
   expect(value("Sessions")).toBe("2 stored · default gpt-5.5 (12k ctx) · 2 stores");
