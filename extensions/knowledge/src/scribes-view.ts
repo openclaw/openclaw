@@ -6,6 +6,7 @@ import {
   openStartDialog,
   pluginButton,
   pluginStateText,
+  runCheckText,
   scribeTile,
 } from "./scribe-dialog.js";
 import { openScheduleDialog } from "./scribe-schedule-dialog.js";
@@ -657,6 +658,10 @@ function detail(
       tokens?.user === undefined ? "" : tokens.user ? "user token configured" : "no user token",
     ].filter(Boolean);
     value.append(el("span", [pluginStateText(scribe.plugin, readiness), ...tokenText].join(" · ")));
+    const checks = runCheckText(scribe.plugin);
+    if (checks) {
+      value.append(el("small", checks, "knowledge-muted"));
+    }
     if (readiness !== "ready") {
       value.append(
         pluginButton(host.basePath, scribe.plugin, readiness, "knowledge-quiet knowledge-small"),

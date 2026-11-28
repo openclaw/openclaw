@@ -1,5 +1,6 @@
 /** Scribe dialogs: the start dialog with each scribe's options and prompt, and the turn-off confirmation. */
 import { button, choice, el } from "./page-dom.js";
+import { mailFields } from "./scribe-mail-fields.js";
 import { slackFields } from "./scribe-slack-fields.js";
 import {
   CONVERSATIONS_SCHEDULE,
@@ -59,9 +60,19 @@ const PLUGIN_STATE: Record<PluginReadiness, (name: string) => string> = {
   "needs-sign-in": (name) => `${name} plugin installed, not connected to your ${name} account`,
   ready: (name) => `${name} connected`,
 };
-/** One line for a needed plugin's readiness. */
+/**
+ * One line for a needed plugin's readiness. A plugin whose sign-in only its runs can check is
+ * "on" rather than "connected".
+ */
 export const pluginStateText = (plugin: ScribePlugin, readiness: PluginReadiness) =>
-  PLUGIN_STATE[readiness](plugin.name);
+  readiness === "ready" && plugin.checkedByRun
+    ? `${plugin.name} plugin on`
+    : PLUGIN_STATE[readiness](plugin.name);
+
+/** What each run checks that the page can't, for a plugin that has such checks. */
+export const runCheckText = (plugin: ScribePlugin) =>
+  plugin.checkedByRun &&
+  `Each run first checks ${plugin.checkedByRun}, and stops with a failure that says which is missing.`;
 
 // The control that fixes a needed plugin, by readiness; a ready plugin needs none.
 const PLUGIN_ACTION: Record<Exclude<PluginReadiness, "ready">, (name: string) => string> = {
@@ -364,6 +375,10 @@ function pluginNotice(input: StartDialogInput) {
         : `${state}. Connect it before starting this scribe.`,
     ),
   );
+  const checks = runCheckText(scribe.plugin);
+  if (checks) {
+    notice.append(el("p", checks, "knowledge-muted"));
+  }
   if (readiness !== "ready") {
     notice.append(pluginButton(input.basePath, scribe.plugin, readiness));
   }
@@ -596,6 +611,11 @@ export function openStartDialog(input: StartDialogInput) {
     options = fields.options;
   } else if (scribe.id === "granola") {
     const fields = granolaFields(changed);
+    frame.body.append(...fields.nodes);
+    mode = fields.mode;
+    options = fields.options;
+  } else if (scribe.id === "mail") {
+    const fields = mailFields(changed);
     frame.body.append(...fields.nodes);
     mode = fields.mode;
     options = fields.options;

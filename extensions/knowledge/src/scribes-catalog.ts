@@ -1,7 +1,13 @@
 /** The scribes Knowledge can start, their options, and the readable prompts that start, run and repair them. */
 import type { IconName } from "./ui-icons.js";
 
-export type ScribeId = "claim-consolidation" | "conversations" | "granola" | "memory" | "slack";
+export type ScribeId =
+  | "claim-consolidation"
+  | "conversations"
+  | "granola"
+  | "mail"
+  | "memory"
+  | "slack";
 export type ScribeMode = "once" | "ongoing";
 export type ConversationScope = "active" | "all";
 export type ConversationSince = "30d" | "90d" | "all" | "today";
@@ -10,6 +16,7 @@ export type MemorySource = "memory-md" | "daily-notes" | "dreams";
 export type GranolaMeetings = "mine" | "all";
 export type GranolaSince = "7d" | "30d" | "today";
 export type SlackSince = "7d" | "30d" | "today";
+export type MailSince = "7d" | "30d" | "today";
 export type ReviewSchedule = typeof REVIEW_WEEKLY_SCHEDULE | typeof REVIEW_NIGHTLY_SCHEDULE;
 
 /** Dialog choices for each scribe; the prompts spell them out as settings. */
@@ -17,6 +24,8 @@ export type ScribeOptions = {
   "claim-consolidation": { schedule: ReviewSchedule };
   conversations: { scope: ConversationScope; since: ConversationSince; schedule?: string };
   granola: { meetings: GranolaMeetings; since: GranolaSince; schedule?: string };
+  /** `sent` also lists threads with mail the owner sent, not only mail they received. */
+  mail: { since: MailSince; sent: boolean; schedule?: string };
   memory: { sources: MemorySource[] };
   /**
    * `userToken` also reads the channels the owner's Slack user token can access; `dms` also reads
@@ -43,6 +52,11 @@ export type ScribePlugin = {
   name: string;
   catalogPath: string;
   channel?: { id: string; accountPath: string };
+  /**
+   * For a plugin that only guides a command-line tool: what the page can't read and each run
+   * checks first instead (the tool's sign-in and linked accounts).
+   */
+  checkedByRun?: string;
 };
 
 /** Static description of one scribe, shared by the list, detail and start dialog. */
@@ -74,6 +88,8 @@ export const CONVERSATIONS_SCHEDULE = "0 4 * * *";
 export const GRANOLA_SCHEDULE = "0 10,14,18 * * 1-5";
 /** Schedule an ongoing Slack scribe uses: weekdays at 9:30 AM, 1:30 PM and 5:30 PM. */
 export const SLACK_SCHEDULE = "30 9,13,17 * * 1-5";
+/** Schedule an ongoing Mail scribe uses: weekdays at 8 AM, 12 PM and 4 PM. */
+export const MAIL_SCHEDULE = "0 8,12,16 * * 1-5";
 /** Default review schedule: Sundays at 3:45 AM in the operator's timezone. */
 export const REVIEW_WEEKLY_SCHEDULE = "45 3 * * 0";
 /** Nightly review schedule: 3:45 AM, after the default 3:30 AM maintenance relink. */
@@ -121,6 +137,26 @@ export const SCRIBES: readonly ScribeDefinition[] = [
     cadence: "Once or ongoing",
     startLabel: "Set up…",
     dialogTitle: "Learn from Granola",
+    submitLabel: "Start",
+  },
+  {
+    id: "mail",
+    title: "Learn from Mail",
+    blurb:
+      "Reads your Gmail through Composio, picks out the threads worth remembering, and saves their decisions, commitments in both directions and news, keeping the people and projects in them up to date. It never sends, labels or deletes mail. Run it once, or keep it learning as mail arrives.",
+    skill: "knowledge-source-ingest",
+    icon: "mail",
+    tone: "amber",
+    plugin: {
+      id: "composio",
+      name: "Composio",
+      catalogPath: "composio/composio",
+      checkedByRun: "the Composio CLI's sign-in and its Gmail link",
+    },
+    modes: ["ongoing", "once"],
+    cadence: "Once or ongoing",
+    startLabel: "Set up…",
+    dialogTitle: "Learn from Mail",
     submitLabel: "Start",
   },
   {
@@ -184,14 +220,15 @@ export const setupIdempotencyKey = (id: ScribeId, sessionKey: string, attempt: s
 
 /**
  * Default dialog choices: conservative (weekly review; active conversations, last 30 days; the
- * owner's Granola meetings, last 7 days; Slack channels the bot is in, last 7 days, without the
- * user token or direct messages).
+ * owner's Granola meetings, last 7 days; Gmail from the last 7 days with the owner's sent mail;
+ * Slack channels the bot is in, last 7 days, without the user token or direct messages).
  */
 export function defaultOptions<Id extends ScribeId>(id: Id): ScribeOptions[Id] {
   const defaults: ScribeOptions = {
     "claim-consolidation": { schedule: REVIEW_WEEKLY_SCHEDULE },
     conversations: { scope: "active", since: "30d", schedule: CONVERSATIONS_SCHEDULE },
     granola: { meetings: "mine", since: "7d", schedule: GRANOLA_SCHEDULE },
+    mail: { since: "7d", sent: true, schedule: MAIL_SCHEDULE },
     memory: { sources: ["memory-md", "daily-notes"] },
     slack: { since: "7d", userToken: false, dms: false, schedule: SLACK_SCHEDULE },
   };
@@ -218,6 +255,7 @@ const SCHEDULE_WORDS: Record<string, string> = {
   [CONVERSATIONS_SCHEDULE]: "daily at 4:00 AM",
   [GRANOLA_SCHEDULE]: "weekdays at 10:00 AM, 2:00 PM and 6:00 PM",
   [SLACK_SCHEDULE]: "weekdays at 9:30 AM, 1:30 PM and 5:30 PM",
+  [MAIL_SCHEDULE]: "weekdays at 8:00 AM, 12:00 PM and 4:00 PM",
 };
 const SINCE_WORDS: Record<ConversationSince, string> = {
   "30d": "from the last 30 days",
@@ -239,6 +277,15 @@ const SLACK_SINCE_WORDS: Record<SlackSince, string> = {
   "30d": "from the last 30 days",
   today: "from today on (new messages only)",
 };
+const MAIL_SINCE_WORDS: Record<MailSince, string> = {
+  "7d": "from the last 7 days",
+  "30d": "from the last 30 days",
+  today: "from today on (new mail only)",
+};
+const MAIL_SENT_WORDS = {
+  off: "list only threads with mail the owner received; the owner's replies in them are still read.",
+  on: "also list threads with mail the owner sent, so their own requests and promises are read.",
+} as const;
 const SLACK_USER_TOKEN_WORDS = {
   off: "not used; read only channels the Slack bot is a member of.",
   on: "also read every channel the owner's Slack user token can access, when one is configured.",
@@ -258,6 +305,7 @@ export const SCHEDULE_CHOICES: Partial<Record<ScribeId, readonly string[]>> = {
   "claim-consolidation": [REVIEW_WEEKLY_SCHEDULE, REVIEW_NIGHTLY_SCHEDULE],
   conversations: [CONVERSATIONS_SCHEDULE],
   granola: [GRANOLA_SCHEDULE],
+  mail: [MAIL_SCHEDULE],
 };
 /** An offered cron schedule in words ("weekly, Sundays at 3:45 AM"); undefined for any other. */
 export const scheduleWords = (expr: string): string | undefined => SCHEDULE_WORDS[expr];
@@ -278,11 +326,17 @@ const CONSOLIDATION_AMOUNTS: Record<ReviewSchedule, { timelines: number; pages: 
 const GRANOLA_MEETINGS_PER_RUN = 4;
 /** Channels with new messages one scheduled Learn from Slack run ingests, within the same ceiling. */
 const SLACK_CHANNELS_PER_RUN = 6;
+/**
+ * Gmail threads one scheduled Learn from Mail run ingests, and the most it triages to find them,
+ * within the same ceiling.
+ */
+const MAIL_THREADS_PER_RUN = 10;
+const MAIL_TRIAGE_PER_RUN = 80;
 /** How a settings line naming a scheduled run's amount begins. */
 const EACH_RUN = "Each run:";
 
-// The settings a scribe's work reads: conversations, Granola meetings, Memory files, Slack
-// channels and how much a scheduled run takes on. Schedules are separate.
+// The settings a scribe's work reads: conversations, Granola meetings, Gmail threads, Memory
+// files, Slack channels and how much a scheduled run takes on. Schedules are separate.
 // `amounts: false` leaves them out, as for a consolidation automation on a custom schedule.
 function workSettings(setup: ScribeSetup, wording = CURRENT_WORDING, amounts = true) {
   const { options } = setup;
@@ -300,6 +354,17 @@ function workSettings(setup: ScribeSetup, wording = CURRENT_WORDING, amounts = t
   }
   if ("sources" in options) {
     return [`Memory files: ${listWords(options.sources.map((source) => MEMORY_WORDS[source]))}.`];
+  }
+  if ("sent" in options) {
+    return [
+      `Gmail threads: the Gmail account linked in Composio, ${MAIL_SINCE_WORDS[options.since] ?? options.since}, leaving out promotions, social and forums mail.`,
+      `Sent mail: ${MAIL_SENT_WORDS[options.sent ? "on" : "off"]}`,
+      ...(scheduled
+        ? [
+            `${EACH_RUN} ingest ${MAIL_THREADS_PER_RUN} threads, triaging at most ${MAIL_TRIAGE_PER_RUN}.`,
+          ]
+        : []),
+    ];
   }
   if ("userToken" in options) {
     return [
@@ -326,6 +391,7 @@ const PURPOSE: Record<ScribeId, string> = {
     "This scribe reads the owner's conversations and saves the decisions, preferences, commitments and lessons in them to Knowledge.",
   granola:
     "This scribe reads the owner's Granola meetings through the Granola plugin and turns each one into a meeting page, updated people and project pages, and the decisions and commitments in it.",
+  mail: "This scribe reads the owner's Gmail, read-only, through the Composio CLI, decides which threads are worth remembering (with the agent's decision model when one is set), and saves their decisions, commitments in both directions and news to Knowledge, keeping the people and projects in them up to date.",
   memory:
     "This scribe brings what Memory already knows into Knowledge. Memory itself is left as it is.",
   slack:
@@ -340,6 +406,7 @@ const WORK: Record<ScribeId, string> = {
     'Follow "Learn from conversations" in the "Scribe runs" section of the knowledge-ingest skill, for the conversations in the settings.',
   granola:
     'Follow "Learn from Granola" in the "Scribe runs" section of the knowledge-meeting-ingest skill, for the Granola meetings in the settings.',
+  mail: 'Follow "Learn from Mail" in the "Scribe runs" section of the knowledge-source-ingest skill, for the Gmail threads in the settings. Read Gmail only through the skill\'s gmail-read.mjs script; never send, draft, label, archive or delete mail.',
   memory:
     'Follow "Learn from Memory" in the "Scribe runs" section of the knowledge-ingest skill, for the Memory files in the settings. Use knowledge_memory_import_progress to check their current hashes before reading them and save progress after each file. Never change Memory files.',
   slack:
@@ -353,6 +420,7 @@ const COUNTS: Record<ScribeId, string> = {
   conversations: "conversations learned and skipped, claims and pages written",
   granola:
     "meetings ingested, already in Knowledge, left pending and without a transcript, pages and claims written",
+  mail: "threads listed, left out by the prefilter, triaged, skipped, ingested and left for a later run, pages and claims written",
   memory: "files read, items saved, already known and skipped",
   slack:
     "channels read, channels left for a later run, messages read, discussions ingested, pages and claims written",
@@ -364,7 +432,7 @@ const UNATTENDED = "Don't ask questions: nobody is watching this turn.";
  * Wording a run message is generated from; earlier releases generated some of it differently.
  * `work` and `counts` replace a scribe's current work step and closing counts; `rules` are a
  * scribe's extra closing rules after the failure rule; `amounts` adds how much a scheduled
- * consolidation, Granola or Slack run takes on to its settings.
+ * consolidation, Granola, Mail or Slack run takes on to its settings.
  */
 type RunWording = {
   access: string;
@@ -499,6 +567,7 @@ const choicesOf = <K extends string>(table: Record<K, unknown>) =>
 export const EDITABLE_SETTINGS: ReadonlySet<ScribeId> = new Set([
   "conversations",
   "granola",
+  "mail",
   "slack",
 ]);
 
@@ -509,6 +578,9 @@ export function settingsSummary(options: ScribeOptions[ScribeId]) {
   }
   if ("meetings" in options) {
     return options.meetings === "all" ? "Every meeting you can read" : "Your meetings";
+  }
+  if ("sent" in options) {
+    return options.sent ? "Mail you received and sent" : "Mail you received";
   }
   if ("userToken" in options) {
     return [
@@ -528,6 +600,11 @@ function settingsChoices(id: ScribeId): ScribeOptions[ScribeId][] {
   if (id === "granola") {
     return choicesOf(GRANOLA_MEETING_WORDS).flatMap((meetings) =>
       choicesOf(GRANOLA_SINCE_WORDS).map((since) => ({ meetings, since })),
+    );
+  }
+  if (id === "mail") {
+    return choicesOf(MAIL_SINCE_WORDS).flatMap((since) =>
+      [true, false].map((sent) => ({ since, sent })),
     );
   }
   if (id === "slack") {

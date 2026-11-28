@@ -3,7 +3,9 @@
 The scribe's prompt checks access, sets up any automation and lists its
 settings; this is only the work. Do not ask questions. Read Slack only through
 the Slack plugin's `message` tool actions `channel-list` and `read`. Never send,
-react, edit, pin or change anything in Slack.
+react, edit, pin or change anything in Slack. Read Gmail only through
+`scripts/gmail-read.mjs`. Never run `composio` yourself, and never send, draft,
+label, archive or delete mail.
 
 ## Learn from Slack
 
@@ -124,3 +126,114 @@ direct messages and group DMs are included.
 10. Count channels read and left for a later run, messages read, discussions
     ingested, and pages and claims written. The status line gives counts only:
     never a channel name, author or message text.
+
+## Learn from Mail
+
+The owner decided that this scribe reads Gmail through Composio, and that a
+decision model decides which threads are ingested. Its extraction follows
+gbrain's open loops: what the owner promised, and who is waiting on whom.
+
+The prompt names how far back to start (today, or the last 7 or 30 days, in the
+owner's time zone) and whether threads with mail the owner sent are listed too.
+
+1. **Connection.** Run `node scripts/gmail-read.mjs check`. It prints
+   `{"ok": true, "account": "<address>"}`, or `{"ok": false, "problem", "detail"}`.
+   Stop on a failure, with the status line its problem names:
+   - `cli-missing`: `Scribe status: failed — the Composio CLI is not installed on the Gateway host`
+   - `signed-out`: `Scribe status: failed — the Composio CLI is not signed in (composio login)`
+   - `gmail-not-linked`: `Scribe status: failed — Gmail is not linked in Composio (composio link gmail)`
+   - `temporary` or `gmail-error`: `Scribe status: failed — Gmail could not be read through Composio`
+
+   Run every `gmail-read.mjs` command the same way, and stop the same way when
+   one fails. When several Gmail accounts are linked, Composio asks for one:
+   that is a `gmail-error` to report, not one to choose for the owner.
+
+2. **Checkpoint.** `knowledge_lookup` the note page
+   `Knowledge scribe checkpoint · Learn from Mail`. Its first lines are
+   `Start: YYYY-MM-DD` (the start date the prompt set when the page was
+   created), `Account: <address>` and `Listed through: <RFC 3339 time>`. Then
+   one line per thread:
+   `<thread id> · history <history id> · messages <messages digest> · newest <YYYY-MM-DD> · <outcome>`,
+   where the outcome is `ingested` or `skipped (<reason>)`. Drop a thread line
+   once its newest message is 90 days old. Lines record outcomes only: never
+   write resume notes, plans or instructions for a later run on the page.
+   Create the page with `knowledge_save_page` (type `note`) on the first run,
+   writing the prompt's start date, the checked account and no
+   `Listed through` line. If `Account` names another address than the check
+   printed, stop with
+   `Scribe status: failed — the Gmail account linked in Composio changed`.
+3. **List.** Note the time, then run
+   `node scripts/gmail-read.mjs list --after <epoch seconds> [--sent] --output list.json`,
+   with `--sent` when the settings list sent mail. Start one day before
+   `Listed through`, or at midnight of `Start` in the owner's time zone when
+   there is none; never before `Start`. The script leaves out promotions,
+   social and forums mail, chats and drafts, and returns threads oldest change
+   first. A thread whose checkpoint line has the same history ID is unchanged:
+   leave it.
+4. **Fetch.** Work through the other threads in that order, in batches of up
+   to 20: fetch, prefilter and triage a batch (steps 4 to 6), ingest the
+   threads it picked (step 7), then take the next batch. Fetch with
+   `node scripts/gmail-read.mjs threads --id <thread id> ... --output-dir threads`. Then run
+   `node scripts/gmail-normalize.mjs triage --account <address> --input threads/<id>.json ...`.
+   A thread whose `messages_digest` is the one on its checkpoint line holds the
+   same messages and only changed labels (it was read, starred or archived):
+   update its history ID and keep its outcome. Any other digest means a message
+   was added or deleted: triage it again, and ingest an `ingested` thread again
+   whatever the triage says, so the manifest plan reconciles the change.
+5. **Prefilter.** A triage row with a `prefilter` reason (`list-mail`,
+   `automated-sender`, `bulk-category`, `calendar-notice`, `spam-or-trash` or
+   `no-mail`) is skipped with that reason, without reading it further. The
+   prefilter keeps every thread the owner wrote in, whatever its labels.
+6. **Triage.** For each remaining row, call `decision_evaluate` with the row's
+   `decision` object unchanged. Its `ingest` answer decides: an explicit
+   `answer` of `true`, or a `probabilityTrue` of at least 0.5 without one,
+   means ingest; otherwise skip with the `kind` choice as the reason (for
+   example `skipped (routine)`). When the agent has no `decision_evaluate`
+   tool, or the result is unavailable, an error or an abstention (`null`),
+   decide yourself from the same state and criteria, and write the reason as
+   `skipped (rubric: <kind>)`. Never send the thread anywhere else to decide.
+   Write each skipped thread's line as soon as it is decided.
+7. **Ingest.** Oldest first, one thread at a time:
+   1. Run `node scripts/gmail-normalize.mjs messages --account <address> --input threads/<id>.json --output messages.jsonl`.
+      Its stderr names the source key `gmail:<address>/<thread id>` and the
+      thread's Gmail link. Run `scripts/chat-transcript.mjs` over it with
+      `--channel "Email: <subject>"` and the source key for a line-stable
+      transcript.
+   2. Follow steps 1, 3 and 4 of the procedure: find the canonical source page
+      and prior snapshots by the source key, run
+      `scripts/source-manifest.mjs snapshot` (`--provider gmail`,
+      `--completeness complete`, coverage from the first message to the time
+      the thread was fetched), and `plan` it against prior manifests. A thread
+      read is the whole thread, drafts left out, so a message missing from a
+      later read was deleted in Gmail; that is observed source state, not a
+      reason to erase Knowledge. Keep the Gmail link on the canonical source
+      page.
+   3. Run step 5 of the procedure through `knowledge-ingest`, with
+      `knowledge-entities` for the people, companies and projects. Resolve
+      each sender and recipient who matters by the `email:<address>` alias
+      first ([identity](identity.md)); add the alias to a person page you
+      create or confirm. The account address is the owner. Never write an email
+      address in page prose.
+   4. Save the thread's decisions and commitments in both directions: what the
+      owner promised or asked for, and who is waiting on the owner (or on
+      whom the owner waits), each with the counterparty, the date and any due
+      date, as `commitment` or `decision` claims on the most specific page.
+      A question addressed to the owner that their newest message did not
+      answer is someone waiting on the owner. Quoted text, signatures and
+      newsletters carry nothing to save.
+   5. Publish and verify (steps 6 and 7) before the thread counts as done, then
+      write its line `ingested`.
+
+   A thread you start, you finish: reading or digesting it is not a stopping
+   point. A thread whose ingestion fails keeps its old line (or none), so the
+   next run reads it again. A scheduled run's message sets how many threads it
+   ingests and the most it triages; without one, triage and ingest every
+   listed thread. The ingest number is a target, not a limit: compaction keeps
+   what you published, so a long run is no reason to stop early.
+
+8. **Record.** When every listed thread has a line, set `Listed through` to
+   the time noted in step 3 with `knowledge_edit_body`. A run that left
+   threads for later keeps the old value, so the next run lists them again.
+9. Count threads listed, left out by the prefilter, triaged, skipped, ingested
+   and left for a later run, and pages and claims written. The status line
+   gives counts only: never a subject, sender, address or message text.

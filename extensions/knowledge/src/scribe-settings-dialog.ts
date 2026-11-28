@@ -9,6 +9,7 @@ import {
   scribeTile,
   show,
 } from "./scribe-dialog.js";
+import { mailFields } from "./scribe-mail-fields.js";
 import { slackFields } from "./scribe-slack-fields.js";
 import { needsUpgrade, updateScribe } from "./scribes-actions.js";
 import {
@@ -41,6 +42,9 @@ function settingsFields(input: SettingsDialogInput, changed: () => void) {
   }
   if (scribe.id === "granola" && "meetings" in options) {
     return { valid: () => true, ...granolaFields(changed, options) };
+  }
+  if (scribe.id === "mail" && "sent" in options) {
+    return { valid: () => true, ...mailFields(changed, options) };
   }
   if (scribe.id === "slack" && "userToken" in options) {
     return slackFields(detection, changed, options);

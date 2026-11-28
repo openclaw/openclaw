@@ -5,6 +5,7 @@ read_when:
   - You are turning on the scheduled consolidation of unlinked claims
   - You want Granola meetings ingested into Knowledge automatically
   - You want Knowledge to learn from your Slack channels
+  - You want Knowledge to learn from your Gmail through Composio
   - A scribe shows Failing or Conversation not found on the Scribes tab
   - A scribe shows New run instructions after you update OpenClaw
   - A scheduled Learn from Slack run fails because the automation has no recorded creator origin
@@ -29,6 +30,7 @@ which can be started again.
 | Knowledge Consolidation  | Ongoing         | Weekly or nightly                                                                | `knowledge-claim-consolidation` |
 | Learn from conversations | Once or ongoing | Active only, or active and archived; starting 30 days, 90 days, all, or today    | `knowledge-ingest`              |
 | Learn from Granola       | Once or ongoing | Your meetings, or every meeting you can read; starting 7 days, 30 days, or today | `knowledge-meeting-ingest`      |
+| Learn from Mail          | Once or ongoing | Starting 7 days, 30 days, or today; threads you wrote in                         | `knowledge-source-ingest`       |
 | Learn from Memory        | Once            | `MEMORY.md`, daily notes, and the Dreaming diary (`DREAMS.md`)                   | `knowledge-ingest`              |
 | Learn from Slack         | Once or ongoing | Starting 7 days, 30 days, or today; Slack user token; direct messages            | `knowledge-source-ingest`       |
 
@@ -58,6 +60,14 @@ which can be started again.
   `Knowledge scribe checkpoint · Learn from Granola`, so an interrupted run
   resumes. Defaults are your meetings (recorded by you or with you invited)
   from the last 7 days.
+- **Learn from Mail** reads Gmail, read-only, through the
+  [Composio CLI](#composio-and-gmail), picks the threads worth remembering, and
+  saves their decisions, commitments in both directions, and news, updating the
+  people, companies, and projects involved. Ongoing runs check for new mail on
+  weekdays at 8 AM, 12 PM, and 4 PM in your time zone. It keeps a checkpoint
+  page, `Knowledge scribe checkpoint · Learn from Mail`, with each thread it
+  triaged and its outcome, so a thread is read again only when it gets new
+  mail. Defaults are the last 7 days, including threads you wrote in.
 - **Learn from Memory** brings `memory-core` notes into Knowledge once and
   saves progress as each file finishes. After a Gateway restart,
   [restart recovery](/gateway/restart-recovery#automatic-resume) continues
@@ -98,6 +108,60 @@ The scribe keeps the meeting's Granola ID (the UUID in its
 `notes.granola.ai/d/…` link) on the meeting page. It retains the meeting notes
 and the full transcript as originals; a meeting without a transcript is not
 ingested.
+
+### Composio and Gmail
+
+Learn from Mail reads Gmail through the [Composio CLI](https://docs.composio.dev/docs/cli)
+on the Gateway host. Set it up there before starting the scribe:
+
+1. Install the Composio plugin (`openclaw plugins install @composio/composio`)
+   and turn it on. It adds `openclaw composio setup`, `status` and `doctor`.
+2. Install the CLI so `composio` is on the Gateway's `PATH`, then run
+   `composio login` and `composio link gmail`.
+
+The Scribes tab checks that the Composio plugin is installed and on:
+
+| Shown                                    | Control               |
+| ---------------------------------------- | --------------------- |
+| Needs the Composio plugin, not installed | **Install Composio…** |
+| Needs the Composio plugin, turned off    | **Turn on Composio…** |
+| Composio plugin on                       | None                  |
+
+The page can't see the CLI's sign-in or which accounts are linked, so every run
+checks them first and stops with `Scribe status: failed`, saying whether the
+CLI is missing, signed out, or has no Gmail linked. The tab shows that as
+**Failing** with the reason. When several Gmail accounts are linked, give one
+the `default` alias in Composio.
+
+The scribe reads Gmail only with the skill's `gmail-read.mjs` script, which runs
+three read-only Composio tools: `GMAIL_GET_PROFILE`, `GMAIL_LIST_THREADS` and
+`GMAIL_FETCH_MESSAGE_BY_THREAD_ID`. It never sends, drafts, labels, archives, or
+deletes mail.
+
+Each run decides which threads to ingest in two steps:
+
+1. **Prefilter.** Listing leaves out Gmail's promotions, social, and forums
+   categories, chats, and drafts. Threads whose received mail is all mailing
+   lists (`List-Unsubscribe`, `List-Id` or bulk `Precedence`), automated
+   senders (such as `no-reply` addresses), calendar notices, or bulk categories
+   are skipped. A thread you wrote in is never skipped this way. Updates mail is
+   kept, since contracts and document requests arrive there.
+2. **Triage.** For each remaining thread, the scribe asks the agent's
+   [decision model](/concepts/decision-models) whether it holds something worth
+   remembering (a decision, a commitment or request in either direction, news
+   about people or projects you work with, an introduction) or is routine, and
+   what kind of mail it is. The request holds the subject, senders, and short
+   excerpts of the newest messages, and goes to the decision provider the agent
+   uses. Without a decision model, or when its answer is unavailable, the
+   scribe's own model applies the same criteria.
+
+Each ingested thread is one source in Knowledge, keyed
+`gmail:<address>/<thread id>`, with retained snapshot manifests and the
+thread's Gmail link. Senders and recipients are matched to person pages by
+their `email:<address>` alias. Email addresses are never written in page
+prose. **Also threads you wrote in** (on by default) also lists threads with
+mail you sent, so your own requests and promises are read even before anyone
+replies; your replies in threads you received are read either way.
 
 ### The Slack plugin
 
@@ -201,8 +265,9 @@ Steps:
 ```
 
 To change when it runs, use **Change…** next to **Schedule** in the scribe's
-detail. Learn from conversations, Learn from Granola and Learn from Slack also
-have **Change…** next to **Settings**, which changes what they read. To change
+detail. Learn from conversations, Learn from Granola, Learn from Mail and Learn
+from Slack also have **Change…** next to **Settings**, which changes what they
+read. To change
 anything else later runs do, edit the run message on the Automations page.
 
 ## After updating OpenClaw
@@ -297,6 +362,10 @@ A scheduled Learn from Slack run works toward ingesting 6 channels with new
 messages, oldest checkpoint first, so every channel gets its turn; a one-time
 run ingests every channel. Channels without new messages don't count.
 
+A scheduled Learn from Mail run works toward ingesting 10 threads, oldest
+change first, and triages at most 80; a one-time run triages and ingests every
+listed thread. Threads left for later are listed again on the next run.
+
 A Learn from Granola run reports `needs attention` when it left meetings pending,
 ingested none, and nothing outside the run held them back. A meeting stays
 pending only while it is still being recorded, its transcript is not ready, or
@@ -305,7 +374,7 @@ verification still fails after a fix attempt.
 ## Controls
 
 Open a scribe for its schedule, settings, next and last run, model, failure
-alert, and recent runs. Learn from Granola and Learn from Slack also show their plugin's
+alert, and recent runs. Learn from Granola, Learn from Mail and Learn from Slack also show their plugin's
 state as their source; for Slack, it also says whether the account has a bot token and a user token.
 
 | Control            | Effect                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                |
@@ -313,7 +382,7 @@ state as their source; for Slack, it also says whether the account has a bot tok
 | Run now            | Requests a run of the automation. It can wait for scheduler capacity; acceptance is not a running-state report. If a run is already in progress, it does not start another.                                                                                                                                                                                                                                                                                                                                           |
 | Disable / Enable   | Disables or enables scheduled runs. While an enabled automation is running, **Stop and disable** also requests cancellation. Enable schedules future runs; it does not resume a cancelled run. **Run now** remains an explicit override.                                                                                                                                                                                                                                                                              |
 | Change…            | Next to **Schedule**: picks a schedule the start dialog offers, or a custom one (every day, weekdays or once a week, at one time), and a time zone. Saving changes the automation's schedule. It keeps the run message and other saved options, except that an unedited Knowledge Consolidation message takes the run amounts of the new schedule. A scribe still on an automation a chat turn created shows no **Change…** until it is upgraded.                                                                     |
-| Change… (Settings) | Next to **Settings**, for Learn from conversations, Learn from Granola and Learn from Slack: changes which conversations, meetings or Slack channels and direct messages later runs read. Saving generates the run message from the new settings on the same automation. When the run message was edited by hand, its settings can't be read: **Reset…** instead replaces it with the generated one for the default settings, after listing the lines that change.                                                    |
+| Change… (Settings) | Next to **Settings**, for Learn from conversations, Learn from Granola, Learn from Mail and Learn from Slack: changes which conversations, meetings, mail or Slack channels and direct messages later runs read. Saving generates the run message from the new settings on the same automation. When the run message was edited by hand, its settings can't be read: **Reset…** instead replaces it with the generated one for the default settings, after listing the lines that change.                             |
 | Remove automation… | Removes the automation and requests cancellation of any active run. The conversation is kept.                                                                                                                                                                                                                                                                                                                                                                                                                         |
 | Open conversation  | Opens the scribe's conversation.                                                                                                                                                                                                                                                                                                                                                                                                                                                                                      |
 | Open run           | In **Recent runs**: opens a run of an ongoing scribe on the Automations page, which keeps its transcript.                                                                                                                                                                                                                                                                                                                                                                                                             |
