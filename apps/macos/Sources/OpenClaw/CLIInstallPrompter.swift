@@ -402,14 +402,19 @@ final class CLIInstallPrompter {
         {
             command = command.dropFirst(2)
         }
-        let managedRoot = URL(fileURLWithPath: CLIInstaller.managedExecutableLocation(homeDirectory: homeDirectory))
+        let managedExecutable = URL(
+            fileURLWithPath: CLIInstaller.managedExecutableLocation(homeDirectory: homeDirectory))
+            .standardizedFileURL
+        let managedRoot = managedExecutable
             .deletingLastPathComponent()
             .deletingLastPathComponent()
             .standardizedFileURL.path + "/"
         guard let executable = command.first else { return false }
         let executableURL = URL(fileURLWithPath: executable).standardizedFileURL
-        let managedRuntimeRoot = managedRoot + "tools/node/"
-        if executableURL.path.hasPrefix(managedRoot), !executableURL.path.hasPrefix(managedRuntimeRoot) {
+        // Only the managed launcher path and the seeded runtime subtree prove ownership by
+        // location. Other executables under the state directory, such as an operator's
+        // `gateway install --wrapper` script in `service-env/`, need the node/bun entrypoint check.
+        if executableURL.path == managedExecutable.path || executableURL.path.hasPrefix(managedRoot + "runtime/") {
             return true
         }
         guard ["node", "bun"].contains(executableURL.lastPathComponent) else { return false }

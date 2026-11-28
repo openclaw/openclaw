@@ -632,6 +632,73 @@ struct UpdateOrchestrationTests {
             programArguments: ["/opt/homebrew/bin/openclaw", "gateway", managedEntry]))
     }
 
+    @Test func `operator wrappers stored under the state directory keep the Gateway external`() async {
+        let managedRoot = CLIInstaller.installPrefix()
+        let envWrapper = "\(managedRoot)/service-env/ai.openclaw.gateway-env-wrapper.sh"
+        let environment = "\(managedRoot)/service-env/ai.openclaw.gateway.env"
+        // `openclaw gateway install --wrapper <path>` accepts any executable the operator owns.
+        let operatorWrappers = [
+            "\(managedRoot)/service-env/openclaw-nvm-node-wrapper.sh",
+            "\(managedRoot)/scripts/openclaw-doppler",
+        ]
+        for operatorWrapper in operatorWrappers {
+            for prefix in [[], [envWrapper, environment], ["/bin/sh", envWrapper, environment]] {
+                let arguments = prefix + [operatorWrapper, "gateway", "--port", "18789"]
+                #expect(!CLIInstallPrompter.launchAgentUsesManagedCLI(programArguments: arguments))
+                #expect(!PostUpdateController.ownsManagedRuntime(
+                    connectionMode: .local,
+                    programArguments: arguments,
+                    gatewayUpdateChannel: nil,
+                    installPolicy: "exact",
+                    launchAgentWriteDisabled: false))
+            }
+        }
+
+        // The bundled app no longer stops in managed-runtime recovery for such a service.
+        // A receipt already marked incomplete keeps the existing ownership-check failure.
+        let wrapped = ["/bin/sh", envWrapper, environment, operatorWrappers[0], "gateway", "--port", "18789"]
+        for incomplete in [false, true] {
+            let resolution = await PostUpdateController.resolveGatewayAction(
+                context: PostUpdateRuntimeContext(
+                    bundledApp: true, usesSeededGateway: false, hasService: true, installedCLI: nil,
+                    ownsManagedRuntime: PostUpdateController.ownsManagedRuntime(
+                        connectionMode: .local,
+                        programArguments: wrapped,
+                        gatewayUpdateChannel: nil,
+                        installPolicy: "exact",
+                        launchAgentWriteDisabled: false)),
+                receipt: PostAppUpdateReceipt(
+                    fromVersion: "2026.11.4", toVersion: "2026.11.5", recordedAt: .distantPast,
+                    gatewayUpdateIncomplete: incomplete))
+            {
+                Issue.record("An external service must not probe the managed CLI")
+                return .missing(location: "/fixture/openclaw")
+            }
+            #expect(resolution.action == (incomplete ? .ownershipFailure : .none))
+        }
+
+        // Versioned Node installs under tools/ follow the entrypoint, like tools/node.
+        let versionedNode = "\(managedRoot)/tools/node-v24.15.0/bin/node"
+        #expect(!CLIInstallPrompter.launchAgentUsesManagedCLI(
+            programArguments: [versionedNode, "/opt/homebrew/lib/node_modules/openclaw/dist/index.js", "gateway"]))
+        #expect(CLIInstallPrompter.launchAgentUsesManagedCLI(
+            programArguments: [
+                versionedNode, "\(managedRoot)/tools/node-v24.15.0/lib/node_modules/openclaw/dist/entry.js", "gateway",
+            ]))
+
+        // App-installed executables under the same root still prove ownership: the stable service
+        // Bun, the older per-build Bun, and the managed launcher behind the env wrapper.
+        let seededEntry = "\(managedRoot)/runtime/build-one/lib/node_modules/openclaw/openclaw.mjs"
+        for seededBun in ["\(managedRoot)/runtime/service/bun", "\(managedRoot)/runtime/build-one/bin/bun"] {
+            #expect(CLIInstallPrompter.launchAgentUsesManagedCLI(
+                programArguments: [seededBun, "--no-install", seededEntry, "gateway"]))
+        }
+        #expect(CLIInstallPrompter.launchAgentUsesManagedCLI(
+            programArguments: [
+                "/bin/sh", envWrapper, environment, CLIInstaller.managedExecutableLocation(), "gateway",
+            ]))
+    }
+
     @Test func `managed repair gates cover bridge and repair alike`() {
         #expect(CLIInstallPrompter.managedRepairGatesOpen(
             launchAgentUsesManagedCLI: true,
