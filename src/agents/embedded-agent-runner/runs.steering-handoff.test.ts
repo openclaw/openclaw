@@ -135,7 +135,7 @@ describe("captured question and drain ownership", () => {
       expect(mock).not.toHaveBeenCalled();
     }
   }
-  function injection(overrides: Partial<Injection> = {}): Injection {
+  function injection(overrides: Partial<Injection>): Injection {
     return { version: 2, isAvailable: accept, queueMessage: vi.fn(asyncNoop), ...overrides };
   }
   function start(overrides: Partial<EmbeddedAgentQueueHandle> = {}) {
