@@ -11,6 +11,7 @@ import { readAcpSessionEntry } from "../acp/runtime/session-meta.js";
 import { listRegisteredAgentHarnesses, registerAgentHarness } from "../agents/harness/registry.js";
 import { restoreRegisteredAgentHarnesses } from "../agents/harness/registry.test-support.js";
 import * as preparedModelRuntime from "../agents/prepared-model-runtime.js";
+import { compareSessionProviderReview } from "../config/sessions/provider-review-store.js";
 import { loadSessionEntry, upsertSessionEntryCore } from "../config/sessions/session-accessor.js";
 import { RESET_PARENT_GRANT_FIXTURE } from "../config/sessions/session-lineage.test-support.js";
 import type { InternalSessionEntry } from "../config/sessions/types.js";
@@ -161,6 +162,55 @@ test.each<[string, ArchivedMainResetCase]>([
     expect(entry?.archivedAt).toBe(100);
     expect(entry?.archiveReason).toBe("manual");
     expect(after).toEqual(before);
+  },
+);
+
+test.each(["agent:main:main", "agent:main:dashboard:peer"])(
+  "sessions.reset replaces %s paused by provider review",
+  async (key) => {
+    const { dir, storePath } = await createSessionStoreDir();
+    const sessionId = "synthetic-reviewed-session";
+    await writeSingleLineSession(dir, sessionId, "synthetic reviewed transcript");
+    await writeSessionStore({ entries: { [key]: sessionStoreEntry(sessionId) } });
+    // Only the provider-review writer may record a pause.
+    await compareSessionProviderReview(
+      {
+        agentId: "main",
+        storePath,
+        sessionKey: key,
+        sessionId,
+        lifecycleRevision: loadSessionEntry({ storePath, sessionKey: key })?.lifecycleRevision,
+      },
+      {
+        expectedReview: undefined,
+        nextReview: {
+          id: "review-1",
+          sessionId,
+          runId: "flagged-run",
+          provider: "openai",
+          model: "gpt-test",
+          runtimeId: "codex",
+        },
+        assertCurrent: () => {},
+      },
+    );
+    const paused = loadSessionEntry({ storePath, sessionKey: key });
+    expect(paused?.providerReview?.id).toBe("review-1");
+
+    const result = await directSessionReq("sessions.reset", {
+      key,
+      expectedSessionId: sessionId,
+    });
+
+    expect(result.ok).toBe(true);
+    const entry = loadSessionEntry({ storePath, sessionKey: key });
+    // Reset starts a new lifecycle generation; the review belonged to the old one.
+    expect(entry?.lifecycleRevision).toBeDefined();
+    expect(entry?.lifecycleRevision).not.toBe(paused?.lifecycleRevision);
+    expect(entry?.providerReview).toBeUndefined();
+    expect(
+      await directSessionReq("sessions.reset", { key, expectedSessionId: entry?.sessionId }),
+    ).toMatchObject({ ok: true });
   },
 );
 
