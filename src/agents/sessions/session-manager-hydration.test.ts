@@ -1,6 +1,7 @@
 import fs from "node:fs";
 import path from "node:path";
 import type { StatementSync } from "node:sqlite";
+import { isRecord } from "@openclaw/normalization-core/record-coerce";
 import { expect, it, vi } from "vitest";
 import { makeUserMessage } from "../../../test/helpers/user-message.js";
 import * as configEnv from "../../config/config-env-vars.js";
@@ -806,3 +807,25 @@ it.each(["canonical", "custom"])(
     });
   },
 );
+
+it("keeps the canonical session id when the persisted header carries a foreign id", async () => {
+  await withOpenClawTestState({ label: "foreign-header-id" }, async (state) => {
+    const target = canonicalTarget(state, "foreign-header-id");
+    await seedHistory(target, "hello");
+    const seeded = await SessionManager.openAsync(target);
+    const events = seeded.getPersistedEntries();
+    // A June 2026 legacy import left a header whose id differs from the session row.
+    await replaceTranscriptEvents(
+      target,
+      events.map((entry) =>
+        isRecord(entry) && entry.type === "session"
+          ? { ...entry, id: "foreign-header-session-id" }
+          : entry,
+      ),
+    );
+    const reopened = await SessionManager.openAsync(target);
+    expect(reopened.getHeader()?.id).toBe("foreign-header-session-id");
+    expect(reopened.getSessionId()).toBe(target.sessionId);
+    await closeOpenClawAgentDatabaseByPathAsync(target.storePath);
+  });
+});
