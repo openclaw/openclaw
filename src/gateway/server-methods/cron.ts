@@ -6,7 +6,6 @@ import {
   validateCronStatusParams,
   validateCronUpdateParams,
 } from "../../../packages/gateway-protocol/src/index.js";
-import { splitTrailingAuthProfile } from "../../agents/model-ref-profile.js";
 import { captureCronStreamSandboxTarget } from "../../agents/sandbox/stream-context.js";
 import { bindCronSelfRemovalCommitGuard } from "../../cron/active-jobs.js";
 import { tryResolveCronJobEffectiveAgentId } from "../../cron/agent-id.js";
@@ -56,10 +55,14 @@ import {
   canHumanManageCronJob,
   prepareCronOwnerChange,
 } from "./cron-human-owner.js";
-import { captureCronUpdatedInferenceBinding } from "./cron-inference-account.js";
+import {
+  captureCronUpdatedInferenceBinding,
+  resolveCronReminderAccountEdit,
+} from "./cron-inference-account.js";
 import {
   assertValidCronUpdatePatch,
   captureCronCreatorSession,
+  captureCronPromptInference,
   normalizeCronUpdateRequest,
 } from "./cron-input-validation.js";
 import {
@@ -164,19 +167,16 @@ export const cronHandlers: GatewayRequestHandlers = {
       respondCronJobNotFound(respond, jobId);
       return;
     }
-    // Released clients encode account selection and key recovery as model-only agentTurn patches.
-    // Authorize the original request, but persist only the binding for a system event.
-    const accountOnly =
-      currentJob.payload.kind === "systemEvent" &&
-      patch.payload?.kind === "agentTurn" &&
-      typeof patch.payload.model === "string" &&
-      Object.keys(patch).length === 1 &&
-      Object.keys(patch.payload).length === 2 &&
-      Boolean(currentJob.inferenceBinding || splitTrailingAuthProfile(patch.payload.model).profile);
+    const { accountOnly, convertsUnboundReminder } = resolveCronReminderAccountEdit(
+      currentJob,
+      patch,
+    );
     const definitionPatch = accountOnly ? {} : patch;
     const expectedRevision =
       p.expectedConfigRevision ??
-      (accountOnly ? resolveCronJobConfigRevision(currentJob) : undefined);
+      (accountOnly || convertsUnboundReminder
+        ? resolveCronJobConfigRevision(currentJob)
+        : undefined);
     let assertOwnerSelectionCurrent: (() => void) | undefined;
     try {
       assertOwnerSelectionCurrent = await prepareCronOwnerChange(client, currentJob, patch);
@@ -341,13 +341,15 @@ export const cronHandlers: GatewayRequestHandlers = {
           "This automation’s runtime owns its account; a host account cannot replace it.",
         );
       }
-      inference = runtimeAuthority
-        ? undefined
-        : await captureCronUpdatedInferenceBinding(nextJob, patch, cfg, {
-            client,
-            context,
-            signal,
-          });
+      if (!runtimeAuthority) {
+        const caller = { client, context, signal };
+        inference = convertsUnboundReminder
+          ? await captureCronPromptInference(nextJob, cfg, caller, {
+              agentId: creatorScope?.agentId,
+              creatorKey: creatorScope?.sessionKey,
+            })
+          : await captureCronUpdatedInferenceBinding(nextJob, patch, cfg, caller);
+      }
     } catch (err) {
       operatorCapture?.disposeOperatorSource?.();
       targetAccess?.release();
