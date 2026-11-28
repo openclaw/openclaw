@@ -113,6 +113,61 @@ it.each([
   expect(state.clientOptions?.scopes).toEqual(expected);
 });
 
+const ceilingRequest = {
+  method: "device.pair.list",
+  scopes: ["operator.pairing", "operator.admin"] as const,
+  grantCeiling: true,
+};
+
+it.each([
+  ["an admin grant keeps the ceiling", ["operator.admin"], ["operator.pairing", "operator.admin"]],
+  ["a narrower grant drops admin", ["operator.pairing", "operator.read"], ["operator.pairing"]],
+  // A shared-token CLI whose cached device token was narrowed keeps the base request.
+  ["a stale grant keeps least privilege", ["operator.read"], ["operator.pairing"]],
+])("a ceiling request with %s", async (_name, grantedScopes, expected) => {
+  state.grant = { token: "device-token", role: "operator", scopes: grantedScopes, updatedAtMs: 1 };
+
+  await callGatewayCli({ ...ceilingRequest, scopes: [...ceilingRequest.scopes] });
+
+  expect(state.clientOptions?.scopes).toEqual(expected);
+});
+
+it("a ceiling request with a shared token asks for least privilege", async () => {
+  state.grant = {
+    token: "device-token",
+    role: "operator",
+    scopes: ["operator.admin"],
+    updatedAtMs: 1,
+  };
+
+  await callGatewayCli({ ...ceilingRequest, scopes: [...ceilingRequest.scopes], token: "shared" });
+
+  expect(state.clientOptions?.scopes).toEqual(["operator.pairing"]);
+});
+
+const adminGrant: DeviceAuthEntry = {
+  token: "device-token",
+  role: "operator",
+  scopes: ["operator.admin"],
+  updatedAtMs: 1,
+};
+it.each<
+  [string, { loadGrant: () => Promise<DeviceAuthEntry | null>; proxyAuthenticated?: boolean }]
+>([
+  ["without a grant", { loadGrant: async () => null }],
+  ["behind a trusted proxy", { loadGrant: async () => adminGrant, proxyAuthenticated: true }],
+])("a ceiling request %s asks for least privilege", async (_name, extra) => {
+  const { fitScopesToStoredDeviceGrant } = await import("./call-scopes.js");
+  const scopes = await fitScopesToStoredDeviceGrant({
+    opts: ceilingRequest,
+    scopes: [...ceilingRequest.scopes],
+    keepRequest: false,
+    ...extra,
+  });
+
+  expect(scopes).toEqual(["operator.pairing"]);
+});
+
 function scopeUpgradeRefusal(approvedScopes: string[]) {
   return Object.assign(new Error("scope upgrade pending approval"), {
     name: "GatewayClientRequestError",

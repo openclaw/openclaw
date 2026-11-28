@@ -62,6 +62,7 @@ export async function callGatewayFromCliRuntime<T = Record<string, unknown>>(
     defaultTimeoutMs?: number;
     timeoutMs?: number | null;
     label?: string;
+    grantCeiling?: boolean;
     useStoredDeviceAuth?: boolean;
     requiredStoredDeviceAuthScopes?: Parameters<
       typeof callGateway
@@ -104,6 +105,7 @@ export async function callGatewayFromCliRuntime<T = Record<string, unknown>>(
         beforeDeviceIdentityLoad: prepareCliGatewayStateAccess,
         expectFinal: extra?.expectFinal ?? Boolean(opts.expectFinal),
         scopes: extra?.scopes,
+        grantCeiling: extra?.grantCeiling,
         useStoredDeviceAuth: extra?.useStoredDeviceAuth,
         requiredStoredDeviceAuthScopes: extra?.requiredStoredDeviceAuthScopes,
         requireLocalBackendSharedAuth: extra?.requireLocalBackendSharedAuth,

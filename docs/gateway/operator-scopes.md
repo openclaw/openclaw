@@ -1261,7 +1261,10 @@ non-operator roles is admin-only even when those sessions can otherwise use
 
 For paired-device token sessions, management is self-scoped unless the caller
 has `operator.admin`: a non-admin caller sees only its own pairing entries, and
-can approve, reject, rotate, revoke, or remove only its own device entry.
+can approve, reject, rotate, revoke, or remove only its own device entry. The
+CLI's `devices list` and `devices approve --latest` connect with `operator.admin`
+when this device's stored grant holds it, so an administrator's CLI sees every
+device and pending request; a narrower grant keeps the pairing-only request.
 
 ## Node pairing approvals
 

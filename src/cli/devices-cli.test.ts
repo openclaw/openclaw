@@ -202,7 +202,10 @@ describe("approval", () => {
   ])("selects scopes for $name", async ({ request, device, scopes }) => {
     list([request], [device]).mockResolvedValueOnce({ device: { deviceId: "device-1" } });
     await run("approve", "req-1");
-    expectCall(0, "device.pair.list", { scopes: ["operator.pairing"] });
+    expectCall(0, "device.pair.list", {
+      scopes: ["operator.pairing", "operator.admin"],
+      grantCeiling: true,
+    });
     expectCall(1, "device.pair.approve", { params: { requestId: "req-1" }, scopes });
   });
 

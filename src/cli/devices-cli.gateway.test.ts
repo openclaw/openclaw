@@ -10,6 +10,8 @@ import { deviceHandlers } from "../gateway/server-methods/devices.js";
 import type { GatewayRequestHandlerOptions } from "../gateway/server-methods/types.js";
 import { GatewayTransportError } from "../gateway/transport-error.js";
 import { resetDatabaseEngineSelectionForTest } from "../infra/database-engine/context.test-support.js";
+import { storeDeviceAuthToken } from "../infra/device-auth-store.js";
+import { loadOrCreateDeviceIdentityAsync } from "../infra/device-identity-async.js";
 import { approveDevicePairing } from "../infra/device-pairing-approval.js";
 import {
   revokeDeviceToken,
@@ -43,10 +45,12 @@ vi.mock("../infra/gateway-lock.js", async (importOriginal) => ({
   readActiveGatewayLockIdentity: transport.activeOwner,
 }));
 
-vi.mock("../config/gateway-dispatch-config.js", () => ({
-  readGatewayDispatchConfig: () => ({ gateway: { auth: { mode: "none" } } }),
+const gatewayAuth = vi.hoisted(() => ({ mode: "none" }));
+vi.mock("../config/gateway-dispatch-config.js", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("../config/gateway-dispatch-config.js")>()),
+  readGatewayDispatchConfig: () => ({ gateway: { auth: { mode: gatewayAuth.mode } } }),
   readGatewayDispatchConfigWithShellEnvFallback: async () => ({
-    gateway: { auth: { mode: "none" } },
+    gateway: { auth: { mode: gatewayAuth.mode } },
   }),
 }));
 
@@ -96,6 +100,7 @@ afterEach(() => {
   closeOpenClawStateDatabaseForTest();
   resetConfigRuntimeState();
   vi.unstubAllEnvs();
+  gatewayAuth.mode = "none";
 });
 afterAll(() => roots.cleanup());
 
@@ -224,6 +229,57 @@ it.each<[string, string, string[], string[] | undefined, string[]]>([
     expect(warn).not.toHaveBeenCalled();
   },
 );
+
+it.each([
+  ["an admin grant", admin, true],
+  ["a pairing grant", pairingRead, false],
+])("lists the devices %s may see and previews their latest request", async (_name, grant, all) => {
+  // A token-auth Gateway with no shared token in the CLI: the CLI connects as
+  // its own paired device, the case the Gateway filters to the caller's entries.
+  gatewayAuth.mode = "token";
+  await pairOperator(targetDeviceId, ["operator.admin"]);
+  await pairOperator("caller", ["operator.admin"], grant);
+  const identity = await loadOrCreateDeviceIdentityAsync();
+  await storeDeviceAuthToken({
+    deviceId: identity.deviceId,
+    role: "operator",
+    token: "cli-token",
+    scopes: grant,
+  });
+  const companion = await requestDevicePairing({
+    deviceId: "companion",
+    publicKey: "public-companion",
+    role: "operator",
+    scopes: ["operator.admin"],
+  });
+  await installTransport("caller");
+  await run("list", "--json");
+  const [list] = expectDefined(transport.runtime.writeJson.mock.calls[0], "list output") as [
+    { pending: Array<{ requestId: string }>; paired: Array<{ deviceId: string }> },
+  ];
+  expect(list.pending.map((request) => request.requestId)).toEqual(
+    all ? [companion.request.requestId] : [],
+  );
+  expect(list.paired.map((device) => device.deviceId).toSorted()).toEqual(
+    all ? ["caller", targetDeviceId] : ["caller"],
+  );
+  expect(transport.request.mock.calls.map(([scopes]) => scopes)).toEqual([
+    all ? ["operator.pairing", "operator.admin"] : ["operator.pairing"],
+  ]);
+  transport.runtime.writeJson.mockClear();
+  const latest = run("approve", "--latest", "--json");
+  if (all) {
+    await latest;
+    expect(transport.runtime.writeJson).toHaveBeenCalledWith(
+      expect.objectContaining({
+        selected: expect.objectContaining({ requestId: companion.request.requestId }),
+      }),
+    );
+    expect(await getPendingDevicePairing(companion.request.requestId)).not.toBeNull();
+  } else {
+    await expect(latest).rejects.toThrow("No pending device pairing requests");
+  }
+});
 
 it("rotates a revoked target using its narrowed scopes", async () => {
   await pairOperator(targetDeviceId, ["operator.admin"], ["operator.read"]);

@@ -561,13 +561,11 @@ async function callGatewayWithScopes<T = Record<string, unknown>>(
   });
   // Authentication metadata must not change the CLI-selected scopes or dispatch checks.
   const opts = { ...input, ...clientOptions };
+  const loadStoredGrant = () =>
+    loadStoredOperatorDeviceAuthToken(deviceIdentity, deviceAuthScope, opts.sharedStateMode);
   let storedAuth: DeviceAuthEntry | null | undefined = opts.preparedDeviceAuth;
   if (useStoredDeviceAuth) {
-    storedAuth ??= await loadStoredOperatorDeviceAuthToken(
-      deviceIdentity,
-      deviceAuthScope,
-      opts.sharedStateMode,
-    );
+    storedAuth ??= await loadStoredGrant();
     if (!storedAuth?.token && deviceAuthScope) {
       throw new GatewayStoredDeviceAuthUnavailableError(
         [
@@ -614,14 +612,7 @@ async function callGatewayWithScopes<T = Record<string, unknown>>(
     // gateway.remote.edgeAuth authenticates at the proxy; first connects then pair.
     !(opts.approvalRuntimeToken || resolvedAuth.allowTailscale || edgeAuthHeaders)
   ) {
-    const availableAuth =
-      storedAuth === undefined
-        ? await loadStoredOperatorDeviceAuthToken(
-            deviceIdentity,
-            deviceAuthScope,
-            opts.sharedStateMode,
-          )
-        : storedAuth;
+    const availableAuth = storedAuth === undefined ? await loadStoredGrant() : storedAuth;
     if (!availableAuth?.token) {
       throw new GatewayCredentialsRequiredError({
         method: opts.method,
@@ -633,13 +624,8 @@ async function callGatewayWithScopes<T = Record<string, unknown>>(
     opts,
     scopes,
     keepRequest: explicitScopes || useStoredDeviceAuth || Boolean(token || password),
-    loadGrant: async () =>
-      storedAuth ??
-      (await loadStoredOperatorDeviceAuthToken(
-        deviceIdentity,
-        deviceAuthScope,
-        opts.sharedStateMode,
-      )),
+    proxyAuthenticated: Boolean(edgeAuthHeaders),
+    loadGrant: async () => storedAuth ?? (await loadStoredGrant()),
   });
   // A one-shot shared-auth CLI connection cannot match an earlier run's owner.
   // Request admin authority for cancellation; the Gateway still validates it.
@@ -955,7 +941,7 @@ export async function callGatewayCli<T = Record<string, unknown>>(
       : undefined;
   const opts = signal ? { ...input, signal } : input;
   if (Array.isArray(input.scopes)) {
-    return await callGatewayWithScopes(opts, input.scopes, { explicitScopes: true });
+    return await callGatewayWithScopes(opts, input.scopes, { explicitScopes: !input.grantCeiling });
   }
   const {
     CLI_DEFAULT_OPERATOR_SCOPES,
