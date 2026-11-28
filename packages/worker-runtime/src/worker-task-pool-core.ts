@@ -163,11 +163,7 @@ export class WorkerTaskPoolCore<Input, Output> {
     if (this.closedError) {
       return Promise.reject(this.closedError);
     }
-    const inputBytes = options.inputBytes ?? 0;
-    if (!Number.isSafeInteger(inputBytes) || inputBytes < 0) {
-      return Promise.reject(new RangeError("inputBytes must be a nonnegative safe integer"));
-    }
-    return this.enqueue(input, options, false, inputBytes).promise;
+    return this.enqueue(input, options, false).promise;
   }
 
   runTask(
@@ -211,8 +207,8 @@ export class WorkerTaskPoolCore<Input, Output> {
     input: WorkerTaskInput<Input>,
     options: OwnedWorkerTaskOptions<Input>,
     owned: boolean,
-    inputBytes = options.inputBytes ?? 0,
   ): Task<Input, Output> {
+    const inputBytes = options.inputBytes ?? 0;
     // A Promise executor would let the task's timer/abort closures retain input too.
     const completion = createRetainedOperation<Output>(() => this.service(), {
       observeRejection: this.ownerOptions.retainedTransport === true,
@@ -595,7 +591,9 @@ export class WorkerTaskPoolCore<Input, Output> {
       finishWorkerTaskWaits(task);
       exchange.onConsumed = response.onConsumed;
       exchange.sent = true;
-      armWorkerTaskTimeout(task, response.timeoutMs, this.timeout);
+      if (!response.preserveDeadline) {
+        armWorkerTaskTimeout(task, response.timeoutMs, this.timeout);
+      }
       try {
         slot.worker!.postMessage(
           {

@@ -3,6 +3,7 @@ import type { Model } from "../llm/types.js";
 import type { ActiveRemoteModelCatalog } from "../model-catalog/remote-overlay.js";
 import type { RemoteModelCatalogWorkerTransfer } from "../model-catalog/remote-startup-snapshot.js";
 import type { PluginMetadataSnapshot } from "../plugins/plugin-metadata-snapshot.types.js";
+import type { PluginSourceAdmissionPublication } from "../plugins/plugin-source-admission.types.js";
 import type { PreparedSyntheticAuthFacts } from "../plugins/provider-synthetic-auth.js";
 import type { AuthProfileCredentialReceipts } from "../state/user-model-account-authority.js";
 import type { captureTemplateInstallSchemaVersionFacts } from "../templates/provenance-runtime-read.js";
@@ -48,6 +49,11 @@ export type PreparedModelCatalogWorkerTask = {
       })
     | Omit<PreparedModelCatalogWorkerInput, "remoteCatalog" | "pluginMetadataSnapshot">;
   request: PreparedModelWorkerRequest;
+};
+
+export type PreparedModelCatalogHostRequest = null | {
+  kind: "source-admission";
+  publication: PluginSourceAdmissionPublication;
 };
 
 export type PreparedModelWorkerCommand =
