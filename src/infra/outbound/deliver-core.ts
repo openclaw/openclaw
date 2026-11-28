@@ -5,6 +5,7 @@ import type { ReplyPayload } from "../../auto-reply/reply-payload.js";
 import { payloadRequiresDurablePayloadTransport } from "../../channels/message/capabilities.js";
 import { resolveReceiptSourceId } from "../../channels/message/receipt.js";
 import { renderPresentationForDelivery } from "../../channels/plugins/outbound/presentation-delivery.js";
+import { resolveMarkdownTableMode } from "../../config/markdown-tables.js";
 import { createSubsystemLogger } from "../../logging/subsystem.js";
 import { commitConfirmedVisibleMessage } from "../../sessions/confirmed-visible-message.js";
 import { getOrCreatePromise } from "../../shared/lazy-promise.js";
@@ -280,6 +281,13 @@ export async function deliverOutboundPayloadsCore(
   const chunkMode = baseHandler.chunker
     ? (params.formatting?.chunkMode ?? resolveChunkMode(cfg, channel, accountId))
     : "length";
+  const chunkingFormatting =
+    baseHandler.chunker && params.formatting?.tableMode === undefined
+      ? {
+          ...params.formatting,
+          tableMode: resolveMarkdownTableMode({ cfg, channel, accountId }),
+        }
+      : params.formatting;
   const { resolveCurrentReplyTo, applyReplyToConsumption } = createReplyToDeliveryPolicy({
     reply,
   });
@@ -297,7 +305,7 @@ export async function deliverOutboundPayloadsCore(
       chunkedTextFormatting: sendHandler.chunkedTextFormatting,
       textLimit,
       chunkMode,
-      formatting: params.formatting,
+      formatting: chunkingFormatting,
       consumeReplyTo: applyReplyToConsumption,
     });
     for (const unit of units) {
