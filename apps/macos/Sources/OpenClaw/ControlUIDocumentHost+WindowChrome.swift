@@ -61,20 +61,14 @@ extension ControlUIDocumentHost {
               isNativeFailureDocument ||
               ControlUIDocumentHost.isTrustedLinkSource(message.frameInfo.request.url, dashboardURL: self.currentURL),
               Self.isWindowDragRequest(message.body),
-              let window = self.webView.window
+              self.webView.window != nil
         else {
             return
         }
-        // The script message arrives async; during a press the app's current
-        // event is still the initiating left-mouse-down (or a later drag). A
-        // finished click leaves left-mouse-up here and starts no drag.
-        guard let event = NSApp.currentEvent,
-              event.type == .leftMouseDown || event.type == .leftMouseDragged,
-              event.window === window
-        else {
-            return
-        }
-        DashboardWindowDragGesture.handle(event, in: window)
+        // The page owns a gesture only after `preventDefault`; the bridge acts
+        // on the native press recorded for this window, once, so page script
+        // cannot move the window by itself.
+        self.windowDragBridge?.requestWindowDrag()
     }
 
     static func isWindowDragRequest(_ body: Any) -> Bool {

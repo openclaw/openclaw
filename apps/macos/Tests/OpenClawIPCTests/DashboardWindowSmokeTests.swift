@@ -106,6 +106,313 @@ struct DashboardWindowSmokeTests {
         #expect(window.zoomCount == 1)
     }
 
+    @Test func `dashboard web drag policy keeps the titlebar reachable and honest`() {
+        // Same reach as AppKit's own titlebar drag: a fixed window stays put and
+        // a full-screen window has no frame to move.
+        #expect(DashboardWindowDragPolicy.allowsManualMove(isMovable: true, isFullScreen: false))
+        #expect(!DashboardWindowDragPolicy.allowsManualMove(isMovable: false, isFullScreen: false))
+        #expect(!DashboardWindowDragPolicy.allowsManualMove(isMovable: true, isFullScreen: true))
+
+        #expect(DashboardWindowDragPolicy.targetOrigin(
+            startOrigin: NSPoint(x: 200, y: 200),
+            pressPointer: NSPoint(x: 500, y: 400),
+            pointer: NSPoint(x: 650, y: 430)) == NSPoint(x: 350, y: 230))
+        #expect(DashboardWindowDragPolicy.targetOrigin(
+            startOrigin: NSPoint(x: 200, y: 200),
+            pressPointer: NSPoint(x: 500, y: 400),
+            pointer: NSPoint(x: 500, y: 400)) == NSPoint(x: 200, y: 200))
+    }
+
+    @Test func `dashboard web drag follows the recorded press and ends on release`() throws {
+        let window = makeDashboardDragWindow()
+        defer { window.close() }
+        var clock: TimeInterval = 900
+        let bridge = DashboardWindowWebDragBridge(
+            window: { window },
+            time: { clock },
+            primaryButtonIsDown: { true })
+        defer { bridge.invalidate() }
+        #expect(bridge.isObservingNativePresses)
+
+        let press = try #require(dashboardMouseEvent(
+            .leftMouseDown, at: NSPoint(x: 300, y: 400), in: window, timestamp: 900))
+        // A live window resolves the event's `.window` from its number, so these
+        // positive cases run through the bridge's window-identity check rather
+        // than its number fallback; a change there would silently weaken them.
+        #expect(press.window === window)
+        try bridge.handle(press)
+        #expect(bridge.hasPendingPress)
+        #expect(!bridge.isDragging)
+
+        bridge.requestWindowDrag()
+        #expect(bridge.isDragging)
+        #expect(!bridge.hasPendingPress)
+
+        let start = window.frame.origin
+        let drag = try #require(dashboardMouseEvent(
+            .leftMouseDragged, at: NSPoint(x: 330, y: 420), in: window, timestamp: 900.1))
+        // The page surrendered this drag with `preventDefault`.
+        #expect(bridge.handle(drag) == false)
+        #expect(window.frame.origin == NSPoint(x: start.x + 30, y: start.y + 20))
+
+        clock = 900.2
+        let release = try #require(dashboardMouseEvent(
+            .leftMouseUp, at: NSPoint(x: 330, y: 420), in: window, timestamp: 900.2))
+        // The page still sees the release, so a click finishes normally.
+        #expect(bridge.handle(release))
+        #expect(!bridge.isDragging)
+        #expect(!bridge.hasPendingPress)
+
+        // One press, one gesture: the request cannot be replayed.
+        let settled = window.frame.origin
+        bridge.requestWindowDrag()
+        #expect(!bridge.isDragging)
+        #expect(window.frame.origin == settled)
+    }
+
+    @Test func `dashboard page message cannot move the window without a native press`() throws {
+        let window = makeDashboardDragWindow()
+        defer { window.close() }
+        var clock: TimeInterval = 100
+        let bridge = DashboardWindowWebDragBridge(
+            window: { window },
+            time: { clock },
+            // The held-button check is not enough on its own; without a recorded
+            // press the page still gets nothing.
+            primaryButtonIsDown: { true })
+        defer { bridge.invalidate() }
+        let start = window.frame.origin
+
+        bridge.requestWindowDrag()
+        #expect(!bridge.isDragging)
+
+        try bridge.handle(#require(dashboardMouseEvent(
+            .leftMouseDown, at: NSPoint(x: 300, y: 400), in: window, timestamp: 100)))
+        clock = 100 + DashboardWindowWebDragBridge.pressLifetime + 0.1
+        // A late request belongs to no in-flight gesture.
+        bridge.requestWindowDrag()
+        #expect(!bridge.isDragging)
+
+        _ = bridge.handle(try #require(dashboardMouseEvent(
+            .leftMouseDragged, at: NSPoint(x: 380, y: 460), in: window, timestamp: clock)))
+        #expect(window.frame.origin == start)
+    }
+
+    @Test func `dashboard press without a window identity cannot claim a window`() throws {
+        let window = makeDashboardDragWindow()
+        defer { window.close() }
+        let bridge = DashboardWindowWebDragBridge(
+            window: { window },
+            time: { 100 },
+            primaryButtonIsDown: { true })
+        defer { bridge.invalidate() }
+        let start = window.frame.origin
+        // An event with no window of its own reaches the number fallback; it
+        // must not be able to claim this document's window.
+        let floating = try #require(NSEvent.mouseEvent(
+            with: .leftMouseDown,
+            location: NSPoint(x: 300, y: 400),
+            modifierFlags: [],
+            timestamp: 100,
+            windowNumber: 0,
+            context: nil,
+            eventNumber: 1,
+            clickCount: 1,
+            pressure: 1))
+        #expect(floating.window == nil)
+
+        try bridge.handle(floating)
+        #expect(!bridge.hasPendingPress)
+
+        bridge.requestWindowDrag()
+        #expect(!bridge.isDragging)
+        _ = bridge.handle(try #require(dashboardMouseEvent(
+            .leftMouseDragged, at: NSPoint(x: 380, y: 460), in: window, timestamp: 100.1)))
+        #expect(window.frame.origin == start)
+    }
+
+    @Test func `dashboard web double click keeps the native zoom gesture`() throws {
+        let window = makeDashboardDragWindow()
+        defer { window.close() }
+        let bridge = DashboardWindowWebDragBridge(
+            window: { window },
+            time: { 100 },
+            primaryButtonIsDown: { true })
+        defer { bridge.invalidate() }
+
+        try bridge.handle(#require(dashboardMouseEvent(
+            .leftMouseDown, at: NSPoint(x: 300, y: 400), in: window, clickCount: 2, timestamp: 100)))
+        bridge.requestWindowDrag()
+
+        #expect(window.zoomCount == 1)
+        #expect(!bridge.isDragging)
+        #expect(!bridge.hasPendingPress)
+
+        // A replayed double click does not zoom twice.
+        bridge.requestWindowDrag()
+        #expect(window.zoomCount == 1)
+    }
+
+    @Test func `dashboard drag is anchored on the press not on the request pointer`() throws {
+        let window = makeDashboardDragWindow()
+        defer { window.close() }
+        let bridge = DashboardWindowWebDragBridge(
+            window: { window },
+            time: { 100.2 },
+            primaryButtonIsDown: { true })
+        defer { bridge.invalidate() }
+
+        try bridge.handle(#require(dashboardMouseEvent(
+            .leftMouseDown, at: NSPoint(x: 300, y: 400), in: window, timestamp: 100)))
+        // WebKit delivers the press async: the pointer has already moved 20pt
+        // before the request lands, and that movement must not be lost.
+        _ = bridge.handle(try #require(dashboardMouseEvent(
+            .leftMouseDragged, at: NSPoint(x: 320, y: 400), in: window, timestamp: 100.1)))
+
+        bridge.requestWindowDrag()
+        #expect(bridge.isDragging)
+
+        let start = window.frame.origin
+        _ = bridge.handle(try #require(dashboardMouseEvent(
+            .leftMouseDragged, at: NSPoint(x: 330, y: 400), in: window, timestamp: 100.2)))
+        #expect(window.frame.origin == NSPoint(x: start.x + 30, y: start.y))
+    }
+
+    @Test func `dashboard drag ends when the release lands in another window`() throws {
+        let window = makeDashboardDragWindow()
+        let other = makeDashboardDragWindow()
+        defer { window.close() }
+        defer { other.close() }
+        let bridge = DashboardWindowWebDragBridge(
+            window: { window },
+            time: { 100 },
+            primaryButtonIsDown: { true })
+        defer { bridge.invalidate() }
+        let otherStart = other.frame.origin
+
+        try bridge.handle(#require(dashboardMouseEvent(
+            .leftMouseDown, at: NSPoint(x: 300, y: 400), in: window, timestamp: 100)))
+        bridge.requestWindowDrag()
+        #expect(bridge.isDragging)
+
+        // A press that started on the page can end anywhere.
+        _ = bridge.handle(try #require(dashboardMouseEvent(
+            .leftMouseUp, at: NSPoint(x: 20, y: 20), in: other, timestamp: 100.3)))
+        #expect(!bridge.isDragging)
+
+        let settled = window.frame.origin
+        _ = bridge.handle(try #require(dashboardMouseEvent(
+            .leftMouseDragged, at: NSPoint(x: 500, y: 500), in: window, timestamp: 100.4)))
+        #expect(window.frame.origin == settled)
+        #expect(other.frame.origin == otherStart)
+    }
+
+    @Test func `dashboard drag ends when its window closes`() throws {
+        let window = makeDashboardDragWindow()
+        let bridge = DashboardWindowWebDragBridge(
+            window: { window },
+            time: { 100 },
+            primaryButtonIsDown: { true })
+        defer { bridge.invalidate() }
+
+        try bridge.handle(#require(dashboardMouseEvent(
+            .leftMouseDown, at: NSPoint(x: 300, y: 400), in: window, timestamp: 100)))
+        bridge.requestWindowDrag()
+        #expect(bridge.isDragging)
+
+        window.close()
+
+        #expect(!bridge.isDragging)
+    }
+
+    @Test func `dashboard drag leaves a non-movable window alone`() throws {
+        let window = makeDashboardDragWindow()
+        defer { window.close() }
+        window.isMovable = false
+        let bridge = DashboardWindowWebDragBridge(
+            window: { window },
+            time: { 100 },
+            primaryButtonIsDown: { true })
+        defer { bridge.invalidate() }
+        let start = window.frame.origin
+
+        try bridge.handle(#require(dashboardMouseEvent(
+            .leftMouseDown, at: NSPoint(x: 300, y: 400), in: window, timestamp: 100)))
+        bridge.requestWindowDrag()
+
+        #expect(!bridge.isDragging)
+        _ = bridge.handle(try #require(dashboardMouseEvent(
+            .leftMouseDragged, at: NSPoint(x: 420, y: 500), in: window, timestamp: 100.1)))
+        #expect(window.frame.origin == start)
+    }
+
+    @Test func `dashboard drag cannot park the window off screen`() throws {
+        let window = makeDashboardDragWindow()
+        defer { window.close() }
+        let bridge = DashboardWindowWebDragBridge(
+            window: { window },
+            time: { 100 },
+            primaryButtonIsDown: { true })
+        defer { bridge.invalidate() }
+        let screens = NSScreen.screens
+        try #require(!screens.isEmpty)
+
+        try bridge.handle(#require(dashboardMouseEvent(
+            .leftMouseDown, at: NSPoint(x: 300, y: 400), in: window, timestamp: 100)))
+        bridge.requestWindowDrag()
+        let start = window.frame.origin
+        _ = bridge.handle(try #require(dashboardMouseEvent(
+            .leftMouseDragged, at: NSPoint(x: 60_000, y: 60_000), in: window, timestamp: 100.1)))
+
+        // AppKit constrains its own frame changes so the titlebar stays
+        // reachable. A web-driven drag has to do the same instead of following
+        // the pointer off the display.
+        let screen = try #require(window.screen ?? NSScreen.main)
+        let visible = screen.visibleFrame
+        let frame = window.frame
+        let titlebarHeight = frame.height - window.contentLayoutRect.height
+        let titlebar = NSRect(
+            x: frame.minX,
+            y: frame.maxY - titlebarHeight,
+            width: frame.width,
+            height: titlebarHeight)
+        #expect(screens.contains { $0.visibleFrame.intersects(window.frame) })
+        #expect(titlebar.intersects(visible))
+        #expect(visible.contains(NSPoint(x: titlebar.midX, y: titlebar.midY)))
+        // The clamp still tracks the pointer; it must not freeze the window.
+        #expect(window.frame.origin != start)
+    }
+
+    private func makeDashboardDragWindow() -> DashboardWindowGestureSpy {
+        let window = DashboardWindowGestureSpy(
+            contentRect: NSRect(x: 240, y: 240, width: 720, height: 480),
+            styleMask: [.titled, .closable, .miniaturizable, .resizable, .fullSizeContentView],
+            backing: .buffered,
+            defer: false)
+        window.isReleasedWhenClosed = false
+        return window
+    }
+
+    private func dashboardMouseEvent(
+        _ type: NSEvent.EventType,
+        at point: NSPoint,
+        in window: NSWindow,
+        clickCount: Int = 1,
+        timestamp: TimeInterval)
+        -> NSEvent?
+    {
+        NSEvent.mouseEvent(
+            with: type,
+            location: point,
+            modifierFlags: [],
+            timestamp: timestamp,
+            windowNumber: window.windowNumber,
+            context: nil,
+            eventNumber: Int(timestamp * 1000),
+            clickCount: clickCount,
+            pressure: type == .leftMouseUp ? 0 : 1)
+    }
+
     @Test func `dashboard window controller shows and closes`() async throws {
         let server = try await DashboardHTTPFixture.start()
         defer { server.stop() }

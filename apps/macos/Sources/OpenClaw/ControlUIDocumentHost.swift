@@ -38,6 +38,8 @@ final class ControlUIDocumentHost {
     var onAuthenticationFailure: ((Error) -> Void)?
     var downloads: [ObjectIdentifier: DashboardBrowserDownload] = [:]
     var expectsDownloadPolicyInterruption = false
+    /// Claims the page's window-drag requests against a native press record.
+    private(set) var windowDragBridge: DashboardWindowWebDragBridge?
 
     init(
         url: URL,
@@ -76,6 +78,13 @@ final class ControlUIDocumentHost {
             forKey: "drawsBackground")
         self.webView.underPageBackgroundColor = .windowBackgroundColor
         self.webView.allowsBackForwardNavigationGestures = true
+        // The page can only ask; the press it asks about has to be one the
+        // native event stream recorded for this document's window. Installed
+        // here, where the setter is visible, so chrome registration stays a
+        // read-only consumer.
+        self.windowDragBridge = DashboardWindowWebDragBridge(window: { [weak self] in
+            self?.webView.window
+        })
         nativeAuthHandler.owner = self
         self.registerWindowChromeHandler()
         self.installWindowChromeScript()
@@ -84,6 +93,7 @@ final class ControlUIDocumentHost {
     }
 
     isolated deinit {
+        self.windowDragBridge?.invalidate()
         self.nativeStartupObservation?.cancel()
         self.cancelDownloads()
     }
