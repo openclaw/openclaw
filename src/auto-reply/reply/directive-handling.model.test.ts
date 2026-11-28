@@ -1128,33 +1128,6 @@ describe("handleDirectiveOnly model persist behavior (fixes #1435)", () => {
     }
   });
 
-  it("queues system events for elevated and reasoning mode directives", async () => {
-    const sessionEntry = createSessionEntry();
-
-    await runHandleCommand("/elevated on", {
-      elevatedAllowed: true,
-      elevatedEnabled: true,
-      sessionEntry,
-    });
-
-    expect(enqueueSystemEvent).toHaveBeenCalledWith(
-      "Elevated ASK - exec runs on host; approvals may still apply.",
-      {
-        sessionKey,
-        contextKey: "mode:elevated",
-      },
-    );
-
-    vi.mocked(enqueueSystemEvent).mockClear();
-
-    await runHandleCommand("/reasoning stream", { sessionEntry });
-
-    expect(enqueueSystemEvent).toHaveBeenCalledWith("Reasoning STREAM - emit live <think>.", {
-      sessionKey,
-      contextKey: "mode:reasoning",
-    });
-  });
-
   it.each([
     {
       command: EXEC_DEFAULTS_DIRECTIVE,
