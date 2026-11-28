@@ -1,4 +1,5 @@
 import { afterEach, expect, it, vi } from "vitest";
+import { getLoadedChannelPluginById } from "../../../channels/plugins/registry-loaded.js";
 import type { ChannelHeartbeatAdapter } from "../../../channels/plugins/types.adapters.js";
 import { setRuntimeConfigSnapshot } from "../../../config/config.js";
 import { upsertSessionEntryCore } from "../../../config/sessions/session-accessor.js";
@@ -9,8 +10,16 @@ import { bindGatewayLifecycleRequest } from "../../../gateway/server-lifecycle-r
 import { createMockGatewayLifecycleRuntime } from "../../../gateway/server-lifecycle-runtime.test-support.js";
 import { createContext } from "../../../gateway/server-plugin-in-process-dispatch.test-support.js";
 import { onAgentEvent } from "../../../infra/agent-events.js";
+import {
+  resetPluginRuntimeStateForTest,
+  setActivePluginRegistry,
+} from "../../../plugins/runtime.js";
 import { withPluginRuntimeGatewayRequestScope } from "../../../plugins/runtime/gateway-request-scope.js";
 import { createDeferredCore } from "../../../shared/deferred.js";
+import {
+  createChannelTestPluginBase,
+  createTestRegistry,
+} from "../../../test-utils/channel-plugins.js";
 import { withOpenClawTestState } from "../../../test-utils/openclaw-test-state.js";
 import { normalizeSessionDeliveryState } from "../../../utils/delivery-context.shared.js";
 import { mutateSubagentRuns } from "./subagent-registry-persistence.js";
@@ -24,6 +33,7 @@ vi.mock("../../../infra/agent-events.js", { spy: true });
 
 afterEach(async () => {
   await resetSubagentRegistryForTests({ persist: false });
+  resetPluginRuntimeStateForTest();
   vi.restoreAllMocks();
   vi.useRealTimers();
 });
@@ -60,22 +70,32 @@ it.each([
     // Core must follow the channel's declared typing capability, never its name.
     const channel =
       scenario === "other channel" ? "discord" : scenario === "no typing" ? "plain" : "telegram";
+    const sendTypingGuarded: NonNullable<ChannelHeartbeatAdapter["sendTypingGuarded"]> = async (
+      target,
+    ) => {
+      if (pendingSend) {
+        enteredSend.resolve();
+        await pendingSend;
+      }
+      target.assertPlatformSendAuthorized?.();
+      sends.push(target);
+    };
+    setActivePluginRegistry(
+      createTestRegistry([
+        {
+          pluginId: channel,
+          source: "test",
+          plugin: {
+            ...createChannelTestPluginBase({ id: channel }),
+            heartbeat: channel === "plain" ? {} : { sendTypingGuarded },
+          },
+        },
+      ]),
+    );
     const typing = createLifecycleTypingManager({
       getConfig: () => cfg,
       isAvailable: () => true,
-      resolveAdapter: async (resolved) =>
-        resolved !== channel || channel === "plain"
-          ? {}
-          : {
-              sendTypingGuarded: async (target) => {
-                if (pendingSend) {
-                  enteredSend.resolve();
-                  await pendingSend;
-                }
-                target.assertPlatformSendAuthorized?.();
-                sends.push(target);
-              },
-            },
+      resolveAdapter: async (resolved) => getLoadedChannelPluginById(resolved)?.heartbeat,
     });
     const context = createContext();
     context.lifecycleRuntime = createMockGatewayLifecycleRuntime({
