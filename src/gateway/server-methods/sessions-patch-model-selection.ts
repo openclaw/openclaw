@@ -42,7 +42,11 @@ import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import { formatErrorMessage } from "../../infra/errors.js";
 import { isSessionStatusModelPatchOrigin } from "../session-model-patch-origin.js";
 import { SessionMutationAuthorizationChangedError } from "../session-sharing.js";
-import type { SessionWorkerPlacementContext } from "../worker-environments/session-placement-lifecycle.js";
+import { hasWorkerLocalInference } from "../worker-environments/placement-projector.js";
+import {
+  readSessionWorkerPlacementAsync,
+  type SessionWorkerPlacementContext,
+} from "../worker-environments/session-placement-lifecycle.js";
 import { resolveGatewayModelSelectionPolicy } from "./session-model-selection-policy.js";
 import { prepareSessionWorkerPlacementPatchValidation } from "./sessions-shared.js";
 
@@ -403,6 +407,10 @@ export async function prepareSessionPatchRuntimeSelection(params: {
           }),
         )?.harness;
     } else {
+      const sessionEntry = {
+        ...params.entry,
+        authProfileOverrideSource: resolveCollapsedSessionAuthPinSource(params.entry),
+      };
       const choice = await prepareModelSelectionRuntime({
         cfg: params.cfg,
         agentId: params.agentId,
@@ -413,13 +421,58 @@ export async function prepareSessionPatchRuntimeSelection(params: {
         prepareNativeCatalog: params.prepareNativeCatalog,
         rawRuntime:
           typeof params.patch.agentRuntime === "string" ? params.patch.agentRuntime : undefined,
-        sessionEntry: {
-          ...params.entry,
-          authProfileOverrideSource: resolveCollapsedSessionAuthPinSource(params.entry),
-        },
+        sessionEntry,
       });
       if (choice.status === "rejected") {
         return invalid(choice.message);
+      }
+      // Native/explicit runtime selections have already checked their account. The inherited
+      // host runtime still needs a check, not a replacement runtime or provider.
+      if (
+        typeof params.patch.model === "string" &&
+        !params.validateInheritedRuntime &&
+        choice.runtime.kind !== "set" &&
+        params.patch.agentRuntime === undefined
+      ) {
+        const { readPublishedHostModelAccountFailure } =
+          await import("../../agents/model-runtime-choice.js");
+        const account = await readPublishedHostModelAccountFailure({
+          cfg: params.cfg,
+          agentId: params.agentId,
+          workspaceDir: params.entry.spawnedWorkspaceDir,
+          ...model,
+          sessionEntry,
+        });
+        if (account) {
+          if (account.pinned) {
+            return invalid(account.message);
+          }
+          const { resolveRequiredWorkerInferenceProfileId } =
+            await import("./chat-metadata-session-projection.js");
+          if (
+            !resolveRequiredWorkerInferenceProfileId(
+              { agentId: params.agentId, sessionEntry },
+              params.cfg,
+            )
+          ) {
+            const context = params.placement?.context;
+            const placement =
+              context &&
+              (await readSessionWorkerPlacementAsync({
+                context,
+                sessionId: sessionEntry.sessionId,
+              }));
+            if (
+              !placement?.environmentId ||
+              !hasWorkerLocalInference(
+                placement,
+                context?.workerEnvironmentService?.get(placement.environmentId),
+              )
+            ) {
+              return invalid(account.message);
+            }
+          }
+        }
       }
       selectedHarness = choice.harness;
       const policyError = resolveAgentHarnessOperatorPolicyError(
