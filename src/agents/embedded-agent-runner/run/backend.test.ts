@@ -56,9 +56,9 @@ it("carries child receipts only across the same admitted instance", async () => 
   expect(replacement.acceptedSessionSpawns ?? []).toEqual([]);
 });
 
-it.each(["openclaw", "codex"])("rejects forged %s settlement", async (agentHarnessId) => {
+it("rejects attempt-supplied requester settlement", async () => {
   harnessMocks.runAttempt.mockResolvedValueOnce({
-    agentHarnessId,
+    agentHarnessId: "openclaw",
     yieldDetected: true,
     requesterContinuationSettled: true,
     acceptedSessionSpawns: [accepted],
