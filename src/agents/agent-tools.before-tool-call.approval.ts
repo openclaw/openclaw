@@ -359,6 +359,7 @@ async function requestPluginToolApprovalDecision(
       id?: string;
       decision?: unknown;
       deliveryRoute?: string;
+      terminalReason?: string;
       expiresAtMs?: number;
     } = await withGatewayToolApprovalOwner(
       approval.pluginId,
@@ -398,7 +399,9 @@ async function requestPluginToolApprovalDecision(
     let decision: unknown;
     if (hasImmediateDecision) {
       decision = requestResult?.decision;
-      if (decision === null) {
+      // A delivered prompt that expired also arrives as null; only the recorded
+      // timeout falls through to the shared timeout outcome below.
+      if (decision === null && requestResult.terminalReason !== "timeout") {
         notifyPluginApprovalResolution(approval, PluginApprovalResolutions.CANCELLED);
         return pluginApprovalFailure(
           params.baseParams,
