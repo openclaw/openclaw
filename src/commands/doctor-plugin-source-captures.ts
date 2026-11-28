@@ -2,6 +2,7 @@ import { note } from "../../packages/terminal-core/src/note.js";
 import { quoteCliArg } from "../cli/quote-cli-arg.js";
 import { resolveStateDir } from "../config/state-dir.js";
 import { inspectOtherOpenClawProcesses } from "../infra/openclaw-process-census.js";
+import { hasPluginNativeCaptureReclaimCandidates } from "../plugins/plugin-source-capture-directory.js";
 import {
   inspectLegacyPluginSourceCaptureRoots,
   pruneLegacyPluginSourceCaptures,
@@ -9,7 +10,26 @@ import {
 } from "../plugins/plugin-source-capture-report.js";
 import { getOpenClawDatabaseMaintenanceScope } from "../state/openclaw-state-db-async-lifecycle.js";
 import { formatBytes } from "./doctor-disk-space.js";
+import type { DoctorMaintenancePending } from "./doctor-maintenance-pending.js";
 import { inspectDoctorTemporaryDirectories } from "./doctor/shared/temporary-directories.js";
+
+/**
+ * Read-only: whether `noteLegacyPluginSourceCaptures(env, true)` would remove anything. It runs
+ * the same inspections without custody; an incomplete inspection is undecidable.
+ */
+export async function checkLegacyPluginSourceCapturesPending(
+  env: NodeJS.ProcessEnv,
+): Promise<DoctorMaintenancePending> {
+  const { directories, warnings } = await inspectDoctorTemporaryDirectories(env);
+  const report = await inspectLegacyPluginSourceCaptureRoots(resolveStateDir(env), directories);
+  if (report.roots.length > 0) {
+    return "work";
+  }
+  if (warnings.length > 0 || report.warnings.length > 0) {
+    return "undecidable";
+  }
+  return (await hasPluginNativeCaptureReclaimCandidates(resolveStateDir(env))) ? "work" : "none";
+}
 
 export async function noteLegacyPluginSourceCaptures(
   env: NodeJS.ProcessEnv,

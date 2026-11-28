@@ -10,6 +10,7 @@ import { useAutoCleanupTempDirTracker } from "../../test/helpers/temp-dir.js";
 import { stripInboundMetadata } from "../auto-reply/reply/strip-inbound-meta.js";
 import { resolvePreferredOpenClawTmpDir } from "../infra/tmp-openclaw-dir.js";
 import { getAgentScopedMediaLocalRoots } from "../media/local-roots.js";
+import { readPersistedMediaFacts } from "../media/media-facts.js";
 import { escapeRegExp } from "../shared/regexp.js";
 import { captureEnv, setTestEnvValue } from "../test-utils/env.js";
 import {
@@ -131,6 +132,22 @@ describe("prepareCliPromptImagePayload prompt references", () => {
     expect(result.imagePaths).toHaveLength(1);
   });
 
+  it("keeps images within the configured imageMaxDimensionPx", async () => {
+    const workspaceDir = imageWorkspace();
+    const imagePath = path.join(workspaceDir, "wide.png");
+    const image = createSolidPngBuffer(1600, 8, { r: 0, g: 0, b: 255 });
+    await fs.writeFile(imagePath, image);
+    const prepared = await prepareCliPromptImagePayload({
+      backend: codexImages,
+      prompt: "describe the attachment",
+      workspaceDir,
+      config: { agents: { defaults: { imageMaxDimensionPx: 2400 } } },
+      media: [{ path: imagePath, contentType: "image/png" }],
+    });
+
+    await expect(fs.readFile(prepared.imagePaths?.[0] ?? "")).resolves.toEqual(image);
+  });
+
   it("surfaces inline sanitization failure when a preceding image fact is suppressed", async () => {
     await expect(
       prepareCliPromptImagePayload({
@@ -190,12 +207,18 @@ describe("writeCliImages", () => {
 
   it("carries exact image-turn correlation beside Claude prompt paths", async () => {
     const turnKey = hashCliImageTurnEntryId("transcript-entry-1");
-    const prepared = await prepareCliPromptImagePayload({
+    const params = {
       backend: { command: "claude", imageArg: "@" },
       prompt: "describe this",
       workspaceDir: "/workspace",
-      images: [pngImage("aW1hZ2U=")],
+      media: readPersistedMediaFacts({ __openclaw: { media: [null] } }),
       imageTurnKey: turnKey,
+    };
+    const textOnly = await prepareCliPromptImagePayload(params);
+    expect(textOnly.prompt).toBe(params.prompt);
+    const prepared = await prepareCliPromptImagePayload({
+      ...params,
+      images: [pngImage(createSolidPngBuffer(1, 1, { r: 0, g: 90, b: 70 }))],
     });
 
     try {

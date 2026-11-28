@@ -67,6 +67,7 @@ const factParams = (sessionKey = PARENT) => ({
   agentId: "main",
   sessionKey,
   capabilityToolNames: new Set<string>(),
+  sentHistory: [],
 });
 const factsText = (facts: Awaited<ReturnType<typeof buildRuntimeFactsContext>>) =>
   facts.map((fragment) => fragment.text).join("\n");
@@ -251,7 +252,7 @@ it("refreshes a warm reader after another writer persists a result", async () =>
   }
 });
 
-it.each(["suppressed", "intentional non-delivery", "already delivered"])(
+it.each(["suppressed", "already delivered"])(
   "does not revive %s obligations",
   async (disposition) => {
     const delivered = disposition === "already delivered";
@@ -272,9 +273,6 @@ it.each(["suppressed", "intentional non-delivery", "already delivered"])(
         delivery: {
           status: delivered ? "delivered" : "failed",
           ...(delivered ? { deliveredAt: Date.now() } : {}),
-          ...(disposition === "intentional non-delivery"
-            ? { disposition: "intentional_non_delivery" as const }
-            : {}),
         },
         suppressCompletionDelivery: disposition === "suppressed",
       }),

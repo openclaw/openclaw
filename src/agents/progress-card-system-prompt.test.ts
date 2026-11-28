@@ -22,6 +22,7 @@ async function append(params: {
   return (
     await prepareAttemptSystemPromptAdditions({
       agentId: "main",
+      workspaceDir: "/workspace",
       sessionId: "synthetic-session",
       config: params.config,
       extraSystemPrompt: params.extraSystemPrompt,

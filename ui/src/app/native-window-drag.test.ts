@@ -17,13 +17,11 @@ it("drags blank native titlebar descendants but leaves controls and page content
   try {
     const shell = document.body.appendChild(document.createElement("div"));
     shell.style.setProperty("--openclaw-native-titlebar-height", "40px");
-    shell.style.setProperty("--mac-trim", "4px");
     shell.addEventListener("mousedown", beginNativeWindowDragFromTitlebar);
     const blank = shell.appendChild(document.createElement("span"));
     const button = shell.appendChild(document.createElement("button"));
     expect(mouseDown(blank, { clientY: 20 }).defaultPrevented).toBe(true);
     expect(mouseDown(button, { clientY: 20 }).defaultPrevented).toBe(false);
-    expect(mouseDown(blank, { clientY: 37 }).defaultPrevented).toBe(false);
     expect(mouseDown(blank, { clientY: 60 }).defaultPrevented).toBe(false);
     expect(postMessage).toHaveBeenCalledTimes(1);
   } finally {

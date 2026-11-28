@@ -44,17 +44,36 @@ export function mcpOAuthCliLoginSteps(identity: McpOAuthIdentity): string | unde
   return `run ${login} (works while the Gateway runs), or ask the agent to connect in a direct chat`;
 }
 
+function mcpOAuthSettingsHint(identity: McpOAuthIdentity): string {
+  return identity.configured === false
+    ? "Select Connect on the plugin's page in Settings"
+    : "Sign in from Settings → MCP";
+}
+
+/** Name-free recovery for the bounded model notice; the full error retains the CLI command. */
+function mcpOAuthPromptSignInHint(identity: McpOAuthIdentity): string {
+  return identity.principal === "requester"
+    ? "Reconnect from the channel through the MCP connect flow."
+    : `${mcpOAuthSettingsHint(identity)}, or ask the agent to connect in a direct chat.`;
+}
+
 /** Recovery sentence for MCP OAuth credential errors. */
-export function mcpOAuthSignInHint(identity: McpOAuthIdentity): string {
+function mcpOAuthSignInHint(identity: McpOAuthIdentity): string {
   if (identity.principal === "requester") {
-    return "Reconnect from the channel through the MCP connect flow.";
+    return mcpOAuthPromptSignInHint(identity);
   }
   const steps = mcpOAuthCliLoginSteps(identity);
-  const settings =
-    identity.configured === false
-      ? "Select Connect on the plugin's page in Settings"
-      : "Sign in from Settings → MCP";
-  return `${settings}, or from the Gateway's terminal: ${steps}.`;
+  return `${mcpOAuthSettingsHint(identity)}, or from the Gateway's terminal: ${steps}.`;
+}
+
+/** Preserve the operator error while carrying a compact model-facing recovery fact. */
+export class McpOAuthDiagnosticError extends Error {
+  readonly promptMessage: string;
+
+  constructor(identity: McpOAuthIdentity, reason: string) {
+    super(`MCP server "${identity.serverName}" ${reason} ${mcpOAuthSignInHint(identity)}`);
+    this.promptMessage = `${reason} ${mcpOAuthPromptSignInHint(identity)}`;
+  }
 }
 
 export function requesterMcpOAuthIdentity(

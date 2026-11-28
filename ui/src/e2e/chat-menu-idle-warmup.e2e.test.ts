@@ -66,6 +66,15 @@ suite.define(() => {
         const plusTrigger = pane.getByRole("button", { name: "Add attachment" });
         await sessionTrigger.waitFor({ state: "visible" });
         await plusTrigger.waitFor({ state: "visible" });
+        await page
+          .locator('link[rel="modulepreload"][href*="/chat-effort-picker-panel-"]')
+          .waitFor({ state: "attached" });
+        const sessionHint = page.locator(
+          'link[rel="preload"][as="script"][href*="/chat-header-session-menu-content-"]',
+        );
+        expect(await sessionHint.count()).toBe(0);
+        await sessionTrigger.hover();
+        await sessionHint.waitFor({ state: "attached" });
         const loadingRows = await countLoadingRows(page);
         const sessionMenu = pane.locator("openclaw-chat-header-session-menu");
         const openMenus = async () => {

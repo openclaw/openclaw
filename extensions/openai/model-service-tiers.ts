@@ -6,9 +6,12 @@ import {
 } from "openclaw/plugin-sdk/string-coerce-runtime";
 import { OPENAI_CODEX_RESPONSES_BASE_URL } from "./base-url.js";
 
+type OpenAIModelRoute = { api: string; baseUrl: string; runtimeIds: readonly string[] };
+
 /** Only authenticated remote rows may supply this private observation, never fallback seeds. */
-function readOpenAICodexServiceTiers(
+export function readOpenAIModelServiceTiers(
   rows: readonly unknown[],
+  route: OpenAIModelRoute,
 ): NonNullable<ProviderCatalogOutcome["modelServiceTiers"]> {
   return rows.flatMap((row) => {
     const record = asOptionalRecord(row);
@@ -25,22 +28,20 @@ function readOpenAICodexServiceTiers(
       }
       serviceTiers.push(id);
     }
-    return [
-      {
-        modelId,
-        runtimeId: "codex",
-        api: "openai-chatgpt-responses",
-        baseUrl: OPENAI_CODEX_RESPONSES_BASE_URL,
-        serviceTiers: [...new Set(serviceTiers)],
-      },
-    ];
+    return route.runtimeIds.map((runtimeId) => ({
+      modelId,
+      runtimeId,
+      api: route.api,
+      baseUrl: route.baseUrl,
+      serviceTiers: [...new Set(serviceTiers)],
+    }));
   });
 }
 
 /** Only explicit caller-specific metadata grants a program, never a model name or plan. */
 export function readOpenAIModelAccessPrograms(
   rows: readonly unknown[],
-  route: { api: string; baseUrl: string; runtimeIds: readonly string[] },
+  route: OpenAIModelRoute,
 ): NonNullable<ProviderCatalogOutcome["modelAccessPrograms"]> {
   return rows.flatMap((row) => {
     const record = asOptionalRecord(row);
@@ -72,7 +73,11 @@ export function readOpenAIModelAccessPrograms(
  * hints must not invent subscription access. Hidden rows stay listed: the account is entitled.
  */
 export function buildOpenAICodexReadyOutcome(rows: readonly unknown[]): ProviderCatalogOutcome {
-  const modelServiceTiers = readOpenAICodexServiceTiers(rows);
+  const modelServiceTiers = readOpenAIModelServiceTiers(rows, {
+    api: "openai-chatgpt-responses",
+    baseUrl: OPENAI_CODEX_RESPONSES_BASE_URL,
+    runtimeIds: ["codex"],
+  });
   const modelAccessPrograms = readOpenAIModelAccessPrograms(rows, {
     api: "openai-chatgpt-responses",
     baseUrl: OPENAI_CODEX_RESPONSES_BASE_URL,

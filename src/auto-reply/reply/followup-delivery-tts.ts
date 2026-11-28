@@ -39,7 +39,6 @@ export function createFollowupSpeechPreparer({
       return payload;
     }
     turn.operation.abortSignal.throwIfAborted();
-    turn.queued.operatorAuthority?.assertCurrent();
     const finish = beginReplyOperationFinalizationWork(turn.operation, RUN_STALE_TAKEOVER_MS);
     let prepared = payload;
     try {
@@ -58,7 +57,6 @@ export function createFollowupSpeechPreparer({
       finish();
     }
     turn.operation.abortSignal.throwIfAborted();
-    turn.queued.operatorAuthority?.assertCurrent();
     return prepared;
   };
 }

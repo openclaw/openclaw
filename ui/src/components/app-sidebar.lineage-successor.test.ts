@@ -31,7 +31,6 @@ it.each([
   "introduced-terminal",
   "introduced-overlap",
   "introduced-event",
-  "introduced-swarm",
   "metadata",
   "replacement",
   "deletion",
@@ -157,7 +156,6 @@ it.each([
             activeRunIds: overlap ? ["finishing-run", "remaining-run"] : ["finishing-run"],
           }
         : {}),
-      ...(mode === "introduced-swarm" ? { swarmGroupId: "synthetic-group" } : {}),
     };
     filtered = result(introduced ? [parent] : [parent, refreshed]);
     if (introduced) {
@@ -187,13 +185,6 @@ it.each([
           archived: false,
         });
         expect(canonical()?.status).toBe("running");
-      } else if (mode === "introduced-swarm") {
-        harness.publishEvent("sessions.changed", {
-          swarmGroupId: "synthetic-group",
-          kind: "log",
-          text: "Synthetic progress",
-        });
-        expect(canonical()?.swarmLog).toBe("Synthetic progress");
       }
       if (newer) {
         hold = false;

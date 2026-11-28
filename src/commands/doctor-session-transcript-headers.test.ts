@@ -15,12 +15,19 @@ import {
   createOpenClawTestState,
   type OpenClawTestState,
 } from "../test-utils/openclaw-test-state.js";
+import {
+  changedStoreFiles,
+  snapshotStoreFiles,
+} from "../test-utils/store-snapshot.test-support.js";
 
 const note = vi.hoisted(() => vi.fn());
 
 vi.mock("../../packages/terminal-core/src/note.js", () => ({ note }));
 
-import { noteSessionTranscriptHeaderHealth } from "./doctor-session-transcript-headers.js";
+import {
+  checkSessionTranscriptHeaderRepairPending,
+  noteSessionTranscriptHeaderHealth,
+} from "./doctor-session-transcript-headers.js";
 
 const AGENT_ID = "main";
 const SESSION_ID = "headerless-session";
@@ -52,6 +59,8 @@ describe("doctor SQLite session transcript header repair", () => {
   const rows = () => readTranscriptStorageRows(database(), SESSION_ID);
   const health = (shouldRepair = true) =>
     noteSessionTranscriptHeaderHealth({ cfg, env: state.env, shouldRepair });
+  const pending = (shouldRepair = true) =>
+    checkSessionTranscriptHeaderRepairPending({ cfg, env: state.env, shouldRepair });
   const expectNote = (text: unknown) =>
     expect(note).toHaveBeenCalledWith(text, "Chat history headers");
 
@@ -134,6 +143,12 @@ describe("doctor SQLite session transcript header repair", () => {
     expect(() => SessionManager.open(scope, state.workspaceDir)).toThrow(
       "require doctor/import migration before runtime use",
     );
+
+    // The --fix check finds the same work without writing; plain Doctor never repairs.
+    const storeBeforeCheck = snapshotStoreFiles(state.stateDir);
+    await expect(pending()).resolves.toBe("work");
+    await expect(pending(false)).resolves.toBe("none");
+    expect(changedStoreFiles(storeBeforeCheck, snapshotStoreFiles(state.stateDir))).toEqual([]);
 
     await expect(health(false)).resolves.toEqual({ found: 1, repaired: 0 });
     expect(rows()).toEqual(beforeRows);
@@ -220,6 +235,7 @@ describe("doctor SQLite session transcript header repair", () => {
     expect(rows()).toEqual(afterFirstRepair);
     expect(note).not.toHaveBeenCalled();
     expect(recoveryDirectories()).toEqual(backups);
+    await expect(pending()).resolves.toBe("none");
   });
 
   it("leaves retained history unchanged when its recovery copy cannot be saved", async () => {
@@ -291,6 +307,7 @@ describe("doctor SQLite session transcript header repair", () => {
       }, transcriptDatabaseOptions);
     }
     const before = rows();
+    await expect(pending()).resolves.toBe("none");
     await expect(health()).resolves.toEqual({ found: 0, repaired: 0 });
     expect(rows()).toEqual(before);
     expect(() => SessionManager.open(scope, state.workspaceDir)).toThrow(

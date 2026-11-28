@@ -7,6 +7,7 @@ import {
   responsesPromptObserver,
   type ResponsesPromptObservation,
 } from "@openclaw/ai/internal/openai";
+import { isToolChoiceCacheNeutral } from "@openclaw/ai/internal/shared";
 import { stableStringify } from "@openclaw/normalization-core";
 import { sha256Hex } from "@openclaw/normalization-core/node-crypto";
 import type { StreamFn } from "openclaw/plugin-sdk/agent-core";
@@ -15,7 +16,10 @@ import { isOwnedTranscriptPayload } from "../../config/sessions/transcript-json.
 import { resolveRuntimeProcessEntrypointUrl } from "../../infra/runtime-process-url.js";
 import { WorkerTaskPool } from "../../infra/worker-task-pool.js";
 import type { Message } from "../../llm/types.js";
-import type { PreparedProviderRequest } from "../../sessions/session-fork-context.types.js";
+import type {
+  PreparedProviderRequest,
+  SessionForkContextSnapshot,
+} from "../../sessions/session-fork-context.types.js";
 import { resolveGlobalSingleton } from "../../shared/global-singleton.js";
 import { isDeeplyFrozenPlainData } from "../../shared/immutable-data.js";
 import { log } from "./logger.js";
@@ -66,9 +70,38 @@ export function getProviderPromptState(runId: string): ProviderPromptState {
 // Request content never joins the serialized identity state; it lives and dies with it.
 const preparedRequests = new WeakMap<ProviderPromptState, PreparedProviderRequest>();
 
-export function readPreparedProviderRequest(runId: string): PreparedProviderRequest | undefined {
-  const state = providerPromptStates.get(runId);
-  return state && preparedRequests.get(state);
+/** What a live attempt lends a fork of its session: its route, cache key and last request. */
+export function readSessionForkContext(attempt: {
+  model: Model;
+  promptCacheKey?: string;
+  runId: string;
+}): SessionForkContextSnapshot {
+  const state = providerPromptStates.get(attempt.runId);
+  return {
+    model: attempt.model,
+    promptCacheKey: attempt.promptCacheKey,
+    preparedRequest: state && preparedRequests.get(state),
+  };
+}
+
+/**
+ * The settled turn's last request, which its NO_REPLY recovery (one more request of the same run)
+ * replays. Only where `tool_choice` is outside the cache key, on the same route, and never when
+ * the provider rejected that request's context.
+ */
+export function readSettledTurnRequest(attempt: {
+  model: Model;
+  runId: string;
+}): Record<string, unknown> | undefined {
+  const state = providerPromptStates.get(attempt.runId);
+  const prepared = state && preparedRequests.get(state);
+  return prepared &&
+    isToolChoiceCacheNeutral(attempt.model.api) &&
+    !(state.lastRejected && state.lastRejected === state.lastAttempt) &&
+    prepared.model.provider === attempt.model.provider &&
+    prepared.model.id === attempt.model.id
+    ? prepared.body
+    : undefined;
 }
 
 export function clearProviderPromptState(runId: string): void {

@@ -196,73 +196,23 @@ test("projects.searchRemote sends only the selected host's service credential", 
   expect(fetchImpl).not.toHaveBeenCalled();
 });
 
-test("projects.searchRemote binds native tokens to the host through final fetch", async () => {
-  const cfg = {
-    ...nativeSearchConfig("a.ghe.example.test"),
-    tools: { github: { profileId: "ghp_11111111111111111111111111111111" } },
-    agents: {
-      entries: {
-        main: { tools: { github: { profileId: "ghp_22222222222222222222222222222222" } } },
-      },
-    },
-  };
-  const fetchImpl = mockGitHubFetch();
+test("registered projects.searchRemote refuses aborted callers before credentialed I/O", async () => {
+  const cfg = nativeSearchConfig("a.ghe.example.test");
   setRuntimeConfigSnapshot(cfg);
-  using native = vi
+  const controller = new AbortController();
+  const fetchImpl = mockGitHubFetch();
+  using _ = vi
     .spyOn(githubReadIdentity, "readCachedNativeGitHubToken")
-    .mockResolvedValue("host-a-token");
-  expect(await searchRemote(cfg, "host-a-allowed", projectsHandlers)).toMatchObject({
-    ok: true,
-    payload: { credential: "configured" },
-  });
-  expectFetchAuthority(
-    fetchImpl,
-    /^https:\/\/a\.ghe\.example\.test\/api\/v3\//u,
-    "Bearer host-a-token",
-  );
-
-  fetchImpl.mockClear();
-  native.mockImplementation(async () => {
-    setRuntimeConfigSnapshot({
-      gateway: {
-        github: { host: "b.ghe.example.test", apiBaseUrl: "https://b.ghe.example.test/api/v3" },
-      },
+    .mockImplementation(async () => {
+      controller.abort();
+      return "synthetic-host-a-token";
     });
-    return "host-a-token";
+  const result = await searchRemote(cfg, "closed-native-aborted", undefined, {
+    signal: controller.signal,
   });
-  expect(await searchRemote(cfg, "host-a-replaced", projectsHandlers)).toMatchObject({
-    ok: false,
-    error: { message: expect.stringContaining("GitHub host changed") },
-  });
+  expect(result).toMatchObject({ ok: false });
   expect(fetchImpl).not.toHaveBeenCalled();
 });
-
-test.each(["revoked", "aborted"] as const)(
-  "registered projects.searchRemote refuses %s callers before credentialed I/O",
-  async (closed) => {
-    const cfg = nativeSearchConfig("a.ghe.example.test");
-    setRuntimeConfigSnapshot(cfg);
-    const controller = new AbortController();
-    let active = true;
-    const fetchImpl = mockGitHubFetch();
-    using _ = vi
-      .spyOn(githubReadIdentity, "readCachedNativeGitHubToken")
-      .mockImplementation(async () => {
-        if (closed === "aborted") {
-          controller.abort();
-        } else {
-          active = false;
-        }
-        return "synthetic-host-a-token";
-      });
-    const result = await searchRemote(cfg, `closed-native-${closed}`, undefined, {
-      signal: controller.signal,
-      hasCurrentClientAuthority: () => active,
-    });
-    expect(result).toMatchObject({ ok: false });
-    expect(fetchImpl).not.toHaveBeenCalled();
-  },
-);
 
 test("registered project search keeps an ambient Enterprise token at its declared host", async () => {
   vi.stubEnv("GH_ENTERPRISE_TOKEN", "synthetic-host-a-ambient-token");
@@ -803,6 +753,41 @@ test.each(["write scope", "session access", "registry access", "probe access"])(
     });
   },
 );
+
+test("projects.rename renames a registry project in place and rejects other targets", async () => {
+  return withProjectState(async (state) => {
+    const repo = await initializeRepository(state.root);
+    const project = await registerProjectRegistry({ path: repo, name: "Registered" });
+    expect(
+      await invoke("projects.rename", { projectId: project.id, name: "  Handbook  " }),
+    ).toEqual({
+      ok: true,
+      payload: {
+        id: project.id,
+        displayName: "Handbook",
+        repoRoot: repo,
+        originUrl: "https://github.com/openclaw/openclaw.git",
+        source: "registered",
+      },
+      error: undefined,
+    });
+    // Re-registering keeps the renamed display name and the same ID.
+    await expect(registerProjectRegistry({ path: repo, name: "Other" })).resolves.toMatchObject({
+      id: project.id,
+      displayName: "Handbook",
+    });
+    for (const params of [
+      { projectId: "missing", name: "Missing" },
+      { projectId: "workspace:main", name: "Workspace" },
+      { projectId: project.id, name: "   " },
+      { projectId: project.id },
+    ]) {
+      expect(
+        await invoke("projects.rename", params, projectConfig("/workspace/alpha")),
+      ).toMatchObject({ ok: false, error: { code: "INVALID_REQUEST" } });
+    }
+  });
+});
 
 test("projects.remove returns INVALID_REQUEST for an unknown id", async () => {
   return withProjectState(async () => {

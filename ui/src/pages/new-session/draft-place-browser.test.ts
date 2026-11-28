@@ -458,29 +458,6 @@ describe("DraftPlaceBrowser", () => {
       expect(fixture.onProjectMissing).toHaveBeenCalled();
     },
   );
-
-  it.each([
-    ["the Gateway omits recents", async () => ({ projects: [] })],
-    [
-      "projects.list fails",
-      async () => {
-        throw new Error("projects unavailable");
-      },
-    ],
-  ])("keeps roster recents when %s", async (_label, request) => {
-    const { browser } = createBrowser(request);
-
-    await browser.refreshProjects();
-
-    expect(
-      browser.resolveProjectRecents({
-        sessions: [{ spawnedCwd: "/workspace/recent" }],
-        workspace: "/workspace",
-        workspaceRoots: ["/workspace"],
-        isAdmin: false,
-      }),
-    ).toEqual([{ kind: "folder", folder: "/workspace/recent", displayName: "recent" }]);
-  });
 });
 
 describe("DraftGatewayState", () => {

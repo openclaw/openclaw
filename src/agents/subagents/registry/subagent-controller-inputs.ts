@@ -6,6 +6,7 @@ import { matchesSubagentChildSessionOwner } from "./subagent-child-owner-match.j
 import { subagentRuns } from "./subagent-registry-memory.js";
 import type { SubagentRunRecord } from "./subagent-registry.types.js";
 import { buildRequesterSettleWakeIdentity } from "./subagent-requester-settle-identity.js";
+import { isSubagentPausedByYield } from "./subagent-requester-turn-custody.js";
 
 /** The stable reservation ID of a run's individual completion input. */
 export const subagentCompletionSourceId = (entry: SubagentRunRecord) =>
@@ -15,7 +16,7 @@ export const subagentCompletionSourceId = (entry: SubagentRunRecord) =>
 function* subagentControllerInputs(entry: SubagentRunRecord) {
   const completionId = subagentCompletionSourceId(entry);
   const wake = entry.requesterSettleWake;
-  const pause = entry.pauseReason === "sessions_yield" && Boolean(wake?.pauseNotice);
+  const pause = isSubagentPausedByYield(entry) && Boolean(wake?.pauseNotice);
   const batchRunIds = (pause ? [entry.runId] : wake?.batchRunIds)?.filter((runId) => {
     const member = runId === entry.runId ? entry : subagentRuns.get(runId);
     return (

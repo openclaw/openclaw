@@ -412,32 +412,6 @@
   inset: -4px;
 }
 
-.sidebar-footer-bar__home {
-  position: relative;
-}
-
-/* Home keeps its centered activity glyph; compact badges never move the rail. */
-.sidebar-footer-bar__home .session-row-badges {
-  position: absolute;
-  inset-block-end: 0;
-  inset-inline-end: 0;
-  gap: 2px;
-  padding: 1px;
-  border-radius: var(--radius-sm);
-  align-items: center;
-  background: var(--rail-control-surface);
-}
-
-.sidebar-footer-bar__home .session-row-badge > i {
-  width: 10px;
-  height: 10px;
-}
-
-/* The tooltip and accessible label retain the full outbox count. */
-.sidebar-footer-bar__home .session-row-badge--attention > span {
-  display: none;
-}
-
 .sidebar-rail__pin {
   display: flex;
   position: relative;
@@ -474,20 +448,30 @@ html.openclaw-native-desktop[data-native-platform="macos"] {
   /* The traffic lights are wider than the rail: start its edge below the
      titlebar row so no divider runs between the window controls. */
   .shell:not(.shell--mobile-nav) .sidebar-rail {
-    padding-top: var(--rail-band);
-    border-image: linear-gradient(transparent var(--rail-band), var(--border) 0) 0 1;
+    padding-top: var(--openclaw-native-titlebar-height, 52px);
+    border-image: linear-gradient(
+        transparent var(--openclaw-native-titlebar-height, 52px),
+        var(--border) 0
+      )
+      0 1;
   }
 
   /* A collapsed rail is the only nav surface left, so the titlebar row
      shows the shell background edge to edge. */
   .shell--navigation-rail.shell--nav-collapsed:not(.shell--mobile-nav) {
     .shell-nav {
-      border-image: linear-gradient(transparent var(--rail-band), var(--resize-handle-rest-color) 0)
+      border-image: linear-gradient(
+          transparent var(--openclaw-native-titlebar-height, 52px),
+          var(--resize-handle-rest-color) 0
+        )
         0 1;
     }
 
     .sidebar {
-      background: linear-gradient(transparent var(--rail-band), var(--sidebar-bg) 0);
+      background: linear-gradient(
+        transparent var(--openclaw-native-titlebar-height, 52px),
+        var(--sidebar-bg) 0
+      );
     }
   }
 }

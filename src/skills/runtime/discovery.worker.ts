@@ -1,5 +1,8 @@
+import { createHash } from "node:crypto";
+import fs from "node:fs/promises";
 import path from "node:path";
 import { readDirectoryIdentity } from "@openclaw/fs-safe/advanced";
+import { sha256File } from "@openclaw/fs-safe/durability";
 import { FsSafeError } from "@openclaw/fs-safe/errors";
 import { root as createRoot } from "@openclaw/fs-safe/root";
 import type { WorkerTaskHandler } from "@openclaw/worker-runtime/worker";
@@ -26,6 +29,7 @@ import {
   resolvePluginSkillRootsFromContributions,
 } from "../loading/plugin-skills.js";
 import type { Skill } from "../loading/skill-contract.js";
+import { shouldSyncSkillPath } from "../loading/skill-paths.js";
 import {
   appendLowerPrecedenceSkillRecords,
   mergeSkillRecords,
@@ -98,6 +102,37 @@ async function prepareResourceRootIdentity(skill: Skill): Promise<Skill["resourc
     };
   } catch (error) {
     return { error: error instanceof Error ? error.message : String(error) };
+  }
+}
+
+/**
+ * Mirrors `copySkillTree` selection: an unchanged digest proves a sandbox copy is still current.
+ * Any read failure yields no digest, which the owner treats as a change.
+ */
+async function digestSyncedSkillTree(root: string): Promise<string | undefined> {
+  const hash = createHash("sha256");
+  const visit = async (file: string, relative: string): Promise<void> => {
+    if (!shouldSyncSkillPath(file)) {
+      return;
+    }
+    const stat = await fs.lstat(file);
+    if (stat.isDirectory()) {
+      hash.update(`directory\0${relative}\0${stat.mode}\0`);
+      for (const name of (await fs.readdir(file)).toSorted()) {
+        await visit(path.join(file, name), `${relative}/${name}`);
+      }
+    } else if (stat.isSymbolicLink()) {
+      hash.update(`link\0${relative}\0${await fs.readlink(file)}\0`);
+    } else if (stat.isFile()) {
+      const { digest } = await sha256File(file, { maxBytes: stat.size });
+      hash.update(`file\0${relative}\0${stat.mode}\0${digest}\0`);
+    }
+  };
+  try {
+    await visit(root, "");
+    return hash.digest("hex");
+  } catch {
+    return undefined;
   }
 }
 
@@ -239,6 +274,7 @@ const runTask: WorkerTaskHandler<SkillsDiscoveryOutput, SkillsDiscoveryInput> = 
   // Share physical inventory facts across workspaces, then discard them for the next pass.
   const pluginCache = createPluginCache();
   const sourceReads = new Map<string, SkillSourceReadBatch>();
+  const syncedTreeDigests = new Map<string, Promise<string | undefined>>();
   const plans = new Map<string, ReturnType<typeof resolveInputPlan>>();
   const selectPlan = (sourceInput: SkillsSourcePlanInput) => {
     const key = JSON.stringify(sourceInput);
@@ -303,12 +339,29 @@ const runTask: WorkerTaskHandler<SkillsDiscoveryOutput, SkillsDiscoveryInput> = 
           watchDirectories.add(target);
         }
       }
+      const syncedRoots = new Set(
+        [...sources.entries, ...sources.executionEntries]
+          .filter(({ skill }) => !skill.filePath.startsWith("node://"))
+          .map((entry) => entry.syncSourceDir ?? entry.skill.baseDir),
+      );
+      const syncedDigests: Array<[string, string | undefined]> = [];
+      for (const root of [...syncedRoots].toSorted()) {
+        let digest = syncedTreeDigests.get(root);
+        if (!digest) {
+          digest = digestSyncedSkillTree(root);
+          syncedTreeDigests.set(root, digest);
+        }
+        syncedDigests.push([root, await digest]);
+      }
       results.push({
         key,
         sources,
         watchDirectories: [...watchDirectories],
         plan: selection.plan ? resolvedPlan : undefined,
         fingerprint: sha256Hex(JSON.stringify([entries, sources.runtime])),
+        ...(syncedDigests.every(([, digest]) => digest !== undefined)
+          ? { syncedContentDigest: sha256Hex(JSON.stringify(syncedDigests)) }
+          : {}),
       });
     }
     return { kind: "scan" as const, results };

@@ -59,6 +59,84 @@ const gatewayScenario = {
 };
 
 suite.define(() => {
+  it.each([
+    [390, 844],
+    [820, 1180],
+    [1180, 820],
+    [1440, 900],
+  ])(
+    "shows both runtime names in the picker and the saved fallback at %i × %i",
+    async (width, height) => {
+      await suite.withPage(
+        { viewport: { width, height }, isMobile: width === 390, hasTouch: true, locale: "en-US" },
+        async ({ page }) => {
+          const name = "Studio documentation review extended context";
+          const ref = "openai/studio-review";
+          const entry = {
+            ...models[0],
+            id: "studio-review",
+            name,
+            defaultModelRuntimes: {
+              base: { agentRuntime: { id: "openclaw", source: "model" }, available: true },
+              alternatives: [{ agentRuntime: { id: "codex", source: "model" }, available: true }],
+            },
+          };
+          const saved = {
+            agents: {
+              defaults: {
+                ...config.agents.defaults,
+                model: { primary: "openai/gpt-5.5", fallbacks: [ref] },
+                models: { [ref]: { agentRuntime: { id: "codex" } } },
+              },
+            },
+          };
+          const gw = await installMockGateway(page, {
+            ...gatewayScenario,
+            methodResponses: {
+              ...gatewayScenario.methodResponses,
+              "models.list": { ...catalog, models: [...models, entry] },
+              "config.patch": { ok: true, config: saved, hash: "saved" },
+            },
+          });
+          await page.goto(suite.server.baseUrl + "settings/model-providers");
+          const defaults = page.locator(".model-providers__defaults");
+          const trigger = defaults.getByRole("button", { name: /^Fallback model:/ });
+          await trigger.tap();
+          const list = defaults.getByRole("listbox");
+          const variants = list.getByRole("option").filter({ hasText: name });
+          await expect.poll(() => variants.count()).toBe(2);
+          for (const [i, runtime] of ["OpenClaw", "Codex"].entries()) {
+            const label = variants.nth(i).locator(".picker-select__split-label");
+            expect(await label.getAttribute("title")).toBe(name + " · " + runtime);
+            const tail = label.locator("span").last();
+            expect((await tail.textContent())?.trim()).toBe("· " + runtime);
+            expect(await label.evaluate((e) => e.getBoundingClientRect().height)).toBeLessThan(25);
+            expect(
+              await label.evaluate(
+                (e) =>
+                  e.lastElementChild!.getBoundingClientRect().right <=
+                  e.getBoundingClientRect().right + 1,
+              ),
+            ).toBe(true);
+          }
+          const overflow = (el: Element) => el.scrollWidth - el.clientWidth;
+          expect(
+            await variants
+              .locator(".picker-select__label")
+              .evaluateAll((els) => els.map((el) => el.scrollWidth - el.clientWidth)),
+          ).toEqual([0, 0]);
+          await gw.setMethodResponse("config.get", sourceConfigSnapshot(saved, "saved"));
+          await variants.filter({ hasText: "Codex" }).tap();
+          await gw.waitForRequest("config.patch");
+          await expect.poll(() => trigger.textContent()).toContain(name + " · Codex");
+          expect(await trigger.locator(".picker-select__label").evaluate(overflow)).toBe(0);
+          expect(await trigger.locator(".picker-select__split-label").getAttribute("title")).toBe(
+            name + " · Codex",
+          );
+        },
+      );
+    },
+  );
   it.each([1440, 1100, 768, 640, 390])(
     "Models page keeps controls separate during discovery at %ipx",
     async (width) => {

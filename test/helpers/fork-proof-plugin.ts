@@ -9,15 +9,21 @@ const SOURCE = `module.exports = { id: "${FORK_PLUGIN_ID}", register(api) {
   api.on("agent_end", (_event, ctx) => {
     if (ctx.completedTurn) turns.set(ctx.sessionKey, ctx.completedTurn);
   });
+  api.registerTool(() => ({
+    name: "prefix_fork_note",
+    description: "Record one note about the conversation",
+    parameters: { type: "object", properties: { note: { type: "string" } } },
+    execute: async () => ({ content: [{ type: "text", text: "noted" }] }),
+  }), { name: "prefix_fork_note" });
   api.registerGatewayMethod("prefixfork.run", async ({ params, respond }) => {
     try {
-      const through = turns.get(params.sessionKey);
-      if (!through) throw new Error("No completed parent turn");
+      const through = params.latest ? undefined : turns.get(params.sessionKey);
+      if (!through && !params.latest) throw new Error("No completed parent turn");
       const result = await api.runtime.subagent.runForkedTurn({
         sessionKey: params.sessionKey,
         through,
         prompt: "${FORK_PROBE}",
-        tools: [],
+        tools: params.tools ?? [],
         onSettled: async (outcome) => {
           if (!outcome.ok) throw outcome.error;
           return "fork-settled";
@@ -46,6 +52,7 @@ export async function writeForkProofPlugin(root: string) {
     JSON.stringify({
       id: FORK_PLUGIN_ID,
       activation: { onStartup: true },
+      contracts: { tools: ["prefix_fork_note"] },
       configSchema: { type: "object" },
     }),
   );

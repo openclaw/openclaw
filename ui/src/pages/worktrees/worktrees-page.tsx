@@ -31,7 +31,7 @@ import {
   resolveSessionPreferredFaceForKey,
   sessionNavigationTarget,
 } from "../../lib/sessions/route-navigation.ts";
-import { sessionHubTabs } from "../sessions/session-hub-tabs.ts";
+import { sessionHubTabs, type SessionHubTab } from "../sessions/session-hub-tabs.ts";
 import "../../styles/settings.css";
 import "../../styles/hub-tabs.css";
 import "./worktree-row.css";
@@ -158,7 +158,7 @@ export function renderWorktreesView(model: WorktreesModel, view: () => Worktrees
 
   return (
     <>
-      <HubPageHeader<"sessions" | "worktrees">
+      <HubPageHeader<SessionHubTab>
         active="worktrees"
         tabs={sessionHubTabs("worktrees", (tab) => model.context.navigate(tab))}
         docsUrl={WORKTREES_DOCS_URL}
@@ -172,7 +172,21 @@ export function renderWorktreesView(model: WorktreesModel, view: () => Worktrees
             </InlineAlert>
           </Show>
           <Show when={view().error}>
-            <InlineAlert tone="danger" role="alert">
+            <InlineAlert
+              tone="danger"
+              role="alert"
+              action={
+                <Show when={view().listLoaded && view().listFailed}>
+                  <button
+                    class="btn btn--sm"
+                    disabled={!model.gateway.connected || busy()}
+                    onClick={() => void model.load()}
+                  >
+                    {t("common.retry")}
+                  </button>
+                </Show>
+              }
+            >
               {view().error}
             </InlineAlert>
           </Show>

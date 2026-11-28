@@ -1,8 +1,6 @@
-import { existsSync } from "node:fs";
 import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
-import { DatabaseSync } from "node:sqlite";
 import { isRecord } from "@openclaw/normalization-core/record-coerce";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { GATEWAY_OWNER_PROFILE_ID } from "../../../../packages/gateway-protocol/src/schema/users.js";
@@ -10,8 +8,12 @@ import {
   claimAgentRunDelegatedAuthority,
   releaseAgentRunDelegatedAuthority,
 } from "../../../infra/agent-run-registry.js";
-import type { GithubIssueSubmitHooks, RunGithubCli } from "../../../infra/github-issue.js";
-import type { RestartSentinelPayload } from "../../../infra/restart-sentinel.js";
+import type { RunGithubCli } from "../../../infra/github-issue.js";
+import {
+  createUpdateRun,
+  finishUpdateRun,
+  recordUpdateRunPhase,
+} from "../../../infra/update-run-ledger.js";
 import { createDeferredCore } from "../../../shared/deferred.js";
 import {
   closeOpenClawStateDatabaseAsync,
@@ -29,8 +31,6 @@ import type { GatewayWsMessageHandlerParams } from "./message-handler-types.js";
 const mocks = vi.hoisted(() => ({
   submitGithubIssue: vi.fn(),
   reconcileGithubIssue: vi.fn(),
-  getLatest: vi.fn<() => RestartSentinelPayload | null>(),
-  refreshLatest: vi.fn<() => Promise<RestartSentinelPayload | null>>(),
 }));
 
 vi.mock("../../../infra/github-issue.js", async () => {
@@ -44,80 +44,13 @@ vi.mock("../../../infra/github-issue.js", async () => {
   };
 });
 
-vi.mock("../../server-update-sentinel.js", async () => {
-  const actual = await vi.importActual<typeof import("../../server-update-sentinel.js")>(
-    "../../server-update-sentinel.js",
-  );
-  return {
-    ...actual,
-    getLatestUpdateRestartSentinel: mocks.getLatest,
-    refreshLatestUpdateRestartSentinel: mocks.refreshLatest,
-  };
-});
-
 const { updateReportHandler } = await import("../../server-methods/update-report.js");
 
-const failure: RestartSentinelPayload = {
-  kind: "update",
-  status: "error",
-  ts: 500,
-  stats: {
-    handoffId: "authority-proof",
-    mode: "npm",
-    target: "openclaw@next",
-    reason: "doctor-failed",
-    before: { version: "2026.8.1" },
-    after: { version: "2026.8.2" },
-    steps: [
-      { name: "doctor", command: "openclaw doctor --fix", durationMs: 10, log: { exitCode: 1 } },
-    ],
-    durationMs: 20,
-    recovery: { serviceRestartSafe: true, version: "2026.8.1" },
-  },
-};
+const runId = "aaaaaaaa-bbbb-4ccc-8ddd-eeeeeeeeeeee";
 
 const issueUrl = "https://github.com/openclaw/openclaw/issues/999999";
 const createdResponse = { ok: true, payload: { status: "created", url: issueUrl } };
-const originalWriteFile = fs.writeFile.bind(fs);
 let stateDir = "";
-
-async function countReportReceipts(): Promise<number> {
-  await closeOpenClawStateDatabaseAsync();
-  closeOpenClawStateDatabaseForTest();
-  const databasePath = path.join(stateDir, "state", "openclaw.sqlite");
-  if (!existsSync(databasePath)) {
-    return 0;
-  }
-  try {
-    const database = new DatabaseSync(databasePath, { readOnly: true });
-    try {
-      const row = database
-        .prepare(
-          "SELECT COUNT(*) AS count FROM gateway_restart_sentinel WHERE sentinel_key LIKE 'update-failure-report:%'",
-        )
-        .get() as { count: number };
-      return row.count;
-    } finally {
-      database.close();
-    }
-  } catch (error) {
-    if ((error as NodeJS.ErrnoException).code === "ENOENT") {
-      return 0;
-    }
-    throw error;
-  }
-}
-
-async function countReportFiles(): Promise<number> {
-  try {
-    return (await fs.readdir(path.join(stateDir, "update-reports"))).length;
-  } catch (error) {
-    if ((error as NodeJS.ErrnoException).code === "ENOENT") {
-      return 0;
-    }
-    throw error;
-  }
-}
 
 function createReportHarness(
   client: ReturnType<typeof createOperatorWsClient>,
@@ -148,7 +81,7 @@ function createReportHarness(
     harness.dispatcher.dispatch(
       gatewayRequest(id, "update.report", {
         action,
-        attemptId: "authority-proof",
+        attemptId: runId,
         ...(previewDigest === undefined ? {} : { previewDigest }),
       }),
       client,
@@ -221,30 +154,26 @@ function authorityHarness(change: keyof typeof authorityCloseReasons, connId: st
   };
 }
 
-async function expectNoReport() {
-  expect(await countReportFiles()).toBe(0);
-  expect(await countReportReceipts()).toBe(0);
-}
-
 describe("update report live authority boundary", () => {
   beforeEach(async () => {
     vi.restoreAllMocks();
     vi.clearAllMocks();
     stateDir = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-update-report-authority-"));
     vi.stubEnv("OPENCLAW_STATE_DIR", stateDir);
-    mocks.getLatest.mockReturnValue(failure);
-    mocks.refreshLatest.mockResolvedValue(failure);
-    mocks.submitGithubIssue.mockImplementation(
-      async (_issue: unknown, _runGh: unknown, hooks: GithubIssueSubmitHooks) => {
-        await hooks.afterAuthPreflight?.();
-        const commitIssueCreate = await hooks.beforeIssueCreate?.();
-        commitIssueCreate?.();
-        return {
-          status: "created",
-          url: issueUrl,
-        };
-      },
-    );
+    createUpdateRun({
+      runId,
+      trigger: "control-ui",
+      before: { version: "2026.8.1" },
+    });
+    recordUpdateRunPhase(runId, "validating", {
+      step: { step: "doctor", status: "failed", exitCode: 1 },
+    });
+    finishUpdateRun(runId, {
+      status: "failed",
+      reason: "doctor-failed",
+      after: { version: "2026.8.2" },
+    });
+    mocks.submitGithubIssue.mockResolvedValue({ status: "created", url: issueUrl });
   });
 
   afterEach(async () => {
@@ -286,6 +215,9 @@ describe("update report live authority boundary", () => {
           await released.promise;
           return { started: true, status: 0, stdout: Buffer.alloc(0) };
         }
+        if (args[0] === "issue") {
+          return { started: true, status: 0, stdout: Buffer.from("[]") };
+        }
         expect(args).toContain("POST");
         expect(validateAuthority(identity)).toBe(true);
         return {
@@ -296,14 +228,12 @@ describe("update report live authority boundary", () => {
           ),
         };
       });
-      mocks.submitGithubIssue.mockImplementationOnce(
-        (issue, _runGh, hooks: GithubIssueSubmitHooks) =>
-          transport.submitGithubIssue(issue, runGh, hooks),
+      mocks.submitGithubIssue.mockImplementationOnce((issue) =>
+        transport.submitGithubIssue(issue, runGh),
       );
       try {
         expect(validateAuthority(identity)).toBe(true);
         const previewDigest = await preview("runtime-preview");
-        expect(await countReportFiles()).toBe(0);
         const finished = waitForNextHandler();
         const dispatch = submit("runtime-submit", previewDigest);
         await entered.promise;
@@ -317,9 +247,7 @@ describe("update report live authority boundary", () => {
         expect(validateAuthority(identity)).toBe(true);
         expect(mocks.submitGithubIssue).toHaveBeenCalledOnce();
 
-        expect(runGh.mock.calls.map(([args]) => args[0])).toEqual(["auth", "api"]);
-        expect(await countReportReceipts()).toBe(1);
-        expect(await countReportFiles()).toBe(0);
+        expect(runGh.mock.calls.map(([args]) => args[0])).toEqual(["auth", "issue", "api"]);
         const response = await harness.awaitResponseFrame("runtime-submit");
         expect(response).toMatchObject(createdResponse);
         expect(harness.close).not.toHaveBeenCalled();
@@ -327,53 +255,6 @@ describe("update report live authority boundary", () => {
         released.resolve();
         releaseAgentRunDelegatedAuthority(claim);
       }
-    },
-  );
-
-  it.each(["identity", "same-identity-facts"] as const)(
-    "refuses changed sentinel $0 during real shared auth preflight",
-    async (change) => {
-      const transport = await vi.importActual<typeof import("../../../infra/github-issue.js")>(
-        "../../../infra/github-issue.js",
-      );
-      const client = createOperatorWsClient({ connId: `report-changed-${change}` });
-      grantReportAuthority(client, "system-admin");
-      const { harness, waitForNextHandler, preview, submit } = createReportHarness(client);
-      const previewDigest = await preview(`preview-changed-${change}`);
-      const entered = createDeferredCore();
-      const released = createDeferredCore();
-      const runGh = vi.fn<RunGithubCli>(async (args) => {
-        expect(args[0]).toBe("auth");
-        entered.resolve();
-        await released.promise;
-        return { started: true, status: 0, stdout: Buffer.alloc(0) };
-      });
-      mocks.submitGithubIssue.mockImplementationOnce((issue, _runGh, hooks) =>
-        transport.submitGithubIssue(issue, runGh, hooks),
-      );
-      const finished = waitForNextHandler();
-      const dispatch = submit(`changed-${change}`, previewDigest);
-      await entered.promise;
-      mocks.refreshLatest.mockResolvedValue({
-        ...failure,
-        stats: {
-          ...failure.stats,
-          ...(change === "identity" ? { handoffId: "replacement" } : { reason: "rollback-failed" }),
-        },
-      });
-      released.resolve();
-      await finished;
-      await dispatch;
-
-      expect(runGh).toHaveBeenCalledOnce();
-      await expectNoReport();
-      expect(harness.send).toHaveBeenCalledWith(
-        expect.objectContaining({
-          id: `changed-${change}`,
-          ok: false,
-          error: expect.objectContaining({ code: "INVALID_REQUEST" }),
-        }),
-      );
     },
   );
 
@@ -393,10 +274,8 @@ describe("update report live authority boundary", () => {
       await dispatch(`denied-${scopes[0]}`, "preview");
       const response = await harness.awaitResponseFrame(`denied-${scopes[0]}`);
 
-      await expectNoReport();
       if (!allowed) {
         expect(response).toMatchObject({ ok: false, error: { code: "FORBIDDEN" } });
-        expect(mocks.refreshLatest).not.toHaveBeenCalled();
       } else {
         expect(response).toMatchObject({ ok: true, payload: { status: "ready" } });
         const preview = response.payload;
@@ -413,89 +292,27 @@ describe("update report live authority boundary", () => {
         expect(url.origin + url.pathname).toBe("https://github.com/openclaw/openclaw/issues/new");
         expect(url.searchParams.get("body")).toBe(preview.body);
         expect(url.searchParams.get("title")).toBe(preview.title);
-        await submit("browser-repeat", preview.previewDigest);
-        expect(await harness.awaitResponseFrame("browser-repeat")).toMatchObject({
-          ok: true,
-          payload: { status: "duplicate", fallbackUrl: submitted.payload.fallbackUrl },
-        });
-        expect(await countReportReceipts()).toBe(1);
-        expect(await countReportFiles()).toBe(1);
       }
       expect(mocks.submitGithubIssue).not.toHaveBeenCalled();
       expect(mocks.reconcileGithubIssue).not.toHaveBeenCalled();
     },
   );
 
-  it.each([
-    ["shared-auth", "auth-preflight"],
-    ["invalidated", "auth-preflight"],
-    ["shared-auth", "report-write"],
-    ["invalidated", "report-write"],
-    ["shared-auth", "sentinel-refresh"],
-    ["invalidated", "sentinel-refresh"],
-  ] as const)("blocks report side effects after %s closes during %s", async (change, stage) => {
-    const {
-      harness,
-      waitForNextHandler,
-      revoke,
-      preview,
-      dispatch: dispatchReport,
-    } = authorityHarness(change, `report-${stage}-${change}`);
-    const previewDigest = stage === "sentinel-refresh" ? undefined : await preview("preview");
-    const entered = createDeferredCore();
-    const release = createDeferredCore();
-    let issueCreateCalls = 0;
-    if (stage === "auth-preflight") {
-      mocks.submitGithubIssue.mockImplementationOnce(
-        async (_issue: unknown, _runGh: unknown, hooks: GithubIssueSubmitHooks) => {
-          await hooks.afterAuthPreflight?.();
-          entered.resolve();
-          await release.promise;
-          const commitIssueCreate = await hooks.beforeIssueCreate?.();
-          commitIssueCreate?.();
-          issueCreateCalls += 1;
-          return { status: "created", url: issueUrl };
-        },
-      );
-    } else if (stage === "report-write") {
-      vi.spyOn(fs, "writeFile").mockImplementation(async (...args) => {
-        const result = await originalWriteFile(...args);
-        if (
-          typeof args[0] === "string" &&
-          args[0].includes(`${path.sep}update-reports${path.sep}`)
-        ) {
-          entered.resolve();
-          await release.promise;
-        }
-        return result;
-      });
-    } else {
-      mocks.refreshLatest.mockImplementationOnce(async () => {
-        entered.resolve();
-        await release.promise;
-        return failure;
-      });
-    }
-    const finished = waitForNextHandler();
-    const dispatch = dispatchReport(
-      "denied",
-      stage === "sentinel-refresh" ? "preview" : "submit",
-      previewDigest,
-    );
-    await entered.promise;
-    revoke();
-    release.resolve();
-    await finished;
-    await dispatch;
+  it.each(["shared-auth", "invalidated"] as const)(
+    "rejects the next report request after %s authority is revoked",
+    async (change) => {
+      const { harness, revoke, preview, submit } = authorityHarness(change, `report-${change}`);
+      const previewDigest = await preview("preview");
 
-    expect(harness.close).toHaveBeenCalledWith(4001, authorityCloseReasons[change]);
-    expect(mocks.submitGithubIssue).toHaveBeenCalledTimes(stage === "auth-preflight" ? 1 : 0);
-    if (stage === "auth-preflight") {
-      expect(issueCreateCalls).toBe(0);
-    }
-    await expectNoReport();
-    expect(harness.send).not.toHaveBeenCalledWith(
-      expect.objectContaining({ id: "denied", ok: true }),
-    );
-  });
+      revoke();
+      await submit("denied", previewDigest);
+
+      expect(harness.close).toHaveBeenCalledWith(4001, authorityCloseReasons[change]);
+      expect(mocks.submitGithubIssue).not.toHaveBeenCalled();
+      expect(mocks.reconcileGithubIssue).not.toHaveBeenCalled();
+      expect(harness.send).not.toHaveBeenCalledWith(
+        expect.objectContaining({ id: "denied", ok: true }),
+      );
+    },
+  );
 });

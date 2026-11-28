@@ -2,8 +2,7 @@ import { afterEach, describe, expect, it } from "vitest";
 import { useAutoCleanupTempDirTracker } from "../../test/helpers/temp-dir.js";
 import * as state from "../state/openclaw-state-db.js";
 import * as ledger from "./update-run-ledger.js";
-import { toPublicUpdateRun } from "./update-run-record.js";
-import { renderUpdateRunReport } from "./update-run-report.js";
+import { updateOwedStepRow } from "./update-run-owed-step.js";
 import { updateRunStepsFromResultStep } from "./update-run-step.js";
 import { updateRunLedgerSchema } from "./update-run-write.js";
 
@@ -50,6 +49,7 @@ describe("update run ledger compaction", () => {
       "openclaw doctor",
       "managed-service-restart",
       "managed-service update handoff",
+      "warning:managed-service-reconciliation",
       "service-stop",
       "service-start",
       "service-running",
@@ -92,14 +92,14 @@ describe("update run ledger compaction", () => {
     ledger.finishUpdateRun(run.runId, { status: "succeeded" }, options);
     state.closeOpenClawStateDatabaseForTest();
     const persisted = ledger.getUpdateRun(run.runId, options)!;
-    const published = toPublicUpdateRun(persisted);
-    const report = renderUpdateRunReport(published);
-    expect(report.headline).toMatch(/warnings? needs? attention/);
-    expect(report.markdown).toContain(
-      "Automatic database restoration unavailable: databases changed after snapshot capture; the writer is unknown.",
+    expect(persisted.steps).toContainEqual(
+      expect.objectContaining({
+        step: "warning:database migration writes",
+        detail:
+          "Automatic database restoration unavailable: databases changed after snapshot capture; the writer is unknown. Snapshots retained at $OPENCLAW_STATE_DIR/backup.",
+      }),
     );
-    expect(report.markdown).toContain("Snapshots retained at $OPENCLAW_STATE_DIR/backup.");
-    expect(report.markdown).not.toContain(options.env.OPENCLAW_STATE_DIR);
+    expect(JSON.stringify(persisted.steps)).not.toContain(options.env.OPENCLAW_STATE_DIR);
     for (const expected of evidence) {
       expect(persisted.steps.find(({ step }) => step === expected.step)).toMatchObject(expected);
     }
@@ -135,10 +135,89 @@ describe("update run ledger compaction", () => {
       );
     }
     ledger.finishUpdateRun(run.runId, { status: "succeeded" }, options);
-    const report = renderUpdateRunReport(
-      toPublicUpdateRun(ledger.getUpdateRun(run.runId, options)!),
+    const stored = ledger.getUpdateRun(run.runId, options)!;
+    expect(stored.steps).toEqual(
+      expect.arrayContaining([
+        expect.objectContaining({
+          step: "warning:finalize:plugins:skipped",
+          detail: "warning:finalize:plugins:skipped",
+        }),
+        expect.objectContaining({
+          step: "warning:update-channel-note",
+          detail: "warning:update-channel-note",
+        }),
+        // Requested phase + two warnings + count plain rows, plus the new marker.
+        expect.objectContaining({
+          step: "history:truncated",
+          detail: String(count + 4 - stored.steps.length),
+        }),
+      ]),
     );
-    expect(report.headline).toContain("2 warnings need attention");
+  });
+
+  it("keeps actionable rows through late cleanup and counts unavoidable warning overflow", () => {
+    const options = isolatedOptions();
+    const run = ledger.createUpdateRun({ trigger: "cli" }, options);
+    const write = (step: Parameters<typeof ledger.recordUpdateRunStep>[1]) =>
+      ledger.recordUpdateRunStep(run.runId, step, options);
+    const browserWarning = "Review legacy Browser Relay authentication.";
+    write({ step: "warning:doctor:browser", status: "completed", detail: browserWarning });
+    write({ step: "service-refresh", status: "failed", detail: "Service definition unchanged." });
+    write(updateOwedStepRow("service-definition", "Review the service installation."));
+    for (let index = 0; index < 14; index++) {
+      write({
+        step: `warning:doctor:${index}`,
+        status: "completed",
+        detail: `Doctor advisory ${index}: ${"🦞".repeat(235)}`,
+      });
+    }
+    write({ step: "diagnostic:disposable", status: "completed", detail: "i".repeat(350) });
+    ledger.finishUpdateRun(run.runId, { status: "succeeded" }, options);
+    const cleanup = (suffix: string) =>
+      write({ step: suffix, status: "completed", detail: `Late cleanup: ${"🦞".repeat(240)}` });
+    cleanup("recovery-artifact-cleanup");
+    cleanup("diagnostic:recovery-artifact-cleanup");
+    cleanup("warning:recovery-artifact-cleanup");
+    state.closeOpenClawStateDatabaseForTest();
+
+    const persisted = ledger.getUpdateRun(run.runId, options)!;
+    expect(persisted.steps).toEqual(
+      expect.arrayContaining([
+        expect.objectContaining({ step: "history:truncated", detail: "1" }),
+        expect.objectContaining({ step: "warning:doctor:browser", detail: browserWarning }),
+        expect.objectContaining({
+          step: "service-refresh",
+          status: "failed",
+          detail: "Service definition unchanged.",
+        }),
+        expect.objectContaining({
+          step: "finalize:owed:service-definition",
+          status: "skipped",
+          detail: "Review the service installation.",
+        }),
+      ]),
+    );
+    expect(persisted.steps.some((step) => step.step === "diagnostic:disposable")).toBe(false);
+
+    cleanup("warning:recovery-artifact-cleanup:extra");
+    state.closeOpenClawStateDatabaseForTest();
+    const overflow = ledger.getUpdateRun(run.runId, options)!;
+    expect(Buffer.byteLength(JSON.stringify(overflow.steps))).toBeLessThanOrEqual(16 * 1024);
+    expect(overflow.steps).toEqual(
+      expect.arrayContaining([
+        expect.objectContaining({ step: "history:truncated", detail: "3" }),
+        expect.objectContaining({
+          step: "service-refresh",
+          status: "failed",
+          detail: "Service definition unchanged.",
+        }),
+        expect.objectContaining({
+          step: "finalize:owed:service-definition",
+          status: "skipped",
+          detail: "Review the service installation.",
+        }),
+      ]),
+    );
   });
 
   it("reads and compacts pre-timing rows without adding timing steps", () => {

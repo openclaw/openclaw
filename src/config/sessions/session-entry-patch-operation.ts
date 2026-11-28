@@ -1,3 +1,4 @@
+import { isDeepStrictEqual } from "node:util";
 import { isSubagentSessionRow } from "../../shared/session-list-visibility.js";
 import type { SessionActivitySummary } from "./activity-summary.js";
 import {
@@ -63,6 +64,16 @@ export type SessionEntryBookkeepingReducer =
 /** Closed internal operations; arbitrary updater callbacks retain prepare/CAS. */
 type SessionEntryPatchStep = (
   | { kind: "fields"; patch: Partial<SessionEntry> }
+  | {
+      kind: "shell-call";
+      runId: string;
+      call?: { callId: string; key: string };
+      notice?: NonNullable<SessionEntry["pendingShellCalls"]>["notice"];
+      acknowledged?: {
+        marker: NonNullable<SessionEntry["resumeAfterRestart"]>;
+        pending: NonNullable<SessionEntry["pendingShellCalls"]>;
+      };
+    }
   | { kind: "writer-revoke"; runId: string; terminalAtMs?: number }
   | {
       kind: "cron-session";
@@ -125,6 +136,12 @@ export type SessionEntryPatchOperation =
   | SessionEntryPatchStep
   | { kind: "compound"; operations: readonly SessionEntryPatchStep[] };
 
+/** An accepted pin/archive write can invalidate Undo even when the entry data stays equal. */
+export type SessionEntryPatchWriteIntent = {
+  invalidateArchiveUndo?: true;
+  shellCallMutation?: true;
+};
+
 /** Shared by ordinary cron writes and the atomic reset-boundary owner. */
 export function projectCronSessionEntry(
   operation: Extract<SessionEntryPatchOperation, { kind: "cron-session" }>,
@@ -173,7 +190,20 @@ export function projectSessionEntryPatch(
     if (patch === null) {
       continue;
     }
-    next = mergeSessionEntryPatch({ ...params, existing, writeBase, patch });
+    if (params.writeIntent && operation.kind === "shell-call") {
+      params.writeIntent.shellCallMutation = true;
+    }
+    next = mergeSessionEntryPatch({
+      ...params,
+      existing,
+      writeBase,
+      patch,
+      // Bookkeeping reducers can project a complete row, but do not own its pin or archive.
+      writeIntent:
+        operation.kind === "fields" || operation.kind === "public-fields"
+          ? params.writeIntent
+          : undefined,
+    });
     if (next) {
       existing = writeBase = next;
     }
@@ -241,6 +271,39 @@ export function reduceSessionEntryPatch(
     return null;
   }
   switch (operation.kind) {
+    case "shell-call": {
+      const { call, runId } = operation;
+      if (!existingEntry || entry.incognito || entry.archivedAt !== undefined) {
+        return null;
+      }
+      const pending = entry.pendingShellCalls;
+      const previous = pending?.runId === runId ? pending : undefined;
+      if (operation.acknowledged) {
+        if (
+          !previous ||
+          !isDeepStrictEqual(previous, operation.acknowledged.pending) ||
+          !isDeepStrictEqual(entry.resumeAfterRestart, operation.acknowledged.marker)
+        ) {
+          throw new Error("The interrupted shell no longer owns this restart marker");
+        }
+        return { pendingShellCalls: undefined, resumeAfterRestart: undefined };
+      }
+      if (!call) {
+        return pending?.runId === runId ? { pendingShellCalls: pending } : null;
+      }
+      if (!call.callId || call.callId.length > 1024) {
+        throw new Error("The shell invocation ID cannot be saved; the command was not started.");
+      }
+      if (previous?.calls.some((item) => item.callId === call.callId)) {
+        throw new Error("This shell invocation was already admitted; it was not repeated.");
+      }
+      // A steer with a different requester or destination cannot inherit the first sender's channel.
+      const notice =
+        !previous || isDeepStrictEqual(previous.notice, operation.notice)
+          ? operation.notice
+          : undefined;
+      return { pendingShellCalls: { runId, calls: [...(previous?.calls ?? []), call], notice } };
+    }
     case "writer-revoke":
       return {
         activeWriterRunId: undefined,
@@ -372,17 +435,24 @@ export function mergeSessionEntryPatch(params: {
   sessionKey: string;
   replaceEntry?: boolean;
   preserveActivity?: boolean;
+  writeIntent?: SessionEntryPatchWriteIntent;
 }): SessionEntry | undefined {
-  const { existing, writeBase, patch, sessionKey } = params;
-  // A fallback supplies identity, not an existing node's immutable creation policy.
-  const creationPatch = !existing && patch ? { ...writeBase, ...patch } : patch;
-  if (!creationPatch) {
+  const { existing, writeBase, sessionKey, patch, writeIntent } = params;
+  if (!patch) {
     return undefined;
+  }
+  if (
+    writeIntent &&
+    (params.replaceEntry || Object.hasOwn(patch, "pinnedAt") || Object.hasOwn(patch, "archivedAt"))
+  ) {
+    writeIntent.invalidateArchiveUndo = true;
   }
   if (params.replaceEntry) {
     // SAFETY: The existing replaceEntry updater contract supplies a complete entry.
     return structuredClone(patch as SessionEntry);
   }
+  // A fallback supplies identity, not an existing node's immutable creation policy.
+  const creationPatch = !existing ? { ...writeBase, ...patch } : patch;
   const merged = params.preserveActivity
     ? mergeSessionEntryPreserveActivity(existing, creationPatch)
     : mergeSessionEntry(existing, creationPatch);

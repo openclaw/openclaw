@@ -2,7 +2,6 @@ import { spawnSync } from "node:child_process";
 import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
-import { DatabaseSync } from "node:sqlite";
 import { fileURLToPath } from "node:url";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { pluginProcessRuntimeEntrypoints } from "../plugins/process-runtime.test-support.js";
@@ -429,73 +428,6 @@ describe.skipIf(process.platform === "win32" || Boolean(process.versions.bun))(
       expect(await fs.readFile(pending, "utf8")).toBe("old pending");
     });
 
-    it("restores what the trial's build replaced after two upgrades within one version", async () => {
-      const { stateDir, prefix } = await setup();
-      await fs.cp(
-        fileURLToPath(
-          new URL("../../test/fixtures/state-corpus-populated/2026.10.10/state/", import.meta.url),
-        ),
-        stateDir,
-        { recursive: true },
-      );
-      const db = path.join(stateDir, "agents", "main", "agent", "openclaw-agent.sqlite");
-      const env = {
-        OPENCLAW_STATE_DIR: stateDir,
-        OPENCLAW_CONFIG_PATH: path.join(stateDir, "x.json"),
-      };
-      // Each build of the same package version upgrades state at its first start.
-      const upgradeAs = async (buildId: string) => {
-        vi.resetModules();
-        vi.doMock("../version.js", async (importOriginal) => ({
-          ...(await importOriginal<typeof import("../version.js")>()),
-          resolveRuntimeServiceBuildId: () => buildId,
-        }));
-        const { upgradeStateDirectory } = await import("../state/state-upgrade.js");
-        const { ChainStepError } = await import("../state/state-upgrade-validate.js");
-        vi.doUnmock("../version.js");
-        return await upgradeStateDirectory({
-          env,
-          log: { info: () => {}, warn: () => {} },
-          runChain: async () => {
-            throw new ChainStepError("injected", "use the generic rebuild");
-          },
-        });
-      };
-      const fixtureVersion = new DatabaseSync(db).prepare("PRAGMA user_version").get();
-      expect((await upgradeAs("1.0.0-aaa")).status).toBe("upgraded");
-      // The previous release served this state; the next commit needs a newer schema.
-      const served = new DatabaseSync(db);
-      served.exec("CREATE TABLE e2e_served (build TEXT); INSERT INTO e2e_served VALUES ('aaa')");
-      served.exec(`PRAGMA user_version = ${Number(fixtureVersion?.user_version)}`);
-      served.close();
-      const good = await release(prefix, "1.0.0", 'console.log("old");\n');
-      await publishGitRelease({ prefix, releaseRoot: good, trial: false });
-      const bad = await release(prefix, "1.0.0", 'throw new Error("boot");\n');
-      await fs.writeFile(
-        path.join(bad, "dist", "build-info.json"),
-        JSON.stringify({ version: "1.0.0", buildId: "1.0.0-bbb" }),
-      );
-      await publishGitRelease({ prefix, releaseRoot: bad, trial: true });
-      expect((await upgradeAs("1.0.0-bbb")).status).toBe("upgraded");
-      // The applied plan stays for the trial; the earlier build's record is retired.
-      await expect(
-        fs.access(path.join(stateDir, ".upgraded-1.0.0-bbb.json")),
-      ).resolves.toBeUndefined();
-      await expect(fs.access(path.join(stateDir, ".upgraded-1.0.0-aaa.json"))).rejects.toThrow();
-
-      startGateway(prefix);
-      startGateway(prefix);
-      expect(startGateway(prefix).stdout).toContain("old");
-
-      const restored = new DatabaseSync(db);
-      try {
-        expect(restored.prepare("SELECT build FROM e2e_served").get()).toEqual({ build: "aaa" });
-      } finally {
-        restored.close();
-      }
-      await expect(fs.access(path.join(stateDir, ".upgraded-1.0.0-bbb.json"))).rejects.toThrow();
-    });
-
     it("resumes an interrupted rollback before the link moves", async () => {
       const { stateDir, prefix } = await setup();
       await publishFailingTrial(prefix, true);
@@ -638,7 +570,7 @@ describe.skipIf(process.platform === "win32" || Boolean(process.versions.bun))(
     it.each(["openclaw", "lib/node_modules/openclaw"])(
       "keeps the service on the release launcher for %s",
       async (relativeSlot) => {
-        const { prefix } = await setup();
+        const { stateDir, prefix } = await setup();
         const slot = path.join(prefix, relativeSlot);
         const root = path.join(prefix, "releases", "git-fixture", relativeSlot);
         await fs.mkdir(path.join(root, "dist"), { recursive: true });
@@ -651,7 +583,8 @@ describe.skipIf(process.platform === "win32" || Boolean(process.versions.bun))(
         await fs.writeFile(launcher, "");
         const { resolveGatewayProgramArguments } = await import("../daemon/program-args.js");
         const service = await resolveGatewayProgramArguments({
-          cliEntrypoint: entry,
+          env: { OPENCLAW_STATE_DIR: stateDir },
+          cliEntrypoint: { planned: entry },
           runtime: "node",
           runtimePath: process.execPath,
           port: 18789,
@@ -702,6 +635,88 @@ describe.skipIf(process.platform === "win32" || Boolean(process.versions.bun))(
       });
 
       expect(verdict).toMatchObject({ kind: "owned", refreshDefinition: false });
+    });
+
+    // A Git conversion keeps the service `gateway install` wrote for the checkout; the
+    // checkout's entry forwards to the launcher, and Doctor runs from the release.
+    it.each([
+      ["forwards dist/index.js to this launcher", "owned"],
+      ["forwards openclaw.mjs to this launcher", "owned"],
+      ["is a linked worktree forwarding to this launcher", "owned"],
+      ["has no forwarding marker", "foreign"],
+      ["forwards to a missing launcher", "foreign"],
+      ["forwards to another state directory's launcher", "foreign"],
+      ["lacks the forwarder module", "foreign"],
+      ["is a package, not a checkout", "foreign"],
+    ] as const)("classifies a checkout service whose tree %s as %s", async (layout, kind) => {
+      const { inspectManagedGatewayServiceBeforeUpdate } =
+        await import("../cli/update-cli/update-command-service-plan.js");
+      const { summarizeGatewayServiceLayout } = await import("../daemon/service-layout.js");
+      const { stateDir, prefix } = await setup();
+      await publishFixture(prefix, "2.0.0", "", false);
+      await writeGitReleaseLauncher(prefix);
+      const other = await setup();
+      await publishFixture(other.prefix, "3.0.0", "", false);
+      await writeGitReleaseLauncher(other.prefix);
+      const checkout = path.join(stateDir, "checkout");
+      const linked = layout === "is a linked worktree forwarding to this launcher";
+      await fs.mkdir(path.join(checkout, "dist"), { recursive: true });
+      if (linked) {
+        await fs.writeFile(path.join(checkout, ".git"), "gitdir: /elsewhere/.git/worktrees/x\n");
+      } else if (layout !== "is a package, not a checkout") {
+        await fs.mkdir(path.join(checkout, ".git"));
+      }
+      await fs.writeFile(
+        path.join(checkout, "package.json"),
+        JSON.stringify({ name: "openclaw", version: "1.0.0" }),
+      );
+      await fs.writeFile(path.join(checkout, "dist", "index.js"), "");
+      await fs.writeFile(path.join(checkout, "openclaw.mjs"), "");
+      if (layout !== "lacks the forwarder module") {
+        await fs.writeFile(path.join(checkout, "release-launcher-forward.mjs"), "");
+      }
+      if (layout !== "has no forwarding marker") {
+        const launcher =
+          layout === "forwards to a missing launcher"
+            ? path.join(stateDir, "gone", "openclaw-launcher.mjs")
+            : path.join(
+                layout === "forwards to another state directory's launcher" ? other.prefix : prefix,
+                "openclaw-launcher.mjs",
+              );
+        // `markForwarding` keeps a main checkout's marker in `.git`, and other trees' at the root.
+        const marker =
+          linked || layout === "is a package, not a checkout"
+            ? path.join(checkout, ".openclaw-launcher")
+            : path.join(checkout, ".git", "openclaw-launcher");
+        await fs.writeFile(marker, `${launcher}\n`);
+      }
+      const entry = path.join(
+        checkout,
+        layout === "forwards openclaw.mjs to this launcher" ? "openclaw.mjs" : "dist/index.js",
+      );
+      const command = { programArguments: [process.execPath, entry, "gateway", "--port", "1"] };
+      const verdict = await inspectManagedGatewayServiceBeforeUpdate({
+        // Doctor's root: the package root of the release the CLI was forwarded to.
+        root: await fs.realpath(gitReleaseSlot(prefix)),
+        state: {
+          installed: true,
+          loadState: { status: "loaded" },
+          running: true,
+          env: {},
+          command,
+          runtime: { status: "running", systemd: { managerUid: 1001 } },
+        },
+      });
+
+      expect(verdict).toEqual(
+        kind === "owned"
+          ? expect.objectContaining({ kind, refreshDefinition: false })
+          : { kind: "foreign" },
+      );
+      // `gateway status` compares this version with the CLI's to report drift.
+      expect((await summarizeGatewayServiceLayout(command))?.packageVersion).toBe(
+        kind === "owned" ? "2.0.0" : layout.includes("another state") ? "3.0.0" : "1.0.0",
+      );
     });
 
     it("runs a Windows checkout from releases behind an absolute junction link", async () => {

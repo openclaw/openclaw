@@ -80,8 +80,9 @@ export type SubagentForkedTurnParams<T> = {
    * Tools the fork may run: tools the calling plugin registered, plus `read`, `ls` and `exec`.
    * Every tool the session lists stays visible to the model so the provider serves the
    * session's cached prefix; only these run. The session's tool policy must allow each one, or
-   * the run is not admitted; `read`, `ls` and `exec` are never added to it. `exec` runs only on
-   * the owner's turns and never asks for approval: a command that needs approval is denied.
+   * the run is not admitted; `read`, `ls` and `exec` are never added to it. `exec` is admitted
+   * only on the owner's turns (through a `sessionAccess` method, only on the signed-in caller's
+   * own turns) and never asks for approval: a command that needs approval is denied.
    * Other core tools and tools another plugin registered are refused.
    */
   tools: readonly string[];

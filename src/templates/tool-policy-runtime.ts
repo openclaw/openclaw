@@ -177,9 +177,11 @@ class TemplateToolProfileConsentError extends Error {
 
 class TemplateToolProfileConsentStateError extends Error {
   constructor(agentId: string, cause: unknown) {
+    // Name the missing fact; Doctor prints only this message, and every refusal looked alike.
+    const reason = cause instanceof Error ? cause.message : String(cause);
     super(
-      `Cannot verify the installed tool authority for Template-managed agent ${JSON.stringify(agentId)}. ` +
-        "Repair the OpenClaw state database before running it.",
+      `Cannot verify the installed tool authority for Template-managed agent ${JSON.stringify(agentId)}: ` +
+        `${reason} Repair the OpenClaw state database before running it.`,
       { cause },
     );
     this.name = "TemplateToolProfileConsentStateError";

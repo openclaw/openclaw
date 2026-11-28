@@ -1,3 +1,4 @@
+import path from "node:path";
 import { setImmediate as nextTurn } from "node:timers/promises";
 import { expectDefined } from "@openclaw/normalization-core";
 import { afterEach, expect, it, vi } from "vitest";
@@ -9,6 +10,7 @@ import {
   loadSessionEntry,
   persistSessionTranscriptTurn,
   replaceSessionEntrySync,
+  resetSessionEntryLifecycle,
   upsertSessionEntryCore,
 } from "../config/sessions/session-accessor.js";
 import {
@@ -18,9 +20,13 @@ import {
 import { derivePersistedSessionLifecyclePatch } from "../config/sessions/session-run-lifecycle-projection.js";
 import { createPluginMetadataSnapshotFixture } from "../plugins/plugin-metadata.test-support.js";
 import { createEmptyPluginRegistry } from "../plugins/registry-empty.js";
-import { emitSessionLifecycleEvent } from "../sessions/session-lifecycle-events.js";
+import {
+  emitSessionIdentityMutation,
+  emitSessionLifecycleEvent,
+} from "../sessions/session-lifecycle-events.js";
 import { sessionChanges } from "../sessions/session-row-changes.js";
 import { createDeferredCore } from "../shared/deferred.js";
+import { readOpenClawAgentDatabaseIdentity } from "../state/openclaw-agent-db-identity.js";
 import { openOpenClawAgentDatabase } from "../state/openclaw-agent-db.js";
 import { getUserPreferences, setUserPreferences } from "../state/user-preferences.test-support.js";
 import { withOpenClawTestState } from "../test-utils/openclaw-test-state.js";
@@ -523,6 +529,81 @@ it.each(["disposal", "replacement"] as const)(
     });
   },
 );
+
+it("shows the first task after a failed title without promoting transcript text to a saved name", async () => {
+  await withOpenClawTestState({ scenario: "minimal" }, async () => {
+    setRuntimeConfigSnapshot(cfg);
+    const { target, query } = seedTranscriptRow("fallback-title");
+    await appendTranscript(
+      target,
+      { role: "user", content: "Compare the release checklist" },
+      { role: "assistant", content: "Here is the checklist." },
+    );
+    await upsertSessionEntryCore(target, { titleFallbackReady: true });
+    using projection = await createTestProjection({ cfg });
+    await projection.ensureMaterialized();
+    await vi.waitFor(() =>
+      expect(projection.snapshot(query, display).row?.derivedTitle).toBe(
+        "Compare the release checklist",
+      ),
+    );
+    expect(loadSessionEntry(target)?.displayName).toBeUndefined();
+    expect(
+      projection.snapshot(query, { includeDerivedTitles: false }).row?.derivedTitle,
+    ).toBeUndefined();
+  });
+});
+
+it("retires a fallback title when session identity is invalidated before metadata arrives", async () => {
+  await withOpenClawTestState({ scenario: "minimal" }, async ({ root }) => {
+    const storePath = path.join(root, "reset-fallback-title.sqlite");
+    const config = { ...cfg, session: { store: storePath } };
+    setRuntimeConfigSnapshot(config);
+    const { target, query } = seedTranscriptRow(
+      "reset-fallback-title",
+      { titleFallbackReady: true },
+      "main",
+      storePath,
+    );
+    await appendTranscript(target, { role: "user", content: "Review the old release" });
+    using projection = await createTestProjection({ cfg: config });
+    await projection.ensureMaterialized();
+    await vi.waitFor(() =>
+      expect(projection.snapshot(query, display).row?.derivedTitle).toBe("Review the old release"),
+    );
+
+    const replacement = { ...target, sessionId: "replacement-fallback" };
+    const original = expectDefined(projection.capture(query), "original session row");
+    const database = openOpenClawAgentDatabase(
+      toDatabaseOptions(resolveSqliteTranscriptReadScope(target)),
+    );
+    // Exercise the identity-only publication, not the ordinary full-row update.
+    emitSessionIdentityMutation({
+      kind: "reset",
+      agentId: target.agentId,
+      databaseIdentity: readOpenClawAgentDatabaseIdentity(database).identity,
+      previous: { sessionId: target.sessionId, sessionKeys: [target.sessionKey] },
+      current: { sessionId: replacement.sessionId, sessionKeys: [target.sessionKey] },
+    });
+    const renewed = expectDefined(projection.capture(query), "renewed session row");
+    expect(renewed.generation).not.toBe(original.generation);
+    expect(renewed.fallbackTitle).toBeUndefined();
+
+    await resetSessionEntryLifecycle({
+      agentId: target.agentId,
+      storePath,
+      target: { canonicalKey: target.sessionKey, storeKeys: [target.sessionKey] },
+      buildNextEntry: () => ({ sessionId: replacement.sessionId, updatedAt: 2 }),
+    });
+    await appendTranscript(replacement, { role: "user", content: "Plan the new release" });
+    await upsertSessionEntryCore(replacement, { titleFallbackReady: true });
+    await projection.ensureMaterialized();
+    expect(projection.snapshot(query, display).row?.sessionId).toBe(replacement.sessionId);
+    await vi.waitFor(() =>
+      expect(projection.snapshot(query, display).row?.derivedTitle).toBe("Plan the new release"),
+    );
+  });
+});
 
 it("eventually fills legacy titles and previews without waiting during startup or changing activity", async ({
   signal,

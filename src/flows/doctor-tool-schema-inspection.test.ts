@@ -4,9 +4,15 @@ import { afterEach, expect, it, vi } from "vitest";
 import * as mcpConfig from "../agents/agent-bundle-mcp-runtime-config.js";
 import { createMcpProofPluginRegistry } from "../agents/mcp-connection-resolver.test-fixtures.js";
 import { configFor, modelDefinition } from "../agents/model-auth.fixtures.test-support.js";
+import * as doctorMetadata from "../commands/doctor/shared/plugin-metadata-snapshot-scope.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import * as discovery from "../plugins/discovery.js";
 import * as manifests from "../plugins/manifest-registry.js";
+import {
+  getPluginCache,
+  getPluginCacheRetirementSignal,
+  type PluginCache,
+} from "../plugins/plugin-cache.js";
 import { clearPluginMetadataLifecycleCaches } from "../plugins/plugin-metadata-lifecycle.js";
 import { resetPluginRuntimeStateForTest } from "../plugins/runtime.js";
 import { withPluginRuntimeRegistryScope } from "../plugins/runtime/gateway-request-scope.js";
@@ -24,6 +30,8 @@ afterEach(() => {
 
 it.each([
   { mode: "doctor", fails: false, variant: "tools" },
+  { mode: "lint", fails: false, variant: "deferred" },
+  { mode: "lint", fails: false, variant: "rejected-deferral" },
   { mode: "lint", fails: true, variant: "tools" },
   { mode: "doctor", fails: false, variant: "missing-provider-collision" },
   { mode: "doctor", fails: false, variant: "provider-collision" },
@@ -39,7 +47,9 @@ it.each([
     const collision = variant.endsWith("collision");
     const withoutPluginTools = variant === "provider-without-tools";
     const toolName = collision ? "web_search" : "fleet_tool";
-    const providerOnly = variant !== "tools" && variant !== "missing-provider-collision";
+    const deferred = variant === "deferred" || variant === "rejected-deferral";
+    const providerOnly =
+      !deferred && variant !== "tools" && variant !== "missing-provider-collision";
     const providerFirst = variant === "early-duplicate-provider-collision";
     const providerPluginId = providerFirst ? "a-search-provider" : "z-search-provider";
     const duplicateProvider = variant === "duplicate-provider-collision" || providerFirst;
@@ -184,6 +194,24 @@ module.exports = { id, register(api) {
         const rejectColdRead = vi.fn(() => {
           throw new Error("cold plugin metadata read after inspection preparation");
         });
+        const observedCaches = new Set<PluginCache>();
+        const deferredDisposals: Array<() => Promise<void>> = [];
+        const metadataAliveDuringRelease: boolean[] = [];
+        const deferralFailure = new Error("caller refused inspection disposal");
+        const createScope = doctorMetadata.createDoctorPluginMetadataSnapshotScope;
+        vi.spyOn(doctorMetadata, "createDoctorPluginMetadataSnapshotScope").mockImplementation(
+          (params) => {
+            const scope = createScope(params);
+            return {
+              ...scope,
+              run: (selection, operation) =>
+                scope.run(selection, () => {
+                  observedCaches.add(getPluginCache());
+                  return operation();
+                }),
+            };
+          },
+        );
         const acquireInspection = pluginTools.acquirePluginToolInspectionRegistry;
         const loadMcpConfig = mcpConfig.loadSessionMcpConfig;
         vi.spyOn(pluginTools, "acquirePluginToolInspectionRegistry").mockImplementation(
@@ -201,7 +229,18 @@ module.exports = { id, register(api) {
                 return loadMcpConfig(request);
               });
             }
-            return inspection;
+            const release = inspection.release;
+            return {
+              ...inspection,
+              release: async () => {
+                metadataAliveDuringRelease.push(
+                  [...observedCaches].every(
+                    (cache) => !getPluginCacheRetirementSignal(cache).aborted,
+                  ),
+                );
+                await release();
+              },
+            };
           },
         );
         const operation = withPluginRuntimeRegistryScope(caller.registry, () =>
@@ -210,10 +249,20 @@ module.exports = { id, register(api) {
             cfg,
             runtime: defaultRuntime,
             env: process.env,
+            ...(deferred
+              ? {
+                  deferInspectionDisposal: (dispose: () => Promise<void>) => {
+                    if (variant === "rejected-deferral") {
+                      throw deferralFailure;
+                    }
+                    deferredDisposals.push(dispose);
+                  },
+                }
+              : {}),
           }),
         );
-        if (fails) {
-          await expect(operation).rejects.toBe(detectorFailure);
+        if (fails || variant === "rejected-deferral") {
+          await expect(operation).rejects.toBe(fails ? detectorFailure : deferralFailure);
         } else {
           const findings = await operation;
           const expectFinding = (fields: Partial<HealthFinding>) =>
@@ -247,6 +296,21 @@ module.exports = { id, register(api) {
               requirement: expect.stringContaining("Plugin tool inspection cleanup failed"),
             });
           }
+        }
+        if (variant === "deferred") {
+          try {
+            expect(deferredDisposals).toHaveLength(1);
+            expect(observedCaches.size).toBeGreaterThan(0);
+            for (const cache of observedCaches) {
+              expect(getPluginCacheRetirementSignal(cache).aborted).toBe(false);
+            }
+          } finally {
+            await Promise.all(deferredDisposals.map((dispose) => dispose()));
+          }
+        }
+        expect(metadataAliveDuringRelease).toEqual([true]);
+        for (const cache of observedCaches) {
+          expect(getPluginCacheRetirementSignal(cache).aborted).toBe(true);
         }
         expect(rejectColdRead).not.toHaveBeenCalled();
         expect(resolveRequester).not.toHaveBeenCalled();

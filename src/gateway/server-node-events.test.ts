@@ -404,7 +404,7 @@ describe("voice transcript events", () => {
               loaded: buildSessionLookup(sessionKey),
               assertCurrent: () => {
                 if (opts === firstConnection && !current) {
-                  throw new Error("Node event session authority changed");
+                  throw new Error("Node event session changed. Retry the event.");
                 }
               },
               pending,
@@ -420,7 +420,7 @@ describe("voice transcript events", () => {
         firstConnection,
       );
       if (phase === "reservation") {
-        await expect(first).rejects.toThrow("Node event session authority changed");
+        await expect(first).rejects.toThrow("Node event session changed. Retry the event.");
       } else {
         await entered.promise;
       }
@@ -607,11 +607,19 @@ describe("notifications changed events", () => {
     expect(handoff).toHaveBeenCalledTimes(1);
   });
   it.each([
-    ["removed", undefined, "agent:ops:main", "ops", "com.example.mail"],
-    ["posted", "node-key", "agent:main:node-key", "main", undefined],
+    ["removed", undefined, "agent:ops:main", "ops", "com.example.mail", "notification:notif"],
+    // Posted updates are keyed by hex node id and key, so the queue's lowercasing keeps them apart.
+    [
+      "posted",
+      "node-key",
+      "agent:main:node-key",
+      "main",
+      undefined,
+      "notification:6e6f6465:6e6f746966",
+    ],
   ] as const)(
     "routes %s notifications with session key %s",
-    async (change, requestedKey, sessionKey, agentId, packageName) => {
+    async (change, requestedKey, sessionKey, agentId, packageName, contextKey) => {
       if (requestedKey) {
         lookupSession.mockReturnValueOnce({
           ...buildSessionLookup(requestedKey),
@@ -621,7 +629,7 @@ describe("notifications changed events", () => {
       const { notify } = nodeFixture();
       await notify({ change, packageName, sessionKey: requestedKey });
 
-      const routing = { sessionKey, contextKey: "notification:notif" };
+      const routing = { sessionKey, contextKey };
       expect(enqueue).toHaveBeenCalledWith(
         `Notification ${change} (node=node key=notif${packageName ? ` package=${packageName}` : ""})`,
         expect.objectContaining(routing),

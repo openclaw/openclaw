@@ -14,6 +14,7 @@ import {
   createControlUiE2eContextOptions,
   createControlUiE2eSuite,
 } from "./control-ui-e2e-suite.test-support.ts";
+import { waitForSettledFormControls } from "./settle.test-support.ts";
 
 const record = createRequireRecord("record", "expected-object-value");
 const digest = (bytes: Uint8Array) => createHash("sha256").update(bytes).digest("hex");
@@ -37,8 +38,25 @@ const suite = createControlUiE2eSuite({
       entrypoint: ["dist/index.js"],
       env: { OPENCLAW_TEST_MINIMAL_GATEWAY: undefined, VITEST: undefined },
       config: {
-        gateway: { controlUi: { enabled: true }, reload: { mode: "hybrid" } },
-        plugins: { allow: [] },
+        gateway: {
+          controlUi: { enabled: true, root: path.resolve("dist/control-ui") },
+          reload: { mode: "hybrid" },
+        },
+        plugins: { allow: [], entries: { crabbox: { enabled: false } } },
+        cloudWorkers: {
+          profiles: {
+            proof: {
+              provider: "crabbox",
+              install: "bundle",
+              settings: {
+                provider: "synthetic-proof",
+                class: "proof",
+                ttl: "8h",
+                idleTimeout: "45m",
+              },
+            },
+          },
+        },
         cron: { enabled: false },
         logging: { level: "info", consoleLevel: "error" },
       },
@@ -61,6 +79,166 @@ const suite = createControlUiE2eSuite({
 });
 
 suite.define(() => {
+  it("persists cloud profile retries after a real stale-hash rejection without allocating workers", async () => {
+    const owner = instance;
+    if (!owner) {
+      throw new Error("Config Gateway fixture was not started");
+    }
+    const handoff = await owner.cli(["dashboard", "--json"]);
+    expect(handoff.code, handoff.stderr).toBe(0);
+    const browserUrl = record(JSON.parse(handoff.stdout)).browserUrl;
+    if (typeof browserUrl !== "string") {
+      throw new Error("Dashboard did not return a browser handoff");
+    }
+    const url = new URL("settings/cloud-workers", browserUrl);
+    url.hash = new URL(browserUrl).hash;
+    await suite.withPage(createControlUiE2eContextOptions(), async ({ page }) => {
+      const forbidden: string[] = [];
+      let patches = 0;
+      let holdCatalog = true;
+      const catalogRequests = new Set<string>();
+      const catalogReplies: Array<() => void> = [];
+      const releaseCatalog = () => {
+        holdCatalog = false;
+        catalogReplies.splice(0).forEach((send) => send());
+      };
+      let hold = true;
+      let release: (() => void) | undefined;
+      const releaseWrite = () => {
+        release?.();
+        release = undefined;
+      };
+      await page.routeWebSocket(`ws://127.0.0.1:${owner.port}/**`, (socket) => {
+        const server = socket.connectToServer();
+        socket.onMessage((message) => {
+          const frame = record(JSON.parse(message.toString()));
+          if (frame.type === "req") {
+            if (
+              frame.method === "environments.list" &&
+              typeof frame.id === "string" &&
+              record(frame.params).projection === "profiles"
+            ) {
+              catalogRequests.add(frame.id);
+            }
+            if (
+              ["environments.prepare", "sessions.create", "sessions.dispatch"].includes(
+                String(frame.method),
+              )
+            ) {
+              forbidden.push(String(frame.method));
+            }
+            if (frame.method === "config.patch") {
+              patches++;
+              if (hold) {
+                hold = false;
+                release = () => server.send(message);
+                return;
+              }
+            }
+          }
+          server.send(message);
+        });
+        server.onMessage((message) => {
+          const frame = record(JSON.parse(message.toString()));
+          if (
+            frame.type === "res" &&
+            typeof frame.id === "string" &&
+            catalogRequests.delete(frame.id) &&
+            holdCatalog
+          ) {
+            catalogReplies.push(() => socket.send(message));
+          } else {
+            socket.send(message);
+          }
+        });
+      });
+      try {
+        expect((await page.goto(url.href))?.status()).toBe(200);
+        await waitForControlUiGatewayReady(page);
+        await page.locator(".settings-disclosure > summary").click();
+        await page.getByRole("button", { name: "Edit: proof", exact: true }).click();
+        const lifetime = page.getByLabel("Max lifetime", { exact: true });
+        const input = await lifetime.elementHandle();
+        await lifetime.fill("9h");
+        await waitForSettledFormControls(page, [{ locator: lifetime, value: "9h" }]);
+        expect(await lifetime.evaluate((element, original) => element === original, input)).toBe(
+          true,
+        );
+        await expect.poll(() => catalogReplies.length).toBeGreaterThan(0);
+        const save = page.getByRole("button", { name: "Save", exact: true });
+        await save.click();
+        await expect.poll(() => Boolean(release)).toBe(true);
+        expect(patches).toBe(1);
+        expect(await lifetime.isDisabled()).toBe(true);
+        expect(await lifetime.evaluate((element, original) => element === original, input)).toBe(
+          true,
+        );
+        releaseCatalog();
+        await page
+          .locator(".settings-row")
+          .filter({ has: page.locator("code", { hasText: /^proof$/ }) })
+          .getByText(/^(Advertised|Unavailable)$/)
+          .waitFor();
+        expect(await lifetime.evaluate((element, original) => element === original, input)).toBe(
+          true,
+        );
+        const external = await owner.cli([
+          "config",
+          "set",
+          "cloudWorkers.profiles.proof.settings.ttl",
+          "7h",
+        ]);
+        expect(external.code, external.stderr).toBe(0);
+        releaseWrite();
+        await page
+          .getByRole("alert")
+          .filter({ hasText: /changed|reload|conflict/i })
+          .waitFor();
+        expect(await lifetime.inputValue()).toBe("9h");
+        expect(await lifetime.evaluate((element, original) => element === original, input)).toBe(
+          true,
+        );
+        // Reload through the existing config owner after the real server rejects its old hash.
+        await evaluateControlUiContext(page, (app) => app.runtimeConfig.refresh());
+        await expect.poll(() => save.isEnabled()).toBe(true);
+        await save.click();
+        await page.getByText("Profile saved", { exact: true }).waitFor();
+        const stored = await owner.cli([
+          "config",
+          "get",
+          "cloudWorkers.profiles.proof.settings.ttl",
+          "--json",
+        ]);
+        expect(stored.code, stored.stderr).toBe(0);
+        expect(JSON.parse(stored.stdout)).toBe("9h");
+        expect((await page.reload())?.status()).toBe(200);
+        await waitForControlUiGatewayReady(page);
+        await page.locator(".settings-disclosure > summary").click();
+        await page.getByRole("button", { name: "Edit: proof", exact: true }).click();
+        expect(await lifetime.inputValue()).toBe("9h");
+        const entry = await page
+          .locator('script[type="module"][src*="/assets/index-"]')
+          .getAttribute("src");
+        if (!entry) {
+          throw new Error("Gateway did not serve a production entry asset");
+        }
+        const asset = new URL(entry, page.url());
+        const served = await page.request.get(asset.href, {
+          headers: { "Accept-Encoding": "identity" },
+        });
+        expect(served.status()).toBe(200);
+        expect(digest(await served.body())).toBe(
+          digest(await readFile(path.join("dist/control-ui", asset.pathname.replace(/^\//u, "")))),
+        );
+        expect(patches).toBe(2);
+        expect(forbidden).toEqual([]);
+      } finally {
+        releaseCatalog();
+        releaseWrite();
+      }
+    });
+  });
+
   it("persists Logging edits across reload, keeps in-flight edits, and rejects a stale hash", async () => {
     const owner = instance;
     if (!owner) {

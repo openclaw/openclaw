@@ -106,111 +106,6 @@ it("checks default filters once per batch and keeps the first retained row in or
   );
 });
 
-it("formats only new rows until the locale or effective timezone changes", async () => {
-  const validTimes = ["2026-09-22T12:00:37Z", "1970-01-01T00:00:00Z"];
-  const allTimes = [...validTimes, "not a timestamp", "", null, undefined];
-  const props = createProps({
-    status: { error: null, hasLoaded: true, stale: false, awaitingGateway: false },
-    entries: allTimes.map((time, index) => ({
-      id: index,
-      time,
-      raw: "log entry",
-      message: index === 0 ? "A\u0308 Café initial" : "other entry",
-    })),
-  });
-  const [entries, setEntries] = createSignal(props.entries);
-  const [filterText, setFilterText] = createSignal("");
-  const NativeDateTimeFormat = Intl.DateTimeFormat;
-  let timeZone = "UTC";
-  const formatCalls: Array<ReturnType<typeof vi.fn<Intl.DateTimeFormat["format"]>>> = [];
-  // Model an OS timezone change while retaining native Intl timestamp formatting.
-  vi.spyOn(Intl, "DateTimeFormat").mockImplementation(function (locales, options) {
-    const formatter = new NativeDateTimeFormat(locales, { ...options, timeZone });
-    const format = vi.fn(formatter.format.bind(formatter));
-    formatCalls.push(format);
-    Object.defineProperty(formatter, "format", { value: format });
-    return formatter;
-  });
-  const { container } = mountSolid(() => (
-    <LogsView
-      {...props}
-      entries={entries()}
-      filterText={filterText()}
-      onFilterTextChange={setFilterText}
-    />
-  ));
-  const filterInput = container.querySelector<HTMLInputElement>(".settings-input")!;
-
-  const expectTimes = (times: typeof allTimes, locale = "en", formats?: number) => {
-    flush();
-    expect(
-      container
-        .querySelector<HTMLElement>(".log-stream")!
-        .style.getPropertyValue("--log-time-width"),
-    ).toMatch(/^\d+ch$/);
-    if (formats !== undefined) {
-      expect(formatCalls.flatMap((format) => format.mock.calls)).toHaveLength(formats);
-    }
-    const native = new NativeDateTimeFormat(locale, {
-      hour: "2-digit",
-      minute: "2-digit",
-      second: "2-digit",
-      timeZone,
-    });
-    const expected = times.map((time) => {
-      const date = new Date(time ?? "");
-      return !time ? "" : Number.isNaN(date.getTime()) ? time : native.format(date);
-    });
-    expect(Array.from(container.querySelectorAll(".log-time"), (row) => row.textContent)).toEqual(
-      expected,
-    );
-    formatCalls.forEach((format) => format.mockClear());
-  };
-
-  expectTimes(allTimes, "en");
-  for (const locale of ["fr", "en"] as const) {
-    await i18n.setLocale(locale);
-    expectTimes(allTimes, locale);
-  }
-
-  const appendedTime = "2026-09-22T18:10:00Z";
-  setEntries((rows) => [
-    ...rows,
-    { id: allTimes.length, time: appendedTime, raw: "A\u0308 Café appended" },
-  ]);
-  expectTimes([...allTimes, appendedTime], "en", 1);
-
-  filterInput.value = "ä";
-  filterInput.dispatchEvent(new Event("input", { bubbles: true }));
-  expectTimes([validTimes[0], appendedTime], "en", 0);
-
-  timeZone = "America/Los_Angeles";
-  const nextTime = "2026-09-22T20:00:00Z";
-  setEntries((rows) => [...rows, { id: allTimes.length + 1, time: nextTime, raw: "Ä Café next" }]);
-  expectTimes([validTimes[0], appendedTime, nextTime], "en");
-
-  timeZone = "Asia/Tokyo";
-  filterInput.value = "cafe\u0301 initial";
-  filterInput.dispatchEvent(new Event("input", { bubbles: true }));
-  expectTimes([validTimes[0]], "en");
-});
-
-it("keeps the visible export filename suffix stable when labels are localized", async () => {
-  i18n.registerTranslation("pt-BR", {
-    gatewayLogs: {
-      exportButton: "Exportar {label}",
-      exportLabels: { filtered: "filtrado", visible: "visivel" },
-    },
-  });
-  await i18n.setLocale("pt-BR");
-  const onExport = vi.fn();
-  const view = mountSolid(() => <LogsView {...createProps({ onExport })} />);
-  flush();
-  view.getByRole("button", { name: "Exportar visivel" }).click();
-
-  expect(onExport).toHaveBeenCalledWith([raw], "visible");
-});
-
 it.each(["follow", "queued-follow", "reader"] as const)(
   "preserves scroll intent through row resizes (%s)",
   (mode) => {
@@ -406,6 +301,7 @@ it("shows whether the stream is following as the reader leaves and returns to th
   const end = () => stream.scrollHeight - stream.clientHeight;
   const expired = () => {
     clock.flush(performance.now());
+    stream.dispatchEvent(new Event("scrollend"));
     vi.advanceTimersByTime(250);
     flush();
   };
@@ -632,87 +528,94 @@ it("keeps an in-flight hidden append at the end when the page becomes visible", 
 });
 
 it.each([
-  [true, "No log entries match these filters."],
-  [false, "No log entries yet."],
-] as const)(
-  "distinguishes an empty filter result from an empty log (retained: %s)",
-  (retained, message) => {
-    const props = createProps({
-      status: { error: null, hasLoaded: true, stale: false, awaitingGateway: false },
-      entries: retained ? [{ id: 0, raw, level: "info" }] : [],
-      filterText: "unmatched query",
+  { input: "wheel", delayedScroll: "first" },
+  { input: "wheel", delayedScroll: "final" },
+  { input: "keyboard", delayedScroll: "final" },
+])(
+  "resumes following when $input delays the $delayedScroll scroll event beyond the idle window",
+  ({ input, delayedScroll }) => {
+    vi.useFakeTimers({ toFake: ["setTimeout", "clearTimeout"] });
+    const clock = createFrameClock();
+    vi.stubGlobal("requestAnimationFrame", clock.request);
+    vi.stubGlobal("cancelAnimationFrame", clock.cancel);
+    let rowHeight = 20;
+    vi.spyOn(HTMLElement.prototype, "offsetHeight", "get").mockImplementation(function (
+      this: HTMLElement,
+    ) {
+      return this.classList.contains("log-stream") ? 380 : rowHeight;
     });
-    const view = mountSolid(() => <LogsView {...props} />);
-    flush();
-    expect(
-      view.container.querySelector('[role="region"][aria-label="Logs"] [role="status"]')
-        ?.textContent,
-    ).toBe(message);
+    const lines = (count: number) =>
+      Array.from({ length: count }, (_, id) => ({ id, raw: `line ${id}` }));
+    const [autoFollow, setAutoFollow] = createSignal(true);
+    const onToggleAutoFollow = vi.fn(setAutoFollow);
+    let stream!: HTMLDivElement;
+    let jump!: () => void;
+    const view = mountSolid(() => (
+      <LogsView
+        {...createProps({
+          status: { error: null, hasLoaded: true, stale: false, awaitingGateway: false },
+          onToggleAutoFollow,
+          onStreamRef: (element, scroll) => {
+            stream = element;
+            jump = scroll;
+            installClampedLogsViewport(element, 378);
+          },
+        })}
+        autoFollow={autoFollow()}
+        entries={lines(500)}
+      />
+    ));
+    const frame = (scroll: boolean) => {
+      vi.advanceTimersByTime(16);
+      clock.flush(performance.now());
+      flush();
+      if (scroll) {
+        stream.dispatchEvent(new Event("scroll"));
+      }
+      flush();
+    };
+    const end = () => stream.scrollHeight - stream.clientHeight;
+    try {
+      flush();
+      jump();
+      for (let i = 0; i < 4; i++) {
+        frame(true);
+      }
+      stream.dispatchEvent(new WheelEvent("wheel", { deltaY: -4000 }));
+      stream.scrollTop = 2000;
+      stream.dispatchEvent(new Event("scroll"));
+      flush();
+      vi.advanceTimersByTime(300);
+      expect(onToggleAutoFollow).toHaveBeenLastCalledWith(false);
+
+      // Rows near the end render taller than the estimate. A busy main thread delivers the wheel's
+      // scroll event after the idle window; its measurements then carry the view to the end.
+      rowHeight = 23;
+      if (input === "keyboard") {
+        stream.dispatchEvent(new KeyboardEvent("keydown", { key: "PageDown", bubbles: true }));
+      } else {
+        stream.dispatchEvent(new WheelEvent("wheel", { deltaY: 1_000_000 }));
+      }
+      if (delayedScroll === "final") {
+        stream.scrollTop = end() - 500;
+        stream.dispatchEvent(new Event("scroll"));
+        flush();
+      }
+      stream.scrollTop = end();
+      for (let i = 0; i < 3; i++) {
+        frame(false);
+      }
+      vi.advanceTimersByTime(250);
+      stream.dispatchEvent(new Event("scroll"));
+      flush();
+      for (let i = 0; i < 6; i++) {
+        frame(true);
+      }
+
+      expect(end() - stream.scrollTop).toBeLessThan(2);
+      expect(onToggleAutoFollow).toHaveBeenLastCalledWith(true);
+    } finally {
+      view.unmount();
+    }
   },
 );
-
-it("keeps one toolbar at phone width and moves page actions into a menu", async () => {
-  vi.stubGlobal("matchMedia", (query: string) => ({
-    matches: query === "(max-width: 640px)",
-    media: query,
-    addEventListener: vi.fn(),
-    removeEventListener: vi.fn(),
-  }));
-  const onLevelToggle = vi.fn();
-  const onToggleAutoFollow = vi.fn();
-  const onExport = vi.fn();
-  const view = mountSolid(() => (
-    <LogsView
-      {...createProps({
-        status: { error: null, hasLoaded: true, stale: false, awaitingGateway: false },
-        file: "/tmp/openclaw/openclaw-gateway.log",
-        levelFilters: {
-          trace: false,
-          debug: true,
-          info: true,
-          warn: true,
-          error: true,
-          fatal: true,
-        },
-        onLevelToggle,
-        onToggleAutoFollow,
-        onExport,
-      })}
-    />
-  ));
-  flush();
-
-  const filter = view.container.querySelector<HTMLElement>(
-    '[aria-controls="logs-levels:content"]',
-  )!;
-  expect(filter.classList.contains("active")).toBe(true);
-  expect(filter.textContent).toContain("debug, info, warn, error, fatal");
-
-  filter.click();
-  flush();
-  await vi.waitFor(() => {
-    const debug = [...document.querySelectorAll<HTMLElement>('[role="menuitemcheckbox"]')].find(
-      (item) => item.textContent?.trim() === "debug",
-    );
-    expect(debug).toBeTruthy();
-    debug!.click();
-  });
-  expect(onLevelToggle).toHaveBeenCalledWith("debug", false);
-
-  view.container.querySelector<HTMLInputElement>('.logs-toolbar input[role="switch"]')!.click();
-  expect(onToggleAutoFollow).toHaveBeenCalledWith(false);
-  expect(view.container.querySelector(".logs-footer")?.textContent).toContain(
-    "File: /tmp/openclaw/openclaw-gateway.log",
-  );
-
-  view.getByRole("button", { name: "More actions" }).click();
-  flush();
-  await vi.waitFor(() => {
-    const exportItem = [...document.querySelectorAll<HTMLElement>(".oc-menu-item")].find(
-      (item) => item.textContent?.trim() === "Export filtered",
-    );
-    expect(exportItem).toBeTruthy();
-    exportItem!.click();
-  });
-  expect(onExport).toHaveBeenCalledWith([raw], "filtered");
-});

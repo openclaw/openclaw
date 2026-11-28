@@ -17,12 +17,19 @@ final class UnusedPCMStreamingAudioPlayer: PCMStreamingAudioPlaying {
 final class DrainingPCMStreamingAudioPlayer: PCMStreamingAudioPlaying {
     private(set) var frames: [Data] = []
     private(set) var playCount = 0
+    private(set) var stopCount = 0
+    private let drainBarrier: RealtimeRelayStartupBarrier?
     private let playbackStarted = RealtimeRelayTestSignal<Int>()
     private let playbackFinished = RealtimeRelayTestSignal<Void>()
+
+    init(drainBarrier: RealtimeRelayStartupBarrier? = nil) {
+        self.drainBarrier = drainBarrier
+    }
 
     func play(stream: AsyncThrowingStream<Data, Error>, sampleRate _: Double) async -> StreamingPlaybackResult {
         self.playCount += 1
         self.playbackStarted.send(self.playCount)
+        await self.drainBarrier?.suspend()
         do {
             for try await frame in stream {
                 self.frames.append(frame)
@@ -33,7 +40,8 @@ final class DrainingPCMStreamingAudioPlayer: PCMStreamingAudioPlaying {
     }
 
     func stop() -> Double? {
-        nil
+        self.stopCount += 1
+        return nil
     }
 
     func waitUntilPlaybackFinished() async throws {

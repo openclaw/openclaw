@@ -66,7 +66,10 @@ const denied: ErrorShape = { code: "FORBIDDEN", message: "Destination is not wri
 const source = { hostId: "node:fixture", threadId: "thread-one" };
 const page = { ...source, items: [{ id: "first", type: "userMessage" as const, text: "source" }] };
 
-function fixture(config: OpenClawConfig = {}) {
+function fixture(
+  config: OpenClawConfig = {},
+  profileRelation?: import("../../../packages/gateway-protocol/src/index.js").SessionCatalogProfileRelation,
+) {
   const read = vi.fn<SessionCatalogProvider["read"]>(async () => page);
   const reauthorize = vi.fn<() => Promise<SessionCatalogThreadVisibility | null>>(async () => ({
     visibility,
@@ -74,8 +77,14 @@ function fixture(config: OpenClawConfig = {}) {
   const commitGuard = vi.fn();
   const run = () =>
     importAuthorizedSessionCatalog({
-      request: { catalogId: "fixture", ...source },
-      provider: { id: "fixture", label: "Fixture", list: vi.fn(), read },
+      request: { catalogId: "fixture", ...source, ...(profileRelation ? { profileRelation } : {}) },
+      provider: {
+        id: "fixture",
+        label: "Fixture",
+        supportsProfileRelation: true,
+        list: vi.fn(),
+        read,
+      },
       agentId: "main",
       allowProcessHomeFallback: false,
       client: null,
@@ -177,4 +186,21 @@ it.each([
   await expect(fixture().run()).rejects.toThrow(error);
   expect(mocks.preserve).not.toHaveBeenCalled();
   expect(mocks.record).not.toHaveBeenCalled();
+});
+
+it("retains the relationship target on every imported source page", async () => {
+  const profileRelation = {
+    relationship: "owned",
+    target: { type: "github-account", id: "101" },
+  } as const;
+  const test = fixture({}, profileRelation);
+  test.read
+    .mockResolvedValueOnce({ ...page, nextCursor: "next" })
+    .mockResolvedValueOnce({ ...page, items: [] });
+  test.reauthorize.mockResolvedValue(null);
+  await expect(test.run()).resolves.toBeNull();
+  expect(test.read).toHaveBeenCalledTimes(2);
+  for (const [request] of test.read.mock.calls) {
+    expect(request.profileRelation).toEqual(profileRelation);
+  }
 });

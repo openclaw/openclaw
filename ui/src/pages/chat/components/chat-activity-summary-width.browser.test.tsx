@@ -114,7 +114,7 @@ it.each(
   },
 );
 
-it("keeps both linked agent names and the remaining count visible in a narrow launch summary", async () => {
+it("truncates only the names to keep a narrow launch summary on one line", async () => {
   const launches = group(
     "launches",
     "tool",
@@ -161,7 +161,14 @@ it("keeps both linked agent names and the remaining count visible in a narrow la
   expect(links).toHaveLength(2);
   expect(title.textContent).toContain("1 more");
   expect(title.scrollWidth).toBeLessThanOrEqual(title.clientWidth);
-  expect(links[1]!.getBoundingClientRect().top).toBeGreaterThan(
-    links[0]!.getBoundingClientRect().top,
+  for (const link of links) {
+    expect(link.scrollWidth).toBeGreaterThan(link.clientWidth);
+    expect(link.clientWidth).toBeGreaterThan(0);
+    expect(getComputedStyle(link).textOverflow).toBe("ellipsis");
+  }
+  const row = title.closest(".chat-tool-row")!;
+  expect(row.getBoundingClientRect().height).toBeCloseTo(
+    links[0]!.getBoundingClientRect().height,
+    0,
   );
 });

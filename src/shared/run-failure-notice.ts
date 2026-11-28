@@ -11,7 +11,12 @@ export type RunFailureCause = {
 };
 
 /** A diagnostic-only display row owned by the settled run, not a model attempt. */
-export type RunFailureNotice = { runId: string; summary: string; cause?: RunFailureCause };
+export type RunFailureNotice = {
+  runId: string;
+  summary: string;
+  summaryAsTitle?: true;
+  cause?: RunFailureCause;
+};
 
 // Provider ids and failover reason codes are short identifiers; anything longer is not one.
 const readCauseField = (value: unknown) =>
@@ -57,5 +62,10 @@ export function readRunFailureNotice(
     notice.desktopSummary.trim()
       ? notice.desktopSummary
       : notice.summary;
-  return { runId: notice.runId, summary, ...(cause ? { cause } : {}) };
+  return {
+    runId: notice.runId,
+    summary,
+    ...(notice.summaryAsTitle === true ? { summaryAsTitle: true } : {}),
+    ...(cause ? { cause } : {}),
+  };
 }

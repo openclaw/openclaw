@@ -13,6 +13,7 @@ import {
 } from "./worker-protocol-primitives.js";
 
 export const WORKER_GATEWAY_TOOLS_PROTOCOL_FEATURE = "worker-gateway-tools-v1";
+export const WORKER_EXEC_DEFAULTS_PROTOCOL_FEATURE = "worker-exec-defaults-v1";
 export const WORKER_GATEWAY_MCP_GUEST_RESULT_PROTOCOL_FEATURE =
   "worker-gateway-mcp-guest-result-v1";
 export const WORKER_GATEWAY_TOOL_METHODS = {
@@ -132,6 +133,14 @@ export const WorkerToolSurfaceSchema = closedObject({
     { maxItems: 256 },
   ),
   policy: closedObject({
+    execDefaults: Type.Optional(
+      closedObject({
+        backgroundMs: Type.Optional(Type.Integer({ minimum: 1 })),
+        timeoutSec: Type.Optional(Type.Integer({ minimum: 1 })),
+        cleanupMs: Type.Optional(Type.Integer({ minimum: 1 })),
+        pathPrepend: Type.Optional(Type.Array(Type.String())),
+      }),
+    ),
     workspaceOnly: Type.Boolean(),
     readOnly: Type.Boolean(),
     applyPatchEnabled: Type.Boolean(),

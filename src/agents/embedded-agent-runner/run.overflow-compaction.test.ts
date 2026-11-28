@@ -215,6 +215,7 @@ describe("compactEmbeddedRunForRecovery", () => {
       sessionKey: baseRunParams.sessionKey,
       currentTokenCount: 277_403,
       tokenBudget: 200_000,
+      reason: "overflow",
       runtimeContext: {
         sandboxSessionKey: "global",
         sandboxAgentId: "main",

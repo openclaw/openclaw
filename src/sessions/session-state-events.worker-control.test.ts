@@ -21,6 +21,7 @@ const edge = vi.hoisted(() => {
       databasePath: "/synthetic/state.sqlite",
       coordinationKey: "captured-shared-state",
       identity: { key: "file:1:1", canonicalPath: "/synthetic/state.sqlite" },
+      isCurrent: () => true,
       assertCurrent: vi.fn(),
     },
   } satisfies OpenClawStateWorkerContext;

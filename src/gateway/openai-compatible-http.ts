@@ -19,10 +19,7 @@ import {
 } from "./http-common.js";
 import { handleGatewayPostJsonEndpoint } from "./http-endpoint-helpers.js";
 import type { GatewayHttpRequestAuthOptions } from "./http-request-authority.js";
-import {
-  authorizeOpenAiCompatibleHttpModelOverride,
-  resolveOpenAiCompatibleHttpSenderIsOwner,
-} from "./http-utils.js";
+import { authorizeOpenAiCompatibleHttpModelOverride } from "./http-utils.js";
 import {
   readOpenAiHttpRunTerminal,
   resolveOpenAiCompatibleAgentError,
@@ -32,6 +29,7 @@ import {
   resolveToolChoiceConstraintError,
   type ToolChoiceConstraint,
 } from "./openai-tool-choice.js";
+import { decideTurnGrant } from "./operator-admission.js";
 
 type StreamError = { message: string; type: string; code?: string };
 type StreamResult = {
@@ -69,9 +67,9 @@ export async function prepareOpenAiCompatibleHttpRequest<T extends z.ZodType>(
     sendMissingScopeForbidden(res, modelAuth.missingScope);
     return undefined;
   }
-  const senderIsOwner = resolveOpenAiCompatibleHttpSenderIsOwner(req, handled.requestAuth);
   const payload = parseGatewayJsonRequest(res, handled.body, opts.schema);
-  return payload ? Object.assign(client, handled, { payload, senderIsOwner }) : undefined;
+  const grant = decideTurnGrant(handled.operatorScopes);
+  return payload ? Object.assign(client, handled, { payload, grant }) : undefined;
 }
 
 export async function sendOpenAiCompatibleJsonResponse(params: {

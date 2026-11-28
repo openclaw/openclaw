@@ -3,6 +3,7 @@
   "scenarios": [
     "base",
     "git-release",
+    "release-update",
     "session-share",
     "backup-schedule",
     "abandoned-update",
@@ -24,6 +25,7 @@
     "missing-configured-plugin-migration",
     "missing-load-path",
     "custom-plugin-siblings",
+    "boot-plugin-convergence",
     "projects-doctor",
     "channel-owner-policy",
     "projects-startup-migration",

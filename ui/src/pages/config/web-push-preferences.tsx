@@ -112,8 +112,12 @@ function QuietHoursWindowRows(props: {
   );
 }
 
+type PreferenceAgentOptions = NotificationAgentOptions & {
+  onSaveAgents: (ids: string[] | undefined) => Promise<void> | void;
+};
+
 export function UserNotificationPreferences(
-  props: NotificationAgentOptions & {
+  props: PreferenceAgentOptions & {
     preferences: WebPushNotificationPreferences;
     disabled?: boolean;
     onChange: (value: WebPushNotificationPreferences) => Promise<void> | void;
@@ -128,7 +132,7 @@ export function UserNotificationPreferences(
         <For each={WEB_PUSH_CATEGORIES}>
           {(entry) => (
             <SettingsToggleRow
-              disabled={props.disabled}
+              disabled={props.disabled || props.writePending}
               title={t(`configView.notifications.${entry}`)}
               checked={props.preferences.categories[entry] === true}
               onChange={(checked) =>
@@ -138,7 +142,7 @@ export function UserNotificationPreferences(
           )}
         </For>
         <SettingsSelectRow
-          disabled={props.disabled}
+          disabled={props.disabled || props.writePending}
           title={t("configView.notifications.lockScreenDetail")}
           description={t("configView.notifications.lockScreenDetailHint")}
           value={props.preferences.detailLevel}
@@ -146,7 +150,7 @@ export function UserNotificationPreferences(
           onChange={(value) => void patch({ detailLevel: detailLevel(value) })}
         />
         <SettingsToggleRow
-          disabled={props.disabled}
+          disabled={props.disabled || props.writePending}
           title={t("configView.notifications.quietHours")}
           checked={props.preferences.quietHours.enabled}
           onChange={(enabled) =>
@@ -155,7 +159,7 @@ export function UserNotificationPreferences(
         />
         <Show when={props.preferences.quietHours.enabled}>
           <QuietHoursWindowRows
-            disabled={props.disabled}
+            disabled={props.disabled || props.writePending}
             quietHours={props.preferences.quietHours}
             onChange={(quietHours) => void patch({ quietHours })}
           />
@@ -164,9 +168,11 @@ export function UserNotificationPreferences(
           agentCatalog={props.agentCatalog}
           onLoadAgents={props.onLoadAgents}
           presentationScope={props.presentationScope}
+          writePending={props.writePending}
+          submission={props.submission}
           disabled={props.disabled}
           agentIds={props.preferences.agentIds}
-          onChange={(agentIds) => patch({ agentIds: agentIds ?? [] })}
+          onChange={(ids) => props.onSaveAgents(ids)}
         />
       </div>
     </section>
@@ -174,7 +180,7 @@ export function UserNotificationPreferences(
 }
 
 export function DeviceNotificationPreferences(
-  props: NotificationAgentOptions & {
+  props: PreferenceAgentOptions & {
     inheritedAgentIds?: string[];
     preferences: WebPushDevicePreferences;
     disabled?: boolean;
@@ -188,7 +194,7 @@ export function DeviceNotificationPreferences(
       <SettingsSectionHeader title={t("configView.notifications.installedApp")} />
       <div class="settings-group">
         <SettingsToggleRow
-          disabled={props.disabled}
+          disabled={props.disabled || props.writePending}
           title={t("configView.notifications.deliverDevice")}
           checked={props.preferences.enabled}
           onChange={(enabled) => void patch({ enabled })}
@@ -197,7 +203,7 @@ export function DeviceNotificationPreferences(
           title={t("configView.notifications.notificationLabel")}
           control={
             <input
-              disabled={props.disabled}
+              disabled={props.disabled || props.writePending}
               type="text"
               class="settings-input"
               aria-label={t("configView.notifications.notificationLabel")}
@@ -208,7 +214,7 @@ export function DeviceNotificationPreferences(
           }
         />
         <SettingsSelectRow
-          disabled={props.disabled}
+          disabled={props.disabled || props.writePending}
           title={t("configView.notifications.lockScreenDetail")}
           value={props.preferences.detailLevel ?? "inherit"}
           options={[
@@ -220,7 +226,7 @@ export function DeviceNotificationPreferences(
           }
         />
         <SettingsSelectRow
-          disabled={props.disabled}
+          disabled={props.disabled || props.writePending}
           title={t("configView.notifications.quietHours")}
           value={
             props.preferences.quietHours === undefined
@@ -249,7 +255,7 @@ export function DeviceNotificationPreferences(
         >
           {(quietHours) => (
             <QuietHoursWindowRows
-              disabled={props.disabled}
+              disabled={props.disabled || props.writePending}
               quietHours={quietHours()}
               onChange={(value) => void patch({ quietHours: value })}
             />
@@ -259,16 +265,18 @@ export function DeviceNotificationPreferences(
           agentCatalog={props.agentCatalog}
           onLoadAgents={props.onLoadAgents}
           presentationScope={props.presentationScope}
+          writePending={props.writePending}
+          submission={props.submission}
           disabled={props.disabled}
           inherit
           inheritedAgentIds={props.inheritedAgentIds}
           agentIds={props.preferences.agentIds}
-          onChange={(agentIds) => patch({ agentIds })}
+          onChange={(ids) => props.onSaveAgents(ids)}
         />
         <For each={WEB_PUSH_CATEGORIES}>
           {(entry) => (
             <SettingsSelectRow
-              disabled={props.disabled}
+              disabled={props.disabled || props.writePending}
               title={t(`configView.notifications.${entry}`)}
               value={
                 props.preferences.categories?.[entry] === undefined

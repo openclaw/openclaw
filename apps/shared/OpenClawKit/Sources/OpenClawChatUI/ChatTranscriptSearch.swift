@@ -2,6 +2,8 @@
 import SwiftUI
 
 struct ChatTranscriptSearchResults: Equatable {
+    private static let inlineMarkdownMarkers = CharacterSet(charactersIn: "*_`[<~\\&")
+
     let messageIDs: [UUID]
 
     init(rows: [ChatTranscriptRow], query: String) {
@@ -9,9 +11,22 @@ struct ChatTranscriptSearchResults: Equatable {
         self.messageIDs = query.isEmpty ? [] : rows.compactMap { row in
             guard case let .message(message) = row,
                   ["user", "assistant"].contains(message.role.lowercased()),
-                  ChatMessageVisibleText.visibleText(in: message).localizedStandardContains(query)
+                  Self.matches(message, query: query)
             else { return nil }
             return message.id
+        }
+    }
+
+    private static func matches(_ message: OpenClawChatMessage, query: String) -> Bool {
+        let text = ChatMessageVisibleText.visibleText(in: message)
+        if text.localizedStandardContains(query) { return true }
+        guard text.rangeOfCharacter(from: Self.inlineMarkdownMarkers) != nil else { return false }
+
+        let markdown = ChatMarkdownDisplayPreprocessor.preserveChatSoftBreaks(in: text)
+        guard let parsed = try? AttributedString(markdown: markdown) else { return false }
+        // Find may cross inline formatting, but the renderer displays each paragraph separately.
+        return parsed.runs[\.presentationIntent].contains { _, range in
+            String(parsed[range].characters).localizedStandardContains(query)
         }
     }
 

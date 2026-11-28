@@ -1,15 +1,17 @@
 import { normalizeOptionalString } from "@openclaw/normalization-core/string-coerce";
 import { sanitizeTerminalText } from "../../packages/terminal-core/src/safe-text.js";
 import type { GatewayProbeServerSummary } from "../gateway/probe.js";
-import type { RestartSentinelPayload } from "../infra/restart-sentinel.js";
+import {
+  formatRestartSentinelMessage,
+  type RestartSentinelPayload,
+} from "../infra/restart-sentinel.js";
 import { projectUpdateRunHistory } from "../infra/update-run-history-projection.js";
 import { getUpdateRun, getUpdateRunAsync } from "../infra/update-run-ledger.js";
-import { isAcknowledgedAbandonedUpdateRun } from "../infra/update-run-record.js";
+import { renderUpdateRunSummary } from "../infra/update-run-notice.js";
 import {
-  renderUpdateRunReport,
-  resolveUpdateRunIdentity,
-  updateRunReportInputFromSentinel,
-} from "../infra/update-run-report.js";
+  isAcknowledgedAbandonedUpdateRun,
+  type UpdateRunRecord,
+} from "../infra/update-run-record.js";
 import { readUpdateRunStatus } from "../infra/update-run-status.js";
 
 type Formatter = (value: string) => string;
@@ -21,11 +23,9 @@ type StatusReportOptions = {
   gatewayServer?: Pick<GatewayProbeServerSummary, "version" | "buildId">;
 };
 
-function renderStatusReport(
-  run: Parameters<typeof renderUpdateRunReport>[0],
-  opts: StatusReportOptions = {},
-) {
-  const report = renderUpdateRunReport(run);
+function renderStatusReport(run: UpdateRunRecord, opts: StatusReportOptions = {}) {
+  const summary = renderUpdateRunSummary(run);
+  const report = { headline: summary, lines: summary.split("\n").slice(1).filter(Boolean) };
   const reconciled = isAcknowledgedAbandonedUpdateRun(run);
   const history =
     !reconciled && opts.localGatewayHealthy
@@ -57,9 +57,12 @@ function renderStatusReport(
     explicitTargetVersion !== beforeVersion &&
     afterVersion === explicitTargetVersion,
   );
+  const identityUnavailable =
+    run.verification.versionMatch === false &&
+    !(recordedServingVersion && afterVersion && recordedServingVersion !== afterVersion) &&
+    !(recordedServingBuild && run.after.buildId && recordedServingBuild !== run.after.buildId);
   const afterIdentityAvailable =
-    (!rollbackAttempted || afterIsDistinctTarget) &&
-    resolveUpdateRunIdentity(run.verification, run.after).kind !== "unavailable";
+    (!rollbackAttempted || afterIsDistinctTarget) && !identityUnavailable;
   // Recovery can verify the starting package without selecting an update target.
   const targetVersion =
     explicitTargetVersion ?? (afterIdentityAvailable ? afterVersion : undefined);
@@ -76,14 +79,7 @@ function renderStatusReport(
     (!afterIdentityAvailable && targetVersion === afterVersion) ||
     (rollbackAttempted && (!previousVersion || targetVersion === previousVersion));
   const observedFailure = run.status === "failed" && !reconciled && opts.localGatewayHealthy;
-  const message =
-    run.status === "failed" && !reconciled
-      ? run.steps
-          .filter((step) => step.status === "failed")
-          .flatMap((step) => step.failureFacts ?? [])
-          .find((fact) => fact.message)?.message
-      : undefined;
-  let headline = message ? `${report.headline} ${message}` : report.headline;
+  let headline = report.headline;
   const label = (value: string) => sanitizeTerminalText(value).slice(0, 240);
   const servingLabel = label(servingVersion ?? "an unknown version");
   const targetLabel = label(targetVersion ?? "an unknown target");
@@ -113,7 +109,16 @@ function renderStatusReport(
 
 function readReport(payload: RestartSentinelPayload, opts: StatusReportOptions = {}) {
   const run = payload.stats?.runId ? getUpdateRun(payload.stats.runId) : undefined;
-  return renderStatusReport(run ?? updateRunReportInputFromSentinel(payload), opts);
+  if (run) {
+    return renderStatusReport(run, opts);
+  }
+  const headline = formatRestartSentinelMessage(payload);
+  return {
+    headline,
+    lines: headline.split("\n").slice(1),
+    reconciled: false,
+    historicalFailure: false,
+  };
 }
 
 export function formatUpdateRestartStatusValue(
@@ -128,7 +133,15 @@ export function formatUpdateRestartStatusValue(
 
 function formatUpdateRestartReport(
   payload: RestartSentinelPayload,
-  { headline, reconciled, historicalFailure }: ReturnType<typeof renderStatusReport>,
+  {
+    headline,
+    reconciled,
+    historicalFailure,
+  }: {
+    headline: string;
+    reconciled: boolean;
+    historicalFailure: boolean;
+  },
   opts: StatusReportOptions,
 ): string {
   const format =
@@ -171,7 +184,13 @@ export async function buildStatusUpdateRows(
       : undefined;
     const restart = formatUpdateRestartReport(
       payload,
-      renderStatusReport(restartRun ?? updateRunReportInputFromSentinel(payload), opts),
+      restartRun
+        ? renderStatusReport(restartRun, opts)
+        : {
+            headline: formatRestartSentinelMessage(payload),
+            reconciled: false,
+            historicalFailure: false,
+          },
       opts,
     );
     if (restart) {

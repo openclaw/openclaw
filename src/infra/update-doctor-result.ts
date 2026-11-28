@@ -1,11 +1,8 @@
-import { AsyncLocalStorage } from "node:async_hooks";
 import { randomUUID } from "node:crypto";
 import fs from "node:fs/promises";
 import path from "node:path";
 import { isDeepStrictEqual } from "node:util";
-import { isRecord } from "@openclaw/normalization-core/record-coerce";
 import { z } from "zod";
-import { ConfigMutationConflictError } from "../config/mutation-conflict.js";
 import { hasCommandProcessCleanupError } from "../process/exec-result.js";
 import { getOpenClawDatabaseMaintenanceScope } from "../state/openclaw-state-maintenance-context.js";
 import { collectNestedErrorCandidates } from "./error-graph-internal.js";
@@ -19,13 +16,16 @@ import type {
   UpdateDatabaseWriteReceipt,
 } from "./update-database-generations.js";
 import {
+  getUpdateDoctorConfigCapture,
+  runWithUpdateDoctorConfigCapture,
+} from "./update-doctor-config-capture.js";
+import {
   UpdateDoctorConfigChangeSchema,
+  UpdateDoctorConfigFileWriteSchema,
+  UpdateDoctorConfigHashSchema,
   UpdateDoctorConfigWriteRefusalSchema,
 } from "./update-doctor-config-schema.js";
-import type {
-  UpdateDoctorConfigChange,
-  UpdateDoctorConfigWriteRefusal,
-} from "./update-doctor-config.js";
+import type { DoctorConfigCapture, DoctorConfigWriteAuthority } from "./update-doctor-config.js";
 import { UpdateDoctorLintFindingSchema } from "./update-doctor-lint-schema.js";
 import { runWithUpdateDoctorMigrationCapture } from "./update-doctor-migration-attribution.js";
 import {
@@ -34,6 +34,16 @@ import {
 } from "./update-doctor-scan-receipts.js";
 import { normalizeUpdateFailureFacts, type UpdateFailureFact } from "./update-failure-facts.js";
 import { UpdateFailureFactSchema } from "./update-run-schema.js";
+
+export type { DoctorConfigCapture } from "./update-doctor-config.js";
+
+export {
+  getUpdateDoctorConfigCapture,
+  getUpdateDoctorConfigWriteAuthority,
+  recordUpdateDoctorConfigMigration,
+  recordUpdateDoctorConfigWriteRefusal,
+  runUpdateDoctorIncludeWrite,
+} from "./update-doctor-config-capture.js";
 
 // IPC contract between package update parents and the post-install doctor child.
 export const UPDATE_POST_INSTALL_DOCTOR_RESULT_PATH_ENV =
@@ -53,11 +63,6 @@ export const PACKAGE_POST_INSTALL_DOCTOR_ADVISORY: PackageUpdateStepAdvisory = {
     "Post-install doctor reported a recoverable update-time repair warning after the package install was verified; continuing with post-core plugin convergence.",
 };
 
-const configHashSchema = z.string().regex(/^[0-9a-f]{64}$/u);
-const configFileWriteSchema = z.object({
-  inputHash: configHashSchema.optional(),
-  hash: configHashSchema,
-});
 export const UpdateDoctorDeferredInspectionCheckIdsSchema = z
   .array(UpdateDoctorLintFindingSchema.shape.checkId.max(256))
   .max(128);
@@ -79,12 +84,12 @@ const DoctorMaintenanceRefusalSchema = z.discriminatedUnion("kind", [
 export type DoctorMaintenanceRefusal = z.infer<typeof DoctorMaintenanceRefusalSchema>;
 
 const doctorResultEvidence = {
-  configHash: z.union([z.literal("unchanged"), configHashSchema]).optional(),
-  configInputHash: configHashSchema.optional(),
+  configHash: z.union([z.literal("unchanged"), UpdateDoctorConfigHashSchema]).optional(),
+  configInputHash: UpdateDoctorConfigHashSchema.optional(),
   configFileWrites: z
     .record(
       z.string().refine((filePath) => path.isAbsolute(filePath)),
-      configFileWriteSchema,
+      UpdateDoctorConfigFileWriteSchema,
     )
     .optional()
     .catch(undefined),
@@ -178,25 +183,13 @@ export function normalizeUpdatePostInstallDoctorWarnings(warnings: readonly stri
   ].slice(0, 32);
 }
 
-export type DoctorConfigCapture = {
-  path: string;
-  hash: string;
-  inputHash?: string;
-  fileWrites?: Record<string, z.infer<typeof configFileWriteSchema>>;
-  configChanges: UpdateDoctorConfigChange[];
-  configWriteRefusal?: UpdateDoctorConfigWriteRefusal;
-  deferredInspectionCheckIds?: string[];
-  warnings?: string[];
-};
 /** Runs a policy check under Doctor's held maintenance owner and its open scope. */
 type DoctorPolicyCustodyOwner = { assertCurrent(policy: () => void): void };
-export type UpdateDoctorWriteAuthority = {
+export type UpdateDoctorWriteAuthority = DoctorConfigWriteAuthority & {
   /** An optional work profile; config preparation still proves eligibility. */
   retirementOnly?: true;
   /** Parent Doctor phase deadline for nested managed-service inspection. */
   serviceInspectionDeadlineAtMs?: number;
-  inputHash: string;
-  assertCurrent: () => void;
   /** Doctor lends its held maintenance owner to `assertCurrent`; see doctor-policy-custody. */
   lendPolicyCustody?: (owner: DoctorPolicyCustodyOwner | undefined) => void;
   commandAuthority?: import("./update-managed-command-custody.js").ManagedCommandProcessAuthority;
@@ -406,168 +399,29 @@ export function createUpdateDoctorDatabaseWriteCapture(
   };
 }
 
-const doctorConfigWrites = new AsyncLocalStorage<{
-  capture: DoctorConfigCapture;
-  authority?: UpdateDoctorWriteAuthority;
-}>();
-
-export function getUpdateDoctorConfigCapture(): DoctorConfigCapture | undefined {
-  return doctorConfigWrites.getStore()?.capture;
+export function captureUpdateDoctorConfigWrites<T>(
+  configPath: string,
+  run: (capture: DoctorConfigCapture) => Promise<T>,
+  authority?: UpdateDoctorWriteAuthority,
+): Promise<T> {
+  return runWithUpdateDoctorConfigCapture(
+    { path: path.resolve(configPath), hash: "unchanged", configChanges: [] },
+    run,
+    authority,
+  );
 }
 
 /** Deferral requires an owned result channel, not just an inherited marker. */
 export function recordUpdateDoctorDeferredInspectionChecks(
   checkIds: string[],
 ): string[] | undefined {
-  const capture = doctorConfigWrites.getStore()?.capture;
+  const capture = getUpdateDoctorConfigCapture();
   if (!capture) {
     return undefined;
   }
   return (capture.deferredInspectionCheckIds = UpdateDoctorDeferredInspectionCheckIdsSchema.parse([
     ...new Set([...(capture.deferredInspectionCheckIds ?? []), ...checkIds]),
   ]));
-}
-
-export function captureUpdateDoctorConfigWrites<T>(
-  configPath: string,
-  run: (capture: DoctorConfigCapture) => Promise<T>,
-  authority?: UpdateDoctorWriteAuthority,
-): Promise<T> {
-  const capture: DoctorConfigCapture = {
-    path: path.resolve(configPath),
-    hash: "unchanged",
-    configChanges: [],
-  };
-  return doctorConfigWrites.run(
-    {
-      capture,
-      authority: authority
-        ? { inputHash: authority.inputHash, assertCurrent: authority.assertCurrent }
-        : undefined,
-    },
-    () => run(capture),
-  );
-}
-
-/** The same authority covers include writers; only the root has a captured input hash. */
-export function getUpdateDoctorConfigWriteAuthority(
-  configPath: string,
-): { assertCurrent: () => void; inputHash?: string } | undefined {
-  const context = doctorConfigWrites.getStore();
-  if (!context?.authority) {
-    return undefined;
-  }
-  const { capture, authority } = context;
-  return {
-    assertCurrent: authority.assertCurrent,
-    ...(capture.path === path.resolve(configPath)
-      ? { inputHash: capture.hash === "unchanged" ? authority.inputHash : capture.hash }
-      : {}),
-  };
-}
-
-export function assertUpdateDoctorConfigInputHash(configPath: string, inputHash: string): void {
-  const authority = getUpdateDoctorConfigWriteAuthority(configPath);
-  if (authority?.inputHash !== undefined && authority.inputHash !== inputHash) {
-    const message = "Config changed after update validation; Doctor did not promote its changes.";
-    recordUpdateDoctorConfigWriteRefusal({ reason: "config-input-changed", message, keys: [] });
-    throw new ConfigMutationConflictError(message, { retryable: false });
-  }
-}
-
-/** Retain the validated root input and live Doctor owner through include publication. */
-export async function runUpdateDoctorIncludeWrite<T>(
-  configPath: string,
-  inputHash: string,
-  run: () => Promise<T>,
-): Promise<T> {
-  const context = doctorConfigWrites.getStore();
-  if (!context?.authority) {
-    return await run();
-  }
-  context.authority.assertCurrent();
-  assertUpdateDoctorConfigInputHash(configPath, inputHash);
-  const result = await run();
-  context.authority.assertCurrent();
-  return result;
-}
-
-/** Retain one contiguous chain from the writer's input through its actual publications. */
-export function recordUpdateDoctorConfigFileWrite(
-  configPath: string,
-  inputHash: string | null,
-  hash: string,
-): void {
-  const capture = doctorConfigWrites.getStore()?.capture;
-  if (!capture) {
-    return;
-  }
-  const resolvedPath = path.resolve(configPath);
-  const write =
-    capture.path === resolvedPath
-      ? capture
-      : ((capture.fileWrites ??= {})[resolvedPath] ??= { hash: "unchanged" });
-  if (write.hash === "unchanged") {
-    write.inputHash = inputHash ?? undefined;
-  } else if (inputHash !== write.hash) {
-    // An outside write between Doctor passes breaks ownership permanently for this run.
-    delete write.inputHash;
-  }
-  write.hash = hash;
-}
-
-/** Pair the consumed snapshot with the serialized payload at publication, never a later read. */
-export function recordUpdateDoctorConfigWrite(
-  configPath: string,
-  inputHash: string | null,
-  hash: string,
-  inputConfig: unknown,
-  outputJson: string,
-): void {
-  recordUpdateDoctorConfigFileWrite(configPath, inputHash, hash);
-  const capture = doctorConfigWrites.getStore()?.capture;
-  if (capture && capture.path === path.resolve(configPath)) {
-    const before = isRecord(inputConfig) ? inputConfig : {};
-    const after: unknown = JSON.parse(outputJson);
-    if (!isRecord(after)) {
-      throw new Error("Committed Doctor config is not an object.");
-    }
-    const keys = new Set(
-      capture.configChanges.flatMap((change) => (change.kind === "key" ? [change.key] : [])),
-    );
-    for (const key of new Set([...Object.keys(before), ...Object.keys(after)])) {
-      if (!isDeepStrictEqual(before[key], after[key])) {
-        keys.add(key);
-      }
-    }
-    capture.configChanges = [
-      ...[...keys].toSorted().map((key): UpdateDoctorConfigChange => ({ kind: "key", key })),
-      ...capture.configChanges.filter((change) => change.kind === "migration"),
-    ];
-  }
-}
-
-/** Record migration notes only after their matching config write has committed. */
-export function recordUpdateDoctorConfigMigration(message: string): void {
-  const capture = doctorConfigWrites.getStore()?.capture;
-  if (
-    capture &&
-    message.trim() &&
-    !capture.configChanges.some(
-      (change) => change.kind === "migration" && change.message === message,
-    )
-  ) {
-    capture.configChanges.push({ kind: "migration", message });
-  }
-}
-
-export function recordUpdateDoctorConfigWriteRefusal(
-  refusal: UpdateDoctorConfigWriteRefusal,
-): void {
-  const capture = doctorConfigWrites.getStore()?.capture;
-  if (capture) {
-    capture.configWriteRefusal ??= { ...refusal, keys: [...new Set(refusal.keys)].toSorted() };
-  }
 }
 
 export function createUpdatePostInstallDoctorResultPath(

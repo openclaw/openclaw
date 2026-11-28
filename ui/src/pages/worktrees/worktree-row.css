@@ -27,5 +27,5 @@ openclaw-worktrees-page .settings-row:has(.worktree-row__name) > .settings-row__
   overflow: hidden;
   text-overflow: ellipsis;
   white-space: nowrap;
-  cursor: pointer;
+  cursor: var(--cursor-action);
 }

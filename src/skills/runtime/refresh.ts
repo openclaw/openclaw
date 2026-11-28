@@ -68,6 +68,7 @@ type Source = {
   dirty: boolean;
   sources?: WorkspaceSkillSources;
   fingerprint?: string;
+  syncedContentDigest?: string;
   unavailable?: boolean;
   watchDirectories?: string[];
   observations: Map<string, ReturnType<typeof observeOwnedDirectory>>;
@@ -252,7 +253,7 @@ function scanDirtySources(): Promise<void> {
         return;
       }
       const changed = new Set<string>();
-      const refreshed = new Set<string>();
+      const syncedContentChanged = new Set<string>();
       const recovered: Source[] = [];
       // Install the completed batch before publishing any revision or listener event.
       for (const result of results) {
@@ -280,16 +281,22 @@ function scanDirtySources(): Promise<void> {
         }
         source.sources = result.sources;
         source.fingerprint = result.fingerprint;
+        // An unreadable tree has no digest and always invalidates copies.
+        if (
+          result.syncedContentDigest === undefined ||
+          source.syncedContentDigest !== result.syncedContentDigest
+        ) {
+          syncedContentChanged.add(source.workspaceDir);
+        }
+        source.syncedContentDigest = result.syncedContentDigest;
         source.watchDirectories = result.watchDirectories;
         observeSource(source);
-        refreshed.add(source.workspaceDir);
       }
       while (state.plans.size > MAX_SOURCES) {
         state.plans.delete(state.plans.keys().next().value!);
       }
-      // A completed bounded pass also invalidates supporting-file copies. This
-      // deliberately conservative revision avoids a second recursive tree scan.
-      for (const workspaceDir of refreshed) {
+      // Every pass re-reads the synced trees; only changed bytes invalidate sandbox copies.
+      for (const workspaceDir of syncedContentChanged) {
         markSkillsSupportingFilesChanged({ workspaceDir });
       }
       for (const workspaceDir of changed) {

@@ -3,13 +3,16 @@ import { getGatewayToolCallerIdentity } from "../../agents/tools/gateway-caller-
 import type { GatewayClient } from "./client-types.js";
 import type { GatewayRequestContext } from "./types.js";
 
-export function isSyntheticGatewayCaller(client: GatewayClient | null): boolean {
+export function isSyntheticGatewayConnection(client: GatewayClient | null): boolean {
   return Boolean(
     client?.internal?.syntheticClient ||
     client?.internal?.agentToolCaller ||
-    client?.internal?.agentRuntimeIdentity ||
-    getGatewayToolCallerIdentity(),
+    client?.internal?.agentRuntimeIdentity,
   );
+}
+
+export function isSyntheticGatewayCaller(client: GatewayClient | null): boolean {
+  return isSyntheticGatewayConnection(client) || Boolean(getGatewayToolCallerIdentity());
 }
 
 /** Creation-only defaults require a direct profiled operator, not a delegated transport. */
@@ -33,6 +36,23 @@ export function resolveAuthenticatedPersonalGatewayProfileId(
     !isSyntheticGatewayCaller(client) &&
     profileId &&
     profileId !== GATEWAY_OWNER_PROFILE_ID
+    ? profileId
+    : undefined;
+}
+
+/** A named display profile alone cannot establish a plugin publisher's individual identity. */
+export function resolvePluginRequestPersonProfileId(client: GatewayClient): string | undefined {
+  const profileId = resolveAuthenticatedPersonalGatewayProfileId(client);
+  if (!profileId) {
+    return undefined;
+  }
+  const ingress = client.internal?.remoteIngressPrincipal?.principal;
+  if (ingress) {
+    return ingress.kind !== "owner" && ingress.profileId === profileId ? profileId : undefined;
+  }
+  // Owner-device enrollment authenticates the owner's OpenClaw ID account.
+  // Shared secrets and unlinked devices have no individual login or linked owner profile.
+  return client.authenticatedUserId || client.internal?.openclawIdPrincipal?.kind === "owner"
     ? profileId
     : undefined;
 }

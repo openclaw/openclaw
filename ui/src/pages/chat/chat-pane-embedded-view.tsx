@@ -8,6 +8,7 @@ import { elementRef } from "../../lib/reactive/element-ref.ts";
 import { t } from "../../lib/reactive/i18n.ts";
 import { ContentPresentation } from "../../lib/solid/presentation.ts";
 import type { ElementProperties } from "../../types/solid-elements.d.ts";
+import { Browser } from "./chat-browser-panel-load.ts";
 import { buildChatBoardPanel } from "./chat-pane-board-panel.ts";
 import { buildChatDiscussionPanel } from "./chat-pane-discussion-panel.ts";
 import type { SidebarPanelDefinitionParams, SidebarPanelData } from "./chat-pane-embedded-types.ts";
@@ -37,9 +38,6 @@ type Props = SidebarPanelDefinitionParams & PanelHostProps;
 
 const Terminal = lazy(() => import("../../components/terminal/terminal-panel-registration.tsx"), {
   export: "TerminalPanelHost",
-});
-const Browser = lazy(() => import("../../components/browser/browser-panel.ts"), {
-  export: "BrowserPanelHost",
 });
 const Context = lazy(() => import("./components/chat-context-panel.tsx"), {
   export: "ChatContextPanel",

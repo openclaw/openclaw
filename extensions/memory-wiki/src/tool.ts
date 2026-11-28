@@ -135,6 +135,8 @@ type WikiToolMemoryContext = {
   conversationRecall?: OpenClawPluginToolContext["conversationRecall"];
   signal?: AbortSignal;
   memoryContext?: MemoryCallerContext;
+  /** Present while the service runs; it owns import and compile after the search. */
+  refreshSources?: () => void;
 };
 
 export function createWikiStatusTool(
@@ -189,14 +191,16 @@ export function createWikiSearchTool(
       try {
         return await racePromiseWithAbortSignal(
           async () => {
-            // Import and publication share the service lifetime. A search deadline
-            // must not leave committed imports without their compiled snapshot.
-            await syncMemoryWikiImportedSources({
-              config,
-              appConfig,
-              signal: memoryContext.signal ?? signal,
-            });
+            if (!memoryContext.refreshSources) {
+              // One-shot callers have no service to own background work.
+              await syncMemoryWikiImportedSources({
+                config,
+                appConfig,
+                signal: memoryContext.signal ?? signal,
+              });
+            }
             signal.throwIfAborted();
+            // Refresh after the search: a cold read owner activates through the vault queue.
             const results = await searchMemoryWiki({
               config,
               appConfig,
@@ -210,7 +214,7 @@ export function createWikiSearchTool(
               ...(params.backend ? { searchBackend: params.backend } : {}),
               ...(params.corpus ? { searchCorpus: params.corpus } : {}),
               ...(params.mode ? { mode: params.mode } : {}),
-            });
+            }).finally(() => memoryContext.refreshSources?.());
             signal.throwIfAborted();
             return textResult(renderWikiSearchResults(results), { results });
           },

@@ -5,7 +5,6 @@ import { awaitGateBeforeSettlement, createDeferred } from "../../test/helpers/pr
 import { useAutoCleanupTempDirTracker } from "../../test/helpers/temp-dir.js";
 import { closeSkillsWatchers, prepareSandboxFsContext } from "../skills/runtime/refresh.js";
 import type { SkillSnapshot } from "../skills/types.js";
-import type { AdmittedRunOperatorAuthority } from "./admitted-run-context.js";
 import { createTestOperatorAuthority } from "./admitted-run-context.test-support.js";
 import { resolveSandboxSkillRuntimeInputs } from "./embedded-agent-runner/sandbox-skills.js";
 import { preparePluginToolExecutionCapabilities } from "./plugin-tool-execution.js";
@@ -86,8 +85,7 @@ function sandboxFixture(source = "openclaw-managed") {
 
 function modelExecution(
   models: string[],
-  options: Pick<AdmittedRunOperatorAuthority, "onModelPolicyChanged"> & {
-    allows?: () => boolean;
+  options: {
     allow?: string[];
   } = {},
 ) {
@@ -101,12 +99,9 @@ function modelExecution(
     authority: createTestOperatorAuthority({
       profileId: "caller",
       scopes: [],
-      assertCurrent() {},
-      onModelPolicyChanged: options.onModelPolicyChanged,
       modelPolicy: {
         models: models.map((model) => ({ provider: "fixture", model })),
-        allows: (ref) =>
-          ref.provider === "fixture" && models.includes(ref.model) && (options.allows?.() ?? true),
+        allows: (ref) => ref.provider === "fixture" && models.includes(ref.model),
       },
     }),
   })(() => {}).modelExecution!;
@@ -292,18 +287,8 @@ it("releases managed workspace admission while the helper waits for exchange com
   expect(retained).toBe(0);
 });
 
-it("selects the permitted default before execution and holds its current authority", async () => {
-  let allowed = true;
-  let changed: (() => void) | undefined;
-  const execution = modelExecution(["default"], {
-    allows: () => allowed,
-    onModelPolicyChanged: (callback) => {
-      changed = callback;
-      return () => {
-        changed = undefined;
-      };
-    },
-  });
+it("selects the permitted default before execution", async () => {
+  const execution = modelExecution(["default"]);
   expect(execution.cliEntryPath).toBe(path.resolve(import.meta.dirname, "../../openclaw.mjs"));
   const action = vi.fn(async ({ model, agentId }: { model: string; agentId: string }) => ({
     model,
@@ -317,17 +302,6 @@ it("selects the permitted default before execution and holds its current authori
     model: "fixture/default",
     agentId: "caller",
   });
-  await expect(
-    execution.run({ model: null, explicit: false }, async ({ signal, model }) => {
-      expect(model).toBe("fixture/default");
-      allowed = false;
-      changed?.();
-      expect(signal.aborted).toBe(true);
-      return "discarded";
-    }),
-  ).rejects.toThrow("cannot use this model");
-  expect(changed).toBeUndefined();
-  await expect(execution.run(preferred, action)).rejects.toThrow("cannot use this model");
 });
 
 it("keeps an allowed canonical model and refuses an empty permitted selection", async () => {

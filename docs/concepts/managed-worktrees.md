@@ -34,6 +34,11 @@ workspace filesystem instead of a host `/tmp` tmpfs. Keep workspaces on disk and
 use the provided variables (for example, `mktemp -d "$TMPDIR/validation.XXXXXXXX"`).
 Explicit command or sandbox environment overrides remain supported.
 
+When scratch creation fails with `EACCES` or `EROFS`, OpenClaw uses its private
+temporary directory if a safe one is available. Other workspace validation
+failures still stop execution. This fallback leaves workspace permissions
+unchanged and is outside the checkout's snapshots and workspace scratch cleanup.
+
 Unix-domain sockets have much shorter path limits than ordinary files. A deeply
 nested workspace can therefore fail socket creation with `AF_UNIX path too long`.
 For those tools, select a short workspace path or explicitly override the temp
@@ -55,8 +60,10 @@ OpenClaw does not sweep arbitrary host temp entries based on their names.
 Branch pickers display the last recorded local refs while discovery refreshes in
 background. A refreshing indicator stays visible until the Gateway sends the
 updated options; slow Git keeps cached choices available. Discovery never fetches
-from a remote or scans checkout contents. Ref changes invalidate the suggestions,
-and session creation validates the selected base before changing a checkout.
+from a remote or scans checkout contents. Ref changes and Git initialization in
+the selected folder or an intermediate parent invalidate the suggestions, so a
+new nested repository supplies its own branches. Session creation validates the
+selected base before changing a checkout.
 Failed or non-Git discovery becomes eligible for another user-requested read after
 five seconds of elapsed time, even if the system wall clock moves backward.
 
@@ -140,7 +147,10 @@ checkout recipes in memory for 24 hours, including source-only checkouts used by
 sandboxes. It discovers repositories serially, at most once per repository every
 two minutes, and defers for foreground work or host I/O pressure. Background
 preparation uses the ordinary template single flight and generation retention;
-a create arriving during preparation joins that build. Linux Git and native clone
+requests for the same new commit join that build. A startup send whose accepted
+base already has a ready generation uses that generation, even while a different
+commit is building. This applies to both managed and sandbox templates and keeps
+the session’s HEAD, index, and dependencies on its accepted base. Linux Git and native clone
 children use idle I/O priority, and macOS children use background task policy.
 Restarting the Gateway clears these recipes; the next successful create registers
 the repository again. Background work does not extend the 24-hour window.
@@ -818,8 +828,10 @@ has no snapshot, **Restore fresh checkout** recreates its recorded branch, or it
 recorded base if that branch is gone. Invalid saved snapshots report an error;
 they never silently fall back to a fresh checkout.
 
-The button uses the existing admin-authorized `worktrees.restore` operation,
-also available in **Settings > Worktrees**. Progress stays visible during restore;
+The button uses the `worktrees.restore` operation. Administrators and the person
+who started the conversation see it; everyone else is asked to have an
+administrator restore the workspace or to start a new conversation.
+**Settings > Worktrees** offers the same restore to administrators. Progress stays visible during restore;
 failure includes a typed reason and recovery guidance. Restore has a five-minute
 budget, including lease waits, and joins started Git cleanup before returning.
 Concurrent restores serialize through the worktree lifecycle. An expired registry
@@ -1309,7 +1321,7 @@ their specific input error and exit with code 1 before cleanup or removal.
 | `worktrees.recoverRemoval` | Complete an interrupted removal from the exact pending snapshot.             |
 | `worktrees.retireSnapshot` | Retire one redundant snapshot with exact retained-source guards.             |
 
-`worktrees.list` requires `operator.write` because it returns every session's worktree paths, repository roots, and branches. `worktrees.create` and `worktrees.branches` require `operator.write` for configured agent workspaces and registered projects; arbitrary host paths still require `operator.admin`. All creation disables repository Git hooks; write-scoped creation also skips `.openclaw/worktree-setup.sh`. Removing, restoring, and garbage-collecting worktrees remain admin-only. Branch listing reads existing refs only and never fetches. Unchanged inventories are reused after checking checkout, ref, configuration, and object-storage metadata, including repositories with large pack directories; changed metadata refreshes the inventory. Remote-only branches come back remote-qualified (`origin/feature-a`) so every returned name resolves as a base ref. New Session can also request a typed repository status from this method; a plain directory or unavailable checkout returns no branches instead of forcing the UI to infer Git capability from an error string.
+`worktrees.list` requires `operator.write` because it returns every session's worktree paths, repository roots, and branches. `worktrees.create` and `worktrees.branches` require `operator.write` for configured agent workspaces and registered projects; arbitrary host paths still require `operator.admin`. All creation disables repository Git hooks; write-scoped creation also skips `.openclaw/worktree-setup.sh`. Removing and garbage-collecting worktrees remain admin-only. Restoring is admin-only, except that a caller with `operator.sessions.write` may restore the worktree of a conversation they started. Branch listing reads existing refs only and never fetches. Unchanged inventories are reused after checking checkout, ref, configuration, and object-storage metadata, including repositories with large pack directories; changed metadata refreshes the inventory. Remote-only branches come back remote-qualified (`origin/feature-a`) so every returned name resolves as a base ref. New Session can also request a typed repository status from this method; a plain directory or unavailable checkout returns no branches instead of forcing the UI to infer Git capability from an error string.
 
 Owner-routed requests require `operator.admin` and the corresponding
 [capability](/gateway/protocol/versioning#local-state-owner-routing). Their wire

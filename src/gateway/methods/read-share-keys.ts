@@ -5,6 +5,7 @@ type ShareKey = GatewayReadSharing["shareKey"];
 export function operatorReadShareKey(...[caller, params]: Parameters<ShareKey>): string | null {
   const { client } = caller;
   if (
+    caller.read?.shareable === false ||
     !client?.authenticatedUserProfile ||
     client.connect.role !== "operator" ||
     client.internal?.syntheticClient ||

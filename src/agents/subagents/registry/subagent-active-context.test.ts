@@ -242,6 +242,7 @@ it.each([
         agentId: "main",
         runId,
         capabilityToolNames: new Set<string>(),
+        sentHistory: [],
       });
       const prompt = facts.map((fragment) => fragment.text).join("\n");
       const results = ["## Child results awaiting delivery", "batch result a", "batch result b"];
