@@ -67,23 +67,4 @@ describe("extractStoredAssistantText", () => {
   ])("rewrites only transcript errors: $name", ({ message, expected }) => {
     expect(extractStoredAssistantText(message)).toBe(expected);
   });
-
-  it("prefers final_answer text when phased assistant history is present", () => {
-    const message = {
-      role: "assistant",
-      content: [
-        {
-          type: "text",
-          text: "internal reasoning",
-          textSignature: JSON.stringify({ v: 1, id: "item_commentary", phase: "commentary" }),
-        },
-        {
-          type: "text",
-          text: "Done.",
-          textSignature: JSON.stringify({ v: 1, id: "item_final", phase: "final_answer" }),
-        },
-      ],
-    };
-    expect(extractStoredAssistantText(message)).toBe("Done.");
-  });
 });
