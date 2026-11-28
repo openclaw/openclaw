@@ -20,6 +20,8 @@ import {
   readOnlyWorkerScope,
 } from "../infra/sqlite-readonly-worker-context.js";
 import { createAuthRateLimiter } from "../plugin-sdk/webhook-ingress.js";
+import { enqueueCommandInLane } from "../process/command-queue.js";
+import { runWithGatewayRootWorkAdmissionForTest } from "../process/gateway-work-admission.test-helpers.js";
 import { trackAsyncWork } from "../shared/async-work-scope.js";
 import { createDeferredCore } from "../shared/deferred.js";
 import {
@@ -360,13 +362,9 @@ it("keeps standalone scheduled services free of an unbound Gateway resolver", as
   const scheduler = createTestGatewayScheduler(clock.clock);
   const resourceHost = new LegacyPluginSdkResourceHost();
   resourceHost.bindScheduler(scheduler);
-  let opened = false;
-  registry.services.push({
-    id: "standalone",
-    pluginId: "standalone",
-    source: "synthetic",
-    origin: "workspace",
-    service: {
+  let serviceSnapshot: ReturnType<typeof AsyncLocalStorage.snapshot> | undefined;
+  registry.services.push(
+    createServiceRegistration({
       apiVersion: 2,
       id: "standalone",
       start({ scheduler: serviceScheduler }) {
@@ -374,23 +372,24 @@ it("keeps standalone scheduled services free of an unbound Gateway resolver", as
           id: "legacy-resource",
           delayMs: 1,
           run: () => {
+            serviceSnapshot = AsyncLocalStorage.snapshot();
             expect(getBoundLegacyPluginSdkResourceHost()).toBe(resourceHost);
-            const limiter = createAuthRateLimiter();
-            limiter.dispose();
-            opened = true;
+            createAuthRateLimiter().dispose();
           },
         });
       },
-    },
-  });
+    }),
+  );
   const readers = createSqliteReadOnlyWorkerScope();
-  const services = await resourceHost.run(() =>
-    readers.run(() => startPluginServices({ registry, config: {}, scheduler })),
+  const services = await runWithGatewayRootWorkAdmissionForTest(() =>
+    resourceHost.run(() =>
+      readers.run(() => startPluginServices({ registry, config: {}, scheduler })),
+    ),
   );
   await readers.close();
   try {
     await clock.advanceBy(1);
-    expect(opened).toBe(true);
+    await serviceSnapshot!(() => enqueueCommandInLane("service", async () => {}));
   } finally {
     await services.stop();
     await scheduler.stop();
