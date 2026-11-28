@@ -455,6 +455,9 @@ function maybeEmitFailureAlert(
   const job = cronNotificationJob(params.job);
   const alert: Extract<CronNotificationIntent, { kind: "failure-alert" }> = {
     kind: "failure-alert",
+    ...(params.failureNotificationDetail?.kind === "human-owner-unavailable"
+      ? { plainOnly: true as const }
+      : {}),
     job,
     payload: buildFailureAlertPayload({
       job: params.job,
@@ -486,6 +489,7 @@ function maybeEmitFailureAlert(
     !hasJobFailureDestination &&
     (terminal || alertConfig.mode === "announce") &&
     params.status === "error" &&
+    !alert.plainOnly &&
     // Command jobs and on-exit or stream schedules are operator-only, so they alert as before.
     hasFailureRepairOwner(params.job) &&
     (terminal || isJobEnabled(params.job))

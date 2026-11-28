@@ -1,6 +1,7 @@
 import { tryResolveCronJobEffectiveAgentId } from "../cron/agent-id.js";
+import { assertCronHumanOwner, CronHumanOwnerUnavailableError } from "../cron/human-owner.js";
 import { hasCanonicalCronDeliveryMode } from "../cron/store/delivery-codec.js";
-import type { CronJob } from "../cron/types.js";
+import type { CronJob, CronStoredJob } from "../cron/types.js";
 import type { GatewayScheduledJob, GatewayScheduler } from "../infra/gateway-scheduler.js";
 import { markOpenClawExecEnv } from "../infra/openclaw-exec-env.js";
 import { getSpawnBroker, runWithSpawnBroker } from "../process/spawn-broker/context.js";
@@ -23,7 +24,9 @@ type Logger = {
   warn: (obj: unknown, msg?: string) => void;
 };
 
-type OnExitCronJob = CronJob & { schedule: Extract<CronJob["schedule"], { kind: "on-exit" }> };
+type OnExitCronJob = CronStoredJob & {
+  schedule: Extract<CronJob["schedule"], { kind: "on-exit" }>;
+};
 
 export type CronExitResult = {
   exitCode: number | null;
@@ -36,6 +39,7 @@ export type CronExitResult = {
 
 export type CronExitWatcherHandlers = {
   getDefaultAgentId?: () => string | undefined;
+  getJob?: (id: string) => CronStoredJob | undefined;
   getProcessSupervisor: () => ProcessSupervisor;
   fireOnExit: (
     job: OnExitCronJob,
@@ -117,6 +121,7 @@ export function createCronExitWatchers(
     cwd: string | undefined;
     consecutiveFailures: number;
     retryJob: GatewayScheduledJob | undefined;
+    ownerBlocked?: true;
   };
   const active = new Map<string, WatcherSlot>();
   // Cancelled predecessors and unconfirmed cleanup remain suspension blockers.
@@ -263,6 +268,22 @@ export function createCronExitWatchers(
         let run: ManagedRun;
         try {
           run = await supervisor.spawn({
+            initiateSpawn: (launch) => {
+              const owner = handlers;
+              const current = owner.getJob ? owner.getJob(job.id) : slot.job;
+              if (
+                !owns() ||
+                slot.cancelled ||
+                !current ||
+                !isWatchableExitJob(current, owner.getDefaultAgentId?.()) ||
+                current.schedule.command !== command ||
+                current.schedule.cwd !== cwd
+              ) {
+                throw new Error("cron on-exit watcher no longer owns this launch");
+              }
+              assertCronHumanOwner(current);
+              return launch();
+            },
             scopeKey: scopeKey(job.id),
             replaceExistingScope: true,
             mode: "child",
@@ -279,6 +300,17 @@ export function createCronExitWatchers(
           // Startup can reject after native launch without returning a run.
           // Its pre-registered scope still owns that cleanup before any retry.
           await closeScope();
+          if (err instanceof CronHumanOwnerUnavailableError && !err.retryable) {
+            if (owns() && !slot.cancelled) {
+              handlers.logger.warn(
+                { jobId: job.id, err: err.message },
+                "cron-exit: owner unavailable",
+              );
+              await persistWatcherState({ lastError: err.message });
+              slot.ownerBlocked = true;
+            }
+            return;
+          }
           // Keep the slot reserved as the retry placeholder; scheduleRetry re-arms
           // with backoff so a transient supervisor failure cannot silently drop
           // the watch (the job would otherwise never fire with no recorded cause).
@@ -442,7 +474,12 @@ export function createCronExitWatchers(
         const { command, cwd } = job.schedule;
         // Completion persists disabled before firing, so an enabled job after
         // that point is a new arm, even while the previous payload is settling.
-        if (!slot.fired && slot.command === command && slot.cwd === cwd) {
+        if (
+          !slot.fired &&
+          slot.command === command &&
+          slot.cwd === cwd &&
+          (slot.run !== undefined || slot.job.ownerProfileId === job.ownerProfileId)
+        ) {
           slot.job = job;
           continue;
         }
@@ -475,7 +512,7 @@ export function createCronExitWatchers(
       Array.from(
         new Set([
           ...Array.from(active.entries())
-            .filter(([, slot]) => !slot.fired)
+            .filter(([, slot]) => !slot.fired && !slot.ownerBlocked)
             .map(([jobId]) => jobId),
           ...Array.from(settlingSlots, (slot) => slot.job.id),
         ]),

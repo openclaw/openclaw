@@ -268,6 +268,7 @@ export function createSandboxPersistentExecOwner(params: { scheduler: GatewaySch
       argv: readonly string[];
       cwd?: string;
       assertCurrent: () => void;
+      assertLaunch?: () => void;
       signal: AbortSignal;
       onOutput: (stream: "stdout" | "stderr", chunk: Buffer) => void | Promise<void>;
       releaseAuthority: () => void;
@@ -500,7 +501,7 @@ export function createSandboxPersistentExecOwner(params: { scheduler: GatewaySch
             ),
           );
           assertCurrent();
-        });
+        }, input.assertLaunch);
         assertCurrent();
         input.signal.addEventListener("abort", onAbort, { once: true });
         assertCurrent();

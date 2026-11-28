@@ -1,9 +1,11 @@
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { awaitGateBeforeSettlement, createDeferred } from "../../test/helpers/promise.js";
+import { ensureProfileForEmail } from "../state/user-profiles.js";
 import {
   createGatewaySchedulerClock,
   createTestGatewayScheduler,
 } from "../test-utils/gateway-scheduler-clock.js";
+import { createOpenClawTestState } from "../test-utils/openclaw-test-state.js";
 import {
   readCronRunRecordsForTests,
   readCronRunHistoryPageForTests,
@@ -29,7 +31,7 @@ const { logger, makeStorePath } = setupCronServiceSuite({
 
 const cleanups: Array<() => Promise<void>> = [];
 afterEach(async () => {
-  for (const cleanup of cleanups.splice(0)) {
+  for (const cleanup of cleanups.splice(0).toReversed()) {
     await cleanup();
   }
 });
@@ -86,12 +88,19 @@ describe("ordinary session agent turns", () => {
   it.each(["isolated", "main", "session:agent:main:project:inbox"] as const)(
     "requires fresh authority after a human transfer on %s, including a transfer back",
     async (sessionTarget) => {
+      const profiles = await createOpenClawTestState({
+        scenario: "minimal",
+        prepareProfileCatalog: true,
+      });
+      cleanups.push(() => profiles.cleanup());
+      const alice = ensureProfileForEmail("alice@example.test");
+      const bob = ensureProfileForEmail("bob@example.test");
       const { cron, storePath, run } = await service();
       await cron.start();
       const job = await cron.add(jobInput({ enabled: false, sessionTarget }), {
-        createdActor: { type: "human", source: "profile", id: "alice" },
+        createdActor: { type: "human", source: "profile", id: alice.id },
       });
-      for (const ownerProfileId of ["bob", "alice"]) {
+      for (const ownerProfileId of [bob.id, alice.id]) {
         await cron.update(job.id, { ownerProfileId });
         await cron.run(job.id, "force");
         expect(run).not.toHaveBeenCalled();

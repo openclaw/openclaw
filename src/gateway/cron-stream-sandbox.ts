@@ -66,6 +66,7 @@ export function createCronStreamSandboxExecutor(params: {
         argv: job.schedule.command,
         cwd: job.schedule.cwd ?? authority.sandbox.containerWorkdir,
         assertCurrent: authority.assertCurrent,
+        assertLaunch: input.assertLaunch,
         signal: authority.signal,
         onOutput: input.onOutput,
         releaseAuthority: authority.release,

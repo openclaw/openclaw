@@ -3,7 +3,11 @@ import { resolveSystemEventQueueKey } from "../../infra/system-event-ownership.j
 import { isCronWithinActiveHours } from "../active-hours.js";
 import { isCronActiveJobMarkerCurrent } from "../active-jobs.js";
 import { tryResolveCronJobEffectiveAgentId } from "../agent-id.js";
-import { resolveCronOwnerTransferRecoveryError } from "../human-owner.js";
+import {
+  assertCronHumanOwner,
+  CronHumanOwnerUnavailableError,
+  resolveCronOwnerTransferRecoveryError,
+} from "../human-owner.js";
 import { cronOperatorSourceRefusal } from "../operator-source-error.js";
 import { readDefaultProactiveJobReceiptsByKeyAsync } from "../proactive-job-receipt.js";
 import { isProactiveJobMigrationPending } from "../proactive-job-receipt.kernel.js";
@@ -253,6 +257,23 @@ export async function executeJobCore(
       ) {
         return { status: "skipped", error: "stream batch source no longer current" };
       }
+    }
+    try {
+      assertCronHumanOwner(job);
+    } catch (error) {
+      if (!(error instanceof CronHumanOwnerUnavailableError)) {
+        throw error;
+      }
+      return {
+        status: "error",
+        error: error.message,
+        executionStarted: false,
+        ...(error.retryable ? { errorClassification: { kind: "transient-preflight" } } : {}),
+        failureNotificationDetail: {
+          kind: "human-owner-unavailable",
+          catalogUnavailable: error.retryable,
+        },
+      };
     }
     // One admission per occurrence, shared by its trigger and payload executors.
     occurrence = await admitCronOccurrence(state, job, agentId);

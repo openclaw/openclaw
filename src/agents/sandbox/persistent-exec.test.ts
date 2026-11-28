@@ -134,7 +134,10 @@ async function fixture() {
   const exited = createDeferredCore<SandboxPersistentExecStopped>();
   const preparation = {
     receipt,
-    start: vi.fn<SandboxPersistentExecPreparation["start"]>(async (admit) => await admit()),
+    start: vi.fn<SandboxPersistentExecPreparation["start"]>(async (admit, assertLaunch) => {
+      await admit();
+      assertLaunch?.();
+    }),
     checkCurrent: vi.fn<SandboxPersistentExecPreparation["checkCurrent"]>(async () => {}),
     stopped: exited.promise,
     stop: vi.fn<SandboxPersistentExecPreparation["stop"]>(async () => stopped(receipt)),
@@ -603,6 +606,31 @@ it("retains uncertain stop custody and refuses a replacement until the same owne
   expect(stopDockerPersistentExec).not.toHaveBeenCalled();
   expect(withSettledLocalWorkspaceProjectionPath).toHaveBeenCalledOnce();
   expect(f.finalize).not.toHaveBeenCalled();
+});
+
+it("checks launch admission at START without retaining it for running custody", async () => {
+  let admitted = false;
+  const assertLaunch = () => {
+    if (!admitted) {
+      throw new Error("launch refused");
+    }
+    admitted = false;
+  };
+  await expect(f.start({ assertLaunch, releaseAuthority: () => {} })).rejects.toThrow(
+    "launch refused",
+  );
+  expect(await f.store.list()).toEqual([]);
+
+  admitted = true;
+  const run = await f.start({ assertLaunch });
+  try {
+    await f.clock.advanceBy(20_000);
+    expect(f.preparation.checkCurrent).toHaveBeenCalledOnce();
+    expect(run.activity?.resultSettled).toBe(false);
+  } finally {
+    run.cancel("manual-cancel");
+    await run.wait();
+  }
 });
 
 it.each(["source", "registry", "parent container"] as const)(

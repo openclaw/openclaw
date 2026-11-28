@@ -1,12 +1,12 @@
 import { StringDecoder } from "node:string_decoder";
 import { toErrorObject } from "@openclaw/normalization-core/error-coercion";
 import { resolveCronJobEffectiveAgentId } from "../cron/agent-id.js";
+import { CronHumanOwnerUnavailableError } from "../cron/human-owner.js";
 import { errorBackoffMs } from "../cron/service/jobs-scheduling.js";
 import { CronStreamSourceRetirementError, cronStreamScheduleKey } from "../cron/stream-schedule.js";
 import type { CronJobState } from "../cron/types.js";
 import { formatErrorMessage } from "../infra/errors.js";
 import type { GatewayScheduledJob, GatewaySchedulerScope } from "../infra/gateway-scheduler.js";
-import { markOpenClawExecEnv } from "../infra/openclaw-exec-env.js";
 import { isOperatorAuthorityUnavailable } from "../infra/operator-authority-error.js";
 import { type getSpawnBroker, runWithSpawnBroker } from "../process/spawn-broker/context.js";
 import type { ManagedRun } from "../process/supervisor/index.js";
@@ -31,6 +31,7 @@ import {
   CRON_STREAM_SOURCE_CHANGED,
   prepareCronStreamSourceAuthority,
 } from "./cron-stream-source-authority.js";
+import { spawnCronStreamSource } from "./cron-stream-source-launch.js";
 import {
   assertCronStreamExtinction,
   observeCronStreamRun,
@@ -397,40 +398,23 @@ export class CronStreamJobOwner {
 
     let run: ManagedRun;
     try {
-      const assertCurrent = () => {
-        if (!isCurrent()) {
-          throw new Error("Stream source admission is no longer current.");
-        }
-      };
-      if (this.job.streamSandbox) {
-        if (!this.params.spawnSandboxSource) {
-          throw new Error("Sandbox stream execution is unavailable; no host process was started.");
-        }
-        run = await this.params.spawnSandboxSource({
-          job: this.job,
-          assertCurrent,
-          signal: this.scheduler.signal,
-          onOutput,
-        });
-      } else {
-        const supervisor = this.params.getProcessSupervisor();
-        this.cleanupHostScope ??= supervisor.acquireScopeCleanup(jobScopeKey(this.job.id), {
-          processTree: "owned-only",
-        });
-        run = await supervisor.spawn({
-          assertCurrent,
-          scopeKey: jobScopeKey(this.job.id),
-          replaceExistingScope: true,
-          mode: "child",
-          argv: this.job.schedule.command,
-          ...(this.job.schedule.cwd ? { cwd: this.job.schedule.cwd } : {}),
-          env: markOpenClawExecEnv({ ...process.env }),
-          stdinMode: "pipe-closed",
-          captureOutput: false,
-          onStdout: (chunk) => this.output.enqueueChunk("stdout", chunk, outputSignal),
-          onStderr: (chunk) => this.output.enqueueChunk("stderr", chunk, outputSignal),
-        });
-      }
+      run = await spawnCronStreamSource({
+        job: this.job,
+        scheduleKey: this.scheduleKey,
+        sourceIdentity: this.sourceIdentity,
+        owner: this.params,
+        signal: this.scheduler.signal,
+        isCurrent,
+        onSandboxOutput: onOutput,
+        onHostOutput: (channel, chunk) => this.output.enqueueChunk(channel, chunk, outputSignal),
+        acquireHostSupervisor: () => {
+          const supervisor = this.params.getProcessSupervisor();
+          this.cleanupHostScope ??= supervisor.acquireScopeCleanup(jobScopeKey(this.job.id), {
+            processTree: "owned-only",
+          });
+          return supervisor;
+        },
+      });
     } catch (error) {
       try {
         await this.releaseHostScope();
@@ -441,7 +425,10 @@ export class CronStreamJobOwner {
           toErrorObject(cleanupError, "stream source startup cleanup is unconfirmed"),
         );
       }
-      if (isOperatorAuthorityUnavailable(error)) {
+      if (
+        isOperatorAuthorityUnavailable(error) ||
+        (error instanceof CronHumanOwnerUnavailableError && error.retryable)
+      ) {
         sourceAuthority.release();
         this.state = "backoff";
         void this.scheduleRestart(
@@ -451,6 +438,15 @@ export class CronStreamJobOwner {
       }
       if (!isCurrent()) {
         this.state = "stopped";
+        return;
+      }
+      if (error instanceof CronHumanOwnerUnavailableError) {
+        sourceAuthority.release();
+        this.sourceAuthority = undefined;
+        this.output.cancelMatching();
+        this.desiredRunning = false;
+        this.state = "stopped";
+        await this.persistState({ streamStatus: "error", streamError: error.message });
         return;
       }
       await this.recoverSource(`stream source failed to start: ${String(error)}`);

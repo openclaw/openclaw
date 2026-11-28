@@ -1,5 +1,36 @@
 import type { SessionCreatedActor } from "../config/sessions/session-entry-provenance.js";
+import { type OperatorRefusalCause, operatorRefusalText } from "../gateway/operator-refusal.js";
+import { readResidentUserProfileId } from "../state/user-profile-list.js";
 import type { CronStoredJob } from "./types.js";
+
+export class CronHumanOwnerUnavailableError extends Error {
+  constructor(
+    cause: OperatorRefusalCause,
+    readonly retryable = false,
+  ) {
+    super(operatorRefusalText(cause, "run this automation"));
+  }
+}
+
+export function assertCronHumanOwner(
+  job: Pick<CronStoredJob, "ownerProfileId" | "createdActor">,
+): void {
+  if (!job.ownerProfileId) {
+    if (job.createdActor?.type === "human" && job.createdActor.source === "profile") {
+      throw new CronHumanOwnerUnavailableError("automation-owner-unrecorded");
+    }
+    return;
+  }
+  let ownerId: string | undefined;
+  try {
+    ownerId = readResidentUserProfileId(job.ownerProfileId);
+  } catch {
+    throw new CronHumanOwnerUnavailableError("automation-owner-catalog-unavailable", true);
+  }
+  if (!ownerId) {
+    throw new CronHumanOwnerUnavailableError("automation-owner-removed");
+  }
+}
 
 /** Legacy jobs keep their execution semantics until their human owner changes. */
 export function hasTransferredCronOwner(

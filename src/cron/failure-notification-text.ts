@@ -84,6 +84,13 @@ export function cronFailureDetailLines(
     // Failed runs pause with their own notice; an aborted run keeps the detail for its alert.
     return ["Cause: the account this automation runs on was removed, signed out or replaced."];
   }
+  if (failureNotificationDetail.kind === "human-owner-unavailable") {
+    return failureNotificationDetail.catalogUnavailable
+      ? [
+          "The Gateway could not check the automation's owner. Wait until the Gateway is ready and try again.",
+        ]
+      : ["Ask an administrator to review the owner on the Automations page."];
+  }
   if (failureNotificationDetail.kind === "invalid-target") {
     return [
       "Cause: invalid automation target. Update agentId or sessionTarget before re-enabling.",

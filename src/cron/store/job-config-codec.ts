@@ -103,19 +103,11 @@ export function decodeStoredCronJobConfig(
   const schedule = isRecord(jobJson.schedule) ? jobJson.schedule : undefined;
   const payload = isRecord(jobJson.payload) ? jobJson.payload : undefined;
   const streamSandbox = parseCronStreamSandboxTarget(jobJson.streamSandbox);
-  // Older stores retained the trusted human creator before management ownership was explicit.
-  const actor = isRecord(jobJson.createdActor) ? jobJson.createdActor : undefined;
-  const ownerProfileId =
-    jobJson.ownerProfileId ??
-    (actor?.type === "human" && actor.source === "profile" && typeof actor.id === "string"
-      ? actor.id
-      : undefined);
   return {
     ...decodeDeliveryConfig(jobJson),
     ...(jobJson.streamOperatorSource !== undefined
       ? { streamOperatorSource: decodeCronStreamOperatorSource(jobJson.streamOperatorSource) }
       : {}),
-    ...(ownerProfileId ? { ownerProfileId } : {}),
     ...(schedule?.kind === "sandbox-stream" && streamSandbox
       ? { schedule: { ...schedule, kind: "stream" }, streamSandbox }
       : {}),
@@ -133,4 +125,22 @@ export function decodeStoredCronJobConfig(
         }
       : {}),
   };
+}
+
+/** Keep legacy creator authority in the runtime projection until Doctor persists the owner. */
+export function decodeRuntimeCronJobConfig(
+  jobJson: Record<string, unknown>,
+): Record<string, unknown> {
+  const config = decodeStoredCronJobConfig(jobJson);
+  const actor = isRecord(config.createdActor) ? config.createdActor : undefined;
+  if (
+    config.ownerProfileId == null &&
+    actor?.type === "human" &&
+    actor.source === "profile" &&
+    typeof actor.id === "string" &&
+    actor.id.trim()
+  ) {
+    config.ownerProfileId = actor.id;
+  }
+  return config;
 }

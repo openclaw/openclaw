@@ -62,6 +62,20 @@ const refusalCauses = {
     nextStep:
       "Select an authorized stored account with `openclaw automations edit <jobId> --model <provider/model>@<account>`, or use a configured provider key. For eligible host-managed accounts, `openclaw doctor --fix` can record the account.",
   },
+  "automation-owner-unrecorded": {
+    why: "The automation's human owner is not recorded.",
+    nextStep:
+      "Run openclaw doctor --fix, or ask an administrator to select an owner on the Automations page.",
+  },
+  "automation-owner-catalog-unavailable": {
+    why: "The automation's human owner could not be checked because the profile catalog is not ready.",
+    nextStep: "Retry when the Gateway is ready.",
+  },
+  "automation-owner-removed": {
+    why: "The automation's human owner no longer exists.",
+    nextStep:
+      "Ask an administrator to select a new owner on the Automations page before running it again.",
+  },
   "workspace-not-owned": {
     why: "Only the person who started this conversation or an administrator can restore its workspace.",
     nextStep: "Ask an administrator to restore this workspace, or start a new conversation.",

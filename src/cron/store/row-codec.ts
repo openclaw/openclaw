@@ -29,7 +29,7 @@ import {
   decodeCronJobConfig as decodeDeliveryConfig,
 } from "./delivery-codec.js";
 import {
-  decodeStoredCronJobConfig,
+  decodeRuntimeCronJobConfig,
   resolveCronJobGrantDefinitionRevision,
   stripJobRuntimeFields,
 } from "./job-config-codec.js";
@@ -150,7 +150,7 @@ export function rowToCronJob(
     toolsAllowExecTarget: _rawToolsAllowExecTarget,
     toolsAllowExecTargetRequirement: _rawToolsAllowExecTargetRequirement,
     ...runtimeConfig
-  } = decodeStoredCronJobConfig(jobJson);
+  } = decodeRuntimeCronJobConfig(jobJson);
   const payload = isRecord(runtimeConfig.payload) ? runtimeConfig.payload : undefined;
   const toolsAllow = Array.isArray(payload?.toolsAllow)
     ? payload.toolsAllow.filter((tool): tool is string => typeof tool === "string")

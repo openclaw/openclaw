@@ -130,6 +130,52 @@ async function readPersistedJobs(): Promise<StoredJob[]> {
   return (await loadCronStore(storePath)).jobs as unknown as StoredJob[];
 }
 
+it("persists legacy owners without changing enabled state or transferred ownership", async () => {
+  const createdActor = { type: "human", source: "profile", id: "profile-creator" };
+  const payload = { kind: "agentTurn", message: "Morning brief", toolsAllow: ["message"] };
+  const runtimeAuthority = {
+    version: 1,
+    runtimeId: "codex",
+    namespace: "codex.apps",
+    payload: { apps: [{ id: "calendar" }] },
+  };
+  const retained = { createdActor, payload, runtimeAuthority };
+  await writeCurrentCronStore([
+    createCurrentCronJob({ ...retained, id: "legacy-owner" }),
+    createCurrentCronJob({ ...retained, id: "paused", enabled: false }),
+    createCurrentCronJob({ ...retained, id: "transferred", ownerProfileId: "profile-recipient" }),
+    createCurrentCronJob({
+      id: "incomplete-attribution",
+      createdActor: { ...createdActor, id: "" },
+      payload,
+    }),
+  ]);
+
+  await repairCronStore();
+
+  const { configJobs, store } = await loadCronJobsStoreWithConfigJobs(storePath);
+  expect(configJobs).toContainEqual(
+    expect.objectContaining({ id: "incomplete-attribution", enabled: false, payload }),
+  );
+  for (const [id, ownerProfileId] of [
+    ["legacy-owner", "profile-creator"],
+    ["paused", "profile-creator"],
+    ["transferred", "profile-recipient"],
+  ]) {
+    expect(configJobs.find((job) => job.id === id)).toMatchObject({
+      ownerProfileId,
+      payload,
+      enabled: id !== "paused",
+    });
+    expect(store.jobs.find((job) => job.id === id)).toMatchObject({ runtimeAuthority });
+  }
+  expectNoteContaining("Saved pre-repair cron backup", "Doctor changes");
+  expectNoteContaining("Paused automation incomplete-attribution", "Doctor warnings");
+  const repeat = makePrompter();
+  await repairCronStore(repeat);
+  expect(repeat.confirm).not.toHaveBeenCalled();
+});
+
 function requirePersistedJob(jobs: StoredJob[], index: number) {
   const job = jobs[index];
   if (!job) {

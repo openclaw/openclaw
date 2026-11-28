@@ -18,7 +18,6 @@ import { createOperatorRecoveryFixture } from "../../gateway/operator-run-recove
 import type { GatewayCronCreatorAuthorityAdmission } from "../../gateway/server-methods/cron-creator-authority-admission.js";
 import {
   admission,
-  CREATOR,
   cron as creatorCron,
   createCronFixture,
   inRun,
@@ -35,6 +34,7 @@ import {
   withPluginRuntimeGatewayRequestScope,
 } from "../../plugins/runtime/gateway-request-scope.js";
 import { getPluginToolMeta } from "../../plugins/tool-metadata.js";
+import { prepareUserProfileCatalog } from "../../state/user-profile-list.js";
 import { ensureProfileForEmail } from "../../state/user-profiles.js";
 import { createGatewaySchedulerClock } from "../../test-utils/gateway-scheduler-clock.js";
 import { admitScheduledOccurrence } from "../execution-context-admission.js";
@@ -58,7 +58,15 @@ const session = await vi.importActual<typeof import("./session.js")>("./session.
 const accessor = await vi.importActual<typeof import("../../config/sessions/session-accessor.js")>(
   "../../config/sessions/session-accessor.js",
 );
-installRequesterCronAuthorityTestHooks();
+function requesterActor() {
+  return {
+    type: "human",
+    source: "profile",
+    id: ensureProfileForEmail("bind-requester@example.test").id,
+  } as const;
+}
+
+installRequesterCronAuthorityTestHooks(requesterActor);
 
 const DEVICE: PairedDevice = {
   deviceId: "control-ui-device",
@@ -121,7 +129,7 @@ async function seedKeyOnlyJob(
       delivery: { mode: "none" },
     },
     {
-      createdActor: CREATOR,
+      createdActor: requesterActor(),
       scheduledToolPolicy: createAccountCronScheduledToolPolicy({
         ownerSessionKey: parentSessionKey,
         ownerAccountId: "default",
@@ -260,6 +268,7 @@ it.each([
   const { context } = fixture;
   context.resolveGatewayContext = () => context;
   const profile = ensureProfileForEmail("bind-operator@example.test");
+  using _ = { [Symbol.dispose]: (await prepareUserProfileCatalog()).release };
   const recovery = await createOperatorRecoveryFixture({
     stateDir,
     context,
@@ -325,7 +334,7 @@ it.each([
     "stored automation",
   );
   // Binding never rewrites the job's requester attribution, agent, or tool policy.
-  expect(job.createdActor).toEqual(CREATOR);
+  expect(job.createdActor).toEqual(requesterActor());
   expect(job.agentId).toBe(seeded.agentId);
   expect(job.scheduledToolPolicy).toEqual(seeded.scheduledToolPolicy);
   if (scenario === "unbound") {
@@ -365,6 +374,17 @@ it.each([
     expect(runEmbeddedAgentMock).not.toHaveBeenCalled();
     return;
   }
+  if (scenario === "channel owner binds") {
+    config.gateway = {
+      ...config.gateway,
+      roles: {
+        default: "member",
+        definitions: {
+          member: { scopes: ["operator.write"], agents: "*", sessions: { others: "write" } },
+        },
+      },
+    };
+  }
   const occurrence = await runOccurrence(config, job, context as never);
   expect(occurrence.runRowParent).toEqual(occurrence.memoryParent);
   if (scenario === "unbound") {
@@ -375,8 +395,7 @@ it.each([
     expect(occurrence.operatorAdmitted).toBe(true);
     expect(occurrence.memoryParent).toMatchObject({ sessionKey: SESSION, senderIsOwner: true });
   } else {
-    // The stored profile requester still decides owner status; the fixture's
-    // attributed profile is not resident, so the bound child is not the owner.
+    // Binding does not promote the automation's member requester to an owner.
     expect(occurrence.operatorAdmitted).toBe(false);
     expect(occurrence.memoryParent).toMatchObject({ sessionKey: SESSION, senderIsOwner: false });
   }

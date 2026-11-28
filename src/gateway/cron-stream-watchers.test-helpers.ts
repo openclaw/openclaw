@@ -70,6 +70,7 @@ export function fakeSupervisor() {
   const exits: Array<(result: RunExit) => void> = [];
   const spawn = vi.fn(async (input: SpawnInput) => {
     inputs.push(input);
+    input.initiateSpawn?.(() => {});
     const activity = { resultSettled: false, lastOutputAtMs: Date.now() };
     const wait = createDeferred<RunExit>();
     const resolveWait = (result: RunExit) => {

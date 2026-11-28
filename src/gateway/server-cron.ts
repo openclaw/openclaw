@@ -618,6 +618,7 @@ export function buildGatewayCronService(params: {
 
   const exitWatcherHandlers = {
     getDefaultAgentId: () => cron.getDefaultAgentId(),
+    getJob: (id) => cron.getJob(id),
     getProcessSupervisor,
     fireOnExit: async (job, exit, controls) => {
       // Reload adopts children before draining the previous scheduler. Its
@@ -696,17 +697,15 @@ export function buildGatewayCronService(params: {
     hostExecutionDisabled,
     resolveGatewayContext: scheduledGatewayContextResolver,
     getDefaultAgentId: () => cron.getDefaultAgentId(),
+    getJob: (id) => cron.getJob(id),
     scheduler: params.scheduler,
     getProcessSupervisor,
     spawnSandboxSource: async (input) => (await getSandboxStreams()).spawn(input),
-    updateState: async (jobId, patch, streamScheduleKey, streamSourceIdentity) => {
-      return await cron.updateExternalState(jobId, streamScheduleKey, streamSourceIdentity, patch);
-    },
+    updateState: (jobId, patch, streamScheduleKey, streamSourceIdentity) =>
+      cron.updateExternalState(jobId, streamScheduleKey, streamSourceIdentity, patch),
     retireSource: async (jobId, streamScheduleKey, streamSourceIdentity) =>
       await cron.retireExternalStreamSource(jobId, streamScheduleKey, streamSourceIdentity),
-    updateCounters: async (jobId, counters) => {
-      await cron.updateExternalCounters(jobId, counters);
-    },
+    updateCounters: (jobId, counters) => cron.updateExternalCounters(jobId, counters),
     recordFailure: async (jobId, error, patch, streamScheduleKey, streamSourceIdentity) => {
       await cron.recordExternalFailure(jobId, error, patch, {
         scheduleKey: streamScheduleKey,

@@ -129,6 +129,9 @@ export function holdsFailureNotificationForRetry(
   result: { error?: string; failureNotificationDetail?: CronFailureNotificationDetail },
   category: CronRetryOn | undefined,
 ): boolean {
+  if (result.failureNotificationDetail?.kind === "human-owner-unavailable") {
+    return result.failureNotificationDetail.catalogUnavailable;
+  }
   if (category === undefined || result.failureNotificationDetail?.kind === "script-failure") {
     return false;
   }
@@ -160,7 +163,8 @@ export function resolveTransientCronRetryDecision(params: {
     };
   }
   const retryHint =
-    params.errorClassification?.kind === "session-conflict"
+    params.errorClassification?.kind === "session-conflict" ||
+    params.errorClassification?.kind === "transient-preflight"
       ? { retryable: params.executionStarted !== true, category: undefined }
       : resolveCronExecutionRetryHint({
           error: params.error,

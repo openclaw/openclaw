@@ -80,6 +80,7 @@ export type ResolvedFailureAlert = CronFailureAlertRoute & {
 
 type CronFailureAlertNotification = {
   kind: "failure-alert";
+  plainOnly?: true;
   job: CronNotificationJob;
   payload: ReplyPayload;
   runAtMs?: number;

@@ -46,6 +46,7 @@ import { getPluginToolMeta } from "../../plugins/tool-metadata.js";
 import { withSessionTurn } from "../../sessions/session-controller.admission.js";
 import { createDeferredCore } from "../../shared/deferred.js";
 import { runOpenClawStateWriteTransaction } from "../../state/openclaw-state-db.js";
+import { prepareUserProfileCatalog } from "../../state/user-profile-list.js";
 import { setCanonicalUserProfileRole } from "../../state/user-profile-writes.js";
 import { ensureProfileForEmail } from "../../state/user-profiles.js";
 import { createGatewaySchedulerClock } from "../../test-utils/gateway-scheduler-clock.js";
@@ -202,6 +203,7 @@ it.each([
   if (realPrincipal || rolePolicySource) {
     await setCanonicalUserProfileRole(profile.id, "writer");
   }
+  using _ = { [Symbol.dispose]: (await prepareUserProfileCatalog()).release };
   const { client, revokePersonPolicy } = prepareContinuationClient({
     config,
     context,

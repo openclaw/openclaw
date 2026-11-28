@@ -1,6 +1,9 @@
 import { describe, expect, it, vi } from "vitest";
 import { createCronRegressionState } from "../../../test/helpers/cron/service-regression-fixtures.js";
 import { runGatewayCronSessionEvent } from "../../gateway/server-cron-event-dispatch.js";
+import { ensureProfileForEmail } from "../../state/user-profiles.js";
+import { withOpenClawTestState } from "../../test-utils/openclaw-test-state.js";
+import { prepareUserProfileCatalogForTest } from "../../test-utils/user-profile-catalog.js";
 import { makeCronJob } from "../delivery.test-helpers.js";
 import { resolveCronRunErrorReason } from "../run-error-reason.js";
 import { TEST_SCHEDULED_OCCURRENCE } from "../scheduled-occurrence.test-support.js";
@@ -22,10 +25,15 @@ function makeJob(scheduleKind: "at" | "every") {
   });
 }
 
-async function executeAndApply(job: ReturnType<typeof makeJob>, deps: Partial<CronServiceDeps>) {
+async function executeAndApply(
+  job: ReturnType<typeof makeJob>,
+  deps: Partial<CronServiceDeps>,
+  attemptAt = startedAt,
+) {
+  const completedAt = attemptAt + (endedAt - startedAt);
   const state = createCronRegressionState({
     storePath: "/tmp/cron-retry-classification.json",
-    nowMs: () => endedAt,
+    nowMs: () => completedAt,
     runIsolatedAgentJob: vi.fn(async () => ({ status: "ok" as const })),
     ...deps,
   });
@@ -42,9 +50,9 @@ async function executeAndApply(job: ReturnType<typeof makeJob>, deps: Partial<Cr
         result.provider,
         result.errorClassification,
       ),
-      executionStarted: true,
-      startedAt,
-      endedAt,
+      executionStarted: result.executionStarted ?? true,
+      startedAt: attemptAt,
+      endedAt: completedAt,
     },
     { deferredNotifications },
   );
@@ -52,6 +60,50 @@ async function executeAndApply(job: ReturnType<typeof makeJob>, deps: Partial<Cr
 }
 
 describe("resolveTransientCronRetryDecision", () => {
+  it("emits only a plain alert when the automation's human owner is missing", async () => {
+    await withOpenClawTestState({ scenario: "minimal", prepareProfileCatalog: true }, async () => {
+      const job = makeJob("at");
+      job.ownerProfileId = "removed-profile";
+      job.owner = { sessionKey: "agent:main:owner" };
+      job.failureAlert = { after: 1 };
+      job.delivery = { mode: "announce", channel: "telegram", to: "synthetic-owner" };
+      const runIsolatedAgentJob = vi.fn(async () => ({ status: "ok" as const }));
+
+      const notices = await executeAndApply(job, { runIsolatedAgentJob });
+
+      expect(runIsolatedAgentJob).not.toHaveBeenCalled();
+      expect(notices).toMatchObject([
+        {
+          kind: "failure-alert",
+          plainOnly: true,
+          payload: { text: expect.stringContaining("Ask an administrator to review the owner") },
+        },
+      ]);
+    });
+  });
+
+  it("keeps a due one-shot pending until the profile catalog is ready", async () => {
+    await withOpenClawTestState({ scenario: "minimal" }, async () => {
+      const job = makeJob("at");
+      job.ownerProfileId = ensureProfileForEmail("scheduled-owner@example.test").id;
+      const runIsolatedAgentJob = vi.fn(async () => ({ status: "ok" as const }));
+
+      await executeAndApply(job, { runIsolatedAgentJob });
+
+      expect(runIsolatedAgentJob).not.toHaveBeenCalled();
+      expect(job.enabled).toBe(true);
+      const retryAt = job.state.nextRunAtMs!;
+      expect(retryAt).toBeGreaterThan(endedAt);
+
+      using _ = { [Symbol.dispose]: (await prepareUserProfileCatalogForTest()).release };
+      await executeAndApply(job, { runIsolatedAgentJob }, retryAt);
+
+      expect(runIsolatedAgentJob).toHaveBeenCalledOnce();
+      expect(job.state.lastRunStatus).toBe("ok");
+      expect(job.state.nextRunAtMs).toBeUndefined();
+    });
+  });
+
   it.each([false, true])(
     "ends an invalid-target one-shot, alerting only through a route (alert route: %s)",
     async (route) => {

@@ -12,10 +12,12 @@ import type {
   SpawnInput,
 } from "../process/supervisor/types.js";
 import { AsyncWorkScope, trackAsyncWork } from "../shared/async-work-scope.js";
+import { ensureProfileForEmail } from "../state/user-profiles.js";
 import {
   createGatewaySchedulerClock,
   createTestGatewayScheduler,
 } from "../test-utils/gateway-scheduler-clock.js";
+import { withOpenClawTestState } from "../test-utils/openclaw-test-state.js";
 import { resolveStreamStopReason } from "./cron-stream-watchers.js";
 import {
   createCronStreamWatcherFixture,
@@ -92,6 +94,44 @@ describe("cron stream watchers", () => {
     } finally {
       await watchers.stopAll("shutdown");
     }
+  });
+
+  it("withholds a stream source until its human owner is reassigned", async () => {
+    await withOpenClawTestState({ scenario: "minimal", prepareProfileCatalog: true }, async () => {
+      const missing = { ...job(), ownerProfileId: "removed-profile" };
+      const owner = ensureProfileForEmail("stream-owner@example.test");
+      const assigned = { ...missing, ownerProfileId: owner.id };
+      let current = assigned;
+      const { fake, updateState, watchers } = createCronStreamWatcherFixture({
+        getJob: () => current,
+      });
+      const spawn = fake.spawn.getMockImplementation()!;
+      fake.spawn.mockImplementationOnce((input) => {
+        current = missing;
+        return spawn(input);
+      });
+      try {
+        await watchers.start(assigned);
+        expect(fake.runs).toHaveLength(0);
+        expect(updateState).toHaveBeenLastCalledWith(
+          missing.id,
+          expect.objectContaining({
+            streamStatus: "error",
+            streamError: expect.stringContaining("human owner no longer exists"),
+          }),
+          expect.any(String),
+          expect.any(String),
+        );
+
+        current = assigned;
+        await watchers.start(current);
+        expect(watchers.inspect(missing.id)?.processAlive).toBe(true);
+        current = missing;
+        fake.inputs.at(-1)?.assertCurrent?.();
+      } finally {
+        await watchers.stopAll("shutdown");
+      }
+    });
   });
 
   it("marks a source stable once after a late scheduler wake", async () => {
