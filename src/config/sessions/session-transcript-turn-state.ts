@@ -88,11 +88,16 @@ export function buildExpectedTranscriptTurnSessionPatch(params: {
     }
   }
   const hasAppendedMessage = params.appendedMessages.some((message) => message.appended);
+  const hasVisibleAppendedMessage = params.appendedMessages.some(
+    (append) => append.appended && asOptionalRecord(append.message)?.display !== false,
+  );
   const acceptedMessage =
     hasAppendedMessage ||
     (params.expectedSessionState !== undefined &&
       params.appendedMessages.some((message) => !message.appended));
   const touchUpdatedAt = params.touchSessionEntry === true && hasAppendedMessage ? Date.now() : 0;
+  const touchActivityAt =
+    params.touchSessionEntry === true && hasVisibleAppendedMessage ? touchUpdatedAt : 0;
   return {
     ...(acceptedMessage ? params.sessionLifecyclePatch : undefined),
     ...(lastSubmittedModel &&
@@ -108,6 +113,13 @@ export function buildExpectedTranscriptTurnSessionPatch(params: {
             touchUpdatedAt,
           ),
         }
+      : {}),
+    // A visible fresh append is conversation activity, so its unread stamp must
+    // commit with the transcript instead of a second write that could fail after
+    // the transcript landed. Hidden bookkeeping (private completions, delivery
+    // mirrors) keeps the previous activity timestamp: it has no visible message.
+    ...(touchActivityAt > 0
+      ? { lastActivityAt: Math.max(params.currentEntry.lastActivityAt ?? 0, touchActivityAt) }
       : {}),
   };
 }

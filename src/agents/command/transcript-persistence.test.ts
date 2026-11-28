@@ -2,6 +2,7 @@ import path from "node:path";
 import { afterAll, expect, it } from "vitest";
 import {
   findTranscriptEvent,
+  loadSessionEntry,
   upsertSessionEntryCore,
 } from "../../config/sessions/session-accessor.js";
 import { useSessionStoreTempDirs } from "../../test-utils/session-state-cleanup.js";
@@ -73,6 +74,65 @@ it.each([
   expect(messages.at(-1)).toMatchObject(assistantMessage("Report received"));
   expect(messages.every((message) => Reflect.get(message, "display") === false)).toBe(true);
 });
+
+it.each(["CLI", "ACP"] as const)(
+  "keeps %s private completions out of unread activity",
+  async (runtime) => {
+    const common = await createSession("Review the worker result");
+    const settled = Date.now() - 60_000;
+    const baseline = { ...common.sessionEntry, updatedAt: settled, lastActivityAt: settled };
+    await upsertSessionEntryCore({ ...common, sessionEntry: baseline }, baseline);
+    const read = () =>
+      loadSessionEntry({
+        agentId: common.agentId,
+        sessionKey: common.sessionKey,
+        storePath: common.storePath,
+        readConsistency: "latest",
+      });
+    await persist(
+      runtime,
+      {
+        ...common,
+        sessionEntry: baseline,
+        sessionStore: { [common.sessionKey]: baseline },
+        privateCompletion: true,
+        inputProvenance: {
+          kind: "inter_session",
+          sourceTool: "subagent_settle",
+          sourceRole: "subagent",
+        },
+      },
+      "Report received",
+      true,
+    );
+    // The append still touches the entry, but a hidden completion is not activity.
+    expect(read()?.updatedAt).toBeGreaterThan(settled);
+    expect(read()?.lastActivityAt).toBe(settled);
+  },
+);
+
+it.each(["CLI", "ACP"] as const)(
+  "counts a visible %s transcript append as unread activity",
+  async (runtime) => {
+    const common = await createSession();
+    const settled = Date.now() - 60_000;
+    const baseline = { ...common.sessionEntry, updatedAt: settled, lastActivityAt: settled };
+    await upsertSessionEntryCore({ ...common, sessionEntry: baseline }, baseline);
+    await persist(
+      runtime,
+      { ...common, sessionEntry: baseline, sessionStore: { [common.sessionKey]: baseline } },
+      "Report received",
+    );
+    expect(
+      loadSessionEntry({
+        agentId: common.agentId,
+        sessionKey: common.sessionKey,
+        storePath: common.storePath,
+        readConsistency: "latest",
+      })?.lastActivityAt,
+    ).toBeGreaterThan(settled);
+  },
+);
 
 it.each(["CLI", "ACP"] as const)("recovers full %s answer after a later turn", async (runtime) => {
   const runId = `run-${runtime.toLowerCase()}-final`;
