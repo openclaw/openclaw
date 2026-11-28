@@ -26,6 +26,7 @@ type KernelSample = {
 export function createStallKernelRecorder(
   warn: (message: string) => void,
   packageRoot: string | null,
+  interruptStacks: boolean,
 ) {
   if (!isMainThread) {
     return undefined;
@@ -56,6 +57,7 @@ export function createStallKernelRecorder(
         heartbeat: heartbeat.buffer,
         port: port2,
         packageRoot,
+        interruptStacks,
         timeOrigin: performance.timeOrigin,
       },
       transferList: [port2],

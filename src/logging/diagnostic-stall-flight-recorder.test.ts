@@ -8,6 +8,7 @@ import { createStallFlightRecorder } from "./diagnostic-stall-flight-recorder.js
 
 const native = vi.hoisted(() => ({
   start: vi.fn(),
+  platform: "linux",
   versions: { node: "26.6.0", bun: undefined as string | undefined },
   conflict: vi.fn(() => false),
   mainThread: true,
@@ -19,6 +20,9 @@ vi.mock("node:v8", async (original) => ({
 }));
 vi.mock("node:process", async (original) => ({
   ...(await original<typeof import("node:process")>()),
+  get platform() {
+    return native.platform;
+  },
   versions: native.versions,
 }));
 vi.mock("node:worker_threads", async (original) => ({
@@ -45,6 +49,7 @@ afterEach(() => {
   vi.restoreAllMocks();
 });
 beforeEach(() => {
+  native.platform = "linux";
   native.start.mockReset();
   native.conflict.mockReset().mockReturnValue(false);
   native.versions.node = "26.6.0";
@@ -177,21 +182,44 @@ it.each([false, true])(
     }
   },
 );
-it("rotates without a sampling gap and reports only the recent stall's inclusive frames", () => {
-  const { recorder, handles, sampleAt } = fixture();
-  expect(sampleAt(5_000, null)).toBeUndefined();
-  expect(native.start.mock.invocationCallOrder[1]).toBeLessThan(
-    handles[0]!.stop.mock.invocationCallOrder[0]!,
-  );
-  const result = sampleAt(6_500);
-  expect(result).toContain('inclusive=[["work1@node:timers:10",2]]');
-  expect(result).toContain("samples=2 intervalMs=25 truncated=false");
-  expect(result).not.toContain("work0");
+it("keeps interrupted stack capture without starting a native profiler on macOS", () => {
+  native.platform = "darwin";
+  const { sampleAt, recorder, warn } = fixture();
+  expect(sampleAt(6_500)).toBeUndefined();
+  const hook = Symbol.for("openclaw.stallFlightRecorder.capture");
+  const captureStack: unknown = Reflect.get(globalThis, hook);
+  expect(typeof captureStack === "function" && captureStack()).toMatchObject({
+    windows: [],
+    stacks: [expect.objectContaining({ frames: expect.any(Array) })],
+  });
+  expect(native.kernel).toHaveBeenCalledWith(warn, expect.any(String), true);
   recorder.stop();
-  expect(handles[2]![Symbol.dispose]).toHaveBeenCalledOnce();
-  expect(sampleAt(12_000)).toBeUndefined();
-  expect(native.start).toHaveBeenCalledTimes(3);
+  expect(Reflect.has(globalThis, hook)).toBe(false);
+  expect(native.start).not.toHaveBeenCalled();
+  expect(warn).toHaveBeenCalledExactlyOnceWith(
+    "stall flight recorder using interrupted stacks: macos-native-profiler-deadlock-risk",
+  );
 });
+
+it.each(["linux", "win32"])(
+  "rotates without a sampling gap on %s and reports only the recent stall's inclusive frames",
+  (platform) => {
+    native.platform = platform;
+    const { recorder, handles, sampleAt } = fixture();
+    expect(sampleAt(5_000, null)).toBeUndefined();
+    expect(native.start.mock.invocationCallOrder[1]).toBeLessThan(
+      handles[0]!.stop.mock.invocationCallOrder[0]!,
+    );
+    const result = sampleAt(6_500);
+    expect(result).toContain('inclusive=[["work1@node:timers:10",2]]');
+    expect(result).toContain("samples=2 intervalMs=25 truncated=false");
+    expect(result).not.toContain("work0");
+    recorder.stop();
+    expect(handles[2]![Symbol.dispose]).toHaveBeenCalledOnce();
+    expect(sampleAt(12_000)).toBeUndefined();
+    expect(native.start).toHaveBeenCalledTimes(3);
+  },
+);
 
 function sampledProfile(start: number, end: number, samples: Array<{ at: number; name: string }>) {
   // Native profile timestamps have a different origin from performance.now().
@@ -225,7 +253,9 @@ function sampleWindow(earlier: number[], block: number[], later: number[]) {
   );
 }
 
-it.skipIf(typeof getBuiltinModule("v8").startCpuProfile !== "function")(
+it.skipIf(
+  process.platform === "darwin" || typeof getBuiltinModule("v8").startCpuProfile !== "function",
+)(
   "profiles a real 1,200 ms synchronous block without the unrelated work before its report",
   async () => {
     native.start.mockImplementation(getBuiltinModule("v8").startCpuProfile);
@@ -392,20 +422,21 @@ it.each(["runtime", "profiler", "worker"])(
   },
 );
 
-it.skipIf(Boolean(process.versions.bun) || Number(process.versions.node.split(".")[0]) >= 26)(
-  "reports the interrupted Node 24 CPU owner without running queued microtasks",
-  async () => {
-    const { stdout } = await promisify(execFile)(
-      process.execPath,
-      [
-        "--import",
-        import.meta.resolve("tsx"),
-        "--input-type=module",
-        "-e",
-        `
+it.skipIf(
+  Boolean(process.versions.bun) ||
+    (process.platform !== "darwin" && Number(process.versions.node.split(".")[0]) >= 26),
+)("reports the interrupted CPU owner without running queued microtasks", async () => {
+  const { stdout } = await promisify(execFile)(
+    process.execPath,
+    [
+      "--import",
+      import.meta.resolve("tsx"),
+      "--input-type=module",
+      "-e",
+      `
       import { createStallFlightRecorder } from ${JSON.stringify(new URL("./diagnostic-stall-flight-recorder.ts", import.meta.url).href)};
       import { stallCpuOwner } from ${JSON.stringify(new URL("./diagnostic-stall-cpu.test-support.ts", import.meta.url).href)};
-      const recorder = createStallFlightRecorder(message => { throw new Error(message); });
+      const recorder = createStallFlightRecorder(console.warn);
       try {
         await new Promise(resolve => setTimeout(resolve, 1000));
         let reentered = false;
@@ -416,18 +447,17 @@ it.skipIf(Boolean(process.versions.bun) || Number(process.versions.node.split(".
         console.log(JSON.stringify({reentered, report: recorder.sample({startedAt, endedAt})}));
       } finally { recorder.stop(); }
       `,
-      ],
-      { timeout: 12_000 },
-    );
-    const { reentered, report } = JSON.parse(stdout.trim());
-    expect(reentered).toBe(false);
-    expect(report).toContain("sampleMode=interrupt");
-    expect(report).toContain(
-      "stallCpuOwner@openclaw:src/logging/diagnostic-stall-cpu.test-support.ts",
-    );
-    expect(Buffer.byteLength(report)).toBeLessThanOrEqual(2_048);
-  },
-);
+    ],
+    { timeout: 12_000 },
+  );
+  const { reentered, report } = JSON.parse(stdout.trim());
+  expect(reentered).toBe(false);
+  expect(report).toContain("sampleMode=interrupt");
+  expect(report).toContain(
+    "stallCpuOwner@openclaw:src/logging/diagnostic-stall-cpu.test-support.ts",
+  );
+  expect(Buffer.byteLength(report)).toBeLessThanOrEqual(2_048);
+});
 
 it.skipIf(process.platform !== "linux" || Boolean(process.versions.bun))(
   "captures the main thread's live futex wait three times within the profile byte cap",

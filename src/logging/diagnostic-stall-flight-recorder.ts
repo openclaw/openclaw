@@ -1,5 +1,5 @@
 import { performance } from "node:perf_hooks";
-import { versions } from "node:process";
+import { platform, versions } from "node:process";
 import { getCallSites } from "node:util";
 import * as v8 from "node:v8";
 import { isMainThread } from "node:worker_threads";
@@ -22,11 +22,13 @@ export function createStallFlightRecorder(warn: (message: string) => void) {
   const packageRoot = isMainThread
     ? resolveOpenClawPackageRootSync({ moduleUrl: import.meta.url })
     : null;
-  const kernel = createStallKernelRecorder(warn, packageRoot);
+  const nativeRuntime = Number(versions.node.split(".")[0]) >= 26;
+  // SIGPROF can stall Darwin rwlocks used by Node MessagePorts (#181120).
+  const native = nativeRuntime && platform !== "darwin";
+  const kernel = createStallKernelRecorder(warn, packageRoot, !versions.bun && !native);
   let active: v8.SyncCPUProfileHandle | undefined;
   let previous: StallProfileWindow | undefined;
   let startedAt = 0;
-  const native = Number(versions.node.split(".")[0]) >= 26;
   let disabled = !isMainThread || Boolean(versions.bun);
   const captureSymbol = Symbol.for("openclaw.stallFlightRecorder.capture");
   const stopProfile = () => {
@@ -50,8 +52,7 @@ export function createStallFlightRecorder(warn: (message: string) => void) {
     }
     const captureStartedAt = performance.now();
     if (!native) {
-      // Node 24's native profiler ignores interval/buffer options. Interrupt only
-      // to snapshot the executing stack, without enabling a profiler or debugger.
+      // Snapshot the executing stack without enabling a profiler or a debugger listener.
       if (
         hasProfilerConflict() ||
         process.getBuiltinModule("inspector")?.url() ||
@@ -101,6 +102,8 @@ export function createStallFlightRecorder(warn: (message: string) => void) {
       if (native) {
         active = start();
         startedAt = performance.now();
+      } else if (nativeRuntime) {
+        warn("stall flight recorder using interrupted stacks: macos-native-profiler-deadlock-risk");
       }
       // Inspector interrupts capture bounded evidence while ordinary JS is stuck.
       // Parsing and output stay in the observer; no inspector listener is opened.

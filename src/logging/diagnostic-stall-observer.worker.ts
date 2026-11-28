@@ -8,11 +8,12 @@ import { extractErrorCode } from "@openclaw/normalization-core/error-coercion";
 import type { StallProfileSnapshot } from "./diagnostic-stall-profile.js";
 
 // SAFETY: createStallKernelRecorder is the sole launcher and owns this transferred payload.
-const { heartbeat, port, packageRoot, timeOrigin } = workerData as {
+const { heartbeat, port, packageRoot, timeOrigin, interruptStacks } = workerData as {
   heartbeat: SharedArrayBuffer;
   port: MessagePort;
   packageRoot: string | null;
   timeOrigin: number;
+  interruptStacks: boolean;
 };
 const clock = new BigInt64Array(heartbeat);
 // Bun workers have their own origin; compare every sample in the main thread's clock domain.
@@ -41,7 +42,6 @@ let nextKernelAt = 0;
 let nextReportAt = 0;
 let kernelPending = false;
 let reportPending = false;
-const interruptStacks = !process.versions.bun && Number(process.versions.node.split(".")[0]) < 26;
 let stackAttempts = 0;
 let stackPending = false;
 // Normal long stalls last tens of seconds; five minutes leaves ample recovery headroom.
@@ -146,7 +146,7 @@ async function reportStall(beat: bigint, at: number) {
       throw new Error("capture unavailable");
     }
     session.connectToMainThread();
-    // Rotate the bounded native recorder or capture the interrupted Node 24 stack.
+    // Rotate the bounded native recorder or capture the interrupted JavaScript stack.
     const { result, exceptionDetails } = await session.post("Runtime.evaluate", {
       expression: 'globalThis[Symbol.for("openclaw.stallFlightRecorder.capture")]?.()',
       returnByValue: true,

@@ -400,7 +400,7 @@ runners and PTY helper have fixed task labels; these measure
 the synchronous launch, not the child's running time. During active event-loop
 sampling on Node, Promise continuations retain their inherited code-owned task
 labels; their synchronous execution is measured without charging time awaiting I/O.
-On Node 26, a bounded CPU flight
+On Node 26 and later outside macOS, a bounded CPU flight
 recorder writes one additional bounded `main-thread stall profile` line with a
 stall interval's top inclusive frames, sample count, and truncation status.
 Several stalls can finish before reporting; only the longest interval is profiled.
@@ -416,7 +416,7 @@ appears as `[async task:...]`, distinct from a sampled call frame. Unnamed work
 remains unattributed. Lower-ranked entries are dropped first to keep each report within 2 KiB;
 `reportTruncated=true` identifies this log-size trimming.
 
-On Node 24, the observer instead captures up to three interrupted JavaScript
+On Node 24 and on macOS, the observer instead captures up to three interrupted JavaScript
 stacks, 250 ms apart, after 500 ms without a heartbeat. It opens no debugger
 listener and starts no CPU profiler. Each stack contains at most 16 frames,
 with bounded symbol/location lengths; at most three stack payloads can wait
@@ -425,7 +425,12 @@ for the main thread. Reports use `sampleMode=interrupt`, `truncated=true`, and
 Source maps and user-defined stack formatting hooks are not invoked. Native
 calls may defer inspector interrupts until unrelated JavaScript resumes;
 captures dispatched more than 100 ms late are discarded. Such calls can still
-produce kernel-only evidence.
+produce kernel-only evidence on Linux.
+
+On macOS, the Gateway avoids automatic native CPU profiling because its sampling
+signal can stall native read/write locks. On Node 26 and later, the recorder logs
+`macos-native-profiler-deadlock-risk` when it selects interrupted stacks instead.
+Callback attribution, event-loop health, and explicitly requested CPU profiles are unchanged.
 
 The recorder skips Bun and processes already started with conflicting
 profiling, tracing, or debugger options. Callback labels still work on those

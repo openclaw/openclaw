@@ -195,6 +195,7 @@ describe("createGatewayEventLoopHealthMonitor", () => {
     loggingState.rawConsole = { ...console, warn };
     try {
       const harness = createMonitorHarness();
+      warn.mockClear(); // Count stall warnings, not recorder startup diagnostics.
       harness.stall(1_200, false);
       await harness.samples(3);
       expect(harness.monitor.snapshot()?.delayMaxMs).toBeGreaterThanOrEqual(1_200);

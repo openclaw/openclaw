@@ -18,6 +18,7 @@ vi.mock("node:worker_threads", async (original) => ({
     heartbeat: observer.heartbeat.buffer,
     port: { postMessage: observer.message },
     packageRoot: null,
+    interruptStacks: true,
     timeOrigin: performance.timeOrigin,
   },
 }));
@@ -91,45 +92,41 @@ it.each([false, true, null])(
   },
 );
 
-it.skipIf(Boolean(process.versions.bun) || Number(process.versions.node.split(".")[0]) >= 26)(
-  "starts only after a missed heartbeat, bounds stacks, and rejects delayed captures",
-  async () => {
-    vi.resetModules();
-    vi.useFakeTimers();
-    vi.setSystemTime(1_000);
-    vi.spyOn(performance, "now").mockImplementation(() => Date.now());
-    observer.heartbeat.set([1_000n, 0n, 3n]);
-    observer.message.mockReset();
-    const stackMessages = () =>
-      observer.message.mock.calls.filter(([sample]) => "frames" in sample);
-    observer.connect.mockClear();
-    observer.post.mockReset();
-    let dispatchDelay = 101;
-    observer.post.mockImplementation(() =>
-      Promise.resolve({
-        result: { value: { stacks: [{ at: Date.now() + dispatchDelay, frames: [] }] } },
-      }),
-    );
-    await import("./diagnostic-stall-observer.worker.js");
-    for (let tick = 0; tick < 20; tick++) {
-      observer.heartbeat[0] = BigInt(Date.now());
-      await vi.advanceTimersByTimeAsync(250);
-    }
-    await vi.advanceTimersByTimeAsync(249);
-    expect(observer.connect).not.toHaveBeenCalled();
-    expect(observer.post).not.toHaveBeenCalled();
-    await vi.advanceTimersByTimeAsync(1);
-    expect(observer.connect).toHaveBeenCalledTimes(1);
-    await vi.advanceTimersByTimeAsync(1_000);
-    expect(stackMessages()).toHaveLength(0);
-    expect(observer.heartbeat[2]).toBe(3n);
-    dispatchDelay = 0;
+it("starts only after a missed heartbeat, bounds stacks, and rejects delayed captures", async () => {
+  vi.resetModules();
+  vi.useFakeTimers();
+  vi.setSystemTime(1_000);
+  vi.spyOn(performance, "now").mockImplementation(() => Date.now());
+  observer.heartbeat.set([1_000n, 0n, 3n]);
+  observer.message.mockReset();
+  const stackMessages = () => observer.message.mock.calls.filter(([sample]) => "frames" in sample);
+  observer.connect.mockClear();
+  observer.post.mockReset();
+  let dispatchDelay = 101;
+  observer.post.mockImplementation(() =>
+    Promise.resolve({
+      result: { value: { stacks: [{ at: Date.now() + dispatchDelay, frames: [] }] } },
+    }),
+  );
+  await import("./diagnostic-stall-observer.worker.js");
+  for (let tick = 0; tick < 20; tick++) {
     observer.heartbeat[0] = BigInt(Date.now());
-    await vi.advanceTimersByTimeAsync(1_250);
-    expect(stackMessages()).toHaveLength(3);
-    expect(observer.heartbeat[2]).toBe(0n);
-    observer.heartbeat[0] = BigInt(Date.now());
-    await vi.advanceTimersByTimeAsync(1_250);
-    expect(stackMessages()).toHaveLength(3);
-  },
-);
+    await vi.advanceTimersByTimeAsync(250);
+  }
+  await vi.advanceTimersByTimeAsync(249);
+  expect(observer.connect).not.toHaveBeenCalled();
+  expect(observer.post).not.toHaveBeenCalled();
+  await vi.advanceTimersByTimeAsync(1);
+  expect(observer.connect).toHaveBeenCalledTimes(1);
+  await vi.advanceTimersByTimeAsync(1_000);
+  expect(stackMessages()).toHaveLength(0);
+  expect(observer.heartbeat[2]).toBe(3n);
+  dispatchDelay = 0;
+  observer.heartbeat[0] = BigInt(Date.now());
+  await vi.advanceTimersByTimeAsync(1_250);
+  expect(stackMessages()).toHaveLength(3);
+  expect(observer.heartbeat[2]).toBe(0n);
+  observer.heartbeat[0] = BigInt(Date.now());
+  await vi.advanceTimersByTimeAsync(1_250);
+  expect(stackMessages()).toHaveLength(3);
+});
