@@ -449,6 +449,15 @@ export abstract class AgentSessionCompaction extends AgentSessionInspection {
     if (pendingEntryIndex >= 0 && (firstKeptIndex < 0 || firstKeptIndex > pendingEntryIndex)) {
       throw new Error("Compaction must retain the unprocessed pending user request.");
     }
+    // Manual compaction has no pending request, but an off-branch boundary would
+    // still replace the retained tail with only the summary.
+    if (firstKeptIndex < 0) {
+      throw new Error(
+        "Compaction must retain a boundary entry on the current branch: the session_before_compact " +
+          "hook returned a firstKeptEntryId that is not on it. Return the id of an entry from " +
+          "branchEntries and compact again.",
+      );
+    }
     if (
       requestBudget &&
       requestTokenLimit !== undefined &&
