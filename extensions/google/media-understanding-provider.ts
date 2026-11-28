@@ -22,6 +22,28 @@ import { normalizeGoogleModelId } from "./model-id.js";
 const DEFAULT_GOOGLE_AUDIO_PROMPT = "Transcribe the audio.";
 const DEFAULT_GOOGLE_VIDEO_PROMPT = "Describe the video.";
 
+type GeminiThinkingConfig = { thinkingLevel?: string; thinkingBudget?: number };
+
+// Maps tools.media providerOptions.google.{thinkingLevel,thinkingBudget} onto
+// generationConfig.thinkingConfig. Other keys are ignored.
+function resolveGeminiThinkingConfig(
+  query: AudioTranscriptionRequest["query"],
+): GeminiThinkingConfig | undefined {
+  const thinkingLevel =
+    typeof query?.thinkingLevel === "string" ? query.thinkingLevel.trim() : undefined;
+  const thinkingBudget =
+    typeof query?.thinkingBudget === "number" && Number.isFinite(query.thinkingBudget)
+      ? query.thinkingBudget
+      : undefined;
+  if (!thinkingLevel && thinkingBudget === undefined) {
+    return undefined;
+  }
+  return {
+    ...(thinkingLevel ? { thinkingLevel } : {}),
+    ...(thinkingBudget !== undefined ? { thinkingBudget } : {}),
+  };
+}
+
 async function generateGeminiInlineDataText(params: {
   buffer: Buffer;
   mime?: string;
@@ -31,6 +53,7 @@ async function generateGeminiInlineDataText(params: {
   request?: ProviderRequestTransportOverrides;
   model?: string;
   prompt?: string;
+  query?: AudioTranscriptionRequest["query"];
   timeoutMs: number;
   signal?: AbortSignal;
   fetchFn?: typeof fetch;
@@ -55,6 +78,7 @@ async function generateGeminiInlineDataText(params: {
   const url = `${baseUrl}/models/${model}:generateContent`;
 
   const prompt = params.prompt?.trim() || params.defaultPrompt;
+  const thinkingConfig = resolveGeminiThinkingConfig(params.query);
 
   const body = {
     contents: [
@@ -71,6 +95,7 @@ async function generateGeminiInlineDataText(params: {
         ],
       },
     ],
+    ...(thinkingConfig ? { generationConfig: { thinkingConfig } } : {}),
   };
 
   const { response: res, release } = await postJsonRequest({
