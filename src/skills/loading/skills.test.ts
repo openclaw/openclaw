@@ -445,4 +445,44 @@ describe("applySkillEnvOverrides", () => {
       );
     });
   });
+
+  it("injects operator-configured env keys that match credential-name patterns", () => {
+    // Regression for #31583: `skills.entries.<skill>.env` values whose names match the
+    // credential-suffix filter (e.g. GOG_KEYRING_PASSWORD) were silently dropped when the
+    // skill metadata did not also declare them via primaryEnv/requires.env, so CLI tools
+    // spawned by exec never received them.
+    withClearedEnv(["GOG_ACCOUNT", "GOG_KEYRING_PASSWORD"], () => {
+      checkOverrides(
+        applySkillEnvOverrides({
+          skills: envSkillEntries("gog", {}),
+          config: skillConfig("gog", {
+            env: {
+              GOG_ACCOUNT: "user@example.com",
+              GOG_KEYRING_PASSWORD: "keyring-pass", // pragma: allowlist secret
+            },
+          }),
+        }),
+        () => expectEnv({ GOG_ACCOUNT: "user@example.com", GOG_KEYRING_PASSWORD: "keyring-pass" }),
+        () => expectEnv({ GOG_ACCOUNT: undefined, GOG_KEYRING_PASSWORD: undefined }),
+      );
+    });
+  });
+
+  it("still blocks dangerous host env overrides configured via skills.entries env", () => {
+    withClearedEnv(["NODE_OPTIONS", "BASH_ENV"], () => {
+      checkOverrides(
+        applySkillEnvOverrides({
+          skills: envSkillEntries("unsafe-env-skill", {}),
+          config: skillConfig("unsafe-env-skill", {
+            env: {
+              NODE_OPTIONS: "--require /tmp/evil.js",
+              BASH_ENV: "/tmp/pwn.sh",
+            },
+          }),
+        }),
+        () => expectEnv({ NODE_OPTIONS: undefined, BASH_ENV: undefined }),
+        () => expectEnv({ NODE_OPTIONS: undefined, BASH_ENV: undefined }),
+      );
+    });
+  });
 });
