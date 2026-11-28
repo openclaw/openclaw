@@ -1,5 +1,6 @@
 import fs from "node:fs/promises";
 import path from "node:path";
+import { wakeUpdateRunWatcher } from "../gateway/update-run-watcher.js";
 import { hasErrnoCode } from "../infra/errno.js";
 import { servingGitReleaseSlot } from "../infra/git-release-paths.js";
 import { sendUpdateResultTelemetry } from "../infra/update-result-telemetry.js";
@@ -149,6 +150,9 @@ export async function recoverLegacyTrialRun(receipt: LegacyTrialReceipt): Promis
   });
   if (result?.updateResult) {
     void sendUpdateResultTelemetry(result.updateResult, { env: context.environment });
+  }
+  if (result?.run && !result.retry) {
+    wakeUpdateRunWatcher(result.run.runId);
   }
   return result !== undefined && !result.retry;
 }

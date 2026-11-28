@@ -200,11 +200,11 @@ export async function preflight(params: {
             );
             message = `'${ancestor}' is owned by ${account}; update as that user, or run sudo openclaw update.`;
           } else if (user.uid !== 0) {
-            const relative = path.relative(await fs.realpath(user.homedir), ancestor);
+            const home = await fs.realpath(user.homedir).catch(() => null);
+            const relative =
+              home && home !== path.parse(home).root && path.relative(home, ancestor);
             const outsideHome =
-              relative === ".." ||
-              relative.startsWith(`..${path.sep}`) ||
-              path.isAbsolute(relative);
+              !relative || relative === ".." || relative.startsWith(`..${path.sep}`);
             message = outsideHome
               ? `The installation at '${ancestor}' is owned by root. Run: sudo openclaw update`
               : `Files in '${ancestor}' are not writable by ${user.username}. Fix ownership with: sudo chown -R ${shellEscape(user.username)} ${shellEscape(ancestor)}. Then retry the update.`;

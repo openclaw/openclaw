@@ -564,7 +564,11 @@ describe("package release conversion", () => {
           channel: "stable",
           node,
         }),
-      ).toMatchObject({ status: "failed", reason: "package-not-writable" });
+      ).toMatchObject({
+        status: "failed",
+        reason: "package-not-writable",
+        message: `The global package at ${runningRoot} is not writable. Run the update as the user that owns it, or, if OpenClaw runs as a system service, run: sudo openclaw update`,
+      });
       expect(await fs.readdir(runningRoot)).toEqual([]);
       expect(await readTrial()).toBeNull();
     } finally {
@@ -938,10 +942,6 @@ describe("update preflight", () => {
     expect(
       await preflight({ ...params, statfs: async () => ({ bavail: 1, bsize: 1 }) }),
     ).toMatchObject({ ok: false, reason: "insufficient-install-space" });
-    await fs.mkdir(path.join(root, "data", "state"), { recursive: true });
-    const database = path.join(root, "data", "state", "openclaw.sqlite");
-    await fs.writeFile(database, "");
-    await fs.truncate(database, 3_000_000_000);
     expect(
       await preflight({
         ...params,

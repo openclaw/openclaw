@@ -252,11 +252,7 @@ The Gateway's `update.run` and `openclaw update` both use one path:
    work, and sends the result notice. Restored files alone do not prove that the
    previous Gateway is serving. Startup does not infer a failed update from PID
    reuse or uptime.
-7. After the result is recorded, the serving release runs advisory Doctor inspections
-   in the background. The same update details receive their results without a page
-   reload. Only warning and error findings add advice; inspections do not delay
-   completion, fail the update, or trigger rollback.
-8. Every Gateway boot updates installed plugins in the background after core
+7. Every Gateway boot updates installed plugins in the background after core
    readiness, then reloads changed plugins through the existing runtime lifecycle.
    A pending trial defers this work. The first plugin result and next command appear
    in matching update details while that plugin step is unsettled; later boots do
@@ -572,7 +568,7 @@ the original history entry unchanged with the healthy release still selected.
 
 The Gateway preserves existing repair acknowledgments, unrelated failures, and
 recovery records. It needs one matching publication receipt before it can record
-success and run advisory Doctor inspections. If the older
+success. If the older
 updater exits because it can't read the migrated schema, its exit status still
 reflects that refusal.
 
@@ -740,7 +736,7 @@ On Gateway startup, older supported database schemas advance through their
 canonical migration owners on the live databases under exclusive custody. Boot
 does not copy configuration into a private tree, run a Doctor chain, or publish
 replacement database files. Existing configuration reading and normalization
-stay with their canonical owners; advisory Doctor inspections run after readiness.
+stay with their canonical owners.
 
 If an earlier upgrade already broke a scheduled job, run `openclaw doctor --fix`.
 While the applied upgrade receipt remains, Doctor can verify the saved account at
