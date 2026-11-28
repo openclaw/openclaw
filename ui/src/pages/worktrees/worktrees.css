@@ -4,6 +4,7 @@
   gap: 0.35em;
 
   > span:first-child,
+  > .worktrees-branch,
   > .worktrees-session-owner {
     overflow: hidden;
     text-overflow: ellipsis;
@@ -14,7 +15,13 @@
     text-decoration: underline;
   }
 
+  > span:first-child {
+    flex: none;
+    max-inline-size: 25%;
+  }
+
   > .worktrees-updated {
     flex: none;
+    white-space: nowrap;
   }
 }

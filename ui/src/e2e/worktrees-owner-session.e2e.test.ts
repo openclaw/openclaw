@@ -69,8 +69,64 @@ suite.define(() => {
       const surface = page.locator("openclaw-worktrees-page");
       const frame = await takeControlUiScreenshotFrame(page, surface, [named], {
         animations: "disabled",
+        elements: [named],
       });
       await writeFile(path.join(suite.artifactDir, "after-clean.png"), frame.png);
+      await writeFile(
+        path.join(suite.artifactDir, "after-owner-bounds.json"),
+        JSON.stringify(frame.elements[0]?.bounds),
+      );
     });
+  });
+
+  it("keeps the time visible next to truncated worktree details in a narrow dark window", async () => {
+    const branchName = "worktree/release-cleanup-and-backward-compatibility-review";
+    const sessionName = "Prepare the release and review compatibility with older installations";
+    await suite.withPage(
+      { viewport: { width: 400, height: 850 }, colorScheme: "dark" },
+      async ({ page }) => {
+        await installMockGateway(page, {
+          methodResponses: {
+            "worktrees.list": { worktrees: [{ ...worktree, branch: branchName }] },
+            "worktrees.sessionOwners": {
+              sessions: [
+                {
+                  requestedKey: ownerKey,
+                  key: ownerKey,
+                  agentId: "main",
+                  displayName: sessionName,
+                },
+              ],
+            },
+          },
+        });
+        await page.goto(`${suite.server.baseUrl}worktrees`);
+        await page.locator('html[data-theme-mode="dark"]').waitFor({ state: "attached" });
+        const surface = page.locator("openclaw-worktrees-page");
+        const repository = surface.getByText("lobster", { exact: true });
+        const branch = surface.getByText(branchName, { exact: true });
+        const owner = surface.getByRole("link", { name: sessionName, exact: true });
+        const updated = surface.locator(".worktrees-updated");
+        const frame = await takeControlUiScreenshotFrame(page, surface, [branch, owner, updated], {
+          animations: "disabled",
+        });
+        for (const item of [branch, owner]) {
+          expect(await item.evaluate((element) => element.scrollWidth > element.clientWidth)).toBe(
+            true,
+          );
+        }
+        expect(
+          await repository.evaluate((element) => element.scrollWidth === element.clientWidth),
+        ).toBe(true);
+        expect(
+          await updated.evaluate((element) => {
+            const time = element.getBoundingClientRect();
+            const row = element.parentElement!.getBoundingClientRect();
+            return element.scrollWidth === element.clientWidth && time.right <= row.right + 1;
+          }),
+        ).toBe(true);
+        await writeFile(path.join(suite.artifactDir, "after-narrow-dark.png"), frame.png);
+      },
+    );
   });
 });

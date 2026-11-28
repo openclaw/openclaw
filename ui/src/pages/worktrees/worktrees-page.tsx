@@ -319,11 +319,11 @@ export function renderWorktreesView(model: WorktreesModel, view: () => Worktrees
                         title={record().name}
                         description={
                           <span class="worktrees-details">
-                            <span>
-                              <span title={record().repoRoot}>
-                                {pathDisplayName(record().repoRoot)}
-                              </span>
-                              {" · "}
+                            <span title={record().repoRoot}>
+                              {pathDisplayName(record().repoRoot)}
+                            </span>
+                            <span aria-hidden="true">·</span>
+                            <span class="worktrees-branch" title={record().branch}>
                               {record().branch}
                             </span>
                             <span aria-hidden="true">·</span>

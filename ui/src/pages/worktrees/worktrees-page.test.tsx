@@ -209,6 +209,13 @@ afterEach(() => {
 });
 
 describe("WorktreesPage lifecycle", () => {
+  it("exposes the full branch name as the branch hover title", async () => {
+    const branch = "worktree/release-cleanup-and-compatibility-review";
+    const page = await createWorktreesPage(listRequest([worktree("cleanup", { branch })])).ready();
+
+    expect(page.query(`[title="${branch}"]`)?.textContent).toBe(branch);
+  });
+
   it("reuses a held row and resolves distinct off-roster owners in bounded batches", async () => {
     const held = "agent:main:existing-owner";
     const misses = Array.from(
