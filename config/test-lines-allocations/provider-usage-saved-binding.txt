@@ -1,0 +1,5 @@
+# Provider usage must resolve a saved profile binding into its credential without releasing
+# another provider's secret to a fixed usage endpoint. The two credential-boundary regressions
+# (environment precedence, provider-owned fixed destinations) cannot be proven by a cheaper
+# layer: they only fail once a config-sourced candidate is classified as a binding.
+196
