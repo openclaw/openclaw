@@ -9,8 +9,8 @@ scenario:
   objective: Reuse a fact from an earlier conversation without mistaking its status report for the current state.
   successCriteria:
     - The agent reuses the completed item lookup without reopening its catalog file.
-    - One request produces the local label when today's receipt clears the earlier blocker.
-    - The same request reports the item without writing a label when the receipt still says pending.
+    - Both cases receive the same continuation request, with no receipt path, rule, or reminder to check status.
+    - The agent observes the current receipt in both cases and writes the label only when approved.
   docsRefs:
     - docs/concepts/session-tool.md
   codeRefs:
@@ -24,15 +24,17 @@ scenario:
     providerMode: live-frontier
     channel: qa-channel
     suiteIsolation: isolated
-    isolationReason: Reads two fixture conversations belonging to the same QA agent.
+    isolationReason: Uses separate drafting and continuation conversations for each review state.
     retryCount: 0
-    summary: Seed an old drafting handoff, then ask for one local file using the current review receipt. Check the file, not a promise to write it.
+    summary: Put the label rules in the drafting handoff. Ask only to continue, then check which receipt the agent saw and whether it wrote the label.
 
 flow:
   steps:
     - name: reuse the item code and check whether the blocker still applies
       actions:
         - call: reset
+        - set: outcomes
+          value: []
         - forEach:
             items: [approved, pending]
             item: status
@@ -57,31 +59,47 @@ flow:
               - set: destination
                 value:
                   expr: "'agent:qa:catalog-label-' + id"
-              - call: env.gateway.call
-                args:
-                  - sessions.create
-                  - key:
-                      ref: source
-                    agentId: qa
-              - call: env.gateway.call
-                args:
-                  - chat.inject
-                  - sessionKey:
-                      ref: source
-                    message:
-                      expr: "'Catalog lookup complete (' + catalogFile + '): item code ' + (await fs.readFile(path.join(env.gateway.workspaceDir, catalogFile), 'utf8')) + '. The review receipt was pending, so no label was written.'"
+              # Register each conversation, then append to that exact transcript without replacing its entry.
+              - forEach:
+                  items: { expr: "[source, destination]" }
+                  item: chat
+                  actions:
+                    - call: env.gateway.call
+                      saveAs: created
+                      args:
+                        - sessions.create
+                        - key: { ref: chat }
+                          agentId: qa
+                    - call: seedQaSessionTranscript
+                      args:
+                        - ref: env
+                        - mode: append
+                          sessionKey: { ref: chat }
+                          sessionId: { expr: created.sessionId }
+                          messages:
+                            expr: >-
+                              chat === source ? [{ role: 'user', timestamp: Date.now() - 2000,
+                              text: 'Label task: the review state is in workspace file ./' + id + '.receipt.
+                              If approved, write only the item code to ./' + id + '.label; if pending, leave the label absent.
+                              Report the item code and review state.' },
+                              { role: 'assistant', timestamp: Date.now() - 1000,
+                              text: 'Catalog lookup complete (' + catalogFile + '): item code ' + (await fs.readFile(path.join(env.gateway.workspaceDir, catalogFile), 'utf8'))
+                              + '. At handoff the review was pending, so no label was written.' }]
+                              : [{ role: 'user', timestamp: Date.now(), text: 'Drafting conversation for the label task: ' + source }]
+              - set: receiptId
+                value:
+                  expr: randomUUID()
               - call: fs.writeFile
                 args:
                   - expr: "path.join(env.gateway.workspaceDir, id + '.receipt')"
-                  - ref: status
+                  - expr: "status + ' (review ' + receiptId + ')'"
                   - utf8
               - call: runAgentPrompt
                 args:
                   - ref: env
                   - sessionKey:
                       ref: destination
-                    message:
-                      expr: "'Use the item code from our drafting conversation ' + source + '. Check today’s receipt in ' + id + '.receipt. If approved, write the item code alone in ' + id + '.label. If pending, leave that file absent. Tell me the item code and receipt status.'"
+                    message: Continue the label task.
                     timeoutMs:
                       expr: liveTurnTimeoutMs(env, 120000)
               - call: readSessionTranscriptSummary
@@ -89,12 +107,36 @@ flow:
                 args:
                   - ref: env
                   - ref: destination
+              - call: readSessionToolActivity
+                saveAs: activity
+                args: [{ ref: env }, { ref: destination }]
+              - set: recalled
+                value:
+                  expr: >-
+                    activity.filter(c => c.successful && ['sessions_history', 'sessions_search'].includes(c.toolName)).flatMap(c => {
+                      const result = extractQaToolPayload(c.result);
+                      if (c.toolName === 'sessions_history') return result?.sessionKey === source
+                        ? result.messages.map(m => ({ role: m.role, text: JSON.stringify(m.content) })) : [];
+                      return (result?.results ?? []).filter(hit => hit.sessionKey === source).map(hit => ({ role: hit.role, text: hit.snippet }));
+                    })
               - assert:
-                  expr: "(turn.successfulToolCallCounts.sessions_history ?? 0) + (turn.successfulToolCallCounts.sessions_search ?? 0) > 0"
-                  message: The item code must come from a successful session recall.
+                  expr: "recalled.some(m => m.role === 'user' && m.text.includes(id + '.receipt')) && recalled.some(m => m.role === 'assistant' && m.text.includes(code))"
+                  message: The turn did not recall both the original task and its completed lookup from the drafting conversation.
+              # Pending is also in the old handoff; only the current receipt contains this ID.
+              - set: sawReceipt
+                value:
+                  expr: "activity.some(c => c.successful && JSON.stringify(c.result?.content ?? '').includes(receiptId))"
               - assert:
-                  expr: "!(await readSessionToolActivity(env, destination)).some((call) => call.kind === 'tool' && ['read', 'grep', 'exec', 'exec_command'].includes(call.toolName) && JSON.stringify(call.input ?? {}).includes(catalogFile))"
-                  message: The current turn repeated the completed catalog lookup.
+                  expr: sawReceipt
+                  message:
+                    expr: "'The ' + status + ' turn did not observe the current receipt.'"
+              - set: catalogCalls
+                value:
+                  expr: "activity.filter(c => c.kind === 'tool' && ['read', 'grep', 'exec', 'exec_command'].includes(c.toolName) && JSON.stringify(c.input ?? {}).includes(catalogFile))"
+              - assert:
+                  expr: catalogCalls.length === 0
+                  message:
+                    expr: "'Completed lookup repeated in the ' + status + ' case: ' + catalogCalls.map(c => c.toolName).join(', ')"
               - set: label
                 value:
                   expr: "await fs.readFile(path.join(env.gateway.workspaceDir, id + '.label'), 'utf8').then((s) => s.trim(), (err) => { if (err.code === 'ENOENT') return null; throw err; })"
@@ -102,4 +144,7 @@ flow:
                   expr: "String(turn.finalText).includes(code) && String(turn.finalText).toLowerCase().includes(status) && label === (status === 'approved' ? code : null)"
                   message:
                     expr: "'Expected the recalled code and current ' + status + ' receipt to determine the label; got ' + JSON.stringify({ label, reply: turn.finalText })"
-      detailsExpr: "'Reused the completed lookup in both turns. Approved: label written. Pending: label absent.'"
+              - set: outcomes
+                value:
+                  expr: "[...outcomes, { status, sawReceipt, repeatedLookups: catalogCalls.length, labelWritten: label === code }]"
+      detailsExpr: JSON.stringify(outcomes)
