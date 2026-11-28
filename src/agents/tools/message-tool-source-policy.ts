@@ -6,6 +6,7 @@ import { uniqueValues } from "@openclaw/normalization-core/string-normalization"
 import { stripPlainTextToolCallBlocks } from "../../../packages/tool-call-repair/src/index.js";
 import type { SourceReplyDeliveryMode } from "../../auto-reply/get-reply-options.types.js";
 import type { AgentRuntimeMessageActionContext } from "../../gateway/message-action-turn-capability.js";
+import { isInternalSourceReplyConversation } from "../../infra/outbound/internal-source-reply.js";
 import { MessageActionDeniedError } from "../../infra/outbound/message-action-denial.js";
 import { sourceDeliveryTargetsMatch } from "../../infra/outbound/source-delivery-plan.js";
 import { normalizeOptionalAccountId } from "../../routing/account-id.js";
@@ -136,7 +137,15 @@ export function enforceSourceReplyOnlyMessageAction(params: {
       .map((target) => normalizeOptionalString(target))
       .filter((target): target is string => Boolean(target)),
   );
-  if (!sourceChannel || sourceTargets.length === 0) {
+  // A Control UI session has no external peer, but the private source-reply sink
+  // still owns its reply. The sink's owner decides that case so the guard and the
+  // sink never disagree about which conversation is current. The effective provider
+  // already folds an external session route into its channel, so a remaining
+  // internal provider is the Control UI conversation itself.
+  const internalConversation =
+    sourceChannel !== undefined &&
+    isInternalSourceReplyConversation({ currentChannelProvider: sourceChannel });
+  if (!sourceChannel || (sourceTargets.length === 0 && !internalConversation)) {
     throw sourceReplyPolicyError(
       "Completion source replies require an authoritative current conversation.",
     );

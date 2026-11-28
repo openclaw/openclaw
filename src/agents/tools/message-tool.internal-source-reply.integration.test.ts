@@ -418,6 +418,46 @@ describe("WebChat message tool internal source reply", () => {
     );
   });
 
+  it("lets a completion-handoff Control UI wake send without an external target", async () => {
+    // Settle wake: completion-handoff + message_tool_only. A dashboard session has
+    // no external peer, but the internal source-reply sink still owns the reply.
+    const tool = createCurrentSourceMessageTool({
+      sourceReplyOnly: true,
+      sourceReplyDeliveryMode: "message_tool_only",
+      currentChannelProvider: "webchat",
+      currentChannelId: undefined,
+      currentMessagingTarget: undefined,
+      agentSessionKey: "agent:main:dashboard:cli",
+      runSessionKey: "agent:main:dashboard:cli",
+    });
+
+    const toolResult = await tool.execute("completion-wake", {
+      action: "send",
+      message: "Children finished; here is the result.",
+    });
+    expect(toolResult.details).toMatchObject({
+      sourceReplySink: "internal-ui",
+      sourceReplyDeliveryMode: "message_tool_only",
+    });
+  });
+
+  it("still refuses a completion reply on a route-less non-Control UI session", async () => {
+    // No route and no Control UI provider: there is no authoritative conversation.
+    const tool = createCurrentSourceMessageTool({
+      sourceReplyOnly: true,
+      sourceReplyDeliveryMode: "message_tool_only",
+      currentChannelProvider: undefined,
+      currentChannelId: undefined,
+      currentMessagingTarget: undefined,
+      agentSessionKey: "agent:main:main",
+      runSessionKey: "agent:main:main",
+    });
+
+    await expect(
+      tool.execute("completion-wake", { action: "send", message: "completion" }),
+    ).rejects.toThrow("authoritative current conversation");
+  });
+
   it("answers a Control UI user from an inter-session result turn", async () => {
     await withOpenClawTestState(
       { layout: "state-only", prefix: "inter-session-dashboard-" },
