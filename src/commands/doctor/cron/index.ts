@@ -1,11 +1,14 @@
 // Doctor cron repair orchestration for legacy stores, run logs, payloads, and warnings.
+import { safeParseJsonRecord } from "@openclaw/normalization-core/json-coercion";
 import { isRecord } from "@openclaw/normalization-core/record-coerce";
 import { note } from "../../../../packages/terminal-core/src/note.js";
 import { formatCliCommand } from "../../../cli/command-format.js";
 import type { OpenClawConfig } from "../../../config/types.openclaw.js";
+import { isJobEnabled } from "../../../cron/service/jobs-scheduling.js";
 import { resolveCronJobsStorePath } from "../../../cron/store.js";
 import type { HealthFinding } from "../../../flows/health-checks.js";
 import { formatErrorMessage as errorMessage } from "../../../infra/errors.js";
+import { executeExistingOpenClawStateRead } from "../../../state/openclaw-state-db-readonly.js";
 import { resolveOpenClawStateSqlitePath } from "../../../state/openclaw-state-db.paths.js";
 import { shortenHomePath } from "../../../utils.js";
 import type { DoctorPrompter, DoctorOptions } from "../../doctor-prompter.js";
@@ -90,6 +93,107 @@ function inspectCronJobHealth(jobs: Array<Record<string, unknown>>) {
 
 const LEGACY_CRON_STORE_CHECK_ID = "core/doctor/legacy-cron-store";
 
+function dockerStreamInventory(state: LegacyCronRepairState): HealthFinding[] {
+  const inventory = new Map<string, string>();
+  function inspect(
+    job: Record<string, unknown> | undefined,
+    status: string,
+    id: unknown = job?.id ?? job?.jobId,
+  ) {
+    if (!job || typeof id !== "string" || !isRecord(job.schedule) || inventory.has(id)) {
+      return;
+    }
+    const kind = job.schedule.kind;
+    if (
+      kind === "sandbox-stream" ||
+      (kind === "stream" && isRecord(job.streamSandbox) && job.streamSandbox.backendId === "docker")
+    ) {
+      inventory.set(id, status);
+    }
+  }
+  for (const job of state.loadedJobs) {
+    if (job.streamSandbox?.backendId === "docker") {
+      inventory.set(job.id, isJobEnabled(job) ? "is configured" : "is paused");
+    }
+  }
+  if (state.ownerRows.length > state.loadedJobs.length) {
+    // Read the definition and its ID from the same row. The loader can omit retired rows.
+    for (const row of state.ownerRows) {
+      if (!inventory.has(row.job_id)) {
+        inspect(
+          safeParseJsonRecord(row.job_json) ?? undefined,
+          "has a definition the Gateway did not load",
+          row.job_id,
+        );
+      }
+    }
+  }
+  for (const { job, raw } of [
+    ...state.persistedQuarantine,
+    ...(state.legacyQuarantine?.jobs ?? []),
+  ]) {
+    inspect(
+      job,
+      "is quarantined",
+      isRecord(raw) && typeof raw.jobId === "string" ? raw.jobId : undefined,
+    );
+  }
+
+  const source = { checkId: LEGACY_CRON_STORE_CHECK_ID, path: resolveOpenClawStateSqlitePath() };
+  return Array.from(inventory, ([id, status]) => ({
+    ...source,
+    severity: "info",
+    requirement: "cron-sandbox-stream-inventory",
+    target: id,
+    message: `Docker stream ${JSON.stringify(id)} ${status}.`,
+  }));
+}
+
+async function dockerStreamCleanupFindings(selectedStoreKey?: string): Promise<HealthFinding[]> {
+  const source = {
+    checkId: LEGACY_CRON_STORE_CHECK_ID,
+    severity: "warning" as const,
+    path: resolveOpenClawStateSqlitePath(),
+  };
+  try {
+    const custody = await executeExistingOpenClawStateRead(
+      {},
+      { type: "sandboxPersistentExec.uncertainOwnerKeys", input: undefined },
+    );
+    const selectedPrefix = selectedStoreKey && `cron:${selectedStoreKey}:`;
+    const findings: HealthFinding[] = [];
+    for (const ownerKey of custody?.ownerKeys ?? []) {
+      if (!ownerKey.startsWith("cron:")) {
+        continue;
+      }
+      // Other partitions may no longer have a job or even an entry in the cron store inventory.
+      const target =
+        selectedPrefix && ownerKey.startsWith(selectedPrefix)
+          ? ownerKey.slice(selectedPrefix.length)
+          : ownerKey;
+      findings.push({
+        ...source,
+        requirement: "cron-sandbox-stream-cleanup",
+        target,
+        message: `The Gateway recorded unconfirmed container cleanup for Docker stream ${JSON.stringify(target)}.`,
+        fixHint:
+          "Check the Gateway logs for the cleanup error and inspect the stream container on the original Docker daemon. If cleanup is still blocked, keep the record and report the error.",
+      });
+    }
+    return findings;
+  } catch (err) {
+    rethrowSqliteSchemaVersionError(err);
+    return [
+      {
+        ...source,
+        requirement: "cron-sandbox-stream-cleanup-readable",
+        message: `Doctor could not read the Docker stream cleanup records. ${errorMessage(err)}`,
+        fixHint: `Check read access to the Gateway state database and rerun ${formatCliCommand("openclaw doctor --lint --only core/doctor/legacy-cron-store")}. If the read still fails, report the error.`,
+      },
+    ];
+  }
+}
+
 function legacyCronStoreFinding(params: {
   readonly message: string;
   readonly path: string;
@@ -112,10 +216,15 @@ export async function collectLegacyCronStoreHealthFindings(params: {
   cfg: OpenClawConfig;
 }): Promise<readonly HealthFinding[]> {
   let state: LegacyCronRepairState | null;
+  let cleanup: HealthFinding[] = [];
   try {
     const selection = await readCronStoreSelectionForDoctor(params.cfg);
+    cleanup = await dockerStreamCleanupFindings(
+      selection.status === "ready" ? selection.storeKey : undefined,
+    );
     if (selection.status === "unresolved") {
       return [
+        ...cleanup,
         legacyCronStoreFinding({
           message: selection.message,
           path: selection.storePath,
@@ -126,10 +235,14 @@ export async function collectLegacyCronStoreHealthFindings(params: {
       ];
     }
     state = await loadLegacyCronRepairState({ cfg: params.cfg, readOnly: true });
+    if (!state) {
+      return cleanup;
+    }
   } catch (err) {
     rethrowSqliteSchemaVersionError(err);
     const storePath = resolveCronJobsStorePath(readLegacyCronStorePath(params.cfg));
     return [
+      ...cleanup,
       legacyCronStoreFinding({
         message: `Unable to read cron job store at ${shortenHomePath(storePath)}.`,
         path: storePath,
@@ -142,11 +255,7 @@ export async function collectLegacyCronStoreHealthFindings(params: {
       }),
     ];
   }
-  if (!state) {
-    return [];
-  }
-
-  const findings: HealthFinding[] = [];
+  const findings = [...dockerStreamInventory(state), ...cleanup];
   const { legacyQuarantine, rawJobs } = state;
   const sqliteStorePath = resolveOpenClawStateSqlitePath();
   const recordFinding = (
@@ -253,10 +362,22 @@ export async function maybeRepairLegacyCronStore(params: {
 }) {
   let state: LegacyCronRepairState | null;
   try {
-    if (!(await maybeRepairCronStoreSelection(params))) {
+    const selection = await readCronStoreSelectionForDoctor(params.cfg);
+    for (const { message, fixHint } of await dockerStreamCleanupFindings(
+      selection.status === "ready" ? selection.storeKey : undefined,
+    )) {
+      note(fixHint ? `${message}\n- ${fixHint}` : message, "Cron warnings");
+    }
+    if (!(await maybeRepairCronStoreSelection({ ...params, selection }))) {
       return;
     }
     state = await loadLegacyCronRepairState({ cfg: params.cfg });
+    if (!state) {
+      return;
+    }
+    for (const { message } of dockerStreamInventory(state)) {
+      note(message, "Cron");
+    }
   } catch (err) {
     rethrowSqliteSchemaVersionError(err);
     const reason = err instanceof Error ? err.message : String(err);
@@ -269,9 +390,6 @@ export async function maybeRepairLegacyCronStore(params: {
       ].join("\n"),
       "Cron",
     );
-    return;
-  }
-  if (!state) {
     return;
   }
   const { storePath, legacyQuarantine, invalidConfigRows, persistedQuarantine, rawJobs } = state;

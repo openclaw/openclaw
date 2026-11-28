@@ -4,6 +4,9 @@ import os from "node:os";
 import path from "node:path";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { observeHostDataSql } from "../../../../test/helpers/sqlite-statement-execution-counter.js";
+import { createSandboxPersistentExecStore } from "../../../agents/sandbox/persistent-exec-store.js";
+import * as sandbox from "../../../agents/sandbox/persistent-exec.test-helpers.js";
+import { updateRegistry } from "../../../agents/sandbox/registry.js";
 import type { OpenClawConfig } from "../../../config/config.js";
 import {
   loadCronJobsStoreWithConfigJobs,
@@ -14,6 +17,7 @@ import {
 } from "../../../cron/store.js";
 import { resolveCronStoreKeyInDatabase } from "../../../cron/store/paths.js";
 import * as quarantine from "../../../cron/store/quarantine.js";
+import { makeCronStreamSandboxTarget } from "../../../cron/stream-sandbox.test-support.js";
 import * as staging from "../../../infra/sqlite-snapshot-staging.js";
 import { createNonExitingRuntime } from "../../../runtime.js";
 import { createOpenClawDatabaseMaintenanceScope } from "../../../state/openclaw-state-db-async-lifecycle.js";
@@ -147,6 +151,67 @@ function expectNoNoteContaining(message: string, title = "Cron"): void {
 }
 
 describe("collectLegacyCronStoreHealthFindings", () => {
+  it("lists Docker streams as inventory and warns only about unconfirmed container cleanup", async () => {
+    const schedule = { kind: "stream", command: ["watch", "private-argument"] };
+    const job = createCurrentCronJob({ schedule, sessionTarget: "main", enabled: undefined });
+    const stored = { ...schedule, kind: "sandbox-stream" };
+    const streamSandbox = makeCronStreamSandboxTarget();
+    const docker = { ...job, id: "docker", schedule: stored, streamSandbox };
+    const quarantined = {
+      job: { ...docker, id: undefined, schedule },
+      raw: { jobId: "quarantined" },
+    };
+    const retired = { ...job, id: "retired", payload: { kind: "skillCollectionReview" } };
+    await writeCronStore([retired, docker, job, { ...docker, id: undefined, streamSandbox: null }]);
+    await saveCronQuarantinedJobs({
+      storePath,
+      nowMs: 1,
+      entries: [{ sourceIndex: 0, reason: "invalid-schedule", ...quarantined }],
+    });
+    await updateRegistry(sandbox.registryEntry);
+    const custody = createSandboxPersistentExecStore();
+    const db = openOpenClawStateDatabase().db;
+    const storeKey = resolveCronStoreKeyInDatabase(db, storePath);
+    const active = { ...sandbox.reservationFor(1), ownerKey: `cron:${storeKey}:docker` };
+    const removed = { ...sandbox.reservationFor(2), ownerKey: "cron:retired:removed" };
+    await custody.reserve(active, () => {});
+    await custody.reserve(removed, () => {});
+    // The saved cleanup outcome remains readable even if the Docker target is damaged.
+    db.prepare(
+      "UPDATE sandbox_persistent_execs SET phase = 'uncertain', backend_target_json = ? WHERE owner_key = ?",
+    ).run("private-detail", removed.ownerKey);
+
+    const all = await collectLegacyCronStoreHealthFindings({ cfg: createCronConfig() });
+    const findings = all.filter((f) => f.requirement?.startsWith("cron-sandbox-stream"));
+    expect(findings.map((f) => [f.severity, f.target, f.fixHint])).toEqual([
+      ["info", "docker", undefined],
+      ["info", "raw-3", undefined],
+      ["info", "quarantined", undefined],
+      ["warning", removed.ownerKey, expect.stringContaining("original Docker daemon")],
+    ]);
+    expect(findings.find((f) => f.target === "docker")?.message).toContain("is configured");
+    expect(findings.find((f) => f.target === "raw-3")?.message).toContain("did not load");
+    expect(JSON.stringify(findings)).not.toMatch(/private-argument|private-detail/);
+  });
+
+  it("reports the cleanup query error and how to retry the read", async () => {
+    vi.stubEnv("OPENCLAW_STATE_DIR", tempRoot!);
+    openOpenClawStateDatabase().db.exec(
+      "CREATE TABLE sandbox_persistent_execs (owner_key TEXT PRIMARY KEY)",
+    );
+    await closeOpenClawStateDatabaseAsync();
+
+    const findings = await collectLegacyCronStoreHealthFindings({ cfg: createCronConfig() });
+    expect(
+      findings.find((f) => f.requirement === "cron-sandbox-stream-cleanup-readable"),
+    ).toMatchObject({
+      message: expect.stringMatching(/no such column: .*phase/iu),
+      fixHint: expect.stringContaining(
+        "openclaw doctor --lint --only core/doctor/legacy-cron-store",
+      ),
+    });
+  });
+
   it("reports alias-only Gateway exec jobs with recreation guidance", async () => {
     await writeCurrentCronStore([
       createCurrentCronJob({

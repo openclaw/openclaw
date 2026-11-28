@@ -163,6 +163,7 @@ export async function loadLegacyCronRepairState(params: {
     invalidConfigRows,
     persistedQuarantine,
     projectedOwnersByJobId,
+    loadedJobs: loaded.store.jobs,
     rawJobs: currentJobs,
     jobsFingerprint: loaded.jobsFingerprint,
     ownerRows,

@@ -8,6 +8,7 @@ import {
 import { tryResolveAmbientOwnerAgentId } from "../../../agents/agent-scope-config.js";
 import type { OpenClawConfig } from "../../../config/types.openclaw.js";
 import type { CronQuarantinedJob, QuarantinedCronConfigJob } from "../../../cron/store.js";
+import type { CronStoreFile } from "../../../cron/types.js";
 import { prepareProviderModelPolicySurfaces } from "../../../plugins/provider-model-routes.js";
 import type { LegacyCodexModelIdentity } from "../shared/codex-route-model-ref.js";
 import {
@@ -39,6 +40,7 @@ export type LegacyCronRepairState = {
   invalidConfigRows: QuarantinedCronConfigJob[];
   persistedQuarantine: CronQuarantinedJob[];
   projectedOwnersByJobId: ReadonlyMap<string, CronOwnerProjection>;
+  loadedJobs: CronStoreFile["jobs"];
   rawJobs: Array<Record<string, unknown>>;
   jobsFingerprint: string | undefined;
   ownerRows: Awaited<ReturnType<typeof inspectCronJobOwnersForDoctor>>;
