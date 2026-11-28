@@ -2,6 +2,7 @@ import { expect, it, vi } from "vitest";
 import type * as Cli from "./cli-output-contracts.js";
 import {
   createClaudeParser,
+  createPluginParser,
   joinJsonlFrames,
   claudeStreamEvent,
   claudeTextDelta,
@@ -91,6 +92,17 @@ it("refines only the current parent call when Claude reports partial usage", () 
     usage: { input: 100, output: 42, cacheRead: undefined },
     diagnosticUsage: { input: 1100, output: 51 },
   });
+});
+
+it("keeps terminal-only usage available without publishing live context", () => {
+  const onContextTokens = vi.fn();
+  const parser = createPluginParser({
+    onContextTokens,
+    parseJsonlEvent: () => ({ kind: "result", text: "Done", usage: { input: 120, output: 5 } }),
+  });
+  finishFrames(parser, { type: "summary" });
+  expect(parser.getOutput()?.usage).toMatchObject({ input: 120, output: 5 });
+  expect(onContextTokens).not.toHaveBeenCalled();
 });
 
 function message(text: string) {

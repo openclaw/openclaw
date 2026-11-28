@@ -91,6 +91,18 @@ it(
                 },
               };
             }
+            // Late child and task-progress counters are not the parent’s refined final measurement.
+            yield claudeStreamEvent({ type: "message_delta", usage: { output_tokens: 21 } });
+            yield {
+              type: "assistant",
+              parent_tool_use_id: "child",
+              message: {
+                id: "child-message",
+                content: [],
+                usage: { input_tokens: 1000, output_tokens: 5 },
+              },
+            };
+            yield { type: "system", subtype: "task_progress", usage: { total_tokens: 2000 } };
             yield {
               type: "result",
               subtype: "success",
@@ -129,7 +141,7 @@ it(
             expect(result.status).toBe("ok");
             expect(await row()).toMatchObject({
               key,
-              totalTokens: 28_517 + turnOffset,
+              totalTokens: 28_534 + turnOffset,
               totalTokensFresh: true,
             });
           }
