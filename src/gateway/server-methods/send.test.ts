@@ -37,7 +37,7 @@ import { DEDUPE_MAX, DEDUPE_TTL_MS } from "../server-constants.js";
 import { startGatewayMaintenanceTimers } from "../server-maintenance.js";
 import { gatewayProfile } from "../server/client-fixtures.test-support.js";
 import { createGatewayMaintenanceStateForTest } from "../test-helpers.maintenance-state.js";
-import { registerSendDeliveryAttemptTests } from "./send.delivery-attempt.test-support.js";
+import { registerSendAttemptTests } from "./send.delivery-attempt.test-support.js";
 import { registerSendSessionRoutingTests } from "./send.session-routing.test-support.js";
 import {
   agentRuntimeClientForTests as agentRuntimeClient,
@@ -630,7 +630,7 @@ describe("gateway send conversation ownership", () => {
     expect(mocks.ensureOutboundSessionEntry).not.toHaveBeenCalled();
   });
 
-  registerSendDeliveryAttemptTests({ mocks, invokeGatewayMessageMethod, mockDeliverySuccess });
+  registerSendAttemptTests(mocks, invokeGatewayMessageMethod, mockDeliverySuccess, runSend);
 
   it("keeps the first deferred send route when a retry sees newer defaults", async () => {
     const firstSelection = createDeferred<{ channel: string; configured: string[] }>();

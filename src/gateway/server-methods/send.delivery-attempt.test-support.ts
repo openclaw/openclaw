@@ -1,26 +1,96 @@
 import { expect, it, vi, type Mock } from "vitest";
+import { ErrorCodes } from "../../../packages/gateway-protocol/src/index.js";
 import type { dispatchChannelMessageAction } from "../../channels/plugins/message-action-dispatch.js";
 import type { ChannelPlugin } from "../../channels/plugins/types.public.js";
 import type { deliverOutboundPayloads } from "../../infra/outbound/deliver.js";
 import { runWithOperatorToolGatewayAuthority } from "../operator-tool-gateway-authority.js";
 import { assertGatewayUploadsEnabled } from "../upload-policy.js";
 import { createMessageActionTurnClientForTests, firstRespondCall } from "./send.test-helpers.js";
-import type { createMessageMethodTestDriver } from "./send.test-support.js";
+import { makeContext, type createMessageMethodTestDriver } from "./send.test-support.js";
 
 type DeliveryAttemptTestHarness = Pick<
   ReturnType<typeof createMessageMethodTestDriver>,
-  "invokeGatewayMessageMethod"
+  "invokeGatewayMessageMethod" | "runSend"
 > & {
   mocks: {
     deliverOutboundPayloads: Mock<typeof deliverOutboundPayloads>;
+    ensureOutboundSessionEntry: Mock;
     dispatchChannelMessageAction: Mock<typeof dispatchChannelMessageAction>;
     sendPoll: Mock<NonNullable<NonNullable<ChannelPlugin["outbound"]>["sendPoll"]>>;
   };
   mockDeliverySuccess: (messageId: string) => void;
 };
 
-export function registerSendDeliveryAttemptTests(harness: DeliveryAttemptTestHarness): void {
-  const { mocks, invokeGatewayMessageMethod, mockDeliverySuccess } = harness;
+export function registerSendAttemptTests(
+  mocks: DeliveryAttemptTestHarness["mocks"],
+  invokeGatewayMessageMethod: DeliveryAttemptTestHarness["invokeGatewayMessageMethod"],
+  mockDeliverySuccess: DeliveryAttemptTestHarness["mockDeliverySuccess"],
+  runSend: DeliveryAttemptTestHarness["runSend"],
+): void {
+  it("returns and replays intentional send suppression without a delivery receipt", async () => {
+    mocks.deliverOutboundPayloads.mockImplementationOnce(async (params) => {
+      params.onPayloadDeliveryOutcome?.({
+        index: 0,
+        status: "suppressed",
+        reason: "cancelled_by_message_sending_hook",
+        hookEffect: { cancelReason: "private hook diagnostic" },
+      });
+      return [];
+    });
+    const context = makeContext();
+    const first = await runSend({}, null, context);
+    const replay = await runSend({}, null, context);
+    const expected = {
+      runId: "send-test",
+      channel: "slack",
+      deliveryStatus: "suppressed",
+      suppressionReason: "cancelled_by_message_sending_hook",
+    };
+    const firstResponse = firstRespondCall(first.respond);
+    expect(firstResponse.slice(0, 3)).toEqual([true, expected, undefined]);
+    expect(firstResponse[3]?.channel).toBe("slack");
+    const replayResponse = firstRespondCall(replay.respond);
+    expect(replayResponse.slice(0, 3)).toEqual([true, expected, undefined]);
+    expect(replayResponse[3]).toMatchObject({ cached: true });
+    expect(mocks.deliverOutboundPayloads).toHaveBeenCalledTimes(1);
+    expect(mocks.ensureOutboundSessionEntry).not.toHaveBeenCalled();
+  });
+
+  it.each(["missing", "identityless", "mixed"] as const)(
+    "keeps %s delivery evidence from becoming intentional suppression",
+    async (evidence) => {
+      mocks.deliverOutboundPayloads.mockImplementationOnce(async (params) => {
+        if (evidence !== "missing") {
+          params.onPayloadDeliveryOutcome?.({
+            index: 0,
+            status: "suppressed",
+            reason:
+              evidence === "identityless"
+                ? "adapter_returned_no_identity"
+                : "cancelled_by_message_sending_hook",
+          });
+        }
+        if (evidence === "mixed") {
+          params.onPayloadDeliveryOutcome?.({
+            index: 1,
+            status: "suppressed",
+            reason: "adapter_returned_no_identity",
+          });
+        }
+        return [];
+      });
+      const { respond } = await runSend({});
+      const response = firstRespondCall(respond);
+      expect(response[0]).toBe(false);
+      expect(response[1]).toBeUndefined();
+      expect(response[2]).toMatchObject({
+        code: ErrorCodes.UNAVAILABLE,
+        message: "Error: No delivery result",
+      });
+      expect(mocks.ensureOutboundSessionEntry).not.toHaveBeenCalled();
+    },
+  );
+
   it.each(
     (["message.action", "send", "poll"] as const).flatMap((method) =>
       (["fence-failure", "delivery-authority", "upload-policy"] as const)

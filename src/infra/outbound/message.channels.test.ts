@@ -294,6 +294,27 @@ function setDemoPollRegistry(outboundOptions: Parameters<typeof createDemoAliasO
   );
 }
 
+it("preserves suppression from a Gateway-backed send without inventing delivery", async () => {
+  const sendText = vi.fn();
+  registerPlugin("threadchat", { deliveryMode: "gateway", sendText });
+  callGatewayMock.mockResolvedValueOnce({
+    runId: "suppressed-send",
+    channel: "threadchat",
+    deliveryStatus: "suppressed",
+    suppressionReason: "cancelled_by_message_sending_hook",
+  });
+
+  const result = await sendThreadMessage();
+
+  expect(result).toMatchObject({
+    via: "gateway",
+    deliveryStatus: "suppressed",
+    suppressionReason: "cancelled_by_message_sending_hook",
+  });
+  expect(result.result).toBeUndefined();
+  expect(sendText).not.toHaveBeenCalled();
+});
+
 describe("sendPoll channel normalization", () => {
   it.each(["send", "poll"] as const)(
     "keeps hosted %s delivery on its bound Gateway",
