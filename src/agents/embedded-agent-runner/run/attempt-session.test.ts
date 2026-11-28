@@ -307,16 +307,28 @@ afterEach(() => {
   clearEmbeddedSessionPromptStates(["permission-system-updates"]);
 });
 
+async function useRealCatalogToolHydration() {
+  const { resolveToolSearchCatalogTool } = await vi.importActual<
+    typeof import("../../tool-search-directory.js")
+  >("../../tool-search-directory.js");
+  const { toToolDefinitions } = await vi.importActual<
+    typeof import("../../agent-tool-definition-adapter.js")
+  >("../../agent-tool-definition-adapter.js");
+  const { wrapToolDefinition } = await vi.importActual<
+    typeof import("../../sessions/tools/tool-definition-wrapper.js")
+  >("../../sessions/tools/tool-definition-wrapper.js");
+  hoisted.resolveToolSearchCatalogTool.mockImplementation(resolveToolSearchCatalogTool);
+  hoisted.toToolDefinitions.mockImplementation(toToolDefinitions);
+  hoisted.wrapToolDefinition.mockImplementation(wrapToolDefinition);
+}
+
 describe("prepareEmbeddedAttemptAgentSession", () => {
-  it("recovers a native hidden write through exec without executing or exposing it directly", async () => {
+  it("runs a hidden catalog tool called at top level, and through exec", async () => {
     const harness = createCodeModeHarness();
     const fixture = createInput({ codeModeCatalogRef: harness.catalogRef });
     const workspace = tempDirs.make("code-mode-hidden-write-");
     hoisted.getGlobalHookRunner.mockReturnValue(undefined);
-    const { wrapToolDefinition } = await vi.importActual<
-      typeof import("../../sessions/tools/tool-definition-wrapper.js")
-    >("../../sessions/tools/tool-definition-wrapper.js");
-    hoisted.wrapToolDefinition.mockImplementation(wrapToolDefinition);
+    await useRealCatalogToolHydration();
     const write = createWriteTool(workspace);
     const execute = vi.spyOn(write, "execute");
     const direct = {
@@ -333,6 +345,7 @@ describe("prepareEmbeddedAttemptAgentSession", () => {
     });
     await prepareEmbeddedAttemptAgentSession(fixture.input);
     const input = { path: "result.txt", content: "written through the bridge\n" };
+    const bridged = { path: "bridged.txt", content: "written inside exec\n" };
     const { agent } = captureAgent(surface.tools, {
       resolveDeferredTool: hoisted.createAgentSession.mock.calls[0]![0].resolveDeferredTool,
       streamFn: createTurnSequenceStream(
@@ -342,7 +355,7 @@ describe("prepareEmbeddedAttemptAgentSession", () => {
             {
               ...makeCall("exec"),
               arguments: {
-                code: "return await write(" + JSON.stringify(input) + ");",
+                code: "return await write(" + JSON.stringify(bridged) + ");",
                 awaitResults: true,
               },
             },
@@ -351,54 +364,50 @@ describe("prepareEmbeddedAttemptAgentSession", () => {
         ],
         [],
         (context, turn) => {
-          expect(context.tools?.map((tool) => tool.name)).toEqual(["exec", "wait", "computer"]);
-          if (turn === 2) {
-            expect(execute).not.toHaveBeenCalled();
+          if (turn === 1) {
+            // The prompt index still omits the catalog tool; the call resolves on demand.
+            expect(context.tools?.map((tool) => tool.name)).toEqual(["exec", "wait", "computer"]);
           }
         },
       ),
     });
     await agent.prompt("write the result");
     const results = agent.state.messages.filter((message) => message.role === "toolResult");
-    expect(results[0]).toMatchObject({
-      isError: true,
-      content: [{ type: "text", text: expect.stringContaining("Use exec with JavaScript") }],
-    });
-    expect(results[1]).toMatchObject({ toolName: "computer", isError: false });
-    expect(results[2], JSON.stringify(results[2])).toMatchObject({
-      toolName: "exec",
-      isError: false,
-      details: { status: "completed", value: { changed: true, created: true } },
-    });
-    expect(execute).toHaveBeenCalledOnce();
+    const outcomes = results.map((result) => `${result.toolName}:${result.isError}`);
+    expect(outcomes).toEqual(["write:false", "computer:false", "exec:false"]);
+    expect(results[2]).toMatchObject({ details: { status: "completed" } });
+    expect(execute).toHaveBeenCalledTimes(2);
     expect(await readFile(join(workspace, "result.txt"), "utf8")).toBe(input.content);
+    expect(await readFile(join(workspace, "bridged.txt"), "utf8")).toBe(bridged.content);
   });
 
-  it("limits Code Mode recovery hints to current catalog names, including collisions and MCP", async () => {
+  it("keeps Code Mode recovery hints for catalog names that are not one callable entry", async () => {
     const harness = createCodeModeHarness();
     const fixture = createInput({ codeModeCatalogRef: harness.catalogRef });
     onTestFinished(() => toolSearch.clearToolSearchCatalog(harness.ctx));
+    hoisted.getGlobalHookRunner.mockReturnValue(undefined);
+    await useRealCatalogToolHydration();
     const targets = [
       jsonTool("llm-task", {}),
       jsonTool("llm_task", {}),
       mcpTool({ name: "mcp_remote_write", serverName: "remote", toolName: "write" }),
+      // Two servers export the same name, so no single entry can be resolved from it.
+      mcpTool({ name: "shared_write", serverName: "remote", toolName: "write" }),
+      mcpTool({ name: "shared_write", serverName: "other", toolName: "write" }),
       jsonTool("denied_write", {}),
       jsonTool("policy_denied_write", {}),
     ];
+    const allowed = ["llm-task", "llm_task", "mcp_remote_write", "shared_write"];
     const surface = applyCodeModeCatalog({
       ...harness.ctx,
-      config: {
-        tools: {
-          gatewayPolicy: { allow: ["llm-task", "llm_task", "mcp_remote_write", "denied_write"] },
-        },
-      },
+      config: { tools: { gatewayPolicy: { allow: [...allowed, "denied_write"] } } },
       tools: [...harness.tools, ...targets],
     });
     await prepareEmbeddedAttemptAgentSession(fixture.input);
     // Permission refresh removes the previously registered tool, not just an invented unknown.
     toolSearch.restrictToolSearchCatalog({
       catalogRef: harness.catalogRef,
-      allowedToolNames: new Set(["llm-task", "llm_task", "mcp_remote_write"]),
+      allowedToolNames: new Set(allowed),
     });
     const { agent } = captureAgent(
       surface.tools,
@@ -406,34 +415,30 @@ describe("prepareEmbeddedAttemptAgentSession", () => {
         resolveDeferredTool: hoisted.createAgentSession.mock.calls[0]![0].resolveDeferredTool,
       },
       [
-        [
-          "llm-task",
-          "llm_task",
-          "mcp_remote_write",
-          "denied_write",
-          "policy_denied_write",
-          "unknown_tool",
-        ].map((name) => makeCall(name)),
+        [...new Set(targets.map((tool) => tool.name)), "unknown_tool"].map((name) =>
+          makeCall(name),
+        ),
         [{ type: "text", text: "done" }],
       ],
     );
     await agent.prompt("inspect the available tools");
     const results = agent.state.messages.filter((message) => message.role === "toolResult");
-    for (const result of results.slice(0, 3)) {
-      expect(result).toMatchObject({
-        isError: true,
-        content: [{ type: "text", text: expect.stringContaining("catalog.search") }],
-      });
-    }
-    expect(results.slice(3).map((result) => result.content)).toEqual([
+    // One visible catalog entry runs as called; an ambiguous name still needs exec to pick the id.
+    const errors = results.slice(0, 4).map((result) => result.isError);
+    expect(errors).toEqual([false, false, false, true]);
+    expect(results[3]).toMatchObject({
+      content: [{ type: "text", text: expect.stringContaining("catalog.search") }],
+    });
+    expect(results.slice(4).map((result) => result.content)).toEqual([
       [{ type: "text", text: "Tool denied_write not found" }],
       [{ type: "text", text: "Tool policy_denied_write not found" }],
       [{ type: "text", text: "Tool unknown_tool not found" }],
     ]);
-    for (const target of targets) {
-      expect(target.execute).not.toHaveBeenCalled();
-    }
+    // Only the three names that resolve to one catalog entry ran.
+    const calls = targets.map((target) => vi.mocked(target.execute).mock.calls.length);
+    expect(calls).toEqual([1, 1, 1, 0, 0, 0, 0]);
   });
+
   it("keeps effective workspace rules in automatic compaction when the process and sandbox cwd differ", async () => {
     const fixture = createInput();
     const workspaceDir = tempDirs.make("openclaw-attempt-compaction-workspace-");
