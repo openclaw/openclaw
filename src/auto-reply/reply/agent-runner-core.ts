@@ -257,10 +257,14 @@ export function resolveFallbackOriginModel(params: {
   run: FollowupRun["run"];
   fallbackStateEntry?: SessionEntry;
   runtimeModelSelection?: ModelRef;
+  hookModelSelection?: ModelRef;
 }): { provider: string; model: string; persistedAutoFallback: boolean } {
-  // Runtime-owned selection is not a fallback from the caller's nominal model.
+  // Runtime-owned or hook-selected turn routing is not a fallback from the caller's nominal model.
   if (params.runtimeModelSelection) {
     return { ...params.runtimeModelSelection, persistedAutoFallback: false };
+  }
+  if (params.hookModelSelection) {
+    return { ...params.hookModelSelection, persistedAutoFallback: false };
   }
   const entry = params.fallbackStateEntry;
   const isAutoFallbackOverride =

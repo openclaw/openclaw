@@ -37,6 +37,8 @@ export type EmbeddedAgentMeta = {
   };
   /** Runtime-owned selection, independent of the final response or credential source. */
   runtimeModelSelection?: ProviderModelRef;
+  /** Turn-level model explicitly selected by a before_model_resolve hook. */
+  hookModelSelection?: ProviderModelRef;
   /** Redacted credential source selected for the terminal physical model attempt. */
   credentialSource?: AgentRuntimeCredentialSource;
   fallbackAttempts?: FallbackAttempt[];

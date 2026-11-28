@@ -653,6 +653,7 @@ async function runEmbeddedAgentEntryInternal<T extends EmbeddedAgentRunResult>(
       requestedProvider: params.selection.provider,
       requestedModel: params.selection.model,
       fallbackAttempts: fallbackResult.attempts,
+      ...(!params.modelResolve?.modelSelectionLocked && hookSelection ? { hookSelection } : {}),
       ...(policyEscalated
         ? {
             providerPolicyRetry: {

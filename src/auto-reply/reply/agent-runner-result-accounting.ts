@@ -177,6 +177,7 @@ export async function accountAgentTurn(context: AgentTurnAccountingContext) {
   const providerUsed =
     runResult.meta?.agentMeta?.provider ?? fallbackProvider ?? followupRun.run.provider;
   const runtimeModelSelection = runResult.meta?.agentMeta?.runtimeModelSelection;
+  const hookModelSelection = runResult.meta?.agentMeta?.hookModelSelection;
   // A tool-free finalizer owns its response usage, not the session's next model.
   const sessionModel = runtimeModelSelection ?? { provider: providerUsed, model: modelUsed };
 
@@ -239,6 +240,7 @@ export async function accountAgentTurn(context: AgentTurnAccountingContext) {
     run: followupRun.run,
     fallbackStateEntry,
     runtimeModelSelection,
+    hookModelSelection,
   });
   const selectedProvider = configuredFallbackModel.provider;
   const selectedModel = configuredFallbackModel.model;
@@ -417,6 +419,7 @@ export async function accountAgentTurn(context: AgentTurnAccountingContext) {
     promptTokens,
     preserveRuntimeModel:
       fallbackExhausted ||
+      Boolean(hookModelSelection) ||
       (fallbackTransition.stateChanged
         ? fallbackTransition.nextState
         : fallbackTransition.previousState

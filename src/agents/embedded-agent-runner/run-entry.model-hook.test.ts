@@ -225,3 +225,55 @@ it.each([undefined, [] as string[]])(
     });
   },
 );
+
+it.each<[string, string[] | undefined]>([
+  ["with fallbacksOverride", []],
+  ["without fallbacksOverride", undefined],
+])(
+  "records hookModelSelection on agentMeta when before_model_resolve overrides the turn model (%s)",
+  async (label, fallbacksOverride) => {
+    await withOpenClawTestState({ label: `hook-selection-provenance-${label}` }, async (state) => {
+      const cfg = createModelFallbackConfig("google/gemini-4-hydrogen", []);
+      setRuntimeConfigSnapshot(cfg);
+      const registry = createEmptyPluginRegistry();
+      registry.typedHooks.push({
+        pluginId: "local-routing",
+        hookName: "before_model_resolve",
+        source: "test",
+        handler: () => ({
+          providerOverride: "venice",
+          modelOverride: "grok-4-7",
+          ...(fallbacksOverride !== undefined ? { fallbacksOverride } : {}),
+        }),
+      });
+      setActivePluginRegistry(registry);
+      initializeGlobalHookRunner(registry);
+
+      const settled = await runEmbeddedAgentEntry({
+        selection: {
+          cfg,
+          provider: "google",
+          model: "gemini-4-hydrogen",
+          agentDir: state.agentDir(),
+        },
+        modelResolve: { prompt: "Route this turn" },
+        identity: { runId: `hook-provenance-${label}`, agentId: "main", sessionId: label },
+        harness: createDirectHarness(state.workspaceDir, "openclaw"),
+        behavior: { kind: "maintenance" },
+        sessionOverride: { kind: "preserve" },
+        runCandidate: async (provider, model, options) => {
+          const selected = options.resolvedModelSelection;
+          return makeResult({
+            provider: selected?.provider ?? provider,
+            model: selected?.modelId ?? model,
+          });
+        },
+      });
+
+      expect(settled.result.meta.agentMeta?.hookModelSelection).toEqual({
+        provider: "venice",
+        model: "grok-4-7",
+      });
+    });
+  },
+);
