@@ -286,7 +286,8 @@ suite.define(() => {
 
         // Adding a provider checks the key the same way, inside the add dialog.
         await page.locator("[data-models-catalog-search]").fill("tencent-tokenhub");
-        await page.locator('[data-models-catalog-provider="tencent-tokenhub"] button').click();
+        await page.locator('[data-models-catalog-provider="tencent"] button').click();
+        await page.locator("[data-models-login-api-key]", { hasText: "Tencent TokenHub" }).click();
         const form = page.getByRole("dialog", { name: "Add provider" });
         await form.getByRole("textbox", { name: "API key" }).fill("sk-synthetic-revoked");
         const added = await saveAndRead(form, () =>

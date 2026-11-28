@@ -49,7 +49,8 @@ suite.define(() => {
         await page.goto(await open("settings/model-providers"));
         await waitForControlUiGatewayReady(page);
         await page.locator("[data-models-catalog-search]").fill("Tencent");
-        await page.locator('[data-models-catalog-provider="tencent-tokenhub"] button').click();
+        await page.locator('[data-models-catalog-provider="tencent"] button').click();
+        await page.locator("[data-models-login-api-key]", { hasText: "Tencent TokenHub" }).click();
         const form = page.getByRole("dialog", { name: "Add provider" });
         await form.getByRole("textbox", { name: "API key" }).fill("sk-synthetic-remove-in-use");
         await form.getByRole("button", { name: "Save provider", exact: true }).click();

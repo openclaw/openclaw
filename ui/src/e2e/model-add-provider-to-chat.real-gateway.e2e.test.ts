@@ -45,7 +45,10 @@ suite.define(() => {
         let clicks = 0;
         const started = Date.now();
         await page.locator("[data-models-catalog-search]").fill("Tencent");
-        await page.locator('[data-models-catalog-provider="tencent-tokenhub"] button').click();
+        // TokenHub and TokenPlan share the Tencent card; each keeps its own key button.
+        await page.locator('[data-models-catalog-provider="tencent"] button').click();
+        clicks++;
+        await page.locator("[data-models-login-api-key]", { hasText: "Tencent TokenHub" }).click();
         clicks++;
         const form = page.getByRole("dialog", { name: "Add provider" });
         // A provider with config still shows its display name, not its config id.
