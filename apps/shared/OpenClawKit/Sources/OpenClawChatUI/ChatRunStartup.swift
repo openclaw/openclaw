@@ -5,7 +5,10 @@ import Foundation
 struct ChatRunStartup: Equatable {
     enum State: Equatable {
         case status(String, retrying: Bool)
+        /// Output other than answer text: reasoning, a tool call, or narration.
         case activity
+        /// Answer text is the latest output. The working line drops its label under it.
+        case answering
     }
 
     let runID: String
@@ -28,7 +31,7 @@ struct ChatRunStartup: Equatable {
     static func reconciled(current: ChatRunStartup?, next: ChatRunStartup) -> ChatRunStartup {
         guard let current, current.runID == next.runID else { return next }
         // Once the run has produced something, only a retry can put a status back.
-        if case let .status(_, retrying) = next.state, !retrying, current.state == .activity { return current }
+        if case let .status(_, retrying) = next.state, !retrying, current.status == nil { return current }
         if let known = current.seq {
             if let seq = next.seq {
                 if seq <= known { return current }
@@ -38,8 +41,8 @@ struct ChatRunStartup: Equatable {
         }
         // Chat deltas use a different counter; keep the agent sequence so an older replayed status
         // cannot return after this activity.
-        if next.state == .activity, next.seq == nil, current.seq != nil {
-            return ChatRunStartup(runID: next.runID, state: .activity, seq: current.seq)
+        if next.status == nil, next.seq == nil, current.seq != nil {
+            return ChatRunStartup(runID: next.runID, state: next.state, seq: current.seq)
         }
         return next
     }

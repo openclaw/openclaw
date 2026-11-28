@@ -44,6 +44,7 @@ import {
   withArtifactPreservingStateReads,
   withLiveStateReads,
 } from "../state/artifact-preserving-state-reads.js";
+import type { StartupStateSchemaReader } from "../state/openclaw-database-preflight.types.js";
 import {
   recoverOpenClawStateRollbackJournalForStartup,
   withCurrentOpenClawStateReadScope,
@@ -447,6 +448,9 @@ export async function readAdmittedConfigSnapshot(params: {
   if (admitted.snapshot.valid) {
     try {
       await withLiveStateReads(async () => {
+        const { prestartGatewayStateSchemaReader } =
+          await import("../state/openclaw-agent-schema-inspection-worker.js");
+        await using stateReader = prestartGatewayStateSchemaReader(env);
         // Recovery has not authored its selected config yet. Migrating the live
         // clobbered source under the recovered config's guard would mutate the
         // wrong owners before readiness can refuse. The recovery owner applies
@@ -469,7 +473,11 @@ export async function readAdmittedConfigSnapshot(params: {
             process.send({ type: "openclaw.trial", phase: "trial" }, () => {});
           }
         }
-        await assertStartupStateReady({ cfg: admitted.snapshot.sourceConfig, env });
+        await assertStartupStateReady({
+          cfg: admitted.snapshot.sourceConfig,
+          env,
+          takeStateSchemaReader: stateReader?.take,
+        });
         await params.prepareClientCredentials?.(admitted.snapshot);
         await withArtifactPreservingStateReads(readIdentity);
       });
@@ -482,6 +490,7 @@ export async function readAdmittedConfigSnapshot(params: {
 
 /** Admission runs before lease acquisition: even acquiring a lease commits SQLite writes. */
 async function assertStartupStateReady(params: {
+  takeStateSchemaReader?: StartupStateSchemaReader;
   cfg: OpenClawConfig;
   env: NodeJS.ProcessEnv;
 }): Promise<void> {
@@ -499,6 +508,7 @@ async function assertStartupStateReady(params: {
         env: params.env,
         config: params.cfg,
         operation: "gateway-startup",
+        takeStateSchemaReader: params.takeStateSchemaReader,
         onAgentInspection: (stats) => {
           Object.assign(admissionMetrics, stats);
         },

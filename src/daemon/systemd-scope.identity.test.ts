@@ -137,8 +137,6 @@ const skippedUnit: SystemdServiceAccountMismatch = {
   serviceUser: "openclaw",
   programArguments: ["/usr/bin/node", "/usr/lib/node_modules/openclaw/dist/index.js", "gateway"],
   workingDirectory: "",
-  selectors: { HOME: "/var/lib/openclaw" },
-  selectorsIncomplete: false,
 };
 it.each([
   [new SystemdServiceAccountRefusalError(skippedUnit), [skippedUnit]],

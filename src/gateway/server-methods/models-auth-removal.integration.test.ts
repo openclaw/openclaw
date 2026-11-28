@@ -1,12 +1,13 @@
 import { withTimeout } from "@openclaw/fs-safe/advanced";
 import { Command } from "commander";
-import { describe, expect, it, vi } from "vitest";
+import { describe, expect, it, onTestFinished, vi } from "vitest";
 import { resolveAgentDir } from "../../agents/agent-scope.js";
 import { upsertAuthProfile } from "../../agents/auth-profiles.js";
 import type { AgentCommandGatewayIngressOpts } from "../../agents/command/types.js";
 import { registerConfigCli } from "../../cli/config-cli.js";
 import { readConfigFileSnapshot } from "../../config/config.js";
 import * as configLock from "../../config/write-lock.js";
+import { acquireGatewayLock } from "../../infra/gateway-lock.js";
 import { setLoggerOverride } from "../../logging/logger.js";
 import { createWarnLogCapture } from "../../logging/test-helpers/warn-log-capture.js";
 import { defaultRuntime } from "../../runtime.js";
@@ -100,6 +101,15 @@ describe("models.authLogout with a concurrent registered config set", () => {
         },
       };
       const hotReloadRecovery = vi.fn(() => ({ status: "emitted" as const }));
+      // A production Gateway starts under process state custody (run-loop-startup.ts); Vitest
+      // skips that lock unless asked. Without it the registered `config set` takes offline custody
+      // beside the live Gateway and waits for that Gateway's pending removal.
+      const custody = await acquireGatewayLock({
+        env: process.env,
+        allowInTests: true,
+        timeoutMs: 0,
+      });
+      onTestFinished(async () => await custody?.release());
       await using gateway = await startModelsGateway(state, cfg, token, { hotReloadRecovery });
       const { client } = gateway;
       const logoutProvider = (selection: Record<string, unknown> = {}) =>

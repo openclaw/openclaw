@@ -6,6 +6,7 @@ import {
 import type {
   ModelAuthLogoutResult,
   ModelAuthOrderSetResult,
+  ModelAuthProfileRenameResult,
 } from "../../../../src/gateway/server-methods/models-auth-status.types.js";
 import type { GatewayBrowserClient } from "../../api/gateway.ts";
 import type { ModelsProbeResult } from "../../api/types.ts";
@@ -53,7 +54,7 @@ export function createModelProviderProfileActions(options: {
   setProbeResult: (cardId: string, result: ModelsProbeResult | null) => void;
   clearMessage: (cardId: string) => void;
   cancelRefresh: () => void;
-  refresh: () => Promise<void>;
+  refresh: (force?: boolean) => Promise<void>;
   getConfig: () => RuntimeConfigCapability;
   isCurrentClient: (client: GatewayBrowserClient, epoch: number) => boolean;
   onLogoutStarted: (receipt: { cardId: string; completion: Promise<void> }) => void;
@@ -303,6 +304,46 @@ export function createModelProviderProfileActions(options: {
     options.setData({ ...data, authStatus: { ...authStatus, providers } });
   }
   return {
+    renameProfile: async (profileId: string, displayName: string): Promise<boolean> => {
+      const client = options.getClient();
+      const key = "rename:" + profileId;
+      if (!client || !options.canMutate() || options.isBusy(key)) {
+        return false;
+      }
+      const { agentId, isCurrent } = captureScope(client);
+      options.setBusy(key, true);
+      try {
+        const result = await client.request<ModelAuthProfileRenameResult>(
+          "models.authProfileRename",
+          {
+            agentId,
+            profileId,
+            displayName,
+          },
+        );
+        invalidateModelAuthStatusRequests(client);
+        if (!isCurrent()) {
+          return false;
+        }
+        if (result.warning) {
+          showProfileActionWarning(result.warning);
+        }
+        await options.refresh(false);
+        return isCurrent();
+      } catch (error) {
+        if (isCurrent()) {
+          showProfileActionError(error);
+          // A transport timeout can follow a commit. Reconcile the same account before retry.
+          invalidateModelAuthStatusRequests(client);
+          void options.refresh(false);
+        }
+        return false;
+      } finally {
+        if (isCurrent()) {
+          options.setBusy(key, false);
+        }
+      }
+    },
     resetProbes(): void {
       probeEpochs = new Map();
     },

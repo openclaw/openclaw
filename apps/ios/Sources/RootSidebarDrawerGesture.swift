@@ -2,13 +2,15 @@ import OpenClawChatUI
 import SwiftUI
 import UIKit.UIGestureRecognizerSubclass
 
-/// Decides what a drawer pan may do. Opening follows Apple's convention for
-/// edge-owned navigation (interactive pop): only a pan that starts at the
-/// leading screen edge opens the drawer. A horizontal swipe that starts
-/// anywhere else stays with the content's own pan, which scrolls only by its
-/// vertical component, exactly as a vertical pan would. Closing accepts a
-/// leftward pan that starts anywhere while the drawer covers the content.
+/// Root chat supports dragging from the conversation. Other root screens open
+/// from the leading edge only, and pushed screens keep their back gesture.
 struct SidebarDrawerGesturePolicy: Equatable {
+    enum OpeningRegion: Equatable {
+        case disabled
+        case edge
+        case content
+    }
+
     enum Intent: Equatable {
         case open
         case close
@@ -29,7 +31,7 @@ struct SidebarDrawerGesturePolicy: Equatable {
 
     var layoutMode: RootTabs.SidebarLayoutMode
     var isPresented: Bool
-    var canOpenFromEdge: Bool
+    var openingRegion: OpeningRegion
     var reduceMotion: Bool
 
     /// A disabled recognizer never sees touches, so content pans never wait on it.
@@ -37,7 +39,7 @@ struct SidebarDrawerGesturePolicy: Equatable {
         guard self.layoutMode == .drawer, !self.reduceMotion else { return false }
         switch intent {
         case .open:
-            return !self.isPresented && self.canOpenFromEdge
+            return !self.isPresented && self.openingRegion != .disabled
         case .close:
             return self.isPresented
         }
@@ -50,7 +52,7 @@ struct SidebarDrawerGesturePolicy: Equatable {
         guard self.isEnabled(for: intent) else { return false }
         switch intent {
         case .open:
-            return start.x <= Self.edgeWidth && start.y > Self.topExclusion
+            return start.y > Self.topExclusion && (self.openingRegion == .content || start.x <= Self.edgeWidth)
         case .close:
             return true
         }
@@ -86,14 +88,9 @@ struct SidebarDrawerGesturePolicy: Equatable {
     }
 }
 
-/// The drawer's only gesture owner: one UIKit pan opens from the leading edge, one closes.
-/// Scroll views underneath wait for the drawer pan to fail, so a drawer swipe never also
-/// scrolls the transcript; a touch outside the edge zone fails it on touch-down, so
-/// ordinary scrolling never waits.
-///
-/// Not `UIScreenEdgePanGestureRecognizer`: the system decides its edge zone, and it never
-/// opened the drawer for the behavior harness's edge drag (4 pt in), which the SwiftUI drag
-/// it replaced did. This pan applies the same 44 pt zone itself, in window space.
+/// One UIKit pan opens the drawer and one closes it. The transcript's vertical pan waits
+/// for the drawer to decide the direction so dragging the card doesn't also scroll chat.
+/// UIKit's screen-edge recognizer doesn't reliably cover our 44 pt edge zone.
 struct SidebarDrawerPanGesture: UIGestureRecognizerRepresentable {
     let intent: SidebarDrawerGesturePolicy.Intent
     let policy: SidebarDrawerGesturePolicy
@@ -166,6 +163,23 @@ struct SidebarDrawerPanGesture: UIGestureRecognizerRepresentable {
         init(intent: SidebarDrawerGesturePolicy.Intent, policy: SidebarDrawerGesturePolicy) {
             self.intent = intent
             self.policy = policy
+        }
+
+        func gestureRecognizer(_ gestureRecognizer: UIGestureRecognizer, shouldReceive touch: UITouch) -> Bool {
+            guard self.intent == .open, self.policy.openingRegion == .content else { return true }
+            // Keep the composer and horizontally scrolling chat content in control of their own drags.
+            var view = touch.view
+            while let candidate = view, candidate !== gestureRecognizer.view {
+                if candidate is UITextView { return false }
+                if let scrollView = candidate as? UIScrollView,
+                   scrollView.isScrollEnabled,
+                   scrollView.alwaysBounceHorizontal || scrollView.contentSize.width > scrollView.bounds.width + 1
+                {
+                    return false
+                }
+                view = candidate.superview
+            }
+            return true
         }
 
         func gestureRecognizerShouldBegin(_ gestureRecognizer: UIGestureRecognizer) -> Bool {

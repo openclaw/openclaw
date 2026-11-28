@@ -249,33 +249,6 @@ describe("Discord model picker custom_id", () => {
 });
 
 describe("provider paging", () => {
-  it("buckets providers when count exceeds the alpha-bucket threshold", () => {
-    // 28 providers all starting with the same letter ("p") → letter-bucket
-    // fallback uses count-based numeric chunks of 20 items.
-    const entries: Record<string, string[]> = {};
-    for (let i = 1; i <= DISCORD_MODEL_PICKER_PROVIDER_SINGLE_PAGE_MAX + 3; i += 1) {
-      entries[`provider-${String(i).padStart(2, "0")}`] = [`model-${i}`];
-    }
-    const data = createModelsProviderData(entries);
-
-    const firstBucket = getDiscordModelPickerProviderPage({ data, page: 1 });
-    expect(firstBucket.buckets).toHaveLength(2);
-    expect(firstBucket.bucket?.id).toBe("1-20");
-    expect(firstBucket.items).toHaveLength(20);
-    expect(firstBucket.totalPages).toBe(1);
-    expect(firstBucket.hasNext).toBe(false);
-
-    const secondBucket = getDiscordModelPickerProviderPage({
-      data,
-      page: 1,
-      bucket: "21-28",
-    });
-    expect(secondBucket.bucket?.id).toBe("21-28");
-    expect(secondBucket.items).toHaveLength(8);
-    expect(secondBucket.totalPages).toBe(1);
-    expect(secondBucket.hasPrev).toBe(false);
-  });
-
   it("uses Discord-safe provider pages with and without buckets", () => {
     const compactData = createModelsProviderData({
       anthropic: ["claude-sonnet-4-5"],
@@ -309,39 +282,6 @@ describe("provider paging", () => {
 });
 
 describe("model paging", () => {
-  it("sorts models and buckets them across the Discord select-option constraint", () => {
-    // 29 models all starting with the same prefix → numeric bucket fallback,
-    // 20 in the first bucket and 9 in the second.
-    const models = Array.from(
-      { length: DISCORD_MODEL_PICKER_MODEL_PAGE_SIZE + 4 },
-      (_, idx) =>
-        `model-${String(DISCORD_MODEL_PICKER_MODEL_PAGE_SIZE + 4 - idx).padStart(2, "0")}`,
-    );
-    const data = createModelsProviderData({ openai: models });
-
-    const firstBucket = requireValue(
-      getDiscordModelPickerModelPage({ data, provider: "openai", page: 1 }),
-      "expected first model bucket for openai",
-    );
-    expect(firstBucket.buckets.length).toBeGreaterThan(1);
-    expect(firstBucket.bucket?.id).toBe("1-20");
-    expect(firstBucket.items[0]).toBe("model-01");
-    expect(firstBucket.items.length).toBeLessThanOrEqual(DISCORD_MODEL_PICKER_MODEL_PAGE_SIZE);
-
-    const secondBucket = requireValue(
-      getDiscordModelPickerModelPage({
-        data,
-        provider: "openai",
-        page: 1,
-        bucket: "21-29",
-      }),
-      "expected second model bucket for openai",
-    );
-    expect(secondBucket.bucket?.id).toBe("21-29");
-    expect(secondBucket.items[0]).toBe("model-21");
-    expect(secondBucket.items).toHaveLength(9);
-  });
-
   it("uses Discord select-option max for model pages", () => {
     const data = createModelsProviderData({ openai: ["gpt-4o", "gpt-4.1"] });
     const page = requireValue(

@@ -38,6 +38,8 @@ export function createToolTerminalObserver(
   runId: string,
 ): NonNullable<EmbeddedRunAttemptParams["observeToolTerminal"]> {
   let lastToolError: ToolErrorSummary | undefined;
+  // The catalog tool a failed dispatch ran; unset when the catalog resolved no target.
+  let failedDispatchTarget: string | undefined;
 
   return (observation) => {
     const effectReceipt = readToolEffectReceipt(observation.result);
@@ -69,14 +71,19 @@ export function createToolTerminalObserver(
       (observation.outcome !== "failure" &&
         observation.toolName === "message" &&
         projectPluginMessageDeliveryFact(observation.result)?.status === "suppressed");
+    // The dispatcher reports the catalog tool its argument reader resolved, so recovery keys
+    // on the target the dispatcher ran, not on its own reading of the arguments.
+    const isDispatch = isToolCallDispatcherName(observation.toolName);
+    const dispatchedToolId = isDispatch ? asRecord(details?.tool)?.id : undefined;
     if (!preservesFailure && observation.outcome === "failure") {
       const mutatingAction = executionStarted && mutation.mutatingAction;
       const terminalDiagnostic =
         observation.failure?.terminalDiagnostic ??
         (executionStarted ? readTimeoutDiagnostic(observation.result) : undefined);
-      const dispatchedToolName = isToolCallDispatcherName(observation.toolName)
+      const dispatchedToolName = isDispatch
         ? unwrapToolCallForDisplay({ name: observation.toolName, args: executedArguments }).name
         : undefined;
+      failedDispatchTarget = typeof dispatchedToolId === "string" ? dispatchedToolId : undefined;
       lastToolError = {
         toolName: observation.toolName,
         ...(dispatchedToolName && dispatchedToolName !== observation.toolName
@@ -92,11 +99,16 @@ export function createToolTerminalObserver(
       !preservesFailure &&
       lastToolError &&
       // A call to a missing tool did nothing and has no name a retry could reuse, so the
-      // next successful executed call recovers it. Otherwise only the same tool recovers.
+      // next successful executed call recovers it. A dispatch recovers by its catalog target;
+      // one the catalog did not resolve has no target to retry, so any later dispatch
+      // recovers it. Otherwise only the same tool recovers.
       (lastToolError.unknownTool
         ? executionStarted
-        : normalizeLowercaseStringOrEmpty(lastToolError.toolName) ===
-          normalizeLowercaseStringOrEmpty(observation.toolName))
+        : isToolCallDispatcherName(lastToolError.toolName)
+          ? isDispatch &&
+            (failedDispatchTarget === undefined || dispatchedToolId === failedDispatchTarget)
+          : normalizeLowercaseStringOrEmpty(lastToolError.toolName) ===
+            normalizeLowercaseStringOrEmpty(observation.toolName))
     ) {
       lastToolError = undefined;
     }

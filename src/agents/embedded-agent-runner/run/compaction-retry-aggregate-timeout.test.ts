@@ -5,7 +5,7 @@ import {
   waitForCompactionRetryWithAggregateTimeout as aggregateWait,
 } from "./compaction-retry-aggregate-timeout.js";
 
-function waitForRetry(overrides: Partial<Parameters<typeof aggregateWait>[0]> = {}) {
+function waitForRetry(overrides: Partial<Parameters<typeof aggregateWait>[0]>) {
   return aggregateWait({
     waitForCompactionRetry: () => new Promise<void>(() => {}),
     abortable: async (promise) => await promise,

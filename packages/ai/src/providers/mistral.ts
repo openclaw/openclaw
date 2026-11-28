@@ -401,6 +401,15 @@ export const streamMistral: StreamFunction<"mistral-conversations", MistralOptio
           usageOutput.totalTokens =
             usage.totalTokens || usageOutput.input + usageOutput.output + cacheRead;
           usageOutput.usageReport = { state: terminal ? "available" : "unavailable" };
+          // Mistral's `usage.prompt_tokens` is the measured request size, cached tokens included.
+          usageOutput.contextUsage =
+            terminal && promptTokens > 0
+              ? {
+                  state: "available",
+                  promptTokens,
+                  totalTokens: promptTokens + usageOutput.output,
+                }
+              : { state: "unavailable" };
           calculateCost(model, usageOutput);
         }
 

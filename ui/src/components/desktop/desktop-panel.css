@@ -430,6 +430,16 @@ openclaw-desktop-panel {
     font: inherit;
     font-size: 12px;
   }
+  .desktop-source-retry {
+    min-height: 36px;
+    padding-inline: 16px;
+    font-size: var(--control-ui-text-md, 14px);
+  }
+  @media (pointer: coarse) {
+    .desktop-source-retry {
+      min-height: 44px;
+    }
+  }
   .desktop-presentation--desktop .desktop-picker:has(> openclaw-panel-empty-state),
   .desktop-presentation--mobile .desktop-picker:has(> openclaw-panel-empty-state) {
     padding: 0;

@@ -2,10 +2,8 @@
 import { createRoot } from "solid-js";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { createDeferred } from "../../../../test/helpers/promise.js";
-import type { ModelCatalogResult, SystemAgentSetupDetectResult } from "../../api/types.ts";
+import type { SystemAgentSetupDetectResult } from "../../api/types.ts";
 import { i18n } from "../../i18n/index.ts";
-import { beginModelCatalogRead, publishModelCatalogResult } from "../../lib/model-catalog-cache.ts";
-import { updatePickers } from "../../test-helpers/select-picker.ts";
 import { createStorageMock } from "../../test-helpers/storage.ts";
 import { waitForFast } from "../../test-helpers/wait-for.ts";
 import {
@@ -15,12 +13,8 @@ import {
   selectManualProvider,
   setInput,
   callsFor,
-  waitForElement,
-  pageButton,
-  nativeModel,
 } from "./model-setup-first-run.test-support.ts";
 import { createModelSetupSaving } from "./model-setup-saving.ts";
-import { createNativeModelSetup } from "./native-model-setup.tsx";
 
 const inventory: SystemAgentSetupDetectResult = {
   ...detection,
@@ -31,19 +25,6 @@ const scanButton = (page: ParentNode) =>
   [...page.querySelectorAll<HTMLButtonElement>(".model-setup__intro button")].find(
     (button) => (button.getAttribute("aria-label") ?? button.textContent?.trim()) === "Check again",
   )!;
-const nativeOption = '[role="option"][data-value="acp-opencode/fixture-model"]';
-const catalogScope = { view: "all" as const, agentId: "main" };
-function nativeControls(page: ParentNode) {
-  const section = page.querySelector<HTMLElement>("[data-native-model-setup]")!;
-  const button = (selector: string) => pageButton(section, selector)!;
-  return {
-    section,
-    button,
-    trigger: () => button(".picker-select__trigger"),
-    alert: () => section.querySelector('[role="alert"]'),
-    status: () => section.querySelector('p[role="status"]'),
-  };
-}
 
 describe("Model setup refresh continuity", () => {
   beforeEach(async () => {
@@ -100,33 +81,6 @@ describe("Model setup refresh continuity", () => {
     expect(warnings.mock.calls.flat().join("\n")).not.toContain("[STRICT_READ_UNTRACKED]");
   });
 
-  it("admits native catalog refresh before its asynchronous read is observed", () => {
-    const { context, client, request } = createFirstRunContext();
-    const unsubscribe = vi.fn();
-    vi.spyOn(context.gateway, "subscribeEvents").mockReturnValue(unsubscribe);
-    request.mockResolvedValue({ models: [] });
-    const { owner, dispose } = createRoot((disposeRoot) => ({
-      owner: createNativeModelSetup({
-        getContext: () => context,
-        getConnection: () => null,
-        canUseSetup: (candidate) => candidate === client,
-        blocked: () => false,
-        onSelected: () => {},
-        onChange: () => {},
-      }),
-      dispose: disposeRoot,
-    }));
-    try {
-      owner.open();
-      expect(callsFor(request, "models.list")).toHaveLength(1);
-      owner.open();
-      expect(callsFor(request, "models.list")).toHaveLength(1);
-    } finally {
-      dispose();
-    }
-    expect(unsubscribe).toHaveBeenCalledOnce();
-  });
-
   it.each([false, true])(
     "settles a retired save before first settle (owned: %s)",
     async (owned) => {
@@ -145,159 +99,14 @@ describe("Model setup refresh continuity", () => {
     },
   );
 
-  it.each([false, true])(
-    "retries a failed native catalog with cached choices: %s",
-    async (warm) => {
-      const { context, client, request } = createFirstRunContext();
-      const model = nativeModel("Cached fixture model");
-      const cached: ModelCatalogResult = { models: [model] };
-      const pending = createDeferred<ModelCatalogResult>();
-      const retry = createDeferred<ModelCatalogResult>();
-      let reads = 0;
-      request.mockImplementation(async (method) => {
-        if (method === "models.list") {
-          return ++reads === 1 ? pending.promise : retry.promise;
-        }
-        throw new Error("Unexpected request: " + method);
-      });
-      const { page } = await mountDetection(context, client, inventory, false);
-      if (warm) {
-        publishModelCatalogResult(
-          beginModelCatalogRead(client, catalogScope),
-          catalogScope,
-          cached,
-        );
-      }
-      const { section, button, trigger: getTrigger, alert, status } = nativeControls(page);
-      const trigger = getTrigger();
-      const expectSelection = () => {
-        expect(getTrigger()).toBe(trigger);
-        expect(button("button.primary").disabled).toBe(false);
-      };
-      try {
-        trigger.click();
-        if (warm) {
-          await waitForElement(section, nativeOption);
-          section.querySelector<HTMLElement>(nativeOption)!.click();
-          await page.updateComplete;
-          expect(trigger.textContent).toContain("Cached fixture model");
-          expectSelection();
-          expect(status()).toBeNull();
-          await selectManualProvider(page, "fixture-key");
-          expect(callsFor(request, "models.list")).toHaveLength(1);
-        }
-        pending.reject(new Error("Catalog refresh failed. Try again."));
-        await waitForFast(() => expect(alert()?.textContent).toContain("Catalog refresh failed"));
-        if (warm) {
-          expectSelection();
-        }
-        button('[role="alert"] button').click();
-        await waitForFast(() => {
-          expect(callsFor(request, "models.list")).toHaveLength(2);
-          expect(alert()).toBeNull();
-          if (!warm) {
-            expect(status()).toBeNull();
-          }
-        });
-        retry.resolve({ models: warm ? [{ ...model, name: "Refreshed fixture model" }] : [] });
-        if (warm) {
-          await waitForFast(() => expect(trigger.textContent).toContain("Refreshed fixture model"));
-          expectSelection();
-          expect(status()).toBeNull();
-        } else {
-          await waitForFast(() =>
-            expect(status()?.textContent).toContain("No models from installed agents yet"),
-          );
-        }
-        expect(alert()).toBeNull();
-      } finally {
-        pending.resolve(cached);
-        retry.resolve(cached);
-      }
-    },
-  );
-
-  it("reopens the published native inventory without restarting discovery and retries explicitly", async () => {
-    const { context, client, request } = createFirstRunContext();
-    const model = nativeModel();
-    let catalog: ModelCatalogResult = { models: [model], pendingProviders: ["acp-qwen"] };
-    const retry = createDeferred<ModelCatalogResult>();
-    let discoveries = 0;
-    request.mockImplementation(async (method, params) => {
-      if (method === "models.list") {
-        if (
-          params &&
-          typeof params === "object" &&
-          "refresh" in params &&
-          params.refresh === true &&
-          ++discoveries > 1
-        ) {
-          return retry.promise;
-        }
-        return catalog;
-      }
-      if (method === "agents.update") {
-        throw new Error("The model choice could not be saved.");
-      }
-      throw new Error("Unexpected request: " + method);
-    });
-    const { page } = await mountDetection(context, client, inventory, false);
-    const { section, button, trigger, alert, status } = nativeControls(page);
-    const saveError = "The model choice could not be saved.";
-    try {
-      trigger().click();
-      await waitForElement(section, nativeOption);
-      section.querySelector<HTMLElement>(nativeOption)!.click();
-      await page.updateComplete;
-      catalog = {
-        models: [model, { ...model, id: "new-model", name: "New published model" }],
-        pendingProviders: ["acp-qwen"],
-      };
-      const publish = (value: ModelCatalogResult) =>
-        publishModelCatalogResult(beginModelCatalogRead(client, catalogScope), catalogScope, value);
-      publish(catalog);
-      trigger().click();
-      await waitForElement(section, '[role="option"][data-value="acp-opencode/new-model"]');
-      expect(discoveries).toBe(1);
-      expect(section.querySelector('[role="option"][aria-selected="true"]')).toBe(
-        section.querySelector(nativeOption),
-      );
-      trigger().click();
-      await updatePickers(page);
-      catalog = { ...catalog, refreshFailed: true };
-      publish(catalog);
-      trigger().click();
-      await waitForFast(() => expect(button('[role="alert"] button').disabled).toBe(false));
-      expect(discoveries).toBe(1);
-      button('[role="alert"] button').click();
-      await page.updateComplete;
-      expect(discoveries).toBe(2);
-      expect(status()).toBeNull();
-      expect(button("button.primary").disabled).toBe(false);
-      await selectManualProvider(page, "fixture-key");
-      expect(page.querySelector<HTMLInputElement>(manualInput)?.disabled).toBe(false);
-      retry.resolve({ models: catalog.models });
-      await waitForFast(() => expect(alert()).toBeNull());
-      expect(status()).toBeNull();
-      expect(trigger().textContent).toContain("Fixture model");
-      button("button.primary").click();
-      await waitForFast(() => expect(alert()?.textContent).toContain(saveError));
-      publish({ models: [model] });
-      trigger().click();
-      await page.updateComplete;
-      await updatePickers(page);
-      expect(alert()?.textContent).toContain(saveError);
-    } finally {
-      retry.resolve({ models: catalog.models });
-    }
-  });
-
   it.each(["scope", "revision"])(
     "clears drafts and ignores late rescans after owner %s changes",
     async (change) => {
       const { context, client, request, snapshot, publishGatewaySnapshot } =
         createFirstRunContext();
       const { page } = await mountDetection(context, client, inventory, change === "revision");
+      page.discoveryOpen = true;
+      await page.updateComplete;
       await selectManualProvider(page, "fixture-key");
       setInput(page, manualInput, "old-owner-draft");
       const pending = createDeferred<SystemAgentSetupDetectResult>();

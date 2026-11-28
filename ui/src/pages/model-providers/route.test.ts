@@ -57,6 +57,7 @@ function createModelsRouter(selectedId: string | null = "main") {
   const context = Object.freeze({
     gateway: store.gateway,
     agents,
+    agentSelection: chatSelection,
     settingsAgentSelection: selection,
   }) satisfies Parameters<NonNullable<typeof page.loader>>[0];
   const router = createRouter<RouteId, typeof context, null, ModelProvidersRouteData>({
@@ -188,6 +189,21 @@ it.each([true, false])("preserves provider deep links when connected=%s", async 
     provider: "openai",
     client: connected ? h.gateway.snapshot.client : null,
   });
+});
+
+it.each([
+  ["?firstRun=1", "research"],
+  ["", "main"],
+])("loads credentials for the agent that owns %s", async (search, agentId) => {
+  const h = createModelsRouter("main");
+  // First run sets up the application's agent, not the one Settings last showed.
+  h.chatSelection.set("research");
+  await h.router.navigateLocation(
+    { pathname: "/settings/model-providers", search, hash: "" },
+    h.context,
+  );
+  expect(h.data()).toMatchObject({ agentId, firstRun: search !== "" });
+  expect(h.modelCalls("models.authStatus").at(-1)?.[1]).toMatchObject({ agentId });
 });
 
 it.each<[OwnerChange, Boundary]>([

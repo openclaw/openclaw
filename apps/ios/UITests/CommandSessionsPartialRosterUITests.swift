@@ -4,13 +4,13 @@ import XCTest
 /// Consumer regression for the Sessions screen partial-roster repair (issue #193789):
 /// with the loopback Gateway fixture's later page failing (`/partial`), the retained
 /// sessions must stay listed beside an incomplete-result notice with a working
-/// in-screen Refresh, and `/complete` plus that Refresh must recover the full roster.
+/// in-screen Try again, and `/complete` plus that Try again must recover the full roster.
 /// The fixture, its setup code, and the `/partial` + `/complete` controls come from
 /// `scripts/test-ios-shell-gateway.mjs` (default 205-session roster); the flow was
 /// first executed in https://github.com/openclaw/openclaw/pull/193809#pullrequestreview-5794596195.
 @MainActor
 final class CommandSessionsPartialRosterUITests: XCTestCase {
-    func testPartialRosterNoticeRetainsRowsAndRefreshRecovers() async throws {
+    func testPartialRosterNoticeRetainsRowsAndTryAgainRecovers() async throws {
         self.continueAfterFailure = false
         let environment = ProcessInfo.processInfo.environment
         try XCTSkipUnless(
@@ -45,46 +45,44 @@ final class CommandSessionsPartialRosterUITests: XCTestCase {
         app.launchArguments[destination] = "sessions"
         app.launch()
 
-        // The leading sidebar can render the identical notice text, so every
-        // assertion is scoped to the Sessions screen's own scroll view.
-        let screen = app.scrollViews.containing(.staticText, identifier: "Recent sessions").firstMatch
-        XCTAssertTrue(screen.waitForExistence(timeout: 10))
-        let notice = screen.staticTexts["Showing 200 sessions; 205 total. Refresh to load the rest."]
-        let partialCount = screen.staticTexts["199 sessions"]
+        // The sidebar shows the same notice with its own retry, so every assertion
+        // uses the Sessions screen's identifiers.
+        let notice = app.staticTexts["Sessions.PartialLoad.Notice"]
         XCTAssertTrue(
-            partialCount.waitForExistence(timeout: 20),
-            "The main session is excluded from the visible row count")
-        self.capture("partial-roster", in: app)
-        XCTAssertTrue(
-            notice.waitForExistence(timeout: 10),
+            notice.waitForExistence(timeout: 20),
             "Retained rows need an incomplete-result notice")
-        XCTAssertTrue(
-            screen.buttons.matching(NSPredicate(format: "label CONTAINS %@", "Synthetic session 1"))
-                .firstMatch
-                .exists)
-        let refresh = screen.buttons["Refresh"]
-        XCTAssertTrue(refresh.waitForExistence(timeout: 5))
-        XCTAssertTrue(refresh.isHittable)
+        XCTAssertEqual(notice.label, "Couldn’t load some sessions. Try again.")
+        // The first page (sessions 0–199) stays listed; the failing later page (200–204) is missing.
+        let retained = app.buttons["SessionDashboard.Session.agent:main:navigation-1"]
+        let laterPage = app.buttons["SessionDashboard.Session.agent:main:navigation-204"]
+        XCTAssertTrue(retained.exists, "Rows from the loaded page stay listed beside the notice")
+        XCTAssertFalse(laterPage.exists)
+        self.capture("partial-roster", in: app)
+        let retry = app.buttons["Sessions.PartialLoad.Refresh"]
+        XCTAssertTrue(retry.waitForExistence(timeout: 5))
+        XCTAssertTrue(retry.isHittable)
+        XCTAssertEqual(retry.label, "Try again")
         // Capture the control's identity while it still exists; resolving it after
-        // recovery would fail (the banner is gone once the roster is complete).
-        let refreshIdentity = "label=\(refresh.label); identifier=\(refresh.identifier)"
+        // recovery would fail (the notice is gone once the roster is complete).
+        let retryIdentity = "label=\(retry.label); identifier=\(retry.identifier)"
 
         try await self.setPartial(false, fixture: fixture)
-        refresh.tap()
-        XCTAssertTrue(screen.staticTexts["204 sessions"].waitForExistence(timeout: 15))
+        retry.tap()
+        XCTAssertTrue(laterPage.waitForExistence(timeout: 15), "Try again loads the rest of the roster")
         XCTAssertTrue(notice.waitForNonExistence(timeout: 5))
-        XCTAssertFalse(refresh.exists)
+        XCTAssertFalse(retry.exists)
+        XCTAssertTrue(retained.exists)
         self.capture("complete-roster", in: app)
 
         let trace = XCTAttachment(
             string: """
-                launch arguments: \(app.launchArguments.joined(separator: " "))
-                fixture: \(fixture.absoluteString)
-                retained rows visible while final page failing: Synthetic session 1 … header "199 sessions"
-                notice: Showing 200 sessions; 205 total. Refresh to load the rest.
-                in-screen Refresh: \(refreshIdentity)
-                header count after recovery: 204 sessions
-                """)
+            launch arguments: \(app.launchArguments.joined(separator: " "))
+            fixture: \(fixture.absoluteString)
+            retained rows visible while final page failing: Synthetic session 1; Synthetic session 204 absent
+            notice: Couldn’t load some sessions. Try again.
+            in-screen Try again: \(retryIdentity)
+            after recovery: Synthetic session 204 listed, notice gone
+            """)
         trace.name = "sessions-partial-roster-trace"
         trace.lifetime = .keepAlways
         self.add(trace)

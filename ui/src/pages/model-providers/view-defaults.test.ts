@@ -242,7 +242,15 @@ it("keeps the global decision model reachable for a new user without a chat mode
       defaultModels: { primary: "", fallbacks: [], utilityModel: null },
       thinkingOverridden: false,
       fastModeOverridden: false,
-      catalogProviders: [{ id: "openai", label: "OpenAI", choices: [], authProviders: ["openai"] }],
+      catalogProviders: [
+        {
+          id: "openai",
+          label: "OpenAI",
+          choices: [],
+          authProviders: ["openai"],
+          apiKeyProviders: [],
+        },
+      ],
     }),
   );
   // The catalog stays the first action; the defaults wait below it.

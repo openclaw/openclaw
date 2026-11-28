@@ -1181,7 +1181,7 @@ describe("createBackupArchive", () => {
   );
 
   it(
-    "fails when declared plugin SQLite appears after snapshot discovery: late.sqlite",
+    "refuses malformed declared plugin SQLite even when it appears after snapshot discovery",
     withState(async (state) => {
       const { outputDir, dbPath: latePath } = await pluginDatabaseFixture(state, "late.sqlite");
 
@@ -1218,7 +1218,7 @@ describe("createBackupArchive", () => {
 
       try {
         await expect(createStateArchive(outputDir)).rejects.toThrow(
-          /SQLite state appeared after snapshot discovery/,
+          /SQLite database cannot be compacted safely for backup/,
         );
         expect(createdLatePath).toBe(true);
         expect(stagedArchiveCleanupAttempts).toBeGreaterThanOrEqual(2);

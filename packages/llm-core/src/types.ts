@@ -935,3 +935,44 @@ export type CompleteSimpleFn = (
 ) => Promise<AssistantMessage>;
 
 export type ValidateToolArgumentsFn = (tool: Tool, toolCall: ToolCall) => unknown;
+
+export type RuntimeContextDataRange = { start: number; end: number };
+
+const dataRanges = Symbol("openclaw.runtimeContextDataRanges");
+type RuntimeContextDataCarrier = {
+  content: unknown;
+  [dataRanges]?: { text: string; ranges: readonly RuntimeContextDataRange[] };
+};
+
+/** The exact text of a string or a single text-block message. */
+export function getRuntimeContextDataText(message: RuntimeContextDataCarrier): string | undefined {
+  const { content } = message;
+  if (typeof content === "string") {
+    return content;
+  }
+  if (Array.isArray(content) && content.length === 1 && content[0]?.type === "text") {
+    const text: unknown = content[0].text;
+    return typeof text === "string" ? text : undefined;
+  }
+  return undefined;
+}
+
+/** In-memory only. A copy with different text must not inherit the old offsets. */
+export function setRuntimeContextDataRanges(
+  message: RuntimeContextDataCarrier,
+  ranges: readonly RuntimeContextDataRange[],
+) {
+  const text = getRuntimeContextDataText(message);
+  if (text !== undefined && ranges.length) {
+    message[dataRanges] = { text, ranges };
+  } else {
+    delete message[dataRanges];
+  }
+}
+
+export function getRuntimeContextDataRanges(message: RuntimeContextDataCarrier) {
+  const binding = message[dataRanges];
+  return binding && binding.text === getRuntimeContextDataText(message)
+    ? binding.ranges
+    : undefined;
+}

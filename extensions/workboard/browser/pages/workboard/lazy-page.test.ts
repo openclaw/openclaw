@@ -80,7 +80,7 @@ it("reports reload guidance for import failures and preserves mount failure retr
   pending.reject(failure);
   await pending.promise.catch(() => {});
   expect(host.ui.invalidate).toHaveBeenCalledOnce();
-  expect(() => handle.update?.(context)).toThrow("Check your connection and reload this page.");
+  expect(() => handle.update?.(context)).toThrow("Couldn’t load Workboard. Reload this page.");
   handle.dispose?.();
   const mountFailure = new Error("mount failed");
   load.mockResolvedValue(() => {

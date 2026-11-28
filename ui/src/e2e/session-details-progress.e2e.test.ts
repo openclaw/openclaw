@@ -68,6 +68,56 @@ suite.define(() => {
     },
   );
 
+  it("keeps focus in Details when Clear removes its trigger and restores the card on rejection", async () => {
+    await suite.withPage(
+      { reducedMotion: "reduce", viewport: { width: 1440, height: 900 } },
+      async ({ page }) => {
+        const sessionKey = "agent:main:clear-progress";
+        const card = {
+          sessionKey,
+          revision: 4,
+          updatedAt: Date.now(),
+          markdown: "Review the final layout.",
+        };
+        const gateway = await installMockGateway(page, {
+          sessionKey,
+          featureMethods: ["progressCard.get", "progressCard.put"],
+          heldMethods: ["progressCard.put"],
+          methodResponses: { "progressCard.get": { card } },
+          historyMessages: [{ role: "assistant", content: "The checklist is ready." }],
+        });
+        await page.goto(controlUiSessionUrl(suite.server.baseUrl, sessionKey));
+        const details = await openChatDetails(page);
+        const options = details.getByRole("button", { name: "Task progress options" });
+        await options.press("Enter");
+        await page
+          .getByRole("menuitem", { name: "Clear saved progress for everyone" })
+          .press("Enter");
+        expect((await gateway.waitForRequest("progressCard.put")).params).toEqual({
+          sessionKey,
+          expectedRevision: 4,
+        });
+        await options.waitFor({ state: "hidden" });
+        await expect
+          .poll(() => details.evaluate((panel) => panel === document.activeElement))
+          .toBe(true);
+        const composer = page.getByRole("textbox", { name: "Chat composer", exact: true });
+        await composer.fill("Keep these edits.");
+        await gateway.rejectDeferred("progressCard.put", {
+          code: "UNAVAILABLE",
+          message: "Write unavailable",
+        });
+        await options.waitFor();
+        await page
+          .getByText("Could not clear saved progress card.", { exact: true })
+          .first()
+          .waitFor();
+        expect(await composer.inputValue()).toBe("Keep these edits.");
+        expect(await composer.evaluate((input) => input === document.activeElement)).toBe(true);
+      },
+    );
+  });
+
   it("opens inactive split-pane Details on the first click", async () => {
     const sessionKey = "agent:main:details-first-click";
     await suite.withPage(

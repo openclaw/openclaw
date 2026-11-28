@@ -270,6 +270,7 @@ it("reports a redacted, collapsed, bounded prefix of the last of two rejected re
     prepareModel: vi.fn(async () => ({ ...preparedModel(), config: {} })),
     completeModel,
     isCurrent: () => true,
+    readEntry: async () => undefined,
   });
   const error = await request(observerState(), []).catch((caught: unknown) => caught);
   expect(error).toBeInstanceOf(Error);
@@ -326,6 +327,7 @@ it("gives the last utility fallback its own model budget after slow preparation"
     }),
     completeModel,
     isCurrent: () => true,
+    readEntry: async () => undefined,
   });
   const settled = request(observerState(), []).catch((error: unknown) => error);
   await advance(2_000 + 30_000 + 29_000);
@@ -375,6 +377,7 @@ it("uses a healthy configured fallback when the primary returns invalid observer
     }),
     completeModel: (params) => runUtilityCompletion(params, complete),
     isCurrent: () => true,
+    readEntry: async () => undefined,
   });
   const result = await request(observerState({ utilityModelRef: "fixture/primary" }), []).catch(
     (error: unknown) => error,

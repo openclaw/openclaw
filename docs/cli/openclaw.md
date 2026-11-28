@@ -25,7 +25,7 @@ Running `openclaw` with no subcommand routes based on config state:
   without onboarding or OpenClaw. Use `/openclaw` inside the TUI, or run
   `openclaw setup` directly, to reach OpenClaw later.
 
-Running `openclaw setup` first live-tests the configured default model. A passing turn starts OpenClaw. An interactive failure opens guided inference setup and hands off to OpenClaw after a candidate passes. One-shot, JSON, and other noninteractive requests fail with instructions to run [`openclaw onboard`](/cli/onboard) when inference is unavailable. `openclaw --help` and `openclaw --version` keep their normal fast paths.
+Running `openclaw setup` first live-tests the configured default model. A passing turn starts OpenClaw. An interactive failure opens guided inference setup and hands off to OpenClaw after a candidate passes. Except for [local error explanations](#explain-an-error-without-a-model), one-shot, JSON, and other noninteractive requests fail with instructions to run [`openclaw onboard`](/cli/onboard) when inference is unavailable. `openclaw --help` and `openclaw --version` keep their normal fast paths.
 
 If inference plugin loading or owner verification fails, the error includes the underlying cause after applying OpenClaw's error redaction. One-shot text and JSON output retain that detail alongside onboarding guidance.
 
@@ -47,6 +47,21 @@ It does not dump secrets or load plugin CLI commands just to start.
 Use `status` for the detailed inventory: config path, docs/source paths, local CLI checks, key/token presence, agents, model, and Gateway details.
 
 OpenClaw uses the same reference discovery as regular agents: in a Git checkout it points at local `docs/` and the source tree; in an npm install it uses bundled docs and links to [https://github.com/openclaw/openclaw](https://github.com/openclaw/openclaw), with guidance to check source when docs are not enough.
+
+## Explain an error without a model
+
+In the OpenClaw TUI, type `explain error:` followed by the error message. If you
+can't start the TUI, pass the redacted error directly to the offline flag:
+
+```bash
+openclaw setup --explain-error 'OpenClaw config is invalid'
+```
+
+OpenClaw recognizes a small set of error messages. It gives a likely cause and
+one safe next step, or asks for more precise error details. It does not run the
+suggested step, contact a model, or inspect your installation. Remove tokens,
+keys, and private values before pasting; your terminal or chat client may still
+show or retain what you entered.
 
 ## Examples
 

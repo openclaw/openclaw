@@ -10,36 +10,27 @@ import org.junit.Test
 
 class GatewayTalkSetupReadinessTest {
   @Test
-  fun targetTitlesStayNestedLocalizedPresentation() {
-    val targets =
+  fun realtimeIssuesKeepExistingLocalizedTemplates() {
+    val title = NativeText.Resource(source = "Realtime Talk", formatArgs = emptyList())
+    val issueCases =
       listOf(
-        GatewayTalkSetupTarget.REALTIME_TALK to "Realtime Talk",
-        GatewayTalkSetupTarget.DICTATION to "Dictation",
+        GatewayTalkSetupIssue.Targeted(GatewayTalkSetupTargetIssue.GroupMissing) to "Gateway did not return \${issue.target.title} setup",
+        GatewayTalkSetupIssue.Targeted(GatewayTalkSetupTargetIssue.NoProvider) to
+          "No \${issue.target.title} provider is configured on the Gateway",
+        GatewayTalkSetupIssue.Targeted(GatewayTalkSetupTargetIssue.MissingReadiness) to
+          "Gateway did not return \${issue.target.title} readiness",
+        GatewayTalkSetupIssue.Targeted(GatewayTalkSetupTargetIssue.ConfigureProvider) to
+          "Configure a \${issue.target.title} provider on the Gateway",
+        GatewayTalkSetupIssue.Targeted(GatewayTalkSetupTargetIssue.MissingActiveProvider) to
+          "Gateway did not identify the active \${issue.target.title} provider",
+        GatewayTalkSetupIssue.Targeted(GatewayTalkSetupTargetIssue.UnsupportedProvider) to
+          "Choose a supported \${issue.target.title} provider on the Gateway",
       )
-
-    for ((target, source) in targets) {
-      val title = NativeText.Resource(source = source, formatArgs = emptyList())
-      assertEquals(title, target.title)
-      val issueCases =
-        listOf(
-          GatewayTalkSetupIssue.Targeted(GatewayTalkSetupTargetIssue.GroupMissing, target) to "Gateway did not return \${issue.target.title} setup",
-          GatewayTalkSetupIssue.Targeted(GatewayTalkSetupTargetIssue.NoProvider, target) to
-            "No \${issue.target.title} provider is configured on the Gateway",
-          GatewayTalkSetupIssue.Targeted(GatewayTalkSetupTargetIssue.MissingReadiness, target) to
-            "Gateway did not return \${issue.target.title} readiness",
-          GatewayTalkSetupIssue.Targeted(GatewayTalkSetupTargetIssue.ConfigureProvider, target) to
-            "Configure a \${issue.target.title} provider on the Gateway",
-          GatewayTalkSetupIssue.Targeted(GatewayTalkSetupTargetIssue.MissingActiveProvider, target) to
-            "Gateway did not identify the active \${issue.target.title} provider",
-          GatewayTalkSetupIssue.Targeted(GatewayTalkSetupTargetIssue.UnsupportedProvider, target) to
-            "Choose a supported \${issue.target.title} provider on the Gateway",
-        )
-      for ((issue, template) in issueCases) {
-        assertEquals(
-          NativeText.Resource(source = template, formatArgs = listOf(title)),
-          gatewayTalkSetupIssueDescriptionText(issue),
-        )
-      }
+    for ((issue, template) in issueCases) {
+      assertEquals(
+        NativeText.Resource(source = template, formatArgs = listOf(title)),
+        gatewayTalkSetupIssueDescriptionText(issue),
+      )
     }
   }
 
@@ -61,7 +52,6 @@ class GatewayTalkSetupReadinessTest {
       ),
       gatewayTalkSetupIssueDescriptionText(
         GatewayTalkSetupIssue.UnknownProvider(
-          target = GatewayTalkSetupTarget.REALTIME_TALK,
           providerId = "future-provider",
         ),
       ),
@@ -78,19 +68,16 @@ class GatewayTalkSetupReadinessTest {
   }
 
   @Test
-  fun mixedProviderStatesRemainDistinct() {
+  fun unconfiguredRealtimeProviderRetainsItsIdentity() {
     val readiness =
       parseGatewayTalkSetupReadiness(
         catalog(
           realtime = providerGroup(id = "openai", label = "OpenAI Realtime", configured = false),
-          transcription = providerGroup(id = "deepgram", label = "Deepgram", configured = true),
         ),
       )
 
     val realtime = readiness.realtimeTalk as GatewayTalkSetupState.NeedsSetup
-    val dictation = readiness.dictation as GatewayTalkSetupState.Ready
     assertEquals("OpenAI Realtime", realtime.provider?.label)
-    assertEquals("Deepgram", dictation.provider.label)
   }
 
   @Test
@@ -98,11 +85,10 @@ class GatewayTalkSetupReadinessTest {
     val alias =
       parseGatewayTalkSetupReadiness(
         catalog(
-          realtime = providerGroup(id = "google", label = "Google Live", configured = true),
-          transcription = providerGroup(id = "openai", label = "OpenAI Realtime Transcription", configured = true, activeProvider = "openai-realtime", aliases = listOf("openai-realtime")),
+          realtime = providerGroup(id = "openai", label = "OpenAI Realtime", configured = true, activeProvider = "openai-realtime", aliases = listOf("openai-realtime")),
         ),
       )
-    assertEquals("openai", (alias.dictation as GatewayTalkSetupState.Ready).provider.id)
+    assertEquals("openai", (alias.realtimeTalk as GatewayTalkSetupState.Ready).provider.id)
     val canonical =
       parseGatewayTalkSetupReadiness(
         catalog(
@@ -159,22 +145,17 @@ class GatewayTalkSetupReadinessTest {
   }
 
   @Test
-  fun missingCatalogIsUnverifiedForBothActions() {
+  fun missingCatalogIsUnverified() {
     val readiness = parseGatewayTalkSetupReadiness(null)
 
     assertTrue(readiness.realtimeTalk is GatewayTalkSetupState.Unverified)
-    assertTrue(readiness.dictation is GatewayTalkSetupState.Unverified)
   }
 
-  private fun catalog(
-    realtime: String,
-    transcription: String = providerGroup(id = "deepgram", label = "Deepgram", configured = true),
-  ) = json("""{"realtime":$realtime,"transcription":$transcription}""")
+  private fun catalog(realtime: String) = json("""{"realtime":$realtime}""")
 
   private fun unconfiguredRealtimeCatalog() =
     catalog(
       realtime = providerGroup(id = "openai", label = "OpenAI Realtime", configured = false, activeProvider = null, ready = false),
-      transcription = providerGroup(id = "system", label = "System", configured = true),
     )
 
   private fun providerGroup(

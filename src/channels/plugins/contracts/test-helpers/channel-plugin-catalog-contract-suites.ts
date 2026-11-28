@@ -60,14 +60,12 @@ function writePlugin(
 export function describeChannelCatalogEntryContract(params: {
   channelId: string;
   npmSpec: string;
-  alias?: string;
+  alias: string;
 }) {
   it(`${params.channelId} channel catalog contract keeps the shipped catalog entry aligned`, () => {
     const entry = getChannelPluginCatalogEntry(params.channelId);
     expect(entry?.install.npmSpec).toBe(params.npmSpec);
-    if (params.alias) {
-      expect(entry?.meta.aliases).toContain(params.alias);
-    }
+    expect(entry?.meta.aliases).toContain(params.alias);
   });
 }
 export function describeBundledMetadataOnlyChannelCatalogContract(params: {
@@ -77,7 +75,7 @@ export function describeBundledMetadataOnlyChannelCatalogContract(params: {
   meta: Meta;
   defaultChoice?: string;
 }) {
-  it(`${params.pluginId} includes bundled metadata when the runtime entrypoint is omitted`, () => {
+  it(`${params.pluginId} discovers workspace metadata with bundled plugins disabled`, () => {
     const workspaceDir = tempDir();
     writeJson(path.join(workspaceDir, "package.json"), { name: "openclaw" });
     writePlugin(

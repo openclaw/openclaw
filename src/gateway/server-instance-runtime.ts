@@ -37,7 +37,6 @@ import type {
   GatewayLifecycleRuntime,
   GatewayLifecycleSessionMethod,
 } from "./server-instance-runtime.types.js";
-import { registerGatewayLifecycleRuntime } from "./server-lifecycle-runtime-context.js";
 import type { AgentRunRequest } from "./server-methods/agent-request-types.js";
 import type { GatewayRequestContext } from "./server-methods/types.js";
 import { createSyntheticPluginRuntimeClient } from "./server-plugin-runtime-client.js";
@@ -306,7 +305,6 @@ export function createGatewayInstanceRuntime(
       return { suppressed: result.deliveryStatus === "suppressed" };
     },
   };
-  const releaseLifecycleRuntime = registerGatewayLifecycleRuntime(lifecycle);
 
   const pendingApprovalPublications = new Map<string, Set<symbol>>();
   const publishRequestedAsync = async (
@@ -490,7 +488,6 @@ export function createGatewayInstanceRuntime(
     close: () => {
       closed = true;
       lifecycleTyping.close();
-      releaseLifecycleRuntime();
       approvalSubscribers.clear();
       pendingApprovalPublications.clear();
       routeCoordinator.close();
