@@ -278,20 +278,24 @@ can differ from the personal default selected when the actual chat starts.
 **Start session** uses a matching prepared name if it is ready. Otherwise, normal
 initial naming runs after submission; Start never waits for the speculative call.
 The sidebar adds no placeholder row while a session is being created: the row
-appears once the Gateway lists the session and fades in. While a name is
-pending, the chat header shows a subtle loading bar instead of “New session,”
-and the sidebar row keeps its title blank; the name fades in when it is ready. If
-naming ends without a name, the ordinary fallback label appears. Reduced-motion
-preferences skip the fades and keep the placeholder still.
-This is creation-only: later messages do not regenerate an existing session's
-name. Explicit worktree names are preserved, and typing never creates a worktree
-or runs setup.
+appears once the Gateway lists the session and fades in. While the initial name
+is pending, the chat header shows a subtle loading bar instead of "New session",
+and the sidebar row stays blank. The title fades in when it is ready.
+Reduced-motion preferences skip the fades and keep the placeholder still.
+Explicit worktree names are preserved, and typing never creates a worktree or
+runs setup.
 
-If automatic naming fails after submission, the session receives a two-word,
-crustacean-themed name. New worktree branches use the saved session title when
-available, with the same two-word fallback if naming has not finished. They never
-use the first-message text as a branch-name fallback. A title that arrives later
-updates the sidebar without renaming an existing branch.
+If automatic naming fails, no title is saved. The sidebar and chat header show a
+shortened version of the first message. If it has no text, they show the worktree
+checkout or "New session" instead. That fallback stays visible while the next
+message triggers another attempt. Once a title is saved or you set a custom name,
+later messages do not regenerate it. Sending a message updates the **Last
+updated** order; automatic naming does not.
+
+New worktree branches use the saved session title when available, or a two-word
+crustacean-themed name if naming fails or has not finished. They never use the
+first message as a branch name. A title that arrives later updates the session
+without renaming an existing branch.
 
 ## New-session preferences and recents
 
@@ -673,11 +677,11 @@ It does not switch the current conversation away from the replacement.
 Likewise, a delayed rename, archive, or restore confirmation clears only the
 original session's checkbox, preserving a replacement you selected meanwhile.
 
-**Rename** in the sidebar, chat header, and Sessions page starts with your custom name or the generated dashboard title. Edit the text, then save or press Enter. Saving an unchanged generated title leaves automatic naming intact; clearing a custom name restores the generated title. Channel and account decorations stay outside the editable name. Rename targets the session you started editing. If that session is deleted and recreated at the same key before you save, the edit is rejected instead of renaming the replacement. Reopen Rename on the current session to try again. Resetting the conversation keeps the same session identity and does not invalidate the edit.
+**Rename** in the sidebar, chat header, and Sessions page starts with your custom name, the generated dashboard title, or the first-message excerpt after a failed attempt. While the initial name is pending, the field starts blank. You can still click the title area in the header or use **Rename** in the sidebar or on the Sessions page. Edit the text, then save or press Enter. Saving without changes leaves automatic naming intact. Clearing a custom name restores the generated title or fallback. Channel and account decorations stay outside the editable name. Rename targets the session you started editing. If that session is deleted and recreated at the same key before you save, the edit is rejected instead of renaming the replacement. Reopen Rename on the current session to try again. Resetting the conversation keeps the same session identity and does not invalidate the edit.
 
 While you edit a title inline, existing rows in that sidebar section keep their order. Status changes still appear, removed sessions leave the list, and new sessions appear after the existing rows. The selected sort resumes when you save or cancel.
 
-Automatic titles follow the language of the first message, including short instructions with quoted literals. Titles are capped at 60 characters and unmatched quotation marks are removed after truncation. Empty or quote-only model output uses a readable crustacean-themed fallback name.
+Automatic titles follow the language of the first message, including short instructions with quoted literals. Titles are capped at 60 characters and unmatched quotation marks are removed after truncation. If the model returns empty or quote-only output, no title is saved and the session shows a shortened version of the first message when it has text.
 
 **New group** from the sidebar, chat header, or Sessions page keeps the original session selection while the dialog is open and the group is being saved. A deleted or replaced session is not moved; an error is shown and the new group remains available. For a sidebar multi-selection, sessions that still exist can move even if another target fails. Paging a selected session out of the visible list does not cancel its move.
 
