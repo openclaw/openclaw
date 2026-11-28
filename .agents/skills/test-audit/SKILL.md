@@ -15,9 +15,9 @@ Before adding test, answer:
 
 1. Protected observable behavior, invariant, or independent contract?
 2. Credible regression that makes it fail?
-3. Why existing proof misses it? Each contract: one primary owner at strongest
-   boundary. Another layer needs distinct transport/lifecycle risk. Extend
-   tables/shared fixtures; consolidate repeated setup.
+3. Why existing proof misses it? What is the narrowest production boundary that fails on
+   this defect? Extend the existing owner suite; another layer needs a distinct
+   transport or lifecycle failure.
 4. Export, flag, wrapper, injection hook with no production caller needed?
    Move proof to real boundary instead.
 
@@ -32,6 +32,10 @@ Before adding test, answer:
 - Reject self-comparisons, copied inventories, source greps,
   implementation/call-shape assertions, duplicate contracts, test-only seams,
   subject-generated expected values, mocks supplying asserted behavior.
+- Reject one-off Gateway-boot `.e2e.test.ts` files under 150 lines when a direct
+  contract test catches the same defect (#205573). Size alone is not a reason to cut.
+- Reject mocked in-process `*.e2e.test.ts` files that exercise no real Gateway,
+  process or browser. Move any distinct contract to its owner’s ordinary test suite.
 - Fixtures must not fabricate owner receipts/order or claim persistence path
   never writes.
 - Negative controls must fail at intended guard; names must match exercised behavior.

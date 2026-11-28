@@ -48,7 +48,12 @@ description: Choose proportional OpenClaw tests/checks, diagnose failures, route
 
 - Select proof for touched contract; reuse valid proof (rerun for changed inputs or missing coverage); finish workflow's required gates within user/host limits; report unrun checks and gaps. Prove user-visible behavior through real flow when feasible; external APIs need live contract proof; isolated mock-Gateway harness = valid channel boundary proof. Docs-only: docs sanity and `git diff --check`.
 
-- Runtime defect: reproduce real entry point; rerun it + relevant siblings.
+- Runtime defect: verify the real entry point before and after in a disposable run;
+  report the observed result in the PR, not the reproduction harness in CI. Commit
+  one fast, non-mocked unit or narrow contract regression by default, extending
+  the existing owner suite. Use the boundary guide above for Gateway-boot exceptions.
+- Changes to `AGENTS.md` or eval-driven testing rules: weigh defect detection against
+  net test LOC and CI seconds using the [cost budget](../../../docs/help/testing/writing-tests.md#cost-budget).
 - Trusted source: `pnpm changed:lanes --json`, focused tests + targeted typecheck/lint/format; `pnpm check:changed` = optional smart local check.
 - Public SDK/plugin contract: representative consumers, not all-plugin sweep.
 - Build output, lazy imports, package boundaries: include `pnpm build` or the
