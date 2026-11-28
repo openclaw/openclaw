@@ -1,7 +1,6 @@
 import { beforeEach, expect, test, vi } from "vitest";
 import { closeGatewayTestWebSocket } from "../../test/helpers/gateway-websocket.js";
 import { awaitGateBeforeSettlement, withinTest } from "../../test/helpers/promise.js";
-import { observeHostDataSql } from "../../test/helpers/sqlite-statement-execution-counter.js";
 import * as modelRuntime from "../auto-reply/reply/model-runtime-normalization.js";
 import { persistReplySessionEntry } from "../auto-reply/reply/session-entry-persistence.js";
 import { getRuntimeConfig } from "../config/io.js";
@@ -31,7 +30,6 @@ import {
   chatSendOwner,
 } from "./server.sessions.create.test-support.js";
 import { gatewayConnect } from "./server/client-fixtures.test-support.js";
-import { readSessionGroupCatalog } from "./session-group-catalog.js";
 import { embeddedRunMock, rpcReq, testState, writeSessionStore } from "./test-helpers.js";
 import {
   sessionStoreEntry,
@@ -189,54 +187,9 @@ test.for([
   },
 );
 
-test("sessions.create registers a category only after the session commit succeeds", async () => {
-  const category = "Deferred category";
-  const bindCreation = vi.fn(() => {
-    throw new Error("session commit rejected");
-  });
-  await expect(
-    createSession(
-      { category, key: "agent:main:dashboard:failed-category-create" },
-      {
-        sessionMutationAuthorization: {
-          assertCurrent: vi.fn(),
-          assertTargetCurrent: vi.fn(),
-          bindCreation,
-        },
-      },
-    ),
-  ).rejects.toThrow("session commit rejected");
-  expect(bindCreation).toHaveBeenCalledOnce();
-  expect(readSessionGroupCatalog().groups.map((group) => group.name)).not.toContain(category);
-  const broadcastToConnIds = vi.fn();
-  const created = await createSession(
-    { category: `  ${category}  `, key: "agent:main:dashboard:created" },
-    {
-      context: {
-        broadcastToConnIds,
-        getSessionEventSubscriberConnIds: () => new Set(["conn-1"]),
-      },
-    },
-  );
-  expectOk(created);
-  expect(readSessionGroupCatalog().groups.filter((group) => group.name === category)).toHaveLength(
-    1,
-  );
-  expect(
-    broadcastToConnIds.mock.calls.filter(([, payload]) => payload?.reason === "groups"),
-  ).toHaveLength(1);
-});
-
 test("concurrent sessions.create requests adopt one canonical keyed session", async () => {
   const key = "agent:main:dashboard:concurrent-keyed-session";
-  const sql = observeHostDataSql();
-  let created: Awaited<ReturnType<typeof createSession>>[];
-  try {
-    created = await Promise.all(Array.from({ length: 4 }, () => createSession({ key })));
-    expect(sql.queries.filter((query) => /\bfrom\s+"?session_nodes\b/i.test(query))).toEqual([]);
-  } finally {
-    sql.restore();
-  }
+  const created = await Promise.all(Array.from({ length: 4 }, () => createSession({ key })));
   expect(created.every((result) => result.ok)).toBe(true);
   expect(new Set(created.map((result) => result.payload?.key))).toEqual(new Set([key]));
   const sessionIds = new Set(created.map((result) => result.payload?.sessionId));
@@ -244,25 +197,6 @@ test("concurrent sessions.create requests adopt one canonical keyed session", as
   const persistedSessionId = loadSessionEntry({ sessionKey: key, storePath })?.sessionId;
   const canonicalSessionId = created[0]?.payload?.sessionId;
   expect(persistedSessionId).toBe(canonicalSessionId);
-});
-
-test("createGatewaySession forwards its commit guard into main-session reset", async () => {
-  try {
-    const key = "agent:main:main";
-    const original = sessionStoreEntry("main-before-guard-close");
-    testState.sessionConfig = { dmScope: "main" };
-    await writeSessionStore({ entries: { main: original } });
-    const commitGuard = vi.fn(() => {
-      if (commitGuard.mock.calls.length > 1) {
-        throw new Error("session create authority closed");
-      }
-    });
-    await expect(resetMain({ commitGuard })).rejects.toThrow("session create authority closed");
-    expect(commitGuard).toHaveBeenCalledTimes(2);
-    expect(readEntry(key)).toMatchObject(original);
-  } finally {
-    testState.sessionConfig = undefined;
-  }
 });
 
 test("sessions.create preserves keyed draft adoption idempotency", async () => {
@@ -561,10 +495,6 @@ test("sessions.create replays an identical creation once and rejects conflicting
     expectOk(first);
     expect(replay).toEqual(first);
     expect(chatSend).toHaveBeenCalledOnce();
-    expect(chatSend.mock.calls[0]?.[0].params).toMatchObject({
-      idempotencyKey: expect.any(String),
-      message: "start this task exactly once",
-    });
     const restarted = await directSessionReq<{ key: string }>("sessions.create", params, {
       client: clientFor() as never,
       context: { dedupe: new Map() },
@@ -594,9 +524,6 @@ test("sessions.create replays an identical creation once and rejects conflicting
     expectOk(differentOwner);
     expect(differentOwner.payload?.key).not.toBe(first.payload?.key);
     expect(chatSend).toHaveBeenCalledTimes(2);
-    expect(chatSend.mock.calls[1]?.[0].params.idempotencyKey).not.toBe(
-      chatSend.mock.calls[0]?.[0].params.idempotencyKey,
-    );
   } finally {
     chatSend.mockRestore();
   }

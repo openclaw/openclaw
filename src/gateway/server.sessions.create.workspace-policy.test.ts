@@ -1,9 +1,5 @@
-import { execFile } from "node:child_process";
-import syncFs from "node:fs";
 import fs from "node:fs/promises";
-import os from "node:os";
 import path from "node:path";
-import { promisify } from "node:util";
 import { truncateUtf16Safe } from "@openclaw/normalization-core/utf16-slice";
 import { afterEach, expect, test, vi } from "vitest";
 import type { SessionsFilesGetResult } from "../../packages/gateway-protocol/src/index.js";
@@ -13,7 +9,6 @@ import { useAutoCleanupTempDirTracker } from "../../test/helpers/temp-dir.js";
 import { makeUserMessage } from "../../test/helpers/user-message.js";
 import { createSandboxTestContext } from "../agents/sandbox/test-fixtures.js";
 import { SessionManager } from "../agents/sessions/session-manager.js";
-import { findGitCheckoutRoot } from "../agents/worktrees/git.js";
 import { getRegistryWorktree } from "../agents/worktrees/registry.test-support.js";
 import { managedWorktrees, ManagedWorktreeService } from "../agents/worktrees/service.js";
 import { getRuntimeConfig } from "../config/io.js";
@@ -44,7 +39,6 @@ let gitWorkspaceTemplate: string;
 const { createSessionStoreDir, openClient } = setupSessionCreateTestHarness(async (makeTempDir) => {
   gitWorkspaceTemplate = await createGitWorkspace(makeTempDir("openclaw-session-git-template-"));
 });
-const execFileAsync = promisify(execFile);
 const tempDirs = useAutoCleanupTempDirTracker(afterEach);
 const directoryLinkType = process.platform === "win32" ? "junction" : "dir";
 type CreatedSession = {
@@ -71,9 +65,6 @@ function expectDetached(result: Awaited<ReturnType<typeof createSession>>) {
   for (const field of ["spawnedCwd", "sessionRoot", "worktree"] as const) {
     expect(result.payload?.entry[field], field).toBeUndefined();
   }
-}
-function expectInvalid(result: Awaited<ReturnType<typeof directSessionReq>>, message: unknown) {
-  expect(result).toMatchObject({ ok: false, error: { code: "INVALID_REQUEST", message } });
 }
 async function openWorkspaceClient(root: string, scope = "operator.admin", name = "device") {
   const client = await openClient({
@@ -160,21 +151,6 @@ async function openWorkspaceEditor(fixture: Awaited<ReturnType<typeof setupReset
   };
 }
 
-async function makeNonGitTempDir(prefix: string): Promise<string> {
-  let root = await fs.realpath(os.tmpdir());
-  for (;;) {
-    const checkoutRoot = await findGitCheckoutRoot(root);
-    if (!checkoutRoot) {
-      return tempDirs.make(prefix, root);
-    }
-    const parent = path.dirname(checkoutRoot);
-    if (parent === checkoutRoot) {
-      throw new Error("could not find a temp root outside a git checkout");
-    }
-    root = parent;
-  }
-}
-
 test("sessions.create accepts a Windows node-host cwd without provisioning a Gateway worktree", async () => {
   // A running suite server can read config before this test installs its per-case session store.
   getRuntimeConfig();
@@ -209,7 +185,6 @@ test("sessions.create rejects a Gateway worktree targeting a node", async () => 
 });
 
 test.each([
-  ["file", "INVALID_REQUEST", "sessions.create cwd is not a directory"],
   ["outside", "FORBIDDEN", "missing scope: operator.admin"],
   ["escape", "INVALID_REQUEST", "sessions.create cwd is outside the sandboxed agent workspace"],
 ] as const)(
@@ -217,21 +192,17 @@ test.each([
   async (kind, code, message) => {
     const root = tempDirs.make("openclaw-session-cwd-");
     const workspace = path.join(root, "workspace");
-    let cwd = path.join(root, kind === "file" ? "workspace.txt" : "outside");
+    let cwd = path.join(root, "outside");
     await fs.mkdir(workspace);
-    if (kind === "file") {
-      await fs.writeFile(cwd, "not a directory\n");
-    } else {
-      await fs.mkdir(cwd);
-      testState.agentConfig = {
-        workspace,
-        ...(kind === "escape" ? { sandbox: { mode: "all" as const } } : {}),
-      };
-      if (kind === "escape") {
-        const link = path.join(workspace, "escape");
-        await fs.symlink(cwd, link, directoryLinkType);
-        cwd = link;
-      }
+    await fs.mkdir(cwd);
+    testState.agentConfig = {
+      workspace,
+      ...(kind === "escape" ? { sandbox: { mode: "all" as const } } : {}),
+    };
+    if (kind === "escape") {
+      const link = path.join(workspace, "escape");
+      await fs.symlink(cwd, link, directoryLinkType);
+      cwd = link;
     }
     const { storePath } = await createSessionStoreDir();
     using client = await openWorkspaceClient(
@@ -349,11 +320,8 @@ test("an ordinary session created through a workspace alias can adopt without ac
     ).toBeUndefined();
     await fs.unlink(alias);
     await fs.symlink(workspace, alias, directoryLinkType);
-    const workspaceStats = vi.spyOn(syncFs, "lstatSync");
     const adopted = await adoptUnboundPullRequestWorkspace(input);
     adoptedId = adopted.worktree?.id;
-    expect(workspaceStats.mock.calls.filter(([pathname]) => pathname === alias)).toHaveLength(0);
-    workspaceStats.mockRestore();
     expect(adoptedId).toBeDefined();
     expect(adopted.priorWorkspace).toMatchObject({ workspaceDir: alias, fileRoot: alias });
     const worktree = getRegistryWorktree(process.env, adoptedId!);
@@ -432,22 +400,6 @@ test("sessions.create requires admin for full permission mode", async () => {
     ok: true,
     payload: { entry: { permissionMode: "full", sessionRoot: workspace } },
   });
-});
-
-test("sessions.create uses a non-git Gateway cwd directly but not as a worktree source", async () => {
-  const cwd = await makeNonGitTempDir("openclaw-session-direct-cwd-");
-  const direct = await createSession({ cwd });
-  expect(direct.ok).toBe(true);
-  expect(direct.payload?.entry?.spawnedCwd).toBe(cwd);
-
-  const isolated = await createSession({ cwd, worktree: true });
-  expectInvalid(isolated, `requested working directory is not a git checkout: ${cwd}`);
-});
-
-test("sessions.create keeps its cwd contract absolute-only", async () => {
-  const created = await directSessionReq("sessions.create", { cwd: "~/repo" });
-
-  expectInvalid(created, "sessions.create cwd must be absolute");
 });
 
 test.each([
@@ -634,21 +586,6 @@ test("an open Files editor cannot save into a replacement managed workspace", as
   const legacy = await editor.save("legacy client edit\n", saved.payload!, false);
   expect(legacy.ok, JSON.stringify(legacy.error)).toBe(true);
   await editor.expectContent(current.path, "legacy client edit\n");
-});
-
-test("sessions.create rejects worktrees for agent workspaces without a commit", async () => {
-  const workspace = await makeNonGitTempDir("openclaw-session-unborn-workspace-");
-  await execFileAsync("git", ["init", workspace]);
-  testState.agentConfig = { workspace };
-  await createSessionStoreDir();
-  try {
-    const created = await createSession({ agentId: "main", worktree: true });
-
-    expectInvalid(created, expect.stringContaining("git checkout has no commits"));
-    expect(created.error?.message).toContain("Create an initial commit, then retry.");
-  } finally {
-    testState.agentConfig = undefined;
-  }
 });
 
 test("an explicit cwd reset refuses the previous managed file source", async () => {

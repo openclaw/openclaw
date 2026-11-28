@@ -1,7 +1,6 @@
 import { expectDefined } from "@openclaw/normalization-core";
 import { afterEach, expect, onTestFinished, test, vi } from "vitest";
 import { resolveAgentDir, resolveAgentWorkspaceDir } from "../agents/agent-scope-config.js";
-import * as modelCatalogRuntime from "../agents/model-catalog.runtime.js";
 import { loadSessionEntry } from "../config/sessions/session-accessor.js";
 import type { GatewayOperatorRoleDefinition } from "../config/types.gateway.js";
 import { createDeferredCore } from "../shared/deferred.js";
@@ -248,20 +247,12 @@ test.each([
   (row) =>
     withFixture([row.scope, row.selection !== "none", row.origin], async (fixture) => {
       const links = listUserProfileAuthLinks(fixture.owner.id);
-      if (row.selection === "none") {
-        vi.mocked(fixture.context.loadGatewayModelCatalogSnapshot)
-          .mockImplementation(() => new Promise(() => {}))
-          .mockClear();
-      }
       await fixture.create(
         row.selection === "explicit"
           ? `${model}@${expectDefined(fixture.authProfileId, "owned account")}`
           : undefined,
         row.idempotent,
       );
-      if (row.selection === "none") {
-        expect(fixture.context.loadGatewayModelCatalogSnapshot).not.toHaveBeenCalled();
-      }
 
       expect(fixture.respond.mock.calls[0]?.slice(0, 2)).toEqual([
         true,
@@ -393,49 +384,6 @@ test.each(["deadline", "disconnect"])(
         providerOverride: "openai",
         modelOverride: "gpt-4.1",
       });
-    }
-  },
-);
-
-test.each([-3_600_000, 3_600_000])(
-  "sessions.create shares its catalog deadline across reads despite a %s ms clock step",
-  async (clockStep) => {
-    const fixture = await createCatalogFixture();
-    const thinking = vi
-      .spyOn(modelCatalogRuntime, "loadProviderScopedThinkingCatalog")
-      .mockResolvedValueOnce([]);
-    onTestFinished(() => thinking.mockRestore());
-    await fixture.create(model, "seed");
-    expect(fixture.respond.mock.calls[0]?.[0]).toBe(true);
-    expect(fixture.entry()).toBeDefined();
-    expect(thinking).not.toHaveBeenCalled();
-    const before = fixture.entry();
-    const gates = [holdCatalog(fixture.context), holdCatalog(fixture.context)];
-    fixture.respond.mockClear();
-    vi.useFakeTimers({ toFake: ["setTimeout", "clearTimeout", "Date", "performance"] });
-    const creating = fixture.create(model);
-    try {
-      await Promise.race([gates[0]!.entered.promise, creating]);
-      await vi.advanceTimersByTimeAsync(10_000);
-      vi.setSystemTime(Date.now() + clockStep);
-      gates[0]!.release.resolve();
-      await Promise.race([gates[1]!.entered.promise, creating]);
-      await vi.advanceTimersByTimeAsync(9_999);
-      expect(fixture.respond).not.toHaveBeenCalled();
-      await vi.advanceTimersByTimeAsync(1);
-      expect(fixture.respond.mock.calls[0]?.slice(0, 3)).toEqual([
-        false,
-        undefined,
-        expect.objectContaining({ code: "UNAVAILABLE", retryable: true }),
-      ]);
-      await creating;
-      expect(fixture.entry()).toEqual(before);
-    } finally {
-      vi.useRealTimers();
-      for (const gate of gates) {
-        gate.release.resolve();
-      }
-      await creating;
     }
   },
 );

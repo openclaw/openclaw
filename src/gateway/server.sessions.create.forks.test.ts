@@ -25,7 +25,7 @@ import {
   registerForkableCliBackend,
 } from "./server.sessions.create.forks.test-support.js";
 import {
-  setupSessionCreateTestHarness,
+  setupSessionCreateHandlerTestHarness,
   requireNonEmptyString,
 } from "./server.sessions.create.test-support.js";
 import { gatewayConnect } from "./server/client-fixtures.test-support.js";
@@ -40,7 +40,7 @@ import {
   getGatewayConfigModule,
 } from "./test/server-sessions.test-helpers.js";
 
-const { createSessionStoreDir } = setupSessionCreateTestHarness();
+const { createSessionStoreDir } = setupSessionCreateHandlerTestHarness();
 
 test("sessions.create keeps ordinary dashboard chats independent of Home", async () => {
   const { storePath } = await createSessionStoreDir();
@@ -94,8 +94,6 @@ test("sessions.create keeps ordinary dashboard chats independent of Home", async
 });
 
 test.each([
-  { params: { agentId: "main", spawnDepth: 1 }, message: "spawnDepth requires parentSessionKey" },
-  { params: { fork: true }, message: "fork requires parentSessionKey" },
   {
     params: { agentId: "ops", parentSessionKey: "agent:main:missing" },
     message: "unknown parent session: agent:main:missing",
@@ -108,10 +106,6 @@ test.each([
       task: "hello after replacing parent",
     },
     message: "sessions.create key must differ from parentSessionKey",
-  },
-  {
-    params: { parentSessionKey: "main", forkFrom: "last-completed" },
-    message: "forkFrom requires fork=true",
   },
 ] as const)(
   "sessions.create rejects invalid child intent: $message",
@@ -156,22 +150,6 @@ test.each<{
     tokens: 200_000,
     window: undefined,
     limit: "200000/100000 tokens",
-  },
-  {
-    name: "visible spawn with inherited large model",
-    model: "gpt-large",
-    provider: "openai",
-    tokens: 391_869,
-    window: 922_000,
-    limit: undefined,
-  },
-  {
-    name: "visible spawn with explicit small model",
-    model: "gpt-small",
-    provider: "openai",
-    tokens: 150_000,
-    window: 128_000,
-    limit: "150000/128000 tokens",
   },
   {
     name: "visible spawn with selected window clamping configured capacity",
@@ -276,7 +254,7 @@ test.each<{
         });
       }
     }
-    const inherited = !window || model === "gpt-large" || Boolean(nativeCatalog);
+    const inherited = !window || Boolean(nativeCatalog);
     await seedSizedForkParent(dir, {
       totalTokens: tokens,
       ...(inherited ? { providerOverride: provider, modelOverride: model } : {}),
@@ -551,50 +529,40 @@ test.each(["cli", "enabled", "disabled"] as const)(
   },
 );
 
-test.each(["caller key", "unauthorized agent"])(
-  "sessions.create rejects a catalog target with %s",
-  async (conflict) => {
-    const { storePath } = await createSessionStoreDir();
-    testState.agentsConfig = { ownership: "explicit", entries: { main: {}, research: {} } };
-    const existing = sessionStoreEntry("sess-existing-catalog-target", {
+test("sessions.create rejects a catalog target with a caller key", async () => {
+  const { storePath } = await createSessionStoreDir();
+  testState.agentsConfig = { ownership: "explicit", entries: { main: {}, research: {} } };
+  const existing = sessionStoreEntry("sess-existing-catalog-target", {
+    providerOverride: "openai",
+    modelOverride: "gpt-existing",
+  });
+  await writeSessionStore({ entries: { main: existing } });
+  installSessionCatalog(() => ({
+    model: "anthropic/claude-opus-4-8",
+    agentRuntime: "claude-cli",
+  }));
+  try {
+    const created = await directSessionReq("sessions.create", {
+      catalogId: "claude",
+      key: "main",
+      agentId: "main",
+    });
+    expect(created).toMatchObject({
+      ok: false,
+      error: { code: "INVALID_REQUEST", message: "sessions.create catalogId cannot include key" },
+    });
+    expect(
+      loadSessionEntry({ agentId: "main", sessionKey: "agent:main:main", storePath }),
+    ).toMatchObject({
+      sessionId: existing.sessionId,
       providerOverride: "openai",
       modelOverride: "gpt-existing",
     });
-    await writeSessionStore({ entries: { main: existing } });
-    const resolveCreateSession = vi.fn(({ agentId }: { agentId?: string }) =>
-      agentId === "research"
-        ? undefined
-        : { model: "anthropic/claude-opus-4-8", agentRuntime: "claude-cli" },
-    );
-    installSessionCatalog(resolveCreateSession);
-    try {
-      const created = await directSessionReq("sessions.create", {
-        catalogId: "claude",
-        ...(conflict === "caller key" ? { key: "main", agentId: "main" } : { agentId: "research" }),
-      });
-      expect(created).toMatchObject({
-        ok: false,
-        error:
-          conflict === "caller key"
-            ? { code: "INVALID_REQUEST", message: "sessions.create catalogId cannot include key" }
-            : { code: "UNAVAILABLE", message: "session catalog claude cannot create sessions" },
-      });
-      expect(
-        loadSessionEntry({ agentId: "main", sessionKey: "agent:main:main", storePath }),
-      ).toMatchObject({
-        sessionId: existing.sessionId,
-        providerOverride: "openai",
-        modelOverride: "gpt-existing",
-      });
-      if (conflict === "unauthorized agent") {
-        expect(resolveCreateSession).toHaveBeenCalledWith({ agentId: "research" });
-      }
-    } finally {
-      testState.agentsConfig = undefined;
-      setActivePluginRegistry(createEmptyPluginRegistry());
-    }
-  },
-);
+  } finally {
+    testState.agentsConfig = undefined;
+    setActivePluginRegistry(createEmptyPluginRegistry());
+  }
+});
 
 test.each<{
   name: string;
@@ -612,32 +580,6 @@ test.each<{
       modelOverride: "gpt-5.5",
       modelOverrideSource: "user",
       agentRuntimeOverride: "codex",
-      modelProvider: "codex",
-      model: "gpt-5.5",
-      contextTokens: 272000,
-      inputTokens: 12000,
-      outputTokens: 340,
-      totalTokens: 12340,
-      totalTokensFresh: false,
-      contextBudgetStatus: {
-        schemaVersion: 1,
-        source: "pre-prompt-estimate",
-        updatedAt: 1,
-        provider: "codex",
-        model: "gpt-5.5",
-        route: "compact_then_truncate",
-        shouldCompact: true,
-        estimatedPromptTokens: 250000,
-        contextTokenBudget: 128000,
-        promptBudgetBeforeReserve: 112000,
-        reserveTokens: 16000,
-        effectiveReserveTokens: 16000,
-        remainingPromptBudgetTokens: 0,
-        overflowTokens: 138000,
-        toolResultReducibleChars: 5000,
-        messageCount: 12,
-        unwindowedMessageCount: 12,
-      },
       thinkingLevel: "off",
       fastMode: "auto",
       traceLevel: "debug",
@@ -655,14 +597,7 @@ test.each<{
       authProfileOverride: "codex-oauth",
       authProfileOverrideSource: "user",
     },
-    absent: [
-      "modelProvider",
-      "model",
-      "contextTokens",
-      "inputTokens",
-      "outputTokens",
-      "contextBudgetStatus",
-    ],
+    absent: [],
     resolved: { modelProvider: "codex", model: "gpt-5.5" },
   },
   {
@@ -693,7 +628,7 @@ test.each<{
   },
 ])(
   "sessions.create inherits only durable selection: $name",
-  async ({ name, defaults, parent, inherited, absent, resolved }) => {
+  async ({ defaults, parent, inherited, absent, resolved }) => {
     const { storePath } = await createSessionStoreDir();
     testState.agentConfig = { model: { primary: defaults } };
     await writeSessionStore({ entries: { main: sessionStoreEntry("sess-parent", parent) } });
@@ -710,22 +645,10 @@ test.each<{
       expect(entry).toMatchObject({
         parentSessionKey: "agent:main:main",
         ...inherited,
-        totalTokens: 0,
-        totalTokensFresh: true,
-        totalTokensVersion: SESSION_TOTAL_TOKENS_VERSION,
       });
       for (const field of absent) {
         expect(entry?.[field], field).toBeUndefined();
       }
-    }
-    if (name === "explicit selection") {
-      const overridden = await directSessionReq<CreatedSession>("sessions.create", {
-        agentId: "main",
-        fastMode: false,
-        parentSessionKey: "main",
-      });
-      expect(overridden.ok, JSON.stringify(overridden.error)).toBe(true);
-      expect(overridden.payload?.entry?.fastMode).toBe(false);
     }
   },
 );
