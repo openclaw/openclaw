@@ -718,8 +718,15 @@ struct OnboardingView: View {
     /// The active page is scrollable on short screens. Taller windows donate all
     /// extra room instead of leaving the content pinned to a fixed canvas.
     static func contentHeight(for windowHeight: CGFloat) -> CGFloat {
-        max(0, windowHeight - 145 - 72)
+        max(0, windowHeight - OnboardingGuideHero.minimumHeight - self.navigationBarHeight - self.pageAreaBottomGap)
     }
+
+    static func contentHeight(forPageArea pageAreaHeight: CGFloat) -> CGFloat {
+        max(0, pageAreaHeight - self.pageAreaBottomGap)
+    }
+
+    static let navigationBarHeight: CGFloat = 60
+    static let pageAreaBottomGap: CGFloat = 12
 
     static func pageOrder(
         for mode: AppState.ConnectionMode,

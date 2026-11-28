@@ -18,24 +18,29 @@ manager. If you already use OpenClaw, setup keeps your existing connection.
 For terminal-based setup, see [Onboarding overview](/start/onboarding-overview).
 </Tip>
 
-## Automatic first run
+## First run
 
-On a fresh install, open the app and follow **Setting up OpenClaw on this Mac**:
+<a id="automatic-first-run" />
 
-1. The app prepares its runtime and starts a local Gateway.
-2. The dashboard opens and connects available AI access.
-3. A live AI test verifies the connection before guided setup continues.
+On a fresh install, open the app and follow the setup window. OpenClaw, your
+guide, introduces itself on the first page and then says in plain words what
+each step is doing, what it needs from you, and which button to click next.
+Its lines are written in advance and work before any AI is connected. If a
+step fails, it says what went wrong and names the button that retries it.
+VoiceOver reads each new line without moving focus.
 
-An already configured model is kept. You can then set up optional features
-and start chatting. To choose the connection yourself, select **Set up manually**.
+1. Choose where your assistant runs: **On this Mac** (recommended), **Sign in
+   with OpenClaw ID**, **On another computer**, or **Set up later**.
+2. On this Mac, the app prepares its runtime and starts a local Gateway.
+3. **Connect your AI** must pass a live AI test before you can continue.
+   An already configured model is kept.
+4. **Finish** closes setup. After a new AI connection, it opens the dashboard,
+   where the guide continues with your agent.
 
 Existing configurations and saved connections keep their settings; setup does
-not automatically switch to a discovered Gateway. Older apps may open manual setup first; developer builds and Gateways without
-automatic setup support use it instead. Nix mode and
-background-only launches do not run automatic first setup.
-
-If setup fails, the app opens the relevant manual step with the error visible.
-If you close setup early, reopen it from the app menu.
+not automatically switch to a discovered Gateway. Nix mode and background-only
+launches do not run first setup. If you close setup early, reopen it from the
+app menu.
 
 ## macOS prompts
 
@@ -71,11 +76,12 @@ in macOS System Settings.
 </Step>
 </Steps>
 
-## Manual setup
+## Setup steps
 
-Choose **Set up manually** to use these steps. The app also opens them when
-automatic setup cannot finish. The screenshots show an earlier manual flow;
-your build may use different labels or layouts.
+<a id="manual-setup" />
+
+These are the steps of the setup window in detail. The screenshots show an
+earlier flow; your build may use different labels or layouts.
 
 <Steps>
 <Step title="Read the security notice">
@@ -90,7 +96,6 @@ Existing profiles and tool policies stay unchanged. Setup ends with a
 `Tool profile:` line that names the profile, where it is set, what it allows,
 any other tool settings that change it, and how to add a tool. A full tool profile does not grant execution
 permissions. See [Tool profiles](/gateway/config-tools/tool-policy#tool-profiles).
-These rules apply to automatic setup too.
 
 <Frame>
 <img src="/assets/macos-onboarding/03-security-notice.png" alt="OpenClaw welcome screen with the security notice" />
@@ -129,7 +134,7 @@ if you want to use Git.
 </Step>
 <Step title="Connect your AI">
 Choose a detected connection, sign in to a provider, or enter an API key or
-token. The manual picker waits for your choice before testing, installing,
+token. The picker waits for your choice before testing, installing,
 or saving anything. Setup must pass a live AI test before you can continue.
 
 See [AI connection options](/start/onboarding#ai-connection-options) below for login reuse,
