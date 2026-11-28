@@ -538,7 +538,9 @@ process.exitCode = await runCancelableCommand(async (signal) => {
         "stop",
         "openclaw-gateway.service",
       ]);
-      assert.equal(readJson(lockPath).ownerId, holder.ownerId, "Crash lost its legacy lock");
+      const retained = readJson(lockPath);
+      assert.equal(retained.ownerId, holder.ownerId, "Crash lost its legacy lock");
+      writeJson("crashed-gateway-lock", { lockPath, holder: retained });
     }
     let update;
     let updateFailure;

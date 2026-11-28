@@ -23,7 +23,6 @@ import { resolveGatewayRestartDeferralTimeoutMs } from "../infra/restart-budget.
 import { DoctorMaintenanceRefusalError } from "../infra/update-doctor-result.js";
 import { createDeferredCore } from "../shared/deferred.js";
 import { getFileLockProcessStartTime } from "../shared/pid-alive.js";
-import * as leaseInspection from "../state/openclaw-agent-db-lease-inspection.js";
 import { claimOpenClawAgentDatabaseLease } from "../state/openclaw-agent-db-lease.js";
 import { getOpenClawDatabaseMaintenanceScope } from "../state/openclaw-state-db-async-lifecycle.js";
 import {
@@ -33,6 +32,7 @@ import {
 import { withOpenClawTestState } from "../test-utils/openclaw-test-state.js";
 import { beginDoctorRepair } from "./doctor-maintenance.admission.test-support.js";
 import { beginDoctorMaintenance } from "./doctor-maintenance.js";
+import { mockDoctorMaintenancePollClock } from "./doctor-maintenance.test-support.js";
 
 const dirs = useAutoCleanupTempDirTracker(afterEach);
 // With no recorded rehearsal, waits end 30 min after Doctor started, less the 10 min floor.
@@ -97,10 +97,7 @@ function holdState(databasePath: string, gateway = false) {
 }
 
 function startDoctor(waitForMaintenance = false, assertCurrent?: () => void) {
-  const leaseReads = vi.spyOn(leaseInspection, "readActiveOpenClawAgentDatabaseLeasesReadOnly");
-  vi.useFakeTimers({ toFake: ["setTimeout", "clearTimeout", "Date", "performance"] });
-  let now = 0;
-  vi.spyOn(performance, "now").mockImplementation(() => now);
+  const advancePoll = mockDoctorMaintenancePollClock();
   const listeners = new Set<(message: string) => void>();
   const log = vi.fn((message: unknown) =>
     listeners.forEach((listener) => listener(String(message))),
@@ -133,16 +130,7 @@ function startDoctor(waitForMaintenance = false, assertCurrent?: () => void) {
   return {
     log,
     result,
-    advanceTo: async (ms = now) => {
-      now = ms;
-      await vi.advanceTimersToNextTimerAsync();
-      // A poll now awaits a real child read before it can log or arm its next timer.
-      await Promise.allSettled(
-        leaseReads.mock.results.flatMap((attempt) =>
-          attempt.type === "return" ? [attempt.value] : [],
-        ),
-      );
-    },
+    advanceTo: (ms?: number) => advancePoll(result, ms),
     logged,
     firstWait: logged("Waiting"),
     isSettled: () => settled,
@@ -244,8 +232,9 @@ it.each([false, true])(
       if (stateHolder) {
         await doctor.logged("Waiting up to 1200 s for the OpenClaw agent-embedded process");
         stateHolder.release();
+        const agentWait = doctor.logged("to close an agent database");
         await doctor.advanceTo(900_000);
-        await doctor.logged("to close an agent database");
+        await agentWait;
       } else {
         await doctor.firstWait;
       }

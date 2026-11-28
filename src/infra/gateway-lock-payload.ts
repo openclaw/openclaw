@@ -12,7 +12,6 @@ import { createManagedHandoffBootIdentityReader } from "./update-managed-service
 // Sidecar mtime is the cross-namespace heartbeat; payload bytes and ownership stay immutable.
 export const GATEWAY_OWNER_HEARTBEAT_MS = 15_000;
 export const GATEWAY_OWNER_HEARTBEAT_STALE_MS = 90_000;
-export const LEGACY_GATEWAY_OWNER_LEASE_TTL_MS = 5 * 60_000;
 
 const [uuidBoot, windowsBoot, freebsdBoot] = managedHandoffBootSchema.options;
 const host = z.string().min(1);
@@ -63,29 +62,7 @@ export function readGatewayLockProcessNamespace(): ProcessNamespace | null {
 type GatewayLockHolder = Partial<Pick<LockPayload, "pid" | "processNamespace">> & {
   host?: string;
   heartbeatAt?: number;
-  ownerId?: unknown;
-  role?: unknown;
-  createdAt?: unknown;
-  expiresAt?: number | null;
 };
-
-export function isLegacyGatewayLeaseLock(holder: {
-  processNamespace?: unknown;
-  role?: unknown;
-  ownerId?: unknown;
-  createdAt?: unknown;
-}): holder is { role: "gateway"; ownerId: string; createdAt: string } {
-  // 9.7 introduced explicit Gateway-role process owners; 9.6 projections omit the role.
-  return (
-    process.platform === "linux" &&
-    !isTruthyEnvValue(process.env.OPENCLAW_GATEWAY_REQUIRE_NAMESPACE_PROOF) &&
-    holder.processNamespace === undefined &&
-    holder.role === "gateway" &&
-    typeof holder.ownerId === "string" &&
-    holder.ownerId.length > 0 &&
-    typeof holder.createdAt === "string"
-  );
-}
 
 export function readLockHeartbeat(lockPath: string): number | undefined {
   try {
@@ -128,7 +105,6 @@ export function describeGatewayLockHolder(
 export class GatewayLockNamespaceError extends Error {
   readonly heartbeatAgeMs?: number;
   readonly legacyLock: boolean;
-  readonly legacyLease: boolean;
 
   constructor(holder: GatewayLockHolder, lockPath?: string) {
     const legacyLock = process.platform === "linux" && holder.processNamespace === undefined;
@@ -141,11 +117,6 @@ export class GatewayLockNamespaceError extends Error {
     );
     this.name = "GatewayLockNamespaceError";
     this.legacyLock = legacyLock;
-    this.legacyLease =
-      isLegacyGatewayLeaseLock(holder) ||
-      (legacyLock &&
-        !isTruthyEnvValue(process.env.OPENCLAW_GATEWAY_REQUIRE_NAMESPACE_PROOF) &&
-        typeof holder.expiresAt === "number");
     const owner = GatewayProcessNamespaceSchema.safeParse(holder.processNamespace).data;
     if (isForeignLinuxNamespace(owner, readGatewayLockProcessNamespace())) {
       const heartbeatAt = lockPath ? readLockHeartbeat(lockPath) : holder.heartbeatAt;

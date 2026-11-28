@@ -1,10 +1,39 @@
 import { aroundEach, vi } from "vitest";
 import type { SystemdServiceReadBinding } from "../daemon/service-types.js";
 import * as tmpOpenClawDir from "../infra/tmp-openclaw-dir.js";
+import { createDeferredCore } from "../shared/deferred.js";
+import * as timers from "../utils/sleep.js";
 
 type DoctorMaintenance = NonNullable<
   Awaited<ReturnType<typeof import("./doctor-maintenance.js").beginDoctorMaintenance>>
 >;
+
+/** Step the Doctor's retry timer and wait for its real lock or database inspection to finish. */
+export function mockDoctorMaintenancePollClock(startMs = 0) {
+  vi.useFakeTimers({ toFake: ["setTimeout", "clearTimeout", "Date", "performance"] });
+  let elapsedMs = startMs;
+  vi.spyOn(performance, "now").mockImplementation(() => elapsedMs);
+
+  const sleep = timers.sleep;
+  let nextPoll = createDeferredCore<number>();
+  vi.spyOn(timers, "sleep").mockImplementation((ms, signal) => {
+    const waiting = sleep(ms, signal);
+    nextPoll.resolve(ms);
+    return waiting;
+  });
+
+  return async (result: Promise<unknown>, ms = elapsedMs) => {
+    const finished = result.then(() => undefined);
+    const delay = await Promise.race([nextPoll.promise, finished]);
+    if (delay === undefined) {
+      return;
+    }
+    nextPoll = createDeferredCore<number>();
+    elapsedMs = ms;
+    await vi.advanceTimersByTimeAsync(delay);
+    await Promise.race([nextPoll.promise, finished]);
+  };
+}
 
 export function createDoctorMaintenanceFixture(overrides: Partial<DoctorMaintenance> = {}) {
   return {
