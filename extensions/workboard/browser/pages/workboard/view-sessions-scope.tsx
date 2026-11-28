@@ -1,7 +1,7 @@
 /** @jsxImportSource @solidjs/web */
 import type { ProjectsListResult, SessionsGroupsListResult } from "@openclaw/gateway-protocol";
 import type { WorkboardSessionsBoardSpec } from "@openclaw/workboard-contract";
-import { createEffect, createMemo, createSignal, For, onSettled, Show } from "solid-js";
+import { createMemo, For, Show } from "solid-js";
 import type { GatewayBrowserClient } from "../../api/gateway.ts";
 import { SelectPicker } from "../../components/host-components.tsx";
 import { icons } from "../../components/icons.tsx";
@@ -16,14 +16,17 @@ const NO_GROUP = "none";
 const groupValue = (group: string | undefined) =>
   group === undefined ? ANY_GROUP : group === "" ? NO_GROUP : `group:${group}`;
 
-/** The editor owns these fields; other saved scope fields pass through unchanged. */
-export function sessionsScopeFiltersKey(scope: SessionsBoardScope | undefined): string {
-  return JSON.stringify([
-    scope?.group ?? null,
-    scope?.projectId ?? null,
-    scope?.titleContains?.trim() || null,
-    scope?.includeSessionKeys ?? null,
-  ]);
+/** An omitted field is untouched; null removes a filter, and [] selects no sessions. */
+export function editedScopeFields(
+  original: SessionsBoardScope | undefined,
+  draft: SessionsBoardScope,
+) {
+  const changes = Object.fromEntries(
+    (["group", "projectId", "titleContains", "includeSessionKeys"] as const)
+      .filter((field) => JSON.stringify(original?.[field]) !== JSON.stringify(draft[field]))
+      .map((field) => [field, draft[field] ?? null]),
+  );
+  return Object.keys(changes).length ? changes : undefined;
 }
 
 export function hasSessionsScopeFilters(scope: SessionsBoardScope | undefined): boolean {
@@ -67,27 +70,21 @@ export function SessionsScopeHeading(props: {
   onEdit: () => void;
 }) {
   // Saved scopes hold project ids; show the project's name like the editor does.
-  const [projectNames, setProjectNames] = createSignal<ReadonlyMap<string, string>>(new Map());
-  createEffect(
-    () => (props.scope?.projectId ? props.client : null),
-    (client) => {
-      if (!client) {
-        return;
+  const projectClient = createMemo(() => (props.scope?.projectId ? props.client : null));
+  const projectNames = createMemo(() => {
+    const client = projectClient();
+    return (async function* () {
+      yield new Map<string, string>(); // Show the saved id immediately, even if the list is unavailable.
+      if (client) {
+        const result = await client
+          .request<ProjectsListResult>("projects.list", {})
+          .catch(() => null);
+        if (result) {
+          yield new Map(result.projects.map(({ id, displayName }) => [id, displayName]));
+        }
       }
-      let live = true;
-      void client.request<ProjectsListResult>("projects.list", {}).then(
-        ({ projects }) => {
-          if (live) {
-            setProjectNames(new Map(projects.map(({ id, displayName }) => [id, displayName])));
-          }
-        },
-        () => {}, // The saved id remains readable if the project list is unavailable.
-      );
-      return () => {
-        live = false;
-      };
-    },
-  );
+    })();
+  });
   const summary = () => {
     const scope = props.scope;
     if (!scope || !hasSessionsScopeFilters(scope)) {
@@ -143,33 +140,32 @@ export function SessionsScopeEditor(props: {
     void props.revision;
     return props.scope;
   };
-  const [groups, setGroups] = createSignal<readonly string[]>([]);
-  const [projects, setProjects] = createSignal<ProjectsListResult["projects"]>([]);
-  const [choicesFailed, setChoicesFailed] = createSignal(false);
-  const loadChoices = async (client: GatewayBrowserClient, live: () => boolean) => {
-    const [groupResult, projectResult] = await Promise.allSettled([
-      client.request<SessionsGroupsListResult>("sessions.groups.list", {}),
-      client.request<ProjectsListResult>("projects.list", {}),
-    ]);
-    if (!live()) {
-      return;
-    }
-    if (groupResult.status === "fulfilled") {
-      setGroups(groupResult.value.groups.map((group) => group.name));
-    }
-    if (projectResult.status === "fulfilled") {
-      setProjects(projectResult.value.projects);
-    }
-    setChoicesFailed(groupResult.status === "rejected" || projectResult.status === "rejected");
-  };
-  onSettled(() => {
-    let live = true;
-    if (props.client) {
-      void loadChoices(props.client, () => live);
-    }
-    return () => {
-      live = false;
-    };
+  const activeClient = createMemo(() => props.client);
+  const choices = createMemo(() => {
+    const client = activeClient();
+    return (async function* () {
+      // Render the editable draft before either list arrives; reconnect starts a new read.
+      yield {
+        groups: [] as string[],
+        projects: [] as ProjectsListResult["projects"],
+        failed: false,
+      };
+      if (!client) {
+        return;
+      }
+      const [groupResult, projectResult] = await Promise.allSettled([
+        client.request<SessionsGroupsListResult>("sessions.groups.list", {}),
+        client.request<ProjectsListResult>("projects.list", {}),
+      ]);
+      yield {
+        groups:
+          groupResult.status === "fulfilled"
+            ? groupResult.value.groups.map(({ name }) => name)
+            : [],
+        projects: projectResult.status === "fulfilled" ? projectResult.value.projects : [],
+        failed: groupResult.status === "rejected" || projectResult.status === "rejected",
+      };
+    })();
   });
   // Picks survive switching to "Any session" and back while this editor is open.
   let parkedKeys: string[] = [];
@@ -177,7 +173,8 @@ export function SessionsScopeEditor(props: {
   const titleValue = liveInputValue(() => scope().titleContains ?? "");
   const groupOptions = createMemo(() => {
     const current = scope().group;
-    const names = groups().includes(current ?? "") || !current ? groups() : [...groups(), current];
+    const { groups } = choices();
+    const names = groups.includes(current ?? "") || !current ? groups : [...groups, current];
     return [
       { value: ANY_GROUP, label: t("workboard.sessionsBoard.scope.anyGroup") },
       { value: NO_GROUP, label: t("workboard.sessionsBoard.scope.noGroup") },
@@ -186,7 +183,7 @@ export function SessionsScopeEditor(props: {
   });
   const projectOptions = createMemo(() => {
     const current = scope().projectId;
-    const options = projects().map((project) => ({
+    const options = choices().projects.map((project) => ({
       value: project.id,
       label: project.displayName,
       description: project.repositoryIdentity,
@@ -291,7 +288,7 @@ export function SessionsScopeEditor(props: {
             />
           </label>
         </div>
-        <Show when={choicesFailed()}>
+        <Show when={choices().failed}>
           <p class="workboard-sessions-scope__note">
             {t("workboard.sessionsBoard.scope.choicesUnavailable")}
           </p>

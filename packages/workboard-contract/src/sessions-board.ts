@@ -238,18 +238,20 @@ function normalizeColumn(value: unknown) {
   };
 }
 
+const SCOPE_KEYS = [
+  "agentIds",
+  "includeSessionKeys",
+  "group",
+  "projectId",
+  "titleContains",
+  "includeArchived",
+  "includeAutomation",
+  "includeHome",
+  "maxAgeHours",
+];
+
 function normalizeScope(value: unknown) {
-  const input = record(value, "scope", [
-    "agentIds",
-    "includeSessionKeys",
-    "group",
-    "projectId",
-    "titleContains",
-    "includeArchived",
-    "includeAutomation",
-    "includeHome",
-    "maxAgeHours",
-  ]);
+  const input = record(value, "scope", SCOPE_KEYS);
   let agentIds: string[] | undefined;
   if (input.agentIds !== undefined) {
     if (!Array.isArray(input.agentIds)) {
@@ -325,6 +327,19 @@ export function patchWorkboardSessionsBoardSpec(
   current: WorkboardSessionsBoardSpec,
   value: unknown,
 ): WorkboardSessionsBoardSpec {
-  const patch = record(value, "sessions board patch", SPEC_KEYS);
+  const { scopeChanges, ...patch } = record(value, "sessions board patch", [
+    ...SPEC_KEYS,
+    "scopeChanges",
+  ]);
+  if (scopeChanges !== undefined) {
+    if (patch.scope !== undefined) {
+      throw new Error("Use either scope or scopeChanges, not both.");
+    }
+    // Merge in the existing write transaction, not against the snapshot from when the editor opened.
+    const changes = record(scopeChanges, "scopeChanges", SCOPE_KEYS);
+    patch.scope = Object.fromEntries(
+      Object.entries({ ...current.scope, ...changes }).filter(([, entry]) => entry !== null),
+    );
+  }
   return normalizeWorkboardSessionsBoardSpec({ ...current, ...patch });
 }

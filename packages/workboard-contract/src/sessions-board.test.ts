@@ -1,6 +1,7 @@
 import { describe, expect, expectTypeOf, it } from "vitest";
 import {
   normalizeWorkboardSessionsBoardSpec,
+  patchWorkboardSessionsBoardSpec,
   type WorkboardSessionFacts,
 } from "./sessions-board.js";
 
@@ -43,6 +44,21 @@ describe("Sessions board match normalization", () => {
     ]) {
       expect(() => scope(invalid)).toThrow();
     }
+  });
+
+  it("applies field edits to the current scope without changing the full replacement contract", () => {
+    const current = normalizeWorkboardSessionsBoardSpec({
+      ...specWithMatch({}),
+      scope: { agentIds: ["main"], group: "Mobile", includeSessionKeys: ["one"] },
+    });
+    const patch = (value: unknown) => patchWorkboardSessionsBoardSpec(current, value).scope;
+    expect(patch({ scopeChanges: { group: null, includeSessionKeys: [] } })).toEqual({
+      agentIds: ["main"],
+      includeSessionKeys: [],
+    });
+    expect(patch({ scope: {} })).toEqual({});
+    expect(() => patch({ scope: {}, scopeChanges: { group: null } })).toThrow();
+    expect(() => patch({ scopeChanges: { unknown: null } })).toThrow();
   });
 
   it.each([

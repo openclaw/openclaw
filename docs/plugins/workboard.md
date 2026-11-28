@@ -163,7 +163,9 @@ or filter by sidebar group, linked project, or text in the session title. Filter
 apply together: a **Mobile** group filter and an **iOS** title filter show only
 sessions in that group with a matching title. New matching sessions appear
 automatically unless you choose **Only selected sessions**. Removing a session
-from the board does not archive or delete it.
+from the board does not archive or delete it. Saving in **Edit board** updates only
+the filters you edited. If the Board agent or another operator changed other filters
+while the dialog was open, those changes stay on the board.
 
 The Board agent can set the same filters. Pass `scope` when creating a board with
 `kind: "sessions"`, or read the board first and send the complete replacement `scope` to

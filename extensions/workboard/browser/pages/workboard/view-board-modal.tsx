@@ -25,7 +25,7 @@ import { liveInputValue } from "./view-input-value.ts";
 import {
   SessionsScopeEditor,
   hasSessionsScopeFilters,
-  sessionsScopeFiltersKey,
+  editedScopeFields,
   sessionsScopeForSave,
   type SessionsBoardScope,
   type SessionsScopeChoice,
@@ -44,7 +44,7 @@ export type BoardDraft = {
 };
 const originals = new WeakMap<
   BoardDraft,
-  Pick<BoardDraft, "name" | "icon" | "color" | "sessions"> & { scopeKey?: string }
+  Pick<BoardDraft, "name" | "icon" | "color" | "sessions">
 >();
 
 function sessionColumnsKey(spec: WorkboardSessionsBoardSpec): string {
@@ -70,7 +70,6 @@ export function createBoardDraft(board: WorkboardBoardSummary): BoardDraft {
   originals.set(draft, {
     ...fields,
     sessions: structuredClone(draft.sessions),
-    scopeKey: sessionsScopeFiltersKey(draft.scope),
   });
   return draft;
 }
@@ -151,9 +150,9 @@ export function BoardModal(props: {
         sessions && sessionColumnsKey(sessions) !== openingColumnsKey
           ? sessions.columns
           : undefined;
-      const scopeToSave =
-        !initialDraft.create && scope && sessionsScopeFiltersKey(scope) !== original?.scopeKey
-          ? scope
+      const scopeChanges =
+        !initialDraft.create && scope
+          ? editedScopeFields(original?.sessions?.scope, scope)
           : undefined;
       for (const field of ["name", "icon", "color"] as const) {
         const value = initialDraft[field].trim();
@@ -175,7 +174,7 @@ export function BoardModal(props: {
       if (!isCurrent()) {
         return;
       }
-      if (columnsToSave || scopeToSave) {
+      if (columnsToSave || scopeChanges) {
         if (!props.canWrite) {
           throw new Error(t("workboard.sessionsBoard.writeUnavailable"));
         }
@@ -183,7 +182,7 @@ export function BoardModal(props: {
           boardId: initialDraft.id,
           patch: {
             ...(columnsToSave ? { columns: columnsToSave } : {}),
-            ...(scopeToSave ? { scope: scopeToSave } : {}),
+            ...(scopeChanges ? { scopeChanges } : {}),
           },
         });
       }

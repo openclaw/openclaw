@@ -187,7 +187,7 @@ it("creates an unrestricted Sessions board without a scope", async () => {
   });
 });
 
-it("replaces the saved scope with the edit and keeps fields the editor does not show", async () => {
+it("saves an empty selection without replacing other filters", async () => {
   const { board, page } = await mountSessionsPage({
     agentIds: ["main"],
     maxAgeHours: 24,
@@ -225,13 +225,7 @@ it("replaces the saved scope with the edit and keeps fields the editor does not 
       {
         boardId: board.id,
         patch: {
-          scope: {
-            agentIds: ["main"],
-            maxAgeHours: 24,
-            includeArchived: true,
-            group: "Design",
-            includeSessionKeys: [],
-          },
+          scopeChanges: { includeSessionKeys: [] },
         },
       },
     ],
@@ -271,8 +265,57 @@ it("clears filters back to any session without dropping other scope fields", asy
   await vi.advanceTimersByTimeAsync(0);
   expect(page.request).toHaveBeenCalledWith("workboard.sessionsBoard.update", {
     boardId: board.id,
-    patch: { scope: { agentIds: ["writer"] } },
+    patch: { scopeChanges: { group: null, titleContains: null, includeSessionKeys: null } },
   });
+});
+
+it("preserves the Board agent’s newer filters when saving an open draft", async () => {
+  const { board, page } = await mountSessionsPage({
+    agentIds: ["main", "writer"],
+    includeSessionKeys: [],
+  });
+  const form = await openBoardEditor(page);
+  const title = expectDefined(
+    form.querySelector<HTMLInputElement>(".workboard-sessions-scope__filters input"),
+    "title filter",
+  );
+  title.value = "retry";
+  title.dispatchEvent(new Event("input", { bubbles: true }));
+  const newer = { agentIds: ["writer"], includeSessionKeys: ["agent:main:docs"] };
+  await page.request("workboard.sessionsBoard.update", {
+    boardId: board.id,
+    patch: { scope: newer },
+  });
+  form.requestSubmit();
+  await vi.advanceTimersByTimeAsync(0);
+  expect(board.sessions.scope).toEqual({ ...newer, titleContains: "retry" });
+});
+
+it("recovers both choice lists on reconnect without losing the open draft", async () => {
+  const { page } = await mountSessionsPage();
+  const request = expectDefined(page.request.getMockImplementation(), "request");
+  let unavailable = true;
+  page.request.mockImplementation((method, params) => {
+    if (unavailable && (method === "projects.list" || method === "sessions.groups.list")) {
+      return Promise.reject(new Error("Disconnected"));
+    }
+    return request(method, params);
+  });
+  const form = await openBoardEditor(page);
+  await vi.advanceTimersByTimeAsync(0);
+  expect(picker(form, "Project").options).toHaveLength(1);
+  radio(form, "Only selected sessions").click();
+  page.fixture.connection.connected = false;
+  page.fixture.notify();
+  await vi.advanceTimersByTimeAsync(0);
+  unavailable = false;
+  page.fixture.connection.connected = true;
+  page.fixture.notify();
+  await vi.advanceTimersByTimeAsync(0);
+  expect(page.container.querySelector(".workboard-board-draft")).toBe(form);
+  expect(radio(form, "Only selected sessions").checked).toBe(true);
+  expect(picker(form, "Project").options.map((option) => option.label)).toContain("OpenClaw");
+  expect(picker(form, "Group").options.map((option) => option.label)).toContain("Design");
 });
 
 it("cancels scope edits without saving or changing the open board", async () => {

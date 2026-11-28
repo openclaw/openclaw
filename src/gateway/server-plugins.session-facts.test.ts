@@ -196,6 +196,28 @@ describe("trusted plugin selected session facts", () => {
       expect(keys(await selected(shortlist))).toEqual([key]);
     }));
 
+  it("intersects explicit keys with configured agents even for a trusted reader", () =>
+    withFixture(async (fixture, { inScope }) => {
+      const retired = "agent:retired:mobile";
+      await fixture.seed(retired);
+      setRuntimeConfigSnapshot({
+        ...fixture.cfg,
+        agents: { ownership: "explicit", entries: { main: {} } },
+      });
+      sessionChanges.emit({ all: true, scope: "stores" });
+      const keys = (configuredAgentsOnly: boolean) =>
+        inScope(
+          () =>
+            runtime.gateway.withSessionFacts(
+              { sessionKeys: [retired, sessionKey], configuredAgentsOnly },
+              async (snapshot) => snapshot.sessions.map((row) => row.key).toSorted(),
+            ),
+          undefined,
+        );
+      expect(await keys(false)).toEqual([retired, sessionKey].toSorted());
+      expect(await keys(true)).toEqual([sessionKey]);
+    }));
+
   it.each(["config-presentation", "secret registry"] as const)(
     "preserves exact and selected text and PR state after %s changes",
     (change) =>
